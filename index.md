@@ -6,6 +6,16 @@ analysis that turn RapidReconciler exports into actionable insights in minutes.
 
 ---
 
+## Roles and Responsibilities
+
+Here are the key roles and responsibilities for the RapidReconciler application. These roles are designed to ensure that the application is effectively implemented, maintained, and utilized within your organization. Each role has specific responsibilities that contribute to the overall success of RapidReconciler in streamlining your JD Edwards reconciliation processes.
+
+| Document | Description |
+|----------|-------------|
+| [Roles and Responsibilities](/RapidReconciler-AI/MiscDocs/roles-responsibilities.html) | Overview of the key roles and responsibilities for the RapidReconciler application, including system administrators, IT support, and end users. |
+
+---
+
 ## Sales Procedures and Collateral
 
 Here are some key collateral documents that provide an overview of RapidReconciler's benefits and features. These resources are intended to help you understand the value proposition of the application and how it can assist your JD Edwards reconciliation processes. Click on each document name to view the full content.
