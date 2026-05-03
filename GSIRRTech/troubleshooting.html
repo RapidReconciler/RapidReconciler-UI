@@ -865,6 +865,29 @@
     background: #fff;
   }
 
+  /* ============== LOG SNIPPET BLOCK ============== */
+  .view .log-snippet {
+    background: #1f2d4a;
+    color: #e6ecf5;
+    border-radius: 4px;
+    padding: 12px 14px;
+    margin: 8px 0 14px;
+    overflow-x: auto;
+    font-family: 'Source Code Pro', 'Consolas', monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: pre;
+  }
+  .view .log-snippet-label {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--ink-soft);
+    margin: 14px 0 4px;
+  }
+
 
   /* ============== TROUBLESHOOTING ROW LAYOUT ============== */
   .view .ts-row {
@@ -2804,6 +2827,107 @@
         <div class="callout tip">
           <div class="callout-label">Working remotely</div>
           <p>If you&rsquo;re diagnosing remotely, ask the customer&rsquo;s I/T contact to send you the latest <code>.out</code> file rather than transcribing errors over a call. The full log usually contains more context than any single error message they&rsquo;ll quote.</p>
+        </div>
+
+        <h3 id="healthy-log">What a healthy startup log looks like</h3>
+        <p>A healthy <code>rr-valc-agent_YYYYMMDD.out</code> file follows a predictable shape: the agent starts up, connects to VALC, then launches one Spring Boot service per licensed customer database and confirms each is running. Use the snippets below as a pattern reference when reviewing a customer&rsquo;s log &mdash; the structure should look the same. Customer-specific values (database names, IP addresses, UUIDs, PIDs, company lists) will of course differ.</p>
+
+        <p><strong>Phase 1 &mdash; Agent process starts.</strong> Spring Boot banner, JPA repositories, embedded Derby pool, JMS SSL enabled, monitor and company-sync schedules started, and finally the local and external IP discovered. A successful startup ends with a <code>Started AgentApplication in N seconds</code> line.</p>
+        <div class="log-snippet-label">Snippet &mdash; agent startup</div>
+<pre class="log-snippet">2026-05-03 02:39:52.002  INFO {pid} --- [main] c.r.agent.AgentApplication      : Starting AgentApplication v1.6.0 using Java 1.8.0_45 on {customer-app-server}
+2026-05-03 02:39:59.294  INFO {pid} --- [main] c.r.agent.jms.JmsCustomizer     : SSL enabled: true
+2026-05-03 02:40:00.248  INFO {pid} --- [main] c.r.agent.task.monitor.MonitorSchedule : Services instance monitoring started
+2026-05-03 02:40:00.249  INFO {pid} --- [main] c.r.a.t.s.company.CompanySyncSchedule  : Companies licenses sync started
+2026-05-03 02:40:03.647  INFO {pid} --- [main] c.r.agent.AgentInitializer      : Local IP Address: 10.x.x.x / External IP: 74.x.x.x
+2026-05-03 02:40:03.647  INFO {pid} --- [main] c.r.agent.AgentInitializer      : Initialization completed
+2026-05-03 02:40:03.651  INFO {pid} --- [main] c.r.agent.AgentApplication      : Started AgentApplication in 13.025 seconds (JVM running for 16.072)</pre>
+
+        <p><strong>Phase 2 &mdash; Connect to VALC.</strong> The agent advertises its agent version, internal/external IP, gets a client queue UUID, and confirms a connection.</p>
+        <div class="log-snippet-label">Snippet &mdash; VALC connection</div>
+<pre class="log-snippet">2026-05-03 02:40:11.031  INFO {pid} --- [scheduling-1] c.r.agent.jms.AgentConnectionJms : Try connect to VALC: rr-agent-connection - extIP: 74.x.x.x - intIp: 10.x.x.x - Agent Version: 1.6.0
+2026-05-03 02:40:12.148  INFO {pid} --- [scheduling-1] c.r.agent.jms.AgentConnectionJms : Client queue - {uuid}
+2026-05-03 02:40:12.413  INFO {pid} --- [scheduling-1] c.r.agent.jms.AgentConnectionJms : Connected to VALC. Use this queue to communicate now: {uuid}</pre>
+
+        <div class="callout warning">
+          <div class="callout-label">Don&rsquo;t panic at the early ERROR lines</div>
+          <p>Immediately after Phase 2 you will see a cluster of <code>ERROR</code> lines that look like this, one for each licensed customer database:</p>
+<pre class="log-snippet" style="margin-top:8px;">2026-05-03 02:40:14.582 ERROR {pid} --- [scheduling-1] c.r.a.service.impl.HealthServiceImpl : Could not load health endpoint: I/O error on GET request for &quot;https://127.0.0.1:48047/health&quot;: Connection refused
+2026-05-03 02:40:16.891 ERROR {pid} --- [scheduling-1] c.r.a.service.impl.HealthServiceImpl : Could not load health endpoint: I/O error on GET request for &quot;https://127.0.0.1:41310/health&quot;: Connection refused</pre>
+          <p style="margin-top:8px;">These are <strong>expected and benign</strong>. The agent polls each per-customer service&rsquo;s health endpoint to decide whether it needs to start that service &mdash; and on a fresh agent restart, none of those services are up yet, so the connection refusals are how the agent confirms it needs to launch them. They stop appearing once each service finishes coming up. ERROR lines that persist <em>after</em> all instances have reached <code>up=true</code> heartbeat status are real and worth investigating.</p>
+        </div>
+
+        <p><strong>Phase 3 &mdash; Launch a service instance per licensed database.</strong> For each customer database the agent licenses, you&rsquo;ll see a startup loop with three preconditions checked, then a <code>java.exe</code> command line being executed with that database&rsquo;s connection string. Each service runs on its own <code>server.port</code> and <code>management.port</code>.</p>
+        <div class="log-snippet-label">Snippet &mdash; one service instance launching</div>
+<pre class="log-snippet">2026-05-03 02:41:05.061  INFO {pid} --- [scheduling-1] a.s.i.ServicesInstanceManagerServiceImpl : 1 - Service is not running: [OK]
+2026-05-03 02:41:05.125  INFO {pid} --- [scheduling-1] .r.a.s.i.DatabaseManagerServiceMsSqlImpl : Database connected with success.
+2026-05-03 02:41:05.130  INFO {pid} --- [scheduling-1] a.s.i.ServicesInstanceManagerServiceImpl : 2 - Database connectivity: [OK]
+2026-05-03 02:41:05.647  INFO {pid} --- [scheduling-1] a.s.i.ServicesInstanceManagerServiceImpl : 3 - Instance JAR package runnable: [OK]
+2026-05-03 02:41:05.648  INFO {pid} --- [scheduling-1] a.s.i.ServicesInstanceManagerServiceImpl : Startup preconditions met, proceeding.
+2026-05-03 02:41:05.654  INFO {pid} --- [scheduling-1] a.s.i.ServicesInstanceManagerServiceImpl : Executing: [..., -jar, ./files/{services-jar-sha1}, --spring.datasource.url=jdbc:jtds:sqlserver://10.x.x.x:1433;databaseName={customer-db-1}, ..., --server.port=34536, --management.port=48047, ...]</pre>
+        <p>This is followed by that service&rsquo;s own Spring Boot startup output (the agent merges child-process stdout into its log), ending with a <code>Started ClientServicesApplication</code> line and a Tomcat <code>Started on port(s): NNNNN (https)</code>.</p>
+
+        <p><strong>Phase 4 &mdash; Steady state.</strong> Once all instances are up, the agent declares each one running, syncs the JDE company list to VALC for each database, and starts emitting periodic heartbeats. <strong>This is the single best confirmation that the agent is healthy.</strong> All four entries below show <code>up=true</code> and a non-error <code>dbSystemStatus</code>:</p>
+        <div class="log-snippet-label">Snippet &mdash; steady state</div>
+<pre class="log-snippet">2026-05-03 02:43:03.545  INFO {pid} --- [scheduling-1] a.s.i.ServicesInstanceManagerServiceImpl : Instance that runs on {customer-db-4} is RUNNING!
+2026-05-03 02:43:03.685  INFO {pid} --- [scheduling-1] c.r.a.t.s.company.CompanySyncService : All companies on {customer-db-1}: [{customer company list — varies per customer}]
+2026-05-03 02:43:03.859  INFO {pid} --- [scheduling-1] c.r.agent.jms.ValcOutbound           : Sending company sync
+2026-05-03 02:43:05.012  INFO {pid} --- [scheduling-1] c.r.agent.jms.ValcOutbound           : Sending heartbeat. States: [
+  RunningInstanceState(uuid={uuid}, errorMessage=null, port=34536, up=true, revisionNumber=178, dbSystemStatus=success),
+  RunningInstanceState(uuid={uuid}, errorMessage=null, port=33198, up=true, revisionNumber=178, dbSystemStatus=success),
+  RunningInstanceState(uuid={uuid}, errorMessage=null, port=32650, up=true, revisionNumber=178, dbSystemStatus=none),
+  RunningInstanceState(uuid={uuid}, errorMessage=null, port=38285, up=true, revisionNumber=178, dbSystemStatus=success)
+]</pre>
+
+        <h3 id="healthy-log-quick-checks">Quick checks against a customer&rsquo;s log</h3>
+        <p>When a customer sends in their <code>.out</code> file, scan for these markers in order. If you find all four, the agent is healthy regardless of any earlier-looking errors in the file:</p>
+        <ol>
+          <li>A <code>Started AgentApplication in N seconds</code> line near the top.</li>
+          <li>A <code>Connected to VALC</code> line shortly after.</li>
+          <li>One <code>Instance that runs on &lt;db&gt; is RUNNING!</code> line per licensed customer database.</li>
+          <li>A recent heartbeat (<code>Sending heartbeat. States: [&hellip;]</code>) where every <code>RunningInstanceState</code> shows <code>up=true</code>. Heartbeats are emitted on a regular cadence; if the most recent one is more than a few minutes old, the agent has stopped or lost its VALC connection.</li>
+        </ol>
+
+        <h3 id="log-comparison">Log Comparison Tool</h3>
+        <p>When a customer&rsquo;s log doesn&rsquo;t match the healthy shape above and the divergence point isn&rsquo;t obvious, you can have Claude do a structured comparison for you. The workflow takes about a minute: download the reference log, open Claude, upload both files together with the prompt below, and read the diagnosis.</p>
+
+        <div class="example-box">
+          <div class="example-label">Step 1 &mdash; Download the reference log</div>
+          <p style="margin:0 0 10px 0;">A complete redacted example log from a healthy 4-database customer. Save this to your machine; you&rsquo;ll upload it to Claude alongside the customer&rsquo;s log.</p>
+          <p style="margin:0;">
+            <a class="ts-copy-btn" href="https://raw.githubusercontent.com/RapidReconciler/RapidReconciler-AI/main/logs/rr-valc-agent_HEALTHY-EXAMPLE.log" download="rr-valc-agent_HEALTHY-EXAMPLE.log" style="text-decoration:none;">
+              <span class="ts-copy-icon">&#x2B07;</span><span class="ts-copy-text">Download reference log</span>
+            </a>
+          </p>
+        </div>
+
+        <div class="example-box">
+          <div class="example-label">Step 2 &mdash; Open Claude and upload both files</div>
+          <p style="margin:0 0 6px 0;">Go to <a href="https://claude.ai" target="_blank" rel="noopener">claude.ai</a> (free tier is sufficient; sign in with your work account) and start a new chat. Attach two files to the same message:</p>
+          <ul style="margin:6px 0 0 18px; font-size:14.5px;">
+            <li>The customer&rsquo;s <code>rr-valc-agent_YYYYMMDD.out</code> log file</li>
+            <li>The reference log you just downloaded</li>
+          </ul>
+          <p style="margin:8px 0 0 0;">If the customer also sent the matching <code>.err</code> file from the same day, attach that too &mdash; it often contains the stack trace that explains what the <code>.out</code> only hints at.</p>
+        </div>
+
+        <div class="example-box">
+          <div class="example-label">Step 3 &mdash; Copy the prompt and send</div>
+          <p style="margin:0 0 8px 0;">Click the button below to copy the prompt, paste it into the chat with your attached files, and add the customer&rsquo;s reported symptom in the indicated spot before sending.</p>
+          <button class="ts-copy-btn" type="button"
+                  data-clip="You are helping an RR Support technician diagnose a RapidReconciler agent log.\n\nATTACHED FILES\n  - The customer's rr-valc-agent .out log file (the one with the problem)\n  - rr-valc-agent_HEALTHY-EXAMPLE.log: a known-good reference from a healthy 4-database customer\n  - (optionally) the matching .err file from the same day\n\nCUSTOMER-REPORTED SYMPTOM\n  [REPLACE THIS LINE with what the customer is reporting, e.g. &quot;agent shows offline in VALC since this morning&quot;, &quot;one database stuck on Stopped&quot;, &quot;works for a few minutes after restart then disconnects&quot;]\n\nWHAT A HEALTHY LOG LOOKS LIKE\n  A healthy startup follows four phases in order:\n    Phase 1 - Agent process starts. Ends with &quot;Started AgentApplication in N seconds&quot;.\n    Phase 2 - Connect to VALC. Includes &quot;Try connect to VALC&quot;, &quot;Client queue&quot;, and &quot;Connected to VALC&quot;.\n    Phase 3 - Launch one Spring Boot service per licensed customer database. For each DB:\n              &quot;1 - Service is not running: [OK]&quot; -> &quot;Database connected with success&quot; ->\n              &quot;2 - Database connectivity: [OK]&quot; -> &quot;3 - Instance JAR package runnable: [OK]&quot; ->\n              java.exe Executing line -> child Spring Boot startup -> &quot;Started ClientServicesApplication&quot;.\n    Phase 4 - Steady state. &quot;Instance that runs on &lt;db&gt; is RUNNING!&quot;, company sync, and periodic\n              heartbeats with every RunningInstanceState showing up=true.\n\nIMPORTANT - DO NOT FLAG AS THE PROBLEM\n  Immediately after Phase 2 there is a cluster of ERROR lines reading &quot;Could not load health endpoint:\n  ... Connection refused&quot;, one per licensed database. These are expected and benign on every agent\n  startup &mdash; the agent polls each per-customer service to decide whether to launch it, and on a fresh\n  start none are up yet. They stop appearing once each service finishes coming up. Only flag\n  Connection refused errors if they persist AFTER all instances have reached up=true heartbeat status.\n\nWHAT TO RETURN\n  1. Phase verdict: for each of Phases 1-4, state OK / FAILED / NOT REACHED with a one-line reason.\n  2. Divergence point: the first line in the customer's log where it stops following the healthy pattern.\n     Quote the line with its timestamp.\n  3. Most likely cause: based on the divergence point AND the customer's reported symptom, the most\n     likely root cause. If the log doesn't show the cause, say so plainly &mdash; list what the log rules\n     OUT rather than guess.\n  4. What to check next: 2-4 concrete next steps for the tech (e.g. specific service to check,\n     specific port to test, specific config field to verify).\n  5. Any other ERROR or WARN lines from outside the expected startup cluster, with timestamps.\n\nKeep the response scannable &mdash; short bullets, no long prose. If the customer's log appears healthy,\nsay that explicitly and identify which phase the customer's reported symptom would manifest in if it\nrecurs."
+                  onclick="copyTroubleshooting(this)" aria-label="Copy log comparison prompt">
+            <span class="ts-copy-icon">&#x1F4CB;</span><span class="ts-copy-text">Copy prompt</span>
+          </button>
+        </div>
+
+        <div class="callout tip">
+          <div class="callout-label">What to expect &mdash; and what not to</div>
+          <p>The structured comparison is good at telling you <em>where</em> the customer&rsquo;s log diverges from healthy and <em>what that divergence rules in or out</em>. It is <strong>not</strong> a substitute for checking SQL Server, Windows Services, firewalls, or DNS &mdash; many root causes only manifest in the agent log as a generic symptom (&ldquo;Connection refused&rdquo;) with the actual cause visible only on the database or network side. Treat the response as a starting point that tells you which direction to investigate, not a final diagnosis.</p>
+        </div>
+
+        <div class="callout note">
+          <div class="callout-label">Notes for the file maintainer</div>
+          <p>The reference log was generated from agent <strong>v1.6.0</strong>. If GSI ships a major agent revision (Spring Boot upgrade, new startup phases, renamed classes), regenerate the reference log at the same time so techs aren&rsquo;t comparing against a stale baseline. Open the <code>.log</code> file in <strong>Notepad++ or VS Code</strong> &mdash; not Notepad &mdash; because the file mixes line-ending styles in places.</p>
         </div>
 
         <h2 id="other-diagnostic-tools">Other Diagnostic Tools</h2>
