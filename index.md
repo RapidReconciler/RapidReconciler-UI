@@ -6,43 +6,13 @@ analysis that turn RapidReconciler exports into actionable insights in minutes.
 
 ---
 
-## Roles and Responsibilities
+## RapidReconciler Hub: Roles and Responsibilities
 
-Here are the key roles and responsibilities for the RapidReconciler application. These roles are designed to ensure that the application is effectively implemented, maintained, and utilized within your organization. Each role has specific responsibilities that contribute to the overall success of RapidReconciler in streamlining your JD Edwards reconciliation processes.
-
-| Document | Description |
-|----------|-------------|
-| [Roles and Responsibilities](/RapidReconciler-AI/MiscDocs/roles-responsibilities.html) | Overview of the key roles and responsibilities for the RapidReconciler application, including system administrators, IT support, and end users. |
-
----
-
-## Sales Procedures and Collateral
-
-Here are some key collateral documents that provide an overview of RapidReconciler's benefits and features. These resources are intended to help you understand the value proposition of the application and how it can assist your JD Edwards reconciliation processes. Click on each document name to view the full content.
-
-| Document                                                                                   | Description                                                                                      |
-| ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
-| [Sales Procedures and Collateral](/RapidReconciler-AI/GSIRRSales/sales-client-management.html)   | Process controls for the RR Sales Team to ensure consistent and effective communication of RapidReconciler's value proposition to potential clients. |
-
----
-
-## GSI RR Tech Procedures and References
-
-These technical documents provide detailed guidance on the installation, configuration, and maintenance of RapidReconciler. They cover everything from initial setup requirements to server migration and certificate management. Whether you're a system administrator responsible for maintaining the application or an IT professional involved in the deployment process, these resources will help ensure a smooth and successful implementation of RapidReconciler in your JD Edwards environment.
+This is the starting point for all things RapidReconciler. The hub provides an overview of the key roles and responsibilities for the RapidReconciler application, including system administrators, IT support, and end users. It serves as a central resource for understanding who is responsible for what within the RapidReconciler ecosystem, ensuring that everyone knows their role in maintaining and utilizing the application effectively.
 
 | Document | Description |
 |----------|-------------|
-| [RR Tech Home](/RapidReconciler-AI/GSIRRTech/tech-client-management.html)                  | Installation and configuration requirements |
-
----
-
-## End User Procedures and References
-
-RapidReconciler University is your go-to resource for learning how to use the application effectively. Whether you're new to RapidReconciler or looking to deepen your understanding of its features, these training materials will guide you through the process. From video tutorials to step-by-step guides, RapidReconciler University offers a comprehensive learning experience that covers everything from basic navigation to advanced reconciliation techniques. Explore the resources below to get started on your journey to mastering RapidReconciler.
-
-| Document | Description |
-|----------|-------------|
-| [RapidReconciler University](/RapidReconciler-AI/RRUniversity/rapidreconciler-university.html) | A comprehensive guide to help new users get up and running with RapidReconciler, covering installation, basic navigation, and initial setup. |
+| [Roles and Responsibilities](/RapidReconciler-AI/MiscDocs/rapidreconciler-hub.html) | Overview of the key roles and responsibilities for the RapidReconciler application, including system administrators, IT support, and end users. |
 
 ---
 
