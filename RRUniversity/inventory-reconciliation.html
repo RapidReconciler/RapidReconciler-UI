@@ -1,0 +1,2117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Inventory Reconciliation Walkthrough &mdash; RapidReconciler University</title>
+<script>
+  /* Panel-mode detection — runs before any rendering to avoid layout flash.
+     Triggered by ?panel=1 in the URL. Optional ?view=stepN deep-links to a view. */
+  (function() {
+    try {
+      var qs = new URLSearchParams(window.location.search);
+      if (qs.get('panel') === '1') {
+        document.documentElement.classList.add('panel-mode');
+      }
+    } catch (e) { /* old browser or sandbox — silently ignore */ }
+  })();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@300;400;500;600;700;800&family=Source+Sans+3:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --navy:        #1f2d4a;
+    --navy-deep:   #142037;
+    --navy-soft:   #2c3e63;
+    --blue:        #2b5fb0;
+    --blue-bright: #3d8fd6;
+    --blue-pale:   #d6e6f5;
+    --orange:      #f08a24;
+    --orange-deep: #d97316;
+    --bg:          #ffffff;
+    --bg-soft:     #f6f8fb;
+    --bg-panel:    #eef3f9;
+    --text:        #1f2d4a;
+    --text-soft:   #5a6479;
+    --text-muted:  #8a93a6;
+    --rule:        #e1e7ef;
+    --rule-strong: #c9d3e0;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+
+  body {
+    font-family: 'Open Sans', -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.65;
+    font-weight: 400;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .container {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 0 40px;
+  }
+
+  /* ============== TOP NAV ============== */
+  header.topnav {
+    background: #fff;
+    border-bottom: 1px solid var(--rule);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    box-shadow: 0 1px 0 rgba(31, 45, 74, 0.04);
+  }
+
+  .topnav-inner {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 0;
+    gap: 32px;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    text-decoration: none;
+    color: var(--navy);
+  }
+  .brand img { height: 42px; width: auto; display: block; }
+  .brand-divider { width: 1px; height: 28px; background: var(--rule-strong); }
+  .brand-product { display: flex; flex-direction: column; line-height: 1.1; }
+  .brand-product-name {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 700; font-size: 17px; color: var(--navy);
+    letter-spacing: -0.005em;
+  }
+  .brand-product-tag {
+    font-size: 11px; color: var(--text-muted); font-weight: 500;
+    letter-spacing: 0.06em; text-transform: uppercase; margin-top: 2px;
+  }
+
+  nav.section-nav {
+    display: flex; gap: 28px; font-size: 14px; font-weight: 600; margin-left: auto;
+  }
+  nav.section-nav a {
+    color: var(--navy); text-decoration: none; position: relative; padding: 6px 0;
+    transition: color 0.2s;
+  }
+  nav.section-nav a:hover { color: var(--blue); }
+  nav.section-nav a::after {
+    content: ''; position: absolute; left: 0; bottom: 0; width: 0;
+    height: 2px; background: var(--orange); transition: width 0.3s ease;
+  }
+  nav.section-nav a:hover::after { width: 100%; }
+  .nav-cta {
+    background: var(--orange); color: #fff !important; padding: 10px 22px !important;
+    border-radius: 4px; font-weight: 700 !important; font-size: 13px !important;
+    transition: background 0.2s !important;
+  }
+  .nav-cta:hover { background: var(--orange-deep); color: #fff !important; }
+  .nav-cta::after { display: none !important; }
+
+  /* ============== PAGE HEADER (thin) ============== */
+  .page-header {
+    background: linear-gradient(180deg, var(--bg-soft) 0%, #fff 100%);
+    border-bottom: 1px solid var(--rule);
+    padding: 28px 0 24px;
+  }
+  .breadcrumb {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 13px; color: var(--text-soft);
+    margin-bottom: 12px; flex-wrap: wrap;
+  }
+  .breadcrumb a { color: var(--blue); text-decoration: none; font-weight: 600; transition: color 0.2s; }
+  .breadcrumb a:hover { text-decoration: underline; }
+  .breadcrumb .sep { color: var(--rule-strong); }
+  .breadcrumb .current { color: var(--text-soft); font-weight: 500; }
+  .page-title {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 800; font-size: clamp(28px, 3.6vw, 36px);
+    line-height: 1.15; letter-spacing: -0.02em;
+    color: var(--navy);
+    margin: 0;
+  }
+  .page-title em {
+    color: var(--blue-bright); font-style: normal;
+  }
+
+  /* ============== SPA LAYOUT (sidebar + content) ============== */
+  .spa-wrap {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    gap: 48px;
+    padding: 48px 0 80px;
+    align-items: start;
+  }
+
+  aside.sidebar {
+    position: sticky;
+    top: 96px;
+    background: var(--bg-soft);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    padding: 24px 0;
+    overflow: hidden;
+  }
+  .sidebar-title {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 700;
+    font-size: 13px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--orange);
+    padding: 0 24px 16px;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 12px;
+  }
+  ul.sidebar-nav { list-style: none; }
+  ul.sidebar-nav li {}
+  ul.sidebar-nav li button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    border: none;
+    padding: 11px 24px;
+    font-family: 'Open Sans', sans-serif;
+    font-size: 14.5px;
+    color: var(--text);
+    cursor: pointer;
+    border-left: 3px solid transparent;
+    transition: all 0.2s;
+  }
+  ul.sidebar-nav li button:hover {
+    background: #fff;
+    color: var(--blue);
+    border-left-color: var(--blue-bright);
+  }
+  ul.sidebar-nav li.active button {
+    background: #fff;
+    color: var(--navy);
+    font-weight: 700;
+    border-left-color: var(--orange);
+  }
+
+  main.content-card {
+    background: #fff;
+    min-width: 0; /* prevent grid blowout */
+  }
+
+  /* SPA view switching */
+  .view { display: none; }
+  .view.active { display: block; animation: fadeIn 0.3s ease; }
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ============== ARTICLE / TYPOGRAPHY ============== */
+  .view h1 {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 700; font-size: 36px;
+    color: var(--navy);
+    letter-spacing: -0.02em;
+    margin-bottom: 20px;
+    line-height: 1.1;
+  }
+  .view h2 {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 700; font-size: 24px;
+    color: var(--navy);
+    margin-top: 40px; margin-bottom: 14px;
+    padding-bottom: 10px;
+    border-bottom: 2px solid var(--rule);
+    letter-spacing: -0.015em;
+  }
+  .view h3 {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 700; font-size: 18px;
+    color: var(--navy);
+    margin-top: 28px; margin-bottom: 12px;
+    letter-spacing: -0.01em;
+  }
+  .view h4 {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 600; font-size: 15px;
+    color: var(--navy-soft);
+    margin-top: 20px; margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .view p {
+    font-size: 15px; line-height: 1.7; margin-bottom: 14px;
+    color: var(--text);
+  }
+  .view p strong { color: var(--navy); font-weight: 700; }
+  .view a {
+    color: var(--blue); text-decoration: none;
+    border-bottom: 1px solid var(--blue-pale);
+    transition: color 0.2s, border-color 0.2s;
+  }
+  .view a:hover { color: var(--orange); border-bottom-color: var(--orange); }
+  .view ul, .view ol { margin: 0 0 18px 22px; font-size: 15px; line-height: 1.7; }
+  .view li { margin-bottom: 6px; }
+  .view li strong { color: var(--navy); font-weight: 700; }
+  .view code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    background: var(--bg-panel);
+    color: var(--navy);
+    padding: 2px 6px;
+    border-radius: 3px;
+  }
+
+  /* Tables */
+  .view table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 18px 0 24px;
+    font-size: 14px;
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .view thead { background: var(--navy); color: #fff; }
+  .view th {
+    text-align: left; padding: 12px 16px;
+    font-weight: 700; font-size: 12px;
+    letter-spacing: 0.06em; text-transform: uppercase;
+  }
+  .view td {
+    padding: 13px 16px; border-bottom: 1px solid var(--rule);
+    vertical-align: top; line-height: 1.55;
+  }
+  .view tr:last-child td { border-bottom: none; }
+  .view tbody tr:nth-child(even) { background: var(--bg-soft); }
+  .view tbody tr:hover { background: var(--blue-pale); }
+
+  /* Callouts */
+  .view .callout {
+    display: flex; gap: 14px;
+    padding: 16px 20px;
+    border-radius: 6px;
+    margin: 22px 0;
+    border-left: 4px solid;
+  }
+  .view .callout-icon {
+    flex-shrink: 0; width: 24px; height: 24px;
+    border-radius: 50%;
+    display: grid; place-items: center;
+    font-weight: 700; font-size: 13px; color: #fff;
+  }
+  .view .callout p { margin-bottom: 0; font-size: 14.5px; }
+  .view .callout.important { background: #fef5e7; border-color: var(--orange); }
+  .view .callout.important .callout-icon { background: var(--orange); }
+  .view .callout.warning { background: #fef5e7; border-color: var(--orange); }
+  .view .callout.warning .callout-icon { background: var(--orange); }
+  .view .callout.note, .view .callout.tip, .view .callout.info {
+    background: var(--blue-pale); border-color: var(--blue);
+  }
+  .view .callout.note .callout-icon, .view .callout.tip .callout-icon, .view .callout.info .callout-icon {
+    background: var(--blue);
+  }
+  /* Original used callout-label as a heading inside the box */
+  .view .callout-label {
+    font-weight: 700;
+    color: var(--navy);
+    margin-bottom: 4px;
+    font-size: 14.5px;
+  }
+
+  /* Images */
+  .view img, .view .screenshot {
+    max-width: 100%;
+    height: auto;
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    margin: 14px 0;
+    background: var(--bg-soft);
+  }
+
+  .view figure {
+    margin: 22px 0;
+  }
+  .view figure img {
+    margin: 0;
+    display: block;
+    width: 100%;
+  }
+  .view figure figcaption {
+    margin-top: 8px;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text-soft);
+    font-style: italic;
+    text-align: left;
+  }
+
+  /* For small native-resolution UI panels — don't upscale them */
+  .view figure.figure--narrow {
+    max-width: 320px;
+  }
+  .view figure.figure--narrow img {
+    width: auto;
+    max-width: 100%;
+  }
+
+  /* Side-by-side layout for related narrow figures */
+  .view .figure-pair {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 28px;
+    align-items: flex-start;
+    margin: 22px 0;
+  }
+  .view .figure-pair figure {
+    margin: 0;
+    flex: 0 0 auto;
+  }
+
+  /* Topic footer nav (back to index, prev/next) */
+  .topic-footer-nav {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 48px;
+    padding-top: 28px;
+    border-top: 1px solid var(--rule);
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .back-btn, .next-btn {
+    background: transparent;
+    border: 1px solid var(--rule-strong);
+    color: var(--navy);
+    padding: 10px 18px;
+    border-radius: 4px;
+    font-family: 'Open Sans', sans-serif;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .back-btn:hover, .next-btn:hover {
+    background: var(--navy);
+    color: #fff;
+    border-color: var(--navy);
+  }
+  .next-btn {
+    background: var(--orange);
+    border-color: var(--orange);
+    color: #fff;
+  }
+  .next-btn:hover {
+    background: var(--orange-deep);
+    border-color: var(--orange-deep);
+  }
+
+  /* Email card / video link styling from original */
+  .view .email-card {
+    background: var(--bg-soft);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 20px;
+    margin: 18px 0;
+  }
+  .view .email-card .label {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+  }
+  .view .email-card .addr {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 14px;
+    color: var(--navy);
+    font-weight: 600;
+    margin-bottom: 10px;
+  }
+  .view .email-compose-btn {
+    display: inline-block;
+    background: var(--orange);
+    color: #fff !important;
+    text-decoration: none !important;
+    padding: 8px 16px;
+    border-radius: 4px;
+    font-size: 13px;
+    font-weight: 700;
+    border: none !important;
+  }
+  .view .email-compose-btn:hover { background: var(--orange-deep); }
+
+  .view .video-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--blue-pale);
+    color: var(--blue) !important;
+    padding: 8px 14px;
+    border-radius: 4px;
+    font-size: 13px;
+    font-weight: 600;
+    text-decoration: none !important;
+    border: none !important;
+    margin: 6px 0;
+  }
+  .view .video-link:hover { background: var(--blue); color: #fff !important; }
+
+  /* Hide original branding header/yellow bar/sidebar (we replace with GSI nav) */
+  .blue-header, .yellow-bar, aside.sidebar.original { display: none; }
+
+  /* Diamond divider — give it GSI styling */
+  .view .diamond-divider {
+    text-align: center;
+    margin: 28px 0;
+  }
+  .view .diamond {
+    display: inline-block;
+    width: 8px; height: 8px;
+    background: var(--orange);
+    transform: rotate(45deg);
+  }
+
+  /* ============== FOOTER ============== */
+  /* ============== EXTRA CLASSES (PO Receipts Walkthrough) ============== */
+  /* Lead paragraph */
+  .view .lead {
+    font-size: 17px;
+    line-height: 1.65;
+    color: var(--text-soft);
+    margin-bottom: 18px;
+    font-weight: 400;
+  }
+  .view .lead strong { color: var(--navy); font-weight: 700; }
+
+  /* "principle" callout variant - blue tone for guiding principles */
+  .view .callout.principle {
+    background: var(--blue-pale);
+    border-color: var(--blue);
+  }
+  .view .callout.principle .callout-icon { background: var(--blue); }
+
+  /* Checklist - styled as a card with rule-bordered items */
+  .view .checklist {
+    list-style: none;
+    margin: 16px 0 24px;
+    padding: 0;
+    background: var(--bg-soft);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .view .checklist .checklist-title {
+    background: var(--navy);
+    color: #fff;
+    padding: 10px 18px;
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 700;
+    font-size: 13px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .view .checklist li {
+    padding: 12px 18px 12px 42px;
+    position: relative;
+    margin-bottom: 0;
+    border-top: 1px solid var(--rule);
+    font-size: 14.5px;
+    line-height: 1.55;
+  }
+  /* Title row: no checkbox, no extra left padding */
+  .view .checklist li.checklist-title {
+    padding: 10px 18px;
+    border-top: none;
+  }
+  .view .checklist li.checklist-title::before {
+    content: none;
+  }
+  .view .checklist li:not(.checklist-title)::before {
+    content: '';
+    position: absolute;
+    left: 16px;
+    top: 15px;
+    width: 16px;
+    height: 16px;
+    border: 1.5px solid var(--rule-strong);
+    border-radius: 3px;
+    background: #fff;
+  }
+
+  /* Status pills (green/yellow/red) */
+  .view .status-pill {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    line-height: 1.5;
+    white-space: nowrap;
+  }
+  .view .status-pill.green { background: #e2efd9; color: #3d6927; border: 1px solid #b3d49a; }
+  .view .status-pill.yellow { background: #fef5e7; color: #8a5a0c; border: 1px solid #f5cb35; }
+  .view .status-pill.red { background: #fdeae5; color: #8a3520; border: 1px solid #e8a895; }
+
+  /* Step badge inline */
+  .view .step-badge {
+    display: inline-block;
+    background: var(--orange);
+    color: #fff;
+    padding: 4px 12px;
+    border-radius: 999px;
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 700;
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+    margin-right: 8px;
+  }
+
+  /* num-cell for table sequence numbers */
+  .view td.num-cell {
+    width: 36px;
+    text-align: center;
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 700;
+    color: var(--orange);
+    font-size: 15px;
+  }
+
+  /* Key-value cards (KV grid) */
+  .view .kv-grid {
+    display: grid;
+    gap: 16px;
+    margin: 18px 0 24px;
+  }
+  .view .kv-card {
+    background: var(--bg-soft);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 16px 18px;
+  }
+  .view .kv-card .kv-label {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+  }
+  .view .kv-card .kv-value {
+    font-size: 15px;
+    line-height: 1.55;
+    color: var(--text);
+  }
+  .view .kv-card .kv-value strong { color: var(--navy); }
+
+  /* Flow container (for SVG flowchart) */
+  .view .flow-container {
+    background: var(--bg-soft);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    padding: 24px;
+    margin: 24px 0;
+    overflow-x: auto;
+    text-align: center;
+  }
+  .view .flow-svg { max-width: 100%; height: auto; display: inline-block; }
+
+  /* Sidebar section label (for grouping nav items) */
+  .sidebar-section-label {
+    padding: 16px 24px 8px;
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 700;
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    border-top: 1px solid var(--rule);
+    margin-top: 8px;
+  }
+  .sidebar-section-label:first-of-type { border-top: none; margin-top: 0; }
+
+  /* Step number indicator for sidebar items */
+  ul.sidebar-nav li.step-num button { padding-left: 50px; position: relative; }
+  ul.sidebar-nav li.step-num button::before {
+    content: counter(step-counter);
+    position: absolute;
+    left: 22px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--orange);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 700;
+  }
+  ul#sidebar-steps { counter-reset: step-counter; }
+  ul#sidebar-steps li.step-num { counter-increment: step-counter; }
+
+  /* ============== FOOTER (thin, single line) ============== */
+  footer {
+    background: var(--navy-deep);
+    color: rgba(255,255,255,0.7);
+    padding: 18px 0;
+    font-size: 13px;
+    border-top: 3px solid var(--blue);
+  }
+  .footer-line {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 24px;
+    flex-wrap: wrap;
+  }
+  .footer-line strong { color: #fff; font-weight: 700; }
+  .footer-line a {
+    color: var(--blue-bright);
+    text-decoration: none;
+    transition: color 0.15s;
+  }
+  .footer-line a:hover { color: #fff; }
+  .footer-sep { color: rgba(255,255,255,0.25); margin: 0 6px; }
+
+
+  /* ============== EXTRA: page-meta, figure/figcaption, xref, quick-ref, done btn ============== */
+  .view .page-meta {
+    display: flex;
+    gap: 18px;
+    align-items: center;
+    flex-wrap: wrap;
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-bottom: 24px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--rule);
+  }
+  .view .page-meta .meta-item { display: inline-flex; align-items: center; gap: 6px; }
+  .view .page-meta .meta-item strong { color: var(--text-soft); font-weight: 600; }
+  .view .page-meta kbd {
+    background: #fff;
+    border: 1px solid var(--rule-strong);
+    border-bottom-width: 2px;
+    border-radius: 3px;
+    padding: 1px 6px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--navy);
+  }
+
+  .view figure { margin: 22px 0; }
+  .view figure img {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    margin: 0 auto;
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    background: var(--bg-soft);
+  }
+  .view figcaption {
+    font-size: 13px;
+    color: var(--text-soft);
+    text-align: center;
+    margin-top: 10px;
+    line-height: 1.55;
+    padding: 0 8px;
+  }
+  .view figcaption strong {
+    display: block;
+    color: var(--navy);
+    font-weight: 700;
+    font-size: 13.5px;
+    margin-bottom: 3px;
+  }
+
+  .view .xref {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--bg-panel);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--blue-bright);
+    padding: 10px 14px;
+    border-radius: 4px;
+    font-size: 13.5px;
+    color: var(--text);
+    text-decoration: none !important;
+    border-bottom: 1px solid var(--rule) !important;
+    margin: 6px 0;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .view .xref:hover {
+    background: var(--blue-pale);
+    color: var(--navy) !important;
+    border-left-color: var(--blue) !important;
+  }
+  .view .xref::before { content: '↗'; color: var(--blue); font-weight: 700; }
+  .view .xref strong { color: var(--navy); font-weight: 700; }
+
+  .view .quick-ref {
+    background: var(--bg-soft);
+    border: 1px solid var(--rule);
+    border-left: 4px solid var(--orange);
+    border-radius: 4px;
+    padding: 16px 20px;
+    margin: 18px 0;
+  }
+  .view .quick-ref-title {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 700;
+    font-size: 12px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--orange);
+    margin-bottom: 10px;
+  }
+  .view .quick-ref dl {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 6px 18px;
+    margin: 0;
+  }
+  .view .quick-ref dt {
+    font-weight: 700;
+    color: var(--navy);
+    font-size: 13.5px;
+  }
+  .view .quick-ref dd {
+    margin: 0;
+    font-size: 13.5px;
+    color: var(--text-soft);
+  }
+
+  /* Multi-paragraph callout wrapper */
+  .view .callout > div:not(.callout-icon) { flex: 1; min-width: 0; }
+  .view .callout > div:not(.callout-icon) p { margin-bottom: 10px; font-size: 14.5px; }
+  .view .callout > div:not(.callout-icon) p:last-child { margin-bottom: 0; }
+
+  :root { --green: #2e8b57; }
+  .view .topic-footer-nav .done-btn {
+    background: var(--green);
+    border-color: var(--green);
+    color: #fff;
+    border: 1px solid;
+    padding: 10px 18px;
+    border-radius: 4px;
+    font-family: 'Open Sans', sans-serif;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .view .topic-footer-nav .done-btn:hover {
+    background: #246e44;
+    border-color: #246e44;
+  }
+
+  .view tbody tr.highlight-row { background: var(--blue-pale) !important; }
+  .view tbody tr.highlight-row:hover { background: var(--blue-pale) !important; }
+
+  /* SVG flow container styling */
+  .view .flow-container {
+    background: var(--bg-soft);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    padding: 24px;
+    margin: 24px 0;
+    overflow-x: auto;
+    text-align: center;
+  }
+  .view .flow-svg { max-width: 100%; height: auto; display: inline-block; }
+
+  /* Variance source heading style for inside Step 2.2 */
+  .view .variance-source {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 700;
+    font-size: 17px;
+    color: var(--navy);
+    margin-top: 28px;
+    margin-bottom: 8px;
+    padding-left: 12px;
+    border-left: 4px solid var(--orange);
+  }
+
+  /* ============== RESPONSIVE ============== */
+  @media (max-width: 960px) {
+    .spa-wrap { grid-template-columns: 1fr; gap: 28px; }
+    aside.sidebar { position: static; }
+  }
+  @media (max-width: 800px) {
+    .container { padding: 0 22px; }
+    nav.section-nav { display: none; }
+    .footer-line { gap: 12px; font-size: 12px; }
+  }
+  /* ============== PANEL MODE ==============
+     Activated via ?panel=1 in URL. Strips chrome, collapses sidebar
+     to a horizontal chip strip, and tightens content for narrow embed. */
+
+  /* Hide chrome */
+  html.panel-mode header.topnav,
+  html.panel-mode .page-header,
+  html.panel-mode footer,
+  html.panel-mode .topic-footer-nav {
+    display: none !important;
+  }
+
+  /* Tighter container padding */
+  html.panel-mode .container {
+    padding: 0 14px;
+  }
+
+  /* SPA wrap: stack vertically, no gap */
+  html.panel-mode .spa-wrap {
+    grid-template-columns: 1fr;
+    gap: 0;
+    padding: 12px 0 24px;
+  }
+
+  /* Sidebar → horizontal chip strip across the top */
+  html.panel-mode aside.sidebar {
+    position: sticky;
+    top: 0;
+    margin: 0 -14px 14px;
+    padding: 0 12px;
+    border: none;
+    border-bottom: 1px solid var(--rule);
+    border-radius: 0;
+    background: var(--bg);
+    z-index: 10;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: stretch;
+    white-space: nowrap;
+  }
+  html.panel-mode aside.sidebar::-webkit-scrollbar { height: 4px; }
+  html.panel-mode aside.sidebar::-webkit-scrollbar-thumb { background: var(--rule-strong); border-radius: 2px; }
+
+  /* Hide the title and section labels in chip mode */
+  html.panel-mode .sidebar-title,
+  html.panel-mode .sidebar-section-label {
+    display: none;
+  }
+
+  html.panel-mode ul.sidebar-nav {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: nowrap;
+    flex-shrink: 0;
+  }
+
+  /* Chip-style buttons: underline-on-active instead of left-border */
+  html.panel-mode ul.sidebar-nav li button {
+    border-left: none !important;
+    border-bottom: 2px solid transparent;
+    padding: 10px 12px !important;
+    font-size: 12.5px;
+    white-space: nowrap;
+    color: var(--text-soft);
+    background: transparent;
+  }
+
+  html.panel-mode ul.sidebar-nav li button:hover {
+    background: var(--bg-soft);
+    color: var(--blue);
+  }
+
+  html.panel-mode ul.sidebar-nav li.active button {
+    background: transparent;
+    border-bottom-color: var(--orange);
+    color: var(--navy);
+    border-left-color: transparent !important;
+  }
+
+  /* Step number badges become small inline prefixes */
+  html.panel-mode ul.sidebar-nav li.step-num button {
+    padding-left: 12px !important;
+  }
+  html.panel-mode ul.sidebar-nav li.step-num button::before {
+    position: static;
+    transform: none;
+    width: auto;
+    height: auto;
+    background: transparent;
+    color: var(--text-muted);
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 700;
+    font-size: 11px;
+    margin-right: 4px;
+    border-radius: 0;
+    display: inline;
+  }
+  html.panel-mode ul.sidebar-nav li.step-num.active button::before {
+    color: var(--orange);
+  }
+
+  /* Visual separator before a new nav group (after sibling lists) */
+  html.panel-mode ul.sidebar-nav + ul.sidebar-nav {
+    border-left: 1px solid var(--rule);
+    margin-left: 4px;
+    padding-left: 4px;
+  }
+
+  /* Main content tightening */
+  html.panel-mode main.content-card {
+    padding: 0;
+  }
+
+  html.panel-mode .view h1 {
+    font-size: 19px;
+    margin-bottom: 10px;
+    line-height: 1.25;
+  }
+  html.panel-mode .view h2 {
+    font-size: 15px;
+    margin-top: 22px;
+    margin-bottom: 8px;
+  }
+  html.panel-mode .view h3 {
+    font-size: 13.5px;
+    margin-top: 16px;
+    margin-bottom: 6px;
+  }
+  html.panel-mode .view p,
+  html.panel-mode .view ul,
+  html.panel-mode .view ol {
+    font-size: 13px;
+    line-height: 1.55;
+  }
+  html.panel-mode .view li { margin-bottom: 3px; }
+
+  /* Tables: horizontal scroll if too wide for the panel */
+  html.panel-mode .view table {
+    font-size: 12px;
+    display: block;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+  html.panel-mode .view th,
+  html.panel-mode .view td {
+    padding: 8px 10px;
+  }
+  html.panel-mode .view td {
+    white-space: normal;
+  }
+
+  /* Callouts: tighter */
+  html.panel-mode .view .callout {
+    padding: 10px 12px;
+    margin: 14px 0;
+    gap: 10px;
+  }
+  html.panel-mode .view .callout p,
+  html.panel-mode .view .callout > div p {
+    font-size: 12.5px;
+  }
+  html.panel-mode .view .callout-icon {
+    width: 20px;
+    height: 20px;
+    font-size: 11px;
+  }
+
+  /* Figures: stay full-width within the panel */
+  html.panel-mode .view figure { margin: 14px 0; }
+  html.panel-mode .view figure.figure--narrow {
+    max-width: 100%;
+  }
+  html.panel-mode .view figcaption {
+    font-size: 11.5px;
+    margin-top: 6px;
+  }
+
+  /* Checklists: tighter */
+  html.panel-mode .view .checklist li {
+    padding: 9px 12px 9px 36px;
+    font-size: 12.5px;
+  }
+  html.panel-mode .view .checklist li:not(.checklist-title)::before {
+    left: 12px;
+    top: 11px;
+    width: 14px;
+    height: 14px;
+  }
+
+  /* Process flowchart: scrollable */
+  html.panel-mode .view .flow-container {
+    padding: 12px;
+    margin: 14px 0;
+  }
+
+  /* Reduce diamond divider margin */
+  html.panel-mode .view .diamond-divider {
+    margin: 16px 0;
+  }
+</style>
+</head>
+<body>
+
+<!-- ============ TOP NAV ============ -->
+<header class="topnav">
+  <div class="container topnav-inner">
+    <a class="brand" href="rapidreconciler-university.html">
+      <img src="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1BST0ZJTEUAAQEAAAHIAAAAAAQwAABtbnRyUkdCIFhZWiAH4AABAAEAAAAAAABhY3NwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAA9tYAAQAAAADTLQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAlkZXNjAAAA8AAAACRyWFlaAAABFAAAABRnWFlaAAABKAAAABRiWFlaAAABPAAAABR3dHB0AAABUAAAABRyVFJDAAABZAAAAChnVFJDAAABZAAAAChiVFJDAAABZAAAAChjcHJ0AAABjAAAADxtbHVjAAAAAAAAAAEAAAAMZW5VUwAAAAgAAAAcAHMAUgBHAEJYWVogAAAAAAAAb6IAADj1AAADkFhZWiAAAAAAAABimQAAt4UAABjaWFlaIAAAAAAAACSgAAAPhAAAts9YWVogAAAAAAAA9tYAAQAAAADTLXBhcmEAAAAAAAQAAAACZmYAAPKnAAANWQAAE9AAAApbAAAAAAAAAABtbHVjAAAAAAAAAAEAAAAMZW5VUwAAACAAAAAcAEcAbwBvAGcAbABlACAASQBuAGMALgAgADIAMAAxADb/2wBDAAUDBAQEAwUEBAQFBQUGBwwIBwcHBw8LCwkMEQ8SEhEPERETFhwXExQaFRERGCEYGh0dHx8fExciJCIeJBweHx7/2wBDAQUFBQcGBw4ICA4eFBEUHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh7/wAARCAFUAmMDASIAAhEBAxEB/8QAHQABAAEFAQEBAAAAAAAAAAAAAAYEBQcICQMCAf/EAFoQAAEDAwEFBAUDDAwLCAMAAAEAAgMEBREGBxIhMUEIE1FhFCJxgZEyQqEJFRgjUlZilbHB0dI4RlNygoSFkrTCxOEWJDdDVXWTlLKz0xclM1RXY6LwNHPD/8QAHAEBAAIDAQEBAAAAAAAAAAAAAAQFAQMGAgcI/8QANBEBAAIBAgMDCgYDAQEAAAAAAAECAwQRBSExEkFRBhMUIjJhcaGx8DNSgZHB0RUjQuHx/9oADAMBAAIRAxEAPwDctERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBEXhU1tHTf8A5FVDF5PeAVmImeUMTMRzl7orVJqOysOHVzT+9Y4/kC+RqayE49OH+yf+hbPMZfyz+zV6Rh/PH7wu6Kip7vbJyBFX05J5AvAPwKrQQRkHIWu1Zr1hsretvZncREWHoREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERARF8zSRwxOlle1jGjLnE4ACHR9Kw3nU9DQl0UH+NTjgQ0+q32n9Cj+pNSzVxdTURdFTci7k6T9A8lHVaafQb+tk/ZTarie09nF+/8AS7XHUN0rSQ6oMMZ+ZF6o+PMq1EknJOSVVWy31VxqO4pY9483E8GtHiSpGzRMhjy+4sD/AAEWR8c/mU22XDg9Xor64dRqfWiJlEUVzvVlrbU4GdofEThsjOR8vIq2LfW9bxvWeSPelqT2bRtIquhuVdQuBpaqSMD5oOW/A8FSIk1i0bSxW01neJ2TG06xBIjuUIb072MflH6PgpXTTw1MLZoJWyRu5OachYjVdaLpV2uo7ynf6pPrxn5Lvb+lQM+grbnj5Ss9NxO9Z2yc4+bKSKgsl1prrS97Cd17eEkZ5tP6PNV6qLVms7T1XtL1vWLVnkIiLy9CIiAiIgIiICIiAiIgIiICIiAiIgIiICIiAiIgIiICIiAiIgIiICIiAiIgIiICIiAiIgIiICIiAiIgIiICIiAiIgIiICIiAiIgIoXrHanoXSkr6e636B1Ww4dTUwM0rT4ODc7p/fYUDm7TGi2yubFZr/IwHg4xRDPu7xTMXD9VmjtUpMwiZdfpsU9m94iWcEWJdPdoPZ5dZWxVM9faXuO6DWU/q5/fMLgB5nCyja7jQXWijrrZW09bSyDLJoJA9jvYRwWrNpc2Cf8AZWYbMOpw543x2iVSeAyVj/V18dcJzS0z/wDFIzzH+cPj7PBS/UcNZUWieKhcBK4YI6ub1A8ysYua5ri1wLXA4IIwQVM4firMzeesK/ime9YjHHSfvZ+Ii+omPlkbHG0ve44a0DJJVso2RtH0cdLY4HNA35h3j3eOeX0K8KisUE9NaKanqd3vY2YODy8B8FWrms1u1kmfe67BXs46xttyeFfSxVlHLSzDLJG4Pl4FYoe0se5jubTgrKd3rordQS1UrgN0eqPundAsVuJc4uPEk5Ks+Gxbs28FRxaa9qvi/ERFZqgREQVNsrZ7fWMqad2HN5jo4eB8lky018NyoWVUB4O4Ob1aeoKxUr3o+6G33IRSOxTzkNfnk09CoOt0/nK9qOsLDQaqcV+xbpLIqIio3RiIiAiIgIiICIiAiIgIiICIiAiIgIiICIiAiIgIiICIiAiIgIiICIiAiIgIiICIiAiIgIiICIiAiIgIiICIiAiIgIiICIiD5lkjiifLK9scbGlznOOA0DmSegWqe3DblcL1Vz2LR9XJRWlhLJayM7stV47p5tZ7OJ68OCnPa41tNZ9PU2krfKWVF1aX1bmni2nBxu/w3ZHsa4dVqmus4Fwulq+kZY38I/n+nLcc4nelvR8U7eM/wIiLrHKikmgdb6i0TdW11jrnxtJ+3UzyTDMPBzeXv5joVG0XjJjrkrNbxvEvePJbHaLUnaYb3bJ9odn2g2H02hIp66EBtZROdl8Lj1H3TT0d+QghXDVen21zXVlG0NqgPWbyEg/StGNH6ku+k7/T3uyVRp6qE+1sjerHjq09R7xggFbr7Jtodo2g2AVtERT18IDa2ic7LoXeI8WHo78hBC4riXDcnD8nnsPsfT3T7nY8P4hj4hj8zm9r6++PeirYpXTCFsbjKXboZjjnwwp/pawMtsYqKgB9W4e0RjwHn5q6Nt9G24OrxA0VDm7pf+f2+aoNTXyK1Q93Huvq3j1GdGjxKgZdVfUbY8cdfv8AZKw6PHpd8uSd9un34mpr5Faoe7j3X1bx6jOjR4lRpmsLq2PdMdK4/dFhz9BwrDUTS1Ez5pnufI85c48yV5qbi0WOldrRvKvzcQy3vvWdoVdzuVZcZRJVzF+Pkt5Nb7AqREUqtYrG0IVrTad7TvIiIvTAiIgIiIMm6XrTX2WGVxzIwd2/2j+7B96uaiGzl8uKuMsd3PqkOxwDuo+GFL1zmppFMsxDqtJknJhraRERaEkREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERBpP2mbjLcNsl5a9xMdIIqaIeDWxtJ/8Ak5x96xssg9oymlpds2oWyNI7yWOVpI5tdEwjHxx7lj5fTdBERpce35Y+j5vr5mdVk3/NP1ERFLRBERAV30fqS76Tv9Pe7JVGnqoT7WyN6seOrT1HvGCAVaEXm9K3rNbRvEvVbWpaLVnaYb3bJtodo2g2AVtERT18IDa2ic7LoXeI8WHo78hBCuOrNPiva6spGgVQHrN6SAfnWi+j9SXfSd/p73ZKo09VCfa2RvVjx1aeo94wQCt19k20O0bQbAK2iIp6+EBtbROdl0LvEeLD0d+QghcTxLhuTh+Tz2H2Pp7p9zsuH8Qx8Qx+Zze19ffHvRNzXNcWuBa4HBBGCCvxT3Ven21zXVlG0NqgPWbyEg/SoG5rmuLXAtcDggjBBXvBnrmrvCHqdNbT22no/ERFvRxERAREQFdNPWae7VOBllOw/bJMcvIeaaes092qcDLKdh+2SY5eQ81kSCKkttDuM3IKeFpJJOAAOZJ/OoOr1fm/Up7Sx0Wi8769/Z+pTw0tuodxm5BTwtJJccAAcySfyr1hlimibLDIySNwy17HAgjyIWAdrW0SS/yvs9nkdHamOxJIOBqSP6vgOvMqKaV1bfdMziS11rmxZy+nk9aJ/tb+cYKlYvJrUZcHnLW2vPdP8z4qnUeW+j0+q8xWvapHLtR4+6O+P1+DaxFD9nuvbXq2HuABSXJjcyUznZ3h1LD1H0hTBc/n0+TT3nHljaYdhpdXh1eKM2C3arPeIiLSkCIiAiiu0vaDpXZ3ZPrrqe5NpmvyIIGDfmncPmsYOJ9vIdSFp/tQ7Vetr/UTUukWR6btpOGSBokq3jzectbnhwaMj7orfh02TL7McmrJmpj6t4bjcKC2wGouNdTUcI/zk8rY2/EkBQ+p2wbLKd+5JtA04T/7dex4+LSQua15vF2vVWay83SuuVSeBmq6h0r/AOc4kqhU6vDY/wCrIs62e6HTSLbJsqkeGN1/p8E/dVjWj4ngpZZb5Zb3AKizXe33KEjIkpKlkzceOWkhcn1UW6urbdVsrLfWVFHUx8WTQSmN7fY4HIS3DY7rEa2e+HWhFoZsq7UWudMTw0eqHf4T2oEBxnIbVRt4cWyfO6nD858Qtzdm+u9M7QdPMvemLg2qgzuzRuG7LA/7iRvNp+g8wSOKg5tNfD7XRKx5q5OiTIiLQ2iKz6y1NY9H6dqr/qGvjorfTNy+R3Eknk1oHFzj0A4rS/a52p9XainlodFh+m7VxaJuDqyUeJdxEfsbxH3RW/Dp75p9VqyZq4+rdu73e02emdVXe6UVvgaC50tVO2JgA5klxAUTqNsOyyB+6/aBpwn8CuY8fFpK5pXW43C61r626V9VXVT/AJc1TM6R7va5xJKpVOrw2O+yLOtnuh05pdruy6pOI9oGmm8cfbLjHH/xEKW2642+5Qd/bq+lrIvu4JmyN+IJXJlVVruNwtVW2stdfVUNS0YbNTTOjeP4TSCluGx3WI1s98OsyLQDZ12n9pGmJY4bxUx6nt7cB0Vd6swGPmzNGc8uLg9bc7Htsui9ptP3dnq3Ul1Y0ultlWQ2doHNzcHD2+beWRkDkoWbS5MXOY5JOPPTJyhkZWjUeqNM6b7j/CLUVos3pG93Hp9bHB3u7je3d8jexvNzjlkeKu61H+qLftE/lD+zLzgxxlyRSXrLfsUmzYr/ALUNmn/qJpH8dU/66f8Aahs0/wDUTSP46p/11y9RWP8Ajq/mQ/TbeDrLZrpbL1bYrlZ7jR3Ghmz3VTSTNlifglp3XNJBwQQcHmCFVrEfY6/Y46W/jn9MnWXFV5K9i818E6lu1WJERF4ehERAREQEREBERAREQEREBERAREQEREBERARFbNU3226asFZfLtOIaOkj33u6noGgdXEkADxKzWs2mKx1li1orG89HxqzUdm0rZpbvfa6OkpY+GXcXPd0a0c3OPgFrBtH7QupL1NJSaVa6x2/kJSA6pkHiXcQz2N4j7pQHanr68a/1C643B5ipYyW0dI0+pAz87jwy7r7AAIiu34bwLHhrF88dq3h3R/bjOI8byZbTTBO1fHvn+nvX1lZcKp9XX1c9XUSHL5ZpC97vaTxK8EWUNiOyKv2gSvuFbPJb7FA/cfO1oMkz+rIweHDq48B4Hji5z58Wmxze87RCnwYMmpydikbzLF6Lc+LYFsyZSdy6z1UkmMd86ul3/bgODfoWFtuGxGfRlC6/wCn6ievszCBOyXBmpsng4kABzM8M4BGRnPNV2m45pdRkjHG8TPTdYangmpwY5yTtMR4f/GGURFcKgREQFM9i8OsJdf0J0UXMuTTl73Z7lsWRvd7+B4jnnGOOFaND6VvGsdQQWWy05lnk4veeDIWdXvPQD+4ZJW7Gy3QVn0Bp9tutzRLUyYdV1bm4fO/8zRxw3p5kkmm4vxLHpcc49t7T3f2uOE8OyanJGTfasd/9JZHv7je83d/A3t3lnyUd1Xp9tc11ZRtDaoD1m8hIP0rBXab7RjtK1x0poKogmvEMg9Pri0SR02DkxNB4OeeTujRkfK+TkvYBtfs21PTveR93R32lYPT6De4tPLvGZ4lhPw5HoTxNK5cMRlh2eSMWffFZbXNc1xa4FrgcEEYIK/FPdV6fbXNdWUbQ2qA9ZvISD9Kgbmua4tcC1wOCCMEFXWDPXNXeHOanTW09tp6PxERb0cV009Zp7tU4GWU7D9skxy8h5pp6zT3apwMsp2H7ZJjl5DzWRIIqS20O4zcgp4Wkkk4AA5kn86g6vV+b9SntLHRaLzvr39n6vqipYKOmZT08YZGwYAH5fasb7f2ajdYYzbzm0DjWtjzv5zwLvwPz8+itGodsT4dVRNtNO2e0QOLZi4YdUeLmn5uOnj18srWW526/wBojrqGVlTSTtwQR8WuHQ9CFrrp9TwzJj1OWm8Tz5/z4T3wxfV6LjeHNotPl2mOXL6x417p/wDYlqKi2Sbsq0V6TNNJbpZBK8uEZqHtbHno0NI4e3Kjms9jtA+jkqdMySw1LG5FNK/eZJ5Bx4g+0kezmurxeUuiyXis7xv3zHL6vn+o8iOJ4cc3js227omd/nEfVhahq6mhrIqyjmfBUQuD45GHBaQtlNlusYtW2TM24y5U2G1MY4A+DwPA/QfctZ5o5IZnwyscyRji17XDBaRwIKveg9QS6Z1PS3RhJia7cqGD58R+UPzjzAUjjHDa67BM19uOk/x+qH5N8bvwrVRF5/12na0eHv8AjH0bWIvmGRk0TJYnB7HtDmuHIg8ivpfNH2/qLH+3bahadlujnXasa2puNQTFbqLewZ5McSfBjc5cfYOZCns8sUEEk80jY4o2l73uOA1oGSSfBc09v+0Op2k7SK+994/62wuNPbIjkBlO0nddg8nO+UfM46BStLg89fn0hoz5fN15dUb11qy/a21LU6g1HXvrK6c4yeDY2DkxjeTWjPADzPMkqxIivYiIjaFVMzM7yIs/7CuzRftc0MF/1NVS2GxzAPgaGA1NUw/OaDwY09HOBz0aQQVs3prs77I7HBuN0pDcJSAHTXCV87nY64J3R7mhRMutx4526pFNLe8b9HOVF0hv2wHZHeKTuJdGUVKRxbJROfA9p8csIz7CCFrTt27MV30fQ1GoNG1M97s8IL6imkaPSqZg+dw4SNHUgAjwIyQxa7Hedp5F9Lesbxza6KV7LNe37Z1qyn1BYagtc0htRTuP2upizxjePA9DzB4hRRZg2R9nnXuvhFXSU31gszyD6bXRkOkb4xxcHP8Aad1p8VIy2pWvr9GnHFpt6vVvbs11laNe6NodT2V5NPVM9eNxG/DIPlRux1B+PAjgQpGSACScAcyoLsZ2XWDZZYJ7VY6ivqXVUglqpqqbe7x4GMhgw1nDhwGSAMk4C9du14qLDsc1XdKR7o6iK2TNie3mx727jXDzBcD7lz01ib7V6LiJmK72aQ9qLanVbRtfVEFHVOOnLXK6C3xNd6kpBw6c45l3Q9G4884iRF0WOkUrFYU17Ted5EWa+yVsptG03V1xfqF8jrTaIY5JqaJ5Y6ofIXBjS4cQ31XE4IPLiFulSbKNmFNA2GPZ7pZzWjAMtqhkd73OaSfeVGzaymK3Z23lvxaa2Sva3cwkXSrUOwzZNfIHRVOh7TTZ5PoY/RXDzHdFqwbtM7IIbHLW7Pr69zhlwt9zI48eTJmgewBzfa5Ypr8Vp2nkzbSXjpzajqfbBdE6i1ztHt9v07U1NA+nkFRUXGElpo42ni8EfO6NHUkdMkWKs0Tqyj1lFo6qsFdDfpZRFFROjw97icAtPItOD6wO7gE5wuhewLZhbdl2iY7VDuT3Sq3ZrnVgf+LLj5I/AbxDR7TzJXrVaiMdOXWWMGGb259IZBgjMUEcRkfKWNDS9+N52BzOOGStSvqi37RP5Q/sy24Wo/1Rb9on8of2ZVmi/Hr+v0TdT+FLUdERXypdFOx1+xx0t/HP6ZOsuLEfY6/Y46W/jn9MnWXFzmf8W3xlc4vYr8BERamwREQEREBERAREQEREBERAREQEREBERAREQFq32v8AWUlZfqXRlHN/i1C1tRWBp+VM4eq0/vWnP8PyW0hIAyTgBc9dbXh1/wBX3e9Oe54rayWZpPRpcd0e4YHuXQeTumjLqJyT/wAx85+5UPlBqZxaeMcf9fSPuFoREXcOKFvtsft9NbNl2mqWkbGIzbYZSWcnPkYHud73OJ960JW2XZf2j2666XpNIXOrjgu1A3uqZsjsekQj5Ib4uaOGOeAD4rnvKPDkyaetq9Inn/a/8nstKZ7Vt1mOX9M3qlvFDTXS01dtrWNfTVUL4ZWuGQWuBB/KqpeNdTiroZ6UySRCaN0ZfGcObkYyPMZXE1nad3ZzG8bOciKZ7Wdnl32fX80dYDPQTEmjrGtw2VvgfBw6j8yhi+p4stM1IvSd4l8xy4r4bzS8bTAr5ofSt41jqCCy2WnMs8nF7zwZCzq956Af3DJKaH0reNY6ggstlpzLPJxe88GQs6veegH9wySt2NlugrPoDT7bdbmiWpkw6rq3Nw+d/wCZo44b08ySTWcV4rTRU7Ned56R4e+VlwvhdtZbtW5Uj5+6DZboKz6A0+23W5olqZMOq6tzcPnf+Zo44b08ySTgztW9oFtjbVaG0NWB11IMdxuMTuFIORjjP7p4u+byHrfJdq3tAtsbarQ2hqwOupBjuNxidwpByMcZ/dPF3zeQ9b5OmDnOc4ucS5xOSSeJK5PBgvmv57Nzmfm67JkrhrGLFG2w5znOLnEucTkkniSrto/Ul50lqKkv9grZKOvpX70cjeRHVrhyLSOBB5q0IrKYiY2lCiZid4dI9gG1+zbU9O95H3dHfaVg9PoN7i08u8ZniWE/DkehMq1Xp9tc11ZRtDaoD1m8hIP0rmTo/Ul50lqKkv8AYK2Sjr6V+9HI3kR1a4ci0jgQea6GbANr9m2p6d7yPu6O+0rB6fQb3Fp5d4zPEsJ+HI9CanNhvpr+cx9E6tqamnm8nVbXNc1xa4FrgcEEYIKuenrNPdqnAyynYftkmOXkPNS+/abp7nUsqGP7iTI70gfLH6fNXWCKkttDuM3IKeFpJJOAAOZJ/Ot2TiETSOx1n5IOLhkxknzk+rHzIIqS20O4zcgp4Wkkk4AA5kn86wNta2iSX+V9ns8jo7Ux2JJBwNSR/V8B15lNrW0SS/yvs9nkdHamOxJIOBqSP6vgOvMrG66LgnBPNbajUR63dHh759/0+PTh/Kjyo89vo9HPqdJmO/3R7vr8OpZ07N0LW6cudQHO3n1YYRngA1gPL+EVgtZC2Kaxp9OXaaguUnd0FcW/bTyikHJx8jnBPs81accwZM+ivXHG88p/aVF5K6vDpeJ475p2id438N45Nh0XzG9kkbZI3texwy1zTkEeIKodQXm3WG2SXC51LYIWDhn5Tz0a0dSV80rS17RWsbzL7dfJTHSb3naI72ve22khpNotf3A3RM1kzgOjnNGfiePvUKVz1XeJr/qKtvE7dx1TJvBv3LQAGj3NACti+saPHbFp6Uv1iIif2fn3iefHqNZly4/ZtaZj4TLZXYrczc9n1CHvDpKQupXY6bvyR/NLVNFijs2yk2C6wdGVTX/FmP6qyuvm3F8UYtbkrHj9eb7b5P57Z+GYL269mI/bl/DEfa71O/TGwu8up5Wx1VzLLbCSefeE95jz7tsi51rcv6obcRFpbSdp3uNTXT1GMHj3TGt//r9K00UrQV2xb+Lbq7b5NvAWc+x5svp9e66lu97pu+sVj3JZI3g7tROT9rjPQtGC5w8mg8HLBi6A9iO0U9u2CW+uiYBLdaypqpndSWyGEfREOH6V71mSceLl38nnTUi+Tmze0BoDWgADgAOiIsd9oXaBX7NNnjtTW6gpq6ZtXFB3U5cG4fnJ4cc8FR1rNpiIWkzFY3lkRDxGCtLPsx9WfehZP9rL+lPsx9WfehZP9rL+lSfQs3g0ek4vFsZpzYjs3sWr63VNLp+Ga41NQZ2ekHfjpnHie6Z8lvHJzgkZ4EDgsjrSz7MfVn3oWT/ay/pT7MfVn3oWT/ay/pWbaTUW6x82I1GGOkt01Au0RQTXLYfrClga50n1rllDWjJPdjfIA9jVjTs5doC+bUNez6cuNht1BDHb5KoS073lxLXsbj1jjHrn4LYWaKOaF8MzGyRyNLXtcMhwPAgrRalsN4i3VurauSvJySRZH7QWzG4bMtdVFvdFI+zVT3S2upIO6+LPyCfu2ZAPuPULHC6Gl4vWLQp7Vms7SnmxTajfdlmppLvaIoqunqYxFWUcxIZOwHI4j5LhxweOMngcrbjSHau2Z3aFgvX1y0/UHAc2enM0efJ8eSR5loWhaLRm0uPLO89W3HqL442jo6j6b2jaC1G9sdk1hZK2VwyIY6xne/zCQ76FKRxGQuR6luj9pevtIlg09qy60UTG7rYO/MkAH/6n5Z9CiX4b+WyRXW/mh04qLZbqi5UtznoaaWtpA9tPUPjBkiDhhwa7mAeqq1p7sy7XtdFNFRbQbLFUQkhpuFubuPaOAy+InDupJaW+TStrNJaksWrLJDetO3OnuNBN8mWF2cHq1w5tcOoOCFBy4L4vahKx5a39mV2Wo/1Rb9on8of2ZbcLUf6ot+0T+UP7Mtmi/Hr+v0eNT+FLUdERXypdFOx1+xx0t/HP6ZOsuLEfY6/Y46W/jn9MnWXFzmf8W3xlc4vYr8BERamwREQEREBERAREQEREBERAREQEREBERAREQUt4MgtNYYhmQQP3fbunC50LpA9rXsLHDLXDBHiFzw1Ra32TUtzs8geHUVXLT+uOJ3XEA+/GV1fkxaN8le/l/Ll/KWs7Y7d3P+FuREXWuUF+tc5jg5ri1wOQQcEFfiIJRDtE15DRGij1hfGw4xj01+QPAOzke4rKPZ/21T2epj03rGtkntsz8U9fM8udTOJ+S9x4mMnqfk+zlgZFC1HD9PnxzS1Yjfw+qZg1+fBki8WmdvH6OhGrdO2bV+nprPeKdlTR1DctcD6zD817HdCOh/MtRtRbE9X2/aBDpihpnVkFWS+mr90iLugeLnn5pbkZHmMZyFOuyptFvktxi0NXU1TcqERudS1DRvOo2gfJeT/m+g6gkAZBAGzC5GM+p4Nlthid4n7iXWzg03F8VcsxtMfcwiWy3QVn0Bp9tutzRLUyYdV1bm4fO/8AM0ccN6eZJJwZ2re0C2xtqtDaGrA66kGO43GJ3CkHIxxn908XfN5D1vku1b2gW2NtVobQ1YHXUgx3G4xO4Ug5GOM/uni75vIet8nTBznOcXOJc4nJJPElR8GC+a/ns3OZ+aXkyVw1jFijbYc5znFziXOJySTxJX4iKzQREWy3ZG2E23WdEdb6xgdPaI5jHQUW9htU5hw58mOO4DwDc8SDngMHXly1xV7VnvHjnJbaGtKzN2TtBay1PtDpb7p2uqLLb7VMHVlza3hjmYGg8HucOBByADk9Ad+LfYLFbqBlvoLLbqSkY3dbBDTMZGB4boGF62y3WuyW80tsoaS3UbHPkMVPE2KMFxLnOw0AZJJJKrcnEO1WaxVNppOzaJmVaoftasV4v+lX0tnq3RyMdvyU4wBUtHzM9D1HQ9fEar7fO0zerjqunotnVwkobTbKgSelhvGvkaeoP+a/BPyuZ6AbF7ANr9m2p6d7yPu6O+0rB6fQb3Fp5d4zPEsJ+HI9CdWKubSWrniOnP8A+mpph1uK+ntM7Wjbly/b7+TAssckUr4pWOjkY4texwwWkcwR0K+VsDta2dx3+J94s8bY7sxuZIxwFSB08n+B68j0IwBLHJFK+KVjo5GOLXscMFpHMEdCvo3DeJYtfi7dOUx1jw/8fEuNcFz8Jz+byc6z0numP78Y/h8oiKwUy62nUd/tUfdW68V1NHj/AMNkzgz+byVJc7lcLnP39xrqmskHJ00peR7M8lSotcYscW7cVjfx2branNanm7Xma+G87fsIiLY0s6dm6Et07dKjBw+rDPL1WA/1llVRHZBanWnQFuilZuy1DTUyDGD65yP/AI7qly+WcVyxm1mS8dN/pyffOAae2n4bhx269mPnz/lqh9USo5H2vRlwB+1wz1kLhjq9sJH/ACytPlvx25bBJd9ibrjC0l9nr4ap2G5JjdmJ3uzI0n96tB1M0Ft8O3g96uNsm4uiXY5rRWdnnTjS/ffTuqYX8OWKiQgfzS1c7VtZ2B9fU9FXXPZ7cJ2xmtkNdbt443pQ0CWMeZa1rgPwXJrqTbFvHcaS0Vyc+9uIsEduj/ITJ/rOn/rLO6xl2ltB3raNszfpuwy0cdY6sin3qqRzGbrc54hpOePgqjDMVyVmfFY5ImaTEObiLYP7Ebah/wCf0x/vkv8A0k+xG2of+f0x/vkv/SV56Vh/MqvMZPBr4i97hSyUVfUUUxaZKeV0Ty05GWkg48uC8Fv6tTYPsEf5a6z/AFHP/wA2Fb2rRLsEf5a6z/Uc/wDzYVvaqTX/AIy00n4axa60jp7W2n5rFqW2xV1FJxAdwdG7HB7HDi1wzzH5Fp9tS7JuqrPLLWaGq2agoM5bSzPbFVsHhxwx/tBafwVurdLhQ2qglr7nWU9FSQgGSeeQMjYCQBlx4DiQFUtIcA5pBB4gjqtOHUZMXstmTFXJ1co9R6dv+m6z0PUFluFqnJIDKundEXY5kbwGRy4jxVrXWqtpKWtp3U1bTQ1MLvlRzRh7T7QeCx3qPYPskvrMVWibbSuzkOoA6kIPsiLQfeCp1OIx/wBVRbaKf+Zc2UW6Wsex7pmrZJLpTUtxtkxOWw1jG1EQ8gRuuHtJctXdqmzfVWzW9x2vU9GyPv2l1NUwP34KhoxksdgHhkZBAIyOHEZmYtTjy8qzzR8mC+PnMIesg7CtqF42X6whudLJNPapnhlyoQ71Z4+pAPAPbzafHgeBKx8i23pF47NujXW01neHWe1V9HdbXS3O3zsqKOrhZPBKw5a9jgC1w8iCFqh9UW/aJ/KH9mWVOxndZrpsBszJ5HSPoZp6QOdz3WyEtHua4D3LFf1Rb9on8of2ZU2mr2NTFfDf+Vlnt2sO/wAGo6Iiu1W6Kdjr9jjpb+Of0ydZcWI+x1+xx0t/HP6ZOsuLnM/4tvjK5xexX4CIi1NgiIgIiICIiAiIgIiICIiAiIgIiICIiAiIgLUztcaQfadZxaopoj6Hd2hspA4NqGDBH8JoB8yHLbNWLXul7drHS1ZYLm37VUN9SQDLopB8l7fMH4jI6qw4ZrPQ9RGTu6T8EHiOjjV4Jx9/WPi59or7rrSt30bqOosl4gMc0RzHIB6kzM8HtPUH6OIPEKxL6NS9clYtWd4l88vS2O01tG0wIiL08ivmh9K3jWOoILLZacyzycXvPBkLOr3noB/cMkpofSt41jqCCy2WnMs8nF7zwZCzq956Af3DJK3Y2W6Cs+gNPtt1uaJamTDqurc3D53/AJmjjhvTzJJNRxXitNFTs153npHh75W3C+F21lu1blSPn7oNlugrPoDT7bdbmiWpkw6rq3Nw+d/5mjjhvTzJJODO1b2gW2NtVobQ1YHXUgx3G4xO4Ug5GOM/uni75vIet8l2re0C2xtqtDaGrA66kGO43GJ3CkHIxxn908XfN5D1vk6YOc5zi5xLnE5JJ4krk8GC+a/ns3OZ+brsmSuGsYsUbbDnOc4ucS5xOSSeJK/ERWaCIiIC6Wdmp1G7YRo80RZ3QtzA7dPDvAT3nv395c01sT2T9vFLoKN2kNWvkGn5pTLTVbGl5opHfKDmjiY3Hjw4g5ODk4h63FbJj9XuSdLkilufe3nQ8BkqPW7XWirjbvrhRatsU9IBkytr4t1vt9bh71gTtJ9o6wUenKzS+gbjHdLpWxOhmuFO7MFLG4YcWPHy3kcAW8BnOcjCqMeG+S3ZiFjfJWkbzLT/AFc+ifqy8PtpYaJ1dOaYs+T3feO3ceWML70fqS86S1FSX+wVslHX0r96ORvIjq1w5FpHAg81aEXQ9mNtpU2877w6R7ANr9m2p6d7yPu6O+0rB6fQb3Fp5d4zPEsJ+HI9CfXa1s7jv8T7xZ42x3ZjcyRjgKkDp5P8D15HoRzu0fqS86S1FSX+wVslHX0r96ORvIjq1w5FpHAg810M2AbX7NtT073kfd0d9pWD0+g3uLTy7xmeJYT8OR6E1/8At4fljNhn78J9zdqNPg4ngnT6iN9/vePf99GBZY5IpXxSsdHIxxa9jhgtI5gjoV8rYHa1s7jv8T7xZ42x3ZjcyRjgKkDp5P8AA9eR6EYAljkilfFKx0cjHFr2OGC0jmCOhXe8N4li1+Lt05THWPD/AMfG+NcFz8Jz+byc6z0numP78Y/h8oiKwUwpLs101JqfVNPRFhNJEe9qndBGDy9p5e/yVmstsrrxcobdboHT1MzsNaPpJPQDxWzGzvSdLpKxNo4y2Wrlw+qmA+W7wH4I6e89VS8a4pXRYZrWfXt093v/AK97qPJfgV+JamMl4/1Vnn7/AHf37v0SRrQ1oa0ANAwABwC/URfNn2tbtUWai1Fpy5WG4sL6O4U0lNMAcHde0tJHgePBcutdabuGj9YXTTN0bu1duqHQvOMB45tePJzSHDyIXVZa/drvYvJru0N1Xpun39R26LdkgYONbAOO7+/bxLfEEjj6uJuizxjttbpKNqcXbrvHWGiCqLZXVlsuNPcbfUSU1XTStlhmjdh0b2nIcD4grxlY+KR0UrHMewlrmuGC0jmCPFfKu+qs6N59hHaa07qWhp7Prmpgsl8YAz0qQ7tLVn7re5Ru8Q7A8DxwNhaeeGpgZPTzRzRPGWPjcHNcPEEc1yTV0smo9Q2Nr2WW/XS2Ned54o6uSEOPLJ3SMquy8Prad6TsmU1kxG1o3dXFjbahtu2faApZRcLzDX3Jo9S3ULxLMXeDsHDPa4j3rnrctZavudM6muWqr7WwPaWuiqLhLI0g8wQ5xGFYl5pw6N/Wlm2s5erCqu1X6fdauu7vu/SZ3y7mc7u84nGevNUqIrOI2Qp5tg+wR/lrrP8AUc//ADYVvatRewls41BQ3ap2iXGL0O2VNC+koo5GkSVO89jjIB0YNzAPXPDgMrKPa62mV2z3Z8yms0czLtenPpoKoMO5TMA9d+9y38HDRnPEu+aqXVR53P2arLBPm8W9mCu2ltc/wlvx0FYKous9rlzXSxu9WpqW8N3hzazl5uyfmgq1bBe0nfdCU0Nh1PDUX6wRjdhIePSqVvgwu4PaOjXEY6EAYWAkVlGmx+b83MIU579vtw6g7Ptpmh9eUrZdM6ho6qYty6lc7u6hnQ70TsO9+MHoSpeuSMb3xva9jnNe0gtc04IPiFMrHtY2l2VoZbtc36OMYxHJWPlYMeDXkge4KFfh0/8AMpNdZH/UOni1K7fmsNP1dss2jaSeKqvFNWGsqe7Id6Mzu3NDHHo5xcDu+DMnGRnAF82x7Ub1TejV+ur2Yj8psNQYA4ceB7vdyOPIqCyPfI9z3uc57iS5zjkk+JWzT6Gcd4taejzm1UXr2aw+URXTSVgueqdS2/T1mg7+vr52wwt44yebjjk0DJJ6AEqwmYiN5Q4jflDfHsT0MlHsBtczw4emVdTO3Ph3hZ/UWMvqi37RP5Q/sy2h0XYaTS+krVpyhyae20kdMxx5u3WgFx8yck+1avfVFv2ifyh/ZlS6a3b1Pa8d/wCVnmr2cG3wajoiK7Vbop2Ov2OOlv45/TJ1lxYj7HX7HHS38c/pk6y4ucz/AItvjK5xexX4CIi1NgiIgIiICIiAiIgIiICIiAiIgIiICIiAiIgIiIIxtF0NYNd2U269U/rsyaepjwJYHHq0+HLIPArU/aRsX1ho+WWoipH3i1tOW1dIwuLR+Gzm328R5rddFZ6DiufR8q86+E/x4K7XcLwaznblbxhzeV80PpW8ax1BBZbLTmWeTi954MhZ1e89AP7hklbwaj0DovUMj5bxpq21Uzxh03chkp/htw76V66K0XpnRlNPT6btcdEyofvynfc97iOQLnEuwOgz1PirzJ5TUnFPYpMW+X3+ikx+TdoyR27xNfmotlugrPoDT7bdbmiWpkw6rq3Nw+d/5mjjhvTzJJODO1b2gW2NtVobQ1YHXUgx3G4xO4Ug5GOM/uni75vIet8nZi5UkdfQT0Usk0cc8Zje6GV0bwCMHdc0gtPmCCOixK7szbG3OLnaZqHOJySbnU5J/nrmqZq3yTkz7zLpZxTTHFMW0Q55Oc5zi5xLnE5JJ4kr8XQ37GTY197E/wCMqn9dPsZNjX3sT/jKp/XU/wDyGLwn7/VE9Dv4w55Iuhv2Mmxr72J/xlU/rp9jJsa+9if8ZVP66f5HF4T9/qeh38Yc8kXQ37GTY197E/4yqf10+xk2NfexP+Mqn9dP8ji8J+/1PQ7+MOeSLob9jJsa+9if8ZVP66fYybGvvYn/ABlU/rp/kcXhP3+p6HfxhzyRdDfsZNjX3sT/AIyqf10+xk2NfexP+Mqn9dP8ji8J+/1PQ7+MOeSLob9jJsa+9if8ZVP66fYybGvvYn/GVT+un+RxeE/f6nod/GHPJXfR+pLzpLUVJf7BWyUdfSv3o5G8iOrXDkWkcCDzW+32Mmxr72J/xlU/rp9jJsa+9if8ZVP66xPEMUxtMT9/qRpMkTvEwu2wDa/Ztqene8j7ujvtKwen0G9xaeXeMzxLCfhyPQn12tbO47/E+8WeNsd2Y3MkY4CpA6eT/A9eR6EeOktg+zTSl/pr7p60VtBcKZ2Y5o7lUH2ggvw4HqCCCsnKJh1dtLnjLp52+P0+D3rOH4tfp5wamN4n5e+PCfvo04ljkilfFKx0cjHFr2OGC0jmCOhUr0ds+1FqR7JIqV1HRHnVVDS1uPwRzd7uHmFsS7T1ifdXXV9pon1zsZndCC7IGM5PXHVXNdDqPKq9qbYabT4zz/aPv4OK0fkDjpk7Wpydqu/KIjbePfP9fujuiNHWjSdEYqCMyVEg+3VMg9d/l5DyH0qRIi5XLmvmvN8k7zLvtPp8WnxxixVitY6RAiItbcIiIMEdoLs6WXaDLNf9PSQ2bUjgS9xbinrD07wAZa78Me8O4Y0s1/oLV2hLk6h1RZKqgdvbscxbvQzebJB6ruXQ58cLqUqe40NFcqOSiuNHT1lLKMSQzxCRjx4FpBBUzBrb4o2nnCPl01b845S5LouhmruzRsm1A+SaOyz2Wd/OS2VBiA9jHbzB7mqC1fY30s6TNJrC8xM8JYIpD8Ru/kU+uvxT15Ik6TJHRpai3Oh7G2mxIDNrS7PZ1DaWNpPvyfyKW6Y7Kuyq0PbJXQXW+PDg4em1e6weW7EGZHkcpOvxR0I0mSWjGmdPX3U10jten7TWXOskIAipoi8gE4y7HBrePFxwB1K202E9lents0F+2lGCtqG4fFZ4zvQsP/vO5P8A3o9XxLhwWyunNP2LTlAKCwWegtdKDnuqSBsTSfE7o4nzKuahZtde8bV5Qk4tLWvOeb8jYyONscbGsY0ANa0YAA5ABWzVWnrLqmxVNjv9uguFvqW4khlbkeRB5hw5gjiDyV0RQYnbmlNINs3ZY1HYZ57poMyX21E7wojj0uAeA6SjzGHeR5rXWupKqhq5aOuppqWpiduyQzRlj2HwLTxBXWlR/V+idI6uhEWptO226bowx9RADIwfgv8AlN9xCsMXELV5XjdDyaSs868nK9FvrqHsnbLLi7ft5vVmPRtNWd4z3iVrz9KjE3Y202ZCYdaXZjOgdSxuI9+R+RS41+GWidJkaYotzoextpsSAza0uz2dQ2ljaT78n8ilumOyrsqtD2yV0F1vjw4OHptXusHluxBmR5HKTr8UdCNJklpBovSWo9ZXhlp0zaKq5VTiMiJnqxg/Oe7kweZIC3s7Nmw2h2X0LrrdJYbhqeqj3JZ2D7XTMPExx54njzdwzjkBzyvp2w2TTtubbrDaaK10bTkQ0sDY258cAcT5q4qBqNZbLHZjlCVh09cfOeci1H+qLftE/lD+zLbhY620bH9M7V/rT/hFXXel+tffdx6BLGze73c3t7fY7P8A4bcYxzPNatNkjHli1ujZmpN6TWHNRFvN9h9s0/05q7/e6f8A6CfYfbNP9Oau/wB7p/8AoK19PwoHomRLux1+xx0t/HP6ZOsuKO7NdH2zQOirfpOzz1k9DQ953UlW9rpTvyOkO8WtaObzjAHDCkSpstotebR3ysqRNaxEiIi8PQiIgIiICIiAiIgIiICIiAiIgIiICIiAiIgIitxv1jBIN5twI5j0pn6UFxRW36/2L/TVt/3pn6VcY3skY2SNzXscAWuacgg9Qg/UREBERAREQEREBERAREQEREBEXzLJHFG6WV7WMYMuc44AHiSg+kXjR1VNWU4qKSeOeJ3J8bg4H3heyAiIgIiICIiAip566ip6iOnnrKeKaU4jjfIGufxxwB4niqhAREQERUYutuN0+tfpkXpu7vdzn1sYz8ccceCCsREQEREBERAREQERUVVd7TSzugqrnRQStxvMkna1wyMjIJQVqK2/X+xf6atv+9M/Sqykqqash76kqIaiPON+J4c3PhkIPZERARFTwV1FUVElPBWU8s0RxJGyQOczjjiBxHFBUIiICIiAiIgIiICIiAiIgIiICIiAiIgIiICIiAiIgIiICIiD8cN5pbkjIxkcwsZ7QNMWOx2IVNJHMKiSZsbN6UkdSeHsCyasd7V3urbxZ7NG71pHbxA/DcGtP0OWYYlU2DQtknsVHVV0c3fyQtkkPeloGRn3Koq9f2ekl9EoaWprGQjd34gAzA4cPEeeFW7SJn0WjKltMNwO3IuHzWkgH6OHvXrs9oaWj0rRPp2N354xJK8c3OPifLl7kFTpnUdt1BE91E57ZI8d5FIMObnr4EexU+otW26x3OGhrGTF0jA8vYAQxpJHHjnoeSjemBC/apc329oFM1jw/c+Tn1Qf/llfdBHHedq9bNKxskNAzDQ4ZAc3Df8AiLj7kN1wo9oVomuApZ6eppGOPqyzAAeRIzwC+H7RrQ2sbGaWs9HccCcsABHiBnOPp8lQ6vhiu20q02xzGvZExrpQRnIyXlp8sAfFem1rdnNntMLWiSaY7uB8kcGgew5+hBN6qspaWifW1E7I6djd8yE8MKHy7SLWJXd1b62SBpwZQAPoyqba24x0tntrZDHTSSO3z4bu6Bn2BxUzbTW+32c0/dxRUMURDmkeru4458UCy3SivFA2toZe8iccEEYLT1BHQqxXHXVooLnV0M8VTv02QXNaCHuGPVHHnx6+BVo2Pl0VDdqgktpBI3cz0IDi76C1fuyqljrqq6X2oha+WSoIjc4ZLCcudjz9YJsbpA/VVJFpaPUE1NOyGR26yLhvn1iPZ0JVPaNa2663Wlt1FT1L5J2lznEANjw0kg8eJ4K17W5HVAtNniPr1NRvew8Gj/iPwUukihtVkmbQwsjbTwOdGxo4ZDSUFo1DrS1WirNEGzVdUODo4QCGnwJ8fIZX7pvWVsvVX6E1k1LVcd2OYD1scwCOvkrNsgpYJKGsukhbLWvnLHPdxc0YB+kk+3Cp9biKTaLZY6ID0sPjMxZzA38jPuyfYglt11BTW++UVplgmdLWY3HtxujJxx4r51VqSh09DC+rZLK+ZxDI48ZwOZ4nly+Kjm0pzafU+m6x5a1rZ8uLjgANew8firLeYpdTUt71JJvimpmtiogR0DwSfhn3u8k2N2RrreKS22V11qN7uQxrg0fKdvYwB58VbblWMvmipqhlsrpGVTMMgYWiQ8cB3XAzx68Oih76iTVlVYtPwPJpaemjkq3t+6DBvfAcPa4rKMUbIomxRtDWMaGtaOQA5BOgiFmdTaF0lH9dXuM80pkMUfrEvIHqjpwAGTyX7Br+gFRHHX26voWSfIkkj9X2+OPZlVOvdPTX6KldRVMcVZSFz42vPBwOM+z5IwrPR6iutLdaSzautcT+9kb3U+6D62fVdwyDxxyxhBPwQRkclS3a4UtroJK6tk7uGMcTjJJPAADxVUrLrKzi+2V1vbUNhlLw+Iu5FwzwPuysMrK3aFQjclmtVxipXnDZiwYP0/kKlTbhROtguXpDBSGPvO9dwG748VAHXjUGmqeK3aktsNbbCBC17QDloHLwPDoQCcKs2u1Tm6foIKfLaeeTeO6MAgNy0ezjnHkssbveo2j2tsrhBQ1s8LTgygAD24P58KT2G8UN6oRV0EhczO65rhhzD4EL9t1FQW2zspIWxNpI4vWJA3XDHFx8c8yoZslDfTb3NTgtozI3u88sZeR8BhB9VH/em16Jnyo7fECfc3P/ABPHwUmqdRUsOp4LAIZn1Erd7fbjdbwJ48c8hlRrZiPT77fL24E97JusPk5xcR8A1fmlP+89pd4uJ4spw6Nh88hgPwaUEo1Tf6XT9FHU1Ucsokk7trY8Z5E54nlw+lW3W+p4rRbGw91MKqsp391u4+1HAAJ4+J6eCtO0PFy1dYrKDvN3w+QeTnDP0NPxVXteqjFp2Gkb8qpnAx4hoJ/LuoPHZVe/S6aS2SmrnqWb00k0r95uMgBoJOf/AKVWaefYrrrC4V9JRTitpSWPme71CeLMtGeoB9yvbA2yaXGcYoqPj5lrP7lE9msctHo66XUAumkMj2nmXbjeH07yC86h1parRVmiDJquqacOZCBhp8CT18hlfWm9ZWy9VfoTWTUtVx3Y5gPWxzwR18lZ9kFJTvt1XdH4krJJyxz3cXNGAfpJJ8+CptZiKXaRZo6ED0tr4zMW+Adnj7G592EEu1TqCk09SRVFVFLKJZNxrY8Z5E54nl+lWKq2jWqGQd3RVk0OcGUNAGfLJ4qk1+Bc9aWOzEb0YIkkb0Ic7j9DD8VcdqUkFJox1MyNjGyyxxxta0ANwd7gOnBv0oJDDdaGWzi7icNozH3m+4ch1yPHphRg7QqHjKy1XF9I12DOGDH5cfSq+lsrajZ/T2aWYwOlpmDe+5eSHY8+PRRqOs1ToyjZTV9FBXWph3Q5p4AE8s8xz+cEGQLTcKW6UEddRSF8Mmd0lpB4HBGD5qqVHZJqWptFLPQxCKmkia6NgaBujHLA8FWLDIolq3S9jfBcb3VxzumETpXYlIBIbwH0AKWqK7VKv0XSMsYOHVMjIh8d4/Q1IYlGNnmk7debNLW3GOUkzFke68t4ADj8SfgpDU6gsGkImWWjinqZIySYozvFpJz6xPXjyVfpOF1r0JTOazMjaV0+McSXAvx9OFYdkFNBNTV11lxLWvnLC93FwGASfeSfgsi9ad1na7xWCh7uakqjndZMBh3kCOvkVdb9eKCyURq6+UsYTuta0Zc8+AChWvhFJryyR0YHpu+wylo4gb43c+wZPsX7q4Mue0q12ysOaVjWncJ4OJy4/HACbC40e0S1SygVFJV0sTs7krmgtPtx/eqbZJG6aK63eX5dTUbuT0xlx/4h8FetoksFNo2sD44yHNbHG0gYBJAGPYMn3KxRtltGyBz48tlmi3iR4SPAz/NIQV9x2g2qnrX01JTVNduHDpIgN33ePtVRQa4tVfcaKho4qmSSqH3IHdnjkO49MZ4ZX7szoqWm0pTTwNaZagF8rxzJyRj3cvirJpyKGu2q3OshjY2KlD8boAG/gMJ9p9YoJQ3UdKdUu086GZtQG7wecbjvV3uHHPL8i9tTX2jsFA2rqw9++8MZGzG84+/wCiesC23bSbLcXODI5Wtjc4nAHEtJJ8MOC+Lex2tNYuuErSbRbjuxNI4SHp8TxPlgJsbp3bqk1lDDVGCSDvWB4jkxvNB5ZwqhEWGRERAREQEREBERAREQEREBERAREQEREBERAREQFGqzTD6rWcN/lrGmKEDdg7vjwaccc/dHPJSVEFNdKGmuVBNQ1bN+GVu64dfIjzB4qFx6HvVLG+joNTTQ0TifUw4EA8+AOPyZU9RDZZ9LaeotP0ToKbMkkhzLM4es89PYB4Km0lpx9lq7hVz1bamaseHEhm7u8ST1PMn6FIUQR6h04+HWNVqCarbL3zC1kQZgs4NA458Bj3pdNOPr9WUV6kq2iKkaA2Dc4kgk5znxI6dFIUQWnVNhpNQW8UtS50bmO3o5W82H848lGDoe8zwMoazU0slA3H2sNccgchgnH5cKeom5stX1khp9NS2W2u9GY+F0bXkbxBcMFx8TxX5pKzCw2ZlB3omcHue94bu7xJ8PZgK7Igj1004+v1ZRXqSraIqRoDYNziSCTnOfEjp0UgcA5pa4AgjBB6r9RBB5dDVtFWyz6fvktBFL8qI54eWQeIGeGRkeKueldJQWaqfcKmqkrrg/OZnj5OeeOJOT4k/BSVFndjZHdb6adqOCmjZVimdA5xyWb2QQPMeCq3WKBmlH2GncI2GnMQeW59Y83Ee3iruiwyjuidLx6chn3pxUTzOGZAzdw0chjJ65/wDoUiREEY1Hpaor7sLvbbvUUNYGBnMlpA6DjwHiOI8l4W7SNZJeYLpfru64SU5BhYGbrQRxB+PHgFLkWd2NhWDVmnPr46nnhuFRRVVNkxPYSWjPlkYPmD8Vf0WGUJdo263GaBt/v76ylhdvCJjMbx8z+fiVI9RWSjvdqNBUgsaCHRvZzjcOAI/QrmiGyBDQ97fTtt82p5XUA4d2Gu4t8MZx7uSlNHZae3WCS1W09xvRuaJHDJLyMb58Sroibmyy6NsQ09aXUXfid75TI54bu5yAOXsCsE2h6+C8z11nvj6Jk7i5wDTvAE5I4HiPapyibsbIhY9Fm3ambeJLlJV7oOBK3Ly4twSXZ8yqzXOmTqOCm7uqFPNTlxaS3IIdjP5ApGibs7I4bBcJNIS2WouzpqiXgamRpdhuQccTk8Bj3q5aetbLTY6e2bwlETSHO3cBxJJPD3q4ogg0mhq2irZptP3yWhil5xEHh5ZB446ZHBXTSmkqezVL6+oqX11wkzmZ45Z544nifElSVFndjZHmacf/AIav1FNVteAzdih3MFnq7vPPt+Kaz07JqFtHF6WIIYHl72lmd/OPMY4Z+KkKLDOyzaqsEd9oY6f0qalfC7fidGeAd0y3r+ZWCbR19romUd11NJPRNcCWBnrOx4k/nzhThE3Nkc1Vpk3Wx0tqoqr0OKnc3DSCWuaBgA+xXy3U5pLfT0pldMYYmx947m7Axkr3RAUd1tpybUcVLCytbTRwuc5wMe9vE4A6jGOPxUiRB8xxsZE2JrQGNaGgeShM+h6ukr5ajT96lt8c3yosHA8sg8R4ZHDxU4RBGdLaRhtFY65VdVJX3B+ftzx8nPPGcnPmvzWekmX6eGtp6s0lZCA0P3chwByOXEEHqpOibmyA12hLpcadguGo5aiVjvV32lzGjHQE8zw4qYVVrpaqym0zNJpzCIsDgQABgjzGAVXIhsgdv0NdaJz6aHUs8NA92XsiBa5w+OAfNXfRWmRpqOsfLVtndOWkv3N0NDc+Z8SpKvOphjqaaSnmaXRysLHgOIyCMHiOIWd2NmONpFXRaguFstlolZWVYe4b0TssAdjhkezJ8MKd2C1QWezw2+n5Mb67wOLnHm7/AO+S8bJpyzWaV01BRiOVwwXucXOx4Ak8PcrsgjWjNMz2CetmnuDqp1S4Y9UjkT6xyeJOVJURYZEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQf//Z" alt="GSI" />
+      <div class="brand-divider"></div>
+      <div class="brand-product">
+        <span class="brand-product-name">RapidReconciler</span>
+        <span class="brand-product-tag">University</span>
+      </div>
+    </a>
+    <nav class="section-nav">
+      <a href="rapidreconciler-university.html#getting-started">Getting Started</a>
+      <a href="rapidreconciler-university.html#inventory">Inventory</a>
+      <a href="rapidreconciler-university.html#in-transit">In Transit</a>
+      <a href="rapidreconciler-university.html#po-receipts">PO Receipts</a>
+      <a href="rapidreconciler-university.html#reference">Reference</a>
+      <a href="mailto:rrsupport@getgsi.com" class="nav-cta">Contact Support</a>
+    </nav>
+  </div>
+</header>
+
+<!-- ============ PAGE HEADER ============ -->
+<section class="page-header">
+  <div class="container">
+    <div class="breadcrumb">
+      <a href="rapidreconciler-university.html">University</a>
+      <span class="sep">/</span>
+      <a href="rapidreconciler-university.html#inventory">Inventory</a>
+      <span class="sep">/</span>
+      <span class="current">Inventory Reconciliation Walkthrough</span>
+    </div>
+    <h1 class="page-title">Inventory Reconciliation <em>Walkthrough</em></h1>
+  </div>
+</section>
+
+<!-- ============ SPA LAYOUT ============ -->
+<div class="container">
+  <div class="spa-wrap">
+    <aside class="sidebar">
+            <div class="sidebar-title">Inventory Reconciliation Walkthrough</div>
+
+      <div class="sidebar-section-label">Overview</div>
+      <ul class="sidebar-nav">
+        <li data-target="home"><button onclick="showView('home')">Index</button></li>
+        <li data-target="process"><button onclick="showView('topic-process')">Process at a Glance</button></li>
+      </ul>
+
+      <div class="sidebar-section-label">Reconciliation Steps</div>
+      <ul class="sidebar-nav" id="sidebar-steps">
+        <li data-target="step1" class="step-num"><button onclick="showView('topic-step1')">Select data &amp; check the system</button></li>
+        <li data-target="step2" class="step-num"><button onclick="showView('topic-step2')">Read Valuation, investigate variances</button></li>
+        <li data-target="step3" class="step-num"><button onclick="showView('topic-step3')">Period-end closing activities</button></li>
+        <li data-target="step4" class="step-num"><button onclick="showView('topic-step4')">Review the Integrity Reports</button></li>
+      </ul>
+
+      <div class="sidebar-section-label">Reference</div>
+      <ul class="sidebar-nav">
+        <li data-target="reference"><button onclick="showView('topic-reference')">Reference Material</button></li>
+        <li data-target="pitfalls"><button onclick="showView('topic-pitfalls')">Pitfalls &amp; Getting Help</button></li>
+      </ul>
+    </aside>
+
+    <main class="content-card">
+
+      <!-- ============ INDEX (HOME) VIEW ============ -->
+      <section id="home" class="view active">
+        <h1>Inventory Reconciliation Walkthrough</h1>
+        <p class="lead">A practical, step-by-step guide for reconciling JD Edwards perpetual inventory (F4111) to the general ledger (F0902) using RapidReconciler.</p>
+
+        <div class="page-meta">
+          <span class="meta-item"><strong>Last reviewed:</strong>&nbsp;January 2026</span>
+          <span class="meta-item"><strong>Reading time:</strong>&nbsp;~25 minutes</span>
+          <span class="meta-item">Press <kbd>Ctrl</kbd>+<kbd>F</kbd> (or <kbd>&#8984;</kbd>+<kbd>F</kbd>) to search this page</span>
+        </div>
+
+        <div class="diamond-divider"><span class="diamond"></span></div>
+
+        <h2>Who This Guide Is For</h2>
+
+        <p>You should use this guide if you are responsible for closing inventory accounts at period-end, or for monitoring inventory variances during the period. It assumes you have a RapidReconciler login and access to JD Edwards for making corrections.</p>
+
+        <div class="callout important">
+          <div class="callout-icon">!</div>
+          <div>
+            <p><strong>Important.</strong> RapidReconciler is read-only. It identifies what is out of balance and where the discrepancy originates &mdash; but every correction is made in JD Edwards, not in RapidReconciler. Data refreshes nightly; transactions entered today won&rsquo;t appear until tomorrow.</p>
+          </div>
+        </div>
+
+        <h2>The Four Steps</h2>
+
+        <p>The reconciliation process breaks into four steps. Steps 1 and 2 are run daily or weekly during the period; Steps 3 and 4 are period-end activities. See <a href="javascript:void(0)" onclick="showView('topic-process')">Process at a Glance</a> for the full flowchart and frequency table.</p>
+
+        <table>
+          <thead>
+            <tr><th style="width:6%;">#</th><th style="width:36%;">Step</th><th>What It Does</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="num-cell">1</td><td><a href="javascript:void(0)" onclick="showView('topic-step1')">Select data &amp; check the system</a></td><td>Confirm both status lights are green, then choose the period and account filters.</td></tr>
+            <tr><td class="num-cell">2</td><td><a href="javascript:void(0)" onclick="showView('topic-step2')">Read Valuation, investigate variances</a></td><td>Read the Valuation section, then work through every non-zero line in the Variance Calculation section.</td></tr>
+            <tr><td class="num-cell">3</td><td><a href="javascript:void(0)" onclick="showView('topic-step3')">Period-end closing activities</a></td><td>Run the pre-close checklist, post the closing JE, and produce the Audit Report.</td></tr>
+            <tr><td class="num-cell">4</td><td><a href="javascript:void(0)" onclick="showView('topic-step4')">Review the Integrity Reports</a></td><td>Review Reports 2&ndash;6 monthly, plus other reports when triggered.</td></tr>
+          </tbody>
+        </table>
+
+        <h2>Before You Begin</h2>
+
+        <h3>What You Need</h3>
+
+        <table>
+          <thead>
+            <tr><th style="width:28%;">Item</th><th>Requirement</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>RapidReconciler login</strong></td><td>Provided by your administrator.</td></tr>
+            <tr><td><strong>Browser</strong></td><td>Chrome, Edge, Firefox, or Safari.</td></tr>
+            <tr><td><strong>Network</strong></td><td>Office network or VPN.</td></tr>
+            <tr><td><strong>JD Edwards access</strong></td><td>Required for making corrections.</td></tr>
+            <tr><td><strong>Account permissions</strong></td><td>Confirm with your administrator which companies and accounts you can see.</td></tr>
+          </tbody>
+        </table>
+
+        <h3>Key JD Edwards Tables Behind the Scenes</h3>
+
+        <p>You won&rsquo;t query these directly, but understanding what RapidReconciler is comparing helps when investigating variances.</p>
+
+        <table>
+          <thead>
+            <tr><th style="width:18%;">Table</th><th>What It Holds</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong><code>F4111</code></strong></td><td>Item Ledger &mdash; every inventory transaction.</td></tr>
+            <tr><td><strong><code>F41021</code></strong></td><td>Item Location &mdash; current on-hand balances.</td></tr>
+            <tr><td><strong><code>F0902</code></strong></td><td>Account Balances &mdash; GL period-end totals.</td></tr>
+            <tr><td><strong><code>F0911</code></strong></td><td>Account Ledger &mdash; GL transaction detail.</td></tr>
+            <tr><td><strong><code>F4095</code></strong></td><td>Distribution/Manufacturing AAI Values.</td></tr>
+            <tr><td><strong><code>F4101</code> / <code>F4102</code></strong></td><td>Item Master / Item Branch.</td></tr>
+          </tbody>
+        </table>
+
+        <div class="callout principle">
+          <div class="callout-icon">i</div>
+          <div>
+            <p><strong>Key principle.</strong> RapidReconciler tells you <em>what</em> is out of balance and <em>where</em> the discrepancy originates &mdash; but every correction lands in JD Edwards. Don&rsquo;t adjust the GL on stale data; both status lights must be green and the latest import must be complete.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ PROCESS AT A GLANCE ============ -->
+      <section id="topic-process" class="view">
+        <h1>The Reconciliation Process at a Glance</h1>
+        <p>The diagram below shows the end-to-end reconciliation flow at a glance. Each step is detailed in the sidebar topics 1 through 4.</p>
+
+        <div class="diamond-divider"><span class="diamond"></span></div>
+
+        <h2>Reconciliation Flowchart</h2>
+
+        <div class="flow-container">
+  <svg class="flow-svg" viewBox="0 0 880 1380" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Flowchart showing the inventory reconciliation process from login through to integrity report review">
+    <defs>
+      <marker id="arrowFlow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" fill="#5a6479"/>
+      </marker>
+      <marker id="arrowFlowRed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" fill="#c75a3a"/>
+      </marker>
+      <marker id="arrowFlowGreen" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" fill="#3d6927"/>
+      </marker>
+      <linearGradient id="boxGrad" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#fdfdfd"/>
+        <stop offset="100%" stop-color="#eef3f9"/>
+      </linearGradient>
+      <linearGradient id="stepGrad" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#2b5fb0"/>
+        <stop offset="100%" stop-color="#1f2d4a"/>
+      </linearGradient>
+      <linearGradient id="endGrad" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#f08a24"/>
+        <stop offset="100%" stop-color="#d97316"/>
+      </linearGradient>
+      <linearGradient id="sourceGrad" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#fef5e7"/>
+        <stop offset="100%" stop-color="#fbe9c8"/>
+      </linearGradient>
+      <filter id="flowShadow" x="-5%" y="-5%" width="110%" height="115%">
+        <feDropShadow dx="0" dy="2" stdDeviation="2" flood-opacity="0.15"/>
+      </filter>
+    </defs>
+
+    <!-- START -->
+    <g filter="url(#flowShadow)">
+      <rect x="320" y="20" width="240" height="56" rx="28" fill="url(#endGrad)"/>
+      <text x="440" y="44" text-anchor="middle" font-family="'Source Sans 3', sans-serif" font-size="13" font-weight="700" fill="#fff" letter-spacing="1.2">START</text>
+      <text x="440" y="63" text-anchor="middle" font-family="'Open Sans', sans-serif" font-size="11" fill="#fff">Log in to RapidReconciler</text>
+    </g>
+    <line x1="440" y1="76" x2="440" y2="106" stroke="#5a6479" stroke-width="2" marker-end="url(#arrowFlow)"/>
+
+    <!-- DECISION: Status lights green? -->
+    <g filter="url(#flowShadow)">
+      <polygon points="440,110 600,180 440,250 280,180" fill="url(#boxGrad)" stroke="#c9d3e0" stroke-width="1.5"/>
+      <text x="440" y="175" text-anchor="middle" font-family="'Open Sans', sans-serif" font-size="12" font-weight="600" fill="#1f2d4a">Both status lights</text>
+      <text x="440" y="192" text-anchor="middle" font-family="'Open Sans', sans-serif" font-size="12" font-weight="600" fill="#1f2d4a">green?</text>
+    </g>
+
+    <!-- NO branch: resolve prior period -->
+    <line x1="280" y1="180" x2="180" y2="180" stroke="#c75a3a" stroke-width="2" marker-end="url(#arrowFlowRed)"/>
+    <text x="225" y="172" text-anchor="middle" font-family="'Open Sans', sans-serif" font-size="11" font-weight="700" fill="#c75a3a">NO</text>
+    <g filter="url(#flowShadow)">
+      <rect x="20" y="155" width="160" height="50" rx="6" fill="#fbe9e3" stroke="#c75a3a" stroke-width="1.5"/>
+      <text x="100" y="175" text-anchor="middle" font-family="'Open Sans', sans-serif" font-size="11" font-weight="600" fill="#8a3520">Resolve prior period</text>
+      <text x="100" y="191" text-anchor="middle" font-family="'Open Sans', sans-serif" font-size="11" fill="#8a3520">or contact IT</text>
+    </g>
+    <!-- loop back from "resolve" up to START -->
+    <path d="M 100 155 Q 100 40 320 40" fill="none" stroke="#c75a3a" stroke-width="2" stroke-dasharray="4,4" marker-end="url(#arrowFlowRed)"/>
+
+    <!-- YES branch: continue down -->
+    <line x1="440" y1="250" x2="440" y2="280" stroke="#5a6479" stroke-width="2" marker-end="url(#arrowFlow)"/>
+    <text x="455" y="270" font-family="'Open Sans', sans-serif" font-size="11" font-weight="700" fill="#3d6927">YES</text>
+
+    <!-- STEP 1 -->
+    <g filter="url(#flowShadow)">
+      <rect x="180" y="285" width="520" height="80" rx="6" fill="url(#stepGrad)" stroke="#1f2d4a"/>
+      <circle cx="215" cy="310" r="16" fill="#f08a24"/>
+      <text x="215" y="316" text-anchor="middle" font-family="'Source Sans 3', sans-serif" font-size="14" font-weight="700" fill="#fff">1</text>
+      <text x="245" y="315" font-family="'Source Sans 3', sans-serif" font-size="14" font-weight="600" fill="#fff">Select period &amp; account filters</text>
+      <text x="200" y="340" font-family="'Open Sans', sans-serif" font-size="11" fill="#fff">• Choose accounting period and company/account scope</text>
+      <text x="200" y="356" font-family="'Open Sans', sans-serif" font-size="11" fill="#fff">• Confirm system is ready for reconciliation work</text>
+    </g>
+    <line x1="440" y1="365" x2="440" y2="395" stroke="#5a6479" stroke-width="2" marker-end="url(#arrowFlow)"/>
+
+    <!-- DECISION: Out of Balance = 0? -->
+    <g filter="url(#flowShadow)">
+      <polygon points="440,400 600,470 440,540 280,470" fill="url(#boxGrad)" stroke="#c9d3e0" stroke-width="1.5"/>
+      <text x="440" y="465" text-anchor="middle" font-family="'Open Sans', sans-serif" font-size="12" font-weight="600" fill="#1f2d4a">Out of Balance</text>
+      <text x="440" y="482" text-anchor="middle" font-family="'Open Sans', sans-serif" font-size="12" font-weight="600" fill="#1f2d4a">= 0 ?</text>
+    </g>
+
+    <!-- YES branch: reconciled - go to END or skip ahead -->
+    <line x1="600" y1="470" x2="700" y2="470" stroke="#3d6927" stroke-width="2" marker-end="url(#arrowFlowGreen)"/>
+    <text x="650" y="462" text-anchor="middle" font-family="'Open Sans', sans-serif" font-size="11" font-weight="700" fill="#3d6927">YES</text>
+    <g filter="url(#flowShadow)">
+      <rect x="700" y="445" width="160" height="50" rx="6" fill="#e2efd9" stroke="#3d6927" stroke-width="1.5"/>
+      <text x="780" y="465" text-anchor="middle" font-family="'Open Sans', sans-serif" font-size="11" font-weight="600" fill="#3d6927">Reconciled —</text>
+      <text x="780" y="481" text-anchor="middle" font-family="'Open Sans', sans-serif" font-size="11" fill="#3d6927">no action needed</text>
+    </g>
+
+    <!-- NO branch: investigate -->
+    <line x1="440" y1="540" x2="440" y2="570" stroke="#5a6479" stroke-width="2" marker-end="url(#arrowFlow)"/>
+    <text x="455" y="560" font-family="'Open Sans', sans-serif" font-size="11" font-weight="700" fill="#c75a3a">NO</text>
+
+    <!-- STEP 2 (Investigate variance sources) -->
+    <g filter="url(#flowShadow)">
+      <rect x="180" y="575" width="520" height="60" rx="6" fill="url(#stepGrad)" stroke="#1f2d4a"/>
+      <circle cx="215" cy="605" r="16" fill="#f08a24"/>
+      <text x="215" y="611" text-anchor="middle" font-family="'Source Sans 3', sans-serif" font-size="14" font-weight="700" fill="#fff">2</text>
+      <text x="245" y="600" font-family="'Source Sans 3', sans-serif" font-size="14" font-weight="600" fill="#fff">Investigate each variance source</text>
+      <text x="245" y="618" font-family="'Open Sans', sans-serif" font-size="11" fill="#fff">Identify where the discrepancy originates</text>
+    </g>
+
+    <!-- Six variance source boxes (fanned out) -->
+    <line x1="440" y1="635" x2="440" y2="660" stroke="#5a6479" stroke-width="2"/>
+    <line x1="100" y1="660" x2="780" y2="660" stroke="#5a6479" stroke-width="2"/>
+    <line x1="100" y1="660" x2="100" y2="685" stroke="#5a6479" stroke-width="2" marker-end="url(#arrowFlow)"/>
+    <line x1="236" y1="660" x2="236" y2="685" stroke="#5a6479" stroke-width="2" marker-end="url(#arrowFlow)"/>
+    <line x1="372" y1="660" x2="372" y2="685" stroke="#5a6479" stroke-width="2" marker-end="url(#arrowFlow)"/>
+    <line x1="508" y1="660" x2="508" y2="685" stroke="#5a6479" stroke-width="2" marker-end="url(#arrowFlow)"/>
+    <line x1="644" y1="660" x2="644" y2="685" stroke="#5a6479" stroke-width="2" marker-end="url(#arrowFlow)"/>
+    <line x1="780" y1="660" x2="780" y2="685" stroke="#5a6479" stroke-width="2" marker-end="url(#arrowFlow)"/>
+
+    <g filter="url(#flowShadow)">
+      <rect x="40" y="690" width="120" height="44" rx="4" fill="url(#sourceGrad)" stroke="#d97316" stroke-width="1.5"/>
+      <text x="100" y="708" text-anchor="middle" font-family="'Source Sans 3', sans-serif" font-size="11" font-weight="700" fill="#5a3b10">Carry Forward</text>
+      <text x="100" y="722" text-anchor="middle" font-family="'Open Sans', sans-serif" font-size="9" fill="#5a3b10">prior period balance</text>
+    </g>
+    <g filter="url(#flowShadow)">
+      <rect x="176" y="690" width="120" height="44" rx="4" fill="url(#sourceGrad)" stroke="#d97316" stroke-width="1.5"/>
+      <text x="236" y="708" text-anchor="middle" font-family="'Source Sans 3', sans-serif" font-size="11" font-weight="700" fill="#5a3b10">GL Batches</text>
+      <text x="236" y="722" text-anchor="middle" font-family="'Open Sans', sans-serif" font-size="9" fill="#5a3b10">unposted batches</text>
+    </g>
+    <g filter="url(#flowShadow)">
+      <rect x="312" y="690" width="120" height="44" rx="4" fill="url(#sourceGrad)" stroke="#d97316" stroke-width="1.5"/>
+      <text x="372" y="708" text-anchor="middle" font-family="'Source Sans 3', sans-serif" font-size="11" font-weight="700" fill="#5a3b10">End of Day</text>
+      <text x="372" y="722" text-anchor="middle" font-family="'Open Sans', sans-serif" font-size="9" fill="#5a3b10">nightly close</text>
+    </g>
+    <g filter="url(#flowShadow)">
+      <rect x="448" y="690" width="120" height="44" rx="4" fill="url(#sourceGrad)" stroke="#d97316" stroke-width="1.5"/>
+      <text x="508" y="708" text-anchor="middle" font-family="'Source Sans 3', sans-serif" font-size="11" font-weight="700" fill="#5a3b10">Transactions</text>
+      <text x="508" y="722" text-anchor="middle" font-family="'Open Sans', sans-serif" font-size="9" fill="#5a3b10">current period</text>
+    </g>
+    <g filter="url(#flowShadow)">
+      <rect x="584" y="690" width="120" height="44" rx="4" fill="url(#sourceGrad)" stroke="#d97316" stroke-width="1.5"/>
+      <text x="644" y="708" text-anchor="middle" font-family="'Source Sans 3', sans-serif" font-size="11" font-weight="700" fill="#5a3b10">Cardex</text>
+      <text x="644" y="722" text-anchor="middle" font-family="'Open Sans', sans-serif" font-size="9" fill="#5a3b10">F4111 ledger</text>
+    </g>
+    <g filter="url(#flowShadow)">
+      <rect x="720" y="690" width="120" height="44" rx="4" fill="url(#sourceGrad)" stroke="#d97316" stroke-width="1.5"/>
+      <text x="780" y="708" text-anchor="middle" font-family="'Source Sans 3', sans-serif" font-size="11" font-weight="700" fill="#5a3b10">Manual JEs</text>
+      <text x="780" y="722" text-anchor="middle" font-family="'Open Sans', sans-serif" font-size="9" fill="#5a3b10">to inventory</text>
+    </g>
+
+    <!-- Converge from sources -->
+    <line x1="100" y1="734" x2="100" y2="755" stroke="#5a6479" stroke-width="2"/>
+    <line x1="236" y1="734" x2="236" y2="755" stroke="#5a6479" stroke-width="2"/>
+    <line x1="372" y1="734" x2="372" y2="755" stroke="#5a6479" stroke-width="2"/>
+    <line x1="508" y1="734" x2="508" y2="755" stroke="#5a6479" stroke-width="2"/>
+    <line x1="644" y1="734" x2="644" y2="755" stroke="#5a6479" stroke-width="2"/>
+    <line x1="780" y1="734" x2="780" y2="755" stroke="#5a6479" stroke-width="2"/>
+    <line x1="100" y1="755" x2="780" y2="755" stroke="#5a6479" stroke-width="2"/>
+    <line x1="440" y1="755" x2="440" y2="780" stroke="#5a6479" stroke-width="2" marker-end="url(#arrowFlow)"/>
+
+    <!-- Take corrective action -->
+    <g filter="url(#flowShadow)">
+      <rect x="240" y="785" width="400" height="52" rx="6" fill="url(#boxGrad)" stroke="#c9d3e0" stroke-width="1.5"/>
+      <text x="440" y="806" text-anchor="middle" font-family="'Source Sans 3', sans-serif" font-size="13" font-weight="700" fill="#1f2d4a">Take corrective action in JD Edwards</text>
+      <text x="440" y="824" text-anchor="middle" font-family="'Open Sans', sans-serif" font-size="11" fill="#5a6479">RapidReconciler is read-only — corrections are made in JDE</text>
+    </g>
+    <line x1="440" y1="837" x2="440" y2="867" stroke="#5a6479" stroke-width="2" marker-end="url(#arrowFlow)"/>
+
+    <!-- Wait for nightly refresh -->
+    <g filter="url(#flowShadow)">
+      <rect x="290" y="872" width="300" height="40" rx="6" fill="#eef3f9" stroke="#c9d3e0" stroke-width="1.5"/>
+      <text x="440" y="897" text-anchor="middle" font-family="'Open Sans', sans-serif" font-size="12" font-weight="600" fill="#5a6479">Wait for nightly refresh</text>
+    </g>
+    <line x1="440" y1="912" x2="440" y2="942" stroke="#5a6479" stroke-width="2" marker-end="url(#arrowFlow)"/>
+
+    <!-- DECISION: Period-end? -->
+    <g filter="url(#flowShadow)">
+      <polygon points="440,947 600,1017 440,1087 280,1017" fill="url(#boxGrad)" stroke="#c9d3e0" stroke-width="1.5"/>
+      <text x="440" y="1012" text-anchor="middle" font-family="'Open Sans', sans-serif" font-size="12" font-weight="600" fill="#1f2d4a">Period-end</text>
+      <text x="440" y="1029" text-anchor="middle" font-family="'Open Sans', sans-serif" font-size="12" font-weight="600" fill="#1f2d4a">close?</text>
+    </g>
+
+    <!-- NO branch: loop back to Step 1 -->
+    <path d="M 280 1017 Q 130 1017 130 320 Q 130 320 180 320" fill="none" stroke="#5a6479" stroke-width="2" stroke-dasharray="4,4" marker-end="url(#arrowFlow)"/>
+    <text x="160" y="1010" text-anchor="middle" font-family="'Open Sans', sans-serif" font-size="11" font-weight="700" fill="#5a6479">NO</text>
+
+    <!-- YES branch: continue to step 3 -->
+    <line x1="440" y1="1087" x2="440" y2="1117" stroke="#5a6479" stroke-width="2" marker-end="url(#arrowFlow)"/>
+    <text x="455" y="1107" font-family="'Open Sans', sans-serif" font-size="11" font-weight="700" fill="#3d6927">YES</text>
+
+    <!-- STEP 3 -->
+    <g filter="url(#flowShadow)">
+      <rect x="180" y="1122" width="520" height="60" rx="6" fill="url(#stepGrad)" stroke="#1f2d4a"/>
+      <circle cx="215" cy="1152" r="16" fill="#f08a24"/>
+      <text x="215" y="1158" text-anchor="middle" font-family="'Source Sans 3', sans-serif" font-size="14" font-weight="700" fill="#fff">3</text>
+      <text x="245" y="1147" font-family="'Source Sans 3', sans-serif" font-size="14" font-weight="600" fill="#fff">Post closing JE &amp; produce Audit Report</text>
+      <text x="245" y="1165" font-family="'Open Sans', sans-serif" font-size="11" fill="#fff">Period-end closing activities in RapidReconciler</text>
+    </g>
+    <line x1="440" y1="1182" x2="440" y2="1212" stroke="#5a6479" stroke-width="2" marker-end="url(#arrowFlow)"/>
+
+    <!-- STEP 4 -->
+    <g filter="url(#flowShadow)">
+      <rect x="180" y="1217" width="520" height="60" rx="6" fill="url(#stepGrad)" stroke="#1f2d4a"/>
+      <circle cx="215" cy="1247" r="16" fill="#f08a24"/>
+      <text x="215" y="1253" text-anchor="middle" font-family="'Source Sans 3', sans-serif" font-size="14" font-weight="700" fill="#fff">4</text>
+      <text x="245" y="1242" font-family="'Source Sans 3', sans-serif" font-size="14" font-weight="600" fill="#fff">Review Integrity Reports 2–6</text>
+      <text x="245" y="1260" font-family="'Open Sans', sans-serif" font-size="11" fill="#fff">Final data integrity check for the closed period</text>
+    </g>
+    <line x1="440" y1="1277" x2="440" y2="1307" stroke="#5a6479" stroke-width="2" marker-end="url(#arrowFlow)"/>
+
+    <!-- END -->
+    <g filter="url(#flowShadow)">
+      <rect x="320" y="1312" width="240" height="56" rx="28" fill="url(#endGrad)"/>
+      <text x="440" y="1336" text-anchor="middle" font-family="'Source Sans 3', sans-serif" font-size="13" font-weight="700" fill="#fff" letter-spacing="1.2">END</text>
+      <text x="440" y="1355" text-anchor="middle" font-family="'Open Sans', sans-serif" font-size="11" fill="#fff">Period closed</text>
+    </g>
+  </svg>
+</div>
+
+        <h2>How Often to Run Each Step</h2>
+
+        <table>
+          <thead>
+            <tr><th>Activity</th><th style="width:30%;">Frequency</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><a href="javascript:void(0)" onclick="showView('topic-step1')">Step&nbsp;1</a> and <a href="javascript:void(0)" onclick="showView('topic-step2')">Step&nbsp;2</a> &mdash; Monitor and investigate variances</td><td>Daily or weekly</td></tr>
+            <tr><td><a href="javascript:void(0)" onclick="showView('topic-step3')">Step&nbsp;3</a> and <a href="javascript:void(0)" onclick="showView('topic-step4')">Step&nbsp;4</a> &mdash; Closing activities and integrity reviews</td><td>Period-end only</td></tr>
+          </tbody>
+        </table>
+
+        <div class="callout note">
+          <div class="callout-icon">i</div>
+          <div>
+            <p><strong>Reading the chart.</strong> Solid black arrows are the main path. Red arrows show stop-and-fix branches; green arrows show clean exits. Dashed arrows are loops back to earlier steps (e.g., wait for nightly refresh, then re-evaluate).</p>
+          </div>
+        </div>
+
+        <div class="topic-footer-nav">
+          <button class="back-btn" onclick="goHome()">&larr; Back to Index</button>
+          <button class="next-btn" onclick="showView('topic-step1')">Start: Step 1 &rarr;</button>
+        </div>
+      </section>
+
+      <!-- ============ STEP 1 ============ -->
+      <section id="topic-step1" class="view">
+        <h1>Step 1 &mdash; Select the Right Data and Confirm the System Is Ready</h1>
+        <p>Before reading any numbers, make sure RapidReconciler has fresh, accurate data and you&rsquo;re looking at the right slice of it. Two checks: status lights, then period and account filters.</p>
+
+        <div class="diamond-divider"><span class="diamond"></span></div>
+
+        <h2>1.1 &nbsp; Log in and check the status lights</h2>
+
+        <p>Both status indicators at the top center of the Reconciliation page <strong>must be green</strong> before you make any GL adjustments.</p>
+
+        <figure>
+          <img src="../images/rr_module_status_bar.png" alt="The Inventory module header bar showing the Inventory Validation and System Status indicators in green, with the period selector on the right." />
+          <figcaption>The Inventory module header bar. The two status lights sit at the top center; the period selector is on the right.</figcaption>
+        </figure>
+
+        <table>
+          <thead>
+            <tr><th style="width:18%;">Light</th><th>Green Means</th><th>Red Means</th><th>What To Do If Red</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>Inventory Validation</strong></td><td>Carry-forward from prior period is accurate.</td><td>Likely an unposted batch in the prior period.</td><td>Hover for details; resolve the prior period first.</td></tr>
+            <tr><td><strong>System Status</strong></td><td>Last JD Edwards import succeeded.</td><td>Import error.</td><td>Hover for details; contact your administrator.</td></tr>
+          </tbody>
+        </table>
+
+        <div class="callout note">
+          <div class="callout-icon">i</div>
+          <div>
+            <p><strong>Flashing yellow on System Status</strong> means the import is still running. Wait for it to finish before reviewing data.</p>
+          </div>
+        </div>
+
+        <h2>1.2 &nbsp; Select the period and apply filters</h2>
+
+        <ul>
+          <li>Use the <strong>period selector</strong> in the top-right corner. New periods appear automatically as cardex transactions are entered in JD Edwards.</li>
+          <li>Apply filters in left-to-right order: <strong>Company &rarr; Business Unit &rarr; Object &rarr; Subsidiary</strong>. Removing a company also removes its child entities.</li>
+          <li>Filter and period selections persist as you move between pages within the inventory module.</li>
+        </ul>
+
+        <figure>
+          <img src="../images/inventory_filters_panel.png" alt="The FILTERS panel showing five columns: Base Currency, Company, Business Unit, Object, and Subsidiary. Each column has a search box and a checkbox list with All selected at the top." />
+          <figcaption>The FILTERS panel. Apply filters left to right &mdash; Company drives Business Unit, which drives Object, which drives Subsidiary.</figcaption>
+        </figure>
+
+        <div class="callout note">
+          <div class="callout-icon">i</div>
+          <div>
+            <p><strong>Tip.</strong> If the screen looks stale or columns don&rsquo;t refresh, click the refresh icon in the top-right corner.</p>
+          </div>
+        </div>
+
+        <a class="xref" href="javascript:void(0)" onclick="showView('topic-reference')">
+          See <strong>Reference Material &rarr; The Reconciliation Page Layout</strong> for a full tour of the page.
+        </a>
+
+        <div class="topic-footer-nav">
+          <button class="back-btn" onclick="goHome()">&larr; Back to Index</button>
+          <button class="next-btn" onclick="showView('topic-step2')">Next: Read Valuation, investigate variances &rarr;</button>
+        </div>
+      </section>
+
+      <!-- ============ STEP 2 ============ -->
+      <section id="topic-step2" class="view">
+        <h1>Step 2 &mdash; Read the Valuation Section, Then Investigate Variances</h1>
+        <p>Step 2 has two parts. First you read the Valuation section to see whether perpetual matches the GL. If it doesn&rsquo;t, you work through every non-zero line in the Variance Calculation section &mdash; each line points to a specific source of the discrepancy.</p>
+
+        <div class="diamond-divider"><span class="diamond"></span></div>
+
+        <h2>2.1 &nbsp; Check the Valuation section</h2>
+
+        <p>The Valuation section answers one question: <em>does perpetual match the GL for this period and these accounts?</em></p>
+
+        <figure class="figure--narrow">
+          <img src="../images/inventory_valuation_panel.png" alt="The Valuation panel showing GL Balance, Perpetual Balance, and an Out of Balance amount highlighted in orange." />
+          <figcaption>The Valuation panel. <strong>Out of Balance</strong> is highlighted whenever it isn&rsquo;t zero.</figcaption>
+        </figure>
+
+        <table>
+          <thead>
+            <tr><th style="width:24%;">Field</th><th>What It Shows</th><th>Source</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>GL Balance</strong></td><td>General ledger total.</td><td><code>F0902</code> &mdash; should match your trial balance exactly.</td></tr>
+            <tr><td><strong>Perpetual Balance</strong></td><td>Summarized cardex total.</td><td><code>F4111</code>, summarized by RapidReconciler.</td></tr>
+            <tr><td><strong>Out of Balance</strong></td><td>The difference.</td><td>Zero = fully reconciled.</td></tr>
+          </tbody>
+        </table>
+
+        <div class="callout note">
+          <div class="callout-icon">i</div>
+          <div>
+            <p><strong>Out of Balance = $0</strong> &rarr; Inventory is reconciled. Stop here.</p>
+            <p><strong>Out of Balance &ne; $0</strong> &rarr; Continue to 2.2 and work through each variance source below.</p>
+          </div>
+        </div>
+
+        <h2>2.2 &nbsp; Work through each variance source</h2>
+
+        <p>Every non-zero line in the Variance Calculation section needs attention. The sum of these lines equals the total Out of Balance amount.</p>
+
+        <figure class="figure--narrow">
+          <img src="../images/inventory_variance_calculation_panel.png" alt="The Variance Calculation panel listing six variance sources &mdash; Carry Forward, GL Batches, End of Day, Transactions, Cardex, and Manual Journal Entries &mdash; with a highlighted Unreconciled Variance total." />
+          <figcaption>The Variance Calculation panel. The lines above sum to <strong>Unreconciled Variance</strong>, which equals <strong>Out of Balance</strong> in the Valuation panel.</figcaption>
+        </figure>
+
+        <h3 class="variance-source">Carry Forward</h3>
+        <p style="font-style:italic; color:var(--text-soft); margin-bottom:14px;">The variance from the prior period that wasn&rsquo;t fully cleared.</p>
+
+        <p><strong>Why it happens:</strong> A prior-period variance was left unresolved at close.</p>
+
+        <p><strong>How to fix it:</strong></p>
+        <ul>
+          <li>Go back to the prior period and resolve the original issue if possible.</li>
+          <li>If the prior period is closed and the amount is immaterial, roll it into this period&rsquo;s manual JE &mdash; and document the decision for audit.</li>
+        </ul>
+
+        <h3 class="variance-source">GL Batches</h3>
+        <p style="font-style:italic; color:var(--text-soft); margin-bottom:14px;">GL detail entries (<code>F0911</code>) where the batch hasn&rsquo;t been posted yet.</p>
+
+        <p><strong>Why it happens:</strong> Batches sit unposted because of approval holds, posting errors, or missing batch headers.</p>
+
+        <p><strong>How to fix it:</strong></p>
+        <ul>
+          <li>Work with finance to identify and post outstanding batches.</li>
+          <li>A <strong>bell icon</strong> on this row flags batches unposted for more than 2 days &mdash; treat as urgent.</li>
+          <li>For a missing batch header, run the JD Edwards Missing Batch Header report, rebuild the header, and repost.</li>
+        </ul>
+
+        <div class="callout important">
+          <div class="callout-icon">!</div>
+          <div>
+            <p><strong>Must be $0 before closing the period.</strong> Don&rsquo;t proceed to Step 3 with this line non-zero.</p>
+          </div>
+        </div>
+
+        <h3 class="variance-source">End of Day</h3>
+        <p style="font-style:italic; color:var(--text-soft); margin-bottom:14px;">Item ledger records (<code>F4111</code>) that don&rsquo;t yet have a batch number or GL date.</p>
+
+        <p><strong>Why it happens:</strong> Ship confirmations, material issues, and work order completions create item ledger records immediately, but the GL batch isn&rsquo;t created until <strong>Sales Update (R42800)</strong> or <strong>Manufacturing Accounting (R31802A)</strong> runs &mdash; usually nightly.</p>
+
+        <p><strong>How to fix it:</strong></p>
+        <ul>
+          <li>A <strong>bell icon</strong> flags orders open more than 2 days &mdash; investigate why nightly jobs haven&rsquo;t picked them up.</li>
+          <li>Confirm Sales Update and Manufacturing Accounting are scheduled and completing.</li>
+          <li>Engage IT for chronically stuck orders.</li>
+        </ul>
+
+        <div class="callout important">
+          <div class="callout-icon">!</div>
+          <div>
+            <p><strong>Must be $0 before closing the period.</strong></p>
+          </div>
+        </div>
+
+        <h3 class="variance-source">Transactions</h3>
+        <p style="font-style:italic; color:var(--text-soft); margin-bottom:14px;">Dollar differences between an item ledger transaction (<code>F4111</code>) and its GL entry (<code>F0911</code>) &mdash; where the two don&rsquo;t match on company, account, fiscal period, document type, document number, order number, or batch number.</p>
+
+        <p><strong>Why it happens:</strong> DMAAI misconfiguration, fiscal period mismatches from backdated transactions, intercompany settlements landing in unexpected accounts, and direct ship handling.</p>
+
+        <p><strong>How to fix it:</strong></p>
+        <ul>
+          <li>Go to the <strong>Transactions page</strong> (see <a href="javascript:void(0)" onclick="showView('topic-reference')">Reference Material &rarr; The Transactions Page</a>) and review each row.</li>
+          <li>Use the Transaction Detail report (the <strong>+</strong> icon) to find the root cause.</li>
+          <li>The corrective action is <strong>always an offsetting manual JE in JD Edwards</strong> &mdash; the original transaction is final and can&rsquo;t be rewritten.</li>
+          <li>Add a note in RapidReconciler for each resolved item so the audit trail is complete.</li>
+        </ul>
+
+        <h3 class="variance-source">Cardex</h3>
+        <p style="font-style:italic; color:var(--text-soft); margin-bottom:14px;">Items where summarized item ledger (<code>F4111</code>) doesn&rsquo;t match on-hand balance in <code>F41021</code>.</p>
+
+        <table>
+          <thead>
+            <tr><th style="width:24%;">Variance Type</th><th>Meaning</th><th>How to Resolve</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>Quantity variance</strong></td><td><code>F4111</code> quantity &ne; <code>F41021</code> quantity.</td><td>Requires an IT SQL correction &mdash; cannot be fixed through normal JDE transactions.</td></tr>
+            <tr><td><strong>Amount variance</strong></td><td><code>F4111</code> extended cost &ne; <code>F41021</code> value.</td><td>Dollars-only IA adjustment in JD Edwards.</td></tr>
+          </tbody>
+        </table>
+
+        <div class="callout note">
+          <div class="callout-icon">i</div>
+          <div>
+            <p><strong>How to find them.</strong> Open the <strong>Cardex Integrity pop-up</strong> in RapidReconciler. It lists only items with variances and tells you which type. Always validate against JD Edwards before adjusting. See the <a href="cardex-variance.html">Handling Cardex Variance</a> guide for the full procedure.</p>
+          </div>
+        </div>
+
+        <h3 class="variance-source">Manual Journal Entries</h3>
+        <p style="font-style:italic; color:var(--text-soft); margin-bottom:14px;">Manual entries posted directly to the inventory GL account.</p>
+
+        <p>These are surfaced here so they&rsquo;re visible inside the reconciliation. No corrective action &mdash; this line confirms manual entries are accounted for in the variance math.</p>
+
+        <h2>2.3 &nbsp; Use the supporting widgets to dig in</h2>
+
+        <p>These tools sit alongside the variance lines and help you find and resolve issues faster.</p>
+
+        <table>
+          <thead>
+            <tr><th style="width:24%;">Widget</th><th>When To Use It</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>Drill Down Widget</strong></td><td>Multi-company environments &mdash; see which account holds the largest variance. Click sections to drill from currency code through company, business unit, object, and subsidiary.</td></tr>
+            <tr><td><strong>Out of Balance History Graph</strong></td><td>Shows variance trends across the last 14 periods. Use it to tell whether a variance is recurring or a one-off. Click any data point to jump to that period.</td></tr>
+            <tr><td><strong>Offset Account Widget (star icon)</strong></td><td>Hover over the End of Day or Transactions row. Opens a pop-up listing the inventory account and suggested offset for each variance, exportable to Excel. <em>Period-end close tool &mdash; mid-period entries won&rsquo;t reflect.</em></td></tr>
+            <tr><td><strong>Journal Entry Button</strong></td><td>Produces an Excel report of GL and perpetual balances for account-level JEs when you don&rsquo;t need transaction-level detail.</td></tr>
+          </tbody>
+        </table>
+
+        <div class="callout note">
+          <div class="callout-icon">i</div>
+          <div>
+            <p><strong>About the Offset Account export.</strong> The <code>je_account</code> column will include rows for the inventory side, a &ldquo;Tolerance Adjust&rdquo; line for sub-unit rounding, and &ldquo;TBD&rdquo; placeholders for any variance rows without a configured offset. Replace &ldquo;Tolerance Adjust&rdquo; and &ldquo;TBD&rdquo; with the correct GL accounts before pasting into JD Edwards.</p>
+          </div>
+        </div>
+
+        <div class="topic-footer-nav">
+          <button class="back-btn" onclick="goHome()">&larr; Back to Index</button>
+          <button class="next-btn" onclick="showView('topic-step3')">Next: Period-end closing activities &rarr;</button>
+        </div>
+      </section>
+
+      <!-- ============ STEP 3 ============ -->
+      <section id="topic-step3" class="view">
+        <h1>Step 3 &mdash; Period-End Closing Activities</h1>
+        <p>Only do this once Step 2 is fully worked through. The closing activities have three parts: pre-close checklist, post the closing JE, and produce the Audit Report.</p>
+
+        <div class="diamond-divider"><span class="diamond"></span></div>
+
+        <h2>3.1 &nbsp; Pre-close checklist</h2>
+
+        <p>Confirm all of the following before posting your closing JE:</p>
+
+        <ul class="checklist">
+          <li class="checklist-title">Pre-close requirements</li>
+          <li><strong>GL Batches</strong> variance = $0.</li>
+          <li><strong>End of Day</strong> variance = $0.</li>
+          <li><strong>Transaction</strong> variances reviewed; offsetting JEs prepared.</li>
+          <li><strong>Carry Forward</strong> accounted for in the manual entry (if applicable).</li>
+        </ul>
+
+        <h2>3.2 &nbsp; Post the closing journal entry</h2>
+
+        <p>Choose the right tool based on what you&rsquo;re posting:</p>
+
+        <table>
+          <thead>
+            <tr><th style="width:34%;">What You&rsquo;re Posting</th><th>Tool To Use</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>Account-level amounts</strong></td><td>Journal Entry button &mdash; produces an Excel report of GL and perpetual balances.</td></tr>
+            <tr><td><strong>Transaction-level amounts</strong></td><td>Offset Account widget (star icon) &mdash; export to Excel, replace &ldquo;TBD&rdquo; with real accounts, paste two rightmost columns into JD Edwards.</td></tr>
+          </tbody>
+        </table>
+
+        <p>After posting, <strong>wait for the next nightly import</strong> and confirm Out of Balance returns to $0.</p>
+
+        <h2>3.3 &nbsp; Produce and save the Audit Report</h2>
+
+        <p>The Audit Report is your permanent record of the period&rsquo;s reconciliation. <strong>Produce it for every period and save it externally</strong> &mdash; detail data may be removed during a future purge.</p>
+
+        <figure class="figure--narrow">
+          <img src="../images/inventory_audit_report_button.png" alt="The bottom of the Variance Calculation panel showing the Journal Entry and Audit Report buttons, with the Audit Report button circled in red." />
+          <figcaption>Click <strong>Audit Report</strong> at the bottom of the Variance Calculation panel.</figcaption>
+        </figure>
+
+        <p>The report contains:</p>
+
+        <table>
+          <thead>
+            <tr><th style="width:30%;">Section</th><th>What&rsquo;s In It</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>Accounts Summary</strong></td><td>Valuation and variance summary for each account.</td></tr>
+            <tr><td><strong>Unposted GL Batches</strong></td><td>Any remaining unposted batches.</td></tr>
+            <tr><td><strong>End of Day</strong></td><td>Work orders or sales orders still awaiting processing.</td></tr>
+            <tr><td><strong>Manual Journal Entries</strong></td><td>All manual entries posted to the account.</td></tr>
+            <tr><td><strong>Variances</strong></td><td>Transaction variances with your notes.</td></tr>
+            <tr><td><strong>Perpetual Details</strong></td><td>Item balances and values at period end.</td></tr>
+          </tbody>
+        </table>
+
+        <p>Output: Excel or PDF.</p>
+
+        <div class="topic-footer-nav">
+          <button class="back-btn" onclick="goHome()">&larr; Back to Index</button>
+          <button class="next-btn" onclick="showView('topic-step4')">Next: Review the Integrity Reports &rarr;</button>
+        </div>
+      </section>
+
+      <!-- ============ STEP 4 ============ -->
+      <section id="topic-step4" class="view">
+        <h1>Step 4 &mdash; Review the Integrity Reports</h1>
+        <p>Integrity reports surface JD Edwards configuration issues that <em>cause</em> future variances. Review them at install and then <strong>monthly</strong> at period-end.</p>
+
+        <div class="diamond-divider"><span class="diamond"></span></div>
+
+        <h2>4.1 &nbsp; The reports you must review monthly</h2>
+
+        <table>
+          <thead>
+            <tr><th style="width:14%;">Report</th><th style="width:22%;">Name</th><th>What It Catches</th><th>How to Resolve</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>Report 2</strong></td><td>DMAAI Entry Integrity</td><td>Business unit/object/subsidiary mismatches and net-zero accounts in DMAAI tables.</td><td>Correct the AAI entries in JD Edwards.</td></tr>
+            <tr><td><strong>Report 3</strong></td><td>Excluded GL Classes</td><td>Items whose GL class isn&rsquo;t in the model DMAAI table 4152 &mdash; their values are excluded from the reconciliation.</td><td>Add the GL class to the model, or confirm exclusion is intentional.</td></tr>
+            <tr><td><strong>Report 4</strong></td><td>UOM Conversion Integrity</td><td>Items whose transaction UOM differs from the primary UOM with no conversion factor (causes <code>-9999</code> in the As-Of quantity column).</td><td>Add the direct conversion in JD Edwards.</td></tr>
+            <tr><td><strong>Report 5</strong></td><td>GL Class Integrity</td><td>Items where the GL class on <code>F4102</code> doesn&rsquo;t match one or more <code>F41021</code> location records.</td><td>Correct in JD Edwards using the proper GL class change procedure.</td></tr>
+            <tr><td><strong>Report 6</strong></td><td>Frozen Cost Integrity</td><td>Items where <code>F30026</code> frozen cost &ne; <code>F4105</code> method 07 ledger cost.</td><td>Re-roll the cost in JD Edwards (equivalent to running R30543).</td></tr>
+          </tbody>
+        </table>
+
+        <div class="callout note">
+          <div class="callout-icon">i</div>
+          <div>
+            <p>Items clear from these reports automatically after the next nightly refresh once the underlying JDE data is corrected.</p>
+          </div>
+        </div>
+
+        <h2>4.2 &nbsp; Other reports &mdash; review when triggered</h2>
+
+        <table>
+          <thead>
+            <tr><th style="width:36%;">Report</th><th>When to Review</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>Report 0 &mdash; JDE DMAAs</strong></td><td>Debugging only &mdash; when investigating Transactions page items.</td></tr>
+            <tr><td><strong>Report 1 &mdash; Model AAI Table</strong></td><td>Before any GL adjustments &mdash; confirms DMAAI 4152 is accurate.</td></tr>
+            <tr><td><strong>Report 7 &mdash; Duplicate Item Costs</strong></td><td>When alerted at login &mdash; causes the import to fail; correct in JDE immediately.</td></tr>
+            <tr><td><strong>Report 8 &mdash; Duplicate Sales Integrity</strong></td><td>When items appear &mdash; typically caused by Sales Update failures; resolve via cycle count and manual JE; contact <a href="mailto:rrsupport@getgsi.com">rrsupport@getgsi.com</a> for help.</td></tr>
+            <tr><td><strong>Report 9 &mdash; Clean Cutoff Integrity</strong></td><td>Informational &mdash; items where cardex creation period &ne; GL date period; no action required, review for accrual opportunities.</td></tr>
+            <tr><td><strong>Report 10 &mdash; Items Missing Branch Records</strong></td><td>When items appear &mdash; severe data integrity issue; contact IT immediately.</td></tr>
+          </tbody>
+        </table>
+
+        <h2>Period-End Sign-Off Checklist</h2>
+
+        <ul class="checklist">
+          <li class="checklist-title">Before signing off on the period</li>
+          <li>All four steps complete: data confirmed (Step 1), variances investigated (Step 2), closing JE posted and Audit Report saved (Step 3), integrity reports reviewed (Step 4).</li>
+          <li>Reports 2&ndash;6 reviewed; remediation actions logged or completed in JDE.</li>
+          <li>Out of Balance returned to $0 after the post-JE nightly refresh.</li>
+          <li>Audit Report saved externally for permanent retention.</li>
+        </ul>
+
+        <div class="topic-footer-nav">
+          <button class="back-btn" onclick="goHome()">&larr; Back to Index</button>
+          <button class="done-btn" onclick="goHome()">Done &mdash; Back to Index &#x2713;</button>
+        </div>
+      </section>
+
+      <!-- ============ REFERENCE MATERIAL ============ -->
+      <section id="topic-reference" class="view">
+        <h1>Reference Material</h1>
+        <p>The sections below are reference info you&rsquo;ll dip into during Step 2 &mdash; they support the workflow rather than being a separate process. Each section describes one of the four pages or views you&rsquo;ll touch most often.</p>
+
+        <div class="diamond-divider"><span class="diamond"></span></div>
+
+        <h2>The Reconciliation Page Layout</h2>
+
+        <p>The Reconciliation page is the default page after login. It has four parts you&rsquo;ll use throughout the process:</p>
+
+        <ul>
+          <li><strong>Status indicators</strong> (top center) &mdash; both must be green; see <a href="javascript:void(0)" onclick="showView('topic-step1')">Step 1.1</a>.</li>
+          <li><strong>Period selector</strong> (top right) &mdash; driven by the reconciliation start date your administrator configured. If more than 14 periods exist, ask your administrator about a purge.</li>
+          <li><strong>Account filters</strong> (left-to-right hierarchy) &mdash; Company &rarr; Business Unit &rarr; Object &rarr; Subsidiary. Use the search row at the top of each column to filter within it.</li>
+          <li><strong>Valuation and Variance Calculation sections</strong> &mdash; covered in <a href="javascript:void(0)" onclick="showView('topic-step2')">Step 2</a>.</li>
+        </ul>
+
+        <p>To open the <strong>Inventory Validation Report</strong>, click directly on the Inventory Validation status light. This report is your starting point any time that light is red.</p>
+
+        <h2>The Transactions Page</h2>
+
+        <p>Use this page when the <strong>Transactions</strong> line in the Variance Calculation is non-zero.</p>
+
+        <p><strong>What&rsquo;s listed:</strong> Documents where <code>F4111</code> doesn&rsquo;t match <code>F0911</code>. Fully reconciled transactions don&rsquo;t appear.</p>
+
+        <p><strong>Tolerance:</strong> Transactions differing by less than 1 monetary unit are excluded by default, but their amounts still roll up into the Transactions line of the variance. Administrators can change this threshold.</p>
+
+        <h3>Filters</h3>
+
+        <table>
+          <thead>
+            <tr><th style="width:26%;">Filter</th><th>Options</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Type</td><td>Inventory, Sales, Manufacturing, Purchasing.</td></tr>
+            <tr><td>Sub Type</td><td>Accounts, Periods, Transfers, Intercompany, Direct Ship, Voucher Variance.</td></tr>
+            <tr><td>Order Type</td><td>JDE order type.</td></tr>
+            <tr><td>Document Type</td><td>JDE document type.</td></tr>
+          </tbody>
+        </table>
+
+        <p><strong>Filter widget tips:</strong></p>
+        <ul>
+          <li><strong>Target icon</strong> isolates one value and hides others in that category.</li>
+          <li><strong>Toggle switch</strong> turns a value on/off independently &mdash; useful for stacking views (e.g., target Sales, then toggle Inventory back on).</li>
+        </ul>
+
+        <p><strong>Subtotals widget</strong> has a <strong>Type</strong> dropdown that groups totals by Type, Sub Type, Order Type, or Document Type.</p>
+
+        <h3>Transaction Detail report</h3>
+
+        <p>Click the <strong>+</strong> icon at the left of any row to expand. The green icon exports detail to Excel. Six sections:</p>
+
+        <table>
+          <thead>
+            <tr><th style="width:30%;">Section</th><th>What It Shows</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>1 &mdash; Unassigned Account</strong></td><td>Cardex transactions whose GL class isn&rsquo;t in the model DMAAI table &mdash; stock items belong here.</td></tr>
+            <tr><td><strong>2 &mdash; F4111 Cardex</strong></td><td>All cardex rows for the selected company, document type, and document number.</td></tr>
+            <tr><td><strong>3 &mdash; F0911 GL</strong></td><td>All GL rows for the same company, document type, and document number.</td></tr>
+            <tr><td><strong>4 &mdash; RapidReconciler</strong></td><td>How RR matches and summarizes &mdash; one row = match; multiple rows = mismatch.</td></tr>
+            <tr><td><strong>5 &mdash; Order Data</strong></td><td>All lines for the related sales order or PO; for intercompany, related order info.</td></tr>
+            <tr><td><strong>6 &mdash; DMAAIs</strong></td><td>All DMAAI entries for each GL class involved; first row is from the model table.</td></tr>
+          </tbody>
+        </table>
+
+        <p><strong>Analysis tips:</strong></p>
+        <ul>
+          <li>Verify company number, account number, and period end date align across Sections 2 and 3.</li>
+          <li>For single-sided IT transfers, cardex shows only the &ldquo;from&rdquo; side and GL nets to $0.</li>
+          <li>Account differences between Sections 2 and 3 &rarr; check DMAAI setup in Section 6.</li>
+        </ul>
+
+        <div class="callout important">
+          <div class="callout-icon">!</div>
+          <div>
+            <p><strong>Corrective action for every Transactions page item:</strong> offsetting JE in JD Edwards plus a note in RapidReconciler.</p>
+          </div>
+        </div>
+
+        <h2>The As-Of Page</h2>
+
+        <p>The supporting detail behind the Perpetual Balance shown in the Valuation section. Use it when you need to see balances at the item, branch, location, or lot level.</p>
+
+        <p><strong>Important behavior:</strong></p>
+        <ul>
+          <li>Amounts are <strong>summarized <code>F4111</code> from the balance forward</strong> &mdash; not a snapshot of item balance &times; unit cost.</li>
+          <li>Items can have a value with no quantity. This is expected &mdash; see the <a href="inventory-zero-balance.html">Zero Balance Adjustments</a> guide.</li>
+          <li><strong><code>-9999</code></strong> in the Quantity on Hand column means a UOM conversion factor is missing (Integrity Report 4).</li>
+        </ul>
+
+        <p><strong>Filters</strong> (combinable, all match from start of value): Item Number, Branch Plant, Location, Lot. The <strong>Totals</strong> row sums all visible rows.</p>
+
+        <p><strong>Detail section controls:</strong></p>
+        <ul>
+          <li><strong>Daily As-Of dropdown</strong> &mdash; view inventory as of any single day in the period. Clear it before comparing to the Reconciliation page perpetual total (which uses period end).</li>
+          <li><strong>Common UOM</strong> &mdash; restates quantities across items in one UOM for easier analysis (administrator must configure).</li>
+          <li><strong>Summarize by Item</strong> &mdash; collapses location and lot detail to branch + item level; nets offsetting positives and negatives.</li>
+          <li><strong>Plus icon</strong> &mdash; expands transaction detail for any row; exportable.</li>
+          <li><strong>Row Count</strong> &mdash; top right; pagination kicks in above 250 rows.</li>
+        </ul>
+
+        <p><strong>Key columns:</strong></p>
+
+        <table>
+          <thead>
+            <tr><th style="width:18%;">Column</th><th>Meaning</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>CurrCost</strong></td><td>Current item cost from the cost ledger; period-independent.</td></tr>
+            <tr><td><strong>CalcCost</strong></td><td>Amount &divide; Quantity on Hand; zero when quantity is zero.</td></tr>
+            <tr><td><strong>QtyVar</strong></td><td><code>F4111</code> summarized quantity vs. <code>F41021</code> quantity.</td></tr>
+            <tr><td><strong>AmtVar</strong></td><td><code>F4111</code> summarized extended cost vs. <code>F41021</code> value.</td></tr>
+          </tbody>
+        </table>
+
+        <div class="callout important">
+          <div class="callout-icon">!</div>
+          <div>
+            <p><strong>GL class code changes.</strong> Changing a GL class without following the proper procedure produces multiple rows for the same item on the As-Of grid. Correct procedure: (1) adjust inventory to zero under the original code, (2) update the code at all hierarchy levels (item branch, item location, open orders), (3) adjust inventory back in under the new code.</p>
+          </div>
+        </div>
+
+        <h2>The Roll Forward Page</h2>
+
+        <p>Lists item activity across a date range, with document and order types mapped to report columns by your administrator. <strong>Informational &mdash; not part of the standard reconciliation flow.</strong></p>
+
+        <p><strong>Validation:</strong> Look at the rightmost <strong>Variance</strong> column. Any non-zero value means a document or order type may be missing from the report configuration &mdash; ask your administrator to review.</p>
+
+        <div class="topic-footer-nav">
+          <button class="back-btn" onclick="goHome()">&larr; Back to Index</button>
+          <button class="next-btn" onclick="showView('topic-pitfalls')">Next: Pitfalls &amp; Getting Help &rarr;</button>
+        </div>
+      </section>
+
+      <!-- ============ PITFALLS & GETTING HELP ============ -->
+      <section id="topic-pitfalls" class="view">
+        <h1>Common Pitfalls and Getting Help</h1>
+        <p>A few things worth keeping in mind as you work through the reconciliation process, plus a directory of related documentation for the deeper questions this guide doesn&rsquo;t cover.</p>
+
+        <div class="diamond-divider"><span class="diamond"></span></div>
+
+        <h2>Common Pitfalls</h2>
+
+        <div class="callout tip">
+          <div class="callout-icon">i</div>
+          <div>
+            <p><strong>Never adjust the GL on stale data.</strong> Both status lights must be green and the latest import must be complete. Acting on red or yellow data is how variances get baked in for future periods.</p>
+          </div>
+        </div>
+
+        <div class="callout tip">
+          <div class="callout-icon">i</div>
+          <div>
+            <p><strong>Carry-forward rolls.</strong> A small variance left in one period reappears as Carry Forward next period &mdash; and compounds. Resolve in the period it originates whenever possible.</p>
+          </div>
+        </div>
+
+        <div class="callout tip">
+          <div class="callout-icon">i</div>
+          <div>
+            <p><strong>DMAAI is the usual suspect for Transactions variances.</strong> Before assuming a transaction is broken, check Section 6 of the Transaction Detail report.</p>
+          </div>
+        </div>
+
+        <div class="callout tip">
+          <div class="callout-icon">i</div>
+          <div>
+            <p><strong>Cardex variances split two ways.</strong> Quantity variances need IT (SQL); amount variances need a dollars-only IA in JDE. The Cardex Integrity pop-up tells you which. See <a href="cardex-variance.html">Handling Cardex Variance</a> for the full procedure.</p>
+          </div>
+        </div>
+
+        <div class="callout tip">
+          <div class="callout-icon">i</div>
+          <div>
+            <p><strong>Save Audit Reports externally.</strong> Don&rsquo;t rely on RapidReconciler retaining detail data forever &mdash; purges happen.</p>
+          </div>
+        </div>
+
+        <div class="callout tip">
+          <div class="callout-icon">i</div>
+          <div>
+            <p><strong>Watch for repeating variances.</strong> The Out of Balance History Graph is the fastest way to tell whether you have a chronic configuration issue or a one-off.</p>
+          </div>
+        </div>
+
+        <h2>Where to Get More Help</h2>
+
+        <table>
+          <thead>
+            <tr><th style="width:38%;">Topic</th><th>Document</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Login, navigation, first-time setup.</td><td><a href="getting-started-with-rapidreconciler.html">Getting Started with RapidReconciler</a></td></tr>
+            <tr><td>DMAAI tables, GL account assignment, period-end logic.</td><td><a href="inventory-reference-guide.html">Inventory Key Concepts</a></td></tr>
+            <tr><td>JDE vs. RapidReconciler reconciliation, timing, backdating.</td><td>Stock Status and Trial Balance Reconciliation Guide</td></tr>
+            <tr><td>DMAAI model table process and refresh.</td><td><a href="managing-accounts.html">Managing Inventory Accounts</a></td></tr>
+            <tr><td>Item ledger balances, posting codes, dates.</td><td><a href="inventory-item-ledger.html">Working with the Item Ledger</a></td></tr>
+            <tr><td>DMAAI setup, GL class codes, business unit.</td><td><a href="distribution-aais.html">Ultimate DMAAI Guide</a></td></tr>
+            <tr><td>GL class code change procedure.</td><td><a href="inventory-gl-class-codes.html">Managing GL Class Codes</a></td></tr>
+            <tr><td>UOM changes and cardex impact.</td><td><a href="inventory-uom.html">About Units of Measure</a></td></tr>
+            <tr><td>Cost methods, cost levels, <code>F4105</code>.</td><td><a href="inventory-costing.html">Product Costing Guide</a></td></tr>
+            <tr><td>Zero balance adjustments.</td><td><a href="inventory-zero-balance.html">Zero Balance Adjustments</a></td></tr>
+            <tr><td>Cardex variance &mdash; standard vs. average cost.</td><td><a href="cardex-variance.html">Handling Cardex Variance</a></td></tr>
+            <tr><td>Sales order types, AAIs, JEs, common issues.</td><td>Sales Order Reference Guide</td></tr>
+            <tr><td>In Transit module &mdash; concepts and use.</td><td><a href="transfer-order-reference.html">In Transit Key Concepts</a> / <a href="in-transit-rec-walkthrough.html">Using the Application</a></td></tr>
+            <tr><td>PO Receipts module &mdash; concepts and use.</td><td><a href="purchase-order-reference.html">PO Receipts Key Concepts</a> / <a href="po-receipts-walkthrough.html">Using the Application</a></td></tr>
+            <tr><td>Companies, users, settings, offset accounts.</td><td><a href="administrator-walkthrough.html">Administrator Responsibilities</a></td></tr>
+            <tr><td>Support.</td><td><a href="mailto:rrsupport@getgsi.com">rrsupport@getgsi.com</a></td></tr>
+          </tbody>
+        </table>
+
+        <a class="xref" href="javascript:void(0)" onclick="showView('topic-process')">
+          See <strong>Process at a Glance</strong> for the visual end-to-end flowchart.
+        </a>
+
+        <div class="topic-footer-nav">
+          <button class="back-btn" onclick="goHome()">&larr; Back to Index</button>
+          <button class="next-btn" onclick="goHome()">Return to Index &#8634;</button>
+        </div>
+      </section>
+
+    </main>
+  </div>
+</div>
+
+<!-- ============ FOOTER ============ -->
+<footer>
+  <div class="container">
+    <div class="footer-line">
+      <span><strong>RapidReconciler University</strong> <span class="footer-sep">&middot;</span> a GSI knowledge base for JD Edwards reconciliation</span>
+      <span>&copy; 2026 GSI <span class="footer-sep">&middot;</span> <a href="mailto:rrsupport@getgsi.com">rrsupport@getgsi.com</a> <span class="footer-sep">&middot;</span> <a href="https://www.getgsi.com" target="_blank" rel="noopener">getgsi.com</a></span>
+    </div>
+  </div>
+</footer>
+
+<script>
+  function showView(id) {
+    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+    const target = document.getElementById(id);
+    if (target) {
+      target.classList.add('active');
+      window.scrollTo({ top: 0, behavior: 'instant' });
+
+      const slug = id === 'home' ? 'home' : id.replace('topic-', '');
+      // Update active state across all sidebar groups
+      document.querySelectorAll('.sidebar-nav li').forEach(li => {
+        li.classList.toggle('active', li.dataset.target === slug);
+      });
+
+      // Panel mode: scroll the now-active chip into view in the horizontal strip
+      if (document.documentElement.classList.contains('panel-mode')) {
+        const activeLi = document.querySelector('.sidebar-nav li.active');
+        if (activeLi && activeLi.scrollIntoView) {
+          activeLi.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+        }
+      }
+
+      try {
+        if (window.location.protocol !== 'about:') {
+          // Preserve query string (e.g., ?panel=1) when updating the hash
+          const search = window.location.search || '';
+          const newUrl = slug === 'home'
+            ? (search || window.location.pathname)
+            : (window.location.pathname + search + '#' + slug);
+          history.replaceState(null, '', newUrl);
+        }
+      } catch (e) { /* sandboxed context */ }
+    }
+  }
+
+  function goHome() { showView('home'); }
+
+  document.querySelectorAll('.sidebar-nav li[data-target="home"]').forEach(li => li.classList.add('active'));
+
+  window.addEventListener('DOMContentLoaded', () => {
+    try {
+      // Query param ?view=stepN takes precedence over hash
+      const qs = new URLSearchParams(window.location.search);
+      const viewParam = qs.get('view');
+      if (viewParam) {
+        const target = viewParam === 'home' ? 'home' : 'topic-' + viewParam;
+        showView(target);
+        return;
+      }
+      const hash = window.location.hash.replace('#', '');
+      if (hash && hash !== 'home') showView('topic-' + hash);
+    } catch (e) { /* ignore */ }
+  });
+
+  window.addEventListener('popstate', () => {
+    try {
+      const hash = window.location.hash.replace('#', '');
+      showView(hash && hash !== 'home' ? 'topic-' + hash : 'home');
+    } catch (e) { /* ignore */ }
+  });
+</script>
+
+</body>
+</html>
