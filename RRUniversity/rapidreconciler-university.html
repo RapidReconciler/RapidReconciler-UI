@@ -1603,26 +1603,57 @@
     return snippet;
   }
 
-  /* Run lunr; if no hits, retry with prefix wildcards for forgiving matching. */
+  /* Run lunr with AND semantics by default (each token required), with two
+     fallback tiers if strict AND returns nothing. Stop words are stripped
+     from required clauses because lunr's pipeline filters them anyway and
+     a leftover `+stopword` term will fail the whole query. */
   function lunrSearchFlexible(rawQuery) {
     const tokens = rawQuery.trim().split(/\s+/).filter(Boolean);
     if (!tokens.length) return [];
 
-    // First pass: lunr's default scoring on the raw query.
-    let hits = [];
-    try {
-      hits = lunrIdx.search(rawQuery);
-    } catch (e) {
-      /* malformed query, fall through */
-    }
-    if (hits.length) return hits;
+    // Strip lunr query operators from user-typed tokens to avoid syntax errors,
+    // and lowercase to match the index pipeline.
+    const clean = tokens
+      .map(t => t.replace(/[*+~^:\-]/g, '').toLowerCase())
+      .filter(Boolean);
+    if (!clean.length) return [];
 
-    // Second pass: tolerant prefix match — turns "cardex" into "cardex*".
-    const fuzzy = tokens.map(t => t.replace(/[*+~^]/g, '') + '*').join(' ');
+    // Stop words like "in", "of", "the" get dropped from required clauses —
+    // lunr filters them in its pipeline, but `+stopword` still fails the query.
+    const required = clean.filter(t => {
+      try {
+        return lunr.stopWordFilter(new lunr.Token(t)) !== undefined;
+      } catch (e) { return true; }
+    });
+
+    // Tier 1: strict AND on non-stop-word tokens (uses stemming)
+    if (required.length) {
+      const q = required.map(t => '+' + t).join(' ');
+      try {
+        const hits = lunrIdx.search(q);
+        if (hits.length) return hits;
+      } catch (e) { /* fall through */ }
+    }
+
+    // Tier 2: AND with prefix wildcard on tokens ≥ 4 chars
+    // (short tokens like "po" or "rr" stay un-wildcarded to avoid over-matching)
+    if (required.length) {
+      const q = required
+        .map(t => '+' + t + (t.length >= 4 ? '*' : ''))
+        .join(' ');
+      try {
+        const hits = lunrIdx.search(q);
+        if (hits.length) return hits;
+      } catch (e) { /* fall through */ }
+    }
+
+    // Tier 3: last-resort OR with wildcards on the full original token set —
+    // ensures we return something even for unusual or single-stopword queries.
+    const q = clean.map(t => t + (t.length >= 4 ? '*' : '')).join(' ');
     try {
-      hits = lunrIdx.search(fuzzy);
+      return lunrIdx.search(q);
     } catch (e) {}
-    return hits;
+    return [];
   }
 
   /* ----- Render ----- */
