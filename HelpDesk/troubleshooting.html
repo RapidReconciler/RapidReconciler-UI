@@ -3646,6 +3646,75 @@
     text-align: center;
   }
 
+  /* ----- Paste-text fallback inside the strip ----- */
+  .dropmsg-or {
+    display: flex; align-items: center; gap: 12px;
+    margin: 14px 0 6px;
+    color: var(--text-muted);
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.12em;
+  }
+  .dropmsg-or::before, .dropmsg-or::after {
+    content: ''; flex: 1; height: 1px; background: var(--rule);
+  }
+  .dropmsg-paste {
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .dropmsg-paste-textarea {
+    width: 100%;
+    min-height: 78px;
+    padding: 10px 12px;
+    border: 1px solid var(--rule-strong);
+    border-radius: 5px;
+    background: #fff;
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+    resize: vertical;
+    color: var(--text);
+    transition: border-color 0.15s ease;
+  }
+  .dropmsg-paste-textarea:focus {
+    outline: none;
+    border-color: var(--orange);
+    box-shadow: 0 0 0 2px rgba(240, 138, 36, 0.18);
+  }
+  .dropmsg-paste-textarea::placeholder {
+    color: var(--text-muted);
+    font-style: italic;
+  }
+  .dropmsg-paste-btn {
+    align-self: flex-start;
+    padding: 7px 14px;
+    background: var(--orange);
+    color: #fff;
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 600; font-size: 12.5px;
+    border: 1px solid var(--orange);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: filter 0.15s ease;
+  }
+  .dropmsg-paste-btn:hover:not(:disabled) { filter: brightness(1.08); }
+  .dropmsg-paste-btn:disabled {
+    background: var(--bg-panel); color: var(--text-muted);
+    border-color: var(--rule); cursor: not-allowed; filter: none;
+  }
+
+  /* ----- Walked-tickets index status indicator ----- */
+  .dropmsg-meta {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px dashed var(--rule);
+    font-size: 11px;
+    color: var(--text-muted);
+    font-style: italic;
+  }
+  .dropmsg-meta-loading { color: var(--text-muted); }
+  .dropmsg-meta-ok      { color: var(--green-deep);  font-style: normal; }
+  .dropmsg-meta-fail    { color: var(--orange-deep); font-style: normal; font-weight: 600; }
+
   @media (max-width: 760px) {
     .dropmsg-summary-row { grid-template-columns: 1fr; }
     .dropmsg-summary-key { padding-top: 8px; }
@@ -3795,6 +3864,17 @@
             <span class="dropmsg-zone-hint">or click to choose &mdash; both files stay in your browser</span>
           </div>
         </div>
+        <div class="dropmsg-or"><span>or paste text directly</span></div>
+        <div class="dropmsg-paste">
+          <textarea
+            id="dropmsg-paste-text"
+            class="dropmsg-paste-textarea"
+            placeholder="Paste an email body, a CoPilot thread summary, an agent log snippet, or any other text the customer sent &mdash; then click Match."
+            aria-label="Paste content to match against scenarios and walked tickets"
+            spellcheck="false"
+            autocomplete="off"></textarea>
+          <button type="button" id="dropmsg-paste-match-btn" class="dropmsg-paste-btn" disabled>Match against pasted text</button>
+        </div>
         <div class="dropmsg-summary" id="dropmsg-summary"></div>
         <div class="dropmsg-actions">
           <button type="button" class="dropmsg-bundle-btn" id="dropmsg-bundle-btn" disabled>
@@ -3806,6 +3886,9 @@
         <div class="dropmsg-results" id="dropmsg-results">
           <div class="dropmsg-results-label">Top matching scenarios</div>
           <div id="dropmsg-results-list"></div>
+        </div>
+        <div class="dropmsg-meta" id="dropmsg-meta">
+          <span id="dropmsg-meta-walked" class="dropmsg-meta-loading">Walked-tickets index: loading&hellip;</span>
         </div>
       </div>
     </div>
@@ -8554,6 +8637,9 @@ GSI Helpdesk</div>
   var clearBtn = document.getElementById('dropmsg-clear-btn');
   var resultsBox = document.getElementById('dropmsg-results');
   var resultsList = document.getElementById('dropmsg-results-list');
+  var pasteTa  = document.getElementById('dropmsg-paste-text');
+  var pasteBtn = document.getElementById('dropmsg-paste-match-btn');
+  var walkedMeta = document.getElementById('dropmsg-meta-walked');
 
   if (!zone) return;       /* feature absent on this page */
 
@@ -9192,6 +9278,83 @@ GSI Helpdesk</div>
   });
   bundleBtn.addEventListener('click', buildEvidenceBundle);
   clearBtn.addEventListener('click', clear);
+
+  /* ----- Paste-text fallback handler ----- */
+  /* Same matcher pipeline as the .msg drop, but skips file parsing — text in,
+     stripQuoteHistory → rankScenarios → renderResults. No evidence bundle
+     because there's no original file to bundle. */
+  if (pasteTa && pasteBtn) {
+    pasteTa.addEventListener('input', function () {
+      pasteBtn.disabled = pasteTa.value.trim().length === 0;
+    });
+    pasteTa.addEventListener('keydown', function (e) {
+      /* Ctrl/Cmd+Enter triggers Match without leaving the textarea */
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !pasteBtn.disabled) {
+        e.preventDefault();
+        pasteBtn.click();
+      }
+    });
+    pasteBtn.addEventListener('click', function () {
+      var text = (pasteTa.value || '').trim();
+      if (!text) return;
+      lastParsed = null;
+      lastFile = null;
+      bundleBtn.disabled = true;
+      clearBtn.hidden = false;
+      summary.classList.remove('is-shown');
+      resultsBox.classList.remove('is-shown');
+      setBusy(true, 'Matching pasted text…');
+      var bodyClean = stripQuoteHistory(text);
+      rankScenarios(bodyClean).then(function (scored) {
+        renderResults(scored);
+        var msg = scored.length
+          ? ('Done — ' + scored.length + ' match' + (scored.length === 1 ? '' : 'es') + '. (No file = no evidence bundle.)')
+          : 'Done — nothing matched. This may be a new pattern worth a walked-ticket case study.';
+        setBusy(false, msg);
+        try {
+          if (window.sessionStorage) {
+            window.sessionStorage.setItem('rrTriageEmailBody', bodyClean);
+          }
+        } catch (e) {}
+      }).catch(function (err) {
+        console.error('[dropmsg] paste-match failed', err);
+        setBusy(false, 'Match failed: ' + (err.message || err));
+      });
+    });
+  }
+
+  /* ----- Walked-tickets index status indicator -----
+     Triggers a fetch on load so the user knows immediately whether the
+     cross-file fetch worked. Surfaces success count or an actionable
+     failure message. */
+  if (walkedMeta) {
+    getWalkedTicketCards().then(function (cards) {
+      walkedMeta.classList.remove('dropmsg-meta-loading');
+      if (cards.length > 0) {
+        walkedMeta.classList.add('dropmsg-meta-ok');
+        walkedMeta.textContent = 'Walked-tickets index loaded: ' + cards.length + ' case'
+          + (cards.length === 1 ? '' : 's') + ' available to the matcher.';
+      } else {
+        walkedMeta.classList.add('dropmsg-meta-fail');
+        walkedMeta.textContent = 'Walked-tickets index reachable but empty — make sure each '
+          + '.case-card on walked-tickets.html carries a data-search attribute.';
+      }
+    }).catch(function (err) {
+      walkedMeta.classList.remove('dropmsg-meta-loading');
+      walkedMeta.classList.add('dropmsg-meta-fail');
+      walkedMeta.textContent = 'Walked-tickets index could not be loaded — running locally on file:// '
+        + 'will block this fetch in Chrome (use python3 -m http.server, or push to GitHub Pages). '
+        + 'Scenario-card matching still works.';
+    });
+  }
+
+  /* ----- Also clear the paste box when the strip's Clear button is hit ----- */
+  if (pasteTa && clearBtn) {
+    clearBtn.addEventListener('click', function () {
+      pasteTa.value = '';
+      if (pasteBtn) pasteBtn.disabled = true;
+    });
+  }
 
 })();
 </script>
