@@ -265,6 +265,40 @@ def extract_sections_traditional(
     return records
 
 
+
+
+def extract_sections_ui_reference(
+    soup: BeautifulSoup, doc_url: str, page_title: str
+) -> list[dict]:
+    """
+    Extract one record per <article class="ui-entry"> for UI-reference-style pages.
+
+    Each entry corresponds to a single UI element (status light, button, panel,
+    etc.) with its own id anchor. This gives per-element search granularity so
+    a query like "red light" lands the user at the specific entry rather than
+    the top of a long reference page.
+    """
+    records: list[dict] = []
+    for article in soup.select("article.ui-entry"):
+        strip_boilerplate(article)
+        article_id = article.get("id", "")
+        heading = article.find(["h1", "h2", "h3"])
+        section_title = clean_text(heading) or page_title
+        body = clean_text(article)
+        if len(body) < MIN_SECTION_BODY_CHARS:
+            continue
+        records.append(
+            {
+                "id": f"{doc_url}::{article_id or section_title}",
+                "url": doc_url + (f"#{article_id}" if article_id else ""),
+                "page_title": page_title,
+                "section_title": section_title,
+                "body": body,
+            }
+        )
+    return records
+
+
 # ---------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------
@@ -275,8 +309,11 @@ def process_file(path: Path) -> list[dict]:
         soup = BeautifulSoup(f, "html.parser")
 
     page_title = get_page_title(soup)
+    is_ui_reference = bool(soup.select("article.ui-entry"))
     is_spa = bool(soup.select("section.view"))
 
+    if is_ui_reference:
+        return extract_sections_ui_reference(soup, path.name, page_title)
     if is_spa:
         return extract_sections_spa(soup, path.name, page_title)
     return extract_sections_traditional(soup, path.name, page_title)
