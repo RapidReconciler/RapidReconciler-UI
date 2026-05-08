@@ -86,6 +86,36 @@ TITLE_SUFFIXES = (
 # usually just the section heading with no real content.
 MIN_SECTION_BODY_CHARS = 40
 
+# Section titles that don't add search value on their own. Records with these
+# (after prefix cleaning, lowercased) are skipped — they were generating noise
+# search hits where the only standalone-readable text was the word "Overview".
+NOISE_SECTION_TITLES = frozenset({
+    "overview",
+    "topics",
+    "navigation",
+    "scope",
+    "related",
+    "related documentation",
+    "related guides",
+    "related docs",
+    "in this guide",
+    "what's in this guide",
+    "in this document",
+    "introduction",
+    "contents",
+    "table of contents",
+})
+
+# Strip leading "Section N:" / "Section N ·" / "N. " / "N.M:" / "Step N:" etc.
+# from section titles before they're emitted to the search index. The reference
+# docs use these prefixes liberally and they're noise from a search-result
+# perspective — "Section 3: WIP Revaluation for Standard Cost" should rank and
+# display as "WIP Revaluation for Standard Cost".
+SECTION_PREFIX_RE = re.compile(
+    r"^(?:section\s+|step\s+)?\d+(?:\.\d+)?\s*[:—–\-·•]+\s*",
+    re.IGNORECASE,
+)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -141,6 +171,26 @@ def strip_boilerplate(root: Tag) -> None:
             tag.decompose()
 
 
+def clean_section_title(title: str) -> str | None:
+    """
+    Strip leading numeric/section prefixes ("Section 3:", "1.2 ", etc.) from a
+    section title, then check the result against the noise stop-list.
+
+    Returns the cleaned title if it's useful as a standalone search record, or
+    None if the title is generic noise that shouldn't get its own record.
+    Callers handle the None case by skipping the section or falling back to the
+    page title.
+    """
+    if not title:
+        return None
+    cleaned = SECTION_PREFIX_RE.sub("", title.strip()).strip()
+    if not cleaned:
+        return None
+    if cleaned.lower() in NOISE_SECTION_TITLES:
+        return None
+    return cleaned
+
+
 # ---------------------------------------------------------------------------
 # Per-format extractors
 # ---------------------------------------------------------------------------
@@ -157,7 +207,13 @@ def extract_sections_spa(soup: BeautifulSoup, doc_url: str, page_title: str) -> 
 
         view_id = view.get("id", "")
         heading = view.find(["h1", "h2", "h3"])
-        section_title = clean_text(heading) or page_title
+        section_title_raw = clean_text(heading)
+        if section_title_raw:
+            section_title = clean_section_title(section_title_raw)
+            if section_title is None:
+                continue  # noise title — skip emitting this view as its own record
+        else:
+            section_title = page_title
         body = clean_text(view)
 
         if len(body) < MIN_SECTION_BODY_CHARS:
@@ -232,7 +288,10 @@ def extract_sections_traditional(
 
     # Each h2 starts a section that runs until the next h2 at the same depth.
     for i, h2 in enumerate(h2s):
-        section_title = clean_text(h2)
+        section_title_raw = clean_text(h2)
+        section_title = clean_section_title(section_title_raw)
+        if section_title is None:
+            continue  # noise / empty title — skip this h2's section
         section_id = h2.get("id", "")
 
         parts: list[str] = [section_title]
@@ -283,7 +342,13 @@ def extract_sections_ui_reference(
         strip_boilerplate(article)
         article_id = article.get("id", "")
         heading = article.find(["h1", "h2", "h3"])
-        section_title = clean_text(heading) or page_title
+        section_title_raw = clean_text(heading)
+        if section_title_raw:
+            section_title = clean_section_title(section_title_raw)
+            if section_title is None:
+                continue  # noise title — skip this UI entry
+        else:
+            section_title = page_title
         body = clean_text(article)
         if len(body) < MIN_SECTION_BODY_CHARS:
             continue
