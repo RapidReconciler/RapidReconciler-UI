@@ -1,0 +1,66 @@
+name: Refresh search indices
+
+# Regenerates RRUniversity/search-index.json and Scenarios/scenarios-index.json
+# whenever a relevant HTML file or build script changes on main, then commits
+# the regenerated JSON files back to the repo.
+#
+# The two index JSON files are deliberately NOT in the trigger paths — pushing
+# them must not retrigger this workflow.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'RRUniversity/**.html'
+      - 'RRUniversity/build-search-index.py'
+      - 'Scenarios/**.html'
+      - 'Scenarios/build-scenarios-index.py'
+      - '.github/workflows/refresh-indices.yml'
+  # Also runnable on demand from the Actions tab
+  workflow_dispatch:
+
+# The default GITHUB_TOKEN needs write access to commit the regenerated indices
+permissions:
+  contents: write
+
+# If a second push lands while the first run is still going, queue the new run
+# rather than running them in parallel — they'd just step on each other's commits
+concurrency:
+  group: refresh-indices-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install --quiet beautifulsoup4
+
+      - name: Regenerate RR University search-index.json
+        working-directory: RRUniversity
+        run: python build-search-index.py
+
+      - name: Regenerate Scenarios scenarios-index.json
+        working-directory: Scenarios
+        run: python build-scenarios-index.py
+
+      - name: Commit and push regenerated indices
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add RRUniversity/search-index.json Scenarios/scenarios-index.json
+          if git diff --staged --quiet; then
+            echo "No index changes — nothing to commit."
+          else
+            git commit -m "chore: refresh search indices [skip ci]"
+            git push
+          fi
