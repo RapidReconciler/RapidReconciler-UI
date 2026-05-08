@@ -1,148 +1,249 @@
 # RapidReconciler-AI — Project Guide for Claude
 
-## What this project is
+A static HTML knowledge base for GSI RapidReconciler, deployed via GitHub Pages
+at `https://rapidreconciler.github.io/RapidReconciler-AI/`.
 
-A static HTML knowledge base for GSI RapidReconciler, deployed via GitHub Pages at
-`https://rapidreconciler.github.io/RapidReconciler-AI/`. It has two main branches:
-
-- **RR University** — public-facing guides for customers and end users
-- **GSI RR Tech / Sales** — internal operational docs for GSI staff
-
-The entry point for everything is `Hub/rapidreconciler-hub.html`.
+The entry point for everything is `rapidreconciler-hub.html` at the repo root.
 
 ---
 
 ## Folder structure
 
 ```
-RapidReconciler-AI/          ← repo root
-├── 404.html                 ← GitHub Pages redirect for missing-repo-name URLs
-├── CLAUDE.md                ← this file
-├── rapidreconciler-hub.html ← top-level navigation (lives at the repo root)
+RapidReconciler-AI/                  ← repo root, hub lives here
+├── rapidreconciler-hub.html         ← top-level navigation
+├── 404.html                         ← GH Pages fallback for missing-repo-name URLs
+├── CLAUDE.md                        ← this file
 │
-├── RRUniversity/            ← PUBLIC: customer-facing knowledge base
-│   ├── rapidreconciler-university.html
+├── HelpDesk/                        ← Help desk search page
+│   └── troubleshooting.html         ← textarea search, results from two indices
+│
+├── Scenarios/                       ← One HTML file per troubleshooting scenario
+│   ├── scenarios-index.json         ← search index (22 scenarios)
+│   ├── scenario-template.html       ← template for new scenarios
+│   └── scenario-*.html              ← 22 scenario pages
+│
+├── RRUniversity/                    ← PUBLIC: customer-facing KB
+│   ├── rapidreconciler-university.html  ← KB landing + per-module search
 │   ├── getting-started-with-rapidreconciler.html
 │   ├── ui-reference.html
-│   ├── build-search-index.py
-│   ├── search-index.json
-│   ├── administrator-start-here.html
-│   ├── administrator-complex-password.html
-│   ├── inventory-*.html               (10 docs — Inventory module)
-│   ├── po-receipts-*.html             (3 docs — AP / PO Receipts module)
-│   ├── transfer-order-*.html          (3 docs — Transfers module)
-│   └── start-here-{inventory,ap,transfers}.html
+│   ├── search-index.json            ← 273 sections across 24 docs (~1.2 MB)
+│   ├── build-search-index.py        ← regenerates search-index.json (Python)
+│   ├── administrator-*.html         (Administrator module)
+│   ├── inventory-*.html             (Inventory module — 10 docs)
+│   ├── po-receipts-*.html           (A/P module — 3 docs)
+│   ├── transfer-order-*.html        (Transfers module — 3 docs)
+│   └── start-here-{inventory,ap,transfers,administrator}.html
 │
-├── GSIRRTech/               ← INTERNAL: technical staff docs
-│   ├── troubleshooting.html
-│   ├── Scenarios/
-│   ├── start-here-monitor.html
-│   ├── start-here-dba.html
-│   ├── start-here-developer.html
-│   ├── start-here-network-tech.html
-│   └── installing-production-database.html / -client-in-valc.html / etc.
+├── GSIRRTech/                       ← INTERNAL: tech staff docs
+│   ├── tech-roles.html              ← 5 tech role cards
+│   ├── tech-client-management.html  ← workflow: install → go-live
+│   ├── start-here-{dba,network-tech,developer,monitor}.html
+│   ├── installing-production-database.html
+│   ├── installing-client-in-valc.html
+│   ├── certificate-management.html
+│   └── server-migration.html
 │
-├── GSIRRSales/              ← INTERNAL: sales staff docs
-│   ├── sales-client-management.html
+├── GSIRRSales/                      ← INTERNAL: sales staff docs
+│   ├── sales-roles.html             ← Sales role card + Customer Documents section
+│   ├── sales-client-management.html ← workflow: prospect → contract
 │   ├── start-here-sales.html
 │   ├── rr-self-guided-tour.html
-│   └── rr-{provisioning,installation-prep,msa-template,contract-template,sow-template,fact-sheet}.html
+│   ├── rr-discovery-call.html
+│   ├── rr-provisioning.html
+│   ├── rr-installation-prep.html
+│   ├── proof-of-concept.html
+│   └── rr-{msa,contract,sow}-template.html
 │
-└── Compliance/              ← Compliance attestations (PDFs)
+└── Compliance/                      ← SOC 2 attestations (PDFs)
     ├── SOC2-Bridge-Letter.pdf
     └── SOC2-Type2-Report.pdf
 ```
 
-**Critical for links:** Because `rapidreconciler-hub.html` lives at the repo
-root, links from the hub to other folders are written WITHOUT a `../` prefix
-(e.g. `href="GSIRRTech/troubleshooting.html"`, not `href="../GSIRRTech/..."`).
-A `../` from the root traverses above the repo, dropping `RapidReconciler-AI`
-from the URL.
+---
+
+## Link path rules — read this before editing hrefs
+
+**The hub lives at the repo root**, not in a `Hub/` subfolder. Get path
+prefixes right depending on which file the link is in:
+
+| Source file location          | Linking to a sibling folder file        | Use this href                          |
+|-------------------------------|-----------------------------------------|----------------------------------------|
+| Repo root (the hub)           | `HelpDesk/troubleshooting.html`         | `HelpDesk/troubleshooting.html`        |
+| Inside any subfolder          | `HelpDesk/troubleshooting.html`         | `../HelpDesk/troubleshooting.html`     |
+| Inside `HelpDesk/`            | The hub itself                           | `../rapidreconciler-hub.html`          |
+| Inside `HelpDesk/`            | A scenario file in `Scenarios/`         | `../Scenarios/scenario-foo.html`       |
+
+**Never write `../FOLDER/file.html` from the hub** (which is at root) — the
+`../` traverses above the repo and the URL drops the `RapidReconciler-AI`
+segment, producing 404s.
+
+**Never write `/RapidReconciler-AI/...`** absolute paths — works only on the
+deployed site, breaks every other context.
 
 ---
 
----
+## Architecture: Hub
 
-## Module system (RR University)
+`rapidreconciler-hub.html` is intentionally minimal:
 
-The four role cards on `rapidreconciler-university.html` each map to a filename prefix.
-Search results are filtered by which cards are toggled on.
+- **Topnav** with brand + 3 links: RR University, Help Desk, (Documents
+  scrolls down)
+- **Hero** with title/lede + 2 compliance shortcut buttons (SOC 2 Bridge
+  Letter, SOC 2 Type 2 Report — both compose-email mailtos) + a "What's
+  inside" glass card with 5 destination links: See the product, Sales
+  Roles, Tech Roles, RR University, Help Desk
+- **Stats band** (24 / 6 / 2 / 12+)
+- **Footer**
 
-| Role card       | Filename prefix   | Docs |
-|-----------------|-------------------|------|
-| Inventory       | `inventory-`      | 10   |
-| AP              | `po-receipts-`    | 3    |
-| Transfers       | `transfer-order-` | 3    |
-| Administrators  | `administrator-`  | 2    |
-
-**General docs** (no module prefix: `start-here-*`, `getting-started-*`, `ui-reference.html`)
-are always visible regardless of toggle state.
-
-**Default toggle state:** Inventory ON, all others OFF. Persists to `localStorage`
-under key `rru-search-filters-v1`.
+The hub does NOT embed roles, scenarios, or compliance documents. Each lives
+on its own per-team page.
 
 ---
 
-## Key conventions
+## Architecture: Per-team role pages
 
-### Naming
-- Module docs use `module-descriptive-name.html` (e.g. `inventory-costing.html`)
-- Admin docs use `administrator-` prefix (renamed from `start-here-administrator.html`
-  and `complex-password.html` — do not use the old names anywhere)
-- Scenario files use `scenario-slug.html` inside `GSIRRTech/Scenarios/`
+- `GSIRRSales/sales-roles.html` — Sales role card + a complete **Customer
+  Documents & Templates** section (SOC 2 Bridge Letter, SOC 2 Type 2 Report,
+  Provisioning Document, Installation Prep Guide, MSA / Software License /
+  SOW templates). Hero links to: Sales Workflow, Customer Documents, Self-
+  Guided Tour.
+- `GSIRRTech/tech-roles.html` — 5 tech role cards (RR DBA, Network Tech, DB
+  Developer, UI Developer, Helpdesk Tech). Hero links to: Tech Workflow,
+  Help Desk, Certificate Management.
 
-### Links
-- Always use **relative paths** between files (`../RRUniversity/foo.html`)
-- Never use root-relative paths (`/RRUniversity/foo.html`) — these break on GitHub Pages
-  because the site lives at `/RapidReconciler-AI/`, not at `/`
+Each role card uses the original `entry-card` format with VIEW DETAILS →
+start-here doc and WORKFLOW → workflow doc footer links.
 
-### GitHub Pages URL structure
+---
+
+## Architecture: Help Desk
+
+`HelpDesk/troubleshooting.html` is a search-first discovery page:
+
+- Hero has a 6-row textarea (paste-friendly — designed for Copilot-summarized
+  emails or pasted error messages). Search debounce: 180ms.
+- **Default state**: Common scenarios panel shows 6 hand-picked cards. The
+  6 cards are the only scenario cards in the HTML; the other 16 scenarios
+  live solely in `scenarios-index.json` and surface via search results.
+- **Search state**: Common scenarios panel hides; results panel shows a
+  two-source tree:
+  - *Scenarios* — flat list of matching scenario titles + category pills.
+    Source: `../Scenarios/scenarios-index.json` (lazy-fetched on first
+    search, cached for the session).
+  - *RR University* — collapsible doc → section tree. Source:
+    `../RRUniversity/search-index.json` (also lazy-fetched).
+- Both fetches run in parallel via `Promise.all`. A race-condition guard
+  discards stale renders if the user keeps typing.
+- Clicking a result navigates to the destination page (no inline detail panes).
+
+**To add or swap common scenarios**: toggle the `data-common="true"`
+attribute on a scenario card in the HTML. To add a card, copy an existing
+one's structure and update the slug/title/category/data-search.
+
+**Scenarios are designed for runbook-style content**: each scenario page
+should contain self-resolution steps for a customer, plus an "If it still
+doesn't work, escalate to RR support" block. Older scenarios use the
+description / possible solutions / related format and will be migrated to
+runbooks gradually.
+
+---
+
+## Architecture: RR University
+
+`RRUniversity/rapidreconciler-university.html` is the public KB landing page
+with module-aware search:
+
+- **4 role cards** (Inventory / AP / Transfers / Administrators), each with
+  an "Include in search" toggle. Default: only Inventory ON; persisted to
+  localStorage as `rru-search-filters-v1`.
+- **Module → filename prefix mapping** for filtering:
+
+  | Role card       | Filename prefix    | Docs |
+  |-----------------|--------------------|------|
+  | Inventory       | `inventory-`       | 10   |
+  | AP              | `po-receipts-`     | 3    |
+  | Transfers       | `transfer-order-`  | 3    |
+  | Administrators  | `administrator-`   | 2    |
+
+- **General docs** (no prefix — `start-here-*`, `getting-started-*`,
+  `ui-reference.html`) are always visible regardless of toggle state.
+- **Search results** render as a 2-tier tree: doc title → section anchors.
+  The same tree shape is reused on the Help Desk page for RR University
+  results.
+
+---
+
+## search-index.json regeneration
+
+`RRUniversity/search-index.json` is built from RR University HTML files by
+`RRUniversity/build-search-index.py`. The script extracts every `<section>`
+or heading-anchored block and emits a record:
+
+```json
+{
+  "id":            "doc.html::section-anchor",
+  "url":           "doc.html#section-anchor",
+  "page_title":    "Document Title",
+  "section_title": "Section Title",
+  "body":          "concatenated searchable text"
+}
 ```
-https://rapidreconciler.github.io/RapidReconciler-AI/Hub/rapidreconciler-hub.html
-https://rapidreconciler.github.io/RapidReconciler-AI/RRUniversity/rapidreconciler-university.html
-https://rapidreconciler.github.io/RapidReconciler-AI/GSIRRTech/troubleshooting.html
-```
-If a URL is missing `/RapidReconciler-AI/`, the `404.html` at the repo root will
-auto-redirect to the correct path.
+
+**Regeneration constraint**: this repo's owner cannot install Python locally
+(company policy). Two options:
+
+1. **GitHub Actions** (recommended): set up a workflow that runs the script
+   on push to `RRUniversity/` and commits the regenerated index back. No
+   local Python required.
+2. **Manual**: regenerate in a Python environment elsewhere and drop the new
+   `search-index.json` into the repo.
+
+`Scenarios/scenarios-index.json` is generated similarly — same constraints
+apply.
 
 ---
 
-## Regenerating the search index
+## Common pitfalls
 
-Run from inside `RRUniversity/` after adding, removing, or renaming any HTML file:
-
-```
-python build-search-index.py
-```
-
-Requires Python + `beautifulsoup4` (`pip install beautifulsoup4`).
-
-Output: `search-index.json` (273 records across 24 docs as of last build).
-
-The script has a custom extractor for `ui-reference.html` (articles with
-`class="ui-entry"`) — one record per entry, 35 total.
-
----
-
-## Troubleshooting page notes
-
-- Drop-the-email input and paste textarea live in `<section class="hero">`
-- Match results live in `<section class="match-section">` below the hero
-- Scenario files in `GSIRRTech/Scenarios/` are loaded from `scenarios-index.json`
-- The `[hidden] { display: none !important; }` global CSS rule is intentional —
-  it ensures JS `element.hidden = true` always wins over display: flex/grid rules
-- `EMAIL_STOPWORDS` (300 words) and `EMAIL_PHRASE_BONUSES` live in Block 1 of the
-  main `<script>` — they must initialize before `tokenizeEmail()` or the page crashes
-- Title-weight scoring: title hits score 3×, body hits score 1×, phrase bonuses 6× (title) / 3× (body)
+- **Adding `../` to a hub link.** The hub is at root; this dumps the visitor
+  out of the repo on click.
+- **Modifying `troubleshooting.html` cards directly.** Cards are display-only
+  for the 6 commons. Search reads from the indices. Don't try to add a
+  17th card to the HTML — add it to `scenarios-index.json` instead.
+- **Quoting more than 15 words from any source.** Standing content rule for
+  RR University and any external citation.
+- **Tier-based language.** The "Tier 1 / Tier 2 / Tier 3" framing was
+  retired across the project. Don't reintroduce it.
+- **Removing tracked attributes when editing cards.** `data-search`,
+  `data-common`, `data-category` all drive search/filter logic. Preserve
+  them when editing card markup.
 
 ---
 
-## What NOT to touch without understanding the impact
+## Style & content conventions
 
-- `search-index.json` — always regenerate via script, never hand-edit
-- The `<script type="application/json">` blocks in `rapidreconciler-hub.html` —
-  these are the role-contacts and JSM config data blocks; they've been stripped but
-  the CSS selectors for `.jsm-fields` are dead code left intentionally
-- `scenarios-index.json` — generated by `build_scenarios_index.py` in repo root
-- The `data-role` attributes on path cards must exactly match `data-search-toggle`
-  values and the `ROLE_TO_PREFIX` keys in `rapidreconciler-university.html`'s JS
+- **Voice**: present tense, second person ("you click", not "the user
+  clicks"). Concise, no filler.
+- **Code in HTML**: `<code>` for any literal command, path, env var, role
+  name like `rrsupport@getgsi.com`, or button label.
+- **Em dashes**: written as `&mdash;` in source.
+- **Headings**: `<h1>` for page title, `<h2>` for major sections, `<h3>`
+  for subsections. Each section should have an `id` for deep linking.
+- **Fonts**: Open Sans for body, Source Sans 3 for headings (loaded from
+  Google Fonts at the top of every standalone page).
+- **Color tokens**: defined in `:root` at the top of each file. Navy
+  (#1f2d4a) is the primary brand color; sales = navy, tech = green/teal,
+  helpdesk = orange, certificate = orange, db = teal.
+
+---
+
+## Deployment
+
+- **GitHub Pages** serves from the repo root.
+- **Site URL**: `https://rapidreconciler.github.io/RapidReconciler-AI/`
+- **404 handler**: `404.html` redirects URLs that are missing the
+  `/RapidReconciler-AI/` repo-name segment by prepending it.
+- **No build step required** for HTML/CSS/JS edits — push, GitHub Pages
+  serves immediately.
+- **Search index regeneration** is the only build step; see above.
