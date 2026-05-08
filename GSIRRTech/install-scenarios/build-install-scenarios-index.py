@@ -1,19 +1,25 @@
 #!/usr/bin/env python3
 """
-build-scenarios-index.py — Build scenarios-index.json from Scenarios/*.html.
+build-install-scenarios-index.py — Build install-scenarios-index.json from
+GSIRRTech/install-scenarios/*.html.
+
+Mirror of Scenarios/build-scenarios-index.py, scoped to the install-scenarios
+folder. These scenarios are GSI-tech-only reference material used during
+installation, migration, and deployment web meetings — they are NOT surfaced
+on the customer-facing Help Desk.
 
 Walks the current directory for `scenario-*.html` files (skipping the template),
-extracts each one's metadata + searchable text, and writes scenarios-index.json
-next to itself. The Help Desk page (HelpDesk/troubleshooting.html) fetches this
-file at search time to surface scenario matches.
+extracts each one's metadata + searchable text, and writes
+install-scenarios-index.json next to itself. The install troubleshooting page
+(GSIRRTech/install-troubleshooting.html) fetches this file at search time.
 
 Usage
 -----
     pip install beautifulsoup4
-    python3 build-scenarios-index.py
+    python3 build-install-scenarios-index.py
 
-Run from inside the Scenarios/ directory (or with cwd set to it). Output is
-written to ./scenarios-index.json.
+Run from inside GSIRRTech/install-scenarios/ (or with cwd set to it). Output is
+written to ./install-scenarios-index.json.
 
 Schema
 ------
@@ -25,7 +31,7 @@ Schema
           "slug":      "scenario-foo",
           "title":     "Display title",
           "subtitle":  "shorter sub-headline",
-          "category":  "Install · migration",
+          "category":  "Install · agent",
           "data_search": "lowercased searchable body text"
         },
         ...
@@ -51,7 +57,7 @@ except ImportError:
 
 SKIP_FILES = {
     "scenario-template.html",
-    "scenarios-index.json",
+    "install-scenarios-index.json",
 }
 
 # Tags whose contents should be excluded from the searchable body
@@ -80,10 +86,7 @@ def extract_scenario(path: Path) -> dict:
     for header in soup.find_all("header", class_=lambda c: c and "topnav" in c):
         header.decompose()
 
-    # ---- category from .hero-eyebrow (e.g. "Scenario · Install") -------------
-    # Strip any .it-badge inside the eyebrow first — otherwise the badge text
-    # gets spliced into the category. We work on a re-parsed copy so the badge
-    # text remains in the page-wide body text used for data_search below.
+    # ---- category from .hero-eyebrow ----------------------------------------
     category = ""
     eyebrow = soup.select_one(".hero-eyebrow")
     if eyebrow:
@@ -91,7 +94,7 @@ def extract_scenario(path: Path) -> dict:
         for badge in eb_copy.select(".it-badge"):
             badge.extract()
         raw = text_of(eb_copy)
-        m = re.match(r"^\s*scenario\s*[·\u00B7\u2022\-]+\s*(.+?)\s*$", raw, re.IGNORECASE)
+        m = re.match(r"^\s*scenario\s*[·•\-]+\s*(.+?)\s*$", raw, re.IGNORECASE)
         category = (m.group(1) if m else raw).strip()
 
     # ---- title + subtitle from <h1 class="hero-title">title <em>subtitle</em>
@@ -115,7 +118,6 @@ def extract_scenario(path: Path) -> dict:
     # ---- data_search: lowercased, punctuation-stripped body text -------------
     body = soup.body or soup
     raw_text = text_of(body)
-    # Lowercase, drop punctuation, collapse whitespace
     cleaned = re.sub(r"[^\w\s]", " ", raw_text).lower()
     cleaned = collapse_ws(cleaned)
 
@@ -143,7 +145,7 @@ def main(argv: list[str]) -> int:
         except Exception as e:
             print(f"  ! {path.name}: {e}", file=sys.stderr)
 
-    out_path = here / "scenarios-index.json"
+    out_path = here / "install-scenarios-index.json"
     payload = {
         "version":   1,
         "generated": datetime.datetime.now(datetime.timezone.utc)
