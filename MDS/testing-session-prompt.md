@@ -1,7 +1,7 @@
 # Handoff prompt for new session — scenario testing
 
 Copy everything below the line into a fresh Claude conversation. Attach the
-current `troubleshooting.html` (and optionally `start-here-monitor.html`) when
+current `troubleshooting.html` (and optionally `start-here-helpdesk-tech.html`) when
 you start.
 
 ---

@@ -15,8 +15,9 @@ RapidReconciler-AI/                  ← repo root, hub lives here
 ├── 404.html                         ← GH Pages fallback for missing-repo-name URLs
 ├── CLAUDE.md                        ← this file
 │
-├── HelpDesk/                        ← Help desk search page
-│   └── troubleshooting.html         ← textarea search, results from two indices
+├── HelpDesk/                        ← Help desk: search + Helpdesk Tech home
+│   ├── troubleshooting.html         ← textarea search, results from two indices
+│   └── start-here-helpdesk-tech.html ← Helpdesk Tech onboarding
 │
 ├── Scenarios/                       ← One HTML file per troubleshooting scenario
 │   ├── scenarios-index.json         ← search index (22 scenarios)
@@ -35,17 +36,21 @@ RapidReconciler-AI/                  ← repo root, hub lives here
 │   ├── transfer-order-*.html        (Transfers module — 3 docs)
 │   └── start-here-{inventory,ap,transfers,administrator}.html
 │
-├── GSIRRTech/                       ← INTERNAL: tech staff docs
-│   ├── tech-roles.html              ← 5 tech role cards
+├── GSIRRTech/                       ← INTERNAL: install + product engineering
+│   ├── tech-team.html               ← 3 tech role cards (DBA, Network Tech, DB Developer)
 │   ├── tech-client-management.html  ← workflow: install → go-live
-│   ├── start-here-{dba,network-tech,developer,monitor}.html
+│   ├── start-here-{dba,network-tech,developer}.html
 │   ├── installing-production-database.html
 │   ├── installing-client-in-valc.html
 │   ├── certificate-management.html
-│   └── server-migration.html
+│   ├── install-troubleshooting.html ← search hub for install scenarios
+│   └── install-scenarios/           ← 14 install scenario pages
+│       └── scenario-*.html
+│
+│   Note: Helpdesk Tech onboarding lives in HelpDesk/. server-migration.html
+│   lives in RRUniversity/.
 │
 ├── GSIRRSales/                      ← INTERNAL: sales staff docs
-│   ├── sales-roles.html             ← Sales role card + Customer Documents section
 │   ├── sales-client-management.html ← workflow: prospect → contract
 │   ├── start-here-sales.html
 │   ├── rr-self-guided-tour.html
@@ -92,7 +97,7 @@ deployed site, breaks every other context.
 - **Hero** with title/lede + 2 compliance shortcut buttons (SOC 2 Bridge
   Letter, SOC 2 Type 2 Report — both compose-email mailtos) + a "What's
   inside" glass card with 5 destination links: See the product, Sales
-  Roles, Tech Roles, RR University, Help Desk
+  Roles, Tech Team, RR University, Help Desk
 - **Stats band** (24 / 6 / 2 / 12+)
 - **Footer**
 
@@ -103,16 +108,16 @@ on its own per-team page.
 
 ## Architecture: Per-team role pages
 
-- `GSIRRSales/sales-roles.html` — Sales role card + a complete **Customer
-  Documents & Templates** section (SOC 2 Bridge Letter, SOC 2 Type 2 Report,
-  Provisioning Document, Installation Prep Guide, MSA / Software License /
-  SOW templates). Hero links to: Sales Workflow, Customer Documents, Self-
-  Guided Tour.
-- `GSIRRTech/tech-roles.html` — 5 tech role cards (RR DBA, Network Tech, DB
-  Developer, UI Developer, Helpdesk Tech). Hero links to: Tech Workflow,
-  Help Desk, Certificate Management.
+- `GSIRRTech/tech-team.html` — 3 tech role cards (RR DBA, Network Tech, DB
+  Developer). Hero links to: Tech Workflow, Install Reference, Help Desk,
+  Certificate Management. The Helpdesk Tech role is intentionally excluded —
+  it's a triage role (not workflow execution), so its onboarding doc and
+  daily tool both live on the Help Desk page.
 
-Each role card uses the original `entry-card` format with VIEW DETAILS →
+The hub's "Sales" link goes directly to `GSIRRSales/start-here-sales.html`
+(no per-team role landing page on the sales side).
+
+Each tech role card uses the original `entry-card` format with VIEW DETAILS →
 start-here doc and WORKFLOW → workflow doc footer links.
 
 ---
