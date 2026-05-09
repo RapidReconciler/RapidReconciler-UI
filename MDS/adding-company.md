@@ -24,7 +24,7 @@ A GSI representative will follow up to confirm licensing and coordinate the upda
 
 ## Managing Company Settings
 
-![Add Company](../Images/rr_admin_add_company.png)
+![Add Company](../Images/rr-admin-add-company.png)
 
 Company settings, including enabling or disabling companies for individual users, are managed by your RapidReconciler administrator. If you need changes to your company configuration, please contact your internal RapidReconciler administrator.
 

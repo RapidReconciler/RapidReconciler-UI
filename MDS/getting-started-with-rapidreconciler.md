@@ -39,7 +39,7 @@ To assign or reset your password:
 - GSI has the ability to enable complex passwords for RapidReconciler.
 - Contact GSI at **<rrsupport@getgsi.com>** to enable this feature for your company.
 
-![Log In Screen](../Images/rr_log_in_screen.png) ![Password Reset](../Images/rr_password_reset.png)
+![Log In Screen](../Images/rr-login-screen.png) ![Password Reset](../Images/rr-password-reset.png)
 
 [Complex Passwords](../MDS/complex-password.md)
 
@@ -51,22 +51,22 @@ To assign or reset your password:
 
 The banner is the blue bar that runs across the top of the web page. The following controls are available within the banner:
 
-![rr_web_page_banner](../Images/rr_web_page_banner.png)
+![rr_web_page_banner](../Images/rr-web-page-banner.png)
 
 | **Control** | **Description** |
 |---|---|
-| <img src="../Images/rr_collapse_navigation_bar.png" width="24px"/> **Collapse** | Hides or shows the left-side navigation panel. |
-| <img src="../Images/rr_personal_data.png" width="24px"/> **Personal Data** | Toggles the display of personal user information. |
-| <img src="../Images/rr_log_out.png" width="24px"/> **Log Out** | Ends the current session and logs the user out. |
-| <img src="../Images/rr_full_screen.png" width="24px"/> **Full Screen** | Expands the application to full screen. |
-| <img src="../Images/rr_system_alerts.png" width="24px"/> **System Alerts** | Displays any active system notifications. |
-| <img src="../Images/rr_help_panel.png" width="24px"/> **Help Panel** | Toggles the context-sensitive help panel. |
+| <img src="../Images/rr-collapse-navigation-bar.png" width="24px"/> **Collapse** | Hides or shows the left-side navigation panel. |
+| <img src="../Images/rr-personal-data.png" width="24px"/> **Personal Data** | Toggles the display of personal user information. |
+| <img src="../Images/rr-log-out.png" width="24px"/> **Log Out** | Ends the current session and logs the user out. |
+| <img src="../Images/rr-full-screen.png" width="24px"/> **Full Screen** | Expands the application to full screen. |
+| <img src="../Images/rr-system-alerts.png" width="24px"/> **System Alerts** | Displays any active system notifications. |
+| <img src="../Images/rr-help-panel.png" width="24px"/> **Help Panel** | Toggles the context-sensitive help panel. |
 
 **2.2 Main Navigation Bar**
 
 The main navigation bar runs along the left side of the browser window. The items visible to each user will depend on the permissions granted by the RapidReconciler Administrator.
 
-![rr_main_navigation](../Images/rr_main_navigation.png)
+![rr_main_navigation](../Images/rr-main-navigation.png)
 
 | **Item** | **Description** |
 |---|---|
@@ -86,7 +86,7 @@ Clicking on Inventory, In Transit, or PO Receipts expands the navigation bar to 
 
 The module status bar provides information on your current location within the application and the status of the applicable data. It contains four elements:
 
-![rr_module_status_bar](../Images/rr_module_status_bar.png)
+![rr_module_status_bar](../Images/rr-module-status-bar.png)
 
 - **Page Identifier** - Displays the name of the page you are currently on.
 - **Inventory Validation** - A green indicator confirms that the roll-forward from the prior period is accurate. Red indicates a potential issue (typically an unposted batch) that must be resolved before making journal entries.

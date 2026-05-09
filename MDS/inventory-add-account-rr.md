@@ -28,7 +28,7 @@ RapidReconciler uses **DMAAI table 4152** with document type **PI** as the defau
 
 ### 1.1 How RapidReconciler Uses DMAAI
 
-![JDE DMAIIs](../Images/rr_inventory_jde_dmaais.png)
+![JDE DMAIIs](../Images/rr-inv-jde-dmaais.png)
 
 
 The DMAAI (Default Model AAI) table in JD Edwards defines the general ledger accounts associated with inventory transactions by GL class code. RapidReconciler reads these entries to determine which accounts to display in the reconciliation interface.
@@ -42,7 +42,7 @@ The DMAAI (Default Model AAI) table in JD Edwards defines the general ledger acc
 
 The default document type (PI) may be changed by the RapidReconciler administrator in the company settings. If a different document type is configured, additional DMAAI entries must be set up in JD Edwards for that document type in order for the correct accounts to appear in RapidReconciler.
 
-![Change AAI Document Type](../Images/rr_admin_change_aai_doctype.png)
+![Change AAI Document Type](../Images/rr-admin-change-aai-doctype.png)
 
 > **Important:** Setting up and maintaining DMAAI entries in JD Edwards is the responsibility of the customer. RapidReconciler displays accounts based on whatever entries exist in the configured DMAAI table and document type -- the customer is responsible for vetting the accuracy of these entries.
 
@@ -75,7 +75,7 @@ Follow these steps to add a new inventory account in RapidReconciler:
 
 Use Integrity report 1 shown below to validate that the new DMAAI entry is set up correctly and will be picked up by RapidReconciler:
 
-![Inventory Integrity Model DMAAI](../Images/rr_inventory_integrity1_modeldmaai.png)
+![Inventory Integrity Model DMAAI](../Images/rr-inv-integrity1-modeldmaai.png)
 
 ### 2.2 Additional Requirements
 
@@ -91,7 +91,7 @@ In addition to creating the DMAAI entry, the following conditions must be met be
 
 ## Section 3: Troubleshooting
 
-![Inventory Filter Refresh](../Images/rr_inventory_filter_refresh.png)
+![Inventory Filter Refresh](../Images/rr-inv-filter-refresh.png)
 
 
 | Symptom | Likely Cause | Action |

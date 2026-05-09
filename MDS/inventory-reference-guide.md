@@ -26,7 +26,7 @@
 
 ### The Model DMAAI Table in JD Edwards
 
-![JDE DMAIIs](../Images/rr_inventory_jde_dmaais.png)
+![JDE DMAIIs](../Images/rr-inv-jde-dmaais.png)
 
 The **Model DMAAI Table** is a foundational concept in RapidReconciler. DMAAI table **4152** with document type **PI** has been designated as the default model table. The document type may be changed by the RR administrator in Company settings.
 
@@ -59,7 +59,7 @@ The Model DMAAI Table must be vetted for accuracy before RapidReconciler can pro
 
 - Use Integrity report 1 shown below to validate that the new DMAAI entry is set up correctly and will be picked up by RapidReconciler:
 
-![Inventory Integrity Model DMAAI](../Images/rr_inventory_integrity1_modeldmaai.png)
+![Inventory Integrity Model DMAAI](../Images/rr-inv-integrity1-modeldmaai.png)
 
 ### Managing Inventory Accounts
 
@@ -170,7 +170,7 @@ This variance source checks the integrity between F0911 (GL detail) and F0902 (a
 
 ### Common Batch Posting Errors
 
-![Inventory Batch Popup](../Images/rr_inv_batch_popup.png)
+![Inventory Batch Popup](../Images/rr-inv-batch-popup.png)
 
 Use the account, gl date, approval and posting status columns on the GL Batches variance preview screen to identify any batches that have not posted successfully. Common errors include:
 
@@ -214,7 +214,7 @@ The type column will display the apprpriate batch header status message:
 | **Sales** | The sales update program has not yet run to pick up the transaction. This is typical for transactions that occurred on the current day. |
 | **Manufacturing** | The manufacturing accounting program has not yet run to pick up the transaction. This is typical for transactions that occurred on the current day. |
 
-![Inventory EOD Popup](../Images/rr_inv_eod_popup.png)
+![Inventory EOD Popup](../Images/rr-inv-eod-popup.png)
 
 **Key Takeaways:**
 

@@ -67,7 +67,7 @@ The RapidReconciler Cardex Integrity pop-up compares the summarized item ledger 
 From the RapidReconciler inventory reconciliation screen, open the Cardex Integrity pop-up. 
 Hover over the cardex variance line in the variance calculation section. Click the green square to open the pop-up.
 
-![Cardex Integrity](../Images/rr_inv_cardex_integrity_popup.png)
+![Cardex Integrity](../Images/rr-inv-cardex-integrity-popup.png)
 
 **1.2 Review the variance indicators**
 
@@ -226,7 +226,7 @@ If Step 2 confirmed that JD Edwards is correct and the variance exists only in R
 
 > **Key Principle:** The Re-Roll options do not change JD Edwards data. They recalculate or adjust RapidReconciler's internal balances to bring them into alignment with JD Edwards, which is the system of record. Since RapidReconciler only tracks history from the point the program was initiated or the data was last reset, Re-Roll is sometimes needed to account for transactions or cost changes that occurred before or outside that window. Note there is no UNDO button. Use the options with caution!
 
-![Re-roll Item](../Images/rr_inv_asof_reroll.png)
+![Re-roll Item](../Images/rr-inv-asof-reroll.png)
 
 The Re-Roll Item dialog offers three options. Only one should be selected at a time.
 
@@ -234,7 +234,7 @@ The Re-Roll Item dialog offers three options. Only one should be selected at a t
 
 ### Option 1: Re-Roll Item
 
-![Re-roll Item](../Images/rr_inv_asof_reroll1.png)
+![Re-roll Item](../Images/rr-inv-asof-reroll1.png)
 
 **When to use:** When there are issues with the RapidReconciler stated quantity on hand due to changes in the primary unit of measure, or after a JDE correction has been made and RapidReconciler needs to be recalculated.
 
@@ -255,7 +255,7 @@ The Re-Roll Item dialog offers three options. Only one should be selected at a t
 
 ### Option 2: Zero Beginning Balance
 
-![Zero Beg Balance](../Images/rr_inv_asof_reroll2.png)
+![Zero Beg Balance](../Images/rr-inv-asof-reroll2.png)
 
 **When to use:** Only if the first available period for the item in RapidReconciler should have a beginning balance of zero. Check the earliest balance by selecting the oldest date from the Period Ends drop-down before using this option.
 
@@ -276,7 +276,7 @@ The Re-Roll Item dialog offers three options. Only one should be selected at a t
 
 ### Option 3: Remove CX Var
 
-![Remove CX Var](../Images/rr_inv_asof_reroll3.png)
+![Remove CX Var](../Images/rr-inv-asof-reroll3.png)
 
 **When to use:** When JD Edwards is confirmed to be correct but RapidReconciler is showing a cardex variance. Requires JDE validation (Step 2) to be completed first.
 

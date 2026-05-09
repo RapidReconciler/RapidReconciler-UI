@@ -160,7 +160,7 @@ The Integration Services Catalog (SSISDB) must exist on the target SQL Server be
 
 ---
 
-![SSIS Catalog](../Images/rr_ssis_catalog.png)
+![SSIS Catalog](../Images/rr-ssis-catalog.png)
 
 ### Step 2 -- Create the RapidReconciler Folder
 
@@ -256,18 +256,18 @@ Before opening Visual Studio, gather the following JD Edwards-specific informati
 1. Launch **Visual Studio Community**. Run as an administrator if possible to avoid permission issues during deployment.
 2. Select **Create a new project**
 
-![SSIS Create Project](../Images/rr_ssis_create_project.png)
+![SSIS Create Project](../Images/rr-ssis-create-project.png)
 
 
 3. Search for and select **Integration Services Project**, then click **Next**
 
-![SSIS Integration Services Project Template](../Images/rr_ssis_is_project_template.png)
+![SSIS Integration Services Project Template](../Images/rr-ssis-is-project-template.png)
 
 4. Set the **Project name** to `RapidReconciler`
 5. Choose an appropriate location on the server to save the solution
 6. Click **Create**
 
-![SSIS Configure Project](../Images/rr_ssis_configure_project.png)
+![SSIS Configure Project](../Images/rr-ssis-configure-project.png)
 
 7. Once the solution loads, confirm the project appears in **Solution Explorer** as `RapidReconciler`
 
@@ -275,7 +275,7 @@ Before opening Visual Studio, gather the following JD Edwards-specific informati
 
 ### Step 3 -- Add the Existing SSIS Package
 
-![SSIS Add Existing Package](../Images/rr_ssis_add_existing_package.png)
+![SSIS Add Existing Package](../Images/rr-ssis-add-existing-package.png)
 
 
 1. In **Solution Explorer**, right-click the `RapidReconciler` project
@@ -290,7 +290,7 @@ Before opening Visual Studio, gather the following JD Edwards-specific informati
 
 ---
 
-![SSIS Control Flow Variables](../Images/rr_ssis_controlflow_variables.png)
+![SSIS Control Flow Variables](../Images/rr-ssis-controlflow-variables.png)
 **Figure 1 -- RapidReconciler SSIS Package in Visual Studio**
 
 ### Step 4 -- Configure the Connection Managers
@@ -355,7 +355,7 @@ Save all changes to the package by clicking **File -> Save All** or pressing `Ct
 
 ### Step 8 -- Configure the SQL Agent Package Path
 
-![SSIS Package Path](../Images/rr_ssis_package_path.png)
+![SSIS Package Path](../Images/rr-ssis-package-path.png)
 
 1. In SSMS, navigate to **SQL Server Agent -> Jobs -> RapidReconciler_Prod**
 2. Right-click the job and select **Properties**
@@ -386,7 +386,7 @@ Save all changes to the package by clicking **File -> Save All** or pressing `Ct
 
 ### Step 4 -- Enable the Job Schedule
 
-![SQL Agent Job Schedule](../Images/rr_sqlagent_jobschedule.png)
+![SQL Agent Job Schedule](../Images/rr-sqlagent-jobschedule.png)
 
 1. Select the schedule from the list and click **Edit**
 2. In the **Job Schedule Properties** dialog, check the **Enabled** checkbox at the top

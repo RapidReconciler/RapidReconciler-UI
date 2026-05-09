@@ -67,7 +67,7 @@ When a purchase order or sales order is entered, the GL Class Code is copied fro
 
 > **Key Takeaway:** The GL Class Code flows downward through the hierarchy -- from Item Master to Item Branch to Item Location to Order Line -- but it does **not** update automatically. Each level must be maintained independently.
 
-![GL Class Code Hierarchy](../Images/rr_inv_glclass_levels.png)
+![GL Class Code Hierarchy](../Images/rr-inv-glclass-levels.png)
 
 ---
 
@@ -173,7 +173,7 @@ Since these values are expected to be the same, any item appearing on this repor
 
 > **Best Practice:** Run Integrity Report 5 regularly -- particularly after any GL Class Code change -- to proactively identify and resolve mismatches before they cause incorrect journal entries or period-end reconciliation issues.
 
-![Inventory Integrity Report 5](../Images/rr_inv_integrity5.png)
+![Inventory Integrity Report 5](../Images/rr-inv-integrity5.png)
 
 Integrity Report 5 can be accessed via the RapidReconciler application under the Inventory Integrity Reports menu. Review the report output for any items listed and take corrective action as needed to ensure GL Class Codes are consistent across all levels of the hierarchy.
 

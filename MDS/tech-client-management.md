@@ -53,7 +53,7 @@ VALC (Version and Licensing Control) is a GSI-developed web application hosted o
 
 VALC contains five main pages accessible from the top navigation:
 
-![Main Navigation](../Images/rr_valc_main_navigation.png)
+![Main Navigation](../Images/rr-valc-main-navigation.png)
 
 | **Page** | **Description** |
 |---|---|
@@ -69,7 +69,7 @@ VALC contains five main pages accessible from the top navigation:
 - Click the **Clients** page in the main navigation bar.
 - Click **Create Client** in the top-right corner.
 
-![Create Client](../Images/rr_valc_create_client.png)
+![Create Client](../Images/rr-valc-create-client.png)
 
 Complete the form using the following field guidance:
 
@@ -97,7 +97,7 @@ After confirming, the new client will appear in the grid with the following init
 | **Agent Version** | Blank | Populates once the agent connects |
 | **System Status / Messages** | Blank | Populates after database setup is complete and the job runs for the first time |
 
-![Manage Clients](../Images/rr_valc_manage_clients.png)
+![Manage Clients](../Images/rr-valc-manage-clients.png)
 
 ---
 
@@ -109,7 +109,7 @@ An initial user account must be created before the agent can be installed.
 - Select the **User Accounts** tab.
 - Click **New User** and complete the form as follows:
 
-![New User](../Images/rr_valc_new_user.png)
+![New User](../Images/rr-valc-new-user.png)
 
 | **Field** | **Value** |
 |---|---|
@@ -133,7 +133,7 @@ The new user will appear as a row on the User Accounts tab. These credentials wi
 
 > **Recommendation:** It is best practice to get the client running on Inventory and Admin before enabling additional modules.
 
-![Initial Tabs](../Images/rr_valc_initial_tabs.png)
+![Initial Tabs](../Images/rr-valc-initial-tabs.png)
 
 The **Setup Step** field will display "Created" at this stage and will cycle through subsequent steps as the installation progresses.
 
@@ -141,7 +141,7 @@ The **Setup Step** field will display "Created" at this stage and will cycle thr
 
 ### Step 4 -- Configure Additional Fields
 
-![VALC Additional Fields](../Images/rr_valc_additional_fields.png)
+![VALC Additional Fields](../Images/rr-valc-additional-fields.png)
 
 | **Field** | **Value** |
 |---|---|
@@ -175,7 +175,7 @@ The **Setup Step** field will display "Created" at this stage and will cycle thr
 
 ### Step 1 -- Download and Install the Agent
 
-![Download Agent](../Images/rr_valc_download_agent.png)
+![Download Agent](../Images/rr-valc-download-agent.png)
 
 - From the customer's application server, open a web browser and navigate to: **https://rapidreconciler.getgsi.com**
 - Log in using the user credentials created in VALC (Step 2 above).
