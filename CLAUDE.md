@@ -16,7 +16,7 @@ RapidReconciler-AI/                  ← repo root, hub lives here
 ├── CLAUDE.md                        ← this file
 │
 ├── HelpDesk/                        ← Help desk: search + Helpdesk Tech home
-│   ├── troubleshooting.html         ← textarea search, results from two indices
+│   ├── troubleshooting.html         ← internal scenario search (Helpdesk Tech tool)
 │   └── start-here-helpdesk-tech.html ← Helpdesk Tech onboarding
 │
 ├── Scenarios/                       ← One HTML file per troubleshooting scenario
@@ -24,8 +24,9 @@ RapidReconciler-AI/                  ← repo root, hub lives here
 │   ├── scenario-template.html       ← template for new scenarios
 │   └── scenario-*.html              ← 22 scenario pages
 │
-├── RRUniversity/                    ← PUBLIC: customer-facing KB
+├── RRUniversity/                    ← PUBLIC: customer-facing KB + Help
 │   ├── rapidreconciler-university.html  ← KB landing + per-module search
+│   ├── help.html                    ← customer Help Desk: paste-search over scenarios
 │   ├── getting-started-with-rapidreconciler.html
 │   ├── ui-reference.html
 │   ├── search-index.json            ← 273 sections across 24 docs (~1.2 MB)
@@ -122,25 +123,36 @@ start-here doc and WORKFLOW → workflow doc footer links.
 
 ---
 
-## Architecture: Help Desk
+## Architecture: Help Desk pages (two flavors)
 
-`HelpDesk/troubleshooting.html` is a search-first discovery page:
+Two near-identical search-first pages share the same paste-friendly UX and
+search engine. They differ only in chrome and audience:
 
-- Hero has a 6-row textarea (paste-friendly — designed for Copilot-summarized
-  emails or pasted error messages). Search debounce: 180ms.
+- **`HelpDesk/troubleshooting.html`** — *internal* (Helpdesk Tech tool). Sticky
+  orange "GSI Internal Use Only" banner; sibling `start-here-helpdesk-tech.html`
+  for onboarding.
+- **`RRUniversity/help.html`** — *customer-facing* (deployed inside the
+  RapidReconciler app). Plain RR University-style topnav with "University",
+  "Contact Support" buttons.
+
+Both pages:
+
+- Hero has a 6-row textarea (paste-friendly — Copilot-summarized emails,
+  pasted error messages). Search debounce: 180ms.
 - **Default state**: Common scenarios panel shows 6 hand-picked cards. The
-  6 cards are the only scenario cards in the HTML; the other 16 scenarios
-  live solely in `scenarios-index.json` and surface via search results.
-- **Search state**: Common scenarios panel hides; results panel shows a
-  two-source tree:
-  - *Scenarios* — flat list of matching scenario titles + category pills.
-    Source: `../Scenarios/scenarios-index.json` (lazy-fetched on first
-    search, cached for the session).
-  - *RR University* — collapsible doc → section tree. Source:
-    `../RRUniversity/search-index.json` (also lazy-fetched).
-- Both fetches run in parallel via `Promise.all`. A race-condition guard
-  discards stale renders if the user keeps typing.
-- Clicking a result navigates to the destination page (no inline detail panes).
+  6 cards are the only scenario cards in the HTML; the other scenarios live
+  solely in `scenarios-index.json` and surface via search.
+- **Search state**: Common scenarios panel hides; results panel shows a flat
+  list of matching scenario titles + category pills. Source:
+  `../Scenarios/scenarios-index.json` (lazy-fetched on first search, cached
+  for the session). A race-condition guard discards stale renders if the
+  user keeps typing.
+- Clicking a result navigates to the destination scenario page.
+
+The RR University search is **scoped to RR University only** (handled on
+`RRUniversity/rapidreconciler-university.html`). The Help Desk pages search
+**scenarios only**. Each page has one focused search index, no parallel
+multi-source fetching.
 
 **To add or swap common scenarios**: toggle the `data-common="true"`
 attribute on a scenario card in the HTML. To add a card, copy an existing
