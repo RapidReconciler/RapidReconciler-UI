@@ -49,6 +49,7 @@
   .steps-list { display: grid; gap: 18px; margin-top: 6px; }
   .step-card { background: #fff; border: 1px solid var(--rule-strong); border-radius: 6px; padding: 20px 24px; position: relative; }
   .step-num { position: absolute; top: -12px; left: 18px; background: var(--navy); color: #fff; font-family: 'Source Sans 3', sans-serif; font-weight: 700; font-size: 12.5px; padding: 4px 11px; border-radius: 100px; letter-spacing: 0.04em; }
+  .step-card .it-badge { position: absolute; top: -11px; left: 90px; font-size: 10.5px; padding: 2px 9px; letter-spacing: 0.05em; }
   .step-title { font-family: 'Source Sans 3', sans-serif; font-weight: 700; font-size: 17px; color: var(--navy); margin-bottom: 6px; padding-top: 4px; }
   .step-when { font-size: 13.5px; color: var(--text-soft); margin-bottom: 10px; font-style: italic; }
   .step-when strong { color: var(--text); font-style: normal; }
@@ -112,16 +113,19 @@
   </div>
 
   <section class="hero">
-    <div class="hero-eyebrow">Status lights red</div>
+    <div class="hero-eyebrow">
+      Status lights red
+      <span class="it-badge">For your IT</span>
+    </div>
     <h1 class="hero-title">System status light is red</h1>
     <p class="hero-lede">
-      The System Status indicator at the top of the Reconciliation page is <strong>red or amber</strong> (anything other than green). This signals that a back-end job has crashed or the nightly refresh hasn&rsquo;t completed cleanly &mdash; the figures aren&rsquo;t ready to reconcile yet. <strong>Don&rsquo;t start your month-end close until both status lights are green</strong>; the figures you&rsquo;d be working from can&rsquo;t be trusted while either is off-color.
+      The System Status indicator at the top of the Reconciliation page is <strong>red or amber</strong> (anything other than green). A back-end job didn&rsquo;t complete cleanly &mdash; the figures aren&rsquo;t ready to reconcile yet. <strong>Don&rsquo;t start your month-end close until both status lights are green</strong>; the figures you&rsquo;d be working from can&rsquo;t be trusted while either is off-color.
     </p>
     <p class="hero-lede" style="margin-top: 10px; font-size: 14.5px;">
-      There&rsquo;s a built-in export that captures the crash details &mdash; that&rsquo;s the key piece of information to send to support. The fix happens GSI-side; there&rsquo;s nothing to change inside RapidReconciler or JDE on your end.
+      Most red lights are caused by something in the SQL Server / SSIS environment your IT owns &mdash; out of disk, a full TempDB log, a failed SQL Agent job, or an SSIS package error. Have your IT walk the checks below before involving RR support; many issues clear once the underlying environment is healthy and the job re-runs.
     </p>
     <p class="hero-lede" style="margin-top: 10px; font-size: 14.5px;">
-      <strong>Different cause family:</strong> if the red status light is paired with a Cardex variance that won&rsquo;t clear after month-end and a missing future period, see <a href="scenario-cardex-variance-month-end.html">Cardex variance and red status light after month-end</a>. That&rsquo;s a data-duplication issue your IT can address &mdash; different from the click-and-email-Excel path below.
+      <strong>Different symptom:</strong> if the nightly job is still <em>running</em> rather than failed (no error, just hasn&rsquo;t finished after many hours), see <a href="scenario-rr-job-running-long.html">RR nightly job running long</a> &mdash; that path covers stopping the hung SQL job and re-running it.
     </p>
   </section>
 
@@ -137,7 +141,7 @@
   </div>
 
   <div class="section-header">
-    <h2 class="section-title">Try these steps in order</h2>
+    <h2 class="section-title">Recommendations to share with your IT</h2>
   </div>
 
   <div class="steps-list">
@@ -146,44 +150,79 @@
       <span class="step-num">Step 1</span>
       <div class="step-title">Capture the basic context</div>
       <div class="step-body">
-        <p>Note the following before you do anything else &mdash; this becomes the email if support needs to investigate.</p>
+        <p>Note the following before forwarding to your IT &mdash; the same context becomes the email if it later needs to go to RR support.</p>
         <ul>
           <li>The date and time the indicator turned red.</li>
           <li>The company or business unit you were viewing.</li>
           <li>A screenshot of the Reconciliation page header showing the red System Status indicator.</li>
         </ul>
       </div>
-      <div class="step-result"><strong>Captured?</strong> Continue to Step 2.</div>
+      <div class="step-result"><strong>Captured?</strong> Forward to your IT with Steps 2&ndash;4 to walk.</div>
     </article>
 
     <article class="step-card">
       <span class="step-num">Step 2</span>
-      <div class="step-title">Click the red System Status indicator to export the crash details</div>
+      <span class="it-badge">For your IT</span>
+      <div class="step-title">Check disk space and TempDB on the database server</div>
       <div class="step-body">
-        <p>Clicking the red indicator exports an Excel report with the crash details &mdash; this is the artifact RR support needs to diagnose what went wrong.</p>
-        <ol>
-          <li>Click the red System Status indicator at the top of the Reconciliation page.</li>
-          <li>Save the Excel file that downloads.</li>
-        </ol>
-        <p>If clicking the indicator doesn&rsquo;t do anything, capture a screenshot of the indicator and any browser console errors instead and note that the export failed.</p>
+        <p>The most common cause is the SQL Server host running out of room. Have IT check:</p>
+        <ul>
+          <li><strong>Free disk space</strong> on every drive that hosts the RapidReconciler database, the SQL Server data and log directories, and TempDB. Low or zero free space stalls the nightly job.</li>
+          <li><strong>TempDB log file size and autogrowth</strong>. A full TempDB log will fail any large operation. If it&rsquo;s near full, free space (shrink, restart the SQL service during a maintenance window, or expand the drive) before re-running.</li>
+          <li><strong>Database log file (<code>RapidReconciler_Prod_log.ldf</code>)</strong> &mdash; same check, same fix path.</li>
+        </ul>
       </div>
-      <div class="step-result"><strong>Got the Excel?</strong> Continue below to email RR support.</div>
+      <div class="step-result"><strong>Disk and log space OK?</strong> Continue to Step 3.</div>
+    </article>
+
+    <article class="step-card">
+      <span class="step-num">Step 3</span>
+      <span class="it-badge">For your IT</span>
+      <div class="step-title">Review SQL Agent Job History for the failed job</div>
+      <div class="step-body">
+        <p>Have IT open <strong>SQL Server Management Studio &rarr; SQL Server Agent &rarr; Job Activity Monitor</strong> (or the Job History node) on the RapidReconciler database server.</p>
+        <ul>
+          <li>Find the most recent failed RapidReconciler job that lines up with the red light&rsquo;s timestamp.</li>
+          <li>Open the job&rsquo;s history and read the error message on the failed step. Common patterns: out of disk, login failure, deadlock, package validation error.</li>
+          <li>Capture the error text &mdash; that&rsquo;s the most useful artifact if this needs to escalate to RR support.</li>
+        </ul>
+      </div>
+      <div class="step-result"><strong>Found the failed job and captured the error?</strong> Continue to Step 4.</div>
+    </article>
+
+    <article class="step-card">
+      <span class="step-num">Step 4</span>
+      <span class="it-badge">For your IT</span>
+      <div class="step-title">Pull the Integration Services (SSIS) report</div>
+      <div class="step-body">
+        <p>If the failed job was an SSIS package, the SSIS catalog has a more detailed execution report than the SQL Agent log alone.</p>
+        <ul>
+          <li>In SSMS, expand <strong>Integration Services Catalogs &rarr; SSISDB &rarr; (your folder)</strong>.</li>
+          <li>Right-click the project or package &rarr; <strong>Reports &rarr; Standard Reports &rarr; All Executions</strong>.</li>
+          <li>Find the failed execution at the timestamp matching the red light. Open <em>View Messages</em> on that execution.</li>
+          <li>Capture the error messages &mdash; especially anything labeled <em>Error</em> or <em>OnError</em>.</li>
+        </ul>
+        <p>If IT identifies and fixes the underlying issue (cleared disk, expanded log, fixed permissions), have them re-run the job. The status light should clear once the next successful run completes.</p>
+      </div>
+      <div class="step-result"><strong>Issue identified and resolved by IT?</strong> Stop here &mdash; you&rsquo;re done. <strong>Issue still unclear or not resolved?</strong> Continue below to RR support.</div>
     </article>
 
   </div>
 
   <div class="section-header">
-    <h2 class="section-title">Email RapidReconciler support</h2>
+    <h2 class="section-title">If your IT can&rsquo;t resolve it &mdash; email RapidReconciler support</h2>
   </div>
 
   <div class="escalate-block">
-    <div class="escalate-title">Send the crash details</div>
-    <p>A red System Status almost always needs RR support to read the Excel and route it to the right person. Email <a href="mailto:rrsupport@getgsi.com?subject=RapidReconciler%20%E2%80%94%20System%20status%20light%20is%20red">rrsupport@getgsi.com</a> and include:</p>
+    <div class="escalate-title">Send the crash details and what your IT found</div>
+    <p>If the SQL Agent / SSIS errors don&rsquo;t point at an environment cause IT can fix, the click-and-export path captures the RR-side picture for support. Email <a href="mailto:rrsupport@getgsi.com?subject=RapidReconciler%20%E2%80%94%20System%20status%20light%20is%20red">rrsupport@getgsi.com</a> and include:</p>
     <ul>
-      <li>The Excel report exported from clicking the red indicator (the most important attachment).</li>
+      <li><strong>Click the red System Status indicator</strong> on the Reconciliation page header. It exports an Excel with the crash details &mdash; the most useful attachment for RR support.</li>
+      <li>The SQL Agent error message and SSIS execution messages your IT captured in Steps 3 and 4.</li>
+      <li>What your IT already checked and ruled out (disk, TempDB, log space).</li>
       <li>Your screenshot of the Reconciliation page header with the red indicator visible.</li>
       <li>The date, time, and company / business unit from Step 1.</li>
-      <li>If the Excel export didn&rsquo;t work, say so and include a screenshot of any browser console errors.</li>
+      <li>If clicking the indicator doesn&rsquo;t produce an Excel, say so and include a screenshot of any browser console errors instead.</li>
     </ul>
     <p><a class="escalate-email" href="mailto:rrsupport@getgsi.com?subject=RapidReconciler%20%E2%80%94%20System%20status%20light%20is%20red">Email rrsupport@getgsi.com</a></p>
   </div>
