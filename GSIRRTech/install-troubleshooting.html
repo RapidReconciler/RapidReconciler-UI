@@ -360,12 +360,54 @@
     return term.replace(/['‘’]/g, '').split(/[^a-z0-9]+/i).filter(t => t.length > 1);
   }
 
+  // Bounded Levenshtein distance — bails out when distance exceeds maxDist so
+  // we never do the full O(n*m) work for unrelated word pairs.
+  function editDistance(a, b, maxDist) {
+    const la = a.length, lb = b.length;
+    if (Math.abs(la - lb) > maxDist) return maxDist + 1;
+    const prev = new Array(lb + 1);
+    const curr = new Array(lb + 1);
+    for (let j = 0; j <= lb; j++) prev[j] = j;
+    for (let i = 1; i <= la; i++) {
+      curr[0] = i;
+      let rowMin = i;
+      for (let j = 1; j <= lb; j++) {
+        if (a.charCodeAt(i - 1) === b.charCodeAt(j - 1)) {
+          curr[j] = prev[j - 1];
+        } else {
+          curr[j] = 1 + Math.min(prev[j], curr[j - 1], prev[j - 1]);
+        }
+        if (curr[j] < rowMin) rowMin = curr[j];
+      }
+      if (rowMin > maxDist) return maxDist + 1;
+      for (let j = 0; j <= lb; j++) prev[j] = curr[j];
+    }
+    return prev[lb];
+  }
+
+  // Token match: exact substring first, then typo-tolerant pass for tokens
+  // long enough that a single-character slip ("staus" -> "status") shouldn't
+  // sink the whole query.
+  function tokenMatches(searchText, token) {
+    if (searchText.indexOf(token) !== -1) return true;
+    if (token.length < 4) return false;
+    const maxDist = token.length >= 7 ? 2 : 1;
+    const words = searchText.match(/[a-z0-9]+/g);
+    if (!words) return false;
+    for (let i = 0; i < words.length; i++) {
+      const w = words[i];
+      if (Math.abs(w.length - token.length) > maxDist) continue;
+      if (editDistance(token, w, maxDist) <= maxDist) return true;
+    }
+    return false;
+  }
+
   function matchesQuery(searchText, term) {
     const tokens = tokenize(term);
     const meaningful = tokens.filter(t => !STOPWORDS.has(t));
     // If everything was a stopword, fall back to literal substring match.
     if (meaningful.length === 0) return searchText.includes(term);
-    return meaningful.every(t => searchText.includes(t));
+    return meaningful.every(t => tokenMatches(searchText, t));
   }
 
   let searchDebounce = null;
