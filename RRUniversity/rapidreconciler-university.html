@@ -1755,23 +1755,48 @@
     return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
-  /* Build a ~180-char snippet with matched terms <mark>ed. */
+  /* Build a ~180-char snippet with matched terms <mark>ed. The window is
+     chosen to cover as many distinct matched terms as possible, not just
+     the earliest one — so a record where "system", "status", and "light"
+     appear together gets a snippet showing all three rather than just
+     opening with the first hit. */
   function makeSnippet(body, terms, maxLen = 200) {
     if (!body) return '';
     const lower = body.toLowerCase();
-    let earliest = -1;
-    for (const t of terms) {
-      if (!t) continue;
-      const i = lower.indexOf(t.toLowerCase());
-      if (i >= 0 && (earliest < 0 || i < earliest)) earliest = i;
+
+    // Collect every position where any term appears.
+    const hits = [];
+    const distinctTerms = [...new Set(terms.filter(Boolean).map(t => t.toLowerCase()))];
+    for (const t of distinctTerms) {
+      let idx = 0;
+      while ((idx = lower.indexOf(t, idx)) !== -1) {
+        hits.push({ pos: idx, term: t });
+        idx += t.length;
+      }
     }
+
     let start, end;
-    if (earliest < 0) {
+    if (!hits.length) {
       start = 0;
       end = Math.min(body.length, maxLen);
     } else {
+      // For each hit, score the window that would be centered on it by the
+      // number of distinct terms covered, breaking ties on earliest position.
       const half = Math.floor(maxLen / 2);
-      start = Math.max(0, earliest - half);
+      let best = { count: -1, pos: 0 };
+      for (const h of hits) {
+        const ws = Math.max(0, h.pos - half);
+        const we = Math.min(body.length, ws + maxLen);
+        const distinct = new Set();
+        for (const h2 of hits) {
+          if (h2.pos >= ws && h2.pos < we) distinct.add(h2.term);
+        }
+        if (distinct.size > best.count ||
+            (distinct.size === best.count && h.pos < best.pos)) {
+          best = { count: distinct.size, pos: h.pos };
+        }
+      }
+      start = Math.max(0, best.pos - half);
       end   = Math.min(body.length, start + maxLen);
     }
     let snippet = body.slice(start, end);
