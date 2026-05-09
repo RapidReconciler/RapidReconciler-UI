@@ -1979,6 +1979,105 @@
     font-size: 14px;
   }
 
+/* ===== Browse-all panel ===== */
+  .ts-browse-all {
+    margin-top: 28px;
+    border: 1px solid var(--rule, #e2e8f0);
+    border-radius: 8px;
+    background: #fff;
+    transition: box-shadow 0.18s;
+  }
+  .ts-browse-all[open] {
+    box-shadow: 0 4px 12px rgba(31, 45, 74, 0.06);
+  }
+  .ts-browse-all-summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 16px 22px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 700;
+    font-size: 16px;
+    color: var(--navy, #1f2d4a);
+    user-select: none;
+  }
+  .ts-browse-all-summary::-webkit-details-marker { display: none; }
+  .ts-browse-all-summary:hover { color: var(--blue, #2b5fb0); }
+  .ts-browse-all-meta {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    font-weight: 500;
+    font-size: 13px;
+    color: var(--text-soft, #5a6479);
+  }
+  .ts-browse-all-arrow {
+    display: inline-block;
+    transition: transform 0.2s;
+  }
+  .ts-browse-all[open] .ts-browse-all-arrow {
+    transform: rotate(180deg);
+  }
+  .ts-browse-all-content {
+    border-top: 1px solid var(--rule, #e2e8f0);
+    padding: 6px 22px 14px;
+  }
+  .ts-browse-all-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .ts-browse-all-list li {
+    border-bottom: 1px solid var(--rule, #e2e8f0);
+  }
+  .ts-browse-all-list li:last-child { border-bottom: none; }
+  .ts-browse-all-list a {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 12px 4px;
+    text-decoration: none;
+    color: var(--text, #1f2d4a);
+    transition: color 0.12s, padding-left 0.12s;
+  }
+  .ts-browse-all-list a:hover {
+    color: var(--blue, #2b5fb0);
+    padding-left: 8px;
+  }
+  .ts-browse-all-list .ts-browse-title {
+    font-weight: 600;
+    flex: 1;
+  }
+  .ts-browse-all-list .ts-browse-category {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-soft, #5a6479);
+    background: rgba(0, 0, 0, 0.04);
+    padding: 3px 10px;
+    border-radius: 100px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    flex-shrink: 0;
+  }
+  .ts-browse-all-list .ts-browse-arrow {
+    color: var(--text-soft, #5a6479);
+    flex-shrink: 0;
+    transition: transform 0.18s, color 0.12s;
+  }
+  .ts-browse-all-list a:hover .ts-browse-arrow {
+    color: var(--blue, #2b5fb0);
+    transform: translateX(3px);
+  }
+  .ts-browse-all-loading {
+    font-size: 14px;
+    color: var(--text-soft, #5a6479);
+    padding: 12px 0;
+  }
+
 /* ===== Search results tree ===== */
   .ts-results-panel { padding: 0; }
   .ts-results-clear {
@@ -2344,6 +2443,22 @@
 </div>
     </div>
 
+    <!-- Browse-all panel: collapsible full scenario list, defaulted closed -->
+    <details class="ts-browse-all" id="ts-browse-all">
+      <summary class="ts-browse-all-summary">
+        <span class="ts-browse-all-label">Browse all scenarios</span>
+        <span class="ts-browse-all-meta">
+          <span class="ts-browse-all-count" id="ts-browse-all-count"></span>
+          <span class="ts-browse-all-arrow" aria-hidden="true">&#9662;</span>
+        </span>
+      </summary>
+      <div class="ts-browse-all-content">
+        <ul class="ts-browse-all-list" id="ts-browse-all-list">
+          <li class="ts-browse-all-loading">Loading scenarios&hellip;</li>
+        </ul>
+      </div>
+    </details>
+
     <!-- Results panel: shown when search has content -->
     <div class="ts-results-panel" id="ts-results-panel" hidden>
       <div class="ts-section-header">
@@ -2491,6 +2606,7 @@
   function showCommons() {
     commonsPanel.hidden = false;
     resultsPanel.hidden = true;
+    if (browseAllPanel) browseAllPanel.hidden = false;
     if (statusEl) {
       statusEl.innerHTML = 'Showing <span class="count">' + document.querySelectorAll('.ts-card[data-id]').length + '</span> common scenarios';
     }
@@ -2499,6 +2615,40 @@
   function showResults() {
     commonsPanel.hidden = true;
     resultsPanel.hidden = false;
+    if (browseAllPanel) browseAllPanel.hidden = true;
+  }
+
+  /* Browse-all: full scenario list, lazy-populated on first expand. */
+  const browseAllPanel = document.getElementById('ts-browse-all');
+  const browseAllList  = document.getElementById('ts-browse-all-list');
+  const browseAllCount = document.getElementById('ts-browse-all-count');
+  let browseAllRendered = false;
+
+  async function populateBrowseAll() {
+    if (browseAllRendered) return;
+    const list = await ensureScenariosIndex();
+    if (!list || !list.length) {
+      browseAllList.innerHTML = '<li class="ts-browse-all-loading">No scenarios indexed yet.</li>';
+      return;
+    }
+    browseAllRendered = true;
+    const sorted = [...list].sort((a, b) => a.title.localeCompare(b.title));
+    browseAllList.innerHTML = sorted.map(s =>
+      '<li><a href="' + escapeHtml(s.href) + '">' +
+        '<span class="ts-browse-title">' + escapeHtml(s.title) + '</span>' +
+        '<span class="ts-browse-category">' + escapeHtml(s.category || '') + '</span>' +
+        '<span class="ts-browse-arrow" aria-hidden="true">&rarr;</span>' +
+      '</a></li>'
+    ).join('');
+    if (browseAllCount) {
+      browseAllCount.textContent = sorted.length + ' total';
+    }
+  }
+
+  if (browseAllPanel) {
+    browseAllPanel.addEventListener('toggle', () => {
+      if (browseAllPanel.open) populateBrowseAll();
+    });
   }
 
   function clearSearch() {
