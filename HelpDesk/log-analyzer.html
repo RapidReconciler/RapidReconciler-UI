@@ -502,6 +502,12 @@ const CONSOLE_RULES = [
     match: /(fontawesome-webfont|simple-line-icons|\.woff2?)\b.*\b(404|Not Found)/i, severity: 'noise' },
   { name: 'Font fallback 404 (general)',
     match: /\.woff2?\b.*\b404\b/i, severity: 'noise' },
+  { name: 'DevTools stack frame',
+    match: /^\s*(?:\(anonymous\)|[\w$.]+)\s+@\s+\S+:\d+(?::\d+)?\s*$/, severity: 'noise' },
+  { name: 'Native stack frame',
+    match: /^\s*[A-Z][\w$]*(?:\.[\w$]+)+\s*$/, severity: 'noise' },
+  { name: 'Bare console.log value (dev leftover)',
+    match: /^[\w.-]+\.js:\d+\s+(null|undefined|true|false|-?\d+(?:\.\d+)?)\s*$/, severity: 'noise' },
 
   // ---- Flags ----
   { name: 'Blocked by client (extension or DLP)',
@@ -519,6 +525,13 @@ const CONSOLE_RULES = [
     runbook: '../Scenarios/scenario-domain-url-not-resolving.html' },
 
   // ---- Critical ----
+  { name: 'TLS certificate failure',
+    match: /\bnet::ERR_CERT_/i, severity: 'crit',
+    note: 'Browser refused the connection because the server certificate is expired, untrusted, or has a hostname mismatch. Open the runbook for the cert-renewal procedure and the Tech Team certificate-management doc.',
+    runbook: '../Scenarios/scenario-cert-not-secure-warning.html' },
+  { name: 'JS error on .js asset (caught/logged)',
+    match: /^[\w.-]+\.js:\d+\s+(TypeError|ReferenceError|SyntaxError|RangeError):\s/, severity: 'crit',
+    note: 'Application JS error logged via console.error (no "Uncaught" prefix usually means an Angular interceptor caught and rethrew it). Capture the full stack trace plus the surrounding 10-20 lines of console output and email rrsupport.' },
   { name: 'Uncaught JS exception in base.js',
     match: /\bUncaught.*\bbase\.js/i, severity: 'crit',
     note: 'Application JS crashed with a stack trace in base.js. Capture the full error and email rrsupport.' },
@@ -528,13 +541,52 @@ const CONSOLE_RULES = [
 ];
 
 const AGENT_RULES = [
-  // ---- Healthy signals ----
+  // ---- Healthy signals (matched first; order matters) ----
   { name: 'Heartbeat',
     match: /\bINFO\b.*Sending heartbeat/i, severity: 'good' },
   { name: 'Successful instance state',
     match: /\bdbSystemStatus=success\b/, severity: 'good' },
+  { name: 'Connected to VALC',
+    match: /\bConnected to VALC\b.*queue/i, severity: 'good' },
+  { name: 'Agent application started',
+    match: /\bStarted AgentApplication in [\d.]+ seconds/i, severity: 'good' },
+  { name: 'Client services application started',
+    match: /\bStarted ClientServicesApplication\b/i, severity: 'good' },
+  { name: 'Database connectivity OK',
+    match: /\bDatabase connectivity:\s*\[OK\]/i, severity: 'good' },
+  { name: 'Instance JAR runnable',
+    match: /\bInstance JAR package runnable:\s*\[OK\]/i, severity: 'good' },
+  { name: 'Pre-start check OK',
+    match: /\bService is not running:\s*\[OK\]/i, severity: 'good' },
+  { name: 'Startup preconditions met',
+    match: /\bStartup preconditions met,\s*proceeding\b/i, severity: 'good' },
+  { name: 'Database connected',
+    match: /\bDatabase connected with success\b/i, severity: 'good' },
+  { name: 'Instance is RUNNING',
+    match: /\bInstance that runs on \S+ is RUNNING!/i, severity: 'good' },
+  { name: 'Notifying VALC of port',
+    match: /\bWarning VALC that database \S+ runs on port \d+/i, severity: 'good' },
 
   // ---- Benign noise ----
+  { name: 'Health probe during startup (expected)',
+    match: /HealthServiceImpl.*Could not load health endpoint.*Connection refused/i, severity: 'noise',
+    note: 'These ERROR lines are normal while an instance is still starting &mdash; the agent polls the health endpoint before the instance HTTPS listener is up. Concerning only if they continue indefinitely with no matching "Started ClientServicesApplication".' },
+  { name: 'Instance startup polling',
+    match: /\bChecking if instance is up attempt number\b/i, severity: 'noise' },
+  { name: 'VALC connection attempt',
+    match: /\bTry connect to VALC\b/i, severity: 'noise' },
+  { name: 'VALC client queue assigned',
+    match: /\bClient queue\s*-\s*[a-f0-9-]{8,}/i, severity: 'noise' },
+  { name: 'Starting an instance',
+    match: /\bStarting instance:\s*ServicesInstance/i, severity: 'noise' },
+  { name: 'Instance launch command',
+    match: /\bExecuting:\s*\[.*java(\.exe)?,/i, severity: 'noise' },
+  { name: 'DB pre-flight check',
+    match: /\bTrying to connect on database address\b/i, severity: 'noise' },
+  { name: 'Logback configurator',
+    match: /\|\s*-(INFO|WARN)\s+in\s+ch\.qos\.logback\b/i, severity: 'noise' },
+  { name: 'Spring Boot banner',
+    match: /^[\s./\\():_|=`'.,*-]+$|::\s*Spring Boot\s*::/i, severity: 'noise' },
   { name: 'Log shipping',
     match: /\bINFO\b.*Sending file .*\.out\.log/i, severity: 'noise' },
   { name: 'Company sync',
@@ -649,13 +701,29 @@ function analyze() {
   }
   const rules = mode === 'agent' ? AGENT_RULES : CONSOLE_RULES;
 
-  // Tokenise — for agent logs we keep one entry per top-level log line; subsequent
-  // indented continuation lines (stack-trace frames) are appended to the previous line.
+  // Tokenise — split on physical newlines, then re-join continuation fragments back
+  // onto their parent log entry so each `lines[i]` is one logical message.
+  //
+  // Agent logs: indented lines (stack-trace frames, multi-line property dumps)
+  //   continue the previous entry.
+  //
+  // Console logs: a new entry is recognised by one of:
+  //   - source-location header from Chrome ("base.js:5 ...", "fontawesome.woff:1 ...")
+  //   - DevTools stack frame ("(anonymous) @ base.js:2", "attr @ base.js:3")
+  //   - XHR/fetch method line ("GET https://...", "POST https://...")
+  //   - native stack frame ("XMLHttpRequest.send", "Promise.then") &mdash; capitalised
+  //     prototype name with one or more dotted member accesses, alone on the line.
+  //   Anything else is treated as a continuation of the prior entry. This handles
+  //   warnings whose payload contains literal newlines (e.g. AngularJS popover
+  //   attribute dumps) that would otherwise fragment into orphan lines.
+  const consoleEntryStart = /^(?:[\w.-]+\.[A-Za-z0-9]+:\d+(?::\d+)?\s|(?:\(anonymous\)|[\w$.]+)\s+@\s+\S+:\d+|(?:GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)\s+https?:\/\/|[A-Z][\w$]*(?:\.[\w$]+)+\s*$)/;
   const rawLines = text.split(/\r?\n/);
   const lines = [];
   for (const l of rawLines) {
     if (!l.trim()) continue;
     if (mode === 'agent' && /^\s/.test(l) && lines.length) {
+      lines[lines.length - 1] += '\n' + l;
+    } else if (mode === 'console' && lines.length && !consoleEntryStart.test(l)) {
       lines[lines.length - 1] += '\n' + l;
     } else {
       lines.push(l);
