@@ -342,6 +342,32 @@
     searchEl.focus();
   }
 
+  // Common English stopwords that we drop from queries so a natural-language
+  // phrase like "i don't see data" reduces to its meaningful tokens (data, see).
+  const STOPWORDS = new Set([
+    'a','an','and','any','are','as','at','be','been','but','by','can','cant','could',
+    'did','do','does','doesnt','doing','dont','for','from','had','has','have','he',
+    'her','him','his','how','i','im','if','in','into','is','isnt','it','its','just',
+    'me','my','no','not','of','on','or','our','out','over','she','should','so','some',
+    'than','that','the','their','them','then','there','these','they','this','those',
+    'to','too','up','us','was','wasnt','we','well','were','what','when','where',
+    'which','who','why','will','with','would','you','your','yours'
+  ]);
+
+  function tokenize(term) {
+    // Strip apostrophes first so contractions collapse ("don't" -> "dont"),
+    // then split on non-alphanumeric and drop short tokens.
+    return term.replace(/['‘’]/g, '').split(/[^a-z0-9]+/i).filter(t => t.length > 1);
+  }
+
+  function matchesQuery(searchText, term) {
+    const tokens = tokenize(term);
+    const meaningful = tokens.filter(t => !STOPWORDS.has(t));
+    // If everything was a stopword, fall back to literal substring match.
+    if (meaningful.length === 0) return searchText.includes(term);
+    return meaningful.every(t => searchText.includes(t));
+  }
+
   let searchDebounce = null;
   async function performSearch(rawTerm) {
     const term = rawTerm.trim().toLowerCase();
@@ -350,7 +376,7 @@
     renderResults(term, [], false);
     const list = await ensureScenariosIndex();
     if ((searchEl.value || '').trim().toLowerCase() !== term) return;
-    const matches = list.filter(s => s.search.includes(term));
+    const matches = list.filter(s => matchesQuery(s.search, term));
     renderResults(term, matches, true);
   }
 

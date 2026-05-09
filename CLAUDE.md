@@ -186,8 +186,30 @@ with module-aware search:
 - **General docs** (no prefix — `start-here-*`, `getting-started-*`,
   `ui-reference.html`) are always visible regardless of toggle state.
 - **Search results** render as a 2-tier tree: doc title → section anchors.
-  The same tree shape is reused on the Help Desk page for RR University
-  results.
+
+---
+
+## Search engine split
+
+Two engines, deliberately:
+
+- **RR University** (`RRUniversity/rapidreconciler-university.html`) uses
+  **Lunr.js** with stemming, default English stopwords, and a 3-tier matching
+  fallback (strict AND of non-stopword tokens → AND with prefix wildcards on
+  ≥4-char tokens → OR with wildcards as last resort). Right tool for ~273
+  doc sections with relevance scoring and stemming.
+
+- **The three scenario-search pages** — `HelpDesk/troubleshooting.html`,
+  `RRUniversity/help.html`, and `GSIRRTech/install-troubleshooting.html` —
+  use a **custom matcher**: tokenize → strip apostrophes → drop short tokens
+  → drop English stopwords → require all remaining tokens to appear in the
+  scenario's `data_search` field. Falls back to literal substring match if
+  every token was a stopword. Sufficient for small flat indices (12-14
+  records each) with hand-curated `data_search` blobs. Do NOT add Lunr to
+  these pages — the custom matcher is intentional.
+
+Behavior across the three scenario pages must stay aligned. If you change
+the matcher logic on one, change it on all three.
 
 ---
 
