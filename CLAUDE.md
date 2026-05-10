@@ -15,8 +15,8 @@ RapidReconciler-AI/                  ← repo root, hub lives here
 ├── 404.html                         ← GH Pages fallback for missing-repo-name URLs
 ├── CLAUDE.md                        ← this file
 │
-├── HelpDesk/                        ← Help desk: search + Helpdesk Tech home
-│   ├── troubleshooting.html         ← internal scenario search (Helpdesk Tech tool)
+├── HelpDesk/                        ← Help desk: scenario search + Helpdesk Tech home
+│   ├── troubleshooting.html         ← canonical Help Desk (techs + customers)
 │   └── start-here-helpdesk-tech.html ← Helpdesk Tech onboarding
 │
 ├── Scenarios/                       ← One HTML file per troubleshooting scenario
@@ -26,7 +26,7 @@ RapidReconciler-AI/                  ← repo root, hub lives here
 │
 ├── RRUniversity/                    ← PUBLIC: customer-facing KB + Help
 │   ├── rapidreconciler-university.html  ← KB landing + per-module search
-│   ├── help.html                    ← customer Help Desk: paste-search over scenarios
+│   ├── help.html                    ← redirect shim → ../HelpDesk/troubleshooting.html
 │   ├── getting-started-with-rapidreconciler.html
 │   ├── ui-reference.html
 │   ├── search-index.json            ← 273 sections across 24 docs (~1.2 MB)
@@ -123,19 +123,23 @@ start-here doc and WORKFLOW → workflow doc footer links.
 
 ---
 
-## Architecture: Help Desk pages (two flavors)
+## Architecture: Help Desk page
 
-Two near-identical search-first pages share the same paste-friendly UX and
-search engine. They differ only in chrome and audience:
+A single search-first page serves both techs and customers:
 
-- **`HelpDesk/troubleshooting.html`** — *internal* (Helpdesk Tech tool). Sticky
-  orange "GSI Internal Use Only" banner; sibling `start-here-helpdesk-tech.html`
-  for onboarding.
-- **`RRUniversity/help.html`** — *customer-facing* (deployed inside the
-  RapidReconciler app). Plain RR University-style topnav with "University",
-  "Contact Support" buttons.
+- **`HelpDesk/troubleshooting.html`** — the canonical Help Desk. Sibling
+  `start-here-helpdesk-tech.html` is the Helpdesk Tech onboarding doc;
+  sibling `log-analyzer.html` is the agent-log / browser-console paste
+  triage tool. Both are linked from the welcome banner with internal-leaning
+  labels — customer visitors self-filter past them.
+- **`RRUniversity/help.html`** — a thin auto-redirect shim
+  (`<meta http-equiv="refresh">` + `window.location.replace`) pointing at
+  `../HelpDesk/troubleshooting.html`. The deployed RapidReconciler app has
+  its in-app "Help" button hard-baked at this URL, so the path is preserved
+  forever as a redirect — never restore a separate customer-facing page
+  here.
 
-Both pages:
+The page:
 
 - Hero has a 6-row textarea (paste-friendly — Copilot-summarized emails,
   pasted error messages). Search debounce: 180ms.
@@ -150,7 +154,7 @@ Both pages:
 - Clicking a result navigates to the destination scenario page.
 
 The RR University search is **scoped to RR University only** (handled on
-`RRUniversity/rapidreconciler-university.html`). The Help Desk pages search
+`RRUniversity/rapidreconciler-university.html`). The Help Desk page searches
 **scenarios only**. Each page has one focused search index, no parallel
 multi-source fetching.
 
@@ -199,17 +203,17 @@ Two engines, deliberately:
   ≥4-char tokens → OR with wildcards as last resort). Right tool for ~273
   doc sections with relevance scoring and stemming.
 
-- **The three scenario-search pages** — `HelpDesk/troubleshooting.html`,
-  `RRUniversity/help.html`, and `GSIRRTech/install-troubleshooting.html` —
-  use a **custom matcher**: tokenize → strip apostrophes → drop short tokens
-  → drop English stopwords → require all remaining tokens to appear in the
-  scenario's `data_search` field. Falls back to literal substring match if
-  every token was a stopword. Sufficient for small flat indices (12-14
-  records each) with hand-curated `data_search` blobs. Do NOT add Lunr to
+- **The two scenario-search pages** — `HelpDesk/troubleshooting.html` and
+  `GSIRRTech/install-troubleshooting.html` — use a **custom matcher**:
+  tokenize → strip apostrophes → drop short tokens → drop English stopwords
+  → require all remaining tokens to appear in the scenario's `data_search`
+  field. Falls back to literal substring match if every token was a stopword.
+  Sufficient for small flat indices (10-14 records each) with hand-curated
+  `data_search` blobs. Do NOT add Lunr to
   these pages — the custom matcher is intentional.
 
-Behavior across the three scenario pages must stay aligned. If you change
-the matcher logic on one, change it on all three.
+Behavior across the two scenario-search pages must stay aligned. If you
+change the matcher logic on one, change it on the other.
 
 ---
 
