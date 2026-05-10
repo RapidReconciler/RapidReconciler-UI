@@ -230,7 +230,7 @@
 <script>
   /* Build a mailto: link with the IT-side steps pre-filled in the body, then
      open the user's mail client. Triggered by the Hand-off card button. */
-  function composeITEmail() {
+  function composeITEmail(triggerCard) {
     const titleEl = document.querySelector('.hero-title');
     const scenarioTitle = titleEl ? titleEl.innerText.trim() : 'RapidReconciler scenario';
     const scenarioUrl = window.location.href.split('#')[0];
@@ -244,16 +244,37 @@
       return clone.innerText.trim();
     };
     const readStepNum  = (card) => (card.querySelector('.step-num')?.innerText  || '').trim();
-    const readStepBody = (card) => (card.querySelector('.step-body')?.innerText || '').trim()
-                                     .replace(/\n{3,}/g, '\n\n');
+    const readStepBody = (card) => {
+      const b = card.querySelector('.step-body');
+      if (!b) return '';
+      const clone = b.cloneNode(true);
+      // Replace each <figure> with a plain-text "Reference image: <absolute URL>"
+      // line so the IT email body still surfaces the screenshot as a link.
+      clone.querySelectorAll('figure').forEach(f => {
+        const img = f.querySelector('img');
+        const p = document.createElement('p');
+        if (img) {
+          const absUrl = new URL(img.getAttribute('src'), document.baseURI).href;
+          p.textContent = 'Reference image: ' + absUrl;
+        }
+        f.replaceWith(p);
+      });
+      // Strip handoff cards (button chrome shouldn't appear in the email body).
+      clone.querySelectorAll('.handoff-card').forEach(el => el.remove());
+      return clone.innerText.trim().replace(/\n{3,}/g, '\n\n');
+    };
 
     // If the whole scenario is IT (badge in the hero eyebrow), include all step
     // cards in the email body. Otherwise split: IT-badged cards go in the body,
     // non-IT cards become the "What I already tried" checklist at the top.
     const allCards  = Array.from(document.querySelectorAll('.step-card'));
     const isAllIT   = !!document.querySelector('.hero-eyebrow .it-badge');
-    const itCards   = isAllIT ? allCards : allCards.filter(card =>  card.querySelector('.it-badge'));
-    const userCards = isAllIT ? []       : allCards.filter(card => !card.querySelector('.it-badge'));
+    const itCards   = triggerCard
+      ? [triggerCard]
+      : (isAllIT ? allCards : allCards.filter(card => card.querySelector('.it-badge')));
+    const userCards = triggerCard
+      ? allCards.filter(c => c !== triggerCard)
+      : (isAllIT ? [] : allCards.filter(card => !card.querySelector('.it-badge')));
 
     let triedBlock = '';
     if (userCards.length) {
