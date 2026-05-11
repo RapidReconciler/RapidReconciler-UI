@@ -498,56 +498,13 @@
     searchEl.focus();
   }
 
-  /* Pill selector: "What are you installing?"
-     Single-select. Active pill adds body class `pill-active-<id>` which drives
-     CSS rules to hide any [data-pill] element that doesn't list the active pill
-     in its space-separated value. Clicking the active pill again toggles it off
-     (no pill = everything visible). After every change, sections that filter
-     down to zero visible rows are tagged `.empty-after-filter` so their summary
-     bars hide too. */
-  const PILL_IDS = ['database', 'migration', 'valc'];
-  let activePill = null;
-
-  function applyPillFilter() {
-    PILL_IDS.forEach(id => document.body.classList.remove('pill-active-' + id));
-    if (activePill) document.body.classList.add('pill-active-' + activePill);
-    document.querySelectorAll('.pill-button').forEach(btn => {
-      const isActive = btn.dataset.pill === activePill;
-      btn.classList.toggle('active', isActive);
-      btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
-    });
-    /* Hide section drawers whose visible-row count drops to zero after filtering.
-       Without this, you'd see an empty drawer header collapsing to nothing on click. */
-    document.querySelectorAll('.ts-browse-section').forEach(section => {
-      const rows = section.querySelectorAll('.ts-browse-all-list > li');
-      let visibleCount = 0;
-      rows.forEach(li => {
-        const style = window.getComputedStyle(li);
-        if (style.display !== 'none') visibleCount++;
-      });
-      section.classList.toggle('empty-after-filter', visibleCount === 0);
-    });
-  }
-
-  document.querySelectorAll('.pill-button').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const id = btn.dataset.pill;
-      activePill = (activePill === id) ? null : id;
-      applyPillFilter();
-    });
-  });
-
-
-  /* Browse-all: full scenario list, grouped into three subsections, lazy-populated on first expand.
-     Slug-to-section map is hard-coded so the classification stays accurate regardless of how
-     the human-readable `category` string evolves on individual scenarios. Unmapped scenarios
-     default to 'database' so a newly-added one shows up somewhere rather than disappearing. */
-  /* Pill categories: Database (SQL Server + SSIS install + post-deploy issues),
-     Migration (server-migration-specific scenarios), VALC (operator console).
-     Each scenario is mapped to exactly one pill. The data-pill attribute on each
-     rendered scenario row drives the pill-filter CSS rules. */
+  /* Scenarios → pill mapping (source of truth for both the scenarios drawer
+     subsections AND the top-level count when the drawer hasn't been lazy-rendered
+     yet). Each scenario maps to exactly one pill: Database (SQL Server + SSIS
+     install + post-deploy issues), Migration (server-migration-specific),
+     VALC (operator console). Unmapped scenarios fall through to 'database'
+     in the populate step so a newly-added one shows up somewhere visible. */
   const SCENARIO_SECTIONS = {
-    // Database install scenarios (SQL scripts, SSIS, data extraction, post-deploy)
     'scenario-agent-install-hangs':              'database',
     'scenario-companies-tab-empty':              'database',
     'scenario-database-sql-script-fails':        'database',
@@ -557,10 +514,8 @@
     'scenario-post-deploy-rruser-login-error':   'database',
     'scenario-ssis-deploy-permission-denied':    'database',
     'scenario-ssis-driver-mismatch':             'database',
-    // Migration-specific scenarios
     'scenario-migration-data-not-flowing':       'migration',
     'scenario-post-migration-login-fails-network': 'migration',
-    // VALC operator-console scenarios (clients grid, setup-step, agent registration)
     'scenario-agent-prompt-not-appearing':       'valc',
     'scenario-agent-services-not-running':       'valc',
     'scenario-clients-grid-not-updating':        'valc',
@@ -572,6 +527,99 @@
     { id: 'migration', label: 'Migration' },
     { id: 'valc',      label: 'VALC' }
   ];
+
+  /* Pill selector: "What are you installing?"
+     Single-select. Active pill adds body class `pill-active-<id>` which drives
+     CSS rules to hide any [data-pill] element that doesn't list the active pill
+     in its space-separated value. Clicking the active pill again toggles it off
+     (no pill = everything visible). After every change, sub-section counts are
+     re-computed from the current pill and badges updated; sections that filter
+     down to zero visible rows are tagged `.empty-after-filter` so their summary
+     bars hide too. Top-level drawer counts (scenarios + documents) also reflect
+     the filter via the `N of M visible` format. */
+  const PILL_IDS = ['database', 'migration', 'valc'];
+  let activePill = null;
+
+  function isVisibleUnderActivePill(el) {
+    if (!activePill) return true;
+    const pills = (el.getAttribute('data-pill') || '').split(/\s+/).filter(Boolean);
+    return pills.includes(activePill);
+  }
+
+  function applyPillFilter() {
+    PILL_IDS.forEach(id => document.body.classList.remove('pill-active-' + id));
+    if (activePill) document.body.classList.add('pill-active-' + activePill);
+    document.querySelectorAll('.pill-button').forEach(btn => {
+      const isActive = btn.dataset.pill === activePill;
+      btn.classList.toggle('active', isActive);
+      btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+    });
+
+    /* Per-section: count visible rows from data-pill (not computed style, since
+       computed style would be affected by parent-section hiding from a previous
+       call to this function). Update count badge; hide section if 0 visible. */
+    document.querySelectorAll('.ts-browse-section').forEach(section => {
+      const rows = section.querySelectorAll('.ts-browse-all-list > li');
+      if (rows.length === 0) return; /* not yet rendered */
+      const visibleCount = Array.from(rows).filter(isVisibleUnderActivePill).length;
+      const totalCount = rows.length;
+      section.classList.toggle('empty-after-filter', visibleCount === 0);
+      const countEl = section.querySelector('.ts-browse-section-count');
+      if (countEl) {
+        countEl.textContent = activePill ? (visibleCount + ' / ' + totalCount) : totalCount;
+      }
+    });
+
+    /* Top-level scenarios drawer count. The scenarios drawer is lazy-rendered so
+       the rows may not exist in the DOM yet -- fall back to the SCENARIO_SECTIONS
+       map (the source of truth for the hardcoded scenario list) so we can still
+       show an accurate count before the drawer is expanded. */
+    if (browseAllCount) {
+      const rendered = document.querySelectorAll('#ts-browse-all-list .ts-browse-all-list > li');
+      let total, visible;
+      if (rendered.length > 0) {
+        total = rendered.length;
+        visible = activePill ? Array.from(rendered).filter(isVisibleUnderActivePill).length : total;
+      } else {
+        const allPills = Object.values(SCENARIO_SECTIONS);
+        total = allPills.length;
+        visible = activePill ? allPills.filter(p => p === activePill).length : total;
+      }
+      browseAllCount.textContent = activePill
+        ? visible + ' of ' + total + ' visible'
+        : total + ' total';
+    }
+
+    /* Top-level docs drawer count. Docs rows are static HTML so always rendered. */
+    const docsPanel = document.getElementById('ts-browse-all-docs');
+    const docsCount = docsPanel ? docsPanel.querySelector('.ts-browse-all-count') : null;
+    if (docsPanel && docsCount) {
+      const allRows = docsPanel.querySelectorAll('.ts-browse-all-list > li');
+      const total = allRows.length;
+      if (total > 0) {
+        const visible = activePill
+          ? Array.from(allRows).filter(isVisibleUnderActivePill).length
+          : total;
+        docsCount.textContent = activePill
+          ? visible + ' of ' + total + ' visible'
+          : total + ' referenced';
+      }
+    }
+  }
+
+  document.querySelectorAll('.pill-button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.pill;
+      activePill = (activePill === id) ? null : id;
+      applyPillFilter();
+    });
+  });
+
+  /* Initial call to set the top-level scenarios count (from SCENARIO_SECTIONS map)
+     and the top-level docs count (from static HTML rows) without waiting for the
+     user to click a pill or expand a drawer. */
+  applyPillFilter();
+
 
   let browseAllRendered = false;
   async function populateBrowseAll() {
