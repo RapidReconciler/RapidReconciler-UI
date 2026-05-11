@@ -290,3 +290,24 @@ apply.
 - **No build step required** for HTML/CSS/JS edits — push, GitHub Pages
   serves immediately.
 - **Search index regeneration** is the only build step; see above.
+
+---
+
+## Workflow
+
+- **After every commit-and-push, pause and prompt the user to sync their
+  local worktree.** The owner runs in a separate clone and needs to pull
+  origin/main into their local main before any follow-up work happens on
+  top. Standard prompt format: *"Pushed `<sha>`. Pull into your local main
+  when ready, then say synced and we'll keep going."* Wait for the user's
+  confirmation (typically "synced" or "done") before starting the next
+  change. This keeps the local environment lined up with origin and lets
+  the user spot-check the GitHub Pages deploy if they want.
+
+- **Auto-regen commits land after every push that touches indexed files.**
+  A GitHub Action regenerates `RRUniversity/search-index.json` and
+  `Scenarios/scenarios-index.json` (and the install-scenarios index) and
+  pushes a `chore: refresh search indices [skip ci]` commit. Don't try to
+  hand-edit the index files locally — they'll be overwritten. The
+  user-prompt-to-sync above gives the user time to pull both the main
+  commit AND the follow-up regen commit before we add anything on top.
