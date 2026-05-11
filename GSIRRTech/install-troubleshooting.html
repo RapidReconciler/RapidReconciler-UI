@@ -70,6 +70,10 @@
   .ts-browse-all-arrow { display: inline-block; transition: transform 0.2s; }
   .ts-browse-all[open] .ts-browse-all-arrow { transform: rotate(180deg); }
   .ts-browse-all-content { border-top: 1px solid var(--rule); padding: 6px 22px 14px; }
+  .ts-browse-section { margin-top: 14px; }
+  .ts-browse-section:first-child { margin-top: 4px; }
+  .ts-browse-section-title { font-family: 'Source Sans 3', sans-serif; font-weight: 700; font-size: 12.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--teal-deep); padding: 12px 4px 8px; border-bottom: 1px solid var(--rule); display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin: 0; }
+  .ts-browse-section-count { font-size: 10.5px; font-weight: 700; color: var(--text-soft); background: rgba(0, 0, 0, 0.04); padding: 2px 9px; border-radius: 100px; letter-spacing: 0.05em; }
   .ts-browse-all-list { list-style: none; padding: 0; margin: 0; }
   .ts-browse-all-list li { border-bottom: 1px solid var(--rule); }
   .ts-browse-all-list li:last-child { border-bottom: none; }
@@ -178,9 +182,9 @@
         </span>
       </summary>
       <div class="ts-browse-all-content">
-        <ul class="ts-browse-all-list" id="ts-browse-all-list">
-          <li class="ts-browse-all-loading">Loading scenarios&hellip;</li>
-        </ul>
+        <div id="ts-browse-all-list">
+          <div class="ts-browse-all-loading">Loading scenarios&hellip;</div>
+        </div>
       </div>
     </details>
 
@@ -236,6 +240,7 @@
       .then(data => {
         const list = (data && Array.isArray(data.scenarios)) ? data.scenarios : [];
         scenariosIndex = list.map(s => ({
+          slug:     s.slug || '',
           title:    s.title || '',
           category: s.category || '',
           href:     'install-scenarios/' + s.slug + '.html',
@@ -306,24 +311,74 @@
     searchEl.focus();
   }
 
-  /* Browse-all: full scenario list, lazy-populated on first expand. */
+  /* Browse-all: full scenario list, grouped into three subsections, lazy-populated on first expand.
+     Slug-to-section map is hard-coded so the classification stays accurate regardless of how
+     the human-readable `category` string evolves on individual scenarios. Unmapped scenarios
+     default to 'database' so a newly-added one shows up somewhere rather than disappearing. */
+  const SCENARIO_SECTIONS = {
+    // VALC operator-console scenarios — clients grid, setup-step, agent registration visibility
+    'scenario-agent-prompt-not-appearing':       'valc',
+    'scenario-agent-services-not-running':       'valc',
+    'scenario-clients-grid-not-updating':        'valc',
+    'scenario-setup-step-not-advancing':         'valc',
+    'scenario-ui-loads-agent-not-connecting':    'valc',
+    // SSIS package scenarios — deployment, variable/connection configuration, data flow
+    'scenario-companies-tab-empty':              'integration',
+    'scenario-initial-load-errors-or-zeros':     'integration',
+    'scenario-migration-data-not-flowing':       'integration',
+    'scenario-package-extracts-no-data':         'integration',
+    'scenario-post-deploy-rruser-login-error':   'integration',
+    'scenario-ssis-deploy-permission-denied':    'integration',
+    'scenario-ssis-driver-mismatch':             'integration',
+    // SQL Server / install scripts / DB network connectivity
+    'scenario-agent-install-hangs':              'database',
+    'scenario-database-sql-script-fails':        'database',
+    'scenario-database-status-unknown-stopped':  'database',
+    'scenario-post-migration-login-fails-network': 'database'
+  };
+  const SECTION_ORDER = [
+    { id: 'valc',        label: 'VALC' },
+    { id: 'integration', label: 'Integration Services' },
+    { id: 'database',    label: 'Database' }
+  ];
+
   let browseAllRendered = false;
   async function populateBrowseAll() {
     if (browseAllRendered) return;
     const list = await ensureScenariosIndex();
     if (!list || !list.length) {
-      browseAllList.innerHTML = '<li class="ts-browse-all-loading">No scenarios indexed yet.</li>';
+      browseAllList.innerHTML = '<div class="ts-browse-all-loading">No scenarios indexed yet.</div>';
       return;
     }
     browseAllRendered = true;
     const sorted = [...list].sort((a, b) => a.title.localeCompare(b.title));
-    browseAllList.innerHTML = sorted.map(s =>
+    const buckets = { valc: [], integration: [], database: [] };
+    sorted.forEach(s => {
+      const section = SCENARIO_SECTIONS[s.slug] || 'database';
+      buckets[section].push(s);
+    });
+
+    const renderRow = s =>
       '<li><a href="' + escapeHtml(s.href) + '">' +
         '<span class="ts-browse-title">' + escapeHtml(s.title) + '</span>' +
         '<span class="ts-browse-category">' + escapeHtml(s.category || '') + '</span>' +
         '<span class="ts-browse-arrow" aria-hidden="true">&rarr;</span>' +
-      '</a></li>'
-    ).join('');
+      '</a></li>';
+
+    browseAllList.innerHTML = SECTION_ORDER
+      .filter(sec => buckets[sec.id].length)
+      .map(sec =>
+        '<div class="ts-browse-section">' +
+          '<h3 class="ts-browse-section-title">' +
+            '<span>' + escapeHtml(sec.label) + '</span>' +
+            '<span class="ts-browse-section-count">' + buckets[sec.id].length + '</span>' +
+          '</h3>' +
+          '<ul class="ts-browse-all-list">' +
+            buckets[sec.id].map(renderRow).join('') +
+          '</ul>' +
+        '</div>'
+      ).join('');
+
     if (browseAllCount) {
       browseAllCount.textContent = sorted.length + ' total';
     }
