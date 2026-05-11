@@ -796,6 +796,11 @@ const AGENT_RULES = [
   { name: 'Routine INFO',
     match: /\bINFO\b/, severity: 'noise' },
 
+  // ---- Benign WARNs (matched BEFORE the catch-all "WARN level" flag) ----
+  { name: 'Hibernate SqlExceptionHelper warning (benign)',
+    match: /\bo\.h\.engine\.jdbc\.spi\.SqlExceptionHelper\b/i, severity: 'noise',
+    note: 'Hibernate WARN-level messages from SqlExceptionHelper are routine — typically "Database not created, connection made to existing database instead" (the schema generator is correctly skipping creation because the DB already exists) or "SQL Warning Code: 10000, SQLState: 01J01" (an informational JDBC SQLWarning). Neither is an operator-actionable problem.' },
+
   // ---- Flags ----
   { name: 'WARN level',
     match: /\bWARN\b/, severity: 'flag' },
@@ -892,18 +897,34 @@ function analyze(mode) {
 
   // Tokenise — split on physical newlines, then re-join continuation fragments back
   // onto their parent log entry so each `lines[i]` is one logical message.
+  //
+  // For agent logs, a NEW entry must start with the canonical timestamp +
+  // log-level prefix (e.g. "2026-05-11 00:13:11.918  WARN 4272 --- ..."). Any
+  // line that doesn't match that pattern is a continuation -- whether it's an
+  // indented stack frame, a wrapped property dump like
+  // "jobUsername=rruser, jobPassword=rruser, ...", or anything else the
+  // application logger printed across multiple lines.
+  const agentEntryStart = /^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}[.,]\d{3}\s+(INFO|WARN|ERROR|DEBUG|TRACE)\b/;
   const consoleEntryStart = /^(?:[\w.-]+\.[A-Za-z0-9]+:\d+(?::\d+)?\s|(?:\(anonymous\)|[\w$.]+)\s+@\s+\S+:\d+|(?:GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)\s+https?:\/\/|[A-Z][\w$]*(?:\.[\w$]+)+\s*$)/;
   const rawLines = text.split(/\r?\n/);
   const lines = [];
   for (const l of rawLines) {
     if (!l.trim()) continue;
-    if (mode === 'agent' && /^\s/.test(l) && lines.length) {
-      lines[lines.length - 1] += '\n' + l;
-    } else if (mode === 'console' && lines.length && !consoleEntryStart.test(l)) {
-      lines[lines.length - 1] += '\n' + l;
-    } else {
-      lines.push(l);
+    const isContinuation = (mode === 'agent')
+      ? !agentEntryStart.test(l)
+      : !consoleEntryStart.test(l);
+    if (isContinuation) {
+      if (lines.length) {
+        // Stitch onto the previous logical entry.
+        lines[lines.length - 1] += '\n' + l;
+      }
+      // Otherwise this is a truncated continuation at the very start of the
+      // pasted text (the parent entry was cut off before the capture began).
+      // Drop it — there's nothing meaningful to classify on its own, and
+      // flagging it would just confuse the operator.
+      continue;
     }
+    lines.push(l);
   }
 
   // Classify
