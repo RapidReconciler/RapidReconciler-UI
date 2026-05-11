@@ -90,7 +90,7 @@
     <div class="hero-eyebrow">Install &middot; application server</div>
     <h1 class="hero-title">Agent services not running on application server</h1>
     <p class="hero-lede">
-      In Windows Services console, <code>RapidReconciler Agent</code> or <code>RapidReconciler Services</code> is stopped or fails to start. Common causes: a Windows Update reboot, expired service-account credentials, a corrupted config file, or a stopped dependency. Often resolves with a service restart.
+      In Windows Services console, the <code>rr-valc-agent</code> service (display name: <strong>Rapid Reconciler 7 Agent</strong>) is stopped or fails to start. Common causes: a Windows Update reboot, the LocalSystem account hit a permission issue on the install root or the DB, a corrupted <code>rr-valc-agent.xml</code> config, or the WinSW recovery loop (restart 10s &rarr; restart 30s &rarr; reboot) ran through its three attempts and gave up. Often resolves with a service restart.
     </p>
   </section>
 
@@ -99,9 +99,15 @@
   </div>
   <div class="symptoms">
     <ul>
-      <li>Services console shows RR Agent or RR Services as <code>Stopped</code> or failing to start.</li>
-      <li>Symptom may surface elsewhere as agent disconnected on the Clients grid, or database <code>Unknown</code> on the Databases tab.</li>
+      <li>Services console (<code>services.msc</code>) shows <strong>Rapid Reconciler 7 Agent</strong> as <code>Stopped</code> or failing to start.</li>
+      <li>Symptom may surface elsewhere as agent disconnected on the VALC Clients grid, or database <code>Unknown</code> on the Databases tab.</li>
+      <li>Task Manager shows no <code>java.exe</code> processes (since the parent agent supervises every child, stopping the service terminates them all).</li>
     </ul>
+  </div>
+
+  <div class="callout">
+    <div class="callout-label">Only one service to look for</div>
+    <p>Older docs referenced a second service called <code>RapidReconciler Services</code> &mdash; that no longer exists. The current installer (post-WinSW migration) registers only the single <code>rr-valc-agent</code> service. What older docs called "RapidReconciler Services" is actually the agent&rsquo;s spawned child <code>java.exe</code> processes (one per RR database), which appear in Task Manager but not in <code>services.msc</code>. See the <a href="../rr-agent-reference.html">RR Agent Reference</a> for the parent/child process model.</p>
   </div>
 
   <div class="section-header">
@@ -112,15 +118,16 @@
 
     <article class="step-card">
       <span class="step-num">Check 1</span>
-      <div class="step-title">Restart the services</div>
+      <div class="step-title">Restart the service</div>
       <div class="step-body">
         <ol>
           <li>On the application server, open Services console (<code>services.msc</code>).</li>
-          <li>Right-click <code>RapidReconciler Agent</code> &rarr; Start.</li>
-          <li>Repeat for <code>RapidReconciler Services</code>.</li>
+          <li>Find <strong>Rapid Reconciler 7 Agent</strong> (service name <code>rr-valc-agent</code>).</li>
+          <li>Right-click &rarr; Start (or Restart if it&rsquo;s in a stuck state).</li>
+          <li>Confirm the status reaches <strong>Running</strong>. Task Manager &rarr; Details should show one <code>java.exe</code> for the agent plus one per RR database within ~30 seconds.</li>
         </ol>
       </div>
-      <div class="step-result"><strong>Both running?</strong> Stop here. Otherwise, continue.</div>
+      <div class="step-result"><strong>Running?</strong> Stop here. Otherwise, continue.</div>
     </article>
 
     <article class="step-card">
@@ -128,12 +135,13 @@
       <div class="step-title">Inspect logs and credentials</div>
       <div class="step-body">
         <ul>
-          <li>Check today&rsquo;s agent wrapper log file for the startup error.</li>
-          <li>Verify the service&rsquo;s Log On credentials are still valid (a recent password rotation can break this).</li>
-          <li>Check Windows Event Viewer Application log for related errors at the time of failure.</li>
+          <li>Open <code>C:\Program Files\Rapid Reconciler\logs\rr-valc-agent.wrapper.log</code> &mdash; this is WinSW&rsquo;s own log and captures service start/stop attempts plus the JVM launch arguments. If the wrapper couldn&rsquo;t launch the JVM (missing JAR, bad path, JRE error), it&rsquo;s logged here.</li>
+          <li>Then check today&rsquo;s <code>rr-valc-agent_YYYYMMDD.out.log</code> and <code>.err.log</code> for the Java-side startup error if WinSW did launch the JVM but the agent died early. <code>.err.log</code> empty = JVM didn&rsquo;t crash; non-empty almost always tells you what blew up.</li>
+          <li>By default the service runs as <strong>LocalSystem</strong> (the shipped WinSW config has no <code>&lt;serviceaccount&gt;</code>). If IT changed it post-install to a custom account, verify those credentials are still valid &mdash; a recent password rotation can break it.</li>
+          <li>Check Windows Event Viewer &rarr; Application log for related errors at the time of failure; WinSW emits Service-Control-Manager events here too.</li>
         </ul>
       </div>
-      <div class="step-result">If the wrapper log indicates a config issue, escalate to a senior tech to investigate the agent installation.</div>
+      <div class="step-result">If the wrapper log or <code>.err.log</code> indicates a config issue, escalate to a senior tech to investigate the agent installation.</div>
     </article>
 
   </div>

@@ -437,6 +437,11 @@
         <h1>Variables reference</h1>
         <p>Every variable in the package, organized by scope (package-level vs container-scoped). The <strong>install-configurable</strong> column marks which ones the GSI tech sets during Step 8 of the install procedure. The rest are pre-set runtime flags or state-holders the tech should not modify.</p>
 
+        <figure>
+          <img src="../Images/rr-ssis-variables-panel.png" alt="Visual Studio Variables panel showing all 11 package-level variables: aaStartDateGr (String, 2022-01-01), dbowner (String, dbo.), DecExtCost (Int32, 100), DecQty (Int32, 100), DecQtyCX (Int32, 100), DecUnitCost (Int32, 10000), InitLoad (Int32, 0), ModInv (Int32, 0), ModRnv (Int32, 0), RefreshDays (String, -35), RefreshDaysRNV (String, -90). Scope column shows RapidReconciler_Prod (truncated) for all rows." />
+          <figcaption><strong>The Variables panel in VS &mdash; all 11 package-level variables at a glance</strong>Name / Scope / Data type / Value columns. The six install-configurable ones (the four <code>Dec*</code> divisors plus <code>aaStartDateGr</code> and <code>dbowner</code>) sit at the top of the alphabetical list. <code>InitLoad</code>, <code>ModInv</code>, <code>ModRnv</code>, <code>RefreshDays</code>, and <code>RefreshDaysRNV</code> are runtime flags &mdash; leave at the shipped values.</figcaption>
+        </figure>
+
         <h2 id="package-vars">Package-level variables (11)</h2>
         <p>All defined at lines 82&ndash;182 of the <code>.dtsx</code> XML, in the <code>User</code> namespace.</p>
         <table>
@@ -519,6 +524,12 @@
 
         <h2 id="jdesource">JDESource &mdash; JDE production source</h2>
         <p>OLE DB connection to the customer's JDE production database. Read-only by convention &mdash; the package never writes back to JDE.</p>
+
+        <figure>
+          <img src="../Images/rr-ssis-jdesource-connection.png" alt="Visual Studio Properties pane for the JDESource OLE DB connection: ConnectionString Data Source=.;Initial Catalog=jde_source;Provider=SQLNCLI11.1;Integrated Security=SSPI; ConnectRetryCount 1; ConnectRetryInterval 5; ConnectUsingManagedIdentity False; DelayValidation False; HasExpressions False; ID GUID; InitialCatalog (customer name scrubbed); Name JDESource; Password masked; RetainSameConnection True; ServerName period; SupportsDTCTransactions True." />
+          <figcaption><strong>JDESource connection &mdash; Properties pane in VS</strong>The ConnectionString row shows the runtime-resolved value (provider, auth, host, catalog). <code>ConnectRetryCount=1</code> and <code>ConnectRetryInterval=5</code> are the default OLE DB driver retry behavior. <code>RetainSameConnection=True</code> keeps the connection open across tasks within a single run. <code>SupportsDTCTransactions=True</code> means the connection can participate in distributed transactions if needed. (Customer name in the InitialCatalog cell is scrubbed for this doc.)</figcaption>
+        </figure>
+
         <h3>Template connection string (as shipped)</h3>
         <pre>Data Source=.;Initial Catalog=jde_treatt;Provider=SQLNCLI11.1;Integrated Security=SSPI;</pre>
         <p><em>Note:</em> the template ships pointed at a sample customer (<code>jde_treatt</code>) on the local instance with Windows Authentication. The install tech replaces both the <strong>Data Source</strong> and <strong>Initial Catalog</strong> with the customer's actual JDE server and database, and switches the authentication to SQL Authentication using the <code>rapidrec</code>/<code>rapidrec</code> read-only login (Step 8 Step 4 of 8 in the install procedure).</p>
@@ -536,6 +547,12 @@
 
         <h2 id="rrlocal">RRLocal &mdash; RR-local destination</h2>
         <p>OLE DB connection to the customer's RR-local SQL Server database. The default database name is <code>RapidReconciler_Prod</code> (created by Script 1 of the install zip). Read/write &mdash; every data-flow task in the package writes to this connection via an OLE DB Destination component, and the package also reads from it at the start of each run to fetch the F4111 <code>maxUKID</code> watermark and the enabled-module flags.</p>
+
+        <figure>
+          <img src="../Images/rr-ssis-rrlocal-connection.png" alt="Visual Studio Properties pane for the RRLocal OLE DB connection: ConnectionString Data Source=localhost;User ID=rruser;Initial Catalog=RapidReconciler_Prod;Provider=SQLNCLI11.1;Persist Security Info=True; ConnectRetryCount 1; InitialCatalog RapidReconciler_Prod; Name RRLocal; Password masked; ServerName localhost; SupportsDTCTransactions True." />
+          <figcaption><strong>RRLocal connection &mdash; Properties pane in VS, standard install config</strong>Standard SQL-Authentication setup: <code>User ID=rruser</code>, <code>Initial Catalog=RapidReconciler_Prod</code>, <code>Persist Security Info=True</code> so the password is retained. The connection points at <code>localhost</code> by default (RR-local DB on the same server); in topologies where the RR DB lives on a different host, the install tech updates <code>Data Source</code>.</figcaption>
+        </figure>
+
         <h3>Template connection string (as shipped)</h3>
         <pre>Data Source=localhost;Initial Catalog=RapidReconciler_Prod;Provider=SQLNCLI11.1;Integrated Security=SSPI;
   Application Name=SSIS-RRV7-{67E1E379-4559-48E4-B16C-57E068C83CC7}RRLocal;</pre>
@@ -698,6 +715,12 @@
 
         <h2 id="gl-flow">6. General Ledger</h2>
         <p>The most complex container: copies the chart of accounts and GL distributions, with cache-driven filtering to keep the load focused on inventory-relevant accounts.</p>
+
+        <figure style="max-width: 480px;">
+          <img src="../Images/rr-ssis-gl-container-expanded.png" alt="Visual Studio Control Flow with the General Ledger container expanded, showing data flows in execution order from top to bottom: F0011, F4095, F4096_FA@RT (greyed out / disabled), F4096_FA1RT, Load Objects, F0901, F0902, F0911. The four connection managers are visible at the bottom: Cache - Objects, Cache - Short Items, JDESource, RRLocal." />
+          <figcaption><strong>General Ledger container expanded &mdash; execution order top to bottom</strong>The greyed-out <code>F4096_FA@RT</code> box is the disabled legacy variant (older JDE column name); the enabled <code>F4096_FA1RT</code> is the modern variant Oracle introduced. <code>Load Objects</code> sits between them and the rest of the GL flow &mdash; it populates the <code>Cache - Objects</code> cache from F0901 GMOBJ values before F0902 and F0911 consume the cache for their lookup-based filtering.</figcaption>
+        </figure>
+
         <table>
           <thead><tr><th>Task</th><th>JDE table</th><th>Notes</th></tr></thead>
           <tbody>
@@ -1053,6 +1076,11 @@ WHERE  PRDOCO &gt; 0 AND PRDGL &gt;= @[User::DateF43121]</pre>
 
         <h2 id="dates-and-decimals">The Dates and Decimals Derived Column transform</h2>
         <p>Every data-flow task that copies a JDE table with date columns or scaled-numeric columns includes a Derived Column transformation named <strong>Dates and Decimals</strong> wired between the OLE DB Source and the OLE DB Destination. This is where both the Julian-to-Gregorian date conversion and the decimal-divisor application happen, in a single transform per task.</p>
+
+        <figure>
+          <img src="../Images/rr-ssis-dates-decimals.png" alt="Visual Studio Derived Column Transformation Editor showing six derived columns being added: GrgILDGL (database timestamp, expression DATEADD Day SUBSTRING strILDGL 4 3 minus 1 wrapped in DATEADD Year of the year portion added to 1900-01-01), GrgILCRDJ (similar expression for strILCRDJ), fltILNID (DT_R8 ILLNID divided by 1000), fltILTRQT (DT_R8 ILTRQT divided by User DecQty), fltILPAID (DT_R8 ILPAID divided by User DecExtCost), fltILUNCS (DT_R8 ILUNCS divided by User DecUnitCost). All six are configured as 'add as new column' so the source columns are preserved alongside their derived counterparts." />
+          <figcaption><strong>Dates and Decimals editor in the F4111 task</strong>The six expressions visible here are the per-row transformations: two <code>Grg*</code> Julian-to-Gregorian conversions (with the <code>DATEADD</code> / <code>SUBSTRING</code> shape detailed below) and four <code>flt*</code> decimal divisions &mdash; one with a hardcoded <code>/ 1000</code> divisor (line-ID field, fixed precision) and three keyed off the <code>Dec*</code> package variables (cost/quantity fields, customer-configurable precision). Each is marked <strong>&lt;add as new column&gt;</strong> in the Derived Column column so the original JDE values are preserved alongside.</figcaption>
+        </figure>
         <p>The transform <em>adds new columns</em> to the data-flow buffer rather than overwriting the originals &mdash; output columns get a prefix indicating their type:</p>
         <ul>
           <li><strong><code>Grg</code></strong> prefix &mdash; Gregorian datetime version of a JDE Julian date column. E.g. <code>strILDGL</code> (the Julian string from F4111) becomes <code>GrgILDGL</code> (a <code>DT_DBTIMESTAMP</code>).</li>
@@ -1117,6 +1145,11 @@ fltILUNCS =  (DT_R8) ILUNCS / @[User::DecUnitCost]</pre>
         </ol>
 
         <p>The cache lives only in memory for the duration of one package run &mdash; it's not persisted between runs. Each scheduled execution rebuilds the cache from F0901 first, then uses it for downstream filtering.</p>
+
+        <figure>
+          <img src="../Images/rr-ssis-lookup-transform.png" alt="Visual Studio Lookup Transformation Editor Columns tab showing the join: an Available Input Columns panel with columns CVCDEC, GMOBJ (highlighted), intGBFY, intExponent, strGBAID, strGBLT, strGMOBJ on the left, and an Available Lookup Columns panel on the right with a single column mlobj. An arrow connects GMOBJ to mlobj, indicating the join column." />
+          <figcaption><strong>Lookup Transformation Editor &mdash; F0902 vs Cache - Objects</strong>The Columns tab. <strong>Available Input Columns</strong> on the left is the F0902 row stream &mdash; <code>GMOBJ</code> (highlighted) is the column being joined. <strong>Available Lookup Columns</strong> on the right is the cache, holding the single column <code>mlobj</code> (the column name the cache populator wrote earlier from F0901&rsquo;s GMOBJ). The arrow connecting them is the equi-join. Rows in F0902 whose GMOBJ matches a row in the cache flow to the Match output (the destination); rows that don&rsquo;t match flow to the No-match output, which has no destination &mdash; effectively dropping them.</figcaption>
+        </figure>
 
         <div class="callout note">
           <div class="callout-icon">i</div>
@@ -1204,6 +1237,12 @@ ORDER  BY Capture DESC</pre>
           <li><strong><code>ErrorNum = 0</code></strong> on every row.</li>
           <li><strong><code>UpdateCount</code></strong> non-zero for active tables (F4111, F0911, F4111, F4101, F4102 for typical mid-volume customers). Some tables may legitimately show zero (e.g. F4801 if the customer doesn't use work orders).</li>
         </ul>
+
+        <figure>
+          <img src="../Images/rr-ssis-healthy-btoc.png" alt="SSMS query result grid for v_diagnostic4_b_to_c_log on a healthy production run. Columns visible: Capture, Step, Process, StartTime, EndTime, Seconds, UpdateCount, ErrorNum. Many rows with Step = data capture and ErrorNum = 0. UpdateCount values vary by table: F0911 New shows 3034 and 1917, F0902 shows 49, F0901 shows 813, F4095 shows 2772, F4108 shows 109015, F4101 shows 11866, F4102 shows 6328, F41021 shows 25766, F41002 shows 42580, F4211 shows 345 and 194, F1113 shows 0, F0006 shows 227, F0010 shows 13, F0008 shows 44. The top row is 'A to B Complete' bookending the run. Timestamps are all from a single ~7-minute window." />
+          <figcaption><strong>Healthy <code>v_diagnostic4_b_to_c_log</code> output</strong>The verification query result on a successful run. Every row at <code>Step = 'data capture'</code> shows <code>ErrorNum = 0</code> with a meaningful <code>UpdateCount</code> for active tables (cardex / item-master / GL distribution in the high thousands or hundreds of thousands; smaller reference tables in the tens or zero). The top row is the bookend <code>A to B Complete</code> entry that marks the package&rsquo;s overall finish. <code>StartTime</code> / <code>EndTime</code> on each row give per-table duration &mdash; useful for spotting which step in a slow run was the bottleneck.</figcaption>
+        </figure>
+
         <p>If any of these is false, see <a href="install-scenarios/scenario-initial-load-errors-or-zeros.html">Initial load reports errors or zero counts</a>.</p>
 
         <h2 id="incremental">Incremental vs. initial-load behavior</h2>

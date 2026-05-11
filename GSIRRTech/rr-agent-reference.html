@@ -137,6 +137,35 @@
   .view .diamond-divider { text-align: center; margin: 28px 0; }
   .view .diamond { display: inline-block; width: 8px; height: 8px; background: var(--orange); transform: rotate(45deg); }
 
+  /* Figure with caption (for screenshots) */
+  .view figure { margin: 22px 0; }
+  .view figure img { display: block; max-width: 100%; height: auto; margin: 0 auto; border: 1px solid var(--rule); border-radius: 6px; background: var(--bg-soft); }
+  .view figcaption { font-size: 13px; color: var(--text-soft); text-align: center; margin-top: 10px; line-height: 1.55; padding: 0 8px; }
+  .view figcaption strong { display: block; color: var(--navy); font-weight: 700; font-size: 13.5px; margin-bottom: 4px; }
+
+  /* Log-sample block (styled like a log viewer pane) */
+  .view .log-sample { margin: 22px 0; }
+  .view .log-sample-pane {
+    background: #0f1626;
+    color: #d5dae5;
+    border-radius: 6px;
+    padding: 18px 20px;
+    overflow-x: auto;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11.5px;
+    line-height: 1.55;
+    white-space: pre;
+    border: 1px solid var(--navy-deep);
+  }
+  .view .log-sample-pane .log-info { color: #9ad1ff; }
+  .view .log-sample-pane .log-warn { color: #ffcc66; }
+  .view .log-sample-pane .log-comment { color: #6e7a8f; font-style: italic; }
+  .view .log-sample-pane .log-time { color: #a8b5cb; }
+  .view .log-sample-pane .log-thread { color: #b497e3; }
+  .view .log-sample-pane .log-class { color: #88c999; }
+  .view .log-sample-caption { font-size: 13px; color: var(--text-soft); text-align: center; margin-top: 10px; line-height: 1.55; padding: 0 8px; }
+  .view .log-sample-caption strong { display: block; color: var(--navy); font-weight: 700; font-size: 13.5px; margin-bottom: 4px; }
+
   /* xref blocks */
   .view .xref { display: block; padding: 12px 16px; margin: 8px 0; background: var(--bg-soft); border: 1px solid var(--rule); border-left: 3px solid var(--blue); border-radius: 0 6px 6px 0; text-decoration: none !important; color: var(--text); transition: background 0.15s, border-color 0.15s; font-size: 13.5px; border-bottom: 1px solid var(--rule) !important; }
   .view .xref:hover { background: var(--bg-panel); border-left-color: var(--orange); }
@@ -344,29 +373,51 @@
         <h1>Installation</h1>
         <p>What the installer puts on disk and into Windows.</p>
 
-        <h2 id="windows-services">Windows services</h2>
-        <p>Two services are registered in the Windows Services console (<code>services.msc</code>). Both should show <strong>Running</strong> with <strong>Startup type: Automatic</strong>.</p>
+        <h2 id="installer-characteristics">Installer characteristics</h2>
+        <p>Confirmed by inspecting the shipped <code>rr-agent-setup-x64.exe</code> with <code>innoextract</code>.</p>
         <table>
-          <thead><tr><th>Service display name</th><th>Role</th><th>Startup type</th></tr></thead>
+          <thead><tr><th>Property</th><th>Value</th></tr></thead>
           <tbody>
-            <tr>
-              <td><code>RapidReconciler Agent</code> &mdash; service binary <code>rr-valc-agent.exe</code></td>
-              <td>The agent itself &mdash; the long-lived Java parent process that connects to VALC, manages data-services children, and reports back. Stopping this service terminates every <code>java.exe</code> on the box.</td>
-              <td>Automatic</td>
-            </tr>
-            <tr>
-              <td><code>RapidReconciler Services</code></td>
-              <td>The <strong>internal RR Data Services</strong> layer. Hosts the per-instance HTTPS listeners that the SPA hits on its assigned port and bridges to the RR Database Server using SQL Authentication.</td>
-              <td>Automatic</td>
-            </tr>
+            <tr><td>Installer engine</td><td><strong>Inno Setup 5.5.6</strong></td></tr>
+            <tr><td>Digital signature</td><td><strong>None.</strong> The shipped installer is unsigned, so SmartScreen and aggressive Group Policy / AV will flag it. Customers may need to "More info &rarr; Run anyway" on first launch, or have IT temporarily whitelist the binary.</td></tr>
+            <tr><td>Bundled JRE</td><td><strong>Oracle Java 1.8.0_45</strong> (commercial build, x64). The agent doesn&rsquo;t use the system Java &mdash; it ships and runs its own. Note this is a 2015-vintage JRE that hasn&rsquo;t received public Oracle security updates since 2016; engineering question listed in <a href="javascript:void(0)" onclick="showView('topic-troubleshooting')">Troubleshooting &amp; gaps</a>.</td></tr>
+            <tr><td>Service wrapper</td><td><strong>WinSW</strong> &mdash; the open-source <a href="https://github.com/kohsuke/winsw" target="_blank" rel="noopener">Windows Service Wrapper</a> by Kohsuke Kawaguchi (same wrapper Jenkins ships). The <code>rr-valc-agent.exe</code> in the install root is the WinSW v2 binary; its config sits next to it as <code>rr-valc-agent.xml</code>.</td></tr>
+            <tr><td>Total files installed</td><td>~203 (most by count being the bundled JRE)</td></tr>
+            <tr><td>Agent JAR size</td><td>46.8 MiB (<code>rr-valc-agent.jar</code>, Spring Boot fat-JAR)</td></tr>
           </tbody>
         </table>
 
-        <div class="callout todo">
-          <div class="callout-icon">!</div>
+        <h2 id="windows-services">Windows service</h2>
+        <p>The installer registers <strong>one</strong> Windows service via WinSW. It should show <strong>Running</strong> with <strong>Startup type: Automatic</strong> in <code>services.msc</code>.</p>
+        <table>
+          <thead><tr><th>Service property</th><th>Value</th></tr></thead>
+          <tbody>
+            <tr><td>Service name (sc.exe ID)</td><td><code>rr-valc-agent</code></td></tr>
+            <tr><td>Display name</td><td>Rapid Reconciler 7 Agent</td></tr>
+            <tr><td>Description</td><td>Manages Rapid Reconciler services and updates</td></tr>
+            <tr><td>Executable</td><td><code>&lt;install&gt;\jre\bin\java.exe -jar &lt;install&gt;\rr-valc-agent.jar</code></td></tr>
+            <tr><td>Start mode</td><td>Automatic</td></tr>
+            <tr><td>Stop timeout</td><td>10 seconds (before forced kill)</td></tr>
+            <tr><td>Failure recovery</td><td>Restart after 10s &rarr; Restart after 30s &rarr; Reboot</td></tr>
+            <tr><td>Service account</td><td><strong>LocalSystem</strong> by default. The shipped WinSW config has no <code>&lt;serviceaccount&gt;</code> element, so Windows registers the service under <code>LocalSystem</code> at install time. IT can change this post-install via <code>services.msc &rarr; Properties &rarr; Log On</code> if a customer policy requires a dedicated service account &mdash; if you do, ensure that account has read/write on the install root and the JDBC connectivity permissions documented in <a href="javascript:void(0)" onclick="showView('topic-database')">Database</a>.</td></tr>
+          </tbody>
+        </table>
+
+        <figure>
+          <img src="../Images/rr-agent-service.png" alt="Task Manager Services tab showing rr-valc-agent service with PID 3468, status Running, description Rapid Reconciler 7 Agent, highlighted in the service list." />
+          <figcaption><strong>The single Windows service after install</strong>Task Manager &rarr; Services tab: the <code>rr-valc-agent</code> row (display name <strong>Rapid Reconciler 7 Agent</strong>) should show <strong>Running</strong> with an assigned PID. There is no second &ldquo;Services&rdquo;-named service to look for.</figcaption>
+        </figure>
+
+        <figure>
+          <img src="../Images/rr-agent-logon.png" alt="Rapid Reconciler 7 Agent Properties dialog Log On tab showing Local System account radio selected, Allow service to interact with desktop unchecked, This account alternative empty." />
+          <figcaption><strong>Service Properties &rarr; Log On tab</strong>The shipped default: <strong>Local System account</strong>. Switch to <strong>This account</strong> only if a customer requires a dedicated service account, and grant that account read/write on the install root plus the JDBC permissions the agent needs.</figcaption>
+        </figure>
+
+        <div class="callout note">
+          <div class="callout-icon">i</div>
           <div class="callout-body">
-            <div class="callout-label">TODO &mdash; confirm</div>
-            <p>The <strong>service account</strong> each service runs under (LocalSystem, a domain service account, etc.) and any minimum-permission requirements for that account on the SQL Server / file system.</p>
+            <div class="callout-label">"RapidReconciler Services" service is no longer a thing</div>
+            <p>Older docs and the original <a href="install-scenarios/scenario-agent-services-not-running.html">Agent services not running</a> scenario reference a second Windows service called <code>RapidReconciler Services</code>. The current installer (post-WinSW migration) registers <strong>only the one service above</strong>. What the older docs were calling "RapidReconciler Services" is actually the agent&rsquo;s spawned child <code>java.exe</code> processes (one per RR database) running as children of the parent agent, not as separate Windows services &mdash; they appear in Task Manager but not in <code>services.msc</code>. See the <a href="javascript:void(0)" onclick="showView('topic-processes')">Processes &amp; startup</a> topic for the parent/child model.</p>
           </div>
         </div>
 
@@ -390,6 +441,11 @@
 &#9500;&#9472;&#9472; unins000.exe                   &larr; Inno Setup uninstaller
 &#9492;&#9472;&#9472; unins000.dat                   &larr; installer manifest</pre>
 
+        <figure>
+          <img src="../Images/rr-agent-install-root.png" alt="File Explorer view of C:\Program Files\Rapid Reconciler showing four folders (db, files, jre, logs) and the install-root files: derby.log, keystore.rr.jks, rr-valc-agent.exe (381 KB), rr-valc-agent.exe.config (1 KB), rr-valc-agent.jar (47,896 KB), rr-valc-agent.xml (3 KB), sample-allOptions.xml (10 KB), unins000.dat (22 KB), unins000.exe (714 KB)." />
+          <figcaption><strong>Install root in File Explorer</strong>Real sizes: the agent JAR dominates at ~48 MB; everything else combined under 1 MB. The four subfolders (<code>db</code>, <code>files</code>, <code>jre</code>, <code>logs</code>) are populated at install time. The two <code>unins000.*</code> files at the bottom are Inno Setup&rsquo;s auto-generated uninstaller.</figcaption>
+        </figure>
+
         <h2 id="notable-files">Notable files</h2>
         <table>
           <thead><tr><th>File / folder</th><th>What it is</th><th>When IT touches it</th></tr></thead>
@@ -411,8 +467,8 @@
             </tr>
             <tr>
               <td><code>rr-valc-agent.xml</code></td>
-              <td>Agent configuration (per-customer settings). <strong>TODO:</strong> document the keys IT cares about (DB server, VALC endpoint, port assignments).</td>
-              <td>Set at install time. Hand-edited only when reconfiguring.</td>
+              <td>The <strong>WinSW service configuration</strong> &mdash; not a custom RR config schema, just the standard WinSW XML config that defines how Windows runs the service. Contents (verbatim from the shipped installer): <code>&lt;id&gt;rr-valc-agent&lt;/id&gt;</code>, <code>&lt;name&gt;Rapid Reconciler 7 Agent&lt;/name&gt;</code>, <code>&lt;executable&gt;%BASE%\jre\bin\java.exe&lt;/executable&gt;</code>, <code>&lt;arguments&gt;-jar "%BASE%\rr-valc-agent.jar"&lt;/arguments&gt;</code>, <code>&lt;startmode&gt;Automatic&lt;/startmode&gt;</code>, three <code>&lt;onfailure&gt;</code> actions (restart 10s &rarr; restart 30s &rarr; reboot), <code>&lt;stoptimeout&gt;10 sec&lt;/stoptimeout&gt;</code>, <code>&lt;logpath&gt;%BASE%\logs&lt;/logpath&gt;</code>, <code>&lt;log mode="roll-by-time"&gt;&lt;pattern&gt;yyyyMMdd&lt;/pattern&gt;&lt;/log&gt;</code>, and <code>&lt;env name="RRAGENT_HOME" value="%BASE%"/&gt;</code>. Per-customer runtime configuration (DB credentials, VALC endpoint, port assignments) lives <em>inside the agent JAR</em> and is initialised at install time / managed via VALC Manage Deploys &mdash; not in this file.</td>
+              <td>Rarely. Only edited when changing service-level behavior (failure-recovery policy, log rotation pattern, env vars). Per-customer config is not here.</td>
             </tr>
             <tr>
               <td><code>sample-allOptions.xml</code></td>
@@ -490,6 +546,11 @@
           <li><code>spring.profiles.active=production-https</code> &mdash; production profile, HTTPS endpoints active.</li>
           <li><code>spring.datasource.url</code> / <code>spring.datasource.jdbcUrl</code> &mdash; jTDS JDBC URL pointing at the RR Database Server (default SQL Server port <strong>1433</strong>), with <code>databaseName=rrv7-&lt;customer&gt;</code> identifying which RR database this child serves.</li>
         </ul>
+
+        <figure>
+          <img src="../Images/rr-agent-java-processes.png" alt="Task Manager Processes tab with Command Line column visible, showing two Java(TM) Platform SE binary entries: the parent agent (java.exe -jar C:\Program Files\Rapid Reconciler\rr-valc-agent.jar) and one data-services child (java.exe -Xrs -Xmx2g -jar ./files/359 --spring.profiles.active=production-https). The customer in this screenshot has one RR database." />
+          <figcaption><strong>Real parent + child in Task Manager (1-database customer shown)</strong>Both rows use the bundled JRE at <code>C:\Program Files\Rapid Reconciler\jre\bin\java.exe</code>. The top row is the parent (<code>-jar rr-valc-agent.jar</code>). The bottom row is one data-services child (<code>-Xrs -Xmx2g -jar ./files/359 --spring.profiles.active=production-https &hellip;</code>). A 4-database customer would show 1 parent + 4 children, all with the same <code>-Xrs -Xmx2g</code> flags but pointing at distinct <code>--spring.datasource.url</code> JDBC URLs.</figcaption>
+        </figure>
 
         <h3>Supervision</h3>
         <p>The parent agent <strong>owns the children</strong>. Stop the <code>rr-valc-agent</code> Windows service in <code>services.msc</code> and every <code>java.exe</code> &mdash; agent and data-services &mdash; terminates with it. Restart the service and they all come back up. Don&rsquo;t kill <code>java.exe</code> processes from Task Manager &mdash; always use the service manager so the wrapper logs the stop and the children shut down cleanly.</p>
@@ -698,6 +759,9 @@
         </table>
         <p>Log levels: standard <code>INFO</code>, <code>WARN</code>, <code>ERROR</code>, <code>DEBUG</code>, <code>TRACE</code>. The agent normally runs at <code>INFO</code>.</p>
 
+        <h2 id="log-rotation">Rotation mechanism</h2>
+        <p>Rotation is driven by WinSW (the service wrapper), not by the application. <code>rr-valc-agent.xml</code> declares <code>&lt;log mode="roll-by-time"&gt;&lt;pattern&gt;yyyyMMdd&lt;/pattern&gt;&lt;/log&gt;</code> &mdash; WinSW closes the current <code>.out.log</code> / <code>.err.log</code> at midnight and opens a fresh pair with the new date in the filename. No size cap, no <code>keepFiles</code> retention setting in the shipped config &mdash; old dated logs accumulate indefinitely until the maintenance procedure below is run, which is why the procedure exists.</p>
+
         <h2 id="log-maintenance">Log folder maintenance</h2>
         <p>Dated <code>.out.log</code> files accumulate one per day and the folder will grow indefinitely if left alone. The supported maintenance procedure is:</p>
         <ol>
@@ -708,16 +772,36 @@
         <p>Recommend this cleanup on a periodic cadence (monthly, quarterly &mdash; whatever the customer&rsquo;s ops cadence allows). It&rsquo;s a routine maintenance task, not an incident response.</p>
 
         <h2 id="healthy-log">What a healthy log looks like</h2>
-        <p>In steady state, the agent log scrolls with three recurring messages:</p>
+        <p>In steady state, the agent log scrolls with a tight repeating pattern: a heartbeat to VALC every ~30 seconds, a company-sync ping ~1 second later, then 30 seconds of silence, then the next heartbeat. The sample below is from a real customer&rsquo;s production log (companies / database names / UUID values scrubbed). The first heartbeat carries one <code>RunningInstanceState</code> entry per child <code>java.exe</code> &mdash; this customer has four RR databases, so four entries:</p>
+
+        <div class="log-sample">
+          <div class="log-sample-pane"><span class="log-time">2026-05-11 00:00:12.766</span>  <span class="log-info">INFO</span> 2208 --- [<span class="log-thread">scheduling-1</span>] <span class="log-class">c.r.a.t.s.company.CompanySyncService</span>     : All companies on &lt;DB&gt;: [&hellip; 24 CompanyState entries scrubbed &hellip;]
+<span class="log-time">2026-05-11 00:00:13.016</span>  <span class="log-info">INFO</span> 2208 --- [<span class="log-thread">scheduling-1</span>] <span class="log-class">c.r.agent.jms.ValcOutbound</span>               : Sending company sync
+<span class="log-time">2026-05-11 00:00:43.890</span>  <span class="log-info">INFO</span> 2208 --- [<span class="log-thread">scheduling-1</span>] <span class="log-class">c.r.agent.jms.ValcOutbound</span>               : Sending heartbeat. States: [
+    RunningInstanceState(uuid=&lt;u1&gt;, errorMessage=null, port=36313, up=true, revisionNumber=178, dbSystemStatus=success),
+    RunningInstanceState(uuid=&lt;u2&gt;, errorMessage=null, port=35390, up=true, revisionNumber=178, dbSystemStatus=success),
+    RunningInstanceState(uuid=&lt;u3&gt;, errorMessage=null, port=45244, up=true, revisionNumber=178, dbSystemStatus=none),
+    RunningInstanceState(uuid=&lt;u4&gt;, errorMessage=null, port=38333, up=true, revisionNumber=178, dbSystemStatus=none)
+]
+<span class="log-time">2026-05-11 00:01:15.729</span>  <span class="log-info">INFO</span> 2208 --- [<span class="log-thread">scheduling-1</span>] <span class="log-class">c.r.agent.jms.ValcOutbound</span>               : Sending heartbeat. States: [&hellip; same 4 entries &hellip;]
+<span class="log-time">2026-05-11 00:01:16.808</span>  <span class="log-info">INFO</span> 2208 --- [<span class="log-thread">scheduling-1</span>] <span class="log-class">c.r.agent.jms.ValcOutbound</span>               : Sending company sync
+<span class="log-time">2026-05-11 00:03:54.288</span>  <span class="log-warn">WARN</span> 2208 --- [<span class="log-thread">global-threads)</span>] <span class="log-class">o.h.engine.jdbc.spi.SqlExceptionHelper</span>   : SQL Warning Code: 10000, SQLState: 01J01
+<span class="log-time">2026-05-11 00:03:54.288</span>  <span class="log-warn">WARN</span> 2208 --- [<span class="log-thread">global-threads)</span>] <span class="log-class">o.h.engine.jdbc.spi.SqlExceptionHelper</span>   : Database &#39;db&#39; not created, connection made to existing database instead.
+<span class="log-time">2026-05-11 01:14:00.315</span>  <span class="log-info">INFO</span> 2208 --- [<span class="log-thread">global-threads)</span>] <span class="log-class">c.r.agent.jms.ValcOutbound</span>               : Sending file .\logs\rr-valc-agent_20260511.out.log
+<span class="log-comment">&hellip; pattern continues: heartbeat &rarr; company sync &rarr; ~30s gap, repeat &hellip;</span></div>
+          <div class="log-sample-caption"><strong>Healthy steady state &mdash; sample from a real 4-database customer</strong>Every line is harmless. The <span style="color:#9ad1ff;">INFO</span>-coloured <code>Sending heartbeat</code> / <code>Sending company sync</code> pair is the heartbeat-pulse rhythm. The <span style="color:#ffcc66;">WARN</span>-coloured Hibernate <code>SqlExceptionHelper</code> lines are expected noise (the schema generator correctly skipping creation because Apache Derby&rsquo;s local <code>db</code> already exists). The <code>Sending file &hellip; .out.log</code> line is the once-an-hour-ish log ship to VALC. The <code>RunningInstanceState</code> blocks confirm each child is <code>up=true</code> on its assigned high port.</div>
+        </div>
+
+        <p>Summary of what to expect:</p>
         <ul>
-          <li><strong>Heartbeat</strong> &mdash; <code>INFO ... Sending heartbeat</code>. Most frequent.</li>
-          <li><strong>Service-instance status checks</strong> &mdash; <code>INFO ... ServiceInstance ... monitoring &lt;N&gt; instance</code>. The agent confirming each child is still up.</li>
-          <li><strong>Company sync</strong> &mdash; <code>INFO ... Sending company sync</code>. Periodic push of JDE company / business-unit metadata to VALC.</li>
+          <li><strong>Heartbeat</strong> &mdash; <code>INFO &hellip; Sending heartbeat. States: [&hellip;]</code>. Most frequent &mdash; about every 30 seconds. The embedded <code>RunningInstanceState</code> list has one entry per child <code>java.exe</code>, each on a distinct port in the App Server&rsquo;s HTTPS range.</li>
+          <li><strong>Company sync</strong> &mdash; <code>INFO &hellip; Sending company sync</code>. Fires ~1 second after each heartbeat. Periodic push of JDE company / business-unit metadata to VALC.</li>
+          <li><strong>Service-instance status checks</strong> &mdash; <code>INFO &hellip; ServiceInstance &hellip; monitoring &lt;N&gt; instance</code>. The agent confirming each child is still up.</li>
         </ul>
         <p>Occasional benign noise:</p>
         <ul>
-          <li><strong>Hibernate <code>SqlExceptionHelper</code> WARNs</strong> &mdash; the schema generator correctly skipping creation because the DB already exists.</li>
-          <li><strong>Log shipping</strong> &mdash; <code>INFO ... Sending file ... .out.log</code>. The agent shipping its own log file to VALC.</li>
+          <li><strong>Hibernate <code>SqlExceptionHelper</code> WARNs</strong> &mdash; the schema generator correctly skipping creation because the Apache Derby local <code>db</code> already exists.</li>
+          <li><strong>Log shipping</strong> &mdash; <code>INFO &hellip; Sending file &hellip; .out.log</code>. The agent shipping its own log file back to VALC via the same <code>ValcOutbound</code> JMS channel as heartbeats. Roughly hourly cadence observed in production logs.</li>
           <li><strong>Health-endpoint <code>Connection refused</code> ERRORs during startup</strong> &mdash; expected for a few seconds per instance while the child HTTPS listener comes up; concerning if they continue indefinitely with no matching <code>Started ClientServicesApplication</code>.</li>
         </ul>
         <p>For a turn-key way to classify any agent log, paste it into the <a href="../HelpDesk/log-analyzer.html">Log Analyzer</a> &mdash; the same rules described here drive its verdict.</p>
@@ -750,8 +834,8 @@
           </thead>
           <tbody>
             <tr>
-              <td>Both Windows services are stopped or won&rsquo;t start.</td>
-              <td>Windows update reboot interrupted shutdown; expired service-account credentials; corrupted config; or a stopped dependency.</td>
+              <td>The <code>rr-valc-agent</code> Windows service is stopped or won&rsquo;t start.</td>
+              <td>Windows update reboot interrupted shutdown; the LocalSystem account (or a custom service account if IT changed it) hit a permission issue on the install root or DB; corrupted <code>rr-valc-agent.xml</code>; or the WinSW recovery loop ran through its three actions (restart, restart, reboot) and gave up.</td>
               <td>See the <a href="install-scenarios/scenario-agent-services-not-running.html">Agent services not running</a> install scenario.</td>
             </tr>
             <tr>
@@ -778,12 +862,12 @@
         </table>
 
         <h2 id="open-questions">Open questions for engineering</h2>
-        <p>Items still needing engineering input. (The network topology, port range, <code>RapidReconciler Services</code> role, install-directory layout, notable files, process model, JVM heap, log-maintenance procedure, JDBC driver, DB naming, keystore location, and DB platform / auth questions from the initial draft have all been answered and are folded into the topics above.)</p>
+        <p>Items still needing engineering input. (The network topology, port range, <code>RapidReconciler Services</code> role, install-directory layout, notable files, process model, JVM heap, log-maintenance procedure, JDBC driver, DB naming, keystore location, DB platform / auth, service-account default, and <code>rr-valc-agent.xml</code> contents questions from the initial draft have all been answered and are folded into the topics above.)</p>
         <ul>
-          <li><strong>Service accounts</strong> &mdash; which Windows account the <code>rr-valc-agent</code> service runs under, with what minimum permissions on the App Server.</li>
-          <li><strong><code>rr-valc-agent.xml</code> keys</strong> &mdash; document the specific configuration keys IT cares about (DB server address, VALC endpoint, port assignments, log levels) so support knows what to look at when reconfiguring.</li>
-          <li><strong>Log-ship destination</strong> &mdash; the "Sending file ... .out.log" log line implies an upstream target. Which RR Server endpoint, on what cadence, and is it the same JMS channel or a separate transfer?</li>
-          <li><strong>Heartbeat cadence + VALC outage behavior</strong> &mdash; how often the heartbeat fires, and how the agent reacts when <code>rr-valc-spa.cloudapp.net</code> is unreachable (retry, queue, give up?).</li>
+          <li><strong>Bundled JRE refresh policy</strong> &mdash; the installer ships <strong>Oracle Java 1.8.0_45</strong> (commercial, May 2015). This JRE hasn&rsquo;t received public Oracle security updates in ~9 years. Is there a refresh on the roadmap, and how does it get to existing installs (VALC Manage Deploys, full re-install, in-place)? Customers running aggressive vulnerability scanners will flag <code>jre\bin\*.dll</code> as out-of-support.</li>
+          <li><strong>Installer signing</strong> &mdash; the shipped <code>rr-agent-setup-x64.exe</code> is unsigned. SmartScreen will warn on first run, and customer Group Policy or EDR products may block it outright. Worth signing for the next build, or at minimum publishing the SHA-256 hash so customers can verify the download out-of-band.</li>
+          <li><strong>Log-ship destination</strong> &mdash; the &ldquo;<code>Sending file &hellip; .out.log</code>&rdquo; line in a production log confirms cadence (roughly hourly) and channel (same <code>c.r.agent.jms.ValcOutbound</code> JMS channel as heartbeats). Open question is the <strong>endpoint on the RR Server side</strong>: which URL/queue receives the shipped log, and what happens to it post-ingest (rotation, retention, indexing for support search)?</li>
+          <li><strong>VALC outage behavior</strong> &mdash; heartbeat cadence confirmed as ~30 seconds in a production log (heartbeat + company sync alternating, ~30 s apart). Open question is how the agent reacts when <code>rr-valc-spa.cloudapp.net</code> is unreachable mid-run (retry interval, max retries, fall back to queued local state, or just keep trying indefinitely?).</li>
           <li><strong>Agent &harr; VALC auth mechanism</strong> &mdash; over the JMS-over-HTTPS channel, is authentication mTLS using the cert in <code>keystore.rr.jks</code>, a signed token, a shared secret, something else?</li>
           <li><strong>DB-server unreachable behavior</strong> &mdash; startup vs. mid-run handling. Retry/backoff/give-up.</li>
           <li><strong>SQL login permissions</strong> &mdash; the minimum SQL Server role(s) the RR app login needs (db_owner on the <code>rrv7-&lt;customer&gt;</code> database? something more restricted?). Also where the login&rsquo;s username + password are stored.</li>

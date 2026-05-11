@@ -45,7 +45,7 @@ RapidReconciler-AI/                  ← repo root, hub lives here
 │   ├── installing-client-in-valc.html
 │   ├── certificate-management.html
 │   ├── install-troubleshooting.html ← search hub for install scenarios
-│   └── install-scenarios/           ← 14 install scenario pages
+│   └── install-scenarios/           ← 16 install scenario pages
 │       └── scenario-*.html
 │
 │   Note: Helpdesk Tech onboarding lives in HelpDesk/. server-migration.html
