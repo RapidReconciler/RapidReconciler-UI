@@ -461,6 +461,41 @@
     min-height: 18px;
   }
 
+  /* ===== Dynamic search coach (inside the navy hero) =====
+     One always-visible italic line under the search input that adapts to the
+     current query state (empty / keyword / question / question-with-trouble /
+     zero-results). Replaces the older static "Search tips" drawer + the
+     keyword-mode hint that used to live in the results panel. */
+  .search-coach {
+    max-width: 640px;
+    margin: 12px auto 0;
+    text-align: center;
+    font-size: 13px;
+    line-height: 1.55;
+    color: rgba(255, 255, 255, 0.74);
+    font-style: italic;
+    min-height: 1.55em;
+    transition: opacity 0.18s;
+  }
+  .search-coach strong {
+    color: var(--blue-bright);
+    font-weight: 700;
+    font-style: normal;
+  }
+  .search-coach em {
+    color: rgba(255, 255, 255, 0.92);
+    font-style: italic;
+  }
+  .search-coach code {
+    background: rgba(255, 255, 255, 0.12);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 12.5px;
+    color: #fff;
+    font-style: normal;
+  }
+
   .search-status .count {
     color: var(--orange);
     font-weight: 700;
@@ -1562,6 +1597,7 @@
             <button type="button" class="search-clear" id="searchClear" aria-label="Clear search">&times;</button>
           </div>
           <div class="search-status" id="searchStatus" role="status" aria-live="polite"></div>
+          <div class="search-coach" id="searchCoach" role="status" aria-live="polite"></div>
         </div>
       </div>
     </div>
@@ -1610,6 +1646,66 @@
             <span>Workflow</span><span class="arrow">&rarr;</span>
           </a>
         </div>
+      </article>
+
+      <!-- 2. Accounts Payable -->
+      <article class="path-card accent-cyan" data-role="ap" data-keywords="accounts payable AP PO receipts purchase order reconciliation suspension exclusion variance period close">
+        <div class="path-card-body">
+          <h3 class="path-card-title">Accounts Payable</h3>
+          <span class="path-card-tag">A/P</span>
+          <p class="path-card-desc">
+            Reconcile PO receipts at period close. Match GL postings to JDE receipts, work the variance, and manage suspension and exclusion rules.
+          </p>
+        </div>
+        <div class="path-card-actions">
+          <a class="path-action" href="start-here-ap.html">
+            <span>Onboarding</span><span class="arrow">&rarr;</span>
+          </a>
+          <a class="path-action" href="po-receipts-reconcile.html">
+            <span>Workflow</span><span class="arrow">&rarr;</span>
+          </a>
+        </div>
+      </article>
+
+      <!-- 3. Transfers -->
+      <article class="path-card accent-green" data-role="transfers" data-keywords="transfer order branch plant inter-branch variance exclusion reconciliation period close">
+        <div class="path-card-body">
+          <h3 class="path-card-title">Transfers</h3>
+          <span class="path-card-tag">Transfers</span>
+          <p class="path-card-desc">
+            Reconcile transfer orders between branch plants. Investigate inter-branch variance, manage transfer exclusions, and walk the transfer-specific workflow.
+          </p>
+        </div>
+        <div class="path-card-actions">
+          <a class="path-action" href="start-here-transfers.html">
+            <span>Onboarding</span><span class="arrow">&rarr;</span>
+          </a>
+          <a class="path-action" href="transfer-order-reconcile.html">
+            <span>Workflow</span><span class="arrow">&rarr;</span>
+          </a>
+        </div>
+      </article>
+
+      <!-- 4. Administrators -->
+      <article class="path-card accent-navy" data-role="administrators" data-keywords="administrator admin setup users companies authorized password offsets onboarding configuration">
+        <div class="path-card-body">
+          <h3 class="path-card-title">Administrators</h3>
+          <span class="path-card-tag">Admin</span>
+          <p class="path-card-desc">
+            Set RapidReconciler up for your team. Manage users and authorized companies, configure inventory offsets and password rules, and keep the system healthy.
+          </p>
+        </div>
+        <div class="path-card-actions">
+          <a class="path-action" href="administrator-start-here.html">
+            <span>Onboarding</span><span class="arrow">&rarr;</span>
+          </a>
+          <a class="path-action" href="administrator-managing-users.html">
+            <span>Workflow</span><span class="arrow">&rarr;</span>
+          </a>
+        </div>
+      </article>
+
+    </div>
       </div>
     </details>
   </div>
@@ -1775,6 +1871,8 @@
       indexState = 'ready';
       searchInput.classList.remove('is-loading');
       searchInput.placeholder = 'Search the knowledge base — try RNV, cardex, weighted average…';
+      // Initial coach paint (empty-state intro).
+      updateCoach();
       // If the user typed before the index loaded, run that query now.
       if (searchInput.value.trim()) runSearch(searchInput.value);
     })
@@ -1862,10 +1960,14 @@
     const tokens = rawQuery.trim().split(/\s+/).filter(Boolean);
     if (!tokens.length) return [];
 
-    // Strip lunr query operators from user-typed tokens to avoid syntax errors,
-    // and lowercase to match the index pipeline.
+    // Strip lunr query operators (*, +, ~, ^, :, -) and trailing punctuation
+    // (?, !, ., ,, ;) from user-typed tokens so a natural sentence like
+    // "how is weighted average calculated?" doesn't smuggle ? through to lunr
+    // (which treats it as query syntax and silently busts the strict-AND tier,
+    // falling all the way through to a wide-open OR fallback). Lowercased
+    // here too to match the index pipeline.
     const clean = tokens
-      .map(t => t.replace(/[*+~^:\-]/g, '').toLowerCase())
+      .map(t => t.replace(/[*+~^:\-?!,.;]/g, '').toLowerCase())
       .filter(Boolean);
     if (!clean.length) return [];
 
@@ -1910,6 +2012,55 @@
   }
 
   /* ----- Render ----- */
+  const coachEl = document.getElementById('searchCoach');
+
+  /* Dynamic search coach. One line of guidance under the search input that
+     adapts to the current query state. Called from clearResults (empty),
+     renderResults (after each query), and once on index-ready (so the first
+     paint isn't blank). */
+  let lastQuery       = '';
+  let lastResultCount = null;   // null = no search yet, 0 = explicit zero
+  function updateCoach() {
+    if (!coachEl) return;
+    const q = (lastQuery || '').trim();
+    if (!q) {
+      coachEl.innerHTML =
+        'Type <strong>keywords</strong> for a tight list of docs whose titles match, ' +
+        'or phrase as a <strong>question</strong> ' +
+        '(<em>&ldquo;how do I close a period?&rdquo;</em>) for the full content of every doc.';
+      return;
+    }
+    if (lastResultCount === 0) {
+      coachEl.innerHTML =
+        '<strong>No matches.</strong> Try fewer terms, check spelling, ' +
+        'or rephrase as a question (<em>&ldquo;how do I&hellip;?&rdquo;</em>).';
+      return;
+    }
+    // Trouble intent (either as a question OR a declarative statement like
+    // "my period close failed") — surface Troubleshooting docs prominently.
+    if (hasTroubleIntent(q)) {
+      coachEl.innerHTML =
+        '<strong>Troubleshooting docs included</strong> &mdash; your query mentions a problem.';
+      return;
+    }
+    if (isQuestion(q)) {
+      coachEl.innerHTML =
+        'Showing <strong>instructional docs</strong>. Add <code>error</code>, ' +
+        '<code>fail</code>, or <code>fix</code> if you also want Troubleshooting.';
+      return;
+    }
+    // Keyword mode (no trouble intent).
+    if (lastSearchNarrowed) {
+      coachEl.innerHTML =
+        'Showing <strong>title matches only</strong>. Phrase as a question ' +
+        '(<em>&ldquo;how do I&hellip;?&rdquo;</em>) to widen the search across full doc text.';
+    } else {
+      coachEl.innerHTML =
+        'Phrase as a question (<em>&ldquo;how do I&hellip;?&rdquo;</em>) ' +
+        'to search across the full doc text.';
+    }
+  }
+
   function clearResults() {
     document.body.classList.remove('searching');
     searchInput.classList.remove('has-value');
@@ -1917,6 +2068,9 @@
     resultsCount.innerHTML = '';
     resultsEmpty.hidden = true;
     if (searchStatus) searchStatus.textContent = '';
+    lastQuery = '';
+    lastResultCount = null;
+    updateCoach();
   }
 
   /* ----- Search filter (driven by role-card toggles) ----- */
@@ -2024,6 +2178,9 @@
     const groups = groupHitsByPage(hits);
     const totalSections = groups.reduce((n, g) => n + g.sections.length, 0);
 
+    lastQuery = rawQuery;
+    lastResultCount = totalSections;
+
     if (!totalSections) {
       resultsList.innerHTML = '';
       resultsCount.innerHTML = `No matches for <span class="count-num">"${safeQuery}"</span>`;
@@ -2036,6 +2193,7 @@
         `<strong>Nothing found.</strong> Try fewer or different terms &mdash; for example, ` +
         `the JDE table number ("F4111"), a process name ("RNV"), or a feature name ("cardex").${filterHint}`;
       if (searchStatus) searchStatus.innerHTML = '';
+      updateCoach();
       return;
     }
 
@@ -2048,6 +2206,7 @@
       searchStatus.innerHTML =
         `<span class="count">${totalSections}</span> match${totalSections === 1 ? '' : 'es'} across ${groups.length} doc${groups.length === 1 ? '' : 's'}`;
     }
+    updateCoach();
 
     const html = groups.map(g => {
       const sectionsHtml = g.sections.map(s => {
@@ -2076,6 +2235,117 @@
     resultsList.innerHTML = html;
   }
 
+  /* Detect whether the user typed a natural-language question or a bag of
+     keywords. Keywords get a tighter result set (title-only match); questions
+     get the full body search. Heuristic:
+       - ends with `?`                                    → question
+       - starts with how/what/why/where/when/which/who    → question
+       - starts with an auxiliary (do/does/is/are/can…)   → question
+     Everything else is treated as a keyword query. */
+  const QUESTION_STARTERS = new Set([
+    'how','what','why','where','when','which','who','whose','whom',
+    'do','does','did','is','are','was','were','am',
+    'can','could','will','would','should','shall','may','might',
+    'has','have','had'
+  ]);
+  function isQuestion(rawQuery) {
+    const q = rawQuery.trim().toLowerCase();
+    if (!q) return false;
+    if (q.endsWith('?')) return true;
+    const firstWord = q.replace(/^[^a-z]+/, '').split(/\s+/)[0] || '';
+    return QUESTION_STARTERS.has(firstWord);
+  }
+
+  /* Detect whether the user's query signals that something is *broken* (as
+     opposed to "how do I do X" learning). When trouble intent is absent, we
+     suppress troubleshooting docs entirely from question-mode results so a
+     plain "how do I close a period" doesn't surface "Period Close
+     Troubleshooting" — that doc is for people whose close already failed. */
+  const TROUBLE_WORDS = new Set([
+    'error','errors','fail','failed','failing','failure','broken','wrong',
+    'stuck','issue','issues','problem','problems','crash','crashes','crashing',
+    'timeout','timeouts','missing','blank','empty','red','amber','warning',
+    'warnings','glitch','troubleshoot','troubleshooting','debug','debugging',
+    'fix','fixing','hang','hangs','hanging','freeze','frozen','dead','down',
+    // tokens after apostrophe-stripping for common contractions
+    'wont','cant','doesnt','isnt','dont','didnt','couldnt','wouldnt','shouldnt',
+    'arent','wasnt','werent','hasnt','havent','hadnt'
+  ]);
+  function hasTroubleIntent(rawQuery) {
+    const q = rawQuery.toLowerCase();
+    // Phrasal signals that single-token matching would miss.
+    if (/\bnot\s+working\b|\bnot\s+work\b|\bdoesn['']?t\s+work\b|\bwon['']?t\s+work\b|\bisn['']?t\s+working\b|\bcan['']?t\s+\w+/i.test(q)) return true;
+    const tokens = q.replace(/['‘’]/g, '').split(/[^a-z0-9]+/).filter(Boolean);
+    return tokens.some(t => TROUBLE_WORDS.has(t));
+  }
+
+  /* Re-rank lunr's hits by doc type so the right *kind* of doc surfaces first
+     for a "how do I" question. Start-here / getting-started / overview docs
+     get a small boost because they're the natural learning-first answer to
+     a "how do I" question; troubleshooting docs get a small demotion because
+     they're for "things that broke" rather than "things to learn", and they
+     tend to over-rank on lunr's title-boost when their filename contains the
+     same nouns as the query (e.g. "Period Close Troubleshooting"
+     out-scoring "Start Here — Inventory" for "how do I close a period").
+     Multipliers are deliberately small — they re-order ties + close calls,
+     they don't flip clearly-relevant results. */
+  /* True iff this record is a troubleshooting doc. Checks both URL pattern
+     (period-close-troubleshooting.html) AND page_title text — some
+     troubleshooting docs don't follow the URL convention
+     (login-and-access.html with title "Login & Access Troubleshooting",
+     reports-and-exports.html with title "Reports & Exports Troubleshooting"). */
+  function isTroubleshootingDoc(rec) {
+    if (!rec) return false;
+    const url = (rec.url || '').toLowerCase();
+    if (/troubleshooting\.html/.test(url)) return true;
+    const pageTitle = (rec.page_title || '').toLowerCase();
+    return /\btroubleshooting\b/.test(pageTitle);
+  }
+  function docTypeMultiplier(rec) {
+    if (!rec) return 1.0;
+    const u = (rec.url || '').toLowerCase();
+    if (/^start-here-/.test(u))              return 1.4;
+    if (/^administrator-start-here/.test(u)) return 1.4;
+    if (/^getting-started-/.test(u))         return 1.3;
+    if (isTroubleshootingDoc(rec))           return 0.6;
+    return 1.0;
+  }
+  function reRankByDocType(hits) {
+    if (!hits || !hits.length) return hits;
+    return hits.map(h => {
+      const rec = docsById.get(h.ref);
+      const mult = docTypeMultiplier(rec);
+      return Object.assign({}, h, { score: h.score * mult });
+    }).sort((a, b) => b.score - a.score);
+  }
+
+  /* When the user typed a keyword query (no question phrasing), keep only
+     hits whose match data shows every query token landed in a title field
+     (section_title or page_title). lunr's matchData is keyed by the stemmed
+     query token, with a nested map of field-name → position info — so a hit
+     "passes" only if every token has at least one title-field entry. If
+     every token was a stopword or all hits were filtered out, fall back to
+     the original list so the user still sees something. */
+  function titleOnlyHits(hits) {
+    if (!hits || !hits.length) return hits;
+    const filtered = hits.filter(h => {
+      const meta = h.matchData && h.matchData.metadata;
+      if (!meta) return false;
+      const tokens = Object.keys(meta);
+      if (!tokens.length) return false;
+      return tokens.every(t => {
+        const fields = meta[t];
+        return fields && (fields.section_title || fields.page_title);
+      });
+    });
+    return filtered;
+  }
+
+  /* Tracks whether the most recent runSearch() narrowed to title-only hits.
+     renderResults reads this to decide whether to show the keyword-mode tip
+     ("Showing title matches. Phrase as a question…") above the results list. */
+  let lastSearchNarrowed = false;
+
   function runSearch(rawQuery) {
     const query = rawQuery.trim();
     if (!query) {
@@ -2088,7 +2358,33 @@
     }
     if (indexState === 'failed') return;
 
-    const hits = lunrSearchFlexible(query);
+    let hits = lunrSearchFlexible(query);
+
+    // Re-rank by doc type so Start Here / Getting Started float to the top
+    // and Troubleshooting drops a notch. Applies to both keyword and
+    // question modes.
+    hits = reRankByDocType(hits);
+
+    // Question mode without trouble-intent words? Suppress troubleshooting
+    // docs entirely — they're for "things that broke" and would be noise
+    // when the user is asking "how do I do X". If the query DOES contain
+    // trouble words (error, fail, red, can't, etc.), keep them in the mix.
+    if (isQuestion(query) && !hasTroubleIntent(query)) {
+      hits = hits.filter(h => !isTroubleshootingDoc(docsById.get(h.ref)));
+    }
+
+    // Keyword query? Narrow to title-only hits. If that empties the result
+    // set, keep the original body-inclusive hits so the user still gets a
+    // response (they can rephrase as a question to force the full search).
+    lastSearchNarrowed = false;
+    if (!isQuestion(query) && hits.length) {
+      const narrowed = titleOnlyHits(hits);
+      if (narrowed.length) {
+        hits = narrowed;
+        lastSearchNarrowed = true;
+      }
+    }
+
     renderResults(query, hits);
   }
 
