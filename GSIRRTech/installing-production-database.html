@@ -2586,17 +2586,21 @@ SUBMITTED BY
 
           <table>
             <thead>
-              <tr><th>Variable</th><th>Value to Enter</th></tr>
+              <tr><th>Variable</th><th>Type</th><th>Template default</th><th>Value to Enter</th></tr>
             </thead>
             <tbody>
-              <tr><td><code>aaStartDateGr</code></td><td>Start date for data extraction. Set to 2 months prior to the current fiscal year.</td></tr>
-              <tr><td><code>dbowner</code></td><td>Table qualifier for JDE data (e.g. <code>proddta.</code>). <strong>Ensure there is a period at the end.</strong></td></tr>
-              <tr><td><code>DecExtCost</code></td><td>Decimal places for extended cost: <code>1</code> followed by the number of zeros for ECST.</td></tr>
-              <tr><td><code>DecUnitCost</code></td><td>Decimal places for unit cost: <code>1</code> followed by the number of zeros for UNCS.</td></tr>
-              <tr><td><code>DecQTY</code></td><td>Decimal places for quantity on hand: <code>1</code> followed by the number of zeros for PQOH.</td></tr>
-              <tr><td><code>DecQtyCX</code></td><td>Decimal places for transaction quantities in cardex: <code>1</code> followed by the number of zeros for TRQT.</td></tr>
+              <tr><td><code>aaStartDateGr</code></td><td>String</td><td><code>2022-01-01</code></td><td>Start date for data extraction in <code>YYYY-MM-DD</code> format. Set to 2 months prior to the start of the current fiscal year. <em>Worked example:</em> if the customer's fiscal year begins 1&nbsp;July&nbsp;2026, set <code>aaStartDateGr</code> to <code>2026-05-01</code>. The package converts this Gregorian date to JDE's Julian format internally (via the <code>qryJulianStart</code> container variable in the Companies sequence) before passing it to the F4111 cardex query, so the format must be parseable by SQL Server's <code>datetime</code> &mdash; keep the <code>YYYY-MM-DD</code> form.</td></tr>
+              <tr><td><code>dbowner</code></td><td>String</td><td><code>dbo.</code></td><td>Table qualifier (schema prefix) for the customer's JDE source tables &mdash; e.g. <code>proddta.</code>, <code>jdeprod.</code>, <code>crpdta.</code>. <strong>Must end with a period.</strong> The package builds source queries by string-concatenation: <code>"Select &hellip; FROM " + @[User::dbowner] + "F0006 &hellip;"</code>. Without the trailing period the runtime query becomes <code>proddtaF0006</code> (invalid object name) and every table read returns zero rows.</td></tr>
+              <tr><td><code>DecExtCost</code></td><td>Int</td><td><code>100</code></td><td>Decimal-precision multiplier for extended cost (ECST). <code>1</code> followed by the number of zeros equal to the customer's ECST decimal places &mdash; <code>100</code> for 2-decimal ECST (standard JDE), <code>10000</code> for 4-decimal.</td></tr>
+              <tr><td><code>DecUnitCost</code></td><td>Int</td><td><code>10000</code></td><td>Decimal-precision multiplier for unit cost (UNCS). Same rule as <code>DecExtCost</code>; defaults to <code>10000</code> (4-decimal UNCS &mdash; standard JDE).</td></tr>
+              <tr><td><code>DecQty</code></td><td>Int</td><td><code>100</code></td><td>Decimal-precision multiplier for quantity on hand (PQOH). <code>100</code> for 2-decimal PQOH (standard JDE).</td></tr>
+              <tr><td><code>DecQtyCX</code></td><td>Int</td><td><code>100</code></td><td>Decimal-precision multiplier for transaction quantities in cardex (TRQT). <code>100</code> for 2-decimal TRQT (standard JDE).</td></tr>
             </tbody>
           </table>
+          <div class="callout">
+            <div class="callout-label">Don't edit the other package variables</div>
+            <p>The Variables window shows additional entries (<code>InitLoad</code>, <code>ModInv</code>, <code>ModRnv</code>, <code>RefreshDays</code>, <code>RefreshDaysRNV</code>) plus container-scoped variables like <code>aaStartF0015</code> and <code>qryJulianStart</code>. These are pre-set runtime flags and computed expressions &mdash; <strong>only</strong> the six variables in the table above are install-time configurable. Leave the rest at their shipped defaults.</p>
+          </div>
 
           <ol start="4">
             <li>Save all changes by clicking <strong>File &rarr; Save All</strong> or pressing <code>Ctrl + Shift + S</code>.</li>
@@ -2604,7 +2608,7 @@ SUBMITTED BY
 
           <div class="callout warning">
             <div class="callout-label">Common mistake</div>
-            <p>Forgetting the trailing period on <code>dbowner</code> (e.g. entering <code>proddta</code> instead of <code>proddta.</code>) is the single most common cause of "package deployed but extracts no data" tickets. Double-check before saving.</p>
+            <p>Forgetting the trailing period on <code>dbowner</code> (e.g. entering <code>proddta</code> instead of <code>proddta.</code>) is the single most common cause of "package deployed but extracts no data" tickets. Double-check before saving. If you've already hit this, walk the dedicated runbook: <a href="install-scenarios/scenario-package-extracts-no-data.html">SSIS package deployed but extracts no data</a>.</p>
           </div>
         </div>
 
@@ -2735,7 +2739,8 @@ SUBMITTED BY
 
           <div class="callout">
             <div class="callout-label">Scheduling guidance</div>
-            <p>The RapidReconciler job should run during off-peak hours (typically overnight) to minimize impact on system performance and provide the most accurate snapshot. Coordinate with the customer's IT contact to determine the best time. The initial load may take longer than subsequent runs.</p>
+            <p>The RapidReconciler job should run during off-peak hours (typically overnight) to minimize impact on system performance and provide the most accurate snapshot. Coordinate with the customer's IT contact to determine the best time.</p>
+            <p>The initial load takes longer than subsequent runs because it pulls the full history defined by <code>aaStartDateGr</code>, not just the day's delta. Order of magnitude: most customers complete overnight; very high-volume customers (large cardex, long history) can run 8+ hours and benefit from being scheduled to start on a Friday or Saturday evening so the customer's I/T contact has weekend daylight to verify it in Step 11 before the next workday's data flows through.</p>
           </div>
 
           <ol>
@@ -2886,6 +2891,7 @@ ORDER BY Capture DESC, StartTime DESC;</code></pre>
         <div class="callout warning">
           <div class="callout-label">If the numbers don't make sense or there are errors</div>
           <p>If the UpdateCount values look way off (e.g. all zeros across the major tables, or counts that don't reflect the customer's actual JDE volume) or any row shows a non-zero <code>ErrorNum</code>, the load did not succeed. Contact <strong><code>rrsupport@getgsi.com</code></strong> for assistance &mdash; do not proceed to <a href="javascript:void(0)" onclick="showView('topic-email-tech')">Step 12</a>. Include the customer name, the timestamp of the failed run from the <code>Capture</code> column, and a screenshot of the diagnostic view rows in your support request.</p>
+          <p>For triage before escalating, the install-troubleshooting reference has dedicated runbooks: <a href="install-scenarios/scenario-initial-load-errors-or-zeros.html">Initial load reports errors or zero counts</a> (the general triage flow, with patterns for login / schema / timeout failures), and <a href="install-scenarios/scenario-package-extracts-no-data.html">SSIS package deployed but extracts no data</a> (the specific case where every <code>UpdateCount</code> is zero with no error &mdash; almost always a <code>dbowner</code> trailing-period issue).</p>
         </div>
 
         <div class="step-check" data-check-id="step11-verification-passed">
