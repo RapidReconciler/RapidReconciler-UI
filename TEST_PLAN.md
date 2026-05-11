@@ -52,7 +52,7 @@ Each test lists: **Name** · **Input / steps** · **Expected**.
 
 | # | Name | Input / steps | Expected |
 |---|---|---|---|
-| 2.2.1 | All pills unchecked default | First load in a fresh browser profile | None of Inventory / A/P / Transfers / Administrators is checked. (LocalStorage key `rru-search-filters-v1` either absent or all-false.) |
+| 2.2.1 | Default pill state | First load in a fresh browser profile (after clearing `rru-search-filters-v1` from localStorage) | Only **Inventory** is checked; A/P / Transfers / Administrators are unchecked. (Matches `DEFAULT_FILTERS = { inventory: true, ap: false, transfers: false, administrators: false }` in the page JS and the "Default: only Inventory ON" note in CLAUDE.md.) |
 | 2.2.2 | Toggle Inventory | Click the Inventory pill | Pill turns solid blue with white text. Reload — Inventory stays checked (localStorage persisted). |
 | 2.2.3 | Toggle multiple modules | Click A/P and Transfers | Both pills become solid blue. Reload — both stay checked. |
 | 2.2.4 | Uncheck a pill | Click a checked pill | Pill returns to translucent / outlined style. |

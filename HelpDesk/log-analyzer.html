@@ -906,22 +906,31 @@ function analyze(mode) {
   // application logger printed across multiple lines.
   const agentEntryStart = /^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}[.,]\d{3}\s+(INFO|WARN|ERROR|DEBUG|TRACE)\b/;
   const consoleEntryStart = /^(?:[\w.-]+\.[A-Za-z0-9]+:\d+(?::\d+)?\s|(?:\(anonymous\)|[\w$.]+)\s+@\s+\S+:\d+|(?:GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)\s+https?:\/\/|[A-Z][\w$]*(?:\.[\w$]+)+\s*$)/;
-  const rawLines = text.split(/\r?\n/);
+  const isContinuationLine = (l) => (mode === 'agent')
+    ? !agentEntryStart.test(l)
+    : !consoleEntryStart.test(l);
+  const rawLines = text.split(/\r?\n/).filter(l => l.trim());
   const lines = [];
-  for (const l of rawLines) {
-    if (!l.trim()) continue;
-    const isContinuation = (mode === 'agent')
-      ? !agentEntryStart.test(l)
-      : !consoleEntryStart.test(l);
-    if (isContinuation) {
+  for (let i = 0; i < rawLines.length; i++) {
+    const l = rawLines[i];
+    if (isContinuationLine(l)) {
       if (lines.length) {
         // Stitch onto the previous logical entry.
         lines[lines.length - 1] += '\n' + l;
+        continue;
       }
-      // Otherwise this is a truncated continuation at the very start of the
-      // pasted text (the parent entry was cut off before the capture began).
-      // Drop it — there's nothing meaningful to classify on its own, and
-      // flagging it would just confuse the operator.
+      // No previous entry yet. Look ahead: if a real entry-start exists later
+      // in the paste, treat this as truncated junk from before the capture
+      // began and drop it. If no later entry exists, the user pasted lines
+      // that simply don't carry an entry-start prefix (e.g. a single bare
+      // benign-noise line) — keep them so the classifier can still rule on
+      // them.
+      let hasLaterEntry = false;
+      for (let j = i + 1; j < rawLines.length; j++) {
+        if (!isContinuationLine(rawLines[j])) { hasLaterEntry = true; break; }
+      }
+      if (hasLaterEntry) continue;
+      lines.push(l);
       continue;
     }
     lines.push(l);
