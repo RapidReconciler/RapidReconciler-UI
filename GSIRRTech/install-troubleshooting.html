@@ -418,6 +418,24 @@
     return meaningful.every(t => tokenMatches(searchText, t));
   }
 
+  // Score a scenario for ranking after the filter passes. Title hits dominate
+  // (the natural user question usually maps to a scenario by its title), with
+  // body occurrence count as a tiebreaker capped per token so a single keyword-
+  // dense scenario can't run away with the list. Same scoring layer lives in
+  // HelpDesk/troubleshooting.html — keep the two aligned.
+  function scoreMatch(scenario, meaningful) {
+    if (!meaningful.length) return 0;
+    const title = (scenario.title || '').toLowerCase();
+    const body  = scenario.search || '';
+    let score = 0;
+    for (const t of meaningful) {
+      if (title.indexOf(t) !== -1) score += 100;
+      const occurrences = body.split(t).length - 1;
+      score += Math.min(occurrences, 10);
+    }
+    return score;
+  }
+
   let searchDebounce = null;
   async function performSearch(rawTerm) {
     const term = rawTerm.trim().toLowerCase();
@@ -426,7 +444,12 @@
     renderResults(term, [], false);
     const list = await ensureScenariosIndex();
     if ((searchEl.value || '').trim().toLowerCase() !== term) return;
-    const matches = list.filter(s => matchesQuery(s.search, term));
+    const meaningful = tokenize(term).filter(t => !STOPWORDS.has(t));
+    const matches = list
+      .filter(s => matchesQuery(s.search, term))
+      .map(s => ({ s, score: scoreMatch(s, meaningful) }))
+      .sort((a, b) => b.score - a.score || a.s.title.localeCompare(b.s.title))
+      .map(x => x.s);
     renderResults(term, matches, true);
   }
 
