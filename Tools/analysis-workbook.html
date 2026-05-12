@@ -1999,7 +1999,9 @@ const DMAAIKnowledge = {
     '4128': 'RNV Credit Reversal',
     '4134': 'In-Transit Inventory Debit (IB)',
     '4136': 'In-Transit Credit on Receipt',
-    '4141': 'Inventory Standard Cost Variance — revaluation offset',
+    '4141': 'Inventory Standard Cost Variance (II / IT / IR)',
+    '3240': 'Material Variance — WIP / standard cost change after completion',
+    '3260': 'Planned Variance — WIP / standard cost change after completion',
     '4162': 'Cross-Company Inventory Transfer (IX)',
     '4172': 'Physical Inventory Adjustment (IJ)',
     '4220': 'Inventory Relief — COGS Credit',
@@ -2010,19 +2012,25 @@ const DMAAIKnowledge = {
     '4400': 'Intercompany / Advanced Pricing'
   },
 
-  // Diagnosis text for a missing variance/revaluation AAI (typically 4141).
-  // The fingerprint: a Standard-Cost-Change / Revaluation row exists in F4111
-  // but no matching F0911 counterpart was built — because the GL journal
-  // entry couldn't fully build without an offsetting account on file.
-  missingVarianceAAIExplanation(aai, dt, amount, account) {
-    const aaiLabel = aai || '4141';
-    const dtTxt = dt ? `on this ${dt} doc` : 'on this document';
-    return `The F4111 cardex captured a Standard Cost Change of ${amount} ${dtTxt}, but no offsetting F0911 entry was built — neither on the inventory side (account ${account || 'the inventory account'}) nor on the expense side. The completion side of the entry posted normally; only the cost-revaluation half is missing.\n\nWhen JD Edwards builds the journal entry for a standard-cost adjustment, it expects to debit inventory and credit the variance/revaluation account that DMAAI ${aaiLabel} (Inventory Standard Cost Variance) points at. If ${aaiLabel} is not set up for the affected company / GL class, AAI lookup fails, the GL journal entry cannot fully build, and the F4111 cardex updates anyway. The result is exactly what this document shows: a cardex-only revaluation row with no GL counterpart and a variance equal to the missing amount.`;
+  // Diagnosis text for IC "Standard Cost Change After Work Order Completion".
+  // Mirrors Pattern 5.9 in AnalysisGuides/transaction-detail-analysis.md —
+  // the cause is a process-sequencing gap (R30835 ran the cost update but
+  // R30837 didn't write the GL revaluation, or the WO was closed at status
+  // 999 so R30837 couldn't touch it), NOT a missing AAI lookup. The fix
+  // is a manual JE crediting AAI 3260 (Planned Variance) or 3240 (Material
+  // Variance) — not 4141, which is the standard-cost variance AAI for
+  // non-manufacturing inventory docs (II / IT / IR).
+  icStandardCostChangeExplanation(dt, amount, invAccount, cardexDocNum, glDocNum) {
+    const dtTxt = dt ? `on this ${dt} (work order completion) doc` : 'on this work order completion';
+    const docMismatchNote = (cardexDocNum && glDocNum && cardexDocNum !== glDocNum)
+      ? `\n\nNote: the cardex shows doc ${cardexDocNum} while the GL completion entry references doc ${glDocNum}. That mismatch is normal R31802A (Manufacturing Accounting) behavior — completions are summarized into a separate GL document — it is not the cause of the variance.`
+      : '';
+    return `The F4111 cardex captured a Standard Cost Change of ${amount} ${dtTxt}, but no F0911 counterpart was built — neither on the inventory side (${invAccount || 'the inventory account'}) nor on an expense / variance account. The completion itself posted normally; only the cost-revaluation half is missing, and the variance equals that missing amount exactly.\n\nThis is the symptom of a process-sequencing gap rather than a missing AAI. When R30835 (Frozen Standard Update) runs after a completion has already posted, it writes the cardex revaluation row but the GL revaluation is the job of R30837 (WIP Revaluation). If R30837 isn't configured to run after R30835, or the work order has already moved to status 999 (closed — R30837 will not revalue closed work orders), the GL entry never gets written and the F4111 cardex updates anyway.${docMismatchNote}`;
   },
 
-  missingVarianceAAIResolution(aai, account) {
-    const aaiLabel = aai || '4141';
-    return `Step 1.  In JDE, open DMAAI (fast path DMAAI) and look up AAI ${aaiLabel} (Inventory Standard Cost Variance) for the affected company and GL class.  Confirm whether a row exists.  If it doesn't, that's the configuration gap producing the missing GL entry.\n\nStep 2.  Work with cost accounting to identify the correct variance / revaluation expense account for this company and GL class.  Manufacturing accounting setup usually specifies which account standard-cost adjustments should hit (often a "Standard Cost Variance" or "Inventory Revaluation Expense" account on the P&L).\n\nStep 3.  Add the ${aaiLabel} entry in DMAAI pointing at the correct account.  Make sure the BU configuration matches the rest of the inventory AAIs for this company (typically blank so it sources from the branch / plant).\n\nStep 4.  Post a manual journal entry to correct the historical posting — debit ${account || 'the inventory account'} for the standard-cost adjustment amount and credit the newly-configured variance / revaluation account for the same amount.\n\nStep 5.  Refresh RapidReconciler and re-analyze.  The variance should clear, and future standard-cost adjustments on this company / GL class will build their GL entries correctly.`;
+  icStandardCostChangeResolution(invAccount, amountForJE) {
+    const amtFragment = amountForJE ? ` (${amountForJE})` : '';
+    return `Step 1.  Identify the work-order status. Check the work order's NxtSts in JDE — if it is 999, R30837 will not revalue it even if re-run, so the only path is the manual JE in Step 3.\n\nStep 2.  Review R30837 (WIP Revaluation) configuration if the work order is still open. R30837 needs to be called from R30835 (Frozen Standard Update) — confirm the PO is set to launch it. Fixing this prevents future occurrences but does not correct the historic variance on this document.\n\nStep 3.  Post a manual journal entry to correct the historic posting on this document — debit ${invAccount || 'the inventory account'}${amtFragment} for the standard-cost adjustment amount, and credit AAI 3260 (Planned Variance) or AAI 3240 (Material Variance), per your cost-accounting team's convention for revaluation differences. Confirm the company and GL class on the AAI entries match the affected branch.\n\nStep 4.  Assess materiality before posting. This pattern frequently produces aged variances dating back months or years (the gap isn't detected until the next reconciliation review). Very old or small amounts may warrant suspension rather than a journal entry.\n\nStep 5.  Refresh RapidReconciler and re-analyze. The variance should clear; if R30837 was reconfigured in Step 2, future standard-cost changes on open work orders will build their GL entries correctly.`;
   },
 
   // Known net-zero complement pairs — debit AAI / credit AAI on the
@@ -3716,33 +3724,41 @@ const TransactionDetailTemplate = {
 
     const isNetZeroPair = Math.abs(cardex) >= 0.01 && (cancellingPair || explicitPair);
 
-    // Missing variance/revaluation AAI fingerprint — typically DMAAI 4141.
+    // "Standard Cost Change After Work Order Completion" fingerprint.
+    // Documented as Pattern 5.9 in AnalysisGuides/transaction-detail-analysis.md.
     //
-    // Fingerprint: an F4111 row with a Standard-Cost-Change / Revaluation
-    // comment exists, but no matching F0911 row (Inv or Exp side) for the
-    // same amount was built, AND the document's variance is roughly equal
-    // to that orphan F4111 amount.
+    // Fingerprint: IC doc + an F4111 row with a Standard-Cost-Change
+    // comment that has no matching F0911 counterpart on either side +
+    // the document variance equals that orphan amount exactly.
     //
-    // JDE behavior: when standard cost changes during an IC completion (or
-    // similar revaluation event), JDE expects to build a debit-inventory /
-    // credit-variance journal entry. If DMAAI 4141 (Inventory Standard
-    // Cost Variance) isn't set up for the affected company / GL class,
-    // AAI lookup fails, the GL journal entry can't fully build, but the
-    // F4111 cardex updates anyway — producing a cardex-only revaluation
-    // row with no GL counterpart. Doc 545031 IC was the field example.
-    const isRevaluationComment = c => /(?:standard\s+cost|revaluation|cost\s+roll)/i.test(c || '');
-    const orphanRevalRow = (function() {
-      for (const r of data.f4111Rows) {
-        if (!isRevaluationComment(r.comment)) continue;
-        if (Math.abs(r.cardexAmt || 0) < 0.01) continue;
-        const amt = r.cardexAmt;
-        const hasGL = data.f0911Inv.some(g => Math.abs((g.ledgerAmt || 0) - amt) < 0.01)
-                   || data.f0911Exp.some(g => Math.abs((g.ledgerAmt || 0) + amt) < 0.01);
-        if (!hasGL) return r;
-      }
-      return null;
-    })();
-    const isMissingVarianceAAI = orphanRevalRow
+    // Cause (per the canonical guide): R30835 (Frozen Standard Update)
+    // updated the standard cost after the completion had already posted.
+    // The cardex revaluation row was written, but R30837 (WIP Revaluation)
+    // didn't write the corresponding GL entry — either because R30837
+    // isn't configured to run after R30835, or because the work order
+    // has already moved to status 999 (closed — R30837 will not revalue
+    // closed work orders).
+    //
+    // Scoped to IC because the R30835/R30837 sequencing only applies to
+    // manufacturing completions. For II / IT / IR docs the same orphan-row
+    // shape can occur but the cause is different (typically AAI 4141
+    // standard-cost variance on the inventory side) — that case is not
+    // handled here and falls through to the generic patterns 5.4 / 5.11.
+    const isStandardCostChangeComment = c => /standard\s+cost\s+change/i.test(c || '');
+    const orphanRevalRow = (data.dt && /^IC$/i.test(data.dt))
+      ? (function() {
+          for (const r of data.f4111Rows) {
+            if (!isStandardCostChangeComment(r.comment)) continue;
+            if (Math.abs(r.cardexAmt || 0) < 0.01) continue;
+            const amt = r.cardexAmt;
+            const hasGL = data.f0911Inv.some(g => Math.abs((g.ledgerAmt || 0) - amt) < 0.01)
+                       || data.f0911Exp.some(g => Math.abs((g.ledgerAmt || 0) + amt) < 0.01);
+            if (!hasGL) return r;
+          }
+          return null;
+        })()
+      : null;
+    const isICStandardCostChange = orphanRevalRow
       && Math.abs(Math.abs(variance) - Math.abs(orphanRevalRow.cardexAmt)) < 0.01;
 
     // Pattern classification
@@ -3776,13 +3792,18 @@ const TransactionDetailTemplate = {
     } else if (Math.abs(ledger) < 0.01 && Math.abs(cardex) >= 0.01) {
       pattern = '5.3'; patternLabel = 'Cardex-Only Entry (No GL)';
       patternExplanation = `F4111 has ${Helpers.money(cardex)} but F0911 is zero — the cardex was written but the GL entry never followed.  Most commonly an unposted batch, or a partial-batch GL failure where one line is missing from an otherwise-posted batch.`;
-    } else if (isMissingVarianceAAI) {
-      pattern = '5.6'; patternLabel = 'Missing variance AAI (Standard Cost Change without GL counterpart)';
-      patternExplanation = DMAAIKnowledge.missingVarianceAAIExplanation(
-        '4141',
+    } else if (isICStandardCostChange) {
+      pattern = '5.6'; patternLabel = 'Standard Cost Change after work order completion (R30837 / closed-WO)';
+      // Pick up the GL completion doc number (if different from the cardex
+      // doc) so the explanation can call out the R31802A summarization
+      // as a normal aside, not the bug.
+      const glCompletionRow = data.f0911Inv.find(g => /completed.*w\.?o/i.test(g.comment || '')) || data.f0911Inv[0];
+      patternExplanation = DMAAIKnowledge.icStandardCostChangeExplanation(
         data.dt,
         Helpers.money(orphanRevalRow.cardexAmt, true),
-        data.account || (data.f4111Rows[0] && data.f4111Rows[0].account) || ''
+        data.account || (data.f4111Rows[0] && data.f4111Rows[0].account) || '',
+        data.doc,
+        glCompletionRow && glCompletionRow.doc
       );
     } else if (data.rrSummary.length > 1) {
       pattern = '5.4'; patternLabel = 'Account or Period Mismatch';
@@ -3929,7 +3950,12 @@ const TransactionDetailTemplate = {
       return DMAAIKnowledge.netZeroResolution(findings.dmaaiPair);
     }
     if (pattern === '5.6') {
-      return DMAAIKnowledge.missingVarianceAAIResolution('4141', data.account || '');
+      // The orphan revaluation row's cardex amount is the JE amount.
+      const orphan = data.f4111Rows.find(r => /standard\s+cost\s+change/i.test(r.comment || '') && Math.abs(r.cardexAmt || 0) >= 0.01);
+      return DMAAIKnowledge.icStandardCostChangeResolution(
+        data.account || '',
+        orphan ? Helpers.money(Math.abs(orphan.cardexAmt)) : ''
+      );
     }
     return `Step 1.  Compare F4111 and F0911 totals at the GL class + batch level individually to isolate which combination is the source of the variance.\n\nStep 2.  For IM / IC / IH documents, query F0911 for the GL document number across all order numbers — R31802A summarizes GL entries by account, so a single GL entry may cover multiple work orders.\n\nStep 3.  If the GL entry legitimately belongs only to this document, query F0911 for batch type JE or IH entries against the same account for the period — a miscoded manual journal entry may be the source.\n\nStep 4.  If the variance is confirmed as a cross-work-order summarization, suspend the record in RapidReconciler with a note.  Otherwise post a reversing journal entry.`;
   }
