@@ -19,6 +19,9 @@ RapidReconciler-AI/                  ← repo root, hub lives here
 │   ├── troubleshooting.html         ← canonical Help Desk (techs + customers)
 │   └── start-here-helpdesk-tech.html ← Helpdesk Tech onboarding
 │
+├── Tools/                           ← In-browser utilities (third surface on the help page)
+│   └── analysis-workbook.html       ← Drop-an-xlsx → formatted analysis workbook generator (8 templates)
+│
 ├── Scenarios/                       ← One HTML file per troubleshooting scenario
 │   ├── scenarios-index.json         ← search index (22 scenarios)
 │   ├── scenario-template.html       ← template for new scenarios
