@@ -1978,18 +1978,18 @@ const GLClassTemplate = {
 Templates.register(GLClassTemplate);
 
 /* ====================================================================
-   DMAAI TEMPLATE  —  full implementation (Integrity Report 2)
-   F4095 (DMAAI) vs model table 4152 PI. Account-routing mismatches.
-==================================================================== */
-const DMAAITemplate = {
-  id: 'dmaai',
-  name: 'DMAAI',
-  family: 'Multi-finding, config',
-  description: 'F4095 vs model table 4152 PI. Account routing errors.',
-  status: 'ready',
+   DMAAI KNOWLEDGE  —  shared static facts used by BOTH the DMAAI
+   integrity-report template (whole-table routing audit) and the
+   Transaction Detail template (per-document diagnosis when a doc
+   produces a net-zero F0911 posting from a same-account debit+credit).
 
-  // Table descriptions for Pattern field context
-  _tableDesc: {
+   Single source of truth for: the DMAAI table descriptions, the known
+   debit/credit complement pairs, and the doc-type → pair lookup used
+   when a Transaction Detail export reveals a self-cancelling posting.
+==================================================================== */
+const DMAAIKnowledge = {
+  // Table descriptions used in both templates' narrative output.
+  tableDesc: {
     '3110': 'Raw Material WIP — Material Issues (IM)',
     '3120': 'Work In Process (WIP)',
     '3130': 'WIP Completions (IC)',
@@ -2008,6 +2008,61 @@ const DMAAITemplate = {
     '4385': 'Outbound Logistics',
     '4400': 'Intercompany / Advanced Pricing'
   },
+
+  // Known net-zero complement pairs — debit AAI / credit AAI on the
+  // inventory side. docTypes lists the JDE document types whose posting
+  // flows through that pair, so a Transaction Detail export can be
+  // mapped to the likely DMAAI pair from its doc-type field.
+  pairs: [
+    { debit: '4122', credit: '4124', docTypes: ['IA','II','IJ','IL','IM','IP','IR','IV'] },
+    { debit: '4126', credit: '4128', docTypes: ['VV','OV','OP'] },
+    { debit: '4134', credit: '4136', docTypes: ['IB'] },
+    { debit: '4240', credit: '4220', docTypes: ['SO','SD','RM'] }
+  ],
+
+  pairForDocType(dt) {
+    const upper = String(dt || '').toUpperCase().trim();
+    if (!upper) return null;
+    return this.pairs.find(p => p.docTypes.includes(upper)) || null;
+  },
+
+  // Plain-language explanation of why a net-zero F0911 posting is the
+  // fingerprint of a misrouted DMAAI complement AAI. Used by the
+  // Transaction Detail template's pattern 5.5.
+  netZeroExplanation(pair, dt) {
+    if (!pair) {
+      return `The F0911 Inv section shows a debit and a matching credit on the same inventory account — they net to zero, so no GL impact is recorded for this document. This is the fingerprint of a DMAAI complement-AAI configuration error: the debit AAI and the matching credit AAI for the transaction type are routed to the same account. The cardex was written normally (F4111 reflects the transaction), but the GL self-cancels.`;
+    }
+    const debitDesc  = (DMAAIKnowledge.tableDesc[pair.debit]  || '').replace(/\s*\([^)]*\)\s*$/, '');
+    const creditDesc = (DMAAIKnowledge.tableDesc[pair.credit] || '').replace(/\s*\([^)]*\)\s*$/, '');
+    return `The F0911 Inv section shows a debit and a matching credit on the same inventory account — they net to zero, so no GL impact is recorded for this document. For doc type ${dt || pair.docTypes[0]}, postings route through the DMAAI ${pair.debit} / ${pair.credit} pair: ${pair.debit} is the ${debitDesc.toLowerCase()}, ${pair.credit} is the ${creditDesc.toLowerCase()}. When both AAIs point to the same account in DMAAI, every transaction of this type posts a debit and a credit of the same amount to the same account and self-cancels.\n\nThe cardex was written normally (F4111 reflects the transaction), but no net GL impact lands — the inventory account is unchanged while the inventory has actually moved.`;
+  },
+
+  // Resolution path — keyed to which side is wrong (the credit side is
+  // almost always the one that should point at a separate offset).
+  netZeroResolution(pair) {
+    const base   = pair ? `${pair.debit} / ${pair.credit}` : 'the affected DMAAI pair';
+    const credit = pair ? pair.credit : 'the complement AAI';
+    return `Step 1.  Open DMAAI in JDE (fast path DMAAI) and look up the ${base} entries for this company and GL class.  Confirm both point to the same account — this is the configuration error producing the net-zero posting.\n\nStep 2.  Ask the cost-accounting team whether the net-zero configuration is intentional for this combination.  Intentional clearing-account setups exist but are rare on inventory tables.\n\nStep 3.  If unintentional, update the credit-side entry (${credit}) to point to the correct offsetting account — typically the expense / variance account for this transaction type, not the inventory account that ${pair ? pair.debit : 'the debit AAI'} already uses.\n\nStep 4.  Post a manual journal entry to correct any historical GL postings that routed through the wrong account.  Use the Transactions page in RapidReconciler for the affected items to confirm exact amounts and accounts before posting.\n\nStep 5.  Refresh RapidReconciler and re-analyze the document to confirm clearance.`;
+  }
+};
+
+/* ====================================================================
+   DMAAI TEMPLATE  —  full implementation (Integrity Report 2)
+   F4095 (DMAAI) vs model table 4152 PI. Account-routing mismatches.
+==================================================================== */
+const DMAAITemplate = {
+  id: 'dmaai',
+  name: 'DMAAI',
+  family: 'Multi-finding, config',
+  description: 'F4095 vs model table 4152 PI. Account routing errors.',
+  status: 'ready',
+
+  // Table descriptions — shared with the Transaction Detail template's
+  // net-zero diagnosis (pattern 5.5). Single source of truth lives in
+  // DMAAIKnowledge.tableDesc above; this property is just an alias so
+  // existing call sites (this._tableDesc[...]) keep working unchanged.
+  _tableDesc: DMAAIKnowledge.tableDesc,
 
   // Column fingerprint (AAIAccount + ModelAccount + TableNumber) is the
   // dominant signal. Sheet name is a small boost — production exports may
@@ -3594,11 +3649,30 @@ const TransactionDetailTemplate = {
     const ratio = Math.abs(variance) / denom;
     const priority = Priority.fromRatio(ratio);
 
+    // Net-zero F0911 fingerprint — multiple F0911 Inv rows on the SAME
+    // account that sum to ~$0 from non-zero gross activity. This is the
+    // signature of a DMAAI complement-AAI misroute (e.g. 4134 and 4136
+    // both pointing at the same inventory account). It must be checked
+    // before pattern 5.3, because the cancelled posting would otherwise
+    // be misdiagnosed as a missing GL entry. Requires a non-zero cardex
+    // so we don't false-positive on documents with no real activity.
+    const f0911InvGross = data.f0911Inv.reduce((a, r) => a + Math.abs(r.ledgerAmt || 0), 0);
+    const f0911InvNet   = data.f0911Inv.reduce((a, r) => a + (r.ledgerAmt || 0), 0);
+    const f0911Accounts = new Set(data.f0911Inv.map(r => r.account).filter(Boolean));
+    const isNetZeroPair = Math.abs(cardex) >= 0.01
+      && data.f0911Inv.length >= 2
+      && f0911InvGross > 0.01
+      && Math.abs(f0911InvNet) < 0.01
+      && f0911Accounts.size === 1;
+
     // Pattern classification
     let pattern, patternLabel, patternExplanation;
     if (data.unassigned.length) {
       pattern = '5.1'; patternLabel = 'Unassigned Account — Missing Model Table Entry';
       patternExplanation = `The Unassigned section at the top shows ${data.unassigned.length} row(s) whose GL class code has no entry in DMAAI model table 4152.  RapidReconciler cannot assign an account, so those cardex amounts are excluded from the reconciliation — the displayed variance is partial.  Add the missing GL class to the model table in JDE.`;
+    } else if (isNetZeroPair) {
+      pattern = '5.5'; patternLabel = 'Net-zero F0911 pair (DMAAI complement misrouted)';
+      patternExplanation = DMAAIKnowledge.netZeroExplanation(DMAAIKnowledge.pairForDocType(data.dt), data.dt);
     } else if (Math.abs(cardex) < 0.01 && Math.abs(ledger) >= 0.01) {
       pattern = '5.2'; patternLabel = 'GL-Only Entry (No Cardex)';
       patternExplanation = `F4111 total is zero but F0911 has ${Helpers.money(ledger)} on the inventory account.  This is a GL-only entry — typically a manual journal entry coded to inventory, an A/P payment hitting the wrong account, a tax variance at voucher match, or a non-stock line that routed to the inventory account.`;
@@ -3622,7 +3696,18 @@ const TransactionDetailTemplate = {
       evidence.push({ severity: 'Anchor', label: `RR Summary  →  Row ${data.rrSummary[0].rowNumber}`, description: `Cardex ${Helpers.money(cardex)} · Ledger ${Helpers.money(ledger)} · Variance ${Helpers.money(variance, true)}`, sourceRow: data.rrSummary[0].rowNumber });
     }
     // Root cause from F4111 or F0911 depending on pattern
-    if (pattern === '5.2' && data.f0911Inv[0]) {
+    if (pattern === '5.5') {
+      // Surface BOTH self-cancelling F0911 rows so the reader can see the
+      // debit and credit sitting on the same account.
+      const debitRow  = data.f0911Inv.filter(r => (r.ledgerAmt || 0) > 0)[0];
+      const creditRow = data.f0911Inv.filter(r => (r.ledgerAmt || 0) < 0)[0];
+      if (debitRow) {
+        evidence.push({ severity: 'Root cause', label: `F0911 Inv (debit)  →  Row ${debitRow.rowNumber}`, description: `Account ${debitRow.account} · ${Helpers.money(debitRow.ledgerAmt)}${debitRow.comment ? '\n' + debitRow.comment : ''}`, sourceRow: debitRow.rowNumber });
+      }
+      if (creditRow) {
+        evidence.push({ severity: 'Root cause', label: `F0911 Inv (credit)  →  Row ${creditRow.rowNumber}`, description: `Account ${creditRow.account} · ${Helpers.money(creditRow.ledgerAmt)}${creditRow.comment ? '\n' + creditRow.comment : ''}\nSame account as the debit row — the two self-cancel`, sourceRow: creditRow.rowNumber });
+      }
+    } else if (pattern === '5.2' && data.f0911Inv[0]) {
       evidence.push({ severity: 'Root cause', label: `${data.f0911Inv[0].bt} doc ${data.f0911Inv[0].doc}  →  Row ${data.f0911Inv[0].rowNumber}`, description: `GL entry on account ${data.f0911Inv[0].account} · ${Helpers.money(data.f0911Inv[0].ledgerAmt)}\n${data.f0911Inv[0].comment || 'No cardex counterpart — the variance is entirely on this row'}`, sourceRow: data.f0911Inv[0].rowNumber });
     } else if (pattern === '5.3' && data.f4111Rows[0]) {
       const fr = data.f4111Rows[0];
@@ -3721,6 +3806,9 @@ const TransactionDetailTemplate = {
     }
     if (pattern === '5.4') {
       return `Step 1.  Check the DMAAs section of the source sheet for mismatch flags (Mismatch - object, Mismatch - BU, etc.).\n\nStep 2.  If a DMAAI configuration error is found, correct the AAI to match the model table 4152.  Post a manual journal entry to move existing GL amounts to the correct account.\n\nStep 3.  If the mismatch is in period rather than account, check the GL Date processing options on the program that created the F0911 entry (P4312 PO 2, P4314 PO 2, R42800 PO 1).  If set to use a different date than the F4111 TransDate, that explains the period mismatch.\n\nStep 4.  Post a journal entry to move the GL amount to the correct period or account.`;
+    }
+    if (pattern === '5.5') {
+      return DMAAIKnowledge.netZeroResolution(DMAAIKnowledge.pairForDocType(data.dt));
     }
     return `Step 1.  Compare F4111 and F0911 totals at the GL class + batch level individually to isolate which combination is the source of the variance.\n\nStep 2.  For IM / IC / IH documents, query F0911 for the GL document number across all order numbers — R31802A summarizes GL entries by account, so a single GL entry may cover multiple work orders.\n\nStep 3.  If the GL entry legitimately belongs only to this document, query F0911 for batch type JE or IH entries against the same account for the period — a miscoded manual journal entry may be the source.\n\nStep 4.  If the variance is confirmed as a cross-work-order summarization, suspend the record in RapidReconciler with a note.  Otherwise post a reversing journal entry.`;
   }
