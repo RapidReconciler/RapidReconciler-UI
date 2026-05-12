@@ -3649,21 +3649,56 @@ const TransactionDetailTemplate = {
     const ratio = Math.abs(variance) / denom;
     const priority = Priority.fromRatio(ratio);
 
-    // Net-zero F0911 fingerprint — multiple F0911 Inv rows on the SAME
-    // account that sum to ~$0 from non-zero gross activity. This is the
-    // signature of a DMAAI complement-AAI misroute (e.g. 4134 and 4136
-    // both pointing at the same inventory account). It must be checked
-    // before pattern 5.3, because the cancelled posting would otherwise
-    // be misdiagnosed as a missing GL entry. Requires a non-zero cardex
-    // so we don't false-positive on documents with no real activity.
-    const f0911InvGross = data.f0911Inv.reduce((a, r) => a + Math.abs(r.ledgerAmt || 0), 0);
-    const f0911InvNet   = data.f0911Inv.reduce((a, r) => a + (r.ledgerAmt || 0), 0);
-    const f0911Accounts = new Set(data.f0911Inv.map(r => r.account).filter(Boolean));
-    const isNetZeroPair = Math.abs(cardex) >= 0.01
-      && data.f0911Inv.length >= 2
-      && f0911InvGross > 0.01
-      && Math.abs(f0911InvNet) < 0.01
-      && f0911Accounts.size === 1;
+    // Net-zero F0911 fingerprint — a debit and credit of equal magnitude
+    // on the SAME inventory account that cancel each other within the
+    // F0911 Inv section. This is the signature of a DMAAI complement-AAI
+    // misroute (e.g. 4134 and 4136 both pointing at the inventory account
+    // instead of 4136 pointing at expense). Detected two ways, either is
+    // enough to fire:
+    //
+    //   A. STRUCTURAL — find a pair of rows on the same account with
+    //      ledger amounts that sum to ~$0. Survives a residual on a
+    //      third row (the cancel pair contributes $0 to the net so
+    //      the section as a whole can still be non-zero).
+    //
+    //   B. EXPLICIT — the DMAAIs section at the bottom of the export
+    //      already flags the issue with a comment like
+    //      "Net zero review - 4134,4136". This is the strongest signal
+    //      because the export itself names the AAIs involved.
+    //
+    // Either signal preempts pattern 5.3 (Cardex-Only — would otherwise
+    // misdiagnose this as a missing GL entry) and 5.4 (generic
+    // account/period mismatch — too vague to actually help the user).
+    const findCancellingPair = rows => {
+      for (let i = 0; i < rows.length; i++) {
+        for (let j = i + 1; j < rows.length; j++) {
+          const ri = rows[i], rj = rows[j];
+          if (!ri.account || ri.account !== rj.account) continue;
+          const ai = ri.ledgerAmt || 0, aj = rj.ledgerAmt || 0;
+          if (Math.abs(ai + aj) < 0.01 && Math.abs(ai) > 0.01) {
+            return ai > 0 ? { debitRow: ri, creditRow: rj } : { debitRow: rj, creditRow: ri };
+          }
+        }
+      }
+      return null;
+    };
+    const cancellingPair = findCancellingPair(data.f0911Inv);
+
+    let explicitPair = null;
+    let explicitDmaaRow = null;
+    const dmaaNZ = data.dmaas.find(r => /net.?zero.*review/i.test(r.comment || ''));
+    if (dmaaNZ) {
+      explicitDmaaRow = dmaaNZ;
+      const m = String(dmaaNZ.comment).match(/(\d{4})\D+(\d{4})/);
+      if (m) {
+        const a = m[1], b = m[2];
+        explicitPair = DMAAIKnowledge.pairs.find(p =>
+          (p.debit === a && p.credit === b) || (p.debit === b && p.credit === a)
+        ) || { debit: a, credit: b, docTypes: [data.dt] };
+      }
+    }
+
+    const isNetZeroPair = Math.abs(cardex) >= 0.01 && (cancellingPair || explicitPair);
 
     // Pattern classification
     let pattern, patternLabel, patternExplanation;
@@ -3672,7 +3707,24 @@ const TransactionDetailTemplate = {
       patternExplanation = `The Unassigned section at the top shows ${data.unassigned.length} row(s) whose GL class code has no entry in DMAAI model table 4152.  RapidReconciler cannot assign an account, so those cardex amounts are excluded from the reconciliation — the displayed variance is partial.  Add the missing GL class to the model table in JDE.`;
     } else if (isNetZeroPair) {
       pattern = '5.5'; patternLabel = 'Net-zero F0911 pair (DMAAI complement misrouted)';
-      patternExplanation = DMAAIKnowledge.netZeroExplanation(DMAAIKnowledge.pairForDocType(data.dt), data.dt);
+      // Pick the most specific pair we know about: explicit comment in
+      // the DMAAIs section wins, then doc-type lookup as fallback.
+      const resolvedPair = explicitPair || DMAAIKnowledge.pairForDocType(data.dt);
+      patternExplanation = DMAAIKnowledge.netZeroExplanation(resolvedPair, data.dt);
+      // If we found the actual cancelling rows, prepend the specific
+      // amounts and account so the diagnosis is concrete, not abstract.
+      if (cancellingPair) {
+        const acct = cancellingPair.debitRow.account;
+        const amt  = Helpers.money(Math.abs(cancellingPair.debitRow.ledgerAmt));
+        patternExplanation = `On this document, ${amt} posted as a debit AND ${amt} posted as a credit — both to the same inventory account ${acct} — so the inventory side self-cancels.\n\n` + patternExplanation;
+      }
+      // If F0911 Inv has a non-trivial residual after the cancelling pair,
+      // call it out — the residual is a SEPARATE issue, not part of the
+      // misroute, and the user shouldn't chase it as if it were.
+      const residual = data.f0911InvTot;
+      if (cancellingPair && Math.abs(residual) >= 0.01) {
+        patternExplanation += `\n\nNote: the F0911 Inv section also contains a separate row of ${Helpers.money(residual)} that isn't part of the cancelling pair. That row is unrelated to this misroute and warrants its own investigation (likely a separate adjustment posted to the same account).`;
+      }
     } else if (Math.abs(cardex) < 0.01 && Math.abs(ledger) >= 0.01) {
       pattern = '5.2'; patternLabel = 'GL-Only Entry (No Cardex)';
       patternExplanation = `F4111 total is zero but F0911 has ${Helpers.money(ledger)} on the inventory account.  This is a GL-only entry — typically a manual journal entry coded to inventory, an A/P payment hitting the wrong account, a tax variance at voucher match, or a non-stock line that routed to the inventory account.`;
@@ -3697,15 +3749,18 @@ const TransactionDetailTemplate = {
     }
     // Root cause from F4111 or F0911 depending on pattern
     if (pattern === '5.5') {
-      // Surface BOTH self-cancelling F0911 rows so the reader can see the
-      // debit and credit sitting on the same account.
-      const debitRow  = data.f0911Inv.filter(r => (r.ledgerAmt || 0) > 0)[0];
-      const creditRow = data.f0911Inv.filter(r => (r.ledgerAmt || 0) < 0)[0];
-      if (debitRow) {
-        evidence.push({ severity: 'Root cause', label: `F0911 Inv (debit)  →  Row ${debitRow.rowNumber}`, description: `Account ${debitRow.account} · ${Helpers.money(debitRow.ledgerAmt)}${debitRow.comment ? '\n' + debitRow.comment : ''}`, sourceRow: debitRow.rowNumber });
+      // Surface the SPECIFIC cancelling pair (not just "first +/- rows" —
+      // a residual on a third row could otherwise be picked here). If no
+      // structural pair was found but the DMAAIs section explicitly
+      // flagged the issue, the pair rows may not exist on this doc; just
+      // surface the DMAAIs row as the anchor.
+      if (cancellingPair) {
+        const d = cancellingPair.debitRow, c = cancellingPair.creditRow;
+        evidence.push({ severity: 'Root cause', label: `F0911 Inv (debit)  →  Row ${d.rowNumber}`, description: `Account ${d.account} · ${Helpers.money(d.ledgerAmt)}${d.comment ? '\n' + d.comment : ''}`, sourceRow: d.rowNumber });
+        evidence.push({ severity: 'Root cause', label: `F0911 Inv (credit)  →  Row ${c.rowNumber}`, description: `Account ${c.account} · ${Helpers.money(c.ledgerAmt)}${c.comment ? '\n' + c.comment : ''}\nSame account as the debit row — the two self-cancel`, sourceRow: c.rowNumber });
       }
-      if (creditRow) {
-        evidence.push({ severity: 'Root cause', label: `F0911 Inv (credit)  →  Row ${creditRow.rowNumber}`, description: `Account ${creditRow.account} · ${Helpers.money(creditRow.ledgerAmt)}${creditRow.comment ? '\n' + creditRow.comment : ''}\nSame account as the debit row — the two self-cancel`, sourceRow: creditRow.rowNumber });
+      if (explicitDmaaRow) {
+        evidence.push({ severity: 'Root cause', label: `DMAAIs Net Zero flag  →  Row ${explicitDmaaRow.rowNumber}`, description: `${explicitDmaaRow.account || ''}${explicitDmaaRow.comment ? ' · ' + explicitDmaaRow.comment : ''}\nThe DMAAIs section on this export already flagged this pair — the misroute is reported by the integrity check that produced this Transaction Detail.`, sourceRow: explicitDmaaRow.rowNumber });
       }
     } else if (pattern === '5.2' && data.f0911Inv[0]) {
       evidence.push({ severity: 'Root cause', label: `${data.f0911Inv[0].bt} doc ${data.f0911Inv[0].doc}  →  Row ${data.f0911Inv[0].rowNumber}`, description: `GL entry on account ${data.f0911Inv[0].account} · ${Helpers.money(data.f0911Inv[0].ledgerAmt)}\n${data.f0911Inv[0].comment || 'No cardex counterpart — the variance is entirely on this row'}`, sourceRow: data.f0911Inv[0].rowNumber });
@@ -3719,9 +3774,14 @@ const TransactionDetailTemplate = {
       evidence.push({ severity: 'Informational', label: `DMAAI Model  →  Row ${data.dmaas[0].rowNumber}`, description: `Model table 4152 entry for context · ${data.dmaas[0].account}${data.dmaas[0].comment ? ' · ' + data.dmaas[0].comment : ''}`, sourceRow: data.dmaas[0].rowNumber });
     }
 
+    // For pattern 5.5, pass through the resolved DMAAI pair so the
+    // resolution text can name 4134/4136 (etc.) directly instead of
+    // having to re-derive it.
+    const dmaaiPair = pattern === '5.5' ? (explicitPair || DMAAIKnowledge.pairForDocType(data.dt)) : null;
+
     return {
       variance, cardex, ledger, ratio, priority,
-      pattern, patternLabel, patternExplanation, evidence
+      pattern, patternLabel, patternExplanation, evidence, dmaaiPair
     };
   },
 
@@ -3808,7 +3868,7 @@ const TransactionDetailTemplate = {
       return `Step 1.  Check the DMAAs section of the source sheet for mismatch flags (Mismatch - object, Mismatch - BU, etc.).\n\nStep 2.  If a DMAAI configuration error is found, correct the AAI to match the model table 4152.  Post a manual journal entry to move existing GL amounts to the correct account.\n\nStep 3.  If the mismatch is in period rather than account, check the GL Date processing options on the program that created the F0911 entry (P4312 PO 2, P4314 PO 2, R42800 PO 1).  If set to use a different date than the F4111 TransDate, that explains the period mismatch.\n\nStep 4.  Post a journal entry to move the GL amount to the correct period or account.`;
     }
     if (pattern === '5.5') {
-      return DMAAIKnowledge.netZeroResolution(DMAAIKnowledge.pairForDocType(data.dt));
+      return DMAAIKnowledge.netZeroResolution(findings.dmaaiPair);
     }
     return `Step 1.  Compare F4111 and F0911 totals at the GL class + batch level individually to isolate which combination is the source of the variance.\n\nStep 2.  For IM / IC / IH documents, query F0911 for the GL document number across all order numbers — R31802A summarizes GL entries by account, so a single GL entry may cover multiple work orders.\n\nStep 3.  If the GL entry legitimately belongs only to this document, query F0911 for batch type JE or IH entries against the same account for the period — a miscoded manual journal entry may be the source.\n\nStep 4.  If the variance is confirmed as a cross-work-order summarization, suspend the record in RapidReconciler with a note.  Otherwise post a reversing journal entry.`;
   }
