@@ -1999,6 +1999,7 @@ const DMAAIKnowledge = {
     '4128': 'RNV Credit Reversal',
     '4134': 'In-Transit Inventory Debit (IB)',
     '4136': 'In-Transit Credit on Receipt',
+    '4141': 'Inventory Standard Cost Variance — revaluation offset',
     '4162': 'Cross-Company Inventory Transfer (IX)',
     '4172': 'Physical Inventory Adjustment (IJ)',
     '4220': 'Inventory Relief — COGS Credit',
@@ -2007,6 +2008,21 @@ const DMAAIKnowledge = {
     '4365': 'Supplier Direct Ship / Outside Operations Settlement',
     '4385': 'Outbound Logistics',
     '4400': 'Intercompany / Advanced Pricing'
+  },
+
+  // Diagnosis text for a missing variance/revaluation AAI (typically 4141).
+  // The fingerprint: a Standard-Cost-Change / Revaluation row exists in F4111
+  // but no matching F0911 counterpart was built — because the GL journal
+  // entry couldn't fully build without an offsetting account on file.
+  missingVarianceAAIExplanation(aai, dt, amount, account) {
+    const aaiLabel = aai || '4141';
+    const dtTxt = dt ? `on this ${dt} doc` : 'on this document';
+    return `The F4111 cardex captured a Standard Cost Change of ${amount} ${dtTxt}, but no offsetting F0911 entry was built — neither on the inventory side (account ${account || 'the inventory account'}) nor on the expense side. The completion side of the entry posted normally; only the cost-revaluation half is missing.\n\nWhen JD Edwards builds the journal entry for a standard-cost adjustment, it expects to debit inventory and credit the variance/revaluation account that DMAAI ${aaiLabel} (Inventory Standard Cost Variance) points at. If ${aaiLabel} is not set up for the affected company / GL class, AAI lookup fails, the GL journal entry cannot fully build, and the F4111 cardex updates anyway. The result is exactly what this document shows: a cardex-only revaluation row with no GL counterpart and a variance equal to the missing amount.`;
+  },
+
+  missingVarianceAAIResolution(aai, account) {
+    const aaiLabel = aai || '4141';
+    return `Step 1.  In JDE, open DMAAI (fast path DMAAI) and look up AAI ${aaiLabel} (Inventory Standard Cost Variance) for the affected company and GL class.  Confirm whether a row exists.  If it doesn't, that's the configuration gap producing the missing GL entry.\n\nStep 2.  Work with cost accounting to identify the correct variance / revaluation expense account for this company and GL class.  Manufacturing accounting setup usually specifies which account standard-cost adjustments should hit (often a "Standard Cost Variance" or "Inventory Revaluation Expense" account on the P&L).\n\nStep 3.  Add the ${aaiLabel} entry in DMAAI pointing at the correct account.  Make sure the BU configuration matches the rest of the inventory AAIs for this company (typically blank so it sources from the branch / plant).\n\nStep 4.  Post a manual journal entry to correct the historical posting — debit ${account || 'the inventory account'} for the standard-cost adjustment amount and credit the newly-configured variance / revaluation account for the same amount.\n\nStep 5.  Refresh RapidReconciler and re-analyze.  The variance should clear, and future standard-cost adjustments on this company / GL class will build their GL entries correctly.`;
   },
 
   // Known net-zero complement pairs — debit AAI / credit AAI on the
@@ -3700,6 +3716,35 @@ const TransactionDetailTemplate = {
 
     const isNetZeroPair = Math.abs(cardex) >= 0.01 && (cancellingPair || explicitPair);
 
+    // Missing variance/revaluation AAI fingerprint — typically DMAAI 4141.
+    //
+    // Fingerprint: an F4111 row with a Standard-Cost-Change / Revaluation
+    // comment exists, but no matching F0911 row (Inv or Exp side) for the
+    // same amount was built, AND the document's variance is roughly equal
+    // to that orphan F4111 amount.
+    //
+    // JDE behavior: when standard cost changes during an IC completion (or
+    // similar revaluation event), JDE expects to build a debit-inventory /
+    // credit-variance journal entry. If DMAAI 4141 (Inventory Standard
+    // Cost Variance) isn't set up for the affected company / GL class,
+    // AAI lookup fails, the GL journal entry can't fully build, but the
+    // F4111 cardex updates anyway — producing a cardex-only revaluation
+    // row with no GL counterpart. Doc 545031 IC was the field example.
+    const isRevaluationComment = c => /(?:standard\s+cost|revaluation|cost\s+roll)/i.test(c || '');
+    const orphanRevalRow = (function() {
+      for (const r of data.f4111Rows) {
+        if (!isRevaluationComment(r.comment)) continue;
+        if (Math.abs(r.cardexAmt || 0) < 0.01) continue;
+        const amt = r.cardexAmt;
+        const hasGL = data.f0911Inv.some(g => Math.abs((g.ledgerAmt || 0) - amt) < 0.01)
+                   || data.f0911Exp.some(g => Math.abs((g.ledgerAmt || 0) + amt) < 0.01);
+        if (!hasGL) return r;
+      }
+      return null;
+    })();
+    const isMissingVarianceAAI = orphanRevalRow
+      && Math.abs(Math.abs(variance) - Math.abs(orphanRevalRow.cardexAmt)) < 0.01;
+
     // Pattern classification
     let pattern, patternLabel, patternExplanation;
     if (data.unassigned.length) {
@@ -3731,6 +3776,14 @@ const TransactionDetailTemplate = {
     } else if (Math.abs(ledger) < 0.01 && Math.abs(cardex) >= 0.01) {
       pattern = '5.3'; patternLabel = 'Cardex-Only Entry (No GL)';
       patternExplanation = `F4111 has ${Helpers.money(cardex)} but F0911 is zero — the cardex was written but the GL entry never followed.  Most commonly an unposted batch, or a partial-batch GL failure where one line is missing from an otherwise-posted batch.`;
+    } else if (isMissingVarianceAAI) {
+      pattern = '5.6'; patternLabel = 'Missing variance AAI (Standard Cost Change without GL counterpart)';
+      patternExplanation = DMAAIKnowledge.missingVarianceAAIExplanation(
+        '4141',
+        data.dt,
+        Helpers.money(orphanRevalRow.cardexAmt, true),
+        data.account || (data.f4111Rows[0] && data.f4111Rows[0].account) || ''
+      );
     } else if (data.rrSummary.length > 1) {
       pattern = '5.4'; patternLabel = 'Account or Period Mismatch';
       patternExplanation = `Multiple RR Summary rows indicate the cardex and ledger entries are matched but landing on different accounts or in different periods.  Check DMAAI configuration (account mismatch) or GL Date processing options (period mismatch).`;
@@ -3762,6 +3815,11 @@ const TransactionDetailTemplate = {
       if (explicitDmaaRow) {
         evidence.push({ severity: 'Root cause', label: `DMAAIs Net Zero flag  →  Row ${explicitDmaaRow.rowNumber}`, description: `${explicitDmaaRow.account || ''}${explicitDmaaRow.comment ? ' · ' + explicitDmaaRow.comment : ''}\nThe DMAAIs section on this export already flagged this pair — the misroute is reported by the integrity check that produced this Transaction Detail.`, sourceRow: explicitDmaaRow.rowNumber });
       }
+    } else if (pattern === '5.6') {
+      // Surface the orphan F4111 revaluation row — the one with cardex
+      // activity but no matching F0911 counterpart.
+      const r = orphanRevalRow;
+      evidence.push({ severity: 'Root cause', label: `${r.dt || data.dt} doc ${r.doc || data.doc} (cardex revaluation)  →  Row ${r.rowNumber}`, description: `Cardex ${Helpers.money(r.cardexAmt)}${r.comment ? ' · ' + r.comment.trim() : ''}\nNo F0911 counterpart on either the inventory or expense side — variance equals this amount exactly.`, sourceRow: r.rowNumber });
     } else if (pattern === '5.2' && data.f0911Inv[0]) {
       evidence.push({ severity: 'Root cause', label: `${data.f0911Inv[0].bt} doc ${data.f0911Inv[0].doc}  →  Row ${data.f0911Inv[0].rowNumber}`, description: `GL entry on account ${data.f0911Inv[0].account} · ${Helpers.money(data.f0911Inv[0].ledgerAmt)}\n${data.f0911Inv[0].comment || 'No cardex counterpart — the variance is entirely on this row'}`, sourceRow: data.f0911Inv[0].rowNumber });
     } else if (pattern === '5.3' && data.f4111Rows[0]) {
@@ -3869,6 +3927,9 @@ const TransactionDetailTemplate = {
     }
     if (pattern === '5.5') {
       return DMAAIKnowledge.netZeroResolution(findings.dmaaiPair);
+    }
+    if (pattern === '5.6') {
+      return DMAAIKnowledge.missingVarianceAAIResolution('4141', data.account || '');
     }
     return `Step 1.  Compare F4111 and F0911 totals at the GL class + batch level individually to isolate which combination is the source of the variance.\n\nStep 2.  For IM / IC / IH documents, query F0911 for the GL document number across all order numbers — R31802A summarizes GL entries by account, so a single GL entry may cover multiple work orders.\n\nStep 3.  If the GL entry legitimately belongs only to this document, query F0911 for batch type JE or IH entries against the same account for the period — a miscoded manual journal entry may be the source.\n\nStep 4.  If the variance is confirmed as a cross-work-order summarization, suspend the record in RapidReconciler with a note.  Otherwise post a reversing journal entry.`;
   }
