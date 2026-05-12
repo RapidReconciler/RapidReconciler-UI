@@ -16,13 +16,57 @@
 (function () {
   'use strict';
 
+  /* -- Demo content prefilled into searches and the log analyzer during the
+        tour. The console paste mirrors a real "agent loaded fine, then a TLS
+        cert + caught TypeError" capture — picked because the analyzer pulls
+        two critical signals out of the noise, which makes a striking demo.
+        The agent slice is sanitized (real UUIDs / IPs / credentials removed)
+        but otherwise representative of a healthy heartbeat run with a couple
+        of routine SqlExceptionHelper WARNs that the analyzer suppresses. -- */
+  var DEMO_CONSOLE = [
+    'base.js:5 URL visited /page/login',
+    'font-awesome.min.css:1  GET https://staging-rr-spa.azurewebsites.net/vendor/fontawesome/fonts/fontawesome-webfont.woff?v=4.2.0 net::ERR_ABORTED 404 (Not Found)',
+    'app.js:13235 null',
+    'app.js:13236 0',
+    'base.js:5 TypeError: Cannot read properties of null (reading \'message\')',
+    '    at app.js:13238:32',
+    '    at base.js:5:9410',
+    '    at u (base.js:5:26119)',
+    '    at f.$eval (base.js:6:1395)',
+    '    at f.$digest (base.js:5:31927)',
+    '    at f.$apply (base.js:6:1662)',
+    '    at XMLHttpRequest.x (base.js:5:12250)',
+    '(anonymous) @ base.js:5',
+    '$eval @ base.js:6',
+    '$digest @ base.js:5',
+    '$apply @ base.js:6',
+    'XMLHttpRequest.send',
+    'base.js:5  POST https://staging-valcspa.cloudapp.net/resource/client/login net::ERR_CERT_DATE_INVALID'
+  ].join('\n');
+
+  var DEMO_AGENT = [
+    '2026-05-11 00:03:53.619  INFO 2208 --- [   scheduling-1] c.r.agent.jms.ValcOutbound               : Sending heartbeat. States: [RunningInstanceState(uuid=instance-a, errorMessage=null, port=36313, up=true, revisionNumber=178, dbSystemStatus=success), RunningInstanceState(uuid=instance-b, errorMessage=null, port=35390, up=true, revisionNumber=178, dbSystemStatus=success)]',
+    '2026-05-11 00:03:54.288  WARN 2208 --- [global-threads)] o.h.engine.jdbc.spi.SqlExceptionHelper   : SQL Warning Code: 10000, SQLState: 01J01',
+    '2026-05-11 00:03:54.288  WARN 2208 --- [global-threads)] o.h.engine.jdbc.spi.SqlExceptionHelper   : Database \'db\' not created, connection made to existing database instead.',
+    '2026-05-11 00:04:25.177  INFO 2208 --- [   scheduling-1] c.r.agent.jms.ValcOutbound               : Sending heartbeat. States: [RunningInstanceState(uuid=instance-a, errorMessage=null, port=36313, up=true, revisionNumber=178, dbSystemStatus=success), RunningInstanceState(uuid=instance-b, errorMessage=null, port=35390, up=true, revisionNumber=178, dbSystemStatus=success)]'
+  ].join('\n');
+
+  /* Helper used by demo actions: set an input/textarea value and notify
+     listeners (Lunr search, scenario matcher, and the log analyzer's
+     debounced auto-analyze all listen for "input"). */
+  function fillInput(el, value) {
+    if (!el) return;
+    el.value = value;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
   /* -- The flat step list. `page` is matched against pathname suffix. -- */
   var STEPS = [
     {
       page: 'rapidreconciler-help.html',
       type: 'center',
       title: 'Welcome to the RapidReconciler Help portal',
-      body: 'A quick 30-second tour of the five surfaces. You’ll see the knowledge base, the troubleshooting hub, the workbook analyzer, and the log analyzer — then end up back here, ready to pick a destination.'
+      body: 'A quick tour of the five surfaces — knowledge base, troubleshooting hub, workbook analyzer, log analyzer. We\'ll fill the searches and run the analyzer for you as we go, so you can see each surface working.'
     },
     {
       page: 'rapidreconciler-help.html',
@@ -30,15 +74,27 @@
       target: '.destinations',
       placement: 'top',
       title: 'Three customer-facing surfaces',
-      body: 'University for how-to. Help Desk for troubleshooting. Analysis Workbook Generator for turning a RapidReconciler export into a formatted analysis workbook. We’ll stop on each of them next.'
+      body: 'University for how-to. Help Desk for troubleshooting. Analysis Workbook Generator for turning a supported RapidReconciler export into a formatted analysis workbook. We\'ll stop on each of them next.'
     },
     {
       page: 'RRUniversity/rapidreconciler-university.html',
       type: 'spotlight',
       target: '#docSearch',
       placement: 'bottom',
+      action: function (el) { fillInput(el, 'GL class'); },
+      actionDelay: 1500,
       title: 'Knowledge-base search',
-      body: 'Type a keyword or a question — results filter live across the full knowledge base. Section anchors take you straight to the matching paragraph.'
+      body: 'Type a keyword or a question — results filter live. We\'ve searched <strong>"GL class"</strong> for you to demo it.'
+    },
+    {
+      page: 'RRUniversity/rapidreconciler-university.html',
+      type: 'spotlight',
+      target: '#resultsPanel',
+      placement: 'top',
+      action: function () { fillInput(document.getElementById('docSearch'), 'GL class'); },
+      actionDelay: 200,
+      title: 'Live results, grouped by document',
+      body: 'Results are scored by relevance and grouped by document. Click any section anchor to jump straight to that paragraph.'
     },
     {
       page: 'RRUniversity/rapidreconciler-university.html',
@@ -53,8 +109,20 @@
       type: 'spotlight',
       target: '#ts-search',
       placement: 'bottom',
+      action: function (el) { fillInput(el, 'system status light is red'); },
+      actionDelay: 1500,
       title: 'Paste an error or describe a symptom',
-      body: 'Drop a Copilot-summarized email, a stack trace, or plain-language description into this textarea. Matching runbooks surface as you type — each one walks through the fix step by step.'
+      body: 'Drop a Copilot-summarized email, a stack trace, or plain-language description. We\'ve typed <strong>"system status light is red"</strong> for you — matching runbooks surface as you type.'
+    },
+    {
+      page: 'HelpDesk/troubleshooting.html',
+      type: 'spotlight',
+      target: '#ts-results-panel',
+      placement: 'top',
+      action: function () { fillInput(document.getElementById('ts-search'), 'system status light is red'); },
+      actionDelay: 200,
+      title: 'Matching runbooks',
+      body: 'Each result links to a step-by-step runbook. Most end in either a self-resolution path or a one-click "Generate IT email" handoff.'
     },
     {
       page: 'Tools/analysis-workbook.html',
@@ -62,7 +130,7 @@
       target: '#step1',
       placement: 'right',
       title: 'Drop an .xlsx export',
-      body: 'Drag any RapidReconciler export onto the Step 1 card. The template auto-detects from the file’s columns and sheet name — eight report types supported across DMAAI, GL Class, Cardex, and more.'
+      body: 'Drag any of the <strong>supported</strong> RapidReconciler exports onto the Step 1 card. The template auto-detects from the file\'s columns and sheet name — eight supported reports across DMAAI, GL Class, Cardex, and more.'
     },
     {
       page: 'Tools/analysis-workbook.html',
@@ -76,15 +144,27 @@
     {
       page: 'HelpDesk/log-analyzer.html',
       type: 'spotlight',
-      target: '.input-cards',
-      placement: 'top',
-      title: 'Triage a log in seconds',
-      body: 'Paste a browser-console dump or pick an agent <code>.out.log</code> file. The analyzer surfaces the relevant lines and returns a triage verdict — fast first pass before you open a ticket.'
+      target: '.input-card[data-mode="console"]',
+      placement: 'right',
+      action: function () { fillInput(document.getElementById('input-console'), DEMO_CONSOLE); },
+      actionDelay: 600,
+      title: 'Browser console paste',
+      body: 'We pasted a real console capture — a TLS cert failure plus a caught TypeError, wrapped in font-fallback 404s and AngularJS stack frames. The analyzer surfaces the two critical signals and suppresses the noise. <strong>Verdict appears below.</strong>'
+    },
+    {
+      page: 'HelpDesk/log-analyzer.html',
+      type: 'spotlight',
+      target: '.input-card[data-mode="agent"]',
+      placement: 'left',
+      action: function () { fillInput(document.getElementById('input-agent'), DEMO_AGENT); },
+      actionDelay: 600,
+      title: 'RR agent log paste',
+      body: 'Now a healthy agent <code>.out.log</code> slice — two heartbeats plus two routine SqlExceptionHelper WARNs. The analyzer recognizes the Hibernate noise as benign and clears the run. <strong>Verdict refreshes below.</strong>'
     },
     {
       page: 'rapidreconciler-help.html',
       type: 'center',
-      title: 'You’re set',
+      title: 'You\'re set',
       body: 'Pick a destination card below to get started. You can re-launch this tour any time from the link in the top banner.'
     }
   ];
@@ -259,7 +339,15 @@
     }
 
     if (typeof step.action === 'function') {
-      try { step.action(target); } catch (e) { /* non-fatal */ }
+      var runAction = function () {
+        try { step.action(target); } catch (e) { /* non-fatal */ }
+      };
+      // Demo actions (typing into a search input, pasting log content, etc.)
+      // often need to wait for the page's own JS to finish wiring up — Lunr
+      // index loading on University, scenario-index fetch on the Help Desk,
+      // etc. step.actionDelay lets each step opt into that wait.
+      if (step.actionDelay) setTimeout(runAction, step.actionDelay);
+      else runAction();
     }
 
     target.scrollIntoView({ behavior: 'smooth', block: 'center' });
