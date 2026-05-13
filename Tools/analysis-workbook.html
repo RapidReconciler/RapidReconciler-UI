@@ -3647,13 +3647,20 @@ const TransactionDetailTemplate = {
     const unassigned = rows.filter(r => /unassigned/i.test(r.source));
     const dmaas = rows.filter(r => /dmaa/i.test(r.source));
 
+    // Orders section — present in some exports, absent in others. The
+    // section has its own column header row (identified by C == "Orders"
+    // case-insensitive) with DIFFERENT column meanings from the main
+    // header row at row 2 (e.g. column O is LineTy here, not Ext).
+    // When absent, data.orders is [] and Pattern 5.7 simply doesn't fire.
+    const orders = this._parseOrdersSection(ws);
+
     const f4111Tot = f4111Rows.reduce((a, r) => a + r.cardexAmt, 0);
     const f0911InvTot = f0911Inv.reduce((a, r) => a + r.ledgerAmt, 0);
     const variance = f4111Tot - f0911InvTot;
 
     return {
       sheetName: ws.name, headerRow: headerRowNum, rows,
-      docHeader, rrSummary, f4111Rows, f0911Inv, f0911Exp, unassigned, dmaas,
+      docHeader, rrSummary, f4111Rows, f0911Inv, f0911Exp, unassigned, dmaas, orders,
       f4111Tot, f0911InvTot, variance,
       doc: docHeader ? docHeader.doc : (rows[0] && rows[0].doc) || '?',
       dt: docHeader ? docHeader.dt : '?',
@@ -3663,6 +3670,82 @@ const TransactionDetailTemplate = {
       period: docHeader ? docHeader.period : (rows[0] && rows[0].period) || '?',
       account: docHeader ? docHeader.account : (rows[0] && rows[0].account) || ''
     };
+  },
+
+  // Parse the Orders section if present. Finds a row where column C equals
+  // "Orders" (case-insensitive) — that's the section's own column-header
+  // row — then reads column letters → field names from that row, then
+  // collects subsequent data rows until the next section header is hit
+  // (B or C starts with a known section marker). Returns [] if no Orders
+  // section is found, which is the normal case for many exports.
+  //
+  // The Orders section's column meanings differ from the main header row
+  // at row 2 (e.g. column O is LineTy here, not Ext), so we use this local
+  // column map only for these rows.
+  _parseOrdersSection(ws) {
+    const maxRow = ws.actualRowCount || ws.rowCount;
+    let headerRow = -1;
+    // Find the Orders header row
+    for (let r = 1; r <= maxRow; r++) {
+      const c = ws.getCell('C' + r).value;
+      const text = c == null ? '' : String(typeof c === 'object' ? (c.text || c.result || c) : c).trim();
+      if (/^orders$/i.test(text)) { headerRow = r; break; }
+    }
+    if (headerRow < 0) return [];
+
+    // Read the column map from the Orders header row (B through AB).
+    const colMap = {};   // { 'linety': 'O', 'qty': 'U', ... }
+    const COLS = ['B','C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','X','Y','Z','AA','AB'];
+    for (const col of COLS) {
+      const v = ws.getCell(col + headerRow).value;
+      if (v == null) continue;
+      const label = String(typeof v === 'object' ? (v.text || v.result || v) : v).toLowerCase().replace(/\s+/g, '').trim();
+      if (label) colMap[label] = col;
+    }
+    const cellVal = (r, fieldName) => {
+      const col = colMap[fieldName];
+      if (!col) return null;
+      const v = ws.getCell(col + r).value;
+      if (v == null) return null;
+      if (typeof v === 'object') return v.text || v.result !== undefined ? v.result : v;
+      return v;
+    };
+
+    // Collect order rows from headerRow+1 until the next section break.
+    // A new section is signalled by column B containing a recognized
+    // section marker, OR column C containing one (e.g. "F4111 Data",
+    // "F0911 Inv Acct", "DMAAIs", "RR Summary", "RapidRec Tot", etc.).
+    const sectionMarker = /^(f4111|f0911|dmaa|rr\s*summary|rapidrec|unassigned|cardex\s*tot|gl\s*tot|rapidrec\s*tot)/i;
+    const orders = [];
+    for (let r = headerRow + 1; r <= maxRow; r++) {
+      const bVal = ws.getCell('B' + r).value;
+      const cVal = ws.getCell('C' + r).value;
+      const bText = bVal == null ? '' : String(typeof bVal === 'object' ? (bVal.text || bVal.result || bVal) : bVal).trim();
+      const cText = cVal == null ? '' : String(typeof cVal === 'object' ? (cVal.text || cVal.result || cVal) : cVal).trim();
+      if (sectionMarker.test(bText) || sectionMarker.test(cText)) break;
+      if (!bText && !cText) continue;   // blank row inside the section — skip but don't break
+      orders.push({
+        rowNumber: r,
+        sectionSource: cText,
+        company: Helpers.str(cellVal(r, 'company')),
+        transdate: cellVal(r, 'transdate'),
+        gldate: cellVal(r, 'gldate'),
+        glclass: Helpers.str(cellVal(r, 'glclass')),
+        doc: Helpers.str(cellVal(r, 'doc')),
+        dt: Helpers.str(cellVal(r, 'dt')),
+        ordernum: Helpers.str(cellVal(r, 'ordernum')),
+        ordtype: Helpers.str(cellVal(r, 'ordtype') || cellVal(r, 'ot')),
+        line: Helpers.str(cellVal(r, 'line')),
+        linety: Helpers.str(cellVal(r, 'linety')).toUpperCase(),
+        nxtsts: Helpers.str(cellVal(r, 'nxtsts')),
+        branch: Helpers.str(cellVal(r, 'branch')),
+        item: Helpers.str(cellVal(r, 'item')),
+        qty: Helpers.num(cellVal(r, 'qty')),
+        unitcost: Helpers.num(cellVal(r, 'unitcost')),
+        comment: Helpers.str(cellVal(r, 'comment'))
+      });
+    }
+    return orders;
   },
 
   classify(data) {
@@ -3761,11 +3844,44 @@ const TransactionDetailTemplate = {
     const isICStandardCostChange = orphanRevalRow
       && Math.abs(Math.abs(variance) - Math.abs(orphanRevalRow.cardexAmt)) < 0.01;
 
+    // Mixed line types on a return / credit doc.
+    //
+    // Fingerprint: doc type is a return/credit type (RI, RM, CR, RE, SR)
+    // AND the Orders section (if present) shows at least one stock line
+    // (LineTy = S, has F4111) AND at least one non-stock line (LineTy != S,
+    // no F4111) on the SAME doc. JDE DMAAIs route by order type + GL class
+    // only — they don't see line type — so when both line kinds share an
+    // order type, the dollars-only credit lines get posted through the
+    // inventory-route AAI just like the stock returns do.
+    //
+    // Gated on data.orders being non-empty — many exports don't include an
+    // Orders section, and we can't make this determination without it. When
+    // the section is missing, the doc falls through to existing patterns
+    // (typically 5.3 cardex-only) unchanged.
+    //
+    // Fires BEFORE pattern 5.3 so the cardex-only "go post the unposted
+    // batch" guidance doesn't preempt this. Posting the batch as-is would
+    // push the misrouted credits into GL and make cleanup harder.
+    const RETURN_DOC_TYPES = /^(RI|RM|CR|RE|SR)$/i;
+    const ordersForThisDoc = (data.orders || []).filter(o => o.doc === data.doc);
+    const lineTypesOnDoc = new Set(ordersForThisDoc.map(o => o.linety).filter(Boolean));
+    const stockLines = ordersForThisDoc.filter(o => o.linety === 'S');
+    const nonStockLines = ordersForThisDoc.filter(o => o.linety && o.linety !== 'S');
+    const isLineTypeMix = data.dt
+      && RETURN_DOC_TYPES.test(data.dt)
+      && ordersForThisDoc.length >= 2
+      && stockLines.length >= 1
+      && nonStockLines.length >= 1
+      && lineTypesOnDoc.size >= 2;
+
     // Pattern classification
     let pattern, patternLabel, patternExplanation;
     if (data.unassigned.length) {
       pattern = '5.1'; patternLabel = 'Unassigned Account — Missing Model Table Entry';
       patternExplanation = `The Unassigned section at the top shows ${data.unassigned.length} row(s) whose GL class code has no entry in DMAAI model table 4152.  RapidReconciler cannot assign an account, so those cardex amounts are excluded from the reconciliation — the displayed variance is partial.  Add the missing GL class to the model table in JDE.`;
+    } else if (isLineTypeMix) {
+      pattern = '5.7'; patternLabel = 'Mixed line types on a return doc (DMAAI routes both through the same AAI)';
+      patternExplanation = this._lineTypeMixExplanation(data, stockLines, nonStockLines);
     } else if (isNetZeroPair) {
       pattern = '5.5'; patternLabel = 'Net-zero F0911 pair (DMAAI complement misrouted)';
       // Pick the most specific pair we know about: explicit comment in
@@ -3841,6 +3957,15 @@ const TransactionDetailTemplate = {
       // activity but no matching F0911 counterpart.
       const r = orphanRevalRow;
       evidence.push({ severity: 'Root cause', label: `${r.dt || data.dt} doc ${r.doc || data.doc} (cardex revaluation)  →  Row ${r.rowNumber}`, description: `Cardex ${Helpers.money(r.cardexAmt)}${r.comment ? ' · ' + r.comment.trim() : ''}\nNo F0911 counterpart on either the inventory or expense side — variance equals this amount exactly.`, sourceRow: r.rowNumber });
+    } else if (pattern === '5.7') {
+      // Surface the stock + non-stock Orders rows side by side so the
+      // user can see the mix concretely.
+      for (const s of stockLines) {
+        evidence.push({ severity: 'Root cause', label: `Order line ${s.line || '?'} (stock, LineTy ${s.linety})  →  Row ${s.rowNumber}`, description: `Doc ${s.doc} · OrdType ${s.ordtype} · qty ${s.qty}${s.item ? ' · ' + s.item : ''}\nStock line — has an F4111 cardex record for the real inventory return.`, sourceRow: s.rowNumber });
+      }
+      for (const n of nonStockLines) {
+        evidence.push({ severity: 'Root cause', label: `Order line ${n.line || '?'} (non-stock, LineTy ${n.linety})  →  Row ${n.rowNumber}`, description: `Doc ${n.doc} · OrdType ${n.ordtype} · qty ${n.qty}${n.comment ? ' · ' + n.comment.trim() : ''}\nNon-stock line — no F4111 record, dollars-only. Sharing the order type with the stock line above sends both through the same DMAAI route.`, sourceRow: n.rowNumber });
+      }
     } else if (pattern === '5.2' && data.f0911Inv[0]) {
       evidence.push({ severity: 'Root cause', label: `${data.f0911Inv[0].bt} doc ${data.f0911Inv[0].doc}  →  Row ${data.f0911Inv[0].rowNumber}`, description: `GL entry on account ${data.f0911Inv[0].account} · ${Helpers.money(data.f0911Inv[0].ledgerAmt)}\n${data.f0911Inv[0].comment || 'No cardex counterpart — the variance is entirely on this row'}`, sourceRow: data.f0911Inv[0].rowNumber });
     } else if (pattern === '5.3' && data.f4111Rows[0]) {
@@ -3957,7 +4082,23 @@ const TransactionDetailTemplate = {
         orphan ? Helpers.money(Math.abs(orphan.cardexAmt)) : ''
       );
     }
+    if (pattern === '5.7') {
+      return this._lineTypeMixResolution(data);
+    }
     return `Step 1.  Compare F4111 and F0911 totals at the GL class + batch level individually to isolate which combination is the source of the variance.\n\nStep 2.  For IM / IC / IH documents, query F0911 for the GL document number across all order numbers — R31802A summarizes GL entries by account, so a single GL entry may cover multiple work orders.\n\nStep 3.  If the GL entry legitimately belongs only to this document, query F0911 for batch type JE or IH entries against the same account for the period — a miscoded manual journal entry may be the source.\n\nStep 4.  If the variance is confirmed as a cross-work-order summarization, suspend the record in RapidReconciler with a note.  Otherwise post a reversing journal entry.`;
+  },
+
+  // Pattern 5.7 — narrative built from the actual Orders rows on this doc.
+  _lineTypeMixExplanation(data, stockLines, nonStockLines) {
+    const ordType = (stockLines[0] && stockLines[0].ordtype) || data.ot || 'this order type';
+    const nonStockTypes = Array.from(new Set(nonStockLines.map(n => n.linety))).filter(Boolean).join(' / ');
+    const stockCount = stockLines.length;
+    const nonStockCount = nonStockLines.length;
+    return `This document has ${stockCount} stock line${stockCount === 1 ? '' : 's'} (LineTy S — real inventory movement, with an F4111 cardex record) and ${nonStockCount} non-stock line${nonStockCount === 1 ? '' : 's'} (LineTy ${nonStockTypes} — dollars-only, no F4111 record), all under order type ${ordType}.\n\nJDE's DMAAI configuration routes by order type and GL class only — it does not see line type. When both kinds of lines share an order type, every line posts through the same AAI route. That route is correct for the stock returns (which need an inventory account hit) and wrong for the dollars-only credits (which should land on a credit / variance account, not inventory). The variance on this document is the misrouted portion.\n\nThe systemic fix is to split returns and credits into separate order types in JDE so DMAAI can route each correctly. Until that happens, every period close requires a manual reconciling entry to fix the mismatched postings.`;
+  },
+
+  _lineTypeMixResolution(data) {
+    return `Do NOT post the unposted batch as-is via R09801. That would push the misrouted dollars-only lines into GL and compound the cleanup at close.\n\nStep 1.  Identify which Order section lines are stock (LineTy S — these are the legitimate inventory returns and post correctly) and which are non-stock (LineTy is anything else — these are the misrouted dollars-only credits). The Evidence list above flags both groups with their source rows.\n\nStep 2.  Interim fix for this document: post a manual journal entry that re-routes the non-stock line amounts off the inventory account and onto the correct credit / variance account that cost-accounting has designated for dollars-only adjustments. Confirm the account with your cost-accounting team before posting.\n\nStep 3.  Systemic fix (recommended, prevents the issue going forward): in JDE, define separate order types — one for stock returns, one for dollars-only credits / adjustments. Update the order-entry workflow so each line type lands on the appropriate order type. DMAAI then routes each correctly without manual intervention at close.\n\nStep 4.  Once the systemic fix is in place, audit any open RI / RM / CR / RE / SR documents to see if they need the same re-routing treatment. Future docs entered after the order-type split will not hit this issue.\n\nStep 5.  Refresh RapidReconciler and re-analyze. The variance on this document should clear once the JE in Step 2 is posted.`;
   }
 };
 Templates.register(TransactionDetailTemplate);
