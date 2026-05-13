@@ -74,7 +74,7 @@
       target: '.destinations',
       placement: 'top',
       title: 'Three customer-facing surfaces',
-      body: 'University for how-to. Help Desk for troubleshooting. Analysis Workbook Generator for turning a supported RapidReconciler export into a formatted analysis workbook. We\'ll stop on each of them next.'
+      body: 'University for how-to. Help Desk for troubleshooting. RapidReconciler Export Analyzer for turning a supported export into a formatted analysis workbook. We\'ll stop on each of them next.'
     },
     {
       page: 'RRUniversity/rapidreconciler-university.html',
