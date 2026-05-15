@@ -810,6 +810,15 @@
         <li data-target="home"><button onclick="showView('home')">Index</button></li>
         <li data-target="stock-valuation"><button onclick="showView('topic-stock-valuation')">Stock Valuation total differs</button></li>
         <li data-target="calculated-cost"><button onclick="showView('topic-calculated-cost')">Calculated cost differs from JDE</button></li>
+      </ul>
+
+      <div class="sidebar-section-label">Concepts</div>
+      <ul class="sidebar-nav">
+        <li data-target="cardex-date-logic"><button onclick="showView('topic-cardex-date-logic')">Cardex date logic</button></li>
+      </ul>
+
+      <div class="sidebar-section-label">Get help</div>
+      <ul class="sidebar-nav">
         <li data-target="email-support"><button onclick="showView('topic-email-support')">Email RR Support</button></li>
       </ul>
     </aside>
@@ -842,6 +851,10 @@
               <td><a href="javascript:void(0)" onclick="showView('topic-calculated-cost')">Calculated cost differs from JDE</a></td>
             </tr>
             <tr>
+              <td>A transaction appears in a different period in RR than the period its <strong>JDE GL date</strong> would suggest</td>
+              <td><a href="javascript:void(0)" onclick="showView('topic-cardex-date-logic')">Cardex date logic</a></td>
+            </tr>
+            <tr>
               <td>None of the above, or the steps in a topic above didn&rsquo;t resolve it</td>
               <td><a href="javascript:void(0)" onclick="showView('topic-email-support')">Email RR Support</a></td>
             </tr>
@@ -857,6 +870,8 @@
             <dd>Make sure both reports are pinned to the same as-of date and the same set of branches / business units. Most discrepancies vanish once the inputs match.</dd>
             <dt>Calculated cost</dt>
             <dd>RR&rsquo;s calculated cost is <strong>amount on hand &divide; quantity on hand</strong> &mdash; a derived value, not pulled from JDE&rsquo;s cost record. JDE has no cost history, so RR shows the calculated value as a reference.</dd>
+            <dt>Period assignment</dt>
+            <dd>RR places each cardex transaction into a fiscal period using a deterministic rule based on the JDE GL date and creation date. See <a href="javascript:void(0)" onclick="showView('topic-cardex-date-logic')">Cardex date logic</a> for the full rule and how Inventory Basis vs. GL Basis accounting changes which period a transaction lands in.</dd>
             <dt>Support email</dt>
             <dd><a href="mailto:rrsupport@getgsi.com">rrsupport@getgsi.com</a></dd>
           </dl>
@@ -889,6 +904,27 @@
         </ul>
         <p>If the JDE report is taken hours, days, or weeks apart from the RR view you&rsquo;re comparing it to, the totals won&rsquo;t match. That&rsquo;s expected, not a bug.</p>
 
+        <h2>How rounding causes a residual amount</h2>
+        <p>Even with the same data and the same as-of moment, the two reports can disagree by a few cents per line because of where the rounding happens in the math.</p>
+        <p>In JDE, item quantities can carry <strong>0 to 6 decimal places</strong> and unit costs are typically stored to <strong>4 decimals</strong>. When the Stock Valuation Report multiplies these together, the extended value is rounded to <strong>2 decimals</strong> for display. The Stock Valuation Report uses one fresh <code>quantity &times; unit cost</code> calculation per line at report time. RapidReconciler, by contrast, <strong>summarizes the cardex transaction amounts</strong> the way they were posted &mdash; each transaction was already rounded to 2 decimals when JDE wrote it, so the running total is a sum of pre-rounded values, not a single multiplication done at report time.</p>
+
+        <div class="callout">
+          <div class="callout-label">Worked example</div>
+          <p>An item with <code>quantity = 3.142857</code> on hand and <code>unit cost = 12.3456</code>:</p>
+          <ul>
+            <li><strong>JDE Stock Valuation:</strong> <code>3.142857 &times; 12.3456 = 38.79989952</code>, rounded to display as <code>$38.80</code>.</li>
+            <li><strong>RR Inventory As-of:</strong> if the on-hand of 3.142857 was built from three separate transactions (each rounded to 2 decimals when posted), the summed amount might land at <code>$38.81</code> &mdash; a <strong>$0.01 residual</strong> from the same underlying movement.</li>
+          </ul>
+          <p>Across thousands of items the residuals accumulate to a small but real difference in the totals.</p>
+        </div>
+
+        <p>The most visible expression of this is a line on the As-of view that shows <strong>zero quantity but a non-zero residual amount</strong> &mdash; the cardex transactions for that item zeroed out the quantity perfectly but left a few cents of cumulative rounding behind.</p>
+
+        <div class="callout warning">
+          <div class="callout-label">Why we don&rsquo;t hide these lines</div>
+          <p>Some customers ask us to suppress the zero-quantity-with-residual lines from the As-of details view. We don&rsquo;t, because removing them creates a <strong>mismatch between the total on the Inventory Reconciliation page and the total on the As-of details page</strong> for the same period. Other customers explicitly want these residuals visible because they investigate them as part of their close. Both views always tie out by design.</p>
+        </div>
+
         <h2>Step 1 &mdash; Confirm the as-of dates match</h2>
         <ol>
           <li>Note the exact <strong>as-of date and time</strong> of the JDE Stock Valuation Report. If the report doesn&rsquo;t print one, the as-of is &ldquo;the moment it ran.&rdquo;</li>
@@ -917,6 +953,9 @@
           <li><strong>End-of-day</strong> &mdash; sales orders or work orders that haven&rsquo;t settled yet.</li>
         </ul>
         <p>The <a href="inventory-reconciliation.html">Inventory Reconciliation</a> walkthrough covers how to drill into each source. If a single line is causing the gap, RR&rsquo;s detail view will show it directly.</p>
+
+        <h2>If you&rsquo;re running a custom or self-generated report</h2>
+        <p>The guidance above assumes you&rsquo;re comparing RR to the standard JDE <em>Stock Valuation Report</em>. If your team is comparing RR to a custom report &mdash; a Smart Form, a UBE you wrote in-house, an Excel export with bespoke logic &mdash; we can&rsquo;t comment on the gap without knowing the exact report definition: which tables it pulls from, how it filters, whether it rounds the same way, and where the as-of cut-off sits. The first step in those cases is to document the report&rsquo;s logic, then match RR&rsquo;s scope and dates to it the same way you would for the standard report.</p>
 
         <h2>When to escalate</h2>
         <p>Email <a href="mailto:rrsupport@getgsi.com">rrsupport@getgsi.com</a> if all of the following are true:</p>
@@ -972,6 +1011,75 @@
         <div class="topic-footer-nav">
           <button class="back-btn" onclick="goHome()">&larr; Back to Index</button>
           <button class="prev-btn" onclick="showView('topic-stock-valuation')">&larr; Previous</button>
+          <button class="next-btn" onclick="showView('topic-email-support')">Next &rarr;</button>
+        </div>
+      </section>
+
+      <!-- ============ TOPIC: CARDEX DATE LOGIC ============ -->
+      <section id="topic-cardex-date-logic" class="view">
+        <h1>Cardex date logic &mdash; how RR assigns a transaction to a period</h1>
+        <p>Every cardex transaction (F4111 row) ends up in exactly one fiscal period in RapidReconciler. The rule for picking that period is deterministic, but it isn&rsquo;t always the JDE GL date you might expect &mdash; especially for transactions that haven&rsquo;t posted to the GL yet, or that carry a future-dated GL. This page explains the rule and the two accounting methods that build on top of it.</p>
+
+        <div class="diamond-divider"><span class="diamond"></span></div>
+
+        <h2>The four-rule period date</h2>
+        <p>For each cardex row, RR walks these rules in order and uses the first one that matches:</p>
+        <ol>
+          <li><strong>GL Date exists and is in the future.</strong> If the cardex row has a GL date but it&rsquo;s after today, RR uses <strong>today</strong> as the period date. (Future-dated GL entries are pulled back to the current period so they don&rsquo;t silently park value in a future period.)</li>
+          <li><strong>GL Date exists.</strong> Otherwise, if there&rsquo;s any GL date on the row, RR uses the <strong>GL date</strong>. This is the normal case for posted activity.</li>
+          <li><strong>No GL date and Creation Date is in the future.</strong> If the row hasn&rsquo;t posted to the GL yet AND its creation date is after today, RR uses <strong>today</strong>. (Same rationale &mdash; no parking value in the future.)</li>
+          <li><strong>Use the Creation Date.</strong> Otherwise, RR uses the <strong>creation date</strong> as the period date. This is what happens for cardex activity that hasn&rsquo;t been batched to the GL yet (work-order completions, sales-order shipments waiting on Sales Update, etc.).</li>
+        </ol>
+
+        <div class="callout">
+          <div class="callout-label">Why a transaction may land in a different period than its JDE GL date</div>
+          <p>If a transaction&rsquo;s GL date is in the future (e.g. a backdated reversal was entered with a forward-dated GL), rule 1 fires and RR places it in the current period &mdash; not the future period the GL would put it in. The transaction will move once it actually posts and the GL date catches up.</p>
+        </div>
+
+        <h2>Why the rule looks the way it does</h2>
+        <p>Each of the three candidate dates has a trade-off:</p>
+        <table>
+          <thead><tr><th>Candidate</th><th>Pro</th><th>Con</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Transaction date</strong> (user-entered)</td><td>Direct user input</td><td>Accuracy &mdash; depends on whoever entered the row</td></tr>
+            <tr><td><strong>Creation date</strong> (system-generated)</td><td>Always present, system-stamped</td><td>Global &ldquo;item update&rdquo; events can shift it</td></tr>
+            <tr><td><strong>GL date</strong></td><td>Ties RR to GL postings</td><td>Doesn&rsquo;t reflect true inventory timing (date the goods actually moved)</td></tr>
+          </tbody>
+        </table>
+        <p>RR&rsquo;s four-rule order balances these &mdash; prefer the GL date when it&rsquo;s available and reasonable, fall back to the creation date when the GL date isn&rsquo;t there yet, and pull future-dated rows back to today so nothing parks ahead of the reporting cut-off.</p>
+
+        <h2>Inventory Basis vs. GL Basis &mdash; the accounting method choice</h2>
+        <p>The four-rule period date defines <em>where the cardex row first lands</em>. The accounting method defines <em>what happens when its GL posting later arrives in a different period</em>. There are two options:</p>
+
+        <h3>Inventory Basis (default)</h3>
+        <ul>
+          <li>The transaction stays in the period it was originally placed in (per the four-rule logic).</li>
+          <li>When the GL posts later in a different period, the variance reclassifies from <strong>End of Day Variance</strong> to a <strong>Period Variance</strong>.</li>
+          <li>Prior period totals don&rsquo;t shift around &mdash; once a period is closed, its cardex placement is sticky.</li>
+        </ul>
+
+        <h3>GL Basis</h3>
+        <ul>
+          <li>When the GL posts, the cardex transaction moves to the <strong>GL&rsquo;s period</strong>.</li>
+          <li>No &ldquo;Period Variance&rdquo; classification &mdash; everything aligns to GL by construction.</li>
+          <li>Prior periods&rsquo; out-of-balance figures can change as late GL postings flow in.</li>
+        </ul>
+
+        <p>Inventory Basis is the default and what most customers use because it preserves period totals once close is complete. GL Basis is occasionally chosen when the customer wants every cardex row to track the GL exactly, even if that means historical totals change retroactively. Confirm which method your instance is on before investigating a period-placement question &mdash; the right answer differs between the two.</p>
+
+        <h2>Where this shows up when comparing to JDE</h2>
+        <p>A typical mismatch caused by the date logic:</p>
+        <ul>
+          <li>A work-order completion happened on the last day of Period 6 but hasn&rsquo;t been batched to the GL yet.</li>
+          <li>JDE Stock Status, run on Period 7 Day 1, includes the on-hand impact of that completion because the quantity is already in the item-balance tables.</li>
+          <li>RR places the cardex row in Period 6 (rule 4, creation date), so the Period 7 Inventory As-of total in RR <em>excludes</em> it &mdash; the totals diverge by exactly that transaction&rsquo;s extended value.</li>
+          <li>Once the work-order completion is batched and the GL posts, the row reclassifies (Inventory Basis: into a Period Variance staying in Period 6; GL Basis: moves to whatever period the GL date lands in).</li>
+        </ul>
+        <p>When you&rsquo;re reconciling a specific gap and the date logic looks like the cause, drill into the Inventory Reconciliation page&rsquo;s variance breakdown for the period &mdash; End of Day Variance, Period Variance, and Transaction Variance each map to a different scenario in the rules above.</p>
+
+        <div class="topic-footer-nav">
+          <button class="back-btn" onclick="goHome()">&larr; Back to Index</button>
+          <button class="prev-btn" onclick="showView('topic-calculated-cost')">&larr; Previous</button>
           <button class="next-btn" onclick="showView('topic-email-support')">Next &rarr;</button>
         </div>
       </section>
