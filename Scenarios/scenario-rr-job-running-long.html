@@ -154,12 +154,13 @@
           <li><strong>Current run duration</strong> &mdash; how long today&rsquo;s job has been running.</li>
           <li><strong>Average run time</strong> &mdash; how long it usually takes to complete.</li>
         </ul>
-        <p>If the current run is roughly in line with the average, give it a little more time and check back. If it&rsquo;s considerably longer than the average, the job is stuck on the SQL Server side &mdash; draft a note to your IT using the button below. The email asks them to stop the SQL job, let it roll back, and re-run it (the standard fix), and includes the deeper checks if it hangs again.</p>
+        <p>If the current run is roughly in line with the average, give it a little more time and check back. If it&rsquo;s considerably longer than the average, the job is stuck on the SQL Server side &mdash; draft a note to your IT using the button below. The email asks them to stop the SQL job, let it roll back, and re-run it (the standard fix), includes the deeper checks if it hangs again, and recommends proactive monitoring so your DBA can be alerted next time without waiting on GSI to flag it.</p>
+        <p>In GSI&rsquo;s experience this is usually a transient timing issue inside SQL Server &mdash; the job almost always completes normally on the re-run.</p>
         <div class="handoff-card" role="note" style="margin-top: 16px;">
           <div class="handoff-card-icon" aria-hidden="true">&#9993;</div>
           <div class="handoff-card-text">
             <div class="handoff-card-title">Send to your IT</div>
-            <div class="handoff-card-desc">Draft an email to IT with the SQL job stop / rollback / re-run procedure and the deeper investigation checks pre-filled.</div>
+            <div class="handoff-card-desc">Draft an email to IT with the standard stop / rollback / re-run procedure, the deeper investigation checks, and proactive-monitoring recommendations pre-filled.</div>
           </div>
           <button type="button" class="handoff-card-btn" onclick="composeITEmail(this.closest('.step-card'))">
             Generate IT email <span>&rarr;</span>
@@ -219,14 +220,25 @@
       'Recent SQL Server changes — patches, service-account changes, antivirus or backup software added, log shipping or replication enabled. Anything that changed since the last successful run is suspect.',
     ].map(line => '  - ' + line).join('\n');
 
+    const proactiveMonitoring = [
+      'Configure SQL Server Database Mail on the RapidReconciler database server if it isn\'t already set up.',
+      'Add a SQL Server Agent Operator with your on-call DBA email address (and a distribution list if you have one).',
+      'Create a small "RR job running long" monitor: a SQL Agent job that runs every 5 minutes and queries msdb.dbo.sysjobactivity for the RapidReconciler job where stop_execution_date IS NULL. If start_execution_date is older than a threshold (e.g. 1.5x–2x the historical average from msdb.dbo.sysjobhistory), call msdb.dbo.sp_send_dbmail to notify the operator. This gives your team a heads-up before users notice the amber status light.',
+      'Alternative: if you already run a SQL Server monitoring tool (Redgate SQL Monitor, SolarWinds DPA, Idera, Datadog, etc.), add a duration-threshold alert on the RapidReconciler SQL Agent job there instead — same effect, no custom T-SQL to maintain.',
+      'Context: GSI watches the same condition on our side, which is why you may hear from us when a run goes long. The goal of monitoring on your end is to give your DBA team the same head start independently of us.',
+    ].map(line => '  - ' + line).join('\n');
+
     const subject = 'RapidReconciler — job running longer than usual';
     const body =
       'Hi,\n\n' +
       'The RapidReconciler System Status light is flashing amber this morning. The hover pop-up shows the current run is considerably longer than the average run time, so the job is stuck on the SQL Server side rather than just slow. There\'s no error — it\'s just not completing.\n\n' +
-      'Could you do the standard fix first? Stop the running SQL job, let it roll back, and re-run it. Most of the time that clears it:\n\n' +
+      'GSI has seen this behavior before. It is typically a transient timing issue within SQL Server — the standard fix is to stop the running job, let it roll back, and re-run it, and the job almost always completes successfully on the next attempt.\n\n' +
+      'Standard fix:\n\n' +
       standardFix + '\n\n' +
       'If the re-run hangs at the same point, something is consistently blocking the job. Please check, in this order:\n\n' +
       ifHangsAgain + '\n\n' +
+      'Proactive monitoring — so your team hears about this before GSI has to flag it:\n\n' +
+      proactiveMonitoring + '\n\n' +
       'For assistance with any of the above, contact RR support at rrsupport@getgsi.com.\n\n' +
       'Please let me know when complete.\n\n' +
       'Thanks!';
