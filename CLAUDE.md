@@ -3,17 +3,33 @@
 A static HTML knowledge base for GSI RapidReconciler, deployed via GitHub Pages
 at `https://rapidreconciler.github.io/RapidReconciler-AI/`.
 
-The entry point for everything is `rapidreconciler-hub.html` at the repo root.
+Two top-level landing pages at the repo root:
+
+- **`rapidreconciler-help.html`** &mdash; the **customer-facing cover page**
+  (Help portal). Three destination cards: University, Help Desk, Export
+  Analyzer. The in-app Help button and external links target this page.
+- **`rapidreconciler-hub.html`** &mdash; the **internal staff hub**. Routes
+  GSI sales, tech, and support staff to per-team landing pages. Not
+  customer-facing.
 
 ---
 
 ## Folder structure
 
 ```
-RapidReconciler-AI/                  ← repo root, hub lives here
-├── rapidreconciler-hub.html         ← top-level navigation
+RapidReconciler-AI/                  ← repo root
+├── rapidreconciler-help.html        ← customer-facing cover (3 destination cards)
+├── rapidreconciler-hub.html         ← internal staff hub (per-team landing pages)
+├── release-notes.html               ← auto-updated by GHA on push to main
 ├── 404.html                         ← GH Pages fallback for missing-repo-name URLs
 ├── CLAUDE.md                        ← this file
+│
+├── .github/
+│   ├── scripts/
+│   │   └── update_release_notes.py  ← prepends commit subject+body to release-notes.html
+│   └── workflows/
+│       ├── refresh-indices.yml      ← regenerates the 3 search-index JSONs
+│       └── update-release-notes.yml ← runs the script above on push to main
 │
 ├── HelpDesk/                        ← Help desk: scenario search + Helpdesk Tech home
 │   ├── troubleshooting.html         ← canonical Help Desk (techs + customers)
@@ -89,6 +105,36 @@ segment, producing 404s.
 
 **Never write `/RapidReconciler-AI/...`** absolute paths — works only on the
 deployed site, breaks every other context.
+
+---
+
+## Architecture: Customer-facing cover page
+
+`rapidreconciler-help.html` is the landing page customers see when they
+click the in-app Help button (via the `RRUniversity/help.html` redirect
+shim) or open the public Help portal.
+
+- **Wordmark banner** with brand, `HELP` + `Beta` pills, a `Take the
+  90-second tour` button, and a `Release notes` link (pill, mirrors the
+  tour button styling so they read as a pair).
+- **Split hero** &mdash; title/lede on the left, a 3-card fanned product
+  collage on the right (hidden under 960px). Below the lede is a
+  **persona-chip row** (`.persona-chips`) with three chips: *I am using
+  the application*, *I am supporting the application*, *I need to
+  analyze an export*. Each chip has a `data-target` (`university` /
+  `helpdesk` / `analyzer`).
+- **3 destination cards** (`.destination-card`) for University, Help
+  Desk, and the Export Analyzer. Each card carries a matching
+  `data-card` attribute so the chip handler can find it.
+
+**Chip → spotlight behavior**: clicking a chip adds `.has-spotlight` to
+the `.destinations` container and `.is-spotlit` to the matching card.
+CSS dims the non-spotlit cards to 38% opacity + desaturate and gives
+the chosen card an accent-colored glow ring with a slow pulse
+(`@keyframes persona-pulse-*`). Re-clicking the active chip clears the
+state. Respects `prefers-reduced-motion`. When editing cards, **preserve
+the `data-card` attribute** &mdash; without it the chip can't find the
+card to spotlight.
 
 ---
 
@@ -250,6 +296,36 @@ apply.
 
 ---
 
+## Release notes (auto-published)
+
+`release-notes.html` at the repo root is the customer-readable changelog
+linked from the cover page's wordmark banner. Entries are appended
+**newest-first** by `.github/workflows/update-release-notes.yml`, which
+runs `.github/scripts/update_release_notes.py` on every push to `main`.
+
+The script:
+
+- Walks `github.event.before..github.sha` (or `HEAD~1..HEAD` on manual
+  dispatch).
+- Skips commits whose message contains `[skip release notes]`,
+  `[skip-release-notes]`, or `[skip ci]`, or whose subject starts with
+  `chore: refresh search indices` or `chore: append release notes`.
+- HTML-escapes the subject + body, strips known git trailers
+  (`Co-Authored-By`, `Signed-off-by`, etc.), and inserts a new
+  `<article class="rn-entry">` block immediately after the
+  `<!-- RELEASE_NOTES_INSERTION_POINT -->` marker.
+- **Caps the page at `MAX_ENTRIES` (100)** &mdash; after each prepend,
+  trims the oldest articles past the cap so the file doesn't grow
+  unbounded. Older changes remain reachable via the GitHub commit-
+  history link in the page footer.
+- Commits with `chore: append release notes [skip release notes][skip ci]`
+  to prevent feedback loops.
+
+**To keep a commit out of release notes**, add `[skip release notes]` to
+the subject or body. (Use sparingly &mdash; the default is "publish".)
+
+---
+
 ## Common pitfalls
 
 - **Adding `../` to a hub link.** The hub is at root; this dumps the visitor
@@ -262,8 +338,10 @@ apply.
 - **Tier-based language.** The "Tier 1 / Tier 2 / Tier 3" framing was
   retired across the project. Don't reintroduce it.
 - **Removing tracked attributes when editing cards.** `data-search`,
-  `data-common`, `data-category` all drive search/filter logic. Preserve
-  them when editing card markup.
+  `data-common`, `data-category` drive search/filter logic on Help Desk
+  cards; `data-card` (on cover destination cards) and `data-target` (on
+  cover persona chips) drive the spotlight handler. Preserve all of
+  these when editing card markup.
 
 ---
 
@@ -298,19 +376,39 @@ apply.
 
 ## Workflow
 
-- **After every commit-and-push, pause and prompt the user to sync their
-  local worktree.** The owner runs in a separate clone and needs to pull
-  origin/main into their local main before any follow-up work happens on
-  top. Standard prompt format: *"Pushed `<sha>`. Pull into your local main
-  when ready, then say synced and we'll keep going."* Wait for the user's
-  confirmation (typically "synced" or "done") before starting the next
-  change. This keeps the local environment lined up with origin and lets
-  the user spot-check the GitHub Pages deploy if they want.
+- **Work on a worktree branch and squash-merge to main when a chunk is
+  release-worthy.** Don't commit directly to main during multi-task
+  sessions. Accumulate multiple per-step commits on the worktree branch
+  (e.g. `claude/<adjective-name>-<sha>`), then squash-merge to main as
+  a single commit whose subject + body describe the released change.
+  That squash commit becomes one entry in `release-notes.html`. Trade-
+  off accepted: one extra merge step at the end vs. the noise of many
+  per-step commits in main's history and in the release-notes page.
 
-- **Auto-regen commits land after every push that touches indexed files.**
-  A GitHub Action regenerates `RRUniversity/search-index.json` and
-  `Scenarios/scenarios-index.json` (and the install-scenarios index) and
-  pushes a `chore: refresh search indices [skip ci]` commit. Don't try to
-  hand-edit the index files locally — they'll be overwritten. The
-  user-prompt-to-sync above gives the user time to pull both the main
-  commit AND the follow-up regen commit before we add anything on top.
+- **Hold commits during a working session if the user signals they want
+  to batch.** When the user opens with "several tasks lined up" or asks
+  to "avoid a large number of commits," stage edits without committing
+  until you hit a natural breakpoint, then ask before pushing. (Saved
+  to memory as `feedback_batched_commits.md`.)
+
+- **After every push to main, pause and prompt the user to sync their
+  local clone.** The owner runs in a separate clone and needs to pull
+  origin/main into their local main before any follow-up work happens
+  on top. Standard prompt format: *"Pushed `<sha>`. Pull into your
+  local main when ready, then say synced and we'll keep going."* Wait
+  for the user's confirmation before starting the next change. Two
+  bot-side commits typically land per push: the search-indices refresh
+  and the release-notes append, both with `[skip ci]` in the subject.
+
+- **Auto-regen + release-notes commits land after every push to main.**
+  Two GitHub Actions fire:
+    - `refresh-indices.yml` regenerates the three search indices when
+      relevant HTML or build scripts change, and pushes back a
+      `chore: refresh search indices [skip ci]` commit.
+    - `update-release-notes.yml` appends a `<article>` entry to
+      `release-notes.html` for every non-skip commit in the push, and
+      pushes back a `chore: append release notes [skip release notes]
+      [skip ci]` commit. Both workflows ignore each other's commits via
+      `paths-ignore` and job-level `if:` guards.
+  Don't try to hand-edit the regenerated index files or expect the
+  release-notes file to be untouched between sessions.
