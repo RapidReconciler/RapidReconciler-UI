@@ -2,17 +2,30 @@
 """Append entries to release-notes.html for new commits in a BEFORE..AFTER range.
 
 Invoked by .github/workflows/update-release-notes.yml on every push to main.
-For each commit in the range that isn't filtered out, builds an <article>
-block and inserts it directly after the RELEASE_NOTES_INSERTION_POINT marker
-so the newest entry stays at the top of the rendered page.
 
-Filtering rules (commits skipped):
+Publish model: **opt-in via `Release-Note:` trailer.** A commit only produces
+an entry if its body contains a `Release-Note:` line. The trailer's content
+(everything from the colon through end-of-body, minus other trailer blocks
+like Co-Authored-By) becomes the entry text — the commit subject and body
+are NOT published. This keeps engineering-detailed commit messages (which
+often contain customer doc numbers, dollar amounts, etc.) off the customer-
+facing page; authors write a deliberately customer-safe note in the trailer.
+
+A commit with no `Release-Note:` trailer is silently skipped.
+
+Filtering rules (always win, even with a Release-Note: trailer):
   - Subject or body contains: [skip release notes], [skip-release-notes], [skip ci]
   - Subject starts with:      "chore: refresh search indices"   (auto-regen workflow)
   - Subject starts with:      "chore: append release notes"     (this workflow's own commits)
 
-Common trailers (Co-Authored-By, Signed-off-by, etc.) are stripped from the body
-before rendering, since they aren't useful in release notes.
+Trailer format examples:
+
+  Release-Note: One-line customer-safe summary of what shipped.
+
+  Release-Note:
+  Multi-paragraph notes are also fine — everything from the colon
+  through the end of the body (minus trailing Co-Authored-By etc.)
+  becomes the entry. Blank lines separate paragraphs in the rendered output.
 """
 
 import html
@@ -22,9 +35,14 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-REPO_URL    = "https://github.com/RapidReconciler/RapidReconciler-AI"
 NOTES_FILE  = Path("release-notes.html")
 MARKER      = "<!-- RELEASE_NOTES_INSERTION_POINT -->"
+# Empty-state placeholder pattern. Removed from the page (along with its
+# explanatory comment) the first time a real entry is inserted.
+EMPTY_STATE_RE = re.compile(
+    r'\n\n  <!-- Empty-state placeholder\..*?</div>\n',
+    re.DOTALL,
+)
 
 # Cap on how many <article class="rn-entry"> blocks live on the page. After
 # every prepend the script trims the oldest entries past this count so the
@@ -98,6 +116,60 @@ def strip_trailers(body: str) -> str:
     return "\n".join(lines).rstrip()
 
 
+# Matches the start of a Release-Note: trailer line. Case-insensitive so
+# "Release-Note:", "release-note:", and "RELEASE-NOTE:" all work.
+RELEASE_NOTE_LINE_RE = re.compile(r"^Release-Note:[ \t]*(.*)$", re.IGNORECASE)
+
+
+def extract_release_note(body: str) -> str | None:
+    """Return the customer-facing release-note content from a commit body, or
+    None if there's no `Release-Note:` trailer. The content runs from the
+    colon through end-of-body, with any following known-trailer block
+    (Co-Authored-By, etc.) stripped off the tail.
+
+    Single-line and multi-paragraph forms both work:
+
+        Release-Note: A new persona selector helps you self-route.
+
+        Release-Note:
+        Multi-paragraph notes are fine. Paragraphs are separated by
+        blank lines and rendered as separate <p> elements.
+
+        Co-Authored-By: ...
+    """
+    lines = body.split("\n")
+    start_idx = None
+    first_line_content = ""
+    for i, line in enumerate(lines):
+        m = RELEASE_NOTE_LINE_RE.match(line or "")
+        if m:
+            start_idx = i
+            first_line_content = m.group(1)
+            break
+    if start_idx is None:
+        return None
+
+    # Collect from the trailer onward, replacing the first line with just
+    # the content after "Release-Note:".
+    rn_lines = [first_line_content] + lines[start_idx + 1:]
+
+    # Strip any *trailing* known-trailer block (Co-Authored-By, etc.)
+    end_idx = len(rn_lines)
+    while end_idx > 0 and TRAILER_RE.match(rn_lines[end_idx - 1] or ""):
+        end_idx -= 1
+    rn_lines = rn_lines[:end_idx]
+
+    # Strip trailing blank lines
+    while rn_lines and not rn_lines[-1].strip():
+        rn_lines.pop()
+    # Strip leading blank lines (e.g. the form where colon is on its own line)
+    while rn_lines and not rn_lines[0].strip():
+        rn_lines.pop(0)
+
+    content = "\n".join(rn_lines).strip()
+    return content or None
+
+
 def render_paragraphs(text: str) -> str:
     text = text.strip()
     if not text:
@@ -111,18 +183,19 @@ def render_paragraphs(text: str) -> str:
 
 
 def build_entry(commit) -> str:
+    # The SHA is kept as a data-attribute for grep / inspect, but is no longer
+    # rendered or linked — this page is customer-facing, so we don't expose
+    # the GitHub commit history. Body text comes from the Release-Note: trailer
+    # only, not the commit subject or full body.
     short_sha   = commit["sha"][:7]
     dt          = datetime.fromisoformat(commit["date"])
     iso_date    = dt.strftime("%Y-%m-%d")
     pretty_date = dt.strftime("%B %-d, %Y")
-    body        = strip_trailers(commit["body"])
-    text        = commit["subject"] if not body else commit["subject"] + "\n\n" + body
-    paras       = render_paragraphs(text)
+    paras       = render_paragraphs(commit["release_note"])
     return (
         f'  <article class="rn-entry" data-sha="{short_sha}">\n'
         f'    <div class="rn-entry-meta">\n'
         f'      <time class="rn-entry-date" datetime="{iso_date}">{pretty_date}</time>\n'
-        f'      <a class="rn-entry-sha" href="{REPO_URL}/commit/{commit["sha"]}" target="_blank" rel="noopener">{short_sha}</a>\n'
         f'    </div>\n'
         f'    <div class="rn-entry-body">\n'
         f'{paras}\n'
@@ -158,9 +231,26 @@ def main(before: str, after: str):
     if not commits:
         print("No commits in range.")
         return
-    keep = [c for c in commits if not should_skip(c)]
+
+    # Filter in two passes: first drop chore / skip-marker commits, then drop
+    # commits without a Release-Note: trailer. Attach the extracted note to
+    # each commit dict so build_entry() can use it directly.
+    keep = []
+    skipped_no_trailer = 0
+    for c in commits:
+        if should_skip(c):
+            continue
+        note = extract_release_note(c["body"])
+        if note is None:
+            skipped_no_trailer += 1
+            continue
+        c["release_note"] = note
+        keep.append(c)
     if not keep:
-        print(f"All {len(commits)} commit(s) filtered out by skip rules.")
+        parts = [f"{len(commits)} commit(s) in range"]
+        if skipped_no_trailer:
+            parts.append(f"{skipped_no_trailer} had no Release-Note: trailer")
+        print(f"Nothing to publish: {', '.join(parts)}.")
         return
 
     # git log --reverse → oldest-first. We want newest at the top of the page,
@@ -172,6 +262,10 @@ def main(before: str, after: str):
     if MARKER not in text:
         raise SystemExit(f"Marker '{MARKER}' not found in {NOTES_FILE}")
 
+    # Strip the empty-state placeholder if present — it only shows when the
+    # page has zero entries, which is no longer the case after this insert.
+    text = EMPTY_STATE_RE.sub("", text)
+
     pre, post = text.split(MARKER, 1)
     # Normalize the gap between marker and the existing first entry to exactly one blank line.
     post = re.sub(r"^\n+", "\n\n", post, count=1)
@@ -182,6 +276,8 @@ def main(before: str, after: str):
 
     NOTES_FILE.write_text(updated, encoding="utf-8")
     msg = f"Appended {len(keep)} entry/entries from {len(commits)} commit(s) in range."
+    if skipped_no_trailer:
+        msg += f" Skipped {skipped_no_trailer} commit(s) without a Release-Note: trailer."
     if removed:
         msg += f" Trimmed {removed} oldest entry/entries to keep page under {MAX_ENTRIES}."
     print(msg)
