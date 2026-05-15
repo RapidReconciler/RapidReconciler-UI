@@ -26,10 +26,12 @@ RapidReconciler-AI/                  ← repo root
 │
 ├── .github/
 │   ├── scripts/
-│   │   └── update_release_notes.py  ← prepends commit subject+body to release-notes.html
+│   │   ├── update_release_notes.py  ← prepends Release-Note: trailer content to release-notes.html
+│   │   └── update_doc_dates.py      ← injects per-file last-commit date into each customer doc
 │   └── workflows/
 │       ├── refresh-indices.yml      ← regenerates the 3 search-index JSONs
-│       └── update-release-notes.yml ← runs the script above on push to main
+│       ├── update-release-notes.yml ← runs update_release_notes.py on push to main
+│       └── update-doc-dates.yml     ← runs update_doc_dates.py on push to main
 │
 ├── HelpDesk/                        ← Help desk: scenario search + Helpdesk Tech home
 │   ├── troubleshooting.html         ← canonical Help Desk (techs + customers)
@@ -48,7 +50,7 @@ RapidReconciler-AI/                  ← repo root
 │   ├── help.html                    ← redirect shim → ../HelpDesk/troubleshooting.html
 │   ├── getting-started-with-rapidreconciler.html
 │   ├── ui-reference.html
-│   ├── search-index.json            ← 273 sections across 24 docs (~1.2 MB)
+│   ├── search-index.json            ← ~290 sections across the 35 RR University docs (~1.2 MB)
 │   ├── build-search-index.py        ← regenerates search-index.json (Python)
 │   ├── administrator-*.html         (Administrator module)
 │   ├── inventory-*.html             (Inventory module — 10 docs)
@@ -80,9 +82,15 @@ RapidReconciler-AI/                  ← repo root
 │   ├── proof-of-concept.html
 │   └── rr-{msa,contract,sow}-template.html
 │
-└── Compliance/                      ← SOC 2 attestations (PDFs)
-    ├── SOC2-Bridge-Letter.pdf
-    └── SOC2-Type2-Report.pdf
+├── Compliance/                      ← SOC 2 attestations (PDFs)
+│   ├── SOC2-Bridge-Letter.pdf
+│   └── SOC2-Type2-Report.pdf
+│
+└── docs/                            ← INTERNAL: repo-side planning + design notes
+    └── plans/                       ← saved plans for deferred features — read on session start
+        ├── analyzer-disclaimer-and-feedback.md
+        ├── dmaai-system-context.md
+        └── rapidreconciler-db-bootstrap.md
 ```
 
 ---
@@ -423,24 +431,37 @@ default). For belt-and-suspenders on a chore commit, also add
   until you hit a natural breakpoint, then ask before pushing. (Saved
   to memory as `feedback_batched_commits.md`.)
 
-- **After every push to main, pause and prompt the user to sync their
-  local clone.** The owner runs in a separate clone and needs to pull
-  origin/main into their local main before any follow-up work happens
-  on top. Standard prompt format: *"Pushed `<sha>`. Pull into your
-  local main when ready, then say synced and we'll keep going."* Wait
-  for the user's confirmation before starting the next change. Two
-  bot-side commits typically land per push: the search-indices refresh
-  and the release-notes append, both with `[skip ci]` in the subject.
+- **After every PR merge, auto-pull origin/main into the owner's main
+  clone — no "say synced" handshake.** The worktree shares its `.git/`
+  dir with the owner's main clone at `C:/source/repos/RapidReconciler-AI`,
+  so once the bots have settled, run
+  `git -C "C:/source/repos/RapidReconciler-AI" pull --ff-only origin main`
+  to update the main clone, then fast-forward / reset the worktree
+  branch to match. Report the new main SHA + which bot commits landed.
+  If the pull fails (uncommitted changes in the main clone, owner on a
+  non-main branch, etc.) — DON'T force or destroy. Surface the failure
+  and let the owner resolve it manually. (Saved to memory as
+  `feedback_auto_pull_main.md`.)
 
-- **Auto-regen + release-notes commits land after every push to main.**
-  Two GitHub Actions fire:
+- **Auto-regen + release-notes + doc-dates commits land after every
+  push to main.** Three GitHub Actions fire:
     - `refresh-indices.yml` regenerates the three search indices when
       relevant HTML or build scripts change, and pushes back a
       `chore: refresh search indices [skip ci]` commit.
-    - `update-release-notes.yml` appends a `<article>` entry to
-      `release-notes.html` for every non-skip commit in the push, and
-      pushes back a `chore: append release notes [skip release notes]
-      [skip ci]` commit. Both workflows ignore each other's commits via
-      `paths-ignore` and job-level `if:` guards.
-  Don't try to hand-edit the regenerated index files or expect the
-  release-notes file to be untouched between sessions.
+    - `update-release-notes.yml` appends an `<article>` entry to
+      `release-notes.html` for every commit that carries a
+      `Release-Note:` trailer (commits without the trailer are silently
+      skipped), and pushes back a `chore: append release notes [skip
+      release notes][skip ci]` commit.
+    - `update-doc-dates.yml` runs `update_doc_dates.py` to inject each
+      customer-facing doc's last-commit date into its `<time
+      class="doc-last-updated">` element, and pushes back a `chore:
+      refresh doc dates [skip ci]` commit when any dates changed.
+  All three workflows ignore each other's commits via `paths-ignore`
+  and job-level `if:` guards. Typically two to three of them push a
+  follow-up commit per merge (refresh-indices always runs if relevant
+  files were touched; release-notes only if a trailer was present;
+  doc-dates only if a customer doc was touched).
+  Don't try to hand-edit the regenerated index files, the doc-date
+  `<time>` elements, or expect the release-notes file to be untouched
+  between sessions.
