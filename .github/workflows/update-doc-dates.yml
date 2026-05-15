@@ -1,0 +1,77 @@
+name: Update doc dates
+
+# For each customer-facing HTML file that changed on this push to main, refresh
+# the "Last updated <date>" line in its banner from git's commit history. The
+# script writes nothing for files whose dates are already current, so the
+# commit step is a no-op on pushes that didn't touch a customer doc.
+#
+# Plays nicely with the other bot workflows (refresh-indices, update-release-
+# notes) by using the same pull-rebase-retry loop on push, and by skipping its
+# own commits (subject prefix) and other bots' commits.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'RRUniversity/**.html'
+      - 'Scenarios/**.html'
+      - 'HelpDesk/**.html'
+      - 'Tools/doc-header.css'
+      - '.github/workflows/update-doc-dates.yml'
+      - '.github/scripts/update_doc_dates.py'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-doc-dates-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    if: >-
+      !contains(github.event.head_commit.message, '[skip ci]') &&
+      !startsWith(github.event.head_commit.message, 'chore: refresh doc dates') &&
+      !startsWith(github.event.head_commit.message, 'chore: refresh search indices') &&
+      !startsWith(github.event.head_commit.message, 'chore: append release notes')
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          # Full history so the script can resolve last-commit-date per file
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Refresh last-updated dates
+        run: python .github/scripts/update_doc_dates.py
+
+      - name: Commit and push if changed
+        # Uses pull-rebase-retry to avoid losing to sibling bot workflows that
+        # may push to main on the same trigger.
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add RRUniversity/*.html Scenarios/scenario-*.html HelpDesk/*.html 2>/dev/null || true
+          if git diff --staged --quiet; then
+            echo "No date changes — nothing to commit."
+          else
+            git commit -m "chore: refresh doc dates [skip ci]"
+            for attempt in 1 2 3 4 5; do
+              if git push; then
+                echo "Push succeeded on attempt $attempt."
+                exit 0
+              fi
+              echo "Push rejected on attempt $attempt — rebasing on origin/main and retrying."
+              git pull --rebase origin main
+              sleep 2
+            done
+            echo "Push still failing after 5 attempts; giving up."
+            exit 1
+          fi
