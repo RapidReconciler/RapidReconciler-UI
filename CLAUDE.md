@@ -303,6 +303,32 @@ linked from the cover page's wordmark banner. Entries are appended
 **newest-first** by `.github/workflows/update-release-notes.yml`, which
 runs `.github/scripts/update_release_notes.py` on every push to `main`.
 
+**Publish model: opt-in via `Release-Note:` trailer.** A commit only
+produces a release-notes entry if its body contains a `Release-Note:`
+trailer. The trailer's content (the text from the colon through end-of-
+body, minus any subsequent known-trailer block like `Co-Authored-By`)
+becomes the entry text &mdash; the commit subject and main body are NOT
+published. This keeps engineering-detailed commits (which often contain
+customer doc numbers, dollar amounts, file names, etc.) off the customer-
+facing page; authors write a deliberately customer-safe note in the
+trailer.
+
+A commit with no `Release-Note:` trailer is silently skipped.
+
+Trailer formats both supported:
+
+```
+Release-Note: One-line customer-safe summary of what shipped.
+```
+
+```
+Release-Note:
+Multi-paragraph notes are also fine — everything from the colon through
+the end of the body becomes the entry. Blank lines separate paragraphs.
+
+Co-Authored-By: ...
+```
+
 The script:
 
 - Walks `github.event.before..github.sha` (or `HEAD~1..HEAD` on manual
@@ -310,19 +336,25 @@ The script:
 - Skips commits whose message contains `[skip release notes]`,
   `[skip-release-notes]`, or `[skip ci]`, or whose subject starts with
   `chore: refresh search indices` or `chore: append release notes`.
-- HTML-escapes the subject + body, strips known git trailers
-  (`Co-Authored-By`, `Signed-off-by`, etc.), and inserts a new
+  (These filters win even if a `Release-Note:` trailer is present.)
+- For each remaining commit, extracts the `Release-Note:` trailer
+  content. **No trailer = no entry.**
+- HTML-escapes the trailer content and inserts a new
   `<article class="rn-entry">` block immediately after the
   `<!-- RELEASE_NOTES_INSERTION_POINT -->` marker.
 - **Caps the page at `MAX_ENTRIES` (100)** &mdash; after each prepend,
   trims the oldest articles past the cap so the file doesn't grow
-  unbounded. Older changes remain reachable via the GitHub commit-
-  history link in the page footer.
+  unbounded.
 - Commits with `chore: append release notes [skip release notes][skip ci]`
   to prevent feedback loops.
 
-**To keep a commit out of release notes**, add `[skip release notes]` to
-the subject or body. (Use sparingly &mdash; the default is "publish".)
+**To publish a release-notes entry:** include a `Release-Note:` trailer
+with deliberately customer-safe wording. The commit subject and body can
+contain whatever engineering detail you want.
+
+**To keep a commit out of release notes:** just omit the trailer (the
+default). For belt-and-suspenders on a chore commit, also add
+`[skip release notes]` to the message.
 
 ---
 
