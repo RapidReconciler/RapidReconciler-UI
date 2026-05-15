@@ -2727,17 +2727,96 @@ const DMAAIKnowledge = {
   // is a manual JE crediting AAI 3260 (Planned Variance) or 3240 (Material
   // Variance) — not 4141, which is the standard-cost variance AAI for
   // non-manufacturing inventory docs (II / IT / IR).
-  icStandardCostChangeExplanation(dt, amount, invAccount, cardexDocNum, glDocNum) {
+  //
+  // aaiContext (optional): when SystemContext is loaded, this carries the
+  // result of looking up AAI 3240 / 3260 for the customer's company / GL
+  // class. Possible shapes:
+  //   - null            — SystemContext not loaded; fall back to generic.
+  //   - { status: 'configured', accounts: [...] }
+  //                     — at least one of 3240 / 3260 IS configured; we
+  //                       can name the actual GL account.
+  //   - { status: 'missing' }
+  //                     — SystemContext loaded but neither AAI is
+  //                       configured for this company / GL class — this
+  //                       is a real configuration gap, not a sequencing
+  //                       one, and the diagnosis flips accordingly.
+  icStandardCostChangeExplanation(dt, amount, invAccount, cardexDocNum, glDocNum, aaiContext) {
     const dtTxt = dt ? `on this ${dt} (work order completion) doc` : 'on this work order completion';
     const docMismatchNote = (cardexDocNum && glDocNum && cardexDocNum !== glDocNum)
       ? `\n\nNote: the cardex shows doc ${cardexDocNum} while the GL completion entry references doc ${glDocNum}. That mismatch is normal R31802A (Manufacturing Accounting) behavior — completions are summarized into a separate GL document — it is not the cause of the variance.`
       : '';
-    return `The F4111 cardex captured a Standard Cost Change of ${amount} ${dtTxt}, but no F0911 counterpart was built — neither on the inventory side (${invAccount || 'the inventory account'}) nor on an expense / variance account. The completion itself posted normally; only the cost-revaluation half is missing, and the variance equals that missing amount exactly.\n\nThis is the symptom of a process-sequencing gap rather than a missing AAI. When R30835 (Frozen Standard Update) runs after a completion has already posted, it writes the cardex revaluation row but the GL revaluation is the job of R30837 (WIP Revaluation). If R30837 isn't configured to run after R30835, or the work order has already moved to status 999 (closed — R30837 will not revalue closed work orders), the GL entry never gets written and the F4111 cardex updates anyway.${docMismatchNote}`;
+
+    const cardexLine = `The F4111 cardex captured a Standard Cost Change of ${amount} ${dtTxt}, but no F0911 counterpart was built — neither on the inventory side (${invAccount || 'the inventory account'}) nor on an expense / variance account. The completion itself posted normally; only the cost-revaluation half is missing, and the variance equals that missing amount exactly.`;
+
+    if (aaiContext && aaiContext.status === 'missing') {
+      // The loaded DMAAI integrity report tells us 3240 AND 3260 are both
+      // unconfigured for this company / GL class. R30837 has no account
+      // to write to even when it does fire — this is a configuration gap.
+      return `${cardexLine}\n\nThe loaded DMAAI integrity report shows that neither AAI 3240 (Material Variance) nor AAI 3260 (Planned Variance) is configured for this company / GL class. This is a configuration gap rather than a process-sequencing gap — R30837 (WIP Revaluation) has no destination account to write the GL entry to, so the cardex revaluation runs but the GL side cannot follow. The fix is to configure the variance AAI in JDE before any manual correcting entry can be posted (see Step 1 below).${docMismatchNote}`;
+    }
+
+    return `${cardexLine}\n\nThis is the symptom of a process-sequencing gap rather than a missing AAI. When R30835 (Frozen Standard Update) runs after a completion has already posted, it writes the cardex revaluation row but the GL revaluation is the job of R30837 (WIP Revaluation). If R30837 isn't configured to run after R30835, or the work order has already moved to status 999 (closed — R30837 will not revalue closed work orders), the GL entry never gets written and the F4111 cardex updates anyway.${docMismatchNote}`;
   },
 
-  icStandardCostChangeResolution(invAccount, amountForJE) {
+  icStandardCostChangeResolution(invAccount, amountForJE, aaiContext) {
     const amtFragment = amountForJE ? ` (${amountForJE})` : '';
-    return `Step 1.  Identify the work-order status. Check the work order's NxtSts in JDE — if it is 999, R30837 will not revalue it even if re-run, so the only path is the manual JE in Step 3.\n\nStep 2.  Review R30837 (WIP Revaluation) configuration if the work order is still open. R30837 needs to be called from R30835 (Frozen Standard Update) — confirm the PO is set to launch it. Fixing this prevents future occurrences but does not correct the historic variance on this document.\n\nStep 3.  Post a manual journal entry to correct the historic posting on this document — debit ${invAccount || 'the inventory account'}${amtFragment} for the standard-cost adjustment amount, and credit AAI 3260 (Planned Variance) or AAI 3240 (Material Variance), per your cost-accounting team's convention for revaluation differences. Confirm the company and GL class on the AAI entries match the affected branch.\n\nStep 4.  Assess materiality before posting. This pattern frequently produces aged variances dating back months or years (the gap isn't detected until the next reconciliation review). Very old or small amounts may warrant suspension rather than a journal entry.\n\nStep 5.  Refresh RapidReconciler and re-analyze. The variance should clear; if R30837 was reconfigured in Step 2, future standard-cost changes on open work orders will build their GL entries correctly.`;
+    const invAcct = invAccount || 'the inventory account';
+
+    if (aaiContext && aaiContext.status === 'missing') {
+      // Configuration gap — Step 1 changes to "configure the AAI first".
+      return `Step 1.  Configure the manufacturing variance AAI in JDE. Add a row to DMAAI table 3240 (Material Variance) or 3260 (Planned Variance) — whichever your cost-accounting team's convention uses for standard-cost revaluation — for the affected company and GL class. Without this entry, R30837 (WIP Revaluation) has no destination account and cannot post the missing GL counterpart, even when it fires correctly.\n\nStep 2.  Re-export the DMAAI integrity report (Integrity Report 0) from RapidReconciler and reload it on this analyzer page so future analyses pick up the new AAI configuration.\n\nStep 3.  Post a manual journal entry to correct the historic posting on this document — debit ${invAcct}${amtFragment} for the standard-cost adjustment amount, and credit the newly-configured variance AAI account. The Step 1 fix prevents future occurrences; this manual JE corrects the historic variance that already accumulated.\n\nStep 4.  Review R30837 (WIP Revaluation) configuration. R30837 needs to be called from R30835 (Frozen Standard Update) — confirm the PO is set to launch it. Even with the AAI now configured, the sequencing issue can still occur unless R30837 actually fires after R30835.\n\nStep 5.  Refresh RapidReconciler and re-analyze. The variance should clear once the AAI is configured and the JE is posted.`;
+    }
+
+    // Process-sequencing gap branch — Step 1 / 2 / 4 / 5 are unchanged.
+    // Only Step 3's credit line varies: when the integrity report tells us
+    // which GL account 3240 / 3260 resolves to, we name it directly.
+    let creditLine;
+    if (aaiContext && aaiContext.status === 'configured') {
+      const accts = aaiContext.accounts;
+      const accountList = accts
+        .map(a => `AAI ${a.table} (${a.description}) → GL account ${a.longAccount || a.account}`)
+        .join(' or ');
+      const plural = accts.length > 1;
+      creditLine = `${accountList}. The account name${plural ? 's' : ''} above come${plural ? '' : 's'} from your loaded DMAAI integrity report — the actual GL account${plural ? 's' : ''} configured for this company and GL class.`;
+    } else {
+      creditLine = 'AAI 3260 (Planned Variance) or AAI 3240 (Material Variance), per your cost-accounting team\'s convention for revaluation differences. Confirm the company and GL class on the AAI entries match the affected branch.';
+    }
+
+    return `Step 1.  Identify the work-order status. Check the work order's NxtSts in JDE — if it is 999, R30837 will not revalue it even if re-run, so the only path is the manual JE in Step 3.\n\nStep 2.  Review R30837 (WIP Revaluation) configuration if the work order is still open. R30837 needs to be called from R30835 (Frozen Standard Update) — confirm the PO is set to launch it. Fixing this prevents future occurrences but does not correct the historic variance on this document.\n\nStep 3.  Post a manual journal entry to correct the historic posting on this document — debit ${invAcct}${amtFragment} for the standard-cost adjustment amount, and credit ${creditLine}\n\nStep 4.  Assess materiality before posting. This pattern frequently produces aged variances dating back months or years (the gap isn't detected until the next reconciliation review). Very old or small amounts may warrant suspension rather than a journal entry.\n\nStep 5.  Refresh RapidReconciler and re-analyze. The variance should clear; if R30837 was reconfigured in Step 2, future standard-cost changes on open work orders will build their GL entries correctly.`;
+  },
+
+  /* Look up the configured GL accounts for AAI 3240 (Material Variance) and
+     3260 (Planned Variance) — the two manufacturing variance AAIs Pattern
+     5.6's resolution names. Returns one of:
+       - { status: 'configured', accounts: [...] }
+           when at least one of 3240 / 3260 is configured in the loaded
+           DMAAI integrity report for this company / GL class.
+       - { status: 'missing' }
+           when SystemContext is loaded but neither AAI is configured —
+           a real configuration gap.
+       - null
+           when SystemContext is not loaded; caller falls back to the
+           generic "credit AAI 3240/3260" text.
+     Doc type is intentionally not part of the lookup: 3240 / 3260
+     configuration is keyed on company + GL class in the integrity
+     report, and the wildcard '****' on glclass is handled by
+     SystemContext.lookupAAI. */
+  mfgVarianceAaiContext(company, glClass) {
+    if (typeof SystemContext === 'undefined' || !SystemContext.isLoaded()) return null;
+    if (!company) return null;
+    const accounts = [];
+    for (const table of ['3240', '3260']) {
+      const row = SystemContext.lookupAAI({ company, table, glClass });
+      if (row && row.aaiaccount) {
+        accounts.push({
+          table,
+          account:     row.aaiaccount,
+          longAccount: row.longaccount || row.aaiaccount,
+          description: table === '3240' ? 'Material Variance' : 'Planned Variance',
+        });
+      }
+    }
+    return accounts.length ? { status: 'configured', accounts } : { status: 'missing' };
   },
 
   // Known net-zero complement pairs — debit AAI / credit AAI on the
@@ -4727,6 +4806,12 @@ const TransactionDetailTemplate = {
 
     // Pattern classification
     let pattern, patternLabel, patternExplanation;
+    // Pattern 5.6 enrichment: if the loaded DMAAI integrity report tells us
+    // which GL account AAI 3240 / 3260 resolves to for this customer (or
+    // that neither AAI is configured), stash the result on findings so the
+    // resolution-text path can pick it up later. null when no integrity
+    // report is loaded — keeps the existing generic phrasing intact.
+    let mfgVarianceAaiContext = null;
     if (data.unassigned.length) {
       pattern = '5.1'; patternLabel = 'Unassigned Account — Missing Model Table Entry';
       patternExplanation = `The Unassigned section at the top shows ${data.unassigned.length} row(s) whose GL class code has no entry in DMAAI model table 4152.  RapidReconciler cannot assign an account, so those cardex amounts are excluded from the reconciliation — the displayed variance is partial.  Add the missing GL class to the model table in JDE.`;
@@ -4765,12 +4850,18 @@ const TransactionDetailTemplate = {
       // doc) so the explanation can call out the R31802A summarization
       // as a normal aside, not the bug.
       const glCompletionRow = data.f0911Inv.find(g => /completed.*w\.?o/i.test(g.comment || '')) || data.f0911Inv[0];
+      // If the customer's DMAAI integrity report is loaded, look up
+      // AAI 3240 / 3260 for this company / GL class. The result drives
+      // both the explanation (process-sequencing gap vs. configuration
+      // gap) and the resolution text (named GL account vs. generic).
+      mfgVarianceAaiContext = DMAAIKnowledge.mfgVarianceAaiContext(data.company, data.glclass);
       patternExplanation = DMAAIKnowledge.icStandardCostChangeExplanation(
         data.dt,
         Helpers.money(orphanRevalRow.cardexAmt, true),
         data.account || (data.f4111Rows[0] && data.f4111Rows[0].account) || '',
         data.doc,
-        glCompletionRow && glCompletionRow.doc
+        glCompletionRow && glCompletionRow.doc,
+        mfgVarianceAaiContext
       );
     } else if (data.rrSummary.length > 1) {
       pattern = '5.4'; patternLabel = 'Account or Period Mismatch';
@@ -4836,7 +4927,8 @@ const TransactionDetailTemplate = {
 
     return {
       variance, cardex, ledger, ratio, priority,
-      pattern, patternLabel, patternExplanation, evidence, dmaaiPair
+      pattern, patternLabel, patternExplanation, evidence, dmaaiPair,
+      mfgVarianceAaiContext
     };
   },
 
@@ -4931,7 +5023,8 @@ const TransactionDetailTemplate = {
       const orphan = data.f4111Rows.find(r => /standard\s+cost\s+change/i.test(r.comment || '') && Math.abs(r.cardexAmt || 0) >= 0.01);
       return DMAAIKnowledge.icStandardCostChangeResolution(
         data.account || '',
-        orphan ? Helpers.money(Math.abs(orphan.cardexAmt)) : ''
+        orphan ? Helpers.money(Math.abs(orphan.cardexAmt)) : '',
+        findings.mfgVarianceAaiContext
       );
     }
     if (pattern === '5.7') {
