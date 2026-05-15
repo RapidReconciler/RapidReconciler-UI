@@ -146,6 +146,7 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <li>The structure and key fields of the F4111 table</li>
 <li>A field-level reference for the most important columns analysts work with</li>
 <li>Why the F41112 (Item ASOF) table cannot be trusted as a standalone source for inventory balances</li>
+<li>How Item Reclassifications (P4116) write paired F4111 entries that span GL accounts</li>
 <li>Common questions about item ledger behavior</li>
 <li>Identifying and correcting quantity integrity variances using R41544 and R41995</li>
 <li>The Global Item Update creation date override risk and how to protect against it</li>
@@ -339,6 +340,11 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 
 <div class="callout note"><p><strong>Note:</strong> RapidReconciler does not rely on F41112 for any reconciliation calculation. All quantity and dollar totals are derived from F4111 directly, eliminating the F41112 reliability problem from the reconciliation process entirely.</p></div>
 
+<h4 id="section-1-6-3"><span class="num">1.6.3</span>As-Of Updating (R41548) &mdash; Why Skipping It Creates False Variances on Low-Velocity Items</h4>
+<p>The <strong>Item Ledger As-Of Record Generation program (R41542)</strong> only creates an F41112 record for a given year when at least one transaction exists in <code>F4111</code> for that item during the year. For low-velocity items &mdash; spare parts, slow-movers, regulated stock that sits on a shelf for years &mdash; this leaves <strong>gaps in F41112</strong>: the item has a real on-hand balance that hasn&rsquo;t changed in three years, but F41112 has no row for the intervening fiscal years because no transactions were written.</p>
+<p>The <strong>As-Of Updating program (R41548)</strong> is the carry-forward companion to R41542. It scans the item ledger for items that exist but have no F41112 row for a target year, then writes a balance-forward row that carries the prior year&rsquo;s cumulative quantity and amount into the current year. The processing option takes a four-digit fiscal year; the program fills in every missing year from the last known balance up to that year for each affected item. Without R41548, period reports and the R41544 Item Balance/Ledger Integrity Report read the gap as a missing balance and flag the item as out of integrity &mdash; even though the underlying F4111 history is completely consistent.</p>
+<div class="callout note"><p><strong>Why this matters for RapidReconciler users.</strong> A stale F41112 from skipping R41548 produces false-positive variances on items that haven&rsquo;t moved &mdash; the most common pattern is a steady book balance with no current-year activity that nonetheless appears on the As-Of page with a non-zero <code>AmtVar</code>. If you see this pattern concentrated on slow-movers, ask your DBA when R41548 was last run; the fix is to run it for the affected fiscal year, not to adjust the GL.</p></div>
+
 <h3 id="section-1-7"><span class="num">1.7</span>Joining F4111 to Other Tables</h3>
 <p>Custom reports and integrity queries often require joining F4111 to related JD Edwards tables. The correct join keys depend on which table is being joined and — in some cases — on the document type involved.</p>
 
@@ -393,6 +399,21 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <tr><td>ILKCOO</td><td>PRKCOO</td></tr>
 </tbody></table></div>
 <p>The amount on the receiver (PRAREC) should equal the extended amount on the corresponding cardex record (ILPAID). A discrepancy between these two values is a common source of three-way-match variances.</p>
+
+<h3 id="section-1-8"><span class="num">1.8</span>Item Reclassifications (P4116) &mdash; A Frequently Overlooked Cardex Source</h3>
+<p>The <strong>Reclassifications Transactions program (P4116)</strong> is the JD Edwards path for reclassifying an item and any associated lot when the item&rsquo;s properties change. The same program is used to combine several lots into one, split one lot into several, change a GL class or stocking type, or move quantity and value from one item number to another. Each reclassification is entered as paired <strong>From</strong> and <strong>To</strong> lines; the system validates that the From and To quantities balance (configurable in the processing options) and processes them as a single transaction group with one shared document number.</p>
+
+<p>What lands in the cardex matters for reconciliation:</p>
+<ul>
+<li><strong>Paired <code>F4111</code> entries.</strong> The reclassification writes paired rows in <code>F4111</code> &mdash; one removing the From item-location quantity and amount, one adding it to the To item-location &mdash; with the same document number and batch.</li>
+<li><strong><code>F41021</code> and <code>F0911</code> are updated in step.</strong> The Item Location on-hand balances are adjusted, and journal entries are written to the General Ledger from AAIs <strong>4122 / 4124</strong> (or the zero-balance AAIs <strong>4126 / 4128</strong> when the From location goes to zero with dollars remaining).</li>
+<li><strong>The accounts on each side can differ.</strong> Because the From and To items can carry different GL class codes or stocking types, the inventory account that 4122 resolves to on the From side does not have to equal the account on the To side. The result is a cardex pair where one row debits one inventory account and the other credits a different inventory account &mdash; with no PO receipt, sale, or transfer order behind it.</li>
+<li><strong>The document type is configurable.</strong> The Inventory Management guide does not hard-code a single document type for P4116; the system displays whichever document type the transaction was written under, which depends on the document-type setup at the site.</li>
+</ul>
+
+<div class="callout important"><p><strong>The reconciliation pattern.</strong> A reclassification often surfaces as a &ldquo;phantom&rdquo; GL-class movement: an inventory account is credited and a different inventory account is debited, the two cardex rows share a document number, and there is no purchase or sales activity to explain it. When you see this pattern in the As-Of or Roll Forward views, look for a matching transaction-group document on Reclassifications (P4116) rather than chasing a missing receipt.</p></div>
+
+<div class="callout note"><p><strong>Reversals leave a trail.</strong> Per JDE design, you cannot delete a reclassification record &mdash; you correct an error by entering a reversing reclassification, which the system records under the same document and batch as the original. Two related reclassification pairs in the cardex for the same item are therefore expected when a correction has been made; treat both as legitimate history rather than as duplicate noise.</p></div>
 
 </section>
 
