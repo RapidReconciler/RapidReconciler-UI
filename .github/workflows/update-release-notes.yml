@@ -1,0 +1,78 @@
+name: Update release notes
+
+# Appends a new entry to release-notes.html for each non-skip commit pushed to
+# main, then commits the regenerated page back to the repo. Skips its own
+# commits and the refresh-indices workflow's commits in two ways:
+#   1. paths-ignore on the trigger filters pushes that only touch the index
+#      JSON files or release-notes.html itself
+#   2. The job-level if: refuses to run on commits whose subject starts with
+#      "chore: append release notes" or "chore: refresh search indices", or
+#      whose message contains [skip release notes] / [skip-release-notes]
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'RRUniversity/search-index.json'
+      - 'Scenarios/scenarios-index.json'
+      - 'GSIRRTech/install-scenarios/install-scenarios-index.json'
+      - 'release-notes.html'
+  # Manual trigger for backfills or re-runs.
+  workflow_dispatch:
+    inputs:
+      since:
+        description: 'Commit SHA to start from (exclusive). Leave blank to use HEAD~1.'
+        required: false
+        default: ''
+
+# The default GITHUB_TOKEN needs write access to commit the updated page
+permissions:
+  contents: write
+
+# Queue concurrent runs so one push can't overwrite another's appended entry
+concurrency:
+  group: update-release-notes-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    if: >-
+      !contains(github.event.head_commit.message, '[skip release notes]') &&
+      !contains(github.event.head_commit.message, '[skip-release-notes]') &&
+      !startsWith(github.event.head_commit.message, 'chore: append release notes') &&
+      !startsWith(github.event.head_commit.message, 'chore: refresh search indices')
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          # Full history so the script can resolve BEFORE..AFTER ranges and
+          # not just the shallow tip
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Append new release-note entries
+        env:
+          # github.event.before is unset on workflow_dispatch; fall back to the
+          # manual input, and ultimately to HEAD~1 inside the script.
+          BEFORE: ${{ github.event.before || inputs.since }}
+          AFTER: ${{ github.sha }}
+        run: |
+          python .github/scripts/update_release_notes.py "$BEFORE" "$AFTER"
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add release-notes.html
+          if git diff --staged --quiet; then
+            echo "No release-notes changes — nothing to commit."
+          else
+            git commit -m "chore: append release notes [skip release notes][skip ci]"
+            git push
+          fi
