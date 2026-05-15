@@ -925,6 +925,15 @@
           <p>Some customers ask us to suppress the zero-quantity-with-residual lines from the As-of details view. We don&rsquo;t, because removing them creates a <strong>mismatch between the total on the Inventory Reconciliation page and the total on the As-of details page</strong> for the same period. Other customers explicitly want these residuals visible because they investigate them as part of their close. Both views always tie out by design.</p>
         </div>
 
+        <h3>How JDE handles these residuals (and why some still show up)</h3>
+        <p>JDE has its own mechanism for clearing residual value at zero quantity: <strong>Zero Balance Adjustments</strong> (ZBAs). When a triggering transaction drives on-hand to zero and leaves residual cost behind, JDE auto-generates a journal entry that writes off the residual to a designated account (configured via DMAAI 4126 / 4128 for Inventory, 4400 / 4405 for Purchasing). The cardex row for the ZBA shows <em>&ldquo;Zero Balance Adjustment&rdquo;</em> in the Explanation field.</p>
+        <p>ZBAs only fire on specific transaction types, though:</p>
+        <ul>
+          <li><strong>Triggers a ZBA:</strong> inventory issue (P4112), inventory transfer (P4113), negative inventory adjustment (P4114), negative-quantity PO receipt or receipt reversal (P4312).</li>
+          <li><strong>Does NOT trigger a ZBA:</strong> sales shipments (P4205 / R42800), inventory reclassification (P4116), cycle / tag count updates (R41413 / R41610), future cost updates (R41052), cost revisions (P4105).</li>
+        </ul>
+        <p>That last bullet is the gap. The residuals you typically see on RR&rsquo;s As-of view are the ones whose final zero-out transaction was a sales shipment, a cycle count, a cost revision, or any other non-ZBA path &mdash; JDE&rsquo;s own write-off mechanism never fires for those, so the residual stays in the cardex history and surfaces in RR. For the full ZBA mechanic, the triggering AAIs, and worked examples, see the <a href="inventory-zero-balance.html">Zero Balance Adjustments Reference</a>.</p>
+
         <h2>Step 1 &mdash; Confirm the as-of dates match</h2>
         <ol>
           <li>Note the exact <strong>as-of date and time</strong> of the JDE Stock Valuation Report. If the report doesn&rsquo;t print one, the as-of is &ldquo;the moment it ran.&rdquo;</li>
@@ -1076,6 +1085,16 @@
           <li>Once the work-order completion is batched and the GL posts, the row reclassifies (Inventory Basis: into a Period Variance staying in Period 6; GL Basis: moves to whatever period the GL date lands in).</li>
         </ul>
         <p>When you&rsquo;re reconciling a specific gap and the date logic looks like the cause, drill into the Inventory Reconciliation page&rsquo;s variance breakdown for the period &mdash; End of Day Variance, Period Variance, and Transaction Variance each map to a different scenario in the rules above.</p>
+
+        <h2>How to verify with the As Of Item Details export</h2>
+        <p>When the symptom is a <strong>quantity-on-hand mismatch</strong> between RR and JDE for a specific period &mdash; e.g., an item shows 100 LB on the JDE cardex but 80 LB on RR&rsquo;s As-of view for the same period end &mdash; the four-rule period logic is usually the cause. The fastest way to identify which transactions moved is the As Of Item Details export:</p>
+        <ol>
+          <li>From the Inventory module, open the <strong>Inventory As Of</strong> page for the period in question, drill into the item, and export the transaction list to Excel.</li>
+          <li>Each row shows the cardex transaction&rsquo;s <strong>period date</strong> as RR assigned it &mdash; this is the output of the four-rule logic, not the raw JDE GL date or transaction date.</li>
+          <li>Pull the same item&rsquo;s F4111 cardex from JDE for the same date range.</li>
+          <li>Compare row by row. The transactions whose <strong>RR period date differs from the JDE GL date</strong> (or the JDE transaction date, where no GL date exists) are the ones the four-rule logic re-placed. Those are what shifted the As-of quantity.</li>
+        </ol>
+        <p>Most of the time the gap comes from one or two transactions whose GL date hadn&rsquo;t been written when RR processed them &mdash; RR fell back to rule 4 (creation date) and placed them in a period the user expected to land elsewhere. Once you can see which transactions moved, you can decide whether to wait for the next nightly job (which will reclassify them once the GL posts) or to investigate further.</p>
 
         <div class="topic-footer-nav">
           <button class="back-btn" onclick="goHome()">&larr; Back to Index</button>
