@@ -66,6 +66,10 @@ jobs:
           python .github/scripts/update_release_notes.py "$BEFORE" "$AFTER"
 
       - name: Commit and push if changed
+        # Push uses a pull-rebase-retry loop because a sibling bot workflow
+        # (refresh-indices) can land its own commit on main between this
+        # workflow's checkout and push. Without the retry, whichever workflow
+        # pushes second gets rejected.
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -74,5 +78,15 @@ jobs:
             echo "No release-notes changes — nothing to commit."
           else
             git commit -m "chore: append release notes [skip release notes][skip ci]"
-            git push
+            for attempt in 1 2 3 4 5; do
+              if git push; then
+                echo "Push succeeded on attempt $attempt."
+                exit 0
+              fi
+              echo "Push rejected on attempt $attempt — rebasing on origin/main and retrying."
+              git pull --rebase origin main
+              sleep 2
+            done
+            echo "Push still failing after 5 attempts; giving up."
+            exit 1
           fi
