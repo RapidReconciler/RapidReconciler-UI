@@ -1212,6 +1212,22 @@ const F = {
     return cell;
   },
 
+  /* Build a cell value that hyperlinks to a cell on another sheet in the
+     same workbook. We use a HYPERLINK() formula instead of ExcelJS's
+     { text, hyperlink } shorthand because ExcelJS 4.4.0 writes every
+     hyperlink with TargetMode="External" — Excel then treats the "#" as
+     a URL anchor, lands on the sheet, but loses the cell reference. The
+     HYPERLINK formula is evaluated by Excel itself and handles internal
+     cell references correctly, so the click actually jumps to the row. */
+  internalHyperlink(sheetName, cellRef, displayText) {
+    const escSheet = String(sheetName).replace(/'/g, "''");
+    const escDisplay = String(displayText).replace(/"/g, '""');
+    return {
+      formula: `HYPERLINK("#'${escSheet}'!${cellRef}","${escDisplay}")`,
+      result: String(displayText)
+    };
+  },
+
   /* Render the 5-row chrome (brand strip, headline, subline, context, spacer) */
   renderChrome(ws, { headline, subline, context }) {
     // Row 1 — brand strip
@@ -1526,7 +1542,7 @@ const F = {
         alignment: { horizontal: 'left', vertical: 'top', indent: 1, wrapText: true }
       });
       if (ev.sourceRow) {
-        ws.getCell(`A${row}`).value = { text: ev.label, hyperlink: `#'${sourceSheetName}'!A${ev.sourceRow}` };
+        ws.getCell(`A${row}`).value = F.internalHyperlink(sourceSheetName, `A${ev.sourceRow}`, ev.label);
       }
 
       // C:D — description
@@ -1718,7 +1734,7 @@ const F = {
         const cell = ws.getCell(row, ci + 1);
         if (ci === 0 && typeof v === 'object' && v.text) {
           // Hyperlinked first column
-          cell.value = { text: v.text, hyperlink: `#'${sourceSheetName}'!A${v.sourceRow}` };
+          cell.value = F.internalHyperlink(sourceSheetName, `A${v.sourceRow}`, v.text);
           cell.font = { name: 'Arial', size: 10, color: { argb: 'FF0563C1' }, underline: true };
         } else {
           cell.value = v;
@@ -1827,10 +1843,25 @@ const SourceSheet = {
     // exports sometimes ship with a minimal <dimension ref="A1"/> element
     // that misleads srcWs.actualColumnCount / columnCount, so we measure
     // directly from cells we can see.
+    //
+    // IMPORTANT: probeRow.cellCount counts style-only cells too. JDE-side
+    // xlsx exports often carry empty styled cells past the real data
+    // (the JDE Item Ledger fixture has 18 populated columns but row 1
+    // reports cellCount=30). Walk the cells and only count positions
+    // with an actual value, so maxCol tracks real data, not styling.
+    const lastPopulatedCol = row => {
+      if (!row) return 0;
+      let last = 0;
+      const probeMax = row.cellCount || 0;
+      for (let c = 1; c <= probeMax; c++) {
+        const v = row.getCell(c).value;
+        if (v !== null && v !== undefined && v !== '') last = c;
+      }
+      return last;
+    };
     let maxCol = 0;
     for (let probe = Math.max(1, headerRow); probe <= headerRow + 5; probe++) {
-      const probeRow = srcWs.getRow(probe);
-      if (probeRow && probeRow.cellCount) maxCol = Math.max(maxCol, probeRow.cellCount);
+      maxCol = Math.max(maxCol, lastPopulatedCol(srcWs.getRow(probe)));
     }
     if (!maxCol) maxCol = srcWs.actualColumnCount || srcWs.columnCount || 1;
 
@@ -1871,6 +1902,66 @@ const SourceSheet = {
           F.fillCell(dst.getRow(h.rowNumber).getCell(c), colors.fill);
         }
       });
+    }
+
+    // Pattern-name note column — append after the source data so the
+    // user can read which detector flagged each row while scrolling.
+    // Lives in the first empty column (maxCol + 1); for the standard
+    // 18-col JDE Item Ledger export this lands at column S, which is
+    // exactly where the user expects it. AutoFilter range below picks
+    // this column up too so it's filterable.
+    //
+    // Visual treatment: saturated priority-matched fill with white bold
+    // text, so flagged rows have a strong visual anchor when scrolling
+    // the raw data. The full-row pastel highlight (above) gives context;
+    // this note cell shouts the WHY at the user.
+    let noteCol = 0;
+    if (options.patternByRow && options.patternByRow.size > 0) {
+      noteCol = maxCol + 1;
+      // Build a row → priority lookup from highlights so the note cell
+      // can pick a matching saturated fill.
+      const priorityByRow = new Map();
+      (options.highlights || []).forEach(h => priorityByRow.set(h.rowNumber, h.priority));
+      const saturatedFill = p => p === 1 ? 'FFB81F1F' : p === 2 ? 'FFD97316' : 'FFA88A1F';
+
+      // Header
+      const headerCell = dst.getRow(headerRow).getCell(noteCol);
+      headerCell.value = 'RR Analyzer Note';
+      headerCell.font = { bold: true, name: 'Arial', size: 10 };
+      F.fillCell(headerCell, PALETTE.lightBlue);
+      // Body
+      options.patternByRow.forEach((label, rowNumber) => {
+        const cell = dst.getRow(rowNumber).getCell(noteCol);
+        cell.value = label;
+        const p = priorityByRow.get(rowNumber) || 3;
+        F.fillCell(cell, saturatedFill(p));
+        cell.font = { name: 'Arial', size: 11, bold: true, color: { argb: 'FFFFFFFF' } };
+        cell.alignment = { horizontal: 'left', vertical: 'middle', indent: 1, wrapText: true };
+        // Bump the row a touch so wrapped two-pattern labels are readable
+        const r = dst.getRow(rowNumber);
+        if (!r.height || r.height < 22) r.height = 22;
+      });
+      // Give the column some breathing room
+      dst.getColumn(noteCol).width = 36;
+    }
+
+    // Freeze panes (reapply after potentially extending columns above)
+    dst.views = [{ state: 'frozen', xSplit: 0, ySplit: freezeAt - 1, topLeftCell: `A${freezeAt}`, showGridLines: true }];
+
+    // AutoFilter — extend to include the note column when present
+    const filterLastCol = SourceSheet.colLetter(noteCol > 0 ? noteCol : maxCol);
+    dst.autoFilter = `A${headerRow}:${filterLastCol}${lastRowNumber}`;
+
+    // Optionally pre-filter the source sheet to just the highlighted rows
+    // by hiding every data row that wasn't flagged. Header row stays
+    // visible, highlights stay coloured, and AutoFilter still applies on
+    // top — the user can Right-click → Unhide whenever they want the
+    // full data back.
+    if (options.hideUnhighlighted && options.highlights && options.highlights.length) {
+      const keep = new Set(options.highlights.map(h => h.rowNumber));
+      for (let r = headerRow + 1; r <= lastRowNumber; r++) {
+        if (!keep.has(r)) dst.getRow(r).hidden = true;
+      }
     }
 
     return dst;
@@ -5945,10 +6036,24 @@ Templates.register(SystemStatusTemplate);
    ITEM LEDGER TEMPLATE  —  JDE-native Item Ledger export
    First template that reads JDE directly (not an RR export). Detected by
    column-header fingerprint (sheet name is useless — typically "Sheet1").
-   Two patterns in v1:
-     1. Intercompany Transactions — Doc Co != Order Co
-     2. Backdated Transactions    — GL Date is more than 7 days earlier
-                                    than the row's Transaction Date.
+   Eight patterns:
+     1. Intercompany Transactions — Doc Co != Order Co.
+     2. Backdated Transactions    — GL Date > 7 days before Tx Date.
+     3. Negative Unit Cost        — stored unit cost < 0.
+     4. Missing IB on Cost Change — standard-cost item changes without an
+                                    accompanying IB revaluation row.
+     5. Unjustified Avg Change    — weighted-avg cost changes without an
+                                    OV/OP receipt preceding it.
+     6. Large Unit-Cost Jump      — single-row cost change > ±25%.
+     7. Residual-Cost IA          — IA with qty=0 but ext≠0 (stuck like
+                                    a ZBA candidate the auto-clear can't
+                                    write off). Low priority.
+     8. Stored Value Mismatch     — qty × stored unit cost ≠ stored ext
+                                    by more than the rounding tolerance.
+
+   Plus a unit-cost timeline section that shows every cost change by
+   branch/plant in entry order, with the analyzer's inferred cost
+   method (Standard / Weighted Avg / Unknown) per branch.
 ==================================================================== */
 const ItemLedgerTemplate = {
   id: 'item-ledger',
@@ -6171,20 +6276,52 @@ const ItemLedgerTemplate = {
       sheetName: ws.name,
       headerRow: 1,
       rows,
-      // For chrome context
-      totalRows: rows.length
+      totalRows: rows.length,
+      // Expose companies + branches so the inline preview card (which reads
+      // data.companies directly) renders cleanly.
+      companies: Array.from(new Set(rows.map(r => r.docCo).filter(Boolean))).sort(),
+      branches: Array.from(new Set(rows.map(r => (r.docCo || '') + '/' + (r.branchPlant || '')).filter(s => s !== '/'))).sort()
     };
   },
 
   // ---- Classification ----
-  // Pattern 1: Intercompany. Both Doc Co AND Order Co parse as non-zero
-  // numbers AND those numbers differ -> flag.
-  // Pattern 2: Backdated. Per row, compare GL Date vs Transaction Date.
-  // If GL Date is more than _BACKDATE_DAYS earlier than Transaction Date,
-  // flag. Rows missing either date are skipped.
-  _BACKDATE_DAYS: 7,    // tunable v1 constant — surface in report if it trips on too many rows
+  // Eight patterns:
+  //   1. Intercompany — Doc Co != Order Co (both populated, numeric, non-zero).
+  //   2. Backdated — GL Date more than _BACKDATE_DAYS earlier than Transaction Date.
+  //   3. Negative unit cost — stored unit cost (iluncs) is below zero.
+  //   4. Missing IB on cost change (standard-cost integrity) — unit cost
+  //      changes between rows without an IB revaluation row between them.
+  //   5. Unjustified avg cost change (weighted-avg integrity) — unit cost
+  //      changes following a non-receipt doc type.
+  //   6. Large unit-cost jump — single-row % change exceeds _LARGE_JUMP_PCT.
+  //   7. Residual-cost IA — IA (inventory adjustment) row with qty=0 but
+  //      ext!=0. Stuck like a ZBA candidate but the ZBA can't write it off
+  //      because the residual cost is non-zero. Low priority but worth
+  //      surfacing — usually fixed via a manual write-off when reconciling
+  //      cardex amount variance.
+  //   8. Stored value mismatch — qty × stored unit cost differs from the
+  //      stored extended cost by more than _UNIT_EXT_TOLERANCE. One of the
+  //      three fields is wrong.
+  _BACKDATE_DAYS: 7,
+  _LARGE_JUMP_PCT: 25,         // single-row unit-cost jump threshold
+  _COST_NOISE_ABS: 0.01,       // unit-cost diffs below this absolute floor = noise
+  _COST_NOISE_REL: 0.005,      // ...or below this fraction of the prior cost = noise
+  _UNIT_EXT_TOLERANCE: 0.05,   // qty × unitCost vs ext: tolerance for rounding diffs
+  _RECEIPT_DOCS: ['OV', 'OP'], // PO receipts that legitimately update weighted avg
+  _REVAL_DOCS: ['IB'],         // standard-cost revaluation JE
+
+  // Treat a unit-cost change as meaningful only if it exceeds BOTH a 1¢
+  // absolute floor and a 0.5% relative floor (whichever is larger for the
+  // current cost). Everything below is rounding noise on a standard-cost
+  // item and shouldn't trip the timeline / Pattern 4 / Pattern 5 detectors.
+  _isMeaningfulCostChange(prior, curr) {
+    const delta = Math.abs(curr - prior);
+    const floor = Math.max(this._COST_NOISE_ABS, Math.abs(prior) * this._COST_NOISE_REL);
+    return delta >= floor;
+  },
 
   classify(data) {
+    // ---- Pattern 1: Intercompany ----
     const intercompany = [];
     data.rows.forEach(r => {
       const dc = Number(r.docCo);
@@ -6194,9 +6331,7 @@ const ItemLedgerTemplate = {
       }
     });
 
-    // Backdated detection — per row, lag = TxDate - GLDate (in days).
-    // Lag > threshold means the GL Date was set further in the past than
-    // _BACKDATE_DAYS relative to when the transaction actually happened.
+    // ---- Pattern 2: Backdated ----
     const backdated = [];
     const dayMs = 86400000;
     const thresholdMs = this._BACKDATE_DAYS * dayMs;
@@ -6207,33 +6342,292 @@ const ItemLedgerTemplate = {
       if (isNaN(glMs) || isNaN(txMs)) return;
       const lagMs = txMs - glMs;
       if (lagMs > thresholdMs) {
-        backdated.push({
-          row: r,
-          lagDays: Math.round(lagMs / dayMs)
-        });
+        backdated.push({ row: r, lagDays: Math.round(lagMs / dayMs) });
       }
     });
 
-    // Priority:
-    //   P1 if BOTH patterns have hits (either alone w/ large hit count still P1 — see below)
-    //   P2 if exactly one pattern hit and that count is small (< ~20)
-    //   P3 if both are clean
-    let priority;
-    const interN = intercompany.length;
-    const backN = backdated.length;
-    if (interN === 0 && backN === 0) priority = 3;
-    else if (interN > 0 && backN > 0) priority = 1;
-    else if (interN > 0 || backN > 0) {
-      // single-pattern: still P1 if the hit count is meaningful, else P2.
-      // "Small" = 20 rows or fewer (arbitrary but tuned to the sample).
-      const onlyN = Math.max(interN, backN);
-      priority = onlyN > 20 ? 1 : 2;
+    // ---- Pattern 3: Negative unit cost (direct check on the stored
+    //      Unit Cost field — JDE iluncs). Anything below zero is flagged. ----
+    const negativeCost = [];
+    data.rows.forEach(r => {
+      const unit = Number(r.unitCost);
+      if (!isFinite(unit)) return;
+      if (unit < 0) {
+        negativeCost.push({ row: r });
+      }
+    });
+
+    // ---- Pattern 8: Stored value inconsistency (qty × unitCost ≠ ext).
+    //      For qty>0 rows the three fields should satisfy qty × unit ≈ ext
+    //      (within rounding). qty=0 rows are EXEMPT: those are PPV
+    //      variance partners on OV pairs or IB revaluations where the ext
+    //      represents a per-batch / per-on-hand amount and doesn't
+    //      derive from qty × unit. ----
+    const valueInconsistent = [];
+    data.rows.forEach(r => {
+      const qty  = Number(r.qtyPrimary);
+      const unit = Number(r.unitCost);
+      const ext  = Number(r.extendedCost);
+      if (!isFinite(qty) || !isFinite(unit) || !isFinite(ext)) return;
+      if (qty === 0) return;
+      const expected = qty * unit;
+      const diff = Math.abs(ext - expected);
+      if (diff > this._UNIT_EXT_TOLERANCE) {
+        valueInconsistent.push({ row: r, expected, actual: ext, diff });
+      }
+    });
+
+    // ---- Pattern 7: Residual-cost IA (zero qty, non-zero ext) ----
+    const residualIA = [];
+    data.rows.forEach(r => {
+      const dt = (r.docType || '').toUpperCase();
+      if (dt !== 'IA') return;
+      const qty = Number(r.qtyPrimary);
+      const ext = Number(r.extendedCost);
+      if (!isFinite(qty) || !isFinite(ext)) return;
+      if (qty === 0 && ext !== 0) {
+        residualIA.push({ row: r });
+      }
+    });
+
+    // ---- Cost-evolution analysis (Patterns 4 / 5 / 6 + timeline) ----
+    // Group rows by Co+Branch; sort by UKID asc; compute per-row unit cost;
+    // infer cost method per branch; then run integrity checks.
+    const byBranch = new Map();
+    data.rows.forEach(r => {
+      const key = (r.docCo || '') + '|' + (r.branchPlant || '');
+      if (!byBranch.has(key)) byBranch.set(key, []);
+      byBranch.get(key).push(r);
+    });
+
+    const missingIB = [];
+    const unjustifiedAvg = [];
+    const largeJumps = [];
+    const costTimeline = [];
+    const methodByBranch = new Map();
+
+    // Per-branch precomputed data for the second pass (timeline + patterns)
+    const branchData = new Map();
+
+    // ---- PASS 1: per-branch method inference ----
+    for (const [branchKey, branchRows] of byBranch) {
+      const sorted = branchRows.slice().sort((a, b) => {
+        const au = a.ukid == null ? 0 : a.ukid;
+        const bu = b.ukid == null ? 0 : b.ukid;
+        return au - bu;
+      });
+
+      // Compute (sequential) unit-cost points, skipping rows where qty=0
+      const costPoints = [];
+      sorted.forEach(r => {
+        const qty = Number(r.qtyPrimary);
+        const ext = Number(r.extendedCost);
+        if (!isFinite(qty) || !isFinite(ext) || qty === 0) return;
+        costPoints.push({ row: r, unitCost: ext / qty, docType: (r.docType || '').toUpperCase() });
+      });
+
+      branchData.set(branchKey, { sorted, costPoints });
+
+      if (costPoints.length < 2) {
+        methodByBranch.set(branchKey, 'UNKNOWN');
+        continue;
+      }
+
+      // Method inference — count F4111 rows per OV doc on this branch.
+      // Per the user's spec:
+      //   * Standard cost: each OV (PO receipt) doc writes TWO F4111 rows
+      //     — a qty>0 row at standard cost + a qty=0 row carrying the PPV
+      //     (purchase price variance) between standard and actual cost.
+      //   * Weighted average: each OV doc writes ONE F4111 row at the
+      //     receipt's actual cost. No PPV row because the avg absorbs it.
+      // So the discriminator is "how many F4111 rows per OV doc number" —
+      // 2 means standard, 1 means weighted-avg. (Tiny cost diffs between
+      // non-receipt rows are rounding noise on a standard-cost item and
+      // should NOT mislead the inference.)
+      const ovDocRowCounts = new Map();
+      sorted.forEach(r => {
+        if ((r.docType || '').toUpperCase() !== 'OV') return;
+        const k = r.docNumber || '';
+        if (!k) return;
+        ovDocRowCounts.set(k, (ovDocRowCounts.get(k) || 0) + 1);
+      });
+
+      const ovDocCounts = Array.from(ovDocRowCounts.values());
+      let method = 'UNKNOWN';
+      if (ovDocCounts.length >= 2) {
+        const twoRow = ovDocCounts.filter(c => c >= 2).length;
+        const ratio = twoRow / ovDocCounts.length;
+        method = ratio >= 0.7 ? 'STANDARD' : 'WEIGHTED_AVG';
+      } else if (ovDocCounts.length === 1) {
+        method = ovDocCounts[0] >= 2 ? 'STANDARD' : 'UNKNOWN';
+      } else {
+        // No OV docs at all — fall back to "is the unit cost essentially flat?"
+        // Apply the same noise floor used for change detection so tiny
+        // rounding-noise variations don't push the branch into UNKNOWN.
+        let changes = 0;
+        for (let i = 1; i < costPoints.length; i++) {
+          if (this._isMeaningfulCostChange(costPoints[i - 1].unitCost, costPoints[i].unitCost)) changes++;
+        }
+        method = changes === 0 ? 'STANDARD' : 'UNKNOWN';
+      }
+      methodByBranch.set(branchKey, method);
+
     }
 
-    // Build evidence list — sorted DESCENDING by UKID so newest entries
-    // land first (matches SystemStatusTemplate's newest-first pattern).
-    const evidence = [];
+    // ---- PROPAGATION: UNKNOWN branches inherit the dominant known method ----
+    // Cost method is a per-item attribute in JDE — all branches of one item
+    // share it. If some branches got KNOWN inferences (had OV rows) and
+    // others ended up UNKNOWN (no receipts in the export window), propagate
+    // the dominant known method to the unknowns.
+    const knownVals = Array.from(methodByBranch.values()).filter(m => m === 'STANDARD' || m === 'WEIGHTED_AVG');
+    if (knownVals.length > 0) {
+      const stdCount = knownVals.filter(m => m === 'STANDARD').length;
+      const avgCount = knownVals.length - stdCount;
+      let dominant = null;
+      if (stdCount > avgCount) dominant = 'STANDARD';
+      else if (avgCount > stdCount) dominant = 'WEIGHTED_AVG';
+      if (dominant) {
+        for (const [k, v] of methodByBranch) {
+          if (v === 'UNKNOWN') methodByBranch.set(k, dominant);
+        }
+      }
+    }
 
+    // ---- PASS 2: emit timeline entries + Pattern 4/5/6 detections ----
+    //
+    // For STANDARD branches: an OV row's unit cost is the PO PRICE (not the
+    // standard cost). Combined with the paired qty=0 variance row, the
+    // standard cost is recovered. So transitions involving an OV row don't
+    // represent a real cost change — they reflect PO price variability.
+    // Skip those. For WEIGHTED_AVG / UNKNOWN branches, all transitions matter.
+    for (const [branchKey, { sorted, costPoints }] of branchData) {
+      const method = methodByBranch.get(branchKey);
+      if (costPoints.length < 2) continue;
+
+      const isStandard = method === 'STANDARD';
+
+      // Pre-compute IB row UKIDs on this branch for Pattern 4. IB rows have
+      // qty=0 (no quantity change, only a cost revaluation) so they're not
+      // in costPoints. We look up IB presence by UKID range instead.
+      const ibUkids = sorted
+        .filter(r => this._REVAL_DOCS.includes((r.docType || '').toUpperCase()))
+        .map(r => r.ukid)
+        .filter(u => u != null);
+
+      for (let i = 1; i < costPoints.length; i++) {
+        const prior = costPoints[i - 1];
+        const curr  = costPoints[i];
+
+        if (isStandard && (prior.docType === 'OV' || curr.docType === 'OV')) continue;
+        if (!this._isMeaningfulCostChange(prior.unitCost, curr.unitCost)) continue;
+
+        const delta = curr.unitCost - prior.unitCost;
+        const pctChange = prior.unitCost !== 0 ? (delta / Math.abs(prior.unitCost)) * 100 : null;
+
+        // Each timeline entry references BOTH the prior transaction and the
+        // current transaction so the renderer can show them as a pair — the
+        // "before" row and the "after" row, side-by-side / row-by-row.
+        costTimeline.push({
+          branchKey,
+          branchLabel: (curr.row.docCo || '?') + ' / ' + (curr.row.branchPlant || '?'),
+          method,
+          pctChange,
+          priorRow: {
+            rowNumber: prior.row.rowNumber,
+            ukid: prior.row.ukid,
+            date: prior.row.glDateRaw || (prior.row.glDate ? prior.row.glDate.slice(0, 10) : ''),
+            doc: prior.row.docNumber,
+            docType: prior.docType,
+            qty: prior.row.qtyPrimary,
+            uom: prior.row.primaryUom || '',
+            ext: prior.row.extendedCost,
+            unitCost: prior.unitCost
+          },
+          currRow: {
+            rowNumber: curr.row.rowNumber,
+            ukid: curr.row.ukid,
+            date: curr.row.glDateRaw || (curr.row.glDate ? curr.row.glDate.slice(0, 10) : ''),
+            doc: curr.row.docNumber,
+            docType: curr.docType,
+            qty: curr.row.qtyPrimary,
+            uom: curr.row.primaryUom || '',
+            ext: curr.row.extendedCost,
+            unitCost: curr.unitCost
+          }
+        });
+
+        // Pattern 4 — missing IB on standard-cost change. IB rows have qty=0
+        // (revaluation entries) and aren't in costPoints, so we check the raw
+        // ibUkids list for an IB row in the UKID range between prior and curr.
+        if (method === 'STANDARD') {
+          const pU = prior.row.ukid;
+          const cU = curr.row.ukid;
+          const ibBetween = pU != null && cU != null &&
+            ibUkids.some(u => u > pU && u <= cU);
+          if (!ibBetween) {
+            missingIB.push({ row: curr.row, prevRow: prior.row, prevCost: prior.unitCost, newCost: curr.unitCost, pctChange });
+          }
+        }
+
+        // Pattern 5 — weighted-avg change without an OV receipt preceding it
+        if (method === 'WEIGHTED_AVG' && !this._RECEIPT_DOCS.includes(prior.docType)) {
+          unjustifiedAvg.push({ row: curr.row, prevRow: prior.row, prevDocType: prior.docType, prevCost: prior.unitCost, newCost: curr.unitCost, pctChange });
+        }
+
+        // Pattern 6 — large jump (regardless of method). Skip if either
+        // side of the transition has qty=0. costPoints already excludes
+        // qty=0 rows, so this is defensive — protects Pattern 6 from
+        // flagging PPV variance rows or IB revaluation rows if a future
+        // change ever lets them through.
+        const priorQty = Number(prior.row.qtyPrimary);
+        const currQty  = Number(curr.row.qtyPrimary);
+        if (priorQty !== 0 && currQty !== 0 &&
+            pctChange !== null && Math.abs(pctChange) >= this._LARGE_JUMP_PCT) {
+          largeJumps.push({ row: curr.row, prevCost: prior.unitCost, newCost: curr.unitCost, pctChange });
+        }
+      }
+    }
+
+    // Counts
+    const interN  = intercompany.length;
+    const backN   = backdated.length;
+    const negN    = negativeCost.length;
+    const ibN     = missingIB.length;
+    const avgN    = unjustifiedAvg.length;
+    const jumpN   = largeJumps.length;
+    const residN  = residualIA.length;
+    const valIncN = valueInconsistent.length;
+
+    // Priority — pick the most severe (lowest number) priority across all
+    // firing patterns. Patterns with their own intrinsic priority:
+    //   * residual-cost IA       — always P3 (low — recommended fix only)
+    //   * negative / missing IB / avg drift / value mismatch — P1 (data integrity)
+    //   * intercompany / backdated / large jumps — P1 if >20 rows, else P2
+    const patternPriorities = [];
+    if (interN)  patternPriorities.push(interN > 20 ? 1 : 2);
+    if (backN)   patternPriorities.push(backN  > 20 ? 1 : 2);
+    if (negN)    patternPriorities.push(1);
+    if (ibN)     patternPriorities.push(1);
+    if (avgN)    patternPriorities.push(1);
+    if (jumpN)   patternPriorities.push(jumpN > 20 ? 1 : 2);
+    if (residN)  patternPriorities.push(3);
+    if (valIncN) patternPriorities.push(1);
+    const priority = patternPriorities.length === 0 ? 3 : Math.min(...patternPriorities);
+
+    // Pattern label (for inline preview pill / chrome subline reuse)
+    const labelBits = [];
+    if (interN)  labelBits.push(`Intercompany (${interN})`);
+    if (backN)   labelBits.push(`Backdated (${backN})`);
+    if (negN)    labelBits.push(`Negative cost (${negN})`);
+    if (ibN)     labelBits.push(`Missing IB (${ibN})`);
+    if (avgN)    labelBits.push(`Avg drift (${avgN})`);
+    if (jumpN)   labelBits.push(`Large jumps (${jumpN})`);
+    if (residN)  labelBits.push(`Residual IA (${residN})`);
+    if (valIncN) labelBits.push(`Value mismatch (${valIncN})`);
+    const patternLabel = labelBits.length ? labelBits.join(' · ') : 'Clean — all patterns passed';
+
+    // ---- Evidence list (combined, sorted by UKID desc, capped at 40) ----
+    const evidence = [];
     intercompany.forEach(r => {
       const ukidShown = r.ukidDisplay || (r.ukid == null ? '' : String(r.ukid));
       const dateShown = r.glDateRaw || (r.glDate ? r.glDate.slice(0, 10) : '');
@@ -6245,7 +6639,6 @@ const ItemLedgerTemplate = {
         sourceRow: r.rowNumber
       });
     });
-
     backdated.forEach(b => {
       const r = b.row;
       const ukidShown = r.ukidDisplay || (r.ukid == null ? '' : String(r.ukid));
@@ -6260,102 +6653,290 @@ const ItemLedgerTemplate = {
         sourceRow: r.rowNumber
       });
     });
+    negativeCost.forEach(n => {
+      const r = n.row;
+      const ukidShown = r.ukidDisplay || (r.ukid == null ? '' : String(r.ukid));
+      evidence.push({
+        severity: 'Root cause',
+        sortKey: r.ukid != null ? r.ukid : -1,
+        label: ukidShown || '(no UKID)',
+        description: `Negative unit cost: stored unit cost ${Helpers.money(r.unitCost)}\nQty ${Helpers.count(r.qtyPrimary)} ${r.primaryUom || ''}  ·  Ext ${Helpers.money(r.extendedCost)}\nDoc ${r.docNumber}${r.docType ? ' (' + r.docType + ')' : ''}  ·  Co ${r.docCo || '(blank)'}  ·  ${r.branchPlant || '(no branch)'}\nLot ${r.lotSerial || '(none)'}  ·  Location ${r.location || '(none)'}`,
+        sourceRow: r.rowNumber
+      });
+    });
+    valueInconsistent.forEach(v => {
+      const r = v.row;
+      const ukidShown = r.ukidDisplay || (r.ukid == null ? '' : String(r.ukid));
+      evidence.push({
+        severity: 'Root cause',
+        sortKey: r.ukid != null ? r.ukid : -1,
+        label: ukidShown || '(no UKID)',
+        description: `Value mismatch: qty × unit cost = ${Helpers.money(v.expected)} but Extended Cost = ${Helpers.money(v.actual)} (diff ${Helpers.money(v.diff)})\nQty ${Helpers.count(r.qtyPrimary)} ${r.primaryUom || ''}  ·  Unit ${Helpers.money(r.unitCost)}  ·  Ext ${Helpers.money(r.extendedCost)}\nDoc ${r.docNumber}${r.docType ? ' (' + r.docType + ')' : ''}  ·  Co ${r.docCo || '(blank)'}  ·  ${r.branchPlant || '(no branch)'}`,
+        sourceRow: r.rowNumber
+      });
+    });
+    missingIB.forEach(m => {
+      const r = m.row;
+      const ukidShown = r.ukidDisplay || (r.ukid == null ? '' : String(r.ukid));
+      const pctShown = m.pctChange != null ? `${m.pctChange >= 0 ? '+' : ''}${m.pctChange.toFixed(1)}%` : '';
+      evidence.push({
+        severity: 'Root cause',
+        sortKey: r.ukid != null ? r.ukid : -1,
+        label: ukidShown || '(no UKID)',
+        description: `Missing IB: unit cost changed ${Helpers.money(m.prevCost)} → ${Helpers.money(m.newCost)} ${pctShown ? '(' + pctShown + ') ' : ''}with no IB revaluation row between\nDoc ${r.docNumber}${r.docType ? ' (' + r.docType + ')' : ''}  ·  Co ${r.docCo || '(blank)'}  ·  ${r.branchPlant || '(no branch)'}\nPrior doc ${m.prevRow.docNumber}${m.prevRow.docType ? ' (' + m.prevRow.docType + ')' : ''}`,
+        sourceRow: r.rowNumber
+      });
+    });
+    unjustifiedAvg.forEach(u => {
+      const r = u.row;
+      const ukidShown = r.ukidDisplay || (r.ukid == null ? '' : String(r.ukid));
+      const pctShown = u.pctChange != null ? `${u.pctChange >= 0 ? '+' : ''}${u.pctChange.toFixed(1)}%` : '';
+      evidence.push({
+        severity: 'Anchor',
+        sortKey: r.ukid != null ? r.ukid : -1,
+        label: ukidShown || '(no UKID)',
+        description: `Unjustified avg change: ${Helpers.money(u.prevCost)} → ${Helpers.money(u.newCost)} ${pctShown ? '(' + pctShown + ') ' : ''}— preceding doc type was ${u.prevDocType || '(blank)'}, not an OV/OP receipt\nDoc ${r.docNumber}${r.docType ? ' (' + r.docType + ')' : ''}  ·  Co ${r.docCo || '(blank)'}  ·  ${r.branchPlant || '(no branch)'}`,
+        sourceRow: r.rowNumber
+      });
+    });
+    largeJumps.forEach(j => {
+      const r = j.row;
+      const ukidShown = r.ukidDisplay || (r.ukid == null ? '' : String(r.ukid));
+      const pctShown = j.pctChange != null ? `${j.pctChange >= 0 ? '+' : ''}${j.pctChange.toFixed(1)}%` : '';
+      evidence.push({
+        severity: 'Related',
+        sortKey: r.ukid != null ? r.ukid : -1,
+        label: ukidShown || '(no UKID)',
+        description: `Large unit-cost jump: ${Helpers.money(j.prevCost)} → ${Helpers.money(j.newCost)} ${pctShown ? '(' + pctShown + ', ' : '('}threshold ±${this._LARGE_JUMP_PCT}%)\nDoc ${r.docNumber}${r.docType ? ' (' + r.docType + ')' : ''}  ·  Co ${r.docCo || '(blank)'}  ·  ${r.branchPlant || '(no branch)'}`,
+        sourceRow: r.rowNumber
+      });
+    });
+    residualIA.forEach(x => {
+      const r = x.row;
+      const ukidShown = r.ukidDisplay || (r.ukid == null ? '' : String(r.ukid));
+      evidence.push({
+        severity: 'Informational',
+        sortKey: r.ukid != null ? r.ukid : -1,
+        label: ukidShown || '(no UKID)',
+        description: `Residual IA: qty 0 but ext ${Helpers.money(r.extendedCost)} — stuck like a ZBA candidate (the zero-balance adjustment can't write it off because the residual cost isn't zero)\nDoc ${r.docNumber}${r.docType ? ' (' + r.docType + ')' : ''}  ·  Co ${r.docCo || '(blank)'}  ·  ${r.branchPlant || '(no branch)'}\nLot ${r.lotSerial || '(none)'}  ·  Location ${r.location || '(none)'}`,
+        sourceRow: r.rowNumber
+      });
+    });
 
-    // Sort UKID descending — newest at the top
     evidence.sort((a, b) => {
       const ax = typeof a.sortKey === 'number' ? a.sortKey : -1;
       const bx = typeof b.sortKey === 'number' ? b.sortKey : -1;
       return bx - ax;
     });
-
-    // Cap evidence at 40 rows so the Analysis tab stays tractable when a
-    // large file generates hundreds of findings. Total counts still
-    // surface on the variance card + WHAT block, so nothing is hidden.
     const evidenceTrimmed = evidence.slice(0, 40);
 
-    // Source-sheet highlights — red for intercompany, orange for
-    // backdated. Both rendered with priority colors.
+    // ---- Source-sheet highlights (by priority) ----
     const highlights = [];
     intercompany.forEach(r => highlights.push({ rowNumber: r.rowNumber, priority: 1 }));
     backdated.forEach(b => highlights.push({ rowNumber: b.row.rowNumber, priority: 2 }));
+    negativeCost.forEach(n => highlights.push({ rowNumber: n.row.rowNumber, priority: 1 }));
+    missingIB.forEach(m => highlights.push({ rowNumber: m.row.rowNumber, priority: 1 }));
+    unjustifiedAvg.forEach(u => highlights.push({ rowNumber: u.row.rowNumber, priority: 2 }));
+    largeJumps.forEach(j => highlights.push({ rowNumber: j.row.rowNumber, priority: 2 }));
+    residualIA.forEach(x => highlights.push({ rowNumber: x.row.rowNumber, priority: 3 }));
+    valueInconsistent.forEach(v => highlights.push({ rowNumber: v.row.rowNumber, priority: 1 }));
 
-    // Pattern label for the inline preview
-    let patternLabel;
-    if (interN && backN) patternLabel = 'Intercompany routing AND backdated transactions';
-    else if (interN) patternLabel = `Intercompany transactions (${interN})`;
-    else if (backN) patternLabel = `Backdated transactions (${backN})`;
-    else patternLabel = 'Clean — no intercompany routing, no backdated transactions';
+    // ---- Per-row pattern note (for the column S "RR Analyzer Note") ----
+    // A single row can fire multiple patterns; join the labels with " · "
+    // so the user can see every detector that flagged the row while
+    // scrolling the source sheet.
+    const patternByRow = new Map();
+    const tagRow = (rn, label) => {
+      if (rn == null) return;
+      const prior = patternByRow.get(rn);
+      patternByRow.set(rn, prior ? `${prior}  ·  ${label}` : label);
+    };
+    intercompany.forEach(r => tagRow(r.rowNumber, 'Intercompany'));
+    backdated.forEach(b => tagRow(b.row.rowNumber, 'Backdated'));
+    negativeCost.forEach(n => tagRow(n.row.rowNumber, 'Negative cost'));
+    missingIB.forEach(m => tagRow(m.row.rowNumber, 'Missing IB'));
+    unjustifiedAvg.forEach(u => tagRow(u.row.rowNumber, 'Avg drift'));
+    largeJumps.forEach(j => tagRow(j.row.rowNumber, 'Large jump'));
+    residualIA.forEach(x => tagRow(x.row.rowNumber, 'Residual IA'));
+    valueInconsistent.forEach(v => tagRow(v.row.rowNumber, 'Value mismatch'));
 
-    // Build the dimensional summary (Company > Branch/Plant > Location > Lot)
+    // ---- Summary (for chrome context only — no pivot section rendered) ----
     const summary = this._buildSummary(data.rows);
 
-    // Surface the actionPlan + findings array so the multi-finding preview
-    // renderer can show this template's results inline too. We feed it a
-    // single-issue "findings" shape per pattern so the pill rendering
-    // mirrors SystemStatusTemplate's preview.
+    // ---- Multi-findings — one per pattern that fires, or a "clean" synth ----
     const multiFindings = [];
     if (interN) {
       multiFindings.push({
-        number: multiFindings.length + 1,
-        type: 'intercompany',
-        title: `${interN} intercompany transaction${interN === 1 ? '' : 's'}`,
-        priority: 1,
-        rowCount: interN,
-        issue: 'Intercompany routing',
+        number: multiFindings.length + 1, type: 'intercompany',
+        title: `Intercompany routing  (${interN} row${interN === 1 ? '' : 's'})`,
+        priority: 1, rowCount: interN,
+        issue: 'Intercompany',
+        scopeShort: `${interN} row${interN === 1 ? '' : 's'}`,
+        detail: 'Doc Co ≠ Order Co (both populated)',
         scope: `${interN} row${interN === 1 ? '' : 's'} where Doc Co and Order Co are both populated, both numeric, and different.`,
         pattern: `The inventory side of the transaction posts to a different company than the order originated in. Not necessarily wrong — intercompany activity is real — but worth surfacing because the posting destination is split.`,
-        resolution: `Step 1.  Confirm intercompany routing is the expected behavior for these document types and order types with the customer's company-master config.\n\nStep 2.  If unexpected, review the Order Co assignment on each flagged document and correct in JDE before the period closes.`
+        resolution: `Step 1.  Confirm intercompany routing is the expected behavior for these document types and order types with the customer's company-master config.\n\nStep 2.  If unexpected, review the Order Co assignment on each flagged document and correct in JDE before the period closes.`,
+        rows: intercompany.map(r => ({ row: r }))
       });
     }
     if (backN) {
       multiFindings.push({
-        number: multiFindings.length + 1,
-        type: 'backdated',
-        title: `${backN} backdated transaction${backN === 1 ? '' : 's'}`,
-        priority: backN > 20 ? 1 : 2,
-        rowCount: backN,
-        issue: 'Backdated transactions',
+        number: multiFindings.length + 1, type: 'backdated',
+        title: `Backdated transactions  (${backN} row${backN === 1 ? '' : 's'})`,
+        priority: backN > 20 ? 1 : 2, rowCount: backN,
+        issue: 'Backdated',
+        scopeShort: `${backN} row${backN === 1 ? '' : 's'}`,
+        detail: `GL Date > ${this._BACKDATE_DAYS} days before Tx Date`,
         scope: `${backN} row${backN === 1 ? '' : 's'} where the GL Date is more than ${this._BACKDATE_DAYS} days earlier than the Transaction Date on the same row.`,
         pattern: `Backdating happens when a transaction is entered with a GL Date earlier than the date the transaction actually occurred. Common causes: corrections backdated to a prior month, late vouchers entered to a re-opened period, or item-ledger replays after a fix.`,
-        resolution: `Step 1.  Confirm the backdated GL Dates are intentional. If they cross a closed period, posting will fail or get redirected.\n\nStep 2.  For backdating that crossed periods, review whether the affected GL accounts need a manual period adjustment.\n\nStep 3.  If the backdating volume is unexpected, ask the entry team for context on the corrections — recurring backdating often signals a process gap.`
+        resolution: `Step 1.  Confirm the backdated GL Dates are intentional. If they cross a closed period, posting will fail or get redirected.\n\nStep 2.  For backdating that crossed periods, review whether the affected GL accounts need a manual period adjustment.\n\nStep 3.  If the backdating volume is unexpected, ask the entry team for context on the corrections — recurring backdating often signals a process gap.`,
+        rows: backdated
+      });
+    }
+    if (negN) {
+      multiFindings.push({
+        number: multiFindings.length + 1, type: 'negative_cost',
+        title: `Negative unit cost  (${negN} row${negN === 1 ? '' : 's'})`,
+        priority: 1, rowCount: negN,
+        issue: 'Negative cost',
+        scopeShort: `${negN} row${negN === 1 ? '' : 's'}`,
+        detail: 'Qty and Ext have opposite signs',
+        scope: `${negN} row${negN === 1 ? '' : 's'} where Quantity and Extended Cost are both non-zero and of opposite polarity. The implied unit cost (Ext ÷ Qty) is negative.`,
+        pattern: `Quantity and Extended Cost should always share a sign — a positive receipt has positive qty and positive ext, an issue has negative qty and negative ext. When the signs disagree, the unit cost is negative. Common causes: a manual entry with one field's sign flipped, a cost roll that mishandled return-to-vendor adjustments, or a bad backflush.`,
+        resolution: `Step 1.  For each flagged row, look up the source transaction in JDE Item Ledger Inquiry and confirm whether the sign mismatch was intentional.\n\nStep 2.  If it was a data-entry error, reverse the bad row and post a corrected one with matching signs.\n\nStep 3.  If multiple rows share a common cause (e.g. a batch of returns processed with the wrong sign convention), trace the upstream process and stop the bleed.`,
+        rows: negativeCost
+      });
+    }
+    if (ibN) {
+      multiFindings.push({
+        number: multiFindings.length + 1, type: 'missing_ib',
+        title: `Missing IB on cost change  (${ibN} row${ibN === 1 ? '' : 's'})`,
+        priority: 1, rowCount: ibN,
+        issue: 'Missing IB',
+        scopeShort: `${ibN} row${ibN === 1 ? '' : 's'}`,
+        detail: 'Standard-cost integrity: cost changed without an IB revaluation',
+        scope: `${ibN} row${ibN === 1 ? '' : 's'} on branches that look like standard-cost items where the unit cost changed from the prior row without an IB revaluation entry between them.`,
+        pattern: `In standard cost, a unit-cost change should be accompanied by an IB inventory-revaluation row that posts the GL impact. If the cost moved but no IB row exists, the inventory has been revalued without the corresponding GL entry — a classic cost-roll bug or a manual update that bypassed the revaluation program.`,
+        resolution: `Step 1.  For each flagged row, walk the F0911 GL postings around that date and check whether a manual JE booked the revaluation outside of the IB cycle.\n\nStep 2.  If no GL entry exists, the inventory cost change is unposted. Decide whether to backfill via JE or reverse the cost change in JDE and reapply through R30835 (cost-roll) properly.\n\nStep 3.  If a pattern emerges (e.g., all missing-IB rows on the same date), suspect a process gap in the cost-roll job — investigate the R30835 / R30837 sequence with the cost accounting team.`,
+        rows: missingIB
+      });
+    }
+    if (avgN) {
+      multiFindings.push({
+        number: multiFindings.length + 1, type: 'unjustified_avg',
+        title: `Unjustified avg-cost change  (${avgN} row${avgN === 1 ? '' : 's'})`,
+        priority: 1, rowCount: avgN,
+        issue: 'Avg drift',
+        scopeShort: `${avgN} row${avgN === 1 ? '' : 's'}`,
+        detail: 'Weighted-avg cost changed without an OV/OP receipt preceding',
+        scope: `${avgN} row${avgN === 1 ? '' : 's'} on branches that look like weighted-average items where the unit cost changed but the preceding doc type was not an OV or OP receipt.`,
+        pattern: `Weighted-average cost should only recompute when a new receipt blends into the running average. If the cost changes after a non-receipt doc (issue, transfer, adjustment), something other than a receipt is recomputing it — a manual override, a cost-roll on a weighted-avg item (which is unusual), or a data-conversion artifact.`,
+        resolution: `Step 1.  For each flagged row, identify the preceding doc and look it up in JDE. If it was a manual cost adjustment, confirm it was intentional and documented.\n\nStep 2.  If the preceding doc was a transfer or issue, investigate whether the cost recomputation was triggered by another transaction within the same batch (the analyzer only sees per-row context).\n\nStep 3.  Recurring unjustified avg changes on the same branch may indicate a configuration issue — confirm the item is actually set up as weighted-avg in F4105 and not standard.`,
+        rows: unjustifiedAvg
+      });
+    }
+    if (jumpN) {
+      multiFindings.push({
+        number: multiFindings.length + 1, type: 'large_jump',
+        title: `Large unit-cost jumps  (${jumpN} row${jumpN === 1 ? '' : 's'})`,
+        priority: jumpN > 20 ? 1 : 2, rowCount: jumpN,
+        issue: 'Large jumps',
+        scopeShort: `${jumpN} row${jumpN === 1 ? '' : 's'}`,
+        detail: `Unit-cost change > ±${this._LARGE_JUMP_PCT}% vs prior`,
+        scope: `${jumpN} row${jumpN === 1 ? '' : 's'} where the single-row unit-cost change exceeded ±${this._LARGE_JUMP_PCT}% relative to the prior cost on the same branch.`,
+        pattern: `Large single-step swings in unit cost — regardless of the underlying cost method — are usually worth a quick sanity check. Legitimate causes include supplier-price changes, scrap revaluations, or annual cost rolls. Less-legitimate causes include data-entry errors (wrong units), bad cost-roll runs, or stale conversion factors.`,
+        resolution: `Step 1.  For each flagged row, confirm the new cost is plausible against the supplier price book or the most recent purchase order.\n\nStep 2.  If the cost is wrong, reverse and re-post the offending transaction with the correct cost.\n\nStep 3.  If multiple jumps cluster around the same date, the cost-roll job is the likely culprit — pull its log and confirm what changed.`,
+        rows: largeJumps
+      });
+    }
+    if (valIncN) {
+      multiFindings.push({
+        number: multiFindings.length + 1, type: 'value_mismatch',
+        title: `Stored value mismatch  (${valIncN} row${valIncN === 1 ? '' : 's'})`,
+        priority: 1, rowCount: valIncN,
+        issue: 'Value mismatch',
+        scopeShort: `${valIncN} row${valIncN === 1 ? '' : 's'}`,
+        detail: 'Qty × Unit Cost ≠ Extended Cost (beyond rounding)',
+        scope: `${valIncN} row${valIncN === 1 ? '' : 's'} where Quantity × stored Unit Cost differs from the row's Extended Cost by more than ±${Helpers.money(this._UNIT_EXT_TOLERANCE)} (rounding tolerance).`,
+        pattern: `Each F4111 row stores Quantity, Unit Cost, and Extended Cost. These should always satisfy qty × unit = ext within rounding. When they don't, one of the three fields is wrong — typical causes are a manual-entry mistake, a botched cost roll that updated unit cost but not ext, or a data-conversion artifact that lost precision on one of the fields.`,
+        resolution: `Step 1.  For each flagged row, look it up in JDE Item Ledger Inquiry and identify which of qty, unit cost, or ext is the outlier vs the source transaction.\n\nStep 2.  Reverse the bad row and post a corrected one with all three fields consistent.\n\nStep 3.  If many rows share a common pattern (same date, same item, same doc type), the upstream process that wrote them needs investigation — pull the relevant batch / job log.`,
+        rows: valueInconsistent
+      });
+    }
+    if (residN) {
+      multiFindings.push({
+        number: multiFindings.length + 1, type: 'residual_ia',
+        title: `Residual-cost IA rows  (${residN} row${residN === 1 ? '' : 's'})`,
+        priority: 3, rowCount: residN,
+        issue: 'Residual IA',
+        scopeShort: `${residN} row${residN === 1 ? '' : 's'}`,
+        detail: 'IA with qty=0 but ext≠0',
+        scope: `${residN} IA (inventory adjustment) row${residN === 1 ? '' : 's'} with zero quantity but a non-zero extended cost — stuck like a zero-balance-adjustment candidate the ZBA can't clean up.`,
+        pattern: `An IA row that posts a cost adjustment without a quantity leaves residual value on the item with nothing to net it against. The zero-balance-adjustment process only clears rows where BOTH qty and ext are zero, so these rows hang around and show up as cardex amount variance until someone manually writes them off.`,
+        resolution: `These rows are typically cleared as part of cardex amount variance reconciliation. Low priority — no extra action needed unless you're actively working cardex variance for this item.`,
+        rows: residualIA
       });
     }
     if (!multiFindings.length) {
       multiFindings.push({
-        number: 1,
-        type: 'clean',
-        title: 'No intercompany routing or backdated transactions detected',
-        priority: 3,
-        rowCount: data.rows.length,
+        number: 1, type: 'clean',
+        title: 'All checked patterns passed',
+        priority: 3, rowCount: 0,
         issue: 'Clean',
+        scopeShort: `${data.rows.length} row${data.rows.length === 1 ? '' : 's'}`,
+        detail: '8 patterns checked, 0 flagged',
         scope: `${data.rows.length} row${data.rows.length === 1 ? '' : 's'} reviewed across ${summary.companies.length} compan${summary.companies.length === 1 ? 'y' : 'ies'} and ${summary.branches.length} branch${summary.branches.length === 1 ? '' : 'es'}.`,
-        pattern: `Every row had Doc Co = Order Co (or one of them blank), and every row's GL Date was within ${this._BACKDATE_DAYS} days of its Transaction Date.`,
-        resolution: `No action required by this analysis. The Summary tab on this workbook still lists the dimensional totals if you want a quick QoH / value read.`
+        pattern: `All 8 integrity checks passed.`,
+        resolution: `No action required.`,
+        rows: []
       });
     }
 
+    // ---- Action plan ----
     const actionPlan = [];
-    if (interN) actionPlan.push({ action: `Review the ${interN} intercompany row${interN === 1 ? '' : 's'} listed in the Evidence section. Confirm the Doc Co → Order Co split is expected for those document types.`, owner: 'JDE Admin' });
-    if (backN) actionPlan.push({ action: `Review the ${backN} backdated row${backN === 1 ? '' : 's'}. Check whether any cross a closed period — those need a manual period adjustment or a re-open before posting.`, owner: 'Accounting' });
-    if (!interN && !backN) actionPlan.push({ action: 'No flagged transactions. The Summary section gives the dimensional totals; no action required.', owner: 'Customer' });
+    if (interN) actionPlan.push({ action: `Review the ${interN} intercompany row${interN === 1 ? '' : 's'} (Finding ${this._findingNumber(multiFindings, 'intercompany')}). Confirm the Doc Co → Order Co split is expected for those document types.`, owner: 'JDE Admin' });
+    if (backN)  actionPlan.push({ action: `Review the ${backN} backdated row${backN === 1 ? '' : 's'} (Finding ${this._findingNumber(multiFindings, 'backdated')}). Check whether any cross a closed period — those need a manual period adjustment or a re-open before posting.`, owner: 'Accounting' });
+    if (negN)   actionPlan.push({ action: `Review the ${negN} negative-unit-cost row${negN === 1 ? '' : 's'} (Finding ${this._findingNumber(multiFindings, 'negative_cost')}). Confirm whether the sign mismatch was intentional; if not, reverse and re-post.`, owner: 'Inventory Accounting' });
+    if (ibN)    actionPlan.push({ action: `Review the ${ibN} missing-IB row${ibN === 1 ? '' : 's'} (Finding ${this._findingNumber(multiFindings, 'missing_ib')}). Walk F0911 GL postings around those dates and confirm whether a revaluation was booked manually or was simply skipped.`, owner: 'Cost Accounting' });
+    if (avgN)   actionPlan.push({ action: `Review the ${avgN} unjustified avg-change row${avgN === 1 ? '' : 's'} (Finding ${this._findingNumber(multiFindings, 'unjustified_avg')}). Identify what triggered the recomputation when it wasn't an OV/OP receipt.`, owner: 'Inventory Accounting' });
+    if (jumpN)  actionPlan.push({ action: `Review the ${jumpN} large unit-cost jump${jumpN === 1 ? '' : 's'} (Finding ${this._findingNumber(multiFindings, 'large_jump')}). Confirm each is intentional and not a data-entry error.`, owner: 'Cost Accounting' });
+    if (valIncN) actionPlan.push({ action: `Investigate the ${valIncN} stored-value-mismatch row${valIncN === 1 ? '' : 's'} (Finding ${this._findingNumber(multiFindings, 'value_mismatch')}). Identify which of qty, unit cost, or ext is wrong against the source transaction in JDE and reverse + correct.`, owner: 'Inventory Accounting' });
+    if (residN) actionPlan.push({ action: `When time permits, clear the ${residN} residual-cost IA row${residN === 1 ? '' : 's'} (Finding ${this._findingNumber(multiFindings, 'residual_ia')}) via a manual ZBA-style write-off. Low priority but knocks down cardex amount variance.`, owner: 'Inventory Accounting' });
+    if (!actionPlan.length) actionPlan.push({ action: 'No action required — all checked patterns passed.', owner: 'Customer' });
 
     return {
       // Raw classification
-      intercompany,
-      backdated,
+      intercompany, backdated, negativeCost, missingIB, unjustifiedAvg, largeJumps, residualIA, valueInconsistent,
+      costTimeline,
+      methodByBranch: Object.fromEntries(methodByBranch),
       summary,
       evidence: evidenceTrimmed,
       evidenceTruncated: evidence.length > evidenceTrimmed.length,
       evidenceTotal: evidence.length,
       highlights,
+      patternByRow,
       priority,
       patternLabel,
-      // Multi-finding shape (drives inline preview)
       findings: multiFindings,
       overallPriority: priority,
-      totalFindings: interN + backN,
-      actionPlan
+      totalFindings: interN + backN + negN + ibN + avgN + jumpN + residN + valIncN,
+      actionPlan,
+      patternsChecked: [
+        'Intercompany routing  (Doc Co ≠ Order Co)',
+        `Backdated transactions  (GL Date > ${this._BACKDATE_DAYS} days before Tx Date)`,
+        'Negative unit cost  (stored unit cost < 0)',
+        'Missing IB on cost change  (standard-cost integrity)',
+        'Unjustified avg-cost change  (weighted-avg integrity)',
+        `Large unit-cost jumps  (> ±${this._LARGE_JUMP_PCT}% vs prior on same branch)`,
+        'Residual-cost IA  (IA row with qty=0 but ext≠0 — ZBA candidate)',
+        `Stored value mismatch  (qty × unit cost ≠ ext beyond ${Helpers.money(this._UNIT_EXT_TOLERANCE)})`
+      ]
     };
+  },
+
+  _findingNumber(findings, type) {
+    const f = findings.find(x => x.type === type);
+    return f ? f.number : '?';
   },
 
   // Build the rolled-up Company > Branch/Plant > Location > Lot summary.
@@ -6400,103 +6981,87 @@ const ItemLedgerTemplate = {
 
   // ---- Rendering ----
   filename() {
-    return `Item Ledger Analysis ${Helpers.todayStamp()}.xlsx`;
+    return `JDE Item Ledger Analysis ${Helpers.todayStamp()}.xlsx`;
   },
 
   async render(workbook, data, findings, sourceWb, sourceSheet) {
     const ws = workbook.addWorksheet('Analysis', { views: [{ showGridLines: false, state: 'normal' }] });
     F.standardColumnWidths(ws);
-
-    // Widen columns A and F a bit so the summary table reads cleanly when
-    // it lands later. Standard widths (24, 30, 38, 22, 22) accommodate the
-    // chrome + variance + evidence; the summary uses 6 columns and needs
-    // F populated.
     ws.getColumn(6).width = 22;
+    ws.getColumn(7).width = 16;   // Unit Cost column on the cost-timeline section
 
-    // ---- Chrome (rows 1-5) ----
-    const interN = findings.intercompany.length;
-    const backN = findings.backdated.length;
-    const subline = `${Helpers.count(data.rows.length)} rows · ${interN} intercompany transaction${interN === 1 ? '' : 's'} · ${backN} backdated entr${backN === 1 ? 'y' : 'ies'}`;
+    // Chrome
+    const total = findings.totalFindings;
+    const subline = total === 0
+      ? `${Helpers.count(data.rows.length)} rows  ·  clean — all ${findings.patternsChecked.length} patterns passed`
+      : `${Helpers.count(data.rows.length)} rows  ·  ${total} flagged across ${findings.findings.length} pattern${findings.findings.length === 1 ? '' : 's'}  ·  ${findings.patternLabel}`;
     const context = `Source  JDE Item Ledger Inquiry export          ${Helpers.todayPretty()}          Rows  ${Helpers.count(data.rows.length)}`;
-
     F.renderChrome(ws, {
       headline: 'Item Ledger — JDE Export Analysis',
       subline,
       context
     });
 
-    // No "Verify before acting" disclaimer — this is a direct readout of
-    // the customer's own JDE ledger, not a JDE-side hypothesis. Start
-    // content at row 6, matching the SystemStatusTemplate pattern.
     let row = 6;
 
-    // ---- Summary section FIRST (per spec) ----
-    row = this._renderSummaryPivot(ws, row, findings.summary);
-
-    // small spacer
+    // ---- Findings priority list — FIRST section under the chrome ----
+    row = F.renderIssueSummary(ws, row, {
+      rows: findings.findings.map(f => ({
+        issue: f.issue,
+        scope: f.scopeShort || f.scope,
+        detail: f.detail || '',
+        rowCount: f.rowCount,
+        priority: f.priority
+      }))
+    });
     ws.getRow(row).height = 14; row++;
 
-    // ---- Variance card ----
-    const totalFlagged = interN + backN;
-    let varianceNumber, varianceSub, rationale;
-    if (totalFlagged === 0) {
-      varianceNumber = '0';
-      varianceSub = 'flagged';
-      rationale = `Pattern:  ${findings.patternLabel}\n\nEvery row had Doc Co matching Order Co (or one of them blank) and every row's GL Date was within ${this._BACKDATE_DAYS} days of its Transaction Date. The Summary section above lists the dimensional totals.`;
+    if (total === 0) {
+      // ---- Clean state — green callout, list what was checked, done ----
+      row = this._renderCleanCallout(ws, row, findings.patternsChecked);
+      ws.getRow(row).height = 14; row++;
     } else {
-      varianceNumber = String(totalFlagged);
-      varianceSub = 'intercompany + backdated';
-      const bits = [];
-      if (interN) bits.push(`${interN} intercompany row${interN === 1 ? '' : 's'} (Doc Co ≠ Order Co)`);
-      if (backN) bits.push(`${backN} backdated row${backN === 1 ? '' : 's'} (GL Date > ${this._BACKDATE_DAYS} days before Transaction Date)`);
-      rationale = `Pattern:  ${findings.patternLabel}\n\n${bits.join('.  ')}.  See the Evidence list below for the per-row breakdown; flagged rows are highlighted on the source sheet.`;
+      // Cost timeline section removed — feedback was that the visual
+      // density on the analysis tab outweighed its diagnostic value.
+      // The flagged rows on the source sheet (with the RR Analyzer Note
+      // column) carry the same information in a more scannable form.
+
+      // ---- Finding cards (one per pattern) + sub-tables ----
+      findings.findings.forEach(f => {
+        row = F.renderFindingCard(ws, row, {
+          number: f.number,
+          title: f.title,
+          priority: f.priority,
+          scope: f.scope,
+          pattern: f.pattern,
+          resolution: f.resolution
+        });
+        if (f.rows && f.rows.length > 0) {
+          row = this._renderFindingSubTable(ws, row, f, f.rows.slice(0, 12), data.sheetName);
+        }
+        ws.getRow(row).height = 10; row++;
+      });
+
+      // ---- Action Plan ----
+      row = F.renderActionPlan(ws, row, { steps: findings.actionPlan });
     }
-    row = F.renderVarianceCard(ws, row, {
-      priority: findings.priority,
-      varianceNumber,
-      varianceSub,
-      rationale
-    });
-
-    ws.getRow(row).height = 14; row++;
-
-    // ---- WHAT / WHY / HOW ----
-    row = F.renderCardPair(ws, row, {
-      title: '1.  WHAT happened',
-      body: this._whatBody(data, findings),
-      header: 'navy'
-    });
-    row = F.renderCardPair(ws, row, {
-      title: '2.  WHY it happened',
-      body: this._whyBody(data, findings),
-      header: 'midblue'
-    });
-    row = F.renderCardPair(ws, row, {
-      title: '3.  HOW to fix it',
-      body: this._howBody(data, findings),
-      header: 'navy'
-    });
-
-    ws.getRow(row).height = 14; row++;
-
-    // ---- Evidence ----
-    row = F.renderEvidence(ws, row, {
-      sourceSheetName: data.sheetName,
-      rows: findings.evidence
-    });
 
     // ---- Caution + footer ----
     row = F.renderCautionAndFooter(ws, row, {
-      cautionText: 'This analysis flags only two patterns in the Item Ledger:  intercompany routing and backdated transactions (GL Date vs Transaction Date on each row).  It does not validate cardex / GL integrity, posting status, or AAI routing.  Confirm the broader item-ledger picture with your JDE team and the RR University inventory module.',
+      cautionText: `This analysis flags ${findings.patternsChecked.length} integrity patterns in the Item Ledger.  It does not validate cardex / GL integrity, posting status, or AAI routing — confirm the broader picture with your JDE team and the RR University inventory module.`,
       footerText: `Analysis produced by the RapidReconciler Export Analyzer  ·  ${Helpers.todayPretty()}`
     });
     F.applyPageSetup(ws, row - 1);
 
-    // ---- Source sheet (with highlights) ----
+    // ---- Source sheet (with highlights, filtered to flagged rows) ----
     SourceSheet.copy(sourceSheet, workbook, data.sheetName, {
       headerRow: data.headerRow,
       freezeAt: data.headerRow + 1,
-      highlights: findings.highlights
+      highlights: findings.highlights,
+      patternByRow: findings.patternByRow,   // adds an "RR Analyzer Note"
+                                             // column after the source data
+      hideUnhighlighted: true   // start collapsed to the flagged rows only;
+                                // right-click → Unhide to see the full data
     });
 
     // ---- Notes tab ----
@@ -6504,206 +7069,165 @@ const ItemLedgerTemplate = {
     workbook.views = [{ activeTab: 0 }];
   },
 
-  // Render the dimensional summary pivot. Subtotals at Company and
-  // Company+Branch breaks, grand total at the bottom. Returns the next
-  // free row. Template-local — not generic enough to live on F.
-  _renderSummaryPivot(ws, startRow, summary) {
-    const PALETTE_LB   = PALETTE.lightBlue;   // FFD6E4F0  — company subtotal
-    const PALETTE_BP   = 'FFEAF2FA';           // branch subtotal (lighter)
-    const PALETTE_LOC  = 'FFF5F9FC';           // location subtotal (lightest)
-    const PALETTE_NAVY = PALETTE.navy;
-    const qtyFmt = summary.anyFractionalQty ? '#,##0.00;-#,##0.00;-' : '#,##0;-#,##0;-';
-    const valFmt = '$#,##0.00;($#,##0.00);-';
-
-    // Excel-native outline grouping for drill-down. We do NOT set
-    // ws.properties.outlineProperties here: ExcelJS writes the
-    // <outlinePr> element AFTER <pageSetUpPr> inside <sheetPr>, but the
-    // OOXML schema requires <outlinePr> first. That ordering violation
-    // makes Excel reject the file as corrupted. With no outlinePr
-    // emitted, Excel uses its defaults (summaryBelow=true, summaryRight=true)
-    // and the file opens cleanly. The trade-off is that Excel treats
-    // subtotal rows as if they sit BELOW their children (Excel's standard
-    // Data -> Subtotal convention), but the row order we emit puts them
-    // ABOVE — so the [+]/[-] gutter will appear next to the LAST row of
-    // each visible group. Functional drill-down still works.
-    if (!ws.views || !ws.views[0]) ws.views = [{ showGridLines: false }];
-
+  // ---- Green "all clean" callout ----
+  _renderCleanCallout(ws, startRow, patternsChecked) {
+    const greenFill = 'FFE8F5E9';      // very pale green
+    const greenStrip = 'FF2E7D32';     // mid-green
     let row = startRow;
 
-    // ---- Section header strip ----
+    ws.getRow(row).height = 28;
+    F.writeMerged(ws, `A${row}:E${row}`, '✓  ALL CHECKED PATTERNS PASSED', {
+      font: { name: 'Arial', size: 12, bold: true, color: { argb: 'FFFFFFFF' } },
+      fill: greenStrip,
+      alignment: { horizontal: 'left', vertical: 'middle', indent: 2 }
+    });
+    row++;
+
+    const body = 'No anomalies were detected in any of the following checks:\n\n' +
+      patternsChecked.map((p, i) => `   ${i + 1}.  ${p}`).join('\n');
+    const lineCount = F.wrapLines(body, 90);
+    ws.getRow(row).height = Math.min(400, Math.max(60, lineCount * 18 + 24));
+    F.writeMerged(ws, `A${row}:E${row}`, body, {
+      font: { name: 'Arial', size: 11, color: { argb: 'FF1B5E20' } },
+      fill: greenFill,
+      alignment: { horizontal: 'left', vertical: 'top', indent: 2, wrapText: true }
+    });
+    row++;
+
+    return row;
+  },
+
+  // ---- Unit-cost timeline (insight A) ----
+  // Each change event shows BOTH the "before" transaction and the "after"
+  // transaction in adjacent rows so the change is visible in context (the
+  // user can see what came before the change AND what posted the new cost).
+  _renderCostTimeline(ws, startRow, timeline, methodByBranch) {
+    let row = startRow;
+    const branchCount = Object.keys(methodByBranch).length;
+
+    // Section header
     ws.getRow(row).height = 24;
-    F.writeMerged(ws, `A${row}:F${row}`,
-      'Summary — Quantity and Extended Cost  (drill-down: Company → Branch/Plant → Location → Lot)',
+    F.writeMerged(ws, `A${row}:G${row}`,
+      `Unit-cost timeline  ·  ${timeline.length} change event${timeline.length === 1 ? '' : 's'} across ${branchCount} branch${branchCount === 1 ? '' : 'es'}  ·  each event shows the prior + change rows`,
       {
         font: { name: 'Arial', size: 11, bold: true, color: { argb: PALETTE.navyText } },
-        fill: PALETTE_LB,
+        fill: PALETTE.lightBlue,
         alignment: { horizontal: 'left', vertical: 'middle', indent: 1 }
       });
     row++;
 
-    // ---- Column header row ----
+    // Column headers
     ws.getRow(row).height = 22;
-    const headers = ['Company', 'Branch/Plant', 'Location', 'Lot', 'Quantity', 'Value'];
+    const headers = ['Branch  ·  Cost method', 'Date', 'Doc', 'DT', 'Qty (UoM)', 'Extended Cost', 'Unit Cost'];
     headers.forEach((h, i) => {
       const cell = ws.getCell(row, i + 1);
       cell.value = h;
       cell.font = { name: 'Arial', size: 10, bold: true, color: { argb: PALETTE.navyText } };
-      F.fillCell(cell, PALETTE_LB);
+      F.fillCell(cell, PALETTE.lightBlue);
       cell.alignment = { horizontal: i >= 4 ? 'right' : 'left', vertical: 'middle', indent: 1 };
       cell.border = { top: { style: 'thin', color: { argb: 'FFB0B7BF' } }, bottom: { style: 'thin', color: { argb: 'FFB0B7BF' } } };
     });
     row++;
 
-    // ---- Pre-aggregate by Co, Co+Bp, Co+Bp+Loc (needed because subtotals
-    //      sit ABOVE their detail rows, so totals must be known up front).
-    const SEP = '\x1f';  // unit separator — won't collide with real values
-    const coAgg = new Map();
-    const bpAgg = new Map();
-    const locAgg = new Map();
-    summary.entries.forEach(e => {
-      const coKey = e.co || '';
-      const bpKey = coKey + SEP + (e.bp || '');
-      const locKey = bpKey + SEP + (e.loc || '');
-      if (!coAgg.has(coKey))   coAgg.set(coKey,   { qty: 0, value: 0 });
-      if (!bpAgg.has(bpKey))   bpAgg.set(bpKey,   { qty: 0, value: 0 });
-      if (!locAgg.has(locKey)) locAgg.set(locKey, { qty: 0, value: 0 });
-      const co = coAgg.get(coKey);  co.qty  += e.qty; co.value  += e.value;
-      const bp = bpAgg.get(bpKey);  bp.qty  += e.qty; bp.value  += e.value;
-      const lc = locAgg.get(locKey); lc.qty += e.qty; lc.value  += e.value;
-    });
-
-    // ---- Writers ----
-    // Each row: 6 cols filled with the configured fill so colored bars look
-    // continuous; label goes in the column matching the subtotal level
-    // (col 1 = Co, col 2 = Bp, col 3 = Loc); qty/value always in cols 5/6.
-    const writeSubtotal = ({ labelCol, label, qty, val, fillArgb, textArgb, bold, level, hidden }) => {
-      const r = ws.getRow(row);
-      r.height = 18;
-      r.outlineLevel = level;
-      r.hidden = !!hidden;
-      for (let c = 1; c <= 6; c++) {
-        const cell = ws.getCell(row, c);
-        cell.value = '';
-        cell.font = { name: 'Arial', size: 10, bold: !!bold, color: { argb: textArgb || PALETTE.navyText } };
-        if (fillArgb) F.fillCell(cell, fillArgb);
-        cell.alignment = { horizontal: c >= 5 ? 'right' : 'left', vertical: 'middle', indent: 1 };
-      }
-      ws.getCell(row, labelCol).value = label;
-      const qtyCell = ws.getCell(row, 5);
-      qtyCell.value = qty;
-      qtyCell.numFmt = qtyFmt;
-      const valCell = ws.getCell(row, 6);
-      valCell.value = val;
-      valCell.numFmt = valFmt;
-      row++;
-    };
-
-    const writeDetail = (e) => {
-      const r = ws.getRow(row);
-      r.height = 18;
-      r.outlineLevel = 4;
-      r.hidden = true;  // hidden by default — exposed when location is expanded
-      const cells = [e.co || '', e.bp || '', e.loc || '', e.lot || '', e.qty, e.value];
-      cells.forEach((v, i) => {
-        const cell = ws.getCell(row, i + 1);
+    // Cap at 12 change events (24 data rows + 12 spacers ≈ 36 rows in the
+    // timeline). More than that and the section overwhelms the analysis tab.
+    const CAP = 12;
+    const methodLabel = (m) => m === 'STANDARD' ? 'Standard cost' : m === 'WEIGHTED_AVG' ? 'Weighted average' : 'Unknown';
+    const writeRow = ({ event, isBefore, isAfter }) => {
+      const r = event[isBefore ? 'priorRow' : 'currRow'];
+      ws.getRow(row).height = 18;
+      const branchCell = isBefore
+        ? `${event.branchLabel}  ·  ${methodLabel(event.method)}`
+        : '';                                          // second row leaves branch col blank
+      const qtyDisplay = Helpers.count(r.qty) + (r.uom ? '  ' + r.uom : '');
+      const cells = [branchCell, r.date, r.doc, r.docType, qtyDisplay, Helpers.money(r.ext), Helpers.money(r.unitCost)];
+      // "Before" row gets a subtle muted fill; "after" row gets a soft
+      // highlight so the eye lands on the changed cost.
+      const fill = isAfter ? 'FFFFF6E0' : PALETTE.white;
+      cells.forEach((v, ci) => {
+        const cell = ws.getCell(row, ci + 1);
         cell.value = v;
-        cell.font = { name: 'Arial', size: 10, color: { argb: PALETTE.text } };
-        cell.alignment = { horizontal: i >= 4 ? 'right' : 'left', vertical: 'middle', indent: 1 };
-        if (i === 4) cell.numFmt = qtyFmt;
-        if (i === 5) cell.numFmt = valFmt;
+        cell.font = { name: 'Arial', size: 10, color: { argb: PALETTE.text }, bold: !!isAfter };
+        F.fillCell(cell, fill);
+        cell.alignment = { horizontal: ci >= 4 ? 'right' : 'left', vertical: 'middle', indent: 1, wrapText: false };
       });
       row++;
     };
 
-    // ---- Grand Total — outline level 0, always visible ----
-    writeSubtotal({
-      labelCol: 1, label: 'Grand Total',
-      qty: summary.grand.qty, val: summary.grand.value,
-      fillArgb: PALETTE_NAVY, textArgb: 'FFFFFFFF', bold: true,
-      level: 0, hidden: false
+    timeline.slice(0, CAP).forEach((event, idx) => {
+      writeRow({ event, isBefore: true });
+      writeRow({ event, isAfter: true });
+      if (idx < Math.min(CAP, timeline.length) - 1) {
+        ws.getRow(row).height = 6;   // thin spacer between events
+        row++;
+      }
     });
 
-    // ---- Walk entries, emit subtotals + details ----
-    // Default expansion state: only Company rows (level 1) visible. Branch,
-    // Location, and Lot rows are hidden — exposed when the user clicks [+].
-    let prevCo = null, prevBp = null, prevLoc = null;
-    summary.entries.forEach(e => {
-      if (e.co !== prevCo) {
-        const t = coAgg.get(e.co || '');
-        writeSubtotal({
-          labelCol: 1, label: `${e.co || '(blank)'} Total`,
-          qty: t.qty, val: t.value,
-          fillArgb: PALETTE_LB, textArgb: PALETTE.navyText, bold: true,
-          level: 1, hidden: false
+    if (timeline.length > CAP) {
+      ws.getRow(row).height = 18;
+      F.writeMerged(ws, `A${row}:G${row}`,
+        `Showing first ${CAP} of ${timeline.length} change events  ·  the full set is highlighted on the source sheet`,
+        {
+          font: { name: 'Arial', size: 10, italic: true, color: { argb: PALETTE.text } },
+          alignment: { horizontal: 'left', vertical: 'middle', indent: 1 }
         });
-        prevCo = e.co; prevBp = null; prevLoc = null;
-      }
-      if (e.bp !== prevBp) {
-        const t = bpAgg.get((e.co || '') + SEP + (e.bp || ''));
-        writeSubtotal({
-          labelCol: 2, label: `${e.bp || '(blank)'} Total`,
-          qty: t.qty, val: t.value,
-          fillArgb: PALETTE_BP, textArgb: PALETTE.navyText, bold: true,
-          level: 2, hidden: true
-        });
-        prevBp = e.bp; prevLoc = null;
-      }
-      if (e.loc !== prevLoc) {
-        const t = locAgg.get((e.co || '') + SEP + (e.bp || '') + SEP + (e.loc || ''));
-        writeSubtotal({
-          labelCol: 3, label: `${e.loc || '(blank)'} Total`,
-          qty: t.qty, val: t.value,
-          fillArgb: PALETTE_LOC, textArgb: PALETTE.navyText, bold: false,
-          level: 3, hidden: true
-        });
-        prevLoc = e.loc;
-      }
-      writeDetail(e);
-    });
+      row++;
+    }
 
     return row;
   },
 
-  // ---- WHAT / WHY / HOW body text ----
-  _whatBody(data, findings) {
-    const interN = findings.intercompany.length;
-    const backN = findings.backdated.length;
-    const lines = [];
-    lines.push(`The Item Ledger export covers ${Helpers.count(data.rows.length)} row${data.rows.length === 1 ? '' : 's'} across ${findings.summary.companies.length} compan${findings.summary.companies.length === 1 ? 'y' : 'ies'} and ${findings.summary.branches.length} branch${findings.summary.branches.length === 1 ? '' : 'es'}.`);
-    if (interN) lines.push(`\n${interN} row${interN === 1 ? '' : 's'} flagged as intercompany (Doc Co ≠ Order Co with both populated).`);
-    if (backN) lines.push(`\n${backN} row${backN === 1 ? '' : 's'} flagged as backdated (GL Date more than ${this._BACKDATE_DAYS} days earlier than the Transaction Date on the same row).`);
-    if (!interN && !backN) lines.push(`\nNo intercompany routing and no backdated transactions detected. The Summary section above shows the rolled-up Quantity and Extended Cost across the four dimensions (Company → Branch/Plant → Location → Lot).`);
-    if (findings.evidenceTruncated) lines.push(`\nThe Evidence list below shows the top ${findings.evidence.length} flagged rows (sorted by Unique Key ID descending). The full count is ${findings.evidenceTotal}.`);
-    return lines.join('\n');
+  // ---- Per-finding sub-table (first N flagged rows under the finding card) ----
+  _renderFindingSubTable(ws, startRow, f, subRows, sourceSheetName) {
+    const headers = ['UKID', 'Doc', 'DT', 'Co / Branch', 'GL Date', 'Detail'];
+    const tableRows = subRows.map(item => {
+      // Each item may be a raw row (intercompany) or a wrapper {row, ...} for others
+      const r = item.row || item;
+      const ukidShown = r.ukidDisplay || (r.ukid == null ? '' : String(r.ukid));
+      return [
+        { text: ukidShown || `Row ${r.rowNumber}`, sourceRow: r.rowNumber },
+        r.docNumber || '',
+        r.docType || '',
+        (r.docCo || '?') + ' / ' + (r.branchPlant || '?'),
+        r.glDateRaw || (r.glDate ? r.glDate.slice(0, 10) : ''),
+        this._formatExtraDetail(f.type, item)
+      ];
+    });
+    const caption = f.rows.length > subRows.length
+      ? `First ${subRows.length} of ${f.rows.length} rows  ·  full list highlighted on the source sheet`
+      : null;
+    return F.renderSubTable(ws, startRow, { caption, headers, rows: tableRows, sourceSheetName });
   },
 
-  _whyBody(data, findings) {
-    const parts = [];
-    parts.push('This analysis runs two pattern detectors against the Item Ledger:');
-    parts.push(`\n  Intercompany.  For every row where Doc Co and Order Co are both populated and both numeric, the analyzer flags the row when those two numbers differ. The inventory side posts to one company; the order originated in another. Not necessarily an error — intercompany activity is real — but worth surfacing because the posting destination is split.`);
-    parts.push(`\n  Backdated.  For each row, the analyzer compares the GL Date to the Transaction Date. If the GL Date is more than ${this._BACKDATE_DAYS} days earlier than the Transaction Date, the row is flagged. The Transaction Date reflects when the activity actually happened; the GL Date is what the entry posts to. A gap means a transaction was posted to a period earlier than when it occurred.`);
-    parts.push(`\nThe ${this._BACKDATE_DAYS}-day threshold is a v1 constant. Small differences within a week often reflect normal cut-off timing; the threshold is set to flag rows that are clearly posted backward beyond that buffer.`);
-    return parts.join('');
+  _formatExtraDetail(type, item) {
+    switch (type) {
+      case 'intercompany': {
+        const r = item.row || item;
+        return `Order Co ${r.orderCo || '?'}`;
+      }
+      case 'backdated':
+        return `${item.lagDays} days earlier`;
+      case 'negative_cost': {
+        const r = item.row || item;
+        return `Unit ${Helpers.money(r.unitCost)}`;
+      }
+      case 'missing_ib':
+      case 'unjustified_avg':
+      case 'large_jump': {
+        const pct = item.pctChange != null ? `  (${item.pctChange >= 0 ? '+' : ''}${item.pctChange.toFixed(1)}%)` : '';
+        return `${Helpers.money(item.prevCost)} → ${Helpers.money(item.newCost)}${pct}`;
+      }
+      case 'residual_ia': {
+        const r = item.row || item;
+        return `qty 0  ·  ext ${Helpers.money(r.extendedCost)}`;
+      }
+      case 'value_mismatch':
+        return `expected ${Helpers.money(item.expected)} vs ${Helpers.money(item.actual)} (diff ${Helpers.money(item.diff)})`;
+      default:
+        return '';
+    }
   },
 
-  _howBody(data, findings) {
-    const interN = findings.intercompany.length;
-    const backN = findings.backdated.length;
-    const steps = [];
-    let i = 1;
-    if (interN) {
-      steps.push(`Step ${i++}.  Confirm intercompany routing with the customer's company-master config. For each flagged row in the Evidence list, verify the Doc Co → Order Co split is expected for that document type / order type combination. If unexpected, correct the Order Co assignment in JDE before the period closes.`);
-    }
-    if (backN) {
-      steps.push(`Step ${i++}.  Review backdated transactions for posting-period implications. Walk the Evidence list and identify which flagged rows cross a closed period. Those need either a manual period adjustment or a re-open before posting.`);
-      steps.push(`Step ${i++}.  If the volume of backdated rows is unexpected (more than a handful in a normal month), talk to the entry team. Recurring backdating often signals a process gap — e.g. late vouchers being entered against earlier periods to make the original budget work.`);
-    }
-    if (!interN && !backN) {
-      steps.push(`Step ${i++}.  No flagged transactions. The Summary section at the top of this tab gives the dimensional totals by Company → Branch/Plant → Location → Lot — useful for a quick value / quantity read across the period.`);
-    }
-    steps.push(`Step ${i++}.  This template flags only two patterns. For a fuller item-ledger review, work with your JDE team and consult the RR University inventory module (cardex variance, DMAAI routing, GL class integrity).`);
-    return steps.join('\n\n');
-  }
 };
 Templates.register(ItemLedgerTemplate);
 
