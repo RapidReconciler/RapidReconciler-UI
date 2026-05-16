@@ -6352,6 +6352,7 @@ const ItemLedgerTemplate = {
   _COST_NOISE_ABS: 0.01,       // unit-cost diffs below this absolute floor = noise
   _COST_NOISE_REL: 0.005,      // ...or below this fraction of the prior cost = noise
   _UNIT_EXT_TOLERANCE: 0.05,   // qty × unitCost vs ext: tolerance for rounding diffs
+  _NEG_COST_TOLERANCE: 0.01,   // unit-cost noise band around zero — -$0.01 won't flag
   _RECEIPT_DOCS: ['OV', 'OP'], // PO receipts that legitimately update weighted avg
   _REVAL_DOCS: ['IB'],         // standard-cost revaluation JE
 
@@ -6365,18 +6366,29 @@ const ItemLedgerTemplate = {
     return delta >= floor;
   },
 
-  classify(data) {
+  classify(data, options = {}) {
+    // Cost-method override. F4111 alone is ambiguous — both standard
+    // cost (with PPV) and weighted-avg (with landed cost) can produce
+    // a 2-row OV pattern. When the caller knows the answer they can
+    // pass `costMethodOverride = 'STANDARD'` or `'WEIGHTED_AVG'` and
+    // every branch is treated that way, skipping the heuristic.
+    const costMethodOverride = options.costMethodOverride || null;
+
     // ---- Pattern 3 (FIRST): Negative unit cost (stored Unit Cost < 0).
     //      Run this ahead of every other pattern so a negative-cost row
     //      is exclusively classified as "Negative cost" and ignored by
     //      the other detectors below. A row with `unitCost = -0.63` is
     //      anomalous in its own right — letting it also trip Missing IB
     //      / Large jump / Stored value mismatch just adds noise. ----
+    // Negative cost — flag rows whose stored Unit Cost is more negative
+    // than the noise tolerance. A unit cost of -$0.01 from rounding isn't
+    // worth a P1 finding; only "real" negative costs (below the floor)
+    // get flagged.
     const negativeCost = [];
     data.rows.forEach(r => {
       const unit = Number(r.unitCost);
       if (!isFinite(unit)) return;
-      if (unit < 0) {
+      if (unit < -this._NEG_COST_TOLERANCE) {
         negativeCost.push({ row: r });
       }
     });
@@ -6472,6 +6484,26 @@ const ItemLedgerTemplate = {
         return au - bu;
       });
 
+      // Pre-detect consecutive reversal pairs on this branch (sorted by
+      // UKID asc). A reversal pair is two adjacent rows that perfectly
+      // cancel: qty[a] = -qty[b], ext[a] = -ext[b], both qtys non-zero.
+      // The net impact is zero — the original transaction was reversed
+      // before any further activity — so flagging the originating row as
+      // a "large jump" or "avg drift" is noise. We exclude both rows
+      // from costPoints, which removes them from Pattern 4 / 5 / 6
+      // entirely.
+      const reversalRows = new Set();
+      for (let i = 0; i < sorted.length - 1; i++) {
+        const a = sorted[i], b = sorted[i + 1];
+        const aQty = Number(a.qtyPrimary), bQty = Number(b.qtyPrimary);
+        const aExt = Number(a.extendedCost), bExt = Number(b.extendedCost);
+        if (!isFinite(aQty) || !isFinite(bQty) || aQty === 0) continue;
+        if (Math.abs(aQty + bQty) > 1e-6) continue;     // qty exactly opposite (FP tolerant)
+        if (Math.abs(aExt + bExt) > 0.005) continue;    // ext within ½¢ of opposite
+        reversalRows.add(a.rowNumber);
+        reversalRows.add(b.rowNumber);
+      }
+
       // Compute (sequential) unit-cost points, skipping rows where qty=0.
       // Use the STORED Unit Cost field (iluncs) — the canonical JDE value
       // — instead of computing ext/qty. The computed form amplifies the
@@ -6481,13 +6513,14 @@ const ItemLedgerTemplate = {
       // across the whole standard-cost run, so transitions only fire
       // when JDE actually rewrites the cost.
       //
-      // Negative-cost rows are excluded here so the transition into/out
-      // of the negative-cost anomaly isn't flagged separately as a
-      // Pattern 4 / 5 / 6 finding — the row is already covered by
-      // Pattern 3.
+      // Excluded:
+      //   * negative-cost rows — already covered by Pattern 3
+      //   * reversal-pair rows — net impact is zero, the originating
+      //     transaction was undone before any further activity
       const costPoints = [];
       sorted.forEach(r => {
         if (isNegRow(r)) return;
+        if (reversalRows.has(r.rowNumber)) return;
         const qty = Number(r.qtyPrimary);
         const unit = Number(r.unitCost);
         if (!isFinite(qty) || !isFinite(unit) || qty === 0 || unit === 0) return;
@@ -6558,6 +6591,16 @@ const ItemLedgerTemplate = {
         for (const [k, v] of methodByBranch) {
           if (v === 'UNKNOWN') methodByBranch.set(k, dominant);
         }
+      }
+    }
+
+    // ---- OVERRIDE: caller-provided cost method wins over inference ----
+    // The 2-row OV heuristic is ambiguous — both standard cost (PPV row)
+    // and weighted-avg (landed-cost row) produce 2 rows per OV. When the
+    // user knows the method, override every branch with their choice.
+    if (costMethodOverride === 'STANDARD' || costMethodOverride === 'WEIGHTED_AVG') {
+      for (const k of methodByBranch.keys()) {
+        methodByBranch.set(k, costMethodOverride);
       }
     }
 
@@ -6637,8 +6680,16 @@ const ItemLedgerTemplate = {
           }
         }
 
-        // Pattern 5 — weighted-avg change without an OV receipt preceding it
-        if (method === 'WEIGHTED_AVG' && !this._RECEIPT_DOCS.includes(prior.docType)) {
+        // Pattern 5 — weighted-avg cost change with neither side a receipt.
+        // For weighted-avg, a cost change is "justified" if the change is
+        // adjacent to an OV/OP receipt — either the prior row is the
+        // receipt (curr reflects the new running avg) or the curr row IS
+        // the receipt (which carries the vendor price, not the avg, in
+        // JDE configs that store receipt price on F4111). Only when
+        // BOTH sides are non-receipts is the change unexplained drift.
+        if (method === 'WEIGHTED_AVG'
+            && !this._RECEIPT_DOCS.includes(prior.docType)
+            && !this._RECEIPT_DOCS.includes(curr.docType)) {
           unjustifiedAvg.push({ row: curr.row, prevRow: prior.row, prevDocType: prior.docType, prevCost: prior.unitCost, newCost: curr.unitCost, pctChange });
         }
 
@@ -6868,8 +6919,8 @@ const ItemLedgerTemplate = {
         priority: 1, rowCount: negN,
         issue: 'Negative cost',
         scopeShort: `${negN} row${negN === 1 ? '' : 's'}`,
-        detail: 'Unit cost is less than zero',
-        scope: `${negN} row${negN === 1 ? '' : 's'} where the stored Unit Cost field (iluncs) is less than zero.`,
+        detail: `Unit cost is less than -${Helpers.money(this._NEG_COST_TOLERANCE)}`,
+        scope: `${negN} row${negN === 1 ? '' : 's'} where the stored Unit Cost field (iluncs) is more negative than -${Helpers.money(this._NEG_COST_TOLERANCE)} (small rounding-noise negatives are ignored).`,
         pattern: `Unit cost in JDE should never be negative. Common causes: a manual entry with the cost flipped, a cost roll that mishandled return-to-vendor adjustments, a bad backflush, or a data-conversion artifact on go-live.`,
         resolution: `Step 1.  For each flagged row, look up the source transaction in JDE Item Ledger Inquiry and confirm whether the negative cost was intentional.\n\nStep 2.  If it was a data-entry error, reverse the bad row and post a corrected one.\n\nStep 3.  If multiple rows share a common cause, trace the upstream process and stop the bleed.`,
         rows: negativeCost
@@ -6992,7 +7043,7 @@ const ItemLedgerTemplate = {
       patternsChecked: [
         'Intercompany routing  (Doc Co ≠ Order Co)',
         `Backdated transactions  (GL Date > ${this._BACKDATE_DAYS} days before Tx Date)`,
-        'Negative unit cost  (stored unit cost < 0)',
+        `Negative unit cost  (stored unit cost < -${Helpers.money(this._NEG_COST_TOLERANCE)})`,
         'Missing IB on cost change  (standard-cost integrity)',
         'Unjustified avg-cost change  (weighted-avg integrity)',
         `Large unit-cost jumps  (> ±${this._LARGE_JUMP_PCT}% vs prior on same branch)`,
@@ -7123,19 +7174,20 @@ const ItemLedgerTemplate = {
     ws.getRow(row).height = 14; row++;
 
     if (total === 0) {
-      // ---- Clean state — green callout, list what was checked, done ----
+      // ---- Clean state — green callout, list what was checked ----
       row = this._renderCleanCallout(ws, row, findings.patternsChecked);
       ws.getRow(row).height = 14; row++;
-    } else {
-      // Finding cards + per-finding sub-tables removed by user request —
-      // they offered little beyond the priority list above and the
-      // hyperlinked source-sheet view. The Action Plan was also removed:
-      // Item Ledger transactions are historical and can't be edited.
-      // Instead, show a Branch/Plant × Location totals matrix so the
-      // reader can see the on-hand-equivalent picture at a glance.
-      const matrix = this._buildBranchLocationMatrix(data.rows);
-      row = this._renderTotalsMatrix(ws, row, matrix);
     }
+
+    // ---- Totals matrix (always rendered, clean or flagged) ----
+    // Finding cards + per-finding sub-tables removed by user request —
+    // they offered little beyond the priority list above and the
+    // hyperlinked source-sheet view. The Action Plan was also removed:
+    // Item Ledger transactions are historical and can't be edited.
+    // Instead, show a Company × Branch/Plant × Location totals matrix
+    // so the reader can see the on-hand-equivalent picture at a glance.
+    const matrix = this._buildBranchLocationMatrix(data.rows);
+    row = this._renderTotalsMatrix(ws, row, matrix);
 
     // ---- Caution + footer ----
     row = F.renderCautionAndFooter(ws, row, {
@@ -7161,19 +7213,23 @@ const ItemLedgerTemplate = {
     workbook.views = [{ activeTab: 0 }];
   },
 
-  // ---- Branch/Plant × Location totals matrix ----
-  // Two-dimensional aggregation: rows are (branch, location) pairs,
-  // metrics are summed primary-UoM Quantity + summed Extended Cost.
-  // Includes per-branch subtotals (when a branch has >1 location) and
-  // a grand total. Replaces the old Action Plan which had no value for
-  // historical transactions the user can't change.
+  // ---- Company × Branch/Plant × Location totals matrix ----
+  // Three-level aggregation. Replaces the old Action Plan which had no
+  // value for historical transactions the user can't change.
+  //   * Innermost: (location) — summed primary-UoM Qty + Extended Cost
+  //   * Branch subtotal — when a (company, branch) has >1 location
+  //   * Company subtotal — when a company has >1 branch
+  //   * Grand total
   _buildBranchLocationMatrix(rows) {
-    const byBranch = new Map();
+    const byCo = new Map();
     rows.forEach(r => {
+      const co  = r.docCo       || '(no company)';
       const bp  = r.branchPlant || '(no branch)';
       const loc = r.location    || '(no location)';
-      if (!byBranch.has(bp)) byBranch.set(bp, new Map());
-      const branchMap = byBranch.get(bp);
+      if (!byCo.has(co)) byCo.set(co, new Map());
+      const coMap = byCo.get(co);
+      if (!coMap.has(bp)) coMap.set(bp, new Map());
+      const branchMap = coMap.get(bp);
       if (!branchMap.has(loc)) branchMap.set(loc, { qty: 0, amt: 0 });
       const cell = branchMap.get(loc);
       cell.qty += r.qtyPrimary  || 0;
@@ -7182,23 +7238,33 @@ const ItemLedgerTemplate = {
 
     const flat = [];
     let grandQty = 0, grandAmt = 0;
-    Array.from(byBranch.keys()).sort().forEach(bp => {
-      const branchMap = byBranch.get(bp);
-      const locations = Array.from(branchMap.keys()).sort();
-      let bpQty = 0, bpAmt = 0;
-      locations.forEach(loc => {
-        const cell = branchMap.get(loc);
-        flat.push({ branch: bp, location: loc, qty: cell.qty, amt: cell.amt, kind: 'data' });
-        bpQty += cell.qty;
-        bpAmt += cell.amt;
+    Array.from(byCo.keys()).sort().forEach(co => {
+      const coMap = byCo.get(co);
+      const branches = Array.from(coMap.keys()).sort();
+      let coQty = 0, coAmt = 0;
+      branches.forEach(bp => {
+        const branchMap = coMap.get(bp);
+        const locations = Array.from(branchMap.keys()).sort();
+        let bpQty = 0, bpAmt = 0;
+        locations.forEach(loc => {
+          const cell = branchMap.get(loc);
+          flat.push({ company: co, branch: bp, location: loc, qty: cell.qty, amt: cell.amt, kind: 'data' });
+          bpQty += cell.qty;
+          bpAmt += cell.amt;
+        });
+        if (locations.length > 1) {
+          flat.push({ company: co, branch: bp, location: 'Subtotal', qty: bpQty, amt: bpAmt, kind: 'branchSubtotal' });
+        }
+        coQty += bpQty;
+        coAmt += bpAmt;
       });
-      if (locations.length > 1) {
-        flat.push({ branch: bp, location: 'Subtotal', qty: bpQty, amt: bpAmt, kind: 'subtotal' });
+      if (branches.length > 1) {
+        flat.push({ company: co, branch: 'Subtotal', location: '', qty: coQty, amt: coAmt, kind: 'companySubtotal' });
       }
-      grandQty += bpQty;
-      grandAmt += bpAmt;
+      grandQty += coQty;
+      grandAmt += coAmt;
     });
-    flat.push({ branch: 'Grand total', location: '', qty: grandQty, amt: grandAmt, kind: 'grand' });
+    flat.push({ company: 'Grand total', branch: '', location: '', qty: grandQty, amt: grandAmt, kind: 'grand' });
     return flat;
   },
 
@@ -7207,55 +7273,67 @@ const ItemLedgerTemplate = {
 
     // Section header (matches the Action Plan styling so the page reads consistently)
     ws.getRow(row).height = 28;
-    F.writeMerged(ws, `A${row}:E${row}`, 'Totals  ·  Branch/Plant × Location', {
+    F.writeMerged(ws, `A${row}:E${row}`, 'Totals  ·  Company × Branch/Plant × Location', {
       font: { name: 'Arial', size: 13, bold: true, color: { argb: PALETTE.navyText } },
       fill: PALETTE.lightBlue,
       alignment: { horizontal: 'left', vertical: 'middle', indent: 1 }
     });
     row++;
 
-    // Column headers — Branch/Plant | Location (B:C merged) | Quantity | Extended Cost
+    // Column headers — Company | Branch/Plant | Location | Quantity | Extended Cost
     ws.getRow(row).height = 22;
-    const setSingleHeader = (addr, label, align) => {
+    const setHeader = (addr, label, align) => {
       const cell = ws.getCell(addr);
       cell.value = label;
       cell.font = { name: 'Arial', size: 10, bold: true, color: { argb: PALETTE.navyText } };
       F.fillCell(cell, PALETTE.lightBlue);
       cell.alignment = { horizontal: align, vertical: 'middle', indent: align === 'left' ? 1 : 0 };
     };
-    setSingleHeader(`A${row}`, 'Branch/Plant', 'left');
-    F.writeMerged(ws, `B${row}:C${row}`, 'Location', {
-      font: { name: 'Arial', size: 10, bold: true, color: { argb: PALETTE.navyText } },
-      fill: PALETTE.lightBlue,
-      alignment: { horizontal: 'left', vertical: 'middle', indent: 1 }
-    });
-    setSingleHeader(`D${row}`, 'Quantity', 'right');
-    setSingleHeader(`E${row}`, 'Extended Cost', 'right');
+    setHeader(`A${row}`, 'Company', 'left');
+    setHeader(`B${row}`, 'Branch/Plant', 'left');
+    setHeader(`C${row}`, 'Location', 'left');
+    setHeader(`D${row}`, 'Quantity', 'right');
+    setHeader(`E${row}`, 'Extended Cost', 'right');
     row++;
 
     // Data rows
     matrix.forEach((m, i) => {
-      const isSubtotal = m.kind === 'subtotal';
-      const isGrand    = m.kind === 'grand';
+      const isBranchSub  = m.kind === 'branchSubtotal';
+      const isCompanySub = m.kind === 'companySubtotal';
+      const isGrand      = m.kind === 'grand';
+      const isAnySub     = isBranchSub || isCompanySub;
       const fill = isGrand
         ? PALETTE.lightBlue
-        : (isSubtotal ? PALETTE.greyBody : (i % 2 === 0 ? PALETTE.white : PALETTE.greyBody));
-      const bold = isSubtotal || isGrand;
+        : isCompanySub
+          ? 'FFEAF1F8'   // a touch darker than greyBody for stronger separation
+          : isBranchSub
+            ? PALETTE.greyBody
+            : (i % 2 === 0 ? PALETTE.white : PALETTE.greyBody);
+      const bold = isAnySub || isGrand;
       ws.getRow(row).height = isGrand ? 22 : 18;
 
-      // A — Branch/Plant. Suppress on subtotal rows for visual quiet.
+      // A — Company. Suppress on branch-subtotal rows for visual quiet;
+      // company-subtotal and grand rows put their label in A.
       const aCell = ws.getCell(`A${row}`);
-      aCell.value = isSubtotal ? '' : m.branch;
+      const aValue = isBranchSub ? '' : (isCompanySub ? m.company + ' total' : (isGrand ? m.company : m.company));
+      aCell.value = aValue;
       aCell.font = { name: 'Arial', size: 10, bold, color: { argb: PALETTE.text } };
       F.fillCell(aCell, fill);
       aCell.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
 
-      // B:C — Location
-      F.writeMerged(ws, `B${row}:C${row}`, isGrand ? '' : m.location, {
-        font: { name: 'Arial', size: 10, bold, italic: isSubtotal, color: { argb: PALETTE.text } },
-        fill: fill,
-        alignment: { horizontal: 'left', vertical: 'middle', indent: 1 }
-      });
+      // B — Branch
+      const bCell = ws.getCell(`B${row}`);
+      bCell.value = isGrand ? '' : (isCompanySub ? '' : m.branch);
+      bCell.font = { name: 'Arial', size: 10, bold, italic: isBranchSub, color: { argb: PALETTE.text } };
+      F.fillCell(bCell, fill);
+      bCell.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
+
+      // C — Location
+      const cCell = ws.getCell(`C${row}`);
+      cCell.value = isGrand ? '' : (isCompanySub ? '' : m.location);
+      cCell.font = { name: 'Arial', size: 10, bold, italic: isBranchSub, color: { argb: PALETTE.text } };
+      F.fillCell(cCell, fill);
+      cCell.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
 
       // D — Quantity
       const dCell = ws.getCell(`D${row}`);
@@ -7454,7 +7532,8 @@ const App = (() => {
     selectedTemplate: null,
     detectionScores: null,
     data: null,
-    findings: null
+    findings: null,
+    costMethodOverride: null   // for Item Ledger: 'STANDARD' | 'WEIGHTED_AVG' | null (auto)
   };
 
   const $ = sel => document.querySelector(sel);
@@ -7672,7 +7751,10 @@ const App = (() => {
     try {
       const t = state.selectedTemplate;
       const data = t.parse(state.sourceWb);
-      const findings = t.classify(data);
+      // Reset cost-method override on a fresh analysis run — the
+      // previous file's override doesn't apply to a new file.
+      state.costMethodOverride = null;
+      const findings = t.classify(data, { costMethodOverride: state.costMethodOverride });
       state.data = data;
       state.findings = findings;
       state.sourceSheet = state.sourceWb.getWorksheet(data.sheetName);
@@ -7681,6 +7763,17 @@ const App = (() => {
       console.error(err);
       setPreviewMessage(`Analysis failed: ${err.message}`, 'error');
     }
+  }
+
+  /* Re-classify with the user-selected cost-method override and refresh
+     the preview card. Wired to the radio buttons in the Item Ledger
+     preview callout. Setting to '' or 'AUTO' clears the override. */
+  function setCostMethod(method) {
+    if (!state.selectedTemplate || !state.data) return;
+    state.costMethodOverride = (method === 'STANDARD' || method === 'WEIGHTED_AVG') ? method : null;
+    const t = state.selectedTemplate;
+    state.findings = t.classify(state.data, { costMethodOverride: state.costMethodOverride });
+    renderPreview(t, state.data, state.findings);
   }
 
   function renderPreview(t, data, findings) {
@@ -7754,12 +7847,58 @@ const App = (() => {
     `;
   }
 
+  /* Inline cost-method callout — shown only for Item Ledger. The 2-row
+     OV pattern is ambiguous (standard PPV vs weighted-avg landed cost),
+     so we let the user override our heuristic when they know the
+     answer. Findings update live as the radio changes. */
+  function renderCostMethodCallout(t, findings) {
+    if (!t || t.id !== 'item-ledger') return '';
+    const current = state.costMethodOverride || 'AUTO';
+    // Summarize what the inference picked, for context
+    const methods = findings.methodByBranch || {};
+    const branches = Object.keys(methods);
+    const stdCount = branches.filter(k => methods[k] === 'STANDARD').length;
+    const avgCount = branches.filter(k => methods[k] === 'WEIGHTED_AVG').length;
+    const inferenceNote = current === 'AUTO'
+      ? `Auto-detect picked ${stdCount > avgCount ? 'standard cost' : avgCount > stdCount ? 'weighted average' : 'mixed/unknown'} (${branches.length} branch${branches.length === 1 ? '' : 'es'}).`
+      : `Override active — every branch treated as ${current === 'STANDARD' ? 'standard cost' : 'weighted average'}.`;
+    const radio = (val, label) => {
+      const checked = (val === 'AUTO' && !state.costMethodOverride) || val === state.costMethodOverride
+        ? 'checked' : '';
+      return `<label style="margin-right: 16px; cursor: pointer; user-select: none;">
+        <input type="radio" name="rr-cost-method" value="${val}" ${checked}
+               onchange="App.setCostMethod('${val}')"
+               style="vertical-align: middle; margin-right: 4px;">${label}
+      </label>`;
+    };
+    return `
+      <div style="background: #fff7e6; border: 1px solid #f0c178; border-left: 4px solid #d97316;
+                  border-radius: 6px; padding: 12px 14px; margin-bottom: 14px;
+                  font-size: 13px; line-height: 1.5;">
+        <div style="font-weight: 700; color: #6b3a00; margin-bottom: 4px;">
+          ⚠  Cost method
+        </div>
+        <div style="color: #4a4a4a; margin-bottom: 8px;">
+          F4111 alone can't distinguish standard cost (PPV row) from
+          weighted average (landed-cost row) — both produce 2 rows per
+          OV doc. ${inferenceNote} Override if needed:
+        </div>
+        <div>
+          ${radio('AUTO', 'Auto-detect')}
+          ${radio('STANDARD', 'Standard cost')}
+          ${radio('WEIGHTED_AVG', 'Weighted average')}
+        </div>
+      </div>
+    `;
+  }
+
   function renderMultiFindingPreview(t, data, findings) {
     const findingPills = findings.findings.map(f => {
       const c = f.priority === 1 ? 'p1' : f.priority === 2 ? 'p2' : 'p3';
       return `<span class="preview-priority-strip ${c}" style="display:inline-block; padding:4px 10px; font-size:11px; border-radius:4px; margin-right:6px; letter-spacing:0.05em;">P${f.priority} · ${f.rowCount} rows · ${escapeHtml(f.issue)}</span>`;
     }).join(' ');
     return `
+      ${renderCostMethodCallout(t, findings)}
       <div class="preview-number">${findings.totalFindings} findings</div>
       <div class="preview-number-sub">${findings.findings.length} categor${findings.findings.length === 1 ? 'y' : 'ies'} · ${data.companies ? data.companies.length + ' companies' : ''}</div>
       <div class="preview-rationale">${findingPills}</div>
@@ -7856,7 +7995,8 @@ const App = (() => {
     init,
     showTemplateGrid: () => { showTemplateGrid(); },
     download,
-    reset
+    reset,
+    setCostMethod
   };
 })();
 
