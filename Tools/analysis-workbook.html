@@ -1213,12 +1213,15 @@ const F = {
   },
 
   /* Build a cell value that hyperlinks to a cell on another sheet in the
-     same workbook. We use a HYPERLINK() formula instead of ExcelJS's
-     { text, hyperlink } shorthand because ExcelJS 4.4.0 writes every
-     hyperlink with TargetMode="External" — Excel then treats the "#" as
-     a URL anchor, lands on the sheet, but loses the cell reference. The
-     HYPERLINK formula is evaluated by Excel itself and handles internal
-     cell references correctly, so the click actually jumps to the row. */
+     same workbook. We use a HYPERLINK() formula so Excel's formula
+     engine handles the navigation natively. The `{ text, hyperlink }`
+     shorthand routes through ExcelJS's <hyperlink> + rels writer which
+     forces TargetMode="External" — Excel then treats the target as a
+     file path (`'Sheet1'!A289` triggers "Cannot open the specified
+     file"). The HYPERLINK formula bypasses the rels path entirely: the
+     "#" prefix tells Excel "navigate within this workbook" and the
+     cell reference resolves cleanly. The caller still applies the
+     blue-underline cell font so the cell looks like a hyperlink. */
   internalHyperlink(sheetName, cellRef, displayText) {
     const escSheet = String(sheetName).replace(/'/g, "''");
     const escDisplay = String(displayText).replace(/"/g, '""');
@@ -1628,14 +1631,23 @@ const F = {
       cell.alignment = { horizontal: i >= 3 ? 'center' : 'left', vertical: 'middle', indent: i >= 3 ? 0 : 1 };
     });
 
-    // Data rows
+    // Data rows. When a row has jumpToRow + sourceSheetName, the Issue
+    // cell becomes a hyperlink that takes the user to the first flagged
+    // row of that pattern on the source data sheet.
     let row = startRow + 1;
     rows.forEach((r, i) => {
       const altFill = i % 2 === 0 ? PALETTE.white : PALETTE.greyBody;
       ws.getRow(row).height = rowHeight;
       const colors = Priority.colors(r.priority);
+      const issueIsLink = r.jumpToRow && r.sourceSheetName;
+      const issueValue = issueIsLink
+        ? F.internalHyperlink(r.sourceSheetName, `A${r.jumpToRow}`, r.issue)
+        : r.issue;
+      const issueFont = issueIsLink
+        ? { name: 'Arial', size: 11, bold: true, color: { argb: 'FF0563C1' }, underline: true }
+        : { name: 'Arial', size: 11, bold: true, color: { argb: PALETTE.text } };
       const cells = [
-        { v: r.issue, fill: altFill, font: { name: 'Arial', size: 11, bold: true, color: { argb: PALETTE.text } }, align: 'left' },
+        { v: issueValue, fill: altFill, font: issueFont, align: 'left' },
         { v: r.scope, fill: altFill, font: { name: 'Arial', size: 11, color: { argb: PALETTE.text } }, align: 'left' },
         { v: r.detail, fill: altFill, font: { name: 'Arial', size: 11, color: { argb: PALETTE.text } }, align: 'left' },
         { v: r.rowCount, fill: altFill, font: { name: 'Arial', size: 12, bold: true, color: { argb: PALETTE.text } }, align: 'center' },
@@ -1865,21 +1877,54 @@ const SourceSheet = {
     }
     if (!maxCol) maxCol = srcWs.actualColumnCount || srcWs.columnCount || 1;
 
-    // Iterate populated rows via eachRow — same dimension-element caveat
-    // applies to rowCount, so we use the populated-row iterator instead.
+    // Iterate populated rows. Either:
+    //  (a) sortedSourceRows is provided — write the header row, then write
+    //      data rows in the provided order, renumbered from headerRow+1.
+    //      Each element must carry rowNumber (the source row to copy).
+    //  (b) no sortedSourceRows — preserve original source row order and
+    //      row numbers (existing behavior).
     let lastRowNumber = 0;
-    srcWs.eachRow({ includeEmpty: false }, (srcRow, rowNumber) => {
-      lastRowNumber = Math.max(lastRowNumber, rowNumber);
-      const dstRow = dst.getRow(rowNumber);
-      if (srcRow.height) dstRow.height = srcRow.height;
+    if (options.sortedSourceRows && options.sortedSourceRows.length) {
+      // Header row
+      const srcHeader = srcWs.getRow(headerRow);
+      const dstHeader = dst.getRow(headerRow);
+      if (srcHeader.height) dstHeader.height = srcHeader.height;
       for (let c = 1; c <= maxCol; c++) {
-        const v = srcRow.getCell(c).value;
+        const v = srcHeader.getCell(c).value;
         if (v !== null && v !== undefined && v !== '') {
-          dstRow.getCell(c).value = v;
+          dstHeader.getCell(c).value = v;
         }
       }
-    });
-    if (lastRowNumber === 0) lastRowNumber = headerRow;
+      // Sorted data rows
+      options.sortedSourceRows.forEach((dataRow, i) => {
+        const newRn = headerRow + 1 + i;
+        const srcRow = srcWs.getRow(dataRow.rowNumber);
+        const dstRow = dst.getRow(newRn);
+        if (srcRow.height) dstRow.height = srcRow.height;
+        for (let c = 1; c <= maxCol; c++) {
+          const v = srcRow.getCell(c).value;
+          if (v !== null && v !== undefined && v !== '') {
+            dstRow.getCell(c).value = v;
+          }
+        }
+      });
+      lastRowNumber = headerRow + options.sortedSourceRows.length;
+    } else {
+      // Same dimension-element caveat applies to rowCount, so we use the
+      // populated-row iterator instead.
+      srcWs.eachRow({ includeEmpty: false }, (srcRow, rowNumber) => {
+        lastRowNumber = Math.max(lastRowNumber, rowNumber);
+        const dstRow = dst.getRow(rowNumber);
+        if (srcRow.height) dstRow.height = srcRow.height;
+        for (let c = 1; c <= maxCol; c++) {
+          const v = srcRow.getCell(c).value;
+          if (v !== null && v !== undefined && v !== '') {
+            dstRow.getCell(c).value = v;
+          }
+        }
+      });
+      if (lastRowNumber === 0) lastRowNumber = headerRow;
+    }
 
     // Bold the header row
     dst.getRow(headerRow).font = { bold: true, name: 'Arial', size: 10 };
@@ -6321,9 +6366,27 @@ const ItemLedgerTemplate = {
   },
 
   classify(data) {
+    // ---- Pattern 3 (FIRST): Negative unit cost (stored Unit Cost < 0).
+    //      Run this ahead of every other pattern so a negative-cost row
+    //      is exclusively classified as "Negative cost" and ignored by
+    //      the other detectors below. A row with `unitCost = -0.63` is
+    //      anomalous in its own right — letting it also trip Missing IB
+    //      / Large jump / Stored value mismatch just adds noise. ----
+    const negativeCost = [];
+    data.rows.forEach(r => {
+      const unit = Number(r.unitCost);
+      if (!isFinite(unit)) return;
+      if (unit < 0) {
+        negativeCost.push({ row: r });
+      }
+    });
+    const negativeCostRows = new Set(negativeCost.map(n => n.row.rowNumber));
+    const isNegRow = r => negativeCostRows.has(r.rowNumber);
+
     // ---- Pattern 1: Intercompany ----
     const intercompany = [];
     data.rows.forEach(r => {
+      if (isNegRow(r)) return;
       const dc = Number(r.docCo);
       const oc = Number(r.orderCo);
       if (!isNaN(dc) && !isNaN(oc) && dc !== 0 && oc !== 0 && dc !== oc) {
@@ -6336,6 +6399,7 @@ const ItemLedgerTemplate = {
     const dayMs = 86400000;
     const thresholdMs = this._BACKDATE_DAYS * dayMs;
     data.rows.forEach(r => {
+      if (isNegRow(r)) return;
       if (!r.glDate || !r.transactionDate) return;
       const glMs = new Date(r.glDate).getTime();
       const txMs = new Date(r.transactionDate).getTime();
@@ -6343,17 +6407,6 @@ const ItemLedgerTemplate = {
       const lagMs = txMs - glMs;
       if (lagMs > thresholdMs) {
         backdated.push({ row: r, lagDays: Math.round(lagMs / dayMs) });
-      }
-    });
-
-    // ---- Pattern 3: Negative unit cost (direct check on the stored
-    //      Unit Cost field — JDE iluncs). Anything below zero is flagged. ----
-    const negativeCost = [];
-    data.rows.forEach(r => {
-      const unit = Number(r.unitCost);
-      if (!isFinite(unit)) return;
-      if (unit < 0) {
-        negativeCost.push({ row: r });
       }
     });
 
@@ -6365,6 +6418,7 @@ const ItemLedgerTemplate = {
     //      derive from qty × unit. ----
     const valueInconsistent = [];
     data.rows.forEach(r => {
+      if (isNegRow(r)) return;
       const qty  = Number(r.qtyPrimary);
       const unit = Number(r.unitCost);
       const ext  = Number(r.extendedCost);
@@ -6380,6 +6434,7 @@ const ItemLedgerTemplate = {
     // ---- Pattern 7: Residual-cost IA (zero qty, non-zero ext) ----
     const residualIA = [];
     data.rows.forEach(r => {
+      if (isNegRow(r)) return;
       const dt = (r.docType || '').toUpperCase();
       if (dt !== 'IA') return;
       const qty = Number(r.qtyPrimary);
@@ -6417,13 +6472,26 @@ const ItemLedgerTemplate = {
         return au - bu;
       });
 
-      // Compute (sequential) unit-cost points, skipping rows where qty=0
+      // Compute (sequential) unit-cost points, skipping rows where qty=0.
+      // Use the STORED Unit Cost field (iluncs) — the canonical JDE value
+      // — instead of computing ext/qty. The computed form amplifies the
+      // rounding of stored Extended Cost ("$0.93 / 0.11 LB" = 8.4545
+      // when the true unit cost is 8.2767) and produces false-positive
+      // cost changes whenever qty is small. Stored unit cost is stable
+      // across the whole standard-cost run, so transitions only fire
+      // when JDE actually rewrites the cost.
+      //
+      // Negative-cost rows are excluded here so the transition into/out
+      // of the negative-cost anomaly isn't flagged separately as a
+      // Pattern 4 / 5 / 6 finding — the row is already covered by
+      // Pattern 3.
       const costPoints = [];
       sorted.forEach(r => {
+        if (isNegRow(r)) return;
         const qty = Number(r.qtyPrimary);
-        const ext = Number(r.extendedCost);
-        if (!isFinite(qty) || !isFinite(ext) || qty === 0) return;
-        costPoints.push({ row: r, unitCost: ext / qty, docType: (r.docType || '').toUpperCase() });
+        const unit = Number(r.unitCost);
+        if (!isFinite(qty) || !isFinite(unit) || qty === 0 || unit === 0) return;
+        costPoints.push({ row: r, unitCost: unit, docType: (r.docType || '').toUpperCase() });
       });
 
       branchData.set(branchKey, { sorted, costPoints });
@@ -6800,10 +6868,10 @@ const ItemLedgerTemplate = {
         priority: 1, rowCount: negN,
         issue: 'Negative cost',
         scopeShort: `${negN} row${negN === 1 ? '' : 's'}`,
-        detail: 'Qty and Ext have opposite signs',
-        scope: `${negN} row${negN === 1 ? '' : 's'} where Quantity and Extended Cost are both non-zero and of opposite polarity. The implied unit cost (Ext ÷ Qty) is negative.`,
-        pattern: `Quantity and Extended Cost should always share a sign — a positive receipt has positive qty and positive ext, an issue has negative qty and negative ext. When the signs disagree, the unit cost is negative. Common causes: a manual entry with one field's sign flipped, a cost roll that mishandled return-to-vendor adjustments, or a bad backflush.`,
-        resolution: `Step 1.  For each flagged row, look up the source transaction in JDE Item Ledger Inquiry and confirm whether the sign mismatch was intentional.\n\nStep 2.  If it was a data-entry error, reverse the bad row and post a corrected one with matching signs.\n\nStep 3.  If multiple rows share a common cause (e.g. a batch of returns processed with the wrong sign convention), trace the upstream process and stop the bleed.`,
+        detail: 'Unit cost is less than zero',
+        scope: `${negN} row${negN === 1 ? '' : 's'} where the stored Unit Cost field (iluncs) is less than zero.`,
+        pattern: `Unit cost in JDE should never be negative. Common causes: a manual entry with the cost flipped, a cost roll that mishandled return-to-vendor adjustments, a bad backflush, or a data-conversion artifact on go-live.`,
+        resolution: `Step 1.  For each flagged row, look up the source transaction in JDE Item Ledger Inquiry and confirm whether the negative cost was intentional.\n\nStep 2.  If it was a data-entry error, reverse the bad row and post a corrected one.\n\nStep 3.  If multiple rows share a common cause, trace the upstream process and stop the bleed.`,
         rows: negativeCost
       });
     }
@@ -7002,16 +7070,54 @@ const ItemLedgerTemplate = {
       context
     });
 
+    // ---- Sort the source rows + remap row numbers ----
+    // The source sheet copy is sorted by Branch/Plant (asc) then UKID
+    // (desc, newest first). All references in `findings` that carry a
+    // source-side rowNumber (highlights, patternByRow, per-finding row
+    // lists) are remapped to the new positions so hyperlinks land
+    // correctly.
+    const sortedRows = data.rows.slice().sort((a, b) => {
+      const ba = (a.branchPlant || '').localeCompare(b.branchPlant || '');
+      if (ba) return ba;
+      return (a.ukid || 0) - (b.ukid || 0);
+    });
+    const rowMap = new Map();
+    sortedRows.forEach((r, i) => {
+      rowMap.set(r.rowNumber, data.headerRow + 1 + i);
+    });
+    const remapped = {
+      highlights: findings.highlights
+        .map(h => ({ rowNumber: rowMap.get(h.rowNumber), priority: h.priority }))
+        .filter(h => h.rowNumber != null),
+      patternByRow: new Map()
+    };
+    findings.patternByRow.forEach((label, oldRn) => {
+      const newRn = rowMap.get(oldRn);
+      if (newRn != null) remapped.patternByRow.set(newRn, label);
+    });
+    // For each finding, pick the first flagged row's new row number for
+    // the Issue-summary hyperlink target.
+    findings.findings.forEach(f => {
+      if (f.rows && f.rows.length > 0) {
+        const firstSrcRn = (f.rows[0].row || f.rows[0]).rowNumber;
+        f.firstNewRow = rowMap.get(firstSrcRn);
+      }
+    });
+
     let row = 6;
 
     // ---- Findings priority list — FIRST section under the chrome ----
+    // The Issue cell is a hyperlink to the first flagged row of that
+    // pattern on the source data sheet.
     row = F.renderIssueSummary(ws, row, {
       rows: findings.findings.map(f => ({
         issue: f.issue,
         scope: f.scopeShort || f.scope,
         detail: f.detail || '',
         rowCount: f.rowCount,
-        priority: f.priority
+        priority: f.priority,
+        jumpToRow: f.firstNewRow,
+        sourceSheetName: data.sheetName
       }))
     });
     ws.getRow(row).height = 14; row++;
@@ -7021,29 +7127,14 @@ const ItemLedgerTemplate = {
       row = this._renderCleanCallout(ws, row, findings.patternsChecked);
       ws.getRow(row).height = 14; row++;
     } else {
-      // Cost timeline section removed — feedback was that the visual
-      // density on the analysis tab outweighed its diagnostic value.
-      // The flagged rows on the source sheet (with the RR Analyzer Note
-      // column) carry the same information in a more scannable form.
-
-      // ---- Finding cards (one per pattern) + sub-tables ----
-      findings.findings.forEach(f => {
-        row = F.renderFindingCard(ws, row, {
-          number: f.number,
-          title: f.title,
-          priority: f.priority,
-          scope: f.scope,
-          pattern: f.pattern,
-          resolution: f.resolution
-        });
-        if (f.rows && f.rows.length > 0) {
-          row = this._renderFindingSubTable(ws, row, f, f.rows.slice(0, 12), data.sheetName);
-        }
-        ws.getRow(row).height = 10; row++;
-      });
-
-      // ---- Action Plan ----
-      row = F.renderActionPlan(ws, row, { steps: findings.actionPlan });
+      // Finding cards + per-finding sub-tables removed by user request —
+      // they offered little beyond the priority list above and the
+      // hyperlinked source-sheet view. The Action Plan was also removed:
+      // Item Ledger transactions are historical and can't be edited.
+      // Instead, show a Branch/Plant × Location totals matrix so the
+      // reader can see the on-hand-equivalent picture at a glance.
+      const matrix = this._buildBranchLocationMatrix(data.rows);
+      row = this._renderTotalsMatrix(ws, row, matrix);
     }
 
     // ---- Caution + footer ----
@@ -7053,20 +7144,139 @@ const ItemLedgerTemplate = {
     });
     F.applyPageSetup(ws, row - 1);
 
-    // ---- Source sheet (with highlights, filtered to flagged rows) ----
+    // ---- Source sheet (sorted by branch + UKID desc, highlights, all rows visible) ----
     SourceSheet.copy(sourceSheet, workbook, data.sheetName, {
       headerRow: data.headerRow,
       freezeAt: data.headerRow + 1,
-      highlights: findings.highlights,
-      patternByRow: findings.patternByRow,   // adds an "RR Analyzer Note"
-                                             // column after the source data
-      hideUnhighlighted: true   // start collapsed to the flagged rows only;
-                                // right-click → Unhide to see the full data
+      sortedSourceRows: sortedRows,
+      highlights: remapped.highlights,
+      patternByRow: remapped.patternByRow   // adds an "RR Analyzer Note"
+                                            // column after the source data
+      // AutoFilter is applied so the user can filter to flagged rows
+      // themselves; we don't hide unflagged rows up front.
     });
 
     // ---- Notes tab ----
     F.renderNotesTab(workbook, {});
     workbook.views = [{ activeTab: 0 }];
+  },
+
+  // ---- Branch/Plant × Location totals matrix ----
+  // Two-dimensional aggregation: rows are (branch, location) pairs,
+  // metrics are summed primary-UoM Quantity + summed Extended Cost.
+  // Includes per-branch subtotals (when a branch has >1 location) and
+  // a grand total. Replaces the old Action Plan which had no value for
+  // historical transactions the user can't change.
+  _buildBranchLocationMatrix(rows) {
+    const byBranch = new Map();
+    rows.forEach(r => {
+      const bp  = r.branchPlant || '(no branch)';
+      const loc = r.location    || '(no location)';
+      if (!byBranch.has(bp)) byBranch.set(bp, new Map());
+      const branchMap = byBranch.get(bp);
+      if (!branchMap.has(loc)) branchMap.set(loc, { qty: 0, amt: 0 });
+      const cell = branchMap.get(loc);
+      cell.qty += r.qtyPrimary  || 0;
+      cell.amt += r.extendedCost || 0;
+    });
+
+    const flat = [];
+    let grandQty = 0, grandAmt = 0;
+    Array.from(byBranch.keys()).sort().forEach(bp => {
+      const branchMap = byBranch.get(bp);
+      const locations = Array.from(branchMap.keys()).sort();
+      let bpQty = 0, bpAmt = 0;
+      locations.forEach(loc => {
+        const cell = branchMap.get(loc);
+        flat.push({ branch: bp, location: loc, qty: cell.qty, amt: cell.amt, kind: 'data' });
+        bpQty += cell.qty;
+        bpAmt += cell.amt;
+      });
+      if (locations.length > 1) {
+        flat.push({ branch: bp, location: 'Subtotal', qty: bpQty, amt: bpAmt, kind: 'subtotal' });
+      }
+      grandQty += bpQty;
+      grandAmt += bpAmt;
+    });
+    flat.push({ branch: 'Grand total', location: '', qty: grandQty, amt: grandAmt, kind: 'grand' });
+    return flat;
+  },
+
+  _renderTotalsMatrix(ws, startRow, matrix) {
+    let row = startRow;
+
+    // Section header (matches the Action Plan styling so the page reads consistently)
+    ws.getRow(row).height = 28;
+    F.writeMerged(ws, `A${row}:E${row}`, 'Totals  ·  Branch/Plant × Location', {
+      font: { name: 'Arial', size: 13, bold: true, color: { argb: PALETTE.navyText } },
+      fill: PALETTE.lightBlue,
+      alignment: { horizontal: 'left', vertical: 'middle', indent: 1 }
+    });
+    row++;
+
+    // Column headers — Branch/Plant | Location (B:C merged) | Quantity | Extended Cost
+    ws.getRow(row).height = 22;
+    const setSingleHeader = (addr, label, align) => {
+      const cell = ws.getCell(addr);
+      cell.value = label;
+      cell.font = { name: 'Arial', size: 10, bold: true, color: { argb: PALETTE.navyText } };
+      F.fillCell(cell, PALETTE.lightBlue);
+      cell.alignment = { horizontal: align, vertical: 'middle', indent: align === 'left' ? 1 : 0 };
+    };
+    setSingleHeader(`A${row}`, 'Branch/Plant', 'left');
+    F.writeMerged(ws, `B${row}:C${row}`, 'Location', {
+      font: { name: 'Arial', size: 10, bold: true, color: { argb: PALETTE.navyText } },
+      fill: PALETTE.lightBlue,
+      alignment: { horizontal: 'left', vertical: 'middle', indent: 1 }
+    });
+    setSingleHeader(`D${row}`, 'Quantity', 'right');
+    setSingleHeader(`E${row}`, 'Extended Cost', 'right');
+    row++;
+
+    // Data rows
+    matrix.forEach((m, i) => {
+      const isSubtotal = m.kind === 'subtotal';
+      const isGrand    = m.kind === 'grand';
+      const fill = isGrand
+        ? PALETTE.lightBlue
+        : (isSubtotal ? PALETTE.greyBody : (i % 2 === 0 ? PALETTE.white : PALETTE.greyBody));
+      const bold = isSubtotal || isGrand;
+      ws.getRow(row).height = isGrand ? 22 : 18;
+
+      // A — Branch/Plant. Suppress on subtotal rows for visual quiet.
+      const aCell = ws.getCell(`A${row}`);
+      aCell.value = isSubtotal ? '' : m.branch;
+      aCell.font = { name: 'Arial', size: 10, bold, color: { argb: PALETTE.text } };
+      F.fillCell(aCell, fill);
+      aCell.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
+
+      // B:C — Location
+      F.writeMerged(ws, `B${row}:C${row}`, isGrand ? '' : m.location, {
+        font: { name: 'Arial', size: 10, bold, italic: isSubtotal, color: { argb: PALETTE.text } },
+        fill: fill,
+        alignment: { horizontal: 'left', vertical: 'middle', indent: 1 }
+      });
+
+      // D — Quantity
+      const dCell = ws.getCell(`D${row}`);
+      dCell.value = m.qty;
+      dCell.numFmt = '#,##0.00';
+      dCell.font = { name: 'Arial', size: 10, bold, color: { argb: PALETTE.text } };
+      F.fillCell(dCell, fill);
+      dCell.alignment = { horizontal: 'right', vertical: 'middle' };
+
+      // E — Extended Cost
+      const eCell = ws.getCell(`E${row}`);
+      eCell.value = m.amt;
+      eCell.numFmt = '"$"#,##0.00';
+      eCell.font = { name: 'Arial', size: 10, bold, color: { argb: PALETTE.text } };
+      F.fillCell(eCell, fill);
+      eCell.alignment = { horizontal: 'right', vertical: 'middle' };
+
+      row++;
+    });
+
+    return row;
   },
 
   // ---- Green "all clean" callout ----
