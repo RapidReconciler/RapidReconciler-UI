@@ -874,18 +874,3 @@ Common document types appearing in the Transaction Detail report:
 | **RI** | Sales invoice / shipment. Covers standard SO and direct ship S6 order types. For account mismatches, R42800 PO 5 (Business Unit Source) is the most common cause — it controls where the business unit portion of the GL account is sourced from and a wrong setting affects all sales entries in that version. For period mismatches, check R42800 PO 1 (GL Date). If F0911 Comment reads "Non stock line in Inv acct," a non-stock line type (N, F, or similar) posted to the inventory account -- investigate line type definition. Lines showing GL date 2000-01-01 and document 0 were never processed through Sales Update. |
 | **RM** | Sales return / credit memo. If the batch type is **IB** rather than I, the return was processed via a manual correction batch that posted to the inventory account without writing a cardex record -- this produces a GL-only variance. Investigate who created the IB batch and whether the inventory account coding is correct. |
 
----
-
-## Section 10: Related Documentation
-
-- [Inventory: Using the Application](../MDS/inventory-using-application.md)
-- [DMAAI Reference Guide](../MDS/distribution-aais.md)
-- [GL Class Code Management Guide](../MDS/gl-class-code-changes.md)
-- [Item Ledger and Cardex Analysis Guide](../MDS/item-ledger-faq.md)
-- [Zero Balance Adjustments Guide](../MDS/zero-balance-adjustments.md)
-- [Cardex Integrity Variance Guide](../MDS/cardex_variance.md)
-- [Purchase Order Reference Guide](../MDS/purchase_order_reference.md)
-- [Stock Status and Trial Balance Reconciliation](../MDS/stock-status-trial-balance.md)
-
----
-

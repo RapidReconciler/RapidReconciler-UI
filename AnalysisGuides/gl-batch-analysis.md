@@ -579,13 +579,4 @@ After corrections are made, verify that the GL Batches variance in RapidReconcil
 
 ---
 
-## Section 13: Related Documentation
-
-- [Inventory: Using the Application](../MDS/inventory-using-application.md)
-- [Transaction Detail Analysis Guide](../MDS/transaction-detail-analysis-guide.md)
-- [DMAAI Reference Guide](../MDS/distribution-aais.md)
-- [Manufacturing Work Order Reference Guide](../MDS/manufacturing-reference.md)
-
----
-
 *For support, contact GSI at [rrsupport@getgsi.com](mailto:rrsupport@getgsi.com)*
