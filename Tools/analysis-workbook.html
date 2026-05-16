@@ -1213,19 +1213,17 @@ const F = {
   },
 
   /* Build a cell value that hyperlinks to a cell on another sheet in the
-     same workbook. We use a HYPERLINK() formula instead of ExcelJS's
-     { text, hyperlink } shorthand because ExcelJS 4.4.0 writes every
-     hyperlink with TargetMode="External" — Excel then treats the "#" as
-     a URL anchor, lands on the sheet, but loses the cell reference. The
-     HYPERLINK formula is evaluated by Excel itself and handles internal
-     cell references correctly, so the click actually jumps to the row. */
+     same workbook. The hyperlink target intentionally omits the leading
+     "#": ExcelJS 4.4.0 writes internal hyperlinks with a `location=`
+     attribute on the <hyperlink> element, passing the target string
+     straight through. Excel parses `location="'Sheet'!A5"` as a valid
+     internal cell reference and navigates correctly. The earlier
+     `#'Sheet'!A5` form caused Excel to land on the sheet but lose the
+     row, because the leading `#` is not valid inside a cell-reference
+     location attribute. */
   internalHyperlink(sheetName, cellRef, displayText) {
     const escSheet = String(sheetName).replace(/'/g, "''");
-    const escDisplay = String(displayText).replace(/"/g, '""');
-    return {
-      formula: `HYPERLINK("#'${escSheet}'!${cellRef}","${escDisplay}")`,
-      result: String(displayText)
-    };
+    return { text: String(displayText), hyperlink: `'${escSheet}'!${cellRef}` };
   },
 
   /* Render the 5-row chrome (brand strip, headline, subline, context, spacer) */
@@ -6417,13 +6415,20 @@ const ItemLedgerTemplate = {
         return au - bu;
       });
 
-      // Compute (sequential) unit-cost points, skipping rows where qty=0
+      // Compute (sequential) unit-cost points, skipping rows where qty=0.
+      // Use the STORED Unit Cost field (iluncs) — the canonical JDE value
+      // — instead of computing ext/qty. The computed form amplifies the
+      // rounding of stored Extended Cost ("$0.93 / 0.11 LB" = 8.4545
+      // when the true unit cost is 8.2767) and produces false-positive
+      // cost changes whenever qty is small. Stored unit cost is stable
+      // across the whole standard-cost run, so transitions only fire
+      // when JDE actually rewrites the cost.
       const costPoints = [];
       sorted.forEach(r => {
         const qty = Number(r.qtyPrimary);
-        const ext = Number(r.extendedCost);
-        if (!isFinite(qty) || !isFinite(ext) || qty === 0) return;
-        costPoints.push({ row: r, unitCost: ext / qty, docType: (r.docType || '').toUpperCase() });
+        const unit = Number(r.unitCost);
+        if (!isFinite(qty) || !isFinite(unit) || qty === 0 || unit === 0) return;
+        costPoints.push({ row: r, unitCost: unit, docType: (r.docType || '').toUpperCase() });
       });
 
       branchData.set(branchKey, { sorted, costPoints });
@@ -7053,15 +7058,15 @@ const ItemLedgerTemplate = {
     });
     F.applyPageSetup(ws, row - 1);
 
-    // ---- Source sheet (with highlights, filtered to flagged rows) ----
+    // ---- Source sheet (with highlights, AutoFilter, all rows visible) ----
     SourceSheet.copy(sourceSheet, workbook, data.sheetName, {
       headerRow: data.headerRow,
       freezeAt: data.headerRow + 1,
       highlights: findings.highlights,
-      patternByRow: findings.patternByRow,   // adds an "RR Analyzer Note"
-                                             // column after the source data
-      hideUnhighlighted: true   // start collapsed to the flagged rows only;
-                                // right-click → Unhide to see the full data
+      patternByRow: findings.patternByRow   // adds an "RR Analyzer Note"
+                                            // column after the source data
+      // AutoFilter is applied so the user can filter to flagged rows
+      // themselves; we don't hide unflagged rows up front.
     });
 
     // ---- Notes tab ----
