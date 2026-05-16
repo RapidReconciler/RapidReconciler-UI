@@ -1396,16 +1396,42 @@ const F = {
       'Informational': { p: 3, badge: 'Informational' }
     };
 
+    // Estimate row height to accommodate wrapped text. Excel doesn't auto-
+    // size merged-cell rows when wrapText is on, so the prior fixed
+    // height: 44 truncated long descriptions. Heuristic: count explicit
+    // newlines plus a soft-wrap estimate based on character count vs the
+    // merged column width, take the max across label (A:B) and description
+    // (C:D), then convert to row points at ~15px / line + padding.
+    const estimateRowHeight = (label, description) => {
+      const labelText = String(label || '');
+      const descText  = String(description || '');
+      // A:B merged is ~50 chars per line at Arial 11 bold and the
+      // standard column widths; C:D merged is ~60 chars per line at
+      // Arial 10.5 regular.
+      const labelLines = Math.max(
+        (labelText.match(/\n/g) || []).length + 1,
+        Math.ceil(labelText.length / 50) || 1
+      );
+      const descLines = Math.max(
+        (descText.match(/\n/g) || []).length + 1,
+        Math.ceil(descText.length / 60) || 1
+      );
+      const lines = Math.max(labelLines, descLines);
+      return Math.min(180, Math.max(44, lines * 15 + 14));
+    };
+
     let row = startRow + 1;
     rows.forEach(ev => {
-      ws.getRow(row).height = 44;
+      ws.getRow(row).height = estimateRowHeight(ev.label, ev.description);
       const sev = severityMap[ev.severity] || severityMap.Informational;
       const colors = Priority.colors(sev.p);
 
-      // A:B — label with hyperlink to source row
+      // A:B — label with hyperlink to source row. vertical: 'top' so
+      // wrapped lines start at the top of the row rather than centering
+      // a single line and clipping the rest.
       F.writeMerged(ws, `A${row}:B${row}`, ev.label, {
         font: { name: 'Arial', size: 11, bold: true, color: { argb: 'FF0563C1' }, underline: true },
-        alignment: { horizontal: 'left', vertical: 'middle', indent: 1, wrapText: true }
+        alignment: { horizontal: 'left', vertical: 'top', indent: 1, wrapText: true }
       });
       if (ev.sourceRow) {
         ws.getCell(`A${row}`).value = { text: ev.label, hyperlink: `#'${sourceSheetName}'!A${ev.sourceRow}` };
@@ -1414,10 +1440,10 @@ const F = {
       // C:D — description
       F.writeMerged(ws, `C${row}:D${row}`, ev.description, {
         font: { name: 'Arial', size: 10.5, color: { argb: PALETTE.text } },
-        alignment: { horizontal: 'left', vertical: 'middle', indent: 1, wrapText: true }
+        alignment: { horizontal: 'left', vertical: 'top', indent: 1, wrapText: true }
       });
 
-      // E — severity badge
+      // E — severity badge (kept vertically centred for the badge feel)
       ws.getCell(`E${row}`).value = sev.badge;
       ws.getCell(`E${row}`).font = { name: 'Arial', size: 10.5, bold: true, color: { argb: colors.text } };
       F.fillCell(ws.getCell(`E${row}`), colors.fill);
@@ -5134,19 +5160,19 @@ const SystemStatusTemplate = {
   // Known SQL Server error codes — customer-provided table. Unknown codes
   // fall through to a generic "see SQL Server documentation" line.
   _sqlErrors: {
-    2627:  { severity: 16, description: 'Violation of PRIMARY KEY constraint. Cannot insert duplicate key in object.', cause: 'Attempting to insert a duplicate key into a column with a PRIMARY KEY or UNIQUE constraint.', resolution: 'Check for duplicate values in the key column; update or delete the conflicting row.' },
-    2601:  { severity: 16, description: 'Cannot insert duplicate key row in object with unique index.', cause: 'Inserting a duplicate value into a column with a UNIQUE constraint.', resolution: 'Remove or update the duplicate row before inserting.' },
-    547:   { severity: 16, description: 'The INSERT statement conflicted with the FOREIGN KEY constraint.', cause: 'Trying to insert a child table row without a matching parent row.', resolution: 'Ensure the referenced parent row exists before inserting.' },
-    208:   { severity: 16, description: 'Invalid object name.', cause: 'Table or view name in the query does not exist or is inaccessible.', resolution: 'Verify the object name and schema; check permissions.' },
-    1205:  { severity: 16, description: 'Transaction (Process ID) was deadlocked on resources with another process and has been chosen as the deadlock victim.', cause: 'Two or more transactions are waiting for each other’s resources.', resolution: 'Retry the transaction; optimize queries to reduce lock contention.' },
-    8152:  { severity: 16, description: 'String or binary data would be truncated.', cause: 'Inserting or updating a value longer than the column’s defined length.', resolution: 'Adjust the column size or truncate the input value.' },
-    8115:  { severity: 16, description: 'Arithmetic overflow error converting expression to data type.', cause: 'Arithmetic operation produces a value outside the data type’s range.', resolution: 'Change the data type to a larger size or adjust the calculation.' },
-    2812:  { severity: 16, description: 'Could not find stored procedure.', cause: 'Specified stored procedure does not exist in the database.', resolution: 'Verify the procedure name and schema; check if it’s in the correct database.' },
-    18456: { severity: 14, description: 'Login failed for user.', cause: 'Authentication failure for a SQL Server login.', resolution: 'Check username/password; verify SQL Server authentication settings.' },
-    8134:  { severity: 16, description: 'Divide by zero error encountered.', cause: 'Attempting to divide by zero.', resolution: 'Add a check to ensure the divisor is not zero.' },
-    8145:  { severity: 16, description: 'Subquery returned more than 1 value.', cause: 'A scalar subquery returned multiple rows.', resolution: 'Use MAX(), MIN(), or aggregate functions in scalar subqueries.' },
-    8114:  { severity: 16, description: 'Error converting data type.', cause: 'Data type mismatch during conversion.', resolution: 'Ensure data types match or convert explicitly.' },
-    5171:  { severity: 16, description: 'Not a primary database file.', cause: 'SQL Server cannot recognize an MDF file as a valid database file.', resolution: 'Restore from backup or repair the file.' }
+    2627:  { severity: 16, description: 'Violation of PRIMARY KEY constraint. Cannot insert duplicate key in object.', plain: 'The step tried to insert a row whose primary key already exists in the target table.', cause: 'Attempting to insert a duplicate key into a column with a PRIMARY KEY or UNIQUE constraint.', resolution: 'Check for duplicate values in the key column; update or delete the conflicting row.', docUrl: 'https://learn.microsoft.com/sql/relational-databases/errors-events/mssqlserver-2627-database-engine-error' },
+    2601:  { severity: 16, description: 'Cannot insert duplicate key row in object with unique index.', plain: 'The step tried to insert a row whose value already exists on a column protected by a unique index.', cause: 'Inserting a duplicate value into a column with a UNIQUE constraint.', resolution: 'Remove or update the duplicate row before inserting.', docUrl: 'https://learn.microsoft.com/sql/relational-databases/errors-events/mssqlserver-2601-database-engine-error' },
+    547:   { severity: 16, description: 'The INSERT statement conflicted with the FOREIGN KEY constraint.', plain: 'The step tried to insert or update a child row whose parent row is missing.', cause: 'Trying to insert a child table row without a matching parent row.', resolution: 'Ensure the referenced parent row exists before inserting.', docUrl: 'https://learn.microsoft.com/sql/relational-databases/errors-events/mssqlserver-547-database-engine-error' },
+    208:   { severity: 16, description: 'Invalid object name.', plain: 'SQL Server cannot find a table, view, or other object named in the query.', cause: 'Table or view name in the query does not exist or is inaccessible.', resolution: 'Verify the object name and schema; check permissions.', docUrl: 'https://learn.microsoft.com/sql/relational-databases/errors-events/mssqlserver-208-database-engine-error' },
+    1205:  { severity: 16, description: 'Transaction (Process ID) was deadlocked on resources with another process and has been chosen as the deadlock victim.', plain: 'Two SQL Server sessions wanted each other’s locks; SQL Server killed one to break the tie.', cause: 'Two or more transactions are waiting for each other’s resources.', resolution: 'Retry the transaction; optimize queries to reduce lock contention.', docUrl: 'https://learn.microsoft.com/sql/relational-databases/errors-events/mssqlserver-1205-database-engine-error' },
+    8152:  { severity: 16, description: 'String or binary data would be truncated.', plain: 'The step tried to write a value that’s longer than the target column will hold.', cause: 'Inserting or updating a value longer than the column’s defined length.', resolution: 'Adjust the column size or truncate the input value.', docUrl: 'https://learn.microsoft.com/sql/relational-databases/errors-events/mssqlserver-8152-database-engine-error' },
+    8115:  { severity: 16, description: 'Arithmetic overflow error converting expression to data type.', plain: 'A number got too large for the column or variable it was being stored into.', cause: 'Arithmetic operation produces a value outside the data type’s range.', resolution: 'Change the data type to a larger size or adjust the calculation.', docUrl: 'https://learn.microsoft.com/sql/relational-databases/errors-events/mssqlserver-8115-database-engine-error' },
+    2812:  { severity: 16, description: 'Could not find stored procedure.', plain: 'The step called a stored procedure that doesn’t exist (or that the user can’t see).', cause: 'Specified stored procedure does not exist in the database.', resolution: 'Verify the procedure name and schema; check if it’s in the correct database.', docUrl: 'https://learn.microsoft.com/sql/relational-databases/errors-events/mssqlserver-2812-database-engine-error' },
+    18456: { severity: 14, description: 'Login failed for user.', plain: 'The SQL Agent step couldn’t authenticate to SQL Server with the credentials it tried.', cause: 'Authentication failure for a SQL Server login.', resolution: 'Check username/password; verify SQL Server authentication settings.', docUrl: 'https://learn.microsoft.com/sql/relational-databases/errors-events/mssqlserver-18456-database-engine-error' },
+    8134:  { severity: 16, description: 'Divide by zero error encountered.', plain: 'A calculation divided by zero, which SQL Server can’t represent.', cause: 'Attempting to divide by zero.', resolution: 'Add a check to ensure the divisor is not zero.', docUrl: 'https://learn.microsoft.com/sql/relational-databases/errors-events/mssqlserver-8134-database-engine-error' },
+    8145:  { severity: 16, description: 'Subquery returned more than 1 value.', plain: 'A nested query that was expected to return a single value returned several rows instead.', cause: 'A scalar subquery returned multiple rows.', resolution: 'Use MAX(), MIN(), or aggregate functions in scalar subqueries.', docUrl: 'https://learn.microsoft.com/sql/relational-databases/errors-events/mssqlserver-512-database-engine-error' },
+    8114:  { severity: 16, description: 'Error converting data type.', plain: 'A value couldn’t be converted to the type the step asked for (often a text-to-number cast).', cause: 'Data type mismatch during conversion.', resolution: 'Ensure data types match or convert explicitly.', docUrl: 'https://learn.microsoft.com/sql/relational-databases/errors-events/mssqlserver-8114-database-engine-error' },
+    5171:  { severity: 16, description: 'Not a primary database file.', plain: 'SQL Server tried to attach a file as a database but it isn’t a valid primary (.mdf) file.', cause: 'SQL Server cannot recognize an MDF file as a valid database file.', resolution: 'Restore from backup or repair the file.', docUrl: 'https://learn.microsoft.com/sql/relational-databases/errors-events/mssqlserver-5171-database-engine-error' }
   },
 
   // ---- Detection ----
@@ -5569,8 +5595,14 @@ const SystemStatusTemplate = {
   },
 
   _buildEvidence(data, ctx) {
+    // First column (label) is the StartTime of the offending row, hyperlinked
+    // to the source sheet. Step / Process / metric details live in the
+    // description column. Final array is sorted by StartTime descending so
+    // the newest issues sit at the top of the Evidence list.
+    const trimMs = s => String(s || '').replace(/\.\d+$/, '').trim();
+
     const ev = [];
-    // Errors first — each is a root cause
+    // Errors first — each is a root cause / related (severity follows position)
     ctx.allErrors.slice(0, 8).forEach((e, i) => {
       const meta = this._sqlErrors[e.errorNum];
       const desc = meta
@@ -5578,8 +5610,9 @@ const SystemStatusTemplate = {
         : `ErrorNum ${e.errorNum} — Unknown SQL error; see SQL Server documentation`;
       ev.push({
         severity: i === 0 ? 'Root cause' : 'Related',
-        label: `${e.step.trim()}  →  Row ${e.rowNumber}`,
-        description: `${desc}\nProcess: ${e.process.trim()}  ·  StartTime ${e.startStr}`,
+        sortKey: e.startStr || '',
+        label: trimMs(e.startStr) || '(no StartTime)',
+        description: `${desc}\nStep: ${e.step.trim()}  ·  Process: ${e.process.trim()}`,
         sourceRow: e.rowNumber
       });
     });
@@ -5588,7 +5621,8 @@ const SystemStatusTemplate = {
       const last = c.lastStep || {};
       ev.push({
         severity: 'Anchor',
-        label: `Cycle ${c.startStr || '(unknown start)'}  →  Row ${c.startRow}`,
+        sortKey: c.startStr || '',
+        label: trimMs(c.startStr) || '(no StartTime)',
         description: `Cycle started${c.truncatedStart ? ' before the export window — start row is the first visible row' : ''} but no "RapidReconciler — Successfully Completed" row appears.  Last step seen: ${String(last.step || '').trim()} — ${String(last.process || '').trim()}`,
         sourceRow: c.startRow
       });
@@ -5599,11 +5633,22 @@ const SystemStatusTemplate = {
       const aboveStr = s.aboveMedianSec >= 60 ? `${Math.round(s.aboveMedianSec / 60)} min above median` : `${Math.round(s.aboveMedianSec)}s above median`;
       ev.push({
         severity: 'Informational',
-        label: `${s.row.step.trim()}  →  Row ${s.row.rowNumber}`,
-        description: `Ran in ${this._fmtDuration(s.row.durationSec)} on ${s.row.startStr}.  Median across complete cycles: ${this._fmtDuration(s.medianSec)} (${ratioStr}, ${aboveStr}).`,
+        sortKey: s.row.startStr || '',
+        label: trimMs(s.row.startStr) || '(no StartTime)',
+        description: `Step: ${s.row.step.trim()}  ·  Ran in ${this._fmtDuration(s.row.durationSec)}.  Median across complete cycles: ${this._fmtDuration(s.medianSec)} (${ratioStr}, ${aboveStr}).`,
         sourceRow: s.row.rowNumber
       });
     });
+
+    // Sort by StartTime descending — newest at the top. Empty sort keys
+    // (no StartTime) fall to the bottom.
+    ev.sort((a, b) => {
+      if (!a.sortKey && !b.sortKey) return 0;
+      if (!a.sortKey) return 1;
+      if (!b.sortKey) return -1;
+      return b.sortKey.localeCompare(a.sortKey);
+    });
+
     return ev;
   },
 
@@ -5638,7 +5683,10 @@ const SystemStatusTemplate = {
       context
     });
 
-    let row = F.renderDisclaimer(ws, 6);
+    // No "Verify before acting" disclaimer for this template — the analysis
+    // is a direct readout of the SQL Agent step log, not a JDE-side
+    // hypothesis that needs cross-checking. Start content at row 6.
+    let row = 6;
 
     // Variance card — the headline number is what matters most: error count
     // if any, else partial-cycle count, else slow-step count, else "clean".
@@ -5750,10 +5798,13 @@ const SystemStatusTemplate = {
       const unknown = findings.errorCodes.filter(e => !this._sqlErrors[e.code]);
       known.forEach(e => {
         const meta = this._sqlErrors[e.code];
-        parts.push(`\n  ${e.code} (severity ${meta.severity}, ${e.count}x):  ${meta.description}\n    Typical cause:  ${meta.cause}`);
+        parts.push(`\n  ${e.code} (severity ${meta.severity}, ${e.count}x):  ${meta.description}`);
+        if (meta.plain) parts.push(`\n    What it means:  ${meta.plain}`);
+        parts.push(`\n    Typical cause:  ${meta.cause}`);
+        if (meta.docUrl) parts.push(`\n    SQL Server docs:  ${meta.docUrl}`);
       });
       unknown.forEach(e => {
-        parts.push(`\n  ${e.code} (${e.count}x):  Unknown SQL error code.  See SQL Server documentation for the full text.`);
+        parts.push(`\n  ${e.code} (${e.count}x):  Unknown SQL error code.  See SQL Server documentation:  https://learn.microsoft.com/sql/relational-databases/errors-events/database-engine-events-and-errors`);
       });
       if (findings.partialCycles.length) {
         parts.push(`\n\nThe partial cycles below may be the downstream consequence — once a step throws an error, the rest of the cycle often aborts.`);
