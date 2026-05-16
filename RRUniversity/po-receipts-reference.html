@@ -359,6 +359,17 @@ footer { background: var(--navy-deep); color: rgba(255,255,255,0.7); padding: 18
     </table>
     <p>This overwrite behavior is the primary reason F43121 does not function as a true ledger and why As-Of reporting is not available for RNV.</p>
 
+    <h4 id="s3-3-1">Reversal Sequence: Voucher Before Receipt</h4>
+    <p>When a receipt has already been matched to a voucher, JD Edwards will <strong>not</strong> let you cancel the receipt directly. The Procurement guide states: &ldquo;you cannot cancel a receipt record. Instead, you must reverse the voucher in Match Voucher to Open Receipt&rdquo; and then reverse the receipt.</p>
+    <p>The canonical sequence is therefore:</p>
+    <ol>
+      <li>Reverse the voucher in <code>P0411</code> (Match Voucher to Open Receipt) &mdash; this writes the Match Type <strong>4</strong> record.</li>
+      <li>Reverse the receipt in <code>P43214</code> (Open Receipts by Supplier) &mdash; this writes the Match Type <strong>3</strong> record.</li>
+    </ol>
+    <div class="callout important">
+      <p><strong>Important:</strong> Reversing out of order is the most common cause of orphaned F43121 / F43099 entries and stranded RNV balances. If a user reverses the receipt first while a matched voucher still points at it, JD Edwards either blocks the cancel or leaves F43121 in an inconsistent state that no longer ties back to the A/P ledger. This is the root cause of many of the &ldquo;out-of-sequence&rdquo; reconciliation states RapidReconciler surfaces &mdash; voucher reversal was skipped, was processed after the receipt reversal, or hit a different period.</p>
+    </div>
+
     </section>
 
 <section id="topic-section-4" class="view">
@@ -1016,8 +1027,15 @@ footer { background: var(--navy-deep); color: rgba(255,255,255,0.7); padding: 18
       </tbody>
     </table>
     <div class="callout note">
-      <p><strong>Note:</strong> If a purchase order receipt is reversed, any landed costs applied — including journal entries, F43121 records, and cardex records — will also be reversed.</p>
-      <p><strong>Note:</strong> Landed costs cannot be reversed through the Stand Alone program (P43214: ZJDE0003). Reversal is possible only if the purchase order itself is reversed using Open Receipts by Supplier (P43214: ZJDE0001).</p>
+      <p><strong>Note:</strong> If a purchase order receipt is reversed, any landed costs applied &mdash; including journal entries, F43121 records, and cardex records &mdash; will also be reversed.</p>
+      <p><strong>Note:</strong> Landed costs cannot be reversed through the Stand Alone program (<code>P43214: ZJDE0003</code>). Reversal is possible only if the purchase order itself is reversed using Open Receipts by Supplier (<code>P43214: ZJDE0001</code>).</p>
+    </div>
+
+    <h4 id="s8-4-1">Stand-Alone Landed Cost Cannot Be Reversed In Place</h4>
+    <p>The two <code>P43214</code> versions are not interchangeable. JDE&rsquo;s <em>Allow reversals/Apply landed cost</em> processing option on the Purchase Receipts Inquiry program is set to <strong>1</strong> on <code>ZJDE0001</code> (Open Receipts by Supplier, used for reversals) and <strong>2</strong> on <code>ZJDE0003</code> (Stand-Alone Landed Cost, used for applying landed cost between receipt and voucher match). A single session does one or the other &mdash; never both.</p>
+    <p>The practical consequence: if landed cost was applied via the stand-alone path (after the receipt, before voucher match), there is <strong>no JDE function</strong> that removes just the landed cost line. The only way to back it out is to reverse the underlying receipt in <code>ZJDE0001</code>, which cascades and reverses every landed cost line along with it. Landed cost lines applied during the original receipt entry in <code>P4312</code> follow the same rule &mdash; they only come off when the receipt itself is reversed.</p>
+    <div class="callout important">
+      <p><strong>Important &mdash; reconciliation impact:</strong> A stand-alone-applied landed cost line on a receipt that has since been partially or fully vouchered (or that AP no longer wants to voucher) is a stranded record. JDE has no graceful path to remove it without unwinding the receipt &mdash; an action AP usually will not take if downstream postings exist. These show up in RapidReconciler as small, persistent variances on the affected order. Suspend the order with an audit note explaining the stranded landed cost line, or exclude the specific document if the underlying receipt is otherwise reconciled.</p>
     </div>
 
     <h3 id="s8-5"><span class="num">8.5</span>Landed Cost Journal Entries</h3>
