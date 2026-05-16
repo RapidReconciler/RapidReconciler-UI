@@ -1405,26 +1405,27 @@ const F = {
 
     // Estimate row height to accommodate wrapped text. Excel doesn't auto-
     // size merged-cell rows when wrapText is on, so the prior fixed
-    // height: 44 truncated long descriptions. Heuristic: count explicit
-    // newlines plus a soft-wrap estimate based on character count vs the
-    // merged column width, take the max across label (A:B) and description
-    // (C:D), then convert to row points at ~15px / line + padding.
+    // height: 44 truncated long descriptions. Heuristic: split on explicit
+    // newlines, then for each segment compute its own wrap based on
+    // character count vs the merged column width, and sum. Take the max
+    // across label (A:B) and description (C:D), then convert to row points
+    // at ~15px / line + padding. Per-segment wrapping (vs averaging the
+    // whole string) fixes the case where a description had explicit
+    // newlines AND one of its lines was much longer than the others —
+    // the old formula understated the height in that mix.
+    const wrapLines = (text, charsPerLine) => {
+      return text.split('\n').reduce((sum, segment) => {
+        return sum + Math.max(1, Math.ceil(segment.length / charsPerLine));
+      }, 0);
+    };
     const estimateRowHeight = (label, description) => {
       const labelText = String(label || '');
       const descText  = String(description || '');
       // A:B merged is ~50 chars per line at Arial 11 bold and the
       // standard column widths; C:D merged is ~60 chars per line at
       // Arial 10.5 regular.
-      const labelLines = Math.max(
-        (labelText.match(/\n/g) || []).length + 1,
-        Math.ceil(labelText.length / 50) || 1
-      );
-      const descLines = Math.max(
-        (descText.match(/\n/g) || []).length + 1,
-        Math.ceil(descText.length / 60) || 1
-      );
-      const lines = Math.max(labelLines, descLines);
-      return Math.min(180, Math.max(44, lines * 15 + 14));
+      const lines = Math.max(wrapLines(labelText, 50), wrapLines(descText, 60));
+      return Math.min(220, Math.max(44, lines * 15 + 14));
     };
 
     let row = startRow + 1;
@@ -5864,9 +5865,8 @@ Templates.register(SystemStatusTemplate);
    column-header fingerprint (sheet name is useless — typically "Sheet1").
    Two patterns in v1:
      1. Intercompany Transactions — Doc Co != Order Co
-     2. Backdated Transactions    — out-of-place GL dates when rows are
-                                    sequenced by Unique Key ID (transaction
-                                    serial number; ASC = order of entry).
+     2. Backdated Transactions    — GL Date is more than 7 days earlier
+                                    than the row's Transaction Date.
 ==================================================================== */
 const ItemLedgerTemplate = {
   id: 'item-ledger',
@@ -6097,10 +6097,10 @@ const ItemLedgerTemplate = {
   // ---- Classification ----
   // Pattern 1: Intercompany. Both Doc Co AND Order Co parse as non-zero
   // numbers AND those numbers differ -> flag.
-  // Pattern 2: Backdated. Sort ascending by Unique Key ID, walk with a
-  // running-max GL Date. If a row's GL Date is more than _BACKDATE_DAYS
-  // earlier than running max, flag.
-  _BACKDATE_DAYS: 30,   // tunable v1 constant — surface in report if it trips on too many rows
+  // Pattern 2: Backdated. Per row, compare GL Date vs Transaction Date.
+  // If GL Date is more than _BACKDATE_DAYS earlier than Transaction Date,
+  // flag. Rows missing either date are skipped.
+  _BACKDATE_DAYS: 7,    // tunable v1 constant — surface in report if it trips on too many rows
 
   classify(data) {
     const intercompany = [];
@@ -6112,33 +6112,21 @@ const ItemLedgerTemplate = {
       }
     });
 
-    // Backdated detection — walk by ascending UKID. Rows missing UKID or
-    // GL Date are skipped (they can't participate in the running-max
-    // sequence, so flagging them would be misleading).
-    const ukidSorted = data.rows
-      .filter(r => r.ukid != null && !isNaN(r.ukid) && r.glDate)
-      .slice()
-      .sort((a, b) => a.ukid - b.ukid);
-
+    // Backdated detection — per row, lag = TxDate - GLDate (in days).
+    // Lag > threshold means the GL Date was set further in the past than
+    // _BACKDATE_DAYS relative to when the transaction actually happened.
     const backdated = [];
-    let runningMaxMs = -Infinity;
-    let runningMaxRow = null;
     const dayMs = 86400000;
     const thresholdMs = this._BACKDATE_DAYS * dayMs;
-    ukidSorted.forEach(r => {
-      const ms = new Date(r.glDate).getTime();
-      if (isNaN(ms)) return;
-      if (ms > runningMaxMs) {
-        runningMaxMs = ms;
-        runningMaxRow = r;
-        return;
-      }
-      const lagMs = runningMaxMs - ms;
+    data.rows.forEach(r => {
+      if (!r.glDate || !r.transactionDate) return;
+      const glMs = new Date(r.glDate).getTime();
+      const txMs = new Date(r.transactionDate).getTime();
+      if (isNaN(glMs) || isNaN(txMs)) return;
+      const lagMs = txMs - glMs;
       if (lagMs > thresholdMs) {
         backdated.push({
           row: r,
-          runningMaxMs,
-          runningMaxRow,
           lagDays: Math.round(lagMs / dayMs)
         });
       }
@@ -6178,16 +6166,15 @@ const ItemLedgerTemplate = {
 
     backdated.forEach(b => {
       const r = b.row;
-      const mx = b.runningMaxRow;
       const ukidShown = r.ukidDisplay || (r.ukid == null ? '' : String(r.ukid));
-      const dateShown = r.glDateRaw || (r.glDate ? r.glDate.slice(0, 10) : '');
-      const maxShown = mx && (mx.glDateRaw || (mx.glDate ? mx.glDate.slice(0, 10) : ''));
+      const glShown = r.glDateRaw || (r.glDate ? r.glDate.slice(0, 10) : '');
+      const txShown = r.transactionDateRaw || (r.transactionDate ? r.transactionDate.slice(0, 10) : '');
       const lagYears = b.lagDays >= 365 ? ` (>${Math.floor(b.lagDays / 365)} year${b.lagDays >= 730 ? 's' : ''} earlier)` : ` (${b.lagDays} days earlier)`;
       evidence.push({
         severity: 'Related',
         sortKey: r.ukid != null ? r.ukid : -1,
         label: ukidShown || '(no UKID)',
-        description: `Backdated: GL Date ${dateShown} vs running-max GL Date ${maxShown || '(unknown)'}${lagYears}\nDoc ${r.docNumber}${r.docType ? ' (' + r.docType + ')' : ''}  ·  Co ${r.docCo || '(blank)'}  ·  ${r.branchPlant || '(no branch)'}\nQty ${Helpers.count(r.qtyPrimary)} ${r.primaryUom || ''}  ·  Ext ${Helpers.money(r.extendedCost)}`,
+        description: `Backdated: GL Date ${glShown} vs Transaction Date ${txShown || '(unknown)'}${lagYears}\nDoc ${r.docNumber}${r.docType ? ' (' + r.docType + ')' : ''}  ·  Co ${r.docCo || '(blank)'}  ·  ${r.branchPlant || '(no branch)'}\nQty ${Helpers.count(r.qtyPrimary)} ${r.primaryUom || ''}  ·  Ext ${Helpers.money(r.extendedCost)}`,
         sourceRow: r.rowNumber
       });
     });
@@ -6246,8 +6233,8 @@ const ItemLedgerTemplate = {
         priority: backN > 20 ? 1 : 2,
         rowCount: backN,
         issue: 'Backdated transactions',
-        scope: `${backN} row${backN === 1 ? '' : 's'} where the GL Date is more than ${this._BACKDATE_DAYS} days earlier than the running-max GL Date seen so far when rows are sequenced by Unique Key ID (ascending = order of entry into the ledger).`,
-        pattern: `Backdating happens when a transaction is entered with a GL Date earlier than the most recent transactions already posted. Common causes: corrections backdated to a prior month, late vouchers entered to a re-opened period, or item-ledger replays after a fix.`,
+        scope: `${backN} row${backN === 1 ? '' : 's'} where the GL Date is more than ${this._BACKDATE_DAYS} days earlier than the Transaction Date on the same row.`,
+        pattern: `Backdating happens when a transaction is entered with a GL Date earlier than the date the transaction actually occurred. Common causes: corrections backdated to a prior month, late vouchers entered to a re-opened period, or item-ledger replays after a fix.`,
         resolution: `Step 1.  Confirm the backdated GL Dates are intentional. If they cross a closed period, posting will fail or get redirected.\n\nStep 2.  For backdating that crossed periods, review whether the affected GL accounts need a manual period adjustment.\n\nStep 3.  If the backdating volume is unexpected, ask the entry team for context on the corrections — recurring backdating often signals a process gap.`
       });
     }
@@ -6260,7 +6247,7 @@ const ItemLedgerTemplate = {
         rowCount: data.rows.length,
         issue: 'Clean',
         scope: `${data.rows.length} row${data.rows.length === 1 ? '' : 's'} reviewed across ${summary.companies.length} compan${summary.companies.length === 1 ? 'y' : 'ies'} and ${summary.branches.length} branch${summary.branches.length === 1 ? '' : 'es'}.`,
-        pattern: `Every row had Doc Co = Order Co (or one of them blank), and the GL Dates moved forward consistently when sequenced by Unique Key ID.`,
+        pattern: `Every row had Doc Co = Order Co (or one of them blank), and every row's GL Date was within ${this._BACKDATE_DAYS} days of its Transaction Date.`,
         resolution: `No action required by this analysis. The Summary tab on this workbook still lists the dimensional totals if you want a quick QoH / value read.`
       });
     }
@@ -6373,13 +6360,13 @@ const ItemLedgerTemplate = {
     if (totalFlagged === 0) {
       varianceNumber = '0';
       varianceSub = 'flagged';
-      rationale = `Pattern:  ${findings.patternLabel}\n\nEvery row had Doc Co matching Order Co (or one of them blank) and GL Dates progressed forward when sequenced by Unique Key ID. The Summary section above lists the dimensional totals.`;
+      rationale = `Pattern:  ${findings.patternLabel}\n\nEvery row had Doc Co matching Order Co (or one of them blank) and every row's GL Date was within ${this._BACKDATE_DAYS} days of its Transaction Date. The Summary section above lists the dimensional totals.`;
     } else {
       varianceNumber = String(totalFlagged);
       varianceSub = 'intercompany + backdated';
       const bits = [];
       if (interN) bits.push(`${interN} intercompany row${interN === 1 ? '' : 's'} (Doc Co ≠ Order Co)`);
-      if (backN) bits.push(`${backN} backdated row${backN === 1 ? '' : 's'} (GL Date > ${this._BACKDATE_DAYS} days behind running-max when sorted by Unique Key ID)`);
+      if (backN) bits.push(`${backN} backdated row${backN === 1 ? '' : 's'} (GL Date > ${this._BACKDATE_DAYS} days before Transaction Date)`);
       rationale = `Pattern:  ${findings.patternLabel}\n\n${bits.join('.  ')}.  See the Evidence list below for the per-row breakdown; flagged rows are highlighted on the source sheet.`;
     }
     row = F.renderVarianceCard(ws, row, {
@@ -6418,7 +6405,7 @@ const ItemLedgerTemplate = {
 
     // ---- Caution + footer ----
     row = F.renderCautionAndFooter(ws, row, {
-      cautionText: 'This analysis flags only two patterns in the Item Ledger:  intercompany routing and backdated transactions (sequenced by Unique Key ID).  It does not validate cardex / GL integrity, posting status, or AAI routing.  Confirm the broader item-ledger picture with your JDE team and the RR University inventory module.',
+      cautionText: 'This analysis flags only two patterns in the Item Ledger:  intercompany routing and backdated transactions (GL Date vs Transaction Date on each row).  It does not validate cardex / GL integrity, posting status, or AAI routing.  Confirm the broader item-ledger picture with your JDE team and the RR University inventory module.',
       footerText: `Analysis produced by the RapidReconciler Export Analyzer  ·  ${Helpers.todayPretty()}`
     });
     F.applyPageSetup(ws, row - 1);
@@ -6587,7 +6574,7 @@ const ItemLedgerTemplate = {
     const lines = [];
     lines.push(`The Item Ledger export covers ${Helpers.count(data.rows.length)} row${data.rows.length === 1 ? '' : 's'} across ${findings.summary.companies.length} compan${findings.summary.companies.length === 1 ? 'y' : 'ies'} and ${findings.summary.branches.length} branch${findings.summary.branches.length === 1 ? '' : 'es'}.`);
     if (interN) lines.push(`\n${interN} row${interN === 1 ? '' : 's'} flagged as intercompany (Doc Co ≠ Order Co with both populated).`);
-    if (backN) lines.push(`\n${backN} row${backN === 1 ? '' : 's'} flagged as backdated (GL Date more than ${this._BACKDATE_DAYS} days earlier than the running-max GL Date when rows are sequenced by Unique Key ID).`);
+    if (backN) lines.push(`\n${backN} row${backN === 1 ? '' : 's'} flagged as backdated (GL Date more than ${this._BACKDATE_DAYS} days earlier than the Transaction Date on the same row).`);
     if (!interN && !backN) lines.push(`\nNo intercompany routing and no backdated transactions detected. The Summary section above shows the rolled-up Quantity and Extended Cost across the four dimensions (Company → Branch/Plant → Location → Lot).`);
     if (findings.evidenceTruncated) lines.push(`\nThe Evidence list below shows the top ${findings.evidence.length} flagged rows (sorted by Unique Key ID descending). The full count is ${findings.evidenceTotal}.`);
     return lines.join('\n');
@@ -6597,8 +6584,8 @@ const ItemLedgerTemplate = {
     const parts = [];
     parts.push('This analysis runs two pattern detectors against the Item Ledger:');
     parts.push(`\n  Intercompany.  For every row where Doc Co and Order Co are both populated and both numeric, the analyzer flags the row when those two numbers differ. The inventory side posts to one company; the order originated in another. Not necessarily an error — intercompany activity is real — but worth surfacing because the posting destination is split.`);
-    parts.push(`\n  Backdated.  The analyzer sorts every row ascending by Unique Key ID (the transaction serial number JDE assigns at entry time, so ascending = the order rows were created). It then walks the sorted list tracking the running-max GL Date seen so far. A row whose GL Date is more than ${this._BACKDATE_DAYS} days earlier than that running max is flagged.`);
-    parts.push(`\nThe ${this._BACKDATE_DAYS}-day threshold is a v1 constant. Small backdates within a single month often reflect normal corrections; the threshold is set to flag rows that cross at least a month boundary in the wrong direction.`);
+    parts.push(`\n  Backdated.  For each row, the analyzer compares the GL Date to the Transaction Date. If the GL Date is more than ${this._BACKDATE_DAYS} days earlier than the Transaction Date, the row is flagged. The Transaction Date reflects when the activity actually happened; the GL Date is what the entry posts to. A gap means a transaction was posted to a period earlier than when it occurred.`);
+    parts.push(`\nThe ${this._BACKDATE_DAYS}-day threshold is a v1 constant. Small differences within a week often reflect normal cut-off timing; the threshold is set to flag rows that are clearly posted backward beyond that buffer.`);
     return parts.join('');
   },
 
