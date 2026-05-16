@@ -500,7 +500,7 @@
     border: 1px solid var(--rule-strong);
     border-radius: 8px;
     display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
+    grid-template-columns: repeat(4, 1fr);
     gap: 22px;
   }
   .reports-group h3 {
@@ -537,7 +537,7 @@
     color: var(--text-muted);
     margin-top: 1px;
   }
-  @media (max-width: 980px) {
+  @media (max-width: 1100px) {
     .reports-groups { grid-template-columns: 1fr 1fr; }
   }
   @media (max-width: 640px) {
@@ -967,7 +967,7 @@
 <details class="supported-reports">
   <summary>
     Supported reports &mdash; where to export each from
-    <span class="count">8 reports</span>
+    <span class="count">9 reports</span>
   </summary>
   <div class="reports-groups">
     <div class="reports-group">
@@ -994,6 +994,13 @@
       <ul>
         <li><strong>Transaction Detail</strong><span class="report-loc">Inventory Transactions page</span></li>
         <li><strong>Cardex Variance</strong><span class="report-loc">Inventory As Of page</span></li>
+      </ul>
+    </div>
+    <div class="reports-group">
+      <h3>Page-header status lights</h3>
+      <p class="reports-group-hint">Click the indicator light in the RapidReconciler page header to download the diagnostic export.</p>
+      <ul>
+        <li><strong>System Status</strong><span class="report-loc">click the red System Status light</span></li>
       </ul>
     </div>
   </div>
@@ -5110,7 +5117,689 @@ const TransactionDetailTemplate = {
 };
 Templates.register(TransactionDetailTemplate);
 
-// All 8 templates now implemented — no stubs remaining.
+/* ====================================================================
+   SYSTEM STATUS TEMPLATE  —  SQL Agent step log for the nightly RR job
+   Each row is one executed SQL step. Cycles run A -> B -> C; the analyzer
+   surfaces failed cycles, partial cycles, SQL errors, and slow-step
+   anomalies. Source: clicking the red System Status light on the RR
+   header downloads the "System Status Generated ..." workbook.
+==================================================================== */
+const SystemStatusTemplate = {
+  id: 'system-status',
+  name: 'System Status',
+  family: 'Operational log',
+  description: 'SQL Agent step log for the nightly A-to-C run. Cycles, errors, slowdowns.',
+  status: 'ready',
+
+  // Known SQL Server error codes — customer-provided table. Unknown codes
+  // fall through to a generic "see SQL Server documentation" line.
+  _sqlErrors: {
+    2627:  { severity: 16, description: 'Violation of PRIMARY KEY constraint. Cannot insert duplicate key in object.', cause: 'Attempting to insert a duplicate key into a column with a PRIMARY KEY or UNIQUE constraint.', resolution: 'Check for duplicate values in the key column; update or delete the conflicting row.' },
+    2601:  { severity: 16, description: 'Cannot insert duplicate key row in object with unique index.', cause: 'Inserting a duplicate value into a column with a UNIQUE constraint.', resolution: 'Remove or update the duplicate row before inserting.' },
+    547:   { severity: 16, description: 'The INSERT statement conflicted with the FOREIGN KEY constraint.', cause: 'Trying to insert a child table row without a matching parent row.', resolution: 'Ensure the referenced parent row exists before inserting.' },
+    208:   { severity: 16, description: 'Invalid object name.', cause: 'Table or view name in the query does not exist or is inaccessible.', resolution: 'Verify the object name and schema; check permissions.' },
+    1205:  { severity: 16, description: 'Transaction (Process ID) was deadlocked on resources with another process and has been chosen as the deadlock victim.', cause: 'Two or more transactions are waiting for each other’s resources.', resolution: 'Retry the transaction; optimize queries to reduce lock contention.' },
+    8152:  { severity: 16, description: 'String or binary data would be truncated.', cause: 'Inserting or updating a value longer than the column’s defined length.', resolution: 'Adjust the column size or truncate the input value.' },
+    8115:  { severity: 16, description: 'Arithmetic overflow error converting expression to data type.', cause: 'Arithmetic operation produces a value outside the data type’s range.', resolution: 'Change the data type to a larger size or adjust the calculation.' },
+    2812:  { severity: 16, description: 'Could not find stored procedure.', cause: 'Specified stored procedure does not exist in the database.', resolution: 'Verify the procedure name and schema; check if it’s in the correct database.' },
+    18456: { severity: 14, description: 'Login failed for user.', cause: 'Authentication failure for a SQL Server login.', resolution: 'Check username/password; verify SQL Server authentication settings.' },
+    8134:  { severity: 16, description: 'Divide by zero error encountered.', cause: 'Attempting to divide by zero.', resolution: 'Add a check to ensure the divisor is not zero.' },
+    8145:  { severity: 16, description: 'Subquery returned more than 1 value.', cause: 'A scalar subquery returned multiple rows.', resolution: 'Use MAX(), MIN(), or aggregate functions in scalar subqueries.' },
+    8114:  { severity: 16, description: 'Error converting data type.', cause: 'Data type mismatch during conversion.', resolution: 'Ensure data types match or convert explicitly.' },
+    5171:  { severity: 16, description: 'Not a primary database file.', cause: 'SQL Server cannot recognize an MDF file as a valid database file.', resolution: 'Restore from backup or repair the file.' }
+  },
+
+  // ---- Detection ----
+  detect(workbook) {
+    let score = 0;
+    const named = workbook.getWorksheet('System Status') || workbook.getWorksheet('system status');
+    if (named) score += 0.15;
+
+    const sheet = named || this._findSheet(workbook);
+    if (!sheet) return score;
+
+    const { headers } = Helpers.readHeaders(sheet, ['capture', 'step', 'errornum']);
+    const required = ['capture', 'step', 'process', 'starttime', 'endtime', 'seconds', 'updatecount', 'errornum'];
+    const found = required.filter(h => headers.includes(h));
+    score += (found.length / required.length) * 0.7;
+
+    // Row 1 banner "System Status Generated ..." is a strong confirmatory signal
+    const banner = String(sheet.getRow(1).getCell(1).value || '');
+    if (/system status generated/i.test(banner)) score += 0.1;
+
+    return Math.max(0, Math.min(1.0, score));
+  },
+
+  _findSheet(workbook) {
+    for (const ws of workbook.worksheets) {
+      const { headers } = Helpers.readHeaders(ws, ['capture', 'step', 'errornum']);
+      if (headers.includes('capture') && headers.includes('errornum') && headers.includes('starttime')) return ws;
+    }
+    return null;
+  },
+
+  // ---- Parsing ----
+  parse(workbook) {
+    const ws = workbook.getWorksheet('System Status') || this._findSheet(workbook);
+    if (!ws) throw new Error('System Status parse: could not locate the System Status sheet');
+    const { headers, headerRowNum } = Helpers.readHeaders(ws, ['capture', 'step', 'errornum']);
+    if (!headers.includes('errornum') || !headers.includes('starttime') || !headers.includes('step')) {
+      throw new Error('System Status parse: missing required columns (need Capture, Step, Process, StartTime, EndTime, Seconds, UpdateCount, ErrorNum)');
+    }
+    const get = Helpers.cellGetter(ws, headers);
+    const rows = [];
+    const maxRow = ws.actualRowCount || ws.rowCount;
+    for (let r = headerRowNum + 1; r <= maxRow; r++) {
+      const step = Helpers.str(get(r, 'step'));
+      if (!step) continue;
+      const startStr = Helpers.str(get(r, 'starttime'));
+      const endStr = Helpers.str(get(r, 'endtime'));
+      const startMs = this._parseTimestamp(startStr);
+      // GOTCHA: when Step starts with "Data Capture" (case-insensitive), the
+      // Seconds column actually holds MINUTES. Normalize to seconds here.
+      const rawSec = Helpers.num(get(r, 'seconds'));
+      const isDataCapture = /^data capture\b/i.test(step);
+      const durationSec = isDataCapture ? rawSec * 60 : rawSec;
+      rows.push({
+        rowNumber: r,
+        capture: Helpers.str(get(r, 'capture')),
+        step,
+        process: Helpers.str(get(r, 'process')),
+        startStr,
+        endStr,
+        startMs,
+        rawSeconds: rawSec,
+        durationSec,
+        durationUnit: isDataCapture ? 'minutes' : 'seconds',
+        isDataCapture,
+        updateCount: Helpers.num(get(r, 'updatecount')),
+        errorNum: Helpers.num(get(r, 'errornum'))
+      });
+    }
+    if (rows.length === 0) throw new Error('System Status parse: no data rows found');
+
+    // Sort by StartTime ascending — the file is typically newer-on-top, but
+    // cycle identification needs chronological order.
+    const sorted = rows.slice().sort((a, b) => (a.startMs || 0) - (b.startMs || 0));
+
+    // Cycle identification: a cycle STARTS at Step="Data Capture" + Process
+    // matching "Starting A to B" (asterisk banner); a cycle COMPLETES at
+    // Step="RapidReconciler" + Process="Successfully Completed".
+    const cycles = [];
+    let current = null;
+    const orphanTail = []; // rows before the first start we see
+    sorted.forEach(row => {
+      const isStart = /^data capture$/i.test(row.step) && /Starting A to B/i.test(row.process);
+      const isEnd = /^rapidreconciler$/i.test(row.step) && /successfully completed/i.test(row.process);
+      if (isStart) {
+        if (current) {
+          // Previous cycle never saw a Successful Completed -> partial
+          current.complete = false;
+          cycles.push(current);
+        }
+        current = {
+          startRow: row.rowNumber,
+          startMs: row.startMs,
+          startStr: row.startStr,
+          capture: row.capture,
+          steps: [row],
+          errors: [],
+          complete: false,
+          endRow: null,
+          endMs: null,
+          lastStep: row
+        };
+      } else if (current) {
+        current.steps.push(row);
+        current.lastStep = row;
+        if (row.errorNum && row.errorNum !== 0) current.errors.push(row);
+        if (isEnd) {
+          current.complete = true;
+          current.endRow = row.rowNumber;
+          current.endMs = row.startMs;
+          cycles.push(current);
+          current = null;
+        }
+      } else {
+        // Step appearing before any cycle start we've seen — the file is a
+        // rolling tail and this cycle's start is outside the export window.
+        orphanTail.push(row);
+        if (row.errorNum && row.errorNum !== 0) {
+          // We still want errors in orphan rows to surface as findings.
+        }
+      }
+    });
+    if (current) {
+      current.complete = false;
+      cycles.push(current);
+    }
+
+    // If we have orphan tail rows, wrap them in a synthetic "truncated" cycle
+    // so their errors and timings still contribute to findings.
+    if (orphanTail.length) {
+      const last = orphanTail[orphanTail.length - 1];
+      cycles.unshift({
+        startRow: orphanTail[0].rowNumber,
+        startMs: orphanTail[0].startMs,
+        startStr: orphanTail[0].startStr,
+        capture: orphanTail[0].capture || '(truncated)',
+        steps: orphanTail,
+        errors: orphanTail.filter(r => r.errorNum && r.errorNum !== 0),
+        complete: orphanTail.some(r => /^rapidreconciler$/i.test(r.step) && /successfully completed/i.test(r.process)),
+        truncatedStart: true,
+        endRow: null,
+        endMs: null,
+        lastStep: last
+      });
+    }
+
+    // Banner from row 1 — "System Status Generated <date>" if present
+    const banner = String(ws.getRow(1).getCell(1).value || '');
+
+    return {
+      sheetName: ws.name,
+      headerRow: headerRowNum,
+      banner,
+      rows: sorted,
+      cycles
+    };
+  },
+
+  // String timestamps come through as "YYYY-MM-DD HH:MM:SS.mmm" — JS Date
+  // parses these directly. Excel-typed dates arrive as Date objects.
+  _parseTimestamp(v) {
+    if (!v) return null;
+    if (v instanceof Date) return v.getTime();
+    const t = new Date(v).getTime();
+    return isNaN(t) ? null : t;
+  },
+
+  // ---- Classification ----
+  classify(data) {
+    const cycles = data.cycles;
+    const completeCycles = cycles.filter(c => c.complete && !c.truncatedStart);
+    const partialCycles = cycles.filter(c => !c.complete);
+    const allErrors = data.rows.filter(r => r.errorNum && r.errorNum !== 0);
+
+    // Error counts by code
+    const errorsByCode = {};
+    allErrors.forEach(e => {
+      errorsByCode[e.errorNum] = errorsByCode[e.errorNum] || { code: e.errorNum, count: 0, rows: [] };
+      errorsByCode[e.errorNum].count++;
+      errorsByCode[e.errorNum].rows.push(e);
+    });
+    const errorCodes = Object.values(errorsByCode).sort((a, b) => b.count - a.count);
+
+    // Failing steps — steps with errors in multiple cycles (by Step name)
+    const failingStepCounts = {};
+    allErrors.forEach(e => {
+      const key = e.step;
+      failingStepCounts[key] = failingStepCounts[key] || { step: key, errorRows: [], cycles: new Set() };
+      failingStepCounts[key].errorRows.push(e);
+    });
+    cycles.forEach(c => {
+      c.errors.forEach(e => {
+        if (failingStepCounts[e.step]) failingStepCounts[e.step].cycles.add(c.startRow);
+      });
+    });
+    const failingSteps = Object.values(failingStepCounts)
+      .map(s => ({ step: s.step, errorCount: s.errorRows.length, cycleCount: s.cycles.size, rows: s.errorRows }))
+      .sort((a, b) => b.errorCount - a.errorCount);
+
+    // Median duration per step (across complete cycles only — partial
+    // cycles may include aborted runs that skew the median). Excludes
+    // rows where errorNum != 0 since failed steps often have anomalous
+    // (zero or huge) duration.
+    const stepDurations = {};
+    completeCycles.forEach(c => {
+      c.steps.forEach(row => {
+        if (row.errorNum && row.errorNum !== 0) return;
+        const key = row.step;
+        stepDurations[key] = stepDurations[key] || [];
+        stepDurations[key].push(row.durationSec);
+      });
+    });
+    const medianByStep = {};
+    Object.entries(stepDurations).forEach(([step, ds]) => {
+      const sorted = ds.slice().sort((a, b) => a - b);
+      const m = sorted.length % 2 === 0
+        ? (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2
+        : sorted[(sorted.length - 1) / 2];
+      medianByStep[step] = { median: m, samples: sorted.length };
+    });
+
+    // Slow-step anomalies: rows where duration >= 3x median OR >= 5 min
+    // above median (whichever is more permissive). Requires at least 3
+    // samples for a meaningful median.
+    const slowAnomalies = [];
+    data.rows.forEach(row => {
+      const md = medianByStep[row.step];
+      if (!md || md.samples < 3) return;
+      if (row.errorNum && row.errorNum !== 0) return;
+      const ratio = md.median > 0 ? row.durationSec / md.median : 0;
+      const aboveMedianSec = row.durationSec - md.median;
+      const slow3x = md.median > 0 && ratio >= 3;
+      const slow5min = aboveMedianSec >= 300;
+      if (slow3x || slow5min) {
+        slowAnomalies.push({
+          row,
+          medianSec: md.median,
+          ratio,
+          aboveMedianSec
+        });
+      }
+    });
+    slowAnomalies.sort((a, b) => b.aboveMedianSec - a.aboveMedianSec);
+
+    // Slowest 5 steps across all cycles by absolute duration
+    const slowestRows = data.rows
+      .filter(r => !(r.errorNum && r.errorNum !== 0))
+      .slice()
+      .sort((a, b) => b.durationSec - a.durationSec)
+      .slice(0, 5);
+
+    // Priority: P1 if any errors or any partial cycles; P2 if slow-step
+    // anomalies only; P3 otherwise.
+    let priority;
+    if (allErrors.length || partialCycles.length) priority = 1;
+    else if (slowAnomalies.length) priority = 2;
+    else priority = 3;
+
+    // Pattern label for the variance card / preview
+    let patternLabel;
+    if (allErrors.length && partialCycles.length) patternLabel = 'Errors and partial cycles';
+    else if (allErrors.length) patternLabel = `SQL error${allErrors.length === 1 ? '' : 's'} during the run`;
+    else if (partialCycles.length) patternLabel = `Cycle did not complete (${partialCycles.length} partial)`;
+    else if (slowAnomalies.length) patternLabel = `Step duration anomalies (${slowAnomalies.length} flagged)`;
+    else patternLabel = 'Clean — every cycle completed without errors';
+
+    // Build evidence list — top errors, partial-cycle markers, top slow rows.
+    const evidence = this._buildEvidence(data, { allErrors, partialCycles, slowAnomalies });
+
+    // Source-sheet highlights: errors P1 (red), partial cycle starts P2
+    // (orange), slow-anomaly rows P3 (yellow).
+    const highlights = [];
+    allErrors.forEach(e => highlights.push({ rowNumber: e.rowNumber, priority: 1 }));
+    partialCycles.forEach(c => {
+      highlights.push({ rowNumber: c.startRow, priority: 2 });
+      if (c.lastStep && c.lastStep.rowNumber !== c.startRow) {
+        highlights.push({ rowNumber: c.lastStep.rowNumber, priority: 2 });
+      }
+    });
+    slowAnomalies.slice(0, 15).forEach(s => highlights.push({ rowNumber: s.row.rowNumber, priority: 3 }));
+
+    // Multi-finding shape — surfaces in the App's inline preview as a
+    // pill-per-category. Mirrors GLBatchTemplate / FrozenCostTemplate's
+    // findings[] array so the existing preview renderer just works.
+    const multiFindings = [];
+    if (allErrors.length) {
+      const codeStr = errorCodes.map(e => `${e.code}×${e.count}`).join(', ');
+      multiFindings.push({
+        number: multiFindings.length + 1,
+        type: 'errors',
+        title: `${allErrors.length} SQL error${allErrors.length === 1 ? '' : 's'} (codes: ${codeStr})`,
+        priority: 1,
+        rowCount: allErrors.length,
+        issue: 'SQL errors during the run',
+        scope: `${allErrors.length} step row${allErrors.length === 1 ? '' : 's'} returned a non-zero ErrorNum across ${failingSteps.length} distinct step name${failingSteps.length === 1 ? '' : 's'}.  Error codes seen: ${codeStr}.`,
+        pattern: this._patternForErrors(errorCodes),
+        resolution: this._resolutionForErrors(errorCodes)
+      });
+    }
+    if (partialCycles.length) {
+      const example = partialCycles[0];
+      const lastStep = example.lastStep && example.lastStep.step ? example.lastStep.step.trim() : '(unknown)';
+      multiFindings.push({
+        number: multiFindings.length + 1,
+        type: 'partial_cycles',
+        title: `${partialCycles.length} partial cycle${partialCycles.length === 1 ? '' : 's'} — job did not finish`,
+        priority: 1,
+        rowCount: partialCycles.length,
+        issue: 'Partial cycle(s) — never reached Successfully Completed',
+        scope: `${partialCycles.length} cycle${partialCycles.length === 1 ? '' : 's'} started at a "Data Capture — Starting A to B" marker but never reached a "RapidReconciler — Successfully Completed" row.  Earliest partial start: ${example.startStr || '(unknown)'} stopped after step ${lastStep}.`,
+        pattern: `No SQL errors landed for these cycles, so the cause is outside SQL itself: the SQL Agent job was cancelled, the SSIS package timed out, the host rebooted, or the scheduled task hit its wall-clock limit.  The SQL Agent job history on the database server will name the actual failure.`,
+        resolution: `Step 1.  Have IT check SQL Agent Job History for each partial cycle's timestamp.\n\nStep 2.  If the failed step was an SSIS package, pull the Integration Services execution report (SSMS -> SSISDB -> Reports -> All Executions).\n\nStep 3.  Address the underlying host / SSIS issue (disk space, TempDB, permissions, scheduling) and re-run the SQL Agent job.\n\nStep 4.  Confirm the next System Status export shows a "Successfully Completed" row for the cycle.`
+      });
+    }
+    if (slowAnomalies.length) {
+      const top = slowAnomalies.slice(0, 3);
+      const topStr = top.map(s => `${s.row.step.trim()} (${this._fmtDuration(s.row.durationSec)} vs ${this._fmtDuration(s.medianSec)} median)`).join(' · ');
+      multiFindings.push({
+        number: multiFindings.length + 1,
+        type: 'slow_steps',
+        title: `${slowAnomalies.length} slow-step anomal${slowAnomalies.length === 1 ? 'y' : 'ies'} flagged`,
+        priority: 2,
+        rowCount: slowAnomalies.length,
+        issue: 'Step duration anomalies',
+        scope: `${slowAnomalies.length} step run${slowAnomalies.length === 1 ? '' : 's'} crossed the slowdown threshold (>= 3x median OR >= 5 minutes above median).  Top offenders: ${topStr}.`,
+        pattern: `Common drivers for cycle-to-cycle slowdowns: database growth (fact tables doubling in size), missing or fragmented indexes (query plans regressing), contention (another process holding locks), or a coinciding backup / reindex.`,
+        resolution: `Step 1.  Share this analysis with your IT / DBA team for a performance review.  The cycles all completed, so this is capacity planning rather than an outage.\n\nStep 2.  Tune the slowest steps first.  Have the DBA review index health, statistics freshness, and any concurrent batch jobs around the cycle window.\n\nStep 3.  Track slow-step counts over time — if they are increasing cycle-to-cycle, the underlying cause is getting worse and the next failure may be a hard one.`
+      });
+    }
+    if (!multiFindings.length) {
+      // Clean log — still produce a finding so the preview / download flow renders something.
+      multiFindings.push({
+        number: 1,
+        type: 'clean',
+        title: 'No errors, partial cycles, or slow-step anomalies detected',
+        priority: 3,
+        rowCount: cycles.length,
+        issue: 'Clean log',
+        scope: `${cycles.length} cycle${cycles.length === 1 ? '' : 's'} in the export window all completed with ErrorNum = 0 and no notable slowdowns.`,
+        pattern: `Every cycle reached "RapidReconciler — Successfully Completed".  If the System Status light is still red, the cause is outside what this export captures (host, SSIS, scheduled task).`,
+        resolution: `Step 1.  Have IT check the SQL Agent job history, the SSIS execution report, and the host event log on the database server around the timestamp of the most recent cycle.\n\nStep 2.  Re-run the SQL Agent job once any underlying cause is addressed, then refresh RapidReconciler and confirm the light turns green.`
+      });
+    }
+
+    return {
+      // Multi-finding shape (for App preview + render)
+      findings: multiFindings,
+      totalFindings: multiFindings.reduce((a, f) => a + f.rowCount, 0),
+      overallPriority: priority,
+      actionPlan: this._buildActionPlan(multiFindings, errorCodes),
+      // Raw classification data (consumed by render helpers below)
+      totalCycles: cycles.length,
+      completeCycles: completeCycles.length,
+      partialCycles,
+      allErrors,
+      errorCodes,
+      failingSteps,
+      slowAnomalies,
+      slowestRows,
+      medianByStep,
+      priority,
+      patternLabel,
+      evidence,
+      highlights,
+      cycles
+    };
+  },
+
+  _patternForErrors(errorCodes) {
+    const parts = ['Each non-zero ErrorNum is a SQL Server error that aborted the step.  The error codes map to specific SQL Server conditions:'];
+    errorCodes.forEach(e => {
+      const meta = this._sqlErrors[e.code];
+      if (meta) {
+        parts.push(`\n  ${e.code} (severity ${meta.severity}, ${e.count}x):  ${meta.description}\n    Typical cause:  ${meta.cause}`);
+      } else {
+        parts.push(`\n  ${e.code} (${e.count}x):  Unknown SQL error code.  See SQL Server documentation for the full text.`);
+      }
+    });
+    return parts.join('');
+  },
+
+  _resolutionForErrors(errorCodes) {
+    const lines = ['Step 1.  Attach this analysis workbook AND the original System Status export to an email to your IT / DBA team.  The Evidence list links every failing row back to the System Status sheet so IT can see the exact step, process, and timestamp.'];
+    let i = 2;
+    errorCodes.forEach(e => {
+      const meta = this._sqlErrors[e.code];
+      if (meta) {
+        lines.push(`Step ${i}.  Error ${e.code} (${e.count}x):  ${meta.resolution}`);
+      } else {
+        lines.push(`Step ${i}.  Error ${e.code} (${e.count}x):  Unknown SQL error code.  Have IT look up the message text in SQL Server documentation and address the underlying cause before re-running.`);
+      }
+      i++;
+    });
+    lines.push(`Step ${i}.  After IT clears the underlying error and re-runs the SQL Agent job, refresh RapidReconciler and confirm the System Status light goes green.`);
+    return lines.join('\n\n');
+  },
+
+  _buildActionPlan(multiFindings, errorCodes) {
+    const steps = [];
+    if (multiFindings.some(f => f.type === 'errors')) {
+      steps.push({ action: `Send this analysis workbook AND the original System Status export to your IT / DBA team.  The Evidence list links every failing SQL row back to the source sheet.`, owner: 'Customer' });
+      errorCodes.forEach(e => {
+        const meta = this._sqlErrors[e.code];
+        const what = meta ? meta.resolution : 'Look up the message text in SQL Server documentation and address the underlying cause.';
+        steps.push({ action: `Resolve SQL error ${e.code} (${e.count} occurrence${e.count === 1 ? '' : 's'}):  ${what}`, owner: 'IT / DBA' });
+      });
+    }
+    if (multiFindings.some(f => f.type === 'partial_cycles')) {
+      steps.push({ action: `Check SQL Agent Job History on the database server for the partial-cycle timestamps.  The Job History view names the actual abort reason that the per-step output can't see.`, owner: 'IT / DBA' });
+      steps.push({ action: `If the failed step was an SSIS package, pull the Integration Services execution report (SSMS -> SSISDB -> Reports -> All Executions) for the failed run.  Capture any OnError messages.`, owner: 'IT / DBA' });
+    }
+    if (multiFindings.some(f => f.type === 'slow_steps')) {
+      steps.push({ action: `Review the slowest steps named in the Evidence list with the DBA.  Common drivers: database growth, missing or fragmented indexes, contention, or a coinciding backup / reindex.`, owner: 'DBA' });
+    }
+    if (multiFindings.some(f => f.type === 'clean')) {
+      steps.push({ action: `Cycles in the export window all look clean.  If the System Status light is still red, have IT check the SQL Agent job history, the SSIS execution report, and the host event log around the most recent cycle's timestamp.`, owner: 'IT / DBA' });
+    }
+    steps.push({ action: 'Re-run the SQL Agent job once the underlying issue is addressed.  Refresh RapidReconciler and confirm the System Status light turns green; the next System Status export should show a "Successfully Completed" row for each cycle.', owner: 'IT / DBA + Customer' });
+    return steps;
+  },
+
+  _buildEvidence(data, ctx) {
+    const ev = [];
+    // Errors first — each is a root cause
+    ctx.allErrors.slice(0, 8).forEach((e, i) => {
+      const meta = this._sqlErrors[e.errorNum];
+      const desc = meta
+        ? `ErrorNum ${e.errorNum} — ${meta.description}`
+        : `ErrorNum ${e.errorNum} — Unknown SQL error; see SQL Server documentation`;
+      ev.push({
+        severity: i === 0 ? 'Root cause' : 'Related',
+        label: `${e.step.trim()}  →  Row ${e.rowNumber}`,
+        description: `${desc}\nProcess: ${e.process.trim()}  ·  StartTime ${e.startStr}`,
+        sourceRow: e.rowNumber
+      });
+    });
+    // Partial cycles
+    ctx.partialCycles.slice(0, 5).forEach(c => {
+      const last = c.lastStep || {};
+      ev.push({
+        severity: 'Anchor',
+        label: `Cycle ${c.startStr || '(unknown start)'}  →  Row ${c.startRow}`,
+        description: `Cycle started${c.truncatedStart ? ' before the export window — start row is the first visible row' : ''} but no "RapidReconciler — Successfully Completed" row appears.  Last step seen: ${String(last.step || '').trim()} — ${String(last.process || '').trim()}`,
+        sourceRow: c.startRow
+      });
+    });
+    // Top slow anomalies
+    ctx.slowAnomalies.slice(0, 5).forEach(s => {
+      const ratioStr = s.medianSec > 0 ? `${s.ratio.toFixed(1)}x median` : 'no median baseline';
+      const aboveStr = s.aboveMedianSec >= 60 ? `${Math.round(s.aboveMedianSec / 60)} min above median` : `${Math.round(s.aboveMedianSec)}s above median`;
+      ev.push({
+        severity: 'Informational',
+        label: `${s.row.step.trim()}  →  Row ${s.row.rowNumber}`,
+        description: `Ran in ${this._fmtDuration(s.row.durationSec)} on ${s.row.startStr}.  Median across complete cycles: ${this._fmtDuration(s.medianSec)} (${ratioStr}, ${aboveStr}).`,
+        sourceRow: s.row.rowNumber
+      });
+    });
+    return ev;
+  },
+
+  _fmtDuration(sec) {
+    if (!sec || sec < 1) return '< 1s';
+    if (sec < 60) return `${Math.round(sec)}s`;
+    if (sec < 3600) return `${Math.floor(sec / 60)}m ${Math.round(sec % 60)}s`;
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    return `${h}h ${m}m`;
+  },
+
+  // ---- Rendering ----
+  filename(data) {
+    return `System Status Analysis ${Helpers.todayStamp()}.xlsx`;
+  },
+
+  async render(workbook, data, findings, sourceWb, sourceSheet) {
+    const ws = workbook.addWorksheet('Analysis', { views: [{ showGridLines: false, state: 'normal' }] });
+    F.standardColumnWidths(ws);
+
+    // Chrome
+    const totalErrors = findings.allErrors.length;
+    const subline = totalErrors || findings.partialCycles.length
+      ? `${totalErrors} error${totalErrors === 1 ? '' : 's'} · ${findings.partialCycles.length} partial cycle${findings.partialCycles.length === 1 ? '' : 's'} · ${findings.completeCycles} clean cycle${findings.completeCycles === 1 ? '' : 's'}`
+      : `${findings.completeCycles} clean cycle${findings.completeCycles === 1 ? '' : 's'}${findings.slowAnomalies.length ? ` · ${findings.slowAnomalies.length} step duration anomal${findings.slowAnomalies.length === 1 ? 'y' : 'ies'}` : ''}`;
+    const context = `Source  SQL Agent step log          ${data.banner ? data.banner.replace(/\s+/g, ' ').trim() : 'System Status export'}          Rows  ${Helpers.count(data.rows.length)}`;
+
+    F.renderChrome(ws, {
+      headline: `System Status — Nightly RR Job Log`,
+      subline,
+      context
+    });
+
+    let row = F.renderDisclaimer(ws, 6);
+
+    // Variance card — the headline number is what matters most: error count
+    // if any, else partial-cycle count, else slow-step count, else "clean".
+    let varianceNumber, varianceSub, rationale;
+    if (totalErrors) {
+      varianceNumber = String(totalErrors);
+      varianceSub = `SQL error${totalErrors === 1 ? '' : 's'}`;
+      rationale = `Pattern:  ${findings.patternLabel}\n\n${findings.errorCodes.length} distinct error code${findings.errorCodes.length === 1 ? '' : 's'} across ${findings.failingSteps.length} step${findings.failingSteps.length === 1 ? '' : 's'}.  ${findings.partialCycles.length ? `${findings.partialCycles.length} partial cycle${findings.partialCycles.length === 1 ? '' : 's'}.  ` : ''}Send this analysis to IT — the Evidence list below names every failing row, and the HOW card carries the SQL Server resolution for each known error code.`;
+    } else if (findings.partialCycles.length) {
+      varianceNumber = String(findings.partialCycles.length);
+      varianceSub = `partial cycle${findings.partialCycles.length === 1 ? '' : 's'}`;
+      rationale = `Pattern:  ${findings.patternLabel}\n\nThe job started but the "RapidReconciler — Successfully Completed" row never landed.  No SQL errors in the log, so the cause is probably outside SQL — SQL Agent abort, host shutdown, or scheduled-task timeout.  Have IT check the SQL Agent job history.`;
+    } else if (findings.slowAnomalies.length) {
+      varianceNumber = String(findings.slowAnomalies.length);
+      varianceSub = `slow step${findings.slowAnomalies.length === 1 ? '' : 's'}`;
+      rationale = `Pattern:  ${findings.patternLabel}\n\nEvery cycle completed cleanly with no SQL errors.  ${findings.slowAnomalies.length} step run${findings.slowAnomalies.length === 1 ? '' : 's'} crossed the 3x-median or +5-minute slowdown threshold.  Worth a look for capacity planning; not an immediate failure.`;
+    } else {
+      varianceNumber = '0';
+      varianceSub = 'errors';
+      rationale = `Pattern:  ${findings.patternLabel}\n\nEvery cycle in the log completed with no SQL errors and no notable slowdowns.  If the System Status light is still red, the cause is likely outside the SQL Agent step log — check the host, the SSIS package, and the SQL Agent job history with IT.`;
+    }
+    row = F.renderVarianceCard(ws, row, {
+      priority: findings.priority,
+      varianceNumber,
+      varianceSub,
+      rationale
+    });
+
+    ws.getRow(row).height = 14; row++;
+
+    // WHAT card
+    row = F.renderCardPair(ws, row, {
+      title: '1.  WHAT happened',
+      body: this._whatBody(data, findings),
+      header: 'navy'
+    });
+
+    // WHY card
+    row = F.renderCardPair(ws, row, {
+      title: '2.  WHY it happened',
+      body: this._whyBody(data, findings),
+      header: 'midblue'
+    });
+
+    // HOW card
+    row = F.renderCardPair(ws, row, {
+      title: '3.  HOW to fix it',
+      body: this._howBody(data, findings),
+      header: 'navy'
+    });
+
+    ws.getRow(row).height = 14; row++;
+
+    // Evidence list
+    row = F.renderEvidence(ws, row, {
+      sourceSheetName: data.sheetName,
+      rows: findings.evidence
+    });
+
+    // Caution + footer
+    row = F.renderCautionAndFooter(ws, row, {
+      cautionText: 'This analysis reads the SQL Agent step log only.  A red System Status light can be caused by failures outside this log — host shutdown, SSIS package errors, disk full, or scheduled-task timeout.  If the cycles below all look clean but the light is still red, have IT check the SQL Agent job history and the SSIS execution report on the database server.',
+      footerText: `Analysis produced by the RapidReconciler Export Analyzer  ·  ${Helpers.todayPretty()}`
+    });
+    F.applyPageSetup(ws, row - 1);
+
+    // Source sheet — copy with highlights
+    SourceSheet.copy(sourceSheet, workbook, data.sheetName, {
+      headerRow: data.headerRow,
+      freezeAt: data.headerRow + 1,
+      highlights: findings.highlights
+    });
+
+    F.renderNotesTab(workbook, {});
+    workbook.views = [{ activeTab: 0 }];
+  },
+
+  _whatBody(data, findings) {
+    const lines = [];
+    lines.push(`The System Status export covers ${Helpers.count(data.rows.length)} executed SQL steps across ${findings.totalCycles} cycle${findings.totalCycles === 1 ? '' : 's'} — ${findings.completeCycles} clean, ${findings.partialCycles.length} partial.`);
+    if (findings.allErrors.length) {
+      const codes = findings.errorCodes.map(e => `${e.code} (${e.count}x)`).join(', ');
+      lines.push(`\n${findings.allErrors.length} step${findings.allErrors.length === 1 ? '' : 's'} returned a non-zero ErrorNum.  Codes seen: ${codes}.`);
+      const topStep = findings.failingSteps[0];
+      if (topStep) {
+        lines.push(`Most-frequently-failing step: ${topStep.step.trim()} (${topStep.errorCount} error row${topStep.errorCount === 1 ? '' : 's'}).`);
+      }
+    }
+    if (findings.partialCycles.length) {
+      const example = findings.partialCycles[0];
+      const lastStep = (example.lastStep && example.lastStep.step) ? example.lastStep.step.trim() : '(unknown)';
+      lines.push(`\nPartial cycles started but never reached "RapidReconciler — Successfully Completed".  Example: cycle starting ${example.startStr || '(unknown)'} stopped after step ${lastStep}.`);
+    }
+    if (!findings.allErrors.length && !findings.partialCycles.length && findings.slowAnomalies.length) {
+      lines.push(`\nNo errors and no partial cycles.  ${findings.slowAnomalies.length} step run${findings.slowAnomalies.length === 1 ? '' : 's'} crossed the slowdown threshold (>= 3x median or >= 5 minutes above median).`);
+    }
+    if (findings.slowestRows.length) {
+      const top = findings.slowestRows[0];
+      lines.push(`\nSlowest step in the log: ${top.step.trim()} ran ${this._fmtDuration(top.durationSec)} on ${top.startStr}.`);
+    }
+    return lines.join('\n');
+  },
+
+  _whyBody(data, findings) {
+    if (findings.allErrors.length) {
+      const parts = [];
+      parts.push(`Each non-zero ErrorNum is a SQL Server error that aborted the step.  The error codes map to specific SQL Server conditions:`);
+      const known = findings.errorCodes.filter(e => this._sqlErrors[e.code]);
+      const unknown = findings.errorCodes.filter(e => !this._sqlErrors[e.code]);
+      known.forEach(e => {
+        const meta = this._sqlErrors[e.code];
+        parts.push(`\n  ${e.code} (severity ${meta.severity}, ${e.count}x):  ${meta.description}\n    Typical cause:  ${meta.cause}`);
+      });
+      unknown.forEach(e => {
+        parts.push(`\n  ${e.code} (${e.count}x):  Unknown SQL error code.  See SQL Server documentation for the full text.`);
+      });
+      if (findings.partialCycles.length) {
+        parts.push(`\n\nThe partial cycles below may be the downstream consequence — once a step throws an error, the rest of the cycle often aborts.`);
+      }
+      return parts.join('');
+    }
+    if (findings.partialCycles.length) {
+      return `Each partial cycle started at a "Data Capture — Starting A to B" marker but never reached a "RapidReconciler — Successfully Completed" row.  No SQL errors landed in the log, so the cause is almost certainly outside SQL itself: the SQL Agent job was cancelled, the SSIS package timed out, the host rebooted, or the scheduled task hit its wall-clock limit.  The SQL Agent job history on the database server will name the actual failure.`;
+    }
+    if (findings.slowAnomalies.length) {
+      return `Every cycle completed cleanly.  The flagged rows ran far longer than the median for that same step name across all clean cycles.  Common drivers:\n\n  - Database growth — a step over a fact table that has doubled in size will take longer even if nothing is broken.\n  - Missing or fragmented indexes — query plans regress over time.\n  - Contention — another process holding locks against the same tables.\n  - One-off long transactions — a backup, a reindex, or another batch ran at the same time.\n\nNot an immediate failure, but worth a DBA review if the slowdowns are getting worse cycle-to-cycle.`;
+    }
+    return `Every cycle in the export window completed with no SQL errors and no notable slowdowns.  If the System Status light is still red, the failure is outside the SQL step log — check the SQL Agent job history, the SSIS execution report, and the host event log with IT.`;
+  },
+
+  _howBody(data, findings) {
+    if (findings.allErrors.length) {
+      const steps = [];
+      steps.push(`Step 1.  Attach this analysis workbook AND the original System Status export to an email to your IT / DBA team.  The Evidence list below links every failing row back to the System Status sheet so IT can see the exact step, process, and timestamp.`);
+      let i = 2;
+      findings.errorCodes.forEach(e => {
+        const meta = this._sqlErrors[e.code];
+        if (meta) {
+          steps.push(`Step ${i}.  Error ${e.code} (${e.count}x):  ${meta.resolution}`);
+        } else {
+          steps.push(`Step ${i}.  Error ${e.code} (${e.count}x):  Unknown SQL error code.  Have IT look up the message text in SQL Server documentation and address the underlying cause before re-running.`);
+        }
+        i++;
+      });
+      steps.push(`Step ${i}.  After IT clears the underlying error and re-runs the SQL Agent job, refresh RapidReconciler and confirm the System Status light goes green.`);
+      return steps.join('\n\n');
+    }
+    if (findings.partialCycles.length) {
+      return `Step 1.  Send this analysis workbook AND the original System Status export to your IT / DBA team.  No SQL errors landed in the log, so the failure is outside the SQL step output — they need to investigate at the host / SSIS layer.\n\nStep 2.  Have IT check SQL Agent Job History for the failed cycle's timestamp.  The Job History view shows the actual abort reason (cancellation, timeout, package error) that the System Status export can't see.\n\nStep 3.  If the failed step was an SSIS package, have IT pull the Integration Services execution report (SSMS -> SSISDB -> Reports -> All Executions) for the failed run.  Capture any OnError messages.\n\nStep 4.  Address the underlying host / SSIS issue (disk space, TempDB, permissions, scheduling), re-run the SQL Agent job, and confirm the next System Status export shows a "Successfully Completed" row.`;
+    }
+    if (findings.slowAnomalies.length) {
+      const top = findings.slowAnomalies.slice(0, 5);
+      const lines = top.map((s, i) => `  ${i + 1}.  ${s.row.step.trim()} — ran ${this._fmtDuration(s.row.durationSec)} vs ${this._fmtDuration(s.medianSec)} median (${s.ratio > 0 ? s.ratio.toFixed(1) + 'x' : 'no baseline'})`).join('\n');
+      return `Step 1.  Share this analysis with your IT / DBA team for a performance review.  The cycles all completed, so this is capacity planning rather than an outage.\n\nStep 2.  Top slowdowns to investigate:\n\n${lines}\n\nStep 3.  Common causes for cycle-to-cycle slowdowns:  database growth (fact tables doubling in size), missing or fragmented indexes (query plans regressing), contention (another process holding locks), or a coinciding backup / reindex.\n\nStep 4.  Have the DBA review index health, statistics freshness, and any concurrent batch jobs around the cycle window.  Tune the slowest steps first.`;
+    }
+    return `Step 1.  Every cycle in the log completed cleanly with no errors and no notable slowdowns.  If the System Status light is still red, the cause is outside what this export captures.\n\nStep 2.  Send this analysis AND the original System Status export to your IT / DBA team.  Ask them to check the SQL Agent job history, the SSIS execution report, and the host event log on the database server for any failure around the timestamp of the most recent cycle.\n\nStep 3.  Re-run the SQL Agent job once the underlying cause is addressed, then refresh RapidReconciler and confirm the light turns green.`;
+  }
+};
+Templates.register(SystemStatusTemplate);
+
+// 9 templates now implemented — no stubs remaining.
 
 /* ====================================================================
    APP CONTROLLER  —  upload, detect, preview, download
