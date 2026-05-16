@@ -706,14 +706,4 @@ Before closing a period using RapidReconciler:
 
 ---
 
-## Section 11: Related Documentation
-
-- [GL Batch Analysis Guide](../MDS/gl-batch-analysis-guide.md)
-- [End of Day Analysis Guide](../MDS/end-of-day-analysis-guide.md)
-- [Transaction Detail Analysis Guide](../MDS/transaction-detail-analysis-guide.md)
-- [Cardex Variance Analysis Guide](../MDS/cardex_variance.md)
-- [Inventory: Using the Application](../MDS/inventory-using-application.md)
-
----
-
 *For support, contact GSI at [rrsupport@getgsi.com](mailto:rrsupport@getgsi.com)*

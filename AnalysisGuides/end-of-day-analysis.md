@@ -665,13 +665,4 @@ Before closing a period that includes manufacturing activity, confirm:
 
 ---
 
-## Section 9: Related Documentation
-
-- [GL Batch Analysis Guide](../MDS/gl-batch-analysis-guide.md)
-- [Transaction Detail Analysis Guide](../MDS/transaction-detail-analysis-guide.md)
-- [Inventory: Using the Application](../MDS/inventory-using-application.md)
-- [DMAAI Reference Guide](../MDS/distribution-aais.md)
-
----
-
 *For support, contact GSI at [rrsupport@getgsi.com](mailto:rrsupport@getgsi.com)*
