@@ -967,7 +967,7 @@
 <details class="supported-reports">
   <summary>
     Supported reports &mdash; where to export each from
-    <span class="count">9 reports</span>
+    <span class="count">10 reports</span>
   </summary>
   <div class="reports-groups">
     <div class="reports-group">
@@ -1001,6 +1001,13 @@
       <p class="reports-group-hint">Click the indicator light in the RapidReconciler page header to download the diagnostic export.</p>
       <ul>
         <li><strong>System Status</strong><span class="report-loc">click the red System Status light</span></li>
+      </ul>
+    </div>
+    <div class="reports-group">
+      <h3>JDE-native exports</h3>
+      <p class="reports-group-hint">Export from JDE directly &mdash; not from RapidReconciler. The analyzer fingerprints the file by its column headers, so generic sheet names like <code>Sheet1</code> are fine.</p>
+      <ul>
+        <li><strong>Item Ledger</strong><span class="report-loc">JDE Item Ledger Inquiry &mdash; Export Grid Data</span></li>
       </ul>
     </div>
   </div>
@@ -5851,7 +5858,772 @@ const SystemStatusTemplate = {
 };
 Templates.register(SystemStatusTemplate);
 
-// 9 templates now implemented — no stubs remaining.
+/* ====================================================================
+   ITEM LEDGER TEMPLATE  —  JDE-native Item Ledger export
+   First template that reads JDE directly (not an RR export). Detected by
+   column-header fingerprint (sheet name is useless — typically "Sheet1").
+   Two patterns in v1:
+     1. Intercompany Transactions — Doc Co != Order Co
+     2. Backdated Transactions    — out-of-place GL dates when rows are
+                                    sequenced by Unique Key ID (transaction
+                                    serial number; ASC = order of entry).
+==================================================================== */
+const ItemLedgerTemplate = {
+  id: 'item-ledger',
+  name: 'Item Ledger',
+  family: 'JDE-native, transactional',
+  description: 'JDE Item Ledger export. Intercompany routing, backdated transactions, dimensional totals.',
+  status: 'ready',
+
+  // ---- Header normalization ----
+  // JDE export columns often arrive as "<Pretty Label>  <ALIAS>" (e.g.
+  // "Long Item No - Inv Master  ILLITM"). We normalize header text the
+  // same way DMAAITemplate does — lowercase + strip whitespace — and ALSO
+  // strip a trailing all-caps token of length 3-9 that looks like a JDE
+  // alias, so both spellings collapse to the same key. The sample sheet
+  // ships with clean labels ("Document Number", "Doc Ty") so this only
+  // bites on customer files that left the JDE alias suffix in.
+  _normHeader(raw) {
+    if (raw == null) return '';
+    let s = String(typeof raw === 'object' ? raw.text || raw.result || raw : raw).trim();
+    if (!s) return '';
+    // Strip trailing JDE alias — e.g. "Long Item No - Inv Master  ILLITM"
+    s = s.replace(/\s{2,}[A-Z]{3,9}\d?\s*$/, '');
+    return s.toLowerCase().replace(/\s+/g, '').trim();
+  },
+
+  // Strongest signature set (8 headers). Score 0.9+ requires >= 6 matches.
+  _signatureHeaders: [
+    'documentnumber', 'doctype', 'docco', 'transactiondate',
+    'quantityprimaryuom', 'g/ldate', 'uniquekeyid', 'classcode'
+  ],
+
+  _antiSignals: [
+    'aaiaccount', 'modelaccount',          // DMAAI
+    'glok', 'varok',                       // Roll Forward
+    'cardexamount', 'ledgeramount',        // Transaction Detail
+    'lpd', 'slpd'                          // Frozen Cost
+  ],
+
+  // Read every cell in row 1 and return parallel arrays of the raw header
+  // strings + normalized keys. We don't dedupe — the second "Document
+  // Number" must remain visible to the parser.
+  _readHeaderRow(ws, rowNum = 1) {
+    const row = ws.getRow(rowNum);
+    const maxCol = Math.max(ws.actualColumnCount || 0, ws.columnCount || 0, 30);
+    const raw = [];
+    const norm = [];
+    for (let c = 1; c <= maxCol; c++) {
+      const v = row.getCell(c).value;
+      if (v == null || v === '') { raw.push(''); norm.push(''); continue; }
+      raw.push(String(typeof v === 'object' ? v.text || v.result || v : v).trim());
+      norm.push(this._normHeader(v));
+    }
+    return { raw, norm };
+  },
+
+  // ---- Detection ----
+  detect(workbook) {
+    let score = 0;
+    let bestSheet = null;
+    let bestFound = 0;
+    let bestNorm = null;
+
+    for (const ws of workbook.worksheets) {
+      const { norm } = this._readHeaderRow(ws, 1);
+      const found = this._signatureHeaders.filter(h => norm.includes(h)).length;
+      if (found > bestFound) {
+        bestFound = found;
+        bestSheet = ws;
+        bestNorm = norm;
+      }
+    }
+    if (!bestSheet || bestFound < 4) return 0;
+
+    // Base score from the 8-header signature — 6/8 lands at ~0.68, 8/8 at
+    // ~0.90 before the doc-number-twice and anti-signal adjustments.
+    score += (bestFound / this._signatureHeaders.length) * 0.9;
+
+    // Two columns labelled "Document Number" is a strong confirming
+    // signal — JDE-native files have it, RR-side exports never do.
+    const docNumCount = bestNorm.filter(h => h === 'documentnumber').length;
+    if (docNumCount >= 2) score += 0.15;
+
+    // Anti-signals (RR-side, not JDE-side) — reduce score if any present.
+    const antiHits = this._antiSignals.filter(h => bestNorm.includes(h));
+    if (antiHits.length) score -= 0.5 * antiHits.length;
+
+    return Math.max(0, Math.min(1.0, score));
+  },
+
+  _findSheet(workbook) {
+    let bestSheet = null;
+    let bestFound = 0;
+    for (const ws of workbook.worksheets) {
+      const { norm } = this._readHeaderRow(ws, 1);
+      const found = this._signatureHeaders.filter(h => norm.includes(h)).length;
+      if (found > bestFound) {
+        bestFound = found;
+        bestSheet = ws;
+      }
+    }
+    return bestFound >= 4 ? bestSheet : null;
+  },
+
+  // ---- Parsing ----
+  // Column resolution:
+  //   docNumber    = FIRST  occurrence of "Document Number" header
+  //   orderNumber  = SECOND occurrence of "Document Number" header
+  //   docType      = "Doc Type" (with the e)
+  //   orderType    = "Doc Ty"   (no e)
+  // Everything else maps by single normalized header lookup.
+  parse(workbook) {
+    const ws = this._findSheet(workbook);
+    if (!ws) throw new Error('Item Ledger parse: could not locate a sheet with the JDE Item Ledger header signature.');
+    const { norm } = this._readHeaderRow(ws, 1);
+
+    // Resolve column indices (1-based). For "documentnumber" we capture
+    // both the first and second occurrence; everything else takes the
+    // first match.
+    const firstIdx = key => norm.indexOf(key) + 1;
+    const docNumIdxs = [];
+    norm.forEach((k, i) => { if (k === 'documentnumber') docNumIdxs.push(i + 1); });
+
+    const docNumCol   = docNumIdxs[0] || 0;
+    const orderNumCol = docNumIdxs[1] || 0;
+    const cols = {
+      docType:        firstIdx('doctype'),       // with the e
+      docCo:          firstIdx('docco'),
+      transactionDate:firstIdx('transactiondate'),
+      branchPlant:    firstIdx('branch/plant'),
+      qtyPrimary:     firstIdx('quantityprimaryuom'),
+      primaryUom:     firstIdx('primaryuom'),
+      unitCost:       firstIdx('unitcost'),
+      extendedCost:   firstIdx('extendedcost'),
+      lotSerial:      firstIdx('lot/serial'),
+      location:       firstIdx('location'),
+      lotStatusCode:  firstIdx('lotstatuscode'),
+      orderType:      firstIdx('docty'),         // no e
+      orderCo:        firstIdx('orderco'),
+      classCode:      firstIdx('classcode'),
+      glDate:         firstIdx('g/ldate'),
+      ukid:           firstIdx('uniquekeyid')
+    };
+
+    if (!docNumCol || !cols.qtyPrimary || !cols.ukid) {
+      throw new Error('Item Ledger parse: missing required columns (need Document Number, Quantity Primary UoM, Unique Key ID).');
+    }
+
+    const cellVal = (row, col) => {
+      if (!col) return null;
+      const v = row.getCell(col).value;
+      if (v == null) return null;
+      if (typeof v === 'object' && v.text !== undefined) return v.text;
+      if (typeof v === 'object' && v.result !== undefined) return v.result;
+      return v;
+    };
+
+    const isoDate = v => {
+      if (v == null || v === '') return '';
+      if (v instanceof Date) return v.toISOString();
+      // Excel serial date (number) — convert via the 1899-12-30 epoch
+      if (typeof v === 'number') {
+        const ms = (v - 25569) * 86400 * 1000; // Excel -> Unix epoch
+        const d = new Date(ms);
+        return isNaN(d.getTime()) ? '' : d.toISOString();
+      }
+      const d = new Date(String(v));
+      return isNaN(d.getTime()) ? '' : d.toISOString();
+    };
+
+    // Preserve raw cell text alongside ISO so the rendered output can
+    // show whatever the source file showed (no surprise reformatting).
+    const rawDisplay = v => {
+      if (v == null || v === '') return '';
+      if (v instanceof Date) return v.toISOString().slice(0, 10);
+      if (typeof v === 'object' && v.text) return String(v.text);
+      return String(v);
+    };
+
+    const rows = [];
+    const maxRow = ws.actualRowCount || ws.rowCount;
+    for (let r = 2; r <= maxRow; r++) {
+      const row = ws.getRow(r);
+      const docNumRaw = cellVal(row, docNumCol);
+      // Skip blank rows — Document Number is always populated on real data
+      if (docNumRaw == null || docNumRaw === '') continue;
+
+      const ukidRaw = cellVal(row, cols.ukid);
+      const glRaw = cellVal(row, cols.glDate);
+      const txRaw = cellVal(row, cols.transactionDate);
+
+      rows.push({
+        rowNumber: r,
+        docNumber: Helpers.str(docNumRaw),
+        docType: Helpers.str(cellVal(row, cols.docType)),
+        docCo: Helpers.str(cellVal(row, cols.docCo)),
+        transactionDate: isoDate(txRaw),
+        transactionDateRaw: rawDisplay(txRaw),
+        branchPlant: Helpers.str(cellVal(row, cols.branchPlant)),
+        qtyPrimary: Helpers.num(cellVal(row, cols.qtyPrimary)),
+        primaryUom: Helpers.str(cellVal(row, cols.primaryUom)),
+        unitCost: Helpers.num(cellVal(row, cols.unitCost)),
+        extendedCost: Helpers.num(cellVal(row, cols.extendedCost)),
+        lotSerial: Helpers.str(cellVal(row, cols.lotSerial)),
+        location: Helpers.str(cellVal(row, cols.location)),
+        lotStatusCode: Helpers.str(cellVal(row, cols.lotStatusCode)),
+        orderNumber: Helpers.str(cellVal(row, orderNumCol)),
+        orderType: Helpers.str(cellVal(row, cols.orderType)),
+        orderCo: Helpers.str(cellVal(row, cols.orderCo)),
+        classCode: Helpers.str(cellVal(row, cols.classCode)),
+        glDate: isoDate(glRaw),
+        glDateRaw: rawDisplay(glRaw),
+        ukid: (ukidRaw == null || ukidRaw === '') ? null : Number(ukidRaw),
+        ukidDisplay: ukidRaw == null ? '' : String(ukidRaw)
+      });
+    }
+
+    if (rows.length === 0) throw new Error('Item Ledger parse: no data rows found below the header row.');
+
+    return {
+      sheetName: ws.name,
+      headerRow: 1,
+      rows,
+      // For chrome context
+      totalRows: rows.length
+    };
+  },
+
+  // ---- Classification ----
+  // Pattern 1: Intercompany. Both Doc Co AND Order Co parse as non-zero
+  // numbers AND those numbers differ -> flag.
+  // Pattern 2: Backdated. Sort ascending by Unique Key ID, walk with a
+  // running-max GL Date. If a row's GL Date is more than _BACKDATE_DAYS
+  // earlier than running max, flag.
+  _BACKDATE_DAYS: 30,   // tunable v1 constant — surface in report if it trips on too many rows
+
+  classify(data) {
+    const intercompany = [];
+    data.rows.forEach(r => {
+      const dc = Number(r.docCo);
+      const oc = Number(r.orderCo);
+      if (!isNaN(dc) && !isNaN(oc) && dc !== 0 && oc !== 0 && dc !== oc) {
+        intercompany.push(r);
+      }
+    });
+
+    // Backdated detection — walk by ascending UKID. Rows missing UKID or
+    // GL Date are skipped (they can't participate in the running-max
+    // sequence, so flagging them would be misleading).
+    const ukidSorted = data.rows
+      .filter(r => r.ukid != null && !isNaN(r.ukid) && r.glDate)
+      .slice()
+      .sort((a, b) => a.ukid - b.ukid);
+
+    const backdated = [];
+    let runningMaxMs = -Infinity;
+    let runningMaxRow = null;
+    const dayMs = 86400000;
+    const thresholdMs = this._BACKDATE_DAYS * dayMs;
+    ukidSorted.forEach(r => {
+      const ms = new Date(r.glDate).getTime();
+      if (isNaN(ms)) return;
+      if (ms > runningMaxMs) {
+        runningMaxMs = ms;
+        runningMaxRow = r;
+        return;
+      }
+      const lagMs = runningMaxMs - ms;
+      if (lagMs > thresholdMs) {
+        backdated.push({
+          row: r,
+          runningMaxMs,
+          runningMaxRow,
+          lagDays: Math.round(lagMs / dayMs)
+        });
+      }
+    });
+
+    // Priority:
+    //   P1 if BOTH patterns have hits (either alone w/ large hit count still P1 — see below)
+    //   P2 if exactly one pattern hit and that count is small (< ~20)
+    //   P3 if both are clean
+    let priority;
+    const interN = intercompany.length;
+    const backN = backdated.length;
+    if (interN === 0 && backN === 0) priority = 3;
+    else if (interN > 0 && backN > 0) priority = 1;
+    else if (interN > 0 || backN > 0) {
+      // single-pattern: still P1 if the hit count is meaningful, else P2.
+      // "Small" = 20 rows or fewer (arbitrary but tuned to the sample).
+      const onlyN = Math.max(interN, backN);
+      priority = onlyN > 20 ? 1 : 2;
+    }
+
+    // Build evidence list — sorted DESCENDING by UKID so newest entries
+    // land first (matches SystemStatusTemplate's newest-first pattern).
+    const evidence = [];
+
+    intercompany.forEach(r => {
+      const ukidShown = r.ukidDisplay || (r.ukid == null ? '' : String(r.ukid));
+      const dateShown = r.glDateRaw || (r.glDate ? r.glDate.slice(0, 10) : '');
+      evidence.push({
+        severity: 'Root cause',
+        sortKey: r.ukid != null ? r.ukid : -1,
+        label: ukidShown || '(no UKID)',
+        description: `Intercompany: Doc Co ${r.docCo} → Order Co ${r.orderCo}\nDoc ${r.docNumber}${r.docType ? ' (' + r.docType + ')' : ''}  ·  Order ${r.orderNumber || '(none)'}${r.orderType ? ' (' + r.orderType + ')' : ''}\nGL Date ${dateShown || '(blank)'}  ·  Qty ${Helpers.count(r.qtyPrimary)} ${r.primaryUom || ''}  ·  Ext ${Helpers.money(r.extendedCost)}`,
+        sourceRow: r.rowNumber
+      });
+    });
+
+    backdated.forEach(b => {
+      const r = b.row;
+      const mx = b.runningMaxRow;
+      const ukidShown = r.ukidDisplay || (r.ukid == null ? '' : String(r.ukid));
+      const dateShown = r.glDateRaw || (r.glDate ? r.glDate.slice(0, 10) : '');
+      const maxShown = mx && (mx.glDateRaw || (mx.glDate ? mx.glDate.slice(0, 10) : ''));
+      const lagYears = b.lagDays >= 365 ? ` (>${Math.floor(b.lagDays / 365)} year${b.lagDays >= 730 ? 's' : ''} earlier)` : ` (${b.lagDays} days earlier)`;
+      evidence.push({
+        severity: 'Related',
+        sortKey: r.ukid != null ? r.ukid : -1,
+        label: ukidShown || '(no UKID)',
+        description: `Backdated: GL Date ${dateShown} vs running-max GL Date ${maxShown || '(unknown)'}${lagYears}\nDoc ${r.docNumber}${r.docType ? ' (' + r.docType + ')' : ''}  ·  Co ${r.docCo || '(blank)'}  ·  ${r.branchPlant || '(no branch)'}\nQty ${Helpers.count(r.qtyPrimary)} ${r.primaryUom || ''}  ·  Ext ${Helpers.money(r.extendedCost)}`,
+        sourceRow: r.rowNumber
+      });
+    });
+
+    // Sort UKID descending — newest at the top
+    evidence.sort((a, b) => {
+      const ax = typeof a.sortKey === 'number' ? a.sortKey : -1;
+      const bx = typeof b.sortKey === 'number' ? b.sortKey : -1;
+      return bx - ax;
+    });
+
+    // Cap evidence at 40 rows so the Analysis tab stays tractable when a
+    // large file generates hundreds of findings. Total counts still
+    // surface on the variance card + WHAT block, so nothing is hidden.
+    const evidenceTrimmed = evidence.slice(0, 40);
+
+    // Source-sheet highlights — red for intercompany, orange for
+    // backdated. Both rendered with priority colors.
+    const highlights = [];
+    intercompany.forEach(r => highlights.push({ rowNumber: r.rowNumber, priority: 1 }));
+    backdated.forEach(b => highlights.push({ rowNumber: b.row.rowNumber, priority: 2 }));
+
+    // Pattern label for the inline preview
+    let patternLabel;
+    if (interN && backN) patternLabel = 'Intercompany routing AND backdated transactions';
+    else if (interN) patternLabel = `Intercompany transactions (${interN})`;
+    else if (backN) patternLabel = `Backdated transactions (${backN})`;
+    else patternLabel = 'Clean — no intercompany routing, no backdated transactions';
+
+    // Build the dimensional summary (Company > Branch/Plant > Location > Lot)
+    const summary = this._buildSummary(data.rows);
+
+    // Surface the actionPlan + findings array so the multi-finding preview
+    // renderer can show this template's results inline too. We feed it a
+    // single-issue "findings" shape per pattern so the pill rendering
+    // mirrors SystemStatusTemplate's preview.
+    const multiFindings = [];
+    if (interN) {
+      multiFindings.push({
+        number: multiFindings.length + 1,
+        type: 'intercompany',
+        title: `${interN} intercompany transaction${interN === 1 ? '' : 's'}`,
+        priority: 1,
+        rowCount: interN,
+        issue: 'Intercompany routing',
+        scope: `${interN} row${interN === 1 ? '' : 's'} where Doc Co and Order Co are both populated, both numeric, and different.`,
+        pattern: `The inventory side of the transaction posts to a different company than the order originated in. Not necessarily wrong — intercompany activity is real — but worth surfacing because the posting destination is split.`,
+        resolution: `Step 1.  Confirm intercompany routing is the expected behavior for these document types and order types with the customer's company-master config.\n\nStep 2.  If unexpected, review the Order Co assignment on each flagged document and correct in JDE before the period closes.`
+      });
+    }
+    if (backN) {
+      multiFindings.push({
+        number: multiFindings.length + 1,
+        type: 'backdated',
+        title: `${backN} backdated transaction${backN === 1 ? '' : 's'}`,
+        priority: backN > 20 ? 1 : 2,
+        rowCount: backN,
+        issue: 'Backdated transactions',
+        scope: `${backN} row${backN === 1 ? '' : 's'} where the GL Date is more than ${this._BACKDATE_DAYS} days earlier than the running-max GL Date seen so far when rows are sequenced by Unique Key ID (ascending = order of entry into the ledger).`,
+        pattern: `Backdating happens when a transaction is entered with a GL Date earlier than the most recent transactions already posted. Common causes: corrections backdated to a prior month, late vouchers entered to a re-opened period, or item-ledger replays after a fix.`,
+        resolution: `Step 1.  Confirm the backdated GL Dates are intentional. If they cross a closed period, posting will fail or get redirected.\n\nStep 2.  For backdating that crossed periods, review whether the affected GL accounts need a manual period adjustment.\n\nStep 3.  If the backdating volume is unexpected, ask the entry team for context on the corrections — recurring backdating often signals a process gap.`
+      });
+    }
+    if (!multiFindings.length) {
+      multiFindings.push({
+        number: 1,
+        type: 'clean',
+        title: 'No intercompany routing or backdated transactions detected',
+        priority: 3,
+        rowCount: data.rows.length,
+        issue: 'Clean',
+        scope: `${data.rows.length} row${data.rows.length === 1 ? '' : 's'} reviewed across ${summary.companies.length} compan${summary.companies.length === 1 ? 'y' : 'ies'} and ${summary.branches.length} branch${summary.branches.length === 1 ? '' : 'es'}.`,
+        pattern: `Every row had Doc Co = Order Co (or one of them blank), and the GL Dates moved forward consistently when sequenced by Unique Key ID.`,
+        resolution: `No action required by this analysis. The Summary tab on this workbook still lists the dimensional totals if you want a quick QoH / value read.`
+      });
+    }
+
+    const actionPlan = [];
+    if (interN) actionPlan.push({ action: `Review the ${interN} intercompany row${interN === 1 ? '' : 's'} listed in the Evidence section. Confirm the Doc Co → Order Co split is expected for those document types.`, owner: 'JDE Admin' });
+    if (backN) actionPlan.push({ action: `Review the ${backN} backdated row${backN === 1 ? '' : 's'}. Check whether any cross a closed period — those need a manual period adjustment or a re-open before posting.`, owner: 'Accounting' });
+    if (!interN && !backN) actionPlan.push({ action: 'No flagged transactions. The Summary section gives the dimensional totals; no action required.', owner: 'Customer' });
+
+    return {
+      // Raw classification
+      intercompany,
+      backdated,
+      summary,
+      evidence: evidenceTrimmed,
+      evidenceTruncated: evidence.length > evidenceTrimmed.length,
+      evidenceTotal: evidence.length,
+      highlights,
+      priority,
+      patternLabel,
+      // Multi-finding shape (drives inline preview)
+      findings: multiFindings,
+      overallPriority: priority,
+      totalFindings: interN + backN,
+      actionPlan
+    };
+  },
+
+  // Build the rolled-up Company > Branch/Plant > Location > Lot summary.
+  // Returns:
+  //   { entries: [{co, bp, loc, lot, qty, value}, ...],   // sorted asc
+  //     companies: [...], branches: [...],
+  //     grand: { qty, value },
+  //     anyFractionalQty: boolean }
+  _buildSummary(rows) {
+    const map = new Map();
+    let anyFractional = false;
+    rows.forEach(r => {
+      const co  = r.docCo || '';
+      const bp  = r.branchPlant || '';
+      const loc = r.location || '';
+      const lot = r.lotSerial || '';
+      const key = co + ' ' + bp + ' ' + loc + ' ' + lot;
+      let entry = map.get(key);
+      if (!entry) {
+        entry = { co, bp, loc, lot, qty: 0, value: 0 };
+        map.set(key, entry);
+      }
+      entry.qty += r.qtyPrimary || 0;
+      entry.value += r.extendedCost || 0;
+      if ((r.qtyPrimary || 0) % 1 !== 0) anyFractional = true;
+    });
+    const entries = Array.from(map.values()).sort((a, b) => {
+      return (a.co || '').localeCompare(b.co || '')
+          || (a.bp || '').localeCompare(b.bp || '')
+          || (a.loc || '').localeCompare(b.loc || '')
+          || (a.lot || '').localeCompare(b.lot || '');
+    });
+    const grand = entries.reduce((g, e) => ({ qty: g.qty + e.qty, value: g.value + e.value }), { qty: 0, value: 0 });
+    return {
+      entries,
+      companies: Array.from(new Set(entries.map(e => e.co))).filter(s => s !== '').sort(),
+      branches: Array.from(new Set(entries.map(e => `${e.co}/${e.bp}`))).filter(s => s !== '/').sort(),
+      grand,
+      anyFractionalQty: anyFractional
+    };
+  },
+
+  // ---- Rendering ----
+  filename() {
+    return `Item Ledger Analysis ${Helpers.todayStamp()}.xlsx`;
+  },
+
+  async render(workbook, data, findings, sourceWb, sourceSheet) {
+    const ws = workbook.addWorksheet('Analysis', { views: [{ showGridLines: false, state: 'normal' }] });
+    F.standardColumnWidths(ws);
+
+    // Widen columns A and F a bit so the summary table reads cleanly when
+    // it lands later. Standard widths (24, 30, 38, 22, 22) accommodate the
+    // chrome + variance + evidence; the summary uses 6 columns and needs
+    // F populated.
+    ws.getColumn(6).width = 22;
+
+    // ---- Chrome (rows 1-5) ----
+    const interN = findings.intercompany.length;
+    const backN = findings.backdated.length;
+    const subline = `${Helpers.count(data.rows.length)} rows · ${interN} intercompany transaction${interN === 1 ? '' : 's'} · ${backN} backdated entr${backN === 1 ? 'y' : 'ies'}`;
+    const context = `Source  JDE Item Ledger Inquiry export          ${Helpers.todayPretty()}          Rows  ${Helpers.count(data.rows.length)}`;
+
+    F.renderChrome(ws, {
+      headline: 'Item Ledger — JDE Export Analysis',
+      subline,
+      context
+    });
+
+    // No "Verify before acting" disclaimer — this is a direct readout of
+    // the customer's own JDE ledger, not a JDE-side hypothesis. Start
+    // content at row 6, matching the SystemStatusTemplate pattern.
+    let row = 6;
+
+    // ---- Summary section FIRST (per spec) ----
+    row = this._renderSummaryPivot(ws, row, findings.summary);
+
+    // small spacer
+    ws.getRow(row).height = 14; row++;
+
+    // ---- Variance card ----
+    const totalFlagged = interN + backN;
+    let varianceNumber, varianceSub, rationale;
+    if (totalFlagged === 0) {
+      varianceNumber = '0';
+      varianceSub = 'flagged';
+      rationale = `Pattern:  ${findings.patternLabel}\n\nEvery row had Doc Co matching Order Co (or one of them blank) and GL Dates progressed forward when sequenced by Unique Key ID. The Summary section above lists the dimensional totals.`;
+    } else {
+      varianceNumber = String(totalFlagged);
+      varianceSub = 'intercompany + backdated';
+      const bits = [];
+      if (interN) bits.push(`${interN} intercompany row${interN === 1 ? '' : 's'} (Doc Co ≠ Order Co)`);
+      if (backN) bits.push(`${backN} backdated row${backN === 1 ? '' : 's'} (GL Date > ${this._BACKDATE_DAYS} days behind running-max when sorted by Unique Key ID)`);
+      rationale = `Pattern:  ${findings.patternLabel}\n\n${bits.join('.  ')}.  See the Evidence list below for the per-row breakdown; flagged rows are highlighted on the source sheet.`;
+    }
+    row = F.renderVarianceCard(ws, row, {
+      priority: findings.priority,
+      varianceNumber,
+      varianceSub,
+      rationale
+    });
+
+    ws.getRow(row).height = 14; row++;
+
+    // ---- WHAT / WHY / HOW ----
+    row = F.renderCardPair(ws, row, {
+      title: '1.  WHAT happened',
+      body: this._whatBody(data, findings),
+      header: 'navy'
+    });
+    row = F.renderCardPair(ws, row, {
+      title: '2.  WHY it happened',
+      body: this._whyBody(data, findings),
+      header: 'midblue'
+    });
+    row = F.renderCardPair(ws, row, {
+      title: '3.  HOW to fix it',
+      body: this._howBody(data, findings),
+      header: 'navy'
+    });
+
+    ws.getRow(row).height = 14; row++;
+
+    // ---- Evidence ----
+    row = F.renderEvidence(ws, row, {
+      sourceSheetName: data.sheetName,
+      rows: findings.evidence
+    });
+
+    // ---- Caution + footer ----
+    row = F.renderCautionAndFooter(ws, row, {
+      cautionText: 'This analysis flags only two patterns in the Item Ledger:  intercompany routing and backdated transactions (sequenced by Unique Key ID).  It does not validate cardex / GL integrity, posting status, or AAI routing.  Confirm the broader item-ledger picture with your JDE team and the RR University inventory module.',
+      footerText: `Analysis produced by the RapidReconciler Export Analyzer  ·  ${Helpers.todayPretty()}`
+    });
+    F.applyPageSetup(ws, row - 1);
+
+    // ---- Source sheet (with highlights) ----
+    SourceSheet.copy(sourceSheet, workbook, data.sheetName, {
+      headerRow: data.headerRow,
+      freezeAt: data.headerRow + 1,
+      highlights: findings.highlights
+    });
+
+    // ---- Notes tab ----
+    F.renderNotesTab(workbook, {});
+    workbook.views = [{ activeTab: 0 }];
+  },
+
+  // Render the dimensional summary pivot. Subtotals at Company and
+  // Company+Branch breaks, grand total at the bottom. Returns the next
+  // free row. Template-local — not generic enough to live on F.
+  _renderSummaryPivot(ws, startRow, summary) {
+    const PALETTE_LB = PALETTE.lightBlue;        // FFD6E4F0
+    const PALETTE_LB2 = 'FFEAF2FA';              // slightly lighter than lightBlue for branch subtotal
+    const PALETTE_NAVY = PALETTE.navy;
+    const qtyFmt = summary.anyFractionalQty ? '#,##0.00;-#,##0.00;-' : '#,##0;-#,##0;-';
+    const valFmt = '$#,##0.00;($#,##0.00);-';
+
+    let row = startRow;
+
+    // ---- Section header strip ----
+    ws.getRow(row).height = 24;
+    F.writeMerged(ws, `A${row}:F${row}`,
+      'Summary — Quantity and Extended Cost  (rolled up by Company → Branch/Plant → Location → Lot)',
+      {
+        font: { name: 'Arial', size: 11, bold: true, color: { argb: PALETTE.navyText } },
+        fill: PALETTE_LB,
+        alignment: { horizontal: 'left', vertical: 'middle', indent: 1 }
+      });
+    row++;
+
+    // ---- Column header row ----
+    ws.getRow(row).height = 22;
+    const headers = ['Company', 'Branch/Plant', 'Location', 'Lot', 'Quantity', 'Value'];
+    headers.forEach((h, i) => {
+      const cell = ws.getCell(row, i + 1);
+      cell.value = h;
+      cell.font = { name: 'Arial', size: 10, bold: true, color: { argb: PALETTE.navyText } };
+      F.fillCell(cell, PALETTE_LB);
+      cell.alignment = { horizontal: i >= 4 ? 'right' : 'left', vertical: 'middle', indent: 1 };
+      cell.border = { top: { style: 'thin', color: { argb: 'FFB0B7BF' } }, bottom: { style: 'thin', color: { argb: 'FFB0B7BF' } } };
+    });
+    row++;
+
+    // ---- Data rows with subtotals ----
+    // Heuristic line-count estimator for wrap-aware row height. Lot and
+    // Location values can be long ('A1.A2.A3.B' etc.), so we mirror the
+    // F.renderEvidence approach: max lines across all 4 dim cols vs ~14
+    // chars per visible line.
+    const estimateHeight = (co, bp, loc, lot) => {
+      const wrapLines = (txt, perLine) => Math.max(1, Math.ceil(String(txt || '').length / perLine));
+      const lines = Math.max(
+        wrapLines(co, 12), wrapLines(bp, 14),
+        wrapLines(loc, 18), wrapLines(lot, 18)
+      );
+      return Math.min(60, Math.max(18, lines * 14 + 4));
+    };
+
+    const dash = '—';
+    const writeDataRow = (e, fillArgb) => {
+      ws.getRow(row).height = estimateHeight(e.co, e.bp, e.loc, e.lot);
+      const cells = [
+        e.co  || '',
+        e.bp  || '',
+        e.loc ? e.loc : dash,
+        e.lot ? e.lot : dash,
+        e.qty,
+        e.value
+      ];
+      cells.forEach((v, i) => {
+        const cell = ws.getCell(row, i + 1);
+        cell.value = v;
+        cell.font = { name: 'Arial', size: 10, color: { argb: PALETTE.text } };
+        cell.alignment = { horizontal: i >= 4 ? 'right' : 'left', vertical: 'middle', indent: 1, wrapText: true };
+        if (fillArgb) F.fillCell(cell, fillArgb);
+        if (i === 4) cell.numFmt = qtyFmt;
+        if (i === 5) cell.numFmt = valFmt;
+      });
+      row++;
+    };
+
+    const writeSubtotalRow = (label, qty, val, fillArgb, textArgb, bold) => {
+      ws.getRow(row).height = 20;
+      const labelCell = ws.getCell(row, 1);
+      labelCell.value = label;
+      labelCell.font = { name: 'Arial', size: 10, bold: !!bold, color: { argb: textArgb || PALETTE.navyText } };
+      F.fillCell(labelCell, fillArgb);
+      labelCell.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
+      // Fill empty middle cols
+      for (let c = 2; c <= 4; c++) {
+        const cell = ws.getCell(row, c);
+        cell.value = '';
+        F.fillCell(cell, fillArgb);
+      }
+      const qtyCell = ws.getCell(row, 5);
+      qtyCell.value = qty;
+      qtyCell.numFmt = qtyFmt;
+      qtyCell.font = { name: 'Arial', size: 10, bold: true, color: { argb: textArgb || PALETTE.navyText } };
+      F.fillCell(qtyCell, fillArgb);
+      qtyCell.alignment = { horizontal: 'right', vertical: 'middle', indent: 1 };
+      const valCell = ws.getCell(row, 6);
+      valCell.value = val;
+      valCell.numFmt = valFmt;
+      valCell.font = { name: 'Arial', size: 10, bold: true, color: { argb: textArgb || PALETTE.navyText } };
+      F.fillCell(valCell, fillArgb);
+      valCell.alignment = { horizontal: 'right', vertical: 'middle', indent: 1 };
+      row++;
+    };
+
+    // Walk entries; emit subtotal rows on Company and Company+Branch breaks
+    let prevCo = null;
+    let prevBp = null;
+    let coQty = 0, coVal = 0;
+    let bpQty = 0, bpVal = 0;
+    let groupHasRows = false;
+
+    const flushBranch = () => {
+      if (!groupHasRows) return;
+      writeSubtotalRow(`  Branch ${prevCo || '(blank)'} / ${prevBp || '(blank)'} subtotal`, bpQty, bpVal, PALETTE_LB2, PALETTE.navyText, true);
+      bpQty = 0; bpVal = 0;
+    };
+    const flushCompany = () => {
+      if (prevCo === null) return;
+      writeSubtotalRow(`Company ${prevCo || '(blank)'} subtotal`, coQty, coVal, PALETTE_LB, PALETTE.navyText, true);
+      coQty = 0; coVal = 0;
+    };
+
+    summary.entries.forEach(e => {
+      if (prevCo === null) {
+        prevCo = e.co; prevBp = e.bp;
+      }
+      if (e.co !== prevCo) {
+        flushBranch();
+        flushCompany();
+        prevCo = e.co; prevBp = e.bp;
+      } else if (e.bp !== prevBp) {
+        flushBranch();
+        prevBp = e.bp;
+      }
+      writeDataRow(e);
+      coQty += e.qty; coVal += e.value;
+      bpQty += e.qty; bpVal += e.value;
+      groupHasRows = true;
+    });
+    flushBranch();
+    flushCompany();
+
+    // Grand total — navy fill, white bold text
+    writeSubtotalRow('GRAND TOTAL', summary.grand.qty, summary.grand.value, PALETTE_NAVY, 'FFFFFFFF', true);
+
+    return row;
+  },
+
+  // ---- WHAT / WHY / HOW body text ----
+  _whatBody(data, findings) {
+    const interN = findings.intercompany.length;
+    const backN = findings.backdated.length;
+    const lines = [];
+    lines.push(`The Item Ledger export covers ${Helpers.count(data.rows.length)} row${data.rows.length === 1 ? '' : 's'} across ${findings.summary.companies.length} compan${findings.summary.companies.length === 1 ? 'y' : 'ies'} and ${findings.summary.branches.length} branch${findings.summary.branches.length === 1 ? '' : 'es'}.`);
+    if (interN) lines.push(`\n${interN} row${interN === 1 ? '' : 's'} flagged as intercompany (Doc Co ≠ Order Co with both populated).`);
+    if (backN) lines.push(`\n${backN} row${backN === 1 ? '' : 's'} flagged as backdated (GL Date more than ${this._BACKDATE_DAYS} days earlier than the running-max GL Date when rows are sequenced by Unique Key ID).`);
+    if (!interN && !backN) lines.push(`\nNo intercompany routing and no backdated transactions detected. The Summary section above shows the rolled-up Quantity and Extended Cost across the four dimensions (Company → Branch/Plant → Location → Lot).`);
+    if (findings.evidenceTruncated) lines.push(`\nThe Evidence list below shows the top ${findings.evidence.length} flagged rows (sorted by Unique Key ID descending). The full count is ${findings.evidenceTotal}.`);
+    return lines.join('\n');
+  },
+
+  _whyBody(data, findings) {
+    const parts = [];
+    parts.push('This analysis runs two pattern detectors against the Item Ledger:');
+    parts.push(`\n  Intercompany.  For every row where Doc Co and Order Co are both populated and both numeric, the analyzer flags the row when those two numbers differ. The inventory side posts to one company; the order originated in another. Not necessarily an error — intercompany activity is real — but worth surfacing because the posting destination is split.`);
+    parts.push(`\n  Backdated.  The analyzer sorts every row ascending by Unique Key ID (the transaction serial number JDE assigns at entry time, so ascending = the order rows were created). It then walks the sorted list tracking the running-max GL Date seen so far. A row whose GL Date is more than ${this._BACKDATE_DAYS} days earlier than that running max is flagged.`);
+    parts.push(`\nThe ${this._BACKDATE_DAYS}-day threshold is a v1 constant. Small backdates within a single month often reflect normal corrections; the threshold is set to flag rows that cross at least a month boundary in the wrong direction.`);
+    return parts.join('');
+  },
+
+  _howBody(data, findings) {
+    const interN = findings.intercompany.length;
+    const backN = findings.backdated.length;
+    const steps = [];
+    let i = 1;
+    if (interN) {
+      steps.push(`Step ${i++}.  Confirm intercompany routing with the customer's company-master config. For each flagged row in the Evidence list, verify the Doc Co → Order Co split is expected for that document type / order type combination. If unexpected, correct the Order Co assignment in JDE before the period closes.`);
+    }
+    if (backN) {
+      steps.push(`Step ${i++}.  Review backdated transactions for posting-period implications. Walk the Evidence list and identify which flagged rows cross a closed period. Those need either a manual period adjustment or a re-open before posting.`);
+      steps.push(`Step ${i++}.  If the volume of backdated rows is unexpected (more than a handful in a normal month), talk to the entry team. Recurring backdating often signals a process gap — e.g. late vouchers being entered against earlier periods to make the original budget work.`);
+    }
+    if (!interN && !backN) {
+      steps.push(`Step ${i++}.  No flagged transactions. The Summary section at the top of this tab gives the dimensional totals by Company → Branch/Plant → Location → Lot — useful for a quick value / quantity read across the period.`);
+    }
+    steps.push(`Step ${i++}.  This template flags only two patterns. For a fuller item-ledger review, work with your JDE team and consult the RR University inventory module (cardex variance, DMAAI routing, GL class integrity).`);
+    return steps.join('\n\n');
+  }
+};
+Templates.register(ItemLedgerTemplate);
+
+// 10 templates now implemented — no stubs remaining.
 
 /* ====================================================================
    APP CONTROLLER  —  upload, detect, preview, download
