@@ -890,6 +890,7 @@
         <li data-target="home"><button onclick="showView('home')">Index</button></li>
         <li data-target="app-server"><button onclick="showView('topic-app-server')">Application Server</button></li>
         <li data-target="db-server"><button onclick="showView('topic-db-server')">Database Server</button></li>
+        <li data-target="jde-move"><button onclick="showView('topic-jde-move')">JDE Server Move</button></li>
       </ul>
 
       <div class="sidebar-section-label">Wrap-Up</div>
@@ -937,6 +938,11 @@
               <td>Both topics, in any order</td>
               <td>All three values (or just the two from the app server, if you&rsquo;re consolidating onto a single new machine that hosts both)</td>
             </tr>
+            <tr>
+              <td><strong>The customer&rsquo;s JDE server</strong> (RR servers unchanged)</td>
+              <td><a href="javascript:void(0)" onclick="showView('topic-jde-move')">JDE Server Move</a></td>
+              <td>Nothing &mdash; no rrsupport email needed (VALC and Cloudflare still point at the same RR app server)</td>
+            </tr>
           </tbody>
         </table>
 
@@ -953,6 +959,10 @@
             <tr>
               <td><a href="javascript:void(0)" onclick="showView('topic-db-server')">Database Server Migration</a></td>
               <td>Replacing the SQL Server that hosts the <code>RapidReconciler_Prod</code> database. Covers same-version replacements and SQL version upgrades (e.g., 2017 &rarr; 2022).</td>
+            </tr>
+            <tr>
+              <td><a href="javascript:void(0)" onclick="showView('topic-jde-move')">JDE Server Move</a></td>
+              <td>Updating the SSIS JDE Source connection manager when the customer&rsquo;s JDE host changes &mdash; an IP / hostname change, a planned cutover, or an on-premise to cloud migration. RR servers stay put.</td>
             </tr>
             <tr>
               <td><a href="javascript:void(0)" onclick="showView('topic-send-rrsupport')">What to send rrsupport</a></td>
@@ -1208,7 +1218,203 @@
         <div class="topic-footer-nav">
           <button class="back-btn" onclick="goHome()">&larr; Back to Index</button>
           <button class="prev-btn" onclick="showView('topic-app-server')">&larr; Previous</button>
-          <button class="next-btn" onclick="showView('topic-send-rrsupport')">Next: What to send rrsupport &rarr;</button>
+          <button class="next-btn" onclick="showView('topic-jde-move')">Next: JDE Server Move &rarr;</button>
+        </div>
+      </section>
+
+      <section id="topic-jde-move" class="view">
+        <h2>JDE Server Move &mdash; SSIS Connection Update</h2>
+        <p>Use this topic when the customer&rsquo;s JDE host changes and the RR servers themselves don&rsquo;t move &mdash; an IP / hostname change, a planned cutover to a fresh JDE environment, or an on-premise to cloud migration of JDE. Only the <strong>JDE Source</strong> connection manager on the SSIS package needs to change; nothing on the RR side or on GSI&rsquo;s side (VALC, Cloudflare) is affected.</p>
+
+        <div class="callout note">
+          <div class="callout-label">No rrsupport email required</div>
+          <p>Because nothing visible to GSI changes (the RR app server still has the same internal / external IPs, the RR database server still hosts <code>RapidReconciler_Prod</code>), VALC and Cloudflare don&rsquo;t need updating. Skip the &ldquo;What to send rrsupport&rdquo; step at the end. If you&rsquo;re also moving an RR server at the same time, work through that topic separately &mdash; the app-server migration topic re-deploys the whole SSIS project from scratch and updates both source and destination connections.</p>
+        </div>
+
+        <div class="diamond-divider"><span class="diamond"></span></div>
+
+        <h2>Software Prerequisites</h2>
+        <p>Confirm these are in place on the RR application server before starting:</p>
+        <ul class="checklist">
+          <li class="checklist-title">RR application server prerequisites</li>
+          <li>Visual Studio Community Edition with the SQL Server Integration Services extension</li>
+          <li>Outbound network connectivity from the RR app server to the new JDE host &mdash; host / port reachable; firewall and DNS already opened on the customer&rsquo;s side</li>
+          <li>JDE database driver matching the new JDE environment (IBM i Access Client Solutions, Oracle Database client, etc.). Usually the same driver family as before, but cloud-hosted JDE may need a newer version &mdash; see <a href="javascript:void(0)" onclick="document.getElementById('cloud-pitfalls').scrollIntoView({block:'start'})">On-prem to cloud</a> below</li>
+          <li>Credentials for the SSIS service account that will read from the new JDE (typically a read-only database user the customer&rsquo;s JDE team provisions ahead of the cutover)</li>
+        </ul>
+
+        <div class="diamond-divider"><span class="diamond"></span></div>
+
+        <h2>Information to gather from the customer&rsquo;s JDE team</h2>
+        <p>Collect these values before opening Visual Studio so you don&rsquo;t have to bounce back and forth mid-edit:</p>
+        <table>
+          <thead><tr><th>Field</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Hostname / IP</strong></td><td>The DNS name or IP the RR app server should connect to. For cloud JDE the customer will usually hand you a hostname behind a private endpoint or VPN; confirm the RR app server can resolve it and reach it on the relevant port.</td></tr>
+            <tr><td><strong>Port</strong></td><td>Platform default unless the customer&rsquo;s DBA has overridden it &mdash; 1521 (Oracle), 50000 / 50001 (DB2 LUW), 446 / 448 (DB2 for i with SSL), 1433 (SQL Server).</td></tr>
+            <tr><td><strong>Database / schema / library</strong></td><td>The JDE production library (often <code>PRODDTA</code>, <code>CRPDTA</code>) for DB2 for i, or the Oracle schema name for Oracle-hosted JDE.</td></tr>
+            <tr><td><strong>Service account</strong></td><td>Username + password for the read-only account RR will use. Cloud environments often introduce new auth methods (OAuth, Azure AD, wallet-based connections) &mdash; confirm with the JDE team which method the new environment expects.</td></tr>
+            <tr><td><strong>TLS / SSL requirement</strong></td><td>Cloud-hosted JDE almost always requires encrypted connections. Get the issuing certificate chain if it&rsquo;s a private CA; SSIS will reject the connection if the certificate isn&rsquo;t trusted by the RR app server.</td></tr>
+          </tbody>
+        </table>
+
+        <div class="diamond-divider"><span class="diamond"></span></div>
+
+        <h2>The Change Process</h2>
+        <p>Five steps. Work through them in order on the RR application server.</p>
+
+        <div class="step-card">
+          <div class="step-badge">1</div>
+          <div class="step-meta">JDE Move &middot; Step 1 of 5</div>
+          <div class="step-title">Open the SSIS project in Visual Studio</div>
+          <p>You need the project (not just the deployed package). Two paths depending on whether you have the source files:</p>
+          <ul>
+            <li><strong>If you have the project files</strong> (the <code>.dtproj</code> on the app server or in source control): open it directly via <strong>File &rarr; Open &rarr; Project/Solution</strong>.</li>
+            <li><strong>If only the deployed package is available</strong>: import from SSISDB. <strong>File &rarr; New &rarr; Project &rarr; Integration Services Import Project Wizard</strong>, then point at the database server hosting SSISDB and select <strong>SSISDB &rarr; RapidReconciler &rarr; (project name)</strong>. The wizard pulls everything back into a fresh project on your local disk that you can edit and re-deploy.</li>
+          </ul>
+        </div>
+
+        <div class="step-card">
+          <div class="step-badge">2</div>
+          <div class="step-meta">JDE Move &middot; Step 2 of 5</div>
+          <div class="step-title">Locate the JDE Source connection manager</div>
+          <p>Connection managers live in two places &mdash; check the project level first:</p>
+          <ul>
+            <li><strong>Project-level</strong>: in Solution Explorer (right pane), expand <strong>Connection Managers</strong>. The JDE Source connection appears here when it&rsquo;s shared across multiple packages.</li>
+            <li><strong>Package-level</strong>: open the <code>.dtsx</code> from Solution Explorer, then look at the <strong>Connection Managers</strong> tray at the bottom of the design surface. Package-scoped connections live here.</li>
+          </ul>
+          <p>The connection manager is typically named <code>JDE Source</code>, <code>JDE</code>, or a similar customer-recognizable label. If you&rsquo;re not sure which one is the JDE source, right-click each and pick <strong>Properties</strong> &mdash; the <code>ConnectionString</code> property names the JDE host directly.</p>
+        </div>
+
+        <div class="step-card">
+          <div class="step-badge">3</div>
+          <div class="step-meta">JDE Move &middot; Step 3 of 5</div>
+          <div class="step-title">Update and test the connection string</div>
+          <ol>
+            <li><strong>Right-click</strong> the JDE Source connection manager &rarr; <strong>Edit</strong>.</li>
+            <li>Update the fields with the new connection details:
+              <ul>
+                <li><strong>Server / Data Source</strong>: new JDE hostname or IP</li>
+                <li><strong>Initial Catalog / Database / Schema</strong>: usually unchanged, but confirm</li>
+                <li><strong>Authentication</strong>: select the auth method matching the new environment</li>
+                <li><strong>User name / Password</strong>: the new service-account credentials</li>
+              </ul>
+            </li>
+            <li>For cloud-hosted JDE, click <strong>All</strong> in the connection dialog and add encryption options if applicable: <code>Encrypt=true</code>, and either <code>TrustServerCertificate=false</code> with the root CA installed on the app server (the secure default), or <code>TrustServerCertificate=true</code> if your security policy allows it (convenient but skips certificate validation &mdash; don&rsquo;t use in production unless you&rsquo;ve agreed to the trade-off with the customer&rsquo;s security team).</li>
+            <li>Click <strong>Test Connection</strong>. If it returns <em>Test connection succeeded</em>, you&rsquo;re good. If it fails, the error message points at the cause &mdash; most often a firewall block, an incorrect credential, an untrusted certificate, or a missing / outdated driver.</li>
+            <li>Click <strong>OK</strong> to save.</li>
+          </ol>
+          <div class="callout warning">
+            <div class="callout-label">Don&rsquo;t embed credentials in cleartext</div>
+            <p>SSIS treats connection-string passwords as a sensitive property. Confirm the project&rsquo;s <strong>ProtectionLevel</strong> (Project property page) is <code>EncryptSensitiveWithPassword</code> or <code>EncryptSensitiveWithUserKey</code> &mdash; not <code>DontSaveSensitive</code> (which silently drops the password on deploy and the job will fail at runtime). Whichever protection you pick, document the protection password somewhere the next person who edits the project can recover it.</p>
+          </div>
+        </div>
+
+        <div class="step-card">
+          <div class="step-badge">4</div>
+          <div class="step-meta">JDE Move &middot; Step 4 of 5</div>
+          <div class="step-title">Build and redeploy</div>
+          <ol>
+            <li><strong>Build &rarr; Build Solution</strong> (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd>). Confirm <em>0 errors</em> in the Output window.</li>
+            <li><strong>Right-click the project</strong> in Solution Explorer &rarr; <strong>Deploy</strong>.</li>
+            <li>Step through the deployment wizard. Target the existing <strong>SSISDB / RapidReconciler / (project name)</strong> path on the database server &mdash; you&rsquo;re overwriting the deployed version with the updated connection.</li>
+            <li>Confirm the wizard ends with <em>Deployment of project complete</em>.</li>
+          </ol>
+          <a class="xref" href="../GSIRRTech/installing-production-database.html#topic-ssis-deploy">
+            See <strong>Installing the Production Database &rarr; Tour 3</strong> for screenshots of each Visual Studio deployment dialog.
+          </a>
+        </div>
+
+        <div class="step-card">
+          <div class="step-badge">5</div>
+          <div class="step-meta">JDE Move &middot; Step 5 of 5</div>
+          <div class="step-title">Run a one-shot fetch to verify</div>
+          <p>Don&rsquo;t wait for the next scheduled run &mdash; trigger the SQL Agent job manually so you find connection or auth errors immediately.</p>
+          <ol>
+            <li>Open <strong>SSMS</strong> &rarr; connect to the RR database server &rarr; expand <strong>SQL Server Agent &rarr; Jobs</strong>.</li>
+            <li>Find the RR data-pull job (the one that calls the SSIS package).</li>
+            <li>Right-click &rarr; <strong>Start Job at Step&hellip;</strong> &rarr; pick the SSIS step &rarr; <strong>Start</strong>.</li>
+            <li>Open <strong>Job Activity Monitor</strong> to watch progress. A clean run confirms the new connection works end-to-end.</li>
+            <li>Refresh the RapidReconciler UI and confirm fresh data is appearing &mdash; the System Status light goes green and the latest run time updates.</li>
+          </ol>
+          <div class="callout tip">
+            <div class="callout-label">If the job fails</div>
+            <p>The SSIS error log is the first stop &mdash; SSMS &rarr; SQL Server Agent &rarr; Job Activity Monitor &rarr; right-click the failed job &rarr; <strong>View History</strong>, then drill into the failed step and expand the error message. Almost every connection failure is a credential mismatch, a firewall block, a missing root CA (for cloud TLS), or the wrong driver version. The Test Connection in Step 3 catches most of these &mdash; if Test Connection passed but the job still fails, the most common cause is that the SQL Agent service account on the database server is a different user from the one you tested with in Visual Studio. Re-test from a command-line tool running as the SQL Agent account to confirm.</p>
+          </div>
+        </div>
+
+        <div class="diamond-divider"><span class="diamond"></span></div>
+
+        <h2 id="cloud-pitfalls">On-prem to cloud &mdash; specific pitfalls</h2>
+        <p>When the JDE move is from on-premise to a cloud-hosted environment (Oracle Cloud Database, AWS RDS, IBM Power Virtual Server for DB2 for i, Azure SQL, etc.), the connection-string update itself is the same shape, but several supporting concerns become first-class:</p>
+
+        <table>
+          <thead>
+            <tr><th>Concern</th><th>What&rsquo;s different</th><th>What to do</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Network latency</strong></td>
+              <td>On-prem JDE typically sits on the same LAN as the RR app server with sub-millisecond round-trips. Cloud JDE adds 10&ndash;100&nbsp;ms per round-trip, often more across regions.</td>
+              <td>Plan for the nightly fetch to run 2&ndash;10&times; longer. Run a test pull during off-hours, time it, and adjust the SQL Agent schedule so the job completes before users arrive.</td>
+            </tr>
+            <tr>
+              <td><strong>VPN / private link</strong></td>
+              <td>Most cloud JDE deployments don&rsquo;t expose the database publicly &mdash; access is through a site-to-site VPN, an AWS PrivateLink, an Azure Private Endpoint, or an Oracle Cloud FastConnect.</td>
+              <td>Confirm the customer&rsquo;s network team has the tunnel up and the RR app server is on the right route. <code>tnsping</code> (Oracle), <code>db2 connect</code> (DB2), or <code>Test-NetConnection</code> (PowerShell) from the app server is the fastest way to confirm reachability before touching SSIS.</td>
+            </tr>
+            <tr>
+              <td><strong>Firewall &amp; DNS</strong></td>
+              <td>Outbound rules from the RR app server now have a different destination IP or hostname. Internal DNS may need a new record.</td>
+              <td>Get the new IP from the customer and confirm with their network team that outbound on the JDE port is allowed. If using a private DNS zone, confirm the RR app server is configured to resolve it.</td>
+            </tr>
+            <tr>
+              <td><strong>TLS / SSL</strong></td>
+              <td>Cloud DBs almost always require encrypted connections, and many use a private CA the RR app server doesn&rsquo;t trust by default.</td>
+              <td>Install the issuing CA into the Windows <strong>Trusted Root Certification Authorities</strong> store on the RR app server <em>before</em> testing the connection. Use <code>certmgr.msc</code> or PowerShell <code>Import-Certificate</code>. Don&rsquo;t default to <code>TrustServerCertificate=true</code> &mdash; it works but disables certificate validation entirely.</td>
+            </tr>
+            <tr>
+              <td><strong>Authentication</strong></td>
+              <td>On-prem typically uses Windows-integrated, SQL-auth, or DB2 user / password. Cloud often adds OAuth, Azure AD, federated SSO, or wallet-based connections (Oracle Cloud Autonomous Database).</td>
+              <td>Use the auth method the customer&rsquo;s cloud DBA recommends. For Oracle Cloud Autonomous, that&rsquo;s usually a TNS wallet &mdash; download it from OCI, copy to the app server, set <code>TNS_ADMIN</code> to its location, and use a <em>TNS Service Name</em> connection (not Host / Port). For Azure SQL Managed Instance behind Azure AD, use the <code>Microsoft.Data.SqlClient</code> provider with <code>Authentication=Active Directory Service Principal</code>.</td>
+            </tr>
+            <tr>
+              <td><strong>Driver version</strong></td>
+              <td>Older drivers (legacy iSeries Access, Oracle 11g client) may not negotiate TLS 1.2 / 1.3 properly or may not support the cloud&rsquo;s connection topology.</td>
+              <td>Plan to upgrade the driver on the app server as part of the JDE move. For Oracle, install the matching cloud-side client (19c or 21c). For IBM i, install the latest IBM i Access Client Solutions. For SQL Server / Azure SQL, replace <code>Microsoft OLE DB Provider for SQL Server</code> with <code>Microsoft OLE DB Driver 18+ for SQL Server (MSOLEDBSQL18)</code>.</td>
+            </tr>
+            <tr>
+              <td><strong>Time zones</strong></td>
+              <td>Cloud DBs often run in UTC regardless of where the customer is; on-prem usually runs in the local time zone. The RR data fetch uses timestamp comparisons that can misbehave when the source TZ shifts.</td>
+              <td>Spot-check timestamps in the first post-move fetch. Pick a specific document, look at the JDE side and the RR side, and confirm the timestamps match. If they&rsquo;re off by exactly your TZ offset, you have a TZ issue and the SSIS data flow needs explicit conversion in the source query.</td>
+            </tr>
+            <tr>
+              <td><strong>Egress cost</strong></td>
+              <td>Cloud providers charge for data leaving the cloud. RR&rsquo;s nightly pull can move gigabytes of cardex / ledger data.</td>
+              <td>Estimate per-pull data volume after a few real runs &mdash; the customer&rsquo;s cloud cost dashboard will show it. If costs surprise the customer, options are: filter the SSIS source query more aggressively, schedule the pull less frequently (weekly summaries + daily deltas), or co-locate the RR app server in the same cloud region as the JDE source to avoid egress entirely.</td>
+            </tr>
+            <tr>
+              <td><strong>Service-account secrets</strong></td>
+              <td>Cleartext passwords in <code>.dtsx</code> packages are poor practice on-prem and usually fail compliance review for cloud connections.</td>
+              <td>Use SSIS <em>project parameters</em> marked <strong>Sensitive</strong> for the password. The project ProtectionLevel determines how Sensitive parameters are encrypted at rest. For the more secure option, use a credential-store integration (Azure Key Vault for Azure SQL, OCI Vault for Oracle Cloud) and reference the secret from the SSIS package via an environment variable.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="callout principle">
+          <div class="callout-label">Test before cutover</div>
+          <p>For an on-prem &rarr; cloud move, the customer&rsquo;s cloud JDE is usually stood up <em>before</em> the on-prem one is retired. Use that overlap. Stand up a second SSIS project (or a second connection-manager configuration) pointing at the new cloud JDE, run a few full fetches against it while the on-prem source is still live, and compare row counts and selected dollar totals before flipping production over. The time-zone, driver, and egress issues above are best caught while you still have the on-prem source as a reference.</p>
+        </div>
+
+        <div class="callout principle">
+          <div class="callout-label">Next</div>
+          <p>That&rsquo;s the whole procedure for a customer-side JDE move &mdash; nothing to send to rrsupport. If you&rsquo;d like a quick sign-off list, the <a href="javascript:void(0)" onclick="showView('topic-checklist')">Post-Migration Checklist</a> has a JDE-only path at the top.</p>
+        </div>
+
+        <div class="topic-footer-nav">
+          <button class="back-btn" onclick="goHome()">&larr; Back to Index</button>
+          <button class="prev-btn" onclick="showView('topic-db-server')">&larr; Previous</button>
+          <button class="next-btn" onclick="showView('topic-checklist')">Next: Post-Migration Checklist &rarr;</button>
         </div>
       </section>
 
@@ -1334,6 +1540,19 @@ NAME &middot; CUSTOMER IT</pre>
           <li class="checklist-title">Before starting</li>
           <li>Users notified of the maintenance window</li>
           <li>Final source-server backup taken (verified) and held as the rollback artifact</li>
+        </ul>
+
+        <h2>JDE Server Move (skip if the customer&rsquo;s JDE host isn&rsquo;t changing)</h2>
+        <ul class="checklist">
+          <li class="checklist-title">JDE Server Move</li>
+          <li>New JDE connection details collected from the customer&rsquo;s JDE team (host, port, library / schema, service account, TLS / SSL requirement)</li>
+          <li>RR app server has outbound reachability to the new JDE host (firewall + DNS confirmed)</li>
+          <li>Required JDE database driver installed / upgraded on the RR app server (for on-prem &rarr; cloud, verify driver version supports TLS 1.2+ and the cloud&rsquo;s auth method)</li>
+          <li>(Cloud only) Issuing CA installed in the Windows Trusted Root Certification Authorities store on the RR app server</li>
+          <li>SSIS JDE Source connection manager updated in Visual Studio; <em>Test Connection</em> succeeded</li>
+          <li>Project rebuilt with 0 errors and re-deployed to SSISDB</li>
+          <li>One-shot SQL Agent run completed successfully; fresh data visible in the RR UI</li>
+          <li>(Cloud only) First-run row counts and selected dollar totals spot-checked against the source while it is still live</li>
         </ul>
 
         <h2>Application Server (skip if not migrating the app server)</h2>
