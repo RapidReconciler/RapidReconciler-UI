@@ -1212,6 +1212,22 @@ const F = {
     return cell;
   },
 
+  /* Build a cell value that hyperlinks to a cell on another sheet in the
+     same workbook. We use a HYPERLINK() formula instead of ExcelJS's
+     { text, hyperlink } shorthand because ExcelJS 4.4.0 writes every
+     hyperlink with TargetMode="External" — Excel then treats the "#" as
+     a URL anchor, lands on the sheet, but loses the cell reference. The
+     HYPERLINK formula is evaluated by Excel itself and handles internal
+     cell references correctly, so the click actually jumps to the row. */
+  internalHyperlink(sheetName, cellRef, displayText) {
+    const escSheet = String(sheetName).replace(/'/g, "''");
+    const escDisplay = String(displayText).replace(/"/g, '""');
+    return {
+      formula: `HYPERLINK("#'${escSheet}'!${cellRef}","${escDisplay}")`,
+      result: String(displayText)
+    };
+  },
+
   /* Render the 5-row chrome (brand strip, headline, subline, context, spacer) */
   renderChrome(ws, { headline, subline, context }) {
     // Row 1 — brand strip
@@ -1526,7 +1542,7 @@ const F = {
         alignment: { horizontal: 'left', vertical: 'top', indent: 1, wrapText: true }
       });
       if (ev.sourceRow) {
-        ws.getCell(`A${row}`).value = { text: ev.label, hyperlink: `#'${sourceSheetName}'!A${ev.sourceRow}` };
+        ws.getCell(`A${row}`).value = F.internalHyperlink(sourceSheetName, `A${ev.sourceRow}`, ev.label);
       }
 
       // C:D — description
@@ -1718,7 +1734,7 @@ const F = {
         const cell = ws.getCell(row, ci + 1);
         if (ci === 0 && typeof v === 'object' && v.text) {
           // Hyperlinked first column
-          cell.value = { text: v.text, hyperlink: `#'${sourceSheetName}'!A${v.sourceRow}` };
+          cell.value = F.internalHyperlink(sourceSheetName, `A${v.sourceRow}`, v.text);
           cell.font = { name: 'Arial', size: 10, color: { argb: 'FF0563C1' }, underline: true };
         } else {
           cell.value = v;
@@ -1872,6 +1888,54 @@ const SourceSheet = {
         }
       });
     }
+
+    // Pattern-name note column — append after the source data so the
+    // user can read which detector flagged each row while scrolling.
+    // Lives in the first empty column (maxCol + 1); for the standard
+    // 18-col JDE Item Ledger export this lands at column S, which is
+    // exactly where the user expects it. AutoFilter range below picks
+    // this column up too so it's filterable.
+    //
+    // Visual treatment: saturated priority-matched fill with white bold
+    // text, so flagged rows have a strong visual anchor when scrolling
+    // the raw data. The full-row pastel highlight (above) gives context;
+    // this note cell shouts the WHY at the user.
+    let noteCol = 0;
+    if (options.patternByRow && options.patternByRow.size > 0) {
+      noteCol = maxCol + 1;
+      // Build a row → priority lookup from highlights so the note cell
+      // can pick a matching saturated fill.
+      const priorityByRow = new Map();
+      (options.highlights || []).forEach(h => priorityByRow.set(h.rowNumber, h.priority));
+      const saturatedFill = p => p === 1 ? 'FFB81F1F' : p === 2 ? 'FFD97316' : 'FFA88A1F';
+
+      // Header
+      const headerCell = dst.getRow(headerRow).getCell(noteCol);
+      headerCell.value = 'RR Analyzer Note';
+      headerCell.font = { bold: true, name: 'Arial', size: 10 };
+      F.fillCell(headerCell, PALETTE.lightBlue);
+      // Body
+      options.patternByRow.forEach((label, rowNumber) => {
+        const cell = dst.getRow(rowNumber).getCell(noteCol);
+        cell.value = label;
+        const p = priorityByRow.get(rowNumber) || 3;
+        F.fillCell(cell, saturatedFill(p));
+        cell.font = { name: 'Arial', size: 11, bold: true, color: { argb: 'FFFFFFFF' } };
+        cell.alignment = { horizontal: 'left', vertical: 'middle', indent: 1, wrapText: true };
+        // Bump the row a touch so wrapped two-pattern labels are readable
+        const r = dst.getRow(rowNumber);
+        if (!r.height || r.height < 22) r.height = 22;
+      });
+      // Give the column some breathing room
+      dst.getColumn(noteCol).width = 36;
+    }
+
+    // Freeze panes (reapply after potentially extending columns above)
+    dst.views = [{ state: 'frozen', xSplit: 0, ySplit: freezeAt - 1, topLeftCell: `A${freezeAt}`, showGridLines: true }];
+
+    // AutoFilter — extend to include the note column when present
+    const filterLastCol = SourceSheet.colLetter(noteCol > 0 ? noteCol : maxCol);
+    dst.autoFilter = `A${headerRow}:${filterLastCol}${lastRowNumber}`;
 
     // Optionally pre-filter the source sheet to just the highlighted rows
     // by hiding every data row that wasn't flagged. Header row stays
@@ -6495,8 +6559,15 @@ const ItemLedgerTemplate = {
           unjustifiedAvg.push({ row: curr.row, prevRow: prior.row, prevDocType: prior.docType, prevCost: prior.unitCost, newCost: curr.unitCost, pctChange });
         }
 
-        // Pattern 6 — large jump (regardless of method)
-        if (pctChange !== null && Math.abs(pctChange) >= this._LARGE_JUMP_PCT) {
+        // Pattern 6 — large jump (regardless of method). Skip if either
+        // side of the transition has qty=0. costPoints already excludes
+        // qty=0 rows, so this is defensive — protects Pattern 6 from
+        // flagging PPV variance rows or IB revaluation rows if a future
+        // change ever lets them through.
+        const priorQty = Number(prior.row.qtyPrimary);
+        const currQty  = Number(curr.row.qtyPrimary);
+        if (priorQty !== 0 && currQty !== 0 &&
+            pctChange !== null && Math.abs(pctChange) >= this._LARGE_JUMP_PCT) {
           largeJumps.push({ row: curr.row, prevCost: prior.unitCost, newCost: curr.unitCost, pctChange });
         }
       }
@@ -6655,6 +6726,25 @@ const ItemLedgerTemplate = {
     residualIA.forEach(x => highlights.push({ rowNumber: x.row.rowNumber, priority: 3 }));
     valueInconsistent.forEach(v => highlights.push({ rowNumber: v.row.rowNumber, priority: 1 }));
 
+    // ---- Per-row pattern note (for the column S "RR Analyzer Note") ----
+    // A single row can fire multiple patterns; join the labels with " · "
+    // so the user can see every detector that flagged the row while
+    // scrolling the source sheet.
+    const patternByRow = new Map();
+    const tagRow = (rn, label) => {
+      if (rn == null) return;
+      const prior = patternByRow.get(rn);
+      patternByRow.set(rn, prior ? `${prior}  ·  ${label}` : label);
+    };
+    intercompany.forEach(r => tagRow(r.rowNumber, 'Intercompany'));
+    backdated.forEach(b => tagRow(b.row.rowNumber, 'Backdated'));
+    negativeCost.forEach(n => tagRow(n.row.rowNumber, 'Negative cost'));
+    missingIB.forEach(m => tagRow(m.row.rowNumber, 'Missing IB'));
+    unjustifiedAvg.forEach(u => tagRow(u.row.rowNumber, 'Avg drift'));
+    largeJumps.forEach(j => tagRow(j.row.rowNumber, 'Large jump'));
+    residualIA.forEach(x => tagRow(x.row.rowNumber, 'Residual IA'));
+    valueInconsistent.forEach(v => tagRow(v.row.rowNumber, 'Value mismatch'));
+
     // ---- Summary (for chrome context only — no pivot section rendered) ----
     const summary = this._buildSummary(data.rows);
 
@@ -6809,6 +6899,7 @@ const ItemLedgerTemplate = {
       evidenceTruncated: evidence.length > evidenceTrimmed.length,
       evidenceTotal: evidence.length,
       highlights,
+      patternByRow,
       priority,
       patternLabel,
       findings: multiFindings,
@@ -6915,11 +7006,10 @@ const ItemLedgerTemplate = {
       row = this._renderCleanCallout(ws, row, findings.patternsChecked);
       ws.getRow(row).height = 14; row++;
     } else {
-      // ---- Cost timeline (when there's any cost movement to show) ----
-      if (findings.costTimeline && findings.costTimeline.length > 0) {
-        row = this._renderCostTimeline(ws, row, findings.costTimeline, findings.methodByBranch);
-        ws.getRow(row).height = 14; row++;
-      }
+      // Cost timeline section removed — feedback was that the visual
+      // density on the analysis tab outweighed its diagnostic value.
+      // The flagged rows on the source sheet (with the RR Analyzer Note
+      // column) carry the same information in a more scannable form.
 
       // ---- Finding cards (one per pattern) + sub-tables ----
       findings.findings.forEach(f => {
@@ -6953,6 +7043,8 @@ const ItemLedgerTemplate = {
       headerRow: data.headerRow,
       freezeAt: data.headerRow + 1,
       highlights: findings.highlights,
+      patternByRow: findings.patternByRow,   // adds an "RR Analyzer Note"
+                                             // column after the source data
       hideUnhighlighted: true   // start collapsed to the flagged rows only;
                                 // right-click → Unhide to see the full data
     });
