@@ -1843,10 +1843,25 @@ const SourceSheet = {
     // exports sometimes ship with a minimal <dimension ref="A1"/> element
     // that misleads srcWs.actualColumnCount / columnCount, so we measure
     // directly from cells we can see.
+    //
+    // IMPORTANT: probeRow.cellCount counts style-only cells too. JDE-side
+    // xlsx exports often carry empty styled cells past the real data
+    // (the JDE Item Ledger fixture has 18 populated columns but row 1
+    // reports cellCount=30). Walk the cells and only count positions
+    // with an actual value, so maxCol tracks real data, not styling.
+    const lastPopulatedCol = row => {
+      if (!row) return 0;
+      let last = 0;
+      const probeMax = row.cellCount || 0;
+      for (let c = 1; c <= probeMax; c++) {
+        const v = row.getCell(c).value;
+        if (v !== null && v !== undefined && v !== '') last = c;
+      }
+      return last;
+    };
     let maxCol = 0;
     for (let probe = Math.max(1, headerRow); probe <= headerRow + 5; probe++) {
-      const probeRow = srcWs.getRow(probe);
-      if (probeRow && probeRow.cellCount) maxCol = Math.max(maxCol, probeRow.cellCount);
+      maxCol = Math.max(maxCol, lastPopulatedCol(srcWs.getRow(probe)));
     }
     if (!maxCol) maxCol = srcWs.actualColumnCount || srcWs.columnCount || 1;
 
