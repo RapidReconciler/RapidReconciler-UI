@@ -461,7 +461,14 @@ This means the **true variance is larger than what RapidReconciler is showing**.
 - CardexAmount and LedgerAmount are on separate rows
 - Variance equals the amount on each row
 
-> **Analyzer output:** for account-mismatch docs the analyzer's headline is the **misposted amount** (the dollars that need to move via JE), not the document's net variance — the net is $0 because the cardex and GL amounts agree in absolute value. The HOW card walks the analyst through a five-step plan: (1) name the inventory-side DMAAI for the doc type — IM → 3110, IA → 4124, SO/RI → 4240, etc.; (2) check that AAI's row in the DMAAs section for a "Mismatch" flag; (3) post a Dr expected / Cr misposted JE for the misposted dollars; (4) correct the AAI in JDE so future docs route correctly; (5) escalate if the DMAAs section is clean (likely a manual JE coded the account directly).
+> **Analyzer output:** for account-mismatch docs the analyzer's headline is the **misposted amount** (the dollars that need to move via JE), not the document's net variance — the net is $0 because the cardex and GL amounts agree in absolute value. Priority bucketing (P1/P2/P3) is retired for this template; the dollar amount + pattern label carry the headline. When the JDE DMAAIs workbook is preloaded, the HOW card walks the analyst through a four-step plan that reasons against the actual F4095:
+>
+> 1. Name the inventory-side DMAAI for the doc type (IM → 3110, IA → 4124, SO/RI → 4240, IB → 4134, etc.) and confirm against the preloaded F4095 that the cardex routed correctly (so the GL is where it went wrong).
+> 2. Lay out the two real possibilities — the DMAAI was reconfigured *after* the doc posted, OR the DMAAI was overridden at posting time. If the misposted account appears anywhere else in the preloaded F4095 under a different routing, that detail is surfaced; if it doesn't, scenario (b) becomes the more likely of the two.
+> 3. The immediate JE — `Dr expected_acct / Cr posted_acct` for the misposted dollars.
+> 4. How to figure out which scenario applies (DMAAI change-history check, F0911 batch-type / source check) and prevent recurrence.
+>
+> The old "Step 5: escalate if the DMAAs section is clean" branch is gone — when SystemContext is loaded, the analyzer can reason about that case directly instead of asking the analyst to escalate.
 
 **Common causes:**
 
