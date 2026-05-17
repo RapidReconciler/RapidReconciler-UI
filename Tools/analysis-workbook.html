@@ -716,6 +716,9 @@
     z-index: 3;
   }
   .lp-cards.three { grid-template-columns: 1fr 1fr 1fr; }
+  /* Two-card variant: each card gets ~50% of the row, so the worklist
+     card body has more room. Inner type bumps a tick for readability. */
+  .lp-cards.two   { grid-template-columns: 1fr 1fr; }
   .lp-card {
     background: #fff;
     border-radius: 12px;
@@ -787,13 +790,13 @@
   .lp-card-title {
     font-family: 'Source Sans 3', sans-serif;
     font-weight: 700;
-    font-size: 20px;
+    font-size: 22px;
     color: var(--navy, #1f2d4a);
-    margin-bottom: 6px;
+    margin-bottom: 8px;
     line-height: 1.2;
   }
   .lp-card-desc {
-    font-size: 14px;
+    font-size: 15px;
     line-height: 1.55;
     color: var(--text-soft, #5a6479);
     margin-bottom: 16px;
@@ -826,9 +829,11 @@
 
   @media (max-width: 1000px) {
     .lp-cards.three { grid-template-columns: 1fr 1fr; }
+    .lp-cards.two   { grid-template-columns: 1fr 1fr; }
   }
   @media (max-width: 760px) {
     .lp-cards.three { grid-template-columns: 1fr; }
+    .lp-cards.two   { grid-template-columns: 1fr; }
     .lp-title { font-size: 28px; }
   }
 
@@ -943,7 +948,7 @@
   </div>
 </section>
 
-<section class="lp-cards three" aria-label="Three-step analyzer flow">
+<section class="lp-cards two" aria-label="Two-step analyzer flow">
 
   <!-- ===== Card 1: Preload (single DMAAI source for downstream
        analyses) =====
@@ -991,7 +996,15 @@
     <div class="dmaai-error" id="preloadError" style="display:none;"></div>
   </section>
 
-  <!-- ===== Card 2: Drop the export ===== -->
+  <!-- ===== Card 2: Drop + Analyze + Download (combined) =====
+       The old Step 2 (template confirmation) and Step 3 (download)
+       lived in their own cards, but Step 2 was anemic (just a
+       "Detected: X" pill and a "Change template" footgun) and Step 3
+       was just two buttons. Merging gives a wider card and removes
+       the manual-override path that mostly served to let users pick
+       the wrong template by accident. Detection auto-confirms in the
+       happy path; the template grid only surfaces inline when
+       detection confidence is low. -->
   <section class="lp-card step" id="step1">
     <div class="lp-card-head">
       <div class="lp-icon" aria-hidden="true">
@@ -1001,11 +1014,11 @@
           <line x1="12" y1="3" x2="12" y2="15"></line>
         </svg>
       </div>
-      <div class="lp-card-eyebrow">Drop</div>
+      <div class="lp-card-eyebrow">Drop &amp; download</div>
       <span class="lp-step-pill">Step 1</span>
     </div>
-    <h2 class="lp-card-title">Drop your export</h2>
-    <p class="lp-card-desc">Drag an <code>.xlsx</code> file onto the zone below, or click to choose. The template is detected automatically.</p>
+    <h2 class="lp-card-title">Drop your export, get an analysis</h2>
+    <p class="lp-card-desc">Drag an <code>.xlsx</code> file onto the zone below, or click to choose. The template is detected automatically and the workbook is ready to download as soon as the analysis finishes.</p>
 
     <label class="drop-zone" id="dropZone" for="fileInput">
       <input type="file" id="fileInput" accept=".xlsx,.xls" />
@@ -1017,29 +1030,14 @@
       <div class="file-meta-detect" id="fileMetaDetect"></div>
     </div>
     <div id="step1Status"></div>
-  </section>
 
-  <!-- ===== Card 3: Confirm + Download =====
-       Merges the old Step 2 (template confirmation) with the old
-       Step 3 (download button). The interactive preview is gone — it
-       didn't tell the analyst anything they couldn't get from opening
-       the workbook in Excel. -->
-  <section class="lp-card step locked" id="step2">
-    <div class="lp-card-head">
-      <div class="lp-icon" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M9 11l3 3L22 4"></path>
-          <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
-        </svg>
-      </div>
-      <div class="lp-card-eyebrow">Analyze &amp; download</div>
-      <span class="lp-step-pill">Step 2</span>
-    </div>
-    <h2 class="lp-card-title">Analyze and Download</h2>
-    <p class="lp-card-desc">We fingerprint your file by sheet name + column headers. If detection is wrong, pick the right template manually. When the template is confirmed, download the workbook.</p>
-
+    <!-- Detected-template pill (auto-confirmed in the happy path). -->
     <div id="templateConfirmed" style="display:none;"></div>
+    <!-- Template grid: only shown inline when detection confidence is
+         too low to auto-confirm. Clicking a card confirms and runs. -->
     <div id="templateGrid" class="template-grid" style="display:none;"></div>
+    <!-- Analysis status banner + download row appear once the analysis
+         has run. -->
     <div id="analysisStatus" class="analysis-status" style="display:none;"></div>
     <div id="downloadRow" class="button-row" style="display:none;">
       <button class="btn btn-primary" id="downloadBtn" onclick="App.download()">
@@ -10390,31 +10388,29 @@ const App = (() => {
   }
 
   function showTemplateGrid() {
-    $('#step2').classList.remove('locked');
+    // Inline within Step 1 now (the old Step 2 is gone). Only used as
+    // the escape hatch when detection confidence is too low to
+    // auto-confirm — selecting a card calls selectTemplate(t, true).
     $('#templateGrid').style.display = 'grid';
     $('#templateConfirmed').style.display = 'none';
   }
 
   function selectTemplate(template, confirmed) {
     state.selectedTemplate = template;
-    $('#step2').classList.remove('locked');
 
     if (confirmed) {
       $('#templateGrid').style.display = 'none';
       $('#templateConfirmed').style.display = 'flex';
       $('#templateConfirmed').className = 'template-detected';
+      // No "Change template" footgun — auto-detection wins. If you
+      // think the wrong template got picked, Reset and re-drop. (The
+      // low-confidence escape hatch shows the grid inline before any
+      // confirmation happens.)
       $('#templateConfirmed').innerHTML = `
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
         <span><strong>${template.name}</strong> &mdash; ${template.family}</span>
-        <button class="template-change" onclick="App.showTemplateGrid()">Change template &#9662;</button>
       `;
-      $('#step2').classList.add('done');
     }
-
-    // (The JDE DMAAI's preload loader stays visible regardless of the
-    // selected template — it's now a general-purpose DMAAI source
-    // alongside RR DMAAI's, feeding any downstream analysis that needs
-    // AAI lookup.)
 
     if (template.status === 'ready') {
       runAnalysis();
@@ -10668,8 +10664,6 @@ const App = (() => {
     state = { file: null, sourceWb: null, sourceSheet: null, selectedTemplate: null, detectionScores: null, data: null, findings: null };
     $('#fileMeta').style.display = 'none';
     $('#fileInput').value = '';
-    $('#step2').classList.add('locked');
-    $('#step2').classList.remove('done');
     $('#templateGrid').style.display = 'none';
     $('#templateConfirmed').style.display = 'none';
     const analysisStatus = $('#analysisStatus');
