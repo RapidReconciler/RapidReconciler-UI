@@ -7236,6 +7236,20 @@ const ItemLedgerTemplate = {
       cell.amt += r.extendedCost || 0;
     });
 
+    // Snap near-zero values (FP artifacts + cent-level rounding noise) to
+    // exactly zero so the matrix doesn't display "-$0.01" for what is
+    // really a rounding wobble across summed F4111 rows. Thresholds:
+    //   * qty: < 0.005 of a primary-UoM unit
+    //   * amt: < $0.015 (anything that displays as $0.00 or -$0.01 after
+    //     2dp rounding)
+    const snapQty = v => Math.abs(v) < 0.005 ? 0 : v;
+    const snapAmt = v => Math.abs(v) < 0.015 ? 0 : v;
+
+    // Aggregate snapped values at each level so the visible numbers add
+    // up arithmetically (i.e., the Grand total = sum of branch subtotals
+    // = sum of location cells). If we summed the raw values instead, a
+    // clamped -$0.01 would still leak into the Grand total even though
+    // the cell that contributed it displays as $0.00.
     const flat = [];
     let grandQty = 0, grandAmt = 0;
     Array.from(byCo.keys()).sort().forEach(co => {
@@ -7248,23 +7262,32 @@ const ItemLedgerTemplate = {
         let bpQty = 0, bpAmt = 0;
         locations.forEach(loc => {
           const cell = branchMap.get(loc);
-          flat.push({ company: co, branch: bp, location: loc, qty: cell.qty, amt: cell.amt, kind: 'data' });
-          bpQty += cell.qty;
-          bpAmt += cell.amt;
+          const qSnap = snapQty(cell.qty);
+          const aSnap = snapAmt(cell.amt);
+          flat.push({ company: co, branch: bp, location: loc, qty: qSnap, amt: aSnap, kind: 'data' });
+          bpQty += qSnap;
+          bpAmt += aSnap;
         });
+        const bpQtyS = snapQty(bpQty);
+        const bpAmtS = snapAmt(bpAmt);
         if (locations.length > 1) {
-          flat.push({ company: co, branch: bp, location: 'Subtotal', qty: bpQty, amt: bpAmt, kind: 'branchSubtotal' });
+          flat.push({ company: co, branch: bp, location: 'Subtotal', qty: bpQtyS, amt: bpAmtS, kind: 'branchSubtotal' });
         }
-        coQty += bpQty;
-        coAmt += bpAmt;
+        coQty += bpQtyS;
+        coAmt += bpAmtS;
       });
-      if (branches.length > 1) {
-        flat.push({ company: co, branch: 'Subtotal', location: '', qty: coQty, amt: coAmt, kind: 'companySubtotal' });
+      const coQtyS = snapQty(coQty);
+      const coAmtS = snapAmt(coAmt);
+      // Company-subtotal is only useful when there are multiple companies
+      // AND that company has multiple branches. Single-company runs would
+      // produce a row that just duplicates the Grand total below.
+      if (branches.length > 1 && byCo.size > 1) {
+        flat.push({ company: co, branch: 'Subtotal', location: '', qty: coQtyS, amt: coAmtS, kind: 'companySubtotal' });
       }
-      grandQty += coQty;
-      grandAmt += coAmt;
+      grandQty += coQtyS;
+      grandAmt += coAmtS;
     });
-    flat.push({ company: 'Grand total', branch: '', location: '', qty: grandQty, amt: grandAmt, kind: 'grand' });
+    flat.push({ company: 'Grand total', branch: '', location: '', qty: snapQty(grandQty), amt: snapAmt(grandAmt), kind: 'grand' });
     return flat;
   },
 
