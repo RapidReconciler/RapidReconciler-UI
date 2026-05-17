@@ -3039,11 +3039,11 @@ const DMAAIKnowledge = {
     '4174': 'Batch Cost Maintenance Expense Offset — Future Cost Update (P41052), credit side of 4172',
     '4182': 'Bulk Product Gain/Loss Inventory Offset',
     '4184': 'Bulk Product Gain/Loss Expense Offset — credit side of 4182',
-    '4220': 'Inventory Relief — COGS Credit. In ST/OT transfer flows, 4220 is repurposed as the in-transit clearing account on the shipping (ST) side — must match 4320 on the OT receiving side for clearing to net to zero.',
+    '4220': 'COGS / Inventory Relief. In standard sales orders 4220 is the COGS debit paired against 4240 (inventory credit). On ST transfer-order shipments 4220 is repurposed as "COGS — Branch Transfers" — still the debit half of a sales-side wash pair against 4240, but offsetting branch-A inventory rather than recognising real COGS. NOT the in-transit clearing account; that role belongs to 4245 on the ST side and 4320 on the OT side.',
     '4225': 'COGS Performance Liability (intermediate before COGS recognition)',
     '4230': 'Sales Revenue. In ST/OT transfers, 4230 is used as a wash account — revenue and A/R both net to zero so no real revenue is booked for an internal move.',
     '4240': 'Cost of Goods Sold',
-    '4245': 'A/R Wash Account for transfer-order shipments — paired with 4230 revenue wash; both net to zero on intercompany transfers',
+    '4245': 'Inventory in Transit DEBIT on ST transfer-order shipments. Labeled "A/R Trade" in F4095 (its role in regular Sales Orders) but for ST doc-type rows it is repurposed as the in-transit clearing debit. Per JDE convention the BU is hard-coded to a company-wide value so the in-transit account is consistent regardless of shipping branch. Must resolve to the same account as 4320 (OT receipt credit) for the in-transit clearing to net to zero across an ST/OT pair. On the revenue side of regular transfers 4245 still washes against 4230 to net zero.',
     '4310': 'Inventory on PO Receipt (OR)',
     '4335': 'Standard-Cost Variance on PO Receipt — fires when received cost differs from inventory cost; commonly paired with 4337 landed cost',
     '4337': 'Material Burden (freight, duty, etc. — always credit)',
@@ -7878,43 +7878,57 @@ const JdeDmaaisTemplate = {
 
     // ---- Pattern 7: Transfer clearing-account mismatch ----
     // ST/OT transfer orders post in two halves: ST shipment debits the
-    // Goods-in-Transit clearing account via AAI 4220, OT receipt
-    // credits it via AAI 4320. For the clearing to net to zero the
-    // two sides must resolve to the SAME GL account. When they don't,
-    // every transfer of that (co, gl, cost) leaves a residual balance
-    // on the clearing account — a notoriously hard reconciliation
-    // problem. We detect it directly from F4095.
+    // Inventory-in-Transit clearing account via AAI 4245, OT receipt
+    // credits it via AAI 4320. Per the JDE Distribution AAI docs and
+    // the JDEtips ST/OT transfer accounting article (Nov-Dec 2007):
     //
-    // We pin the ST clearing AAI at 4220 (some configs use 4124 or
-    // 4225 instead, but 4220 is the documented standard). For each
-    // (co, gl, cost) tuple that has BOTH a 4220 and a 4320 row, we
-    // resolve each via the hierarchy and compare effective accounts.
+    //   * 4245 is labeled "A/R Trade" in F4095 but for transfer-order
+    //     doc type (ST) it's repurposed as the Inventory-in-Transit
+    //     DEBIT. Customers configure it with a hard-coded business
+    //     unit (not flexed) so the in-transit account is company-wide.
+    //   * 4320 is labeled "Received Not Vouchered" but for OT it's the
+    //     Inventory-in-Transit CREDIT — the offset that clears the
+    //     debit posted by 4245 on the ST side.
+    //
+    // For clearing to net to zero across the full ST/OT cycle, both
+    // AAIs must resolve to the same GL account. When they don't, every
+    // transfer of that (co, gl, cost) leaves a residual balance on the
+    // clearing account — a notoriously hard reconciliation problem.
+    //
+    // The check iterates every (co, gl, cost) tuple where EITHER 4245
+    // or 4320 appears in F4095 (so wildcard-only configs are still
+    // covered), resolves both sides via the 4-tier hierarchy preferring
+    // doc type ST for 4245 and OT for 4320, and flags when the
+    // effective accounts differ.
     const transferClearing = [];
     {
-      const stByKey = new Map();
-      const otByKey = new Map();
+      const tuples = new Set();
       rows.forEach(r => {
-        const key = `${r.co}|${r.glClass}|${r.costType}`;
-        if (r.aaiNum === 4220 && !stByKey.has(key)) stByKey.set(key, r);
-        if (r.aaiNum === 4320 && !otByKey.has(key)) otByKey.set(key, r);
+        if (r.aaiNum === 4245 || r.aaiNum === 4320) {
+          tuples.add(`${r.co}|${r.glClass}|${r.costType}`);
+        }
       });
-      for (const [key, stRow] of stByKey) {
-        const otRow = otByKey.get(key);
-        if (!otRow) continue;
-        const stRes = this._resolveAAI(idx, 4220, stRow.co, stRow.orderType, stRow.docType, stRow.glClass, stRow.costType);
-        const otRes = this._resolveAAI(idx, 4320, otRow.co, otRow.orderType, otRow.docType, otRow.glClass, otRow.costType);
-        if (!stRes || !otRes) continue;
+      tuples.forEach(tuple => {
+        const [co, gl, cost] = tuple.split('|');
+        // Resolve 4245 preferring DT=ST (canonical transfer-order
+        // doc type); fall back to SO and then any DT row.
+        let stRes = this._resolveAAI(idx, 4245, co, '', 'ST', gl, cost)
+                 || this._resolveAAI(idx, 4245, co, '', 'SO', gl, cost)
+                 || this._resolveAAI(idx, 4245, co, '', '',   gl, cost);
+        let otRes = this._resolveAAI(idx, 4320, co, '', 'OT', gl, cost)
+                 || this._resolveAAI(idx, 4320, co, '', '',   gl, cost);
+        if (!stRes || !otRes) return;
         const stAcct = this._effectiveAccount(stRes);
         const otAcct = this._effectiveAccount(otRes);
         if (stAcct !== otAcct) {
           transferClearing.push({
-            co: stRow.co, glClass: stRow.glClass, costType: stRow.costType,
+            co, glClass: gl, costType: cost,
             stRow: stRes.rows[0], otRow: otRes.rows[0],
             stAcct, otAcct,
             stTier: stRes.tierLabel, otTier: otRes.tierLabel
           });
         }
-      }
+      });
     }
 
     // ---- Pattern 6: Unrecognized AAI series ----
@@ -8031,8 +8045,8 @@ const JdeDmaaisTemplate = {
     duplicates.forEach(d => d.rows.forEach(r => tagRow(r.rowNumber, 'Duplicate key')));
     redundantSpecific.forEach(r => tagRow(r.specific.rowNumber, 'Redundant vs wildcard'));
     transferClearing.forEach(t => {
-      tagRow(t.stRow.rowNumber, `Transfer clearing mismatch: 4220 → ${t.stAcct}; 4320 (row ${t.otRow.rowNumber}) → ${t.otAcct}`);
-      tagRow(t.otRow.rowNumber, `Transfer clearing mismatch: 4320 → ${t.otAcct}; 4220 (row ${t.stRow.rowNumber}) → ${t.stAcct}`);
+      tagRow(t.stRow.rowNumber, `Transfer clearing mismatch: 4245 → ${t.stAcct}; 4320 (row ${t.otRow.rowNumber}) → ${t.otAcct}`);
+      tagRow(t.otRow.rowNumber, `Transfer clearing mismatch: 4320 → ${t.otAcct}; 4245 (row ${t.stRow.rowNumber}) → ${t.stAcct}`);
     });
     unrecognizedSeries.forEach(s => s.rows.forEach(r => tagRow(r.rowNumber, `Unrecognized AAI series ${s.series}`)));
 
@@ -8087,10 +8101,10 @@ const JdeDmaaisTemplate = {
         priority: 2, rowCount: counts.transferClearing,
         issue: 'Transfer clearing',
         scopeShort: `${counts.transferClearing} tuple${counts.transferClearing === 1 ? '' : 's'}`,
-        detail: '4220 (ST clearing) and 4320 (OT clearing) resolve to different accounts',
-        scope: `${counts.transferClearing} (co, gl, cost) tuple${counts.transferClearing === 1 ? '' : 's'} where the ST-side clearing AAI (4220) and the OT-side clearing AAI (4320) resolve through the F4095 hierarchy to different GL accounts.`,
-        pattern: `Transfer orders post in two halves: the ST shipment side debits the Goods-in-Transit clearing account via AAI 4220, and the OT receipt side credits it via AAI 4320. For the clearing account to net to zero on a completed transfer, both AAIs must resolve to the same GL account. When they drift apart — usually because one side was updated and the other wasn't — every transfer leaves a residual on the clearing account. This is one of the hardest reconciliation issues to track down because the residual builds over time and the F0911 entries individually look correct.`,
-        resolution: `Step 1.  For each flagged tuple, review the 4220 and 4320 entries side by side in JDE (P40950). Confirm with the cost-accounting team which is the intended clearing account for ST/OT transfers in this company / GL class.\n\nStep 2.  Update the side that's wrong so both AAIs route to the same account.\n\nStep 3.  Once F4095 is corrected, future transfers will clear properly. Existing residual balances on the old clearing account need a manual JE to clean up.`,
+        detail: '4245 ST (in-transit debit) and 4320 OT (in-transit credit) resolve to different accounts',
+        scope: `${counts.transferClearing} (co, gl, cost) tuple${counts.transferClearing === 1 ? '' : 's'} where AAI 4245 (the Inventory-in-Transit DEBIT on ST shipments, despite being labeled "A/R Trade" in F4095) and AAI 4320 (the Inventory-in-Transit CREDIT on OT receipts, despite being labeled "Received Not Vouchered") resolve through the F4095 hierarchy to different GL accounts.`,
+        pattern: `Transfer orders post in two halves: the ST shipment side debits the Inventory-in-Transit account via AAI 4245 (the "A/R Trade" AAI is repurposed for transfers per JDE convention; the BU is hard-coded to a company-wide value so the in-transit account is the same regardless of which branch ships). The OT receipt side credits the same Inventory-in-Transit account via AAI 4320. For the clearing account to net to zero on a completed transfer, both AAIs must resolve to the same GL account. When they drift apart — usually because one side was updated and the other wasn't, or because one side's row is missing and the wildcard fallback resolves elsewhere — every transfer leaves a residual on the clearing account. This is one of the hardest reconciliation issues to track down because the residual builds over time and the F0911 entries individually look correct.`,
+        resolution: `Step 1.  For each flagged tuple, review the 4245 and 4320 entries side by side in JDE (P40950). Note that 4245's display name is "A/R Trade" — that label is misleading; for ST doc-type rows it points at the in-transit clearing account, not A/R. Confirm with the cost-accounting team which is the intended in-transit account for this company / GL class.\n\nStep 2.  Update the side that's wrong so both AAIs route to the same account. Pay attention to the 4-tier hierarchy: a specific row beats the wildcard, so if the fix is at the wildcard tier check whether any specific rows would still override it.\n\nStep 3.  Once F4095 is corrected, future transfers will clear properly. Existing residual balances on the old clearing account need a manual JE to clean up.`,
         rows: transferClearing
       });
     }
@@ -8259,6 +8273,12 @@ const JdeDmaaisTemplate = {
     });
     F.applyPageSetup(ws, row - 1);
 
+    // ---- Pattern Detail tab (one block per flagged pattern) ----
+    this._renderPatternDetailTab(workbook, data, findings, rowMap, data.sheetName);
+
+    // ---- Transaction Tracing tab (Sales + Inventory T-account flows) ----
+    this._renderTransactionTracingTab(workbook, data, findings);
+
     // ---- Source sheet (with highlights + RR Analyzer Note column J) ----
     SourceSheet.copy(sourceSheet, workbook, data.sheetName, {
       headerRow: data.headerRow,
@@ -8292,6 +8312,378 @@ const JdeDmaaisTemplate = {
       alignment: { horizontal: 'left', vertical: 'top', indent: 2, wrapText: true }
     });
     row++;
+    return row;
+  },
+
+  // ---- Pattern Detail tab ----
+  // One block per flagged pattern. Each block carries the
+  // pattern's what/why/recommendation as Excel-renderable
+  // sections, plus an evidence sub-table with hyperlinks back
+  // to the source sheet. Skipped entirely when the analyzer is
+  // clean (no findings).
+  _renderPatternDetailTab(workbook, data, findings, rowMap, sourceSheetName) {
+    const flagged = findings.findings.filter(f => f.type !== 'clean' && f.rowCount > 0);
+    if (flagged.length === 0) return;
+
+    const ws = workbook.addWorksheet('Pattern Detail', { views: [{ showGridLines: false, state: 'normal' }] });
+    F.standardColumnWidths(ws);
+
+    F.renderChrome(ws, {
+      headline: "JDE DMAAI's — Pattern Detail",
+      subline: `${findings.totalFindings} findings across ${flagged.length} pattern${flagged.length === 1 ? '' : 's'}  ·  what/why/recommendation per pattern`,
+      context: `Source  JDE F4095          ${Helpers.todayPretty()}          Patterns flagged  ${flagged.length}`
+    });
+
+    let row = 6;
+    flagged.forEach(f => {
+      row = this._renderPatternBlock(ws, row, f, sourceSheetName, rowMap);
+      ws.getRow(row).height = 14; row++;     // spacer
+    });
+
+    row = F.renderCautionAndFooter(ws, row, {
+      cautionText: 'Recommendations below are starting points, not final calls. Confirm every change with the cost / inventory accounting team. A single F4095 row update affects every transaction posted afterward for the matching company, doc type, and GL class.',
+      footerText: `Analysis produced by the RapidReconciler Export Analyzer  ·  ${Helpers.todayPretty()}`
+    });
+    F.applyPageSetup(ws, row - 1);
+  },
+
+  _renderPatternBlock(ws, startRow, f, sourceSheetName, rowMap) {
+    let row = startRow;
+    const colors = Priority.colors(f.priority);
+
+    // Priority-strip header bar
+    ws.getRow(row).height = 30;
+    F.writeMerged(ws, `A${row}:E${row}`, `[P${f.priority}]   ${f.title}`, {
+      font: { name: 'Arial', size: 14, bold: true, color: { argb: colors.text } },
+      fill: colors.fill,
+      alignment: { horizontal: 'left', vertical: 'middle', indent: 1 }
+    });
+    row++;
+
+    // Three labelled sections: WHAT / WHY / RECOMMENDATION
+    const section = (label, body) => {
+      ws.getRow(row).height = 22;
+      F.writeMerged(ws, `A${row}:E${row}`, label, {
+        font: { name: 'Arial', size: 11, bold: true, color: { argb: PALETTE.navyText } },
+        fill: PALETTE.lightBlue,
+        alignment: { horizontal: 'left', vertical: 'middle', indent: 1 }
+      });
+      row++;
+      const lines = F.wrapLines(body, 95);
+      ws.getRow(row).height = Math.min(360, Math.max(40, lines * 16 + 16));
+      F.writeMerged(ws, `A${row}:E${row}`, body, {
+        font: { name: 'Arial', size: 11, color: { argb: PALETTE.text } },
+        fill: PALETTE.white,
+        alignment: { horizontal: 'left', vertical: 'top', indent: 2, wrapText: true }
+      });
+      row++;
+    };
+
+    section('WHAT IT FOUND', f.scope || '');
+    section('WHY IT MATTERS', f.pattern || '');
+    section('RECOMMENDATION', f.resolution || '');
+
+    // Evidence sub-table — first up-to-8 rows from the finding,
+    // each linked back to its source-sheet row.
+    if (f.rows && f.rows.length > 0) {
+      ws.getRow(row).height = 22;
+      F.writeMerged(ws, `A${row}:E${row}`, `EVIDENCE  ·  first ${Math.min(8, f.rows.length)} of ${f.rows.length} ${f.rows.length === 1 ? 'entry' : 'entries'}`, {
+        font: { name: 'Arial', size: 11, bold: true, color: { argb: PALETTE.navyText } },
+        fill: PALETTE.lightBlue,
+        alignment: { horizontal: 'left', vertical: 'middle', indent: 1 }
+      });
+      row++;
+
+      // Header row for the evidence mini-table
+      ws.getRow(row).height = 20;
+      ['Source row', 'Co', 'OT', 'DT', 'GL Class · Account / Detail'].forEach((h, i) => {
+        const cell = ws.getCell(row, i + 1);
+        cell.value = h;
+        cell.font = { name: 'Arial', size: 10, bold: true, color: { argb: PALETTE.navyText } };
+        F.fillCell(cell, PALETTE.greyBody);
+        cell.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
+      });
+      row++;
+
+      // Each finding type has a different "shape" for its row list —
+      // normalize via this picker, then render up to 8 entries.
+      const pickRow = item => {
+        if (item.drRow)       return { src: item.drRow, extra: `${item.gl || '****'}  ·  same account on dr+cr: ${this._formatAccount(item.drRow)} (pair ${item.pair.dr}/${item.pair.cr})` };
+        if (item.stRow)       return { src: item.stRow, extra: `${item.glClass || '****'}  ·  4245→${item.stAcct}  vs  4320 (row ${rowMap.get(item.otRow.rowNumber) || item.otRow.rowNumber})→${item.otAcct}` };
+        if (item.existingRow) return { src: item.existingRow, extra: `${item.gl || '****'}  ·  missing AAI ${item.missingAAI}; existing side: ${this._formatAccount(item.existingRow)}` };
+        if (item.specific)    return { src: item.specific, extra: `${item.specific.glClass}  ·  redundant — same account as (co, ****) wildcard at row ${rowMap.get(item.wildcard.rowNumber) || item.wildcard.rowNumber}` };
+        if (item.rows && item.rows.length) {
+          if (item.series != null) {
+            // unrecognizedSeries shape
+            return { src: item.rows[0], extra: `series ${item.series}  ·  AAIs: ${item.distinctAAIs.join(', ')}  ·  ${item.rows.length} F4095 row${item.rows.length === 1 ? '' : 's'}` };
+          }
+          // duplicates shape: { key, rows: [...] }
+          return { src: item.rows[0], extra: `duplicate of ${item.rows.length - 1} other row${item.rows.length === 2 ? '' : 's'} on key ${item.key}` };
+        }
+        if (item.row)         return { src: item.row, extra: this._formatAccount(item.row) };
+        return null;
+      };
+
+      const evidenceRows = f.rows.slice(0, 8).map(pickRow).filter(Boolean);
+      evidenceRows.forEach((e, i) => {
+        const src = e.src;
+        const newRn = rowMap.get(src.rowNumber) || src.rowNumber;
+        const altFill = i % 2 === 0 ? PALETTE.white : PALETTE.greyBody;
+        ws.getRow(row).height = 20;
+
+        // A — hyperlinked "Row N" label
+        const aCell = ws.getCell(row, 1);
+        aCell.value = F.internalHyperlink(sourceSheetName, `A${newRn}`, `Row ${newRn}`);
+        aCell.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FF0563C1' }, underline: true };
+        F.fillCell(aCell, altFill);
+        aCell.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
+
+        // B–D — Co / OT / DT
+        [src.co || '', src.orderType || '', src.docType || ''].forEach((v, ci) => {
+          const cell = ws.getCell(row, ci + 2);
+          cell.value = v;
+          cell.font = { name: 'Arial', size: 10, color: { argb: PALETTE.text } };
+          F.fillCell(cell, altFill);
+          cell.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
+        });
+
+        // E — finding-specific detail
+        const eCell = ws.getCell(row, 5);
+        eCell.value = e.extra;
+        eCell.font = { name: 'Arial', size: 10, color: { argb: PALETTE.text } };
+        F.fillCell(eCell, altFill);
+        eCell.alignment = { horizontal: 'left', vertical: 'middle', indent: 1, wrapText: true };
+
+        row++;
+      });
+
+      if (f.rows.length > 8) {
+        ws.getRow(row).height = 18;
+        F.writeMerged(ws, `A${row}:E${row}`, `Showing first 8 of ${f.rows.length} — full list highlighted on the source sheet (column J)`, {
+          font: { name: 'Arial', size: 10, italic: true, color: { argb: PALETTE.text } },
+          fill: PALETTE.bgPanel || PALETTE.greyBody,
+          alignment: { horizontal: 'left', vertical: 'middle', indent: 2 }
+        });
+        row++;
+      }
+    }
+
+    return row;
+  },
+
+  // ---- Transaction Tracing tab ----
+  // For each (module, company, transaction type) in v1's scope
+  // (Sales + Inventory), look up each AAI in F4095 across all GL
+  // classes and render a T-account-style flow. AAIs that resolve
+  // to different accounts depending on GL class get an inline
+  // sub-list. AAIs not configured in F4095 are noted as such.
+  //
+  // v1 doesn't cover Purchasing or Manufacturing modules — those
+  // will be added in v2 once the format is validated.
+  _TRANSACTION_FLOWS: [
+    // ---- Sales module ----
+    { module: 'Sales', txn: 'SO', docTypes: ['SO'], label: 'Standard Sales Order (revenue-generating)', steps: [
+      { aai: 4220, side: 'Dr', desc: 'Cost of Goods Sold' },
+      { aai: 4240, side: 'Cr', desc: 'Inventory at shipping branch' },
+      { aai: 4245, side: 'Dr', desc: 'A/R Trade — real receivable from a paying customer' },
+      { aai: 4230, side: 'Cr', desc: 'Sales Revenue' }
+    ] },
+    { module: 'Sales', txn: 'ST', docTypes: ['ST'], label: 'Transfer Order Shipment  (intra-company — no real revenue)', steps: [
+      { aai: 4220, side: 'Dr', desc: 'COGS — Branch Transfers  (wash partner of 4240, NOT in-transit clearing)' },
+      { aai: 4240, side: 'Cr', desc: 'Inventory at Branch A  (wash partner of 4220)' },
+      { aai: 4245, side: 'Dr', desc: 'Inventory in Transit  (despite the "A/R Trade" label — must match 4320 OT on the receiving side)' }
+    ] },
+    { module: 'Sales', txn: 'ST_markup', docTypes: ['ST'], label: 'Transfer Order Shipment  WITH markup  (rare — A/R + A/P fire)', steps: [
+      { aai: 4220, side: 'Dr', desc: 'COGS — Branch Transfers' },
+      { aai: 4240, side: 'Cr', desc: 'Inventory at Branch A' },
+      { aai: 4245, side: 'Dr', desc: 'A/R Trade  (real receivable when markup is non-zero)' },
+      { aai: 4230, side: 'Cr', desc: 'Sales Revenue — markup amount' }
+    ] },
+    // ---- Inventory module ----
+    { module: 'Inventory', txn: 'IA_inc', docTypes: ['IA'], label: 'Inventory Adjustment — increase  (count higher than on-hand)', steps: [
+      { aai: 4122, side: 'Dr', desc: 'Inventory  (increase)' },
+      { aai: 4124, side: 'Cr', desc: 'Expense / COGS  (offset for the gained inventory)' }
+    ] },
+    { module: 'Inventory', txn: 'IA_dec', docTypes: ['IA'], label: 'Inventory Adjustment — decrease  (count lower than on-hand)', steps: [
+      { aai: 4122, side: 'Cr', desc: 'Inventory  (decrease)' },
+      { aai: 4124, side: 'Dr', desc: 'Expense / COGS  (writes off the missing inventory)' }
+    ] },
+    { module: 'Inventory', txn: 'II', docTypes: ['II'], label: 'Inventory Issue  (issue to consumption / scrap)', steps: [
+      { aai: 4122, side: 'Cr', desc: 'Inventory  (decrease)' },
+      { aai: 4124, side: 'Dr', desc: 'Expense / COGS  (offset)' }
+    ] },
+    { module: 'Inventory', txn: 'IT', docTypes: ['IT'], label: 'Inventory Transfer  (location-to-location within the same branch — net zero by design)', steps: [
+      { aai: 4122, side: 'Dr/Cr', desc: '4122 fires on BOTH sides of the transfer at the same account — debits the receiving location and credits the sending one. Net inventory impact is zero by design.' }
+    ] },
+    { module: 'Inventory', txn: 'IM', docTypes: ['IM'], label: 'Material Issue  (to a work order or other consuming process)', steps: [
+      { aai: 4122, side: 'Cr', desc: 'Inventory  (raw material leaving inventory)' },
+      { aai: 4124, side: 'Dr', desc: 'Expense / WIP  (offset)' }
+    ] },
+    { module: 'Inventory', txn: 'IB', docTypes: ['IB'], label: 'Standard Cost Revaluation  (R30837 WIP Revaluation, or batch cost roll)', steps: [
+      { aai: 4134, side: 'Dr', desc: 'Inventory cost-change debit' },
+      { aai: 4136, side: 'Cr', desc: 'Inventory cost-change credit  (P&L offset)' }
+    ] },
+    { module: 'Inventory', txn: 'IP', docTypes: ['IP','PI'], label: 'Physical Inventory Update  (R41413 Cycle Count, R41610 Tag Count)', steps: [
+      { aai: 4152, side: 'Dr/Cr', desc: 'Inventory  (direction depends on whether count was over or short vs on-hand)' },
+      { aai: 4154, side: 'Cr/Dr', desc: 'Expense / COGS  (offset)' },
+      { aai: 4126, side: '—', desc: 'Zero-balance inventory offset (fires only when count drives qty to 0 with dollars remaining)' },
+      { aai: 4128, side: '—', desc: 'Zero-balance expense offset' }
+    ] }
+  ],
+
+  _renderTransactionTracingTab(workbook, data, findings) {
+    const ws = workbook.addWorksheet('Transaction Tracing', { views: [{ showGridLines: false, state: 'normal' }] });
+    F.standardColumnWidths(ws);
+    // Wider column E so the GL-class branch list breathes.
+    ws.getColumn(5).width = 60;
+
+    F.renderChrome(ws, {
+      headline: "JDE DMAAI's — Transaction Tracing",
+      subline: `T-account flow per module / company / transaction type  ·  Sales + Inventory  ·  ${data.companies.length} compan${data.companies.length === 1 ? 'y' : 'ies'}`,
+      context: `Source  JDE F4095          ${Helpers.todayPretty()}          Modules covered  Sales, Inventory  (Purchasing + Manufacturing in v2)`
+    });
+
+    // Build the same hierarchy-aware index the classifier uses
+    const idx = this._buildIndex(data.rows);
+
+    // Group all distinct GL classes per company so we can iterate
+    // and resolve every AAI's per-GL-class account.
+    const glClassesByCo = new Map();
+    data.rows.forEach(r => {
+      if (!glClassesByCo.has(r.co)) glClassesByCo.set(r.co, new Set());
+      glClassesByCo.get(r.co).add(r.glClass);
+    });
+
+    let row = 6;
+    const modules = ['Sales', 'Inventory'];
+
+    modules.forEach(modName => {
+      // Module band
+      ws.getRow(row).height = 32;
+      F.writeMerged(ws, `A${row}:E${row}`, `${modName.toUpperCase()}  MODULE`, {
+        font: { name: 'Arial', size: 14, bold: true, color: { argb: 'FFFFFFFF' } },
+        fill: PALETTE.navy,
+        alignment: { horizontal: 'left', vertical: 'middle', indent: 2 }
+      });
+      row++;
+
+      const moduleFlows = this._TRANSACTION_FLOWS.filter(f => f.module === modName);
+
+      data.companies.forEach(co => {
+        // Company sub-header
+        ws.getRow(row).height = 22;
+        F.writeMerged(ws, `A${row}:E${row}`, `Company ${co}`, {
+          font: { name: 'Arial', size: 12, bold: true, color: { argb: PALETTE.navyText } },
+          fill: PALETTE.lightBlue,
+          alignment: { horizontal: 'left', vertical: 'middle', indent: 2 }
+        });
+        row++;
+
+        moduleFlows.forEach(flow => {
+          row = this._renderTracingFlow(ws, row, flow, co, glClassesByCo.get(co) || new Set(), idx);
+          ws.getRow(row).height = 8; row++;   // micro-spacer between flows
+        });
+
+        ws.getRow(row).height = 12; row++;    // gap between companies
+      });
+    });
+
+    row = F.renderCautionAndFooter(ws, row, {
+      cautionText: 'This tab reads F4095 only.  It shows where each AAI WOULD resolve given the current F4095 configuration; it does NOT validate that resolved GL accounts match the customer\'s chart of accounts or that the JDE program (R42800, P4312, etc.) actually fires each AAI in the expected order. Confirm intent with the customer\'s JDE administrator before changing anything.',
+      footerText: `Analysis produced by the RapidReconciler Export Analyzer  ·  ${Helpers.todayPretty()}`
+    });
+    F.applyPageSetup(ws, row - 1);
+  },
+
+  _renderTracingFlow(ws, startRow, flow, co, glClasses, idx) {
+    let row = startRow;
+
+    // Flow title (txn type + label)
+    ws.getRow(row).height = 22;
+    F.writeMerged(ws, `A${row}:E${row}`, `${flow.txn}  ·  ${flow.label}`, {
+      font: { name: 'Arial', size: 11, bold: true, color: { argb: PALETTE.navyText } },
+      fill: PALETTE.greyBody,
+      alignment: { horizontal: 'left', vertical: 'middle', indent: 2 }
+    });
+    row++;
+
+    // Column headers
+    ws.getRow(row).height = 20;
+    ['AAI', 'Side', 'Description', '', 'Resolved account(s)  ·  GL class branches'].forEach((h, i) => {
+      const cell = ws.getCell(row, i + 1);
+      cell.value = h;
+      cell.font = { name: 'Arial', size: 10, bold: true, color: { argb: PALETTE.navyText } };
+      F.fillCell(cell, PALETTE.bgPanel || PALETTE.lightBlue);
+      cell.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
+    });
+    row++;
+
+    flow.steps.forEach(step => {
+      // For each AAI + each doc type the flow covers, group the
+      // resolved accounts per GL class. List the distinct accounts
+      // and the GL classes that route there.
+      const accountToGls = new Map();   // account string → Set of GL classes (or "****" / "[no config]")
+      const dts = flow.docTypes && flow.docTypes.length ? flow.docTypes : [''];
+      // Include the wildcard "****" so customers using only wildcard
+      // fallbacks still show up.
+      const glClassList = glClasses.size ? [...glClasses, '****'] : ['****'];
+
+      glClassList.forEach(gl => {
+        dts.forEach(dt => {
+          const res = this._resolveAAI(idx, step.aai, co, '', dt, gl, '');
+          const acct = res ? this._formatAccount(res.rows[0]) : '[not configured]';
+          if (!accountToGls.has(acct)) accountToGls.set(acct, new Set());
+          accountToGls.get(acct).add(gl);
+        });
+      });
+
+      // Sort: configured accounts first, [not configured] last
+      const entries = Array.from(accountToGls.entries())
+        .sort(([a], [b]) => (a === '[not configured]' ? 1 : 0) - (b === '[not configured]' ? 1 : 0));
+
+      // Render multi-row block: first row carries AAI/side/desc,
+      // subsequent rows for additional account branches.
+      entries.forEach(([acct, gls], idx2) => {
+        ws.getRow(row).height = 18;
+        const altFill = idx2 % 2 === 0 ? PALETTE.white : PALETTE.greyBody;
+        const isFirst = idx2 === 0;
+
+        // A — AAI number
+        const aCell = ws.getCell(row, 1);
+        aCell.value = isFirst ? step.aai : '';
+        aCell.font = { name: 'Arial', size: 10, bold: isFirst, color: { argb: PALETTE.text } };
+        F.fillCell(aCell, altFill);
+        aCell.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
+
+        // B — Side (Dr / Cr / Dr/Cr / —)
+        const bCell = ws.getCell(row, 2);
+        bCell.value = isFirst ? step.side : '';
+        bCell.font = { name: 'Arial', size: 10, bold: isFirst, color: { argb: PALETTE.text } };
+        F.fillCell(bCell, altFill);
+        bCell.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
+
+        // C:D — Description (merged)
+        F.writeMerged(ws, `C${row}:D${row}`, isFirst ? step.desc : '', {
+          font: { name: 'Arial', size: 10, italic: !isFirst, color: { argb: PALETTE.text } },
+          fill: altFill,
+          alignment: { horizontal: 'left', vertical: 'middle', indent: 1, wrapText: true }
+        });
+
+        // E — Account · GL class branches
+        const sortedGls = Array.from(gls).sort();
+        const branchStr = sortedGls.length === glClasses.size + 1 || (sortedGls.length === 1 && sortedGls[0] === '****')
+          ? acct
+          : `${acct}   (${sortedGls.length} GL class${sortedGls.length === 1 ? '' : 'es'}: ${sortedGls.slice(0, 6).join(', ')}${sortedGls.length > 6 ? ', …' : ''})`;
+        const eCell = ws.getCell(row, 5);
+        eCell.value = branchStr;
+        eCell.font = { name: 'Arial', size: 10, color: { argb: acct === '[not configured]' ? '8B0000' : PALETTE.text } };
+        F.fillCell(eCell, altFill);
+        eCell.alignment = { horizontal: 'left', vertical: 'middle', indent: 1, wrapText: true };
+
+        row++;
+      });
+    });
+
     return row;
   }
 };
