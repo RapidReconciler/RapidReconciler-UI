@@ -461,6 +461,8 @@ This means the **true variance is larger than what RapidReconciler is showing**.
 - CardexAmount and LedgerAmount are on separate rows
 - Variance equals the amount on each row
 
+> **Analyzer output:** for account-mismatch docs the analyzer's headline is the **misposted amount** (the dollars that need to move via JE), not the document's net variance — the net is $0 because the cardex and GL amounts agree in absolute value. The HOW card walks the analyst through a five-step plan: (1) name the inventory-side DMAAI for the doc type — IM → 3110, IA → 4124, SO/RI → 4240, etc.; (2) check that AAI's row in the DMAAs section for a "Mismatch" flag; (3) post a Dr expected / Cr misposted JE for the misposted dollars; (4) correct the AAI in JDE so future docs route correctly; (5) escalate if the DMAAs section is clean (likely a manual JE coded the account directly).
+
 **Common causes:**
 
 | Cause | How to Identify | Resolution |
@@ -476,6 +478,8 @@ This means the **true variance is larger than what RapidReconciler is showing**.
 **Symptoms:**
 - Multiple rows in RR Summary with different Period values
 - Amounts match but are in different fiscal periods
+
+> **Analyzer output:** the analyzer now treats period mismatch as its own pattern (distinct from 5.4 Account Mismatch). The two share a shape ("multiple RR Summary rows") but lead to different fixes: account mismatch needs an account-to-account JE and an AAI correction; period mismatch needs a period-to-period JE and a GL Date processing-option correction. The analyzer routes account-mismatch first when both differ on the same doc, since the AAI fix is the more impactful root cause.
 
 **Common causes:**
 
