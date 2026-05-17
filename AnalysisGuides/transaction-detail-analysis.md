@@ -288,6 +288,60 @@ All DMAAI entries for each GL class code in the transaction. The first row is al
 
 > **Critical:** Any entry in the Comment column of the DMAAs section indicates a configuration problem. "Mismatch - object" means the AAI object account does not match the model table. "Mismatch - BU" means the business unit differs. "Net Zero" means the debit and credit AAIs point to the same account, producing no net GL impact.
 
+### 3.10 Cross-Section Interpretation Rules
+
+The Transaction Detail sections are not independent. Each carries an expectation about what should appear in the others, and the variance you're investigating is almost always a violation of one of these expectations. Read them as a small set of rules; the existing patterns in Section 5 are specializations of these rules.
+
+**Rule 1 -- LineTy on the Header Comp / Orders section predicts F4111 presence.**
+
+Every order line in the Header Comp section (both purchase and sales orders) carries a **LineTy** code (S, N, J, F, T, M, W, B, D, O, R, or a customer-defined variant). The **Inventory Interface** flag on the line-type constant (`F40205`) determines whether the line writes to the item ledger:
+
+| Inventory Interface | F4111 expectation | Common line types |
+|---|---|---|
+| **Y** | At least one F4111 row should exist for the line (often several, one per lot picked) | S (stock), W (work order), B (bulk) |
+| **N** | No F4111 row should exist for the line | N (non-stock), J (job cost), F (freight), T (text), M (misc charge), D (direct ship), O (outside ops), R (recurring) |
+
+Violations of this rule are diagnostic:
+- A line with Inventory Interface = Y and **no F4111** is either an unshipped backorder (NxtSts < ship-confirm), an unwritten cardex (rare), or -- if NxtSts &ge; ship-confirm -- a partial / missing-row case worth investigating (Pattern 5.13 is the closed-order variant).
+- A line with Inventory Interface = N and **an F4111 record** is unusual and warrants explanation; it may indicate a misconfigured line type or a posting that bypassed the standard interface.
+
+See `RRUniversity/inventory-line-types.html` for the full LineTy reference, including which flags each code carries.
+
+**Rule 2 -- The F4111 row's Account column is the expected GL account.**
+
+Each F4111 row carries an **Account** value -- that's the GL account where RapidReconciler expects the corresponding F0911 inventory entry to land, based on the DMAAI configuration that fired for the transaction. When the F0911 Inv Acct entry lands on a **different account**, the variance is an **account mismatch** (Section 5.4). The mismatch is read directly off the two sections without any DMAAI configuration lookup -- F4111 has the expected account, F0911 has the actual posted account.
+
+Common causes when these disagree:
+- A DMAAI configuration that's been changed mid-period -- older cardex rows reference the prior account; newer GL entries reference the new account
+- A non-stock line on the same order routing through an inventory AAI (mixed-line-type pattern, Section 5.7)
+- A manual journal entry that miscoded an inventory amount to a different account (Section 5.2)
+
+**Rule 3 -- The F4111 row's Period and the matching F0911 row's Period should match.**
+
+If F4111 and F0911 hit the same account but in **different fiscal periods**, the variance is a **period mismatch** (Section 5.5). This is a different root cause from an account mismatch -- the AAI is correctly configured, but the GL post landed in a period other than the cardex period. Typical causes:
+- Sales Update (R42800) or Manufacturing Accounting (R31802A) ran with a GL date processing option set to "use system date" rather than the F4111 transaction date -- every batch posts to the GL period the program runs in, not the period the inventory moved
+- Backdated F0911 entries (manual JE) coded to inventory
+- Period close timing -- cardex written in the open period; GL post deferred into the next period
+
+Account mismatch and period mismatch are mutually exclusive: an account mismatch is about *where* the GL landed; a period mismatch is about *when*. Both produce multiple rows in the RR Summary, so the way to tell them apart is to look at the rows directly -- same account but different periods is the period case; different accounts is the account case.
+
+**Rule 4 -- F4111 row count can exceed F0911 row count.**
+
+RapidReconciler matches on the totals after normalization, not on row counts. JDE's GL-posting programs frequently summarize multiple cardex rows into a single F0911 entry to save record count in the GL:
+- R31802A (Manufacturing Accounting) summarizes by GL account across a batch of work orders -- one F0911 entry per (account, batch) regardless of how many components were issued
+- R42800 (Sales Update) can summarize by document or by GL account depending on its processing options
+- R09870 (General Post) can also consolidate inventory postings
+
+So seeing 8 F4111 rows and 2 F0911 rows on the same doc is normal, not a bug. The opposite -- fewer F4111 rows than F0911 entries on the same account, batch, and period -- is suspicious (suggests a GL post with no cardex backing, Pattern 5.2, or a cardex shortage like Pattern 5.13).
+
+**Rule 5 -- The RR Summary normalizes both sides to one row per (account, period).**
+
+The F4111 Data and F0911 Inv Acct sections both contain raw rows; the **RR Summary** rolls each side up to one row per unique (Account, Period) combination and lays them side-by-side. That's why:
+- A clean reconciliation produces **one** RR Summary row with CardexAmount and LedgerAmount both populated
+- An account or period mismatch produces **two or more** RR Summary rows -- one with only CardexAmount, one with only LedgerAmount, on different accounts or different periods
+
+The RR Summary is the section to read first. The F4111 and F0911 sections back up the diagnosis once the Summary points you at the right rows.
+
 ---
 
 ## Section 4: How RapidReconciler Matches Transactions
@@ -639,6 +693,58 @@ If Step 2 finds the GL entry belongs only to this work order and the excess cann
 
 ---
 
+### 5.13 Post-Ship-Confirm Order Edit (Sales Order)
+
+**Symptoms:**
+- Document type is sales-related (RI, SI, ST shipment) on an SO / ST / SD / RM / CR / CO order
+- Order line(s) in the Orders section show **NxtSts ≥ 540** (ship-confirm or later)
+- F4111 cardex total is materially less than F0911 inventory total (cardex short)
+- F0911 inventory total **matches** the order math (`Σ qty × unit cost` across stock lines) within rounding
+- The document variance equals `(order qty − cardex qty) × unit cost`
+- Often only **one F4111 row per item** despite the order line showing a higher current qty
+- DMAAs section is **clean** -- no configuration flags
+
+**What is happening:**
+
+Not every Transaction Detail discrepancy is a DMAAI configuration problem. Some are process / access-control violations.
+
+When a sales order is **ship-confirmed**, JD Edwards writes the F4111 cardex records immediately from the warehouse's pick and sets the **Inventory In Hand flag** (`F4211.IVI = 1`) on the affected lines. The cardex is now locked: it represents what physically left the warehouse.
+
+The GL postings, however, don't happen until **R42800 (Sales Update)** runs later -- often hours or a day later. R42800 reads the **current** F4211 line qty at the moment it runs and computes the GL postings from `qty × unit cost`.
+
+If someone edits the order line in P4210 / P42101 (Sales Order Entry) **between ship-confirm and R42800**, the cardex is unchanged (already locked) but R42800 uses the new qty. The GL therefore reflects more units than actually shipped. The cardex-to-GL variance equals the qty delta times the unit cost.
+
+This is supposed to be impossible:
+- **Order Activity Rules** should treat the post-confirm status as terminal-editable for the order type
+- The **Inventory In Hand flag** should block P4210 / P42101 line edits at the row level
+- **Role permissions** should restrict P4210 / P42101 edit access for users who don't legitimately need post-confirm corrections
+
+When all three controls are correctly in place, a user simply cannot perform the edit that causes this variance. When the variance is observed, one of the three controls is misconfigured or has been bypassed.
+
+| Cause | How to Identify | Resolution |
+|---|---|---|
+| User edited a sales-order line between ship-confirm and Sales Update | NxtSts ≥ 540 on the Orders line; F4111 qty is smaller than the current order qty; cardex × order-qty math equals the GL total; variance = (order qty − cardex qty) × unit cost | (1) Confirm what physically shipped (warehouse pick ticket). (2) If cardex is correct: post a JE reversing the GL excess — Dr inventory, Cr COGS for the variance amount. (3) If GL is correct: write the missing F4111 rows via a JDE-side cardex repost; do NOT post a JE in that case. (4) Fix Order Activity Rules so the post-confirm status is terminal-editable, confirm `F4211.IVI` is being set at ship-confirm, and restrict P4210 / P42101 edit access for users who don't need it. (5) Sweep F4211 for other lines with last-modified timestamp > ship-confirm timestamp to find sibling cases. |
+
+**Critical distinction from Section 5.11 (GL-Excess):**
+
+Section 5.11's GL-excess is typically a manufacturing GL summarization (R31802A) or a miscoded JE on an inventory account. The fingerprint there is "GL exceeds cardex for a specific GL-class + batch combination."
+
+Section 5.13's variance has the same shape (`GL > cardex`) but a different cause -- the Orders section will show stock lines past ship-confirm whose qty equals the GL-implied qty, not the F4111-recorded qty. If the Orders section is present and the order qty matches the GL math, **5.13 is the diagnosis, not 5.11**. The corrective action is a process / access-control fix, not a cost-method or AAI fix.
+
+**Prevention checklist (for the customer to action with their JDE Distribution team):**
+
+| Control | Where it lives | What it does |
+|---|---|---|
+| **Order Activity Rules** | P40204 (Order Activity Rules) | Defines which statuses allow which transactions. Set the post-ship-confirm status (typically 540 → 560) as the terminal editable status for the affected doc type. |
+| **Inventory In Hand flag** | `F4211.IVI` (set automatically at ship-confirm if Activity Rules are correct) | When set to 1, P4210 / P42101 refuse line edits at the row level — second line of defense if Activity Rules permit edits. |
+| **Role permissions** | Security Workbench (P00950) on P4210 / P42101 | Remove edit access for users whose role doesn't legitimately require post-confirm corrections. For the few roles that do, route edits through an approval workflow (manager sign-off). |
+
+If a correction is genuinely needed after ship-confirm, the supported path in JDE is: invoice first (which lifts the Inventory In Hand lock), create a credit order to reverse, then re-enter the corrected order. Direct line edits should be the exception, not the routine.
+
+**Customer-facing reference:** `RRUniversity/inventory-line-types.html` carries the full LineTy reference (S / N / J / F / T / M / W / B / D / O / R), notes which line types write F4111 at ship-confirm, and frames this pattern in customer-readable terms.
+
+---
+
 ## Section 6: DMAAI Analysis
 
 The DMAAs section at the bottom of the Transaction Detail report is critical for diagnosing account-level mismatches. Work through it in the following order:
@@ -733,6 +839,7 @@ Before reviewing anything else, scan the top of the report for an **Unassigned**
 - When the RR Summary shows a partial cardex-only pattern, compare the F0911 entries for each GL class and batch individually against the corresponding F4111 lines. A GL class total that is smaller than its F4111 counterpart points to the specific account and batch where the missing line item will be found. Before concluding the GL entry is absent, query F0911 across **all** accounts for the document and batch -- the entry may have posted to an unexpected account rather than being missing entirely.
 - **For IC, IM, and IH document types:** The GL document number in F0911 is almost always different from the cardex document number -- this is normal. Before concluding a GL entry is missing or erroneous, query F0911 for the GL document number across all order numbers to determine whether it is a summarized manufacturing posting covering multiple work orders. See Section 4 (Manufacturing Accounting GL Summarization) and Section 5.12.
 - When the RR Summary shows a GL-excess pattern, compare the F0911 and F4111 totals for each GL class and batch individually to isolate which combination is the source. See Sections 4.11 and 4.12 for the investigation procedure.
+- **When the Orders section is present and shows stock lines with NxtSts ≥ 540:** compare the order line qty against the F4111 qty for the same item / line. If the order line qty is larger than what F4111 captured AND the F0911 inventory total matches `Σ qty × unit cost` from the Orders section, the order was edited after ship-confirm. See Section 5.13. The corrective action is a process / access-control fix, not a configuration fix.
 
 **Step 6 -- Review the Receipts Section**
 
@@ -761,6 +868,7 @@ Based on the analysis above, classify the variance using Section 5 of this guide
 - Post the unposted batch
 - Correct the DMAAI configuration and document the impact
 - Add missing GL class to model table 4152
+- Tighten Order Activity Rules and / or role permissions to prevent post-ship-confirm order edits (Section 5.13)
 - Suspend the order in RapidReconciler if the variance is a known exception (e.g., confirmed cross-work-order GL summarization)
 
 **Step 10 -- Document in RapidReconciler**

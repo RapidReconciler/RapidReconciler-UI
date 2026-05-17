@@ -3850,6 +3850,38 @@ const SystemContext = (function () {
     return state;
   }
 
+  /* Parallel import for the JDE F4095 path. Accepts either a raw F4095
+     export (Database Browser dump of P964001) or a previously-analyzed
+     JDE DMAAI's workbook (which carries the same data on its "JDE Data"
+     tab). JdeDmaaisTemplate.parse already finds the right sheet by
+     header signature in both cases.
+
+     Translates the F4095 row shape into the SystemContext row shape via
+     JdeDmaaisTemplate._toSystemContextRows so lookupAAI works
+     transparently. reportType is set to 'jde_f4095' so the preload UI
+     can suppress the "RR DMAAI's" pill when the data came from a JDE
+     source (avoiding the misleading "both pills lit" state). */
+  async function importFromJdeWorkbook(file) {
+    if (!file) throw new Error('SystemContext.importFromJdeWorkbook: file is required');
+    const buffer = await file.arrayBuffer();
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(buffer);
+    const parsed = JdeDmaaisTemplate.parse(wb);
+    const rows = JdeDmaaisTemplate._toSystemContextRows(parsed.rows);
+    state = {
+      rows,
+      companies:      parsed.companies,
+      tables:         Array.from(new Set(rows.map(r => r.tablenumber).filter(Boolean))).sort(),
+      docTypes:       Array.from(new Set(rows.map(r => r.doctype).filter(Boolean))).sort(),
+      glClasses:      Array.from(new Set(rows.map(r => r.glclass).filter(Boolean))).sort(),
+      reportType:     'jde_f4095',
+      loadedAt:       new Date().toISOString(),
+      sourceFileName: file.name,
+    };
+    save();
+    return state;
+  }
+
   function clear() {
     state = null;
     persistDisabled = false;
@@ -3865,6 +3897,7 @@ const SystemContext = (function () {
       sourceFileName: state.sourceFileName,
       rowCount:       state.rows.length,
       companies:      state.companies,
+      reportType:     state.reportType,
     };
   }
 
@@ -3896,7 +3929,7 @@ const SystemContext = (function () {
 
   load();  // hydrate on script load
 
-  return { importFromWorkbook, clear, isLoaded, metadata, lookupAAI };
+  return { importFromWorkbook, importFromJdeWorkbook, clear, isLoaded, metadata, lookupAAI };
 })();
 
 /* ====================================================================
@@ -5124,6 +5157,14 @@ const TransactionDetailTemplate = {
         ordernum: Helpers.str(get(r, 'ordernum')),
         ot: Helpers.str(get(r, 'ot')),
         pc: Helpers.str(get(r, 'pc')),
+        // Per-line fields populated on F4111 rows (and order-section rows
+        // for some exports). Used by Pattern 5.13 (post-confirm order edit)
+        // to compare cardex qty against order qty per line / item.
+        line:     Helpers.str(get(r, 'line')),
+        branch:   Helpers.str(get(r, 'branch')),
+        item:     Helpers.str(get(r, 'item')),
+        qty:      Helpers.num(get(r, 'qty')),
+        unitcost: Helpers.num(get(r, 'unitcost')),
         cardexAmt: Helpers.num(get(r, 'cardexamount')),
         ledgerAmt: Helpers.num(get(r, 'ledgeramount')),
         comment: Helpers.str(get(r, 'comment'))
@@ -5368,6 +5409,68 @@ const TransactionDetailTemplate = {
       && nonStockLines.length >= 1
       && lineTypesOnDoc.size >= 2;
 
+    // Post-ship-confirm order edit fingerprint.
+    //
+    // F4111 (the cardex) is written immediately at ship-confirm from the
+    // warehouse's pick. R42800 (Sales Update) runs later and books the GL
+    // from the CURRENT F4211 line quantity. When someone modifies the
+    // order line in between, the cardex stays frozen at the confirmed
+    // qty while the GL gets the post-edit qty — producing a variance
+    // equal to (post-edit qty - confirmed qty) × unit cost per line.
+    //
+    // Documented as Pattern 5.13 in AnalysisGuides/transaction-detail-analysis.md.
+    //
+    // Fingerprint requires the Orders section (so we can see post-edit
+    // qty) AND a sales-family order type (so we know R42800 is the
+    // GL-posting program). We then check three signals together:
+    //
+    //   1. The order's stock lines are past ship-confirm (NxtSts >= 540
+    //      in JDE's status progression — 540 = ship-confirm, 560 =
+    //      inventory-relieved, 600 = invoiced, 999 = closed).
+    //   2. The GL inventory total matches what the order math predicts
+    //      (Σ qty × unitcost across stock lines, within rounding). This
+    //      is the "GL trusted the order" signal.
+    //   3. The cardex total is materially less than the GL — the
+    //      "cardex is short" signal. The variance equals the qty delta
+    //      × unit cost.
+    //
+    // Gated tightly because the same shape can also arise from a partial-
+    // shipment that genuinely intends two F4111 writes (one at confirm,
+    // one after a backorder fills) where R42800 hasn't fully posted yet.
+    // The NxtSts >= 540 check rules out the in-flight case; the
+    // ledger-matches-order check rules out the not-yet-posted case.
+    const SALES_ORDER_TYPES = /^(SO|ST|SD|RM|CR|CO)$/i;
+    const stockOrdersForDoc = ordersForThisDoc
+      .filter(o => !o.linety || o.linety === 'S');
+    const shipConfirmedStockOrders = stockOrdersForDoc.filter(o => {
+      const sts = parseInt(o.nxtsts || '0', 10);
+      return sts >= 540;
+    });
+    const orderExpectedDollars = shipConfirmedStockOrders.reduce(
+      (sum, o) => sum + Math.abs(o.qty || 0) * Math.abs(o.unitcost || 0),
+      0
+    );
+    const orderQtyTotal = shipConfirmedStockOrders.reduce(
+      (sum, o) => sum + Math.abs(o.qty || 0), 0
+    );
+    const cardexQtyTotal = data.f4111Rows.reduce(
+      (sum, r) => sum + Math.abs(r.qty || 0), 0
+    );
+    const isPostConfirmOrderEdit = (
+      shipConfirmedStockOrders.length >= 1 &&
+      data.ot && SALES_ORDER_TYPES.test(data.ot) &&
+      orderExpectedDollars > 0.01 &&
+      // Ledger matches the post-edit order math (within 5% for rounding).
+      Math.abs(Math.abs(ledger) - orderExpectedDollars) < Math.max(0.05 * orderExpectedDollars, 0.05) &&
+      // Cardex is materially short of the ledger (more than 2% gap).
+      Math.abs(cardex) < Math.abs(ledger) * 0.98 &&
+      Math.abs(cardex) >= 0.01 &&
+      // Qty actually decreased between confirm and the current order
+      // line state (rules out cost-only edits — those are a different
+      // pattern). cardexQtyTotal < orderQtyTotal by a non-trivial amount.
+      cardexQtyTotal < orderQtyTotal - 0.001
+    );
+
     // Pattern classification
     let pattern, patternLabel, patternExplanation;
     // Pattern 5.6 enrichment: if the loaded DMAAI integrity report tells us
@@ -5382,6 +5485,11 @@ const TransactionDetailTemplate = {
     } else if (isLineTypeMix) {
       pattern = '5.7'; patternLabel = 'Mixed line types on a return doc (DMAAI routes both through the same AAI)';
       patternExplanation = this._lineTypeMixExplanation(data, stockLines, nonStockLines);
+    } else if (isPostConfirmOrderEdit) {
+      pattern = '5.13'; patternLabel = 'Order line edited between ship-confirm and Sales Update';
+      patternExplanation = this._postConfirmOrderEditExplanation(data, shipConfirmedStockOrders, {
+        orderExpectedDollars, orderQtyTotal, cardexQtyTotal
+      });
     } else if (isNetZeroPair) {
       pattern = '5.5'; patternLabel = 'Net-zero F0911 pair (DMAAI complement misrouted)';
       // Pick the most specific pair we know about: explicit comment in
@@ -5471,6 +5579,38 @@ const TransactionDetailTemplate = {
       }
       for (const n of nonStockLines) {
         evidence.push({ severity: 'Root cause', label: `Order line ${n.line || '?'} (non-stock, LineTy ${n.linety})  →  Row ${n.rowNumber}`, description: `Doc ${n.doc} · OrdType ${n.ordtype} · qty ${n.qty}${n.comment ? ' · ' + n.comment.trim() : ''}\nNon-stock line — no F4111 record, dollars-only. Sharing the order type with the stock line above sends both through the same DMAAI route.`, sourceRow: n.rowNumber });
+      }
+    } else if (pattern === '5.13') {
+      // Surface each shipped stock order line paired with its cardex
+      // counterpart so the qty delta is visible row-by-row. Matching is
+      // by item (one item may have multiple F4111 rows for lot splits;
+      // we aggregate qty across them).
+      for (const o of shipConfirmedStockOrders) {
+        const f4111Matches = data.f4111Rows.filter(f => o.item && f.item === o.item);
+        const confirmedQty = f4111Matches.reduce((sum, f) => sum + Math.abs(f.qty || 0), 0);
+        const orderQty = Math.abs(o.qty || 0);
+        const unit = Math.abs(o.unitcost || 0);
+        const deltaQty = orderQty - confirmedQty;
+        const deltaDollars = deltaQty * unit;
+        const itemTag = o.item ? ` · ${o.item}` : '';
+        const stsTag = o.nxtsts ? ` · NxtSts ${o.nxtsts}` : '';
+        evidence.push({
+          severity: 'Root cause',
+          label: `Order line ${o.line || '?'}${itemTag}  →  Row ${o.rowNumber}`,
+          description:
+            `Order qty ${orderQty} @ ${Helpers.money(unit)}${stsTag}\n` +
+            `Cardex captured qty ${confirmedQty} (${f4111Matches.length} F4111 row${f4111Matches.length === 1 ? '' : 's'})\n` +
+            `Delta: +${deltaQty} EA × ${Helpers.money(unit)} = ${Helpers.money(deltaDollars)} of GL inventory drawdown with no matching cardex movement.`,
+          sourceRow: o.rowNumber
+        });
+        for (const f of f4111Matches) {
+          evidence.push({
+            severity: 'Related',
+            label: `F4111 cardex line ${f.line || '?'}${f.item ? ' · ' + f.item : ''}  →  Row ${f.rowNumber}`,
+            description: `qty ${f.qty} @ ${Helpers.money(Math.abs(f.unitcost || 0))} = ${Helpers.money(f.cardexAmt)} · written at ship-confirm — locked.`,
+            sourceRow: f.rowNumber
+          });
+        }
       }
     } else if (pattern === '5.2' && data.f0911Inv[0]) {
       evidence.push({ severity: 'Root cause', label: `${data.f0911Inv[0].bt} doc ${data.f0911Inv[0].doc}  →  Row ${data.f0911Inv[0].rowNumber}`, description: `GL entry on account ${data.f0911Inv[0].account} · ${Helpers.money(data.f0911Inv[0].ledgerAmt)}\n${data.f0911Inv[0].comment || 'No cardex counterpart — the variance is entirely on this row'}`, sourceRow: data.f0911Inv[0].rowNumber });
@@ -5594,6 +5734,9 @@ const TransactionDetailTemplate = {
     if (pattern === '5.7') {
       return this._lineTypeMixResolution(data);
     }
+    if (pattern === '5.13') {
+      return this._postConfirmOrderEditResolution(data, findings);
+    }
     return `Step 1.  Compare F4111 and F0911 totals at the GL class + batch level individually to isolate which combination is the source of the variance.\n\nStep 2.  For IM / IC / IH documents, query F0911 for the GL document number across all order numbers — R31802A summarizes GL entries by account, so a single GL entry may cover multiple work orders.\n\nStep 3.  If the GL entry legitimately belongs only to this document, query F0911 for batch type JE or IH entries against the same account for the period — a miscoded manual journal entry may be the source.\n\nStep 4.  If the variance is confirmed as a cross-work-order summarization, suspend the record in RapidReconciler with a note.  Otherwise post a reversing journal entry.`;
   },
 
@@ -5608,6 +5751,32 @@ const TransactionDetailTemplate = {
 
   _lineTypeMixResolution(data) {
     return `Do NOT post the unposted batch as-is via R09801. That would push the misrouted dollars-only lines into GL and compound the cleanup at close.\n\nStep 1.  Identify which Order section lines are stock (LineTy S — these are the legitimate inventory returns and post correctly) and which are non-stock (LineTy is anything else — these are the misrouted dollars-only credits). The Evidence list above flags both groups with their source rows.\n\nStep 2.  Interim fix for this document: post a manual journal entry that re-routes the non-stock line amounts off the inventory account and onto the correct credit / variance account that cost-accounting has designated for dollars-only adjustments. Confirm the account with your cost-accounting team before posting.\n\nStep 3.  Systemic fix (recommended, prevents the issue going forward): in JDE, define separate order types — one for stock returns, one for dollars-only credits / adjustments. Update the order-entry workflow so each line type lands on the appropriate order type. DMAAI then routes each correctly without manual intervention at close.\n\nStep 4.  Once the systemic fix is in place, audit any open RI / RM / CR / RE / SR documents to see if they need the same re-routing treatment. Future docs entered after the order-type split will not hit this issue.\n\nStep 5.  Refresh RapidReconciler and re-analyze. The variance on this document should clear once the JE in Step 2 is posted.`;
+  },
+
+  // Pattern 5.13 — narrative built from the per-line qty delta.
+  _postConfirmOrderEditExplanation(data, shipConfirmedStockOrders, totals) {
+    const { orderExpectedDollars, orderQtyTotal, cardexQtyTotal } = totals;
+    const qtyDelta = orderQtyTotal - cardexQtyTotal;
+    const dollarDelta = orderExpectedDollars - Math.abs(data.f4111Tot);
+    const lineCount = shipConfirmedStockOrders.length;
+    const linesPhrase = lineCount === 1 ? '1 stock line' : `${lineCount} stock lines`;
+    // Build a per-line breakdown the reader can scan
+    const breakdown = shipConfirmedStockOrders.map(o => {
+      const f = data.f4111Rows.filter(f => o.item && f.item === o.item);
+      const confirmed = f.reduce((sum, r) => sum + Math.abs(r.qty || 0), 0);
+      const orderQty  = Math.abs(o.qty || 0);
+      const unit      = Math.abs(o.unitcost || 0);
+      const d         = (orderQty - confirmed) * unit;
+      return `  Line ${o.line || '?'}${o.item ? '  (' + o.item + ')' : ''}: cardex captured qty ${confirmed} at ship-confirm; order line currently shows qty ${orderQty}. Delta = ${Helpers.money(d)} of GL inventory drawdown with no cardex backing.`;
+    }).join('\n');
+    return `F4111 cardex was written at ship-confirm for ${linesPhrase} on this doc. Total qty captured by cardex: ${cardexQtyTotal} EA for ${Helpers.money(Math.abs(data.f4111Tot))}. Total qty currently on the order: ${orderQtyTotal} EA for ${Helpers.money(orderExpectedDollars)}. R42800 (Sales Update) ran later and booked the GL inventory account at the order's current qty — ${Helpers.money(Math.abs(data.f0911InvTot))}, which matches the order math, not the cardex.\n\nThe gap of ${qtyDelta} EA (${Helpers.money(dollarDelta)}) means the order line qty was edited between ship-confirm and Sales Update. Once ship-confirm fires, F4111 records and the Inventory In Hand flag on F4211 are written immediately — the cardex is locked. Any subsequent edit to the line affects only the GL posting, producing exactly this kind of variance.\n\nPer-line breakdown:\n${breakdown}\n\nThis is a process / access-control issue, not a DMAAI configuration issue. The cardex is the truth of what physically shipped; the GL has the post-edit qty. JDE Order Activity Rules should treat ship-confirm as the terminal editable status on this order type, and the Inventory In Hand flag should block line edits after that point.`;
+  },
+
+  _postConfirmOrderEditResolution(data, findings) {
+    const invAcct = (data.f0911Inv[0] && data.f0911Inv[0].account) || data.account || 'the inventory account';
+    const variance = Math.abs(findings.variance);
+    const varianceStr = Helpers.money(variance);
+    return `Step 1.  Confirm what physically shipped. Pull the warehouse pick ticket or shipment confirmation paperwork for doc ${data.doc}. The cardex (F4111) reflects what the warehouse said left the building at ship-confirm; the GL reflects the post-edit order qty. Whichever matches the physical reality is the truth, and the other side needs correcting.\n\nStep 2.  If the cardex is correct (the most common case — the post-confirm edit was unauthorized): post a reversing journal entry to bring the GL into line with cardex.\n   Dr  ${invAcct}  ${varianceStr}  (reverse the over-credit)\n   Cr  COGS / Sales Cost  ${varianceStr}  (reverse the over-debit on the COGS side)\n   The exact COGS account is the one AAI 4220 resolves to for this company / GL class. Confirm in JDE before posting.\n\nStep 3.  If the GL is correct (the post-edit qty actually shipped after the original confirm — e.g. a follow-on partial fill that was added to the order): the cardex is missing rows. Use a JDE-side cardex repost (R41544 or a manual F4111 insert via a trusted tool) to write the missing inventory movements. Do NOT post a JE in this case — you'd double-count the inventory drawdown.\n\nStep 4.  Prevent recurrence. Cardex-vs-GL variances on closed sales orders are usually unauthorized post-confirm edits. Address it in JDE configuration:\n   (a)  Order Activity Rules — set the post-ship-confirm status (typically 540 → 560) as the terminal editable status for this doc type's activity ruleset. Edits past that status are blocked at the rule level.\n   (b)  Inventory In Hand flag (F4211.IVI) — confirm it's being set to 1 at ship-confirm. When set, P4210 / P42101 refuse line edits at the row level. This is the second line of defense if Activity Rules permit edits.\n   (c)  Role restrictions — remove P4210 / P42101 edit access for users whose role doesn't legitimately need post-confirm corrections. For the few roles that do, route edits through a workflow that requires manager approval.\n\nStep 5.  Sweep for the same pattern. The same root cause is likely affecting other closed orders. Query F4211 for lines with NxtSts ≥ 540 where the line qty changed AFTER ship-confirm (compare against F42199 history if available, or filter by last-modified timestamp > shipment-confirm timestamp). Each match is a candidate for the same correction. The Evidence list on this report gives you the columns and accounts to write the sweep query against.\n\nStep 6.  Refresh RapidReconciler and re-analyze. The variance on this document should clear once Step 2 (or Step 3) is posted. Steps 4 and 5 prevent the next occurrence.`;
   }
 };
 Templates.register(TransactionDetailTemplate);
@@ -7933,6 +8102,44 @@ const JdeDmaaisTemplate = {
     };
   },
 
+  // Translate parsed F4095 rows (this template's native shape) into the
+  // row shape SystemContext.lookupAAI expects, so downstream templates
+  // that query SystemContext (Transaction Detail's Pattern 5.6
+  // manufacturing-variance lookup, etc.) can resolve a JDE AAI to its
+  // configured account just as if the user had loaded an RR DMAAI
+  // Integrity Report. Called by SystemContext.importFromJdeWorkbook on
+  // the JDE preload path.
+  //
+  // Field mapping:
+  //   aaiNum    → tablenumber    (stringified; lookup does .startsWith
+  //                               so 3240 still matches a query for '3240')
+  //   co        → companynumber
+  //   docType   → doctype
+  //   glClass   → glclass        (lookupAAI already handles '****' wildcard)
+  //   bu.obj.sub → aaiaccount    (JDE long-account form; empty trailing
+  //                               segments dropped)
+  _toSystemContextRows(rows) {
+    return rows.map(r => {
+      const bu  = r.branchPlant || '';
+      const obj = r.objAcct     || '';
+      const sub = r.sub         || '';
+      const aaiaccount = [bu, obj, sub].filter(Boolean).join('.');
+      return {
+        rowNumber:     r.rowNumber,
+        companynumber: String(r.co || ''),
+        tablenumber:   String(r.aaiNum),
+        doctype:       r.docType  || '',
+        glclass:       r.glClass  || '',
+        aaiaccount,
+        longaccount:   aaiaccount,
+        // Raw F4095 components preserved for callers that want them
+        bu, object: obj, sub,
+        costtype:  r.costType  || '',
+        ordertype: r.orderType || ''
+      };
+    });
+  },
+
   // Known debit/credit complement pairs sourced from the Oracle JDE
   // Distribution AAI docs — used by Patterns 1 and 2.
   //
@@ -10175,8 +10382,13 @@ const App = (() => {
     const errorEl   = $('#preloadError');
     if (errorEl) { errorEl.style.display = 'none'; errorEl.textContent = ''; }
 
-    const rrMd  = (typeof SystemContext !== 'undefined') ? SystemContext.metadata() : null;
+    const sysMd = (typeof SystemContext !== 'undefined') ? SystemContext.metadata() : null;
     const jdeMd = (typeof PriorWorkbook !== 'undefined')  ? PriorWorkbook.metadata() : null;
+    // A JDE preload populates SystemContext too (reportType 'jde_f4095'),
+    // so the RR pill should only light when SystemContext was sourced from
+    // an actual RR Integrity Report, not when it's just the F4095 mirror.
+    const rrMd = sysMd && sysMd.reportType !== 'jde_f4095' ? sysMd : null;
+    const jdeF4095Md = sysMd && sysMd.reportType === 'jde_f4095' ? sysMd : null;
 
     // Pills always reflect their respective store state.
     if (rrPill) {
@@ -10190,25 +10402,32 @@ const App = (() => {
     }
     if (jdePill) {
       if (jdeMd) {
+        const f4095Suffix = jdeF4095Md
+          ? ` · ${jdeF4095Md.rowCount} F4095 rows feeding AAI lookups`
+          : ' · F4095 lookups unavailable (JDE Data tab missing)';
         jdePill.dataset.state = 'on';
-        jdePill.title = `JDE DMAAI's loaded · ${jdeMd.itemCount} worklist item${jdeMd.itemCount === 1 ? '' : 's'} · loaded ${_relTime(jdeMd.loadedAt)}`;
+        jdePill.title = `JDE DMAAI's loaded · ${jdeMd.itemCount} worklist item${jdeMd.itemCount === 1 ? '' : 's'}${f4095Suffix} · loaded ${_relTime(jdeMd.loadedAt)}`;
       } else {
         jdePill.dataset.state = 'off';
         jdePill.title = "JDE DMAAI's (previously analyzed) not loaded";
       }
     }
 
-    // Single drop-zone / loaded toggle.
-    if (rrMd) {
+    // Single drop-zone / loaded toggle. JDE wins the display when both
+    // stores are populated from the same JDE source (the common case).
+    if (jdeMd) {
+      if (dropZone) dropZone.style.display = 'none';
+      if (loaded)   loaded.style.display = 'flex';
+      if (loadedName) loadedName.textContent = `${jdeMd.sourceFileName}  —  detected as JDE DMAAI's`;
+      const f4095Bit = jdeF4095Md
+        ? ` · ${jdeF4095Md.rowCount} F4095 rows for AAI lookups`
+        : '';
+      if (loadedMeta) loadedMeta.textContent = `${jdeMd.itemCount} worklist item${jdeMd.itemCount === 1 ? '' : 's'} from prior run${f4095Bit} · loaded ${_relTime(jdeMd.loadedAt)}`;
+    } else if (rrMd) {
       if (dropZone) dropZone.style.display = 'none';
       if (loaded)   loaded.style.display = 'flex';
       if (loadedName) loadedName.textContent = `${rrMd.sourceFileName}  —  detected as RR DMAAI's`;
       if (loadedMeta) loadedMeta.textContent = `${rrMd.rowCount} rows · ${rrMd.companies.length} ${rrMd.companies.length === 1 ? 'company' : 'companies'} · loaded ${_relTime(rrMd.loadedAt)}`;
-    } else if (jdeMd) {
-      if (dropZone) dropZone.style.display = 'none';
-      if (loaded)   loaded.style.display = 'flex';
-      if (loadedName) loadedName.textContent = `${jdeMd.sourceFileName}  —  detected as JDE DMAAI's`;
-      if (loadedMeta) loadedMeta.textContent = `${jdeMd.itemCount} worklist item${jdeMd.itemCount === 1 ? '' : 's'} from prior run · loaded ${_relTime(jdeMd.loadedAt)}`;
     } else {
       if (dropZone) dropZone.style.display = '';
       if (loaded)   loaded.style.display = 'none';
@@ -10272,8 +10491,23 @@ const App = (() => {
 
       try {
         if (detected === 'jde') {
+          // JDE workbooks carry BOTH a prior worklist (Analysis tab,
+          // for Answer / Decision / Status carryover) and the full
+          // F4095 dump (JDE Data tab, for downstream AAI lookups). Load
+          // both so Transaction Detail's Pattern 5.6 et al. resolve
+          // AAIs against the customer's actual F4095 — not generic
+          // placeholder text.
           await PriorWorkbook.importFromWorkbook(file);
-          SystemContext.clear();
+          try {
+            await SystemContext.importFromJdeWorkbook(file);
+          } catch (sysErr) {
+            // The Analysis tab parse already succeeded, so the JDE
+            // preload is "loaded" enough for answer carryover. Only
+            // the F4095 ingestion failed — surface it but don't undo
+            // the worklist import.
+            console.warn('SystemContext.importFromJdeWorkbook failed; F4095 lookups will fall back to generic placeholders', sysErr);
+            SystemContext.clear();
+          }
         } else if (detected === 'rr') {
           await SystemContext.importFromWorkbook(file);
           PriorWorkbook.clear();
