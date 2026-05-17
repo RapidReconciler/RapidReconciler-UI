@@ -425,11 +425,16 @@ default). For belt-and-suspenders on a chore commit, also add
   off accepted: one extra merge step at the end vs. the noise of many
   per-step commits in main's history and in the release-notes page.
 
-- **Hold commits during a working session if the user signals they want
-  to batch.** When the user opens with "several tasks lined up" or asks
-  to "avoid a large number of commits," stage edits without committing
-  until you hit a natural breakpoint, then ask before pushing. (Saved
-  to memory as `feedback_batched_commits.md`.)
+- **Hold commits by default; batch into logical chunks.** Don't
+  commit after every small edit, and don't proactively offer to
+  commit when a chunk wraps. Accumulate changes in the worktree
+  until the owner explicitly says "commit." The only exception is
+  when the working tree is genuinely getting unwieldy (many files
+  touched across unrelated concerns, or the diff is too large to
+  describe in a coherent commit message) — at that point, surface
+  the situation and propose a checkpoint. Routine sequences of
+  edits don't need permission to keep going; the owner reads the
+  diff at commit time, not after every edit.
 
 - **When the owner says "commit," run the full commit-to-sync flow
   end-to-end — don't pause to ask whether to push.** "Commit" means:
@@ -442,6 +447,22 @@ default). For belt-and-suspenders on a chore commit, also add
   to ask — the owner considers the full sequence one action. Use the
   full path `/c/Program Files/GitHub CLI/gh.exe` since `gh` isn't on
   the PATH the Bash tool sees.
+
+- **Don't pause to ask permission for routine actions.** The owner
+  approves every tool invocation (always-allow or allow-once) and
+  never denies — so conversational prompts like "should I run X?" /
+  "want me to do Y?" / "ready to proceed?" are friction, not
+  safety. Run the action and report the result. The only times to
+  stop and confirm are: (1) genuinely destructive ops the
+  system-prompt safety section calls out (force-push to main,
+  schema-altering DB commands, deleting unrelated work-in-progress),
+  (2) scope-changing decisions where the design choice belongs to
+  the owner (which of three approaches to implement, whether to
+  refactor adjacent code), or (3) when a previous attempt was
+  rejected and you need direction on what to try instead. Routine
+  workflow steps — re-running a script with new params, reading a
+  file, navigating a preview, regenerating a fixture — never
+  warrant a confirmation prompt.
 
 - **After every PR merge, auto-pull origin/main into the owner's main
   clone — no "say synced" handshake.** The worktree shares its `.git/`

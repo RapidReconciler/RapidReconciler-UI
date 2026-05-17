@@ -1297,29 +1297,42 @@ const F = {
     ws.getRow(5).height = 10;
   },
 
-  /* Variance card — priority strip + body */
-  renderVarianceCard(ws, startRow, { priority, varianceNumber, varianceSub, rationale }) {
-    const c = Priority.colors(priority);
+  /* Variance card — header strip + body.
+     Pass priority=null to suppress the "Priority X — Y" label and use
+     a neutral navy strip instead. Used by Transaction Detail, where
+     the priority bucketing has been retired in favor of just the
+     dollar amount + pattern label. */
+  renderVarianceCard(ws, startRow, { priority, varianceNumber, varianceSub, rationale, stripLabel }) {
+    const hidePriority = priority == null;
+    const c = hidePriority
+      ? { fill: 'FF1F2D4A', text: 'FFFFFFFF' }   // neutral navy strip / white text
+      : Priority.colors(priority);
 
-    // Row N — priority strip
+    // Row N — header strip
     const stripRow = startRow;
     ws.getRow(stripRow).height = 20;
-    F.writeMerged(ws, `A${stripRow}:E${stripRow}`, `VARIANCE  (Priority ${priority} — ${Priority.actionLabel(priority)})`.toUpperCase(), {
+    const stripText = hidePriority
+      ? (stripLabel || 'VARIANCE').toString().toUpperCase()
+      : `VARIANCE  (Priority ${priority} — ${Priority.actionLabel(priority)})`.toUpperCase();
+    F.writeMerged(ws, `A${stripRow}:E${stripRow}`, stripText, {
       font: { name: 'Arial', size: 13, bold: true, color: { argb: c.text } },
       fill: c.fill,
       alignment: { horizontal: 'left', vertical: 'middle', indent: 1 }
     });
 
     // Row N+1 — body. Variance number A:B merged left, rationale C:E merged right.
+    // Body uses navy on white (not the strip's color scheme) so the
+    // numbers + rationale stay readable regardless of strip palette.
+    const bodyTextColor = 'FF1F2D4A';
     const bodyRow = startRow + 1;
     ws.getRow(bodyRow).height = 100;
     const numberValue = varianceSub ? `${varianceNumber}\n${varianceSub}` : varianceNumber;
     F.writeMerged(ws, `A${bodyRow}:B${bodyRow}`, numberValue, {
-      font: { name: 'Arial', size: varianceSub ? 24 : 28, bold: true, color: { argb: c.text } },
+      font: { name: 'Arial', size: varianceSub ? 24 : 28, bold: true, color: { argb: hidePriority ? bodyTextColor : c.text } },
       alignment: { horizontal: 'center', vertical: 'middle', wrapText: true }
     });
     F.writeMerged(ws, `C${bodyRow}:E${bodyRow}`, rationale, {
-      font: { name: 'Arial', size: 12, italic: true, color: { argb: c.text } },
+      font: { name: 'Arial', size: 12, italic: true, color: { argb: hidePriority ? bodyTextColor : c.text } },
       alignment: { horizontal: 'left', vertical: 'middle', indent: 1, wrapText: true }
     });
 
@@ -3916,20 +3929,45 @@ const SystemContext = (function () {
      Returns the first matching parsed row (see DMAAITemplate.parse for
      row shape) or null. Callers that need a deterministic specific row
      should pass enough of (docType, glClass) to disambiguate. */
-  function lookupAAI({ company, table, docType, glClass } = {}) {
+  // Strip leading zeros from JDE company numbers so the lookup matches
+  // regardless of whether the caller padded (e.g. "00010") or not
+  // ("10"). The F4095 export normally stores them unpadded; the
+  // RCardexLedgerCompare2 table pads to 5 chars. Both forms should
+  // resolve to the same row.
+  const _normCo = c => String(c || '').trim().replace(/^0+/, '') || '0';
+
+  function lookupAAI({ company, table, docType, glClass, orderType, costType } = {}) {
     if (!state || !company || !table) return null;
+    const targetCo = _normCo(company);
     return state.rows.find(r =>
-      r.companynumber === company &&
+      _normCo(r.companynumber) === targetCo &&
       typeof r.tablenumber === 'string' &&
       r.tablenumber.startsWith(table) &&
-      (!docType || r.doctype === docType) &&
-      (!glClass || r.glclass === glClass || r.glclass === '****')
+      (!docType   || r.doctype   === docType) &&
+      (!glClass   || r.glclass   === glClass || r.glclass === '****') &&
+      (!orderType || r.ordertype === orderType || r.ordertype === '') &&
+      (!costType  || r.costtype  === costType  || r.costtype  === '')
     ) || null;
+  }
+
+  /* Reverse lookup — find every F4095 row that resolves to a given
+     account. Used by Pattern 5.4 to figure out whether a "misposted"
+     account is actually configured *somewhere* in the F4095 (under a
+     different GL class / doc type / order type) — that distinguishes
+     "DMAAI was overridden at post time" (account isn't in F4095 at
+     all for this customer) from "DMAAI was reconfigured after the
+     doc posted" (account IS in F4095, just under a different routing).
+
+     Returns an array of matching rows (may be empty). */
+  function rowsByAccount(account) {
+    if (!state || !account) return [];
+    const norm = String(account).trim();
+    return state.rows.filter(r => r.aaiaccount === norm || r.longaccount === norm);
   }
 
   load();  // hydrate on script load
 
-  return { importFromWorkbook, importFromJdeWorkbook, clear, isLoaded, metadata, lookupAAI };
+  return { importFromWorkbook, importFromJdeWorkbook, clear, isLoaded, metadata, lookupAAI, rowsByAccount };
 })();
 
 /* ====================================================================
@@ -5749,16 +5787,33 @@ const TransactionDetailTemplate = {
     // Safe date stringification — empty inlineStr cells can return objects
     // that throw on `new Date(...).toISOString()`. Always degrade to '?'.
     const safeDate = v => {
-      if (!v) return '?';
+      if (!v) return null;
       try {
         const d = v instanceof Date ? v : new Date(v);
-        if (isNaN(d.getTime())) return '?';
+        if (isNaN(d.getTime())) return null;
         return d.toISOString().slice(0, 10);
-      } catch { return '?'; }
+      } catch { return null; }
     };
-    const periodStr = Helpers.str(data.period) || '?';
-    const accountStr = Helpers.str(data.account) || '?';
-    const context = `Company  ${data.company || '?'}          GL Date  ${safeDate(data.docHeader && data.docHeader.gldate)}          Period  ${periodStr}          Account  ${accountStr}`;
+    // The Doc Header row often has NULL gldate / period (the sproc /
+    // export populates them on the F4111 and F0911 rows but not the
+    // header). Fall back to the F0911 Inv row, then the F4111 row,
+    // then '?'. Same for period.
+    const firstF0911   = data.f0911Inv[0]   || null;
+    const firstF4111   = data.f4111Rows[0]  || null;
+    const docHeaderRow = data.docHeader     || null;
+    const glDateStr =
+      safeDate(docHeaderRow && docHeaderRow.gldate) ||
+      safeDate(firstF0911   && firstF0911.gldate)   ||
+      safeDate(firstF4111   && firstF4111.gldate)   ||
+      '?';
+    const periodStr =
+      (docHeaderRow && Helpers.str(docHeaderRow.period)) ||
+      (firstF0911   && Helpers.str(firstF0911.period))   ||
+      (firstF4111   && Helpers.str(firstF4111.period))   ||
+      Helpers.str(data.period) ||
+      '?';
+    const accountStr = Helpers.str(data.account) || (firstF4111 && Helpers.str(firstF4111.account)) || '?';
+    const context = `Company  ${data.company || '?'}          GL Date  ${glDateStr}          Period  ${periodStr}          Account  ${accountStr}`;
 
     F.renderChrome(ws, {
       headline: `Transaction Detail — Document ${data.doc} (${data.dt}) — Order ${data.ordernum} (${data.ot})`,
@@ -5766,21 +5821,22 @@ const TransactionDetailTemplate = {
     });
 
     let row = F.renderDisclaimer(ws, 6);
-    // For Pattern 5.4 (account mismatch) the "variance" we display IS
-    // the misposted amount, so the rationale label reads cleaner as
-    // "Misposted X vs document amount Y" instead of "Variance X vs
-    // document amount Y" (which would be confusing because the
-    // document's net variance is $0).
+    // Priority bucketing is retired on Transaction Detail — analyst
+    // judgement, not a sliding scale, decides what needs immediate
+    // attention. The card shows the dollar amount + the pattern name
+    // and lets the WHAT / WHY / HOW carry the rest. The strip uses a
+    // neutral navy band (priority colors are gone with the labels).
     const isAcctMismatch = findings.pattern === '5.4';
     const headlineLabel = isAcctMismatch ? 'Misposted' : 'Variance';
     const docAmt = isAcctMismatch
       ? Math.max(Math.abs(findings.cardex), Math.abs(findings.ledger), findings.variance)
       : Math.max(Math.abs(findings.cardex), Math.abs(findings.ledger));
-    const rationale = `Pattern:  ${findings.patternLabel}\n\n${headlineLabel} ${Helpers.money(Math.abs(findings.variance))} vs document amount ${Helpers.money(docAmt)} = ${Math.round(findings.ratio * 100)}%  →  Priority ${findings.priority}`;
+    const rationale = `Pattern:  ${findings.patternLabel}\n\n${headlineLabel} ${Helpers.money(Math.abs(findings.variance))} vs document amount ${Helpers.money(docAmt)} = ${Math.round(findings.ratio * 100)}%`;
     row = F.renderVarianceCard(ws, row, {
-      priority: findings.priority,
-      // For 5.4, the headline number is the (positive) misposted
-      // amount — no signed +/- prefix.
+      priority: null,                   // suppress the "Priority X — Y" chrome
+      stripLabel: isAcctMismatch ? 'ACCOUNT MISMATCH' : 'VARIANCE',
+      // For 5.4 the headline number is the (positive) misposted amount —
+      // no signed +/- prefix.
       varianceNumber: isAcctMismatch
         ? Helpers.money(Math.abs(findings.variance))
         : Helpers.money(findings.variance, true),
@@ -5957,29 +6013,91 @@ const TransactionDetailTemplate = {
     const posted   = m.postedAcct   || '[posted account from F0911]';
     const amt      = Helpers.money(m.mispostedAmt || 0);
 
-    // Step 1 — name the AAI that should have fired
-    const article = /^[AEIOU]/i.test(dtRaw) ? 'an' : 'a';
-    let step1;
-    if (aaiInfo) {
-      step1 = `Step 1.  This is ${article} ${dtRaw} document. For ${dtRaw}, the inventory side of the GL post comes through DMAAI ${aaiInfo.aai} (${aaiInfo.label}) — ${aaiInfo.note}. That's the AAI to inspect.`;
-    } else {
-      step1 = `Step 1.  Identify which DMAAI fires for ${data.dt || 'this document type'}'s inventory side. Look at the DMAAs section near the bottom of this workbook — the row whose resolved account matches ${expected} is the one that drove the cardex. The same AAI should be driving the GL post; if the GL landed on ${posted} instead, the AAI is misconfigured for this customer.`;
+    // Pull the doc's full lookup key from the parsed sections.
+    const docCompany   = (data.company || '').trim();
+    const docOrderType = (data.ot || (data.docHeader && data.docHeader.ot) || '').trim();
+    const f4111        = data.f4111Rows[0] || null;
+    const docGlClass   = (f4111 && f4111.glclass) || '';
+
+    // If SystemContext (preloaded F4095) is loaded AND we know the
+    // inventory AAI for this doc type, we can answer two questions
+    // the analyst would otherwise have to chase down by hand:
+    //   1. Does the F4095 say this exact (company, AAI, OT, DT, GL
+    //      class) routing resolves to the cardex's expected account?
+    //   2. Is the misposted account configured *anywhere* in F4095
+    //      under a different routing? If it is, it's a real account
+    //      in this customer's chart — strong hint that the misroute
+    //      is an override or a stale-config issue rather than a typo.
+    let sysExpected = null;
+    let sysPostedConfigs = [];
+    if (aaiInfo && typeof SystemContext !== 'undefined' && SystemContext.isLoaded()) {
+      sysExpected = SystemContext.lookupAAI({
+        company:   docCompany,
+        table:     aaiInfo.aai,
+        docType:   dtRaw,
+        glClass:   docGlClass,
+        orderType: docOrderType
+      });
+      sysPostedConfigs = SystemContext.rowsByAccount(posted);
     }
 
-    // Step 2 — check the preloaded DMAAIs / DMAAs section
-    const aaiNumStr = aaiInfo ? aaiInfo.aai : 'the relevant AAI';
-    const step2 = `Step 2.  Find that AAI's row in the DMAAs section near the bottom of this workbook (look for "${aaiNumStr}" in the DMAAI Table column) and check the Comment column for "Mismatch - object", "Mismatch - BU", or a similar flag. That comment is the smoking gun — it tells you the AAI is pointing at ${posted} when the model table says it should point at ${expected}.`;
+    // ---- Step 1: state the comparison ----
+    const article = /^[AEIOU]/i.test(dtRaw) ? 'an' : 'a';
+    const docKey = [
+      `Company ${docCompany || '?'}`,
+      docOrderType && `order type ${docOrderType}`,
+      docGlClass   && `GL class ${docGlClass}`
+    ].filter(Boolean).join(', ');
+    let step1 = aaiInfo
+      ? `Step 1.  This is ${article} ${dtRaw} document — ${docKey}. For ${dtRaw}, the inventory side of the GL post comes through DMAAI ${aaiInfo.aai} (${aaiInfo.label}) — ${aaiInfo.note}.`
+      : `Step 1.  ${docKey}. Identify which DMAAI fires for ${data.dt || 'this document type'}'s inventory side — the row in the DMAAs section whose resolved account matches ${expected} is the one that drove the cardex.`;
+    if (sysExpected) {
+      step1 += `\n\nThe preloaded F4095 confirms: AAI ${aaiInfo.aai} for this exact key resolves to ${sysExpected.aaiaccount}, which matches what the cardex (F4111) used. The GL (F0911), however, landed on ${posted} — so the cardex routed correctly, and the GL did not.`;
+    } else if (aaiInfo && typeof SystemContext !== 'undefined' && SystemContext.isLoaded()) {
+      step1 += `\n\nThe preloaded F4095 has no specific row for that exact key, so the cardex's expected account (${expected}, from F4111) is the authoritative reference. The GL (F0911) landed on ${posted} instead.`;
+    }
 
-    // Step 3 — immediate JE
+    // ---- Step 2: the two real scenarios ----
+    let step2 = `Step 2.  There are only two ways the GL could have landed on ${posted} instead of ${expected}:\n  (a)  The DMAAI was different when this doc posted, and was later reconfigured to its current state.\n  (b)  The DMAAI was overridden at posting time — a manual journal entry coded the inventory account directly, or a posting program with an override processing option redirected it.`;
+    if (sysPostedConfigs.length > 0 && aaiInfo) {
+      // F4095 typically has multiple rows per (AAI, GLClass, OT, DT)
+      // routing differing only on cost type or other secondary keys.
+      // Dedupe down to unique tuples so the routing list doesn't
+      // repeat the same line N times.
+      const seen = new Set();
+      const uniq = [];
+      for (const r of sysPostedConfigs) {
+        const key = [r.tablenumber, r.glclass, r.ordertype, r.doctype].join('|');
+        if (seen.has(key)) continue;
+        seen.add(key);
+        uniq.push(r);
+      }
+      const head = uniq.slice(0, 3).map(r => {
+        const parts = [];
+        if (r.tablenumber) parts.push('AAI ' + r.tablenumber);
+        if (r.glclass)     parts.push('GL class ' + r.glclass);
+        if (r.ordertype)   parts.push('OT ' + r.ordertype);
+        if (r.doctype)     parts.push('DT ' + r.doctype);
+        return parts.join(' / ');
+      }).join('; ');
+      const moreCount = uniq.length - Math.min(3, uniq.length);
+      const more = moreCount > 0 ? `, and ${moreCount} more routing${moreCount === 1 ? '' : 's'}` : '';
+      step2 += `\n\nWorth noting: ${posted} IS configured in the preloaded F4095, but under different routing (${head}${more}). It's a real account in this customer's chart — just not the one that should have caught ${article} ${dtRaw} document with this routing key.`;
+    } else if (aaiInfo && typeof SystemContext !== 'undefined' && SystemContext.isLoaded()) {
+      step2 += `\n\nNote: ${posted} doesn't appear anywhere in the preloaded F4095. That makes scenario (b) — manual override at posting time — the more likely of the two; (a) would require the prior config to have pointed at this account, which the current F4095 has no record of.`;
+    }
+
+    // ---- Step 3: immediate JE ----
     const step3 = `Step 3 (immediate fix).  Post a journal entry to move the misposted dollars to the right account:\n   Dr  ${expected}        ${amt}\n   Cr  ${posted}        ${amt}\nUse the GL date that matches the original F0911 entry so the correction lands in the same period.`;
 
-    // Step 4 — preventative AAI fix
-    const step4 = `Step 4 (preventative fix).  In JDE, correct DMAAI ${aaiNumStr} so it points at the same Object / Business Unit as the model table (4152). After the fix, future ${dtRaw || 'documents of this type'} will post to the right account automatically — no more period-end JEs for this same issue.`;
+    // ---- Step 4: which scenario, and how to prevent recurrence ----
+    const batchHint = (data.f0911Inv[0] && data.f0911Inv[0].batch) || '[this doc\'s batch]';
+    const aaiNumStr = aaiInfo ? aaiInfo.aai : 'the relevant AAI';
+    const step4 = `Step 4 (figure out which scenario, then prevent recurrence).
+  - For (a) DMAAI changed:  in JDE, pull the audit / change history on DMAAI ${aaiNumStr} for Company ${docCompany || '?'}${docGlClass ? ' / GL class ' + docGlClass : ''}. If the row was modified after this doc's batch (${batchHint}) posted, that confirms it. Fix: every doc that posted under the old config needs the same JE as Step 3.
+  - For (b) override at post time:  pull the F0911 record for batch ${batchHint} and check the Source / Comment / BT column for a JE batch type or an override flag. The user / program that posted it is the cause. Fix: restrict override permissions in the relevant program, or move manual journal entries on inventory accounts behind an approval workflow.`;
 
-    // Step 5 — escalation
-    const step5 = `Step 5 (if the DMAAs section shows no flag for ${aaiNumStr}).  The misroute isn't a DMAAI configuration problem. Most likely a manual journal entry coded the inventory amount to ${posted} directly, or an override on the posting program redirected it. Pull the F0911 record for this batch and check the Source column / Comment for a JE batch type — that points at who did the manual posting.`;
-
-    return [step1, step2, step3, step4, step5].join('\n\n');
+    return [step1, step2, step3, step4].join('\n\n');
   },
 
   // Pattern 5.14 — Period Mismatch helpers. Same account on cardex and GL,
@@ -10957,7 +11075,13 @@ const App = (() => {
     // succeeds.
     const isMultiFinding = Array.isArray(findings.findings);
     const headlinePriority = isMultiFinding ? findings.overallPriority : findings.priority;
-    const c = (headlinePriority === 1 ? 'p1' : headlinePriority === 2 ? 'p2' : 'p3');
+    // Transaction Detail has retired Priority bucketing. For that
+    // template's single-doc / single-pattern findings, surface the
+    // pattern label directly instead of a "Priority X — Y" string.
+    const hidePriority = t.id === 'transaction-detail';
+    const c = hidePriority
+      ? 'neutral'
+      : (headlinePriority === 1 ? 'p1' : headlinePriority === 2 ? 'p2' : 'p3');
 
     let headline;
     if (isMultiFinding) {
@@ -10966,6 +11090,10 @@ const App = (() => {
       headline = findingCount === 0
         ? `${Helpers.count(totalRows)} rows analyzed · clean — no integrity issues detected.`
         : `${Helpers.count(totalRows)} rows analyzed · ${findingCount} item${findingCount === 1 ? '' : 's'} flagged across ${findings.findings.length} pattern${findings.findings.length === 1 ? '' : 's'}.`;
+    } else if (hidePriority) {
+      headline = findings.patternLabel
+        ? `Analysis complete · ${findings.patternLabel}.`
+        : 'Analysis complete.';
     } else {
       headline = `Analysis complete · Priority ${headlinePriority} — ${Priority.actionLabel(headlinePriority)}.`;
     }
