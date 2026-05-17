@@ -1029,7 +1029,7 @@
 <details class="supported-reports">
   <summary>
     Supported reports &mdash; where to export each from
-    <span class="count">10 reports</span>
+    <span class="count">11 reports</span>
   </summary>
   <div class="reports-tier">
     <h2 class="reports-tier-title">RapidReconciler Exports</h2>
@@ -1092,6 +1092,7 @@
         <p class="reports-group-hint">Export from JDE directly &mdash; not from RapidReconciler. The analyzer fingerprints the file by its column headers, so generic sheet names like <code>Sheet1</code> are fine.</p>
         <ul>
           <li><strong>Item Ledger</strong><span class="report-loc">JDE Item Ledger Inquiry &mdash; Export Grid Data</span></li>
+          <li><strong>JDE DMAAI&rsquo;s</strong><span class="report-loc">JDE Database Browser (P964001) &mdash; table F4095 &mdash; Export to Excel</span></li>
         </ul>
       </div>
     </div>
@@ -3021,20 +3022,31 @@ const DMAAIKnowledge = {
     '3110': 'Raw Material WIP — Material Issues (IM)',
     '3120': 'Work In Process (WIP)',
     '3130': 'WIP Completions (IC)',
-    '4122': 'Inventory Debit (IA / II / IJ / IL / IM / IP / IR / IV)',
-    '4124': 'Inventory Relief (credit side of 4122)',
-    '4126': 'Received Not Vouchered Debit (VV)',
-    '4128': 'RNV Credit Reversal',
-    '4134': 'In-Transit Inventory Debit (IB)',
-    '4136': 'In-Transit Credit on Receipt',
-    '4141': 'Inventory Standard Cost Variance (II / IT / IR)',
+    '4122': 'Inventory Valuation Account — Balance Sheet inventory for Issues / Transfers / Adjustments / Reclassifications (P4112 / P4113 / P4114 / P4116)',
+    '4124': 'Expense / COGS Account — credit side of 4122. Can also serve as the COGS credit on some Sales Order flows where customers route through 4124 instead of the standard 4240/4220 pair.',
+    '4126': 'Zero Balance Inventory Offset — used when qty=0 but dollars remain',
+    '4128': 'Zero Balance Expense Offset — credit side of 4126',
+    '4134': 'Item Balance Cost Change Inventory Offset — Quantity Revisions (P41022), Item Branch/Plant (P41026), Batch Cost Maintenance (P41802)',
+    '4136': 'Item Balance Cost Change Expense Offset — credit side of 4134',
+    '4141': 'Standard Cost Variance on Inventory Transfers (P4113) — fires when From and To branches carry different standard costs',
     '3240': 'Material Variance — WIP / standard cost change after completion',
     '3260': 'Planned Variance — WIP / standard cost change after completion',
+    '4152': 'Physical Inventory Update Inventory Offset — Cycle Count (P41413), Tag Count (P41610)',
+    '4154': 'Physical Inventory Update Expense Offset — credit side of 4152',
     '4162': 'Cross-Company Inventory Transfer (IX)',
+    '4164': 'Average Cost Update — COGS Side (credit side of 4162 in JDE configs that use 4162 for avg cost)',
     '4172': 'Physical Inventory Adjustment (IJ)',
-    '4220': 'Inventory Relief — COGS Credit',
+    '4174': 'Batch Cost Maintenance Expense Offset — Future Cost Update (P41052), credit side of 4172',
+    '4182': 'Bulk Product Gain/Loss Inventory Offset',
+    '4184': 'Bulk Product Gain/Loss Expense Offset — credit side of 4182',
+    '4220': 'Inventory Relief — COGS Credit. In ST/OT transfer flows, 4220 is repurposed as the in-transit clearing account on the shipping (ST) side — must match 4320 on the OT receiving side for clearing to net to zero.',
+    '4225': 'COGS Performance Liability (intermediate before COGS recognition)',
+    '4230': 'Sales Revenue. In ST/OT transfers, 4230 is used as a wash account — revenue and A/R both net to zero so no real revenue is booked for an internal move.',
     '4240': 'Cost of Goods Sold',
+    '4245': 'A/R Wash Account for transfer-order shipments — paired with 4230 revenue wash; both net to zero on intercompany transfers',
     '4310': 'Inventory on PO Receipt (OR)',
+    '4335': 'Standard-Cost Variance on PO Receipt — fires when received cost differs from inventory cost; commonly paired with 4337 landed cost',
+    '4337': 'Material Burden (freight, duty, etc. — always credit)',
     '4365': 'Supplier Direct Ship / Outside Operations Settlement',
     '4385': 'Outbound Logistics',
     '4400': 'Intercompany / Advanced Pricing'
@@ -7690,14 +7702,41 @@ const JdeDmaaisTemplate = {
     };
   },
 
-  // Known debit/credit complement pairs. The same pairs the existing
-  // DMAAIKnowledge constant encodes — used by Patterns 1 and 2.
+  // Known debit/credit complement pairs sourced from the Oracle JDE
+  // Distribution AAI docs — used by Patterns 1 and 2.
+  //
+  // `triggeredBy` names the JDE programs that drive postings through
+  // each pair. Used by the per-row "Missing complement" note so the
+  // user immediately knows which JDE program would post one-sided if
+  // the missing side stays missing.
   _complementPairs: [
-    { dr: 4122, cr: 4124, label: 'Inventory dr/cr',     docTypes: ['IA','II','IJ','IL','IM','IP','IR','IV'] },
-    { dr: 4126, cr: 4128, label: 'RNV dr/cr',            docTypes: ['VV','OV','OP'] },
-    { dr: 4134, cr: 4136, label: 'In-transit dr/cr',     docTypes: ['IB'] },
-    { dr: 4240, cr: 4220, label: 'Sales / COGS dr/cr',   docTypes: ['SO','SD','RM'] },
-    { dr: 4310, cr: 4320, label: 'PO receipt / RNV dr/cr', docTypes: [] }
+    { dr: 4122, cr: 4124, label: 'Inventory dr/cr',
+      docTypes: ['IA','II','IJ','IL','IM','IP','IR','IV'],
+      triggeredBy: 'P4112 (Issues), P4113 (Transfers), P4114 (Adjustments), P4116 (Reclassifications)' },
+    { dr: 4126, cr: 4128, label: 'Zero-balance offset dr/cr',
+      docTypes: ['VV','OV','OP'],
+      triggeredBy: 'P4112 / P4113 / P4114 / P4116 when qty=0 but dollars remain' },
+    { dr: 4134, cr: 4136, label: 'Item balance cost change dr/cr',
+      docTypes: ['IB'],
+      triggeredBy: 'P41022 (Quantity Revisions), P41026 (Item Branch/Plant), P41802 (Batch Cost Maintenance)' },
+    { dr: 4152, cr: 4154, label: 'Physical inventory dr/cr',
+      docTypes: ['IP'],
+      triggeredBy: 'P41413 (Cycle Count Update), P41610 (Tag Count Update)' },
+    { dr: 4162, cr: 4164, label: 'Average cost update dr/cr',
+      docTypes: [],
+      triggeredBy: 'Average cost recompute (P41051 or similar; varies by JDE config)' },
+    { dr: 4172, cr: 4174, label: 'Batch cost maintenance dr/cr',
+      docTypes: [],
+      triggeredBy: 'P41052 (Future Cost Update)' },
+    { dr: 4182, cr: 4184, label: 'Bulk gain/loss dr/cr',
+      docTypes: [],
+      triggeredBy: 'Bulk Product Gain/Loss Processing' },
+    { dr: 4240, cr: 4220, label: 'Sales / COGS dr/cr',
+      docTypes: ['SO','SD','RM','ST','IM'],
+      triggeredBy: 'R42800 (Sales Update) — the batch report that posts the GL side of Sales Order shipments. Also fires on ST (transfer-order shipment) and IM (post-shipment inventory move).' },
+    { dr: 4310, cr: 4320, label: 'PO receipt / RNV dr/cr',
+      docTypes: [],
+      triggeredBy: 'P4312 (PO Receipts), P43214 (Voucher Match)' }
   ],
 
   // Doc types where net-zero on the dr/cr pair is the INTENDED config.
@@ -7837,6 +7876,47 @@ const JdeDmaaisTemplate = {
       if (rs.length > 1) duplicates.push({ key: k, rows: rs });
     }
 
+    // ---- Pattern 7: Transfer clearing-account mismatch ----
+    // ST/OT transfer orders post in two halves: ST shipment debits the
+    // Goods-in-Transit clearing account via AAI 4220, OT receipt
+    // credits it via AAI 4320. For the clearing to net to zero the
+    // two sides must resolve to the SAME GL account. When they don't,
+    // every transfer of that (co, gl, cost) leaves a residual balance
+    // on the clearing account — a notoriously hard reconciliation
+    // problem. We detect it directly from F4095.
+    //
+    // We pin the ST clearing AAI at 4220 (some configs use 4124 or
+    // 4225 instead, but 4220 is the documented standard). For each
+    // (co, gl, cost) tuple that has BOTH a 4220 and a 4320 row, we
+    // resolve each via the hierarchy and compare effective accounts.
+    const transferClearing = [];
+    {
+      const stByKey = new Map();
+      const otByKey = new Map();
+      rows.forEach(r => {
+        const key = `${r.co}|${r.glClass}|${r.costType}`;
+        if (r.aaiNum === 4220 && !stByKey.has(key)) stByKey.set(key, r);
+        if (r.aaiNum === 4320 && !otByKey.has(key)) otByKey.set(key, r);
+      });
+      for (const [key, stRow] of stByKey) {
+        const otRow = otByKey.get(key);
+        if (!otRow) continue;
+        const stRes = this._resolveAAI(idx, 4220, stRow.co, stRow.orderType, stRow.docType, stRow.glClass, stRow.costType);
+        const otRes = this._resolveAAI(idx, 4320, otRow.co, otRow.orderType, otRow.docType, otRow.glClass, otRow.costType);
+        if (!stRes || !otRes) continue;
+        const stAcct = this._effectiveAccount(stRes);
+        const otAcct = this._effectiveAccount(otRes);
+        if (stAcct !== otAcct) {
+          transferClearing.push({
+            co: stRow.co, glClass: stRow.glClass, costType: stRow.costType,
+            stRow: stRes.rows[0], otRow: otRes.rows[0],
+            stAcct, otAcct,
+            stTier: stRes.tierLabel, otTier: otRes.tierLabel
+          });
+        }
+      }
+    }
+
     // ---- Pattern 6: Unrecognized AAI series ----
     // JDE's standard distribution-AAI range is roughly 3000-4499 — the
     // documented manufacturing (3xxx) and distribution (4100s inventory,
@@ -7898,22 +7978,24 @@ const JdeDmaaisTemplate = {
       netZero: netZero.length,
       missing: missingComplement.length,
       inactive: inactive.length,
+      transferClearing: transferClearing.length,
       duplicates: duplicates.length,
       redundant: redundantSpecific.length,
       unrecognized: unrecognizedSeries.length
     };
     const priority = (counts.netZero || counts.missing || counts.inactive) ? 1
-                   : (counts.duplicates) ? 2
+                   : (counts.transferClearing || counts.duplicates) ? 2
                    : (counts.redundant || counts.unrecognized) ? 3
                    : 3;
 
     const labelBits = [];
-    if (counts.netZero)      labelBits.push(`Net-zero pair (${counts.netZero})`);
-    if (counts.missing)      labelBits.push(`Missing complement (${counts.missing})`);
-    if (counts.inactive)     labelBits.push(`Inactive AAI (${counts.inactive})`);
-    if (counts.duplicates)   labelBits.push(`Duplicate key (${counts.duplicates})`);
-    if (counts.redundant)    labelBits.push(`Redundant specific (${counts.redundant})`);
-    if (counts.unrecognized) labelBits.push(`Unrecognized series (${counts.unrecognized})`);
+    if (counts.netZero)          labelBits.push(`Net-zero pair (${counts.netZero})`);
+    if (counts.missing)          labelBits.push(`Missing complement (${counts.missing})`);
+    if (counts.inactive)         labelBits.push(`Inactive AAI (${counts.inactive})`);
+    if (counts.transferClearing) labelBits.push(`Transfer clearing mismatch (${counts.transferClearing})`);
+    if (counts.duplicates)       labelBits.push(`Duplicate key (${counts.duplicates})`);
+    if (counts.redundant)        labelBits.push(`Redundant specific (${counts.redundant})`);
+    if (counts.unrecognized)     labelBits.push(`Unrecognized series (${counts.unrecognized})`);
     const patternLabel = labelBits.length ? labelBits.join(' · ') : 'Clean — no AAI configuration issues found';
 
     // ---- Highlights for the source-sheet copy (priority-color fills) ----
@@ -7923,6 +8005,7 @@ const JdeDmaaisTemplate = {
     inactive.forEach(i => highlights.push({ rowNumber: i.row.rowNumber, priority: 1 }));
     duplicates.forEach(d => d.rows.forEach(r => highlights.push({ rowNumber: r.rowNumber, priority: 2 })));
     redundantSpecific.forEach(r => highlights.push({ rowNumber: r.specific.rowNumber, priority: 3 }));
+    transferClearing.forEach(t => { highlights.push({ rowNumber: t.stRow.rowNumber, priority: 2 }); highlights.push({ rowNumber: t.otRow.rowNumber, priority: 2 }); });
     unrecognizedSeries.forEach(s => s.rows.forEach(r => highlights.push({ rowNumber: r.rowNumber, priority: 3 })));
 
     // ---- Per-row pattern note ("RR Analyzer Note" column) ----
@@ -7940,10 +8023,17 @@ const JdeDmaaisTemplate = {
       tagRow(n.drRow.rowNumber, `Net-zero with ${n.pair.cr} (row ${n.crRow.rowNumber}): same account ${acct}`);
       tagRow(n.crRow.rowNumber, `Net-zero with ${n.pair.dr} (row ${n.drRow.rowNumber}): same account ${acct}`);
     });
-    missingComplement.forEach(m => tagRow(m.existingRow.rowNumber, `Missing complement (${m.missingAAI})`));
+    missingComplement.forEach(m => {
+      const trig = m.pair.triggeredBy ? ` — ${m.pair.triggeredBy} would post one-sided` : '';
+      tagRow(m.existingRow.rowNumber, `Missing complement (${m.missingAAI})${trig}`);
+    });
     inactive.forEach(i => tagRow(i.row.rowNumber, 'Inactive (blank Obj Acct)'));
     duplicates.forEach(d => d.rows.forEach(r => tagRow(r.rowNumber, 'Duplicate key')));
     redundantSpecific.forEach(r => tagRow(r.specific.rowNumber, 'Redundant vs wildcard'));
+    transferClearing.forEach(t => {
+      tagRow(t.stRow.rowNumber, `Transfer clearing mismatch: 4220 → ${t.stAcct}; 4320 (row ${t.otRow.rowNumber}) → ${t.otAcct}`);
+      tagRow(t.otRow.rowNumber, `Transfer clearing mismatch: 4320 → ${t.otAcct}; 4220 (row ${t.stRow.rowNumber}) → ${t.stAcct}`);
+    });
     unrecognizedSeries.forEach(s => s.rows.forEach(r => tagRow(r.rowNumber, `Unrecognized AAI series ${s.series}`)));
 
     // ---- Multi-findings cards ----
@@ -7988,6 +8078,20 @@ const JdeDmaaisTemplate = {
         pattern: `A blank Obj Acct row "succeeds" at lookup but produces an empty account number — the posting either fails or routes to JDE's error-suspense account. This SHADOWS the wildcard fallback that would have otherwise provided a working account — JDE never gets to try the (co, ****) or (00000, ****) tier because the specific row was found.`,
         resolution: `Step 1.  Either populate the Obj Acct on each flagged row with the correct GL account, or delete the row entirely so the wildcard fallback (one tier down) takes over.\n\nStep 2.  If the row was intended to "disable" the AAI, that's not how F4095 works — there is no per-row disable flag. Removing the row is the right way to fall through to the wildcard.`,
         rows: inactive
+      });
+    }
+    if (counts.transferClearing) {
+      multiFindings.push({
+        number: multiFindings.length + 1, type: 'transfer_clearing',
+        title: `Transfer clearing-account mismatch  (${counts.transferClearing} tuple${counts.transferClearing === 1 ? '' : 's'})`,
+        priority: 2, rowCount: counts.transferClearing,
+        issue: 'Transfer clearing',
+        scopeShort: `${counts.transferClearing} tuple${counts.transferClearing === 1 ? '' : 's'}`,
+        detail: '4220 (ST clearing) and 4320 (OT clearing) resolve to different accounts',
+        scope: `${counts.transferClearing} (co, gl, cost) tuple${counts.transferClearing === 1 ? '' : 's'} where the ST-side clearing AAI (4220) and the OT-side clearing AAI (4320) resolve through the F4095 hierarchy to different GL accounts.`,
+        pattern: `Transfer orders post in two halves: the ST shipment side debits the Goods-in-Transit clearing account via AAI 4220, and the OT receipt side credits it via AAI 4320. For the clearing account to net to zero on a completed transfer, both AAIs must resolve to the same GL account. When they drift apart — usually because one side was updated and the other wasn't — every transfer leaves a residual on the clearing account. This is one of the hardest reconciliation issues to track down because the residual builds over time and the F0911 entries individually look correct.`,
+        resolution: `Step 1.  For each flagged tuple, review the 4220 and 4320 entries side by side in JDE (P40950). Confirm with the cost-accounting team which is the intended clearing account for ST/OT transfers in this company / GL class.\n\nStep 2.  Update the side that's wrong so both AAIs route to the same account.\n\nStep 3.  Once F4095 is corrected, future transfers will clear properly. Existing residual balances on the old clearing account need a manual JE to clean up.`,
+        rows: transferClearing
       });
     }
     if (counts.duplicates) {
@@ -8049,12 +8153,12 @@ const JdeDmaaisTemplate = {
     }
 
     return {
-      netZero, missingComplement, inactive, duplicates, redundantSpecific, unrecognizedSeries,
+      netZero, missingComplement, inactive, transferClearing, duplicates, redundantSpecific, unrecognizedSeries,
       highlights, patternByRow,
       priority, patternLabel,
       findings: multiFindings,
       overallPriority: priority,
-      totalFindings: counts.netZero + counts.missing + counts.inactive + counts.duplicates + counts.redundant + counts.unrecognized,
+      totalFindings: counts.netZero + counts.missing + counts.inactive + counts.transferClearing + counts.duplicates + counts.redundant + counts.unrecognized,
       // Empty actionPlan — the preview card (renderMultiFindingPreview)
       // expects this field to exist and iterates it with .map(). DMAAIs
       // don't have a meaningful action plan beyond the per-finding
@@ -8064,6 +8168,7 @@ const JdeDmaaisTemplate = {
         'Net-zero pair  (dr + cr resolve to same account)',
         'Missing complement  (one side resolves, the other does not)',
         'Inactive AAI  (row exists with blank Obj Acct)',
+        'Transfer clearing mismatch  (4220 vs 4320 resolve differently)',
         'Duplicate key tuple  (R894095A would clean these)',
         'Redundant specific entry  (same account as wildcard fallback)',
         `Unrecognized AAI series  (outside ${KNOWN_SERIES_MIN}–${KNOWN_SERIES_MAX})`
@@ -8112,11 +8217,12 @@ const JdeDmaaisTemplate = {
         // Pick the first flagged row's new row number for the Issue-summary hyperlink
         const firstItem = f.rows[0];
         let srcRn = null;
-        if (firstItem.drRow)           srcRn = firstItem.drRow.rowNumber;
+        if (firstItem.drRow)            srcRn = firstItem.drRow.rowNumber;
+        else if (firstItem.stRow)       srcRn = firstItem.stRow.rowNumber;
         else if (firstItem.existingRow) srcRn = firstItem.existingRow.rowNumber;
-        else if (firstItem.row)        srcRn = firstItem.row.rowNumber;
-        else if (firstItem.rows)       srcRn = firstItem.rows[0].rowNumber;
-        else if (firstItem.specific)   srcRn = firstItem.specific.rowNumber;
+        else if (firstItem.row)         srcRn = firstItem.row.rowNumber;
+        else if (firstItem.rows)        srcRn = firstItem.rows[0].rowNumber;
+        else if (firstItem.specific)    srcRn = firstItem.specific.rowNumber;
         if (srcRn != null) f.firstNewRow = rowMap.get(srcRn);
       }
     });
@@ -8143,8 +8249,12 @@ const JdeDmaaisTemplate = {
     }
 
     // ---- Caution + footer ----
+    // Same shape as the Transaction Detail / DMAAI Entry Integrity
+    // cautions: lead with non-prod testing, then add the DMAAI-specific
+    // blast-radius note (one F4095 row affects every future posting on
+    // the matching company / doc type / GL class).
     row = F.renderCautionAndFooter(ws, row, {
-      cautionText: 'This analysis reads F4095 only.  It flags AAI configuration anti-patterns that frequently cause GL/cardex issues, but it does not validate the resolved GL accounts against your chart of accounts or confirm intent.  Review every finding with the accounting team before changing F4095.',
+      cautionText: 'Before making any changes in JD Edwards:  test all DMAAI configuration changes in a non-production environment first.  A single F4095 row update affects every transaction posted afterward for the matching company, doc type, and GL class — confirm the intended GL accounts with the cost / inventory accounting team before updating the production records.',
       footerText: `Analysis produced by the RapidReconciler Export Analyzer  ·  ${Helpers.todayPretty()}`
     });
     F.applyPageSetup(ws, row - 1);
