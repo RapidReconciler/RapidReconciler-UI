@@ -382,6 +382,19 @@ default). For belt-and-suspenders on a chore commit, also add
   cards; `data-card` (on cover destination cards) and `data-target` (on
   cover persona chips) drive the spotlight handler. Preserve all of
   these when editing card markup.
+- **Real customer-identifying data in customer-facing docs.** Anything
+  in `RRUniversity/` (and the rendered Help Desk pages) is published
+  on the public GitHub Pages site. Don't paste real customer
+  account numbers (`1000000.142000`, `5077777.501010.51`, etc.),
+  branch / company numbers (`00010`), doc numbers (`1324740`), or
+  customer names (`Acme`) into prose, tables, callouts, or examples.
+  Use clean fictional generics (`5000.140000`, `100.5100.MKTG`,
+  `MFG01.4220`) that demonstrate the same concept without tracing
+  back to a real customer. Test fixtures under
+  `Tools/_test_corpus/fixtures/` are private to the repo; account
+  numbers there are fine. Internal-only docs under `AnalysisGuides/`
+  and code comments can reference test cases for traceability, but
+  customer-facing docs cannot.
 
 ---
 
@@ -447,6 +460,32 @@ default). For belt-and-suspenders on a chore commit, also add
   to ask — the owner considers the full sequence one action. Use the
   full path `/c/Program Files/GitHub CLI/gh.exe` since `gh` isn't on
   the PATH the Bash tool sees.
+
+- **Before running the commit flow, sweep the docs.** When the
+  owner says "commit," check the working-tree diff and ask:
+    1. Do any existing how-to or reference docs need updating to
+       reflect the change? Customer-facing pages in `RRUniversity/`
+       and the analyst guide at `AnalysisGuides/transaction-detail-
+       analysis.md` are the usual suspects when analyzer behavior
+       shifts, when a workflow changes, or when a referenced
+       concept gets clarified.
+    2. Did the chunk add a *new* customer-facing document? If yes,
+       add it to BOTH "Browse all documents" drawers so it shows
+       up where users actually browse:
+         - `RRUniversity/rapidreconciler-university.html` — the
+           drawer is a `<details class="lp-drawer">` block with
+           role-grouped lists (Getting started, Inventory, A/P,
+           Transfers, Administrators). Its count is auto-recomputed
+           in JS from the visible items, so no manual bump.
+         - `HelpDesk/troubleshooting.html` — `<details id="ts-
+           browse-all-docs">` block with nested `<details
+           class="ts-browse-section">` per category. Both the
+           overall `ts-browse-all-count` ("N in scope") AND the
+           section's own `ts-browse-section-count` are hand-
+           maintained — bump both when adding an entry.
+  The docs and the code should land in the same commit; if a doc
+  update is missing, the owner has to re-grep the next day to
+  figure out what changed and where to update.
 
 - **Don't pause to ask permission for routine actions.** The owner
   approves every tool invocation (always-allow or allow-once) and
