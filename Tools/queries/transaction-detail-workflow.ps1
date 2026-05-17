@@ -169,6 +169,14 @@ try {
   $ws = $wb.Worksheets.Item(1)
   $ws.Name = 'Transaction Details'
   $range = $ws.Range($ws.Cells.Item(1, 1), $ws.Cells.Item($rowCount + 2, $colCount))
+  # Force every column to Text format BEFORE we write data. The sproc
+  # returns account values like "1000000.142000" (string nchar) but
+  # Excel's Value2 setter happily auto-converts those to numbers,
+  # which silently drops trailing zeros after the decimal. Set "@"
+  # (text format) on the full range first to preserve the strings.
+  # The analyzer reads values as text anyway, so this doesn't break
+  # downstream parsing.
+  $range.NumberFormat = '@'
   $range.Value2 = $data
   # Light formatting that mirrors the RR export
   $ws.Range($ws.Cells.Item(2, 1), $ws.Cells.Item(2, $colCount)).Font.Bold = $true

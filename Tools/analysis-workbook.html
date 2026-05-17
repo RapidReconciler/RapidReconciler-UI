@@ -5284,12 +5284,25 @@ const TransactionDetailTemplate = {
   },
 
   classify(data) {
-    const variance = data.variance;
+    // variance/ratio/priority are `let` (not const) because Pattern 5.4
+    // (Account Mismatch) overrides them after detection — the doc's net
+    // variance can be $0 even when there's a real misposting to clean
+    // up, so for that pattern the headline number becomes the misposted
+    // amount, not the net.
+    let variance = data.variance;
     const cardex = data.f4111Tot;
     const ledger = data.f0911InvTot;
     const denom = Math.max(Math.abs(cardex), Math.abs(ledger)) || 1;
-    const ratio = Math.abs(variance) / denom;
-    const priority = Priority.fromRatio(ratio);
+    let ratio = Math.abs(variance) / denom;
+    let priority = Priority.fromRatio(ratio);
+
+    // Account-mismatch context — populated in the 5.4 branch and read
+    // by the WHAT / HOW / evidence code below. Stays null for every
+    // other pattern.
+    let _accountMismatchMispostedAmt = 0;
+    let _accountMismatchExpectedAcct = null;
+    let _accountMismatchPostedAcct   = null;
+    let _accountMismatchRatio        = null;
 
     // Net-zero F0911 fingerprint — a debit and credit of equal magnitude
     // on the SAME inventory account that cancel each other within the
@@ -5535,9 +5548,43 @@ const TransactionDetailTemplate = {
         glCompletionRow && glCompletionRow.doc,
         mfgVarianceAaiContext
       );
+    } else if (data.rrSummary.length > 1 && (() => {
+      // Multiple RR Summary rows = either account or period mismatch.
+      // The two cases ask different questions of the analyst, so split:
+      //  - Account mismatch: 2+ rows with DIFFERENT accounts
+      //  - Period mismatch:  2+ rows with the SAME account but different periods
+      // Account-mismatch wins when both differ (different accounts swamps
+      // any period oddity — the analyst's job is to move the money to
+      // the right account, not the right period).
+      const accounts = new Set(data.rrSummary.map(r => String(r.account || '').trim()).filter(Boolean));
+      return accounts.size >= 2;
+    })()) {
+      pattern = '5.4'; patternLabel = 'Account Mismatch';
+      // The misposted amount is the dollar magnitude that needs to move
+      // via JE. It's the absolute LedgerAmount on the row that has GL
+      // posted to the wrong account (the row whose CardexAmount is ~0).
+      // If we can't isolate it cleanly, fall back to |cardex| or |ledger|.
+      const ghostRow   = data.rrSummary.find(r => Math.abs(r.cardexAmt || 0) < 0.01 && Math.abs(r.ledgerAmt || 0) >= 0.01) || data.rrSummary[0];
+      const expectedRow = data.rrSummary.find(r => Math.abs(r.ledgerAmt || 0) < 0.01 && Math.abs(r.cardexAmt || 0) >= 0.01) || data.rrSummary[1] || data.rrSummary[0];
+      const mispostedAmt = ghostRow ? Math.abs(ghostRow.ledgerAmt || 0) : Math.abs(data.f0911InvTot);
+      const expectedAcct = expectedRow && expectedRow.account;
+      const postedAcct   = ghostRow    && ghostRow.account;
+      patternExplanation = this._accountMismatchExplanation(data, { mispostedAmt, expectedAcct, postedAcct });
+      // Override the headline: a $0 net variance underplays the cleanup
+      // size. Use the misposted dollars (the JE amount) instead, and
+      // recompute priority off that.
+      const denomMisp = Math.max(Math.abs(cardex), Math.abs(ledger), mispostedAmt) || 1;
+      variance = mispostedAmt;
+      ratio    = mispostedAmt / denomMisp;
+      priority = Priority.fromRatio(ratio);
+      _accountMismatchMispostedAmt = mispostedAmt;
+      _accountMismatchExpectedAcct = expectedAcct;
+      _accountMismatchPostedAcct   = postedAcct;
+      _accountMismatchRatio        = ratio;
     } else if (data.rrSummary.length > 1) {
-      pattern = '5.4'; patternLabel = 'Account or Period Mismatch';
-      patternExplanation = `Multiple RR Summary rows indicate the cardex and ledger entries are matched but landing on different accounts or in different periods.  Check DMAAI configuration (account mismatch) or GL Date processing options (period mismatch).`;
+      // Same account on each row but different periods → period mismatch.
+      pattern = '5.14'; patternLabel = 'Period Mismatch';
+      patternExplanation = this._periodMismatchExplanation(data);
     } else {
       pattern = '5.11'; patternLabel = 'GL-Excess or Cross-Work-Order Summarization';
       patternExplanation = `Both F4111 and F0911 have non-zero values but they don't match.  For IM / IC / IH documents this is often R31802A summarizing GL entries across multiple work orders — check the GL document number against all order numbers before concluding it's an error.`;
@@ -5612,6 +5659,40 @@ const TransactionDetailTemplate = {
           });
         }
       }
+    } else if (pattern === '5.4') {
+      // Surface the two RR Summary rows that disagree on account so the
+      // analyst sees exactly which account got the cardex and which got
+      // the GL post.
+      const expected = data.rrSummary.find(r => Math.abs(r.ledgerAmt || 0) < 0.01 && Math.abs(r.cardexAmt || 0) >= 0.01);
+      const posted   = data.rrSummary.find(r => Math.abs(r.cardexAmt || 0) < 0.01 && Math.abs(r.ledgerAmt || 0) >= 0.01);
+      if (expected) {
+        evidence.push({
+          severity: 'Root cause',
+          label: `Expected account (cardex landed here)  →  Row ${expected.rowNumber}`,
+          description: `${expected.account} · cardex ${Helpers.money(expected.cardexAmt)} · ledger ${Helpers.money(expected.ledgerAmt)}\nThis is where the inventory dollars belong — the F4111 cardex routed them correctly.`,
+          sourceRow: expected.rowNumber
+        });
+      }
+      if (posted) {
+        evidence.push({
+          severity: 'Root cause',
+          label: `Misposted account (GL went here instead)  →  Row ${posted.rowNumber}`,
+          description: `${posted.account} · cardex ${Helpers.money(posted.cardexAmt)} · ledger ${Helpers.money(posted.ledgerAmt)}\nThe GL post landed on this account; the JE in step 3 moves the dollars to the expected account above.`,
+          sourceRow: posted.rowNumber
+        });
+      }
+    } else if (pattern === '5.14') {
+      // Period mismatch — surface the two RR Summary rows on different periods.
+      const rows = data.rrSummary.slice(0, 2);
+      for (const r of rows) {
+        const periodStr = r.period && (r.period.toString ? r.period.toString().slice(0, 10) : r.period);
+        evidence.push({
+          severity: 'Root cause',
+          label: `RR Summary row · period ${periodStr || '—'}  →  Row ${r.rowNumber}`,
+          description: `${r.account} · cardex ${Helpers.money(r.cardexAmt)} · ledger ${Helpers.money(r.ledgerAmt)}\nSame account as the other row — only the period differs.`,
+          sourceRow: r.rowNumber
+        });
+      }
     } else if (pattern === '5.2' && data.f0911Inv[0]) {
       evidence.push({ severity: 'Root cause', label: `${data.f0911Inv[0].bt} doc ${data.f0911Inv[0].doc}  →  Row ${data.f0911Inv[0].rowNumber}`, description: `GL entry on account ${data.f0911Inv[0].account} · ${Helpers.money(data.f0911Inv[0].ledgerAmt)}\n${data.f0911Inv[0].comment || 'No cardex counterpart — the variance is entirely on this row'}`, sourceRow: data.f0911Inv[0].rowNumber });
     } else if (pattern === '5.3' && data.f4111Rows[0]) {
@@ -5632,7 +5713,15 @@ const TransactionDetailTemplate = {
     return {
       variance, cardex, ledger, ratio, priority,
       pattern, patternLabel, patternExplanation, evidence, dmaaiPair,
-      mfgVarianceAaiContext
+      mfgVarianceAaiContext,
+      // Pattern 5.4 context: which two accounts disagreed and how many
+      // dollars need to move. Null for every other pattern.
+      accountMismatch: pattern === '5.4' ? {
+        mispostedAmt: _accountMismatchMispostedAmt,
+        expectedAcct: _accountMismatchExpectedAcct,
+        postedAcct:   _accountMismatchPostedAcct,
+        ratio:        _accountMismatchRatio
+      } : null
     };
   },
 
@@ -5644,9 +5733,19 @@ const TransactionDetailTemplate = {
     const ws = workbook.addWorksheet('Analysis', { views: [{ showGridLines: false, state: 'normal' }] });
     F.standardColumnWidths(ws);
 
-    const subline = Math.abs(findings.variance) < 0.01
-      ? `Cardex and ledger reconcile — no variance on this document`
-      : `${Helpers.money(findings.variance, true)} variance · cardex ${Helpers.money(findings.cardex)} vs ledger ${Helpers.money(findings.ledger)}`;
+    // Subline is the one-line below-headline summary. For account
+    // mismatch the cardex + ledger TOTALS match (net variance is $0),
+    // so the standard "X variance · cardex Y vs ledger Z" reads
+    // nonsensically — phrase it as a misposted-dollars summary instead.
+    let subline;
+    if (findings.pattern === '5.4' && findings.accountMismatch) {
+      const m = findings.accountMismatch;
+      subline = `${Helpers.money(m.mispostedAmt)} misposted · cardex landed on ${m.expectedAcct || '—'} · ledger went to ${m.postedAcct || '—'}`;
+    } else if (Math.abs(findings.variance) < 0.01) {
+      subline = `Cardex and ledger reconcile — no variance on this document`;
+    } else {
+      subline = `${Helpers.money(findings.variance, true)} variance · cardex ${Helpers.money(findings.cardex)} vs ledger ${Helpers.money(findings.ledger)}`;
+    }
     // Safe date stringification — empty inlineStr cells can return objects
     // that throw on `new Date(...).toISOString()`. Always degrade to '?'.
     const safeDate = v => {
@@ -5667,10 +5766,24 @@ const TransactionDetailTemplate = {
     });
 
     let row = F.renderDisclaimer(ws, 6);
-    const rationale = `Pattern:  ${findings.patternLabel}\n\nVariance ${Helpers.money(Math.abs(findings.variance))} vs document amount ${Helpers.money(Math.max(Math.abs(findings.cardex), Math.abs(findings.ledger)))} = ${Math.round(findings.ratio * 100)}%  →  Priority ${findings.priority}`;
+    // For Pattern 5.4 (account mismatch) the "variance" we display IS
+    // the misposted amount, so the rationale label reads cleaner as
+    // "Misposted X vs document amount Y" instead of "Variance X vs
+    // document amount Y" (which would be confusing because the
+    // document's net variance is $0).
+    const isAcctMismatch = findings.pattern === '5.4';
+    const headlineLabel = isAcctMismatch ? 'Misposted' : 'Variance';
+    const docAmt = isAcctMismatch
+      ? Math.max(Math.abs(findings.cardex), Math.abs(findings.ledger), findings.variance)
+      : Math.max(Math.abs(findings.cardex), Math.abs(findings.ledger));
+    const rationale = `Pattern:  ${findings.patternLabel}\n\n${headlineLabel} ${Helpers.money(Math.abs(findings.variance))} vs document amount ${Helpers.money(docAmt)} = ${Math.round(findings.ratio * 100)}%  →  Priority ${findings.priority}`;
     row = F.renderVarianceCard(ws, row, {
       priority: findings.priority,
-      varianceNumber: Helpers.money(findings.variance, true),
+      // For 5.4, the headline number is the (positive) misposted
+      // amount — no signed +/- prefix.
+      varianceNumber: isAcctMismatch
+        ? Helpers.money(Math.abs(findings.variance))
+        : Helpers.money(findings.variance, true),
       rationale
     });
 
@@ -5698,6 +5811,8 @@ const TransactionDetailTemplate = {
   },
 
   _whatBody(data, findings) {
+    if (findings.pattern === '5.4')  return this._accountMismatchWhat(data, findings);
+    if (findings.pattern === '5.14') return this._periodMismatchWhat(data, findings);
     return `Document ${data.doc} (${data.dt}) on Order ${data.ordernum} (${data.ot}) for Company ${data.company} shows a variance of ${Helpers.money(findings.variance, true)} between the item ledger (F4111 = ${Helpers.money(findings.cardex)}) and the GL inventory account (F0911 = ${Helpers.money(findings.ledger)}).`;
   },
   _whyBody(data, findings) {
@@ -5717,7 +5832,10 @@ const TransactionDetailTemplate = {
       return `Step 1.  Check the PC (Posting Code) field on the F4111 rows.  If not "P", the cardex was written but the batch was never posted to the GL.\n\nStep 2.  Locate the unposted batch in JDE Batch Approval (P0011) and post it via R09801.\n\nStep 3.  If all F4111 rows show PC = "P", query F0911 for the document and batch across all accounts — the GL entry may have posted to an unexpected account rather than being absent entirely.\n\nStep 4.  If the GL entry truly doesn't exist, post a manual journal entry for the line amount.  Investigate why the GL interface rejected the line.`;
     }
     if (pattern === '5.4') {
-      return `Step 1.  Check the DMAAs section of the source sheet for mismatch flags (Mismatch - object, Mismatch - BU, etc.).\n\nStep 2.  If a DMAAI configuration error is found, correct the AAI to match the model table 4152.  Post a manual journal entry to move existing GL amounts to the correct account.\n\nStep 3.  If the mismatch is in period rather than account, check the GL Date processing options on the program that created the F0911 entry (P4312 PO 2, P4314 PO 2, R42800 PO 1).  If set to use a different date than the F4111 TransDate, that explains the period mismatch.\n\nStep 4.  Post a journal entry to move the GL amount to the correct period or account.`;
+      return this._accountMismatchResolution(data, findings);
+    }
+    if (pattern === '5.14') {
+      return this._periodMismatchResolution(data, findings);
     }
     if (pattern === '5.5') {
       return DMAAIKnowledge.netZeroResolution(findings.dmaaiPair);
@@ -5770,6 +5888,128 @@ const TransactionDetailTemplate = {
       return `  Line ${o.line || '?'}${o.item ? '  (' + o.item + ')' : ''}: cardex captured qty ${confirmed} at ship-confirm; order line currently shows qty ${orderQty}. Delta = ${Helpers.money(d)} of GL inventory drawdown with no cardex backing.`;
     }).join('\n');
     return `F4111 cardex was written at ship-confirm for ${linesPhrase} on this doc. Total qty captured by cardex: ${cardexQtyTotal} EA for ${Helpers.money(Math.abs(data.f4111Tot))}. Total qty currently on the order: ${orderQtyTotal} EA for ${Helpers.money(orderExpectedDollars)}. R42800 (Sales Update) ran later and booked the GL inventory account at the order's current qty — ${Helpers.money(Math.abs(data.f0911InvTot))}, which matches the order math, not the cardex.\n\nThe gap of ${qtyDelta} EA (${Helpers.money(dollarDelta)}) means the order line qty was edited between ship-confirm and Sales Update. Once ship-confirm fires, F4111 records and the Inventory In Hand flag on F4211 are written immediately — the cardex is locked. Any subsequent edit to the line affects only the GL posting, producing exactly this kind of variance.\n\nPer-line breakdown:\n${breakdown}\n\nThis is a process / access-control issue, not a DMAAI configuration issue. The cardex is the truth of what physically shipped; the GL has the post-edit qty. JDE Order Activity Rules should treat ship-confirm as the terminal editable status on this order type, and the Inventory In Hand flag should block line edits after that point.`;
+  },
+
+  // The inventory-side AAI by doc type — the one that fires when inventory
+  // dollars move via this doc type. Used by Pattern 5.4 (Account Mismatch)
+  // to guide the analyst directly to the DMAAI entry they need to inspect
+  // and (usually) fix. Returns null for unknown doc types; the resolution
+  // text falls back to generic "check the DMAAs section" language.
+  _inventoryAaiForDocType(dt) {
+    const t = String(dt || '').trim().toUpperCase();
+    const map = {
+      // Manufacturing
+      IM: { aai: '3110', label: 'Inventory Material',     note: 'credit when material is issued to a work order' },
+      IC: { aai: '3120', label: 'WIP',                    note: 'credit on WO completion (3130 debits finished-goods inventory)' },
+      IH: { aai: '3120', label: 'WIP',                    note: 'debit for labor charged to a work order' },
+      IS: { aai: '3120', label: 'WIP',                    note: 'credit on scrap' },
+      IV: { aai: '32xx', label: 'WO Variance',            note: 'manufacturing variance — Material (3240), Planned (3260), Labor (3270), Burden (3280)' },
+      // Inventory adjustments / moves
+      IA: { aai: '4124', label: 'Inventory Adjustment',   note: 'credit on adjustment (4122 is the debit side)' },
+      II: { aai: '4124', label: 'Inventory Issue',        note: 'credit on issue (4122 is the debit side)' },
+      IJ: { aai: '4124', label: 'Inventory Journal',      note: 'credit (4122 debit)' },
+      IL: { aai: '4124', label: 'Inventory Location',     note: 'credit (4122 debit)' },
+      IR: { aai: '4124', label: 'Inventory Reclass',      note: 'credit (4122 debit)' },
+      IT: { aai: '4124', label: 'Inventory Transfer',     note: 'credit within a branch; in-transit uses 4245 / 4320' },
+      IP: { aai: '4154', label: 'Physical Inventory',     note: 'credit on physical count (4152 debit)' },
+      IB: { aai: '4134', label: 'Inv Cost Change',        note: 'inventory side (4136 is the expense / variance side)' },
+      // Sales / returns
+      SO: { aai: '4240', label: 'Inventory at Branch',    note: 'credit on sales shipment (4220 COGS debit)' },
+      SD: { aai: '4240', label: 'Inventory at Branch',    note: 'credit on shipment (4220 COGS debit)' },
+      ST: { aai: '4240', label: 'Inventory at Branch',    note: 'credit on transfer shipment (4220 debit)' },
+      RM: { aai: '4240', label: 'Inventory at Branch',    note: 'debit on sales return (4220 COGS credit)' },
+      RI: { aai: '4240', label: 'Inventory at Branch',    note: 'credit (4220 COGS debit)' },
+      // Purchasing
+      OP: { aai: '4310', label: 'Inventory Receipt',      note: 'debit on PO receipt (4320 RNV credit)' },
+      OV: { aai: '4320', label: 'Received Not Vouchered', note: 'debit on voucher match (clears RNV)' },
+      PV: { aai: '4320', label: 'Received Not Vouchered', note: 'debit on voucher match' },
+    };
+    return map[t] || null;
+  },
+
+  // Pattern 5.4 — Account Mismatch helpers (WHAT / WHY / HOW).
+  // The variance signature is two RR Summary rows on different accounts:
+  // one carries the cardex (where it should have gone), the other carries
+  // the GL (where it actually went). The cleanup is a JE between the two
+  // accounts; the prevention is correcting the AAI that misrouted the GL.
+
+  _accountMismatchWhat(data, findings) {
+    const m = findings.accountMismatch || {};
+    const expected = m.expectedAcct || 'the expected inventory account';
+    const posted   = m.postedAcct   || 'a different account';
+    const amt      = Helpers.money(m.mispostedAmt || 0);
+    const docLabel = data.dt ? `${data.dt} document` : 'document';
+    return `The GL booked this ${docLabel} to the wrong account. The cardex (F4111) recorded ${amt} of inventory movement on ${expected}, but the GL (F0911) posted that same ${amt} to ${posted} instead. The net variance on the document is $0 because the two halves are the same dollar amount — but the money is sitting in the wrong place and needs to move.`;
+  },
+
+  _accountMismatchExplanation(data, ctx) {
+    const expected = ctx.expectedAcct || 'the expected inventory account';
+    const posted   = ctx.postedAcct   || 'a different account';
+    const amt      = Helpers.money(ctx.mispostedAmt || 0);
+    return `Two RR Summary rows show the same dollars (${amt}) on two different accounts: ${expected} on the cardex side, ${posted} on the GL side. That's the fingerprint of an account mismatch — the inventory movement was real, but the GL routed it to the wrong place.`;
+  },
+
+  _accountMismatchResolution(data, findings) {
+    const m       = findings.accountMismatch || {};
+    const dtRaw   = (data.dt || '').trim().toUpperCase();
+    const aaiInfo = this._inventoryAaiForDocType(dtRaw);
+    const expected = m.expectedAcct || '[expected account from F4111]';
+    const posted   = m.postedAcct   || '[posted account from F0911]';
+    const amt      = Helpers.money(m.mispostedAmt || 0);
+
+    // Step 1 — name the AAI that should have fired
+    const article = /^[AEIOU]/i.test(dtRaw) ? 'an' : 'a';
+    let step1;
+    if (aaiInfo) {
+      step1 = `Step 1.  This is ${article} ${dtRaw} document. For ${dtRaw}, the inventory side of the GL post comes through DMAAI ${aaiInfo.aai} (${aaiInfo.label}) — ${aaiInfo.note}. That's the AAI to inspect.`;
+    } else {
+      step1 = `Step 1.  Identify which DMAAI fires for ${data.dt || 'this document type'}'s inventory side. Look at the DMAAs section near the bottom of this workbook — the row whose resolved account matches ${expected} is the one that drove the cardex. The same AAI should be driving the GL post; if the GL landed on ${posted} instead, the AAI is misconfigured for this customer.`;
+    }
+
+    // Step 2 — check the preloaded DMAAIs / DMAAs section
+    const aaiNumStr = aaiInfo ? aaiInfo.aai : 'the relevant AAI';
+    const step2 = `Step 2.  Find that AAI's row in the DMAAs section near the bottom of this workbook (look for "${aaiNumStr}" in the DMAAI Table column) and check the Comment column for "Mismatch - object", "Mismatch - BU", or a similar flag. That comment is the smoking gun — it tells you the AAI is pointing at ${posted} when the model table says it should point at ${expected}.`;
+
+    // Step 3 — immediate JE
+    const step3 = `Step 3 (immediate fix).  Post a journal entry to move the misposted dollars to the right account:\n   Dr  ${expected}        ${amt}\n   Cr  ${posted}        ${amt}\nUse the GL date that matches the original F0911 entry so the correction lands in the same period.`;
+
+    // Step 4 — preventative AAI fix
+    const step4 = `Step 4 (preventative fix).  In JDE, correct DMAAI ${aaiNumStr} so it points at the same Object / Business Unit as the model table (4152). After the fix, future ${dtRaw || 'documents of this type'} will post to the right account automatically — no more period-end JEs for this same issue.`;
+
+    // Step 5 — escalation
+    const step5 = `Step 5 (if the DMAAs section shows no flag for ${aaiNumStr}).  The misroute isn't a DMAAI configuration problem. Most likely a manual journal entry coded the inventory amount to ${posted} directly, or an override on the posting program redirected it. Pull the F0911 record for this batch and check the Source column / Comment for a JE batch type — that points at who did the manual posting.`;
+
+    return [step1, step2, step3, step4, step5].join('\n\n');
+  },
+
+  // Pattern 5.14 — Period Mismatch helpers. Same account on cardex and GL,
+  // but different periods. Cause is usually a GL Date processing option
+  // set to "system date" rather than the F4111 transaction date.
+
+  _periodMismatchWhat(data, findings) {
+    const periods = Array.from(new Set(data.rrSummary.map(r => r.period && (r.period.toString ? r.period.toString().slice(0, 10) : r.period)).filter(Boolean)));
+    const acct = data.rrSummary[0] && data.rrSummary[0].account;
+    return `The cardex (F4111) and the GL (F0911) agree on the account (${acct || '—'}) and the dollar amount, but they landed in different fiscal periods (${periods.join(' vs ')}). The inventory and GL totals reconcile across the whole document; the problem is the period one of them posted in.`;
+  },
+
+  _periodMismatchExplanation(data) {
+    return `Two RR Summary rows show the same account but different fiscal periods — that's the fingerprint of a period mismatch. The AAI configuration is correct; the GL post just landed in the wrong period. Typical cause: R42800 (Sales Update) or R31802A (Manufacturing Accounting) ran with its GL Date processing option set to use the system run date instead of the F4111 transaction date. Every batch that program processes then lands in whatever period the program ran in, not the period the inventory actually moved.`;
+  },
+
+  _periodMismatchResolution(data, findings) {
+    const periods = Array.from(new Set(data.rrSummary.map(r => r.period && (r.period.toString ? r.period.toString().slice(0, 10) : r.period)).filter(Boolean)));
+    const acct = data.rrSummary[0] && data.rrSummary[0].account;
+    return `Step 1.  Confirm the discrepancy is period, not account. Both RR Summary rows here have account ${acct || '[same account]'}; the periods are ${periods.join(' and ')}. If the accounts also differ, escalate to the account-mismatch pattern instead — it's a different fix.
+
+Step 2 (immediate fix).  Post a journal entry that reverses the GL amount out of the wrong period and re-posts it in the right one. Use the F4111 transaction date / period as the target. The amounts are equal and opposite; net P&L impact is zero, but the period attribution is corrected.
+
+Step 3 (preventative fix).  Find the program that wrote the F0911 entry (the BT column on the F0911 Inv row points at the batch type: SO ⇒ R42800, IM/IC/IH ⇒ R31802A, OP/OV ⇒ P4312/P43214). Check its GL Date processing option:
+  - R42800 PO 1 — "GL Date for Sales Update"
+  - R31802A PO 1 — "GL Date Source"
+  - P4312 PO 2 / P43214 PO 2 — "GL Date" override
+If the option is set to use the system run date, change it to use the transaction date (F4111 TransDate, or the SOP processing date). Every future post will then land in the right period.
+
+Step 4 (sweep).  This pattern usually isn't a one-off — once the processing option is wrong, every batch the program runs in the affected period drifts. Pull F0911 for the batch numbers that appear on this document and check whether sibling docs in the same batch have the same period mismatch. If they do, the corrective JE above needs to cover all of them, not just this one document.`;
   },
 
   _postConfirmOrderEditResolution(data, findings) {
