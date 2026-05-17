@@ -431,6 +431,18 @@ default). For belt-and-suspenders on a chore commit, also add
   until you hit a natural breakpoint, then ask before pushing. (Saved
   to memory as `feedback_batched_commits.md`.)
 
+- **When the owner says "commit," run the full commit-to-sync flow
+  end-to-end — don't pause to ask whether to push.** "Commit" means:
+  git commit → `git push -u origin <branch>` → open PR via
+  `gh pr create` (with the `Release-Note:` trailer in the body) →
+  `gh pr merge --squash` → poll for bot commits to settle → fast-
+  forward the owner's main clone (the next bullet). Only stop to ask
+  if you hit a genuine obstacle (merge conflict, CI failure,
+  destructive-action prompt). "Should I push next?" is not a question
+  to ask — the owner considers the full sequence one action. Use the
+  full path `/c/Program Files/GitHub CLI/gh.exe` since `gh` isn't on
+  the PATH the Bash tool sees.
+
 - **After every PR merge, auto-pull origin/main into the owner's main
   clone — no "say synced" handshake.** The worktree shares its `.git/`
   dir with the owner's main clone at `C:/source/repos/RapidReconciler-AI`,
