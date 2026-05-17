@@ -7542,7 +7542,652 @@ const ItemLedgerTemplate = {
 };
 Templates.register(ItemLedgerTemplate);
 
-// 10 templates now implemented — no stubs remaining.
+/* ====================================================================
+   JDE DMAAI's TEMPLATE  —  F4095 (Distribution AAIs) full dump
+
+   Customer drops a full F4095 export from JDE Database Browser
+   (P964001) or from SSMS against the customer's mirrored schema.
+   Detects misconfigurations directly from the AAI table — before
+   any transaction posts.
+
+   Differs from the existing "DMAAI Entry Integrity" template,
+   which consumes RR's integrity-report output (scoped to AAIs RR
+   exercises). This one reads the raw F4095 across every JDE
+   distribution module.
+
+   F4095 lookup hierarchy (per JDE docs / RR University):
+     1.  (specific company, specific GL class)
+     2.  (specific company, **** wildcard)
+     3.  (00000 default,    specific GL class)
+     4.  (00000 default,    **** wildcard)
+     5.  → no match → posting error
+
+   The classifier resolves every (co, ot, dt, glClass, cost) tuple
+   through this hierarchy so a "specific co" lookup that hits a
+   "00000 / ****" fallback is treated as a real working
+   configuration, not a missing entry.
+==================================================================== */
+const JdeDmaaisTemplate = {
+  id: 'jde-dmaais',
+  name: "JDE DMAAI's",
+  family: 'JDE-native, configuration',
+  description: 'JDE F4095 full Distribution AAI dump. Hierarchy-aware lookup, net-zero pair, missing complement, inactive AAI, duplicate key.',
+  status: 'ready',
+
+  _normHeader(raw) {
+    if (raw == null) return '';
+    let s = String(typeof raw === 'object' ? raw.text || raw.result || raw : raw).trim();
+    return s.toLowerCase().replace(/\s+/g, '').trim();
+  },
+
+  // Strongest signature set (9 headers). All present = score 1.0.
+  _signatureHeaders: [
+    'aainumber', 'co', 'orty', 'doty', 'g/lcat',
+    'costtype', 'businessunit', 'objacct', 'sub'
+  ],
+
+  _readHeaderRow(ws, rowNum = 1) {
+    const row = ws.getRow(rowNum);
+    const maxCol = Math.max(ws.actualColumnCount || 0, ws.columnCount || 0, 15);
+    const raw = [];
+    const norm = [];
+    for (let c = 1; c <= maxCol; c++) {
+      const v = row.getCell(c).value;
+      if (v == null || v === '') { raw.push(''); norm.push(''); continue; }
+      raw.push(String(typeof v === 'object' ? v.text || v.result || v : v).trim());
+      norm.push(this._normHeader(v));
+    }
+    return { raw, norm };
+  },
+
+  // ---- Detection ----
+  detect(workbook) {
+    let bestFound = 0;
+    let bestSheet = null;
+    for (const ws of workbook.worksheets) {
+      const { norm } = this._readHeaderRow(ws, 1);
+      const found = this._signatureHeaders.filter(h => norm.includes(h)).length;
+      if (found > bestFound) { bestFound = found; bestSheet = ws; }
+    }
+    if (!bestSheet || bestFound < 5) return 0;
+    return Math.min(1.0, bestFound / this._signatureHeaders.length);
+  },
+
+  _findSheet(workbook) {
+    let best = null, bestFound = 0;
+    for (const ws of workbook.worksheets) {
+      const { norm } = this._readHeaderRow(ws, 1);
+      const found = this._signatureHeaders.filter(h => norm.includes(h)).length;
+      if (found > bestFound) { bestFound = found; best = ws; }
+    }
+    return bestFound >= 5 ? best : null;
+  },
+
+  // ---- Parsing ----
+  parse(workbook) {
+    const ws = this._findSheet(workbook);
+    if (!ws) throw new Error('JDE DMAAI parse: could not locate a sheet with the F4095 header signature.');
+    const { norm } = this._readHeaderRow(ws, 1);
+    const colOf = key => norm.indexOf(key) + 1;
+    const cols = {
+      aaiNum:      colOf('aainumber'),
+      co:          colOf('co'),
+      orderType:   colOf('orty'),
+      docType:     colOf('doty'),
+      glClass:     colOf('g/lcat'),
+      costType:    colOf('costtype'),
+      branchPlant: colOf('businessunit'),
+      objAcct:     colOf('objacct'),
+      sub:         colOf('sub')
+    };
+    if (!cols.aaiNum || !cols.co || !cols.objAcct) {
+      throw new Error('JDE DMAAI parse: missing required columns (AAI Number, Co, Obj Acct).');
+    }
+
+    const cellVal = (row, col) => {
+      if (!col) return null;
+      const v = row.getCell(col).value;
+      if (v == null) return null;
+      if (typeof v === 'object' && v.text !== undefined) return v.text;
+      if (typeof v === 'object' && v.result !== undefined) return v.result;
+      return v;
+    };
+    // Trim trailing/leading whitespace; preserve interior. Keep the value
+    // exactly as JDE stores it semantically (a blank field becomes "").
+    const norm5 = v => v == null ? '' : String(v).trim();
+
+    const rows = [];
+    const maxRow = ws.actualRowCount || ws.rowCount;
+    for (let r = 2; r <= maxRow; r++) {
+      const row = ws.getRow(r);
+      const aaiRaw = cellVal(row, cols.aaiNum);
+      if (aaiRaw == null || aaiRaw === '') continue;     // skip blank rows
+      const aaiNum = Number(aaiRaw);
+      if (!isFinite(aaiNum)) continue;
+      rows.push({
+        rowNumber: r,
+        aaiNum,
+        co:          norm5(cellVal(row, cols.co)),
+        orderType:   norm5(cellVal(row, cols.orderType)),
+        docType:     norm5(cellVal(row, cols.docType)),
+        glClass:     norm5(cellVal(row, cols.glClass)),
+        costType:    norm5(cellVal(row, cols.costType)),
+        branchPlant: norm5(cellVal(row, cols.branchPlant)),
+        objAcct:     norm5(cellVal(row, cols.objAcct)),
+        sub:         norm5(cellVal(row, cols.sub))
+      });
+    }
+    if (rows.length === 0) throw new Error('JDE DMAAI parse: no data rows found below the header row.');
+
+    return {
+      sheetName: ws.name,
+      headerRow: 1,
+      rows,
+      totalRows: rows.length,
+      // For chrome / preview rendering
+      companies: Array.from(new Set(rows.map(r => r.co).filter(Boolean))).sort(),
+      aaiNumbers: Array.from(new Set(rows.map(r => r.aaiNum))).sort((a, b) => a - b)
+    };
+  },
+
+  // Known debit/credit complement pairs. The same pairs the existing
+  // DMAAIKnowledge constant encodes — used by Patterns 1 and 2.
+  _complementPairs: [
+    { dr: 4122, cr: 4124, label: 'Inventory dr/cr',     docTypes: ['IA','II','IJ','IL','IM','IP','IR','IV'] },
+    { dr: 4126, cr: 4128, label: 'RNV dr/cr',            docTypes: ['VV','OV','OP'] },
+    { dr: 4134, cr: 4136, label: 'In-transit dr/cr',     docTypes: ['IB'] },
+    { dr: 4240, cr: 4220, label: 'Sales / COGS dr/cr',   docTypes: ['SO','SD','RM'] },
+    { dr: 4310, cr: 4320, label: 'PO receipt / RNV dr/cr', docTypes: [] }
+  ],
+
+  // Doc types where net-zero on the dr/cr pair is the INTENDED config.
+  // IT (Inventory Transfer) moves stock between locations on the same
+  // item — the inventory account decreases on the "from" side and
+  // increases on the "to" side, net $0 to the GL by design. Flagging
+  // this as an anomaly is noise. Add more here if other transfer-style
+  // doc types surface during testing.
+  _byDesignNetZeroDocTypes: ['IT'],
+
+  // Build an index keyed by the full lookup tuple. Each key maps to an
+  // array because the same tuple may appear multiple times (Pattern 4
+  // duplicates) — we keep all rows.
+  _buildIndex(rows) {
+    const idx = new Map();
+    rows.forEach(r => {
+      const k = `${r.aaiNum}|${r.co}|${r.orderType}|${r.docType}|${r.glClass}|${r.costType}`;
+      if (!idx.has(k)) idx.set(k, []);
+      idx.get(k).push(r);
+    });
+    return idx;
+  },
+
+  // Walk the 4-tier F4095 hierarchy. Returns the FIRST tier that has at
+  // least one row, plus the tier index/label. Returns null if all four
+  // tiers are empty (the "AAI not configured" case).
+  _resolveAAI(idx, aaiNum, co, ot, dt, glClass, cost) {
+    const tiers = [
+      { co,       gl: glClass, label: 'specific co + specific gl' },
+      { co,       gl: '****',  label: 'specific co + wildcard gl' },
+      { co: '00000', gl: glClass, label: 'default co (00000) + specific gl' },
+      { co: '00000', gl: '****',  label: 'default co (00000) + wildcard gl' }
+    ];
+    for (let i = 0; i < tiers.length; i++) {
+      const t = tiers[i];
+      const k = `${aaiNum}|${t.co}|${ot}|${dt}|${t.gl}|${cost}`;
+      const rows = idx.get(k);
+      if (rows && rows.length > 0) return { rows, tierIdx: i, tierLabel: t.label };
+    }
+    return null;
+  },
+
+  // Compose the "effective account" string from the first row of a
+  // resolved tier. Two AAI lookups produce the same posting target if
+  // their effective accounts match. Account = BU + Obj + Sub.
+  _effectiveAccount(resolution) {
+    if (!resolution || !resolution.rows || !resolution.rows[0]) return null;
+    const r = resolution.rows[0];
+    return `${r.branchPlant}|${r.objAcct}|${r.sub}`;
+  },
+
+  // Pretty-print the same triple for display in evidence.
+  _formatAccount(r) {
+    const bu  = r.branchPlant || '(blank BU)';
+    const obj = r.objAcct     || '(blank obj)';
+    const sub = r.sub         || '(blank sub)';
+    return `${bu}.${obj}${sub && sub !== '(blank sub)' ? '.' + sub : ''}`;
+  },
+
+  // ---- Classification ----
+  classify(data) {
+    const rows = data.rows;
+    const idx  = this._buildIndex(rows);
+
+    // ---- Pattern 1: Net-zero pair (dr + cr resolve to same account) ----
+    // For each complement pair, walk every (co, ot, dt, glClass, cost)
+    // tuple that appears on either side. Resolve both sides via the
+    // hierarchy. Flag when the effective accounts match.
+    //
+    // Skip doc types listed in _byDesignNetZeroDocTypes — those (e.g.
+    // IT inventory transfers) are net-zero on purpose and shouldn't be
+    // surfaced as anomalies.
+    const byDesignDTs = new Set(this._byDesignNetZeroDocTypes);
+    const netZero = [];
+    this._complementPairs.forEach(pair => {
+      const tuples = new Set();
+      rows.forEach(r => {
+        if (r.aaiNum === pair.dr || r.aaiNum === pair.cr) {
+          tuples.add(`${r.co}|${r.orderType}|${r.docType}|${r.glClass}|${r.costType}`);
+        }
+      });
+      tuples.forEach(tuple => {
+        const [co, ot, dt, gl, cost] = tuple.split('|');
+        if (byDesignDTs.has(dt)) return;   // IT and similar are net-zero by design
+        const drRes = this._resolveAAI(idx, pair.dr, co, ot, dt, gl, cost);
+        const crRes = this._resolveAAI(idx, pair.cr, co, ot, dt, gl, cost);
+        if (!drRes || !crRes) return;
+        if (this._effectiveAccount(drRes) === this._effectiveAccount(crRes)) {
+          netZero.push({
+            pair, co, ot, dt, gl, cost,
+            drRow: drRes.rows[0],
+            crRow: crRes.rows[0],
+            drTier: drRes.tierLabel,
+            crTier: crRes.tierLabel
+          });
+        }
+      });
+    });
+
+    // ---- Pattern 2: Missing complement ----
+    // For each tuple present on one side of a pair, check the other
+    // side. Only flag when the OTHER SIDE returns null from
+    // _resolveAAI — i.e., truly no fallback at any tier.
+    const missingComplement = [];
+    this._complementPairs.forEach(pair => {
+      const tuples = new Set();
+      rows.forEach(r => {
+        if (r.aaiNum === pair.dr || r.aaiNum === pair.cr) {
+          tuples.add(`${r.co}|${r.orderType}|${r.docType}|${r.glClass}|${r.costType}`);
+        }
+      });
+      tuples.forEach(tuple => {
+        const [co, ot, dt, gl, cost] = tuple.split('|');
+        const drRes = this._resolveAAI(idx, pair.dr, co, ot, dt, gl, cost);
+        const crRes = this._resolveAAI(idx, pair.cr, co, ot, dt, gl, cost);
+        if (drRes && !crRes) {
+          missingComplement.push({ pair, co, ot, dt, gl, cost, missingAAI: pair.cr, existingSide: 'dr', existingRow: drRes.rows[0], existingTier: drRes.tierLabel });
+        } else if (!drRes && crRes) {
+          missingComplement.push({ pair, co, ot, dt, gl, cost, missingAAI: pair.dr, existingSide: 'cr', existingRow: crRes.rows[0], existingTier: crRes.tierLabel });
+        }
+      });
+    });
+
+    // ---- Pattern 3: Inactive AAI (blank Obj Acct) ----
+    // A row that exists in F4095 with a blank Obj Acct. Lookup
+    // "succeeds" at that tier (the row exists for the key) but the
+    // account is blank → posting fails. This *shadows* the wildcard
+    // fallback that would otherwise have worked.
+    const inactive = rows.filter(r => !r.objAcct).map(r => ({ row: r }));
+
+    // ---- Pattern 4: Duplicate key tuples ----
+    // Multiple F4095 rows with identical (AAI, Co, Or Ty, Do Ty, GL,
+    // Cost). R894095A would remove these into F4095TEM; until it runs,
+    // the first-found wins.
+    const duplicates = [];
+    for (const [k, rs] of idx) {
+      if (rs.length > 1) duplicates.push({ key: k, rows: rs });
+    }
+
+    // ---- Pattern 6: Unrecognized AAI series ----
+    // JDE's standard distribution-AAI range is roughly 3000-4499 — the
+    // documented manufacturing (3xxx) and distribution (4100s inventory,
+    // 4200s sales, 4300s purchasing, 4400s intercompany) buckets. AAI
+    // numbers outside this range (e.g. 1700) aren't part of the standard
+    // catalogue we recognise. They might be:
+    //   * customer-specific custom AAIs added via a custom JDE program
+    //   * misconfigured rows with the wrong AAI number
+    //   * AAIs from a series we haven't documented yet
+    // Either way, surface them grouped by "series" (hundreds bucket) so
+    // the user can investigate and add to the knowledge base later.
+    // Informational only — Priority 3.
+    const KNOWN_SERIES_MIN = 3000;
+    const KNOWN_SERIES_MAX = 4499;
+    const unrecognizedSeries = [];
+    {
+      const bySeries = new Map();
+      rows.forEach(r => {
+        if (r.aaiNum < KNOWN_SERIES_MIN || r.aaiNum > KNOWN_SERIES_MAX) {
+          const series = Math.floor(r.aaiNum / 100) * 100;
+          if (!bySeries.has(series)) bySeries.set(series, []);
+          bySeries.get(series).push(r);
+        }
+      });
+      Array.from(bySeries.keys()).sort((a, b) => a - b).forEach(series => {
+        const seriesRows = bySeries.get(series);
+        const distinctAAIs = Array.from(new Set(seriesRows.map(r => r.aaiNum))).sort((a, b) => a - b);
+        unrecognizedSeries.push({ series, distinctAAIs, rows: seriesRows });
+      });
+    }
+
+    // ---- Pattern 5: Specific row redundant vs wildcard fallback ----
+    // For each (aai, co, ot, dt, cost) combo, if a (co, ****) wildcard
+    // exists and a (co, specific GL) row resolves to the SAME effective
+    // account as the wildcard, the specific row is redundant — could be
+    // deleted without changing behaviour. (If accounts differ, both are
+    // intentional.)
+    const redundantSpecific = [];
+    const byPartialKey = new Map();
+    rows.forEach(r => {
+      const k = `${r.aaiNum}|${r.co}|${r.orderType}|${r.docType}|${r.costType}`;
+      if (!byPartialKey.has(k)) byPartialKey.set(k, []);
+      byPartialKey.get(k).push(r);
+    });
+    for (const [k, rs] of byPartialKey) {
+      const wildcards = rs.filter(r => r.glClass === '****');
+      const specifics = rs.filter(r => r.glClass && r.glClass !== '****');
+      if (!wildcards.length || !specifics.length) continue;
+      const wAcct = this._effectiveAccount({ rows: [wildcards[0]] });
+      specifics.forEach(s => {
+        const sAcct = this._effectiveAccount({ rows: [s] });
+        if (sAcct === wAcct) redundantSpecific.push({ specific: s, wildcard: wildcards[0] });
+      });
+    }
+
+    // ---- Priority / Counts ----
+    const unrecognizedRowCount = unrecognizedSeries.reduce((sum, s) => sum + s.rows.length, 0);
+    const counts = {
+      netZero: netZero.length,
+      missing: missingComplement.length,
+      inactive: inactive.length,
+      duplicates: duplicates.length,
+      redundant: redundantSpecific.length,
+      unrecognized: unrecognizedSeries.length
+    };
+    const priority = (counts.netZero || counts.missing || counts.inactive) ? 1
+                   : (counts.duplicates) ? 2
+                   : (counts.redundant || counts.unrecognized) ? 3
+                   : 3;
+
+    const labelBits = [];
+    if (counts.netZero)      labelBits.push(`Net-zero pair (${counts.netZero})`);
+    if (counts.missing)      labelBits.push(`Missing complement (${counts.missing})`);
+    if (counts.inactive)     labelBits.push(`Inactive AAI (${counts.inactive})`);
+    if (counts.duplicates)   labelBits.push(`Duplicate key (${counts.duplicates})`);
+    if (counts.redundant)    labelBits.push(`Redundant specific (${counts.redundant})`);
+    if (counts.unrecognized) labelBits.push(`Unrecognized series (${counts.unrecognized})`);
+    const patternLabel = labelBits.length ? labelBits.join(' · ') : 'Clean — no AAI configuration issues found';
+
+    // ---- Highlights for the source-sheet copy (priority-color fills) ----
+    const highlights = [];
+    netZero.forEach(n => { highlights.push({ rowNumber: n.drRow.rowNumber, priority: 1 }); highlights.push({ rowNumber: n.crRow.rowNumber, priority: 1 }); });
+    missingComplement.forEach(m => highlights.push({ rowNumber: m.existingRow.rowNumber, priority: 1 }));
+    inactive.forEach(i => highlights.push({ rowNumber: i.row.rowNumber, priority: 1 }));
+    duplicates.forEach(d => d.rows.forEach(r => highlights.push({ rowNumber: r.rowNumber, priority: 2 })));
+    redundantSpecific.forEach(r => highlights.push({ rowNumber: r.specific.rowNumber, priority: 3 }));
+    unrecognizedSeries.forEach(s => s.rows.forEach(r => highlights.push({ rowNumber: r.rowNumber, priority: 3 })));
+
+    // ---- Per-row pattern note ("RR Analyzer Note" column) ----
+    const patternByRow = new Map();
+    const tagRow = (rn, label) => {
+      if (rn == null) return;
+      const prior = patternByRow.get(rn);
+      patternByRow.set(rn, prior ? `${prior}  ·  ${label}` : label);
+    };
+    // Each net-zero row gets a note naming its partner AAI, the partner's
+    // F4095 row number, and the shared account — so the user can see both
+    // sides of the misconfig without cross-referencing manually.
+    netZero.forEach(n => {
+      const acct = this._formatAccount(n.drRow);
+      tagRow(n.drRow.rowNumber, `Net-zero with ${n.pair.cr} (row ${n.crRow.rowNumber}): same account ${acct}`);
+      tagRow(n.crRow.rowNumber, `Net-zero with ${n.pair.dr} (row ${n.drRow.rowNumber}): same account ${acct}`);
+    });
+    missingComplement.forEach(m => tagRow(m.existingRow.rowNumber, `Missing complement (${m.missingAAI})`));
+    inactive.forEach(i => tagRow(i.row.rowNumber, 'Inactive (blank Obj Acct)'));
+    duplicates.forEach(d => d.rows.forEach(r => tagRow(r.rowNumber, 'Duplicate key')));
+    redundantSpecific.forEach(r => tagRow(r.specific.rowNumber, 'Redundant vs wildcard'));
+    unrecognizedSeries.forEach(s => s.rows.forEach(r => tagRow(r.rowNumber, `Unrecognized AAI series ${s.series}`)));
+
+    // ---- Multi-findings cards ----
+    const multiFindings = [];
+    if (counts.netZero) {
+      multiFindings.push({
+        number: multiFindings.length + 1, type: 'net_zero',
+        title: `Net-zero pair  (${counts.netZero} tuple${counts.netZero === 1 ? '' : 's'})`,
+        priority: 1, rowCount: counts.netZero,
+        issue: 'Net-zero pair',
+        scopeShort: `${counts.netZero} tuple${counts.netZero === 1 ? '' : 's'}`,
+        detail: 'Debit and credit AAIs point to the same account',
+        scope: `${counts.netZero} (co, ot, dt, gl, cost) tuple${counts.netZero === 1 ? '' : 's'} where the debit and credit AAIs in a known complement pair resolve to the same BU/Obj/Sub account through the F4095 hierarchy.`,
+        pattern: `When both sides of a complement pair (e.g., 4122 inventory debit + 4124 inventory credit) route to the same GL account, every transaction of that type posts a debit and credit of equal value to the same account and self-cancels in F0911. The cardex is written but no net GL impact lands — the inventory account looks unchanged even though inventory moved. This is the F4095-side fingerprint of the cardex-vs-GL variance that the Transaction Detail analyzer's "net-zero" pattern catches after the fact.`,
+        resolution: `Step 1.  For each flagged tuple, look up both AAIs in JDE (P40950). Confirm with cost accounting which account each should target.\n\nStep 2.  Update the side that's wrong. The credit side (4124, 4128, 4136, 4220, 4320) is almost always the one that was missed or copy-pasted from the debit.\n\nStep 3.  Once the AAI is corrected, future transactions post correctly. Historic transactions already posted with the wrong routing need a manual JE to clear the net-zero entries from F0911.`,
+        rows: netZero
+      });
+    }
+    if (counts.missing) {
+      multiFindings.push({
+        number: multiFindings.length + 1, type: 'missing_complement',
+        title: `Missing complement AAI  (${counts.missing} tuple${counts.missing === 1 ? '' : 's'})`,
+        priority: 1, rowCount: counts.missing,
+        issue: 'Missing complement',
+        scopeShort: `${counts.missing} tuple${counts.missing === 1 ? '' : 's'}`,
+        detail: 'One side of a complement pair resolves, the other does not',
+        scope: `${counts.missing} (co, ot, dt, gl, cost) tuple${counts.missing === 1 ? '' : 's'} where one side of a known complement pair resolves through the F4095 hierarchy but the other side returns no match at any of the four tiers.`,
+        pattern: `Posting these transactions produces a single-sided GL entry — the configured side posts, the missing side fails. Result is typically an unposted-batch error or, worse, a one-sided ledger if a fallback account accepts the orphan.`,
+        resolution: `Step 1.  Identify the missing AAI for each flagged tuple. The "Missing complement (XXXX)" note on the source row names the absent AAI.\n\nStep 2.  Configure the missing AAI in JDE (P40950) for that (co, ot, dt, gl) combination, or add a (co, ****) wildcard if every GL class within that company should route the same way.\n\nStep 3.  Run R894095A (DMAAI Cleanup) to refresh any consolidated tables before re-testing.`,
+        rows: missingComplement
+      });
+    }
+    if (counts.inactive) {
+      multiFindings.push({
+        number: multiFindings.length + 1, type: 'inactive_aai',
+        title: `Inactive AAI  (${counts.inactive} row${counts.inactive === 1 ? '' : 's'})`,
+        priority: 1, rowCount: counts.inactive,
+        issue: 'Inactive AAI',
+        scopeShort: `${counts.inactive} row${counts.inactive === 1 ? '' : 's'}`,
+        detail: 'F4095 row with blank Obj Acct',
+        scope: `${counts.inactive} F4095 row${counts.inactive === 1 ? '' : 's'} where Obj Acct is blank. The row exists in the hierarchy but resolves to an unposted-able account string.`,
+        pattern: `A blank Obj Acct row "succeeds" at lookup but produces an empty account number — the posting either fails or routes to JDE's error-suspense account. This SHADOWS the wildcard fallback that would have otherwise provided a working account — JDE never gets to try the (co, ****) or (00000, ****) tier because the specific row was found.`,
+        resolution: `Step 1.  Either populate the Obj Acct on each flagged row with the correct GL account, or delete the row entirely so the wildcard fallback (one tier down) takes over.\n\nStep 2.  If the row was intended to "disable" the AAI, that's not how F4095 works — there is no per-row disable flag. Removing the row is the right way to fall through to the wildcard.`,
+        rows: inactive
+      });
+    }
+    if (counts.duplicates) {
+      multiFindings.push({
+        number: multiFindings.length + 1, type: 'duplicate_key',
+        title: `Duplicate key tuple  (${counts.duplicates} pair${counts.duplicates === 1 ? '' : 's'})`,
+        priority: 2, rowCount: counts.duplicates,
+        issue: 'Duplicate key',
+        scopeShort: `${counts.duplicates} key${counts.duplicates === 1 ? '' : 's'}`,
+        detail: 'Same (AAI, Co, Or Ty, Do Ty, GL, Cost) appears multiple times',
+        scope: `${counts.duplicates} key${counts.duplicates === 1 ? '' : 's'} where multiple F4095 rows share the same (AAI Number, Co, Or Ty, Do Ty, GL Cat, Cost Type) tuple. JDE's lookup uses the first match, so the later duplicates are silently ignored.`,
+        pattern: `Duplicates typically appear after a DMAAI copy operation that didn't clean up afterwards. JDE's R894095A (DMAAI Cleanup) removes them into F4095TEM for review. Until then, the first-found wins — which may or may not be the intended row.`,
+        resolution: `Step 1.  For each flagged key, review all duplicate rows in F4095. Confirm which is correct.\n\nStep 2.  Run R894095A (DMAAI Cleanup) to move duplicates into F4095TEM. Review F4095TEM and restore any that were intentional.`,
+        rows: duplicates
+      });
+    }
+    if (counts.redundant) {
+      multiFindings.push({
+        number: multiFindings.length + 1, type: 'redundant_specific',
+        title: `Redundant specific entry  (${counts.redundant} row${counts.redundant === 1 ? '' : 's'})`,
+        priority: 3, rowCount: counts.redundant,
+        issue: 'Redundant specific',
+        scopeShort: `${counts.redundant} row${counts.redundant === 1 ? '' : 's'}`,
+        detail: 'Specific-GL row resolves to the same account as the (co, ****) wildcard',
+        scope: `${counts.redundant} F4095 row${counts.redundant === 1 ? '' : 's'} with a specific GL Class where the resolved account is identical to the (same Co, **** wildcard) entry. The specific row could be deleted without changing behaviour.`,
+        pattern: `Often these accumulated when specific entries were added "just in case" and the wildcard was already pointing at the right account. Not an error — just clutter. Low priority.`,
+        resolution: `Optional cleanup. For each flagged row, confirm the wildcard alone covers the intended case, then delete the specific row to keep F4095 lean.`,
+        rows: redundantSpecific
+      });
+    }
+    if (counts.unrecognized) {
+      const seriesSummary = unrecognizedSeries.map(s => `${s.series} (${s.distinctAAIs.join(', ')})`).join('; ');
+      multiFindings.push({
+        number: multiFindings.length + 1, type: 'unrecognized_series',
+        title: `Unrecognized AAI series  (${counts.unrecognized} series, ${unrecognizedRowCount} row${unrecognizedRowCount === 1 ? '' : 's'})`,
+        priority: 3, rowCount: counts.unrecognized,
+        issue: 'Unrecognized series',
+        scopeShort: `${counts.unrecognized} series, ${unrecognizedRowCount} row${unrecognizedRowCount === 1 ? '' : 's'}`,
+        detail: `Outside the JDE standard ${KNOWN_SERIES_MIN}–${KNOWN_SERIES_MAX} distribution-AAI range`,
+        scope: `${counts.unrecognized} AAI series outside the standard JDE distribution range (${KNOWN_SERIES_MIN}–${KNOWN_SERIES_MAX}). Series found: ${seriesSummary}. Total ${unrecognizedRowCount} F4095 row${unrecognizedRowCount === 1 ? '' : 's'}.`,
+        pattern: `The standard JDE distribution AAI range covers manufacturing (3xxx) and distribution (4100s inventory, 4200s sales, 4300s purchasing, 4400s intercompany). Numbers outside this range may be customer-specific custom AAIs, misconfigured rows with the wrong number, or AAIs from a JDE module we haven't documented. This pattern surfaces them for review.`,
+        resolution: `Look up each unrecognized series in JDE's AAI documentation or in the customer's custom-AAI catalogue. If legitimate, document the series so future analyses can recognise it. If suspicious, confirm with the JDE administrator before changing anything.`,
+        rows: unrecognizedSeries
+      });
+    }
+    if (!multiFindings.length) {
+      multiFindings.push({
+        number: 1, type: 'clean',
+        title: 'All checked patterns passed',
+        priority: 3, rowCount: 0,
+        issue: 'Clean',
+        scopeShort: `${rows.length} F4095 row${rows.length === 1 ? '' : 's'}`,
+        detail: '5 patterns checked, 0 flagged',
+        scope: `${rows.length} F4095 row${rows.length === 1 ? '' : 's'} reviewed across ${data.companies.length} compan${data.companies.length === 1 ? 'y' : 'ies'} and ${data.aaiNumbers.length} distinct AAI number${data.aaiNumbers.length === 1 ? '' : 's'}.`,
+        pattern: 'All 5 integrity checks passed.',
+        resolution: 'No action required.',
+        rows: []
+      });
+    }
+
+    return {
+      netZero, missingComplement, inactive, duplicates, redundantSpecific, unrecognizedSeries,
+      highlights, patternByRow,
+      priority, patternLabel,
+      findings: multiFindings,
+      overallPriority: priority,
+      totalFindings: counts.netZero + counts.missing + counts.inactive + counts.duplicates + counts.redundant + counts.unrecognized,
+      // Empty actionPlan — the preview card (renderMultiFindingPreview)
+      // expects this field to exist and iterates it with .map(). DMAAIs
+      // don't have a meaningful action plan beyond the per-finding
+      // resolution text already on each card.
+      actionPlan: [],
+      patternsChecked: [
+        'Net-zero pair  (dr + cr resolve to same account)',
+        'Missing complement  (one side resolves, the other does not)',
+        'Inactive AAI  (row exists with blank Obj Acct)',
+        'Duplicate key tuple  (R894095A would clean these)',
+        'Redundant specific entry  (same account as wildcard fallback)',
+        `Unrecognized AAI series  (outside ${KNOWN_SERIES_MIN}–${KNOWN_SERIES_MAX})`
+      ]
+    };
+  },
+
+  // ---- Rendering ----
+  filename() {
+    return `JDE DMAAIs Analysis ${Helpers.todayStamp()}.xlsx`;
+  },
+
+  async render(workbook, data, findings, sourceWb, sourceSheet) {
+    const ws = workbook.addWorksheet('Analysis', { views: [{ showGridLines: false, state: 'normal' }] });
+    F.standardColumnWidths(ws);
+
+    // Chrome
+    const total = findings.totalFindings;
+    const subline = total === 0
+      ? `${Helpers.count(data.rows.length)} F4095 rows  ·  clean — all ${findings.patternsChecked.length} patterns passed`
+      : `${Helpers.count(data.rows.length)} F4095 rows  ·  ${total} flagged across ${findings.findings.length} pattern${findings.findings.length === 1 ? '' : 's'}  ·  ${findings.patternLabel}`;
+    const context = `Source  JDE F4095 (Distribution AAIs) export          ${Helpers.todayPretty()}          Rows  ${Helpers.count(data.rows.length)}`;
+    F.renderChrome(ws, {
+      headline: "JDE DMAAI's — F4095 Analysis",
+      subline,
+      context
+    });
+
+    // Source rows aren't sorted — F4095 has a natural key order from the
+    // SELECT in the export query. We just need a rowMap that's an identity
+    // map (each source row keeps its number), so the existing hyperlink
+    // and highlight code paths work unchanged.
+    const sortedRows = data.rows.slice();
+    const rowMap = new Map();
+    sortedRows.forEach((r, i) => rowMap.set(r.rowNumber, data.headerRow + 1 + i));
+    const remappedHighlights = findings.highlights
+      .map(h => ({ rowNumber: rowMap.get(h.rowNumber), priority: h.priority }))
+      .filter(h => h.rowNumber != null);
+    const remappedPatternByRow = new Map();
+    findings.patternByRow.forEach((label, oldRn) => {
+      const newRn = rowMap.get(oldRn);
+      if (newRn != null) remappedPatternByRow.set(newRn, label);
+    });
+    findings.findings.forEach(f => {
+      if (f.rows && f.rows.length > 0) {
+        // Pick the first flagged row's new row number for the Issue-summary hyperlink
+        const firstItem = f.rows[0];
+        let srcRn = null;
+        if (firstItem.drRow)           srcRn = firstItem.drRow.rowNumber;
+        else if (firstItem.existingRow) srcRn = firstItem.existingRow.rowNumber;
+        else if (firstItem.row)        srcRn = firstItem.row.rowNumber;
+        else if (firstItem.rows)       srcRn = firstItem.rows[0].rowNumber;
+        else if (firstItem.specific)   srcRn = firstItem.specific.rowNumber;
+        if (srcRn != null) f.firstNewRow = rowMap.get(srcRn);
+      }
+    });
+
+    let row = 6;
+
+    // ---- Findings priority list ----
+    row = F.renderIssueSummary(ws, row, {
+      rows: findings.findings.map(f => ({
+        issue: f.issue,
+        scope: f.scopeShort || f.scope,
+        detail: f.detail || '',
+        rowCount: f.rowCount,
+        priority: f.priority,
+        jumpToRow: f.firstNewRow,
+        sourceSheetName: data.sheetName
+      }))
+    });
+    ws.getRow(row).height = 14; row++;
+
+    if (total === 0) {
+      row = this._renderCleanCallout(ws, row, findings.patternsChecked);
+      ws.getRow(row).height = 14; row++;
+    }
+
+    // ---- Caution + footer ----
+    row = F.renderCautionAndFooter(ws, row, {
+      cautionText: 'This analysis reads F4095 only.  It flags AAI configuration anti-patterns that frequently cause GL/cardex issues, but it does not validate the resolved GL accounts against your chart of accounts or confirm intent.  Review every finding with the accounting team before changing F4095.',
+      footerText: `Analysis produced by the RapidReconciler Export Analyzer  ·  ${Helpers.todayPretty()}`
+    });
+    F.applyPageSetup(ws, row - 1);
+
+    // ---- Source sheet (with highlights + RR Analyzer Note column J) ----
+    SourceSheet.copy(sourceSheet, workbook, data.sheetName, {
+      headerRow: data.headerRow,
+      freezeAt: data.headerRow + 1,
+      highlights: remappedHighlights,
+      patternByRow: remappedPatternByRow
+    });
+
+    F.renderNotesTab(workbook, {});
+    workbook.views = [{ activeTab: 0 }];
+  },
+
+  _renderCleanCallout(ws, startRow, patternsChecked) {
+    const greenFill = 'FFE8F5E9';
+    const greenStrip = 'FF2E7D32';
+    let row = startRow;
+    ws.getRow(row).height = 28;
+    F.writeMerged(ws, `A${row}:E${row}`, '✓  ALL CHECKED PATTERNS PASSED', {
+      font: { name: 'Arial', size: 12, bold: true, color: { argb: 'FFFFFFFF' } },
+      fill: greenStrip,
+      alignment: { horizontal: 'left', vertical: 'middle', indent: 2 }
+    });
+    row++;
+    const body = 'No anomalies were detected in any of the following checks:\n\n' +
+      patternsChecked.map((p, i) => `   ${i + 1}.  ${p}`).join('\n');
+    const lineCount = F.wrapLines(body, 90);
+    ws.getRow(row).height = Math.min(400, Math.max(60, lineCount * 18 + 24));
+    F.writeMerged(ws, `A${row}:E${row}`, body, {
+      font: { name: 'Arial', size: 11, color: { argb: 'FF1B5E20' } },
+      fill: greenFill,
+      alignment: { horizontal: 'left', vertical: 'top', indent: 2, wrapText: true }
+    });
+    row++;
+    return row;
+  }
+};
+Templates.register(JdeDmaaisTemplate);
+
+// 11 templates now implemented — no stubs remaining.
 
 /* ====================================================================
    APP CONTROLLER  —  upload, detect, preview, download
