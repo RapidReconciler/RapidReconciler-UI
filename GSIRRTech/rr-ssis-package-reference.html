@@ -85,6 +85,8 @@
   .view h3 { font-family: 'Source Sans 3', sans-serif; font-weight: 700; font-size: 17px; color: var(--navy); margin-top: 22px; margin-bottom: 8px; letter-spacing: -0.01em; }
   .view p { font-size: 14.5px; line-height: 1.7; margin-bottom: 12px; color: var(--text); }
   .view p strong { color: var(--navy); font-weight: 700; }
+  .view p.ssis-primer-note { font-size: 13.5px; font-style: italic; color: var(--text-soft); border-left: 3px solid var(--blue); padding: 6px 14px; margin: 4px 0 18px; background: var(--bg-soft); }
+  .view p.ssis-primer-note a { color: var(--blue); }
   .view a { color: var(--blue); text-decoration: none; border-bottom: 1px solid var(--blue-pale); transition: color 0.2s, border-color 0.2s; }
   .view a:hover { color: var(--orange); border-bottom-color: var(--orange); }
   .view ul, .view ol { margin: 0 0 14px 22px; font-size: 14.5px; line-height: 1.7; }
@@ -307,6 +309,8 @@
         <h1>Overview</h1>
         <p>The <code>RapidReconciler_Prod.dtsx</code> package is the production data-extraction component of RapidReconciler. It runs as a scheduled SQL Agent job on the customer's SSIS server, reads roughly 30 tables from the customer's JD&nbsp;Edwards source database, transforms the data along the way (JDE Julian dates back to Gregorian, JDE-scaled numeric columns to RR-canonical decimal precision), and writes them into the customer's <code>RapidReconciler_Prod</code> database (the default name created by Script 1 of the install zip). <strong>RR data services</strong> &mdash; an internal-network-only Java process that runs alongside the RR Agent on the customer's application server &mdash; then reads from <code>RapidReconciler_Prod</code> and serves the data through to the RapidReconciler UI.</p>
 
+        <p class="ssis-primer-note">New to SSIS? Microsoft's <a href="https://learn.microsoft.com/en-us/sql/integration-services/integration-services-ssis-packages" target="_blank" rel="noopener">Integration Services packages primer</a> covers the underlying concepts (packages, control flow, data flow, connection managers, event handlers, variables) before you dive into RR's specifics below.</p>
+
         <h2 id="why">Why the package exists</h2>
         <p>RapidReconciler does inventory and financial reconciliation against JDE data, but it never reads directly from the customer's JDE production database. Two reasons:</p>
         <ul>
@@ -420,6 +424,50 @@
             <tr><td>Lookup transforms (cache-driven)</td><td>6+ in GL filtering chain</td></tr>
             <tr><td>Event handlers</td><td>1 (<code>OnError</code>, empty body)</td></tr>
             <tr><td>Logging mode</td><td>2 (verbose)</td></tr>
+          </tbody>
+        </table>
+
+        <h2 id="not-used">SSIS features RR's package deliberately doesn't use</h2>
+        <p>A general-purpose SSIS package can opt into a wide set of platform features (configurations, parameters, checkpoint restart, package-level transactions, digital signatures, custom log providers, multiple event handlers). RR's package uses very few of them &mdash; the design intentionally stays on the simple end of the surface. Knowing what isn't here helps an experienced SSIS dev orient quickly to the design boundaries.</p>
+
+        <table>
+          <thead><tr><th>SSIS feature</th><th>RR's package</th><th>Why</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><strong>Configurations</strong> (external property files)</td>
+              <td>Not used</td>
+              <td>The 6 install-configurable variables (<code>dbowner</code>, <code>aaStartDateGr</code>, the four <code>Dec*</code> divisors) are set at design time in Visual Studio and baked into the deployed package. Re-deploy to change. A configurations file would add a moving part the customer DBA has to track on top of the SSISDB-deployed package; the trade-off isn't worth it for 6 values that change at most once per install.</td>
+            </tr>
+            <tr>
+              <td><strong>Project / package Parameters</strong></td>
+              <td>Not used</td>
+              <td>Same reason &mdash; the install-configurable values live as package-level <em>variables</em>, not project Parameters. Parameters would surface them in the Integration Services Catalog UI for runtime overrides; that's not the install model RR uses.</td>
+            </tr>
+            <tr>
+              <td><strong>Checkpoint restart</strong></td>
+              <td>Not used (no <code>CheckpointFileName</code> set)</td>
+              <td>The package's incremental design (<code>maxUKID</code> watermarks, date-window filters) makes a failed run safe to re-run from the top &mdash; the next run picks up where the last one left off without re-doing successful steady-state work. Checkpoint files would add complexity (file persistence, cleanup) without buying much.</td>
+            </tr>
+            <tr>
+              <td><strong>Package-level transactions</strong> (<code>TransactionOption</code>)</td>
+              <td>Default (<code>Supported</code>); no transaction span declared</td>
+              <td>Each data-flow task commits independently to <code>RRLocal</code> through OLE DB Destinations. Durability is per-task at the SQL Server level; the package doesn't enroll multiple tasks into a single distributed transaction. A failure mid-run leaves successful tables loaded and failed tables to retry &mdash; aligned with the incremental design above.</td>
+            </tr>
+            <tr>
+              <td><strong>Custom Log Providers</strong></td>
+              <td>Not used</td>
+              <td>Logging relies on two layers: SSISDB's built-in execution logging (<code>catalog.execution_data</code> tables) for SSIS engine-level start/end/error events, and the application-level <code>v_diagnostic4_b_to_c_log</code> table written by the package's own SQL tasks for per-table row counts and error codes. A custom Log Provider would duplicate one of those without adding signal.</td>
+            </tr>
+            <tr>
+              <td><strong>Multiple event handlers</strong></td>
+              <td>One (<code>OnError</code> at package scope, empty body)</td>
+              <td>Error propagation relies on SSIS's default behavior &mdash; any failed task fails its containing container, which fails the package run, which surfaces in SSISDB execution status and in the diagnostic table's <code>ErrorNum</code>. The empty <code>OnError</code> handler is a placeholder for future engineering to wire in alerting (e.g. an email task) without restructuring the package.</td>
+            </tr>
+            <tr>
+              <td><strong>Digital signature</strong></td>
+              <td>Not signed</td>
+              <td>The deployed package isn't digitally signed and the SSIS server isn't configured to check signatures. Trust is established by the install procedure (the DBA deploys a package they received from GSI) rather than by signature verification.</td>
+            </tr>
           </tbody>
         </table>
 
