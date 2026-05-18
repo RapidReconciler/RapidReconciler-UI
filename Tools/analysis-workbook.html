@@ -1243,6 +1243,7 @@ const F = {
     if (opts.font) cell.font = opts.font;
     if (opts.fill) F.fillCell(cell, opts.fill);
     if (opts.alignment) cell.alignment = opts.alignment;
+    if (opts.border) cell.border = opts.border;
     return cell;
   },
 
@@ -5344,6 +5345,11 @@ const TransactionDetailTemplate = {
     let _accountMismatchExpectedAcct = null;
     let _accountMismatchPostedAcct   = null;
     let _accountMismatchRatio        = null;
+    // Sign of the F4111 cardex amount on the "expected" row. Drives Dr/Cr
+    // direction in the corrective JE: negative = inventory side should be
+    // a credit in the original transaction (IM, IA, II, SO/ST shipment),
+    // positive = inventory side should be a debit (IC, OP, PV, RM).
+    let _accountMismatchCardexSign   = 0;
 
     // Net-zero F0911 fingerprint — a debit and credit of equal magnitude
     // on the SAME inventory account that cancel each other within the
@@ -5681,6 +5687,7 @@ const TransactionDetailTemplate = {
       _accountMismatchExpectedAcct = expectedAcct;
       _accountMismatchPostedAcct   = postedAcct;
       _accountMismatchRatio        = ratio;
+      _accountMismatchCardexSign   = Math.sign(expectedRow && expectedRow.cardexAmt || 0);
     } else if (data.rrSummary.length > 1 && (() => {
       // Period Mismatch requires *actually different* periods on the
       // RR Summary rows. The earlier version of this detector fired on
@@ -5877,7 +5884,8 @@ const TransactionDetailTemplate = {
         mispostedAmt: _accountMismatchMispostedAmt,
         expectedAcct: _accountMismatchExpectedAcct,
         postedAcct:   _accountMismatchPostedAcct,
-        ratio:        _accountMismatchRatio
+        ratio:        _accountMismatchRatio,
+        cardexSign:   _accountMismatchCardexSign
       } : null
     };
   },
@@ -6002,7 +6010,26 @@ const TransactionDetailTemplate = {
     };
     renderCompactCard('1.  WHAT happened',   this._whatBody(data, findings), 'navy');
     renderCompactCard('2.  WHY it happened', this._whyBody(data, findings),  'midblue');
-    renderCompactCard('3.  HOW to fix it',   this._howBody(data, findings),  'navy');
+    // HOW supports two return types from _howBody:
+    //   - string  → simple prose body (older patterns)
+    //   - array   → structured sections including cell-based T-account blocks
+    //               (Pattern 5.4 today; future accounting patterns will use
+    //                the same shape so their JEs render against real cells
+    //                instead of text-padded shapes in Arial)
+    const howValue = this._howBody(data, findings);
+    if (Array.isArray(howValue)) {
+      // Title strip (mirrors renderCompactCard's title styling)
+      ws.getRow(row).height = 28;
+      F.writeMerged(ws, `A${row}:E${row}`, '3.  HOW to fix it', {
+        font: { name: 'Arial', size: 13, bold: true, color: { argb: 'FFFFFFFF' } },
+        fill: PALETTE.navy,
+        alignment: { horizontal: 'left', vertical: 'middle', indent: 2 }
+      });
+      row++;
+      row = this._renderHowSections(ws, row, howValue);
+    } else {
+      renderCompactCard('3.  HOW to fix it', howValue, 'navy');
+    }
 
     // Evidence section removed — the Transaction Details sheet is small
     // enough to read directly, and the source-sheet highlights below
@@ -6170,6 +6197,124 @@ const TransactionDetailTemplate = {
     return map[t] || null;
   },
 
+  // Render a stacked T-account block as real Excel cells with borders.
+  // Used by any pattern whose HOW returns a 'tAccounts' section. The
+  // analyst sees a proper T (horizontal bar under the account number,
+  // vertical bar dividing Dr and Cr columns) rather than text-padded
+  // shapes that disintegrate in Arial.
+  //
+  // accounts: [{
+  //   accountNumber:  account code string (e.g. "1000000.142000")
+  //   rows:           [{ dr, cr, note }]   — entries below the Dr / Cr column heads
+  //   balanceNote:    optional one-line summary of the resulting balance
+  //   untouched:      true to render a single-line "untouched" footnote instead
+  //   untouchedLabel: parenthetical for the untouched line (e.g. "WIP — counterpart")
+  // }]
+  //
+  // Column usage: A = Dr (right-aligned), B = Cr (left-aligned, with left
+  // border to form the vertical T-bar). C:E = inline note. Account number
+  // spans A:E above with a bottom border (the horizontal T-bar).
+  // Returns the next free row.
+  _renderTAccountsBlock(ws, startRow, accounts) {
+    let row = startRow;
+    const navy = { argb: PALETTE.navyText };
+    const text = { argb: PALETTE.text };
+    const soft = { argb: PALETTE.textSoft };
+    for (let i = 0; i < accounts.length; i++) {
+      const acct = accounts[i];
+      if (acct.untouched) {
+        ws.getRow(row).height = 20;
+        F.writeMerged(ws, `A${row}:E${row}`,
+          `${acct.untouchedLabel || acct.accountNumber || 'Counterpart'} — untouched (posted correctly in the original transaction).`, {
+            font: { name: 'Arial', size: 11, italic: true, color: soft },
+            alignment: { horizontal: 'left', vertical: 'middle', indent: 2 }
+          });
+        row++;
+        continue;
+      }
+      // Account number (merged A:E, bold, centered, thick bottom border)
+      ws.getRow(row).height = 22;
+      F.writeMerged(ws, `A${row}:E${row}`, acct.accountNumber || '', {
+        font: { name: 'Arial', size: 12, bold: true, color: navy },
+        alignment: { horizontal: 'center', vertical: 'middle' },
+        border: { bottom: { style: 'medium', color: navy } }
+      });
+      row++;
+      // Dr / Cr column header row
+      ws.getRow(row).height = 18;
+      const drHead = ws.getCell(`A${row}`);
+      drHead.value = 'Dr';
+      drHead.font = { name: 'Arial', size: 10, bold: true, color: navy };
+      drHead.alignment = { horizontal: 'right', vertical: 'middle', indent: 2 };
+      const crHead = ws.getCell(`B${row}`);
+      crHead.value = 'Cr';
+      crHead.font = { name: 'Arial', size: 10, bold: true, color: navy };
+      crHead.alignment = { horizontal: 'left', vertical: 'middle', indent: 2 };
+      crHead.border = { left: { style: 'medium', color: navy } };
+      row++;
+      // Entry rows
+      for (const r of acct.rows || []) {
+        ws.getRow(row).height = 18;
+        const drCell = ws.getCell(`A${row}`);
+        drCell.value = r.dr || '';
+        drCell.font = { name: 'Arial', size: 11, color: text };
+        drCell.alignment = { horizontal: 'right', vertical: 'middle', indent: 2 };
+        const crCell = ws.getCell(`B${row}`);
+        crCell.value = r.cr || '';
+        crCell.font = { name: 'Arial', size: 11, color: text };
+        crCell.alignment = { horizontal: 'left', vertical: 'middle', indent: 2 };
+        crCell.border = { left: { style: 'medium', color: navy } };
+        if (r.note) {
+          F.writeMerged(ws, `C${row}:E${row}`, `← ${r.note}`, {
+            font: { name: 'Arial', size: 10, italic: true, color: soft },
+            alignment: { horizontal: 'left', vertical: 'middle', indent: 1 }
+          });
+        }
+        row++;
+      }
+      // Balance note row (e.g. "→ ending balance: 0")
+      if (acct.balanceNote) {
+        ws.getRow(row).height = 18;
+        const balCell = ws.getCell(`B${row}`);
+        balCell.value = `→ ${acct.balanceNote}`;
+        balCell.font = { name: 'Arial', size: 10, italic: true, color: text };
+        balCell.alignment = { horizontal: 'left', vertical: 'middle', indent: 2 };
+        balCell.border = { left: { style: 'medium', color: navy } };
+        row++;
+      }
+      // Spacer between stacked T-accounts (skip after the last one)
+      if (i < accounts.length - 1) {
+        ws.getRow(row).height = 6;
+        row++;
+      }
+    }
+    return row;
+  },
+
+  // Render an array of "HOW sections" — supports prose chunks AND
+  // cell-based T-account blocks. Called by the render flow when the
+  // pattern's HOW body returns an array (vs a plain string for older
+  // patterns). Returns the next free row.
+  _renderHowSections(ws, startRow, sections) {
+    let row = startRow;
+    for (const sec of sections) {
+      if (sec.type === 'prose') {
+        const text = sec.text || '';
+        const lineCount = F.wrapLines(text, 90);
+        const height = Math.min(400, Math.max(20, lineCount * 16 + 6));
+        ws.getRow(row).height = height;
+        F.writeMerged(ws, `A${row}:E${row}`, text, {
+          font: { name: 'Arial', size: 11, color: { argb: PALETTE.text } },
+          alignment: { horizontal: 'left', vertical: 'top', indent: 2, wrapText: true }
+        });
+        row++;
+      } else if (sec.type === 'tAccounts') {
+        row = this._renderTAccountsBlock(ws, row, sec.accounts || []);
+      }
+    }
+    return row;
+  },
+
   // Pattern 5.4 — Account Mismatch helpers (WHAT / WHY / HOW).
   // The variance signature is two RR Summary rows on different accounts:
   // one carries the cardex (where it should have gone), the other carries
@@ -6178,13 +6323,21 @@ const TransactionDetailTemplate = {
 
   _accountMismatchWhat(data, findings) {
     const m = findings.accountMismatch || {};
-    const expected = m.expectedAcct || 'the expected inventory account';
-    const posted   = m.postedAcct   || 'a different account';
+    const expected = m.expectedAcct || '[expected account from F4111]';
+    const posted   = m.postedAcct   || '[posted account from F0911]';
     const amt      = Helpers.money(m.mispostedAmt || 0);
+    // Sign-aware label: both lines describe the SAME inventory leg of the
+    // original transaction. The mismatch is the account, not the direction.
+    //   cardexSign < 0  → inventory leg should be a credit (IM, IA, etc.)
+    //   cardexSign >= 0 → inventory leg should be a debit (IC, OP, etc.)
+    const label = (m.cardexSign || 0) < 0 ? 'Cr' : 'Dr';
     return [
-      `• F4111 cardex routed ${amt} to ${expected}`,
-      `• F0911 GL posted ${amt} to ${posted}`,
-      `• Net variance: $0 (same magnitude); misposted dollars: ${amt}`
+      `Inventory leg of this ${data.dt || ''} doc should have posted to one account; F0911 landed on another.`,
+      ``,
+      `   ${label}   ${expected}   ${amt}   ← per AAI (F4111 cardex model)`,
+      `   ${label}   ${posted}   ${amt}   ← where F0911 actually posted`,
+      ``,
+      `Same magnitude, same Dr/Cr side — only the account differs. Misposted dollars: ${amt}.`
     ].join('\n');
   },
 
@@ -6202,92 +6355,85 @@ const TransactionDetailTemplate = {
     const expected = m.expectedAcct || '[expected account from F4111]';
     const posted   = m.postedAcct   || '[posted account from F0911]';
     const amt      = Helpers.money(m.mispostedAmt || 0);
-
-    // Pull the doc's full lookup key from the parsed sections.
     const docCompany   = (data.company || '').trim();
     const docOrderType = (data.ot || (data.docHeader && data.docHeader.ot) || '').trim();
     const f4111        = data.f4111Rows[0] || null;
     const docGlClass   = (f4111 && f4111.glclass) || '';
+    const article      = /^[AEIOU]/i.test(dtRaw) ? 'an' : 'a';
 
-    // If SystemContext (preloaded F4095) is loaded AND we know the
-    // inventory AAI for this doc type, we can answer two questions
-    // the analyst would otherwise have to chase down by hand:
-    //   1. Does the F4095 say this exact (company, AAI, OT, DT, GL
-    //      class) routing resolves to the cardex's expected account?
-    //   2. Is the misposted account configured *anywhere* in F4095
-    //      under a different routing? If it is, it's a real account
-    //      in this customer's chart — strong hint that the misroute
-    //      is an override or a stale-config issue rather than a typo.
-    let sysExpected = null;
-    let sysPostedConfigs = [];
-    if (aaiInfo && typeof SystemContext !== 'undefined' && SystemContext.isLoaded()) {
-      sysExpected = SystemContext.lookupAAI({
-        company:   docCompany,
-        table:     aaiInfo.aai,
-        docType:   dtRaw,
-        glClass:   docGlClass,
-        orderType: docOrderType
-      });
-      sysPostedConfigs = SystemContext.rowsByAccount(posted);
-    }
+    // Sign-aware JE direction. The original transaction's inventory leg is
+    // either a debit (IC/OP/PV/RM family — cardexSign > 0) or a credit
+    // (IM/IA/II/SO-shipment family — cardexSign < 0). The corrective JE
+    // mirrors that direction on the expected account and inverts on the
+    // posted account (which reverses the bad post and lets it net to 0).
+    const isCreditInventory = (m.cardexSign || 0) < 0;
+    const drAcct = isCreditInventory ? posted   : expected;
+    const crAcct = isCreditInventory ? expected : posted;
+    const expectedNote = isCreditInventory
+      ? 'apply the credit that should have happened'
+      : 'apply the debit that should have happened';
 
-    // ---- Step 1: state the comparison ----
-    const article = /^[AEIOU]/i.test(dtRaw) ? 'an' : 'a';
+    // Doc context — names the AAI that fires for this doc type's inventory
+    // side. One line; the analyst uses it for the prevention pass at the
+    // end. No investigation hand-holding (analysts don't audit-trail the
+    // DMAAI for every doc; the JE is the fix).
     const docKey = [
       `Company ${docCompany || '?'}`,
       docOrderType && `order type ${docOrderType}`,
       docGlClass   && `GL class ${docGlClass}`
     ].filter(Boolean).join(', ');
-    let step1 = aaiInfo
-      ? `Step 1.  This is ${article} ${dtRaw} document — ${docKey}. For ${dtRaw}, the inventory side of the GL post comes through DMAAI ${aaiInfo.aai} (${aaiInfo.label}) — ${aaiInfo.note}.`
-      : `Step 1.  ${docKey}. Identify which DMAAI fires for ${data.dt || 'this document type'}'s inventory side — the row in the DMAAs section whose resolved account matches ${expected} is the one that drove the cardex.`;
-    if (sysExpected) {
-      step1 += `\n\nThe preloaded F4095 confirms: AAI ${aaiInfo.aai} for this exact key resolves to ${sysExpected.aaiaccount}, which matches what the cardex (F4111) used. The GL (F0911), however, landed on ${posted} — so the cardex routed correctly, and the GL did not.`;
-    } else if (aaiInfo && typeof SystemContext !== 'undefined' && SystemContext.isLoaded()) {
-      step1 += `\n\nThe preloaded F4095 has no specific row for that exact key, so the cardex's expected account (${expected}, from F4111) is the authoritative reference. The GL (F0911) landed on ${posted} instead.`;
-    }
+    const context = aaiInfo
+      ? `${article.charAt(0).toUpperCase() + article.slice(1)} ${dtRaw} document — ${docKey}. Inventory side routes through DMAAI ${aaiInfo.aai} (${aaiInfo.label}).`
+      : `${docKey}. Inventory-side DMAAI for ${data.dt || 'this document type'} is unknown — identify it from the DMAAs section (the row resolving to ${expected}).`;
 
-    // ---- Step 2: the two real scenarios ----
-    let step2 = `Step 2.  There are only two ways the GL could have landed on ${posted} instead of ${expected}:\n  (a)  The DMAAI was different when this doc posted, and was later reconfigured to its current state.\n  (b)  The DMAAI was overridden at posting time — a manual journal entry coded the inventory account directly, or a posting program with an override processing option redirected it.`;
-    if (sysPostedConfigs.length > 0 && aaiInfo) {
-      // F4095 typically has multiple rows per (AAI, GLClass, OT, DT)
-      // routing differing only on cost type or other secondary keys.
-      // Dedupe down to unique tuples so the routing list doesn't
-      // repeat the same line N times.
-      const seen = new Set();
-      const uniq = [];
-      for (const r of sysPostedConfigs) {
-        const key = [r.tablenumber, r.glclass, r.ordertype, r.doctype].join('|');
-        if (seen.has(key)) continue;
-        seen.add(key);
-        uniq.push(r);
+    // The corrective JE — direction driven by cardexSign.
+    const je = `Corrective JE (post on the original F0911 GL date so the period matches):\n   Dr  ${drAcct}   ${amt}\n   Cr  ${crAcct}   ${amt}`;
+
+    // T-account picture — what the JE does to each account. The bad
+    // account nets to zero (prior wrong post + this JE's offset); the
+    // expected account picks up the entry that should have happened;
+    // the counterpart leg of the original transaction is untouched.
+    const counterpart = this._counterpartAaiForMfgDocType(dtRaw);
+    const counterpartLabel = counterpart
+      ? `${counterpart.plainName} (DMAAI ${counterpart.aai})`
+      : 'Counterpart leg';
+    const tAccounts = [
+      {
+        accountNumber: expected,
+        rows: [
+          isCreditInventory
+            ? { dr: null, cr: amt, note: expectedNote }
+            : { dr: amt, cr: null, note: expectedNote }
+        ]
+      },
+      {
+        accountNumber: posted,
+        rows: [
+          isCreditInventory
+            ? { dr: amt, cr: amt, note: 'Dr from this JE cancels the prior bad Cr' }
+            : { dr: amt, cr: amt, note: 'Cr from this JE cancels the prior bad Dr' }
+        ],
+        balanceNote: 'ending balance: 0'
+      },
+      {
+        untouched: true,
+        untouchedLabel: counterpartLabel
       }
-      const head = uniq.slice(0, 3).map(r => {
-        const parts = [];
-        if (r.tablenumber) parts.push('AAI ' + r.tablenumber);
-        if (r.glclass)     parts.push('GL class ' + r.glclass);
-        if (r.ordertype)   parts.push('OT ' + r.ordertype);
-        if (r.doctype)     parts.push('DT ' + r.doctype);
-        return parts.join(' / ');
-      }).join('; ');
-      const moreCount = uniq.length - Math.min(3, uniq.length);
-      const more = moreCount > 0 ? `, and ${moreCount} more routing${moreCount === 1 ? '' : 's'}` : '';
-      step2 += `\n\nWorth noting: ${posted} IS configured in the preloaded F4095, but under different routing (${head}${more}). It's a real account in this customer's chart — just not the one that should have caught ${article} ${dtRaw} document with this routing key.`;
-    } else if (aaiInfo && typeof SystemContext !== 'undefined' && SystemContext.isLoaded()) {
-      step2 += `\n\nNote: ${posted} doesn't appear anywhere in the preloaded F4095. That makes scenario (b) — manual override at posting time — the more likely of the two; (a) would require the prior config to have pointed at this account, which the current F4095 has no record of.`;
-    }
+    ];
 
-    // ---- Step 3: immediate JE ----
-    const step3 = `Step 3 (immediate fix).  Post a journal entry to move the misposted dollars to the right account:\n   Dr  ${expected}        ${amt}\n   Cr  ${posted}        ${amt}\nUse the GL date that matches the original F0911 entry so the correction lands in the same period.`;
+    // Prevention pointer — single line. The detailed audit / override
+    // investigation (Source/Comment/BT, change history) was dropped; in
+    // practice nobody chases it that far when the JE clears the variance.
+    const aaiRef = aaiInfo ? `DMAAI ${aaiInfo.aai}` : 'the inventory-side DMAAI';
+    const prevent = `Prevention: review ${aaiRef} in JDE for ${docKey}. If a posting-time override is allowed on this account, restrict it or route manual inventory JEs through an approval step.`;
 
-    // ---- Step 4: which scenario, and how to prevent recurrence ----
-    const batchHint = (data.f0911Inv[0] && data.f0911Inv[0].batch) || '[this doc\'s batch]';
-    const aaiNumStr = aaiInfo ? aaiInfo.aai : 'the relevant AAI';
-    const step4 = `Step 4 (figure out which scenario, then prevent recurrence).
-  - For (a) DMAAI changed:  in JDE, pull the audit / change history on DMAAI ${aaiNumStr} for Company ${docCompany || '?'}${docGlClass ? ' / GL class ' + docGlClass : ''}. If the row was modified after this doc's batch (${batchHint}) posted, that confirms it. Fix: every doc that posted under the old config needs the same JE as Step 3.
-  - For (b) override at post time:  pull the F0911 record for batch ${batchHint} and check the Source / Comment / BT column for a JE batch type or an override flag. The user / program that posted it is the cause. Fix: restrict override permissions in the relevant program, or move manual journal entries on inventory accounts behind an approval workflow.`;
-
-    return [step1, step2, step3, step4].join('\n\n');
+    return [
+      { type: 'prose', text: context },
+      { type: 'prose', text: je },
+      { type: 'prose', text: 'T-account view (account balances after the JE posts):' },
+      { type: 'tAccounts', accounts: tAccounts },
+      { type: 'prose', text: prevent }
+    ];
   },
 
   // Pattern 5.14 — Period Mismatch helpers. Same account on cardex and GL,
