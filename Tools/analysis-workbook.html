@@ -5399,6 +5399,13 @@ const TransactionDetailTemplate = {
         // for some exports). Used by Pattern 5.13 (post-confirm order edit)
         // to compare cardex qty against order qty per line / item.
         line:     Helpers.str(get(r, 'line')),
+        // UDC 40/CM cost method (the sproc writes '02' for weighted average,
+        // '07' for standard, '09' for manufacturing last, etc. on each F4111
+        // detail row since the 2026-05 sproc update — blank on rows
+        // generated before then, blank on F0911 rows). Consumed by Pattern
+        // 5.16 (Mfg Cost Mismatch) and Pattern 5.17 (Voucher Variance on
+        // Inventory) through CostMethodKnowledge.
+        ext:      Helpers.str(get(r, 'ext')),
         branch:   Helpers.str(get(r, 'branch')),
         item:     Helpers.str(get(r, 'item')),
         qty:      Helpers.num(get(r, 'qty')),
@@ -6720,20 +6727,69 @@ const TransactionDetailTemplate = {
       : String(qty);
     const higher = ledgerUC > cardexUC ? 'GL' : 'cardex';
     const lower  = ledgerUC > cardexUC ? 'cardex' : 'GL';
-    return [
+    const methodLine = this._costMethodSummary(data.f4111Rows);
+    const lines = [];
+    if (methodLine) lines.push(`• Cost method (F4111 Ext): ${methodLine}`);
+    lines.push(
       `• F4111 cardex: ${Helpers.money(findings.cardex)} — ${qtyStr} units × ${Helpers.money(cardexUC)}/unit`,
       `• F0911 GL: ${Helpers.money(findings.ledger)} — implied ${Helpers.money(ledgerUC)}/unit at ${qtyStr} units`,
       `• Unit-cost ratio: ${m.ratio.toFixed(1)}× — ${higher} unit cost is much higher than ${lower}`,
       `• Variance: ${Helpers.money(findings.variance, true)} — the gap between the two cost bases × ${qtyStr} units`
-    ].join('\n');
+    );
+    return lines.join('\n');
   },
   _mfgCostMismatchExplanation(data, m) {
     const ledgerHigher = (m && m.implLedgerUC) > (m && m.implCardexUC);
-    return [
-      `• F4111 cardex and F0911 GL recorded this completion at different unit costs — one side used the frozen / standard cost, the other used the work-order actual cost (or a post-revaluation cost)`,
-      `• Process-sequencing gap is the most common cause: R30835 (Frozen Standard Update) ran and updated one side's cost basis, but R30837 (WIP Revaluation) didn't post the corresponding GL adjustment — so the books diverged${ledgerHigher ? ' (GL ended up at the higher actual cost; cardex stayed at the lower frozen standard)' : ' (cardex ended up at the higher revalued cost; GL stayed at the lower pre-revaluation cost)'}`,
-      `• Less common: a timing window between completion and posting where one side picked up a fresh cost while the other used the prior cost`
-    ].join('\n');
+    const methodInfo = this._dominantCostMethod(data.f4111Rows);
+    const bullets = [];
+    if (methodInfo && methodInfo.code === '07') {
+      // Standard cost — the canonical framing: cardex vs frozen standard
+      // vs work-order actual.
+      bullets.push(`• Item is on standard cost (F4111 Ext = 07). F4111 cardex and F0911 GL recorded this completion at different unit costs — one side used the frozen standard from F30026, the other used the work-order actual cost (or a post-revaluation cost)`);
+    } else if (methodInfo && methodInfo.code === '09') {
+      bullets.push(`• Item is on manufacturing-last cost (F4111 Ext = 09). F4111 cardex captured the pre-completion cost basis while F0911 GL captured the work-order actual at completion — R30837 (WIP Revaluation) didn't post the bridging adjustment, so the cardex and GL never reconciled to the new manufacturing-last value`);
+    } else if (methodInfo && methodInfo.type === 'actual') {
+      bullets.push(`• Item is on an actual-costing method (F4111 Ext = ${methodInfo.code}, ${methodInfo.name}). F4111 cardex captured the pre-completion cost; F0911 GL captured the completion-time actual cost. The two bases diverged and no revaluation closed the gap`);
+    } else {
+      // Cost method not in Ext (older fixture) or non-actual/standard
+      // method — fall back to the original generic framing.
+      bullets.push(`• F4111 cardex and F0911 GL recorded this completion at different unit costs — one side used the frozen / standard cost, the other used the work-order actual cost (or a post-revaluation cost)`);
+    }
+    bullets.push(`• Process-sequencing gap is the most common cause: R30835 (Frozen Standard Update) ran and updated one side's cost basis, but R30837 (WIP Revaluation) didn't post the corresponding GL adjustment — so the books diverged${ledgerHigher ? ' (GL ended up at the higher actual cost; cardex stayed at the lower frozen standard)' : ' (cardex ended up at the higher revalued cost; GL stayed at the lower pre-revaluation cost)'}`);
+    bullets.push(`• Less common: a timing window between completion and posting where one side picked up a fresh cost while the other used the prior cost`);
+    return bullets.join('\n');
+  },
+
+  // Summarize the distinct cost methods present on F4111 detail rows for
+  // display in WHAT cards. Returns "07 (Standard Cost)" for single-method
+  // docs, "07 (Standard Cost), 02 (Weighted Average Cost)" when mixed,
+  // or null when no F4111 detail rows have an Ext value (older fixtures
+  // pre-dating the 2026-05 sproc update, or no detail rows at all).
+  _costMethodSummary(f4111Rows) {
+    if (!f4111Rows || !f4111Rows.length) return null;
+    const codes = new Set();
+    for (const r of f4111Rows) {
+      const code = (r.ext || '').trim();
+      if (code) codes.add(code);
+    }
+    if (!codes.size) return null;
+    return Array.from(codes).sort().map(c => CostMethodKnowledge.label(c) || c).join(', ');
+  },
+  // Pick the single dominant cost method on the doc — the most common
+  // Ext value across F4111 rows. Returns { code, name, type, note } or
+  // null when no row carries a recognized method. Used by WHY explanations
+  // that want to lead with the cost-method framing (Pattern 5.16, etc.).
+  _dominantCostMethod(f4111Rows) {
+    if (!f4111Rows || !f4111Rows.length) return null;
+    const counts = {};
+    for (const r of f4111Rows) {
+      const code = (r.ext || '').trim();
+      if (code) counts[code] = (counts[code] || 0) + 1;
+    }
+    const codes = Object.keys(counts);
+    if (!codes.length) return null;
+    codes.sort((a, b) => counts[b] - counts[a]);
+    return CostMethodKnowledge.resolve(codes[0]);
   },
   _mfgCostMismatchResolution(data, findings) {
     const m = findings.costMismatch || {};
