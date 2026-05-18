@@ -350,9 +350,12 @@ The script:
 - HTML-escapes the trailer content and inserts a new
   `<article class="rn-entry">` block immediately after the
   `<!-- RELEASE_NOTES_INSERTION_POINT -->` marker.
-- **Caps the page at `MAX_ENTRIES` (100)** &mdash; after each prepend,
+- **Caps the page at `MAX_ENTRIES` (currently 10 for dev; lift back
+  to 100 when shipping to customers)** &mdash; after each prepend,
   trims the oldest articles past the cap so the file doesn't grow
-  unbounded.
+  unbounded. The cap was lowered during analyzer iteration to keep
+  the page short and easy to scan; nobody's reading it as a customer
+  changelog yet.
 - Commits with `chore: append release notes [skip release notes][skip ci]`
   to prevent feedback loops.
 
