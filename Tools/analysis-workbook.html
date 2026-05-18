@@ -1325,7 +1325,9 @@ const F = {
     // numbers + rationale stay readable regardless of strip palette.
     const bodyTextColor = 'FF1F2D4A';
     const bodyRow = startRow + 1;
-    ws.getRow(bodyRow).height = 100;
+    // Tighter when rationale is empty — the body row is mostly the
+    // big number when there's nothing else to display.
+    ws.getRow(bodyRow).height = (rationale && String(rationale).trim()) ? 100 : 60;
     const numberValue = varianceSub ? `${varianceNumber}\n${varianceSub}` : varianceNumber;
     F.writeMerged(ws, `A${bodyRow}:B${bodyRow}`, numberValue, {
       font: { name: 'Arial', size: varianceSub ? 24 : 28, bold: true, color: { argb: hidePriority ? bodyTextColor : c.text } },
@@ -1390,9 +1392,10 @@ const F = {
     const body =
       'This is a pattern-match against the analyzer\'s current library of known root causes. ' +
       'Customer DMAAI / order-type / line-type configurations vary, and patterns specific to ' +
-      'your setup may not be recognized yet. Review the Evidence below and confirm the diagnosis ' +
-      'in JDE before posting any journal entries or making configuration changes. If this ' +
-      'diagnosis doesn\'t fit, fill in the Notes tab and send the workbook to rrsupport@getgsi.com.';
+      'your setup may not be recognized yet. Review the highlighted rows on the source sheet ' +
+      'and confirm the diagnosis in JDE before posting any journal entries or making ' +
+      'configuration changes. If this diagnosis doesn\'t fit, fill in the Notes tab and send ' +
+      'the workbook to rrsupport@getgsi.com.';
     F.writeMerged(ws, `A${bodyRow}:E${bodyRow}`, body, {
       font: { name: 'Arial', size: 11, color: { argb: PALETTE.navyText } },
       fill: 'FFFDF6E3', // very pale wheat — readable on a light theme
@@ -5430,6 +5433,58 @@ const TransactionDetailTemplate = {
     const isICStandardCostChange = orphanRevalRow
       && Math.abs(Math.abs(variance) - Math.abs(orphanRevalRow.cardexAmt)) < 0.01;
 
+    // R31802A orphan cardex row — the broader manufacturing variant.
+    //
+    // Fingerprint: doc is a manufacturing type (IC / IM / IH / IS), one
+    // of the F4111 rows has a cardex amount equal to the document
+    // variance, AND that row has no matching F0911 entry on the same
+    // account (within rounding). The remaining F4111 rows reconcile to
+    // the F0911 total.
+    //
+    // What's happening: R31802A (Manufacturing Accounting) processed
+    // most of the document's F4111 rows into F0911 but skipped this
+    // one. R31802A's *real-world* causes for skipping a row are well
+    // documented:
+    //   - "Already processed" flags set on the row (re-runs won't
+    //     re-post)
+    //   - Selection / version filtering excluded the row
+    //   - Zero net variance to post (nothing to GL)
+    //   - Errors during processing (AAI / account-lookup failures)
+    //   - Interrupted / partial run (rare but possible)
+    // AND there's a critical caveat: RR filters F0911 at import time,
+    // so the GL row may legitimately exist in JDE outside RR's view.
+    // For that reason the resolution does NOT blindly recommend a JE
+    // — it walks the analyst through the five real causes above and
+    // tells them to check R31802A's report (errors / warnings /
+    // skipped counts) before concluding the GL is actually missing.
+    //
+    // Fires BEFORE the period-mismatch detector below — both can
+    // produce 2 RR Summary rows but only this one has the orphan
+    // amount = document variance signature. Fires AFTER the IC SCC
+    // detector above so the more specific "standard cost change after
+    // WO completion" diagnosis (Pattern 5.6) wins when its narrower
+    // fingerprint matches.
+    const MFG_DOC_TYPES = /^(IC|IM|IH|IS)$/i;
+    const r31802aOrphanRow = (data.dt && MFG_DOC_TYPES.test(data.dt))
+      ? (function() {
+          const targetVar = Math.abs(variance);
+          if (targetVar < 0.01) return null;
+          for (const fr of data.f4111Rows) {
+            const amt = Math.abs(fr.cardexAmt || 0);
+            if (Math.abs(amt - targetVar) > 0.01) continue;
+            // Does any F0911 row (Inv side) match this F4111 row by
+            // account + amount? If yes, this F4111 row isn't orphaned.
+            const hasGL = data.f0911Inv.some(g =>
+              String(g.account || '').trim() === String(fr.account || '').trim() &&
+              Math.abs(Math.abs(g.ledgerAmt || 0) - amt) < 0.01
+            );
+            if (!hasGL) return fr;
+          }
+          return null;
+        })()
+      : null;
+    const isR31802aOrphan = r31802aOrphanRow && !isICStandardCostChange;
+
     // Mixed line types on a return / credit doc.
     //
     // Fingerprint: doc type is a return/credit type (RI, RM, CR, RE, SR)
@@ -5586,11 +5641,18 @@ const TransactionDetailTemplate = {
         glCompletionRow && glCompletionRow.doc,
         mfgVarianceAaiContext
       );
+    } else if (isR31802aOrphan) {
+      pattern = '5.15'; patternLabel = 'R31802A orphan cardex row';
+      patternExplanation = this._r31802aOrphanExplanation(data, r31802aOrphanRow);
     } else if (data.rrSummary.length > 1 && (() => {
       // Multiple RR Summary rows = either account or period mismatch.
       // The two cases ask different questions of the analyst, so split:
       //  - Account mismatch: 2+ rows with DIFFERENT accounts
-      //  - Period mismatch:  2+ rows with the SAME account but different periods
+      //  - Period mismatch:  2+ rows with the SAME account but DIFFERENT
+      //    periods (note: actually-different — the old detector fired
+      //    on "same account" alone, which over-triggered when RR split
+      //    a doc into multiple rows for reasons that weren't period
+      //    drift at all)
       // Account-mismatch wins when both differ (different accounts swamps
       // any period oddity — the analyst's job is to move the money to
       // the right account, not the right period).
@@ -5619,8 +5681,23 @@ const TransactionDetailTemplate = {
       _accountMismatchExpectedAcct = expectedAcct;
       _accountMismatchPostedAcct   = postedAcct;
       _accountMismatchRatio        = ratio;
-    } else if (data.rrSummary.length > 1) {
-      // Same account on each row but different periods → period mismatch.
+    } else if (data.rrSummary.length > 1 && (() => {
+      // Period Mismatch requires *actually different* periods on the
+      // RR Summary rows. The earlier version of this detector fired on
+      // "multiple RR Summary rows, same account" alone, which over-
+      // triggered: RR can produce multi-row summaries for reasons that
+      // aren't period drift (e.g. one row matched the GL, another row
+      // is an orphan F4111 line — both on the same account, same
+      // period). Verify periods differ before claiming the diagnosis.
+      const periodKey = r => {
+        const p = r && r.period;
+        if (p == null) return null;
+        if (p instanceof Date) return p.toISOString().slice(0, 10);
+        return String(p).trim().slice(0, 10);
+      };
+      const periods = new Set(data.rrSummary.map(periodKey).filter(Boolean));
+      return periods.size >= 2;
+    })()) {
       pattern = '5.14'; patternLabel = 'Period Mismatch';
       patternExplanation = this._periodMismatchExplanation(data);
     } else {
@@ -5731,6 +5808,48 @@ const TransactionDetailTemplate = {
           sourceRow: r.rowNumber
         });
       }
+    } else if (pattern === '5.15') {
+      // Find the orphan F4111 row and surface it + the F0911 rows that
+      // DID post so the analyst can see what reconciled and what
+      // didn't. Use the local `variance` (not findings.variance) — the
+      // findings object isn't assembled yet at this point in classify().
+      const targetVar = Math.abs(variance);
+      const orphan = data.f4111Rows.find(fr => {
+        const amt = Math.abs(fr.cardexAmt || 0);
+        if (Math.abs(amt - targetVar) > 0.01) return false;
+        return !data.f0911Inv.some(g =>
+          String(g.account || '').trim() === String(fr.account || '').trim() &&
+          Math.abs(Math.abs(g.ledgerAmt || 0) - amt) < 0.01
+        );
+      });
+      if (orphan) {
+        evidence.push({
+          severity: 'Root cause',
+          label: `Orphan F4111 row (no F0911 counterpart in this report)  →  Row ${orphan.rowNumber}`,
+          description: `${orphan.account} · cardex ${Helpers.money(orphan.cardexAmt)}${orphan.batch ? ' · batch ' + orphan.batch : ''}${orphan.comment ? '\n' + orphan.comment.trim() : ''}\nThe batch number and GL date on this row suggest JDE processed something. Check F0911 directly in JDE before concluding the GL entry is missing.`,
+          sourceRow: orphan.rowNumber
+        });
+      }
+      // Also show the matched F4111 + F0911 rows so the analyst sees
+      // what reconciled cleanly.
+      const matched = data.f4111Rows.filter(fr => fr !== orphan).slice(0, 2);
+      for (const m of matched) {
+        evidence.push({
+          severity: 'Related',
+          label: `F4111 row · reconciled  →  Row ${m.rowNumber}`,
+          description: `${m.account} · cardex ${Helpers.money(m.cardexAmt)}${m.batch ? ' · batch ' + m.batch : ''} — has a matching F0911 entry on the same account.`,
+          sourceRow: m.rowNumber
+        });
+      }
+      if (data.f0911Inv[0]) {
+        const g = data.f0911Inv[0];
+        evidence.push({
+          severity: 'Related',
+          label: `F0911 Inv (what DID post)  →  Row ${g.rowNumber}`,
+          description: `${g.account} · ledger ${Helpers.money(g.ledgerAmt)}${g.batch ? ' · batch ' + g.batch : ''} — accounts for the reconciled portion of the cardex.`,
+          sourceRow: g.rowNumber
+        });
+      }
     } else if (pattern === '5.2' && data.f0911Inv[0]) {
       evidence.push({ severity: 'Root cause', label: `${data.f0911Inv[0].bt} doc ${data.f0911Inv[0].doc}  →  Row ${data.f0911Inv[0].rowNumber}`, description: `GL entry on account ${data.f0911Inv[0].account} · ${Helpers.money(data.f0911Inv[0].ledgerAmt)}\n${data.f0911Inv[0].comment || 'No cardex counterpart — the variance is entirely on this row'}`, sourceRow: data.f0911Inv[0].rowNumber });
     } else if (pattern === '5.3' && data.f4111Rows[0]) {
@@ -5771,14 +5890,26 @@ const TransactionDetailTemplate = {
     const ws = workbook.addWorksheet('Analysis', { views: [{ showGridLines: false, state: 'normal' }] });
     F.standardColumnWidths(ws);
 
-    // Subline is the one-line below-headline summary. For account
-    // mismatch the cardex + ledger TOTALS match (net variance is $0),
-    // so the standard "X variance · cardex Y vs ledger Z" reads
-    // nonsensically — phrase it as a misposted-dollars summary instead.
+    // Subline is the one-line below-headline summary. Pattern-aware so
+    // it surfaces what's actually wrong, not just cardex-vs-ledger
+    // totals (which for orphan-row / account-mismatch patterns hide
+    // the real signal).
     let subline;
     if (findings.pattern === '5.4' && findings.accountMismatch) {
       const m = findings.accountMismatch;
       subline = `${Helpers.money(m.mispostedAmt)} misposted · cardex landed on ${m.expectedAcct || '—'} · ledger went to ${m.postedAcct || '—'}`;
+    } else if (findings.pattern === '5.15') {
+      // Count how many F4111 rows reconcile to F0911 vs how many don't.
+      const total   = data.f4111Rows.length;
+      const matched = data.f4111Rows.filter(fr =>
+        data.f0911Inv.some(g =>
+          String(g.account || '').trim() === String(fr.account || '').trim() &&
+          Math.abs(Math.abs(g.ledgerAmt || 0) - Math.abs(fr.cardexAmt || 0)) < 0.01
+        )
+      ).length;
+      const orphans = Math.max(0, total - matched);
+      const rowWord = total === 1 ? 'F4111 row' : 'F4111 rows';
+      subline = `${Helpers.money(findings.variance, true)} orphan · ${orphans} of ${total} ${rowWord} missing from F0911`;
     } else if (Math.abs(findings.variance) < 0.01) {
       subline = `Cardex and ledger reconcile — no variance on this document`;
     } else {
@@ -5812,7 +5943,20 @@ const TransactionDetailTemplate = {
       (firstF4111   && Helpers.str(firstF4111.period))   ||
       Helpers.str(data.period) ||
       '?';
-    const accountStr = Helpers.str(data.account) || (firstF4111 && Helpers.str(firstF4111.account)) || '?';
+    // data.account comes from the Doc Header row's Account column.
+    // usp6compare2 stuffs the report-generation date in that cell (e.g.
+    // "May 18 2026"), which is not an account number. Validate: real
+    // account numbers start with a digit and contain a dot (BU.OBJ.SUB
+    // or BU.OBJ form). When the doc-header value fails that check, fall
+    // back to the first F4111 row's Account column, which is always a
+    // real account.
+    const looksLikeAccount = s => {
+      const t = String(s || '').trim();
+      return /^\d/.test(t) && /\./.test(t);
+    };
+    const accountStr = looksLikeAccount(data.account)
+      ? Helpers.str(data.account)
+      : ((firstF4111 && looksLikeAccount(firstF4111.account) && Helpers.str(firstF4111.account)) || '?');
     const context = `Company  ${data.company || '?'}          GL Date  ${glDateStr}          Period  ${periodStr}          Account  ${accountStr}`;
 
     F.renderChrome(ws, {
@@ -5820,47 +5964,66 @@ const TransactionDetailTemplate = {
       subline, context
     });
 
-    let row = F.renderDisclaimer(ws, 6);
-    // Priority bucketing is retired on Transaction Detail — analyst
-    // judgement, not a sliding scale, decides what needs immediate
-    // attention. The card shows the dollar amount + the pattern name
-    // and lets the WHAT / WHY / HOW carry the rest. The strip uses a
-    // neutral navy band (priority colors are gone with the labels).
+    // Top disclaimer dropped — same boilerplate on every report was the
+    // single biggest noise pocket above the analysis. The verify-before-
+    // acting message is folded into the bottom caution band instead.
+    let row = 6;
+    // Priority bucketing is retired on Transaction Detail. The card
+    // shows the dollar amount + the pattern name in the strip; the WHAT
+    // / WHY / HOW carry the rest. Rationale is left empty — no
+    // "Pattern: X" line below the headline number (the strip already
+    // carries the pattern name).
     const isAcctMismatch = findings.pattern === '5.4';
-    const headlineLabel = isAcctMismatch ? 'Misposted' : 'Variance';
-    const docAmt = isAcctMismatch
-      ? Math.max(Math.abs(findings.cardex), Math.abs(findings.ledger), findings.variance)
-      : Math.max(Math.abs(findings.cardex), Math.abs(findings.ledger));
-    const rationale = `Pattern:  ${findings.patternLabel}\n\n${headlineLabel} ${Helpers.money(Math.abs(findings.variance))} vs document amount ${Helpers.money(docAmt)} = ${Math.round(findings.ratio * 100)}%`;
     row = F.renderVarianceCard(ws, row, {
-      priority: null,                   // suppress the "Priority X — Y" chrome
-      stripLabel: isAcctMismatch ? 'ACCOUNT MISMATCH' : 'VARIANCE',
+      priority: null,                                       // suppress the "Priority X — Y" chrome
+      stripLabel: this._stripLabelForPattern(findings),     // pattern name lives in the strip
       // For 5.4 the headline number is the (positive) misposted amount —
       // no signed +/- prefix.
       varianceNumber: isAcctMismatch
         ? Helpers.money(Math.abs(findings.variance))
         : Helpers.money(findings.variance, true),
-      rationale
+      rationale: ''                                          // strip carries the label; no rationale needed
     });
 
-    ws.getRow(row).height = 14; row++;
-    row = F.renderCardPair(ws, row, { title: '1.  WHAT happened', body: this._whatBody(data, findings), header: 'navy' });
-    row = F.renderCardPair(ws, row, { title: '2.  WHY it happened', body: this._whyBody(data, findings), header: 'midblue' });
-    row = F.renderCardPair(ws, row, { title: '3.  HOW to fix it', body: this._howBody(data, findings), header: 'navy' });
+    // No inter-card spacer rows — the card-title strips (height 28)
+    // already provide visual separation. Trim each rendered card's
+    // body height to the actual content so we don't leave Excel's
+    // auto-generated padding as whitespace beneath short bullet lists.
+    const renderCompactCard = (title, body, header) => {
+      const startRow = row;
+      row = F.renderCardPair(ws, row, { title, body, header });
+      // renderCardPair lays out: startRow = title (height 28),
+      // startRow + 1 = body. Body height defaults to lines*18 + 24,
+      // which adds visual whitespace below short text. Recompute
+      // tighter: lines*16 + 6.
+      const lineCount = F.wrapLines(body, 90);
+      const tighter = Math.min(400, Math.max(36, lineCount * 16 + 6));
+      ws.getRow(startRow + 1).height = tighter;
+    };
+    renderCompactCard('1.  WHAT happened',   this._whatBody(data, findings), 'navy');
+    renderCompactCard('2.  WHY it happened', this._whyBody(data, findings),  'midblue');
+    renderCompactCard('3.  HOW to fix it',   this._howBody(data, findings),  'navy');
 
-    ws.getRow(row).height = 14; row++;
-    row = F.renderEvidence(ws, row, { sourceSheetName: data.sheetName, rows: findings.evidence });
+    // Evidence section removed — the Transaction Details sheet is small
+    // enough to read directly, and the source-sheet highlights below
+    // call out the root-cause rows. Saves the analyst a section to
+    // ignore on every report.
 
+    // Bottom caution folds in the verify-before-acting message that
+    // used to be a separate band at the top. Kept tight — analyst
+    // reads it once and from then on it's just a footer caveat.
     row = F.renderCautionAndFooter(ws, row, {
-      cautionText: 'Before making any changes in JD Edwards:  test all configuration changes in a non-production environment first. For any GL journal entry, review the Transactions page in RapidReconciler for the affected items to confirm exact amounts and accounts before posting.',
+      cautionText: 'Pattern match — verify in JDE before posting any JE or making configuration changes. Test config changes in non-production first. Diagnosis doesn\'t fit? Use the Notes tab and send the workbook to rrsupport@getgsi.com.',
       footerText: `Analysis produced using the Transaction Detail Analysis Guide  ·  RapidReconciler  ·  ${Helpers.todayPretty()}`
     });
     F.applyPageSetup(ws, row - 1);
 
-    const highlights = findings.evidence.filter(e => e.sourceRow).map(e => {
-      const p = e.severity === 'Root cause' ? 1 : (e.severity === 'Anchor' || e.severity === 'Related') ? 2 : 3;
-      return { rowNumber: e.sourceRow, priority: p };
-    });
+    // Highlight only the root-cause rows on the source sheet. Anchors /
+    // Related / Informational rows aren't worth a color stripe on a
+    // doc the analyst is going to read top-to-bottom anyway.
+    const highlights = findings.evidence
+      .filter(e => e.sourceRow && e.severity === 'Root cause')
+      .map(e => ({ rowNumber: e.sourceRow, priority: 1 }));
     SourceSheet.copy(sourceSheet, workbook, data.sheetName, { headerRow: data.headerRow, freezeAt: data.headerRow + 1, highlights });
     F.renderNotesTab(workbook, this._notesContext ? this._notesContext(data) : {});
     workbook.views = [{ activeTab: 0 }];
@@ -5869,6 +6032,8 @@ const TransactionDetailTemplate = {
   _whatBody(data, findings) {
     if (findings.pattern === '5.4')  return this._accountMismatchWhat(data, findings);
     if (findings.pattern === '5.14') return this._periodMismatchWhat(data, findings);
+    if (findings.pattern === '5.15') return this._r31802aOrphanWhat(data, findings);
+    if (findings.pattern === '5.13') return this._postConfirmOrderEditWhat(data, findings);
     return `Document ${data.doc} (${data.dt}) on Order ${data.ordernum} (${data.ot}) for Company ${data.company} shows a variance of ${Helpers.money(findings.variance, true)} between the item ledger (F4111 = ${Helpers.money(findings.cardex)}) and the GL inventory account (F0911 = ${Helpers.money(findings.ledger)}).`;
   },
   _whyBody(data, findings) {
@@ -5892,6 +6057,19 @@ const TransactionDetailTemplate = {
     }
     if (pattern === '5.14') {
       return this._periodMismatchResolution(data, findings);
+    }
+    if (pattern === '5.15') {
+      // Find the orphan F4111 row again so the resolution can name it.
+      const targetVar = Math.abs(findings.variance);
+      const orphan = data.f4111Rows.find(fr => {
+        const amt = Math.abs(fr.cardexAmt || 0);
+        if (Math.abs(amt - targetVar) > 0.01) return false;
+        return !data.f0911Inv.some(g =>
+          String(g.account || '').trim() === String(fr.account || '').trim() &&
+          Math.abs(Math.abs(g.ledgerAmt || 0) - amt) < 0.01
+        );
+      });
+      return this._r31802aOrphanResolution(data, findings, orphan);
     }
     if (pattern === '5.5') {
       return DMAAIKnowledge.netZeroResolution(findings.dmaaiPair);
@@ -5927,23 +6105,32 @@ const TransactionDetailTemplate = {
     return `Do NOT post the unposted batch as-is via R09801. That would push the misrouted dollars-only lines into GL and compound the cleanup at close.\n\nStep 1.  Identify which Order section lines are stock (LineTy S — these are the legitimate inventory returns and post correctly) and which are non-stock (LineTy is anything else — these are the misrouted dollars-only credits). The Evidence list above flags both groups with their source rows.\n\nStep 2.  Interim fix for this document: post a manual journal entry that re-routes the non-stock line amounts off the inventory account and onto the correct credit / variance account that cost-accounting has designated for dollars-only adjustments. Confirm the account with your cost-accounting team before posting.\n\nStep 3.  Systemic fix (recommended, prevents the issue going forward): in JDE, define separate order types — one for stock returns, one for dollars-only credits / adjustments. Update the order-entry workflow so each line type lands on the appropriate order type. DMAAI then routes each correctly without manual intervention at close.\n\nStep 4.  Once the systemic fix is in place, audit any open RI / RM / CR / RE / SR documents to see if they need the same re-routing treatment. Future docs entered after the order-type split will not hit this issue.\n\nStep 5.  Refresh RapidReconciler and re-analyze. The variance on this document should clear once the JE in Step 2 is posted.`;
   },
 
-  // Pattern 5.13 — narrative built from the per-line qty delta.
-  _postConfirmOrderEditExplanation(data, shipConfirmedStockOrders, totals) {
-    const { orderExpectedDollars, orderQtyTotal, cardexQtyTotal } = totals;
+  // Pattern 5.13 — Post-confirm order edit (WHAT + WHY)
+  _postConfirmOrderEditWhat(data, findings) {
+    // Re-derive the per-line totals (already in findings indirectly via
+    // variance but we want crisp WHAT numbers). Cheap to recompute.
+    const SALES_ORDER_TYPES = /^(SO|ST|SD|RM|CR|CO)$/i;
+    const ordersForThisDoc = (data.orders || []).filter(o => o.doc === data.doc);
+    const stockOrders = ordersForThisDoc.filter(o => !o.linety || o.linety === 'S');
+    const shipConfirmed = stockOrders.filter(o => parseInt(o.nxtsts || '0', 10) >= 540);
+    const orderQtyTotal = shipConfirmed.reduce((s, o) => s + Math.abs(o.qty || 0), 0);
+    const orderDollars  = shipConfirmed.reduce((s, o) => s + Math.abs(o.qty || 0) * Math.abs(o.unitcost || 0), 0);
+    const cardexQtyTotal = data.f4111Rows.reduce((s, r) => s + Math.abs(r.qty || 0), 0);
     const qtyDelta = orderQtyTotal - cardexQtyTotal;
-    const dollarDelta = orderExpectedDollars - Math.abs(data.f4111Tot);
-    const lineCount = shipConfirmedStockOrders.length;
-    const linesPhrase = lineCount === 1 ? '1 stock line' : `${lineCount} stock lines`;
-    // Build a per-line breakdown the reader can scan
-    const breakdown = shipConfirmedStockOrders.map(o => {
-      const f = data.f4111Rows.filter(f => o.item && f.item === o.item);
-      const confirmed = f.reduce((sum, r) => sum + Math.abs(r.qty || 0), 0);
-      const orderQty  = Math.abs(o.qty || 0);
-      const unit      = Math.abs(o.unitcost || 0);
-      const d         = (orderQty - confirmed) * unit;
-      return `  Line ${o.line || '?'}${o.item ? '  (' + o.item + ')' : ''}: cardex captured qty ${confirmed} at ship-confirm; order line currently shows qty ${orderQty}. Delta = ${Helpers.money(d)} of GL inventory drawdown with no cardex backing.`;
-    }).join('\n');
-    return `F4111 cardex was written at ship-confirm for ${linesPhrase} on this doc. Total qty captured by cardex: ${cardexQtyTotal} EA for ${Helpers.money(Math.abs(data.f4111Tot))}. Total qty currently on the order: ${orderQtyTotal} EA for ${Helpers.money(orderExpectedDollars)}. R42800 (Sales Update) ran later and booked the GL inventory account at the order's current qty — ${Helpers.money(Math.abs(data.f0911InvTot))}, which matches the order math, not the cardex.\n\nThe gap of ${qtyDelta} EA (${Helpers.money(dollarDelta)}) means the order line qty was edited between ship-confirm and Sales Update. Once ship-confirm fires, F4111 records and the Inventory In Hand flag on F4211 are written immediately — the cardex is locked. Any subsequent edit to the line affects only the GL posting, producing exactly this kind of variance.\n\nPer-line breakdown:\n${breakdown}\n\nThis is a process / access-control issue, not a DMAAI configuration issue. The cardex is the truth of what physically shipped; the GL has the post-edit qty. JDE Order Activity Rules should treat ship-confirm as the terminal editable status on this order type, and the Inventory In Hand flag should block line edits after that point.`;
+    const dollarDelta = orderDollars - Math.abs(data.f4111Tot);
+    return [
+      `• F4111 (locked at ship-confirm): qty ${cardexQtyTotal} for ${Helpers.money(Math.abs(data.f4111Tot))}`,
+      `• F4211 current order qty (drives R42800): qty ${orderQtyTotal} for ${Helpers.money(orderDollars)}`,
+      `• F0911 booked the order's current qty: ${Helpers.money(Math.abs(data.f0911InvTot))}`,
+      `• Delta: ${qtyDelta} EA × unit cost = ${Helpers.money(dollarDelta)} — the variance`
+    ].join('\n');
+  },
+
+  _postConfirmOrderEditExplanation(data, shipConfirmedStockOrders, totals) {
+    return [
+      `• Order line qty was edited in P4210 / P42101 between ship-confirm and R42800 — cardex was locked at confirm, GL got the post-edit qty`,
+      `• Order Activity Rules or F4211.IVI (Inventory In Hand) flag allowed the edit when it should have blocked it`
+    ].join('\n');
   },
 
   // The inventory-side AAI by doc type — the one that fires when inventory
@@ -5994,15 +6181,18 @@ const TransactionDetailTemplate = {
     const expected = m.expectedAcct || 'the expected inventory account';
     const posted   = m.postedAcct   || 'a different account';
     const amt      = Helpers.money(m.mispostedAmt || 0);
-    const docLabel = data.dt ? `${data.dt} document` : 'document';
-    return `The GL booked this ${docLabel} to the wrong account. The cardex (F4111) recorded ${amt} of inventory movement on ${expected}, but the GL (F0911) posted that same ${amt} to ${posted} instead. The net variance on the document is $0 because the two halves are the same dollar amount — but the money is sitting in the wrong place and needs to move.`;
+    return [
+      `• F4111 cardex routed ${amt} to ${expected}`,
+      `• F0911 GL posted ${amt} to ${posted}`,
+      `• Net variance: $0 (same magnitude); misposted dollars: ${amt}`
+    ].join('\n');
   },
 
   _accountMismatchExplanation(data, ctx) {
-    const expected = ctx.expectedAcct || 'the expected inventory account';
-    const posted   = ctx.postedAcct   || 'a different account';
-    const amt      = Helpers.money(ctx.mispostedAmt || 0);
-    return `Two RR Summary rows show the same dollars (${amt}) on two different accounts: ${expected} on the cardex side, ${posted} on the GL side. That's the fingerprint of an account mismatch — the inventory movement was real, but the GL routed it to the wrong place.`;
+    return [
+      `• DMAAI override at posting time — manual JE coded the inventory account directly, or a posting program's override option redirected the GL leg`,
+      `• DMAAI reconfigured after this doc posted — older docs reference the prior routing; newer GL entries reference the current one`
+    ].join('\n');
   },
 
   _accountMismatchResolution(data, findings) {
@@ -6107,11 +6297,208 @@ const TransactionDetailTemplate = {
   _periodMismatchWhat(data, findings) {
     const periods = Array.from(new Set(data.rrSummary.map(r => r.period && (r.period.toString ? r.period.toString().slice(0, 10) : r.period)).filter(Boolean)));
     const acct = data.rrSummary[0] && data.rrSummary[0].account;
-    return `The cardex (F4111) and the GL (F0911) agree on the account (${acct || '—'}) and the dollar amount, but they landed in different fiscal periods (${periods.join(' vs ')}). The inventory and GL totals reconcile across the whole document; the problem is the period one of them posted in.`;
+    return [
+      `• F4111 period: ${periods[0] || '—'}`,
+      `• F0911 period: ${periods[1] || '—'}`,
+      `• Same account (${acct || '—'}), same dollars — only the period drifted`
+    ].join('\n');
   },
 
   _periodMismatchExplanation(data) {
-    return `Two RR Summary rows show the same account but different fiscal periods — that's the fingerprint of a period mismatch. The AAI configuration is correct; the GL post just landed in the wrong period. Typical cause: R42800 (Sales Update) or R31802A (Manufacturing Accounting) ran with its GL Date processing option set to use the system run date instead of the F4111 transaction date. Every batch that program processes then lands in whatever period the program ran in, not the period the inventory actually moved.`;
+    return [
+      `• R42800 / R31802A GL Date PO set to system run date instead of F4111 TransDate — batch lands in whatever period the program ran in`,
+      `• Backdated manual JE on the inventory account picked up the same amount in a different period`
+    ].join('\n');
+  },
+
+  // Pattern 5.15 — R31802A orphan cardex row helpers.
+  //
+  // A manufacturing F4111 row (IC / IM / IH / IS) whose amount matches
+  // the document variance but has no F0911 counterpart on the same
+  // account in this report. The "report" caveat is critical: RR filters
+  // F0911 at import time, so the GL row may exist in JDE outside RR's
+  // view. The diagnosis points the analyst at the five real R31802A
+  // causes instead of recommending a JE that might double-count.
+
+  // Find a "twin" — another F4111 row with the same item, same unit
+  // cost, same account as the orphan (the row that DID post). When a
+  // twin exists, several of the otherwise-plausible causes (selection
+  // filtering, configuration errors) drop out because identical inputs
+  // can't legitimately produce different outcomes through field-based
+  // routing — that scopes the investigation to row-instance causes
+  // like an interrupted run or a mis-set processed-flag.
+  _findOrphanTwin(data, orphan) {
+    if (!orphan) return null;
+    return data.f4111Rows.find(fr =>
+      fr !== orphan &&
+      Math.abs(fr.cardexAmt || 0) > 0.01 &&
+      fr.item === orphan.item &&
+      Math.abs((fr.unitcost || 0) - (orphan.unitcost || 0)) < 0.0001 &&
+      String(fr.account || '').trim() === String(orphan.account || '').trim()
+    ) || null;
+  },
+
+  // Counterpart AAI by manufacturing doc type. The orphan F4111 row's
+  // account is one side of R31802A's standard pair; the counterpart
+  // is the OTHER side — what didn't fire in F0911. Used to construct
+  // the corrective JE.
+  //   shortLabel  — used in the inline "(DMAAI X — Y)" parenthetical
+  //                 when F4095 resolves to an account
+  //   plainName   — used as the literal account label when the F4095
+  //                 lookup misses (or no preload is available). The
+  //                 analyst will substitute the actual JDE account on
+  //                 their side once they look it up.
+  _counterpartAaiForMfgDocType(dt) {
+    const t = String(dt || '').trim().toUpperCase();
+    const map = {
+      IC: { aai: '3120', shortLabel: 'WIP',             plainName: 'Work in Process' },
+      IM: { aai: '3120', shortLabel: 'WIP',             plainName: 'Work in Process' },
+      IH: { aai: '3401', shortLabel: 'Labor accrual',   plainName: 'Labor Accrual' },
+      IS: { aai: '3120', shortLabel: 'WIP',             plainName: 'Work in Process' },
+    };
+    return map[t] || null;
+  },
+
+  // Short, ALL-CAPS pattern names for the variance-card strip. The
+  // full pattern label is often too long to fit cleanly on a single
+  // strip row — keep these tight.
+  _stripLabelForPattern(findings) {
+    const p = findings && findings.pattern;
+    const map = {
+      '5.1':  'UNASSIGNED ACCOUNT',
+      '5.2':  'GL-ONLY ENTRY',
+      '5.3':  'CARDEX-ONLY ENTRY',
+      '5.4':  'ACCOUNT MISMATCH',
+      '5.5':  'NET-ZERO DMAAI PAIR',
+      '5.6':  'STANDARD COST CHANGE',
+      '5.7':  'MIXED LINE TYPES',
+      '5.11': 'GL EXCESS',
+      '5.13': 'POST-CONFIRM ORDER EDIT',
+      '5.14': 'PERIOD MISMATCH',
+      '5.15': 'R31802A ORPHAN CARDEX ROW',
+    };
+    return map[p] || (findings && findings.patternLabel ? findings.patternLabel.toUpperCase() : 'VARIANCE');
+  },
+
+  // Standard inventory-side DMAAI pair by manufacturing doc type. Used
+  // by Pattern 5.15's WHAT card to name the AAIs the analyst should
+  // review if the GL row turns up on a different account in JDE F0911
+  // (i.e. one of these AAIs is misrouted for this routing).
+  _mfgDocTypePair(dt) {
+    const t = String(dt || '').trim().toUpperCase();
+    return ({
+      IC: ['3130', '3120'],
+      IM: ['3110', '3120'],
+      IH: ['3120', '3401'],
+      IS: ['3130', '3120'],
+    })[t] || null;
+  },
+
+  _r31802aOrphanWhat(data, findings) {
+    // Re-locate the orphan so we can name its specifics.
+    const targetVar = Math.abs(findings.variance);
+    const orphan = data.f4111Rows.find(fr => {
+      const amt = Math.abs(fr.cardexAmt || 0);
+      if (Math.abs(amt - targetVar) > 0.01) return false;
+      return !data.f0911Inv.some(g =>
+        String(g.account || '').trim() === String(fr.account || '').trim() &&
+        Math.abs(Math.abs(g.ledgerAmt || 0) - amt) < 0.01
+      );
+    });
+    const amt   = orphan ? Helpers.money(orphan.cardexAmt) : Helpers.money(findings.variance);
+    const acct  = (orphan && orphan.account) || (data.f4111Rows[0] && data.f4111Rows[0].account) || '—';
+    const batch = (orphan && orphan.batch)   || '[batch]';
+    const item  = (orphan && orphan.item)    || '';
+    const orphanQty = orphan && Math.abs(orphan.qty || 0);
+    const glcl  = (orphan && orphan.glclass) || '';
+    const twin  = this._findOrphanTwin(data, orphan);
+    const twinQty = twin && Math.abs(twin.qty || 0);
+    const pair  = this._mfgDocTypePair(data.dt);
+    // Format qty as a tidy number (drop trailing zeros on integers).
+    const fmtQty = q => (q == null) ? null : Number(q).toString();
+    // WO completion docs have no line number — qty is the differentiator
+    // between the orphan and the twin. Include it in the row-identifying
+    // metadata so the analyst can spot which F4111 row is which on the
+    // source sheet without scrolling to compare.
+    const orphanMeta = [
+      item && `item ${item}`,
+      orphanQty ? `qty ${fmtQty(orphanQty)}` : null,
+      batch && `batch ${batch}`
+    ].filter(Boolean).join(', ');
+    const dmaaisHint = pair
+      ? `DMAAIs ${pair[0]} and ${pair[1]}${glcl ? ' for GL class ' + glcl : ''}`
+      : 'the doc\'s DMAAI pair';
+    const lines = [
+      `• Orphan F4111 row: ${amt} on ${acct}${orphanMeta ? ' (' + orphanMeta + ')' : ''} — no matching F0911 entry`,
+      `• This single row carries the entire ${Helpers.money(findings.variance, true)} variance`
+    ];
+    if (twin) {
+      const twinDesc = twinQty ? `same item / account / unit cost, qty ${fmtQty(twinQty)}` : 'same item / account / unit cost';
+      lines.push(`• Twin F4111 row (${twinDesc}) DID post — identical inputs, different outcomes`);
+    }
+    lines.push(`• Before posting the JE, confirm in JDE F0911 for batch ${batch} across all accounts`);
+    lines.push(`• If found on a different account, review ${dmaaisHint} in the DMAAs section of the source sheet — one is misrouted for this doc's routing`);
+    return lines.join('\n');
+  },
+
+  _r31802aOrphanExplanation(data, orphan) {
+    const twin = this._findOrphanTwin(data, orphan);
+    if (twin) {
+      // With a twin, two of the four causes are ruled out (filtering
+      // and processing errors would have affected both rows uniformly).
+      return [
+        `• Partial / interrupted R31802A run — identical-data twin posted, this row didn't (the textbook fingerprint)`,
+        `• Stale "already processed" flag set on the orphan F4111 row, blocking re-posting`
+      ].join('\n');
+    }
+    // No twin — all four real causes are in scope.
+    return [
+      `• Processing error during R31802A — most often missing cost components on the item (no rollup → no variance → no F0911)`,
+      `• R31802A run was interrupted partway through`,
+      `• Version / selection PO on the R31802A version excluded the row (cost type, GL class, sub-ledger filter)`,
+      `• "Already processed" flag set on the F4111 row, blocking re-posting`
+    ].join('\n');
+  },
+
+  _r31802aOrphanResolution(data, findings, orphan) {
+    const amt    = Helpers.money(orphan && Math.abs(orphan.cardexAmt));
+    const acct   = (orphan && orphan.account) || '[orphan F4111 account]';
+    const batch  = (orphan && orphan.batch)   || '[batch]';
+    const dtRaw  = (data.dt || '').trim().toUpperCase();
+    const cp     = this._counterpartAaiForMfgDocType(dtRaw);
+    const cardexIsDebit = orphan && (orphan.cardexAmt || 0) > 0;
+
+    // Resolve the counterpart account from the preloaded F4095 if loaded.
+    // When we can't (no preload, or F4095 has no row for this routing),
+    // fall back to the plain-English account name so the JE reads
+    // cleanly — the analyst substitutes the actual JDE account once
+    // they look it up.
+    let counterpartLine;
+    if (cp && typeof SystemContext !== 'undefined' && SystemContext.isLoaded()) {
+      const f4111 = data.f4111Rows[0] || null;
+      const cpRow = SystemContext.lookupAAI({
+        company:   data.company,
+        table:     cp.aai,
+        docType:   dtRaw,
+        glClass:   (f4111 && f4111.glclass) || '',
+        orderType: data.ot || (data.docHeader && data.docHeader.ot) || ''
+      });
+      counterpartLine = cpRow && cpRow.aaiaccount
+        ? `${cpRow.aaiaccount}   (DMAAI ${cp.aai} — ${cp.shortLabel})`
+        : `${cp.plainName}   (DMAAI ${cp.aai})`;
+    } else if (cp) {
+      counterpartLine = `${cp.plainName}   (DMAAI ${cp.aai})`;
+    } else {
+      counterpartLine = `counterpart account (DMAAI pair for ${dtRaw})`;
+    }
+
+    // Direction follows the cardex sign — a positive cardex amount is a
+    // debit on the inventory side, so the orphan account takes the Dr
+    // and the counterpart takes the Cr (and vice versa).
+    const drAcct = cardexIsDebit ? acct : counterpartLine;
+    const crAcct = cardexIsDebit ? counterpartLine : acct;
+
+    return `Post the journal entry R31802A should have posted on its own:\n\n   Dr  ${drAcct}   ${amt}\n   Cr  ${crAcct}   ${amt}\n\nThe orphan F4111 row above is the ${cardexIsDebit ? 'inventory-side debit' : 'inventory-side credit'}; the counterpart is the other side R31802A would have hit through standard DMAAI routing. As a cleaner alternative, re-run R31802A for batch ${batch} — that lets the AAI configuration drive the posting and leaves no manual entry in the GL.`;
   },
 
   _periodMismatchResolution(data, findings) {
