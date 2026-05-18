@@ -72,6 +72,8 @@ When both Cardex and Ledger are zero (no document found), treat ratio as 100% / 
 
 In both cases, include a step that has the user verify the current state of the document on the Transactions page in RapidReconciler before posting any correction, since the variance may have moved since this analysis was generated.
 
+**All patterns share a unified output style** &mdash; the WHAT card is a bullet list of the key facts (amounts, accounts, period, variance direction); the WHY card is a bullet list of 1&ndash;3 root-cause candidates (not exhaustive); the HOW card is a short numbered action sequence ending with a one-line prevention pointer. No prose paragraphs, no "Step 1 / Step 2 / Step 3 / Step 4 / Step 5" boilerplate where 2 steps would do. The Account Mismatch pattern (Section 5.4) is the most elaborate &mdash; its HOW includes a real Excel JE-flow matrix &mdash; but every pattern's output passes the same "all signal, no noise" check.
+
 **Suggested causes** from the Section 8 Quick Lookup should be distilled into the WHY card body (formatting spec, Section 6.2), not listed as a separate section. The full lookup table lives in this guide for the analyst to reference; the workbook only needs the most likely cause.
 
 **Evidence list** (formatting spec, Section 6.3): show the source rows that drive the variance. For Transaction Detail, evidence typically includes:
@@ -174,6 +176,7 @@ Individual F4111 rows (when present) include:
 | **Doc / DT** | Document number and type |
 | **OrderNum / OT** | Order number and type |
 | **Line** | The order line number |
+| **Ext** | Cost method (UDC 40/CM) recorded against the F4111 row at posting time. `02` = Weighted Average, `07` = Standard, `09` = Manufacturing Last, etc. Lets the analyst confirm the costing regime in effect for this transaction without a separate F4105 lookup. See the [Cost Methods reference](../RRUniversity/inventory-costing.html#section-1) for the full UDC list. |
 | **PC** | Posting code. "P" = posted; blank or other = not posted. "X" = memo transaction (excluded from reconciliation) |
 | **Branch** | Branch plant |
 | **Item** | Item number |
@@ -798,6 +801,56 @@ When the orphan row has a *twin* on the same doc -- same item, same account, sam
 - Processing errors can't be the cause (item-master / AAI lookups resolve uniformly across rows for the same item).
 
 That narrows the diagnosis to partial-run OR a stale "already-processed" flag -- and on a same-batch twin, partial-run is overwhelmingly likely.
+
+---
+
+### 5.15 Voucher Variance on Inventory (PV under standard cost)
+
+> Numbered 5.15 in this guide; the analyzer's internal pattern ID is **5.17**.
+
+**Symptoms:**
+- Document type is **PV** (P4314 Voucher Match)
+- F4111 cardex is empty (no cardex rows for this doc)
+- F0911 has entries on an inventory-side account (RR pulled them into `f0911Inv`)
+- DMAAs section may show "Override" or unusual routing for AAI 4330
+
+**What is happening:**
+
+A PV (voucher match) document writes its variance through AAI **4330 (Purchase Price Variance)**. The destination depends on the customer's costing method:
+
+| Cost method | AAI 4330 routes to | F4111 cardex behavior |
+|---|---|---|
+| Standard cost | Expense / variance account (P&L) | Empty -- voucher does not write to F4111 |
+| Weighted average | Inventory account | F4111 captures a revaluation row |
+
+The full receipt-voucher cycle:
+
+```
+Receipt (OV, P4312)        Voucher (PV, P4314)            Voucher with variance
+---------------------      -----------------------        ---------------------------
+Dr  Inventory (4310)       Dr  RNV (4320)                 Dr  RNV (4320)
+Cr  RNV (4320)             Cr  A/P (PC AAI)               Dr  Variance (4330)  -- or Cr
+                                                          Cr  A/P
+```
+
+When a PV doc shows up with **`F4111 empty + F0911 on inventory`**, that's wrong for either cost method:
+
+- **Standard cost** -- 4330 should route to expense, so the variance landing on inventory means 4330 was overridden at posting time (manual JE on the inventory account, or a posting-program override flag), OR 4330 was reconfigured / wasn't set correctly for this routing.
+- **Weighted average** -- 4330 routes to inventory by design and F4111 should have a cardex revaluation row, but the cardex side is missing. P4314 didn't trigger the F4111 write -- either a partial run, a configuration issue suppressing the F4111 update, or the item is mis-flagged non-stock for this branch.
+
+**Diagnostic key:** what AAI 4330 resolves to for this customer's company / GL class settles it.
+
+> **Analyzer output:** Pattern 5.17 in the analyzer pulls AAI 4330's resolved account from the loaded F4095 (DMAAIs preload) and chooses the right hypothesis directly. The WHY card names the cost method ("Customer is on standard cost -- AAI 4330 resolves to {acct} (an expense account)") and the HOW card pre-fills the corrective JE with the actual variance amount and accounts. When F4095 isn't loaded, the analyzer presents both hypotheses and tells the analyst to confirm 4330 in JDE before posting anything.
+
+**Common causes and resolution:**
+
+| Cause | How to identify | Resolution |
+|---|---|---|
+| Std-cost: DMAAI 4330 overridden at posting time | F0911 batch source/comment shows manual JE batch type (JE / IH) or override flag | Post Dr expense (the account 4330 should resolve to) / Cr inventory for the variance amount. Restrict override permissions or route manual inventory JEs through an approval step to prevent recurrence. |
+| Std-cost: DMAAI 4330 was reconfigured after this doc posted | Audit / change history on DMAAI 4330 shows a modification date after this doc's batch posted | Same JE as above. Then sweep other PV docs that posted under the prior config -- they'll need the same correction. |
+| Weighted-avg: P4314 didn't write F4111 | F4095 confirms 4330 routes to inventory; F4111 has no row for this doc | Confirm P4314 ran to completion (no partial-run / job-step failure on this batch). Post a manual cardex revaluation for the variance amount; coordinate with cost-accounting so the entry updates the item's average cost, not just sits on the cardex. |
+
+**Caveat:** the analyzer's data view of F0911 is filtered to inventory-relevant accounts (per RR's mirror filter). When confirming in JDE, query F0911 for the full batch without that filter -- the RNV (4320) and A/P legs are filtered out of RR's view but are part of the same voucher posting.
 
 ---
 
