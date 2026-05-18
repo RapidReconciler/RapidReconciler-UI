@@ -461,14 +461,14 @@ This means the **true variance is larger than what RapidReconciler is showing**.
 - CardexAmount and LedgerAmount are on separate rows
 - Variance equals the amount on each row
 
-> **Analyzer output:** for account-mismatch docs the analyzer's headline is the **misposted amount** (the dollars that need to move via JE), not the document's net variance — the net is $0 because the cardex and GL amounts agree in absolute value. Priority bucketing (P1/P2/P3) is retired for this template; the dollar amount + pattern label carry the headline. When the JDE DMAAIs workbook is preloaded, the HOW card walks the analyst through a four-step plan that reasons against the actual F4095:
+> **Analyzer output:** for account-mismatch docs the analyzer's headline is the **misposted amount** (the dollars that need to move via JE), not the document's net variance — the net is $0 because the cardex and GL amounts agree in absolute value. Priority bucketing (P1/P2/P3) is retired for this template; the dollar amount + pattern label carry the headline. The HOW card is built from "what should have posted" rather than from the F4111 model. It contains:
 >
-> 1. Name the inventory-side DMAAI for the doc type (IM → 3110, IA → 4124, SO/RI → 4240, IB → 4134, etc.) and confirm against the preloaded F4095 that the cardex routed correctly (so the GL is where it went wrong).
-> 2. Lay out the two real possibilities — the DMAAI was reconfigured *after* the doc posted, OR the DMAAI was overridden at posting time. If the misposted account appears anywhere else in the preloaded F4095 under a different routing, that detail is surfaced; if it doesn't, scenario (b) becomes the more likely of the two.
-> 3. The immediate JE — `Dr expected_acct / Cr posted_acct` for the misposted dollars.
-> 4. How to figure out which scenario applies (DMAAI change-history check, F0911 batch-type / source check) and prevent recurrence.
+> 1. **Doc context** — names the inventory-side DMAAI for the doc type (IM → 3110, IA → 4124, SO/RI → 4240, IB → 4134, etc.).
+> 2. **The corrective JE**, direction derived from the sign of the cardex amount. For credit-inventory doc types (IM, IA, II, SO/ST/SD shipment, etc.) the JE is `Dr posted_acct / Cr expected_acct`; for debit-inventory doc types (IC, OP, PV, RM) it's `Dr expected_acct / Cr posted_acct`. The direction is the result of subtracting the actual F0911 post from the JE that should have posted — it lands the dollars on the expected account and zeroes out the bad account.
+> 3. **A T-account picture** rendered as real Excel cells with borders (account number above a thick horizontal bar; Dr and Cr columns split by a vertical bar). Three accounts are shown: the expected account (gets the entry that should have happened), the bad account (Dr and Cr offset each other → ending balance 0), and the counterpart leg of the original JE (untouched). The picture is the WHY-of-the-direction made visible.
+> 4. **A one-line prevention pointer** — review the inventory-side DMAAI in JDE; restrict posting-time overrides if applicable.
 >
-> The old "Step 5: escalate if the DMAAs section is clean" branch is gone — when SystemContext is loaded, the analyzer can reason about that case directly instead of asking the analyst to escalate.
+> The investigation block (DMAAI change-history check, F0911 batch-type / source check) was dropped — analysts don't chase down the audit trail once the JE clears the variance. The two scenarios (DMAAI reconfigured vs override at post time) live in the WHY card now.
 
 **Common causes:**
 
