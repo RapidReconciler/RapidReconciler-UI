@@ -3210,40 +3210,63 @@ const DMAAIKnowledge = {
     return bullets.join('\n');
   },
 
-  icStandardCostChangeResolution(invAccount, amountForJE, aaiContext) {
-    const amtFragment = amountForJE ? ` (${amountForJE})` : '';
+  // signedAmount: the orphan F4111 row's cardex amount, KEEPING sign.
+  // Positive = cost went up (Dr Inventory / Cr Variance). Negative
+  // inverts (Cr Inventory / Dr Variance). Caller passes orphan.cardexAmt
+  // directly. The matrix renderer formats Dr/Cr presentation; this
+  // helper just feeds it numeric amounts.
+  icStandardCostChangeResolution(invAccount, signedAmount, aaiContext) {
     const invAcct = invAccount || 'the inventory account';
+
+    // Build the JE-flow matrix data once for both branches. The matrix
+    // shows the corrective entry against the inventory account and the
+    // variance AAI. Signed amounts: Dr = +, Cr = -. The orphan cardex
+    // sign drives direction: positive cardex (cost went up) means
+    // inventory needs a debit + variance a credit; negative inverts it.
+    const dr  = signedAmount || 0;          // signed amount on inventory
+    const cr  = -dr;                          // opposite on variance
+    let varLabel = 'Manufacturing Variance';
+    let varIdent = 'AAI 3240 / 3260';
+    if (aaiContext && aaiContext.status === 'configured' && aaiContext.accounts && aaiContext.accounts.length) {
+      const a = aaiContext.accounts[0];
+      varLabel = a.description || varLabel;
+      varIdent = `AAI ${a.table} → ${a.longAccount || a.account}`;
+    } else if (aaiContext && aaiContext.status === 'missing') {
+      varIdent = '[AAI 3240 / 3260 — NOT CONFIGURED]';
+    }
+    const matrix = {
+      columns: [
+        { role: 'inventory', label: 'Inventory (WIP / FG)', identifier: invAcct },
+        { role: 'variance',  label: varLabel,                identifier: varIdent }
+      ],
+      scenarios: [
+        { label: 'What R30837 should have posted', amounts: [dr,   cr] },
+        { label: 'What F0911 actually posted',     amounts: [null, null] },
+        { label: 'Corrective entry',               amounts: [dr,   cr] },
+        { label: 'End Result',                     amounts: [dr,   cr], endResult: true }
+      ]
+    };
 
     if (aaiContext && aaiContext.status === 'missing') {
       // Configuration gap — Step 1 is "configure the AAI first."
       return [
-        `Step 1.  Configure the manufacturing variance AAI in JDE. Add a row to DMAAI table 3240 (Material Variance) or 3260 (Planned Variance) — whichever your cost-accounting team uses for standard-cost revaluation — for the affected company and GL class. Without this entry, R30837 has no destination and can't post the missing GL counterpart even when it fires.`,
-        `Step 2.  Re-export the DMAAI integrity report (Integrity Report 0) from RapidReconciler and reload it on this analyzer page so future runs pick up the new AAI configuration.`,
-        `Step 3.  Post a manual JE to correct the historic posting on this document:\n   Dr  ${invAcct}${amtFragment}\n   Cr  the newly-configured variance AAI account (per Step 1)\nStep 1 prevents future occurrences; this JE clears the existing variance.`,
-        `Step 4.  Review R30837 (WIP Revaluation) configuration. R30837 needs to be called from R30835 (Frozen Standard Update) — confirm the processing option is set to launch it. Even with the AAI now configured, the sequencing issue can recur unless R30837 actually fires.`,
-        `Step 5.  Refresh RapidReconciler and re-analyze. The variance should clear once the AAI is configured and the JE is posted.`
-      ].join('\n\n');
-    }
-
-    // Process-sequencing gap branch — Step 3's credit varies based on whether
-    // the integrity report tells us which GL account 3240 / 3260 resolves to.
-    let creditLine;
-    if (aaiContext && aaiContext.status === 'configured') {
-      const accts = aaiContext.accounts;
-      const accountList = accts.map(a => `AAI ${a.table} (${a.description}) → ${a.longAccount || a.account}`).join(' or ');
-      const plural = accts.length > 1;
-      creditLine = `${accountList} (account${plural ? 's' : ''} from your loaded DMAAI integrity report — the actual configuration for this company / GL class)`;
-    } else {
-      creditLine = `AAI 3260 (Planned Variance) or AAI 3240 (Material Variance), per your cost-accounting team's convention. Confirm the company and GL class on the AAI entries match the affected branch.`;
+        { type: 'prose', text: `Step 1.  Configure the manufacturing variance AAI in JDE. Add a row to DMAAI table 3240 (Material Variance) or 3260 (Planned Variance) — whichever your cost-accounting team uses for standard-cost revaluation — for the affected company and GL class. Without this entry, R30837 has no destination and can't post the missing GL counterpart even when it fires.` },
+        { type: 'prose', text: `Step 2.  Re-export the DMAAI integrity report (Integrity Report 0) from RapidReconciler and reload it on this analyzer page so future runs pick up the new AAI configuration.` },
+        { type: 'prose', text: `Step 3.  Post a manual JE to correct the historic posting on this document. Step 1 prevents future occurrences; this JE clears the existing variance:` },
+        { type: 'jeFlowMatrix', matrix },
+        { type: 'prose', text: `Step 4.  Review R30837 (WIP Revaluation) configuration. R30837 needs to be called from R30835 (Frozen Standard Update) — confirm the processing option is set to launch it. Even with the AAI now configured, the sequencing issue can recur unless R30837 actually fires.` },
+        { type: 'prose', text: `Step 5.  Refresh RapidReconciler and re-analyze. The variance should clear once the AAI is configured and the JE is posted.` }
+      ];
     }
 
     return [
-      `Step 1.  Check the work-order status in JDE. If NxtSts is 999, R30837 won't revalue it even if re-run — the only correction path is the manual JE in Step 3.`,
-      `Step 2.  If the WO is still open, review R30837 (WIP Revaluation) configuration. R30837 needs to be called from R30835 (Frozen Standard Update) — confirm the processing option is set to launch it. Fixing this prevents future occurrences but doesn't clear the historic variance on this doc.`,
-      `Step 3.  Post a manual JE to correct the historic posting:\n   Dr  ${invAcct}${amtFragment}\n   Cr  ${creditLine}`,
-      `Step 4.  Assess materiality before posting. This pattern frequently produces aged variances dating back months or years (the gap isn't detected until reconciliation review). Very old or small amounts may warrant suspension rather than a JE.`,
-      `Step 5.  Refresh RapidReconciler and re-analyze. The variance should clear; if R30837 was reconfigured in Step 2, future standard-cost changes on open WOs will build their GL entries correctly.`
-    ].join('\n\n');
+      { type: 'prose', text: `Step 1.  Check the work-order status in JDE. If NxtSts is 999, R30837 won't revalue it even if re-run — the only correction path is the manual JE in Step 3.` },
+      { type: 'prose', text: `Step 2.  If the WO is still open, review R30837 (WIP Revaluation) configuration. R30837 needs to be called from R30835 (Frozen Standard Update) — confirm the processing option is set to launch it. Fixing this prevents future occurrences but doesn't clear the historic variance on this doc.` },
+      { type: 'prose', text: `Step 3.  Post a manual JE to correct the historic posting on this document:` },
+      { type: 'jeFlowMatrix', matrix },
+      { type: 'prose', text: `Step 4.  Assess materiality before posting. This pattern frequently produces aged variances dating back months or years (the gap isn't detected until reconciliation review). Very old or small amounts may warrant suspension rather than a JE.` },
+      { type: 'prose', text: `Step 5.  Refresh RapidReconciler and re-analyze. The variance should clear; if R30837 was reconfigured in Step 2, future standard-cost changes on open WOs will build their GL entries correctly.` }
+    ];
   },
 
   /* Look up the configured GL accounts for AAI 3240 (Material Variance) and
@@ -3910,9 +3933,16 @@ Templates.register(DMAAITemplate);
    SystemContext  —  per-session DMAAI integrity report cache.
 
    The user uploads their DMAAI Entry Integrity export (Integrity Report 0)
-   once per browser session. We parse it with DMAAITemplate.parse, hold the
-   parsed rows in memory, and mirror them to sessionStorage so a page
-   reload during the same tab keeps the data. Closing the tab clears it.
+   or a JDE F4095 workbook once. We parse it with DMAAITemplate.parse, hold
+   the parsed rows in memory, and mirror them to localStorage so the
+   preload survives browser restarts, reboots, and across multiple tabs.
+   The state stays until the user explicitly clears it (or clears site
+   data).
+
+   In dev/test contexts a known fixture path is also auto-rehydrated on
+   page load when nothing is in localStorage yet — see tryAutoRehydrate
+   below — so a fresh checkout or cleared browser still gets the system
+   context the analyzer needs without a manual preload step.
 
    Other templates (notably TransactionDetailTemplate) can call
    SystemContext.lookupAAI({ company, table, docType, glClass }) to find
@@ -3931,19 +3961,36 @@ Templates.register(DMAAITemplate);
 ==================================================================== */
 const SystemContext = (function () {
   const KEY = 'rr-system-dmaai-v1';
+  // Known fixture paths to auto-rehydrate from when localStorage is empty
+  // (dev / test contexts). First entry that fetches AND parses OK wins.
+  // The 'JDE F4095' workbooks are preferred over RR's DMAAI integrity
+  // report because they carry per-customer routing the analyzer needs.
+  //
+  // Per-customer F4095 fixtures (RR F4095 <Customer>.xlsx) are generated
+  // by Tools/queries/f4095-preload-workflow.ps1 -Database <db>. When
+  // working in a specific customer's data, drop that customer's F4095
+  // preload via the Preload card to swap from the auto-rehydrated default.
+  const AUTO_REHYDRATE_FIXTURES = [
+    { url: '/Tools/_test_corpus/fixtures/RR F4095 Acme.xlsx',                  importer: 'jde' },
+    { url: '/Tools/_test_corpus/fixtures/RR F4095 Treatt.xlsx',                importer: 'jde' },
+    { url: '/Tools/_test_corpus/fixtures/RR F4095 NACoal.xlsx',                importer: 'jde' },
+    { url: '/Tools/_test_corpus/fixtures/jde-dmaais.xlsx',                     importer: 'jde' },
+    { url: '/Tools/_test_corpus/fixtures/jde-dmaais-analyzed-acme.xlsx',       importer: 'jde' },
+    { url: '/Tools/_test_corpus/fixtures/dmaai int 2.xlsx',                    importer: 'rr'  }
+  ];
   let state = null;
   // Track whether persistence is currently disabled because a prior save
-  // failed (e.g. exceeded sessionStorage quota for a very large report).
+  // failed (e.g. exceeded localStorage quota for a very large report).
   // When true, importFromWorkbook still keeps the state in memory but
-  // skips the sessionStorage write so we don't keep throwing.
+  // skips the localStorage write so we don't keep throwing.
   let persistDisabled = false;
 
   function load() {
     try {
-      const raw = sessionStorage.getItem(KEY);
+      const raw = localStorage.getItem(KEY);
       if (raw) state = JSON.parse(raw);
     } catch (e) {
-      console.warn('SystemContext: could not hydrate from sessionStorage', e);
+      console.warn('SystemContext: could not hydrate from localStorage', e);
     }
     return state;
   }
@@ -3951,11 +3998,11 @@ const SystemContext = (function () {
   function save() {
     if (persistDisabled) return;
     try {
-      sessionStorage.setItem(KEY, JSON.stringify(state));
+      localStorage.setItem(KEY, JSON.stringify(state));
     } catch (e) {
       persistDisabled = true;
       console.warn(
-        'SystemContext: sessionStorage write failed (likely quota). ' +
+        'SystemContext: localStorage write failed (likely quota). ' +
         'Falling back to in-memory only for the rest of this session.', e
       );
     }
@@ -4033,7 +4080,7 @@ const SystemContext = (function () {
   function clear() {
     state = null;
     persistDisabled = false;
-    try { sessionStorage.removeItem(KEY); } catch (e) {}
+    try { localStorage.removeItem(KEY); } catch (e) {}
   }
 
   function isLoaded() { return !!state; }
@@ -4100,7 +4147,41 @@ const SystemContext = (function () {
     return state.rows.filter(r => r.aaiaccount === norm || r.longaccount === norm);
   }
 
-  load();  // hydrate on script load
+  // Auto-rehydrate from a known fixture when localStorage is empty.
+  // Used in dev / test contexts so a fresh checkout, cleared browser
+  // storage, or a reboot doesn't strand the analyzer in "no F4095
+  // loaded" mode that forces the three-hypothesis fallback in patterns
+  // like 5.17. Silent no-op when no fixture is reachable (e.g. on the
+  // deployed site, where the test corpus isn't served).
+  async function tryAutoRehydrate() {
+    if (state) return;   // user-loaded data wins
+    for (const f of AUTO_REHYDRATE_FIXTURES) {
+      try {
+        const resp = await fetch(f.url, { cache: 'no-cache' });
+        if (!resp.ok) continue;
+        const blob = await resp.blob();
+        const fileObj = new File([blob], f.url.split('/').pop());
+        if (f.importer === 'jde') {
+          await importFromJdeWorkbook(fileObj);
+        } else {
+          await importFromWorkbook(fileObj);
+        }
+        console.log(`SystemContext: auto-rehydrated from ${f.url}`);
+        // Notify the page so the Preload card can refresh its status pill.
+        try { document.dispatchEvent(new CustomEvent('systemcontext:rehydrated', { detail: { source: f.url } })); } catch (e) {}
+        return;
+      } catch (e) {
+        // try the next fixture
+      }
+    }
+  }
+
+  load();  // hydrate on script load (synchronous from localStorage)
+  // Fire and forget — if localStorage was empty, kick off the async
+  // rehydrate without blocking page render. Patterns that classify
+  // before this resolves will fall back to the no-F4095 branch, just
+  // like before; a manual file drop will overwrite either way.
+  tryAutoRehydrate();
 
   return { importFromWorkbook, importFromJdeWorkbook, clear, isLoaded, metadata, lookupAAI, rowsByAccount };
 })();
@@ -6415,6 +6496,9 @@ const TransactionDetailTemplate = {
   },
 
   _whatBody(data, findings) {
+    return this._spaceBullets(this._whatBodyRaw(data, findings));
+  },
+  _whatBodyRaw(data, findings) {
     if (findings.pattern === '5.1')  return this._unassignedWhat(data, findings);
     if (findings.pattern === '5.2')  return this._glOnlyWhat(data, findings);
     if (findings.pattern === '5.3')  return this._cardexOnlyWhat(data, findings);
@@ -6444,10 +6528,22 @@ const TransactionDetailTemplate = {
     return lines.join('\n');
   },
   _whyBody(data, findings) {
-    return findings.patternExplanation;
+    return this._spaceBullets(findings.patternExplanation);
   },
   _howBody(data, findings) {
     return this._howFor(findings.pattern, data, findings);
+  },
+
+  // Bullet cards (WHAT / WHY) join their bullets with a single `\n` —
+  // which renders as densely packed lines in the Excel cell because Excel
+  // doesn't add inter-bullet leading. Wrap the cell content with a
+  // blank line before every bullet (except the first) so the list reads
+  // as a scan-able list instead of a wall of text. Idempotent: triple+
+  // newlines are collapsed back to double. Strings without bullets
+  // pass through unchanged.
+  _spaceBullets(s) {
+    if (!s || typeof s !== 'string' || !s.includes('•')) return s;
+    return s.replace(/\n(?=\s*•)/g, '\n\n').replace(/\n{3,}/g, '\n\n');
   },
   _howFor(pattern, data, findings) {
     if (pattern === '5.1')  return this._unassignedResolution(data);
@@ -6456,12 +6552,15 @@ const TransactionDetailTemplate = {
     if (pattern === '5.4')  return this._accountMismatchResolution(data, findings);
     if (pattern === '5.5')  return DMAAIKnowledge.netZeroResolution(findings.dmaaiPair);
     if (pattern === '5.6')  {
-      // The orphan revaluation row's cardex amount is the JE amount.
+      // The orphan revaluation row's cardex amount drives the JE direction.
+      // Pass the signed amount so the matrix renderer can show the right
+      // Dr/Cr columns.
       const orphan = data.f4111Rows.find(r => /standard\s+cost\s+change/i.test(r.comment || '')
                                             && Math.abs(r.cardexAmt || 0) >= 0.01);
+      const orphanAcct = (orphan && orphan.account) || data.account || '';
       return DMAAIKnowledge.icStandardCostChangeResolution(
-        data.account || '',
-        orphan ? Helpers.money(Math.abs(orphan.cardexAmt)) : '',
+        orphanAcct,
+        orphan ? (orphan.cardexAmt || 0) : 0,
         findings.mfgVarianceAaiContext
       );
     }
@@ -6809,19 +6908,35 @@ const TransactionDetailTemplate = {
     const variance = Math.abs(findings.variance || 0);
     const ledgerHigher = ledgerUC > cardexUC;
     const acct = (data.rrSummary[0] && data.rrSummary[0].account) || data.account || '[WIP/FG account]';
-    // The corrective JE moves the variance amount to a manufacturing
-    // variance AAI. Direction is policy-dependent — Step 2's framing
-    // assumes the LOWER of the two costs is the customer's intended
-    // cost; if the higher cost is the intent, the analyst flips the JE.
-    const varianceAaiLine = `AAI 3240 (Material Variance) or 3260 (Planned Variance) per cost-accounting policy`;
-    const drLine = ledgerHigher ? varianceAaiLine : acct;
-    const crLine = ledgerHigher ? acct : varianceAaiLine;
+    // ledgerHigher = GL is over-stated vs cardex → variance is an
+    //   excess DEBIT sitting on inventory. Corrective: Cr Inventory
+    //   (back it out), Dr Variance (absorb it).
+    // !ledgerHigher = GL is understated vs cardex → variance is a
+    //   missing debit on inventory. Corrective: Dr Inventory (top it
+    //   up), Cr Variance.
+    const invSign = ledgerHigher ? -variance : +variance;   // direction OF the variance currently on inventory
+    const corrInv = -invSign;                                // corrective reverses it
+    const corrVar = +invSign;                                // and lands on variance AAI
+    const matrix = {
+      columns: [
+        { role: 'inventory', label: 'Inventory (WIP / FG)',     identifier: acct },
+        { role: 'variance',  label: 'Manufacturing Variance',   identifier: 'AAI 3240 (Material) or 3260 (Planned)' }
+      ],
+      scenarios: [
+        { label: 'Where the variance should sit',              amounts: [null,    invSign] },
+        { label: 'Where the variance is sitting today',        amounts: [invSign, null]    },
+        { label: 'Corrective entry',                           amounts: [corrInv, corrVar] },
+        { label: 'End Result',                                 amounts: [null,    invSign], endResult: true }
+      ]
+    };
+
     return [
-      `Step 1.  Identify which cost is correct per the customer's cost-accounting policy. Cardex shows ${Helpers.money(cardexUC)}/unit; GL implies ${Helpers.money(ledgerUC)}/unit. Confirm with cost-accounting which one represents the intended cost basis (frozen standard vs work-order actual).`,
-      `Step 2.  Post a corrective JE to clear the variance:\n   Dr  ${drLine}   ${Helpers.money(variance)}\n   Cr  ${crLine}   ${Helpers.money(variance)}\nThe Dr/Cr direction above assumes the ${ledgerHigher ? 'lower (cardex)' : 'lower (GL)'} cost is the customer's intended basis and the excess on the ${ledgerHigher ? 'GL' : 'cardex'} side moves to a manufacturing variance account. Flip the direction if the customer intends the higher cost as correct.`,
-      `Step 3.  Investigate R30837 (WIP Revaluation) configuration in JDE. R30837 needs to be called from R30835 (Frozen Standard Update) so cardex and GL stay aligned through standard-cost changes. If R30837 isn't firing — or the work order has reached status 999 (R30837 won't revalue closed WOs) — this kind of mismatch will keep accumulating on future cost changes.`,
-      `Step 4.  Refresh RapidReconciler and re-analyze. The variance should clear once the JE is posted; the R30837 fix prevents recurrence.`
-    ].join('\n\n');
+      { type: 'prose', text: `Step 1.  Identify which cost is correct per the customer's cost-accounting policy. Cardex shows ${Helpers.money(cardexUC)}/unit; GL implies ${Helpers.money(ledgerUC)}/unit. Confirm with cost-accounting which side represents the intended cost basis (frozen standard vs work-order actual). The matrix below assumes the ${ledgerHigher ? 'lower (cardex)' : 'higher (cardex)'} side is correct and moves the excess to a manufacturing variance account — flip the JE direction if the policy is the opposite.` },
+      { type: 'prose', text: `Step 2.  Post the corrective JE to clear the variance:` },
+      { type: 'jeFlowMatrix', matrix },
+      { type: 'prose', text: `Step 3.  Investigate R30837 (WIP Revaluation) configuration in JDE. R30837 needs to be called from R30835 (Frozen Standard Update) so cardex and GL stay aligned through standard-cost changes. If R30837 isn't firing — or the work order has reached status 999 (R30837 won't revalue closed WOs) — this kind of mismatch will keep accumulating on future cost changes.` },
+      { type: 'prose', text: `Step 4.  Refresh RapidReconciler and re-analyze. The variance should clear once the JE is posted; the R30837 fix prevents recurrence.` }
+    ];
   },
 
   // Pattern 5.17 — Voucher Variance on Inventory (PV under standard cost).
@@ -6857,23 +6972,23 @@ const TransactionDetailTemplate = {
   _voucherVariOnInvExplanation(data, ctx) {
     if (ctx && ctx.status === 'std-cost') {
       return [
-        `• Customer is on standard cost — AAI 4330 (Purchase Price Variance) resolves to ${ctx.longAccount} (an expense account) for this company / GL class`,
-        `• The voucher variance on this doc was redirected to an inventory account anyway. Most common cause: DMAAI 4330 was overridden at posting time (manual JE coded the inventory account, or a posting-program override redirected the variance leg)`,
-        `• Less common: AAI 4330 was reconfigured after this doc posted, and the old config pointed at the inventory account`
+        `• Std cost: AAI 4330 resolves to ${ctx.longAccount} (expense account) for this company / GL class.`,
+        `• Variance landed on inventory anyway. Most common cause: DMAAI 4330 was overridden at posting time (manual JE on the inventory account, or a posting-program override).`,
+        `• Less common: 4330 was reconfigured after this doc posted; the prior config pointed at inventory.`
       ].join('\n');
     }
     if (ctx && ctx.status === 'weighted-avg') {
       return [
-        `• Customer is on weighted-average — AAI 4330 (Purchase Price Variance) resolves to ${ctx.longAccount} (an inventory account) for this company / GL class`,
-        `• Under weighted-average, the voucher should ALSO have written an F4111 cardex revaluation row to capture the variance in the average cost — but F4111 is empty for this doc, so the cardex side never wrote`,
-        `• Likely cause: the voucher post (P4314) didn't trigger the cardex update — either a job-step failure during voucher match, or a configuration issue suppressing the F4111 write`
+        `• Weighted-average: AAI 4330 resolves to ${ctx.longAccount} (inventory account) for this company / GL class.`,
+        `• Under WA, F4111 should ALSO carry a cardex revaluation row — but it's empty for this doc, so the cardex side never wrote.`,
+        `• Likely cause: P4314 didn't trigger the F4111 update (job-step failure during voucher match, or a config suppressing the cardex write).`
       ].join('\n');
     }
     // F4095 not loaded — present both hypotheses
     return [
-      `• Standard-cost case (most common): AAI 4330 should route to an expense account. The voucher variance was redirected to an inventory account, typically by a DMAAI 4330 override at posting time or a stale 4330 configuration. Confirm in JDE that 4330 for this company / GL class resolves to expense.`,
-      `• Weighted-average case: AAI 4330 routes to inventory by design and the voucher should have written an F4111 revaluation. The cardex side is missing here, suggesting the P4314 voucher post didn't update F4111. Confirm in JDE that 4330 for this company / GL class resolves to inventory.`,
-      `• Preload the JDE DMAAIs workbook on the analyzer's Preload card to get a definitive answer instead of two hypotheses`
+      `• Std-cost case: 4330 should route to expense; landed on inventory instead. Usual cause is a 4330 override at posting time or a stale config.`,
+      `• WA case: 4330 routes to inventory by design, but F4111 should also carry a matching revaluation row — and doesn't. P4314 didn't write F4111.`,
+      `• Confirm 4330's destination in JDE, or preload the JDE DMAAIs workbook for a definitive answer.`
     ].join('\n');
   },
   _voucherVariOnInvResolution(data, findings, ctx) {
@@ -6882,12 +6997,34 @@ const TransactionDetailTemplate = {
     const batch = (f0911Row && f0911Row.batch) || '[batch]';
     const amt = Helpers.money(Math.abs(findings.variance || findings.ledger || 0));
     if (ctx && ctx.status === 'std-cost') {
+      // Variance currently sits on inventory (where F0911 posted it).
+      // Std cost says it should be on expense. We don't know whether the
+      // original variance was Dr or Cr — could be either depending on
+      // whether the voucher cost came in higher or lower than the receipt
+      // cost. Use the signed F0911 inventory total (findings.ledger) as
+      // the source of truth.
+      const ledgerAmt = findings.ledger || 0;       // signed amount currently on inventory
+      const correctInv = -ledgerAmt;                 // corrective reverses it
+      const correctExp = +ledgerAmt;                 // and lands on expense (same sign as original)
+      const matrix = {
+        columns: [
+          { role: 'inventory', label: 'Inventory (where it landed)',  identifier: acct },
+          { role: 'expense',   label: 'Expense (per AAI 4330)',        identifier: ctx.longAccount || ctx.account }
+        ],
+        scenarios: [
+          { label: 'What AAI 4330 should have posted (std cost)', amounts: [null,        ledgerAmt] },
+          { label: 'What AAI 4330 actually posted',                amounts: [ledgerAmt,  null]      },
+          { label: 'Corrective entry',                             amounts: [correctInv, correctExp] },
+          { label: 'End Result',                                   amounts: [null,        ledgerAmt], endResult: true }
+        ]
+      };
       return [
-        `Step 1.  Post a corrective JE to move the misposted variance off inventory and onto the expense account 4330 should resolve to:\n   Dr  ${ctx.longAccount}   ${amt}\n   Cr  ${acct}   ${amt}\nUse the GL date of the original F0911 entry so the correction lands in the same period.`,
-        `Step 2.  Identify why the variance was redirected. Pull the F0911 record for batch ${batch} and check the Source / Comment / BT column — a manual JE batch type (JE / IH) means a person redirected it; an automatic batch with no override suggests AAI 4330 was misconfigured at posting time.`,
-        `Step 3.  In JDE, pull the audit / change history on DMAAI 4330 for Company ${data.company || '?'}${data.glclass ? ' / GL class ' + data.glclass : ''}. If 4330 was changed after this doc posted, sweep other PV docs that posted under the old config — they'll need the same Step 1 JE.`,
-        `Step 4.  Refresh RapidReconciler and re-analyze. The variance should clear once the JE is posted.`
-      ].join('\n\n');
+        { type: 'prose', text: `Step 1.  Post a corrective JE to move the misposted variance off inventory and onto the expense account AAI 4330 resolves to. Use the GL date of the original F0911 entry so the correction lands in the same period.` },
+        { type: 'jeFlowMatrix', matrix },
+        { type: 'prose', text: `Step 2.  Identify why the variance was redirected. Pull the F0911 record for batch ${batch} and check the Source / Comment / BT column — a manual JE batch type (JE / IH) means a person redirected it; an automatic batch with no override suggests AAI 4330 was misconfigured at posting time.` },
+        { type: 'prose', text: `Step 3.  In JDE, pull the audit / change history on DMAAI 4330 for Company ${data.company || '?'}${data.glclass ? ' / GL class ' + data.glclass : ''}. If 4330 was changed after this doc posted, sweep other PV docs that posted under the old config — they'll need the same Step 1 JE.` },
+        { type: 'prose', text: `Step 4.  Refresh RapidReconciler and re-analyze. The variance should clear once the JE is posted.` }
+      ];
     }
     if (ctx && ctx.status === 'weighted-avg') {
       return [
@@ -7033,14 +7170,20 @@ const TransactionDetailTemplate = {
     const white  = { argb: 'FFFFFFFF' };
     const ruleColor = { argb: 'FFBFC8D6' };  // subtle grey-blue for the label/data divider
     const numFmt = '#,##0.00;[Red](#,##0.00);""';
-    const acctCols = ['C', 'D', 'E'];
+    // Matrix width is driven by columns.length. 2-account JEs use C+D;
+    // 3-account JEs use C+D+E. The HOW pane fills cols A-E regardless
+    // (prose sections still span A:E), so anything unused on the matrix
+    // tab simply stays empty in the data area for that row block.
+    const ALL_ACCT_COLS = ['C', 'D', 'E'];
     const columns  = matrix.columns || [];
+    const colCount = Math.min(columns.length, ALL_ACCT_COLS.length);
+    const acctCols = ALL_ACCT_COLS.slice(0, colCount);
 
     // --- Header row 1: account role label (navy fill, white bold) ---
     ws.getRow(row).height = 22;
     // Label half blank
     F.writeMerged(ws, `A${row}:B${row}`, '', {});
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < colCount; i++) {
       const cell = ws.getCell(`${acctCols[i]}${row}`);
       const col = columns[i];
       cell.value = col ? col.label : '';
@@ -7053,7 +7196,7 @@ const TransactionDetailTemplate = {
     // --- Header row 2: account identifier (light-blue fill, italic) ---
     ws.getRow(row).height = 18;
     F.writeMerged(ws, `A${row}:B${row}`, '', {});
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < colCount; i++) {
       const cell = ws.getCell(`${acctCols[i]}${row}`);
       const col = columns[i];
       cell.value = col ? (col.identifier || '') : '';
@@ -7079,9 +7222,9 @@ const TransactionDetailTemplate = {
         alignment: { horizontal: 'left', vertical: 'middle', indent: 1 },
         border: labelBorder
       });
-      // Amount cells in C / D / E — the data columns carry the stripe and
-      // a left rule on column C to separate labels from data
-      for (let i = 0; i < 3; i++) {
+      // Amount cells — the data columns carry the stripe and a left rule
+      // on the first data column to separate labels from data
+      for (let i = 0; i < colCount; i++) {
         const cell = ws.getCell(`${acctCols[i]}${row}`);
         const amt = (sc.amounts || [])[i];
         cell.value = (amt == null || amt === '') ? null : amt;
@@ -12496,10 +12639,44 @@ const App = (() => {
           <h4>2. Why it happened</h4>
           <p>${escapeHtml(t._whyBody(data, findings))}</p>
           <h4>3. How to fix it</h4>
-          <p>${escapeHtml(t._howBody(data, findings)).replace(/Step \d+\./g, '<br><strong>$&</strong>')}</p>
+          <p>${escapeHtml(flattenHowForPreview(t._howBody(data, findings))).replace(/Step \d+\./g, '<br><strong>$&</strong>')}</p>
         </div>
       </details>
     `;
+  }
+
+  // Pattern resolutions that include a JE-flow matrix return an array of
+  // sections (prose / jeFlowMatrix). The xlsx render path handles them
+  // structurally via _renderHowSections, but the inline HTML preview
+  // here only wants flat text. Render the matrix as a compact
+  //   Account A   Account B
+  //     (label)   amount   amount
+  // text block so the preview stays informative even without the styled
+  // grid. String inputs pass through untouched.
+  function flattenHowForPreview(howValue) {
+    if (typeof howValue === 'string') return howValue;
+    if (!Array.isArray(howValue)) return String(howValue || '');
+    const parts = [];
+    for (const sec of howValue) {
+      if (sec && sec.type === 'prose') {
+        parts.push(sec.text || '');
+      } else if (sec && sec.type === 'jeFlowMatrix' && sec.matrix) {
+        const cols = sec.matrix.columns || [];
+        const scenarios = sec.matrix.scenarios || [];
+        const header = cols.map(c => `${c.label || ''} (${c.identifier || ''})`).join('   |   ');
+        const lines = [header];
+        for (const sc of scenarios) {
+          const amts = (sc.amounts || []).map(a => {
+            if (a == null || a === '') return '—';
+            const abs = Math.abs(a).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            return a < 0 ? `(${abs})` : abs;
+          }).join('   |   ');
+          lines.push(`  ${sc.label || ''}:  ${amts}`);
+        }
+        parts.push(lines.join('\n'));
+      }
+    }
+    return parts.join('\n\n');
   }
 
   /* Inline cost-method callout — shown only for Item Ledger. The 2-row

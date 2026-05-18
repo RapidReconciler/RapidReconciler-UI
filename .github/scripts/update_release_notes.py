@@ -48,7 +48,13 @@ EMPTY_STATE_RE = re.compile(
 # every prepend the script trims the oldest entries past this count so the
 # file doesn't grow indefinitely. Older changes remain reachable via the
 # GitHub commit-history link in the page footer.
-MAX_ENTRIES = 100
+#
+# Temporarily lowered to 10 during development testing — nobody's actively
+# reading these entries in customer-facing context yet, and the shorter
+# page is easier to scan when iterating on the analyzer. Bump back to 100
+# (or whatever feels right) once the page graduates to active customer
+# consumption.
+MAX_ENTRIES = 10
 
 SKIP_MARKERS  = ("[skip release notes]", "[skip-release-notes]", "[skip ci]")
 SKIP_PREFIXES = ("chore: refresh search indices", "chore: append release notes")
