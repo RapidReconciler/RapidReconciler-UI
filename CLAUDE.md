@@ -560,6 +560,29 @@ versed analyst, not a layperson. Keep that voice:
   and let the owner resolve it manually. (Saved to memory as
   `feedback_auto_pull_main.md`.)
 
+- **After the merge + main pull, clean up stale branch state.** This
+  closes the loop that bit twice when feature branches were retried:
+  the previous PR squash-merged with `--delete-branch`, but the local
+  worktree branch kept the pre-squash commits, so the next push pushed
+  duplicates that GitHub flagged as "CONFLICTING" against main. Run:
+    1. `git -C "<worktree>" fetch --prune` to drop remote-tracking refs
+       whose upstream branch was deleted (silences the
+       "upstream is gone" warning).
+    2. `git -C "<worktree>" reset --hard origin/main` on the worktree
+       branch so its tip matches the just-merged main. The next commit
+       on this worktree starts cleanly from the squashed state, no
+       leftover commits to rebase away. Safe because the working tree
+       has no pending changes at this point (we just merged); skip if
+       the working tree isn't clean.
+    3. `git -C "<worktree>" branch -d <branch-name>` if the worktree
+       branch is single-use (Claude-named like
+       `claude/<adjective>-<sha>`) and we're done with it. Skip if the
+       worktree is staying on the same branch for another round of
+       work. The `gh pr merge --delete-branch` flag already cleans the
+       remote; this cleans the local side too.
+  Skip any of these steps that would destroy uncommitted work, and
+  surface the situation so the owner can clean up manually.
+
 - **Auto-regen + release-notes + doc-dates commits land after every
   push to main.** Three GitHub Actions fire:
     - `refresh-indices.yml` regenerates the three search indices when
