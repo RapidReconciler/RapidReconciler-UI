@@ -900,6 +900,8 @@
     .feedback-text { font-size: 13px; }
   }
 </style>
+<link rel="stylesheet" href="tour.css">
+<script defer src="tour.js"></script>
 </head>
 <body>
 
@@ -5896,7 +5898,11 @@ const TransactionDetailTemplate = {
 
   async render(workbook, data, findings, sourceWb, sourceSheet) {
     const ws = workbook.addWorksheet('Analysis', { views: [{ showGridLines: false, state: 'normal' }] });
-    F.standardColumnWidths(ws);
+    // Custom widths: A:B carry scenario labels in the JE-flow matrix
+    // (Pattern 5.4); C / D / E are the three account columns and want
+    // balanced widths so the matrix doesn't read lopsided. WHAT / WHY /
+    // HOW prose still merges A:D (total ~98 chars, plenty for prose).
+    F.setColumnWidths(ws, [24, 22, 26, 26, 26]);
 
     // Subline is the one-line below-headline summary. Pattern-aware so
     // it surfaces what's actually wrong, not just cardex-vs-ledger
@@ -6197,97 +6203,107 @@ const TransactionDetailTemplate = {
     return map[t] || null;
   },
 
-  // Render a stacked T-account block as real Excel cells with borders.
-  // Used by any pattern whose HOW returns a 'tAccounts' section. The
-  // analyst sees a proper T (horizontal bar under the account number,
-  // vertical bar dividing Dr and Cr columns) rather than text-padded
-  // shapes that disintegrate in Arial.
+  // Render a JE-flow matrix: rows = scenarios ("what should have", "what
+  // actually happened", "corrective entry", "end result"), columns = the
+  // accounts touched (expected / counterpart / posted). Each cell holds a
+  // signed amount — positive = Dr (black), negative = Cr (red, parens),
+  // zero/null = blank. Reads like a ledger trial-balance under each
+  // scenario, which is what accountants want when they're verifying a
+  // corrective JE doesn't double-count.
   //
-  // accounts: [{
-  //   accountNumber:  account code string (e.g. "1000000.142000")
-  //   rows:           [{ dr, cr, note }]   — entries below the Dr / Cr column heads
-  //   balanceNote:    optional one-line summary of the resulting balance
-  //   untouched:      true to render a single-line "untouched" footnote instead
-  //   untouchedLabel: parenthetical for the untouched line (e.g. "WIP — counterpart")
-  // }]
+  // matrix: {
+  //   columns: [
+  //     { role: 'Inventory' | 'Counterpart' | 'Mistaken Account',
+  //       label: 'Inventory' | 'Work in Process' | 'Mistaken Account',
+  //       identifier: '1000000.142000' | 'WIP (DMAAI 3120)' | '1000000.143000.PRS' }
+  //   ],
+  //   scenarios: [
+  //     { label: 'What was supposed to happen', amounts: [signedNum|null, ...] },
+  //     ...
+  //   ]
+  // }
   //
-  // Column usage: A = Dr (right-aligned), B = Cr (left-aligned, with left
-  // border to form the vertical T-bar). C:E = inline note. Account number
-  // spans A:E above with a bottom border (the horizontal T-bar).
+  // JE-flow matrix layout:
+  //   Cols A:B = scenario label (left-aligned, no fill)
+  //   Cols C, D, E = three account columns (balanced widths via the
+  //     custom standardColumnWidths in render())
+  // The matrix reads as a small ledger table — clean, no inter-column
+  // noise borders, a single thin vertical rule between labels and data,
+  // and the End Result row marked with a medium top border + bold.
   // Returns the next free row.
-  _renderTAccountsBlock(ws, startRow, accounts) {
+  _renderJeFlowMatrix(ws, startRow, matrix) {
     let row = startRow;
-    const navy = { argb: PALETTE.navyText };
-    const text = { argb: PALETTE.text };
-    const soft = { argb: PALETTE.textSoft };
-    for (let i = 0; i < accounts.length; i++) {
-      const acct = accounts[i];
-      if (acct.untouched) {
-        ws.getRow(row).height = 20;
-        F.writeMerged(ws, `A${row}:E${row}`,
-          `${acct.untouchedLabel || acct.accountNumber || 'Counterpart'} — untouched (posted correctly in the original transaction).`, {
-            font: { name: 'Arial', size: 11, italic: true, color: soft },
-            alignment: { horizontal: 'left', vertical: 'middle', indent: 2 }
-          });
-        row++;
-        continue;
-      }
-      // Account number (merged A:E, bold, centered, thick bottom border)
-      ws.getRow(row).height = 22;
-      F.writeMerged(ws, `A${row}:E${row}`, acct.accountNumber || '', {
-        font: { name: 'Arial', size: 12, bold: true, color: navy },
-        alignment: { horizontal: 'center', vertical: 'middle' },
-        border: { bottom: { style: 'medium', color: navy } }
-      });
-      row++;
-      // Dr / Cr column header row
-      ws.getRow(row).height = 18;
-      const drHead = ws.getCell(`A${row}`);
-      drHead.value = 'Dr';
-      drHead.font = { name: 'Arial', size: 10, bold: true, color: navy };
-      drHead.alignment = { horizontal: 'right', vertical: 'middle', indent: 2 };
-      const crHead = ws.getCell(`B${row}`);
-      crHead.value = 'Cr';
-      crHead.font = { name: 'Arial', size: 10, bold: true, color: navy };
-      crHead.alignment = { horizontal: 'left', vertical: 'middle', indent: 2 };
-      crHead.border = { left: { style: 'medium', color: navy } };
-      row++;
-      // Entry rows
-      for (const r of acct.rows || []) {
-        ws.getRow(row).height = 18;
-        const drCell = ws.getCell(`A${row}`);
-        drCell.value = r.dr || '';
-        drCell.font = { name: 'Arial', size: 11, color: text };
-        drCell.alignment = { horizontal: 'right', vertical: 'middle', indent: 2 };
-        const crCell = ws.getCell(`B${row}`);
-        crCell.value = r.cr || '';
-        crCell.font = { name: 'Arial', size: 11, color: text };
-        crCell.alignment = { horizontal: 'left', vertical: 'middle', indent: 2 };
-        crCell.border = { left: { style: 'medium', color: navy } };
-        if (r.note) {
-          F.writeMerged(ws, `C${row}:E${row}`, `← ${r.note}`, {
-            font: { name: 'Arial', size: 10, italic: true, color: soft },
-            alignment: { horizontal: 'left', vertical: 'middle', indent: 1 }
-          });
-        }
-        row++;
-      }
-      // Balance note row (e.g. "→ ending balance: 0")
-      if (acct.balanceNote) {
-        ws.getRow(row).height = 18;
-        const balCell = ws.getCell(`B${row}`);
-        balCell.value = `→ ${acct.balanceNote}`;
-        balCell.font = { name: 'Arial', size: 10, italic: true, color: text };
-        balCell.alignment = { horizontal: 'left', vertical: 'middle', indent: 2 };
-        balCell.border = { left: { style: 'medium', color: navy } };
-        row++;
-      }
-      // Spacer between stacked T-accounts (skip after the last one)
-      if (i < accounts.length - 1) {
-        ws.getRow(row).height = 6;
-        row++;
-      }
+    const navy   = { argb: PALETTE.navyText };
+    const navyFill = PALETTE.navy;
+    const lightBlue = PALETTE.lightBlue;
+    const text   = { argb: PALETTE.text };
+    const white  = { argb: 'FFFFFFFF' };
+    const ruleColor = { argb: 'FFBFC8D6' };  // subtle grey-blue for the label/data divider
+    const numFmt = '#,##0.00;[Red](#,##0.00);""';
+    const acctCols = ['C', 'D', 'E'];
+    const columns  = matrix.columns || [];
+
+    // --- Header row 1: account role label (navy fill, white bold) ---
+    ws.getRow(row).height = 22;
+    // Label half blank
+    F.writeMerged(ws, `A${row}:B${row}`, '', {});
+    for (let i = 0; i < 3; i++) {
+      const cell = ws.getCell(`${acctCols[i]}${row}`);
+      const col = columns[i];
+      cell.value = col ? col.label : '';
+      cell.font = { name: 'Arial', size: 11, bold: true, color: white };
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      F.fillCell(cell, navyFill);
     }
+    row++;
+
+    // --- Header row 2: account identifier (light-blue fill, italic) ---
+    ws.getRow(row).height = 18;
+    F.writeMerged(ws, `A${row}:B${row}`, '', {});
+    for (let i = 0; i < 3; i++) {
+      const cell = ws.getCell(`${acctCols[i]}${row}`);
+      const col = columns[i];
+      cell.value = col ? (col.identifier || '') : '';
+      cell.font = { name: 'Arial', size: 10, italic: true, color: navy };
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      F.fillCell(cell, lightBlue);
+      cell.border = { bottom: { style: 'medium', color: navy } };
+    }
+    row++;
+
+    // --- Scenario rows ---
+    const scenarios = matrix.scenarios || [];
+    for (let s = 0; s < scenarios.length; s++) {
+      const sc = scenarios[s];
+      const isEndResult = !!sc.endResult;
+      const stripe = (s % 2 === 0);
+      ws.getRow(row).height = 22;
+      // Scenario label (merged A:B, left-aligned with comfortable indent —
+      // labels read as row headers, no fill, no border)
+      const labelBorder = isEndResult ? { top: { style: 'medium', color: navy } } : undefined;
+      F.writeMerged(ws, `A${row}:B${row}`, sc.label || '', {
+        font: { name: 'Arial', size: 11, bold: isEndResult, color: text },
+        alignment: { horizontal: 'left', vertical: 'middle', indent: 1 },
+        border: labelBorder
+      });
+      // Amount cells in C / D / E — the data columns carry the stripe and
+      // a left rule on column C to separate labels from data
+      for (let i = 0; i < 3; i++) {
+        const cell = ws.getCell(`${acctCols[i]}${row}`);
+        const amt = (sc.amounts || [])[i];
+        cell.value = (amt == null || amt === '') ? null : amt;
+        cell.numFmt = numFmt;
+        cell.font = { name: 'Arial', size: 11, bold: isEndResult, color: text };
+        cell.alignment = { horizontal: 'right', vertical: 'middle', indent: 2 };
+        if (stripe) F.fillCell(cell, lightBlue);
+        const border = {};
+        if (i === 0) border.left = { style: 'thin', color: ruleColor };
+        if (isEndResult) border.top = { style: 'medium', color: navy };
+        if (Object.keys(border).length) cell.border = border;
+      }
+      row++;
+    }
+
     return row;
   },
 
@@ -6308,8 +6324,8 @@ const TransactionDetailTemplate = {
           alignment: { horizontal: 'left', vertical: 'top', indent: 2, wrapText: true }
         });
         row++;
-      } else if (sec.type === 'tAccounts') {
-        row = this._renderTAccountsBlock(ws, row, sec.accounts || []);
+      } else if (sec.type === 'jeFlowMatrix') {
+        row = this._renderJeFlowMatrix(ws, row, sec.matrix || { columns: [], scenarios: [] });
       }
     }
     return row;
@@ -6354,7 +6370,6 @@ const TransactionDetailTemplate = {
     const aaiInfo = this._inventoryAaiForDocType(dtRaw);
     const expected = m.expectedAcct || '[expected account from F4111]';
     const posted   = m.postedAcct   || '[posted account from F0911]';
-    const amt      = Helpers.money(m.mispostedAmt || 0);
     const docCompany   = (data.company || '').trim();
     const docOrderType = (data.ot || (data.docHeader && data.docHeader.ot) || '').trim();
     const f4111        = data.f4111Rows[0] || null;
@@ -6363,15 +6378,9 @@ const TransactionDetailTemplate = {
 
     // Sign-aware JE direction. The original transaction's inventory leg is
     // either a debit (IC/OP/PV/RM family — cardexSign > 0) or a credit
-    // (IM/IA/II/SO-shipment family — cardexSign < 0). The corrective JE
-    // mirrors that direction on the expected account and inverts on the
-    // posted account (which reverses the bad post and lets it net to 0).
+    // (IM/IA/II/SO-shipment family — cardexSign < 0). The matrix below
+    // derives every cell from this single sign.
     const isCreditInventory = (m.cardexSign || 0) < 0;
-    const drAcct = isCreditInventory ? posted   : expected;
-    const crAcct = isCreditInventory ? expected : posted;
-    const expectedNote = isCreditInventory
-      ? 'apply the credit that should have happened'
-      : 'apply the debit that should have happened';
 
     // Doc context — names the AAI that fires for this doc type's inventory
     // side. One line; the analyst uses it for the prevention pass at the
@@ -6386,40 +6395,54 @@ const TransactionDetailTemplate = {
       ? `${article.charAt(0).toUpperCase() + article.slice(1)} ${dtRaw} document — ${docKey}. Inventory side routes through DMAAI ${aaiInfo.aai} (${aaiInfo.label}).`
       : `${docKey}. Inventory-side DMAAI for ${data.dt || 'this document type'} is unknown — identify it from the DMAAs section (the row resolving to ${expected}).`;
 
-    // The corrective JE — direction driven by cardexSign.
-    const je = `Corrective JE (post on the original F0911 GL date so the period matches):\n   Dr  ${drAcct}   ${amt}\n   Cr  ${crAcct}   ${amt}`;
-
-    // T-account picture — what the JE does to each account. The bad
-    // account nets to zero (prior wrong post + this JE's offset); the
-    // expected account picks up the entry that should have happened;
-    // the counterpart leg of the original transaction is untouched.
+    // JE-flow matrix — three accounts × four scenarios. Cell values are
+    // signed (Dr = positive, Cr = negative); the number format renders
+    // credits in red parens and blanks zero-amount cells. Reading down a
+    // column shows how each account's balance evolves through the
+    // scenarios; reading across "End Result" should equal "What was
+    // supposed to happen" (i.e., the books are reconciled).
+    //
+    // signedAmt: +X = Dr, -X = Cr. For an IM (cardexSign < 0):
+    //   Inventory should be credited (-X), WIP debited (+X), Mistaken 0.
+    // For an IC (cardexSign > 0):
+    //   Inventory (= FG) should be debited (+X), WIP credited (-X), 0.
+    // Signed amounts per account, per scenario. Convention: Dr = positive,
+    // Cr = negative. The number format renders negative as red parens and
+    // zero/null as blank, so the matrix reads like a trial balance.
+    //   sExp = signed amount on the expected (inventory) account in the
+    //          "supposed to happen" leg. Matches the cardex sign.
+    //   sCp  = signed amount on the counterpart leg. Opposite of sExp.
+    //   sMis = signed amount on the mistaken account in "what actually
+    //          happened" — the mistaken account received the leg that was
+    //          MEANT for the expected account, so it carries the same
+    //          sign as sExp.
+    const numAmt = Math.abs(m.mispostedAmt || 0);
+    const sign   = isCreditInventory ? -1 : 1;
+    const sExp   = sign * numAmt;
+    const sCp    = -sign * numAmt;
+    const sMis   = sExp;
     const counterpart = this._counterpartAaiForMfgDocType(dtRaw);
-    const counterpartLabel = counterpart
-      ? `${counterpart.plainName} (DMAAI ${counterpart.aai})`
-      : 'Counterpart leg';
-    const tAccounts = [
-      {
-        accountNumber: expected,
-        rows: [
-          isCreditInventory
-            ? { dr: null, cr: amt, note: expectedNote }
-            : { dr: amt, cr: null, note: expectedNote }
-        ]
-      },
-      {
-        accountNumber: posted,
-        rows: [
-          isCreditInventory
-            ? { dr: amt, cr: amt, note: 'Dr from this JE cancels the prior bad Cr' }
-            : { dr: amt, cr: amt, note: 'Cr from this JE cancels the prior bad Dr' }
-        ],
-        balanceNote: 'ending balance: 0'
-      },
-      {
-        untouched: true,
-        untouchedLabel: counterpartLabel
-      }
-    ];
+    const counterpartLabel = counterpart ? counterpart.plainName : 'Counterpart';
+    const counterpartIdent = counterpart ? `(DMAAI ${counterpart.aai})` : '—';
+
+    // Each scenario is one ledger snapshot. End Result = Actual + Corrective.
+    //   What supposed: Dr counterpart, Cr/Dr expected         — original intended JE
+    //   What actually: Dr counterpart, Cr/Dr mistaken         — F0911 reality (wrong account)
+    //   Corrective:    Cr/Dr expected, opposite on mistaken   — the JE we're posting
+    //   End Result:    sums of actual + corrective            — matches "supposed to"
+    const matrix = {
+      columns: [
+        { role: 'expected',    label: aaiInfo ? aaiInfo.label : 'Expected', identifier: expected },
+        { role: 'counterpart', label: counterpartLabel,                     identifier: counterpartIdent },
+        { role: 'posted',      label: 'Mistaken Account',                   identifier: posted }
+      ],
+      scenarios: [
+        { label: 'What was supposed to happen', amounts: [sExp,  sCp,  null] },
+        { label: 'What actually happened',      amounts: [null,  sCp,  sMis] },
+        { label: 'Corrective entry',            amounts: [sExp,  null, -sMis] },
+        { label: 'End Result',                  amounts: [sExp,  sCp,  null], endResult: true }
+      ]
+    };
 
     // Prevention pointer — single line. The detailed audit / override
     // investigation (Source/Comment/BT, change history) was dropped; in
@@ -6429,9 +6452,7 @@ const TransactionDetailTemplate = {
 
     return [
       { type: 'prose', text: context },
-      { type: 'prose', text: je },
-      { type: 'prose', text: 'T-account view (account balances after the JE posts):' },
-      { type: 'tAccounts', accounts: tAccounts },
+      { type: 'jeFlowMatrix', matrix },
       { type: 'prose', text: prevent }
     ];
   },
