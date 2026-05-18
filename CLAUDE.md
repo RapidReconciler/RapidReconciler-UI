@@ -413,6 +413,51 @@ default). For belt-and-suspenders on a chore commit, also add
   (#1f2d4a) is the primary brand color; sales = navy, tech = green/teal,
   helpdesk = orange, certificate = orange, db = teal.
 
+### Export Analyzer output mantra
+
+The Transaction Detail / DMAAI / Cardex / etc. patterns render WHAT
+/ WHY / HOW cards inside an `.xlsx` workbook. Audience is a JDE-
+versed analyst, not a layperson. Keep that voice:
+
+- **Self-check before any analyzer change ships: "all signal, no
+  noise" (the GSI tagline).** For every WHAT, WHY, HOW, header
+  strip, footer band, disclaimer, evidence section, and field
+  shown on the analysis tab, ask: is this signal the analyst will
+  use, or noise they'll learn to skim past? Boilerplate disclaimers
+  that repeat on every report are noise. Percentages that don't
+  measure materiality are noise. Pattern labels repeated in the
+  strip AND in a "Pattern: X" line below the headline are noise.
+  Sections an analyst stops reading after the first encounter
+  (because the same text shows every time) are noise. If a field is
+  going to make the analyst scroll to the source sheet to get the
+  rest of the picture — like an orphan-row diagnosis that names
+  the account but not the item — that's signal missing, not noise.
+  Apply the test on every output change.
+
+- **Short and to the point.** Prose paragraphs are harder to scan
+  than bullets. Default to bullet lists for WHAT and WHY; reserve
+  prose for HOW where the JE itself reads best as a labeled block.
+- **WHAT and WHY are bullet lists.** Each bullet is a fact or a
+  cause. No "fingerprint of" / "this is the signature of" / "the
+  reason is" scaffolding — the analyst can recognize patterns from
+  the data.
+- **WHY suggests only a couple of likely causes**, not an
+  exhaustive enumeration. Pick the top 1-2 root-cause candidates
+  for the doc-type / pattern combination. Add a third only when
+  the data signals push it into the running (e.g. twin-row
+  detection ruling out two of four causes).
+- **Assume JDE fluency.** Don't parenthetically expand R31802A,
+  R42800, DMAAI, F4111, F0911, AAI, etc. — the analyst knows them.
+  The first occurrence in a doc can get an inline expansion if
+  context warrants; subsequent uses don't.
+- **Plain-name fallbacks when an F4095 lookup misses.** The RR
+  "JDE DMAAIs" extract filters F4095, so an account lookup against
+  the preloaded data may legitimately miss rows that exist in JDE
+  (the analyst would find them via direct DB Browser). When the
+  resolution falls back, use the proper JDE account name (e.g.
+  "Work in Process" for AAI 3120) so the JE reads as plain English
+  rather than a placeholder like `[no F4095 match for this routing]`.
+
 ---
 
 ## Deployment

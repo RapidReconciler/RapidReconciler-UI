@@ -756,6 +756,51 @@ If a correction is genuinely needed after ship-confirm, the supported path in JD
 
 ---
 
+### 5.14 R31802A Orphan Cardex Row (Manufacturing)
+
+> Numbered 5.14 in the analyzer guide; the analyzer's internal pattern ID is 5.15 (5.14 is reserved in code for Period Mismatch). The two numbers don't have to align — the analyst sees the pattern label, not the ID.
+
+**Symptoms:**
+- Document type is **manufacturing** (IC, IM, IH, or IS)
+- F4111 cardex has multiple rows on the same inventory account; one row's cardex amount equals the document's net variance
+- That F4111 row has no matching F0911 entry on the same account / amount
+- Other F4111 rows on the same account reconcile to F0911 cleanly
+- DMAAs section is **clean** -- no Mismatch / Net Zero flags
+
+**What is happening:**
+
+R31802A (Manufacturing Accounting) is what turns F4111 inventory movements into F0911 journal entries for manufacturing docs. For most of this document's rows, R31802A did its job: the F4111 row and its F0911 counterpart line up. One row got skipped, so the F0911 side of that row is missing -- the row is an "orphan."
+
+R31802A has a small number of legitimate reasons to skip a single F4111 row:
+
+| Cause | How to identify | Resolution |
+|---|---|---|
+| Partial / interrupted R31802A run | Run log shows non-zero exit code, rows-processed count below rows-selected, or "killed" status; an identical-data twin row on the same doc posted normally (selection / errors would have skipped both) | Re-run R31802A for the affected batch; AAI routing drives the correct posting and leaves no manual JE in the GL |
+| "Already processed" flag set on the F4111 row | F4111 row's status flag indicates already-posted, but no corresponding F0911 row exists | Confirm whether a prior failed run set the flag manually; clear it if appropriate and re-run R31802A |
+| Processing error during R31802A (no twin) | R31802A run report's Errors section names the item; classic killer is "Cost components missing for item X" (no rollup → no variance → no F0911) | Fix the item-master issue (cost components in P30026, AAI configuration, target-account status) and re-run R31802A |
+| Version / selection PO filtered the row out (no twin) | R31802A version's processing options have a selection criterion (cost type, GL class, sub-ledger) that excludes the row | Either re-run with a less restrictive version, or confirm the exclusion is intentional |
+
+**Critical caveat:**
+
+RapidReconciler **does not** filter F0911 inventory accounts (it filters P&L). So absence of a matching F0911 row in this report is a strong signal the row really is missing from JDE F0911 -- not just hidden by RR's import. The analyzer's HOW card still suggests querying JDE F0911 directly across all accounts as a sanity check, because a misrouted GL entry on a *different* account would appear in JDE but not flag in this pattern.
+
+**Critical distinction from Section 5.9 (Standard Cost Change After WO Completion):**
+
+Section 5.9 is the narrow case where R30837 / R30835 sequencing produces an orphan F4111 cost-revaluation row. The analyzer detects 5.9 specifically when the orphan F4111 row's comment includes "Standard Cost Change" -- that's a different root cause (R30835 fired before R30837 was ready, or the WO is closed and R30837 won't revalue it).
+
+5.14 is the broader bucket: any orphan F4111 row on a manufacturing doc whose amount equals the document variance, regardless of comment. The two patterns share evidence shape but lead to different fixes.
+
+**Analyzer signal: identical-data twin row**
+
+When the orphan row has a *twin* on the same doc -- same item, same account, same unit cost -- two of the four causes drop out:
+
+- Selection / version filtering can't be the cause (selection is field-based; identical rows pass or fail together).
+- Processing errors can't be the cause (item-master / AAI lookups resolve uniformly across rows for the same item).
+
+That narrows the diagnosis to partial-run OR a stale "already-processed" flag -- and on a same-batch twin, partial-run is overwhelmingly likely.
+
+---
+
 ## Section 6: DMAAI Analysis
 
 The DMAAs section at the bottom of the Transaction Detail report is critical for diagnosing account-level mismatches. Work through it in the following order:
