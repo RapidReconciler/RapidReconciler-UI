@@ -3176,12 +3176,18 @@ const DMAAIKnowledge = {
 
   // Diagnosis text for IC "Standard Cost Change After Work Order Completion".
   // Mirrors Pattern 5.9 in AnalysisGuides/transaction-detail-analysis.md —
-  // the cause is a process-sequencing gap (R30835 ran the cost update but
-  // R30837 didn't write the GL revaluation, or the WO was closed at status
-  // 999 so R30837 couldn't touch it), NOT a missing AAI lookup. The fix
-  // is a manual JE crediting AAI 3260 (Planned Variance) or 3240 (Material
-  // Variance) — not 4141, which is the standard-cost variance AAI for
-  // non-manufacturing inventory docs (II / IT / IR).
+  // R30822 (Frozen Cost Update) changed the standard cost in F4105 after
+  // the completion posted. R30837 (WIP Revaluation) is what bridges the
+  // F4111 cardex side and the F0911 GL side; it writes BOTH the
+  // "Standard Cost Change" row AND its GL counterpart. The cardex row
+  // exists here, so R30837 partially ran — the GL write failed. Cause is
+  // usually a missing variance AAI (3240 / 3260), a Closed-status WO
+  // (R30837 skips them — typically NxtSts 90 in UDC 00/SS but values are
+  // customer-defined), or a processing-options gap. NOT a missing AAI
+  // lookup for the inventory leg. The fix is a manual JE crediting AAI
+  // 3260 (Planned Variance) or 3240 (Material Variance) — not 4141,
+  // which is the standard-cost variance AAI for non-manufacturing
+  // inventory docs (II / IT / IR).
   //
   // aaiContext (optional): when SystemContext is loaded, this carries the
   // result of looking up AAI 3240 / 3260 for the customer's company / GL
@@ -3202,7 +3208,7 @@ const DMAAIKnowledge = {
     if (aaiContext && aaiContext.status === 'missing') {
       bullets.push(`• The loaded DMAAI integrity report shows AAI 3240 (Material Variance) AND 3260 (Planned Variance) are both unconfigured for this company / GL class — R30837 (WIP Revaluation) has no destination account to write to, so the cardex revaluation runs but the GL side can't follow (this is a configuration gap, not a process-sequencing gap)`);
     } else {
-      bullets.push(`• Process-sequencing gap rather than a missing AAI: R30835 (Frozen Standard Update) wrote the cardex revaluation but R30837 (WIP Revaluation) didn't fire after it — either R30837 isn't configured to run after R30835, or the WO has reached status 999 (R30837 won't revalue closed WOs)`);
+      bullets.push(`• R30837 (WIP Revaluation) writes both the F4111 "Standard Cost Change" cardex row AND its F0911 GL counterpart. The cardex row exists here, so R30837 partially fired — the GL side never wrote. Cause is usually: the variance AAI (3240 Material / 3260 Planned) isn't configured for this routing, the WO has reached its Closed status in UDC 00/SS (typically 90; values are customer-defined and R30837 skips closed WOs), or R30837's processing options suppress the GL write`);
     }
     if (cardexDocNum && glDocNum && cardexDocNum !== glDocNum) {
       bullets.push(`• Cardex shows doc ${cardexDocNum} while the GL completion entry references doc ${glDocNum} — that's normal R31802A behavior (completions are summarized into a separate GL document), not the cause`);
@@ -3254,14 +3260,14 @@ const DMAAIKnowledge = {
         { type: 'prose', text: `Step 2.  Re-export the DMAAI integrity report (Integrity Report 0) from RapidReconciler and reload it on this analyzer page so future runs pick up the new AAI configuration.` },
         { type: 'prose', text: `Step 3.  Post a manual JE to correct the historic posting on this document. Step 1 prevents future occurrences; this JE clears the existing variance:` },
         { type: 'jeFlowMatrix', matrix },
-        { type: 'prose', text: `Step 4.  Review R30837 (WIP Revaluation) configuration. R30837 needs to be called from R30835 (Frozen Standard Update) — confirm the processing option is set to launch it. Even with the AAI now configured, the sequencing issue can recur unless R30837 actually fires.` },
+        { type: 'prose', text: `Step 4.  Review R30837 (WIP Revaluation) configuration. R30837 needs to be called from R30822 (Frozen Cost Update) — confirm the processing option is set to launch it. Even with the AAI now configured, the sequencing issue can recur unless R30837 actually fires.` },
         { type: 'prose', text: `Step 5.  Refresh RapidReconciler and re-analyze. The variance should clear once the AAI is configured and the JE is posted.` }
       ];
     }
 
     return [
-      { type: 'prose', text: `Step 1.  Check the work-order status in JDE. If NxtSts is 999, R30837 won't revalue it even if re-run — the only correction path is the manual JE in Step 3.` },
-      { type: 'prose', text: `Step 2.  If the WO is still open, review R30837 (WIP Revaluation) configuration. R30837 needs to be called from R30835 (Frozen Standard Update) — confirm the processing option is set to launch it. Fixing this prevents future occurrences but doesn't clear the historic variance on this doc.` },
+      { type: 'prose', text: `Step 1.  Check the work-order status in JDE. If the WO has reached Closed status in UDC 00/SS (typically 90 — values are customer-defined; check your shop's order activity rules), R30837 won't revalue it even if re-run, so the manual JE in Step 3 is the only correction path. If the WO is still active, both R30837 reconfig and the manual JE are viable.` },
+      { type: 'prose', text: `Step 2.  If the WO is still open, review R30837 (WIP Revaluation) configuration. R30837 needs to be called from R30822 (Frozen Cost Update) — confirm the processing option is set to launch it. Fixing this prevents future occurrences but doesn't clear the historic variance on this doc.` },
       { type: 'prose', text: `Step 3.  Post a manual JE to correct the historic posting on this document:` },
       { type: 'jeFlowMatrix', matrix },
       { type: 'prose', text: `Step 4.  Assess materiality before posting. This pattern frequently produces aged variances dating back months or years (the gap isn't detected until reconciliation review). Very old or small amounts may warrant suspension rather than a JE.` },
@@ -4467,8 +4473,8 @@ const FrozenCostTemplate = {
         col2: this._scopeStr(f30026Only),
         col3: f30026OnlyQOH.length ? `${f30026OnlyQOH.length} carrying QOH — GL gap ${Helpers.money(glGap)}` : 'No QOH currently — no immediate GL impact',
         scope: `${f30026Only.length} item-branch records where F4105 method 07 cost is zero but F30026 has component costs.  ${f30026OnlyQOH.length > 0 ? `${f30026OnlyQOH.length} of these carry on-hand quantity — those represent ${Helpers.money(glGap)} of inventory currently undervalued in the GL.` : 'No QOH on any affected row, so no immediate GL impact.'}  Manufacturing transactions for these items value at zero, and the full F30026 cost will appear as variance at R31804.`,
-        pattern: `R30835 (Frozen Standard Update) either never ran for these items, or the cost method 07 was excluded from the cost-method set used by the last roll, or the F4105 records were manually deleted.  ${f30026OnlyQOH.length ? `Items with QOH > 0 are the actionable subset — they're undervalued in inventory today.` : 'Items with QOH = 0 are dormant — fix when activity resumes.'}`,
-        resolution: `Step 1.  Identify which branches and items need R30835.  Focus first on the ${f30026OnlyQOH.length} items with QOH > 0.\n\nStep 2.  Confirm cost method 07 is in the cost method set used by R30835.  If not, adjust the set before running.\n\nStep 3.  Run R30835 (Frozen Standard Update) in proof mode for the affected items / branches.  Review for unintended impact.\n\nStep 4.  Run R30835 in final mode.  Verify F4105 records were created.\n\nStep 5.  For the QOH-bearing items, review whether an inventory revaluation journal entry is needed to reflect the corrected cost in the GL.  Confirm with cost accounting before posting.\n\nStep 6.  Refresh RapidReconciler and re-run Integrity Report 6 to confirm clearance.`
+        pattern: `R30822 (Frozen Cost Update) either never ran for these items, or the cost method 07 was excluded from the cost-method set used by the last roll, or the F4105 records were manually deleted.  ${f30026OnlyQOH.length ? `Items with QOH > 0 are the actionable subset — they're undervalued in inventory today.` : 'Items with QOH = 0 are dormant — fix when activity resumes.'}`,
+        resolution: `Step 1.  Identify which branches and items need R30822.  Focus first on the ${f30026OnlyQOH.length} items with QOH > 0.\n\nStep 2.  Confirm cost method 07 is in the cost method set used by R30822.  If not, adjust the set before running.\n\nStep 3.  Run R30822 (Frozen Cost Update) in proof mode for the affected items / branches.  Review for unintended impact.\n\nStep 4.  Run R30822 in final mode.  Verify F4105 records were created.\n\nStep 5.  For the QOH-bearing items, review whether an inventory revaluation journal entry is needed to reflect the corrected cost in the GL.  Confirm with cost accounting before posting.\n\nStep 6.  Refresh RapidReconciler and re-run Integrity Report 6 to confirm clearance.`
       });
     }
     if (f4105Only.length) {
@@ -4487,7 +4493,7 @@ const FrozenCostTemplate = {
         col3: `${manufactured.length} manufactured, ${purchased.length} purchased${byST['S'] ? ', ' + byST['S'].length + ' stock' : ''}`,
         scope: `${f4105Only.length} item-branch records where F4105 has a method 07 cost but F30026 has no component breakdown.  ${manufactured.length} manufactured items (Stocking Type M), ${purchased.length} purchased items (Stocking Type P)${byST['S'] ? `, ${byST['S'].length} stock items` : ''}.  ${Object.keys(Helpers.groupBy(f4105Only, r => `${r.companynumber}/${r.branchplant}`)).length} branches.`,
         pattern: `${manufactured.length ? `The ${manufactured.length} manufactured items are the highest concern — they should always have F30026 cost components.  Manufacturing transactions value at the F4105 cost but cannot reconcile to components, so R31804 clears the full WIP balance to the Other Variance account (AAI 3280) on every work order.  ` : ''}${purchased.length ? `The ${purchased.length} purchased items may be intentional (manual F4105 maintenance without a cost build) but should be confirmed with the item setup team.` : ''}`,
-        resolution: `Step 1.  Group by stocking type.  Manufactured items (M) are the highest priority — they must have F30026 components.\n\nStep 2.  For each manufactured item, build the cost components in F30026 via P30026.  Then run R30835 to verify F4105 aligns with the F30026 sum.\n\nStep 3.  For purchased items, confirm with the item setup team whether a manual F4105 cost is intentional.  If yes, exclude from future Integrity Report 6 runs via selection criteria.  If no, build an A1 (material) component in F30026 and run R30835.\n\nStep 4.  Run R30837 (WIP Revaluation) for any open work orders on items whose F4105 cost was corrected — failure to revalue open WIP creates persistent cardex-only variances.\n\nStep 5.  Refresh RapidReconciler and re-run Integrity Report 6.`
+        resolution: `Step 1.  Group by stocking type.  Manufactured items (M) are the highest priority — they must have F30026 components.\n\nStep 2.  For each manufactured item, build the cost components in F30026 via P30026.  Then run R30822 to verify F4105 aligns with the F30026 sum.\n\nStep 3.  For purchased items, confirm with the item setup team whether a manual F4105 cost is intentional.  If yes, exclude from future Integrity Report 6 runs via selection criteria.  If no, build an A1 (material) component in F30026 and run R30822.\n\nStep 4.  Run R30837 (WIP Revaluation) for any open work orders on items whose F4105 cost was corrected — failure to revalue open WIP creates persistent cardex-only variances.\n\nStep 5.  Refresh RapidReconciler and re-run Integrity Report 6.`
       });
     }
     if (mismatch.length) {
@@ -4508,9 +4514,9 @@ const FrozenCostTemplate = {
         col3: `top variance ${Helpers.money(topVariance)}${dominantBranch ? `; ${dominantBranch[1].length} in ${dominantBranch[0]}` : ''}`,
         scope: `${mismatch.length} item-branch records where F4105 method 07 cost and F30026 component sum disagree.  Top absolute variance: ${Helpers.money(topVariance)}.  Variance distribution: ${mismatch.filter(r => Math.abs(r.variance) < 0.01).length} rounding (< $0.01), ${mismatch.filter(r => Math.abs(r.variance) >= 0.01 && Math.abs(r.variance) < 1).length} small (< $1), ${mismatch.filter(r => Math.abs(r.variance) >= 1).length} material (≥ $1).`,
         pattern: dominantBranch
-          ? `${dominantBranch[1].length} of the ${mismatch.length} mismatches concentrate in branch ${dominantBranch[0]} — strong indicator of a partial cost roll (R30835 ran for some branches but not this one).  A single R30835 run scoped to that branch may resolve the cluster.  Remaining items spread across other branches likely represent individual cost-component updates that were not rolled to the frozen standard.`
-          : `Mismatches are spread across ${Object.keys(byBranch).length} branches with no concentration — individual cost-component drift rather than a missed R30835 run.  Each item needs review.`,
-        resolution: `Step 1.  ${dominantBranch ? `Run R30835 for branch ${dominantBranch[0]} first.  This may resolve ${dominantBranch[1].length} of the mismatches in a single pass.\n\nStep 2.  ` : ''}For each remaining mismatch, determine in P30026 whether F30026 was updated after the last cost roll, or whether F4105 was edited directly in P4105 without updating F30026.  Determine which is correct with cost accounting.\n\nStep ${dominantBranch ? 3 : 2}.  Run R30835 for any items where F30026 is the authoritative value.  For items where F4105 was manually edited and is correct, update F30026 components to match.\n\nStep ${dominantBranch ? 4 : 3}.  Rounding differences (< $0.01) can usually be set aside as immaterial.\n\nStep ${dominantBranch ? 5 : 4}.  Run R30837 (WIP Revaluation) for items with open work orders.\n\nStep ${dominantBranch ? 6 : 5}.  Refresh RapidReconciler and re-run Integrity Report 6.`
+          ? `${dominantBranch[1].length} of the ${mismatch.length} mismatches concentrate in branch ${dominantBranch[0]} — strong indicator of a partial cost roll (R30822 ran for some branches but not this one).  A single R30822 run scoped to that branch may resolve the cluster.  Remaining items spread across other branches likely represent individual cost-component updates that were not rolled to the frozen standard.`
+          : `Mismatches are spread across ${Object.keys(byBranch).length} branches with no concentration — individual cost-component drift rather than a missed R30822 run.  Each item needs review.`,
+        resolution: `Step 1.  ${dominantBranch ? `Run R30822 for branch ${dominantBranch[0]} first.  This may resolve ${dominantBranch[1].length} of the mismatches in a single pass.\n\nStep 2.  ` : ''}For each remaining mismatch, determine in P30026 whether F30026 was updated after the last cost roll, or whether F4105 was edited directly in P4105 without updating F30026.  Determine which is correct with cost accounting.\n\nStep ${dominantBranch ? 3 : 2}.  Run R30822 for any items where F30026 is the authoritative value.  For items where F4105 was manually edited and is correct, update F30026 components to match.\n\nStep ${dominantBranch ? 4 : 3}.  Rounding differences (< $0.01) can usually be set aside as immaterial.\n\nStep ${dominantBranch ? 5 : 4}.  Run R30837 (WIP Revaluation) for items with open work orders.\n\nStep ${dominantBranch ? 6 : 5}.  Refresh RapidReconciler and re-run Integrity Report 6.`
       });
     }
 
@@ -4537,16 +4543,16 @@ const FrozenCostTemplate = {
     const mm = findings.find(f => f.type === 'mismatch');
 
     if (f30026 && qohCount > 0) {
-      steps.push({ action: `Address the ${qohCount} zero-cost items with QOH > 0 first (Finding 1).  These represent ${Helpers.money(glGap)} of inventory currently undervalued in the GL.  Run R30835 for these items and assess whether a revaluation journal entry is needed.`, owner: 'Cost Accounting + IT' });
+      steps.push({ action: `Address the ${qohCount} zero-cost items with QOH > 0 first (Finding 1).  These represent ${Helpers.money(glGap)} of inventory currently undervalued in the GL.  Run R30822 for these items and assess whether a revaluation journal entry is needed.`, owner: 'Cost Accounting + IT' });
     }
     if (f30026) {
-      steps.push({ action: `Run R30835 for the remaining zero-cost items (Finding 1) to populate F4105 from F30026.  Test in non-production first.`, owner: 'Cost Accounting' });
+      steps.push({ action: `Run R30822 for the remaining zero-cost items (Finding 1) to populate F4105 from F30026.  Test in non-production first.`, owner: 'Cost Accounting' });
     }
     if (f4105) {
       steps.push({ action: `Confirm with cost accounting which F4105-only items (Finding ${f4105.number}) are intentional manual costs vs. missing cost builds.  Build F30026 components for the manufactured items.`, owner: 'Item Setup / Cost Accounting' });
     }
     if (mm) {
-      steps.push({ action: `Investigate branch concentrations in the mismatch finding (Finding ${mm.number}).  A single branch with many rows usually points to a missed R30835 — fixable in one run.`, owner: 'Cost Accounting' });
+      steps.push({ action: `Investigate branch concentrations in the mismatch finding (Finding ${mm.number}).  A single branch with many rows usually points to a missed R30822 — fixable in one run.`, owner: 'Cost Accounting' });
     }
     steps.push({ action: 'Run R30837 (WIP Revaluation) for any items where F4105 was corrected.  Failure to revalue open WIP creates persistent cardex-only variances on the next reconciliation.', owner: 'Cost Accounting' });
     steps.push({ action: 'After all corrections, refresh RapidReconciler and re-run Integrity Report 6.  Confirm corrected items no longer appear.', owner: 'RapidReconciler Administrator' });
@@ -4611,7 +4617,7 @@ const FrozenCostTemplate = {
 
     row = F.renderActionPlan(ws, row, { steps: findings.actionPlan });
     row = F.renderCautionAndFooter(ws, row, {
-      cautionText: 'Before making any changes in JD Edwards:  test all R30835 (Frozen Standard Update) runs in a non-production environment first.  Cost corrections affect every transaction posted after the change — confirm with cost accounting before updating production records.  If items have open work orders, R30837 (WIP Revaluation) must also run.',
+      cautionText: 'Before making any changes in JD Edwards:  test all R30822 (Frozen Cost Update) runs in a non-production environment first.  Cost corrections affect every transaction posted after the change — confirm with cost accounting before updating production records.  If items have open work orders, R30837 (WIP Revaluation) must also run.',
       footerText: `Analysis produced using the Frozen Cost Integrity Guide  ·  RapidReconciler  ·  ${Helpers.todayPretty()}`
     });
     F.applyPageSetup(ws, row - 1);
@@ -5699,15 +5705,17 @@ const TransactionDetailTemplate = {
     // comment that has no matching F0911 counterpart on either side +
     // the document variance equals that orphan amount exactly.
     //
-    // Cause (per the canonical guide): R30835 (Frozen Standard Update)
-    // updated the standard cost after the completion had already posted.
-    // The cardex revaluation row was written, but R30837 (WIP Revaluation)
-    // didn't write the corresponding GL entry — either because R30837
-    // isn't configured to run after R30835, or because the work order
-    // has already moved to status 999 (closed — R30837 will not revalue
-    // closed work orders).
+    // Cause (per the canonical guide): R30822 (Frozen Cost Update)
+    // changed the standard cost in F4105 after the completion posted.
+    // R30837 (WIP Revaluation) is the program that bridges the cardex
+    // and GL sides — it wrote the F4111 "Standard Cost Change" row but
+    // its F0911 counterpart didn't complete. Cause: the variance AAI
+    // (3240 / 3260) isn't configured for this routing, R30837's
+    // processing options suppress the GL write, or the WO has reached
+    // its Closed status in UDC 00/SS (typically 90; values are
+    // customer-defined and R30837 skips closed WOs).
     //
-    // Scoped to IC because the R30835/R30837 sequencing only applies to
+    // Scoped to IC because the R30822/R30837 sequencing only applies to
     // manufacturing completions. For II / IT / IR docs the same orphan-row
     // shape can occur but the cause is different (typically AAI 4141
     // standard-cost variance on the inventory side) — that case is not
@@ -6375,16 +6383,23 @@ const TransactionDetailTemplate = {
     // usp6compare2 stuffs the report-generation date in that cell (e.g.
     // "May 18 2026"), which is not an account number. Validate: real
     // account numbers start with a digit and contain a dot (BU.OBJ.SUB
-    // or BU.OBJ form). When the doc-header value fails that check, fall
-    // back to the first F4111 row's Account column, which is always a
-    // real account.
+    // or BU.OBJ form). When the doc-header value fails the check, walk
+    // the available rows in order of relevance — F4111 detail first
+    // (cardex always names a real account), then F0911 Inv (the GL
+    // side; populated even on Pattern 5.17 where F4111 is empty),
+    // then F0911 Exp as a last resort.
     const looksLikeAccount = s => {
       const t = String(s || '').trim();
       return /^\d/.test(t) && /\./.test(t);
     };
-    const accountStr = looksLikeAccount(data.account)
-      ? Helpers.str(data.account)
-      : ((firstF4111 && looksLikeAccount(firstF4111.account) && Helpers.str(firstF4111.account)) || '?');
+    const firstF0911Inv = (data.f0911Inv || [])[0];
+    const firstF0911Exp = (data.f0911Exp || [])[0];
+    const accountStr =
+      (looksLikeAccount(data.account) && Helpers.str(data.account)) ||
+      (firstF4111    && looksLikeAccount(firstF4111.account)    && Helpers.str(firstF4111.account))    ||
+      (firstF0911Inv && looksLikeAccount(firstF0911Inv.account) && Helpers.str(firstF0911Inv.account)) ||
+      (firstF0911Exp && looksLikeAccount(firstF0911Exp.account) && Helpers.str(firstF0911Exp.account)) ||
+      '?';
     const context = `Company  ${data.company || '?'}          GL Date  ${glDateStr}          Period  ${periodStr}          Account  ${accountStr}`;
 
     F.renderChrome(ws, {
@@ -6865,7 +6880,7 @@ const TransactionDetailTemplate = {
       // method — fall back to the original generic framing.
       bullets.push(`• F4111 cardex and F0911 GL recorded this completion at different unit costs — one side used the frozen / standard cost, the other used the work-order actual cost (or a post-revaluation cost)`);
     }
-    bullets.push(`• Process-sequencing gap is the most common cause: R30835 (Frozen Standard Update) ran and updated one side's cost basis, but R30837 (WIP Revaluation) didn't post the corresponding GL adjustment — so the books diverged${ledgerHigher ? ' (GL ended up at the higher actual cost; cardex stayed at the lower frozen standard)' : ' (cardex ended up at the higher revalued cost; GL stayed at the lower pre-revaluation cost)'}`);
+    bullets.push(`• Most common cause: R30822 (Frozen Cost Update) changed the standard cost in F4105 after the completion posted, and R30837 (WIP Revaluation) didn't bridge cardex to GL — either the variance AAI (3240 / 3260) isn't configured for this routing, R30837's processing options suppress the GL write, or the WO is at its Closed status in UDC 00/SS (typically 90; R30837 skips closed WOs)${ledgerHigher ? '. GL ended up at the higher actual cost; cardex stayed at the lower frozen standard.' : '. Cardex ended up at the higher revalued cost; GL stayed at the lower pre-revaluation cost.'}`);
     bullets.push(`• Less common: a timing window between completion and posting where one side picked up a fresh cost while the other used the prior cost`);
     return bullets.join('\n');
   },
@@ -6934,7 +6949,7 @@ const TransactionDetailTemplate = {
       { type: 'prose', text: `Step 1.  Identify which cost is correct per the customer's cost-accounting policy. Cardex shows ${Helpers.money(cardexUC)}/unit; GL implies ${Helpers.money(ledgerUC)}/unit. Confirm with cost-accounting which side represents the intended cost basis (frozen standard vs work-order actual). The matrix below assumes the ${ledgerHigher ? 'lower (cardex)' : 'higher (cardex)'} side is correct and moves the excess to a manufacturing variance account — flip the JE direction if the policy is the opposite.` },
       { type: 'prose', text: `Step 2.  Post the corrective JE to clear the variance:` },
       { type: 'jeFlowMatrix', matrix },
-      { type: 'prose', text: `Step 3.  Investigate R30837 (WIP Revaluation) configuration in JDE. R30837 needs to be called from R30835 (Frozen Standard Update) so cardex and GL stay aligned through standard-cost changes. If R30837 isn't firing — or the work order has reached status 999 (R30837 won't revalue closed WOs) — this kind of mismatch will keep accumulating on future cost changes.` },
+      { type: 'prose', text: `Step 3.  Investigate R30837 (WIP Revaluation) configuration in JDE. R30837 needs to be called from R30822 (Frozen Cost Update) so cardex and GL stay aligned through standard-cost changes. If R30837 isn't firing — or the work order has reached its Closed status in UDC 00/SS (typically 90; values are customer-defined) and R30837 won't revalue closed WOs — this kind of mismatch will keep accumulating on future cost changes.` },
       { type: 'prose', text: `Step 4.  Refresh RapidReconciler and re-analyze. The variance should clear once the JE is posted; the R30837 fix prevents recurrence.` }
     ];
   },
@@ -7125,10 +7140,13 @@ const TransactionDetailTemplate = {
       ST: { aai: '4240', label: 'Inventory at Branch',    note: 'credit on transfer shipment (4220 debit)' },
       RM: { aai: '4240', label: 'Inventory at Branch',    note: 'debit on sales return (4220 COGS credit)' },
       RI: { aai: '4240', label: 'Inventory at Branch',    note: 'credit (4220 COGS debit)' },
-      // Purchasing
+      // Purchasing — OV is the RECEIPT event (P4312), not a voucher. Its
+      // inventory leg is the same as OP: Dr Inventory (4310) / Cr RNV (4320).
+      // PV is the voucher-match event (P4314), which clears RNV and posts
+      // any price variance through 4330.
       OP: { aai: '4310', label: 'Inventory Receipt',      note: 'debit on PO receipt (4320 RNV credit)' },
-      OV: { aai: '4320', label: 'Received Not Vouchered', note: 'debit on voucher match (clears RNV)' },
-      PV: { aai: '4320', label: 'Received Not Vouchered', note: 'debit on voucher match' },
+      OV: { aai: '4310', label: 'Inventory Receipt',      note: 'debit on PO receipt (4320 RNV credit)' },
+      PV: { aai: '4320', label: 'Received Not Vouchered', note: 'debit on voucher match (clears RNV; variance via 4330)' },
     };
     return map[t] || null;
   },
@@ -7357,7 +7375,7 @@ const TransactionDetailTemplate = {
     const sExp   = sign * numAmt;
     const sCp    = -sign * numAmt;
     const sMis   = sExp;
-    const counterpart = this._counterpartAaiForMfgDocType(dtRaw);
+    const counterpart = this._counterpartAaiForDocType(dtRaw);
     const counterpartLabel = counterpart ? counterpart.plainName : 'Counterpart';
     const counterpartIdent = counterpart ? `(DMAAI ${counterpart.aai})` : '—';
 
@@ -7451,13 +7469,42 @@ const TransactionDetailTemplate = {
   //                 lookup misses (or no preload is available). The
   //                 analyst will substitute the actual JDE account on
   //                 their side once they look it up.
-  _counterpartAaiForMfgDocType(dt) {
+  // Counterpart AAI for the Pattern 5.4 (Account Mismatch) matrix's
+  // middle column — the non-inventory leg of the original transaction's
+  // JE that DID post correctly (so it just sits in place across all four
+  // matrix scenarios). Returns null for doc types whose counterpart isn't
+  // tied to a single DMAAI (e.g. PV's A/P side is keyed by PCAAI, not
+  // 4xxx); Pattern 5.4 falls back to a generic "Counterpart / --" header
+  // when null.
+  _counterpartAaiForDocType(dt) {
     const t = String(dt || '').trim().toUpperCase();
     const map = {
-      IC: { aai: '3120', shortLabel: 'WIP',             plainName: 'Work in Process' },
-      IM: { aai: '3120', shortLabel: 'WIP',             plainName: 'Work in Process' },
-      IH: { aai: '3401', shortLabel: 'Labor accrual',   plainName: 'Labor Accrual' },
-      IS: { aai: '3120', shortLabel: 'WIP',             plainName: 'Work in Process' },
+      // Manufacturing
+      IC: { aai: '3120', shortLabel: 'WIP',                 plainName: 'Work in Process' },
+      IM: { aai: '3120', shortLabel: 'WIP',                 plainName: 'Work in Process' },
+      IH: { aai: '3401', shortLabel: 'Labor accrual',       plainName: 'Labor Accrual' },
+      IS: { aai: '3120', shortLabel: 'WIP',                 plainName: 'Work in Process' },
+      // Inventory adjustments / moves — inventory leg is the 4124-side
+      // credit; the counterpart is 4122 (the expense / contra side).
+      IA: { aai: '4122', shortLabel: 'Inv Adj contra',      plainName: 'Inventory Adjustment Contra' },
+      II: { aai: '4122', shortLabel: 'Inv Issue contra',    plainName: 'Inventory Issue Contra' },
+      IJ: { aai: '4122', shortLabel: 'Inv Journal contra',  plainName: 'Inventory Journal Contra' },
+      IL: { aai: '4122', shortLabel: 'Inv Location contra', plainName: 'Inventory Location Contra' },
+      IR: { aai: '4122', shortLabel: 'Inv Reclass contra',  plainName: 'Inventory Reclass Contra' },
+      IT: { aai: '4122', shortLabel: 'Inv Transfer contra', plainName: 'Inventory Transfer Contra' },
+      IP: { aai: '4152', shortLabel: 'Physical Inv',        plainName: 'Physical Inventory' },
+      IB: { aai: '4136', shortLabel: 'Inv Cost Change exp', plainName: 'Inventory Cost Change Expense Offset' },
+      // Sales / returns — inventory leg is 4240; counterpart is 4220 COGS.
+      SO: { aai: '4220', shortLabel: 'COGS',                plainName: 'Cost of Goods Sold' },
+      SD: { aai: '4220', shortLabel: 'COGS',                plainName: 'Cost of Goods Sold' },
+      ST: { aai: '4220', shortLabel: 'COGS (transfer)',     plainName: 'Cost of Goods Sold -- Branch Transfers' },
+      RM: { aai: '4220', shortLabel: 'COGS',                plainName: 'Cost of Goods Sold' },
+      RI: { aai: '4220', shortLabel: 'COGS',                plainName: 'Cost of Goods Sold' },
+      // Purchasing -- OV / OP receipts pair 4310 (inventory) with 4320 RNV.
+      // PV's counterpart is A/P keyed by PCAAI rather than a 4xxx DMAAI,
+      // so it stays null and Pattern 5.4 shows a generic header.
+      OP: { aai: '4320', shortLabel: 'RNV',                 plainName: 'Received Not Vouchered' },
+      OV: { aai: '4320', shortLabel: 'RNV',                 plainName: 'Received Not Vouchered' },
     };
     return map[t] || null;
   },
@@ -7573,7 +7620,7 @@ const TransactionDetailTemplate = {
     const acct   = (orphan && orphan.account) || '[orphan F4111 account]';
     const batch  = (orphan && orphan.batch)   || '[batch]';
     const dtRaw  = (data.dt || '').trim().toUpperCase();
-    const cp     = this._counterpartAaiForMfgDocType(dtRaw);
+    const cp     = this._counterpartAaiForDocType(dtRaw);
     const cardexIsDebit = orphan && (orphan.cardexAmt || 0) > 0;
 
     // Resolve the counterpart account from the preloaded F4095 if loaded.
@@ -9201,7 +9248,7 @@ const ItemLedgerTemplate = {
         detail: 'Standard-cost integrity: cost changed without an IB revaluation',
         scope: `${ibN} row${ibN === 1 ? '' : 's'} on branches that look like standard-cost items where the unit cost changed from the prior row without an IB revaluation entry between them.`,
         pattern: `In standard cost, a unit-cost change should be accompanied by an IB inventory-revaluation row that posts the GL impact. If the cost moved but no IB row exists, the inventory has been revalued without the corresponding GL entry — a classic cost-roll bug or a manual update that bypassed the revaluation program.`,
-        resolution: `Step 1.  For each flagged row, walk the F0911 GL postings around that date and check whether a manual JE booked the revaluation outside of the IB cycle.\n\nStep 2.  If no GL entry exists, the inventory cost change is unposted. Decide whether to backfill via JE or reverse the cost change in JDE and reapply through R30835 (cost-roll) properly.\n\nStep 3.  If a pattern emerges (e.g., all missing-IB rows on the same date), suspect a process gap in the cost-roll job — investigate the R30835 / R30837 sequence with the cost accounting team.`,
+        resolution: `Step 1.  For each flagged row, walk the F0911 GL postings around that date and check whether a manual JE booked the revaluation outside of the IB cycle.\n\nStep 2.  If no GL entry exists, the inventory cost change is unposted. Decide whether to backfill via JE or reverse the cost change in JDE and reapply through R30822 (cost-roll) properly.\n\nStep 3.  If a pattern emerges (e.g., all missing-IB rows on the same date), suspect a process gap in the cost-roll job — investigate the R30822 / R30837 sequence with the cost accounting team.`,
         rows: missingIB
       });
     }

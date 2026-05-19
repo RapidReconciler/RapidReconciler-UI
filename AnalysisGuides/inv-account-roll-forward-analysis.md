@@ -93,7 +93,7 @@ The materiality threshold is data-dependent — for datasets where the typical i
 2. For any persistent stuck OOB (same value, same account, many periods), run R099102 (Account Balance Repost) scoped tightly to that company and account. Test in non-production first; involve the JD Edwards admin.
 3. For one-time historical OOB incidents that have already healed in subsequent periods, document the incident for the audit trail; no active correction is needed.
 4. For clusters of OOBs on the same date across multiple accounts, investigate whether a single posting incident explains them all.
-5. For end-period CardexVar residuals, run the Cardex Variance Analysis report for each affected account to identify the specific F4111 records that don't reconcile. First check: confirm R30837 (WIP Revaluation) was run after the most recent R30835 (Frozen Standard Update).
+5. For end-period CardexVar residuals, run the Cardex Variance Analysis report for each affected account to identify the specific F4111 records that don't reconcile. First check: confirm R30837 (WIP Revaluation) was run after the most recent R30822 (Frozen Cost Update).
 6. After any R099102 or other corrections, refresh RapidReconciler and re-run the report to confirm anomalies have cleared.
 7. When GLOK and VarOK are intact, state explicitly that no batch posting, R099102, or Reroll is required for chain continuity — continue periodic monitoring at each refresh.
 
