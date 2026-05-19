@@ -60,21 +60,26 @@ RRV8/
 │
 ├── inventory-reconciliation.html          page (page-per-page pattern)
 ├── data/
-│   └── reconciliation-2016-08-27.json     one snapshot per period
+│   └── reconciliation.json                ONE file covers all 13 periods
+│                                          (per-account rows; period switch
+│                                           is in-memory, no re-fetch)
 │
 ├── sprocs/                                14 .sql files (sp_helptext dumps)
-│   ├── usp6getreconfiledata.sql           master entry (thin wrapper)
+│   ├── usp6getrinvaccountsummary.sql      master entry for the rec page
+│   │                                      (wraps v6ui_raccountsummary)
 │   ├── usp6getfilteredview.sql            38 KB workhorse
 │   └── &hellip;
 │
 ├── views/                                 17 .sql files (sp_helptext dumps)
-│   ├── v6ui_reconfiledata.sql             the master reconciliation view
+│   ├── v6ui_raccountsummary.sql           the real master reconciliation view
+│   ├── v6ui_reconfiledata.sql             DEAD &mdash; intended for a process
+│   │                                      that never shipped
 │   └── &hellip;
 │
 └── scripts/                               capture / regen tooling (TBD)
-    └── capture-periods.ps1                planned: pull all 13 period
-                                           snapshots from the DB in one
-                                           script invocation
+    └── capture-periods.ps1                planned: re-pull the snapshot
+                                           via usp6getrinvaccountsummary
+                                           + FOR JSON PATH + reshape
 ```
 
 **Naming conventions**
@@ -82,9 +87,9 @@ RRV8/
 | Thing | Convention | Example |
 |---|---|---|
 | Page file | `<area>-<page>.html` | `inventory-reconciliation.html` |
-| Data snapshot | `<area>-YYYY-MM-DD.json` | `reconciliation-2016-08-27.json` |
-| Sproc DDL | `<sproc-name>.sql` (verbatim from DB) | `usp6getreconfiledata.sql` |
-| View DDL | `<view-name>.sql` | `v6ui_reconfiledata.sql` |
+| Data snapshot | `<area>.json` (one file per page; every period inside) | `reconciliation.json` |
+| Sproc DDL | `<sproc-name>.sql` (verbatim from DB) | `usp6getrinvaccountsummary.sql` |
+| View DDL | `<view-name>.sql` | `v6ui_raccountsummary.sql` |
 | Script | `<verb>-<noun>.ps1` | `capture-periods.ps1` |
 
 ---
@@ -94,9 +99,9 @@ RRV8/
 As of the latest commit, V8 has:
 
 - **One page**: `inventory-reconciliation.html` &mdash; the modernized
-  Inventory > Reconciliation. Fully styled. Loads data from
-  `data/reconciliation-2016-08-27.json` on page load and renders all
-  values dynamically.
+  Inventory > Reconciliation. Fully styled. Loads
+  `data/reconciliation.json` once on page load; every period
+  / filter combination is computed in-memory from that.
 - **Single all-periods snapshot**: `data/reconciliation.json` &mdash;
   195 row-level records covering 13 periods, 2 companies, 5 inventory
   accounts, 12 subsidiaries, 2 business units. Fetched once on page
@@ -139,6 +144,33 @@ As of the latest commit, V8 has:
   Reset link.
 - **Variance breakdown** renders dynamically from the filtered view,
   negatives in red parentheses, total in the navy bar.
+- **Sidebar status panel** &mdash; Inventory Validation (module-scoped,
+  this period&rsquo;s roll-forward state) above System Status (global
+  heartbeat). 14px dots with halos. System Status pulses via
+  transform + opacity (compositor thread, no main-thread repaint).
+  Both lights are **clickable** &mdash; downloads a diagnostic
+  Excel (validation roll-forward chain / system-feed status).
+  Matches the live SPA muscle memory of clicking a light to open
+  its report.
+- **Excel exports** (SheetJS from CDN, deferred load):
+  - *Audit Report* &rarr; multi-sheet workbook (Summary / By Company
+    / By Account / History / Filters) &mdash; everything respects
+    the current filter view.
+  - *Journal Entry* &rarr; one-sheet JE batch with debit / credit
+    rows per non-zero variance component.
+  - *Inventory Validation light* &rarr; roll-forward-chain +
+    variance-components diagnostic.
+  - *System Status light* &rarr; overall + per-feed status with
+    last-success timestamps and lag.
+  - *Pending Close Items rows* &rarr; per-bucket detail report.
+- **Bottom row &mdash; three reconciliation widgets**:
+  - *OOB History* (trend, filtered)
+  - *By Inventory Account* (clickable contributor bars; click a row
+    to narrow the Object filter to that account; click again to
+    restore All)
+  - *Pending Close Items* (un-posted GL batches, open WO journals,
+    in-transit inventory, manual JE drafts) &mdash; each row
+    downloads its detail Excel
 - **User menu** (click the user chip in the top bar) holds the
   identity block + database switcher + admin-gated actions (Import
   JDE data, Restart Service, Sign out). Mirrors the live SPA&rsquo;s
@@ -163,44 +195,54 @@ As of the latest commit, V8 has:
 
 **What&rsquo;s NOT wired yet**
 
-- Filter math is now exact, row-level &mdash; the real backend just
-  needs to return the same `accountRows` shape (currently captured
-  via `usp6getrinvaccountsummary`). No more synthesized
-  breakdown / share-weight approximations.
 - Admin actions in the user menu (Import JDE, Restart Service) flash
   a toast but don&rsquo;t do anything. Database switcher updates the
   user-chip label but doesn&rsquo;t actually re-fetch from a
   different DB &mdash; the snapshot path is hard-coded.
-- Variance step *Preview* buttons / *Journal Entry* / *Audit Report*
-  flash a toast but don&rsquo;t open anything.
+- Variance step *Preview* buttons flash a toast but don&rsquo;t open
+  a drill-down modal yet.
 - Permission gating: the user menu shows all admin actions; in
   production the auth/role layer hides what the user can&rsquo;t do.
   Handoff concern.
-- Period dropdown only has one period&rsquo;s data &mdash; we need the
-  capture script to fill the rest. *Refresh* in the top bar re-fetches
-  the current snapshot but other periods are still gray-disabled.
+- The capture-periods script (`scripts/capture-periods.ps1`) isn&rsquo;t
+  built yet. Recapturing data today is the sqlcmd `FOR JSON PATH`
+  one-liner + small Python reshape from *How to capture* below.
+  The script becomes the right investment once we have a second
+  page (Transactions, etc.) that needs the same flow.
 - No other pages yet (Transactions, As Of, Roll Forward, Integrity, In
   Transit, PO Receipts).
 - No optimization pass on the captured sprocs / views.
+- Pending Close Items + per-bucket detail rows are synthesized at
+  download time (no real source rows yet). Shaped so a real backend
+  can fill them in without changing the renderer.
 - `RRV8/views/v6ui_reconfiledata.sql` is captured but the view itself
-  is dead in production (intended for a process that was never
-  implemented). Leave it in the library for archaeology, but it&rsquo;s
-  NOT the source for the reconciliation summary.
+  is dead in production (intended for a process that never shipped).
+  Leave it in the library for archaeology; the actual data source
+  is `v6ui_raccountsummary` (wrapped by `usp6getrinvaccountsummary`).
 
 ---
 
 ## How to preview locally
 
 The repo&rsquo;s static server (`.claude/serve.ps1`) is the only
-prerequisite. Start it from the worktree root if it isn&rsquo;t already
-running, then open:
+prerequisite. From a PowerShell window:
+
+```powershell
+cd C:\source\repos\RapidReconciler-AI
+.\.claude\serve.ps1
+```
+
+Leave that window open (closing it stops the server; Ctrl-C stops
+it cleanly). Then in a browser:
 
 ```
 http://localhost:8765/RRV8/inventory-reconciliation.html
 ```
 
-The page reads `data/reconciliation-2016-08-27.json` via `fetch` on load.
-Hard-refresh after editing the page or the JSON.
+The page reads `data/reconciliation.json` via `fetch` on load and
+keeps the whole dataset in memory. Hard-refresh after editing the
+page or the JSON. Period switching is in-memory (no re-fetch);
+the top-bar Refresh button re-fetches the snapshot.
 
 ---
 
@@ -216,79 +258,66 @@ to a new filename, then:
    keys for the new page&rsquo;s breakdown.
 3. **History chart**: structure is the same &mdash; only the data
    array changes.
-4. **Filter chips**: update each `<button class="filter-chip">`&rsquo;s
+4. **Sidebar filters**: update each `<button class="sidebar-filter">`&rsquo;s
    `data-filter` attribute + label to match what the new page filters
-   on. The JS reads `data.filter[<group>]` for the dropdown contents.
+   on. The JS reads `data.filter[<group>]` for the popover contents
+   and `data.accountRows[].<dimension>` for row-level matching.
 5. **Capture a snapshot**: see the capture workflow below. Save as
-   `data/<area>-YYYY-MM-DD.json`.
-6. **Update `WORKFLOW.md`**: add the new page to the *Current state
+   `data/<area>.json` (single file covers every period for that
+   area).
+6. **Update `DATA_FILE`** in the page script to point at the new
+   snapshot filename.
+7. **Update `WORKFLOW.md`**: add the new page to the *Current state
    checkpoint* list.
 
 The script tag at the bottom of the file is self-contained &mdash; it
-loads `data/<file>` based on the period dropdown. Most of the JS is
-generic and works across pages with no edits.
+loads `data/<file>` once, then period switching, filter changes, and
+all the recompute logic happens in-memory off the loaded
+`accountRows`. Most of the JS is generic and works across pages
+with no edits.
 
 ---
 
 ## How to capture period snapshots
 
-The Inventory > Reconciliation page has 13 known close dates. Today only
-one (`2016-08-27`) is captured. Two paths to get the rest.
+All 13 periods for Inventory > Reconciliation are currently captured
+in `data/reconciliation.json` (195 rows). To refresh that file:
 
-### Path A &mdash; SQL/PowerShell (planned)
+### Path A &mdash; sqlcmd one-liner (current method)
 
-**Not built yet.** Will live at `RRV8/scripts/capture-periods.ps1` +
-`RRV8/scripts/capture-period.sql`. Once built, the flow is:
+```bash
+SQLCMD='/c/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/sqlcmd'
+PW=$(cat "$USERPROFILE/.rr-sql-pwd")
 
-```powershell
-# Capture all 13 periods to RRV8/data/
-.\RRV8\scripts\capture-periods.ps1 -All
-
-# Capture one specific period
-.\RRV8\scripts\capture-periods.ps1 -Period 2016-04-30
+"$SQLCMD" -S localhost -U rruser -P "$PW" -d rrv7-acme -y 0 \
+  -Q "SET NOCOUNT ON; SELECT * FROM v6ui_raccountsummary ORDER BY PeriodEnds, CompanyNumber, ObjectAccount, SubAccount FOR JSON PATH" \
+  > .tmp-raw.json
 ```
 
-The script will call `usp6getreconfiledata` once per period, reshape the
-multi-rowset result into our JSON file format, and drop each one into
-`RRV8/data/`. Mirrors the dev-box connection convention used by
-`Tools/queries/transaction-detail-workflow.ps1` (sqlcmd via SQL auth,
-password at `$env:USERPROFILE\.rr-sql-pwd`).
+Then a small Python reshape script trims whitespace, converts the
+scientific-notation numbers, and emits the V8 shape (`accountRows`
+array + preserved `_meta` / `validation` / `filter` / `pending` blocks).
+See git history of `RRV8/data/reconciliation.json` for the reshape
+recipe; it&rsquo;s also the seed for the future
+`scripts/capture-periods.ps1` (PowerShell port of the same flow).
 
-This is the right investment for a multi-week project &mdash; we&rsquo;ll
-re-capture data many times as the V8 pages grow, and we&rsquo;ll use the
-same template for other pages (Transactions, As Of, etc.).
+### Path B &mdash; SQL/PowerShell script (planned)
 
-### Path B &mdash; Browser-side dump (manual)
+**Not built yet.** Will live at `RRV8/scripts/capture-periods.ps1`.
+Same `FOR JSON PATH` + reshape pattern, but wrapped so a future
+session can run one command per page (`-Area reconciliation`,
+`-Area transactions`, etc.) instead of remembering the SQL.
 
-If you need data fast and don&rsquo;t want to wait for Path A tooling:
+### Path C &mdash; Browser-side DevTools dump (legacy fallback)
 
-1. Sign in to the live staging app (`staging-rr-spa.azurewebsites.net`)
-   on the Acme test instance.
-2. Navigate to Inventory > Reconciliation.
-3. Open DevTools (F12) > **Network** tab > filter to **Fetch/XHR**.
-4. For each period in the date dropdown:
-   - Click the period.
-   - Wait for the `reconciliation-filtered` request to fire.
-   - Right-click the row &gt; *Save as* &gt; *response*.
-   - Save to your Downloads.
-5. For each saved file:
-   - Move it to `RRV8/data/`.
-   - Rename to `reconciliation-YYYY-MM-DD.json` (the period&rsquo;s end
-     date).
-   - Edit the front of the file to add the `_meta` block:
-     ```json
-     {
-       "_meta": {
-         "captured": "<today>",
-         "instance": "rrv7-acme",
-         "period":   "YYYY-MM-DD",
-         "source":   "GET reconciliation-filtered"
-       },
-       &hellip;
-     }
-     ```
-6. Refresh `inventory-reconciliation.html` &mdash; the period dropdown
-   should now have those periods clickable.
+If the dev-box DB is unavailable, the live staging SPA at
+`staging-rr-spa.azurewebsites.net` can be dumped manually via
+DevTools &rarr; Network &rarr; right-click the
+`reconciliation-filtered` row &rarr; *Save as* &rarr; *response*.
+That gives the old per-period response shape; you&rsquo;d still
+need a reshape pass to merge multiple periods into the V8
+`accountRows` shape. Not recommended &mdash; Path A is faster and
+gives row-level data.
 
 ---
 
@@ -300,8 +329,8 @@ library so optimization work has a current target.
 ```bash
 SQLCMD='/c/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/sqlcmd'
 PW=$(cat "$USERPROFILE/.rr-sql-pwd")
-NAME='usp6getreconfiledata'   # or v6ui_reconfiledata, etc.
-KIND='sprocs'                 # or 'views'
+NAME='usp6getrinvaccountsummary'   # or v6ui_raccountsummary, etc.
+KIND='sprocs'                      # or 'views'
 
 "$SQLCMD" -S localhost -U rruser -P "$PW" -d 'rrv7-acme' -h -1 -W -k 1 \
   -Q "SET NOCOUNT ON; EXEC sp_helptext 'dbo.$NAME'" \
@@ -354,13 +383,12 @@ adding release notes for V8 work.
 
 | | What | Who decides |
 |---|---|---|
-| Soon | Build `scripts/capture-periods.ps1` so we can backfill the 12 missing snapshots | tooling task |
-| Soon | Wire the *Refresh* button to re-fetch the current period&rsquo;s JSON | tooling task |
-| Soon | Filter chip selection &rarr; actually filter the rendered values (path: per-filter snapshots, or a thin backend) | design call |
-| Medium | Mockup of the second page (Transactions? As Of?) | design call |
+| Soon | Build `scripts/capture-periods.ps1` (Path A → PowerShell port) so future pages don&rsquo;t need a re-derived sqlcmd one-liner | tooling task |
+| Soon | Mockup of the second page (Transactions? As Of?) &mdash; pick which | design call |
+| Medium | Variance step *Preview* modals (drill to underlying transactions per component) | design + tooling |
 | Medium | Optimization pass on the captured sprocs/views | engineering |
-| Medium | Variance step *Preview* modals (show underlying transactions) | design + tooling |
-| Later | Link from the hub page&rsquo;s *Internal Workflows* section | hub edit when V8 has 3+ pages |
+| Medium | Real backend wiring (replace `accountRows` synthesis with API; admin actions; DB switcher; permission gating) | handoff team |
+| Later | Promote V8 from the hub *Demos* section to *Internal Workflows* when there are 3+ pages | hub edit |
 | Later | Decide V8&rsquo;s eventual hosting story (still GitHub Pages? Static Web App + Functions? Replace prod?) | strategic call |
 
 ---
