@@ -1,0 +1,2207 @@
+<!DOCTYPE html>
+<!--
+  =============================================================================
+  MOCKUP: Inventory > Reconciliation
+  =============================================================================
+  Visual proposal for a modernized version of the live RR SPA's
+  Inventory Reconciliation page (currently AngularJS / Bootstrap 3,
+  ~2015-2017 design vintage). This file is a STATIC mockup -- nothing
+  is wired to real data, no auth, no real behavior.
+
+  Modernization angles applied:
+    1. Slim two-tone top bar with period pill + actions on the right
+    2. Icon-collapsed sidebar that expands on hover (60px -> 240px)
+    3. Hero "Out of Balance" stat promoted to a giant headline
+    4. Status strip (Inventory Validation + System Status) as a thin
+       always-visible health bar with timestamps
+    5. Filter row as inline chip dropdowns, not a collapsible panel
+    6. Variance Calculation rendered as a horizontal "math story":
+         Carry Fwd + GL Batches + EoD + Tx + Cardex - JEs = Total
+    7. Donut chart + 12-month history both rendered as inline SVG with
+       modern legend chips
+    8. Journal Entry / Audit Report / Refresh / Import in a header
+       action bar, not as panel-footer buttons
+    9. Open Sans + Source Sans 3 typography, GSI brand palette
+   10. Responsive grid (mobile-aware)
+
+  Data shown is fictional Acme test-instance data, same numbers as the
+  live screenshot for verisimilitude. No real customer data.
+  =============================================================================
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Inventory Reconciliation &mdash; RapidReconciler Mockup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;500;600;700;800&family=Source+Sans+3:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --navy:        #1f2d4a;
+    --navy-deep:   #142037;
+    --navy-soft:   #2c3e63;
+    --blue:        #2b5fb0;
+    --blue-bright: #3d8fd6;
+    --blue-pale:   #e6efff;
+    --orange:      #f08a24;
+    --orange-deep: #d97316;
+    --orange-pale: #fbe7ce;
+    --green:       #2e8a55;
+    --green-deep:  #246b43;
+    --green-pale:  #def4e6;
+    --red:         #c0392b;
+    --red-pale:    #fce5e1;
+    --bg:          #fafbfd;
+    --bg-soft:     #f3f5f9;
+    --bg-card:     #ffffff;
+    --text:        #1f2d4a;
+    --text-soft:   #4a5468;
+    --text-muted:  #828a9a;
+    --rule:        #e6eaf0;
+    --rule-strong: #cfd6e0;
+    --shadow-sm:   0 1px 2px rgba(20, 32, 55, 0.04);
+    --shadow-md:   0 4px 12px -2px rgba(20, 32, 55, 0.08);
+    --shadow-lg:   0 14px 32px -10px rgba(20, 32, 55, 0.18);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: 'Open Sans', -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+  h1, h2, h3, h4, h5 { font-family: 'Source Sans 3', sans-serif; font-weight: 700; }
+
+  /* ============================================================
+     LAYOUT SHELL
+     ============================================================ */
+  .app {
+    display: grid;
+    grid-template-columns: 60px 1fr;
+    grid-template-rows: 56px 1fr;
+    grid-template-areas:
+      "sidebar topbar"
+      "sidebar main";
+    min-height: 100vh;
+  }
+  /* Sidebar expands ONLY when the cursor is directly over the sidebar
+     itself -- not when the cursor enters the rest of the page. The
+     sidebar is position: fixed so the expanded panel floats over the
+     main content; the grid column stays at 60px so nothing shifts. */
+
+  /* ============================================================
+     TOP BAR
+     ============================================================ */
+  .topbar {
+    grid-area: topbar;
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--rule);
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 0 24px;
+    z-index: 50;
+    box-shadow: var(--shadow-sm);
+  }
+  .topbar-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-right: 18px;
+    text-decoration: none;
+  }
+  .topbar-brand-mark {
+    width: 28px; height: 28px;
+    border-radius: 7px;
+    background: linear-gradient(135deg, var(--blue) 0%, var(--navy) 100%);
+    display: grid;
+    place-items: center;
+    color: #fff;
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 800;
+    font-size: 14px;
+    letter-spacing: -0.02em;
+  }
+  .topbar-brand-name {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 800;
+    font-size: 17px;
+    color: var(--navy);
+    letter-spacing: -0.015em;
+  }
+  .topbar-brand-env {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    background: var(--bg-soft);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    padding: 2px 7px;
+    margin-left: 4px;
+  }
+  /* Period selector lives in the page header (next to action
+     buttons) because the period concept is module-scoped, not
+     global — Inventory and Transfers share it; PO Receipts has
+     no notion of a period. Anchoring it to the page header
+     means absent-on-PO-Receipts is a local thing, not a hole in
+     the global top bar. */
+  .period-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--bg-card);
+    border: 1px solid var(--rule-strong);
+    border-radius: 100px;
+    padding: 8px 14px 8px 12px;
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 700;
+    font-size: 13px;
+    color: var(--navy);
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+  }
+  .period-pill:hover { border-color: var(--blue); background: #fff; box-shadow: var(--shadow-sm); }
+  .period-pill-icon { width: 14px; height: 14px; color: var(--text-muted); }
+  .period-pill-label {
+    font-size: 10.5px;
+    color: var(--text-muted);
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-right: 2px;
+  }
+  .period-pill-caret { width: 11px; height: 11px; color: var(--text-muted); margin-left: 2px; }
+  .topbar-spacer { flex: 1; }
+  .topbar-actions { display: flex; align-items: center; gap: 4px; }
+  .topbar-action {
+    width: 36px; height: 36px;
+    border-radius: 7px;
+    display: grid;
+    place-items: center;
+    color: var(--text-soft);
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    position: relative;
+  }
+  .topbar-action:hover { background: var(--bg-soft); color: var(--blue); }
+  .topbar-action svg { width: 18px; height: 18px; }
+  .topbar-action .badge {
+    position: absolute;
+    top: 8px; right: 8px;
+    width: 7px; height: 7px;
+    background: var(--orange);
+    border: 2px solid var(--bg-card);
+    border-radius: 50%;
+  }
+  .topbar-user {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 4px 10px 4px 4px;
+    border-radius: 100px;
+    margin-left: 6px;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .topbar-user:hover { background: var(--bg-soft); }
+  .topbar-user-avatar {
+    width: 30px; height: 30px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--orange) 0%, var(--orange-deep) 100%);
+    display: grid;
+    place-items: center;
+    color: #fff;
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 800;
+    font-size: 13px;
+  }
+  .topbar-user-name {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 700;
+    font-size: 13px;
+    color: var(--text);
+  }
+  .topbar-user-co {
+    font-size: 11px;
+    color: var(--text-muted);
+    display: block;
+    line-height: 1.1;
+  }
+
+  /* ============================================================
+     SIDEBAR
+     ============================================================ */
+  .sidebar {
+    grid-area: sidebar;
+    background: var(--navy);
+    color: rgba(255, 255, 255, 0.85);
+    overflow: hidden;
+    width: 60px;
+    transition: width 0.22s ease;
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    top: 0; left: 0; bottom: 0;
+    z-index: 60;
+  }
+  .sidebar:hover { width: 240px; box-shadow: 8px 0 32px -8px rgba(20, 32, 55, 0.18); }
+  .sidebar-brand {
+    height: 56px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 18px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+  .sidebar-brand-mark {
+    width: 24px; height: 24px;
+    border-radius: 6px;
+    background: var(--orange);
+    color: #fff;
+    display: grid;
+    place-items: center;
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 800;
+    font-size: 12px;
+    flex-shrink: 0;
+  }
+  .sidebar-brand-text {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 800;
+    color: #fff;
+    font-size: 16px;
+    white-space: nowrap;
+    opacity: 0;
+    transition: opacity 0.18s;
+  }
+  .sidebar:hover .sidebar-brand-text { opacity: 1; }
+  .sidebar-section {
+    padding: 16px 0 8px;
+  }
+  .sidebar-section-label {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 10.5px;
+    font-weight: 800;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.45);
+    padding: 0 18px 8px;
+    opacity: 0;
+    transition: opacity 0.18s;
+    white-space: nowrap;
+  }
+  .sidebar:hover .sidebar-section-label { opacity: 1; }
+  .sidebar-nav-item {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 10px 18px;
+    color: rgba(255, 255, 255, 0.7);
+    text-decoration: none;
+    font-size: 13.5px;
+    font-weight: 600;
+    border-left: 3px solid transparent;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+    white-space: nowrap;
+  }
+  .sidebar-nav-item:hover {
+    background: rgba(255, 255, 255, 0.06);
+    color: #fff;
+  }
+  .sidebar-nav-item.is-active {
+    background: rgba(255, 255, 255, 0.08);
+    color: #fff;
+    border-left-color: var(--orange);
+  }
+  .sidebar-nav-icon { width: 18px; height: 18px; flex-shrink: 0; }
+  .sidebar-nav-text {
+    opacity: 0;
+    transition: opacity 0.18s;
+  }
+  .sidebar:hover .sidebar-nav-text { opacity: 1; }
+  .sidebar-nav-children {
+    padding: 0 0 4px 0;
+    margin-bottom: 4px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    display: none;
+  }
+  .sidebar:hover .sidebar-nav-children { display: block; }
+  .sidebar-nav-child {
+    display: block;
+    padding: 7px 18px 7px 50px;
+    color: rgba(255, 255, 255, 0.55);
+    text-decoration: none;
+    font-size: 12.5px;
+    font-weight: 500;
+    transition: color 0.15s, background 0.15s;
+  }
+  .sidebar-nav-child:hover { color: #fff; background: rgba(255, 255, 255, 0.04); }
+  .sidebar-nav-child.is-active {
+    color: var(--orange);
+    background: rgba(255, 255, 255, 0.04);
+  }
+  .sidebar-bottom {
+    margin-top: auto;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    padding: 12px 18px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .sidebar-bottom-pulse {
+    width: 8px; height: 8px;
+    background: var(--green);
+    border-radius: 50%;
+    flex-shrink: 0;
+    box-shadow: 0 0 0 0 rgba(46, 138, 85, 0.6);
+    animation: sidebar-pulse 2s ease-in-out infinite;
+  }
+  @keyframes sidebar-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(46, 138, 85, 0.6); }
+    50% { box-shadow: 0 0 0 6px rgba(46, 138, 85, 0); }
+  }
+  .sidebar-bottom-text {
+    font-size: 11.5px;
+    color: rgba(255, 255, 255, 0.65);
+    white-space: nowrap;
+    opacity: 0;
+    transition: opacity 0.18s;
+  }
+  .sidebar:hover .sidebar-bottom-text { opacity: 1; }
+  /* When a filter popover is open we want the sidebar to stay expanded
+     so the row that opened the popover remains visible. The .is-pinned
+     class is toggled on <body> by the popover open/close handlers. */
+  body.is-pinned .sidebar { width: 240px; box-shadow: 8px 0 32px -8px rgba(20, 32, 55, 0.18); }
+  body.is-pinned .sidebar-brand-text,
+  body.is-pinned .sidebar-section-label,
+  body.is-pinned .sidebar-nav-text,
+  body.is-pinned .sidebar-bottom-text,
+  body.is-pinned .sidebar-filter-text,
+  body.is-pinned .sidebar-filter-status { opacity: 1; }
+  body.is-pinned .sidebar-nav-children { display: block; }
+
+  /* ============================================================
+     SIDEBAR FILTERS (persistent global filter rail)
+     ============================================================ */
+  .sidebar-filters {
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    padding: 12px 0 6px;
+    margin-top: 4px;
+  }
+  .sidebar-filters-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 18px 8px;
+  }
+  .sidebar-filters-label {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 10.5px;
+    font-weight: 800;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.45);
+    opacity: 0;
+    transition: opacity 0.18s;
+    white-space: nowrap;
+  }
+  .sidebar:hover .sidebar-filters-label,
+  body.is-pinned .sidebar-filters-label { opacity: 1; }
+  .sidebar-filters-clear {
+    background: transparent;
+    border: none;
+    color: rgba(255, 255, 255, 0.55);
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    cursor: pointer;
+    opacity: 0;
+    padding: 0;
+    transition: opacity 0.18s, color 0.15s;
+  }
+  .sidebar:hover .sidebar-filters-clear,
+  body.is-pinned .sidebar-filters-clear { opacity: 1; }
+  .sidebar-filters-clear:hover { color: var(--orange); }
+  .sidebar-filter {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 9px 18px;
+    color: rgba(255, 255, 255, 0.78);
+    background: transparent;
+    border: none;
+    border-left: 3px solid transparent;
+    width: 100%;
+    text-align: left;
+    cursor: pointer;
+    font-family: 'Open Sans', sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+    position: relative;
+  }
+  .sidebar-filter:hover {
+    background: rgba(255, 255, 255, 0.06);
+    color: #fff;
+  }
+  .sidebar-filter.is-active {
+    border-left-color: var(--orange);
+    background: rgba(240, 138, 36, 0.08);
+    color: #fff;
+  }
+  .sidebar-filter-icon {
+    width: 18px; height: 18px;
+    flex-shrink: 0;
+    color: rgba(255, 255, 255, 0.65);
+    position: relative;
+  }
+  .sidebar-filter:hover .sidebar-filter-icon,
+  .sidebar-filter.is-active .sidebar-filter-icon { color: #fff; }
+  .sidebar-filter-dot {
+    position: absolute;
+    top: 14px;
+    left: 32px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--orange);
+    border: 2px solid var(--navy);
+    display: none;
+  }
+  .sidebar-filter.is-active .sidebar-filter-dot { display: block; }
+  .sidebar-filter-text {
+    flex: 1;
+    opacity: 0;
+    transition: opacity 0.18s;
+  }
+  .sidebar:hover .sidebar-filter-text { opacity: 1; }
+  .sidebar-filter-status {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 10.5px;
+    font-weight: 800;
+    color: rgba(255, 255, 255, 0.45);
+    background: rgba(255, 255, 255, 0.06);
+    border-radius: 100px;
+    padding: 2px 8px;
+    opacity: 0;
+    transition: opacity 0.18s, background 0.15s, color 0.15s;
+    letter-spacing: 0.02em;
+  }
+  .sidebar-filter.is-active .sidebar-filter-status {
+    background: var(--orange);
+    color: #fff;
+  }
+  .sidebar:hover .sidebar-filter-status { opacity: 1; }
+
+  /* ============================================================
+     MAIN CONTENT
+     ============================================================ */
+  .main {
+    grid-area: main;
+    padding: 24px 32px 40px;
+    max-width: 1600px;
+    width: 100%;
+    margin: 0 auto;
+  }
+
+  /* Page header */
+  .page-header {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 24px;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+  }
+  .page-header-text { min-width: 0; }
+  .breadcrumb {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12.5px;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+    font-weight: 600;
+  }
+  .breadcrumb a {
+    color: var(--text-soft);
+    text-decoration: none;
+    transition: color 0.15s;
+  }
+  .breadcrumb a:hover { color: var(--blue); }
+  .breadcrumb .sep { color: var(--rule-strong); font-weight: 400; }
+  .page-title {
+    font-size: 28px;
+    color: var(--navy);
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+    margin-bottom: 8px;
+  }
+  .page-sub {
+    font-size: 13.5px;
+    color: var(--text-soft);
+  }
+  .page-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 16px;
+    border-radius: 7px;
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 700;
+    font-size: 13.5px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: background 0.15s, border-color 0.15s, color 0.15s, transform 0.1s;
+    text-decoration: none;
+  }
+  .btn:active { transform: translateY(1px); }
+  .btn svg { width: 16px; height: 16px; }
+  .btn-secondary {
+    background: var(--bg-card);
+    border-color: var(--rule-strong);
+    color: var(--text);
+  }
+  .btn-secondary:hover { border-color: var(--blue); color: var(--blue); }
+  .btn-primary {
+    background: var(--orange);
+    color: #fff;
+    box-shadow: 0 4px 12px -4px rgba(240, 138, 36, 0.45);
+  }
+  .btn-primary:hover { background: var(--orange-deep); }
+  .btn-ghost {
+    background: transparent;
+    color: var(--text-soft);
+    border-color: transparent;
+  }
+  .btn-ghost:hover { background: var(--bg-soft); color: var(--blue); }
+
+  /* Health strip */
+  .health-strip {
+    background: var(--bg-card);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    padding: 10px 16px;
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    margin-bottom: 20px;
+    box-shadow: var(--shadow-sm);
+    flex-wrap: wrap;
+  }
+  .health-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12.5px;
+    color: var(--text-soft);
+  }
+  .health-dot {
+    width: 9px; height: 9px;
+    border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 0 3px rgba(46, 138, 85, 0.18);
+    flex-shrink: 0;
+  }
+  .health-dot.is-warn { background: var(--orange); box-shadow: 0 0 0 3px rgba(240, 138, 36, 0.18); }
+  .health-dot.is-error { background: var(--red); box-shadow: 0 0 0 3px rgba(192, 57, 43, 0.18); }
+  .health-label {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 700;
+    color: var(--navy);
+    font-size: 12.5px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .health-meta { font-size: 11.5px; color: var(--text-muted); margin-left: 4px; }
+  .health-sep { width: 1px; height: 18px; background: var(--rule); }
+  .health-spacer { flex: 1; }
+  .health-refresh {
+    font-size: 11.5px;
+    color: var(--text-muted);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .health-refresh svg { width: 12px; height: 12px; }
+
+  /* Active-filter summary banner (shown only when at least one
+     filter group is narrowed; gives the page a visible "you are
+     looking at a slice" indicator since filters now live in the
+     sidebar where they're easy to miss while reading the page). */
+  .filter-summary {
+    display: none;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 14px;
+    margin-bottom: 16px;
+    background: var(--orange-pale);
+    border: 1px solid rgba(240, 138, 36, 0.45);
+    border-radius: 8px;
+    color: var(--orange-deep);
+    font-size: 12.5px;
+    font-weight: 600;
+  }
+  .filter-summary.is-on { display: flex; }
+  .filter-summary svg { width: 14px; height: 14px; flex-shrink: 0; }
+  .filter-summary-text { flex: 1; color: var(--text); font-weight: 500; }
+  .filter-summary-text strong { color: var(--navy); font-weight: 700; }
+  .filter-summary-reset {
+    background: transparent;
+    border: none;
+    color: var(--orange-deep);
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 11.5px;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    cursor: pointer;
+  }
+  .filter-summary-reset:hover { text-decoration: underline; }
+
+  /* ============================================================
+     HERO STAT
+     ============================================================ */
+  .hero-stat {
+    background: linear-gradient(135deg, var(--bg-card) 0%, var(--bg-soft) 100%);
+    border: 1px solid var(--rule);
+    border-radius: 14px;
+    padding: 28px 32px;
+    margin-bottom: 24px;
+    display: grid;
+    grid-template-columns: 1.4fr 1fr 1fr;
+    gap: 28px;
+    align-items: center;
+    box-shadow: var(--shadow-md);
+    position: relative;
+    overflow: hidden;
+  }
+  .hero-stat::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0;
+    width: 6px; height: 100%;
+    background: linear-gradient(180deg, var(--orange) 0%, var(--orange-deep) 100%);
+  }
+  .hero-main { min-width: 0; }
+  .hero-label {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 11.5px;
+    font-weight: 800;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--orange-deep);
+    margin-bottom: 8px;
+  }
+  .hero-value {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 800;
+    font-size: 54px;
+    line-height: 1;
+    color: var(--navy);
+    letter-spacing: -0.03em;
+    margin-bottom: 6px;
+  }
+  .hero-value-currency {
+    font-size: 32px;
+    color: var(--text-muted);
+    font-weight: 600;
+    margin-right: 4px;
+    vertical-align: 0.2em;
+  }
+  .hero-sub {
+    font-size: 13.5px;
+    color: var(--text-soft);
+    line-height: 1.55;
+  }
+  .hero-sub strong { color: var(--navy); font-weight: 700; }
+  .hero-side {
+    border-left: 1px solid var(--rule);
+    padding-left: 28px;
+  }
+  .hero-side-label {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+  }
+  .hero-side-value {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 700;
+    font-size: 22px;
+    color: var(--navy);
+    line-height: 1.1;
+    margin-bottom: 4px;
+    letter-spacing: -0.01em;
+  }
+  .hero-side-delta {
+    font-size: 12.5px;
+    color: var(--text-soft);
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .hero-side-delta.is-up { color: var(--red); }
+  .hero-side-delta.is-down { color: var(--green); }
+  .hero-side-delta svg { width: 12px; height: 12px; }
+  .hero-spark { height: 40px; margin-top: 8px; }
+
+  /* ============================================================
+     VARIANCE MATH STORY
+     ============================================================ */
+  .variance-panel {
+    background: var(--bg-card);
+    border: 1px solid var(--rule);
+    border-radius: 14px;
+    padding: 24px 28px;
+    margin-bottom: 24px;
+    box-shadow: var(--shadow-md);
+  }
+  .panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 22px;
+    gap: 14px;
+  }
+  .panel-title {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 800;
+    font-size: 14px;
+    color: var(--text-soft);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+  .panel-help {
+    font-size: 12px;
+    color: var(--text-muted);
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .panel-help:hover { color: var(--blue); }
+  .panel-help svg { width: 13px; height: 13px; }
+
+  .variance-flow {
+    display: flex;
+    align-items: stretch;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .variance-step {
+    flex: 1 1 130px;
+    min-width: 130px;
+    background: var(--bg-soft);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    padding: 14px 14px 12px;
+    transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
+    cursor: pointer;
+    position: relative;
+  }
+  .variance-step:hover {
+    border-color: var(--blue);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md);
+    background: #fff;
+  }
+  .variance-step-label {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+  }
+  .variance-step-value {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 800;
+    font-size: 17px;
+    color: var(--navy);
+    letter-spacing: -0.01em;
+    line-height: 1.15;
+  }
+  .variance-step-value.is-negative { color: var(--red); }
+  .variance-step-action {
+    position: absolute;
+    top: 8px; right: 8px;
+    width: 22px; height: 22px;
+    border-radius: 5px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    color: var(--text-muted);
+    display: grid;
+    place-items: center;
+    opacity: 0;
+    transition: opacity 0.15s, background 0.15s, color 0.15s;
+  }
+  .variance-step:hover .variance-step-action { opacity: 1; }
+  .variance-step-action:hover { background: var(--blue-pale); color: var(--blue); }
+  .variance-step-action svg { width: 12px; height: 12px; }
+  .variance-op {
+    display: grid;
+    place-items: center;
+    width: 18px;
+    color: var(--text-muted);
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 700;
+    font-size: 18px;
+  }
+  .variance-equals {
+    display: grid;
+    place-items: center;
+    width: 24px;
+    color: var(--text-muted);
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 800;
+    font-size: 22px;
+  }
+  .variance-total {
+    flex: 1 1 160px;
+    min-width: 160px;
+    background: linear-gradient(135deg, var(--navy) 0%, var(--navy-deep) 100%);
+    border: 1px solid var(--navy);
+    border-radius: 10px;
+    padding: 14px 16px 12px;
+    color: #fff;
+    position: relative;
+    box-shadow: 0 10px 24px -10px rgba(20, 32, 55, 0.45);
+  }
+  .variance-total-label {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    color: var(--orange);
+    margin-bottom: 8px;
+  }
+  .variance-total-value {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 800;
+    font-size: 22px;
+    color: #fff;
+    letter-spacing: -0.01em;
+    line-height: 1.1;
+  }
+
+  /* ============================================================
+     BOTTOM GRID (history chart full-width)
+     ============================================================ */
+  .bottom-grid {
+    display: block;
+  }
+  .chart-card {
+    background: var(--bg-card);
+    border: 1px solid var(--rule);
+    border-radius: 14px;
+    padding: 22px 26px 18px;
+    box-shadow: var(--shadow-md);
+    min-width: 0;
+  }
+  .chart-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+    gap: 12px;
+  }
+  .chart-legend {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 12px;
+    color: var(--text-soft);
+  }
+  .legend-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 600;
+  }
+  .legend-dot {
+    width: 9px; height: 9px;
+    border-radius: 2px;
+  }
+  .legend-dot.is-usd { background: var(--blue); }
+  .legend-dot.is-gbp { background: var(--orange); }
+  .legend-value { color: var(--text-muted); font-weight: 500; margin-left: 2px; }
+
+  .donut-wrap {
+    position: relative;
+    display: grid;
+    place-items: center;
+    height: 240px;
+  }
+  .donut-center {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    pointer-events: none;
+  }
+  .donut-center-label {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 2px;
+  }
+  .donut-center-value {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 800;
+    font-size: 24px;
+    color: var(--navy);
+    letter-spacing: -0.01em;
+  }
+  .donut-svg { width: 220px; height: 220px; }
+  .donut-segment { transition: opacity 0.18s; }
+  .donut-segment:hover { opacity: 0.85; cursor: pointer; }
+
+  .chart-history-wrap { height: 240px; position: relative; padding-top: 6px; }
+  .chart-history-svg { width: 100%; height: 100%; }
+  .history-stats {
+    display: flex;
+    gap: 28px;
+    padding-top: 12px;
+    margin-top: 12px;
+    border-top: 1px solid var(--rule);
+  }
+  .history-stat-label {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+  }
+  .history-stat-value {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 800;
+    font-size: 15px;
+    color: var(--navy);
+  }
+  .history-stat-value.is-red { color: var(--red); }
+  .history-stat-value.is-green { color: var(--green-deep); }
+
+  /* Floating help docked at bottom-right */
+  .help-fab {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: var(--navy);
+    color: #fff;
+    display: grid;
+    place-items: center;
+    box-shadow: 0 12px 28px -8px rgba(20, 32, 55, 0.42);
+    border: none;
+    cursor: pointer;
+    transition: transform 0.18s, background 0.18s;
+    z-index: 80;
+  }
+  .help-fab:hover { transform: translateY(-2px); background: var(--blue); }
+  .help-fab svg { width: 20px; height: 20px; }
+
+  /* ============================================================
+     POPOVERS (period selector + filter chip dropdowns)
+     ============================================================ */
+  .period-popover, .filter-popover {
+    position: fixed;
+    background: var(--bg-card);
+    border: 1px solid var(--rule-strong);
+    border-radius: 10px;
+    box-shadow: 0 20px 48px -16px rgba(20, 32, 55, 0.28);
+    z-index: 150;
+    min-width: 200px;
+    max-height: 420px;
+    overflow-y: auto;
+    padding: 6px;
+  }
+  .period-popover[hidden], .filter-popover[hidden] { display: none; }
+  .period-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--text);
+    cursor: pointer;
+  }
+  .period-item:hover { background: var(--bg-soft); color: var(--blue); }
+  .period-item.is-current {
+    background: var(--blue-pale);
+    color: var(--blue);
+  }
+  .filter-popover { padding: 10px; min-width: 260px; max-width: 320px; }
+  /* Caret pointing back at the sidebar row that opened the popover.
+     Hidden by default; .has-caret class + --caret-top CSS var control it. */
+  .filter-popover.has-caret::before {
+    content: '';
+    position: absolute;
+    top: var(--caret-top, 16px);
+    left: -7px;
+    width: 12px; height: 12px;
+    background: var(--bg-card);
+    border-left: 1px solid var(--rule-strong);
+    border-bottom: 1px solid var(--rule-strong);
+    transform: rotate(45deg);
+  }
+  .filter-popover-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 6px 8px;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 6px;
+  }
+  .filter-popover-title {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 10.5px;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+  .filter-popover-actions {
+    display: flex;
+    gap: 6px;
+  }
+  .filter-popover-action {
+    background: transparent;
+    border: none;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--blue);
+    cursor: pointer;
+    text-decoration: underline;
+    padding: 2px 4px;
+  }
+  .filter-popover-action:hover { color: var(--orange-deep); }
+  .filter-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13.5px;
+    color: var(--text);
+    line-height: 1.3;
+  }
+  .filter-row:hover { background: var(--bg-soft); }
+  .filter-row input { margin: 0; cursor: pointer; }
+
+  /* Mockup banner */
+  .mockup-ribbon {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    background: rgba(208, 56, 56, 0.95);
+    color: #fff;
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 10.5px;
+    font-weight: 800;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    padding: 6px 14px;
+    border-radius: 100px;
+    z-index: 200;
+    box-shadow: 0 6px 16px -6px rgba(208, 56, 56, 0.55);
+  }
+
+  /* Responsive */
+  @media (max-width: 1100px) {
+    .hero-stat { grid-template-columns: 1fr; gap: 18px; }
+    .hero-side { border-left: none; border-top: 1px solid var(--rule); padding-left: 0; padding-top: 18px; }
+    .bottom-grid { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 760px) {
+    .app { grid-template-columns: 0 1fr; }
+    .sidebar { display: none; }
+    .main { padding: 16px; }
+    .topbar { padding: 0 14px; }
+    .topbar-brand-env, .topbar-user-co { display: none; }
+    .hero-value { font-size: 40px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Mockup status ribbon -->
+<div class="mockup-ribbon">Design mockup &middot; not production</div>
+
+<div class="app">
+
+  <!-- ==================== TOP BAR ==================== -->
+  <header class="topbar">
+    <a href="#" class="topbar-brand">
+      <span class="topbar-brand-mark">RR</span>
+      <span class="topbar-brand-name">RapidReconciler</span>
+      <span class="topbar-brand-env">Acme &middot; USD/GBP</span>
+    </a>
+
+    <span class="topbar-spacer"></span>
+
+    <div class="topbar-actions">
+      <button class="topbar-action" title="Refresh data" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"></path><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"></path></svg>
+      </button>
+      <button class="topbar-action" title="Fullscreen" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"></path><path d="M21 8V5a2 2 0 0 0-2-2h-3"></path><path d="M3 16v3a2 2 0 0 0 2 2h3"></path><path d="M16 21h3a2 2 0 0 0 2-2v-3"></path></svg>
+      </button>
+      <button class="topbar-action" title="Notifications" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
+        <span class="badge"></span>
+      </button>
+      <button class="topbar-action" title="Help" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+      </button>
+    </div>
+
+    <div class="topbar-user">
+      <span class="topbar-user-avatar">E</span>
+      <span>
+        <span class="topbar-user-name">Welcome, Ed</span>
+        <span class="topbar-user-co">RR Test Server</span>
+      </span>
+    </div>
+  </header>
+
+  <!-- ==================== SIDEBAR ==================== -->
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <span class="sidebar-brand-mark">RR</span>
+      <span class="sidebar-brand-text">RapidReconciler</span>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-section-label">Main navigation</div>
+      <a href="#" class="sidebar-nav-item is-active">
+        <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"></path><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
+        <span class="sidebar-nav-text">Inventory</span>
+      </a>
+      <div class="sidebar-nav-children">
+        <a href="#" class="sidebar-nav-child is-active">Reconciliation</a>
+        <a href="#" class="sidebar-nav-child">Transactions</a>
+        <a href="#" class="sidebar-nav-child">As Of</a>
+        <a href="#" class="sidebar-nav-child">Roll Forward</a>
+        <a href="#" class="sidebar-nav-child">Integrity</a>
+      </div>
+      <a href="#" class="sidebar-nav-item">
+        <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+        <span class="sidebar-nav-text">In Transit</span>
+      </a>
+      <a href="#" class="sidebar-nav-item">
+        <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg>
+        <span class="sidebar-nav-text">PO Receipts</span>
+      </a>
+      <a href="#" class="sidebar-nav-item">
+        <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+        <span class="sidebar-nav-text">Admin</span>
+      </a>
+      <a href="#" class="sidebar-nav-item">
+        <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10v6M2 10l10-5 10 5-10 5z"></path><path d="M6 12v5c3 3 9 3 12 0v-5"></path></svg>
+        <span class="sidebar-nav-text">University</span>
+      </a>
+    </div>
+
+    <!-- Persistent global filters. These selections are shared
+         across every page in the app (mirrors the live SPA
+         behavior where currency/company/etc. persist between
+         Reconciliation, Transactions, As Of, etc.) and survive
+         page reloads via localStorage. -->
+    <div class="sidebar-filters" id="js-sidebar-filters">
+      <div class="sidebar-filters-head">
+        <span class="sidebar-filters-label">Active filters</span>
+        <button class="sidebar-filters-clear" type="button" id="js-filter-clear">Reset</button>
+      </div>
+      <button class="sidebar-filter" type="button" data-filter="currencies">
+        <span class="sidebar-filter-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+        </span>
+        <span class="sidebar-filter-dot" aria-hidden="true"></span>
+        <span class="sidebar-filter-text">Currency</span>
+        <span class="sidebar-filter-status">All</span>
+      </button>
+      <button class="sidebar-filter" type="button" data-filter="companies">
+        <span class="sidebar-filter-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M3 9h18"></path><path d="M9 21V9"></path></svg>
+        </span>
+        <span class="sidebar-filter-dot" aria-hidden="true"></span>
+        <span class="sidebar-filter-text">Company</span>
+        <span class="sidebar-filter-status">All</span>
+      </button>
+      <button class="sidebar-filter" type="button" data-filter="businessUnits">
+        <span class="sidebar-filter-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h7v7H3z"></path><path d="M14 3h7v7h-7z"></path><path d="M14 14h7v7h-7z"></path><path d="M3 14h7v7H3z"></path></svg>
+        </span>
+        <span class="sidebar-filter-dot" aria-hidden="true"></span>
+        <span class="sidebar-filter-text">Business Unit</span>
+        <span class="sidebar-filter-status">All</span>
+      </button>
+      <button class="sidebar-filter" type="button" data-filter="objects">
+        <span class="sidebar-filter-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+        </span>
+        <span class="sidebar-filter-dot" aria-hidden="true"></span>
+        <span class="sidebar-filter-text">Inventory account</span>
+        <span class="sidebar-filter-status">All</span>
+      </button>
+      <button class="sidebar-filter" type="button" data-filter="subsidiaries">
+        <span class="sidebar-filter-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><circle cx="4.5" cy="6" r="2"></circle><circle cx="19.5" cy="6" r="2"></circle><circle cx="4.5" cy="18" r="2"></circle><circle cx="19.5" cy="18" r="2"></circle><line x1="12" y1="9" x2="4.5" y2="8"></line><line x1="12" y1="9" x2="19.5" y2="8"></line><line x1="12" y1="15" x2="4.5" y2="16"></line><line x1="12" y1="15" x2="19.5" y2="16"></line></svg>
+        </span>
+        <span class="sidebar-filter-dot" aria-hidden="true"></span>
+        <span class="sidebar-filter-text">Subsidiary</span>
+        <span class="sidebar-filter-status">All</span>
+      </button>
+    </div>
+
+    <div class="sidebar-bottom">
+      <span class="sidebar-bottom-pulse"></span>
+      <span class="sidebar-bottom-text">All systems operational</span>
+    </div>
+  </aside>
+
+  <!-- ==================== MAIN ==================== -->
+  <main class="main">
+
+    <!-- Page header -->
+    <div class="page-header">
+      <div class="page-header-text">
+        <div class="breadcrumb">
+          <a href="#">Inventory</a>
+          <span class="sep">/</span>
+          <span>Reconciliation</span>
+        </div>
+        <h1 class="page-title">Inventory Reconciliation</h1>
+        <div class="page-sub" id="js-page-sub">Period ending <strong>August 27, 2016</strong> &middot; 2 companies, 5 inventory accounts</div>
+      </div>
+      <div class="page-actions">
+        <!-- Period selector (module-scoped: this control disappears
+             on pages that aren't period-bounded, e.g. PO Receipts) -->
+        <button class="period-pill" type="button" id="js-period-btn" aria-haspopup="listbox">
+          <svg class="period-pill-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="3" y="4" width="18" height="18" rx="2"></rect>
+            <line x1="16" y1="2" x2="16" y2="6"></line>
+            <line x1="8" y1="2" x2="8" y2="6"></line>
+            <line x1="3" y1="10" x2="21" y2="10"></line>
+          </svg>
+          <span class="period-pill-label">Period</span>
+          <span id="js-period-display">Aug 27, 2016</span>
+          <svg class="period-pill-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
+        </button>
+        <!-- Period dropdown -- populated from PERIOD_FILES in the script -->
+        <div class="period-popover" id="js-period-popover" hidden></div>
+
+        <button class="btn btn-ghost" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+          Import JDE data
+        </button>
+        <button class="btn btn-secondary" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
+          Journal Entry
+        </button>
+        <button class="btn btn-primary" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"></path><line x1="12" y1="6" x2="12" y2="8"></line><line x1="12" y1="16" x2="12" y2="18"></line></svg>
+          Audit Report
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Health strip (module-scoped only; System Status moved to
+         the sidebar bottom pulse because it's the same value app-
+         wide). This strip carries just the Inventory Validation
+         dot, which refreshes when this module loads. -->
+    <div class="health-strip">
+      <div class="health-item">
+        <span class="health-dot"></span>
+        <span class="health-label">Inventory Validation</span>
+        <span class="health-meta">Roll-forward clean &middot; verified at load</span>
+      </div>
+      <span class="health-spacer"></span>
+      <span class="health-refresh">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+        Last refreshed 4 min ago
+      </span>
+    </div>
+
+    <!-- Active-filter summary banner. Hidden by default; .is-on
+         class added when any filter group is narrowed below "all". -->
+    <div class="filter-summary" id="js-filter-summary" role="status" aria-live="polite">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon></svg>
+      <span class="filter-summary-text" id="js-filter-summary-text">Filters are narrowing this view.</span>
+      <button class="filter-summary-reset" type="button" id="js-filter-summary-reset">Reset</button>
+    </div>
+
+    <!-- Filter dropdown popover (shared, repositioned per sidebar row) -->
+    <div class="filter-popover" id="js-filter-popover" hidden></div>
+
+    <!-- Hero stat -->
+    <section class="hero-stat">
+      <div class="hero-main">
+        <div class="hero-label">Out of balance &middot; this period</div>
+        <div class="hero-value" id="js-hero-value">$13,203.53</div>
+        <div class="hero-sub" id="js-hero-sub">
+          GL balance <strong>$18,724,064.22</strong> minus perpetual balance <strong>$18,710,860.69</strong>.
+        </div>
+      </div>
+      <div class="hero-side">
+        <div class="hero-side-label">GL Balance</div>
+        <div class="hero-side-value" id="js-gl-balance">$18,724,064.22</div>
+        <div class="hero-side-delta" id="js-gl-delta">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+          Steady at $18.7M
+        </div>
+      </div>
+      <div class="hero-side">
+        <div class="hero-side-label">Perpetual Balance</div>
+        <div class="hero-side-value" id="js-perp-balance">$18,710,860.69</div>
+        <div class="hero-side-delta" id="js-perp-delta">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+          Steady at $18.7M
+        </div>
+      </div>
+    </section>
+
+    <!-- Variance math story -->
+    <section class="variance-panel">
+      <div class="panel-head">
+        <div class="panel-title">Variance breakdown</div>
+        <a href="#" class="panel-help">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+          Watch the explainer
+        </a>
+      </div>
+      <div class="variance-flow">
+
+        <div class="variance-step" data-component="carryForward">
+          <div class="variance-step-label">Carry forward</div>
+          <div class="variance-step-value">&nbsp;</div>
+        </div>
+
+        <div class="variance-op">+</div>
+
+        <div class="variance-step" data-component="glBatches">
+          <div class="variance-step-label">GL batches</div>
+          <div class="variance-step-value">&nbsp;</div>
+          <button class="variance-step-action" type="button" title="Preview">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
+          </button>
+        </div>
+
+        <div class="variance-op">+</div>
+
+        <div class="variance-step" data-component="endOfDay">
+          <div class="variance-step-label">End of day</div>
+          <div class="variance-step-value">&nbsp;</div>
+          <button class="variance-step-action" type="button" title="Preview">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
+          </button>
+        </div>
+
+        <div class="variance-op">+</div>
+
+        <div class="variance-step" data-component="transactions">
+          <div class="variance-step-label">Transactions</div>
+          <div class="variance-step-value">&nbsp;</div>
+          <button class="variance-step-action" type="button" title="Open Transactions">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="7" y1="17" x2="17" y2="7"></line><polyline points="7 7 17 7 17 17"></polyline></svg>
+          </button>
+        </div>
+
+        <div class="variance-op">+</div>
+
+        <div class="variance-step" data-component="cardex">
+          <div class="variance-step-label">Cardex</div>
+          <div class="variance-step-value">&nbsp;</div>
+          <button class="variance-step-action" type="button" title="Preview">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
+          </button>
+        </div>
+
+        <div class="variance-op">+</div>
+
+        <div class="variance-step" data-component="manualJournalEntries">
+          <div class="variance-step-label">Manual JEs</div>
+          <div class="variance-step-value">&nbsp;</div>
+          <button class="variance-step-action" type="button" title="Preview">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
+          </button>
+        </div>
+
+        <div class="variance-equals">=</div>
+
+        <div class="variance-total">
+          <div class="variance-total-label">Unreconciled variance</div>
+          <div class="variance-total-value" id="js-variance-total">&nbsp;</div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- Bottom grid: donut + history -->
+    <section class="bottom-grid">
+
+      <div class="chart-card">
+        <div class="chart-head">
+          <div class="panel-title">Out of balance &middot; trailing 12 closes</div>
+          <div class="chart-legend">
+            <span class="legend-chip"><span class="legend-dot" style="background: var(--orange);"></span>Out of balance</span>
+          </div>
+        </div>
+        <div class="chart-history-wrap">
+          <svg class="chart-history-svg" id="js-history-svg" viewBox="0 0 600 240" preserveAspectRatio="none" aria-hidden="true">
+            <!-- Zero line -->
+            <line x1="40" y1="100" x2="600" y2="100" stroke="var(--rule-strong)" stroke-width="1" stroke-dasharray="3 3"/>
+            <!-- Gridlines -->
+            <line x1="40" y1="40" x2="600" y2="40"  stroke="var(--rule)" stroke-width="1"/>
+            <line x1="40" y1="160" x2="600" y2="160" stroke="var(--rule)" stroke-width="1"/>
+            <line x1="40" y1="220" x2="600" y2="220" stroke="var(--rule)" stroke-width="1"/>
+            <!-- Y axis labels -->
+            <text x="36" y="42"  font-family="Open Sans" font-size="10" fill="var(--text-muted)" text-anchor="end">+20k</text>
+            <text x="36" y="102" font-family="Open Sans" font-size="10" fill="var(--text-muted)" text-anchor="end">0</text>
+            <text x="36" y="162" font-family="Open Sans" font-size="10" fill="var(--text-muted)" text-anchor="end">-20k</text>
+            <text x="36" y="222" font-family="Open Sans" font-size="10" fill="var(--text-muted)" text-anchor="end">-40k</text>
+
+            <!-- Line path through 12 periods (matches the screenshot shape) -->
+            <polyline fill="none" stroke="var(--orange)" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round"
+                      points="60,100 105,100 145,100 190,180 230,100 275,100 320,90 365,100 405,100 450,100 495,200 540,100 585,60"/>
+            <!-- Point markers -->
+            <g fill="#fff" stroke="var(--orange)" stroke-width="2">
+              <circle cx="60"  cy="100" r="3.5"/>
+              <circle cx="105" cy="100" r="3.5"/>
+              <circle cx="145" cy="100" r="3.5"/>
+              <circle cx="190" cy="180" r="3.5"/>
+              <circle cx="230" cy="100" r="3.5"/>
+              <circle cx="275" cy="100" r="3.5"/>
+              <circle cx="320" cy="90"  r="3.5"/>
+              <circle cx="365" cy="100" r="3.5"/>
+              <circle cx="405" cy="100" r="3.5"/>
+              <circle cx="450" cy="100" r="3.5"/>
+              <circle cx="495" cy="200" r="3.5"/>
+              <circle cx="540" cy="100" r="3.5"/>
+              <circle cx="585" cy="60"  r="4.5" stroke-width="3"/>
+            </g>
+            <!-- X axis labels (subset) -->
+            <text x="60"  y="234" font-family="Open Sans" font-size="9.5" fill="var(--text-muted)" text-anchor="middle">Aug 15</text>
+            <text x="190" y="234" font-family="Open Sans" font-size="9.5" fill="var(--text-muted)" text-anchor="middle">Nov 15</text>
+            <text x="320" y="234" font-family="Open Sans" font-size="9.5" fill="var(--text-muted)" text-anchor="middle">Feb 16</text>
+            <text x="450" y="234" font-family="Open Sans" font-size="9.5" fill="var(--text-muted)" text-anchor="middle">May 16</text>
+            <text x="585" y="234" font-family="Open Sans" font-size="9.5" fill="var(--text-muted)" text-anchor="middle">Aug 16</text>
+          </svg>
+        </div>
+        <div class="history-stats">
+          <div>
+            <div class="history-stat-label">Current</div>
+            <div class="history-stat-value" id="js-hist-current">&nbsp;</div>
+          </div>
+          <div>
+            <div class="history-stat-label">12-mo high</div>
+            <div class="history-stat-value" id="js-hist-high">&nbsp;</div>
+          </div>
+          <div>
+            <div class="history-stat-label">12-mo low</div>
+            <div class="history-stat-value" id="js-hist-low">&nbsp;</div>
+          </div>
+          <div>
+            <div class="history-stat-label">Avg variance</div>
+            <div class="history-stat-value" id="js-hist-avg">&nbsp;</div>
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+  </main>
+
+</div>
+
+<!-- Floating help button (mockup-only; no behavior) -->
+<button class="help-fab" type="button" title="University &middot; context help" aria-label="Help">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10v6M2 10l10-5 10 5-10 5z"></path><path d="M6 12v5c3 3 9 3 12 0v-5"></path></svg>
+</button>
+
+<!-- ============================================================
+     RUNTIME: loads RRV8/data/reconciliation-<period>.json, renders
+     all DOM bound to the response. Wires the period selector
+     (swaps snapshots) and filter chips (re-renders from in-memory
+     filtered selections). No framework, no build step. The data
+     file format mirrors the V8 proposed API shape in API.md.
+     ============================================================ -->
+<script>
+(function () {
+  'use strict';
+
+  // Period available in /data/ today. As more snapshots get captured
+  // from the live SPA they're added here; the period dropdown shows
+  // every entry and grays-out the ones missing a data file.
+  const PERIOD_FILES = [
+    { period: '2016-08-27', display: 'Aug 27, 2016', file: 'data/reconciliation-2016-08-27.json' },
+    { period: '2016-07-30', display: 'Jul 30, 2016', file: null },
+    { period: '2016-07-02', display: 'Jul 2, 2016',  file: null },
+    { period: '2016-05-28', display: 'May 28, 2016', file: null },
+    { period: '2016-04-30', display: 'Apr 30, 2016', file: null },
+    { period: '2016-04-02', display: 'Apr 2, 2016',  file: null },
+    { period: '2016-02-27', display: 'Feb 27, 2016', file: null },
+    { period: '2016-01-30', display: 'Jan 30, 2016', file: null },
+    { period: '2015-12-31', display: 'Dec 31, 2015', file: null },
+    { period: '2015-11-28', display: 'Nov 28, 2015', file: null },
+    { period: '2015-10-31', display: 'Oct 31, 2015', file: null },
+    { period: '2015-10-03', display: 'Oct 3, 2015',  file: null },
+    { period: '2015-08-29', display: 'Aug 29, 2015', file: null }
+  ];
+
+  // In-memory state. Filter selections are sets of selected IDs.
+  // Hydrated from localStorage on init so they survive reloads and
+  // future page navigation (mirrors the persistence the live SPA
+  // already has). On first ever load the sets are empty and get
+  // populated with the full ID list from the loaded snapshot.
+  const LS_KEY        = 'rrv8-filter-selections-v1';
+  let currentData     = null;
+  let currentPeriod   = '2016-08-27';
+  const selected = {
+    currencies:    new Set(),
+    companies:     new Set(),
+    businessUnits: new Set(),
+    objects:       new Set(),
+    subsidiaries:  new Set()
+  };
+  // Group → user-facing label for the active-filter summary banner.
+  const GROUP_LABELS = {
+    currencies:    'currency',
+    companies:     'company',
+    businessUnits: 'business unit',
+    objects:       'inventory account',
+    subsidiaries:  'subsidiary'
+  };
+
+  function loadSelectionsFromStorage() {
+    try {
+      const raw = localStorage.getItem(LS_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      Object.keys(selected).forEach(group => {
+        if (Array.isArray(parsed[group])) {
+          selected[group] = new Set(parsed[group]);
+        }
+      });
+    } catch (_) { /* ignore storage errors */ }
+  }
+  function saveSelectionsToStorage() {
+    try {
+      const out = {};
+      Object.keys(selected).forEach(group => { out[group] = [...selected[group]]; });
+      localStorage.setItem(LS_KEY, JSON.stringify(out));
+    } catch (_) { /* ignore */ }
+  }
+
+  // ---------- Formatters ----------
+  function fmtMoney(v) {
+    if (v === null || v === undefined || isNaN(v)) return '—';
+    const sign = v < 0 ? '(' : '';
+    const close = v < 0 ? ')' : '';
+    const n = Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return sign + '$' + n + close;
+  }
+  function fmtVariance(v) {
+    // Variance step values don't carry a leading $ (matches the live RR UI).
+    if (v === null || v === undefined || isNaN(v)) return '—';
+    const sign = v < 0 ? '(' : '';
+    const close = v < 0 ? ')' : '';
+    const n = Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return sign + n + close;
+  }
+  function fmtShortMoney(v) {
+    if (v === null || v === undefined || isNaN(v)) return '—';
+    const abs = Math.abs(v);
+    let unit = '', scale = 1;
+    if (abs >= 1e6) { unit = 'M'; scale = 1e6; }
+    else if (abs >= 1e3) { unit = 'K'; scale = 1e3; }
+    const formatted = (abs / scale).toFixed(scale === 1 ? 0 : 1);
+    return (v < 0 ? '-$' : '$') + formatted + unit;
+  }
+
+  // ---------- Render ----------
+  // Compute a filtered view of the snapshot by aggregating the
+  // per-company breakdown rows that match the current selection.
+  // The first-pass wiring filters on currency + company; the other
+  // three filters (business unit, inventory account, subsidiary)
+  // proportionally narrow the totals via the snapshot's optional
+  // shareByXxx weights. A real backend would replace this with a
+  // single API call that returns the filtered summary directly.
+  function computeFilteredView(data) {
+    // Default to full snapshot if no breakdown is present.
+    const fallback = {
+      valuation: data.summary.valuation,
+      variance:  data.summary.variance,
+      companyCount: (data.filter.companies || []).length,
+      accountCount: (data.filter.objects   || []).length,
+      narrowed: false
+    };
+    const breakdown = data.breakdown && data.breakdown.byCompany;
+    if (!Array.isArray(breakdown) || breakdown.length === 0) return fallback;
+
+    // 1. Pick companies that match BOTH the currency filter
+    //    (via parentId) AND the company filter directly.
+    const allCurrencies = new Set((data.filter.currencies || []).map(x => x.id));
+    const allCompanies  = new Set((data.filter.companies  || []).map(x => x.id));
+    const selCurrencies = selected.currencies.size ? selected.currencies : allCurrencies;
+    const selCompanies  = selected.companies.size  ? selected.companies  : allCompanies;
+
+    const matched = breakdown.filter(row => {
+      const co = (data.filter.companies || []).find(c => c.id === row.companyId);
+      const currencyId = co ? co.parentId : null;
+      return selCompanies.has(row.companyId) && (!currencyId || selCurrencies.has(currencyId));
+    });
+
+    if (matched.length === 0) {
+      return {
+        valuation: { glBalance: 0, perpetualBalance: 0, outOfBalance: 0 },
+        variance:  zeroVariance(data.summary.variance),
+        companyCount: 0,
+        accountCount: 0,
+        narrowed: true
+      };
+    }
+
+    // 2. Aggregate valuation + variance across matched companies.
+    let gl = 0, perp = 0;
+    const variance = zeroVariance(data.summary.variance);
+    matched.forEach(row => {
+      gl   += row.glBalance        || 0;
+      perp += row.perpetualBalance || 0;
+      Object.keys(variance).forEach(key => {
+        variance[key] += (row.variance && row.variance[key]) || 0;
+      });
+    });
+
+    // 3. Apply proportional weights for the remaining three filter
+    //    groups. Each shareBy* map says "if this id were the only
+    //    one selected, this is the fraction of the matched total
+    //    it would represent." Summing the selected shares gives
+    //    the multiplier. If no shareBy data exists for a group,
+    //    the filter is treated as scope-only (chip status updates
+    //    but the numbers don't change).
+    function shareFor(group, shareKey) {
+      const totalIds = (data.filter[group] || []).map(x => x.id);
+      const map = (data.breakdown && data.breakdown[shareKey]) || null;
+      if (!map || totalIds.length === 0) return 1;
+      const sel = selected[group].size ? selected[group] : new Set(totalIds);
+      if (sel.size === totalIds.length) return 1;
+      let share = 0;
+      sel.forEach(id => { share += (map[id] || 0); });
+      return Math.max(0, Math.min(1, share));
+    }
+    const buShare  = shareFor('businessUnits', 'shareByBusinessUnit');
+    const objShare = shareFor('objects',       'shareByObject');
+    const subShare = shareFor('subsidiaries',  'shareBySubsidiary');
+    const multiplier = buShare * objShare * subShare;
+
+    gl   *= multiplier;
+    perp *= multiplier;
+    Object.keys(variance).forEach(key => { variance[key] *= multiplier; });
+
+    return {
+      valuation: { glBalance: gl, perpetualBalance: perp, outOfBalance: gl - perp },
+      variance:  variance,
+      companyCount: matched.length,
+      accountCount: selected.objects.size || (data.filter.objects || []).length,
+      narrowed: anyGroupNarrowed(data)
+    };
+  }
+
+  function zeroVariance(template) {
+    const out = {};
+    Object.keys(template).forEach(k => { out[k] = 0; });
+    return out;
+  }
+
+  function anyGroupNarrowed(data) {
+    return Object.keys(selected).some(group => {
+      const total = (data.filter[group] || []).length;
+      return total > 0 && selected[group].size < total;
+    });
+  }
+
+  function renderAll(data) {
+    if (!data) return;
+
+    // Period button
+    const periodMeta = PERIOD_FILES.find(p => p.period === currentPeriod);
+    document.getElementById('js-period-display').textContent = periodMeta ? periodMeta.display : currentPeriod;
+
+    // Hydrate filter selections from data if not already populated
+    initSelectionsIfEmpty(data);
+
+    // Compute the filtered view from current selections + breakdown
+    const view = computeFilteredView(data);
+
+    // Hero
+    const v = view.valuation;
+    document.getElementById('js-hero-value').textContent = fmtMoney(v.outOfBalance);
+    document.getElementById('js-hero-sub').innerHTML =
+      'GL balance <strong>' + fmtMoney(v.glBalance) +
+      '</strong> minus perpetual balance <strong>' + fmtMoney(v.perpetualBalance) + '</strong>.';
+    document.getElementById('js-gl-balance').textContent   = fmtMoney(v.glBalance);
+    document.getElementById('js-perp-balance').textContent = fmtMoney(v.perpetualBalance);
+
+    // Variance step cards
+    const vc = view.variance;
+    document.querySelectorAll('.variance-step[data-component]').forEach(step => {
+      const key = step.getAttribute('data-component');
+      const raw = vc[key];
+      const value = (raw && typeof raw === 'object') ? raw.value : raw;
+      const valEl = step.querySelector('.variance-step-value');
+      valEl.textContent = fmtVariance(value);
+      valEl.classList.toggle('is-negative', (value || 0) < 0);
+    });
+
+    // Total
+    document.getElementById('js-variance-total').textContent = fmtMoney(vc.unreconciledVariance);
+
+    // Page subtitle — reflect filter narrowing
+    const sub = document.getElementById('js-page-sub');
+    if (sub && periodMeta) {
+      const ends = new Date(periodMeta.period + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+      sub.innerHTML = 'Period ending <strong>' + ends + '</strong> &middot; ' +
+        view.companyCount + ' ' + (view.companyCount === 1 ? 'company' : 'companies') + ', ' +
+        view.accountCount + ' inventory ' + (view.accountCount === 1 ? 'account' : 'accounts');
+    }
+
+    // History chart + stats (aggregate per period; unaffected by
+    // filters because we don't have per-filter historical slices)
+    renderHistory(data.barChart || []);
+
+    // Sidebar filter row state + active-filter banner
+    renderFilterRows(data);
+    renderFilterSummary(data);
+
+    // Health strip validation dot color
+    renderValidation(data.validation);
+
+    // Refresh popover content
+    renderPeriodPopover();
+  }
+
+  function renderHistory(points) {
+    if (!points.length) return;
+    const W = 600, H = 240, MARGIN_L = 40, MARGIN_R = 15;
+    const minY = Math.min(0, ...points.map(p => p.value));
+    const maxY = Math.max(0, ...points.map(p => p.value));
+    const rangeY = Math.max(maxY - minY, 1);
+    const span = W - MARGIN_L - MARGIN_R;
+    const dx = points.length > 1 ? span / (points.length - 1) : 0;
+
+    function px(i) { return MARGIN_L + (i * dx); }
+    function py(v) {
+      // y=0 line at v=0; flips to plot upwards for positive
+      const norm = (v - minY) / rangeY; // 0..1 where 0=bottom 1=top
+      return (H - 20) - norm * (H - 40); // leave room for x-axis labels at bottom
+    }
+    const zeroY = py(0);
+
+    // Build polyline
+    const polylinePoints = points.map((p, i) => px(i).toFixed(1) + ',' + py(p.value).toFixed(1)).join(' ');
+
+    // Build SVG content
+    const svg = document.getElementById('js-history-svg');
+    const fmt = (s) => new Date(s + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+    const xLabelEvery = Math.max(1, Math.floor(points.length / 5));
+
+    let parts = [];
+    // Zero line
+    parts.push('<line x1="' + MARGIN_L + '" y1="' + zeroY.toFixed(1) + '" x2="' + (W - MARGIN_R) + '" y2="' + zeroY.toFixed(1) + '" stroke="var(--rule-strong)" stroke-width="1" stroke-dasharray="3 3"/>');
+    // Y-axis labels (just min, zero, max)
+    parts.push('<text x="' + (MARGIN_L - 4) + '" y="' + (py(maxY) + 4) + '" font-family="Open Sans" font-size="10" fill="var(--text-muted)" text-anchor="end">' + (maxY >= 1000 ? Math.round(maxY/1000) + 'k' : maxY.toFixed(0)) + '</text>');
+    parts.push('<text x="' + (MARGIN_L - 4) + '" y="' + (zeroY + 4)    + '" font-family="Open Sans" font-size="10" fill="var(--text-muted)" text-anchor="end">0</text>');
+    parts.push('<text x="' + (MARGIN_L - 4) + '" y="' + (py(minY) + 4) + '" font-family="Open Sans" font-size="10" fill="var(--text-muted)" text-anchor="end">' + (minY <= -1000 ? Math.round(minY/1000) + 'k' : minY.toFixed(0)) + '</text>');
+    // Polyline
+    parts.push('<polyline fill="none" stroke="var(--orange)" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round" points="' + polylinePoints + '"/>');
+    // Point markers
+    parts.push('<g fill="#fff" stroke="var(--orange)" stroke-width="2">');
+    points.forEach((p, i) => {
+      const r = (i === points.length - 1) ? 4.5 : 3.5;
+      parts.push('<circle cx="' + px(i).toFixed(1) + '" cy="' + py(p.value).toFixed(1) + '" r="' + r + '"' + (r === 4.5 ? ' stroke-width="3"' : '') + '><title>' + p.period + ': ' + fmtMoney(p.value) + '</title></circle>');
+    });
+    parts.push('</g>');
+    // X-axis labels (subset)
+    points.forEach((p, i) => {
+      if (i % xLabelEvery === 0 || i === points.length - 1) {
+        parts.push('<text x="' + px(i).toFixed(1) + '" y="' + (H - 6) + '" font-family="Open Sans" font-size="9.5" fill="var(--text-muted)" text-anchor="middle">' + fmt(p.period) + '</text>');
+      }
+    });
+    svg.innerHTML = parts.join('');
+
+    // History stats
+    const current = points[points.length - 1].value;
+    const high    = Math.max(...points.map(p => p.value));
+    const low     = Math.min(...points.map(p => p.value));
+    const avg     = points.reduce((a, p) => a + p.value, 0) / points.length;
+    const curEl   = document.getElementById('js-hist-current');
+    const highEl  = document.getElementById('js-hist-high');
+    const lowEl   = document.getElementById('js-hist-low');
+    const avgEl   = document.getElementById('js-hist-avg');
+    curEl.textContent  = fmtMoney(current);
+    highEl.textContent = fmtMoney(high);
+    lowEl.textContent  = fmtMoney(low);
+    avgEl.textContent  = fmtMoney(avg);
+    curEl.classList.toggle('is-red',  current < 0);
+    curEl.classList.toggle('is-green', current >= 0 && current < 1);
+    highEl.classList.toggle('is-green', high >= 0);
+    highEl.classList.toggle('is-red',  high < 0);
+    lowEl.classList.toggle('is-red',  low < 0);
+    lowEl.classList.toggle('is-green', low >= 0 && low < 1);
+    avgEl.classList.toggle('is-red',  avg < 0);
+  }
+
+  function renderValidation(validation) {
+    if (!validation) return;
+    const dots = document.querySelectorAll('.health-dot');
+    dots.forEach(d => {
+      d.classList.remove('is-warn', 'is-error');
+      if (validation.color === 'warning')      d.classList.add('is-warn');
+      else if (validation.color === 'danger' || validation.color === 'error') d.classList.add('is-error');
+    });
+  }
+
+  // ---------- Filter selections ----------
+  // Populate any group that's still empty after localStorage hydration.
+  // If a group had a stored selection that referenced ids that no
+  // longer exist in this snapshot, drop the dead ids so the chip
+  // status stays accurate.
+  function initSelectionsIfEmpty(data) {
+    Object.keys(selected).forEach(group => {
+      const allIds = (data.filter[group] || []).map(item => item.id);
+      const allSet = new Set(allIds);
+      // Remove stored ids that no longer appear in this snapshot
+      [...selected[group]].forEach(id => { if (!allSet.has(id)) selected[group].delete(id); });
+      // If still empty after that, seed with the full id list
+      if (selected[group].size === 0) {
+        allIds.forEach(id => selected[group].add(id));
+      }
+    });
+  }
+
+  function renderFilterRows(data) {
+    document.querySelectorAll('.sidebar-filter[data-filter]').forEach(row => {
+      const group = row.getAttribute('data-filter');
+      const total = (data.filter[group] || []).length;
+      const sel = selected[group].size;
+      const statusEl = row.querySelector('.sidebar-filter-status');
+      const narrowed = total > 0 && sel < total;
+      row.classList.toggle('is-active', narrowed);
+      if (!statusEl) return;
+      if (total === 0)        statusEl.textContent = '—';
+      else if (sel === total) statusEl.textContent = 'All';
+      else if (sel === 0)     statusEl.textContent = 'None';
+      else                    statusEl.textContent = sel + ' / ' + total;
+    });
+  }
+
+  function renderFilterSummary(data) {
+    const banner = document.getElementById('js-filter-summary');
+    const text   = document.getElementById('js-filter-summary-text');
+    if (!banner || !text) return;
+    const narrowedGroups = Object.keys(selected).filter(group => {
+      const total = (data.filter[group] || []).length;
+      return total > 0 && selected[group].size < total;
+    });
+    if (narrowedGroups.length === 0) {
+      banner.classList.remove('is-on');
+      return;
+    }
+    const parts = narrowedGroups.map(group => {
+      const total = (data.filter[group] || []).length;
+      const sel = selected[group].size;
+      return '<strong>' + sel + ' of ' + total + '</strong> ' + GROUP_LABELS[group] + (sel === 1 ? '' : 's');
+    });
+    text.innerHTML = 'Filtered: ' + parts.join(' &middot; ');
+    banner.classList.add('is-on');
+  }
+
+  // Re-render only the bits that change when a selection toggles.
+  // Used by popover checkbox handlers + the reset buttons.
+  function onSelectionChanged() {
+    if (!currentData) return;
+    saveSelectionsToStorage();
+    renderFilterRows(currentData);
+    renderFilterSummary(currentData);
+    // Recompute hero / variance / page-sub from the new filter view
+    const view = computeFilteredView(currentData);
+    const v = view.valuation;
+    document.getElementById('js-hero-value').textContent = fmtMoney(v.outOfBalance);
+    document.getElementById('js-hero-sub').innerHTML =
+      'GL balance <strong>' + fmtMoney(v.glBalance) +
+      '</strong> minus perpetual balance <strong>' + fmtMoney(v.perpetualBalance) + '</strong>.';
+    document.getElementById('js-gl-balance').textContent   = fmtMoney(v.glBalance);
+    document.getElementById('js-perp-balance').textContent = fmtMoney(v.perpetualBalance);
+    const vc = view.variance;
+    document.querySelectorAll('.variance-step[data-component]').forEach(step => {
+      const key = step.getAttribute('data-component');
+      const raw = vc[key];
+      const value = (raw && typeof raw === 'object') ? raw.value : raw;
+      const valEl = step.querySelector('.variance-step-value');
+      valEl.textContent = fmtVariance(value);
+      valEl.classList.toggle('is-negative', (value || 0) < 0);
+    });
+    document.getElementById('js-variance-total').textContent = fmtMoney(vc.unreconciledVariance);
+    const sub = document.getElementById('js-page-sub');
+    const periodMeta = PERIOD_FILES.find(p => p.period === currentPeriod);
+    if (sub && periodMeta) {
+      const ends = new Date(periodMeta.period + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+      sub.innerHTML = 'Period ending <strong>' + ends + '</strong> &middot; ' +
+        view.companyCount + ' ' + (view.companyCount === 1 ? 'company' : 'companies') + ', ' +
+        view.accountCount + ' inventory ' + (view.accountCount === 1 ? 'account' : 'accounts');
+    }
+  }
+
+  // ---------- Period popover ----------
+  function renderPeriodPopover() {
+    const pop = document.getElementById('js-period-popover');
+    pop.innerHTML = '';
+    PERIOD_FILES.forEach(p => {
+      const btn = document.createElement('button');
+      btn.className = 'period-item' + (p.period === currentPeriod ? ' is-current' : '');
+      btn.type = 'button';
+      btn.textContent = p.display + (p.file ? '' : '  — not captured');
+      btn.disabled = !p.file;
+      btn.style.opacity = p.file ? '1' : '0.55';
+      btn.style.cursor = p.file ? 'pointer' : 'not-allowed';
+      btn.addEventListener('click', () => {
+        if (!p.file) return;
+        loadPeriod(p.period, p.file);
+        hidePopovers();
+      });
+      pop.appendChild(btn);
+    });
+  }
+
+  // Position helper. Period popover anchors below its button (standard
+  // dropdown). Filter popover anchors to the RIGHT of the sidebar row
+  // that opened it, with a caret pointing back at the row, since the
+  // sidebar lives along the left edge of the viewport.
+  function positionPopover(popoverEl, triggerEl, opts) {
+    opts = opts || {};
+    const r = triggerEl.getBoundingClientRect();
+    if (opts.anchor === 'right') {
+      // Anchor against the sidebar's right edge so the popover
+      // doesn't slide as the sidebar collapses/expands.
+      const sidebar = document.querySelector('.sidebar');
+      const sidebarRight = sidebar ? sidebar.getBoundingClientRect().right : (r.right);
+      popoverEl.style.left = (sidebarRight + 12) + 'px';
+      popoverEl.style.top  = Math.max(8, r.top) + 'px';
+      // Caret aligned with the vertical center of the trigger row
+      popoverEl.style.setProperty('--caret-top', Math.max(8, (r.top + r.height/2) - parseFloat(popoverEl.style.top) - 6) + 'px');
+      popoverEl.classList.add('has-caret');
+    } else {
+      popoverEl.style.top = (r.bottom + 6) + 'px';
+      popoverEl.style.left = r.left + 'px';
+      popoverEl.classList.remove('has-caret');
+    }
+  }
+
+  function hidePopovers() {
+    document.getElementById('js-period-popover').hidden = true;
+    const fp = document.getElementById('js-filter-popover');
+    fp.hidden = true;
+    fp.classList.remove('has-caret');
+    document.body.classList.remove('is-pinned');
+  }
+
+  document.getElementById('js-period-btn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const pop = document.getElementById('js-period-popover');
+    if (!pop.hidden) { hidePopovers(); return; }
+    hidePopovers();
+    positionPopover(pop, e.currentTarget);
+    pop.hidden = false;
+  });
+
+  // ---------- Filter popover ----------
+  function openFilterPopover(triggerRow) {
+    const group = triggerRow.getAttribute('data-filter');
+    const items = currentData.filter[group] || [];
+    const sel = selected[group];
+    const pop = document.getElementById('js-filter-popover');
+    pop.innerHTML = '';
+
+    // Head
+    const head = document.createElement('div');
+    head.className = 'filter-popover-head';
+    const title = document.createElement('span');
+    title.className = 'filter-popover-title';
+    const labelEl = triggerRow.querySelector('.sidebar-filter-text');
+    title.textContent = labelEl ? labelEl.textContent : group;
+    const actions = document.createElement('div');
+    actions.className = 'filter-popover-actions';
+    const selAll = document.createElement('button');
+    selAll.type = 'button';
+    selAll.className = 'filter-popover-action';
+    selAll.textContent = 'All';
+    selAll.addEventListener('click', () => {
+      items.forEach(it => sel.add(it.id));
+      drawRows();
+      onSelectionChanged();
+    });
+    const selNone = document.createElement('button');
+    selNone.type = 'button';
+    selNone.className = 'filter-popover-action';
+    selNone.textContent = 'None';
+    selNone.addEventListener('click', () => {
+      sel.clear();
+      drawRows();
+      onSelectionChanged();
+    });
+    actions.appendChild(selAll);
+    actions.appendChild(selNone);
+    head.appendChild(title);
+    head.appendChild(actions);
+    pop.appendChild(head);
+
+    function drawRows() {
+      [...pop.querySelectorAll('.filter-row')].forEach(n => n.remove());
+      items.forEach(item => {
+        const row = document.createElement('label');
+        row.className = 'filter-row';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = sel.has(item.id);
+        cb.addEventListener('change', () => {
+          if (cb.checked) sel.add(item.id);
+          else sel.delete(item.id);
+          onSelectionChanged();
+        });
+        const labelText = document.createElement('span');
+        labelText.textContent = item.label;
+        row.appendChild(cb);
+        row.appendChild(labelText);
+        pop.appendChild(row);
+      });
+    }
+    drawRows();
+
+    positionPopover(pop, triggerRow, { anchor: 'right' });
+    pop.hidden = false;
+    // Keep the sidebar expanded for as long as the popover is open
+    document.body.classList.add('is-pinned');
+  }
+
+  document.querySelectorAll('.sidebar-filter[data-filter]').forEach(row => {
+    row.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const pop = document.getElementById('js-filter-popover');
+      if (!pop.hidden && pop.dataset.activeFilter === row.dataset.filter) {
+        hidePopovers();
+        return;
+      }
+      hidePopovers();
+      pop.dataset.activeFilter = row.dataset.filter;
+      openFilterPopover(row);
+    });
+  });
+
+  function resetAllFilters() {
+    if (!currentData) return;
+    Object.keys(selected).forEach(group => {
+      selected[group].clear();
+      (currentData.filter[group] || []).forEach(item => selected[group].add(item.id));
+    });
+    onSelectionChanged();
+    hidePopovers();
+  }
+  document.getElementById('js-filter-clear').addEventListener('click', (e) => {
+    e.stopPropagation();
+    resetAllFilters();
+  });
+  document.getElementById('js-filter-summary-reset').addEventListener('click', (e) => {
+    e.stopPropagation();
+    resetAllFilters();
+  });
+
+  // Clicks INSIDE either popover stay inside (without this, the
+  // document-level "click outside to close" handler fires when the
+  // user toggles a checkbox and the popover snaps shut on the first
+  // selection — breaking the multi-select flow).
+  document.getElementById('js-filter-popover').addEventListener('click', (e) => e.stopPropagation());
+  document.getElementById('js-period-popover').addEventListener('click', (e) => e.stopPropagation());
+  // Click outside to close
+  document.addEventListener('click', () => hidePopovers());
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') hidePopovers();
+  });
+
+  // ---------- Loader ----------
+  async function loadPeriod(period, file) {
+    try {
+      const res = await fetch(file, { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      currentData = data;
+      currentPeriod = period;
+      renderAll(data);
+    } catch (err) {
+      console.error('RRV8 load failed:', err);
+    }
+  }
+
+  // Hydrate persisted filter selections BEFORE the snapshot loads
+  // so initSelectionsIfEmpty leaves them alone if storage had them.
+  loadSelectionsFromStorage();
+
+  // Initial load
+  const initial = PERIOD_FILES.find(p => p.period === currentPeriod);
+  if (initial && initial.file) loadPeriod(initial.period, initial.file);
+
+  // Refresh button in the topbar → reload the current period's JSON
+  // so a "Refresh" matches the user's mental model (re-fetch the data,
+  // recompute filters). No spinner yet; the snapshot is small enough
+  // that the visual swap is effectively instant.
+  document.querySelectorAll('.topbar-action[title="Refresh data"]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const meta = PERIOD_FILES.find(p => p.period === currentPeriod);
+      if (meta && meta.file) loadPeriod(meta.period, meta.file);
+    });
+  });
+})();
+</script>
+
+</body>
+</html>
