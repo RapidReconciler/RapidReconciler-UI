@@ -385,19 +385,29 @@ default). For belt-and-suspenders on a chore commit, also add
   cards; `data-card` (on cover destination cards) and `data-target` (on
   cover persona chips) drive the spotlight handler. Preserve all of
   these when editing card markup.
-- **Real customer-identifying data in customer-facing docs.** Anything
-  in `RRUniversity/` (and the rendered Help Desk pages) is published
-  on the public GitHub Pages site. Don't paste real customer
-  account numbers (`1000000.142000`, `5077777.501010.51`, etc.),
-  branch / company numbers (`00010`), doc numbers (`1324740`), or
-  customer names (`Acme`) into prose, tables, callouts, or examples.
-  Use clean fictional generics (`5000.140000`, `100.5100.MKTG`,
-  `MFG01.4220`) that demonstrate the same concept without tracing
-  back to a real customer. Test fixtures under
-  `Tools/_test_corpus/fixtures/` are private to the repo; account
-  numbers there are fine. Internal-only docs under `AnalysisGuides/`
-  and code comments can reference test cases for traceability, but
-  customer-facing docs cannot.
+- **Real customer-identifying data goes nowhere in this repo.** The
+  repo is **public** on GitHub. Anything tracked here — customer-
+  facing pages in `RRUniversity/` and `HelpDesk/` rendered to the
+  GitHub Pages site, internal-only docs under `AnalysisGuides/`,
+  scripts under `Tools/queries/`, and the source HTML of the
+  analyzer itself — is readable by anyone who finds the repo.
+  Don't paste real customer account numbers (`1000000.142000`,
+  `5077777.501010.51`, etc.), branch / company numbers (`00010`),
+  doc numbers (`1324740`), or customer names (`Acme`) into prose,
+  tables, callouts, examples, or code comments. Use clean fictional
+  generics (`5000.140000`, `100.5100.MKTG`, `MFG01.4220`) that
+  demonstrate the same concept without tracing back to a real
+  customer.
+- **Test fixtures with real customer data are gitignored, not
+  committed.** `Tools/_test_corpus/fixtures/` is in `.gitignore`.
+  Customer F4095 extracts, Transaction Detail / Item Ledger
+  exports, and any other workbook produced by the `Tools/queries/`
+  scripts stay on the local machine only. The analyzer's
+  auto-rehydrate fixture list in `Tools/analysis-workbook.html`
+  silently falls through when those files aren't present, so the
+  deployed site loses no functionality. If you produce a new
+  fixture and need to share it with a teammate, hand it over
+  out-of-band — don't try to commit it.
 
 ---
 
