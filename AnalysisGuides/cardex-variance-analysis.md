@@ -229,7 +229,7 @@ This field otherwise holds transaction type codes on all other rows. On the Curr
 | Value in `dt` on Curr bal row | Cost Method | Key reconciliation implications |
 |---|---|---|
 | `02` | Weighted Average Cost | WAC recalculates after each qualifying OV receipt and PV voucher match; manual P4105 changes create IB rows; negative quantities corrupt the WAC — check that runqty never went below zero |
-| `07` | Standard Cost | Costs frozen from F30026 cost components; component/ledger mismatch is the primary risk; check RapidReconciler Integrity Report 6 or run R30543; WIP Revaluation (R30837) must be run from R30835 when standards change |
+| `07` | Standard Cost | Costs frozen from F30026 cost components; component/ledger mismatch is the primary risk; check RapidReconciler Integrity Report 6 or run R30543; WIP Revaluation (R30837) must be run from R30822 when standards change |
 | `09` | Actual Cost | Costs captured per work order; zero-cost transactions indicate missing F4105 entries; Inventory Cost Level must be 2 or 3 |
 
 **Cost level — read from the `dt` field where `ukid = 0` (Beg bal row)**
@@ -688,7 +688,7 @@ Use this checklist for each Cardex variance investigation:
 
 **Cost Method-Specific Checks (Method 07 — Standard Cost)**
 - [ ] Check RapidReconciler Integrity Report 6 (or run R30543) for component/ledger mismatch
-- [ ] If standard cost was updated recently, confirm R30837 WIP Revaluation was run from R30835
+- [ ] If standard cost was updated recently, confirm R30837 WIP Revaluation was run from R30822
 - [ ] Verify cost component sum in F30026 equals F4105 method 07 value for the item
 
 **JDE Validation (Section 6)**

@@ -178,7 +178,7 @@ The batch type in F0011 identifies what kind of transactions the batch contains 
 | **W** | Manufacturing / Work Orders | Manufacturing Accounting (R31802A) |
 | **S** | Sales Update | Sales Update (R42800) |
 | **ST** | Stock Transfer | Transfer Order processing |
-| **NC** | Frozen Cost Update | Frozen Standard Cost Update (R30835) |
+| **NC** | Frozen Cost Update | Frozen Standard Cost Update (R30822) |
 
 ---
 

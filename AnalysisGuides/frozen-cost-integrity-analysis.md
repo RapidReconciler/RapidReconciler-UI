@@ -81,11 +81,11 @@ Sort sub-tables by Company → Branch → Item ascending (the natural source-she
 **Action Plan** (formatting spec, Section 7.4): in execution order. Typical sequence:
 
 1. Confirm with the cost accounting team whether any large F4105-only concentrations (e.g., purchased items in a specific branch) are intentional. A single decision may reclassify many rows.
-2. Run R30835 (Frozen Standard Update) for branches with the zero-cost (P1) cluster to create the missing F4105 method 07 records. Test in non-production first.
+2. Run R30822 (Frozen Cost Update) for branches with the zero-cost (P1) cluster to create the missing F4105 method 07 records. Test in non-production first.
 3. For the QOH-bearing P1 items (the GL-understatement subset), review the RapidReconciler Transactions page and assess whether a revaluation journal entry is needed. Confirm with accounting before posting.
-4. Investigate any branch-wide mismatch clusters — likely partial cost rolls. Determine which value is correct and run R30835 for the affected branch.
+4. Investigate any branch-wide mismatch clusters — likely partial cost rolls. Determine which value is correct and run R30822 for the affected branch.
 5. Build F30026 components for any manufactured items with no F30026 build — every work order produces variance until corrected.
-6. Run R30837 (WIP Revaluation) for any open work orders on items corrected by R30835. Failure to do so produces persistent cardex-only variances.
+6. Run R30837 (WIP Revaluation) for any open work orders on items corrected by R30822. Failure to do so produces persistent cardex-only variances.
 7. Refresh RapidReconciler and re-run Integrity Report 6 to confirm corrected items have cleared.
 
 **Source sheet handling** (formatting spec, Section 10): Frozen Cost exports are typically large (hundreds to thousands of rows). **Pattern A — no highlights, AutoFilter only.** Readers filter on `UnitCost = 0` for P1, `FrzCost = 0` for the F4105-only P2 finding, or both > 0 with non-zero variance for the mismatch P2 finding.
@@ -122,7 +122,7 @@ In JD Edwards EnterpriseOne, the frozen standard cost (cost method 07) is the co
 | **Item Cost (method 07)** | F4105 | P4105 (Item Cost) | Single unit cost per item/branch — the amount used for F4111 (item ledger) valuation |
 | **Cost Components** | F30026 | P30026 (Product Cost Revisions) | Itemized cost breakdown by cost type (A1 material, B1–B4 labor/overhead, C1–C4 machine, D1–D2 outside operations, etc.) |
 
-When R30835 (Frozen Standard Update) runs, it is supposed to write the sum of F30026 cost components to F4105 as the new frozen standard. When the two tables are in sync, every manufacturing transaction values correctly and variance accounting clears WIP to zero. When they diverge, transactions use the wrong cost — silently posting to incorrect amounts in both the item ledger and the GL.
+When R30822 (Frozen Cost Update) runs, it is supposed to write the sum of F30026 cost components to F4105 as the new frozen standard. When the two tables are in sync, every manufacturing transaction values correctly and variance accounting clears WIP to zero. When they diverge, transactions use the wrong cost — silently posting to incorrect amounts in both the item ledger and the GL.
 
 ### The Three Ways F4105 and F30026 Can Diverge
 
@@ -139,7 +139,7 @@ The frozen cost from F30026 is the valuation basis for:
 - **Material issues (IM):** Each component is issued at its F30026 frozen standard cost. If F30026 is zero or missing, the IM posts at zero — raw material inventory is reduced without a corresponding WIP debit.
 - **Work order completions (IC):** The parent item is completed to finished goods at its frozen standard cost. If the F4105 cost is zero or incorrect, finished goods inventory is valued incorrectly.
 - **Variance accounting (IV):** R31804 computes variances as the difference between actual WIP (IM + IH − IC − IS) and the expected cost. If F4105 and F30026 are out of sync, R31804 will produce unexplained variances that cannot be traced to a genuine efficiency or usage difference.
-- **WIP Revaluation (R30837):** If the frozen standard is updated via R30835 while work orders are open, R30837 revalues open WIP to the new standard. If F30026 and F4105 are out of sync, R30837 may not revalue correctly.
+- **WIP Revaluation (R30837):** If the frozen standard is updated via R30822 while work orders are open, R30837 revalues open WIP to the new standard. If F30026 and F4105 are out of sync, R30837 may not revalue correctly.
 
 ---
 
@@ -190,7 +190,7 @@ The item has a frozen standard cost in F4105 but no cost component records in F3
 
 **Common causes:**
 - The item was set up with a cost in P4105 directly, bypassing the Product Cost Revisions (P30026) program
-- A cost roll (R30835) was never run to populate F30026 components
+- A cost roll (R30822) was never run to populate F30026 components
 - F30026 components were manually deleted after the item was costed
 - The item is a purchased item with a manually maintained F4105 cost and no cost build was performed
 
@@ -205,10 +205,10 @@ The item has cost component records in F30026 but F4105 does not have a method 0
 **Impact:** All manufacturing transactions for this item — material issues, completions, labor accruals — will post at zero cost. Inventory is systematically undervalued. The full F30026 cost amount will either appear as an unexplained variance at R31804, or as a negative WIP balance. Any inventory quantities on hand are valued at zero in the GL, regardless of what F30026 shows.
 
 **Common causes:**
-- R30835 (Frozen Standard Update) was never run after F30026 components were established
+- R30822 (Frozen Cost Update) was never run after F30026 components were established
 - The F4105 method 07 record was manually deleted
 - The cost method 07 was not included in the cost method set used during the last cost roll
-- The item was added to a new branch plant after the last cost roll and the branch was not included in the R30835 run
+- The item was added to a new branch plant after the last cost roll and the branch was not included in the R30822 run
 
 **Severity:** HIGH. Zero-cost inventory is a direct valuation error. Items with QOH > 0 represent understated inventory balances in the GL today.
 
@@ -221,7 +221,7 @@ Both F4105 and F30026 have values, but they do not match. The Variance column sh
 **Impact:** The difference between F4105 and F30026 will appear as a variance at R31804 — specifically as an engineering variance (AAI 3270) if the gap reflects a cost change that was not rolled to the frozen standard, or as an other/WIP clearance variance (AAI 3280) if the source is less clear. If the mismatch is small and consistent across many items, it may indicate a cost roll that partially completed (some branches updated, others not).
 
 **Common causes:**
-- R30835 was run for some branches but not all (partial cost roll)
+- R30822 was run for some branches but not all (partial cost roll)
 - A component cost was updated in F30026 after the last cost roll
 - The frozen standard was manually edited in P4105 without updating F30026 (or vice versa)
 - Rounding differences between the two tables (typically small, less than $0.01 per unit)
@@ -312,28 +312,28 @@ Decision table:
 
 | Cause | How to Identify | Resolution |
 |---|---|---|
-| R30835 (Frozen Standard Update) was never run for this item/branch | F30026 is empty or all components are zero | Set up F30026 cost components via P30026, then run R30835 to push them to F4105 |
+| R30822 (Frozen Cost Update) was never run for this item/branch | F30026 is empty or all components are zero | Set up F30026 cost components via P30026, then run R30822 to push them to F4105 |
 | Cost was manually entered in P4105 without a cost build | F4105 has a cost but F30026 has no breakdown | Review whether a cost build is appropriate; if not, document the manual cost in F30026 as an A1 component |
-| F30026 components were deleted after the item was costed | F4105 has a cost; F30026 records were recently removed | Recreate F30026 components; run R30835 to verify alignment |
+| F30026 components were deleted after the item was costed | F4105 has a cost; F30026 records were recently removed | Recreate F30026 components; run R30822 to verify alignment |
 | Purchased item — cost maintained manually in F4105 | Stocking Type P; F30026 is intentionally blank | Acceptable for purchased items if F4105 is maintained manually and no cost build is expected — exclude from future runs using item selection criteria |
 
 ### Cost in F30026 Only
 
 | Cause | How to Identify | Resolution |
 |---|---|---|
-| R30835 was not run after F30026 components were established | F30026 has components; F4105 method 07 record is missing | Run R30835 (Frozen Standard Update) for the affected items and branches to create or update the F4105 record |
-| Cost method 07 excluded from the cost method set used in the last roll | F4105 has other cost methods (e.g., 01, 02) but not 07 | Confirm cost method 07 is included in the cost method set used by R30835; rerun R30835 |
-| F4105 method 07 record was manually deleted | No method 07 record in P4105 | Run R30835 to recreate the record from F30026 components |
-| New branch plant added after the last cost roll | Item/branch combination is recent; F30026 was populated but R30835 was not run for the new branch | Include the new branch in the R30835 run scope and rerun |
+| R30822 was not run after F30026 components were established | F30026 has components; F4105 method 07 record is missing | Run R30822 (Frozen Cost Update) for the affected items and branches to create or update the F4105 record |
+| Cost method 07 excluded from the cost method set used in the last roll | F4105 has other cost methods (e.g., 01, 02) but not 07 | Confirm cost method 07 is included in the cost method set used by R30822; rerun R30822 |
+| F4105 method 07 record was manually deleted | No method 07 record in P4105 | Run R30822 to recreate the record from F30026 components |
+| New branch plant added after the last cost roll | Item/branch combination is recent; F30026 was populated but R30822 was not run for the new branch | Include the new branch in the R30822 run scope and rerun |
 
 ### Both Populated — Mismatch
 
 | Cause | How to Identify | Resolution |
 |---|---|---|
-| Partial cost roll — some branches updated, others not | Same item shows the same variance across multiple locations in the same branch | Run R30835 for all affected branches |
-| Component cost updated in F30026 after the last cost roll | F30026 component amounts are more recent than the last R30835 run date | Run R30835 to push updated F30026 costs to F4105 |
+| Partial cost roll — some branches updated, others not | Same item shows the same variance across multiple locations in the same branch | Run R30822 for all affected branches |
+| Component cost updated in F30026 after the last cost roll | F30026 component amounts are more recent than the last R30822 run date | Run R30822 to push updated F30026 costs to F4105 |
 | Rounding difference | Variance < $0.01 per unit; applies to many items | Assess materiality; a rounding-only variance of < $0.01 on items with low QOH can typically be excluded from correction |
-| Manual edit to F4105 without updating F30026 | F4105 was changed in P4105 directly; F30026 reflects different amounts | Determine which is correct; update the incorrect record; run R30835 to verify alignment |
+| Manual edit to F4105 without updating F30026 | F4105 was changed in P4105 directly; F30026 reflects different amounts | Determine which is correct; update the incorrect record; run R30822 to verify alignment |
 | Cross-plant cost sourcing (Prodplant ≠ BranchPlant) | Prodplant and Prodcost columns populated with a different branch | Review whether the cross-plant cost sourcing is intentional; if so, this finding may be expected behavior |
 
 ---
@@ -344,7 +344,7 @@ Decision table:
 |---|---|---|
 | View/update F4105 item cost (all methods) | P4105 — Item Cost Maintenance | Fast path: `COST` or Inventory Management > Item Cost |
 | View/update F30026 cost components | P30026 — Product Cost Revisions | Fast path: `PRODCOST` or Manufacturing > Product Data Management > Product Cost |
-| Run Frozen Standard Update | R30835 — Frozen Standard Update | Manufacturing > Product Data Management > Product Costing Reports |
+| Run Frozen Cost Update | R30822 — Frozen Cost Update | Manufacturing > Product Data Management > Product Costing Reports |
 | Run WIP Revaluation | R30837 — WIP Revaluation | Manufacturing > Product Data Management > Product Costing Reports |
 | View work order cost | P4801 — Work Order Entry, Cost tab | Fast path: `WO` or Inventory Management > Work Orders |
 | Run Integrity Report 6 | R41416 (component 6) | Inventory Management > Reports > Integrity Reports |
@@ -373,7 +373,7 @@ For each mismatch row, calculate the absolute variance amount (|UnitCost − Frz
 **Step 4 — Check for Systematic Patterns**
 
 Before correcting individual items, look for patterns across the full dataset:
-- Are all zero-F4105 items in the same branch? This suggests R30835 was not run for that branch.
+- Are all zero-F4105 items in the same branch? This suggests R30822 was not run for that branch.
 - Do all mismatches share the same variance amount? This suggests a specific cost component was updated but not rolled.
 - Are the same items appearing across multiple locations? This is expected for cost level 2 items — one item can appear once per branch/location combination.
 
@@ -383,7 +383,7 @@ For each priority finding, confirm the values in JDE using P4105 and P30026 befo
 
 **Step 6 — Correct and Rerun**
 
-For F30026 / F4105 mismatches: run R30835 after correcting F30026 components. For manual F4105 corrections: update P4105 and confirm F30026 aligns. After all corrections, trigger a RapidReconciler data refresh and re-run Integrity Report 6. Confirm that corrected items no longer appear.
+For F30026 / F4105 mismatches: run R30822 after correcting F30026 components. For manual F4105 corrections: update P4105 and confirm F30026 aligns. After all corrections, trigger a RapidReconciler data refresh and re-run Integrity Report 6. Confirm that corrected items no longer appear.
 
 **Step 7 — Review Open Work Orders**
 
@@ -396,8 +396,8 @@ For any items where the frozen standard cost was corrected, check whether there 
 - [Integrity Report 5 Guide](integrity-report5-glclass-analysis.md) — GL class code integrity (F4102 vs F41021). Section 10 of the manufacturing reference notes that F41021/F4102 GL class code mismatches cause manufacturing transactions to post to unexpected accounts — IR5 and IR6 findings often co-occur on the same items.
 - [DMAAI Analysis Guide](inventory-integrity-report2-analysis.md) — If F30026 contains GL class codes that are missing from the DMAAI model table (4152 PI), manufacturing transactions will error when R31802A runs. IR2 and IR6 findings can be related.
 - [Cardex Variance Analysis Guide](cardex-variance-analysis.md) — Frozen cost errors directly cause cardex variances. A zero-cost F4105 record will produce a cardex variance equal to the full inventory value of every transaction for that item.
-- [End of Day Analysis Guide](end-of-day-analysis.md) — Missing R30835 runs and zero-cost records are common contributors to unexplained End of Day variances.
-- [Manufacturing Work Order Reference](manufacturing-reference.md) — Full reference for R31802A, R31804, R30835, R30837, and the relationship between F30026 and manufacturing transaction valuation.
+- [End of Day Analysis Guide](end-of-day-analysis.md) — Missing R30822 runs and zero-cost records are common contributors to unexplained End of Day variances.
+- [Manufacturing Work Order Reference](manufacturing-reference.md) — Full reference for R31802A, R31804, R30822, R30837, and the relationship between F30026 and manufacturing transaction valuation.
 
 ---
 

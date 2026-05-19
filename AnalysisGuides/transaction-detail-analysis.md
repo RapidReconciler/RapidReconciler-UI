@@ -556,7 +556,7 @@ This means the **true variance is larger than what RapidReconciler is showing**.
 
 **What is happening:**
 
-When a work order completion is processed, the cardex is written at the current standard cost. If the standard cost is subsequently updated via R30835 (Frozen Standard Update) **after** the completion has already posted, JD Edwards writes a second cardex row to revalue the completed inventory to the new standard. However, if WIP Revaluation (R30837) was not configured to run -- or was not called from R30835 -- the corresponding GL journal entry is never created, leaving the cardex revaluation with no GL counterpart.
+When a work order completion is processed, the cardex is written at the current standard cost. If the standard cost is subsequently updated via R30822 (Frozen Cost Update) **after** the completion has already posted, JD Edwards writes a second cardex row to revalue the completed inventory to the new standard. However, if WIP Revaluation (R30837) was not configured to run -- or was not called from R30822 -- the corresponding GL journal entry is never created, leaving the cardex revaluation with no GL counterpart.
 
 The GL document number mismatch (e.g., cardex shows doc 545031 but GL shows 566580) is **normal behavior** for IC transactions -- Manufacturing Accounting (R31802A) summarizes multiple work order transactions into a single GL document. This is not the cause of the variance but can cause confusion when tracing the transaction.
 
@@ -565,7 +565,7 @@ The GL document number mismatch (e.g., cardex shows doc 545031 but GL shows 5665
 | Cause | How to Identify | Resolution |
 |---|---|---|
 | R30837 (WIP Revaluation) not run after standard cost update | F4111 Row 2 shows "Standard Cost Change" with no matching GL entry; variance amount matches Row 2 exactly | Post a manual journal entry: debit inventory account for the variance amount; credit the appropriate variance account (AAI 3260 Planned Variance or 3240 Material Variance). Review WIP Revaluation configuration to prevent recurrence. |
-| R30837 run but work order was already closed at status 999 | Work order NxtSts = 999; R30837 does not revalue closed work orders | Same journal entry resolution. Note: R30837 only revalues open work orders -- closed work orders require manual correction. |
+| R30837 run but work order was already at its Closed status | Work order NxtSts at the Closed value in UDC 00/SS (typically 90; values are customer-defined per shop's order activity rules); R30837 does not revalue closed work orders | Same journal entry resolution. Note: R30837 only revalues open work orders -- closed work orders require manual correction. |
 
 > **Aged variance note:** This pattern frequently produces historic variances dating back months or years, since the cost change and the missing GL entry may not be detected until the next reconciliation review. Assess materiality before posting a journal entry for small or very old amounts.
 
@@ -789,7 +789,7 @@ RapidReconciler **does not** filter F0911 inventory accounts (it filters P&L). S
 
 **Critical distinction from Section 5.9 (Standard Cost Change After WO Completion):**
 
-Section 5.9 is the narrow case where R30837 / R30835 sequencing produces an orphan F4111 cost-revaluation row. The analyzer detects 5.9 specifically when the orphan F4111 row's comment includes "Standard Cost Change" -- that's a different root cause (R30835 fired before R30837 was ready, or the WO is closed and R30837 won't revalue it).
+Section 5.9 is the narrow case where R30837 / R30822 sequencing produces an orphan F4111 cost-revaluation row. The analyzer detects 5.9 specifically when the orphan F4111 row's comment includes "Standard Cost Change" -- that's a different root cause (R30822 fired before R30837 was ready, or the WO is closed and R30837 won't revalue it).
 
 5.14 is the broader bucket: any orphan F4111 row on a manufacturing doc whose amount equals the document variance, regardless of comment. The two patterns share evidence shape but lead to different fixes.
 
@@ -1090,4 +1090,105 @@ Common document types appearing in the Transaction Detail report:
 | **JS** | Sales order shipment (cost-of-sales entry). The same standard cost change after shipment pattern seen on IC transactions can occur on JS -- if a second F4111 row appears with zero quantity and comment "Standard Cost Change," the GL revaluation entry is missing. See Section 5.9. |
 | **RI** | Sales invoice / shipment. Covers standard SO and direct ship S6 order types. For account mismatches, R42800 PO 5 (Business Unit Source) is the most common cause — it controls where the business unit portion of the GL account is sourced from and a wrong setting affects all sales entries in that version. For period mismatches, check R42800 PO 1 (GL Date). If F0911 Comment reads "Non stock line in Inv acct," a non-stock line type (N, F, or similar) posted to the inventory account -- investigate line type definition. Lines showing GL date 2000-01-01 and document 0 were never processed through Sales Update. |
 | **RM** | Sales return / credit memo. If the batch type is **IB** rather than I, the return was processed via a manual correction batch that posted to the inventory account without writing a cardex record -- this produces a GL-only variance. Investigate who created the IB batch and whether the inventory account coding is correct. |
+
+---
+
+## Section 10: JDE Status Code Reference
+
+Several patterns (5.6, 5.9, 5.13, 5.15, 5.16) branch on the order or work-order status of the document being analyzed. Statuses live in **three separate UDC tables**, one per order type, each with its own canonical range and its own field on the source record. Status codes are **user-defined per shop's Order Activity Rules** (P40204 for purchasing, P40203 for sales, P98012 for work orders) -- the canonical values below are the JDE standard but customer-specific overrides are common.
+
+### 10.1 Work Order Statuses (UDC 00/SS)
+
+Stored on **F4801** (Work Order Header). Field names: `WrStts` (last status) and `NxtSts` (next status). Range: typically **two-digit values 10-99**.
+
+| Status | Description | Meaning |
+|---|---|---|
+| **10** | Entered | WO created but not approved |
+| **20** | Approved | Ready for planning |
+| **30** | Planned | Material / capacity planning complete |
+| **40** | Firm Planned | Frozen for scheduling |
+| **50** | Released | Available to shop floor -- controls when inventory can be issued |
+| **60** | Parts List / Routing Complete | Pick lists and routing ready |
+| **70** | In Process | Production started |
+| **80** | Completed | Quantity completed -- controls completions to inventory |
+| **90** | Closed | Accounting complete -- prevents further transactions; R30837 will not revalue |
+| **99** | Cancelled | WO voided / cancelled |
+
+More detailed implementations may also use intermediate values: 15 (Awaiting Approval), 25 (MRP Planned), 45 (Scheduled), 55 (Picked), 65 (Started), 85 (Production Complete), 95 (Financial Close).
+
+> **Important for Patterns 5.6 / 5.15 / 5.16:** **R30837 (WIP Revaluation) will not revalue a work order at the Closed status (typically 90).** When a Standard Cost Change orphan is detected and the WO is already closed, the only correction path is a manual JE -- the cardex revaluation is permanent at that point. If the WO is still open (any status below the customer's Closed value), R30837 can be re-run after the AAI / config fix to catch the orphan automatically.
+
+### 10.2 Sales Order Statuses (UDC 40/AT)
+
+Stored on **F4211** (Sales Order Detail) and **F4201** (Sales Order Header). Field names: `LSTS` (last status) and `NXTR` (next status). Range: typically **three-digit values 500-999**.
+
+| Status | Description | Meaning |
+|---|---|---|
+| **500** | Quote | Quote stage, not a firm order |
+| **510** | Blanket Order | Open blanket / contract order |
+| **520** | Order Entry | Order created |
+| **525** | Credit Check | Awaiting credit approval |
+| **530** | Allocation | Inventory allocated |
+| **540** | Print Pick Slip | Ready for warehouse |
+| **560** | Warehouse Pick | Items picked |
+| **580** | Shipment Confirmation | Shipped -- F4111 cardex written |
+| **600** | Shipped | Shipment confirmed |
+| **620** | Sales Update / Invoiced | R42800 ran; F0911 written |
+| **999** | Closed | Fully complete -- no further processing |
+
+> **Important for Pattern 5.13 (Post-Confirm Order Edit):** the analyzer's stock-line check uses **NxtSts &ge; 540** to identify ship-confirmed lines. When NxtSts is at the Closed value (typically 999) and the F4211 qty exceeds the F4111-captured qty, the order line was edited after ship-confirm. Lines with NxtSts &lt; 540 are still in-flight and don't trigger Pattern 5.13.
+
+### 10.3 Purchase Order Statuses (UDC 40/AT for PO)
+
+Stored on **F4311** (Purchase Order Detail) and **F4301** (Purchase Order Header). Field names: `LSTS` (last status) and `NXTR` (next status). Range: typically **three-digit values 200-999**.
+
+| Status | Description | Meaning |
+|---|---|---|
+| **200** | Requisition | Requisition stage |
+| **220** | PO Entry | PO created |
+| **230** | Approval | Approved for purchasing |
+| **260** | Budget Check | Awaiting budget approval |
+| **280** | Print PO | PO printed / sent to vendor |
+| **400** | Partially Received | Some receipts completed |
+| **420** | Fully Received | All quantities received |
+| **430** | Voucher Match | A/P voucher created |
+| **999** | Closed | Order closed |
+
+> **Important for OV / PV doc types:** an OV (PO Receipt -- P4312) advances the line from a pre-receipt status (e.g. 280) to a post-receipt status (e.g. 400). A PV (Voucher Match -- P4314) advances it further to 430 / 999. The doc type on F4111 / F0911 rows tells you which event posted; the order line's NxtSts tells you where the line is in the cycle. Reconciling against the wrong stage of the cycle is a frequent source of "missing GL" diagnoses that are actually "GL hasn't fired yet."
+
+### 10.4 Order Activity Rules
+
+Each order type has its own configuration of allowed status transitions:
+
+| Program | Order Type | UDC | Header / Detail |
+|---|---|---|---|
+| **P40203** | Sales Order Activity Rules | 40/AT | F4201 / F4211 |
+| **P40204** | Purchase Order Activity Rules | 40/AT | F4301 / F4311 |
+| **P98012** | Work Order Activity Rules | 00/SS | F4801 |
+
+When a customer's statuses diverge from the JDE standard (e.g. a custom "550 -- Quality Hold" inserted between Pick Slip and Pick Confirmed), the analyzer's hard-coded status comparisons in Patterns 5.13, 5.6, 5.15, 5.16 should still work because the comparisons are **inequalities** against the canonical Closed value, not exact-status matches. The exception: a customer who uses a non-standard Closed value for any order type. If a shop closes work orders at status `95` instead of `90`, the WO-Closed branch in Pattern 5.6 / 5.16 needs to be configured to that shop's value -- otherwise the analyzer will recommend the "WO still open, R30837 re-run viable" path on an effectively-closed WO.
+
+---
+
+## Section 11: Manufacturing Cost Programs Reference
+
+Patterns 5.6 / 5.9 / 5.15 / 5.16 reference several JDE programs in their explanation and resolution prose. The canonical role of each:
+
+| Program | Role | When it runs | Tables it writes |
+|---|---|---|---|
+| **P4312** | PO Receipts (interactive) | Receipt entry against an open PO line | F43121, **F4111** (inventory at frozen std + separate "Standard Cost Change" row for the variance when receipt price differs from frozen std), F0911 (inventory Dr / RNV Cr; variance to AAI 4335 when configured) |
+| **P4314** | Voucher Match (interactive) | Voucher entry against received PO lines | F43121, F0911 (RNV Dr / A/P Cr; PPV via AAI 4330 when applicable). Does NOT write to F4111 under standard cost; **does** write F4111 revaluation under weighted average. |
+| **R30812** | Cost Rollup | Manual / batch | F30026 (cost components — simulated) |
+| **R30835** | Cost Simulation | Manual / batch | F30026 (simulated cost values; preview only -- does not freeze) |
+| **R30822** | Frozen Cost Update | Manual / batch (typically scheduled) | F4105 (writes the new frozen std cost over the prior value). Does NOT directly post F4111 or F0911 by itself -- the cardex + GL revaluation is the job of **R30837**. |
+| **R30837** | WIP Revaluation | Run after R30822 (or after late labor / material on actual-cost WOs) | F4111 (Standard Cost Change rows for affected items) + F0911 (matching GL entries through AAI 3240 / 3260). Primarily an **actual-costing** tool (methods 02 / 09); under standard costing it's an optional revaluation control rather than an automatic step in the cycle. Skips work orders that have reached their Closed status. |
+| **R31802A** | Manufacturing Accounting | Run after WO completion | F4111 (cardex rows for completion, scrap, issues), F0911 (GL through AAIs 3110 / 3120 / 3130 / 3240 / 3260) |
+| **P3102** | Production Cost Inquiry | Interactive (review only) | Read-only |
+
+**Diagnosis implication for the "Standard Cost Change" F4111 row signature:**
+
+- **OV doc context (PO Receipt):** the row was written by **P4312** at receipt time, splitting the receipt into inventory-at-frozen-standard plus a variance entry. The variance should also appear in F0911 routed through AAI 4335 (PPV). If F4111 has the row but F0911 doesn't, the cause is in P4312's accounting -- typically AAI 4335 isn't configured for the routing or the receipt's processing options suppressed the GL write. **Pattern 5.6 does NOT fire on OV docs** -- this is expected P4312 behavior with a separate variance leg.
+- **IC doc context (WO Completion):** the row was written by **R30837** after R30822 changed the frozen standard. R30837 normally writes both the F4111 row AND the matching F0911 entry. If F4111 has the row but F0911 doesn't, R30837 partially fired -- the GL side failed because of AAI 3240 / 3260 configuration, a Closed-status WO (R30837 skips closed WOs in UDC 00/SS, typically `90`), or processing-options gap. **Pattern 5.6 fires on IC docs only.**
+
+Mixing these up was a real cause of misdiagnosis in earlier analyzer iterations -- the F4111 row looks identical in both contexts but the corrective program and accounting expectation are different.
 
