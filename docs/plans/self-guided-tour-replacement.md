@@ -58,16 +58,24 @@ Keep `tour.js`'s cross-page spotlight engine for in-app onboarding (separate con
 
 3. **Clone the template** — copy `GSIRRSales/rr-self-guided-tour.html` to the chosen new location. Don't edit `rr-self-guided-tour.html` itself — that's the other product's tour and needs to stay independent.
 
-4. **Rewrite stages for RR:**
-   - `#screen-welcome`: brand intro + "what RR does in one sentence" hook
-   - `#screen-app`: the main tour rail walkthrough. Suggested stops:
-     - Reconciliation Dashboard overview
-     - Transactions page (variance review)
-     - Export → Analyzer hand-off (this is the wow moment for a sales demo)
-     - DMAAI / Frozen Cost integrity reports
-     - Help Desk + RR University (the "you have a knowledge base" closer)
-   - `#screen-finish`: CTA to schedule a demo, link to Help Desk for self-serve, link to RR University
-   - Keep total stops to ~6–8 (the rr-self-guided-tour has 12+; ours can be tighter)
+4. **Rewrite stages for RapidReconciler Assist** (the help portal —
+   NOT the live RR app). Suggested stops:
+   - `#screen-welcome`: brand intro for Assist; "what Assist gives you"
+     hook (variance triage + analyst KB + on-tap troubleshooting)
+   - `#screen-app`: tour rail walkthrough across the Assist surfaces:
+     - **Export Analyzer** — drop a fixture, see WHAT/WHY/HOW cards,
+       JE-flow matrix; this is the wow moment for the Assist demo
+     - **RR University** — KB browse + search; the analyst-grade
+       reference layer
+     - **Help Desk** — scenario search + paste-an-error-message
+       triage; the on-tap troubleshooting layer
+     - **Log Analyzer** — paste a console log, see signal vs noise
+       classification; the "we already know your noisy log lines"
+       closer
+   - `#screen-finish`: CTA to schedule a demo or self-serve at
+     rapidreconciler-help.html (the Assist landing)
+   - Keep total stops to ~5–7 (the rr-self-guided-tour has 12+; ours
+     can be tighter since Assist is a more focused product surface)
 
 5. **Update the entry points (5 pages):** the existing "Take the 90-second tour" button HTML stays where it is; just change its `href` from the JS-engine entry to the new tour's URL. Remove the `<script src="Tools/tour.js">` and `<link href="Tools/tour.css">` includes from those 5 pages.
 
@@ -87,9 +95,19 @@ Keep `tour.js`'s cross-page spotlight engine for in-app onboarding (separate con
 
 ---
 
-## Decisions (resolved 2026-05-19 evening)
+## Decisions (resolved 2026-05-19 evening, **scope clarified 2026-05-20**)
 
-1. **Productization scope: the full RR app.** Tour should cover the entire RR experience -- reconciliation flow, Transactions / variance review, Analyzer, integrity reports, Help Desk + KB -- not just one surface.
+1. **Productization scope: RapidReconciler Assist (the help portal).**
+   On 2026-05-20 the owner rebranded the help portal (KB + Help Desk +
+   Export Analyzer + Log Analyzer) as a separately-sellable product
+   named **RapidReconciler Assist**, distinct from the live
+   **RapidReconciler** app at rapidreconciler.getgsi.com. The new
+   self-guided tour is the **Assist** product's demo, not a tour of
+   the full RR app. The pre-existing `GSIRRSales/rr-self-guided-tour.html`
+   continues to cover the full RR app (rebranded "RapidReconciler Demo"
+   on the hub page). The new tour file should be named
+   `GSIRRSales/rr-assist-self-guided-tour.html` (the hub page already
+   links to this path).
 
 2. **File location: `GSIRRSales/`, same folder as the existing self-guided tour.** This is treated as a **sales artifact**, parallel to `rr-self-guided-tour.html` and `rr-self-guided-tour-AI.html`. Proposed filename: `GSIRRSales/rr-rapidreconciler-tour.html` (or similar -- TBD on the file day-of).
 
