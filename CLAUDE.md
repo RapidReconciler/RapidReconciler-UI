@@ -426,6 +426,52 @@ default). For belt-and-suspenders on a chore commit, also add
   (#1f2d4a) is the primary brand color; sales = navy, tech = green/teal,
   helpdesk = orange, certificate = orange, db = teal.
 
+### Doc-chrome template (use this for every new doc page)
+
+Customer- and internal-facing doc pages (RRUniversity, Scenarios,
+HelpDesk, GSIRRTech, GSIRRSales) share a single header-template
+loader: `Tools/doc-chrome.js`. New docs must opt into it instead of
+inlining a header block. The minimal shape:
+
+```html
+<link rel="stylesheet" href="../Tools/doc-header.css">
+<script defer src="../Tools/doc-chrome.js"></script>
+</head>
+<body data-doc-type="reference">   <!-- howto | reference | runbook -->
+
+<header class="doc-header" data-doc-chrome>
+  <span class="doc-last-updated">Last updated
+    <time datetime="2026-05-20">May 20, 2026</time>
+  </span>
+</header>
+```
+
+- `data-doc-type` on the body picks the pill text + SVG icon and the
+  accent-stripe color (`howto` = blue, `reference` = navy, `runbook`
+  = orange). The loader uses this attribute to render the right pill.
+- `Scenarios/scenario-template.html` is the canonical starter. Copy
+  it when creating a new scenario.
+- For docs at deeper paths (e.g. `GSIRRTech/install-scenarios/`),
+  adjust the relative paths to `../../Tools/...`. The loader derives
+  image URLs from its own script src so logos resolve correctly
+  regardless of folder depth.
+- Leave the `<time>` element inline -- `.github/scripts/update_doc_dates.py`
+  scans the source HTML for the literal `<span class="doc-last-updated">`
+  + `<time>` so the GHA can stamp it on push. The loader preserves
+  the existing span when generating the rest of the header.
+- **Exception**: the destination/landing pages
+  (`rapidreconciler-help.html`, `RRUniversity/rapidreconciler-university.html`,
+  `HelpDesk/troubleshooting.html`, `HelpDesk/log-analyzer.html`,
+  `Tools/analysis-workbook.html`) use the **welcome-banner template**
+  (`Tools/welcome-banner.css`) instead -- different design language
+  for surface-level pages. Don't mix the two on the same page.
+- **Exception**: a few GSIRRSales sales-playbook docs
+  (`rr-discovery-call`, `rr-installation-prep`, `rr-provisioning`)
+  use a bespoke playbook-style header (`doc-header-titleblock` +
+  `doc-header-eyebrow` + `doc-header-title` + `doc-header-subtitle`).
+  Don't migrate those to the standard template without explicit
+  sign-off -- they're intentionally different.
+
 ### Export Analyzer output mantra
 
 The Transaction Detail / DMAAI / Cardex / etc. patterns render WHAT
