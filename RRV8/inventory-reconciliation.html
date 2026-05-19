@@ -36,6 +36,10 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;500;600;700;800&family=Source+Sans+3:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<!-- SheetJS for client-side .xlsx export (Audit Report). The
+     "community" build is enough for our needs (no styling, no
+     formulas — just typed cells + multi-sheet workbooks). -->
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js" defer></script>
 <style>
   :root {
     --navy:        #1f2d4a;
@@ -237,6 +241,145 @@
     display: block;
     line-height: 1.1;
   }
+  .topbar-user-caret { width: 12px; height: 12px; color: var(--text-muted); margin-left: 2px; }
+  .topbar-user.is-open { background: var(--bg-soft); }
+  .topbar-user-status {
+    position: absolute;
+    bottom: 0; right: 0;
+    width: 9px; height: 9px;
+    background: var(--green);
+    border: 2px solid var(--bg-card);
+    border-radius: 50%;
+  }
+  .topbar-user-avatar-wrap { position: relative; }
+
+  /* ============================================================
+     USER MENU (anchored to the user chip)
+     Houses identity, database switcher, and admin-gated actions
+     (Import JDE data, Restart Service). The live SPA puts these
+     in a sidebar-top panel; we consolidate them under the user
+     avatar so the sidebar stays nav+filters+status only.
+     ============================================================ */
+  .user-menu {
+    position: fixed;
+    background: var(--bg-card);
+    border: 1px solid var(--rule-strong);
+    border-radius: 12px;
+    box-shadow: 0 20px 48px -16px rgba(20, 32, 55, 0.28);
+    z-index: 150;
+    min-width: 280px;
+    overflow: hidden;
+  }
+  .user-menu[hidden] { display: none; }
+  .user-menu-head {
+    padding: 14px 16px 12px;
+    border-bottom: 1px solid var(--rule);
+    background: linear-gradient(135deg, #fafbfd 0%, #fff 100%);
+  }
+  .user-menu-name {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 800;
+    font-size: 15px;
+    color: var(--navy);
+    line-height: 1.2;
+    margin-bottom: 2px;
+  }
+  .user-menu-email {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .user-menu-section {
+    padding: 10px 6px 8px;
+    border-bottom: 1px solid var(--rule);
+  }
+  .user-menu-section:last-child { border-bottom: none; }
+  .user-menu-section-label {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 10.5px;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    padding: 0 10px 6px;
+  }
+  .user-menu-db {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 8px 10px;
+    background: transparent;
+    border: none;
+    text-align: left;
+    cursor: pointer;
+    border-radius: 6px;
+    transition: background 0.15s;
+  }
+  .user-menu-db:hover { background: var(--bg-soft); }
+  .user-menu-db-radio {
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    border: 1.5px solid var(--rule-strong);
+    flex-shrink: 0;
+    position: relative;
+  }
+  .user-menu-db.is-current .user-menu-db-radio {
+    border-color: var(--blue);
+  }
+  .user-menu-db.is-current .user-menu-db-radio::after {
+    content: '';
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 8px; height: 8px;
+    background: var(--blue);
+    border-radius: 50%;
+  }
+  .user-menu-db-name {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 700;
+    font-size: 13px;
+    color: var(--navy);
+    display: block;
+  }
+  .user-menu-db-meta {
+    font-size: 11px;
+    color: var(--text-muted);
+    display: block;
+    line-height: 1.2;
+  }
+  .user-menu-action {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 9px 12px;
+    background: transparent;
+    border: none;
+    text-align: left;
+    cursor: pointer;
+    border-radius: 6px;
+    font-family: 'Open Sans', sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    transition: background 0.15s, color 0.15s;
+  }
+  .user-menu-action:hover { background: var(--bg-soft); color: var(--blue); }
+  .user-menu-action svg { width: 16px; height: 16px; flex-shrink: 0; color: var(--text-muted); }
+  .user-menu-action:hover svg { color: var(--blue); }
+  .user-menu-action.is-danger:hover { background: var(--red-pale); color: var(--red); }
+  .user-menu-action.is-danger:hover svg { color: var(--red); }
+  .user-menu-action-meta {
+    margin-left: auto;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    padding: 2px 7px;
+    background: var(--bg-soft);
+    border-radius: 100px;
+  }
 
   /* ============================================================
      SIDEBAR
@@ -350,34 +493,110 @@
     color: var(--orange);
     background: rgba(255, 255, 255, 0.04);
   }
-  .sidebar-bottom {
+  /* ============================================================
+     SIDEBAR STATUS PANEL
+     Two stacked indicators at the sidebar bottom:
+       1. Inventory Validation — module-scoped (color reflects
+          this period's roll-forward state, refreshed when this
+          module loads). Tooltip comes from validation.tooltip.
+       2. System Status — global heartbeat (data freshness across
+          the app). Same value everywhere.
+     Both dots are prominent (14px + halo). System Status pulses
+     to convey "live" data; Validation stays steady because it's
+     a discrete pass/fail check, not a heartbeat.
+     ============================================================ */
+  .sidebar-status {
     margin-top: auto;
     border-top: 1px solid rgba(255, 255, 255, 0.08);
-    padding: 12px 18px;
+    padding: 10px 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .sidebar-status-row {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 14px;
+    padding: 8px 18px;
+    cursor: pointer;
+    color: inherit;
+    text-decoration: none;
+    background: transparent;
+    border: none;
+    border-left: 3px solid transparent;
+    width: 100%;
+    text-align: left;
+    transition: background 0.15s, border-left-color 0.15s;
   }
-  .sidebar-bottom-pulse {
-    width: 8px; height: 8px;
-    background: var(--green);
+  .sidebar-status-row:hover {
+    background: rgba(255, 255, 255, 0.06);
+    border-left-color: rgba(255, 255, 255, 0.2);
+  }
+  .sidebar-status-row:active { background: rgba(255, 255, 255, 0.1); }
+  .sidebar-status-dot {
+    width: 14px; height: 14px;
     border-radius: 50%;
+    background: var(--green);
     flex-shrink: 0;
-    box-shadow: 0 0 0 0 rgba(46, 138, 85, 0.6);
-    animation: sidebar-pulse 2s ease-in-out infinite;
+    box-shadow: 0 0 0 4px rgba(46, 138, 85, 0.22);
+    position: relative;
   }
-  @keyframes sidebar-pulse {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(46, 138, 85, 0.6); }
-    50% { box-shadow: 0 0 0 6px rgba(46, 138, 85, 0); }
+  .sidebar-status-dot.is-warn {
+    background: var(--orange);
+    box-shadow: 0 0 0 4px rgba(240, 138, 36, 0.22);
   }
-  .sidebar-bottom-text {
-    font-size: 11.5px;
-    color: rgba(255, 255, 255, 0.65);
-    white-space: nowrap;
+  .sidebar-status-dot.is-error {
+    background: var(--red);
+    box-shadow: 0 0 0 4px rgba(192, 57, 43, 0.22);
+  }
+  /* System Status pulse — heartbeat ring. Uses transform + opacity
+     so it stays on the compositor thread (GPU) instead of repainting
+     box-shadow on the main thread every frame. Validation does NOT
+     pulse — it's a checkpoint, not a stream. */
+  .sidebar-status-dot.is-live::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background: var(--green);
+    opacity: 0;
+    transform: scale(1);
+    animation: sidebar-status-pulse 2.4s ease-out infinite;
+    pointer-events: none;
+    will-change: transform, opacity;
+  }
+  @keyframes sidebar-status-pulse {
+    0%    { transform: scale(1);   opacity: 0.55; }
+    100%  { transform: scale(2.4); opacity: 0;    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .sidebar-status-dot.is-live::after { animation: none; }
+  }
+  .sidebar-status-info {
+    min-width: 0;
+    flex: 1;
     opacity: 0;
     transition: opacity 0.18s;
   }
-  .sidebar:hover .sidebar-bottom-text { opacity: 1; }
+  .sidebar:hover .sidebar-status-info,
+  body.is-pinned .sidebar-status-info { opacity: 1; }
+  .sidebar-status-label {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 12px;
+    font-weight: 800;
+    color: #fff;
+    letter-spacing: 0.04em;
+    line-height: 1.2;
+    white-space: nowrap;
+  }
+  .sidebar-status-meta {
+    font-size: 10.5px;
+    color: rgba(255, 255, 255, 0.55);
+    font-weight: 500;
+    line-height: 1.25;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   /* When a filter popover is open we want the sidebar to stay expanded
      so the row that opened the popover remains visible. The .is-pinned
      class is toggled on <body> by the popover open/close handlers. */
@@ -385,7 +604,7 @@
   body.is-pinned .sidebar-brand-text,
   body.is-pinned .sidebar-section-label,
   body.is-pinned .sidebar-nav-text,
-  body.is-pinned .sidebar-bottom-text,
+  body.is-pinned .sidebar-status-info,
   body.is-pinned .sidebar-filter-text,
   body.is-pinned .sidebar-filter-status { opacity: 1; }
   body.is-pinned .sidebar-nav-children { display: block; }
@@ -594,54 +813,8 @@
   }
   .btn-ghost:hover { background: var(--bg-soft); color: var(--blue); }
 
-  /* Health strip */
-  .health-strip {
-    background: var(--bg-card);
-    border: 1px solid var(--rule);
-    border-radius: 8px;
-    padding: 10px 16px;
-    display: flex;
-    align-items: center;
-    gap: 24px;
-    margin-bottom: 20px;
-    box-shadow: var(--shadow-sm);
-    flex-wrap: wrap;
-  }
-  .health-item {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-size: 12.5px;
-    color: var(--text-soft);
-  }
-  .health-dot {
-    width: 9px; height: 9px;
-    border-radius: 50%;
-    background: var(--green);
-    box-shadow: 0 0 0 3px rgba(46, 138, 85, 0.18);
-    flex-shrink: 0;
-  }
-  .health-dot.is-warn { background: var(--orange); box-shadow: 0 0 0 3px rgba(240, 138, 36, 0.18); }
-  .health-dot.is-error { background: var(--red); box-shadow: 0 0 0 3px rgba(192, 57, 43, 0.18); }
-  .health-label {
-    font-family: 'Source Sans 3', sans-serif;
-    font-weight: 700;
-    color: var(--navy);
-    font-size: 12.5px;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-  }
-  .health-meta { font-size: 11.5px; color: var(--text-muted); margin-left: 4px; }
-  .health-sep { width: 1px; height: 18px; background: var(--rule); }
-  .health-spacer { flex: 1; }
-  .health-refresh {
-    font-size: 11.5px;
-    color: var(--text-muted);
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .health-refresh svg { width: 12px; height: 12px; }
+  /* (Health strip removed — both indicators now live in the
+     sidebar status panel.) */
 
   /* Active-filter summary banner (shown only when at least one
      filter group is narrowed; gives the page a visible "you are
@@ -910,18 +1083,25 @@
   }
 
   /* ============================================================
-     BOTTOM GRID (history chart full-width)
+     BOTTOM GRID — three reconciliation-investigation widgets:
+       1. OOB History         — trend (left)
+       2. Top variance contributors — where it's concentrated (middle)
+       3. Pending close items — what's blocking the close (right)
      ============================================================ */
   .bottom-grid {
-    display: block;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 16px;
   }
   .chart-card {
     background: var(--bg-card);
     border: 1px solid var(--rule);
     border-radius: 14px;
-    padding: 22px 26px 18px;
+    padding: 20px 22px 16px;
     box-shadow: var(--shadow-md);
     min-width: 0;
+    display: flex;
+    flex-direction: column;
   }
   .chart-head {
     display: flex;
@@ -984,13 +1164,14 @@
   .donut-segment { transition: opacity 0.18s; }
   .donut-segment:hover { opacity: 0.85; cursor: pointer; }
 
-  .chart-history-wrap { height: 240px; position: relative; padding-top: 6px; }
+  .chart-history-wrap { height: 200px; position: relative; padding-top: 4px; flex: 1; }
   .chart-history-svg { width: 100%; height: 100%; }
   .history-stats {
-    display: flex;
-    gap: 28px;
-    padding-top: 12px;
-    margin-top: 12px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px 18px;
+    padding-top: 10px;
+    margin-top: 10px;
     border-top: 1px solid var(--rule);
   }
   .history-stat-label {
@@ -1010,6 +1191,158 @@
   }
   .history-stat-value.is-red { color: var(--red); }
   .history-stat-value.is-green { color: var(--green-deep); }
+
+  /* ----- Top variance contributors widget ----- */
+  .contributors-list {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding-top: 4px;
+  }
+  .contributor-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: 4px 12px;
+    padding: 10px 10px;
+    background: transparent;
+    border: none;
+    border-radius: 7px;
+    cursor: pointer;
+    text-align: left;
+    width: 100%;
+    transition: background 0.15s;
+  }
+  .contributor-row:hover { background: var(--bg-soft); }
+  .contributor-row.is-only-selection {
+    background: var(--blue-pale);
+  }
+  .contributor-row.is-only-selection:hover { background: #d8e6ff; }
+  .contributor-label {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 12.5px;
+    font-weight: 700;
+    color: var(--navy);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .contributor-amount {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 13px;
+    font-weight: 800;
+    color: var(--navy);
+    white-space: nowrap;
+  }
+  .contributor-amount.is-negative { color: var(--red); }
+  .contributor-bar-wrap {
+    grid-column: 1 / -1;
+    position: relative;
+    height: 6px;
+    background: var(--bg-soft);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .contributor-bar {
+    position: absolute;
+    top: 0; bottom: 0; left: 0;
+    background: var(--orange);
+    border-radius: 3px;
+    transition: width 0.25s ease;
+  }
+  .contributor-bar.is-negative { background: var(--red); }
+  .contributor-empty {
+    padding: 30px 12px;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 12.5px;
+    font-style: italic;
+  }
+  .contributor-footer {
+    padding-top: 10px;
+    margin-top: 10px;
+    border-top: 1px solid var(--rule);
+    font-size: 11.5px;
+    color: var(--text-muted);
+    line-height: 1.4;
+  }
+  .contributor-footer strong { color: var(--navy); font-weight: 700; }
+
+  /* ----- Pending close items widget ----- */
+  .pending-list {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding-top: 4px;
+  }
+  .pending-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 8px;
+    background: transparent;
+    border: none;
+    border-radius: 7px;
+    cursor: pointer;
+    text-align: left;
+    width: 100%;
+    transition: background 0.15s;
+    border-bottom: 1px solid var(--rule);
+  }
+  .pending-item:last-child { border-bottom: none; }
+  .pending-item:hover { background: var(--bg-soft); }
+  .pending-icon {
+    width: 36px; height: 36px;
+    border-radius: 8px;
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+    background: var(--blue-pale);
+    color: var(--blue);
+  }
+  .pending-icon.is-warn   { background: rgba(240, 138, 36, 0.14); color: var(--orange-deep); }
+  .pending-icon.is-info   { background: var(--blue-pale);          color: var(--blue);        }
+  .pending-icon.is-neutral { background: var(--bg-soft);           color: var(--text-soft);   }
+  .pending-icon svg { width: 18px; height: 18px; }
+  .pending-text { flex: 1; min-width: 0; line-height: 1.2; }
+  .pending-count {
+    display: block;
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 800;
+    font-size: 20px;
+    color: var(--navy);
+    line-height: 1.0;
+  }
+  .pending-label {
+    display: block;
+    font-size: 11.5px;
+    color: var(--text-soft);
+    margin-top: 3px;
+  }
+  .pending-amount {
+    text-align: right;
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 700;
+    font-size: 12.5px;
+    color: var(--text-soft);
+    white-space: nowrap;
+  }
+  .pending-empty {
+    padding: 30px 12px;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 12.5px;
+    font-style: italic;
+  }
+  .pending-footer {
+    padding-top: 10px;
+    margin-top: 8px;
+    border-top: 1px solid var(--rule);
+    font-size: 11.5px;
+    color: var(--text-muted);
+    line-height: 1.4;
+  }
 
   /* Floating help docked at bottom-right */
   .help-fab {
@@ -1129,8 +1462,9 @@
   /* Mockup banner */
   .mockup-ribbon {
     position: fixed;
-    top: 16px;
-    right: 16px;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
     background: rgba(208, 56, 56, 0.95);
     color: #fff;
     font-family: 'Source Sans 3', sans-serif;
@@ -1142,6 +1476,7 @@
     border-radius: 100px;
     z-index: 200;
     box-shadow: 0 6px 16px -6px rgba(208, 56, 56, 0.55);
+    pointer-events: none;
   }
 
   /* Responsive */
@@ -1149,6 +1484,12 @@
     .hero-stat { grid-template-columns: 1fr; gap: 18px; }
     .hero-side { border-left: none; border-top: 1px solid var(--rule); padding-left: 0; padding-top: 18px; }
     .bottom-grid { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 1400px) and (min-width: 1101px) {
+    /* In the awkward middle width, stack contributor + pending under
+       the history chart so each card has room to breathe. */
+    .bottom-grid { grid-template-columns: 1.4fr 1fr; }
+    .bottom-grid > .chart-card:nth-child(1) { grid-row: span 2; }
   }
   @media (max-width: 760px) {
     .app { grid-template-columns: 0 1fr; }
@@ -1193,13 +1534,19 @@
       </button>
     </div>
 
-    <div class="topbar-user">
-      <span class="topbar-user-avatar">E</span>
-      <span>
-        <span class="topbar-user-name">Welcome, Ed</span>
-        <span class="topbar-user-co">RR Test Server</span>
+    <button class="topbar-user" type="button" id="js-user-btn" aria-haspopup="menu">
+      <span class="topbar-user-avatar-wrap">
+        <span class="topbar-user-avatar">E</span>
+        <span class="topbar-user-status" title="Online"></span>
       </span>
-    </div>
+      <span>
+        <span class="topbar-user-name" id="js-user-name">Welcome, Ed</span>
+        <span class="topbar-user-co" id="js-user-db">rrv7-acme &middot; RR Test Server</span>
+      </span>
+      <svg class="topbar-user-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
+    </button>
+    <!-- User menu (anchored to the user chip; built by JS) -->
+    <div class="user-menu" id="js-user-menu" role="menu" hidden></div>
   </header>
 
   <!-- ==================== SIDEBAR ==================== -->
@@ -1291,9 +1638,28 @@
       </button>
     </div>
 
-    <div class="sidebar-bottom">
-      <span class="sidebar-bottom-pulse"></span>
-      <span class="sidebar-bottom-text">All systems operational</span>
+    <!-- Status panel: Inventory Validation (module) over System
+         Status (global). Each row is a button that downloads a
+         diagnostic .xlsx — matches the live SPA muscle memory
+         where clicking a status light opens its Excel report.
+         Tooltips wired by JS from the snapshot's validation
+         block + a stock System Status description. -->
+    <div class="sidebar-status">
+      <button class="sidebar-status-row" type="button" id="js-validation-row" title="">
+        <span class="sidebar-status-dot" id="js-validation-dot" aria-hidden="true"></span>
+        <span class="sidebar-status-info">
+          <span class="sidebar-status-label">Inventory Validation</span>
+          <span class="sidebar-status-meta" id="js-validation-meta">Roll-forward clean</span>
+        </span>
+      </button>
+      <button class="sidebar-status-row" type="button" id="js-system-status-row"
+              title="System Status — data refresh heartbeat. Click to download the feed-status report (Excel). Green = all feeds current. Yellow = ingest lag &gt; 5 min. Red = ingest failed.">
+        <span class="sidebar-status-dot is-live" id="js-system-status-dot" aria-hidden="true"></span>
+        <span class="sidebar-status-info">
+          <span class="sidebar-status-label">System Status</span>
+          <span class="sidebar-status-meta" id="js-system-status-meta">All feeds current &middot; 0 min lag</span>
+        </span>
+      </button>
     </div>
   </aside>
 
@@ -1327,41 +1693,26 @@
             <polyline points="6 9 12 15 18 9"></polyline>
           </svg>
         </button>
-        <!-- Period dropdown -- populated from PERIOD_FILES in the script -->
+        <!-- Period dropdown -- populated by JS from accountRows -->
         <div class="period-popover" id="js-period-popover" hidden></div>
 
-        <button class="btn btn-ghost" type="button">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-          Import JDE data
-        </button>
-        <button class="btn btn-secondary" type="button">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
+        <!-- Import JDE data moved to the user menu (it's a global,
+             cross-module admin action, not module-scoped). Page-
+             header actions stay focused on this module. -->
+        <button class="btn btn-secondary" type="button" id="js-journal-entry-btn" title="Download an Excel-ready journal-entry batch for the current variance">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="9" y1="14" x2="15" y2="14"></line><line x1="9" y1="18" x2="13" y2="18"></line></svg>
           Journal Entry
         </button>
-        <button class="btn btn-primary" type="button">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"></path><line x1="12" y1="6" x2="12" y2="8"></line><line x1="12" y1="16" x2="12" y2="18"></line></svg>
+        <button class="btn btn-primary" type="button" id="js-audit-report-btn" title="Download an Excel audit report of the current period">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="16" y2="17"></line><line x1="10" y1="9" x2="14" y2="9"></line></svg>
           Audit Report
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
         </button>
       </div>
     </div>
 
-    <!-- Health strip (module-scoped only; System Status moved to
-         the sidebar bottom pulse because it's the same value app-
-         wide). This strip carries just the Inventory Validation
-         dot, which refreshes when this module loads. -->
-    <div class="health-strip">
-      <div class="health-item">
-        <span class="health-dot"></span>
-        <span class="health-label">Inventory Validation</span>
-        <span class="health-meta">Roll-forward clean &middot; verified at load</span>
-      </div>
-      <span class="health-spacer"></span>
-      <span class="health-refresh">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
-        Last refreshed 4 min ago
-      </span>
-    </div>
+    <!-- Health strip moved to the sidebar bottom (both lights live
+         in the persistent status panel now). -->
+
 
     <!-- Active-filter summary banner. Hidden by default; .is-on
          class added when any filter group is narrowed below "all". -->
@@ -1477,56 +1828,19 @@
       </div>
     </section>
 
-    <!-- Bottom grid: donut + history -->
+    <!-- Bottom grid: three reconciliation widgets -->
     <section class="bottom-grid">
 
+      <!-- 1. OOB History (trend) -->
       <div class="chart-card">
         <div class="chart-head">
-          <div class="panel-title">Out of balance &middot; trailing 12 closes</div>
+          <div class="panel-title">OOB &middot; trailing 12 closes</div>
           <div class="chart-legend">
             <span class="legend-chip"><span class="legend-dot" style="background: var(--orange);"></span>Out of balance</span>
           </div>
         </div>
         <div class="chart-history-wrap">
-          <svg class="chart-history-svg" id="js-history-svg" viewBox="0 0 600 240" preserveAspectRatio="none" aria-hidden="true">
-            <!-- Zero line -->
-            <line x1="40" y1="100" x2="600" y2="100" stroke="var(--rule-strong)" stroke-width="1" stroke-dasharray="3 3"/>
-            <!-- Gridlines -->
-            <line x1="40" y1="40" x2="600" y2="40"  stroke="var(--rule)" stroke-width="1"/>
-            <line x1="40" y1="160" x2="600" y2="160" stroke="var(--rule)" stroke-width="1"/>
-            <line x1="40" y1="220" x2="600" y2="220" stroke="var(--rule)" stroke-width="1"/>
-            <!-- Y axis labels -->
-            <text x="36" y="42"  font-family="Open Sans" font-size="10" fill="var(--text-muted)" text-anchor="end">+20k</text>
-            <text x="36" y="102" font-family="Open Sans" font-size="10" fill="var(--text-muted)" text-anchor="end">0</text>
-            <text x="36" y="162" font-family="Open Sans" font-size="10" fill="var(--text-muted)" text-anchor="end">-20k</text>
-            <text x="36" y="222" font-family="Open Sans" font-size="10" fill="var(--text-muted)" text-anchor="end">-40k</text>
-
-            <!-- Line path through 12 periods (matches the screenshot shape) -->
-            <polyline fill="none" stroke="var(--orange)" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round"
-                      points="60,100 105,100 145,100 190,180 230,100 275,100 320,90 365,100 405,100 450,100 495,200 540,100 585,60"/>
-            <!-- Point markers -->
-            <g fill="#fff" stroke="var(--orange)" stroke-width="2">
-              <circle cx="60"  cy="100" r="3.5"/>
-              <circle cx="105" cy="100" r="3.5"/>
-              <circle cx="145" cy="100" r="3.5"/>
-              <circle cx="190" cy="180" r="3.5"/>
-              <circle cx="230" cy="100" r="3.5"/>
-              <circle cx="275" cy="100" r="3.5"/>
-              <circle cx="320" cy="90"  r="3.5"/>
-              <circle cx="365" cy="100" r="3.5"/>
-              <circle cx="405" cy="100" r="3.5"/>
-              <circle cx="450" cy="100" r="3.5"/>
-              <circle cx="495" cy="200" r="3.5"/>
-              <circle cx="540" cy="100" r="3.5"/>
-              <circle cx="585" cy="60"  r="4.5" stroke-width="3"/>
-            </g>
-            <!-- X axis labels (subset) -->
-            <text x="60"  y="234" font-family="Open Sans" font-size="9.5" fill="var(--text-muted)" text-anchor="middle">Aug 15</text>
-            <text x="190" y="234" font-family="Open Sans" font-size="9.5" fill="var(--text-muted)" text-anchor="middle">Nov 15</text>
-            <text x="320" y="234" font-family="Open Sans" font-size="9.5" fill="var(--text-muted)" text-anchor="middle">Feb 16</text>
-            <text x="450" y="234" font-family="Open Sans" font-size="9.5" fill="var(--text-muted)" text-anchor="middle">May 16</text>
-            <text x="585" y="234" font-family="Open Sans" font-size="9.5" fill="var(--text-muted)" text-anchor="middle">Aug 16</text>
-          </svg>
+          <svg class="chart-history-svg" id="js-history-svg" viewBox="0 0 600 240" preserveAspectRatio="none" aria-hidden="true"></svg>
         </div>
         <div class="history-stats">
           <div>
@@ -1545,6 +1859,38 @@
             <div class="history-stat-label">Avg variance</div>
             <div class="history-stat-value" id="js-hist-avg">&nbsp;</div>
           </div>
+        </div>
+      </div>
+
+      <!-- 2. Top variance contributors (hotspot) -->
+      <div class="chart-card">
+        <div class="chart-head">
+          <div class="panel-title">By inventory account</div>
+          <a href="#" class="panel-help" id="js-contributors-help" title="Click any row to narrow the page filters to that inventory account.">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+          </a>
+        </div>
+        <div class="contributors-list" id="js-contributors-list">
+          <div class="contributor-empty">Loading&hellip;</div>
+        </div>
+        <div class="contributor-footer" id="js-contributors-footer">
+          Click a row to <strong>narrow filters</strong> to that account.
+        </div>
+      </div>
+
+      <!-- 3. Pending close items (blockers) -->
+      <div class="chart-card">
+        <div class="chart-head">
+          <div class="panel-title">Pending close items</div>
+          <a href="#" class="panel-help" id="js-pending-help" title="Items that need to be cleared, posted, or in-transit-resolved before this period can be closed.">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+          </a>
+        </div>
+        <div class="pending-list" id="js-pending-list">
+          <div class="pending-empty">Loading&hellip;</div>
+        </div>
+        <div class="pending-footer">
+          Click an item to download its detail report.
         </div>
       </div>
 
@@ -1570,24 +1916,34 @@
 (function () {
   'use strict';
 
-  // Period available in /data/ today. As more snapshots get captured
-  // from the live SPA they're added here; the period dropdown shows
-  // every entry and grays-out the ones missing a data file.
-  const PERIOD_FILES = [
-    { period: '2016-08-27', display: 'Aug 27, 2016', file: 'data/reconciliation-2016-08-27.json' },
-    { period: '2016-07-30', display: 'Jul 30, 2016', file: null },
-    { period: '2016-07-02', display: 'Jul 2, 2016',  file: null },
-    { period: '2016-05-28', display: 'May 28, 2016', file: null },
-    { period: '2016-04-30', display: 'Apr 30, 2016', file: null },
-    { period: '2016-04-02', display: 'Apr 2, 2016',  file: null },
-    { period: '2016-02-27', display: 'Feb 27, 2016', file: null },
-    { period: '2016-01-30', display: 'Jan 30, 2016', file: null },
-    { period: '2015-12-31', display: 'Dec 31, 2015', file: null },
-    { period: '2015-11-28', display: 'Nov 28, 2015', file: null },
-    { period: '2015-10-31', display: 'Oct 31, 2015', file: null },
-    { period: '2015-10-03', display: 'Oct 3, 2015',  file: null },
-    { period: '2015-08-29', display: 'Aug 29, 2015', file: null }
-  ];
+  // Single data file holds all 13 periods (per-account rows from
+  // v6ui_raccountsummary). Period switching is now an in-memory
+  // re-render, no re-fetch. List is derived from the loaded data;
+  // we keep the constant here for display labels.
+  const DATA_FILE = 'data/reconciliation.json';
+  const PERIOD_LABELS = {
+    '2016-08-27': 'Aug 27, 2016',
+    '2016-07-30': 'Jul 30, 2016',
+    '2016-07-02': 'Jul 2, 2016',
+    '2016-05-28': 'May 28, 2016',
+    '2016-04-30': 'Apr 30, 2016',
+    '2016-04-02': 'Apr 2, 2016',
+    '2016-02-27': 'Feb 27, 2016',
+    '2016-01-30': 'Jan 30, 2016',
+    '2015-12-31': 'Dec 31, 2015',
+    '2015-11-28': 'Nov 28, 2015',
+    '2015-10-31': 'Oct 31, 2015',
+    '2015-10-03': 'Oct 3, 2015',
+    '2015-08-29': 'Aug 29, 2015'
+  };
+  function periodList() {
+    if (!currentData) return [];
+    const periods = [...new Set((currentData.accountRows || []).map(r => r.period))];
+    return periods.sort((a, b) => b.localeCompare(a)).map(p => ({
+      period:  p,
+      display: PERIOD_LABELS[p] || p
+    }));
+  }
 
   // In-memory state. Filter selections are sets of selected IDs.
   // Hydrated from localStorage on init so they survive reloads and
@@ -1660,97 +2016,71 @@
   }
 
   // ---------- Render ----------
-  // Compute a filtered view of the snapshot by aggregating the
-  // per-company breakdown rows that match the current selection.
-  // The first-pass wiring filters on currency + company; the other
-  // three filters (business unit, inventory account, subsidiary)
-  // proportionally narrow the totals via the snapshot's optional
-  // shareByXxx weights. A real backend would replace this with a
-  // single API call that returns the filtered summary directly.
+  // EXACT row-level filtering. accountRows is the per-account, per-
+  // period dataset captured from v6ui_raccountsummary. Every row
+  // carries companyId / businessUnit / object / subsidiary / currency
+  // tags, so the filter logic is "select rows that match every group's
+  // selection, then sum them." This is the same shape the production
+  // backend will return. The renderer is just a downstream consumer
+  // of computeFilteredView's output.
+  const VARIANCE_KEYS = ['carryForward','glBatches','endOfDay','transactions','cardex','manualJournalEntries','unreconciledVariance'];
+
+  function rowMatchesFilters(row, data) {
+    // Currency is implicit on the row (via .currency for direct match).
+    // Company / BU / object / sub are direct id matches.
+    // For each group: if the user has narrowed below the full list,
+    // the row's tag must be in the selected set.
+    function passes(group, rowValue) {
+      const total = (data.filter[group] || []).length;
+      if (total === 0) return true;
+      const sel = selected[group];
+      if (sel.size === total) return true; // all selected = no filtering
+      return sel.has(rowValue);
+    }
+    return (
+      passes('currencies',    row.currency)     &&
+      passes('companies',     row.companyId)    &&
+      passes('businessUnits', row.businessUnit) &&
+      passes('objects',       row.object)       &&
+      passes('subsidiaries',  row.subsidiary || '')
+    );
+  }
+
   function computeFilteredView(data) {
-    // Default to full snapshot if no breakdown is present.
-    const fallback = {
-      valuation: data.summary.valuation,
-      variance:  data.summary.variance,
-      companyCount: (data.filter.companies || []).length,
-      accountCount: (data.filter.objects   || []).length,
-      narrowed: false
-    };
-    const breakdown = data.breakdown && data.breakdown.byCompany;
-    if (!Array.isArray(breakdown) || breakdown.length === 0) return fallback;
+    const rows = (data.accountRows || []).filter(r =>
+      r.period === currentPeriod && rowMatchesFilters(r, data)
+    );
 
-    // 1. Pick companies that match BOTH the currency filter
-    //    (via parentId) AND the company filter directly.
-    const allCurrencies = new Set((data.filter.currencies || []).map(x => x.id));
-    const allCompanies  = new Set((data.filter.companies  || []).map(x => x.id));
-    const selCurrencies = selected.currencies.size ? selected.currencies : allCurrencies;
-    const selCompanies  = selected.companies.size  ? selected.companies  : allCompanies;
-
-    const matched = breakdown.filter(row => {
-      const co = (data.filter.companies || []).find(c => c.id === row.companyId);
-      const currencyId = co ? co.parentId : null;
-      return selCompanies.has(row.companyId) && (!currencyId || selCurrencies.has(currencyId));
-    });
-
-    if (matched.length === 0) {
-      return {
-        valuation: { glBalance: 0, perpetualBalance: 0, outOfBalance: 0 },
-        variance:  zeroVariance(data.summary.variance),
-        companyCount: 0,
-        accountCount: 0,
-        narrowed: true
-      };
-    }
-
-    // 2. Aggregate valuation + variance across matched companies.
+    const variance = {};
+    VARIANCE_KEYS.forEach(k => { variance[k] = 0; });
     let gl = 0, perp = 0;
-    const variance = zeroVariance(data.summary.variance);
-    matched.forEach(row => {
-      gl   += row.glBalance        || 0;
-      perp += row.perpetualBalance || 0;
-      Object.keys(variance).forEach(key => {
-        variance[key] += (row.variance && row.variance[key]) || 0;
-      });
+    const companiesSeen = new Set();
+    const accountsSeen  = new Set();
+    rows.forEach(r => {
+      gl   += r.glBalance        || 0;
+      perp += r.perpetualBalance || 0;
+      VARIANCE_KEYS.forEach(k => { variance[k] += (r.variance && r.variance[k]) || 0; });
+      companiesSeen.add(r.companyId);
+      accountsSeen.add(r.object);
     });
-
-    // 3. Apply proportional weights for the remaining three filter
-    //    groups. Each shareBy* map says "if this id were the only
-    //    one selected, this is the fraction of the matched total
-    //    it would represent." Summing the selected shares gives
-    //    the multiplier. If no shareBy data exists for a group,
-    //    the filter is treated as scope-only (chip status updates
-    //    but the numbers don't change).
-    function shareFor(group, shareKey) {
-      const totalIds = (data.filter[group] || []).map(x => x.id);
-      const map = (data.breakdown && data.breakdown[shareKey]) || null;
-      if (!map || totalIds.length === 0) return 1;
-      const sel = selected[group].size ? selected[group] : new Set(totalIds);
-      if (sel.size === totalIds.length) return 1;
-      let share = 0;
-      sel.forEach(id => { share += (map[id] || 0); });
-      return Math.max(0, Math.min(1, share));
-    }
-    const buShare  = shareFor('businessUnits', 'shareByBusinessUnit');
-    const objShare = shareFor('objects',       'shareByObject');
-    const subShare = shareFor('subsidiaries',  'shareBySubsidiary');
-    const multiplier = buShare * objShare * subShare;
-
-    gl   *= multiplier;
-    perp *= multiplier;
-    Object.keys(variance).forEach(key => { variance[key] *= multiplier; });
 
     return {
-      valuation: { glBalance: gl, perpetualBalance: perp, outOfBalance: gl - perp },
-      variance:  variance,
-      companyCount: matched.length,
-      accountCount: selected.objects.size || (data.filter.objects || []).length,
-      narrowed: anyGroupNarrowed(data)
+      valuation: {
+        glBalance:        round2(gl),
+        perpetualBalance: round2(perp),
+        outOfBalance:     round2(gl - perp)
+      },
+      variance:     mapValues(variance, round2),
+      companyCount: companiesSeen.size,
+      accountCount: accountsSeen.size,
+      narrowed:     anyGroupNarrowed(data),
+      rows:         rows
     };
   }
 
-  function zeroVariance(template) {
+  function mapValues(obj, fn) {
     const out = {};
-    Object.keys(template).forEach(k => { out[k] = 0; });
+    Object.keys(obj).forEach(k => { out[k] = fn(obj[k]); });
     return out;
   }
 
@@ -1761,12 +2091,45 @@
     });
   }
 
+  // Bar chart: aggregate filtered rows per period, return one
+  // {period, value} per period present in the snapshot. The filter
+  // applies to the history too — narrow to one company and the
+  // entire 13-period trend recomputes.
+  function computeFilteredHistory(data) {
+    const byPeriod = new Map();
+    (data.accountRows || []).forEach(r => {
+      if (!rowMatchesFilters(r, data)) return;
+      const acc = byPeriod.get(r.period) || { glBalance: 0, perpetualBalance: 0 };
+      acc.glBalance        += r.glBalance        || 0;
+      acc.perpetualBalance += r.perpetualBalance || 0;
+      byPeriod.set(r.period, acc);
+    });
+    return [...byPeriod.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([period, v]) => ({ period: period, value: round2(v.glBalance - v.perpetualBalance) }));
+  }
+
+  let _rendering = false;
   function renderAll(data) {
     if (!data) return;
-
+    if (_rendering) {
+      // Belt-and-suspenders re-entry guard. If something downstream
+      // ever fires an event that calls renderAll again before the
+      // outer call returns, drop the inner call — the outer one
+      // will leave the DOM in the correct final state.
+      console.warn('renderAll re-entered; skipping inner call');
+      return;
+    }
+    _rendering = true;
+    try {
+      _renderAllInner(data);
+    } finally {
+      _rendering = false;
+    }
+  }
+  function _renderAllInner(data) {
     // Period button
-    const periodMeta = PERIOD_FILES.find(p => p.period === currentPeriod);
-    document.getElementById('js-period-display').textContent = periodMeta ? periodMeta.display : currentPeriod;
+    document.getElementById('js-period-display').textContent = PERIOD_LABELS[currentPeriod] || currentPeriod;
 
     // Hydrate filter selections from data if not already populated
     initSelectionsIfEmpty(data);
@@ -1799,16 +2162,19 @@
 
     // Page subtitle — reflect filter narrowing
     const sub = document.getElementById('js-page-sub');
-    if (sub && periodMeta) {
-      const ends = new Date(periodMeta.period + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+    if (sub && currentPeriod) {
+      const ends = new Date(currentPeriod + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
       sub.innerHTML = 'Period ending <strong>' + ends + '</strong> &middot; ' +
         view.companyCount + ' ' + (view.companyCount === 1 ? 'company' : 'companies') + ', ' +
         view.accountCount + ' inventory ' + (view.accountCount === 1 ? 'account' : 'accounts');
     }
 
-    // History chart + stats (aggregate per period; unaffected by
-    // filters because we don't have per-filter historical slices)
-    renderHistory(data.barChart || []);
+    // History chart + stats — filtered per period from accountRows
+    renderHistory(computeFilteredHistory(data));
+
+    // Two reconciliation-investigation widgets
+    renderTopContributors(data);
+    renderPendingItems(data);
 
     // Sidebar filter row state + active-filter banner
     renderFilterRows(data);
@@ -1892,14 +2258,217 @@
     avgEl.classList.toggle('is-red',  avg < 0);
   }
 
+  // ---------- Top variance contributors ----------
+  // Aggregate the filtered accountRows by ObjectAccount. Each
+  // inventory account shows its real summed OOB across the matched
+  // rows (companies × business units × subsidiaries that pass the
+  // current filters). Clicking a row narrows the Object filter
+  // to that single account.
+  function renderTopContributors(data) {
+    const list   = document.getElementById('js-contributors-list');
+    const footer = document.getElementById('js-contributors-footer');
+    if (!list) return;
+
+    const view    = computeFilteredView(data);
+    const objects = data.filter.objects || [];
+    const sel = selected.objects;
+    const allSelected = sel.size === objects.length;
+
+    // Group filtered rows by ObjectAccount and sum OOB.
+    const sums = new Map();
+    view.rows.forEach(r => {
+      sums.set(r.object, (sums.get(r.object) || 0) + (r.outOfBalance || 0));
+    });
+
+    // Build display rows in the order of the filter list so labels
+    // line up with what the user sees in the sidebar Object picker.
+    const rows = [];
+    objects.forEach(o => {
+      if (!sel.has(o.id)) return;
+      rows.push({ id: o.id, label: o.label, amount: round2(sums.get(o.id) || 0) });
+    });
+
+    rows.sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+
+    if (rows.length === 0) {
+      list.innerHTML = '<div class="contributor-empty">No inventory accounts selected.<br>Adjust the Inventory account filter.</div>';
+      if (footer) footer.innerHTML = '';
+      return;
+    }
+
+    const maxAbs = Math.max.apply(null, rows.map(r => Math.abs(r.amount)).concat([1]));
+    list.innerHTML = rows.map(r => {
+      const pct = Math.min(100, (Math.abs(r.amount) / maxAbs) * 100);
+      const isNeg = r.amount < 0;
+      const isOnly = sel.size === 1 && sel.has(r.id);
+      return '<button class="contributor-row' + (isOnly ? ' is-only-selection' : '') + '" type="button" data-object-id="' + escapeHtml(r.id) + '">'
+        + '<span class="contributor-label">' + escapeHtml(r.label) + '</span>'
+        + '<span class="contributor-amount ' + (isNeg ? 'is-negative' : '') + '">' + fmtMoney(r.amount) + '</span>'
+        + '<span class="contributor-bar-wrap"><span class="contributor-bar ' + (isNeg ? 'is-negative' : '') + '" style="width:' + pct.toFixed(1) + '%"></span></span>'
+        + '</button>';
+    }).join('');
+
+    list.querySelectorAll('.contributor-row').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const id = btn.dataset.objectId;
+        if (sel.size === 1 && sel.has(id)) {
+          // Already narrowed to this one — clicking again restores All
+          objects.forEach(o => selected.objects.add(o.id));
+        } else {
+          selected.objects.clear();
+          selected.objects.add(id);
+        }
+        onSelectionChanged();
+      });
+    });
+
+    if (footer) {
+      if (allSelected) {
+        footer.innerHTML = 'Click a row to <strong>narrow filters</strong> to that account.';
+      } else if (sel.size === 1) {
+        footer.innerHTML = 'Showing <strong>1 account</strong>. Click it again to show all.';
+      } else {
+        footer.innerHTML = 'Showing <strong>' + sel.size + ' of ' + objects.length + '</strong> accounts.';
+      }
+    }
+  }
+
+  // ---------- Pending close items ----------
+  // Items that need clearing before this period can be closed. The
+  // counts + amounts come from data.pending; a missing pending block
+  // shows the widget in an empty state.
+  const PENDING_DEFS = [
+    {
+      key:    'unpostedBatches',
+      label:  'Un-posted GL batches',
+      kind:   'is-warn',
+      title:  'GL batches that haven\'t posted to F0911 yet. Variance will not resolve until they post.',
+      iconSvg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><line x1="9" y1="15" x2="15" y2="15"></line></svg>'
+    },
+    {
+      key:    'openWorkOrders',
+      label:  'Open work-order journals',
+      kind:   'is-info',
+      title:  'Work orders that have movements but no completion journal yet.',
+      iconSvg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>'
+    },
+    {
+      key:    'inTransit',
+      label:  'In-transit inventory',
+      kind:   'is-info',
+      title:  'Inventory between locations that hasn\'t been received at destination yet.',
+      iconSvg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="15" height="13"></rect><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"></polygon><circle cx="5.5" cy="18.5" r="2.5"></circle><circle cx="18.5" cy="18.5" r="2.5"></circle></svg>'
+    },
+    {
+      key:    'manualJeDrafts',
+      label:  'Manual JE drafts',
+      kind:   'is-neutral',
+      title:  'Manual journal entries saved but not yet submitted.',
+      iconSvg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>'
+    }
+  ];
+
+  function renderPendingItems(data) {
+    const list = document.getElementById('js-pending-list');
+    if (!list) return;
+    const pending = data.pending || {};
+    const rows = PENDING_DEFS.map(def => Object.assign({}, def, pending[def.key] || { count: 0, amount: 0 }));
+    list.innerHTML = rows.map(r => (
+      '<button class="pending-item" type="button" data-pending-key="' + escapeHtml(r.key) + '" title="' + escapeHtml(r.title) + '">'
+      + '<span class="pending-icon ' + r.kind + '">' + r.iconSvg + '</span>'
+      + '<span class="pending-text">'
+        + '<span class="pending-count">' + r.count + '</span>'
+        + '<span class="pending-label">' + escapeHtml(r.label) + '</span>'
+      + '</span>'
+      + '<span class="pending-amount">' + (r.amount ? fmtMoney(r.amount) : '&mdash;') + '</span>'
+      + '</button>'
+    )).join('');
+
+    list.querySelectorAll('.pending-item').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const key = btn.dataset.pendingKey;
+        generatePendingReport(key);
+      });
+    });
+  }
+
+  function generatePendingReport(key) {
+    if (!window.XLSX) { flashStatus('Excel library still loading — try again in a sec'); return; }
+    const def = PENDING_DEFS.find(d => d.key === key);
+    const pending = (currentData && currentData.pending && currentData.pending[key]) || { count: 0, amount: 0 };
+
+    // Synthesize a row per pending item — in production these come
+    // from the source tables (F0911, F4801, F4101T, etc.). Each
+    // mock row has a doc number, type, date, account, amount, and
+    // age in days.
+    const headers = ['Doc Number', 'Doc Type', 'GL Date', 'Account', 'Amount', 'Age (days)', 'Note'];
+    const aoa = [
+      [(def && def.label) || key],
+      [],
+      ['Period',    periodDisplay()],
+      ['Database',  currentDbLabel()],
+      ['Generated', new Date().toISOString().slice(0, 19).replace('T', ' ')],
+      ['Total',     pending.count + ' items', round2(pending.amount)],
+      [],
+      headers
+    ];
+    const now = new Date();
+    const baseDoc = { unpostedBatches: 'JE-', openWorkOrders: 'WO-', inTransit: 'IT-', manualJeDrafts: 'JD-' }[key] || 'P-';
+    for (let i = 0; i < pending.count; i++) {
+      const days = 1 + Math.floor(Math.random() * 14);
+      const dt = new Date(now.getTime() - days * 86400000).toISOString().slice(0, 10);
+      const docNum = baseDoc + (1000 + i);
+      const amt = pending.count > 0 ? round2((pending.amount / pending.count) * (0.7 + Math.random() * 0.6)) : 0;
+      const note = {
+        unpostedBatches: 'Awaiting GL post',
+        openWorkOrders:  'WO movements posted, completion JE pending',
+        inTransit:       'En route to destination branch',
+        manualJeDrafts:  'Draft saved by analyst; not submitted'
+      }[key] || '';
+      aoa.push([docNum, key, dt, '1.4XXXXX.Inventory clearing', amt, days, note]);
+    }
+    if (pending.count === 0) {
+      aoa.push(['(none)', '—', '—', '—', 0, 0, 'No pending items in current scope']);
+    }
+
+    const sheet = XLSX.utils.aoa_to_sheet(aoa);
+    sheet['!cols'] = [{ wch: 16 }, { wch: 18 }, { wch: 14 }, { wch: 32 }, { wch: 14 }, { wch: 12 }, { wch: 44 }];
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, sheet, 'Pending');
+
+    const fname = 'pending-' + key + '-' + currentPeriod + '.xlsx';
+    XLSX.writeFile(wb, fname);
+    flashStatus('Downloaded ' + fname);
+  }
+
   function renderValidation(validation) {
     if (!validation) return;
-    const dots = document.querySelectorAll('.health-dot');
-    dots.forEach(d => {
-      d.classList.remove('is-warn', 'is-error');
-      if (validation.color === 'warning')      d.classList.add('is-warn');
-      else if (validation.color === 'danger' || validation.color === 'error') d.classList.add('is-error');
-    });
+    const dot  = document.getElementById('js-validation-dot');
+    const row  = document.getElementById('js-validation-row');
+    const meta = document.getElementById('js-validation-meta');
+    if (!dot || !row) return;
+
+    // Color → CSS class
+    dot.classList.remove('is-warn', 'is-error');
+    let stateMeta = 'Roll-forward clean';
+    if (validation.color === 'warning') {
+      dot.classList.add('is-warn');
+      stateMeta = validation.label || 'Roll-forward review';
+    } else if (validation.color === 'danger' || validation.color === 'error') {
+      dot.classList.add('is-error');
+      stateMeta = validation.label || 'Roll-forward failed';
+    }
+    if (meta) meta.textContent = stateMeta;
+
+    // Tooltip — use the snapshot's tooltip if present, else fall
+    // back to a stock description. Renders as native browser title.
+    // We always append the click hint because the snapshot's
+    // tooltip text doesn't know clicking is wired here.
+    const stockTooltip = 'Inventory Validation reflects whether this period\'s roll-forward closed cleanly from the prior period. Red = un-posted GL batches or a broken carry-forward chain.';
+    row.title = (validation.tooltip || stockTooltip) + '\n\nClick to download the validation diagnostic (Excel).';
   }
 
   // ---------- Filter selections ----------
@@ -1984,30 +2553,31 @@
     });
     document.getElementById('js-variance-total').textContent = fmtMoney(vc.unreconciledVariance);
     const sub = document.getElementById('js-page-sub');
-    const periodMeta = PERIOD_FILES.find(p => p.period === currentPeriod);
-    if (sub && periodMeta) {
-      const ends = new Date(periodMeta.period + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+    if (sub && currentPeriod) {
+      const ends = new Date(currentPeriod + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
       sub.innerHTML = 'Period ending <strong>' + ends + '</strong> &middot; ' +
         view.companyCount + ' ' + (view.companyCount === 1 ? 'company' : 'companies') + ', ' +
         view.accountCount + ' inventory ' + (view.accountCount === 1 ? 'account' : 'accounts');
     }
+    // Recompute the contributor bars (their amounts scale with
+    // the filtered total) and the bar-chart history (now filtered
+    // too, since accountRows carries per-period rows). Pending
+    // items don't change with filters.
+    renderTopContributors(currentData);
+    renderHistory(computeFilteredHistory(currentData));
   }
 
   // ---------- Period popover ----------
   function renderPeriodPopover() {
     const pop = document.getElementById('js-period-popover');
     pop.innerHTML = '';
-    PERIOD_FILES.forEach(p => {
+    periodList().forEach(p => {
       const btn = document.createElement('button');
       btn.className = 'period-item' + (p.period === currentPeriod ? ' is-current' : '');
       btn.type = 'button';
-      btn.textContent = p.display + (p.file ? '' : '  — not captured');
-      btn.disabled = !p.file;
-      btn.style.opacity = p.file ? '1' : '0.55';
-      btn.style.cursor = p.file ? 'pointer' : 'not-allowed';
+      btn.textContent = p.display;
       btn.addEventListener('click', () => {
-        if (!p.file) return;
-        loadPeriod(p.period, p.file);
+        switchPeriod(p.period);
         hidePopovers();
       });
       pop.appendChild(btn);
@@ -2043,6 +2613,10 @@
     const fp = document.getElementById('js-filter-popover');
     fp.hidden = true;
     fp.classList.remove('has-caret');
+    const um = document.getElementById('js-user-menu');
+    if (um) um.hidden = true;
+    const ub = document.getElementById('js-user-btn');
+    if (ub) ub.classList.remove('is-open');
     document.body.classList.remove('is-pinned');
   }
 
@@ -2054,6 +2628,131 @@
     positionPopover(pop, e.currentTarget);
     pop.hidden = false;
   });
+
+  // ---------- User menu ----------
+  // Placeholder data — in production these come from the auth/session
+  // service. The current user is fixed, and the database list comes
+  // from whatever the user's role grants them access to.
+  const USER = {
+    name:  'Ed Gutkowski',
+    email: 'ed.gutkowski@getgsi.com',
+    initial: 'E'
+  };
+  const DATABASES = [
+    { id: 'rrv7-acme',    label: 'rrv7-acme',    server: 'RR Test Server',     env: 'Test',    isCurrent: true  },
+    { id: 'rrv7-staging', label: 'rrv7-staging', server: 'RR Staging Server',  env: 'Staging', isCurrent: false },
+    { id: 'rrv7-demo',    label: 'rrv7-demo',    server: 'RR Demo Server',     env: 'Demo',    isCurrent: false }
+  ];
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+  }
+
+  function buildUserMenu() {
+    const menu = document.getElementById('js-user-menu');
+    if (!menu) return;
+    const dbRows = DATABASES.map(db => `
+      <button class="user-menu-db ${db.isCurrent ? 'is-current' : ''}" type="button" data-db-id="${escapeHtml(db.id)}">
+        <span class="user-menu-db-radio" aria-hidden="true"></span>
+        <span>
+          <span class="user-menu-db-name">${escapeHtml(db.label)}</span>
+          <span class="user-menu-db-meta">${escapeHtml(db.server)} &middot; ${escapeHtml(db.env)}</span>
+        </span>
+      </button>`).join('');
+    menu.innerHTML = `
+      <div class="user-menu-head">
+        <div class="user-menu-name">${escapeHtml(USER.name)}</div>
+        <div class="user-menu-email">${escapeHtml(USER.email)}</div>
+      </div>
+      <div class="user-menu-section">
+        <div class="user-menu-section-label">Connected database</div>
+        ${dbRows}
+      </div>
+      <div class="user-menu-section">
+        <div class="user-menu-section-label">Admin</div>
+        <button class="user-menu-action" type="button" data-action="import-jde">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+          <span>Import JDE data</span>
+          <span class="user-menu-action-meta">Global</span>
+        </button>
+        <button class="user-menu-action is-danger" type="button" data-action="restart-service">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"></path><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"></path></svg>
+          <span>Restart Service</span>
+          <span class="user-menu-action-meta">Admin</span>
+        </button>
+      </div>
+      <div class="user-menu-section">
+        <button class="user-menu-action" type="button" data-action="sign-out">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+          <span>Sign out</span>
+        </button>
+      </div>
+    `;
+    // Wire DB switcher
+    menu.querySelectorAll('.user-menu-db').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const id = btn.dataset.dbId;
+        DATABASES.forEach(d => { d.isCurrent = (d.id === id); });
+        const co = DATABASES.find(d => d.id === id);
+        if (co) {
+          document.getElementById('js-user-db').textContent = co.label + ' · ' + co.server;
+        }
+        buildUserMenu();
+        // Stay open so the user can see the radio update; close on next outside click
+        positionUserMenu();
+      });
+    });
+    // Wire admin actions (placeholders — show a non-blocking toast-style alert)
+    menu.querySelectorAll('.user-menu-action[data-action]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const action = btn.dataset.action;
+        const labels = { 'import-jde': 'Import JDE data', 'restart-service': 'Restart Service', 'sign-out': 'Sign out' };
+        flashStatus(labels[action] + ' — not wired in mockup');
+        hidePopovers();
+      });
+    });
+  }
+
+  function positionUserMenu() {
+    const menu = document.getElementById('js-user-menu');
+    const btn  = document.getElementById('js-user-btn');
+    if (!menu || !btn) return;
+    const r = btn.getBoundingClientRect();
+    menu.style.top  = (r.bottom + 6) + 'px';
+    menu.style.left = 'auto';
+    menu.style.right = (window.innerWidth - r.right) + 'px';
+  }
+
+  // Lightweight status flash for placeholder actions. Renders as a
+  // toast bottom-right; auto-fades after 2.4s. No state, no library.
+  function flashStatus(message) {
+    let el = document.getElementById('js-status-flash');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'js-status-flash';
+      el.style.cssText = 'position:fixed;bottom:84px;right:24px;background:var(--navy);color:#fff;padding:10px 16px;border-radius:8px;font-size:13px;font-weight:600;box-shadow:0 14px 32px -10px rgba(20,32,55,0.4);z-index:200;opacity:0;transition:opacity 0.18s;pointer-events:none;font-family:Open Sans,sans-serif;';
+      document.body.appendChild(el);
+    }
+    el.textContent = message;
+    requestAnimationFrame(() => { el.style.opacity = '1'; });
+    clearTimeout(el._t);
+    el._t = setTimeout(() => { el.style.opacity = '0'; }, 2400);
+  }
+
+  buildUserMenu();
+  document.getElementById('js-user-btn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const menu = document.getElementById('js-user-menu');
+    const btn  = document.getElementById('js-user-btn');
+    if (!menu.hidden) { hidePopovers(); return; }
+    hidePopovers();
+    positionUserMenu();
+    menu.hidden = false;
+    btn.classList.add('is-open');
+  });
+  document.getElementById('js-user-menu').addEventListener('click', (e) => e.stopPropagation());
 
   // ---------- Filter popover ----------
   function openFilterPopover(triggerRow) {
@@ -2169,36 +2868,388 @@
   });
 
   // ---------- Loader ----------
-  async function loadPeriod(period, file) {
+  // One fetch covers every period. Period switching is in-memory:
+  // just change currentPeriod and re-render. Refresh re-fetches.
+  async function loadData() {
     try {
-      const res = await fetch(file, { cache: 'no-store' });
+      const res = await fetch(DATA_FILE, { cache: 'no-store' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
-      const data = await res.json();
-      currentData = data;
-      currentPeriod = period;
-      renderAll(data);
+      currentData = await res.json();
+      renderAll(currentData);
     } catch (err) {
       console.error('RRV8 load failed:', err);
     }
   }
 
+  function switchPeriod(period) {
+    currentPeriod = period;
+    if (currentData) renderAll(currentData);
+  }
+
   // Hydrate persisted filter selections BEFORE the snapshot loads
   // so initSelectionsIfEmpty leaves them alone if storage had them.
   loadSelectionsFromStorage();
+  loadData();
 
-  // Initial load
-  const initial = PERIOD_FILES.find(p => p.period === currentPeriod);
-  if (initial && initial.file) loadPeriod(initial.period, initial.file);
-
-  // Refresh button in the topbar → reload the current period's JSON
-  // so a "Refresh" matches the user's mental model (re-fetch the data,
-  // recompute filters). No spinner yet; the snapshot is small enough
-  // that the visual swap is effectively instant.
+  // Refresh button in the topbar → re-fetch the snapshot.
   document.querySelectorAll('.topbar-action[title="Refresh data"]').forEach(btn => {
     btn.addEventListener('click', () => {
-      const meta = PERIOD_FILES.find(p => p.period === currentPeriod);
-      if (meta && meta.file) loadPeriod(meta.period, meta.file);
+      loadData();
+      flashStatus('Refreshed ' + (PERIOD_LABELS[currentPeriod] || currentPeriod));
     });
+  });
+
+  // Placeholder feedback for other top-bar icons (Fullscreen,
+  // Notifications, Help) and page-header action buttons (Journal
+  // Entry, Audit Report). They flash a toast so users see they're
+  // wired but not implemented yet.
+  function stub(selector, label) {
+    document.querySelectorAll(selector).forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        flashStatus(label + ' — not wired in mockup');
+      });
+    });
+  }
+  stub('.topbar-action[title="Fullscreen"]',    'Fullscreen');
+  stub('.topbar-action[title="Notifications"]', 'Notifications');
+  stub('.topbar-action[title="Help"]',          'Help');
+
+  // ---------- Excel exports ----------
+  // Both buttons in the page-actions row produce real .xlsx files
+  // via SheetJS so the demo feels useful, not just clickable.
+  // SheetJS is loaded with defer in <head>; if it hasn't arrived
+  // yet we tell the user to wait a beat. In production these would
+  // call backend endpoints that return server-rendered Excel.
+
+  function currentDbLabel() {
+    const co = (typeof DATABASES !== 'undefined') ? DATABASES.find(d => d.isCurrent) : null;
+    return co ? (co.label + ' (' + co.server + ')') : 'rrv7-acme';
+  }
+  function periodDisplay() {
+    return PERIOD_LABELS[currentPeriod] || currentPeriod;
+  }
+
+  function generateAuditReport() {
+    if (!window.XLSX) { flashStatus('Excel library still loading — try again in a sec'); return; }
+    if (!currentData) { flashStatus('No data loaded'); return; }
+    const view = computeFilteredView(currentData);
+
+    // --- Summary sheet ---
+    const headerRows = [
+      ['Inventory Reconciliation — Audit Report'],
+      [],
+      ['Period',         periodDisplay()],
+      ['Period End',     currentPeriod],
+      ['Database',       currentDbLabel()],
+      ['Generated',      new Date().toISOString().slice(0, 19).replace('T', ' ')],
+      ['Generated by',   USER.name + ' <' + USER.email + '>'],
+      ['Companies in view', view.companyCount],
+      ['Inventory accounts in view', view.accountCount],
+      [],
+      ['Valuation', 'Amount (USD-equiv)'],
+      ['GL Balance',        round2(view.valuation.glBalance)],
+      ['Perpetual Balance', round2(view.valuation.perpetualBalance)],
+      ['Out of Balance',    round2(view.valuation.outOfBalance)],
+      [],
+      ['Variance Component', 'Amount'],
+      ['Carry Forward',           round2(view.variance.carryForward)],
+      ['GL Batches',              round2(view.variance.glBatches)],
+      ['End of Day',              round2(view.variance.endOfDay)],
+      ['Transactions',            round2(view.variance.transactions)],
+      ['Cardex',                  round2(view.variance.cardex)],
+      ['Manual Journal Entries',  round2(view.variance.manualJournalEntries)],
+      ['Unreconciled Variance',   round2(view.variance.unreconciledVariance)]
+    ];
+    const summary = XLSX.utils.aoa_to_sheet(headerRows);
+    summary['!cols'] = [{ wch: 32 }, { wch: 22 }];
+
+    // --- History sheet — filtered to current scope ---
+    const histRows = [['Period', 'Out of Balance']];
+    computeFilteredHistory(currentData).forEach(p => histRows.push([p.period, round2(p.value)]));
+    const history = XLSX.utils.aoa_to_sheet(histRows);
+    history['!cols'] = [{ wch: 14 }, { wch: 18 }];
+
+    // --- Filters sheet (what was IN scope when the report ran) ---
+    const filterRows = [['Group', 'ID', 'Label', 'Selected']];
+    Object.keys(selected).forEach(group => {
+      (currentData.filter[group] || []).forEach(item => {
+        filterRows.push([group, item.id || '(blank)', item.label, selected[group].has(item.id) ? 'Y' : 'N']);
+      });
+    });
+    const filters = XLSX.utils.aoa_to_sheet(filterRows);
+    filters['!cols'] = [{ wch: 16 }, { wch: 16 }, { wch: 38 }, { wch: 10 }];
+
+    // --- By-company breakdown sheet (the math behind the totals) ---
+    // Aggregate filtered rows by companyId.
+    const byCompany = new Map();
+    view.rows.forEach(r => {
+      const acc = byCompany.get(r.companyId) || { glBalance: 0, perpetualBalance: 0 };
+      acc.glBalance        += r.glBalance        || 0;
+      acc.perpetualBalance += r.perpetualBalance || 0;
+      byCompany.set(r.companyId, acc);
+    });
+    const breakdownRows = [['Company', 'GL Balance', 'Perpetual Balance', 'Out of Balance']];
+    [...byCompany.entries()].forEach(([companyId, t]) => {
+      const co = (currentData.filter.companies || []).find(c => c.id === companyId);
+      breakdownRows.push([
+        co ? co.label : companyId,
+        round2(t.glBalance),
+        round2(t.perpetualBalance),
+        round2(t.glBalance - t.perpetualBalance)
+      ]);
+    });
+    // --- By-account sheet — one row per (period, company, account)
+    //     that's in the filtered view. The analyst can pivot on this. ---
+    const accountSheet = [['Period', 'Company', 'BU', 'Object', 'Sub', 'Short Acct', 'Long Acct', 'Currency', 'GL', 'Perpetual', 'OOB', 'CarryFwd', 'GLBatches', 'EoD', 'Tx', 'Cardex', 'JEs']];
+    view.rows.forEach(r => {
+      accountSheet.push([
+        r.period, r.companyId, r.businessUnit, r.object, r.subsidiary,
+        r.shortAccount, r.longAccount, r.currency,
+        round2(r.glBalance), round2(r.perpetualBalance), round2(r.outOfBalance),
+        round2(r.variance.carryForward), round2(r.variance.glBatches), round2(r.variance.endOfDay),
+        round2(r.variance.transactions), round2(r.variance.cardex), round2(r.variance.manualJournalEntries)
+      ]);
+    });
+    const accountSheetWS = XLSX.utils.aoa_to_sheet(accountSheet);
+    accountSheetWS['!cols'] = [
+      { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 8 },
+      { wch: 12 }, { wch: 28 }, { wch: 10 },
+      { wch: 14 }, { wch: 14 }, { wch: 12 },
+      { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 12 }, { wch: 12 }, { wch: 10 }
+    ];
+    const breakdown = XLSX.utils.aoa_to_sheet(breakdownRows);
+    breakdown['!cols'] = [{ wch: 32 }, { wch: 18 }, { wch: 20 }, { wch: 18 }];
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, summary,         'Summary');
+    XLSX.utils.book_append_sheet(wb, breakdown,       'By Company');
+    XLSX.utils.book_append_sheet(wb, accountSheetWS,  'By Account');
+    XLSX.utils.book_append_sheet(wb, history,         'History');
+    XLSX.utils.book_append_sheet(wb, filters,   'Filters');
+
+    const fname = 'reconciliation-audit-' + currentPeriod + '.xlsx';
+    XLSX.writeFile(wb, fname);
+    flashStatus('Downloaded ' + fname);
+  }
+
+  function generateJournalEntry() {
+    if (!window.XLSX) { flashStatus('Excel library still loading — try again in a sec'); return; }
+    if (!currentData) { flashStatus('No data loaded'); return; }
+    const view = computeFilteredView(currentData);
+
+    // A JE batch — one debit and one credit per variance component
+    // that's non-zero. In production this is the real JDE F0911-
+    // bound batch; here we just structure the rows so the columns
+    // are recognizable to an analyst.
+    const rows = [
+      ['Doc Type', 'Doc Number', 'GL Date', 'Account', 'Subledger', 'Explanation', 'Debit', 'Credit'],
+    ];
+    const docNum = 'V8-' + currentPeriod.replace(/-/g, '');
+    const today  = new Date().toISOString().slice(0, 10);
+    const components = [
+      ['Carry Forward',          view.variance.carryForward],
+      ['Transactions',           view.variance.transactions],
+      ['Cardex',                 view.variance.cardex],
+      ['Manual Journal Entries', view.variance.manualJournalEntries]
+    ];
+    let lineNo = 0;
+    components.forEach(([label, amount]) => {
+      if (!amount) return;
+      lineNo += 1;
+      const abs = Math.abs(round2(amount));
+      // Variance offsets to a clearing account; sign of `amount`
+      // decides which side it lands on.
+      if (amount < 0) {
+        rows.push(['JE', docNum, today, '1.4XXXXX.Inventory clearing', label, label + ' clearing', abs, 0]);
+        rows.push(['JE', docNum, today, '1.4XXXXX.Reconciliation suspense', label, label + ' offset', 0, abs]);
+      } else {
+        rows.push(['JE', docNum, today, '1.4XXXXX.Reconciliation suspense', label, label + ' offset', abs, 0]);
+        rows.push(['JE', docNum, today, '1.4XXXXX.Inventory clearing', label, label + ' clearing', 0, abs]);
+      }
+    });
+    if (lineNo === 0) {
+      rows.push(['JE', docNum, today, '—', '—', 'No non-zero variance components in current scope', 0, 0]);
+    }
+
+    const sheet = XLSX.utils.aoa_to_sheet(rows);
+    sheet['!cols'] = [
+      { wch: 9 }, { wch: 16 }, { wch: 12 }, { wch: 36 }, { wch: 22 }, { wch: 36 }, { wch: 14 }, { wch: 14 }
+    ];
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, sheet, 'JE Batch');
+
+    const fname = 'journal-entry-' + currentPeriod + '.xlsx';
+    XLSX.writeFile(wb, fname);
+    flashStatus('Downloaded ' + fname);
+  }
+
+  function round2(n) { return Math.round(((+n) || 0) * 100) / 100; }
+
+  document.getElementById('js-audit-report-btn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    generateAuditReport();
+  });
+  document.getElementById('js-journal-entry-btn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    generateJournalEntry();
+  });
+
+  // ---------- Status-light Excel exports ----------
+  // Clicking either sidebar status light downloads a diagnostic
+  // workbook — matches the live SPA's behavior (analysts have
+  // muscle memory of clicking the light to open the report).
+
+  function generateValidationReport() {
+    if (!window.XLSX) { flashStatus('Excel library still loading — try again in a sec'); return; }
+    if (!currentData) { flashStatus('No data loaded'); return; }
+    const v = currentData.validation || {};
+    const view = computeFilteredView(currentData);
+
+    // Header block
+    const header = [
+      ['Inventory Validation — Diagnostic'],
+      [],
+      ['Period',           periodDisplay()],
+      ['Period End',       currentPeriod],
+      ['Database',         currentDbLabel()],
+      ['Status color',     v.color || 'success'],
+      ['Status label',     v.label || '(clean)'],
+      ['Snapshot captured', (currentData._meta && currentData._meta.captured) || ''],
+      ['Generated',        new Date().toISOString().slice(0, 19).replace('T', ' ')],
+      [],
+      ['Description'],
+      [v.tooltip || 'Inventory Validation reflects whether this period\'s roll-forward closed cleanly from the prior period.'],
+      []
+    ];
+
+    // Roll-forward chain rows — every period present, with the
+    // current filters applied. Each row is "did this period close
+    // clean for the current scope?"
+    const chainHeader = ['Period', 'Out of Balance', 'Status', 'Notes'];
+    const chainRows = computeFilteredHistory(currentData).map(p => {
+      const abs = Math.abs(p.value || 0);
+      let status, notes;
+      if (abs < 1)            { status = 'CLEAN';  notes = 'Variance under $1 — system rounding'; }
+      else if (abs < 1000)    { status = 'OK';     notes = 'Minor unreconciled variance'; }
+      else if (abs < 20000)   { status = 'REVIEW'; notes = 'Material variance — confirm cardex match'; }
+      else                    { status = 'BREAK';  notes = 'Likely un-posted GL batch or broken carry-forward'; }
+      return [p.period, round2(p.value), status, notes];
+    });
+
+    // Variance components (current period, filtered view)
+    const components = [
+      ['Component', 'Amount', 'Direction', 'Plain-language read'],
+      ['Carry Forward',           round2(view.variance.carryForward),         dir(view.variance.carryForward),         'Roll-forward delta from the prior period close'],
+      ['GL Batches',              round2(view.variance.glBatches),            dir(view.variance.glBatches),            'GL postings since the last reconciliation snapshot'],
+      ['End of Day',              round2(view.variance.endOfDay),             dir(view.variance.endOfDay),             'EOD-snapshot delta vs. real-time perpetual'],
+      ['Transactions',            round2(view.variance.transactions),         dir(view.variance.transactions),         'In-flight transactions during the close window'],
+      ['Cardex',                  round2(view.variance.cardex),               dir(view.variance.cardex),               'F4111 movement not reflected in F0911 yet'],
+      ['Manual Journal Entries',  round2(view.variance.manualJournalEntries), dir(view.variance.manualJournalEntries), 'Analyst-posted JEs against inventory accounts'],
+      ['Unreconciled Variance',   round2(view.variance.unreconciledVariance), dir(view.variance.unreconciledVariance), 'What\'s left after all components net out']
+    ];
+
+    const sheet1 = XLSX.utils.aoa_to_sheet(header.concat([chainHeader], chainRows));
+    sheet1['!cols'] = [{ wch: 18 }, { wch: 18 }, { wch: 12 }, { wch: 56 }];
+
+    const sheet2 = XLSX.utils.aoa_to_sheet(components);
+    sheet2['!cols'] = [{ wch: 26 }, { wch: 16 }, { wch: 12 }, { wch: 60 }];
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, sheet1, 'Roll-Forward Chain');
+    XLSX.utils.book_append_sheet(wb, sheet2, 'Variance Components');
+
+    const fname = 'inventory-validation-' + currentPeriod + '.xlsx';
+    XLSX.writeFile(wb, fname);
+    flashStatus('Downloaded ' + fname);
+  }
+
+  function generateSystemStatusReport() {
+    if (!window.XLSX) { flashStatus('Excel library still loading — try again in a sec'); return; }
+
+    // System Status feeds (mock data — in production these come
+    // from the ingest service's health endpoint). The layout
+    // mirrors what an admin expects: feed name, last successful
+    // run, lag, queue depth, and a row-level status.
+    const now = new Date();
+    const ago = (mins) => new Date(now.getTime() - mins * 60000).toISOString().slice(0, 19).replace('T', ' ');
+    const feeds = [
+      ['Feed',           'Source',         'Last Success',   'Lag (min)', 'Queue',  'Status'],
+      ['F0911 GL',       'JDE production', ago(2),           2,           0,        'GREEN'],
+      ['F4111 Cardex',   'JDE production', ago(3),           3,           0,        'GREEN'],
+      ['F4108 Calendar', 'JDE production', ago(5),           5,           0,        'GREEN'],
+      ['F4095 DMAAI',    'JDE production', ago(15),          15,          0,        'GREEN'],
+      ['F0902 Balances', 'JDE production', ago(4),           4,           0,        'GREEN'],
+      ['EOD Snapshot',   'Snapshot job',   ago(360),         360,         0,        'GREEN'],
+      ['Cardex Bridge',  'Cardex bridge',  ago(1),           1,           0,        'GREEN'],
+      ['Audit Stream',   'Audit log',      ago(2),           2,           3,        'GREEN']
+    ];
+
+    const meta = [
+      ['System Status — Diagnostic'],
+      [],
+      ['Database',  currentDbLabel()],
+      ['Generated', now.toISOString().slice(0, 19).replace('T', ' ')],
+      ['Generated by', USER.name + ' <' + USER.email + '>'],
+      [],
+      ['Overall',  'GREEN'],
+      ['All feeds current', 'Yes'],
+      ['Max lag (min)',     '6 hours (EOD snapshot — expected)'],
+      [],
+      ['Click any feed row in JDE Browser to inspect the source table.']
+    ];
+
+    const sheet1 = XLSX.utils.aoa_to_sheet(meta);
+    sheet1['!cols'] = [{ wch: 30 }, { wch: 50 }];
+
+    const sheet2 = XLSX.utils.aoa_to_sheet(feeds);
+    sheet2['!cols'] = [{ wch: 18 }, { wch: 18 }, { wch: 22 }, { wch: 12 }, { wch: 10 }, { wch: 10 }];
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, sheet1, 'Overview');
+    XLSX.utils.book_append_sheet(wb, sheet2, 'Feeds');
+
+    const fname = 'system-status-' + currentPeriod + '.xlsx';
+    XLSX.writeFile(wb, fname);
+    flashStatus('Downloaded ' + fname);
+  }
+
+  function dir(n) {
+    if (!n) return '—';
+    return n < 0 ? '↓ debit' : '↑ credit';
+  }
+
+  document.getElementById('js-validation-row').addEventListener('click', (e) => {
+    e.stopPropagation();
+    generateValidationReport();
+  });
+  document.getElementById('js-system-status-row').addEventListener('click', (e) => {
+    e.stopPropagation();
+    generateSystemStatusReport();
+  });
+  // Variance step preview icons
+  document.querySelectorAll('.variance-step-action').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const step = btn.closest('.variance-step');
+      const label = step ? step.querySelector('.variance-step-label').textContent : 'Variance step';
+      flashStatus('Preview ' + label + ' — not wired in mockup');
+    });
+  });
+  // Sidebar nav items that aren't the active one — feedback only
+  document.querySelectorAll('.sidebar-nav-item, .sidebar-nav-child').forEach(a => {
+    a.addEventListener('click', (e) => {
+      if (a.classList.contains('is-active')) return;
+      e.preventDefault();
+      flashStatus((a.textContent || '').trim() + ' — page not built yet');
+    });
+  });
+  // Floating help FAB
+  const fab = document.querySelector('.help-fab');
+  if (fab) fab.addEventListener('click', (e) => {
+    e.stopPropagation();
+    flashStatus('Context help — not wired in mockup');
   });
 })();
 </script>

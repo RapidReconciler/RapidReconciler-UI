@@ -97,15 +97,19 @@ As of the latest commit, V8 has:
   Inventory > Reconciliation. Fully styled. Loads data from
   `data/reconciliation-2016-08-27.json` on page load and renders all
   values dynamically.
-- **One period snapshot**: `data/reconciliation-2016-08-27.json` &mdash;
-  captured from the live staging response (Acme test instance).
+- **Single all-periods snapshot**: `data/reconciliation.json` &mdash;
+  195 row-level records covering 13 periods, 2 companies, 5 inventory
+  accounts, 12 subsidiaries, 2 business units. Fetched once on page
+  load; period switching is in-memory (no re-fetch). Captured via
+  `usp6getrinvaccountsummary` reading the `v6ui_raccountsummary`
+  view against `rrv7-acme`.
 - **Period dropdown wired**: clicking shows all 13 known close dates,
-  but only Aug 27 has a snapshot file; the rest say *&mdash; not captured*
-  and are disabled. The pill lives in the **page header** (next to the
-  action buttons), not the top bar &mdash; period is module-scoped
-  (Inventory and Transfers share it, PO Receipts has none) so the
-  control belongs with page chrome that can disappear on modules that
-  don&rsquo;t use it.
+  every one selectable (since the snapshot covers them all). The
+  pill lives in the **page header** (next to the action buttons),
+  not the top bar &mdash; period is module-scoped (Inventory and
+  Transfers share it, PO Receipts has none) so the control belongs
+  with page chrome that can disappear on modules that don&rsquo;t
+  use it.
 - **Filters live in the sidebar** (not in a page-level filter bar).
   Collapsed sidebar shows 5 filter icons; expanded sidebar shows full
   rows with `All` / `N / total` status pills and an orange dot on any
@@ -114,24 +118,41 @@ As of the latest commit, V8 has:
   Selections persist across reloads via `localStorage`
   (`rrv8-filter-selections-v1`), mirroring the live SPA's
   cross-page-navigation persistence.
-- **Filters re-compute the page** from the snapshot's `breakdown` block:
-  - `breakdown.byCompany` &mdash; per-company valuation + variance
-    rows. Currency + Company selections aggregate matched rows.
-  - `breakdown.shareByBusinessUnit`, `shareByObject`,
-    `shareBySubsidiary` &mdash; weights summing to 1.0 across each
-    group's ids. The product of selected shares multiplies the matched
-    total. So a real-looking narrowing happens for every filter group.
-  - Hero stat, GL / Perpetual side stats, variance step cards, total,
-    and the page subtitle ("2 companies, 5 inventory accounts") all
-    recompute on selection change.
-  - The bar-chart history is intentionally NOT filtered &mdash; it's
-    period-aggregate data, not per-filter slices.
+- **Filters are exact, row-level**. `data/reconciliation.json`
+  contains an `accountRows` array &mdash; one row per (period,
+  company, business unit, object, subsidiary, currency) tuple,
+  captured from `usp6getrinvaccountsummary` against `rrv7-acme`.
+  195 rows total (13 periods &times; 15 account combinations).
+  - Each row carries its dimension tags plus the full variance
+    breakdown (carryForward, glBatches, endOfDay, transactions,
+    cardex, manualJournalEntries, unreconciledVariance).
+  - `computeFilteredView()` is the single seam: filter rows by
+    every active selection, then sum. Hero, GL/Perpetual side
+    stats, variance steps, total, and page subtitle all read from
+    its return value.
+  - The bar-chart history is filtered TOO &mdash; `computeFilteredHistory()`
+    groups the same row-set by period and emits OOB per period.
+    Narrow to one company and the 13-period trend recomputes.
 - **Active-filter banner**: an orange callout under the page header
   appears whenever any group is narrowed below "all", showing which
   groups are reduced (e.g. *"Filtered: 1 of 2 currencies"*) plus a
   Reset link.
 - **Variance breakdown** renders dynamically from the filtered view,
   negatives in red parentheses, total in the navy bar.
+- **User menu** (click the user chip in the top bar) holds the
+  identity block + database switcher + admin-gated actions (Import
+  JDE data, Restart Service, Sign out). Mirrors the live SPA&rsquo;s
+  sidebar-top panel but consolidated under the avatar so the
+  sidebar stays nav + filters + status. Database switcher and admin
+  actions are placeholders &mdash; real permission gating is the
+  handoff team&rsquo;s concern.
+- **Toast feedback** for every placeholder button: refresh, Journal
+  Entry, Audit Report, Restart Service, Import JDE data, sidebar
+  nav items that aren&rsquo;t built yet, variance step previews,
+  fullscreen / notifications / help icons, context-help FAB. The
+  page feels alive even when actions are stubs.
+- **Hub link**: the V8 preview is linked from the hub&rsquo;s
+  *Demos* section (`rapidreconciler-hub.html`), internal-only.
 - **Out-of-balance history chart** redraws from JSON with min/max/zero
   axis labels and a current-period emphasis on the last point. Stats
   (Current / 12-mo high / 12-mo low / Avg) computed in JS.
@@ -142,15 +163,19 @@ As of the latest commit, V8 has:
 
 **What&rsquo;s NOT wired yet**
 
-- Filter `breakdown` block is synthesized from the aggregate totals;
-  the real backend will return its own breakdown shape. The math layer
-  in `inventory-reconciliation.html` (`computeFilteredView`) is the
-  single seam to replace when the API lands &mdash; everything
-  downstream (hero, variance steps, page subtitle, banner) reads from
-  its return value.
-- Variance step *Preview* buttons don&rsquo;t open anything.
-- *Import JDE data* / *Journal Entry* / *Audit Report* buttons
-  don&rsquo;t do anything.
+- Filter math is now exact, row-level &mdash; the real backend just
+  needs to return the same `accountRows` shape (currently captured
+  via `usp6getrinvaccountsummary`). No more synthesized
+  breakdown / share-weight approximations.
+- Admin actions in the user menu (Import JDE, Restart Service) flash
+  a toast but don&rsquo;t do anything. Database switcher updates the
+  user-chip label but doesn&rsquo;t actually re-fetch from a
+  different DB &mdash; the snapshot path is hard-coded.
+- Variance step *Preview* buttons / *Journal Entry* / *Audit Report*
+  flash a toast but don&rsquo;t open anything.
+- Permission gating: the user menu shows all admin actions; in
+  production the auth/role layer hides what the user can&rsquo;t do.
+  Handoff concern.
 - Period dropdown only has one period&rsquo;s data &mdash; we need the
   capture script to fill the rest. *Refresh* in the top bar re-fetches
   the current snapshot but other periods are still gray-disabled.
