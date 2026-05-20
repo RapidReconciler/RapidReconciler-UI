@@ -162,9 +162,68 @@ poller so amber / red / green reflect the live job state.
   + `rrFetch`) routes every data fetch through one helper.
   Demo mode reads the static JSON files above; prod / staging
   modes hit `<activeDb.ip>/<endpoint>` with `Authorization:
-  Bearer <jwt>` (auth wiring pending). Three fetch sites
-  carry `// PROD-TODO:` tags pointing at the prod endpoint
-  shape; `grep -rn "PROD-TODO" RRV8/` enumerates them.
+  Bearer <jwt>`. Three fetch sites carry `// PROD-TODO:` tags
+  pointing at the prod endpoint shape; `grep -rn "PROD-TODO"
+  RRV8/` enumerates them.
+- **Auth wiring complete (client-side).** `bootSession()` runs
+  at page boot: in demo mode it hydrates `window.RR_SESSION`
+  from `data/demo-jwt-payload.json`; in staging/prod it reads
+  the JWT from `localStorage.rrv8.token`, decodes it, and
+  populates `RR_SESSION.user` + `dbs[] + activeDbIndex`. If
+  no valid token is present, a centered login modal blocks the
+  page until the user POSTs credentials to
+  `<authBase>/resource/client/login` (staging:
+  `https://staging-valcspa.cloudapp.net`; prod:
+  `https://rr-valc-spa.cloudapp.net`; configurable via
+  `RR_CONFIG.authBase` or `?mode=staging` URL override).
+  Login success stores the JWT, hydrates session, removes the
+  modal. The user-menu DB switcher reads `RR_SESSION.dbs[]`
+  directly; switching DBs updates `activeDbIndex` (the next
+  `rrFetch` uses the new agent automatically). Sign out drops
+  the token and reloads. Permission gating (which admin
+  actions to hide based on JWT flags) remains a later chunk.
+- **Prod-mode reconciliation IS wired (summary-only).**
+  In staging/prod mode, `loadData()` does the two-call sequence
+  observed in the staging HAR: `GET /inventory/status` to
+  retrieve the default `reconciliationFilter` scope, then
+  `POST /inventory/reconciliation-filtered` with each filter
+  dimension wrapped as `[{id, checked, show}, ...]` (the
+  agent's Spring controller binds these to a `coral.rapidreconciler.client.services.beans.Item` array
+  &mdash; bare ID strings cause a Jackson 400). The response
+  is the legacy `{validation, filter, summary, pieChart,
+  barChart, ...}` envelope. `adaptLegacyResponse(legacy,
+  period)` synthesizes a minimal V8 `accountRows[]` (one row
+  per period from `barChart`, with the active period carrying
+  the real `glBalance / perpetualBalance / variance` from
+  `summary`) so the existing render path produces correct
+  numbers for hero stats, the validation light, the variance
+  table, and the bar-chart history. Transactions sign is
+  flipped during synthesis to round-trip cleanly through V8&rsquo;s
+  `VARIANCE_SIGN.transactions = -1` aggregator. A blue
+  `#js-prod-mode-banner` at top of main explains the
+  summary-only limitation: row-level filter narrowing,
+  per-company / per-account contributor bars, subsidiary
+  popover, and variance drilldown previews can&rsquo;t differentiate
+  without server-side `accountRows[]`. Confirmed live against
+  the local agent on `rrtest-rrsqltest.getgsi.com:34536`
+  (hosts-file mapped to 127.0.0.1) &mdash; numbers match the
+  V8 demo verbatim because the demo was derived from this
+  exact agent.
+- **`audit-detail` and `system-status-log` confirmed missing
+  server-side.** Direct probes (`GET /inventory/audit-detail`,
+  `GET /system/agent-log`, `GET /system/job-status`,
+  `GET /v_diagnostic5_job_status`) all return 404 on the
+  agent. `ensureAuditDetail` surfaces a red
+  `showFetchError('inventory/audit-detail', ...)` banner when
+  the user clicks an Audit Report button in prod mode; the
+  system-status-log failure logs to console only (background
+  fetch, not user-initiated).
+- **`/inventory/transactions` exists.** Returns HTTP 405 on GET
+  and HTTP 500 (NPE) on POST with the reconciliation-style
+  body &mdash; the body schema is different. Whatever the
+  V8 Transactions page needs as its data source, the legacy
+  agent has an endpoint named for it; deriving the request
+  shape from the staging HAR is the path of least resistance.
 - **Offline-vendored** CDN libraries under `RRV8/vendor/`
   (SheetJS, jsPDF, jspdf-autotable &mdash; ~1.3 MB) and self-
   hosted Google Fonts under `RRV8/fonts/` (Open Sans + Source
@@ -263,37 +322,45 @@ poller so amber / red / green reflect the live job state.
 
 ## Open work / candidate next chunks
 
-1. **Prod-mode auth + JWT plumbing** (NEXT) &mdash; login POST
-   against VALC, JWT stored in `localStorage.rrv8.token`, parse
-   JWT's `dbs[]` into `window.RR_SESSION` (skeleton already in
-   place), drive the user-menu DB switcher off it. Replaces the
-   hardcoded `USER` + `DATABASES` constants. Demo mode hydrates
-   the same `RR_SESSION` from `data/demo-jwt-payload.json`
-   (already shipped) so the user-menu wiring is mode-agnostic.
-   Contract decoded from the staging HAR &mdash; see the auth +
-   agent-routing section of [RRV8/API.md](API.md).
-2. **Prod-mode reconciliation wiring (first endpoint)** &mdash;
-   replace the demo stub for `reconciliation-filtered` with a
-   POST against the active customer's agent (see the PROD-TODO
-   tag on `loadData` in `inventory-reconciliation.html`).
-   **Likely blocker**: production endpoint returns summary only,
-   no `accountRows[]`. Engineering conversation needed before
-   this chunk.
-3. **Prod-mode audit-detail + system-status-log wiring** &mdash;
-   the other two PROD-TODO sites. Both need new server-side
-   endpoints (no equivalents in today's AngularJS SPA).
+1. **Server-side `accountRows[]` endpoint** (NEXT, engineering
+   conversation) &mdash; the prod-mode wiring is in and serves
+   real data, but only at summary granularity. To restore
+   V8&rsquo;s row-level features (filter narrowing actually
+   moving numbers, real per-company / per-account contributor
+   bars, the subsidiary popover, drilldown previews) the agent
+   needs to expose row-level data &mdash; either an expansion of
+   `inventory/reconciliation-filtered` accepting `rows: true`,
+   or a parallel `inventory/rows` endpoint. Mock shape can
+   match the existing `accountRows[]` in `RRV8/data/reconciliation.json`.
+2. **Server-side `audit-detail` and `system-status-log`
+   endpoints** &mdash; confirmed missing on the agent via direct
+   probes. Until these land, the audit-report buttons banner
+   their failure in prod mode and the System Status drawer
+   falls back to the bare `currentJob` poll.
+3. **Permission gating in the user menu** &mdash; hide Import
+   JDE / Restart Service / etc. based on the JWT's per-DB
+   permission flags (`a`, `as`, `aite`, `aprs`, `rs`, `su`).
+   Auth is already populating these into `RR_SESSION.dbs[]`;
+   just need the gating logic in `buildUserMenu`.
 4. **Second V8 page** (Transactions / As Of / Roll Forward / In
-   Transit / PO Receipts). Building it is the right time to
-   extract a real `scripts/capture-periods.ps1` from the ad-hoc
-   capture patterns.
+   Transit / PO Receipts). Transactions design preview already
+   landed at `RRV8/inventory-transactions.html` (combined
+   Filters + Subtotals widget, subtotal-as-filter pattern;
+   Details table TBD). Building this is the right time to
+   extract a real `scripts/capture-periods.ps1` from the
+   ad-hoc capture patterns.
 5. **Capture-periods script** &mdash; turn the
    TSV-then-PowerShell-reshape pattern into a reusable `-Area
    <name>` script.
-6. **Permission gating** in the user menu (currently shows all
-   admin actions to all users). Drives off the JWT's per-DB
-   permission flags (`a`, `as`, `aite`, `aprs`, `rs`, `su`).
-7. **Audit report PDF page-break-per-account** option &mdash;
+6. **Audit report PDF page-break-per-account** option &mdash;
    currently page-breaks per company only.
+7. **PDF auto-color negatives in red** &mdash; the Excel
+   exports now use `[Red]` in their number-format strings to
+   match the on-screen convention. The PDF (jspdf-autotable)
+   needs a `didParseCell` hook to do the same: inspect each
+   cell text/value, set `cell.styles.textColor = [192, 57,
+   43]` when negative. Small follow-up; deferred from the
+   negatives-in-red chunk.
 8. **Inline data + libraries** as a one-file
    flash-drive-demoable HTML &mdash; owner declined for now,
    noted as future option. The offline-vendoring chunk already
