@@ -110,6 +110,30 @@ port matches the JWT's `dbs[i].ip` port.
    endpoints.** None of the existing `/inventory/*` endpoints return
    row-level data today.
 
+### System Status "job running" (amber) signal
+
+The System Status light turns AMBER when the SQL Agent refresh job
+is currently mid-run &mdash; numbers in the page aren't stable yet and
+the user shouldn't trust them until the light returns to green.
+
+Source: SQL view `dbo.v_diagnostic5_job_status` (captured at
+[`RRV8/views/v_diagnostic5_job_status.sql`](views/v_diagnostic5_job_status.sql)).
+Returns one row, columns:
+
+| Column | Type | Notes |
+|---|---|---|
+| `JobStatus` | varchar | `'Failed'` &middot; `'Successful'` &middot; `'Cancelled'` &middot; `'In Progress'` &middot; `'Not Found'`. AMBER fires on `'In Progress'`. |
+| `job_date` | varchar | Last run start time as `mon dd yyyy hh:mm(AM|PM)`. |
+| `minutes` | int | Run duration (last completed) OR how long the current run has been going (when In Progress). |
+| `avg` | int | Average runtime in minutes across the last 10 successful runs. Used to flag overruns. |
+| `count` | int | Sample count for the average. |
+
+V8 mock at `data/system-status-log.json` carries a `currentJob`
+object with the same shape (rename `avg` &rarr; `avgMinutes` for
+readability). Production wiring: `rrFetch('system/job-status')`
+backed by a server endpoint that runs `SELECT * FROM
+dbo.v_diagnostic5_job_status` and reshapes columns to camelCase.
+
 ---
 
 ## Current network surface (Inventory > Reconciliation)

@@ -49,8 +49,19 @@ It has:
   Letter portrait, one company per page break, per-page footer
   with `Generated <ts>` + `Page X of Y`.
 - **Context-help modal** (FAB &rarr; 2-column glossary +
-  workflows). **Reference-guide chip** next to the title links
-  to `../RRUniversity/inventory-reconciliation.html`.
+  workflows).
+- **Page header — V8 standard for every main page.** Layout:
+  breadcrumb on top, then a title-row containing the title
+  (which IS the reference-guide link via `.page-title-link`,
+  with a subtle external-link arrow) + the period pill. Audit-
+  report buttons (Excel + PDF) hug the right edge. No subtitle
+  &mdash; the period pill carries the "which period" context.
+  Period pill is visually prominent (2px blue border, 15px
+  bold) to read as a primary context control.
+- **Demo Mode pill** in the topbar &mdash; centered between the
+  brand and the user chip via two flex spacers. Auto-removes
+  itself in non-demo modes via the IIFE's `if (!IS_DEMO)`
+  branch.
 - **Runbook drawer** on the two sidebar status lights. Clicking
   Inventory Validation opens a runbook drawer that auto-runs
   the prior-period unposted-batches / carry-forward-break
@@ -67,6 +78,20 @@ It has:
   into `Tools/analysis-workbook.html` triggers the analyzer's
   `SystemStatusTemplate` cleanly &mdash; the runbook hop is
   end-to-end.
+- **System Status amber/red live state.** The sidebar dot + the
+  drawer banner are both driven by `currentJob.jobStatus` (from
+  the SQL view `v_diagnostic5_job_status`, captured at
+  `RRV8/views/v_diagnostic5_job_status.sql`). Color mapping:
+  `In Progress` &rarr; amber (with pulsing dot), `Successful`
+  &rarr; green, `Failed` / `Cancelled` &rarr; red, `Not Found`
+  &rarr; amber. Historical step-log anomalies surface as
+  evidence inside the drawer but no longer drive the light
+  color &mdash; the light answers "is the system trustworthy
+  right now?" not "are there historical anomalies?". A 60s
+  poller (prod) re-reads the view via
+  `rrFetch('v_diagnostic5_job_status')` so the light stays
+  live without requiring a page refresh. Demo skips the
+  poll (`RR_CONFIG.statusPollMs = null`).
 - **Sidebar layout**: filters above main navigation, so the
   analyst sets context (company, currency, BU, account,
   subsidiary) before picking a module. Status lights remain at
@@ -81,9 +106,12 @@ exports), **#78** (docs refresh), **#79** (vertical variance +
 Preview modal + audit data foundation), **#80** (audit Excel +
 PDF + context help + chrome cleanup), **#81** (HANDOFF.md),
 **#82** (runbook drawer + SystemStatus step-log + cycle-only
-analysis), and an in-flight chunk that adds mode infrastructure
-(`config.js` + `IS_DEMO` + `rrFetch`) and vendors CDN libraries +
-Google Fonts locally so demo mode runs offline.
+analysis), **#83** (mode infrastructure + offline-vendoring),
+and an in-flight chunk that adds the V8 standard page-header
+(title = ref-guide link, prominent period pill, right-pinned
+audit buttons), Demo Mode topbar pill polish, and wires the
+System Status light to `v_diagnostic5_job_status` with a 60s
+poller so amber / red / green reflect the live job state.
 
 ---
 
@@ -115,6 +143,12 @@ Google Fonts locally so demo mode runs offline.
   `RRV8/scripts/gen-system-status-log.py` (re-run when the
   cycle template shifts &mdash; the owner can&rsquo;t run Python
   locally; ship the regenerated JSON alongside the script edit).
+- `RRV8/views/v_diagnostic5_job_status.sql` &mdash; production SQL
+  view DDL that powers the System Status light (returns
+  `JobStatus / job_date / minutes / avg / count`). V8's mock
+  exposes the same shape under `currentJob` in
+  `system-status-log.json`; prod polls the view via
+  `rrFetch('v_diagnostic5_job_status')` on a 60s interval.
 - `RRV8/data/demo-jwt-payload.json` (~1.4 KB) &mdash; synthetic
   JWT payload matching the prod VALC login response shape (`user`
   + `dbs[]`). Hydrates `window.RR_SESSION` in demo mode so the

@@ -201,6 +201,15 @@ def main() -> None:
             cycle_end_ts = datetime.strptime(cycle_rows[-1]["endtime"], "%Y-%m-%d %H:%M:%S")
             all_rows.extend(build_adhoc_sprocs(cycle_end_ts))
 
+    # Average cycle duration in minutes (rounded) — feeds currentJob.avgMinutes.
+    cycle_totals = []
+    for cs in CYCLE_DATES:
+        rs = [r for r in all_rows if r["capture"].endswith(cs.strftime("%Y-%m-%d %H:%M"))]
+        if not rs: continue
+        total = sum(r["seconds"] if r["step"] == "Data Capture" else r["seconds"] / 60 for r in rs)
+        cycle_totals.append(total)
+    avg_min = round(sum(cycle_totals) / len(cycle_totals)) if cycle_totals else 0
+
     out = {
         "_meta": {
             "captured":    SNAPSHOT_TS.isoformat() + "Z",
@@ -210,6 +219,14 @@ def main() -> None:
             "cycles":      len(CYCLE_DATES),
             "rows":        len(all_rows),
             "convention":  "Data-capture rows: Seconds column = MINUTES. Other rows: Seconds column = true seconds. Production mislabel preserved."
+        },
+        "currentJob": {
+            "_source":    "Mocks v_diagnostic5_job_status. Production: SELECT * FROM dbo.v_diagnostic5_job_status. In prod the agent polls this and feeds it to the System Status light. Flip jobStatus to 'In Progress' to demo the amber state.",
+            "jobStatus":  "Successful",
+            "jobDate":    CYCLE_DATES[-1].strftime("%b %d %Y %I:%M%p").replace(" 0", " "),
+            "minutes":    0,
+            "avgMinutes": avg_min,
+            "count":      len([c for c in cycle_totals]),
         },
         "banner":  "System Status Generated " + SNAPSHOT_TS.strftime("%Y-%m-%d %H:%M:%S"),
         "columns": ["Capture", "Step", "Process", "StartTime", "EndTime", "Seconds", "UpdateCount", "ErrorNum"],

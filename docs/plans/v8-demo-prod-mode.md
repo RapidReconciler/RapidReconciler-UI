@@ -2,10 +2,21 @@
 
 Captured 2026-05-20.
 
-**Status update (2026-05-20):** Chunk #1 (mode infrastructure +
-offline-vendoring) has landed. Read the "Chunk order" section below
-for what remains &mdash; chunk #2 (prod-mode auth + JWT plumbing) is
-the next pickup point.
+**Status update (2026-05-20):** Chunks landed so far:
+- **Chunk #1 — mode infrastructure + offline-vendoring** (PR #83).
+- **Page-header v8 standard + Demo Mode pill polish + System
+  Status live polling** (this PR). Adds the page-header
+  convention (title = reference-guide link, prominent period
+  pill, right-pinned audit buttons, no subtitle), centers the
+  Demo Mode pill in the topbar, and wires the System Status
+  light to `v_diagnostic5_job_status` with a 60s poller
+  (`RR_CONFIG.statusPollMs`). The view's `JobStatus` column
+  drives the dot color directly (Successful → green, In Progress
+  → amber, Failed/Cancelled → red, Not Found → amber).
+
+**Next pickup point:** chunk #2 below &mdash; prod-mode auth + JWT
+plumbing (login POST, JWT in localStorage, parse `dbs[]` into
+`window.RR_SESSION`, wire the user-menu DB switcher to it).
 
 ## Goal
 
