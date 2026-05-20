@@ -229,9 +229,30 @@ GET /api/v2/inventory/reconciliation
 - `GET /api/v2/inventory/reconciliation/drill-down?level=2&from=GBP` &mdash; on-demand deeper drill levels.
 - `GET /api/v2/inventory/reconciliation/audit-report?format=xlsx|pdf` &mdash; the Audit Report download.
 - `POST /api/v2/inventory/reconciliation/journal-entry` &mdash; the Journal Entry export.
+- `GET /api/v2/inventory/reconciliation/variance-drilldown?component=glBatches&period=2016-08-27` &mdash; per-component drilldown (per-batch rows for GL Batches from `v6_007_unpostedbatches`, per-account aggregate for components without a captured view yet). Replaces the static-snapshot fetch the page does today.
 - `GET /api/v2/system/status` &mdash; status indicator data, cached client-side.
 - **SSE** on `/api/v2/system/status/stream` &mdash; replaces the 60s `poll` XHR long-poll.
 - `GET /api/v2/periods?instance=rrv7-acme` &mdash; the period list, cached client-side via ETag.
+
+### Variance-component → source-view bindings
+
+These bindings let the Preview pane / Excel export call the right
+SQL when wiring moves from static snapshot to a live backend.
+
+| Component | Source view | Notes |
+|---|---|---|
+| `glBatches` | `v6_007_unpostedbatches` | Un-posted F0911 batches joined to `rinvaccountlist` and `rfiscalcalendar`. Per-batch grouping with approval + post status. Excel export matches the production *Unposted GL Batches* report shape verbatim (10 cols: CompanyNumber / BatchDate / PeriodEnds / Username / LongAccount / BatchNumber / Type / Amount / Approval_Status / Posting_Status; merged title row; light-gray header row; no metadata block). Currency + Rate columns from the production report are intentionally skipped &mdash; we don't yet capture an FX source. |
+| `endOfDay` | `v6_006_unposted_cardex` | Un-posted cardex transactions (`rtransactions` where `batchnumber = 0`) joined to `rinvaccountlist`. Per-doc grouping with order type, doc type/number, branch plant, and next-status. |
+| `manualJournalEntries` | `v6ui_manual_entries` | Per-doc manual JEs (`vcr_f0911` where `batchtype = 'g'` and `ordertype = ''`) joined to `rinvaccountlist`. 10 cols: CompanyNumber / PeriodEnds / DocType / DocNumber / LongAccount / Amount / UserName / Originator / Explanation / Remark. Currency + Rate from the view are dropped in V8 until an FX source is captured. |
+| `carryForward` | (rollover &mdash; no drilldown) | Prior-period unreconciled variance; not drillable. |
+| `transactions` | (dedicated page) | Has its own Transactions page; no inline drilldown. |
+| `cardex` | `v6ui_itemrollintegritydialog` | Per-item integrity issues where perpetual valuation doesn&rsquo;t roll cleanly (`rperpetualinv` where `reason != ''`) joined to `rinvaccountlist`. 15 cols: Reason / CompanyNumber / LongAccount / Branch / ShortItem / ItemNumber / ThirdItem / Location / Lot / Method / AdjAmount / AdjQty / UOM / GLClass / Comment. **No PeriodEnds column** &mdash; current-state report, not period-historical. The shared filter chain skips the period predicate for this binding via `requirePeriod: false`. |
+
+The snapshot declares these bindings in `_meta.drilldownSources`.
+Front-end filter chain (`filterViewBackedRows`) is shared across all
+view-backed components &mdash; takes (array key, amount field name),
+filters by current period + selected companies + the set of long
+accounts that pass `rowMatchesFilters`, and sorts by `|amount|` desc.
 
 ---
 
