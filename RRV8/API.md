@@ -1,12 +1,14 @@
 # RRV8 &mdash; API surface
 
 Reference doc for the V8 backend redesign. Captures the **current** AngularJS-era
-SPA's network surface (decoded from a staging HAR, 2026-05-20) and proposes a
-cleaner shape for V8.
+SPA's network surface (initially decoded from a staging HAR, 2026-05-20; updated
+the same day with the full controller catalog mined directly from the per-DB
+data-services jar) and proposes a cleaner shape for V8.
 
 Not authoritative for the proposal section &mdash; that's a design pitch for
-engineering to react to. The "Current network surface" section IS authoritative:
-it's what the live SPA does today, captured directly from staging.
+engineering to react to. The "Current network surface" and "Per-agent endpoints"
+sections ARE authoritative: they reflect the controllers shipping in the agent
+jar today.
 
 ---
 
@@ -101,14 +103,44 @@ agent URL + port from the active DB's JWT entry. The SPA picks the
 default DB (or whichever the user last selected via the DB switcher)
 and sets that as the API base for the session.
 
-Observed endpoints (Inventory > Reconciliation):
+### Full controller catalog (mined from the agent jar, 2026-05-20)
 
-| Endpoint | Method | Body | Returns |
+The complete HTTP surface is decoded directly from the per-DB
+data-services jar at
+`C:\Program Files\Rapid Reconciler\files\359` (the 47&nbsp;MB Spring
+Boot fat jar that the `rr-valc-agent` Windows service spawns per
+database; see [`reference_rr_agent_jar.md`](../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/reference_rr_agent_jar.md)
+for the javap recipe). Despite the misleading "rr-valc-agent" service
+name, this file IS the data-services agent &mdash; the jar at
+`C:\Program Files\Rapid Reconciler\rr-valc-agent.jar` is the VALC
+central agent and has no HTTP controllers.
+
+| Controller | Method | Path | Notes |
 |---|---|---|---|
-| `/poll` | GET | &mdash; | `{ updating, recalculating }` &mdash; live-update heartbeat, fires continuously |
-| `/available-periods` | GET | &mdash; | `{ availablePeriods[], defaultPeriod, validation, recalculating }` |
-| `/inventory/status` | GET | &mdash; | `{ reconciliationFilter, validation }` &mdash; sidebar status + last-used filter scope |
-| `/inventory/reconciliation-filtered` | POST | full filter state JSON | `{ validation, filter, summary, pieChart, barChart, agingChart, alertDuplicateCosts }` |
+| PollController | GET | `/poll` | Long-poll heartbeat. Holds the connection open ~60s and returns `{updating, recalculating}` when either flag flips or on timeout. Only "is the job running NOW" signal V8 has. |
+| PeriodController | GET | `/available-periods` | Period list + `defaultPeriod` + validation block. |
+| StatusController | GET | `/inventory/status` | `{reconciliationFilter, validation}`. Validation block is the **Inventory Validation (roll-forward) light** &mdash; see "Two ValidationLight sources" below. |
+| StatusController | GET | `/in-transit/status` | Same shape, In Transit module. |
+| StatusController | GET | `/po-receipts/status` | Same shape, PO Receipts module. |
+| StatusController | POST | `/system-status` | Generates the diagnostic Excel server-side (this is where `SELECT * FROM v_diagnostic5_job_status` actually runs). Returns `{fileName}` &mdash; download via `/download-excel/{id}`. NOT a polling endpoint. |
+| ReconciliationController | POST | `/inventory/reconciliation` | Initial-load variant. |
+| ReconciliationController | POST | `/inventory/reconciliation-filtered` | Filtered variant. Body must wrap each filter dimension as `[{id, checked, show}, ...]` (Jackson binds to a `coral.rapidreconciler.client.services.beans.Item` array; bare ID strings cause a 400). |
+| ReconciliationController | POST | `/in-transit/reconciliation`, `/in-transit/reconciliation-filtered` | In Transit siblings. |
+| ReconciliationController | POST | `/po-receipts/reconciliation`, `/po-receipts/reconciliation-filtered` | PO Receipts siblings. |
+| TransactionsController | POST | `/inventory/transactions` | Body `{take, skip, page, pageSize, aggregate[], reconciliationFilter, groupingType, exclusions, cacheKey}`. `reconciliationFilter` uses **bare string arrays** here, NOT the `Item` shape. |
+| TransactionsController | POST | `/inventory/transactions/details` | Body `{company, doc, type}`. **`type`, not `docType`** &mdash; see gotcha below. Returns the `usp6Compare2` rowset. |
+| TransactionsController | POST | `/inventory/transactions/save-notes` | Body `{notes:[rows]}` &mdash; persists analyst notes. |
+| TransactionsController | POST | `/in-transit/transactions`, `/in-transit/transactions/details`, `/in-transit/transactions/save-notes` | In Transit siblings. |
+| IntegrityController | GET | `/inventory/integrity/available-reports` | Lists integrity reports by id + description (`v_integrity_jde_aais`, Model AAI Table, Frozen Cost Integrity, &hellip;). |
+| IntegrityController | POST | `/inventory/integrity` | Body `{report:<view-id>, take/skip/page/pageSize, reconciliationFilter}`. Runs the named integrity view. |
+| IntegrityController | GET / POST | `/in-transit/integrity/available-reports`, `/in-transit/integrity` | In Transit siblings. |
+| DownloadController | GET | `/download-excel/{id}` | Downloads the file produced by an earlier `POST` (`/system-status`, audit export, etc.). |
+| DownloadController | GET | `/download-pdf/{id}` | PDF sibling. |
+| RollForwardController | GET | `/roll-forward/filters` | Available filters for the Roll Forward module. |
+| RollForwardController | POST | `/roll-forward` | Run a roll-forward. |
+| RunJobController | GET | `/run-ssis` | Triggers the SSIS refresh job. |
+| OrdersController, AsOfController, LineAnalysisController, CommonUomController | &mdash; | various | Not yet wired by V8; mined but not exercised. |
+| admin/AdminCompaniesController, AdminGeneralController, AdminInventoryOffsetsController, AdminUsersController | &mdash; | various | Admin module endpoints; out of scope for the analyst pages. |
 
 CORS is wide open: `Access-Control-Allow-Origin: *`. Server header is
 `Apache-Coyote/1.1` (the Spring Boot data-services child).
@@ -129,34 +161,147 @@ port matches the JWT's `dbs[i].ip` port.
    endpoint that exposes the rows, or a server-side filter that walks
    the rows and aggregates per the V8 query. **This is real backend
    work, not a rewiring.**
-4. **The other V8 features (audit detail, system-status step log,
-   variance-component drilldowns) likewise need new server-side
-   endpoints.** None of the existing `/inventory/*` endpoints return
-   row-level data today.
+4. **No JSON endpoint exposes `v_diagnostic5_job_status` directly.**
+   The view's data is reachable only through `POST /system-status`,
+   which generates the diagnostic Excel server-side. V8 fetches the
+   Excel and runs it through `Tools/analysis-workbook.html`'s
+   `SystemStatusTemplate` via the headless `rrv8-analyze` postMessage
+   bridge &mdash; never re-implement that parsing inline.
+5. **The other variance-component drilldowns** (audit detail,
+   row-level breakdowns, etc.) need new server-side endpoints; none
+   of the existing `/inventory/*` endpoints return row-level data
+   today.
 
-### System Status "job running" (amber) signal
+### Critical gotchas (decoded 2026-05-20)
 
-The System Status light turns AMBER when the SQL Agent refresh job
-is currently mid-run &mdash; numbers in the page aren't stable yet and
-the user shouldn't trust them until the light returns to green.
+These bit V8 and cost real debugging time. Pin them down so future
+sessions don&rsquo;t repeat them.
 
-Source: SQL view `dbo.v_diagnostic5_job_status` (captured at
-[`RRV8/views/v_diagnostic5_job_status.sql`](views/v_diagnostic5_job_status.sql)).
-Returns one row, columns:
+**Jackson silently drops unknown JSON fields.** Spring's default
+deserializer ignores any JSON key that doesn&rsquo;t bind to a setter
+on the request DTO. The result: a misnamed field arrives as `null` at
+the controller with **no error**, and the sproc / view runs with the
+wrong parameter, producing a degraded but plausible-looking response.
 
-| Column | Type | Notes |
-|---|---|---|
-| `JobStatus` | varchar | `'Failed'` &middot; `'Successful'` &middot; `'Cancelled'` &middot; `'In Progress'` &middot; `'Not Found'`. AMBER fires on `'In Progress'`. |
-| `job_date` | varchar | Last run start time as `mon dd yyyy hh:mm(AM|PM)`. |
-| `minutes` | int | Run duration (last completed) OR how long the current run has been going (when In Progress). |
-| `avg` | int | Average runtime in minutes across the last 10 successful runs. Used to flag overruns. |
-| `count` | int | Sample count for the average. |
+The bug that caught us: `POST /inventory/transactions/details` takes a
+`TransactionDetailsRequest { company, doc, type }`. V8 (and the
+documentation snippets above the fix) sent `docType` &mdash; Jackson
+dropped it, the agent called `usp6Compare2(company, doc, NULL)`, and
+the sproc returned only the section-divider rows (17 rows total,
+matching just the structural skeleton). With the correct field name
+`type`, the same call returns **71 rows** including the F4111 / F0911
+detail data. Always cross-check JSON field names against the
+controller DTOs (`javap -p ...$Request.class` on the relevant
+controller inner-class).
 
-V8 mock at `data/system-status-log.json` carries a `currentJob`
-object with the same shape (rename `avg` &rarr; `avgMinutes` for
-readability). Production wiring: `rrFetch('system/job-status')`
-backed by a server endpoint that runs `SELECT * FROM
-dbo.v_diagnostic5_job_status` and reshapes columns to camelCase.
+**Two separate `ValidationLight` sources.** The agent has two
+repository methods that each return a `ValidationLight` bean with the
+same shape but completely different semantics:
+
+- `ValidationRepository.getValidationLight(filter, Tab)` &rarr; the
+  **Inventory Validation (roll-forward) light**, period-scoped.
+  Exposed via `GET /inventory/status` (the validation block in that
+  response).
+- `ServerStatusRepository.getServerStatus()` &rarr; the **SQL Agent
+  job status** (derived from `v_diagnostic5_job_status`). Exists in
+  Java but is **NOT exposed by any controller** &mdash; only reachable
+  via `POST /system-status` which embeds the row inside the diagnostic
+  Excel.
+
+V8 spent a session wiring "System Status" to `/inventory/status`'s
+validation block before realizing that&rsquo;s actually the Inventory
+Validation data. The lights serve different purposes:
+
+- **Inventory Validation** = period-scoped roll-forward check.
+- **System Status** = global SQL Agent job health.
+
+They cannot be combined and have distinct sources.
+
+**`ValidationLight.Color` enum values are `none / danger / yellow /
+success / unknown`.** NOT the Bootstrap `success / warning / danger`
+that the JSON field name suggests. V8&rsquo;s `mapValidationToJob` maps
+all five:
+
+```
+success  → "Successful"
+yellow   → "In Progress"  (or trust `label` if it carries the
+                           explicit enum, e.g. "In Progress",
+                           "Not Found", "Failed", "Cancelled")
+danger   → "Failed"
+none     → unknown / amber
+unknown  → unknown / amber
+```
+
+The `label` field, when set, carries the raw `JobStatus` enum text
+&mdash; prefer it over color mapping.
+
+### Diagnostic Excel pipeline (the only path to `v_diagnostic5_job_status`)
+
+The legacy SPA's "click the System Status light to download a
+diagnostic Excel" feature is the only way the SQL Agent step log +
+`v_diagnostic5_job_status` row reach the client. The flow:
+
+1. `POST /system-status` (empty body OK) → `{ fileName: "<uuid>_-_SystemStatus_<stamp>" }`.
+   The agent runs `SELECT * FROM v_diagnostic5_job_status` and the
+   `findDiagnosticLog` SQL inside this call, builds the Excel
+   server-side, and writes it to
+   `C:\Program Files\Rapid Reconciler\<fileName>`.
+2. `GET /download-excel/{fileName}` → the `.xlsx` binary (ArrayBuffer).
+3. Hand the buffer to the analyzer&rsquo;s `SystemStatusTemplate` via
+   the `rrv8-analyze` postMessage bridge (V8 uses a hidden iframe so
+   the analyzer runs headlessly).
+
+The Excel layout the analyzer expects:
+
+| Row | Content |
+|---|---|
+| 1 | Banner: `System Status Generated <timestamp>` |
+| 2 | Header row: `Capture`, `Step`, `Process`, `StartTime`, `EndTime`, `Seconds`, `UpdateCount`, `ErrorNum` |
+| 3+ | Step-log rows verbatim (newer rows on top from the agent; the analyzer re-sorts chronologically) |
+
+Production mislabel preserved: when `Step` starts with "Data
+Capture", the `Seconds` column actually holds MINUTES. The analyzer
+normalizes this at parse time.
+
+The `v_diagnostic5_job_status` row columns (`JobStatus / job_date /
+minutes / avg / count`) are referenced inside the Excel but not as
+a separate sheet &mdash; the SystemStatusTemplate diagnosis uses the
+step log itself as the authoritative source. V8 mock at
+`data/system-status-log.json` carries a synthetic `currentJob` object
+with the camelCased shape (`{ jobStatus, jobDate, minutes,
+avgMinutes, count }`); production reaches the same data through the
+Excel.
+
+### Agent jar mining recipe
+
+Quick reference for future debugging when an endpoint&rsquo;s exact
+shape is unclear (and the static V8 docs / HAR captures don&rsquo;t cover
+the case). Saves an order of magnitude over probing endpoints.
+
+```bash
+JAR='C:\Program Files\Rapid Reconciler\files\359'
+JAVAP='C:\Program Files\Eclipse Adoptium\jdk-25.0.2.10-hotspot\bin\javap.exe'
+mkdir /tmp/dsvc && cd /tmp/dsvc
+"/c/Windows/System32/tar.exe" -xf "$JAR"
+find . -name "*Controller.class" | sort
+# For each controller, list paths + methods:
+"$JAVAP" -p -v ./coral/rapidreconciler/client/services/controller/PollController.class \
+  | grep -E "Utf8 +/|RequestMapping|method[^a-z]"
+# For request DTOs (when field-name discovery is needed):
+"$JAVAP" -p ./coral/rapidreconciler/client/services/controller/TransactionsController\$TransactionDetailsRequest.class
+```
+
+Common controllers worth disassembling:
+
+- `coral/rapidreconciler/client/services/controller/*.class`
+  &mdash; the HTTP surface
+- `coral/rapidreconciler/client/services/controller/*$*Request.class`
+  &mdash; inner classes that define request body shapes (this is where
+  the `type` vs `docType` discrepancy hides)
+- `coral/rapidreconciler/client/services/beans/ValidationLight*.class`
+  &mdash; response bean shapes
+- `coral/rapidreconciler/client/services/repository/*.class`
+  &mdash; what each endpoint actually runs at the SQL level
 
 ---
 

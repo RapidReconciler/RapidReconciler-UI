@@ -2724,7 +2724,7 @@
         <span class="sidebar-status-dot is-live" id="js-system-status-dot" aria-hidden="true"></span>
         <span class="sidebar-status-info">
           <span class="sidebar-status-label">System Status</span>
-          <span class="sidebar-status-meta" id="js-system-status-meta">Loading step log&hellip;</span>
+          <span class="sidebar-status-meta" id="js-system-status-meta">Checking job status&hellip;</span>
         </span>
       </button>
     </div>
@@ -4824,18 +4824,24 @@
       }
       clearFetchErrors();
       renderAll(currentData);
-      // Background-fetch the SQL Agent step log so the sidebar meta
-      // line ("Last cycle clean · 4h 13m") reflects reality without
-      // waiting for the user to open the drawer. Silent on failure —
-      // the drawer's own fetch will surface any real issue. After
-      // the first fetch lands, kick the v_diagnostic5_job_status
-      // poller so the light stays current as the day progresses.
+      // Paint the System Status light + meta from any cached
+      // job-status row so the analyst sees a sensible state before
+      // any network call resolves. Then refresh from
+      // /inventory/status&rsquo;s validation block, kick the 60s
+      // belt-and-suspenders tick, and start the /poll long-poll
+      // layer for live in-progress detection. Step log fetches in
+      // parallel and enriches the green-path duration when it lands;
+      // if its endpoint isn&rsquo;t wired, the meta still reads
+      // correctly from the job row alone.
+      rerenderSystemStatus();
+      refreshJobStatus().then(() => {
+        rerenderSystemStatus();
+        startSystemStatusPolling();
+        startSystemPollLoop();
+      });
       ensureSystemStatusLog()
-        .then(log => {
-          renderSystemStatusMeta(log);
-          startSystemStatusPolling();
-        })
-        .catch(() => { /* swallowed — drawer-open path will retry */ });
+        .then(log => renderSystemStatusMeta(log, effectiveJob()))
+        .catch(() => { /* job-status path already rendered the meta */ });
     } catch (err) {
       console.error('RRV8 load failed:', err);
       // In demo this means the static JSON is missing (real bug).
@@ -5737,8 +5743,14 @@
 
       const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 13);
       const fname = 'UnpostedGLBatches_' + currentPeriod + '_' + stamp + '.xlsx';
-      XLSX.writeFile(wb, fname);
-      flashStatus('Downloaded ' + fname);
+      // Route through the analyzer's GLBatchTemplate (same bridge
+      // pattern as Transactions per-row Export). The analyzer
+      // auto-detects from the "Unposted GL Batches" sheet name +
+      // Approval_Status / Posting_Status columns, runs its findings,
+      // and auto-downloads the analyzed workbook.
+      const buffer = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+      handOffToAnalyzer(buffer, fname);
+      flashStatus('Opening Unposted GL Batches in analyzer&hellip;');
       return;
     }
 
@@ -5794,11 +5806,19 @@
       ];
 
       const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, sheet, meta.label.slice(0, 31));
+      // Use the exact sheet name the analyzer&rsquo;s EndOfDayTemplate
+      // looks for so detection wins cleanly. (The variance step
+      // label is "End of Day" so this matches what we&rsquo;d have
+      // sliced to anyway.)
+      XLSX.utils.book_append_sheet(wb, sheet, 'End of Day');
 
       const fname = 'variance-endofday-' + currentPeriod + '.xlsx';
-      XLSX.writeFile(wb, fname);
-      flashStatus('Downloaded ' + fname);
+      // Route through the analyzer's EndOfDayTemplate (Type / Status /
+      // DocType / TransactionAmount columns detect cleanly above the
+      // metadata block). Same bridge pattern as the GL Batches export.
+      const buffer = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+      handOffToAnalyzer(buffer, fname);
+      flashStatus('Opening End of Day in analyzer&hellip;');
       return;
     }
 
@@ -6517,7 +6537,170 @@
   // EndTime / Seconds / UpdateCount / ErrorNum). Lazy-fetched on first
   // drawer open + a background fetch after page load so the sidebar
   // meta line can reflect the latest cycle.
+  //
+  // IMPORTANT: the LIGHT color + meta line are driven by
+  // v_diagnostic5_job_status (the live current-cycle state), NOT by
+  // the historical step log. Step log is bonus data for the drawer's
+  // deeper analysis &mdash; if it 404s (e.g. on agents where the
+  // server endpoint isn&rsquo;t wired yet), the light still works
+  // because we cache the job-status row in sessionStorage and any
+  // page can read it (Transactions reads the same key, so the light
+  // persists across page navigation).
   let _systemStatusLogCache = null;
+
+  // ----- Session-scope cache for v_diagnostic5_job_status -----
+  // Key shape matches the pattern used by Transactions&rsquo;
+  // _scopeKey helper so the two pages share state across navigation.
+  function _jobStatusCacheKey() {
+    const dbName = (window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex] || {}).n || '_';
+    return 'rrv8.scope.v1.' + MODE + '.' + dbName + '.jobStatus';
+  }
+  function readCachedJobStatus() {
+    try {
+      const raw = sessionStorage.getItem(_jobStatusCacheKey());
+      if (!raw) return null;
+      const obj = JSON.parse(raw);
+      return (obj && obj.payload) || null;
+    } catch (_) { return null; }
+  }
+  function writeCachedJobStatus(job) {
+    if (!job) return;
+    try {
+      sessionStorage.setItem(_jobStatusCacheKey(),
+        JSON.stringify({ ts: Date.now(), payload: job }));
+    } catch (_) {}
+  }
+
+  // Apply a job-status row to a sidebar dot. Sets both class
+  // conventions so the same helper works on this page (is-warn /
+  // is-error against the default-green base) and on Transactions
+  // (is-amber / is-red / is-green). Either page&rsquo;s CSS picks
+  // up the modifier it knows.
+  function applyJobStatusToDot(dot, job) {
+    if (!dot) return;
+    dot.classList.remove('is-green', 'is-amber', 'is-warn', 'is-red', 'is-error');
+    const status = (job && job.jobStatus) || null;
+    if (!status) {
+      // No data &mdash; neutral amber, not a silent green lie.
+      dot.classList.add('is-amber', 'is-warn');
+      return;
+    }
+    if (/^In Progress$/i.test(status))         dot.classList.add('is-amber', 'is-warn');
+    else if (/^(Failed|Cancelled)$/i.test(status)) dot.classList.add('is-red', 'is-error');
+    else if (/^Not Found$/i.test(status))      dot.classList.add('is-amber', 'is-warn');
+    else                                       dot.classList.add('is-green');
+  }
+
+  // Resolve a fresh job-status. In demo, derived from the static
+  // system-status-log.json (already cached by ensureSystemStatusLog
+  // so the call is a no-op after the first fetch). In prod / staging,
+  // pulled from /inventory/status&rsquo;s `validation` block &mdash;
+  // the agent exposes the v_diagnostic5_job_status columns
+  // (minutes / average / count + a derived color + label) there,
+  // not under the raw view name. Same place the legacy SPA reads
+  // it from. Writes through to sessionStorage on success; falls
+  // back to the cached value on transient failures so the dot
+  // doesn&rsquo;t flap.
+  function mapValidationToJob(v) {
+    if (!v) return null;
+    const label = ((v.label || '') + '').trim();
+    let jobStatus;
+    if      (/^In Progress$/i.test(label))    jobStatus = 'In Progress';
+    else if (/^Not Found$/i.test(label))      jobStatus = 'Not Found';
+    else if (/^Failed$/i.test(label))         jobStatus = 'Failed';
+    else if (/^Cancelled$/i.test(label))      jobStatus = 'Cancelled';
+    else if (v.color === 'success' || v.color === 'green') jobStatus = 'Successful';
+    else if (v.color === 'warning' || v.color === 'amber') jobStatus = 'In Progress';
+    else if (v.color === 'danger'  || v.color === 'red')   jobStatus = 'Failed';
+    else                                       jobStatus = 'Successful';
+    return {
+      jobStatus,
+      jobDate:    '',
+      minutes:    +v.minutes || 0,
+      avgMinutes: +(v.average !== undefined ? v.average : v.avg) || 0,
+      count:      +v.count   || 0
+    };
+  }
+  async function refreshJobStatus() {
+    if (IS_DEMO) {
+      try {
+        const log = await ensureSystemStatusLog();
+        const job = log && log.currentJob;
+        if (job) writeCachedJobStatus(job);
+        return job || readCachedJobStatus();
+      } catch (_) { return readCachedJobStatus(); }
+    }
+    try {
+      const status = await rrFetch('inventory/status');
+      const job = mapValidationToJob(status && status.validation);
+      if (job) { writeCachedJobStatus(job); return job; }
+      return readCachedJobStatus();
+    } catch (_) {
+      return readCachedJobStatus();
+    }
+  }
+
+  // ----- /poll long-poll layer -----
+  // The /inventory/status validation block tells us the LAST job
+  // result (success / warn / danger). It doesn&rsquo;t flip to amber
+  // the moment a refresh job starts &mdash; we&rsquo;d only notice
+  // on the next 60s refreshJobStatus tick. /poll holds a connection
+  // open for ~60s and returns as soon as updating / recalculating
+  // changes; we mirror its `updating` flag into a transient flag
+  // that takes precedence over the cached job state in the
+  // renderer. When `updating` goes back to false (job finished),
+  // we refetch /inventory/status to pick up the new validation
+  // result. Same pattern the legacy SPA uses.
+  let _systemRunningNow = false;
+  function effectiveJob() {
+    const base = readCachedJobStatus();
+    if (!_systemRunningNow) return base;
+    // Overlay In Progress on top of whatever last-row data we have
+    // (preserves minutes / avg / count so the meta line can still
+    // show timing).
+    return Object.assign({}, base || {}, { jobStatus: 'In Progress' });
+  }
+  function rerenderSystemStatus() {
+    renderSystemStatusMeta(_systemStatusLogCache, effectiveJob());
+    if (_activeRunbook && _activeRunbook.kind === 'system-status') {
+      if (_systemStatusLogCache) {
+        showRunbook(diagnoseSystemStatus(_systemStatusLogCache));
+      } else {
+        showRunbook(diagnoseSystemStatusFromJob(effectiveJob()));
+      }
+    }
+  }
+
+  let _pollLoopRunning = false;
+  function startSystemPollLoop() {
+    if (IS_DEMO) return;            // /poll isn&rsquo;t mocked in demo data
+    if (_pollLoopRunning) return;   // single loop per page is enough
+    _pollLoopRunning = true;
+    const tick = async () => {
+      try {
+        const r = await rrFetch('poll');
+        const updating = !!(r && (r.updating || r.recalculating));
+        if (updating !== _systemRunningNow) {
+          const wasRunning = _systemRunningNow;
+          _systemRunningNow = updating;
+          if (wasRunning && !updating) {
+            // Job just finished &mdash; pull the fresh validation
+            // block before re-rendering so the meta shows the new
+            // last-result color / numerics.
+            refreshJobStatus().then(rerenderSystemStatus);
+          } else {
+            rerenderSystemStatus();
+          }
+        }
+      } catch (_) {
+        // network blip; brief delay before reconnecting so we
+        // don&rsquo;t hammer the agent if it&rsquo;s down.
+        await new Promise(res => setTimeout(res, 2000));
+      }
+      if (_pollLoopRunning) tick();
+    };
+    tick();
+  }
 
   function ensureSystemStatusLog() {
     if (_systemStatusLogCache) return Promise.resolve(_systemStatusLogCache);
@@ -6908,35 +7091,41 @@
     };
   }
 
-  function renderSystemStatusMeta(log) {
-    // Sidebar dot + meta line. Color is driven by
-    // v_diagnostic5_job_status.JobStatus (live job state), NOT by
-    // historical step-log cycles. Production view source captured at
-    // RRV8/views/v_diagnostic5_job_status.sql.
+  function renderSystemStatusMeta(log, job) {
+    // Sidebar dot + meta line. JOB is the source of truth for color
+    // and meta wording &mdash; v_diagnostic5_job_status is the live
+    // current-cycle state and is the only signal needed for a
+    // healthy render. LOG (step log) is bonus: when present, it
+    // enriches the green-path "Last cycle clean" duration with the
+    // actual end-to-end runtime. When log isn&rsquo;t available
+    // (e.g. agent endpoint not wired yet), we still render correctly
+    // from job alone.
     const meta = document.getElementById('js-system-status-meta');
     const row  = document.getElementById('js-system-status-row');
     const dot  = document.getElementById('js-system-status-dot');
     if (!meta || !row) return;
 
-    if (!log || !log.cycles || log.cycles.length === 0) {
-      meta.textContent = 'Step log unavailable';
+    const j = job || (log && log.currentJob) || readCachedJobStatus();
+    applyJobStatusToDot(dot, j);
+
+    if (!j) {
+      meta.textContent = 'Status unavailable';
+      row.title =
+        'System Status &mdash; the agent has not returned a status row yet. ' +
+        'Click for details.';
       return;
     }
 
-    const job       = log.currentJob || null;
-    const jobStatus = (job && job.jobStatus) || 'Successful';
+    const jobStatus = j.jobStatus || 'Successful';
     const isRunning = /^In Progress$/i.test(jobStatus);
     const isFailed  = /^Failed$/i.test(jobStatus);
     const isCancel  = /^Cancelled$/i.test(jobStatus);
     const isNotRun  = /^Not Found$/i.test(jobStatus);
 
-    if (dot) dot.classList.remove('is-warn', 'is-error');
-
     if (isRunning) {
-      const running = formatDurationMin(job.minutes || 0);
-      const avg     = job.avgMinutes ? formatDurationMin(job.avgMinutes) : null;
+      const running = formatDurationMin(j.minutes || 0);
+      const avg     = j.avgMinutes ? formatDurationMin(j.avgMinutes) : null;
       meta.textContent = 'Job running · ' + running + (avg ? ' (avg ' + avg + ')' : '');
-      if (dot) dot.classList.add('is-warn');
       row.title =
         'System Status is AMBER — the SQL Agent refresh job is currently running, so today\'s numbers aren\'t stable yet. ' +
         'Source: v_diagnostic5_job_status (JobStatus = "In Progress"). Click to open the runbook drawer.';
@@ -6945,7 +7134,6 @@
 
     if (isFailed || isCancel) {
       meta.textContent = isFailed ? 'Last job failed' : 'Last job cancelled';
-      if (dot) dot.classList.add('is-error');
       row.title =
         'System Status is RED — JobStatus = "' + jobStatus + '" from v_diagnostic5_job_status. ' +
         'Today\'s numbers are NOT reliable. Click to open the runbook drawer for the escalation flow.';
@@ -6954,77 +7142,125 @@
 
     if (isNotRun) {
       meta.textContent = 'No prior job run';
-      if (dot) dot.classList.add('is-warn');
       row.title =
         'System Status is AMBER — JobStatus = "Not Found" from v_diagnostic5_job_status. ' +
         'No SQL Agent refresh has run yet on this database; numbers are baseline only.';
       return;
     }
 
-    // Green path — last job succeeded. Show last-cycle duration as
-    // useful secondary context.
-    const latest = log.cycles[log.cycles.length - 1];
-    const dur    = formatDurationMin(latest.durationMin);
-    meta.textContent = 'Last cycle clean · ' + dur;
+    // Green path — last job succeeded. Prefer step-log cycle duration
+    // when available (richer signal); fall back to job.minutes / avg
+    // when the historical log isn&rsquo;t reachable on this agent.
+    let dur = null;
+    if (log && log.cycles && log.cycles.length) {
+      dur = formatDurationMin(log.cycles[log.cycles.length - 1].durationMin);
+    } else if (j.minutes) {
+      dur = formatDurationMin(j.minutes);
+    } else if (j.avgMinutes) {
+      dur = '~' + formatDurationMin(j.avgMinutes);
+    }
+    meta.textContent = dur ? 'Last cycle clean · ' + dur : 'Last cycle clean';
     row.title =
       'System Status is GREEN — JobStatus = "Successful" from v_diagnostic5_job_status. ' +
       'Click to open the runbook drawer — cycles summary, latest cycle step breakdown, pattern detection.';
   }
 
-  // ---------- System Status polling ----------
-  // Background poll for v_diagnostic5_job_status so the light reflects
-  // the current job state without requiring the user to refresh.
-  // Skipped entirely in demo mode (RR_CONFIG.statusPollMs is null) —
-  // the static JSON doesn't change between polls. Production setting
-  // is 60000 (one request/minute against a top-1-row view, negligible
-  // load).
-  let _systemStatusPollHandle = null;
+  // ----- Degraded drawer (no step log available) -----
+  // Used when the historical step-log endpoint isn&rsquo;t reachable
+  // on this agent. Shows the live job-status banner + a single
+  // explanatory step so the drawer still tells the analyst whether
+  // the system is trustworthy right now &mdash; just without the
+  // multi-cycle median / anomaly analysis.
+  function diagnoseSystemStatusFromJob(job) {
+    if (!job) {
+      return {
+        kind: 'system-status',
+        color: 'amber',
+        statusLabel: 'System Status — unavailable',
+        headline: 'No job-status row from /inventory/status yet.',
+        period: currentPeriod,
+        steps: [{
+          label: 'Job status check', status: 'warn', statusBadge: '?',
+          finding: 'The agent has not yet returned a `validation` block on /inventory/status. ' +
+                   'The light reflects the cached session state, if any.',
+          detail: null
+        }],
+        action: {
+          type: 'investigate',
+          eyebrow: 'Investigate',
+          text: 'Check connectivity to the data-services agent. ' +
+                'V8 reads the v_diagnostic5_job_status columns from /inventory/status&rsquo;s `validation` block (same source the legacy SPA uses).',
+          sub: ''
+        },
+        actionTypeForButtons: 'investigate',
+        currentJob: null
+      };
+    }
+    const status   = job.jobStatus || 'Successful';
+    const isRun    = /^In Progress$/i.test(status);
+    const isFailed = /^(Failed|Cancelled)$/i.test(status);
+    const isNotRun = /^Not Found$/i.test(status);
+    const color = isRun ? 'amber' : (isFailed ? 'red' : (isNotRun ? 'amber' : 'green'));
 
-  function startSystemStatusPolling() {
-    if (IS_DEMO) return;
-    const ms = +(RR_CONFIG && RR_CONFIG.statusPollMs) || 0;
-    if (!ms) return;
-    if (_systemStatusPollHandle) clearInterval(_systemStatusPollHandle);
-    _systemStatusPollHandle = setInterval(pollSystemStatus, ms);
-  }
+    const dur    = job.minutes    ? formatDurationMin(job.minutes)    : null;
+    const avgDur = job.avgMinutes ? formatDurationMin(job.avgMinutes) : null;
+    const subBits = [
+      job.jobDate ? 'Last run: ' + job.jobDate : null,
+      dur    ? 'Duration: ' + dur : null,
+      avgDur ? 'Avg: '      + avgDur : null
+    ].filter(Boolean);
 
-  function pollSystemStatus() {
-    // PROD-TODO: the active DB's data-services HTTP endpoint runs
-    // SELECT * FROM v_diagnostic5_job_status and returns the row.
-    // rrFetch translates 'v_diagnostic5_job_status' to whatever path
-    // the data-services process exposes for views — could be a
-    // dedicated /views/v_diagnostic5_job_status route, a generic
-    // SQL-passthrough, or part of /poll. Engineer's call when
-    // wiring; V8 just asks for "this view's row, please."
-    rrFetch('v_diagnostic5_job_status')
-      .then(payload => {
-        const row = Array.isArray(payload) ? payload[0]
-                  : (payload && payload.rows && payload.rows[0])
-                  || payload;
-        if (!row || !_systemStatusLogCache) return;
-        _systemStatusLogCache.currentJob = mapJobStatusRow(row);
-        renderSystemStatusMeta(_systemStatusLogCache);
-        // If the drawer is currently open on system-status, re-render
-        // so the banner color + headline reflect the new state too.
-        if (_activeRunbook && _activeRunbook.kind === 'system-status') {
-          showRunbook(diagnoseSystemStatus(_systemStatusLogCache));
-        }
-      })
-      .catch(() => { /* network blip / endpoint missing; next tick retries */ });
-  }
+    const headline =
+      isRun    ? 'SQL Agent refresh job is currently RUNNING — numbers will stabilize when it completes.'
+    : isFailed ? 'Last SQL Agent run ' + status + ' — today\'s numbers may not be reliable.'
+    : isNotRun ? 'No prior SQL Agent run on this database — numbers are baseline only.'
+    :            'Last SQL Agent run completed successfully.';
 
-  // Normalize the v_diagnostic5_job_status row to V8's internal
-  // currentJob shape. Tolerant of both the raw view column names
-  // (JobStatus / job_date / avg) and pre-mapped camelCase.
-  function mapJobStatusRow(row) {
     return {
-      jobStatus:  row.JobStatus  || row.jobStatus  || 'Successful',
-      jobDate:    row.job_date   || row.jobDate    || '',
-      minutes:    +row.minutes   || 0,
-      avgMinutes: +((row.avg !== undefined ? row.avg : row.avgMinutes)) || 0,
-      count:      +row.count     || 0
+      kind: 'system-status',
+      color, statusLabel: 'System Status — live job state',
+      headline,
+      period: currentPeriod,
+      steps: [{
+        label: 'v_diagnostic5_job_status',
+        status: color === 'green' ? 'ok' : (color === 'amber' ? 'warn' : 'fail'),
+        statusBadge: color === 'green' ? '✓' : (color === 'amber' ? '!' : '×'),
+        finding: 'JobStatus = "' + status + '"' + (subBits.length ? ' · ' + subBits.join(' · ') : ''),
+        detail: null
+      }, {
+        label: 'Historical step log',
+        status: 'info', statusBadge: 'i',
+        finding: 'Step-log analysis is not available on this agent. The drawer\'s deeper pattern detection ' +
+                 '(slow-step anomalies, per-cycle breakdown) requires a server-side endpoint that has not been wired yet. ' +
+                 'See RRV8/API.md.',
+        detail: null
+      }],
+      action: {
+        type: isFailed ? 'escalate' : 'clean',
+        eyebrow: isFailed ? 'Escalate' : (isRun ? 'Wait' : 'Clear'),
+        text: isFailed
+          ? 'Escalate to RR support &mdash; last SQL Agent run did not complete cleanly.'
+          : (isRun
+              ? 'Job is in progress. Refresh in a few minutes once it completes.'
+              : 'System Status is healthy. No action required.'),
+        sub: ''
+      },
+      actionTypeForButtons: isFailed ? 'escalate' : 'clean',
+      currentJob: job
     };
   }
+
+  // ---------- System Status polling ----------
+  // Historical context: a 60s setInterval re-fetched /inventory/status
+  // every minute to keep the System Status light fresh. That was
+  // redundant once the /poll long-poll layer (startSystemPollLoop)
+  // landed &mdash; /poll holds open and returns the moment updating
+  // / recalculating changes, which is the only meaningful transition
+  // the light needs to react to. After a job finishes the long-poll
+  // already calls refreshJobStatus so the validation block updates.
+  // Keeping the symbol so external callers don&rsquo;t break, but it
+  // intentionally no longer schedules anything.
+  function startSystemStatusPolling() { /* no-op &mdash; /poll long-poll is the live channel */ }
 
   function openRunbookDrawer(kind) {
     if (!currentData) { flashStatus('No data loaded'); return; }
@@ -7037,18 +7273,37 @@
       showRunbook(diagnoseSystemStatus(_systemStatusLogCache));
       return;
     }
-    showRunbook(loadingSystemStatusDiagnosis());
+    // If we already have a cached job-status, open the drawer with
+    // it immediately (so the analyst sees the live state right away
+    // even before the historical step log finishes loading). Step
+    // log resolves async and replaces the drawer body with the full
+    // multi-cycle diagnosis when it lands. effectiveJob() folds in
+    // the /poll long-poll&rsquo;s in-progress flag so a click during
+    // a running refresh job opens straight to the amber state.
+    const cachedJob = effectiveJob();
+    if (cachedJob) {
+      showRunbook(diagnoseSystemStatusFromJob(cachedJob));
+    } else {
+      showRunbook(loadingSystemStatusDiagnosis());
+    }
     ensureSystemStatusLog()
       .then(log => {
         if (_activeRunbook && _activeRunbook.kind === 'system-status') {
           showRunbook(diagnoseSystemStatus(log));
         }
-        renderSystemStatusMeta(log);
+        renderSystemStatusMeta(log, effectiveJob());
       })
       .catch(err => {
-        console.error('System Status log load failed:', err);
-        flashStatus('Could not load system status log');
-        closeRunbookDrawer();
+        // Step log endpoint not reachable (e.g. agent doesn&rsquo;t
+        // expose it yet). Fall back to the live job-status only
+        // drawer rather than toasting + closing &mdash; the
+        // analyst still gets the answer to "is the system
+        // trustworthy right now?" from /inventory/status&rsquo;s
+        // validation block + the /poll long-poll&rsquo;s updating flag.
+        console.warn('System Status step log unavailable; using job-status only:', err && err.message ? err.message : err);
+        if (_activeRunbook && _activeRunbook.kind === 'system-status') {
+          showRunbook(diagnoseSystemStatusFromJob(effectiveJob()));
+        }
       });
   }
 
@@ -7183,6 +7438,10 @@
         btns.push(rbBtn('secondary', 'email-rrsupport', 'Email RR Support'));
       }
     } else {
+      // System Status &mdash; the "Download report" button already
+      // routes through the analyzer pipeline (runSystemStatusAnalysis:
+      // POST /system-status → /download-excel → rrv8-analyze bridge →
+      // SystemStatusTemplate). One click → analyzed workbook.
       if (primary === 'escalate-it') {
         btns.push(rbBtn('primary', 'email-it', 'Email IT'));
         btns.push(rbBtn('secondary', 'email-rrsupport', 'Email RR Support'));
@@ -7202,7 +7461,11 @@
     if (action === 'close') { closeRunbookDrawer(); return; }
     if (action === 'download-excel') {
       if (d.kind === 'inventory-validation') generateValidationReport();
-      else generateSystemStatusReport();
+      // System Status routes through the analyzer pipeline so the
+      // download IS the analyzed workbook (not the raw step log).
+      // Same model as the Transactions per-row Export: one click,
+      // end-to-end. See runSystemStatusAnalysis below.
+      else runSystemStatusAnalysis();
       return;
     }
     if (action === 'view-runbook') {
@@ -7372,50 +7635,162 @@
     flashStatus('Downloaded ' + fname);
   }
 
-  function generateSystemStatusReport() {
-    if (!window.XLSX) { flashStatus('Excel library still loading — try again in a sec'); return; }
-    if (!_systemStatusLogCache) {
-      // Drawer's open path normally loads this before the Download
-      // button is interactive, so cache-miss is rare. Kick the load
-      // anyway and ask the user to retry.
-      ensureSystemStatusLog().catch(() => {});
-      flashStatus('Step log still loading — try again in a sec');
-      return;
+  // ============================================================
+  //  System Status &mdash; analyzer pipeline (legacy-parity)
+  //  POST /system-status → { fileName } → GET /download-excel/{id}
+  //  → ArrayBuffer → handOffToAnalyzer() → Tools/analysis-workbook
+  //  picks up the SystemStatusTemplate and produces the analyzed
+  //  workbook. Same data path the legacy SPA uses (the diagnostic
+  //  Excel IS the SQL Agent step log + v_diagnostic5_job_status
+  //  row baked together); V8&rsquo;s job is just to fetch + hand off.
+  //
+  //  In demo mode (no agent), we synthesize the same-shape xlsx
+  //  from the cached mock log and route the bytes through the
+  //  same bridge so the analyzer flow exercises end-to-end.
+  // ============================================================
+  function rrFetchBinary(area) {
+    // Binary sibling of rrFetch; demo mode reads from data/ as a
+    // .bin/.xlsx file matched by the area. Prod hits the agent with
+    // Bearer auth and returns ArrayBuffer.
+    if (IS_DEMO) {
+      return fetch((RR_CONFIG.dataPath || 'data/') + area + '.bin', { cache: 'no-store' })
+        .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status + ' on ' + area); return r.arrayBuffer(); });
     }
+    const db = window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex];
+    if (!db || !db.ip) return Promise.reject(new Error('No active DB in RR_SESSION'));
+    const url = 'https://' + db.ip + '/' + area;
+    const h = { 'Accept': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
+    try {
+      const t = localStorage.getItem('rrv8.token');
+      if (t) h['Authorization'] = 'Bearer ' + t;
+    } catch (_) {}
+    return fetch(url, { headers: h }).then(r => {
+      if (!r.ok) throw new Error('HTTP ' + r.status + ' on ' + url);
+      return r.arrayBuffer();
+    });
+  }
+
+  function buildSystemStatusXlsxBuffer() {
+    // Demo helper. Same layout as generateSystemStatusReport but
+    // returns the binary in-memory instead of writing to disk.
+    if (!window.XLSX) throw new Error('SheetJS not loaded');
+    if (!_systemStatusLogCache) throw new Error('System Status log not loaded');
     const log = _systemStatusLogCache;
     const banner = log.banner ||
       ('System Status Generated ' + new Date().toISOString().slice(0, 19).replace('T', ' '));
-
-    // Production shape — single sheet that the analyzer's
-    // SystemStatusTemplate detects cleanly: row 1 = banner; row 2 =
-    // header (Capture / Step / Process / StartTime / EndTime /
-    // Seconds / UpdateCount / ErrorNum); rows 3+ = data verbatim
-    // from the loaded step log. The Seconds column preserves the
-    // production mislabel (Data Capture = minutes; others = seconds)
-    // so the analyzer's parse-time normalization keeps working.
     const headers = ['Capture', 'Step', 'Process', 'StartTime', 'EndTime', 'Seconds', 'UpdateCount', 'ErrorNum'];
-    const aoa = [
-      [banner],
-      headers
-    ].concat(log.rows.map(r => [
+    const aoa = [[banner], headers].concat(log.rows.map(r => [
       r.capture, r.step, r.process, r.starttime, r.endtime,
       r.seconds, r.updateCount || 0, r.errorNum || 0
     ]));
-
     const sheet = XLSX.utils.aoa_to_sheet(aoa);
-    sheet['!cols'] = [
-      { wch: 26 }, { wch: 18 }, { wch: 38 }, { wch: 20 },
-      { wch: 20 }, { wch: 10 }, { wch: 12 }, { wch: 10 }
-    ];
-
+    sheet['!cols'] = [{wch:26},{wch:18},{wch:38},{wch:20},{wch:20},{wch:10},{wch:12},{wch:10}];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, sheet, 'System Status');
-
-    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
-    const fname = 'SystemStatus_' + stamp + '.xlsx';
-    XLSX.writeFile(wb, fname);
-    flashStatus('Downloaded ' + fname + ' — drop into Tools/analysis-workbook.html for the worked analysis');
+    return XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
   }
+
+  // Run the analyzer HEADLESSLY in a hidden iframe and hand a
+  // workbook buffer over via the `rrv8-analyze` postMessage
+  // handshake. The analyzer&rsquo;s rrv8AutoAnalyze runs from the
+  // iframe context and triggers its usual download() &mdash; the
+  // browser surfaces the analyzed file in the parent window&rsquo;s
+  // downloads bar with no visible analyzer tab popping up.
+  //
+  // Falls back to a plain download of the raw buffer if the
+  // analyzer fails to acknowledge within the timeout (e.g. file
+  // schema doesn&rsquo;t match any template).
+  function handOffToAnalyzer(buffer, fallbackName) {
+    const iframe = document.createElement('iframe');
+    iframe.src = '../Tools/analysis-workbook.html';
+    iframe.setAttribute('aria-hidden', 'true');
+    iframe.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;border:0;opacity:0;pointer-events:none;';
+    document.body.appendChild(iframe);
+
+    let sent  = false;
+    let done  = false;
+    function fallbackDownload(reason) {
+      console.warn('Analyzer headless run failed &mdash; falling back to direct download:', reason);
+      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href = url; a.download = fallbackName || 'workbook.xlsx';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      flashStatus('Analyzer unavailable &mdash; downloaded the raw workbook; drop into Tools/analysis-workbook.html manually if needed.');
+    }
+    function cleanup() {
+      window.removeEventListener('message', onMsg);
+      clearInterval(pingTimer);
+      clearTimeout(failTimer);
+      // Give the browser a moment to flush the download before
+      // tearing down the iframe (some browsers cancel in-flight
+      // downloads when the source frame is removed too quickly).
+      setTimeout(() => { try { iframe.remove(); } catch (_) {} }, 1500);
+    }
+    function onMsg(ev) {
+      if (ev.source !== iframe.contentWindow || ev.origin !== location.origin) return;
+      if (!ev.data) return;
+      if (ev.data.type === 'rrv8-analyze-ready' && !sent) {
+        sent = true;
+        try { iframe.contentWindow.postMessage({ type: 'rrv8-analyze', detail: buffer }, location.origin); }
+        catch (e) { fallbackDownload(e.message); cleanup(); }
+      } else if (ev.data.type === 'rrv8-analyze-done') {
+        done = true;
+        cleanup();
+      } else if (ev.data.type === 'rrv8-analyze-error') {
+        fallbackDownload(ev.data.message || 'analyzer reported error');
+        cleanup();
+      }
+    }
+    window.addEventListener('message', onMsg);
+    const pingTimer = setInterval(() => {
+      if (sent) { clearInterval(pingTimer); return; }
+      try { iframe.contentWindow.postMessage({ type: 'rrv8-analyze-ping' }, location.origin); } catch (_) {}
+    }, 500);
+    // Hard timeout &mdash; if the analyzer never acks or never
+    // signals done, abort the iframe and fall back so the user
+    // still ends up with a usable file.
+    const failTimer = setTimeout(() => {
+      if (!done) { fallbackDownload('timed out'); cleanup(); }
+    }, 30000);
+  }
+
+  async function runSystemStatusAnalysis() {
+    flashStatus('Generating diagnostic Excel&hellip;');
+    try {
+      let buffer;
+      if (IS_DEMO) {
+        // Demo path: synthesize the Excel from the cached mock log
+        // and route the same bytes through the analyzer bridge so
+        // the pipeline exercises end-to-end without a live agent.
+        if (!_systemStatusLogCache) {
+          try { await ensureSystemStatusLog(); } catch (_) {}
+        }
+        buffer = buildSystemStatusXlsxBuffer();
+      } else {
+        // Prod / staging: agent generates the diagnostic Excel
+        // (which is also where the SELECT * FROM v_diagnostic5_job_status
+        // query actually runs on the server side). Then download
+        // the file and hand it to the analyzer.
+        const resp = await rrFetch('system-status', { method: 'POST', body: {} });
+        const fileName = resp && resp.fileName;
+        if (!fileName) throw new Error('Agent did not return a fileName');
+        buffer = await rrFetchBinary('download-excel/' + encodeURIComponent(fileName));
+      }
+      handOffToAnalyzer(buffer, 'SystemStatus.xlsx');
+    } catch (err) {
+      console.error('System Status analysis failed:', err);
+      flashStatus('Failed to run System Status analysis &mdash; ' + (err && err.message ? err.message : err));
+    }
+  }
+
+  // generateSystemStatusReport() retired &mdash; the Download report
+  // button now calls runSystemStatusAnalysis() instead, which routes
+  // the diagnostic Excel through the analyzer&rsquo;s
+  // SystemStatusTemplate via the rrv8-analyze bridge. The in-memory
+  // workbook builder lives in buildSystemStatusXlsxBuffer() (used by
+  // the demo path of runSystemStatusAnalysis).
 
   function dir(n) {
     if (!n) return '—';
