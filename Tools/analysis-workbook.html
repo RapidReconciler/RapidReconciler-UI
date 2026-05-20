@@ -7748,10 +7748,12 @@ const SystemStatusTemplate = {
       const endStr = Helpers.str(get(r, 'endtime'));
       const startMs = this._parseTimestamp(startStr);
       // GOTCHA: when Step starts with "Data Capture" (case-insensitive), the
-      // Seconds column actually holds MINUTES. Normalize to seconds here.
-      const rawSec = Helpers.num(get(r, 'seconds'));
+      // Seconds column actually holds MINUTES. Other steps are true
+      // seconds — divide them by 60 so the whole sheet normalizes to
+      // minutes (data-capture stays as-is; comparisons line up).
+      const raw = Helpers.num(get(r, 'seconds'));
       const isDataCapture = /^data capture\b/i.test(step);
-      const durationSec = isDataCapture ? rawSec * 60 : rawSec;
+      const durationMin = isDataCapture ? raw : raw / 60;
       rows.push({
         rowNumber: r,
         capture: Helpers.str(get(r, 'capture')),
@@ -7760,9 +7762,9 @@ const SystemStatusTemplate = {
         startStr,
         endStr,
         startMs,
-        rawSeconds: rawSec,
-        durationSec,
-        durationUnit: isDataCapture ? 'minutes' : 'seconds',
+        rawValue: raw,
+        durationMin,
+        sourceUnit: isDataCapture ? 'minutes' : 'seconds',
         isDataCapture,
         updateCount: Helpers.num(get(r, 'updatecount')),
         errorNum: Helpers.num(get(r, 'errornum'))
@@ -7908,7 +7910,7 @@ const SystemStatusTemplate = {
         if (row.errorNum && row.errorNum !== 0) return;
         const key = row.step;
         stepDurations[key] = stepDurations[key] || [];
-        stepDurations[key].push(row.durationSec);
+        stepDurations[key].push(row.durationMin);
       });
     });
     const medianByStep = {};
@@ -7922,32 +7924,41 @@ const SystemStatusTemplate = {
 
     // Slow-step anomalies: rows where duration >= 3x median OR >= 5 min
     // above median (whichever is more permissive). Requires at least 3
-    // samples for a meaningful median.
+    // samples for a meaningful median. Units: minutes throughout.
+    //
+    // Restricted to COMPLETE-CYCLE rows only. Partial-cycle rows are
+    // aborted runs (skewed durations) and orphan rows (a DBA running
+    // an ad-hoc sproc outside any cycle) aren't part of the nightly
+    // job we're analyzing — neither should fire false anomalies.
+    const completeCycleRows = [];
+    completeCycles.forEach(c => c.steps.forEach(r => {
+      if (!(r.errorNum && r.errorNum !== 0)) completeCycleRows.push(r);
+    }));
     const slowAnomalies = [];
-    data.rows.forEach(row => {
+    completeCycleRows.forEach(row => {
       const md = medianByStep[row.step];
       if (!md || md.samples < 3) return;
-      if (row.errorNum && row.errorNum !== 0) return;
-      const ratio = md.median > 0 ? row.durationSec / md.median : 0;
-      const aboveMedianSec = row.durationSec - md.median;
+      const ratio = md.median > 0 ? row.durationMin / md.median : 0;
+      const aboveMedianMin = row.durationMin - md.median;
       const slow3x = md.median > 0 && ratio >= 3;
-      const slow5min = aboveMedianSec >= 300;
+      const slow5min = aboveMedianMin >= 5;
       if (slow3x || slow5min) {
         slowAnomalies.push({
           row,
-          medianSec: md.median,
+          medianMin: md.median,
           ratio,
-          aboveMedianSec
+          aboveMedianMin
         });
       }
     });
-    slowAnomalies.sort((a, b) => b.aboveMedianSec - a.aboveMedianSec);
+    slowAnomalies.sort((a, b) => b.aboveMedianMin - a.aboveMedianMin);
 
-    // Slowest 5 steps across all cycles by absolute duration
-    const slowestRows = data.rows
-      .filter(r => !(r.errorNum && r.errorNum !== 0))
+    // Slowest 5 steps across complete cycles by absolute duration.
+    // Same restriction as above: a slow ad-hoc sproc isn't useful
+    // signal in the cycle-by-cycle performance picture.
+    const slowestRows = completeCycleRows
       .slice()
-      .sort((a, b) => b.durationSec - a.durationSec)
+      .sort((a, b) => b.durationMin - a.durationMin)
       .slice(0, 5);
 
     // Priority: P1 if any errors or any partial cycles; P2 if slow-step
@@ -8015,7 +8026,7 @@ const SystemStatusTemplate = {
     }
     if (slowAnomalies.length) {
       const top = slowAnomalies.slice(0, 3);
-      const topStr = top.map(s => `${s.row.step.trim()} (${this._fmtDuration(s.row.durationSec)} vs ${this._fmtDuration(s.medianSec)} median)`).join(' · ');
+      const topStr = top.map(s => `${s.row.step.trim()} (${this._fmtDuration(s.row.durationMin)} vs ${this._fmtDuration(s.medianMin)} median)`).join(' · ');
       multiFindings.push({
         number: multiFindings.length + 1,
         type: 'slow_steps',
@@ -8155,13 +8166,15 @@ const SystemStatusTemplate = {
     });
     // Top slow anomalies
     ctx.slowAnomalies.slice(0, 5).forEach(s => {
-      const ratioStr = s.medianSec > 0 ? `${s.ratio.toFixed(1)}x median` : 'no median baseline';
-      const aboveStr = s.aboveMedianSec >= 60 ? `${Math.round(s.aboveMedianSec / 60)} min above median` : `${Math.round(s.aboveMedianSec)}s above median`;
+      const ratioStr = s.medianMin > 0 ? `${s.ratio.toFixed(1)}x median` : 'no median baseline';
+      const aboveStr = s.aboveMedianMin >= 1
+        ? `${Math.round(s.aboveMedianMin)} min above median`
+        : `${Math.round(s.aboveMedianMin * 60)}s above median`;
       ev.push({
         severity: 'Informational',
         sortKey: s.row.startStr || '',
         label: trimMs(s.row.startStr) || '(no StartTime)',
-        description: `Step: ${s.row.step.trim()}  ·  Ran in ${this._fmtDuration(s.row.durationSec)}.  Median across complete cycles: ${this._fmtDuration(s.medianSec)} (${ratioStr}, ${aboveStr}).`,
+        description: `Step: ${s.row.step.trim()}  ·  Ran in ${this._fmtDuration(s.row.durationMin)}.  Median across complete cycles: ${this._fmtDuration(s.medianMin)} (${ratioStr}, ${aboveStr}).`,
         sourceRow: s.row.rowNumber
       });
     });
@@ -8178,8 +8191,13 @@ const SystemStatusTemplate = {
     return ev;
   },
 
-  _fmtDuration(sec) {
-    if (!sec || sec < 1) return '< 1s';
+  _fmtDuration(min) {
+    // Input is minutes (the normalized unit across both
+    // data-capture and non-data-capture rows). Convert to seconds
+    // internally so the display fall-through keeps reading as
+    // "30s" / "5m 30s" / "1h 30m" — same shape as before.
+    const sec = (min || 0) * 60;
+    if (sec < 1) return '< 1s';
     if (sec < 60) return `${Math.round(sec)}s`;
     if (sec < 3600) return `${Math.floor(sec / 60)}m ${Math.round(sec % 60)}s`;
     const h = Math.floor(sec / 3600);
@@ -8311,7 +8329,7 @@ const SystemStatusTemplate = {
     }
     if (findings.slowestRows.length) {
       const top = findings.slowestRows[0];
-      lines.push(`\nSlowest step in the log: ${top.step.trim()} ran ${this._fmtDuration(top.durationSec)} on ${top.startStr}.`);
+      lines.push(`\nSlowest step in the log: ${top.step.trim()} ran ${this._fmtDuration(top.durationMin)} on ${top.startStr}.`);
     }
     return lines.join('\n');
   },
@@ -8368,7 +8386,7 @@ const SystemStatusTemplate = {
     }
     if (findings.slowAnomalies.length) {
       const top = findings.slowAnomalies.slice(0, 5);
-      const lines = top.map((s, i) => `  ${i + 1}.  ${s.row.step.trim()} — ran ${this._fmtDuration(s.row.durationSec)} vs ${this._fmtDuration(s.medianSec)} median (${s.ratio > 0 ? s.ratio.toFixed(1) + 'x' : 'no baseline'})`).join('\n');
+      const lines = top.map((s, i) => `  ${i + 1}.  ${s.row.step.trim()} — ran ${this._fmtDuration(s.row.durationMin)} vs ${this._fmtDuration(s.medianMin)} median (${s.ratio > 0 ? s.ratio.toFixed(1) + 'x' : 'no baseline'})`).join('\n');
       return `Step 1.  Share this analysis with your IT / DBA team for a performance review.  The cycles all completed, so this is capacity planning rather than an outage.\n\nStep 2.  Top slowdowns to investigate:\n\n${lines}\n\nStep 3.  Common causes for cycle-to-cycle slowdowns:  database growth (fact tables doubling in size), missing or fragmented indexes (query plans regressing), contention (another process holding locks), or a coinciding backup / reindex.\n\nStep 4.  Have the DBA review index health, statistics freshness, and any concurrent batch jobs around the cycle window.  Tune the slowest steps first.`;
     }
     return `Step 1.  Every cycle in the log completed cleanly with no errors and no notable slowdowns.  If the System Status light is still red, the cause is outside what this export captures.\n\nStep 2.  Send this analysis AND the original System Status export to your IT / DBA team.  Ask them to check the SQL Agent job history, the SSIS execution report, and the host event log on the database server for any failure around the timestamp of the most recent cycle.\n\nStep 3.  Re-run the SQL Agent job once the underlying cause is addressed, then refresh RapidReconciler and confirm the light turns green.`;
