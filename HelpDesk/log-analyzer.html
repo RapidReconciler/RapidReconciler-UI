@@ -243,11 +243,48 @@
     font-style: italic;
   }
   .input-card input[type="file"] { display: none; }
-  /* Anchor the file-meta line (and everything below it: textarea + actions)
-     to the bottom of each card so both cards' textareas align at the same
-     y-position regardless of how many steps appear above. The cards have
-     equal height via the grid stretch. */
-  .input-card .file-meta { margin-top: auto; }
+  /* Drop zone — replaces the agent-log textarea. FileReader handles
+     the actual read so the giant log text never lands in a textarea
+     (which was the bottleneck on multi-MB pastes). */
+  .agent-drop-zone {
+    margin-top: auto;
+    padding: 24px 18px;
+    border: 2px dashed var(--orange);
+    border-radius: 8px;
+    background: var(--orange-pale, #fbe7ce);
+    color: var(--orange-deep, #d97316);
+    text-align: center;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, transform 0.1s;
+    margin-bottom: 12px;
+  }
+  .agent-drop-zone:hover { background: #f7d8a7; }
+  .agent-drop-zone.is-dragover {
+    background: #f6c574;
+    border-style: solid;
+    transform: scale(1.01);
+  }
+  .agent-drop-zone:focus-visible {
+    outline: 3px solid var(--blue);
+    outline-offset: 3px;
+  }
+  .agent-drop-icon { width: 32px; height: 32px; display: block; margin: 0 auto 8px; }
+  .agent-drop-headline {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 700;
+    font-size: 15px;
+    color: var(--navy);
+  }
+  .agent-drop-sub {
+    margin-top: 4px;
+    font-size: 12.5px;
+    color: var(--text-soft);
+  }
+  /* Anchor the file-meta line (and everything below it: drop-zone +
+     actions) to the bottom of each card so both cards' inputs align
+     at the same y-position regardless of how many steps appear above.
+     The cards have equal height via the grid stretch. */
+  .input-card .file-meta { margin-top: 0; margin-bottom: 12px; }
   .input-card textarea {
     width: 100%;
     min-height: 180px;
@@ -460,6 +497,25 @@
   .line-list pre:last-child { border-bottom: none; }
   .line-list pre.flag { background: rgba(240, 138, 36, 0.06); }
   .line-list pre.crit { background: rgba(184, 70, 58, 0.06); }
+  /* Inner expander that holds the (count - SAMPLE_CAP) remaining
+     lines per group. Hidden until the user clicks the summary. */
+  .line-group-more {
+    border-top: 1px dashed var(--rule);
+    margin-top: 4px;
+  }
+  .line-group-more > summary {
+    padding: 8px 18px;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--blue);
+    cursor: pointer;
+    list-style: none;
+    background: var(--bg-soft);
+    user-select: none;
+  }
+  .line-group-more > summary::-webkit-details-marker { display: none; }
+  .line-group-more > summary:hover { color: var(--navy); }
+  .line-group-more[open] > summary { color: var(--navy); }
   .line-runbook {
     display: inline-block;
     margin-left: 8px;
@@ -594,18 +650,23 @@
     <ol class="input-card-steps">
       <li><code>C:\Program Files\Rapid Reconciler\logs</code></li>
       <li>Pick the <strong>most recent</strong> <code>.out.log</code> file in that folder.</li>
-      <li>Click <strong>Choose log file</strong> below &mdash; the file stays on your machine, nothing uploads.</li>
+      <li>Drop it on the zone below, or click to choose &mdash; the file stays on your machine, nothing uploads.</li>
     </ol>
     <input type="file" id="input-agent-file" accept=".log,.out,.txt">
+    <div class="agent-drop-zone" id="agentDropZone" role="button" tabindex="0"
+         aria-label="Drop your .out.log file here, or click to choose">
+      <svg class="agent-drop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+        <polyline points="17 8 12 3 7 8"></polyline>
+        <line x1="12" y1="3" x2="12" y2="15"></line>
+      </svg>
+      <div class="agent-drop-headline">Drop log file here</div>
+      <div class="agent-drop-sub">or click to browse &middot; .log / .out / .txt</div>
+    </div>
     <div class="file-meta" id="agentFileMeta">
       <span class="file-meta-empty">No file selected</span>
     </div>
-    <textarea id="input-agent"
-              placeholder="File contents will appear here after you pick a file. You can also paste log contents manually."
-              spellcheck="false"
-              autocomplete="off"></textarea>
     <div class="input-card-actions">
-      <button type="button" class="input-card-btn primary" id="pickAgentFile">Choose log file</button>
       <button type="button" class="input-card-btn ghost" data-clear="agent">Clear</button>
     </div>
   </article>
@@ -803,7 +864,12 @@ const AGENT_RULES = [
    below; the most recently analysed card's content wins.
    ============================================================= */
 const consoleEl = document.getElementById('input-console');
-const agentEl   = document.getElementById('input-agent');
+
+// Agent log content lives in a JS string (filled by FileReader). The
+// textarea was retired — multi-MB logs hosed the browser when forced
+// through a controlled <textarea>. FileReader hands us text directly
+// without DOM cost.
+let agentFileText = '';
 
 const verdictEl      = document.getElementById('verdict');
 const verdictPill    = document.getElementById('verdictPill');
@@ -824,10 +890,45 @@ function classifyLine(line, rules) {
   return { rule: { name: 'Unrecognized', severity: 'flag' }, line };
 }
 
+// Strip volatile tokens (timestamps, PIDs, ports, UUIDs, IP addresses,
+// thread numbers, hex IDs) so two log lines that differ only in those
+// tokens collapse to the same key. Used to dedupe the "Unrecognized"
+// bucket — a single unknown error spamming the log 200x becomes one
+// row instead of 200.
+function normalizeForGrouping(line) {
+  return line
+    // ISO timestamps with optional fractional seconds: 2026-05-20 10:36:32.452
+    .replace(/\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?/g, '<ts>')
+    // Bare HH:MM:SS(.ms)
+    .replace(/\b\d{2}:\d{2}:\d{2}(?:[.,]\d+)?\b/g, '<time>')
+    // PIDs: " --- [thread] " or " PID " patterns
+    .replace(/\s\d{3,7}\s+---\s/, ' <pid> --- ')
+    // IPv4 addresses
+    .replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, '<ip>')
+    // Port numbers in URLs and host:port
+    .replace(/:\d{2,5}\b/g, ':<port>')
+    // UUIDs
+    .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, '<uuid>')
+    // Long hex IDs (SHA-ish)
+    .replace(/\b[0-9a-f]{16,}\b/gi, '<hex>')
+    // Standalone integers ≥ 4 digits (request IDs, counts) — keep small ints
+    .replace(/\b\d{4,}\b/g, '<n>')
+    // Thread-name brackets like [scheduling-1] keep, but trim whitespace inside
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function escapeHtml(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
     ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' })[c]);
 }
+
+// Cap how many sample lines each group renders by default. The DOM
+// cost was the main "took a long time to load" complaint on large
+// logs — a group with 500 matched lines used to emit 500 <pre>
+// nodes. Now we render up to SAMPLE_CAP and add a one-click expander
+// for the rest. Same coverage, no information loss, fast layout.
+const SAMPLE_CAP = 5;
 
 function renderGroup(rule, items, severity) {
   const sev = severity || rule.severity;
@@ -835,9 +936,23 @@ function renderGroup(rule, items, severity) {
   const runbook = rule.runbook
     ? `<a class="line-runbook" href="${escapeHtml(rule.runbook)}" target="_blank">Open runbook &rarr;</a>`
     : '';
-  const linesHtml = items.map(it =>
+
+  const total = items.length;
+  const head  = items.slice(0, SAMPLE_CAP);
+  const tail  = items.slice(SAMPLE_CAP);
+  const headHtml = head.map(it =>
     `<pre class="${escapeHtml(sev)}">${escapeHtml(it.line.trim())}</pre>`
   ).join('');
+  let restBlock = '';
+  if (tail.length) {
+    const tailHtml = tail.map(it =>
+      `<pre class="${escapeHtml(sev)}">${escapeHtml(it.line.trim())}</pre>`
+    ).join('');
+    restBlock =
+      `<details class="line-group-more"><summary>` +
+      `Show ${tail.length} more occurrence${tail.length === 1 ? '' : 's'}` +
+      `</summary>${tailHtml}</details>`;
+  }
   return `
     <details class="line-group" ${sev !== 'noise' ? 'open' : ''}>
       <summary>
@@ -845,10 +960,10 @@ function renderGroup(rule, items, severity) {
         <span class="line-group-pill ${escapeHtml(sev)}">${escapeHtml(sev)}</span>
         <span>${escapeHtml(rule.name)}</span>
         ${runbook}
-        <span class="line-group-count">${items.length}</span>
+        <span class="line-group-count">${total}</span>
       </summary>
       ${note}
-      <div class="line-list">${linesHtml}</div>
+      <div class="line-list">${headHtml}${restBlock}</div>
     </details>`;
 }
 
@@ -860,8 +975,9 @@ function resetOutput() {
 }
 
 function analyze(mode) {
-  const inputEl = mode === 'agent' ? agentEl : consoleEl;
-  const text = inputEl.value.trim();
+  const text = mode === 'agent'
+    ? agentFileText.trim()
+    : (consoleEl.value || '').trim();
   if (!text) {
     resetOutput();
     return;
@@ -909,12 +1025,31 @@ function analyze(mode) {
     lines.push(l);
   }
 
-  // Classify
+  // Classify. Matched-rule lines bucket by rule name (all 50
+  // HealthServiceImpl errors collapse into one row). Unrecognized
+  // lines bucket by their NORMALIZED form so a single unknown error
+  // spamming the log 200x is one row, not 200 — but two genuinely
+  // different unrecognized errors still get their own rows.
   const buckets = new Map();
   for (const line of lines) {
     const { rule } = classifyLine(line, rules);
-    if (!buckets.has(rule.name)) buckets.set(rule.name, { rule, items: [] });
-    buckets.get(rule.name).items.push({ line });
+    let key, useRule;
+    if (rule.name === 'Unrecognized') {
+      const norm = normalizeForGrouping(line);
+      key = 'Unrecognized::' + norm;
+      // Build a display-friendly per-normalized rule so the header
+      // shows a snippet of what's unrecognized instead of a generic
+      // "Unrecognized" pile.
+      useRule = {
+        name: 'Unrecognized: ' + norm.slice(0, 100) + (norm.length > 100 ? '…' : ''),
+        severity: 'flag'
+      };
+    } else {
+      key = rule.name;
+      useRule = rule;
+    }
+    if (!buckets.has(key)) buckets.set(key, { rule: useRule, items: [] });
+    buckets.get(key).items.push({ line });
   }
 
   // Sort: crit first, flag, good, noise
@@ -1000,8 +1135,10 @@ function updateConsoleMeta() {
     '<strong>' + lines + ' line' + (lines === 1 ? '' : 's') + '</strong> &middot; ' + chars.toLocaleString() + ' chars';
 }
 
-// Per-card debounced auto-analyze on paste/typing
-let debounces = { console: null, agent: null };
+// Console card: debounced auto-analyze on paste/typing. Agent card
+// no longer has a textarea — FileReader handles the input and calls
+// analyze('agent') directly after a successful read.
+let debounces = { console: null };
 function bindAutoAnalyze(el, mode) {
   el.addEventListener('input', () => {
     if (mode === 'console') updateConsoleMeta();
@@ -1010,7 +1147,6 @@ function bindAutoAnalyze(el, mode) {
   });
 }
 bindAutoAnalyze(consoleEl, 'console');
-bindAutoAnalyze(agentEl,   'agent');
 
 document.querySelectorAll('[data-analyze]').forEach(btn => {
   btn.addEventListener('click', () => analyze(btn.dataset.analyze));
@@ -1018,27 +1154,32 @@ document.querySelectorAll('[data-analyze]').forEach(btn => {
 document.querySelectorAll('[data-clear]').forEach(btn => {
   btn.addEventListener('click', () => {
     const mode = btn.dataset.clear;
-    (mode === 'agent' ? agentEl : consoleEl).value = '';
-    if (mode === 'console') resetConsoleMeta();
-    if (mode === 'agent') {
-      // Also reset the file picker label + clear the FileList so picking the
-      // same file again still fires a change event.
+    if (mode === 'console') {
+      consoleEl.value = '';
+      resetConsoleMeta();
+    } else if (mode === 'agent') {
+      agentFileText = '';
+      // Reset the file picker so picking the same file again still
+      // fires a change event.
       const fileInput = document.getElementById('input-agent-file');
       if (fileInput) fileInput.value = '';
       resetAgentFileMeta();
     }
-    // If the cleared card was the one driving output, reset
+    // If the cleared card was the one driving output, reset.
     if (outputContext.textContent.toLowerCase().includes(mode === 'agent' ? 'agent' : 'browser')) {
       resetOutput();
     }
-    (mode === 'agent' ? agentEl : consoleEl).focus();
+    if (mode === 'console') consoleEl.focus();
   });
 });
 
-// ---- Agent file picker ----
+// ---- Agent file picker + drop zone ----
+// The drop zone is BOTH a click target (opens the file dialog) and a
+// drag-drop target. The hidden <input type="file"> handles the actual
+// file selection in both flows.
 const agentFileInput = document.getElementById('input-agent-file');
 const agentFileMeta  = document.getElementById('agentFileMeta');
-const pickAgentBtn   = document.getElementById('pickAgentFile');
+const agentDropZone  = document.getElementById('agentDropZone');
 
 function formatBytes(n) {
   if (n < 1024) return n + ' B';
@@ -1048,32 +1189,78 @@ function formatBytes(n) {
 function resetAgentFileMeta() {
   agentFileMeta.innerHTML = '<span class="file-meta-empty">No file selected</span>';
 }
-if (pickAgentBtn && agentFileInput) {
-  pickAgentBtn.addEventListener('click', () => {
-    // Reset the input first so cancellation can't re-fire with a stale file,
-    // and so picking the same file twice in a row still triggers change.
-    agentFileInput.value = '';
-    agentFileInput.click();
-  });
-}
-if (agentFileInput) {
-  agentFileInput.addEventListener('change', () => {
-    const file = agentFileInput.files && agentFileInput.files[0];
-    if (!file) { resetAgentFileMeta(); return; }
+
+function handleAgentFile(file) {
+  if (!file) { resetAgentFileMeta(); return; }
+  agentFileMeta.innerHTML =
+    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>' +
+    '<polyline points="14 2 14 8 20 8"></polyline></svg> ' +
+    '<strong>' + escapeHtml(file.name) + '</strong> &middot; ' + formatBytes(file.size) +
+    ' &middot; <em>reading&hellip;</em>';
+  const reader = new FileReader();
+  reader.onload = ev => {
+    agentFileText = String(ev.target.result || '');
     agentFileMeta.innerHTML =
       '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
       '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>' +
       '<polyline points="14 2 14 8 20 8"></polyline></svg> ' +
       '<strong>' + escapeHtml(file.name) + '</strong> &middot; ' + formatBytes(file.size);
-    const reader = new FileReader();
-    reader.onload = ev => {
-      agentEl.value = String(ev.target.result || '');
-      analyze('agent');
-    };
-    reader.onerror = () => {
-      agentFileMeta.innerHTML = '<span class="file-meta-empty">Could not read the file.</span>';
-    };
-    reader.readAsText(file);
+    analyze('agent');
+  };
+  reader.onerror = () => {
+    agentFileMeta.innerHTML = '<span class="file-meta-empty">Could not read the file.</span>';
+    agentFileText = '';
+  };
+  reader.readAsText(file);
+}
+
+// Click the drop zone -> open the file dialog.
+if (agentDropZone && agentFileInput) {
+  agentDropZone.addEventListener('click', () => {
+    agentFileInput.value = '';   // allow re-picking the same file
+    agentFileInput.click();
+  });
+  agentDropZone.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      agentFileInput.value = '';
+      agentFileInput.click();
+    }
+  });
+}
+
+// Drag-drop wiring on the zone itself. Prevent default at the
+// document level so an accidental drop OUTSIDE the zone doesn't
+// navigate away from the page.
+['dragover', 'drop'].forEach(ev => {
+  document.addEventListener(ev, (e) => e.preventDefault(), false);
+});
+if (agentDropZone) {
+  agentDropZone.addEventListener('dragenter', (e) => {
+    e.preventDefault();
+    agentDropZone.classList.add('is-dragover');
+  });
+  agentDropZone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    agentDropZone.classList.add('is-dragover');
+  });
+  agentDropZone.addEventListener('dragleave', (e) => {
+    // dragleave fires on every child — only un-highlight if we left the zone itself.
+    if (e.target === agentDropZone) agentDropZone.classList.remove('is-dragover');
+  });
+  agentDropZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    agentDropZone.classList.remove('is-dragover');
+    const dt = e.dataTransfer;
+    const file = dt && dt.files && dt.files[0];
+    if (file) handleAgentFile(file);
+  });
+}
+
+if (agentFileInput) {
+  agentFileInput.addEventListener('change', () => {
+    handleAgentFile(agentFileInput.files && agentFileInput.files[0]);
   });
 }
 </script>
