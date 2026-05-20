@@ -1,8 +1,11 @@
 # V8 demo / prod mode &mdash; saved plan
 
-Captured 2026-05-20. Read this if the next session opens with the V8
-runbook drawer freshly merged and the demo/prod separation is the next
-chunk.
+Captured 2026-05-20.
+
+**Status update (2026-05-20):** Chunk #1 (mode infrastructure +
+offline-vendoring) has landed. Read the "Chunk order" section below
+for what remains &mdash; chunk #2 (prod-mode auth + JWT plumbing) is
+the next pickup point.
 
 ## Goal
 
@@ -142,17 +145,23 @@ modes.
 
 ## Chunk order
 
-1. **Mode infrastructure + offline-vendoring** (this is the next PR).
-   - Add `RRV8/config.js` + `MODE` + `IS_DEMO`.
-   - Add `rrFetch()` helper. Prod path **throws** "not wired yet" until
-     the next chunk; demo path uses static JSON.
-   - Tag every existing fetch site with `// PROD-TODO:` and route
-     through `rrFetch`.
-   - Vendor jsPDF + jspdf-autotable + SheetJS into `RRV8/vendor/`; Google
-     Fonts into `RRV8/fonts/`; swap CDN references.
-   - Demo banner hides itself in non-demo modes (`if (!IS_DEMO) ...remove()`).
-   - GTM-style external resources never fire in demo mode.
-   - Add `data/demo-jwt-payload.json` for the DB-switcher.
+1. **Mode infrastructure + offline-vendoring** &mdash; **LANDED 2026-05-20.**
+   - [x] `RRV8/config.js` + `MODE` + `IS_DEMO`.
+   - [x] `rrFetch()` helper. Prod path throws a clear error until the
+     auth chunk wires `RR_SESSION.dbs[]`; demo path uses static JSON.
+   - [x] Every fetch site tagged with `// PROD-TODO:` and routed
+     through `rrFetch` (3 sites: reconciliation, audit-detail,
+     system-status-log).
+   - [x] Vendored jsPDF (2.5.2) + jspdf-autotable (3.8.4) + SheetJS
+     (0.20.3) into `RRV8/vendor/` (~1.3 MB). Google Fonts (Open Sans
+     + Source Sans 3 + JetBrains Mono, latin subset only) into
+     `RRV8/fonts/` (~450 KB). CDN references replaced with relative
+     vendor / fonts paths.
+   - [x] Demo banner hides itself in non-demo modes via
+     `if (!IS_DEMO) ribbon.remove()` inside the IIFE.
+   - [x] `data/demo-jwt-payload.json` shipped for the DB-switcher
+     (consumed by the auth chunk).
+   - V8 page has no GTM today, so that step was a no-op.
 2. **Prod-mode auth + login plumbing.**
    - Implement the login POST to `authBase + /resource/client/login`.
    - Store JWT in `localStorage.rrv8.token`.

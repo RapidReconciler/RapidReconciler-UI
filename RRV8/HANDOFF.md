@@ -79,10 +79,11 @@ PR history of the V8 page so far: **#76** (scaffold + first
 draft), **#77** (row-level filters + clickable lights + Excel
 exports), **#78** (docs refresh), **#79** (vertical variance +
 Preview modal + audit data foundation), **#80** (audit Excel +
-PDF + context help + chrome cleanup), **#81** (HANDOFF.md), and
-an in-flight runbook-drawer chunk that wires both status lights
-to in-page diagnoses + the production SystemStatus step-log
-shape.
+PDF + context help + chrome cleanup), **#81** (HANDOFF.md),
+**#82** (runbook drawer + SystemStatus step-log + cycle-only
+analysis), and an in-flight chunk that adds mode infrastructure
+(`config.js` + `IS_DEMO` + `rrFetch`) and vendors CDN libraries +
+Google Fonts locally so demo mode runs offline.
 
 ---
 
@@ -114,9 +115,27 @@ shape.
   `RRV8/scripts/gen-system-status-log.py` (re-run when the
   cycle template shifts &mdash; the owner can&rsquo;t run Python
   locally; ship the regenerated JSON alongside the script edit).
+- `RRV8/data/demo-jwt-payload.json` (~1.4 KB) &mdash; synthetic
+  JWT payload matching the prod VALC login response shape (`user`
+  + `dbs[]`). Hydrates `window.RR_SESSION` in demo mode so the
+  user-menu DB switcher and any other JWT-driven logic works
+  the same in demo and prod. Replaces the hardcoded `USER` +
+  `DATABASES` constants once the auth-wiring chunk lands.
 - All data is fictional Acme test-instance data from
   `rrv7-acme`. Safe to commit per WORKFLOW.md's data hygiene
   rules.
+- **Mode infrastructure** (`RRV8/config.js` + `MODE` + `IS_DEMO`
+  + `rrFetch`) routes every data fetch through one helper.
+  Demo mode reads the static JSON files above; prod / staging
+  modes hit `<activeDb.ip>/<endpoint>` with `Authorization:
+  Bearer <jwt>` (auth wiring pending). Three fetch sites
+  carry `// PROD-TODO:` tags pointing at the prod endpoint
+  shape; `grep -rn "PROD-TODO" RRV8/` enumerates them.
+- **Offline-vendored** CDN libraries under `RRV8/vendor/`
+  (SheetJS, jsPDF, jspdf-autotable &mdash; ~1.3 MB) and self-
+  hosted Google Fonts under `RRV8/fonts/` (Open Sans + Source
+  Sans 3 + JetBrains Mono, latin subset &mdash; ~450 KB).
+  Demo mode opens with zero network dependencies.
 - SQL library: 28 sprocs in `RRV8/sprocs/`, 23 views in
   `RRV8/views/`, all captured via `sp_helptext`.
 
@@ -210,29 +229,29 @@ shape.
 
 ## Open work / candidate next chunks
 
-1. **Demo / prod mode infrastructure + offline-vendoring** &mdash;
-   the immediate next chunk. Adds `RRV8/config.js` + `MODE` /
-   `IS_DEMO` flags + `rrFetch()` helper, vendors CDN libraries
-   (jsPDF, SheetJS, jspdf-autotable) into `RRV8/vendor/` and
-   Google Fonts into `RRV8/fonts/` so demo mode runs offline.
-   Tags every fetch site with `// PROD-TODO:`. Prod path stubs
-   until the auth chunk lands. **See the saved plan at
-   [docs/plans/v8-demo-prod-mode.md](../docs/plans/v8-demo-prod-mode.md)
-   &mdash; read first before starting.**
-2. **Prod-mode auth + JWT plumbing** &mdash; login POST against
-   VALC, JWT in localStorage, parse JWT's `dbs[]`, drive the
-   user-menu DB switcher off it. Contract decoded from the
-   staging HAR &mdash; see the auth + agent-routing section of
-   [RRV8/API.md](API.md).
-3. **Prod-mode reconciliation wiring (first endpoint)** &mdash;
+1. **Prod-mode auth + JWT plumbing** (NEXT) &mdash; login POST
+   against VALC, JWT stored in `localStorage.rrv8.token`, parse
+   JWT's `dbs[]` into `window.RR_SESSION` (skeleton already in
+   place), drive the user-menu DB switcher off it. Replaces the
+   hardcoded `USER` + `DATABASES` constants. Demo mode hydrates
+   the same `RR_SESSION` from `data/demo-jwt-payload.json`
+   (already shipped) so the user-menu wiring is mode-agnostic.
+   Contract decoded from the staging HAR &mdash; see the auth +
+   agent-routing section of [RRV8/API.md](API.md).
+2. **Prod-mode reconciliation wiring (first endpoint)** &mdash;
    replace the demo stub for `reconciliation-filtered` with a
-   POST against the active customer's agent. **Likely blocker**:
-   production endpoint returns summary only, no `accountRows[]`.
-   Engineering conversation needed before this chunk.
+   POST against the active customer's agent (see the PROD-TODO
+   tag on `loadData` in `inventory-reconciliation.html`).
+   **Likely blocker**: production endpoint returns summary only,
+   no `accountRows[]`. Engineering conversation needed before
+   this chunk.
+3. **Prod-mode audit-detail + system-status-log wiring** &mdash;
+   the other two PROD-TODO sites. Both need new server-side
+   endpoints (no equivalents in today's AngularJS SPA).
 4. **Second V8 page** (Transactions / As Of / Roll Forward / In
-   Transit / PO Receipts) &mdash; deferred until the demo/prod
-   split lands. Building it is the right time to extract a real
-   `scripts/capture-periods.ps1` from the ad-hoc capture patterns.
+   Transit / PO Receipts). Building it is the right time to
+   extract a real `scripts/capture-periods.ps1` from the ad-hoc
+   capture patterns.
 5. **Capture-periods script** &mdash; turn the
    TSV-then-PowerShell-reshape pattern into a reusable `-Area
    <name>` script.
@@ -243,8 +262,9 @@ shape.
    currently page-breaks per company only.
 8. **Inline data + libraries** as a one-file
    flash-drive-demoable HTML &mdash; owner declined for now,
-   noted as future option. Note: the offline-vendoring chunk
-   gets most of the way there.
+   noted as future option. The offline-vendoring chunk already
+   delivers the same "works without internet" property, just
+   across multiple files rather than one.
 
 ---
 

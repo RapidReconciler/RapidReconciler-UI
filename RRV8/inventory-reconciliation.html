@@ -33,18 +33,31 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Inventory Reconciliation &mdash; RapidReconciler Mockup</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;500;600;700;800&family=Source+Sans+3:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<!-- Self-hosted Google Fonts (latin subset only). Vendored under
+     RRV8/fonts/ so demo mode runs without an internet connection.
+     Source: fonts.googleapis.com (Open Sans + Source Sans 3 +
+     JetBrains Mono). Regenerate via the script noted in
+     docs/plans/v8-demo-prod-mode.md offline-vendoring section. -->
+<link href="fonts/fonts.css" rel="stylesheet">
 <!-- SheetJS for client-side .xlsx export (Audit Report). The
      "community" build is enough for our needs (no styling, no
-     formulas — just typed cells + multi-sheet workbooks). -->
-<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js" defer></script>
+     formulas — just typed cells + multi-sheet workbooks).
+     Vendored locally so demo mode runs without an internet
+     connection. Source: cdn.sheetjs.com/xlsx-0.20.3. -->
+<script src="vendor/xlsx.full.min.js" defer></script>
 <!-- jsPDF + autoTable for client-side PDF export of the Audit Report.
      autoTable handles per-section tables, automatic page breaks, and
-     repeating headers — same data shape we feed into the Excel. -->
-<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js" defer></script>
-<script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.4/dist/jspdf.plugin.autotable.min.js" defer></script>
+     repeating headers — same data shape we feed into the Excel.
+     Vendored locally for offline demo. Sources:
+       cdn.jsdelivr.net/npm/jspdf@2.5.2
+       cdn.jsdelivr.net/npm/jspdf-autotable@3.8.4 -->
+<script src="vendor/jspdf.umd.min.js" defer></script>
+<script src="vendor/jspdf.plugin.autotable.min.js" defer></script>
+<!-- Runtime config (mode = demo | staging | prod). Committed file is
+     the demo config; staging/prod deploys overwrite this single file
+     with their own RR_CONFIG block. Must load before the page's IIFE
+     so MODE / IS_DEMO are available at boot. -->
+<script src="config.js"></script>
 <style>
   :root {
     --navy:        #1f2d4a;
@@ -2975,6 +2988,100 @@
 (function () {
   'use strict';
 
+  // ---------- Mode resolution (demo | staging | prod) ----------
+  // Precedence: ?mode= query string > window.RR_CONFIG.mode > 'demo'.
+  // Anywhere in this file that branches on "real backend vs static
+  // snapshot" reads IS_DEMO. config.js loads first via <script src>
+  // in the page <head> so RR_CONFIG is populated by the time this
+  // IIFE runs.
+  const RR_CONFIG = (window.RR_CONFIG || {});
+  const MODE = (function () {
+    try {
+      const q = new URLSearchParams(location.search).get('mode');
+      if (q && ['demo', 'staging', 'prod'].indexOf(q) >= 0) return q;
+    } catch (_) { /* SSR / no location — fall through */ }
+    return RR_CONFIG.mode || 'demo';
+  })();
+  const IS_DEMO = MODE === 'demo';
+
+  // RR_SESSION holds whatever the auth handshake produced — in prod
+  // it's hydrated from the JWT returned by VALC /resource/client/login;
+  // in demo it's hydrated from data/demo-jwt-payload.json so the
+  // user-menu DB switcher renders the same in both modes. Stub
+  // skeleton here; populated by the auth / demo-hydrate code path.
+  window.RR_SESSION = window.RR_SESSION || {
+    user:          null,   // { id, fn, c, u } — matches JWT.user
+    dbs:           [],     // [{ ip, n, i, p, t, a, as, aite, aprs, rs, su }]
+    activeDbIndex: 0,
+    token:         null    // raw JWT string (prod) / null (demo)
+  };
+
+  // Demo-only red ribbon hides itself in staging/prod. The ribbon is
+  // styled fixed-top + pointer-events:none so removing it is purely
+  // cosmetic — no layout reflow elsewhere.
+  if (!IS_DEMO) {
+    document.addEventListener('DOMContentLoaded', () => {
+      const ribbon = document.querySelector('.mockup-ribbon');
+      if (ribbon) ribbon.remove();
+    });
+  }
+
+  // ---------- Data abstraction: rrFetch() ----------
+  // Every data fetch in this page routes through here. Demo mode
+  // loads a static JSON snapshot from RR_CONFIG.dataPath; prod /
+  // staging will hit the active customer's RR Agent at
+  // <activeDb.ip>/<endpoint> with Authorization: Bearer <jwt>.
+  // Prod path THROWS for now — the auth chunk (next PR) wires it
+  // up. Until then every PROD-TODO fetch site falls back to demo
+  // behavior via the IS_DEMO guard at the call site.
+  //
+  // opts: {
+  //   method:  'GET' | 'POST'   (default 'GET')
+  //   body:    object           (POSTs JSON-encoded)
+  //   query:   object           (GET query-string params)
+  //   demoFile:string           (override demo filename; defaults to area)
+  // }
+  function rrFetch(area, opts) {
+    opts = opts || {};
+    if (IS_DEMO) {
+      const file = (opts.demoFile || area) + '.json';
+      return fetch((RR_CONFIG.dataPath || 'data/') + file, { cache: 'no-store' })
+        .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status + ' on ' + file); return r.json(); });
+    }
+    // Prod / staging path — hit the active DB's RR Agent.
+    const db = window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex];
+    if (!db || !db.ip) {
+      return Promise.reject(new Error(
+        'PROD-TODO: rrFetch called in ' + MODE + ' mode but no active DB is set on window.RR_SESSION. ' +
+        'The auth chunk (login → JWT → RR_SESSION.dbs[]) is not yet wired.'
+      ));
+    }
+    const base = 'https://' + db.ip;
+    const url = base + '/' + area +
+      (opts.query ? '?' + new URLSearchParams(opts.query) : '');
+    const init = {
+      method:  opts.method || 'GET',
+      headers: prodHeaders(opts.body ? 'application/json;charset=UTF-8' : null),
+      body:    opts.body ? JSON.stringify(opts.body) : undefined
+    };
+    return fetch(url, init).then(r => {
+      if (!r.ok) throw new Error('HTTP ' + r.status + ' on ' + url);
+      return r.json();
+    });
+  }
+
+  // Bearer-token + content-type headers for prod calls. JWT lives in
+  // localStorage.rrv8.token (set by the auth chunk on login success).
+  function prodHeaders(contentType) {
+    const h = { 'Accept': 'application/json' };
+    try {
+      const token = localStorage.getItem('rrv8.token');
+      if (token) h['Authorization'] = 'Bearer ' + token;
+    } catch (_) { /* localStorage unavailable */ }
+    if (contentType) h['Content-Type'] = contentType;
+    return h;
+  }
+
   // Sidebar pin — hydrate FIRST so the body class is set before the
   // browser paints. Otherwise the analyst sees a flash of the
   // unpinned state on every page load.
@@ -4067,9 +4174,14 @@
   // just change currentPeriod and re-render. Refresh re-fetches.
   async function loadData() {
     try {
-      const res = await fetch(DATA_FILE, { cache: 'no-store' });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      currentData = await res.json();
+      // PROD-TODO: replace with rrFetch('inventory/reconciliation-filtered',
+      //   { method: 'POST', body: currentFilterState })
+      // — production endpoint returns SUMMARY ONLY (no accountRows[]).
+      // V8's row-level features require either a server-side endpoint
+      // expansion (rows: true opt-in) or a parallel /inventory/rows call.
+      // See docs/plans/v8-demo-prod-mode.md "Open questions" + RRV8/API.md
+      // auth + agent-routing section for the contract.
+      currentData = await rrFetch('reconciliation');
       renderAll(currentData);
       // Background-fetch the SQL Agent step log so the sidebar meta
       // line ("Last cycle clean · 4h 13m") reflects reality without
@@ -4145,8 +4257,13 @@
   let _auditDetailCache = null;
   function ensureAuditDetail() {
     if (_auditDetailCache) return Promise.resolve(_auditDetailCache);
-    return fetch('data/audit-report-detail.json')
-      .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    // PROD-TODO: replace with rrFetch('inventory/audit-detail',
+    //   { query: { period: currentPeriod } })
+    // — needs a server-side endpoint that streams reconcilingItems +
+    // perpetual rows for the given period. No equivalent in the
+    // current AngularJS SPA (it generates audit reports server-side
+    // and downloads the .xlsx). See RRV8/API.md.
+    return rrFetch('audit-report-detail')
       .then(j => { _auditDetailCache = j; return j; });
   }
 
@@ -5722,8 +5839,14 @@
 
   function ensureSystemStatusLog() {
     if (_systemStatusLogCache) return Promise.resolve(_systemStatusLogCache);
-    return fetch('data/system-status-log.json')
-      .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    // PROD-TODO: replace with rrFetch('system/agent-log',
+    //   { query: { since: '<iso-ts>' } })
+    // — needs a server-side endpoint that returns the SQL Agent step
+    // log (probably from msdb.sysjobsteps or a wrapper the agent
+    // already exposes). Response shape must match the mock:
+    // { _meta, banner, columns, rows[] } per the format the parse
+    // function expects. See RRV8/API.md and the parse code below.
+    return rrFetch('system-status-log')
       .then(j => {
         _systemStatusLogCache = parseSystemStatusLog(j);
         return _systemStatusLogCache;
