@@ -230,29 +230,98 @@ As of the latest commit, V8 has:
   in localStorage, hydrated at the top of the IIFE before paint
   to avoid a flash of unpinned state. Distinct from the existing
   transient `.is-pinned` class used by popovers.
-- **Audit-report data captured (function rewrite pending)**: the
-  production audit report is built by a chain of sprocs
-  (`usp6getrinvaccountsummaryreports`, `usp6getrunpostedbatches`,
-  `usp6getrunpostedcardex`, `usp6getjournalentries`,
-  `usp6getrcardexledgercompare`, `usp6getrperpetualinv`), each a
-  thin wrapper around `usp6getfilteredview` with a `@viewname`
-  parameter. Five new view DDLs captured for it
-  (`v6ui_accountsummaryreport`, `v6ui_unposted_batches`,
-  `v6ui_unposted_cardex`, plus the cardex/glbatches ones). Data
-  shape:
-  - `reconciliation.json` gains small audit-only arrays
-    (`accountSummary` 247 rows, `unpostedCardexUi` 16,
-    `unpostedBatchesUi` empty, `accountDescriptions` 15) &mdash;
-    inline because they're small.
-  - `data/audit-report-detail.json` (new, 7.4 MB) carries the
-    heavy arrays: `reconcilingItems` (14,915 rows, all periods)
-    and `perpetual` (19,235 rows filtered to QOH &ne; 0). Loaded
-    lazily on first audit-report click so it doesn't slow the
-    initial page load.
+- **Audit report**: production-style "Perpetual Inventory
+  Reconciliation" workbook. Built by a chain of sprocs in the
+  legacy SPA (`usp6getrinvaccountsummaryreports`,
+  `usp6getrunpostedbatches`, `usp6getrunpostedcardex`,
+  `usp6getjournalentries`, `usp6getrcardexledgercompare`,
+  `usp6getrperpetualinv`), each a thin wrapper around
+  `usp6getfilteredview` with a `@viewname` parameter. V8 reads the
+  same underlying views straight out of the snapshot.
 
-  The `generateAuditReport` JS function rewrite (cover + Account
-  Summary table + per-account sections matching the production
-  layout) is the next chunk &mdash; it's in the open task list.
+  Data layout:
+  - `reconciliation.json`: small audit-only arrays inline &mdash;
+    `accountSummary` (247 rows, from `v6ui_accountsummaryreport`),
+    `unpostedBatchesUi` (empty in dev, from `v6ui_unposted_batches`),
+    `unpostedCardexUi` (16 rows, from `v6ui_unposted_cardex`),
+    `accountDescriptions` (15 rows, from `v6ui_getaccounts` for
+    the per-account headers like "Raw Material - Col Concentrate").
+  - `data/audit-report-detail.json` (7.4 MB): heavy arrays loaded
+    on first audit-report click &mdash; `reconcilingItems` (14,915
+    rows across all periods, from `v6ui_reconcilingitems`, analyst
+    notes preserved) and `perpetual` (19,235 rows filtered to QOH
+    &ne; 0, joined from `v6_006_perpetual` + `ritems` + `F4101`
+    for item descriptions). Cached in `_auditDetailCache` after
+    the first fetch so subsequent runs are instant.
+
+  Output: **one tab per company** (improvement over the legacy
+  app's one-company-per-file pattern). Tab names like `00010 - USD`,
+  `00050 - GBP`. Each tab follows the production layout verbatim:
+  - 5-row cover (Title / Currency Code / Period Ends / Prepared /
+    Prepared by &lt;email&gt; (&lt;db&gt;))
+  - "Account Summary" header + table (Account / GL Balance /
+    Perpetual Balance / Out of Balance) + bolded total row
+  - Per-account sections in longAccount order:
+    - Account header: `<longAccount> - <description>`
+    - "Accounts Summary" sub-section: G/L Balance, Perpetual,
+      Variance + the six variance components + Unreconciled
+      Variance (bolded total)
+    - "Unposted GL Batches" (or "All batches posted...")
+    - "End Of Day" (or "All inventory transactions were...")
+    - "Journal Entries" (Doc No / Doc Type / User / Amount + total)
+    - "Variances" (8-column transactional table, 3-row-per-entry
+      with `Note:` and analyst markup preserved)
+    - "Perpetual Details" (Branch / Item Number / Description /
+      UM / QOH / Amount on Hand + total)
+    - `---------------------------------------------` separator
+  - All amount columns use the `$#,##0.00;($#,##0.00);-` format;
+    QOH uses `#,##0.00;(#,##0.00);-`. Section + sub-section
+    headers are bolded; table-header rows have a light-gray
+    (`#D4D0C8`) fill. Title row is bold Calibri 14.
+
+  Filename pattern: `PerpetualInventoryReconciliation_<period>_<stamp>.xlsx`.
+  Sidebar filters (Company, Object, BU, Subsidiary, Currency)
+  flow through &mdash; deselected companies skip their tab; any
+  long account that doesn't pass `rowMatchesFilters` is dropped
+  from that company's tab.
+
+- **Context help**: two affordances now point at reference material:
+  - **Reference guide chip** next to the page title links straight to
+    `../RRUniversity/inventory-reconciliation.html` (the customer-
+    facing KB doc) in a new tab.
+  - **Help FAB** (bottom-right floating button) opens a two-column
+    glossary modal: variance-component definitions (with JDE
+    table refs) on the left, common workflows on the right
+    (Investigating an OOB period / Reading the Audit Report /
+    Handling Cardex / Handling End of Day). Footer carries links
+    to the same University doc and the Help Desk page. ESC,
+    backdrop, or X dismisses. Static content &mdash; finance
+    audience asked for *"what does this term mean again?"* not
+    a contextual deep-dive.
+
+- **Audit Report PDF**: companion to the Excel export, same data
+  + same filter chain via `ensureAuditDetail()`. Built with
+  **jsPDF + jspdf-autotable** loaded from CDN. The page header
+  has two side-by-side buttons (*Audit Report &middot; Excel* and
+  *Audit Report &middot; PDF*) so the analyst picks the format
+  explicitly.
+
+  Layout: Letter portrait. One company per page break (so each
+  company's cover starts on a fresh page). Inside a company,
+  `autoTable` handles intra-table pagination + repeating headers
+  on every page automatically. Sections render in the same order
+  as the Excel (cover &rarr; Account Summary table &rarr;
+  per-account Accounts Summary / Unposted GL Batches / End Of Day
+  / Journal Entries / Variances / Perpetual Details). For
+  Variances, each row's analyst Note is rendered as an italic
+  full-row `colSpan` line directly beneath its data row so the
+  audit trail stays intact.
+
+  Each page carries a small footer: `Generated <full timestamp>`
+  on the left and `Page X of Y` on the right. Number formatting
+  matches the Excel: `$#,##0.00` (parens for negatives) for
+  amounts, `#,##0.00` for QOH. Filename pattern:
+  `PerpetualInventoryReconciliation_<period>_<stamp>.pdf`.
 - **Variance-step Preview pane + Excel exports**: each preview-bearing
   variance step (GL Batches, End of Day, Cardex, Manual JEs) has a
   Preview icon **and** a download icon under it. Both respect the
@@ -329,11 +398,6 @@ As of the latest commit, V8 has:
 - No other pages yet (Transactions, As Of, Roll Forward, Integrity, In
   Transit, PO Receipts).
 - No optimization pass on the captured sprocs / views.
-- The Audit Report Excel: data is captured (per the chunk above)
-  but the `generateAuditReport` JS function still emits the older
-  V8 multi-sheet shape, not the production single-sheet layout
-  (cover + Account Summary table + per-account sections). The
-  next chunk rewrites it.
 - `RRV8/views/v6ui_reconfiledata.sql` is captured but the view itself
   is dead in production (intended for a process that never shipped).
   Leave it in the library for archaeology; the actual data source

@@ -19,7 +19,7 @@
          Carry Fwd + GL Batches + EoD + Tx + Cardex - JEs = Total
     7. Donut chart + 12-month history both rendered as inline SVG with
        modern legend chips
-    8. Journal Entry / Audit Report / Refresh / Import in a header
+    8. Audit Report (Excel + PDF) / Refresh / Import in a header
        action bar, not as panel-footer buttons
     9. Open Sans + Source Sans 3 typography, GSI brand palette
    10. Responsive grid (mobile-aware)
@@ -40,6 +40,11 @@
      "community" build is enough for our needs (no styling, no
      formulas — just typed cells + multi-sheet workbooks). -->
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js" defer></script>
+<!-- jsPDF + autoTable for client-side PDF export of the Audit Report.
+     autoTable handles per-section tables, automatic page breaks, and
+     repeating headers — same data shape we feed into the Excel. -->
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.4/dist/jspdf.plugin.autotable.min.js" defer></script>
 <style>
   :root {
     --navy:        #1f2d4a;
@@ -816,6 +821,28 @@
     letter-spacing: -0.02em;
     margin-bottom: 8px;
   }
+  .page-title-doc {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-left: 14px;
+    font-family: 'Open Sans', sans-serif;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--blue);
+    text-decoration: none;
+    vertical-align: 8px;
+    padding: 5px 11px;
+    border-radius: 6px;
+    border: 1px solid rgba(36, 130, 220, 0.25);
+    background: rgba(36, 130, 220, 0.06);
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .page-title-doc:hover {
+    background: var(--blue-pale);
+    border-color: rgba(36, 130, 220, 0.45);
+  }
+  .page-title-doc svg { width: 13px; height: 13px; }
   .page-sub {
     font-size: 13.5px;
     color: var(--text-soft);
@@ -826,6 +853,9 @@
     gap: 8px;
     flex-wrap: wrap;
   }
+  /* Push the audit-report button pair to the right edge of the
+     page-actions row so the period selector stays on the left. */
+  .page-actions #js-audit-report-btn { margin-left: auto; }
   .btn {
     display: inline-flex;
     align-items: center;
@@ -1514,6 +1544,175 @@
   .help-fab svg { width: 20px; height: 20px; }
 
   /* ============================================================
+     CONTEXT-HELP MODAL — variance glossary + workflows
+     ============================================================ */
+  .help-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 210;
+    display: grid;
+    place-items: center;
+    animation: preview-fade-in 140ms ease-out;
+  }
+  .help-modal[hidden] { display: none; }
+  .help-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(20, 32, 55, 0.42);
+    backdrop-filter: blur(2px);
+  }
+  .help-card {
+    position: relative;
+    z-index: 1;
+    background: #fff;
+    border-radius: 14px;
+    box-shadow: 0 30px 60px -12px rgba(20, 32, 55, 0.45);
+    width: min(960px, 94vw);
+    max-height: 86vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    animation: preview-slide-in 180ms cubic-bezier(0.2, 0.9, 0.3, 1);
+  }
+  .help-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 18px 24px 14px;
+    border-bottom: 1px solid var(--rule);
+  }
+  .help-titleblock { min-width: 0; }
+  .help-title {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 800;
+    font-size: 18px;
+    color: var(--navy);
+    line-height: 1.2;
+  }
+  .help-sub {
+    margin-top: 4px;
+    font-size: 12.5px;
+    color: var(--text-muted);
+    line-height: 1.4;
+  }
+  .help-close {
+    width: 32px; height: 32px;
+    border-radius: 8px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    color: var(--text-muted);
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+    transition: background 0.15s, color 0.15s;
+  }
+  .help-close:hover { background: var(--bg-soft); color: var(--navy); }
+  .help-close svg { width: 16px; height: 16px; }
+
+  .help-body {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    overflow: hidden;
+  }
+  .help-col {
+    overflow-y: auto;
+    padding: 18px 24px 22px;
+  }
+  .help-col + .help-col { border-left: 1px solid var(--rule); }
+  .help-col-title {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 800;
+    font-size: 11.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    margin: 0 0 14px;
+  }
+
+  .help-gloss { margin: 0; }
+  .help-gloss dt {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 700;
+    font-size: 13.5px;
+    color: var(--navy);
+    margin-top: 14px;
+  }
+  .help-gloss dt:first-child { margin-top: 0; }
+  .help-gloss dd {
+    margin: 4px 0 0;
+    font-size: 12.5px;
+    color: var(--text);
+    line-height: 1.5;
+  }
+  .help-gloss code, .help-workflow code {
+    font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+    font-size: 11px;
+    background: var(--bg-soft);
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: var(--text-soft);
+  }
+
+  .help-workflow {
+    margin-bottom: 18px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--rule);
+  }
+  .help-workflow:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+  .help-workflow h4 {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 700;
+    font-size: 13.5px;
+    color: var(--navy);
+    margin: 0 0 8px;
+  }
+  .help-workflow ol, .help-workflow ul {
+    margin: 0;
+    padding-left: 22px;
+    font-size: 12.5px;
+    line-height: 1.55;
+    color: var(--text);
+  }
+  .help-workflow li { margin-bottom: 4px; }
+
+  .help-foot {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 24px;
+    border-top: 1px solid var(--rule);
+    background: #fff;
+  }
+  .help-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 12px;
+    border-radius: 7px;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--blue);
+    border: 1px solid rgba(36, 130, 220, 0.25);
+    background: rgba(36, 130, 220, 0.05);
+    text-decoration: none;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .help-link:hover {
+    background: var(--blue-pale);
+    border-color: rgba(36, 130, 220, 0.45);
+  }
+  .help-link svg { width: 14px; height: 14px; }
+
+  @media (max-width: 760px) {
+    .help-body { grid-template-columns: 1fr; }
+    .help-col + .help-col { border-left: none; border-top: 1px solid var(--rule); }
+  }
+
+  /* ============================================================
      PREVIEW MODAL (variance-component drilldown)
      ============================================================ */
   .preview-modal {
@@ -1954,13 +2153,6 @@
       <button class="topbar-action" title="Fullscreen" type="button">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"></path><path d="M21 8V5a2 2 0 0 0-2-2h-3"></path><path d="M3 16v3a2 2 0 0 0 2 2h3"></path><path d="M16 21h3a2 2 0 0 0 2-2v-3"></path></svg>
       </button>
-      <button class="topbar-action" title="Notifications" type="button">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
-        <span class="badge"></span>
-      </button>
-      <button class="topbar-action" title="Help" type="button">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
-      </button>
     </div>
 
     <button class="topbar-user" type="button" id="js-user-btn" aria-haspopup="menu">
@@ -2014,10 +2206,6 @@
       <a href="#" class="sidebar-nav-item">
         <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
         <span class="sidebar-nav-text">Admin</span>
-      </a>
-      <a href="#" class="sidebar-nav-item">
-        <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10v6M2 10l10-5 10 5-10 5z"></path><path d="M6 12v5c3 3 9 3 12 0v-5"></path></svg>
-        <span class="sidebar-nav-text">University</span>
       </a>
     </div>
 
@@ -2109,7 +2297,13 @@
           <span class="sep">/</span>
           <span>Reconciliation</span>
         </div>
-        <h1 class="page-title">Inventory Reconciliation</h1>
+        <h1 class="page-title">
+          Inventory Reconciliation
+          <a class="page-title-doc" href="../RRUniversity/inventory-reconciliation.html" target="_blank" rel="noopener" title="Open the Inventory Reconciliation reference guide in RR University">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg>
+            Reference guide
+          </a>
+        </h1>
         <div class="page-sub" id="js-page-sub">Period ending <strong>August 27, 2016</strong> &middot; 2 companies, 5 inventory accounts</div>
       </div>
       <div class="page-actions">
@@ -2134,13 +2328,13 @@
         <!-- Import JDE data moved to the user menu (it's a global,
              cross-module admin action, not module-scoped). Page-
              header actions stay focused on this module. -->
-        <button class="btn btn-secondary" type="button" id="js-journal-entry-btn" title="Download an Excel-ready journal-entry batch for the current variance">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="9" y1="14" x2="15" y2="14"></line><line x1="9" y1="18" x2="13" y2="18"></line></svg>
-          Journal Entry
-        </button>
         <button class="btn btn-primary" type="button" id="js-audit-report-btn" title="Download an Excel audit report of the current period">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="16" y2="17"></line><line x1="10" y1="9" x2="14" y2="9"></line></svg>
-          Audit Report
+          Audit Report&nbsp;&middot;&nbsp;Excel
+        </button>
+        <button class="btn btn-primary" type="button" id="js-audit-report-pdf-btn" title="Download a PDF audit report of the current period">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><path d="M9 13h.01"></path><path d="M9 17h6"></path><path d="M9 9h.01"></path></svg>
+          Audit Report&nbsp;&middot;&nbsp;PDF
         </button>
       </div>
     </div>
@@ -2394,10 +2588,104 @@
 
 </div>
 
-<!-- Floating help button (mockup-only; no behavior) -->
-<button class="help-fab" type="button" title="University &middot; context help" aria-label="Help">
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10v6M2 10l10-5 10 5-10 5z"></path><path d="M6 12v5c3 3 9 3 12 0v-5"></path></svg>
+<!-- Floating help button — opens the context-help modal -->
+<button class="help-fab" id="js-help-fab" type="button" title="Inventory Reconciliation reference" aria-label="Open reference">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg>
 </button>
+
+<!-- Context-help modal: 2-col glossary + workflows -->
+<div class="help-modal" id="js-help-modal" hidden role="dialog" aria-modal="true" aria-labelledby="js-help-title">
+  <div class="help-backdrop" id="js-help-backdrop"></div>
+  <div class="help-card" role="document">
+    <header class="help-head">
+      <div class="help-titleblock">
+        <div class="help-title" id="js-help-title">Inventory Reconciliation reference</div>
+        <div class="help-sub">What each metric means, how the math works, and where to drill.</div>
+      </div>
+      <button class="help-close" id="js-help-close" type="button" title="Close" aria-label="Close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+      </button>
+    </header>
+    <div class="help-body">
+      <section class="help-col">
+        <h3 class="help-col-title">Variance components</h3>
+        <dl class="help-gloss">
+          <dt>Carry Forward</dt>
+          <dd>Prior period's unreconciled variance, rolled into the current period. If this is non&#8209;zero, a previous close left a residual that hasn&rsquo;t been booked. Click the Preview icon to see the prior period&rsquo;s full breakdown.</dd>
+
+          <dt>GL Batches</dt>
+          <dd>F0911 batches hitting these inventory accounts that have not yet posted (<code>glpost &lt;&gt; 'P'</code>). The GL balance is short by this amount until they post. Source view: <code>v6_007_unpostedbatches</code>.</dd>
+
+          <dt>End of Day</dt>
+          <dd>F4111 cardex records with no batch number &mdash; daily inventory movements that didn&rsquo;t get bundled into a posted batch. Usually a JDE end&#8209;of&#8209;day job didn&rsquo;t complete. Source view: <code>v6_006_unposted_cardex</code>.</dd>
+
+          <dt>Transactions</dt>
+          <dd>Net F0911 vs F4111 timing/posting variance for the period. A positive raw amount reduces out&#8209;of&#8209;balance, so the math subtracts it. Source view: <code>v6ui_reconcilingitems</code>.</dd>
+
+          <dt>Cardex</dt>
+          <dd>F41021 (item balance) vs F4111 (cardex) per&#8209;item discrepancies. Items where the perpetual roll&#8209;forward doesn&rsquo;t tie &mdash; usually a cost or UM change that broke the roll. Source view: <code>v6ui_itemrollintegritydialog</code>.</dd>
+
+          <dt>Manual Journal Entries</dt>
+          <dd>Manual JEs (<code>batchtype = 'G'</code>) booked directly to these inventory accounts in the period. Source view: <code>v6ui_manual_entries</code>.</dd>
+
+          <dt>Unreconciled Variance</dt>
+          <dd>GL balance minus perpetual balance &mdash; the bottom&#8209;line OOB. Equals the sum of the six components above (Transactions subtracted). When components sum cleanly to this total, every dollar is accounted for.</dd>
+        </dl>
+      </section>
+
+      <section class="help-col">
+        <h3 class="help-col-title">Common workflows</h3>
+
+        <article class="help-workflow">
+          <h4>Investigating an out&#8209;of&#8209;balance period</h4>
+          <ol>
+            <li>Pick the period from the header dropdown.</li>
+            <li>Read the Variance Breakdown bottom&#8209;up &mdash; the orange Unreconciled Variance is the target.</li>
+            <li>For each non&#8209;zero component, click <strong>Preview</strong> to see the contributing rows in the modal, or the download icon to export.</li>
+            <li>Narrow the sidebar (Company / Object / BU / Subsidiary) when the breakdown is noisy &mdash; every widget recomputes in place.</li>
+          </ol>
+        </article>
+
+        <article class="help-workflow">
+          <h4>Reading the Audit Report</h4>
+          <ul>
+            <li><strong>Excel</strong>: one tab per company. Each tab is cover &rarr; Account Summary table &rarr; per&#8209;account sections (Accounts Summary + the four sub&#8209;sections + Perpetual Details).</li>
+            <li><strong>PDF</strong>: same data, paginated. Every page carries <em>Generated &lt;ts&gt;</em> + <em>Page X of Y</em>.</li>
+            <li>Sidebar filters propagate to the export &mdash; deselected companies skip their tab.</li>
+          </ul>
+        </article>
+
+        <article class="help-workflow">
+          <h4>Handling a Cardex variance</h4>
+          <ol>
+            <li>Click <strong>Cardex Preview</strong> for per&#8209;item rows with Reason (Amount or Quantity).</li>
+            <li>Reason = <em>Amount</em>: needs a cost re&#8209;roll. Reason = <em>Quantity</em>: needs an item&#8209;balance fix.</li>
+            <li>Narrow by Object or Subsidiary to scope the work list.</li>
+          </ol>
+        </article>
+
+        <article class="help-workflow">
+          <h4>Handling End of Day</h4>
+          <ol>
+            <li>Non&#8209;zero means F4111 has un&#8209;batched records &mdash; a JDE batch job didn&rsquo;t bundle them.</li>
+            <li>Preview shows per&#8209;document detail; export to Excel and send to the JDE admin.</li>
+            <li>Once the batch job runs, the next snapshot recapture clears the component.</li>
+          </ol>
+        </article>
+      </section>
+    </div>
+    <footer class="help-foot">
+      <a class="help-link" href="../RRUniversity/inventory-reconciliation.html" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg>
+        Full reference in RR University
+      </a>
+      <a class="help-link" href="../HelpDesk/troubleshooting.html" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+        Search the Help Desk
+      </a>
+    </footer>
+  </div>
+</div>
 
 <!-- Variance-component preview modal (V8's first modal). Hidden by
      default; openVariancePreview(componentKey) populates + shows. -->
@@ -3591,8 +3879,6 @@
     });
   }
   stub('.topbar-action[title="Fullscreen"]',    'Fullscreen');
-  stub('.topbar-action[title="Notifications"]', 'Notifications');
-  stub('.topbar-action[title="Help"]',          'Help');
 
   // ---------- Excel exports ----------
   // Both buttons in the page-actions row produce real .xlsx files
@@ -3609,159 +3895,674 @@
     return PERIOD_LABELS[currentPeriod] || currentPeriod;
   }
 
+  // ---------- Audit Report ----------
+  // Production-style "Perpetual Inventory Reconciliation" report.
+  // Layout matches the legacy SPA's output: cover header → Account
+  // Summary table → per-account sections (Accounts Summary, Unposted
+  // GL Batches, End Of Day, Journal Entries, Variances, Perpetual
+  // Details) → separator. Multi-company improvement: one TAB per
+  // company instead of forcing the analyst to re-run per-company.
+  //
+  // Heavy arrays (reconcilingItems ~15k rows, perpetual ~19k rows)
+  // live in data/audit-report-detail.json and are lazy-loaded on
+  // first invocation; the dashboard's initial fetch stays small.
+
+  let _auditDetailCache = null;
+  function ensureAuditDetail() {
+    if (_auditDetailCache) return Promise.resolve(_auditDetailCache);
+    return fetch('data/audit-report-detail.json')
+      .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(j => { _auditDetailCache = j; return j; });
+  }
+
+  function buildAccountDescMap(snap) {
+    const m = new Map();
+    (snap.accountDescriptions || []).forEach(d => {
+      m.set(d.companyNumber + '|' + d.longAccount, d.description);
+    });
+    return m;
+  }
+
+  // Pull currency code out of a company label like "00010 - Acme Inc (USD)".
+  function currencyOfCompanyLabel(label) {
+    if (!label) return '';
+    const m = label.match(/\(([A-Z]{3})\)\s*$/);
+    return m ? m[1] : '';
+  }
+
+  function formatDateMDY(iso) {
+    if (!iso) return '';
+    const d = new Date(iso + 'T00:00:00');
+    return ('0' + (d.getMonth()+1)).slice(-2) + '/' + ('0' + d.getDate()).slice(-2) + '/' + d.getFullYear();
+  }
+
+  // Style descriptors applied per cell after the AOA is rendered.
+  const _STY = {
+    title:       { font: { name: 'Calibri', bold: true, sz: 16 } },
+    coverMeta:   { font: { name: 'Calibri', sz: 11 } },
+    section:     { font: { name: 'Calibri', bold: true, sz: 13 }, fill: { fgColor: { rgb: 'E8ECF3' }, patternType: 'solid' } },
+    accountHead: { font: { name: 'Calibri', bold: true, sz: 12 } },
+    subsection:  { font: { name: 'Calibri', bold: true, sz: 11 } },
+    tableHead:   { font: { name: 'Calibri', bold: true }, fill: { fgColor: { rgb: 'D4D0C8' }, patternType: 'solid' } },
+    bold:        { font: { name: 'Calibri', bold: true } },
+    money:       { numFmt: '$#,##0.00;($#,##0.00);-' },
+    moneyBold:   { font: { name: 'Calibri', bold: true }, numFmt: '$#,##0.00;($#,##0.00);-' },
+    qty:         { numFmt: '#,##0.00;(#,##0.00);-' },
+    sep:         { font: { name: 'Calibri', color: { rgb: '999999' } } }
+  };
+
+  // Build one company's worksheet. Returns { aoa, styles, colWidths }.
+  function buildAuditCompanyTab(co, snap, detail, descMap) {
+    const cnum = co.id;
+    const currency = currencyOfCompanyLabel(co.label) || 'USD';
+    const aoa = [];
+    const styles = [];   // [{ r:0-idx, c:0-idx, s:style }]
+    function row(cells) { aoa.push(cells || []); return aoa.length - 1; }
+    function styleCell(r, c, s) { styles.push({ r: r, c: c, s: s }); }
+    function styleRowFirstCell(r, s) { styleCell(r, 0, s); }
+
+    // --- Cover ---------------------------------------------------
+    let r = row(['Perpetual Inventory Reconciliation']);
+    styleCell(r, 0, _STY.title);
+    row(['Currency Code: ' + currency]);
+    row(['Period Ends: ' + formatDateMDY(currentPeriod)]);
+    row(['Prepared: ' + formatDateMDY(new Date().toISOString().slice(0, 10))]);
+    row(['Prepared by ' + USER.email + ' (' + (snap._meta && snap._meta.instance ? snap._meta.instance : '') + ')']);
+    r = row(['Account Summary']);
+    styleCell(r, 0, _STY.section);
+    row([]);
+
+    // --- Account Summary table -----------------------------------
+    // Only real inventory accounts that exist in accountRows (skip
+    // dummy 'gl class not in base table' / 'outside operations').
+    const acctRows = (snap.accountRows || []).filter(ar =>
+      ar.period === currentPeriod && ar.companyId === cnum && rowMatchesFilters(ar, snap)
+    );
+    const longAccounts = [...new Set(acctRows.map(ar => ar.longAccount))].sort();
+    const summaryByLA = new Map();
+    (snap.accountSummary || []).forEach(s => {
+      if (s.periodEnds === currentPeriod && s.companyNumber === cnum) {
+        summaryByLA.set(s.longAccount, s);
+      }
+    });
+
+    r = row(['Account', 'GL Balance', 'Perpetual Balance', 'Out of Balance']);
+    [0,1,2,3].forEach(c => styleCell(r, c, _STY.tableHead));
+
+    let tGl = 0, tPerp = 0;
+    longAccounts.forEach(la => {
+      const s = summaryByLA.get(la);
+      const gl = s ? s.endGLBal : 0;
+      const pp = s ? s.perpetual : 0;
+      const oob = s ? s.outofBal : (gl - pp);
+      tGl  += gl;
+      tPerp += pp;
+      const rr = row([la, round2(gl), round2(pp), round2(oob)]);
+      styleCell(rr, 1, _STY.money);
+      styleCell(rr, 2, _STY.money);
+      styleCell(rr, 3, _STY.money);
+    });
+    const tOob = round2(tGl - tPerp);
+    r = row(['', round2(tGl), round2(tPerp), tOob]);
+    styleCell(r, 1, _STY.moneyBold);
+    styleCell(r, 2, _STY.moneyBold);
+    styleCell(r, 3, _STY.moneyBold);
+
+    // --- Per-account sections ------------------------------------
+    longAccounts.forEach(la => {
+      const s = summaryByLA.get(la);
+      row([]);
+      const desc = descMap.get(cnum + '|' + la);
+      r = row([la + (desc ? ' - ' + desc : '')]);
+      styleCell(r, 0, _STY.accountHead);
+
+      // Accounts Summary sub-section
+      r = row(['Accounts Summary']);
+      styleCell(r, 0, _STY.subsection);
+      const ar = acctRows.find(a => a.longAccount === la); // for fallback if accountSummary missing
+      const gl = s ? s.endGLBal : (ar ? ar.glBalance : 0);
+      const pp = s ? s.perpetual : (ar ? ar.perpetualBalance : 0);
+      const oob = s ? s.outofBal : (gl - pp);
+      const begVar  = s ? s.begVar   : (ar ? ar.variance.carryForward : 0);
+      const unpstGL = s ? s.unpstGL  : 0;
+      const eod     = s ? s.endofDay : 0;
+      const txVar   = s ? s.variance : (ar ? ar.variance.transactions * -1 : 0);
+      const itemRoll = s ? s.itemRoll : (ar ? ar.variance.cardex : 0);
+      const jes     = s ? s.jes      : (ar ? ar.variance.manualJournalEntries : 0);
+      r = row(['G/L Balance',           round2(gl)]);  styleCell(r, 1, _STY.money);
+      r = row(['Perpetual Balance',     round2(pp)]);  styleCell(r, 1, _STY.money);
+      r = row(['Variance',              round2(oob)]); styleCell(r, 1, _STY.money);
+      row([]);
+      r = row(['Beginning Variance',    round2(begVar)]);   styleCell(r, 1, _STY.money);
+      r = row(['Unposted Batches',      round2(unpstGL)]);  styleCell(r, 1, _STY.money);
+      r = row(['End of Day',            round2(eod)]);      styleCell(r, 1, _STY.money);
+      r = row(['Transactional Variance', round2(txVar)]);   styleCell(r, 1, _STY.money);
+      r = row(['Cardex Variance',       round2(itemRoll)]); styleCell(r, 1, _STY.money);
+      r = row(['Manual Journal Entries', round2(jes)]);     styleCell(r, 1, _STY.money);
+      row([]);
+      r = row(['Unreconciled Variance', round2(oob)]);
+      styleCell(r, 0, _STY.bold);
+      styleCell(r, 1, _STY.moneyBold);
+      row([]);
+
+      // Unposted GL Batches sub-section
+      r = row(['Unposted GL Batches']);
+      styleCell(r, 0, _STY.subsection);
+      const batches = (snap.unpostedBatchesUi || []).filter(b =>
+        b.companyNumber === cnum && b.longAccount === la && b.periodEnds === currentPeriod
+      );
+      if (batches.length === 0) {
+        row(['All batches posted for this period']);
+      } else {
+        r = row(['Batch Date', 'Username', 'Batch Number', 'Type', 'Approval Status', 'Posting Status', 'Amount']);
+        [0,1,2,3,4,5,6].forEach(c => styleCell(r, c, _STY.tableHead));
+        let tot = 0;
+        batches.forEach(b => {
+          const rr = row([b.batchDate, b.username, b.batchNumber, b.type, b.approval_Status || b.apprsts, b.posting_Status || b.poststs, round2(b.amount)]);
+          styleCell(rr, 6, _STY.money);
+          tot += b.amount || 0;
+        });
+        const rr = row(['', '', '', '', '', '', round2(tot)]);
+        styleCell(rr, 6, _STY.moneyBold);
+      }
+      row([]);
+
+      // End Of Day sub-section
+      r = row(['End Of Day']);
+      styleCell(r, 0, _STY.subsection);
+      const eodRows = (snap.unpostedCardexUi || []).filter(b =>
+        b.companyNumber === cnum && b.longAccount === la && b.periodEnds === currentPeriod
+      );
+      if (eodRows.length === 0) {
+        row(['All inventory transactions were successfully processed for this period']);
+      } else {
+        r = row(['Transaction Date', 'Type', 'Order Type', 'Doc Type', 'Doc Number', 'Branch Plant', 'Status', 'Transaction Amount']);
+        [0,1,2,3,4,5,6,7].forEach(c => styleCell(r, c, _STY.tableHead));
+        let tot = 0;
+        eodRows.forEach(e => {
+          const rr = row([e.transactionDate, e.type, e.orderType, e.docType, e.docNumber, e.branchPlant, e.status, round2(e.transactionAmount)]);
+          styleCell(rr, 7, _STY.money);
+          tot += e.transactionAmount || 0;
+        });
+        const rr = row(['', '', '', '', '', '', '', round2(tot)]);
+        styleCell(rr, 7, _STY.moneyBold);
+      }
+      row([]);
+
+      // Journal Entries sub-section (4-col production layout)
+      r = row(['Journal Entries']);
+      styleCell(r, 0, _STY.subsection);
+      const jeRows = (snap.manualJournalEntries || []).filter(je =>
+        je.companyNumber === cnum && je.longAccount === la && je.periodEnds === currentPeriod
+      );
+      if (jeRows.length === 0) {
+        row(['No manual journal entries for this period']);
+      } else {
+        r = row(['Doc No', 'Doc Type', 'User', 'Amount']);
+        [0,1,2,3].forEach(c => styleCell(r, c, _STY.tableHead));
+        let tot = 0;
+        jeRows.forEach(je => {
+          const rr = row([je.docNumber, je.docType, je.username, round2(je.amount)]);
+          styleCell(rr, 3, _STY.money);
+          tot += je.amount || 0;
+        });
+        const rr = row(['', '', '', round2(tot)]);
+        styleCell(rr, 3, _STY.moneyBold);
+      }
+      row([]);
+
+      // Variances sub-section (8 cols + 3-row-per-entry layout)
+      r = row(['Variances']);
+      styleCell(r, 0, _STY.subsection);
+      const reconRows = (detail.reconcilingItems || []).filter(x =>
+        x.companyNumber === cnum && x.longAccount === la && x.periodEnds === currentPeriod
+      );
+      if (reconRows.length === 0) {
+        row(['No transaction variances for this period']);
+      } else {
+        r = row(['Worked', 'DT', 'Doc No', 'OT', 'Mfg Batch', 'Cardex Amount', 'Ledger Amount', 'Cardex Ledger Variance']);
+        [0,1,2,3,4,5,6,7].forEach(c => styleCell(r, c, _STY.tableHead));
+        reconRows.forEach(rec => {
+          const dataRow = row([rec.worked ? 'Yes' : 'No', rec.dt, rec.docNumber, rec.ot, rec.batch || '', round2(rec.cardexAmount), round2(rec.ledgerAmount), round2(rec.variance)]);
+          styleCell(dataRow, 5, _STY.money);
+          styleCell(dataRow, 6, _STY.money);
+          styleCell(dataRow, 7, _STY.money);
+          row(['', 'Note:']);
+          row(['', '', rec.note || '']);
+        });
+      }
+      row([]);
+
+      // Perpetual Details sub-section (6 cols + total row)
+      r = row(['Perpetual Details']);
+      styleCell(r, 0, _STY.subsection);
+      const perpRows = (detail.perpetual || []).filter(p =>
+        p.companyNumber === cnum && p.longAccount === la
+      );
+      if (perpRows.length === 0) {
+        row(['No data']);
+      } else {
+        r = row(['Branch', 'Item Number', 'Item Description', 'UM', 'QOH', 'Amount on Hand']);
+        [0,1,2,3,4,5].forEach(c => styleCell(r, c, _STY.tableHead));
+        let aohTot = 0;
+        perpRows.forEach(p => {
+          const rr = row([p.branch, p.itemNumber, p.itemDescription, p.uom, round2(p.quantityOnHand), round2(p.amountOnHand)]);
+          styleCell(rr, 4, _STY.qty);
+          styleCell(rr, 5, _STY.money);
+          aohTot += p.amountOnHand || 0;
+        });
+        const rr = row(['', '', '', '', '', round2(aohTot)]);
+        styleCell(rr, 5, _STY.moneyBold);
+      }
+      row([]);
+      r = row(['-------------------------------------------------------------']);
+      styleCell(r, 0, _STY.sep);
+    });
+
+    // Convert AOA to sheet and apply per-cell styles
+    const sheet = XLSX.utils.aoa_to_sheet(aoa);
+    styles.forEach(spec => {
+      const ref = XLSX.utils.encode_cell({ r: spec.r, c: spec.c });
+      if (sheet[ref]) {
+        sheet[ref].s = Object.assign({}, sheet[ref].s || {}, spec.s);
+        if (spec.s.numFmt) sheet[ref].z = spec.s.numFmt;
+      }
+    });
+    // Column widths — modest set that fits the data shapes above
+    sheet['!cols'] = [
+      { wch: 28 }, { wch: 16 }, { wch: 18 }, { wch: 14 },
+      { wch: 14 }, { wch: 18 }, { wch: 18 }, { wch: 22 }
+    ];
+    return sheet;
+  }
+
   function generateAuditReport() {
     if (!window.XLSX) { flashStatus('Excel library still loading — try again in a sec'); return; }
     if (!currentData) { flashStatus('No data loaded'); return; }
-    const view = computeFilteredView(currentData);
 
-    // --- Summary sheet ---
-    const headerRows = [
-      ['Inventory Reconciliation — Audit Report'],
-      [],
-      ['Period',         periodDisplay()],
-      ['Period End',     currentPeriod],
-      ['Database',       currentDbLabel()],
-      ['Generated',      new Date().toISOString().slice(0, 19).replace('T', ' ')],
-      ['Generated by',   USER.name + ' <' + USER.email + '>'],
-      ['Companies in view', view.companyCount],
-      ['Inventory accounts in view', view.accountCount],
-      [],
-      ['Valuation', 'Amount (USD-equiv)'],
-      ['GL Balance',        round2(view.valuation.glBalance)],
-      ['Perpetual Balance', round2(view.valuation.perpetualBalance)],
-      ['Out of Balance',    round2(view.valuation.outOfBalance)],
-      [],
-      ['Variance Component', 'Amount'],
-      ['Carry Forward',           round2(view.variance.carryForward)],
-      ['GL Batches',              round2(view.variance.glBatches)],
-      ['End of Day',              round2(view.variance.endOfDay)],
-      ['Transactions',            round2(view.variance.transactions)],
-      ['Cardex',                  round2(view.variance.cardex)],
-      ['Manual Journal Entries',  round2(view.variance.manualJournalEntries)],
-      ['Unreconciled Variance',   round2(view.variance.unreconciledVariance)]
-    ];
-    const summary = XLSX.utils.aoa_to_sheet(headerRows);
-    summary['!cols'] = [{ wch: 32 }, { wch: 22 }];
+    const wasCached = !!_auditDetailCache;
+    if (!wasCached) flashStatus('Loading audit-report data…');
 
-    // --- History sheet — filtered to current scope ---
-    const histRows = [['Period', 'Out of Balance']];
-    computeFilteredHistory(currentData).forEach(p => histRows.push([p.period, round2(p.value)]));
-    const history = XLSX.utils.aoa_to_sheet(histRows);
-    history['!cols'] = [{ wch: 14 }, { wch: 18 }];
-
-    // --- Filters sheet (what was IN scope when the report ran) ---
-    const filterRows = [['Group', 'ID', 'Label', 'Selected']];
-    Object.keys(selected).forEach(group => {
-      (currentData.filter[group] || []).forEach(item => {
-        filterRows.push([group, item.id || '(blank)', item.label, selected[group].has(item.id) ? 'Y' : 'N']);
+    ensureAuditDetail()
+      .then(detail => {
+        const allCos = currentData.filter.companies || [];
+        const companiesInScope = allCos.filter(c => selected.companies.has(c.id));
+        if (companiesInScope.length === 0) {
+          flashStatus('No companies selected — narrow back to at least one');
+          return;
+        }
+        const descMap = buildAccountDescMap(currentData);
+        const wb = XLSX.utils.book_new();
+        companiesInScope.forEach(co => {
+          const sheet = buildAuditCompanyTab(co, currentData, detail, descMap);
+          const currency = currencyOfCompanyLabel(co.label) || '';
+          // Tab name max 31 chars; "00010 - USD" is a safe shape
+          let tabName = co.id + (currency ? ' - ' + currency : '');
+          if (tabName.length > 31) tabName = tabName.slice(0, 31);
+          XLSX.utils.book_append_sheet(wb, sheet, tabName);
+        });
+        const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 13);
+        const fname = 'PerpetualInventoryReconciliation_' + currentPeriod + '_' + stamp + '.xlsx';
+        XLSX.writeFile(wb, fname);
+        flashStatus('Downloaded ' + fname);
+      })
+      .catch(err => {
+        console.error('Audit report failed:', err);
+        flashStatus('Failed to load audit-report data — check the console');
       });
-    });
-    const filters = XLSX.utils.aoa_to_sheet(filterRows);
-    filters['!cols'] = [{ wch: 16 }, { wch: 16 }, { wch: 38 }, { wch: 10 }];
-
-    // --- By-company breakdown sheet (the math behind the totals) ---
-    // Aggregate filtered rows by companyId.
-    const byCompany = new Map();
-    view.rows.forEach(r => {
-      const acc = byCompany.get(r.companyId) || { glBalance: 0, perpetualBalance: 0 };
-      acc.glBalance        += r.glBalance        || 0;
-      acc.perpetualBalance += r.perpetualBalance || 0;
-      byCompany.set(r.companyId, acc);
-    });
-    const breakdownRows = [['Company', 'GL Balance', 'Perpetual Balance', 'Out of Balance']];
-    [...byCompany.entries()].forEach(([companyId, t]) => {
-      const co = (currentData.filter.companies || []).find(c => c.id === companyId);
-      breakdownRows.push([
-        co ? co.label : companyId,
-        round2(t.glBalance),
-        round2(t.perpetualBalance),
-        round2(t.glBalance - t.perpetualBalance)
-      ]);
-    });
-    // --- By-account sheet — one row per (period, company, account)
-    //     that's in the filtered view. The analyst can pivot on this. ---
-    const accountSheet = [['Period', 'Company', 'BU', 'Object', 'Sub', 'Short Acct', 'Long Acct', 'Currency', 'GL', 'Perpetual', 'OOB', 'CarryFwd', 'GLBatches', 'EoD', 'Tx', 'Cardex', 'JEs']];
-    view.rows.forEach(r => {
-      accountSheet.push([
-        r.period, r.companyId, r.businessUnit, r.object, r.subsidiary,
-        r.shortAccount, r.longAccount, r.currency,
-        round2(r.glBalance), round2(r.perpetualBalance), round2(r.outOfBalance),
-        round2(r.variance.carryForward), round2(r.variance.glBatches), round2(r.variance.endOfDay),
-        round2(r.variance.transactions), round2(r.variance.cardex), round2(r.variance.manualJournalEntries)
-      ]);
-    });
-    const accountSheetWS = XLSX.utils.aoa_to_sheet(accountSheet);
-    accountSheetWS['!cols'] = [
-      { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 8 },
-      { wch: 12 }, { wch: 28 }, { wch: 10 },
-      { wch: 14 }, { wch: 14 }, { wch: 12 },
-      { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 12 }, { wch: 12 }, { wch: 10 }
-    ];
-    const breakdown = XLSX.utils.aoa_to_sheet(breakdownRows);
-    breakdown['!cols'] = [{ wch: 32 }, { wch: 18 }, { wch: 20 }, { wch: 18 }];
-
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, summary,         'Summary');
-    XLSX.utils.book_append_sheet(wb, breakdown,       'By Company');
-    XLSX.utils.book_append_sheet(wb, accountSheetWS,  'By Account');
-    XLSX.utils.book_append_sheet(wb, history,         'History');
-    XLSX.utils.book_append_sheet(wb, filters,   'Filters');
-
-    const fname = 'reconciliation-audit-' + currentPeriod + '.xlsx';
-    XLSX.writeFile(wb, fname);
-    flashStatus('Downloaded ' + fname);
   }
 
-  function generateJournalEntry() {
-    if (!window.XLSX) { flashStatus('Excel library still loading — try again in a sec'); return; }
-    if (!currentData) { flashStatus('No data loaded'); return; }
-    const view = computeFilteredView(currentData);
+  // ---------- PDF Audit Report ----------
+  // Same data + filter chain as the Excel; rendered via jsPDF +
+  // autoTable. One company per major page break; autoTable handles
+  // intra-table pagination + repeating headers automatically.
+  function fmtMoneyPdf(v) {
+    const n = Number(v) || 0;
+    const abs = Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return n < 0 ? '($' + abs + ')' : '$' + abs;
+  }
+  function fmtQtyPdf(v) {
+    const n = Number(v) || 0;
+    return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
 
-    // A JE batch — one debit and one credit per variance component
-    // that's non-zero. In production this is the real JDE F0911-
-    // bound batch; here we just structure the rows so the columns
-    // are recognizable to an analyst.
-    const rows = [
-      ['Doc Type', 'Doc Number', 'GL Date', 'Account', 'Subledger', 'Explanation', 'Debit', 'Credit'],
-    ];
-    const docNum = 'V8-' + currentPeriod.replace(/-/g, '');
-    const today  = new Date().toISOString().slice(0, 10);
-    const components = [
-      ['Carry Forward',          view.variance.carryForward],
-      ['Transactions',           view.variance.transactions],
-      ['Cardex',                 view.variance.cardex],
-      ['Manual Journal Entries', view.variance.manualJournalEntries]
-    ];
-    let lineNo = 0;
-    components.forEach(([label, amount]) => {
-      if (!amount) return;
-      lineNo += 1;
-      const abs = Math.abs(round2(amount));
-      // Variance offsets to a clearing account; sign of `amount`
-      // decides which side it lands on.
-      if (amount < 0) {
-        rows.push(['JE', docNum, today, '1.4XXXXX.Inventory clearing', label, label + ' clearing', abs, 0]);
-        rows.push(['JE', docNum, today, '1.4XXXXX.Reconciliation suspense', label, label + ' offset', 0, abs]);
-      } else {
-        rows.push(['JE', docNum, today, '1.4XXXXX.Reconciliation suspense', label, label + ' offset', abs, 0]);
-        rows.push(['JE', docNum, today, '1.4XXXXX.Inventory clearing', label, label + ' clearing', 0, abs]);
+  const _PDF_STY = {
+    head: { fillColor: [212, 208, 200], textColor: [20, 20, 20], fontStyle: 'bold', halign: 'left', fontSize: 9 },
+    foot: { fillColor: [240, 240, 240], textColor: [20, 20, 20], fontStyle: 'bold', halign: 'left', fontSize: 9 },
+    body: { fontSize: 9, cellPadding: 3, overflow: 'linebreak' },
+    margin: { left: 36, right: 36 }
+  };
+
+  function addPdfCover(doc, co, snap, periodLabel) {
+    const currency = currencyOfCompanyLabel(co.label) || 'USD';
+    const instance = (snap._meta && snap._meta.instance) ? snap._meta.instance : '';
+    let y = 50;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(16);
+    doc.setTextColor(31, 45, 74); // navy
+    doc.text('Perpetual Inventory Reconciliation', 36, y);
+    y += 24;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(10);
+    doc.setTextColor(50, 50, 50);
+    doc.text('Company: ' + co.label, 36, y); y += 14;
+    doc.text('Currency Code: ' + currency, 36, y); y += 14;
+    doc.text('Period Ends: ' + formatDateMDY(currentPeriod), 36, y); y += 14;
+    doc.text('Prepared: ' + formatDateMDY(new Date().toISOString().slice(0, 10)), 36, y); y += 14;
+    doc.text('Prepared by ' + USER.email + (instance ? ' (' + instance + ')' : ''), 36, y); y += 22;
+    doc.setTextColor(0, 0, 0);
+    return y;
+  }
+
+  function addPdfFooter(doc) {
+    const pageCount = doc.internal.getNumberOfPages();
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(120, 120, 120);
+    const w = doc.internal.pageSize.getWidth();
+    const h = doc.internal.pageSize.getHeight();
+    const ts = new Date().toLocaleString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    for (let i = 1; i <= pageCount; i++) {
+      doc.setPage(i);
+      doc.text('Generated ' + ts, 36, h - 18);
+      doc.text('Page ' + i + ' of ' + pageCount, w - 36, h - 18, { align: 'right' });
+    }
+  }
+
+  function pdfSectionTitle(doc, text, y) {
+    if (y > doc.internal.pageSize.getHeight() - 80) { doc.addPage(); y = 50; }
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.setTextColor(31, 45, 74);
+    doc.text(text, 36, y);
+    doc.setTextColor(0, 0, 0);
+    return y + 6;
+  }
+
+  function pdfEmptyState(doc, text, y) {
+    if (y > doc.internal.pageSize.getHeight() - 60) { doc.addPage(); y = 50; }
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(9);
+    doc.setTextColor(110, 110, 110);
+    doc.text(text, 50, y + 12);
+    doc.setTextColor(0, 0, 0);
+    return y + 26;
+  }
+
+  function buildPdfCompanySection(doc, co, snap, detail, descMap, isFirst) {
+    if (!isFirst) doc.addPage();
+    let y = addPdfCover(doc, co, snap, currentPeriod);
+    const cnum = co.id;
+
+    // Filter scope
+    const acctRows = (snap.accountRows || []).filter(ar =>
+      ar.period === currentPeriod && ar.companyId === cnum && rowMatchesFilters(ar, snap)
+    );
+    const longAccounts = [...new Set(acctRows.map(ar => ar.longAccount))].sort();
+    const summaryByLA = new Map();
+    (snap.accountSummary || []).forEach(s => {
+      if (s.periodEnds === currentPeriod && s.companyNumber === cnum) {
+        summaryByLA.set(s.longAccount, s);
       }
     });
-    if (lineNo === 0) {
-      rows.push(['JE', docNum, today, '—', '—', 'No non-zero variance components in current scope', 0, 0]);
+
+    if (longAccounts.length === 0) {
+      pdfEmptyState(doc, 'No accounts in scope for this company.', y);
+      return;
     }
 
-    const sheet = XLSX.utils.aoa_to_sheet(rows);
-    sheet['!cols'] = [
-      { wch: 9 }, { wch: 16 }, { wch: 12 }, { wch: 36 }, { wch: 22 }, { wch: 36 }, { wch: 14 }, { wch: 14 }
-    ];
+    // Account Summary table
+    y = pdfSectionTitle(doc, 'Account Summary', y);
+    let tGl = 0, tPerp = 0;
+    const summaryBody = longAccounts.map(la => {
+      const s = summaryByLA.get(la);
+      const gl = s ? s.endGLBal : 0;
+      const pp = s ? s.perpetual : 0;
+      const oob = s ? s.outofBal : (gl - pp);
+      tGl += gl;
+      tPerp += pp;
+      return [la, fmtMoneyPdf(gl), fmtMoneyPdf(pp), fmtMoneyPdf(oob)];
+    });
+    doc.autoTable({
+      startY: y,
+      head: [['Account', 'GL Balance', 'Perpetual Balance', 'Out of Balance']],
+      body: summaryBody,
+      foot: [['Total', fmtMoneyPdf(tGl), fmtMoneyPdf(tPerp), fmtMoneyPdf(tGl - tPerp)]],
+      styles: _PDF_STY.body,
+      headStyles: _PDF_STY.head,
+      footStyles: _PDF_STY.foot,
+      margin: _PDF_STY.margin,
+      columnStyles: {
+        1: { halign: 'right' }, 2: { halign: 'right' }, 3: { halign: 'right' }
+      }
+    });
+    y = doc.lastAutoTable.finalY + 18;
 
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, sheet, 'JE Batch');
+    // Per-account sections
+    longAccounts.forEach(la => {
+      const s = summaryByLA.get(la);
+      const ar = acctRows.find(a => a.longAccount === la);
+      const desc = descMap.get(cnum + '|' + la);
+      const accountHead = la + (desc ? ' - ' + desc : '');
 
-    const fname = 'journal-entry-' + currentPeriod + '.xlsx';
-    XLSX.writeFile(wb, fname);
-    flashStatus('Downloaded ' + fname);
+      y = pdfSectionTitle(doc, accountHead, y);
+
+      // Accounts Summary — 2-column label/value table
+      const gl   = s ? s.endGLBal  : (ar ? ar.glBalance : 0);
+      const pp   = s ? s.perpetual : (ar ? ar.perpetualBalance : 0);
+      const oob  = s ? s.outofBal  : (gl - pp);
+      const begVar  = s ? s.begVar   : (ar ? ar.variance.carryForward : 0);
+      const unpstGL = s ? s.unpstGL  : 0;
+      const eod     = s ? s.endofDay : 0;
+      const txVar   = s ? s.variance : (ar ? ar.variance.transactions * -1 : 0);
+      const itemRoll = s ? s.itemRoll : (ar ? ar.variance.cardex : 0);
+      const jes     = s ? s.jes      : (ar ? ar.variance.manualJournalEntries : 0);
+
+      doc.autoTable({
+        startY: y,
+        head: [['Accounts Summary', '']],
+        body: [
+          ['G/L Balance',            fmtMoneyPdf(gl)],
+          ['Perpetual Balance',      fmtMoneyPdf(pp)],
+          ['Variance',               fmtMoneyPdf(oob)],
+          ['',                       ''],
+          ['Beginning Variance',     fmtMoneyPdf(begVar)],
+          ['Unposted Batches',       fmtMoneyPdf(unpstGL)],
+          ['End of Day',             fmtMoneyPdf(eod)],
+          ['Transactional Variance', fmtMoneyPdf(txVar)],
+          ['Cardex Variance',        fmtMoneyPdf(itemRoll)],
+          ['Manual Journal Entries', fmtMoneyPdf(jes)]
+        ],
+        foot: [['Unreconciled Variance', fmtMoneyPdf(oob)]],
+        styles: _PDF_STY.body,
+        headStyles: _PDF_STY.head,
+        footStyles: _PDF_STY.foot,
+        margin: _PDF_STY.margin,
+        tableWidth: 320,
+        columnStyles: { 0: { cellWidth: 200 }, 1: { halign: 'right', cellWidth: 120 } }
+      });
+      y = doc.lastAutoTable.finalY + 14;
+
+      // Unposted GL Batches
+      y = pdfSectionTitle(doc, 'Unposted GL Batches', y);
+      const batches = (snap.unpostedBatchesUi || []).filter(b =>
+        b.companyNumber === cnum && b.longAccount === la && b.periodEnds === currentPeriod
+      );
+      if (batches.length === 0) {
+        y = pdfEmptyState(doc, 'All batches posted for this period', y);
+      } else {
+        let tot = 0;
+        const body = batches.map(b => {
+          tot += b.amount || 0;
+          return [b.batchDate, b.username, String(b.batchNumber || ''), b.type, b.approval_Status || b.apprsts || '', b.posting_Status || b.poststs || '', fmtMoneyPdf(b.amount)];
+        });
+        doc.autoTable({
+          startY: y,
+          head: [['Batch Date', 'Username', 'Batch #', 'Type', 'Approval', 'Posting', 'Amount']],
+          body: body,
+          foot: [['', '', '', '', '', 'Total', fmtMoneyPdf(tot)]],
+          styles: _PDF_STY.body,
+          headStyles: _PDF_STY.head,
+          footStyles: _PDF_STY.foot,
+          margin: _PDF_STY.margin,
+          columnStyles: { 6: { halign: 'right' } }
+        });
+        y = doc.lastAutoTable.finalY + 14;
+      }
+
+      // End Of Day
+      y = pdfSectionTitle(doc, 'End Of Day', y);
+      const eodRows = (snap.unpostedCardexUi || []).filter(b =>
+        b.companyNumber === cnum && b.longAccount === la && b.periodEnds === currentPeriod
+      );
+      if (eodRows.length === 0) {
+        y = pdfEmptyState(doc, 'All inventory transactions were successfully processed for this period', y);
+      } else {
+        let tot = 0;
+        const body = eodRows.map(e => {
+          tot += e.transactionAmount || 0;
+          return [e.transactionDate, e.type, e.orderType, e.docType, String(e.docNumber || ''), e.branchPlant, e.status, fmtMoneyPdf(e.transactionAmount)];
+        });
+        doc.autoTable({
+          startY: y,
+          head: [['Trans Date', 'Type', 'OT', 'DocType', 'DocNumber', 'Branch', 'Status', 'Amount']],
+          body: body,
+          foot: [['', '', '', '', '', '', 'Total', fmtMoneyPdf(tot)]],
+          styles: _PDF_STY.body,
+          headStyles: _PDF_STY.head,
+          footStyles: _PDF_STY.foot,
+          margin: _PDF_STY.margin,
+          columnStyles: { 7: { halign: 'right' } }
+        });
+        y = doc.lastAutoTable.finalY + 14;
+      }
+
+      // Journal Entries
+      y = pdfSectionTitle(doc, 'Journal Entries', y);
+      const jeRows = (snap.manualJournalEntries || []).filter(je =>
+        je.companyNumber === cnum && je.longAccount === la && je.periodEnds === currentPeriod
+      );
+      if (jeRows.length === 0) {
+        y = pdfEmptyState(doc, 'No manual journal entries for this period', y);
+      } else {
+        let tot = 0;
+        const body = jeRows.map(je => {
+          tot += je.amount || 0;
+          return [String(je.docNumber || ''), je.docType, je.username, fmtMoneyPdf(je.amount)];
+        });
+        doc.autoTable({
+          startY: y,
+          head: [['Doc No', 'Doc Type', 'User', 'Amount']],
+          body: body,
+          foot: [['', '', 'Total', fmtMoneyPdf(tot)]],
+          styles: _PDF_STY.body,
+          headStyles: _PDF_STY.head,
+          footStyles: _PDF_STY.foot,
+          margin: _PDF_STY.margin,
+          columnStyles: { 3: { halign: 'right' } }
+        });
+        y = doc.lastAutoTable.finalY + 14;
+      }
+
+      // Variances
+      y = pdfSectionTitle(doc, 'Variances', y);
+      const reconRows = (detail.reconcilingItems || []).filter(x =>
+        x.companyNumber === cnum && x.longAccount === la && x.periodEnds === currentPeriod
+      );
+      if (reconRows.length === 0) {
+        y = pdfEmptyState(doc, 'No transaction variances for this period', y);
+      } else {
+        const body = [];
+        reconRows.forEach(rec => {
+          body.push([
+            rec.worked ? 'Yes' : 'No',
+            rec.dt,
+            String(rec.docNumber || ''),
+            rec.ot,
+            String(rec.batch || ''),
+            fmtMoneyPdf(rec.cardexAmount),
+            fmtMoneyPdf(rec.ledgerAmount),
+            fmtMoneyPdf(rec.variance)
+          ]);
+          if (rec.note) {
+            // Spans the row across the table; autoTable colSpan via cell
+            body.push([{ content: 'Note: ' + rec.note, colSpan: 8, styles: { fontStyle: 'italic', textColor: [90, 90, 90], fillColor: [250, 250, 250] } }]);
+          }
+        });
+        doc.autoTable({
+          startY: y,
+          head: [['Worked', 'DT', 'Doc No', 'OT', 'Mfg Batch', 'Cardex', 'Ledger', 'CL Variance']],
+          body: body,
+          styles: _PDF_STY.body,
+          headStyles: _PDF_STY.head,
+          margin: _PDF_STY.margin,
+          columnStyles: { 5: { halign: 'right' }, 6: { halign: 'right' }, 7: { halign: 'right' } }
+        });
+        y = doc.lastAutoTable.finalY + 14;
+      }
+
+      // Perpetual Details
+      y = pdfSectionTitle(doc, 'Perpetual Details', y);
+      const perpRows = (detail.perpetual || []).filter(p =>
+        p.companyNumber === cnum && p.longAccount === la
+      );
+      if (perpRows.length === 0) {
+        y = pdfEmptyState(doc, 'No data', y);
+      } else {
+        let aohTot = 0;
+        const body = perpRows.map(p => {
+          aohTot += p.amountOnHand || 0;
+          return [p.branch, p.itemNumber, p.itemDescription, p.uom, fmtQtyPdf(p.quantityOnHand), fmtMoneyPdf(p.amountOnHand)];
+        });
+        doc.autoTable({
+          startY: y,
+          head: [['Branch', 'Item Number', 'Item Description', 'UM', 'QOH', 'Amount on Hand']],
+          body: body,
+          foot: [['', '', '', '', 'Total', fmtMoneyPdf(aohTot)]],
+          styles: _PDF_STY.body,
+          headStyles: _PDF_STY.head,
+          footStyles: _PDF_STY.foot,
+          margin: _PDF_STY.margin,
+          columnStyles: { 4: { halign: 'right' }, 5: { halign: 'right' } }
+        });
+        y = doc.lastAutoTable.finalY + 22;
+      }
+    });
+  }
+
+  function generateAuditReportPdf() {
+    if (!(window.jspdf && window.jspdf.jsPDF)) {
+      flashStatus('PDF library still loading — try again in a sec'); return;
+    }
+    if (!currentData) { flashStatus('No data loaded'); return; }
+
+    const wasCached = !!_auditDetailCache;
+    if (!wasCached) flashStatus('Loading audit-report data…');
+
+    ensureAuditDetail()
+      .then(detail => {
+        const allCos = currentData.filter.companies || [];
+        const companiesInScope = allCos.filter(c => selected.companies.has(c.id));
+        if (companiesInScope.length === 0) {
+          flashStatus('No companies selected — narrow back to at least one');
+          return;
+        }
+        const descMap = buildAccountDescMap(currentData);
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF({ orientation: 'p', unit: 'pt', format: 'letter' });
+        companiesInScope.forEach((co, idx) => {
+          buildPdfCompanySection(doc, co, currentData, detail, descMap, idx === 0);
+        });
+        addPdfFooter(doc);
+        const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 13);
+        const fname = 'PerpetualInventoryReconciliation_' + currentPeriod + '_' + stamp + '.pdf';
+        doc.save(fname);
+        flashStatus('Downloaded ' + fname);
+      })
+      .catch(err => {
+        console.error('PDF audit report failed:', err);
+        flashStatus('Failed to generate PDF — check the console');
+      });
   }
 
   // ---------- Variance-component drilldown ----------
@@ -4450,9 +5251,9 @@
     e.stopPropagation();
     generateAuditReport();
   });
-  document.getElementById('js-journal-entry-btn').addEventListener('click', (e) => {
+  document.getElementById('js-audit-report-pdf-btn').addEventListener('click', (e) => {
     e.stopPropagation();
-    generateJournalEntry();
+    generateAuditReportPdf();
   });
 
   // ---------- Sidebar pin ----------
@@ -4651,10 +5452,32 @@
     });
   });
   // Floating help FAB
-  const fab = document.querySelector('.help-fab');
-  if (fab) fab.addEventListener('click', (e) => {
-    e.stopPropagation();
-    flashStatus('Context help — not wired in mockup');
+  // ---------- Context-help modal ----------
+  // Click the FAB → opens a centered card with the variance-component
+  // glossary on the left + common workflows on the right. ESC,
+  // backdrop click, or the X button dismisses. All static content;
+  // no per-page state.
+  function openHelpModal() {
+    const m = document.getElementById('js-help-modal');
+    if (!m) return;
+    m.hidden = false;
+    document.body.style.overflow = 'hidden';
+  }
+  function closeHelpModal() {
+    const m = document.getElementById('js-help-modal');
+    if (!m || m.hidden) return;
+    m.hidden = true;
+    document.body.style.overflow = '';
+  }
+  const fab = document.getElementById('js-help-fab');
+  if (fab) fab.addEventListener('click', (e) => { e.stopPropagation(); openHelpModal(); });
+  document.getElementById('js-help-close').addEventListener('click', closeHelpModal);
+  document.getElementById('js-help-backdrop').addEventListener('click', closeHelpModal);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      const m = document.getElementById('js-help-modal');
+      if (m && !m.hidden) closeHelpModal();
+    }
   });
 })();
 </script>
