@@ -468,6 +468,35 @@ the top-bar Refresh button re-fetches the snapshot.
 The page-per-page pattern is &mdash; copy `inventory-reconciliation.html`
 to a new filename, then:
 
+0. **Page header — V8 standard (don't deviate).** The header layout
+   is fixed across all main pages:
+   ```html
+   <div class="page-header">
+     <div class="page-header-left">
+       <div class="breadcrumb">...</div>
+       <div class="title-row">
+         <h1 class="page-title">
+           <a class="page-title-link"
+              href="../RRUniversity/<your-page>.html"
+              target="_blank" rel="noopener">
+             <Your Page Title>
+             <svg class="page-title-ext-icon" ...>↗</svg>
+           </a>
+         </h1>
+         <button class="period-pill" ...>...</button>  <!-- omit on pages without a period -->
+       </div>
+     </div>
+     <div class="page-actions">
+       <!-- audit-report or other module-level action buttons -->
+     </div>
+   </div>
+   ```
+   The title itself IS the reference-guide link; no separate
+   "Reference guide" pill. Period pill goes to the right of the
+   title (drop it entirely on PO Receipts and other non-period
+   pages). Audit / action buttons hug the right edge of the page
+   header. No subtitle &mdash; the period pill already says
+   "which period," so a "Period ending..." subtitle is redundant.
 1. **Hero stat**: change the headline metric and the two side-stat
    labels.
 2. **Variance / breakdown panel**: change the `data-component`
