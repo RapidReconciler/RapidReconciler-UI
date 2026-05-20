@@ -634,7 +634,7 @@
           <div class="callout-icon">!</div>
           <div class="callout-body">
             <div class="callout-label">TODO &mdash; confirm</div>
-            <p><strong>Heartbeat cadence</strong>: how often the heartbeat fires (every N seconds / minutes)? <strong>VALC-outage behavior</strong>: how the agent reacts if <code>rr-valc-spa.cloudapp.net</code> is unreachable &mdash; retry, queue, give up? Are the retries visible in the log? <strong>Authentication</strong>: over the JMS-over-HTTPS channel, is it mutual TLS via the keystore, a signed token, a shared secret?</p>
+            <p><strong>Heartbeat cadence</strong>: how often the heartbeat fires (every N seconds / minutes)? <strong>VALC-outage behavior</strong>: how the agent reacts if <code>rr-valc-spa.cloudapp.net</code> is unreachable &mdash; retry, queue, give up? Are the retries visible in the log? <strong>JMS-channel authentication</strong>: over the agent&harr;VALC JMS-over-HTTPS channel, is it mutual TLS via the keystore, a signed token, a shared secret? (Separate from the SPA&harr;data-services HTTP auth, which is documented under <a href="javascript:void(0)" onclick="showView('topic-database')">Database &rarr; Endpoint authentication</a>.)</p>
           </div>
         </div>
 
@@ -660,6 +660,20 @@
         <h2 id="port-range">HTTPS port range (App Server &harr; end-user browser)</h2>
         <p>Each data-services child also opens an <strong>HTTPS listener</strong> on the App Server so the SPA can call it. Those ports are assigned from the range <strong><code>32145 &ndash; 49152</code></strong>. Specific port numbers are chosen at install time (one per RR database) and <strong>must be opened on the customer&rsquo;s internal network</strong> &mdash; the firewall has to allow end-user PCs to reach the App Server on whichever port each RR database lands on.</p>
         <p>The agent announces each child&rsquo;s assigned port to VALC at startup so the SPA back-end knows where to route customer traffic (look for the <code>Warning VALC that database &lt;db&gt; runs on port &lt;n&gt;</code> log line).</p>
+        <p><strong>Empirical confirmation (2026-05-20)</strong>: on a development install hosting 4 databases (rrv7-acme, rrv7-demo, rrv7-NACoal, rrv7-treatt), <code>netstat</code> showed exactly 4 listeners in the documented range (32650, 33198, 34536, 37844), matching the per-DB <code>ip</code> fields in the VALC-issued JWT. The agent&rsquo;s "one data-services child per database" model is real, not aspirational.</p>
+
+        <h2 id="endpoint-auth">Endpoint authentication</h2>
+        <p>Every request to a data-services child requires <strong><code>Authorization: Bearer &lt;jwt&gt;</code></strong>. There is <strong>no localhost bypass</strong> &mdash; a <code>curl</code> from the App Server itself against <code>https://localhost:&lt;port&gt;/poll</code> without the header returns <code>HTTP 401 Unauthorized</code> from <code>Server: Apache-Coyote/1.1</code>.</p>
+        <p>The JWT is <strong>RS256-signed by VALC</strong> (<code>rr-valc-spa.cloudapp.net</code> in prod, <code>staging-valcspa.cloudapp.net</code> in staging) and minted at <code>POST /resource/client/login</code>. The data-services children validate the signature locally &mdash; presumably against a public key in <code>keystore.rr.jks</code>, deployed alongside the agent JAR &mdash; without making a round-trip back to VALC on each call.</p>
+        <p>The JWT payload carries:</p>
+        <ul>
+          <li><code>user</code> &mdash; id, full name, email, tenant label.</li>
+          <li><code>dbs[]</code> &mdash; one entry per database the user is authorized for, with <code>ip</code> (<code>host:port</code> for that data-services child), <code>n</code> (database name), <code>k</code> (per-DB key), and per-tab company arrays (<code>i</code>, <code>p</code>, <code>t</code>) plus permission flags (<code>a</code>, <code>as</code>, <code>aite</code>, <code>aprs</code>, <code>rs</code>, <code>su</code>).</li>
+          <li><code>iat</code> &mdash; issue timestamp.</li>
+        </ul>
+        <p>Failures return Spring Boot&rsquo;s default JSON error envelope <code>{ timestamp, status, error, exception, message, path }</code>. Schema-mismatched POSTs surface the underlying Jackson error in <code>message</code> &mdash; useful for debugging hand-built requests.</p>
+        <p><strong>CORS</strong>: each child responds with <code>Access-Control-Allow-Origin: *</code>, so browser tooling from any origin (including <code>http://localhost:8765</code> during V8 development) can call the agent without a proxy as long as it carries a valid JWT.</p>
+        <p>Bad credentials at the VALC login endpoint return <code>HTTP 500 Internal Server Error</code> with <code>"message": "User invalid."</code> &mdash; <em>not</em> a 401. Clients should parse the <code>message</code> field to distinguish bad creds from real VALC outages. See <a href="../RRV8/API.md">RRV8/API.md</a> for the captured request/response shapes.</p>
 
         <h2 id="jde-access">JDE read access</h2>
         <p>The agent does <strong>not</strong> talk to the customer&rsquo;s JDE database directly. The customer&rsquo;s JDE Business Data is pulled into the RR Database Server by <strong>SQL Server Integration Services (SSIS)</strong> running on the DB Server, using <strong>read-only credentials</strong> with a non-expiring password. The agent only ever reads RR-side tables, not raw JDE tables.</p>

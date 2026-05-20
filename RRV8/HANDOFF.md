@@ -218,12 +218,100 @@ poller so amber / red / green reflect the live job state.
   the user clicks an Audit Report button in prod mode; the
   system-status-log failure logs to console only (background
   fetch, not user-initiated).
-- **`/inventory/transactions` exists.** Returns HTTP 405 on GET
-  and HTTP 500 (NPE) on POST with the reconciliation-style
-  body &mdash; the body schema is different. Whatever the
-  V8 Transactions page needs as its data source, the legacy
-  agent has an endpoint named for it; deriving the request
-  shape from the staging HAR is the path of least resistance.
+- **`/inventory/transactions` wired against the live agent**
+  (`RRV8/inventory-transactions.html`). Body shape decoded
+  from the staging HAR: `{ take, skip, page, pageSize,
+  aggregate[], reconciliationFilter{currencies/companies/BU/
+  objects/subsidiaries/period}, groupingType: 'TYPE',
+  exclusions, cacheKey }`. Note: `reconciliationFilter` uses
+  **bare string arrays**, NOT the `{id, checked, show}` Item
+  shape that `/inventory/reconciliation-filtered` requires.
+  Response: `{ total, data[], aggregates, benchmark,
+  cacheKey, groups, types, subTypes, orderTypes, docTypes }`
+  &mdash; full per-Type breakdown comes back in `groups`.
+  V8 strategy: single bulk fetch (`pageSize: 10000`),
+  client-side filter/recompute on chip clicks and Type-row
+  selection &mdash; trades initial load for instant
+  interactivity, fixes the legacy "minutes per page" pain.
+  Per-revisit `sessionStorage` cache keyed by
+  `(mode + db + period + filter signature)` with a 5-min TTL
+  and 4 MB ceiling.
+- **Architectural principle: all data flows through the
+  RR Agent.** V8 pages do not query the database directly,
+  invoke `Tools/queries/*.ps1` over HTTP shims, or load
+  fixtures other than the captured snapshots in `RRV8/data/`.
+  Every dynamic value comes from an agent endpoint &mdash;
+  prod hits the live agent, demo mode reads the captured
+  snapshot at `RRV8/data/<endpoint>.json`. New V8 features
+  that need new data start with "which agent endpoint serves
+  this?" as the gating question.
+- **Endpoints referenced by the legacy SPA's `app.js`** all
+  exist on this install but under `/inventory/...` prefixes
+  (not the bare paths the SPA's URL map suggested). Discovered
+  via probe on 2026-05-20:
+    - `POST /inventory/transactions/details` — body `{company,
+      doc, docType}`; returns `{total, data[], aggregates,
+      benchmark, cacheKey}`. `data[]` rows have the columns
+      from `dbo.usp6compare2` (Sort / Period / Account /
+      Source / Company / TransDate / GLDate / GLClass /
+      Batch / BT / Doc / DT / OrderNum / OT / Line / Ext /
+      PC / Branch / Item / Location / Lot / Qty / UM /
+      UnitCost / CardexAmount / LedgerAmount / Variance /
+      SubType / Comment), grouped by section via the
+      `Source` column ('Doc Header', 'F4111', 'F0911 Inv
+      Acct', 'F0911 Exp Acct', 'RR Summary', 'Header Comp',
+      'Receipts', 'DMAAa').
+    - `GET /inventory/integrity/available-reports` — lists
+      integrity reports by id + description. Report 0 is the
+      JDE DMAAIs (`id: "v_integrity_jde_aais"`); report 1 is
+      Model AAI Table; report 7 is Frozen Cost Integrity;
+      etc.
+    - `POST /inventory/integrity` — body `{report: <view-id>,
+      take/skip/page/pageSize, reconciliationFilter}`. Same
+      `{total, data[], aggregates, ...}` envelope.
+  Same agent (data-services v359). V8 features wired to
+  these:
+    - **Per-row Export button** on the Transactions page
+      (`RRV8/inventory-transactions.html`) is wired to
+      `GET /transactions/details?company=&doc=&docType=`
+      &mdash; same parameters the
+      `Tools/queries/transaction-detail-workflow.ps1` script
+      passes to `dbo.usp6compare2`. The agent endpoint
+      should return the sproc&rsquo;s rowset (Doc Header /
+      F4111 / F0911 Inv / F0911 Exp / RR Summary / Header
+      Comp / Receipts / DMAAIs sections, plus the `Sort`
+      sequence column that gets stripped on export). V8
+      builds the Transaction Details xlsx in the
+      analyzer&rsquo;s expected shape (banner row + header
+      row + data rows), opens `Tools/analysis-workbook.html`
+      in a new tab, and hands the data over via a
+      **postMessage bridge** (`rrv8-analyze` message carrying
+      the workbook ArrayBuffer + preloaded DMAAIs from
+      `v_integrity_jde_aais`). The analyzer auto-detects
+      the Transaction Detail template, runs analysis, and
+      auto-clicks download &mdash; one click on V8 produces
+      the 2-tab analyzed workbook (Transaction Details +
+      Analysis). When `/transactions/details` 404s on this
+      install, `showFetchError` surfaces the gap. See
+      `AnalysisGuides/transaction-detail-analysis.md`.
+    - **DMAAI preload (integrity report 0)** &mdash; on
+      Transactions page boot, `getIntegrityDmaais()` calls
+      `POST /inventory/integrity` with body
+      `{report: "v_integrity_jde_aais", reconciliationFilter,
+      take/skip/page/pageSize}`. Result (~5.3k rows on this
+      install&rsquo;s scope; full SQL view has ~15.8k) caches
+      in `sessionStorage` and surfaces a green pill in the
+      Details header when loaded. Flows to the analyzer via
+      the postMessage bridge as `window.RR_PRELOADED_DMAAIS`
+      for templates that opt-in (the TransactionDetail
+      template&rsquo;s AAI-pattern hook to actually consume
+      it is the next follow-up). Demo snapshot at
+      `RRV8/data/v-integrity-jde-aais.json`.
+    - **Note-edit persistence** &mdash;
+      `POST /inventory/transactions/save-notes` is the likely
+      path (mirroring the /transactions/details discovery);
+      not yet probed or wired. When wired, the Note column
+      becomes editable and persists.
 - **Offline-vendored** CDN libraries under `RRV8/vendor/`
   (SheetJS, jsPDF, jspdf-autotable &mdash; ~1.3 MB) and self-
   hosted Google Fonts under `RRV8/fonts/` (Open Sans + Source
