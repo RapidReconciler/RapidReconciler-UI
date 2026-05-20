@@ -148,10 +148,37 @@ As of the latest commit, V8 has:
   this period&rsquo;s roll-forward state) above System Status (global
   heartbeat). 14px dots with halos. System Status pulses via
   transform + opacity (compositor thread, no main-thread repaint).
-  Both lights are **clickable** &mdash; downloads a diagnostic
-  Excel (validation roll-forward chain / system-feed status).
-  Matches the live SPA muscle memory of clicking a light to open
-  its report.
+  Both lights are **clickable** &mdash; opens the runbook drawer
+  (see *Runbook drawer* below). The diagnostic Excel is now a
+  secondary action inside the drawer; clicking the light no
+  longer immediately downloads.
+- **Sidebar layout**: filters live ABOVE main navigation. The
+  analyst sets context (company, currency, BU, account,
+  subsidiary) before picking a module &mdash; matches the way
+  reconciliation work actually starts.
+- **Runbook drawer** (the in-page version of the public Help
+  Desk runbook scenarios for each light):
+  - *Inventory Validation* &mdash; auto-runs the prior-period
+    unposted-batches check on `accountRows[]` across the
+    current filter scope (Step 1 of the runbook), then walks
+    the roll-forward chain looking for old un-posted batches
+    or carry-forward breaks (Step 2). Recommended action is
+    derived from the production runbook's decision table:
+    post-batches-in-JDE / R099102-proof-mode / admin Reroll by
+    Company / escalate-rrsupport. Action buttons compose mailtos
+    matching the canonical Scenarios/ originals.
+  - *System Status* &mdash; reads `data/system-status-log.json`
+    (lazy-loaded; production SQL Agent step-log shape) and
+    surfaces: Step 1 Recent cycles table, Step 2 Latest cycle
+    breakdown (every step row that sums to the cycle's total
+    runtime &mdash; "the entries that make up the lag"),
+    Step 3 Pattern detection (step duration anomalies vs.
+    median across complete cycles). Light is RED when the
+    latest cycle errored / partial, OR any cycle in the window
+    errored / partial, OR there are slow-step anomalies.
+    Recommended action mirrors the analyzer's findings
+    semantics (SQL error code, partial-cycle escalation, or
+    performance review).
 - **Excel exports** (SheetJS from CDN, deferred load):
   - *Audit Report* &rarr; multi-sheet workbook (Summary / By Company
     / By Account / History / Filters) &mdash; everything respects
@@ -159,9 +186,16 @@ As of the latest commit, V8 has:
   - *Journal Entry* &rarr; one-sheet JE batch with debit / credit
     rows per non-zero variance component.
   - *Inventory Validation light* &rarr; roll-forward-chain +
-    variance-components diagnostic.
-  - *System Status light* &rarr; overall + per-feed status with
-    last-success timestamps and lag.
+    variance-components diagnostic (download button inside the
+    runbook drawer).
+  - *System Status light* &rarr; production SQL Agent step-log
+    shape (single sheet: banner row, then Capture / Step /
+    Process / StartTime / EndTime / Seconds / UpdateCount /
+    ErrorNum columns, then data rows verbatim from the loaded
+    log). Filename `SystemStatus_<stamp>.xlsx`. Dropping the
+    file into `Tools/analysis-workbook.html` triggers the
+    analyzer's `SystemStatusTemplate` cleanly &mdash; the
+    runbook hop is end-to-end.
   - *Pending Close Items rows* &rarr; per-bucket detail report.
 - **Bottom row &mdash; three reconciliation widgets**:
   - *OOB History* (trend, filtered) &mdash; gradient area fill,

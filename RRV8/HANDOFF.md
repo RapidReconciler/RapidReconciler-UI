@@ -51,6 +51,26 @@ It has:
 - **Context-help modal** (FAB &rarr; 2-column glossary +
   workflows). **Reference-guide chip** next to the title links
   to `../RRUniversity/inventory-reconciliation.html`.
+- **Runbook drawer** on the two sidebar status lights. Clicking
+  Inventory Validation opens a runbook drawer that auto-runs
+  the prior-period unposted-batches / carry-forward-break
+  decision tree on `accountRows[]`, surfaces the most-likely
+  cause, and offers the mailto buttons from
+  `Scenarios/scenario-inventory-validation-red-variance.html`.
+  Clicking System Status opens a parallel drawer over the
+  production-shape SQL Agent step log (Capture / Step / Process
+  / StartTime / EndTime / Seconds / UpdateCount / ErrorNum) &mdash;
+  Step 1 lists recent cycles, Step 2 shows the latest cycle's
+  step breakdown (the entries that sum to the cycle's total
+  runtime), Step 3 flags step-duration anomalies vs. median.
+  Excel export downloads in the production shape so dropping it
+  into `Tools/analysis-workbook.html` triggers the analyzer's
+  `SystemStatusTemplate` cleanly &mdash; the runbook hop is
+  end-to-end.
+- **Sidebar layout**: filters above main navigation, so the
+  analyst sets context (company, currency, BU, account,
+  subsidiary) before picking a module. Status lights remain at
+  the bottom of the sidebar.
 - OOB chart with hover tooltip, sidebar pin button, By Business
   Unit panel (replaced Pending Close Items), subsidiary popover
   viewport fix.
@@ -59,7 +79,10 @@ PR history of the V8 page so far: **#76** (scaffold + first
 draft), **#77** (row-level filters + clickable lights + Excel
 exports), **#78** (docs refresh), **#79** (vertical variance +
 Preview modal + audit data foundation), **#80** (audit Excel +
-PDF + context help + chrome cleanup).
+PDF + context help + chrome cleanup), **#81** (HANDOFF.md), and
+an in-flight runbook-drawer chunk that wires both status lights
+to in-page diagnoses + the production SystemStatus step-log
+shape.
 
 ---
 
@@ -77,6 +100,20 @@ PDF + context help + chrome cleanup).
   `_auditDetailCache`. Carries `reconcilingItems` (14,915 rows
   all periods, analyst notes preserved) + `perpetual` (19,235
   rows filtered to QOH &ne; 0).
+- `RRV8/data/system-status-log.json` (~25 KB) &mdash;
+  **lazy-loaded** on first System Status drawer open + a
+  background fetch after main data load so the sidebar meta
+  line ("Last cycle clean &middot; 4h 13m") reflects reality
+  without user interaction. Cached in `_systemStatusLogCache`.
+  Production SQL Agent step-log shape: `_meta`, `banner`,
+  `columns`, and `rows[]` with Capture / Step / Process /
+  StartTime / EndTime / Seconds / UpdateCount / ErrorNum. 7
+  nightly cycles (~25 step rows each, 153 rows total): 5 clean,
+  one with a slow Cardex Roll Forward, one that fails on F4111
+  with SQL 8152. Generated deterministically by
+  `RRV8/scripts/gen-system-status-log.py` (re-run when the
+  cycle template shifts &mdash; the owner can&rsquo;t run Python
+  locally; ship the regenerated JSON alongside the script edit).
 - All data is fictional Acme test-instance data from
   `rrv7-acme`. Safe to commit per WORKFLOW.md's data hygiene
   rules.
@@ -173,20 +210,41 @@ PDF + context help + chrome cleanup).
 
 ## Open work / candidate next chunks
 
-1. **Second V8 page** (Transactions / As Of / Roll Forward / In
-   Transit / PO Receipts). Building it is the right time to
-   extract a real `scripts/capture-periods.ps1` from the ad-hoc
-   capture patterns we've used.
-2. **Capture-periods script** &mdash; turn the
+1. **Demo / prod mode infrastructure + offline-vendoring** &mdash;
+   the immediate next chunk. Adds `RRV8/config.js` + `MODE` /
+   `IS_DEMO` flags + `rrFetch()` helper, vendors CDN libraries
+   (jsPDF, SheetJS, jspdf-autotable) into `RRV8/vendor/` and
+   Google Fonts into `RRV8/fonts/` so demo mode runs offline.
+   Tags every fetch site with `// PROD-TODO:`. Prod path stubs
+   until the auth chunk lands. **See the saved plan at
+   [docs/plans/v8-demo-prod-mode.md](../docs/plans/v8-demo-prod-mode.md)
+   &mdash; read first before starting.**
+2. **Prod-mode auth + JWT plumbing** &mdash; login POST against
+   VALC, JWT in localStorage, parse JWT's `dbs[]`, drive the
+   user-menu DB switcher off it. Contract decoded from the
+   staging HAR &mdash; see the auth + agent-routing section of
+   [RRV8/API.md](API.md).
+3. **Prod-mode reconciliation wiring (first endpoint)** &mdash;
+   replace the demo stub for `reconciliation-filtered` with a
+   POST against the active customer's agent. **Likely blocker**:
+   production endpoint returns summary only, no `accountRows[]`.
+   Engineering conversation needed before this chunk.
+4. **Second V8 page** (Transactions / As Of / Roll Forward / In
+   Transit / PO Receipts) &mdash; deferred until the demo/prod
+   split lands. Building it is the right time to extract a real
+   `scripts/capture-periods.ps1` from the ad-hoc capture patterns.
+5. **Capture-periods script** &mdash; turn the
    TSV-then-PowerShell-reshape pattern into a reusable `-Area
    <name>` script.
-3. **Permission gating** in the user menu (currently shows all
-   admin actions to all users). Handoff-team concern.
-4. **Audit report PDF page-break-per-account** option &mdash;
+6. **Permission gating** in the user menu (currently shows all
+   admin actions to all users). Drives off the JWT's per-DB
+   permission flags (`a`, `as`, `aite`, `aprs`, `rs`, `su`).
+7. **Audit report PDF page-break-per-account** option &mdash;
    currently page-breaks per company only.
-5. **Inline data + libraries** as a one-file
+8. **Inline data + libraries** as a one-file
    flash-drive-demoable HTML &mdash; owner declined for now,
-   noted as future option.
+   noted as future option. Note: the offline-vendoring chunk
+   gets most of the way there.
 
 ---
 

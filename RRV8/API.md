@@ -1,10 +1,114 @@
 # RRV8 &mdash; API surface
 
 Reference doc for the V8 backend redesign. Captures the **current** AngularJS-era
-SPA's network surface and proposes a cleaner shape for V8.
+SPA's network surface (decoded from a staging HAR, 2026-05-20) and proposes a
+cleaner shape for V8.
 
-Not authoritative &mdash; this is a design proposal for engineering to react to,
-not a contract.
+Not authoritative for the proposal section &mdash; that's a design pitch for
+engineering to react to. The "Current network surface" section IS authoritative:
+it's what the live SPA does today, captured directly from staging.
+
+---
+
+## Auth + agent-routing model (decoded from staging HAR, 2026-05-20)
+
+The SPA splits its calls across **two hosts**: a central VALC endpoint for
+auth + customer routing, and a **per-customer RR Agent** for everything else.
+
+### Login
+
+```
+POST https://staging-valcspa.cloudapp.net/resource/client/login
+Content-Type: application/json;charset=UTF-8
+
+{ "username": "user@example.com", "password": "...", "rememberme": false }
+```
+
+Production is presumably `https://rr-valc-spa.cloudapp.net` (per the
+[RR Agent reference](../GSIRRTech/rr-agent-reference.html)'s VALC endpoint
+listing). Response:
+
+```json
+{ "token": "<RS256 JWT, ~1.2 kB>" }
+```
+
+The SPA stores the JWT in `localStorage.token` (see the AuthInterceptor
+factory in `base.js`) and sends `Authorization: Bearer <jwt>` on every
+subsequent call. No cookies are set. Logout is a localStorage drop.
+
+### JWT payload shape
+
+```json
+{
+  "user": {
+    "id": 82,
+    "fn": "Ed Gutkowski",
+    "c":  "RR Test Server",            // server/tenant label
+    "u":  "user@example.com",
+    "rm": 0,
+    "rs": "",
+    "wm": null
+  },
+  "dbs": [
+    {
+      "ip": "rrtest-rrsqltest.getgsi.com:34536",  // per-DB agent URL + port
+      "k":  "029ab26e227570e9499a97fd8c81fc2cc1cab9c7", // 32-hex per-DB key
+      "n":  "rrv7-acme",                          // DB name
+      "i":  ["00010", "00050"],                   // companies user can see (Inventory)
+      "p":  ["00010", "00050"],                   // companies (PO Receipts?)
+      "t":  ["00010", "00050"],                   // companies (Transfers?)
+      "a":   true,                                // app access
+      "as":  true,                                // accounts manage
+      "aite":true,                                // item edit
+      "aprs":true,                                // PO Receipts
+      "rs":  true,                                // reports
+      "su":  false                                // super-user / admin
+    },
+    /* one entry per DB this user has access to */
+  ],
+  "iat": 1779268990385
+}
+```
+
+### Per-agent endpoints
+
+After login, every data call goes to `https://<dbs[i].ip>/...` &mdash; the
+agent URL + port from the active DB's JWT entry. The SPA picks the
+default DB (or whichever the user last selected via the DB switcher)
+and sets that as the API base for the session.
+
+Observed endpoints (Inventory > Reconciliation):
+
+| Endpoint | Method | Body | Returns |
+|---|---|---|---|
+| `/poll` | GET | &mdash; | `{ updating, recalculating }` &mdash; live-update heartbeat, fires continuously |
+| `/available-periods` | GET | &mdash; | `{ availablePeriods[], defaultPeriod, validation, recalculating }` |
+| `/inventory/status` | GET | &mdash; | `{ reconciliationFilter, validation }` &mdash; sidebar status + last-used filter scope |
+| `/inventory/reconciliation-filtered` | POST | full filter state JSON | `{ validation, filter, summary, pieChart, barChart, agingChart, alertDuplicateCosts }` |
+
+CORS is wide open: `Access-Control-Allow-Origin: *`. Server header is
+`Apache-Coyote/1.1` (the Spring Boot data-services child).
+`X-Application-Context: application:production-https:<port>` confirms the
+port matches the JWT's `dbs[i].ip` port.
+
+### Implications for V8
+
+1. **Two API bases, not one.** `RR_CONFIG.authBase` for login; the active DB's
+   `ip` becomes the per-session data base. The DB switcher in V8's user
+   menu IS the production behavior &mdash; it's selecting a different
+   `dbs[i]` from the same JWT.
+2. **Auth is dirt simple.** JWT in localStorage, Bearer header, no
+   cookies, no SSO.
+3. **The production `reconciliation-filtered` endpoint returns SUMMARY
+   ONLY** &mdash; no `accountRows[]`. V8's row-level filtering (which is the
+   page's value-add over the live SPA) requires either a new server
+   endpoint that exposes the rows, or a server-side filter that walks
+   the rows and aggregates per the V8 query. **This is real backend
+   work, not a rewiring.**
+4. **The other V8 features (audit detail, system-status step log,
+   variance-component drilldowns) likewise need new server-side
+   endpoints.** None of the existing `/inventory/*` endpoints return
+   row-level data today.
 
 ---
 
