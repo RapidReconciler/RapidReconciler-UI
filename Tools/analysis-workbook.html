@@ -12884,20 +12884,35 @@ const App = (() => {
   }
 
   if (typeof window !== 'undefined') {
-    // Signal readiness to window.opener so V8 knows it's safe to
-    // post the payload. Fires on load + on every subsequent
-    // message-ack request (since same-origin V8 might miss the
-    // initial signal due to timing).
+    // Signal readiness back to whatever host loaded this page.
+    // Supports two host conventions so V8 can pick whichever fits
+    // the UX:
+    //   - window.opener  → opened as a new tab via window.open()
+    //   - window.parent  → loaded headlessly in a hidden iframe
+    // Iframe is the preferred (no visible analyzer tab popping up);
+    // the new-tab path is kept for cases where the user wants to
+    // see / interact with the analyzer manually.
+    function rrCallerWindow() {
+      if (window.opener && !window.opener.closed) return window.opener;
+      if (window.parent && window.parent !== window) return window.parent;
+      return null;
+    }
     window.addEventListener('load', () => {
-      if (window.opener && !window.opener.closed) {
-        try { window.opener.postMessage({ type: 'rrv8-analyze-ready' }, location.origin); } catch (_) {}
+      const caller = rrCallerWindow();
+      if (caller) {
+        try { caller.postMessage({ type: 'rrv8-analyze-ready' }, location.origin); } catch (_) {}
       }
     });
     window.addEventListener('message', async (ev) => {
       if (ev.origin !== location.origin) return;
       if (!ev.data) return;
-      if (ev.data.type === 'rrv8-analyze-ping' && window.opener && !window.opener.closed) {
-        try { window.opener.postMessage({ type: 'rrv8-analyze-ready' }, location.origin); } catch (_) {}
+      if (ev.data.type === 'rrv8-analyze-ping') {
+        // Echo readiness so the host's polling ping can drive the
+        // handshake even if the initial 'load' signal raced past it.
+        const caller = (ev.source && ev.source.postMessage) ? ev.source : rrCallerWindow();
+        if (caller) {
+          try { caller.postMessage({ type: 'rrv8-analyze-ready' }, location.origin); } catch (_) {}
+        }
         return;
       }
       if (ev.data.type !== 'rrv8-analyze') return;

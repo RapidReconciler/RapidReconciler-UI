@@ -5,7 +5,9 @@ session. Paste the **Resume prompt** section as the first message in
 the new session; the rest of this file is context that prompt points
 the new session at.
 
-**Updated**: 2026-05-20, after PR #80.
+**Updated**: 2026-05-20, after the agent-jar-mining session
+(controller catalog + Jackson field-name gotcha + headless
+analyzer pipeline + diagnostic-Excel route).
 
 ---
 
@@ -245,55 +247,82 @@ poller so amber / red / green reflect the live job state.
   snapshot at `RRV8/data/<endpoint>.json`. New V8 features
   that need new data start with "which agent endpoint serves
   this?" as the gating question.
-- **Endpoints referenced by the legacy SPA's `app.js`** all
-  exist on this install but under `/inventory/...` prefixes
-  (not the bare paths the SPA's URL map suggested). Discovered
-  via probe on 2026-05-20:
-    - `POST /inventory/transactions/details` — body `{company,
-      doc, docType}`; returns `{total, data[], aggregates,
-      benchmark, cacheKey}`. `data[]` rows have the columns
-      from `dbo.usp6compare2` (Sort / Period / Account /
-      Source / Company / TransDate / GLDate / GLClass /
-      Batch / BT / Doc / DT / OrderNum / OT / Line / Ext /
-      PC / Branch / Item / Location / Lot / Qty / UM /
-      UnitCost / CardexAmount / LedgerAmount / Variance /
-      SubType / Comment), grouped by section via the
-      `Source` column ('Doc Header', 'F4111', 'F0911 Inv
-      Acct', 'F0911 Exp Acct', 'RR Summary', 'Header Comp',
-      'Receipts', 'DMAAa').
+- **Full agent endpoint catalog is mined from the data-services
+  jar.** The per-DB jar lives at
+  `C:\Program Files\Rapid Reconciler\files\359` (47 MB Spring
+  Boot fat jar, NOT the `rr-valc-agent.jar` next to it &mdash;
+  that one is the VALC central agent and hosts no HTTP
+  controllers). The complete controller catalog is in
+  `RRV8/API.md` &mdash; *Per-agent endpoints &middot; Full
+  controller catalog (mined from the agent jar, 2026-05-20)*.
+  Mining recipe (javap on `BOOT-INF/classes/coral/.../*Controller.class`)
+  is in the same API.md section + saved memory at
+  `reference_rr_agent_jar.md`. Use this when an endpoint shape
+  is unclear &mdash; way faster than probing.
+- **Key endpoints V8 uses today** (all decoded from the jar):
+    - `POST /inventory/transactions/details` — body
+      `{company, doc, type}`. **`type`, NOT `docType`** &mdash;
+      Jackson silently drops unknown fields, so misnaming this
+      field gives a degraded sproc response with no error (only
+      section-divider rows; 17 rows total instead of ~71 with
+      full F4111/F0911 detail). Returns the `usp6Compare2`
+      rowset grouped by `Source` column ('Doc Header', 'F4111',
+      'F0911 Inv Acct', 'F0911 Exp Acct', 'RR Summary',
+      'Header Comp', 'Receipts', 'DMAAa').
+    - `POST /inventory/transactions/save-notes` — body
+      `{notes: [rows]}`. Wired and working.
     - `GET /inventory/integrity/available-reports` — lists
-      integrity reports by id + description. Report 0 is the
-      JDE DMAAIs (`id: "v_integrity_jde_aais"`); report 1 is
-      Model AAI Table; report 7 is Frozen Cost Integrity;
-      etc.
+      integrity reports by id + description. Report
+      `v_integrity_jde_aais` is the JDE DMAAIs; Model AAI Table,
+      Frozen Cost Integrity, etc.
     - `POST /inventory/integrity` — body `{report: <view-id>,
       take/skip/page/pageSize, reconciliationFilter}`. Same
       `{total, data[], aggregates, ...}` envelope.
-  Same agent (data-services v359). V8 features wired to
-  these:
+    - `POST /system-status` &rarr; `{fileName}`, then
+      `GET /download-excel/{fileName}` &rarr; the diagnostic
+      Excel binary. The ONLY path to `v_diagnostic5_job_status`
+      data on this agent &mdash; there is no separate JSON
+      endpoint. V8 hands the Excel buffer to
+      `Tools/analysis-workbook.html`&rsquo;s
+      `SystemStatusTemplate` via the `rrv8-analyze` postMessage
+      bridge.
+    - `GET /poll` &mdash; 60s long-poll returning
+      `{updating, recalculating}`. Only live "is the job
+      running now?" signal. V8&rsquo;s `startSystemPollLoop`
+      / `startTxSystemPollLoop` drive the amber transient on
+      the System Status dot from this.
+    - `GET /inventory/status` &mdash; `validation` block is
+      the **Inventory Validation (roll-forward) light**, NOT
+      the System Status (despite some legacy V8 wiring that
+      conflated them). See *Critical gotchas* in API.md.
+  V8 features wired to these:
     - **Per-row Export button** on the Transactions page
       (`RRV8/inventory-transactions.html`) is wired to
-      `GET /transactions/details?company=&doc=&docType=`
-      &mdash; same parameters the
+      `POST /inventory/transactions/details` with body
+      `{company, doc, type}` &mdash; same parameters the
       `Tools/queries/transaction-detail-workflow.ps1` script
-      passes to `dbo.usp6compare2`. The agent endpoint
-      should return the sproc&rsquo;s rowset (Doc Header /
-      F4111 / F0911 Inv / F0911 Exp / RR Summary / Header
-      Comp / Receipts / DMAAIs sections, plus the `Sort`
-      sequence column that gets stripped on export). V8
-      builds the Transaction Details xlsx in the
-      analyzer&rsquo;s expected shape (banner row + header
-      row + data rows), opens `Tools/analysis-workbook.html`
-      in a new tab, and hands the data over via a
-      **postMessage bridge** (`rrv8-analyze` message carrying
-      the workbook ArrayBuffer + preloaded DMAAIs from
-      `v_integrity_jde_aais`). The analyzer auto-detects
-      the Transaction Detail template, runs analysis, and
-      auto-clicks download &mdash; one click on V8 produces
-      the 2-tab analyzed workbook (Transaction Details +
-      Analysis). When `/transactions/details` 404s on this
-      install, `showFetchError` surfaces the gap. See
-      `AnalysisGuides/transaction-detail-analysis.md`.
+      passes to `dbo.usp6compare2`. **Watch the field name:
+      `type`, not `docType`**; Jackson drops unknown fields
+      silently. The agent returns the sproc&rsquo;s rowset
+      (Doc Header / F4111 / F0911 Inv / F0911 Exp / RR Summary
+      / Header Comp / Receipts / DMAAIs sections, plus the
+      `Sort` sequence column that gets stripped on export).
+      V8 builds the Transaction Details xlsx in the
+      analyzer&rsquo;s expected shape using a HARDCODED
+      canonical column order (see `SPROC_COL_ORDER` in
+      `exportRow`) so the workbook is consistent even if the
+      first row is sparse. Hands the buffer over to the
+      analyzer **HEADLESSLY** via `handOffToAnalyzer` &mdash;
+      hidden iframe pointed at `Tools/analysis-workbook.html`,
+      `rrv8-analyze` postMessage bridge carrying the workbook
+      ArrayBuffer + preloaded DMAAIs from
+      `v_integrity_jde_aais`. The analyzer auto-detects the
+      Transaction Detail template, runs analysis, and the
+      browser surfaces the analyzed workbook in the parent
+      window&rsquo;s downloads bar &mdash; no analyzer tab
+      ever pops up. Falls back to a plain workbook download
+      after a 30s timeout if the iframe doesn&rsquo;t
+      acknowledge. See `AnalysisGuides/transaction-detail-analysis.md`.
     - **DMAAI preload (integrity report 0)** &mdash; on
       Transactions page boot, `getIntegrityDmaais()` calls
       `POST /inventory/integrity` with body
@@ -308,10 +337,53 @@ poller so amber / red / green reflect the live job state.
       it is the next follow-up). Demo snapshot at
       `RRV8/data/v-integrity-jde-aais.json`.
     - **Note-edit persistence** &mdash;
-      `POST /inventory/transactions/save-notes` is the likely
-      path (mirroring the /transactions/details discovery);
-      not yet probed or wired. When wired, the Note column
-      becomes editable and persists.
+      `POST /inventory/transactions/save-notes` (body
+      `{notes:[rows]}`). Wired and confirmed from the jar.
+      The batch-edit modal&rsquo;s Apply button posts every
+      selected row in one call.
+    - **Headless analyzer pipeline** &mdash; `handOffToAnalyzer`
+      on both Reconciliation and Transactions opens
+      `Tools/analysis-workbook.html` in a hidden iframe
+      (positioned off-screen, opacity 0). The analyzer
+      signals 'rrv8-analyze-ready' via `window.parent` (the
+      analyzer&rsquo;s `rrCallerWindow` helper supports both
+      `window.opener` for tab-based callers and `window.parent`
+      for iframes). V8 posts the workbook buffer; the analyzer
+      runs `rrv8AutoAnalyze` &rarr; `handleFile` &rarr;
+      `selectTemplate` &rarr; `runAnalysis` &rarr; `download()`;
+      the browser surfaces the analyzed file in the parent
+      window&rsquo;s downloads bar. 30s hard timeout falls
+      back to a plain workbook download. Used by: Transactions
+      per-row Export, System Status drawer&rsquo;s Download
+      report button (Reconciliation + Transactions), GL
+      Batches export, End of Day export.
+    - **Analyzer-template coverage** (V8 export &rarr; template):
+      Transactions per-row Export &rarr; `TransactionDetailTemplate`;
+      System Status drawer &rarr; `SystemStatusTemplate`;
+      GL Batches export &rarr; `GLBatchTemplate`; End of Day
+      export &rarr; `EndOfDayTemplate`. Other V8 exports
+      (Manual JEs, Cardex/Item Roll Integrity, Audit Report,
+      Inventory Validation, Journal Entry, Carry Forward) have
+      no matching analyzer template &mdash; they still write
+      directly. Future templates would be analyzer-side builds.
+    - **System Status drawer on Transactions** &mdash; click the
+      sidebar System Status row to open a minimal drawer
+      (reuses the `.edit-overlay` chrome + new `.status-banner`
+      block). Shows the live job state from the shared
+      sessionStorage cache; Download report routes through the
+      headless analyzer pipeline. Full multi-cycle runbook
+      analysis still lives on the Reconciliation drawer.
+    - **Grid standards (V8 convention)** &mdash; documented in
+      [`RRV8/GRID-STANDARDS.md`](GRID-STANDARDS.md). Two pillars
+      so far: (1) header layout, with a `.grid-state-cluster`
+      (column chooser + row count, two `.grid-pill` siblings)
+      pinned to the far right; (2) drag-to-reorder columns via
+      `draggable="true"` on each th + delegated drop handler on
+      the thead, persisted to localStorage under
+      `rrv8-<page>-col-order-v1`. Mirror these on every future
+      grid; expand the doc as new conventions earn their place
+      (sortable columns, resize, sticky header, etc.). Reference
+      implementation: Transactions Details grid.
 - **Offline-vendored** CDN libraries under `RRV8/vendor/`
   (SheetJS, jsPDF, jspdf-autotable &mdash; ~1.3 MB) and self-
   hosted Google Fonts under `RRV8/fonts/` (Open Sans + Source
@@ -391,6 +463,31 @@ poller so amber / red / green reflect the live job state.
 
 ## Gotchas
 
+- **Jackson silently drops unknown JSON fields.** The biggest
+  source of pain this session: a misnamed POST body field
+  arrives as `null` at the controller with no error, and the
+  underlying sproc runs with the wrong parameter producing a
+  degraded-but-plausible response. The bug:
+  `POST /inventory/transactions/details` takes a
+  `TransactionDetailsRequest { company, doc, type }`; V8 was
+  sending `docType` &rarr; sproc ran with `@DocType=NULL` &rarr;
+  only 17 section-divider rows came back (vs ~71 with the
+  correct field). Always cross-check JSON field names against
+  the controller DTO via
+  `javap -p <Controller>$<Request>.class` &mdash; full recipe
+  in API.md and the saved memory at `reference_rr_agent_jar.md`.
+- **Two `ValidationLight` sources have the same shape but
+  different semantics.** `/inventory/status`&rsquo;s validation
+  block is the **Inventory Validation (roll-forward) light**,
+  not the System Status. `ServerStatusRepository.getServerStatus()`
+  returns the SQL Agent job status but is NOT exposed by any
+  controller &mdash; only reachable via the diagnostic Excel
+  from `POST /system-status`. See API.md *Critical gotchas*.
+- **`ValidationLight.Color` enum is `none / danger / yellow /
+  success / unknown`** &mdash; NOT the Bootstrap
+  `success / warning / danger` the JSON name suggests. The
+  `label` field, when set, carries the explicit JobStatus enum
+  text and should be preferred over color mapping.
 - **Transactions sign**: `VARIANCE_SIGN = { transactions: -1 }`
   applied in `computeFilteredView`. Per-row data in
   `accountRows[]` is unchanged.
@@ -420,11 +517,17 @@ poller so amber / red / green reflect the live job state.
    `inventory/reconciliation-filtered` accepting `rows: true`,
    or a parallel `inventory/rows` endpoint. Mock shape can
    match the existing `accountRows[]` in `RRV8/data/reconciliation.json`.
-2. **Server-side `audit-detail` and `system-status-log`
-   endpoints** &mdash; confirmed missing on the agent via direct
-   probes. Until these land, the audit-report buttons banner
-   their failure in prod mode and the System Status drawer
-   falls back to the bare `currentJob` poll.
+2. **Server-side `audit-detail` endpoint** &mdash; confirmed
+   missing on the agent (no controller in the jar). Until it
+   lands, the audit-report buttons banner their failure in prod
+   mode. The earlier `system-status-log` ask was resolved a
+   different way: `POST /system-status` + `GET /download-excel/{id}`
+   is the production data path (the diagnostic Excel carries
+   the SQL Agent step log + `v_diagnostic5_job_status` row);
+   V8 now routes it through `Tools/analysis-workbook.html`&rsquo;s
+   `SystemStatusTemplate` headlessly via the
+   `handOffToAnalyzer` iframe bridge. No separate JSON
+   endpoint is needed.
 3. **Permission gating in the user menu** &mdash; hide Import
    JDE / Restart Service / etc. based on the JWT's per-DB
    permission flags (`a`, `as`, `aite`, `aprs`, `rs`, `su`).
