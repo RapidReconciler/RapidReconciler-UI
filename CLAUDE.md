@@ -3,14 +3,20 @@
 A static HTML knowledge base for GSI RapidReconciler, deployed via GitHub Pages
 at `https://rapidreconciler.github.io/RapidReconciler-AI/`.
 
-Two top-level landing pages at the repo root:
+Three top-level landing pages at the repo root:
 
 - **`rapidreconciler-help.html`** &mdash; the **customer-facing cover page**
   (Help portal). Three destination cards: University, Help Desk, Export
   Analyzer. The in-app Help button and external links target this page.
-- **`rapidreconciler-hub.html`** &mdash; the **internal staff hub**. Routes
-  GSI sales, tech, and support staff to per-team landing pages. Not
-  customer-facing.
+- **`rapidreconciler-hub.html`** &mdash; the **internal staff hub**. Holds
+  the welcome card + sign-in form (legacy SPA credentials, no SSO). On
+  submit, redirects to the launchpad. Not customer-facing.
+- **`rapidreconciler-launchpad.html`** &mdash; the **post-sign-in
+  launchpad**. Tiled grid of authorized destinations (Demos / Products /
+  Workflows for internal users; Products / Training / Documents for
+  customers). Reads `localStorage.rrv8.token` + `rrv8.viewMode`; bounces
+  back to the hub if neither is set. Sign out from the user-menu chip
+  clears both and returns to the hub.
 
 ---
 
@@ -19,7 +25,8 @@ Two top-level landing pages at the repo root:
 ```
 RapidReconciler-AI/                  ← repo root
 ├── rapidreconciler-help.html        ← customer-facing cover (3 destination cards)
-├── rapidreconciler-hub.html         ← internal staff hub (per-team landing pages)
+├── rapidreconciler-hub.html         ← internal staff hub: welcome + sign-in
+├── rapidreconciler-launchpad.html   ← post-sign-in launchpad (tiled grid, viewMode-filtered)
 ├── release-notes.html               ← auto-updated by GHA on push to main
 ├── 404.html                         ← GH Pages fallback for missing-repo-name URLs
 ├── CLAUDE.md                        ← this file

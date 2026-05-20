@@ -26,15 +26,39 @@ Content-Type: application/json;charset=UTF-8
 
 Production is presumably `https://rr-valc-spa.cloudapp.net` (per the
 [RR Agent reference](../GSIRRTech/rr-agent-reference.html)'s VALC endpoint
-listing). Response:
+listing). Success response:
 
 ```json
 { "token": "<RS256 JWT, ~1.2 kB>" }
 ```
 
+Failure response is Spring Boot's default error shape, **NOT a 401**.
+Bad creds return HTTP 500 with:
+
+```json
+{
+  "timestamp": "2026-05-20T14:02:41.071+00:00",
+  "status":    500,
+  "error":     "Internal Server Error",
+  "message":   "User invalid.",
+  "path":      "/client/login"
+}
+```
+
+(Confirmed against staging on 2026-05-20.) Clients distinguish bad
+creds from real outages by parsing the `message` field, not the status
+code &mdash; `"User invalid."` = wrong email/password; anything else
+is a service issue.
+
 The SPA stores the JWT in `localStorage.token` (see the AuthInterceptor
 factory in `base.js`) and sends `Authorization: Bearer <jwt>` on every
-subsequent call. No cookies are set. Logout is a localStorage drop.
+subsequent call. VALC also sets an `XSRF-TOKEN` cookie on the login
+response, but V8 ignores it (Bearer auth doesn&rsquo;t need it). Logout
+is a localStorage drop.
+
+**CORS**: VALC returns `Access-Control-Allow-Origin: *` on the login
+endpoint, so cross-origin POST from `http://localhost:8765` works
+without a proxy.
 
 ### JWT payload shape
 

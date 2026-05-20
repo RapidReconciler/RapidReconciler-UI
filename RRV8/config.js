@@ -14,8 +14,12 @@
  * Field reference:
  *   mode          — 'demo' | 'staging' | 'prod'. Drives every IS_DEMO
  *                   branch in the page.
- *   authBase      — VALC login endpoint root (null in demo).
- *                   Production: 'https://rr-valc-spa.cloudapp.net'.
+ *   authBase      — VALC login endpoint root. Null = use the per-mode
+ *                   default from RR_AUTH_BASES at boot:
+ *                     staging → https://staging-valcspa.cloudapp.net
+ *                     prod    → https://rr-valc-spa.cloudapp.net
+ *                   Set explicitly here to override (e.g. a local
+ *                   mock VALC for offline testing).
  *   dataPath      — only used in demo mode. Where to fetch the static
  *                   JSON snapshots from. Relative to the HTML.
  *   statusPollMs  — interval for re-checking v_diagnostic5_job_status
@@ -34,4 +38,12 @@ window.RR_CONFIG = {
   statusPollMs: null,
   release:      'V8',
   buildStamp:   '2026-05-20'
+};
+
+// Per-mode VALC defaults. Used when RR_CONFIG.authBase is null and
+// the resolved MODE is staging or prod. Engineering overrides
+// authBase in their customer-specific config.js at deploy time.
+window.RR_AUTH_BASES = {
+  staging: 'https://staging-valcspa.cloudapp.net',
+  prod:    'https://rr-valc-spa.cloudapp.net'
 };

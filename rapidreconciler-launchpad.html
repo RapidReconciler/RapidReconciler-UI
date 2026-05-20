@@ -1,0 +1,792 @@
+<!DOCTYPE html>
+<!--
+  =============================================================================
+  RapidReconciler &mdash; Launchpad (post-login landing)
+  =============================================================================
+  Where signed-in users land after authenticating on the hub. Tiles are
+  filtered by viewMode (customer vs internal): customers see Products /
+  Training / Documents; internal users additionally see Workflows / Demos.
+
+  Auth state lives in localStorage at the same origin as the hub:
+    rrv8.token    : RS256 JWT from VALC (real auth path)
+    rrv8.viewMode : 'customer' | 'internal'
+
+  No real auth = no launchpad. If both are missing the page redirects
+  back to the hub.
+  =============================================================================
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Launchpad &mdash; RapidReconciler</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&family=Source+Sans+3:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --navy:        #1f2d4a;
+    --navy-deep:   #142037;
+    --navy-soft:   #2c3e63;
+    --blue:        #2b5fb0;
+    --blue-bright: #3d8fd6;
+    --blue-pale:   #e6efff;
+    --orange:      #f08a24;
+    --orange-deep: #d97316;
+    --green:       #2e8a55;
+    --bg:          #f6f8fc;
+    --bg-soft:     #eef3f9;
+    --bg-card:     #ffffff;
+    --text:        #1f2d4a;
+    --text-soft:   #4a5468;
+    --text-muted:  #828a9a;
+    --rule:        #e1e7ef;
+    --rule-strong: #c9d3e0;
+    --shadow-sm:   0 1px 2px rgba(20, 32, 55, 0.04);
+    --shadow-md:   0 6px 18px -4px rgba(20, 32, 55, 0.10);
+    --shadow-lg:   0 20px 40px -16px rgba(20, 32, 55, 0.22);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    font-family: 'Open Sans', -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2, h3 { font-family: 'Source Sans 3', sans-serif; font-weight: 800; letter-spacing: -0.015em; }
+  a { color: inherit; text-decoration: none; }
+
+  /* ============================================================
+     TOPBAR
+     ============================================================ */
+  .lp-topbar {
+    background: linear-gradient(180deg, var(--navy) 0%, var(--navy-deep) 100%);
+    color: #fff;
+    padding: 0 32px;
+    height: 64px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    box-shadow: 0 1px 0 rgba(0,0,0,0.15);
+  }
+  .lp-brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    color: #fff;
+  }
+  .lp-brand-mark {
+    width: 34px; height: 34px;
+    border-radius: 8px;
+    background: linear-gradient(135deg, var(--blue-bright) 0%, var(--blue) 100%);
+    display: grid;
+    place-items: center;
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 800;
+    font-size: 15px;
+    letter-spacing: -0.02em;
+    color: #fff;
+  }
+  .lp-brand-name {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 800;
+    font-size: 18px;
+    letter-spacing: -0.01em;
+  }
+  .lp-brand-tag {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: rgba(255,255,255,0.55);
+    margin-left: 6px;
+    border: 1px solid rgba(255,255,255,0.20);
+    border-radius: 4px;
+    padding: 2px 8px;
+  }
+  .lp-user-zone { position: relative; }
+  .lp-user-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 100px;
+    padding: 6px 14px 6px 6px;
+    color: #fff;
+    cursor: pointer;
+    font-family: 'Open Sans', sans-serif;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .lp-user-chip:hover { background: rgba(255,255,255,0.14); border-color: rgba(255,255,255,0.22); }
+  .lp-user-avatar {
+    width: 30px; height: 30px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--orange) 0%, var(--orange-deep) 100%);
+    display: grid; place-items: center;
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 800;
+    font-size: 13px;
+    color: #fff;
+  }
+  .lp-user-name {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 700;
+    font-size: 13.5px;
+  }
+  .lp-user-caret {
+    width: 12px; height: 12px;
+    color: rgba(255,255,255,0.55);
+    margin-left: 2px;
+  }
+  .lp-user-menu {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    background: var(--bg-card);
+    border: 1px solid var(--rule-strong);
+    border-radius: 10px;
+    box-shadow: var(--shadow-lg);
+    min-width: 220px;
+    padding: 6px;
+    z-index: 30;
+    color: var(--text);
+  }
+  .lp-user-menu[hidden] { display: none; }
+  .lp-user-menu-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 12px;
+    border-radius: 6px;
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 600;
+    font-size: 13.5px;
+    width: 100%;
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--text);
+    text-align: left;
+  }
+  .lp-user-menu-row:hover { background: var(--bg-soft); }
+  .lp-user-menu-row.is-danger:hover { background: rgba(192,57,43,0.08); color: #c0392b; }
+  .lp-user-menu-info {
+    padding: 10px 12px 12px;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 4px;
+  }
+  .lp-user-menu-info-name {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 800;
+    font-size: 14px;
+    color: var(--navy);
+  }
+  .lp-user-menu-info-email {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 2px;
+  }
+  .lp-user-menu-info-mode {
+    margin-top: 8px;
+    display: inline-block;
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 2px 8px;
+    border-radius: 100px;
+    background: var(--blue-pale);
+    color: var(--blue);
+  }
+  .lp-user-menu-info-mode.is-internal { background: rgba(46,138,85,0.12); color: var(--green); }
+
+  /* ============================================================
+     HERO
+     ============================================================ */
+  .lp-hero {
+    padding: 56px 32px 24px;
+    background: linear-gradient(180deg, #fff 0%, var(--bg) 100%);
+    border-bottom: 1px solid var(--rule);
+  }
+  .lp-hero-inner {
+    max-width: 1280px;
+    margin: 0 auto;
+  }
+  .lp-hero-eyebrow {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--orange-deep);
+    margin-bottom: 12px;
+  }
+  .lp-hero-title {
+    font-size: 38px;
+    color: var(--navy);
+    line-height: 1.1;
+    margin-bottom: 10px;
+  }
+  .lp-hero-title-name {
+    background: linear-gradient(135deg, var(--blue) 0%, var(--blue-bright) 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent;
+  }
+  .lp-hero-subtitle {
+    font-size: 15.5px;
+    color: var(--text-soft);
+    max-width: 640px;
+  }
+
+  /* ============================================================
+     MAIN — sectioned tile grid
+     ============================================================ */
+  .lp-main {
+    padding: 36px 32px 72px;
+  }
+  .lp-main-inner {
+    max-width: 1280px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 40px;
+  }
+  .lp-section {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .lp-section[hidden] { display: none; }
+  .lp-section-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .lp-section-label {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 11.5px;
+    font-weight: 800;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-soft);
+  }
+  .lp-section-rule {
+    flex: 1;
+    height: 1px;
+    background: var(--rule);
+  }
+  .lp-section-internal-pill {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    color: var(--green);
+    background: rgba(46,138,85,0.10);
+    border: 1px solid rgba(46,138,85,0.20);
+    border-radius: 100px;
+    padding: 2px 8px;
+  }
+
+  .lp-tile-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 16px;
+  }
+  .lp-tile {
+    background: var(--bg-card);
+    border: 1px solid var(--rule);
+    border-radius: 14px;
+    padding: 22px 22px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    box-shadow: var(--shadow-sm);
+    transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
+    position: relative;
+    overflow: hidden;
+    min-height: 132px;
+  }
+  .lp-tile::after {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+    background: var(--blue);
+    transform: scaleX(0);
+    transform-origin: left;
+    transition: transform 0.20s ease;
+  }
+  .lp-tile:hover {
+    transform: translateY(-3px);
+    box-shadow: var(--shadow-md);
+    border-color: var(--blue-pale);
+  }
+  .lp-tile:hover::after { transform: scaleX(1); }
+  .lp-tile-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .lp-tile-icon {
+    width: 40px; height: 40px;
+    border-radius: 10px;
+    background: var(--blue-pale);
+    color: var(--blue);
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+  }
+  .lp-tile-icon svg { width: 20px; height: 20px; }
+  .lp-tile-title-wrap { flex: 1; min-width: 0; }
+  .lp-tile-title {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 800;
+    font-size: 16px;
+    color: var(--navy);
+    letter-spacing: -0.01em;
+    line-height: 1.2;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .lp-tile-pill {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 9.5px;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    border-radius: 100px;
+    padding: 2px 8px;
+    line-height: 1.2;
+  }
+  .lp-tile-pill.is-new { background: var(--orange); color: #fff; }
+  .lp-tile-pill.is-preview { background: var(--blue); color: #fff; }
+  .lp-tile-desc {
+    font-size: 13px;
+    color: var(--text-soft);
+    line-height: 1.5;
+  }
+  .lp-tile-arrow {
+    margin-top: auto;
+    align-self: flex-end;
+    color: var(--text-muted);
+    font-size: 18px;
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 700;
+    transition: color 0.15s, transform 0.15s;
+  }
+  .lp-tile:hover .lp-tile-arrow {
+    color: var(--blue);
+    transform: translateX(3px);
+  }
+
+  /* External-link icon overlay */
+  .lp-tile-external {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    width: 14px; height: 14px;
+    color: var(--text-muted);
+    opacity: 0.5;
+  }
+
+  /* ============================================================
+     FOOTER
+     ============================================================ */
+  .lp-footer {
+    border-top: 1px solid var(--rule);
+    padding: 22px 32px;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 12.5px;
+    background: var(--bg-soft);
+  }
+  .lp-footer a { color: var(--blue); font-weight: 700; }
+
+  /* ============================================================
+     RESPONSIVE
+     ============================================================ */
+  @media (max-width: 720px) {
+    .lp-topbar { padding: 0 16px; }
+    .lp-hero { padding: 36px 16px 18px; }
+    .lp-hero-title { font-size: 28px; }
+    .lp-main { padding: 24px 16px 56px; }
+    .lp-tile-grid { grid-template-columns: 1fr; }
+    .lp-user-name { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<header class="lp-topbar">
+  <a class="lp-brand" href="rapidreconciler-launchpad.html">
+    <span class="lp-brand-mark">RR</span>
+    <span class="lp-brand-name">RapidReconciler</span>
+    <span class="lp-brand-tag" id="lp-mode-tag">Launchpad</span>
+  </a>
+  <div class="lp-user-zone">
+    <button class="lp-user-chip" id="lp-user-btn" aria-haspopup="menu" aria-expanded="false">
+      <span class="lp-user-avatar" id="lp-user-avatar">?</span>
+      <span class="lp-user-name" id="lp-user-name">Sign in</span>
+      <svg class="lp-user-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+    </button>
+    <div class="lp-user-menu" id="lp-user-menu" hidden role="menu">
+      <div class="lp-user-menu-info">
+        <div class="lp-user-menu-info-name" id="lp-user-info-name">&mdash;</div>
+        <div class="lp-user-menu-info-email" id="lp-user-info-email">&mdash;</div>
+        <span class="lp-user-menu-info-mode" id="lp-user-info-mode">Customer view</span>
+      </div>
+      <button type="button" class="lp-user-menu-row" data-action="back-to-hub">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><polyline points="15 18 9 12 15 6"></polyline></svg>
+        <span>Back to hub</span>
+      </button>
+      <button type="button" class="lp-user-menu-row is-danger" data-action="sign-out">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+        <span>Sign out</span>
+      </button>
+    </div>
+  </div>
+</header>
+
+<section class="lp-hero">
+  <div class="lp-hero-inner">
+    <div class="lp-hero-eyebrow">Welcome back</div>
+    <h1 class="lp-hero-title"><span class="lp-hero-title-name" id="lp-hero-name">RapidReconciler</span></h1>
+    <p class="lp-hero-subtitle" id="lp-hero-subtitle">Pick where to land. Apps you open from here keep you signed in for the rest of this session.</p>
+  </div>
+</section>
+
+<main class="lp-main">
+  <div class="lp-main-inner">
+
+    <!-- ============== DEMOS (internal only) ============== -->
+    <section class="lp-section" data-section="demos" data-internal-only>
+      <div class="lp-section-head">
+        <span class="lp-section-label">Demos</span>
+        <span class="lp-section-internal-pill">Internal</span>
+        <span class="lp-section-rule"></span>
+      </div>
+      <div class="lp-tile-grid">
+        <a class="lp-tile" href="GSIRRSales/rr-self-guided-tour.html">
+          <div class="lp-tile-head">
+            <span class="lp-tile-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polygon points="10 8 16 12 10 16 10 8"></polygon></svg></span>
+            <div class="lp-tile-title-wrap"><div class="lp-tile-title">RapidReconciler Demo</div></div>
+          </div>
+          <div class="lp-tile-desc">Self-guided product tour.</div>
+          <span class="lp-tile-arrow">&rarr;</span>
+        </a>
+        <a class="lp-tile" href="GSIRRSales/rr-assist-self-guided-tour.html">
+          <div class="lp-tile-head">
+            <span class="lp-tile-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"></polygon></svg></span>
+            <div class="lp-tile-title-wrap"><div class="lp-tile-title">RapidReconciler Assist Demo</div></div>
+          </div>
+          <div class="lp-tile-desc">Self-guided Assist tour.</div>
+          <span class="lp-tile-arrow">&rarr;</span>
+        </a>
+        <a class="lp-tile" href="RRV8/inventory-reconciliation.html?mode=staging" data-link="preview">
+          <div class="lp-tile-head">
+            <span class="lp-tile-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line><line x1="3" y1="9" x2="21" y2="9"></line></svg></span>
+            <div class="lp-tile-title-wrap"><div class="lp-tile-title">V8 Design Preview <span class="lp-tile-pill is-preview">Preview</span></div></div>
+          </div>
+          <div class="lp-tile-desc">Modernized SPA &middot; live staging data when signed in.</div>
+          <span class="lp-tile-arrow">&rarr;</span>
+        </a>
+      </div>
+    </section>
+
+    <!-- ============== PRODUCTS ============== -->
+    <section class="lp-section" data-section="products">
+      <div class="lp-section-head">
+        <span class="lp-section-label">Products</span>
+        <span class="lp-section-rule"></span>
+      </div>
+      <div class="lp-tile-grid">
+        <a class="lp-tile" href="https://rapidreconciler.getgsi.com" data-link="legacy">
+          <div class="lp-tile-head">
+            <span class="lp-tile-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg></span>
+            <div class="lp-tile-title-wrap"><div class="lp-tile-title">RR Application</div></div>
+          </div>
+          <div class="lp-tile-desc">Open the production reconciler.</div>
+          <span class="lp-tile-arrow">&rarr;</span>
+        </a>
+        <a class="lp-tile" href="rapidreconciler-help.html">
+          <div class="lp-tile-head">
+            <span class="lp-tile-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22c-4.5-1.5-8-5.5-8-11V5l8-3 8 3v6c0 5.5-3.5 9.5-8 11z"></path><circle cx="12" cy="11" r="2.2"></circle><line x1="12" y1="13.5" x2="12" y2="15.5"></line></svg></span>
+            <div class="lp-tile-title-wrap"><div class="lp-tile-title">RR Assist <span class="lp-tile-pill is-new">New</span></div></div>
+          </div>
+          <div class="lp-tile-desc">Help portal + Export Analyzer.</div>
+          <span class="lp-tile-arrow">&rarr;</span>
+        </a>
+        <a class="lp-tile" href="RRUniversity/rapidreconciler-licensing.html">
+          <div class="lp-tile-head">
+            <span class="lp-tile-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="13" rx="2" ry="2"></rect><path d="M3 10h18"></path><path d="M8 15h3"></path><circle cx="17" cy="15.5" r="2.5"></circle><line x1="18.8" y1="17.3" x2="20.5" y2="19"></line></svg></span>
+            <div class="lp-tile-title-wrap"><div class="lp-tile-title">RR Licensing</div></div>
+          </div>
+          <div class="lp-tile-desc">License terms and management.</div>
+          <span class="lp-tile-arrow">&rarr;</span>
+        </a>
+      </div>
+    </section>
+
+    <!-- ============== TRAINING (customer-only) ============== -->
+    <section class="lp-section" data-section="training" data-customer-only>
+      <div class="lp-section-head">
+        <span class="lp-section-label">Training</span>
+        <span class="lp-section-rule"></span>
+      </div>
+      <div class="lp-tile-grid">
+        <a class="lp-tile" href="RRUniversity/start-here-inventory.html">
+          <div class="lp-tile-head">
+            <span class="lp-tile-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg></span>
+            <div class="lp-tile-title-wrap"><div class="lp-tile-title">Inventory</div></div>
+          </div>
+          <div class="lp-tile-desc">Reconciliation, transactions, audit reports.</div>
+          <span class="lp-tile-arrow">&rarr;</span>
+        </a>
+        <a class="lp-tile" href="RRUniversity/start-here-ap.html">
+          <div class="lp-tile-head">
+            <span class="lp-tile-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="9" y1="14" x2="15" y2="14"></line><line x1="9" y1="18" x2="13" y2="18"></line></svg></span>
+            <div class="lp-tile-title-wrap"><div class="lp-tile-title">A/P</div></div>
+          </div>
+          <div class="lp-tile-desc">PO Receipts module workflows.</div>
+          <span class="lp-tile-arrow">&rarr;</span>
+        </a>
+        <a class="lp-tile" href="RRUniversity/start-here-transfers.html">
+          <div class="lp-tile-head">
+            <span class="lp-tile-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"></polyline><path d="M3 11V9a4 4 0 0 1 4-4h14"></path><polyline points="7 23 3 19 7 15"></polyline><path d="M21 13v2a4 4 0 0 1-4 4H3"></path></svg></span>
+            <div class="lp-tile-title-wrap"><div class="lp-tile-title">Transfers</div></div>
+          </div>
+          <div class="lp-tile-desc">Transfer-order reconciliation.</div>
+          <span class="lp-tile-arrow">&rarr;</span>
+        </a>
+        <a class="lp-tile" href="RRUniversity/administrator-start-here.html">
+          <div class="lp-tile-head">
+            <span class="lp-tile-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg></span>
+            <div class="lp-tile-title-wrap"><div class="lp-tile-title">Administrator</div></div>
+          </div>
+          <div class="lp-tile-desc">Setup and configuration.</div>
+          <span class="lp-tile-arrow">&rarr;</span>
+        </a>
+      </div>
+    </section>
+
+    <!-- ============== WORKFLOWS (internal only) ============== -->
+    <section class="lp-section" data-section="workflows" data-internal-only>
+      <div class="lp-section-head">
+        <span class="lp-section-label">Workflows</span>
+        <span class="lp-section-internal-pill">Internal</span>
+        <span class="lp-section-rule"></span>
+      </div>
+      <div class="lp-tile-grid">
+        <a class="lp-tile" href="GSIRRSales/sales-client-management.html">
+          <div class="lp-tile-head">
+            <span class="lp-tile-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path></svg></span>
+            <div class="lp-tile-title-wrap"><div class="lp-tile-title">Sales Team</div></div>
+          </div>
+          <div class="lp-tile-desc">Prospect &rarr; contract workflow.</div>
+          <span class="lp-tile-arrow">&rarr;</span>
+        </a>
+        <a class="lp-tile" href="GSIRRTech/tech-team.html">
+          <div class="lp-tile-head">
+            <span class="lp-tile-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 1 0-3 6.4l5.9 5.9a2 2 0 0 0 2.8-2.8l-5.9-5.9a4 4 0 0 0 .2-3.6z"></path></svg></span>
+            <div class="lp-tile-title-wrap"><div class="lp-tile-title">Tech Team</div></div>
+          </div>
+          <div class="lp-tile-desc">Install &rarr; go-live workflow.</div>
+          <span class="lp-tile-arrow">&rarr;</span>
+        </a>
+      </div>
+    </section>
+
+    <!-- ============== DOCUMENTS (customer-only) ============== -->
+    <section class="lp-section" data-section="documents" data-customer-only>
+      <div class="lp-section-head">
+        <span class="lp-section-label">Documents</span>
+        <span class="lp-section-rule"></span>
+      </div>
+      <div class="lp-tile-grid">
+        <a class="lp-tile" href="Compliance/SOC2-Bridge-Letter.pdf" target="_blank" rel="noopener">
+          <svg class="lp-tile-external" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 3h7v7M13 3L6 10M11 9v4H3V5h4"/></svg>
+          <div class="lp-tile-head">
+            <span class="lp-tile-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg></span>
+            <div class="lp-tile-title-wrap"><div class="lp-tile-title">SOC 2 Bridge Letter</div></div>
+          </div>
+          <div class="lp-tile-desc">Compliance attestation (PDF).</div>
+          <span class="lp-tile-arrow">&rarr;</span>
+        </a>
+        <a class="lp-tile" href="Compliance/SOC2-Type2-Report.pdf" target="_blank" rel="noopener">
+          <svg class="lp-tile-external" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 3h7v7M13 3L6 10M11 9v4H3V5h4"/></svg>
+          <div class="lp-tile-head">
+            <span class="lp-tile-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg></span>
+            <div class="lp-tile-title-wrap"><div class="lp-tile-title">SOC 2 Type 2 Report</div></div>
+          </div>
+          <div class="lp-tile-desc">Compliance attestation (PDF).</div>
+          <span class="lp-tile-arrow">&rarr;</span>
+        </a>
+        <a class="lp-tile" href="GSIRRSales/rr-provisioning.html">
+          <div class="lp-tile-head">
+            <span class="lp-tile-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3 8-8"></path><path d="M20 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h11"></path></svg></span>
+            <div class="lp-tile-title-wrap"><div class="lp-tile-title">Tech Requirements</div></div>
+          </div>
+          <div class="lp-tile-desc">Provisioning &amp; environment.</div>
+          <span class="lp-tile-arrow">&rarr;</span>
+        </a>
+      </div>
+    </section>
+
+  </div>
+</main>
+
+<footer class="lp-footer">
+  &copy; 2026 GSI &middot; RapidReconciler &middot; <a href="rapidreconciler-hub.html">Back to hub</a>
+</footer>
+
+<script>
+(function () {
+  'use strict';
+
+  // ---- Auth state (read once at boot) ----
+  function readSession() {
+    let token = null;
+    try { token = localStorage.getItem('rrv8.token'); } catch (_) {}
+    let viewMode = null;
+    try { viewMode = localStorage.getItem('rrv8.viewMode'); } catch (_) {}
+    if (!token && !viewMode) return null;
+    // Decode JWT payload (no signature check — server validates on real calls).
+    let payload = null;
+    if (token) {
+      try {
+        const part = String(token).split('.')[1];
+        if (part) {
+          const b64raw = part.replace(/-/g, '+').replace(/_/g, '/');
+          const pad = b64raw.length % 4;
+          const b64 = pad ? b64raw + '='.repeat(4 - pad) : b64raw;
+          const json = decodeURIComponent(atob(b64).split('').map(c =>
+            '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join(''));
+          payload = JSON.parse(json);
+        }
+      } catch (_) { /* malformed token; treat as visual-mode */ }
+    }
+    return {
+      token: token,
+      viewMode: viewMode || (payload ? 'customer' : 'customer'),
+      user: payload && payload.user ? payload.user : null,
+      isReal: !!payload
+    };
+  }
+
+  const session = readSession();
+  if (!session) {
+    // No auth signal at all — bounce back to the hub.
+    location.replace('rapidreconciler-hub.html');
+    return;
+  }
+
+  // ---- Apply viewMode filter ----
+  // Internal: Products + Workflows + Demos (data-internal-only sections shown,
+  //           data-customer-only sections hidden).
+  // Customer: Products + Training + Documents (the inverse).
+  // Sections without either attribute (e.g. Products) are always visible.
+  const isInternal = session.viewMode === 'internal';
+  document.querySelectorAll('.lp-section[data-internal-only]').forEach(s => {
+    if (!isInternal) s.setAttribute('hidden', '');
+  });
+  document.querySelectorAll('.lp-section[data-customer-only]').forEach(s => {
+    if (isInternal) s.setAttribute('hidden', '');
+  });
+
+  // ---- Hero greeting + topbar chip ----
+  const firstName = (session.user && session.user.fn) ? session.user.fn.split(/\s+/)[0] : (isInternal ? 'GSI staff' : 'Guest');
+  const initial   = (firstName[0] || '?').toUpperCase();
+  document.getElementById('lp-hero-name').textContent = firstName + (firstName === 'Guest' || firstName === 'GSI staff' ? '' : '');
+  document.getElementById('lp-hero-name').textContent = firstName;
+  document.getElementById('lp-user-avatar').textContent = initial;
+  document.getElementById('lp-user-name').textContent = (session.user && session.user.fn) ? session.user.fn : (isInternal ? 'Internal preview' : 'Customer preview');
+  document.getElementById('lp-user-info-name').textContent = (session.user && session.user.fn) || (isInternal ? 'Internal preview' : 'Customer preview');
+  document.getElementById('lp-user-info-email').textContent = (session.user && session.user.u) || (session.isReal ? '' : 'No real authentication — visual preview only.');
+  const modeEl = document.getElementById('lp-user-info-mode');
+  modeEl.textContent = isInternal ? 'Internal view' : 'Customer view';
+  modeEl.classList.toggle('is-internal', isInternal);
+
+  // Mode tag in the topbar brand row
+  const tag = document.getElementById('lp-mode-tag');
+  if (tag) tag.textContent = isInternal ? 'Launchpad · Internal' : 'Launchpad · Customer';
+
+  // Subtitle: nudge the user if they're in visual-only mode
+  if (!session.isReal) {
+    document.getElementById('lp-hero-subtitle').textContent =
+      'Preview mode — apps you open will ask you to sign in. Real sign-in stores a session token so apps you open stay signed in.';
+  }
+
+  // ---- Forward credentials to destination apps when possible ----
+  // Same-origin destinations (V8) read localStorage.rrv8.token
+  // directly via their bootSession — no special handoff needed.
+  // Cross-origin destinations (RR Application at
+  // rapidreconciler.getgsi.com) can't see our localStorage. As
+  // a partial mitigation we append the saved email as a query
+  // param; the legacy SPA would need to be modified to read it
+  // (and the browser's password manager will autofill the
+  // password if it's saved for that site). True cross-origin
+  // auto-login requires the SPA to support a fragment-based JWT
+  // handoff, which it doesn't today.
+  function getSavedEmail() {
+    try { return localStorage.getItem('rrv8.lastEmail') || ''; } catch (_) { return ''; }
+  }
+  document.querySelectorAll('a.lp-tile[data-link="legacy"]').forEach(tile => {
+    tile.addEventListener('click', (e) => {
+      const email = getSavedEmail();
+      if (!email) return; // No saved email → let the link navigate as-is
+      const base = tile.getAttribute('href') || '';
+      // Insert ?u=<email> before any hash fragment. AngularJS apps
+      // use hashbang routing (#/page/...) so we want the query
+      // BEFORE the hash, not in it.
+      const hashIdx = base.indexOf('#');
+      const before  = hashIdx === -1 ? base    : base.slice(0, hashIdx);
+      const after   = hashIdx === -1 ? ''      : base.slice(hashIdx);
+      const sep     = before.indexOf('?') === -1 ? '?' : '&';
+      const newUrl  = before + sep + 'u=' + encodeURIComponent(email) + after;
+      e.preventDefault();
+      window.location.href = newUrl;
+    });
+  });
+
+  // ---- User menu ----
+  const btn = document.getElementById('lp-user-btn');
+  const menu = document.getElementById('lp-user-menu');
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const open = !menu.hidden;
+    menu.hidden = open;
+    btn.setAttribute('aria-expanded', String(!open));
+  });
+  document.addEventListener('click', () => {
+    menu.hidden = true;
+    btn.setAttribute('aria-expanded', 'false');
+  });
+  menu.addEventListener('click', (e) => e.stopPropagation());
+  menu.querySelectorAll('[data-action]').forEach(b => {
+    b.addEventListener('click', () => {
+      const action = b.dataset.action;
+      if (action === 'sign-out') {
+        try { localStorage.removeItem('rrv8.token'); } catch (_) {}
+        try { localStorage.removeItem('rrv8.viewMode'); } catch (_) {}
+        location.href = 'rapidreconciler-hub.html';
+      } else if (action === 'back-to-hub') {
+        location.href = 'rapidreconciler-hub.html';
+      }
+    });
+  });
+})();
+</script>
+
+</body>
+</html>
