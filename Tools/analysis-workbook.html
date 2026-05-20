@@ -12848,6 +12848,73 @@ const App = (() => {
     }
   }
 
+  // ============================================================
+  //  RRV8 PROGRAMMATIC ENTRY POINT
+  //  Used by RRV8/inventory-transactions.html's per-row Export
+  //  button. V8 opens this page in a new window, waits for the
+  //  'rrv8-analyze-ready' signal, then posts the Transaction
+  //  Detail xlsx (ArrayBuffer) + the optional preloaded DMAAIs.
+  //  We auto-process via the existing handleFile pipeline and
+  //  auto-click download, then signal back so V8 can close the
+  //  window. Same-origin only — ev.origin must match.
+  // ============================================================
+  async function rrv8AutoAnalyze(detailBuffer, dmaaiData) {
+    if (dmaaiData) {
+      // Stash on the global for templates that opt-in to using
+      // the preloaded universe (TransactionDetailTemplate's
+      // future hook). Templates that don't reference it ignore
+      // it harmlessly.
+      window.RR_PRELOADED_DMAAIS = dmaaiData;
+    }
+    const blob = new Blob([detailBuffer], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    });
+    const file = new File([blob], 'Transaction Details.xlsx');
+    await handleFile(file);
+    // handleFile triggers selectTemplate → runAnalysis (if the
+    // template auto-confirms). Wait briefly for state.data to
+    // populate, then auto-download.
+    const start = Date.now();
+    while (!state || !state.data) {
+      if (Date.now() - start > 8000) throw new Error('Analysis timed out');
+      await new Promise(r => setTimeout(r, 100));
+    }
+    await download();
+    return true;
+  }
+
+  if (typeof window !== 'undefined') {
+    // Signal readiness to window.opener so V8 knows it's safe to
+    // post the payload. Fires on load + on every subsequent
+    // message-ack request (since same-origin V8 might miss the
+    // initial signal due to timing).
+    window.addEventListener('load', () => {
+      if (window.opener && !window.opener.closed) {
+        try { window.opener.postMessage({ type: 'rrv8-analyze-ready' }, location.origin); } catch (_) {}
+      }
+    });
+    window.addEventListener('message', async (ev) => {
+      if (ev.origin !== location.origin) return;
+      if (!ev.data) return;
+      if (ev.data.type === 'rrv8-analyze-ping' && window.opener && !window.opener.closed) {
+        try { window.opener.postMessage({ type: 'rrv8-analyze-ready' }, location.origin); } catch (_) {}
+        return;
+      }
+      if (ev.data.type !== 'rrv8-analyze') return;
+      try {
+        await rrv8AutoAnalyze(ev.data.detail, ev.data.dmaaiData);
+        if (ev.source && ev.source.postMessage) {
+          ev.source.postMessage({ type: 'rrv8-analyze-done' }, ev.origin);
+        }
+      } catch (err) {
+        console.error('rrv8 auto-analyze failed:', err);
+        if (ev.source && ev.source.postMessage) {
+          ev.source.postMessage({ type: 'rrv8-analyze-error', message: String(err && err.message || err) }, ev.origin);
+        }
+      }
+    });
+  }
+
   function reset() {
     state = { file: null, sourceWb: null, sourceSheet: null, selectedTemplate: null, detectionScores: null, data: null, findings: null };
     $('#fileMeta').style.display = 'none';
