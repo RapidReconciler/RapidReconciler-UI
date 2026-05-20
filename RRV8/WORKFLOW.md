@@ -164,13 +164,15 @@ As of the latest commit, V8 has:
     last-success timestamps and lag.
   - *Pending Close Items rows* &rarr; per-bucket detail report.
 - **Bottom row &mdash; three reconciliation widgets**:
-  - *OOB History* (trend, filtered)
-  - *By Inventory Account* (clickable contributor bars; click a row
-    to narrow the Object filter to that account; click again to
-    restore All)
-  - *Pending Close Items* (un-posted GL batches, open WO journals,
-    in-transit inventory, manual JE drafts) &mdash; each row
-    downloads its detail Excel
+  - *OOB History* (trend, filtered) &mdash; gradient area fill,
+    dashed gridlines, vertical hover guide + floating navy
+    tooltip showing period + OOB value on mouseover.
+  - *By Business Unit* (clickable contributor bars; click a row to
+    narrow the BusinessUnit filter to that BU; click again to
+    restore All). **Replaced the prior Pending Close Items panel**
+    because all four pending buckets lacked captured SQL sources.
+  - *By Inventory Account* (same pattern but narrows the Object
+    filter).
 - **User menu** (click the user chip in the top bar) holds the
   identity block + database switcher + admin-gated actions (Import
   JDE data, Restart Service, Sign out). Mirrors the live SPA&rsquo;s
@@ -188,8 +190,121 @@ As of the latest commit, V8 has:
 - **Out-of-balance history chart** redraws from JSON with min/max/zero
   axis labels and a current-period emphasis on the last point. Stats
   (Current / 12-mo high / 12-mo low / Avg) computed in JS.
-- **SQL reference library**: 14 sproc DDL files in `sprocs/`, 17 view DDL
+- **SQL reference library**: 21 sproc DDL files in `sprocs/`, 23 view DDL
   files in `views/`. Captured via `sp_helptext` against `rrv7-acme`.
+- **Variance breakdown is a vertical reconciliation statement**
+  (not a horizontal row of cards). Each component (Carry Forward,
+  GL Batches, End of Day, Transactions, Cardex, Manual JEs) is a
+  table row showing label + subtitle (e.g. "F0911 to F4111
+  discrepancies"), signed Amount column (parens + red for
+  negatives), Running balance column (cumulative through the
+  components), and a persistent actions column with Preview /
+  Excel icons. Zero-value rows get muted styling so the analyst's
+  eye drops straight to the components that moved. Total row at
+  the bottom is a navy gradient bar with the orange "Unreconciled
+  variance" label and the value in the Running-balance column.
+  Built for the finance / cost-accounting audience.
+- **Transactions sign convention**: Transactions is stored in
+  `accountRows[].variance.transactions` with the magnitude of the
+  F0911-to-F4111 effect, but in the variance math it SUBTRACTS
+  from out-of-balance. `computeFilteredView` applies a sign
+  multiplier via `VARIANCE_SIGN = { transactions: -1 }` at the
+  aggregation step so every downstream consumer (variance table,
+  Carry Forward preview, audit report, JE export) gets the
+  properly-signed value and the sum of components equals the
+  total. The per-row data is unchanged; the convention is declared
+  in one place.
+- **Carry Forward preview**: clicking the Preview icon on Carry
+  Forward opens the modal in a special mode &mdash; instead of a
+  table it shows a compact "VARIANCE CALCULATION" card
+  (label-amount-per-row + orange-bar total) showing the **prior
+  period's variance breakdown**, scoped through the current
+  sidebar filters. No Excel export for this one (the prior-period
+  breakdown is already a derived view, not transactional data).
+  On the earliest period the modal shows an explicit empty state.
+- **Sidebar pin**: a pin button in the brand bar (visible on
+  hover) toggles `body.has-pinned-sidebar`. When pinned, the
+  sidebar locks at 240px AND the `.app` grid column shifts to
+  240px so the main content moves right (instead of the sidebar
+  floating over it). State persists via `rrv8-sidebar-pinned-v1`
+  in localStorage, hydrated at the top of the IIFE before paint
+  to avoid a flash of unpinned state. Distinct from the existing
+  transient `.is-pinned` class used by popovers.
+- **Audit-report data captured (function rewrite pending)**: the
+  production audit report is built by a chain of sprocs
+  (`usp6getrinvaccountsummaryreports`, `usp6getrunpostedbatches`,
+  `usp6getrunpostedcardex`, `usp6getjournalentries`,
+  `usp6getrcardexledgercompare`, `usp6getrperpetualinv`), each a
+  thin wrapper around `usp6getfilteredview` with a `@viewname`
+  parameter. Five new view DDLs captured for it
+  (`v6ui_accountsummaryreport`, `v6ui_unposted_batches`,
+  `v6ui_unposted_cardex`, plus the cardex/glbatches ones). Data
+  shape:
+  - `reconciliation.json` gains small audit-only arrays
+    (`accountSummary` 247 rows, `unpostedCardexUi` 16,
+    `unpostedBatchesUi` empty, `accountDescriptions` 15) &mdash;
+    inline because they're small.
+  - `data/audit-report-detail.json` (new, 7.4 MB) carries the
+    heavy arrays: `reconcilingItems` (14,915 rows, all periods)
+    and `perpetual` (19,235 rows filtered to QOH &ne; 0). Loaded
+    lazily on first audit-report click so it doesn't slow the
+    initial page load.
+
+  The `generateAuditReport` JS function rewrite (cover + Account
+  Summary table + per-account sections matching the production
+  layout) is the next chunk &mdash; it's in the open task list.
+- **Variance-step Preview pane + Excel exports**: each preview-bearing
+  variance step (GL Batches, End of Day, Cardex, Manual JEs) has a
+  Preview icon **and** a download icon under it. Both respect the
+  current period + sidebar filters. **All four components are now
+  backed by real SQL views:**
+  - **GL Batches &rarr; `v6_007_unpostedbatches`** &mdash; per-batch
+    rows with approval + post status. Snapshot carries an empty
+    array today (no un-posted batches in dev DB).
+  - **End of Day &rarr; `v6_006_unposted_cardex`** &mdash; un-posted
+    cardex transactions. Snapshot carries 16 real rows spanning
+    2015-07-04 through 2015-12-31 from the dev DB.
+  - **Manual JEs &rarr; `v6ui_manual_entries`** &mdash; per-doc
+    manual journal entries joined to inventory accounts. Snapshot
+    carries 241 real rows spanning 2015-10-03 through 2016-08-27.
+  - **Cardex &rarr; `v6ui_itemrollintegritydialog`** &mdash; per-item
+    integrity issues where the perpetual valuation doesn&rsquo;t
+    roll cleanly. **The view has no PeriodEnds column** &mdash; it&rsquo;s
+    a current-state report, not period-historical, so the
+    drilldown shows the same rows regardless of which period is
+    selected. Only the sidebar Company / Object / BU / Subsidiary
+    filters narrow it. Snapshot carries 783 real rows from the dev
+    DB (2 reasons: Amount / Quantity; 2 companies; 15 long
+    accounts). This is reflected in `filterViewBackedRows` via the
+    `requirePeriod: false` option.
+
+  The Excel exports for view-backed components match the production
+  report layout: merged title row across all data columns
+  ("Unposted GL Batches Generated &lt;timestamp&gt;", "Manual Journal
+  Entries Generated &lt;timestamp&gt;", "Item Roll Integrity Generated
+  &lt;timestamp&gt;"), light-gray header row, per-row PeriodEnds
+  where applicable, no separate metadata block. Currency + Rate
+  columns from the production exports are intentionally skipped
+  until we capture an FX source. Filename pattern:
+  `<ReportName>_<period?>_<stamp>.xlsx` (cardex omits period since
+  the report is period-independent).
+
+  **Preview pane** (V8's first modal): clicking the Preview icon
+  opens a centered card with a sticky-header scrollable table that
+  mirrors the Excel column shape for that component. Header shows
+  component label + source view chip + scope summary; footer has
+  "Close" and "Export to Excel" (calls `generateVarianceExcel`).
+  ESC, backdrop click, or the X button dismisses. If the user
+  switches the period or narrows filters while the modal is open,
+  the table re-renders in place via `_renderAllInner`.
+
+  Bindings declared in `_meta.drilldownSources`. The shared filter
+  chain (`filterViewBackedRows(arrayKey, amountField, { requirePeriod })`)
+  routes any view-backed array through the current period (when the
+  source has one) + selected companies + the set of long accounts
+  resolved from the sidebar filters &mdash; so Company / Object /
+  Business Unit / Subsidiary / Currency narrowing flows through both
+  Preview and Excel identically to the hero stats.
 - **API.md**: documents the current `reconciliation-filtered` JSON shape
   and proposes a cleaner V8 shape.
 
@@ -199,8 +314,10 @@ As of the latest commit, V8 has:
   a toast but don&rsquo;t do anything. Database switcher updates the
   user-chip label but doesn&rsquo;t actually re-fetch from a
   different DB &mdash; the snapshot path is hard-coded.
-- Variance step *Preview* buttons flash a toast but don&rsquo;t open
-  a drill-down modal yet.
+- All four variance-component view bindings are now wired
+  (`glBatches`, `endOfDay`, `manualJournalEntries`, `cardex`).
+  Carry Forward (rollover, no drilldown) and Transactions (its own
+  dedicated page) are the only components without a Preview pane.
 - Permission gating: the user menu shows all admin actions; in
   production the auth/role layer hides what the user can&rsquo;t do.
   Handoff concern.
@@ -212,9 +329,11 @@ As of the latest commit, V8 has:
 - No other pages yet (Transactions, As Of, Roll Forward, Integrity, In
   Transit, PO Receipts).
 - No optimization pass on the captured sprocs / views.
-- Pending Close Items + per-bucket detail rows are synthesized at
-  download time (no real source rows yet). Shaped so a real backend
-  can fill them in without changing the renderer.
+- The Audit Report Excel: data is captured (per the chunk above)
+  but the `generateAuditReport` JS function still emits the older
+  V8 multi-sheet shape, not the production single-sheet layout
+  (cover + Account Summary table + per-account sections). The
+  next chunk rewrites it.
 - `RRV8/views/v6ui_reconfiledata.sql` is captured but the view itself
   is dead in production (intended for a process that never shipped).
   Leave it in the library for archaeology; the actual data source
