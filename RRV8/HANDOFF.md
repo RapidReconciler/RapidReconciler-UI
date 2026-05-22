@@ -5,9 +5,8 @@ session. Paste the **Resume prompt** section as the first message in
 the new session; the rest of this file is context that prompt points
 the new session at.
 
-**Updated**: 2026-05-20, after the agent-jar-mining session
-(controller catalog + Jackson field-name gotcha + headless
-analyzer pipeline + diagnostic-Excel route).
+**Updated**: 2026-05-20, after PR #89 (grid standards + Start Here
+area + headless analyzer + agent jar findings).
 
 ---
 
@@ -17,17 +16,54 @@ analyzer pipeline + diagnostic-Excel route).
 > please read these in order and confirm you understand them:
 >
 > 1. **CLAUDE.md** at the repo root &mdash; project-wide
->    conventions, link rules, data hygiene, commit workflow.
+>    conventions, link rules, data hygiene, commit workflow,
+>    "don't mention the preview panel" durable preference.
 > 2. **RRV8/WORKFLOW.md** &mdash; the V8 project guide.
 > 3. **RRV8/HANDOFF.md** &mdash; this file. The sections after
 >    *Resume prompt* are the briefing.
-> 4. **RRV8/inventory-reconciliation.html** &mdash; just confirm
->    it exists. Read targeted sections when editing.
-> 5. **Recent commits**: `git log --oneline -10`.
+> 4. **RRV8/GRID-STANDARDS.md** &mdash; the grid-standards spec
+>    (Transactions Details grid is the reference implementation).
+> 5. **RRV8/API.md** &mdash; full agent controller catalog +
+>    Critical Gotchas (Jackson field-name binding, two
+>    ValidationLight sources, diagnostic Excel pipeline). Skim
+>    so the next time you wire an endpoint you don&rsquo;t repeat
+>    the `docType` vs `type` debug cycle.
+> 6. **RRV8/inventory-reconciliation.html** + **RRV8/inventory-
+>    transactions.html** &mdash; just confirm both exist. Read
+>    targeted sections when editing; pages are ~7-8k lines each.
+> 7. **Recent commits**: `git log --oneline -10`.
 >
 > After reading those, summarize back in 3&ndash;5 bullets what
 > RRV8 currently looks like and what's most worth doing next,
 > then wait for the next instruction.
+
+### In-flight design direction (discussed end of last session)
+
+Owner sketched the next pass on the Transactions page's "Start Here"
+area. Treat as the queued chunk if owner asks "where were we":
+
+- **Get rid of the pill row** (the SubType / Order Type / Document
+  chip rows under "Refine by classification"). Free up that
+  vertical space.
+- **Action items become horizontal cards across the top** instead
+  of a left-pane list. Show 6&ndash;8 cards (or however many fit
+  comfortably), not the current 4.
+- **Trend chart goes full-width below the action cards**. Make
+  the labels readable &mdash; the current SVG is too cramped.
+  Consider a bar chart instead of a line chart.
+- **Filter out worked rows from action items**. If everything in
+  scope is worked, the whole Start Here area should turn green
+  (the success state).
+- **Every action item must filter the grid to its supporting
+  details** on click (the current detectors mostly do this; double-
+  check the new ones).
+- **Suggested entry block** (new) &mdash; for all worked items,
+  build a suggested JE from the preloaded DMAAIs
+  (`window.RR_PRELOADED_DMAAIS` from
+  `RRV8/data/v-integrity-jde-aais.json` or the live
+  `/inventory/integrity` report 0). Surface the proposed entry in
+  the Start Here area as a quick "here&rsquo;s what to book"
+  recommendation.
 
 ---
 
