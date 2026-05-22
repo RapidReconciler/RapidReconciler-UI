@@ -241,13 +241,67 @@ clear-button listeners. Call it ONCE at page boot. The filter
 helper `searchFilter(rows, query)` walks `visibleColumns()` and
 returns the matching subset.
 
-## 9. State key naming
+## 9. Column value filter (per-column distinct-value picker)
+
+Excel-style per-column filter. Each filterable column header carries a
+small funnel glyph next to the label. Click the glyph to open a
+popover with a checkbox for every distinct value currently present in
+that column; uncheck any to narrow the grid.
+
+- Default state: every value checked &rarr; no filter applied.
+- Unchecking any value applies a filter live (no Apply button).
+- A header with an active filter paints the funnel + label in
+  brand-blue (`is-filter-active` class on the `<th>`).
+- Header layout: `<label> <sort-caret?> <funnel-button>`. Click on
+  the label sorts the column; click on the funnel opens the filter
+  popover. The `data-action="filter-col"` attribute on the funnel
+  + `e.stopPropagation()` keeps the two interactions separate.
+
+Popover contents:
+- Section label (the column name).
+- Search input filters the value list in place &mdash; useful when a
+  column has 50+ distinct values.
+- Scrollable checkbox list.
+- Quick actions: **Select all** / **Select none** / **Clear filter**.
+
+State + persistence:
+- `_gridState[module].columnFilters` &mdash; `{ colKey: Set<value> }`
+  where presence + size of the Set marks an active filter; empty /
+  missing = no filter.
+- Saved as JSON `{ colKey: [value, ...] }` under
+  `rrv8-<page>-<module>-colfilter-v1` (Sets serialize to arrays).
+- `loadColumnFilters` skips unknown column keys (forward-compatible
+  if the column set changes between versions).
+
+Apply order in `filteredRows()`: page-scope filters &rarr; finding
+focus &rarr; **column filters** &rarr; row-state filter &rarr;
+search &rarr; sort. Column filters narrow the universe; the row-state
+filter and search narrow that result further. Sort runs last.
+
+Distinct values come from `distinctValuesForColumn(module, colKey)`
+which walks the module's row set (after the page Company filter,
+so per-column choices reflect what's actually selectable). Derived
+columns like `_findingStatus` are computed via `colValue(row, key)`
+so the filter works on the displayed value, not a raw row property.
+
+Implementation hook: `openColumnFilterPopover(module, colKey, anchor)`.
+Wired from the thead delegated click handler:
+```js
+const filterBtn = e.target.closest('[data-action="filter-col"]');
+if (filterBtn) { e.stopPropagation(); openColumnFilterPopover(...); return; }
+```
+
+Reference implementation: every column on the DMAAI module grids
+(`RRV8/accounting-dmaais.html`).
+
+## 10. State key naming
 
 For per-page persistence, use the pattern `rrv8-<page>-<feature>-v1`:
 
 - `rrv8-tx-columns-v1` &mdash; Transactions, visibility
 - `rrv8-tx-col-order-v1` &mdash; Transactions, drag order
 - `rrv8-tx-sort-v1` &mdash; Transactions, active sort column + dir
+- `rrv8-dmaai-<module>-colfilter-v1` &mdash; DMAAI module grid, column value filters
 - (future) `rrv8-recon-columns-v1` &mdash; Reconciliation, visibility
 
 The `-v1` suffix lets us migrate the schema later by bumping to
@@ -260,10 +314,11 @@ per-visit &ldquo;find,&rdquo; not a saved preference.
 
 ## Pages applying this standard
 
-| Page | Header layout | `.grid-pill` cluster | Drag-to-reorder | Click-to-sort | Search | Notes |
-|---|---|---|---|---|---|---|
-| `inventory-transactions.html` (Details grid) | ✓ | ✓ | ✓ | ✓ | ✓ | Reference implementation |
-| `inventory-reconciliation.html` (variance Preview tables) | &mdash; | &mdash; | &mdash; | &mdash; | &mdash; | Different surface (modal); revisit when modal grids get standardized |
+| Page | Header layout | `.grid-pill` cluster | Drag-to-reorder | Click-to-sort | Search | Column filter | Notes |
+|---|---|---|---|---|---|---|---|
+| `inventory-transactions.html` (Details grid) | ✓ | ✓ | ✓ | ✓ | ✓ | &mdash; | Original reference; column filter to be added |
+| `accounting-dmaais.html` (module grids) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Reference implementation for column filter |
+| `inventory-reconciliation.html` (variance Preview tables) | &mdash; | &mdash; | &mdash; | &mdash; | &mdash; | &mdash; | Different surface (modal); revisit when modal grids get standardized |
 
 ## Conventions we&rsquo;ve NOT yet decided
 

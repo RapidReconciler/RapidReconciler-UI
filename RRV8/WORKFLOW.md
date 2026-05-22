@@ -98,7 +98,15 @@ RRV8/
 
 As of the latest commit, V8 has:
 
-- **One page**: `inventory-reconciliation.html` &mdash; the modernized
+- **Three pages**: `inventory-reconciliation.html`,
+  `inventory-transactions.html`, and `accounting-dmaais.html`.
+  The DMAAI page is the analyzer worklist surface (FIX FIRST +
+  ASK CUSTOMER + module grids) wired to a Python pattern detector
+  (`RRV8/scripts/derive-dmaai-analysis.py`) that reads integrity
+  report 0 (`v_integrity_jde_aais`) and emits the worklist JSON.
+  Agent endpoints for the worklist + responses are specced in
+  `RRV8/API.md` (PROD-TODO).
+- **Reconciliation page**: the modernized
   Inventory > Reconciliation. Fully styled. Loads
   `data/reconciliation.json` once on page load; every period
   / filter combination is computed in-memory from that.
