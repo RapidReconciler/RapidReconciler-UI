@@ -37,33 +37,79 @@ area + headless analyzer + agent jar findings).
 > RRV8 currently looks like and what's most worth doing next,
 > then wait for the next instruction.
 
-### In-flight design direction (discussed end of last session)
+### In-flight design direction (queued for next session)
 
-Owner sketched the next pass on the Transactions page's "Start Here"
-area. Treat as the queued chunk if owner asks "where were we":
+**Top of the list: rebuild `accounting-dmaais.html` as the
+analyzer-worklist surface.** The page currently in the repo
+(committed) is a placeholder &mdash; a universe-view grid with a
+worked/note model from an earlier design direction we abandoned
+mid-session. The real surface follows the JDE DMAAI analyzer&rsquo;s
+worklist workbook (a copy is in the owner&rsquo;s Downloads:
+`JDE DMAAIs Analysis 2026-05-22.xlsx`).
 
-- **Get rid of the pill row** (the SubType / Order Type / Document
-  chip rows under "Refine by classification"). Free up that
-  vertical space.
-- **Action items become horizontal cards across the top** instead
-  of a left-pane list. Show 6&ndash;8 cards (or however many fit
-  comfortably), not the current 4.
-- **Trend chart goes full-width below the action cards**. Make
-  the labels readable &mdash; the current SVG is too cramped.
-  Consider a bar chart instead of a line chart.
-- **Filter out worked rows from action items**. If everything in
-  scope is worked, the whole Start Here area should turn green
-  (the success state).
-- **Every action item must filter the grid to its supporting
-  details** on click (the current detectors mostly do this; double-
-  check the new ones).
-- **Suggested entry block** (new) &mdash; for all worked items,
-  build a suggested JE from the preloaded DMAAIs
-  (`window.RR_PRELOADED_DMAAIS` from
-  `RRV8/data/v-integrity-jde-aais.json` or the live
-  `/inventory/integrity` report 0). Surface the proposed entry in
-  the Start Here area as a quick "here&rsquo;s what to book"
-  recommendation.
+**Inputs to read at session start:**
+
+1. `docs/plans/dmaai-page-overlay-table.md` &mdash; the canonical
+   spec for the SQL table, JSON sidecar shape, and the build
+   sequence. Read this first.
+2. `AnalysisGuides/dmaai-analysis.md` &mdash; the analyzer
+   process (what it does + how it categorizes findings).
+3. The sample workbook in the owner&rsquo;s Downloads &mdash;
+   the actual output shape the new page renders from.
+
+**Build sequence** (full version in the spec doc):
+
+- Python extraction script
+  (`RRV8/scripts/extract-dmaai-analysis.py`) reads the analyzer
+  xlsx, emits `RRV8/data/dmaai-analysis-latest.json`. Owner
+  can&rsquo;t run Python locally; ship the JSON alongside the
+  script.
+- Strip the placeholder grid out of `accounting-dmaais.html`.
+- Add **pill tab nav** (5 tabs: Analysis / Sales / Inventory /
+  Manufacturing / Purchasing). Default open: Analysis.
+- **Headline strip** under the page header: title + subline +
+  source / date / total rows + caveat callout.
+- **Analysis tab**: FIX FIRST table + ASK THE CUSTOMER table +
+  IGNORE FOR NOW explainer. Each row has an inline `Answer`
+  dropdown (Intended / Needs review / Fixed) + `Decision` text
+  + a `Status` pill.
+- **Module tabs**: V8 grid scoped to each module&rsquo;s AAI
+  tables (Sales = 4220 / 4230 / 4240, Inventory = 4122 / 4124 /
+  4134 / 4136 / 4162 / 4172, Manufacturing = 3110 / 3130,
+  Purchasing = 4126 / 4128 / 4310 / 4365 / 4385 / 4400).
+- **Local response state** `_dmaaiResponses` keyed by
+  `findingId`. Optimistic update on every Answer / Decision
+  change.
+- **Save**: PROD-TODO POST to
+  `/inventory/integrity/aai-save-responses`. Demo persists to
+  `RRV8/data/dmaai-responses.json` so the round-trip simulates
+  the SQL store.
+
+**Decisions already pinned (don&rsquo;t re-litigate):**
+
+- Show only the latest run on the page. No history picker in V1.
+- `AnalysisRunId` = ISO timestamp (multiple runs per day OK).
+- Q&A is fixed three-value Answer + free-text Decision + Status
+  pill. Not free-form questionnaire.
+- Data source = JSON sidecar produced by the analyzer (NOT
+  in-browser SheetJS parsing of the xlsx). The xlsx stays as the
+  human-readable artifact; the JSON is the machine artifact V8
+  consumes. Analyzer guide gets updated separately to mention
+  the JSON output.
+- Analyzer reads integrity report **0** (`v_integrity_jde_aais`),
+  not report 2 as the older guide implied.
+
+### Side queues (not blocking the DMAAI rebuild)
+
+- **Sidebar extraction** &mdash; the V8 sidebar (filters + nav +
+  status panel) is currently inlined into every page. Plan in
+  `docs/plans/sidebar-extraction.md` &mdash; do as a separate PR
+  after the DMAAI work lands so the diff is bisectable.
+- **Version subtitle** (`Version 8.0` under each page title from
+  the `SQLSourceControl Database Revision` extended property) &mdash;
+  parked until the new agent ships and exposes it on
+  `/inventory/status`. Notes saved in
+  `project_db_version_subtitle_pending.md` memory.
 
 ---
 
@@ -194,7 +240,7 @@ poller so amber / red / green reflect the live job state.
   the same in demo and prod. Replaces the hardcoded `USER` +
   `DATABASES` constants once the auth-wiring chunk lands.
 - All data is fictional Acme test-instance data from
-  `rrv7-acme`. Safe to commit per WORKFLOW.md's data hygiene
+  `RapidReconciler_Dev`. Safe to commit per WORKFLOW.md's data hygiene
   rules.
 - **Mode infrastructure** (`RRV8/config.js` + `MODE` + `IS_DEMO`
   + `rrFetch`) routes every data fetch through one helper.
@@ -440,7 +486,7 @@ poller so amber / red / green reflect the live job state.
   hook says the file is visible there.** Explicit owner
   preference, recorded multiple times.
 - **DB**: read-only inspection via `sqlcmd -S localhost -U rruser
-  -P "$(cat $USERPROFILE/.rr-sql-pwd)" -d rrv7-acme ...`.
+  -P "$(cat $USERPROFILE/.rr-sql-pwd)" -d RapidReconciler_Dev ...`.
   Full recipe in WORKFLOW.md.
 - **PowerShell quirks**: use
   `[System.IO.File]::WriteAllText(path, text,

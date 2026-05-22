@@ -214,7 +214,7 @@ def main() -> None:
         "_meta": {
             "captured":    SNAPSHOT_TS.isoformat() + "Z",
             "source":      "SQL Agent step log (mock)",
-            "db":          "rrv7-acme",
+            "db":          "RapidReconciler_Dev",
             "seed":        SEED,
             "cycles":      len(CYCLE_DATES),
             "rows":        len(all_rows),

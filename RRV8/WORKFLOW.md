@@ -107,7 +107,7 @@ As of the latest commit, V8 has:
   accounts, 12 subsidiaries, 2 business units. Fetched once on page
   load; period switching is in-memory (no re-fetch). Captured via
   `usp6getrinvaccountsummary` reading the `v6ui_raccountsummary`
-  view against `rrv7-acme`.
+  view against `RapidReconciler_Dev`.
 - **Period dropdown wired**: clicking shows all 13 known close dates,
   every one selectable (since the snapshot covers them all). The
   pill lives in the **page header** (next to the action buttons),
@@ -126,7 +126,7 @@ As of the latest commit, V8 has:
 - **Filters are exact, row-level**. `data/reconciliation.json`
   contains an `accountRows` array &mdash; one row per (period,
   company, business unit, object, subsidiary, currency) tuple,
-  captured from `usp6getrinvaccountsummary` against `rrv7-acme`.
+  captured from `usp6getrinvaccountsummary` against `RapidReconciler_Dev`.
   195 rows total (13 periods &times; 15 account combinations).
   - Each row carries its dimension tags plus the full variance
     breakdown (carryForward, glBatches, endOfDay, transactions,
@@ -225,7 +225,7 @@ As of the latest commit, V8 has:
   axis labels and a current-period emphasis on the last point. Stats
   (Current / 12-mo high / 12-mo low / Avg) computed in JS.
 - **SQL reference library**: 21 sproc DDL files in `sprocs/`, 23 view DDL
-  files in `views/`. Captured via `sp_helptext` against `rrv7-acme`.
+  files in `views/`. Captured via `sp_helptext` against `RapidReconciler_Dev`.
 - **Variance breakdown is a vertical reconciliation statement**
   (not a horizontal row of cards). Each component (Carry Forward,
   GL Batches, End of Day, Transactions, Cardex, Manual JEs) is a
@@ -535,7 +535,7 @@ in `data/reconciliation.json` (195 rows). To refresh that file:
 SQLCMD='/c/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/sqlcmd'
 PW=$(cat "$USERPROFILE/.rr-sql-pwd")
 
-"$SQLCMD" -S localhost -U rruser -P "$PW" -d rrv7-acme -y 0 \
+"$SQLCMD" -S localhost -U rruser -P "$PW" -d RapidReconciler_Dev -y 0 \
   -Q "SET NOCOUNT ON; SELECT * FROM v6ui_raccountsummary ORDER BY PeriodEnds, CompanyNumber, ObjectAccount, SubAccount FOR JSON PATH" \
   > .tmp-raw.json
 ```
@@ -578,7 +578,7 @@ PW=$(cat "$USERPROFILE/.rr-sql-pwd")
 NAME='usp6getrinvaccountsummary'   # or v6ui_raccountsummary, etc.
 KIND='sprocs'                      # or 'views'
 
-"$SQLCMD" -S localhost -U rruser -P "$PW" -d 'rrv7-acme' -h -1 -W -k 1 \
+"$SQLCMD" -S localhost -U rruser -P "$PW" -d 'RapidReconciler_Dev' -h -1 -W -k 1 \
   -Q "SET NOCOUNT ON; EXEC sp_helptext 'dbo.$NAME'" \
   > "RRV8/$KIND/$NAME.sql"
 ```
