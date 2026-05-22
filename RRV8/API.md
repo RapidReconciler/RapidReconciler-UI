@@ -79,7 +79,7 @@ without a proxy.
     {
       "ip": "rrtest-rrsqltest.getgsi.com:34536",  // per-DB agent URL + port
       "k":  "029ab26e227570e9499a97fd8c81fc2cc1cab9c7", // 32-hex per-DB key
-      "n":  "rrv7-acme",                          // DB name
+      "n":  "RapidReconciler_Dev",                          // DB name
       "i":  ["00010", "00050"],                   // companies user can see (Inventory)
       "p":  ["00010", "00050"],                   // companies (PO Receipts?)
       "t":  ["00010", "00050"],                   // companies (Transfers?)
@@ -434,7 +434,7 @@ GET /api/v2/inventory/reconciliation
 ```json
 {
   "asOfPeriod": "2016-08-27",
-  "instance": "rrv7-acme",
+  "instance": "RapidReconciler_Dev",
   "currency": "USD",
   "status": {
     "validation": "green",
@@ -529,7 +529,7 @@ GET /api/v2/inventory/reconciliation
 - `GET /api/v2/inventory/reconciliation/variance-drilldown?component=glBatches&period=2016-08-27` &mdash; per-component drilldown (per-batch rows for GL Batches from `v6_007_unpostedbatches`, per-account aggregate for components without a captured view yet). Replaces the static-snapshot fetch the page does today.
 - `GET /api/v2/system/status` &mdash; status indicator data, cached client-side.
 - **SSE** on `/api/v2/system/status/stream` &mdash; replaces the 60s `poll` XHR long-poll.
-- `GET /api/v2/periods?instance=rrv7-acme` &mdash; the period list, cached client-side via ETag.
+- `GET /api/v2/periods?instance=RapidReconciler_Dev` &mdash; the period list, cached client-side via ETag.
 
 ### Variance-component → source-view bindings
 
