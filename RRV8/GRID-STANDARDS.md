@@ -26,11 +26,13 @@ grids in the next commit so the codebase stays consistent.
   state pills like the DMAAI preload indicator) flow naturally after
   the title.
 - **Grid-state cluster** is pinned to the far right and contains
-  three pills, in this order:
-  1. **Excel pill** &mdash; one-click export of the analyst&rsquo;s
+  four elements, in this order:
+  1. **Search input** &mdash; case-insensitive substring search
+     across visible columns. See section 8.
+  2. **Excel pill** &mdash; one-click export of the analyst&rsquo;s
      current view (filters + visible columns + drag order).
-  2. **Columns pill** &mdash; opens the column chooser popover.
-  3. **Row count pill** &mdash; the rightmost element on the page;
+  3. **Columns pill** &mdash; opens the column chooser popover.
+  4. **Row count pill** &mdash; the rightmost element on the page;
      shows `N rows` / `N rows of M` / `Loading…`.
 
 CSS hook: wrap the pills in `<div class="grid-state-cluster">`.
@@ -165,33 +167,109 @@ attached through every header re-render because they live on the
 parent. Call it ONCE at page boot after the first
 `renderTableHeader()`.
 
-## 7. State key naming
+## 7. Column sort (click-to-toggle)
+
+- Click a column header &rarr; sort by that column ascending.
+- Click the **same** column again &rarr; toggle to descending.
+- Click a **different** column &rarr; reset to ascending on the new
+  column.
+- Two-state, not three-state. There&rsquo;s no &ldquo;unsorted&rdquo;
+  click; once an analyst commits to a column the sort persists until
+  they pick a different one. Reset-to-default is the column
+  chooser&rsquo;s **Reset to defaults** affordance (which can clear
+  sort alongside visibility + order if needed).
+- The active column shows a caret (`&#9650;` for asc, `&#9660;` for
+  desc) and its label paints in the brand blue. Inactive columns
+  stay neutral &mdash; no caret &mdash; so the header row reads
+  uncluttered.
+- Hover affordance: any sortable header label shifts to brand blue
+  on hover so the click target is discoverable.
+
+Drag-vs-sort coexistence: each `<th>` is both `draggable="true"`
+(for column reorder) and click-to-sort. The HTML5 drag spec
+suppresses the `click` event when a real drag occurs, so the two
+interactions don&rsquo;t collide without a manual guard.
+
+Comparator rules:
+- **Numeric** for columns with `tdClass: 'is-money'` or
+  `tdClass: 'is-num'` (money + integer-identifier columns).
+  `Number(value)`; non-finite coerces to 0.
+- **String** for everything else, using
+  `String.localeCompare(other, undefined, { numeric: true, sensitivity: 'base' })`.
+  The `numeric: true` flag handles natural-order sorting for
+  mixed-content identifier columns (e.g. `A10` before `A2` would be
+  wrong; `numeric: true` puts them in numeric order).
+- Null-safe: `null` / `undefined` / `''` all compare as 0 (numeric)
+  or empty string (string) without throwing.
+
+State + persistence:
+- `_state.sortKey` &mdash; active column key, or `null` for default
+  agent order.
+- `_state.sortDir` &mdash; `'asc'` | `'desc'`.
+- Saved to `localStorage` under `rrv8-<page>-sort-v1`.
+- `loadSort` is forward-compatible: unknown keys clear back to the
+  default (`{ key: null, dir: 'asc' }`).
+
+Implementation hook: `wireColumnSort()` attaches a delegated
+`click` listener to the `<tr>` of the table header. Same pattern
+as `wireColumnDrag()`; call it ONCE at page boot after the first
+`renderTableHeader()`.
+
+## 8. Search (case-insensitive substring)
+
+- A compact text input sits leftmost in the grid-state cluster.
+- Filters the visible rows by case-insensitive substring match
+  against any **visible** column. Hidden columns are excluded so
+  the search feels tied to what the analyst is actually looking at.
+- 150ms debounce on input so a fast typist doesn&rsquo;t pay for a
+  render per keystroke.
+- ESC inside the input clears the search and re-renders.
+- A small &times; button appears inside the input when there&rsquo;s
+  a query; clicking it clears the field and re-focuses the input.
+- Search is a per-grid &ldquo;find&rdquo; operation, NOT a scope narrow.
+  It applies AFTER `filteredRows()` and the sort, inside
+  `renderDetails`. The Start Here cards, KPI strip, and active-filter
+  banner are unaffected &mdash; they reflect the un-searched scope.
+- The row-count pill DOES reflect the search (so the analyst sees
+  &ldquo;14 rows&rdquo; when the search narrows from 264).
+
+Placeholder: `Search rows…`. State lives in `_state.gridSearch`;
+ephemeral per session (not persisted).
+
+Implementation hook: `wireGridSearch()` attaches input + keydown +
+clear-button listeners. Call it ONCE at page boot. The filter
+helper `searchFilter(rows, query)` walks `visibleColumns()` and
+returns the matching subset.
+
+## 9. State key naming
 
 For per-page persistence, use the pattern `rrv8-<page>-<feature>-v1`:
 
 - `rrv8-tx-columns-v1` &mdash; Transactions, visibility
 - `rrv8-tx-col-order-v1` &mdash; Transactions, drag order
+- `rrv8-tx-sort-v1` &mdash; Transactions, active sort column + dir
 - (future) `rrv8-recon-columns-v1` &mdash; Reconciliation, visibility
 
 The `-v1` suffix lets us migrate the schema later by bumping to
 `-v2` and translating in `loadX`.
 
+Search state is intentionally NOT persisted &mdash; it&rsquo;s a
+per-visit &ldquo;find,&rdquo; not a saved preference.
+
 ---
 
 ## Pages applying this standard
 
-| Page | Header layout | `.grid-pill` cluster | Drag-to-reorder | Notes |
-|---|---|---|---|---|
-| `inventory-transactions.html` (Details grid) | ✓ | ✓ | ✓ | Reference implementation |
-| `inventory-reconciliation.html` (variance Preview tables) | &mdash; | &mdash; | &mdash; | Different surface (modal); revisit when modal grids get standardized |
+| Page | Header layout | `.grid-pill` cluster | Drag-to-reorder | Click-to-sort | Search | Notes |
+|---|---|---|---|---|---|---|
+| `inventory-transactions.html` (Details grid) | ✓ | ✓ | ✓ | ✓ | ✓ | Reference implementation |
+| `inventory-reconciliation.html` (variance Preview tables) | &mdash; | &mdash; | &mdash; | &mdash; | &mdash; | Different surface (modal); revisit when modal grids get standardized |
 
 ## Conventions we&rsquo;ve NOT yet decided
 
 Leaving as open questions; pick the answer when the first page
 needs it:
 
-- **Sortable columns**: click header to sort ascending / descending /
-  unsorted (3-state). Visual indicator (caret) on the active column.
 - **Column resize**: drag the right edge of a column to widen /
   narrow. Persist per-column width.
 - **Sticky header**: thead pins to the top of the scroll container
