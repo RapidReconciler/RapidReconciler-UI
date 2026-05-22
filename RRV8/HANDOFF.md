@@ -5,8 +5,10 @@ session. Paste the **Resume prompt** section as the first message in
 the new session; the rest of this file is context that prompt points
 the new session at.
 
-**Updated**: 2026-05-20, after PR #89 (grid standards + Start Here
-area + headless analyzer + agent jar findings).
+**Updated**: 2026-05-22, after the DMAAI worklist page rebuild
+(analyzer pattern detector ported to Python, finance-facing copy,
+GSI logo, per-column grid filter, sidebar Modules collapse, agent
+endpoints + SQL tables specced).
 
 ---
 
@@ -39,74 +41,66 @@ area + headless analyzer + agent jar findings).
 
 ### In-flight design direction (queued for next session)
 
-**Top of the list: rebuild `accounting-dmaais.html` as the
-analyzer-worklist surface.** The page currently in the repo
-(committed) is a placeholder &mdash; a universe-view grid with a
-worked/note model from an earlier design direction we abandoned
-mid-session. The real surface follows the JDE DMAAI analyzer&rsquo;s
-worklist workbook (a copy is in the owner&rsquo;s Downloads:
-`JDE DMAAIs Analysis 2026-05-22.xlsx`).
+**DMAAI worklist page is now built** &mdash; `accounting-dmaais.html`
+was rewritten as the analyzer worklist surface (no longer a
+placeholder universe-view grid). What landed in this chunk:
 
-**Inputs to read at session start:**
+- Pattern detection ported into Python: `RRV8/scripts/derive-dmaai-analysis.py`
+  reads `RRV8/data/v-integrity-jde-aais.json` (integrity report 0),
+  runs the analyzer&rsquo;s detectors (`nz`, `glsub`, `mc`, `unrec`,
+  `itnz`), and emits `RRV8/data/dmaai-analysis-latest.json`.
+  Scoped to the JWT&rsquo;s allowed companies (00010, 00050 in demo).
+- Page layout: headline strip (lead with "N configurations flagged for
+  your review", finance-friendly copy &mdash; no F4095 / "patterns"
+  jargon), collapsible caveat callout, page-scope Company filter pill,
+  5-tab pill nav (Analysis / Sales / Inventory / Manufacturing /
+  Purchasing) with tab counts that reflect *remaining work*, not
+  static totals.
+- Worklist tables: FIX FIRST + ASK CUSTOMER with inline Answer
+  dropdown (Intended / Needs review / Fixed), Decision textarea, and a
+  derived Status pill (Open / In Progress / Resolved / Closed by
+  intent / Still Flagged). Per-finding "Configs" row-count chip; the
+  Reference column is a clickable link that switches to the finding&rsquo;s
+  module tab and narrows the grid via `findingFocus`.
+- Module tabs: V8 grid with leading Status chip column, status filter
+  pill (All / Hide intended / Open only), and **per-column value
+  filter** (the new grid standard &mdash; see GRID-STANDARDS.md &sect;9).
+- Save/load wired through `rrFetch` to PROD-TODO endpoints
+  (`/inventory/integrity/aai-analysis-latest`,
+  `/inventory/integrity/aai-responses`,
+  `/inventory/integrity/aai-save-responses`); demo mode reads the
+  derived JSON. Endpoint contracts pinned in `RRV8/API.md` and
+  `docs/plans/dmaai-page-overlay-table.md` &sect;5.
+- Pattern rules: **DocType IT (Inventory Transfer) net-zero is
+  expected (wash entries) &mdash; exempt from the `nz` finding.** The
+  new `itnz` pattern flags the inverse: IT pairs that fail to net to
+  zero (real setup error).
+- Topbar: GSI logo + active DB identifier. Sidebar: "Scope" label,
+  "Modules" section with click-to-expand groups (state persisted as
+  `rrv8-sidebar-modules-expanded-v1`). No GSI logo in sidebar &mdash;
+  it flatten-whites on the navy background.
 
-1. `docs/plans/dmaai-page-overlay-table.md` &mdash; the canonical
-   spec for the SQL table, JSON sidecar shape, and the build
-   sequence. Read this first.
-2. `AnalysisGuides/dmaai-analysis.md` &mdash; the analyzer
-   process (what it does + how it categorizes findings).
-3. The sample workbook in the owner&rsquo;s Downloads &mdash;
-   the actual output shape the new page renders from.
+### Next-session queue
 
-**Build sequence** (full version in the spec doc):
-
-- Python extraction script
-  (`RRV8/scripts/extract-dmaai-analysis.py`) reads the analyzer
-  xlsx, emits `RRV8/data/dmaai-analysis-latest.json`. Owner
-  can&rsquo;t run Python locally; ship the JSON alongside the
-  script.
-- Strip the placeholder grid out of `accounting-dmaais.html`.
-- Add **pill tab nav** (5 tabs: Analysis / Sales / Inventory /
-  Manufacturing / Purchasing). Default open: Analysis.
-- **Headline strip** under the page header: title + subline +
-  source / date / total rows + caveat callout.
-- **Analysis tab**: FIX FIRST table + ASK THE CUSTOMER table +
-  IGNORE FOR NOW explainer. Each row has an inline `Answer`
-  dropdown (Intended / Needs review / Fixed) + `Decision` text
-  + a `Status` pill.
-- **Module tabs**: V8 grid scoped to each module&rsquo;s AAI
-  tables (Sales = 4220 / 4230 / 4240, Inventory = 4122 / 4124 /
-  4134 / 4136 / 4162 / 4172, Manufacturing = 3110 / 3130,
-  Purchasing = 4126 / 4128 / 4310 / 4365 / 4385 / 4400).
-- **Local response state** `_dmaaiResponses` keyed by
-  `findingId`. Optimistic update on every Answer / Decision
-  change.
-- **Save**: PROD-TODO POST to
-  `/inventory/integrity/aai-save-responses`. Demo persists to
-  `RRV8/data/dmaai-responses.json` so the round-trip simulates
-  the SQL store.
-
-**Decisions already pinned (don&rsquo;t re-litigate):**
-
-- Show only the latest run on the page. No history picker in V1.
-- `AnalysisRunId` = ISO timestamp (multiple runs per day OK).
-- Q&A is fixed three-value Answer + free-text Decision + Status
-  pill. Not free-form questionnaire.
-- Data source = JSON sidecar produced by the analyzer (NOT
-  in-browser SheetJS parsing of the xlsx). The xlsx stays as the
-  human-readable artifact; the JSON is the machine artifact V8
-  consumes. Analyzer guide gets updated separately to mention
-  the JSON output.
-- Analyzer reads integrity report **0** (`v_integrity_jde_aais`),
-  not report 2 as the older guide implied.
-
-### Side queues (not blocking the DMAAI rebuild)
-
+- **Agent dev work**: implement the three DMAAI endpoints + two SQL
+  tables specified in `docs/plans/dmaai-page-overlay-table.md`.
+  Pattern detector reference impl: `derive-dmaai-analysis.py`
+  `detect_findings()`. Carry-forward join keyed on
+  `(IssueType, Company, Scope, GLClass)`.
+- **`beforeunload` guard** on the DMAAI page so the analyst gets
+  warned when closing with unsaved responses (the save bar is the
+  only signal today).
+- **Roll the GSI-logo topbar pattern + sidebar "Modules" collapse +
+  per-column grid filter** onto `inventory-reconciliation.html`
+  and `inventory-transactions.html` for consistency. (DMAAI is the
+  reference implementation for all three.)
 - **Sidebar extraction** &mdash; the V8 sidebar (filters + nav +
-  status panel) is currently inlined into every page. Plan in
-  `docs/plans/sidebar-extraction.md` &mdash; do as a separate PR
-  after the DMAAI work lands so the diff is bisectable.
-- **Version subtitle** (`Version 8.0` under each page title from
-  the `SQLSourceControl Database Revision` extended property) &mdash;
+  status panel) is still inlined into every page. Plan in
+  `docs/plans/sidebar-extraction.md` &mdash; the per-page divergence
+  is widening (DMAAI now has module-collapse logic the others lack);
+  a real extraction is overdue.
+- **Version subtitle** (`Version 8.0` under each page title from the
+  `SQLSourceControl Database Revision` extended property) &mdash;
   parked until the new agent ships and exposes it on
   `/inventory/status`. Notes saved in
   `project_db_version_subtitle_pending.md` memory.

@@ -142,6 +142,27 @@ central agent and has no HTTP controllers.
 | OrdersController, AsOfController, LineAnalysisController, CommonUomController | &mdash; | various | Not yet wired by V8; mined but not exercised. |
 | admin/AdminCompaniesController, AdminGeneralController, AdminInventoryOffsetsController, AdminUsersController | &mdash; | various | Admin module endpoints; out of scope for the analyst pages. |
 
+### Planned &mdash; DMAAI worklist endpoints (PROD-TODO)
+
+The DMAAI page (`RRV8/accounting-dmaais.html`) drives a recurring
+audit workflow that needs server-side persistence. The analysis itself
+is derived from `v_integrity_jde_aais` (integrity report 0) plus
+pattern detection in code; the response state lives in a new SQL table.
+The page currently calls the endpoints below via `rrFetch`; in dev
+they 404 and the page falls back to a snapshot. Implement these on
+the per-DB data-services agent.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET  | `/inventory/integrity/aai-analysis-latest` | Runs the analyzer pattern detection over the current `v_integrity_jde_aais` rowset for the JWT's allowed companies and returns the worklist JSON. Response shape: see `docs/plans/dmaai-page-overlay-table.md` &sect;4 (`{_meta, fixFirst, askCustomer, ignoreBlurb, modules}`). The agent caches the run row in `dbo.RIntegrityDMAAIAnalysis` (one row per run, keyed by `AnalysisRunId`) so the response endpoint can join carry-forward responses cheaply. Re-running is idempotent within a window (configurable; default 1 hour). |
+| GET  | `/inventory/integrity/aai-responses` | Returns persisted analyst responses for the latest run by default, or `?runId={iso}` for a specific historical run. Body: `{analysisRunId, responses: [DmaaiResponse, ...]}`. The analyzer's carry-forward step joins prior responses to the current run by semantic identity `(IssueType, Company, Scope, GLClass)` and bumps `Status` to `Still Flagged` when a previously-Resolved finding reappears. |
+| POST | `/inventory/integrity/aai-save-responses` | Persists analyst answers to `dbo.RIntegrityDMAAIResponse`. Body: `{analysisRunId, responses: [DmaaiResponse, ...]}`. DTO field naming is **camelCase first-letter-lowercase** (Jackson gotcha): `analysisRunId / findingId / issueType / company / scope / glClass / answer / decision / status / lastModifiedBy / lastModifiedDate`. Upsert by `(analysisRunId, findingId)`. |
+
+SQL table DDL + the JSON sidecar contract are pinned in
+`docs/plans/dmaai-page-overlay-table.md`. Don't change the field
+names without updating both ends &mdash; Jackson silently drops
+unknown keys (see *Critical gotchas* below).
+
 CORS is wide open: `Access-Control-Allow-Origin: *`. Server header is
 `Apache-Coyote/1.1` (the Spring Boot data-services child).
 `X-Application-Context: application:production-https:<port>` confirms the
