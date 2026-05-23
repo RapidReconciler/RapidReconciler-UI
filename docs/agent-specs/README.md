@@ -1,43 +1,35 @@
-# Agent endpoint specs &mdash; staging area
+# docs/agent-specs/ &mdash; MOVED
 
-This folder holds **planned-endpoint specs for the RR data-services
-agent** that V8 needs but the current agent doesn&rsquo;t yet expose.
-Each file is a self-contained brief the agent team (or a future
-contributor) can read cold and implement against.
+Planned-endpoint specs for the RR data-services agent have moved to
+their permanent home in the
+[`RapidReconciler-Agent`](https://github.com/RapidReconciler/RapidReconciler-Agent)
+repo:
 
-## Why this folder exists
+**[github.com/RapidReconciler/RapidReconciler-Agent/tree/main/specs](https://github.com/RapidReconciler/RapidReconciler-Agent/tree/main/specs)**
 
-Until the dedicated `RapidReconciler-Agent` repo is created (see
-[`project_agent_repo_plan`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/project_agent_repo_plan.md))
-these specs live here in the V8 repo as a staging area. When the
-agent repo exists, the contents of this folder migrate to its
-`specs/` directory verbatim &mdash; the format is intentionally
-copy-paste compatible.
+Why: when this folder was created, the agent repo didn't exist. Specs
+lived here as a staging area with a documented intent to migrate. The
+agent repo now exists (created 2026-05-23), so specs live there
+alongside the source they describe.
 
-## Conventions
+## What's still here
 
-Every spec carries:
+- This stub README, so existing links in
+  [`RRV8/HANDOFF.md`](../../RRV8/HANDOFF.md) and elsewhere still
+  resolve.
+- [`reconciliation-rows.md`](reconciliation-rows.md) &mdash; a thin
+  redirect to the new location.
 
-- **Status** &mdash; `Ready to implement`, `Needs design`, `Blocked`,
-  or `Shipped`.
-- **Use case** &mdash; the V8 feature that needs this endpoint and why
-  the current surface doesn&rsquo;t cover it.
-- **Request DTO** &mdash; existing or new, with Jackson field naming
-  spelled out.
-- **Response DTO** &mdash; same.
-- **Controller method (Spring)** &mdash; complete Java, paste-ready.
-- **Data dependencies** &mdash; sprocs / views / repositories the
-  method calls.
-- **Demo reference** &mdash; the captured snapshot under
-  `RRV8/data/*.json` that mirrors what the response should produce.
-- **Wiring on the V8 side** &mdash; what fetches it today, and how
-  V8 degrades when the endpoint isn&rsquo;t live yet.
+## Adding new specs
 
-## Current specs
+Add new specs directly to
+[`RapidReconciler-Agent/specs/`](https://github.com/RapidReconciler/RapidReconciler-Agent/tree/main/specs)
+following the format documented in that folder's README. Don't add
+new files here.
 
-| File | Status | Blocking V8 feature |
-|---|---|---|
-| [reconciliation-rows.md](reconciliation-rows.md) | Ready to implement | Reconciliation page → Variance contributors card (BU/Account/Subsidiary breakdown) |
+## When this stub can go away
 
-When you add another, mirror the section structure in
-`reconciliation-rows.md` so the format stays consistent.
+When every reference in this repo points at the agent repo specs
+folder directly. Search this repo for `docs/agent-specs` to find
+remaining link targets; once they're all updated, this folder can be
+deleted.
