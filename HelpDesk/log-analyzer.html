@@ -806,6 +806,9 @@ const AGENT_RULES = [
   { name: 'Health probe during startup (expected)',
     match: /HealthServiceImpl.*Could not load health endpoint.*Connection refused/i, severity: 'noise',
     note: 'These ERROR lines are normal while an instance is still starting &mdash; the agent polls the health endpoint before the instance HTTPS listener is up. Concerning only if they continue indefinitely with no matching "Started ClientServicesApplication".' },
+  { name: 'Couldn&rsquo;t reach the old version to shut it down',
+    match: /HealthServiceImpl.*Could not access shutdown endpoint.*Connection refused/i, severity: 'noise',
+    note: 'The agent tried to ask the old version to shut down cleanly, but it was already gone. This is the EXPECTED outcome during most deploys &mdash; the failed connection IS the confirmation that the old version already stopped. Concerning only if it happens repeatedly when no deploy is in progress.' },
   { name: 'Instance startup polling',
     match: /\bChecking if instance is up attempt number\b/i, severity: 'noise' },
   { name: 'VALC connection attempt',
@@ -895,6 +898,12 @@ const AGENT_RULES = [
   { name: 'Downloaded file looks corrupted',
     match: /(?:SHA-?1.*?mismatch|integrity.*?fail|checksum.*?fail|file.*?corrupt)/i, severity: 'crit',
     note: 'A file VALC sent arrived at the agent but didn&rsquo;t match the expected checksum &mdash; either the transfer was interrupted or the copy on VALC is stale. The agent normally deletes the bad copy and re-requests; if you see this repeatedly for the same file, VALC has a bad copy and engineering needs to re-upload.' },
+  { name: 'VALC sent an update for something the agent doesn&rsquo;t have yet',
+    match: /ValcMessageListener.*Could not interpret JMS message/i, severity: 'flag',
+    note: 'VALC sent an instruction referencing a record (a user, tab name, etc.) the agent&rsquo;s local database doesn&rsquo;t have yet. Usually a timing issue &mdash; VALC created the record but the create-sync to this agent hasn&rsquo;t happened. Most of the time the next sync resolves it. Concerning if you see the same message repeat for more than a few minutes after a deploy.' },
+  { name: 'Database sync script returned the wrong row count',
+    match: /DatabaseManagerServiceMsSqlImpl.*Script FAILED to execute.*Incorrect result size/i, severity: 'flag',
+    note: 'The agent ran a sync script against the customer&rsquo;s SQL Server and got a different number of rows than expected (usually 0 rows when expecting 1). Same root cause as "VALC sent an update for something the agent doesn&rsquo;t have yet" &mdash; just visible from the database side instead of the JMS side. Self-corrects on the next successful sync. Investigate if persistent.' },
   { name: 'ERROR level',
     match: /\bERROR\b/, severity: 'crit',
     note: 'Agent logged an explicit error. Capture surrounding context (10-20 lines before) and email rrsupport.' },
@@ -1070,24 +1079,37 @@ function analyze(mode) {
     lines.push(l);
   }
 
-  // Classify. Matched-rule lines bucket by rule name (all 50
-  // HealthServiceImpl errors collapse into one row). Unrecognized
-  // lines bucket by their NORMALIZED form so a single unknown error
-  // spamming the log 200x is one row, not 200 — but two genuinely
-  // different unrecognized errors still get their own rows.
+  // Classify. Most matched-rule lines bucket by rule name (all 50
+  // HealthServiceImpl health-probe errors collapse into one row).
+  //
+  // EXCEPTION — the generic level catch-alls ("ERROR level",
+  // "WARN level") and the synthetic "Unrecognized" rule all
+  // sub-bucket by their NORMALIZED form. Without that, 44
+  // "syncDatabaseJobName: Script FAILED" lines AND 44 "Could not
+  // interpret JMS message" lines AND 12 other miscellaneous errors
+  // all collapse into one useless "ERROR level (100)" row with no
+  // way to see what's actually different. With per-signature
+  // sub-bucketing, each distinct error pattern gets its own row,
+  // its own count, and its own header — same trick "Unrecognized"
+  // already uses.
+  const SUB_BUCKET_RULES = new Set(['Unrecognized', 'ERROR level', 'WARN level']);
+  const SUB_BUCKET_PREFIX = {
+    'Unrecognized': 'Unrecognized',
+    'ERROR level':  'Unhandled ERROR',
+    'WARN level':   'Unhandled WARN'
+  };
   const buckets = new Map();
   for (const line of lines) {
     const { rule } = classifyLine(line, rules);
     let key, useRule;
-    if (rule.name === 'Unrecognized') {
+    if (SUB_BUCKET_RULES.has(rule.name)) {
       const norm = normalizeForGrouping(line);
-      key = 'Unrecognized::' + norm;
-      // Build a display-friendly per-normalized rule so the header
-      // shows a snippet of what's unrecognized instead of a generic
-      // "Unrecognized" pile.
+      key = rule.name + '::' + norm;
+      const prefix = SUB_BUCKET_PREFIX[rule.name];
       useRule = {
-        name: 'Unrecognized: ' + norm.slice(0, 100) + (norm.length > 100 ? '…' : ''),
-        severity: 'flag'
+        name: prefix + ': ' + norm.slice(0, 100) + (norm.length > 100 ? '…' : ''),
+        severity: rule.severity,
+        note: rule.note
       };
     } else {
       key = rule.name;
