@@ -1,0 +1,390 @@
+/*
+ * RRV8 — shared sidebar mount
+ *
+ * Single source of truth for the V8 left-rail. Replaces the inline
+ * <aside class="sidebar"> markup that used to live in every page.
+ *
+ * Usage (each page calls once at the top of its IIFE):
+ *
+ *   RRV8.mountSidebar({
+ *     activePage:    'reconciliation' | 'transactions' | 'dmaais',
+ *     hasPeriodFilter: true,        // adds the "Period" filter row
+ *                                   // above Currency on Reconciliation
+ *   });
+ *
+ * What the mount does:
+ *   - Inserts the <aside class="sidebar"> DOM with stable IDs.
+ *   - Hydrates the pin state from rrv8-sidebar-pinned-v1 BEFORE any
+ *     paint (avoids the flash of unpinned state).
+ *   - Wires the pin button + module collapse toggles. Both persist
+ *     their state to localStorage.
+ *   - Marks the active page's nav link with .is-active.
+ *
+ * What it deliberately does NOT do — these stay in each page's IIFE
+ * because they depend on per-page data and rendering callbacks:
+ *   - Filter row click → opening the filter-popover with values.
+ *   - User chip click → user-menu popover.
+ *   - Status row click → status drawer.
+ *   - Filter row visual state (dot + status text) updates as data
+ *     loads or selections change.
+ *
+ * The page just calls mountSidebar() first, then continues to find
+ * elements by ID (e.g. document.querySelectorAll('.sidebar-filter'))
+ * exactly as before.
+ */
+(function (global) {
+  'use strict';
+
+  const PIN_LS_KEY     = 'rrv8-sidebar-pinned-v1';
+  const MODULES_LS_KEY = 'rrv8-sidebar-modules-expanded-v1';
+
+  // Hydrate the pin class on whichever element exists. sidebar.js
+  // is loaded in <head>, so document.body may be null when this
+  // module first evaluates. Apply to <html> as a temporary host so
+  // the CSS body.has-pinned-sidebar selector still matches once
+  // body parses — then migrate the class onto body in mountSidebar().
+  function hydratePinClass() {
+    try {
+      if (localStorage.getItem(PIN_LS_KEY) !== '1') return;
+      if (document.body) {
+        document.body.classList.add('has-pinned-sidebar');
+      } else if (document.documentElement) {
+        document.documentElement.classList.add('has-pinned-sidebar');
+      }
+    } catch (_) {}
+  }
+  hydratePinClass();
+
+  function loadExpandedModules() {
+    try {
+      const raw = localStorage.getItem(MODULES_LS_KEY);
+      const arr = raw ? JSON.parse(raw) : [];
+      return new Set(Array.isArray(arr) ? arr : []);
+    } catch (_) { return new Set(); }
+  }
+  function saveExpandedModules(set) {
+    try { localStorage.setItem(MODULES_LS_KEY, JSON.stringify(Array.from(set))); }
+    catch (_) {}
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, m =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m])
+    );
+  }
+
+  function html(strings, ...values) {
+    // Tiny tagged-template helper. Concatenates string parts with
+    // interpolated values in order so `${cls(...)}` etc. work.
+    let out = '';
+    strings.forEach((s, i) => {
+      out += s;
+      if (i < values.length) out += values[i];
+    });
+    return out;
+  }
+
+  function buildSidebarHtml(opts) {
+    const activePage = opts.activePage || '';
+    const hasPeriod  = !!opts.hasPeriodFilter;
+
+    // Hydrate persisted state UP FRONT so it lives in the initial
+    // template — no post-mount class swaps, no flicker.
+    const expanded = loadExpandedModules();
+    const expCls = (id) => expanded.has(id) ? ' is-expanded' : '';
+    const expAria = (id) => expanded.has(id) ? 'true' : 'false';
+    const dmaaiSeed = seedDmaaiStateFromSession();
+    const dotCls = dmaaiSeed.state ? ' is-' + dmaaiSeed.state : '';
+    const dotTitle = dmaaiSeed.title;
+
+    // is-active classes per page
+    const cls = (page) => activePage === page ? ' is-active' : '';
+    const isInventoryPage = activePage === 'reconciliation' || activePage === 'transactions';
+
+    // The period filter row only renders on Reconciliation. Its
+    // popover/click wiring is page-specific (in the IIFE).
+    const periodRow = hasPeriod ? html`
+      <button class="sidebar-filter" type="button" id="js-period-sidebar-btn">
+        <span class="sidebar-filter-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+        </span>
+        <span class="sidebar-filter-dot"></span>
+        <span class="sidebar-filter-text">Period</span>
+        <span class="sidebar-filter-status" id="js-period-sidebar-status">&mdash;</span>
+      </button>` : '';
+
+    return html`
+<aside class="sidebar">
+  <div class="sidebar-brand">
+    <button class="sidebar-user" type="button" id="js-user-btn" aria-haspopup="menu" title="User menu">
+      <span class="sidebar-user-avatar-wrap">
+        <span class="sidebar-user-avatar">E</span>
+        <span class="sidebar-user-status" title="Online"></span>
+      </span>
+      <span class="sidebar-user-text">
+        <span class="sidebar-user-name" id="js-user-name">Welcome, Ed</span>
+        <span class="sidebar-user-db" id="js-user-db">RapidReconciler_Dev</span>
+      </span>
+      <svg class="sidebar-user-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
+    </button>
+    <button class="sidebar-pin" id="js-sidebar-pin" type="button" title="Pin sidebar open" aria-label="Pin sidebar open" aria-pressed="false">
+      <svg class="sidebar-pin-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="12" y1="17" x2="12" y2="22"></line>
+        <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"></path>
+      </svg>
+    </button>
+  </div>
+
+  <!-- Scope (global filter rail) -->
+  <div class="sidebar-filters" id="js-sidebar-filters">
+    <div class="sidebar-filters-head">
+      <span class="sidebar-filters-label">Scope</span>
+      <button class="sidebar-filters-clear" type="button" id="js-filter-clear">Reset</button>
+    </div>
+    ${periodRow}
+    <button class="sidebar-filter" type="button" data-filter="currencies">
+      <span class="sidebar-filter-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+      </span>
+      <span class="sidebar-filter-dot"></span>
+      <span class="sidebar-filter-text">Currency</span>
+      <span class="sidebar-filter-status">All</span>
+    </button>
+    <button class="sidebar-filter" type="button" data-filter="companies">
+      <span class="sidebar-filter-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>
+      </span>
+      <span class="sidebar-filter-dot"></span>
+      <span class="sidebar-filter-text">Company</span>
+      <span class="sidebar-filter-status">All</span>
+    </button>
+    <button class="sidebar-filter" type="button" data-filter="businessUnits">
+      <span class="sidebar-filter-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h7v7H3z"/><path d="M14 3h7v7h-7z"/><path d="M14 14h7v7h-7z"/><path d="M3 14h7v7H3z"/></svg>
+      </span>
+      <span class="sidebar-filter-dot"></span>
+      <span class="sidebar-filter-text">Business Unit</span>
+      <span class="sidebar-filter-status">All</span>
+    </button>
+    <button class="sidebar-filter" type="button" data-filter="objects">
+      <span class="sidebar-filter-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+      </span>
+      <span class="sidebar-filter-dot"></span>
+      <span class="sidebar-filter-text">Account</span>
+      <span class="sidebar-filter-status">All</span>
+    </button>
+    <button class="sidebar-filter" type="button" data-filter="subsidiaries">
+      <span class="sidebar-filter-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><circle cx="4.5" cy="6" r="2"/><circle cx="19.5" cy="6" r="2"/><circle cx="4.5" cy="18" r="2"/><circle cx="19.5" cy="18" r="2"/></svg>
+      </span>
+      <span class="sidebar-filter-dot"></span>
+      <span class="sidebar-filter-text">Subsidiary</span>
+      <span class="sidebar-filter-status">All</span>
+    </button>
+  </div>
+
+  <!-- Modules (main nav) -->
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Modules</div>
+    <div class="sidebar-module${expCls('inventory')}" data-module="inventory">
+      <button type="button" class="sidebar-nav-item${isInventoryPage ? ' is-active' : ''}" data-module-toggle="inventory" aria-expanded="${expAria('inventory')}">
+        <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"></path><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
+        <span class="sidebar-nav-text">Inventory</span>
+        <svg class="sidebar-nav-caret" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 6 8 10 12 6"/></svg>
+      </button>
+      <div class="sidebar-nav-children">
+        <a href="inventory-reconciliation.html" class="sidebar-nav-child${cls('reconciliation')}" data-nav-page="reconciliation">Reconciliation</a>
+        <a href="inventory-transactions.html"   class="sidebar-nav-child${cls('transactions')}"   data-nav-page="transactions">Transactions</a>
+        <a href="#" class="sidebar-nav-child">As Of</a>
+        <a href="#" class="sidebar-nav-child">Roll Forward</a>
+        <a href="#" class="sidebar-nav-child">Integrity</a>
+      </div>
+    </div>
+    <div class="sidebar-module${expCls('in-transit')}" data-module="in-transit">
+      <button type="button" class="sidebar-nav-item" data-module-toggle="in-transit" aria-expanded="${expAria('in-transit')}">
+        <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+        <span class="sidebar-nav-text">In Transit</span>
+      </button>
+    </div>
+    <div class="sidebar-module${expCls('po-receipts')}" data-module="po-receipts">
+      <button type="button" class="sidebar-nav-item" data-module-toggle="po-receipts" aria-expanded="${expAria('po-receipts')}">
+        <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg>
+        <span class="sidebar-nav-text">PO Receipts</span>
+      </button>
+    </div>
+    <div class="sidebar-module${expCls('admin')}" data-module="admin">
+      <button type="button" class="sidebar-nav-item" data-module-toggle="admin" aria-expanded="${expAria('admin')}">
+        <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+        <span class="sidebar-nav-text">Admin</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Accounting -->
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Accounting</div>
+    <a href="accounting-dmaais.html" class="sidebar-nav-item${cls('dmaais')}" data-nav-page="dmaais">
+      <span class="sidebar-nav-icon-wrap">
+        <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h12a4 4 0 0 1 4 4v12H8a4 4 0 0 1-4-4Z"/><path d="M4 4v12a4 4 0 0 0 4 4"/><line x1="9" y1="9" x2="15" y2="9"/><line x1="9" y1="13" x2="15" y2="13"/></svg>
+        <span class="sidebar-nav-dot${dotCls}" id="js-dmaai-dot" title="${escapeHtml(dotTitle)}"></span>
+      </span>
+      <span class="sidebar-nav-text">DMAAIs</span>
+    </a>
+  </div>
+
+  <!-- Status panel -->
+  <div class="sidebar-status">
+    <div class="sidebar-status-row">
+      <span class="sidebar-status-dot is-green" id="js-validation-dot" title="Inventory Validation"></span>
+      <span class="sidebar-status-label">Inventory Validation</span>
+    </div>
+    <button class="sidebar-status-row" id="js-status-row" type="button" title="System Status &mdash; click for the runbook drawer">
+      <span class="sidebar-status-dot" id="js-status-dot"></span>
+      <span class="sidebar-status-label">System Status</span>
+    </button>
+  </div>
+</aside>`;
+  }
+
+  function wirePin() {
+    const pin = document.getElementById('js-sidebar-pin');
+    if (!pin) return;
+    pin.setAttribute('aria-pressed', document.body.classList.contains('has-pinned-sidebar') ? 'true' : 'false');
+    pin.addEventListener('click', () => {
+      const pinned = !document.body.classList.contains('has-pinned-sidebar');
+      document.body.classList.toggle('has-pinned-sidebar', pinned);
+      pin.setAttribute('aria-pressed', pinned ? 'true' : 'false');
+      try { localStorage.setItem(PIN_LS_KEY, pinned ? '1' : '0'); } catch (_) {}
+    });
+  }
+
+  function wireModuleToggles() {
+    // Initial .is-expanded classes were baked into the template by
+    // mountSidebar() so there's no first-paint flicker. We just need
+    // to attach the click handlers + keep the set in sync.
+    const expanded = loadExpandedModules();
+    document.querySelectorAll('.sidebar-module').forEach(el => {
+      const id  = el.dataset.module;
+      const btn = el.querySelector('[data-module-toggle]');
+      if (!btn) return;
+      btn.addEventListener('click', () => {
+        const open = !el.classList.contains('is-expanded');
+        el.classList.toggle('is-expanded', open);
+        btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+        if (open) expanded.add(id); else expanded.delete(id);
+        saveExpandedModules(expanded);
+      });
+    });
+  }
+
+  /**
+   * Paint the DMAAIs preload status dot on the sidebar's DMAAIs nav
+   * row. Persistent across page navigation — the underlying cache
+   * (sessionStorage `rrv8.scope.v1.*.dmaais`) survives reloads so
+   * the indicator reads "ready" on every page once the preload has
+   * happened anywhere in the session.
+   *
+   * @param {string} state — 'loading' | 'ready' | 'error' | 'none'
+   * @param {{count?:number, message?:string}} info — optional metadata
+   */
+  function setDmaaiStatus(state, info) {
+    const dot = document.getElementById('js-dmaai-dot');
+    if (!dot) return;
+    dot.classList.remove('is-loading', 'is-ready', 'is-error');
+    if (state === 'loading') {
+      dot.classList.add('is-loading');
+      dot.title = 'Loading the JDE DMAAI universe…';
+    } else if (state === 'ready') {
+      dot.classList.add('is-ready');
+      const n = info && info.count;
+      dot.title = 'DMAAIs loaded' + (n ? ' · ' + n.toLocaleString('en-US') + ' rows' : '') + '. Per-row Export will include them in the analyzer workbook.';
+    } else if (state === 'error') {
+      dot.classList.add('is-error');
+      const msg = (info && info.message) ? ' — ' + info.message : '';
+      dot.title = 'DMAAIs unavailable. Export will still produce a workbook, but without the DMAAI universe the analyzer\'s AAI-pattern classification will be less precise.' + msg;
+    } else {
+      dot.title = 'DMAAIs preload status';
+    }
+  }
+
+  // Best-effort scan of sessionStorage for a cached DMAAI payload from
+  // any (mode, db) tuple. Used both to seed the initial template
+  // (so the dot paints in its final state on first render — no
+  // flicker) and to expose a runtime setter for pages that actively
+  // preload. Returns { state: 'ready'|'', count, title } describing
+  // what the dot should look like for the cached payload.
+  function seedDmaaiStateFromSession() {
+    try {
+      for (let i = 0; i < sessionStorage.length; i++) {
+        const k = sessionStorage.key(i);
+        if (!k || !/^rrv8\.scope\.v1\..+\.dmaais$/.test(k)) continue;
+        const raw = sessionStorage.getItem(k);
+        if (!raw) continue;
+        const obj = JSON.parse(raw);
+        const payload = obj && obj.payload;
+        const rows = (payload && payload.data) || (Array.isArray(payload) ? payload : []);
+        if (rows.length) {
+          return {
+            state: 'ready',
+            count: rows.length,
+            title: 'DMAAIs loaded · ' + rows.length.toLocaleString('en-US') + ' rows. Per-row Export will include them in the analyzer workbook.',
+          };
+        }
+      }
+    } catch (_) { /* sessionStorage unavailable or stale shape — ignore */ }
+    return { state: '', count: 0, title: 'DMAAIs preload status' };
+  }
+
+  /**
+   * Mount the sidebar and wire its purely-internal behaviors.
+   * Page-specific behaviors (filter popovers, user menu, status drawer)
+   * stay in the page IIFE — they find their targets by ID.
+   *
+   * @param {{activePage?:string, hasPeriodFilter?:boolean, target?:HTMLElement}} opts
+   * @returns {HTMLElement|null} the mounted <aside>
+   */
+  function mountSidebar(opts) {
+    opts = opts || {};
+    // Insert the sidebar DOM into a placeholder element (preferred) or
+    // as the first child of .app.
+    let host = opts.target || document.getElementById('js-sidebar-mount');
+    if (!host) {
+      const app = document.querySelector('.app');
+      if (!app) {
+        console.warn('[sidebar.js] No mount target — expected #js-sidebar-mount or .app');
+        return null;
+      }
+      // Prepend a fresh container so we don't clobber whatever was at
+      // index 0.
+      host = document.createElement('div');
+      host.id = 'js-sidebar-mount';
+      app.insertBefore(host, app.firstChild);
+    }
+    host.outerHTML = buildSidebarHtml(opts);
+
+    // If we tagged <html> earlier (because <body> didn't exist when
+    // sidebar.js first ran), promote the class onto <body> now so the
+    // CSS body.has-pinned-sidebar rules engage.
+    if (document.documentElement.classList.contains('has-pinned-sidebar')) {
+      document.body.classList.add('has-pinned-sidebar');
+      document.documentElement.classList.remove('has-pinned-sidebar');
+    } else {
+      // Double-check sessionStorage on the off-chance hydratePinClass()
+      // ran before localStorage was available.
+      hydratePinClass();
+    }
+
+    wirePin();
+    wireModuleToggles();
+    // DMAAI dot was seeded into the template by buildSidebarHtml
+    // (seedDmaaiStateFromSession), so no post-mount class swap is
+    // needed. Pages that actively preload will overwrite the dot
+    // state via RRV8.setDmaaiStatus(...).
+    return document.querySelector('.sidebar');
+  }
+
+  global.RRV8 = global.RRV8 || {};
+  global.RRV8.mountSidebar    = mountSidebar;
+  global.RRV8.setDmaaiStatus  = setDmaaiStatus;
+})(window);
