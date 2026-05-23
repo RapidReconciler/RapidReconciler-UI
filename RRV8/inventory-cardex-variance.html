@@ -212,6 +212,16 @@
     color: var(--navy);
   }
   .action-control.is-active .action-control-value { color: var(--blue); }
+  .action-button {
+    background: var(--orange);
+    color: #fff;
+    border-color: var(--orange);
+  }
+  .action-button:hover {
+    background: var(--orange-deep);
+    border-color: var(--orange-deep);
+    color: #fff;
+  }
   .action-spacer { flex: 1 1 auto; }
   .filter-banner {
     display: inline-flex;
@@ -741,6 +751,10 @@
       <span class="action-control-label">Reason</span>
       <span class="action-control-value" id="reason-pill-value">All</span>
       <svg class="pill-caret" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 6 8 10 12 6"/></svg>
+    </button>
+    <button type="button" class="action-control action-button" id="reroll-btn" title="Re-roll the perpetual valuation for items in scope">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8a5 5 0 0 1 9-3"/><path d="M12 3v3h-3"/><path d="M13 8a5 5 0 0 1-9 3"/><path d="M4 13v-3h3"/></svg>
+      <span>Re-roll</span>
     </button>
     <div class="action-spacer"></div>
     <div class="filter-banner" id="filter-banner" hidden>
@@ -1737,6 +1751,67 @@
     });
   }
 
+  // ----- Re-roll (POST /inventory/rollIItem) -----
+  // Endpoint exists in the current agent (AsOfController.inventoryRollIItem
+  // — note the double-I, verbatim from the bytecode). DTO is the same
+  // AsOfRequest used by /inventory/as-of: reconciliationFilter wrapped
+  // in bare string arrays, plus daily/commonUom/summarizeByItem/filters/
+  // DataSourceRequest paging. Re-roll runs the per-item perpetual
+  // rebuild for everything in scope — destructive in the sense that
+  // it mutates the live valuation rows. We confirm before firing.
+  const rerollBtn = document.getElementById('reroll-btn');
+  if (rerollBtn) {
+    rerollBtn.addEventListener('click', async () => {
+      if (IS_DEMO) {
+        toast('Re-roll requires a live agent connection — switch out of demo mode to use this.');
+        return;
+      }
+      const co = _state.companyFilter || 'all companies in scope';
+      const ok = window.confirm(
+        'Re-roll perpetual valuation for ' + co + '?\n\n' +
+        'This rebuilds the on-hand quantities and amounts for every item in ' +
+        'the current Cardex Variance scope. It may take several minutes ' +
+        'and updates the live database.'
+      );
+      if (!ok) return;
+      rerollBtn.disabled = true;
+      const origLabel = rerollBtn.querySelector('span') ? rerollBtn.querySelector('span').textContent : 'Re-roll';
+      if (rerollBtn.querySelector('span')) rerollBtn.querySelector('span').textContent = 'Re-rolling…';
+      toast('Re-roll started — this may take several minutes.');
+      try {
+        const db  = window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex] || {};
+        const cos = _state.companyFilter
+          ? [_state.companyFilter]
+          : (Array.isArray(db.i) ? db.i : []);
+        const period = readCurrentPeriodFromCache() || '';
+        const body = {
+          reconciliationFilter: {
+            companies:     cos,
+            businessUnits: [],
+            objects:       [],
+            subsidiaries:  [],
+            currencies:    [],
+            period:        period
+          },
+          daily:           period,
+          commonUom:       '',
+          summarizeByItem: false,
+          filters: { itemNumber: '', branchPlant: '', location: '', lot: '' },
+          take: 0, skip: 0, page: 1, pageSize: 0
+        };
+        await rrFetch('inventory/rollIItem', { method: 'POST', body: body });
+        toast('Re-roll complete. Refreshing data…');
+        if (typeof loadData === 'function') loadData();
+      } catch (err) {
+        console.error('Re-roll failed:', err);
+        toast('Re-roll failed — see console for details.');
+      } finally {
+        rerollBtn.disabled = false;
+        if (rerollBtn.querySelector('span')) rerollBtn.querySelector('span').textContent = origLabel;
+      }
+    });
+  }
+
   // ----- Filter banner Clear -----
   const fbClear = document.getElementById('filter-banner-clear');
   if (fbClear) {
@@ -2048,6 +2123,12 @@
   wireColumnSort();
   wireGridSearch();
   loadData();
+  // Seed the sidebar's filter universe cache (currencies / companies /
+  // BUs / objects / subsidiaries). Fire-and-forget — first page in the
+  // tab does the work; subsequent pages short-circuit to the cache.
+  if (window.RRV8 && typeof window.RRV8.ensureInventoryStatus === 'function') {
+    window.RRV8.ensureInventoryStatus(rrFetch);
+  }
 
 })();
 </script>

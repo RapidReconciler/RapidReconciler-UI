@@ -36,7 +36,26 @@
   'use strict';
 
   const PIN_LS_KEY     = 'rrv8-sidebar-pinned-v1';
-  const MODULES_LS_KEY = 'rrv8-sidebar-modules-expanded-v1';
+  const SECTION_LS_KEY = 'rrv8-sidebar-section-expanded-v1';
+  // Per the accordion model: at most ONE section may be expanded at
+  // a time (across Scope + every module). Persisted value is the id
+  // of that section, or '' for "all collapsed".
+
+  // Default-expansion map: when localStorage has no recorded
+  // preference yet, fall back to the section that contains the
+  // currently active page so the user doesn't land on a fully-
+  // collapsed sidebar with no way to navigate. Falls back to
+  // 'scope' when the active page doesn't belong to a module
+  // (matches the pre-accordion UX where Scope was always visible).
+  const PAGE_TO_SECTION = {
+    reconciliation:   'inventory',
+    transactions:     'inventory',
+    asof:             'inventory',
+    'cardex-variance':'inventory'
+    // dmaais is under Accounting, which is a single-row section (no
+    // children) and intentionally NOT in this map — Scope default
+    // is friendlier than expanding an empty section.
+  };
 
   // Hydrate the pin class on whichever element exists. sidebar.js
   // is loaded in <head>, so document.body may be null when this
@@ -55,16 +74,15 @@
   }
   hydratePinClass();
 
-  function loadExpandedModules() {
+  function loadExpandedSection(activePage) {
     try {
-      const raw = localStorage.getItem(MODULES_LS_KEY);
-      const arr = raw ? JSON.parse(raw) : [];
-      return new Set(Array.isArray(arr) ? arr : []);
-    } catch (_) { return new Set(); }
+      const raw = localStorage.getItem(SECTION_LS_KEY);
+      if (raw !== null) return raw; // user has a recorded preference (incl. '' for all-collapsed)
+    } catch (_) {}
+    return PAGE_TO_SECTION[activePage] || 'scope';
   }
-  function saveExpandedModules(set) {
-    try { localStorage.setItem(MODULES_LS_KEY, JSON.stringify(Array.from(set))); }
-    catch (_) {}
+  function saveExpandedSection(id) {
+    try { localStorage.setItem(SECTION_LS_KEY, id || ''); } catch (_) {}
   }
 
   function escapeHtml(s) {
@@ -89,10 +107,11 @@
     const hasPeriod  = !!opts.hasPeriodFilter;
 
     // Hydrate persisted state UP FRONT so it lives in the initial
-    // template — no post-mount class swaps, no flicker.
-    const expanded = loadExpandedModules();
-    const expCls = (id) => expanded.has(id) ? ' is-expanded' : '';
-    const expAria = (id) => expanded.has(id) ? 'true' : 'false';
+    // template — no post-mount class swaps, no flicker. Accordion
+    // model: at most one section expanded at a time.
+    const currentExpanded = loadExpandedSection(activePage);
+    const expCls = (id) => currentExpanded === id ? ' is-expanded' : '';
+    const expAria = (id) => currentExpanded === id ? 'true' : 'false';
     const dmaaiSeed = seedDmaaiStateFromSession();
     const dotCls = dmaaiSeed.state ? ' is-' + dmaaiSeed.state : '';
     const dotTitle = dmaaiSeed.title;
@@ -135,14 +154,21 @@
     </button>
   </div>
 
-  <!-- Scope (global filter rail) -->
-  <div class="sidebar-filters" id="js-sidebar-filters">
-    <div class="sidebar-filters-head">
-      <span class="sidebar-filters-label">Scope</span>
-      <button class="sidebar-filters-clear" type="button" id="js-filter-clear">Reset</button>
-    </div>
-    ${periodRow}
-    <button class="sidebar-filter" type="button" data-filter="currencies">
+  <!-- Scope (global filter rail) — accordion-collapsible, mirrors the
+       .sidebar-module pattern so a single click handler drives both. -->
+  <div class="sidebar-section">
+    <div class="sidebar-module sidebar-scope${expCls('scope')}" data-module="scope">
+      <button type="button" class="sidebar-nav-item" data-module-toggle="scope" aria-expanded="${expAria('scope')}">
+        <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+        <span class="sidebar-nav-text">Scope</span>
+        <svg class="sidebar-nav-caret" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 6 8 10 12 6"/></svg>
+      </button>
+      <div class="sidebar-nav-children sidebar-filters" id="js-sidebar-filters">
+        <div class="sidebar-filters-actions">
+          <button class="sidebar-filters-clear" type="button" id="js-filter-clear">Reset all</button>
+        </div>
+        ${periodRow}
+        <button class="sidebar-filter" type="button" data-filter="currencies">
       <span class="sidebar-filter-icon">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
       </span>
@@ -182,6 +208,8 @@
       <span class="sidebar-filter-text">Subsidiary</span>
       <span class="sidebar-filter-status">All</span>
     </button>
+      </div>
+    </div>
   </div>
 
   <!-- Modules (main nav) -->
@@ -260,21 +288,36 @@
     });
   }
 
-  function wireModuleToggles() {
+  function wireSectionToggles() {
+    // Accordion: at most one section may be expanded at a time across
+    // Scope + every module. Click on the open one collapses it
+    // (no section expanded). Click on a closed one collapses any
+    // previously-open peer and expands the clicked one.
+    //
     // Initial .is-expanded classes were baked into the template by
-    // mountSidebar() so there's no first-paint flicker. We just need
-    // to attach the click handlers + keep the set in sync.
-    const expanded = loadExpandedModules();
-    document.querySelectorAll('.sidebar-module').forEach(el => {
+    // mountSidebar() so there's no first-paint flicker. We only
+    // attach click handlers + keep the persisted id in sync.
+    const all = document.querySelectorAll('.sidebar-module');
+    all.forEach(el => {
       const id  = el.dataset.module;
       const btn = el.querySelector('[data-module-toggle]');
       if (!btn) return;
       btn.addEventListener('click', () => {
-        const open = !el.classList.contains('is-expanded');
-        el.classList.toggle('is-expanded', open);
-        btn.setAttribute('aria-expanded', open ? 'true' : 'false');
-        if (open) expanded.add(id); else expanded.delete(id);
-        saveExpandedModules(expanded);
+        const wasExpanded = el.classList.contains('is-expanded');
+        // Collapse every section first — guarantees only one open.
+        all.forEach(other => {
+          if (!other.classList.contains('is-expanded')) return;
+          other.classList.remove('is-expanded');
+          const t = other.querySelector('[data-module-toggle]');
+          if (t) t.setAttribute('aria-expanded', 'false');
+        });
+        if (!wasExpanded) {
+          el.classList.add('is-expanded');
+          btn.setAttribute('aria-expanded', 'true');
+          saveExpandedSection(id);
+        } else {
+          saveExpandedSection('');
+        }
       });
     });
   }
@@ -377,7 +420,7 @@
     }
 
     wirePin();
-    wireModuleToggles();
+    wireSectionToggles();
     // DMAAI dot was seeded into the template by buildSidebarHtml
     // (seedDmaaiStateFromSession), so no post-mount class swap is
     // needed. Pages that actively preload will overwrite the dot
@@ -529,6 +572,63 @@
   }
 
   /**
+   * Ensure the inventory filter universe (currencies / companies /
+   * businessUnits / objects / subsidiaries) is cached for the active
+   * (mode, db) tuple, and repaint the sidebar from it.
+   *
+   * Why this lives here: the filter universe is session-level — it
+   * doesn't change between page navigations or period switches — but
+   * it ships inside /inventory/status which ALSO carries a
+   * period-scoped validation block. The right long-term answer is a
+   * dedicated scope endpoint (or baking the universe into the JWT
+   * next to dbs[i].i). Until that lands, this helper centralizes the
+   * fetch + cache + sidebar repaint so every page gets the sidebar
+   * populated with one boot-time call, no matter the entry point.
+   *
+   * Idempotent: cached entries short-circuit to a sidebar repaint
+   * with no network. The first cold call (per tab) seeds the cache
+   * for every subsequent page navigation.
+   *
+   * @param {function} rrFetchFn   - the page's rrFetch helper
+   * @param {object}   [opts]
+   * @param {boolean}  [opts.force] - re-fetch even if cached
+   * @returns {Promise<object|null>}
+   */
+  async function ensureInventoryStatus(rrFetchFn, opts) {
+    opts = opts || {};
+    if (typeof rrFetchFn !== 'function') return null;
+    const session = (global.RR_SESSION || {});
+    const dbs    = Array.isArray(session.dbs) ? session.dbs : [];
+    const dbIdx  = session.activeDbIndex || 0;
+    const dbName = (dbs[dbIdx] && dbs[dbIdx].n) || '_';
+    const mode   = (global.RR_CONFIG && global.RR_CONFIG.mode) || 'demo';
+    const key    = 'rrv8.scope.v1.' + mode + '.' + dbName + '.status';
+    if (!opts.force) {
+      try {
+        const raw = sessionStorage.getItem(key);
+        if (raw) {
+          const obj = JSON.parse(raw);
+          if (obj && obj.payload) {
+            paintSidebarFromCache();
+            return obj.payload;
+          }
+        }
+      } catch (_) {}
+    }
+    try {
+      const payload = await rrFetchFn('inventory/status', { demoFile: 'inventory-status' });
+      if (payload) {
+        try { sessionStorage.setItem(key, JSON.stringify({ ts: Date.now(), payload: payload })); } catch (_) {}
+        paintSidebarFromCache();
+      }
+      return payload;
+    } catch (err) {
+      try { console.warn('[sidebar] ensureInventoryStatus failed:', err); } catch (_) {}
+      return null;
+    }
+  }
+
+  /**
    * Write the page's current period to the cross-page cache so the
    * next page in the navigation sees it. Pages call this whenever
    * their period changes (load, bar-chart click, etc.).
@@ -550,8 +650,9 @@
   }
 
   global.RRV8 = global.RRV8 || {};
-  global.RRV8.mountSidebar          = mountSidebar;
-  global.RRV8.setDmaaiStatus        = setDmaaiStatus;
-  global.RRV8.paintSidebarFromCache = paintSidebarFromCache;
-  global.RRV8.publishCurrentPeriod  = publishCurrentPeriod;
+  global.RRV8.mountSidebar            = mountSidebar;
+  global.RRV8.setDmaaiStatus          = setDmaaiStatus;
+  global.RRV8.paintSidebarFromCache   = paintSidebarFromCache;
+  global.RRV8.publishCurrentPeriod    = publishCurrentPeriod;
+  global.RRV8.ensureInventoryStatus   = ensureInventoryStatus;
 })(window);
