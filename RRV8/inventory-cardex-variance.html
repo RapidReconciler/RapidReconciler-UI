@@ -797,9 +797,9 @@
       <span class="details-title">Details</span>
       <div class="details-head-right">
         <div class="grid-state-cluster">
-          <label class="grid-search" title="Filter visible rows by any text in any visible column">
+          <label class="grid-search" title="Substring search across visible columns. Prefix the query with ^ to switch to starts-with (e.g. ^468- matches Item 468-... but not X-468-).">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="7" r="4"/><line x1="10" y1="10" x2="14" y2="14"/></svg>
-            <input type="search" id="grid-search-input" placeholder="Search rows&hellip;" autocomplete="off" spellcheck="false">
+            <input type="search" id="grid-search-input" placeholder="Search rows&hellip; (^ for starts-with)" autocomplete="off" spellcheck="false">
             <button type="button" class="grid-search-clear" id="grid-search-clear" hidden title="Clear search">&times;</button>
           </label>
           <button type="button" class="grid-pill grid-pill-export" id="grid-export-btn" title="Export current view (filters + visible columns + order) to Excel">
@@ -934,16 +934,23 @@
   }
   // Reconciliation-filtered wraps each dimension in {id, checked, show}
   // — Jackson binds to a coral...Item array; bare strings here give a
-  // 400. Returned for the Recon variance impact hero number.
-  function reconciliationFilterAsItems() {
-    const db = window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex] || {};
-    const wrap = arr => (arr || []).map(id => ({ id, checked: true, show: true }));
+  // 400. EMPTY arrays cause a 500 (the sproc joins to nothing and
+  // explodes), so the body must carry the full filter universe with
+  // only the dimension(s) the caller wants to narrow set to a
+  // restricted list. Source the universe from GET /inventory/status.
+  function wrapItems(ids) {
+    return (ids || []).map(id => ({ id, checked: true, show: true }));
+  }
+  function buildReconFilteredBody(fullScope, narrowCompanyIds, period) {
     return {
-      currencies:    [],
-      companies:     wrap(db.i),
-      businessUnits: [],
-      objects:       [],
-      subsidiaries:  []
+      period:        period || (fullScope && fullScope.period) || '',
+      currencies:    wrapItems(fullScope && fullScope.currencies),
+      companies:     wrapItems(narrowCompanyIds && narrowCompanyIds.length
+                                  ? narrowCompanyIds
+                                  : (fullScope && fullScope.companies)),
+      objects:       wrapItems(fullScope && fullScope.objects),
+      businessUnits: wrapItems(fullScope && fullScope.businessUnits),
+      subsidiaries:  wrapItems(fullScope && fullScope.subsidiaries)
     };
   }
   function readCurrentPeriodFromCache() {
@@ -1258,24 +1265,27 @@
         });
       } else if (!IS_DEMO) {
         // Pull per-company reconciliation-filtered for the cardex
-        // variance impact. Companies the JWT grants access to come from
-        // dbs[i].i. One call per company so the totals split out for the
-        // hero's Company-filter scoping.
-        const db = window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex] || {};
-        const cos = Array.isArray(db.i) ? db.i : [];
-        const period = readCurrentPeriodFromCache() || '';
+        // variance impact. The body must carry the FULL filter universe
+        // (empty arrays cause a 500 on the agent), so we fetch
+        // /inventory/status once to get the scope, then narrow the
+        // companies dimension per call.
+        const status     = await rrFetch('inventory/status');
+        const fullScope  = (status && status.reconciliationFilter) || {};
+        const period     = readCurrentPeriodFromCache() ||
+                           (fullScope.period) || '';
         _reconCurrentPeriod = period;
+
+        const db  = window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex] || {};
+        const cos = Array.isArray(db.i) ? db.i : [];
         await Promise.all(cos.map(async co => {
           try {
-            const body = reconciliationFilterAsItems();
-            body.companies = [{ id: co, checked: true, show: true }];
-            body.period = period;
+            const body  = buildReconFilteredBody(fullScope, [co], period);
             const recon = await rrFetch('inventory/reconciliation-filtered', {
               method: 'POST', body
             });
-            const cx = recon && recon.summary && recon.summary.variance &&
-                       recon.summary.variance.cardex;
-            // The cardex field can be a scalar or {value, alert} object.
+            const cx  = recon && recon.summary && recon.summary.variance &&
+                        recon.summary.variance.cardex;
+            // cardex can be a scalar or {value, alert} object.
             const val = (cx && typeof cx === 'object') ? (cx.value || 0) : (cx || 0);
             _reconCardexByCompany[co] = val;
           } catch (e) {
@@ -1344,14 +1354,19 @@
     );
   }
   function searchFilter(rows, q) {
-    const query = String(q || '').toLowerCase().trim();
+    let query = String(q || '').toLowerCase().trim();
+    if (!query) return rows;
+    // §8 starts-with anchor: a leading `^` switches to startsWith.
+    const anchored = query.charAt(0) === '^';
+    if (anchored) query = query.slice(1);
     if (!query) return rows;
     const cols = visibleColumns();
     return rows.filter(r => {
       for (let i = 0; i < cols.length; i++) {
         const v = r[cols[i].key];
         if (v == null) continue;
-        if (String(v).toLowerCase().indexOf(query) !== -1) return true;
+        const s = String(v).toLowerCase();
+        if (anchored ? s.indexOf(query) === 0 : s.indexOf(query) !== -1) return true;
       }
       return false;
     });

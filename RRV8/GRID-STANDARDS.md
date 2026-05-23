@@ -215,12 +215,17 @@ Implementation hook: `wireColumnSort()` attaches a delegated
 as `wireColumnDrag()`; call it ONCE at page boot after the first
 `renderTableHeader()`.
 
-## 8. Search (case-insensitive substring)
+## 8. Search (case-insensitive substring, with `^` starts-with anchor)
 
 - A compact text input sits leftmost in the grid-state cluster.
 - Filters the visible rows by case-insensitive substring match
   against any **visible** column. Hidden columns are excluded so
   the search feels tied to what the analyst is actually looking at.
+- **`^` prefix switches to starts-with**. `^468-` matches Item
+  `468-12053` but NOT `X-468-12053`. The anchor is stripped before
+  the comparison; rest of the query behaves the same. Use when an
+  ID code prefix is shared by unrelated items and you don't want
+  substring matches in the middle.
 - 150ms debounce on input so a fast typist doesn&rsquo;t pay for a
   render per keystroke.
 - ESC inside the input clears the search and re-renders.
