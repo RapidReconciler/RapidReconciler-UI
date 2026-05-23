@@ -391,6 +391,25 @@ GET /api/v2/inventory/reconciliation
 - **SSE** on `/api/v2/system/status/stream` &mdash; replaces the 60s `poll` XHR long-poll.
 - `GET /api/v2/periods?instance=RapidReconciler_Dev` &mdash; the period list, cached client-side via ETag.
 
+### Open handoff items
+
+- **Cross-period history for the "Out of Bal by Period" header chart.**
+  The live `/inventory/reconciliation` endpoint returns rows for the
+  current period only. The header bar chart needs cross-period
+  history. Today both `inventory-reconciliation.html` and
+  `inventory-transactions.html` fall back to fetching the
+  `data/reconciliation.json` demo snapshot for the bars when the live
+  response is single-period &mdash; that's a stopgap; the snapshot is
+  immutable in staging and goes stale in production. Real fix: agent
+  exposes a `GET /api/v2/inventory/reconciliation/history?periods=12`
+  (or similar) that returns per-period `glBalance` / `perpetualBalance`
+  sums (whole-client, no row detail) so the chart paints accurate
+  trend regardless of mode. Filter sensitivity (currency / company /
+  BU / object / subsidiary) on the trend bars is a separate
+  follow-up &mdash; either the new endpoint takes the filter as
+  params, or the page does the aggregation client-side from a
+  cross-period rows endpoint.
+
 ---
 
 ## What hits the wire today vs. V8

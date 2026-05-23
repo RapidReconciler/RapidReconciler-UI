@@ -564,7 +564,11 @@
   body.has-pinned-sidebar .sidebar-filter-status,
   body.has-pinned-sidebar .sidebar-filters-label,
   body.has-pinned-sidebar .sidebar-filters-clear { opacity: 1; }
-  body.has-pinned-sidebar .sidebar-nav-children { display: block; }
+  /* Pinned-mode override removed: it was forcing every module's
+     children to display:block regardless of accordion state,
+     defeating the .sidebar-module.is-expanded .sidebar-nav-children
+     rule from sidebar.css. With it gone, the accordion correctly
+     shows only the expanded section in pinned mode. */
 
   .sidebar-pin {
     margin-left: auto;
@@ -732,7 +736,11 @@
     border-bottom: 1px solid rgba(255, 255, 255, 0.06);
     display: none;
   }
-  .sidebar:hover .sidebar-nav-children { display: block; }
+  /* Hover-mode override removed: same reason as the pinned-mode one
+     above -- forcing every module's children to display:block on
+     sidebar hover defeats the .sidebar-module.is-expanded rule from
+     sidebar.css. With it gone, hovering the collapsed rail widens
+     it AND the accordion correctly shows only the expanded section. */
   .sidebar-nav-child {
     display: block;
     padding: 7px 18px 7px 50px;
@@ -4045,9 +4053,79 @@
   //  routing. We just give it data + a switchPeriod callback.
   // ============================================================
   let _periodBars = null;
-  function renderPeriodBars(points) {
+  let _periodBarsSnapshotCache = null;
+  let _periodBarsSnapshotTried  = false;
+  // Pull the demo snapshot's accountRows[] once and cache. Used as the
+  // cross-period fallback when the live (staging) API only returns
+  // current-period rows -- the period bar chart would otherwise
+  // collapse to a single bar. Whitelisted in TESTING.md as a
+  // permitted direct data/ fetch (period-bar chart history).
+  //
+  // Tries the same candidate paths the (deleted) variance-trend chart
+  // used so the fetch resolves whether the page is hosted at /RRV8/...
+  // (the static dev/demo layout) or some other mount.
+  async function loadPeriodBarsSnapshot() {
+    if (_periodBarsSnapshotTried) return _periodBarsSnapshotCache || [];
+    _periodBarsSnapshotTried = true;
+    const dataPathPrefix = (typeof RR_CONFIG !== 'undefined' && RR_CONFIG && RR_CONFIG.dataPath) || 'data/';
+    const candidates = [
+      dataPathPrefix + 'reconciliation.json',
+      'data/reconciliation.json',
+      '../RRV8/data/reconciliation.json'
+    ];
+    const tried = [];
+    let rows = null;
+    for (const url of candidates) {
+      try {
+        const res = await fetch(url, { cache: 'force-cache' });
+        if (!res.ok) { tried.push(url + ' -> HTTP ' + res.status); continue; }
+        const recon = await res.json();
+        rows = (recon && recon.accountRows) || [];
+        console.info('[period-bars] loaded', rows.length, 'snapshot rows from', url);
+        break;
+      } catch (e) {
+        tried.push(url + ' -> ' + (e && e.message ? e.message : e));
+      }
+    }
+    if (rows == null) {
+      console.warn('[period-bars] could not fetch reconciliation.json. Tried:', tried.join('; '));
+      rows = [];
+    }
+    _periodBarsSnapshotCache = rows;
+    return rows;
+  }
+  // Build a period-bars data array from any accountRows[]-shaped list.
+  // The snapshot rows ARE NOT filtered through rowMatchesFilters here:
+  // the live response's `data.filter` universe is narrow (often just
+  // the current period's slice), and using it to gate snapshot rows
+  // ends up excluding most of them. The bars are an at-a-glance trend
+  // overview; the hero + grid carry the scope-filtered numbers.
+  function periodBarsFromRows(rows) {
+    const byPeriod = new Map();
+    (rows || []).forEach(r => {
+      const acc = byPeriod.get(r.period) || { glBalance: 0, perpetualBalance: 0 };
+      acc.glBalance        += r.glBalance        || 0;
+      acc.perpetualBalance += r.perpetualBalance || 0;
+      byPeriod.set(r.period, acc);
+    });
+    return [...byPeriod.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([period, v]) => ({ period, value: round2(v.glBalance - v.perpetualBalance) }));
+  }
+  async function renderPeriodBars(points) {
     const host = document.getElementById('js-period-bars');
     if (!host || !window.RRV8 || !window.RRV8.mountPeriodBars) return;
+    // If the snapshot gives us MORE periods than the live response,
+    // use it. This is the cross-period fallback for staging mode where
+    // the live API only returns the current period; in demo mode the
+    // snapshot has the same periods so no change.
+    const snapshot = await loadPeriodBarsSnapshot();
+    if (snapshot.length) {
+      const snapshotPoints = periodBarsFromRows(snapshot);
+      if (snapshotPoints.length > (points ? points.length : 0)) {
+        points = snapshotPoints;
+      }
+    }
     if (!_periodBars) {
       _periodBars = window.RRV8.mountPeriodBars({
         host,
@@ -8181,14 +8259,26 @@
     return n < 0 ? '↓ debit' : '↑ credit';
   }
 
-  document.getElementById('js-validation-row').addEventListener('click', (e) => {
-    e.stopPropagation();
-    openRunbookDrawer('inventory-validation');
-  });
-  document.getElementById('js-system-status-row').addEventListener('click', (e) => {
-    e.stopPropagation();
-    openRunbookDrawer('system-status');
-  });
+  // Guarded: the validation + system-status rows used to be static
+  // HTML; they're now rendered conditionally by renderValidation /
+  // renderSystemStatus (both already null-check the row in the same
+  // way). Without these guards the missing nodes throw a TypeError
+  // here and halt the IIFE before later wire-up (sidebar nav-item
+  // handlers, help FAB, ensureInventoryStatus seed) can attach.
+  const _valRow = document.getElementById('js-validation-row');
+  if (_valRow) {
+    _valRow.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openRunbookDrawer('inventory-validation');
+    });
+  }
+  const _sysRow = document.getElementById('js-system-status-row');
+  if (_sysRow) {
+    _sysRow.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openRunbookDrawer('system-status');
+    });
+  }
 
   // ---------- Runbook drawer listeners ----------
   document.getElementById('js-runbook-close').addEventListener('click', closeRunbookDrawer);
@@ -8258,7 +8348,13 @@
   // Sidebar nav items that aren't the active one — feedback only.
   // Real links (href !== '#') are allowed to navigate; this fallback
   // only fires for the "not built yet" stubs that still point at '#'.
+  // Module-toggle buttons (Scope / Inventory / etc.) carry
+  // data-module-toggle and are accordion toggles, not nav links —
+  // sidebar.js wires their click to expand/collapse the section.
+  // Without this exemption the flash fires alongside the accordion
+  // and the user reads it as "click did nothing useful."
   document.querySelectorAll('.sidebar-nav-item, .sidebar-nav-child').forEach(a => {
+    if (a.hasAttribute('data-module-toggle')) return;
     a.addEventListener('click', (e) => {
       if (a.classList.contains('is-active')) return;
       const href = a.getAttribute('href') || '';
