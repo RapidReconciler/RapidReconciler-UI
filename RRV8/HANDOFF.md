@@ -5,10 +5,11 @@ session. Paste the **Resume prompt** section as the first message in
 the new session; the rest of this file is context that prompt points
 the new session at.
 
-**Updated**: 2026-05-22, after the DMAAI worklist page rebuild
-(analyzer pattern detector ported to Python, finance-facing copy,
-GSI logo, per-column grid filter, sidebar Modules collapse, agent
-endpoints + SQL tables specced).
+**Updated**: 2026-05-23, after the shared-chrome extraction + V8
+page unification chunk (sidebar.js / period-bars.js single
+objects, GSI topbar + page-header standard rolled across the 3 V8
+pages, variance breakdown reformatted into 6 action cards + 3
+contributor cards, DMAAI sidebar status dot).
 
 ---
 
@@ -40,6 +41,49 @@ endpoints + SQL tables specced).
 > then wait for the next instruction.
 
 ### In-flight design direction (queued for next session)
+
+**Shared chrome extracted to single objects** &mdash; the V8 sidebar
+and the period bar-chart selector are now mounted from shared JS
+modules instead of inlined per page. What landed in this chunk:
+
+- `RRV8/sidebar.css` + `RRV8/sidebar.js` &mdash; expose
+  `RRV8.mountSidebar({activePage, hasPeriodFilter})` and
+  `RRV8.setDmaaiStatus(state, info)`. All persisted state
+  (pinned-class, modules expanded, DMAAI status dot, welcome chip)
+  is baked into the initial template by the mount call to avoid
+  post-paint flicker. Pin-class hydrates onto `<html>` when scripts
+  load in `<head>` (before `<body>` exists), then migrates to
+  `<body>` at mount time. Used by all 3 V8 pages.
+- `RRV8/period-bars.css` + `RRV8/period-bars.js` &mdash; expose
+  `RRV8.mountPeriodBars({host, data, currentPeriod, labelFor,
+  fmtValue, onSwitch, labelText})`. Returns
+  `{setData, setCurrentPeriod, render, destroy}`. Used by both the
+  Reconciliation and Transactions pages in place of the old period
+  pill. SVG with `preserveAspectRatio="none"` scales the bar group
+  into the right-side header whitespace. Selected period spotlit
+  with `--orange` + drop-shadow glow; "Out of Bal by Period" label
+  on the left, selected-period date on the right.
+- `inventory-reconciliation.html` &mdash; variance breakdown
+  reformatted into a 3&times;2 grid of action cards plus a bottom
+  total bar. Each card carries its own Excel export. Zero-state
+  cards paint green with "No action required"; non-zero cards show
+  variance + hover preview. Three bottom contributor cards: By
+  business unit / By inventory account / By subsidiary. Hero
+  totals dropped the "$" prefix (mixed currencies) and the "Steady
+  at" subtext. Audit Excel/PDF buttons moved into a
+  `.page-actions-row` directly under the title.
+- `inventory-transactions.html` &mdash; period pill replaced with
+  the shared bar-chart. Sidebar Period filter row click opens the
+  existing period popover so the chart and the pill stay in sync.
+  DMAAI preload pill removed; status routes through
+  `RRV8.setDmaaiStatus` to paint the sidebar dot.
+- Topbar unified across all 3 V8 pages: GSI logo + RapidReconciler
+  wordmark + active DB identifier only. Demo Mode pill retired; the
+  welcome chip moved into the sidebar brand area and persists.
+- DMAAI loading/ready/error status is communicated by a colored
+  dot next to the sidebar "DMAAIs" link instead of the in-grid pill.
+  State persists across pages via sessionStorage scan
+  (`rrv8.scope.v1.*.dmaais`) so the dot is correct on first paint.
 
 **DMAAI worklist page is now built** &mdash; `accounting-dmaais.html`
 was rewritten as the analyzer worklist surface (no longer a
@@ -90,15 +134,14 @@ placeholder universe-view grid). What landed in this chunk:
 - **`beforeunload` guard** on the DMAAI page so the analyst gets
   warned when closing with unsaved responses (the save bar is the
   only signal today).
-- **Roll the GSI-logo topbar pattern + sidebar "Modules" collapse +
-  per-column grid filter** onto `inventory-reconciliation.html`
-  and `inventory-transactions.html` for consistency. (DMAAI is the
-  reference implementation for all three.)
-- **Sidebar extraction** &mdash; the V8 sidebar (filters + nav +
-  status panel) is still inlined into every page. Plan in
-  `docs/plans/sidebar-extraction.md` &mdash; the per-page divergence
-  is widening (DMAAI now has module-collapse logic the others lack);
-  a real extraction is overdue.
+- **Build the As Of page** (`inventory-asof.html`) using the shared
+  sidebar (`activePage: 'asof'`, `hasPeriodFilter: true`) and shared
+  period bars. Layout: breadcrumb + "As Of" title + bar selector,
+  page-actions row with Common UOM / Summarize by Item / Re-roll,
+  hero stats strip (Quantity / Amount / QtyVar / AmtVar), V8 grid
+  with ~10 default columns and the rest togglable via column
+  chooser. Data source: `RRV8/data/as-of.json`, generated from a
+  legacy xlsx export by `RRV8/scripts/extract-asof-sample.py`.
 - **Version subtitle** (`Version 8.0` under each page title from the
   `SQLSourceControl Database Revision` extended property) &mdash;
   parked until the new agent ships and exposes it on
