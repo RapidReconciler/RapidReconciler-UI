@@ -7,7 +7,7 @@
  * Usage (each page calls once at the top of its IIFE):
  *
  *   RRV8.mountSidebar({
- *     activePage:    'reconciliation' | 'transactions' | 'dmaais',
+ *     activePage:    'reconciliation' | 'transactions' | 'asof' | 'cardex-variance' | 'dmaais',
  *     hasPeriodFilter: true,        // adds the "Period" filter row
  *                                   // above Currency on Reconciliation
  *   });
@@ -99,7 +99,7 @@
 
     // is-active classes per page
     const cls = (page) => activePage === page ? ' is-active' : '';
-    const isInventoryPage = activePage === 'reconciliation' || activePage === 'transactions';
+    const isInventoryPage = activePage === 'reconciliation' || activePage === 'transactions' || activePage === 'asof' || activePage === 'cardex-variance';
 
     // The period filter row only renders on Reconciliation. Its
     // popover/click wiring is page-specific (in the IIFE).
@@ -196,7 +196,8 @@
       <div class="sidebar-nav-children">
         <a href="inventory-reconciliation.html" class="sidebar-nav-child${cls('reconciliation')}" data-nav-page="reconciliation">Reconciliation</a>
         <a href="inventory-transactions.html"   class="sidebar-nav-child${cls('transactions')}"   data-nav-page="transactions">Transactions</a>
-        <a href="#" class="sidebar-nav-child">As Of</a>
+        <a href="inventory-asof.html"           class="sidebar-nav-child${cls('asof')}"           data-nav-page="asof">As Of</a>
+        <a href="inventory-cardex-variance.html" class="sidebar-nav-child${cls('cardex-variance')}" data-nav-page="cardex-variance">Cardex Variance</a>
         <a href="#" class="sidebar-nav-child">Roll Forward</a>
         <a href="#" class="sidebar-nav-child">Integrity</a>
       </div>
@@ -384,7 +385,173 @@
     return document.querySelector('.sidebar');
   }
 
+  // ============================================================
+  //  Cross-page sidebar state — reads + paints from the existing
+  //  caches the V8 pages already write to:
+  //
+  //   - localStorage `rrv8-filter-selections-v1`  → filter row counts
+  //   - sessionStorage `rrv8.scope.v1.<mode>.<db>.status`  → System Status +
+  //                                                         Inventory Validation dots
+  //   - sessionStorage `rrv8.scope.v1.<mode>.<db>.jobStatus` → System Status dot
+  //                                                            (live job state cache)
+  //   - sessionStorage `rrv8.scope.v1.<mode>.<db>.currentPeriod` → Period row
+  //                                                                + bar chart
+  //
+  //  Pages with their own full wiring (Reconciliation, Transactions)
+  //  paint these themselves and re-call this helper is a no-op overwrite.
+  //  Pages WITHOUT full wiring (As Of, Cardex Variance) just call this
+  //  after mountSidebar to get the cross-page state reflected.
+  // ============================================================
+
+  const FILTER_GROUPS = ['currencies', 'companies', 'businessUnits', 'objects', 'subsidiaries'];
+
+  function scanSessionForScope(suffix) {
+    // Mirrors the inline scopeKey pattern in the V8 pages — but since
+    // we don't know which (mode, db) is "current" from sidebar.js, scan
+    // and pick the freshest entry by timestamp.
+    let best = null;
+    try {
+      const rx = new RegExp('^rrv8\\.scope\\.v1\\..+\\.' + suffix + '$');
+      for (let i = 0; i < sessionStorage.length; i++) {
+        const k = sessionStorage.key(i);
+        if (!k || !rx.test(k)) continue;
+        const raw = sessionStorage.getItem(k);
+        if (!raw) continue;
+        const obj = JSON.parse(raw);
+        if (obj && obj.payload && (!best || (obj.ts || 0) > (best.ts || 0))) best = obj;
+      }
+    } catch (_) {}
+    return best ? best.payload : null;
+  }
+  function loadStoredFilterSelections() {
+    try {
+      const raw = localStorage.getItem('rrv8-filter-selections-v1');
+      return raw ? (JSON.parse(raw) || {}) : {};
+    } catch (_) { return {}; }
+  }
+  function formatPeriodIso(iso) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
+    if (!m) return String(iso || '');
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return months[parseInt(m[2],10)-1] + ' ' + parseInt(m[3],10) + ', ' + m[1];
+  }
+
+  function paintFilterRow(group, statusPayload, selections) {
+    const btn = document.querySelector('.sidebar-filter[data-filter="' + group + '"]');
+    if (!btn) return;
+    const statusEl = btn.querySelector('.sidebar-filter-status');
+    const rf = (statusPayload && statusPayload.reconciliationFilter) || {};
+    const all = Array.isArray(rf[group]) ? rf[group] : [];
+    const sel = Array.isArray(selections[group]) ? selections[group] : [];
+    const narrowed = sel.length > 0 && sel.length < all.length;
+    btn.classList.toggle('is-active', narrowed);
+    if (statusEl) {
+      statusEl.textContent = all.length === 0 ? '—'
+        : (sel.length === 0 || sel.length === all.length) ? 'All'
+        : sel.length + ' / ' + all.length;
+    }
+  }
+
+  function paintStatusDots(statusPayload, jobStatusPayload) {
+    // Inventory Validation dot — same color mapping the pages use
+    // (ValidationLight.Color: none/danger/yellow/success/unknown).
+    const valDot = document.getElementById('js-validation-dot');
+    if (valDot) {
+      valDot.classList.remove('is-green', 'is-amber', 'is-warn', 'is-red');
+      const v = (statusPayload && statusPayload.validation) || null;
+      const color = v && (v.color || '').toLowerCase();
+      if (color === 'success' || color === 'green') {
+        valDot.classList.add('is-green');
+        valDot.title = 'Inventory Validation — roll-forward clean';
+      } else if (color === 'yellow' || color === 'warning' || color === 'amber') {
+        valDot.classList.add('is-amber', 'is-warn');
+        valDot.title = 'Inventory Validation — roll-forward in progress / amber';
+      } else if (color === 'danger' || color === 'red') {
+        valDot.classList.add('is-red');
+        valDot.title = 'Inventory Validation — roll-forward failed';
+      } else {
+        valDot.classList.add('is-green');  // default optimistic when no signal
+        valDot.title = 'Inventory Validation';
+      }
+    }
+
+    // System Status dot — driven by the cached jobStatus row (set by
+    // Reconciliation/Transactions when they refresh /inventory/status).
+    const sysDot = document.getElementById('js-status-dot');
+    if (sysDot) {
+      sysDot.classList.remove('is-green', 'is-amber', 'is-warn', 'is-red', 'is-error');
+      const status = jobStatusPayload && (jobStatusPayload.jobStatus || jobStatusPayload.status);
+      if (!status) {
+        sysDot.classList.add('is-amber', 'is-warn');
+        sysDot.title = 'System Status — no live read yet';
+      } else if (/^In Progress$/i.test(status)) {
+        sysDot.classList.add('is-amber', 'is-warn');
+        sysDot.title = 'System Status — SQL Agent refresh job in progress';
+      } else if (/^(Failed|Cancelled)$/i.test(status)) {
+        sysDot.classList.add('is-red', 'is-error');
+        sysDot.title = 'System Status — last job ' + status;
+      } else if (/^Not Found$/i.test(status)) {
+        sysDot.classList.add('is-amber', 'is-warn');
+        sysDot.title = 'System Status — no prior job (baseline only)';
+      } else {
+        sysDot.classList.add('is-green');
+        sysDot.title = 'System Status — last job completed successfully';
+      }
+    }
+  }
+
+  /**
+   * Paint the sidebar from the existing cross-page state caches.
+   * Safe to call on every page; pages that wire their own filter
+   * popovers will overwrite later with their own renderers.
+   *
+   * Reads:
+   *   - localStorage `rrv8-filter-selections-v1`
+   *   - sessionStorage `rrv8.scope.v1.<mode>.<db>.status`
+   *   - sessionStorage `rrv8.scope.v1.<mode>.<db>.jobStatus`
+   *   - sessionStorage `rrv8.scope.v1.<mode>.<db>.currentPeriod`
+   */
+  function paintSidebarFromCache() {
+    const status      = scanSessionForScope('status');
+    const jobStatus   = scanSessionForScope('jobStatus');
+    const periodCache = scanSessionForScope('currentPeriod');
+    const selections  = loadStoredFilterSelections();
+
+    FILTER_GROUPS.forEach(g => paintFilterRow(g, status, selections));
+    paintStatusDots(status, jobStatus);
+
+    // Paint the Period filter row if it's present (hasPeriodFilter: true).
+    const periodStatus = document.getElementById('js-period-sidebar-status');
+    if (periodStatus && periodCache) {
+      const iso = (typeof periodCache === 'string') ? periodCache : (periodCache && periodCache.period);
+      if (iso) periodStatus.textContent = formatPeriodIso(iso);
+    }
+  }
+
+  /**
+   * Write the page's current period to the cross-page cache so the
+   * next page in the navigation sees it. Pages call this whenever
+   * their period changes (load, bar-chart click, etc.).
+   */
+  function publishCurrentPeriod(period) {
+    if (!period) return;
+    try {
+      // Pick a key that matches the V8 scope-cache pattern; if no db is
+      // active yet (rare — only on the very first paint) fall back to a
+      // stable name so the value still survives within the tab.
+      const session = (global.RR_SESSION || {});
+      const dbs = Array.isArray(session.dbs) ? session.dbs : [];
+      const dbIdx = session.activeDbIndex || 0;
+      const db = (dbs[dbIdx] && dbs[dbIdx].n) || '_';
+      const mode = (global.RR_CONFIG && global.RR_CONFIG.mode) || 'demo';
+      const key = 'rrv8.scope.v1.' + mode + '.' + db + '.currentPeriod';
+      sessionStorage.setItem(key, JSON.stringify({ ts: Date.now(), payload: period }));
+    } catch (_) {}
+  }
+
   global.RRV8 = global.RRV8 || {};
-  global.RRV8.mountSidebar    = mountSidebar;
-  global.RRV8.setDmaaiStatus  = setDmaaiStatus;
+  global.RRV8.mountSidebar          = mountSidebar;
+  global.RRV8.setDmaaiStatus        = setDmaaiStatus;
+  global.RRV8.paintSidebarFromCache = paintSidebarFromCache;
+  global.RRV8.publishCurrentPeriod  = publishCurrentPeriod;
 })(window);

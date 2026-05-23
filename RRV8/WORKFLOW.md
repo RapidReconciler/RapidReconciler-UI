@@ -98,14 +98,23 @@ RRV8/
 
 As of the latest commit, V8 has:
 
-- **Three pages**: `inventory-reconciliation.html`,
-  `inventory-transactions.html`, and `accounting-dmaais.html`.
+- **Five pages**: `inventory-reconciliation.html`,
+  `inventory-transactions.html`, `accounting-dmaais.html`,
+  `inventory-asof.html`, and `inventory-cardex-variance.html`.
   The DMAAI page is the analyzer worklist surface (FIX FIRST +
   ASK CUSTOMER + module grids) wired to a Python pattern detector
   (`RRV8/scripts/derive-dmaai-analysis.py`) that reads integrity
   report 0 (`v_integrity_jde_aais`) and emits the worklist JSON.
   Agent endpoints for the worklist + responses are specced in
-  `RRV8/API.md` (PROD-TODO).
+  `RRV8/API.md` (PROD-TODO). The As Of page pivots away from the
+  legacy &ldquo;paginate millions of rows&rdquo; pattern: the main
+  grid defaults to item-level rollup, each row expands to show its
+  lot/location detail, and a page-level Company filter narrows the
+  scope. Cardex Variance is the dedicated worklist for per-item
+  perpetual-vs-cardex drift, sourced from `v6ui_itemrollintegritydialog`
+  (783 rows, both companies). References: `HANDOFF.md` &sect; *As Of
+  page &mdash; design notes* and *Cardex Variance page &mdash;
+  design notes*.
 - **Reconciliation page**: the modernized
   Inventory > Reconciliation. Fully styled. Loads
   `data/reconciliation.json` once on page load; every period
@@ -614,6 +623,55 @@ V8 commits typically have no `Release-Note:` trailer &mdash; it&rsquo;s
 internal staff-facing design work, not customer-facing changes. Once V8
 is linked from the hub and visible to internal folks, we&rsquo;ll start
 adding release notes for V8 work.
+
+---
+
+## V8 tenets
+
+These are non-negotiable principles that shape every V8 design and
+implementation decision. When a tradeoff comes up, the tenet wins.
+
+### Agent-first, no snapshot-only paths
+
+V8 dev work pulls **all** data through the live RR data-services agent,
+the same way prod does. Static snapshots under `RRV8/data/` exist as a
+deployment artifact (so customers / external readers on GitHub Pages
+see a working surface without auth), not as the development mode.
+
+- The committed default in [`RRV8/config.js`](config.js) is
+  `mode: 'staging'`. Opening a V8 page in dev hits the local agent at
+  `rrtest-rrsqltest.getgsi.com:34536` (hosts-file mapped to 127.0.0.1).
+- To intentionally read snapshots (agent offline, demoing the page
+  publicly, etc.) append `?mode=demo` to the URL.
+- Every dynamic value goes through `rrFetch(area, opts)`. The helper
+  routes by `MODE` &mdash; demo reads `data/<area>.json` via
+  `opts.demoFile`, staging/prod hits the agent. **No page hard-codes
+  `fetch('data/<file>.json')`** for runtime data.
+- New endpoints get mined from the agent jar
+  (`C:\Program Files\Rapid Reconciler\files\359`) via `javap`. Jackson
+  silently drops unknown JSON fields, so field names must come from the
+  bytecode, not guesswork. Recipe in
+  [`API.md`](API.md) &sect; *Agent jar mining recipe*. See also the
+  [`reference_rr_agent_jar.md`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/reference_rr_agent_jar.md)
+  memory.
+- The reason this is a tenet: demo-mode snapshots hide bugs. Stale
+  data goes unnoticed for weeks; field-name mismatches silently
+  degrade; permission gating never trips because the static blob
+  doesn&rsquo;t care. Working in agent mode all the time surfaces
+  every one of these before they ship. Saved as
+  [`feedback_v8_agent_first`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/feedback_v8_agent_first.md).
+
+### Finance, not IT
+
+V8 pages serve **accountants and finance analysts**, not IT. No SQL
+view names, sproc names, agent endpoint paths, or other RR plumbing in
+user-facing strings (eyebrows, tooltips, hero labels, banner copy,
+Excel export banners). JDE-domain references the analyst already
+speaks (F4111, F0911, F4101, F41021, DMAAI, AAI, R31802A, GL,
+perpetual, cardex, period close) stay &mdash; they&rsquo;re domain
+language, not jargon. Code comments are exempt; the rule is about
+user-visible text. Saved as
+[`feedback_v8_audience_finance_not_it`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/feedback_v8_audience_finance_not_it.md).
 
 ---
 

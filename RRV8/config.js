@@ -1,10 +1,15 @@
 /*
  * RRV8 — runtime configuration
  *
- * The COMMITTED version of this file IS the demo config. Customer-
- * facing prod deploys (and staging) overwrite this file at publish
- * time with their own `window.RR_CONFIG` block — the HTML and the
- * rest of the page are byte-identical between environments.
+ * The COMMITTED version of this file is the DEV config: mode = 'staging'
+ * so the dev workflow exercises the live RR data-services agent. This is
+ * the V8 agent-first tenet (see feedback_v8_agent_first.md in memory):
+ * snapshots exist as a deployment artifact, not as the dev mode. To
+ * intentionally read from snapshots (e.g. when the agent is offline or
+ * for an external reader on GitHub Pages), append `?mode=demo` to the
+ * URL. Customer-facing prod deploys overwrite this file at publish time
+ * with their own `window.RR_CONFIG` block — the HTML stays byte-identical
+ * between environments.
  *
  * Precedence at boot:
  *   1. ?mode= URL parameter wins (engineer / QA override)
@@ -22,22 +27,21 @@
  *                   mock VALC for offline testing).
  *   dataPath      — only used in demo mode. Where to fetch the static
  *                   JSON snapshots from. Relative to the HTML.
- *   statusPollMs  — interval for re-checking v_diagnostic5_job_status
- *                   (System Status light). null = don't poll (the
- *                   demo default — static JSON doesn't change).
- *                   Prod default: 60000 (1 minute).
+ *   statusPollMs  — interval for re-checking the SQL Agent job status
+ *                   (System Status light). null = don't poll. Prod
+ *                   default: 60000 (1 minute).
  *   release       — version label shown in the user menu.
  *   buildStamp    — date the deploy was cut; surfaces in diagnostics.
  *
  * See docs/plans/v8-demo-prod-mode.md for the full design rationale.
  */
 window.RR_CONFIG = {
-  mode:         'demo',
+  mode:         'staging',
   authBase:     null,
   dataPath:     'data/',
-  statusPollMs: null,
+  statusPollMs: 60000,
   release:      'V8',
-  buildStamp:   '2026-05-20'
+  buildStamp:   '2026-05-23'
 };
 
 // Per-mode VALC defaults. Used when RR_CONFIG.authBase is null and
