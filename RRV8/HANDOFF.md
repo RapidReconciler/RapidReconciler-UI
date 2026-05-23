@@ -5,47 +5,131 @@ session. Paste the **Resume prompt** section as the first message in
 the new session; the rest of this file is context that prompt points
 the new session at.
 
-**Updated**: 2026-05-23, after the post-agent-first work landed.
-Highlights this chunk:
+**Updated**: 2026-05-23, after the contributors-card tabbed rework
+and the row-level reconciliation endpoint spec landed
+([PR #98](https://github.com/RapidReconciler/RapidReconciler-AI/pull/98)).
+Highlights of this longer session:
 
-- **Agent-mode bugs surfaced + fixed**: stale JWT pointing at port
-  34536 when the agent moved to 36801 (re-login fixed); the
-  Cardex Variance hero&rsquo;s `/inventory/reconciliation-filtered`
-  500&rsquo;d because my body shape sent empty arrays for the
-  non-company dimensions (sproc joined to nothing) &mdash; now
-  fetches `/inventory/status` first and passes the full filter
-  universe with companies narrowed; the As Of grid showed
-  Quantity=0 / Amount=0 because the agent returns `QOH` and
-  `AmountonHand` not `Quantity` / `Amount` &mdash; added explicit
-  key aliases to `normalizeAsOfRows`.
-- **Search anchor**: §8 standard now accepts a `^` prefix to
-  switch from substring to startsWith. Applied across Transactions,
-  As Of, and Cardex Variance grids. Tooltip + placeholder
-  advertise it.
-- **As Of bulk-fetch model**: always sends `summarizeByItem: false`
-  to the agent so the &ldquo;Lot detail&rdquo; toggle becomes a
-  pure client-side render flip. Matching pattern to Transactions.
-- **As Of Cardex Variance hero card**: two variance tiles collapsed
-  into one linkable card. Native `<a href>` &mdash; right-click
-  &ldquo;open in new tab&rdquo; works; arrow glyph signals
-  clickability.
-- **SQL compatibility floor**: dev DB bumped to compat 140 (SQL
-  Server 2017) to match the install doc&rsquo;s engine floor. Tenet
-  added to WORKFLOW.md and saved as feedback memory. Install +
-  migration runbooks now have an explicit
-  `ALTER DATABASE SET COMPATIBILITY_LEVEL = 140` step so customer
-  DBs land at the floor consistently.
-- **`usp6getasof_v2` sproc (NEW)** at `RRV8/sprocs/usp6getasof_v2.sql`.
-  Optimized replacement for `usp6getasofpaginated`. Same row +
-  total shape; **27% faster on warm cache** (1,764ms vs 2,431ms
-  on dev DB with 6.5M asof rows + both companies). Static SQL +
-  temp-table stats + single-pass aggregate + filter pushdown.
-  **Not wired to the agent yet** &mdash; that&rsquo;s an
-  `AsOfController` repository-method change. V8 still hits the
-  legacy sproc through the agent until that flip.
-- **`scripts/extract-cardex.py`**: minor JSON-formatting fix to
-  keep `reconciliation.json` minified (matches the original) so
-  re-captures produce one-line diffs.
+**As Of page polish ([PR #96](https://github.com/RapidReconciler/RapidReconciler-AI/pull/96))**
+
+- **Residual budget filter** &mdash; drop-largest algorithm: start
+  with every Qty=0 row hidden, pop biggest-|Amount| outliers until
+  signed sum fits &plusmn;target. Default $10, integer-step. Card
+  shows count + signed residual (with |Amount|-used budget in the
+  hover hint). Excel export gets a residuals summary row + a
+  separate Residuals tab. Audit report Excel + PDF cover lines
+  use the same algorithm; threshold reads from As Of&rsquo;s
+  persisted target so both surfaces stay in lockstep. Algorithm
+  iterated from greedy-add → cumulative-|Amount| cap →
+  cumulative-signed cap → drop-largest, each pass tested against
+  the demo data; drop-largest is monotonic in target and
+  consistently hides at least as many rows as the alternatives.
+- **Details preview column** (formerly &ldquo;Preview&rdquo;) on
+  every grid row. Hover → floating popover with the item ledger
+  rowset (transdate / source / dt / doc / qty / uom / cost / val /
+  running balance / variance). Persists until X click; own Excel
+  download. Wired to `POST /inventory/as-of/details` &mdash; the
+  EXISTING endpoint that runs `usp6ItemRollForward` via
+  `ItemRollForwardRepository.findDetailsInventory` (confirmed via
+  javap; API.md catalog row corrected from &ldquo;per-item lot
+  drill-in&rdquo; to actual semantics).
+- **Re-roll** moved from As Of to Cardex Variance and wired
+  against `POST /inventory/rollIItem` (existing endpoint) with a
+  confirmation prompt.
+- **Period bars** relabeled `Perpetual by Period` reading
+  `accountSummary[].perpetual`. Tooltip flipped below the bars so
+  the page-header overflow doesn&rsquo;t clip it.
+- **Stats strip** restructured: 3-col → 2fr/1fr. Quantity tile
+  replaced with a *Perpetual by Branch* widget (2-column bar list,
+  top 10 branches, click-to-narrow Branch column filter). Amount
+  tile absorbed the Cardex Variance card (label IS the link).
+- **Common UOM disabled** with a tooltip noting it depends on an
+  Admin-page conversion table not built yet.
+- **Lot detail filter-banner clear pill** removed (redundant; Lot
+  detail is a view toggle, not a filter).
+- **Totals row** pinned at the bottom of the grid covering the
+  four numeric columns.
+
+**Sidebar accordion ([PR #96](https://github.com/RapidReconciler/RapidReconciler-AI/pull/96))**
+
+- Scope section is now accordion-collapsible like every module.
+  Strict accordion across Scope + Inventory + In Transit + PO
+  Receipts + Admin: at most one section expanded at a time.
+  Default-expanded section is page-aware (Inventory wins on
+  Inventory pages; Scope otherwise).
+- **`RRV8.ensureInventoryStatus(rrFetch)`** is a new shared
+  helper on sidebar.js that seeds the filter-universe cache at
+  boot from every page. Previously only Transactions populated
+  this cache, so the sidebar showed dashes on Reconciliation /
+  As Of / Cardex Variance / DMAAIs until you bounced through
+  Transactions. Fix is a one-line boot call from each page.
+
+**Reconciliation page contributors card ([PR #98](https://github.com/RapidReconciler/RapidReconciler-AI/pull/98))**
+
+- Three contributor cards (BU / Account / Subsidiary) collapsed
+  into one tabbed card. Stable height; top 8 with `+ N more` tail;
+  active tab persists in `rrv8-recon-contrib-tab-v1`. Click-to-
+  narrow preserved. Three near-identical renderers → one
+  `renderContributorsCard(data)`. Old `js-bu-list` / `js-contributors-list`
+  / `js-sub-list` IDs gone.
+- `adaptLegacyResponse` synthesized rows now carry `outOfBalance`
+  so demo / prod shape stays consistent.
+
+**Agent endpoint specs ([PR #98](https://github.com/RapidReconciler/RapidReconciler-AI/pull/98))**
+
+- **New `docs/agent-specs/` folder** &mdash; staging area for
+  planned-endpoint specs until the `RapidReconciler-Agent` repo
+  exists (see `[[project_agent_repo_plan]]`). README documents
+  the section format.
+- **First spec: `reconciliation-rows.md`** &mdash; ready-to-implement
+  Java for `POST /inventory/reconciliation/rows` (+ in-transit /
+  po-receipts siblings). Uses existing `AccountSummaryRepository.findAll`
+  → `usp6GetRInvAccountSummary` → `v6ui_raccountsummary`. Same
+  chain that produced `data/reconciliation.json`. No new SQL
+  needed; just a thin Spring controller method.
+- V8&rsquo;s `loadData` now fires TWO parallel `rrFetch` calls:
+  the existing summary endpoint AND the new rows endpoint. The
+  rows fetch has its own `.catch → null` so 404 degrades to
+  single-row synthesis. The day the agent ships the method, V8
+  picks up real BU / Account / Subsidiary bars with no client
+  change.
+- Contributors card empty-state check tightened to
+  `_prodMode && !_hasRowLevelData` so it auto-clears when rows
+  arrive.
+
+**Documentation ([PR #97](https://github.com/RapidReconciler/RapidReconciler-AI/pull/97), [PR #96](https://github.com/RapidReconciler/RapidReconciler-AI/pull/96))**
+
+- **`RRV8/TESTING.md`** &mdash; full automated-test-plan spec for
+  V8: 8 tiers of checks (syntactic, reference integrity, V8
+  conventions, finance-not-IT, SQL compat-140, data hygiene, demo
+  shape, cross-file). Includes pre-push hook + GHA integration
+  outline. Plan only; suite implementation deferred.
+- **`RRV8/API.md` rewritten** &mdash; new top-level
+  &ldquo;Planned endpoints &mdash; handoff list for the agent
+  team&rdquo; H2 with conventions intro (auth / CORS / Jackson /
+  reconciliationFilter shape). Four sub-sections: Row-level
+  reconciliation (READY TO IMPLEMENT, links to the agent spec),
+  DMAAI worklist, Audit report detail, Work notes GET. Corrected
+  `/inventory/as-of/details` catalog row (it returns Item Roll
+  Forward detail, not lot drill-in).
+
+**New memories saved this session**
+
+- `project_dev_to_qa_workflow` &mdash; DB-object changes flow:
+  dev box → schema-compare → `RapidReconciler-SQL` dev branch
+  → publish to `RapidReconciler_QA`. Free to add/change objects
+  in dev.
+- `project_agent_repo_plan` &mdash; create `RapidReconciler-Agent`
+  to mirror SQL repo's dev/qa/main pattern. Owner will set up
+  when time permits. Specs in `docs/agent-specs/` migrate there
+  when it lands.
+- `project_new_agent_incoming` (earlier) &mdash; infrastructure
+  update bringing a new data-services agent; treat API.md as a
+  snapshot, not a contract.
+- `feedback_always_spec_new_endpoints` &mdash; when V8 needs
+  server data the agent doesn&rsquo;t have, add it to API.md
+  handoff AND wire `rrFetch` to call it (with graceful fallback).
+  Don&rsquo;t synthesize silently &mdash; document the contract.
 
 Prior chunk (agent-first tenet):
 
@@ -81,18 +165,31 @@ Inventory &rarr; As Of &rarr; Cardex Variance.
 > 4. **RRV8/GRID-STANDARDS.md** &mdash; the grid-standards spec
 >    (Transactions Details grid is the reference implementation).
 > 5. **RRV8/API.md** &mdash; full agent controller catalog +
+>    `Planned endpoints — handoff list for the agent team` H2 +
 >    Critical Gotchas (Jackson field-name binding, two
 >    ValidationLight sources, diagnostic Excel pipeline). Skim
 >    so the next time you wire an endpoint you don&rsquo;t repeat
 >    the `docType` vs `type` debug cycle.
-> 6. **RRV8/inventory-reconciliation.html** + **RRV8/inventory-
->    transactions.html** &mdash; just confirm both exist. Read
->    targeted sections when editing; pages are ~7-8k lines each.
-> 7. **Recent commits**: `git log --oneline -10`.
+> 6. **RRV8/TESTING.md** &mdash; automated-test-plan spec for V8
+>    (8 tiers). Plan only; suite implementation deferred. Read
+>    so you know what's covered when the suite ships.
+> 7. **docs/agent-specs/** &mdash; staging area for planned-
+>    endpoint specs going to the agent team. Each file is a
+>    self-contained brief with paste-ready Java; format is
+>    designed to migrate to the future `RapidReconciler-Agent`
+>    repo (see `[[project_agent_repo_plan]]`).
+> 8. **RRV8 pages**: just confirm all five exist
+>    (`inventory-reconciliation.html`, `inventory-transactions.html`,
+>    `inventory-asof.html`, `inventory-cardex-variance.html`,
+>    `accounting-dmaais.html`). Read targeted sections when
+>    editing; pages are 5-9k lines each.
+> 9. **Recent commits**: `git log --oneline -10`.
 >
-> After reading those, summarize back in 3&ndash;5 bullets what
-> RRV8 currently looks like and what's most worth doing next,
-> then wait for the next instruction.
+> After reading those, summarize back in 4&ndash;6 bullets what
+> RRV8 currently looks like, what&rsquo;s working through the
+> live agent, what&rsquo;s still on demo-only paths, and
+> what&rsquo;s most worth doing next. Then wait for the next
+> instruction.
 
 ### In-flight design direction (queued for next session)
 
@@ -288,26 +385,67 @@ take/skip/page/pageSize}` per the IntegrityController catalog row.
 
 ### Next-session queue
 
-- **Agent dev work**: implement the three DMAAI endpoints + two SQL
-  tables specified in `docs/plans/dmaai-page-overlay-table.md`.
-  Pattern detector reference impl: `derive-dmaai-analysis.py`
-  `detect_findings()`. Carry-forward join keyed on
-  `(IssueType, Company, Scope, GLClass)`.
+**Agent-side specs to ship** (each unblocks a V8 feature):
+
+- **`POST /inventory/reconciliation/rows`** &mdash; the priority
+  ask. Spec is ready-to-implement at
+  [`docs/agent-specs/reconciliation-rows.md`](../docs/agent-specs/reconciliation-rows.md).
+  V8 already wires the parallel `rrFetch` call and degrades
+  cleanly on 404; the day the controller method ships, the
+  Reconciliation page&rsquo;s contributors card paints real
+  bars with no client change. Uses existing
+  `AccountSummaryRepository.findAll` &mdash; thin Spring method.
+- **`/inventory/audit-detail`** &mdash; specced in
+  `RRV8/API.md`&rsquo;s Planned section. Streams the two heavy
+  arrays (`reconcilingItems`, `perpetual`) the Reconciliation
+  audit Excel + PDF need. Today the buttons surface a red
+  fetch-error banner in prod mode.
+- **`/inventory/work-notes` GET** &mdash; specced in API.md.
+  Save side already works (`POST /inventory/transactions/save-notes`);
+  only the bulk GET is missing.
+- **Three DMAAI endpoints** + two SQL tables specified in
+  `docs/plans/dmaai-page-overlay-table.md`. Pattern detector
+  reference impl: `derive-dmaai-analysis.py` `detect_findings()`.
+  Carry-forward join keyed on `(IssueType, Company, Scope, GLClass)`.
+
+**Client-side work**:
+
 - **`beforeunload` guard** on the DMAAI page so the analyst gets
   warned when closing with unsaved responses (the save bar is the
   only signal today).
-- **Wire the As Of page against the agent**. `AsOfController`
-  exists in the jar; mine the request shape with
-  `javap -p ./coral/.../AsOfController$*Request.class` and swap
-  the static `data/as-of.json` fetch for an `rrFetch` call. Add
-  a dedicated `/inventory/as-of/hotspots` shaped endpoint if the
-  variance-only result set isn&rsquo;t a cheap derivation of the
-  same query.
-- **Version subtitle** (`Version 8.0` under each page title from the
-  `SQLSourceControl Database Revision` extended property) &mdash;
-  parked until the new agent ships and exposes it on
+- **Wire `usp6getasof_v2`** to AsOfController. Java/Spring
+  repository-method change in the agent jar. 27% faster on warm
+  cache vs the legacy sproc (1,764ms vs 2,431ms on dev DB);
+  production should see proportional or better wins.
+- **Cardex Variance hero N+1** &mdash; one
+  `/inventory/reconciliation-filtered` call per company in the
+  JWT for the hero number. Fine with 2 companies; ugly with 20.
+  Could be a single-call shape if the agent exposed per-company
+  aggregates in the response &mdash; backend conversation.
+- **Build the next page** (Roll Forward / Integrity / In Transit /
+  PO Receipts). The pattern's now well-grooved across 5 pages;
+  start by mining the relevant controller in the agent jar, then
+  build the page through `rrFetch` from day one (agent-first
+  tenet).
+- **Implement the test plan** (`RRV8/TESTING.md`) &mdash; suite
+  is spec'd but not yet written. PowerShell pre-push hook for
+  fast tiers; Python in GHA for all tiers. Run cost: minutes.
+- **`docs/agent-specs/` migration** &mdash; when the
+  `RapidReconciler-Agent` repo is created (see
+  `[[project_agent_repo_plan]]`), the specs in this folder move
+  over verbatim and `RRV8/API.md` shrinks to a client doc.
+
+**Parked**:
+
+- **Version subtitle** (`Version 8.0` under each page title from
+  the `SQLSourceControl Database Revision` extended property)
+  &mdash; parked until the new agent ships and exposes it on
   `/inventory/status`. Notes saved in
   `project_db_version_subtitle_pending.md` memory.
+- **Deletion-candidates sweep** &mdash; walk the live object
+  inventory and propose which sprocs / views / tables are dead
+  and can be removed. Cross-reference with V8 callsites AND the
+  agent jar. Owner mentioned as &ldquo;at some point.&rdquo;
 
 ---
 
