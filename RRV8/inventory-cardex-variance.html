@@ -1,0 +1,2041 @@
+<!DOCTYPE html>
+<!--
+  =============================================================================
+  MOCKUP: Inventory > Cardex Variance
+  =============================================================================
+  Dedicated V8 surface for the per-item cardex-variance worklist. Same data
+  source as the Reconciliation page's "Cardex" variance Preview
+  (`v6ui_itemrollintegritydialog`) — per-item perpetual-vs-cardex drift —
+  elevated to its own page because it's the most actionable surface
+  outside Reconciliation itself.
+
+  Read-only V8 grid (no per-row Save yet — that joins when the responses
+  table is specced). 15-col grid (Reason / Company / LongAccount / Branch
+  / ShortItem / ItemNumber / ThirdItem / Location / Lot / Method /
+  AdjAmount / AdjQty / UOM / GLClass / Comment). Standard V8 chrome:
+  drag-to-reorder, click-to-sort, header search, column chooser, Excel
+  export.
+
+  Source: `RRV8/data/reconciliation.json#cardex` (783 rows, both companies
+  already in scope). Production wiring will hit
+  `POST /inventory/integrity` with `report: 'v6ui_itemrollintegritydialog'`
+  once we wire it (the IntegrityController is already mined in API.md).
+  =============================================================================
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Cardex Variance &mdash; RapidReconciler Mockup</title>
+<link href="fonts/fonts.css" rel="stylesheet">
+<link href="sidebar.css" rel="stylesheet">
+<link href="period-bars.css" rel="stylesheet">
+<script src="config.js"></script>
+<script src="sidebar.js"></script>
+<script src="vendor/xlsx.full.min.js" defer></script>
+<style>
+  :root {
+    --navy:        #1f2d4a;
+    --navy-deep:   #142037;
+    --blue:        #2b5fb0;
+    --blue-bright: #3d8fd6;
+    --blue-pale:   #e6efff;
+    --orange:      #f08a24;
+    --orange-deep: #d97316;
+    --orange-pale: #fbe7ce;
+    --green:       #2e8a55;
+    --green-pale:  #def4e6;
+    --red:         #c0392b;
+    --red-pale:    #fce5e1;
+    --bg:          #fafbfd;
+    --bg-soft:     #f3f5f9;
+    --bg-card:     #ffffff;
+    --text:        #1f2d4a;
+    --text-soft:   #4a5468;
+    --text-muted:  #828a9a;
+    --rule:        #e6eaf0;
+    --rule-strong: #cfd6e0;
+    --shadow-sm:   0 1px 2px rgba(20, 32, 55, 0.04);
+    --shadow-md:   0 4px 12px -2px rgba(20, 32, 55, 0.08);
+    --shadow-lg:   0 14px 32px -10px rgba(20, 32, 55, 0.18);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Open Sans', -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2, h3, h4 { font-family: 'Source Sans 3', sans-serif; font-weight: 700; }
+  a { color: inherit; text-decoration: none; }
+
+  .app {
+    display: grid;
+    grid-template-columns: 60px 1fr;
+    grid-template-rows: 56px 1fr;
+    grid-template-areas:
+      "sidebar topbar"
+      "sidebar main";
+    min-height: 100vh;
+  }
+  .topbar {
+    grid-area: topbar;
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--rule);
+    display: flex;
+    align-items: center;
+    padding: 0 24px;
+    z-index: 50;
+    box-shadow: var(--shadow-sm);
+    gap: 14px;
+  }
+  .topbar-brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+  .topbar-brand-logo { height: 28px; width: auto; flex-shrink: 0; display: block; }
+  .topbar-brand-text { display: flex; flex-direction: column; line-height: 1.15; min-width: 0; }
+  .topbar-brand-name {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 800; font-size: 14px;
+    color: var(--navy); letter-spacing: -0.005em;
+  }
+  .topbar-brand-db {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 11px; font-weight: 700;
+    letter-spacing: 0.04em; text-transform: uppercase;
+    color: var(--text-muted);
+  }
+  body.has-pinned-sidebar .app { grid-template-columns: 240px 1fr; }
+
+  .main { grid-area: main; overflow-y: auto; }
+  .page { max-width: 1280px; margin: 0 auto; padding: 32px 28px 64px; }
+
+  /* Page header */
+  .page-header {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 24px;
+    margin-bottom: 22px;
+  }
+  .page-header-left { min-width: 0; }
+  .breadcrumb {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 11.5px;
+    font-weight: 700;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+  }
+  .breadcrumb a { color: var(--text-muted); text-decoration: none; }
+  .breadcrumb a:hover { color: var(--blue); }
+  .breadcrumb-sep { margin: 0 8px; opacity: 0.5; }
+  .page-title {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 800;
+    font-size: 30px;
+    color: var(--navy);
+    letter-spacing: -0.02em;
+    line-height: 1.1;
+  }
+  .page-title-link {
+    color: inherit; text-decoration: none;
+    display: inline-flex; align-items: center; gap: 8px;
+  }
+  .page-title-link:hover { color: var(--blue); }
+  .page-title-ext-icon { width: 18px; height: 18px; opacity: 0.45; }
+  .page-title-link:hover .page-title-ext-icon { opacity: 0.85; }
+  .page-eyebrow {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 12px; font-weight: 600;
+    color: var(--text-muted);
+    margin-top: 6px;
+    max-width: 720px;
+  }
+  .page-eyebrow code {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 11.5px;
+    background: var(--bg-soft);
+    padding: 1px 6px;
+    border-radius: 4px;
+    color: var(--text);
+  }
+
+  /* Page-actions row (Company pill + Reason pill + spacer + filter banner) */
+  .page-actions-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 22px;
+    flex-wrap: wrap;
+  }
+  .action-control {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--bg-card);
+    border: 1px solid var(--rule-strong);
+    border-radius: 100px;
+    padding: 6px 14px;
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 700;
+    font-size: 12.5px;
+    color: var(--text);
+    box-shadow: var(--shadow-sm);
+    cursor: pointer;
+    user-select: none;
+  }
+  .action-control:hover { border-color: var(--blue); color: var(--blue); }
+  .action-control svg { width: 13px; height: 13px; flex-shrink: 0; }
+  .action-control.is-active {
+    background: var(--blue-pale);
+    border-color: var(--blue);
+    color: var(--blue);
+  }
+  .action-control-label {
+    font-size: 10.5px;
+    font-weight: 800;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+  .action-control.is-active .action-control-label { color: var(--blue); }
+  .action-control-value {
+    font-weight: 800;
+    font-size: 12.5px;
+    color: var(--navy);
+  }
+  .action-control.is-active .action-control-value { color: var(--blue); }
+  .action-spacer { flex: 1 1 auto; }
+  .filter-banner {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--blue-pale);
+    color: var(--blue);
+    border-radius: 100px;
+    padding: 5px 14px;
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 700;
+    font-size: 12px;
+  }
+  .filter-banner[hidden] { display: none; }
+  .filter-banner-clear {
+    background: transparent;
+    border: 0;
+    color: inherit;
+    cursor: pointer;
+    font-weight: 800;
+    padding: 0 0 0 4px;
+  }
+  .filter-banner-clear:hover { text-decoration: underline; }
+
+  /* Hero stats — 4 KPIs */
+  .stats-strip {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px;
+    margin-bottom: 24px;
+  }
+  .stat-tile {
+    background: var(--bg-card);
+    border: 1px solid var(--rule);
+    border-radius: 12px;
+    padding: 16px 18px 18px;
+    box-shadow: var(--shadow-sm);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .stat-tile-label {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 10.5px;
+    font-weight: 800;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+  .stat-tile-value {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--navy);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.15;
+  }
+  .stat-tile-value.is-neg { color: var(--red); }
+  .stat-tile-sub { font-size: 11.5px; color: var(--text-muted); }
+
+  /* Details card + V8 grid (same shape as Transactions) */
+  .details-card {
+    background: var(--bg-card);
+    border: 1px solid var(--rule);
+    border-radius: 14px;
+    box-shadow: var(--shadow-sm);
+    overflow: hidden;
+  }
+  .details-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 22px 12px;
+    border-bottom: 1px solid var(--rule);
+    gap: 16px;
+  }
+  .details-title {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 800;
+    font-size: 15px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--navy);
+  }
+  .details-head-right { display: flex; align-items: center; gap: 10px; }
+
+  .grid-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 700;
+    font-size: 12.5px;
+    padding: 5px 10px;
+    border-radius: 100px;
+    border: 1px solid var(--rule-strong);
+    background: var(--bg-card);
+    color: var(--text-soft);
+    cursor: default;
+    transition: background 0.12s, color 0.12s, border-color 0.12s;
+    white-space: nowrap;
+  }
+  button.grid-pill { cursor: pointer; }
+  button.grid-pill:hover { background: var(--bg-soft); color: var(--text); }
+  button.grid-pill.is-narrowed {
+    background: rgba(241, 164, 67, 0.12);
+    color: #8a5a14;
+    border-color: rgba(241, 164, 67, 0.40);
+  }
+  .grid-pill svg { width: 12px; height: 12px; flex-shrink: 0; }
+  .grid-pill .pill-caret { opacity: 0.55; }
+  .grid-pill.is-loading { color: var(--text-muted); font-style: italic; }
+  .grid-state-cluster {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+  }
+  .grid-search {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px 4px 10px;
+    background: var(--bg-card);
+    border: 1px solid var(--rule);
+    border-radius: 100px;
+  }
+  .grid-search:focus-within {
+    border-color: var(--blue);
+    box-shadow: 0 0 0 2px rgba(43, 95, 176, 0.18);
+  }
+  .grid-search svg { width: 13px; height: 13px; color: var(--text-muted); flex-shrink: 0; }
+  .grid-search input {
+    border: 0;
+    outline: none;
+    background: transparent;
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 12.5px;
+    color: var(--text);
+    width: 160px;
+    padding: 0;
+  }
+  .grid-search input::placeholder { color: var(--text-muted); }
+  .grid-search input::-webkit-search-decoration,
+  .grid-search input::-webkit-search-cancel-button { -webkit-appearance: none; }
+  .grid-search-clear {
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: 16px;
+    line-height: 1;
+    padding: 0 2px;
+    flex-shrink: 0;
+  }
+  .grid-search-clear:hover { color: var(--text); }
+
+  .details-scroll {
+    max-height: 600px;
+    overflow: auto;
+  }
+  .details-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-family: 'Open Sans', sans-serif;
+    font-size: 13px;
+  }
+  .details-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: var(--bg-soft);
+    color: var(--text-muted);
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 700;
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    text-align: left;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--rule);
+    white-space: nowrap;
+  }
+  .details-table th.is-num { text-align: right; }
+  .details-table thead th[draggable="true"] { cursor: grab; user-select: none; }
+  .details-table thead th[draggable="true"]:active { cursor: grabbing; }
+  .details-table thead th.is-dragging { opacity: 0.35; }
+  .details-table thead th.is-drag-over {
+    box-shadow: inset 3px 0 0 var(--blue);
+    background: rgba(43, 95, 176, 0.08);
+  }
+  .details-table thead th[data-col-key]:hover { color: var(--blue); }
+  .details-table thead th.is-sort-active { color: var(--blue); }
+  /* §9 — Per-column funnel filter trigger (Excel-style picker). */
+  .col-filter-trigger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px; height: 16px;
+    margin-left: 4px;
+    background: transparent;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+    color: var(--text-muted);
+    opacity: 0.45;
+    vertical-align: middle;
+    transition: opacity 0.12s, color 0.12s;
+  }
+  .details-table thead th:hover .col-filter-trigger { opacity: 0.9; }
+  .col-filter-trigger:hover { color: var(--blue); opacity: 1; }
+  .col-filter-trigger svg { width: 11px; height: 11px; display: block; }
+  .details-table thead th.is-filter-active { color: var(--blue); }
+  .details-table thead th.is-filter-active .col-filter-trigger {
+    color: var(--blue);
+    opacity: 1;
+  }
+  .col-filter-search {
+    display: block;
+    width: calc(100% - 24px);
+    margin: 4px 12px 6px;
+    padding: 5px 8px;
+    border: 1px solid var(--rule-strong);
+    border-radius: 6px;
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 12.5px;
+    outline: none;
+  }
+  .col-filter-search:focus {
+    border-color: var(--blue);
+    box-shadow: 0 0 0 2px rgba(43, 95, 176, 0.18);
+  }
+  .details-table thead th .sort-caret {
+    display: inline-block;
+    margin-left: 4px;
+    font-size: 9px;
+    line-height: 1;
+    color: var(--blue);
+    vertical-align: middle;
+  }
+  .details-table tbody td {
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--rule);
+    color: var(--text);
+    white-space: nowrap;
+    vertical-align: middle;
+  }
+  .details-table tbody tr:hover td { background: rgba(43, 95, 176, 0.04); }
+  .details-table td.is-num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .details-table td.is-money {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+  }
+  .details-table td .neg { color: var(--red); }
+  .details-empty {
+    padding: 32px 22px;
+    text-align: center;
+    color: var(--text-muted);
+    font-style: italic;
+  }
+  .details-skeleton { padding: 32px 22px; text-align: center; color: var(--text-muted); font-style: italic; }
+
+  /* Reset banner — the v6ui_itemrollintegritydialog Reset row is a
+     metadata marker carrying the date from which cardex variance is
+     measured. Rendered as a strip above the grid instead of a regular
+     row so the analyst sees it as context, not as one of the items. */
+  .reset-banner {
+    background: var(--bg-card);
+    border: 1px solid var(--rule);
+    border-radius: 14px;
+    box-shadow: var(--shadow-sm);
+    margin-bottom: 14px;
+    padding: 12px 18px 14px;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 16px;
+    align-items: center;
+  }
+  .reset-banner[hidden] { display: none; }
+  .reset-banner-icon {
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    background: var(--bg-soft);
+    color: var(--text-muted);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .reset-banner-icon svg { width: 18px; height: 18px; }
+  .reset-banner-body { min-width: 0; }
+  .reset-banner-label {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 10.5px;
+    font-weight: 800;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+  .reset-banner-headline {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 800;
+    font-size: 14px;
+    color: var(--navy);
+    line-height: 1.25;
+    margin-top: 2px;
+  }
+  .reset-banner-headline strong {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-weight: 700;
+    color: var(--text);
+  }
+  .reset-banner-sub {
+    font-size: 12px;
+    color: var(--text-soft);
+    margin-top: 2px;
+  }
+  .reset-banner-meta {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 11px;
+    color: var(--text-muted);
+    text-align: right;
+  }
+
+  /* Comment cell — can carry "Date: ... | Count: ... | QOH: ..." or
+     similar. Truncate visually + put the full text in the title attr. */
+  .comment-cell {
+    display: inline-block;
+    max-width: 320px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-soft);
+    font-size: 12px;
+  }
+
+  /* Reason chip (Amount vs Quantity) */
+  .reason-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 9px;
+    border-radius: 100px;
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 700;
+    font-size: 10.5px;
+    letter-spacing: 0.04em;
+    border: 1px solid transparent;
+  }
+  .reason-chip.is-amount {
+    background: rgba(43, 95, 176, 0.10);
+    color: var(--blue);
+    border-color: rgba(43, 95, 176, 0.28);
+  }
+  .reason-chip.is-quantity {
+    background: rgba(240, 138, 36, 0.12);
+    color: #8a5a14;
+    border-color: rgba(240, 138, 36, 0.32);
+  }
+
+  /* Popover (shared by Company / Reason / Column-chooser) */
+  .popover {
+    position: fixed;
+    background: var(--bg-card);
+    border: 1px solid var(--rule-strong);
+    border-radius: 10px;
+    box-shadow: var(--shadow-lg);
+    z-index: 200;
+    padding: 8px;
+    min-width: 220px;
+    max-height: 70vh;
+    overflow: auto;
+  }
+  .popover[hidden] { display: none; }
+  .popover-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 600;
+    font-size: 13.5px;
+    color: var(--text);
+    cursor: pointer;
+  }
+  .popover-row:hover { background: var(--bg-soft); }
+  .popover-section-label {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 10.5px;
+    font-weight: 800;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    padding: 6px 12px 4px;
+  }
+  .col-vis-list { margin-top: 4px; border-top: 1px solid var(--rule); padding-top: 4px; max-height: 360px; overflow: auto; }
+  .col-vis-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--text);
+    cursor: pointer;
+  }
+  .col-vis-row:hover { background: var(--bg-soft); }
+  .col-vis-row input[type="checkbox"] { width: 14px; height: 14px; accent-color: var(--blue); cursor: pointer; }
+  .col-vis-row .col-vis-label { flex: 1; }
+  .col-vis-row.is-muted .col-vis-label { color: var(--text-muted); }
+  .uom-list { max-height: 360px; overflow: auto; }
+  .uom-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 12px;
+    border-radius: 6px;
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .uom-row:hover { background: var(--bg-soft); }
+  .uom-row.is-selected { background: var(--blue-pale); color: var(--blue); font-weight: 700; }
+  .uom-row .uom-count {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Toast */
+  .toast {
+    position: fixed;
+    bottom: 28px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--navy);
+    color: #fff;
+    padding: 10px 18px;
+    border-radius: 100px;
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 600;
+    font-size: 13px;
+    box-shadow: var(--shadow-lg);
+    z-index: 500;
+    opacity: 0;
+    transition: opacity 0.18s ease;
+    pointer-events: none;
+  }
+  .toast.is-visible { opacity: 1; }
+
+  @media (max-width: 900px) {
+    .stats-strip { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <header class="topbar">
+    <div class="topbar-brand">
+      <img class="topbar-brand-logo" src="../Images/gsi-logo.png" alt="GSI">
+      <span class="topbar-brand-text">
+        <span class="topbar-brand-name">RapidReconciler</span>
+        <span class="topbar-brand-db" id="js-topbar-db">RapidReconciler_Dev</span>
+      </span>
+    </div>
+  </header>
+
+  <div id="js-sidebar-mount"></div>
+
+  <div class="popover" id="filter-popover" hidden role="menu" aria-label="Filter / chooser"></div>
+  <div class="popover" id="colfilter-popover" hidden role="menu" aria-label="Filter by column value"></div>
+  <div class="toast" id="js-toast" role="status" aria-live="polite"></div>
+
+  <main class="main">
+
+<div class="page">
+
+  <!-- PAGE HEADER -->
+  <header class="page-header">
+    <div class="page-header-left">
+      <nav class="breadcrumb" aria-label="Breadcrumb">
+        <a href="#">Inventory</a><span class="breadcrumb-sep">/</span><span>Cardex Variance</span>
+      </nav>
+      <h1 class="page-title">
+        <a class="page-title-link" href="../RRUniversity/inventory-cardex-variance.html" target="_blank" rel="noopener">
+          Cardex Variance
+          <svg class="page-title-ext-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M6 3h7v7M13 3L6 10M11 9v4H3V5h4"/>
+          </svg>
+        </a>
+      </h1>
+      <div class="page-eyebrow">
+        Items whose perpetual valuation didn&rsquo;t roll cleanly &mdash;
+        the cardex roll-integrity worklist. Phantom accounts
+        (<em>outside operations</em>, <em>gl class not in base table</em>)
+        are excluded. Cardex variance is a snapshot concept &mdash; on-hand
+        is &ldquo;right now,&rdquo; so the Reconciliation page only
+        attributes value to the current period; prior periods read $0.
+        The hero pairs two numbers: the <strong>Recon variance impact</strong>
+        for the current period (matching the Reconciliation page&rsquo;s
+        Cardex card) and the <strong>per-item total</strong> across the
+        rows below (cumulative since the last Reset on
+        <span id="js-reset-date">&mdash;</span>).
+      </div>
+    </div>
+  </header>
+
+  <!-- ACTIONS ROW -->
+  <div class="page-actions-row">
+    <button type="button" class="action-control" id="company-pill" title="Narrow to a single company">
+      <span class="action-control-label">Company</span>
+      <span class="action-control-value" id="company-pill-value">All</span>
+      <svg class="pill-caret" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 6 8 10 12 6"/></svg>
+    </button>
+    <button type="button" class="action-control" id="reason-pill" title="Narrow to Amount or Quantity variance">
+      <span class="action-control-label">Reason</span>
+      <span class="action-control-value" id="reason-pill-value">All</span>
+      <svg class="pill-caret" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 6 8 10 12 6"/></svg>
+    </button>
+    <div class="action-spacer"></div>
+    <div class="filter-banner" id="filter-banner" hidden>
+      <span id="filter-banner-text">&mdash;</span>
+      <button type="button" class="filter-banner-clear" id="filter-banner-clear">Clear &times;</button>
+    </div>
+  </div>
+
+  <!-- HERO STATS -->
+  <section class="stats-strip" aria-label="Variance totals">
+    <div class="stat-tile" title="Cardex variance impact for the current period — the same number on the Reconciliation page's Cardex card.">
+      <span class="stat-tile-label">Recon variance impact</span>
+      <span class="stat-tile-value" id="stat-reconcardex">&mdash;</span>
+      <span class="stat-tile-sub">current period · matches Reconciliation</span>
+    </div>
+    <div class="stat-tile" title="Sum of per-item adjustment amounts for the rows in scope, cumulative since the last Reset date.">
+      <span class="stat-tile-label">Per-item total</span>
+      <span class="stat-tile-value" id="stat-netamt">&mdash;</span>
+      <span class="stat-tile-sub">cumulative since last Reset</span>
+    </div>
+    <div class="stat-tile">
+      <span class="stat-tile-label">Items flagged</span>
+      <span class="stat-tile-value" id="stat-count">&mdash;</span>
+      <span class="stat-tile-sub">rows in current scope</span>
+    </div>
+    <div class="stat-tile">
+      <span class="stat-tile-label">Net AdjQty</span>
+      <span class="stat-tile-value" id="stat-netqty">&mdash;</span>
+      <span class="stat-tile-sub">signed quantity net</span>
+    </div>
+  </section>
+
+  <!-- RESET BANNER — populated from the Reset row in
+       v6ui_itemrollintegritydialog. Hidden when there's no Reset row
+       (the view shouldn't realistically be empty here, but defensive). -->
+  <div class="reset-banner" id="reset-banner" hidden>
+    <div class="reset-banner-icon">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"/>
+        <polyline points="12 6 12 12 16 14"/>
+      </svg>
+    </div>
+    <div class="reset-banner-body">
+      <div class="reset-banner-label">Variance reset</div>
+      <div class="reset-banner-headline" id="reset-banner-headline">&mdash;</div>
+      <div class="reset-banner-sub" id="reset-banner-sub">&mdash;</div>
+    </div>
+    <div class="reset-banner-meta" id="reset-banner-meta">&mdash;</div>
+  </div>
+
+  <!-- DETAILS GRID -->
+  <section class="details-card" id="details-card">
+    <div class="details-head">
+      <span class="details-title">Details</span>
+      <div class="details-head-right">
+        <div class="grid-state-cluster">
+          <label class="grid-search" title="Filter visible rows by any text in any visible column">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="7" r="4"/><line x1="10" y1="10" x2="14" y2="14"/></svg>
+            <input type="search" id="grid-search-input" placeholder="Search rows&hellip;" autocomplete="off" spellcheck="false">
+            <button type="button" class="grid-search-clear" id="grid-search-clear" hidden title="Clear search">&times;</button>
+          </label>
+          <button type="button" class="grid-pill grid-pill-export" id="grid-export-btn" title="Export current view (filters + visible columns + order) to Excel">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10v3h10v-3"/><path d="M8 2v9"/><polyline points="5 8 8 11 11 8"/></svg>
+            <span>Excel</span>
+          </button>
+          <button type="button" class="grid-pill grid-pill-cols" id="col-pill" title="Show or hide columns &middot; drag column headers to reorder">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="1"/><line x1="6" y1="3" x2="6" y2="13"/><line x1="10" y1="3" x2="10" y2="13"/></svg>
+            <span id="col-pill-label">Columns</span>
+            <svg class="pill-caret" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 6 8 10 12 6"/></svg>
+          </button>
+          <span class="grid-pill grid-pill-count is-loading" id="details-count">Loading&hellip;</span>
+        </div>
+      </div>
+    </div>
+    <div class="details-scroll">
+      <table class="details-table" id="details-table">
+        <thead>
+          <tr id="details-thead-row"></tr>
+        </thead>
+        <tbody id="details-tbody">
+          <tr><td class="details-skeleton" id="details-skeleton-cell">Loading cardex variance rows&hellip;</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+</div>
+  </main>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  if (window.RRV8 && typeof window.RRV8.mountSidebar === 'function') {
+    window.RRV8.mountSidebar({ activePage: 'cardex-variance', hasPeriodFilter: false });
+  }
+  // Reflect cross-page state in the sidebar (filter counts + status
+  // dots) — Cardex Variance doesn't carry a period dimension so the
+  // Period row isn't rendered, but the GL filters + status lights
+  // should match what the analyst sees elsewhere.
+  if (window.RRV8 && typeof window.RRV8.paintSidebarFromCache === 'function') {
+    window.RRV8.paintSidebarFromCache();
+  }
+
+  const RR_CONFIG = window.RR_CONFIG || { mode: 'demo', dataPath: 'data/' };
+  const MODE = (function () {
+    try {
+      const u = new URL(window.location.href);
+      const q = (u.searchParams.get('mode') || '').toLowerCase();
+      if (q === 'demo' || q === 'staging' || q === 'prod') return q;
+    } catch (_) {}
+    return RR_CONFIG.mode || 'demo';
+  })();
+  const IS_DEMO = MODE === 'demo';
+
+  // ============================================================
+  //  SESSION + rrFetch — agent-first per the V8 tenet.
+  //  Demo mode reads the static snapshot at data/reconciliation.json.
+  //  Staging/prod mode fetches per-section from the live agent.
+  // ============================================================
+  window.RR_SESSION = window.RR_SESSION || { user: null, dbs: [], activeDbIndex: 0, token: null };
+  function rrParseJwt(token) {
+    try {
+      const part = String(token).split('.')[1];
+      if (!part) return null;
+      const b64 = part.replace(/-/g, '+').replace(/_/g, '/');
+      const pad = b64.length % 4;
+      const padded = pad ? b64 + '='.repeat(4 - pad) : b64;
+      const json = decodeURIComponent(atob(padded).split('').map(c =>
+        '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join(''));
+      return JSON.parse(json);
+    } catch (_) { return null; }
+  }
+  function hydrateSessionFromToken() {
+    try {
+      const token = localStorage.getItem('rrv8.token');
+      if (!token) return false;
+      const payload = rrParseJwt(token);
+      if (!payload) return false;
+      window.RR_SESSION.token = token;
+      window.RR_SESSION.user  = payload.user || null;
+      window.RR_SESSION.dbs   = Array.isArray(payload.dbs) ? payload.dbs : [];
+      if (window.RR_SESSION.activeDbIndex >= window.RR_SESSION.dbs.length) {
+        window.RR_SESSION.activeDbIndex = 0;
+      }
+      return window.RR_SESSION.dbs.length > 0;
+    } catch (_) { return false; }
+  }
+  if (!IS_DEMO) hydrateSessionFromToken();
+  function prodHeaders(contentType) {
+    const h = { 'Accept': 'application/json' };
+    if (window.RR_SESSION.token) h['Authorization'] = 'Bearer ' + window.RR_SESSION.token;
+    if (contentType) h['Content-Type'] = contentType;
+    return h;
+  }
+  function rrFetch(area, opts) {
+    opts = opts || {};
+    if (IS_DEMO) {
+      const file = (opts.demoFile || area) + '.json';
+      return fetch((RR_CONFIG.dataPath || 'data/') + file, { cache: 'no-store' })
+        .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status + ' on ' + file); return r.json(); });
+    }
+    const db = window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex];
+    if (!db || !db.ip) {
+      return Promise.reject(new Error('No active database in session — sign in via the hub first.'));
+    }
+    const url = 'https://' + db.ip + '/' + area;
+    return fetch(url, {
+      method:  opts.method || 'GET',
+      headers: prodHeaders(opts.body ? 'application/json;charset=UTF-8' : null),
+      body:    opts.body ? JSON.stringify(opts.body) : undefined
+    }).then(r => {
+      if (!r.ok) throw new Error('HTTP ' + r.status + ' on ' + url);
+      return r.text().then(t => t ? JSON.parse(t) : null);
+    });
+  }
+  function reconciliationFilterFromSession() {
+    // /inventory/integrity expects bare string arrays here. The
+    // company list comes from the JWT's allowed companies (`dbs[i].i`).
+    const db = window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex] || {};
+    return {
+      companies:     Array.isArray(db.i) ? db.i : [],
+      businessUnits: [],
+      objects:       [],
+      subsidiaries:  [],
+      currencies:    [],
+      period:        ''
+    };
+  }
+  // Reconciliation-filtered wraps each dimension in {id, checked, show}
+  // — Jackson binds to a coral...Item array; bare strings here give a
+  // 400. Returned for the Recon variance impact hero number.
+  function reconciliationFilterAsItems() {
+    const db = window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex] || {};
+    const wrap = arr => (arr || []).map(id => ({ id, checked: true, show: true }));
+    return {
+      currencies:    [],
+      companies:     wrap(db.i),
+      businessUnits: [],
+      objects:       [],
+      subsidiaries:  []
+    };
+  }
+  function readCurrentPeriodFromCache() {
+    let best = null;
+    try {
+      for (let i = 0; i < sessionStorage.length; i++) {
+        const k = sessionStorage.key(i);
+        if (!k || !/^rrv8\.scope\.v1\..+\.currentPeriod$/.test(k)) continue;
+        const raw = sessionStorage.getItem(k);
+        if (!raw) continue;
+        const obj = JSON.parse(raw);
+        if (obj && obj.payload && (!best || (obj.ts || 0) > (best.ts || 0))) best = obj;
+      }
+    } catch (_) {}
+    if (!best) return null;
+    return (typeof best.payload === 'string') ? best.payload : (best.payload && best.payload.period);
+  }
+
+  // ----- Toast -----
+  const toastEl = document.getElementById('js-toast');
+  let toastTimer = null;
+  function toast(msg) {
+    if (!toastEl) return;
+    toastEl.textContent = msg;
+    toastEl.classList.add('is-visible');
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toastEl.classList.remove('is-visible'), 2400);
+  }
+
+  // ----- Util -----
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, m =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m])
+    );
+  }
+  function fmtInt(n) {
+    const x = Number(n);
+    if (!isFinite(x)) return '';
+    return Math.round(x).toLocaleString('en-US');
+  }
+  function fmtQty(n) {
+    const x = Number(n);
+    if (!isFinite(x)) return '';
+    return x.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+  }
+  function fmtMoney(n) {
+    const x = Number(n);
+    if (!isFinite(x)) return '';
+    const abs = Math.abs(x).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return x < 0 ? '(' + abs + ')' : abs;
+  }
+  function moneyCell(n) {
+    const x = Number(n);
+    if (!isFinite(x) || x === 0) return '<span style="color:var(--text-muted)">&mdash;</span>';
+    const cls = x < 0 ? 'neg' : '';
+    const txt = fmtMoney(x);
+    return cls ? '<span class="' + cls + '">' + txt + '</span>' : txt;
+  }
+  function qtyCell(n) {
+    const x = Number(n);
+    if (!isFinite(x) || x === 0) return '<span style="color:var(--text-muted)">&mdash;</span>';
+    const cls = x < 0 ? 'neg' : '';
+    const txt = fmtQty(x);
+    return cls ? '<span class="' + cls + '">' + txt + '</span>' : txt;
+  }
+  function reasonCell(r) {
+    const v = (r.reason || '').trim();
+    if (!v) return '';
+    const cls = v === 'Amount' ? 'is-amount' : (v === 'Quantity' ? 'is-quantity' : '');
+    return '<span class="reason-chip ' + cls + '">' + escapeHtml(v) + '</span>';
+  }
+  function commentCell(r) {
+    const v = (r.comment || '').trim();
+    if (!v) return '';
+    return '<span class="comment-cell" title="' + escapeHtml(v) + '">' + escapeHtml(v) + '</span>';
+  }
+  // "outside operations" and "gl class not in base table" are
+  // dummy/trash-bin longAccount values in v6ui_itemrollintegritydialog
+  // (and accountSummary). They're not real inventory accounts and
+  // shouldn't appear in any grid or contribute to totals. The
+  // Reconciliation page already filters them out via the accountRows
+  // intersection; we apply the same rule here so the Cardex Variance
+  // grid total reconciles to Recon's per-account view.
+  function isExcludedAccount(longAccount) {
+    const s = String(longAccount || '').toLowerCase();
+    return s.indexOf('outside operations') !== -1
+        || s.indexOf('not in base table') !== -1;
+  }
+
+  function shortMdy(s) {
+    // Accept "MM/DD/YY", "MM/DD/YYYY", or "YYYY-MM-DD" and emit
+    // a human-readable "Mon DD, YYYY". The Reset row stores its
+    // date in the ItemNumber column (12/11/14 style).
+    if (!s) return '';
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    let m = /^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/.exec(s);
+    if (m) {
+      const mm = parseInt(m[1], 10), dd = parseInt(m[2], 10);
+      let yy = parseInt(m[3], 10);
+      if (yy < 100) yy += yy < 50 ? 2000 : 1900;
+      if (mm >= 1 && mm <= 12) return months[mm - 1] + ' ' + dd + ', ' + yy;
+    }
+    m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+    if (m) return months[parseInt(m[2], 10) - 1] + ' ' + parseInt(m[3], 10) + ', ' + m[1];
+    return s;
+  }
+
+  // ============================================================
+  //  COLUMNS — match v6ui_itemrollintegritydialog (camelCase
+  //  field names since reconciliation.json#cardex serializes that
+  //  way).
+  // ============================================================
+  const COLUMNS = [
+    { key:'reason',        label:'Reason',       defaultOn:true,  render: reasonCell },
+    { key:'companyNumber', label:'Company',      defaultOn:true,  render: r => escapeHtml(r.companyNumber || '') },
+    { key:'longAccount',   label:'Long Account', defaultOn:true,  render: r => escapeHtml(r.longAccount || '') },
+    { key:'branch',        label:'Branch',       defaultOn:true,  render: r => escapeHtml(r.branch || '') },
+    { key:'shortItem',     label:'Short Item',   defaultOn:false, numHeader:true, tdClass:'is-num', render: r => escapeHtml(fmtInt(r.shortItem)) },
+    { key:'itemNumber',    label:'Item',         defaultOn:true,  render: r => escapeHtml(r.itemNumber || '') },
+    { key:'thirdItem',     label:'Third Item',   defaultOn:false, render: r => escapeHtml(r.thirdItem || '') },
+    { key:'location',      label:'Location',     defaultOn:true,  render: r => escapeHtml(r.location || '') },
+    { key:'lot',           label:'Lot',          defaultOn:false, render: r => escapeHtml(r.lot || '') },
+    { key:'method',        label:'Method',       defaultOn:true,  render: r => escapeHtml(r.method || '') },
+    { key:'adjAmount',     label:'Adj Amount',   defaultOn:true,  numHeader:true, tdClass:'is-money', render: r => moneyCell(r.adjAmount) },
+    { key:'adjQty',        label:'Adj Qty',      defaultOn:true,  numHeader:true, tdClass:'is-num',   render: r => qtyCell(r.adjQty) },
+    { key:'uom',           label:'UOM',          defaultOn:true,  render: r => escapeHtml(r.uom || '') },
+    { key:'glClass',       label:'GL Class',     defaultOn:true,  render: r => escapeHtml(r.glClass || '') },
+    { key:'comment',       label:'Comment',      defaultOn:true,  render: commentCell }
+  ];
+  const COLUMNS_BY_KEY = {};
+  COLUMNS.forEach(c => { COLUMNS_BY_KEY[c.key] = c; });
+
+  const COL_LS_KEY       = 'rrv8-cardex-columns-v1';
+  const COL_ORDER_LS_KEY = 'rrv8-cardex-col-order-v1';
+  const SORT_LS_KEY      = 'rrv8-cardex-sort-v1';
+  const COMPANY_LS_KEY   = 'rrv8-cardex-company-v1';
+  const REASON_LS_KEY    = 'rrv8-cardex-reason-v1';
+  const COLFILTER_LS_KEY = 'rrv8-cardex-colfilter-v1';
+
+  function loadColVisibility() {
+    const out = {};
+    COLUMNS.forEach(c => { out[c.key] = c.defaultOn; });
+    try {
+      const raw = localStorage.getItem(COL_LS_KEY);
+      if (raw) {
+        const saved = JSON.parse(raw) || {};
+        Object.keys(saved).forEach(k => { if (k in out) out[k] = !!saved[k]; });
+      }
+    } catch (_) {}
+    return out;
+  }
+  function saveColVisibility() {
+    try { localStorage.setItem(COL_LS_KEY, JSON.stringify(_state.colVisibility)); } catch (_) {}
+  }
+  function loadColOrder() {
+    const allKeys = COLUMNS.map(c => c.key);
+    const knownSet = new Set(allKeys);
+    try {
+      const raw = localStorage.getItem(COL_ORDER_LS_KEY);
+      if (raw) {
+        const saved = JSON.parse(raw);
+        if (Array.isArray(saved)) {
+          const filtered = saved.filter(k => knownSet.has(k));
+          const present  = new Set(filtered);
+          const missing  = allKeys.filter(k => !present.has(k));
+          return filtered.concat(missing);
+        }
+      }
+    } catch (_) {}
+    return allKeys;
+  }
+  function saveColOrder() {
+    try { localStorage.setItem(COL_ORDER_LS_KEY, JSON.stringify(_state.colOrder)); } catch (_) {}
+  }
+  function loadSort() {
+    try {
+      const raw = localStorage.getItem(SORT_LS_KEY);
+      if (!raw) return { key: 'adjAmount', dir: 'desc' };  // default = biggest hits first
+      const s = JSON.parse(raw);
+      if (s && (s.key === null || typeof s.key === 'string') && (s.dir === 'asc' || s.dir === 'desc')) return s;
+    } catch (_) {}
+    return { key: 'adjAmount', dir: 'desc' };
+  }
+  function saveSort() {
+    try { localStorage.setItem(SORT_LS_KEY, JSON.stringify({ key: _state.sortKey, dir: _state.sortDir })); } catch (_) {}
+  }
+  function loadCompany() { try { return localStorage.getItem(COMPANY_LS_KEY) || ''; } catch (_) { return ''; } }
+  function saveCompany() {
+    try {
+      if (_state.companyFilter) localStorage.setItem(COMPANY_LS_KEY, _state.companyFilter);
+      else localStorage.removeItem(COMPANY_LS_KEY);
+    } catch (_) {}
+  }
+  function loadColumnFilters() {
+    const out = {};
+    try {
+      const raw = localStorage.getItem(COLFILTER_LS_KEY);
+      if (!raw) return out;
+      const saved = JSON.parse(raw) || {};
+      Object.keys(saved).forEach(k => {
+        if (COLUMNS_BY_KEY[k] && Array.isArray(saved[k]) && saved[k].length) {
+          out[k] = new Set(saved[k]);
+        }
+      });
+    } catch (_) {}
+    return out;
+  }
+  function saveColumnFilters() {
+    try {
+      const obj = {};
+      Object.keys(_state.columnFilters || {}).forEach(k => {
+        const s = _state.columnFilters[k];
+        if (s && s.size) obj[k] = Array.from(s);
+      });
+      localStorage.setItem(COLFILTER_LS_KEY, JSON.stringify(obj));
+    } catch (_) {}
+  }
+  function loadReason() { try { return localStorage.getItem(REASON_LS_KEY) || ''; } catch (_) { return ''; } }
+  function saveReason() {
+    try {
+      if (_state.reasonFilter) localStorage.setItem(REASON_LS_KEY, _state.reasonFilter);
+      else localStorage.removeItem(REASON_LS_KEY);
+    } catch (_) {}
+  }
+
+  const _state = {
+    colVisibility: loadColVisibility(),
+    colOrder:      loadColOrder(),
+    sortKey:       null,
+    sortDir:       'asc',
+    gridSearch:    '',
+    companyFilter: loadCompany(),
+    reasonFilter:  loadReason(),
+    columnFilters: loadColumnFilters()
+  };
+  const _savedSort = loadSort();
+  _state.sortKey = _savedSort.key;
+  _state.sortDir = _savedSort.dir;
+
+  let _data = null;
+  let _resetRow = null;  // the v6ui_itemrollintegritydialog Reset row,
+                         // surfaced as a meta strip above the grid.
+  let _reconCardexByCompany = null;  // {companyNumber: variance.cardex sum}
+                                     // for the latest period in accountRows.
+  let _reconCurrentPeriod = null;    // the latest accountRows period (ISO).
+
+  function visibleColumns() {
+    return _state.colOrder
+      .map(k => COLUMNS_BY_KEY[k])
+      .filter(c => c && _state.colVisibility[c.key]);
+  }
+  function visibleColspan() { return Math.max(1, visibleColumns().length); }
+
+  // ============================================================
+  //  Data load — sourced from reconciliation.json#cardex
+  //  (same 783-row array that backs the Reconciliation Cardex
+  //  Preview modal). Prod will swap this for
+  //  POST /inventory/integrity { report: 'v6ui_itemrollintegritydialog' }
+  //  per the IntegrityController catalog entry in API.md.
+  // ============================================================
+  async function loadData() {
+    const skeleton = document.getElementById('details-skeleton-cell');
+    if (skeleton) skeleton.colSpan = visibleColspan();
+    try {
+      // -- Cardex grid rows: integrity report on v6ui_itemrollintegritydialog.
+      //    Demo mode reads data/reconciliation.json (snapshot carries
+      //    cardex inline under the `cardex` key). Agent mode hits
+      //    /inventory/integrity with that view as the report id.
+      const integrityPayload = await rrFetch('inventory/integrity', {
+        method: 'POST',
+        body: {
+          report: 'v6ui_itemrollintegritydialog',
+          reconciliationFilter: reconciliationFilterFromSession(),
+          take: 100000, skip: 0, page: 1, pageSize: 100000
+        },
+        demoFile: 'reconciliation'  // snapshot file; we'll pull payload.cardex out
+      });
+      // Demo snapshot delivers the full reconciliation payload (we
+      // pull payload.cardex). Agent delivers the standard paged
+      // shape {total, data[], aggregates, ...}.
+      let all = [];
+      if (Array.isArray(integrityPayload && integrityPayload.cardex)) {
+        all = integrityPayload.cardex;
+      } else if (Array.isArray(integrityPayload && integrityPayload.data)) {
+        all = integrityPayload.data;
+      } else if (Array.isArray(integrityPayload)) {
+        all = integrityPayload;
+      }
+      const resetRows = all.filter(r => (r.reason || '').trim() === 'Reset:');
+      const rows      = all.filter(r =>
+        (r.reason || '').trim() !== 'Reset:' &&
+        !isExcludedAccount(r.longAccount)
+      );
+      _resetRow = resetRows[0] || null;
+      _data = { rows };
+
+      // -- Recon variance impact: sum of accountRows[].variance.cardex
+      //    for the current period. Demo reads the same snapshot we
+      //    already have. Agent hits /inventory/reconciliation-filtered
+      //    (summary only; we read summary.variance.cardex per company).
+      _reconCardexByCompany = {};
+      _reconCurrentPeriod   = null;
+      if (IS_DEMO && integrityPayload && Array.isArray(integrityPayload.accountRows)) {
+        const acc = integrityPayload.accountRows;
+        const periods = Array.from(new Set(acc.map(r => r.period))).sort();
+        _reconCurrentPeriod = periods[periods.length - 1];
+        acc.forEach(r => {
+          if (r.period !== _reconCurrentPeriod) return;
+          const co = r.companyId || r.CompanyNumber || '?';
+          const v  = (r.variance && r.variance.cardex) || 0;
+          _reconCardexByCompany[co] = (_reconCardexByCompany[co] || 0) + v;
+        });
+      } else if (!IS_DEMO) {
+        // Pull per-company reconciliation-filtered for the cardex
+        // variance impact. Companies the JWT grants access to come from
+        // dbs[i].i. One call per company so the totals split out for the
+        // hero's Company-filter scoping.
+        const db = window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex] || {};
+        const cos = Array.isArray(db.i) ? db.i : [];
+        const period = readCurrentPeriodFromCache() || '';
+        _reconCurrentPeriod = period;
+        await Promise.all(cos.map(async co => {
+          try {
+            const body = reconciliationFilterAsItems();
+            body.companies = [{ id: co, checked: true, show: true }];
+            body.period = period;
+            const recon = await rrFetch('inventory/reconciliation-filtered', {
+              method: 'POST', body
+            });
+            const cx = recon && recon.summary && recon.summary.variance &&
+                       recon.summary.variance.cardex;
+            // The cardex field can be a scalar or {value, alert} object.
+            const val = (cx && typeof cx === 'object') ? (cx.value || 0) : (cx || 0);
+            _reconCardexByCompany[co] = val;
+          } catch (e) {
+            console.warn('reconciliation-filtered failed for company', co, e);
+          }
+        }));
+      }
+    } catch (err) {
+      console.error('cardex load failed:', err);
+      const tbody = document.getElementById('details-tbody');
+      if (tbody) {
+        tbody.innerHTML = '<tr><td colspan="' + visibleColspan() + '" class="details-empty">' +
+          'Couldn&rsquo;t load Cardex Variance data &mdash; ' + escapeHtml(err.message) +
+        '</td></tr>';
+      }
+      return;
+    }
+    renderAll();
+  }
+
+  // ============================================================
+  //  Filter + sort + search
+  // ============================================================
+  function filteredRows() {
+    if (!_data || !Array.isArray(_data.rows)) return [];
+    let rows = _data.rows;
+    if (_state.companyFilter) rows = rows.filter(r => (r.companyNumber || '') === _state.companyFilter);
+    if (_state.reasonFilter)  rows = rows.filter(r => (r.reason || '') === _state.reasonFilter);
+    rows = applyColumnFilters(rows);
+    return rows;
+  }
+  function applyColumnFilters(rows) {
+    const cf = _state.columnFilters || {};
+    const keys = Object.keys(cf).filter(k => cf[k] && cf[k].size);
+    if (!keys.length) return rows;
+    return rows.filter(r => {
+      for (let i = 0; i < keys.length; i++) {
+        const k = keys[i];
+        const v = (r[k] == null) ? '' : String(r[k]);
+        if (!cf[k].has(v)) return false;
+      }
+      return true;
+    });
+  }
+  function distinctValuesForColumn(colKey) {
+    if (!_data || !Array.isArray(_data.rows)) return [];
+    let rows = _data.rows;
+    if (_state.companyFilter) rows = rows.filter(r => (r.companyNumber || '') === _state.companyFilter);
+    if (_state.reasonFilter)  rows = rows.filter(r => (r.reason || '') === _state.reasonFilter);
+    const cf = _state.columnFilters || {};
+    const otherKeys = Object.keys(cf).filter(k => k !== colKey && cf[k] && cf[k].size);
+    if (otherKeys.length) {
+      rows = rows.filter(r => {
+        for (let i = 0; i < otherKeys.length; i++) {
+          const k = otherKeys[i];
+          const v = (r[k] == null) ? '' : String(r[k]);
+          if (!cf[k].has(v)) return false;
+        }
+        return true;
+      });
+    }
+    const set = new Set();
+    rows.forEach(r => set.add((r[colKey] == null) ? '' : String(r[colKey])));
+    return Array.from(set).sort((a, b) =>
+      String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' })
+    );
+  }
+  function searchFilter(rows, q) {
+    const query = String(q || '').toLowerCase().trim();
+    if (!query) return rows;
+    const cols = visibleColumns();
+    return rows.filter(r => {
+      for (let i = 0; i < cols.length; i++) {
+        const v = r[cols[i].key];
+        if (v == null) continue;
+        if (String(v).toLowerCase().indexOf(query) !== -1) return true;
+      }
+      return false;
+    });
+  }
+  function sortRows(rows, key, dir) {
+    if (!key) return rows;
+    const col = COLUMNS_BY_KEY[key];
+    if (!col) return rows;
+    const numeric = col.tdClass === 'is-money' || col.tdClass === 'is-num';
+    const mult = (dir === 'desc') ? -1 : 1;
+    return rows.slice().sort((a, b) => {
+      const av = a[key], bv = b[key];
+      if (numeric) {
+        const an = Number(av);
+        const bn = Number(bv);
+        const ax = isFinite(an) ? an : 0;
+        const bx = isFinite(bn) ? bn : 0;
+        return (ax - bx) * mult;
+      }
+      const as = String(av == null ? '' : av);
+      const bs = String(bv == null ? '' : bv);
+      return as.localeCompare(bs, undefined, { numeric: true, sensitivity: 'base' }) * mult;
+    });
+  }
+
+  // ============================================================
+  //  Render
+  // ============================================================
+  function setStat(id, txt, raw) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = txt || '0';
+    el.classList.toggle('is-neg', Number(raw) < 0);
+  }
+  function renderStats(rows) {
+    let netAmt = 0, netQty = 0;
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      netAmt += Number(r.adjAmount) || 0;
+      netQty += Number(r.adjQty)    || 0;
+    }
+    // Recon-authoritative cardex variance, scoped to the active Company
+    // filter so the hero number aligns with whatever the analyst is
+    // looking at. When "All companies" is selected, sum every company.
+    let reconAmt = 0;
+    if (_reconCardexByCompany) {
+      Object.keys(_reconCardexByCompany).forEach(co => {
+        if (_state.companyFilter && _state.companyFilter !== co) return;
+        reconAmt += _reconCardexByCompany[co];
+      });
+    }
+    setStat('stat-reconcardex', fmtMoney(reconAmt), reconAmt);
+    setStat('stat-count',       rows.length.toLocaleString('en-US'), rows.length);
+    setStat('stat-netamt',      fmtMoney(netAmt), netAmt);
+    setStat('stat-netqty',      fmtQty(netQty),   netQty);
+  }
+
+  function renderTableHeader() {
+    const tr = document.getElementById('details-thead-row');
+    if (!tr) return;
+    const cols = visibleColumns();
+    const cf = _state.columnFilters || {};
+    const html = cols.map(c => {
+      const classes = [];
+      if (c.numHeader) classes.push('is-num');
+      const isActive = _state.sortKey === c.key;
+      if (isActive) classes.push('is-sort-active', 'is-sort-' + _state.sortDir);
+      const filtered = !!(cf[c.key] && cf[c.key].size);
+      if (filtered) classes.push('is-filter-active');
+      const clsAttr = classes.length ? ' class="' + classes.join(' ') + '"' : '';
+      const caret = isActive
+        ? '<span class="sort-caret" aria-hidden="true">' + (_state.sortDir === 'desc' ? '&#9660;' : '&#9650;') + '</span>'
+        : '';
+      const funnel =
+        '<button class="col-filter-trigger" type="button" data-action="filter-col" data-col-key="' + escapeHtml(c.key) + '" title="Filter ' + escapeHtml(c.label) + '" aria-label="Filter ' + escapeHtml(c.label) + '">' +
+          '<svg viewBox="0 0 16 16" fill="' + (filtered ? 'currentColor' : 'none') + '" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+            '<polygon points="2 3 14 3 10 8 10 13 6 11 6 8 2 3"/>' +
+          '</svg>' +
+        '</button>';
+      return '<th' + clsAttr + ' draggable="true" data-col-key="' + escapeHtml(c.key) + '">' + escapeHtml(c.label) + caret + funnel + '</th>';
+    }).join('');
+    tr.innerHTML = html;
+  }
+  function updateColPill() {
+    const pill  = document.getElementById('col-pill');
+    const label = document.getElementById('col-pill-label');
+    if (!pill || !label) return;
+    const total = COLUMNS.length;
+    const on    = visibleColumns().length;
+    label.textContent = on === total ? 'Columns' : ('Columns: ' + on + ' / ' + total);
+    pill.classList.toggle('is-narrowed', on < total);
+  }
+  function updateCompanyPill() {
+    const val  = document.getElementById('company-pill-value');
+    const pill = document.getElementById('company-pill');
+    if (val) val.textContent = _state.companyFilter || 'All';
+    if (pill) pill.classList.toggle('is-active', !!_state.companyFilter);
+  }
+  function updateReasonPill() {
+    const val  = document.getElementById('reason-pill-value');
+    const pill = document.getElementById('reason-pill');
+    if (val) val.textContent = _state.reasonFilter || 'All';
+    if (pill) pill.classList.toggle('is-active', !!_state.reasonFilter);
+  }
+  function updateFilterBanner() {
+    const bar  = document.getElementById('filter-banner');
+    const text = document.getElementById('filter-banner-text');
+    if (!bar || !text) return;
+    const bits = [];
+    if (_state.companyFilter) bits.push('Company = ' + _state.companyFilter);
+    if (_state.reasonFilter)  bits.push('Reason = ' + _state.reasonFilter);
+    if (!bits.length) { bar.hidden = true; return; }
+    text.textContent = bits.join(' · ');
+    bar.hidden = false;
+  }
+
+  function renderDetails() {
+    const tbody = document.getElementById('details-tbody');
+    const count = document.getElementById('details-count');
+    if (!tbody) return;
+    renderTableHeader();
+    updateColPill();
+    const allFiltered = filteredRows();
+    renderStats(allFiltered);
+    const rows = searchFilter(sortRows(allFiltered, _state.sortKey, _state.sortDir), _state.gridSearch);
+    count.classList.remove('is-loading');
+    const total = (_data && _data.rows) ? _data.rows.length : rows.length;
+    count.textContent = rows.length.toLocaleString('en-US') + ' rows' +
+      (rows.length < total ? ' of ' + total.toLocaleString('en-US') : '');
+    const span = visibleColspan();
+    if (!rows.length) {
+      tbody.innerHTML = '<tr><td colspan="' + span + '" class="details-empty">No cardex variance rows match the current filter.</td></tr>';
+      return;
+    }
+    const MAX_RENDER = 500;
+    const slice = rows.slice(0, MAX_RENDER);
+    const cols = visibleColumns();
+    const html = slice.map(r => {
+      const cells = cols.map(c => {
+        const cls = c.tdClass ? ' class="' + c.tdClass + '"' : '';
+        return '<td' + cls + '>' + c.render(r) + '</td>';
+      }).join('');
+      return '<tr>' + cells + '</tr>';
+    }).join('');
+    let tail = '';
+    if (rows.length > MAX_RENDER) {
+      tail = '<tr><td colspan="' + span + '" class="details-empty">Showing first ' + MAX_RENDER +
+             ' of ' + rows.length.toLocaleString('en-US') + ' rows. Narrow the filter to see more.</td></tr>';
+    }
+    tbody.innerHTML = html + tail;
+  }
+  function renderResetBanner() {
+    const bar = document.getElementById('reset-banner');
+    if (!bar) return;
+    if (!_resetRow) { bar.hidden = true; return; }
+    const rawDate = (_resetRow.itemNumber || '').trim();   // Reset row stores its date in the ItemNumber column
+    const pretty  = shortMdy(rawDate);
+    const comment = (_resetRow.comment || '').trim();
+    const headline = document.getElementById('reset-banner-headline');
+    const sub      = document.getElementById('reset-banner-sub');
+    const meta     = document.getElementById('reset-banner-meta');
+    if (headline) headline.innerHTML = 'Variance measured from <strong>' + escapeHtml(pretty || rawDate || '&mdash;') + '</strong> forward';
+    if (sub)      sub.textContent    = comment || 'Cardex variance accumulates against the last roll-integrity reset.';
+    if (meta)     meta.textContent   = 'Reset row · ' + escapeHtml(rawDate || '');
+    bar.hidden = false;
+    // Also reflect the date in the eyebrow inline span.
+    const eyebrowDate = document.getElementById('js-reset-date');
+    if (eyebrowDate) eyebrowDate.textContent = pretty || rawDate || '—';
+  }
+  function renderAll() {
+    if (!_data) return;
+    updateCompanyPill();
+    updateReasonPill();
+    updateFilterBanner();
+    renderResetBanner();
+    renderDetails();
+  }
+
+  // ============================================================
+  //  Popovers (shared positioner)
+  // ============================================================
+  function hideAllPopovers() {
+    document.querySelectorAll('.popover').forEach(p => { p.hidden = true; p.dataset.group = ''; });
+  }
+  document.addEventListener('click', (e) => {
+    if (e.target.closest('.popover')) return;
+    if (e.target.closest('[data-pop-anchor]')) return;
+    hideAllPopovers();
+  });
+  function positionPopover(pop, anchor, opts) {
+    opts = opts || {};
+    pop.hidden = false;
+    const rect = anchor.getBoundingClientRect();
+    const popRect = pop.getBoundingClientRect();
+    let top  = rect.bottom + 6;
+    let left = rect.left;
+    if (opts.align === 'right') left = rect.right - popRect.width;
+    const margin = 8;
+    if (left + popRect.width > window.innerWidth - margin) left = window.innerWidth - margin - popRect.width;
+    if (left < margin) left = margin;
+    if (top + popRect.height > window.innerHeight - margin) {
+      top = Math.max(margin, rect.top - popRect.height - 6);
+    }
+    pop.style.top  = top  + 'px';
+    pop.style.left = left + 'px';
+  }
+
+  // ----- Column chooser -----
+  const colPill = document.getElementById('col-pill');
+  function buildColPopover() {
+    const pop = document.getElementById('filter-popover');
+    if (!pop) return;
+    pop.dataset.group = '__col-vis';
+    const items = _state.colOrder.map(k => {
+      const c = COLUMNS_BY_KEY[k];
+      if (!c) return '';
+      const on = !!_state.colVisibility[c.key];
+      return '<label class="col-vis-row' + (on ? '' : ' is-muted') + '" data-col-key="' + escapeHtml(c.key) + '">' +
+        '<input type="checkbox"' + (on ? ' checked' : '') + '>' +
+        '<span class="col-vis-label">' + escapeHtml(c.label) + '</span>' +
+      '</label>';
+    }).join('');
+    pop.innerHTML =
+      '<div class="popover-section-label">Show columns</div>' +
+      '<div class="popover-row" data-col-action="all">Show all</div>' +
+      '<div class="popover-row" data-col-action="reset">Reset to defaults</div>' +
+      '<div class="col-vis-list">' + items + '</div>';
+    pop.querySelector('[data-col-action="all"]').addEventListener('click', () => {
+      COLUMNS.forEach(c => { _state.colVisibility[c.key] = true; });
+      saveColVisibility();
+      buildColPopover();
+      positionPopover(pop, colPill, { align: 'right' });
+      renderDetails();
+    });
+    pop.querySelector('[data-col-action="reset"]').addEventListener('click', () => {
+      COLUMNS.forEach(c => { _state.colVisibility[c.key] = c.defaultOn; });
+      _state.colOrder = COLUMNS.map(c => c.key);
+      saveColVisibility();
+      saveColOrder();
+      buildColPopover();
+      positionPopover(pop, colPill, { align: 'right' });
+      renderDetails();
+    });
+    pop.querySelectorAll('.col-vis-row').forEach(row => {
+      row.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        setTimeout(() => {
+          const cb  = row.querySelector('input[type="checkbox"]');
+          const key = row.dataset.colKey;
+          if (!cb || !key) return;
+          _state.colVisibility[key] = cb.checked;
+          row.classList.toggle('is-muted', !cb.checked);
+          saveColVisibility();
+          renderDetails();
+        }, 0);
+      });
+    });
+  }
+  if (colPill) {
+    colPill.setAttribute('data-pop-anchor', 'col');
+    colPill.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const pop = document.getElementById('filter-popover');
+      if (!pop) return;
+      const wasOpen = !pop.hidden && pop.dataset.group === '__col-vis';
+      hideAllPopovers();
+      if (wasOpen) return;
+      buildColPopover();
+      positionPopover(pop, colPill, { align: 'right' });
+    });
+  }
+
+  // ----- Company popover -----
+  const companyPill = document.getElementById('company-pill');
+  function buildCompanyPopover() {
+    const pop = document.getElementById('filter-popover');
+    if (!pop || !_data) return;
+    pop.dataset.group = '__company';
+    const counts = new Map();
+    (_data.rows || []).forEach(r => {
+      const c = (r.companyNumber || '').trim();
+      if (!c) return;
+      counts.set(c, (counts.get(c) || 0) + 1);
+    });
+    const list = Array.from(counts.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+    const allRow = '<div class="uom-row' + (_state.companyFilter ? '' : ' is-selected') + '" data-company="">' +
+                     '<span>All companies</span>' +
+                     '<span class="uom-count">' + (_data.rows || []).length.toLocaleString('en-US') + '</span>' +
+                   '</div>';
+    const items = list.map(([c, n]) =>
+      '<div class="uom-row' + (_state.companyFilter === c ? ' is-selected' : '') + '" data-company="' + escapeHtml(c) + '">' +
+        '<span>' + escapeHtml(c) + '</span>' +
+        '<span class="uom-count">' + n.toLocaleString('en-US') + '</span>' +
+      '</div>'
+    ).join('');
+    pop.innerHTML =
+      '<div class="popover-section-label">Company</div>' +
+      '<div class="uom-list">' + allRow + items + '</div>';
+    pop.querySelectorAll('.uom-row').forEach(row => {
+      row.addEventListener('click', () => {
+        _state.companyFilter = row.dataset.company || '';
+        saveCompany();
+        hideAllPopovers();
+        renderAll();
+      });
+    });
+  }
+  if (companyPill) {
+    companyPill.setAttribute('data-pop-anchor', 'company');
+    companyPill.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const pop = document.getElementById('filter-popover');
+      if (!pop) return;
+      const wasOpen = !pop.hidden && pop.dataset.group === '__company';
+      hideAllPopovers();
+      if (wasOpen) return;
+      buildCompanyPopover();
+      positionPopover(pop, companyPill);
+    });
+  }
+
+  // ----- Reason popover -----
+  const reasonPill = document.getElementById('reason-pill');
+  function buildReasonPopover() {
+    const pop = document.getElementById('filter-popover');
+    if (!pop || !_data) return;
+    pop.dataset.group = '__reason';
+    const counts = new Map();
+    (_data.rows || []).forEach(r => {
+      const v = (r.reason || '').trim();
+      if (!v) return;
+      counts.set(v, (counts.get(v) || 0) + 1);
+    });
+    const list = Array.from(counts.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+    const allRow = '<div class="uom-row' + (_state.reasonFilter ? '' : ' is-selected') + '" data-reason="">' +
+                     '<span>All reasons</span>' +
+                     '<span class="uom-count">' + (_data.rows || []).length.toLocaleString('en-US') + '</span>' +
+                   '</div>';
+    const items = list.map(([v, n]) =>
+      '<div class="uom-row' + (_state.reasonFilter === v ? ' is-selected' : '') + '" data-reason="' + escapeHtml(v) + '">' +
+        '<span>' + escapeHtml(v) + '</span>' +
+        '<span class="uom-count">' + n.toLocaleString('en-US') + '</span>' +
+      '</div>'
+    ).join('');
+    pop.innerHTML =
+      '<div class="popover-section-label">Reason</div>' +
+      '<div class="uom-list">' + allRow + items + '</div>';
+    pop.querySelectorAll('.uom-row').forEach(row => {
+      row.addEventListener('click', () => {
+        _state.reasonFilter = row.dataset.reason || '';
+        saveReason();
+        hideAllPopovers();
+        renderAll();
+      });
+    });
+  }
+  if (reasonPill) {
+    reasonPill.setAttribute('data-pop-anchor', 'reason');
+    reasonPill.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const pop = document.getElementById('filter-popover');
+      if (!pop) return;
+      const wasOpen = !pop.hidden && pop.dataset.group === '__reason';
+      hideAllPopovers();
+      if (wasOpen) return;
+      buildReasonPopover();
+      positionPopover(pop, reasonPill);
+    });
+  }
+
+  // ----- Filter banner Clear -----
+  const fbClear = document.getElementById('filter-banner-clear');
+  if (fbClear) {
+    fbClear.addEventListener('click', () => {
+      _state.companyFilter = '';
+      _state.reasonFilter  = '';
+      saveCompany();
+      saveReason();
+      renderAll();
+    });
+  }
+
+  // ============================================================
+  //  Column drag-to-reorder + click-to-sort + grid search
+  // ============================================================
+  let _colDragKey = null;
+  function wireColumnDrag() {
+    const tr = document.getElementById('details-thead-row');
+    if (!tr || tr.dataset.dragWired === '1') return;
+    tr.dataset.dragWired = '1';
+    tr.addEventListener('dragstart', (e) => {
+      const th = e.target.closest('th[data-col-key]');
+      if (!th) return;
+      _colDragKey = th.dataset.colKey;
+      th.classList.add('is-dragging');
+      try {
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', _colDragKey);
+      } catch (_) {}
+    });
+    tr.addEventListener('dragend', () => {
+      tr.querySelectorAll('th').forEach(t => t.classList.remove('is-dragging', 'is-drag-over'));
+      _colDragKey = null;
+    });
+    tr.addEventListener('dragover', (e) => {
+      const th = e.target.closest('th[data-col-key]');
+      if (!th || !_colDragKey) return;
+      e.preventDefault();
+      try { e.dataTransfer.dropEffect = 'move'; } catch (_) {}
+      tr.querySelectorAll('th').forEach(t => t.classList.toggle('is-drag-over', t === th));
+    });
+    tr.addEventListener('dragleave', (e) => {
+      const th = e.target.closest('th[data-col-key]');
+      if (th && !tr.contains(e.relatedTarget)) th.classList.remove('is-drag-over');
+    });
+    tr.addEventListener('drop', (e) => {
+      const th = e.target.closest('th[data-col-key]');
+      if (!th || !_colDragKey) return;
+      e.preventDefault();
+      const targetKey = th.dataset.colKey;
+      if (targetKey === _colDragKey) return;
+      const order = _state.colOrder.slice();
+      const fromIdx = order.indexOf(_colDragKey);
+      if (fromIdx < 0) return;
+      order.splice(fromIdx, 1);
+      const toIdx = order.indexOf(targetKey);
+      if (toIdx < 0) return;
+      order.splice(toIdx, 0, _colDragKey);
+      _state.colOrder = order;
+      saveColOrder();
+      renderDetails();
+    });
+  }
+  function wireColumnSort() {
+    const tr = document.getElementById('details-thead-row');
+    if (!tr || tr.dataset.sortWired === '1') return;
+    tr.dataset.sortWired = '1';
+    tr.addEventListener('click', (e) => {
+      // §9 — funnel button intercepts before sort.
+      const filterBtn = e.target.closest('[data-action="filter-col"]');
+      if (filterBtn) {
+        e.stopPropagation();
+        openColumnFilterPopover(filterBtn.dataset.colKey, filterBtn);
+        return;
+      }
+      const th = e.target.closest('th[data-col-key]');
+      if (!th) return;
+      const key = th.dataset.colKey;
+      if (_state.sortKey === key) {
+        _state.sortDir = _state.sortDir === 'asc' ? 'desc' : 'asc';
+      } else {
+        _state.sortKey = key;
+        _state.sortDir = 'asc';
+      }
+      saveSort();
+      renderDetails();
+    });
+  }
+
+  // ============================================================
+  //  §9 — Per-column funnel filter popover
+  // ============================================================
+  const _colFilterPop = document.getElementById('colfilter-popover');
+  function openColumnFilterPopover(colKey, anchor) {
+    const col = COLUMNS_BY_KEY[colKey];
+    if (!col || !_colFilterPop) return;
+    const values = distinctValuesForColumn(colKey);
+    const active = (_state.columnFilters || {})[colKey] || null;
+    function rowHtml(v) {
+      const checked = !active || active.has(v);
+      const label = (v === '' || v == null) ? '(blank)' : v;
+      return '<label class="col-vis-row">' +
+        '<input type="checkbox" data-value="' + escapeHtml(v) + '"' + (checked ? ' checked' : '') + '>' +
+        '<span class="col-vis-label">' + escapeHtml(label) + '</span>' +
+      '</label>';
+    }
+    _colFilterPop.innerHTML =
+      '<div class="popover-section-label">Filter: ' + escapeHtml(col.label) + '</div>' +
+      '<input type="search" class="col-filter-search" data-action="colfilter-search" ' +
+        'placeholder="Search values…" autocomplete="off" spellcheck="false">' +
+      '<div class="col-vis-list">' + values.map(rowHtml).join('') + '</div>' +
+      '<div class="popover-section">' +
+        '<div class="popover-row" data-action="select-all">Select all</div>' +
+        '<div class="popover-row" data-action="select-none">Select none</div>' +
+        '<div class="popover-row" data-action="clear-filter">Clear filter</div>' +
+      '</div>';
+    const r = anchor.getBoundingClientRect();
+    _colFilterPop.style.left = Math.min(window.innerWidth - 280, r.left) + 'px';
+    _colFilterPop.style.top  = (r.bottom + 6) + 'px';
+    _colFilterPop.style.right = 'auto';
+    _colFilterPop.style.minWidth = '240px';
+    _colFilterPop.hidden = false;
+
+    function readChecked() {
+      return Array.from(_colFilterPop.querySelectorAll('input[type="checkbox"]'))
+        .filter(cb => cb.checked).map(cb => cb.dataset.value);
+    }
+    function commit() {
+      const checked = readChecked();
+      const total = _colFilterPop.querySelectorAll('input[type="checkbox"]').length;
+      if (!_state.columnFilters) _state.columnFilters = {};
+      if (checked.length === total) delete _state.columnFilters[colKey];
+      else                          _state.columnFilters[colKey] = new Set(checked);
+      saveColumnFilters();
+      renderDetails();
+    }
+    _colFilterPop.oninput = e => {
+      if (e.target.dataset.action === 'colfilter-search') {
+        const q = e.target.value.toLowerCase();
+        _colFilterPop.querySelectorAll('.col-vis-row').forEach(row => {
+          const lbl = row.querySelector('.col-vis-label').textContent.toLowerCase();
+          row.style.display = (!q || lbl.indexOf(q) !== -1) ? '' : 'none';
+        });
+      }
+    };
+    _colFilterPop.onchange = e => {
+      if (e.target.matches('input[type="checkbox"]')) commit();
+    };
+    _colFilterPop.onclick = e => {
+      const action = e.target.closest('[data-action]');
+      if (!action) return;
+      const a = action.dataset.action;
+      if (a === 'select-all') {
+        _colFilterPop.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = true);
+        commit();
+      } else if (a === 'select-none') {
+        _colFilterPop.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = false);
+        commit();
+      } else if (a === 'clear-filter') {
+        if (!_state.columnFilters) _state.columnFilters = {};
+        delete _state.columnFilters[colKey];
+        saveColumnFilters();
+        _colFilterPop.hidden = true;
+        renderDetails();
+      }
+    };
+  }
+  document.addEventListener('click', e => {
+    if (!_colFilterPop) return;
+    if (_colFilterPop.contains(e.target) || e.target.closest('[data-action="filter-col"]')) return;
+    _colFilterPop.hidden = true;
+  });
+  function wireGridSearch() {
+    const input = document.getElementById('grid-search-input');
+    const clear = document.getElementById('grid-search-clear');
+    if (!input) return;
+    let t = null;
+    function applyNow() {
+      _state.gridSearch = input.value || '';
+      if (clear) clear.hidden = !_state.gridSearch;
+      renderDetails();
+    }
+    input.addEventListener('input', () => {
+      if (t) clearTimeout(t);
+      t = setTimeout(applyNow, 150);
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && _state.gridSearch) {
+        e.preventDefault();
+        input.value = '';
+        if (t) clearTimeout(t);
+        applyNow();
+      }
+    });
+    if (clear) {
+      clear.addEventListener('click', () => {
+        input.value = '';
+        if (t) clearTimeout(t);
+        applyNow();
+        input.focus();
+      });
+    }
+  }
+
+  // ============================================================
+  //  Excel export
+  // ============================================================
+  function exportGridToExcel() {
+    if (typeof XLSX === 'undefined') { toast('Excel library still loading — try again in a moment'); return; }
+    if (!_data) { toast('No data loaded yet'); return; }
+    const rows = searchFilter(sortRows(filteredRows(), _state.sortKey, _state.sortDir), _state.gridSearch);
+    if (!rows.length) { toast('No rows in scope — nothing to export'); return; }
+    const cols = visibleColumns();
+    if (!cols.length) { toast('No columns visible — turn at least one on'); return; }
+
+    const stamp = new Date().toLocaleString('en-US', {
+      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+      hour: 'numeric', minute: '2-digit'
+    });
+    const banner    = ['Cardex Variance Generated ' + stamp].concat(new Array(Math.max(0, cols.length - 1)).fill(''));
+    const headerRow = cols.map(c => c.label);
+
+    const moneyKeys = new Set(['adjAmount']);
+    const qtyKeys   = new Set(['adjQty']);
+    const sums = { adjAmount: 0, adjQty: 0 };
+    rows.forEach(r => {
+      sums.adjAmount += Number(r.adjAmount) || 0;
+      sums.adjQty    += Number(r.adjQty) || 0;
+    });
+    const firstNonNumIdx = cols.findIndex(c => !(moneyKeys.has(c.key) || qtyKeys.has(c.key)));
+    const summary = cols.map((c, i) => {
+      if (i === Math.max(0, firstNonNumIdx)) return 'Grand Summaries';
+      if (moneyKeys.has(c.key) || qtyKeys.has(c.key)) {
+        const v = sums[c.key] || 0;
+        return Math.round(v * 1000) / 1000;
+      }
+      return '';
+    });
+
+    const intIdKeys = new Set(['shortItem']);
+    const dataRows = rows.map(r => cols.map(c => {
+      const v = r[c.key];
+      if (v === null || v === undefined) return '';
+      if (moneyKeys.has(c.key) || qtyKeys.has(c.key)) {
+        const n = +v;
+        return isFinite(n) ? Math.round(n * 1000) / 1000 : '';
+      }
+      if (intIdKeys.has(c.key)) {
+        const n = +v;
+        if (!isFinite(n) || n === 0) return '';
+        return Math.round(n);
+      }
+      return typeof v === 'string' ? v : v;
+    }));
+
+    const aoa   = [banner, headerRow, summary].concat(dataRows);
+    const sheet = XLSX.utils.aoa_to_sheet(aoa);
+    sheet['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: Math.max(0, cols.length - 1) } }];
+    sheet['!rows'] = [{ hpt: 22 }, { hpt: 20 }];
+    const moneyFmt = '$#,##0.00;[Red]($#,##0.00);-';
+    const qtyFmt   = '#,##0.00;[Red](#,##0.00);-';
+    cols.forEach((c, i) => {
+      const isMoney = moneyKeys.has(c.key);
+      const isQty   = qtyKeys.has(c.key);
+      if (!isMoney && !isQty) return;
+      const fmt = isMoney ? moneyFmt : qtyFmt;
+      for (let r = 2; r < aoa.length; r++) {
+        const ref = XLSX.utils.encode_cell({ r, c: i });
+        if (sheet[ref] && typeof sheet[ref].v === 'number') sheet[ref].z = fmt;
+      }
+    });
+    sheet['!cols'] = cols.map(c => ({ wch: Math.min(28, Math.max(10, (c.label || '').length + 4)) }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, sheet, 'Cardex Variance');
+    const fnStamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 13);
+    const fname = 'CardexVariance_' + fnStamp + '.xlsx';
+    XLSX.writeFile(wb, fname);
+    toast('Downloaded ' + fname);
+  }
+  const exportBtn = document.getElementById('grid-export-btn');
+  if (exportBtn) exportBtn.addEventListener('click', exportGridToExcel);
+
+  // ============================================================
+  //  Sidebar nav — carry URL query forward; suppress '#' clicks
+  // ============================================================
+  const search = window.location.search;
+  if (search) {
+    document.querySelectorAll('a[data-nav-page]').forEach(a => {
+      const base = a.getAttribute('href') || '';
+      if (base && !base.includes('?') && base !== '#') a.setAttribute('href', base + search);
+    });
+  }
+  document.querySelectorAll('.sidebar-nav-item, .sidebar-nav-child').forEach(a => {
+    a.addEventListener('click', (e) => {
+      if (a.classList.contains('is-active')) { e.preventDefault(); return; }
+      const href = a.getAttribute('href') || '';
+      if (!href || href === '#') { e.preventDefault(); }
+    });
+  });
+
+  // ============================================================
+  //  Boot
+  // ============================================================
+  renderTableHeader();
+  updateColPill();
+  updateCompanyPill();
+  updateReasonPill();
+  wireColumnDrag();
+  wireColumnSort();
+  wireGridSearch();
+  loadData();
+
+})();
+</script>
+
+</body>
+</html>

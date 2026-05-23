@@ -139,7 +139,12 @@ central agent and has no HTTP controllers.
 | RollForwardController | GET | `/roll-forward/filters` | Available filters for the Roll Forward module. |
 | RollForwardController | POST | `/roll-forward` | Run a roll-forward. |
 | RunJobController | GET | `/run-ssis` | Triggers the SSIS refresh job. |
-| OrdersController, AsOfController, LineAnalysisController, CommonUomController | &mdash; | various | Not yet wired by V8; mined but not exercised. |
+| AsOfController | GET | `/inventory/as-of/daily/{period}` | Daily availability probe for a period. |
+| AsOfController | POST | `/inventory/as-of` | Main As Of fetch. Body extends `DataSourceRequest` (so it carries `take/skip/page/pageSize/aggregate[]` like Transactions) plus `{reconciliationFilter, daily, commonUom, summarizeByItem, filters: {itemNumber, branchPlant, location, lot}}`. `summarizeByItem` toggles the item rollup server-side; `commonUom` requests on-the-fly UOM conversion. Note: `summarizeByItem` (camelCase) and `daily` (the period date, not `period`) &mdash; see gotcha below. |
+| AsOfController | POST | `/inventory/as-of/details` | Per-item lot drill-in. Body: `{branchPlant, lot, company, itemNumber, location, glClass, uom, companyNumber}`. Note both `company` AND `companyNumber` are required &mdash; the controller distinguishes ordering company vs branch company. |
+| AsOfController | POST | `/inventory/rollIItem` | Re-roll a single item's perpetual valuation. **Endpoint name carries a typo (`rollIItem`, double-I)** &mdash; matches the bytecode literally. The Re-roll button on `RRV8/inventory-asof.html` will POST here. |
+| AsOfController | POST | `/in-transit/as-of`, `/in-transit/as-of/details` | In Transit siblings, same DTO shapes. |
+| OrdersController, LineAnalysisController, CommonUomController | &mdash; | various | Not yet wired by V8; mined but not exercised. |
 | admin/AdminCompaniesController, AdminGeneralController, AdminInventoryOffsetsController, AdminUsersController | &mdash; | various | Admin module endpoints; out of scope for the analyst pages. |
 
 ### Planned &mdash; DMAAI worklist endpoints (PROD-TODO)
@@ -162,6 +167,41 @@ SQL table DDL + the JSON sidecar contract are pinned in
 `docs/plans/dmaai-page-overlay-table.md`. Don't change the field
 names without updating both ends &mdash; Jackson silently drops
 unknown keys (see *Critical gotchas* below).
+
+### Planned &mdash; As Of data flow (mined 2026-05-23, not yet wired)
+
+The V8 As Of page (`RRV8/inventory-asof.html`) currently reads a static
+snapshot at `data/as-of.json` filtered to company 00050 because the
+legacy xlsx export the snapshot was derived from was scoped that way.
+The agent already exposes the right surface; V8 just needs to wire it.
+Reference: AsOfController catalog rows above. Field-name gotchas:
+
+- **The period field is `daily`, not `period`.** The Jackson-bound
+  request DTO carries the period as a string under `daily` (matching
+  the URL segment in the GET sibling at `/inventory/as-of/daily/{period}`).
+  Sending `period` will fall through (Jackson drops unknown keys) and
+  the controller runs without a period filter.
+- **`summarizeByItem` (camelCase, first-letter-lowercase).** Same
+  Jackson convention as the rest of the DTOs. Maps directly to the
+  V8 page's &ldquo;Lot detail&rdquo; toggle (inverse semantics: when
+  V8&rsquo;s `summarize` is true, send `summarizeByItem: true`).
+- **`commonUom` is the &ldquo;Common UOM&rdquo; dropdown.** Sending
+  a UOM here asks the agent to convert all quantities to that unit
+  in the response; the V8 demo currently treats Common UOM as a
+  client-side row filter, but prod wiring should pass it through so
+  the server does the conversion math.
+- **`reconciliationFilter` uses bare string arrays**, NOT the
+  `{id, checked, show}` Item shape. Same as Transactions, NOT same
+  as `/inventory/reconciliation-filtered`.
+- **Re-roll = `POST /inventory/rollIItem`.** Note the double-I in
+  the path (verbatim from the bytecode &mdash; "roll inventory
+  item"). The V8 Re-roll button currently flashes a placeholder
+  toast; once wired, it posts to this endpoint.
+
+Once V8 wires the page through `rrFetch('inventory/as-of', { ... })`,
+the JWT&rsquo;s allowed companies (`dbs[i].i`) determine the scope
+automatically &mdash; the company 00010 data gap closes without
+re-exporting xlsx.
 
 CORS is wide open: `Access-Control-Allow-Origin: *`. Server header is
 `Apache-Coyote/1.1` (the Spring Boot data-services child).
@@ -197,6 +237,15 @@ port matches the JWT's `dbs[i].ip` port.
 
 These bit V8 and cost real debugging time. Pin them down so future
 sessions don&rsquo;t repeat them.
+
+**As Of period field is `daily`, not `period`.** The
+`/inventory/as-of` request DTO names the period field `daily` (matching
+the URL segment in the GET sibling at `/inventory/as-of/daily/{period}`).
+The natural intuition is to send `period` &mdash; that&rsquo;s what every
+other period-scoped V8 endpoint uses. Jackson will drop `period` silently
+and the controller runs without a period filter, returning current-state
+data. Confirmed via `javap -p AsOfController$AsOfRequest.class` on
+2026-05-23.
 
 **Jackson silently drops unknown JSON fields.** Spring's default
 deserializer ignores any JSON key that doesn&rsquo;t bind to a setter

@@ -5,11 +5,22 @@ session. Paste the **Resume prompt** section as the first message in
 the new session; the rest of this file is context that prompt points
 the new session at.
 
-**Updated**: 2026-05-23, after the shared-chrome extraction + V8
-page unification chunk (sidebar.js / period-bars.js single
-objects, GSI topbar + page-header standard rolled across the 3 V8
-pages, variance breakdown reformatted into 6 action cards + 3
-contributor cards, DMAAI sidebar status dot).
+**Updated**: 2026-05-23, after the agent-first tenet landed.
+Committed default `mode: 'staging'` so every V8 page hits the live
+agent in dev; As Of and Cardex Variance now route through `rrFetch`
+the same way Reconciliation and Transactions already do. Snapshots
+remain as a fallback (`?mode=demo`) but are not the dev workflow.
+WORKFLOW.md &sect; *V8 tenets* is the canonical reference.
+
+Prior chunk (As Of + Cardex Variance spin-off): As Of now has a page-level Company
+filter and the variance-hotspots strip has been extracted to its
+own dedicated page (Cardex Variance, sourced from the same
+`v6ui_itemrollintegritydialog` data that backs the Reconciliation
+Cardex preview &mdash; 783 rows, both companies). AsOfController
+fully mined in API.md (`POST /inventory/as-of` with
+`{reconciliationFilter, daily, commonUom, summarizeByItem, filters}`;
+Re-roll button maps to `POST /inventory/rollIItem`). Sidebar carries
+Inventory &rarr; As Of &rarr; Cardex Variance.
 
 ---
 
@@ -124,6 +135,114 @@ placeholder universe-view grid). What landed in this chunk:
   `rrv8-sidebar-modules-expanded-v1`). No GSI logo in sidebar &mdash;
   it flatten-whites on the navy background.
 
+### As Of page &mdash; design notes
+
+The legacy AsOf has always been slow because `RinvAsof` is tens of
+millions of rows; the legacy SPA paginated as a workaround that
+didn&rsquo;t do enough. The V8 redesign pivots away from the
+firehose pattern:
+
+- **Item-level rollup is the default grid view**. Rows aggregate
+  by (Company, Branch, ItemNumber, UOM, GLClass) so the analyst
+  sees one row per inventory position instead of one row per lot.
+  Per-row expand (carrot button on each row) drills into the
+  contributing lot/location detail (Location / Lot / LotStatus /
+  LotExp / UOM / Quantity / Amount / QtyVar / AmtVar) inline.
+- **&ldquo;Lot detail&rdquo; toggle** in the page-actions row
+  flips the entire grid to the raw per-lot rows when the analyst
+  wants the firehose anyway. Inverse semantics of the internal
+  `summarize` state. Maps to `summarizeByItem` on the agent
+  request DTO.
+- **Page-level Company filter** in the actions row (`Company`
+  pill). Lists distinct companies present in the data with row
+  counts; selecting one narrows everything (grid, stats). Default
+  is &ldquo;All&rdquo;. Persisted via localStorage so the choice
+  rides across reloads.
+- **Common UOM dropdown** lives next to the Company filter.
+  Demo-mode narrows rows to a chosen UOM; prod will pass it through
+  to the agent as `commonUom` so the server does the conversion
+  math on the wire instead of letting the client see only one
+  unit&rsquo;s rows.
+- **Re-roll button** posts to `POST /inventory/rollIItem` (note
+  double-I in the path &mdash; verbatim from the bytecode). The
+  V8 button is still a placeholder toast; the endpoint is mined
+  and ready to wire.
+- **Server-side win**: production fetch becomes `POST /inventory/as-of`
+  with `{daily, summarizeByItem: true, reconciliationFilter,
+  commonUom, filters}` &mdash; the rollup query alone is small,
+  and lot detail only fetches when the analyst opens a row
+  (`POST /inventory/as-of/details`). Pagination as a row-count
+  problem dissolves at the page level; `DataSourceRequest` paging
+  still handles the residual.
+
+**Variance hotspots moved to their own page** (Cardex Variance
+&mdash; see next section). Cardex-roll-integrity is too important
+a worklist to be a strip on someone else&rsquo;s page.
+
+Period bars in the header source from `reconciliation.json` (only
+the current period actually has As Of data in the demo snapshot;
+clicking other periods surfaces a toast). Excel export = current
+view (rollup or lot detail, filters + visibility + column order
+honored) per the V8 grid standard.
+
+State keys:
+
+- `rrv8-asof-columns-v1`     &mdash; column visibility
+- `rrv8-asof-col-order-v1`   &mdash; drag-reorder
+- `rrv8-asof-sort-v1`        &mdash; sort
+- `rrv8-asof-company-v1`     &mdash; Company filter
+- `rrv8-asof-uom-v1`         &mdash; UOM filter
+- `rrv8-asof-summarize-v1`   &mdash; rollup vs lot detail
+  (default `'1'` = rollup ON)
+
+Data source: `RRV8/data/as-of.json`, generated from the legacy
+xlsx export by `RRV8/scripts/extract-asof-sample.py`. **Currently
+filtered to company 00050** because the source xlsx was scoped
+that way; once V8 wires through `rrFetch('inventory/as-of', ...)`
+the JWT&rsquo;s allowed companies determine scope automatically.
+AsOfController fully mined &mdash; see *API.md &sect; Planned &mdash;
+As Of data flow* for the request shape + the `daily` vs `period`
+gotcha that&rsquo;ll otherwise bite the next wiring attempt.
+
+### Cardex Variance page &mdash; design notes
+
+`RRV8/inventory-cardex-variance.html` is the dedicated worklist
+for per-item perpetual-vs-cardex drift. Same data source as the
+Reconciliation page&rsquo;s Cardex variance Preview modal
+(`v6ui_itemrollintegritydialog`), elevated to its own page because
+it&rsquo;s the most actionable cross-period worklist outside
+Reconciliation itself.
+
+- **Standard V8 grid**: 15 columns (Reason / Company / LongAccount
+  / Branch / ShortItem / ItemNumber / ThirdItem / Location / Lot /
+  Method / AdjAmount / AdjQty / UOM / GLClass / Comment).
+  Drag-to-reorder, click-to-sort (defaults to `adjAmount` desc so
+  the biggest hits surface first), search, column chooser, Excel
+  export.
+- **Hero stats**: Items flagged / |AdjAmount| / Net AdjAmount /
+  Net AdjQty. Refreshes with the active filter.
+- **Page-level filters**: Company pill (00010 vs 00050 in scope)
+  and Reason pill (Amount vs Quantity). Persisted via localStorage.
+- **No period dimension** &mdash; this is a current-state report
+  (the view itself has no PeriodEnds column). Documented at
+  `_meta.drilldownSources.cardex.requirePeriod = false` in
+  `reconciliation.json`.
+- **Reason chip** is color-coded: Amount = blue, Quantity = amber,
+  so the variance type reads at a glance in the grid.
+
+State keys:
+
+- `rrv8-cardex-columns-v1`    &mdash; column visibility
+- `rrv8-cardex-col-order-v1`  &mdash; drag-reorder
+- `rrv8-cardex-sort-v1`       &mdash; sort (default `adjAmount` desc)
+- `rrv8-cardex-company-v1`    &mdash; Company filter
+- `rrv8-cardex-reason-v1`     &mdash; Reason filter
+
+Data source: `RRV8/data/reconciliation.json#cardex` (783 rows,
+both companies). Prod wiring will use `POST /inventory/integrity`
+with `{report: 'v6ui_itemrollintegritydialog', reconciliationFilter,
+take/skip/page/pageSize}` per the IntegrityController catalog row.
+
 ### Next-session queue
 
 - **Agent dev work**: implement the three DMAAI endpoints + two SQL
@@ -134,14 +253,13 @@ placeholder universe-view grid). What landed in this chunk:
 - **`beforeunload` guard** on the DMAAI page so the analyst gets
   warned when closing with unsaved responses (the save bar is the
   only signal today).
-- **Build the As Of page** (`inventory-asof.html`) using the shared
-  sidebar (`activePage: 'asof'`, `hasPeriodFilter: true`) and shared
-  period bars. Layout: breadcrumb + "As Of" title + bar selector,
-  page-actions row with Common UOM / Summarize by Item / Re-roll,
-  hero stats strip (Quantity / Amount / QtyVar / AmtVar), V8 grid
-  with ~10 default columns and the rest togglable via column
-  chooser. Data source: `RRV8/data/as-of.json`, generated from a
-  legacy xlsx export by `RRV8/scripts/extract-asof-sample.py`.
+- **Wire the As Of page against the agent**. `AsOfController`
+  exists in the jar; mine the request shape with
+  `javap -p ./coral/.../AsOfController$*Request.class` and swap
+  the static `data/as-of.json` fetch for an `rrFetch` call. Add
+  a dedicated `/inventory/as-of/hotspots` shaped endpoint if the
+  variance-only result set isn&rsquo;t a cheap derivation of the
+  same query.
 - **Version subtitle** (`Version 8.0` under each page title from the
   `SQLSourceControl Database Revision` extended property) &mdash;
   parked until the new agent ships and exposes it on

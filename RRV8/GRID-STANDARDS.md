@@ -318,6 +318,8 @@ per-visit &ldquo;find,&rdquo; not a saved preference.
 |---|---|---|---|---|---|---|---|
 | `inventory-transactions.html` (Details grid) | ✓ | ✓ | ✓ | ✓ | ✓ | &mdash; | Original reference; column filter to be added |
 | `accounting-dmaais.html` (module grids) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Reference implementation for column filter |
+| `inventory-asof.html` (Details grid) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Adds row-expand for lot detail (item rollup is the default view) |
+| `inventory-cardex-variance.html` (Details grid) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Default sort: adjAmount desc (biggest hits first). Reason chip on Amount/Quantity. Hero pairs Recon-authoritative cardex impact with the per-item grid sum. |
 | `inventory-reconciliation.html` (variance Preview tables) | &mdash; | &mdash; | &mdash; | &mdash; | &mdash; | &mdash; | Different surface (modal); revisit when modal grids get standardized |
 
 ## Conventions we&rsquo;ve NOT yet decided
