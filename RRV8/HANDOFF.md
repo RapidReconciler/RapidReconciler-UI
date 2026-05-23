@@ -119,10 +119,12 @@ Highlights of this longer session:
   dev box → schema-compare → `RapidReconciler-SQL` dev branch
   → publish to `RapidReconciler_QA`. Free to add/change objects
   in dev.
-- `project_agent_repo_plan` &mdash; create `RapidReconciler-Agent`
-  to mirror SQL repo's dev/qa/main pattern. Owner will set up
-  when time permits. Specs in `docs/agent-specs/` migrate there
-  when it lands.
+- `project_agent_repo_plan` &mdash; **DONE 2026-05-23**: the
+  [`RapidReconciler-Agent`](https://github.com/RapidReconciler/RapidReconciler-Agent)
+  repo now exists with Dev/main branches, the v359 installer pinned
+  in `artifacts/`, and the first spec migrated to `specs/`. RRV8/API.md
+  has been slimmed to client-side concerns; agent-side catalog +
+  gotchas + jar-mining live in `RapidReconciler-Agent/docs/`.
 - `project_new_agent_incoming` (earlier) &mdash; infrastructure
   update bringing a new data-services agent; treat API.md as a
   snapshot, not a contract.
@@ -173,11 +175,12 @@ Inventory &rarr; As Of &rarr; Cardex Variance.
 > 6. **RRV8/TESTING.md** &mdash; automated-test-plan spec for V8
 >    (8 tiers). Plan only; suite implementation deferred. Read
 >    so you know what's covered when the suite ships.
-> 7. **docs/agent-specs/** &mdash; staging area for planned-
->    endpoint specs going to the agent team. Each file is a
->    self-contained brief with paste-ready Java; format is
->    designed to migrate to the future `RapidReconciler-Agent`
->    repo (see `[[project_agent_repo_plan]]`).
+> 7. **RapidReconciler-Agent repo** (sibling at
+>    `C:/source/repos/RapidReconciler-Agent`) &mdash; agent source
+>    repo. `specs/` holds planned-endpoint briefs; `docs/` carries
+>    the controller catalog, gotchas, and jar-mining recipe;
+>    `artifacts/v359/` pins the current production installer. Skim
+>    `docs/README.md` for the layout.
 > 8. **RRV8 pages**: just confirm all five exist
 >    (`inventory-reconciliation.html`, `inventory-transactions.html`,
 >    `inventory-asof.html`, `inventory-cardex-variance.html`,
@@ -389,7 +392,7 @@ take/skip/page/pageSize}` per the IntegrityController catalog row.
 
 - **`POST /inventory/reconciliation/rows`** &mdash; the priority
   ask. Spec is ready-to-implement at
-  [`docs/agent-specs/reconciliation-rows.md`](../docs/agent-specs/reconciliation-rows.md).
+  [`RapidReconciler-Agent/specs/reconciliation-rows.md`](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/specs/reconciliation-rows.md).
   V8 already wires the parallel `rrFetch` call and degrades
   cleanly on 404; the day the controller method ships, the
   Reconciliation page&rsquo;s contributors card paints real
@@ -430,11 +433,6 @@ take/skip/page/pageSize}` per the IntegrityController catalog row.
 - **Implement the test plan** (`RRV8/TESTING.md`) &mdash; suite
   is spec'd but not yet written. PowerShell pre-push hook for
   fast tiers; Python in GHA for all tiers. Run cost: minutes.
-- **`docs/agent-specs/` migration** &mdash; when the
-  `RapidReconciler-Agent` repo is created (see
-  `[[project_agent_repo_plan]]`), the specs in this folder move
-  over verbatim and `RRV8/API.md` shrinks to a client doc.
-
 **Parked**:
 
 - **Version subtitle** (`Version 8.0` under each page title from
