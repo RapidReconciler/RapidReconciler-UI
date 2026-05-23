@@ -51,10 +51,8 @@
     reconciliation:   'inventory',
     transactions:     'inventory',
     asof:             'inventory',
-    'cardex-variance':'inventory'
-    // dmaais is under Accounting, which is a single-row section (no
-    // children) and intentionally NOT in this map — Scope default
-    // is friendlier than expanding an empty section.
+    'cardex-variance':'inventory',
+    dmaais:           'accounting'
   };
 
   // Hydrate the pin class on whichever element exists. sidebar.js
@@ -118,7 +116,8 @@
 
     // is-active classes per page
     const cls = (page) => activePage === page ? ' is-active' : '';
-    const isInventoryPage = activePage === 'reconciliation' || activePage === 'transactions' || activePage === 'asof' || activePage === 'cardex-variance';
+    const isInventoryPage  = activePage === 'reconciliation' || activePage === 'transactions' || activePage === 'asof' || activePage === 'cardex-variance';
+    const isAccountingPage = activePage === 'dmaais';
 
     // The period filter row only renders on Reconciliation. Its
     // popover/click wiring is page-specific (in the IIFE).
@@ -197,7 +196,7 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
       </span>
       <span class="sidebar-filter-dot"></span>
-      <span class="sidebar-filter-text">Account</span>
+      <span class="sidebar-filter-text">Object</span>
       <span class="sidebar-filter-status">All</span>
     </button>
     <button class="sidebar-filter" type="button" data-filter="subsidiaries">
@@ -250,16 +249,25 @@
     </div>
   </div>
 
-  <!-- Accounting -->
+  <!-- Accounting — accordion module so future pages (Period-End,
+       AAI Audit, etc.) just slot in as additional children. The
+       DMAAIs preload status dot lives on the section header so it
+       indicates "any accounting data is preloaded" without being
+       tied to a specific child link. -->
   <div class="sidebar-section">
-    <div class="sidebar-section-label">Accounting</div>
-    <a href="accounting-dmaais.html" class="sidebar-nav-item${cls('dmaais')}" data-nav-page="dmaais">
-      <span class="sidebar-nav-icon-wrap">
-        <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h12a4 4 0 0 1 4 4v12H8a4 4 0 0 1-4-4Z"/><path d="M4 4v12a4 4 0 0 0 4 4"/><line x1="9" y1="9" x2="15" y2="9"/><line x1="9" y1="13" x2="15" y2="13"/></svg>
-        <span class="sidebar-nav-dot${dotCls}" id="js-dmaai-dot" title="${escapeHtml(dotTitle)}"></span>
-      </span>
-      <span class="sidebar-nav-text">DMAAIs</span>
-    </a>
+    <div class="sidebar-module${expCls('accounting')}" data-module="accounting">
+      <button type="button" class="sidebar-nav-item${isAccountingPage ? ' is-active' : ''}" data-module-toggle="accounting" aria-expanded="${expAria('accounting')}">
+        <span class="sidebar-nav-icon-wrap">
+          <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h12a4 4 0 0 1 4 4v12H8a4 4 0 0 1-4-4Z"/><path d="M4 4v12a4 4 0 0 0 4 4"/><line x1="9" y1="9" x2="15" y2="9"/><line x1="9" y1="13" x2="15" y2="13"/></svg>
+          <span class="sidebar-nav-dot${dotCls}" id="js-dmaai-dot" title="${escapeHtml(dotTitle)}"></span>
+        </span>
+        <span class="sidebar-nav-text">Accounting</span>
+        <svg class="sidebar-nav-caret" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 6 8 10 12 6"/></svg>
+      </button>
+      <div class="sidebar-nav-children">
+        <a href="accounting-dmaais.html" class="sidebar-nav-child${cls('dmaais')}" data-nav-page="dmaais">DMAAIs</a>
+      </div>
+    </div>
   </div>
 
   <!-- Status panel -->
