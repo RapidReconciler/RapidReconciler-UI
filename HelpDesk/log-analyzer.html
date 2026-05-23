@@ -806,7 +806,7 @@ const AGENT_RULES = [
   { name: 'Health probe during startup (expected)',
     match: /HealthServiceImpl.*Could not load health endpoint.*Connection refused/i, severity: 'noise',
     note: 'These ERROR lines are normal while an instance is still starting &mdash; the agent polls the health endpoint before the instance HTTPS listener is up. Concerning only if they continue indefinitely with no matching "Started ClientServicesApplication".' },
-  { name: 'Couldn&rsquo;t reach the old version to shut it down',
+  { name: "Couldn't reach the old version to shut it down",
     match: /HealthServiceImpl.*Could not access shutdown endpoint.*Connection refused/i, severity: 'noise',
     note: 'The agent tried to ask the old version to shut down cleanly, but it was already gone. This is the EXPECTED outcome during most deploys &mdash; the failed connection IS the confirmation that the old version already stopped. Concerning only if it happens repeatedly when no deploy is in progress.' },
   { name: 'Instance startup polling',
@@ -880,25 +880,25 @@ const AGENT_RULES = [
     note: 'Authentication failed somewhere in the agent stack. Check the credential the agent uses to reach the backend.' },
 
   // ---- Critical ----
-  { name: 'New version isn&rsquo;t reporting back',
+  { name: "New version isn't reporting back",
     match: /\bCould not load version\b/i, severity: 'flag',
     note: 'The agent finished installing a new version but can&rsquo;t read the version number back from it. The new version is probably running but misconfigured &mdash; the deploy will show as failed in VALC. Confirm with the customer whether the application is actually working; if it is, escalate to engineering, not field support.' },
-  { name: 'Can&rsquo;t reach VALC at all',
+  { name: "Can't reach VALC at all",
     match: /\bActiveMQ(?:NotConnected|ConnectionFailed)Exception\b/, severity: 'crit',
     note: 'The agent can&rsquo;t establish any connection to VALC. Three things to check: (1) the customer&rsquo;s network can reach <code>staging-valc.cloudapp.net</code> or <code>rr-spa.cloudapp.net</code> on port 443 &mdash; try a browser test from the agent host, (2) the agent host&rsquo;s firewall isn&rsquo;t blocking outbound TLS to 443, (3) no corporate proxy or DLP appliance is intercepting the TLS handshake.' },
   { name: 'Security check failed talking to VALC',
     match: /\bActiveMQSecurityException\b/, severity: 'crit',
     note: 'The agent reached VALC but VALC refused the connection at the security layer. Usually means the per-customer key files (<code>keystore3.rr.jks</code> and <code>truststore3.rr.jks</code> next to <code>rr-valc-agent.jar</code>) are missing, corrupted, or out of date. Reinstall the agent or have engineering reissue the customer&rsquo;s key files.' },
-  { name: 'Don&rsquo;t trust VALC&rsquo;s security certificate',
+  { name: "Don't trust VALC's security certificate",
     match: /PKIX path building failed|unable to find valid certification path/i, severity: 'crit',
     note: 'The agent&rsquo;s trust file doesn&rsquo;t recognize the certificate VALC presented. This usually happens after VALC renews its certificate but the new authority hasn&rsquo;t been pushed to customer trust files. Engineering needs to push an updated <code>truststore3.rr.jks</code>; this isn&rsquo;t something a customer can fix on their end.' },
-  { name: 'VALC&rsquo;s certificate is for a different address',
+  { name: "VALC's certificate is for a different address",
     match: /No subject alternative names? (?:matching|present)|HostnameVerifier.*?failed/i, severity: 'crit',
     note: 'VALC&rsquo;s certificate doesn&rsquo;t list the hostname the agent connected to. Either the agent is pointed at the wrong VALC address (check the active environment line earlier in the log) or VALC&rsquo;s cert was reissued without including this hostname. Either way, escalate to engineering.' },
   { name: 'Downloaded file looks corrupted',
     match: /(?:SHA-?1.*?mismatch|integrity.*?fail|checksum.*?fail|file.*?corrupt)/i, severity: 'crit',
     note: 'A file VALC sent arrived at the agent but didn&rsquo;t match the expected checksum &mdash; either the transfer was interrupted or the copy on VALC is stale. The agent normally deletes the bad copy and re-requests; if you see this repeatedly for the same file, VALC has a bad copy and engineering needs to re-upload.' },
-  { name: 'VALC sent an update for something the agent doesn&rsquo;t have yet',
+  { name: "VALC sent an update for something the agent doesn't have yet",
     match: /ValcMessageListener.*Could not interpret JMS message/i, severity: 'flag',
     note: 'VALC sent an instruction referencing a record (a user, tab name, etc.) the agent&rsquo;s local database doesn&rsquo;t have yet. Usually a timing issue &mdash; VALC created the record but the create-sync to this agent hasn&rsquo;t happened. Most of the time the next sync resolves it. Concerning if you see the same message repeat for more than a few minutes after a deploy.' },
   { name: 'Database sync script returned the wrong row count',
@@ -977,12 +977,15 @@ function escapeHtml(s) {
     ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' })[c]);
 }
 
-// Cap how many sample lines each group renders by default. The DOM
-// cost was the main "took a long time to load" complaint on large
-// logs — a group with 500 matched lines used to emit 500 <pre>
-// nodes. Now we render up to SAMPLE_CAP and add a one-click expander
-// for the rest. Same coverage, no information loss, fast layout.
-const SAMPLE_CAP = 5;
+// Cap how many sample lines each group renders by default. For
+// matched-rule buckets and normalized sub-buckets, every additional
+// sample past the first is the same content with a different
+// timestamp — so showing 1 by default keeps the page scannable and
+// lets the operator expand the rest with one click if they want
+// timing detail. The DOM cost was the original reason to cap at
+// all — a group with 500 matched lines used to emit 500 <pre>
+// nodes; this version emits 1 + a "Show N more" expander.
+const SAMPLE_CAP = 1;
 
 function renderGroup(rule, items, severity) {
   const sev = severity || rule.severity;
