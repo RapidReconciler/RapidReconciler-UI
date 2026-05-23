@@ -369,7 +369,7 @@
      ============================================================ */
   .stats-strip {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(3, 1fr);
     gap: 14px;
     margin-bottom: 24px;
   }
@@ -383,6 +383,60 @@
     flex-direction: column;
     gap: 4px;
   }
+  /* Linkable hero card — same look as .stat-tile but with hover
+     affordance + an external-link arrow next to the label. Used by
+     the Cardex Variance card that hops to inventory-cardex-variance. */
+  a.stat-tile {
+    text-decoration: none;
+    color: inherit;
+    cursor: pointer;
+    transition: border-color 0.15s, box-shadow 0.15s, transform 0.08s;
+  }
+  a.stat-tile:hover {
+    border-color: var(--blue);
+    box-shadow: 0 2px 8px rgba(43, 95, 176, 0.15);
+  }
+  a.stat-tile:active { transform: translateY(1px); }
+  a.stat-tile .stat-tile-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+  a.stat-tile .stat-tile-link-icon {
+    width: 11px;
+    height: 11px;
+    opacity: 0.55;
+    transition: opacity 0.15s;
+  }
+  a.stat-tile:hover .stat-tile-link-icon { opacity: 1; color: var(--blue); }
+  /* Pair of small value rows inside the Cardex Variance card. */
+  .stat-pair {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 2px;
+  }
+  .stat-pair-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 10px;
+  }
+  .stat-pair-row-label {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 11.5px;
+    font-weight: 700;
+    color: var(--text-soft);
+  }
+  .stat-pair-row-value {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--navy);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.15;
+  }
+  .stat-pair-row-value.is-neg { color: var(--red); }
   .stat-tile-label {
     font-family: 'Source Sans 3', sans-serif;
     font-size: 10.5px;
@@ -863,16 +917,25 @@
       <span class="stat-tile-value" id="stat-amt">&mdash;</span>
       <span class="stat-tile-sub">extended value at period close</span>
     </div>
-    <div class="stat-tile">
-      <span class="stat-tile-label">QtyVar</span>
-      <span class="stat-tile-value" id="stat-qtyvar">&mdash;</span>
-      <span class="stat-tile-sub">item-roll quantity drift</span>
-    </div>
-    <div class="stat-tile">
-      <span class="stat-tile-label">AmtVar</span>
-      <span class="stat-tile-value" id="stat-amtvar">&mdash;</span>
-      <span class="stat-tile-sub">item-roll amount drift</span>
-    </div>
+    <a class="stat-tile" id="stat-cardex-link" href="inventory-cardex-variance.html" data-nav-page="cardex-variance" title="Open Cardex Variance worklist">
+      <span class="stat-tile-label">
+        Cardex Variance
+        <svg class="stat-tile-link-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8">
+          <path d="M6 3h7v7M13 3L6 10M11 9v4H3V5h4"/>
+        </svg>
+      </span>
+      <div class="stat-pair">
+        <div class="stat-pair-row">
+          <span class="stat-pair-row-label">Quantity</span>
+          <span class="stat-pair-row-value" id="stat-qtyvar">&mdash;</span>
+        </div>
+        <div class="stat-pair-row">
+          <span class="stat-pair-row-label">Amount</span>
+          <span class="stat-pair-row-value" id="stat-amtvar">&mdash;</span>
+        </div>
+      </div>
+      <span class="stat-tile-sub">item-roll drift &middot; click for worklist</span>
+    </a>
   </section>
 
   <!-- ============================================================
@@ -883,9 +946,9 @@
       <span class="details-title">Details</span>
       <div class="details-head-right">
         <div class="grid-state-cluster">
-          <label class="grid-search" title="Filter the visible rows by any text in any visible column">
+          <label class="grid-search" title="Substring search across visible columns. Prefix the query with ^ to switch to starts-with (e.g. ^468- finds Item 468-... but not X-468-).">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="7" r="4"/><line x1="10" y1="10" x2="14" y2="14"/></svg>
-            <input type="search" id="grid-search-input" placeholder="Search rows&hellip;" autocomplete="off" spellcheck="false">
+            <input type="search" id="grid-search-input" placeholder="Search rows&hellip; (^ for starts-with)" autocomplete="off" spellcheck="false">
             <button type="button" class="grid-search-clear" id="grid-search-clear" hidden title="Clear search">&times;</button>
           </label>
           <button type="button" class="grid-pill grid-pill-export" id="grid-export-btn" title="Export the current view (filters + visible columns + order) to Excel">
@@ -1026,26 +1089,50 @@
       currencies:    []
     };
   }
-  // Normalize agent response keys (camelCase first-letter-lowercase)
-  // to the TitleCase shape my COLUMNS expect. Snapshot rows are
-  // already TitleCase so pass through. Handles known acronyms
-  // (UOM, GLClass, etc.) explicitly; the rest get a simple first-
-  // letter uppercase.
-  const _AGENT_KEY_OVERRIDES = {
+  // Normalize agent response keys to match the page's COLUMNS map
+  // (which uses the legacy xlsx-export labels). The agent's
+  // /inventory/as-of returns TitleCase keys but with some labels
+  // that differ from the snapshot:
+  //   QOH          → Quantity   (on-hand units)
+  //   AmountonHand → Amount     (on-hand $ value)
+  // Other fields the agent returns are pass-through (CompanyNumber,
+  // LongAccount, Branch, ItemNumber, QtyVar, AmtVar, etc. — already
+  // match). Per-row aggregate echoes (totqty / totamt / totrows /
+  // totpages) get dropped since no COLUMN references them.
+  const _AGENT_KEY_ALIASES = {
+    // Agent TitleCase → expected
+    QOH:            'Quantity',
+    AmountonHand:   'Amount',
+    // camelCase variants (other endpoints may return these)
+    qoh:            'Quantity',
+    amountonHand:   'Amount',
+    quantityOnHand: 'Quantity',
+    amountOnHand:   'Amount',
     uom: 'UOM', glClass: 'GLClass', qtyVar: 'QtyVar', amtVar: 'AmtVar',
     st: 'ST', cm: 'CM', lotBod: 'LotBod', lotExp: 'LotExp',
     lotStatus: 'LotStatus', currCost: 'CurrCost', calcCost: 'CalcCost'
   };
+  const _AGENT_ROW_AGGREGATE_KEYS = new Set([
+    'totqty', 'totamt', 'totqtyvar', 'totamtvar', 'totrows', 'totpages',
+    'totmtvar'  // tolerate truncation in earlier seen variants
+  ]);
   function normalizeAsOfRows(rows) {
     if (!Array.isArray(rows) || !rows.length) return rows || [];
-    const first = rows[0];
-    // Snapshot shape detected by TitleCase keys
-    if ('CompanyNumber' in first || 'LongAccount' in first) return rows;
     return rows.map(r => {
       const out = {};
       Object.keys(r).forEach(k => {
-        const nk = _AGENT_KEY_OVERRIDES[k] || (k[0].toUpperCase() + k.slice(1));
-        out[nk] = r[k];
+        if (_AGENT_ROW_AGGREGATE_KEYS.has(k)) return;  // drop per-row aggregate echoes
+        const alias = _AGENT_KEY_ALIASES[k];
+        if (alias) { out[alias] = r[k]; return; }
+        // camelCase first-letter-lowercase → TitleCase. Acronym-only
+        // tokens (UOM already, GLClass already) come through unchanged
+        // because their first character is already uppercase.
+        const firstCh = k.charAt(0);
+        if (firstCh && firstCh === firstCh.toLowerCase() && firstCh !== firstCh.toUpperCase()) {
+          out[firstCh.toUpperCase() + k.slice(1)] = r[k];
+        } else {
+          out[k] = r[k];
+        }
       });
       return out;
     });
@@ -1335,15 +1422,21 @@
       // fallback. The agent's request DTO names this field `daily`
       // (NOT `period` — Jackson drops unknown keys silently).
       const period = readCurrentPeriodFromCache() || (_data && _data._meta && _data._meta.period) || null;
+      // Bulk-fetch model: always pull the FULL lot-detail dataset from
+      // the agent. The "Lot detail" toggle flips client-side rendering
+      // only (summarizeRows() rolls up by item in JS) so toggling the
+      // pill is instant — no agent roundtrip. Common UOM is also a
+      // client-side row filter for now (a future commonUom-through-
+      // agent pass would swap this when the conversion math is wired).
       const payload = await rrFetch('inventory/as-of', {
         method: 'POST',
         body: {
           reconciliationFilter: reconciliationFilterFromSession(),
           daily:           period || '',
-          commonUom:       _state.uomFilter || '',
-          summarizeByItem: !!_state.summarize,
+          commonUom:       '',
+          summarizeByItem: false,
           filters: { itemNumber: '', branchPlant: '', location: '', lot: '' },
-          take: 100000, skip: 0, page: 1, pageSize: 100000
+          take: 200000, skip: 0, page: 1, pageSize: 200000
         },
         demoFile: 'as-of'
       });
@@ -1505,14 +1598,21 @@
     return Array.from(groups.values());
   }
   function searchFilter(rows, q) {
-    const query = String(q || '').toLowerCase().trim();
+    let query = String(q || '').toLowerCase().trim();
+    if (!query) return rows;
+    // §8 starts-with anchor: a leading `^` switches from substring
+    // match to startsWith, matched against the same visible-column
+    // scan. Mirrors the legacy "starts with" filter cards.
+    const anchored = query.charAt(0) === '^';
+    if (anchored) query = query.slice(1);
     if (!query) return rows;
     const cols = visibleColumns();
     return rows.filter(r => {
       for (let i = 0; i < cols.length; i++) {
         const v = r[cols[i].key];
         if (v == null) continue;
-        if (String(v).toLowerCase().indexOf(query) !== -1) return true;
+        const s = String(v).toLowerCase();
+        if (anchored ? s.indexOf(query) === 0 : s.indexOf(query) !== -1) return true;
       }
       return false;
     });

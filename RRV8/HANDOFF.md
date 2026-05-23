@@ -5,9 +5,52 @@ session. Paste the **Resume prompt** section as the first message in
 the new session; the rest of this file is context that prompt points
 the new session at.
 
-**Updated**: 2026-05-23, after the agent-first tenet landed.
+**Updated**: 2026-05-23, after the post-agent-first work landed.
+Highlights this chunk:
+
+- **Agent-mode bugs surfaced + fixed**: stale JWT pointing at port
+  34536 when the agent moved to 36801 (re-login fixed); the
+  Cardex Variance hero&rsquo;s `/inventory/reconciliation-filtered`
+  500&rsquo;d because my body shape sent empty arrays for the
+  non-company dimensions (sproc joined to nothing) &mdash; now
+  fetches `/inventory/status` first and passes the full filter
+  universe with companies narrowed; the As Of grid showed
+  Quantity=0 / Amount=0 because the agent returns `QOH` and
+  `AmountonHand` not `Quantity` / `Amount` &mdash; added explicit
+  key aliases to `normalizeAsOfRows`.
+- **Search anchor**: §8 standard now accepts a `^` prefix to
+  switch from substring to startsWith. Applied across Transactions,
+  As Of, and Cardex Variance grids. Tooltip + placeholder
+  advertise it.
+- **As Of bulk-fetch model**: always sends `summarizeByItem: false`
+  to the agent so the &ldquo;Lot detail&rdquo; toggle becomes a
+  pure client-side render flip. Matching pattern to Transactions.
+- **As Of Cardex Variance hero card**: two variance tiles collapsed
+  into one linkable card. Native `<a href>` &mdash; right-click
+  &ldquo;open in new tab&rdquo; works; arrow glyph signals
+  clickability.
+- **SQL compatibility floor**: dev DB bumped to compat 140 (SQL
+  Server 2017) to match the install doc&rsquo;s engine floor. Tenet
+  added to WORKFLOW.md and saved as feedback memory. Install +
+  migration runbooks now have an explicit
+  `ALTER DATABASE SET COMPATIBILITY_LEVEL = 140` step so customer
+  DBs land at the floor consistently.
+- **`usp6getasof_v2` sproc (NEW)** at `RRV8/sprocs/usp6getasof_v2.sql`.
+  Optimized replacement for `usp6getasofpaginated`. Same row +
+  total shape; **27% faster on warm cache** (1,764ms vs 2,431ms
+  on dev DB with 6.5M asof rows + both companies). Static SQL +
+  temp-table stats + single-pass aggregate + filter pushdown.
+  **Not wired to the agent yet** &mdash; that&rsquo;s an
+  `AsOfController` repository-method change. V8 still hits the
+  legacy sproc through the agent until that flip.
+- **`scripts/extract-cardex.py`**: minor JSON-formatting fix to
+  keep `reconciliation.json` minified (matches the original) so
+  re-captures produce one-line diffs.
+
+Prior chunk (agent-first tenet):
+
 Committed default `mode: 'staging'` so every V8 page hits the live
-agent in dev; As Of and Cardex Variance now route through `rrFetch`
+agent in dev; As Of and Cardex Variance route through `rrFetch`
 the same way Reconciliation and Transactions already do. Snapshots
 remain as a fallback (`?mode=demo`) but are not the dev workflow.
 WORKFLOW.md &sect; *V8 tenets* is the canonical reference.
