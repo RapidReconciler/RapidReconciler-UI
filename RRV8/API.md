@@ -180,6 +180,95 @@ client code doesn&rsquo;t need special cases:
   allowed companies (`dbs[i].i`) automatically; client code does
   not need to repeat that constraint.
 
+### Planned &mdash; Row-level reconciliation (READY TO IMPLEMENT)
+
+**Full agent-side spec with paste-ready Java is at
+[`docs/agent-specs/reconciliation-rows.md`](../docs/agent-specs/reconciliation-rows.md).**
+This section is the V8-client summary.
+
+`POST /inventory/reconciliation-filtered` currently returns SUMMARY
+ONLY. The Reconciliation page&rsquo;s &ldquo;variance contributors&rdquo;
+card AND any per-dimension drilldown need the underlying per-tuple
+rows. **The data layer already exists** &mdash;
+`AccountSummaryRepository.findAll(UserRequest, ReconciliationFilter, Tab)`
+calls `usp6GetRInvAccountSummary` (which wraps `usp6getfilteredview`
+with `@viewname = 'v6ui_raccountsummary'`). That&rsquo;s the same
+sproc that produced `RRV8/data/reconciliation.json` (195 rows, 13
+periods, 2 companies). All we need is a thin controller method
+exposing it.
+
+**Recommended: dedicated endpoint** so the existing
+`reconciliation-filtered` stays light for callers that only need
+the summary (hero stat refresh, light/poll loops).
+
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/inventory/reconciliation/rows` | Returns per-tuple rows from `AccountSummaryRepository.findAll`. One row per (period, company, businessUnit, object, subsidiary, currency) tuple matching the caller&rsquo;s `reconciliationFilter`. |
+| POST | `/in-transit/reconciliation/rows` | In Transit sibling (same shape, `Tab.IN_TRANSIT`). |
+| POST | `/po-receipts/reconciliation/rows` | PO Receipts sibling (same shape, `Tab.PO_RECEIPTS`). |
+
+#### Request DTO
+
+Same `ReconciliationRequest` the existing methods take (Item-wrapped
+filter arrays + `period`). No new DTO needed.
+
+#### Response DTO
+
+```java
+public class RowsResponse {
+    private List<Map<String, Object>> rows;
+    // standard lombok getter/setter/constructor
+}
+```
+
+The `Map<String, Object>` shape matches what `AccountSummaryRepository.findAll`
+already returns; Jackson will serialize the column names as keys.
+Column names from `v6ui_raccountsummary` should already be the camelCase
+shape V8 expects (`period, companyNumber, businessUnit, object,
+subsidiary, currency, longAccount, shortAccount, glBalance,
+perpetualBalance, outOfBalance, variance: {...}`) &mdash; verify
+against the view DDL at `RRV8/views/v6ui_raccountsummary.sql`. If
+some columns are flat (e.g. `carryForward` instead of nested under
+`variance`), either patch the view or add a small mapper in the
+controller before returning.
+
+#### Controller method (Spring)
+
+```java
+@Autowired
+private AccountSummaryRepository accountSummaryRepository;
+
+@RequestMapping(value = "/inventory/reconciliation/rows", method = RequestMethod.POST)
+public RowsResponse inventoryReconciliationRows(@RequestBody ReconciliationRequest req) throws Exception {
+    ReconciliationFilter filter = reconciliationService.toFilter(req);  // same conversion the existing methods use
+    List<Map<String, Object>> rows =
+        accountSummaryRepository.findAll(userRequest, filter, Tab.INVENTORY);
+    return new RowsResponse(rows);
+}
+```
+
+Wiring notes:
+
+- `userRequest` is the same `@Autowired` field the other methods on this
+  controller use (carries the JWT-scoped allowed companies, so the agent
+  enforces tenancy without the client having to repeat it).
+- `Tab.INVENTORY` vs `Tab.IN_TRANSIT` vs `Tab.PO_RECEIPTS` for the
+  three sibling endpoints; matches the existing `inventoryReconciliation`
+  vs `inTransitReconciliation` pattern.
+- No paging on this response &mdash; V8 expects the full row set per
+  filter scope (the snapshot is 195 rows for the captured instance;
+  real installs are larger but bounded by `period × company × account`
+  cardinality, not transaction volume).
+
+Reference shape: `RRV8/data/reconciliation.json#accountRows` carries
+the captured 195 rows. The new agent response should match that field
+naming exactly so V8 can adapt with no per-field mapper.
+
+**Transactions sign**: same convention as the existing summary block
+&mdash; pre-signed for OOB contribution (V8 flips it via
+`VARIANCE_SIGN.transactions = -1` at aggregation). The view already
+emits the right sign; just pass through.
+
 ### Planned &mdash; DMAAI worklist endpoints (PROD-TODO)
 
 The DMAAI page (`RRV8/accounting-dmaais.html`) drives a recurring
