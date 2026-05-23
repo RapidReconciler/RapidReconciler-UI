@@ -141,11 +141,44 @@ central agent and has no HTTP controllers.
 | RunJobController | GET | `/run-ssis` | Triggers the SSIS refresh job. |
 | AsOfController | GET | `/inventory/as-of/daily/{period}` | Daily availability probe for a period. |
 | AsOfController | POST | `/inventory/as-of` | Main As Of fetch. Body extends `DataSourceRequest` (so it carries `take/skip/page/pageSize/aggregate[]` like Transactions) plus `{reconciliationFilter, daily, commonUom, summarizeByItem, filters: {itemNumber, branchPlant, location, lot}}`. `summarizeByItem` toggles the item rollup server-side; `commonUom` requests on-the-fly UOM conversion. Note: `summarizeByItem` (camelCase) and `daily` (the period date, not `period`) &mdash; see gotcha below. |
-| AsOfController | POST | `/inventory/as-of/details` | Per-item lot drill-in. Body: `{branchPlant, lot, company, itemNumber, location, glClass, uom, companyNumber}`. Note both `company` AND `companyNumber` are required &mdash; the controller distinguishes ordering company vs branch company. |
+| AsOfController | POST | `/inventory/as-of/details` | **Item ledger / roll-forward detail** for a single inventory position &mdash; NOT just lot detail (despite the path name). `AsOfController.inventoryAsOfDetails` injects `ItemRollForwardRepository` and calls `findDetailsInventory(...)` which runs `usp6ItemRollForward(@branch, @itemnumber, @location, @lot, @glclass, @uom, @companyNumber)`. Returns one row per ledger entry behind the position (transdate / periodends / comm / runqty / runamt / dt / doc / qty / uom / cost / val / qtyvar / amtvar). Body DTO `AsOfDetailsRequest`: `{branchPlant, lot, company, itemNumber, location, glClass, uom, companyNumber}`. Note both `company` AND `companyNumber` are required &mdash; the controller distinguishes ordering company vs branch company (in single-company scenarios they're equal). V8's Preview popover on the As Of grid uses this. |
 | AsOfController | POST | `/inventory/rollIItem` | Re-roll a single item's perpetual valuation. **Endpoint name carries a typo (`rollIItem`, double-I)** &mdash; matches the bytecode literally. The Re-roll button on `RRV8/inventory-asof.html` will POST here. |
 | AsOfController | POST | `/in-transit/as-of`, `/in-transit/as-of/details` | In Transit siblings, same DTO shapes. |
 | OrdersController, LineAnalysisController, CommonUomController | &mdash; | various | Not yet wired by V8; mined but not exercised. |
 | admin/AdminCompaniesController, AdminGeneralController, AdminInventoryOffsetsController, AdminUsersController | &mdash; | various | Admin module endpoints; out of scope for the analyst pages. |
+
+---
+
+## Planned endpoints &mdash; handoff list for the agent team
+
+The three subsections below are the V8 features that depend on
+server-side endpoints the current per-DB agent does NOT expose.
+Each one is wired in V8 today through `rrFetch` with the planned
+endpoint name; in demo mode V8 reads a captured snapshot, and in
+prod/staging mode the page surfaces a fetch-error banner until the
+endpoint lands.
+
+Conventions to match the rest of the data-services surface so
+client code doesn&rsquo;t need special cases:
+
+- **Auth:** `Authorization: Bearer <jwt>`. JWT decoding + the active
+  DB picker happen client-side; the agent already runs scoped per
+  DB so no further routing is needed.
+- **CORS:** `Access-Control-Allow-Origin: *` (matches the existing
+  controllers).
+- **Field naming:** Jackson camelCase, first-letter-lowercase, on
+  both request and response DTOs. Unknown JSON keys are dropped
+  silently &mdash; spelling matters; see *Critical gotchas* below.
+- **`reconciliationFilter` shape:** bare string arrays
+  (`{currencies: ["USD"], companies: ["00010"], &hellip;}`) &mdash;
+  same as `/inventory/transactions`, NOT the wrapped Item shape
+  `/inventory/reconciliation-filtered` requires. Empty arrays
+  mean "no narrowing on that dimension" (caller sees everything
+  they&rsquo;re permitted), NOT "join to nothing" (the recon-
+  filtered convention that caused 500s).
+- **Scope from JWT:** every endpoint respects the JWT&rsquo;s
+  allowed companies (`dbs[i].i`) automatically; client code does
+  not need to repeat that constraint.
 
 ### Planned &mdash; DMAAI worklist endpoints (PROD-TODO)
 
@@ -168,7 +201,81 @@ SQL table DDL + the JSON sidecar contract are pinned in
 names without updating both ends &mdash; Jackson silently drops
 unknown keys (see *Critical gotchas* below).
 
-### Planned &mdash; As Of data flow (mined 2026-05-23, not yet wired)
+### Planned &mdash; Audit report detail (PROD-TODO)
+
+The Reconciliation page&rsquo;s Excel + PDF audit reports
+(`generateAuditReport` / `generateAuditReportPdf` in
+[`RRV8/inventory-reconciliation.html`](inventory-reconciliation.html))
+need two heavy arrays the agent doesn&rsquo;t currently expose: the
+analyst-marked reconciling items (with carry-forward `worked` /
+`note` overlay) and the per-item perpetual rows. Demo mode reads
+both from `RRV8/data/audit-report-detail.json` (~7.4 MB, captured
+once); prod-mode wiring is queued and currently surfaces a red
+fetch-error banner.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET / POST | `/inventory/audit-detail` | Streams the two heavy arrays for the requested period in one envelope: `{reconcilingItems: [&hellip;], perpetual: [&hellip;]}`. Query string OR JSON body carries `period` (ISO YYYY-MM-DD) and the standard `reconciliationFilter` (bare string arrays, same shape as `/inventory/transactions`). |
+
+Response field shapes (camelCase first-letter-lowercase per the Jackson convention):
+
+- **`reconcilingItems`** &mdash; per-row F4111 vs F0911 transactional comparison drilling the Variances section in each per-account block. Source view: `v6ui_reconcilingitems` joined to the work-notes overlay table (see *Work notes* below). Fields: `companyNumber, periodEnds, longAccount, dt, docNumber, ot, batch, cardexAmount, ledgerAmount, variance, worked (bool), note (string\|null)`. The `worked` / `note` columns reflect analyst markup from the most recent save; rows absent from the overlay default to `worked=false, note=null`.
+- **`perpetual`** &mdash; per-item on-hand rows feeding the Perpetual Details section. Source view: `v6_006_perpetual` joined to `ritems` + `F4101` for item descriptions, filtered to `QOH != 0`. Fields: `companyNumber, longAccount, branch, itemNumber, itemDescription, uom, quantityOnHand, amountOnHand`.
+
+This is read-only data &mdash; the audit report renders it; the analyst doesn&rsquo;t edit it from this page. (The `worked` / `note` columns inside `reconcilingItems` are EDITED on the Transactions page; the audit report just reads the current state.)
+
+Scope: the response should respect the JWT&rsquo;s allowed companies AND the caller&rsquo;s narrowed filter selections. Empty arrays in the filter dimensions mean "no narrowing" (analyst sees everything they&rsquo;re permitted), matching the `/inventory/transactions` convention &mdash; NOT the `/inventory/reconciliation-filtered` convention where empty arrays cause a 500.
+
+### Planned &mdash; Work notes overlay GET (PROD-TODO)
+
+The Transactions page lets the analyst mark rows `Worked` and attach a `Note`. **Saves already work** &mdash; `POST /inventory/transactions/save-notes` exists in the current TransactionsController (see catalog above) and V8 calls it on every batch-edit Apply. The missing piece is the BULK GET so the page can load the analyst&rsquo;s prior work when the user re-opens a period.
+
+Today the demo snapshot reads `data/work-notes.json` so the architecture mirrors the prod contract (transactions + worknotes are separate datasets joined client-side by the composite PK below). Prod-mode wiring falls back to extracting `Worked` / `Note` from inline values on the bulk transactions response &mdash; same architecture, lossy source. The fix is a single GET endpoint.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET / POST | `/inventory/work-notes` | Returns the current overlay rowset scoped by the caller&rsquo;s `reconciliationFilter` (bare string arrays) + period. Envelope: `{_meta?, total, data: [WorkNote, &hellip;]}`. Rows absent from the response default to `Worked=0, Note=null` on the client; the agent doesn&rsquo;t need to materialize "zero rows" for every transactional row in scope. |
+
+`WorkNote` row shape (Jackson camelCase, matches the existing save DTO with `periodEnds` lifted out of the outer envelope into each row + audit fields on the way out):
+
+```json
+{
+  "companyNumber":   "00010",
+  "inventoryAccount":"1000000.143000.SEC",
+  "orderType":       "W1",
+  "docType":         "IC",
+  "docNumber":       1324370,
+  "periodEnds":      "2016-08-27",
+  "mfgBatch":        13218503,
+  "worked":          true,
+  "note":            "reroll required",
+  "lastModifiedBy":  "user@example.com",
+  "lastModifiedDate":"2026-05-20T00:00:00"
+}
+```
+
+Composite PK on `dbo.RCardexLedgerCompare2WorkNote`:
+
+```
+(CompanyNumber, InventoryAccount, OrderType, DocType, DocNumber, PeriodEnds, MfgBatch)
+```
+
+`MfgBatch` is `Batch` in the V8 grid&rsquo;s field naming &mdash; same value, different column label.
+
+Relationship to the existing save: the existing
+`POST /inventory/transactions/save-notes` takes
+`{period, notes: [TransactionNote, &hellip;]}` and the agent injects
+`period` into each row before upserting. The new GET should return
+rows with `periodEnds` materialized inline (one less thing for the
+client to remember), plus the `lastModifiedBy / lastModifiedDate`
+audit columns. Either align the save&rsquo;s `TransactionNote`
+shape to match (carrying `periodEnds` inline + populating audit
+columns from the JWT + server clock) OR keep the save shape as-is
+&mdash; we don&rsquo;t care, as long as the GET response includes
+`periodEnds` for join compatibility with the bulk transactions
+rowset.
+
+### Reference notes &mdash; As Of data flow (mined 2026-05-23, now wired)
 
 The V8 As Of page (`RRV8/inventory-asof.html`) currently reads a static
 snapshot at `data/as-of.json` filtered to company 00050 because the
@@ -195,13 +302,17 @@ Reference: AsOfController catalog rows above. Field-name gotchas:
   as `/inventory/reconciliation-filtered`.
 - **Re-roll = `POST /inventory/rollIItem`.** Note the double-I in
   the path (verbatim from the bytecode &mdash; "roll inventory
-  item"). The V8 Re-roll button currently flashes a placeholder
-  toast; once wired, it posts to this endpoint.
+  item"). Same `AsOfRequest` DTO as `/inventory/as-of`. Wired from
+  the Re-roll button on `RRV8/inventory-cardex-variance.html` with a
+  confirmation prompt since it mutates live valuation rows.
+- **Item ledger drill-in = `POST /inventory/as-of/details`.** The
+  controller injects `ItemRollForwardRepository` and runs
+  `usp6ItemRollForward` &mdash; see the controller catalog row
+  above. Wired from the Preview popover on the As Of grid.
 
-Once V8 wires the page through `rrFetch('inventory/as-of', { ... })`,
-the JWT&rsquo;s allowed companies (`dbs[i].i`) determine the scope
-automatically &mdash; the company 00010 data gap closes without
-re-exporting xlsx.
+V8 routes everything through `rrFetch('inventory/as-of', { ... })`,
+so the JWT&rsquo;s allowed companies (`dbs[i].i`) determine the
+scope automatically &mdash; no per-company xlsx re-export needed.
 
 CORS is wide open: `Access-Control-Allow-Origin: *`. Server header is
 `Apache-Coyote/1.1` (the Spring Boot data-services child).

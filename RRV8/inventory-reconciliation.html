@@ -5262,6 +5262,73 @@
     return ('0' + (d.getMonth()+1)).slice(-2) + '/' + ('0' + d.getDate()).slice(-2) + '/' + d.getFullYear();
   }
 
+  // Residuals audit definition — shared by Excel + PDF audit reports.
+  // Target reads from the As Of page's persisted setting so the audit
+  // matches whatever residual budget the analyst is working with;
+  // defaults to $10 when As Of has never been touched. The audit
+  // report itself NEVER hides residual rows (it's an audit document) —
+  // this only drives a count + total line on the cover so auditors
+  // see the residual exposure that the As Of view would have
+  // suppressed under the current budget.
+  //
+  // Algorithm matches inventory-asof.html's applyResidualFilter:
+  // Quantity = 0 rows sorted by |Amount| ascending, accumulated until
+  // adding the next would exceed the target. Hidden = the rows that
+  // fit under the budget; their signed amount is what shows on the
+  // cover.
+  const AUDIT_RESIDUAL_DEFAULT_TARGET = 10;
+  function getAuditResidualTarget() {
+    try {
+      const raw = localStorage.getItem('rrv8-asof-residual-target-v1');
+      if (raw === null) return AUDIT_RESIDUAL_DEFAULT_TARGET;
+      const n = Number(raw);
+      return (Number.isFinite(n) && n >= 0) ? n : AUDIT_RESIDUAL_DEFAULT_TARGET;
+    } catch (_) { return AUDIT_RESIDUAL_DEFAULT_TARGET; }
+  }
+  function computeResidualsForPerpetual(perpRows, target) {
+    // Drop-largest-first. Start with every Qty=0 row hidden and pop
+    // the biggest-|Amount| outliers one at a time until the running
+    // signed sum fits inside ±target. Mirrors
+    // inventory-asof.html's applyResidualFilter. Monotonic by
+    // construction (higher target → fewer pops → more rows in the
+    // residual set).
+    const candidates = [];
+    let signedAll = 0, absAll = 0;
+    for (let i = 0; i < perpRows.length; i++) {
+      if ((Number(perpRows[i].quantityOnHand) || 0) !== 0) continue;
+      candidates.push(perpRows[i]);
+      const a = Number(perpRows[i].amountOnHand) || 0;
+      signedAll += a;
+      absAll    += Math.abs(a);
+    }
+    const popOrder = candidates.slice().sort((a, b) =>
+      Math.abs(Number(b.amountOnHand) || 0) - Math.abs(Number(a.amountOnHand) || 0));
+    const removed = new Set();
+    let cumSigned = signedAll, cumAbs = absAll;
+    for (let i = 0; i < popOrder.length && Math.abs(cumSigned) > target; i++) {
+      const a = Number(popOrder[i].amountOnHand) || 0;
+      removed.add(popOrder[i]);
+      cumSigned -= a;
+      cumAbs    -= Math.abs(a);
+    }
+    const count = candidates.length - removed.size;
+    return { count: count, amount: cumSigned, amountAbs: cumAbs, target: target };
+  }
+  function formatResidualAuditLine(stats) {
+    const moneyFmt = (n) => {
+      const v = Number(n) || 0;
+      const s = Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      return v < 0 ? '($' + s + ')' : '$' + s;
+    };
+    return 'Residuals Audit: ' + stats.count.toLocaleString('en-US') +
+      ' row' + (stats.count === 1 ? '' : 's') +
+      ' in perpetual data — residual amount ' +
+      moneyFmt(stats.amount) + ' (within ±' + moneyFmt(stats.target) +
+      ' target; Quantity = 0; cumulative |Amount| ' +
+      moneyFmt(stats.amountAbs) +
+      '). Included in this report for audit completeness.';
+  }
+
   // Style descriptors applied per cell after the AOA is rendered.
   const _STY = {
     title:       { font: { name: 'Calibri', bold: true, sz: 16 } },
@@ -5294,6 +5361,15 @@
     row(['Period Ends: ' + formatDateMDY(currentPeriod)]);
     row(['Prepared: ' + formatDateMDY(new Date().toISOString().slice(0, 10))]);
     row(['Prepared by ' + USER.email + ' (' + (snap._meta && snap._meta.instance ? snap._meta.instance : '') + ')']);
+    // Residuals audit line — count residuals across this company's
+    // perpetual rows. Always reported regardless of any UI toggle on
+    // As Of: audit documents include the rows themselves, and the
+    // cover surfaces the residual exposure for the auditor.
+    const _residualTgt = getAuditResidualTarget();
+    const _coPerpetual = (detail.perpetual || []).filter(p => p.companyNumber === cnum);
+    const _residualStats = computeResidualsForPerpetual(_coPerpetual, _residualTgt);
+    r = row([formatResidualAuditLine(_residualStats)]);
+    styleCell(r, 0, _STY.coverMeta);
     r = row(['Account Summary']);
     styleCell(r, 0, _STY.section);
     row([]);
@@ -5559,7 +5635,7 @@
     margin: { left: 36, right: 36 }
   };
 
-  function addPdfCover(doc, co, snap, periodLabel) {
+  function addPdfCover(doc, co, snap, periodLabel, residualStats) {
     const currency = currencyOfCompanyLabel(co.label) || 'USD';
     const instance = (snap._meta && snap._meta.instance) ? snap._meta.instance : '';
     let y = 50;
@@ -5575,7 +5651,19 @@
     doc.text('Currency Code: ' + currency, 36, y); y += 14;
     doc.text('Period Ends: ' + formatDateMDY(currentPeriod), 36, y); y += 14;
     doc.text('Prepared: ' + formatDateMDY(new Date().toISOString().slice(0, 10)), 36, y); y += 14;
-    doc.text('Prepared by ' + USER.email + (instance ? ' (' + instance + ')' : ''), 36, y); y += 22;
+    doc.text('Prepared by ' + USER.email + (instance ? ' (' + instance + ')' : ''), 36, y); y += 14;
+    if (residualStats) {
+      // Italic so it reads as audit metadata, not a regular metadata
+      // line. Wrap on the page width so a long count doesn't overflow.
+      doc.setFont('helvetica', 'italic');
+      const text = formatResidualAuditLine(residualStats);
+      const wrapW = doc.internal.pageSize.getWidth() - 72;
+      const lines = doc.splitTextToSize(text, wrapW);
+      doc.text(lines, 36, y);
+      y += 14 * lines.length;
+      doc.setFont('helvetica', 'normal');
+    }
+    y += 8;
     doc.setTextColor(0, 0, 0);
     return y;
   }
@@ -5617,8 +5705,14 @@
 
   function buildPdfCompanySection(doc, co, snap, detail, descMap, isFirst) {
     if (!isFirst) doc.addPage();
-    let y = addPdfCover(doc, co, snap, currentPeriod);
     const cnum = co.id;
+    // Residuals audit stats for this company's perpetual rows —
+    // same definition as the Excel cover line, surfaced as an
+    // italic note under "Prepared by".
+    const _residualTgt = getAuditResidualTarget();
+    const _coPerpetual = (detail.perpetual || []).filter(p => p.companyNumber === cnum);
+    const _residualStats = computeResidualsForPerpetual(_coPerpetual, _residualTgt);
+    let y = addPdfCover(doc, co, snap, currentPeriod, _residualStats);
 
     // Filter scope
     const acctRows = (snap.accountRows || []).filter(ar =>
@@ -8178,6 +8272,13 @@
       if (m && !m.hidden) closeHelpModal();
     }
   });
+
+  // Seed the sidebar's filter universe cache (currencies / companies /
+  // BUs / objects / subsidiaries). Fire-and-forget — first page in the
+  // tab does the work; subsequent pages short-circuit to the cache.
+  if (window.RRV8 && typeof window.RRV8.ensureInventoryStatus === 'function') {
+    window.RRV8.ensureInventoryStatus(rrFetch);
+  }
 })();
 </script>
 
