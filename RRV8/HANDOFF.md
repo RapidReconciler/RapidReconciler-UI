@@ -351,7 +351,7 @@ Highlights of the prior longer session (kept for context):
 **New memories saved this session**
 
 - `project_dev_to_qa_workflow` &mdash; DB-object changes flow:
-  dev box → schema-compare → `RapidReconciler-SQL` dev branch
+  dev box → schema-compare → `RapidReconciler-DB` dev branch
   → publish to `RapidReconciler_QA`. Free to add/change objects
   in dev.
 - `project_agent_repo_plan` &mdash; **DONE 2026-05-23**: the
