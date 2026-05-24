@@ -1747,6 +1747,10 @@
       Model
       <span class="tab-count" id="js-tab-count-model">0</span>
     </button>
+    <button class="tab-pill" type="button" role="tab" data-tab="exception-gl" aria-selected="false" title="Items with GL classes not in the AAI master — item / lot-level setup issue distinct from the AAI rule findings.">
+      Exception GL
+      <span class="tab-count" id="js-tab-count-exception-gl">0</span>
+    </button>
     <button class="tab-pill is-active" type="button" role="tab" data-tab="analysis" aria-selected="true">
       Analysis
       <span class="tab-count" id="js-tab-count-analysis">0</span>
@@ -1796,6 +1800,40 @@
           <thead><tr id="js-model-thead-row"></tr></thead>
           <tbody id="js-model-tbody">
             <tr><td colspan="14" class="grid-skeleton"><span class="grid-skeleton-bar"></span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <!-- ============================================================
+       EXCEPTION GL PANEL — items with GL classes not in the AAI
+       master (v_integrity3_exc_glc). Item / lot-level setup issue
+       distinct from the AAI rule findings on the Analysis tab.
+       Same simple-grid pattern as the Model tab.
+       ============================================================ -->
+  <div class="tab-panel" id="js-panel-exception-gl" role="tabpanel">
+    <section class="grid-card">
+      <div class="grid-head">
+        <span class="grid-title">Exception GL &middot; items with GL classes not in the AAI master</span>
+        <div class="grid-state-cluster">
+          <label class="grid-search" title="Search across visible columns">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="7" r="4"/><line x1="10" y1="10" x2="14" y2="14"/></svg>
+            <input type="search" id="js-exc-glc-search" placeholder="Search rows&hellip;" autocomplete="off" spellcheck="false">
+            <button type="button" class="grid-search-clear" id="js-exc-glc-search-clear" hidden title="Clear search">&times;</button>
+          </label>
+          <button type="button" class="grid-pill grid-pill-export" id="js-exc-glc-export-btn" title="Export the exception rows to Excel">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10v3h10v-3"/><path d="M8 2v9"/><polyline points="5 8 8 11 11 8"/></svg>
+            <span>Excel</span>
+          </button>
+          <span class="grid-pill grid-pill-count" id="js-exc-glc-count">Loading&hellip;</span>
+        </div>
+      </div>
+      <div class="grid-scroll">
+        <table class="grid-table" id="js-exc-glc-table">
+          <thead><tr id="js-exc-glc-thead-row"></tr></thead>
+          <tbody id="js-exc-glc-tbody">
+            <tr><td colspan="9" class="grid-skeleton"><span class="grid-skeleton-bar"></span></td></tr>
           </tbody>
         </table>
       </div>
@@ -2759,8 +2797,9 @@
       p.classList.toggle('is-active', active);
       p.setAttribute('aria-selected', active ? 'true' : 'false');
     });
-    document.getElementById('js-panel-model'   ).classList.toggle('is-active', tabId === 'model');
-    document.getElementById('js-panel-analysis').classList.toggle('is-active', tabId === 'analysis');
+    document.getElementById('js-panel-model'       ).classList.toggle('is-active', tabId === 'model');
+    document.getElementById('js-panel-exception-gl').classList.toggle('is-active', tabId === 'exception-gl');
+    document.getElementById('js-panel-analysis'    ).classList.toggle('is-active', tabId === 'analysis');
     MODULE_ORDER.forEach(m => {
       const panel = document.getElementById('js-panel-' + m);
       if (panel) panel.classList.toggle('is-active', tabId === m);
@@ -3723,6 +3762,154 @@
   (function wireModelExport() {
     const btn = document.getElementById('js-model-export-btn');
     if (btn) btn.addEventListener('click', exportModel);
+  })();
+
+  // ============================================================
+  //  Exception GL tab — items with GL classes not in the AAI
+  //  master (v_integrity3_exc_glc). Item / lot-level setup issue
+  //  distinct from the AAI rule findings on the Analysis tab.
+  //  Same simple-grid pattern as Model — search + Excel + count.
+  //  528 rows in dev; small enough to load + filter in JS.
+  // ============================================================
+  const EXC_GLC_COLUMNS = [
+    { key: 'GLClass',       label: 'GL Class' },
+    { key: 'CompanyNumber', label: 'Co' },
+    { key: 'Branch',        label: 'Branch' },
+    { key: 'ShortItem',     label: 'Short Item',  align: 'right' },
+    { key: 'Item',          label: 'Item' },
+    { key: 'ThirdItem',     label: 'Third Item' },
+    { key: 'Description',   label: 'Description' },
+    { key: 'Quantity',      label: 'Quantity',    align: 'right', numFmt: 'qty' },
+    { key: 'Amount',        label: 'Amount',      align: 'right', numFmt: 'money' }
+  ];
+  let _excGlcRows  = [];
+  let _excGlcQuery = '';
+
+  function loadExcGlc() {
+    if (IS_DEMO) {
+      return fetch('data/v-integrity3-exc-glc.json', { cache: 'no-cache' })
+        .then(r => r.ok ? r.json() : { data: [] })
+        .catch(() => ({ data: [] }));
+    }
+    return rrFetch('inventory/integrity', {
+      method: 'POST',
+      body: {
+        report: 'v_integrity3_exc_glc',
+        reconciliationFilter: { currencies: [], companies: [], businessUnits: [], objects: [], subsidiaries: [] },
+        take: 5000, skip: 0, page: 1, pageSize: 5000
+      }
+    }).catch(err => {
+      console.warn('Exception GL fetch failed:', err);
+      return { data: [] };
+    });
+  }
+  function fmtExcGlcCell(col, v) {
+    if (v == null) return '';
+    if (col.numFmt === 'money') {
+      const x = Number(v);
+      if (!isFinite(x)) return '';
+      if (x === 0) return '&mdash;';
+      const abs = Math.abs(x).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      return x < 0 ? '<span class="neg">(' + abs + ')</span>' : abs;
+    }
+    if (col.numFmt === 'qty') {
+      const x = Number(v);
+      if (!isFinite(x)) return '';
+      if (x === 0) return '&mdash;';
+      return x.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+    }
+    return escapeHtml(String(v).trim());
+  }
+  function renderExcGlcHeader() {
+    const tr = document.getElementById('js-exc-glc-thead-row');
+    if (!tr) return;
+    tr.innerHTML = EXC_GLC_COLUMNS.map(c => {
+      const cls = c.align === 'right' ? ' class="is-num"' : '';
+      return '<th' + cls + ' title="' + escapeHtml(c.key) + '">' + escapeHtml(c.label) + '</th>';
+    }).join('');
+  }
+  function excGlcFilteredRows() {
+    const q = String(_excGlcQuery || '').toLowerCase().trim();
+    if (!q) return _excGlcRows;
+    return _excGlcRows.filter(r => {
+      for (let i = 0; i < EXC_GLC_COLUMNS.length; i++) {
+        const v = r[EXC_GLC_COLUMNS[i].key];
+        if (v != null && String(v).toLowerCase().indexOf(q) !== -1) return true;
+      }
+      return false;
+    });
+  }
+  function renderExcGlc() {
+    const tbody = document.getElementById('js-exc-glc-tbody');
+    const count = document.getElementById('js-exc-glc-count');
+    const badge = document.getElementById('js-tab-count-exception-gl');
+    if (!tbody) return;
+    renderExcGlcHeader();
+    const rows = excGlcFilteredRows();
+    if (count) {
+      count.classList.remove('is-loading');
+      const total = _excGlcRows.length;
+      count.textContent = rows.length.toLocaleString('en-US') + ' rows' +
+        (rows.length < total ? ' of ' + total.toLocaleString('en-US') : '');
+    }
+    if (badge) badge.textContent = _excGlcRows.length.toLocaleString('en-US');
+    if (!rows.length) {
+      tbody.innerHTML = '<tr><td colspan="' + EXC_GLC_COLUMNS.length + '" class="details-empty">No rows match the current search.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = rows.map(r =>
+      '<tr>' + EXC_GLC_COLUMNS.map(c => {
+        const cls = c.align === 'right' ? ' class="is-num"' : '';
+        return '<td' + cls + '>' + fmtExcGlcCell(c, r[c.key]) + '</td>';
+      }).join('') + '</tr>'
+    ).join('');
+  }
+  function wireExcGlcSearch() {
+    const input = document.getElementById('js-exc-glc-search');
+    const clear = document.getElementById('js-exc-glc-search-clear');
+    if (!input) return;
+    let t = null;
+    function applyNow() {
+      _excGlcQuery = input.value || '';
+      if (clear) clear.hidden = !_excGlcQuery;
+      renderExcGlc();
+    }
+    input.addEventListener('input', () => { if (t) clearTimeout(t); t = setTimeout(applyNow, 150); });
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Escape' && _excGlcQuery) {
+        e.preventDefault(); input.value = '';
+        if (t) clearTimeout(t);
+        applyNow();
+      }
+    });
+    if (clear) clear.addEventListener('click', () => { input.value = ''; if (t) clearTimeout(t); applyNow(); input.focus(); });
+  }
+  function exportExcGlc() {
+    if (typeof XLSX === 'undefined') {
+      console.warn('Excel library still loading — Exception GL export skipped');
+      return;
+    }
+    const rows = excGlcFilteredRows();
+    const aoa = [EXC_GLC_COLUMNS.map(c => c.label)].concat(
+      rows.map(r => EXC_GLC_COLUMNS.map(c => r[c.key] == null ? '' : r[c.key]))
+    );
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    XLSX.utils.book_append_sheet(wb, ws, 'ExceptionGL');
+    const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 13);
+    XLSX.writeFile(wb, 'ExceptionGL_' + stamp + '.xlsx');
+  }
+
+  // Fire-and-forget. Exception GL is independent of the Analysis flow.
+  loadExcGlc().then(payload => {
+    const rows = (payload && payload.data) || (Array.isArray(payload) ? payload : []);
+    _excGlcRows = rows;
+    renderExcGlc();
+  });
+  wireExcGlcSearch();
+  (function wireExcGlcExport() {
+    const btn = document.getElementById('js-exc-glc-export-btn');
+    if (btn) btn.addEventListener('click', exportExcGlc);
   })();
 
   Promise.all([loadAnalysis(), loadResponses()]).then(([data, savedResponses]) => {
