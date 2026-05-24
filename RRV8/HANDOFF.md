@@ -13,35 +13,63 @@ the new session at.
 > is complete*; memory at
 > [`feedback_v8_agent_first`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/feedback_v8_agent_first.md).
 >
-> **Test agent online (2026-05-24)**: the green-field per-DB
-> data-services agent lives at
+> **Test agent owns every V8 endpoint (2026-05-24)**: the
+> green-field per-DB data-services agent at
 > [`RapidReconciler-Agent`](https://github.com/RapidReconciler/RapidReconciler-Agent)
-> and serves four endpoints V8 needed off the v359 surface
-> (`inventory/reconciliation/rows`, `inventory/reconciliation/history`,
-> `inventory/audit-detail`, `inventory/variance-component`). Two-agent
-> routing in V8&rsquo;s `rrFetch` (one per page): the four go to
-> `localhost:34537`, everything else stays on v359 via `activeDb.ip`.
-> Set `RR_CONFIG.testAgentBase = null` to disable the test agent on
-> installs that don&rsquo;t run it yet. Launch with
-> `pwsh C:/source/repos/RapidReconciler-Agent/setup/run-test-agent.ps1`.
+> has absorbed the full v359 surface V8 calls on the dev box:
+> `inventory/status`, `inventory/reconciliation-filtered`,
+> `inventory/reconciliation/{rows,history}`,
+> `inventory/transactions{,/details,/save-notes}`,
+> `inventory/integrity`, `inventory/audit-detail`,
+> `inventory/variance-component`, `inventory/as-of{,/details}`,
+> `inventory/rollIItem`, `poll`, `system-status`,
+> `download-excel/*`, plus the three planned DMAAI overlay
+> endpoints (`inventory/integrity/aai-*`). V8&rsquo;s `rrFetch`
+> routes everything to `localhost:34537` via
+> `RR_TEST_AGENT_AREAS` + `RR_TEST_AGENT_PREFIXES` in
+> [`config.js`](config.js); v359 service can be stopped on the
+> dev box (the legacy AngularJS SPA still hits v359 unchanged on
+> its own host).
 >
-> **All five V8 pages now route through `rrFetch`&rsquo;s two-agent
-> split.** Reconciliation, Transactions, As Of, Cardex Variance, and
-> DMAAIs all carry the test-agent area Set. DMAAIs additionally
-> routes three planned overlay endpoints
-> (`inventory/integrity/aai-{analysis-latest,responses,save-responses}`)
-> to the test agent &mdash; they 404 today; spec at
-> [`RapidReconciler-Agent/specs/dmaai-overlay-endpoints.md`](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/specs/dmaai-overlay-endpoints.md)
-> + the canonical design at
-> [`docs/plans/dmaai-page-overlay-table.md`](../docs/plans/dmaai-page-overlay-table.md).
+> Launch the test agent with
+> `pwsh C:/source/repos/RapidReconciler-Agent/setup/run-test-agent.ps1`
+> &mdash; or via the mini-VALC dashboard at
+> http://localhost:8080/ (see Valc repo below).
+>
+> **mini-VALC dashboard (2026-05-24)**: control plane for the
+> data-services agent JVMs lives at
+> [`RapidReconciler-Valc`](https://github.com/RapidReconciler/RapidReconciler-Valc).
+> Thymeleaf-rendered Clients page mirrors the legacy VALC column
+> structure (Status / Name / Services / Agent / System Status /
+> Message / License / Notes / Options). Spawns agents via
+> `ProcessBuilder` (multi-DB ready: each `valc.dashboard.agents[]`
+> entry gets its own port + jar path), probes `/health` + `/poll`
+> on a 5s page-poll. **Start / Stop / Force-stop** all live:
+> Stop graceful-destroys a Valc-spawned JVM; Force-stop runs
+> `netstat -ano` &rarr; `taskkill /F` for processes Valc
+> didn&rsquo;t spawn (guard refuses ports &lt; 1024).
+>
+> **All five V8 pages route through `rrFetch`&rsquo;s router**:
+> Reconciliation, Transactions, As Of, Cardex Variance, DMAAIs.
 > Snapshot fallbacks for cross-period history are gone in
-> staging/prod across Reconciliation, Transactions, and As Of (each
-> now sources the bar chart from the live agent).
+> staging/prod; the demo snapshots stay on disk only for the
+> GitHub Pages public preview.
 
-**Updated**: 2026-05-23, after the contributors-card tabbed rework
-and the row-level reconciliation endpoint spec landed
-([PR #98](https://github.com/RapidReconciler/RapidReconciler-AI/pull/98)).
-Highlights of this longer session:
+**Updated**: 2026-05-24, after a long session that (a) wrote the
+production-only rule into WORKFLOW.md + memory, (b) stood up the
+green-field data-services agent in `RapidReconciler-Agent/src/`
+(Spring Boot 3.3.5 / Java 21 / Maven / Lombok / Apache POI 5.3.0
+for the diagnostic Excel), (c) migrated every v359 endpoint V8
+calls on the dev box into that agent (PRs #12, #13, #14, #15, #16,
+#17 on the agent repo Dev; PRs #108, #109, #110, #111, #112, #113
+on the AI repo main), (d) built the mini-VALC Clients dashboard
+in `RapidReconciler-Valc/src/main/java/.../dashboard/`
+(PRs #11, #12, #13 on Valc Dev), and (e) fixed the
+"undefined / \$0.00" Variance Contributors bug
+([RapidReconciler-Agent#18](https://github.com/RapidReconciler/RapidReconciler-Agent/pull/18))
+caused by SQL nchar padding + missing filter-item labels.
+
+Highlights of the prior longer session (kept for context):
 
 **As Of page polish ([PR #96](https://github.com/RapidReconciler/RapidReconciler-AI/pull/96))**
 
@@ -194,38 +222,54 @@ Inventory &rarr; As Of &rarr; Cardex Variance.
 > 1. **CLAUDE.md** at the repo root &mdash; project-wide
 >    conventions, link rules, data hygiene, commit workflow,
 >    "don't mention the preview panel" durable preference.
-> 2. **RRV8/WORKFLOW.md** &mdash; the V8 project guide.
-> 3. **RRV8/HANDOFF.md** &mdash; this file. The sections after
->    *Resume prompt* are the briefing.
+> 2. **RRV8/WORKFLOW.md** &mdash; the V8 project guide. Pay
+>    attention to the *Production-only until Inventory is
+>    complete* tenet &mdash; no new snapshots get added.
+> 3. **RRV8/HANDOFF.md** &mdash; this file. The standing-rule
+>    block at the top has the current state (test agent owns
+>    every V8 endpoint; mini-VALC dashboard exists).
 > 4. **RRV8/GRID-STANDARDS.md** &mdash; the grid-standards spec
 >    (Transactions Details grid is the reference implementation).
-> 5. **RRV8/API.md** &mdash; full agent controller catalog +
->    `Planned endpoints — handoff list for the agent team` H2 +
->    Critical Gotchas (Jackson field-name binding, two
->    ValidationLight sources, diagnostic Excel pipeline). Skim
->    so the next time you wire an endpoint you don&rsquo;t repeat
->    the `docType` vs `type` debug cycle.
+> 5. **RRV8/API.md** &mdash; client-side perspective; the
+>    server-side controller catalog moved to the agent repo.
 > 6. **RRV8/TESTING.md** &mdash; automated-test-plan spec for V8
->    (8 tiers). Plan only; suite implementation deferred. Read
->    so you know what's covered when the suite ships.
+>    (8 tiers). Plan only; suite implementation deferred.
 > 7. **RapidReconciler-Agent repo** (sibling at
->    `C:/source/repos/RapidReconciler-Agent`) &mdash; agent source
->    repo. `specs/` holds planned-endpoint briefs; `docs/` carries
->    the controller catalog, gotchas, and jar-mining recipe;
->    `artifacts/v359/` pins the current production installer. Skim
->    `docs/README.md` for the layout.
-> 8. **RRV8 pages**: just confirm all five exist
+>    `C:/source/repos/RapidReconciler-Agent`) &mdash; the
+>    green-field data-services agent. `src/main/java/coral/
+>    rapidreconciler/client/services/{controller,repository,
+>    services,beans,auth,config}/` is the implementation; all
+>    v359 endpoints V8 calls are absorbed. `specs/` holds the
+>    paste-ready briefs that were shipped + the planned
+>    DMAAI-overlay spec. `docs/` has the controller catalog +
+>    gotchas + jar-mining recipe. `setup/run-test-agent.ps1`
+>    spawns it on :34537. **Default routing rule: new endpoints
+>    land here, not in v359**
+>    ([`feedback_v8_test_agent_default`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/feedback_v8_test_agent_default.md)).
+> 8. **RapidReconciler-Valc repo** (sibling at
+>    `C:/source/repos/RapidReconciler-Valc`) &mdash; the mini-VALC
+>    broker + control-plane dashboard. The Clients dashboard at
+>    http://localhost:8080/ starts/stops/monitors data-services
+>    agents (multi-DB ready via `valc.dashboard.agents[]` in
+>    `application.yml`). The JMS broker piece is from earlier
+>    phases &mdash; see Valc&rsquo;s own README for that.
+> 9. **RRV8 pages**: confirm all five exist
 >    (`inventory-reconciliation.html`, `inventory-transactions.html`,
 >    `inventory-asof.html`, `inventory-cardex-variance.html`,
 >    `accounting-dmaais.html`). Read targeted sections when
 >    editing; pages are 5-9k lines each.
-> 9. **Recent commits**: `git log --oneline -10`.
+> 10. **Recent commits across all three repos**:
+>    ```
+>    git -C "C:/source/repos/RapidReconciler-AI"    log --oneline -10
+>    git -C "C:/source/repos/RapidReconciler-Agent" log --oneline -10
+>    git -C "C:/source/repos/RapidReconciler-Valc"  log --oneline -10
+>    ```
 >
-> After reading those, summarize back in 4&ndash;6 bullets what
-> RRV8 currently looks like, what&rsquo;s working through the
-> live agent, what&rsquo;s still on demo-only paths, and
-> what&rsquo;s most worth doing next. Then wait for the next
-> instruction.
+> After reading those, summarize back in 4&ndash;6 bullets:
+> (a) what RRV8 currently looks like, (b) what&rsquo;s working
+> through the test agent today (everything), (c) what's still
+> open on the page-by-page V8 smoke list, (d) what&rsquo;s most
+> worth doing next. Then wait for the next instruction.
 
 ### In-flight design direction (queued for next session)
 
