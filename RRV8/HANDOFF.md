@@ -5,6 +5,26 @@ session. Paste the **Resume prompt** section as the first message in
 the new session; the rest of this file is context that prompt points
 the new session at.
 
+> **Standing rule (2026-05-23)**: V8 is **production-only** until the
+> Inventory module is complete. No new snapshots, no demo-mode work,
+> no static-fallback paths. Demo will be rebuilt as a deliberate
+> pass after Inventory ships. Canonical statement in
+> [`WORKFLOW.md`](WORKFLOW.md) &sect; *Production-only until Inventory
+> is complete*; memory at
+> [`feedback_v8_agent_first`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/feedback_v8_agent_first.md).
+>
+> **Test agent online (2026-05-24)**: the green-field per-DB
+> data-services agent lives at
+> [`RapidReconciler-Agent`](https://github.com/RapidReconciler/RapidReconciler-Agent)
+> and serves four endpoints V8 needed off the v359 surface
+> (`inventory/reconciliation/rows`, `inventory/reconciliation/history`,
+> `inventory/audit-detail`, `inventory/variance-component`). Two-agent
+> routing in V8&rsquo;s `rrFetch` (one per page): the four go to
+> `localhost:34537`, everything else stays on v359 via `activeDb.ip`.
+> Set `RR_CONFIG.testAgentBase = null` to disable the test agent on
+> installs that don&rsquo;t run it yet. Launch with
+> `pwsh C:/source/repos/RapidReconciler-Agent/setup/run-test-agent.ps1`.
+
 **Updated**: 2026-05-23, after the contributors-card tabbed rework
 and the row-level reconciliation endpoint spec landed
 ([PR #98](https://github.com/RapidReconciler/RapidReconciler-AI/pull/98)).
