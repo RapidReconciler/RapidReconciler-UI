@@ -102,6 +102,57 @@ caused by SQL nchar padding + missing filter-item labels.
   state as the next request&rsquo;s "last seen." The existing 5s
   floor stays as a safety net against any short-circuit.
 
+**Third follow-up chunk &mdash; Administrator &rarr; Users page +
+mini-VALC owns user data**:
+
+- **Architectural decision: users live in mini-VALC&rsquo;s
+  Postgres, not the per-DB SQL Server.** Companies are per-DB
+  (`rcompanies`, on the customer&rsquo;s SQL Server); users span
+  customer DBs (one analyst, multiple installs) so they belong
+  in the central VALC store. mini-VALC&rsquo;s
+  [`application.yml`](https://github.com/RapidReconciler/RapidReconciler-Valc/blob/Dev/src/main/resources/application.yml)
+  was already wired for Postgres + Flyway; v1 of its schema even
+  includes the `users` table by design.
+- **mini-VALC: Admin Users endpoint surface.** Flyway migrations
+  V4 (`password_changed_at` + three seed rows matching the
+  legacy admin screenshot &mdash; Daren Belsterli / Ed Gutkowski
+  / RapidReconciler Demo) and V5 (`temporary_password` flag for
+  the 1-day-vs-90-day expiry). New `UserEntity` + `UserRepository`
+  (soft-delete-aware), `AdminUsersController` exposing
+  `GET / PUT / DELETE /api/v1/admin/users`. `BCryptPasswordEncoder`
+  bean for password hashing. New `CorsConfig` allowing the V8
+  dev origin (`http://localhost:8765`) on `/api/**`.
+- **V8: admin-users.html.** Standard V8 chrome (sidebar /
+  topbar) + breadcrumb Administrator &rarr; Users + "New User"
+  button (placeholder) + Users grid (Active badge / Full Name /
+  Username / Last Login / Last Pass Change / Options icons).
+  Edit pencil opens a modal matching the legacy screenshot:
+  Full Name / Email / Password (Minimum 8 characters, leave
+  blank to keep) / Temporary password (1 day) dropdown / Active
+  dropdown / Save Changes button. Trash opens a delete-confirm
+  modal that fires the soft-delete `DELETE`. Lock icon is still
+  a placeholder toast until the password-reset flow specs.
+- **V8 routing: third origin.** [`config.js`](config.js) now
+  carries `RR_CONFIG.valcBase = 'http://localhost:8080'` and a
+  new `RR_VALC_PREFIXES` table (`'api/v1/admin/'`). The
+  admin-users page&rsquo;s local `rrFetch` consults all three
+  routing tables &mdash; valc, test agent, then activeDb.ip
+  &mdash; in that order, so `api/v1/admin/users` hits mini-VALC
+  and the rest of the existing endpoints keep their routes.
+- **Postgres setup.** Postgres 16 was already installed on the
+  dev box but the `valc` user + database didn&rsquo;t exist;
+  set up via the postgres superuser. Password (`rrvalc`) saved
+  to `$env:USERPROFILE\.rr-pg-pwd` mirroring the SQL Server
+  convention (`.rr-sql-pwd`).
+
+**Not yet wired (queued in *Next-session queue* below)**: the
+`temporary_password` flag is data-only today &mdash; no login
+flow reads it and the RR hub sign-in form still uses the
+legacy-SPA-credentials shim. mini-VALC&rsquo;s `SecurityConfig`
+is permissive (`anyRequest().permitAll()`); JWT signing +
+password-policy enforcement + hub-form rewrite are queued as a
+~1-hour follow-up.
+
 **Second follow-up chunk &mdash; sidebar restructure + Administrator
 group + Companies page**:
 
@@ -812,6 +863,41 @@ with `{report: 'v6ui_itemrollintegritydialog', reconciliationFilter,
 take/skip/page/pageSize}` per the IntegrityController catalog row.
 
 ### Next-session queue
+
+**mini-VALC login + password-policy enforcement** &mdash; the
+Admin &rarr; Users page surfaces and writes
+`users.temporary_password` (1-day vs 90-day expiry), but the
+flag is data-only today &mdash; nothing reads it. Wiring it up:
+
+- **`POST /api/v1/auth/login`** on mini-VALC. Looks up by email
+  (`deleted_at IS NULL`, `is_active = TRUE`), verifies the
+  password via the existing `BCryptPasswordEncoder` bean,
+  computes `password_changed_at + (temporary_password ? 1 day :
+  90 days) > now` &mdash; if expired, returns a "password
+  expired, must change" signal so the caller can route to a
+  password-change screen. Updates `last_login_at`. Returns a JWT
+  the launchpad + V8 pages already expect in
+  `localStorage.rrv8.token`. The complex-password-rules toggle
+  (`clients.password_policy_active`, already in V1) layers on
+  top &mdash; not enforced today.
+- **`POST /api/v1/auth/change-password`** on mini-VALC. Takes
+  old + new, validates `new.length >= 8` + (later) the complex
+  rules, BCrypts + saves + stamps `password_changed_at` + clears
+  `temporary_password`. Returns a fresh JWT.
+- **`rapidreconciler-hub.html`** sign-in form. Today it sets a
+  fake `rrv8.token` and redirects to the launchpad with no real
+  verification (CLAUDE.md flags this as a legacy-SPA-credentials
+  shim). Replace with: POST to `/api/v1/auth/login`, store the
+  returned JWT, route to launchpad on 200 / password-change
+  screen on the expired signal / surface error message on 401.
+- **CORS for the hub origin** &mdash; the hub serves from the
+  same V8 static-server host so the existing
+  `http://localhost:8765` entry in mini-VALC&rsquo;s CorsConfig
+  already covers it.
+
+Estimated ~1 hour: auth endpoint + JWT signing (mini-VALC
+already has spring-security on the classpath) + change-password
+endpoint + hub-form rewrite.
 
 **Agent-side specs to ship** (each unblocks a V8 feature):
 

@@ -1,0 +1,972 @@
+<!DOCTYPE html>
+<!--
+  =============================================================================
+  Administrator > Users
+  =============================================================================
+  Read-only view of the mini-VALC `users` table — the central
+  cross-DB user registry. Different backend from admin-companies:
+  users live in mini-VALC's Postgres (because one analyst spans
+  many customer DBs), not in the per-DB SQL Server. The page calls
+  http://localhost:8080/api/v1/admin/users via the new RR_VALC_PREFIXES
+  routing in config.js.
+
+  Columns mirror the legacy admin screenshot: Active badge / Full
+  Name / Username (email) / Last Login / Last Pass Change /
+  Options (icon placeholders for lock/edit/delete). New User and
+  Excel-download buttons are stubs that toast "coming soon" until
+  the password-management + export flows ship.
+  =============================================================================
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Users &mdash; RapidReconciler Admin</title>
+<link href="fonts/fonts.css" rel="stylesheet">
+<link href="sidebar.css" rel="stylesheet">
+<script src="config.js"></script>
+<script src="sidebar.js"></script>
+<style>
+  :root {
+    --navy:        #1f2d4a;
+    --navy-deep:   #142037;
+    --blue:        #2b5fb0;
+    --blue-bright: #3d8fd6;
+    --blue-pale:   #e6efff;
+    --orange:      #f08a24;
+    --green:       #2e8a55;
+    --green-pale:  #def4e6;
+    --red:         #c0392b;
+    --red-pale:    #fce5e1;
+    --bg:          #fafbfd;
+    --bg-soft:     #f3f5f9;
+    --bg-card:     #ffffff;
+    --text:        #1f2d4a;
+    --text-soft:   #4a5468;
+    --text-muted:  #828a9a;
+    --rule:        #e6eaf0;
+    --rule-strong: #cfd6e0;
+    --shadow-sm:   0 1px 2px rgba(20, 32, 55, 0.04);
+    --shadow-md:   0 4px 12px -2px rgba(20, 32, 55, 0.08);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Open Sans', -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2, h3 { font-family: 'Source Sans 3', sans-serif; font-weight: 700; }
+  a { color: inherit; text-decoration: none; }
+
+  .app {
+    display: grid;
+    grid-template-columns: 60px 1fr;
+    grid-template-rows: 56px 1fr;
+    grid-template-areas:
+      "sidebar topbar"
+      "sidebar main";
+    min-height: 100vh;
+  }
+  body.has-pinned-sidebar .app { grid-template-columns: 240px 1fr; }
+
+  .topbar {
+    grid-area: topbar;
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--rule);
+    display: flex;
+    align-items: center;
+    padding: 0 24px;
+    z-index: 50;
+  }
+  .topbar-brand { display: flex; align-items: center; gap: 12px; }
+  .topbar-brand-logo { height: 28px; width: auto; display: block; }
+  .topbar-brand-text { display: flex; flex-direction: column; line-height: 1.15; }
+  .topbar-brand-name {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 800;
+    font-size: 15px;
+    color: var(--navy);
+  }
+  .topbar-brand-db {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 11px;
+    color: var(--text-muted);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .main {
+    grid-area: main;
+    padding: 24px 32px 64px;
+    overflow-y: auto;
+  }
+  .page { max-width: 1280px; margin: 0 auto; }
+
+  /* Page header — breadcrumb + title row + right-pinned New User
+     button to match the legacy layout. */
+  .page-header {
+    margin-bottom: 18px;
+    display: flex;
+    align-items: flex-end;
+    gap: 16px;
+  }
+  .page-header-left { flex: 1; }
+  .breadcrumb {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+  }
+  .breadcrumb a { color: var(--text-muted); }
+  .breadcrumb a:hover { color: var(--blue); }
+  .breadcrumb-sep { margin: 0 6px; opacity: 0.6; }
+  .page-title { font-size: 26px; color: var(--navy); font-weight: 800; }
+
+  .new-user-btn {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 700;
+    font-size: 13px;
+    color: #fff;
+    background: var(--green);
+    border: 1px solid var(--green);
+    border-radius: 5px;
+    padding: 8px 16px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .new-user-btn:hover { filter: brightness(1.08); }
+
+  .fetch-error {
+    display: none;
+    background: var(--red-pale);
+    border: 1px solid var(--red);
+    color: var(--red);
+    padding: 10px 14px;
+    border-radius: 6px;
+    margin-bottom: 16px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .fetch-error.is-visible { display: block; }
+  .fetch-error code { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+
+  /* Users card */
+  .grid-card {
+    background: var(--bg-card);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    box-shadow: var(--shadow-sm);
+    overflow: hidden;
+  }
+  .grid-card-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--rule);
+    background: var(--bg-soft);
+  }
+  .grid-card-title {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 700;
+    font-size: 14px;
+    color: var(--navy);
+    letter-spacing: 0.02em;
+  }
+  .grid-card-count {
+    margin-left: auto;
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .grid-card-count.is-loading { font-style: italic; }
+  .grid-card-action {
+    background: transparent;
+    border: 1px solid var(--rule-strong);
+    border-radius: 4px;
+    padding: 4px 8px;
+    cursor: pointer;
+    color: var(--text-soft);
+    transition: background 0.12s, color 0.12s, border-color 0.12s;
+    display: inline-flex;
+    align-items: center;
+  }
+  .grid-card-action:hover { color: var(--blue); border-color: var(--blue); background: var(--blue-pale); }
+  .grid-card-action svg { width: 14px; height: 14px; display: block; }
+
+  .grid-table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  .grid-table th {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: var(--text-soft);
+    text-align: left;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--rule-strong);
+    background: var(--bg-soft);
+    white-space: nowrap;
+  }
+  .grid-table th.is-action,
+  .grid-table td.is-action { text-align: center; width: 130px; }
+  .grid-table td {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--rule);
+    font-size: 13.5px;
+    color: var(--text);
+  }
+  .grid-table tr:last-child td { border-bottom: 0; }
+  .grid-table tr:hover td { background: var(--bg-soft); }
+  .grid-table td.is-empty {
+    text-align: center;
+    color: var(--text-muted);
+    padding: 32px 14px;
+    font-style: italic;
+  }
+
+  /* Active/Inactive badge — green pill matching the legacy screenshot. */
+  .status-badge {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 100px;
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .status-badge.is-active { background: var(--green); color: #fff; }
+  .status-badge.is-inactive { background: var(--rule-strong); color: var(--text-soft); }
+
+  .row-icons { display: inline-flex; gap: 6px; }
+  .row-icon-btn {
+    background: transparent;
+    border: 1px solid var(--rule-strong);
+    border-radius: 4px;
+    padding: 4px 6px;
+    cursor: pointer;
+    color: var(--text-soft);
+    transition: background 0.12s, color 0.12s, border-color 0.12s;
+  }
+  .row-icon-btn:hover { color: var(--blue); border-color: var(--blue); background: var(--blue-pale); }
+  .row-icon-btn.is-danger:hover { color: var(--red); border-color: var(--red); background: var(--red-pale); }
+  .row-icon-btn svg { width: 13px; height: 13px; display: block; }
+
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%) translateY(20px);
+    background: var(--navy);
+    color: #fff;
+    padding: 10px 18px;
+    border-radius: 6px;
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 600;
+    font-size: 13px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease, transform 0.2s ease;
+    z-index: 100;
+  }
+  .toast.is-visible {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+
+  /* Edit-user + delete-confirm modals — share chrome with the rest
+     of V8 (cf. admin-companies.html). Two modals on the page; only
+     one open at a time. */
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(20, 32, 55, 0.45);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 200;
+  }
+  .modal-backdrop.is-visible { display: flex; }
+  .modal {
+    background: var(--bg-card);
+    border-radius: 10px;
+    box-shadow: 0 24px 64px -8px rgba(20, 32, 55, 0.30);
+    width: min(560px, 92vw);
+    max-height: 92vh;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+  }
+  .modal-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--rule);
+  }
+  .modal-title {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 700;
+    font-size: 16px;
+    color: var(--navy);
+  }
+  .modal-close {
+    margin-left: auto;
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+    color: var(--text-muted);
+    padding: 4px;
+    border-radius: 4px;
+    display: flex;
+  }
+  .modal-close:hover { color: var(--navy); background: var(--bg-soft); }
+  .modal-close svg { width: 16px; height: 16px; }
+  .modal-body { padding: 18px; }
+  .modal-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px 16px;
+  }
+  .modal-grid .full { grid-column: 1 / -1; }
+  .form-field { display: flex; flex-direction: column; gap: 4px; }
+  .form-field-label {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-soft);
+    letter-spacing: 0.04em;
+  }
+  .form-field-hint {
+    font-weight: 600;
+    color: var(--text-muted);
+    margin-left: 6px;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .form-field input,
+  .form-field select {
+    font-family: inherit;
+    font-size: 14px;
+    color: var(--navy);
+    padding: 8px 10px;
+    border: 1px solid var(--rule-strong);
+    border-radius: 5px;
+    background: var(--bg-card);
+    width: 100%;
+  }
+  .form-field input:focus,
+  .form-field select:focus {
+    outline: none;
+    border-color: var(--blue);
+    box-shadow: 0 0 0 2px var(--blue-pale);
+  }
+  .modal-error {
+    display: none;
+    margin-top: 14px;
+    padding: 8px 12px;
+    background: var(--red-pale);
+    border: 1px solid var(--red);
+    color: var(--red);
+    border-radius: 5px;
+    font-size: 12.5px;
+  }
+  .modal-error.is-visible { display: block; }
+  .modal-foot {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    padding: 12px 18px;
+    border-top: 1px solid var(--rule);
+    background: var(--bg-soft);
+  }
+  .modal-save-btn,
+  .modal-delete-btn {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 700;
+    font-size: 13px;
+    color: #fff;
+    border-radius: 5px;
+    padding: 8px 16px;
+    cursor: pointer;
+  }
+  .modal-save-btn   { background: var(--green); border: 1px solid var(--green); }
+  .modal-delete-btn { background: var(--red);   border: 1px solid var(--red); }
+  .modal-save-btn:hover,
+  .modal-delete-btn:hover { filter: brightness(1.08); }
+  .modal-save-btn:disabled,
+  .modal-delete-btn:disabled { opacity: 0.55; cursor: not-allowed; filter: none; }
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <header class="topbar">
+    <div class="topbar-brand">
+      <img class="topbar-brand-logo" src="../Images/gsi-logo.png" alt="GSI">
+      <span class="topbar-brand-text">
+        <span class="topbar-brand-name">RapidReconciler</span>
+        <span class="topbar-brand-db" id="js-topbar-db">RapidReconciler_Dev</span>
+      </span>
+    </div>
+  </header>
+
+  <div id="js-sidebar-mount"></div>
+
+  <div class="toast" id="js-toast" role="status" aria-live="polite"></div>
+
+  <!-- Edit-user modal. Opens from the per-row pencil icon. PUT to
+       /api/v1/admin/users/{id}; empty Password = keep existing. -->
+  <div class="modal-backdrop" id="js-edit-modal" role="dialog" aria-modal="true" aria-labelledby="js-edit-title">
+    <div class="modal">
+      <div class="modal-head">
+        <span class="modal-title" id="js-edit-title">Edit user</span>
+        <button type="button" class="modal-close" id="js-edit-close" aria-label="Close">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="3" y1="3" x2="13" y2="13"/><line x1="13" y1="3" x2="3" y2="13"/>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-grid">
+          <div class="form-field full">
+            <label class="form-field-label" for="js-edit-name">Full Name</label>
+            <input type="text" id="js-edit-name" maxlength="200">
+          </div>
+          <div class="form-field full">
+            <label class="form-field-label" for="js-edit-email">Email</label>
+            <input type="email" id="js-edit-email" maxlength="320" autocomplete="off">
+          </div>
+          <div class="form-field full">
+            <label class="form-field-label" for="js-edit-password">
+              Password<span class="form-field-hint">(Minimum 8 characters &middot; leave blank to keep)</span>
+            </label>
+            <input type="password" id="js-edit-password" placeholder="********" autocomplete="new-password">
+          </div>
+          <div class="form-field">
+            <label class="form-field-label" for="js-edit-temp">Temporary password (1 day)</label>
+            <select id="js-edit-temp">
+              <option value="false">false</option>
+              <option value="true">true</option>
+            </select>
+          </div>
+          <div class="form-field">
+            <label class="form-field-label" for="js-edit-active">Active</label>
+            <select id="js-edit-active">
+              <option value="true">true</option>
+              <option value="false">false</option>
+            </select>
+          </div>
+        </div>
+        <div class="modal-error" id="js-edit-error" role="alert"></div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="modal-save-btn" id="js-edit-save">Save Changes</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Delete-user confirm modal. Soft-delete via DELETE
+       /api/v1/admin/users/{id}; row stays in Postgres with
+       deleted_at stamped and active=false. -->
+  <div class="modal-backdrop" id="js-delete-modal" role="dialog" aria-modal="true" aria-labelledby="js-delete-title">
+    <div class="modal" style="width: min(440px, 92vw);">
+      <div class="modal-head">
+        <span class="modal-title" id="js-delete-title">Delete user</span>
+        <button type="button" class="modal-close" id="js-delete-close" aria-label="Close">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="3" y1="3" x2="13" y2="13"/><line x1="13" y1="3" x2="3" y2="13"/>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <p style="font-weight: 700; font-size: 14.5px; margin-bottom: 8px;">
+          Delete <span id="js-delete-user-name" style="color: var(--navy);"></span>?
+        </p>
+        <p style="color: var(--text-soft); font-size: 13px;">
+          The account is deactivated and hidden from the list. Past audit references stay intact.
+        </p>
+        <div class="modal-error" id="js-delete-error" role="alert"></div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="modal-delete-btn" id="js-delete-confirm">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <main class="main">
+
+    <div class="page">
+
+      <header class="page-header">
+        <div class="page-header-left">
+          <nav class="breadcrumb" aria-label="Breadcrumb">
+            <a href="#">Administrator</a><span class="breadcrumb-sep">/</span><span>Users</span>
+          </nav>
+          <h1 class="page-title">Users</h1>
+        </div>
+        <button type="button" class="new-user-btn" id="js-new-user" title="Create a new user (coming soon)">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M4 16v-1a4 4 0 0 1 4-4h1"/>
+            <circle cx="8" cy="6" r="3.2"/>
+            <line x1="13" y1="11" x2="13" y2="15"/>
+            <line x1="11" y1="13" x2="15" y2="13"/>
+          </svg>
+          New User
+        </button>
+      </header>
+
+      <div class="fetch-error" id="js-fetch-error" role="alert">
+        Couldn&rsquo;t reach <code>/api/v1/admin/users</code> &mdash;
+        <span id="js-fetch-error-msg"></span>
+      </div>
+
+      <section class="grid-card" aria-label="Users">
+        <div class="grid-card-head">
+          <span class="grid-card-title">Users</span>
+          <span class="grid-card-count is-loading" id="js-row-count">Loading&hellip;</span>
+          <button type="button" class="grid-card-action" id="js-export-btn" title="Export to Excel (coming soon)" aria-label="Export">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M8 2v9"/><path d="M4 8l4 4 4-4"/><path d="M2 13h12"/>
+            </svg>
+          </button>
+        </div>
+        <table class="grid-table" id="js-users-table">
+          <thead>
+            <tr>
+              <th>Active</th>
+              <th>Full Name</th>
+              <th>Username</th>
+              <th>Last Login</th>
+              <th>Last Pass Change</th>
+              <th class="is-action">Options</th>
+            </tr>
+          </thead>
+          <tbody id="js-users-tbody">
+            <tr><td class="is-empty" colspan="6">Loading users&hellip;</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+    </div>
+
+  </main>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ---------- mode + rrFetch with mini-VALC routing ----------
+  // The data-services agent (admin/companies) lives at :34537;
+  // mini-VALC (admin/users) lives at :8080. Routing decision is by
+  // URL prefix.
+  const RR_CONFIG = window.RR_CONFIG || {};
+  const URL_MODE  = new URLSearchParams(window.location.search).get('mode');
+  const MODE      = URL_MODE || RR_CONFIG.mode || 'demo';
+  const IS_DEMO   = (MODE === 'demo');
+
+  const _testAgentAreas    = new Set(window.RR_TEST_AGENT_AREAS || []);
+  const _testAgentPrefixes = window.RR_TEST_AGENT_PREFIXES || [];
+  const _valcPrefixes      = window.RR_VALC_PREFIXES || [];
+  function _routesToTestAgent(area) {
+    if (_testAgentAreas.has(area)) return true;
+    for (let i = 0; i < _testAgentPrefixes.length; i++) {
+      if (area.startsWith(_testAgentPrefixes[i])) return true;
+    }
+    return false;
+  }
+  function _routesToValc(area) {
+    for (let i = 0; i < _valcPrefixes.length; i++) {
+      if (area.startsWith(_valcPrefixes[i])) return true;
+    }
+    return false;
+  }
+  function prodHeaders(contentType) {
+    const h = { 'Accept': 'application/json' };
+    try {
+      const token = localStorage.getItem('rrv8.token');
+      if (token) h['Authorization'] = 'Bearer ' + token;
+    } catch (_) {}
+    if (contentType) h['Content-Type'] = contentType;
+    return h;
+  }
+  function rrFetch(area, opts) {
+    opts = opts || {};
+    if (IS_DEMO) {
+      const file = (opts.demoFile || area) + '.json';
+      return fetch((RR_CONFIG.dataPath || 'data/') + file, { cache: 'no-store' })
+        .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status + ' on ' + file); return r.json(); });
+    }
+    let base;
+    if (_routesToValc(area)) {
+      base = RR_CONFIG.valcBase || 'http://localhost:8080';
+    } else if (_routesToTestAgent(area)) {
+      base = RR_CONFIG.testAgentBase || 'http://localhost:34537';
+    } else {
+      const sess = window.RR_SESSION;
+      const db = sess && sess.dbs && sess.dbs[sess.activeDbIndex || 0];
+      if (!db || !db.ip) {
+        return Promise.reject(new Error(
+          'No active DB. Sign in on the Reconciliation page first.'));
+      }
+      base = 'https://' + db.ip;
+    }
+    const url = base + '/' + area +
+      (opts.query ? '?' + new URLSearchParams(opts.query) : '');
+    const init = {
+      method:  opts.method || 'GET',
+      headers: prodHeaders(opts.body ? 'application/json;charset=UTF-8' : null),
+      body:    opts.body ? JSON.stringify(opts.body) : undefined
+    };
+    return fetch(url, init).then(r => {
+      if (!r.ok) throw new Error('HTTP ' + r.status + ' on ' + url);
+      return r.json().catch(e => e instanceof SyntaxError ? null : Promise.reject(e));
+    });
+  }
+
+  // ---------- helpers ----------
+  function toast(msg) {
+    const el = document.getElementById('js-toast');
+    if (!el) return;
+    el.textContent = msg;
+    el.classList.add('is-visible');
+    setTimeout(() => el.classList.remove('is-visible'), 2400);
+  }
+  function showFetchError(err) {
+    const banner = document.getElementById('js-fetch-error');
+    const msg    = document.getElementById('js-fetch-error-msg');
+    if (banner && msg) {
+      msg.textContent = (err && err.message) || 'fetch failed';
+      banner.classList.add('is-visible');
+    }
+    if (window.RRV8 && window.RRV8.setAgentConnectivity &&
+        err && (err instanceof TypeError ||
+                /failed to fetch|network/i.test(err.message || ''))) {
+      // Note: this is mini-VALC connectivity, not the data-services
+      // agent. Stamping it on the existing Agent dot is a bit
+      // overloaded — fine for now since either backend being down
+      // means "data isn't loading."
+      window.RRV8.setAgentConnectivity('unreachable', { message: err.message });
+    }
+  }
+  function fmt(v) {
+    if (v === null || v === undefined || v === '') return '&mdash;';
+    return String(v).replace(/[&<>"']/g, ch =>
+      ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  }
+  function fmtDate(iso) {
+    // Server gives ISO-8601 timestamps; legacy page shows yyyy-MM-dd.
+    // Strip the time portion to match.
+    if (!iso) return '&mdash;';
+    const s = String(iso);
+    return s.length >= 10 ? s.substring(0, 10) : s;
+  }
+
+  // ---------- render ----------
+  const SVG_UNLOCK =
+    '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' +
+      '<rect x="3" y="7" width="10" height="7" rx="1.5"/>' +
+      '<path d="M5 7V5a3 3 0 0 1 5.5-1.5"/>' +
+    '</svg>';
+  const SVG_EDIT =
+    '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' +
+      '<path d="M11 2l3 3-8 8H3v-3z"/>' +
+      '<path d="M10 3l3 3"/>' +
+    '</svg>';
+  const SVG_TRASH =
+    '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' +
+      '<path d="M3 4h10"/>' +
+      '<path d="M5 4V2.5h6V4"/>' +
+      '<path d="M4 4l1 9.5h6L12 4"/>' +
+    '</svg>';
+
+  // Local cache keyed by user id so the modals can preload values
+  // from memory without a re-GET, and so a successful PUT can patch
+  // a single row in place.
+  const _rowsById = new Map();
+
+  // One row's <tr> markup. Extracted so patchRow/removeRow can
+  // re-render just one row after a successful PUT or DELETE.
+  function rowHtml(r) {
+    const badgeCls = r.active ? 'is-active' : 'is-inactive';
+    const badgeTxt = r.active ? 'Active' : 'Inactive';
+    const username = fmt(r.username);
+    const idStr    = String(r.id);
+    return '<tr data-user-id="' + fmt(idStr) + '">' +
+      '<td><span class="status-badge ' + badgeCls + '">' + badgeTxt + '</span></td>' +
+      '<td>' + fmt(r.fullName) + '</td>' +
+      '<td>' + username + '</td>' +
+      '<td>' + fmtDate(r.lastLoginAt) + '</td>' +
+      '<td>' + fmtDate(r.passwordChangedAt) + '</td>' +
+      '<td class="is-action">' +
+        '<span class="row-icons">' +
+          '<button type="button" class="row-icon-btn" data-action="reset-pass" data-user-id="' + fmt(idStr) + '" title="Reset password (coming soon)" aria-label="Reset password">' + SVG_UNLOCK + '</button>' +
+          '<button type="button" class="row-icon-btn" data-action="edit" data-user-id="' + fmt(idStr) + '" title="Edit user" aria-label="Edit">' + SVG_EDIT + '</button>' +
+          '<button type="button" class="row-icon-btn is-danger" data-action="delete" data-user-id="' + fmt(idStr) + '" title="Delete user" aria-label="Delete">' + SVG_TRASH + '</button>' +
+        '</span>' +
+      '</td>' +
+    '</tr>';
+  }
+
+  function patchRow(row) {
+    if (!row || row.id == null) return;
+    const idStr = String(row.id);
+    _rowsById.set(idStr, row);
+    const tr = document.querySelector(
+      '#js-users-tbody tr[data-user-id="' + idStr.replace(/"/g, '\\"') + '"]');
+    if (!tr) return;
+    const tmp = document.createElement('tbody');
+    tmp.innerHTML = rowHtml(row);
+    tr.parentNode.replaceChild(tmp.firstElementChild, tr);
+  }
+
+  function removeRow(id) {
+    const idStr = String(id);
+    _rowsById.delete(idStr);
+    const tr = document.querySelector(
+      '#js-users-tbody tr[data-user-id="' + idStr.replace(/"/g, '\\"') + '"]');
+    if (tr) tr.parentNode.removeChild(tr);
+    const count = document.getElementById('js-row-count');
+    if (count) {
+      const n = _rowsById.size;
+      count.textContent = n.toLocaleString('en-US') + (n === 1 ? ' user' : ' users');
+    }
+    // If we just removed the last row, paint the empty state.
+    if (_rowsById.size === 0) {
+      const tbody = document.getElementById('js-users-tbody');
+      if (tbody) {
+        tbody.innerHTML = '<tr><td class="is-empty" colspan="6">No users.</td></tr>';
+      }
+    }
+  }
+
+  // ---------- edit modal ----------
+  let _editingId = null;
+
+  function openEditModal(userId) {
+    const row = _rowsById.get(String(userId));
+    if (!row) { toast('Row not loaded — refresh and try again'); return; }
+    _editingId = String(userId);
+    document.getElementById('js-edit-title').textContent = row.fullName || ('User ' + userId);
+    document.getElementById('js-edit-name').value     = row.fullName || '';
+    document.getElementById('js-edit-email').value    = row.username || '';
+    document.getElementById('js-edit-password').value = '';
+    document.getElementById('js-edit-temp').value     = row.temporaryPassword ? 'true' : 'false';
+    document.getElementById('js-edit-active').value   = row.active ? 'true' : 'false';
+    document.getElementById('js-edit-error').classList.remove('is-visible');
+    document.getElementById('js-edit-error').textContent = '';
+    document.getElementById('js-edit-modal').classList.add('is-visible');
+    setTimeout(() => document.getElementById('js-edit-name').focus(), 0);
+  }
+
+  function closeEditModal() {
+    _editingId = null;
+    document.getElementById('js-edit-modal').classList.remove('is-visible');
+  }
+
+  function showEditError(msg) {
+    const el = document.getElementById('js-edit-error');
+    el.textContent = msg;
+    el.classList.add('is-visible');
+  }
+
+  function saveEditModal() {
+    if (_editingId == null) return;
+    const fullName = document.getElementById('js-edit-name').value.trim();
+    const email    = document.getElementById('js-edit-email').value.trim();
+    const password = document.getElementById('js-edit-password').value;   // no trim — passwords may contain leading/trailing spaces
+    const temp     = document.getElementById('js-edit-temp').value === 'true';
+    const active   = document.getElementById('js-edit-active').value === 'true';
+
+    if (!fullName) { showEditError('Full Name is required'); return; }
+    if (!email)    { showEditError('Email is required'); return; }
+    // Loose client-side check; server enforces the real regex.
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      showEditError('Email is invalid'); return;
+    }
+    if (password && password.length < 8) {
+      showEditError('Password must be at least 8 characters'); return;
+    }
+
+    const id = _editingId;
+    const body = { fullName, email, temporaryPassword: temp, active };
+    if (password) body.password = password;
+
+    const btn = document.getElementById('js-edit-save');
+    btn.disabled = true;
+    btn.textContent = 'Saving…';
+    rrFetch('api/v1/admin/users/' + encodeURIComponent(id), {
+      method: 'PUT',
+      body:   body
+    })
+      .then(resp => {
+        patchRow(resp);
+        closeEditModal();
+        toast('Saved ' + resp.username);
+      })
+      .catch(err => {
+        showEditError((err && err.message) || 'save failed');
+      })
+      .finally(() => {
+        btn.disabled = false;
+        btn.textContent = 'Save Changes';
+      });
+  }
+
+  // ---------- delete confirm modal ----------
+  let _deletingId = null;
+
+  function openDeleteModal(userId) {
+    const row = _rowsById.get(String(userId));
+    if (!row) { toast('Row not loaded — refresh and try again'); return; }
+    _deletingId = String(userId);
+    document.getElementById('js-delete-user-name').textContent = row.fullName || row.username || ('user ' + userId);
+    document.getElementById('js-delete-error').classList.remove('is-visible');
+    document.getElementById('js-delete-error').textContent = '';
+    const btn = document.getElementById('js-delete-confirm');
+    btn.disabled = false;
+    btn.textContent = 'Delete';
+    document.getElementById('js-delete-modal').classList.add('is-visible');
+    setTimeout(() => btn.focus(), 0);
+  }
+
+  function closeDeleteModal() {
+    _deletingId = null;
+    document.getElementById('js-delete-modal').classList.remove('is-visible');
+  }
+
+  function confirmDelete() {
+    if (_deletingId == null) return;
+    const id   = _deletingId;
+    const row  = _rowsById.get(id);
+    const name = (row && (row.fullName || row.username)) || ('user ' + id);
+    const btn  = document.getElementById('js-delete-confirm');
+    const err  = document.getElementById('js-delete-error');
+    btn.disabled = true;
+    btn.textContent = 'Deleting…';
+    err.classList.remove('is-visible');
+
+    rrFetch('api/v1/admin/users/' + encodeURIComponent(id), { method: 'DELETE' })
+      .then(() => {
+        removeRow(id);
+        closeDeleteModal();
+        toast('Deleted ' + name);
+      })
+      .catch(e => {
+        err.textContent = (e && e.message) || 'delete failed';
+        err.classList.add('is-visible');
+        btn.disabled = false;
+        btn.textContent = 'Delete';
+      });
+  }
+
+  // Wire modal dismissals once.
+  (function wireModals() {
+    const editBd = document.getElementById('js-edit-modal');
+    document.getElementById('js-edit-close').addEventListener('click', closeEditModal);
+    editBd.addEventListener('click', (e) => { if (e.target === editBd) closeEditModal(); });
+    document.getElementById('js-edit-save').addEventListener('click', saveEditModal);
+
+    const delBd = document.getElementById('js-delete-modal');
+    document.getElementById('js-delete-close').addEventListener('click', closeDeleteModal);
+    delBd.addEventListener('click', (e) => { if (e.target === delBd) closeDeleteModal(); });
+    document.getElementById('js-delete-confirm').addEventListener('click', confirmDelete);
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      if (editBd.classList.contains('is-visible')) closeEditModal();
+      else if (delBd.classList.contains('is-visible')) closeDeleteModal();
+    });
+  })();
+
+  function renderUsers(rows) {
+    const tbody = document.getElementById('js-users-tbody');
+    const count = document.getElementById('js-row-count');
+    if (!tbody) return;
+    _rowsById.clear();
+    (rows || []).forEach(r => { if (r && r.id != null) _rowsById.set(String(r.id), r); });
+    if (!rows || rows.length === 0) {
+      tbody.innerHTML =
+        '<tr><td class="is-empty" colspan="6">No users.</td></tr>';
+      if (count) {
+        count.textContent = '0 users';
+        count.classList.remove('is-loading');
+      }
+      return;
+    }
+    tbody.innerHTML = rows.map(rowHtml).join('');
+    if (count) {
+      count.textContent = rows.length.toLocaleString('en-US') +
+        (rows.length === 1 ? ' user' : ' users');
+      count.classList.remove('is-loading');
+    }
+  }
+
+  // ---------- boot ----------
+  if (window.RRV8 && typeof window.RRV8.mountSidebar === 'function') {
+    window.RRV8.mountSidebar({ activePage: 'admin-users' });
+  }
+  if (window.RRV8 && typeof window.RRV8.ensureInventoryStatus === 'function') {
+    try { window.RRV8.ensureInventoryStatus(rrFetch); } catch (_) {}
+  }
+
+  // Row-action handlers. Edit + delete are wired; the lock icon
+  // (force password reset) is still a placeholder until the
+  // password-management flow specs.
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-action]');
+    if (!btn) return;
+    const action = btn.dataset.action;
+    const userId = btn.dataset.userId;
+    if (action === 'reset-pass') {
+      const row = _rowsById.get(String(userId));
+      const name = (row && (row.fullName || row.username)) || ('user ' + userId);
+      toast('Reset password for ' + name + ' — coming soon');
+    } else if (action === 'edit') {
+      openEditModal(userId);
+    } else if (action === 'delete') {
+      openDeleteModal(userId);
+    }
+  });
+
+  const newBtn = document.getElementById('js-new-user');
+  if (newBtn) newBtn.addEventListener('click', () => toast('New User — coming soon'));
+  const expBtn = document.getElementById('js-export-btn');
+  if (expBtn) expBtn.addEventListener('click', () => toast('Excel export — coming soon'));
+
+  // Main fetch.
+  rrFetch('api/v1/admin/users')
+    .then(rows => renderUsers(rows))
+    .catch(err => {
+      showFetchError(err);
+      const tbody = document.getElementById('js-users-tbody');
+      if (tbody) {
+        tbody.innerHTML =
+          '<tr><td class="is-empty" colspan="6">Couldn&rsquo;t load users. See the error banner above.</td></tr>';
+      }
+      const count = document.getElementById('js-row-count');
+      if (count) {
+        count.textContent = 'Error';
+        count.classList.remove('is-loading');
+      }
+    });
+
+})();
+</script>
+
+</body>
+</html>

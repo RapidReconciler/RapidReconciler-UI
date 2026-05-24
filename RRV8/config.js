@@ -50,9 +50,21 @@ window.RR_CONFIG = {
   dataPath:      'data/',
   statusPollMs:  60000,
   testAgentBase: 'http://localhost:34537',
+  valcBase:      'http://localhost:8080',
   release:       'V8',
   buildStamp:    '2026-05-24'
 };
+
+// Endpoint prefixes that route to mini-VALC (the dev-side stand-in
+// for production VALC's central Postgres + Admin surface). The
+// per-DB data-services agent owns customer-specific data
+// (rcompanies, rtransactions, ritems, ...); mini-VALC owns the
+// cross-DB stuff (users, licensed-companies registry, deploys).
+// Areas starting with any of these prefixes go to RR_CONFIG.valcBase
+// instead of the test agent or the active DB IP.
+window.RR_VALC_PREFIXES = [
+  'api/v1/admin/'    // /api/v1/admin/users, /api/v1/admin/clients, ...
+];
 
 // Areas served by the green-field test agent instead of v359. The set
 // is duplicated in each page's rrFetch (no shared script). Update both
