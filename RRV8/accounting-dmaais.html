@@ -1743,6 +1743,10 @@
        PILL TAB NAV (Analysis / Sales / Inventory / Mfg / Purchasing)
        ============================================================ -->
   <nav class="tab-bar" id="js-tab-bar" role="tablist">
+    <button class="tab-pill" type="button" role="tab" data-tab="model" aria-selected="false" title="Baseline AAI configuration — what the rules SHOULD look like, per (Company, TxComp, Table, OrderType, DocType, GLClass).">
+      Model
+      <span class="tab-count" id="js-tab-count-model">0</span>
+    </button>
     <button class="tab-pill is-active" type="button" role="tab" data-tab="analysis" aria-selected="true">
       Analysis
       <span class="tab-count" id="js-tab-count-analysis">0</span>
@@ -1764,6 +1768,39 @@
       <span class="tab-count" id="js-tab-count-Purchasing">0</span>
     </button>
   </nav>
+
+  <!-- ============================================================
+       MODEL PANEL — baseline AAI configuration (v_integrity1_aai_base)
+       Read-only reference grid. Sits to the left of Analysis so the
+       analyst can compare findings against the canonical baseline.
+       ============================================================ -->
+  <div class="tab-panel" id="js-panel-model" role="tabpanel">
+    <section class="grid-card">
+      <div class="grid-head">
+        <span class="grid-title">Model &middot; F4095 baseline</span>
+        <div class="grid-state-cluster">
+          <label class="grid-search" title="Search across visible columns">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="7" r="4"/><line x1="10" y1="10" x2="14" y2="14"/></svg>
+            <input type="search" id="js-model-search" placeholder="Search rows&hellip;" autocomplete="off" spellcheck="false">
+            <button type="button" class="grid-search-clear" id="js-model-search-clear" hidden title="Clear search">&times;</button>
+          </label>
+          <button type="button" class="grid-pill grid-pill-export" id="js-model-export-btn" title="Export the baseline rows to Excel">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10v3h10v-3"/><path d="M8 2v9"/><polyline points="5 8 8 11 11 8"/></svg>
+            <span>Excel</span>
+          </button>
+          <span class="grid-pill grid-pill-count" id="js-model-count">Loading&hellip;</span>
+        </div>
+      </div>
+      <div class="grid-scroll">
+        <table class="grid-table" id="js-model-table">
+          <thead><tr id="js-model-thead-row"></tr></thead>
+          <tbody id="js-model-tbody">
+            <tr><td colspan="14" class="grid-skeleton"><span class="grid-skeleton-bar"></span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
 
   <!-- ============================================================
        ANALYSIS PANEL — FIX FIRST + ASK CUSTOMER + IGNORE
@@ -2722,6 +2759,7 @@
       p.classList.toggle('is-active', active);
       p.setAttribute('aria-selected', active ? 'true' : 'false');
     });
+    document.getElementById('js-panel-model'   ).classList.toggle('is-active', tabId === 'model');
     document.getElementById('js-panel-analysis').classList.toggle('is-active', tabId === 'analysis');
     MODULE_ORDER.forEach(m => {
       const panel = document.getElementById('js-panel-' + m);
@@ -3543,6 +3581,149 @@
     const q = runId ? '?runId=' + encodeURIComponent(runId) : '';
     return rrFetch('inventory/integrity/aai-responses' + q).catch(() => null);
   }
+
+  // ============================================================
+  //  Model tab — baseline AAI configuration (v_integrity1_aai_base)
+  //
+  //  Reference data: what AAI accounts SHOULD look like per
+  //  (Company, TxComp, Table, OrderType, DocType, GLClass). Analyst
+  //  consults this while working through findings on the Analysis
+  //  + module tabs. 50 rows in dev — small enough to ship the whole
+  //  view to the client and filter in JS.
+  // ============================================================
+  const MODEL_COLUMNS = [
+    { key: 'CompanyNumber',   label: 'Co' },
+    { key: 'TransactionComp', label: 'Tx Co' },
+    { key: 'TableNumber',     label: 'Table' },
+    { key: 'OrderType',       label: 'OT' },
+    { key: 'DocType',         label: 'DT' },
+    { key: 'GLCLass',         label: 'GL Class' },  // view has 'GLCLass' (capital L)
+    { key: 'LongAccount',     label: 'Account' },
+    { key: 'BusUnit',         label: 'BU' },
+    { key: 'Object',          label: 'Obj' },
+    { key: 'Subsidiary',      label: 'Sub' },
+    { key: 'FlexBU',          label: 'Flex BU' },
+    { key: 'BUSource',        label: 'BU Source' },
+    { key: 'FlexSub',         label: 'Flex Sub' },
+    { key: 'SubSource',       label: 'Sub Source' }
+  ];
+  let _modelRows  = [];
+  let _modelQuery = '';
+
+  function loadModel() {
+    if (IS_DEMO) {
+      return fetch('data/v-integrity1-aai-base.json', { cache: 'no-cache' })
+        .then(r => r.ok ? r.json() : { data: [] })
+        .catch(() => ({ data: [] }));
+    }
+    // /inventory/integrity ignores reconciliationFilter contents
+    // (IntegrityViewRepository.findRows post-filters by JWT
+    // CompanyNumber instead). Sending an empty filter for shape
+    // consistency with other clients on this endpoint.
+    return rrFetch('inventory/integrity', {
+      method: 'POST',
+      body: {
+        report: 'v_integrity1_aai_base',
+        reconciliationFilter: { currencies: [], companies: [], businessUnits: [], objects: [], subsidiaries: [] },
+        take: 1000, skip: 0, page: 1, pageSize: 1000
+      }
+    }).catch(err => {
+      console.warn('Model fetch failed:', err);
+      return { data: [] };
+    });
+  }
+
+  function renderModelHeader() {
+    const tr = document.getElementById('js-model-thead-row');
+    if (!tr) return;
+    tr.innerHTML = MODEL_COLUMNS.map(c =>
+      '<th class="is-mono" title="' + escapeHtml(c.key) + '">' + escapeHtml(c.label) + '</th>'
+    ).join('');
+  }
+  function modelFilteredRows() {
+    const q = String(_modelQuery || '').toLowerCase().trim();
+    if (!q) return _modelRows;
+    return _modelRows.filter(r => {
+      for (let i = 0; i < MODEL_COLUMNS.length; i++) {
+        const v = r[MODEL_COLUMNS[i].key];
+        if (v != null && String(v).toLowerCase().indexOf(q) !== -1) return true;
+      }
+      return false;
+    });
+  }
+  function renderModel() {
+    const tbody = document.getElementById('js-model-tbody');
+    const count = document.getElementById('js-model-count');
+    const badge = document.getElementById('js-tab-count-model');
+    if (!tbody) return;
+    renderModelHeader();
+    const rows = modelFilteredRows();
+    if (count) {
+      count.classList.remove('is-loading');
+      const total = _modelRows.length;
+      count.textContent = rows.length.toLocaleString('en-US') + ' rows' +
+        (rows.length < total ? ' of ' + total.toLocaleString('en-US') : '');
+    }
+    if (badge) badge.textContent = _modelRows.length.toLocaleString('en-US');
+    if (!rows.length) {
+      tbody.innerHTML = '<tr><td colspan="' + MODEL_COLUMNS.length + '" class="details-empty">No rows match the current search.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = rows.map(r =>
+      '<tr>' + MODEL_COLUMNS.map(c => {
+        const v = r[c.key];
+        const txt = (v == null ? '' : String(v)).trim();
+        return '<td class="is-mono">' + escapeHtml(txt) + '</td>';
+      }).join('') + '</tr>'
+    ).join('');
+  }
+  function wireModelSearch() {
+    const input = document.getElementById('js-model-search');
+    const clear = document.getElementById('js-model-search-clear');
+    if (!input) return;
+    let t = null;
+    function applyNow() {
+      _modelQuery = input.value || '';
+      if (clear) clear.hidden = !_modelQuery;
+      renderModel();
+    }
+    input.addEventListener('input', () => { if (t) clearTimeout(t); t = setTimeout(applyNow, 150); });
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Escape' && _modelQuery) {
+        e.preventDefault(); input.value = '';
+        if (t) clearTimeout(t);
+        applyNow();
+      }
+    });
+    if (clear) clear.addEventListener('click', () => { input.value = ''; if (t) clearTimeout(t); applyNow(); input.focus(); });
+  }
+  function exportModel() {
+    if (typeof XLSX === 'undefined') {
+      console.warn('Excel library still loading — Model export skipped');
+      return;
+    }
+    const rows = modelFilteredRows();
+    const aoa = [MODEL_COLUMNS.map(c => c.label)].concat(
+      rows.map(r => MODEL_COLUMNS.map(c => r[c.key] == null ? '' : r[c.key]))
+    );
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    XLSX.utils.book_append_sheet(wb, ws, 'Model');
+    const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 13);
+    XLSX.writeFile(wb, 'AAI_Model_' + stamp + '.xlsx');
+  }
+
+  // Fire-and-forget. Model is independent of the Analysis flow.
+  loadModel().then(payload => {
+    const rows = (payload && payload.data) || (Array.isArray(payload) ? payload : []);
+    _modelRows = rows;
+    renderModel();
+  });
+  wireModelSearch();
+  (function wireModelExport() {
+    const btn = document.getElementById('js-model-export-btn');
+    if (btn) btn.addEventListener('click', exportModel);
+  })();
 
   Promise.all([loadAnalysis(), loadResponses()]).then(([data, savedResponses]) => {
     window._dmaaiAnalysis = data;
