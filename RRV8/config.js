@@ -98,13 +98,16 @@ window.RR_TEST_AGENT_AREAS = [
   'inventory/rollIItem',
   'poll',
   'system-status',
-  'available-periods'
+  'available-periods',
+  // Administrator
+  'admin/companies'
 ];
 
 // Endpoints with a variable path segment that rrFetch needs to route
 // to the test agent. Tested with `area.startsWith(prefix)`.
 window.RR_TEST_AGENT_PREFIXES = [
-  'download-excel/'
+  'download-excel/',
+  'admin/companies/'    // per-company edit (PUT /admin/companies/{n})
 ];
 
 // Per-mode VALC defaults. Used when RR_CONFIG.authBase is null and

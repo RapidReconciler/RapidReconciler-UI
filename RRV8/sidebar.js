@@ -48,11 +48,16 @@
   // 'scope' when the active page doesn't belong to a module
   // (matches the pre-accordion UX where Scope was always visible).
   const PAGE_TO_SECTION = {
-    reconciliation:   'inventory',
-    transactions:     'inventory',
-    asof:             'inventory',
-    'cardex-variance':'inventory',
-    dmaais:           'accounting'
+    reconciliation:    'inventory',
+    transactions:      'inventory',
+    asof:              'inventory',
+    'cardex-variance': 'inventory',
+    'admin-companies': 'admin'
+    // dmaais is intentionally NOT in this map: the DMAAIs link lives
+    // on the status panel as an indicator row, not inside an
+    // accordion module, so first-load on the DMAAIs page falls
+    // through to 'scope' (matches the pattern for pages outside the
+    // main nav).
   };
 
   // Hydrate the pin class on whichever element exists. sidebar.js
@@ -113,11 +118,11 @@
     const dmaaiSeed = seedDmaaiStateFromSession();
     const dotCls = dmaaiSeed.state ? ' is-' + dmaaiSeed.state : '';
     const dotTitle = dmaaiSeed.title;
+    const agentSeed = seedAgentConnectivityFromSession();
 
     // is-active classes per page
     const cls = (page) => activePage === page ? ' is-active' : '';
-    const isInventoryPage  = activePage === 'reconciliation' || activePage === 'transactions' || activePage === 'asof' || activePage === 'cardex-variance';
-    const isAccountingPage = activePage === 'dmaais';
+    const isInventoryPage = activePage === 'reconciliation' || activePage === 'transactions' || activePage === 'asof' || activePage === 'cardex-variance';
 
     // The period filter row only renders on Reconciliation. Its
     // popover/click wiring is page-specific (in the IIFE).
@@ -153,9 +158,31 @@
     </button>
   </div>
 
-  <!-- Scope (global filter rail) — accordion-collapsible, mirrors the
-       .sidebar-module pattern so a single click handler drives both. -->
+  <!-- Administrator — its own group above Reconcile. Admin tasks are
+       set-and-forget; pulling them out of the main nav keeps the
+       reconciliation flow uncluttered while keeping admin one click
+       away. -->
   <div class="sidebar-section">
+    <div class="sidebar-section-label">Administrator</div>
+    <div class="sidebar-module${expCls('admin')}" data-module="admin">
+      <button type="button" class="sidebar-nav-item" data-module-toggle="admin" aria-expanded="${expAria('admin')}">
+        <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+        <span class="sidebar-nav-text">Administrator</span>
+        <svg class="sidebar-nav-caret" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 6 8 10 12 6"/></svg>
+      </button>
+      <div class="sidebar-nav-children">
+        <a href="admin-companies.html" class="sidebar-nav-child${cls('admin-companies')}" data-nav-page="admin-companies">Companies</a>
+        <a href="#" class="sidebar-nav-child" data-nav-page="admin-users">Users</a>
+        <a href="#" class="sidebar-nav-child" data-nav-page="admin-cardex-deletions">Cardex Deletions</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Reconcile (main nav). Scope is the first accordion item so the
+       analyst sets context (Company / BU / Account / Sub / Currency)
+       before picking a page. -->
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">Reconcile</div>
     <div class="sidebar-module sidebar-scope${expCls('scope')}" data-module="scope">
       <button type="button" class="sidebar-nav-item" data-module-toggle="scope" aria-expanded="${expAria('scope')}">
         <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
@@ -209,11 +236,6 @@
     </button>
       </div>
     </div>
-  </div>
-
-  <!-- Modules (main nav) -->
-  <div class="sidebar-section">
-    <div class="sidebar-section-label">Modules</div>
     <div class="sidebar-module${expCls('inventory')}" data-module="inventory">
       <button type="button" class="sidebar-nav-item${isInventoryPage ? ' is-active' : ''}" data-module-toggle="inventory" aria-expanded="${expAria('inventory')}">
         <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"></path><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
@@ -225,7 +247,6 @@
         <a href="inventory-transactions.html"   class="sidebar-nav-child${cls('transactions')}"   data-nav-page="transactions">Transactions</a>
         <a href="inventory-cardex-variance.html" class="sidebar-nav-child${cls('cardex-variance')}" data-nav-page="cardex-variance">Cardex Variance</a>
         <a href="inventory-asof.html"           class="sidebar-nav-child${cls('asof')}"           data-nav-page="asof">Perpetual</a>
-        <a href="#" class="sidebar-nav-child">Roll Forward</a>
       </div>
     </div>
     <div class="sidebar-module${expCls('in-transit')}" data-module="in-transit">
@@ -239,33 +260,6 @@
         <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg>
         <span class="sidebar-nav-text">PO Receipts</span>
       </button>
-    </div>
-    <div class="sidebar-module${expCls('admin')}" data-module="admin">
-      <button type="button" class="sidebar-nav-item" data-module-toggle="admin" aria-expanded="${expAria('admin')}">
-        <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-        <span class="sidebar-nav-text">Administrator</span>
-      </button>
-    </div>
-  </div>
-
-  <!-- Accounting — accordion module so future pages (Period-End,
-       AAI Audit, etc.) just slot in as additional children. The
-       DMAAIs preload status dot lives on the section header so it
-       indicates "any accounting data is preloaded" without being
-       tied to a specific child link. -->
-  <div class="sidebar-section">
-    <div class="sidebar-module${expCls('accounting')}" data-module="accounting">
-      <button type="button" class="sidebar-nav-item${isAccountingPage ? ' is-active' : ''}" data-module-toggle="accounting" aria-expanded="${expAria('accounting')}">
-        <span class="sidebar-nav-icon-wrap">
-          <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h12a4 4 0 0 1 4 4v12H8a4 4 0 0 1-4-4Z"/><path d="M4 4v12a4 4 0 0 0 4 4"/><line x1="9" y1="9" x2="15" y2="9"/><line x1="9" y1="13" x2="15" y2="13"/></svg>
-          <span class="sidebar-nav-dot${dotCls}" id="js-dmaai-dot" title="${escapeHtml(dotTitle)}"></span>
-        </span>
-        <span class="sidebar-nav-text">Accounting</span>
-        <svg class="sidebar-nav-caret" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 6 8 10 12 6"/></svg>
-      </button>
-      <div class="sidebar-nav-children">
-        <a href="accounting-dmaais.html" class="sidebar-nav-child${cls('dmaais')}" data-nav-page="dmaais">DMAAIs</a>
-      </div>
     </div>
   </div>
 
@@ -292,11 +286,27 @@
     </div>
   </div>
 
-  <!-- Status panel -->
+  <!-- Status panel — four indicators. DMAAIs is a clickable
+       nav row that doubles as a preload-state indicator: the dot
+       paints green/amber/red driven by setDmaaiStatus() the same
+       way it did when it lived on the Accounting accordion header.
+       Agent answers "can the browser reach the data-services agent
+       at all?" — distinct from System Status, which answers "is the
+       SQL roll-forward job running cleanly?" The /poll loops on
+       Reconciliation and Transactions drive it; non-polling pages
+       seed from the last cached outcome in sessionStorage. -->
   <div class="sidebar-status">
+    <a href="accounting-dmaais.html" class="sidebar-status-row${cls('dmaais')}" data-nav-page="dmaais" title="${escapeHtml(dotTitle)}">
+      <span class="sidebar-status-dot${dotCls}" id="js-dmaai-dot"></span>
+      <span class="sidebar-status-label">DMAAIs</span>
+    </a>
     <div class="sidebar-status-row">
       <span class="sidebar-status-dot is-green" id="js-validation-dot" title="Inventory Validation"></span>
       <span class="sidebar-status-label">Inventory Validation</span>
+    </div>
+    <div class="sidebar-status-row" id="js-agent-conn-row" title="${escapeHtml(agentSeed.title)}">
+      <span class="sidebar-status-dot${agentSeed.cls}" id="js-agent-conn-dot"></span>
+      <span class="sidebar-status-label">Agent</span>
     </div>
     <button class="sidebar-status-row" id="js-status-row" type="button" title="System Status &mdash; click for the runbook drawer">
       <span class="sidebar-status-dot" id="js-status-dot"></span>
@@ -366,20 +376,26 @@
     const dot = document.getElementById('js-dmaai-dot');
     if (!dot) return;
     dot.classList.remove('is-loading', 'is-ready', 'is-error');
+    let title;
     if (state === 'loading') {
       dot.classList.add('is-loading');
-      dot.title = 'Loading the JDE DMAAI universe…';
+      title = 'Loading the JDE DMAAI universe…';
     } else if (state === 'ready') {
       dot.classList.add('is-ready');
       const n = info && info.count;
-      dot.title = 'DMAAIs loaded' + (n ? ' · ' + n.toLocaleString('en-US') + ' rows' : '') + '. Per-row Export will include them in the analyzer workbook.';
+      title = 'DMAAIs loaded' + (n ? ' · ' + n.toLocaleString('en-US') + ' rows' : '') + '. Per-row Export will include them in the analyzer workbook.';
     } else if (state === 'error') {
       dot.classList.add('is-error');
       const msg = (info && info.message) ? ' — ' + info.message : '';
-      dot.title = 'DMAAIs unavailable. Export will still produce a workbook, but without the DMAAI universe the analyzer\'s AAI-pattern classification will be less precise.' + msg;
+      title = 'DMAAIs unavailable. Export will still produce a workbook, but without the DMAAI universe the analyzer\'s AAI-pattern classification will be less precise.' + msg;
     } else {
-      dot.title = 'DMAAIs preload status';
+      title = 'DMAAIs preload status';
     }
+    dot.title = title;
+    // Also stamp the title on the surrounding status row so the
+    // tooltip works whether the analyst hovers the dot or the label.
+    const row = dot.closest('.sidebar-status-row');
+    if (row) row.title = title;
   }
 
   // Best-effort scan of sessionStorage for a cached DMAAI payload from
@@ -408,6 +424,85 @@
       }
     } catch (_) { /* sessionStorage unavailable or stale shape — ignore */ }
     return { state: '', count: 0, title: 'DMAAIs preload status' };
+  }
+
+  // ---------------------------------------------------------------
+  //                                          Agent connectivity dot
+  // ---------------------------------------------------------------
+  // Distinct from System Status. Drives off the success / failure of
+  // the /poll long-poll on Reconciliation + Transactions. Other pages
+  // read the cached outcome at mount time so the dot paints from the
+  // last known state without each page having to repeat the wiring.
+  //
+  // sessionStorage shape:
+  //   key:   'rrv8.agentConnectivity.v1'
+  //   value: '{"state":"ok|unreachable|unknown","ts":<epochMs>,"message"?:string}'
+  //
+  // The state classes the dot can carry (consumed by setAgentConnectivity
+  // and seedAgentConnectivityFromSession; CSS in sidebar.css aliases
+  // them to the existing colour rules):
+  //   'is-green'  ok           — last /poll returned cleanly
+  //   'is-red'    unreachable  — last /poll threw a network error
+  //   ''          unknown      — never polled (or sessionStorage cleared)
+  const AGENT_CONN_LS_KEY = 'rrv8.agentConnectivity.v1';
+
+  function seedAgentConnectivityFromSession() {
+    try {
+      const raw = sessionStorage.getItem(AGENT_CONN_LS_KEY);
+      if (raw) {
+        const obj = JSON.parse(raw);
+        if (obj && obj.state === 'unreachable') {
+          const msg = obj.message ? ' — ' + obj.message : '';
+          return {
+            cls: ' is-red',
+            title: 'Agent unreachable — start the data-services jar' + msg
+          };
+        }
+      }
+    } catch (_) {}
+    // Assume reachable until proven otherwise. The /poll long-poll on
+    // Reconciliation / Transactions will flip this red within seconds
+    // if the agent is actually down. Better default than muted-grey
+    // (which reads as broken even when everything is fine).
+    return { cls: ' is-green', title: 'Agent reachable' };
+  }
+
+  /**
+   * Update the Agent connectivity dot and persist the result so
+   * other pages can paint from cache at mount time.
+   *
+   * @param {'ok'|'unreachable'|'unknown'} state
+   * @param {{message?:string}} info  optional error detail
+   */
+  function setAgentConnectivity(state, info) {
+    const dot = document.getElementById('js-agent-conn-dot');
+    const row = document.getElementById('js-agent-conn-row');
+    let cls = '';
+    let title;
+    if (state === 'ok') {
+      cls = ' is-green';
+      title = 'Agent reachable';
+    } else if (state === 'unreachable') {
+      cls = ' is-red';
+      const msg = info && info.message ? ' — ' + info.message : '';
+      title = 'Agent unreachable — start the data-services jar' + msg;
+    } else {
+      title = 'Agent connectivity (no poll yet this session)';
+    }
+    if (dot) {
+      dot.classList.remove('is-green', 'is-red', 'is-amber',
+                           'is-ready', 'is-error', 'is-loading');
+      if (cls) dot.classList.add(cls.trim());
+      dot.title = title;
+    }
+    if (row) row.title = title;
+    try {
+      sessionStorage.setItem(AGENT_CONN_LS_KEY, JSON.stringify({
+        state: state || 'unknown',
+        ts:    Date.now(),
+        message: (info && info.message) || undefined
+      }));
+    } catch (_) {}
   }
 
   /**
@@ -699,6 +794,7 @@
   global.RRV8 = global.RRV8 || {};
   global.RRV8.mountSidebar            = mountSidebar;
   global.RRV8.setDmaaiStatus          = setDmaaiStatus;
+  global.RRV8.setAgentConnectivity    = setAgentConnectivity;
   global.RRV8.paintSidebarFromCache   = paintSidebarFromCache;
   global.RRV8.publishCurrentPeriod    = publishCurrentPeriod;
   global.RRV8.readCurrentPeriod       = readCurrentPeriod;
