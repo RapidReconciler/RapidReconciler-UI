@@ -52,7 +52,8 @@
     transactions:      'inventory',
     asof:              'inventory',
     'cardex-variance': 'inventory',
-    'admin-companies': 'admin'
+    'admin-companies': 'admin',
+    'admin-users':     'admin'
     // dmaais is intentionally NOT in this map: the DMAAIs link lives
     // on the status panel as an indicator row, not inside an
     // accordion module, so first-load on the DMAAIs page falls
@@ -172,7 +173,7 @@
       </button>
       <div class="sidebar-nav-children">
         <a href="admin-companies.html" class="sidebar-nav-child${cls('admin-companies')}" data-nav-page="admin-companies">Companies</a>
-        <a href="#" class="sidebar-nav-child" data-nav-page="admin-users">Users</a>
+        <a href="admin-users.html" class="sidebar-nav-child${cls('admin-users')}" data-nav-page="admin-users">Users</a>
         <a href="#" class="sidebar-nav-child" data-nav-page="admin-cardex-deletions">Cardex Deletions</a>
       </div>
     </div>
