@@ -69,6 +69,70 @@ in `RapidReconciler-Valc/src/main/java/.../dashboard/`
 ([RapidReconciler-Agent#18](https://github.com/RapidReconciler/RapidReconciler-Agent/pull/18))
 caused by SQL nchar padding + missing filter-item labels.
 
+Follow-up chunk later the same day:
+
+- **Transactions page &mdash; pattern cards.** New grid-level
+  classifier ports the analyzer&rsquo;s TransactionDetailTemplate
+  5.x labels to the page&rsquo;s Start Here strip. Six patterns
+  detectable from grid columns (5.17 Voucher Variance, 5.16 Mfg
+  Cost Mismatch, 5.6 Standard Cost Change, 5.2 GL-Only, 5.3
+  Cardex-Only, 5.4 Account Mismatch via DMAAI lookup, 5.11
+  Other). Cards group unworked rows by likely root cause and
+  click-narrow the grid to that pattern&rsquo;s rows for batch
+  triage. Existing single-dimension detectors remain as long-tail
+  fallback. Implementation: `classifyGridRow` + `stampPatterns`
+  pre-classify every row; `_state.activePattern` filter gates the
+  grid; `_dmaaiIndex` built from the preloaded DMAAI integrity
+  report drives 5.4 detection. **Note**: the renderAll call from
+  `preloadDmaais` was reverted after suspicion of boot-time race
+  &mdash; turned out unrelated (real cause was v359
+  /available-periods being down). 5.4 patterns now only paint
+  when DMAAIs are cached before _data lands; restore the
+  renderAll once we&rsquo;ve confirmed it&rsquo;s safe.
+- **Reconciliation page &mdash; bug fixes.**
+  &middot; "Account" tab label on the Variance Contributors card
+  renamed to "Object" (matches the JDE-domain term).
+  &middot; `switchPeriod` now refetches data in prod/staging mode
+  ([`inventory-reconciliation.html`](inventory-reconciliation.html)
+  &sect; `switchPeriod`). Before this fix, clicking a period bar
+  changed the local `currentPeriod` and re-rendered from
+  `currentData`, but `currentData` only carried the prior period&rsquo;s
+  response in prod mode &mdash; so the hero numbers never moved.
+  &middot; `generateVarianceExcel` is now `async` and lazy-fetches
+  `/inventory/variance-component` rows for GL Batches / End of
+  Day / Manual JEs / Cardex when the Excel icon is clicked
+  without the preview modal having opened first. Before this fix,
+  the workbook came out with headers + the empty-state sentinel
+  ("No manual JEs hit&hellip;") even when the card showed an
+  amount.
+- **/poll cadence floor (Reconciliation + Transactions).** The
+  `startSystemPollLoop` / `startTxSystemPollLoop` recursive
+  `tick()` had no inter-call delay, assuming the v359 long-poll
+  semantics. The test agent&rsquo;s `/poll` returns immediately,
+  so the loop was hammering the agent at ~100 requests/sec and
+  saturating the browser&rsquo;s 6-connection-per-origin pool.
+  Both loops now floor at 5s between calls. Worth flagging for
+  the agent repo: bring `/poll` to long-poll parity (spec under
+  `RapidReconciler-Agent/specs/poll-longpoll.md` when ready).
+- **Two new agent specs**:
+  &middot; [`audit-detail-expanded`](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/specs/audit-detail-expanded.md)
+  &mdash; extend the existing `/inventory/audit-detail` response
+  with five additional arrays (`accountSummary`,
+  `accountDescriptions`, `unpostedBatchesUi`, `unpostedCardexUi`,
+  `manualJournalEntries`) so the Audit Report Excel + PDF
+  per-account sub-sections populate in prod/staging. Today they
+  fall back to "All batches posted&hellip;" placeholders because
+  `adaptLegacyResponse` zeros these arrays out.
+  &middot; [`available-periods`](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/specs/available-periods.md)
+  &mdash; final v359 migration. `GET /available-periods` →
+  `{availablePeriods: [...], defaultPeriod: ...}` reading
+  `dbo.rfiscalcalendar`. Once shipped, no V8 page calls v359 on
+  boot and the dev box can retire it entirely. Surfaced because
+  Transactions page boot misleadingly reports
+  `Fetch failed: inventory/transactions` when this endpoint is
+  actually what failed (the catch block in `loadData` tags every
+  error with that area).
+
 Highlights of the prior longer session (kept for context):
 
 **As Of page polish ([PR #96](https://github.com/RapidReconciler/RapidReconciler-AI/pull/96))**
