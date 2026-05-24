@@ -1387,10 +1387,12 @@
       <button type="button" class="filter-banner-clear" id="filter-banner-clear">Clear &times;</button>
     </div>
     <!-- Analyze integrity reports via the headless analyzer pipeline.
-         Click → fetches v_integrity7_frozen_cost rows from the agent,
-         builds a workbook the analyzer's FrozenCostTemplate consumes,
+         Each button fetches an integrity view from the agent, builds
+         the workbook shape the matching analyzer template expects,
          hands off to Tools/analysis-workbook.html in a hidden iframe,
-         analyzed output lands in the user's Downloads. -->
+         and the analyzed output lands in the user's Downloads. The
+         analyzer's detect() picks the template by column fingerprint
+         so the V8 wiring is purely shape-matching. -->
     <button type="button" class="action-control" id="js-analyze-frozen-cost-btn" title="Fetch the frozen-cost integrity report and run the analyzer on it. Produces an analyst-grade workbook with findings broken out by issue type (F30026-only / F4105-only / mismatch).">
       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M2 13h12"/>
@@ -1398,6 +1400,16 @@
       </svg>
       <span class="action-control-label">Analyze</span>
       <span class="action-control-value">Frozen Cost</span>
+    </button>
+    <button type="button" class="action-control" id="js-analyze-gl-class-btn" title="Fetch the GL Class integrity report and run the analyzer on it. Surfaces items whose Branch and Location have conflicting GL-class assignments (F4102.glcl vs F41021.glcl).">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="2" y="2" width="5" height="5"/>
+        <rect x="9" y="2" width="5" height="5"/>
+        <rect x="2" y="9" width="5" height="5"/>
+        <rect x="9" y="9" width="5" height="5"/>
+      </svg>
+      <span class="action-control-label">Analyze</span>
+      <span class="action-control-value">GL Class</span>
     </button>
   </div>
 
@@ -3877,18 +3889,17 @@
   }
 
   // ============================================================
-  //  Analyze Frozen Cost
+  //  Analyze <integrity-report> — shared handoff helper
   //
-  //  Fetches v_integrity7_frozen_cost rows from the agent, builds
-  //  the workbook shape the analyzer's FrozenCostTemplate expects
-  //  (sheet 'Integrity' with TitleCase headers matching the view's
-  //  columns), and hands off to the headless analyzer pipeline.
-  //
-  //  The integrity view's Lot column already embeds the legacy
-  //  "QOH N" suffix the template parses — no enrichment step
-  //  needed on the V8 side.
+  //  Fetches the integrity rows for `opts.viewName`, builds a
+  //  workbook in the shape the matching analyzer template expects
+  //  (sheet 'Integrity' with TitleCase headers from `opts.headers`),
+  //  and hands off to the headless analyzer pipeline. Template
+  //  detection is column-fingerprint-based on the analyzer side,
+  //  so as long as our headers include the discriminating columns
+  //  the right template fires automatically.
   // ============================================================
-  async function analyzeFrozenCost(btn) {
+  async function analyzeIntegrityReport(opts, btn) {
     if (!btn || btn.disabled) return;
     const origInner    = btn.innerHTML;
     const origDisabled = btn.disabled;
@@ -3898,50 +3909,86 @@
       const payload = await rrFetch('inventory/integrity', {
         method: 'POST',
         body: {
-          report: 'v_integrity7_frozen_cost',
+          report: opts.viewName,
           reconciliationFilter: reconciliationFilterFromSession(),
           take: 20000, skip: 0, page: 1, pageSize: 20000
         },
-        demoFile: 'v-integrity7-frozen-cost'
+        demoFile: opts.demoFile
       });
       const rows = (payload && payload.data) || (Array.isArray(payload) ? payload : []);
-      if (!rows.length) { toast('No frozen-cost variance rows in scope'); return; }
+      if (!rows.length) { toast(opts.emptyMessage || 'No rows in scope'); return; }
 
       if (typeof XLSX === 'undefined') {
         toast('Excel library still loading — try again in a moment');
         return;
       }
 
-      // Headers match FrozenCostTemplate.detect()/parse(); see
-      // Tools/analysis-workbook.html. Helpers.readHeaders is
-      // case-insensitive so TitleCase from the view binds to the
-      // template's lowercase lookups.
-      const headers = [
-        'CompanyNumber', 'BranchPlant', 'ShortItem', 'ItemNumber', 'ThirdItem',
-        'CostLevel', 'Location', 'Lot', 'ST', 'UnitCost', 'FrzCost', 'Variance',
-        'Prodplant', 'Prodcost'
-      ];
-      const aoa = [headers].concat(rows.map(r => headers.map(h => r[h] == null ? '' : r[h])));
+      // Sheet name 'Integrity' is the boost-signal every integrity
+      // template's detect() looks for; the discriminating column
+      // fingerprint in opts.headers (e.g. UnitCost+FrzCost for
+      // FrozenCostTemplate, BranchClass+LocationClass for
+      // GLClassTemplate) drives template selection.
+      const aoa = [opts.headers].concat(rows.map(r => opts.headers.map(h => r[h] == null ? '' : r[h])));
       const wb = XLSX.utils.book_new();
       const ws = XLSX.utils.aoa_to_sheet(aoa);
       XLSX.utils.book_append_sheet(wb, ws, 'Integrity');
       const buffer = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
 
       const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 13);
-      const fallbackName = 'FrozenCostIntegrity_' + stamp + '.xlsx';
+      const fallbackName = opts.fallbackFilenamePrefix + '_' + stamp + '.xlsx';
       handOffToAnalyzer(buffer, fallbackName);
       toast('Analyzing &mdash; the analyzed workbook will land in your downloads.');
     } catch (err) {
-      console.error('Frozen Cost analyze failed:', err);
-      toast('Frozen Cost analyze failed: ' + (err.message || err));
+      console.error(opts.errorContext + ' analyze failed:', err);
+      toast(opts.errorContext + ' analyze failed: ' + (err.message || err));
     } finally {
       btn.disabled = origDisabled;
       btn.innerHTML = origInner;
     }
   }
+
+  // Frozen Cost (v_integrity7_frozen_cost → FrozenCostTemplate).
+  // Lot column embeds 'QOH N' suffix the template parses.
+  function analyzeFrozenCost(btn) {
+    return analyzeIntegrityReport({
+      viewName:               'v_integrity7_frozen_cost',
+      headers: [
+        'CompanyNumber', 'BranchPlant', 'ShortItem', 'ItemNumber', 'ThirdItem',
+        'CostLevel', 'Location', 'Lot', 'ST', 'UnitCost', 'FrzCost', 'Variance',
+        'Prodplant', 'Prodcost'
+      ],
+      demoFile:               'v-integrity7-frozen-cost',
+      fallbackFilenamePrefix: 'FrozenCostIntegrity',
+      emptyMessage:           'No frozen-cost variance rows in scope',
+      errorContext:           'Frozen Cost'
+    }, btn);
+  }
+
+  // GL Class (v_integrity5_gl_class → GLClassTemplate). Items
+  // whose Branch and Location have conflicting GL-class
+  // assignments. Template fingerprints on BranchClass +
+  // LocationClass headers.
+  function analyzeGlClass(btn) {
+    return analyzeIntegrityReport({
+      viewName:               'v_integrity5_gl_class',
+      headers: [
+        'CompanyNumber', 'BranchPlant', 'ItemNumber', 'ThirdItem', 'Description',
+        'Location', 'Lot', 'StockType', 'BranchClass', 'LocationClass'
+      ],
+      demoFile:               'v-integrity5-gl-class',
+      fallbackFilenamePrefix: 'GLClassIntegrity',
+      emptyMessage:           'No GL class conflict rows in scope',
+      errorContext:           'GL Class'
+    }, btn);
+  }
+
   const analyzeFrozenCostBtn = document.getElementById('js-analyze-frozen-cost-btn');
   if (analyzeFrozenCostBtn) {
     analyzeFrozenCostBtn.addEventListener('click', () => analyzeFrozenCost(analyzeFrozenCostBtn));
+  }
+  const analyzeGlClassBtn = document.getElementById('js-analyze-gl-class-btn');
+  if (analyzeGlClassBtn) {
+    analyzeGlClassBtn.addEventListener('click', () => analyzeGlClass(analyzeGlClassBtn));
   }
 
   // ============================================================
