@@ -2380,6 +2380,7 @@
     if (_txPollLoopRunning) return;
     _txPollLoopRunning = true;
     const tick = async () => {
+      const t0 = Date.now();
       try {
         const r = await rrFetch('poll');
         const updating = !!(r && (r.updating || r.recalculating));
@@ -2395,6 +2396,16 @@
         }
       } catch (_) {
         await new Promise(res => setTimeout(res, 2000));
+      }
+      // Floor the poll cadence at 5s. /poll is supposed to be a ~60s
+      // long-poll (v359 holds the connection until a job-status change
+      // or timeout), but the test agent returns immediately. Without
+      // this floor the loop hammers the agent and starves other
+      // endpoints on the same connection pool.
+      const elapsed = Date.now() - t0;
+      const minWait = 5000;
+      if (elapsed < minWait) {
+        await new Promise(res => setTimeout(res, minWait - elapsed));
       }
       if (_txPollLoopRunning) tick();
     };
@@ -2618,6 +2629,7 @@
     period:           null,                 // currently selected period
     activeType:       null,                 // 'Inventory' | 'Mfg' | 'Sales' | null
     activeCompany:    null,                 // CompanyNumber, or null
+    activePattern:    null,                 // analyzer pattern code (5.2/5.3/5.4/5.6/5.16/5.17/5.11), or null
     workedFilter:     'all',                // 'all' | 'yes' | 'no'
     selectedKeys:     new Set(),            // row-keys selected for batch edit
     lastSelectedKey:  null,                 // anchor for shift-click range
@@ -2813,6 +2825,7 @@
               _data = adaptResponse(fresh);
               _workNotes = buildWorkNotesMap(null, _data.rows);
               applyWorkNotesOverlay(_data.rows);
+              stampPatterns(_data.rows);
               renderAll();
             }
           }).catch(() => {});
@@ -2834,6 +2847,10 @@
       // anything reads r.Worked / r.Note.
       _workNotes = buildWorkNotesMap(workNotesPayload, _data.rows);
       applyWorkNotesOverlay(_data.rows);
+      // Classify every row by the analyzer's 5.x pattern codes so
+      // the Start Here strip can group by likely root cause. Re-runs
+      // when the DMAAI index lands (preloadDmaais) since 5.4 needs it.
+      stampPatterns(_data.rows);
       // Fresh data invalidates any stale row selection (the GLXref
       // universe just changed).
       _state.selectedKeys.clear();
@@ -2924,6 +2941,7 @@
     return _data.rows.filter(r => {
       if (_state.activeType    && r.Type !== _state.activeType)    return false;
       if (_state.activeCompany && r.CompanyNumber !== _state.activeCompany) return false;
+      if (_state.activePattern && r._pattern   !== _state.activePattern)    return false;
       if (_state.workedFilter === 'yes' && !r.Worked) return false;
       if (_state.workedFilter === 'no'  &&  r.Worked) return false;
       return passesExclusions(r, _state.exclusions);
@@ -3078,6 +3096,143 @@
     'WR': 'Warehouse Receipt'
   };
 
+  // =========================================================
+  //  Pattern classifier &mdash; grid-level port of the
+  //  analyzer's TransactionDetailTemplate 5.x labels.
+  //
+  //  The full classifier in Tools/analysis-workbook.html reads
+  //  F4111 / F0911 detail rows; the grid has one row per doc
+  //  (summarized). This grid-level cousin uses only what the
+  //  grid carries (CardexAmount, LedgerAmount, Variance, OT,
+  //  DT, OffsetAccount, GLClass) plus the preloaded DMAAI
+  //  integrity report. The 5.x codes are kept verbatim with
+  //  the analyzer so the per-row Export classification
+  //  reconciles with the grid grouping.
+  //
+  //  Patterns that need F4111/F0911 evidence (5.5 net-zero
+  //  pair, 5.7 return-line-mix, 5.13 post-confirm edit, 5.14
+  //  period mismatch, 5.15 R31802A orphan, 5.1 unassigned
+  //  account) can't be detected from grid columns. Rows that
+  //  match no narrower pattern fall into 5.11 here; the
+  //  analyzer reclassifies them when the analyst clicks Export.
+  // =========================================================
+  let _dmaaiIndex = null;
+
+  function buildDmaaiIndex(payload) {
+    const rows = (payload && payload.data) || (Array.isArray(payload) ? payload : []);
+    if (!rows || !rows.length) return null;
+    // Two maps so a (Co|OT|DT|GLClass) lookup can fall back to
+    // a wildcard GLClass entry the way JDE itself resolves AAIs.
+    const exact = new Map();
+    const wild  = new Map();
+    for (const r of rows) {
+      const co  = String(r.CompanyNumber || '').trim();
+      // F4095 right-pads OrderType to width 2 with spaces. Trim both
+      // sides of the lookup so padding-direction edge cases (' S' vs
+      // 'S ') don't break key matching.
+      const ot  = String(r.OrderType     || '').trim();
+      const dt  = String(r.DocType       || '').trim();
+      const gc  = String(r.GLClass       || '').trim();
+      const bu  = String(r.BusUnit       || '').trim();
+      const ob  = String(r.Object        || '').trim();
+      const sub = String(r.Sub           || '').trim();
+      const longAcct = (bu + (ob ? '.' + ob : '') + (sub ? '.' + sub : '')).replace(/\s+/g, '');
+      if (!co || !dt || !longAcct) continue;
+      const key = co + '|' + ot + '|' + dt + '|' + gc;
+      exact.set(key, longAcct);
+      if (gc === '****') wild.set(co + '|' + ot + '|' + dt, longAcct);
+    }
+    return { exact, wild };
+  }
+
+  // Returns { code, label, desc } or null when nothing fires.
+  // Order matters &mdash; narrower / higher-signal patterns
+  // come first so they win over the generic GL-only / cardex-
+  // only fallback when both could apply.
+  function classifyGridRow(row) {
+    const cardex   = Number(row.CardexAmount) || 0;
+    const ledger   = Number(row.LedgerAmount) || 0;
+    const variance = Number(row.Variance)     || 0;
+    const ot = String(row.OT || '').trim().toUpperCase();
+    const dt = String(row.DT || '').trim().toUpperCase();
+    const eps = 0.01;
+
+    // 5.17 Voucher Variance on Inventory &mdash; AP voucher
+    // variance posted directly to inventory (DMAAI 4220 route).
+    if (ot === 'OP' && dt === 'PV') {
+      return { code: '5.17', label: 'Voucher Variance on Inventory (PV)',
+               desc: 'AP voucher variance routed to inventory by DMAAI 4220.' };
+    }
+
+    // 5.16 Manufacturing Cost Mismatch &mdash; cardex unit cost
+    // differs from GL unit cost on work-order completion docs.
+    if (ot === 'WO' && (dt === 'IM' || dt === 'IC' || dt === 'IH')) {
+      return { code: '5.16', label: 'Manufacturing Cost Mismatch',
+               desc: 'Work order completion: cardex unit cost differs from GL unit cost.' };
+    }
+
+    // 5.6 Standard Cost Change &mdash; F4111 cardex revaluation
+    // from a cost roll (R30837 / IB revaluation doc, or BV).
+    if (dt === 'BV' || (dt === 'IB' && Math.abs(ledger) < eps)) {
+      return { code: '5.6', label: 'Standard Cost Change',
+               desc: 'F4111 cardex revaluation from a standard cost change.' };
+    }
+
+    // 5.4 Account Mismatch &mdash; the offset account on this
+    // doc differs from the DMAAI-configured account for the
+    // (Co, OT, DT, GLClass) tuple. Disabled until the DMAAI
+    // index is built (preloadDmaais sets _dmaaiIndex).
+    if (_dmaaiIndex && row.OffsetAccount) {
+      const co = String(row.CompanyNumber || '').trim();
+      const gc = String(row.GLClass       || '').trim();
+      const offsetTrim = String(row.OffsetAccount).replace(/\s+/g, '');
+      if (co && dt) {
+        const expected = _dmaaiIndex.exact.get(co + '|' + ot + '|' + dt + '|' + gc) ||
+                         _dmaaiIndex.wild.get(co  + '|' + ot + '|' + dt);
+        if (expected && expected !== offsetTrim) {
+          return { code: '5.4', label: 'Account Mismatch',
+                   desc: 'Offset account differs from the DMAAI-configured account for this (OT, DT, GL class).' };
+        }
+      }
+    }
+
+    // 5.2 GL-Only Entry (No Cardex) &mdash; manual JE against
+    // an inventory account with no F4111 counterpart.
+    if (Math.abs(cardex) < eps && Math.abs(ledger) >= eps) {
+      return { code: '5.2', label: 'GL-Only Entry (No Cardex)',
+               desc: 'F0911 posting against an inventory account with no F4111 counterpart.' };
+    }
+
+    // 5.3 Cardex-Only Entry (No GL) &mdash; F4111 movement that
+    // never made it to F0911 (likely unposted batch).
+    if (Math.abs(ledger) < eps && Math.abs(cardex) >= eps) {
+      return { code: '5.3', label: 'Cardex-Only Entry (No GL)',
+               desc: 'F4111 movement with no F0911 journal posting.' };
+    }
+
+    // 5.11 fallback &mdash; cardex and GL both posted but
+    // disagree. The analyzer's deeper per-detail classifier
+    // refines this into 5.5 / 5.7 / 5.13 / 5.14 / 5.15 / etc.
+    // when the analyst clicks Export.
+    if (Math.abs(variance) >= eps) {
+      return { code: '5.11', label: 'Other Variance',
+               desc: 'Cardex and GL both posted but disagree &mdash; export the row for full detail analysis.' };
+    }
+    return null;
+  }
+
+  // Stamp _pattern on every row in place. Called whenever
+  // _data.rows is rebuilt (initial load + revalidation) and
+  // again once the DMAAI index lands (so 5.4 can fire).
+  function stampPatterns(rows) {
+    if (!Array.isArray(rows)) return;
+    rows.forEach(r => {
+      const p = classifyGridRow(r);
+      r._pattern    = p ? p.code  : null;
+      r._patternLbl = p ? p.label : null;
+    });
+  }
+
   // Variance breakdown for the slice of rows a card represents.
   // Total = sum of Variance across the slice (worked + unworked).
   // Worked = sum across only the worked rows. Remaining = Total &minus; Worked.
@@ -3107,9 +3262,48 @@
   // attention belongs on what hasn&rsquo;t been triaged), but the
   // breakdown stats are computed across the FULL filtered set so
   // worked/remaining math is meaningful.
+  // Group unworked rows by classifier pattern code. Each
+  // bucket with at least 2 rows becomes a pattern card; the
+  // breakdown stats are computed across the FULL filtered set
+  // (worked + unworked) so the analyst sees how much of the
+  // pattern is already closed out. Click narrows the grid via
+  // _state.activePattern.
+  function buildPatternItems(unworked, allRows) {
+    const byCode = new Map();
+    unworked.forEach(r => {
+      if (!r._pattern) return;
+      const g = byCode.get(r._pattern) || {
+        code:    r._pattern,
+        label:   r._patternLbl || r._pattern,
+        rows:    [],
+        variance: 0
+      };
+      g.rows.push(r);
+      g.variance += Number(r.Variance) || 0;
+      byCode.set(r._pattern, g);
+    });
+    const ranked = [...byCode.values()]
+      .filter(g => g.rows.length >= 2)
+      .sort((a, b) => Math.abs(b.variance) - Math.abs(a.variance));
+    return ranked.map(g => {
+      const slice = allRows.filter(r => r._pattern === g.code);
+      return {
+        eyebrow: 'Pattern ' + g.code,
+        code:    g.label,
+        desc:    '',
+        ...breakdownFor(slice),
+        footer:  'pattern:' + g.code,
+        onclick: () => { _state.activePattern = g.code; }
+      };
+    });
+  }
+
   function buildActionItems(unworked, allRows) {
     if (!unworked.length) return [];
-    const items = [];
+    // Pattern cards come first &mdash; they group by likely root
+    // cause across single-column dimensions. The single-dimension
+    // detectors below stay as a long-tail fallback.
+    const items = buildPatternItems(unworked, allRows);
 
     // -- Largest Type --
     const typeAggU = aggregateBy(unworked, r => r.Type || '').filter(g => g.key);
@@ -3275,6 +3469,7 @@
   function clearCardFilters() {
     _state.activeType    = null;
     _state.activeCompany = null;
+    _state.activePattern = null;
     _state.workedFilter  = 'all';
     _state.exclusions.types      = new Set();
     _state.exclusions.subTypes   = new Set();
@@ -3288,6 +3483,7 @@
   function hasActiveCardFilter() {
     return !!_state.activeType
         || !!_state.activeCompany
+        || !!_state.activePattern
         || _state.workedFilter !== 'all'
         || _state.exclusions.types.size      > 0
         || _state.exclusions.subTypes.size   > 0
@@ -3327,6 +3523,13 @@
     const parts = [];
     if (_state.activeType)    parts.push(_state.activeType);
     if (_state.activeCompany) parts.push('Co ' + _state.activeCompany);
+    if (_state.activePattern) {
+      // Best-effort label: scan _data.rows for the first row with
+      // this pattern code to recover the friendly label.
+      const sample = (_data && _data.rows || []).find(r => r._pattern === _state.activePattern);
+      const label  = (sample && sample._patternLbl) || _state.activePattern;
+      parts.push('Pattern ' + _state.activePattern + ' &mdash; ' + label);
+    }
     function only(setName, universeKey) {
       const set = _state.exclusions[setName];
       const universe = (_data && _data[universeKey]) || [];
@@ -4909,6 +5112,12 @@
     try {
       const payload = await getIntegrityDmaais();
       const rows = (payload && payload.data) || (Array.isArray(payload) ? payload : []);
+      // Build the (Co|OT|DT|GLClass) → expected-account lookup so the
+      // classifier can detect 5.4 Account Mismatch on the next stamp
+      // pass. Intentionally NO renderAll() here — _data may still be
+      // mid-fetch and a concurrent re-render during boot was suspected
+      // of interfering with the inventory/transactions request.
+      _dmaaiIndex = buildDmaaiIndex(payload);
       setAaiStatus('ready', { count: rows.length });
     } catch (err) {
       console.warn('DMAAI preload failed:', err);

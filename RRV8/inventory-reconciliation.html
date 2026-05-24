@@ -3189,7 +3189,7 @@
         </div>
         <div class="contrib-tabs" role="tablist" aria-label="Variance contributor dimension">
           <button class="contrib-tab is-active" type="button" role="tab" aria-selected="true" data-contrib-dim="businessUnits">Business unit</button>
-          <button class="contrib-tab" type="button" role="tab" aria-selected="false" data-contrib-dim="objects">Account</button>
+          <button class="contrib-tab" type="button" role="tab" aria-selected="false" data-contrib-dim="objects">Object</button>
           <button class="contrib-tab" type="button" role="tab" aria-selected="false" data-contrib-dim="subsidiaries">Subsidiary</button>
         </div>
         <div class="contributors-list" id="js-contrib-list">
@@ -5288,7 +5288,9 @@
         // POST the recon request with that scope wrapped as Item arrays.
         const status = await rrFetch('inventory/status');
         const reconFilter = status && status.reconciliationFilter;
-        const period = (reconFilter && reconFilter.period) || currentPeriod;
+        // User's selected period wins over the server's default so
+        // switchPeriod() → loadData() refetches for the picked period.
+        const period = currentPeriod || (reconFilter && reconFilter.period);
         const body = buildProdReconBody(reconFilter, period);
         // Fetch the summary AND the per-tuple rows in parallel.
         // The summary endpoint exists today; the rows endpoint is
@@ -5349,9 +5351,18 @@
   }
 
   function switchPeriod(period) {
+    if (period === currentPeriod) return;
     currentPeriod = period;
     try { localStorage.setItem(PERIOD_LS_KEY, period); } catch (_) {}
-    if (currentData) renderAll(currentData);
+    if (IS_DEMO) {
+      // Demo snapshot carries every period in accountRows[] — recompute
+      // from memory, no refetch needed.
+      if (currentData) renderAll(currentData);
+    } else {
+      // Prod/staging: the agent only returned data for the prior
+      // currentPeriod, so we have to refetch with the new one.
+      loadData();
+    }
   }
 
   // Sidebar nav: carry the current URL's query string forward when
@@ -6291,11 +6302,29 @@
       .sort((a, b) => Math.abs((b[amt] || 0)) - Math.abs((a[amt] || 0)));
   }
 
-  function generateVarianceExcel(componentKey) {
+  async function generateVarianceExcel(componentKey) {
     if (!window.XLSX) { flashStatus('Excel library still loading — try again in a sec'); return; }
     if (!currentData) { flashStatus('No data loaded'); return; }
 
     const meta = COMPONENT_META[componentKey] || { label: componentKey, source: '' };
+
+    // In prod/staging the four view-backed drilldown arrays are only
+    // populated when the preview modal opens (loadVarianceComponentRows
+    // is wired from openVariancePreview). Clicking the Excel icon
+    // directly bypasses the modal, so without this lazy-fetch the
+    // workbook came out with headers + the empty-state sentinel.
+    const cfg = PREVIEW_COLUMNS[componentKey];
+    if (cfg && cfg.source === 'view-backed' && !IS_DEMO &&
+        !_varianceComponentFetched.has(componentKey)) {
+      try {
+        flashStatus('Fetching ' + meta.label + ' rows…');
+        await loadVarianceComponentRows(componentKey, cfg);
+        _varianceComponentFetched.add(componentKey);
+      } catch (err) {
+        showFetchError('inventory/variance-component', err);
+        return;
+      }
+    }
 
     // GL Batches branches to the real per-batch shape from
     // v6_007_unpostedbatches, formatted to match the production
@@ -7318,6 +7347,7 @@
     if (_pollLoopRunning) return;   // single loop per page is enough
     _pollLoopRunning = true;
     const tick = async () => {
+      const t0 = Date.now();
       try {
         const r = await rrFetch('poll');
         const updating = !!(r && (r.updating || r.recalculating));
@@ -7337,6 +7367,16 @@
         // network blip; brief delay before reconnecting so we
         // don&rsquo;t hammer the agent if it&rsquo;s down.
         await new Promise(res => setTimeout(res, 2000));
+      }
+      // Floor the poll cadence at 5s. /poll is supposed to be a ~60s
+      // long-poll (v359 holds the connection until a job-status
+      // change or timeout), but the test agent returns immediately.
+      // Without this floor the loop hammers the agent and starves
+      // other endpoints on the same connection pool.
+      const elapsed = Date.now() - t0;
+      const minWait = 5000;
+      if (elapsed < minWait) {
+        await new Promise(res => setTimeout(res, minWait - elapsed));
       }
       if (_pollLoopRunning) tick();
     };
