@@ -12,7 +12,7 @@ This is the starting point for all things RapidReconciler. The hub provides an o
 
 | Document | Description |
 |----------|-------------|
-| [Roles and Responsibilities](/RapidReconciler-AI/MiscDocs/rapidreconciler-hub.html) | Overview of the key roles and responsibilities for the RapidReconciler application, including system administrators, IT support, and end users. |
+| [Roles and Responsibilities](/RapidReconciler-UI/MiscDocs/rapidreconciler-hub.html) | Overview of the key roles and responsibilities for the RapidReconciler application, including system administrators, IT support, and end users. |
 
 ---
 
@@ -40,6 +40,6 @@ The following examples demonstrate AI-powered analysis of JD Edwards data using 
 
 | Document | Description |
 |----------|-------------|
-| [Inventory Dashboard](/RapidReconciler-AI/DashboardExamples/inventory-dashboard.html)             | Executive summary of inventory reconciliation challenges and how RapidReconciler addresses them  |
-| [In-Transit Dashboard](/RapidReconciler-AI/DashboardExamples/in-transit-dashboard.html)           | Executive
-| [PO Receipts Dashboard Sample](/RapidReconciler-AI/DashboardExamples/po-receipts-dashboard.html)  | Executive summary of PO receipt reconciliation challenges and how RapidReconciler addresses them |
+| [Inventory Dashboard](/RapidReconciler-UI/DashboardExamples/inventory-dashboard.html)             | Executive summary of inventory reconciliation challenges and how RapidReconciler addresses them  |
+| [In-Transit Dashboard](/RapidReconciler-UI/DashboardExamples/in-transit-dashboard.html)           | Executive
+| [PO Receipts Dashboard Sample](/RapidReconciler-UI/DashboardExamples/po-receipts-dashboard.html)  | Executive summary of PO receipt reconciliation challenges and how RapidReconciler addresses them |

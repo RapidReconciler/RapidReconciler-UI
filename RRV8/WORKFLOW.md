@@ -462,7 +462,7 @@ The repo&rsquo;s static server (`.claude/serve.ps1`) is the only
 prerequisite. From a PowerShell window:
 
 ```powershell
-cd C:\source\repos\RapidReconciler-AI
+cd C:\source\repos\RapidReconciler-UI
 .\.claude\serve.ps1
 ```
 
@@ -617,7 +617,7 @@ V8 work follows the same flow as the rest of the repo:
 4. After merge, wait for the bot commits (refresh-indices,
    update-doc-dates) to settle.
 5. Fast-forward the main clone:
-   `git -C "C:/source/repos/RapidReconciler-AI" pull --ff-only origin main`.
+   `git -C "C:/source/repos/RapidReconciler-UI" pull --ff-only origin main`.
 
 V8 commits typically have no `Release-Note:` trailer &mdash; it&rsquo;s
 internal staff-facing design work, not customer-facing changes. Once V8
@@ -651,7 +651,7 @@ complete** &mdash; until then it&rsquo;s frozen, not the dev workflow.
   `rrFetch` to call the planned path, and let it 404 visibly until
   the controller ships. **Do not add a snapshot to make the page
   paint** &mdash; the visible 404 is the signal that an endpoint is
-  missing. See [`feedback_always_spec_new_endpoints`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/feedback_always_spec_new_endpoints.md).
+  missing. See [`feedback_always_spec_new_endpoints`](../../../.claude/projects/C--source-repos-RapidReconciler-UI/memory/feedback_always_spec_new_endpoints.md).
 - Existing snapshot files in `RRV8/data/` and existing demo-mode
   fallbacks stay in place (they keep the deployed GitHub Pages
   preview rendering). Don&rsquo;t extend them; don&rsquo;t add new
@@ -666,7 +666,7 @@ complete** &mdash; until then it&rsquo;s frozen, not the dev workflow.
   silently drops unknown JSON fields, so field names must come from the
   bytecode, not guesswork. Recipe in
   [`RapidReconciler-Agent/docs/jar-mining.md`](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/docs/jar-mining.md). See also the
-  [`reference_rr_agent_jar`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/reference_rr_agent_jar.md)
+  [`reference_rr_agent_jar`](../../../.claude/projects/C--source-repos-RapidReconciler-UI/memory/reference_rr_agent_jar.md)
   memory.
 - **Why this is a tenet:** snapshots hide bugs (stale data, Jackson
   field-name mismatches, permission gating, filter-scope errors).
@@ -675,7 +675,7 @@ complete** &mdash; until then it&rsquo;s frozen, not the dev workflow.
   down to one (the agent) makes every wiring bug surface immediately.
   The deferred demo rebuild gets a clean foundation instead of
   accreted dev-time hacks. Saved as
-  [`feedback_v8_agent_first`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/feedback_v8_agent_first.md).
+  [`feedback_v8_agent_first`](../../../.claude/projects/C--source-repos-RapidReconciler-UI/memory/feedback_v8_agent_first.md).
 
 ### SQL targets the lowest customer compat level
 
@@ -722,7 +722,7 @@ Things to avoid (and their compat-100-safe replacements):
 | JSON functions (130) | XML, or do the work client-side |
 
 Full table + reasoning in
-[`feedback_sql_compat_floor`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/feedback_sql_compat_floor.md).
+[`feedback_sql_compat_floor`](../../../.claude/projects/C--source-repos-RapidReconciler-UI/memory/feedback_sql_compat_floor.md).
 
 ### Finance, not IT
 
@@ -734,7 +734,7 @@ speaks (F4111, F0911, F4101, F41021, DMAAI, AAI, R31802A, GL,
 perpetual, cardex, period close) stay &mdash; they&rsquo;re domain
 language, not jargon. Code comments are exempt; the rule is about
 user-visible text. Saved as
-[`feedback_v8_audience_finance_not_it`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/feedback_v8_audience_finance_not_it.md).
+[`feedback_v8_audience_finance_not_it`](../../../.claude/projects/C--source-repos-RapidReconciler-UI/memory/feedback_v8_audience_finance_not_it.md).
 
 ---
 

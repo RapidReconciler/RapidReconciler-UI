@@ -125,7 +125,7 @@ Catches modern T-SQL syntax that doesn&rsquo;t belong in the
 **Allowed at 140 floor**: `STRING_SPLIT`, `IIF`, `CONCAT`, `TRY_CAST`,
 `OFFSET/FETCH`, JSON functions, `CREATE OR ALTER`, `DROP IF EXISTS`.
 
-**Source of truth**: [`feedback_sql_compat_floor`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/feedback_sql_compat_floor.md).
+**Source of truth**: [`feedback_sql_compat_floor`](../../../.claude/projects/C--source-repos-RapidReconciler-UI/memory/feedback_sql_compat_floor.md).
 
 ### 6. Data-hygiene tenets
 
@@ -249,7 +249,7 @@ When a tier-7 demo shape changes (e.g. the agent ships a new field on
 same commit.
 
 When the agent surface changes (the new agent expected per the
-[`new-agent-incoming`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/project_new_agent_incoming.md)
+[`new-agent-incoming`](../../../.claude/projects/C--source-repos-RapidReconciler-UI/memory/project_new_agent_incoming.md)
 memory), Tier 2 (`rrFetch` endpoint references) and Tier 8 (API.md
 catalog consistency) will likely flag the drift &mdash; that&rsquo;s
 the signal to re-mine the jar and update API.md before fixing the

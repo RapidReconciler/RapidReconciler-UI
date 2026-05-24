@@ -176,12 +176,12 @@
 
   /* Returns the pathname trailing segment used to match a step's `page`.
      Examples:
-       /RapidReconciler-AI/rapidreconciler-help.html        -> rapidreconciler-help.html
-       /RapidReconciler-AI/RRUniversity/rapidreconciler-university.html
+       /RapidReconciler-UI/rapidreconciler-help.html        -> rapidreconciler-help.html
+       /RapidReconciler-UI/RRUniversity/rapidreconciler-university.html
            -> RRUniversity/rapidreconciler-university.html
        /                                                    -> '' (root index)
      Comparison is suffix-based so the tour works under any deploy prefix
-     (GitHub Pages /RapidReconciler-AI/, local file://, etc.). */
+     (GitHub Pages /RapidReconciler-UI/, local file://, etc.). */
   function currentPageKey() {
     var path = location.pathname.replace(/\\/g, '/');
     if (path.endsWith('/')) path += 'rapidreconciler-help.html';

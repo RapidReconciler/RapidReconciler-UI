@@ -11,7 +11,7 @@ the new session at.
 > pass after Inventory ships. Canonical statement in
 > [`WORKFLOW.md`](WORKFLOW.md) &sect; *Production-only until Inventory
 > is complete*; memory at
-> [`feedback_v8_agent_first`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/feedback_v8_agent_first.md).
+> [`feedback_v8_agent_first`](../../../.claude/projects/C--source-repos-RapidReconciler-UI/memory/feedback_v8_agent_first.md).
 >
 > **Test agent owns every V8 endpoint (2026-05-24)**: the
 > green-field per-DB data-services agent at
@@ -245,7 +245,7 @@ Follow-up chunk later the same day:
 
 Highlights of the prior longer session (kept for context):
 
-**As Of page polish ([PR #96](https://github.com/RapidReconciler/RapidReconciler-AI/pull/96))**
+**As Of page polish ([PR #96](https://github.com/RapidReconciler/RapidReconciler-UI/pull/96))**
 
 - **Residual budget filter** &mdash; drop-largest algorithm: start
   with every Qty=0 row hidden, pop biggest-|Amount| outliers until
@@ -285,7 +285,7 @@ Highlights of the prior longer session (kept for context):
 - **Totals row** pinned at the bottom of the grid covering the
   four numeric columns.
 
-**Sidebar accordion ([PR #96](https://github.com/RapidReconciler/RapidReconciler-AI/pull/96))**
+**Sidebar accordion ([PR #96](https://github.com/RapidReconciler/RapidReconciler-UI/pull/96))**
 
 - Scope section is now accordion-collapsible like every module.
   Strict accordion across Scope + Inventory + In Transit + PO
@@ -299,7 +299,7 @@ Highlights of the prior longer session (kept for context):
   As Of / Cardex Variance / DMAAIs until you bounced through
   Transactions. Fix is a one-line boot call from each page.
 
-**Reconciliation page contributors card ([PR #98](https://github.com/RapidReconciler/RapidReconciler-AI/pull/98))**
+**Reconciliation page contributors card ([PR #98](https://github.com/RapidReconciler/RapidReconciler-UI/pull/98))**
 
 - Three contributor cards (BU / Account / Subsidiary) collapsed
   into one tabbed card. Stable height; top 8 with `+ N more` tail;
@@ -310,7 +310,7 @@ Highlights of the prior longer session (kept for context):
 - `adaptLegacyResponse` synthesized rows now carry `outOfBalance`
   so demo / prod shape stays consistent.
 
-**Agent endpoint specs ([PR #98](https://github.com/RapidReconciler/RapidReconciler-AI/pull/98))**
+**Agent endpoint specs ([PR #98](https://github.com/RapidReconciler/RapidReconciler-UI/pull/98))**
 
 - **New `docs/agent-specs/` folder** &mdash; staging area for
   planned-endpoint specs until the `RapidReconciler-Agent` repo
@@ -332,7 +332,7 @@ Highlights of the prior longer session (kept for context):
   `_prodMode && !_hasRowLevelData` so it auto-clears when rows
   arrive.
 
-**Documentation ([PR #97](https://github.com/RapidReconciler/RapidReconciler-AI/pull/97), [PR #96](https://github.com/RapidReconciler/RapidReconciler-AI/pull/96))**
+**Documentation ([PR #97](https://github.com/RapidReconciler/RapidReconciler-UI/pull/97), [PR #96](https://github.com/RapidReconciler/RapidReconciler-UI/pull/96))**
 
 - **`RRV8/TESTING.md`** &mdash; full automated-test-plan spec for
   V8: 8 tiers of checks (syntactic, reference integrity, V8
@@ -419,7 +419,7 @@ Inventory &rarr; As Of &rarr; Cardex Variance.
 >    gotchas + jar-mining recipe. `setup/run-test-agent.ps1`
 >    spawns it on :34537. **Default routing rule: new endpoints
 >    land here, not in v359**
->    ([`feedback_v8_test_agent_default`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/feedback_v8_test_agent_default.md)).
+>    ([`feedback_v8_test_agent_default`](../../../.claude/projects/C--source-repos-RapidReconciler-UI/memory/feedback_v8_test_agent_default.md)).
 > 8. **RapidReconciler-Valc repo** (sibling at
 >    `C:/source/repos/RapidReconciler-Valc`) &mdash; the mini-VALC
 >    broker + control-plane dashboard. The Clients dashboard at
@@ -434,7 +434,7 @@ Inventory &rarr; As Of &rarr; Cardex Variance.
 >    editing; pages are 5-9k lines each.
 > 10. **Recent commits across all three repos**:
 >    ```
->    git -C "C:/source/repos/RapidReconciler-AI"    log --oneline -10
+>    git -C "C:/source/repos/RapidReconciler-UI"    log --oneline -10
 >    git -C "C:/source/repos/RapidReconciler-Agent" log --oneline -10
 >    git -C "C:/source/repos/RapidReconciler-Valc"  log --oneline -10
 >    ```
@@ -1063,7 +1063,7 @@ poller so amber / red / green reflect the live job state.
 
 ## Tools / setup
 
-- **Dev server**: `cd C:\source\repos\RapidReconciler-AI;
+- **Dev server**: `cd C:\source\repos\RapidReconciler-UI;
   .\.claude\serve.ps1` from PowerShell. Page at
   `http://localhost:8765/RRV8/inventory-reconciliation.html`.
   **The owner views in the browser, not the IDE preview panel
