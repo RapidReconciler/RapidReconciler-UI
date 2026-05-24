@@ -1786,6 +1786,48 @@
   COLUMNS.forEach(c => { COLUMNS_BY_KEY[c.key] = c; });
 
   // ============================================================
+  //  ASOF_FETCH_COLUMNS — baseline column set sent to the agent
+  //
+  //  The agent's /inventory/as-of endpoint accepts a `columns: [...]`
+  //  list and strips each row's response Map to only those keys
+  //  before serializing. Cuts the JSON payload (and the browser's
+  //  parse cost) substantially — DevTools profile showed the
+  //  rrFetch microtask sat at ~143 ms on the 35 MB raw JSON body.
+  //
+  //  This baseline includes:
+  //    - Every defaultOn:true grid column (so default render works)
+  //    - Filter dimensions (CompanyNumber, UOM are already in
+  //      defaultOn; no extras needed)
+  //    - Rollup-key fields (covered by defaultOn:true)
+  //    - Lot-detail expansion fields the row-expand renders inline
+  //      (Location, Lot, LotStatus, LotExp, LotBod — without these,
+  //      expanding a rolled-up row would show empty lot rows)
+  //    - Aggregate sources (QtyVar, AmtVar — Quantity/Amount are
+  //      already defaultOn:true)
+  //
+  //  The other ~29 columns (Sales01-10, Purch01-10, ThirdItem,
+  //  ShortItem, CurrCost, CalcCost, ST, CM, Material, Labor,
+  //  Overhead, BranchCompany) are NOT shipped on initial load.
+  //  When the analyst toggles one ON via the column chooser, the
+  //  page refetches with that column added (see ensureColumnsFetched).
+  // ============================================================
+  const ASOF_FETCH_COLUMNS = [
+    'CompanyNumber', 'LongAccount', 'Currency', 'Branch', 'BranchDesc',
+    'ItemNumber',    'Description', 'UOM',      'Quantity', 'Amount',
+    'GLClass',       'Location',    'Lot',      'LotStatus',
+    'LotExp',        'LotBod',      'QtyVar',   'AmtVar'
+  ];
+
+  // Union of ASOF_FETCH_COLUMNS and every currently-visible column.
+  // Computed lazily from _state.colVisibility because chooser
+  // toggles can add columns we didn't ship initially.
+  function wantedColumns() {
+    const out = new Set(ASOF_FETCH_COLUMNS);
+    COLUMNS.forEach(c => { if (_state.colVisibility[c.key]) out.add(c.key); });
+    return out;
+  }
+
+  // ============================================================
   //  STATE + persistence
   // ============================================================
   const COL_LS_KEY       = 'rrv8-asof-columns-v1';
@@ -1939,8 +1981,28 @@
     expanded:      new Set(),  // keys of rolled-up rows the user has expanded
     columnFilters: loadColumnFilters(),
     hideResiduals: loadHideResiduals(),
-    residualTarget: loadResidualTarget()
+    residualTarget: loadResidualTarget(),
+    // Columns the agent has actually shipped to us so far. Starts
+    // empty; populated after each successful loadData() with the
+    // set that was sent in the request. Drives ensureColumnsFetched
+    // — when the user toggles ON a column not in this set, we
+    // refetch instead of just re-rendering empty cells.
+    fetchedColumns: new Set()
   };
+
+  // After a column-chooser toggle, decide whether the new visible
+  // set needs a server roundtrip (a column the user just enabled
+  // isn't in the data we have) or just a local re-render.
+  function ensureColumnsFetched() {
+    const want = wantedColumns();
+    let missing = false;
+    want.forEach(k => { if (!_state.fetchedColumns.has(k)) missing = true; });
+    if (missing) {
+      loadData();   // refetch with the new column set (loadData reads wantedColumns() itself)
+    } else {
+      renderDetails();
+    }
+  }
   // Residual stats are recomputed every filtered pass. The new model:
   // walk Qty=0 rows smallest-|Amount| first, accumulate |Amount| until
   // adding the next would EXCEED the target, hide everything up to
@@ -1992,6 +2054,16 @@
       // pill is instant — no agent roundtrip. Common UOM is also a
       // client-side row filter for now (a future commonUom-through-
       // agent pass would swap this when the conversion math is wired).
+      // Wire-level column projection. The agent's /inventory/as-of
+      // strips each row's response Map to only these keys before
+      // serializing (back-compat: null/empty = ship every column).
+      // Default load = 18 of ~47 columns; column-chooser toggles can
+      // expand this via ensureColumnsFetched(). Cuts both the JSON
+      // payload and the browser's parse cost substantially on the
+      // multi-MB raw body. Snapshot path (demoFile) ignores this
+      // and ships the full snapshot — that's a deployment artifact,
+      // not the hot path.
+      const wantArr = Array.from(wantedColumns());
       const payload = await rrFetch('inventory/as-of', {
         method: 'POST',
         body: {
@@ -2000,6 +2072,7 @@
           commonUom:       '',
           summarizeByItem: false,
           filters: { itemNumber: '', branchPlant: '', location: '', lot: '' },
+          columns: wantArr,
           take: 200000, skip: 0, page: 1, pageSize: 200000
         },
         demoFile: 'as-of'
@@ -2012,8 +2085,15 @@
           totals: payload.aggregates || {},
           rows:   normalizeAsOfRows(payload.data)
         };
+        // Record which columns the agent shipped. Subsequent chooser
+        // toggles use this to decide between refetch and re-render.
+        _state.fetchedColumns = new Set(wantArr);
       } else if (payload && Array.isArray(payload.rows)) {
         _data = payload;
+        // Snapshot (demo) carries every column the original capture
+        // produced; assume all columns are present so the chooser
+        // never tries to refetch in demo mode.
+        _state.fetchedColumns = new Set(COLUMNS.map(c => c.key));
       } else {
         throw new Error('Unexpected response shape — no rows[] or data[]');
       }
@@ -2696,7 +2776,7 @@
       saveColVisibility();
       buildColPopover();
       positionPopover(pop, colPill, { align: 'right' });
-      renderDetails();
+      ensureColumnsFetched();
     });
     pop.querySelector('[data-col-action="reset"]').addEventListener('click', () => {
       COLUMNS.forEach(c => { _state.colVisibility[c.key] = c.defaultOn; });
@@ -2705,7 +2785,7 @@
       saveColOrder();
       buildColPopover();
       positionPopover(pop, colPill, { align: 'right' });
-      renderDetails();
+      ensureColumnsFetched();
     });
     pop.querySelectorAll('.col-vis-row').forEach(row => {
       row.addEventListener('click', (ev) => {
@@ -2717,7 +2797,7 @@
           _state.colVisibility[key] = cb.checked;
           row.classList.toggle('is-muted', !cb.checked);
           saveColVisibility();
-          renderDetails();
+          ensureColumnsFetched();
         }, 0);
       });
     });
