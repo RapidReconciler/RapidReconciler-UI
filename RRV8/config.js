@@ -86,6 +86,7 @@ window.RR_TEST_AGENT_AREAS = [
   //   poll                                      2026-05-24  (System Status 60s poll)
   //   system-status                             2026-05-24  (diagnostic Excel generator)
   //   download-excel/*                          2026-05-24  (diagnostic Excel binary)
+  //   available-periods                         2026-05-24  (closed-period list — FINAL v359 migration)
   'inventory/status',
   'inventory/reconciliation-filtered',
   'inventory/transactions',
@@ -96,7 +97,8 @@ window.RR_TEST_AGENT_AREAS = [
   'inventory/as-of/details',
   'inventory/rollIItem',
   'poll',
-  'system-status'
+  'system-status',
+  'available-periods'
 ];
 
 // Endpoints with a variable path segment that rrFetch needs to route
