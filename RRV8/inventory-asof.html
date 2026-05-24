@@ -791,6 +791,74 @@
   }
 
   /* ============================================================
+     SETUP WARNINGS BAND
+     Surfaced when any of the small per-item setup-integrity reports
+     return rows. Each chip is a count + label; click downloads the
+     rows to Excel. Band hides itself entirely when all reports
+     return zero (the common case in clean dev DBs).
+     ============================================================ */
+  .setup-warnings-band {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 10px 16px;
+    border: 1px solid var(--orange-pale);
+    background: #fffaf2;
+    border-radius: 10px;
+    margin-bottom: 18px;
+    flex-wrap: wrap;
+  }
+  .setup-warnings-band[hidden] { display: none; }
+  .setup-warnings-icon {
+    width: 18px; height: 18px;
+    color: var(--orange-deep);
+    flex-shrink: 0;
+  }
+  .setup-warnings-title {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 800;
+    font-size: 10.5px;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    color: var(--orange-deep);
+    flex-shrink: 0;
+  }
+  .setup-warnings-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .setup-warning-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px;
+    background: #fff;
+    border: 1px solid var(--orange-pale);
+    border-radius: 100px;
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 12.5px;
+    color: var(--text);
+    cursor: pointer;
+    user-select: none;
+    transition: border-color 0.12s, color 0.12s;
+  }
+  .setup-warning-chip:hover {
+    border-color: var(--orange);
+    color: var(--orange-deep);
+  }
+  .setup-warning-chip-count {
+    font-weight: 800;
+    color: var(--orange-deep);
+  }
+  .setup-warning-chip svg {
+    width: 11px; height: 11px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+  .setup-warning-chip:hover svg { color: var(--orange-deep); }
+
+  /* ============================================================
      RESIDUAL FILTER CARD
      ============================================================ */
   .residual-card {
@@ -1471,6 +1539,24 @@
        the Perpetual-page CSS so it reads as a band of bars, not a
        competing card. -->
   <div id="js-period-bars" role="group" aria-label="Period selector — perpetual balance across periods"></div>
+
+  <!-- ============================================================
+       SETUP WARNINGS BAND
+       Per-item setup-integrity reports surfaced inline when any
+       return rows. Chips link to Excel downloads. Hides itself
+       when all three reports return zero. See setup-warnings JS
+       below for the registry; agent whitelist in
+       RapidReconciler-Agent#30.
+       ============================================================ -->
+  <section class="setup-warnings-band" id="setup-warnings-band" hidden aria-label="Setup integrity warnings">
+    <svg class="setup-warnings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+      <line x1="12" y1="9" x2="12" y2="13"/>
+      <line x1="12" y1="17" x2="12.01" y2="17"/>
+    </svg>
+    <span class="setup-warnings-title">Setup warnings</span>
+    <div class="setup-warnings-chips" id="setup-warnings-chips"></div>
+  </section>
 
   <!-- ============================================================
        RESIDUAL FILTER CARD — hide the smallest Quantity = 0 rows up
@@ -3942,6 +4028,118 @@ function updateLotDetailPill() {
   if (analyzeGlClassBtn) {
     analyzeGlClassBtn.addEventListener('click', () => analyzeGlClass(analyzeGlClassBtn));
   }
+
+  // ============================================================
+  //  Setup warnings band
+  //
+  //  Fetches the three per-item setup-integrity reports
+  //  (whitelisted in RapidReconciler-Agent PR #30) in parallel,
+  //  renders a chip for each that returns rows, hides the band
+  //  entirely when all three are empty. Clicking a chip
+  //  downloads the rows for that report to Excel.
+  // ============================================================
+  const SETUP_WARNINGS = [
+    {
+      viewName: 'v_integrity4_uom_conv',
+      label:    'items missing UOM conversion',
+      fileName: 'UOMConversion',
+      demoFile: 'v-integrity4-uom-conv',
+      columns:  ['CompanyNumber', 'BranchPlant', 'ShortItem', 'ItemNumber', 'ThirdItem', 'TransUOM', 'PrimeUOM']
+    },
+    {
+      viewName: 'v_integrity6_duplicate_costs',
+      label:    'items with duplicate cost setups',
+      fileName: 'DuplicateCosts',
+      demoFile: 'v-integrity6-duplicate-costs',
+      columns:  ['CompanyNumber', 'ShortItem', 'ItemNumber', 'Branch', 'Location', 'Lot', 'Method', 'Cost']
+    },
+    {
+      viewName: 'v_integrity8_missing_branch',
+      label:    'items with QOH but missing branch setup',
+      fileName: 'MissingBranch',
+      demoFile: 'v-integrity8-missing-branch',
+      columns:  ['CompanyNumber', 'BranchPlant', 'ShortItem', 'ItemNumber', 'Quantity']
+    }
+  ];
+  // Cache of fetched rows per warning (filled after loadSetupWarnings).
+  // Chips read from here on click so the Excel download doesn't refetch.
+  const _setupWarningRows = new Array(SETUP_WARNINGS.length).fill(null);
+
+  function fetchSetupWarning(w) {
+    return rrFetch('inventory/integrity', {
+      method: 'POST',
+      body: {
+        report: w.viewName,
+        reconciliationFilter: reconciliationFilterFromSession(),
+        take: 5000, skip: 0, page: 1, pageSize: 5000
+      },
+      demoFile: w.demoFile
+    }).catch(err => {
+      console.warn('Setup warning ' + w.viewName + ' fetch failed:', err);
+      return { data: [] };
+    });
+  }
+
+  async function loadSetupWarnings() {
+    const band  = document.getElementById('setup-warnings-band');
+    const chips = document.getElementById('setup-warnings-chips');
+    if (!band || !chips) return;
+    const results = await Promise.all(SETUP_WARNINGS.map(fetchSetupWarning));
+    let html = '';
+    for (let i = 0; i < SETUP_WARNINGS.length; i++) {
+      const w    = SETUP_WARNINGS[i];
+      const rows = (results[i] && results[i].data) ||
+                   (Array.isArray(results[i]) ? results[i] : []);
+      _setupWarningRows[i] = rows;
+      if (!rows.length) continue;
+      html +=
+        '<button type="button" class="setup-warning-chip" data-warning-idx="' + i + '" ' +
+                'title="Click to download these rows to Excel">' +
+          '<span class="setup-warning-chip-count">' + rows.length.toLocaleString('en-US') + '</span>' +
+          '<span>' + escapeHtml(w.label) + '</span>' +
+          '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+            '<path d="M3 10v3h10v-3"/><path d="M8 2v9"/><polyline points="5 8 8 11 11 8"/>' +
+          '</svg>' +
+        '</button>';
+    }
+    if (!html) { band.hidden = true; return; }
+    chips.innerHTML = html;
+    band.hidden = false;
+  }
+
+  function exportSetupWarningExcel(warning, rows) {
+    if (typeof XLSX === 'undefined') {
+      console.warn('Excel library still loading — Setup warning export skipped');
+      return;
+    }
+    if (!rows || !rows.length) return;
+    const aoa = [warning.columns].concat(
+      rows.map(r => warning.columns.map(c => r[c] == null ? '' : r[c]))
+    );
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    XLSX.utils.book_append_sheet(wb, ws, 'Warnings');
+    const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 13);
+    XLSX.writeFile(wb, warning.fileName + '_' + stamp + '.xlsx');
+  }
+
+  // Delegate chip clicks → Excel download for that warning.
+  (function wireSetupWarningChips() {
+    const chips = document.getElementById('setup-warnings-chips');
+    if (!chips) return;
+    chips.addEventListener('click', e => {
+      const chip = e.target.closest('.setup-warning-chip');
+      if (!chip) return;
+      const idx = Number(chip.dataset.warningIdx);
+      if (!Number.isFinite(idx)) return;
+      const w    = SETUP_WARNINGS[idx];
+      const rows = _setupWarningRows[idx];
+      if (w && rows) exportSetupWarningExcel(w, rows);
+    });
+  })();
+
+  // Fire-and-forget on boot. Independent of the main grid fetch.
+  loadSetupWarnings();
 
   // ============================================================
   //  Period bars (shared module)
