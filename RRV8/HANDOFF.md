@@ -24,6 +24,19 @@ the new session at.
 > Set `RR_CONFIG.testAgentBase = null` to disable the test agent on
 > installs that don&rsquo;t run it yet. Launch with
 > `pwsh C:/source/repos/RapidReconciler-Agent/setup/run-test-agent.ps1`.
+>
+> **All five V8 pages now route through `rrFetch`&rsquo;s two-agent
+> split.** Reconciliation, Transactions, As Of, Cardex Variance, and
+> DMAAIs all carry the test-agent area Set. DMAAIs additionally
+> routes three planned overlay endpoints
+> (`inventory/integrity/aai-{analysis-latest,responses,save-responses}`)
+> to the test agent &mdash; they 404 today; spec at
+> [`RapidReconciler-Agent/specs/dmaai-overlay-endpoints.md`](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/specs/dmaai-overlay-endpoints.md)
+> + the canonical design at
+> [`docs/plans/dmaai-page-overlay-table.md`](../docs/plans/dmaai-page-overlay-table.md).
+> Snapshot fallbacks for cross-period history are gone in
+> staging/prod across Reconciliation, Transactions, and As Of (each
+> now sources the bar chart from the live agent).
 
 **Updated**: 2026-05-23, after the contributors-card tabbed rework
 and the row-level reconciliation endpoint spec landed
