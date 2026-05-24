@@ -636,11 +636,19 @@ Inventory &rarr; As Of &rarr; Cardex Variance.
 >    agents (multi-DB ready via `valc.dashboard.agents[]` in
 >    `application.yml`). The JMS broker piece is from earlier
 >    phases &mdash; see Valc&rsquo;s own README for that.
-> 9. **RRV8 pages**: confirm all five exist
+> 9. **RRV8 pages**: confirm all eight exist
 >    (`inventory-reconciliation.html`, `inventory-transactions.html`,
 >    `inventory-asof.html`, `inventory-cardex-variance.html`,
->    `accounting-dmaais.html`). Read targeted sections when
->    editing; pages are 5-9k lines each.
+>    `accounting-dmaais.html`, `admin-companies.html`,
+>    `admin-users.html`). Read targeted sections when editing;
+>    inventory pages are 5-9k lines each; admin pages run ~1k.
+>    The two admin pages talk to different backends &mdash;
+>    Companies hits the data-services agent on :34537
+>    (`rcompanies` lives per-DB on SQL Server); Users hits
+>    mini-VALC on :8080 (`users` lives centrally in
+>    mini-VALC&rsquo;s Postgres because one analyst spans many
+>    customer DBs). config.js routes the third origin via
+>    `RR_VALC_PREFIXES = ['api/v1/admin/']`.
 > 10. **Integrity-reports pass is closed.** All 11 views the
 >    DB exposes are now wired (see the wrap-up table above):
 >    DMAAIs has Model + Exception GL tabs; Transactions
