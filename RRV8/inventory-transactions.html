@@ -3142,7 +3142,7 @@
   //    - Inventory status (the user's GL filter scope —
   //      currencies / companies / BUs / objects / subsidiaries)
   // ============================================================
-  const _scopeMem = { periods: null, status: null, dmaais: null };
+  const _scopeMem = { periods: null, status: null, dmaais: null, crossPeriods: null };
   function _scopeKey(name) {
     const dbName = (window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex] || {}).n || '_';
     return 'rrv8.scope.v1.' + MODE + '.' + dbName + '.' + name;
@@ -3223,14 +3223,50 @@
     _scopeToStorage('dmaais', payload);
     return payload;
   }
+  // Cross-period mismatch report (v_integrity11_crossperiods).
+  // Per-doc grain (Company, DT, Doc, Batch) — drives the 5.14
+  // Period Mismatch detector below. Authoritative source replacing
+  // the prior YYYY-MM(TransDate) vs YYYY-MM(PeriodEnds) heuristic.
+  async function getIntegrityCrossPeriods() {
+    if (_scopeMem.crossPeriods) return _scopeMem.crossPeriods;
+    const cached = _scopeFromStorage('crossPeriods');
+    if (cached) { _scopeMem.crossPeriods = cached; return cached; }
+    let payload;
+    if (IS_DEMO) {
+      payload = await rrFetch('inventory/integrity', { demoFile: 'v-integrity11-crossperiods' });
+    } else {
+      const status = await getInventoryStatus();
+      const rf = (status && status.reconciliationFilter) || {};
+      payload = await rrFetch('inventory/integrity', {
+        method: 'POST',
+        body: {
+          take: 20000, skip: 0, page: 1, pageSize: 20000,
+          report: 'v_integrity11_crossperiods',
+          reconciliationFilter: {
+            currencies:    rf.currencies    || [],
+            companies:     rf.companies     || [],
+            businessUnits: rf.businessUnits || [],
+            objects:       rf.objects       || [],
+            subsidiaries:  rf.subsidiaries  || [],
+            period:        rf.period || '2016-08-27'
+          }
+        }
+      });
+    }
+    _scopeMem.crossPeriods = payload;
+    _scopeToStorage('crossPeriods', payload);
+    return payload;
+  }
   function invalidateScopeCache() {
-    _scopeMem.periods = null;
-    _scopeMem.status  = null;
-    _scopeMem.dmaais  = null;
+    _scopeMem.periods      = null;
+    _scopeMem.status       = null;
+    _scopeMem.dmaais       = null;
+    _scopeMem.crossPeriods = null;
     try {
       sessionStorage.removeItem(_scopeKey('periods'));
       sessionStorage.removeItem(_scopeKey('status'));
       sessionStorage.removeItem(_scopeKey('dmaais'));
+      sessionStorage.removeItem(_scopeKey('crossPeriods'));
     } catch (_) {}
   }
 
@@ -4353,6 +4389,29 @@
   //  analyzer reclassifies them when the analyst clicks Export.
   // =========================================================
   let _dmaaiIndex = null;
+  // Authoritative source for the 5.14 Period Mismatch detector,
+  // built from v_integrity11_crossperiods. Set after the
+  // preloadCrossPeriods() promise resolves. When this is null,
+  // the classifier falls back to the YYYY-MM grid heuristic.
+  let _crossPeriodIndex = null;
+
+  // v_integrity11_crossperiods → Set of "CompanyNumber|DT|Doc"
+  // keys. The view is at per-doc grain; every row here is a real
+  // cross-period mismatch (CardexPeriod != GLPeriod). The grid
+  // row classifier looks each doc up by this key to decide 5.14.
+  function buildCrossPeriodIndex(payload) {
+    const rows = (payload && payload.data) || (Array.isArray(payload) ? payload : []);
+    if (!rows || !rows.length) return new Set();
+    const ix = new Set();
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      const co  = String(r.CompanyNumber || '').trim();
+      const dt  = String(r.DT            || '').trim();
+      const doc = String(r.Doc           || '').trim();
+      if (co && dt && doc) ix.add(co + '|' + dt + '|' + doc);
+    }
+    return ix;
+  }
 
   function buildDmaaiIndex(payload) {
     const rows = (payload && payload.data) || (Array.isArray(payload) ? payload : []);
@@ -4489,14 +4548,31 @@
       }
     }
 
-    // 5.14 — period mismatch / cut-off. The transaction date and
-    // the period this doc is reported in fall in different months,
-    // which usually means the cardex side and the GL side posted
-    // to different periods (timing variance, not a real out-of-
-    // balance). Grid-level heuristic: compare YYYY-MM of TransDate
-    // vs PeriodEnds. The analyzer's deeper per-detail classifier
-    // confirms with F4111 / F0911 date columns on Export.
-    {
+    // 5.14 — period mismatch / cut-off. CardexPeriod != GLPeriod
+    // for this doc (the cardex side and the GL side posted to
+    // different periods — timing variance, not a real out-of-
+    // balance).
+    //
+    // Authoritative source: v_integrity11_crossperiods, preloaded
+    // into _crossPeriodIndex on boot. Lookup by (Co, DT, Doc). The
+    // view enumerates every real cross-period doc; an absence
+    // means this doc is NOT 5.14 even if its TransDate and
+    // PeriodEnds fall in different months (fiscal-calendar edge
+    // cases the YYYY-MM heuristic would have falsely flagged).
+    //
+    // Fallback: when the preload hasn't completed yet, fall back
+    // to the prior YYYY-MM(TransDate) vs YYYY-MM(PeriodEnds) grid
+    // heuristic so the page still produces 5.14 marks during the
+    // brief boot window before the index lands.
+    if (_crossPeriodIndex) {
+      const co  = String(row.CompanyNumber || '').trim();
+      const dtt = String(row.DocType       || '').trim();
+      const doc = String(row.DocNumber     || '').trim();
+      if (co && dtt && doc && _crossPeriodIndex.has(co + '|' + dtt + '|' + doc)) {
+        return '5.14';
+      }
+      // Index present but doc not in it — definitively not 5.14.
+    } else {
       const td = String(row.TransDate  || '').trim();
       const pe = String(row.PeriodEnds || '').trim();
       if (td.length >= 7 && pe.length >= 7 &&
@@ -6957,6 +7033,19 @@
       setAaiStatus('error', err);
     }
   }
+  // v_integrity11_crossperiods preload — drives the 5.14 Period
+  // Mismatch detector. Mirrors preloadDmaais's pattern; same
+  // boot-race concession (no re-stamp after the index lands —
+  // rows only get authoritative 5.14 marks if the preload
+  // completes before stampPatterns runs).
+  async function preloadCrossPeriods() {
+    try {
+      const payload = await getIntegrityCrossPeriods();
+      _crossPeriodIndex = buildCrossPeriodIndex(payload);
+    } catch (err) {
+      console.warn('CrossPeriods preload failed:', err);
+    }
+  }
 
   // ============================================================
   //  Boot
@@ -6967,6 +7056,12 @@
       // Two-phase render: main page renders against /inventory/
       // transactions; the pill flips green once DMAAIs land.
       preloadDmaais();
+      // Cross-periods preload — authoritative 5.14 Period Mismatch
+      // source. Same boot-race trade-off as DMAAIs: rows get the
+      // authoritative mark only if this completes before
+      // stampPatterns() runs; the YYYY-MM heuristic fallback in
+      // classifyGridRow covers the brief window if not.
+      preloadCrossPeriods();
       // System Status light reads the shared sessionStorage cache
       // (instant paint), then refreshes from v_diagnostic5_job_status
       // and starts polling. Same data Reconciliation drives &mdash;
