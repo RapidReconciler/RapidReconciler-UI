@@ -3092,12 +3092,18 @@
       body:    opts.body ? JSON.stringify(opts.body) : undefined
     }).then(r => {
       if (!r.ok) throw new Error('HTTP ' + r.status + ' on ' + url);
-      // Several agent controllers are declared `void` (saves /
-      // status-change endpoints like /inventory/transactions/save-notes),
-      // returning HTTP 200 with an empty body. r.json() throws
-      // &ldquo;Unexpected end of JSON input&rdquo; on an empty string,
-      // so read text first and only parse when there&rsquo;s content.
-      return r.text().then(t => t ? JSON.parse(t) : null);
+      // r.json() parses JSON directly from the body buffer, skipping
+      // the intermediate JS-string allocation that r.text() +
+      // JSON.parse(t) needs. Worth real time on the bulk
+      // /inventory/transactions payload. Several agent controllers
+      // are declared `void` (saves / status-change endpoints like
+      // /inventory/transactions/save-notes), returning HTTP 200 with
+      // an empty body. r.json() throws SyntaxError on empty input —
+      // treat that as null instead of re-throwing.
+      return r.json().catch(e => {
+        if (e instanceof SyntaxError) return null;
+        throw e;
+      });
     });
   }
 
