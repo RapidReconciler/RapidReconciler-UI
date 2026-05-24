@@ -223,8 +223,8 @@
       <div class="sidebar-nav-children">
         <a href="inventory-reconciliation.html" class="sidebar-nav-child${cls('reconciliation')}" data-nav-page="reconciliation">Reconciliation</a>
         <a href="inventory-transactions.html"   class="sidebar-nav-child${cls('transactions')}"   data-nav-page="transactions">Transactions</a>
-        <a href="inventory-asof.html"           class="sidebar-nav-child${cls('asof')}"           data-nav-page="asof">As Of</a>
         <a href="inventory-cardex-variance.html" class="sidebar-nav-child${cls('cardex-variance')}" data-nav-page="cardex-variance">Cardex Variance</a>
+        <a href="inventory-asof.html"           class="sidebar-nav-child${cls('asof')}"           data-nav-page="asof">Perpetual</a>
         <a href="#" class="sidebar-nav-child">Roll Forward</a>
         <a href="#" class="sidebar-nav-child">Integrity</a>
       </div>
@@ -637,6 +637,23 @@
   }
 
   /**
+   * Read the cross-page cached period — the most-recently-published
+   * value across any (mode, db) tuple in this tab. Returns null if
+   * nothing has been published yet. Pages call this at boot so the
+   * period the analyst picked on the previous page persists when they
+   * navigate here. Falls back to a string-or-{period: ...} shape so
+   * callers can use it interchangeably.
+   *
+   * @returns {string|null} ISO YYYY-MM-DD or null
+   */
+  function readCurrentPeriod() {
+    const raw = scanSessionForScope('currentPeriod');
+    if (raw == null) return null;
+    const iso = (typeof raw === 'string') ? raw : (raw && raw.period) || null;
+    return (iso && /^\d{4}-\d{2}-\d{2}$/.test(iso)) ? iso : null;
+  }
+
+  /**
    * Write the page's current period to the cross-page cache so the
    * next page in the navigation sees it. Pages call this whenever
    * their period changes (load, bar-chart click, etc.).
@@ -662,5 +679,6 @@
   global.RRV8.setDmaaiStatus          = setDmaaiStatus;
   global.RRV8.paintSidebarFromCache   = paintSidebarFromCache;
   global.RRV8.publishCurrentPeriod    = publishCurrentPeriod;
+  global.RRV8.readCurrentPeriod       = readCurrentPeriod;
   global.RRV8.ensureInventoryStatus   = ensureInventoryStatus;
 })(window);

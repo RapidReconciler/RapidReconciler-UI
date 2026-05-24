@@ -69,6 +69,116 @@ in `RapidReconciler-Valc/src/main/java/.../dashboard/`
 ([RapidReconciler-Agent#18](https://github.com/RapidReconciler/RapidReconciler-Agent/pull/18))
 caused by SQL nchar padding + missing filter-item labels.
 
+Second follow-up &mdash; **Transactions cost-accountant
+redesign** (this chunk):
+
+- **Variance breakdown card** (was "Start Here"). Four ordered
+  groups now drive the analyst&rsquo;s top-down scan:
+    1. **Account &amp; period mismatches &mdash; perform during close**.
+       5.4 Account Mismatch + 5.14 Period Mismatch share a single
+       top group; checked first because they&rsquo;re the
+       routing / cut-off errors that block close.
+    2. **Patterns &mdash; known failure modes**. Every other 5.x
+       code (5.17 Voucher Variance, 5.16 Mfg Cost Mismatch, 5.6
+       Standard Cost Change, 5.2 GL-Only, 5.3 Cardex-Only, 5.11
+       Other Variance).
+    3. **By module &mdash; what&rsquo;s left**. Sales /
+       Purchasing / Inventory / Manufacturing macro split via the
+       new `moduleOf(row)` classifier (Purchasing pulled out from
+       the existing 3-Type JDE schema using OT/DT heuristics).
+    4. (none) &mdash; single-dimension detectors are retired.
+  **Each row belongs to exactly one card across all groups.**
+  Pattern cards claim rows first; modules see only the leftover
+  universe. Sum of card row counts = total unworked rows in scope.
+- **Card face stays compact**: eyebrow, title, disposition chip
+  (Rebalance / Expense / Self-corrects / Triage &mdash; coded
+  blue / red / green / amber), aging hint (`Aged N days` or
+  `Lingering — X months`), Rows + Total Variance stats (mirrors
+  the breakdown header). Info icon top-right with a hover
+  tooltip carrying "What it is" + "Likely fix" from
+  `PATTERN_INFO` / `MODULE_INFO`. The card is a button to a side
+  panel; the grid is no longer the primary work surface.
+- **Work panel** &mdash; right-side slide-in (~560px) that opens
+  on card click. Layout: card identity + scope &middot; "What it
+  is / Likely fix" block &middot; suggested JE block (5.14 +
+  5.4) &middot; Note textarea + "Mark selected as worked"
+  &middot; backup row list (collapsible, default-closed each
+  open). Apply flow posts to the existing
+  `/inventory/transactions/save-notes`. ESC / backdrop / close
+  button all dismiss. "Open in grid" link in the footer is the
+  power-user escape hatch &mdash; routes back through
+  `applyActionFilter` and auto-expands the Details grid.
+- **Suggested-JE block in the work panel.** Driven by a
+  `ACCRUAL_TEMPLATES` registry keyed on pattern code; ships
+  with two templates today:
+    &middot; **5.14 Period Mismatch** &rarr; period-end accrual.
+    One Dr line per affected `LongAccount` (sum of |Variance|),
+    single Cr offset line totaling the JE. Meta line reminds the
+    analyst to set the auto-reverse flag.
+    &middot; **5.4 Account Mismatch** &rarr; reversal + re-post.
+    Dr per DMAAI-configured (expected) account, Cr per misposted
+    OffsetAccount, both sides aggregated by account. Expected
+    account read from the preloaded `_dmaaiIndex` per row via
+    `dmaaiExpectedFor`; falls back to `(unknown — DMAAI not loaded)`
+    when the integrity preload hasn&rsquo;t completed.
+  **Reactive to filtering** &mdash; both JE tables recompute
+  whenever a row checkbox flips, so the analyst sees the entry
+  shrink as they uncheck rows they&rsquo;re not dispositioning
+  right now. Adding a third pattern is one entry in the
+  registry: heading + help + meta strings + a per-row JE builder.
+- **Hero KPI strip** (Total Variance / Rows Unworked / Worked%)
+  lifted above the period bars. Same data as the breakdown-card
+  scope stats but for the full filtered scope rather than the
+  card-narrowed slice.
+- **Variance contributors widget** &mdash; moved out from below
+  the Start Here card to right under the period bars, matching
+  the Reconciliation page&rsquo;s slot. Collapsible
+  (default-closed). Tabs: Doc Type / Order Type / Sub Type /
+  Type / Company. Click any row to narrow the Details grid
+  through the same `applyActionFilter` flow the cards used to
+  use; this widget is now the "lower-level drill" surface that
+  complements the macro module cards.
+- **Details grid &mdash; less prominent**:
+    &middot; Collapsible card, default-closed. Chevron toggle on
+    the left of the head; analyst expands when they want backup
+    detail. State persists in `localStorage`
+    (`rrv8-tx-details-collapsed-v1`); applyActionFilter
+    auto-expands on "Open in grid" so the narrowed rows are
+    visible immediately.
+    &middot; Worked-filter pill + Update button removed (work
+    happens in the side panel now). Active-filter bar above
+    the grid replaced with an inline "Filtered: … &times;" grid
+    pill that hides when nothing&rsquo;s narrowed.
+- **Sign convention &mdash; final.** Bar chart aggregates
+  `v6ui_raccountsummary.Variance` (stored pre-flipped for OOB
+  contribution) and applies `-1`. KPI tile + breakdown stat +
+  card-face Total Variance sum `r.Variance` from
+  `/inventory/transactions` directly (no flip &mdash; the source
+  is already analyst-signed). The earlier double-flip on KPI /
+  breakdown-stat is gone; July correctly reads negative
+  everywhere now.
+- **Cross-page period scope** &mdash;
+  `RRV8.readCurrentPeriod()` (new on
+  [`sidebar.js`](sidebar.js)) reads the freshest
+  `rrv8.scope.v1.<mode>.<db>.currentPeriod` entry from
+  sessionStorage. Picked up by Reconciliation (boot init) and
+  Transactions (`loadData` period chain). As Of already uses its
+  own equivalent helper. Pick a period on any page &rarr; the
+  others switch to it on next navigation in the same tab.
+- **Sidebar nav** &mdash; Cardex Variance moved above the As Of
+  entry; As Of relabeled to **Perpetual** on the sidebar and on
+  the page header / breadcrumb. (URL still
+  `inventory-asof.html` and `activePage='asof'` so existing
+  cross-page wiring keeps working.)
+- **Reconciliation polish that landed in the same window**:
+    &middot; Variance contributors moved above the variance
+    breakdown so the analyst sees WHERE the variance lives
+    before walking through HOW it&rsquo;s composed; collapsible
+    + default-closed.
+    &middot; Unreconciled-variance total bar softened &mdash;
+    light gradient + thin orange accent stripe, echoes the hero
+    card instead of competing with it.
+
 Follow-up chunk later the same day:
 
 - **Transactions page &mdash; pattern cards.** New grid-level
