@@ -1234,15 +1234,23 @@
   }
   .toast.is-visible { opacity: 1; }
 
-  /* Period-bars sizing inside the page-header */
-  #js-period-bars {
-    width: 420px;
-    height: 80px;
-    flex-shrink: 0;
+  /* ============================================================
+     PERIOD BARS — slim variant for the Perpetual page only.
+     Strips the shared .period-bars card frame (border, shadow,
+     extra padding) so the selector reads as a band of bars under
+     the stats strip rather than a competing card.
+     ============================================================ */
+  #js-period-bars.period-bars {
+    border: none;
+    box-shadow: none;
+    padding: 6px 4px 8px;
+    height: 96px;
+    max-width: none;
+    background: transparent;
+    margin: 0 0 22px;
   }
   @media (max-width: 900px) {
     .stats-strip { grid-template-columns: 1fr; }
-    #js-period-bars { display: none; }
   }
 </style>
 </head>
@@ -1317,7 +1325,6 @@
         </a>
       </h1>
     </div>
-    <div id="js-period-bars" role="group" aria-label="Period selector — perpetual balance across periods"></div>
   </header>
 
   <!-- ============================================================
@@ -1379,6 +1386,12 @@
       </div>
     </div>
   </section>
+
+  <!-- Period bar selector — slim band under the stats strip. The
+       shared .period-bars frame (border + shadow) is overridden in
+       the Perpetual-page CSS so it reads as a band of bars, not a
+       competing card. -->
+  <div id="js-period-bars" role="group" aria-label="Period selector — perpetual balance across periods"></div>
 
   <!-- ============================================================
        RESIDUAL FILTER CARD — hide the smallest Quantity = 0 rows up
@@ -1569,7 +1582,17 @@
       body:    opts.body ? JSON.stringify(opts.body) : undefined
     }).then(r => {
       if (!r.ok) throw new Error('HTTP ' + r.status + ' on ' + url);
-      return r.text().then(t => t ? JSON.parse(t) : null);
+      // r.json() lets the browser parse JSON directly from the body
+      // buffer — skips the intermediate JS-string allocation that
+      // r.text() + JSON.parse(t) needs. Worth real time on the
+      // ~35 MB /inventory/as-of payload (gzip cuts the wire but the
+      // decompressed JSON in memory is still that big). Void agent
+      // controllers return 200 with an empty body — r.json() throws
+      // SyntaxError on that, so treat it as null.
+      return r.json().catch(e => {
+        if (e instanceof SyntaxError) return null;
+        throw e;
+      });
     });
   }
   function reconciliationFilterFromSession() {

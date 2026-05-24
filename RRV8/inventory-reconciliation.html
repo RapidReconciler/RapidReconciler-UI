@@ -3554,11 +3554,16 @@
     };
     return fetch(url, init).then(r => {
       if (!r.ok) throw new Error('HTTP ' + r.status + ' on ' + url);
-      // Some agent controllers are declared `void` and return 200
-      // with an empty body. Read text first and only parse when
-      // there's content; otherwise r.json() throws "Unexpected end
-      // of JSON input."
-      return r.text().then(t => t ? JSON.parse(t) : null);
+      // r.json() parses JSON directly from the body buffer, skipping
+      // the intermediate JS-string allocation that r.text() +
+      // JSON.parse(t) needs. Worth real time on multi-MB payloads
+      // (audit-detail, history, rows). Some agent controllers are
+      // declared `void` and return 200 with an empty body — r.json()
+      // throws SyntaxError on that, so treat it as null.
+      return r.json().catch(e => {
+        if (e instanceof SyntaxError) return null;
+        throw e;
+      });
     });
   }
 
