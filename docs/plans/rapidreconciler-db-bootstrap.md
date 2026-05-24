@@ -17,7 +17,7 @@ deferred — independent).
 Stand up a second private GitHub repo (`RapidReconciler-DB`) that holds the
 product database as an SSDT (`.sqlproj`) project, with source control, release
 artifacts, and inline documentation. The customer-facing docs portal stays in
-this repo (`RapidReconciler-AI`). Each repo gets its own Claude Code session,
+this repo (`RapidReconciler-UI`). Each repo gets its own Claude Code session,
 its own `CLAUDE.md`, and its own permission allowlist.
 
 ## Architecture decisions already locked in
@@ -293,7 +293,7 @@ The product database for RapidReconciler (a GSI product for JD Edwards
 inventory reconciliation). Microsoft SQL Server, managed as a Visual Studio
 SQL Server Database Project (SSDT, `.sqlproj`).
 
-The customer-facing docs portal lives in a separate repo (RapidReconciler-AI).
+The customer-facing docs portal lives in a separate repo (RapidReconciler-UI).
 Don't try to update docs there from this session — switch repos.
 
 ## Repo layout
@@ -610,7 +610,7 @@ Run SchemaSpy from `tools/` on every PR. The generated HTML lives at
 - [ ] `Scripts/PreDeploy.sql` and `Scripts/PostDeploy.sql` reflect any
       release-specific pre / post work.
 - [ ] Customer-facing renames or removals have a corresponding update in
-      the RapidReconciler-AI docs repo (RRUniversity scenarios, Help Desk
+      the RapidReconciler-UI docs repo (RRUniversity scenarios, Help Desk
       runbooks, etc.) — flagged for the docs team to land in parallel.
 
 ## Build
@@ -727,7 +727,7 @@ Out of scope for the bootstrap commit (do later):
 In a fresh Claude Code session, open Claude Code and say:
 
 > "Pick up the plan at `docs/plans/rapidreconciler-db-bootstrap.md` in the
-> RapidReconciler-AI repo. The DB repo is at `<URL>`; clone it to
+> RapidReconciler-UI repo. The DB repo is at `<URL>`; clone it to
 > `C:\source\repos\RapidReconciler-DB`, work through the bootstrap steps
 > starting at step 2, and ask me the convention questions in step 3 before
 > writing CLAUDE.md."

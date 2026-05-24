@@ -25,7 +25,7 @@ modes** with the same codebase:
 
 - **`demo`** &mdash; internal GSI sales / staff use. Offline-capable.
   One static dataset. Deployed to GitHub Pages
-  (`https://rapidreconciler.github.io/RapidReconciler-AI/RRV8/`).
+  (`https://rapidreconciler.github.io/RapidReconciler-UI/RRV8/`).
   Customers never see this.
 - **`prod`** &mdash; real backend. Customers use this. Deployed to
   GSI's central host (today's prod SPA lives at `rr-spa.cloudapp.net`).
@@ -48,7 +48,7 @@ This means `config.js` is **per-environment, not per-customer**:
 
 | Mode | Deploy target | `authBase` | Data source |
 |---|---|---|---|
-| `demo` | `rapidreconciler.github.io/RapidReconciler-AI/RRV8/` | (none) | Static `RRV8/data/*.json` |
+| `demo` | `rapidreconciler.github.io/RapidReconciler-UI/RRV8/` | (none) | Static `RRV8/data/*.json` |
 | `staging` | `staging-rr-spa.azurewebsites.net` | `https://staging-valcspa.cloudapp.net` | Per-DB agent from JWT |
 | `prod` | `rr-spa.cloudapp.net` | `https://rr-valc-spa.cloudapp.net` | Per-DB agent from JWT |
 

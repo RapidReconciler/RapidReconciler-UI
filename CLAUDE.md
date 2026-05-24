@@ -1,7 +1,7 @@
-# RapidReconciler-AI — Project Guide for Claude
+# RapidReconciler-UI — Project Guide for Claude
 
 A static HTML knowledge base for GSI RapidReconciler, deployed via GitHub Pages
-at `https://rapidreconciler.github.io/RapidReconciler-AI/`.
+at `https://rapidreconciler.github.io/RapidReconciler-UI/`.
 
 Three top-level landing pages at the repo root:
 
@@ -23,7 +23,7 @@ Three top-level landing pages at the repo root:
 ## Folder structure
 
 ```
-RapidReconciler-AI/                  ← repo root
+RapidReconciler-UI/                  ← repo root
 ├── rapidreconciler-help.html        ← customer-facing cover (3 destination cards)
 ├── rapidreconciler-hub.html         ← internal staff hub: welcome + sign-in
 ├── rapidreconciler-launchpad.html   ← post-sign-in launchpad (tiled grid, viewMode-filtered)
@@ -115,10 +115,10 @@ prefixes right depending on which file the link is in:
 | Inside `HelpDesk/`            | A scenario file in `Scenarios/`         | `../Scenarios/scenario-foo.html`       |
 
 **Never write `../FOLDER/file.html` from the hub** (which is at root) — the
-`../` traverses above the repo and the URL drops the `RapidReconciler-AI`
+`../` traverses above the repo and the URL drops the `RapidReconciler-UI`
 segment, producing 404s.
 
-**Never write `/RapidReconciler-AI/...`** absolute paths — works only on the
+**Never write `/RapidReconciler-UI/...`** absolute paths — works only on the
 deployed site, breaks every other context.
 
 ---
@@ -529,9 +529,9 @@ versed analyst, not a layperson. Keep that voice:
 ## Deployment
 
 - **GitHub Pages** serves from the repo root.
-- **Site URL**: `https://rapidreconciler.github.io/RapidReconciler-AI/`
+- **Site URL**: `https://rapidreconciler.github.io/RapidReconciler-UI/`
 - **404 handler**: `404.html` redirects URLs that are missing the
-  `/RapidReconciler-AI/` repo-name segment by prepending it.
+  `/RapidReconciler-UI/` repo-name segment by prepending it.
 - **No build step required** for HTML/CSS/JS edits — push, GitHub Pages
   serves immediately.
 - **Search index regeneration** is the only build step; see above.
@@ -616,9 +616,9 @@ versed analyst, not a layperson. Keep that voice:
 
 - **After every PR merge, auto-pull origin/main into the owner's main
   clone — no "say synced" handshake.** The worktree shares its `.git/`
-  dir with the owner's main clone at `C:/source/repos/RapidReconciler-AI`,
+  dir with the owner's main clone at `C:/source/repos/RapidReconciler-UI`,
   so once the bots have settled, run
-  `git -C "C:/source/repos/RapidReconciler-AI" pull --ff-only origin main`
+  `git -C "C:/source/repos/RapidReconciler-UI" pull --ff-only origin main`
   to update the main clone, then fast-forward / reset the worktree
   branch to match. Report the new main SHA + which bot commits landed.
   If the pull fails (uncommitted changes in the main clone, owner on a
