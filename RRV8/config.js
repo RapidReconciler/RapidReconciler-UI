@@ -79,11 +79,13 @@ window.RR_TEST_AGENT_AREAS = [
   //   inventory/transactions                    2026-05-24  (bulk Transactions grid fetch)
   //   inventory/transactions/details            2026-05-24  (per-doc usp6compare2 breakdown)
   //   inventory/transactions/save-notes         2026-05-24  (worknotes upsert)
+  //   inventory/integrity                       2026-05-24  (DMAAIs preload + Cardex Variance grid)
   'inventory/status',
   'inventory/reconciliation-filtered',
   'inventory/transactions',
   'inventory/transactions/details',
-  'inventory/transactions/save-notes'
+  'inventory/transactions/save-notes',
+  'inventory/integrity'
 ];
 
 // Per-mode VALC defaults. Used when RR_CONFIG.authBase is null and
