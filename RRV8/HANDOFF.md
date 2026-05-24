@@ -102,6 +102,63 @@ caused by SQL nchar padding + missing filter-item labels.
   state as the next request&rsquo;s "last seen." The existing 5s
   floor stays as a safety net against any short-circuit.
 
+**Second follow-up chunk &mdash; sidebar restructure + Administrator
+group + Companies page**:
+
+- **Sidebar restructure.** Modules group renamed to **Reconcile**;
+  Scope folded inside as the first accordion item; Administrator
+  promoted to its own top-level group above Reconcile (with three
+  children: Companies, Users, Cardex Deletions). Accounting group
+  removed entirely &mdash; DMAAIs moved to the status panel as a
+  clickable nav row above Inventory Validation. The "Roll Forward"
+  placeholder under Inventory was dropped (legacy feature; user
+  framed it as seldom-used and not worth rebuilding today).
+- **Agent connectivity indicator.** New "Agent" status dot above
+  System Status. Default-green ("assume reachable"); flips red when
+  the `/poll` long-poll&rsquo;s catch fires on Reconciliation or
+  Transactions (network failure, not HTTP 4xx/5xx); auto-recovers on
+  the next successful poll. Last outcome cached in
+  `sessionStorage.rrv8.agentConnectivity.v1` so non-polling pages
+  paint the dot from cache at mount.
+- **Perpetual page label.** Hero "Amount" tile relabeled to
+  **Perpetual Amount** to disambiguate from the Cardex Variance
+  sub-tile&rsquo;s nested Amount label.
+- **Administrator &rarr; Companies page (new).** [`admin-companies.html`](admin-companies.html).
+  Two grid cards: *Licensed Companies* (read from rcompanies, JWT-
+  scoped) and *Not Licensed* (read from `F4111` distinct ilkco minus
+  rcompanies, joined to F0010 for name + ritems for item count + a
+  trailing-12-month F4111 record-count bar chart inline per row,
+  anchored at `MAX(F4111.ildgl)`). Per-row Options icon opens an
+  edit modal (Name / Start Date / AAI Doc / Threshold editable;
+  Company Number + Base Currency read-only) that PUTs to the new
+  endpoint and patches the row in place. Per-row Re-roll icon opens
+  a confirm modal that fires `POST /inventory/rollIItem` for the
+  single company.
+- **Agent endpoints** (new): `GET /admin/companies` returns
+  `{companies[], unlicensed[]}`; `PUT /admin/companies/{n}` updates
+  the four editable rcompanies columns and returns the post-save
+  row. JWT-scoped via the existing `UserRequest.getAllowedCompanies()`.
+  Spec at
+  [`RapidReconciler-Agent/specs/admin-companies.md`](https://github.com/RapidReconciler/repos/RapidReconciler-Agent/blob/Dev/specs/admin-companies.md).
+- **Routing.** `config.js` now adds `'admin/companies'` to
+  `RR_TEST_AGENT_AREAS` and `'admin/companies/'` to
+  `RR_TEST_AGENT_PREFIXES` (the latter covers the per-company PUT).
+
+**Material Usage roll-forward &mdash; built, smoke-tested, fully
+backed out.** Mid-session shipped a two-sheet Material Usage export
+pill on the Perpetual page (Start-date popover + Excel generator)
+plus an agent endpoint over `rtransactions` + `rinvasof` with a
+canonical JDE doc-type bucket map (Receipts / Work Orders /
+Adjustments / Transfers / Shipments / Returns / Other) and Beg/End
+balance snapshots from `rinvasof`. Live-tested clean against the dev
+DB (65k rollup rows / 856k ledger rows for a 2-month range, all
+seven buckets present). Owner then framed the report as "seldom-used,
+not urgent" and asked to drop it; the pill + popover + Java endpoint
++ spec were all removed. **No artifact survives** &mdash; if this
+ever resurfaces, design has to be re-derived (the conversation
+transcript has the bucket map, reconcile math, and `rcompanies` /
+F4111 column conventions if anyone needs to dig).
+
 **Wrap-up session (2026-05-24 PM)** &mdash; three big chunks:
 
 1. **Repo renames + workflow flip.** `RapidReconciler-SQL` &rarr;

@@ -1,0 +1,1017 @@
+<!DOCTYPE html>
+<!--
+  =============================================================================
+  Administrator > Companies
+  =============================================================================
+  Read-only view of the local rcompanies table — the customer's
+  Licensed Companies list as replicated from the central VALC's
+  RCompaniesLic table by the existing Agent + VALC sync.
+
+  Backed by GET /admin/companies (spec at
+  RapidReconciler-Agent/specs/admin-companies.md). JWT-scoped: rows
+  the user can't see in Inventory don't come back.
+
+  Columns: Number / Name / Start Date / Base Currency / AAI Doc /
+  Threshold / Options (icon placeholder) / Re-roll (icon placeholder).
+  Options and Re-roll are intentionally non-functional today — the
+  underlying flows (edit company config, re-roll perpetual) join in
+  follow-up chunks.
+  =============================================================================
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Companies &mdash; RapidReconciler Admin</title>
+<link href="fonts/fonts.css" rel="stylesheet">
+<link href="sidebar.css" rel="stylesheet">
+<script src="config.js"></script>
+<script src="sidebar.js"></script>
+<script src="vendor/xlsx.full.min.js" defer></script>
+<style>
+  :root {
+    --navy:        #1f2d4a;
+    --navy-deep:   #142037;
+    --blue:        #2b5fb0;
+    --blue-bright: #3d8fd6;
+    --blue-pale:   #e6efff;
+    --orange:      #f08a24;
+    --orange-deep: #d97316;
+    --green:       #2e8a55;
+    --red:         #c0392b;
+    --red-pale:    #fce5e1;
+    --bg:          #fafbfd;
+    --bg-soft:     #f3f5f9;
+    --bg-card:     #ffffff;
+    --text:        #1f2d4a;
+    --text-soft:   #4a5468;
+    --text-muted:  #828a9a;
+    --rule:        #e6eaf0;
+    --rule-strong: #cfd6e0;
+    --shadow-sm:   0 1px 2px rgba(20, 32, 55, 0.04);
+    --shadow-md:   0 4px 12px -2px rgba(20, 32, 55, 0.08);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Open Sans', -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2, h3 { font-family: 'Source Sans 3', sans-serif; font-weight: 700; }
+  a { color: inherit; text-decoration: none; }
+
+  .app {
+    display: grid;
+    grid-template-columns: 60px 1fr;
+    grid-template-rows: 56px 1fr;
+    grid-template-areas:
+      "sidebar topbar"
+      "sidebar main";
+    min-height: 100vh;
+  }
+  body.has-pinned-sidebar .app { grid-template-columns: 240px 1fr; }
+
+  .topbar {
+    grid-area: topbar;
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--rule);
+    display: flex;
+    align-items: center;
+    padding: 0 24px;
+    z-index: 50;
+  }
+  .topbar-brand { display: flex; align-items: center; gap: 12px; }
+  .topbar-brand-logo { height: 28px; width: auto; display: block; }
+  .topbar-brand-text { display: flex; flex-direction: column; line-height: 1.15; }
+  .topbar-brand-name {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 800;
+    font-size: 15px;
+    color: var(--navy);
+  }
+  .topbar-brand-db {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 11px;
+    color: var(--text-muted);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .main {
+    grid-area: main;
+    padding: 24px 32px 64px;
+    overflow-y: auto;
+  }
+  .page { max-width: 1280px; margin: 0 auto; }
+
+  /* Page header — matches the V8 standard layout (breadcrumb + title
+     row). No external KB link yet on admin pages. */
+  .page-header { margin-bottom: 18px; }
+  .breadcrumb {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+  }
+  .breadcrumb a { color: var(--text-muted); }
+  .breadcrumb a:hover { color: var(--blue); }
+  .breadcrumb-sep { margin: 0 6px; opacity: 0.6; }
+  .page-title {
+    font-size: 26px;
+    color: var(--navy);
+    font-weight: 800;
+  }
+
+  /* Fetch-error banner — visible-404 over silent-fallback per the
+     agent-first tenet. */
+  .fetch-error {
+    display: none;
+    background: var(--red-pale);
+    border: 1px solid var(--red);
+    color: var(--red);
+    padding: 10px 14px;
+    border-radius: 6px;
+    margin-bottom: 16px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .fetch-error.is-visible { display: block; }
+  .fetch-error code { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+
+  /* Licensed Companies card */
+  .grid-card {
+    background: var(--bg-card);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    box-shadow: var(--shadow-sm);
+    overflow: hidden;
+  }
+  .grid-card-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--rule);
+    background: var(--bg-soft);
+  }
+  .grid-card-title {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 700;
+    font-size: 14px;
+    color: var(--navy);
+    letter-spacing: 0.02em;
+  }
+  .grid-card-count {
+    margin-left: auto;
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .grid-card-count.is-loading { font-style: italic; }
+
+  .grid-table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  .grid-table th {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: var(--text-soft);
+    text-align: left;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--rule-strong);
+    background: var(--bg-soft);
+    white-space: nowrap;
+  }
+  .grid-table th.is-num,
+  .grid-table td.is-num { text-align: right; font-variant-numeric: tabular-nums; }
+  .grid-table th.is-action,
+  .grid-table td.is-action { text-align: center; width: 64px; }
+  .grid-table td {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--rule);
+    font-size: 13.5px;
+    color: var(--text);
+  }
+  .grid-table tr:last-child td { border-bottom: 0; }
+  .grid-table tr:hover td { background: var(--bg-soft); }
+  .grid-table td.is-empty {
+    text-align: center;
+    color: var(--text-muted);
+    padding: 32px 14px;
+    font-style: italic;
+  }
+
+  .row-icon-btn {
+    background: transparent;
+    border: 1px solid var(--rule-strong);
+    border-radius: 4px;
+    padding: 4px 6px;
+    cursor: pointer;
+    color: var(--text-soft);
+    transition: background 0.12s, color 0.12s, border-color 0.12s;
+  }
+  .row-icon-btn:hover { color: var(--blue); border-color: var(--blue); background: var(--blue-pale); }
+  .row-icon-btn svg { width: 13px; height: 13px; display: block; }
+
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%) translateY(20px);
+    background: var(--navy);
+    color: #fff;
+    padding: 10px 18px;
+    border-radius: 6px;
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 600;
+    font-size: 13px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease, transform 0.2s ease;
+    z-index: 100;
+  }
+  .toast.is-visible {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+
+  /* Edit-company modal */
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(20, 32, 55, 0.45);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 200;
+  }
+  .modal-backdrop.is-visible { display: flex; }
+  .modal {
+    background: var(--bg-card);
+    border-radius: 10px;
+    box-shadow: 0 24px 64px -8px rgba(20, 32, 55, 0.30);
+    width: min(560px, 92vw);
+    max-height: 92vh;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+  }
+  .modal-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--rule);
+  }
+  .modal-title {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 700;
+    font-size: 16px;
+    color: var(--navy);
+  }
+  .modal-close {
+    margin-left: auto;
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+    color: var(--text-muted);
+    padding: 4px;
+    border-radius: 4px;
+    display: flex;
+  }
+  .modal-close:hover { color: var(--navy); background: var(--bg-soft); }
+  .modal-close svg { width: 16px; height: 16px; }
+  .modal-body { padding: 18px; }
+  .modal-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px 16px;
+  }
+  .form-field { display: flex; flex-direction: column; gap: 4px; }
+  .form-field-label {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-soft);
+    letter-spacing: 0.04em;
+  }
+  .form-field input {
+    font-family: inherit;
+    font-size: 14px;
+    color: var(--navy);
+    padding: 8px 10px;
+    border: 1px solid var(--rule-strong);
+    border-radius: 5px;
+    background: var(--bg-card);
+    width: 100%;
+  }
+  .form-field input:focus {
+    outline: none;
+    border-color: var(--blue);
+    box-shadow: 0 0 0 2px var(--blue-pale);
+  }
+  .form-field input:disabled,
+  .form-field input[readonly] {
+    background: var(--bg-soft);
+    color: var(--text-soft);
+    cursor: default;
+  }
+  .modal-error {
+    display: none;
+    margin-top: 14px;
+    padding: 8px 12px;
+    background: var(--red-pale);
+    border: 1px solid var(--red);
+    color: var(--red);
+    border-radius: 5px;
+    font-size: 12.5px;
+  }
+  .modal-error.is-visible { display: block; }
+  .modal-foot {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    padding: 12px 18px;
+    border-top: 1px solid var(--rule);
+    background: var(--bg-soft);
+  }
+  .modal-save-btn {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 700;
+    font-size: 13px;
+    background: var(--green);
+    color: #fff;
+    border: 1px solid var(--green);
+    border-radius: 5px;
+    padding: 8px 16px;
+    cursor: pointer;
+  }
+  .modal-save-btn:hover { filter: brightness(1.08); }
+  .modal-save-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+    filter: none;
+  }
+
+  /* Spacing between the two grid cards (Licensed + Not Licensed) */
+  .grid-card + .grid-card { margin-top: 22px; }
+
+  /* Activity bars on the Not Licensed grid — small inline chart per
+     row. Heights are JS-driven (scaled across the whole section so
+     the analyst can compare companies at a glance). */
+  .activity-bars {
+    display: inline-flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 26px;
+    padding: 2px 0;
+  }
+  .activity-bar {
+    width: 8px;
+    background: var(--blue);
+    border-radius: 1px 1px 0 0;
+    transition: opacity 0.12s;
+    min-height: 1px;
+  }
+  .activity-bar.is-empty { background: var(--rule-strong); opacity: 0.45; }
+  .grid-table tr:hover .activity-bar { opacity: 0.85; }
+  .grid-table td.is-activity {
+    /* Don't let a row's vertical padding squeeze the bars to nothing. */
+    padding-top: 6px;
+    padding-bottom: 6px;
+  }
+  .activity-total {
+    display: inline-block;
+    margin-left: 8px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-soft);
+    font-size: 12px;
+    min-width: 36px;
+    text-align: right;
+  }
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <header class="topbar">
+    <div class="topbar-brand">
+      <img class="topbar-brand-logo" src="../Images/gsi-logo.png" alt="GSI">
+      <span class="topbar-brand-text">
+        <span class="topbar-brand-name">RapidReconciler</span>
+        <span class="topbar-brand-db" id="js-topbar-db">RapidReconciler_Dev</span>
+      </span>
+    </div>
+  </header>
+
+  <div id="js-sidebar-mount"></div>
+
+  <div class="toast" id="js-toast" role="status" aria-live="polite"></div>
+
+  <!-- Edit-company modal — opened from the Options icon on each
+       grid row. Populated by the row's cached values at open time;
+       Save Changes PUTs to /admin/companies/{n} and patches the
+       grid row in place on success. -->
+  <div class="modal-backdrop" id="js-edit-modal" role="dialog" aria-modal="true" aria-labelledby="js-edit-title">
+    <div class="modal">
+      <div class="modal-head">
+        <span class="modal-title" id="js-edit-title">Edit company</span>
+        <button type="button" class="modal-close" id="js-edit-close" aria-label="Close">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="3" y1="3" x2="13" y2="13"/><line x1="13" y1="3" x2="3" y2="13"/>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-grid">
+          <div class="form-field">
+            <label class="form-field-label" for="js-edit-number">Company Number</label>
+            <input type="text" id="js-edit-number" readonly>
+          </div>
+          <div class="form-field">
+            <label class="form-field-label" for="js-edit-name">Name</label>
+            <input type="text" id="js-edit-name" maxlength="30">
+          </div>
+          <div class="form-field">
+            <label class="form-field-label" for="js-edit-currency">Base Currency</label>
+            <input type="text" id="js-edit-currency" readonly>
+          </div>
+          <div class="form-field">
+            <label class="form-field-label" for="js-edit-start">Start Date</label>
+            <input type="date" id="js-edit-start">
+          </div>
+          <div class="form-field">
+            <label class="form-field-label" for="js-edit-aaidoc">AAI Doc</label>
+            <input type="text" id="js-edit-aaidoc" maxlength="2">
+          </div>
+          <div class="form-field">
+            <label class="form-field-label" for="js-edit-threshold">Threshold</label>
+            <input type="number" id="js-edit-threshold" step="1">
+          </div>
+        </div>
+        <div class="modal-error" id="js-edit-error" role="alert"></div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="modal-save-btn" id="js-edit-save">Save Changes</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Re-roll confirm modal — opened from the per-row Re-roll icon.
+       Fires POST /inventory/rollIItem (verbatim double-I from v359)
+       which loops dbo.usp6_maint_roll_inventory_from_baseline_comp
+       per company in scope. JWT-scope intersection happens
+       server-side. -->
+  <div class="modal-backdrop" id="js-reroll-modal" role="dialog" aria-modal="true" aria-labelledby="js-reroll-title">
+    <div class="modal" style="width: min(420px, 92vw);">
+      <div class="modal-head">
+        <span class="modal-title" id="js-reroll-title">Re-roll Item</span>
+        <button type="button" class="modal-close" id="js-reroll-close" aria-label="Close">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="3" y1="3" x2="13" y2="13"/><line x1="13" y1="3" x2="3" y2="13"/>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <p style="font-weight: 700; font-size: 14.5px; margin-bottom: 8px;">Are you sure you want to Re-roll?</p>
+        <p style="color: var(--text-soft); font-size: 13px;">
+          Company: <span id="js-reroll-company" style="font-weight: 700; color: var(--navy);"></span>
+        </p>
+        <div class="modal-error" id="js-reroll-error" role="alert"></div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="modal-save-btn" id="js-reroll-confirm">Re-roll</button>
+      </div>
+    </div>
+  </div>
+
+  <main class="main">
+
+    <div class="page">
+
+      <header class="page-header">
+        <nav class="breadcrumb" aria-label="Breadcrumb">
+          <a href="#">Administrator</a><span class="breadcrumb-sep">/</span><span>Companies</span>
+        </nav>
+        <h1 class="page-title">Companies</h1>
+      </header>
+
+      <div class="fetch-error" id="js-fetch-error" role="alert">
+        Couldn&rsquo;t reach <code>/admin/companies</code> &mdash;
+        <span id="js-fetch-error-msg"></span>
+      </div>
+
+      <section class="grid-card" aria-label="Licensed Companies">
+        <div class="grid-card-head">
+          <span class="grid-card-title">Licensed Companies</span>
+          <span class="grid-card-count is-loading" id="js-row-count">Loading&hellip;</span>
+        </div>
+        <table class="grid-table" id="js-companies-table">
+          <thead>
+            <tr>
+              <th>Number</th>
+              <th>Name</th>
+              <th>Start Date</th>
+              <th>Base Currency</th>
+              <th class="is-num">AAI Doc</th>
+              <th class="is-num">Threshold</th>
+              <th class="is-action">Options</th>
+              <th class="is-action">Re-roll</th>
+            </tr>
+          </thead>
+          <tbody id="js-companies-tbody">
+            <tr><td class="is-empty" colspan="8">Loading companies&hellip;</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- Companies with F4111 activity but no rcompanies row.
+           Surfaces "JDE companies that exist on this DB but aren't
+           licensed in RR" — the at-a-glance "is there value in
+           licensing this one?" signal. Bars are last-12-months of
+           F4111 activity anchored at MAX(ildgl), height-scaled
+           globally across the section so cross-company comparison
+           reads at a glance. -->
+      <section class="grid-card" aria-label="Not Licensed Companies">
+        <div class="grid-card-head">
+          <span class="grid-card-title">Not Licensed</span>
+          <span class="grid-card-count is-loading" id="js-unlicensed-count">Loading&hellip;</span>
+        </div>
+        <table class="grid-table" id="js-unlicensed-table">
+          <thead>
+            <tr>
+              <th>Number</th>
+              <th>Name</th>
+              <th class="is-num">Items</th>
+              <th>Activity &middot; 12 mo</th>
+            </tr>
+          </thead>
+          <tbody id="js-unlicensed-tbody">
+            <tr><td class="is-empty" colspan="4">Loading&hellip;</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+    </div>
+
+  </main>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ---------- mode + rrFetch (mirrors the convention on every V8 page) ----------
+  const RR_CONFIG = window.RR_CONFIG || {};
+  const URL_MODE  = new URLSearchParams(window.location.search).get('mode');
+  const MODE      = URL_MODE || RR_CONFIG.mode || 'demo';
+  const IS_DEMO   = (MODE === 'demo');
+
+  const _testAgentAreas    = new Set(window.RR_TEST_AGENT_AREAS || []);
+  const _testAgentPrefixes = window.RR_TEST_AGENT_PREFIXES || ['download-excel/'];
+  function _routesToTestAgent(area) {
+    if (_testAgentAreas.has(area)) return true;
+    for (let i = 0; i < _testAgentPrefixes.length; i++) {
+      if (area.startsWith(_testAgentPrefixes[i])) return true;
+    }
+    return false;
+  }
+  function prodHeaders(contentType) {
+    const h = { 'Accept': 'application/json' };
+    try {
+      const token = localStorage.getItem('rrv8.token');
+      if (token) h['Authorization'] = 'Bearer ' + token;
+    } catch (_) {}
+    if (contentType) h['Content-Type'] = contentType;
+    return h;
+  }
+  function rrFetch(area, opts) {
+    opts = opts || {};
+    if (IS_DEMO) {
+      // Per the production-only tenet: no new admin snapshots get
+      // added. Demo mode for an admin page just surfaces the
+      // 404 from the missing file — visible failure beats silent
+      // fallback.
+      const file = (opts.demoFile || area) + '.json';
+      return fetch((RR_CONFIG.dataPath || 'data/') + file, { cache: 'no-store' })
+        .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status + ' on ' + file); return r.json(); });
+    }
+    let base;
+    if (_routesToTestAgent(area)) {
+      base = RR_CONFIG.testAgentBase || 'http://localhost:34537';
+    } else {
+      const sess = window.RR_SESSION;
+      const db = sess && sess.dbs && sess.dbs[sess.activeDbIndex || 0];
+      if (!db || !db.ip) {
+        return Promise.reject(new Error(
+          'No active DB. Sign in on the Reconciliation page first.'));
+      }
+      base = 'https://' + db.ip;
+    }
+    const url = base + '/' + area +
+      (opts.query ? '?' + new URLSearchParams(opts.query) : '');
+    const init = {
+      method:  opts.method || 'GET',
+      headers: prodHeaders(opts.body ? 'application/json;charset=UTF-8' : null),
+      body:    opts.body ? JSON.stringify(opts.body) : undefined
+    };
+    return fetch(url, init).then(r => {
+      if (!r.ok) throw new Error('HTTP ' + r.status + ' on ' + url);
+      return r.json().catch(e => e instanceof SyntaxError ? null : Promise.reject(e));
+    });
+  }
+
+  // ---------- toast / error helpers ----------
+  function toast(msg) {
+    const el = document.getElementById('js-toast');
+    if (!el) return;
+    el.textContent = msg;
+    el.classList.add('is-visible');
+    setTimeout(() => el.classList.remove('is-visible'), 2400);
+  }
+  function showFetchError(err) {
+    const banner = document.getElementById('js-fetch-error');
+    const msg    = document.getElementById('js-fetch-error-msg');
+    if (banner && msg) {
+      msg.textContent = (err && err.message) || 'fetch failed';
+      banner.classList.add('is-visible');
+    }
+    // Agent-connectivity dot follows the same network-failure pattern
+    // the poll loops use.
+    if (window.RRV8 && window.RRV8.setAgentConnectivity &&
+        err && (err instanceof TypeError ||
+                /failed to fetch|network/i.test(err.message || ''))) {
+      window.RRV8.setAgentConnectivity('unreachable', { message: err.message });
+    }
+  }
+
+  // ---------- render ----------
+  const SVG_EDIT =
+    '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' +
+      '<path d="M11 2l3 3-8 8H3v-3z"/>' +
+      '<path d="M10 3l3 3"/>' +
+    '</svg>';
+  const SVG_REROLL =
+    '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' +
+      '<path d="M3 8a5 5 0 0 1 9-3"/>' +
+      '<path d="M12 3v3h-3"/>' +
+      '<path d="M13 8a5 5 0 0 1-9 3"/>' +
+      '<path d="M4 13v-3h3"/>' +
+    '</svg>';
+
+  function fmt(v) {
+    if (v === null || v === undefined || v === '') return '&mdash;';
+    return String(v).replace(/[&<>"']/g, ch =>
+      ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  }
+  function fmtNum(v) {
+    if (v === null || v === undefined || v === '') return '&mdash;';
+    const n = Number(v);
+    if (!isFinite(n)) return fmt(v);
+    return n.toLocaleString('en-US');
+  }
+
+  // Local cache of the last fetched rows, keyed by companyNumber so
+  // the edit modal can preload values from memory + patch the row
+  // in place after a successful Save (no full re-GET).
+  const _rowsByNumber = new Map();
+
+  function renderCompanies(rows) {
+    const tbody = document.getElementById('js-companies-tbody');
+    const count = document.getElementById('js-row-count');
+    if (!tbody) return;
+    _rowsByNumber.clear();
+    (rows || []).forEach(r => { if (r && r.companyNumber) _rowsByNumber.set(r.companyNumber, r); });
+    if (!rows || rows.length === 0) {
+      tbody.innerHTML =
+        '<tr><td class="is-empty" colspan="8">No licensed companies in scope.</td></tr>';
+      if (count) {
+        count.textContent = '0 companies';
+        count.classList.remove('is-loading');
+      }
+      return;
+    }
+    const html = rows.map(rowHtml).join('');
+    tbody.innerHTML = html;
+    if (count) {
+      count.textContent = rows.length.toLocaleString('en-US') +
+        (rows.length === 1 ? ' company' : ' companies');
+      count.classList.remove('is-loading');
+    }
+  }
+
+  // One row's <tr> markup. Extracted so we can patch a single row
+  // after a successful PUT without re-rendering the whole table.
+  function rowHtml(r) {
+    return '<tr data-company="' + fmt(r.companyNumber) + '">' +
+      '<td>' + fmt(r.companyNumber) + '</td>' +
+      '<td>' + fmt(r.name) + '</td>' +
+      '<td>' + fmt(r.startDate) + '</td>' +
+      '<td>' + fmt(r.currencyCode) + '</td>' +
+      '<td class="is-num">' + fmtNum(r.aaiDoc) + '</td>' +
+      '<td class="is-num">' + fmtNum(r.threshold) + '</td>' +
+      '<td class="is-action">' +
+        '<button type="button" class="row-icon-btn" data-action="edit" data-company="' + fmt(r.companyNumber) + '" title="Edit company settings" aria-label="Edit">' +
+          SVG_EDIT +
+        '</button>' +
+      '</td>' +
+      '<td class="is-action">' +
+        '<button type="button" class="row-icon-btn" data-action="reroll" data-company="' + fmt(r.companyNumber) + '" title="Re-roll the perpetual for this company" aria-label="Re-roll">' +
+          SVG_REROLL +
+        '</button>' +
+      '</td>' +
+    '</tr>';
+  }
+
+  function patchRow(row) {
+    if (!row || !row.companyNumber) return;
+    _rowsByNumber.set(row.companyNumber, row);
+    const tr = document.querySelector(
+      '#js-companies-tbody tr[data-company="' + row.companyNumber.replace(/"/g, '\\"') + '"]');
+    if (!tr) return;
+    const tmp = document.createElement('tbody');
+    tmp.innerHTML = rowHtml(row);
+    tr.parentNode.replaceChild(tmp.firstElementChild, tr);
+  }
+
+  // ---------- Not Licensed grid + bar chart ----------
+  function renderUnlicensed(rows) {
+    const tbody = document.getElementById('js-unlicensed-tbody');
+    const count = document.getElementById('js-unlicensed-count');
+    if (!tbody) return;
+    if (!rows || rows.length === 0) {
+      tbody.innerHTML =
+        '<tr><td class="is-empty" colspan="4">No unlicensed JDE companies have F4111 activity on this DB.</td></tr>';
+      if (count) {
+        count.textContent = '0 companies';
+        count.classList.remove('is-loading');
+      }
+      return;
+    }
+    // Global max across every (company, month) cell — height-scaling
+    // by this max means the analyst can compare across rows: a tall
+    // bar in one company's chart represents more activity than a
+    // tall bar in another's.
+    let globalMax = 0;
+    rows.forEach(r => (r.activityByMonth || []).forEach(m => {
+      if (m && m.count > globalMax) globalMax = m.count;
+    }));
+    const html = rows.map(r => {
+      const months = r.activityByMonth || [];
+      const total  = months.reduce((s, m) => s + (m && m.count ? m.count : 0), 0);
+      const bars   = months.map(m => {
+        const v = (m && m.count) || 0;
+        const h = (globalMax > 0)
+          ? Math.max(1, Math.round((v / globalMax) * 24))   // 26px container, leave 2px padding
+          : 1;
+        const cls = v === 0 ? 'activity-bar is-empty' : 'activity-bar';
+        const titleAttr = ' title="' + fmt(m && m.month || '') + ' &middot; ' +
+                          v.toLocaleString('en-US') + ' rec' + (v === 1 ? '' : 's') + '"';
+        return '<span class="' + cls + '" style="height:' + h + 'px"' + titleAttr + '></span>';
+      }).join('');
+      return '<tr>' +
+        '<td>' + fmt(r.companyNumber) + '</td>' +
+        '<td>' + fmt(r.name) + '</td>' +
+        '<td class="is-num">' + fmtNum(r.itemCount) + '</td>' +
+        '<td class="is-activity">' +
+          '<span class="activity-bars" aria-label="Trailing 12 months of F4111 activity">' + bars + '</span>' +
+          '<span class="activity-total">' + total.toLocaleString('en-US') + '</span>' +
+        '</td>' +
+      '</tr>';
+    }).join('');
+    tbody.innerHTML = html;
+    if (count) {
+      count.textContent = rows.length.toLocaleString('en-US') +
+        (rows.length === 1 ? ' company' : ' companies');
+      count.classList.remove('is-loading');
+    }
+  }
+
+  // ---------- edit modal ----------
+  let _editingNumber = null;
+
+  function openEditModal(companyNumber) {
+    const row = _rowsByNumber.get(companyNumber);
+    if (!row) { toast('Row not loaded — refresh and try again'); return; }
+    _editingNumber = companyNumber;
+    document.getElementById('js-edit-title').textContent = row.name || ('Company ' + companyNumber);
+    document.getElementById('js-edit-number').value    = row.companyNumber || '';
+    document.getElementById('js-edit-name').value      = row.name || '';
+    document.getElementById('js-edit-currency').value  = row.currencyCode || '';
+    document.getElementById('js-edit-start').value     = row.startDate || '';
+    document.getElementById('js-edit-aaidoc').value    = row.aaiDoc || '';
+    document.getElementById('js-edit-threshold').value =
+      (row.threshold === null || row.threshold === undefined) ? '' : row.threshold;
+    document.getElementById('js-edit-error').classList.remove('is-visible');
+    document.getElementById('js-edit-error').textContent = '';
+    document.getElementById('js-edit-modal').classList.add('is-visible');
+    setTimeout(() => document.getElementById('js-edit-name').focus(), 0);
+  }
+
+  function closeEditModal() {
+    _editingNumber = null;
+    document.getElementById('js-edit-modal').classList.remove('is-visible');
+  }
+
+  function showModalError(msg) {
+    const el = document.getElementById('js-edit-error');
+    el.textContent = msg;
+    el.classList.add('is-visible');
+  }
+
+  function saveEditModal() {
+    if (!_editingNumber) return;
+    const name      = document.getElementById('js-edit-name').value.trim();
+    const startDate = document.getElementById('js-edit-start').value;
+    const aaiDoc    = document.getElementById('js-edit-aaidoc').value.trim();
+    const thrRaw    = document.getElementById('js-edit-threshold').value;
+    if (!name)        { showModalError('Name is required'); return; }
+    if (name.length > 30) { showModalError('Name must be 30 characters or fewer'); return; }
+    if (!startDate)   { showModalError('Start Date is required'); return; }
+    if (aaiDoc.length > 2) { showModalError('AAI Doc must be 2 characters or fewer'); return; }
+    if (thrRaw === '' || isNaN(Number(thrRaw))) { showModalError('Threshold must be a whole number'); return; }
+    const threshold = parseInt(thrRaw, 10);
+
+    const saveBtn = document.getElementById('js-edit-save');
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving…';
+
+    const number = _editingNumber;
+    rrFetch('admin/companies/' + encodeURIComponent(number), {
+      method: 'PUT',
+      body:   { name: name, startDate: startDate, aaiDoc: aaiDoc, threshold: threshold }
+    })
+      .then(resp => {
+        patchRow(resp);
+        closeEditModal();
+        toast('Saved ' + number);
+      })
+      .catch(err => {
+        // The agent returns 400 with a JSON body { message: '...' }.
+        // The HTTP NNN our rrFetch throws doesn't carry the body, so
+        // fall back to the error message we got.
+        const m = (err && err.message) || 'save failed';
+        showModalError(m);
+      })
+      .finally(() => {
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Save Changes';
+      });
+  }
+
+  // Wire edit-modal dismissals once.
+  (function wireEditModal() {
+    const backdrop = document.getElementById('js-edit-modal');
+    document.getElementById('js-edit-close').addEventListener('click', closeEditModal);
+    backdrop.addEventListener('click', (e) => {
+      if (e.target === backdrop) closeEditModal();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && backdrop.classList.contains('is-visible')) closeEditModal();
+    });
+    document.getElementById('js-edit-save').addEventListener('click', saveEditModal);
+  })();
+
+  // ---------- re-roll confirm modal ----------
+  // SQL Server serializes concurrent rolls of the same company via
+  // row locks on rperpetualinv/rinvasof, so cross-user double-fires
+  // queue safely. Local button-disable covers the same-tab
+  // double-click case.
+  let _rerollingNumber = null;
+
+  function openRerollModal(companyNumber) {
+    if (!_rowsByNumber.has(companyNumber)) {
+      toast('Row not loaded — refresh and try again'); return;
+    }
+    _rerollingNumber = companyNumber;
+    document.getElementById('js-reroll-company').textContent = companyNumber;
+    document.getElementById('js-reroll-error').classList.remove('is-visible');
+    document.getElementById('js-reroll-error').textContent = '';
+    const btn = document.getElementById('js-reroll-confirm');
+    btn.disabled = false;
+    btn.textContent = 'Re-roll';
+    document.getElementById('js-reroll-modal').classList.add('is-visible');
+    setTimeout(() => btn.focus(), 0);
+  }
+
+  function closeRerollModal() {
+    _rerollingNumber = null;
+    document.getElementById('js-reroll-modal').classList.remove('is-visible');
+  }
+
+  function confirmReroll() {
+    if (!_rerollingNumber) return;
+    const number = _rerollingNumber;
+    const btn = document.getElementById('js-reroll-confirm');
+    const err = document.getElementById('js-reroll-error');
+    btn.disabled = true;
+    btn.textContent = 'Re-rolling…';
+    err.classList.remove('is-visible');
+
+    rrFetch('inventory/rollIItem', {
+      method: 'POST',
+      body:   { reconciliationFilter: { companies: [number] } }
+    })
+      .then(resp => {
+        const n = (resp && resp.rolledCompanies) || 0;
+        closeRerollModal();
+        if (n > 0) {
+          toast('Re-rolled ' + number);
+        } else {
+          // Agent skipped it (out-of-scope / sproc threw). Surface
+          // honestly rather than claiming success.
+          toast('Re-roll for ' + number + ' didn’t complete — check the agent log');
+        }
+      })
+      .catch(e => {
+        const m = (e && e.message) || 're-roll failed';
+        err.textContent = m;
+        err.classList.add('is-visible');
+        btn.disabled = false;
+        btn.textContent = 'Re-roll';
+      });
+  }
+
+  // Wire re-roll-modal dismissals once.
+  (function wireRerollModal() {
+    const backdrop = document.getElementById('js-reroll-modal');
+    document.getElementById('js-reroll-close').addEventListener('click', closeRerollModal);
+    backdrop.addEventListener('click', (e) => {
+      if (e.target === backdrop) closeRerollModal();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && backdrop.classList.contains('is-visible')) closeRerollModal();
+    });
+    document.getElementById('js-reroll-confirm').addEventListener('click', confirmReroll);
+  })();
+
+  // ---------- boot ----------
+  if (window.RRV8 && typeof window.RRV8.mountSidebar === 'function') {
+    window.RRV8.mountSidebar({ activePage: 'admin-companies' });
+  }
+  // Fire-and-forget filter-universe seed so other pages have a warm
+  // sidebar cache after the analyst visits this one.
+  if (window.RRV8 && typeof window.RRV8.ensureInventoryStatus === 'function') {
+    try { window.RRV8.ensureInventoryStatus(rrFetch); } catch (_) {}
+  }
+
+  // Action handlers — Edit opens the edit modal; Re-roll opens the
+  // confirm modal which fires /inventory/rollIItem on Yes.
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-action]');
+    if (!btn) return;
+    const action = btn.dataset.action;
+    const co     = btn.dataset.company;
+    if (action === 'edit') {
+      openEditModal(co);
+    } else if (action === 'reroll') {
+      openRerollModal(co);
+    }
+  });
+
+  // Main fetch — one round trip returns both arrays.
+  rrFetch('admin/companies')
+    .then(resp => {
+      renderCompanies(resp && resp.companies);
+      renderUnlicensed(resp && resp.unlicensed);
+    })
+    .catch(err => {
+      showFetchError(err);
+      const licTbody = document.getElementById('js-companies-tbody');
+      if (licTbody) {
+        licTbody.innerHTML =
+          '<tr><td class="is-empty" colspan="8">Couldn&rsquo;t load companies. See the error banner above.</td></tr>';
+      }
+      const licCount = document.getElementById('js-row-count');
+      if (licCount) {
+        licCount.textContent = 'Error';
+        licCount.classList.remove('is-loading');
+      }
+      const unTbody = document.getElementById('js-unlicensed-tbody');
+      if (unTbody) {
+        unTbody.innerHTML =
+          '<tr><td class="is-empty" colspan="4">&mdash;</td></tr>';
+      }
+      const unCount = document.getElementById('js-unlicensed-count');
+      if (unCount) {
+        unCount.textContent = 'Error';
+        unCount.classList.remove('is-loading');
+      }
+    });
+
+})();
+</script>
+
+</body>
+</html>
