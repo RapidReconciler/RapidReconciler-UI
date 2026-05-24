@@ -3142,7 +3142,7 @@
   //    - Inventory status (the user's GL filter scope —
   //      currencies / companies / BUs / objects / subsidiaries)
   // ============================================================
-  const _scopeMem = { periods: null, status: null, dmaais: null, crossPeriods: null };
+  const _scopeMem = { periods: null, status: null, dmaais: null, crossPeriods: null, duplicateSales: null };
   function _scopeKey(name) {
     const dbName = (window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex] || {}).n || '_';
     return 'rrv8.scope.v1.' + MODE + '.' + dbName + '.' + name;
@@ -3257,16 +3257,53 @@
     _scopeToStorage('crossPeriods', payload);
     return payload;
   }
+  // Duplicate-sales report (v_integrity10_duplicate_sales). Sales
+  // order lines with multiple F4111 records — drives the 5.18
+  // Duplicate Sales pattern card. View grain is per-line; V8
+  // matches at (Co, OT, Order) since the grid doesn't carry
+  // LineID — flags the whole order when any line is duplicated.
+  async function getIntegrityDuplicateSales() {
+    if (_scopeMem.duplicateSales) return _scopeMem.duplicateSales;
+    const cached = _scopeFromStorage('duplicateSales');
+    if (cached) { _scopeMem.duplicateSales = cached; return cached; }
+    let payload;
+    if (IS_DEMO) {
+      payload = await rrFetch('inventory/integrity', { demoFile: 'v-integrity10-duplicate-sales' });
+    } else {
+      const status = await getInventoryStatus();
+      const rf = (status && status.reconciliationFilter) || {};
+      payload = await rrFetch('inventory/integrity', {
+        method: 'POST',
+        body: {
+          take: 5000, skip: 0, page: 1, pageSize: 5000,
+          report: 'v_integrity10_duplicate_sales',
+          reconciliationFilter: {
+            currencies:    rf.currencies    || [],
+            companies:     rf.companies     || [],
+            businessUnits: rf.businessUnits || [],
+            objects:       rf.objects       || [],
+            subsidiaries:  rf.subsidiaries  || [],
+            period:        rf.period || '2016-08-27'
+          }
+        }
+      });
+    }
+    _scopeMem.duplicateSales = payload;
+    _scopeToStorage('duplicateSales', payload);
+    return payload;
+  }
   function invalidateScopeCache() {
-    _scopeMem.periods      = null;
-    _scopeMem.status       = null;
-    _scopeMem.dmaais       = null;
-    _scopeMem.crossPeriods = null;
+    _scopeMem.periods        = null;
+    _scopeMem.status         = null;
+    _scopeMem.dmaais         = null;
+    _scopeMem.crossPeriods   = null;
+    _scopeMem.duplicateSales = null;
     try {
       sessionStorage.removeItem(_scopeKey('periods'));
       sessionStorage.removeItem(_scopeKey('status'));
       sessionStorage.removeItem(_scopeKey('dmaais'));
       sessionStorage.removeItem(_scopeKey('crossPeriods'));
+      sessionStorage.removeItem(_scopeKey('duplicateSales'));
     } catch (_) {}
   }
 
@@ -4394,6 +4431,13 @@
   // preloadCrossPeriods() promise resolves. When this is null,
   // the classifier falls back to the YYYY-MM grid heuristic.
   let _crossPeriodIndex = null;
+  // Authoritative source for the 5.18 Duplicate Sales detector,
+  // built from v_integrity10_duplicate_sales. Set of
+  // "Company|OT|OrderNumber" keys; the classifier looks each
+  // row up by (CompanyNumber, OT, OrderNumber). When this is
+  // null, 5.18 doesn't fire (no fallback — there's no grid
+  // heuristic that could spot duplicates without the view).
+  let _duplicateSalesIndex = null;
 
   // v_integrity11_crossperiods → Set of "CompanyNumber|DT|Doc"
   // keys. The view is at per-doc grain; every row here is a real
@@ -4409,6 +4453,27 @@
       const dt  = String(r.DT            || '').trim();
       const doc = String(r.Doc           || '').trim();
       if (co && dt && doc) ix.add(co + '|' + dt + '|' + doc);
+    }
+    return ix;
+  }
+
+  // v_integrity10_duplicate_sales → Set of "Company|OT|Order"
+  // keys. View grain is per-line (Co, Order, OT, LineID); V8
+  // matches at (Co, OT, Order) since the Transactions grid
+  // doesn't carry LineID — flags the whole order when any of
+  // its lines is duplicated. Acceptable over-flag: duplicate-
+  // sales is typically an order-level re-entry, not a single
+  // mis-keyed line.
+  function buildDuplicateSalesIndex(payload) {
+    const rows = (payload && payload.data) || (Array.isArray(payload) ? payload : []);
+    if (!rows || !rows.length) return new Set();
+    const ix = new Set();
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      const co    = String(r.CompanyNumber || '').trim();
+      const ot    = String(r.OrderType     || '').trim();
+      const order = String(r.OrderNumber   || '').trim();
+      if (co && ot && order) ix.add(co + '|' + ot + '|' + order);
     }
     return ix;
   }
@@ -4502,6 +4567,12 @@
       desc:   'Cardex and GL both posted but disagree, and the variance doesn\'t fit a narrower grid-level pattern.',
       action: 'Click Export on a representative row — the analyzer reads F4111 / F0911 detail and refines into 5.5 / 5.7 / 5.13 / 5.14 / 5.15.',
       disposition: 'triage'
+    },
+    '5.18': {
+      label:  'Duplicate Sales',
+      desc:   'This sales order has more than one F4111 record at the same (line, branch, item, location, lot) — possible re-entry of an order that was already posted.',
+      action: 'Investigate which copy is the duplicate. Reverse the dup; leave the original. The dup may be unposted (R09800 didn\'t run) or may be a true re-entry from a process step that fired twice.',
+      disposition: 'triage'
     }
   };
 
@@ -4578,6 +4649,22 @@
       if (td.length >= 7 && pe.length >= 7 &&
           td.substring(0, 7) !== pe.substring(0, 7)) {
         return '5.14';
+      }
+    }
+
+    // 5.18 — duplicate sales. The same (Company, OrderNumber,
+    // OrderType, LineID) appears more than once in F4111 — usually
+    // an order that got re-entered after the original was already
+    // posted. Match at order grain (Co, OT, Order) since the grid
+    // doesn't carry LineID; any line being duplicated flags the
+    // whole order. No grid-only fallback heuristic — without the
+    // view we can't tell duplicates from legitimate repeat entries.
+    if (_duplicateSalesIndex) {
+      const co    = String(row.CompanyNumber || '').trim();
+      const ot    = String(row.OT            || '').trim();
+      const order = String(row.OrderNumber   || '').trim();
+      if (co && ot && order && _duplicateSalesIndex.has(co + '|' + ot + '|' + order)) {
+        return '5.18';
       }
     }
 
@@ -7046,6 +7133,17 @@
       console.warn('CrossPeriods preload failed:', err);
     }
   }
+  // v_integrity10_duplicate_sales preload — drives the 5.18
+  // Duplicate Sales detector. Same boot-race concession as
+  // DMAAIs / cross-periods.
+  async function preloadDuplicateSales() {
+    try {
+      const payload = await getIntegrityDuplicateSales();
+      _duplicateSalesIndex = buildDuplicateSalesIndex(payload);
+    } catch (err) {
+      console.warn('DuplicateSales preload failed:', err);
+    }
+  }
 
   // ============================================================
   //  Boot
@@ -7062,6 +7160,10 @@
       // stampPatterns() runs; the YYYY-MM heuristic fallback in
       // classifyGridRow covers the brief window if not.
       preloadCrossPeriods();
+      // Duplicate-sales preload — drives 5.18. No fallback
+      // heuristic; if this is slow the pattern card just stays
+      // at 0 until the index lands.
+      preloadDuplicateSales();
       // System Status light reads the shared sessionStorage cache
       // (instant paint), then refreshes from v_diagnostic5_job_status
       // and starts polling. Same data Reconciliation drives &mdash;
