@@ -69,6 +69,39 @@ in `RapidReconciler-Valc/src/main/java/.../dashboard/`
 ([RapidReconciler-Agent#18](https://github.com/RapidReconciler/RapidReconciler-Agent/pull/18))
 caused by SQL nchar padding + missing filter-item labels.
 
+**Follow-up: three queued specs shipped**:
+
+- **`audit-detail-expanded`** &mdash; `POST /inventory/audit-detail`
+  now returns the five small arrays
+  (`accountSummary`, `accountDescriptions`, `unpostedBatchesUi`,
+  `unpostedCardexUi`, `manualJournalEntries`) the Audit Report
+  Excel + PDF read for per-account sub-sections. All five route
+  through `FilteredViewRepository.findRows()` (no new repository
+  classes &mdash; the generic `usp6getfilteredview` wrapper covers
+  every view). V8&rsquo;s `normalizeAuditDetail` now camelCases the
+  full seven-array response and applies two snapshot-compat aliases
+  (`accountDescription`&rarr;`description`, `userName`&rarr;`username`).
+  New `mergeAuditContext(snap, detail)` helper overlays detail
+  arrays on top of `currentData` so the existing
+  `buildAuditCompanyTab` / `buildPdfCompanySection` builders read
+  the merged shape unchanged.
+- **`available-periods`** &mdash; already shipped in agent
+  [#20](https://github.com/RapidReconciler/RapidReconciler-Agent/pull/20)
+  earlier in the session; routing is in [`config.js`](config.js).
+  No further work; the dev box can now retire v359 entirely (no V8
+  page calls v359 on boot).
+- **`poll-longpoll`** &mdash; new spec authored at
+  [`specs/poll-longpoll.md`](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/specs/poll-longpoll.md);
+  agent `PollController` hangs up to 60s (clamped 1&ndash;120s) when
+  the client passes `?updating=...&recalculating=...` query params,
+  polling the underlying view every 1.5s and returning the moment
+  either flag flips. Default (no params) is unchanged short-poll
+  so the mini-VALC `/health` probe keeps working. V8&rsquo;s
+  `startSystemPollLoop` (Reconciliation) and `startTxSystemPollLoop`
+  (Transactions) both opt in by passing the previous response&rsquo;s
+  state as the next request&rsquo;s "last seen." The existing 5s
+  floor stays as a safety net against any short-circuit.
+
 **Wrap-up session (2026-05-24 PM)** &mdash; three big chunks:
 
 1. **Repo renames + workflow flip.** `RapidReconciler-SQL` &rarr;

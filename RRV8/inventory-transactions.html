@@ -3420,11 +3420,24 @@
     if (IS_DEMO) return;
     if (_txPollLoopRunning) return;
     _txPollLoopRunning = true;
+    // Long-poll: pass last-observed state as query params; the agent
+    // holds the connection up to 60s waiting for either flag to flip.
+    // See specs/poll-longpoll.md for the contract.
+    let lastSeen = { updating: false, recalculating: false };
     const tick = async () => {
       const t0 = Date.now();
       try {
-        const r = await rrFetch('poll');
-        const updating = !!(r && (r.updating || r.recalculating));
+        const r = await rrFetch('poll', {
+          query: {
+            updating:      String(lastSeen.updating),
+            recalculating: String(lastSeen.recalculating)
+          }
+        });
+        lastSeen = {
+          updating:      !!(r && r.updating),
+          recalculating: !!(r && r.recalculating)
+        };
+        const updating = lastSeen.updating || lastSeen.recalculating;
         if (updating !== _systemRunningNow) {
           const wasRunning = _systemRunningNow;
           _systemRunningNow = updating;
@@ -3438,11 +3451,9 @@
       } catch (_) {
         await new Promise(res => setTimeout(res, 2000));
       }
-      // Floor the poll cadence at 5s. /poll is supposed to be a ~60s
-      // long-poll (v359 holds the connection until a job-status change
-      // or timeout), but the test agent returns immediately. Without
-      // this floor the loop hammers the agent and starves other
-      // endpoints on the same connection pool.
+      // 5s floor stays as a safety net: prevents melt-down if the
+      // long-poll ever short-circuits (controller error, immediate
+      // return). Long-poll IS the live channel; floor is defense.
       const elapsed = Date.now() - t0;
       const minWait = 5000;
       if (elapsed < minWait) {

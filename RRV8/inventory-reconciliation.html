@@ -5589,6 +5589,11 @@
   // captured snapshot shape. Lower-case the first character of every
   // key on every row so downstream code reads the same field names
   // regardless of mode.
+  //
+  // The two ALIASES tables fix the few view-aliased column names that
+  // diverge from the snapshot keys V8 reads (the snapshot was captured
+  // from the underlying table columns; the views add a few cosmetic
+  // renames the snapshot doesn't carry).
   function normalizeAuditDetail(resp) {
     if (!resp) return resp;
     const lc = (row) => {
@@ -5598,10 +5603,51 @@
       });
       return out;
     };
-    return {
-      reconcilingItems: Array.isArray(resp.reconcilingItems) ? resp.reconcilingItems.map(lc) : [],
-      perpetual:        Array.isArray(resp.perpetual)        ? resp.perpetual.map(lc)        : []
+    const ALIASES_DESC = { accountDescription: 'description' };
+    const ALIASES_JE   = { userName: 'username' };
+    const applyAliases = (row, map) => {
+      Object.keys(map).forEach(from => {
+        if (row[from] !== undefined && row[map[from]] === undefined) {
+          row[map[from]] = row[from];
+        }
+      });
+      return row;
     };
+    const arr = (key, aliases) => Array.isArray(resp[key])
+      ? resp[key].map(lc).map(r => aliases ? applyAliases(r, aliases) : r)
+      : [];
+    return {
+      reconcilingItems:     arr('reconcilingItems'),
+      perpetual:            arr('perpetual'),
+      accountSummary:       arr('accountSummary'),
+      accountDescriptions:  arr('accountDescriptions',  ALIASES_DESC),
+      unpostedBatchesUi:    arr('unpostedBatchesUi'),
+      unpostedCardexUi:     arr('unpostedCardexUi'),
+      manualJournalEntries: arr('manualJournalEntries', ALIASES_JE)
+    };
+  }
+
+  // Build a working snapshot that overlays the audit-detail response's
+  // five small arrays on top of currentData. In prod mode currentData
+  // carries empty stubs for these arrays (adaptLegacyResponse zeros
+  // them out); detail's arrays come from the test-agent
+  // /inventory/audit-detail response. In demo mode currentData already
+  // has them filled, but detail may also carry overlapping arrays —
+  // detail wins where it has rows so the workbook reflects the
+  // freshest server data.
+  function mergeAuditContext(snap, detail) {
+    if (!snap)   return detail || {};
+    if (!detail) return snap;
+    const pick = (k) => (Array.isArray(detail[k]) && detail[k].length)
+      ? detail[k]
+      : (snap[k] || []);
+    return Object.assign({}, snap, {
+      accountSummary:       pick('accountSummary'),
+      accountDescriptions:  pick('accountDescriptions'),
+      unpostedBatchesUi:    pick('unpostedBatchesUi'),
+      unpostedCardexUi:     pick('unpostedCardexUi'),
+      manualJournalEntries: pick('manualJournalEntries')
+    });
   }
 
   function buildAccountDescMap(snap) {
@@ -5956,10 +6002,11 @@
           flashStatus('No companies selected — narrow back to at least one');
           return;
         }
-        const descMap = buildAccountDescMap(currentData);
+        const auditCtx = mergeAuditContext(currentData, detail);
+        const descMap = buildAccountDescMap(auditCtx);
         const wb = XLSX.utils.book_new();
         companiesInScope.forEach(co => {
-          const sheet = buildAuditCompanyTab(co, currentData, detail, descMap);
+          const sheet = buildAuditCompanyTab(co, auditCtx, detail, descMap);
           const currency = currencyOfCompanyLabel(co.label) || '';
           // Tab name max 31 chars; "00010 - USD" is a safe shape
           let tabName = co.id + (currency ? ' - ' + currency : '');
@@ -6330,11 +6377,12 @@
           flashStatus('No companies selected — narrow back to at least one');
           return;
         }
-        const descMap = buildAccountDescMap(currentData);
+        const auditCtx = mergeAuditContext(currentData, detail);
+        const descMap = buildAccountDescMap(auditCtx);
         const { jsPDF } = window.jspdf;
         const doc = new jsPDF({ orientation: 'p', unit: 'pt', format: 'letter' });
         companiesInScope.forEach((co, idx) => {
-          buildPdfCompanySection(doc, co, currentData, detail, descMap, idx === 0);
+          buildPdfCompanySection(doc, co, auditCtx, detail, descMap, idx === 0);
         });
         addPdfFooter(doc);
         const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 13);
@@ -7454,11 +7502,27 @@
     if (IS_DEMO) return;            // /poll isn&rsquo;t mocked in demo data
     if (_pollLoopRunning) return;   // single loop per page is enough
     _pollLoopRunning = true;
+    // The test agent honors {updating, recalculating} query params as
+    // the client's last-observed state and holds the connection up to
+    // 60s waiting for either flag to change (specs/poll-longpoll.md).
+    // Passing the previous response as the next request's "last seen"
+    // turns the loop into a real long-poll: server returns immediately
+    // when state flips, otherwise hangs until its own timeout.
+    let lastSeen = { updating: false, recalculating: false };
     const tick = async () => {
       const t0 = Date.now();
       try {
-        const r = await rrFetch('poll');
-        const updating = !!(r && (r.updating || r.recalculating));
+        const r = await rrFetch('poll', {
+          query: {
+            updating:      String(lastSeen.updating),
+            recalculating: String(lastSeen.recalculating)
+          }
+        });
+        lastSeen = {
+          updating:      !!(r && r.updating),
+          recalculating: !!(r && r.recalculating)
+        };
+        const updating = lastSeen.updating || lastSeen.recalculating;
         if (updating !== _systemRunningNow) {
           const wasRunning = _systemRunningNow;
           _systemRunningNow = updating;
@@ -7476,11 +7540,9 @@
         // don&rsquo;t hammer the agent if it&rsquo;s down.
         await new Promise(res => setTimeout(res, 2000));
       }
-      // Floor the poll cadence at 5s. /poll is supposed to be a ~60s
-      // long-poll (v359 holds the connection until a job-status
-      // change or timeout), but the test agent returns immediately.
-      // Without this floor the loop hammers the agent and starves
-      // other endpoints on the same connection pool.
+      // 5s floor stays as a safety net: if the long-poll ever
+      // short-circuits (controller error, hang returns instantly),
+      // this prevents the loop from melting the request rate again.
       const elapsed = Date.now() - t0;
       const minWait = 5000;
       if (elapsed < minWait) {
