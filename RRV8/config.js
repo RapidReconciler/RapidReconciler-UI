@@ -73,9 +73,11 @@ window.RR_TEST_AGENT_AREAS = [
   'inventory/integrity/aai-analysis-latest',
   'inventory/integrity/aai-responses',
   'inventory/integrity/aai-save-responses',
-  // v359 migration — boot-time status (sidebar filter universe +
-  // Inventory Validation light). First absorbed endpoint, 2026-05-24.
-  'inventory/status'
+  // v359 migration — endpoints absorbed by the test agent in order:
+  //   inventory/status                   2026-05-24  (boot-time filter universe + validation light)
+  //   inventory/reconciliation-filtered  2026-05-24  (Recon summary + barChart)
+  'inventory/status',
+  'inventory/reconciliation-filtered'
 ];
 
 // Per-mode VALC defaults. Used when RR_CONFIG.authBase is null and
