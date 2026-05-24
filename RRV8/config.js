@@ -58,19 +58,24 @@ window.RR_CONFIG = {
 // is duplicated in each page's rrFetch (no shared script). Update both
 // when adding an endpoint.
 //
-// The trailing three (`inventory/integrity/aai-*`) are PLANNED endpoints
-// the test agent doesn't expose yet — the AAI-overlay surface for the
-// DMAAIs worklist (load latest analysis snapshot, load + save analyst
-// responses). They'll 404 until the controllers land; V8 surfaces a
-// visible fetch-error banner per the production-only rule.
+// The migration plan retires v359 endpoint-by-endpoint into the test
+// agent. As each test-agent controller ships, its area moves here so
+// V8 routes to it. See `RRV8/HANDOFF.md` § Test agent online for the
+// current migration state; `feedback_v8_test_agent_default` in memory
+// for the routing rule.
 window.RR_TEST_AGENT_AREAS = [
+  // Inventory module — net-new endpoints first wave
   'inventory/reconciliation/rows',
   'inventory/reconciliation/history',
   'inventory/audit-detail',
   'inventory/variance-component',
+  // DMAAI overlay (analyzer worklist persistence)
   'inventory/integrity/aai-analysis-latest',
   'inventory/integrity/aai-responses',
-  'inventory/integrity/aai-save-responses'
+  'inventory/integrity/aai-save-responses',
+  // v359 migration — boot-time status (sidebar filter universe +
+  // Inventory Validation light). First absorbed endpoint, 2026-05-24.
+  'inventory/status'
 ];
 
 // Per-mode VALC defaults. Used when RR_CONFIG.authBase is null and
