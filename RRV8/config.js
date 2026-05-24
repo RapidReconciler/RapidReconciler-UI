@@ -83,6 +83,9 @@ window.RR_TEST_AGENT_AREAS = [
   //   inventory/as-of                           2026-05-24  (As Of bulk grid)
   //   inventory/as-of/details                   2026-05-24  (As Of Details popover)
   //   inventory/rollIItem                       2026-05-24  (Cardex Variance Re-roll button)
+  //   poll                                      2026-05-24  (System Status 60s poll)
+  //   system-status                             2026-05-24  (diagnostic Excel generator)
+  //   download-excel/*                          2026-05-24  (diagnostic Excel binary)
   'inventory/status',
   'inventory/reconciliation-filtered',
   'inventory/transactions',
@@ -91,7 +94,15 @@ window.RR_TEST_AGENT_AREAS = [
   'inventory/integrity',
   'inventory/as-of',
   'inventory/as-of/details',
-  'inventory/rollIItem'
+  'inventory/rollIItem',
+  'poll',
+  'system-status'
+];
+
+// Endpoints with a variable path segment that rrFetch needs to route
+// to the test agent. Tested with `area.startsWith(prefix)`.
+window.RR_TEST_AGENT_PREFIXES = [
+  'download-excel/'
 ];
 
 // Per-mode VALC defaults. Used when RR_CONFIG.authBase is null and

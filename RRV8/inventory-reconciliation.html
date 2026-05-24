@@ -3464,6 +3464,16 @@
     'inventory/audit-detail',
     'inventory/variance-component'
   ]);
+  // Prefixes for areas with a dynamic path segment (e.g.
+  // download-excel/<uuid>). Tested with area.startsWith(prefix).
+  const _testAgentPrefixes = window.RR_TEST_AGENT_PREFIXES || ['download-excel/'];
+  function _routesToTestAgent(area) {
+    if (_testAgentAreas.has(area)) return true;
+    for (let i = 0; i < _testAgentPrefixes.length; i++) {
+      if (area.startsWith(_testAgentPrefixes[i])) return true;
+    }
+    return false;
+  }
   function rrFetch(area, opts) {
     opts = opts || {};
     if (IS_DEMO) {
@@ -3473,7 +3483,7 @@
     }
     // Prod / staging path — route per-area to the right agent.
     let base;
-    if (_testAgentAreas.has(area)) {
+    if (_routesToTestAgent(area)) {
       base = RR_CONFIG.testAgentBase || 'http://localhost:34537';
     } else {
       const db = window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex];
@@ -8282,14 +8292,21 @@
   function rrFetchBinary(area) {
     // Binary sibling of rrFetch; demo mode reads from data/ as a
     // .bin/.xlsx file matched by the area. Prod hits the agent with
-    // Bearer auth and returns ArrayBuffer.
+    // Bearer auth and returns ArrayBuffer. Routes test-agent areas
+    // (e.g. download-excel/<uuid>) the same way rrFetch does.
     if (IS_DEMO) {
       return fetch((RR_CONFIG.dataPath || 'data/') + area + '.bin', { cache: 'no-store' })
         .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status + ' on ' + area); return r.arrayBuffer(); });
     }
-    const db = window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex];
-    if (!db || !db.ip) return Promise.reject(new Error('No active DB in RR_SESSION'));
-    const url = 'https://' + db.ip + '/' + area;
+    let base;
+    if (_routesToTestAgent(area)) {
+      base = RR_CONFIG.testAgentBase || 'http://localhost:34537';
+    } else {
+      const db = window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex];
+      if (!db || !db.ip) return Promise.reject(new Error('No active DB in RR_SESSION'));
+      base = 'https://' + db.ip;
+    }
+    const url = base + '/' + area;
     const h = { 'Accept': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
     try {
       const t = localStorage.getItem('rrv8.token');
