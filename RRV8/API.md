@@ -79,7 +79,10 @@ Full JWT payload shape:
 | `GET /poll` | (none) | all pages | 60s long-poll for "is a job running?" Drives the System Status amber transient. |
 | `GET /inventory/status` | (none) | Reconciliation, As Of | Returns `reconciliationFilter` + `validation`. Validation block is the **Inventory Validation light** (NOT System Status &mdash; same shape, different semantics; agent gotchas doc). |
 | `POST /inventory/reconciliation-filtered` | Item-wrapped filter arrays | Reconciliation | Summary only today; row-level rows endpoint pending. |
-| `POST /inventory/reconciliation/rows` | Item-wrapped filter arrays | Reconciliation | **Planned.** V8 already wires the parallel `rrFetch` call and degrades cleanly on 404. Spec: [reconciliation-rows.md](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/specs/reconciliation-rows.md). |
+| `POST /inventory/reconciliation/rows` | Item-wrapped filter arrays | Reconciliation, Transactions (cross-period bar chart) | **Live on test agent** (port 34537). V8 calls it for the contributors card + cross-period transactions bars. Spec: [reconciliation-rows.md](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/specs/reconciliation-rows.md). |
+| `POST /inventory/reconciliation/history` | Item-wrapped filter arrays | Reconciliation header bar chart | **Live on test agent.** Spec: [reconciliation-history.md](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/specs/reconciliation-history.md). |
+| `POST /inventory/audit-detail` | Item-wrapped filter arrays | Audit Report Excel + PDF | **Live on test agent.** Spec: [audit-detail.md](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/specs/audit-detail.md). |
+| `POST /inventory/variance-component` | `{component, ...recon-filter}` | Preview modals for GL Batches / End of Day / Manual JEs / Cardex | **Live on test agent.** Spec: [variance-component-drilldown.md](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/specs/variance-component-drilldown.md). |
 | `POST /inventory/transactions` | bare-string filter arrays + paging | Transactions | Single bulk fetch (`pageSize: 10000`), client-side filter/recompute on chip clicks. |
 | `POST /inventory/transactions/details` | `{company, doc, type}` | Transactions per-row Export | **`type`, not `docType`** (Jackson gotcha). |
 | `POST /inventory/transactions/save-notes` | `{period, notes: [...]}` | Transactions batch-edit modal | Field names camelCase first-letter-lowercase. |
@@ -393,22 +396,18 @@ GET /api/v2/inventory/reconciliation
 
 ### Open handoff items
 
-- **Cross-period history for the "Out of Bal by Period" header chart.**
-  The live `/inventory/reconciliation` endpoint returns rows for the
-  current period only. The header bar chart needs cross-period
-  history. Today both `inventory-reconciliation.html` and
-  `inventory-transactions.html` fall back to fetching the
-  `data/reconciliation.json` demo snapshot for the bars when the live
-  response is single-period &mdash; that's a stopgap; the snapshot is
-  immutable in staging and goes stale in production. Real fix: agent
-  exposes a `GET /api/v2/inventory/reconciliation/history?periods=12`
-  (or similar) that returns per-period `glBalance` / `perpetualBalance`
-  sums (whole-client, no row detail) so the chart paints accurate
-  trend regardless of mode. Filter sensitivity (currency / company /
-  BU / object / subsidiary) on the trend bars is a separate
-  follow-up &mdash; either the new endpoint takes the filter as
-  params, or the page does the aggregation client-side from a
-  cross-period rows endpoint.
+- **Cross-period history bar chart &mdash; WIRED (2026-05-24).**
+  Was an open item; now resolved. `POST
+  /inventory/reconciliation/history` (specced in
+  [`RapidReconciler-Agent/specs/reconciliation-history.md`](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/specs/reconciliation-history.md))
+  ships in the green-field test agent on port 34537. V8&rsquo;s
+  Reconciliation page calls it via `loadPeriodBarsSnapshot` (now
+  history-aware); the Transactions page uses
+  `loadCrossPeriodReconRows` against
+  `/inventory/reconciliation/rows` so it can aggregate the
+  transactions-component sum per period (the history endpoint only
+  exposes the GL/Perpetual/OOB sums). `data/reconciliation.json` is
+  no longer the cross-period source in staging/prod mode.
 
 ---
 

@@ -30,19 +30,39 @@
  *   statusPollMs  — interval for re-checking the SQL Agent job status
  *                   (System Status light). null = don't poll. Prod
  *                   default: 60000 (1 minute).
+ *   testAgentBase — base URL of the green-field per-DB data-services
+ *                   test agent (RapidReconciler-Agent). The four
+ *                   endpoints it owns (inventory/reconciliation/rows,
+ *                   inventory/reconciliation/history,
+ *                   inventory/audit-detail,
+ *                   inventory/variance-component) are routed here in
+ *                   staging/prod mode while v359 keeps the rest at
+ *                   activeDb.ip. Set to null on a customer install
+ *                   that doesn't run the test agent yet.
  *   release       — version label shown in the user menu.
  *   buildStamp    — date the deploy was cut; surfaces in diagnostics.
  *
  * See docs/plans/v8-demo-prod-mode.md for the full design rationale.
  */
 window.RR_CONFIG = {
-  mode:         'staging',
-  authBase:     null,
-  dataPath:     'data/',
-  statusPollMs: 60000,
-  release:      'V8',
-  buildStamp:   '2026-05-23'
+  mode:          'staging',
+  authBase:      null,
+  dataPath:      'data/',
+  statusPollMs:  60000,
+  testAgentBase: 'http://localhost:34537',
+  release:       'V8',
+  buildStamp:    '2026-05-24'
 };
+
+// Areas served by the green-field test agent instead of v359. The set
+// is duplicated in each page's rrFetch (no shared script). Update both
+// when adding an endpoint.
+window.RR_TEST_AGENT_AREAS = [
+  'inventory/reconciliation/rows',
+  'inventory/reconciliation/history',
+  'inventory/audit-detail',
+  'inventory/variance-component'
+];
 
 // Per-mode VALC defaults. Used when RR_CONFIG.authBase is null and
 // the resolved MODE is staging or prod. Engineering overrides

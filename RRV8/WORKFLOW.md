@@ -631,34 +631,50 @@ adding release notes for V8 work.
 These are non-negotiable principles that shape every V8 design and
 implementation decision. When a tradeoff comes up, the tenet wins.
 
-### Agent-first, no snapshot-only paths
+### Production-only until Inventory is complete
 
-V8 dev work pulls **all** data through the live RR data-services agent,
-the same way prod does. Static snapshots under `RRV8/data/` exist as a
-deployment artifact (so customers / external readers on GitHub Pages
-see a working surface without auth), not as the development mode.
+V8 development is **production-only**. Every dynamic value comes from
+the live RR data-services agent through `rrFetch`. No new static JSON
+snapshots get added under `RRV8/data/`, no `?mode=demo` branches get
+extended, no demo-only code paths get written. Demo mode will be
+rebuilt as a deliberate pass **after the Inventory module is
+complete** &mdash; until then it&rsquo;s frozen, not the dev workflow.
 
 - The committed default in [`RRV8/config.js`](config.js) is
   `mode: 'staging'`. Opening a V8 page in dev hits the local agent at
   `rrtest-rrsqltest.getgsi.com:34536` (hosts-file mapped to 127.0.0.1).
-- To intentionally read snapshots (agent offline, demoing the page
-  publicly, etc.) append `?mode=demo` to the URL.
-- Every dynamic value goes through `rrFetch(area, opts)`. The helper
-  routes by `MODE` &mdash; demo reads `data/<area>.json` via
-  `opts.demoFile`, staging/prod hits the agent. **No page hard-codes
-  `fetch('data/<file>.json')`** for runtime data.
+- Every dynamic value goes through `rrFetch(area, opts)`. **No page
+  hard-codes `fetch('data/<file>.json')`** for runtime data, and no
+  new `opts.demoFile` snapshot mappings get added.
+- When V8 needs server data the agent doesn&rsquo;t have, spec it in
+  the `RapidReconciler-Agent` repo&rsquo;s `specs/` folder, wire
+  `rrFetch` to call the planned path, and let it 404 visibly until
+  the controller ships. **Do not add a snapshot to make the page
+  paint** &mdash; the visible 404 is the signal that an endpoint is
+  missing. See [`feedback_always_spec_new_endpoints`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/feedback_always_spec_new_endpoints.md).
+- Existing snapshot files in `RRV8/data/` and existing demo-mode
+  fallbacks stay in place (they keep the deployed GitHub Pages
+  preview rendering). Don&rsquo;t extend them; don&rsquo;t add new
+  ones. Where a page falls back to a snapshot when the live response
+  is incomplete (e.g. the cross-period bar-chart history fallback),
+  treat it as a server-side gap to spec rather than something to
+  paper over.
+- TESTING.md tier 7 (demo data shape) is on ice until the demo
+  rebuild. Don&rsquo;t prioritize implementing it.
 - New endpoints get mined from the agent jar
   (`C:\Program Files\Rapid Reconciler\files\359`) via `javap`. Jackson
   silently drops unknown JSON fields, so field names must come from the
   bytecode, not guesswork. Recipe in
-  [`API.md`](API.md) &sect; *Agent jar mining recipe*. See also the
-  [`reference_rr_agent_jar.md`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/reference_rr_agent_jar.md)
+  [`RapidReconciler-Agent/docs/jar-mining.md`](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/docs/jar-mining.md). See also the
+  [`reference_rr_agent_jar`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/reference_rr_agent_jar.md)
   memory.
-- The reason this is a tenet: demo-mode snapshots hide bugs. Stale
-  data goes unnoticed for weeks; field-name mismatches silently
-  degrade; permission gating never trips because the static blob
-  doesn&rsquo;t care. Working in agent mode all the time surfaces
-  every one of these before they ship. Saved as
+- **Why this is a tenet:** snapshots hide bugs (stale data, Jackson
+  field-name mismatches, permission gating, filter-scope errors).
+  Maintaining two parallel shapes &mdash; live agent + snapshot
+  files &mdash; doubles the surface that silently drifts. Cutting it
+  down to one (the agent) makes every wiring bug surface immediately.
+  The deferred demo rebuild gets a clean foundation instead of
+  accreted dev-time hacks. Saved as
   [`feedback_v8_agent_first`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/feedback_v8_agent_first.md).
 
 ### SQL targets the lowest customer compat level

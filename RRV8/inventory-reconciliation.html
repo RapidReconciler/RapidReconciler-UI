@@ -3454,6 +3454,16 @@
   //   query:   object           (GET query-string params)
   //   demoFile:string           (override demo filename; defaults to area)
   // }
+  // Endpoints owned by the green-field data-services test agent
+  // (RapidReconciler-Agent). v359 keeps every other endpoint at
+  // activeDb.ip. Source of truth is RR_TEST_AGENT_AREAS in config.js;
+  // this local Set is built at boot for hot-path lookup.
+  const _testAgentAreas = new Set(window.RR_TEST_AGENT_AREAS || [
+    'inventory/reconciliation/rows',
+    'inventory/reconciliation/history',
+    'inventory/audit-detail',
+    'inventory/variance-component'
+  ]);
   function rrFetch(area, opts) {
     opts = opts || {};
     if (IS_DEMO) {
@@ -3461,15 +3471,20 @@
       return fetch((RR_CONFIG.dataPath || 'data/') + file, { cache: 'no-store' })
         .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status + ' on ' + file); return r.json(); });
     }
-    // Prod / staging path — hit the active DB's RR Agent.
-    const db = window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex];
-    if (!db || !db.ip) {
-      return Promise.reject(new Error(
-        'PROD-TODO: rrFetch called in ' + MODE + ' mode but no active DB is set on window.RR_SESSION. ' +
-        'The auth chunk (login → JWT → RR_SESSION.dbs[]) is not yet wired.'
-      ));
+    // Prod / staging path — route per-area to the right agent.
+    let base;
+    if (_testAgentAreas.has(area)) {
+      base = RR_CONFIG.testAgentBase || 'http://localhost:34537';
+    } else {
+      const db = window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex];
+      if (!db || !db.ip) {
+        return Promise.reject(new Error(
+          'PROD-TODO: rrFetch called in ' + MODE + ' mode but no active DB is set on window.RR_SESSION. ' +
+          'The auth chunk (login → JWT → RR_SESSION.dbs[]) is not yet wired.'
+        ));
+      }
+      base = 'https://' + db.ip;
     }
-    const base = 'https://' + db.ip;
     const url = base + '/' + area +
       (opts.query ? '?' + new URLSearchParams(opts.query) : '');
     const init = {
@@ -4055,44 +4070,67 @@
   let _periodBars = null;
   let _periodBarsSnapshotCache = null;
   let _periodBarsSnapshotTried  = false;
-  // Pull the demo snapshot's accountRows[] once and cache. Used as the
-  // cross-period fallback when the live (staging) API only returns
-  // current-period rows -- the period bar chart would otherwise
-  // collapse to a single bar. Whitelisted in TESTING.md as a
-  // permitted direct data/ fetch (period-bar chart history).
-  //
-  // Tries the same candidate paths the (deleted) variance-trend chart
-  // used so the fetch resolves whether the page is hosted at /RRV8/...
-  // (the static dev/demo layout) or some other mount.
+  // Cross-period rollup for the "Out of Bal by Period" bar chart.
+  // In staging/prod, hits inventory/reconciliation/history on the
+  // test agent (RapidReconciler-Agent) and returns one synthesized
+  // accountRow per period so the existing periodBarsFromRows
+  // aggregator works unchanged. In demo mode, falls back to the
+  // committed data/reconciliation.json snapshot (demo path is frozen
+  // per the production-only rule; see WORKFLOW.md).
   async function loadPeriodBarsSnapshot() {
     if (_periodBarsSnapshotTried) return _periodBarsSnapshotCache || [];
     _periodBarsSnapshotTried = true;
+    if (IS_DEMO) {
+      _periodBarsSnapshotCache = await loadPeriodBarsDemoSnapshot();
+      return _periodBarsSnapshotCache;
+    }
+    // Staging / prod: call the cross-period history endpoint on the
+    // test agent. Filter scope mirrors what loadData passes to
+    // /inventory/reconciliation-filtered, less the period (which the
+    // controller ignores — this is inherently cross-period).
+    try {
+      const status     = await rrFetch('inventory/status');
+      const reconFilter = status && status.reconciliationFilter;
+      const body       = buildProdReconBody(reconFilter, null);
+      const resp       = await rrFetch('inventory/reconciliation/history',
+                                       { method: 'POST', body: body });
+      const points = (resp && resp.points) || [];
+      // Shape the points back into an accountRows-like array so
+      // periodBarsFromRows aggregates them through the same path the
+      // demo snapshot uses. One row per period; aggregation is a no-op.
+      _periodBarsSnapshotCache = points.map(p => ({
+        period:           p.period,
+        glBalance:        p.glBalance,
+        perpetualBalance: p.perpetualBalance
+      }));
+      console.info('[period-bars] loaded', _periodBarsSnapshotCache.length,
+                   'periods from inventory/reconciliation/history');
+      return _periodBarsSnapshotCache;
+    } catch (err) {
+      console.warn('[period-bars] history endpoint failed:', err && err.message);
+      _periodBarsSnapshotCache = [];
+      return [];
+    }
+  }
+  // Demo-mode fallback: loads accountRows[] from the committed
+  // reconciliation.json snapshot. Kept so the deployed GitHub Pages
+  // demo surface keeps rendering; not exercised in dev (mode: staging).
+  async function loadPeriodBarsDemoSnapshot() {
     const dataPathPrefix = (typeof RR_CONFIG !== 'undefined' && RR_CONFIG && RR_CONFIG.dataPath) || 'data/';
     const candidates = [
       dataPathPrefix + 'reconciliation.json',
       'data/reconciliation.json',
       '../RRV8/data/reconciliation.json'
     ];
-    const tried = [];
-    let rows = null;
     for (const url of candidates) {
       try {
         const res = await fetch(url, { cache: 'force-cache' });
-        if (!res.ok) { tried.push(url + ' -> HTTP ' + res.status); continue; }
+        if (!res.ok) continue;
         const recon = await res.json();
-        rows = (recon && recon.accountRows) || [];
-        console.info('[period-bars] loaded', rows.length, 'snapshot rows from', url);
-        break;
-      } catch (e) {
-        tried.push(url + ' -> ' + (e && e.message ? e.message : e));
-      }
+        return (recon && recon.accountRows) || [];
+      } catch (_) { /* try next */ }
     }
-    if (rows == null) {
-      console.warn('[period-bars] could not fetch reconciliation.json. Tried:', tried.join('; '));
-      rows = [];
-    }
-    _periodBarsSnapshotCache = rows;
-    return rows;
+    return [];
   }
   // Build a period-bars data array from any accountRows[]-shaped list.
   // The snapshot rows ARE NOT filtered through rowMatchesFilters here:
@@ -5014,6 +5052,65 @@
     };
   }
 
+  // The test agent's /inventory/reconciliation/rows endpoint returns
+  // raw v6ui_raccountsummary rows with the view's column aliases
+  // (PascalCase, no nested variance object) — see RRV8/views/
+  // v6ui_raccountsummary.sql. This adapter remaps each row onto the
+  // canonical V8 shape that adaptLegacyResponse + every renderer
+  // expects (camelCase top-level fields + nested variance{...}).
+  //
+  // Field map (agent → V8):
+  //   PeriodEnds        → period      (string; trimmed to YYYY-MM-DD if datetime)
+  //   CompanyNumber     → companyId
+  //   BusinessUnit      → businessUnit
+  //   ObjectAccount     → object
+  //   SubAccount        → subsidiary
+  //   Currency          → currency
+  //   ShortAccount      → shortAccount
+  //   LongAccount       → longAccount
+  //   EndGL             → glBalance
+  //   Perpetual         → perpetualBalance
+  //   OOB               → outOfBalance, also → variance.unreconciledVariance
+  //   BegVar            → variance.carryForward
+  //   UnpostBatch       → variance.glBatches
+  //   EndofDay          → variance.endOfDay
+  //   Variance          → variance.transactions (transactionvariance from rcardexledgercompare)
+  //   CardexVar         → variance.cardex
+  //   JEs               → variance.manualJournalEntries
+  function normalizeAgentReconRow(r) {
+    const num = (x) => (typeof x === 'number') ? x : (Number(x) || 0);
+    const periodIso = (() => {
+      const v = r.PeriodEnds || r.periodEnds || r.period;
+      if (!v) return null;
+      const s = String(v);
+      return s.length >= 10 ? s.substring(0, 10) : s;
+    })();
+    return {
+      period:           periodIso,
+      currency:         r.Currency        || r.currency       || '',
+      companyId:        r.CompanyNumber   || r.companyNumber  || r.companyId || '',
+      businessUnit:     r.BusinessUnit    || r.businessUnit   || '',
+      object:           r.ObjectAccount   || r.object         || '',
+      subsidiary:       (r.SubAccount     != null ? r.SubAccount
+                      :  r.subsidiary     != null ? r.subsidiary : ''),
+      shortAccount:     r.ShortAccount    || r.shortAccount   || '',
+      longAccount:      r.LongAccount     || r.longAccount    || '',
+      glBalance:        num(r.EndGL       || r.glBalance),
+      perpetualBalance: num(r.Perpetual   || r.perpetualBalance),
+      outOfBalance:     num(r.OOB         || r.outOfBalance),
+      variance: {
+        carryForward:         num(r.BegVar      || (r.variance && r.variance.carryForward)),
+        glBatches:            num(r.UnpostBatch || (r.variance && r.variance.glBatches)),
+        endOfDay:             num(r.EndofDay    || (r.variance && r.variance.endOfDay)),
+        transactions:         num(typeof r.Variance === 'number' ? r.Variance
+                              : (r.variance && typeof r.variance === 'object' ? r.variance.transactions : 0)),
+        cardex:               num(r.CardexVar   || (r.variance && r.variance.cardex)),
+        manualJournalEntries: num(r.JEs         || (r.variance && r.variance.manualJournalEntries)),
+        unreconciledVariance: num(r.OOB         || (r.variance && r.variance.unreconciledVariance))
+      }
+    };
+  }
+
   // Adapt the legacy SPA's {validation, filter, summary, barChart}
   // response into V8's shape. The legacy endpoint returns SUMMARY ONLY
   // (no per-(period,company,account,...) rows), so we synthesize a
@@ -5200,10 +5297,14 @@
         ]);
         // Inline the rows into the legacy payload so adaptLegacyResponse
         // can route through its row-aware fast path with no extra
-        // parameter plumbing.
+        // parameter plumbing. The test agent emits raw v6ui_raccountsummary
+        // column aliases (PascalCase: PeriodEnds, EndGL, OOB, etc.); the
+        // normalizer remaps them onto the V8 row shape adaptLegacyResponse
+        // expects (camelCase with nested variance object).
         if (rowsResp && (Array.isArray(rowsResp.rows) || Array.isArray(rowsResp.data) || Array.isArray(rowsResp))) {
-          legacy.rows = Array.isArray(rowsResp) ? rowsResp
+          const rawRows = Array.isArray(rowsResp) ? rowsResp
             : (Array.isArray(rowsResp.rows) ? rowsResp.rows : rowsResp.data);
+          legacy.rows = rawRows.map(normalizeAgentReconRow);
         }
         currentData = adaptLegacyResponse(legacy, period);
         showProdModeBanner(period);
@@ -5328,18 +5429,50 @@
   let _auditDetailCache = null;
   function ensureAuditDetail() {
     if (_auditDetailCache) return Promise.resolve(_auditDetailCache);
-    // PROD-TODO: replace with rrFetch('inventory/audit-detail',
-    //   { query: { period: currentPeriod } })
-    // — needs a server-side endpoint that streams reconcilingItems +
-    // perpetual rows for the given period. No equivalent in the
-    // current AngularJS SPA (it generates audit reports server-side
-    // and downloads the .xlsx). See RRV8/API.md.
-    return rrFetch('audit-report-detail')
+    if (IS_DEMO) {
+      // Demo: read the committed snapshot (frozen per the
+      // production-only rule).
+      return rrFetch('audit-report-detail', { demoFile: 'audit-report-detail' })
+        .then(normalizeAuditDetail)
+        .then(j => { _auditDetailCache = j; return j; })
+        .catch(err => { showFetchError('inventory/audit-detail', err); throw err; });
+    }
+    // Staging / prod: POST to the test agent's inventory/audit-detail
+    // endpoint. Body mirrors what /inventory/reconciliation-filtered
+    // sends; the server returns {reconcilingItems[], perpetual[]}.
+    return rrFetch('inventory/status')
+      .then(status => {
+        const reconFilter = status && status.reconciliationFilter;
+        const body = buildProdReconBody(reconFilter, currentPeriod);
+        return rrFetch('inventory/audit-detail', { method: 'POST', body: body });
+      })
+      .then(normalizeAuditDetail)
       .then(j => { _auditDetailCache = j; return j; })
       .catch(err => {
         showFetchError('inventory/audit-detail', err);
         throw err;
       });
+  }
+
+  // The JDBC layer surfaces SQL view column aliases as JSON keys
+  // (PascalCase: PeriodEnds, CompanyNumber, LongAccount, etc.). V8's
+  // audit-report Excel + PDF readers expect camelCase to match the
+  // captured snapshot shape. Lower-case the first character of every
+  // key on every row so downstream code reads the same field names
+  // regardless of mode.
+  function normalizeAuditDetail(resp) {
+    if (!resp) return resp;
+    const lc = (row) => {
+      const out = {};
+      Object.keys(row).forEach(k => {
+        out[k.charAt(0).toLowerCase() + k.slice(1)] = row[k];
+      });
+      return out;
+    };
+    return {
+      reconcilingItems: Array.isArray(resp.reconcilingItems) ? resp.reconcilingItems.map(lc) : [],
+      perpetual:        Array.isArray(resp.perpetual)        ? resp.perpetual.map(lc)        : []
+    };
   }
 
   function buildAccountDescMap(snap) {
@@ -6601,15 +6734,51 @@
   };
 
   let _previewComponent = null;
-  function openVariancePreview(componentKey) {
+  const _varianceComponentFetched = new Set();
+  async function openVariancePreview(componentKey) {
     if (!currentData) { flashStatus('No data loaded'); return; }
     const cfg = PREVIEW_COLUMNS[componentKey];
     if (!cfg) { flashStatus('Preview not configured for ' + componentKey); return; }
     _previewComponent = componentKey;
-    renderPreviewModal();
     const modal = document.getElementById('js-preview-modal');
     modal.hidden = false;
     document.body.style.overflow = 'hidden';
+    renderPreviewModal();
+    // Lazy-load the view-backed rows on first open. The legacy
+    // /inventory/reconciliation-filtered response returns SUMMARY ONLY;
+    // the four variance-component views are served separately by the
+    // test agent's /inventory/variance-component endpoint.
+    if (cfg.source === 'view-backed' && !IS_DEMO &&
+        !_varianceComponentFetched.has(componentKey)) {
+      try {
+        await loadVarianceComponentRows(componentKey, cfg);
+        _varianceComponentFetched.add(componentKey);
+        if (_previewComponent === componentKey) renderPreviewModal();
+      } catch (err) {
+        showFetchError('inventory/variance-component', err);
+        if (_previewComponent === componentKey) renderPreviewModal();
+      }
+    }
+  }
+
+  async function loadVarianceComponentRows(componentKey, cfg) {
+    const status     = await rrFetch('inventory/status');
+    const reconFilter = status && status.reconciliationFilter;
+    const period     = cfg.requirePeriod === false ? null : currentPeriod;
+    const body       = buildProdReconBody(reconFilter, period);
+    body.component = componentKey;
+    const resp = await rrFetch('inventory/variance-component',
+                               { method: 'POST', body: body });
+    const rows = (resp && resp.rows) || [];
+    // PascalCase column aliases from SQL Server → camelCase keys that
+    // filterViewBackedRows / the Excel generators read.
+    currentData[cfg.arrayKey] = rows.map(r => {
+      const out = {};
+      Object.keys(r).forEach(k => {
+        out[k.charAt(0).toLowerCase() + k.slice(1)] = r[k];
+      });
+      return out;
+    });
   }
 
   function closeVariancePreview() {
