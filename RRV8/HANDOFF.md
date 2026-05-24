@@ -69,6 +69,74 @@ in `RapidReconciler-Valc/src/main/java/.../dashboard/`
 ([RapidReconciler-Agent#18](https://github.com/RapidReconciler/RapidReconciler-Agent/pull/18))
 caused by SQL nchar padding + missing filter-item labels.
 
+**Wrap-up session (2026-05-24 PM)** &mdash; three big chunks:
+
+1. **Repo renames + workflow flip.** `RapidReconciler-SQL` &rarr;
+   `RapidReconciler-DB` and `RapidReconciler-AI` &rarr;
+   `RapidReconciler-UI`. Doc/memory sweep + `origin` URL
+   updates handled in-session. All three project repos now
+   default to **`Dev`** on GitHub; the UI repo&rsquo;s `main`
+   is kept "for later" as the stable release surface (nothing
+   public-facing has cut yet). New durable rule saved at
+   [`feedback_dev_default_auto_main`](../../../.claude/projects/C--source-repos-RapidReconciler-UI/memory/feedback_dev_default_auto_main.md).
+   Commit target = **Dev** going forward.
+
+2. **Performance pass on the Perpetual page.** Diagnosed via
+   DevTools (35 MB JSON body was the real bottleneck, not the
+   SQL query). Shipped, in order:
+   - Agent: gzip enabled on responses (PRs Agent#21+#22; the
+     first pass had a YAML-binding bug for `mime-types`).
+     `~27&times;` wire reduction on `/inventory/as-of`.
+   - V8: `rrFetch` switched `r.text() + JSON.parse` &rarr; `r.json()`
+     across the four bulk-fetch pages (PR UI#119) &mdash; skips
+     the intermediate UTF-16 JS string allocation.
+   - Agent: optional `columns: List<String>` projection on
+     `POST /inventory/as-of`, plus V8 wiring to send the
+     visible-column set + refetch on chooser toggle of
+     hidden columns (PRs Agent#23 + UI#120). 18 of 47
+     columns ship by default.
+   - V8: Details grid on Perpetual is collapsible, default-
+     closed (PR UI#121) &mdash; mirrors the Transactions
+     pattern.
+
+3. **Integrity-reports integration pass &mdash; closed.** All
+   11 integrity views the DB exposes are now wired into a
+   workflow surface on the appropriate V8 page:
+
+   | View | Surface | Agent PR | UI PR |
+   |---|---|---|---|
+   | `v_integrity_jde_aais` | DMAAIs Analysis tab | (existing) | (existing) |
+   | `v6ui_itemrollintegritydialog` | Cardex Variance page | (existing) | (existing) |
+   | `v_integrity11_crossperiods` | Tx 5.14 detector source | #24 | #126 |
+   | `v_integrity7_frozen_cost` | Perpetual "Analyze Frozen Cost" &rarr; `FrozenCostTemplate` handoff | #25 | #122 |
+   | `v_integrity5_gl_class` | Perpetual "Analyze GL Class" &rarr; `GLClassTemplate` handoff | #26 | #123 |
+   | `v_integrity1_aai_base` | DMAAIs **Model** tab | #27 | #124 |
+   | `v_integrity3_exc_glc` | DMAAIs **Exception GL** tab | #28 | #125 |
+   | `v_integrity10_duplicate_sales` | Tx 5.18 **Duplicate Sales** pattern card | #29 | #128 |
+   | `v_integrity4_uom_conv` | Perpetual **Setup warnings** band | #30 | #129 |
+   | `v_integrity6_duplicate_costs` | Perpetual **Setup warnings** band | #30 | #129 |
+   | `v_integrity8_missing_branch` | Perpetual **Setup warnings** band | #30 | #129 |
+
+   Dropped: `v_integrity2_aai_discrp` (owner: DMAAI analyzer
+   already covers it). Gap: no `v_integrity9` in the DB.
+
+   For the analyzer-template handoffs (Frozen Cost + GL Class),
+   the V8 page builds the workbook shape the template&rsquo;s
+   `detect()` keys on and fires it through the headless analyzer
+   iframe (`Tools/analysis-workbook.html`) via the same
+   `rrv8-analyze` postMessage bridge the Transactions per-row
+   Export uses. Analyzed workbook lands in the user&rsquo;s
+   Downloads with no analyzer tab popping up.
+
+4. **Sidebar polish** (PR UI#127 + #130 + #131).
+   - Perpetual: Common UOM pill removed; Lot detail toggle
+     moved into the grid header (smaller `.grid-pill-toggle`
+     variant).
+   - V8 sidebar: "Integrity" placeholder under Inventory
+     removed; new **Support** accordion (RR University +
+     Help Desk, open in new tabs) between Accounting and
+     the Status panel; "Admin" relabeled to "Administrator".
+
 Second follow-up &mdash; **Transactions cost-accountant
 redesign** (this chunk):
 
@@ -432,7 +500,23 @@ Inventory &rarr; As Of &rarr; Cardex Variance.
 >    `inventory-asof.html`, `inventory-cardex-variance.html`,
 >    `accounting-dmaais.html`). Read targeted sections when
 >    editing; pages are 5-9k lines each.
-> 10. **Recent commits across all three repos**:
+> 10. **Integrity-reports pass is closed.** All 11 views the
+>    DB exposes are now wired (see the wrap-up table above):
+>    DMAAIs has Model + Exception GL tabs; Transactions
+>    detects 5.14 (cross-periods) + 5.18 (duplicate sales)
+>    from authoritative integrity views; Perpetual has
+>    Analyze Frozen Cost + Analyze GL Class (headless
+>    analyzer handoff) and a Setup warnings band for the
+>    three small per-item integrity reports. `v_integrity2_aai_discrp`
+>    was dropped; no `v_integrity9` exists in the DB.
+> 11. **All repos default to `Dev` now.** The UI repo&rsquo;s
+>    `main` is the stable surface "for later" (no public
+>    release yet); current development lives on Dev with
+>    auto-sync expected to ship between Dev and main. See
+>    [`feedback_dev_default_auto_main`](../../../.claude/projects/C--source-repos-RapidReconciler-UI/memory/feedback_dev_default_auto_main.md).
+>    Repo renames: `RapidReconciler-SQL` &rarr; `RapidReconciler-DB`,
+>    `RapidReconciler-AI` &rarr; `RapidReconciler-UI`.
+> 12. **Recent commits across all three repos**:
 >    ```
 >    git -C "C:/source/repos/RapidReconciler-UI"    log --oneline -10
 >    git -C "C:/source/repos/RapidReconciler-Agent" log --oneline -10
