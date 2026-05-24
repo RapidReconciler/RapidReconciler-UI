@@ -57,11 +57,20 @@ window.RR_CONFIG = {
 // Areas served by the green-field test agent instead of v359. The set
 // is duplicated in each page's rrFetch (no shared script). Update both
 // when adding an endpoint.
+//
+// The trailing three (`inventory/integrity/aai-*`) are PLANNED endpoints
+// the test agent doesn't expose yet — the AAI-overlay surface for the
+// DMAAIs worklist (load latest analysis snapshot, load + save analyst
+// responses). They'll 404 until the controllers land; V8 surfaces a
+// visible fetch-error banner per the production-only rule.
 window.RR_TEST_AGENT_AREAS = [
   'inventory/reconciliation/rows',
   'inventory/reconciliation/history',
   'inventory/audit-detail',
-  'inventory/variance-component'
+  'inventory/variance-component',
+  'inventory/integrity/aai-analysis-latest',
+  'inventory/integrity/aai-responses',
+  'inventory/integrity/aai-save-responses'
 ];
 
 // Per-mode VALC defaults. Used when RR_CONFIG.authBase is null and

@@ -1527,6 +1527,16 @@
     if (contentType) h['Content-Type'] = contentType;
     return h;
   }
+  // Endpoints owned by the green-field data-services test agent
+  // (RapidReconciler-Agent). Source of truth is RR_TEST_AGENT_AREAS
+  // in config.js; this local fallback covers the case where config.js
+  // failed to load.
+  const _testAgentAreas = new Set(window.RR_TEST_AGENT_AREAS || [
+    'inventory/reconciliation/rows',
+    'inventory/reconciliation/history',
+    'inventory/audit-detail',
+    'inventory/variance-component'
+  ]);
   function rrFetch(area, opts) {
     opts = opts || {};
     if (IS_DEMO) {
@@ -1534,11 +1544,17 @@
       return fetch((RR_CONFIG.dataPath || 'data/') + file, { cache: 'no-store' })
         .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status + ' on ' + file); return r.json(); });
     }
-    const db = window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex];
-    if (!db || !db.ip) {
-      return Promise.reject(new Error('No active database in session — sign in via the hub first.'));
+    let base;
+    if (_testAgentAreas.has(area)) {
+      base = RR_CONFIG.testAgentBase || 'http://localhost:34537';
+    } else {
+      const db = window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex];
+      if (!db || !db.ip) {
+        return Promise.reject(new Error('No active database in session — sign in via the hub first.'));
+      }
+      base = 'https://' + db.ip;
     }
-    const url = 'https://' + db.ip + '/' + area;
+    const url = base + '/' + area;
     return fetch(url, {
       method:  opts.method || 'GET',
       headers: prodHeaders(opts.body ? 'application/json;charset=UTF-8' : null),
@@ -3600,31 +3616,53 @@
 
   // ============================================================
   //  Period bars (shared module)
-  //  Source the perpetual-balance-per-period history from the
-  //  accountSummary block already cached in reconciliation.json
-  //  (each row's `perpetual` is the on-hand $ valuation at that
-  //  account-period close). Period click still flips the active
-  //  period; demo only carries one snapshot so other bars surface
-  //  a toast and snap back.
+  //  Cross-period Perpetual valuation history. In staging/prod,
+  //  hits the test agent's /inventory/reconciliation/history
+  //  endpoint and reads `perpetualBalance` per period. In demo mode,
+  //  falls back to the committed reconciliation.json snapshot's
+  //  accountSummary[] (frozen per the production-only rule).
+  //  Period click flips the active period; demo only carries one
+  //  snapshot so other bars surface a toast and snap back.
   // ============================================================
   let _periodBars = null;
+  async function loadAsOfPeriodHistory() {
+    if (IS_DEMO) {
+      try {
+        const recon = await fetch('data/reconciliation.json', { cache: 'force-cache' })
+          .then(r => r.ok ? r.json() : null);
+        const summary = (recon && recon.accountSummary) || [];
+        const byPeriod = new Map();
+        summary.forEach(r => {
+          byPeriod.set(r.periodEnds, (byPeriod.get(r.periodEnds) || 0) + (r.perpetual || 0));
+        });
+        return Array.from(byPeriod.entries())
+          .sort((a, b) => a[0].localeCompare(b[0]))
+          .map(([period, value]) => ({ period, value: Math.round(value * 100) / 100 }));
+      } catch (_) { return []; }
+    }
+    try {
+      const body = {
+        period: null,
+        currencies: [], companies: [], objects: [],
+        businessUnits: [], subsidiaries: []
+      };
+      const resp = await rrFetch('inventory/reconciliation/history',
+                                 { method: 'POST', body });
+      const points = (resp && resp.points) || [];
+      return points.map(p => ({
+        period: p.period,
+        value:  Math.round((p.perpetualBalance || 0) * 100) / 100
+      }));
+    } catch (err) {
+      console.warn('[period-bars] history endpoint failed:', err && err.message);
+      return [];
+    }
+  }
   async function mountPeriodBarsForAsOf() {
     if (!window.RRV8 || !window.RRV8.mountPeriodBars) return;
     const host = document.getElementById('js-period-bars');
     if (!host) return;
-    let history = [];
-    try {
-      const recon = await fetch('data/reconciliation.json', { cache: 'force-cache' })
-        .then(r => r.ok ? r.json() : null);
-      const summary = (recon && recon.accountSummary) || [];
-      const byPeriod = new Map();
-      summary.forEach(r => {
-        byPeriod.set(r.periodEnds, (byPeriod.get(r.periodEnds) || 0) + (r.perpetual || 0));
-      });
-      history = Array.from(byPeriod.entries())
-        .sort((a, b) => a[0].localeCompare(b[0]))
-        .map(([period, value]) => ({ period, value: Math.round(value * 100) / 100 }));
-    } catch (_) {}
+    const history = await loadAsOfPeriodHistory();
     const cur = (_data && _data._meta && _data._meta.period) ||
                 (history.length ? history[history.length - 1].period : null);
     _periodBars = window.RRV8.mountPeriodBars({

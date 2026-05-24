@@ -912,6 +912,16 @@
     if (contentType) h['Content-Type'] = contentType;
     return h;
   }
+  // Endpoints owned by the green-field data-services test agent
+  // (RapidReconciler-Agent). Source of truth is RR_TEST_AGENT_AREAS
+  // in config.js; this local fallback covers the case where config.js
+  // failed to load.
+  const _testAgentAreas = new Set(window.RR_TEST_AGENT_AREAS || [
+    'inventory/reconciliation/rows',
+    'inventory/reconciliation/history',
+    'inventory/audit-detail',
+    'inventory/variance-component'
+  ]);
   function rrFetch(area, opts) {
     opts = opts || {};
     if (IS_DEMO) {
@@ -919,11 +929,17 @@
       return fetch((RR_CONFIG.dataPath || 'data/') + file, { cache: 'no-store' })
         .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status + ' on ' + file); return r.json(); });
     }
-    const db = window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex];
-    if (!db || !db.ip) {
-      return Promise.reject(new Error('No active database in session — sign in via the hub first.'));
+    let base;
+    if (_testAgentAreas.has(area)) {
+      base = RR_CONFIG.testAgentBase || 'http://localhost:34537';
+    } else {
+      const db = window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex];
+      if (!db || !db.ip) {
+        return Promise.reject(new Error('No active database in session — sign in via the hub first.'));
+      }
+      base = 'https://' + db.ip;
     }
-    const url = 'https://' + db.ip + '/' + area;
+    const url = base + '/' + area;
     return fetch(url, {
       method:  opts.method || 'GET',
       headers: prodHeaders(opts.body ? 'application/json;charset=UTF-8' : null),
