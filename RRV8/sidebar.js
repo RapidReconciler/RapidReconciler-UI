@@ -226,7 +226,6 @@
         <a href="inventory-cardex-variance.html" class="sidebar-nav-child${cls('cardex-variance')}" data-nav-page="cardex-variance">Cardex Variance</a>
         <a href="inventory-asof.html"           class="sidebar-nav-child${cls('asof')}"           data-nav-page="asof">Perpetual</a>
         <a href="#" class="sidebar-nav-child">Roll Forward</a>
-        <a href="#" class="sidebar-nav-child">Integrity</a>
       </div>
     </div>
     <div class="sidebar-module${expCls('in-transit')}" data-module="in-transit">
@@ -266,6 +265,29 @@
       </button>
       <div class="sidebar-nav-children">
         <a href="accounting-dmaais.html" class="sidebar-nav-child${cls('dmaais')}" data-nav-page="dmaais">DMAAIs</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Support — out-of-V8 KB destinations. Open in new tab so the
+       analyst keeps their V8 context. -->
+  <div class="sidebar-section">
+    <div class="sidebar-module${expCls('support')}" data-module="support">
+      <button type="button" class="sidebar-nav-item" data-module-toggle="support" aria-expanded="${expAria('support')}">
+        <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/>
+          <circle cx="12" cy="12" r="4"/>
+          <line x1="4.93" y1="4.93" x2="9.17" y2="9.17"/>
+          <line x1="14.83" y1="14.83" x2="19.07" y2="19.07"/>
+          <line x1="14.83" y1="9.17" x2="19.07" y2="4.93"/>
+          <line x1="4.93" y1="19.07" x2="9.17" y2="14.83"/>
+        </svg>
+        <span class="sidebar-nav-text">Support</span>
+        <svg class="sidebar-nav-caret" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 6 8 10 12 6"/></svg>
+      </button>
+      <div class="sidebar-nav-children">
+        <a href="../RRUniversity/rapidreconciler-university.html" class="sidebar-nav-child" target="_blank" rel="noopener">RR University</a>
+        <a href="../HelpDesk/troubleshooting.html" class="sidebar-nav-child" target="_blank" rel="noopener">Help Desk</a>
       </div>
     </div>
   </div>
