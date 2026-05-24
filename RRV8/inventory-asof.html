@@ -256,6 +256,33 @@
   }
   .action-toggle.is-active .toggle-pip { background: var(--blue); }
   .action-toggle.is-active .toggle-pip::after { left: 14px; }
+
+  /* Smaller toggle variant for use inside the grid-state-cluster.
+     Same on/off semantics as .action-toggle but scaled to fit
+     alongside .grid-pill siblings (search, Excel, Columns, count). */
+  .grid-pill-toggle { gap: 6px; }
+  .grid-pill-toggle .grid-toggle-pip {
+    width: 20px;
+    height: 12px;
+    border-radius: 100px;
+    background: var(--rule-strong);
+    position: relative;
+    transition: background 0.15s;
+    flex-shrink: 0;
+  }
+  .grid-pill-toggle .grid-toggle-pip::after {
+    content: '';
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.18);
+    transition: left 0.15s;
+  }
+  .grid-pill-toggle.is-active { border-color: var(--blue); color: var(--blue); }
+  .grid-pill-toggle.is-active .grid-toggle-pip { background: var(--blue); }
+  .grid-pill-toggle.is-active .grid-toggle-pip::after { left: 10px; }
   .action-button {
     background: var(--orange);
     color: #fff;
@@ -1372,16 +1399,7 @@
       <span class="action-control-value" id="company-pill-value">All</span>
       <svg class="pill-caret" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 6 8 10 12 6"/></svg>
     </button>
-    <button type="button" class="action-control is-disabled" id="uom-pill" disabled aria-disabled="true" title="Common UOM depends on the per-item conversion table set up on the Admin page — not built yet. Re-enable when the admin surface ships.">
-      <span class="action-control-label">Common UOM</span>
-      <span class="action-control-value" id="uom-pill-value">All</span>
-      <svg class="pill-caret" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 6 8 10 12 6"/></svg>
-    </button>
-    <button type="button" class="action-control action-toggle" id="lot-detail-pill" title="Show lot- and location-level rows instead of the item rollup">
-      <span class="toggle-pip"></span>
-      <span class="action-control-label">Lot detail</span>
-    </button>
-    <div class="action-spacer"></div>
+<div class="action-spacer"></div>
     <div class="filter-banner" id="filter-banner" hidden>
       <span id="filter-banner-text">&mdash;</span>
       <button type="button" class="filter-banner-clear" id="filter-banner-clear">Clear &times;</button>
@@ -1496,6 +1514,10 @@
       </button>
       <div class="details-head-right">
         <div class="grid-state-cluster">
+          <button type="button" class="grid-pill grid-pill-toggle" id="lot-detail-pill" title="Show lot- and location-level rows instead of the item rollup">
+            <span class="grid-toggle-pip"></span>
+            <span>Lot detail</span>
+          </button>
           <label class="grid-search" title="Substring search across visible columns. Prefix the query with ^ to switch to starts-with (e.g. ^468- finds Item 468-... but not X-468-).">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="7" r="4"/><line x1="10" y1="10" x2="14" y2="14"/></svg>
             <input type="search" id="grid-search-input" placeholder="Search rows&hellip; (^ for starts-with)" autocomplete="off" spellcheck="false">
@@ -1899,7 +1921,6 @@
   const COL_LS_KEY       = 'rrv8-asof-columns-v1';
   const COL_ORDER_LS_KEY = 'rrv8-asof-col-order-v1';
   const SORT_LS_KEY      = 'rrv8-asof-sort-v1';
-  const UOM_LS_KEY       = 'rrv8-asof-uom-v1';
   const COMPANY_LS_KEY   = 'rrv8-asof-company-v1';
   const SUMMARIZE_LS_KEY = 'rrv8-asof-summarize-v1';
   const COLFILTER_LS_KEY = 'rrv8-asof-colfilter-v1';
@@ -1957,20 +1978,13 @@
   function saveSort() {
     try { localStorage.setItem(SORT_LS_KEY, JSON.stringify({ key: _state.sortKey, dir: _state.sortDir })); } catch (_) {}
   }
-  function loadUom() {
-    // Common UOM is disabled pending the Admin-page conversion table.
-    // Wipe any previously-persisted filter so the disabled pill can't
-    // hide rows the analyst doesn't have a way to un-narrow.
-    try { localStorage.removeItem(UOM_LS_KEY); } catch (_) {}
-    return '';
-  }
-  function saveUom() {
-    try {
-      if (_state.uomFilter) localStorage.setItem(UOM_LS_KEY, _state.uomFilter);
-      else localStorage.removeItem(UOM_LS_KEY);
-    } catch (_) {}
-  }
-  function loadCompany() {
+  // On boot, wipe any stale UOM filter from a previous version that
+  // shipped the now-retired Common UOM pill — without this, a user
+  // who had set a UOM filter in localStorage before the pill was
+  // removed would see their grid silently narrowed with no way to
+  // clear it.
+  try { localStorage.removeItem('rrv8-asof-uom-v1'); } catch (_) {}
+function loadCompany() {
     try { return localStorage.getItem(COMPANY_LS_KEY) || ''; } catch (_) { return ''; }
   }
   function saveCompany() {
@@ -2042,7 +2056,6 @@
     sortDir:       'asc',
     gridSearch:    '',
     companyFilter: loadCompany(),
-    uomFilter:     loadUom(),
     summarize:     loadSummarize(),
     expanded:      new Set(),  // keys of rolled-up rows the user has expanded
     columnFilters: loadColumnFilters(),
@@ -2213,9 +2226,6 @@
     if (_state.companyFilter) {
       rows = rows.filter(r => (r.CompanyNumber || '') === _state.companyFilter);
     }
-    if (_state.uomFilter) {
-      rows = rows.filter(r => (r.UOM || '') === _state.uomFilter);
-    }
     if (_state.summarize) rows = summarizeRows(rows);
     // §9 — per-column funnel filters. Applied AFTER rollup so the
     // distinct values reflect what's actually visible in the grid.
@@ -2292,7 +2302,6 @@
     if (!_data || !Array.isArray(_data.rows)) return [];
     let rows = _data.rows;
     if (_state.companyFilter) rows = rows.filter(r => (r.CompanyNumber || '') === _state.companyFilter);
-    if (_state.uomFilter)     rows = rows.filter(r => (r.UOM || '') === _state.uomFilter);
     if (_state.summarize)     rows = summarizeRows(rows);
     const cf = _state.columnFilters || {};
     const otherKeys = Object.keys(cf).filter(k => k !== colKey && cf[k] && cf[k].size);
@@ -2546,13 +2555,7 @@
     label.textContent = on === total ? 'Columns' : ('Columns: ' + on + ' / ' + total);
     pill.classList.toggle('is-narrowed', on < total);
   }
-  function updateUomPill() {
-    const val = document.getElementById('uom-pill-value');
-    const pill = document.getElementById('uom-pill');
-    if (val) val.textContent = _state.uomFilter || 'All';
-    if (pill) pill.classList.toggle('is-active', !!_state.uomFilter);
-  }
-  function updateLotDetailPill() {
+function updateLotDetailPill() {
     // The toggle is "Lot detail" — semantically the inverse of
     // summarize. When the analyst flips it on, we drop the rollup
     // and surface the raw per-lot rows.
@@ -2607,7 +2610,6 @@
     if (!bar || !text) return;
     const bits = [];
     if (_state.companyFilter) bits.push('Company = ' + _state.companyFilter);
-    if (_state.uomFilter)     bits.push('UOM = ' + _state.uomFilter);
     if (!bits.length) { bar.hidden = true; return; }
     text.textContent = bits.join(' · ');
     bar.hidden = false;
@@ -2770,7 +2772,6 @@
   function renderAll() {
     if (!_data) return;
     updateCompanyPill();
-    updateUomPill();
     updateLotDetailPill();
     updateFilterBanner();
     renderDetails();
@@ -2882,58 +2883,7 @@
     });
   }
 
-  // ----- UOM dropdown popover -----
-  const uomPill = document.getElementById('uom-pill');
-  function buildUomPopover() {
-    const pop = document.getElementById('filter-popover');
-    if (!pop || !_data) return;
-    pop.dataset.group = '__uom';
-    // Count rows per UOM in the unfiltered data, sorted by frequency.
-    const counts = new Map();
-    (_data.rows || []).forEach(r => {
-      const u = (r.UOM || '').trim();
-      if (!u) return;
-      counts.set(u, (counts.get(u) || 0) + 1);
-    });
-    const uoms = Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
-    const allRow = '<div class="uom-row' + (_state.uomFilter ? '' : ' is-selected') + '" data-uom="">' +
-                     '<span>All UOMs</span>' +
-                     '<span class="uom-count">' + (_data.rows || []).length.toLocaleString('en-US') + '</span>' +
-                   '</div>';
-    const items = uoms.map(([u, c]) =>
-      '<div class="uom-row' + (_state.uomFilter === u ? ' is-selected' : '') + '" data-uom="' + escapeHtml(u) + '">' +
-        '<span>' + escapeHtml(u) + '</span>' +
-        '<span class="uom-count">' + c.toLocaleString('en-US') + '</span>' +
-      '</div>'
-    ).join('');
-    pop.innerHTML =
-      '<div class="popover-section-label">Common UOM</div>' +
-      '<div class="uom-list">' + allRow + items + '</div>';
-    pop.querySelectorAll('.uom-row').forEach(row => {
-      row.addEventListener('click', () => {
-        const u = row.dataset.uom || '';
-        _state.uomFilter = u;
-        saveUom();
-        hideAllPopovers();
-        renderAll();
-      });
-    });
-  }
-  if (uomPill) {
-    uomPill.setAttribute('data-pop-anchor', 'uom');
-    uomPill.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const pop = document.getElementById('filter-popover');
-      if (!pop) return;
-      const wasOpen = !pop.hidden && pop.dataset.group === '__uom';
-      hideAllPopovers();
-      if (wasOpen) return;
-      buildUomPopover();
-      positionPopover(pop, uomPill);
-    });
-  }
-
-  // ----- Lot detail toggle (inverse of summarize) -----
+// ----- Lot detail toggle (inverse of summarize) -----
   const lotDetailPill = document.getElementById('lot-detail-pill');
   if (lotDetailPill) {
     lotDetailPill.addEventListener('click', () => {
@@ -3417,11 +3367,13 @@
   }
 
   // ----- Filter-banner Clear -----
+  // The banner surfaces the active page-level filters (currently
+  // only Company). Click clears them all at once.
   const fbClear = document.getElementById('filter-banner-clear');
   if (fbClear) {
     fbClear.addEventListener('click', () => {
-      _state.uomFilter = '';
-      saveUom();
+      _state.companyFilter = '';
+      saveCompany();
       renderAll();
     });
   }
@@ -4096,7 +4048,6 @@
   renderTableHeader();
   updateColPill();
   updateCompanyPill();
-  updateUomPill();
   updateLotDetailPill();
   updateResidualCard();
   wireColumnDrag();
