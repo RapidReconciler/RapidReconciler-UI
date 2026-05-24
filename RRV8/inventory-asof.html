@@ -1386,6 +1386,19 @@
       <span id="filter-banner-text">&mdash;</span>
       <button type="button" class="filter-banner-clear" id="filter-banner-clear">Clear &times;</button>
     </div>
+    <!-- Analyze integrity reports via the headless analyzer pipeline.
+         Click → fetches v_integrity7_frozen_cost rows from the agent,
+         builds a workbook the analyzer's FrozenCostTemplate consumes,
+         hands off to Tools/analysis-workbook.html in a hidden iframe,
+         analyzed output lands in the user's Downloads. -->
+    <button type="button" class="action-control" id="js-analyze-frozen-cost-btn" title="Fetch the frozen-cost integrity report and run the analyzer on it. Produces an analyst-grade workbook with findings broken out by issue type (F30026-only / F4105-only / mismatch).">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M2 13h12"/>
+        <path d="M4 13V8"/><path d="M7 13V5"/><path d="M10 13V9"/><path d="M13 13V6"/>
+      </svg>
+      <span class="action-control-label">Analyze</span>
+      <span class="action-control-value">Frozen Cost</span>
+    </button>
   </div>
 
   <!-- ============================================================
@@ -3799,6 +3812,137 @@
   }
   const exportBtn = document.getElementById('grid-export-btn');
   if (exportBtn) exportBtn.addEventListener('click', exportGridToExcel);
+
+  // ============================================================
+  //  Integrity-report analyzer handoff
+  //
+  //  Pattern lifted verbatim from inventory-transactions.html's
+  //  per-row Export flow. Run the analyzer HEADLESSLY in a hidden
+  //  iframe and post the workbook buffer over via 'rrv8-analyze'.
+  //  Analyzer's rrv8AutoAnalyze runs inside the iframe; the
+  //  browser surfaces the analyzed file in the parent window's
+  //  downloads with no visible analyzer tab.
+  //
+  //  Falls back to downloading the raw buffer if the analyzer
+  //  fails to acknowledge within 30 s or signals an error.
+  // ============================================================
+  function handOffToAnalyzer(detailBuffer, fallbackFilename) {
+    const iframe = document.createElement('iframe');
+    iframe.src = '../Tools/analysis-workbook.html';
+    iframe.setAttribute('aria-hidden', 'true');
+    iframe.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;border:0;opacity:0;pointer-events:none;';
+    document.body.appendChild(iframe);
+
+    let sent = false;
+    let done = false;
+    function fallbackDownload(reason) {
+      console.warn('Analyzer headless run failed — falling back to direct download:', reason);
+      const blob = new Blob([detailBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href = url; a.download = fallbackFilename || 'integrity-report.xlsx';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+    function cleanup() {
+      window.removeEventListener('message', onMsg);
+      clearInterval(pingTimer);
+      clearTimeout(failTimer);
+      setTimeout(() => { try { iframe.remove(); } catch (_) {} }, 1500);
+    }
+    function onMsg(ev) {
+      if (ev.source !== iframe.contentWindow || ev.origin !== location.origin) return;
+      if (!ev.data) return;
+      if (ev.data.type === 'rrv8-analyze-ready' && !sent) {
+        sent = true;
+        try {
+          iframe.contentWindow.postMessage({ type: 'rrv8-analyze', detail: detailBuffer }, location.origin);
+        } catch (e) { fallbackDownload(e.message); cleanup(); }
+      } else if (ev.data.type === 'rrv8-analyze-done') {
+        done = true;
+        cleanup();
+      } else if (ev.data.type === 'rrv8-analyze-error') {
+        fallbackDownload(ev.data.message || 'analyzer reported error');
+        cleanup();
+      }
+    }
+    window.addEventListener('message', onMsg);
+    const pingTimer = setInterval(() => {
+      if (sent) { clearInterval(pingTimer); return; }
+      try { iframe.contentWindow.postMessage({ type: 'rrv8-analyze-ping' }, location.origin); } catch (_) {}
+    }, 500);
+    const failTimer = setTimeout(() => {
+      if (!done) { fallbackDownload('timed out'); cleanup(); }
+    }, 30000);
+  }
+
+  // ============================================================
+  //  Analyze Frozen Cost
+  //
+  //  Fetches v_integrity7_frozen_cost rows from the agent, builds
+  //  the workbook shape the analyzer's FrozenCostTemplate expects
+  //  (sheet 'Integrity' with TitleCase headers matching the view's
+  //  columns), and hands off to the headless analyzer pipeline.
+  //
+  //  The integrity view's Lot column already embeds the legacy
+  //  "QOH N" suffix the template parses — no enrichment step
+  //  needed on the V8 side.
+  // ============================================================
+  async function analyzeFrozenCost(btn) {
+    if (!btn || btn.disabled) return;
+    const origInner    = btn.innerHTML;
+    const origDisabled = btn.disabled;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="action-control-label">Analyzing&hellip;</span>';
+    try {
+      const payload = await rrFetch('inventory/integrity', {
+        method: 'POST',
+        body: {
+          report: 'v_integrity7_frozen_cost',
+          reconciliationFilter: reconciliationFilterFromSession(),
+          take: 20000, skip: 0, page: 1, pageSize: 20000
+        },
+        demoFile: 'v-integrity7-frozen-cost'
+      });
+      const rows = (payload && payload.data) || (Array.isArray(payload) ? payload : []);
+      if (!rows.length) { toast('No frozen-cost variance rows in scope'); return; }
+
+      if (typeof XLSX === 'undefined') {
+        toast('Excel library still loading — try again in a moment');
+        return;
+      }
+
+      // Headers match FrozenCostTemplate.detect()/parse(); see
+      // Tools/analysis-workbook.html. Helpers.readHeaders is
+      // case-insensitive so TitleCase from the view binds to the
+      // template's lowercase lookups.
+      const headers = [
+        'CompanyNumber', 'BranchPlant', 'ShortItem', 'ItemNumber', 'ThirdItem',
+        'CostLevel', 'Location', 'Lot', 'ST', 'UnitCost', 'FrzCost', 'Variance',
+        'Prodplant', 'Prodcost'
+      ];
+      const aoa = [headers].concat(rows.map(r => headers.map(h => r[h] == null ? '' : r[h])));
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      XLSX.utils.book_append_sheet(wb, ws, 'Integrity');
+      const buffer = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+
+      const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 13);
+      const fallbackName = 'FrozenCostIntegrity_' + stamp + '.xlsx';
+      handOffToAnalyzer(buffer, fallbackName);
+      toast('Analyzing &mdash; the analyzed workbook will land in your downloads.');
+    } catch (err) {
+      console.error('Frozen Cost analyze failed:', err);
+      toast('Frozen Cost analyze failed: ' + (err.message || err));
+    } finally {
+      btn.disabled = origDisabled;
+      btn.innerHTML = origInner;
+    }
+  }
+  const analyzeFrozenCostBtn = document.getElementById('js-analyze-frozen-cost-btn');
+  if (analyzeFrozenCostBtn) {
+    analyzeFrozenCostBtn.addEventListener('click', () => analyzeFrozenCost(analyzeFrozenCostBtn));
+  }
 
   // ============================================================
   //  Period bars (shared module)
