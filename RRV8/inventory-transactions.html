@@ -562,6 +562,7 @@
   }
 
   .action-card {
+    position: relative;
     display: flex;
     flex-direction: column;
     gap: 2px;
@@ -575,6 +576,76 @@
     color: inherit;
     transition: background 0.12s, border-color 0.12s, transform 0.08s, box-shadow 0.12s;
   }
+  /* Pattern-card info affordance — small (i) in the top-right that
+     surfaces a richer description + suggested next step on hover.
+     Hover-only (no click); clicking the icon doesn't fire the card
+     filter (handled by the data-action="info" check in the bind code). */
+  .action-card-info {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(31, 45, 74, 0.10);
+    color: var(--navy);
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 700;
+    font-size: 10px;
+    font-style: italic;
+    cursor: help;
+    opacity: 0.65;
+    transition: opacity 0.12s, background 0.12s;
+    user-select: none;
+    z-index: 2;
+  }
+  .action-card-info:hover {
+    opacity: 1;
+    background: rgba(31, 45, 74, 0.22);
+  }
+  .action-card-info-tip {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: -4px;
+    z-index: 100;
+    width: 280px;
+    background: #1f2d4a;
+    color: #fff;
+    padding: 10px 12px 11px;
+    border-radius: 6px;
+    font-family: 'Source Sans 3', sans-serif;
+    font-style: normal;
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 1.45;
+    text-align: left;
+    letter-spacing: 0;
+    box-shadow: 0 6px 18px rgba(15, 23, 42, 0.22);
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-2px);
+    transition: opacity 0.14s, transform 0.14s;
+    cursor: default;
+  }
+  .action-card-info:hover .action-card-info-tip,
+  .action-card-info:focus-within .action-card-info-tip {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+  }
+  .action-card-info-tip-heading {
+    font-weight: 700;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: rgba(255, 255, 255, 0.65);
+    margin-top: 7px;
+  }
+  .action-card-info-tip-heading:first-child { margin-top: 0; }
+  .action-card-info-tip-body { margin-top: 2px; }
   .action-card:hover {
     background: rgba(43, 95, 176, 0.06);
     border-color: rgba(43, 95, 176, 0.32);
@@ -3050,7 +3121,12 @@
         const it  = items[idx];
         if (!it || typeof it.onclick !== 'function') return;
         const fire = () => applyActionFilter(it.onclick);
-        card.addEventListener('click', fire);
+        card.addEventListener('click', (e) => {
+          // Clicks on the info-icon (or its hover tooltip) must NOT
+          // fire the card filter — the icon is a hover-only affordance.
+          if (e.target.closest('[data-action="info"]')) return;
+          fire();
+        });
         // role="button" divs don't natively activate on Enter / Space.
         card.addEventListener('keydown', (e) => {
           if (e.key === 'Enter' || e.key === ' ') {
@@ -3145,10 +3221,52 @@
     return { exact, wild };
   }
 
-  // Returns { code, label, desc } or null when nothing fires.
-  // Order matters &mdash; narrower / higher-signal patterns
-  // come first so they win over the generic GL-only / cardex-
-  // only fallback when both could apply.
+  // Single source of truth for the pattern catalog. `label` is the
+  // card title; `desc` explains the root cause; `action` is the
+  // analyst&rsquo;s next step. Both `desc` and `action` surface in
+  // the pattern-card info-icon tooltip.
+  const PATTERN_INFO = {
+    '5.17': {
+      label:  'Voucher Variance on Inventory (PV)',
+      desc:   'AP voucher variance posted to an inventory account instead of the AP variance account — DMAAI 4220 likely routes inventory items there.',
+      action: 'Check DMAAI 4220 for this company / GL class. Reverse the JE, fix the AAI route, and re-post.'
+    },
+    '5.16': {
+      label:  'Manufacturing Cost Mismatch',
+      desc:   'Work order completion: cardex unit cost (F4111) differs from GL unit cost (F0911). The variance equals cardex_qty × cost_delta.',
+      action: 'Re-run R31802A in proof mode against the WO to see the recompute. If the delta persists, the WO needs a manual cost adjustment.'
+    },
+    '5.6': {
+      label:  'Standard Cost Change',
+      desc:   'F4111 cardex revaluation from a standard cost change (DT=BV) or unposted cardex-only IB revaluation.',
+      action: 'Usually transient — reconciles when the matching GL revaluation lands in the next batch post. No action if the next period clears it.'
+    },
+    '5.4': {
+      label:  'Account Mismatch',
+      desc:   'The offset account on this doc differs from the account JDE\'s DMAAI table (F4095) routes to for this (Order Type, Doc Type, GL Class).',
+      action: 'Look up the expected account in F4095 for this combination. Reverse the JE and re-post to the configured account.'
+    },
+    '5.2': {
+      label:  'GL-Only Entry (No Cardex)',
+      desc:   'F0911 journal entry against an inventory account with no F4111 counterpart. Usually a manual JE the analyst posted without a cardex adjustment.',
+      action: 'Either post the matching cardex movement (manual cardex tool) or reverse the JE if it was misposted.'
+    },
+    '5.3': {
+      label:  'Cardex-Only Entry (No GL)',
+      desc:   'F4111 movement with no F0911 journal posting. Usually an unposted GL batch.',
+      action: 'Run R09800 (General Ledger Post) against the open batch. If R09800 errors, check the batch in the JDE Work Center.'
+    },
+    '5.11': {
+      label:  'Other Variance',
+      desc:   'Cardex and GL both posted but disagree, and the variance doesn\'t fit a narrower grid-level pattern.',
+      action: 'Click Export on a representative row — the analyzer reads F4111 / F0911 detail and refines into 5.5 / 5.7 / 5.13 / 5.14 / 5.15.'
+    }
+  };
+
+  // Returns a pattern code (key of PATTERN_INFO) or null when no
+  // pattern fires. Order matters — narrower / higher-signal
+  // patterns come first so they win over the generic GL-only /
+  // cardex-only fallback when both could apply.
   function classifyGridRow(row) {
     const cardex   = Number(row.CardexAmount) || 0;
     const ledger   = Number(row.LedgerAmount) || 0;
@@ -3157,31 +3275,17 @@
     const dt = String(row.DT || '').trim().toUpperCase();
     const eps = 0.01;
 
-    // 5.17 Voucher Variance on Inventory &mdash; AP voucher
-    // variance posted directly to inventory (DMAAI 4220 route).
-    if (ot === 'OP' && dt === 'PV') {
-      return { code: '5.17', label: 'Voucher Variance on Inventory (PV)',
-               desc: 'AP voucher variance routed to inventory by DMAAI 4220.' };
-    }
+    // 5.17 — AP voucher variance posted directly to inventory.
+    if (ot === 'OP' && dt === 'PV') return '5.17';
 
-    // 5.16 Manufacturing Cost Mismatch &mdash; cardex unit cost
-    // differs from GL unit cost on work-order completion docs.
-    if (ot === 'WO' && (dt === 'IM' || dt === 'IC' || dt === 'IH')) {
-      return { code: '5.16', label: 'Manufacturing Cost Mismatch',
-               desc: 'Work order completion: cardex unit cost differs from GL unit cost.' };
-    }
+    // 5.16 — work-order completion cardex vs GL unit cost diverged.
+    if (ot === 'WO' && (dt === 'IM' || dt === 'IC' || dt === 'IH')) return '5.16';
 
-    // 5.6 Standard Cost Change &mdash; F4111 cardex revaluation
-    // from a cost roll (R30837 / IB revaluation doc, or BV).
-    if (dt === 'BV' || (dt === 'IB' && Math.abs(ledger) < eps)) {
-      return { code: '5.6', label: 'Standard Cost Change',
-               desc: 'F4111 cardex revaluation from a standard cost change.' };
-    }
+    // 5.6 — F4111 cardex revaluation from a cost roll.
+    if (dt === 'BV' || (dt === 'IB' && Math.abs(ledger) < eps)) return '5.6';
 
-    // 5.4 Account Mismatch &mdash; the offset account on this
-    // doc differs from the DMAAI-configured account for the
-    // (Co, OT, DT, GLClass) tuple. Disabled until the DMAAI
-    // index is built (preloadDmaais sets _dmaaiIndex).
+    // 5.4 — offset account differs from DMAAI-configured account.
+    // Disabled until the DMAAI index is built (preloadDmaais).
     if (_dmaaiIndex && row.OffsetAccount) {
       const co = String(row.CompanyNumber || '').trim();
       const gc = String(row.GLClass       || '').trim();
@@ -3189,48 +3293,32 @@
       if (co && dt) {
         const expected = _dmaaiIndex.exact.get(co + '|' + ot + '|' + dt + '|' + gc) ||
                          _dmaaiIndex.wild.get(co  + '|' + ot + '|' + dt);
-        if (expected && expected !== offsetTrim) {
-          return { code: '5.4', label: 'Account Mismatch',
-                   desc: 'Offset account differs from the DMAAI-configured account for this (OT, DT, GL class).' };
-        }
+        if (expected && expected !== offsetTrim) return '5.4';
       }
     }
 
-    // 5.2 GL-Only Entry (No Cardex) &mdash; manual JE against
-    // an inventory account with no F4111 counterpart.
-    if (Math.abs(cardex) < eps && Math.abs(ledger) >= eps) {
-      return { code: '5.2', label: 'GL-Only Entry (No Cardex)',
-               desc: 'F0911 posting against an inventory account with no F4111 counterpart.' };
-    }
+    // 5.2 — manual JE against an inventory account with no cardex.
+    if (Math.abs(cardex) < eps && Math.abs(ledger) >= eps) return '5.2';
 
-    // 5.3 Cardex-Only Entry (No GL) &mdash; F4111 movement that
-    // never made it to F0911 (likely unposted batch).
-    if (Math.abs(ledger) < eps && Math.abs(cardex) >= eps) {
-      return { code: '5.3', label: 'Cardex-Only Entry (No GL)',
-               desc: 'F4111 movement with no F0911 journal posting.' };
-    }
+    // 5.3 — cardex movement with no GL counterpart (likely
+    // unposted batch).
+    if (Math.abs(ledger) < eps && Math.abs(cardex) >= eps) return '5.3';
 
-    // 5.11 fallback &mdash; cardex and GL both posted but
-    // disagree. The analyzer's deeper per-detail classifier
-    // refines this into 5.5 / 5.7 / 5.13 / 5.14 / 5.15 / etc.
-    // when the analyst clicks Export.
-    if (Math.abs(variance) >= eps) {
-      return { code: '5.11', label: 'Other Variance',
-               desc: 'Cardex and GL both posted but disagree &mdash; export the row for full detail analysis.' };
-    }
+    // 5.11 — catch-all; the analyzer&rsquo;s per-detail classifier
+    // refines this into 5.5 / 5.7 / 5.13 / 5.14 / 5.15 on Export.
+    if (Math.abs(variance) >= eps) return '5.11';
+
     return null;
   }
 
   // Stamp _pattern on every row in place. Called whenever
   // _data.rows is rebuilt (initial load + revalidation) and
-  // again once the DMAAI index lands (so 5.4 can fire).
+  // again once the DMAAI index lands (so 5.4 can fire). Label
+  // and description live on PATTERN_INFO &mdash; consumers look
+  // them up by code rather than denormalizing onto every row.
   function stampPatterns(rows) {
     if (!Array.isArray(rows)) return;
-    rows.forEach(r => {
-      const p = classifyGridRow(r);
-      r._pattern    = p ? p.code  : null;
-      r._patternLbl = p ? p.label : null;
-    });
+    rows.forEach(r => { r._pattern = classifyGridRow(r); });
   }
 
   // Variance breakdown for the slice of rows a card represents.
@@ -3272,12 +3360,7 @@
     const byCode = new Map();
     unworked.forEach(r => {
       if (!r._pattern) return;
-      const g = byCode.get(r._pattern) || {
-        code:    r._pattern,
-        label:   r._patternLbl || r._pattern,
-        rows:    [],
-        variance: 0
-      };
+      const g = byCode.get(r._pattern) || { code: r._pattern, rows: [], variance: 0 };
       g.rows.push(r);
       g.variance += Number(r.Variance) || 0;
       byCode.set(r._pattern, g);
@@ -3286,11 +3369,15 @@
       .filter(g => g.rows.length >= 2)
       .sort((a, b) => Math.abs(b.variance) - Math.abs(a.variance));
     return ranked.map(g => {
+      const info  = PATTERN_INFO[g.code] || { label: g.code, desc: '', action: '' };
       const slice = allRows.filter(r => r._pattern === g.code);
       return {
         eyebrow: 'Pattern ' + g.code,
-        code:    g.label,
+        code:    info.label,
         desc:    '',
+        // tip drives the info-icon hover popover on the card.
+        // Two-section structure: WHAT IT IS + LIKELY FIX.
+        tip:     { desc: info.desc, action: info.action },
         ...breakdownFor(slice),
         footer:  'pattern:' + g.code,
         onclick: () => { _state.activePattern = g.code; }
@@ -3397,11 +3484,30 @@
     const totalNeg     = it.totalVariance     < 0;
     const remainingNeg = it.remainingVariance < 0;
     const workedNeg    = it.workedVariance    < 0;
+    // Info icon + hover tooltip — only present on cards that carry
+    // a tip payload (pattern cards do; single-dimension detectors
+    // don&rsquo;t). data-action="info" tells the bind code below to
+    // skip the card&rsquo;s click handler when the icon is the target.
+    const infoHtml = it.tip ?
+      '<span class="action-card-info" data-action="info" role="img" aria-label="Pattern details">i' +
+        '<span class="action-card-info-tip" role="tooltip">' +
+          (it.tip.desc ?
+            '<div class="action-card-info-tip-heading">What it is</div>' +
+            '<div class="action-card-info-tip-body">' + escapeHtml(it.tip.desc) + '</div>'
+            : '') +
+          (it.tip.action ?
+            '<div class="action-card-info-tip-heading">Likely fix</div>' +
+            '<div class="action-card-info-tip-body">' + escapeHtml(it.tip.action) + '</div>'
+            : '') +
+        '</span>' +
+      '</span>'
+      : '';
     // <div role="button"> instead of <button> so the card can host a
     // <dl> for the stats grid. <button> only accepts phrasing content;
     // browsers auto-close it before flow content like <dl>, which left
     // the stats block as a sibling and ate clicks on that area.
     return '<div class="action-card" role="button" tabindex="0" data-idx="' + i + '" aria-label="Filter Details grid: ' + escapeHtml(title) + '">' +
+      infoHtml +
       '<span class="action-card-eyebrow">' + it.eyebrow + '</span>' +
       '<span class="action-card-title">' + escapeHtml(title) + '</span>' +
       '<dl class="action-card-stats">' +
@@ -3524,10 +3630,8 @@
     if (_state.activeType)    parts.push(_state.activeType);
     if (_state.activeCompany) parts.push('Co ' + _state.activeCompany);
     if (_state.activePattern) {
-      // Best-effort label: scan _data.rows for the first row with
-      // this pattern code to recover the friendly label.
-      const sample = (_data && _data.rows || []).find(r => r._pattern === _state.activePattern);
-      const label  = (sample && sample._patternLbl) || _state.activePattern;
+      const info = PATTERN_INFO[_state.activePattern];
+      const label = (info && info.label) || _state.activePattern;
       parts.push('Pattern ' + _state.activePattern + ' &mdash; ' + label);
     }
     function only(setName, universeKey) {
@@ -4111,6 +4215,14 @@
         if (!p || p === _state.period) return;
         _state.period = p;
         _periodBars.setCurrentPeriod(p);
+        // Card filters (activePattern, activeType, activeCompany,
+        // workedFilter, chip exclusions) are per-period focus state.
+        // When the analyst picks a new period they're starting fresh,
+        // so reset card-driven narrowing — otherwise the new period's
+        // Start Here strip rebuilds against the stale filter and
+        // surfaces empty / single-card states.
+        clearCardFilters();
+        if (typeof updateWorkedFilterPill === 'function') updateWorkedFilterPill();
         try { sessionStorage.clear(); } catch (_) {}
         loadData();
       },
@@ -4391,6 +4503,11 @@
         hideAllPopovers();
         if (newPeriod && newPeriod !== _state.period) {
           _state.period = newPeriod;
+          // Card filters reset on every period switch &mdash; same
+          // reasoning as the bar-chart onSwitch handler. The Start
+          // Here cards rebuild against the fresh period scope.
+          clearCardFilters();
+          if (typeof updateWorkedFilterPill === 'function') updateWorkedFilterPill();
           // Invalidate the transactions cache for the new period
           // (the scope cache stays — periods + status don't depend
           // on which period the user is viewing). Then re-fetch.
