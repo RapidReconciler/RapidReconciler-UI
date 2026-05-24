@@ -877,8 +877,44 @@
     letter-spacing: 0.05em;
     text-transform: uppercase;
     color: var(--navy);
+    transition: color 0.12s;
   }
   .details-head-right { display: flex; align-items: center; gap: 10px; }
+
+  /* Collapsible toggle on the left of the head — chevron + title,
+     both clickable. Clicking the toggle hides / shows the grid
+     body; the pills on the right (row count, search, Excel,
+     columns) stay visible always so the analyst still sees scope
+     without expanding. Mirrors the Transactions page pattern
+     (see RRV8/HANDOFF.md). */
+  .details-toggle {
+    appearance: none;
+    background: transparent;
+    border: 0;
+    padding: 0;
+    margin: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    color: inherit;
+    user-select: none;
+  }
+  .details-toggle:hover .details-title { color: var(--blue); }
+  .details-toggle:hover .details-toggle-chevron { color: var(--blue); }
+  .details-toggle-chevron {
+    width: 16px;
+    height: 16px;
+    color: var(--text-muted);
+    transition: transform 0.18s, color 0.12s;
+    flex-shrink: 0;
+  }
+  .details-card.is-collapsed .details-toggle-chevron { transform: rotate(-90deg); }
+  .details-card.is-collapsed .details-head {
+    border-bottom: 0;
+    padding-bottom: 14px;
+  }
+  .details-card.is-collapsed .details-scroll { display: none; }
 
   /* GRID STANDARDS — .grid-pill, .grid-state-cluster, .grid-search */
   .grid-pill {
@@ -1425,9 +1461,14 @@
   <!-- ============================================================
        DETAILS GRID
        ============================================================ -->
-  <section class="details-card" id="details-card">
+  <section class="details-card is-collapsed" id="details-card">
     <div class="details-head">
-      <span class="details-title">Details</span>
+      <button type="button" class="details-toggle" id="details-toggle" aria-expanded="false" aria-controls="details-scroll" title="Show / hide the Details grid">
+        <svg class="details-toggle-chevron" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polyline points="5 8 10 13 15 8"/>
+        </svg>
+        <span class="details-title">Details</span>
+      </button>
       <div class="details-head-right">
         <div class="grid-state-cluster">
           <label class="grid-search" title="Substring search across visible columns. Prefix the query with ^ to switch to starts-with (e.g. ^468- finds Item 468-... but not X-468-).">
@@ -3554,6 +3595,40 @@
   }
 
   // ============================================================
+  //  Details grid collapse — default-closed, persisted per-page.
+  //  Mirrors the Transactions page pattern (RRV8/HANDOFF.md).
+  //  Grid is backup detail; the stats strip + residual card up
+  //  top are where the work usually happens.
+  // ============================================================
+  const DETAILS_COLLAPSE_LS_KEY = 'rrv8-asof-details-collapsed-v1';
+  function loadDetailsCollapsed() {
+    try {
+      const v = localStorage.getItem(DETAILS_COLLAPSE_LS_KEY);
+      if (v === '0') return false;
+      if (v === '1') return true;
+    } catch (_) {}
+    return true;  // default-closed
+  }
+  function setDetailsCollapsed(collapsed) {
+    const card   = document.getElementById('details-card');
+    const toggle = document.getElementById('details-toggle');
+    if (!card) return;
+    card.classList.toggle('is-collapsed', collapsed);
+    if (toggle) toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    try { localStorage.setItem(DETAILS_COLLAPSE_LS_KEY, collapsed ? '1' : '0'); } catch (_) {}
+  }
+  function wireDetailsCollapse() {
+    setDetailsCollapsed(loadDetailsCollapsed());
+    const toggle = document.getElementById('details-toggle');
+    if (!toggle) return;
+    toggle.addEventListener('click', () => {
+      const card = document.getElementById('details-card');
+      if (!card) return;
+      setDetailsCollapsed(!card.classList.contains('is-collapsed'));
+    });
+  }
+
+  // ============================================================
   //  Excel export (V8 grid standard)
   //  Exports the analyst's current view: filters + visibility + order.
   // ============================================================
@@ -3836,6 +3911,7 @@
   wireColumnDrag();
   wireColumnSort();
   wireGridSearch();
+  wireDetailsCollapse();
   loadData();
   // Seed the sidebar's filter universe cache (currencies / companies /
   // BUs / objects / subsidiaries). Fire-and-forget — first page in the
