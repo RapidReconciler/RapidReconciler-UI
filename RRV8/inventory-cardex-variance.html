@@ -1310,11 +1310,16 @@
           _reconCardexByCompany[co] = (_reconCardexByCompany[co] || 0) + v;
         });
       } else if (!IS_DEMO) {
-        // Pull per-company reconciliation-filtered for the cardex
-        // variance impact. The body must carry the FULL filter universe
-        // (empty arrays cause a 500 on the agent), so we fetch
-        // /inventory/status once to get the scope, then narrow the
-        // companies dimension per call.
+        // Pull the per-company cardex variance impact in a SINGLE
+        // call via /inventory/reconciliation/by-company. The agent
+        // groups by CompanyNumber server-side; response carries one
+        // entry per company with the same summary.variance shape
+        // /inventory/reconciliation-filtered emits. Replaces the
+        // earlier N+1 loop (one rrFetch per JWT company).
+        //
+        // Body must carry the FULL filter universe (empty arrays
+        // 500 on the agent) so fetch /inventory/status once to get
+        // the scope, then narrow companies to the JWT-allowed set.
         const status     = await rrFetch('inventory/status');
         const fullScope  = (status && status.reconciliationFilter) || {};
         const period     = readCurrentPeriodFromCache() ||
@@ -1323,21 +1328,20 @@
 
         const db  = window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex] || {};
         const cos = Array.isArray(db.i) ? db.i : [];
-        await Promise.all(cos.map(async co => {
-          try {
-            const body  = buildReconFilteredBody(fullScope, [co], period);
-            const recon = await rrFetch('inventory/reconciliation-filtered', {
-              method: 'POST', body
-            });
-            const cx  = recon && recon.summary && recon.summary.variance &&
-                        recon.summary.variance.cardex;
+        try {
+          const body = buildReconFilteredBody(fullScope, cos, period);
+          const resp = await rrFetch('inventory/reconciliation/by-company', {
+            method: 'POST', body
+          });
+          ((resp && resp.companies) || []).forEach(c => {
+            const cx  = c.variance && c.variance.cardex;
             // cardex can be a scalar or {value, alert} object.
             const val = (cx && typeof cx === 'object') ? (cx.value || 0) : (cx || 0);
-            _reconCardexByCompany[co] = val;
-          } catch (e) {
-            console.warn('reconciliation-filtered failed for company', co, e);
-          }
-        }));
+            _reconCardexByCompany[c.companyNumber] = val;
+          });
+        } catch (e) {
+          console.warn('reconciliation/by-company failed', e);
+        }
       }
     } catch (err) {
       console.error('cardex load failed:', err);

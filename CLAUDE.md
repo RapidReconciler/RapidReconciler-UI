@@ -540,6 +540,24 @@ versed analyst, not a layperson. Keep that voice:
 
 ## Workflow
 
+- **Check v359 before designing anything new.** v359 (the legacy
+  `rr-valc-agent.jar` broker + the Services jar at
+  `C:\Program Files\Rapid Reconciler\files\359\` + the Azure VALC SPA
+  at `staging-valcspa.cloudapp.net`) is the canonical spec for auth,
+  endpoint request/response shapes, JWT claim names, password policy
+  enforcement, business logic, and sign conventions. The customer-
+  facing docs describe intended behavior but glaze over edge cases.
+  Designing fresh against the customer doc or intuition produces
+  plausible-but-wrong choices — Jackson silently drops unknown JSON
+  fields, so a mismatched key gives a degraded-but-plausible response
+  with no error. **Mine the jar with `javap`** (recipe in
+  `RapidReconciler-Agent/docs/jar-mining.md`), **observe DevTools**
+  on the live staging SPA, or **decode a real JWT** in
+  `localStorage.rrv8.token` BEFORE writing the new code. Skip this
+  rule only when building something v359 genuinely doesn't have
+  (e.g. the Janitor cleanup task — no v359 analog). Saved as
+  [`feedback_check_v359_first`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/feedback_check_v359_first.md).
+
 - **Work on a worktree branch and squash-merge to main when a chunk is
   release-worthy.** Don't commit directly to main during multi-task
   sessions. Accumulate multiple per-step commits on the worktree branch
