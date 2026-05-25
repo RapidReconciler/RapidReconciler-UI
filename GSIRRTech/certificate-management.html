@@ -873,7 +873,7 @@
 
 <!-- ============ TOP NAV ============ -->
 <header class="doc-header" data-doc-chrome>
-  <span class="doc-last-updated">Last updated <time datetime="2026-05-19">May 19, 2026</time></span>
+  <span class="doc-last-updated">Last updated <time datetime="2026-05-25">May 25, 2026</time></span>
 </header>
 
 
@@ -902,7 +902,8 @@
         <li data-target="home"><button onclick="showView('home')">Index</button></li>
         <li data-target="overview"><button onclick="showView('topic-overview')">Overview &amp; Components</button></li>
         <li data-target="dns"><button onclick="showView('topic-dns')">DNS Configuration</button></li>
-        <li data-target="ssl"><button onclick="showView('topic-ssl')">SSL Renewal</button></li>
+        <li data-target="csr"><button onclick="showView('topic-csr')">Certificate Procurement (CSR)</button></li>
+        <li data-target="ssl"><button onclick="showView('topic-ssl')">SSL Renewal &amp; Deployment</button></li>
         <li data-target="responsibilities"><button onclick="showView('topic-responsibilities')">Responsibilities &amp; Troubleshooting</button></li>
       </ul>
     
@@ -945,8 +946,12 @@
               <td>When and how to request a DNS A-record change. Process, propagation, and an example record.</td>
             </tr>
             <tr>
-              <td><a href="javascript:void(0)" onclick="showView('topic-ssl')">SSL Renewal</a></td>
-              <td>Three-step certificate renewal procedure: backend update, agent deployment via VALC Manage Deploys, browser verification.</td>
+              <td><a href="javascript:void(0)" onclick="showView('topic-csr')">Certificate Procurement (CSR)</a></td>
+              <td>How the wildcard cert is procured at renewal: private key + CSR generation, CA submission, DNS-01 validation for the wildcard, what comes back from the CA.</td>
+            </tr>
+            <tr>
+              <td><a href="javascript:void(0)" onclick="showView('topic-ssl')">SSL Renewal &amp; Deployment</a></td>
+              <td>Three-step rollout once a renewed certificate is in hand: backend update, agent deployment via VALC Manage Deploys, browser verification.</td>
             </tr>
             <tr>
               <td><a href="javascript:void(0)" onclick="showView('topic-responsibilities')">Responsibilities &amp; Troubleshooting</a></td>
@@ -1066,25 +1071,217 @@
         <div class="topic-footer-nav">
           <button class="back-btn" onclick="goHome()">&larr; Back to Index</button>
           <button class="prev-btn" onclick="showView('topic-overview')">&larr; Previous</button>
-          <button class="next-btn" onclick="showView('topic-ssl')">Next: SSL Renewal &rarr;</button>
+          <button class="next-btn" onclick="showView('topic-csr')">Next: Certificate Procurement &rarr;</button>
+        </div>
+      </section>
+
+      <section id="topic-csr" class="view">
+        <h2>Certificate Procurement (CSR)</h2>
+        <p>How the wildcard <code>*.getgsi.com</code> cert gets procured at renewal time. This precedes the <a href="javascript:void(0)" onclick="showView('topic-ssl')">SSL Renewal &amp; Deployment</a> flow &mdash; the cert bundle that Step 1 of that flow installs into the backend has to come from somewhere, and this is that somewhere. Owned by the UI Developer today; documented here so the steps aren&rsquo;t single-person knowledge.</p>
+
+        <div class="diamond-divider"><span class="diamond"></span></div>
+
+        <h2 id="what-is-a-csr">What a CSR is</h2>
+        <p>A <strong>Certificate Signing Request</strong> is a small block of encoded text that bundles two things together:</p>
+        <ul>
+          <li>A <strong>public key</strong> &mdash; one half of a freshly-generated asymmetric key pair</li>
+          <li>The <strong>identity</strong> being claimed: Common Name (<code>*.getgsi.com</code>), organization, etc., signed by the matching private key to prove we hold it</li>
+        </ul>
+        <p>The Certificate Authority (CA) takes the CSR, verifies we control the domain (see <a href="#step-3-validation" onclick="event.preventDefault();document.getElementById('step-3-validation').scrollIntoView({behavior:'smooth'});">Step 3</a>), then signs the public key + identity into a real certificate. The private key never leaves the host that generated it &mdash; that&rsquo;s what makes the cert mean something.</p>
+
+        <div class="callout important">
+          <div class="callout-label">Wildcard CN constraint</div>
+          <p>The Common Name on this CSR is <strong><code>*.getgsi.com</code></strong> &mdash; the wildcard matches every customer&rsquo;s one-level subdomain (<code>rrprod-acme.getgsi.com</code>, <code>rrprod-cust2.getgsi.com</code>, etc.). It does NOT match deeper levels (<code>foo.bar.getgsi.com</code> would need a separate cert). Add a Subject Alternative Name (SAN) for the apex <code>getgsi.com</code> too if any URLs sit there directly.</p>
+        </div>
+
+        <h2 id="renewal-cadence">Renewal cadence</h2>
+        <p>The wildcard cert is renewed roughly <strong>every 6 months</strong>. Start the procurement flow <strong>at least 2&ndash;3 weeks before the expiry date</strong> &mdash; the rollout in <a href="javascript:void(0)" onclick="showView('topic-ssl')">SSL Renewal &amp; Deployment</a> Step 2 is per-customer and takes real wall-clock time, and the cost of cutting it close is a customer-impacting outage if the existing cert expires before every agent has the new one.</p>
+
+        <div class="step-card">
+          <div class="step-badge">1</div>
+          <div class="step-meta">Step 1 of 5 &middot; UI Developer</div>
+          <div class="step-title">Generate a fresh private key + CSR</div>
+          <p>On the UI dev&rsquo;s workstation:</p>
+          <pre><code style="display:block;padding:12px 14px;background:var(--navy-deep);color:#e8eef9;line-height:1.55;overflow-x:auto;">openssl genrsa -out getgsi-2026H2.key 2048
+
+openssl req -new -key getgsi-2026H2.key -out getgsi-2026H2.csr \
+  -subj "/C=US/ST=&lt;state&gt;/L=&lt;city&gt;/O=GSI/CN=*.getgsi.com" \
+  -addext "subjectAltName=DNS:*.getgsi.com,DNS:getgsi.com"</code></pre>
+          <p>Filename convention: include the half-year (<code>2026H1</code>, <code>2026H2</code>) so multiple renewals don&rsquo;t collide on disk.</p>
+
+          <div class="callout">
+            <div class="callout-label">Why a new key each renewal</div>
+            <p>Best practice is to generate a fresh private key on every renewal rather than reusing the existing one. A compromise of an old key affects every cert ever signed against it; rotating the key on every renewal caps the blast radius. The redeploy cost is the same either way (see Step 5 + SSL Renewal Step 1) &mdash; the only thing reusing buys is one less <code>openssl genrsa</code> command.</p>
+          </div>
+
+          <div class="callout warning">
+            <div class="callout-label">Handle the private key like a credential</div>
+            <p>The <code>.key</code> file is the actual secret. Never email it, never put it in git, never paste it in chat. The CSR (<code>.csr</code>) is safe to share &mdash; it&rsquo;s designed to be public.</p>
+          </div>
+        </div>
+
+        <div class="step-card">
+          <div class="step-badge">2</div>
+          <div class="step-meta">Step 2 of 5 &middot; UI Developer</div>
+          <div class="step-title">Submit the CSR to the Certificate Authority</div>
+          <p>Two paths, depending on which CA GSI is using:</p>
+          <ul>
+            <li><strong>Commercial CA</strong> (DigiCert, Sectigo, GoDaddy, etc.) &mdash; log into their portal, paste the contents of the <code>.csr</code> file into the renewal form, pay the renewal fee, click through their identity-verification prompts.</li>
+            <li><strong>Let&rsquo;s Encrypt</strong> &mdash; free, automated via an ACME client (<code>certbot</code>, <code>acme.sh</code>). Wildcard certs require DNS-01 validation (see Step 3), which can be fully automated with a Cloudflare API token. Certs expire every 90 days instead of 6 months &mdash; that&rsquo;s the tradeoff for free.</li>
+          </ul>
+          <div class="callout">
+            <div class="callout-label">Cloudflare proxy certs &mdash; not applicable here</div>
+            <p>Cloudflare can issue + auto-renew certs for free when traffic is proxied through their network (orange-cloud DNS). RapidReconciler customer traffic isn&rsquo;t proxied through Cloudflare &mdash; we use Cloudflare for DNS only (grey-cloud), with traffic going straight to the customer&rsquo;s server. So Cloudflare-managed certs don&rsquo;t cover this use case; we need a real CA-issued wildcard.</p>
+          </div>
+        </div>
+
+        <div class="step-card">
+          <div class="step-badge">3</div>
+          <div class="step-meta">Step 3 of 5 &middot; UI Developer + GSI I/T</div>
+          <div class="step-title" id="step-3-validation">Domain validation (DNS-01 for wildcard)</div>
+          <p>The CA needs proof GSI controls <code>getgsi.com</code> before signing anything. For a wildcard cert, <strong>DNS-01 is the only validation method the CA will accept</strong> &mdash; HTTP-based validation (place a file at <code>/.well-known/acme-challenge/&hellip;</code>) doesn&rsquo;t work because there&rsquo;s no single host to validate against for a wildcard.</p>
+          <p>The CA hands the UI dev a token and asks for a TXT record at a specific name:</p>
+
+          <div class="example-box">
+            <div class="example-label">DNS-01 challenge record (example)</div>
+            <table>
+              <thead><tr><th>Type</th><th>Name</th><th>Value</th><th>TTL</th></tr></thead>
+              <tbody>
+                <tr>
+                  <td><code>TXT</code></td>
+                  <td><code>_acme-challenge.getgsi.com</code></td>
+                  <td><code>&lt;token from the CA&gt;</code></td>
+                  <td><code>120</code> (2 min)</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <p>Process:</p>
+          <ol>
+            <li>UI Dev requests the TXT record from <strong>GSI I/T</strong> with the name + value the CA provided. (Or, if the UI dev has a scoped Cloudflare API token, they add it themselves.)</li>
+            <li>Wait for DNS propagation &mdash; usually under 60 seconds at the TTL above. Confirm via <code>dig TXT _acme-challenge.getgsi.com</code>.</li>
+            <li>Tell the CA &ldquo;check now&rdquo; in their portal (or the ACME client polls automatically). The CA does its own DNS lookup; once it sees the matching TXT value, validation passes.</li>
+            <li>Remove the TXT record after the cert issues &mdash; it&rsquo;s single-use and just becomes clutter.</li>
+          </ol>
+
+          <div class="callout note">
+            <div class="callout-label">Why DNS-01 specifically</div>
+            <p>HTTP-01 validation works by serving a known file at <code>http://&lt;domain&gt;/.well-known/acme-challenge/&lt;token&gt;</code>. That requires a specific host to validate against &mdash; fine for one subdomain, impossible for a wildcard (you can&rsquo;t serve files at every possible <code>*.getgsi.com</code>). DNS-01 validates the apex <code>getgsi.com</code> instead, which is sufficient to prove control of every subdomain underneath.</p>
+          </div>
+        </div>
+
+        <div class="step-card">
+          <div class="step-badge">4</div>
+          <div class="step-meta">Step 4 of 5 &middot; UI Developer</div>
+          <div class="step-title">Download the cert bundle from the CA</div>
+          <p>Once validation passes, the CA issues the cert. The portal (or ACME client) hands back 2&ndash;3 files:</p>
+          <table>
+            <thead><tr><th>File</th><th>What it is</th><th>Needed for deploy?</th></tr></thead>
+            <tbody>
+              <tr><td><code>getgsi-2026H2.crt</code></td><td>The signed wildcard cert itself</td><td><strong>Yes</strong></td></tr>
+              <tr><td><code>intermediate.crt</code> / <code>chain.crt</code></td><td>The CA&rsquo;s intermediate certs that chain up to a browser-trusted root</td><td><strong>Yes</strong></td></tr>
+              <tr><td><code>root.crt</code></td><td>The CA&rsquo;s root cert</td><td>No &mdash; browsers already have it</td></tr>
+            </tbody>
+          </table>
+          <p>What the backend / agents actually need is a <strong>fullchain bundle</strong>: the cert and the intermediate(s) concatenated into one file. Some CAs give you this directly as <code>fullchain.pem</code>; others give you the pieces and you build it:</p>
+          <pre><code style="display:block;padding:12px 14px;background:var(--navy-deep);color:#e8eef9;line-height:1.55;overflow-x:auto;">cat getgsi-2026H2.crt intermediate.crt &gt; getgsi-2026H2-fullchain.pem</code></pre>
+          <p>Java keystores (which the RR agent uses) need the bundle in <code>.p12</code> / PKCS12 format with the private key included:</p>
+          <pre><code style="display:block;padding:12px 14px;background:var(--navy-deep);color:#e8eef9;line-height:1.55;overflow-x:auto;">openssl pkcs12 -export \
+  -in  getgsi-2026H2-fullchain.pem \
+  -inkey getgsi-2026H2.key \
+  -out getgsi-2026H2.p12 \
+  -name getgsi-wildcard</code></pre>
+          <p>The <code>.p12</code> is the artifact that gets installed into <code>keystore.rr.jks</code> on each customer agent (Step 5 + SSL Renewal Step 2).</p>
+        </div>
+
+        <div class="step-card">
+          <div class="step-badge">5</div>
+          <div class="step-meta">Step 5 of 5 &middot; UI Developer</div>
+          <div class="step-title">Hand off to the deployment flow</div>
+          <p>With the renewed bundle in hand (<code>.p12</code> + the underlying <code>.key</code>/<code>.crt</code> archived for the next renewal cycle), procurement is done. The flow transitions into <a href="javascript:void(0)" onclick="showView('topic-ssl')">SSL Renewal &amp; Deployment</a>:</p>
+          <ul>
+            <li>Step 1 (Backend Update) installs the new bundle into the RapidReconciler web tier so the central UI starts serving the renewed cert.</li>
+            <li>Step 2 (Agent Deployment via VALC) pushes the new cert to every customer&rsquo;s agent so their per-customer URL keeps serving HTTPS without a browser warning.</li>
+            <li>Step 3 (Verification) confirms each customer&rsquo;s URL is now serving the renewed cert and SSO still works end-to-end.</li>
+          </ul>
+          <div class="callout">
+            <div class="callout-label">Archive the artifacts</div>
+            <p>Keep the <code>.key</code>, <code>.crt</code>, and <code>fullchain.pem</code> for this cert in a secure vault &mdash; not just the <code>.p12</code>. If a customer&rsquo;s agent needs a manual cert install during a server migration or rebuild, having the underlying bundle on hand saves a CA round-trip. Rotate the vault entries when the next renewal supersedes them.</p>
+          </div>
+        </div>
+
+        <h2 id="csr-troubleshooting">Common procurement-side issues</h2>
+        <table>
+          <thead><tr><th>Symptom</th><th>Likely cause</th><th>Fix</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>CA reports &ldquo;DNS-01 validation failed&rdquo;</td>
+              <td>TXT record hasn&rsquo;t propagated yet, or the value pasted into Cloudflare has extra whitespace / wrong token</td>
+              <td>Verify with <code>dig TXT _acme-challenge.getgsi.com</code>. The CA-supplied token must match byte-for-byte. Wait 60s and ask the CA to re-check.</td>
+            </tr>
+            <tr>
+              <td>CA accepts the CSR but rejects the SAN list</td>
+              <td><code>-addext "subjectAltName=&hellip;"</code> wasn&rsquo;t actually included in the CSR &mdash; older <code>openssl</code> versions need a config-file path instead of inline <code>-addext</code></td>
+              <td>Verify the CSR&rsquo;s SAN list: <code>openssl req -in getgsi-2026H2.csr -noout -text | grep -A1 "Subject Alternative Name"</code>. If empty, regenerate with a config file (search openssl docs for <code>v3_req</code>).</td>
+            </tr>
+            <tr>
+              <td>The <code>.p12</code> won&rsquo;t import into the Java keystore</td>
+              <td>Missing intermediate in the fullchain &mdash; <code>keytool</code> rejects chains that don&rsquo;t reach a trusted root</td>
+              <td>Confirm the fullchain has <em>both</em> the cert and the intermediate(s) concatenated: <code>openssl crl2pkcs7 -nocrl -certfile fullchain.pem | openssl pkcs7 -print_certs</code> should show 2+ certs.</td>
+            </tr>
+            <tr>
+              <td>Forgot which CA we used last time</td>
+              <td>Renewal cadence is 6 months; institutional memory drifts</td>
+              <td>Check the issuer on the currently-deployed cert: <code>echo | openssl s_client -connect rrprod-acme.getgsi.com:443 -servername rrprod-acme.getgsi.com 2&gt;/dev/null | openssl x509 -noout -issuer</code>.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="topic-footer-nav">
+          <button class="back-btn" onclick="goHome()">&larr; Back to Index</button>
+          <button class="prev-btn" onclick="showView('topic-dns')">&larr; Previous</button>
+          <button class="next-btn" onclick="showView('topic-ssl')">Next: SSL Renewal &amp; Deployment &rarr;</button>
         </div>
       </section>
 
       <section id="topic-ssl" class="view">
-        <h2>SSL Renewal</h2>
-        <p>Three-step procedure for renewing the wildcard <code>*.getgsi.com</code> certificate &mdash; one cert covers every customer, but each customer&rsquo;s agent needs the renewed cert pushed to it.</p>
+        <h2>SSL Renewal &amp; Deployment</h2>
+        <p>Three-step rollout once a renewed certificate is in hand &mdash; one cert covers every customer, but each customer&rsquo;s agent needs the renewed cert pushed to it.</p>
 
         <div class="diamond-divider"><span class="diamond"></span></div>
 
         <h2 id="certificate-renewal-process">Certificate Renewal Process</h2>
         <p>The <code>*.getgsi.com</code> wildcard certificate covers all subdomains under <code>getgsi.com</code> &mdash; a single certificate secures every customer&rsquo;s RapidReconciler URL. GSI is responsible for procuring and renewing it.</p>
+
+        <a class="xref" href="javascript:void(0)" onclick="showView('topic-csr')">
+          <strong>Prerequisite:</strong> the cert bundle this flow installs comes out of <strong>Certificate Procurement (CSR)</strong> &mdash; private key + CSR generation, CA submission, DNS-01 validation. Start there if you don&rsquo;t already have a renewed <code>.p12</code> / fullchain in hand.
+        </a>
+
         <p>Once procured, the renewal flows through three handoffs:</p>
 
         <div class="step-card">
           <div class="step-badge">1</div>
           <div class="step-meta">Step 1 of 3 &middot; UI Developer</div>
-          <div class="step-title">Backend Update</div>
-          <p>The UI developer updates the backend configuration with the renewed certificate. This ensures the RapidReconciler web interface continues to serve the correct certificate after renewal.</p>
+          <div class="step-title">Backend Update &mdash; embed the renewed cert</div>
+          <p>The wildcard cert is bundled into the Services jar at Maven build time as a <code>classpath:</code> resource &mdash; there&rsquo;s no runtime path to swap it. Replacing the cert means rebuilding the jar and cutting a new release tag.</p>
+
+          <p>End-to-end mechanism:</p>
+          <ol>
+            <li><strong>Drop the new <code>.pfx</code> into the Services repo&rsquo;s source tree.</strong> The filename encodes the issue + expiry dates &mdash; e.g. <code>wildcard_getgsi_com-070725-080826.pfx</code> for issued 07/07/25, expires 08/08/26 &mdash; so it sits next to the prior cert without colliding.</li>
+            <li><strong>Update <code>application-production-https.properties</code></strong> &mdash; the <code>server.ssl.key-store</code> line points at the bundled filename and has to be bumped to match:
+              <pre><code style="display:block;padding:12px 14px;background:var(--navy-deep);color:#e8eef9;line-height:1.55;overflow-x:auto;">server.ssl.key-store=classpath:wildcard_getgsi_com-&lt;NEW-DATES&gt;.pfx
+server.ssl.key-store-password=&lt;keystore password&gt;
+server.ssl.keyStoreType=PKCS12</code></pre>
+            </li>
+            <li><strong>Delete the prior <code>.pfx</code></strong> from the source tree. The v359 jar currently ships four historical <code>CEIS*.pfx</code> files from 2018-2019 that no one cleaned up &mdash; dead weight in every deploy. Only the active cert needs to ship.</li>
+            <li><strong>Cut a release tag on the Services repo</strong> per the <a href="services-version-control.html">Services version control workflow</a>. The Maven build packages the new <code>.pfx</code> into the jar; the GitHub Release publishes the artifact for Step 2 to deploy.</li>
+          </ol>
+
+          <div class="callout">
+            <div class="callout-label">Why this triggers a Services release</div>
+            <p>A <code>classpath:</code> resource is baked into the jar at build time &mdash; it can&rsquo;t be swapped without rebuilding. Until that constraint is lifted (see <a href="javascript:void(0)" onclick="document.getElementById('decouple-cert').scrollIntoView({behavior:'smooth'});">Future-state: decoupling the cert from the Services jar</a> below), every cert renewal forces a Services version bump even when no actual code changed.</p>
+          </div>
         </div>
 
         <div class="step-card">
@@ -1119,9 +1316,29 @@
           </ul>
         </div>
 
+        <h2 id="decouple-cert">Future-state: decoupling the cert from the Services jar</h2>
+        <p>The current legacy mechanism (cert baked into the Services jar&rsquo;s classpath) was a reasonable choice when the Services jar was the only deployable artifact and VALC&rsquo;s deploy flow only knew how to ship jars. With mini-VALC&rsquo;s <a href="services-version-control.html#post-release-internal">HTTP-push Manage Deploy modal</a> now in place, that constraint is gone &mdash; the deploy machinery can ship arbitrary files to a known path on the customer&rsquo;s agent. Cert renewals don&rsquo;t need to ride along with code releases anymore.</p>
+
+        <h3 id="decouple-shift">The proposed shift</h3>
+        <ul>
+          <li><strong>Agent side</strong>: change <code>server.ssl.key-store</code> in <code>application-production-https.properties</code> from <code>classpath:</code> to <code>file:</code>, pointing at an external path like <code>${rr.cert-store}/wildcard-getgsi.pfx</code>. The Services jar would no longer carry any cert bytes &mdash; the runtime keystore is read from the customer&rsquo;s filesystem at startup.</li>
+          <li><strong>mini-VALC side</strong>: add a <code>component=&apos;tls-cert&apos;</code> slot to the <code>file_versions</code> catalog. The existing Sync + Manage Deploy flow extends naturally &mdash; certs get uploaded once (manually, since renewals don&rsquo;t have a public GitHub release home) then deployed per-customer through the same orchestrator that handles Services jar deploys today, with the deploy target swapped from the running jar path to the cert path.</li>
+        </ul>
+
+        <h3 id="decouple-payoff">Two consequences</h3>
+        <ul>
+          <li><strong>Cert renewals stop forcing a Services release.</strong> The Services jar version moves on its own cadence driven by feature work + bug fixes; cert renewals become independent cert-only deploys. Smaller blast radius &mdash; a botched cert deploy rolls back to the previous cert without rolling back any Services code, and vice versa.</li>
+          <li><strong>The historical-cert accumulation pattern disappears.</strong> The cert store on disk holds one active <code>.pfx</code> + the previous one for rollback, not the four-and-counting <code>CEIS*.pfx</code> files that currently sit in the Services jar from 2018-2019 renewals nobody cleaned up.</li>
+        </ul>
+
+        <div class="callout">
+          <div class="callout-label">Scope</div>
+          <p>Not built yet on either side. Listed here as a queued architecture improvement; the work is well-defined whenever the cadence pressure (or the next renewal headache) makes it worth doing. See <a href="services-version-control.html#post-release-internal">Services version control &sect; 4b</a> for the existing deploy pattern this would extend.</p>
+        </div>
+
         <div class="topic-footer-nav">
           <button class="back-btn" onclick="goHome()">&larr; Back to Index</button>
-          <button class="prev-btn" onclick="showView('topic-dns')">&larr; Previous</button>
+          <button class="prev-btn" onclick="showView('topic-csr')">&larr; Previous</button>
           <button class="next-btn" onclick="showView('topic-responsibilities')">Next: Responsibilities &amp; Troubleshooting &rarr;</button>
         </div>
       </section>
@@ -1165,6 +1382,9 @@
               <td><strong>GSI UI Developer</strong></td>
               <td>
                 <ul style="margin:0;padding-left:18px;">
+                  <li>Generate the private key + CSR each renewal cycle</li>
+                  <li>Submit the CSR to the Certificate Authority and complete DNS-01 validation (coordinating with GSI I/T on the TXT record)</li>
+                  <li>Download the issued cert bundle and produce the deployable <code>.p12</code> + fullchain artifacts</li>
                   <li>Update backend configuration after certificate renewal</li>
                   <li>Confirm web interface serves the renewed certificate correctly</li>
                 </ul>
