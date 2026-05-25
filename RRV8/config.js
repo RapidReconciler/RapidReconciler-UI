@@ -79,6 +79,7 @@ window.RR_TEST_AGENT_AREAS = [
   // Inventory module — net-new endpoints first wave
   'inventory/reconciliation/rows',
   'inventory/reconciliation/history',
+  'inventory/reconciliation/by-company',
   'inventory/audit-detail',
   'inventory/variance-component',
   // DMAAI overlay (analyzer worklist persistence)
