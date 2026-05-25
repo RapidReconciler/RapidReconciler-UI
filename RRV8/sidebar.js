@@ -792,6 +792,283 @@
     } catch (_) {}
   }
 
+  // ============================================================
+  //  Session hydrate + user menu
+  //
+  //  Shared implementation of the welcome dropdown that hangs off
+  //  the sidebar's user chip. Inlined on the four grid pages first
+  //  (reconciliation / transactions / asof / cardex-variance); the
+  //  admin pages — and any new V8 page — opt in by calling
+  //  RRV8.hydrateSession() then RRV8.mountUserMenu(). The grid pages
+  //  still own their inline copy until a separate cleanup pass.
+  // ============================================================
+
+  function parseJwt(token) {
+    try {
+      const body = token.split('.')[1];
+      const json = atob(body.replace(/-/g, '+').replace(/_/g, '/'));
+      return JSON.parse(json);
+    } catch (_) { return null; }
+  }
+
+  // Populate window.RR_SESSION.{user,dbs,activeDbIndex,token}. In
+  // demo mode reads data/demo-jwt-payload.json; in staging/prod
+  // reads localStorage.rrv8.token. Always resolves — failures leave
+  // RR_SESSION empty so renderUserChip falls back to a placeholder.
+  function hydrateSession() {
+    const cfg = global.RR_CONFIG || {};
+    const mode = (new URLSearchParams(global.location.search).get('mode'))
+                 || cfg.mode || 'demo';
+    global.RR_SESSION = global.RR_SESSION || {};
+
+    if (mode === 'demo') {
+      const url = (cfg.dataPath || 'data/') + 'demo-jwt-payload.json';
+      return fetch(url, { cache: 'no-store' })
+        .then(r => r.ok ? r.json() : null)
+        .then(payload => {
+          if (payload) {
+            global.RR_SESSION.user = payload.user || null;
+            global.RR_SESSION.dbs  = Array.isArray(payload.dbs) ? payload.dbs : [];
+            global.RR_SESSION.activeDbIndex = 0;
+            global.RR_SESSION.token = null;
+          }
+          return global.RR_SESSION;
+        })
+        .catch(() => global.RR_SESSION);
+    }
+
+    try {
+      const token = localStorage.getItem('rrv8.token');
+      if (token) {
+        const payload = parseJwt(token);
+        if (payload) {
+          global.RR_SESSION.user = payload.user || null;
+          global.RR_SESSION.dbs  = Array.isArray(payload.dbs) ? payload.dbs : [];
+          global.RR_SESSION.activeDbIndex = 0;
+          global.RR_SESSION.token = token;
+        }
+      }
+    } catch (_) {}
+    return Promise.resolve(global.RR_SESSION);
+  }
+
+  function getCurrentUser() {
+    const u = (global.RR_SESSION && global.RR_SESSION.user) || {};
+    const fn = u.fn || '';
+    return {
+      name:    fn || '—',
+      email:   u.u || '',
+      initial: (fn.trim()[0] || '?').toUpperCase()
+    };
+  }
+
+  function getCurrentDatabases() {
+    const sess = global.RR_SESSION || {};
+    const dbs  = Array.isArray(sess.dbs) ? sess.dbs : [];
+    const activeIdx = sess.activeDbIndex || 0;
+    return dbs.map((db, idx) => ({
+      index:     idx,
+      id:        db.n || ('db-' + idx),
+      label:     db.n || 'unknown',
+      host:      (db.ip || '').split(':')[0] || '—',
+      port:      (db.ip || '').split(':')[1] || '',
+      isCurrent: idx === activeIdx
+    }));
+  }
+
+  function renderUserChip() {
+    const u = getCurrentUser();
+    const dbs = getCurrentDatabases();
+    const active = dbs.find(d => d.isCurrent) || dbs[0];
+
+    const avatarEl = document.querySelector('#js-user-btn .sidebar-user-avatar');
+    if (avatarEl) avatarEl.textContent = u.initial;
+
+    const nameEl = document.getElementById('js-user-name');
+    if (nameEl) {
+      const firstName = (u.name || '').split(/\s+/)[0] || u.name || '—';
+      nameEl.textContent = 'Welcome, ' + firstName;
+    }
+
+    const dbEl = document.getElementById('js-user-db');
+    if (dbEl) {
+      dbEl.textContent = active
+        ? (active.label + (active.host && active.host !== '—' ? ' · ' + active.host : ''))
+        : 'No database';
+    }
+  }
+
+  function buildUserMenu(opts) {
+    const menu = document.getElementById('js-user-menu');
+    if (!menu) return;
+    const u = getCurrentUser();
+    const dbs = getCurrentDatabases();
+    const cfg = global.RR_CONFIG || {};
+    const isDemo = ((new URLSearchParams(global.location.search).get('mode'))
+                    || cfg.mode || 'demo') === 'demo';
+    const showSignOut = !isDemo;
+
+    const dbRows = dbs.length ? dbs.map(db =>
+      '<button class="user-menu-db ' + (db.isCurrent ? 'is-current' : '') +
+      '" type="button" data-db-index="' + db.index + '">' +
+        '<span class="user-menu-db-radio" aria-hidden="true"></span>' +
+        '<span>' +
+          '<span class="user-menu-db-name">' + escapeHtml(db.label) + '</span>' +
+          '<span class="user-menu-db-meta">' + escapeHtml(db.host) +
+            (db.port ? ' &middot; :' + escapeHtml(db.port) : '') +
+          '</span>' +
+        '</span>' +
+      '</button>').join('')
+      : '<div class="user-menu-db-meta" style="padding: 8px 12px;">No databases in session.</div>';
+
+    menu.innerHTML =
+      '<div class="user-menu-head">' +
+        '<div class="user-menu-name">' + escapeHtml(u.name) + '</div>' +
+        '<div class="user-menu-email">' + escapeHtml(u.email) + '</div>' +
+      '</div>' +
+      '<div class="user-menu-section">' +
+        '<div class="user-menu-section-label">Connected database</div>' +
+        dbRows +
+      '</div>' +
+      '<div class="user-menu-section">' +
+        '<div class="user-menu-section-label">Admin</div>' +
+        '<button class="user-menu-action" type="button" data-action="import-jde">' +
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>' +
+          '<span>Import JDE data</span>' +
+          '<span class="user-menu-action-meta">Global</span>' +
+        '</button>' +
+        '<button class="user-menu-action is-danger" type="button" data-action="restart-service">' +
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"></path><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"></path></svg>' +
+          '<span>Restart Service</span>' +
+          '<span class="user-menu-action-meta">Admin</span>' +
+        '</button>' +
+      '</div>' +
+      (showSignOut ?
+        '<div class="user-menu-section">' +
+          '<button class="user-menu-action" type="button" data-action="sign-out">' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>' +
+            '<span>Sign out</span>' +
+          '</button>' +
+        '</div>' : '');
+
+    menu.querySelectorAll('.user-menu-db[data-db-index]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const idx = parseInt(btn.dataset.dbIndex, 10);
+        if (isNaN(idx)) return;
+        global.RR_SESSION.activeDbIndex = idx;
+        renderUserChip();
+        buildUserMenu(opts);
+        positionUserMenu();
+      });
+    });
+
+    menu.querySelectorAll('.user-menu-action[data-action]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const action = btn.dataset.action;
+        if (action === 'sign-out') {
+          try { localStorage.removeItem('rrv8.token'); } catch (_) {}
+          try { localStorage.removeItem('rrv8.viewMode'); } catch (_) {}
+          try { localStorage.removeItem('rrv8.lastEmail'); } catch (_) {}
+          // The hub is the canonical sign-out destination across V8.
+          // Walk up from /RRV8/* to the repo root and land on the hub.
+          global.location.href = '../rapidreconciler-hub.html';
+          return;
+        }
+        // Placeholder: routed-action labels surface as a flash. Pages
+        // that own the real handlers can replace this by re-binding
+        // before calling mountUserMenu.
+        const labels = { 'import-jde': 'Import JDE data', 'restart-service': 'Restart Service' };
+        if (opts && typeof opts.onAction === 'function') {
+          opts.onAction(action);
+        } else if (global.alert && !global.__rrSilenceMenuAlerts) {
+          // Don't pop a modal — quiet console log + close.
+          console.info('[user menu] ' + (labels[action] || action) + ' — not wired on this page');
+        }
+        closeUserMenu();
+      });
+    });
+  }
+
+  function positionUserMenu() {
+    const menu = document.getElementById('js-user-menu');
+    const btn  = document.getElementById('js-user-btn');
+    if (!menu || !btn) return;
+    const r = btn.getBoundingClientRect();
+    menu.style.top = (r.bottom + 6) + 'px';
+    // Buttons inside the sidebar sit at the left edge; right-anchoring
+    // would push the menu's left edge off-screen. Pop it out to the
+    // right of the sidebar instead. Topbar buttons keep the legacy
+    // right-anchored placement.
+    if (btn.closest('.sidebar')) {
+      menu.style.left  = (r.right + 6) + 'px';
+      menu.style.right = 'auto';
+    } else {
+      menu.style.left  = 'auto';
+      menu.style.right = (window.innerWidth - r.right) + 'px';
+    }
+  }
+
+  function openUserMenu() {
+    const menu = document.getElementById('js-user-menu');
+    const btn  = document.getElementById('js-user-btn');
+    if (!menu || !btn) return;
+    positionUserMenu();
+    menu.hidden = false;
+    btn.classList.add('is-open');
+  }
+
+  function closeUserMenu() {
+    const menu = document.getElementById('js-user-menu');
+    const btn  = document.getElementById('js-user-btn');
+    if (menu) menu.hidden = true;
+    if (btn)  btn.classList.remove('is-open');
+  }
+
+  // Mount the welcome-dropdown popover for the current page. Idempotent —
+  // calling twice no-ops on the second call. Pages that already wire
+  // their own popover (the four grid pages) should NOT call this; the
+  // detection guards against double-mount when they migrate later.
+  function mountUserMenu(opts) {
+    opts = opts || {};
+    const btn = document.getElementById('js-user-btn');
+    if (!btn) return;
+    // Skip if a page-local copy already wired it up (legacy grid
+    // pages do this in their IIFE).
+    if (btn.dataset.rrUserMenuMounted === '1') return;
+
+    let menu = document.getElementById('js-user-menu');
+    if (!menu) {
+      menu = document.createElement('div');
+      menu.id = 'js-user-menu';
+      menu.className = 'user-menu';
+      menu.setAttribute('role', 'menu');
+      menu.hidden = true;
+      document.body.appendChild(menu);
+    }
+
+    btn.dataset.rrUserMenuMounted = '1';
+
+    renderUserChip();
+    buildUserMenu(opts);
+
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!menu.hidden) { closeUserMenu(); return; }
+      openUserMenu();
+    });
+    menu.addEventListener('click', (e) => e.stopPropagation());
+    document.addEventListener('click', (e) => {
+      if (menu.hidden) return;
+      if (e.target.closest('#js-user-menu') || e.target.closest('#js-user-btn')) return;
+      closeUserMenu();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !menu.hidden) closeUserMenu();
+    });
+  }
+
   global.RRV8 = global.RRV8 || {};
   global.RRV8.mountSidebar            = mountSidebar;
   global.RRV8.setDmaaiStatus          = setDmaaiStatus;
@@ -800,4 +1077,7 @@
   global.RRV8.publishCurrentPeriod    = publishCurrentPeriod;
   global.RRV8.readCurrentPeriod       = readCurrentPeriod;
   global.RRV8.ensureInventoryStatus   = ensureInventoryStatus;
+  global.RRV8.hydrateSession          = hydrateSession;
+  global.RRV8.mountUserMenu           = mountUserMenu;
+  global.RRV8.renderUserChip          = renderUserChip;
 })(window);

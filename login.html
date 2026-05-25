@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<!--
+  =============================================================================
+  Direct login page — no hub
+  =============================================================================
+  Standalone alternative to rapidreconciler-hub.html. Same VALC auth
+  endpoint, same localStorage keys (rrv8.token / rrv8.viewMode /
+  rrv8.lastEmail); on success redirects to RRV8/inventory-reconciliation.html
+  by default, or to whatever ?redirect=... target the caller specified.
+
+  When to use:
+    - Engineers who don't want the hub's welcome + compliance chrome.
+    - Bookmarked entry point for a specific V8 page (set ?redirect=
+      to that page).
+  =============================================================================
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sign in &mdash; RapidReconciler</title>
+<link rel="icon" href="data:,">
+<link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&family=Source+Sans+3:wght@600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --navy:        #1f2d4a;
+    --navy-deep:   #142037;
+    --blue:        #2b5fb0;
+    --blue-bright: #3d8fd6;
+    --blue-pale:   #e6efff;
+    --orange:      #f08a24;
+    --green:       #2e8a55;
+    --red:         #c0392b;
+    --red-pale:    #fce5e1;
+    --bg:          #f3f5f9;
+    --bg-card:     #ffffff;
+    --text:        #1f2d4a;
+    --text-soft:   #4a5468;
+    --text-muted:  #828a9a;
+    --rule:        #e6eaf0;
+    --rule-strong: #cfd6e0;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Open Sans', -apple-system, sans-serif;
+    background: linear-gradient(180deg, var(--navy) 0%, var(--navy-deep) 100%);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2 { font-family: 'Source Sans 3', sans-serif; font-weight: 700; }
+  a { color: var(--blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  .card {
+    width: min(420px, 100%);
+    background: var(--bg-card);
+    border-radius: 12px;
+    box-shadow: 0 24px 64px -8px rgba(0,0,0,0.40);
+    overflow: hidden;
+  }
+  .card-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 22px 28px;
+    background: linear-gradient(135deg, var(--navy) 0%, var(--blue) 100%);
+    color: #fff;
+  }
+  .card-head img {
+    height: 32px;
+    width: auto;
+    display: block;
+    filter: brightness(0) invert(1);
+  }
+  .card-head-text { display: flex; flex-direction: column; line-height: 1.15; }
+  .card-head-brand {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 800;
+    font-size: 17px;
+    letter-spacing: 0.01em;
+  }
+  .card-head-sub {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 11px;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    color: rgba(255,255,255,0.70);
+  }
+
+  .card-body { padding: 26px 28px 22px; }
+  .card-title {
+    font-size: 20px;
+    font-weight: 800;
+    color: var(--navy);
+    margin-bottom: 4px;
+  }
+  .card-lede {
+    font-size: 13px;
+    color: var(--text-soft);
+    margin-bottom: 20px;
+    line-height: 1.5;
+  }
+
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin-bottom: 14px;
+  }
+  .field label {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-soft);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .field input {
+    font-family: inherit;
+    font-size: 14.5px;
+    color: var(--navy);
+    padding: 10px 12px;
+    border: 1px solid var(--rule-strong);
+    border-radius: 6px;
+    background: var(--bg-card);
+  }
+  .field input:focus {
+    outline: none;
+    border-color: var(--blue);
+    box-shadow: 0 0 0 2px var(--blue-pale);
+  }
+
+  .submit-btn {
+    width: 100%;
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 700;
+    font-size: 14px;
+    color: #fff;
+    background: var(--blue);
+    border: 1px solid var(--blue);
+    border-radius: 6px;
+    padding: 11px 16px;
+    cursor: pointer;
+    margin-top: 6px;
+    transition: filter 0.15s;
+  }
+  .submit-btn:hover:not(:disabled) { filter: brightness(1.08); }
+  .submit-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+  .err {
+    display: none;
+    margin-top: 14px;
+    padding: 10px 12px;
+    background: var(--red-pale);
+    border: 1px solid var(--red);
+    color: var(--red);
+    border-radius: 6px;
+    font-size: 13px;
+  }
+  .err.is-visible { display: block; }
+
+  .card-foot {
+    padding: 14px 28px 22px;
+    border-top: 1px solid var(--rule);
+    background: var(--bg);
+    font-size: 12px;
+    color: var(--text-muted);
+    text-align: center;
+  }
+  .card-foot a { color: var(--text-soft); font-weight: 600; }
+</style>
+</head>
+<body>
+
+<div class="card">
+  <div class="card-head">
+    <img src="Images/gsi-logo.png" alt="GSI">
+    <div class="card-head-text">
+      <span class="card-head-brand">RapidReconciler</span>
+      <span class="card-head-sub">Sign in</span>
+    </div>
+  </div>
+
+  <form class="card-body" id="js-login-form" autocomplete="on" novalidate>
+    <h1 class="card-title">Welcome back</h1>
+    <p class="card-lede">Enter your RapidReconciler credentials. The token persists in this browser until sign-out.</p>
+
+    <div class="field">
+      <label for="js-email">Email</label>
+      <input type="email" id="js-email" name="username" autocomplete="username" required>
+    </div>
+    <div class="field">
+      <label for="js-pw">Password</label>
+      <input type="password" id="js-pw" name="password" autocomplete="current-password" required>
+    </div>
+
+    <button type="submit" class="submit-btn" id="js-submit">Sign in</button>
+
+    <div class="err" id="js-err" role="alert"></div>
+  </form>
+
+  <div class="card-foot">
+    Need the full landing page? <a href="rapidreconciler-hub.html">Open the hub &rarr;</a>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  const AUTH_BASE = 'https://staging-valcspa.cloudapp.net';
+
+  // Where to land after a successful sign-in. ?redirect=... wins so
+  // a bookmark can point straight at a deep V8 page.
+  const params = new URLSearchParams(window.location.search);
+  const DEFAULT_REDIRECT = 'RRV8/inventory-reconciliation.html';
+  const REDIRECT = params.get('redirect') || DEFAULT_REDIRECT;
+
+  const form     = document.getElementById('js-login-form');
+  const emailEl  = document.getElementById('js-email');
+  const pwEl     = document.getElementById('js-pw');
+  const submitEl = document.getElementById('js-submit');
+  const errEl    = document.getElementById('js-err');
+
+  // Pre-fill from the last successful sign-in if the browser still
+  // has it stashed. Saves a step for daily users.
+  try {
+    const last = localStorage.getItem('rrv8.lastEmail');
+    if (last) emailEl.value = last;
+  } catch (_) {}
+  // Focus the password field if we pre-filled the email, otherwise
+  // the email field.
+  setTimeout(() => (emailEl.value ? pwEl : emailEl).focus(), 0);
+
+  function showError(msg) {
+    errEl.textContent = msg;
+    errEl.classList.add('is-visible');
+  }
+  function clearError() {
+    errEl.textContent = '';
+    errEl.classList.remove('is-visible');
+  }
+
+  async function realLogin(username, password) {
+    const res = await fetch(AUTH_BASE + '/resource/client/login', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json;charset=UTF-8', 'Accept': 'application/json' },
+      body:    JSON.stringify({ username: username, password: password, rememberme: false })
+    });
+    if (!res.ok) {
+      throw new Error(res.status === 401
+        ? 'Email or password did not match.'
+        : 'Login service returned HTTP ' + res.status);
+    }
+    const body = await res.json();
+    if (!body.token) throw new Error('Login response missing token field.');
+    try { localStorage.setItem('rrv8.token',     body.token); } catch (_) {}
+    try { localStorage.setItem('rrv8.viewMode',  'customer');  } catch (_) {}
+    try { localStorage.setItem('rrv8.lastEmail', username);    } catch (_) {}
+  }
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    clearError();
+    const username = emailEl.value.trim();
+    const password = pwEl.value;
+    if (!username || !password) {
+      showError('Enter both email and password.');
+      return;
+    }
+    submitEl.disabled = true;
+    const orig = submitEl.textContent;
+    submitEl.textContent = 'Signing in…';
+    try {
+      await realLogin(username, password);
+      window.location.href = REDIRECT;
+    } catch (err) {
+      showError(err.message || String(err));
+      submitEl.disabled = false;
+      submitEl.textContent = orig;
+    }
+  });
+})();
+</script>
+
+</body>
+</html>
