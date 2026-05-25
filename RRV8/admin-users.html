@@ -128,6 +128,49 @@
   .breadcrumb-sep { margin: 0 6px; opacity: 0.6; }
   .page-title { font-size: 26px; color: var(--navy); font-weight: 800; }
 
+  /* Contacts band — sits below the page title inside the left
+     column of the page header. Two email inputs that load from
+     mini-VALC's clients row and PATCH back on blur. */
+  .contacts-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 18px;
+    margin-top: 12px;
+  }
+  .contact-field {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 240px;
+  }
+  .contact-label {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-soft);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .contact-field input {
+    font-family: inherit;
+    font-size: 13.5px;
+    color: var(--navy);
+    padding: 7px 10px;
+    border: 1px solid var(--rule-strong);
+    border-radius: 5px;
+    background: var(--bg-card);
+    transition: background 0.3s, border-color 0.15s;
+  }
+  .contact-field input:focus {
+    outline: none;
+    border-color: var(--blue);
+    box-shadow: 0 0 0 2px var(--blue-pale);
+  }
+  .contact-field input:disabled { background: var(--bg-soft); color: var(--text-muted); cursor: progress; }
+  .contact-field input.is-saving { background: #fff9e6; }
+  .contact-field input.is-saved  { background: var(--green-pale); }
+  .contact-field input.is-error  { background: var(--red-pale); border-color: var(--red); }
+
   .new-user-btn {
     font-family: 'Source Sans 3', sans-serif;
     font-weight: 700;
@@ -695,6 +738,20 @@
             <a href="#">Administrator</a><span class="breadcrumb-sep">/</span><span>Users</span>
           </nav>
           <h1 class="page-title">Users</h1>
+
+          <!-- Contacts band — Contact 1 + Contact 2 email inputs
+               sync to mini-VALC's clients.contact_1_email /
+               contact_2_email columns. PATCH-on-blur; no Save button. -->
+          <div class="contacts-row" id="js-contacts-row">
+            <label class="contact-field">
+              <span class="contact-label">Contact 1</span>
+              <input type="email" id="js-contact-1-email" placeholder="primary@example.com" autocomplete="off" disabled>
+            </label>
+            <label class="contact-field">
+              <span class="contact-label">Contact 2</span>
+              <input type="email" id="js-contact-2-email" placeholder="backup@example.com" autocomplete="off" disabled>
+            </label>
+          </div>
         </div>
         <button type="button" class="new-user-btn" id="js-new-user" title="Create a new user (coming soon)">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -1348,6 +1405,82 @@
   if (newBtn) newBtn.addEventListener('click', () => toast('New User — coming soon'));
   const expBtn = document.getElementById('js-export-btn');
   if (expBtn) expBtn.addEventListener('click', () => toast('Excel export — coming soon'));
+
+  // ---------- Contacts band ------------------------------------------
+  // V8's admin pages map to the customer's single client row in
+  // mini-VALC's clients table. For now the binding is the FIRST row
+  // returned — in dev there's effectively one client per V8 install;
+  // when a session→client mapping ships, swap this for the JWT-derived
+  // client id. PATCH-on-blur sends both fields so the server merge
+  // doesn't wipe the unedited one.
+  const _contact1Input = document.getElementById('js-contact-1-email');
+  const _contact2Input = document.getElementById('js-contact-2-email');
+  let _contactClientId = null;
+
+  async function loadContacts() {
+    try {
+      const rows = await rrFetch('api/v1/admin/clients');
+      if (!rows || rows.length === 0) {
+        console.warn('Contacts band: no client rows from mini-VALC');
+        return;
+      }
+      const c = rows[0];
+      _contactClientId = c.id;
+      _contact1Input.value = c.contact1Email || '';
+      _contact2Input.value = c.contact2Email || '';
+      _contact1Input.dataset.lastSaved =
+        (_contact1Input.value) + ' ' + (_contact2Input.value);
+      _contact2Input.dataset.lastSaved = _contact1Input.dataset.lastSaved;
+      _contact1Input.disabled = false;
+      _contact2Input.disabled = false;
+    } catch (e) {
+      console.warn('Contacts band: failed to load clients —', e.message);
+    }
+  }
+
+  async function saveContacts() {
+    if (_contactClientId == null) return;
+    const v1 = _contact1Input.value.trim();
+    const v2 = _contact2Input.value.trim();
+    const cacheKey = v1 + ' ' + v2;
+    if (_contact1Input.dataset.lastSaved === cacheKey) return;
+    _contact1Input.classList.remove('is-saved', 'is-error');
+    _contact2Input.classList.remove('is-saved', 'is-error');
+    _contact1Input.classList.add('is-saving');
+    _contact2Input.classList.add('is-saving');
+    try {
+      const base = (window.RR_CONFIG && window.RR_CONFIG.valcBase) || 'http://localhost:8080';
+      const r = await fetch(
+        base + '/api/v1/admin/clients/' + encodeURIComponent(_contactClientId) + '/contacts',
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+          body: JSON.stringify({ contact1Email: v1 || null, contact2Email: v2 || null })
+        }
+      );
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      _contact1Input.classList.remove('is-saving');
+      _contact2Input.classList.remove('is-saving');
+      _contact1Input.classList.add('is-saved');
+      _contact2Input.classList.add('is-saved');
+      _contact1Input.dataset.lastSaved = cacheKey;
+      _contact2Input.dataset.lastSaved = cacheKey;
+      setTimeout(() => {
+        _contact1Input.classList.remove('is-saved');
+        _contact2Input.classList.remove('is-saved');
+      }, 1500);
+    } catch (e) {
+      _contact1Input.classList.remove('is-saving');
+      _contact2Input.classList.remove('is-saving');
+      _contact1Input.classList.add('is-error');
+      _contact2Input.classList.add('is-error');
+      console.warn('Contacts save failed:', e.message);
+    }
+  }
+
+  _contact1Input.addEventListener('blur', saveContacts);
+  _contact2Input.addEventListener('blur', saveContacts);
+  loadContacts();
 
   // Main fetch.
   rrFetch('api/v1/admin/users')
