@@ -1207,7 +1207,7 @@
   .hero-value {
     font-family: 'Source Sans 3', sans-serif;
     font-weight: 800;
-    font-size: 54px;
+    font-size: 40px;
     line-height: 1;
     color: var(--navy);
     letter-spacing: -0.03em;
@@ -1215,7 +1215,7 @@
   }
   .hero-value.is-negative { color: var(--red); }
   .hero-value-currency {
-    font-size: 32px;
+    font-size: 24px;
     color: var(--text-muted);
     font-weight: 600;
     margin-right: 4px;
@@ -2821,7 +2821,7 @@
     .main { padding: 16px; }
     .topbar { padding: 0 14px; }
     .topbar-brand-env, .topbar-user-co { display: none; }
-    .hero-value { font-size: 40px; }
+    .hero-value { font-size: 32px; }
   }
 
   /* ============================================================
@@ -5388,6 +5388,10 @@
   }
 
   async function loadData() {
+    // Hoisted so the post-render DMAAI preload at the end of the
+    // try block has both in scope regardless of which branch ran.
+    let reconFilterForPreload = null;
+    let periodForPreload      = currentPeriod || null;
     try {
       if (IS_DEMO) {
         currentData = await rrFetch('reconciliation');
@@ -5396,9 +5400,11 @@
         // POST the recon request with that scope wrapped as Item arrays.
         const status = await rrFetch('inventory/status');
         const reconFilter = status && status.reconciliationFilter;
+        reconFilterForPreload = reconFilter || null;
         // User's selected period wins over the server's default so
         // switchPeriod() → loadData() refetches for the picked period.
         const period = currentPeriod || (reconFilter && reconFilter.period);
+        periodForPreload = period || periodForPreload;
         const body = buildProdReconBody(reconFilter, period);
         // Fetch the summary AND the per-tuple rows in parallel.
         // The summary endpoint exists today; the rows endpoint is
@@ -5449,6 +5455,11 @@
       ensureSystemStatusLog()
         .then(log => renderSystemStatusMeta(log, effectiveJob()))
         .catch(() => { /* job-status path already rendered the meta */ });
+      // Background DMAAI preload — fire-and-forget so navigation to
+      // Transactions / DMAAIs finds the cache warm. Reconciliation
+      // itself doesn't render DMAAIs, so a slow or failed fetch can't
+      // block this page.
+      preloadDmaaisInBackground(reconFilterForPreload, periodForPreload);
     } catch (err) {
       console.error('RRV8 load failed:', err);
       // In demo this means the static JSON is missing (real bug).
@@ -7395,6 +7406,102 @@
       sessionStorage.setItem(_jobStatusCacheKey(),
         JSON.stringify({ ts: Date.now(), payload: job }));
     } catch (_) {}
+  }
+
+  // ----- Session-scope cache for the DMAAI universe ----------------
+  // Same key shape as Transactions' _scopeKey('dmaais') so the two
+  // pages share state across navigation. Reconciliation itself
+  // doesn't render DMAAIs; warming the cache here on login means
+  // navigating to Transactions / DMAAIs lands with the data already
+  // in sessionStorage and no spinner.
+  function _dmaaisCacheKey() {
+    const dbName = (window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex] || {}).n || '_';
+    return 'rrv8.scope.v1.' + MODE + '.' + dbName + '.dmaais';
+  }
+  function readCachedDmaais() {
+    try {
+      const raw = sessionStorage.getItem(_dmaaisCacheKey());
+      if (!raw) return null;
+      const obj = JSON.parse(raw);
+      return (obj && obj.payload) || null;
+    } catch (_) { return null; }
+  }
+  function writeCachedDmaais(payload) {
+    if (!payload) return;
+    try {
+      sessionStorage.setItem(_dmaaisCacheKey(),
+        JSON.stringify({ ts: Date.now(), payload: payload }));
+    } catch (_) {}
+  }
+  function _dmaaisCount(payload) {
+    if (!payload) return 0;
+    if (Array.isArray(payload.data)) return payload.data.length;
+    if (Array.isArray(payload.rows)) return payload.rows.length;
+    if (typeof payload.total === 'number') return payload.total;
+    return 0;
+  }
+
+  // Fire-and-forget DMAAI universe fetch. Called from loadData() so
+  // that by the time the analyst hits Transactions / DMAAIs, the
+  // POST /inventory/integrity[v_integrity_jde_aais] response is
+  // already in sessionStorage. The sidebar DMAAI dot reflects the
+  // state at each transition (loading → ready / error).
+  //
+  // - reconFilter / period are optional; if omitted the helper
+  //   pulls /inventory/status itself. Reconciliation's loadData has
+  //   them in hand for the prod path so it passes them through.
+  // - Errors are swallowed: this page doesn't depend on DMAAIs, so
+  //   a failed preload just leaves the dot red and downstream pages
+  //   will re-attempt on mount.
+  async function preloadDmaaisInBackground(reconFilter, period) {
+    const cached = readCachedDmaais();
+    if (cached) {
+      if (window.RRV8 && typeof window.RRV8.setDmaaiStatus === 'function') {
+        window.RRV8.setDmaaiStatus('ready', { count: _dmaaisCount(cached) });
+      }
+      return;
+    }
+    if (window.RRV8 && typeof window.RRV8.setDmaaiStatus === 'function') {
+      window.RRV8.setDmaaiStatus('loading');
+    }
+    try {
+      let payload;
+      if (IS_DEMO) {
+        payload = await rrFetch('inventory/integrity', { demoFile: 'v-integrity-jde-aais' });
+      } else {
+        let rf = reconFilter;
+        if (!rf) {
+          try {
+            const status = await rrFetch('inventory/status');
+            rf = (status && status.reconciliationFilter) || {};
+          } catch (_) { rf = {}; }
+        }
+        payload = await rrFetch('inventory/integrity', {
+          method: 'POST',
+          body: {
+            take: 20000, skip: 0, page: 1, pageSize: 20000,
+            report: 'v_integrity_jde_aais',
+            reconciliationFilter: {
+              currencies:    rf.currencies    || [],
+              companies:     rf.companies     || [],
+              businessUnits: rf.businessUnits || [],
+              objects:       rf.objects       || [],
+              subsidiaries:  rf.subsidiaries  || [],
+              period:        period || rf.period || '2016-08-27'
+            }
+          }
+        });
+      }
+      writeCachedDmaais(payload);
+      if (window.RRV8 && typeof window.RRV8.setDmaaiStatus === 'function') {
+        window.RRV8.setDmaaiStatus('ready', { count: _dmaaisCount(payload) });
+      }
+    } catch (err) {
+      console.warn('[recon] DMAAI preload failed:', err && err.message);
+      if (window.RRV8 && typeof window.RRV8.setDmaaiStatus === 'function') {
+        window.RRV8.setDmaaiStatus('error', { message: err && err.message });
+      }
+    }
   }
 
   // Apply a job-status row to a sidebar dot. Sets both class
