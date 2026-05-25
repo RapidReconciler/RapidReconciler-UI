@@ -104,6 +104,8 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <li data-target="cut-release"><a href="#cut-release" onclick="goAnchor('cut-release'); return false;">2. Cut a release</a></li>
 <li data-target="action"><a href="#action" onclick="goAnchor('action'); return false;">3. What the Action does</a></li>
 <li data-target="post-release"><a href="#post-release" onclick="goAnchor('post-release'); return false;">4. After the release</a></li>
+<li data-target="post-release-prod" style="padding-left: 14px;"><a href="#post-release-prod" onclick="goAnchor('post-release-prod'); return false;">4a. Production deploy (JMS)</a></li>
+<li data-target="post-release-internal" style="padding-left: 14px;"><a href="#post-release-internal" onclick="goAnchor('post-release-internal'); return false;">4b. Internal deploy (HTTP push)</a></li>
 <li data-target="prereleases"><a href="#prereleases" onclick="goAnchor('prereleases'); return false;">5. Pre-releases &amp; rollbacks</a></li>
 <li data-target="valc-mirror"><a href="#valc-mirror" onclick="goAnchor('valc-mirror'); return false;">6. Mini-VALC parallel</a></li>
 <li data-target="troubleshooting"><a href="#troubleshooting" onclick="goAnchor('troubleshooting'); return false;">7. Troubleshooting</a></li>
@@ -235,7 +237,20 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 
 <section id="post-release">
 <h2>4. After the release</h2>
-<p>The jar on the GitHub Release page isn&rsquo;t the Services install path on its own &mdash; it has to land in VALC&rsquo;s artifact catalog (the <code>file_versions</code> table) before a customer&rsquo;s Agent can stream it down to a Services instance.</p>
+<p>The jar on the GitHub Release page isn&rsquo;t the Services install path on its own &mdash; it has to land in VALC&rsquo;s artifact catalog (the <code>file_versions</code> table) before any of the deploy paths can reach a Services instance.</p>
+<p>Two deploy paths exist, both feeding off the same <code>file_versions</code> row:</p>
+<ul>
+  <li><strong>Production deploy</strong> &mdash; JMS-based. Goes through the central VALC SPA and the customer&rsquo;s legacy <code>rr-valc-agent.jar</code>. The path real customers use today. See &sect; 4a.</li>
+  <li><strong>Internal deploy</strong> &mdash; HTTP-push. Goes through mini-VALC&rsquo;s <strong>Manage Deploy</strong> modal directly to the Services jar&rsquo;s own <code>/admin/self-update</code> endpoint. Used on the dev box and in any environment where mini-VALC has line-of-sight to the agent&rsquo;s internal IP. See &sect; 4b.</li>
+</ul>
+<div class="callout important">
+  <p>Customer deploys are <em>not</em> automatic on every release. Releasing publishes the jar; deploying pushes it. This split is intentional &mdash; gives you a chance to pilot a release on one or two clients before fanout, regardless of which path you use.</p>
+</div>
+</section>
+
+<section id="post-release-prod">
+<h3>4a. Production deploy (JMS via central VALC)</h3>
+<p>The mechanism real customers receive updates through. The customer&rsquo;s legacy Agent jar is the receiver; mini-VALC isn&rsquo;t in the picture at all.</p>
 <ol>
   <li>Open the new GitHub Release; download the attached <code>client-services-X.Y.Z.jar</code>.</li>
   <li>In production VALC, navigate to the artifact upload page; upload the jar with <code>component = services</code>. VALC records the SHA1, file size, and version string into <code>file_versions</code>.</li>
@@ -245,8 +260,34 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <div class="callout note">
   <p><strong>Watch the component slot.</strong> The artifact upload form asks for a component value. Services jars (this doc&rsquo;s artifact) go into <code>component='services'</code>. The other slot, <code>component='agent'</code>, is reserved for <code>rr-valc-agent.jar</code> &mdash; the legacy v359 JMS broker client. Uploading a Services jar into the agent slot will fail SHA1 verification on the customer side because the Agent&rsquo;s <code>HealthService</code> expects a different Actuator contract than the Services jar exposes.</p>
 </div>
+</section>
+
+<section id="post-release-internal">
+<h3>4b. Internal deploy (HTTP push via mini-VALC)</h3>
+<p>The path mini-VALC&rsquo;s <strong>Manage Deploy</strong> modal exercises on the dev box. Bypasses JMS entirely &mdash; mini-VALC POSTs the jar bytes straight to the agent&rsquo;s own <code>/admin/self-update</code> endpoint and orchestrates the restart. Used for internal testing, dogfooding new builds, and any deploy where mini-VALC and the Services agent share a network (typically the same host).</p>
+
+<ol>
+  <li><strong>Sync from GitHub.</strong> Click the circular-arrows icon next to the <strong>New Version</strong> dropdown on the Manage Deploy modal. mini-VALC hits the GitHub Releases API for <code>RapidReconciler-Agent</code>, filters to <code>client-services-*.jar</code> assets, dedups against <code>file_versions</code> by <code>(component, version_string)</code> + <code>sha1_hex</code>, downloads new jars to the artifact store under <code>file_versions.id</code>, and inserts rows with <code>component='services'</code>. Idempotent &mdash; re-runs skip already-imported tags.</li>
+  <li><strong>Pick a version.</strong> The dropdown lists synced rows newest-first (e.g. <code>0.2.0-rc1</code>).</li>
+  <li><strong>Click Deploy.</strong> mini-VALC runs <code>ServicesDeployService.deploy(agentId, fileVersionId)</code>:
+    <ul>
+      <li>Loads the jar bytes from the artifact store.</li>
+      <li>POSTs them to <code>http://{agent_internal_ip}:{port}/admin/self-update</code> with <code>X-Expected-Sha1</code>.</li>
+      <li>The agent stages the jar at <code>&lt;runningJar&gt;.new</code>, verifies SHA1, returns the staged path.</li>
+      <li>mini-VALC stops the agent JVM (graceful destroy, or port-based force-stop if the JVM was launched by an earlier mini-VALC instance and isn&rsquo;t in the lifecycle map).</li>
+      <li><code>Files.move</code> with REPLACE_EXISTING, retry loop (60&times;500ms) to absorb the Windows mmap-release delay.</li>
+      <li>Restart the agent JVM from the swapped path. Poll <code>/health</code> until green or 30s timeout.</li>
+      <li>Insert a <code>client_deploys</code> row with the final status.</li>
+    </ul>
+  </li>
+  <li><strong>Result.</strong> The Deploy button&rsquo;s toast shows <code>SUCCEEDED</code> with target IP / port + the new <code>client_deploys</code> row id. The Services field on the Versions tab updates immediately.</li>
+</ol>
+
+<div class="callout note">
+  <p><strong>Loopback-only.</strong> The agent&rsquo;s <code>/admin/self-update</code> refuses non-loopback callers with 403. mini-VALC must therefore reach the agent over loopback &mdash; either co-hosted (the dev-box pattern) or via an SSH tunnel for remote pilots. Production VALC always uses the JMS path because real customer agents aren&rsquo;t reachable on their internal IP from the central server.</p>
+</div>
 <div class="callout important">
-  <p>Customer deploys are <em>not</em> automatic on every release. Releasing publishes the jar; deploying pushes it. This split is intentional &mdash; gives you a chance to pilot a release on one or two clients before fanout.</p>
+  <p><strong>The deployed jar must itself contain <code>/admin/self-update</code></strong> for the next HTTP-push deploy to work. If you deploy a release that predates this endpoint, the agent loses its self-update path &mdash; restore it via a local <code>mvn package</code> + manual jar swap, or cut a new release tag from a Dev commit that includes the controller.</p>
 </div>
 </section>
 
