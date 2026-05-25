@@ -907,6 +907,64 @@ Estimated ~1 hour: auth endpoint + JWT signing (mini-VALC
 already has spring-security on the classpath) + change-password
 endpoint + hub-form rewrite.
 
+**mini-VALC: production-ready Add Database -> spawn Services jar
+flow** &mdash; today the Create Database modal is a UI stub
+(`dashboard.html:2765-2771` toasts and closes); `ClientDatabaseController`
+exists but isn&rsquo;t wired; nothing publishes a `SynchronizeMessage2`
+when a `client_databases` row lands. Full punch list (7 phases:
+wiring, security, lifecycle, schema, client-side multi-DB,
+observability, testing) plus the architectural gate (per-customer
+vs central broker; does mini-VALC ship to customers or stay
+dev-only?) saved at
+[`docs/plans/mini-valc-database-provisioning-production-ready.md`](../docs/plans/mini-valc-database-provisioning-production-ready.md).
+**Do not start without picking the topology** &mdash; every
+hardening choice depends on it. Tested target: add "rrv7-al"
+through mini-VALC and watch V7 + V8 clients hit the spawned
+Services jar without manual `java -jar` steps.
+
+**Auth chunk: mini-VALC login + change-password + complex-password
+policy + fix new agent&rsquo;s JwtAuthFilter** &mdash; partial
+implementation on disk (uncommitted): `V11__password_history.sql`,
+`PasswordHistoryEntity`/`Repository`, `JwtService` (RS256 keypair
+plumbing), `PasswordPolicyService` (8-char min + 3-of-4 complexity
++ name-restriction + history-of-10, gated by
+`clients.password_policy_active`), `AuthController` skeleton. **Then
+mining v359 revealed the new agent&rsquo;s `JwtAuthFilter` reads
+invented claim keys** &mdash; `sub` doesn&rsquo;t exist in real VALC
+tokens (username is `user.u`), and the `as`/`aite`/`aprs`/`rs`/`su`
+flags are entirely fabricated. Real customer logins have been
+silently producing null username + zero admin flags on the agent
+side. Authoritative claim shape now documented in
+[`RapidReconciler-Agent/docs/v359-auth.md`](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/docs/v359-auth.md);
+divergence + cutover impact called out in
+[`docs/v359-vs-new-agent.md`](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/docs/v359-vs-new-agent.md)
+&sect; 4. Rewrite scope:
+- New agent: rework `JwtAuthFilter.populateUserRequest` to read
+  `user.u` for username, drop the phantom admin flags, add
+  `dbs[i].t` (in-transit companies) + `dbs[i].p` (PO Receipts
+  companies), pick `dbs[i]` by matching `n` to the configured DB
+  (not blindly `dbs[0]`).
+- mini-VALC: rewrite `JwtService.mint()` to emit
+  `{user: {id, fn, c, u, rm}, dbs: [{ip, k, n, i, t, p, a}]}` with
+  `@JsonProperty` annotations matching v359 verbatim. Move
+  `AuthController` from `/api/v1/auth/login` to
+  `/resource/client/login` with `{username, password, rememberme}`
+  request body and `{token}` response.
+- V8 `login.html`: keep its current request/response shape; just
+  flip `AUTH_BASE` from `staging-valcspa.cloudapp.net` to
+  `localhost:8080`. Hub form is being removed (per owner) so no
+  parallel work there.
+- Change-password: new surface (`POST /resource/client/change-password`)
+  with no v359 analog; Azure SPA owns it today via its own UI.
+  mini-VALC takes over when it becomes the auth target. Policy
+  rules come from
+  [`RRUniversity/administrator-complex-password.html`](../RRUniversity/administrator-complex-password.html);
+  the on-disk `PasswordPolicyService` is already implementing them.
+Saved at
+[`feedback_check_v359_first`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/feedback_check_v359_first.md)
+&mdash; check v359 before designing anything new is now a durable
+rule.
+
 **Agent-side specs to ship** (each unblocks a V8 feature):
 
 - **`POST /inventory/reconciliation/rows`** &mdash; the priority
@@ -935,15 +993,13 @@ endpoint + hub-form rewrite.
 - **`beforeunload` guard** on the DMAAI page so the analyst gets
   warned when closing with unsaved responses (the save bar is the
   only signal today).
-- **Wire `usp6getasof_v2`** to AsOfController. Java/Spring
-  repository-method change in the agent jar. 27% faster on warm
-  cache vs the legacy sproc (1,764ms vs 2,431ms on dev DB);
-  production should see proportional or better wins.
-- **Cardex Variance hero N+1** &mdash; one
-  `/inventory/reconciliation-filtered` call per company in the
-  JWT for the hero number. Fine with 2 companies; ugly with 20.
-  Could be a single-call shape if the agent exposed per-company
-  aggregates in the response &mdash; backend conversation.
+- ~~**Wire `usp6getasof_v2`** to AsOfController.~~ Already wired
+  in [`AsOfRepository.java`](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/src/main/java/coral/rapidreconciler/client/services/repository/AsOfRepository.java);
+  this entry was stale.
+- ~~**Cardex Variance hero N+1.**~~ Resolved in agent v0.2.0-rc3 via
+  new `POST /inventory/reconciliation/by-company` endpoint
+  ([ReconciliationController](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/src/main/java/coral/rapidreconciler/client/services/controller/ReconciliationController.java))
+  + V8 cardex page wiring. One call replaces the per-company loop.
 - **Build the next page** (Roll Forward / Integrity / In Transit /
   PO Receipts). The pattern's now well-grooved across 5 pages;
   start by mining the relevant controller in the agent jar, then
