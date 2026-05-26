@@ -54,8 +54,76 @@ the new session at.
 > Snapshot fallbacks for cross-period history are gone in
 > staging/prod; the demo snapshots stay on disk only for the
 > GitHub Pages public preview.
+>
+> **VALC 2.0 is the canonical name (2026-05-26)**: "mini-VALC" was
+> the prototyping name only. New docs, customer-facing language,
+> and commit messages all use "VALC 2.0". The `RapidReconciler-Valc`
+> repo + `coral.rapidreconciler.valc` Java package keep their names
+> (internal identifiers). See memory
+> [`project_valc_2_naming`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/project_valc_2_naming.md)
+> &mdash; also has the Coral context (10-hr/week engagement; the
+> cutover plan doc at `docs/plans/valc-2-cutover-plan.md` +
+> `GSIRRTech/valc-2-cutover-plan.html` is sanitized for Coral
+> readability).
+>
+> **Check v359 before designing anything new (2026-05-25)**: the
+> legacy stack is the canonical spec for auth, endpoint shapes,
+> JWT claim names, business logic. Customer docs glaze edge
+> cases; intuition fills them with plausible-wrong choices. Mine
+> the jar with `javap` (recipe in
+> [`RapidReconciler-Agent/docs/jar-mining.md`](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/docs/jar-mining.md))
+> / decode a real JWT / observe DevTools BEFORE designing. Saved
+> at
+> [`feedback_check_v359_first`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/feedback_check_v359_first.md)
+> + first bullet of repo-root `CLAUDE.md` Workflow section.
+>
+> **JWT claim-shape divergence is a known agent bug (2026-05-25)**:
+> the new agent&rsquo;s `JwtAuthFilter` reads invented keys
+> (`sub`, `as`, `aite`, `aprs`, `rs`, `su`); real VALC tokens use
+> `{user: {id, fn, c, u, rm}, dbs: [{ip, k, n, i, t, p, a}]}` per
+> [`RapidReconciler-Agent/docs/v359-auth.md`](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/docs/v359-auth.md).
+> Real customer logins produce null username + zero admin flags on
+> the agent side. Rewrite queued; mini-VALC auth scaffolding on
+> disk uses the same wrong shape. Three-side fix: new agent's
+> filter + Valc's `JwtService.mint()` + V8 `login.html` AUTH_BASE
+> flip. See *Next-session queue* &sect; *Auth chunk*.
+>
+> **Five plans queued in [`docs/plans/`](../docs/plans/)** all read
+> on session start:
+> - `mini-valc-database-provisioning-production-ready.md` &mdash;
+>   7-phase plan for Add Database &rarr; spawn Services jar
+> - `valc-2-cutover-plan.md` &mdash; phased cutover from legacy
+>   Azure VALC + v359 to VALC 2.0 + new Services jar (also
+>   rendered as
+>   [`GSIRRTech/valc-2-cutover-plan.html`](../GSIRRTech/valc-2-cutover-plan.html)
+>   for the mini-VALC sidebar)
+> - `workspace-cwd-migration.md` &mdash; plan to move Claude
+>   Code's CWD up to `C:/source/repos/` so cross-repo work uses
+>   relative paths
+> - Plus the older `rapidreconciler-db-bootstrap.md`,
+>   `dmaai-system-context.md`, `analyzer-disclaimer-and-feedback.md`,
+>   `sidebar-extraction.md`, etc.
 
-**Updated**: 2026-05-24, after a long session that (a) wrote the
+**Updated**: 2026-05-26, after two sessions (2026-05-25 +
+continuation) that landed (a) the Janitor cleanup task in the
+Services jar (released as Agent `v0.2.0-rc2`); (b) the
+reconciliation by-company endpoint killing the Cardex Variance
+N+1 (released as Agent `v0.2.0-rc3` + V8 cardex page wiring);
+(c) v359 auth surface mining +
+[`v359-auth.md`](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/docs/v359-auth.md)
+authoritative claim-shape doc; (d) mini-VALC auth scaffolding
+(login + change-password + JwtService + PasswordPolicyService +
+V11 password-history migration) on disk in
+`RapidReconciler-Valc`; (e) the VALC 2.0 cutover plan + the
+provisioning plan + the workspace-cwd-migration plan filed in
+`docs/plans/`; (f) the Clients dashboard converted to a
+card-grid layout with health tints (per the "see green, go play
+golf" framing) + a sidebar link to the cutover plan; (g) the
+check-v359-first rule codified to CLAUDE.md + memory.
+
+Earlier rolling summary follows:
+
+**Prior &mdash; long session 2026-05-24 (a) wrote the
 production-only rule into WORKFLOW.md + memory, (b) stood up the
 green-field data-services agent in `RapidReconciler-Agent/src/`
 (Spring Boot 3.3.5 / Java 21 / Maven / Lombok / Apache POI 5.3.0
@@ -665,7 +733,35 @@ Inventory &rarr; As Of &rarr; Cardex Variance.
 >    [`feedback_dev_default_auto_main`](../../../.claude/projects/C--source-repos-RapidReconciler-UI/memory/feedback_dev_default_auto_main.md).
 >    Repo renames: `RapidReconciler-SQL` &rarr; `RapidReconciler-DB`,
 >    `RapidReconciler-AI` &rarr; `RapidReconciler-UI`.
-> 12. **Recent commits across all three repos**:
+> 12. **Saved plans live at
+>    [`docs/plans/`](../docs/plans/)** &mdash; reviewed on session
+>    start per CLAUDE.md. Five active plans:
+>    `valc-2-cutover-plan.md` (phased cutover from Azure VALC +
+>    v359 to VALC 2.0 + new Services jar),
+>    `mini-valc-database-provisioning-production-ready.md` (Add
+>    Database &rarr; spawn Services jar; 7 phases),
+>    `workspace-cwd-migration.md` (eventual move of Claude Code's
+>    CWD up to `C:/source/repos/`), plus the older
+>    `rapidreconciler-db-bootstrap.md`, `dmaai-system-context.md`,
+>    `sidebar-extraction.md`, `v8-demo-prod-mode.md`,
+>    `analyzer-disclaimer-and-feedback.md`,
+>    `dmaai-page-overlay-table.md`,
+>    `self-guided-tour-replacement.md`. Each is a deferred chunk;
+>    read the relevant one before starting the matching work.
+> 13. **Sensitive-framing note** &mdash; the VALC 2.0 cutover plan
+>    (markdown + HTML render at `GSIRRTech/valc-2-cutover-plan.html`)
+>    is **sanitized for Coral readability**. Coral is a third-
+>    party UI vendor on a 10-hour/week engagement; the cutover
+>    plan describes the technical modernization neutrally, NOT
+>    as a vendor-replacement narrative. The truthful internal
+>    context lives in memory `project_valc_2_naming` &mdash;
+>    fine to know, just don't put phase-out language onto
+>    Coral-visible surfaces (the plan docs OR the commit
+>    messages that touch them). See the standing-rule block
+>    above and the memory file for what to NOT put back.
+> 14. **Recent commits across all three repos** (use the new repo
+>    names; `RapidReconciler-AI` &rarr; `RapidReconciler-UI`,
+>    `RapidReconciler-SQL` &rarr; `RapidReconciler-DB`):
 >    ```
 >    git -C "C:/source/repos/RapidReconciler-UI"    log --oneline -10
 >    git -C "C:/source/repos/RapidReconciler-Agent" log --oneline -10
