@@ -968,6 +968,38 @@ take/skip/page/pageSize}` per the IntegrityController catalog row.
 
 ### Next-session queue
 
+**PRIORITY &mdash; VALC 2.0 "Start" button on the Test agent
+popover is silently broken.** Clicking Start in the Clients
+dashboard&rsquo;s Test agent popover does not actually spawn the
+agent JVM. The agent has to be launched manually via
+`pwsh C:/source/repos/RapidReconciler-Agent/setup/run-test-agent.ps1`.
+Most likely causes (in order):
+
+1. `AgentLifecycleService.start()` swallows the spawn exception &mdash;
+   `ProcessBuilder.start()` throws but the `try/catch` only logs
+   at WARN, and the controller&rsquo;s `start` endpoint returns 500
+   without surfacing the error to the dashboard&rsquo;s toast.
+2. The configured `valc.dashboard.agents[].jar-path` in
+   `application.yml`
+   (`C:/source/repos/RapidReconciler-Agent/target/client-services-0.1.0-SNAPSHOT.jar`)
+   doesn&rsquo;t exist locally because the Agent repo hasn&rsquo;t been
+   built since the last `mvn clean`. Verify with
+   `ls C:/source/repos/RapidReconciler-Agent/target/*.jar`.
+3. The `java-home` path
+   (`C:/Development/jdk-21.0.11+10`) may have shifted between
+   JDK installs.
+
+Repro: stop the agent (`taskkill /F` on whatever PID owns :34537),
+click Start in the Clients dashboard, watch the toast + the agent's
+stdout log under `agent-logs/`. Fix outline: surface the spawn
+exception through to the dashboard toast + add a precheck that the
+jar + JDK paths exist before spawning, with a clear error message
+naming the missing path. Side effect of the current bug: agents
+started externally don&rsquo;t have a `Process` handle in
+`AgentLifecycleService.running`, so the popover&rsquo;s Stop button
+also no-ops &mdash; only Force-stop works (it kills the PID
+listening on the port).
+
 **mini-VALC login + password-policy enforcement** &mdash; the
 Admin &rarr; Users page surfaces and writes
 `users.temporary_password` (1-day vs 90-day expiry), but the
