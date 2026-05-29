@@ -667,18 +667,43 @@ Inventory &rarr; As Of &rarr; Cardex Variance.
 
 ## Resume prompt
 
-> I'm continuing the RRV8 project. Before doing anything else,
-> please read these in order and confirm you understand them:
+> **Open this session at CWD `C:/source/repos/`** (the workspace
+> root, not the UI repo). The CWD migration landed in Prompt #1
+> &mdash; per-repo CLAUDE.md files exist for all five RR repos
+> and a workspace-level `C:/source/repos/CLAUDE.md` carries
+> cross-cutting rules. Memory has been copied to
+> `~/.claude/projects/C--source-repos/memory/`.
 >
-> 1. **CLAUDE.md** at the repo root &mdash; project-wide
->    conventions, link rules, data hygiene, commit workflow,
->    "don't mention the preview panel" durable preference.
-> 2. **RRV8/WORKFLOW.md** &mdash; the V8 project guide. Pay
->    attention to the *Production-only until Inventory is
->    complete* tenet &mdash; no new snapshots get added.
-> 3. **RRV8/HANDOFF.md** &mdash; this file. The standing-rule
->    block at the top has the current state (test agent owns
->    every V8 endpoint; mini-VALC dashboard exists).
+> I'm continuing the RR platform work &mdash; we're in a
+> structured 12-prompt sequence (Prompt #1 of 12 just landed,
+> commit + handoff complete; Prompt #2 is incoming). For each
+> prompt I also fold in matching items from the cutover plan's
+> work queue.
+>
+> Before doing anything else, read these in order and confirm:
+>
+> 1. **`CLAUDE.md`** at the workspace root
+>    (`C:/source/repos/CLAUDE.md`) &mdash; cross-cutting rules
+>    (commit workflow, check-v359-first, VALC 2.0 naming,
+>    SQL compat floor, don't-mention-preview-panel, PS5.1 UTF-8).
+> 2. **Per-repo CLAUDE.md** for whichever repo Prompt #2 touches:
+>    [`RapidReconciler-AI/CLAUDE.md`](../../RapidReconciler-AI/CLAUDE.md),
+>    [`RapidReconciler-Agent/CLAUDE.md`](../../RapidReconciler-Agent/CLAUDE.md),
+>    [`RapidReconciler-Valc/CLAUDE.md`](../../RapidReconciler-Valc/CLAUDE.md),
+>    [`RapidReconciler-DB/CLAUDE.md`](../../RapidReconciler-DB/CLAUDE.md),
+>    [`RapidReconciler-SSIS/CLAUDE.md`](../../RapidReconciler-SSIS/CLAUDE.md).
+> 3. **The cutover plan** (post-Prompt #1 reframe):
+>    [`RapidReconciler-AI/docs/plans/valc-2-cutover-plan.md`](../docs/plans/valc-2-cutover-plan.md).
+>    Now framed as the **V8 cutover** (with VALC 2.0 + new
+>    Services jar as the foundation), with V7 &harr; V8
+>    per-customer switching mechanism documented, a Work queue
+>    of prioritized backlog (6 tiers), and a Release-notes
+>    section tracking cutover-relevant commits.
+> 4. **RRV8/WORKFLOW.md** &mdash; V8 project guide. *Production-
+>    only until Inventory is complete* tenet still applies; no
+>    new snapshots.
+> 5. **RRV8/HANDOFF.md** &mdash; this file. Standing-rule block
+>    + Next-session queue + cumulative session notes.
 > 4. **RRV8/GRID-STANDARDS.md** &mdash; the grid-standards spec
 >    (Transactions Details grid is the reference implementation).
 > 5. **RRV8/API.md** &mdash; client-side perspective; the
@@ -735,19 +760,22 @@ Inventory &rarr; As Of &rarr; Cardex Variance.
 >    `RapidReconciler-AI` &rarr; `RapidReconciler-UI`.
 > 12. **Saved plans live at
 >    [`docs/plans/`](../docs/plans/)** &mdash; reviewed on session
->    start per CLAUDE.md. Five active plans:
->    `valc-2-cutover-plan.md` (phased cutover from Azure VALC +
->    v359 to VALC 2.0 + new Services jar),
->    `mini-valc-database-provisioning-production-ready.md` (Add
->    Database &rarr; spawn Services jar; 7 phases),
->    `workspace-cwd-migration.md` (eventual move of Claude Code's
->    CWD up to `C:/source/repos/`), plus the older
->    `rapidreconciler-db-bootstrap.md`, `dmaai-system-context.md`,
->    `sidebar-extraction.md`, `v8-demo-prod-mode.md`,
->    `analyzer-disclaimer-and-feedback.md`,
->    `dmaai-page-overlay-table.md`,
->    `self-guided-tour-replacement.md`. Each is a deferred chunk;
->    read the relevant one before starting the matching work.
+>    start per CLAUDE.md. Active plans (post-Prompt #1):
+>    - `valc-2-cutover-plan.md` &mdash; the V8 cutover plan.
+>      Read-on-start required. Updated in Prompt #1.
+>    - `valc-2-qa-azure-deployment.md` &mdash; QA Azure VM
+>      readiness checklist. **New in Prompt #1.**
+>    - `branding-standards.md` &mdash; GSIBranding asset
+>      standards + remediation list. **New in Prompt #1.**
+>    - `mini-valc-database-provisioning-production-ready.md`
+>      &mdash; Add Database &rarr; spawn Services jar.
+>    - `workspace-cwd-migration.md` &mdash; the CWD migration
+>      executed in Prompt #1; marked DONE.
+>    - Older: `rapidreconciler-db-bootstrap.md`,
+>      `dmaai-system-context.md`, `sidebar-extraction.md`,
+>      `v8-demo-prod-mode.md`, `analyzer-disclaimer-and-feedback.md`,
+>      `dmaai-page-overlay-table.md`,
+>      `self-guided-tour-replacement.md`.
 > 13. **Sensitive-framing note** &mdash; the VALC 2.0 cutover plan
 >    (markdown + HTML render at `GSIRRTech/valc-2-cutover-plan.html`)
 >    is **sanitized for Coral readability**. Coral is a third-
@@ -759,20 +787,22 @@ Inventory &rarr; As Of &rarr; Cardex Variance.
 >    Coral-visible surfaces (the plan docs OR the commit
 >    messages that touch them). See the standing-rule block
 >    above and the memory file for what to NOT put back.
-> 14. **Recent commits across all three repos** (use the new repo
->    names; `RapidReconciler-AI` &rarr; `RapidReconciler-UI`,
->    `RapidReconciler-SQL` &rarr; `RapidReconciler-DB`):
+> 14. **Recent commits** &mdash; at CWD `C:/source/repos/`,
+>    the paths shorten:
 >    ```
->    git -C "C:/source/repos/RapidReconciler-UI"    log --oneline -10
->    git -C "C:/source/repos/RapidReconciler-Agent" log --oneline -10
->    git -C "C:/source/repos/RapidReconciler-Valc"  log --oneline -10
+>    git -C RapidReconciler-AI    log --oneline -10
+>    git -C RapidReconciler-Agent log --oneline -10
+>    git -C RapidReconciler-Valc  log --oneline -10
 >    ```
+>    The cutover plan's Release-notes section
+>    (`RapidReconciler-AI/docs/plans/valc-2-cutover-plan.md`)
+>    tracks cutover-relevant PRs going forward.
 >
-> After reading those, summarize back in 4&ndash;6 bullets:
-> (a) what RRV8 currently looks like, (b) what&rsquo;s working
-> through the test agent today (everything), (c) what's still
-> open on the page-by-page V8 smoke list, (d) what&rsquo;s most
-> worth doing next. Then wait for the next instruction.
+> After reading the above, **stand by for Prompt #2** (the
+> sequence's second of 12). I'll paste it next. For each
+> prompt, fold in matching items from the cutover plan's Work
+> queue, commit at the end of the prompt's work, and we keep
+> moving.
 
 ### In-flight design direction (queued for next session)
 

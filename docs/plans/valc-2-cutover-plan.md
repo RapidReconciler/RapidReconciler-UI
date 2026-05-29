@@ -1,11 +1,15 @@
-# Plan: VALC 2.0 cutover
+# Plan: V8 cutover (VALC 2.0 + new Services jar foundation)
 
-**Status:** Spec only. Not yet executed. Pick up in a fresh session
-when ready.
+**Status:** Spec. In progress. Foundation pieces have landed
+(VALC 2.0 control plane, new Services jar core endpoints, JWT
+per-database scoping). Customer-facing rollout (V7 &rarr; V8) is
+phased.
 
-**Source of this plan:** session conversations on 2026-05-25
+**Source of this plan:** session conversations starting 2026-05-25
 covering what a real customer-facing cutover would actually look
-like.
+like, refined 2026-05-27 to lead with V8 as the customer-visible
+deliverable (with VALC 2.0 + the new Services jar as the
+foundation it depends on).
 
 **Related plan:** [`mini-valc-database-provisioning-production-ready.md`](mini-valc-database-provisioning-production-ready.md)
 &mdash; the &ldquo;Add Database &rarr; spawn Services jar&rdquo;
@@ -17,15 +21,31 @@ provisioning flow.)
 
 ## Background
 
-VALC 2.0 is a platform modernization of the RapidReconciler control
-plane. By the end of Phase 4 below:
+The customer-facing outcome of this work is **V8** &mdash; the
+modernized RapidReconciler UI in `RRV8/`. Two layers of platform
+modernization make V8 viable:
 
-- VALC 2.0 (previously prototyped as &ldquo;mini-VALC&rdquo;)
+- **VALC 2.0** (previously prototyped as &ldquo;mini-VALC&rdquo;)
   replaces the legacy Azure VALC SPA at its existing URLs.
-- The new Services jar from `RapidReconciler-Agent` replaces v359
-  on a per-customer schedule via the existing VALC deploy panel.
-- V8 (RRV8/) replaces the legacy AngularJS SPA when its module
-  coverage closes.
+- The **new Services jar** from `RapidReconciler-Agent` replaces
+  v359 on a per-customer schedule via the existing VALC deploy
+  panel.
+
+V8 itself is a separate switching dimension: every customer's
+install can be flipped between V7 (legacy AngularJS SPA) and V8
+**independently** of the Services jar version. A customer can run
+on the new Services jar with V7 still mounted, then flip to V8
+when their module coverage is ready &mdash; or stay on V7
+indefinitely if they prefer. See &sect; *V7 &harr; V8 customer
+switching* below.
+
+By the end of Phase 4 below:
+
+- VALC 2.0 replaces the legacy Azure VALC SPA at its existing URLs.
+- The new Services jar replaces v359 on every customer's box.
+- V8 replaces V7 on every customer's installation, with V7 kept
+  reachable behind a per-customer flag for rollback or for
+  customers whose module coverage requires it.
 - All VALC infrastructure (legacy + new) runs on Azure VMs. The
   new instance stands up alongside the legacy one and takes over
   via a DNS / LB flip.
@@ -215,6 +235,95 @@ decision not to migrate.
 
 ---
 
+## V7 &harr; V8 customer switching
+
+V7 (the legacy AngularJS SPA) and V8 (RRV8/) are **two independent
+UI surfaces** that share the same Services jar backend and the same
+auth source. A customer's installation can run on either at any
+time, flipped by a single server-side flag. No customer action; no
+DNS work; no broker changes; fully reversible.
+
+### Mechanism (target design)
+
+1. **Per-customer flag in VALC 2.0's Postgres.** New column
+   `clients.ui_version` (values `'v7'` / `'v8'`; default `'v7'`).
+   Ships in a Flyway migration alongside the other VALC 2.0
+   schema changes.
+2. **Landing-page redirect at the legacy URL.** The customer's
+   bookmark (e.g. `rapidreconciler.getgsi.com`) hits a thin
+   landing page that:
+   1. Reads the user's JWT (post-login).
+   2. Resolves `client_id` from the token's `dbs[i]` entry.
+   3. Queries VALC 2.0 for that client's `ui_version`.
+   4. Redirects to the V7 SPA host or the V8 static host
+      accordingly.
+3. **Per-customer flip control.** The VALC 2.0 Client Management
+   page's Edit Client modal gains a **UI version** dropdown
+   (`v7` / `v8`). Admin selects; PUTs to
+   `/api/v1/admin/clients/{id}`; row updates; next login picks
+   up the new value. No user-visible session interruption.
+4. **Rollback.** Same dropdown. Flip back to `v7`; next login
+   serves V7 again. The two surfaces never have to be torn down
+   together &mdash; they coexist.
+5. **Per-user override (deferred).** A `users.ui_version_override`
+   column (nullable, falls back to client-level) lets specific
+   power users opt into V8 ahead of their client's flip, or stay
+   on V7 if they need a V8-incomplete module. Ship after the
+   per-customer flag has bedded in.
+
+### State combinations the cutover walks through
+
+Each customer goes through some subset of these states &mdash; not
+necessarily linearly:
+
+| Services jar | UI surface | Notes |
+|---|---|---|
+| v359 | V7 | Status quo (pre-cutover). |
+| v359 | V8 | **Not supported.** V8 expects the new agent's endpoints (e.g. `reconciliation/history`, `reconciliation/rows`, `audit-detail`). Customers must move to the new Services jar before the V8 flip. |
+| New jar | V7 | Services jar swapped silently per Phase 2 below; UI flag stays at `v7`. V7 keeps working &mdash; the new jar speaks the same legacy endpoints. |
+| New jar | V8 | The end state. Customer flipped via the VALC 2.0 dropdown when their module coverage is ready. |
+
+The new Services jar swap and the V7&rarr;V8 flip are **independent
+gates**. Customers whose module coverage isn't yet built (In
+Transit / PO Receipts / Roll Forward) can ride on the new Services
+jar for an indefinite stretch while their UI stays at V7.
+
+### Sequencing within the phases
+
+- **Phase 0** ships the `clients.ui_version` column, the landing
+  redirect, the Client Management dropdown, and the V8 production
+  hosting. V8 must be reachable at a stable URL before any flag
+  can target it.
+- **Phase 2** is the first customer's **Services jar** swap; UI
+  flag stays at `v7`. That customer is now on `(New jar, V7)`.
+- **Phase 3** rolls the Services jar to the rest of the customer
+  base. UI flag stays at `v7` for all of them.
+- After Phase 3, customers are flipped to V8 **one at a time** as
+  their coverage and operator comfort allow. This isn't a phase
+  with an exit criterion &mdash; it's an ongoing per-customer
+  workflow run from the VALC 2.0 dashboard.
+
+### Why this design
+
+- **No DNS work per customer.** The bookmark URL doesn't change.
+- **No customer conversation.** The flip is a server-side
+  database write.
+- **Independently reversible.** A misbehaving V8 page on customer
+  X doesn't bottleneck the rest of the rollout; flip X back to
+  V7, leave others on V8.
+- **Coexists with the rollback story already in Phase 2.** Both
+  knobs (Services jar version, UI version) live on the VALC 2.0
+  dashboard; both flip the same way (admin selects, server-side
+  push).
+
+### Exit criterion for V7 &harr; V8 dimension
+
+Every customer's `ui_version` is `'v8'`, with no rollback-to-V7
+flips in the last 30 days. At that point V7 can be considered for
+decommission (legacy SPA archive + 90-day fallback per Phase 4).
+
+---
+
 ## Calendar-time estimate &mdash; AI-assisted pace
 
 The original "6&ndash;10 engineer-weeks / 2&ndash;4 months for
@@ -386,3 +495,184 @@ no direct edits to the legacy sources are required.
 - **The split-repo decision** discussed in earlier session
   conversations. It's related but independent &mdash; cutover
   works either way.
+
+---
+
+## Work queue &mdash; recommended sequence
+
+Consolidated backlog as of 2026-05-27, ordered for working through
+when capacity frees up. Each item notes **what**, **why it's here in
+the order**, **where it lives**, and **what it depends on**. Phase
+references point at the Phase 0&ndash;4 sections above; items without
+a phase tag are smaller fixes that surfaced during V8 / VALC 2.0
+build-out and aren't gated by the cutover sequence.
+
+This is a living list &mdash; reorder as dependencies shift. The
+guiding rule: **finish the auth foundation first** (it unblocks real
+multi-DB testing, permission gating, and retires the synthetic dev
+token), then clear the cheap high-value fixes, then the feature
+breadth, then the cutover-infrastructure long poles.
+
+### Tier 1 &mdash; Auth foundation (do first; unblocks the most)
+
+1. **Finish the JWT claim-shape rewrite** (Phase 0 #1). `dbs[i].n`
+   matching is **DONE** (agent `JwtAuthFilter.selectDbEntry`,
+   PR #40). Remaining: read username from `user.u` (not `sub`);
+   drop the phantom `as / aite / aprs / rs / su` reads that don't
+   exist in v359 tokens; add `dbs[i].t` (In Transit) + `dbs[i].p`
+   (PO Receipts) company lists. Spec: `RapidReconciler-Agent/docs/v359-auth.md`
+   items 1&ndash;3.
+2. **mini-VALC mints real tokens** &mdash; `JwtService.mint()` emits
+   the v359 wire shape (`{user:{id,fn,c,u,rm}, dbs:[{ip,k,n,i,t,p,a}]}`);
+   `AuthController` at `POST /resource/client/login` with
+   `{username,password,rememberme}` &rarr; `{token}`. Once live, the
+   dev box logs in through VALC 2.0 and the **synthetic dev token is
+   retired** (no more hand-pasting into `localStorage`; no more
+   "staging VALC has no Dev entry" caveat). Depends on #1 for the
+   claim shape.
+3. **Change-password flow** &mdash; `POST /resource/client/change-password`
+   on mini-VALC, enforcing the on-disk `PasswordPolicyService` rules
+   (8-char min, 3-of-4 complexity, history-of-10, gated by
+   `clients.password_policy_active`). V8 `login.html` flips `AUTH_BASE`
+   to `localhost:8080`. Depends on #2.
+
+### Tier 2 &mdash; Cheap, high-value fixes (clear these next)
+
+4. **VALC 2.0 Start-button bug** &mdash; Clients dashboard Test-agent
+   popover Start silently no-ops; agent must be launched via
+   `run-test-agent.ps1`. Surface the `ProcessBuilder` exception to the
+   dashboard toast + precheck the jar/JDK paths. Full write-up at the
+   top of `RRV8/HANDOFF.md` Next-session queue. No dependencies.
+5. **DMAAI page `beforeunload` guard** &mdash; warn the analyst when
+   closing with unsaved responses. Tiny. No dependencies.
+
+### Tier 3 &mdash; Feature completion (depends on Tier 1 auth)
+
+6. **Permission gating in the V8 user menu** &mdash; hide Import JDE /
+   Restart Service / etc. based on the JWT's per-DB flags. Needs the
+   corrected flags from Tier 1 #1, else everything reads false.
+7. **mini-VALC provisioning flow** (Phase 0 #7) &mdash; Add Database
+   &rarr; spawn Services jar, per
+   [`mini-valc-database-provisioning-production-ready.md`](mini-valc-database-provisioning-production-ready.md).
+   Pick the topology gate (per-customer vs central broker) before
+   starting &mdash; every hardening choice depends on it.
+8. **Deployment Center real wiring** &mdash; the `/valc/deployment`
+   DB-script execute and Services-release deploy are stubs today
+   (per-target placeholder results). Wire DB-script dispatch to the
+   selected customer databases and Services-release push through the
+   agent self-update path. Depends on #7 (provisioning) for the
+   target-database plumbing.
+
+### Tier 4 &mdash; Module breadth (Phase 0 #4)
+
+9. **Build In Transit / PO Receipts / Roll Forward** &mdash; new-agent
+   controllers + V8 pages. The legacy SPA serves these today; the new
+   agent has no controllers for them. Gates which customers are
+   eligible for the Phase 2 / 3 push.
+
+### Tier 5 &mdash; Cutover infrastructure long poles
+
+10. **JMS protocol parity** (Phase 0 #2) &mdash; VALC 2.0 Artemis
+    broker accepts legacy `rr-valc-agent.jar` connections (CORE
+    protocol, existing truststore, post-DNS-flip hostname). Validate
+    end-to-end against a real legacy broker.
+11. **Signing-key inheritance** (Phase 0 #3) &mdash; VALC 2.0 adopts
+    Azure VALC's RSA private key so both stacks verify the same
+    tokens at cutover.
+12. **Schema ETL + password-store strategy** (Phase 0 #5, #6) &mdash;
+    migrate users / clients / permissions / deploy history into VALC
+    2.0 Postgres; confirm the password hash format carries over (if
+    not, forced-reset is customer-visible &mdash; flag early).
+
+### Tier 6 &mdash; Quality &amp; polish (parallelizable)
+
+13. **DMAAI overlay endpoints** &mdash; three agent endpoints + two
+    SQL tables specced in
+    [`docs/plans/dmaai-page-overlay-table.md`](dmaai-page-overlay-table.md);
+    detector reference is `derive-dmaai-analysis.py`.
+14. **Implement the V8 test suite** &mdash; `RRV8/TESTING.md` 8-tier
+    plan; PowerShell pre-push hook for fast tiers, Python in GHA for
+    all tiers.
+15. **Certificate import real-world test** &mdash; round-trip a real
+    DigiCert-signed cert through `/valc/certificate/import` once one
+    is in hand (the generate-CSR side is verified; import is
+    untested against a real signed cert).
+
+### Not in this queue (tracked elsewhere)
+
+- The `rr-valc-agent.jar` broker replacement (explicitly out of
+  cutover scope &mdash; see *What this plan deliberately does NOT
+  cover*).
+- Demo-mode rebuild (frozen until the Inventory module is complete,
+  per the production-only tenet in `RRV8/WORKFLOW.md`).
+- Operational-ownership assignment (Phase 0 #8) &mdash; a decision,
+  not an engineering task; settled at cutover time.
+
+---
+
+## Release notes &mdash; cutover-relevant commits
+
+Curated list of merged PRs that materially advance the cutover.
+Append each new cutover-relevant commit at the **top** so the most
+recent landing reads first. Format: `YYYY-MM-DD &middot; repo#PR
+&middot; short summary &middot; tier / phase reference`.
+
+### 2026-05
+
+- 2026-05-27 &middot; **Agent #40** &middot; `JwtAuthFilter` scopes
+  by matching `dbs[i].n` against `agent.database-name` (not
+  `dbs[0]`); fallback to `dbs[0]` with WARN. &mdash; *Phase 0 #1
+  / Tier 1 #1 (partial).*
+- 2026-05-27 &middot; **UI #144** &middot; HANDOFF queues the VALC
+  2.0 Start-button bug at top of Next-session queue. &mdash;
+  *Tier 2 #4.*
+- 2026-05-26 &middot; **Valc #21** &middot; Certificate Renewal
+  page (CSR generator + signed-cert import, broker keystore
+  mining); Troubleshooting tabs (out.log + Console log analyzer);
+  sidebar polish (cert chip, scrollable, Client Management /
+  Certificate Renewal labels). &mdash; *VALC 2.0 control plane
+  build-out.*
+- 2026-05-26 &middot; **Valc #20** &middot; Deployment Center
+  page (DB Scripts + Services Release tabs, stub execute); new
+  Troubleshooting page (customer connection + out.log import);
+  shared sidebar tail across pages. &mdash; *VALC 2.0 control
+  plane build-out.*
+- 2026-05-26 &middot; **UI #143** &middot; HANDOFF refresh
+  (standing-rule block, Resume prompt for the next session).
+  &mdash; *Cutover-plan upkeep.*
+- 2026-05-26 &middot; **UI #142** &middot; Cutover-plan framing
+  refinements; workspace-cwd-migration plan filed. &mdash;
+  *Cutover-plan upkeep.*
+- 2026-05-26 &middot; **Valc #19** &middot; Sidebar link renamed
+  to "VALC 2.0 cutover plan." &mdash; *Naming alignment.*
+- 2026-05-26 &middot; **Valc #18** &middot; Clients dashboard
+  card-grid layout, sidebar link to the cutover plan, JwtService
+  keydir fix. &mdash; *VALC 2.0 control plane build-out.*
+- 2026-05-25 &middot; **Valc #17** &middot; Dashboard polish +
+  auth scaffolding (JWT shape rewrite still queued). &mdash;
+  *VALC 2.0 control plane build-out.*
+- 2026-05-25 &middot; **Agent #39** &middot; Mined v359's auth
+  surface; flagged the new agent's claim-shape divergence.
+  &mdash; *Phase 0 #1 prep.*
+- 2026-05-25 &middot; **Agent #38** &middot; Reconciliation
+  by-company endpoint kills the Cardex Variance N+1 (one call
+  replaces the per-customer loop). &mdash; *Performance.*
+- 2026-05-25 &middot; **Agent #37** &middot; Janitor: hourly
+  cleanup of legacy export-breadcrumb files left behind by the
+  legacy broker. &mdash; *Housekeeping.*
+- 2026-05-24 &middot; **Agent #36** &middot; Tag-triggered release
+  GitHub Action wired up. &mdash; *Release plumbing.*
+- 2026-05-24 &middot; **Agent #35** &middot; AdminDatabases +
+  `companies/all` loopback-only server-admin endpoints. &mdash;
+  *VALC 2.0 control plane API.*
+- 2026-05-24 &middot; **Agent #34** &middot; AdminCompanies GET +
+  PUT + unlicensed list. &mdash; *VALC 2.0 control plane API.*
+- 2026-05-24 &middot; **Agent #33** &middot; Documentation: v359
+  vs new agent reference. &mdash; *Onboarding / handover.*
+- 2026-05-24 &middot; **Agent #32** &middot; Poll endpoint
+  long-poll parity with v359 (60s hang on
+  `?updating=&recalculating=`). &mdash; *V8 / agent compat.*
+
+Earlier merges that pre-date the cutover-plan framing aren't
+back-filled here; pull from each repo's `git log` if archaeology
+is needed.
