@@ -527,10 +527,11 @@
               <th class="is-num">Threshold</th>
               <th class="is-action">Options</th>
               <th class="is-action">Re-roll</th>
+              <th class="is-action">Unlicense</th>
             </tr>
           </thead>
           <tbody id="js-companies-tbody">
-            <tr><td class="is-empty" colspan="8">Loading companies&hellip;</td></tr>
+            <tr><td class="is-empty" colspan="9">Loading companies&hellip;</td></tr>
           </tbody>
         </table>
       </section>
@@ -550,6 +551,7 @@
         <table class="grid-table" id="js-unlicensed-table">
           <thead>
             <tr>
+              <th class="is-action">License</th>
               <th>Number</th>
               <th>Name</th>
               <th class="is-num">Items</th>
@@ -557,7 +559,7 @@
             </tr>
           </thead>
           <tbody id="js-unlicensed-tbody">
-            <tr><td class="is-empty" colspan="4">Loading&hellip;</td></tr>
+            <tr><td class="is-empty" colspan="5">Loading&hellip;</td></tr>
           </tbody>
         </table>
       </section>
@@ -580,10 +582,17 @@
 
   const _testAgentAreas    = new Set(window.RR_TEST_AGENT_AREAS || []);
   const _testAgentPrefixes = window.RR_TEST_AGENT_PREFIXES || ['download-excel/'];
+  const _valcPrefixes      = window.RR_VALC_PREFIXES || [];
   function _routesToTestAgent(area) {
     if (_testAgentAreas.has(area)) return true;
     for (let i = 0; i < _testAgentPrefixes.length; i++) {
       if (area.startsWith(_testAgentPrefixes[i])) return true;
+    }
+    return false;
+  }
+  function _routesToValc(area) {
+    for (let i = 0; i < _valcPrefixes.length; i++) {
+      if (area.startsWith(_valcPrefixes[i])) return true;
     }
     return false;
   }
@@ -608,7 +617,9 @@
         .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status + ' on ' + file); return r.json(); });
     }
     let base;
-    if (_routesToTestAgent(area)) {
+    if (_routesToValc(area)) {
+      base = RR_CONFIG.valcBase || 'http://localhost:8080';
+    } else if (_routesToTestAgent(area)) {
       base = RR_CONFIG.testAgentBase || 'http://localhost:34537';
     } else {
       const sess = window.RR_SESSION;
@@ -695,7 +706,7 @@
     (rows || []).forEach(r => { if (r && r.companyNumber) _rowsByNumber.set(r.companyNumber, r); });
     if (!rows || rows.length === 0) {
       tbody.innerHTML =
-        '<tr><td class="is-empty" colspan="8">No licensed companies in scope.</td></tr>';
+        '<tr><td class="is-empty" colspan="9">No licensed companies in scope.</td></tr>';
       if (count) {
         count.textContent = '0 companies';
         count.classList.remove('is-loading');
@@ -731,6 +742,11 @@
           SVG_REROLL +
         '</button>' +
       '</td>' +
+      '<td class="is-action">' +
+        '<button type="button" class="row-icon-btn is-danger" data-action="unlicense" data-company="' + fmt(r.companyNumber) + '" title="Remove this company from the customer\'s licensed allowlist" aria-label="Unlicense">' +
+          '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg>' +
+        '</button>' +
+      '</td>' +
     '</tr>';
   }
 
@@ -746,13 +762,15 @@
   }
 
   // ---------- Not Licensed grid + bar chart ----------
+  const COMPANY_30 = '00030';   // LicensingRules.BLOCKED_COMPANIES on the VALC side.
+
   function renderUnlicensed(rows) {
     const tbody = document.getElementById('js-unlicensed-tbody');
     const count = document.getElementById('js-unlicensed-count');
     if (!tbody) return;
     if (!rows || rows.length === 0) {
       tbody.innerHTML =
-        '<tr><td class="is-empty" colspan="4">No unlicensed JDE companies have F4111 activity on this DB.</td></tr>';
+        '<tr><td class="is-empty" colspan="5">No unlicensed JDE companies have F4111 activity on this DB.</td></tr>';
       if (count) {
         count.textContent = '0 companies';
         count.classList.remove('is-loading');
@@ -780,7 +798,13 @@
                           v.toLocaleString('en-US') + ' rec' + (v === 1 ? '' : 's') + '"';
         return '<span class="' + cls + '" style="height:' + h + 'px"' + titleAttr + '></span>';
       }).join('');
-      return '<tr>' +
+      const num = String(r.companyNumber || '').trim();
+      const isBlocked = num === COMPANY_30;
+      const checkbox  = isBlocked
+        ? '<input type="checkbox" disabled title="Company 00030 is reserved and cannot be licensed.">'
+        : '<input type="checkbox" data-action="license" data-company="' + fmt(num) + '" aria-label="License company ' + fmt(num) + '">';
+      return '<tr' + (isBlocked ? ' class="is-blocked"' : '') + '>' +
+        '<td class="is-action">' + checkbox + '</td>' +
         '<td>' + fmt(r.companyNumber) + '</td>' +
         '<td>' + fmt(r.name) + '</td>' +
         '<td class="is-num">' + fmtNum(r.itemCount) + '</td>' +
@@ -974,8 +998,94 @@
     });
   }
 
+  // ---------- Licensing writes (VALC) ----------
+  // V8 reads from the agent (per-DB rcompanies) but WRITES to VALC's
+  // central client_licensed_companies registry. VALC's controller
+  // triggers an immediate sync push to the agent on success.
+  //
+  // Single-client assumption (matches admin-users.html's contact band):
+  // V8's session maps to the first client row in VALC. When a real
+  // session->client mapping ships, replace the boot-time fetch with
+  // a JWT-derived client id.
+  let _clientId = null;
+
+  async function resolveClientId() {
+    if (_clientId != null) return _clientId;
+    try {
+      const rows = await rrFetch('api/v1/admin/clients');
+      if (rows && rows.length > 0) {
+        _clientId = rows[0].id;
+      }
+    } catch (e) {
+      console.warn('Companies: could not resolve client id —', e.message);
+    }
+    return _clientId;
+  }
+
+  async function licenseCompany(num) {
+    const cid = await resolveClientId();
+    if (cid == null) {
+      toast('No client record on file in VALC. Cannot license.', 'err');
+      return false;
+    }
+    if (num === COMPANY_30) {
+      toast('Company 00030 is reserved and cannot be licensed.', 'err');
+      return false;
+    }
+    try {
+      const r = await rrFetch(
+        'api/v1/admin/clients/' + encodeURIComponent(cid) +
+        '/licensed-companies/' + encodeURIComponent(num),
+        { method: 'POST', body: {} });
+      toast('Licensed ' + num);
+      return true;
+    } catch (err) {
+      let msg = (err && err.message) || 'license failed';
+      const idx = msg.indexOf('LICENSE_BLOCKED:');
+      if (idx >= 0) msg = msg.substring(idx + 'LICENSE_BLOCKED:'.length).trim();
+      toast(msg, 'err');
+      return false;
+    }
+  }
+
+  async function unlicenseCompany(num) {
+    const cid = await resolveClientId();
+    if (cid == null) {
+      toast('No client record on file in VALC. Cannot unlicense.', 'err');
+      return false;
+    }
+    try {
+      await rrFetch(
+        'api/v1/admin/clients/' + encodeURIComponent(cid) +
+        '/licensed-companies/' + encodeURIComponent(num),
+        { method: 'DELETE' });
+      toast('Unlicensed ' + num);
+      return true;
+    } catch (err) {
+      const msg = (err && err.message) || 'unlicense failed';
+      toast(msg, 'err');
+      return false;
+    }
+  }
+
+  /** Refresh both tables from the agent after a license/unlicense
+   *  round-trip. The sync push happens server-side; by the time the
+   *  POST/DELETE returns, the agent's rcompanies + RCompaniesLic
+   *  views have already been updated for the dev/loopback case. */
+  function refreshCompanies() {
+    return rrFetch('admin/companies')
+      .then(resp => {
+        renderCompanies(resp && resp.companies);
+        renderUnlicensed(resp && resp.unlicensed);
+      })
+      .catch(err => {
+        console.warn('Companies: refresh failed —', err.message);
+      });
+  }
+
   // Action handlers — Edit opens the edit modal; Re-roll opens the
-  // confirm modal which fires /inventory/rollIItem on Yes.
+  // confirm modal which fires /inventory/rollIItem on Yes; Unlicense
+  // confirms then DELETEs against VALC.
   document.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-action]');
     if (!btn) return;
@@ -985,10 +1095,39 @@
       openEditModal(co);
     } else if (action === 'reroll') {
       openRerollModal(co);
+    } else if (action === 'unlicense') {
+      if (!confirm('Unlicense company ' + co + '? The company will be removed from the customer\'s allowlist and dropped from rcompanies on the next sync (immediate for the dev box).')) return;
+      btn.disabled = true;
+      unlicenseCompany(co).then(ok => {
+        btn.disabled = false;
+        if (ok) refreshCompanies();
+      });
     }
   });
 
+  // Checkbox in the Not Licensed table — license-on-check.
+  document.addEventListener('change', (e) => {
+    const cb = e.target;
+    if (!(cb instanceof HTMLInputElement) || cb.type !== 'checkbox') return;
+    if (cb.dataset.action !== 'license') return;
+    const co = cb.dataset.company;
+    if (!co) return;
+    cb.disabled = true;
+    licenseCompany(co).then(ok => {
+      if (!ok) {
+        cb.checked = false;
+        cb.disabled = false;
+      } else {
+        // refreshCompanies re-renders the table; this checkbox vanishes.
+        refreshCompanies();
+      }
+    });
+  });
+
   // Main fetch — one round trip returns both arrays.
+  // Resolve the clientId in parallel so the first license/unlicense
+  // click doesn't pay a round-trip on top of its own.
+  resolveClientId();
   rrFetch('admin/companies')
     .then(resp => {
       renderCompanies(resp && resp.companies);
@@ -999,7 +1138,7 @@
       const licTbody = document.getElementById('js-companies-tbody');
       if (licTbody) {
         licTbody.innerHTML =
-          '<tr><td class="is-empty" colspan="8">Couldn&rsquo;t load companies. See the error banner above.</td></tr>';
+          '<tr><td class="is-empty" colspan="9">Couldn&rsquo;t load companies. See the error banner above.</td></tr>';
       }
       const licCount = document.getElementById('js-row-count');
       if (licCount) {
@@ -1009,7 +1148,7 @@
       const unTbody = document.getElementById('js-unlicensed-tbody');
       if (unTbody) {
         unTbody.innerHTML =
-          '<tr><td class="is-empty" colspan="4">&mdash;</td></tr>';
+          '<tr><td class="is-empty" colspan="5">&mdash;</td></tr>';
       }
       const unCount = document.getElementById('js-unlicensed-count');
       if (unCount) {
