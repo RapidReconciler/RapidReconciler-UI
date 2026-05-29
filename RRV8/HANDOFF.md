@@ -665,6 +665,68 @@ Inventory &rarr; As Of &rarr; Cardex Variance.
 
 ---
 
+## Prompts #2&ndash;#5 summary (2026-05-29)
+
+What landed across the four-prompt batch:
+
+- **Prompt #2** &mdash; Client Management batch. V12 + V13
+  migrations (`clients.ui_version`, `client_servers` table + 3-cap,
+  `client_databases.server_id`). `LicensedCompaniesController` shell,
+  `IpLocationService` (offline RFC1918 + AWS/Azure/GCP), AuthController
+  license + active-client login gates, dashboard Manage Client modal
+  refresh (V7/V8 toggle, System Status download, Servers/Databases
+  split with location chips), Active/Inactive client signal,
+  per-customer module-cap on JWT `dbs[i].m` consumed by V8 sidebar.
+- **Prompt #3** &mdash; Companies & Licensing. V14 + V15 schema:
+  `client_licensed_companies` central allowlist +
+  `licensing_sync_runs` audit, V15 fixed a CHAR/VARCHAR validate
+  mismatch. `LicensingSyncService` @Scheduled hourly +
+  manual trigger; Agent `POST /admin/companies/sync` reconciles
+  RCompaniesLic + materializes rcompanies from F0010. Company
+  `00030` reserved (`LicensingRules.BLOCKED_COMPANIES`). VALC
+  dashboard Companies tab + V8 admin-companies got working
+  license/unlicense checkboxes.
+- **Prompt #4** &mdash; User Management & Security. V16 dropped
+  `users.temporary_password`; AuthController single 90-day expiry +
+  per-db `t{}` (authorized tabs) + `perms{}` (importJde, restartService,
+  dmaais, inTransitExclude, poReceiptsSuspend) JWT blocks. AdminUsers
+  Active-toggle persistence bug fixed (null in PUT body now = no
+  change). V8 sidebar AND-gates client cap with per-user perms;
+  user-menu hides Import JDE / Restart Service per perm; DMAAI page
+  shows an inline access-denied panel when the user lacks `dmaais`.
+  Excel export of users + permissions wired on admin-users.html.
+- **Prompt #5** &mdash; Sidebar & Admin Tools. Three new VALC pages:
+    * `/valc/docs` &mdash; Agent Documentation viewer (CommonMark
+      renders `RapidReconciler-Agent/docs/*.md` live).
+    * `/valc/sso` &mdash; SSO Configuration (SAML placeholder; singleton
+      `sso_config` row).
+    * `/valc/mailing` &mdash; Mailing List composer; one message per
+      recipient (no shared To/CC visibility). Stub-mode default writes
+      `email_audit` rows; real send flips on with `valc.mail.enabled=true`.
+  Sidebar refactored to V8-style accordion (3 groups: Administrator /
+  Tools / Documents) across every VALC page; shared
+  `static/js/valc-sidebar.js` + `static/css/valc-chrome.css` plus a
+  unified `fragments/admin-nav.html` Thymeleaf fragment.
+  Agent Documentation lives under Documents (not Administrator) per
+  user direction.
+
+**Open dev workflow notes**:
+
+- `setup/restart-valc.cmd` (Valc repo, shipped after Prompt #2) is the
+  idempotent way to bounce VALC. Kills :8080, spawns the launcher with
+  `-ValcRepo` explicit, polls `/actuator/health`, fast-fails on
+  `BUILD FAILURE` / `COMPILATION ERROR` with a log tail.
+- `valc.mail.enabled` defaults `false`; the mailing list won't actually
+  send until SMTP is configured (then flip the flag).
+- The dashboard had a sneaky `_companiesLoading` duplicate `let` from
+  Prompt #3 that killed the whole page IIFE -- caught + fixed via the
+  duplicate identifier rename to `_compTabLoading`. Lesson: when
+  multiple JS-driven features die together but server-rendered HTML
+  still paints, suspect a SyntaxError in the script and ask for the
+  browser console up front.
+
+---
+
 ## Resume prompt
 
 > **Open this session at CWD `C:/source/repos/`** (the workspace
@@ -675,10 +737,10 @@ Inventory &rarr; As Of &rarr; Cardex Variance.
 > `~/.claude/projects/C--source-repos/memory/`.
 >
 > I'm continuing the RR platform work &mdash; we're in a
-> structured 12-prompt sequence (Prompt #1 of 12 just landed,
-> commit + handoff complete; Prompt #2 is incoming). For each
-> prompt I also fold in matching items from the cutover plan's
-> work queue.
+> structured 12-prompt sequence. Prompts #1&ndash;#5 have all
+> landed (cumulative summary at the top of HANDOFF.md);
+> Prompt #6 is incoming. For each prompt I also fold in
+> matching items from the cutover plan's work queue.
 >
 > Before doing anything else, read these in order and confirm:
 >
@@ -798,8 +860,8 @@ Inventory &rarr; As Of &rarr; Cardex Variance.
 >    (`RapidReconciler-AI/docs/plans/valc-2-cutover-plan.md`)
 >    tracks cutover-relevant PRs going forward.
 >
-> After reading the above, **stand by for Prompt #2** (the
-> sequence's second of 12). I'll paste it next. For each
+> After reading the above, **stand by for Prompt #6** (the
+> sequence's sixth of 12). I'll paste it next. For each
 > prompt, fold in matching items from the cutover plan's Work
 > queue, commit at the end of the prompt's work, and we keep
 > moving.
