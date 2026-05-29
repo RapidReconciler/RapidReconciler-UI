@@ -551,7 +551,64 @@
     // (seedDmaaiStateFromSession), so no post-mount class swap is
     // needed. Pages that actively preload will overwrite the dot
     // state via RRV8.setDmaaiStatus(...).
+    applyClientModuleCaps();
     return document.querySelector('.sidebar');
+  }
+
+  // ============================================================
+  //  Per-client module visibility caps
+  //
+  //  VALC 2.0's JWT carries a per-db `m` object that mirrors the
+  //  customer's licensed modules (inv / it / adm / por). The sidebar
+  //  AND-gates with the user's per-db tab perms: a module renders only
+  //  if the customer is licensed for it AND the user is granted the
+  //  matching authorized tab.
+  //
+  //  Fail-open semantics:
+  //   - No `m` claim on the active db -> show everything (back-compat
+  //     with older tokens, and with the synthetic dev token which
+  //     never carried this block).
+  //   - No active db at all -> show everything (admin landing pages).
+  //
+  //  Module -> sidebar-nav-item data-module mapping:
+  //    inv -> "inventory" (also the four /inventory pages)
+  //    it  -> "in-transit"
+  //    por -> "po-receipts"
+  //    adm -> "admin" + DMAAIs row + admin-companies / admin-users
+  // ============================================================
+  function readActiveDbClaim() {
+    const sess = (global.RR_SESSION || {});
+    const dbs  = Array.isArray(sess.dbs) ? sess.dbs : [];
+    if (!dbs.length) return null;
+    const i = sess.activeDbIndex || 0;
+    return dbs[i] || dbs[0];
+  }
+
+  function applyClientModuleCaps() {
+    const active = readActiveDbClaim();
+    if (!active || !active.m) return;  // fail-open
+    const cap = {
+      inv: active.m.inv !== false,
+      it:  active.m.it  !== false,
+      por: active.m.por !== false,
+      adm: active.m.adm !== false
+    };
+    const aside = document.querySelector('.sidebar');
+    if (!aside) return;
+
+    function hideModule(dataModule) {
+      const el = aside.querySelector('.sidebar-module[data-module="' + dataModule + '"]');
+      if (el) el.style.display = 'none';
+    }
+    if (!cap.inv) hideModule('inventory');
+    if (!cap.it)  hideModule('in-transit');
+    if (!cap.por) hideModule('po-receipts');
+    if (!cap.adm) {
+      hideModule('admin');
+      // DMAAIs sits in the bottom status panel, not a sidebar-module.
+      const dmaai = aside.querySelector('.sidebar-status-row[data-nav-page="dmaais"]');
+      if (dmaai) dmaai.style.display = 'none';
+    }
   }
 
   // ============================================================
@@ -1071,6 +1128,7 @@
 
   global.RRV8 = global.RRV8 || {};
   global.RRV8.mountSidebar            = mountSidebar;
+  global.RRV8.applyClientModuleCaps   = applyClientModuleCaps;
   global.RRV8.setDmaaiStatus          = setDmaaiStatus;
   global.RRV8.setAgentConnectivity    = setAgentConnectivity;
   global.RRV8.paintSidebarFromCache   = paintSidebarFromCache;
