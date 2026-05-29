@@ -586,12 +586,24 @@
 
   function applyClientModuleCaps() {
     const active = readActiveDbClaim();
-    if (!active || !active.m) return;  // fail-open
+    if (!active) return;  // fail-open: no active db -> show everything
+
+    // Layered filter per Prompt #4:
+    //   1. Client-level module cap (active.m) -- customer's licensed modules
+    //   2. User-level authorized tab (active.t) -- per-user perm grant
+    //   3. User-level dmaais permission (active.perms.dm)
+    // A module renders only when BOTH client AND user grant access.
+    // Either layer missing falls open (back-compat with the synthetic
+    // dev token + older JWTs).
+    const m = active.m || {};
+    const t = active.t || {};
+    const perms = active.perms || {};
     const cap = {
-      inv: active.m.inv !== false,
-      it:  active.m.it  !== false,
-      por: active.m.por !== false,
-      adm: active.m.adm !== false
+      inv: (m.inv !== false) && (t.inv !== false),
+      it:  (m.it  !== false) && (t.it  !== false),
+      por: (m.por !== false) && (t.por !== false),
+      adm: (m.adm !== false) && (t.adm !== false),
+      dm:  (m.adm !== false) && (perms.dm !== false)   // DMAAIs gated by admin module + user perm
     };
     const aside = document.querySelector('.sidebar');
     if (!aside) return;
@@ -603,8 +615,8 @@
     if (!cap.inv) hideModule('inventory');
     if (!cap.it)  hideModule('in-transit');
     if (!cap.por) hideModule('po-receipts');
-    if (!cap.adm) {
-      hideModule('admin');
+    if (!cap.adm) hideModule('admin');
+    if (!cap.dm) {
       // DMAAIs sits in the bottom status panel, not a sidebar-module.
       const dmaai = aside.querySelector('.sidebar-status-row[data-nav-page="dmaais"]');
       if (dmaai) dmaai.style.display = 'none';
@@ -965,6 +977,15 @@
                     || cfg.mode || 'demo') === 'demo';
     const showSignOut = !isDemo;
 
+    // Per-Prompt #4: hide admin actions the user lacks the permission
+    // for. Reads the JWT's new `perms` block on the active db. Fail-
+    // open if the block is absent (older tokens or the synthetic dev
+    // token) so demos keep working unchanged.
+    const activeDbClaim = readActiveDbClaim() || {};
+    const dbPerms       = activeDbClaim.perms || {};
+    const canImportJde      = (dbPerms.ij !== false);
+    const canRestartService = (dbPerms.rs !== false);
+
     const dbRows = dbs.length ? dbs.map(db =>
       '<button class="user-menu-db ' + (db.isCurrent ? 'is-current' : '') +
       '" type="button" data-db-index="' + db.index + '">' +
@@ -978,6 +999,32 @@
       '</button>').join('')
       : '<div class="user-menu-db-meta" style="padding: 8px 12px;">No databases in session.</div>';
 
+    // Build the Admin section only when at least one action survives
+    // the permission filter; otherwise omit the whole block to keep
+    // the menu tight.
+    let adminHtml = '';
+    if (canImportJde || canRestartService) {
+      adminHtml = '<div class="user-menu-section">' +
+        '<div class="user-menu-section-label">Admin</div>';
+      if (canImportJde) {
+        adminHtml +=
+          '<button class="user-menu-action" type="button" data-action="import-jde">' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>' +
+            '<span>Import JDE data</span>' +
+            '<span class="user-menu-action-meta">Global</span>' +
+          '</button>';
+      }
+      if (canRestartService) {
+        adminHtml +=
+          '<button class="user-menu-action is-danger" type="button" data-action="restart-service">' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"></path><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"></path></svg>' +
+            '<span>Restart Service</span>' +
+            '<span class="user-menu-action-meta">Admin</span>' +
+          '</button>';
+      }
+      adminHtml += '</div>';
+    }
+
     menu.innerHTML =
       '<div class="user-menu-head">' +
         '<div class="user-menu-name">' + escapeHtml(u.name) + '</div>' +
@@ -987,19 +1034,7 @@
         '<div class="user-menu-section-label">Connected database</div>' +
         dbRows +
       '</div>' +
-      '<div class="user-menu-section">' +
-        '<div class="user-menu-section-label">Admin</div>' +
-        '<button class="user-menu-action" type="button" data-action="import-jde">' +
-          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>' +
-          '<span>Import JDE data</span>' +
-          '<span class="user-menu-action-meta">Global</span>' +
-        '</button>' +
-        '<button class="user-menu-action is-danger" type="button" data-action="restart-service">' +
-          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"></path><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"></path></svg>' +
-          '<span>Restart Service</span>' +
-          '<span class="user-menu-action-meta">Admin</span>' +
-        '</button>' +
-      '</div>' +
+      adminHtml +
       (showSignOut ?
         '<div class="user-menu-section">' +
           '<button class="user-menu-action" type="button" data-action="sign-out">' +
