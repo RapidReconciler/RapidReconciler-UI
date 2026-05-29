@@ -615,13 +615,6 @@
             <input type="password" id="js-edit-password" placeholder="********" autocomplete="new-password">
           </div>
           <div class="form-field">
-            <label class="form-field-label" for="js-edit-temp">Temporary password (1 day)</label>
-            <select id="js-edit-temp">
-              <option value="false">false</option>
-              <option value="true">true</option>
-            </select>
-          </div>
-          <div class="form-field">
             <label class="form-field-label" for="js-edit-active">Active</label>
             <select id="js-edit-active">
               <option value="true">true</option>
@@ -1001,7 +994,6 @@
     document.getElementById('js-edit-name').value     = row.fullName || '';
     document.getElementById('js-edit-email').value    = row.username || '';
     document.getElementById('js-edit-password').value = '';
-    document.getElementById('js-edit-temp').value     = row.temporaryPassword ? 'true' : 'false';
     document.getElementById('js-edit-active').value   = row.active ? 'true' : 'false';
     document.getElementById('js-edit-error').classList.remove('is-visible');
     document.getElementById('js-edit-error').textContent = '';
@@ -1025,7 +1017,6 @@
     const fullName = document.getElementById('js-edit-name').value.trim();
     const email    = document.getElementById('js-edit-email').value.trim();
     const password = document.getElementById('js-edit-password').value;   // no trim — passwords may contain leading/trailing spaces
-    const temp     = document.getElementById('js-edit-temp').value === 'true';
     const active   = document.getElementById('js-edit-active').value === 'true';
 
     if (!fullName) { showEditError('Full Name is required'); return; }
@@ -1039,7 +1030,7 @@
     }
 
     const id = _editingId;
-    const body = { fullName, email, temporaryPassword: temp, active };
+    const body = { fullName, email, active };
     if (password) body.password = password;
 
     const btn = document.getElementById('js-edit-save');
@@ -1403,8 +1394,147 @@
 
   const newBtn = document.getElementById('js-new-user');
   if (newBtn) newBtn.addEventListener('click', () => toast('New User — coming soon'));
+
+  // -----------------------------------------------------------------
+  //  Export users + permissions (Prompt #4)
+  //
+  //  Produces a two-sheet workbook:
+  //    1. Users  -- one row per user (rowsById values)
+  //    2. Permissions -- one row per (user, database) pair, looked up
+  //       from /api/v1/admin/users/{id}/permissions?database=<name>.
+  //  Databases iterated = every db the active JWT session sees. For
+  //  dev that's the single RapidReconciler_Dev; in production the
+  //  user-menu's per-db switcher reflects the same list.
+  //
+  //  Uses the shared SheetJS library already loaded by other V8 pages;
+  //  load on demand to avoid forcing the dependency on a page that
+  //  may never trigger the export.
+  // -----------------------------------------------------------------
+  function loadSheetJs() {
+    if (window.XLSX) return Promise.resolve(window.XLSX);
+    return new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'vendor/xlsx.full.min.js';
+      s.onload  = () => resolve(window.XLSX);
+      s.onerror = () => reject(new Error('Failed to load vendor/xlsx.full.min.js'));
+      document.head.appendChild(s);
+    });
+  }
+
+  function trackedDatabases() {
+    const sess = window.RR_SESSION;
+    const dbs  = (sess && Array.isArray(sess.dbs)) ? sess.dbs : [];
+    return dbs.map(d => d && d.n).filter(n => !!n);
+  }
+
+  function fmtIsoForExport(iso) {
+    if (!iso) return '';
+    const s = String(iso);
+    // Strip the trailing 'Z' / fractions for spreadsheet-friendliness.
+    return s.length >= 19 ? s.substring(0, 19).replace('T', ' ') : s;
+  }
+
+  async function exportUsersWorkbook() {
+    const expBtn = document.getElementById('js-export-btn');
+    if (expBtn) { expBtn.disabled = true; }
+    try {
+      const XLSX = await loadSheetJs();
+      const users = Array.from(_rowsById.values());
+      if (users.length === 0) {
+        toast('No users to export', 'err');
+        return;
+      }
+      const dbs = trackedDatabases();
+      if (dbs.length === 0) {
+        toast('No active database session — sign in first', 'err');
+        return;
+      }
+
+      // ---- Users sheet ----
+      const usersRows = [[
+        'ID', 'Email', 'Full name', 'Active', 'Last login', 'Last password change', 'Superuser'
+      ]].concat(users.map(u => [
+        u.id == null ? '' : u.id,
+        u.username || '',
+        u.fullName || '',
+        u.active ? 'Yes' : 'No',
+        fmtIsoForExport(u.lastLoginAt),
+        fmtIsoForExport(u.passwordChangedAt),
+        u.superuser ? 'Yes' : 'No'
+      ]));
+
+      // ---- Permissions sheet ----
+      // One row per (user, db). Fetch in parallel; errors per cell
+      // surface as a 'failed' note in the row rather than failing
+      // the whole export.
+      const permRows = [[
+        'Email', 'Database',
+        'Import JDE', 'Restart Service', 'DMAAIs',
+        'In Transit exclude', 'PO Receipts suspend',
+        'Tab: Inventory', 'Tab: In Transit', 'Tab: Admin', 'Tab: PO Receipts',
+        'Companies'
+      ]];
+      const fetchTasks = [];
+      for (const u of users) {
+        for (const dbName of dbs) {
+          fetchTasks.push(
+            rrFetch('api/v1/admin/users/' + encodeURIComponent(u.id)
+                  + '/permissions?database=' + encodeURIComponent(dbName))
+              .then(p => ({ u, dbName, p, err: null }))
+              .catch(err => ({ u, dbName, p: null, err: err }))
+          );
+        }
+      }
+      const results = await Promise.all(fetchTasks);
+      results.forEach(({ u, dbName, p, err }) => {
+        if (err) {
+          permRows.push([
+            u.username || '', dbName,
+            '', '', '', '', '', '', '', '', '',
+            'ERROR: ' + (err.message || 'fetch failed')
+          ]);
+          return;
+        }
+        const companies = (p && Array.isArray(p.companies))
+          ? p.companies.map(c => c && c.companyNumber).filter(Boolean).join(', ')
+          : '';
+        permRows.push([
+          u.username || '', dbName,
+          p && p.importJde         ? 'Yes' : 'No',
+          p && p.restartService    ? 'Yes' : 'No',
+          p && p.dmaais            ? 'Yes' : 'No',
+          p && p.inTransitExclude  ? 'Yes' : 'No',
+          p && p.poReceiptsSuspend ? 'Yes' : 'No',
+          p && p.tabInventory      ? 'Yes' : 'No',
+          p && p.tabInTransit      ? 'Yes' : 'No',
+          p && p.tabAdmin          ? 'Yes' : 'No',
+          p && p.tabPoReceipts     ? 'Yes' : 'No',
+          companies
+        ]);
+      });
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb,
+        XLSX.utils.aoa_to_sheet(usersRows),
+        'Users');
+      XLSX.utils.book_append_sheet(wb,
+        XLSX.utils.aoa_to_sheet(permRows),
+        'Permissions');
+      const today = new Date().toISOString().substring(0, 10);
+      XLSX.writeFile(wb, 'rr-users-' + today + '.xlsx');
+      toast('Exported ' + users.length + ' user' + (users.length === 1 ? '' : 's'));
+    } catch (e) {
+      toast('Export failed: ' + (e.message || 'unknown'), 'err');
+    } finally {
+      if (expBtn) { expBtn.disabled = false; }
+    }
+  }
+
   const expBtn = document.getElementById('js-export-btn');
-  if (expBtn) expBtn.addEventListener('click', () => toast('Excel export — coming soon'));
+  if (expBtn) {
+    expBtn.title = 'Export users + permissions to Excel';
+    expBtn.addEventListener('click', exportUsersWorkbook);
+  }
 
   // ---------- Contacts band ------------------------------------------
   // V8's admin pages map to the customer's single client row in

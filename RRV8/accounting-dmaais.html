@@ -1974,6 +1974,61 @@
     return RR_SESSION.dbs[RR_SESSION.activeDbIndex || 0] || null;
   }
 
+  // -----------------------------------------------------------------
+  //  Permission guard (Prompt #4)
+  //
+  //  DMAAIs is gated by per-user `dmaais` perm + per-client admin
+  //  module cap. The JWT's active-db `perms.dm` carries the user-
+  //  level flag; `m.adm` carries the client-level cap. Either being
+  //  explicitly false blocks the page.
+  //
+  //  Fail-open semantics:
+  //    - DEMO mode: skip the guard entirely (snapshots aren't perm-
+  //      scoped).
+  //    - No active db or missing perms block: skip (back-compat with
+  //      older tokens / synthetic dev token).
+  //
+  //  When blocked: replace #js-page content with an access-denied
+  //  panel; sidebar + topbar stay rendered so the user can navigate
+  //  away. Return from the IIFE so subsequent fetches don't fire.
+  // -----------------------------------------------------------------
+  function checkDmaaiAccess() {
+    if (IS_DEMO) return true;
+    const db = activeDb();
+    if (!db) return true;  // fail-open; sidebar handles unauth redirect
+    const perms = db.perms || {};
+    const m     = db.m     || {};
+    const userOk   = (perms.dm !== false);
+    const clientOk = (m.adm    !== false);
+    return userOk && clientOk;
+  }
+  if (!checkDmaaiAccess()) {
+    const page = document.getElementById('js-page');
+    if (page) {
+      page.innerHTML =
+        '<header class="page-header"><div class="page-header-left">' +
+          '<nav class="breadcrumb" aria-label="Breadcrumb">' +
+            '<a href="#">Accounting</a><span class="breadcrumb-sep">/</span><span>DMAAIs</span>' +
+          '</nav>' +
+          '<div class="title-row"><h1 class="page-title">DMAAIs</h1></div>' +
+        '</div></header>' +
+        '<section class="grid-card" style="margin-top: 24px;">' +
+          '<div style="padding: 48px 32px; text-align: center; color: var(--text-soft);">' +
+            '<div style="font-family: \'Source Sans 3\', sans-serif; font-weight: 700; ' +
+              'font-size: 18px; color: var(--navy); margin-bottom: 10px;">' +
+              'Access denied' +
+            '</div>' +
+            '<div style="max-width: 480px; margin: 0 auto; line-height: 1.55;">' +
+              'You don&rsquo;t have access to DMAAIs on this database. ' +
+              'Contact your administrator if you need it enabled, or pick a ' +
+              'different database from the user menu.' +
+            '</div>' +
+          '</div>' +
+        '</section>';
+    }
+    return;  // exit the IIFE; no page data loads
+  }
+
   function prodHeaders(contentType) {
     const h = { 'Accept': 'application/json' };
     if (contentType) h['Content-Type'] = contentType;
