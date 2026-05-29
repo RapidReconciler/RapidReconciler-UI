@@ -1,8 +1,14 @@
 # Plan: Move Claude Code's working directory from `RapidReconciler-AI` up to `C:/source/repos/`
 
-**Status:** Spec only. Not yet executed. Pick up in a fresh
-session intentionally chosen for this migration &mdash; not in the
-middle of other work.
+**Status:** **EXECUTED 2026-05-27** in Prompt #1 of the 12-prompt
+sequence. Memory dir copied, workspace `CLAUDE.md` written,
+per-repo `CLAUDE.md` files created for Agent / Valc / DB / SSIS,
+`.claude/settings.local.json` copied up, `RRV8/HANDOFF.md`
+resume prompt updated to point at the new CWD. The next session
+opens at `C:/source/repos/`.
+
+The smoke-test items below (step 7) get exercised in that next
+session.
 
 **Source of this plan:** session conversation on 2026-05-25 about
 whether the platform-wide cross-repo work pattern justifies
