@@ -77,16 +77,38 @@ the new session at.
 > [`feedback_check_v359_first`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/feedback_check_v359_first.md)
 > + first bullet of repo-root `CLAUDE.md` Workflow section.
 >
-> **JWT claim-shape divergence is a known agent bug (2026-05-25)**:
-> the new agent&rsquo;s `JwtAuthFilter` reads invented keys
-> (`sub`, `as`, `aite`, `aprs`, `rs`, `su`); real VALC tokens use
-> `{user: {id, fn, c, u, rm}, dbs: [{ip, k, n, i, t, p, a}]}` per
-> [`RapidReconciler-Agent/docs/v359-auth.md`](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/docs/v359-auth.md).
-> Real customer logins produce null username + zero admin flags on
-> the agent side. Rewrite queued; mini-VALC auth scaffolding on
-> disk uses the same wrong shape. Three-side fix: new agent's
-> filter + Valc's `JwtService.mint()` + V8 `login.html` AUTH_BASE
-> flip. See *Next-session queue* &sect; *Auth chunk*.
+> **JWT claim-shape divergence &mdash; corrected framing (2026-05-30)**:
+> the original 2026-05-25 framing &mdash; that the new agent&rsquo;s
+> `JwtAuthFilter` reads &ldquo;invented&rdquo; keys (`sub`, `as`,
+> `aite`, `aprs`, `rs`, `su`) that don&rsquo;t exist in real tokens
+> &mdash; was based on bytecode-only inspection and is **superseded**.
+> Re-validated 2026-05-30 against V7 source now cloned locally
+> (`C:/source/repos/RapidReconciler-V7-Services` +
+> `RapidReconciler-V7-Valc`, from the Bitbucket `getgsi/RR` project):
+> V7&rsquo;s `rr-valc/LoginClaims` minter DOES emit all of those
+> per-db permission flags. V7&rsquo;s Services jar simply ignores them
+> (Jackson-drops on the consumer side); V7&rsquo;s SPA reads them for
+> UI gating. The new agent reads them correctly for V7 tokens.
+>
+> **Real divergence is between V7 and VALC 2.0 token shapes** &mdash;
+> not phantom fields. Open issues (all source-validated):
+> (a) `dbs[i].t` hard collision (V7: inTransit array; VALC 2.0:
+> tabs object);
+> (b) `dbs[i].p` absent in VALC 2.0 mint;
+> (c) username source canon (V7 nests at `user.u`; VALC 2.0 promotes
+> to top-level `sub`);
+> (d) `as / aite` semantic flip (V7: SSIS + in-transit-exclude;
+> VALC 2.0: both squashed into Import-JDE);
+> (e) signature verification gap (V7 Services side never actually
+> verifies signatures &mdash; just calls `isSigned()`. New agent +
+> VALC 2.0 verify properly. Strictly more secure, but expect
+> rejection of malformed-but-structurally-valid tokens that quietly
+> worked in production).
+>
+> Full breakdown:
+> [`RapidReconciler-Agent/docs/v359-auth.md`](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/docs/v359-auth.md)
+> &sect; *Token shape divergence*. Rewrite is queued; see
+> *Next-session queue* &sect; *Auth chunk*.
 >
 > **Five plans queued in [`docs/plans/`](../docs/plans/)** all read
 > on session start:
@@ -1142,32 +1164,44 @@ hardening choice depends on it. Tested target: add "rrv7-al"
 through mini-VALC and watch V7 + V8 clients hit the spawned
 Services jar without manual `java -jar` steps.
 
-**Auth chunk: mini-VALC login + change-password + complex-password
-policy + fix new agent&rsquo;s JwtAuthFilter** &mdash; partial
-implementation on disk (uncommitted): `V11__password_history.sql`,
-`PasswordHistoryEntity`/`Repository`, `JwtService` (RS256 keypair
-plumbing), `PasswordPolicyService` (8-char min + 3-of-4 complexity
-+ name-restriction + history-of-10, gated by
-`clients.password_policy_active`), `AuthController` skeleton. **Then
-mining v359 revealed the new agent&rsquo;s `JwtAuthFilter` reads
-invented claim keys** &mdash; `sub` doesn&rsquo;t exist in real VALC
-tokens (username is `user.u`), and the `as`/`aite`/`aprs`/`rs`/`su`
-flags are entirely fabricated. Real customer logins have been
-silently producing null username + zero admin flags on the agent
-side. Authoritative claim shape now documented in
-[`RapidReconciler-Agent/docs/v359-auth.md`](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/docs/v359-auth.md);
-divergence + cutover impact called out in
-[`docs/v359-vs-new-agent.md`](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/docs/v359-vs-new-agent.md)
-&sect; 4. Rewrite scope:
-- New agent: rework `JwtAuthFilter.populateUserRequest` to read
-  `user.u` for username, drop the phantom admin flags, add
-  `dbs[i].t` (in-transit companies) + `dbs[i].p` (PO Receipts
-  companies), pick `dbs[i]` by matching `n` to the configured DB
-  (not blindly `dbs[0]`).
-- mini-VALC: rewrite `JwtService.mint()` to emit
-  `{user: {id, fn, c, u, rm}, dbs: [{ip, k, n, i, t, p, a}]}` with
-  `@JsonProperty` annotations matching v359 verbatim. Move
-  `AuthController` from `/api/v1/auth/login` to
+**Auth chunk: VALC 2.0 login + change-password + complex-password
+policy + align new agent&rsquo;s JwtAuthFilter with VALC 2.0**
+&mdash; partial implementation on disk (uncommitted):
+`V11__password_history.sql`, `PasswordHistoryEntity`/`Repository`,
+`JwtService` (RS256 keypair plumbing), `PasswordPolicyService` (8-char
+min + 3-of-4 complexity + name-restriction + history-of-10, gated by
+`clients.password_policy_active`), `AuthController` skeleton.
+
+**Re-scoped 2026-05-30** after cloning the V7 source from Bitbucket
+(`RapidReconciler-V7-Services` + `RapidReconciler-V7-Valc`). The
+original "phantom fields" diagnosis was incomplete &mdash; V7&rsquo;s
+`rr-valc/LoginClaims` DOES emit `as / aite / aprs / rs / su` per-db
+(V7&rsquo;s Services jar ignores them; V7&rsquo;s SPA reads them for
+UI gating). The new agent reads them correctly for V7 tokens.
+
+**The real divergence is V7 token shape vs VALC 2.0 token shape**,
+not new-agent invention. Concretely (full source-validated detail in
+[`RapidReconciler-Agent/docs/v359-auth.md`](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/docs/v359-auth.md)
+&sect; *Token shape divergence*):
+- `dbs[i].t` &mdash; V7: inTransit companies array; VALC 2.0: tabs
+  object. Hard collision.
+- `dbs[i].p` &mdash; V7: PO Receipts companies array; VALC 2.0:
+  absent. Must add to `buildDbsScoped`.
+- top-level `sub` &mdash; VALC 2.0 emits; V7 doesn&rsquo;t. New
+  agent reads `sub`, correct for VALC 2.0, broken for V7.
+- `as / aite` &mdash; V7: SSIS + in-transit-exclude; VALC 2.0: both
+  squashed into `importJde`. Same JSON key, flipped semantics.
+
+Rewrite scope:
+- New agent: align `JwtAuthFilter.populateUserRequest` with what
+  VALC 2.0 actually mints. Add `dbs[i].t` (rename or split to
+  resolve collision) + `dbs[i].p` (companies arrays) to
+  `UserRequest`. Either rename `adminSettings / adminImport` to
+  reflect Import-JDE semantics, or restore V7 semantics in
+  VALC 2.0&rsquo;s minter.
+- VALC 2.0: pick the canonical token shape and make
+  `JwtService.mint()` + `AuthController.buildDbsScoped` match it.
+  Move endpoint from `/api/v1/auth/login` to
   `/resource/client/login` with `{username, password, rememberme}`
   request body and `{token}` response.
 - V8 `login.html`: keep its current request/response shape; just
