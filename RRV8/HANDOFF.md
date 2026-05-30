@@ -134,7 +134,9 @@ the new session at.
 >   `dmaai-system-context.md`, `analyzer-disclaimer-and-feedback.md`,
 >   `sidebar-extraction.md`, etc.
 
-**Updated**: 2026-05-26, after two sessions (2026-05-25 +
+**Updated**: 2026-05-31 &mdash; heartbeat auto-fill shipped (Phase 3 of the manage-client plan): schema V23, AgentFactsService, dev HTTP shim, Topology tab "Reported by agent" panel + mismatch hints, Agent pill derived from heartbeat-freshness. Plus Manage Client UX polish (modal title with client name, pill tooltips, tab gating refresh, password echo on GET, live-update database pill), Databases-tab usability pass (server label, RAM dropdown, fire+delete icons, per-row spawn), and Install tab reposition (now at position 2). See "Session summary (2026-05-31)" below.
+
+**Earlier**: 2026-05-26, after two sessions (2026-05-25 +
 continuation) that landed (a) the Janitor cleanup task in the
 Services jar (released as Agent `v0.2.0-rc2`); (b) the
 reconciliation by-company endpoint killing the Cardex Variance
@@ -692,6 +694,62 @@ fully mined in API.md (`POST /inventory/as-of` with
 `{reconciliationFilter, daily, commonUom, summarizeByItem, filters}`;
 Re-roll button maps to `POST /inventory/rollIItem`). Sidebar carries
 Inventory &rarr; As Of &rarr; Cardex Variance.
+
+---
+
+## Session summary (2026-05-31) &mdash; Heartbeat auto-fill + Manage Client polish + Databases-tab usability
+
+Long batched session driving the Manage Client modal toward "see green, go play golf" for a new hire. Centerpiece is the heartbeat auto-fill slice (queue item #1 from the prior handoff); around it landed multi-agent dev setup, pill tooltips, tab gating fixes, a refactored Databases-tab row, and the Install tab reposition. Three repos touched.
+
+**Heartbeat &rarr; `client_servers` auto-fill (Phase 3 of the manage-client plan).**
+
+- Schema V23 adds 8 columns to `client_servers` (APP_SERVER row): `reported_hostname`, `reported_os_name`, `reported_os_version`, `reported_java_version`, `reported_agent_version`, `reported_free_disk_mb`, `last_heartbeat_at`, `mismatch_flags` JSONB.
+- `AgentFactsService.upsert(clientId, AgentFactsRequest)` &mdash; UPSERT logic with **manual-wins** semantics: blank manual fields (host / internal_ip / external_ip / domain_url) auto-populate from the agent's first report; populated-but-different values record a mismatch in `mismatch_flags` (manual stays). `IpLocationService` reclassifies after any host update.
+- `POST /api/v1/agent/clients/{clientId}/heartbeat-facts` &mdash; dev HTTP shim with Bearer shared-secret auth (constant-time compare). Production transport will be JMS via Coral's v360 Agent layer; wire spec at `RapidReconciler-Agent/specs/heartbeat-facts.md`. Both transports converge on `AgentFactsService.upsert()`.
+- Services-jar side: `ValcReporterProperties` + `AgentFactsCollector` + `ValcHeartbeatReporter` `@Scheduled` task posts facts every 30s. Disabled by default; flip via `application-local.yml`. `run-test-agent.ps1` now auto-activates `spring.profiles.active=local` so the gitignored override file loads without command-line args.
+- **Multi-agent groundwork**: `run-test-agent.ps1` gained `-ReporterClientId`; `run-all-test-agents.ps1` threads it through; `test-agents.psd1` carries a `ClientId` per entry. Added a `mauro` entry (port 34538, ClientId 5) so one box can host parallel V8 agents reporting as different VALC clients without disturbing Mauro's real V7 setup pointing at staging-valcspa.cloudapp.net.
+- Topology tab "Reported by agent" panel renders hostname / OS / Java / agent version / free disk / last heartbeat. The Last heartbeat field gets fresh / stale / dead coloring (&lt;90s / &lt;5min / older) with hover tooltips. Inline "Agent reports: X &mdash; Use detected" hints appear next to manual fields when the agent reports a different value; clicking Use copies the reported value into the input.
+- `DashboardController` derives the Agent pill from `last_heartbeat_at < 90s` OR HTTP probe success. **This is the production design** &mdash; customer installs sit behind firewalls VALC can't HTTP-probe, so heartbeat freshness is the canonical "connected" signal. The dev-only HTTP probe stays as a same-box convenience. Added a new "Add a database" branch in `populateNextStep` so a heartbeat-fresh client with no databases doesn't get pointed at "the next scheduled job" (which can't fire without a DB).
+
+**Manage Client modal UX polish.**
+
+- **Modal title**: now shows `Manage Client &mdash; <client name>` so support knows which customer they're operating on without bouncing to Client Details. The name lookup reads from the card grid (was stranded code from the table layout).
+- **Pill hover tooltips**: each pill on the client card gets a `title=` explainer. Agent pill differentiates green ("recent heartbeat or probe OK") vs red ("no signal in 90s"); Database pill explains the click-to-open popover; System Status pill clarifies "JDE job result, not agent connectivity" with the per-customer message when one exists; Active toggle explains the flip.
+- **Topology tab gating refresh**: extracted into `refreshDownstreamTabGating()`; called from `openManageClient`, `loadAppServerTab`, `activateManageTab`, and the Save Servers handler. Re-opening a finished client no longer shows Databases grayed out until you click a tab; the eager `loadAppServerTab()` call in `openManageClient` populates `__mcAppServerId` from the API at modal open time.
+- **Saved passwords echo on GET**: `ServerDto` returns `credentialsPassword` (the stored value, plaintext today &mdash; column name is aspirational, real at-rest encryption is a later slice). The eye-toggle now reveals what's saved. Empty-string on PUT still means "keep existing" so clearing the input + saving doesn't accidentally wipe the password.
+- **Database pill + popover live-update**: poll loop's old "not worth the complexity" comment retired. Adding a database in the modal now reflects on the card within one 5s poll cycle &mdash; pill label/kind, popover row list, all repaint from the snapshot DTO.
+
+**Databases tab usability pass.**
+
+- **Server column** shows the server's label ("Database Server" / "App Server") instead of "Server N" (the cryptic row id). `DatabaseDto` joins server labels in via a single bulk fetch.
+- **RAM dropdown** with constrained values (512 / 1024 / 2048 / 4096 / 8192 MB) drives the JVM `-Xmx` on spawn. New `PATCH /databases/{id}/max-memory` endpoint validates against the allowlist server-side. Selection reverts on PATCH failure.
+- **Options icons**: per V7's reference, the column carries 🔥 (Reset DB stored procedure) + 🗑 (Delete / soft-delete). Edit pencil dropped &mdash; configuration lives on the Topology tab, not per-row. Both confirm before firing. Reset endpoint returns 501 with a "specify the sproc name" message until the actual sproc is named (TODO in `ClientDatabaseController.reset()`).
+- **Per-row Spawn / Stop**: the play icon (▷) now actually spawns a Services jar via `AgentLifecycleService.start()`. Auto-allocated port from PORT_MIN..PORT_MAX (sticky-port reuse when one was previously assigned), `--agent.database-name` + `--spring.datasource.url` overrides so one jar serves any DB. Icon swaps to stop (■) when running; clicking stop tears down the JVM (or clears the service_port if VALC didn't spawn it). New `valc.dashboard.default-jar-path` / `default-java-home` config keys, since the agents[] registry is legacy seed config and the database rows are the new normal.
+- **Add Database picker** filters by topology now: CONFIG_1 queries the App Server; CONFIG_2 / CONFIG_3 query the SQL Server. Before this, the picker double-listed every database when DB host == App host in CONFIG_2 dev setups (Mauro hit this). VALC's pom gained the `mssql-jdbc` driver (Add Database was failing with "No suitable driver found" for everyone; RR Test Server's SQL_SERVER row also had stale seed data &mdash; `fake-sql.example.com` &mdash; that the user corrected via the UI).
+
+**Install tab reposition (reorder only).**
+
+- Tab moves from position 4 (after Databases) to position 2 (right after Client Details). The V8 workflow inverts V7's order: the agent installs *before* topology is configured because Topology auto-fills from heartbeats once the agent connects. The simple button reorder + a workflow callout at the top of the install doc + a per-step "VALC 2.0 update" callout on Step 8 (Install Agent) and Step 10 (Register Database) of [`installing-client-in-valc.html`](../GSIRRTech/installing-client-in-valc.html) land today; the deeper rework (Inno bundle generator, blocked/ready state recompute, pre-flight grid, full doc rewrite) stays in a consolidated chunk.
+
+**Mauro is live as the heartbeat test case.** A parallel V8 Services jar runs on port 34538 reporting as `client_id=5`. His real V7 agent (PID 3628 on the same box, pointing at staging-valcspa.cloudapp.net) stays untouched. Confirmed: heartbeats every 30s, APP_SERVER row populated with `reported_hostname=RAPIDREC-SQL-TE`, OS/Java/free disk/last-heartbeat all surfaced on the Topology tab, Agent pill green on the card via heartbeat-freshness alone (no HTTP probe).
+
+### Tomorrow's open items
+
+1. **Install tab consolidated chunk** &mdash; the queued chunk #2 from the prior handoff, now slightly expanded:
+   - Generate per-customer Inno Setup `.exe` (WinSW + bundled JRE + Agent jar + customer cert + pre-baked broker URL + customer id).
+   - Signed-URL download + email-to-Contact-1 automation.
+   - Rework Install tab Blocked / Ready / Success states for the new tab position (right after Client Details, before Topology).
+   - Pre-flight validation grid (7 checks: network / SQL reach / SQL auth / JDBC driver / JDE reach / SSIS env / cert trusted) with per-check Re-run.
+   - Real-time "agent connected" indicator on the Install tab when the first heartbeat lands.
+   - Full rewrite of [`GSIRRTech/installing-client-in-valc.html`](../GSIRRTech/installing-client-in-valc.html) to reflect the V8 workflow end-to-end (today carries inline "VALC 2.0 update" callouts at the top + on the most-changed steps).
+
+2. **Reset DB stored procedure name** &mdash; the 🔥 icon on each database row hits `POST /databases/{id}/reset` which today returns 501 with a "specify the sproc name" message. Wire the actual sproc + parameters in `ClientDatabaseController.reset()` once the V7 sproc name + signature are confirmed.
+
+3. **JMS dispatch of heartbeat facts** &mdash; when Coral's v360 Agent ships, add a dispatch branch in `HeartbeatListenerRegistrar` that routes the JMS-borne facts payload to the same `AgentFactsService.upsert()`. Spec for the payload shape: [`RapidReconciler-Agent/specs/heartbeat-facts.md`](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/specs/heartbeat-facts.md). Until then the HTTP shim is the only path; once JMS is in, the HTTP endpoint stays as a backup channel.
+
+4. **Per-client shared secrets** for the agent-facts endpoint &mdash; today a single global `valc.agent.shared-secret` accepts any clientId. Production needs per-client secrets baked into the install bundle (and a per-row secret column on `clients`, stored hashed).
+
+5. **At-rest encryption** for `client_servers.credentials_password_encrypted` and `client_databases.db_password_encrypted` &mdash; column names are aspirational; storage is plaintext today. With password echo on GET now in place, the dev workflow benefits but production needs real encryption before customer credentials live in there.
 
 ---
 
