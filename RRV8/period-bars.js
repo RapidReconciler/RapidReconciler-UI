@@ -88,14 +88,26 @@
         const cls       = ['period-bar'];
         if (isCurrent) cls.push('is-current');
         if (isNeg)     cls.push('is-negative');
-        return '<rect class="' + cls.join(' ') + '"' +
-               ' x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '"' +
-               ' width="' + barW.toFixed(1) + '" height="' + h.toFixed(1) + '"' +
-               ' rx="3"' +
-               ' data-period="' + escapeHtml(p.period) + '"' +
-               ' data-value="' + p.value + '"' +
-               ' role="button" tabindex="0"' +
-               ' aria-label="' + escapeHtml(state.labelFor(p.period) + ': ' + state.fmtValue(p.value)) + '"/>';
+        // Hit area: full chart height, tiled across the column so a
+        // 0-dollar period (visible bar collapses to 1px) still has a
+        // usable hover/click target. Tiles edge-to-edge by absorbing
+        // half the gap on each side and clamping at the chart edges.
+        const hitLeft  = i === 0     ? 0 : x - barGap / 2;
+        const hitRight = i === n - 1 ? W : x + barW + barGap / 2;
+        const hitW     = hitRight - hitLeft;
+        return '<g class="period-bar-group">' +
+          '<rect class="' + cls.join(' ') + '"' +
+            ' x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '"' +
+            ' width="' + barW.toFixed(1) + '" height="' + h.toFixed(1) + '"' +
+            ' rx="3"/>' +
+          '<rect class="period-bar-hit"' +
+            ' x="' + hitLeft.toFixed(1) + '" y="0"' +
+            ' width="' + hitW.toFixed(1) + '" height="' + H + '"' +
+            ' data-period="' + escapeHtml(p.period) + '"' +
+            ' data-value="' + p.value + '"' +
+            ' role="button" tabindex="0"' +
+            ' aria-label="' + escapeHtml(state.labelFor(p.period) + ': ' + state.fmtValue(p.value)) + '"/>' +
+          '</g>';
       }).join('');
 
       // "You are here" cue in the top-right — the selected period
@@ -137,13 +149,13 @@
       const getTip = () => host.querySelector('.period-bars-tip');
 
       host.addEventListener('click', (e) => {
-        const bar = e.target.closest('.period-bar');
+        const bar = e.target.closest('.period-bar-hit');
         if (!bar) return;
         state.onSwitch(bar.dataset.period);
       });
       host.addEventListener('keydown', (e) => {
         if (e.key !== 'Enter' && e.key !== ' ') return;
-        const bar = e.target.closest('.period-bar');
+        const bar = e.target.closest('.period-bar-hit');
         if (!bar) return;
         e.preventDefault();
         state.onSwitch(bar.dataset.period);
@@ -175,12 +187,12 @@
       };
 
       host.addEventListener('mouseover', (e) => {
-        const bar = e.target.closest('.period-bar');
+        const bar = e.target.closest('.period-bar-hit');
         if (bar) showTip(bar);
       });
       host.addEventListener('mouseleave', hideTip);
       host.addEventListener('focusin', (e) => {
-        const bar = e.target.closest('.period-bar');
+        const bar = e.target.closest('.period-bar-hit');
         if (bar) showTip(bar);
       });
       host.addEventListener('focusout', hideTip);

@@ -4200,10 +4200,16 @@
       // Shape the points back into an accountRows-like array so
       // periodBarsFromRows aggregates them through the same path the
       // demo snapshot uses. One row per period; aggregation is a no-op.
+      // Variance block + accountCount are passed through so the carry-
+      // forward preview can read the prior period's full breakdown
+      // directly off the cached snapshot — no client-side recompute,
+      // no second fetch.
       _periodBarsSnapshotCache = points.map(p => ({
         period:           p.period,
         glBalance:        p.glBalance,
-        perpetualBalance: p.perpetualBalance
+        perpetualBalance: p.perpetualBalance,
+        accountCount:     p.accountCount || 0,
+        variance:         p.variance || null
       }));
       console.info('[period-bars] loaded', _periodBarsSnapshotCache.length,
                    'periods from inventory/reconciliation/history');
@@ -7030,14 +7036,43 @@
     document.body.style.overflow = '';
   }
 
-  // Period immediately before the currently selected one. Walks the
-  // sorted distinct periods from accountRows. Returns null on the
-  // earliest period (no prior).
+  // Period immediately before the currently selected one. Returns
+  // null on the earliest period (no prior).
+  //
+  // Prefers the period-bars snapshot when available — it carries
+  // every historical period from /inventory/reconciliation/history,
+  // unlike currentData.accountRows which (under the row-aware fast
+  // path) only holds the active period. Falls back to accountRows
+  // for demo mode and as a boot-race safety net.
   function priorPeriod() {
-    if (!currentData) return null;
-    const periods = [...new Set((currentData.accountRows || []).map(r => r.period))].sort();
+    let periods = [];
+    if (_periodBarsSnapshotCache && _periodBarsSnapshotCache.length) {
+      periods = [...new Set(_periodBarsSnapshotCache.map(r => r.period))].sort();
+    }
+    if (periods.length === 0 && currentData) {
+      periods = [...new Set((currentData.accountRows || []).map(r => r.period))].sort();
+    }
     const idx = periods.indexOf(currentPeriod);
     return idx > 0 ? periods[idx - 1] : null;
+  }
+
+  // Look up the prior period's variance breakdown on the snapshot
+  // cache. Returns null if the cache hasn't loaded or the period
+  // isn't present (callers fall back to computeFilteredView, which
+  // works for demo mode where accountRows carries every period).
+  function priorPeriodViewFromSnapshot(prior) {
+    if (!_periodBarsSnapshotCache || !prior) return null;
+    const row = _periodBarsSnapshotCache.find(r => r.period === prior);
+    if (!row || !row.variance) return null;
+    return {
+      valuation: {
+        glBalance:        row.glBalance        || 0,
+        perpetualBalance: row.perpetualBalance || 0,
+        outOfBalance:     (row.glBalance || 0) - (row.perpetualBalance || 0)
+      },
+      variance:     row.variance,
+      accountCount: row.accountCount || 0
+    };
   }
 
   function renderPreviewModal() {
@@ -7158,9 +7193,13 @@
       return;
     }
 
-    // Compute the prior period's variance breakdown, scoped through
-    // the current sidebar filters (same chain as the current page).
-    const priorView = computeFilteredView(currentData, prior);
+    // Prior period's variance breakdown. In prod/staging the period-
+    // bars snapshot already carries it (one POST to
+    // /inventory/reconciliation/history at page load); fall back to
+    // computeFilteredView for demo mode where accountRows carries
+    // every period.
+    const priorView = priorPeriodViewFromSnapshot(prior)
+                   || computeFilteredView(currentData, prior);
     const priorLabel = PERIOD_LABELS[prior] || prior;
 
     subEl.innerHTML = 'Prior period <strong>' + escapeHtml(priorLabel) + '</strong> &middot; ' +
