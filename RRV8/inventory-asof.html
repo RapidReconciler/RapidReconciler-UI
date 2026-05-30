@@ -1741,13 +1741,23 @@
     }
     let base;
     if (_routesToTestAgent(area)) {
-      base = RR_CONFIG.testAgentBase || 'http://localhost:34537';
+      {
+        // Route to the active DB's agent (dbs[activeDbIndex].ip). V7
+        // architecture: one Services jar per database on its own port.
+        // Switching the DB in the user-menu changes activeDbIndex and
+        // therefore the agent we hit. Static testAgentBase remains as
+        // a boot-race fallback when the session hasn't hydrated yet.
+        const _d = window.RR_SESSION && window.RR_SESSION.dbs && window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex || 0];
+        base = (_d && _d.ip)
+          ? ((/^(?:localhost|127\.0\.0\.1)\b/i.test(_d.ip) ? 'http://' : 'https://') + _d.ip)
+          : (RR_CONFIG.testAgentBase || 'http://localhost:34537');
+      }
     } else {
       const db = window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex];
       if (!db || !db.ip) {
         return Promise.reject(new Error('No active database in session — sign in via the hub first.'));
       }
-      base = 'https://' + db.ip;
+      base = (/^(?:localhost|127\.0\.0\.1)\b/i.test(db.ip) ? 'http://' : 'https://') + db.ip;
     }
     const url = base + '/' + area;
     return fetch(url, {

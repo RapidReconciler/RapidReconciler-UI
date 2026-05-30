@@ -46,13 +46,20 @@
  */
 window.RR_CONFIG = {
   mode:          'staging',
-  authBase:      null,
+  // authBase: where V8's login modal POSTs credentials (rrLogin in
+  // each page's IIFE → ${authBase}/resource/client/login). Point at
+  // local VALC 2.0 so JWTs come from our Postgres, not the legacy
+  // staging-valcspa.cloudapp.net (which mints tokens scoped to real
+  // customer tenants with external host IPs in dbs[i].ip). When null,
+  // RR_AUTH_BASES[mode] is the fallback -- that's how the page used
+  // to behave on this dev box.
+  authBase:      'http://localhost:8080',
   dataPath:      'data/',
   statusPollMs:  60000,
   testAgentBase: 'http://localhost:34537',
   valcBase:      'http://localhost:8080',
   release:       'V8',
-  buildStamp:    '2026-05-24'
+  buildStamp:    '2026-05-30'
 };
 
 // Endpoint prefixes that route to mini-VALC (the dev-side stand-in
@@ -112,6 +119,16 @@ window.RR_TEST_AGENT_AREAS = [
   'poll',
   'system-status',
   'available-periods',
+  // Diagnostics endpoints that don't exist on the new agent yet but
+  // are routed here anyway so V8 hits the local agent (404 cleanly)
+  // instead of the JWT's activeDb.ip (an external GSI host the dev
+  // box can't reach over HTTPS). V8's fall-through path at
+  // rrFetch hardcodes https:// + db.ip, which dies against
+  // localhost:34537 (HTTP-only). Until those endpoints land or V8's
+  // fall-through gets scheme-aware, parking them in the test-agent
+  // table is the cleanest way to keep diagnostic noise localised.
+  'system-status-log',
+  'system/agent-log',
   // Administrator
   'admin/companies'
 ];
