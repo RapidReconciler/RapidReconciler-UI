@@ -301,7 +301,7 @@
       <span class="sidebar-status-dot${dotCls}" id="js-dmaai-dot"></span>
       <span class="sidebar-status-label">DMAAIs</span>
     </a>
-    <div class="sidebar-status-row">
+    <div class="sidebar-status-row" id="js-validation-row">
       <span class="sidebar-status-dot is-green" id="js-validation-dot" title="Inventory Validation"></span>
       <span class="sidebar-status-label">Inventory Validation</span>
     </div>
