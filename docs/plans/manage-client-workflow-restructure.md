@@ -1,7 +1,15 @@
 # Plan: Manage Client modal as a left-to-right workflow
 
-**Status:** Planning — depends on the multi-DB infrastructure that
-landed in VALC [#33](https://github.com/RapidReconciler/RapidReconciler-Valc/pull/33).
+**Status:** Phase 1 + Phase 2 + Install tab slice 1 shipped. Pre-flight
+validation grid and deploy progression remain (slice 2+).
+
+- Phase 1 (5-tab restructure, schema V18–V21) — VALC [#34](https://github.com/RapidReconciler/RapidReconciler-Valc/pull/34).
+- Phase 2 (Import-from-email, legacy Servers grid removed, password
+  link to sidebar, Topology cred UX, LP overlay killer, App Server
+  connection pill) + Install tab slice 1 (readiness probe, RRAdmin
+  auto-seed, Generate install bundle action) — VALC [#35](https://github.com/RapidReconciler/RapidReconciler-Valc/pull/35).
+- Slice 2+ (pre-flight validation grid, deploy step progression,
+  Companies re-grant) — pending.
 
 The Manage Client modal today is a flat tab strip
 (Client Details · Databases · Companies · User Accounts) with
@@ -229,11 +237,11 @@ accidentally mix it with infrastructure writes.
 
 ---
 
-## Future: import from the customer's submission email
+## Import from the customer's submission email (shipped in VALC #35)
 
-The installation-prep doc already produces a structured plain-text
-email when the customer clicks "Submit" (rendered in
-`rr-installation-prep.html` via the `composeEmail` JS helper). The
+The installation-prep doc produces a structured plain-text email
+when the customer clicks "Submit" (rendered in
+`rr-installation-prep.html` via the `buildBody` JS helper). The
 shape is stable:
 
 ```
@@ -259,16 +267,18 @@ SERVERS:
 ...
 ```
 
-**Phase 2 feature** *(not in this plan's scope; tracked as a
-follow-up task)*: an "Import from email" button on Tab 1 that
-parses this format and pre-populates every tab. Customer pastes
-their submit email → admin reviews → saves. Removes the
-copy-paste drudgery that today is the entire onboarding workflow.
+**Shipped in VALC [#35](https://github.com/RapidReconciler/RapidReconciler-Valc/pull/35):**
+an "Import from email" banner above the Client Details form. The
+admin pastes the customer's submission, clicks Parse & Fill, and
+every tab pre-populates (topology → CONFIG_N radio + auto-PUT,
+source platform, table qualifier, ECST/UNCS/PQOH/TRQT decimals,
+customer name, submitter email → Contact 1 if empty, and the 1–3
+server card label + internal IP rows). Admin reviews and saves
+each tab as usual.
 
-Parsing strategy: each section is a labeled block with `KEY: value`
-lines. A 50-line parser in `ClientImportService.java` covers the
-shape. Robustness comes from the customer-side template being
-machine-generated, not from the parser being clever.
+The parser lives client-side in `dashboard.html` rather than a
+`ClientImportService.java` — small enough (~150 lines) that
+collocating with the UI keeps it where the next person looks.
 
 ---
 
@@ -286,21 +296,35 @@ machine-generated, not from the parser being clever.
 
 ---
 
-## Implementation order (estimate: 1.5–2 days)
+## Implementation order
 
-1. **Schema migrations** V18/V19/V20 — 30 min.
-2. **Tab 2 backend** — new endpoints + Client entity fields — 2 hr.
-3. **Tab 2 frontend** — markup + topology radio handler + App Server
-   card editor — 3 hr.
-4. **Tab gating** — disable downstream tabs until App Server saved
-   — 30 min.
-5. **Tab 3 prefill** — read topology, auto-fill host fields,
-   hide DB server card on Config 1 — 1.5 hr.
-6. **Tab 1 JDE config block** — new collapsible section, four
-   decimal inputs + source platform dropdown + table qualifier —
-   1.5 hr.
-7. **Smoke test against the dev box** — clone Dev DB → walk through
-   the workflow → verify all five tabs read correctly — 1 hr.
+**Phase 1 (shipped, VALC [#34](https://github.com/RapidReconciler/RapidReconciler-Valc/pull/34)):**
+1. Schema migrations V18/V19/V20/V21.
+2. Topology backend (new endpoints + ClientEntity fields + ClientServerEntity).
+3. Topology frontend (3-column grid, radio handler, role-keyed cards).
+4. Tab gating (downstream tabs disabled until APP_SERVER saved).
+5. Tab 3 prefill (read topology, auto-fill, hide DB card on Config 1).
+6. Tab 1 JDE config block.
 
-The "import from email" feature is a separate slice — not in this
-plan's hour budget.
+**Phase 2 + Install slice 1 (shipped, VALC [#35](https://github.com/RapidReconciler/RapidReconciler-Valc/pull/35)):**
+1. Legacy Servers grid removed from Databases tab (Topology is canonical).
+2. Import-from-email banner on Client Details with the labeled-block parser.
+3. Password policy link re-added to sidebar Documents.
+4. Topology card cred UX: default rruser/rruser, show/hide eye toggle.
+5. Password-manager overlay killer (attributes + body-level CSS + MutationObserver sweeper).
+6. App Server Connected/Disconnected pill mirroring the client-card face.
+7. New Install tab between Databases and Companies with three states
+   (Blocked / Ready / Success) and newcomer-friendly copy.
+8. `ClientReadinessService` + `GET /readiness` + `POST /install-bundle`.
+9. RRAdmin auto-seed (BCrypt temp password, full per-DB perms,
+   `passwordChangedAt=null` first-login reset, idempotent).
+
+**Install slice 2+ (pending):**
+- Pre-flight validation grid (7 checks: network / SQL reach / SQL auth /
+  JDBC driver / JDE reach / SSIS env / cert trusted) with per-check Re-run.
+- Deploy step progression (push DB schema → Services jar → SSIS) with
+  retry on each step.
+- Companies re-grant after first SSIS pull populates `client_companies`
+  (RRAdmin's `companies` JSONB updates with the full licensed list).
+- Email-the-install-bundle automation (today the support person reads
+  the temp password off the screen and forwards manually).
