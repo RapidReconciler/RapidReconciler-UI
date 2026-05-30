@@ -24,15 +24,23 @@ the new session at.
 > `inventory/variance-component`, `inventory/as-of{,/details}`,
 > `inventory/rollIItem`, `poll`, `system-status`,
 > `download-excel/*`, plus the three planned DMAAI overlay
-> endpoints (`inventory/integrity/aai-*`). V8&rsquo;s `rrFetch`
-> routes everything to `localhost:34537` via
-> `RR_TEST_AGENT_AREAS` + `RR_TEST_AGENT_PREFIXES` in
-> [`config.js`](config.js); v359 service can be stopped on the
-> dev box (the legacy AngularJS SPA still hits v359 unchanged on
-> its own host).
+> endpoints (`inventory/integrity/aai-*`).
+>
+> **V8 rrFetch routing &mdash; refactored 2026-05-30:**
+> V8&rsquo;s `rrFetch` now routes test-agent endpoints to
+> `dbs[activeDbIndex].ip` (auto-scheme: HTTP for localhost, HTTPS
+> otherwise) instead of the static `testAgentBase`. The
+> user-menu DB switcher actually changes which agent gets hit
+> &mdash; V7 architecture parity. `testAgentBase` remains as a
+> boot-race fallback only. Multi-agent dev plan at
+> [`docs/plans/dev-multi-agent-setup.md`](../docs/plans/dev-multi-agent-setup.md).
+> v359 service can be stopped on the dev box (the legacy AngularJS
+> SPA still hits v359 unchanged on its own host).
 >
 > Launch the test agent with
 > `pwsh C:/source/repos/RapidReconciler-Agent/setup/run-test-agent.ps1`
+> (defaults to Dev DB on :34537), or for multi-DB dev,
+> `pwsh C:/source/repos/RapidReconciler-Agent/setup/run-all-test-agents.ps1`
 > &mdash; or via the mini-VALC dashboard at
 > http://localhost:8080/ (see Valc repo below).
 >
@@ -687,6 +695,118 @@ Inventory &rarr; As Of &rarr; Cardex Variance.
 
 ---
 
+## Tonight's session summary (2026-05-30) — Auth chunk + multi-agent groundwork
+
+Long session. The recurring "all zeros" / "wrong tenant in the dropdown"
+cycle is permanently broken; the auth chunk that was queued as Tier 1 #1
+shipped inline. What landed:
+
+**Auth chunk (Tier 1 #1):**
+
+- VALC's `JwtService.mint()` now emits the V7-shape nested
+  `user: {id, fn, c, u, rm}` block alongside top-level `sub` / `name`.
+  Additive — VALC-2.0 consumers keep working; V7-shape consumers (V8's
+  bootSession `RR_SESSION.user`, the new agent's JwtAuthFilter
+  user-fallback) get the data they expected.
+- `AuthController` gained `POST /resource/client/login` (V7-compatible
+  endpoint: `{username, password, rememberme}` → `{token}`, errors as
+  `401 {message: "User invalid."}`). Existing `/api/v1/auth/login` keeps
+  working; both share the same `buildDbsScoped` + new
+  `buildV7UserBlock` helpers. Class-level `@RequestMapping("/api/v1/auth")`
+  removed in favour of full method-level paths so both endpoints can
+  coexist.
+- `SecurityConfig` allowlist extended to `/resource/client/**`.
+- `CorsConfig` allowlist extended to `/resource/client/**` so V8 (on
+  port 8765) can POST cross-origin.
+- New agent's `JwtAuthFilter.populateUserRequest` reads `user.u` first,
+  falls back to top-level `sub` — V7 and VALC 2.0 tokens both work.
+- V8's `login.html` (the root standalone) was the recurring
+  contamination source: it hardcoded
+  `AUTH_BASE = 'https://staging-valcspa.cloudapp.net'`, so every
+  "Open RR App" click logged the user into REAL staging and stashed
+  a JWT for the user's real customer tenant (NA / Prod / QA / TR).
+  Now reads `RR_CONFIG.authBase` (or `?auth=` URL param) first;
+  falls back to legacy staging only when no config is loaded. **This
+  was the root cause** the user kept landing back on staging tokens
+  every time they tried to "fix" the dev login.
+- V8 `RRV8/config.js` sets `authBase: 'http://localhost:8080'` so the
+  fallback above never fires on the dev box.
+
+**Multi-agent groundwork (V7 architecture parity, prep for tomorrow's
+DB-add):**
+
+- `RapidReconciler-Agent/setup/run-test-agent.ps1` parameterized
+  (`-Id`, `-DatabaseName`, `-Port`, `-Detached`). Single jar serves
+  any DB via `--agent.database-name` + `--spring.datasource.url`
+  command-line overrides.
+- New `RapidReconciler-Agent/setup/run-all-test-agents.ps1` reads
+  `test-agents.psd1` registry and spawns each entry detached. Polls
+  `/health` until UP. Idempotent (skips ports already in use).
+- `RapidReconciler-Agent/setup/test-agents.psd1` — registry of
+  test agents; today only `dev`. Add a `qa` entry when the QA DB
+  lands tomorrow.
+- VALC's `AgentDescriptor` gained `databaseName` field;
+  `AgentLifecycleService.start()` passes it through to the spawned
+  JVM. The dashboard's Start button now produces a correctly-scoped
+  agent process.
+- VALC `application.yml`'s `valc.dashboard.agents[0]` now carries
+  explicit `database-name: RapidReconciler_Dev`; a commented QA
+  template sits below it.
+
+**V8 routing refactor:**
+
+- All 7 V8 pages' `rrFetch` now route test-agent endpoints to
+  `http://${dbs[activeDbIndex].ip}` (auto-scheme: HTTP for
+  localhost, HTTPS otherwise) instead of the static
+  `testAgentBase`. The user-menu DB switcher actually changes
+  which agent gets hit now &mdash; V7 architecture parity end-to-end.
+  `testAgentBase` survives as a boot-race fallback only.
+
+**Cosmetic polish:**
+
+- `inventory-reconciliation.html`'s user-menu got
+  `max-width: calc(100vw - 16px)` + ellipsis on long DB names/agent
+  URLs + a `positionUserMenu` viewport clamp so it can't render
+  half off-screen on narrow viewports.
+
+**Postgres data:**
+
+- `valc.client_databases.service_port` updated from `40001` to
+  `34537` (matches the agent's actual port). Now any VALC-minted
+  token has `dbs[0].ip = "127.0.0.1:34537"` instead of pointing at
+  a port nothing was listening on.
+- User Ed Gutkowski's `password_hash` set to the BCrypt of
+  `12345678` (via VALC's own AdminUsers PUT endpoint, ensuring the
+  encoder versions match between mint and verify). Local-dev only;
+  reset before any cutover.
+
+**SQL Server data (user-driven):**
+
+- `rcardexledgercompare` in Dev was missing 896,905 rows that
+  exist in QA. User backfilled via a NOT-EXISTS-by-business-key
+  INSERT (10-column unique-index match; `recid` IDENTITY auto-
+  assigned). This was the root cause of the "GL Balance = 0" the
+  page was showing on the early periods.
+
+**Plan doc filed:**
+
+- `docs/plans/dev-multi-agent-setup.md` &mdash; the V7-architecture-
+  parity plan, the tomorrow-checklist (SQL clone, VALC table rows,
+  user permissions), and the full SQL snippets. Read this on
+  session resume before doing any multi-DB dev work.
+
+### Tomorrow's open items
+
+- Add the QA database (or whichever name) + uncomment the QA agent
+  entries in `application.yml` + `test-agents.psd1` + insert a row
+  in VALC's `client_databases` + grant a `user_database_permissions`
+  row for Ed.
+- Spawn `run-all-test-agents.ps1` → log in fresh → dropdown shows
+  Dev + QA → picking each one actually changes the numbers on the
+  page.
+
+---
+
 ## Prompts #2&ndash;#5 summary (2026-05-29)
 
 What landed across the four-prompt batch:
@@ -847,6 +967,12 @@ What landed across the four-prompt batch:
 >    start per CLAUDE.md. Active plans (post-Prompt #1):
 >    - `valc-2-cutover-plan.md` &mdash; the V8 cutover plan.
 >      Read-on-start required. Updated in Prompt #1.
+>    - `dev-multi-agent-setup.md` &mdash; dev-box parity with V7's
+>      one-Services-jar-per-database architecture. **New 2026-05-30.**
+>      Agent + V8 routing landed; the user's tomorrow-checklist
+>      (SQL clone, VALC table rows, user permissions) is in there.
+>      THIS is what stops the recurring "all zeros" cycle from the
+>      user-menu DB switcher.
 >    - `valc-2-qa-azure-deployment.md` &mdash; QA Azure VM
 >      readiness checklist. **New in Prompt #1.**
 >    - `branding-standards.md` &mdash; GSIBranding asset

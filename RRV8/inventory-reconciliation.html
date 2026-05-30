@@ -418,7 +418,22 @@
     box-shadow: 0 20px 48px -16px rgba(20, 32, 55, 0.28);
     z-index: 150;
     min-width: 280px;
+    /* Never wider than the viewport (with 8px breathing room each
+       side). Without this, a long database name + agent URL could
+       stretch the menu past the right edge of a narrow window and
+       the left side of the menu disappears off-screen. */
+    max-width: calc(100vw - 16px);
     overflow: hidden;
+  }
+  .user-menu-db-name,
+  .user-menu-db-meta,
+  .user-menu-email {
+    /* Truncate with ellipsis so a long agent URL or email doesn't
+       force the menu wider than the viewport (paired with max-width
+       above). */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .user-menu[hidden] { display: none; }
   .user-menu-head {
@@ -3534,7 +3549,17 @@
     // Prod / staging path — route per-area to the right agent.
     let base;
     if (_routesToTestAgent(area)) {
-      base = RR_CONFIG.testAgentBase || 'http://localhost:34537';
+      {
+        // Route to the active DB's agent (dbs[activeDbIndex].ip). V7
+        // architecture: one Services jar per database on its own port.
+        // Switching the DB in the user-menu changes activeDbIndex and
+        // therefore the agent we hit. Static testAgentBase remains as
+        // a boot-race fallback when the session hasn't hydrated yet.
+        const _d = window.RR_SESSION && window.RR_SESSION.dbs && window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex || 0];
+        base = (_d && _d.ip)
+          ? ((/^(?:localhost|127\.0\.0\.1)\b/i.test(_d.ip) ? 'http://' : 'https://') + _d.ip)
+          : (RR_CONFIG.testAgentBase || 'http://localhost:34537');
+      }
     } else {
       const db = window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex];
       if (!db || !db.ip) {
@@ -3543,7 +3568,7 @@
           'The auth chunk (login → JWT → RR_SESSION.dbs[]) is not yet wired.'
         ));
       }
-      base = 'https://' + db.ip;
+      base = (/^(?:localhost|127\.0\.0\.1)\b/i.test(db.ip) ? 'http://' : 'https://') + db.ip;
     }
     const url = base + '/' + area +
       (opts.query ? '?' + new URLSearchParams(opts.query) : '');
@@ -4997,7 +5022,17 @@
     const r = btn.getBoundingClientRect();
     menu.style.top  = (r.bottom + 6) + 'px';
     menu.style.left = 'auto';
-    menu.style.right = (window.innerWidth - r.right) + 'px';
+    // Anchor to the right of the user chip, but clamp so the menu's
+    // left edge never goes off the viewport. Pair with the CSS
+    // max-width: calc(100vw - 16px) on .user-menu so we can rely on
+    // the rendered menu width.
+    const desiredRight = window.innerWidth - r.right;
+    // Force a layout read so menu.offsetWidth reflects the post-CSS
+    // clamp; without this the first open after a session-hydrate
+    // might use a stale width.
+    const menuWidth = menu.offsetWidth || 280;
+    const maxRight = window.innerWidth - menuWidth - 8;
+    menu.style.right = Math.max(8, Math.min(desiredRight, maxRight)) + 'px';
   }
 
   // Lightweight status flash for placeholder actions. Renders as a
@@ -8628,11 +8663,21 @@
     }
     let base;
     if (_routesToTestAgent(area)) {
-      base = RR_CONFIG.testAgentBase || 'http://localhost:34537';
+      {
+        // Route to the active DB's agent (dbs[activeDbIndex].ip). V7
+        // architecture: one Services jar per database on its own port.
+        // Switching the DB in the user-menu changes activeDbIndex and
+        // therefore the agent we hit. Static testAgentBase remains as
+        // a boot-race fallback when the session hasn't hydrated yet.
+        const _d = window.RR_SESSION && window.RR_SESSION.dbs && window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex || 0];
+        base = (_d && _d.ip)
+          ? ((/^(?:localhost|127\.0\.0\.1)\b/i.test(_d.ip) ? 'http://' : 'https://') + _d.ip)
+          : (RR_CONFIG.testAgentBase || 'http://localhost:34537');
+      }
     } else {
       const db = window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex];
       if (!db || !db.ip) return Promise.reject(new Error('No active DB in RR_SESSION'));
-      base = 'https://' + db.ip;
+      base = (/^(?:localhost|127\.0\.0\.1)\b/i.test(db.ip) ? 'http://' : 'https://') + db.ip;
     }
     const url = base + '/' + area;
     const h = { 'Accept': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
