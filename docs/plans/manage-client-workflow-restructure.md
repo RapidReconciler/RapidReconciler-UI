@@ -1,15 +1,58 @@
 # Plan: Manage Client modal as a left-to-right workflow
 
-**Status:** Phase 1 + Phase 2 + Install tab slice 1 shipped. Pre-flight
-validation grid and deploy progression remain (slice 2+).
+**Status:** Phase 1 + Phase 2 + Install tab slice 1 shipped. Heartbeat
+auto-fill (Phase 3) + Databases-tab usability pass + Install tab
+reorder shipped 2026-05-31. Inno-bundle generation, pre-flight grid,
+and the full install-doc rewrite remain in a single consolidated chunk.
 
 - Phase 1 (5-tab restructure, schema V18–V21) — VALC [#34](https://github.com/RapidReconciler/RapidReconciler-Valc/pull/34).
 - Phase 2 (Import-from-email, legacy Servers grid removed, password
   link to sidebar, Topology cred UX, LP overlay killer, App Server
   connection pill) + Install tab slice 1 (readiness probe, RRAdmin
   auto-seed, Generate install bundle action) — VALC [#35](https://github.com/RapidReconciler/RapidReconciler-Valc/pull/35).
-- Slice 2+ (pre-flight validation grid, deploy step progression,
-  Companies re-grant) — pending.
+- Phase 3 (2026-05-31) — **Heartbeat → `client_servers` auto-fill.**
+  Schema V23 (8 heartbeat-fed columns + mismatch_flags JSONB),
+  `AgentFactsService.upsert(clientId, facts)` UPSERT with
+  manual-wins / mismatch-flag semantics, `POST /api/v1/agent/clients/
+  {id}/heartbeat-facts` dev shim (production transport is JMS via
+  Coral's v360 Agent layer — wire format spec at
+  `RapidReconciler-Agent/specs/heartbeat-facts.md`). Topology tab
+  gains a "Reported by agent" panel (hostname / OS / Java / agent
+  version / free disk / last heartbeat with fresh / stale / dead
+  coloring) + inline "Agent reports: X — Use detected" mismatch
+  hints. Dashboard's Agent pill derives liveness from
+  `last_heartbeat_at` freshness (90s window), not just the local
+  HTTP probe — this is the production model where customer installs
+  sit behind firewalls VALC can't probe.
+- Manage Client UX polish (2026-05-31) — modal title shows the
+  client name; pill hover tooltips explain each pill; Add Database
+  picker filters by topology (no more duplicate listings); password
+  echoed on GET so the eye-toggle reveals what's saved; downstream
+  tab gating refreshes on modal open + after Save Servers.
+- Databases-tab usability pass (2026-05-31) — Server column shows
+  the server's label, not "Server N"; RAM dropdown with constrained
+  values (512 / 1024 / 2048 / 4096 / 8192 MB) drives the JVM `-Xmx`
+  on spawn; per-row Options icons reduced to 🔥 (reset DB sproc;
+  endpoint returns 501 until sproc name is specified) + 🗑 (soft
+  delete); per-row Spawn (▷) / Stop (■) icon wired against
+  `AgentLifecycleService` with auto-allocated port + sticky-port
+  reuse. New PATCH `/max-memory`, DELETE, POST `/reset`, POST
+  `/start`, POST `/stop` endpoints on `ClientDatabaseController`.
+- Install tab reorder (2026-05-31) — tab moves from position 4 to
+  position 2 (right after Client Details) to match the inverted V8
+  workflow: Install bundle generation precedes Topology because the
+  agent has to be installed before its heartbeats can auto-populate
+  the Topology tab. Gating logic + bundle generator stay queued.
+- Slice 2+ (consolidated chunk, pending) — per-customer Inno Setup
+  `.exe` generator + signed-URL download + email-to-Contact-1
+  automation; pre-flight validation grid (7 checks: network, SQL
+  reach, SQL auth, JDBC driver, JDE reach, SSIS env, cert trusted)
+  with per-check Re-run; deploy step progression; Companies re-grant
+  after first SSIS pull; full rewrite of
+  [`installing-client-in-valc.html`](../../GSIRRTech/installing-client-in-valc.html)
+  to reflect the V8 workflow end-to-end (today the doc carries
+  inline "VALC 2.0 update" callouts at the top + on the most-changed
+  steps as a stand-in until the rewrite lands).
 
 The Manage Client modal today is a flat tab strip
 (Client Details · Databases · Companies · User Accounts) with
