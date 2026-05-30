@@ -1347,6 +1347,21 @@
   .variance-card.is-negative:hover {
     border-left-color: #8b1f15;
   }
+  /* Validation chain broken — highlight the carry-forward card so
+     the analyst immediately sees which component is the symptom of
+     the roll-forward break. Source order beats .is-zero / .is-negative
+     above so a broken-chain carry-forward shows red even when its
+     own value happens to be zero. */
+  .variance-card.is-validation-broken {
+    background: rgba(192, 57, 43, 0.06);
+    border-color: rgba(192, 57, 43, 0.35);
+    border-left-color: var(--red);
+  }
+  .variance-card.is-validation-broken:hover {
+    border-color: rgba(192, 57, 43, 0.55);
+    border-left-color: #8b1f15;
+  }
+  .variance-card.is-validation-broken .vc-label { color: var(--red); }
   .vc-head {
     display: flex;
     align-items: flex-start;
@@ -4112,7 +4127,12 @@
     renderFilterRows(data);
     renderFilterSummary(data);
 
-    // Health strip validation dot color
+    // Health strip validation dot color. Derived locally from
+    // accountRows' glOk / varOk for the current period (per-period
+    // independence) — overrides the agent's server-side validation
+    // block. Falls through to the server's block only when we have
+    // no rows to derive from (boot-race or degraded mode).
+    data.validation = deriveValidationFromRows(data, currentPeriod) || data.validation;
     renderValidation(data.validation);
 
     // Refresh popover content
@@ -4156,6 +4176,17 @@
       const unrec = vc.unreconciledVariance;
       total.textContent = fmtVariance(unrec);
       total.classList.toggle('is-negative', unrec < 0);
+    }
+    // When the Inventory Validation light is red, shade the carry-
+    // forward card red as well. The carry-forward number is the
+    // symptom of the roll-forward break the validation light surfaces;
+    // tying the two visually lets the analyst land on the component
+    // that needs work without scanning every card.
+    const cfCard = document.querySelector('.variance-card[data-component="carryForward"]');
+    if (cfCard) {
+      const broken = currentData && currentData.validation
+                  && currentData.validation.color === 'danger';
+      cfCard.classList.toggle('is-validation-broken', broken);
     }
   }
 
@@ -4665,6 +4696,33 @@
     });
   })();
 
+
+  // Derive the Inventory Validation light state from accountRows of
+  // the current period. Per-period independence (intent B): light is
+  // red when any row for the active period has glOk = 'No' or
+  // varOk = 'No'. The agent's server-side validation block (which
+  // calls usp6returnvalidationstatus) is bypassed when this local
+  // derivation is possible — keeps the light in lockstep with the
+  // data the page actually shows, no SQL round-trip needed, no
+  // historical-break-propagating-forward false reds.
+  function deriveValidationFromRows(data, period) {
+    if (!data || !Array.isArray(data.accountRows)) return null;
+    const rows = data.accountRows.filter(r => r.period === period);
+    if (rows.length === 0) return null;
+    let broken = false;
+    for (const r of rows) {
+      const g = (r.glOk  || '').toLowerCase();
+      const v = (r.varOk || '').toLowerCase();
+      if (g === 'no' || v === 'no') { broken = true; break; }
+    }
+    return {
+      color:   broken ? 'danger' : 'success',
+      label:   broken ? 'Roll-forward failed' : 'Roll-forward clean',
+      tooltip: broken
+        ? 'This period\'s roll-forward broke. One or more accounts have an unresolved variance — drill into Carry Forward or check Unposted Batches for the root cause.'
+        : null
+    };
+  }
 
   function renderValidation(validation) {
     if (!validation) return;
@@ -5257,6 +5315,12 @@
       glBalance:        num(r.EndGL       || r.glBalance),
       perpetualBalance: num(r.Perpetual   || r.perpetualBalance),
       outOfBalance:     num(r.OOB         || r.outOfBalance),
+      // Roll-forward flags from v6ui_raccountsummary. Drive the
+      // Inventory Validation light per-period; see deriveValidation()
+      // below. 'yes' / 'no' / 'baseline' / 'end' from the underlying
+      // raccountsummary table.
+      glOk:             r.GLOK            || r.glOk           || '',
+      varOk:            r.VarOK           || r.varOk          || '',
       variance: {
         carryForward:         num(r.BegVar      || (r.variance && r.variance.carryForward)),
         glBatches:            num(r.UnpostBatch || (r.variance && r.variance.glBatches)),
@@ -5297,6 +5361,8 @@
         glBalance:        num(r.glBalance),
         perpetualBalance: num(r.perpetualBalance),
         outOfBalance:     num(r.outOfBalance != null ? r.outOfBalance : (num(r.glBalance) - num(r.perpetualBalance))),
+        glOk:             r.glOk || '',
+        varOk:            r.varOk || '',
         variance: {
           carryForward:         num(r.variance && r.variance.carryForward),
           glBatches:            num(r.variance && r.variance.glBatches),
@@ -7640,9 +7706,23 @@
       } catch (_) { return readCachedJobStatus(); }
     }
     try {
-      const status = await rrFetch('inventory/status');
-      const job = mapValidationToJob(status && status.validation);
-      if (job) { writeCachedJobStatus(job); return job; }
+      // Read job status from /poll (v_diagnostic5_job_status). The
+      // validation block on /inventory/status is the roll-forward
+      // check (usp6returnvalidationstatus) — a different signal that
+      // would conflate "broken chain" with "SQL Agent job failed".
+      // Short-poll mode (no query params) returns immediately.
+      const poll = await rrFetch('poll');
+      if (poll && poll.jobStatus) {
+        const job = {
+          jobStatus:  poll.jobStatus,
+          jobDate:    poll.jobDate    || '',
+          minutes:    poll.minutes    || 0,
+          avgMinutes: poll.avgMinutes || 0,
+          count:      poll.count      || 0
+        };
+        writeCachedJobStatus(job);
+        return job;
+      }
       return readCachedJobStatus();
     } catch (_) {
       return readCachedJobStatus();

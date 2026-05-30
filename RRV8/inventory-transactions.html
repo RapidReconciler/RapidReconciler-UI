@@ -3392,11 +3392,23 @@
       } catch (_) { return readCachedJobStatus(); }
     }
     try {
-      // Fresh fetch (not via getInventoryStatus, which permacaches).
-      // The validation block updates as the SQL Agent job runs.
-      const status = await rrFetch('inventory/status');
-      const job = mapValidationToJob(status && status.validation);
-      if (job) { writeCachedJobStatus(job); return job; }
+      // Read job status from /poll (v_diagnostic5_job_status). The
+      // validation block on /inventory/status is the roll-forward
+      // check (usp6returnvalidationstatus) — a different signal that
+      // would conflate "broken chain" with "SQL Agent job failed".
+      // Short-poll mode (no query params) returns immediately.
+      const poll = await rrFetch('poll');
+      if (poll && poll.jobStatus) {
+        const job = {
+          jobStatus:  poll.jobStatus,
+          jobDate:    poll.jobDate    || '',
+          minutes:    poll.minutes    || 0,
+          avgMinutes: poll.avgMinutes || 0,
+          count:      poll.count      || 0
+        };
+        writeCachedJobStatus(job);
+        return job;
+      }
       return readCachedJobStatus();
     } catch (_) {
       return readCachedJobStatus();
