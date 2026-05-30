@@ -123,8 +123,14 @@ This is the bulk of the work. Everything below ships from the
 server side; nothing reaches a customer until it's all done.
 
 1. **Auth shape rewrite** &mdash; new agent's `JwtAuthFilter` +
-   VALC 2.0's `JwtService.mint()` aligned to v359's wire shape.
-   Currently a known bug; chunk queued in [`RRV8/HANDOFF.md`](../../RRV8/HANDOFF.md).
+   VALC 2.0's `JwtService.mint()` aligned on a single canonical
+   wire shape. Source-validated against the V7 codebase 2026-05-30
+   (`rr-client-services` + `rr-valc` repos cloned locally; see
+   [`RapidReconciler-Agent/docs/v359-auth.md`](../../../RapidReconciler-Agent/docs/v359-auth.md)
+   &sect; *Token shape divergence*). Real divergence is between
+   V7's and VALC 2.0's minted shapes (not phantom fields in the new
+   agent as previously framed). Chunk queued in
+   [`RRV8/HANDOFF.md`](../../RRV8/HANDOFF.md).
 2. **JMS protocol parity** &mdash; VALC 2.0's Artemis broker must
    accept connections from existing `rr-valc-agent.jar` instances
    using the legacy CORE protocol, the existing truststore, and
@@ -139,7 +145,14 @@ server side; nothing reaches a customer until it's all done.
    Forward not yet built in the new agent or as V8 pages. The new
    agent today doesn't have these controllers; the legacy SPA hits
    them when customers click those tabs. Build them in the new
-   agent.
+   agent. **V7 source now available** at
+   `C:/source/repos/RapidReconciler-V7-Services` (cloned from
+   `getgsi/rr-client-services` on Bitbucket) &mdash; the relevant
+   controllers (`OrdersController`, `LineAnalysisController`,
+   `RollForwardController`, `RunJobController`) are paste-ready
+   spec material. Detail in
+   [`RapidReconciler-Agent/docs/v359-vs-new-agent.md`](../../../RapidReconciler-Agent/docs/v359-vs-new-agent.md)
+   &sect; *Phase 0 #4 cutover blockers*.
 5. **Schema ETL** &mdash; Azure VALC's user / client / permissions /
    deploy-history data into VALC 2.0's Postgres. Coordinate the
    export and the import. Happens once at the DNS-flip moment.
@@ -517,11 +530,20 @@ breadth, then the cutover-infrastructure long poles.
 
 1. **Finish the JWT claim-shape rewrite** (Phase 0 #1). `dbs[i].n`
    matching is **DONE** (agent `JwtAuthFilter.selectDbEntry`,
-   PR #40). Remaining: read username from `user.u` (not `sub`);
-   drop the phantom `as / aite / aprs / rs / su` reads that don't
-   exist in v359 tokens; add `dbs[i].t` (In Transit) + `dbs[i].p`
-   (PO Receipts) company lists. Spec: `RapidReconciler-Agent/docs/v359-auth.md`
-   items 1&ndash;3.
+   PR #40). **Re-scoped 2026-05-30** against the V7 source &mdash;
+   the "phantom fields" framing in the original HANDOFF was
+   superseded; the fields exist in V7 tokens, the new agent reads
+   them correctly. Real remaining work:
+   (a) resolve the `dbs[i].t` key collision (V7: inTransit array;
+   VALC 2.0: tabs object);
+   (b) make VALC 2.0 emit `dbs[i].p` (PO Receipts companies; today
+   absent);
+   (c) decide username-source canon (`sub` vs `user.u`) and ensure
+   the new agent matches VALC 2.0;
+   (d) reconcile the `as / aite` semantic flip (V7 semantics vs
+   VALC 2.0's Import-JDE squash).
+   Full punch list: [`RapidReconciler-Agent/docs/v359-auth.md`](../../../RapidReconciler-Agent/docs/v359-auth.md)
+   &sect; *What the new agent must change*.
 2. **mini-VALC mints real tokens** &mdash; `JwtService.mint()` emits
    the v359 wire shape (`{user:{id,fn,c,u,rm}, dbs:[{ip,k,n,i,t,p,a}]}`);
    `AuthController` at `POST /resource/client/login` with
@@ -568,7 +590,12 @@ breadth, then the cutover-infrastructure long poles.
 9. **Build In Transit / PO Receipts / Roll Forward** &mdash; new-agent
    controllers + V8 pages. The legacy SPA serves these today; the new
    agent has no controllers for them. Gates which customers are
-   eligible for the Phase 2 / 3 push.
+   eligible for the Phase 2 / 3 push. **V7 source is paste-ready
+   spec** as of 2026-05-30: see
+   [`RapidReconciler-Agent/docs/v359-vs-new-agent.md`](../../../RapidReconciler-Agent/docs/v359-vs-new-agent.md)
+   &sect; *Phase 0 #4 cutover blockers* for the controller / endpoint
+   list. Highest leverage: `OrdersController` (covers BOTH In Transit
+   AND PO Receipts order surfaces in one controller, 8 endpoints).
 
 ### Tier 5 &mdash; Cutover infrastructure long poles
 
@@ -578,7 +605,17 @@ breadth, then the cutover-infrastructure long poles.
     end-to-end against a real legacy broker.
 11. **Signing-key inheritance** (Phase 0 #3) &mdash; VALC 2.0 adopts
     Azure VALC's RSA private key so both stacks verify the same
-    tokens at cutover.
+    tokens at cutover. **Caveat surfaced 2026-05-30**: V7's Services
+    jar (`rr-client-services/TokenService`) does NOT actually verify
+    signatures (it calls `isSigned()` &mdash; a structural check &mdash;
+    then Jackson-deserializes the payload directly). The new agent
+    + VALC 2.0 use modern jjwt's `parseSignedClaims()` which DOES
+    verify. Pre-Phase-2 validation step: decode a real customer
+    token, verify the signature + `exp` against the candidate
+    VALC 2.0 public key end-to-end before silent push. Tokens that
+    quietly worked on V7 may be rejected by the new agent. Detail in
+    [`RapidReconciler-Agent/docs/gotchas.md`](../../../RapidReconciler-Agent/docs/gotchas.md)
+    &sect; *Signature verification difference*.
 12. **Schema ETL + password-store strategy** (Phase 0 #5, #6) &mdash;
     migrate users / clients / permissions / deploy history into VALC
     2.0 Postgres; confirm the password hash format carries over (if
