@@ -807,6 +807,46 @@ DB-add):**
 
 ---
 
+## Session summary (2026-05-30 evening) &mdash; Manage Client modal restructure + Clients grid refactor
+
+Long batched session focused on the install-workflow surface. Two PRs already merged earlier today (Valc #35 phase-2 polish + Install tab slice 1; UI #156 plan doc sweep); this session shipped a second pile that landed in one Valc PR. Highlights:
+
+**Add Client modal redesign.** Dropped Agent Public/Internal IP fields (they belong on the Topology tab now and the new hire doesn&rsquo;t know IPs at create-time anyway). Added a License Term pill row (1 / 2 / 3 years / Custom) that auto-computes End Date from Start Date. Added Licensed Modules checkboxes (Inventory pre-checked; Admin forced true on the backend regardless of payload). Primary Contact Email is now **mandatory and email-validated** &mdash; Backup Contact stays disabled until Primary is a valid email, Create button stays disabled until Name + Primary are both valid. Labels are explicit ("Primary Contact Email" / "Backup Contact Email" vs the old "Contact 1 / 2"). Button text "Create Client" replaces the generic "Confirm". RFC 5737 doc-IP placeholders instead of the real `74.235.230.127`.
+
+**Send installation prep action on the Install tab.** New V22 migration adds `clients.prep_doc_sent_at`. `ClientReadinessService.sendPrepDoc()` wraps the existing `EmailService.sendToEach()` so STUBBED / SENT modes + `email_audit` history apply; the Install tab&rsquo;s blocked card now surfaces a Send / Resend installation prep button with a "Last sent X to Y" hint. Templated subject + body links to the prep doc URL.
+
+**Clients grid refactor.** `DashboardController.snapshot()` now drives from `client_repo.findByDeletedAtIsNull()` (with sort by name) instead of the static `registry.getAgents()` &mdash; a new customer added via Create Client appears on the grid the moment it commits. AgentStatusDto grew: `databases` list (with per-DB online flag) + `databasePillLabel/Kind` + `prepDocSentAt` + `nextStep` + `nextStepKind`. New `testAgent` model attribute decouples the sidebar Test Agent control + popover from the now-alphabetized `agents` list (was breaking when Mauro sorted before RR Test Server &mdash; `agents[0].id` was "client-5", and the Start button POSTed `/api/agents/client-5/start` &rarr; 404).
+
+**Card redesign.** Drawer gone entirely. Pills are now: **Agent** (green / red), **Database** (Available / Multiple / Offline / No databases, with click-to-open popover always listing each registered DB + its status), **System Status** (label visible, color + tooltip-with-message), **Active toggle** (click to flip; PUT `/active` + reload). Delete icon only on inactive cards. V7/V8 pill removed from the card (lives only on Client Details now). Download icon removed (System Status reports happen per-database now). Show-inactive page toggle replaces the V7-era Actives dropdown; count reads honest as "N of M clients" when filter is on. Per-card **next-step hint** (8 first-match-wins rules in `DashboardController.populateNextStep`) lives in the whitespace below the pills and live-updates via `poll()` &mdash; the new hire reads the card and knows the next click without needing a runbook.
+
+**Modal-side wiring.** `loadClientDetailsTab(clientId)` fetches the client&rsquo;s actual data on Manage open and populates every form field &mdash; was Thymeleaf-bound to RR Test Server only, so any Manage click on a non-default client showed the wrong data. Active toggle removed from the Client Details settings strip (single source of truth = card pill). `PUT /api/v1/admin/clients/{id}/active` + `DELETE /api/v1/admin/clients/{id}` endpoints added (soft-delete refuses if `active=true`).
+
+**Bug fixes that landed mid-session:**
+- The sidebar Test Agent popover&rsquo;s `pop.addEventListener('click', e =&gt; e.stopPropagation())` was eating the click bubble before the document-level `[data-action]` delegate could see it &mdash; Start in the popover did literally nothing. Replaced with an outside-click closer that skips when the target is inside `.agent-pop`.
+- Sidebar dot now flips to "checking" yellow + popover auto-closes on a successful Start so the new hire gets immediate feedback instead of waiting 5s for the next poll.
+
+**Mauro&rsquo;s topology populated** via manual curl &mdash; CONFIG_2 + APP_SERVER + SQL_SERVER rows in `client_servers`. Demonstrates what the auto-fill end-state looks like once v360 starts emitting facts in heartbeats. The user&rsquo;s observation that drove this design: *"I would sit here and watch the agent button on the card turn green without doing anything"* &mdash; no "Auto-fill" button, the values flow in via heartbeat and the UI just reflects them. Saved at
+[`project_heartbeat_auto_fill_pending`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/project_heartbeat_auto_fill_pending.md).
+
+**V7 install model captured.** V7 ships a per-customer Inno Setup `.exe` (~50MB+ with bundled JRE) that lays down `C:/Program Files/Rapid Reconciler/` &mdash; WinSW wrapper + Agent jar + truststore + Inno uninstaller. V8 should match the same delivery UX (customer admins already know it). Memory at
+[`reference_v7_install_model`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/reference_v7_install_model.md). V8 keeps V7&rsquo;s **two-layer architecture** (Agent + Services) &mdash; I tried to collapse them earlier in the session and was corrected; see updated
+[`reference_agent_vs_services_naming`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/reference_agent_vs_services_naming.md).
+
+### Tomorrow&rsquo;s open items (top of next-session queue)
+
+1. **Heartbeat &rarr; `client_servers` auto-fill** &mdash; the natural next slice. Agent emits hostname / internal IP / external IP / OS / Java in heartbeat; VALC&rsquo;s `HeartbeatListenerRegistrar` UPSERTs the APP_SERVER row. Topology tab renders the populated values without anyone clicking anything. Spec lives in
+[`project_heartbeat_auto_fill_pending`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/project_heartbeat_auto_fill_pending.md).
+
+2. **V8 install bundle generation** &mdash; "Generate install bundle" today only auto-seeds RRAdmin + returns a temp password. Next step is producing an Inno Setup `.exe` per customer (WinSW wrapper + bundled JRE + Agent jar + customer cert + pre-baked config) + the one-time signed download URL + the email to Contact 1.
+
+3. **Install doc rewrite** at
+[`GSIRRTech/installing-client-in-valc.html`](../GSIRRTech/installing-client-in-valc.html) reflecting the new workflow: Add Client &rarr; Send prep &rarr; Import email &rarr; Topology auto-fills from heartbeat &rarr; Add database &rarr; Services jar deploys per-DB &rarr; Live. The V7-style "manual everything" runbook is misaligned with the new VALC 2.0 surface.
+
+4. **Slice 2 of the Install tab** &mdash; pre-flight validation grid (7 checks: network, SQL reach, SQL auth, JDBC driver, JDE reach, SSIS env, cert trusted). Each individually re-runnable. Spec in
+[`docs/plans/manage-client-workflow-restructure.md`](../docs/plans/manage-client-workflow-restructure.md).
+
+---
+
 ## Prompts #2&ndash;#5 summary (2026-05-29)
 
 What landed across the four-prompt batch:
@@ -1208,37 +1248,16 @@ take/skip/page/pageSize}` per the IntegrityController catalog row.
 
 ### Next-session queue
 
-**PRIORITY &mdash; VALC 2.0 "Start" button on the Test agent
-popover is silently broken.** Clicking Start in the Clients
-dashboard&rsquo;s Test agent popover does not actually spawn the
-agent JVM. The agent has to be launched manually via
-`pwsh C:/source/repos/RapidReconciler-Agent/setup/run-test-agent.ps1`.
-Most likely causes (in order):
-
-1. `AgentLifecycleService.start()` swallows the spawn exception &mdash;
-   `ProcessBuilder.start()` throws but the `try/catch` only logs
-   at WARN, and the controller&rsquo;s `start` endpoint returns 500
-   without surfacing the error to the dashboard&rsquo;s toast.
-2. The configured `valc.dashboard.agents[].jar-path` in
-   `application.yml`
-   (`C:/source/repos/RapidReconciler-Agent/target/client-services-0.1.0-SNAPSHOT.jar`)
-   doesn&rsquo;t exist locally because the Agent repo hasn&rsquo;t been
-   built since the last `mvn clean`. Verify with
-   `ls C:/source/repos/RapidReconciler-Agent/target/*.jar`.
-3. The `java-home` path
-   (`C:/Development/jdk-21.0.11+10`) may have shifted between
-   JDK installs.
-
-Repro: stop the agent (`taskkill /F` on whatever PID owns :34537),
-click Start in the Clients dashboard, watch the toast + the agent's
-stdout log under `agent-logs/`. Fix outline: surface the spawn
-exception through to the dashboard toast + add a precheck that the
-jar + JDK paths exist before spawning, with a clear error message
-naming the missing path. Side effect of the current bug: agents
-started externally don&rsquo;t have a `Process` handle in
-`AgentLifecycleService.running`, so the popover&rsquo;s Stop button
-also no-ops &mdash; only Force-stop works (it kills the PID
-listening on the port).
+**~~PRIORITY &mdash; VALC 2.0 "Start" button on the Test agent
+popover is silently broken.~~** FIXED 2026-05-30 evening. Root
+cause was `pop.addEventListener('click', e =&gt; e.stopPropagation())`
+eating the click bubble before the document-level `[data-action]`
+delegate could see Start. Patched by replacing the swallow with a
+smart outside-click closer (`if (ev.target.closest('.agent-pop'))
+return; closeAllPops();`). Start / Stop / Force-stop all reach the
+delegate now. Sidebar dot also flips to "checking" yellow + popover
+auto-closes on a successful Start so the new hire gets immediate
+visual feedback instead of waiting on the next 5s poll.
 
 **mini-VALC login + password-policy enforcement** &mdash; the
 Admin &rarr; Users page surfaces and writes
