@@ -106,10 +106,12 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <li class="sub" data-target="section-3a"><a href="#section-3a" onclick="goAnchor('section-3a'); return false;">3a. Absorbed from v359</a></li>
 <li class="sub" data-target="section-3b"><a href="#section-3b" onclick="goAnchor('section-3b'); return false;">3b. Net-new</a></li>
 <li class="sub" data-target="section-3c"><a href="#section-3c" onclick="goAnchor('section-3c'); return false;">3c. Not yet implemented</a></li>
-<li data-target="section-4"><a href="#section-4" onclick="goAnchor('section-4'); return false;">4. Will it support v359 customers?</a></li>
-<li class="sub" data-target="section-4a"><a href="#section-4a" onclick="goAnchor('section-4a'); return false;">4a. Cutover preconditions</a></li>
-<li data-target="section-5"><a href="#section-5" onclick="goAnchor('section-5'); return false;">5. Agent updates and clean installs</a></li>
-<li class="sub" data-target="section-5a"><a href="#section-5a" onclick="goAnchor('section-5a'); return false;">5a. When a clean install is required</a></li>
+<li data-target="section-4"><a href="#section-4" onclick="goAnchor('section-4'); return false;">4. Auth surface</a></li>
+<li class="sub" data-target="section-4a"><a href="#section-4a" onclick="goAnchor('section-4a'); return false;">4a. Token-shape divergence</a></li>
+<li data-target="section-5"><a href="#section-5" onclick="goAnchor('section-5'); return false;">5. Will it support v359 customers?</a></li>
+<li class="sub" data-target="section-5a"><a href="#section-5a" onclick="goAnchor('section-5a'); return false;">5a. Cutover preconditions</a></li>
+<li data-target="section-6"><a href="#section-6" onclick="goAnchor('section-6'); return false;">6. Agent updates and clean installs</a></li>
+<li class="sub" data-target="section-6a"><a href="#section-6a" onclick="goAnchor('section-6a'); return false;">6a. When a clean install is required</a></li>
 <li data-target="section-see-also"><a href="#section-see-also" onclick="goAnchor('section-see-also'); return false;">See also</a></li>
 </ul>
 </aside>
@@ -304,21 +306,71 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 </section>
 
 <section id="section-4">
-<h2>4. Will the new agent support existing v359 customers?</h2>
+<h2>4. Auth surface</h2>
+<p>The v359 Services jar is a <strong>token verifier only</strong>. Login and change-password live entirely on the Azure VALC SPA (<code>staging-valcspa.cloudapp.net</code> / <code>rr-valc-spa.cloudapp.net</code>). There is no <code>LoginController</code>, <code>AuthController</code>, or <code>PasswordController</code> in either v359 or the new agent &mdash; both expect a pre-issued JWT in the <code>Authorization: Bearer</code> header.</p>
+
+<div class="callout important">
+  <p><strong>Verification difference (security upgrade in the new stack).</strong> The V7 <code>TokenService.parseToken</code> calls <code>JwtParser.isSigned(token)</code> (a structural check only) then Jackson-deserializes the payload directly &mdash; the RSA signature is never actually verified against the public key. The new agent and VALC 2.0 both use modern jjwt 0.12 <code>parseSignedClaims()</code>, which DOES verify.</p>
+  <p><strong>Cutover implication:</strong> the new agent will reject any malformed-but-structurally-valid tokens that quietly worked in production. Pre-flight a real customer token before a customer cutover. Full detail in <code>RapidReconciler-Agent/docs/gotchas.md</code> &sect; <em>Signature verification difference</em>.</p>
+</div>
+
+<p>When VALC 2.0 takes over as the auth target it must mirror Azure VALC&rsquo;s wire shape exactly:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Endpoint</th><th>Owner today</th><th>Owner after VALC 2.0 cutover</th><th>Wire shape</th></tr></thead>
+<tbody>
+<tr><td><code>POST /resource/client/login</code></td><td>Azure SPA</td><td>VALC 2.0</td><td>Request <code>{username, password, rememberme}</code> &rarr; response <code>{token}</code></td></tr>
+<tr><td><code>POST /resource/client/change-password</code></td><td>Azure SPA UI (out of band)</td><td>VALC 2.0</td><td>Net-new in the V8 context; spec TBD</td></tr>
+</tbody></table></div>
+
+<p><strong>JWT claim shape</strong> &mdash; verified against the V7 source (the minter <code>LoginClaims</code> and the consumer DTO <code>UserRequest</code>). The example below uses fictional values:</p>
+<pre><code>{
+  "user": { "id": 82, "fn": "Jane Analyst", "c": "Example Server",
+            "u": "jane.analyst@example.com", "rm": 0 },
+  "dbs":  [ { "ip": "host:port", "k": "...", "n": "RapidReconciler_NA",
+              "i": [...inventoryCompanies...],
+              "t": [...inTransitCompanies...],
+              "p": [...poReceiptsCompanies...],
+              "a": true,
+              "as": true, "aite": false, "aprs": false,
+              "rs": true, "su": false } ],
+  "iat":  ..., "exp": ...
+}</code></pre>
+<p>V7&rsquo;s <code>LoginClaims.ServicesInstanceVO</code> emits all 12 db-level fields. V7&rsquo;s Services jar reads only the first 7 (<code>ip,k,n,i,t,p,a</code>) and Jackson-drops the rest; V7&rsquo;s SPA reads the permission flags for UI gating. Every short key is a <code>@JsonProperty</code> annotation on the Java class &mdash; <strong>do not invent keys</strong> by guessing from the long names.</p>
+</section>
+
+<section id="section-4a">
+<h3>4a. Known token-shape divergence (V7 vs VALC 2.0)</h3>
+<p>The real divergence is not between v359 and the new agent &mdash; the fields exist in V7 tokens and the new agent reads them correctly. It is between <strong>V7&rsquo;s and VALC 2.0&rsquo;s minted shapes</strong>, which the new agent can&rsquo;t serve both of. Open items:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Issue</th><th>What</th><th>Resolution</th></tr></thead>
+<tbody>
+<tr><td><code>dbs[i].t</code> key collision</td><td>V7 mints as in-transit companies array; VALC 2.0 mints as a tabs object <code>{inv,it,adm,por}</code></td><td>Split the key. Keep <code>t</code> = in-transit array (matches V7); move VALC 2.0&rsquo;s tabs object to a new key.</td></tr>
+<tr><td><code>dbs[i].p</code> absent in VALC 2.0</td><td>V7 mints PO Receipts companies array; VALC 2.0 omits it</td><td>Extend VALC 2.0&rsquo;s <code>buildDbsScoped</code> to emit <code>p</code>. Required before PO Receipts ships in the new agent.</td></tr>
+<tr><td>Username source</td><td>New agent reads top-level <code>sub</code> (correct for VALC 2.0); V7 has no <code>sub</code> (username at <code>user.u</code>)</td><td>Either lock VALC 2.0 as the only minter the new agent talks to, or have the new agent read both <code>sub</code> and <code>user.u</code> (defensive).</td></tr>
+<tr><td><code>as</code> / <code>aite</code> semantic squash</td><td>V7: <code>ssisAuthorized</code> / <code>inTransitExcludeAuthorized</code>. VALC 2.0 mints both as <code>importJde</code></td><td>Either rename the consumer fields to reflect VALC 2.0 semantics, or restore the V7 semantics in VALC 2.0&rsquo;s minter.</td></tr>
+<tr><td><code>dbs[i].n</code> scoping</td><td>&#10003; DONE</td><td>&mdash;</td></tr>
+</tbody></table></div>
+<p>Full breakdown: <code>RapidReconciler-Agent/docs/v359-auth.md</code> &sect; <em>Token shape divergence</em>.</p>
+</section>
+
+<section id="section-5">
+<h2>5. Will the new agent support existing v359 customers?</h2>
 <p><strong>Mechanically, yes.</strong> The deploy story is unchanged: a customer can flip the <em>Services</em> version in VALC&rsquo;s <em>Manage Deploy</em> panel, the existing Agent jar pulls the new jar via JMS, starts it, and verifies it via the Actuator endpoints. No customer-side configuration change required.</p>
-<p><strong>Functionally, not yet.</strong> Three caveats block a real customer cutover today:</p>
+<p><strong>Functionally, not yet.</strong> Four caveats block a real customer cutover today:</p>
 <ol>
   <li><strong>Endpoint coverage is V8-shaped.</strong> The table above lists ~15 endpoint groups the new agent doesn&rsquo;t expose. A customer whose deployed AngularJS SPA exercises In Transit, PO Receipts, Roll Forward, the daily-probe GET, PDF downloads, or any Admin module screen would see those screens break. The legacy SPA hasn&rsquo;t been smoke-tested against the new agent &mdash; it currently runs against v359 on its own host (<code>staging-rr-spa.azurewebsites.net</code> / <code>rapidreconciler.getgsi.com</code>).</li>
+  <li><strong>V7 vs VALC 2.0 token-shape divergence</strong> (see &sect; 4a). The new agent today is VALC-2.0-native &mdash; it reads top-level <code>sub</code> for username (which V7 tokens lack) and has no extraction path for <code>dbs[i].t</code> (in-transit companies) or <code>dbs[i].p</code> (PO Receipts companies). Real legacy-VALC-issued tokens hit the new agent with a null username and no In Transit / PO Receipts scoping. Resolution: pick one canonical token shape (most likely VALC 2.0&rsquo;s) and either retire legacy VALC before deploying the new agent, or have the new agent defensively read both shapes.</li>
   <li><strong>No production release has been cut.</strong> The new code currently runs only on the dev box (<code>localhost:34537</code> / <code>rrtest-rrsqltest.getgsi.com:34537</code>). The repo&rsquo;s <code>main</code> branch hasn&rsquo;t been tagged <code>v360</code> or otherwise blessed for deploy. The artifact in <code>RapidReconciler-Agent/artifacts/v359/</code> is still the production reference.</li>
   <li><strong>SQL compatibility floor still applies.</strong> Customers may sit at SQL Server compat level 100 (per <code>feedback_sql_compat_floor</code> and <code>RRV8/WORKFLOW.md</code> &sect; <em>SQL targets the lowest customer compat level</em>). Every SQL the new agent issues must clear that bar. Current code does; future changes have to keep clearing it. The dev DB sits at compat 100 to catch regressions early.</li>
 </ol>
 </section>
 
-<section id="section-4a">
-<h3>4a. Cutover preconditions</h3>
+<section id="section-5a">
+<h3>5a. Cutover preconditions</h3>
 <p>In rough order, a customer-ready cutover would need:</p>
 <ol>
   <li>Close the legacy-SPA coverage gap above (or sunset the legacy SPA in favor of V8 for the affected modules).</li>
+  <li>Fix the JWT claim-shape divergence (caveat 2 above). Cheap, and unblocks correct behavior on every existing customer login.</li>
   <li>Tag a release on <code>main</code> and pin the corresponding <code>artifacts/v360/</code> directory.</li>
   <li>Validate the actuator + JMS plumbing against a real Agent install (the <code>actuator-deploy-integration.md</code> spec, exercised end-to-end).</li>
   <li>Pilot on one internal install / one consenting customer with a rollback plan to v359.</li>
@@ -328,8 +380,8 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 </div>
 </section>
 
-<section id="section-5">
-<h2>5. Agent updates and clean installs</h2>
+<section id="section-6">
+<h2>6. Agent updates and clean installs</h2>
 <p><strong>No</strong> &mdash; agent-layer changes don&rsquo;t require a clean install. In-place updates via JMS are the whole point of the architecture.</p>
 
 <p>The mechanism is <code>SelfUpdateMessage</code> in <code>rr-common</code>:</p>
@@ -358,8 +410,8 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 </div>
 </section>
 
-<section id="section-5a">
-<h3>5a. When a clean install IS required</h3>
+<section id="section-6a">
+<h3>6a. When a clean install IS required</h3>
 <p>Exceptions, not the norm. Anything in the jar itself flows through <code>SelfUpdateMessage</code>; anything outside the jar needs manual intervention.</p>
 <div class="table-wrap"><table>
 <thead><tr><th>Trigger</th><th>Why self-update can&rsquo;t cover it</th><th>Mitigation</th></tr></thead>
