@@ -7,7 +7,7 @@ Azure host before any customer touches the new stack.
 
 **Source:** session conversation 2026-05-27 (Prompt #1, Foundation
 + Environment Setup) plus Phase 0 of
-[`valc-2-cutover-plan.md`](valc-2-cutover-plan.md).
+[`rrv8-cutover-plan.md`](rrv8-cutover-plan.md).
 
 **Reuses existing framework:** the legacy production stack already
 runs on Azure VMs reached through the broker / agent JMS protocol,
@@ -72,7 +72,7 @@ release-notes section so the audit trail stays continuous.
       `.pem` shipped with the QA Services jar at
       `setup/valc-public-key.pem`.
 - [ ] TLS cert for `qa-valc.<gsi-domain>`. DigiCert path is wired
-      in VALC 2.0 ([`/valc/certificate`](../../GSIRRTech/valc-2-cutover-plan.html));
+      in VALC 2.0 ([`/valc/certificate`](../../GSIRRTech/rrv8-cutover-plan.html));
       generate the CSR there, paste the signed cert back in.
 - [ ] Hosts-file alias decision: legacy broker on the test customer
       box needs to reach the QA VM at the same hostname production

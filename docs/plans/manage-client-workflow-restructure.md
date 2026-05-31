@@ -49,7 +49,7 @@ and the full install-doc rewrite remain in a single consolidated chunk.
   reach, SQL auth, JDBC driver, JDE reach, SSIS env, cert trusted)
   with per-check Re-run; deploy step progression; Companies re-grant
   after first SSIS pull; full rewrite of
-  [`installing-client-in-valc.html`](../../GSIRRTech/installing-client-in-valc.html)
+  [`using-valc.html`](../../GSIRRTech/using-valc.html)
   to reflect the V8 workflow end-to-end (today the doc carries
   inline "VALC 2.0 update" callouts at the top + on the most-changed
   steps as a stand-in until the rewrite lands).

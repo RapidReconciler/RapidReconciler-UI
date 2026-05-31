@@ -70,8 +70,8 @@ the new session at.
 > (internal identifiers). See memory
 > [`project_valc_2_naming`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/project_valc_2_naming.md)
 > &mdash; also has the Coral context (10-hr/week engagement; the
-> cutover plan doc at `docs/plans/valc-2-cutover-plan.md` +
-> `GSIRRTech/valc-2-cutover-plan.html` is sanitized for Coral
+> cutover plan doc at `docs/plans/rrv8-cutover-plan.md` +
+> `GSIRRTech/rrv8-cutover-plan.html` is sanitized for Coral
 > readability).
 >
 > **Check v359 before designing anything new (2026-05-25)**: the
@@ -122,10 +122,10 @@ the new session at.
 > on session start:
 > - `mini-valc-database-provisioning-production-ready.md` &mdash;
 >   7-phase plan for Add Database &rarr; spawn Services jar
-> - `valc-2-cutover-plan.md` &mdash; phased cutover from legacy
+> - `rrv8-cutover-plan.md` &mdash; phased cutover from legacy
 >   Azure VALC + v359 to VALC 2.0 + new Services jar (also
 >   rendered as
->   [`GSIRRTech/valc-2-cutover-plan.html`](../GSIRRTech/valc-2-cutover-plan.html)
+>   [`GSIRRTech/rrv8-cutover-plan.html`](../GSIRRTech/rrv8-cutover-plan.html)
 >   for the mini-VALC sidebar)
 > - `workspace-cwd-migration.md` &mdash; plan to move Claude
 >   Code's CWD up to `C:/source/repos/` so cross-repo work uses
@@ -729,7 +729,7 @@ Long batched session driving the Manage Client modal toward "see green, go play 
 
 **Install tab reposition (reorder only).**
 
-- Tab moves from position 4 (after Databases) to position 2 (right after Client Details). The V8 workflow inverts V7's order: the agent installs *before* topology is configured because Topology auto-fills from heartbeats once the agent connects. The simple button reorder + a workflow callout at the top of the install doc + a per-step "VALC 2.0 update" callout on Step 8 (Install Agent) and Step 10 (Register Database) of [`installing-client-in-valc.html`](../GSIRRTech/installing-client-in-valc.html) land today; the deeper rework (Inno bundle generator, blocked/ready state recompute, pre-flight grid, full doc rewrite) stays in a consolidated chunk.
+- Tab moves from position 4 (after Databases) to position 2 (right after Client Details). The V8 workflow inverts V7's order: the agent installs *before* topology is configured because Topology auto-fills from heartbeats once the agent connects. The simple button reorder + a workflow callout at the top of the install doc + a per-step "VALC 2.0 update" callout on Step 8 (Install Agent) and Step 10 (Register Database) of [`installing-client-in-valc.html`](../GSIRRTech/using-valc.html) land today; the deeper rework (Inno bundle generator, blocked/ready state recompute, pre-flight grid, full doc rewrite) stays in a consolidated chunk.
 
 **Mauro is live as the heartbeat test case.** A parallel V8 Services jar runs on port 34538 reporting as `client_id=5`. His real V7 agent (PID 3628 on the same box, pointing at staging-valcspa.cloudapp.net) stays untouched. Confirmed: heartbeats every 30s, APP_SERVER row populated with `reported_hostname=RAPIDREC-SQL-TE`, OS/Java/free disk/last-heartbeat all surfaced on the Topology tab, Agent pill green on the card via heartbeat-freshness alone (no HTTP probe).
 
@@ -741,7 +741,7 @@ Long batched session driving the Manage Client modal toward "see green, go play 
    - Rework Install tab Blocked / Ready / Success states for the new tab position (right after Client Details, before Topology).
    - Pre-flight validation grid (7 checks: network / SQL reach / SQL auth / JDBC driver / JDE reach / SSIS env / cert trusted) with per-check Re-run.
    - Real-time "agent connected" indicator on the Install tab when the first heartbeat lands.
-   - Full rewrite of [`GSIRRTech/installing-client-in-valc.html`](../GSIRRTech/installing-client-in-valc.html) to reflect the V8 workflow end-to-end (today carries inline "VALC 2.0 update" callouts at the top + on the most-changed steps).
+   - Full rewrite of [`GSIRRTech/using-valc.html`](../GSIRRTech/using-valc.html) to reflect the V8 workflow end-to-end (today carries inline "VALC 2.0 update" callouts at the top + on the most-changed steps).
 
 2. **Reset DB stored procedure name** &mdash; the 🔥 icon on each database row hits `POST /databases/{id}/reset` which today returns 501 with a "specify the sproc name" message. Wire the actual sproc + parameters in `ClientDatabaseController.reset()` once the V7 sproc name + signature are confirmed.
 
@@ -898,7 +898,7 @@ Long batched session focused on the install-workflow surface. Two PRs already me
 2. **V8 install bundle generation** &mdash; "Generate install bundle" today only auto-seeds RRAdmin + returns a temp password. Next step is producing an Inno Setup `.exe` per customer (WinSW wrapper + bundled JRE + Agent jar + customer cert + pre-baked config) + the one-time signed download URL + the email to Contact 1.
 
 3. **Install doc rewrite** at
-[`GSIRRTech/installing-client-in-valc.html`](../GSIRRTech/installing-client-in-valc.html) reflecting the new workflow: Add Client &rarr; Send prep &rarr; Import email &rarr; Topology auto-fills from heartbeat &rarr; Add database &rarr; Services jar deploys per-DB &rarr; Live. The V7-style "manual everything" runbook is misaligned with the new VALC 2.0 surface.
+[`GSIRRTech/using-valc.html`](../GSIRRTech/using-valc.html) reflecting the new workflow: Add Client &rarr; Send prep &rarr; Import email &rarr; Topology auto-fills from heartbeat &rarr; Add database &rarr; Services jar deploys per-DB &rarr; Live. The V7-style "manual everything" runbook is misaligned with the new VALC 2.0 surface.
 
 4. **Slice 2 of the Install tab** &mdash; pre-flight validation grid (7 checks: network, SQL reach, SQL auth, JDBC driver, JDE reach, SSIS env, cert trusted). Each individually re-runnable. Spec in
 [`docs/plans/manage-client-workflow-restructure.md`](../docs/plans/manage-client-workflow-restructure.md).
@@ -995,7 +995,7 @@ What landed across the four-prompt batch:
 >    [`RapidReconciler-DB/CLAUDE.md`](../../RapidReconciler-DB/CLAUDE.md),
 >    [`RapidReconciler-SSIS/CLAUDE.md`](../../RapidReconciler-SSIS/CLAUDE.md).
 > 3. **The cutover plan** (post-Prompt #1 reframe):
->    [`RapidReconciler-AI/docs/plans/valc-2-cutover-plan.md`](../docs/plans/valc-2-cutover-plan.md).
+>    [`RapidReconciler-AI/docs/plans/rrv8-cutover-plan.md`](../docs/plans/rrv8-cutover-plan.md).
 >    Now framed as the **V8 cutover** (with VALC 2.0 + new
 >    Services jar as the foundation), with V7 &harr; V8
 >    per-customer switching mechanism documented, a Work queue
@@ -1063,7 +1063,7 @@ What landed across the four-prompt batch:
 > 12. **Saved plans live at
 >    [`docs/plans/`](../docs/plans/)** &mdash; reviewed on session
 >    start per CLAUDE.md. Active plans (post-Prompt #1):
->    - `valc-2-cutover-plan.md` &mdash; the V8 cutover plan.
+>    - `rrv8-cutover-plan.md` &mdash; the V8 cutover plan.
 >      Read-on-start required. Updated in Prompt #1.
 >    - `dev-multi-agent-setup.md` &mdash; dev-box parity with V7's
 >      one-Services-jar-per-database architecture. **New 2026-05-30.**
@@ -1085,7 +1085,7 @@ What landed across the four-prompt batch:
 >      `dmaai-page-overlay-table.md`,
 >      `self-guided-tour-replacement.md`.
 > 13. **Sensitive-framing note** &mdash; the VALC 2.0 cutover plan
->    (markdown + HTML render at `GSIRRTech/valc-2-cutover-plan.html`)
+>    (markdown + HTML render at `GSIRRTech/rrv8-cutover-plan.html`)
 >    is **sanitized for Coral readability**. Coral is a third-
 >    party UI vendor on a 10-hour/week engagement; the cutover
 >    plan describes the technical modernization neutrally, NOT
@@ -1103,7 +1103,7 @@ What landed across the four-prompt batch:
 >    git -C RapidReconciler-Valc  log --oneline -10
 >    ```
 >    The cutover plan's Release-notes section
->    (`RapidReconciler-AI/docs/plans/valc-2-cutover-plan.md`)
+>    (`RapidReconciler-AI/docs/plans/rrv8-cutover-plan.md`)
 >    tracks cutover-relevant PRs going forward.
 >
 > After reading the above, **stand by for Prompt #6** (the

@@ -5065,14 +5065,36 @@
         if (!IS_DEMO) flashStatus('Switched DB — fetches will use new agent when wired');
       });
     });
-    // Wire admin actions. Sign-out is real (calls rrLogout); others
-    // are placeholders.
+    // Wire admin actions. Sign-out is real (calls rrLogout);
+    // import-jde fires the SQL Agent job VALC has configured for the
+    // active database (server-side via the Services jar). Restart
+    // Service stays a placeholder until the agent endpoint exists.
     menu.querySelectorAll('.user-menu-action[data-action]').forEach(btn => {
-      btn.addEventListener('click', (e) => {
+      btn.addEventListener('click', async (e) => {
         e.stopPropagation();
         const action = btn.dataset.action;
         if (action === 'sign-out') { rrLogout(); return; }
-        const labels = { 'import-jde': 'Import JDE data', 'restart-service': 'Restart Service' };
+        if (action === 'import-jde') {
+          hidePopovers();
+          if (IS_DEMO) {
+            flashStatus('Import JDE — demo mode, no agent call');
+            return;
+          }
+          flashStatus('Starting Import JDE…');
+          try {
+            await rrFetch('jobs/refresh/start', { method: 'POST' });
+            flashStatus('Import JDE started.');
+          } catch (err) {
+            // 409 means VALC hasn't been told which SQL Agent job to
+            // fire for this DB yet — surface the actionable message.
+            const msg = String(err && err.message || err);
+            flashStatus(/409/.test(msg)
+              ? 'No refresh job configured — set Refresh Job Name in VALC'
+              : 'Import JDE failed: ' + msg);
+          }
+          return;
+        }
+        const labels = { 'restart-service': 'Restart Service' };
         flashStatus(labels[action] + ' — not wired in mockup');
         hidePopovers();
       });
