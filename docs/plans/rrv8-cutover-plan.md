@@ -130,7 +130,7 @@ server side; nothing reaches a customer until it's all done.
    &sect; *Token shape divergence*). Real divergence is between
    V7's and VALC 2.0's minted shapes (not phantom fields in the new
    agent as previously framed). Chunk queued in
-   [`RRV8/HANDOFF.md`](../../RRV8/HANDOFF.md).
+   [`RapidReconciler-Valc/HANDOFF.md`](../../../RapidReconciler-Valc/HANDOFF.md).
 2. **JMS protocol parity** &mdash; VALC 2.0's Artemis broker must
    accept connections from existing `rr-valc-agent.jar` instances
    using the legacy CORE protocol, the existing truststore, and
@@ -564,7 +564,7 @@ breadth, then the cutover-infrastructure long poles.
    popover Start silently no-ops; agent must be launched via
    `run-test-agent.ps1`. Surface the `ProcessBuilder` exception to the
    dashboard toast + precheck the jar/JDK paths. Full write-up at the
-   top of `RRV8/HANDOFF.md` Next-session queue. No dependencies.
+   top of `RapidReconciler-Valc/HANDOFF.md` Next-session queue. No dependencies.
 5. **DMAAI page `beforeunload` guard** &mdash; warn the analyst when
    closing with unsaved responses. Tiny. No dependencies.
 

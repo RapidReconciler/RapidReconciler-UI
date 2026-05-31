@@ -240,7 +240,8 @@ Then:
    should show two rows, both green.
 2. Open V8 (`http://localhost:8765/RRV8/inventory-reconciliation.html`).
 3. Sign in via VALC&rsquo;s auth flow (once it ships) OR hand-mint a
-   token via the existing DevTools snippet pattern in HANDOFF.md.
+   token via the existing DevTools snippet pattern in
+   [`RapidReconciler-Valc/HANDOFF.md`](../../../RapidReconciler-Valc/HANDOFF.md).
 4. The user-menu DB switcher should now show **both** databases.
 5. Picking each one should change the numbers on the page.
 
