@@ -70,7 +70,7 @@ RapidReconciler-UI/                  ← repo root
 │   ├── tech-client-management.html  ← workflow: install → go-live
 │   ├── start-here-{dba,network-tech,developer}.html
 │   ├── installing-production-database.html
-│   ├── installing-client-in-valc.html
+│   ├── using-valc.html
 │   ├── certificate-management.html
 │   ├── install-troubleshooting.html ← search hub for install scenarios
 │   └── install-scenarios/           ← 16 install scenario pages

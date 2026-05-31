@@ -1,4 +1,4 @@
-# Plan: V8 cutover (VALC 2.0 + new Services jar foundation)
+# RRV8 Cutover Plan (VALC 2.0 + new Services jar foundation)
 
 **Status:** Spec. In progress. Foundation pieces have landed
 (VALC 2.0 control plane, new Services jar core endpoints, JWT

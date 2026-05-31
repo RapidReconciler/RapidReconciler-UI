@@ -119,6 +119,8 @@ window.RR_TEST_AGENT_AREAS = [
   'poll',
   'system-status',
   'available-periods',
+  // Admin actions
+  'jobs/refresh/start',
   // Diagnostics endpoints that don't exist on the new agent yet but
   // are routed here anyway so V8 hits the local agent (404 cleanly)
   // instead of the JWT's activeDb.ip (an external GSI host the dev
