@@ -15,8 +15,8 @@ alongside the source they describe.
 ## What's still here
 
 - This stub README, so existing links in
-  [`RRV8/HANDOFF.md`](../../RRV8/HANDOFF.md) and elsewhere still
-  resolve.
+  [`RapidReconciler-Valc/HANDOFF.md`](../../../RapidReconciler-Valc/HANDOFF.md)
+  and elsewhere still resolve.
 - [`reconciliation-rows.md`](reconciliation-rows.md) &mdash; a thin
   redirect to the new location.
 
