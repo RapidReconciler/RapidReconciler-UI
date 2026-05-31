@@ -970,147 +970,159 @@ What landed across the four-prompt batch:
 ## Resume prompt
 
 > **Open this session at CWD `C:/source/repos/`** (the workspace
-> root, not the UI repo). The CWD migration landed in Prompt #1
-> &mdash; per-repo CLAUDE.md files exist for all five RR repos
-> and a workspace-level `C:/source/repos/CLAUDE.md` carries
+> root, not the UI repo). Per-repo `CLAUDE.md` files cover all
+> five RR repos; workspace `C:/source/repos/CLAUDE.md` carries
 > cross-cutting rules. Memory has been copied to
-> `~/.claude/projects/C--source-repos/memory/`.
+> `~/.claude/projects/C--source-repos-RapidReconciler-AI/memory/`.
 >
-> I'm continuing the RR platform work &mdash; we're in a
-> structured 12-prompt sequence. Prompts #1&ndash;#5 have all
-> landed (cumulative summary at the top of HANDOFF.md);
-> Prompt #6 is incoming. For each prompt I also fold in
-> matching items from the cutover plan's work queue.
+> Continuing the **Add Client + production-readiness** thread.
+> Two PRs landed in the 2026-05-31 afternoon batch:
 >
-> Before doing anything else, read these in order and confirm:
+> - **Agent** &mdash; `InstallDiagnosticsCollector` pushes
+>   `sql.reachable` / `sql.rr_dbs_present` /
+>   `sql.jde_job_present` every heartbeat. Root-cause exception
+>   chain surfaces *&ldquo;Login failed for user X&rdquo;*
+>   instead of *&ldquo;Failed to obtain JDBC Connection&rdquo;*.
+>   New `GET /admin/system-status` (loopback) so VALC can stream
+>   the diagnostic xlsx without minting a JWT.
+> - **Valc** &mdash; V25 + V26 schema (category, client_install_checks).
+>   Install Progress panel replaces the old Ready/Already-seeded
+>   states on the Install tab; Details modal on every card
+>   surfaces raw signals + suggestions. `AgentLifecycleService`
+>   spawns the Services jar with V7-style CLI args
+>   (`--spring.datasource.*`, `--spring.ds.job.*`,
+>   `--valc.reporter.*`) sourced from Topology credentials
+>   (`client_servers.credentials_*`) with `client_databases.db_*`
+>   as fallback. Dev test-agent registry path removed;
+>   `start-all.ps1` no longer launches a Services jar (use
+>   VALC&rsquo;s &#x25B7; on the Databases row). Jargon sweep
+>   (&ldquo;Services jar&rdquo; &rarr; &ldquo;RR Service&rdquo;);
+>   cert chip carries Renewal + Cert Management links; sidebar
+>   test-agent control retired.
 >
-> 1. **`CLAUDE.md`** at the workspace root
->    (`C:/source/repos/CLAUDE.md`) &mdash; cross-cutting rules
->    (commit workflow, check-v359-first, VALC 2.0 naming,
->    SQL compat floor, don't-mention-preview-panel, PS5.1 UTF-8).
-> 2. **Per-repo CLAUDE.md** for whichever repo Prompt #2 touches:
->    [`RapidReconciler-AI/CLAUDE.md`](../../RapidReconciler-AI/CLAUDE.md),
->    [`RapidReconciler-Agent/CLAUDE.md`](../../RapidReconciler-Agent/CLAUDE.md),
->    [`RapidReconciler-Valc/CLAUDE.md`](../../RapidReconciler-Valc/CLAUDE.md),
->    [`RapidReconciler-DB/CLAUDE.md`](../../RapidReconciler-DB/CLAUDE.md),
->    [`RapidReconciler-SSIS/CLAUDE.md`](../../RapidReconciler-SSIS/CLAUDE.md).
-> 3. **The cutover plan** (post-Prompt #1 reframe):
->    [`RapidReconciler-AI/docs/plans/rrv8-cutover-plan.md`](../docs/plans/rrv8-cutover-plan.md).
->    Now framed as the **V8 cutover** (with VALC 2.0 + new
->    Services jar as the foundation), with V7 &harr; V8
->    per-customer switching mechanism documented, a Work queue
->    of prioritized backlog (6 tiers), and a Release-notes
->    section tracking cutover-relevant commits.
-> 4. **RRV8/WORKFLOW.md** &mdash; V8 project guide. *Production-
->    only until Inventory is complete* tenet still applies; no
->    new snapshots.
-> 5. **RRV8/HANDOFF.md** &mdash; this file. Standing-rule block
->    + Next-session queue + cumulative session notes.
-> 4. **RRV8/GRID-STANDARDS.md** &mdash; the grid-standards spec
->    (Transactions Details grid is the reference implementation).
-> 5. **RRV8/API.md** &mdash; client-side perspective; the
->    server-side controller catalog moved to the agent repo.
-> 6. **RRV8/TESTING.md** &mdash; automated-test-plan spec for V8
->    (8 tiers). Plan only; suite implementation deferred.
-> 7. **RapidReconciler-Agent repo** (sibling at
->    `C:/source/repos/RapidReconciler-Agent`) &mdash; the
->    green-field data-services agent. `src/main/java/coral/
->    rapidreconciler/client/services/{controller,repository,
->    services,beans,auth,config}/` is the implementation; all
->    v359 endpoints V8 calls are absorbed. `specs/` holds the
->    paste-ready briefs that were shipped + the planned
->    DMAAI-overlay spec. `docs/` has the controller catalog +
->    gotchas + jar-mining recipe. `setup/run-test-agent.ps1`
->    spawns it on :34537. **Default routing rule: new endpoints
->    land here, not in v359**
->    ([`feedback_v8_test_agent_default`](../../../.claude/projects/C--source-repos-RapidReconciler-UI/memory/feedback_v8_test_agent_default.md)).
-> 8. **RapidReconciler-Valc repo** (sibling at
->    `C:/source/repos/RapidReconciler-Valc`) &mdash; the mini-VALC
->    broker + control-plane dashboard. The Clients dashboard at
->    http://localhost:8080/ starts/stops/monitors data-services
->    agents (multi-DB ready via `valc.dashboard.agents[]` in
->    `application.yml`). The JMS broker piece is from earlier
->    phases &mdash; see Valc&rsquo;s own README for that.
-> 9. **RRV8 pages**: confirm all eight exist
->    (`inventory-reconciliation.html`, `inventory-transactions.html`,
->    `inventory-asof.html`, `inventory-cardex-variance.html`,
->    `accounting-dmaais.html`, `admin-companies.html`,
->    `admin-users.html`). Read targeted sections when editing;
->    inventory pages are 5-9k lines each; admin pages run ~1k.
->    The two admin pages talk to different backends &mdash;
->    Companies hits the data-services agent on :34537
->    (`rcompanies` lives per-DB on SQL Server); Users hits
->    mini-VALC on :8080 (`users` lives centrally in
->    mini-VALC&rsquo;s Postgres because one analyst spans many
->    customer DBs). config.js routes the third origin via
->    `RR_VALC_PREFIXES = ['api/v1/admin/']`.
-> 10. **Integrity-reports pass is closed.** All 11 views the
->    DB exposes are now wired (see the wrap-up table above):
->    DMAAIs has Model + Exception GL tabs; Transactions
->    detects 5.14 (cross-periods) + 5.18 (duplicate sales)
->    from authoritative integrity views; Perpetual has
->    Analyze Frozen Cost + Analyze GL Class (headless
->    analyzer handoff) and a Setup warnings band for the
->    three small per-item integrity reports. `v_integrity2_aai_discrp`
->    was dropped; no `v_integrity9` exists in the DB.
-> 11. **All repos default to `Dev` now.** The UI repo&rsquo;s
->    `main` is the stable surface "for later" (no public
->    release yet); current development lives on Dev with
->    auto-sync expected to ship between Dev and main. See
->    [`feedback_dev_default_auto_main`](../../../.claude/projects/C--source-repos-RapidReconciler-UI/memory/feedback_dev_default_auto_main.md).
->    Repo renames: `RapidReconciler-SQL` &rarr; `RapidReconciler-DB`,
->    `RapidReconciler-AI` &rarr; `RapidReconciler-UI`.
-> 12. **Saved plans live at
->    [`docs/plans/`](../docs/plans/)** &mdash; reviewed on session
->    start per CLAUDE.md. Active plans (post-Prompt #1):
->    - `rrv8-cutover-plan.md` &mdash; the V8 cutover plan.
->      Read-on-start required. Updated in Prompt #1.
->    - `dev-multi-agent-setup.md` &mdash; dev-box parity with V7's
->      one-Services-jar-per-database architecture. **New 2026-05-30.**
->      Agent + V8 routing landed; the user's tomorrow-checklist
->      (SQL clone, VALC table rows, user permissions) is in there.
->      THIS is what stops the recurring "all zeros" cycle from the
->      user-menu DB switcher.
->    - `valc-2-qa-azure-deployment.md` &mdash; QA Azure VM
->      readiness checklist. **New in Prompt #1.**
->    - `branding-standards.md` &mdash; GSIBranding asset
->      standards + remediation list. **New in Prompt #1.**
->    - `mini-valc-database-provisioning-production-ready.md`
->      &mdash; Add Database &rarr; spawn Services jar.
->    - `workspace-cwd-migration.md` &mdash; the CWD migration
->      executed in Prompt #1; marked DONE.
->    - Older: `rapidreconciler-db-bootstrap.md`,
->      `dmaai-system-context.md`, `sidebar-extraction.md`,
->      `v8-demo-prod-mode.md`, `analyzer-disclaimer-and-feedback.md`,
->      `dmaai-page-overlay-table.md`,
->      `self-guided-tour-replacement.md`.
-> 13. **Sensitive-framing note** &mdash; the VALC 2.0 cutover plan
->    (markdown + HTML render at `GSIRRTech/rrv8-cutover-plan.html`)
->    is **sanitized for Coral readability**. Coral is a third-
->    party UI vendor on a 10-hour/week engagement; the cutover
->    plan describes the technical modernization neutrally, NOT
->    as a vendor-replacement narrative. The truthful internal
->    context lives in memory `project_valc_2_naming` &mdash;
->    fine to know, just don't put phase-out language onto
->    Coral-visible surfaces (the plan docs OR the commit
->    messages that touch them). See the standing-rule block
->    above and the memory file for what to NOT put back.
-> 14. **Recent commits** &mdash; at CWD `C:/source/repos/`,
->    the paths shorten:
->    ```
->    git -C RapidReconciler-AI    log --oneline -10
->    git -C RapidReconciler-Agent log --oneline -10
->    git -C RapidReconciler-Valc  log --oneline -10
->    ```
->    The cutover plan's Release-notes section
->    (`RapidReconciler-AI/docs/plans/rrv8-cutover-plan.md`)
->    tracks cutover-relevant PRs going forward.
+> All repos default to Dev; PRs target main. Recent commits at
+> `C:/source/repos/`:
 >
-> After reading the above, **stand by for Prompt #6** (the
-> sequence's sixth of 12). I'll paste it next. For each
-> prompt, fold in matching items from the cutover plan's Work
-> queue, commit at the end of the prompt's work, and we keep
-> moving.
+> ```
+> git -C RapidReconciler-Agent log --oneline -5
+> git -C RapidReconciler-Valc  log --oneline -5
+> git -C RapidReconciler-AI    log --oneline -5
+> ```
+>
+> ### Read in this order before working
+>
+> 1. **`C:/source/repos/CLAUDE.md`** &mdash; workspace cross-
+>    cutting rules (commit flow, check-v359-first, VALC 2.0
+>    naming, SQL compat floor, no-narrate-preview-panel,
+>    PS5.1 UTF-8).
+> 2. **Per-repo `CLAUDE.md`** for whichever repo the prompt
+>    touches: `RapidReconciler-AI/`, `RapidReconciler-Agent/`,
+>    `RapidReconciler-Valc/`, `RapidReconciler-DB/`,
+>    `RapidReconciler-SSIS/`.
+> 3. **`docs/plans/rrv8-cutover-plan.md`** &mdash; V8 cutover
+>    plan with the prioritized work queue.
+> 4. **This file** &mdash; standing-rule block above + the
+>    Next-session queue immediately below.
+> 5. **Recent memory entries that govern session conduct:**
+>    - [`feedback_production_ready_default`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/feedback_production_ready_default.md)
+>      &mdash; no &ldquo;today only&rdquo; / placeholder options;
+>      delete dead surfaces instead of stubbing them.
+>    - [`feedback_we_are_gsi`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/feedback_we_are_gsi.md)
+>      &mdash; the persona IS GSI; the customer has no VALC
+>      access; relay-instructions go through customer contacts.
+>    - [`user_role_exit_strategy`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/user_role_exit_strategy.md)
+>      &mdash; sole RR support, building VALC 2.0 + V8 + new
+>      Agent so new hires can run it. Labels + defaults must be
+>      self-teaching.
+>
+> ### State of the dev stack at handoff
+>
+> - VALC on `:8080` running, Flyway through V26.
+> - `start-all.ps1` no longer launches a Services jar. Use
+>   VALC&rsquo;s &#x25B7; on the Databases row to spawn.
+> - 5 `RapidReconciler_*` databases on SQL Server.
+> - Postgres `valc` DB has clients seeded.
+>
+> **Live blocker (environment-side, not code):** the password
+> stored on the RR Test Server&rsquo;s Database Server in
+> Topology doesn&rsquo;t match what SSMS accepts for `rruser`.
+> The pipe is wired end-to-end and the diagnostic reports
+> *&ldquo;Login failed for user &#39;rruser&#39;&rdquo;* &mdash;
+> what stands between the dev card and green is the right
+> password. Owner needs to identify or reset `rruser`&rsquo;s
+> SQL password, update Topology, click Spawn &#x25B7;. Within
+> 30s the card should flip Available + Successful.
+>
+> ### Top of next-session queue
+>
+> 1. **Resolve the `rruser` password situation** &mdash; the
+>    dev demo blocker. Update Topology with the working
+>    password (test in SSMS first), spawn via &#x25B7;, watch
+>    the card go green. Confirms the full Add Client pipeline.
+> 2. **Install bundle generator** &mdash; the customer-facing
+>    one-click installer `.exe` (WinSW + bundled JRE + Agent
+>    jar + customer cert + pre-baked broker URL + customer id).
+>    Signed-URL download + email-to-Contact-1 automation.
+>    Largest remaining gap for end-to-end Add Client.
+> 3. **`ServicesDeployService` reads the empty registry** &mdash;
+>    with the dev test-agent registry retired, this service
+>    can&rsquo;t find any agent to deploy to. Needs to target
+>    `client_databases` rows via `AgentLifecycleService`
+>    instead. The Manage Deploys page&rsquo;s deploy button is
+>    dead until this lands.
+> 4. **Delete the `/api/agents/{id}/start|stop` legacy
+>    endpoints in `DashboardController`** &mdash; unreachable
+>    from UI now. Dead code; tidy up.
+> 5. **Per-client shared secrets** for `valc.agent.shared-secret`
+>    &mdash; today a single global value accepts any clientId.
+>    Production needs per-client secrets baked into the install
+>    bundle (and a per-row secret column on `clients`).
+> 6. **At-rest encryption** for `client_servers.credentials_password_encrypted`
+>    + `client_databases.db_password_encrypted` &mdash; column
+>    names are aspirational; storage is plaintext today.
+> 7. **Inner-exception passthrough for `/system-status`
+>    failures** &mdash; same diagnostic pattern as
+>    `sql.reachable` (root-cause chain in `value_detail`).
+> 8. **JMS dispatch of heartbeat-facts** &mdash; when
+>    Coral&rsquo;s v360 Agent ships, add a dispatch branch in
+>    `HeartbeatListenerRegistrar` that routes JMS-borne facts
+>    to `AgentFactsService.upsert()`. Spec at
+>    `RapidReconciler-Agent/specs/heartbeat-facts.md`.
+> 9. **Reset DB stored procedure name** &mdash; the &#x1F525;
+>    icon on each row hits `POST /databases/{id}/reset` which
+>    returns 501 today. Wire the V7 sproc + parameters in
+>    `ClientDatabaseController.reset()` once confirmed.
+>
+> ### Architecture state that&rsquo;s now load-bearing
+>
+> - **Spawn passes credentials as CLI args** &mdash; Topology
+>   `client_servers.credentials_*` is the source of truth;
+>   `client_databases.db_*` is fallback only. Spawn rejects
+>   with `IllegalStateException` if neither has values.
+> - **Spawn also passes `--valc.reporter.*`** &mdash; enabled,
+>   base-url, shared-secret, client-id, client-database-id &mdash;
+>   so the spawned jar pushes heartbeats + install-checks back.
+>   Without these the spawn would be mute.
+> - **`service_port` is permanent for the life of the row.**
+>   Stop does not clear it. Edit modal renders the field
+>   read-only with a tooltip.
+> - **Database pill (Available / Offline / Multiple / No
+>   databases)** reflects the live probe result, not just
+>   port assignment.
+> - **Diagnostic exception chain** walks `getCause()` recursively;
+>   surfaces &ldquo;Login failed for user X&rdquo;,
+>   &ldquo;Connection refused&rdquo;, etc. in `value_detail`.
+>   `diagnoseSqlReachable` produces the one-liner in `value_text`.
+> - **Card UI**: System Status pill + next-step strip both
+>   clickable when there&rsquo;s an action; dispatch routes
+>   `open-manage:install`, `open-manage:databases`,
+>   `open-deployment`, `open-card-details`.
+> - **Card has a &ldquo;Details&rdquo; icon next to Manage
+>   Client** &mdash; opens a per-card diagnostic modal with
+>   suggestions + raw signals + Copy raw signals button (for
+>   engineering tickets, not GSI escalation &mdash; we ARE GSI).
+>
+> Stand by after reading.
 
 ### In-flight design direction (queued for next session)
 
