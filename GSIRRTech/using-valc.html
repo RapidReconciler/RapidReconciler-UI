@@ -1365,6 +1365,11 @@
         </table>
         <p>Knowing what the agent reports back is useful when answering customer security questions, when explaining why a value appears in VALC without being entered there manually, and when triaging mismatches between the customer's environment and what VALC shows.</p>
 
+        <div class="callout principle">
+          <div class="callout-label">VALC 2.0 update &mdash; how the agent is identified</div>
+          <p>In VALC 2.0 the agent is recognized by a <strong>per-install client id and secret</strong> baked into its <code>application.properties</code> at bundle time, not by its external IP. On each connect the agent presents the id + secret; VALC resolves the client and verifies the secret against a stored hash. This means the <strong>Agent External IP Address</strong> becomes telemetry only &mdash; VALC refreshes it automatically every time the agent reconnects (about every 30&nbsp;seconds), so a customer's WAN IP can change without anyone calling in the new address and without VALC losing the connection. Agents from older installs that carry no client id still fall back to external-IP identification until they're re-bundled.</p>
+        </div>
+
         <h2 id="about-valc">About VALC</h2>
         <p>VALC (Version and Licensing Control) is a GSI-developed web application hosted on Microsoft Azure. It is used to manage RapidReconciler and Genius customers. All new customers must be added to VALC before the installation process can begin.</p>
 
@@ -1850,7 +1855,8 @@ SUBMITTED BY
 
         <div class="callout principle">
           <div class="callout-label">VALC 2.0 update &mdash; bundle generation queued</div>
-          <p>In VALC 2.0 the agent install bundle (Inno Setup <code>.exe</code> with WinSW + bundled JRE + per-customer cert + pre-baked broker URL + customer id) is generated from the <strong>Install</strong> tab of the Manage Client modal and emailed as a one-time signed download link to Contact 1 &mdash; the customer doesn't have to log in to a portal to fetch it. The agent registers itself when run; the dashboard's Agent pill turns green within a heartbeat (~30s), and Topology auto-populates from the agent's reported facts. <strong>Today:</strong> the <em>Generate install bundle</em> action auto-seeds RRAdmin + returns the one-time temp password; the Inno <code>.exe</code> generator + email automation is queued. Until then, the V7 download flow below remains the install path.</p>
+          <p>In VALC 2.0 the agent install bundle (Inno Setup <code>.exe</code> with WinSW + bundled JRE + a per-install <strong>client id and secret</strong> baked into the agent's external <code>application.properties</code> + the pre-baked broker URL + a truststore that trusts the VALC 2.0 broker) is generated from the <strong>Install</strong> tab of the Manage Client modal and emailed as a one-time signed download link to Contact 1 &mdash; the customer doesn't have to log in to a portal to fetch it. The agent registers itself when run; the dashboard's Agent pill turns green within a heartbeat (~30s), and Topology auto-populates from the agent's reported facts. <strong>Today:</strong> the <em>Generate install bundle</em> action auto-seeds RRAdmin, mints the per-install client id + secret, and returns the one-time temp password; the Inno <code>.exe</code> generator + email automation is queued. Until then, the V7 download flow below remains the install path.</p>
+          <p>The client id + secret are how VALC 2.0 recognizes which customer an agent belongs to &mdash; they replace the old reliance on the customer's external IP. The secret is stored only as a hash (it's shown once at bundle time and never again), and because identity no longer rides on the IP, a customer's WAN IP can change without VALC losing track of the agent.</p>
         </div>
 
           <figure>
@@ -1902,8 +1908,8 @@ SUBMITTED BY
           <tbody>
             <tr><td>Address</td><td>Internal IP address of the RapidReconciler database server.</td></tr>
             <tr><td>Port</td><td>Port for the instance (typically <code>1433</code>).</td></tr>
-            <tr><td>User Name</td><td><code>rruser</code> <em>(default set during database creation)</em></td></tr>
-            <tr><td>Password</td><td><code>rruser</code> <em>(default set during database creation)</em></td></tr>
+            <tr><td>User Name</td><td><code>rruser</code> <em>(set during database creation)</em></td></tr>
+            <tr><td>Password</td><td>The <code>rruser</code> password set when the database creation script was run for this customer. Each install gets its own unique password, recorded on the client's <strong>Topology</strong> tab in VALC &mdash; copy it from there. If the customer has since rotated it, use the current value.</td></tr>
           </tbody>
         </table>
         <p>Once submitted, the browser displays a <strong>Deploying</strong> status followed by the <strong>Installation Complete</strong> confirmation screen.</p>
@@ -1979,7 +1985,7 @@ SUBMITTED BY
             <tr><td>Address</td><td>IP address of the customer's database server. If a single dedicated server is in use, same as the application server IP.</td></tr>
             <tr><td>Port</td><td>SQL Server port for the instance — typically <code>1433</code>.</td></tr>
             <tr><td>Username</td><td><code>rruser</code> — the default account created during database setup.</td></tr>
-            <tr><td>Password</td><td><code>rruser</code> — default password set during database setup. Coordinate with the customer's DBA if a non-default credential is required.</td></tr>
+            <tr><td>Password</td><td>The per-customer <code>rruser</code> password set when the database creation script was run. Each install gets its own unique value &mdash; it lives on the client's <strong>Topology</strong> tab in VALC, and in VALC 2.0 this field is derived from there automatically. If the customer rotates it, see the rotation note below.</td></tr>
             <tr><td>Name</td><td>Database name as it exists on SQL Server. The production database is always <code>RapidReconciler_Prod</code>. Additional databases follow the same convention — <code>RapidReconciler_Test</code>, <code>RapidReconciler_Dev</code>, <code>RapidReconciler_Train</code>, etc. Create additional databases via the backup/restore method described in the tip above, not by re-running creation scripts.</td></tr>
             <tr><td>Category</td><td>Categorical tag used as a filter on the <a href="javascript:void(0)" onclick="showView('topic-sql-scripts')">SQL Scripts page</a> (RR developers only). Options are <strong>Production</strong>, <strong>Test</strong>, <strong>Archive</strong>, <strong>Change Control</strong>, and <strong>Inactive</strong>. Does not affect database behavior — set the value that matches the role of this database.</td></tr>
             <tr><td>Job Name</td><td><code>RapidReconciler_Prod</code> — the SQL Server Agent job name that runs reconciliation against this database.</td></tr>
@@ -1989,6 +1995,11 @@ SUBMITTED BY
         </table>
 
         <p>The new database appears as a row on the Databases tab. Once the agent is connected and the registration is correct, the <strong>Status</strong> column updates to <strong>Online</strong>.</p>
+
+        <div class="callout important">
+          <div class="callout-label">If the customer rotates the <code>rruser</code> password</div>
+          <p>Every install ships with its own unique <code>rruser</code> password (no shared default). If the customer's DBA later changes it on their SQL Server, the agent can no longer authenticate &mdash; connections fail with <code>Login failed for user 'rruser'</code>. The customer cannot update VALC themselves, so ask them to <strong>send the new password by encrypted email</strong>, then update it on the client's <strong>Topology</strong> tab in VALC. The change is picked up on the next poll &mdash; no restart needed.</p>
+        </div>
 
         <div class="topic-footer-nav">
           <button class="back-btn" onclick="backToFlowchart()">&larr; Back to Flowchart</button>
@@ -2223,6 +2234,11 @@ SUBMITTED BY
               <td>GSI</td>
             </tr>
             <tr>
+              <td>Customer rotated the <code>rruser</code> database password</td>
+              <td>Ask the customer to send the new password by <strong>encrypted email</strong> (they have no VALC access). Update it on the client's <strong>Topology</strong> tab; the agent picks it up on the next poll. Until then, connections fail with <code>Login failed for user 'rruser'</code>. See <a href="javascript:void(0)" onclick="showView('topic-step-10')">Step 10</a>.</td>
+              <td>GSI</td>
+            </tr>
+            <tr>
               <td>Enable complex password policy</td>
               <td>Customer emails <a href="mailto:rrsupport@getgsi.com">rrsupport@getgsi.com</a> with company name, RapidReconciler administrator name, and requested activation date. Tech team enables the <strong>Password Policy</strong> toggle on Client Details once the request is processed. Existing users will be required to reset at next login. See the <a href="javascript:void(0)" onclick="showView('topic-password-policy')">Password Policy</a> guide.</td>
               <td>GSI</td>
@@ -2377,6 +2393,11 @@ SUBMITTED BY
           <li>Verify the <strong>Agent External IP Address</strong> on the Client Details tab matches the customer's actual external IP.</li>
           <li>If the row still hasn't updated, check today's agent <code>.out</code> log file (see <a href="javascript:void(0)" onclick="showView('topic-troubleshooting')">Diagnostic Tools</a> above) for connection errors back to VALC.</li>
         </ol>
+
+        <div class="callout principle">
+          <div class="callout-label">VALC 2.0 update &mdash; external-IP mismatch no longer applies</div>
+          <p>The "Agent External IP doesn't match" cause and remediation step above are specific to the legacy external-IP identity model. In VALC 2.0 the agent identifies itself by its baked-in <strong>client id + secret</strong>, and VALC refreshes the stored external IP automatically on every connect &mdash; so a changed WAN IP no longer keeps a row from going Connected, and there's nothing to verify or edit by hand. If a VALC 2.0 agent isn't connecting, focus on DNS propagation, the Windows service state, and the agent <code>.out</code> log instead.</p>
+        </div>
 
         <h2 id="setup-step-not-advancing">Setup Step Not Advancing</h2>
         <p><strong>Symptom:</strong> After completing an install or migration, the <strong>Setup Step</strong> field on the Client Details tab remains at <code>Created</code> (or an earlier value) and does not advance automatically.</p>
