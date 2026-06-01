@@ -52,6 +52,32 @@ Done this session, recorded here for continuity:
 
 ---
 
+## Refinements (2026-06-01, later in session — SHIPPED)
+
+The practice model was reworked to mirror the real create flow more
+closely (and the licenseEndDate handling reversed):
+
+- **Create-client defaults a 1-year license term** (start = today,
+  end = +1yr) when none is supplied; the Add Client modal no longer
+  shows license term choices. This **reverses Part C's 400** — we
+  default rather than reject.
+- **The practice client sits INACTIVE at rest** (seeded + reset both
+  leave `active=false`), so its card isn't shown until "created". The
+  dashboard only puts an *active* practice client in the practice band.
+- **"Create the practice client" opens the REAL Add Client form,
+  prefilled + read-only** from the practice client's contract baseline;
+  its Create button **activates** the client (PUT /active) instead of
+  POSTing a new row — the card then appears. Mirrors the real create
+  step without churning rows.
+- **Reset now wipes children AND deactivates** → back to the pre-create
+  resting state, ready to "create" again.
+- The practice client renders as a **full card** (shared `clientCard`
+  Thymeleaf fragment), in its own labeled section below live clients.
+- The next step — a guided **Manage Client setup wizard** (Next buttons
+  per page, mandatory-field gating, strict-for-practice nav) — is
+  spec'd separately in
+  [manage-client-setup-wizard.md](manage-client-setup-wizard.md).
+
 ## Part A — Resettable Practice Client
 
 - **Schema (Flyway V29):** `clients.is_practice BOOLEAN NOT NULL
