@@ -1,8 +1,30 @@
 # Manage Client — Guided Setup Wizard — plan
 
-**Status:** Spec / not started. Captures the guided onboarding wizard
-decided across session 2026-06-01, building on the practice sandbox
-([practice-client-and-import-testing.md](practice-client-and-import-testing.md)).
+**Status:** Slices 1–3 SHIPPED 2026-06-01 (RapidReconciler-Valc #54).
+Remaining: slice 4 (strict-for-practice / soft-for-live tab locking),
+slice 5 (Next on Topology → Install Prep → Databases), slice 6 (the
+Domain-URL → App-Server-IP Cloudflare connectivity check). Builds on the
+practice sandbox ([practice-client-and-import-testing.md](practice-client-and-import-testing.md)).
+
+**Shipped so far:**
+- **Slice 1 — Domain URL** is a visible, required field on Client Details
+  (GSI-typed; Cloudflare A-record cross-ref). Placeholder shows the real
+  example `rrtest-rrsqltest.getgsi.com`.
+- **Slice 2 — gated Save & Next → Topology** (Name + Contact 1 + UI
+  Version + Domain URL); saving advances `setup_step` NEW → DETAILS_DONE.
+- **Slice 3 — card entry**: a NEW client's card points at "Finish the
+  record in Client Details" (`open-manage:client`); after the Client
+  Details save it advances to the installation-prep step
+  (`AgentStatusDto.setupStep` + snapshot + populateNextStep).
+- **Import now persists** topology + server rows (so the Topology tab
+  shows imported data instead of blanking on reload).
+- **Practice flow**: Client Details opens blank, Import button
+  spotlighted + auto-pastes the sample (no file), Domain URL
+  pre-populated, UI Version defaults V8 — all gated to
+  `is_practice && setup_step=NEW`; live clients untouched.
+- **Practice-client hardening**: seeder guards on `is_practice` (not
+  name); the practice client's name is immutable on save (keeps its
+  "(Practice)" label, never duplicates).
 
 ## Goal
 
