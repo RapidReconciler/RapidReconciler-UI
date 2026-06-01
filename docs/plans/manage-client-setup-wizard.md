@@ -115,6 +115,45 @@ step's save, so they green as you progress. Companies / User Accounts have no
 dot (ongoing config, not a linear setup step). Pairs with the card ladder:
 the ladder says *what's next*, the dots say *what's done*.
 
+### Install Bundle polish + practice tooling — SHIPPED 2026-06-01
+
+A batch of refinements from new-hire-walkthrough testing:
+
+- **Bundle credentials ride in the bundle, not the email.** The agent zip
+  now carries `RR-FIRST-LOGIN.txt` (default-admin email + temp password +
+  "sign in → you'll set a new password → safe to delete"), so the temp
+  password travels inside the one-time signed download — never the email.
+  The bundle email was slimmed to the link + "open RR-FIRST-LOGIN.txt"
+  pointer (no secret). `adminEmail` + `tempPassword` thread from the
+  controller into `InstallBundleService.generate()`; on a re-generate the
+  readme falls back to "use your original / contact support".
+- **Bundle-ready card does both in one click:** an inline mock of the
+  customer email (To / subject / body + link) *and* the credential details,
+  both on the page (kept visible for Coral review).
+- **"Send prep" → email preview/mock** on Client Details (the sales blurb
+  removed); the actual send fires from the preview's "Send to customer".
+- **Contacts inline editor:** the Install Progress "Contacts on file" row
+  expands to a backup-contact email field (`PUT /{id}/contact2`), greening
+  the row in place.
+- **Simulate heartbeat (practice only):** `POST /{id}/simulate-heartbeat`
+  (gated `is_practice`) stamps the APP_SERVER row's `last_heartbeat_at` so
+  the new hire can walk past "waiting for install" into Databases without a
+  real agent.
+- **Readiness bug fix:** `check()` now returns `agentClientId`, so the
+  Install Bundle tab dot greens after generation and the Generate button
+  relabels to "Regenerate bundle" on reload.
+- **Refresh button feedback:** "Refreshing…" state + a toast + a live
+  "Updated H:MM:SS" timestamp (was a silent no-op).
+- **Practice card live-updates:** the grid poll now reaches the practice
+  card (it renders in its own `#practice-section`, outside the polled
+  `#clients-tbody`), and closing the Manage modal fires an immediate poll —
+  so the card face reflects changes instead of going stale until reload.
+
+Unrelated nav tweak shipped in the same commit: the VALC sidebar
+**Documents** accordion split into **User Docs** (Using Valc, Provisioning,
+Installation Prep, Server Migration) and **Tech Docs** (Agent Documentation,
+Services Documentation, RRV8 Cutover Plan, Automated Test Plan).
+
 - **Doc sweep:** `using-valc.html` (queued capstone rewrite) + the cutover
   plan should reflect the prep-is-sales / Install-Bundle framing.
 
