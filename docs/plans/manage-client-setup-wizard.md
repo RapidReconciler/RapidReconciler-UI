@@ -57,6 +57,10 @@ sat after it). Resolved by splitting the two concerns:
   client's `contact1Email` + `prepDocSentAt`; repainted after a save (so a
   freshly-entered contact enables it) and after a send. The `send-prep-doc`
   endpoint + `prepDocSentAt` are unchanged — only the control moved.
+  **Update 2026-06-01:** the sales-blurb hint was removed, and the button
+  now opens an **email preview/mock-up** (To: Contact 1, the prep subject,
+  body mirroring `buildPrepDocBody` with the live doc link); the actual
+  send fires from the preview's "Send to customer" button.
 - **Install Prep tab → "Install Bundle"** (label only; internal `data-tab`
   / `data-panel` / action codes stay `install`). Its job is now generate +
   send the bundle. The footer **Generate install bundle** button — which
@@ -148,6 +152,17 @@ wizard.
   Server row; Install Prep Next requires the bundle generated; etc.).
 
 ## Domain URL + the connectivity test (Install Prep)
+
+**Connectivity DNS check — SHIPPED 2026-06-01.** The Install Progress
+"Database registered" row was replaced with a live **"Domain resolves to
+app server"** check (`InstallChecksController.valcDomainResolves`): it
+resolves the APP_SERVER row's `domain_url` (bounded 2s lookup) and compares
+the result to that row's `internal_ip`. Green when they match (verified:
+`rrtest-rrsqltest.getgsi.com` → `127.0.0.1`), fail when the host doesn't
+resolve, warning on a mismatch. Also: **"Installation prep received"** now
+greens once the topology is configured (the imported submission populated
+the APP_SERVER row), instead of staying amber after send. Still remaining
+on slice 6: the **A-record-request email**.
 
 - **Domain URL is GSI-typed** and lives on the **Topology App Server
   card** (`client_servers.domain_url`, APP_SERVER role). It
