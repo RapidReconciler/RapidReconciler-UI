@@ -1,11 +1,13 @@
 # Manage Client — Guided Setup Wizard — plan
 
-**Status:** Slices 1–3 SHIPPED 2026-06-01 (RapidReconciler-Valc #54).
-Remaining: slice 4 (strict-for-practice / soft-for-live tab locking),
-slice 5 (Next on Topology → Install Prep → Databases — **Topology → Install
-Prep shipped 2026-06-01**; Install Prep → Databases still to build), slice 6
-(the Domain-URL → App-Server-IP connectivity check, on Install Prep). Builds
-on the practice sandbox ([practice-client-and-import-testing.md](practice-client-and-import-testing.md)).
+**Status:** Slices 1–4 SHIPPED 2026-06-01 (RapidReconciler-Valc #54;
+**slice 4 strict/soft tab locking — #60**). Remaining: slice 5 (Next on
+Topology → Install Bundle → Databases — **Topology → Install Bundle shipped
+2026-06-01**; Install Bundle → Databases still to build), and the
+A-record-request email (the connectivity-check half of slice 6 shipped
+2026-06-01 — `DomainConnectivityService` + the Install-check row + card
+tint; the email is the remaining half). Builds on the practice sandbox
+([practice-client-and-import-testing.md](practice-client-and-import-testing.md)).
 
 **Refinement 2026-06-01 — Domain URL moved off Client Details to the
 Topology App Server card.** Slice 1 surfaced Domain URL on Client Details,
@@ -307,7 +309,14 @@ the Topology completion is derived from the server row, not a new marker.
 3. **Card entry** — `setup_step`-aware next-step: NEW → "start setup"
    (opens Client Details); add `setupStep` to the DTO + snapshot. (SHIPPED)
 4. **Strict-vs-soft nav** — lock later tabs for the practice client;
-   leave soft for live.
+   leave soft for live. **SHIPPED 2026-06-01 (#60).** Practice (`is_practice`)
+   is STRICT: tabs unlock in order from persisted progress signals
+   (`setup_step` → App Server row → bundle/agent → registered database);
+   a click on a not-yet-reached tab is ignored with a "use Save & Next"
+   nudge; a reopened half-done client unlocks back to where it left off.
+   Live clients stay SOFT (only Databases/Companies/Users gate on an App
+   Server). Sanctioned navigations (Save & Next, card deep-links) pass a
+   `force` flag to bypass the gate; only direct tab-bar clicks are gated.
 5. **Next on Topology / Install Prep / Databases** — page by page.
    - **Topology → Install Prep — SHIPPED 2026-06-01.** "Save Topology"
      demoted to a ghost button; primary **"Save & Next: Install Prep →"**
