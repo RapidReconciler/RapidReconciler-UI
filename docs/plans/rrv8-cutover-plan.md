@@ -177,6 +177,18 @@ server side; nothing reaches a customer until it's all done.
    and the engagement hours available. Some processes naturally
    stay where they are today; others may shift.
 
+9. **Agent Java-runtime bridge** &mdash; the broker process runs on
+   Java 8 and launches each Services jar; the modernized Services jar
+   targets Java 21 (Spring Boot 3), so the broker can't spawn it on its
+   own Java 8 runtime. The install bundle ships **both** runtimes and
+   points the broker at the Java 21 path (`valc.services-java-home`)
+   for spawning Services, falling back to its own runtime when unset so
+   existing installs are unaffected. The broker change is a small,
+   backward-compatible launcher tweak; moving the broker itself to
+   Java 21 is a later, separate modernization.
+   **Coral:** this is the runtime split to account for when building
+   and validating the new Services jar against the existing broker.
+
 **Exit criteria for Phase 0**: dev box runs V8 end-to-end against
 VALC-2.0-issued JWTs across every customer-facing module, with
 zero behavioral diff from the same flows on Azure VALC. JMS
