@@ -203,6 +203,34 @@ greens once the topology is configured (the imported submission populated
 the APP_SERVER row), instead of staying amber after send. Still remaining
 on slice 6: the **A-record-request email**.
 
+**Connectivity drives triage + Ping button — SHIPPED 2026-06-01.** A broken
+domain means customers can't reach RapidReconciler at all, so it's now a
+health signal, not just a diagnostic:
+
+- **Shared `DomainConnectivityService`** (cached 60s, keyed by domain+IP so
+  a fix re-checks promptly) is the single source of truth for the resolve
+  check — used by both the Install Progress row and the card triage.
+- **Triage:** in `populateNextStep`, a *running* client whose domain is set
+  but doesn't resolve to its app-server IP is forced to **Needs action**
+  (`danger`, rank 11) instead of "All clear" — it does NOT `setHealthy`.
+  (Verified: Mauro → Needs action while broken, Healthy once fixed; a
+  *missing* domain doesn't penalize.)
+- **Card tint follows triage severity:** new server-computed
+  `AgentStatusDto.cardTint` (derived from `nextStepKind`: success/warning/
+  danger → same, info → secondary) replaces `systemStatusKind` as the
+  `health-*` source in both the server-render and the 5s poll. So a
+  Needs-action card reads red even though its Services pill is green.
+- **Ping button** on the Topology App Server card's Domain URL: resolves
+  what's typed (even unsaved) via `GET /{id}/resolve-domain?host=` and shows
+  "Resolves to X.X.X.X [Use as internal IP]" — one click drops the resolved
+  IP into Internal IP so the check matches. This is also the mitigation for
+  VALC-side resolution not being authoritative for the customer's network:
+  the new hire sees exactly what VALC resolves and reconciles it.
+- **Install Bundle tab dot** greens on `agentClientId` (bundle minted via
+  VALC) **or** `agentEverConnected` (any APP_SERVER heartbeat on record) —
+  so an installed/established client whose bundle wasn't generated here
+  (e.g. Mauro) still shows the step complete.
+
 - **Domain URL is GSI-typed** and lives on the **Topology App Server
   card** (`client_servers.domain_url`, APP_SERVER role). It
   cross-references the customer's **A record at our ISP (Cloudflare)**.
