@@ -880,6 +880,40 @@
     } catch (_) { return null; }
   }
 
+  // ---- Session expiry / auto-logout (real-token modes only) ----
+  // Absolute 1-hour cap from sign-in, plus the token's own exp. When it
+  // lapses we clear the session and bounce to the login page so the user
+  // re-authenticates — which re-checks password expiry. Stops a session
+  // left open for days, or a bookmarked deep link opened after the
+  // password rotated, from silently appearing to still work. The
+  // manually-set dev token (no sessionStart, far-future exp) is exempt.
+  const SESSION_MAX_MS = 60 * 60 * 1000;
+  function sessionExpired() {
+    try {
+      const start = parseInt(localStorage.getItem('rrv8.sessionStart') || '', 10);
+      if (!isNaN(start) && (Date.now() - start) > SESSION_MAX_MS) return true;
+      const token = localStorage.getItem('rrv8.token');
+      if (token) {
+        const p = parseJwt(token);
+        if (p && p.exp && Date.now() >= (p.exp * 1000)) return true;
+      }
+    } catch (_) {}
+    return false;
+  }
+  function endSession() {
+    try { localStorage.removeItem('rrv8.token'); } catch (_) {}
+    try { localStorage.removeItem('rrv8.viewMode'); } catch (_) {}
+    try { localStorage.removeItem('rrv8.sessionStart'); } catch (_) {}
+    // Keep rrv8.lastEmail so the login page can pre-fill the address.
+    global.location.href = '../login.html?reason=timeout';
+  }
+  let _sessionWatchStarted = false;
+  function watchSession() {
+    if (_sessionWatchStarted) return;
+    _sessionWatchStarted = true;
+    global.setInterval(function () { if (sessionExpired()) endSession(); }, 60000);
+  }
+
   // Populate window.RR_SESSION.{user,dbs,activeDbIndex,token}. In
   // demo mode reads data/demo-jwt-payload.json; in staging/prod
   // reads localStorage.rrv8.token. Always resolves — failures leave
@@ -1160,6 +1194,21 @@
       if (e.key === 'Escape' && !menu.hidden) closeUserMenu();
     });
   }
+
+  // Auto-enforce the session cap on every V8 page. sidebar.js is
+  // included on all of them and config.js (RR_CONFIG) loads just before
+  // it, so this runs synchronously on load — independent of whichever
+  // bootSession the page itself uses. Demo mode (no real session) opts
+  // out; the dev token (no sessionStart, far-future exp) is never caught.
+  (function enforceSessionGuard() {
+    try {
+      const mode = (new URLSearchParams(global.location.search).get('mode'))
+                   || (global.RR_CONFIG || {}).mode || 'demo';
+      if (mode === 'demo') return;
+      if (sessionExpired()) { endSession(); return; }
+      watchSession();
+    } catch (_) {}
+  })();
 
   global.RRV8 = global.RRV8 || {};
   global.RRV8.mountSidebar            = mountSidebar;
