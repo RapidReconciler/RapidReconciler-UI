@@ -144,6 +144,23 @@
   .fetch-error.is-visible { display: block; }
   .fetch-error code { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
 
+  /* F0010 data check — company numbers derive from the JDE company
+     constants (dbo.F0010), populated by the import/SSIS sync. Shown when
+     the agent reports 0 F0010 rows so the empty grids read as "JDE hasn't
+     synced yet", not "no companies". Aligns with the VALC Companies tab. */
+  .f0010-banner {
+    background: #fff4e3;
+    border: 1px solid var(--orange);
+    color: var(--text);
+    padding: 10px 14px;
+    border-radius: 6px;
+    margin-bottom: 16px;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .f0010-banner strong { color: var(--orange-deep); }
+  .f0010-banner code { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+
   /* Licensed Companies card */
   .grid-card {
     background: var(--bg-card);
@@ -509,6 +526,16 @@
       <div class="fetch-error" id="js-fetch-error" role="alert">
         Couldn&rsquo;t reach <code>/admin/companies</code> &mdash;
         <span id="js-fetch-error-msg"></span>
+      </div>
+
+      <!-- F0010 data check: shown when the agent reports 0 JDE company
+           constants (companyConstantsCount). Toggled by the admin/companies
+           load. Mirrors the VALC Manage Client > Companies banner. -->
+      <div class="f0010-banner" id="js-f0010-banner" hidden>
+        <strong>No JDE company data yet.</strong> Company numbers come from this database&rsquo;s
+        JDE company constants (<code>F0010</code>), populated by the import / SSIS sync.
+        Run <strong>Import JDE</strong> (or wait for the scheduled run), then reload &mdash;
+        companies appear here once F0010 has data.
       </div>
 
       <section class="grid-card" aria-label="Licensed Companies">
@@ -1082,11 +1109,23 @@
    *  round-trip. The sync push happens server-side; by the time the
    *  POST/DELETE returns, the agent's rcompanies + RCompaniesLic
    *  views have already been updated for the dev/loopback case. */
+  // F0010 data check: show the "no JDE company data" banner only when the
+  // agent explicitly reports zero company-constant rows. Undefined (older
+  // agent / failed fetch) leaves it hidden — no false alarm. Aligns with the
+  // VALC Manage Client > Companies tab.
+  function applyF0010Check(resp) {
+    const banner = document.getElementById('js-f0010-banner');
+    if (!banner) return;
+    const cnt = resp ? resp.companyConstantsCount : null;
+    banner.hidden = !(cnt === 0);
+  }
+
   function refreshCompanies() {
     return rrFetch('admin/companies')
       .then(resp => {
         renderCompanies(resp && resp.companies);
         renderUnlicensed(resp && resp.unlicensed);
+        applyF0010Check(resp);
       })
       .catch(err => {
         console.warn('Companies: refresh failed —', err.message);
@@ -1142,6 +1181,7 @@
     .then(resp => {
       renderCompanies(resp && resp.companies);
       renderUnlicensed(resp && resp.unlicensed);
+      applyF0010Check(resp);
     })
     .catch(err => {
       showFetchError(err);
