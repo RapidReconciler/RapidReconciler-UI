@@ -59,7 +59,14 @@ window.RR_CONFIG = {
   testAgentBase: 'http://localhost:34537',
   valcBase:      'http://localhost:8080',
   release:       'V8',
-  buildStamp:    '2026-05-30'
+  buildStamp:    '2026-05-30',
+  // statusAnchor — GSI's always-up public edge, used by the
+  // Connection Check fault-isolator (HelpDesk/connection-check.html)
+  // as the "is the internet + GSI reachable" baseline probe. Per the
+  // install-prep doc this is the documented host customer IT uses to
+  // verify outbound 443. Override per deploy if the public landing
+  // host changes.
+  statusAnchor:  'https://rapidreconciler.getgsi.com'
 };
 
 // Endpoint prefixes that route to mini-VALC (the dev-side stand-in

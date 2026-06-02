@@ -223,6 +223,8 @@
     text-align: center;
   }
   .card-foot a { color: var(--blue); font-weight: 600; }
+  .card-foot .foot-trouble { margin: 0 0 10px; font-size: 12.5px; }
+  .card-foot .foot-trouble a { color: var(--blue); font-weight: 700; }
   .card-foot .foot-disclaimer { margin: 0 0 10px; line-height: 1.55; }
   .card-foot .foot-copy { margin: 0; color: var(--text-muted); }
 
@@ -256,6 +258,118 @@
     line-height: 1.5;
   }
   .signout-note[hidden] { display: none; }
+
+  /* ===== Connectivity indicator + diagnostics =====================
+     A slim bar between the header and the forms (so it spans the
+     sign-in / reset / change screens). On load the page probes VALC's
+     /api/v1/auth/ping; the bar reflects the result. On a reachability
+     problem it expands a "details for support" panel that classifies
+     the failure in plain language and exposes the raw captured
+     diagnostics (Copy + hand off to the full Log Analyzer). */
+  .conn {
+    padding: 10px 28px;
+    border-bottom: 1px solid var(--rule);
+    background: var(--bg);
+    font-size: 12.5px;
+  }
+  .conn[data-state="ok"]       { background: #eef7f1; border-bottom-color: #cfe8d8; }
+  .conn[data-state="warn"]     { background: #fff4e6; border-bottom-color: #f5d9af; }
+  .conn[data-state="down"]     { background: var(--red-pale); border-bottom-color: #f3c5bd; }
+  .conn[data-state="checking"] { background: var(--bg); }
+  .conn-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .conn-dot {
+    width: 9px; height: 9px;
+    border-radius: 50%;
+    flex: 0 0 auto;
+    background: var(--text-muted);
+  }
+  .conn[data-state="ok"]   .conn-dot { background: var(--green); }
+  .conn[data-state="warn"] .conn-dot { background: var(--orange); }
+  .conn[data-state="down"] .conn-dot { background: var(--red); }
+  .conn[data-state="checking"] .conn-dot {
+    background: var(--blue-bright);
+    animation: conn-pulse 1.1s ease-in-out infinite;
+  }
+  @keyframes conn-pulse { 0%,100% { opacity: 0.35; } 50% { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) {
+    .conn[data-state="checking"] .conn-dot { animation: none; }
+  }
+  .conn-text { color: var(--text-soft); font-weight: 600; }
+  .conn[data-state="ok"]   .conn-text { color: #1f6b42; }
+  .conn[data-state="warn"] .conn-text { color: var(--orange-deep, #d97316); }
+  .conn[data-state="down"] .conn-text { color: var(--red); }
+  .conn-toggle {
+    margin-left: auto;
+    flex: 0 0 auto;
+    background: transparent;
+    border: 0;
+    padding: 0;
+    color: var(--blue);
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .conn-toggle:hover { color: var(--navy); }
+
+  .conn-panel { margin-top: 10px; }
+  .conn-verdict {
+    margin: 0 0 8px;
+    font-size: 12.5px;
+    line-height: 1.5;
+    color: var(--text);
+  }
+  .conn-verdict b { color: var(--navy); }
+  .conn-diag {
+    margin: 0 0 10px;
+    max-height: 150px;
+    overflow: auto;
+    padding: 8px 10px;
+    background: #fff;
+    border: 1px solid var(--rule-strong);
+    border-radius: 5px;
+    font-family: 'JetBrains Mono', 'Consolas', monospace;
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--text-soft);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .conn-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .conn-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 700;
+    padding: 7px 12px;
+    border-radius: 5px;
+    border: 1px solid var(--blue);
+    background: var(--blue);
+    color: #fff;
+    cursor: pointer;
+    text-decoration: none;
+  }
+  .conn-btn:hover { filter: brightness(1.08); text-decoration: none; }
+  .conn-btn.ghost {
+    background: #fff;
+    color: var(--blue);
+  }
+  .conn-btn.ghost:hover { background: var(--blue-pale); }
+  .conn-help {
+    margin: 10px 0 0;
+    font-size: 11.5px;
+    color: var(--text-muted);
+    line-height: 1.5;
+  }
+  .conn-help a { color: var(--blue); font-weight: 600; }
 
   /* Password-manager overlay killer. LastPass / 1Password / Bitwarden
      inject their icon nodes at <body> level, so the data-*-ignore
@@ -313,6 +427,38 @@
   .rules b { color: var(--navy); display: block; margin-bottom: 4px; }
   .rules ul { margin: 0; padding-left: 18px; }
 </style>
+
+<!-- Diagnostic capture — installed early so it catches runtime errors
+     from page load onward. The login page can't read the browser's
+     native console history after the fact, so we buffer our own
+     structured diagnostics (the ping / sign-in outcomes recorded by the
+     main script below) plus any window error / unhandledrejection
+     events. The connectivity panel assembles these into a copyable
+     report and can hand them to the full Log Analyzer. -->
+<script>
+(function () {
+  'use strict';
+  var buf = [];
+  window.__rrDiag = {
+    log: function (msg) {
+      var t = new Date().toISOString().replace('T', ' ').replace(/\.\d+Z$/, '');
+      buf.push('[' + t + '] ' + msg);
+      if (buf.length > 200) buf.shift();
+    },
+    lines: function () { return buf.slice(); }
+  };
+  window.addEventListener('error', function (e) {
+    if (e && e.message) {
+      window.__rrDiag.log('window.error: ' + e.message +
+        (e.filename ? ' @ ' + e.filename + ':' + (e.lineno || '?') : ''));
+    }
+  });
+  window.addEventListener('unhandledrejection', function (e) {
+    var r = e && e.reason;
+    window.__rrDiag.log('unhandledrejection: ' + (r && r.message ? r.message : String(r)));
+  });
+})();
+</script>
 </head>
 <body>
 
@@ -322,6 +468,30 @@
     <div class="card-head-text">
       <span class="card-head-brand">RapidReconciler</span>
       <span class="card-head-sub" id="js-head-sub">Sign in</span>
+    </div>
+  </div>
+
+  <!-- Connectivity indicator + diagnostics (spans all three screens).
+       Populated on load by the /api/v1/auth/ping probe in the script
+       below; hidden until that probe resolves. -->
+  <div class="conn" id="js-conn" data-state="checking" hidden>
+    <div class="conn-line">
+      <span class="conn-dot" aria-hidden="true"></span>
+      <span class="conn-text" id="js-conn-text">Checking connection&hellip;</span>
+      <button type="button" class="conn-toggle is-hidden" id="js-conn-toggle"
+              aria-expanded="false">Details for support</button>
+    </div>
+    <div class="conn-panel is-hidden" id="js-conn-panel">
+      <p class="conn-verdict" id="js-conn-verdict"></p>
+      <pre class="conn-diag" id="js-conn-diag" aria-label="Diagnostic details"></pre>
+      <div class="conn-actions">
+        <a class="conn-btn" id="js-conn-check"
+           href="HelpDesk/connection-check.html" target="_blank" rel="noopener">Check my connection</a>
+        <button type="button" class="conn-btn ghost" id="js-conn-copy">Copy details</button>
+      </div>
+      <p class="conn-help">The connection check pinpoints where the problem is &mdash; so you can
+        give your IT team the exact fix, or know when it&rsquo;s one for
+        <a href="mailto:rrsupport@getgsi.com">GSI support</a>.</p>
     </div>
   </div>
 
@@ -408,6 +578,7 @@
   </form>
 
   <div class="card-foot">
+    <p class="foot-trouble">Trouble signing in? <a href="HelpDesk/connection-check.html">Check your connection</a></p>
     <p class="foot-disclaimer">By using this application, you consent to the storing and processing of your personal data by GSI as described in the <a href="https://www.getgsi.com/privacy-policy" target="_blank" rel="noopener">Privacy Policy</a>.</p>
     <p class="foot-copy">&copy; 2026 RapidReconciler &middot; GSI Inc.</p>
   </div>
@@ -499,6 +670,190 @@
     }
   }
 
+  // ============================================================
+  //  Connectivity indicator + diagnostics
+  //
+  //  On load we probe VALC's /api/v1/auth/ping (the dedicated,
+  //  CORS-permitted reachability endpoint — see AuthController). The
+  //  bar reflects the result; a reachability problem reveals a
+  //  "details for support" panel that classifies the failure in plain
+  //  language and exposes the captured diagnostics for Copy / hand-off
+  //  to the full Log Analyzer.
+  //
+  //  Note on what JS can actually see: a cross-origin network failure
+  //  (server down, DNS, VPN, firewall, TLS/cert) surfaces to fetch only
+  //  as a generic TypeError — the browser hides the specifics from the
+  //  page for security. So the inline verdict groups those into one
+  //  "can't reach the server" cause rather than guessing which. The
+  //  full Log Analyzer (with a pasted DevTools console) can tell them
+  //  apart; the "Open Log Analyzer" hand-off carries the data there.
+  // ============================================================
+  const connEl       = document.getElementById('js-conn');
+  const connText     = document.getElementById('js-conn-text');
+  const connToggle   = document.getElementById('js-conn-toggle');
+  const connPanel    = document.getElementById('js-conn-panel');
+  const connVerdict  = document.getElementById('js-conn-verdict');
+  const connDiag     = document.getElementById('js-conn-diag');
+  const connCopy     = document.getElementById('js-conn-copy');
+
+  function buildDiagnosticsText() {
+    const rc = window.RR_CONFIG || {};
+    const head = [
+      'RapidReconciler sign-in diagnostics',
+      'Generated:      ' + new Date().toISOString(),
+      'Page:           ' + window.location.href,
+      'Auth target:    ' + AUTH_BASE,
+      'Browser online: ' + (navigator.onLine ? 'yes' : 'no'),
+      'App build:      ' + (rc.release || '?') + ' / ' + (rc.buildStamp || '?'),
+      'User agent:     ' + navigator.userAgent,
+      '----- events -----'
+    ];
+    const events = (window.__rrDiag ? window.__rrDiag.lines() : []);
+    return head.concat(events.length ? events : ['(no events captured)']).join('\n');
+  }
+
+  // Map a probe/fetch result to a UI state. `result` is one of:
+  //   {kind:'ok'}                              healthy 2xx + status:ok
+  //   {kind:'reachable', status:n}             server answered (incl. 404 = ping not deployed)
+  //   {kind:'server', status:n}                5xx — reachable but erroring
+  //   {kind:'timeout'} | {kind:'network'} | {kind:'offline'}
+  function applyResult(result) {
+    let state, text, verdict;
+    switch (result.kind) {
+      case 'ok':
+      case 'reachable':
+        state = 'ok'; text = 'All systems operational'; verdict = '';
+        break;
+      case 'server':
+        state = 'warn';
+        text = 'RapidReconciler is reachable but reporting an error';
+        verdict = '<b>Likely a temporary problem on the RapidReconciler server</b> (HTTP '
+          + result.status + '). Wait a moment and try again; if it persists, send the details below to support.';
+        break;
+      case 'timeout':
+        state = 'down';
+        text = "RapidReconciler isn't responding";
+        verdict = '<b>The server didn’t respond in time.</b> This is usually a slow or '
+          + 'interrupted network connection between this device and RapidReconciler. Check your '
+          + 'internet or VPN connection and try again.';
+        break;
+      case 'offline':
+        state = 'down';
+        text = 'This device appears to be offline';
+        verdict = '<b>No internet connection was detected on this device.</b> Reconnect to your '
+          + 'network (and VPN, if you use one) and try again.';
+        break;
+      default: // 'network'
+        state = 'down';
+        text = "Can't reach RapidReconciler";
+        verdict = '<b>This device can’t reach the RapidReconciler server.</b> The usual causes '
+          + 'are a network, DNS, VPN, firewall, or security-certificate issue on the connection '
+          + 'between this device and the server. Check your internet/VPN first; if that’s fine, '
+          + 'send the details below to support.';
+    }
+    connEl.hidden = false;
+    connEl.setAttribute('data-state', state);
+    connText.textContent = text;
+    const isProblem = (state === 'down' || state === 'warn');
+    connToggle.classList.toggle('is-hidden', !isProblem);
+    if (isProblem) {
+      connVerdict.innerHTML = verdict;
+      connDiag.textContent = buildDiagnosticsText();
+    } else {
+      // Healthy: collapse any open panel and drop the toggle.
+      connPanel.classList.add('is-hidden');
+      connToggle.setAttribute('aria-expanded', 'false');
+    }
+  }
+
+  // Classify a thrown fetch error (no HTTP response came back).
+  function classifyError(err) {
+    if (!navigator.onLine) return { kind: 'offline' };
+    if (err && (err.name === 'AbortError')) return { kind: 'timeout' };
+    return { kind: 'network' };
+  }
+
+  // Surface a connectivity problem raised elsewhere (e.g. a failed
+  // sign-in POST), reusing the same bar + panel.
+  function surfaceConnProblem(result) {
+    applyResult(result);
+    // Auto-open the panel so the user sees the guidance + actions.
+    connPanel.classList.remove('is-hidden');
+    connToggle.setAttribute('aria-expanded', 'true');
+  }
+
+  // Probe on load.
+  (function pingHealth() {
+    if (!navigator.onLine) {
+      window.__rrDiag && window.__rrDiag.log('ping skipped: navigator reports offline');
+      applyResult({ kind: 'offline' });
+      return;
+    }
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 6000);
+    window.__rrDiag && window.__rrDiag.log('ping ' + AUTH_BASE + '/api/v1/auth/ping');
+    fetch(AUTH_BASE + '/api/v1/auth/ping', { method: 'GET', headers: { 'Accept': 'application/json' }, signal: ctrl.signal })
+      .then(async (res) => {
+        clearTimeout(timer);
+        if (res.status >= 500) {
+          window.__rrDiag && window.__rrDiag.log('ping HTTP ' + res.status);
+          applyResult({ kind: 'server', status: res.status });
+          return;
+        }
+        if (res.ok) {
+          const body = await res.json().catch(() => ({}));
+          window.__rrDiag && window.__rrDiag.log('ping ok: ' + (body.service || '?') + ' ' + (body.version || ''));
+          applyResult({ kind: 'ok' });
+        } else {
+          // 3xx/4xx — the server answered, so it's reachable (a 404
+          // just means this VALC predates the ping endpoint).
+          window.__rrDiag && window.__rrDiag.log('ping reachable (HTTP ' + res.status + ')');
+          applyResult({ kind: 'reachable', status: res.status });
+        }
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        const r = classifyError(err);
+        window.__rrDiag && window.__rrDiag.log('ping failed: ' + (err && err.name) + ': ' + (err && err.message) + ' -> ' + r.kind);
+        applyResult(r);
+      });
+  })();
+
+  // Toggle the details panel.
+  connToggle.addEventListener('click', () => {
+    const open = connPanel.classList.toggle('is-hidden') === false;
+    connToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) connDiag.textContent = buildDiagnosticsText();
+  });
+
+  // Copy diagnostics to the clipboard (textarea fallback for older browsers).
+  connCopy.addEventListener('click', () => {
+    const text = buildDiagnosticsText();
+    const done = () => {
+      const orig = connCopy.textContent;
+      connCopy.textContent = 'Copied';
+      setTimeout(() => { connCopy.textContent = orig; }, 1600);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done));
+    } else {
+      fallbackCopy(text, done);
+    }
+  });
+  function fallbackCopy(text, done) {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      done();
+    } catch (_) {}
+  }
+
   function setErr(el, msgOrList) {
     if (Array.isArray(msgOrList)) {
       el.innerHTML = '<ul>' + msgOrList.map(m =>
@@ -581,7 +936,9 @@
       storeToken(body.token, username);
       window.location.href = REDIRECT;
     } catch (err) {
-      setErr(errEl, err.message || String(err));
+      window.__rrDiag && window.__rrDiag.log('sign-in failed: ' + (err && err.name) + ': ' + (err && err.message));
+      setErr(errEl, "We couldn't reach RapidReconciler to sign you in. See the connection details above.");
+      surfaceConnProblem(classifyError(err));
     } finally {
       submitEl.disabled = false;
       submitEl.textContent = orig;
@@ -632,7 +989,9 @@
       resetNoteEl.textContent = body.message || 'If that email is registered, instructions are on their way.';
       resetNoteEl.classList.add('is-visible');
     } catch (err) {
-      setErr(resetErrEl, err.message || String(err));
+      window.__rrDiag && window.__rrDiag.log('reset-request failed: ' + (err && err.name) + ': ' + (err && err.message));
+      setErr(resetErrEl, "We couldn't reach RapidReconciler. See the connection details above.");
+      surfaceConnProblem(classifyError(err));
     } finally {
       resetSubmitEl.disabled = false;
       resetSubmitEl.textContent = orig;
@@ -689,7 +1048,9 @@
       storeToken(body.token, pendingEmail);
       window.location.href = REDIRECT;
     } catch (err) {
-      setErr(changeErrEl, err.message || String(err));
+      window.__rrDiag && window.__rrDiag.log('change-password failed: ' + (err && err.name) + ': ' + (err && err.message));
+      setErr(changeErrEl, "We couldn't reach RapidReconciler. See the connection details above.");
+      surfaceConnProblem(classifyError(err));
     } finally {
       changeSubmitEl.disabled = false;
       changeSubmitEl.textContent = orig;

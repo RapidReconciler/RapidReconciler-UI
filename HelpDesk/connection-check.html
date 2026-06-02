@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html lang="en">
+<!--
+  =============================================================================
+  Connection Check — customer-facing connectivity fault-isolator
+  =============================================================================
+  Purpose: tell the user WHERE the connection is breaking down so they route
+  the problem to the right place — their own IT (firewall / IP filter / DNS /
+  proxy) for the ~99% that are on their end, or GSI for the cases that are
+  genuinely ours (e.g. a stale *.getgsi.com A-record). Produces a copy-paste
+  report an end user can hand to their IT with the exact host, port, and action.
+
+  No questions asked. The customer doesn't know their server's address and
+  shouldn't have to: the page runs automatically and DERIVES everything.
+
+  Three checks, run from this PC:
+    A  Internet & GSI   no-cors fetch to RR_CONFIG.statusAnchor
+                        (default rapidreconciler.getgsi.com) — proves the PC
+                        has internet AND GSI's edge is reachable.
+    B  Your RR server   GET <agent>/comms-check. Reaching it IS the
+                        "PC -> your server" test (the agent runs ON the app
+                        server). Its JSON carries the server's own identity
+                        (hostname/IP) AND the server-side checklist: the hops
+                        the browser can't see (server -> SQL DB, server -> GSI).
+    C  Sign-in service  RR_CONFIG.authBase /api/v1/auth/ping (CORS-permitted).
+
+  Agent base (B) resolves with no user input: ?agent= -> dev test-agent base
+  -> the page's own origin (in prod the agent serves the V8 app, so
+  /comms-check is same-origin). When the app server is fully down the page is
+  reached from GSI's public edge and the agent can't be hit — that's the
+  expected "your server is unreachable" branch, still no host needed.
+  =============================================================================
+-->
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Connection Check &mdash; RapidReconciler</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;500;600;700;800&family=Source+Sans+3:wght@400;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../Tools/welcome-banner.css">
+<style>
+  :root {
+    --navy:        #1f2d4a;
+    --navy-deep:   #142037;
+    --blue:        #2b5fb0;
+    --blue-bright: #3d8fd6;
+    --blue-pale:   #e6efff;
+    --orange:      #f08a24;
+    --orange-deep: #d97316;
+    --orange-pale: #fbe7ce;
+    --green:       #2e8a55;
+    --green-deep:  #246b43;
+    --green-soft:  #def4e6;
+    --red:         #b8463a;
+    --red-soft:    #fae3df;
+    --amber-soft:  #fff4e6;
+    --bg:          #ffffff;
+    --bg-soft:     #f6f8fb;
+    --text:        #1f2d4a;
+    --text-soft:   #5a6479;
+    --text-muted:  #8a93a6;
+    --rule:        #e1e7ef;
+    --rule-strong: #c9d3e0;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Open Sans', -apple-system, sans-serif;
+    background: var(--bg-soft);
+    color: var(--text);
+    line-height: 1.6;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  .welcome-banner::before { background: var(--orange); }
+  h1, h2 { font-family: 'Source Sans 3', sans-serif; }
+  a { color: var(--blue); }
+
+  .wrap { max-width: 760px; margin: 0 auto; padding: 32px 24px 48px; width: 100%; flex: 1; }
+
+  .intro h1 { font-size: 28px; font-weight: 800; color: var(--navy); margin-bottom: 8px; }
+  .intro p  { font-size: 15px; color: var(--text-soft); margin-bottom: 18px; max-width: 62ch; }
+
+  .run-btn {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 700;
+    font-size: 14px;
+    color: var(--blue);
+    background: #fff;
+    border: 1px solid var(--rule-strong);
+    border-radius: 7px;
+    padding: 9px 18px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .run-btn:hover:not(:disabled) { background: var(--blue-pale); border-color: var(--blue); }
+  .run-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+  /* Probe rows */
+  .probes { margin: 8px 0 0; }
+  .probe {
+    display: flex; align-items: flex-start; gap: 14px;
+    background: #fff; border: 1px solid var(--rule); border-radius: 10px;
+    padding: 14px 18px; margin-bottom: 10px;
+  }
+  .probe-icon {
+    flex: 0 0 auto; width: 26px; height: 26px; border-radius: 50%;
+    display: grid; place-items: center; font-weight: 700; font-size: 14px;
+    background: var(--bg-soft); color: var(--text-muted); margin-top: 1px;
+  }
+  .probe[data-state="run"]  .probe-icon { background: var(--blue-pale);  color: var(--blue); }
+  .probe[data-state="pass"] .probe-icon { background: var(--green-soft); color: var(--green-deep); }
+  .probe[data-state="warn"] .probe-icon { background: var(--orange-pale); color: var(--orange-deep); }
+  .probe[data-state="fail"] .probe-icon { background: var(--red-soft);   color: var(--red); }
+  .probe[data-state="run"]  .probe-icon::after { content: '\2026'; }
+  .probe[data-state="pass"] .probe-icon::after { content: '\2713'; }
+  .probe[data-state="warn"] .probe-icon::after { content: '!'; }
+  .probe[data-state="fail"] .probe-icon::after { content: '\2715'; }
+  .probe-body { flex: 1; min-width: 0; }
+  .probe-title { font-weight: 700; color: var(--navy); font-size: 14.5px; }
+  .probe-target { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-soft); word-break: break-all; }
+  .probe-result { font-size: 12.5px; color: var(--text-muted); margin-top: 3px; }
+  .probe[data-state="pass"] .probe-result { color: var(--green-deep); }
+  .probe[data-state="warn"] .probe-result { color: var(--orange-deep); }
+  .probe[data-state="fail"] .probe-result { color: var(--red); }
+
+  /* Nested server-side checklist (lives inside probe B) */
+  .scheck-list { margin: 10px 0 2px; }
+  .scheck {
+    display: flex; align-items: flex-start; gap: 10px;
+    padding: 9px 12px; border: 1px solid var(--rule); border-left-width: 4px;
+    border-radius: 7px; background: var(--bg-soft); margin-bottom: 7px;
+  }
+  .scheck[data-status="ok"]      { border-left-color: var(--green); }
+  .scheck[data-status="warning"] { border-left-color: var(--orange); }
+  .scheck[data-status="fail"]    { border-left-color: var(--red); }
+  .scheck-mark { flex: 0 0 auto; width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 700; margin-top: 1px; }
+  .scheck[data-status="ok"]      .scheck-mark { background: var(--green-soft); color: var(--green-deep); }
+  .scheck[data-status="warning"] .scheck-mark { background: var(--orange-pale); color: var(--orange-deep); }
+  .scheck[data-status="fail"]    .scheck-mark { background: var(--red-soft); color: var(--red); }
+  .scheck-body { flex: 1; min-width: 0; }
+  .scheck-label { font-weight: 700; color: var(--navy); font-size: 13px; }
+  .scheck-text { font-size: 12.5px; color: var(--text-soft); margin-top: 1px; }
+  .scheck-detail { font-size: 12px; color: var(--text); margin-top: 5px; padding: 7px 9px; background: #fff; border: 1px solid var(--rule); border-radius: 6px; }
+
+  /* Verdict */
+  .verdict { display: none; margin-top: 22px; border-radius: 10px; padding: 20px 22px; border: 1px solid var(--rule); }
+  .verdict.show { display: block; }
+  .verdict.your-it { background: var(--amber-soft); border-color: #f5d9af; }
+  .verdict.gsi     { background: var(--red-soft);   border-color: #f3c5bd; }
+  .verdict.maybe   { background: var(--blue-pale);  border-color: var(--blue-bright); }
+  .verdict.ok      { background: var(--green-soft); border-color: #cfe8d8; }
+  .verdict-route {
+    display: inline-block; font-family: 'Source Sans 3', sans-serif;
+    font-size: 11.5px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase;
+    padding: 4px 11px; border-radius: 100px; margin-bottom: 10px;
+  }
+  .verdict.your-it .verdict-route { background: var(--orange); color: #fff; }
+  .verdict.gsi     .verdict-route { background: var(--red); color: #fff; }
+  .verdict.maybe   .verdict-route { background: var(--blue); color: #fff; }
+  .verdict.ok      .verdict-route { background: var(--green-deep); color: #fff; }
+  .verdict-headline { font-family: 'Source Sans 3', sans-serif; font-size: 19px; font-weight: 700; color: var(--navy); margin-bottom: 8px; }
+  .verdict-cause { font-size: 14px; color: var(--text); margin-bottom: 14px; }
+  .verdict-actions-label { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-soft); margin-bottom: 6px; }
+  .verdict ul { margin: 0 0 4px 20px; font-size: 13.5px; color: var(--text); }
+  .verdict li { margin: 4px 0; }
+  .verdict code { font-family: 'JetBrains Mono', monospace; font-size: 12.5px; background: rgba(31,45,74,0.06); padding: 1px 6px; border-radius: 4px; }
+
+  .report { margin-top: 18px; display: none; }
+  .report.show { display: block; }
+  .report pre {
+    background: #fff; border: 1px solid var(--rule-strong); border-radius: 8px;
+    padding: 14px 16px; font-family: 'JetBrains Mono', monospace; font-size: 11.5px;
+    line-height: 1.55; color: var(--text-soft); white-space: pre-wrap; word-break: break-word;
+    max-height: 300px; overflow: auto;
+  }
+  .report-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .rbtn {
+    font-family: inherit; font-size: 13px; font-weight: 700;
+    padding: 9px 16px; border-radius: 6px; cursor: pointer; text-decoration: none;
+    border: 1px solid var(--blue); background: var(--blue); color: #fff;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .rbtn:hover { filter: brightness(1.08); }
+  .rbtn.ghost { background: #fff; color: var(--blue); }
+  .rbtn.ghost:hover { background: var(--blue-pale); filter: none; }
+
+  /* Network path */
+  .netpath { display: none; margin-top: 22px; }
+  .netpath.show { display: block; }
+  .netpath-title { font-size: 18px; font-weight: 700; color: var(--navy); margin-bottom: 4px; }
+  .netpath-intro { font-size: 13px; color: var(--text-soft); margin-bottom: 14px; }
+  .np-group { background: #fff; border: 1px solid var(--rule); border-radius: 10px; padding: 6px 4px; margin-bottom: 10px; }
+  .np-group-head {
+    font-family: 'Source Sans 3', sans-serif; font-size: 12px; font-weight: 700;
+    letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-soft);
+    padding: 8px 14px 6px;
+  }
+  .np-row { display: flex; gap: 12px; align-items: baseline; padding: 7px 14px; border-top: 1px solid var(--rule); flex-wrap: wrap; }
+  .np-leg { flex: 0 0 auto; font-weight: 700; color: var(--navy); font-size: 13px; min-width: 200px; }
+  .np-addr { flex: 1; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text); word-break: break-all; }
+  .np-addr .np-noip { color: var(--red); }
+  .np-note { font-size: 12.5px; color: var(--text-soft); padding: 4px 2px; }
+
+  .back-link { display: inline-block; margin-top: 26px; font-size: 13px; }
+
+  footer { margin-top: auto; background: var(--navy-deep); color: rgba(255,255,255,0.7); padding: 22px 0; font-size: 13px; }
+  .footer-inner { max-width: 760px; margin: 0 auto; padding: 0 24px; display: flex; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+  .footer-inner strong { color: #fff; }
+  .footer-inner a { color: var(--blue-bright); text-decoration: none; }
+
+  @media (max-width: 640px) {
+    .intro h1 { font-size: 23px; }
+    .footer-inner { flex-direction: column; gap: 6px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ============ WELCOME BANNER ============ -->
+<section class="welcome-banner" aria-label="Welcome">
+  <div class="welcome-inner">
+    <img class="welcome-logo" src="../Images/rr-logo.png" alt="RapidReconciler" />
+    <div class="welcome-middle">
+      <span class="welcome-pill">Connection Check</span>
+    </div>
+    <div class="welcome-right">
+      <a class="welcome-gsi" href="https://www.getgsi.com" target="_blank" rel="noopener" aria-label="GSI">
+        <img src="../Images/gsi-logo.png" alt="GSI" />
+      </a>
+    </div>
+  </div>
+</section>
+
+<main class="wrap">
+  <div class="intro">
+    <h1>Where is the connection breaking down?</h1>
+    <p>This check runs automatically from this computer and pinpoints where
+      RapidReconciler can&rsquo;t be reached &mdash; so you can give your IT team the
+      exact thing to fix, or know when it&rsquo;s something for GSI. Nothing is
+      uploaded; the checks run in your browser.</p>
+    <button type="button" class="run-btn" id="runBtn">Run the check again</button>
+  </div>
+
+  <!-- Probe rows -->
+  <div class="probes" id="probes">
+    <div class="probe" id="probeA" data-state="idle">
+      <div class="probe-icon" aria-hidden="true"></div>
+      <div class="probe-body">
+        <div class="probe-title">Internet &amp; GSI reachable</div>
+        <div class="probe-target" id="targetA"></div>
+        <div class="probe-result" id="resultA">Waiting&hellip;</div>
+      </div>
+    </div>
+    <div class="probe" id="probeB" data-state="idle">
+      <div class="probe-icon" aria-hidden="true"></div>
+      <div class="probe-body">
+        <div class="probe-title">Your RapidReconciler server</div>
+        <div class="probe-target" id="targetB"></div>
+        <div class="probe-result" id="resultB">Waiting&hellip;</div>
+        <div class="scheck-list" id="serverList"></div>
+      </div>
+    </div>
+    <div class="probe" id="probeC" data-state="idle">
+      <div class="probe-icon" aria-hidden="true"></div>
+      <div class="probe-body">
+        <div class="probe-title">Sign-in service</div>
+        <div class="probe-target" id="targetC"></div>
+        <div class="probe-result" id="resultC">Waiting&hellip;</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Verdict -->
+  <div class="verdict" id="verdict">
+    <span class="verdict-route" id="verdictRoute"></span>
+    <div class="verdict-headline" id="verdictHeadline"></div>
+    <div class="verdict-cause" id="verdictCause"></div>
+    <div class="verdict-actions-label" id="verdictActionsLabel" style="display:none;">What to check / send</div>
+    <ul id="verdictActions"></ul>
+  </div>
+
+  <!-- Network path: the legs + addresses IT can test or trace -->
+  <section class="netpath" id="netpath">
+    <h2 class="netpath-title">Network path</h2>
+    <p class="netpath-intro">The connection legs below, with the addresses your IT can test or trace.
+      A leg that didn&rsquo;t resolve to an IP is itself a clue (a DNS problem).</p>
+    <div id="netpathList"></div>
+  </section>
+
+  <!-- IT-ready report -->
+  <div class="report" id="report">
+    <pre id="reportText"></pre>
+    <div class="report-actions">
+      <button type="button" class="rbtn" id="copyBtn">Copy report</button>
+      <a class="rbtn ghost" id="emailBtn" href="#">Email it to support</a>
+    </div>
+  </div>
+
+  <a class="back-link" href="../login.html">&larr; Back to sign in</a>
+</main>
+
+<footer>
+  <div class="footer-inner">
+    <span><strong>RapidReconciler</strong> &middot; Connection Check</span>
+    <span>&copy; 2026 GSI &middot; <a href="mailto:rrsupport@getgsi.com">rrsupport@getgsi.com</a></span>
+  </div>
+</footer>
+
+<script src="../RRV8/config.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  var rc = window.RR_CONFIG || {};
+  var params = new URLSearchParams(window.location.search);
+  var here = window.location;
+
+  // A — GSI's always-up public edge (internet + GSI baseline).
+  var ANCHOR = rc.statusAnchor || 'https://rapidreconciler.getgsi.com';
+  // C — the auth/login service (VALC). ?auth= wins, then config.
+  var AUTH_BASE = params.get('auth') || rc.authBase || rc.valcBase || '';
+  // B — the agent on the app server. ?agent= wins; then the dev
+  // test-agent base; then this page's own origin (in prod the agent
+  // serves the V8 app, so /comms-check is same-origin). No user input:
+  // reaching the agent IS the "PC -> your server" test, and its
+  // response carries the server's own identity + the server-side hops.
+  var COMMS_BASE = params.get('agent') || rc.testAgentBase
+                || (here.protocol.indexOf('http') === 0 ? (here.protocol + '//' + here.host) : '');
+
+  function $(id) { return document.getElementById(id); }
+  function hostLabel(u) { try { return new URL(u).host; } catch (_) { return u; } }
+  function hostOnly(u) {
+    if (!u) return '';
+    var s = String(u).replace(/^[a-z]+:\/\//i, '').split('/')[0];
+    return s.split(':')[0];
+  }
+  function portOf(u, def) {
+    try { var x = new URL(/^[a-z]+:\/\//i.test(u) ? u : ('https://' + u)); return x.port || (x.protocol === 'http:' ? '80' : '443'); }
+    catch (_) { return def; }
+  }
+  function trimSlash(s) { return (s && s.endsWith('/')) ? s.replace(/\/+$/, '') : s; }
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function (ch) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch];
+    });
+  }
+  function codeify(s) { return '<code>' + escapeHtml(s) + '</code>'; }
+
+  // ---- A reachability probe (A and C) --------------------------------
+  // no-cors fetch resolves (opaque) if ANY HTTP response came back —
+  // even an error status — and rejects only on a true network failure
+  // (DNS, refused, dropped, TLS). Exactly the "reachable?" signal, with
+  // no CORS dependency. Timing is a soft hint: fast reject ~ DNS /
+  // refused; reject at the timeout ~ a firewall silently dropping.
+  function probe(url, opts) {
+    opts = opts || {};
+    var now = function () { return (window.performance && performance.now) ? performance.now() : Date.now(); };
+    var t0 = now();
+    var ctrl = new AbortController();
+    var timer = setTimeout(function () { ctrl.abort(); }, opts.timeout || 8000);
+    var fetchOpts = { signal: ctrl.signal, cache: 'no-store' };
+    if (opts.cors) { fetchOpts.headers = { 'Accept': 'application/json' }; }
+    else { fetchOpts.mode = 'no-cors'; }
+    var bust = url + (url.indexOf('?') >= 0 ? '&' : '?') + 'rrcc=' + Date.now();
+    return fetch(bust, fetchOpts).then(function (res) {
+      clearTimeout(timer);
+      return { ok: true, ms: Math.round(now() - t0), status: (opts.cors ? res.status : 0),
+               serverError: opts.cors && res.status >= 500 };
+    }).catch(function (err) {
+      clearTimeout(timer);
+      return { ok: false, ms: Math.round(now() - t0), aborted: (err && err.name === 'AbortError'),
+               err: (err && err.message) || String(err) };
+    });
+  }
+
+  // ---- Probe B: the agent comms-check (JSON) -------------------------
+  function commsCheck() {
+    if (!COMMS_BASE) return Promise.resolve({ ok: false, noBase: true });
+    var now = function () { return (window.performance && performance.now) ? performance.now() : Date.now(); };
+    var t0 = now();
+    var ctrl = new AbortController();
+    var timer = setTimeout(function () { ctrl.abort(); }, 12000);
+    // Ask the agent to resolve the PC-side hosts too (GSI edge + sign-in),
+    // so the network-path list can show their IPs from the server's view.
+    var resolveCsv = [hostOnly(ANCHOR), AUTH_BASE ? hostOnly(AUTH_BASE) : ''].filter(Boolean).join(',');
+    return fetch(trimSlash(COMMS_BASE) + '/comms-check?resolve=' + encodeURIComponent(resolveCsv) + '&rrcc=' + Date.now(),
+        { signal: ctrl.signal, cache: 'no-store', headers: { 'Accept': 'application/json' } })
+      .then(function (res) {
+        clearTimeout(timer);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.json();
+      })
+      .then(function (data) { return { ok: true, ms: Math.round(now() - t0), data: data }; })
+      .catch(function (err) {
+        clearTimeout(timer);
+        return { ok: false, ms: Math.round(now() - t0), aborted: (err && err.name === 'AbortError'),
+                 err: (err && err.message) || String(err) };
+      });
+  }
+
+  function setProbe(letter, state, resultText, target) {
+    $('probe' + letter).setAttribute('data-state', state);
+    if (target != null) $('target' + letter).textContent = target;
+    $('result' + letter).textContent = resultText;
+  }
+
+  function timingNote(r) {
+    if (r.ok) return '';
+    if (r.aborted) return ' (no response in time — often a firewall silently dropping the connection)';
+    if (r.ms < 1500) return ' (failed immediately — often DNS not resolving, or the connection refused)';
+    return '';
+  }
+
+  // ---- State for the report -----------------------------------------
+  var lastReport = '', lastRoute = '';
+
+  function statusWord(r) {
+    if (!r) return 'not checked';
+    if (r.noBase) return 'not checked (no address available)';
+    if (r.ok) return 'REACHABLE (' + r.ms + ' ms)' + (r.serverError ? ' but HTTP ' + r.status : '');
+    if (r.aborted) return 'NO RESPONSE (' + r.ms + ' ms)';
+    return 'COULD NOT CONNECT (' + r.ms + ' ms)';
+  }
+
+  // ---- Server-side checklist render (inside probe B) -----------------
+  var MARK = { ok: '✓', warning: '!', fail: '✕' };
+  function renderServerChecks(checks) {
+    return checks.map(function (c) {
+      var st = (c.status === 'ok' || c.status === 'warning' || c.status === 'fail') ? c.status : 'warning';
+      var detail = c.detail ? '<div class="scheck-detail">' + escapeHtml(c.detail) + '</div>' : '';
+      return '<div class="scheck" data-status="' + st + '">' +
+        '<span class="scheck-mark">' + (MARK[st] || '') + '</span>' +
+        '<div class="scheck-body">' +
+          '<div class="scheck-label">' + escapeHtml(c.label || c.name || '') + '</div>' +
+          '<div class="scheck-text">' + escapeHtml(c.text || '') + '</div>' + detail +
+        '</div></div>';
+    }).join('');
+  }
+  function worstStatus(checks) {
+    var rank = { ok: 0, warning: 1, fail: 2 }, w = 'ok';
+    checks.forEach(function (c) { if ((rank[c.status] || 0) > rank[w]) w = c.status; });
+    return w;
+  }
+
+  // ---- Network path (the trace-spec list) ----------------------------
+  function buildPathRows(b) {
+    var resolved = (b.ok && b.data && b.data.resolved) ? b.data.resolved : {};
+    var srv = (b.ok && b.data && b.data.host) ? b.data.host : {};
+    var serverEps = (b.ok && b.data && b.data.endpoints) ? b.data.endpoints : [];
+    var anchorH = hostOnly(ANCHOR);
+    var pc = [
+      { label: 'GSI edge', host: anchorH, ip: resolved[anchorH] || null, port: '443' },
+      { label: 'Your RapidReconciler server',
+        host: srv.hostname || (COMMS_BASE ? hostOnly(COMMS_BASE) : 'your server'),
+        ip: srv.internalIp || null, port: '443, 32145–49152' }
+    ];
+    if (AUTH_BASE) {
+      var authH = hostOnly(AUTH_BASE);
+      pc.push({ label: 'Sign-in service', host: authH, ip: resolved[authH] || null, port: portOf(AUTH_BASE, '443') });
+    }
+    return { pc: pc, server: serverEps, serverId: srv, agentReachable: !!(b.ok && b.data) };
+  }
+
+  function renderPath(rows) {
+    function rowHtml(r) {
+      var ip = r.ip ? escapeHtml(r.ip) : '<span class="np-noip">no IP — didn’t resolve</span>';
+      return '<div class="np-row"><span class="np-leg">&rarr; ' + escapeHtml(r.label) + '</span>' +
+             '<span class="np-addr">' + escapeHtml(r.host) + ' (' + ip + ') : ' + escapeHtml(String(r.port)) + '</span></div>';
+    }
+    var html = '<div class="np-group"><div class="np-group-head">From this PC</div>' +
+               rows.pc.map(rowHtml).join('') + '</div>';
+    if (rows.agentReachable) {
+      var sid = [rows.serverId.hostname, rows.serverId.internalIp].filter(Boolean).join(' / ') || 'your server';
+      html += '<div class="np-group"><div class="np-group-head">From your RapidReconciler server (' + escapeHtml(sid) + ')</div>' +
+              (rows.server.length ? rows.server.map(rowHtml).join('')
+                                  : '<div class="np-row"><span class="np-addr">No server-side endpoints reported.</span></div>') +
+              '</div>';
+    } else {
+      html += '<div class="np-note">Your server couldn’t be reached, so its outbound legs (database, GSI) and exact IPs can’t be shown. The addresses above use names your IT can still test or trace.</div>';
+    }
+    $('netpathList').innerHTML = html;
+    $('netpath').classList.add('show');
+  }
+
+  // ---- Attribution ---------------------------------------------------
+  function render(a, b, c) {
+    var online = navigator.onLine;
+    var route, cls, headline, cause, actions = [];
+
+    // Server identity (derived — never asked).
+    var srv = (b.ok && b.data && b.data.host) ? b.data.host : null;
+    var srvName = srv && srv.hostname ? srv.hostname : 'your RapidReconciler server';
+    var srvChecks = (b.ok && b.data && b.data.checks) ? b.data.checks : [];
+    var srvWorst = srvChecks.length ? worstStatus(srvChecks) : null;
+
+    if (!online && !a.ok) {
+      route = 'Your IT'; cls = 'your-it';
+      headline = 'This computer is offline';
+      cause = 'No network connection was detected on this device. Reconnect to your network (and VPN, if you use one) and run the check again.';
+      actions = ['Confirm this PC has a working internet connection.', 'If you connect through a VPN, make sure it is connected.'];
+    } else if (!a.ok) {
+      route = 'Your IT'; cls = 'your-it';
+      headline = "This computer can't reach the internet / GSI";
+      cause = 'The baseline check to GSI&rsquo;s public address failed' + timingNote(a) + '. This usually means general internet access from this PC is blocked or down — not something specific to RapidReconciler.';
+      actions = ['Confirm general internet works from this PC (open any public website).',
+                 'Check VPN, web proxy, and outbound firewall rules.',
+                 'Allow outbound HTTPS (TCP 443) to ' + codeify(hostLabel(ANCHOR)) + '.'];
+    } else if (!b.ok) {
+      var fast = (b.ms < 1500 && !b.aborted && !b.noBase);
+      route = 'Your IT or GSI'; cls = 'maybe';
+      headline = "Your RapidReconciler server couldn't be reached";
+      cause = 'GSI is reachable, but ' + escapeHtml(srvName) + ' didn&rsquo;t respond' + timingNote(b) +
+        '. ' + (fast ? 'A fast failure like this usually means the address isn&rsquo;t resolving (DNS). ' : '') +
+        'Your RapidReconciler address is a getgsi.com name whose DNS is managed by GSI — so this can be a GSI DNS issue, or your own network blocking the route to your server.';
+      actions = ['Ask your IT to confirm this PC can reach your RapidReconciler server (DNS resolves it, and the route / firewall allows ports 32145&ndash;49152 and 443).',
+                 'If your IT confirms DNS and firewall are fine, send the report below to GSI — it may be a DNS / A-record update on our side.'];
+    } else if (srvWorst === 'fail' || srvWorst === 'warning') {
+      // Server is reachable but it self-reports a problem behind it.
+      var bad = srvChecks.filter(function (x) { return x.status === srvWorst; })[0] || {};
+      route = (srvWorst === 'fail') ? 'Your IT or DBA' : 'Heads up'; cls = (srvWorst === 'fail') ? 'your-it' : 'maybe';
+      headline = 'Your server is reachable, but reports a problem behind it';
+      cause = escapeHtml(srvName) + ' answered, but one of its own checks came back ' + srvWorst.toUpperCase() +
+        ': <b>' + escapeHtml(bad.label || '') + '</b> — ' + escapeHtml(bad.text || '') +
+        ' See the checklist under &ldquo;Your RapidReconciler server&rdquo; for the fix.';
+      actions = bad.detail ? [bad.detail] : [];
+    } else if (c.target && !c.ok) {
+      route = 'Your IT or GSI'; cls = 'maybe';
+      headline = "The sign-in service couldn't be reached";
+      cause = 'Your server is reachable, but the sign-in service didn&rsquo;t respond' + timingNote(c) +
+        '. This is the service that authenticates you.';
+      actions = ['Ask your IT to allow outbound HTTPS (TCP 443) to ' + codeify(hostLabel(c.target)) + '.',
+                 'If your IT confirms the route is open, send the report below to GSI.'];
+    } else if (c.serverError) {
+      route = 'Contact GSI'; cls = 'gsi';
+      headline = 'RapidReconciler is reachable but reporting an error';
+      cause = 'Everything on your side looks reachable, but the sign-in service returned a server error (HTTP ' + c.status + '). This is on GSI&rsquo;s side.';
+      actions = ['Send the report below to GSI support — no action needed on your end.'];
+    } else {
+      route = 'All clear'; cls = 'ok';
+      headline = 'Connectivity looks good';
+      cause = 'This PC can reach the internet, GSI, ' + escapeHtml(srvName) + ', and the sign-in service, and the server&rsquo;s own checks all passed. If you still can&rsquo;t use RapidReconciler, send the report to GSI.';
+      actions = [];
+    }
+
+    $('verdict').className = 'verdict show ' + cls;
+    $('verdictRoute').textContent = route;
+    $('verdictHeadline').textContent = headline;
+    $('verdictCause').innerHTML = cause;
+    var ul = $('verdictActions');
+    ul.innerHTML = actions.map(function (x) { return '<li>' + x + '</li>'; }).join('');
+    $('verdictActionsLabel').style.display = actions.length ? 'block' : 'none';
+
+    var pathRows = buildPathRows(b);
+    renderPath(pathRows);
+
+    lastRoute = route;
+    lastReport = buildReport(a, b, c, srv, srvChecks, route, headline, pathRows);
+    $('reportText').textContent = lastReport;
+    $('report').classList.add('show');
+    var subject = encodeURIComponent('RapidReconciler connection check — ' + route);
+    $('emailBtn').setAttribute('href', 'mailto:rrsupport@getgsi.com?subject=' + subject + '&body=' + encodeURIComponent(lastReport));
+  }
+
+  function buildReport(a, b, c, srv, srvChecks, route, headline, pathRows) {
+    var lines = [
+      'RapidReconciler connection check',
+      'Run at:         ' + new Date().toISOString(),
+      'From this PC:   ' + window.location.href,
+      'Browser online: ' + (navigator.onLine ? 'yes' : 'no'),
+      '',
+      'Internet & GSI (' + hostLabel(ANCHOR) + '):  ' + statusWord(a),
+      'Your RapidReconciler server:  ' + statusWord(b) +
+        (srv && (srv.hostname || srv.internalIp) ? '  [' + [srv.hostname, srv.internalIp].filter(Boolean).join(', ') + ']' : ''),
+      'Sign-in service (' + (c.target ? hostLabel(c.target) : 'not configured') + '):  ' + statusWord(c)
+    ];
+    if (srvChecks && srvChecks.length) {
+      lines.push('', 'On your RapidReconciler server:');
+      srvChecks.forEach(function (x) {
+        lines.push('  [' + String(x.status || '?').toUpperCase() + '] ' + (x.label || x.name) + ' — ' + (x.text || ''));
+        if (x.detail) lines.push('         fix: ' + x.detail);
+      });
+    }
+    if (pathRows) {
+      lines.push('', 'Network path (addresses for your IT to test / trace):');
+      pathRows.pc.forEach(function (r) {
+        lines.push('  this PC -> ' + r.label + ': ' + r.host + ' (' + (r.ip || 'did not resolve') + ') : ' + r.port);
+      });
+      if (pathRows.agentReachable) {
+        var from = pathRows.serverId.hostname || 'your server';
+        pathRows.server.forEach(function (r) {
+          lines.push('  ' + from + ' -> ' + r.label + ': ' + r.host + ' (' + (r.ip || 'did not resolve') + ') : ' + r.port);
+        });
+      }
+    }
+    lines.push('', 'Most likely: ' + headline + '  ->  ' + route, 'User agent:  ' + navigator.userAgent);
+    return lines.join('\n');
+  }
+
+  // ---- Run -----------------------------------------------------------
+  var running = false;
+  function run() {
+    if (running) return;
+    running = true;
+    $('runBtn').disabled = true;
+    $('verdict').classList.remove('show');
+    $('report').classList.remove('show');
+    $('netpath').classList.remove('show');
+    $('serverList').innerHTML = '';
+
+    setProbe('A', 'run', 'Checking…', hostLabel(ANCHOR));
+    setProbe('B', 'run', 'Checking your server…', COMMS_BASE ? hostLabel(COMMS_BASE) : 'detecting…');
+    setProbe('C', AUTH_BASE ? 'run' : 'idle', AUTH_BASE ? 'Checking…' : 'No sign-in service configured.',
+      AUTH_BASE ? (hostLabel(AUTH_BASE) + '  (/api/v1/auth/ping)') : '—');
+
+    var pA = probe(ANCHOR);
+    var pB = commsCheck();
+    var pC = AUTH_BASE ? probe(AUTH_BASE + '/api/v1/auth/ping', { cors: true }) : Promise.resolve({ skipped: true });
+
+    Promise.all([pA, pB, pC]).then(function (arr) {
+      var a = arr[0], b = arr[1], c = arr[2];
+      c.target = AUTH_BASE || '';
+
+      // A
+      setProbe('A', a.ok ? 'pass' : 'fail',
+        a.ok ? 'Reachable (' + a.ms + ' ms)' : 'Could not reach' + timingNote(a));
+
+      // B (the agent comms-check)
+      if (b.ok && b.data) {
+        var checks = b.data.checks || [];
+        var worst = checks.length ? worstStatus(checks) : 'ok';
+        var srv = b.data.host || {};
+        var idLabel = srv.hostname || (b.data.agent || 'reachable');
+        setProbe('B', worst === 'ok' ? 'pass' : worst === 'fail' ? 'fail' : 'warn',
+          'Reachable (' + b.ms + ' ms) — ' + checks.length + ' server-side check' + (checks.length === 1 ? '' : 's') +
+            (worst === 'ok' ? ', all clear.' : ', see below.'),
+          idLabel + (srv.internalIp ? '  (' + srv.internalIp + ')' : ''));
+        $('serverList').innerHTML = renderServerChecks(checks);
+      } else if (b.noBase) {
+        setProbe('B', 'fail', 'No address available to reach your server from here.', 'unknown');
+      } else {
+        setProbe('B', 'fail', 'Could not reach your server' + timingNote(b), COMMS_BASE ? hostLabel(COMMS_BASE) : 'unknown');
+      }
+
+      // C (sign-in service)
+      if (!AUTH_BASE) {
+        setProbe('C', 'idle', 'Not configured.');
+      } else {
+        setProbe('C', (c.ok && !c.serverError) ? 'pass' : 'fail',
+          c.serverError ? ('Answered with an error (HTTP ' + c.status + ')')
+            : c.ok ? ('Reachable (' + c.ms + ' ms)') : ('Could not reach' + timingNote(c)));
+      }
+
+      render(a, b, c);
+      running = false;
+      $('runBtn').disabled = false;
+    });
+  }
+
+  // ---- Wire-up -------------------------------------------------------
+  $('targetA').textContent = hostLabel(ANCHOR);
+  $('runBtn').addEventListener('click', run);
+
+  $('copyBtn').addEventListener('click', function () {
+    var text = lastReport || '';
+    var done = function () { var b = $('copyBtn'), o = b.textContent; b.textContent = 'Copied'; setTimeout(function () { b.textContent = o; }, 1600); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done).catch(function () { fallbackCopy(text, done); });
+    } else { fallbackCopy(text, done); }
+  });
+  function fallbackCopy(text, done) {
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select(); document.execCommand('copy');
+      document.body.removeChild(ta); done();
+    } catch (_) {}
+  }
+
+  // Runs automatically — the customer never has to know or type anything.
+  run();
+})();
+</script>
+
+</body>
+</html>
