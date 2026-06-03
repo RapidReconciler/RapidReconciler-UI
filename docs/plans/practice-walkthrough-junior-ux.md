@@ -47,6 +47,27 @@ sequenced actions — not in a chat. If the guidance isn't on the screen, it doe
 
 ## Batch — grouped, in suggested build order
 
+### ★ New finding (pass 9): the practice flow never reaches "all green" — RESOLVED via Spawn
+The sandbox card greens **Agent** (simulate heartbeat) and the **company-data gate**, but
+**Database** stayed "Offline" / **Services** "Not yet deployed" — and the original coaching
+*told the junior not to touch the start-service control*, so there was no path to all-green.
+**Resolution (decision locked):** no new simulate, no always-on practice agent (both were
+explored and dropped). Instead, **teach the existing manual Spawn** — the ▶ on the database
+row runs `AgentLifecycleService.start`, which spawns a *real* Services jar against the
+registered **RapidReconciler_Prod** (a real, populated DB on the dev box), bringing Database
+**Online**, Services **Deployed**, and real company data — and the spawned jar reports
+heartbeat as the practice client. Validated out-of-band: a jar serving `RapidReconciler_Prod`
+returned `companyConstantsCount=11, companies=2` and posted `…/clients/7/heartbeat-facts`.
+Manual Spawn is *preferred* as a training step (the junior performs a real action and watches
+the result). The Databases coaching strip now instructs: register → click ▶ to start the
+service → it comes Online ("in real life the agent does this; in the sandbox you do it").
+- **Dead Database pill on the practice card — FIXED (pass 9).** Root cause: the popover
+  click/keydown handler was bound to `#clients-tbody` (the grid), but the practice card
+  renders in `#practice-section`, so its pill was never handled. Made the handler
+  **document-wide** → the practice pill now opens the same per-DB popover + start-service
+  toggle a live card does.
+(#14 licensing-as-a-step is the last remaining bucket-B item after this.)
+
 ### A. Bugs (break the real flow — fix first)
 > **Pass 1 (2026-06-03) resolved the root cause.** The "blank Client Details" was not a
 > load bug — `loadClientDetailsTab` *intentionally* blanked Name / Contact 1 / RR Admin /
@@ -109,11 +130,16 @@ sequenced actions — not in a chat. If the guidance isn't on the screen, it doe
    below the decoder, so the decoder points at it rather than duplicating the button.
    **Truncation fixed:** `.pill-state` now wraps (full "No databases" / "Not yet
    deployed") instead of ellipsizing; the pills stay matched-height (grid stretch).
-9. **Named triage lanes** on Client Management — *Action Required* / *Waiting on Customer* /
-   *Live* — that cards flow through **automatically** (the agent reporting in is the mover).
-   Junior should always know "is this mine right now, or am I waiting on them?" The coach
-   callout should flip to **"Waiting on the customer"** during the two customer-dependent
-   pauses (prep submission, install).
+9. **Named triage lanes** on Client Management. **ATTEMPTED (pass 9) → REVERTED, not
+   shipped.** Built the 2-lane split (DashboardController actionRequired/waiting +
+   grid lane headers), but in dev it rendered wrong (a "Waiting on customer" header with a
+   count but no cards, next to a "2 healthy" strip — the same two clients can't be both),
+   and it's **low-value here anyway**: with ~2 real clients (almost always healthy → strip)
+   + the practice client (own section), the attention lanes are empty most of the time, so
+   the lanes mostly add confusion. Reverted the working-tree changes (uncommitted).
+   **Revisit only when there's a fuller client roster** where "mine vs waiting" earns its
+   space; would also need the live-poll reload signature extended to re-lane on actorKind
+   change (deferred for reload-loop risk).
 10. ~~**Reality-vs-practice bridge note** between bundle generation and DB registration.~~
     **DONE (pass 5).** The Install Bundle coaching strip now says the next beat is a *wait*
     — in real life the card sits in the queue for days while the customer's team installs;
@@ -121,12 +147,12 @@ sequenced actions — not in a chat. If the guidance isn't on the screen, it doe
     their install" banner itself honest about being a shortcut folds into #9/#10 polish.)*
 11. ~~**Demote check source tags** (VALC / Agent).~~ **DONE (pass 2).** The source pill now
     renders only on rows that need attention (fail / warning); green/pending rows are clean.
-12. ~~**Databases row → collapse technical knobs.**~~ **DONE (pass 7).** Category / RAM /
-    Job Name moved into the existing per-row detail drawer (editable there; the drawer's
-    delegated handlers already served its GL-date toggle, so relocation was safe). Table
-    slimmed to 6 columns (disclose · Service · Online Status · Name · Version · Options),
-    all `colspan` 9→6. Service start/stop stays on the row (operational, used by real
-    support). *(The stale "click Add Database" banner refresh remains a tiny open polish.)*
+12. ~~**Databases row → collapse technical knobs.**~~ **DONE (pass 7) → REVERTED (pass 9).**
+    Decision reversed: the Databases page must **look exactly like production** (knobs visible
+    in the row), so the junior learns the real screen — no practice-only divergence. Restored
+    the 9-column row (Job Name / Category / RAM back as columns), all `colspan` 9, drawer back
+    to read-only. *(Lesson: don't make practice surfaces differ from live; teach the real
+    thing.)*
 13. ~~**Disabled Go-live button must state its blocking reason loudly.**~~ **DONE (pass 2).**
     When the handoff button is disabled, its reason now renders as a loud amber callout
     (`.go-live-hint.is-blocked`) instead of faint side text.
