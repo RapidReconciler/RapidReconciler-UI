@@ -5015,6 +5015,32 @@
     const u = getCurrentUser();
     const dbs = getCurrentDatabases();
     const showSignOut = !IS_DEMO;
+    // Admin actions are role-gated. The active DB's perms come from the
+    // JWT (perms.ij = Import JDE, perms.rs = Restart Service). Fail open
+    // (!== false) for back-compat with the dev token / demo payload that
+    // never carried a perms block.
+    const _sess = window.RR_SESSION || {};
+    const _adb  = (Array.isArray(_sess.dbs) ? _sess.dbs : [])[_sess.activeDbIndex || 0] || {};
+    const _aperms = _adb.perms || {};
+    const canImportJde      = (_aperms.ij !== false);
+    const canRestartService = (_aperms.rs !== false);
+    const adminButtons =
+      (canImportJde ? `
+        <button class="user-menu-action" type="button" data-action="import-jde">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+          <span>Import JDE data</span>
+          <span class="user-menu-action-meta">Global</span>
+        </button>` : '') +
+      (canRestartService ? `
+        <button class="user-menu-action is-danger" type="button" data-action="restart-service">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"></path><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"></path></svg>
+          <span>Restart Service</span>
+          <span class="user-menu-action-meta">Admin</span>
+        </button>` : '');
+    const adminSection = adminButtons ? `
+      <div class="user-menu-section">
+        <div class="user-menu-section-label">Admin</div>${adminButtons}
+      </div>` : '';
 
     const dbRows = dbs.length ? dbs.map(db => `
       <button class="user-menu-db ${db.isCurrent ? 'is-current' : ''}" type="button" data-db-index="${db.index}">
@@ -5035,19 +5061,7 @@
         <div class="user-menu-section-label">Connected database</div>
         ${dbRows}
       </div>
-      <div class="user-menu-section">
-        <div class="user-menu-section-label">Admin</div>
-        <button class="user-menu-action" type="button" data-action="import-jde">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-          <span>Import JDE data</span>
-          <span class="user-menu-action-meta">Global</span>
-        </button>
-        <button class="user-menu-action is-danger" type="button" data-action="restart-service">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"></path><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"></path></svg>
-          <span>Restart Service</span>
-          <span class="user-menu-action-meta">Admin</span>
-        </button>
-      </div>
+      ${adminSection}
       ${showSignOut ? `
       <div class="user-menu-section">
         <button class="user-menu-action" type="button" data-action="sign-out">
@@ -5066,6 +5080,10 @@
         renderUserChip();
         buildUserMenu();
         positionUserMenu();
+        // The new DB may license a different module set — re-apply caps.
+        if (window.RRV8 && typeof window.RRV8.applyClientModuleCaps === 'function') {
+          window.RRV8.applyClientModuleCaps();
+        }
         // In prod/staging this would normally re-fetch against the
         // new DB. The data endpoints aren't wired yet, so just flash
         // a note and leave the page state alone.
@@ -5648,6 +5666,13 @@
     .then(() => {
       renderUserChip();
       buildUserMenu();
+      // Re-apply the client/role module caps now that the session is
+      // hydrated. mountSidebar() runs synchronously at load — before
+      // bootSession populates RR_SESSION — so its initial caps pass
+      // fails open; this pass actually hides unlicensed/ungranted modules.
+      if (window.RRV8 && typeof window.RRV8.applyClientModuleCaps === 'function') {
+        window.RRV8.applyClientModuleCaps();
+      }
       loadData();
     })
     .catch(err => {

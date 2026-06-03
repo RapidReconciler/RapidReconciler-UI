@@ -552,6 +552,20 @@
     // needed. Pages that actively preload will overwrite the dot
     // state via RRV8.setDmaaiStatus(...).
     applyClientModuleCaps();
+    // mountSidebar() runs synchronously at script load, but most pages
+    // populate RR_SESSION later via their own async bootSession(). When
+    // that's the case the pass above fails open (no active db yet), so
+    // re-apply once the session lands. Self-limiting: only polls when the
+    // session wasn't ready at mount, and stops the moment it is (or after
+    // ~3s). Idempotent — applyClientModuleCaps sets visibility explicitly.
+    if (!readActiveDbClaim()) {
+      var _capTries = 0;
+      var _capIv = setInterval(function () {
+        _capTries++;
+        if (readActiveDbClaim()) { clearInterval(_capIv); applyClientModuleCaps(); }
+        else if (_capTries >= 30) { clearInterval(_capIv); }
+      }, 100);
+    }
     return document.querySelector('.sidebar');
   }
 
@@ -608,19 +622,22 @@
     const aside = document.querySelector('.sidebar');
     if (!aside) return;
 
-    function hideModule(dataModule) {
+    function setModule(dataModule, show) {
       const el = aside.querySelector('.sidebar-module[data-module="' + dataModule + '"]');
-      if (el) el.style.display = 'none';
+      if (el) el.style.display = show ? '' : 'none';
     }
-    if (!cap.inv) hideModule('inventory');
-    if (!cap.it)  hideModule('in-transit');
-    if (!cap.por) hideModule('po-receipts');
-    if (!cap.adm) hideModule('admin');
-    if (!cap.dm) {
-      // DMAAIs sits in the bottom status panel, not a sidebar-module.
-      const dmaai = aside.querySelector('.sidebar-status-row[data-nav-page="dmaais"]');
-      if (dmaai) dmaai.style.display = 'none';
-    }
+    // Idempotent: set each module's visibility explicitly so this can be
+    // re-run after the session hydrates (the synchronous mount call fires
+    // before bootSession populates RR_SESSION) or after a DB switch
+    // changes the active `m`/`t` — a module hidden for one DB must be able
+    // to re-show for another.
+    setModule('inventory',   cap.inv);
+    setModule('in-transit',  cap.it);
+    setModule('po-receipts', cap.por);
+    setModule('admin',       cap.adm);
+    // DMAAIs sits in the bottom status panel, not a sidebar-module.
+    const dmaai = aside.querySelector('.sidebar-status-row[data-nav-page="dmaais"]');
+    if (dmaai) dmaai.style.display = cap.dm ? '' : 'none';
   }
 
   // ============================================================
