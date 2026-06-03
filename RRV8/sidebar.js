@@ -1097,9 +1097,9 @@
           try { localStorage.removeItem('rrv8.token'); } catch (_) {}
           try { localStorage.removeItem('rrv8.viewMode'); } catch (_) {}
           try { localStorage.removeItem('rrv8.lastEmail'); } catch (_) {}
-          // The hub is the canonical sign-out destination across V8.
-          // Walk up from /RRV8/* to the repo root and land on the hub.
-          global.location.href = '../rapidreconciler-hub.html';
+          // login.html is the single sign-in entry, co-located with V8
+          // on the app server. Walk up from /RRV8/* to the repo root.
+          global.location.href = '../login.html';
           return;
         }
         // Placeholder: routed-action labels surface as a flash. Pages
