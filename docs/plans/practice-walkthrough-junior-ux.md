@@ -82,8 +82,11 @@ sequenced actions — not in a chat. If the guidance isn't on the screen, it doe
 
 ### B. Flow / structure
 > **Pass 2 (2026-06-03) — scoreboard & go-live clarity trio:** #7, #11, #13 done.
-> The big restructures (#6 no-backtrack march, #9 triage lanes, #14 licensing step)
-> remain — each warrants its own focused pass.
+> **Pass 5 (2026-06-03) — modal + bridge:** #16, #10 done.
+> **Pass 6 (2026-06-03) — pill explainer:** #8 done.
+> **Pass 7 (2026-06-03) — DB row + RR Team:** #12, #15 done. **All mediums shipped.**
+> Remaining: only the big restructures — #6 no-backtrack march, #9 named triage lanes,
+> #14 licensing-as-a-step — each its own focused pass.
 6. **Move company-data + Go-live to *after* the Databases step.** Today they live on the
    Install Bundle tab, so Junior registers a DB on the Databases tab and must backtrack two
    tabs to finish. Make it a one-way march:
@@ -92,26 +95,32 @@ sequenced actions — not in a chat. If the guidance isn't on the screen, it doe
    The practice button is gated on the check no longer reading "No database registered yet,"
    so it no longer dangles a 400-ing action against the real "Next: Databases" step.
    (The *surface-it-where-Junior-is* relocation is part of #6's no-backtrack march.)
-8. **Practice client card → explainer companion card.** First time Junior lands on the
-   card, a practice-only card decodes the 3 pills (Agent / Database / Services), says why
-   they're dim and what greens each, explains the coach callout, and **hosts the
-   "Open Client Details" button** (read, *then* click). Fix the **truncated pill labels**
-   ("No datab…", "Not yet d…").
+8. ~~**Practice client card → explainer companion card** + fix truncated pill labels.~~
+   **DONE (pass 6).** A practice-only `.card-pill-guide` panel under the pills (sandbox
+   cards only, via `a.practice`) decodes Agent / Database / Services and points at the
+   next-action note below. **Adapted:** the original "move Open Client Details into the
+   card" sub-idea was superseded — the card coach was simplified in #19 and sits right
+   below the decoder, so the decoder points at it rather than duplicating the button.
+   **Truncation fixed:** `.pill-state` now wraps (full "No databases" / "Not yet
+   deployed") instead of ellipsizing; the pills stay matched-height (grid stretch).
 9. **Named triage lanes** on Client Management — *Action Required* / *Waiting on Customer* /
    *Live* — that cards flow through **automatically** (the agent reporting in is the mover).
    Junior should always know "is this mine right now, or am I waiting on them?" The coach
    callout should flip to **"Waiting on the customer"** during the two customer-dependent
    pauses (prep submission, install).
-10. **Reality-vs-practice bridge note** between bundle generation and DB registration: in
-    real life you've sent the bundle (that *is* the go-ahead to the customer's teams) and
-    the card waits in the triage queue for days; in practice we fast-forward it. Make the
-    "The DB team has completed their install" banner honest about being a shortcut.
+10. ~~**Reality-vs-practice bridge note** between bundle generation and DB registration.~~
+    **DONE (pass 5).** The Install Bundle coaching strip now says the next beat is a *wait*
+    — in real life the card sits in the queue for days while the customer's team installs;
+    in practice the orange shortcuts fast-forward it. *(Making the "DB team has completed
+    their install" banner itself honest about being a shortcut folds into #9/#10 polish.)*
 11. ~~**Demote check source tags** (VALC / Agent).~~ **DONE (pass 2).** The source pill now
     renders only on rows that need attention (fail / warning); green/pending rows are clean.
-12. **Databases row → collapse technical knobs** (start-service `▷`, RAM, Category, Job
-    Name) behind the `▸` expander. Clean row = name + status. The bare play icon currently
-    reads as "another simulate button." Explain PENDING; refresh the stale "click Add
-    Database" banner once a DB is added.
+12. ~~**Databases row → collapse technical knobs.**~~ **DONE (pass 7).** Category / RAM /
+    Job Name moved into the existing per-row detail drawer (editable there; the drawer's
+    delegated handlers already served its GL-date toggle, so relocation was safe). Table
+    slimmed to 6 columns (disclose · Service · Online Status · Name · Version · Options),
+    all `colspan` 9→6. Service start/stop stays on the row (operational, used by real
+    support). *(The stale "click Add Database" banner refresh remains a tiny open polish.)*
 13. ~~**Disabled Go-live button must state its blocking reason loudly.**~~ **DONE (pass 2).**
     When the handoff button is disabled, its reason now renders as a loud amber callout
     (`.go-live-hint.is-blocked`) instead of faint side text.
@@ -121,11 +130,18 @@ sequenced actions — not in a chat. If the guidance isn't on the screen, it doe
     it never gets done." For practice to teach it, **`Simulate company data` should seed a
     few sample companies** (some on-contract, some not) so the pick is rehearsable; today
     the tab is barren and unexplained.
-15. **RR Team should show only the customer's team** (the seeded admin) for a clean lesson;
-    dev/internal seed users (`@getgsi.com`, `rrdemo`) bleed in via the shared dev database
-    and would never appear for a real customer.
-16. **Create Client modal → wider/shorter two-column layout** + a one-line intro
-    ("This is the customer's card — fill it in from the signed contract").
+15. ~~**RR Team should show only the customer's team.**~~ **DONE (pass 7) — as an
+    explanation, not a filter.** The extra entries are a dev-environment artifact (the
+    practice client shares the dev DB's users); a *real* customer's list already shows only
+    their own people. Heuristically hiding `@getgsi.com` / `rrdemo` from a live user list
+    would be fragile and wrong for production, so instead the RR Team coaching strip now
+    says: "in this shared sandbox you'll also see dev-environment accounts — a real
+    customer's list shows only their own people."
+16. ~~**Create Client modal → wider/shorter two-column layout.**~~ **DONE (pass 5).** Modal
+    widened to 640px; fields paired two-up (Name full; Primary Contact + Company Licenses;
+    RR Admin Name + Email; Modules full) — four rows instead of six. *(The "this is the
+    customer's card, from the contract" intro is already carried by the "From the signed
+    contract" card label + the Client Details coaching strip.)*
 
 ### C. Teaching / copy — **COMPLETE**
 > **Pass 3 (2026-06-03):** #17, #21, #22, #23 done. Card-neatness tweak —
