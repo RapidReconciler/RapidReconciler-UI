@@ -87,10 +87,16 @@ sequenced actions — not in a chat. If the guidance isn't on the screen, it doe
 > **Pass 7 (2026-06-03) — DB row + RR Team:** #12, #15 done. **All mediums shipped.**
 > Remaining: only the big restructures — #6 no-backtrack march, #9 named triage lanes,
 > #14 licensing-as-a-step — each its own focused pass.
-6. **Move company-data + Go-live to *after* the Databases step.** Today they live on the
-   Install Bundle tab, so Junior registers a DB on the Databases tab and must backtrack two
-   tabs to finish. Make it a one-way march:
+6. ~~**Move company-data + Go-live to *after* the Databases step.**~~ **DONE (pass 8,
+   browser-verified).** The Go-live handoff card moved from
+   the Install Bundle tab to the bottom of the Databases tab; it's now self-contained (the
+   practice company-data simulate renders inside the card via `#js-go-live-sim`), painted by
+   `paintGoLive` from `loadManageDatabases` (removed from `loadInstallTab`); the scoreboard's
+   duplicate company-data simulate is gone; post-action reloads repoint to
+   `loadManageDatabases`. One-way march achieved:
    `Client Details → Topology → Install Bundle (generate + heartbeat) → Databases (register → company data → go live) → done.`
+   Browser-verified: card paints at the bottom of the Databases tab, the in-card simulate
+   greens the gate + enables handoff, and the "see what your customer sees" payoff fires.
 7. ~~**Hide "Simulate company data" until a database is registered.**~~ **DONE (pass 2).**
    The practice button is gated on the check no longer reading "No database registered yet,"
    so it no longer dangles a 400-ing action against the real "Next: Databases" step.
