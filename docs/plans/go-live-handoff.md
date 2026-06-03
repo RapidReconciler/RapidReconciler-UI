@@ -1,6 +1,15 @@
 # Plan: Customer go-live handoff
 
-Status: **planned** (not started). Last updated 2026-06-03.
+Status: **in progress** (Phase 1 built). Last updated 2026-06-03.
+
+## Decisions locked (2026-06-03)
+- **Identity:** named RR Administrator only. The synthetic `RRAdmin@<domain>`
+  shared account is dropped; Contact 2's real, deliverable email is the single
+  Administrator-role login.
+- **Name:** capture the RR Administrator's name (new `clients.contact_2_name`)
+  for the seeded user's display name + the welcome-email greeting.
+- **Live state:** track `clients.handed_off_at`; the Clients grid shows a
+  distinct "Live" pill once handed off.
 
 The final step of the new-client process: once the customer's databases are
 registered and their **companies are showing data**, hand the app off to the
@@ -67,21 +76,47 @@ A button (enabled only when the companies-ready check is green) that:
 
 ## Implementation phases
 
-1. **Relabel + seed-source.** Contact 2 → "RR Administrator" in the Add Client modal,
-   Client Details tab, Install Progress contacts editor, and `admin-users.html`
-   contacts band. `deriveAdminEmail` → use Contact 2 verbatim; move/validate the
-   requirement to the handoff step (not client creation).
-2. **Companies-ready check.** Add the Install Progress check (Services jar returns
-   companies with data).
-3. **Handoff action + welcome email.** The button + the `EmailService` template (URL +
-   reset link). Behind the existing stubbed `EmailService` until SMTP lands — verify
-   via `email_audit` in dev.
-4. **Decouple bundle creds.** Stop the install bundle from minting the app-admin login
-   once the handoff owns it.
-5. **Docs.** `rr-installation-prep.html`: collect "RR Administrator (name + email)" as
-   a distinct field feeding Contact 2. Add the go-live step to
-   `tech-client-management.html`; touch `rr-provisioning.html` / `using-valc.html` as
-   needed. Sweep the VALC sidebar docs per the workspace rule.
+1. **Relabel + seed-source.** ✓ BUILT (2026-06-03, not yet committed).
+   - Schema `V34__clients_go_live_handoff.sql`: `clients.contact_2_name` +
+     `clients.handed_off_at`. Entity fields added (`ClientEntity`).
+   - `deriveAdminEmail` now returns Contact 2's email verbatim (lower-cased to
+     match the login lookup), not the synthetic `RRAdmin@<contact1-domain>`.
+     Seed display name = `contact_2_name` (fallback "RR Administrator").
+   - Relabeled Contact 2 → "RR Administrator" (+ a name field) in: Add Client
+     modal, Client Details tab, Install Progress inline contacts editor (all
+     `dashboard.html`), and V8 `admin-users.html` contacts band. DTO/patch
+     endpoints carry `contact2Name` (name set only when present, so partial
+     patches don't clobber it). `InstallChecksController.valcContactsComplete`
+     + `MailingContactsService` wording updated. `PracticeClientService` reset
+     now deletes the seeded admin by Contact 2's email; baseline seeds
+     `Sofia Bianchi` / `sofia.bianchi@mauromfg.example.com`.
+   - TODO: requirement still enforced only at seed time (400 if Contact 2 blank);
+     the handoff step (Phase 3) is where it's surfaced to the operator.
+2. **Companies-ready check.** ✓ BUILT. New `valc.companies_have_data` check in
+   `InstallChecksController` probes each started DB's Services jar
+   (`/admin/companies/all-with-unlicensed`, tight timeouts) for `companyConstantsCount`
+   (F0010) / non-empty companies; green when any DB shows data. Verified present in
+   the install-checks list.
+3. **Handoff action + welcome email.** ✓ BUILT + verified. New `GoLiveHandoffService`
+   (`POST /api/v1/admin/clients/{id}/handoff`): seeds/confirms the RR Administrator
+   (Administrator role, ALL scope), mints a single-use set-password token (7-day TTL),
+   emails the welcome (app URL from `domainUrl` + reset link + KB pointer) via the
+   stubbed `EmailService`, stamps `handed_off_at`. Idempotent (backs "Resend"). UI:
+   "Go-live handoff" card at the bottom of the Install tab — gate reads the
+   `companies_have_data` check + Contact 2 presence; button enables when both green;
+   flips to "live since" + Resend after handoff. Verified end-to-end against a test
+   client: admin seeded (lowercased), reset token in `password_reset_tokens`, welcome
+   body + link in `email_audit`, `handed_off_at` stamped.
+4. **Decouple bundle creds.** ✓ BUILT. `InstallBundleService.generate` drops the
+   `adminEmail`/`tempPassword` params; `RR-FIRST-LOGIN.txt` reworded to "next steps"
+   (no credential — sign-in arrives via the welcome email). `ClientsController`
+   bundle-gen no longer seeds the admin (agent identity still minted by `generate`).
+   Bundle email + dashboard install-success card reworded; the temp-password card +
+   admin-email row removed. Grid "Live" pill added (`AgentStatusDto.handedOff`).
+5. **Docs.** PENDING — do at commit time (workspace doc-sweep rule):
+   `rr-installation-prep.html` "RR Administrator (name + email)" field; go-live step in
+   `tech-client-management.html`; touch `rr-provisioning.html` / `using-valc.html`;
+   sweep VALC sidebar docs.
 
 ---
 
