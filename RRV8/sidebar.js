@@ -172,9 +172,9 @@
         <svg class="sidebar-nav-caret" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 6 8 10 12 6"/></svg>
       </button>
       <div class="sidebar-nav-children">
-        <a href="admin-companies.html" class="sidebar-nav-child${cls('admin-companies')}" data-nav-page="admin-companies">Companies</a>
-        <a href="admin-users.html" class="sidebar-nav-child${cls('admin-users')}" data-nav-page="admin-users">Users</a>
-        <a href="#" class="sidebar-nav-child" data-nav-page="admin-cardex-deletions">Cardex Deletions</a>
+        <a href="admin-companies.html" class="sidebar-nav-child${cls('admin-companies')}" data-nav-page="admin-companies">Licensing</a>
+        <a href="admin-users.html" class="sidebar-nav-child${cls('admin-users')}" data-nav-page="admin-users">RR Team</a>
+        <a href="#" class="sidebar-nav-child" data-nav-page="admin-cardex-deletions">Utilities</a>
       </div>
     </div>
   </div>
