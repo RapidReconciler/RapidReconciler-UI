@@ -874,6 +874,34 @@
                         : 'Sign in';
   }
 
+  // True when the JWT grants admin rights on any assigned database. The
+  // Admin tab (dbs[].t.adm) is the signal the sidebar uses to gate admin UI
+  // (sidebar.js applyClientModuleCaps); a real Administrator token has it true.
+  function isAdminToken(token) {
+    try {
+      const p = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+      const dbs = Array.isArray(p.dbs) ? p.dbs : [];
+      return dbs.some(d => d && d.t && d.t.adm === true);
+    } catch (_) { return false; }
+  }
+
+  // Where to land after sign-in. An explicit ?redirect= always wins. Otherwise
+  // a first-time administrator is taken to Administrator -> Users (the setup
+  // hub with the getting-started checklist) instead of the reconciliation grid,
+  // once. The per-email flag also gates the checklist card on admin-users.
+  function landingFor(token, email) {
+    if (params.get('redirect')) return REDIRECT;
+    try {
+      const key = 'rrv8.adminOnboarded.' + String(email || '').toLowerCase();
+      const seen = localStorage.getItem(key);
+      if (isAdminToken(token) && seen !== 'landed' && seen !== 'dismissed') {
+        localStorage.setItem(key, 'landed');
+        return 'RRV8/admin-users.html';
+      }
+    } catch (_) {}
+    return REDIRECT;
+  }
+
   function storeToken(token, email) {
     try { localStorage.setItem('rrv8.token',     token);      } catch (_) {}
     try { localStorage.setItem('rrv8.viewMode',  'customer');  } catch (_) {}
@@ -934,7 +962,7 @@
         return;
       }
       storeToken(body.token, username);
-      window.location.href = REDIRECT;
+      window.location.href = landingFor(body.token, username);
     } catch (err) {
       window.__rrDiag && window.__rrDiag.log('sign-in failed: ' + (err && err.name) + ': ' + (err && err.message));
       setErr(errEl, "We couldn't reach RapidReconciler to sign you in. See the connection details above.");
