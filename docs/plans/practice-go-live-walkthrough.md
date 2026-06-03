@@ -1,8 +1,11 @@
 # Plan: Practice go-live walkthrough — "see what your customer sees"
 
-Status: **planned** (decision locked 2026-06-03; not started). The first thing to
-tackle next session. Relates to memory `project_practice_flows_per_process` and
-`project_go_live_handoff_shipped`.
+Status: **SHIPPED 2026-06-03** (reuse-the-Install-tab variant). Backend (V37 flag +
+simulate-companies endpoint + handoff returns the practice sign-in link/email) and the
+Install-tab UI (inline "Simulate company data", un-skipped go-live card for practice,
+"See what your customer sees" panel) are live on Valc Dev. The Junior-readiness UX pass on
+top of this lives in `practice-walkthrough-junior-ux.md`. Relates to memory
+`project_practice_flows_per_process` and `project_go_live_handoff_shipped`.
 
 ## Goal
 Extend the **"Practice Creating a New Client"** sandbox flow with a final step that
