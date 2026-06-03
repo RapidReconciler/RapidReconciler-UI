@@ -523,6 +523,13 @@
         <h1 class="page-title">Licensing</h1>
       </header>
 
+      <!-- Read-only company-seat usage. Customer admins see their entitlement
+           ("Using X of N company licenses") but can't change it — the seat
+           count is a contract term set by GSI. Populated from /license-usage. -->
+      <div id="js-license-usage" role="status" hidden
+           style="margin:0 0 14px; padding:10px 14px; border-radius:8px; font-size:13.5px; font-weight:600;
+                  background:#eef3f9; border:1px solid #cfe0f5; color:var(--navy);"></div>
+
       <div class="fetch-error" id="js-fetch-error" role="alert">
         Couldn&rsquo;t reach <code>/admin/companies</code> &mdash;
         <span id="js-fetch-error-msg"></span>
@@ -554,11 +561,10 @@
               <th class="is-num">Threshold</th>
               <th class="is-action">Options</th>
               <th class="is-action">Re-roll</th>
-              <th class="is-action">Unlicense</th>
             </tr>
           </thead>
           <tbody id="js-companies-tbody">
-            <tr><td class="is-empty" colspan="9">Loading companies&hellip;</td></tr>
+            <tr><td class="is-empty" colspan="8">Loading companies&hellip;</td></tr>
           </tbody>
         </table>
       </section>
@@ -578,7 +584,6 @@
         <table class="grid-table" id="js-unlicensed-table">
           <thead>
             <tr>
-              <th class="is-action">License</th>
               <th>Number</th>
               <th>Name</th>
               <th class="is-num">Items</th>
@@ -586,7 +591,7 @@
             </tr>
           </thead>
           <tbody id="js-unlicensed-tbody">
-            <tr><td class="is-empty" colspan="5">Loading&hellip;</td></tr>
+            <tr><td class="is-empty" colspan="4">Loading&hellip;</td></tr>
           </tbody>
         </table>
       </section>
@@ -779,11 +784,6 @@
           SVG_REROLL +
         '</button>' +
       '</td>' +
-      '<td class="is-action">' +
-        '<button type="button" class="row-icon-btn is-danger" data-action="unlicense" data-company="' + fmt(r.companyNumber) + '" title="Remove this company from the customer\'s licensed allowlist" aria-label="Unlicense">' +
-          '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg>' +
-        '</button>' +
-      '</td>' +
     '</tr>';
   }
 
@@ -807,7 +807,7 @@
     if (!tbody) return;
     if (!rows || rows.length === 0) {
       tbody.innerHTML =
-        '<tr><td class="is-empty" colspan="5">No unlicensed JDE companies have F4111 activity on this DB.</td></tr>';
+        '<tr><td class="is-empty" colspan="4">No unlicensed JDE companies have F4111 activity on this DB.</td></tr>';
       if (count) {
         count.textContent = '0 companies';
         count.classList.remove('is-loading');
@@ -837,11 +837,9 @@
       }).join('');
       const num = String(r.companyNumber || '').trim();
       const isBlocked = num === COMPANY_30;
-      const checkbox  = isBlocked
-        ? '<input type="checkbox" disabled title="Company 00030 is reserved and cannot be licensed.">'
-        : '<input type="checkbox" data-action="license" data-company="' + fmt(num) + '" aria-label="License company ' + fmt(num) + '">';
+      // Licensing is a contract term set by GSI — the customer view is
+      // informational only (no License action here).
       return '<tr' + (isBlocked ? ' class="is-blocked"' : '') + '>' +
-        '<td class="is-action">' + checkbox + '</td>' +
         '<td>' + fmt(r.companyNumber) + '</td>' +
         '<td>' + fmt(r.name) + '</td>' +
         '<td class="is-num">' + fmtNum(r.itemCount) + '</td>' +
@@ -1040,70 +1038,10 @@
   // central client_licensed_companies registry. VALC's controller
   // triggers an immediate sync push to the agent on success.
   //
-  // Single-client assumption (matches admin-users.html's contact band):
-  // V8's session maps to the first client row in VALC. When a real
-  // session->client mapping ships, replace the boot-time fetch with
-  // a JWT-derived client id.
-  let _clientId = null;
-
-  async function resolveClientId() {
-    if (_clientId != null) return _clientId;
-    try {
-      const rows = await rrFetch('api/v1/admin/clients');
-      if (rows && rows.length > 0) {
-        _clientId = rows[0].id;
-      }
-    } catch (e) {
-      console.warn('Companies: could not resolve client id —', e.message);
-    }
-    return _clientId;
-  }
-
-  async function licenseCompany(num) {
-    const cid = await resolveClientId();
-    if (cid == null) {
-      toast('No client record on file in VALC. Cannot license.', 'err');
-      return false;
-    }
-    if (num === COMPANY_30) {
-      toast('Company 00030 is reserved and cannot be licensed.', 'err');
-      return false;
-    }
-    try {
-      const r = await rrFetch(
-        'api/v1/admin/clients/' + encodeURIComponent(cid) +
-        '/licensed-companies/' + encodeURIComponent(num),
-        { method: 'POST', body: {} });
-      toast('Licensed ' + num);
-      return true;
-    } catch (err) {
-      let msg = (err && err.message) || 'license failed';
-      const idx = msg.indexOf('LICENSE_BLOCKED:');
-      if (idx >= 0) msg = msg.substring(idx + 'LICENSE_BLOCKED:'.length).trim();
-      toast(msg, 'err');
-      return false;
-    }
-  }
-
-  async function unlicenseCompany(num) {
-    const cid = await resolveClientId();
-    if (cid == null) {
-      toast('No client record on file in VALC. Cannot unlicense.', 'err');
-      return false;
-    }
-    try {
-      await rrFetch(
-        'api/v1/admin/clients/' + encodeURIComponent(cid) +
-        '/licensed-companies/' + encodeURIComponent(num),
-        { method: 'DELETE' });
-      toast('Unlicensed ' + num);
-      return true;
-    } catch (err) {
-      const msg = (err && err.message) || 'unlicense failed';
-      toast(msg, 'err');
-      return false;
-    }
-  }
+  // Licensing changes (license / unlicense) are a GSI-only action done in
+  // the VALC control plane — this customer-facing page is view-only for
+  // licensing. The seat-usage banner resolves the client by the active
+  // database name (see renderLicenseUsage), so no client-id guess is needed.
 
   /** Refresh both tables from the agent after a license/unlicense
    *  round-trip. The sync push happens server-side; by the time the
@@ -1144,44 +1082,56 @@
       openEditModal(co);
     } else if (action === 'reroll') {
       openRerollModal(co);
-    } else if (action === 'unlicense') {
-      if (!confirm('Unlicense company ' + co + '? The company will be removed from the customer\'s allowlist and dropped from rcompanies on the next sync (immediate for the dev box).')) return;
-      btn.disabled = true;
-      unlicenseCompany(co).then(ok => {
-        btn.disabled = false;
-        if (ok) refreshCompanies();
-      });
     }
+    // Licensing changes (license / unlicense) are a contract term set by
+    // GSI — not available on the customer side. The Licensing page here is
+    // view-only for licensing.
   });
 
-  // Checkbox in the Not Licensed table — license-on-check.
-  document.addEventListener('change', (e) => {
-    const cb = e.target;
-    if (!(cb instanceof HTMLInputElement) || cb.type !== 'checkbox') return;
-    if (cb.dataset.action !== 'license') return;
-    const co = cb.dataset.company;
-    if (!co) return;
-    cb.disabled = true;
-    licenseCompany(co).then(ok => {
-      if (!ok) {
-        cb.checked = false;
-        cb.disabled = false;
-      } else {
-        // refreshCompanies re-renders the table; this checkbox vanishes.
-        refreshCompanies();
-      }
-    });
-  });
+  // Read-only company-seat usage banner. The customer admin sees their
+  // entitlement; the seat count is a contract term set by GSI, so it's
+  // display-only here. "Used" = the companies actually licensed on this
+  // database (the rows shown above, straight from the agent), so the banner
+  // always matches what's on screen. The cap comes from VALC, resolved by the
+  // active database name (V8 doesn't carry a client id).
+  async function renderLicenseUsage(used) {
+    const el = document.getElementById('js-license-usage');
+    if (!el) return;
+    try {
+      const sess = window.RR_SESSION || {};
+      const db = sess.dbs && sess.dbs[sess.activeDbIndex || 0];
+      const dbName = db && db.n;
+      if (!dbName) return;
+      const base = RR_CONFIG.valcBase || 'http://localhost:8080';
+      const u = await fetch(base + '/api/v1/admin/clients/license-usage?database=' + encodeURIComponent(dbName),
+        { headers: prodHeaders(null), cache: 'no-store' }).then(r => r.ok ? r.json() : null);
+      if (!u) return;
+      const unlimited = u.unlimited;
+      const cap = u.maxCompanies;
+      const atLimit  = !unlimited && cap != null && used >= cap;
+      const overLimit= !unlimited && cap != null && used >  cap;
+      let msg = unlimited
+        ? ('Using ' + used + ' of unlimited company licenses.')
+        : ('Using ' + used + ' of ' + cap + ' company licenses.');
+      if (overLimit)    msg += ' You are over your licensed amount — contact GSI to add licenses.';
+      else if (atLimit) msg += ' You have used all your licenses — contact GSI to add more.';
+      el.textContent = msg;
+      el.style.background = '#eef3f9'; el.style.borderColor = '#cfe0f5'; el.style.color = 'var(--navy)';
+      if (overLimit) { el.style.background = '#fbe6e3'; el.style.borderColor = '#f1c3bc'; el.style.color = 'var(--red, #c0392b)'; }
+      else if (atLimit) { el.style.background = '#fff5e8'; el.style.borderColor = '#ffd9a6'; el.style.color = 'var(--orange-deep, #b45309)'; }
+      el.hidden = false;
+    } catch (_) { /* leave hidden on error */ }
+  }
 
-  // Main fetch — one round trip returns both arrays.
-  // Resolve the clientId in parallel so the first license/unlicense
-  // click doesn't pay a round-trip on top of its own.
-  resolveClientId();
+  // Main fetch — one round trip returns both arrays. The seat-usage banner's
+  // "used" is the licensed-companies count from this same response.
   rrFetch('admin/companies')
     .then(resp => {
-      renderCompanies(resp && resp.companies);
+      const companies = (resp && resp.companies) || [];
+      renderCompanies(companies);
       renderUnlicensed(resp && resp.unlicensed);
       applyF0010Check(resp);
+      renderLicenseUsage(companies.length);
     })
     .catch(err => {
       showFetchError(err);
