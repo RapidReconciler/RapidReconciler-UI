@@ -108,11 +108,11 @@
      ============================================================ */
   .app {
     display: grid;
-    grid-template-columns: 60px 1fr;
+    grid-template-columns: 1fr;
     grid-template-rows: 56px 1fr;
     grid-template-areas:
-      "sidebar topbar"
-      "sidebar main";
+      "topbar"
+      "main";
     min-height: 100vh;
   }
   /* Sidebar expands ONLY when the cursor is directly over the sidebar
@@ -568,7 +568,10 @@
      class used by popovers. When pinned, the sidebar locks open AND
      the grid column shifts to 240px so the main content moves right
      (no float-over). State persists to localStorage. */
-  body.has-pinned-sidebar .app { grid-template-columns: 240px 1fr; }
+  /* Phase 3: rail removed — the pinned-sidebar grid override is a no-op
+     now, but neutralize it so a stale localStorage pin flag can't
+     resurrect a phantom 240px first column. */
+  body.has-pinned-sidebar .app { grid-template-columns: 1fr; }
   body.has-pinned-sidebar .sidebar { width: 240px; box-shadow: none; }
   body.has-pinned-sidebar .sidebar:hover { box-shadow: none; }
   body.has-pinned-sidebar .sidebar-brand-text,
@@ -2846,7 +2849,7 @@
   /* Mid-width rule for the old 3-card grid is retired — single tabbed
      card needs no special middle breakpoint. */
   @media (max-width: 760px) {
-    .app { grid-template-columns: 0 1fr; }
+    .app { grid-template-columns: 1fr; }
     .sidebar { display: none; }
     .main { padding: 16px; }
     .topbar { padding: 0 14px; }
@@ -3071,8 +3074,6 @@
   <div class="user-menu" id="js-user-menu" role="menu" hidden></div>
 
   <!-- ==================== SIDEBAR ==================== -->
-  <!-- Sidebar DOM built by RRV8.mountSidebar() in sidebar.js. -->
-  <div id="js-sidebar-mount"></div>
 
   <!-- ==================== MAIN ==================== -->
   <main class="main">
@@ -3184,7 +3185,8 @@
         </div>
         <div class="contrib-body" id="js-contrib-body">
           <div class="contrib-tabs" role="tablist" aria-label="Variance contributor dimension">
-            <button class="contrib-tab is-active" type="button" role="tab" aria-selected="true" data-contrib-dim="businessUnits">Business unit</button>
+            <button class="contrib-tab is-active" type="button" role="tab" aria-selected="true" data-contrib-dim="companies">Company</button>
+            <button class="contrib-tab" type="button" role="tab" aria-selected="false" data-contrib-dim="businessUnits">Business unit</button>
             <button class="contrib-tab" type="button" role="tab" aria-selected="false" data-contrib-dim="objects">Object</button>
             <button class="contrib-tab" type="button" role="tab" aria-selected="false" data-contrib-dim="subsidiaries">Subsidiary</button>
           </div>
@@ -3840,8 +3842,29 @@
   // Mount the shared sidebar — pin/module-collapse + DOM live in
   // RRV8/sidebar.js. Page-specific filter popovers continue to bind
   // by ID after mount.
-  if (window.RRV8 && typeof window.RRV8.mountSidebar === 'function') {
-    window.RRV8.mountSidebar({ activePage: 'reconciliation', hasPeriodFilter: true });
+  // Phase 3: off the left rail. mountWorkbar populates the topbar with
+  // the inventory sub-nav + connectivity + Home + user chip + the
+  // permission-scoped Company picker (company: true). Period lives on
+  // the bar graph; BU/Object/Subsidiary/Currency are now contributor
+  // dimensions, not filters.
+  if (window.RRV8 && typeof window.RRV8.mountWorkbar === 'function') {
+    window.RRV8.mountWorkbar({
+      activePage: 'reconciliation',
+      company: true,
+      // Bound at chip-creation (hoisted fns, so callable here). Mirrors
+      // the generic .sidebar-filter handler below; that handler skips the
+      // workbar chip so there's no double-bind.
+      onCompanyClick: function (chip) {
+        const pop = document.getElementById('js-filter-popover');
+        if (!pop.hidden && pop.dataset.activeFilter === chip.dataset.filter) {
+          hidePopovers();
+          return;
+        }
+        hidePopovers();
+        pop.dataset.activeFilter = chip.dataset.filter;
+        openFilterPopover(chip);
+      }
+    });
   }
 
   // Single data file holds all 13 periods (per-account rows from
@@ -4523,6 +4546,7 @@
   const CONTRIB_LS_KEY = 'rrv8-recon-contrib-tab-v1';
   const CONTRIB_TOP_N  = 8;
   const CONTRIB_DIMS = {
+    companies:     { rowKey: 'companyId',                          singular: 'company',       noun: 'companies',      filterLabel: 'Company' },
     businessUnits: { rowKey: 'businessUnit',                       singular: 'business unit', noun: 'business units', filterLabel: 'Business unit' },
     objects:       { rowKey: 'object',                             singular: 'account',       noun: 'accounts',       filterLabel: 'Account' },
     subsidiaries:  { rowKey: 'subsidiary', nullsTo: '',             singular: 'subsidiary',    noun: 'subsidiaries',   filterLabel: 'Subsidiary' }
@@ -4532,7 +4556,7 @@
       const raw = localStorage.getItem(CONTRIB_LS_KEY);
       if (raw && CONTRIB_DIMS[raw]) return raw;
     } catch (_) {}
-    return 'businessUnits';
+    return 'companies';
   }
   function saveContribTab(d) {
     try { localStorage.setItem(CONTRIB_LS_KEY, d); } catch (_) {}
@@ -5242,12 +5266,16 @@
     // Reveal BEFORE measuring — positionPopover reads offsetHeight
     // to decide whether to shift the popover up to fit the viewport.
     pop.hidden = false;
-    positionPopover(pop, triggerRow, { anchor: 'right' });
-    // Keep the sidebar expanded for as long as the popover is open
-    document.body.classList.add('is-pinned');
+    // Phase 3: the Company chip lives in the topbar now, so the popover
+    // drops DOWN from it (default anchor) rather than flying out of the
+    // old left rail.
+    positionPopover(pop, triggerRow, {});
   }
 
   document.querySelectorAll('.sidebar-filter[data-filter]').forEach(row => {
+    // The topbar Company chip is bound at creation via mountWorkbar's
+    // onCompanyClick — skip it here to avoid a double-bind.
+    if (row.classList.contains('workbar-company')) return;
     row.addEventListener('click', (e) => {
       e.stopPropagation();
       const pop = document.getElementById('js-filter-popover');
@@ -5270,14 +5298,14 @@
     onSelectionChanged();
     hidePopovers();
   }
-  document.getElementById('js-filter-clear').addEventListener('click', (e) => {
-    e.stopPropagation();
-    resetAllFilters();
-  });
-  document.getElementById('js-filter-summary-reset').addEventListener('click', (e) => {
-    e.stopPropagation();
-    resetAllFilters();
-  });
+  // Phase 3: #js-filter-clear was the sidebar Scope "Reset all" button —
+  // gone with the rail. Guard so a missing element doesn't throw and abort
+  // boot. #js-filter-summary-reset (the in-page active-filter banner reset)
+  // is guarded for the same reason.
+  const _fc = document.getElementById('js-filter-clear');
+  if (_fc) _fc.addEventListener('click', (e) => { e.stopPropagation(); resetAllFilters(); });
+  const _fsr = document.getElementById('js-filter-summary-reset');
+  if (_fsr) _fsr.addEventListener('click', (e) => { e.stopPropagation(); resetAllFilters(); });
 
   // Clicks INSIDE either popover stay inside (without this, the
   // document-level "click outside to close" handler fires when the
@@ -5656,6 +5684,13 @@
   // Hydrate persisted filter selections BEFORE the snapshot loads
   // so initSelectionsIfEmpty leaves them alone if storage had them.
   loadSelectionsFromStorage();
+  // Phase 3: the BU / Object / Subsidiary / Currency rail filters are
+  // gone (they're contributor dimensions now). Drop any stale saved
+  // narrowing for them so they always start at "all" — initSelectionsIfEmpty
+  // reseeds them from the universe on load, and the contributor card is
+  // the way to narrow them. Company (the surviving scope filter) keeps
+  // its saved selection.
+  ['currencies', 'businessUnits', 'objects', 'subsidiaries'].forEach(g => selected[g].clear());
 
   // Boot path: hydrate the session (demo JSON or VALC login),
   // refresh the user-menu/topbar chrome to reflect the real user,
