@@ -130,6 +130,42 @@ exercise yet):
 
 ---
 
+## Home page (`RRV8/home.html`) &mdash; pending data needs
+
+The post-login Home command center (access-flow Phase 1) ships
+reading only data the agent/JWT already provide, and degrades
+gracefully where they don't. Two enrichments are deferred to a
+backend contract rather than synthesized client-side (per the
+"always spec new endpoints" rule):
+
+1. **Out-of-balance account count.** The Home insight strip ("do I
+   even need to go further?") currently runs off
+   `GET /inventory/status` &rarr; `validation.color`
+   (green/amber/red) only &mdash; a system-health signal, not a
+   work-to-do count. There is **no endpoint today** that returns
+   "N accounts out of balance for the open period." When one lands
+   (candidate: a lightweight `GET /inventory/home-summary` or a
+   `count` field added to `reconciliation-filtered`), Home upgrades
+   the message from "validation is green" to "N accounts need
+   attention" with **no client rewrite** &mdash; the render already
+   branches on the richer field if present and falls back to
+   validation otherwise. Until then, no count is shown (not faked).
+
+2. **Role label claim.** Home shows the `Administrator` badge only
+   from the reliable `dbs[i].t.adm === true` signal (the same one
+   `login.html` `isAdminToken` and `sidebar.js` trust). The other
+   assignable roles (Reconciliation Analyst, Read-Only, Cost
+   Accounting, A/P Clerk) are **not carried as a label in the JWT**
+   today &mdash; only as the per-module `m`/`t`/`perms` caps Home
+   already gates on. When VALC surfaces a role display-name (in the
+   login response `user.roleName`, or a per-db role claim), Home
+   shows it; until then it shows no non-admin role badge rather than
+   inferring a wrong one from caps.
+
+Both are additive: the Home page is fully functional without them.
+
+---
+
 ## Variance-component &rarr; source-view bindings
 
 These bindings let V8's Preview pane / Excel export call the right

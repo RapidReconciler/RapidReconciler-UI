@@ -497,6 +497,10 @@
       dot.title = title;
     }
     if (row) row.title = title;
+    // Phase 2: keep the topbar connectivity pill in sync with the
+    // sidebar dot (same source of truth). Both surfaces coexist while
+    // the sidebar lives; Phase 3 removes the rail and the pill stays.
+    paintTopbarConn(state === 'unreachable', title);
     try {
       sessionStorage.setItem(AGENT_CONN_LS_KEY, JSON.stringify({
         state: state || 'unknown',
@@ -504,6 +508,47 @@
         message: (info && info.message) || undefined
       }));
     } catch (_) {}
+  }
+
+  // ---------------------------------------------------------------
+  //                                       Topbar extras (Phase 2)
+  // ---------------------------------------------------------------
+  // The working pages already carry a <header class="topbar"> with a
+  // brand block and an empty right edge. mountTopbar() injects a
+  // connectivity pill + a Home link there — the two affordances the
+  // topbar lacks once home.html is the post-login landing. Done from
+  // sidebar.js (loaded on every V8 page) so there are zero per-page
+  // HTML edits. Idempotent; no-ops on pages without a .topbar (the
+  // home page builds its own header).
+  function paintTopbarConn(down, title) {
+    const pill = document.getElementById('js-topbar-conn');
+    if (!pill) return;
+    pill.classList.toggle('is-down', !!down);
+    const txt = pill.querySelector('.topbar-conn-text');
+    if (txt) txt.textContent = down ? 'Reconnecting…' : 'Connected';
+    pill.title = title || (down
+      ? 'Data service unreachable — check your VPN / connection'
+      : 'Connected to the data service');
+  }
+
+  function mountTopbar() {
+    const bar = document.querySelector('.topbar');
+    if (!bar) return;                              // home / non-app pages
+    if (bar.querySelector('.topbar-extras')) return; // idempotent
+    const seed = seedAgentConnectivityFromSession();
+    const down = seed.cls.indexOf('is-red') !== -1;
+    const wrap = document.createElement('div');
+    wrap.className = 'topbar-extras';
+    wrap.innerHTML =
+      '<span class="topbar-conn' + (down ? ' is-down' : '') + '" id="js-topbar-conn" title="' + escapeHtml(seed.title) + '">' +
+        '<span class="topbar-conn-dot"></span>' +
+        '<span class="topbar-conn-text">' + (down ? 'Reconnecting…' : 'Connected') + '</span>' +
+      '</span>' +
+      '<a class="topbar-home" href="home.html" title="Back to Home">' +
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11.5 12 4l9 7.5"/><path d="M5 10v9a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-9"/></svg>' +
+        '<span>Home</span>' +
+      '</a>';
+    bar.appendChild(wrap);
   }
 
   /**
@@ -547,6 +592,7 @@
 
     wirePin();
     wireSectionToggles();
+    mountTopbar();
     // DMAAI dot was seeded into the template by buildSidebarHtml
     // (seedDmaaiStateFromSession), so no post-mount class swap is
     // needed. Pages that actively preload will overwrite the dot
@@ -1229,6 +1275,7 @@
 
   global.RRV8 = global.RRV8 || {};
   global.RRV8.mountSidebar            = mountSidebar;
+  global.RRV8.mountTopbar             = mountTopbar;
   global.RRV8.applyClientModuleCaps   = applyClientModuleCaps;
   global.RRV8.setDmaaiStatus          = setDmaaiStatus;
   global.RRV8.setAgentConnectivity    = setAgentConnectivity;
