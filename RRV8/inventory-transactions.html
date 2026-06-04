@@ -75,11 +75,11 @@
      ============================================================ */
   .app {
     display: grid;
-    grid-template-columns: 60px 1fr;
+    grid-template-columns: 1fr;
     grid-template-rows: 56px 1fr;
     grid-template-areas:
-      "sidebar topbar"
-      "sidebar main";
+      "topbar"
+      "main";
     min-height: 100vh;
   }
 
@@ -287,7 +287,9 @@
     color: var(--orange);
   }
   body.has-pinned-sidebar .sidebar-pin-icon { transform: rotate(-45deg); }
-  body.has-pinned-sidebar .app { grid-template-columns: 240px 1fr; }
+  /* Phase 3: rail removed — neutralize the pinned-grid override so a stale
+     localStorage pin flag can't resurrect a phantom 240px first column. */
+  body.has-pinned-sidebar .app { grid-template-columns: 1fr; }
   body.has-pinned-sidebar .sidebar { width: 240px; box-shadow: none; }
   body.has-pinned-sidebar .sidebar-brand-text,
   body.has-pinned-sidebar .sidebar-section-label,
@@ -2595,8 +2597,6 @@
   <div class="user-menu" id="js-user-menu" role="menu" hidden></div>
 
   <!-- ==================== SIDEBAR ==================== -->
-  <!-- Sidebar DOM is built by RRV8.mountSidebar() in sidebar.js. -->
-  <div id="js-sidebar-mount"></div>
 
   <!-- Popover containers (positioned absolutely from JS) -->
   <div class="popover" id="period-popover" hidden role="menu" aria-label="Select period"></div>
@@ -2972,8 +2972,28 @@
   //  Sidebar — mount shared DOM first so later JS finds stable IDs.
   //  Pin + module-collapse handlers live in sidebar.js.
   // ============================================================
-  if (window.RRV8 && typeof window.RRV8.mountSidebar === 'function') {
-    window.RRV8.mountSidebar({ activePage: 'transactions', hasPeriodFilter: true });
+  // Phase 3: off the left rail. mountWorkbar populates the topbar with the
+  // inventory sub-nav + connectivity + Home + user chip (manageUser: this
+  // page's own user menu was .sidebar-user-based, gone with the rail) + the
+  // permission-scoped Company picker. Period lives on the on-page .period-pill;
+  // BU/Object/Subsidiary/Currency are dropped as filters.
+  if (window.RRV8 && typeof window.RRV8.mountWorkbar === 'function') {
+    window.RRV8.mountWorkbar({
+      activePage: 'transactions',
+      manageUser: true,
+      company: true,
+      // Reuse this page's own filter-popover builder; drop it DOWN from the
+      // topbar chip (no align:'right'). The generic .sidebar-filter wiring
+      // below skips the workbar chip to avoid a double-bind.
+      onCompanyClick: function (chip) {
+        var wasOpen = !popFilter.hidden && popFilter.dataset.group === chip.dataset.filter;
+        hideAllPopovers();
+        if (wasOpen) return;
+        buildSidebarFilterPopover(chip.dataset.filter);
+        popFilter.dataset.group = chip.dataset.filter;
+        positionPopover(popFilter, chip);
+      }
+    });
   }
 
   // ============================================================
@@ -6677,6 +6697,9 @@
     });
   }
   document.querySelectorAll('.sidebar-filter[data-filter]').forEach(btn => {
+    // The topbar Company chip is bound at creation via mountWorkbar's
+    // onCompanyClick (drops down) — skip it here to avoid a double-bind.
+    if (btn.classList.contains('workbar-company')) return;
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       const wasOpen = !popFilter.hidden && popFilter.dataset.group === btn.dataset.filter;
@@ -6699,6 +6722,10 @@
   });
 
   loadStoredFilterSelections();
+  // Phase 3: BU / Object / Subsidiary / Currency are no longer filterable
+  // (no rail controls); drop any stale saved narrowing so they start at
+  // "all". Company (the surviving scope filter) keeps its saved selection.
+  ['currencies', 'businessUnits', 'objects', 'subsidiaries'].forEach(g => { _glSelected[g] = new Set(); });
 
   // Pin click wiring lives in sidebar.js.
 

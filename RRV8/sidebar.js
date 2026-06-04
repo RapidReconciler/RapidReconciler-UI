@@ -551,6 +551,149 @@
     bar.appendChild(wrap);
   }
 
+  // ---------------------------------------------------------------
+  //                              Working-page chrome (Phase 3)
+  // ---------------------------------------------------------------
+  // mountWorkbar() is the sidebar's replacement on the inventory
+  // working pages. Instead of a 60px left rail it populates the
+  // existing <header class="topbar"> with: the inventory sub-nav
+  // (the cross-page navigation the sidebar accordion used to own),
+  // a connectivity pill, a Home link, and a compact user chip that
+  // reuses the same #js-user-btn / #js-user-menu plumbing the
+  // sidebar user menu uses (hydrateSession -> mountUserMenu). Pages
+  // call this INSTEAD of mountSidebar; the page's own period bar and
+  // page-local pills stay where they are.
+  //
+  // Scope filters do NOT live here — per the Phase 3 design the BU /
+  // Object / Subsidiary / Currency filters are dropped (they surface
+  // as contributor dimensions), the period lives on the bar graph,
+  // and Company (the permission-scoped one) is handled per-page.
+  const WORKBAR_NAV = [
+    { page: 'reconciliation',  href: 'inventory-reconciliation.html',  label: 'Reconciliation' },
+    { page: 'transactions',    href: 'inventory-transactions.html',    label: 'Transactions' },
+    { page: 'cardex-variance', href: 'inventory-cardex-variance.html', label: 'Cardex Variance' },
+    { page: 'asof',            href: 'inventory-asof.html',            label: 'Perpetual' }
+  ];
+
+  function applyWorkbarCaps() {
+    // The inventory sub-nav requires the Inventory module. Fail open
+    // (show) when there's no active-db claim yet (dev token / pre-
+    // hydrate) — same semantics as applyClientModuleCaps.
+    const a = readActiveDbClaim();
+    if (!a) return;
+    const m = a.m || {}, t = a.t || {};
+    const inv = (m.inv !== false) && (t.inv !== false);
+    const nav = document.querySelector('.workbar-nav');
+    if (nav) nav.style.display = inv ? '' : 'none';
+  }
+
+  function mountWorkbar(opts) {
+    opts = opts || {};
+    const bar = document.querySelector('.topbar');
+    if (!bar) return null;
+    if (bar.querySelector('.workbar-nav')) return bar;  // idempotent
+    const activePage = opts.activePage || '';
+    const search = global.location.search || '';
+
+    const nav = document.createElement('nav');
+    nav.className = 'workbar-nav';
+    nav.setAttribute('aria-label', 'Inventory');
+    nav.innerHTML = WORKBAR_NAV.map(n =>
+      '<a href="' + n.href + escapeHtml(search) + '" class="workbar-nav-item' +
+      (n.page === activePage ? ' is-active' : '') + '" data-nav-page="' +
+      n.page + '">' + escapeHtml(n.label) + '</a>').join('');
+
+    const seed = seedAgentConnectivityFromSession();
+    const down = seed.cls.indexOf('is-red') !== -1;
+    const right = document.createElement('div');
+    right.className = 'workbar-right';
+    right.innerHTML =
+      '<span class="topbar-conn' + (down ? ' is-down' : '') + '" id="js-topbar-conn" title="' + escapeHtml(seed.title) + '">' +
+        '<span class="topbar-conn-dot"></span>' +
+        '<span class="topbar-conn-text">' + (down ? 'Reconnecting…' : 'Connected') + '</span>' +
+      '</span>' +
+      '<a class="topbar-home" href="home.html" title="Back to Home">' +
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11.5 12 4l9 7.5"/><path d="M5 10v9a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-9"/></svg>' +
+        '<span>Home</span>' +
+      '</a>' +
+      '<button class="workbar-user" id="js-user-btn" type="button" aria-haspopup="menu" title="Account">' +
+        // both avatar classes: sidebar.js renderUserChip targets
+        // .sidebar-user-avatar; pages with their own inline renderUserChip
+        // (reconciliation / transactions) target .topbar-user-avatar.
+        '<span class="sidebar-user-avatar topbar-user-avatar">?</span>' +
+        '<svg class="workbar-user-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>' +
+      '</button>';
+
+    bar.appendChild(nav);
+
+    // Company picker — the one surviving Scope control. Permission-
+    // scoped (the page builds its options from the agent's company
+    // universe). Carries the legacy `.sidebar-filter[data-filter=
+    // "companies"]` hooks + inner text/status spans so the page's
+    // EXISTING company-filter wiring (openFilterPopover, renderFilterRows)
+    // binds to it untouched — only the popover anchor changes (drops
+    // down instead of flying out of the rail). Opt-in per page.
+    if (opts.company) {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'sidebar-filter workbar-company';
+      chip.setAttribute('data-filter', 'companies');
+      chip.innerHTML =
+        '<span class="sidebar-filter-text">Company</span>' +
+        '<span class="sidebar-filter-status">All</span>';
+      // Bind the click HERE, at creation, via the page-supplied handler —
+      // the page's generic .sidebar-filter wiring runs at script-eval and
+      // would miss a chip added during this (possibly deferred) boot call.
+      // stopPropagation keeps the page's document-level "click closes
+      // popovers" listener from immediately re-closing it.
+      if (typeof opts.onCompanyClick === 'function') {
+        chip.addEventListener('click', function (e) {
+          e.stopPropagation();
+          opts.onCompanyClick(chip, e);
+        });
+      }
+      bar.appendChild(chip);
+    }
+
+    bar.appendChild(right);
+
+    const paintDbLabel = function () {
+      try {
+        const a = readActiveDbClaim();
+        const dbEl = document.getElementById('js-topbar-db');
+        if (dbEl && a && a.n) dbEl.textContent = a.n;
+      } catch (_) {}
+    };
+
+    // Identity / user-menu ownership:
+    //   opts.manageUser === true  -> mountWorkbar hydrates the session and
+    //     mounts the shared user menu (for simple pages with no bootSession
+    //     of their own: cardex-variance, asof, dmaais).
+    //   default (false)           -> the page owns its session (bootSession)
+    //     and its own user-menu wiring (reconciliation, transactions). The
+    //     original mountSidebar never hydrated; matching that here avoids a
+    //     second hydrate racing the page's loader. mountWorkbar only builds
+    //     the chrome DOM; the page's renderUserChip fills #js-user-btn.
+    if (opts.manageUser) {
+      const finish = function () {
+        paintDbLabel();
+        if (typeof renderUserChip === 'function') renderUserChip();
+        if (typeof mountUserMenu === 'function') mountUserMenu(opts.userMenu || {});
+        applyWorkbarCaps();
+      };
+      if (global.RRV8 && global.RRV8.hydrateSession &&
+          !(global.RR_SESSION && global.RR_SESSION.user)) {
+        global.RRV8.hydrateSession().then(finish);
+      } else {
+        finish();
+      }
+    } else {
+      paintDbLabel();
+      applyWorkbarCaps();
+    }
+    return bar;
+  }
+
   /**
    * Mount the sidebar and wire its purely-internal behaviors.
    * Page-specific behaviors (filter popovers, user menu, status drawer)
@@ -1276,6 +1419,7 @@
   global.RRV8 = global.RRV8 || {};
   global.RRV8.mountSidebar            = mountSidebar;
   global.RRV8.mountTopbar             = mountTopbar;
+  global.RRV8.mountWorkbar            = mountWorkbar;
   global.RRV8.applyClientModuleCaps   = applyClientModuleCaps;
   global.RRV8.setDmaaiStatus          = setDmaaiStatus;
   global.RRV8.setAgentConnectivity    = setAgentConnectivity;
