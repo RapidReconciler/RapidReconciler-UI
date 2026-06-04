@@ -164,6 +164,70 @@ backend contract rather than synthesized client-side (per the
 
 Both are additive: the Home page is fully functional without them.
 
+3. **Account Roll Forward Analysis lives on Reconciliation, not Home.**
+   The Account Roll Forward Analysis (Export Analyzer roll-forward
+   template, sheet `Roll Forward`, keyed on `GLOK`/`VarOK`/`OOB`/
+   `CardexVar`) is the report the customer expects from the Inventory
+   Validation light. Producing it faithfully &mdash; results that match
+   **what the database looks like today** &mdash; is a **full analysis
+   run** (heavy lifting), so it belongs on the **Reconciliation page**
+   (the validation light → `generateValidationReport()`), NOT on the
+   lightweight Home command center.
+
+   **Home stays light:** its red-state insight just flags "needs
+   attention" and routes the user to Reconciliation (`reconUrl()`,
+   navigate only) &mdash; no auto-download, no heavy run on Home. (The
+   `?report=validation` auto-download hook in `inventory-reconciliation.html`
+   still exists but is no longer triggered from Home.)
+
+   **To make the analysis match the live data**, it needs the agent's
+   **native Roll Forward export**. Today `generateValidationReport()`
+   materializes the `Roll Forward` sheet from the loaded `reconciliation`
+   snapshot: `OOB`/`CardexVar`/`Variance`/balances are real/current, but
+   `GLOK`/`VarOK` *break* flags are not in the snapshot &mdash; they're
+   emitted as `baseline`/`end`/`yes`, so a client-built sheet can't
+   surface a true roll-forward break (it'll read "no errors" when the
+   break IS the issue). When the agent exposes the real export (the
+   legacy/v359 report, with true flags), `rrFetch` it and hand the bytes
+   to the analyzer (candidate `GET /inventory/roll-forward`, or the
+   `download-excel/{id}` pattern the System Status pipeline uses) so the
+   findings reflect today's actual data. Do NOT hardcode findings to
+   match a sample workbook &mdash; the analysis must be data-driven.
+
+---
+
+## Restart Services instance (self-serve, VALC-orchestrated)
+
+**Status: V8 calls it; VALC endpoint not implemented yet.** V8 ships a
+self-serve restart for the recurring production symptom where the
+Services jar hangs building an Excel export under memory pressure /
+heavy concurrency (restarting the Services jar clears it):
+
+- An **export hang advisory** (`inventory-reconciliation.html`,
+  `withExportWatchdog` around the audit-report export) surfaces a
+  finance-friendly banner if an export hasn't returned within ~40s, with
+  a **Restart the data service** button gated on the `rs` (Restart
+  Service) JWT permission &mdash; the same perm the admin user-menu uses.
+- The button + the user-menu **Restart Service** action both call
+  `restartService()` &rarr; `POST api/v1/admin/services/restart`
+  (routes to VALC via the `api/v1/admin/` prefix) with body
+  `{ "database": "<active db name>" }`.
+
+**Why VALC and not the Services jar directly:** restart is the Agent's
+job. Per `RapidReconciler-Agent/docs/deploy-architecture.md`, the
+Services jar exposes only Actuator `/health`, `/info`, `/shutdown`;
+`POST /shutdown` *stops* an instance, and **only the Agent re-spawns it**
+(`ServicesInstanceManagerService`, over JMS). V8 must therefore never
+`POST /shutdown` to a Services jar directly &mdash; it would stop the
+instance with nothing to bring it back. VALC's job for this endpoint:
+resolve the client/DB &rarr; tell the Agent (JMS) to **stop + re-spawn**
+that DB's Services instance (mirrors the deploy flow's stop-old/start-new
+step) &rarr; return 200 when the restart is dispatched.
+
+Until VALC implements it, `restartService()` surfaces an honest
+"restart control isn't wired in VALC yet" message (404/405/501) rather
+than faking success. No client change is needed when VALC ships it.
+
 ---
 
 ## Variance-component &rarr; source-view bindings
