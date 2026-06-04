@@ -1,0 +1,798 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Home &mdash; RapidReconciler</title>
+<!--
+  RRV8 Home — the post-login command center every role lands on.
+
+  Phase 1 of the access-flow milestone (see
+  docs/plans/home-command-center-mockup.html for the design mock).
+  This page is ADDITIVE: it does not touch the working-page sidebar.
+  login.html routes here after sign-in; the page reads the JWT caps
+  the same way sidebar.js does and shapes itself per role.
+
+  Real data only (no synthesized numbers):
+    - identity + databases   ← RRV8.hydrateSession() (JWT / demo payload)
+    - module / admin / import tiles ← active-db caps (m / t / perms),
+                                      mirrors sidebar.js applyClientModuleCaps
+    - status insight + period ← /inventory/status (validation.color)
+    - connectivity            ← RRV8.setAgentConnectivity cache + rrFetch fail
+    - Import JDE              ← POST jobs/refresh/start (perm ij)
+
+  Deliberately NOT here yet (no wired backend — would be theater):
+    - Restart Service (no V8 endpoint exists)
+    - out-of-balance account count (no endpoint; see API.md spec stub)
+    - In Transit / PO Receipts module pages (don't exist in V8 yet —
+      surfaced honestly as "not in V8 yet" rather than mis-landing)
+-->
+<link href="fonts/fonts.css" rel="stylesheet">
+<script src="config.js"></script>
+<script src="sidebar.js"></script>
+<style>
+  :root {
+    --navy: #1f2d4a;
+    --navy-deep: #16223b;
+    --orange: #f08a24;
+    --orange-deep: #d9740f;
+    --green: #2e8a55;
+    --green-pale: #e7f3ec;
+    --blue: #2f6fb0;
+    --blue-pale: #e8f0f8;
+    --red: #c0392b;
+    --red-pale: #fae9e7;
+    --amber: #b7791f;
+    --amber-pale: #fdf4e3;
+    --bg: #eef1f6;
+    --bg-card: #ffffff;
+    --bg-soft: #f5f7fa;
+    --text: #243049;
+    --text-muted: #6b7689;
+    --rule: #e4e8ef;
+    --rule-strong: #d2d8e2;
+    --shadow-sm: 0 1px 3px rgba(20,32,55,0.08);
+    --shadow-md: 0 8px 24px -10px rgba(20,32,55,0.22);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Open Sans', -apple-system, Segoe UI, Roboto, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  h1, h2, h3 { font-family: 'Source Sans 3', 'Segoe UI', sans-serif; margin: 0; }
+  a { color: inherit; }
+
+  /* ---- App header strip ---- */
+  .app-header {
+    background: linear-gradient(180deg, var(--navy) 0%, var(--navy-deep) 100%);
+    color: #fff;
+    height: 58px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 0 24px;
+    box-shadow: var(--shadow-md);
+    position: sticky;
+    top: 0;
+    z-index: 40;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; font-family: 'Source Sans 3', sans-serif; }
+  .brand-mark {
+    width: 30px; height: 30px; border-radius: 8px;
+    background: linear-gradient(135deg, var(--orange) 0%, var(--orange-deep) 100%);
+    display: grid; place-items: center; font-weight: 800; color: #fff; font-size: 16px;
+  }
+  .brand-name { font-weight: 800; font-size: 17px; letter-spacing: .2px; }
+  .brand-sub {
+    font-size: 10px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase;
+    color: rgba(255,255,255,.55); padding: 2px 7px; border: 1px solid rgba(255,255,255,.22);
+    border-radius: 100px; margin-left: 2px;
+  }
+  .header-spacer { flex: 1; }
+
+  .conn-pill {
+    display: flex; align-items: center; gap: 8px;
+    padding: 5px 12px; border-radius: 100px;
+    background: rgba(255,255,255,.08); font-size: 12px; font-weight: 700; color: #fff;
+    cursor: default;
+  }
+  .conn-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px rgba(46,138,85,.25); }
+  .conn-pill.is-down { background: rgba(192,57,43,.25); }
+  .conn-pill.is-down .conn-dot { background: #ff6b5b; box-shadow: 0 0 0 3px rgba(255,107,91,.3); animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:.5 } }
+
+  .period-pill {
+    font-size: 12px; font-weight: 700; color: rgba(255,255,255,.8);
+    padding: 5px 12px; border-radius: 100px; background: rgba(255,255,255,.06);
+  }
+  .period-pill[hidden] { display: none; }
+
+  /* user chip + menu */
+  .user-wrap { position: relative; }
+  .user-chip {
+    display: flex; align-items: center; gap: 10px; padding: 5px 8px 5px 6px;
+    border-radius: 100px; background: rgba(255,255,255,.08); cursor: pointer; border: 0; color: #fff;
+    font-family: inherit;
+  }
+  .user-chip:hover { background: rgba(255,255,255,.14); }
+  .avatar {
+    width: 32px; height: 32px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--orange) 0%, var(--orange-deep) 100%);
+    display: grid; place-items: center; font-weight: 800; font-size: 14px; color: #fff; flex-shrink: 0;
+  }
+  .user-chip-text { text-align: left; line-height: 1.15; min-width: 0; }
+  .user-chip-name { font-size: 13px; font-weight: 800; white-space: nowrap; }
+  .user-chip-db { font-size: 11px; color: rgba(255,255,255,.6); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 180px; }
+  .user-menu {
+    position: absolute; top: 46px; right: 0; min-width: 220px;
+    background: var(--bg-card); border: 1px solid var(--rule-strong); border-radius: 12px;
+    box-shadow: 0 20px 48px -16px rgba(20,32,55,.28); overflow: hidden; z-index: 60;
+  }
+  .user-menu[hidden] { display: none; }
+  .user-menu-head { padding: 12px 14px; border-bottom: 1px solid var(--rule); background: var(--bg-soft); }
+  .user-menu-head .nm { font-weight: 800; color: var(--navy); font-size: 14px; }
+  .user-menu-head .em { font-size: 12px; color: var(--text-muted); }
+  .user-menu-action {
+    display: flex; align-items: center; gap: 10px; width: 100%; padding: 11px 14px;
+    background: transparent; border: 0; text-align: left; cursor: pointer;
+    font-family: inherit; font-size: 13px; font-weight: 600; color: var(--text);
+  }
+  .user-menu-action:hover { background: var(--red-pale); color: var(--red); }
+  .user-menu-action svg { width: 16px; height: 16px; }
+
+  /* ---- Connectivity banner ---- */
+  .conn-banner {
+    background: var(--red-pale); border-bottom: 1px solid #f1c9c3; color: #7d241a;
+    padding: 12px 24px; display: none; align-items: center; gap: 14px; font-size: 13.5px;
+  }
+  .conn-banner.is-visible { display: flex; }
+  .conn-banner svg { width: 20px; height: 20px; flex-shrink: 0; }
+  .conn-banner strong { font-weight: 800; }
+  .conn-banner .banner-retry {
+    margin-left: auto; background: var(--red); color: #fff; border: 0; border-radius: 7px;
+    padding: 7px 14px; font-weight: 700; font-size: 12.5px; cursor: pointer; font-family: inherit; white-space: nowrap;
+  }
+
+  /* ---- Page body ---- */
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 28px 24px 60px; }
+
+  .hero-greet { font-size: 26px; font-weight: 800; color: var(--navy); }
+  .hero-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .tag {
+    font-size: 12px; font-weight: 700; padding: 4px 11px; border-radius: 100px;
+    background: var(--bg-card); border: 1px solid var(--rule-strong); color: var(--text-muted);
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .tag[hidden] { display: none; }
+  .tag.role { background: var(--navy); color: #fff; border-color: var(--navy); }
+  .tag .tdot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
+
+  .insight {
+    margin-top: 18px; background: var(--bg-card); border: 1px solid var(--rule);
+    border-left: 4px solid var(--green); border-radius: 12px; padding: 18px 20px;
+    box-shadow: var(--shadow-sm); display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+  }
+  .insight.attention { border-left-color: var(--orange); }
+  .insight.problem { border-left-color: var(--red); }
+  .insight-icon {
+    width: 44px; height: 44px; border-radius: 11px; display: grid; place-items: center; flex-shrink: 0;
+    background: var(--green-pale); color: var(--green);
+  }
+  .insight.attention .insight-icon { background: var(--amber-pale); color: var(--amber); }
+  .insight.problem .insight-icon { background: var(--red-pale); color: var(--red); }
+  .insight-body { flex: 1; min-width: 240px; }
+  .insight-title { font-family: 'Source Sans 3', sans-serif; font-weight: 800; font-size: 16px; color: var(--navy); }
+  .insight-sub { color: var(--text-muted); font-size: 13px; margin-top: 2px; }
+  .cta {
+    background: linear-gradient(135deg, var(--orange) 0%, var(--orange-deep) 100%); color: #fff;
+    border: 0; border-radius: 9px; padding: 12px 20px; font-weight: 800; font-size: 14px;
+    font-family: 'Source Sans 3', sans-serif; cursor: pointer; white-space: nowrap; text-decoration: none;
+    box-shadow: 0 6px 16px -6px rgba(217,116,15,.6); display: inline-block;
+  }
+  .cta:hover { filter: brightness(1.05); }
+  .cta[hidden] { display: none; }
+
+  .section-label {
+    font-family: 'Source Sans 3', sans-serif; font-size: 11px; font-weight: 800;
+    letter-spacing: .14em; text-transform: uppercase; color: var(--text-muted);
+    margin: 30px 0 12px;
+  }
+
+  .module-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(225px, 1fr)); gap: 14px; }
+  .tile {
+    background: var(--bg-card); border: 1px solid var(--rule); border-radius: 12px; padding: 18px;
+    cursor: pointer; transition: transform .12s, box-shadow .12s, border-color .12s; text-decoration: none; color: inherit;
+    display: block;
+  }
+  .tile:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); border-color: var(--rule-strong); }
+  .tile.primary { border: 1.5px solid var(--orange); box-shadow: 0 8px 22px -12px rgba(240,138,36,.5); }
+  .tile-icon { width: 38px; height: 38px; border-radius: 10px; background: var(--blue-pale); color: var(--blue); display: grid; place-items: center; margin-bottom: 12px; }
+  .tile.primary .tile-icon { background: #fdebd7; color: var(--orange-deep); }
+  .tile-title { font-family: 'Source Sans 3', sans-serif; font-weight: 800; font-size: 15.5px; color: var(--navy); }
+  .tile-desc { color: var(--text-muted); font-size: 12.5px; margin-top: 4px; }
+  .tile-badge { display: inline-block; margin-top: 10px; font-size: 10.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--orange-deep); }
+
+  .empty-state {
+    background: var(--bg-card); border: 1px dashed var(--rule-strong); border-radius: 12px;
+    padding: 22px; color: var(--text-muted); font-size: 13.5px; line-height: 1.55;
+  }
+  .empty-state b { color: var(--navy); }
+
+  .lower-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px; }
+  @media (max-width: 820px) { .lower-grid { grid-template-columns: 1fr; } }
+  .panel { background: var(--bg-card); border: 1px solid var(--rule); border-radius: 12px; padding: 20px; box-shadow: var(--shadow-sm); }
+  .panel[hidden] { display: none; }
+  .panel-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+  .panel-head h3 { font-size: 16px; font-weight: 800; color: var(--navy); }
+  .panel-ico { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; flex-shrink: 0; }
+  .ico-db { background: var(--blue-pale); color: var(--blue); }
+  .ico-dmaai { background: var(--green-pale); color: var(--green); }
+  .ico-admin { background: #ece8fb; color: #6c4fd6; }
+  .ico-support { background: var(--amber-pale); color: var(--amber); }
+
+  .row {
+    display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 9px;
+    border: 1px solid var(--rule); margin-bottom: 9px; background: var(--bg-soft);
+  }
+  .row:last-child { margin-bottom: 0; }
+  .row[hidden] { display: none; }
+  .row-main { flex: 1; min-width: 0; }
+  .row-title { font-weight: 700; font-size: 13.5px; color: var(--navy); }
+  .row-sub { font-size: 12px; color: var(--text-muted); }
+  .row-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+  .row-dot.green { background: var(--green); }
+  .row-dot.amber { background: var(--orange); }
+  .row-dot.red { background: var(--red); }
+  .row-dot.grey { background: var(--text-muted); }
+  .btn-sm {
+    border: 1px solid var(--rule-strong); background: var(--bg-card); border-radius: 7px;
+    padding: 6px 12px; font-weight: 700; font-size: 12px; cursor: pointer; font-family: inherit; color: var(--text); white-space: nowrap; text-decoration: none; display: inline-block;
+  }
+  .btn-sm:hover { border-color: var(--blue); color: var(--blue); }
+  .btn-sm:disabled { opacity: .5; cursor: default; }
+  .why {
+    font-size: 12px; color: var(--text-muted); background: var(--bg-soft); border: 1px dashed var(--rule-strong);
+    border-radius: 8px; padding: 9px 12px; margin-top: 10px; line-height: 1.45;
+  }
+  .why b { color: var(--green); }
+  .select-fake {
+    border: 1px solid var(--rule-strong); border-radius: 7px; padding: 7px 11px; font-weight: 700;
+    font-size: 13px; color: var(--navy); background: var(--bg-card); width: 100%; font-family: inherit;
+  }
+
+  .support-links { display: flex; gap: 10px; flex-wrap: wrap; }
+  .support-link {
+    flex: 1; min-width: 140px; text-decoration: none; color: inherit; border: 1px solid var(--rule);
+    border-radius: 10px; padding: 14px; background: var(--bg-soft); transition: border-color .12s;
+  }
+  .support-link:hover { border-color: var(--amber); }
+  .support-link .sl-title { font-weight: 800; color: var(--navy); font-size: 14px; }
+  .support-link .sl-sub { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+
+  .foot { margin-top: 34px; padding-top: 18px; border-top: 1px solid var(--rule); display: flex; align-items: center; gap: 14px; color: var(--text-muted); font-size: 12px; }
+  .foot a { color: var(--blue); font-weight: 700; text-decoration: none; }
+
+  .toast {
+    position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%) translateY(20px);
+    background: var(--navy); color: #fff; padding: 11px 18px; border-radius: 9px; font-weight: 700;
+    font-size: 13px; box-shadow: var(--shadow-md); opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; z-index: 90;
+  }
+  .toast.is-visible { opacity: 1; transform: translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+
+<header class="app-header">
+  <div class="brand">
+    <span class="brand-mark">R</span>
+    <span class="brand-name">RapidReconciler</span>
+    <span class="brand-sub">Home</span>
+  </div>
+  <div class="header-spacer"></div>
+  <div class="conn-pill" id="connPill"><span class="conn-dot"></span><span id="connText">Connected</span></div>
+  <div class="period-pill" id="periodPill" hidden>Period: &mdash;</div>
+  <div class="user-wrap">
+    <button class="user-chip" id="userChip" aria-haspopup="menu">
+      <span class="avatar" id="hdrAvatar">&mdash;</span>
+      <span class="user-chip-text">
+        <span class="user-chip-name" id="hdrName">&mdash;</span>
+        <span class="user-chip-db" id="hdrDb">&mdash;</span>
+      </span>
+    </button>
+    <div class="user-menu" id="userMenu" role="menu" hidden>
+      <div class="user-menu-head">
+        <div class="nm" id="menuName">&mdash;</div>
+        <div class="em" id="menuEmail">&mdash;</div>
+      </div>
+      <button class="user-menu-action" id="signOutBtn" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+        <span>Sign out</span>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="conn-banner" id="connBanner">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+  <span><strong>Your connection to the data service dropped.</strong> The working pages won&rsquo;t load fresh data until it&rsquo;s back &mdash; this is usually a VPN hiccup when working from home, not a problem with your data.</span>
+  <button class="banner-retry" id="bannerRetry">Retry connection</button>
+</div>
+
+<div class="wrap">
+  <div class="hero">
+    <div class="hero-greet" id="greet">Welcome back</div>
+    <div class="hero-meta">
+      <span class="tag role" id="roleTag" hidden>&mdash;</span>
+      <span class="tag"><span class="tdot"></span><span id="dbTag">&mdash;</span></span>
+      <span class="tag" id="periodTag" hidden>Open period: &mdash;</span>
+    </div>
+
+    <div class="insight" id="insight">
+      <div class="insight-icon" id="insightIcon"></div>
+      <div class="insight-body">
+        <div class="insight-title" id="insightTitle">Checking where things stand&hellip;</div>
+        <div class="insight-sub" id="insightSub">Reading the latest status from your database.</div>
+      </div>
+      <a class="cta" id="ctaBtn" href="#" hidden>Start &rarr;</a>
+    </div>
+  </div>
+
+  <div class="section-label">Go to work</div>
+  <div class="module-grid" id="moduleGrid"></div>
+  <div class="empty-state" id="emptyState" hidden></div>
+
+  <div class="lower-grid">
+    <!-- Database & data -->
+    <div class="panel" id="dataPanel">
+      <div class="panel-head">
+        <span class="panel-ico ico-db"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg></span>
+        <h3>Database &amp; data</h3>
+      </div>
+      <select class="select-fake" id="dbSelect"></select>
+      <div class="row" id="importRow" style="margin-top:10px;" hidden>
+        <div class="row-main">
+          <div class="row-title">Import JDE data</div>
+          <div class="row-sub">Pull the latest from JDE into this database</div>
+        </div>
+        <button class="btn-sm" id="importBtn">Import now</button>
+      </div>
+    </div>
+
+    <!-- DMAAIs / accounting setup -->
+    <div class="panel" id="dmaaiPanel">
+      <div class="panel-head">
+        <span class="panel-ico ico-dmaai"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg></span>
+        <h3>Accounting setup</h3>
+      </div>
+      <div class="row">
+        <span class="row-dot grey" id="dmaaiDot"></span>
+        <div class="row-main">
+          <div class="row-title" id="dmaaiTitle">DMAAIs</div>
+          <div class="row-sub" id="dmaaiSub">Loaded on first export</div>
+        </div>
+        <a class="btn-sm" href="accounting-dmaais.html">View</a>
+      </div>
+      <div class="why">
+        <b>Why this is here:</b> the DMAAI universe is preloaded so per-row <b>Export</b> can classify AAI patterns (R31802A, R42800, F4111&rarr;F0911) inside the analysis workbook. Loading it once means every working page already has it &mdash; no per-page refetch.
+      </div>
+    </div>
+
+    <!-- Administration (admin only) -->
+    <div class="panel" id="adminPanel" hidden>
+      <div class="panel-head">
+        <span class="panel-ico ico-admin"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>
+        <h3>Administration</h3>
+      </div>
+      <a class="row" href="admin-companies.html" style="text-decoration:none;">
+        <div class="row-main"><div class="row-title">Licensing</div><div class="row-sub" id="licenseSub">Company seats &amp; entitlements</div></div>
+        <span class="btn-sm">Open</span>
+      </a>
+      <a class="row" href="admin-users.html" style="text-decoration:none;">
+        <div class="row-main"><div class="row-title">RR Team</div><div class="row-sub">Users, roles &amp; access</div></div>
+        <span class="btn-sm">Open</span>
+      </a>
+    </div>
+
+    <!-- Support -->
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-ico ico-support"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4"/><line x1="4.93" y1="4.93" x2="9.17" y2="9.17"/><line x1="14.83" y1="14.83" x2="19.07" y2="19.07"/><line x1="14.83" y1="9.17" x2="19.07" y2="4.93"/><line x1="4.93" y1="19.07" x2="9.17" y2="14.83"/></svg></span>
+        <h3>Need a hand?</h3>
+      </div>
+      <div class="support-links">
+        <a class="support-link" href="../RRUniversity/rapidreconciler-university.html" target="_blank" rel="noopener"><div class="sl-title">RR University</div><div class="sl-sub">Guides &amp; how-tos for your role</div></a>
+        <a class="support-link" href="../HelpDesk/troubleshooting.html" target="_blank" rel="noopener"><div class="sl-title">Help Desk</div><div class="sl-sub">Search fixes or reach support</div></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <span>Signed in as <strong id="footName">&mdash;</strong></span>
+    <span>&middot;</span>
+    <a href="#" id="footSignOut">Sign out</a>
+    <span style="margin-left:auto;" id="footVersion">RapidReconciler V8</span>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function () {
+  'use strict';
+
+  var RR_CONFIG = window.RR_CONFIG || {};
+  var MODE = (new URLSearchParams(window.location.search).get('mode')) || RR_CONFIG.mode || 'demo';
+  var IS_DEMO = MODE === 'demo';
+
+  // ---- rrFetch + routing (copied verbatim from the V8 pages; inline,
+  //      no shared lib — see config.js for the routing tables) ----
+  var _valcPrefixes      = window.RR_VALC_PREFIXES || [];
+  var _testAgentAreas    = window.RR_TEST_AGENT_AREAS || [];
+  var _testAgentPrefixes = window.RR_TEST_AGENT_PREFIXES || [];
+  function _routesToTestAgent(area) {
+    for (var i = 0; i < _testAgentAreas.length; i++) if (area === _testAgentAreas[i]) return true;
+    for (var j = 0; j < _testAgentPrefixes.length; j++) if (area.startsWith(_testAgentPrefixes[j])) return true;
+    return false;
+  }
+  function _routesToValc(area) {
+    for (var i = 0; i < _valcPrefixes.length; i++) if (area.startsWith(_valcPrefixes[i])) return true;
+    return false;
+  }
+  function prodHeaders(contentType) {
+    var h = { 'Accept': 'application/json' };
+    try { var token = localStorage.getItem('rrv8.token'); if (token) h['Authorization'] = 'Bearer ' + token; } catch (_) {}
+    if (contentType) h['Content-Type'] = contentType;
+    return h;
+  }
+  function rrFetch(area, opts) {
+    opts = opts || {};
+    if (IS_DEMO) {
+      var file = (opts.demoFile || area) + '.json';
+      return fetch((RR_CONFIG.dataPath || 'data/') + file, { cache: 'no-store' })
+        .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status + ' on ' + file); return r.json(); });
+    }
+    var base;
+    if (_routesToValc(area)) {
+      base = RR_CONFIG.valcBase || 'http://localhost:8080';
+    } else if (_routesToTestAgent(area)) {
+      var _d = window.RR_SESSION && window.RR_SESSION.dbs && window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex || 0];
+      base = (_d && _d.ip)
+        ? ((/^(?:localhost|127\.0\.0\.1)\b/i.test(_d.ip) ? 'http://' : 'https://') + _d.ip)
+        : (RR_CONFIG.testAgentBase || 'http://localhost:34537');
+    } else {
+      var sess = window.RR_SESSION;
+      var db = sess && sess.dbs && sess.dbs[sess.activeDbIndex || 0];
+      if (!db || !db.ip) return Promise.reject(new Error('No active DB.'));
+      base = (/^(?:localhost|127\.0\.0\.1)\b/i.test(db.ip) ? 'http://' : 'https://') + db.ip;
+    }
+    var url = base + '/' + area + (opts.query ? '?' + new URLSearchParams(opts.query) : '');
+    return fetch(url, {
+      method:  opts.method || 'GET',
+      headers: prodHeaders(opts.body ? 'application/json;charset=UTF-8' : null),
+      body:    opts.body ? JSON.stringify(opts.body) : undefined
+    }).then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status + ' on ' + url);
+      return r.json().catch(function (e) { return e instanceof SyntaxError ? null : Promise.reject(e); });
+    });
+  }
+
+  // ---- session helpers ----
+  function activeDb() {
+    var s = window.RR_SESSION || {};
+    var d = Array.isArray(s.dbs) ? s.dbs : [];
+    return d[s.activeDbIndex || 0] || d[0] || null;
+  }
+  // Mirror sidebar.js applyClientModuleCaps: a module shows when BOTH the
+  // client is licensed (active.m) AND the user is granted the tab (active.t).
+  // Either layer missing fails open (back-compat with the dev token + demo).
+  function caps() {
+    var a = activeDb() || {};
+    var m = a.m || {}, t = a.t || {}, p = a.perms || {};
+    return {
+      inv: (m.inv !== false) && (t.inv !== false),
+      it:  (m.it  !== false) && (t.it  !== false),
+      por: (m.por !== false) && (t.por !== false),
+      adm: (m.adm !== false) && (t.adm !== false),
+      ij:  (p.ij  !== false),
+      dm:  (m.adm !== false) && (p.dm !== false)
+    };
+  }
+  // Strict admin signal — the same one login.html isAdminToken + the
+  // sidebar trust. Used only for the role badge label (not for gating).
+  function isAdmin() { var a = activeDb(); return !!(a && a.t && a.t.adm === true); }
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (m) {
+      return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[m];
+    });
+  }
+  function initials(name) {
+    var p = String(name || '').trim().split(/\s+/);
+    return ((p[0] || '?')[0] + (p[1] ? p[1][0] : '')).toUpperCase();
+  }
+  function fmtPeriod(iso) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
+    if (!m) return String(iso || '');
+    var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return months[parseInt(m[2],10)-1] + ' ' + parseInt(m[3],10) + ', ' + m[1];
+  }
+  function $(id) { return document.getElementById(id); }
+  function toast(msg) {
+    var el = $('toast'); if (!el) return;
+    el.textContent = msg; el.classList.add('is-visible');
+    setTimeout(function () { el.classList.remove('is-visible'); }, 2600);
+  }
+
+  // ---- module catalog: the only modules with REAL V8 pages today are
+  //      the four inventory pages. In Transit / PO Receipts are licensed
+  //      concepts with no V8 page yet — surfaced honestly, not mis-landed.
+  var INVENTORY_TILES = [
+    { href: 'inventory-reconciliation.html', title: 'Reconciliation', desc: 'GL vs. perpetual by account', primary: true },
+    { href: 'inventory-transactions.html',   title: 'Transactions',   desc: 'Drill the period detail' },
+    { href: 'inventory-cardex-variance.html',title: 'Cardex Variance', desc: 'Item-ledger vs. GL' },
+    { href: 'inventory-asof.html',           title: 'Perpetual',       desc: 'As-of inventory position' }
+  ];
+  var TILE_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg>';
+
+  // ---- connectivity (reuses sidebar.js's cross-page cache) ----
+  function setConn(down, message) {
+    $('connBanner').classList.toggle('is-visible', !!down);
+    var pill = $('connPill');
+    pill.classList.toggle('is-down', !!down);
+    $('connText').textContent = down ? 'Reconnecting…' : 'Connected';
+    if (window.RRV8 && window.RRV8.setAgentConnectivity) {
+      window.RRV8.setAgentConnectivity(down ? 'unreachable' : 'ok', message ? { message: message } : undefined);
+    }
+  }
+
+  // ---- render identity, databases, tiles ----
+  function renderIdentity() {
+    var u = (window.RR_SESSION && window.RR_SESSION.user) || {};
+    var name = u.fn || 'there';
+    var email = u.u || '';
+    var first = String(name).split(/\s+/)[0] || name;
+    $('greet').textContent = 'Welcome back, ' + first;
+    $('hdrAvatar').textContent = initials(name);
+    $('hdrName').textContent = name;
+    $('menuName').textContent = name;
+    $('menuEmail').textContent = email;
+    $('footName').textContent = name;
+
+    // Role badge: only the strict Administrator signal is reliable from
+    // the JWT today. Other role labels (Reconciliation Analyst, A/P
+    // Clerk, …) aren't carried in the token yet — show them once VALC
+    // surfaces a role claim rather than guessing one (see API.md stub).
+    if (isAdmin()) { var rt = $('roleTag'); rt.textContent = 'Administrator'; rt.hidden = false; }
+
+    if (RR_CONFIG.release) $('footVersion').textContent = 'RapidReconciler ' + RR_CONFIG.release;
+  }
+
+  function renderDatabases() {
+    var s = window.RR_SESSION || {};
+    var dbs = Array.isArray(s.dbs) ? s.dbs : [];
+    var idx = s.activeDbIndex || 0;
+    var active = dbs[idx] || dbs[0] || null;
+    var host = active && active.ip ? String(active.ip).split(':')[0] : '';
+    $('hdrDb').textContent = active ? active.n : 'No database';
+    $('dbTag').textContent = active ? active.n : 'No database';
+
+    var sel = $('dbSelect');
+    if (!dbs.length) {
+      sel.innerHTML = '<option>No databases in session</option>';
+      sel.disabled = true;
+      return;
+    }
+    sel.innerHTML = dbs.map(function (db, i) {
+      var h = db.ip ? String(db.ip).split(':')[0] : '';
+      return '<option value="' + i + '"' + (i === idx ? ' selected' : '') + '>' +
+        esc(db.n) + (h ? ' &mdash; ' + esc(h) : '') + '</option>';
+    }).join('');
+    sel.disabled = dbs.length < 2;
+  }
+
+  function renderTiles() {
+    var c = caps();
+    var grid = $('moduleGrid');
+    var empty = $('emptyState');
+
+    if (c.inv) {
+      grid.innerHTML = INVENTORY_TILES.map(function (m) {
+        return '<a class="tile' + (m.primary ? ' primary' : '') + '" href="' + m.href + '">' +
+          '<div class="tile-icon">' + TILE_ICON + '</div>' +
+          '<div class="tile-title">' + m.title + '</div>' +
+          '<div class="tile-desc">' + m.desc + '</div>' +
+          (m.primary ? '<span class="tile-badge">Your starting point</span>' : '') +
+        '</a>';
+      }).join('');
+      grid.style.display = '';
+      empty.hidden = true;
+    } else {
+      // No inventory access. Today that means no working V8 page —
+      // be honest about the gap (this is the A/P-clerk case).
+      grid.style.display = 'none';
+      grid.innerHTML = '';
+      var bits = [];
+      if (c.por) bits.push('PO Receipts');
+      if (c.it)  bits.push('In Transit');
+      var modtxt = bits.length ? bits.join(' and ') : 'your module';
+      empty.innerHTML = '<b>Your modules aren&rsquo;t in V8 yet.</b><br>' +
+        'Your account is set up for <b>' + esc(modtxt) + '</b>, which isn&rsquo;t available in the new app yet &mdash; ' +
+        'keep using V7 for that work for now. The Inventory module is what&rsquo;s live in V8 today. ' +
+        'If you think you should have Inventory access, ask your RapidReconciler administrator.';
+      empty.hidden = false;
+    }
+
+    // Admin panel
+    $('adminPanel').hidden = !c.adm;
+    // Import row (Database panel) — perm-gated, and only meaningful with a DB
+    $('importRow').hidden = !(c.ij && activeDb());
+    // DMAAI panel is an admin/accounting-setup concept
+    $('dmaaiPanel').hidden = !c.dm;
+  }
+
+  function setInsight(kind, title, sub) {
+    var el = $('insight');
+    el.classList.remove('attention', 'problem');
+    var icon = $('insightIcon');
+    var check = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
+    var alert = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>';
+    if (kind === 'problem') { el.classList.add('problem'); icon.innerHTML = alert; }
+    else if (kind === 'attention') { el.classList.add('attention'); icon.innerHTML = alert; }
+    else { icon.innerHTML = check; }
+    $('insightTitle').textContent = title;
+    $('insightSub').textContent = sub;
+  }
+
+  // CTA → the user's starting point (first granted real page)
+  function setCta() {
+    var c = caps();
+    var cta = $('ctaBtn');
+    if (c.inv) { cta.href = 'inventory-reconciliation.html'; cta.innerHTML = 'Start with Reconciliation &rarr;'; cta.hidden = false; }
+    else { cta.hidden = true; }
+  }
+
+  // ---- /inventory/status drives period + the status insight ----
+  function loadStatus() {
+    rrFetch('inventory/status', { demoFile: 'inventory-status' }).then(function (payload) {
+      setConn(false);
+      if (!payload) return;
+      var rf = payload.reconciliationFilter || {};
+      if (rf.period) {
+        $('periodPill').textContent = 'Period: ' + fmtPeriod(rf.period);
+        $('periodPill').hidden = false;
+        var pt = $('periodTag'); pt.textContent = 'Open period: ' + fmtPeriod(rf.period); pt.hidden = false;
+      }
+      var v = payload.validation || {};
+      var color = String(v.color || '').toLowerCase();
+      var period = rf.period ? fmtPeriod(rf.period) : 'this period';
+      if (color === 'danger' || color === 'red') {
+        setInsight('problem', 'The roll-forward needs attention',
+          'Inventory validation is red for ' + period + '. Start in Reconciliation to see which accounts moved.');
+      } else if (color === 'warning' || color === 'yellow' || color === 'amber') {
+        setInsight('attention', 'A refresh is in progress',
+          'Inventory validation is still settling for ' + period + '. Numbers may change as the roll-forward finishes.');
+      } else if (color === 'success' || color === 'green') {
+        setInsight('ok', 'Everything is up to date for ' + period,
+          'Last roll-forward completed cleanly. Open a module when you’re ready — nothing is flagged.');
+      } else {
+        setInsight('ok', 'You’re signed in',
+          'Pick a module below to get started.');
+      }
+    }).catch(function (err) {
+      // Network failure → connectivity problem (the VPN-drop case).
+      var msg = String(err && err.message || err);
+      if (err instanceof TypeError || /failed to fetch|network/i.test(msg)) {
+        setConn(true, msg);
+        setInsight('attention', 'Can’t reach your data right now',
+          'The home page loaded, but the data service didn’t answer. Check your VPN / connection, then retry.');
+      } else {
+        setInsight('ok', 'You’re signed in', 'Pick a module below to get started.');
+      }
+    });
+  }
+
+  // DMAAI preload state — read the cross-page session cache the V8 pages
+  // write (rrv8.scope.v1.<mode>.<db>.dmaais). Don't fetch here; just
+  // reflect whatever a working page has already loaded this session.
+  function reflectDmaai() {
+    try {
+      for (var i = 0; i < sessionStorage.length; i++) {
+        var k = sessionStorage.key(i);
+        if (!k || !/^rrv8\.scope\.v1\..+\.dmaais$/.test(k)) continue;
+        var obj = JSON.parse(sessionStorage.getItem(k) || 'null');
+        var payload = obj && obj.payload;
+        var rows = (payload && payload.data) || (Array.isArray(payload) ? payload : []);
+        if (rows && rows.length) {
+          $('dmaaiDot').className = 'row-dot green';
+          $('dmaaiTitle').textContent = 'DMAAIs loaded · ' + rows.length.toLocaleString('en-US') + ' rows';
+          var a = activeDb();
+          $('dmaaiSub').textContent = a ? ('From ' + a.n) : 'Ready';
+          return;
+        }
+      }
+    } catch (_) {}
+    // Nothing cached yet — neutral state.
+    $('dmaaiDot').className = 'row-dot grey';
+    $('dmaaiTitle').textContent = 'DMAAIs';
+    $('dmaaiSub').textContent = 'Loads on first export';
+  }
+
+  // ---- actions ----
+  function doSignOut() {
+    try { localStorage.removeItem('rrv8.token'); } catch (_) {}
+    try { localStorage.removeItem('rrv8.viewMode'); } catch (_) {}
+    try { localStorage.removeItem('rrv8.lastEmail'); } catch (_) {}
+    try { localStorage.removeItem('rrv8.sessionStart'); } catch (_) {}
+    window.location.href = '../login.html';
+  }
+  function doImport() {
+    if (IS_DEMO) { toast('Import JDE — demo mode, no agent call'); return; }
+    var btn = $('importBtn'); btn.disabled = true;
+    toast('Starting Import JDE…');
+    rrFetch('jobs/refresh/start', { method: 'POST' }).then(function () {
+      toast('Import JDE started.');
+    }).catch(function (err) {
+      var msg = String(err && err.message || err);
+      toast(/409/.test(msg) ? 'No refresh job configured — set it in VALC' : 'Import JDE failed: ' + msg);
+    }).then(function () { btn.disabled = false; });
+  }
+
+  function wire() {
+    // user menu toggle
+    var chip = $('userChip'), menu = $('userMenu');
+    chip.addEventListener('click', function (e) { e.stopPropagation(); menu.hidden = !menu.hidden; });
+    document.addEventListener('click', function (e) {
+      if (menu.hidden) return;
+      if (e.target.closest('#userMenu') || e.target.closest('#userChip')) return;
+      menu.hidden = true;
+    });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') menu.hidden = true; });
+
+    $('signOutBtn').addEventListener('click', doSignOut);
+    $('footSignOut').addEventListener('click', function (e) { e.preventDefault(); doSignOut(); });
+    $('importBtn').addEventListener('click', doImport);
+    $('bannerRetry').addEventListener('click', function () { setConn(false); loadStatus(); });
+
+    $('dbSelect').addEventListener('change', function (e) {
+      var i = parseInt(e.target.value, 10);
+      if (isNaN(i)) return;
+      window.RR_SESSION.activeDbIndex = i;
+      renderDatabases();
+      renderTiles();
+      setCta();
+      reflectDmaai();
+      loadStatus();
+    });
+  }
+
+  // ---- boot ----
+  function boot() {
+    // Auth gate: in real modes, no token → back to login.
+    if (!IS_DEMO) {
+      var hasToken = false;
+      try { hasToken = !!localStorage.getItem('rrv8.token'); } catch (_) {}
+      if (!hasToken) { window.location.href = '../login.html'; return; }
+    }
+    wire();
+    var hydrate = (window.RRV8 && window.RRV8.hydrateSession)
+      ? window.RRV8.hydrateSession() : Promise.resolve();
+    hydrate.then(function () {
+      renderIdentity();
+      renderDatabases();
+      renderTiles();
+      setCta();
+      reflectDmaai();
+      loadStatus();
+    });
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+  else boot();
+})();
+</script>
+</body>
+</html>
