@@ -616,13 +616,16 @@
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11.5 12 4l9 7.5"/><path d="M5 10v9a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-9"/></svg>' +
         '<span>Home</span>' +
       '</a>' +
-      '<button class="workbar-user" id="js-user-btn" type="button" aria-haspopup="menu" title="Account">' +
-        // both avatar classes: sidebar.js renderUserChip targets
-        // .sidebar-user-avatar; pages with their own inline renderUserChip
-        // (reconciliation / transactions) target .topbar-user-avatar.
+      // Identity-only chip (no dropdown). Account actions — sign out, DB
+      // switch, Import JDE, Restart — all live on Home; the working-page
+      // chip is just "who's signed in". Kept as id="js-user-btn" so the
+      // pages' renderUserChip (which fills the avatar) still finds it.
+      // both avatar classes: sidebar.js renderUserChip targets
+      // .sidebar-user-avatar; pages with their own inline renderUserChip
+      // (reconciliation / transactions) target .topbar-user-avatar.
+      '<div class="workbar-user is-identity" id="js-user-btn" title="Signed in — manage your account from Home">' +
         '<span class="sidebar-user-avatar topbar-user-avatar">?</span>' +
-        '<svg class="workbar-user-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>' +
-      '</button>';
+      '</div>';
 
     bar.appendChild(nav);
 
@@ -678,7 +681,8 @@
       const finish = function () {
         paintDbLabel();
         if (typeof renderUserChip === 'function') renderUserChip();
-        if (typeof mountUserMenu === 'function') mountUserMenu(opts.userMenu || {});
+        // No user menu on working pages — the chip is identity-only and all
+        // account actions live on Home.
         applyWorkbarCaps();
       };
       if (global.RRV8 && global.RRV8.hydrateSession &&
@@ -1087,17 +1091,36 @@
   }
 
   // ---- Session expiry / auto-logout (real-token modes only) ----
-  // Absolute 1-hour cap from sign-in, plus the token's own exp. When it
-  // lapses we clear the session and bounce to the login page so the user
-  // re-authenticates — which re-checks password expiry. Stops a session
-  // left open for days, or a bookmarked deep link opened after the
-  // password rotated, from silently appearing to still work. The
-  // manually-set dev token (no sessionStart, far-future exp) is exempt.
-  const SESSION_MAX_MS = 60 * 60 * 1000;
+  // Idle timeout: 30 minutes of no user activity ends the session and
+  // bounces to login (which re-checks password expiry). Replaces the old
+  // absolute 1-hour cap, so an actively-working user is no longer kicked
+  // out mid-task — the clock resets on any interaction. Activity is tracked
+  // in localStorage (rrv8.lastActivity) so it's shared across tabs/pages.
+  // The token's own exp still applies as a hard backstop. The manually-set
+  // dev token (no sessionStart, far-future exp) is exempt.
+  const IDLE_MAX_MS = 30 * 60 * 1000;
+  let _lastActivityWrite = 0;
+  function markActivity() {
+    try {
+      // Only track once a real session exists; the dev token has no
+      // sessionStart and stays exempt from the idle timeout.
+      if (!localStorage.getItem('rrv8.sessionStart')) return;
+      const now = Date.now();
+      // Throttle writes — activity events (mousemove, scroll) fire constantly.
+      if (now - _lastActivityWrite < 15000) return;
+      _lastActivityWrite = now;
+      localStorage.setItem('rrv8.lastActivity', String(now));
+    } catch (_) {}
+  }
   function sessionExpired() {
     try {
-      const start = parseInt(localStorage.getItem('rrv8.sessionStart') || '', 10);
-      if (!isNaN(start) && (Date.now() - start) > SESSION_MAX_MS) return true;
+      const start = localStorage.getItem('rrv8.sessionStart');
+      if (start) {
+        // Idle = time since last interaction (falls back to sign-in time
+        // until the first activity is recorded).
+        const last = parseInt(localStorage.getItem('rrv8.lastActivity') || start, 10);
+        if (!isNaN(last) && (Date.now() - last) > IDLE_MAX_MS) return true;
+      }
       const token = localStorage.getItem('rrv8.token');
       if (token) {
         const p = parseJwt(token);
@@ -1110,6 +1133,7 @@
     try { localStorage.removeItem('rrv8.token'); } catch (_) {}
     try { localStorage.removeItem('rrv8.viewMode'); } catch (_) {}
     try { localStorage.removeItem('rrv8.sessionStart'); } catch (_) {}
+    try { localStorage.removeItem('rrv8.lastActivity'); } catch (_) {}
     // Keep rrv8.lastEmail so the login page can pre-fill the address.
     global.location.href = '../login.html?reason=timeout';
   }
@@ -1117,6 +1141,10 @@
   function watchSession() {
     if (_sessionWatchStarted) return;
     _sessionWatchStarted = true;
+    markActivity(); // seed last-activity for this page load
+    ['mousedown', 'keydown', 'scroll', 'touchstart', 'click', 'mousemove'].forEach(function (ev) {
+      global.addEventListener(ev, markActivity, { passive: true });
+    });
     global.setInterval(function () { if (sessionExpired()) endSession(); }, 60000);
   }
 
