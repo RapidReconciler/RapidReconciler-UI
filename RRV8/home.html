@@ -585,7 +585,7 @@
              Hidden until the agent answers; the dot/sub above degrade to the
              connectivity signal when it doesn't. -->
         <div class="svc-mem" id="svcMem" hidden>
-          <div class="svc-mem-bar"><span class="svc-mem-fill" id="svcMemFill"></span></div>
+          <div class="svc-mem-bar" id="svcMemBar"><span class="svc-mem-fill" id="svcMemFill"></span></div>
           <details class="svc-mem-det" id="svcMemDet">
             <summary>Memory details</summary>
             <dl class="svc-mem-dl" id="svcMemDl"></dl>
@@ -887,19 +887,29 @@
   // carries the raw figures for a tech triaging it.
   function setMemMeter(m) {
     var wrap = $('svcMem'); if (!wrap) return;
-    if (!m || m.liveSetMaxMb <= 0) { wrap.hidden = true; return; }
+    // Only the no-telemetry fallback hides the panel outright. Whenever the
+    // service reported health — including a calm "healthy" — the details are
+    // available to drill into; you don't have to wait for amber/red.
+    if (!m || !m.state) { wrap.hidden = true; return; }
     wrap.hidden = false;
-    var pct = Math.max(2, Math.min(100, Math.round(100 * m.liveSetMb / m.liveSetMaxMb)));
-    var fill = $('svcMemFill');
-    fill.style.width = pct + '%';
-    fill.className = 'svc-mem-fill' + (m.state === 'restart' ? ' red' : m.state === 'watch' ? ' amber' : '');
-    var rows = [
-      ['Up', humanizeDuration(m.uptimeMs)],
-      ['Memory in use (after cleanup)', m.liveSetMb + ' of ' + m.liveSetMaxMb + ' MB'],
-      ['Heap right now', m.heapUsedMb + (m.heapMaxMb > 0 ? ' of ' + m.heapMaxMb + ' MB' : ' MB')],
-      ['Time spent reclaiming memory', m.gcOverheadPct + '%'],
-      ['Memory trend', m.trend === 'climbing' ? 'Climbing' : 'Stable']
-    ];
+
+    // The bar needs a known ceiling (post-GC old-gen max). If the JVM
+    // doesn't report one, hide just the bar and keep the figures below.
+    var bar = $('svcMemBar'), fill = $('svcMemFill');
+    if (m.liveSetMaxMb > 0) {
+      bar.hidden = false;
+      var pct = Math.max(2, Math.min(100, Math.round(100 * m.liveSetMb / m.liveSetMaxMb)));
+      fill.style.width = pct + '%';
+      fill.className = 'svc-mem-fill' + (m.state === 'restart' ? ' red' : m.state === 'watch' ? ' amber' : '');
+    } else {
+      bar.hidden = true;
+    }
+
+    var rows = [['Up', humanizeDuration(m.uptimeMs)]];
+    if (m.liveSetMaxMb > 0) rows.push(['Memory in use (after cleanup)', m.liveSetMb + ' of ' + m.liveSetMaxMb + ' MB']);
+    rows.push(['Heap right now', m.heapUsedMb + (m.heapMaxMb > 0 ? ' of ' + m.heapMaxMb + ' MB' : ' MB')]);
+    rows.push(['Time spent reclaiming memory', m.gcOverheadPct + '%']);
+    rows.push(['Memory trend', m.trend === 'climbing' ? 'Climbing' : 'Stable']);
     if (m.totalRamMb > 0) rows.push(['Free RAM on the server', m.freeRamMb + ' of ' + m.totalRamMb + ' MB']);
     $('svcMemDl').innerHTML = rows.map(function (r) {
       return '<dt>' + esc(r[0]) + '</dt><dd>' + esc(r[1]) + '</dd>';
