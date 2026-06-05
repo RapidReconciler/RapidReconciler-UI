@@ -380,6 +380,17 @@
     font-family: inherit; width: 100%;
   }
   .ctx-select:disabled { opacity: .7; }
+  /* Working-companies multi-select: an "all" affordance + one box per
+     allowed company, so a user can work a subset (e.g. 3 of 6). */
+  .ctx-cos { display: flex; flex-direction: column; gap: 4px; }
+  .ctx-co {
+    display: flex; align-items: center; gap: 8px; cursor: pointer;
+    font-weight: 700; font-size: 13.5px; color: var(--navy);
+  }
+  .ctx-co input { width: 15px; height: 15px; accent-color: var(--blue); cursor: pointer; flex-shrink: 0; }
+  .ctx-co-all { font-weight: 800; padding-bottom: 5px; margin-bottom: 3px; border-bottom: 1px solid var(--rule); }
+  .ctx-cos-list { display: flex; flex-direction: column; gap: 4px; max-height: 168px; overflow-y: auto; }
+  .ctx-cos-note { font-weight: 800; color: var(--navy); font-size: 14px; }
   .ctx-flows {
     display: flex; align-items: center; gap: 7px; padding: 9px 18px;
     background: var(--bg-soft); border-top: 1px solid var(--rule);
@@ -396,6 +407,7 @@
   }
   .sect-badge.admin { background: #ece8fb; color: #6c4fd6; }
   .sect-badge.work  { background: var(--blue-pale); color: var(--blue); }
+  .sect-badge.scope { background: #e7edf6; color: var(--navy); }
   .sect-badge .sb-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
   .tile-modtag {
     font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
@@ -406,6 +418,7 @@
   /* ---- Admin first-run wizard (onboarding) ---- */
   /* In onboarding mode the steady-state surface is hidden — the wizard is
      the whole page until the admin's team is set up. */
+  body.is-firstrun #scopeSectionHead,
   body.is-firstrun #scopeBar,
   body.is-firstrun #modSectionHead,
   body.is-firstrun #moduleGrid,
@@ -607,14 +620,18 @@
        Shared by both roles. For an admin it renders below Administration;
        for an analyst it sits below the readiness card above. Either way it
        sits directly above the work it governs (Reconcile). -->
+  <div class="section-head" id="scopeSectionHead">
+    <span class="sect-badge scope"><span class="sb-dot"></span>Scope</span>
+    <span class="section-hint">The database, companies and period your work pages open on.</span>
+  </div>
   <div class="ctx" id="scopeBar">
     <div class="ctx-cell">
       <span class="ctx-k">Database</span>
       <select class="ctx-select" id="dbSelect"></select>
     </div>
     <div class="ctx-cell">
-      <span class="ctx-k">Working company</span>
-      <select class="ctx-select" id="coSelect"></select>
+      <span class="ctx-k">Working companies</span>
+      <div class="ctx-cos" id="coBox"></div>
       <span class="ctx-sub" id="coSub">&mdash;</span>
     </div>
     <div class="ctx-cell">
@@ -835,7 +852,6 @@
     var dbs = Array.isArray(s.dbs) ? s.dbs : [];
     var idx = s.activeDbIndex || 0;
     var active = dbs[idx] || dbs[0] || null;
-    var host = active && active.ip ? String(active.ip).split(':')[0] : '';
     $('hdrDb').textContent = active ? active.n : 'No database';
 
     var sel = $('dbSelect');
@@ -844,10 +860,10 @@
       sel.disabled = true;
       return;
     }
+    // Database name only -- the host/server is plumbing the user doesn't care about.
     sel.innerHTML = dbs.map(function (db, i) {
-      var h = db.ip ? String(db.ip).split(':')[0] : '';
       return '<option value="' + i + '"' + (i === idx ? ' selected' : '') + '>' +
-        esc(db.n) + (h ? ' &mdash; ' + esc(h) : '') + '</option>';
+        esc(db.n) + '</option>';
     }).join('');
     sel.disabled = dbs.length < 2;
   }
@@ -859,25 +875,31 @@
     return (window.RRV8 && window.RRV8.readSessionScope) ? window.RRV8.readSessionScope() : null;
   }
   function renderScopeBar() {
-    var coSel = $('coSelect'), coSub = $('coSub');
-    if (!coSel) return;
+    var coBox = $('coBox'), coSub = $('coSub');
+    if (!coBox) return;
     var sc = scope();
     var allowed = (sc && sc.allowedCompanies) || [];
     var active  = (sc && sc.activeCompanies)  || allowed;
     if (!allowed.length) {
-      coSel.innerHTML = '<option>All companies</option>';
-      coSel.disabled = true;
+      // No company allow-list on the claim -> the whole database is in scope.
+      coBox.innerHTML = '<span class="ctx-cos-note">All companies</span>';
       if (coSub) coSub.textContent = 'All licensed companies for this database.';
     } else {
+      var activeSet = {};
+      active.forEach(function (n) { activeSet[String(n)] = true; });
       var isAll = active.length >= allowed.length;
-      var opts = ['<option value="__all__"' + (isAll ? ' selected' : '') + '>All ' + allowed.length + ' companies</option>'];
-      allowed.forEach(function (num) {
-        var one = (!isAll && active.length === 1 && String(active[0]) === String(num)) ? ' selected' : '';
-        opts.push('<option value="' + esc(num) + '"' + one + '>' + esc(num) + '</option>');
-      });
-      coSel.innerHTML = opts.join('');
-      coSel.disabled = false;
-      if (coSub) coSub.textContent = 'You can access ' + allowed.length + ' ' + (allowed.length === 1 ? 'company' : 'companies') + '.';
+      var rows = allowed.map(function (num) {
+        var on = isAll || activeSet[String(num)];
+        return '<label class="ctx-co"><input type="checkbox" data-co="' + esc(num) + '"' +
+          (on ? ' checked' : '') + '>' + esc(num) + '</label>';
+      }).join('');
+      coBox.innerHTML =
+        '<label class="ctx-co ctx-co-all"><input type="checkbox" data-co-all' +
+          (isAll ? ' checked' : '') + '>All ' + allowed.length + ' companies</label>' +
+        '<div class="ctx-cos-list">' + rows + '</div>';
+      if (coSub) coSub.textContent = isAll
+        ? 'Working all ' + allowed.length + ' companies. Untick to focus on some.'
+        : 'Working ' + active.length + ' of ' + allowed.length + ' companies.';
     }
     var pSel = $('periodSelect');
     if (pSel) {
@@ -898,10 +920,27 @@
     }
   }
   function onCompanyChange(e) {
+    var t = e.target;
+    if (!t || t.type !== 'checkbox') return;
     if (!(window.RRV8 && window.RRV8.setActiveScope)) return;
-    var v = e.target.value;
     var sc = scope() || { allowedCompanies: [] };
-    window.RRV8.setActiveScope({ activeCompanies: (v === '__all__') ? sc.allowedCompanies : [v] });
+    var allowed = (sc.allowedCompanies || []).map(String);
+    var next;
+    if (t.hasAttribute('data-co-all')) {
+      // The "All" row is a select-all affordance: tick it to widen back to
+      // the full allowed set. (Unticking it does the same -- the per-company
+      // boxes are how you narrow.)
+      next = allowed.slice();
+    } else {
+      next = [];
+      var boxes = $('coBox').querySelectorAll('input[data-co]');
+      Array.prototype.forEach.call(boxes, function (b) {
+        if (b.checked) next.push(b.getAttribute('data-co'));
+      });
+      // Never allow an empty working scope -- bounce the last uncheck.
+      if (!next.length) { t.checked = true; next = [t.getAttribute('data-co')]; }
+    }
+    window.RRV8.setActiveScope({ activeCompanies: next });
     renderScopeBar();
   }
   function onPeriodChange(e) {
@@ -1323,7 +1362,7 @@
     $('dmaaiLoadBtn').addEventListener('click', loadDmaaisNow);
     $('restartBtn').addEventListener('click', restartService);
     $('bannerRetry').addEventListener('click', function () { setConn(false); loadStatus(); });
-    $('coSelect').addEventListener('change', onCompanyChange);
+    $('coBox').addEventListener('change', onCompanyChange);
     $('periodSelect').addEventListener('change', onPeriodChange);
 
     // "Am I ready to go?" is collapsible — collapse the detail when there's
