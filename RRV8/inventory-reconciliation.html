@@ -4851,6 +4851,16 @@
   function onSelectionChanged() {
     if (!currentData) return;
     saveSelectionsToStorage();
+    // Company scope flows back to the session so Home + the other work pages
+    // stay in sync (empty selection = "all" → write the full allowed set).
+    // Other dimensions stay page-local.
+    try {
+      if (window.RRV8 && window.RRV8.setActiveScope && window.RRV8.readSessionScope) {
+        const allow = window.RRV8.readSessionScope().allowedCompanies || [];
+        const cos = [...selected.companies];
+        window.RRV8.setActiveScope({ activeCompanies: cos.length ? cos : allow });
+      }
+    } catch (_) {}
     renderFilterRows(currentData);
     renderFilterSummary(currentData);
     // Recompute hero / variance from the new filter view
@@ -5776,6 +5786,20 @@
   // the way to narrow them. Company (the surviving scope filter) keeps
   // its saved selection.
   ['currencies', 'businessUnits', 'objects', 'subsidiaries'].forEach(g => selected[g].clear());
+  // Company scope flows from Home: if the analyst narrowed to specific
+  // companies there (a strict subset of their allowed set), open scoped to
+  // that selection. If they left it at "all", keep the page's own saved
+  // company filter. Per-page narrowing of other dimensions stays local.
+  try {
+    if (window.RRV8 && window.RRV8.readSessionScope) {
+      const _sc = window.RRV8.readSessionScope();
+      const _act = (_sc && _sc.activeCompanies) || [];
+      const _allow = (_sc && _sc.allowedCompanies) || [];
+      if (_act.length && _allow.length && _act.length < _allow.length) {
+        selected.companies = new Set(_act.map(String));
+      }
+    }
+  } catch (_) {}
 
   // Boot path: hydrate the session (demo JSON or VALC login),
   // refresh the user-menu/topbar chrome to reflect the real user,
