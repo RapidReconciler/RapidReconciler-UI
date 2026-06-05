@@ -198,7 +198,15 @@ Both are additive: the Home page is fully functional without them.
 
 ## Restart Services instance (self-serve, VALC-orchestrated)
 
-**Status: V8 calls it; VALC endpoint not implemented yet.** V8 ships a
+**Status: SHIPPED (B1a, local path) — VALC endpoint live.** The VALC
+`AdminServicesController` (`POST /api/v1/admin/services/restart {database}`)
+resolves the DB to its `client_databases` row and does a local
+`AgentLifecycleService` stop &rarr; start (sticky `service_port` reused, so
+JWT/bookmarks don't churn) for the dev / same-box topology where VALC owns
+the Services process. Returns `200 {status:"RESTARTING", database, port}`.
+The **remote-customer JMS `RestartInstance`** path (when the customer's Agent
+owns the process) is **B1b — pending** (see
+`docs/plans/services-restart-endpoint.md`). V8 ships a
 self-serve restart for the recurring production symptom where the
 Services jar hangs building an Excel export under memory pressure /
 heavy concurrency (restarting the Services jar clears it):
@@ -224,9 +232,10 @@ resolve the client/DB &rarr; tell the Agent (JMS) to **stop + re-spawn**
 that DB's Services instance (mirrors the deploy flow's stop-old/start-new
 step) &rarr; return 200 when the restart is dispatched.
 
-Until VALC implements it, `restartService()` surfaces an honest
-"restart control isn't wired in VALC yet" message (404/405/501) rather
-than faking success. No client change is needed when VALC ships it.
+B1a ships the local path; against a customer's remote Agent the endpoint
+returns 503 ("remote-agent restart not wired yet") until B1b, and
+`restartService()` surfaces that honestly rather than faking success. No
+client change was needed — V8 already calls the endpoint.
 
 ---
 
