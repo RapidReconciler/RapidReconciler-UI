@@ -239,6 +239,59 @@ client change was needed — V8 already calls the endpoint.
 
 ---
 
+## Service memory health (proactive restart hint)
+
+**Status: V8 wired; agent endpoint written, ships with the next Services
+jar release.** Complements the reactive Restart button above: the recurring
+production failure is heap exhaustion under concurrency (several users run
+several reports in a short window; the heap ramps and exports start failing
+before GC catches up). This read lets Home's **Service health** card hint a
+restart *before* reports fail, instead of only flagging an outage after.
+
+- **Endpoint:** `GET /admin/service-health` on the per-DB Services jar
+  (agent-direct, like `inventory/status` / `poll`; routes via
+  `RR_TEST_AGENT_AREAS` in `config.js`). **Authenticated** — not in the
+  agent's permitAll list; the card is admin-only and carries the JWT.
+- **Why agent-direct, not VALC:** this only *reports*. Lifecycle stays
+  VALC's job — the card's Restart button still routes to
+  `POST /api/v1/admin/services/restart`. V8 never acts on this read by
+  hitting the Services jar's own `/shutdown`.
+- **Response (`ServiceHealthSnapshot`):**
+
+  ```json
+  {
+    "state": "healthy | watch | restart",
+    "trend": "stable | climbing",
+    "uptimeMs": 264600000,
+    "heapUsedMb": 900, "heapMaxMb": 1024,
+    "liveSetMb": 540, "liveSetMaxMb": 700,
+    "gcOverheadPct": 6.4,
+    "freeRamMb": 1200, "totalRamMb": 8192,
+    "sampledOverSec": 240
+  }
+  ```
+
+- **The verdict is agent-side (one source of truth); V8 owns the
+  finance-facing copy per state.** The signals deliberately avoid the
+  instantaneous-heap-% trap (a healthy JVM sawtooths near max):
+    - **post-GC old-gen floor** (`liveSetMb` / `liveSetMaxMb`) — the live
+      set GC can't reclaim; a climbing floor toward max is the real signal;
+    - **GC overhead** (`gcOverheadPct`) — % of recent wall-clock in
+      stop-the-world GC; back-to-back collections reclaiming little is the
+      in-the-moment freeze;
+    - **free physical RAM** on the host;
+    - **trend** — floor climbing vs stable across a ~5-min ring buffer.
+  Thresholds: `restart` when live-set ≥90% **and** GC ≥10%, or live-set
+  ≥97%, or free RAM ≤5%; `watch` at the softer bands or a climbing trend;
+  else `healthy`. Agent spec:
+  `RapidReconciler-Agent/specs/service-memory-health.md`.
+- **Graceful fallback:** `loadServiceMemory()` polls every 60s and on a
+  restart; if the endpoint is absent/unreachable (older jar, or the card
+  hits a Services instance that predates this release), it silently keeps
+  the connectivity-only signal — no placeholder, no error surfaced.
+
+---
+
 ## Variance-component &rarr; source-view bindings
 
 These bindings let V8's Preview pane / Excel export call the right

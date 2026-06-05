@@ -293,6 +293,26 @@
   }
   .btn-sm:hover { border-color: var(--blue); color: var(--blue); }
   .btn-sm:disabled { opacity: .5; cursor: default; }
+  /* Restart button escalates to a solid red call-to-action when the
+     service-health read says a restart is in order. */
+  .btn-sm.is-urgent { border-color: var(--red); background: var(--red); color: #fff; }
+  .btn-sm.is-urgent:hover { border-color: #c0392b; background: #c0392b; color: #fff; }
+  /* Service-health memory readout (hidden until /admin/service-health answers).
+     The bar tracks the post-GC live set vs its ceiling -- headroom that
+     actually predicts trouble -- NOT instantaneous heap (which sawtooths). */
+  .svc-mem { margin-top: 12px; }
+  .svc-mem-bar { height: 6px; border-radius: 4px; background: var(--bg-soft); overflow: hidden; }
+  .svc-mem-fill { display: block; height: 100%; width: 0; border-radius: 4px; background: var(--green); transition: width .4s ease; }
+  .svc-mem-fill.amber { background: var(--orange); }
+  .svc-mem-fill.red { background: var(--red); }
+  .svc-mem-det { margin-top: 9px; }
+  .svc-mem-det summary { font-size: 11px; color: var(--text-muted); cursor: pointer; list-style: none; }
+  .svc-mem-det summary::-webkit-details-marker { display: none; }
+  .svc-mem-det summary::before { content: '\25B8'; margin-right: 5px; }
+  .svc-mem-det[open] summary::before { content: '\25BE'; }
+  .svc-mem-dl { margin: 9px 0 0; display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 11.5px; }
+  .svc-mem-dl dt { color: var(--text-muted); }
+  .svc-mem-dl dd { margin: 0; color: var(--navy); font-weight: 700; text-align: right; }
   .why {
     font-size: 12px; color: var(--text-muted); background: var(--bg-soft); border: 1px dashed var(--rule-strong);
     border-radius: 8px; padding: 9px 12px; margin-top: 10px; line-height: 1.45;
@@ -561,6 +581,16 @@
           </div>
           <button class="btn-sm" id="restartBtn" type="button">Restart</button>
         </div>
+        <!-- Proactive memory readout — populated by GET /admin/service-health.
+             Hidden until the agent answers; the dot/sub above degrade to the
+             connectivity signal when it doesn't. -->
+        <div class="svc-mem" id="svcMem" hidden>
+          <div class="svc-mem-bar"><span class="svc-mem-fill" id="svcMemFill"></span></div>
+          <details class="svc-mem-det" id="svcMemDet">
+            <summary>Memory details</summary>
+            <dl class="svc-mem-dl" id="svcMemDl"></dl>
+          </details>
+        </div>
       </div>
 
       <!-- DMAAIs / accounting setup -->
@@ -797,6 +827,7 @@
 
   // ---- shared status state (feeds the Service-health card + readiness) ----
   var _connDown = false, _period = '', _jobStatus = '', _periods = [];
+  var _svcMem = null;   // last GET /admin/service-health snapshot (null until it answers)
 
   // ---- connectivity (reuses sidebar.js's cross-page cache) ----
   function setConn(down, message) {
@@ -811,15 +842,92 @@
     updateServiceCard();
     renderReadiness();
   }
-  // Admin "Service health" card — driven by connectivity (is the data
-  // service reachable). Refresh state lives in the Data card / header pill.
+  // Admin "Service health" card. Connectivity is the floor (can't be
+  // healthy if it's unreachable); on top of that the memory read
+  // (GET /admin/service-health) turns the card proactive — it hints a
+  // restart BEFORE reports start failing under memory pressure, rather
+  // than only flagging an outage after the fact. Copy is finance-voice
+  // here; the agent owns the verdict (state), V8 owns the words.
+  var SVC_COPY = {
+    healthy: { dot: 'green', sub: 'Running normally' },
+    watch:   { dot: 'amber', sub: 'Memory is climbing under load — a restart at your next quiet moment keeps reports fast.' },
+    restart: { dot: 'red',   sub: 'Low on memory — reports may start failing. A restart now will clear it.' }
+  };
   function updateServiceCard() {
     var dot = $('svcDot'), sub = $('svcSub');
     if (!dot || !sub) return;
-    dot.className = 'row-dot ' + (_connDown ? 'red' : 'green');
-    sub.textContent = _connDown
-      ? 'Not responding — a restart usually clears it'
-      : 'Running normally';
+
+    // Connectivity down trumps everything — nothing else is meaningful.
+    if (_connDown) {
+      dot.className = 'row-dot red';
+      sub.textContent = 'Not responding — a restart usually clears it';
+      setMemMeter(null);
+      emphasizeRestart(true);
+      return;
+    }
+    // No memory telemetry yet (endpoint not wired / unreachable) — fall
+    // back to the simple "it's up" signal. No placeholder, no meter.
+    var m = _svcMem;
+    if (!m || !m.state || !SVC_COPY[m.state]) {
+      dot.className = 'row-dot green';
+      sub.textContent = 'Running normally';
+      setMemMeter(null);
+      emphasizeRestart(false);
+      return;
+    }
+    var c = SVC_COPY[m.state];
+    dot.className = 'row-dot ' + c.dot;
+    sub.textContent = c.sub;
+    setMemMeter(m);
+    emphasizeRestart(m.state === 'restart');
+  }
+
+  // Memory readout: the bar tracks the post-GC live set vs its ceiling
+  // (headroom that predicts trouble), colored by verdict; the expander
+  // carries the raw figures for a tech triaging it.
+  function setMemMeter(m) {
+    var wrap = $('svcMem'); if (!wrap) return;
+    if (!m || m.liveSetMaxMb <= 0) { wrap.hidden = true; return; }
+    wrap.hidden = false;
+    var pct = Math.max(2, Math.min(100, Math.round(100 * m.liveSetMb / m.liveSetMaxMb)));
+    var fill = $('svcMemFill');
+    fill.style.width = pct + '%';
+    fill.className = 'svc-mem-fill' + (m.state === 'restart' ? ' red' : m.state === 'watch' ? ' amber' : '');
+    var rows = [
+      ['Up', humanizeDuration(m.uptimeMs)],
+      ['Memory in use (after cleanup)', m.liveSetMb + ' of ' + m.liveSetMaxMb + ' MB'],
+      ['Heap right now', m.heapUsedMb + (m.heapMaxMb > 0 ? ' of ' + m.heapMaxMb + ' MB' : ' MB')],
+      ['Time spent reclaiming memory', m.gcOverheadPct + '%'],
+      ['Memory trend', m.trend === 'climbing' ? 'Climbing' : 'Stable']
+    ];
+    if (m.totalRamMb > 0) rows.push(['Free RAM on the server', m.freeRamMb + ' of ' + m.totalRamMb + ' MB']);
+    $('svcMemDl').innerHTML = rows.map(function (r) {
+      return '<dt>' + esc(r[0]) + '</dt><dd>' + esc(r[1]) + '</dd>';
+    }).join('');
+  }
+  function emphasizeRestart(urgent) {
+    var btn = $('restartBtn'); if (btn) btn.classList.toggle('is-urgent', !!urgent);
+  }
+  function humanizeDuration(ms) {
+    var s = Math.floor((ms || 0) / 1000);
+    var d = Math.floor(s / 86400); s -= d * 86400;
+    var h = Math.floor(s / 3600);  s -= h * 3600;
+    var mn = Math.floor(s / 60);
+    if (d) return d + 'd ' + h + 'h';
+    if (h) return h + 'h ' + mn + 'm';
+    return mn + 'm';
+  }
+  // Proactive memory poll. Admin-only (the card is), live agent only (no
+  // demo snapshot — agent-first). Silent graceful fallback: if the agent
+  // doesn't expose the endpoint yet, the card stays on the connectivity
+  // signal. Polls on a cadence so a building problem surfaces on its own.
+  function loadServiceMemory() {
+    if (IS_DEMO || !isAdmin()) return;
+    rrFetch('admin/service-health').then(function (m) {
+      if (!m || !m.state) return;
+      _svcMem = m;
+      updateServiceCard();
+    }).catch(function () { /* endpoint absent/unreachable — keep connectivity state */ });
   }
 
   // ---- render identity, databases, tiles ----
@@ -1160,6 +1268,9 @@
     var db = activeDb() || {};
     rrFetch('api/v1/admin/services/restart', { method: 'POST', body: { database: db.n } }).then(function () {
       toast('Restart requested — reports should work again in about 30 seconds.');
+      // Re-read health once the fresh instance is up so the card clears.
+      _svcMem = null; updateServiceCard();
+      setTimeout(loadServiceMemory, 35000);
     }).catch(function (err) {
       var msg = String(err && err.message || err);
       toast(/404|405|501/.test(msg)
@@ -1412,6 +1523,7 @@
       loadStatus();
       loadSystemStatus();
       loadPeriods();
+      loadServiceMemory();
     });
   }
 
@@ -1437,6 +1549,10 @@
       loadStatus();
       loadSystemStatus();
       loadPeriods();
+      loadServiceMemory();
+      // Proactive cadence: re-read service health every 60s so a problem
+      // building under load surfaces on its own, not just on a reload.
+      setInterval(loadServiceMemory, 60000);
     });
   }
 
