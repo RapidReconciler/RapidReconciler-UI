@@ -1210,6 +1210,7 @@
     try { localStorage.removeItem('rrv8.viewMode'); } catch (_) {}
     try { localStorage.removeItem('rrv8.sessionStart'); } catch (_) {}
     try { localStorage.removeItem('rrv8.lastActivity'); } catch (_) {}
+    try { localStorage.removeItem('rrv8.activeDb'); } catch (_) {}
     // Keep rrv8.lastEmail so the login page can pre-fill the address.
     global.location.href = '../login.html?reason=timeout';
   }
@@ -1224,10 +1225,39 @@
     global.setInterval(function () { if (sessionExpired()) endSession(); }, 60000);
   }
 
+  // The active database is sticky like the rest of the session scope: a
+  // selection made on Home (or any page) persists so the work pages open on
+  // the SAME database, not always dbs[0]. Stored by NAME (indices shift as
+  // the JWT changes); resolved back to an index on each hydrate.
+  function _resolveActiveDbIndex(dbs) {
+    let saved = null;
+    try { saved = localStorage.getItem('rrv8.activeDb'); } catch (_) {}
+    if (saved && Array.isArray(dbs)) {
+      for (let i = 0; i < dbs.length; i++) {
+        if (dbs[i] && dbs[i].n === saved) return i;
+      }
+    }
+    return 0;
+  }
+
+  /** Persist the active database (by name) and point RR_SESSION at it, so
+   *  the choice flows to every page. Pages call this from their DB picker. */
+  function setActiveDatabase(name) {
+    if (!name) return;
+    try { localStorage.setItem('rrv8.activeDb', name); } catch (_) {}
+    const s = global.RR_SESSION;
+    if (s && Array.isArray(s.dbs)) {
+      for (let i = 0; i < s.dbs.length; i++) {
+        if (s.dbs[i] && s.dbs[i].n === name) { s.activeDbIndex = i; break; }
+      }
+    }
+  }
+
   // Populate window.RR_SESSION.{user,dbs,activeDbIndex,token}. In
   // demo mode reads data/demo-jwt-payload.json; in staging/prod
   // reads localStorage.rrv8.token. Always resolves — failures leave
   // RR_SESSION empty so renderUserChip falls back to a placeholder.
+  // activeDbIndex honors the sticky rrv8.activeDb selection (falls to 0).
   function hydrateSession() {
     const cfg = global.RR_CONFIG || {};
     const mode = (new URLSearchParams(global.location.search).get('mode'))
@@ -1242,7 +1272,7 @@
           if (payload) {
             global.RR_SESSION.user = payload.user || null;
             global.RR_SESSION.dbs  = Array.isArray(payload.dbs) ? payload.dbs : [];
-            global.RR_SESSION.activeDbIndex = 0;
+            global.RR_SESSION.activeDbIndex = _resolveActiveDbIndex(global.RR_SESSION.dbs);
             global.RR_SESSION.token = null;
           }
           return global.RR_SESSION;
@@ -1257,7 +1287,7 @@
         if (payload) {
           global.RR_SESSION.user = payload.user || null;
           global.RR_SESSION.dbs  = Array.isArray(payload.dbs) ? payload.dbs : [];
-          global.RR_SESSION.activeDbIndex = 0;
+          global.RR_SESSION.activeDbIndex = _resolveActiveDbIndex(global.RR_SESSION.dbs);
           global.RR_SESSION.token = token;
         }
       }
@@ -1532,6 +1562,7 @@
   global.RRV8.readCurrentPeriod       = readCurrentPeriod;
   global.RRV8.readSessionScope        = readSessionScope;
   global.RRV8.setActiveScope          = setActiveScope;
+  global.RRV8.setActiveDatabase       = setActiveDatabase;
   global.RRV8.ensureInventoryStatus   = ensureInventoryStatus;
   global.RRV8.hydrateSession          = hydrateSession;
   global.RRV8.mountUserMenu           = mountUserMenu;
