@@ -61,16 +61,17 @@
   h1, h2, h3 { font-family: 'Source Sans 3', sans-serif; font-weight: 700; }
   a { color: inherit; text-decoration: none; }
 
+  /* No left rail on the admin pages — single column: topbar over main.
+     Navigation back to Home is the topbar Home button (mountTopbar). */
   .app {
     display: grid;
-    grid-template-columns: 60px 1fr;
+    grid-template-columns: 1fr;
     grid-template-rows: 56px 1fr;
     grid-template-areas:
-      "sidebar topbar"
-      "sidebar main";
+      "topbar"
+      "main";
     min-height: 100vh;
   }
-  body.has-pinned-sidebar .app { grid-template-columns: 240px 1fr; }
 
   .topbar {
     grid-area: topbar;
@@ -566,6 +567,57 @@
     color: var(--text-muted);
     text-align: center;
   }
+
+  /* Per-database company grant — nested under a checked database. Lets the
+     admin restrict a user to specific licensed companies; the granted set
+     pre-filters that user's company picker on Home + the work pages. */
+  .perm-db { padding: 2px 0; }
+  .perm-cos {
+    margin: 2px 0 10px 26px; padding: 9px 11px;
+    border: 1px solid var(--rule, #e4e8ef); border-radius: 8px;
+    background: var(--bg-soft, #f5f7fa);
+  }
+  .perm-cos.is-hidden { display: none; }
+  .perm-cos-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-bottom: 7px; }
+  .perm-cos-hint { font-size: 11px; color: var(--text-soft, #5b6677); }
+  .perm-cos-list {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+    gap: 4px 12px;
+  }
+  .perm-cos-list.is-disabled { opacity: .45; pointer-events: none; }
+  .perm-cos-empty { font-size: 12px; color: var(--text-soft, #5b6677); }
+  .nu-co { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text, #2b3442); }
+  .nu-co input { margin: 0; }
+  .nu-co-all { font-weight: 700; }
+
+  /* Help FAB — floating "how do I add a user?" button, bottom-right.
+     Replaces the inline welcome banner; the create-user steps live in
+     its popover so they're available on demand, not as page chrome. */
+  .fab { position: fixed; right: 24px; bottom: 24px; z-index: 60; }
+  .fab-btn {
+    display: flex; align-items: center; gap: 9px;
+    background: linear-gradient(135deg, var(--orange, #f08a24) 0%, #d9740f 100%);
+    color: #fff; border: 0; border-radius: 100px; padding: 12px 18px;
+    font-family: 'Source Sans 3', sans-serif; font-weight: 800; font-size: 13.5px;
+    cursor: pointer; box-shadow: 0 8px 24px -8px rgba(217,116,15,.6);
+  }
+  .fab-btn:hover { filter: brightness(1.06); }
+  .fab-btn svg { width: 18px; height: 18px; }
+  .fab-pop {
+    position: absolute; right: 0; bottom: 60px; width: 304px;
+    background: var(--bg-card, #fff); border: 1px solid var(--rule, #e4e8ef);
+    border-radius: 12px; box-shadow: 0 20px 48px -16px rgba(20,32,55,.30);
+    padding: 16px 18px;
+  }
+  .fab-pop[hidden] { display: none; }
+  .fab-pop h4 {
+    font-family: 'Source Sans 3', sans-serif; font-size: 14px; font-weight: 800;
+    color: var(--navy); margin: 0 0 9px;
+  }
+  .fab-pop ol { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.6; color: var(--text); }
+  .fab-pop ol li { margin-bottom: 5px; }
+  .fab-pop .fab-foot { margin: 10px 0 0; font-size: 12px; color: var(--text-muted); }
+  .fab-pop .fab-foot a { color: var(--blue, #2f6fb0); font-weight: 700; }
 </style>
 </head>
 <body>
@@ -581,8 +633,6 @@
       </span>
     </div>
   </header>
-
-  <div id="js-sidebar-mount"></div>
 
   <div class="toast" id="js-toast" role="status" aria-live="polite"></div>
 
@@ -777,7 +827,7 @@
                contact_2_email columns. PATCH-on-blur; no Save button. -->
           <div class="contacts-row" id="js-contacts-row">
             <label class="contact-field">
-              <span class="contact-label">Contact 1</span>
+              <span class="contact-label">Project Sponsor</span>
               <input type="email" id="js-contact-1-email" placeholder="primary@example.com" autocomplete="off" disabled>
             </label>
             <label class="contact-field">
@@ -796,26 +846,6 @@
           New User
         </button>
       </header>
-
-      <!-- First-run getting-started checklist for a new administrator.
-           Shown until dismissed (per-admin localStorage flag, shared with
-           login.html's first-run landing). -->
-      <section id="js-getting-started" hidden
-               style="background: linear-gradient(180deg,#f3f8ff 0%,#fff 70%); border:1px solid #cfe0f5; border-radius:10px; padding:16px 18px; margin-bottom:16px;">
-        <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
-          <span style="font-weight:800; font-size:15px; color:var(--navy);">Welcome &mdash; let&rsquo;s get your team set up</span>
-          <button type="button" id="js-gs-dismiss"
-                  style="font-family:inherit; font-size:12.5px; font-weight:700; color:var(--text-soft,#5b6677); background:#fff; border:1px solid var(--rule,#d8dee8); border-radius:6px; padding:5px 12px; cursor:pointer;">Got it</button>
-        </div>
-        <ol style="margin:10px 0 0; padding-left:20px; font-size:13.5px; line-height:1.65; color:var(--text,#2b3442);">
-          <li><strong>Your companies are loaded.</strong> GSI set these up before handoff &mdash; review them on the Companies page.</li>
-          <li><strong>Add your team.</strong> Use <em>New User</em> (top right). Each person gets an email with a secure link to set their own password.</li>
-          <li><strong>Give each person a role.</strong> Administrator, Reconciliation Analyst, or Read-Only controls what they can see and do.</li>
-        </ol>
-        <p style="margin:10px 2px 0; font-size:12.5px; color:var(--text-soft,#5b6677);">
-          New to RapidReconciler? <a href="../RRUniversity/administrator-start-here.html" target="_blank" rel="noopener" style="color:var(--blue,#2f6fd0); font-weight:700;">Read the administrator guide</a>.
-        </p>
-      </section>
 
       <div class="fetch-error" id="js-fetch-error" role="alert">
         Couldn&rsquo;t reach <code>/api/v1/admin/users</code> &mdash;
@@ -854,6 +884,26 @@
 
   </main>
 
+</div>
+
+<!-- Help FAB: create-user steps on demand (replaces the inline banner). -->
+<div class="fab" id="js-fab">
+  <div class="fab-pop" id="js-fab-pop" hidden role="dialog" aria-label="How to add a user">
+    <h4>Add a user in 4 steps</h4>
+    <ol>
+      <li>Click <strong>New User</strong> (top right).</li>
+      <li>Enter their name and email, then choose a role.</li>
+      <li>They get an email with a secure link to set their own password &mdash; you don&rsquo;t create one.</li>
+      <li>Set their access &mdash; click the lock icon on their row to choose which companies and functions they can see.</li>
+    </ol>
+    <p class="fab-foot">New to this? <a href="../RRUniversity/administrator-start-here.html" target="_blank" rel="noopener">Administrator guide</a></p>
+  </div>
+  <button type="button" class="fab-btn" id="js-fab-btn" aria-expanded="false" aria-controls="js-fab-pop">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="10"/><path d="M9.5 9a2.5 2.5 0 0 1 4.5 1.5c0 1.5-2 2-2 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+    </svg>
+    How do I add a user?
+  </button>
 </div>
 
 <script>
@@ -1206,6 +1256,45 @@
     return _rolesCacheV8;
   }
   function roleByIdV8(id) { return (_rolesCacheV8 || []).find(r => String(r.id) === String(id)) || null; }
+
+  // The client's licensed modules (active DB's `m` caps — the same flags the
+  // Client Details tab in VALC sets). Used to filter the role list.
+  function clientModuleCaps() {
+    const s = window.RR_SESSION || {};
+    const db = (s.dbs || [])[s.activeDbIndex || 0] || (s.dbs || [])[0] || {};
+    const m = db.m || {};
+    return { inv: m.inv !== false, it: m.it !== false, por: m.por !== false, adm: m.adm !== false };
+  }
+  // Which modules a role grants. Prefers explicit tab flags from the role
+  // DTO (once VALC exposes them — RoleEntity already has them); falls back
+  // to inferring from the role name until that ships.
+  function roleModules(r) {
+    if ('tabInventory' in r || 'tabPoReceipts' in r || 'tabInTransit' in r || 'tabAdmin' in r) {
+      const m = [];
+      if (r.tabInventory  === true) m.push('inv');
+      if (r.tabInTransit  === true) m.push('it');
+      if (r.tabPoReceipts === true) m.push('por');
+      if (r.tabAdmin      === true) m.push('adm');
+      return m;
+    }
+    const n = (r.name || '').toLowerCase();
+    const m = [];
+    if (/analyst|reconcil/.test(n))            m.push('inv');
+    if (/transit/.test(n))                     m.push('it');
+    if (/payable|receipt|clerk|a\/?p\b/.test(n)) m.push('por');
+    if (/admin/.test(n))                       m.push('adm');
+    return m;
+  }
+  // A role is offerable only if at least one module it grants is licensed
+  // for the client — e.g. A/P Clerk disappears when PO Receipts is off.
+  // Roles that map to no known module show (fail-open).
+  function offerableRoles(roles) {
+    const caps = clientModuleCaps();
+    return (roles || []).filter(r => {
+      const mods = roleModules(r);
+      return mods.length === 0 || mods.some(k => caps[k]);
+    });
+  }
   function updatePermsRoleDesc() {
     const sel = document.getElementById('js-perms-role');
     const r = roleByIdV8(sel.value);
@@ -1230,7 +1319,13 @@
     setTimeout(() => document.getElementById('js-perms-done').focus(), 0);
 
     (async function () {
-      const roles = await loadRolesV8();
+      let roles = offerableRoles(await loadRolesV8());
+      // Keep the user's current role selectable even if its module is no
+      // longer licensed (so editing doesn't silently drop it).
+      if (row.roleId != null && !roles.some(r => String(r.id) === String(row.roleId))) {
+        const cur = roleByIdV8(row.roleId);
+        if (cur) roles = roles.concat([cur]);
+      }
       roleSel.innerHTML = '<option value="">(no role &mdash; no access)</option>' +
         roles.map(r => '<option value="' + r.id + '">' + fmt(r.name) + '</option>').join('');
       roleSel.value = (row.roleId != null) ? String(row.roleId) : '';
@@ -1261,15 +1356,70 @@
   function permDbRowHtml(d, assign) {
     const name     = fmt(d.n);
     const assigned = !!assign;
-    const isList   = assign && assign.companyScope === 'LIST';
-    const note     = isList
-      ? ' <span style="font-size:11px; color:var(--text-soft,#5b6677);">(specific companies — set in the control plane)</span>'
-      : '';
-    return '<label class="perms-check" data-db-name="' + name + '" ' +
-           'style="display:flex; align-items:center; gap:8px; padding:6px 0;">' +
-        '<input type="checkbox" data-db-assign' + (assigned ? ' checked' : '') + '> ' + name + note +
-      '</label>';
+    const cos      = Array.isArray(d.i) ? d.i : [];
+    const isList   = assign && assign.companyScope === 'LIST' && Array.isArray(assign.companies);
+    const allOn    = !isList;                       // ALL unless an explicit company list
+    const sel      = isList ? new Set(assign.companies.map(String)) : null;
+    const coRows   = cos.map(num => {
+      const checked = sel ? sel.has(String(num)) : true;
+      return '<label class="nu-co"><input type="checkbox" data-co="' + fmt(num) + '"' +
+             (checked ? ' checked' : '') + '> ' + fmt(num) + '</label>';
+    }).join('');
+    const coBlock = cos.length
+      ? '<div class="perm-cos' + (assigned ? '' : ' is-hidden') + '" data-cos>' +
+          '<div class="perm-cos-head">' +
+            '<label class="nu-co nu-co-all"><input type="checkbox" data-co-all' + (allOn ? ' checked' : '') + '> All licensed companies</label>' +
+            '<span class="perm-cos-hint">or pick the companies this user may see</span>' +
+          '</div>' +
+          '<div class="perm-cos-list' + (allOn ? ' is-disabled' : '') + '">' + coRows + '</div>' +
+        '</div>'
+      : '<div class="perm-cos' + (assigned ? '' : ' is-hidden') + '" data-cos>' +
+          '<div class="perm-cos-empty">All licensed companies for this database.</div>' +
+        '</div>';
+    return '<div class="perm-db" data-db-name="' + name + '">' +
+        '<label class="perms-check" style="display:flex; align-items:center; gap:8px; padding:6px 0;">' +
+          '<input type="checkbox" data-db-assign' + (assigned ? ' checked' : '') + '> ' + name +
+        '</label>' +
+        coBlock +
+      '</div>';
   }
+
+  // Read one .perm-db block into a {databaseName, companyScope, companies}
+  // assignment, or null when the database isn't checked. "All companies"
+  // (or every box checked) collapses to ALL; a strict subset is LIST.
+  function extractAssignment(wrap) {
+    const dbCb = wrap.querySelector('[data-db-assign]');
+    if (!dbCb || !dbCb.checked) return null;
+    const name  = wrap.getAttribute('data-db-name');
+    const allCb = wrap.querySelector('[data-co-all]');
+    const coCbs = wrap.querySelectorAll('[data-co]');
+    if (!coCbs.length || (allCb && allCb.checked)) {
+      return { databaseName: name, companyScope: 'ALL', companies: [] };
+    }
+    const companies = [];
+    coCbs.forEach(cb => { if (cb.checked) companies.push(cb.getAttribute('data-co')); });
+    if (companies.length === coCbs.length) {
+      return { databaseName: name, companyScope: 'ALL', companies: [] };
+    }
+    return { databaseName: name, companyScope: 'LIST', companies: companies };
+  }
+
+  // Show/hide a DB's company sublist when its checkbox toggles; disable the
+  // individual list while "All licensed companies" is on. Delegated so it
+  // works for both modals' dynamically-rendered rows.
+  document.addEventListener('change', (e) => {
+    const t = e.target;
+    if (!t || !t.matches) return;
+    if (t.matches('[data-db-assign]')) {
+      const wrap = t.closest('.perm-db');
+      const cos  = wrap && wrap.querySelector('[data-cos]');
+      if (cos) cos.classList.toggle('is-hidden', !t.checked);
+    } else if (t.matches('[data-co-all]')) {
+      const wrap = t.closest('.perm-db');
+      const list = wrap && wrap.querySelector('.perm-cos-list');
+      if (list) list.classList.toggle('is-disabled', t.checked);
+    }
+  });
 
   function closePermsModal() {
     _permsUserId = null;
@@ -1282,17 +1432,9 @@
     const roleSel = document.getElementById('js-perms-role');
     const roleId  = roleSel.value ? Number(roleSel.value) : null;
     const assignments = [];
-    document.querySelectorAll('#js-perms-dbs [data-db-name]').forEach(lab => {
-      const cb = lab.querySelector('[data-db-assign]');
-      if (!cb || !cb.checked) return;
-      const name = lab.getAttribute('data-db-name');
-      const prev = _assignByDb[name];
-      // Preserve a LIST scope set in the control plane; otherwise ALL.
-      if (prev && prev.companyScope === 'LIST') {
-        assignments.push({ databaseName: name, companyScope: 'LIST', companies: prev.companies || [] });
-      } else {
-        assignments.push({ databaseName: name, companyScope: 'ALL', companies: [] });
-      }
+    document.querySelectorAll('#js-perms-dbs .perm-db').forEach(wrap => {
+      const a = extractAssignment(wrap);
+      if (a) assignments.push(a);
     });
     try {
       const base = (RR_CONFIG.valcBase || 'http://localhost:8080') +
@@ -1333,7 +1475,7 @@
     setTimeout(() => document.getElementById('js-nu-name').focus(), 0);
 
     (async function () {
-      const roles = await loadRolesV8();
+      const roles = offerableRoles(await loadRolesV8());
       roleSel.innerHTML = '<option value="">(no role &mdash; no access)</option>' +
         roles.map(r => '<option value="' + r.id + '">' + fmt(r.name) + '</option>').join('');
       // Default to Reconciliation Analyst if present (the common teammate role).
@@ -1368,11 +1510,9 @@
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { showErr('Enter a valid email.'); return; }
 
     const assignments = [];
-    document.querySelectorAll('#js-nu-dbs [data-db-name]').forEach(lab => {
-      const cb = lab.querySelector('[data-db-assign]');
-      if (cb && cb.checked) {
-        assignments.push({ databaseName: lab.getAttribute('data-db-name'), companyScope: 'ALL', companies: [] });
-      }
+    document.querySelectorAll('#js-nu-dbs .perm-db').forEach(wrap => {
+      const a = extractAssignment(wrap);
+      if (a) assignments.push(a);
     });
 
     const sess = window.RR_SESSION || {};
@@ -1465,20 +1605,30 @@
   }
 
   // ---------- boot ----------
-  if (window.RRV8 && typeof window.RRV8.mountSidebar === 'function') {
-    window.RRV8.mountSidebar({ activePage: 'admin-users' });
+  // No left rail — admin pages are reached from Home and return via the
+  // topbar Home button. mountTopbar() adds just the connectivity pill +
+  // Home link; account actions (sign out / DB switch) live on Home.
+  if (window.RRV8 && typeof window.RRV8.mountTopbar === 'function') {
+    window.RRV8.mountTopbar();
   }
   if (window.RRV8 && typeof window.RRV8.ensureInventoryStatus === 'function') {
     try { window.RRV8.ensureInventoryStatus(rrFetch); } catch (_) {}
   }
-  // Hydrate window.RR_SESSION from the JWT (or demo payload) and
-  // mount the welcome-dropdown so the chip shows the real user.
+  // Hydrate window.RR_SESSION from the JWT (or demo payload), then
+  // reflect the active database in the topbar and load the contacts
+  // band against the active DB's client (needs the session first).
   if (window.RRV8 && typeof window.RRV8.hydrateSession === 'function') {
     window.RRV8.hydrateSession().then(() => {
-      if (typeof window.RRV8.mountUserMenu === 'function') {
-        window.RRV8.mountUserMenu();
-      }
+      try {
+        const s = window.RR_SESSION || {};
+        const db = (s.dbs || [])[s.activeDbIndex || 0];
+        const dbEl = document.getElementById('js-topbar-db');
+        if (dbEl && db && db.n) dbEl.textContent = db.n;
+      } catch (_) {}
+      loadContacts();
     });
+  } else {
+    loadContacts();
   }
 
   // Row-action handlers. Lock = Permissions (sidebar filter
@@ -1662,7 +1812,25 @@
         console.warn('Contacts band: no client rows from mini-VALC');
         return;
       }
-      const c = rows[0];
+      // Pick the client for THIS install: match the active database's
+      // agent host against the client's agent IP / domain; fall back to
+      // the first row (dev convenience, multiple clients on one broker).
+      // The robust + secure fix is a JWT-scoped GET clients/current so V8
+      // never lists every customer's client — see RRV8/API.md.
+      let c = null;
+      try {
+        const s = window.RR_SESSION || {};
+        const db = (s.dbs || [])[s.activeDbIndex || 0];
+        const host = db && db.ip ? String(db.ip).split(':')[0].toLowerCase() : '';
+        if (host) {
+          c = rows.find(function (r) {
+            return [r.agentInternalIp, r.agentExternalIp, r.domainUrl]
+              .filter(Boolean)
+              .some(function (v) { return String(v).toLowerCase().indexOf(host) !== -1; });
+          }) || null;
+        }
+      } catch (_) {}
+      if (!c) c = rows[0];
       _contactClientId = c.id;
       _contact1Input.value = c.contact1Email || '';
       _contact2Input.value = c.contact2Email || '';
@@ -1718,7 +1886,8 @@
 
   _contact1Input.addEventListener('blur', saveContacts);
   _contact2Input.addEventListener('blur', saveContacts);
-  loadContacts();
+  // loadContacts() is invoked from boot after hydrateSession so it can
+  // match the active database's client.
 
   // Main fetch (also called after adding a user).
   function reloadUsers() {
@@ -1739,21 +1908,24 @@
     });
   }
 
-  // First-run getting-started card: show until this admin dismisses it.
-  (function gettingStarted() {
-    const card = document.getElementById('js-getting-started');
-    const btn  = document.getElementById('js-gs-dismiss');
-    if (!card) return;
-    const key = () => {
-      let e = ''; try { e = (localStorage.getItem('rrv8.lastEmail') || '').toLowerCase(); } catch (_) {}
-      return 'rrv8.adminOnboarded.' + e;
+  // Help FAB: toggle the create-user steps popover. Closes on outside
+  // click or Escape. (The first-run guidance now lives here on demand,
+  // and in the Home onboarding wizard — not as inline page chrome.)
+  (function helpFab() {
+    const btn = document.getElementById('js-fab-btn');
+    const pop = document.getElementById('js-fab-pop');
+    if (!btn || !pop) return;
+    const setOpen = (open) => {
+      pop.hidden = !open;
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
     };
-    let seen = ''; try { seen = localStorage.getItem(key()); } catch (_) {}
-    if (seen !== 'dismissed') card.hidden = false;
-    if (btn) btn.addEventListener('click', () => {
-      try { localStorage.setItem(key(), 'dismissed'); } catch (_) {}
-      card.hidden = true;
+    btn.addEventListener('click', (e) => { e.stopPropagation(); setOpen(pop.hidden); });
+    document.addEventListener('click', (e) => {
+      if (pop.hidden) return;
+      if (e.target.closest('#js-fab')) return;
+      setOpen(false);
     });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setOpen(false); });
   })();
 
   reloadUsers();
