@@ -139,7 +139,9 @@ window.RR_TEST_AGENT_AREAS = [
   'system-status-log',
   'system/agent-log',
   // Administrator
-  'admin/companies'
+  'admin/companies',
+  // Proactive memory-pressure read behind Home's Service-health card
+  'admin/service-health'
 ];
 
 // Endpoints with a variable path segment that rrFetch needs to route
