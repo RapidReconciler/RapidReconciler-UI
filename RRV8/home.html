@@ -325,7 +325,11 @@
 
   /* non-admin readiness card */
   .ready { background: var(--bg-card); border: 1px solid var(--rule); border-radius: 14px; box-shadow: var(--shadow-md); overflow: hidden; max-width: 640px; }
-  .ready-top { padding: 18px 20px; display: flex; align-items: center; gap: 14px; background: var(--green-pale); border-bottom: 1px solid #cfe6d8; }
+  .ready-top { padding: 18px 20px; display: flex; align-items: center; gap: 14px; background: var(--green-pale); border-bottom: 1px solid #cfe6d8; cursor: pointer; }
+  .ready-top .ready-chev { margin-left: auto; flex-shrink: 0; color: var(--text-muted); transition: transform .15s; }
+  .ready.is-collapsed .ready-top { border-bottom: 0; }
+  .ready.is-collapsed .ready-chev { transform: rotate(-90deg); }
+  .ready.is-collapsed .ready-list, .ready.is-collapsed .ready-foot { display: none; }
   .ready-top.warn { background: var(--amber-pale); border-bottom-color: #f0deb5; }
   .ready-top.bad  { background: var(--red-pale); border-bottom-color: #f1c9c3; }
   .ready-badge { width: 44px; height: 44px; border-radius: 12px; background: var(--green); color: #fff; display: grid; place-items: center; flex-shrink: 0; }
@@ -581,10 +585,28 @@
     </div>
   </div>
 
+  <!-- ================== NON-ADMIN: Am I Ready to Go? ==================
+       Top section for an analyst (renders above the scope bar). Hidden for
+       admins, who get the Administration section above instead. -->
+  <div class="view" id="view-ready" hidden>
+    <div class="section-label solo">Am I ready to go?</div>
+    <div class="ready">
+      <div class="ready-top" id="readyTop" role="button" tabindex="0" aria-expanded="true" aria-controls="readyList">
+        <div class="ready-badge" id="readyBadge">&hellip;</div>
+        <div><div class="ready-title" id="readyTitle">Checking&hellip;</div><div class="ready-sub" id="readySub">One moment.</div></div>
+        <svg class="ready-chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+      </div>
+      <div class="ready-list" id="readyList"></div>
+      <div class="ready-foot">
+        <span class="gtg" id="readyFoot">&nbsp;</span>
+      </div>
+    </div>
+  </div>
+
   <!-- ===================== Context bar (scope hub) =====================
        Shared by both roles. For an admin it renders below Administration;
-       for everyone else it's the first thing (no admin section above it).
-       Either way it sits directly above the work it governs. -->
+       for an analyst it sits below the readiness card above. Either way it
+       sits directly above the work it governs (Reconcile). -->
   <div class="ctx" id="scopeBar">
     <div class="ctx-cell">
       <span class="ctx-k">Database</span>
@@ -597,28 +619,12 @@
     </div>
     <div class="ctx-cell">
       <span class="ctx-k">Working period</span>
-      <span class="ctx-v" id="scopePeriodVal">&mdash;</span>
-      <span class="ctx-sub">The open reconciliation period.</span>
+      <select class="ctx-select" id="periodSelect"></select>
+      <span class="ctx-sub">Defaults to the open period &mdash; pick a prior month to work it.</span>
     </div>
     <div class="ctx-flows">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
       <span>What you pick here <b>flows to your work pages</b> &mdash; they open on this company and period. (Finer filters stay on the page.)</span>
-    </div>
-  </div>
-
-  <!-- ================== NON-ADMIN: Am I Ready to Go? ================== -->
-  <div class="view" id="view-ready" hidden>
-    <div class="section-label solo">Am I ready to go?</div>
-    <div class="ready">
-      <div class="ready-top" id="readyTop">
-        <div class="ready-badge" id="readyBadge">&hellip;</div>
-        <div><div class="ready-title" id="readyTitle">Checking&hellip;</div><div class="ready-sub" id="readySub">One moment.</div></div>
-      </div>
-      <div class="ready-list" id="readyList"></div>
-      <div class="ready-foot">
-        <span class="gtg" id="readyFoot">&nbsp;</span>
-        <a class="ready-start" id="readyStart" href="inventory-reconciliation.html">Start in Reconciliation &rarr;</a>
-      </div>
     </div>
   </div>
 
@@ -773,7 +779,7 @@
   var TILE_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg>';
 
   // ---- shared status state (feeds the Service-health card + readiness) ----
-  var _connDown = false, _period = '', _jobStatus = '';
+  var _connDown = false, _period = '', _jobStatus = '', _periods = [];
 
   // ---- connectivity (reuses sidebar.js's cross-page cache) ----
   function setConn(down, message) {
@@ -812,11 +818,14 @@
     $('menuEmail').textContent = email;
     $('footName').textContent = name;
 
-    // Role badge: only the strict Administrator signal is reliable from
-    // the JWT today. Other role labels (Reconciliation Analyst, A/P
-    // Clerk, …) aren't carried in the token yet — show them once VALC
-    // surfaces a role claim rather than guessing one (see API.md stub).
-    if (isAdmin()) { var rt = $('roleTag'); rt.textContent = 'Administrator'; rt.hidden = false; }
+    // Role badge: VALC now mints the role name per-db as `rn` (one role
+    // per user), so we label any role accurately — Reconciliation Analyst,
+    // A/P Clerk, etc. Fall back to the strict Administrator signal for older
+    // tokens minted before `rn`; hide it only when neither is available.
+    var rt = $('roleTag');
+    var a = activeDb() || {};
+    var roleName = a.rn || (isAdmin() ? 'Administrator' : '');
+    if (roleName) { rt.textContent = roleName; rt.hidden = false; }
 
     if (RR_CONFIG.release) $('footVersion').textContent = 'RapidReconciler ' + RR_CONFIG.release;
   }
@@ -870,8 +879,23 @@
       coSel.disabled = false;
       if (coSub) coSub.textContent = 'You can access ' + allowed.length + ' ' + (allowed.length === 1 ? 'company' : 'companies') + '.';
     }
-    var pv = $('scopePeriodVal');
-    if (pv) pv.textContent = (sc && sc.period) ? fmtPeriod(sc.period) : (_period || '—');
+    var pSel = $('periodSelect');
+    if (pSel) {
+      var active = (sc && sc.period) || null;
+      var list = _periods.slice();
+      // Make sure the active period is selectable even if the agent's list
+      // hasn't loaded yet (e.g. the open period from /inventory/status).
+      if (active && list.indexOf(active) === -1) list.unshift(active);
+      if (!list.length) {
+        pSel.innerHTML = '<option>' + (active ? fmtPeriod(active) : '—') + '</option>';
+        pSel.disabled = true;
+      } else {
+        pSel.innerHTML = list.map(function (iso) {
+          return '<option value="' + iso + '"' + (iso === active ? ' selected' : '') + '>' + fmtPeriod(iso) + '</option>';
+        }).join('');
+        pSel.disabled = list.length < 2;
+      }
+    }
   }
   function onCompanyChange(e) {
     if (!(window.RRV8 && window.RRV8.setActiveScope)) return;
@@ -879,6 +903,21 @@
     var sc = scope() || { allowedCompanies: [] };
     window.RRV8.setActiveScope({ activeCompanies: (v === '__all__') ? sc.allowedCompanies : [v] });
     renderScopeBar();
+  }
+  function onPeriodChange(e) {
+    if (!(window.RRV8 && window.RRV8.setActiveScope)) return;
+    window.RRV8.setActiveScope({ period: e.target.value });
+    renderScopeBar();
+  }
+  // The selectable period list (closed period-ends) from the agent's
+  // GET /available-periods. Populates the scope-bar period picker so the
+  // analyst can work a prior month from Home; the choice flows to the work
+  // pages via the session scope.
+  function loadPeriods() {
+    rrFetch('available-periods', { demoFile: 'available-periods' }).then(function (p) {
+      _periods = (p && p.availablePeriods) || [];
+      renderScopeBar();
+    }).catch(function () { /* leave the picker showing just the open period */ });
   }
 
   function renderTiles() {
@@ -1059,7 +1098,15 @@
     else if (anyBad)  { title.textContent = 'Not ready yet';            sub.textContent = 'Check the item(s) below before you start.'; }
     else              { title.textContent = 'Almost ready…';            sub.textContent = 'Finishing the readiness check.'; }
     $('readyFoot').textContent = allGood ? 'Ready when you are.' : '';
-    $('readyStart').hidden = !c.inv; // no Reconciliation entry without Inventory access
+
+    // Collapse when there's nothing to act on (all green) so the analyst
+    // sees just "You're good to go"; expand automatically when an item needs
+    // attention. A manual toggle (readyTop) sticks across re-renders.
+    var card = document.querySelector('#view-ready .ready');
+    if (card && !card.dataset.userToggled) {
+      card.classList.toggle('is-collapsed', allGood);
+      var rt = $('readyTop'); if (rt) rt.setAttribute('aria-expanded', allGood ? 'false' : 'true');
+    }
   }
 
   // Self-serve restart (admin Service-health card). Routes through VALC —
@@ -1131,10 +1178,13 @@
         _period = fmtPeriod(rf.period);
         $('periodPill').textContent = 'Period: ' + _period;
         $('periodPill').hidden = false;
-        // The open period becomes the active scope period (the default that
-        // flows to the work pages). Period isn't user-changeable on Home yet
-        // — that needs a period-list source; for now it reflects the open one.
-        if (window.RRV8 && window.RRV8.setActiveScope) window.RRV8.setActiveScope({ period: rf.period });
+        // Seed the open period as the active default only when the analyst
+        // hasn't already picked one (don't clobber their choice on reload /
+        // DB switch). The picker (loadPeriods) lets them change it.
+        if (window.RRV8 && window.RRV8.setActiveScope && window.RRV8.readSessionScope
+            && !window.RRV8.readSessionScope().period) {
+          window.RRV8.setActiveScope({ period: rf.period });
+        }
       }
       renderScopeBar();
       renderReadiness();
@@ -1241,6 +1291,7 @@
     try { localStorage.removeItem('rrv8.viewMode'); } catch (_) {}
     try { localStorage.removeItem('rrv8.lastEmail'); } catch (_) {}
     try { localStorage.removeItem('rrv8.sessionStart'); } catch (_) {}
+    try { localStorage.removeItem('rrv8.activeDb'); } catch (_) {}
     window.location.href = '../login.html';
   }
   function doImport() {
@@ -1273,6 +1324,24 @@
     $('restartBtn').addEventListener('click', restartService);
     $('bannerRetry').addEventListener('click', function () { setConn(false); loadStatus(); });
     $('coSelect').addEventListener('change', onCompanyChange);
+    $('periodSelect').addEventListener('change', onPeriodChange);
+
+    // "Am I ready to go?" is collapsible — collapse the detail when there's
+    // nothing to do; a manual toggle sticks across re-renders.
+    var readyTop = $('readyTop');
+    if (readyTop) {
+      var toggleReady = function () {
+        var card = document.querySelector('#view-ready .ready');
+        if (!card) return;
+        var collapsed = card.classList.toggle('is-collapsed');
+        card.dataset.userToggled = '1';
+        readyTop.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      };
+      readyTop.addEventListener('click', toggleReady);
+      readyTop.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleReady(); }
+      });
+    }
 
     // Onboarding wizard navigation.
     $('wzNext').addEventListener('click', function (e) {
@@ -1288,6 +1357,14 @@
       var i = parseInt(e.target.value, 10);
       if (isNaN(i)) return;
       window.RR_SESSION.activeDbIndex = i;
+      // Persist the DB choice so it flows to the work pages (sticky like
+      // company/period), not just this page.
+      try {
+        var db = (window.RR_SESSION.dbs || [])[i];
+        if (db && db.n && window.RRV8 && window.RRV8.setActiveDatabase) {
+          window.RRV8.setActiveDatabase(db.n);
+        }
+      } catch (_) {}
       renderDatabases();
       renderScopeBar();
       renderTiles();
@@ -1295,6 +1372,7 @@
       reflectDmaai();
       loadStatus();
       loadSystemStatus();
+      loadPeriods();
     });
   }
 
@@ -1319,6 +1397,7 @@
       reflectDmaai();
       loadStatus();
       loadSystemStatus();
+      loadPeriods();
     });
   }
 
