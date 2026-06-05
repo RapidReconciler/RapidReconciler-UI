@@ -1072,6 +1072,82 @@
   }
 
   // ============================================================
+  //  Canonical session scope (the "scope hub" backbone)
+  //
+  //  One source of truth for the working scope of the active database,
+  //  read by Home AND the work pages so they never disagree. Three layers
+  //  (see docs/plans/home-scope-hub-and-onboarding.md):
+  //    - allowedCompanies : the JWT db claim's company allow-list (db.i) —
+  //      a permission, read-only here.
+  //    - activeCompanies  : the user's current selection (defaults to the
+  //      full allowed set); sticky for the session, set on Home or a page.
+  //    - period           : the active reconciliation period (defaults to
+  //      the cross-page current period).
+  //  Per-page narrowing (accounts / BUs / contributor) is NOT stored here.
+  // ============================================================
+  function _sessionScopeKey() {
+    const session = (global.RR_SESSION || {});
+    const dbs = Array.isArray(session.dbs) ? session.dbs : [];
+    const dbIdx = session.activeDbIndex || 0;
+    const db = (dbs[dbIdx] && dbs[dbIdx].n) || '_';
+    const mode = (global.RR_CONFIG && global.RR_CONFIG.mode) || 'demo';
+    return 'rrv8.scope.v1.' + mode + '.' + db + '.scope';
+  }
+
+  /**
+   * Resolve the active database's working scope, applying the user's sticky
+   * selection over the defaults. Returns:
+   *   { database:{n,ip}, allowedCompanies:[...], activeCompanies:[...], period }
+   * Fail-open: with no claim/selection, activeCompanies = allowedCompanies
+   * and period falls back to the cross-page current period (or null).
+   */
+  function readSessionScope() {
+    const a = readActiveDbClaim() || {};
+    const allowed = Array.isArray(a.i) ? a.i.slice() : [];
+    let stored = null;
+    try {
+      const raw = sessionStorage.getItem(_sessionScopeKey());
+      stored = raw ? (JSON.parse(raw).payload || null) : null;
+    } catch (_) { stored = null; }
+    const active = (stored && Array.isArray(stored.activeCompanies) && stored.activeCompanies.length)
+      ? stored.activeCompanies.slice()
+      : allowed.slice();
+    // Period source of truth is the cross-page currentPeriod cache (newest
+    // wins), so a period a work page publishes isn't shadowed by an older
+    // stored selection. The stored value is only a fallback.
+    const period = readCurrentPeriod() || (stored && stored.period) || null;
+    return {
+      database: { n: a.n || null, ip: a.ip || null },
+      allowedCompanies: allowed,
+      activeCompanies: active,
+      period: period
+    };
+  }
+
+  /**
+   * Update the sticky active selection for the active database. Home writes
+   * it on change; a work page calls it when the analyst changes the active
+   * company/period, so every surface stays in sync. Pass {activeCompanies}
+   * and/or {period}; omitted keys keep their current value. Returns the
+   * freshly-resolved scope.
+   */
+  function setActiveScope(patch) {
+    patch = patch || {};
+    try {
+      const cur = readSessionScope();
+      const next = {
+        activeCompanies: Array.isArray(patch.activeCompanies) ? patch.activeCompanies : cur.activeCompanies,
+        period: ('period' in patch) ? patch.period : cur.period
+      };
+      sessionStorage.setItem(_sessionScopeKey(), JSON.stringify({ ts: Date.now(), payload: next }));
+      // Keep the older currentPeriod cache in lockstep so pages still reading
+      // that key see the same period.
+      if (next.period) publishCurrentPeriod(next.period);
+    } catch (_) {}
+    return readSessionScope();
+  }
+
+  // ============================================================
   //  Session hydrate + user menu
   //
   //  Shared implementation of the welcome dropdown that hangs off
@@ -1454,6 +1530,8 @@
   global.RRV8.paintSidebarFromCache   = paintSidebarFromCache;
   global.RRV8.publishCurrentPeriod    = publishCurrentPeriod;
   global.RRV8.readCurrentPeriod       = readCurrentPeriod;
+  global.RRV8.readSessionScope        = readSessionScope;
+  global.RRV8.setActiveScope          = setActiveScope;
   global.RRV8.ensureInventoryStatus   = ensureInventoryStatus;
   global.RRV8.hydrateSession          = hydrateSession;
   global.RRV8.mountUserMenu           = mountUserMenu;
