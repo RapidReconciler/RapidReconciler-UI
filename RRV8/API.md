@@ -292,6 +292,60 @@ restart *before* reports fail, instead of only flagging an outage after.
 
 ---
 
+## Model DMAAI Review (validate + approve the model)
+
+**Status: V8 wired (Home card + `accounting-model-review.html`); agent
+endpoint + table written, ship with the next Services jar release + a SQL
+apply.** The model DMAAI table (4152 PI) is what RR reads on every import to
+decide which GL account each inventory transaction posts to. The goal is to
+confirm every GL class used in inventory maps to the correct account, then
+record a **single model-level sign-off** — GSI surfaces the diagnostic but
+cannot approve the setup (only the customer's accounting team can).
+
+- **Endpoints** (agent-direct, authenticated; in `RR_TEST_AGENT_AREAS`):
+    - `GET /inventory/integrity/model-approval` — the verdict + counts.
+    - `POST /inventory/integrity/model-approval` — record the attestation
+      (body `{ "note": "<optional>" }`; the approver is taken from the JWT,
+      never the body).
+- **`GET` response (`ModelApprovalStatus`):**
+
+  ```json
+  {
+    "state": "approved | needs-review | unapproved",
+    "approved": true,
+    "approvedBy": "name@customer.com",
+    "approvedDate": "2026-06-06T15:30:00Z",
+    "note": "IN90/EXP1 exclusions are intended",
+    "report1Count": 50,              // model GL-class -> account mappings (Report 1)
+    "report3Count": 3,               // GL classes currently excluded (Report 3)
+    "report3CountAtApproval": 3,
+    "changedSinceApproval": false,
+    "companiesInScope": ["00010","00050"]
+  }
+  ```
+
+- **Verdict is agent-side (one source of truth); V8 owns the copy.**
+  `state`: `unapproved` (never signed off) · `needs-review` (approved, but
+  the excluded-GL-class set has drifted since sign-off — a SHA-256
+  fingerprint of the excluded (Company, GL class) set, stored at approval,
+  no longer matches) · `approved` (signed off, unchanged). Report 3 having
+  exclusions isn't itself an error — some GL classes are legitimately
+  excluded (non-stock / expense); the human sign-off is the gate.
+- **Single model-level attestation**, not per-GL-class: backed by
+  `dbo.RDmaaiModelApproval` (latest row = current sign-off; older rows are
+  an audit trail). Counts come from Integrity Report 1
+  (`v_integrity1_aai_base`) + Report 3 (`v_integrity3_exc_glc`), JWT-scoped.
+  Agent spec: `RapidReconciler-Agent/specs/model-dmaai-review.md`;
+  table DDL: `RapidReconciler-Agent/setup/sql/create-dmaai-model-approval-table.sql`.
+- **Surfaces:** Home's **Model DMAAI Review** card (`home.html`
+  `loadModelApproval`) reads the verdict; the leaner
+  **`accounting-model-review.html`** shows Report 3 (excluded GL classes,
+  the materiality) + Report 1 (the model baseline) and ends in the single
+  Approve action. **Graceful fallback:** both degrade to a neutral
+  "review the model" state when the endpoint isn't live.
+
+---
+
 ## Variance-component &rarr; source-view bindings
 
 These bindings let V8's Preview pane / Excel export call the right

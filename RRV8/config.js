@@ -141,7 +141,10 @@ window.RR_TEST_AGENT_AREAS = [
   // Administrator
   'admin/companies',
   // Proactive memory-pressure read behind Home's Service-health card
-  'admin/service-health'
+  'admin/service-health',
+  // Model DMAAI Review — sign-off read + the enriched model baseline
+  'inventory/integrity/model-approval',
+  'inventory/integrity/model-baseline'
 ];
 
 // Endpoints with a variable path segment that rrFetch needs to route
