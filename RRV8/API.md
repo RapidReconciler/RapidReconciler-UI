@@ -346,6 +346,53 @@ cannot approve the setup (only the customer's accounting team can).
 
 ---
 
+## Data purge (period cutoff)
+
+**Status: SHIPPED (agent + V8).** Purging old data = moving the period
+cutoff (`rcompanies.PeriodCutoff`) forward to a new period beginning date;
+the **next refresh purges everything before it, server-side**. This replaces
+the old manual, per-company date edits with one action that sets every
+company's cutoff at once.
+
+- **Endpoints** (agent-direct, authenticated; in `RR_TEST_AGENT_AREAS`):
+    - `GET /inventory/integrity/purge-info` — current cutoff, DB file size,
+      and the valid new start dates.
+    - `POST /inventory/integrity/purge-cutoff` `{ "date": "yyyy-MM-dd" }` —
+      set the cutoff on every company the caller can see; returns the updated
+      info.
+- **`GET` response (`PurgeInfo`):**
+
+  ```json
+  {
+    "currentCutoff": "2015-08-30",
+    "cutoffsDiverge": false,
+    "dbSizeMb": 49500, "dbSizePretty": "48.3 GB",
+    "calendarDiverges": false,
+    "candidates": ["2015-10-04","2015-11-01", "..."]
+  }
+  ```
+
+  `candidates` are the shared `Rfiscalcalendar.PeriodBegins` later than the
+  current cutoff (exact dates — fiscal periods aren't month-aligned).
+  `calendarDiverges` flags companies that don't share the same period
+  beginning dates (the card warns, doesn't block). `dbSizeMb` is the data
+  file (`sys.database_files` ROWS).
+- **Reversible until the refresh runs.** Setting a *later* cutoff stages the
+  purge and the card's button becomes **Restore**, which POSTs the prior
+  cutoff back. A *forward* move must land on a real period beginning date
+  (else 400); a *backward* (restore) move is unrestricted — it only re-widens
+  and never purges. The actual purge is the refresh job's, not this
+  endpoint's. Note: forward-to-invalid currently surfaces as 403 (the agent's
+  `/error` dispatch isn't in its permit list) — the client catches it and the
+  dropdown only offers valid dates, so it's an unreached safety net.
+- **Surface:** Home's **Data** card → "Purge old data" row → a modal
+  (`home.html` `loadPurgeInfo` / `togglePurge`) showing the current cutoff +
+  DB size, the exact-date picker, the irreversibility + backup warning, and
+  the large-DB insight (performance / disk / tempdb / autogrowth). Agent spec:
+  `RapidReconciler-Agent/specs/data-purge.md`.
+
+---
+
 ## Variance-component &rarr; source-view bindings
 
 These bindings let V8's Preview pane / Excel export call the right
