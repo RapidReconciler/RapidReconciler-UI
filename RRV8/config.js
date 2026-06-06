@@ -123,6 +123,12 @@ window.RR_TEST_AGENT_AREAS = [
   'inventory/as-of',
   'inventory/as-of/details',
   'inventory/rollIItem',
+  // V8 cardex corrective action (CardexCorrectionController) — supersedes rollIItem
+  'inventory/cardex-worklist',
+  'inventory/adjustment-ledger',
+  'inventory/set-beginning-balance',
+  'inventory/undo-adjustment',
+  'inventory/cardex-work-status',
   'poll',
   'system-status',
   'available-periods',
