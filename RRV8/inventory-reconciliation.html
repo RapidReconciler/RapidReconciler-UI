@@ -2394,6 +2394,23 @@
     font-size: 13px;
     font-style: italic;
   }
+  /* Reset banner (cardex): the view's Reason='Reset:' marker row shown as
+     context above the grid instead of as one of the items. */
+  .preview-resetbar {
+    display: flex; align-items: center; gap: 10px;
+    margin: 12px 0 6px; padding: 10px 14px;
+    background: var(--bg-soft); border: 1px solid var(--rule);
+    border-radius: 10px; font-size: 12.5px; color: var(--text-soft);
+  }
+  .preview-resetbar[hidden] { display: none; }
+  .preview-resetbar svg { width: 16px; height: 16px; color: var(--text-muted); flex-shrink: 0; }
+  .preview-resetbar strong { color: var(--navy); font-family: 'Source Sans 3', sans-serif; }
+  .preview-resetbar .rb-date { font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; color: var(--text); }
+  /* Sortable preview headers */
+  .preview-table thead th.sortable { cursor: pointer; }
+  .preview-table thead th.sortable:hover { color: var(--navy); }
+  .preview-table thead th .sort-caret { font-size: 9px; margin-left: 3px; }
+  .preview-table thead th.is-sorted { color: var(--navy); }
 
   /* Compact variance-calculation card (Carry Forward preview).
      Mirrors the live SPA's VARIANCE CALCULATION panel. */
@@ -3403,6 +3420,7 @@
     </header>
     <div class="preview-body">
       <div class="preview-scroll" id="js-preview-scroll">
+        <div class="preview-resetbar" id="js-preview-resetbar" hidden></div>
         <table class="preview-table" id="js-preview-table">
           <thead><tr id="js-preview-thead"></tr></thead>
           <tbody id="js-preview-tbody"></tbody>
@@ -6813,7 +6831,7 @@
         await loadVarianceComponentRows(componentKey, cfg);
         _varianceComponentFetched.add(componentKey);
       } catch (err) {
-        showFetchError('inventory/variance-component', err);
+        showFetchError(cfg.report ? 'inventory/integrity' : 'inventory/variance-component', err);
         return;
       }
     }
@@ -7045,7 +7063,7 @@
         weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
         hour: 'numeric', minute: '2-digit'
       });
-      const headers = ['Reason', 'CompanyNumber', 'LongAccount', 'Branch', 'ShortItem', 'ItemNumber', 'ThirdItem', 'Location', 'Lot', 'Method', 'AdjAmount', 'AdjQty', 'UOM', 'GLClass', 'Comment'];
+      const headers = ['Reason', 'CompanyNumber', 'LongAccount', 'Branch', 'ShortItem', 'ItemNumber', 'ThirdItem', 'Location', 'Lot', 'Method', 'AdjAmount', 'AdjQty', 'UOM', 'GLClass', 'Cost Level', 'Last Activity', 'Tx Count', 'QOH'];
 
       const aoa = [
         ['Item Roll Integrity Generated ' + titleStamp],
@@ -7067,7 +7085,10 @@
           round2(it.adjQty || 0),
           it.uom || '',
           it.glClass || '',
-          it.comment || ''
+          it.costLevel || '',
+          it.lastActivity || '',
+          it.txCount || 0,
+          round2(it.qtyOnHand || 0)
         ]);
       });
       if (items.length === 0) {
@@ -7079,7 +7100,8 @@
       sheet['!cols'] = [
         { wch: 10 }, { wch: 14 }, { wch: 22 }, { wch: 8 }, { wch: 12 },
         { wch: 18 }, { wch: 18 }, { wch: 10 }, { wch: 10 }, { wch: 8 },
-        { wch: 14 }, { wch: 12 }, { wch: 6 }, { wch: 9 }, { wch: 24 }
+        { wch: 14 }, { wch: 12 }, { wch: 6 }, { wch: 9 }, { wch: 10 },
+        { wch: 13 }, { wch: 10 }, { wch: 12 }
       ];
       sheet['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: headers.length - 1 } }];
       sheet['!rows'] = [{ hpt: 22 }, { hpt: 22 }];
@@ -7244,6 +7266,11 @@
       arrayKey: 'cardex',
       amountField: 'adjAmount',
       requirePeriod: false,
+      // Sproc-free fetch: the generic integrity endpoint runs the view
+      // JWT-scoped (no usp6getfilteredview); filtering is client-side via
+      // filterViewBackedRows. Step toward retiring the sproc.
+      report: 'v6ui_itemrollintegritydialog',
+      resetBanner: true,   // surface the view's Reason='Reset:' row as a banner
       columns: [
         { label: 'Reason',        key: 'reason',        kind: 'text' },
         { label: 'CompanyNumber', key: 'companyNumber', kind: 'text' },
@@ -7259,18 +7286,24 @@
         { label: 'AdjQty',        key: 'adjQty',        kind: 'num'  },
         { label: 'UOM',           key: 'uom',           kind: 'text' },
         { label: 'GLClass',       key: 'glClass',       kind: 'text' },
-        { label: 'Comment',       key: 'comment',       kind: 'text' }
+        { label: 'Cost Level',    key: 'costLevel',     kind: 'text' },
+        { label: 'Last Activity', key: 'lastActivity',  kind: 'mono', sort: 'date' },
+        { label: 'Tx Count',      key: 'txCount',       kind: 'num'  },
+        { label: 'QOH',           key: 'qtyOnHand',     kind: 'num'  }
       ]
     }
   };
 
   let _previewComponent = null;
+  let _previewSort = null;          // { key, dir } — click-to-sort on the preview grid
+  let _previewSortBound = false;
   const _varianceComponentFetched = new Set();
   async function openVariancePreview(componentKey) {
     if (!currentData) { flashStatus('No data loaded'); return; }
     const cfg = PREVIEW_COLUMNS[componentKey];
     if (!cfg) { flashStatus('Preview not configured for ' + componentKey); return; }
     _previewComponent = componentKey;
+    _previewSort = null;            // reset to default (|amount| desc) per open
     const modal = document.getElementById('js-preview-modal');
     modal.hidden = false;
     document.body.style.overflow = 'hidden';
@@ -7286,21 +7319,32 @@
         _varianceComponentFetched.add(componentKey);
         if (_previewComponent === componentKey) renderPreviewModal();
       } catch (err) {
-        showFetchError('inventory/variance-component', err);
+        showFetchError(cfg.report ? 'inventory/integrity' : 'inventory/variance-component', err);
         if (_previewComponent === componentKey) renderPreviewModal();
       }
     }
   }
 
   async function loadVarianceComponentRows(componentKey, cfg) {
-    const status     = await rrFetch('inventory/status');
-    const reconFilter = status && status.reconciliationFilter;
-    const period     = cfg.requirePeriod === false ? null : currentPeriod;
-    const body       = buildProdReconBody(reconFilter, period);
-    body.component = componentKey;
-    const resp = await rrFetch('inventory/variance-component',
-                               { method: 'POST', body: body });
-    const rows = (resp && resp.rows) || [];
+    let rows;
+    if (cfg.report) {
+      // Sproc-free path (same as the dedicated Cardex Variance page): the
+      // generic integrity endpoint runs the view JWT-scoped, no
+      // usp6getfilteredview. Company/account narrowing is done client-side
+      // in filterViewBackedRows. (Direction: retire the filtered-view sproc.)
+      const resp = await rrFetch('inventory/integrity',
+                                 { method: 'POST', body: { report: cfg.report } });
+      rows = (resp && (resp.data || resp.rows)) || [];
+    } else {
+      const status     = await rrFetch('inventory/status');
+      const reconFilter = status && status.reconciliationFilter;
+      const period     = cfg.requirePeriod === false ? null : currentPeriod;
+      const body       = buildProdReconBody(reconFilter, period);
+      body.component = componentKey;
+      const resp = await rrFetch('inventory/variance-component',
+                                 { method: 'POST', body: body });
+      rows = (resp && resp.rows) || [];
+    }
     // PascalCase column aliases from SQL Server → camelCase keys that
     // filterViewBackedRows / the Excel generators read.
     currentData[cfg.arrayKey] = rows.map(r => {
@@ -7359,6 +7403,40 @@
     };
   }
 
+  // Client-side sort of the loaded preview rows. Numeric columns sort
+  // numerically, `sort:'date'` columns chronologically, others lexically.
+  // No active sort → returns rows unchanged (filterViewBackedRows' order).
+  function applyPreviewSort(rows, cfg) {
+    if (!_previewSort || !_previewSort.key) return rows;
+    const key = _previewSort.key, dir = _previewSort.dir;
+    const col = (cfg.columns || []).find(c => c.key === key) || {};
+    const isNum = col.kind === 'num', isDate = col.sort === 'date';
+    return rows.slice().sort((a, b) => {
+      let av = a[key], bv = b[key];
+      if (isNum)  { return ((Number(av) || 0) - (Number(bv) || 0)) * dir; }
+      if (isDate) { return ((Date.parse(av) || 0) - (Date.parse(bv) || 0)) * dir; }
+      av = av == null ? '' : String(av); bv = bv == null ? '' : String(bv);
+      return av.localeCompare(bv) * dir;
+    });
+  }
+
+  // Cardex reset banner: the view emits a Reason='Reset:' marker row carrying
+  // the date variance is measured from (in its ItemNumber). Show it as context
+  // above the grid; it's already excluded from the table rows.
+  function renderPreviewResetBanner(cfg) {
+    const bar = document.getElementById('js-preview-resetbar');
+    if (!bar) return;
+    if (!cfg.resetBanner) { bar.hidden = true; return; }
+    const all = (currentData && currentData[cfg.arrayKey]) || [];
+    const resetRow = all.find(r => String(r.reason == null ? '' : r.reason).trim() === 'Reset:');
+    if (!resetRow) { bar.hidden = true; return; }
+    const date = resetRow.itemNumber || resetRow.lastActivity || '';
+    bar.innerHTML =
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9 9 0 0 0-6.36 2.64L3 8"/><path d="M3 3v5h5"/></svg>' +
+      '<span>Variance measured from <strong class="rb-date">' + escapeHtml(date || '—') + '</strong> forward &middot; amounts are cumulative since that reset date.</span>';
+    bar.hidden = false;
+  }
+
   function renderPreviewModal() {
     if (!_previewComponent) return;
     const componentKey = _previewComponent;
@@ -7386,13 +7464,22 @@
     } else if (cfg.source === 'aggregate') {
       rows = componentDrilldownRows(componentKey);
     }
+
+    // Cardex: surface the view's Reason='Reset:' marker as a context banner
+    // (it's filtered out of the table — company '00000' / blank account).
+    renderPreviewResetBanner(cfg);
+    // Click-to-sort on the loaded rows; default (no _previewSort) keeps the
+    // |amount| desc order filterViewBackedRows already applied.
+    rows = applyPreviewSort(rows, cfg);
+
     const amountField = cfg.amountField;
     const total = round2(rows.reduce((s, r) => s + ((r[amountField] || 0)), 0));
 
     // Title + sub
     document.getElementById('js-preview-title').textContent = meta.label;
     const subParts = [];
-    subParts.push('Period <strong>' + escapeHtml(periodDisplay()) + '</strong>');
+    // Current-state reports (cardex) have no period dimension — don't imply one.
+    if (cfg.requirePeriod !== false) subParts.push('Period <strong>' + escapeHtml(periodDisplay()) + '</strong>');
     if (meta.view) subParts.push('Source <code>' + escapeHtml(meta.view) + '</code>');
     else if (cfg.source === 'aggregate') subParts.push('Source <code>accountRows aggregate</code>');
     subParts.push(rows.length + ' ' + (rows.length === 1 ? 'row' : 'rows'));
@@ -7401,11 +7488,33 @@
     // Footer meta + Excel button
     document.getElementById('js-preview-meta').textContent = meta.source || '';
 
-    // Header row
+    // Header row — every column is click-to-sort; active column shows a caret.
     const thead = document.getElementById('js-preview-thead');
-    thead.innerHTML = cfg.columns.map(c =>
-      '<th class="' + (c.kind === 'num' ? 'is-num' : '') + '">' + escapeHtml(c.label) + '</th>'
-    ).join('');
+    thead.innerHTML = cfg.columns.map(c => {
+      const cls = ['sortable'];
+      if (c.kind === 'num') cls.push('is-num');
+      const sorted = _previewSort && _previewSort.key === c.key;
+      if (sorted) cls.push('is-sorted');
+      const caret = sorted ? '<span class="sort-caret">' + (_previewSort.dir < 0 ? '▼' : '▲') + '</span>' : '';
+      return '<th class="' + cls.join(' ') + '" data-sort-key="' + escapeHtml(c.key) + '">' + escapeHtml(c.label) + caret + '</th>';
+    }).join('');
+    if (!_previewSortBound) {
+      _previewSortBound = true;
+      thead.addEventListener('click', function (e) {
+        const th = e.target.closest ? e.target.closest('th[data-sort-key]') : null;
+        if (!th || !_previewComponent) return;
+        const key = th.getAttribute('data-sort-key');
+        const cols = (PREVIEW_COLUMNS[_previewComponent] || {}).columns || [];
+        const col = cols.find(c => c.key === key) || {};
+        if (_previewSort && _previewSort.key === key) {
+          _previewSort.dir = -_previewSort.dir;             // toggle
+        } else {
+          // First click: numbers + dates default to descending (largest / most recent first).
+          _previewSort = { key: key, dir: (col.kind === 'num' || col.sort === 'date') ? -1 : 1 };
+        }
+        renderPreviewModal();
+      });
+    }
 
     // Body rows
     const tbody = document.getElementById('js-preview-tbody');
