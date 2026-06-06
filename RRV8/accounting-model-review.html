@@ -13,14 +13,21 @@
       items whose GL class isn't in the model, so their value is NOT counted.
       The materiality, shown first.
     - Model baseline       (Integrity Report 1 / v_integrity1_aai_base) —
-      the GL-class -> account mappings the model defines. The reference.
+      the GL-class -> account mappings the model defines. Each row carries a
+      per-row OK/Change review (persisted via /model-row-review[s]); flagged
+      rows export as a change request (.xlsx) via /model-change-report.
     - Approve the model    — GET/POST /inventory/integrity/model-approval.
       Records who/when (a small model-level attestation); the Home card's
-      verdict reads from the same endpoint.
+      verdict reads from the same endpoint. Sign-off is GATED while any row
+      is flagged for change (you can't attest a model you've flagged wrong).
 
-  Tables render dynamically from whatever columns the integrity views return
-  (robust to schema), capped for display. Deliberately leaner than the full
-  analyzer worklist on accounting-dmaais.html.
+  Both tables use curated, review-focused columns (not the raw view schema),
+  capped for display: Excluded rolls items up to a per-(GL class, company)
+  count; Model baseline shows Company / GL class / Account / Account name,
+  the per-row review controls, and folds the constant DMAAI key (table 4152,
+  document type) into a caption. The agent's /model-baseline endpoint returns
+  the lean projection; /model-row-reviews supplies saved verdicts. All of it
+  deliberately leaner than the full analyzer worklist on accounting-dmaais.html.
   =============================================================================
 -->
 <html lang="en">
@@ -54,6 +61,51 @@
   .card .sub { color: var(--text-muted); font-size: 12.5px; margin: 0 0 14px; }
   .note-band { display: flex; gap: 10px; align-items: flex-start; background: var(--bg-soft); border: 1px solid var(--rule); border-radius: 10px; padding: 12px 14px; font-size: 13px; color: var(--text-soft); line-height: 1.5; margin-top: 14px; }
   .note-band svg { width: 16px; height: 16px; color: var(--blue); flex-shrink: 0; margin-top: 2px; }
+
+  /* Topbar bar. Defined per-page (sidebar.css styles the workbar contents,
+     not the container). This is a standalone flow — no sidebar grid — so a
+     simple flex bar: brand left, the Connected/Home/identity cluster right. */
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between; gap: 14px;
+    padding: 10px 24px;
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--rule);
+    box-shadow: var(--shadow-sm);
+  }
+
+  /* Topbar brand block — RapidReconciler identifier + active-DB label.
+     (sidebar.css styles the workbar row but not the brand block, so the
+     logo needs an explicit height or it renders at natural size.) */
+  .topbar-brand { display: inline-flex; align-items: center; gap: 10px; min-width: 0; }
+  .topbar-brand-logo { height: 28px; width: auto; flex-shrink: 0; display: block; }
+  .topbar-brand-text { display: flex; flex-direction: column; line-height: 1.15; min-width: 0; }
+  .topbar-brand-name { font-family: 'Source Sans 3', sans-serif; font-weight: 800; font-size: 14px; color: var(--navy); letter-spacing: -0.005em; }
+  .topbar-brand-db { font-family: 'Source Sans 3', sans-serif; font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-muted); }
+
+  /* Company filter — a review aid that narrows both report tables; not tied
+     to permissions (the verdict + stats stay model-level). */
+  .filter-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 18px; padding: 12px 16px; background: var(--bg-card); border: 1px solid var(--rule); border-radius: 12px; box-shadow: var(--shadow-sm); }
+  .filter-bar label { font-size: 11.5px; font-weight: 800; color: var(--text-muted); text-transform: uppercase; letter-spacing: .07em; }
+  .filter-bar select { font-family: inherit; font-size: 13.5px; color: var(--navy); border: 1px solid var(--rule-strong); border-radius: 8px; padding: 6px 11px; background: #fff; cursor: pointer; }
+  .filter-hint { font-size: 12px; color: var(--text-muted); }
+
+  /* Card header with an action on the right (baseline card's download button) */
+  .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+  .card-head > div { min-width: 0; }
+  .btn-sm { border: 1px solid var(--rule-strong); background: var(--bg-card); border-radius: 8px; padding: 7px 13px; font-weight: 800; font-size: 12.5px; cursor: pointer; font-family: inherit; color: var(--text); white-space: nowrap; flex-shrink: 0; }
+  .btn-sm:hover:not(:disabled) { border-color: var(--blue); color: var(--blue); }
+  .btn-sm:disabled { opacity: .45; cursor: default; }
+
+  /* Per-row review controls in the baseline grid */
+  .rev-toggle { display: inline-flex; border: 1px solid var(--rule-strong); border-radius: 7px; overflow: hidden; vertical-align: middle; }
+  .rev-btn { border: 0; background: #fff; color: var(--text-soft); font-family: inherit; font-size: 11.5px; font-weight: 800; padding: 4px 11px; cursor: pointer; }
+  .rev-btn + .rev-btn { border-left: 1px solid var(--rule-strong); }
+  .rev-ok.is-active { background: var(--green); color: #fff; }
+  .rev-change.is-active { background: var(--orange-deep); color: #fff; }
+  .rev-stale { display: inline-block; margin-left: 7px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; color: var(--orange-deep); background: var(--orange-pale); border-radius: 6px; padding: 1px 6px; vertical-align: middle; }
+  .rev-note { width: 100%; min-width: 190px; border: 1px solid var(--rule-strong); border-radius: 7px; padding: 5px 8px; font-family: inherit; font-size: 12.5px; color: var(--navy); }
+  .rev-note:disabled { background: var(--bg-soft); color: var(--text-muted); border-style: dashed; }
+  .changes-note { margin-top: 12px; font-size: 13px; line-height: 1.5; color: var(--orange-deep); background: var(--orange-pale); border: 1px solid #f0d2a8; border-radius: 9px; padding: 9px 12px; }
 
   /* Verdict banner */
   .verdict { display: flex; align-items: center; gap: 14px; border-radius: 12px; padding: 16px 18px; border: 1px solid var(--rule); }
@@ -90,6 +142,7 @@
   th { background: var(--bg-soft); color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; font-size: 10.5px; font-weight: 800; position: sticky; top: 0; }
   tbody tr:last-child td { border-bottom: 0; }
   .tbl-foot { font-size: 12px; color: var(--text-muted); padding: 8px 2px 0; }
+  .tbl-cap { font-size: 12px; color: var(--text-muted); padding: 0 2px 8px; }
   .empty { padding: 26px; text-align: center; color: var(--text-muted); font-size: 13px; }
   .loading { padding: 26px; text-align: center; color: var(--text-muted); font-size: 13px; }
   .toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); background: var(--navy); color: #fff; padding: 11px 18px; border-radius: 10px; font-size: 13.5px; box-shadow: var(--shadow-md); opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 50; }
@@ -137,6 +190,7 @@
       </div>
 
       <div class="approve-row" id="approveControls" hidden>
+        <div class="changes-note" id="changesNote" hidden></div>
         <label class="attest">
           <input type="checkbox" id="attestChk">
           <span>I confirm my accounting team has reviewed the model DMAAI mappings below (including any excluded GL classes) and they are correct for inventory transaction processing.</span>
@@ -154,6 +208,13 @@
       </div>
     </section>
 
+    <!-- ===== Company filter (review aid — narrows both tables below) ===== -->
+    <div class="filter-bar" id="filterBar" hidden>
+      <label for="companyPick">Company</label>
+      <select id="companyPick"><option value="">All companies</option></select>
+      <span class="filter-hint">Narrows the two tables below to one company &mdash; a review aid. The sign-off above stays model-level.</span>
+    </div>
+
     <!-- ===== Report 3: excluded GL classes (materiality first) ===== -->
     <section class="card">
       <h2>Excluded GL classes</h2>
@@ -161,10 +222,15 @@
       <div id="r3Body"><div class="loading">Loading&hellip;</div></div>
     </section>
 
-    <!-- ===== Report 1: model baseline (reference) ===== -->
+    <!-- ===== Report 1: model baseline (reference + per-row review) ===== -->
     <section class="card">
-      <h2>Model baseline</h2>
-      <p class="sub">The GL-class &rarr; account mappings the model defines, per company &mdash; with each account&rsquo;s description. This is what each one <em>should</em> look like; verify the account assigned to each.</p>
+      <div class="card-head">
+        <div>
+          <h2>Model baseline</h2>
+          <p class="sub">The GL-class &rarr; account mappings the model defines, per company &mdash; with each account&rsquo;s description. Verify the account on each row, then mark it <strong>OK</strong> or flag a <strong>Change</strong>. Flagged rows export as a change request to send for correction in JDE.</p>
+        </div>
+        <button class="btn-sm" id="dlChangeBtn" type="button" disabled title="Enabled once you&rsquo;ve flagged at least one mapping to change">Download change request (.xlsx)</button>
+      </div>
       <div id="r1Body"><div class="loading">Loading&hellip;</div></div>
     </section>
   </main>
@@ -177,7 +243,9 @@
   function $(id) { return document.getElementById(id); }
 
   if (window.RRV8 && typeof window.RRV8.mountWorkbar === 'function') {
-    window.RRV8.mountWorkbar({ activePage: 'model-review', manageUser: true });
+    // Standalone accounting flow reached from Home — no cross-page inventory
+    // nav (nav:false). Keeps the Connected pill, Home link, and identity chip.
+    window.RRV8.mountWorkbar({ manageUser: true, nav: false });
   }
 
   var RR_CONFIG = window.RR_CONFIG || { mode: 'demo', dataPath: 'data/' };
@@ -233,20 +301,6 @@
   function toast(msg) { var t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(_toastT); _toastT = setTimeout(function () { t.classList.remove('show'); }, 3200); }
 
   var TABLE_CAP = 250;
-  // Render a list of row-objects as a dynamic table (headers = union of keys
-  // from the first row). Robust to whichever columns the integrity view emits.
-  function renderTable(container, rows, emptyMsg) {
-    if (!rows || !rows.length) { container.innerHTML = '<div class="empty">' + esc(emptyMsg) + '</div>'; return; }
-    var cols = Object.keys(rows[0]);
-    var shown = rows.slice(0, TABLE_CAP);
-    var html = '<div class="tbl-wrap"><table><thead><tr>' +
-      cols.map(function (c) { return '<th>' + esc(c) + '</th>'; }).join('') +
-      '</tr></thead><tbody>' +
-      shown.map(function (r) { return '<tr>' + cols.map(function (c) { return '<td>' + esc(r[c]) + '</td>'; }).join('') + '</tr>'; }).join('') +
-      '</tbody></table></div>';
-    if (rows.length > TABLE_CAP) html += '<div class="tbl-foot">Showing ' + TABLE_CAP + ' of ' + rows.length.toLocaleString('en-US') + ' rows.</div>';
-    container.innerHTML = html;
-  }
 
   // Case-insensitive field read (SQL column casing varies).
   function field(r, name) {
@@ -263,7 +317,7 @@
     var map = Object.create(null);
     rows.forEach(function (r) {
       var co = field(r, 'CompanyNumber'), gl = field(r, 'GLClass');
-      var key = co + ' ' + gl;
+      var key = co + ' ' + gl;
       if (!map[key]) map[key] = { co: co, gl: gl, items: 0 };
       map[key].items++;
     });
@@ -275,6 +329,51 @@
       '</tbody></table></div>' +
       '<div class="tbl-foot">' + groups.length + ' GL class' + (groups.length === 1 ? '' : 'es') + ' excluded &middot; ' +
       rows.length.toLocaleString('en-US') + ' item' + (rows.length === 1 ? '' : 's') + ' affected</div>';
+    container.innerHTML = html;
+  }
+
+  // Model baseline (Report 1, lean projection): Company / GL class / Account /
+  // Account name. TableNumber + DocType are the DMAAI key — constant down the
+  // table (4152 is fixed; the document type is set per company in JDE) — so
+  // they're folded into a caption instead of repeated in a column.
+  function renderBaseline(container, rows, emptyMsg) {
+    if (!rows || !rows.length) { container.innerHTML = '<div class="empty">' + esc(emptyMsg) + '</div>'; return; }
+    function distinct(name) {
+      var seen = Object.create(null), out = [];
+      rows.forEach(function (r) { var v = field(r, name); if (v && !seen[v]) { seen[v] = 1; out.push(v); } });
+      return out;
+    }
+    var tables = distinct('TableNumber'), docTypes = distinct('DocType'), bits = [];
+    if (tables.length)   bits.push('table ' + esc(tables.join(', ')));
+    if (docTypes.length) bits.push('document type ' + esc(docTypes.join(', ')));
+    var caption = bits.length ? '<div class="tbl-cap">Model DMAAI ' + bits.join(' &middot; ') + '</div>' : '';
+
+    var shown = rows.slice(0, TABLE_CAP);
+    var html = caption + '<div class="tbl-wrap"><table><thead><tr>' +
+      '<th>Company</th><th>GL class</th><th>Account</th><th>Account name</th><th>Review</th><th>Requested change</th>' +
+      '</tr></thead><tbody>' +
+      shown.map(function (r) {
+        var co = field(r, 'CompanyNumber'), gl = field(r, 'GLCLass');
+        var acct = field(r, 'LongAccount'), desc = field(r, 'AccountDescription');
+        var rev = _reviews[co + '|' + gl];
+        var status = rev ? rev.status : '';
+        var snap = rev && rev.accountSnapshot != null ? String(rev.accountSnapshot).trim() : '';
+        var stale = !!rev && snap !== '' && snap !== acct;     // model account moved since review
+        var note = rev && rev.requestedChange ? rev.requestedChange : '';
+        return '<tr data-co="' + esc(co) + '" data-gl="' + esc(gl) + '">' +
+          '<td>' + esc(co) + '</td>' +
+          '<td>' + esc(gl) + '</td>' +
+          '<td>' + esc(acct) + '</td>' +
+          '<td>' + esc(desc) + '</td>' +
+          '<td class="rev-cell"><span class="rev-toggle">' +
+            '<button type="button" class="rev-btn rev-ok' + (status === 'ok' ? ' is-active' : '') + '" data-rev="ok">OK</button>' +
+            '<button type="button" class="rev-btn rev-change' + (status === 'change' ? ' is-active' : '') + '" data-rev="change">Change</button>' +
+          '</span>' + (stale ? '<span class="rev-stale" title="The model account changed since this was reviewed — re-check it.">re-review</span>' : '') + '</td>' +
+          '<td class="rev-note-cell"><input class="rev-note" type="text" placeholder="What should change?" value="' + esc(note) + '"' + (status === 'change' ? '' : ' disabled') + '></td>' +
+        '</tr>';
+      }).join('') +
+      '</tbody></table></div>';
+    if (rows.length > TABLE_CAP) html += '<div class="tbl-foot">Showing ' + TABLE_CAP + ' of ' + rows.length.toLocaleString('en-US') + ' rows.</div>';
     container.innerHTML = html;
   }
 
@@ -344,21 +443,149 @@
     if (!$('attestChk').checked) return;
     var btn = $('approveBtn'); btn.disabled = true; btn.textContent = 'Approving…';
     rrFetch('inventory/integrity/model-approval', { method: 'POST', body: { note: $('note').value || null } })
-      .then(function (m) { renderVerdict(m); toast('Model approved — recorded with your name and today’s date.'); })
+      .then(function (m) { renderVerdict(m); applyGate(); toast('Model approved — recorded with your name and today’s date.'); })
       .catch(function (err) { toast('Approval failed: ' + String(err && err.message || err)); btn.disabled = false; });
   }
 
+  // --- Company filter: a review aid that narrows both tables. Both datasets
+  // are kept whole; the picker just re-renders a company-scoped slice. Not
+  // permission-tied — the verdict + stats stay model-level. ---
+  var _r3Rows = [], _r1Rows = [], _company = '';
+  // Per-row reviews, keyed "company|glClass". Loaded from the agent; the
+  // change report + the sign-off gate read from here.
+  var _reviews = Object.create(null), _openChanges = 0;
+
+  function distinctCompanies() {
+    var seen = Object.create(null), out = [];
+    _r1Rows.concat(_r3Rows).forEach(function (r) {
+      var c = field(r, 'CompanyNumber');
+      if (c && !seen[c]) { seen[c] = 1; out.push(c); }
+    });
+    return out.sort();
+  }
+  function rebuildCompanyPicker() {
+    var cos = distinctCompanies(), sel = $('companyPick');
+    if (cos.length < 2) { $('filterBar').hidden = true; return; }   // nothing to pick between
+    if (_company && cos.indexOf(_company) === -1) _company = '';     // prior pick no longer present
+    sel.innerHTML = '<option value="">All companies</option>' +
+      cos.map(function (c) { return '<option value="' + esc(c) + '"' + (c === _company ? ' selected' : '') + '>' + esc(c) + '</option>'; }).join('');
+    $('filterBar').hidden = false;
+  }
+  function byCompany(rows) {
+    if (!_company) return rows;
+    return rows.filter(function (r) { return field(r, 'CompanyNumber') === _company; });
+  }
+  function renderR3() {
+    renderExcluded($('r3Body'), byCompany(_r3Rows),
+      _company ? ('No excluded GL classes for company ' + _company + '.')
+               : 'No excluded GL classes — every GL class used in inventory is in the model.');
+  }
+  function renderR1() {
+    renderBaseline($('r1Body'), byCompany(_r1Rows),
+      _company ? ('No model mappings for company ' + _company + '.') : 'The model baseline is empty.');
+  }
+
+  // --- Per-row review: persist a verdict, recompute the change gate. ---
+  function reviewKey(rv) { return String(rv.companyNumber || '').trim() + '|' + String(rv.glClass || '').trim(); }
+
+  function saveReview(co, gl, status, note) {
+    rrFetch('inventory/integrity/model-row-review', {
+      method: 'POST',
+      body: { company: co, glClass: gl, status: status, requestedChange: note || null }
+    }).then(function (saved) {
+      _reviews[co + '|' + gl] = saved;
+      renderR1();     // reflect active state + note enable + stale badge
+      applyGate();    // recompute outstanding changes + sign-off gate + download button
+    }).catch(function (err) { toast('Couldn’t save the review: ' + String(err && err.message || err)); });
+  }
+
+  // Count open changes across the WHOLE model (not the filtered view), drive
+  // the sign-off gate: you can't attest a model you've flagged as wrong.
+  function applyGate() {
+    var n = 0;
+    for (var k in _reviews) if (_reviews[k] && _reviews[k].status === 'change') n++;
+    _openChanges = n;
+
+    var note = $('changesNote');
+    if (note) {
+      if (n > 0) {
+        note.hidden = false;
+        note.textContent = n + (n === 1 ? ' mapping is flagged for change. Resolve it' : ' mappings are flagged for change. Resolve them')
+          + ' in JDE (the flag clears after the next refresh) or export the change request below — you can’t sign off while a mapping is flagged wrong.';
+      } else { note.hidden = true; }
+    }
+    var chk = $('attestChk');
+    if (chk) {
+      if (n > 0) { chk.checked = false; chk.disabled = true; var b = $('approveBtn'); if (b) b.disabled = true; }
+      else { chk.disabled = false; }
+    }
+    var dl = $('dlChangeBtn'); if (dl) dl.disabled = (n === 0);
+  }
+
+  // Binary sibling of rrFetch (xlsx download), routed to the active DB's agent.
+  function rrFetchBinary(area) {
+    var d = activeDb();
+    if (!d || !d.ip) return Promise.reject(new Error('no active DB'));
+    var base = (/^(?:localhost|127\.0\.0\.1)\b/i.test(d.ip) ? 'http://' : 'https://') + d.ip;
+    var h = { 'Accept': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
+    try { var t = localStorage.getItem('rrv8.token'); if (t) h['Authorization'] = 'Bearer ' + t; } catch (_) {}
+    return fetch(base + '/' + area, { headers: h }).then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status); return r.arrayBuffer();
+    });
+  }
+  function downloadChangeReport() {
+    var btn = $('dlChangeBtn'), label = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Preparing…';
+    rrFetchBinary('inventory/integrity/model-change-report').then(function (buf) {
+      var blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      var url = URL.createObjectURL(blob), a = document.createElement('a');
+      a.href = url; a.download = 'DMAAI-Change-Request.xlsx';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+      btn.textContent = label; applyGate();
+    }).catch(function (err) {
+      toast('Couldn’t build the change request: ' + String(err && err.message || err));
+      btn.textContent = label; applyGate();
+    });
+  }
+
   function boot() {
-    $('attestChk').addEventListener('change', function () { $('approveBtn').disabled = !this.checked; });
+    $('attestChk').addEventListener('change', function () { if (!this.disabled) $('approveBtn').disabled = !this.checked; });
     $('approveBtn').addEventListener('click', doApprove);
+    $('companyPick').addEventListener('change', function () { _company = this.value; renderR3(); renderR1(); });
+    $('dlChangeBtn').addEventListener('click', downloadChangeReport);
+
+    // Delegated row-review controls (the baseline table is re-rendered, so
+    // bind on the stable container, not the rows).
+    $('r1Body').addEventListener('click', function (e) {
+      var btn = e.target.closest ? e.target.closest('.rev-btn') : null;
+      if (!btn) return;
+      var tr = btn.closest('tr'); if (!tr) return;
+      var co = tr.getAttribute('data-co'), gl = tr.getAttribute('data-gl');
+      var status = btn.getAttribute('data-rev');
+      var input = tr.querySelector('.rev-note');
+      saveReview(co, gl, status, (status === 'change' && input) ? input.value : null);
+    });
+    $('r1Body').addEventListener('change', function (e) {
+      var input = e.target.closest ? e.target.closest('.rev-note') : null;
+      if (!input) return;
+      var tr = input.closest('tr'); if (!tr) return;
+      saveReview(tr.getAttribute('data-co'), tr.getAttribute('data-gl'), 'change', input.value);
+    });
+
     var db = activeDb();
     if (db && db.n) $('js-topbar-db').textContent = db.n;
 
-    loadStatus();
-    integrityRows('v_integrity3_exc_glc').then(function (rows) { renderExcluded($('r3Body'), rows, 'No excluded GL classes — every GL class used in inventory is in the model.'); })
+    loadStatus().then(applyGate);
+    // Per-row reviews — load first so the baseline render shows saved verdicts.
+    rrFetch('inventory/integrity/model-row-reviews').then(pluck).then(function (rows) {
+      _reviews = Object.create(null);
+      (rows || []).forEach(function (rv) { _reviews[reviewKey(rv)] = rv; });
+      renderR1(); applyGate();
+    }).catch(function () { /* reviews unavailable on this DB — grid still loads, gate stays open */ });
+    integrityRows('v_integrity3_exc_glc').then(function (rows) { _r3Rows = rows || []; rebuildCompanyPicker(); renderR3(); })
       .catch(function () { $('r3Body').innerHTML = '<div class="empty">Couldn’t load excluded GL classes.</div>'; });
-    // Enriched baseline: OrderType dropped + F0901 account description added (after Subsidiary), agent-side.
-    rrFetch('inventory/integrity/model-baseline').then(pluck).then(function (rows) { renderTable($('r1Body'), rows, 'The model baseline is empty.'); })
+    // Lean baseline: agent returns Company / GL class / Account / Account name (+ Table/DocType for the caption).
+    rrFetch('inventory/integrity/model-baseline').then(pluck).then(function (rows) { _r1Rows = rows || []; rebuildCompanyPicker(); renderR1(); })
       .catch(function () { $('r1Body').innerHTML = '<div class="empty">Couldn’t load the model baseline.</div>'; });
   }
 
