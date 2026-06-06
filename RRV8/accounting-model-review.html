@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<!--
+  =============================================================================
+  RRV8: Accounting > Model DMAAI Review  (lean review + approve)
+  =============================================================================
+  A focused surface for the model DMAAI strategy: the model DMAAI table
+  (4152 PI) maps every inventory GL class to a GL account. GSI surfaces the
+  diagnostic, but only the customer's accounting team can attest the mappings
+  are correct, so this page ends in a single MODEL-LEVEL sign-off.
+
+  Three sections:
+    - Excluded GL classes  (Integrity Report 3 / v_integrity3_exc_glc) —
+      items whose GL class isn't in the model, so their value is NOT counted.
+      The materiality, shown first.
+    - Model baseline       (Integrity Report 1 / v_integrity1_aai_base) —
+      the GL-class -> account mappings the model defines. The reference.
+    - Approve the model    — GET/POST /inventory/integrity/model-approval.
+      Records who/when (a small model-level attestation); the Home card's
+      verdict reads from the same endpoint.
+
+  Tables render dynamically from whatever columns the integrity views return
+  (robust to schema), capped for display. Deliberately leaner than the full
+  analyzer worklist on accounting-dmaais.html.
+  =============================================================================
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Model DMAAI Review &mdash; RapidReconciler V8</title>
+<link href="fonts/fonts.css" rel="stylesheet">
+<link href="sidebar.css" rel="stylesheet">
+<script src="config.js"></script>
+<script src="sidebar.js"></script>
+<style>
+  :root {
+    --navy: #1f2d4a; --blue: #2b5fb0; --blue-pale: #e6efff;
+    --orange: #f08a24; --orange-pale: #fbe7ce; --orange-deep: #d97316;
+    --green: #2e8a55; --green-pale: #def4e6; --green-deep: #1a6b3f;
+    --red: #c0392b; --red-pale: #fce5e1;
+    --bg: #fafbfd; --bg-soft: #f3f5f9; --bg-card: #ffffff;
+    --text: #1f2d4a; --text-soft: #4a5468; --text-muted: #828a9a;
+    --rule: #e6eaf0; --rule-strong: #cfd6e0;
+    --shadow-sm: 0 1px 2px rgba(20,32,55,.04);
+    --shadow-md: 0 4px 14px rgba(20,32,55,.08);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: 'Open Sans', sans-serif; }
+  .page { max-width: 1080px; margin: 0 auto; padding: 26px 28px 60px; }
+  h1 { font-family: 'Source Sans 3', sans-serif; font-size: 26px; margin: 0 0 4px; color: var(--navy); }
+  .lede { color: var(--text-soft); font-size: 14.5px; line-height: 1.55; margin: 0 0 4px; max-width: 760px; }
+  .card { background: var(--bg-card); border: 1px solid var(--rule); border-radius: 14px; box-shadow: var(--shadow-sm); padding: 22px; margin-top: 18px; }
+  .card h2 { font-family: 'Source Sans 3', sans-serif; font-size: 17px; margin: 0 0 3px; color: var(--navy); }
+  .card .sub { color: var(--text-muted); font-size: 12.5px; margin: 0 0 14px; }
+  .note-band { display: flex; gap: 10px; align-items: flex-start; background: var(--bg-soft); border: 1px solid var(--rule); border-radius: 10px; padding: 12px 14px; font-size: 13px; color: var(--text-soft); line-height: 1.5; margin-top: 14px; }
+  .note-band svg { width: 16px; height: 16px; color: var(--blue); flex-shrink: 0; margin-top: 2px; }
+
+  /* Verdict banner */
+  .verdict { display: flex; align-items: center; gap: 14px; border-radius: 12px; padding: 16px 18px; border: 1px solid var(--rule); }
+  .verdict.is-approved { background: var(--green-pale); border-color: #cfe6d8; }
+  .verdict.is-amber { background: var(--orange-pale); border-color: #f0d2a8; }
+  .verdict-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+  .verdict.is-approved .verdict-dot { background: var(--green); }
+  .verdict.is-amber .verdict-dot { background: var(--orange); }
+  .verdict-main { flex: 1; min-width: 0; }
+  .verdict-title { font-weight: 800; font-size: 15px; color: var(--navy); }
+  .verdict-sub { font-size: 13px; color: var(--text-soft); margin-top: 2px; }
+
+  .stat-row { display: flex; gap: 26px; margin: 16px 0 4px; flex-wrap: wrap; }
+  .stat { }
+  .stat-n { font-family: 'Source Sans 3', sans-serif; font-weight: 800; font-size: 22px; color: var(--navy); }
+  .stat-n.warn { color: var(--orange-deep); }
+  .stat-k { font-size: 11.5px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .07em; font-weight: 700; }
+
+  /* Approve controls */
+  .approve-row { margin-top: 16px; }
+  .attest { display: flex; gap: 9px; align-items: flex-start; font-size: 13.5px; color: var(--text); cursor: pointer; line-height: 1.5; }
+  .attest input { width: 16px; height: 16px; margin-top: 1px; accent-color: var(--green); flex-shrink: 0; }
+  textarea#note { width: 100%; margin-top: 12px; border: 1px solid var(--rule-strong); border-radius: 9px; padding: 10px 12px; font-family: inherit; font-size: 13.5px; color: var(--navy); resize: vertical; min-height: 64px; }
+  .btn { border: 1px solid var(--rule-strong); background: var(--bg-card); border-radius: 9px; padding: 9px 18px; font-weight: 800; font-size: 13.5px; cursor: pointer; font-family: inherit; color: var(--text); }
+  .btn-primary { background: var(--green); border-color: var(--green); color: #fff; }
+  .btn-primary:hover { background: var(--green-deep); border-color: var(--green-deep); }
+  .btn-primary:disabled { opacity: .5; cursor: default; }
+  .btn-row { display: flex; gap: 10px; align-items: center; margin-top: 14px; }
+
+  /* Tables */
+  .tbl-wrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 10px; margin-top: 4px; }
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+  th, td { text-align: left; padding: 7px 11px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+  th { background: var(--bg-soft); color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; font-size: 10.5px; font-weight: 800; position: sticky; top: 0; }
+  tbody tr:last-child td { border-bottom: 0; }
+  .tbl-foot { font-size: 12px; color: var(--text-muted); padding: 8px 2px 0; }
+  .empty { padding: 26px; text-align: center; color: var(--text-muted); font-size: 13px; }
+  .loading { padding: 26px; text-align: center; color: var(--text-muted); font-size: 13px; }
+  .toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); background: var(--navy); color: #fff; padding: 11px 18px; border-radius: 10px; font-size: 13.5px; box-shadow: var(--shadow-md); opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 50; }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+  <!-- Topbar (populated by sidebar.js mountWorkbar: Connected pill + Home + user chip) -->
+  <header class="topbar">
+    <div class="topbar-brand">
+      <img class="topbar-brand-logo" src="../Images/gsi-logo.png" alt="GSI">
+      <span class="topbar-brand-text">
+        <span class="topbar-brand-name">RapidReconciler</span>
+        <span class="topbar-brand-db" id="js-topbar-db">&mdash;</span>
+      </span>
+    </div>
+  </header>
+  <div class="user-menu" id="js-user-menu" role="menu" hidden></div>
+
+  <main class="page" id="js-page">
+    <h1>Model DMAAI Review</h1>
+    <p class="lede">
+      The model DMAAI table (<strong>4152&nbsp;PI</strong>) is what RapidReconciler reads on
+      every import to decide which GL account each inventory transaction posts to. The goal here
+      is to confirm <strong>every GL class used in inventory processing maps to the correct
+      account</strong>, then sign off on the model.
+    </p>
+
+    <!-- ===== Approve / verdict ===== -->
+    <section class="card" id="approveCard">
+      <h2>Review &amp; approve the model</h2>
+      <p class="sub">One sign-off for the whole model table on this database.</p>
+      <div class="verdict is-amber" id="verdict">
+        <span class="verdict-dot"></span>
+        <div class="verdict-main">
+          <div class="verdict-title" id="verdictTitle">Loading&hellip;</div>
+          <div class="verdict-sub" id="verdictSub">Checking the model and any sign-off on record.</div>
+        </div>
+      </div>
+
+      <div class="stat-row">
+        <div class="stat"><div class="stat-n" id="statR1">&mdash;</div><div class="stat-k">GL-class &rarr; account mappings</div></div>
+        <div class="stat"><div class="stat-n" id="statR3">&mdash;</div><div class="stat-k">GL classes excluded</div></div>
+      </div>
+
+      <div class="approve-row" id="approveControls" hidden>
+        <label class="attest">
+          <input type="checkbox" id="attestChk">
+          <span>I confirm my accounting team has reviewed the model DMAAI mappings below (including any excluded GL classes) and they are correct for inventory transaction processing.</span>
+        </label>
+        <textarea id="note" placeholder="Optional: note which exclusions are intended, or anything worth recording with this sign-off."></textarea>
+        <div class="btn-row">
+          <button class="btn btn-primary" id="approveBtn" type="button" disabled>Approve the model</button>
+          <span class="verdict-sub" id="approveHint"></span>
+        </div>
+      </div>
+
+      <div class="note-band">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+        <span>GSI surfaces the diagnostics on this page but <strong>cannot approve your DMAAI setup</strong> &mdash; only your accounting team can confirm which account each GL class should post to. Any corrections are made in JD Edwards and <strong>appear here after the next refresh cycle</strong>.</span>
+      </div>
+    </section>
+
+    <!-- ===== Report 3: excluded GL classes (materiality first) ===== -->
+    <section class="card">
+      <h2>Excluded GL classes</h2>
+      <p class="sub">GL classes used by items but not in the model &mdash; those items&rsquo; inventory value is <strong>not counted</strong> in reconciliation. Some exclusions are intended (non-stock / expense classes); confirm each is deliberate before you approve.</p>
+      <div id="r3Body"><div class="loading">Loading&hellip;</div></div>
+    </section>
+
+    <!-- ===== Report 1: model baseline (reference) ===== -->
+    <section class="card">
+      <h2>Model baseline</h2>
+      <p class="sub">The GL-class &rarr; account mappings the model defines, per company &mdash; with each account&rsquo;s description. This is what each one <em>should</em> look like; verify the account assigned to each.</p>
+      <div id="r1Body"><div class="loading">Loading&hellip;</div></div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast"></div>
+
+<script>
+(function () {
+  'use strict';
+  function $(id) { return document.getElementById(id); }
+
+  if (window.RRV8 && typeof window.RRV8.mountWorkbar === 'function') {
+    window.RRV8.mountWorkbar({ activePage: 'model-review', manageUser: true });
+  }
+
+  var RR_CONFIG = window.RR_CONFIG || { mode: 'demo', dataPath: 'data/' };
+  var MODE = (function () {
+    try { var m = new URL(location.href).searchParams.get('mode'); if (m === 'demo' || m === 'staging' || m === 'prod') return m; } catch (_) {}
+    return RR_CONFIG.mode || 'demo';
+  })();
+  var IS_DEMO = MODE === 'demo';
+
+  function activeDb() {
+    var s = window.RR_SESSION;
+    if (!s || !Array.isArray(s.dbs)) return null;
+    return s.dbs[s.activeDbIndex || 0] || null;
+  }
+  function prodHeaders(ct) {
+    var h = { 'Accept': 'application/json' };
+    if (ct) h['Content-Type'] = ct;
+    try { var t = localStorage.getItem('rrv8.token'); if (t) h['Authorization'] = 'Bearer ' + t; } catch (_) {}
+    return h;
+  }
+  var _valcPrefixes = window.RR_VALC_PREFIXES || [];
+  var _testAreas = new Set(window.RR_TEST_AGENT_AREAS || []);
+  var _testPrefixes = window.RR_TEST_AGENT_PREFIXES || ['download-excel/'];
+  function _routesToValc(area) { for (var i = 0; i < _valcPrefixes.length; i++) if (area.indexOf(_valcPrefixes[i]) === 0) return true; return false; }
+  function _routesToTestAgent(area) { if (_testAreas.has(area)) return true; for (var i = 0; i < _testPrefixes.length; i++) if (area.indexOf(_testPrefixes[i]) === 0) return true; return false; }
+  function rrFetch(area, opts) {
+    opts = opts || {};
+    if (IS_DEMO) {
+      var f = (RR_CONFIG.dataPath || 'data/') + (opts.demoFile || area) + '.json';
+      return fetch(f, { cache: 'no-cache' }).then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
+    }
+    var base;
+    if (_routesToValc(area)) { base = RR_CONFIG.valcBase || 'http://localhost:8080'; }
+    else {
+      var d = activeDb();
+      if (!d || !d.ip) {
+        var tb = (_routesToTestAgent(area) && RR_CONFIG.testAgentBase) ? RR_CONFIG.testAgentBase : null;
+        if (!tb) return Promise.reject(new Error('no active DB'));
+        base = tb;
+      } else {
+        base = (/^(?:localhost|127\.0\.0\.1)\b/i.test(d.ip) ? 'http://' : 'https://') + d.ip;
+      }
+    }
+    return fetch(base + '/' + area, {
+      method: opts.method || 'GET',
+      headers: prodHeaders(opts.body ? 'application/json' : null),
+      body: opts.body ? JSON.stringify(opts.body) : undefined
+    }).then(function (r) { if (!r.ok) throw new Error(area + ': HTTP ' + r.status); return r.json(); });
+  }
+
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (m) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[m]; }); }
+  var _toastT;
+  function toast(msg) { var t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(_toastT); _toastT = setTimeout(function () { t.classList.remove('show'); }, 3200); }
+
+  var TABLE_CAP = 250;
+  // Render a list of row-objects as a dynamic table (headers = union of keys
+  // from the first row). Robust to whichever columns the integrity view emits.
+  function renderTable(container, rows, emptyMsg) {
+    if (!rows || !rows.length) { container.innerHTML = '<div class="empty">' + esc(emptyMsg) + '</div>'; return; }
+    var cols = Object.keys(rows[0]);
+    var shown = rows.slice(0, TABLE_CAP);
+    var html = '<div class="tbl-wrap"><table><thead><tr>' +
+      cols.map(function (c) { return '<th>' + esc(c) + '</th>'; }).join('') +
+      '</tr></thead><tbody>' +
+      shown.map(function (r) { return '<tr>' + cols.map(function (c) { return '<td>' + esc(r[c]) + '</td>'; }).join('') + '</tr>'; }).join('') +
+      '</tbody></table></div>';
+    if (rows.length > TABLE_CAP) html += '<div class="tbl-foot">Showing ' + TABLE_CAP + ' of ' + rows.length.toLocaleString('en-US') + ' rows.</div>';
+    container.innerHTML = html;
+  }
+
+  // Case-insensitive field read (SQL column casing varies).
+  function field(r, name) {
+    if (r[name] != null) return String(r[name]).trim();
+    var lo = name.toLowerCase();
+    for (var k in r) if (k.toLowerCase() === lo) return r[k] == null ? '' : String(r[k]).trim();
+    return '';
+  }
+
+  // Excluded GL classes: roll the item rows up to a per-(GL class, company)
+  // item COUNT — no item detail. The count is the materiality.
+  function renderExcluded(container, rows, emptyMsg) {
+    if (!rows || !rows.length) { container.innerHTML = '<div class="empty">' + esc(emptyMsg) + '</div>'; return; }
+    var map = Object.create(null);
+    rows.forEach(function (r) {
+      var co = field(r, 'CompanyNumber'), gl = field(r, 'GLClass');
+      var key = co + ' ' + gl;
+      if (!map[key]) map[key] = { co: co, gl: gl, items: 0 };
+      map[key].items++;
+    });
+    var groups = Object.keys(map).map(function (k) { return map[k]; }).sort(function (a, b) { return b.items - a.items; });
+    var html = '<div class="tbl-wrap"><table><thead><tr><th>GL class</th><th>Company</th><th style="text-align:right">Items excluded</th></tr></thead><tbody>' +
+      groups.map(function (g) {
+        return '<tr><td>' + esc(g.gl || '(blank)') + '</td><td>' + esc(g.co) + '</td><td style="text-align:right">' + g.items.toLocaleString('en-US') + '</td></tr>';
+      }).join('') +
+      '</tbody></table></div>' +
+      '<div class="tbl-foot">' + groups.length + ' GL class' + (groups.length === 1 ? '' : 'es') + ' excluded &middot; ' +
+      rows.length.toLocaleString('en-US') + ' item' + (rows.length === 1 ? '' : 's') + ' affected</div>';
+    container.innerHTML = html;
+  }
+
+  function integrityRows(report) {
+    if (IS_DEMO) return rrFetch('inventory/integrity', { demoFile: report.replace(/_/g, '-') }).then(pluck).catch(function () { return []; });
+    return rrFetch('inventory/status').catch(function () { return {}; }).then(function (status) {
+      var rf = (status && status.reconciliationFilter) || {};
+      return rrFetch('inventory/integrity', {
+        method: 'POST',
+        body: {
+          take: 20000, skip: 0, page: 1, pageSize: 20000,
+          report: report,
+          // Model-level: no company narrowing (the agent still JWT-scopes).
+          reconciliationFilter: {
+            currencies: [], companies: [], businessUnits: [], objects: [], subsidiaries: [],
+            period: rf.period || '2016-08-27'
+          }
+        }
+      }).then(pluck);
+    });
+  }
+  function pluck(p) { return (p && Array.isArray(p.data)) ? p.data : (Array.isArray(p) ? p : []); }
+
+  function shortName(s) { return String(s).split('@')[0]; }
+  function fmtDate(iso) { try { return new Date(iso).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }); } catch (_) { return iso; } }
+
+  var _status = null;
+  function renderVerdict(m) {
+    _status = m;
+    var v = $('verdict'), approved = (m.state === 'approved');
+    v.className = 'verdict ' + (approved ? 'is-approved' : 'is-amber');
+    $('statR1').textContent = (m.report1Count != null ? m.report1Count.toLocaleString('en-US') : '—');
+    var r3 = (m.report3GlClassCount || 0);   // distinct GL classes (not item rows)
+    var r3el = $('statR3'); r3el.textContent = r3.toLocaleString('en-US'); r3el.className = 'stat-n' + (r3 > 0 ? ' warn' : '');
+
+    if (approved) {
+      $('verdictTitle').textContent = 'Model reviewed & approved';
+      $('verdictSub').textContent = 'Approved by ' + esc(shortName(m.approvedBy || 'someone')) + ' on ' + esc(fmtDate(m.approvedDate)) + (m.note ? ' — “' + esc(m.note) + '”' : '');
+      $('approveControls').hidden = false;
+      $('attestChk').checked = false; $('approveBtn').disabled = true;
+      $('approveBtn').textContent = 'Re-approve the model';
+      $('approveHint').textContent = 'Re-approve only if you changed the model in JDE.';
+    } else if (m.state === 'needs-review') {
+      $('verdictTitle').textContent = 'Model changed since approval';
+      $('verdictSub').textContent = 'The set of excluded GL classes changed since the last sign-off — please re-review and approve again.';
+      $('approveControls').hidden = false;
+      $('approveBtn').textContent = 'Approve the model';
+      $('approveHint').textContent = '';
+    } else {
+      $('verdictTitle').textContent = 'Awaiting your accounting team’s review';
+      $('verdictSub').textContent = 'No sign-off on record yet. Review the mappings below, then approve.';
+      $('approveControls').hidden = false;
+      $('approveBtn').textContent = 'Approve the model';
+      $('approveHint').textContent = '';
+    }
+  }
+
+  function loadStatus() {
+    return rrFetch('inventory/integrity/model-approval').then(renderVerdict).catch(function (err) {
+      $('verdictTitle').textContent = 'Review the model below';
+      $('verdictSub').textContent = 'Sign-off isn’t available on this database yet — the mappings still load.';
+      $('approveControls').hidden = true;
+    });
+  }
+
+  function doApprove() {
+    if (!$('attestChk').checked) return;
+    var btn = $('approveBtn'); btn.disabled = true; btn.textContent = 'Approving…';
+    rrFetch('inventory/integrity/model-approval', { method: 'POST', body: { note: $('note').value || null } })
+      .then(function (m) { renderVerdict(m); toast('Model approved — recorded with your name and today’s date.'); })
+      .catch(function (err) { toast('Approval failed: ' + String(err && err.message || err)); btn.disabled = false; });
+  }
+
+  function boot() {
+    $('attestChk').addEventListener('change', function () { $('approveBtn').disabled = !this.checked; });
+    $('approveBtn').addEventListener('click', doApprove);
+    var db = activeDb();
+    if (db && db.n) $('js-topbar-db').textContent = db.n;
+
+    loadStatus();
+    integrityRows('v_integrity3_exc_glc').then(function (rows) { renderExcluded($('r3Body'), rows, 'No excluded GL classes — every GL class used in inventory is in the model.'); })
+      .catch(function () { $('r3Body').innerHTML = '<div class="empty">Couldn’t load excluded GL classes.</div>'; });
+    // Enriched baseline: OrderType dropped + F0901 account description added (after Subsidiary), agent-side.
+    rrFetch('inventory/integrity/model-baseline').then(pluck).then(function (rows) { renderTable($('r1Body'), rows, 'The model baseline is empty.'); })
+      .catch(function () { $('r1Body').innerHTML = '<div class="empty">Couldn’t load the model baseline.</div>'; });
+  }
+
+  var hydrate = (window.RRV8 && window.RRV8.hydrateSession) ? window.RRV8.hydrateSession() : Promise.resolve();
+  hydrate.then(function () {
+    if (!IS_DEMO) { try { if (!localStorage.getItem('rrv8.token')) { window.location.href = '../login.html'; return; } } catch (_) {} }
+    boot();
+  });
+})();
+</script>
+</body>
+</html>

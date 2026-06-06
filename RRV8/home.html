@@ -593,20 +593,19 @@
         </div>
       </div>
 
-      <!-- DMAAIs / accounting setup -->
+      <!-- Model DMAAI Review -->
       <div class="panel" id="dmaaiPanel">
         <div class="panel-head">
           <span class="panel-ico ico-dmaai"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg></span>
-          <h3>Accounting setup</h3>
+          <h3>Model DMAAI Review</h3>
         </div>
         <div class="row">
           <span class="row-dot grey" id="dmaaiDot"></span>
           <div class="row-main">
-            <div class="row-title" id="dmaaiTitle">DMAAIs</div>
-            <div class="row-sub" id="dmaaiSub">Loads automatically on first export</div>
+            <div class="row-title" id="dmaaiTitle">Model DMAAIs</div>
+            <div class="row-sub" id="dmaaiSub">Confirms every inventory GL class posts to the right account.</div>
           </div>
-          <button class="btn-sm" id="dmaaiLoadBtn" type="button" hidden>Load now</button>
-          <a class="btn-sm" href="accounting-dmaais.html">View</a>
+          <a class="btn-sm" id="dmaaiReviewBtn" href="accounting-model-review.html">Review</a>
         </div>
       </div>
 
@@ -1355,94 +1354,46 @@
     });
   }
 
-  // DMAAI preload state — read the cross-page session cache the V8 pages
-  // write (rrv8.scope.v1.<mode>.<db>.dmaais). Don't fetch here; just
-  // reflect whatever a working page has already loaded this session.
-  // Same cache key shape Reconciliation / Transactions / the DMAAIs page
-  // use (rrv8.scope.v1.<mode>.<db>.dmaais) so loading here warms the very
-  // cache the working pages read — no parallel store.
-  function dmaaiCacheKey() {
-    var a = activeDb();
-    return 'rrv8.scope.v1.' + MODE + '.' + ((a && a.n) || '_') + '.dmaais';
+  // Model DMAAI Review card. The model DMAAI table (4152 PI) maps every
+  // inventory GL class to a GL account; this card reports whether the
+  // customer's accounting team has reviewed + approved that model. Verdict
+  // (state) is agent-side; V8 owns the copy. Admin-only; graceful fallback
+  // to a neutral "open the review" state when the endpoint isn't live.
+  var DMAAI_COPY = {
+    approved:       { dot: 'green', title: 'Model reviewed & approved' },
+    'needs-review': { dot: 'amber', title: 'Model changed since approval' },
+    unapproved:     { dot: 'amber', title: 'Model awaiting your review' }
+  };
+  function loadModelApproval() {
+    if (IS_DEMO || !isAdmin()) return;
+    rrFetch('inventory/integrity/model-approval').then(function (m) {
+      if (!m || !m.state) return;
+      var c = DMAAI_COPY[m.state] || DMAAI_COPY.unapproved;
+      $('dmaaiDot').className = 'row-dot ' + c.dot;
+      $('dmaaiTitle').textContent = c.title;
+      $('dmaaiSub').textContent = modelApprovalSub(m);
+      var btn = $('dmaaiReviewBtn');
+      if (btn) btn.textContent = (m.state === 'approved') ? 'View' : 'Review & approve';
+    }).catch(function () { /* endpoint not live yet — keep the neutral default */ });
   }
-  function dmaaiRows(payload) {
-    if (!payload) return [];
-    if (Array.isArray(payload.data)) return payload.data;
-    if (Array.isArray(payload.rows)) return payload.rows;
-    return Array.isArray(payload) ? payload : [];
-  }
-  function reflectDmaai() {
-    var loadBtn = $('dmaaiLoadBtn');
-    try {
-      var obj = JSON.parse(sessionStorage.getItem(dmaaiCacheKey()) || 'null');
-      var rows = dmaaiRows(obj && obj.payload);
-      if (rows && rows.length) {
-        $('dmaaiDot').className = 'row-dot green';
-        $('dmaaiTitle').textContent = 'DMAAIs loaded · ' + rows.length.toLocaleString('en-US') + ' rows';
-        var a = activeDb();
-        $('dmaaiSub').textContent = a ? ('Ready for ' + a.n) : 'Ready';
-        if (loadBtn) loadBtn.hidden = true;
-        return;
-      }
-    } catch (_) {}
-    // Nothing cached yet — neutral, no-action-needed state.
-    $('dmaaiDot').className = 'row-dot grey';
-    $('dmaaiTitle').textContent = 'DMAAIs';
-    $('dmaaiSub').textContent = 'Loads automatically on first export';
-    if (loadBtn) loadBtn.hidden = !(caps().dm && activeDb());
-  }
-
-  // Optional manual warm — mirrors Reconciliation's preloadDmaaisInBackground
-  // (POST /inventory/integrity[v_integrity_jde_aais]) and writes the shared
-  // cache key, so the first Export is instant. Honest: it's not required.
-  var _dmaaiLoading = false;
-  function loadDmaaisNow() {
-    if (_dmaaiLoading) return;
-    _dmaaiLoading = true;
-    var btn = $('dmaaiLoadBtn');
-    if (btn) { btn.disabled = true; btn.textContent = 'Loading…'; }
-    $('dmaaiDot').className = 'row-dot amber';
-    $('dmaaiSub').textContent = 'Loading the DMAAI universe…';
-
-    var fetchP;
-    if (IS_DEMO) {
-      fetchP = rrFetch('inventory/integrity', { demoFile: 'v-integrity-jde-aais' });
-    } else {
-      fetchP = rrFetch('inventory/status').catch(function () { return {}; }).then(function (status) {
-        var rf = (status && status.reconciliationFilter) || {};
-        return rrFetch('inventory/integrity', {
-          method: 'POST',
-          body: {
-            take: 20000, skip: 0, page: 1, pageSize: 20000,
-            report: 'v_integrity_jde_aais',
-            reconciliationFilter: {
-              currencies:    rf.currencies    || [],
-              companies:     rf.companies     || [],
-              businessUnits: rf.businessUnits || [],
-              objects:       rf.objects       || [],
-              subsidiaries:  rf.subsidiaries  || [],
-              period:        rf.period || '2016-08-27'
-            }
-          }
-        });
-      });
+  function modelApprovalSub(m) {
+    var gl = (m.report3GlClassCount || 0), items = (m.report3Count || 0);
+    var exclTxt = gl === 0
+      ? 'Every GL class used in inventory is in the model.'
+      : gl + ' GL class' + (gl === 1 ? '' : 'es') + ' excluded' +
+        (items ? ' (' + items.toLocaleString('en-US') + ' item' + (items === 1 ? '' : 's') + ' not counted)' : '') + '.';
+    if (m.state === 'approved') {
+      var who = m.approvedBy ? (' by ' + shortName(m.approvedBy)) : '';
+      var when = m.approvedDate ? (' · ' + fmtApprovalDate(m.approvedDate)) : '';
+      return 'Approved' + who + when + '. ' + exclTxt;
     }
-
-    fetchP.then(function (payload) {
-      try { sessionStorage.setItem(dmaaiCacheKey(), JSON.stringify({ ts: Date.now(), payload: payload })); } catch (_) {}
-      if (window.RRV8 && window.RRV8.setDmaaiStatus) {
-        window.RRV8.setDmaaiStatus('ready', { count: dmaaiRows(payload).length });
-      }
-      toast('DMAAIs loaded.');
-    }).catch(function (err) {
-      $('dmaaiDot').className = 'row-dot red';
-      $('dmaaiSub').textContent = 'Couldn’t load — it will still load on first export';
-      toast('DMAAI load failed: ' + String(err && err.message || err));
-    }).then(function () {
-      _dmaaiLoading = false;
-      if (btn) { btn.disabled = false; btn.textContent = 'Load now'; }
-      reflectDmaai();
-    });
+    if (m.state === 'needs-review') return 'Excluded GL classes changed since sign-off. ' + exclTxt;
+    return 'Your accounting team needs to review + approve it. ' + exclTxt;
+  }
+  function shortName(s) { return String(s).split('@')[0]; }
+  function fmtApprovalDate(iso) {
+    try { var d = new Date(iso); return d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }); }
+    catch (_) { return ''; }
   }
 
   // ---- actions ----
@@ -1480,7 +1431,6 @@
     $('signOutBtn').addEventListener('click', doSignOut);
     $('footSignOut').addEventListener('click', function (e) { e.preventDefault(); doSignOut(); });
     $('importBtn').addEventListener('click', doImport);
-    $('dmaaiLoadBtn').addEventListener('click', loadDmaaisNow);
     $('restartBtn').addEventListener('click', restartService);
     $('bannerRetry').addEventListener('click', function () { setConn(false); loadStatus(); });
     $('coBox').addEventListener('change', onCompanyChange);
@@ -1529,7 +1479,7 @@
       renderScopeBar();
       renderTiles();
       renderRoleView();
-      reflectDmaai();
+      loadModelApproval();
       loadStatus();
       loadSystemStatus();
       loadPeriods();
@@ -1555,7 +1505,7 @@
       renderTiles();
       renderRoleView();
       checkFirstRun();
-      reflectDmaai();
+      loadModelApproval();
       loadStatus();
       loadSystemStatus();
       loadPeriods();
