@@ -74,7 +74,7 @@ The variance card rationale row (formatting spec, Section 6.1) shows both ratios
 2. View the item on the item ledger screen in JD Edwards, display all rows, and export to Excel. Then perform an analysis using this guide to obtain the current quantity and amount variances — these are the figures to use for the corrections in the steps below.
 3. Request an F41021 SQL correction from IT using the current quantity variance from Step 2 (DBA support required — confirm F4111 is the accurate record before proceeding).
 4. If there are any residual amounts after the quantity correction, perform a dollars-only adjustment to clear.
-5. Run Re-Roll on the RapidReconciler As Of page for all locations for the item and confirm QtyVar and AmtVar both go to zero on the next refresh.
+5. On the RapidReconciler Cardex Variance page, resolve the item with **Adjust Beginning Balance** — **Clear to JDE** once JDE is confirmed correct, or **Manual** to enter the corrected opening quantity and amount — and confirm QtyVar and AmtVar both go to zero on the next refresh. The adjustment is logged and can be undone from the Adjustment ledger.
 
 The exact wording can be specialized to the case (specific item number, location, etc.), but the step structure should be preserved.
 
@@ -121,7 +121,7 @@ An **amount variance** (`amtvar`) exists when the running amount does not agree 
 
 This means the item has been fully depleted in quantity, yet a residual dollar balance remains stranded on the inventory GL account.
 
-**JD Edwards is the system of record.** RapidReconciler calculates its cardex variance only from the point when the program was first initiated or data was last reset — it does not have visibility into transaction history that predates that point. If a discrepancy exists between RapidReconciler and JD Edwards, the Re-Roll options synchronize RapidReconciler to match JD Edwards, not the other way around.
+**JD Edwards is the system of record.** RapidReconciler calculates its cardex variance only from the point when the program was first initiated or data was last reset — it does not have visibility into transaction history that predates that point. If a discrepancy exists between RapidReconciler and JD Edwards, the Adjust Beginning Balance action synchronizes RapidReconciler to match JD Edwards, not the other way around.
 
 ### 2.1 How RapidReconciler Calculates the Beginning Balance
 
@@ -204,7 +204,7 @@ In all cases, item ledger records with a posting code (`ILIPCD`) of **X** are me
 | `IK` | Inventory Kit / Assembly receipt | Receipts finished kit into inventory at BOM cost |
 | `IR` | Inventory Receipt | Standard purchase receipt |
 | `IA` | Inventory Adjustment — quantity or dollars-only correction | Updates F4111 and F41021; high-volume items may have many small IA transactions across periods |
-| `IB` | Inventory Balance / Cost Change | Zero balance adjustments, Re-Roll entries, and P4105 manual cost revisions; created by manual P4105 changes but **not** by system-driven WAC recalculations |
+| `IB` | Inventory Balance / Cost Change | Zero balance adjustments, beginning-balance adjustment entries, and P4105 manual cost revisions; created by manual P4105 changes but **not** by system-driven WAC recalculations |
 
 ### 3.3 RapidReconciler Cardex Integrity Pop-Up Fields
 
@@ -460,7 +460,7 @@ A secondary cause is an unauthorised manual cost change in P4105, which creates 
 
 | Result | Interpretation | Next Step |
 |---|---|---|
-| Qty and amount both match JDE | JDE is correct; variance is in RapidReconciler only | Use Re-Roll options (Section 7) |
+| Qty and amount both match JDE | JDE is correct; variance is in RapidReconciler only | Use Adjust Beginning Balance (Section 7) |
 | **Amount does not match JDE, qty matches** | **True dollar-only discrepancy in JD Edwards** | **Post a dollars-only IA (Steps 5.2–5.6)** |
 | **Quantity does not match JDE** | **F4111 and F41021 quantities diverge — quantity correction required** | **Proceed to Step 5.7** |
 
@@ -561,55 +561,49 @@ If the quantity discrepancy cannot be traced to any F4111 transaction and appear
 1. Determine which system was accurate at go-live — F41021 (physical snapshot) or F4111 (transaction ledger).
 2. If F41021 was correct at go-live and F4111 has since drifted: post an IA in JD Edwards to align F4111 to F41021 for the quantity difference.
 3. If F4111 was correct at go-live and F41021 was wrong: request an F41021 SQL correction from IT for the quantity difference.
-4. After the correction, use the **Zero Beginning Balance** Re-Roll option in RapidReconciler if the earliest period balance needs to be reset to reflect the correction (see Section 7, Option 2).
+4. After the correction, use the **Zero** preset of **Adjust Beginning Balance** in RapidReconciler if the earliest period balance needs to be reset to reflect the correction (see Section 7).
 
 ---
 
 > ⚠ **Before making any changes in JD Edwards:** Test all configuration changes in a non-production environment first. For any scenario where a GL journal entry may be required, review the Transactions page in RapidReconciler for the affected items to confirm exact amounts and accounts before posting.
 
-## Section 7: RapidReconciler Resolution Using Re-Roll
+## Section 7: RapidReconciler Resolution — Adjust Beginning Balance
 
-After completing the JD Edwards correction in Section 6 (or if Step 5.1 confirmed JDE is correct and the variance is in RapidReconciler only), use the **Re-Roll Item** dialog to synchronize RapidReconciler with JD Edwards.
+After completing the JD Edwards correction in Section 6 (or if Step 5.1 confirmed JDE is correct and the variance is in RapidReconciler only), resolve the RapidReconciler side from the **Cardex Variance** page using **Adjust Beginning Balance**.
 
-> **Key principle:** The Re-Roll options do not change JD Edwards data. They recalculate or adjust RapidReconciler's internal balances to bring them into alignment with JD Edwards. **There is no Undo. Use with caution.**
+> **Key principle:** Adjust Beginning Balance does not change JD Edwards data. It sets RapidReconciler's opening (beginning) balance — both **quantity** and **amount** — to a known-correct value, shifting RapidReconciler's internal balances into alignment with JD Edwards. Every adjustment is **logged and reversible** from the Adjustment ledger.
 
-### Option 1: Re-Roll Item
+### The worklist
 
-**When to use:** UOM changes; after a JDE correction has been made and RapidReconciler needs to be recalculated.
+The Cardex Variance page presents one row per **account × grain** (the grain set by cost method and cost level; the GL account is never crossed). It lists only variances that have held **stable** across refreshes, so a day's in-process blip never reaches the list. Each row shows the netted QtyVar and AmtVar and a suggested corrective action grouped by who acts — **In RapidReconciler** (Adjust Beginning Balance), **In JD Edwards** (dollars-only IA or GL-class correction), or **With IT** (F41021 SQL correction).
 
-**What it does:** Keeps the current balance forward at the beginning of the timeline; adjusts transactions as needed; recalculates each period-ending total through the current period.
+### How to use
 
-**How to use:** Open the Re-Roll Item dialog → check **Re-Roll Item** → verify item details (Company, Branch, Item Number, Location, Lot, GI Class, Cost Level, Primary UOM, Period Ends, Quantity, Amount, QtyVar, AmtVar) → click **Re-Roll**.
+1. On the Cardex Variance page, locate the row for the item / location / lot. If it is a netted multi-line group, expand it and pick the constituent line to correct.
+2. Click the row (or its **Adjust** button) to open **Adjust Beginning Balance**.
+3. Choose a preset:
+   - **Clear to JDE** — sets the beginning so the variance nets to zero (target = current beginning − current variance). Use when JDE is confirmed correct and the variance is a RapidReconciler-only artifact. Offered for single-line rows.
+   - **Zero opening** — sets the beginning quantity and amount to zero. Use only when the item's earliest RapidReconciler period should legitimately open at zero.
+   - **Manual** — type the known-correct beginning quantity and beginning amount. Use after a JDE correction, for UOM changes, or whenever you know the true opening figures.
+4. Apply. RapidReconciler re-rolls the item forward through the current period and re-states the affected account. Quantity and amount move together — the variance baseline shifts by the same delta as the beginning balance. Clear to JDE and Zero are resolved from the item's current balance; Manual uses the figures you enter.
 
-> This is the most common re-roll option. Verify item details carefully before executing.
+### Mapping from the legacy Re-Roll options
 
-### Option 2: Zero Beginning Balance
+The three former Re-Roll choices are now the three presets of one reversible action:
 
-**When to use:** Only if the first available period for the item in RapidReconciler should have a beginning balance of zero. Confirm by selecting the oldest date from the Period Ends drop-down before using.
+| Legacy Re-Roll option | Now |
+|---|---|
+| **Re-Roll Item** | **Manual** preset — enter the known beginning quantity and amount |
+| **Zero Beginning Balance** | **Zero opening** preset — beginning quantity and amount set to 0 |
+| **Remove CX Var** | **Clear to JDE** preset — beginning set so the variance nets to zero |
 
-**What it does:** Forces the beginning balance to zero; recalculates each period total from the beginning of the timeline forward.
+### Undo
 
-> **Warning:** All perpetual period totals may change. Do not use if the earliest period has a legitimate non-zero beginning balance.
+Every Adjust Beginning Balance is recorded in the **Adjustment ledger**. Open the ledger, find the entry, and **Undo** to restore the prior beginning balance — the item is re-rolled back deterministically. Undo newest-first per item. (This is the key change from the legacy Re-Roll options, which had no undo.)
 
-### Option 3: Remove CX Var
+### Confirming the result
 
-**When to use:** JD Edwards is confirmed correct but RapidReconciler is showing a cardex variance. Requires JDE validation (Section 6.1) to be completed first.
-
-**What it does:** Removes the erroneous cardex variance displayed in RapidReconciler for the item.
-
-> **Important:** Do not use this option to mask a genuine JDE data issue. Always complete JDE validation first.
-
-### Re-Roll Quick Reference
-
-| Option | Use When | Key Caution |
-|---|---|---|
-| **Re-Roll Item** | UOM changes or general recalculation | Verify item details before executing |
-| **Zero Beg Bal** | Earliest period should be zero | All perpetual period totals recalculate |
-| **Remove CX Var** | JDE correct, RR shows variance | Complete JDE validation first |
-
-### Confirming the Result
-
-Re-Roll changes are applied immediately in RapidReconciler's internal data, but the Cardex Integrity pop-up reflects data as of the most recent nightly import. Verify the variance has cleared by checking the item after the **next nightly refresh cycle** completes. Confirm both **QtyVar** and **AmtVar** show **0**. If a variance still appears, repeat the Section 6 validation before taking further action.
+The adjustment applies immediately. The worklist row clears once the variance is gone, dropping off on the next refresh. Confirm both **QtyVar** and **AmtVar** show **0**. If a variance still appears, repeat the Section 6 validation before adjusting again, or **Undo** the adjustment from the Adjustment ledger.
 
 ---
 
@@ -642,7 +636,7 @@ Section 5 pattern classification. For dollar-only variances: identify the cost i
 State the root cause code from Section 5, the variance type (QtyVar = 0 or ≠ 0, AmtVar value), and a one-sentence summary.
 
 **[N].6 Corrective Action**
-Full step-by-step correction per Sections 5 and 6, with field-level values for the IA transaction and the Re-Roll option to use.
+Full step-by-step correction per Sections 5 and 6, with field-level values for the IA transaction and the Adjust Beginning Balance preset to use.
 
 **[N].7 Recommended Preventive Actions**
 Follow-up items specific to this item's pattern: cost review, BOM validation, IA processing controls, IB authorization confirmation, WAC monitoring, or IT coordination as applicable.
@@ -703,9 +697,9 @@ Use this checklist for each Cardex variance investigation:
 - [ ] Post dollars-only IA (qty blank, unit cost blank); verify in F4111; re-summarize to confirm tie
 
 **RapidReconciler Resolution (Section 7)**
-- [ ] Select appropriate Re-Roll option (Re-Roll Item / Zero Beg Bal / Remove CX Var)
-- [ ] Verify item details in Re-Roll dialog before executing
-- [ ] Confirm QtyVar = 0 and AmtVar = 0 after next nightly refresh
+- [ ] On the Cardex Variance page, select the appropriate Adjust Beginning Balance preset (Clear to JDE / Zero / Manual)
+- [ ] For Manual, enter the known-correct beginning quantity and amount
+- [ ] Apply; confirm QtyVar = 0 and AmtVar = 0 after next nightly refresh (the adjustment is logged and reversible from the Adjustment ledger)
 
 **Documentation**
 - [ ] Document root cause, correction posted, and date
@@ -732,7 +726,7 @@ Use this checklist for each Cardex variance investigation:
 | **PV** | Voucher Match — A/P invoice matched to a PO receipt; if invoiced cost differs from receipt cost, triggers a second WAC recalculation; appears as zero or nominal qty with a non-zero `val` |
 | **PI** | Purchase Invoice or Period Invoice; when qty = 0, it is a cost revaluation entry that resets WAC without a physical receipt |
 | **IA** | Inventory Adjustment — quantity or dollars-only correction; high-volume items may have hundreds of IA transactions per period; an IA that fails to update F41021 is the most common source of quantity variances |
-| **IB** | Inventory Balance — covers zero balance adjustments, Re-Roll entries, and P4105 manual cost revisions; created by manual P4105 changes but **not** by system-driven WAC recalculations; presence on a WAC item warrants authorisation confirmation |
+| **IB** | Inventory Balance — covers zero balance adjustments, beginning-balance adjustment entries, and P4105 manual cost revisions; created by manual P4105 changes but **not** by system-driven WAC recalculations; presence on a WAC item warrants authorisation confirmation |
 | **ILIPCD** | Item Ledger Internal Posting Code in F4111; rows where this = "X" are memo transactions and must be excluded from cardex reconciliation |
 | **F4105** | JD Edwards Item Cost file — stores all cost method buckets in the primary unit of measure; the Sales/Inventory cost method set here determines how inventory transactions are valued |
 | **F4111** | JD Edwards item ledger (transaction detail) table |
@@ -743,7 +737,8 @@ Use this checklist for each Cardex variance investigation:
 | **P4114** | JD Edwards Inventory Adjustments program |
 | **R30543** | JD Edwards Cost Component/Ledger Integrity Report — identifies standard cost items where F4105 method 07 does not equal the sum of F30026 components |
 | **UDC 40/AV** | User Defined Code table controlling which programs affect weighted average cost recalculation; P4114 must be set to "N" during a dollars-only IA in average cost environments |
-| **Re-Roll** | RapidReconciler function to recalculate or synchronize internal balances to match JD Edwards; no Undo |
+| **Adjust Beginning Balance** | RapidReconciler function that sets an item's opening (beginning) balance — quantity and amount — to a known-correct value, re-rolling internal balances into alignment with JD Edwards; logged and reversible from the Adjustment ledger. Replaces the legacy Re-Roll options (Re-Roll Item / Zero Beginning Balance / Remove CX Var), which collapse into its Manual / Zero / Clear to JDE presets |
+| **Adjustment ledger** | The log of every Adjust Beginning Balance, with a before-image of each item's prior beginning balance; an entry can be undone to restore the prior state |
 | **RapidReconciler** | Third-party reconciliation tool that compares F4111 (cardex) to F41021 (on-hand) and F0911 (GL) nightly |
 | **BOM** | Bill of Materials — the component cost structure used to price IK assembly receipts |
 
@@ -751,4 +746,4 @@ Use this checklist for each Cardex variance investigation:
 
 ---
 
-*Guide version: April 2026 (v3) | Integrates: cardex_variance.md (RapidReconciler/JDE resolution procedure), transaction-detail-analysis-guide.md Section 1 (Claude automated analysis specification), inventory-key-concepts.md (beginning balance calculation and reconciliation framework) | Maintain in shared finance repository for reuse across future Cardex reviews.*
+*Guide version: June 2026 (v4) | v4 replaces the legacy Re-Roll resolution (Section 7) with the reversible Adjust Beginning Balance action (Clear to JDE / Zero / Manual presets); the JDE-side validation procedure in Section 6 is unchanged | Integrates: cardex_variance.md (RapidReconciler/JDE resolution procedure), transaction-detail-analysis-guide.md Section 1 (Claude automated analysis specification), inventory-key-concepts.md (beginning balance calculation and reconciliation framework) | Maintain in shared finance repository for reuse across future Cardex reviews.*
