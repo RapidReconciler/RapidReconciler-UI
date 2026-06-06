@@ -591,17 +591,25 @@
     opts = opts || {};
     const bar = document.querySelector('.topbar');
     if (!bar) return null;
-    if (bar.querySelector('.workbar-nav')) return bar;  // idempotent
+    if (bar.querySelector('.workbar-right')) return bar;  // idempotent
     const activePage = opts.activePage || '';
     const search = global.location.search || '';
 
-    const nav = document.createElement('nav');
-    nav.className = 'workbar-nav';
-    nav.setAttribute('aria-label', 'Inventory');
-    nav.innerHTML = WORKBAR_NAV.map(n =>
-      '<a href="' + n.href + escapeHtml(search) + '" class="workbar-nav-item' +
-      (n.page === activePage ? ' is-active' : '') + '" data-nav-page="' +
-      n.page + '">' + escapeHtml(n.label) + '</a>').join('');
+    // Standalone surfaces (e.g. the Model DMAAI Review flow) pass nav:false —
+    // they're reached from Home and don't belong to the inventory page set,
+    // so the cross-page sub-nav would be noise. The connectivity pill, Home
+    // link, and identity chip still mount.
+    const showNav = opts.nav !== false;
+    let nav = null;
+    if (showNav) {
+      nav = document.createElement('nav');
+      nav.className = 'workbar-nav';
+      nav.setAttribute('aria-label', 'Inventory');
+      nav.innerHTML = WORKBAR_NAV.map(n =>
+        '<a href="' + n.href + escapeHtml(search) + '" class="workbar-nav-item' +
+        (n.page === activePage ? ' is-active' : '') + '" data-nav-page="' +
+        n.page + '">' + escapeHtml(n.label) + '</a>').join('');
+    }
 
     const seed = seedAgentConnectivityFromSession();
     const down = seed.cls.indexOf('is-red') !== -1;
@@ -627,7 +635,7 @@
         '<span class="sidebar-user-avatar topbar-user-avatar">?</span>' +
       '</div>';
 
-    bar.appendChild(nav);
+    if (nav) bar.appendChild(nav);
 
     // Company picker — the one surviving Scope control. Permission-
     // scoped (the page builds its options from the agent's company

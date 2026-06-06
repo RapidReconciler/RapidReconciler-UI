@@ -307,6 +307,18 @@ cannot approve the setup (only the customer's accounting team can).
     - `POST /inventory/integrity/model-approval` — record the attestation
       (body `{ "note": "<optional>" }`; the approver is taken from the JWT,
       never the body).
+    - `GET /inventory/integrity/model-baseline` — Report 1, lean projection
+      for the baseline grid (`{ total, data }`; Company / GL class / Account
+      (`LongAccount`) / Account name (`F0901.gmdl01`), plus `TableNumber` +
+      `DocType` the page folds into a caption). JWT-scoped by company.
+    - `GET /inventory/integrity/model-row-reviews` — the per-row review
+      worksheet (`{ total, data:[RowReview] }`), JWT-scoped.
+    - `POST /inventory/integrity/model-row-review` — upsert one mapping's
+      verdict (body `{ company, glClass, status: "ok"|"change",
+      requestedChange }`; reviewer from JWT, account snapshot taken
+      server-side from the live baseline).
+    - `GET /inventory/integrity/model-change-report` — the flagged rows as a
+      change-request `.xlsx` (POI, `Content-Disposition: attachment`).
 - **`GET` response (`ModelApprovalStatus`):**
 
   ```json
@@ -337,12 +349,26 @@ cannot approve the setup (only the customer's accounting team can).
   (`v_integrity1_aai_base`) + Report 3 (`v_integrity3_exc_glc`), JWT-scoped.
   Agent spec: `RapidReconciler-Agent/specs/model-dmaai-review.md`;
   table DDL: `RapidReconciler-Agent/setup/sql/create-dmaai-model-approval-table.sql`.
+- **Per-row review + change request** (layers UNDER the model-level sign-off;
+  the single attestation stays the gate). Each baseline-grid row carries an
+  **OK / Change** verdict, persisted one-current-row-per-`(Company, GLClass)`
+  in `dbo.RDmaaiRowReview` (table DDL:
+  `RapidReconciler-Agent/setup/sql/create-dmaai-row-review-table.sql`). A
+  `change` row captures a free-text requested correction and an
+  account snapshot (`LongAccount` + description at review time → drift cue +
+  plain-English report). Flagged rows export via `model-change-report` as a
+  punch list the customer hands to whoever administers their JDE DMAAIs
+  (GSI can't edit it; email is stubbed, so it's download-then-send).
+  **Sign-off is gated** in V8 while any row is flagged `change` — you can't
+  attest a model you've flagged wrong; the flag clears when JDE is corrected
+  and the next refresh moves the account (snapshot mismatch → re-review).
 - **Surfaces:** Home's **Model DMAAI Review** card (`home.html`
   `loadModelApproval`) reads the verdict; the leaner
   **`accounting-model-review.html`** shows Report 3 (excluded GL classes,
-  the materiality) + Report 1 (the model baseline) and ends in the single
-  Approve action. **Graceful fallback:** both degrade to a neutral
-  "review the model" state when the endpoint isn't live.
+  the materiality) + Report 1 (the model baseline, with the per-row review
+  controls + company filter) and ends in the single Approve action.
+  **Graceful fallback:** both degrade to a neutral "review the model" state
+  when the endpoint isn't live.
 
 ---
 
