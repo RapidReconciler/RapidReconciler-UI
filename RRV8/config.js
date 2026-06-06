@@ -144,7 +144,10 @@ window.RR_TEST_AGENT_AREAS = [
   'admin/service-health',
   // Model DMAAI Review — sign-off read + the enriched model baseline
   'inventory/integrity/model-approval',
-  'inventory/integrity/model-baseline'
+  'inventory/integrity/model-baseline',
+  // Data purge — current cutoff/size/dates + set-cutoff write
+  'inventory/integrity/purge-info',
+  'inventory/integrity/purge-cutoff'
 ];
 
 // Endpoints with a variable path segment that rrFetch needs to route
