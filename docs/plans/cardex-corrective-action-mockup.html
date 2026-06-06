@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cardex Corrective Action (Daren) &mdash; mockup</title>
+<!--
+  =============================================================================
+  PLANNING MOCKUP — not a deployed page. Self-contained, lives in docs/plans/.
+  A design artifact, NOT part of the GitHub Pages site. All data is FICTIONAL
+  and public-repo-safe (generic accounts like 1110.141000).
+  =============================================================================
+  WHO: Daren (cardex / reconciliation analyst). After Karen flags that variance
+  exists, Daren works it: decide which rows are REAL, then correct them.
+
+  THIS MOCKUP DEMONSTRATES TWO THINGS WE DESIGNED:
+
+  1) NETTING-AWARE DISPLAY — one variance row per (account x grain) group, with
+     the grain chosen by cost method + cost level, and ACCOUNT as an invariant
+     partition (we never net across a GL account because the account is the
+     reconciliation unit):
+
+        method 07 (Standard) ............ location / lot   (no netting)
+        method 02 (WAC) level 1 ......... item, all branches/locations/lots
+        method 02 (WAC) level 2 ......... branch + item
+        method 02 (WAC) level 3 ......... location / lot   (like 07)
+        method 09 (Actual) .............. by cost level, like 02  [ASSUMPTION]
+
+     Because account is the partition, a bad GL-class change that moves an item
+     from account A to account B shows as TWO real, equal-and-opposite rows that
+     survive netting — while two locations/lots of a level-1 WAC item inside ONE
+     account that offset each other net to a single clean row (noise).
+
+     This is what today's usp6_006b_cardex_variance does NOT do: it nets every
+     item the same way (lot->location->branch) ignoring cost method/level, its
+     netting keys never include the account, and it leaves the display fields
+     (reason / representative row) inconsistent. The grid below shows the
+     CORRECT result.
+
+  2) CORRECTIVE ACTION — "Adjust Beginning Balance": the analyst sets the known-
+     correct opening QUANTITY and AMOUNT (absolute), previews the resulting
+     QtyVar / AmtVar before committing, and the change is LOGGED and UNDOABLE.
+     This one reversible primitive subsumes the three legacy Re-Roll options:
+        Zero Beginning Balance  = target 0 / 0
+        Remove CX Var           = "Clear to JDE" preset (target that zeroes var)
+        Re-Roll Item            = Manual entry
+
+  WHAT THE APPLY TOUCHES (production mapping, shown as a receipt in the modal):
+     - rperpetualinv  : baselineqoh/baselineaoh shift by the same delta as the
+                        beginning; estunits/baselinevar/reason recomputed.
+     - rinvasof       : bl=1 balance-forward row set to target; per-item roll-
+                        forward re-run so every period shifts by the delta.
+     - raccountsummary: affected longaccount re-aggregated (amountonhand,
+                        balcxvar, accountvariance, outofbalance).
+     - radjustledger  : (NEW) before-image row for undo.
+  UNDO restores the before-image and re-runs the same deterministic recompute.
+  =============================================================================
+-->
+<link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700;800&family=Source+Sans+3:wght@600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --navy: #1f2d4a; --navy-deep: #16223b;
+    --orange: #f08a24; --orange-deep: #d9740f;
+    --green: #2e8a55; --green-pale: #def4e6;
+    --blue: #2f6fb0; --blue-pale: #e8f0f8;
+    --red: #c0392b; --red-pale: #fce5e1;
+    --amber: #b9821c; --amber-pale: #fbf0d8;
+    --bg: #eef1f6; --bg-card: #ffffff; --bg-soft: #f3f5f9;
+    --text: #1f2d4a; --text-soft: #4a5468; --text-muted: #828a9a;
+    --rule: #e6eaf0; --rule-strong: #cfd6e0;
+    --shadow-sm: 0 1px 2px rgba(20,32,55,.05);
+    --shadow-md: 0 4px 12px -2px rgba(20,32,55,.08);
+    --shadow-lg: 0 18px 40px -12px rgba(20,32,55,.30);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: 'Open Sans', sans-serif; font-size: 14px; }
+  h1,h2,h3,h4 { font-family: 'Source Sans 3', sans-serif; margin: 0; }
+  .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+
+  /* Mockup chrome */
+  .mock-bar { background: var(--navy); color: #fff; padding: 10px 20px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 13px; }
+  .mock-bar .pill { background: var(--orange); color: #fff; font-weight: 800; font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; padding: 3px 9px; border-radius: 100px; }
+  .mock-bar .where { color: rgba(255,255,255,.72); }
+  .stage { max-width: 1180px; margin: 0 auto; padding: 24px 20px 80px; }
+
+  .page-title { font-size: 26px; font-weight: 800; color: var(--navy); letter-spacing: -.02em; }
+  .page-sub { color: var(--text-soft); margin-top: 4px; max-width: 760px; }
+
+  /* Rule legend */
+  .legend { background: var(--bg-card); border: 1px solid var(--rule); border-radius: 14px; box-shadow: var(--shadow-sm); padding: 16px 20px; margin: 20px 0; }
+  .legend h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-muted); margin-bottom: 10px; }
+  .legend-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); gap: 10px; }
+  .legend-cell { border: 1px solid var(--rule); border-radius: 10px; padding: 10px 12px; background: var(--bg-soft); }
+  .legend-cell .k { font-weight: 800; font-size: 12px; color: var(--navy); }
+  .legend-cell .v { font-size: 12px; color: var(--text-soft); margin-top: 2px; }
+  .legend-note { margin-top: 12px; font-size: 12.5px; color: var(--text-soft); border-left: 3px solid var(--orange); padding-left: 12px; }
+  .legend-note b { color: var(--navy); }
+
+  /* Toolbar */
+  .toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 16px 0 10px; }
+  .toggle { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 700; color: var(--text-soft); cursor: pointer; user-select: none; }
+  .toggle input { width: 15px; height: 15px; accent-color: var(--blue); }
+  .spacer { flex: 1 1 auto; }
+  .kpi { display: inline-flex; flex-direction: column; align-items: flex-end; }
+  .kpi .lbl { font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--text-muted); }
+  .kpi .val { font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: 16px; color: var(--navy); }
+
+  /* Account section + table */
+  .acct { background: var(--bg-card); border: 1px solid var(--rule); border-radius: 14px; box-shadow: var(--shadow-sm); margin-bottom: 16px; overflow: hidden; }
+  .acct-head { display: flex; align-items: baseline; gap: 12px; padding: 12px 18px; border-bottom: 1px solid var(--rule); background: linear-gradient(0deg, var(--bg-soft), #fff); }
+  .acct-head .num { font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: 14px; color: var(--navy); }
+  .acct-head .nm { color: var(--text-soft); font-weight: 700; font-size: 13px; }
+  .acct-head .net { margin-left: auto; font-size: 12px; color: var(--text-muted); }
+  .acct-head .net b { font-family:'JetBrains Mono',monospace; color: var(--navy); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead th { text-align: left; font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color: var(--text-muted); padding: 9px 12px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+  th.num, td.num { text-align: right; font-family:'JetBrains Mono',monospace; font-variant-numeric: tabular-nums; }
+  tbody td { padding: 10px 12px; border-bottom: 1px solid var(--rule); vertical-align: middle; }
+  tbody tr.grp { cursor: default; }
+  tbody tr.grp:hover td { background: rgba(47,111,176,.04); }
+  tbody tr.netted td { color: var(--text-muted); background: repeating-linear-gradient(45deg,transparent,transparent 6px,rgba(130,138,154,.05) 6px,rgba(130,138,154,.05) 12px); }
+  tbody tr.kid td { background: var(--bg-soft); font-size: 12px; color: var(--text-soft); }
+  tbody tr.kid td:first-child { padding-left: 34px; }
+  .neg { color: var(--red); }
+  .pos { color: var(--green); }
+  .zero { color: var(--text-muted); }
+
+  .expander { background: none; border: 0; cursor: pointer; color: var(--text-muted); font-size: 12px; width: 18px; }
+  .expander:hover { color: var(--blue); }
+
+  .chip { display:inline-flex; align-items:center; padding:2px 8px; border-radius:100px; font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:10.5px; letter-spacing:.03em; border:1px solid transparent; white-space:nowrap; }
+  .chip.qty { background: rgba(240,138,36,.12); color:#8a5a14; border-color: rgba(240,138,36,.32); }
+  .chip.amt { background: var(--blue-pale); color: var(--blue); border-color: rgba(47,111,176,.30); }
+  .chip.clean { background: var(--green-pale); color: var(--green); border-color: rgba(46,138,85,.30); }
+  .sbadge { display:inline-flex; align-items:center; gap:5px; font-size:10px; font-weight:800; letter-spacing:.03em; padding:2px 8px; border-radius:100px; border:1px solid transparent; white-space:nowrap; }
+  .sbadge.stable   { background: var(--green-pale); color: var(--green); border-color: rgba(46,138,85,.3); }
+  .sbadge.settling { background: var(--amber-pale); color: var(--amber); border-color: rgba(185,130,28,.3); }
+  .sbadge .dot { width:6px; height:6px; border-radius:50%; background: currentColor; flex-shrink:0; }
+  .grain { display:inline-flex; align-items:center; gap:6px; font-size:11px; color: var(--text-soft); }
+  .grain .m { font-family:'JetBrains Mono',monospace; font-weight:700; color: var(--navy); }
+  .glchg { display:inline-block; margin-left:6px; font-size:10px; font-weight:800; letter-spacing:.04em; color: var(--red); background: var(--red-pale); border-radius:4px; padding:1px 5px; }
+
+  .btn { font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:12px; border-radius:8px; padding:6px 12px; border:1px solid var(--rule-strong); background:#fff; color: var(--text); cursor:pointer; }
+  .btn:hover { border-color: var(--blue); color: var(--blue); }
+  .btn.primary { background: var(--orange); color:#fff; border-color: var(--orange); }
+  .btn.primary:hover { background: var(--orange-deep); border-color: var(--orange-deep); color:#fff; }
+  .btn.ghost { border-color: transparent; }
+  .btn.sm { padding: 4px 9px; font-size: 11px; }
+
+  /* Modal */
+  .scrim { position: fixed; inset: 0; background: rgba(20,32,55,.45); display: none; align-items: flex-start; justify-content: center; padding: 48px 16px; z-index: 100; }
+  .scrim.open { display: flex; }
+  .modal { background: var(--bg-card); border-radius: 16px; box-shadow: var(--shadow-lg); width: 560px; max-width: 100%; overflow: hidden; }
+  .modal-head { padding: 16px 20px; border-bottom: 1px solid var(--rule); }
+  .modal-head h2 { font-size: 17px; font-weight: 800; color: var(--navy); }
+  .modal-head .ctx { font-size: 12px; color: var(--text-muted); margin-top: 3px; }
+  .modal-body { padding: 18px 20px; }
+  .modal-foot { padding: 14px 20px; border-top: 1px solid var(--rule); display: flex; gap: 10px; align-items: center; }
+
+  .presets { display:flex; gap:8px; margin-bottom:16px; }
+  .preset { flex:1; border:1px solid var(--rule-strong); border-radius:10px; padding:8px; text-align:center; cursor:pointer; background:#fff; }
+  .preset:hover { border-color: var(--blue); }
+  .preset.active { border-color: var(--blue); background: var(--blue-pale); }
+  .preset .pt { font-weight:800; font-size:12px; color: var(--navy); }
+  .preset .ps { font-size:10.5px; color: var(--text-muted); margin-top:2px; }
+
+  .field-row { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom: 6px; }
+  .field label { display:block; font-size:11px; font-weight:800; letter-spacing:.04em; text-transform:uppercase; color: var(--text-muted); margin-bottom:4px; }
+  .field input { width:100%; font-family:'JetBrains Mono',monospace; font-size:15px; padding:8px 10px; border:1px solid var(--rule-strong); border-radius:8px; }
+  .field input:focus { outline:none; border-color: var(--blue); box-shadow:0 0 0 2px rgba(47,111,176,.18); }
+  .field .cur { font-size:11px; color: var(--text-muted); margin-top:4px; font-family:'JetBrains Mono',monospace; }
+
+  .preview { margin-top:16px; border:1px solid var(--rule); border-radius:12px; overflow:hidden; }
+  .preview-head { background: var(--bg-soft); padding:8px 14px; font-size:11px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; color: var(--text-muted); }
+  .preview-body { display:grid; grid-template-columns:1fr 1fr; gap:1px; background: var(--rule); }
+  .preview-cell { background:#fff; padding:12px 14px; }
+  .preview-cell .pl { font-size:11px; color: var(--text-muted); }
+  .preview-cell .pv { font-family:'JetBrains Mono',monospace; font-weight:700; font-size:18px; margin-top:2px; }
+  .preview-cell .arrow { font-size:12px; color: var(--text-muted); }
+  .warn { margin-top:12px; font-size:12px; color: var(--amber); background: var(--amber-pale); border:1px solid rgba(185,130,28,.3); border-radius:8px; padding:8px 12px; display:none; }
+  .warn.show { display:block; }
+  .receipt { margin-top:14px; font-size:11.5px; color: var(--text-soft); }
+  .receipt summary { cursor:pointer; font-weight:700; color: var(--text-muted); }
+  .receipt ul { margin:8px 0 0; padding-left:18px; }
+  .receipt code { font-family:'JetBrains Mono',monospace; background: var(--bg-soft); padding:1px 5px; border-radius:4px; font-size:11px; }
+
+  /* Ledger */
+  .ledger { background: var(--bg-card); border: 1px solid var(--rule); border-radius: 14px; box-shadow: var(--shadow-sm); margin-top: 26px; overflow: hidden; }
+  .ledger-head { padding: 12px 18px; border-bottom: 1px solid var(--rule); display:flex; align-items:center; gap:10px; }
+  .ledger-head h3 { font-size: 13px; text-transform: uppercase; letter-spacing:.08em; color: var(--text-muted); }
+  .ledger-empty { padding: 22px; text-align:center; color: var(--text-muted); font-style: italic; font-size: 13px; }
+  .ledger tbody td { font-size: 12px; }
+  .led-status { font-weight:800; font-size:10.5px; letter-spacing:.04em; text-transform:uppercase; }
+  .led-status.applied { color: var(--blue); }
+  .led-status.reversed { color: var(--text-muted); }
+  tr.reversed td { color: var(--text-muted); text-decoration: line-through; text-decoration-color: rgba(130,138,154,.6); }
+  tr.reversed td:last-child { text-decoration: none; }
+
+  /* Worklist */
+  .worklist { background: var(--bg-card); border:1px solid var(--rule); border-radius:14px; box-shadow:var(--shadow-sm); margin-top:26px; overflow:hidden; }
+  .wl-head { display:flex; align-items:center; gap:10px; padding:12px 18px; border-bottom:1px solid var(--rule); }
+  .wl-head h3 { font-size:13px; text-transform:uppercase; letter-spacing:.08em; color:var(--text-muted); }
+  .wl-head .wl-sub { font-size:12px; color:var(--text-muted); }
+  .wl-empty { padding:22px; text-align:center; color:var(--text-muted); font-style:italic; font-size:13px; }
+  .wl-group:last-child .wl-row:last-child { border-bottom:0; }
+  .wl-group-head { display:flex; align-items:center; gap:10px; padding:10px 18px; background:var(--bg-soft); border-top:1px solid var(--rule); }
+  .wl-count { font-size:11.5px; color:var(--text-muted); }
+  .owner-pill { font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:10.5px; letter-spacing:.04em; text-transform:uppercase; padding:3px 10px; border-radius:100px; }
+  .owner-rr  { background: var(--blue-pale); color: var(--blue); }
+  .owner-jde { background: rgba(240,138,36,.14); color:#8a5a14; }
+  .owner-it  { background: #ece8fb; color:#6c4fd6; }
+  .wl-row { display:flex; align-items:center; gap:14px; padding:11px 18px; border-bottom:1px solid var(--rule); }
+  .wl-main { flex:1; min-width:0; }
+  .wl-action { font-size:12px; color:var(--text-soft); margin-top:3px; }
+  .wl-val { font-size:10px; font-weight:800; color:var(--amber); background:var(--amber-pale); border-radius:4px; padding:1px 6px; margin-left:4px; letter-spacing:.03em; }
+  .wl-nums { font-size:12.5px; color:var(--navy); white-space:nowrap; }
+  .wl-actions { display:flex; gap:8px; }
+  .toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%); background:var(--navy); color:#fff; padding:10px 18px; border-radius:100px; font-size:13px; font-weight:600; box-shadow:var(--shadow-lg); opacity:0; transition:opacity .18s; pointer-events:none; z-index:300; }
+  .toast.show { opacity:1; }
+</style>
+</head>
+<body>
+
+<div class="mock-bar">
+  <span class="pill">Planning mockup</span>
+  <span>Cardex Corrective Action &mdash; Daren</span>
+  <span class="where">docs/plans/ &middot; fictional data &middot; netting + reversible beginning-balance adjust</span>
+</div>
+
+<div class="stage">
+  <div class="page-title">Cardex Variance &mdash; Work &amp; Correct</div>
+  <div class="page-sub">One row per <b>account &times; grain</b>. The grain is chosen by cost method and cost level; the GL account is never crossed. Click a real variance to set its corrected beginning balance &mdash; previewed before commit, and reversible.</div>
+
+  <!-- RULE LEGEND -->
+  <div class="legend">
+    <h3>How rows are grouped (net grain)</h3>
+    <div class="legend-grid">
+      <div class="legend-cell"><div class="k">Method 07 &middot; Standard</div><div class="v">Location / lot &mdash; no netting</div></div>
+      <div class="legend-cell"><div class="k">Method 02 &middot; WAC, Level 1</div><div class="v">Item &mdash; all branches, locations, lots &rarr; one row</div></div>
+      <div class="legend-cell"><div class="k">Method 02 &middot; WAC, Level 2</div><div class="v">Branch + item &mdash; net locations / lots</div></div>
+      <div class="legend-cell"><div class="k">Method 02 &middot; WAC, Level 3</div><div class="v">Location / lot &mdash; like method 07</div></div>
+    </div>
+    <div class="legend-note"><b>Account is never crossed.</b> The account is the reconciliation unit, so a bad GL-class change that moves an item from one account to another shows as two real, equal-and-opposite rows (flagged <span class="glchg">GL-class change</span>) &mdash; they must survive. Offsetting locations/lots <i>inside the same account</i> for a Level&nbsp;1/2 WAC item are distribution noise and net to one clean row.</div>
+  </div>
+
+  <!-- TOOLBAR -->
+  <div class="toolbar">
+    <label class="toggle"><input type="checkbox" id="show-settling"> Show settling (not yet stable)</label>
+    <label class="toggle"><input type="checkbox" id="show-netted"> Show netted-clean rows (noise)</label>
+    <span class="spacer"></span>
+    <span class="kpi"><span class="lbl">Actionable (stable)</span><span class="val" id="kpi-real">&mdash;</span></span>
+    <span class="kpi" style="margin-left:22px;"><span class="lbl">Settling</span><span class="val" id="kpi-settling">&mdash;</span></span>
+    <span class="kpi" style="margin-left:22px;"><span class="lbl">Net $ stable</span><span class="val" id="kpi-amt">&mdash;</span></span>
+  </div>
+
+  <div id="accounts"></div>
+
+  <!-- ACTION WORKLIST — the payoff: stable items only, grouped by who acts -->
+  <div class="worklist">
+    <div class="wl-head">
+      <h3>What needs to be done</h3>
+      <span class="wl-sub">stable items only &middot; grouped by who acts &middot; settling items excluded</span>
+      <span class="spacer"></span>
+      <button class="btn sm" id="wl-export">Export to Excel</button>
+    </div>
+    <div id="worklist-body"></div>
+  </div>
+
+  <!-- UNDO / AUDIT LEDGER -->
+  <div class="ledger">
+    <div class="ledger-head">
+      <h3>Adjustment ledger</h3>
+      <span style="font-size:12px;color:var(--text-muted)">every Adjust Beginning Balance is logged here and can be undone</span>
+    </div>
+    <div id="ledger-body"><div class="ledger-empty">No adjustments yet &mdash; click an <b>Adjust</b> button above.</div></div>
+  </div>
+</div>
+
+<!-- ADJUST MODAL -->
+<div class="scrim" id="scrim">
+  <div class="modal" role="dialog" aria-modal="true">
+    <div class="modal-head">
+      <h2>Adjust Beginning Balance</h2>
+      <div class="ctx" id="m-ctx">&mdash;</div>
+    </div>
+    <div class="modal-body">
+      <div class="presets">
+        <div class="preset" data-preset="clear"><div class="pt">Clear to JDE</div><div class="ps">target zeroes the variance</div></div>
+        <div class="preset" data-preset="zero"><div class="pt">Zero opening</div><div class="ps">begin qty &amp; amt = 0</div></div>
+        <div class="preset active" data-preset="manual"><div class="pt">Manual</div><div class="ps">type known values</div></div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>Beginning quantity</label>
+          <input id="in-qty" type="number" step="0.01">
+          <div class="cur" id="cur-qty">current &mdash;</div>
+        </div>
+        <div class="field">
+          <label>Beginning amount</label>
+          <input id="in-amt" type="number" step="0.01">
+          <div class="cur" id="cur-amt">current &mdash;</div>
+        </div>
+      </div>
+
+      <div class="preview">
+        <div class="preview-head">Resulting variance after apply (preview)</div>
+        <div class="preview-body">
+          <div class="preview-cell"><div class="pl">QtyVar</div><div class="pv" id="pv-qty">&mdash;</div><div class="arrow" id="pv-qty-from"></div></div>
+          <div class="preview-cell"><div class="pl">AmtVar</div><div class="pv" id="pv-amt">&mdash;</div><div class="arrow" id="pv-amt-from"></div></div>
+        </div>
+      </div>
+      <div class="warn" id="warn">&mdash;</div>
+
+      <details class="receipt">
+        <summary>What this writes (and how undo reverses it)</summary>
+        <ul>
+          <li><code>rperpetualinv</code> &mdash; shift <code>baselineqoh/baselineaoh</code> by the same delta; recompute <code>estunits</code>, <code>baselinevar</code>, <code>reason</code>.</li>
+          <li><code>rinvasof</code> &mdash; set the <code>bl=1</code> balance-forward to the target; re-run the per-item roll-forward (every period shifts by the delta).</li>
+          <li><code>raccountsummary</code> &mdash; re-aggregate this account (<code>amountonhand</code>, <code>balcxvar</code>, <code>accountvariance</code>, <code>outofbalance</code>).</li>
+          <li><code>radjustledger</code> &mdash; before-image row. <b>Undo</b> writes the prior beginning back and re-runs the same deterministic recompute.</li>
+        </ul>
+      </details>
+    </div>
+    <div class="modal-foot">
+      <button class="btn primary" id="m-apply">Apply adjustment</button>
+      <button class="btn ghost" id="m-cancel">Cancel</button>
+      <span class="spacer"></span>
+      <span style="font-size:11.5px;color:var(--text-muted)" id="m-grain"></span>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ----- tolerances (mirror the sproc intent) -----
+  var QTY_TOL = 0.05;       // |net qty var| at/under this nets away
+  var THRESHOLD = 50;       // per-item $ materiality (ritems.threshold stand-in)
+  var MIN_STABLE_RUNS = 3;  // refreshes a net must hold before it's actionable (noise gate)
+
+  // ----- fmt -----
+  function money(n){ var x=Math.abs(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); return n<0?'('+x+')':x; }
+  function qty(n){ return n.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:2}); }
+  function cls(n){ return Math.abs(n)<0.005 ? 'zero' : (n<0?'neg':'pos'); }
+  function moneyCell(n){ return '<span class="'+cls(n)+'">'+(Math.abs(n)<0.005?'&mdash;':money(n))+'</span>'; }
+  function qtyCell(n){ return '<span class="'+cls(n)+'">'+(Math.abs(n)<0.005?'&mdash;':qty(n))+'</span>'; }
+
+  // ============================================================
+  //  FICTIONAL raw lines (rperpetualinv-shaped). qtyVar/amtVar are the
+  //  per-line cardex variances; blQty/blAmt the per-line beginning
+  //  balance. glchg marks lines born from a GL-class change.
+  // ============================================================
+  // glClass is the JDE inventory GL class (ritems.glclass); it maps via AAI to
+  // the inventory account. A GL-class change is exactly why MFG-200 below posts
+  // to two different accounts (RM01 -> FG01), so showing glClass makes the
+  // "GL-class change" flag self-evident.
+  // runsStable = consecutive nightly refreshes the net hasn't moved (the noise
+  // gate; >= MIN_STABLE_RUNS = actionable). baselineArtifact marks a variance the
+  // analyst has determined is a load-time baseline desync (fixable in RR, no JDE).
+  var LINES = [
+    // A) GL-class change: item MFG-200's class moved RM01 -> FG01, so its postings
+    //    moved accounts. Two accounts, equal/opposite. BOTH REAL. Stable.
+    { id:'A1', account:'1110.141000', acctName:'Raw Materials',  glClass:'RM01', branch:'BR10', item:'MFG-200', loc:'',   lot:'',     method:'02', level:2, qtyVar:0,   amtVar:-4250.00, blQty:0,    blAmt:12880.00, glchg:true, glchgFrom:'RM01', glchgTo:'FG01', runsStable:6 },
+    { id:'A2', account:'1110.141500', acctName:'Finished Goods', glClass:'FG01', branch:'BR10', item:'MFG-200', loc:'',   lot:'',     method:'02', level:2, qtyVar:0,   amtVar: 4250.00, blQty:0,    blAmt:0.00,     glchg:true, glchgFrom:'RM01', glchgTo:'FG01', runsStable:6 },
+
+    // B) Level-1 WAC, two branches inside ONE account, perfectly offsetting -> nets clean (noise).
+    { id:'B1', account:'1110.141000', acctName:'Raw Materials',  glClass:'RM01', branch:'BR10', item:'WAC-100', loc:'A1', lot:'',     method:'02', level:1, qtyVar: 30, amtVar: 75.00,  blQty:540,  blAmt:1350.00, runsStable:4 },
+    { id:'B2', account:'1110.141000', acctName:'Raw Materials',  glClass:'RM01', branch:'BR12', item:'WAC-100', loc:'B2', lot:'',     method:'02', level:1, qtyVar:-30, amtVar:-75.00,  blQty:210,  blAmt:525.00,  runsStable:4 },
+
+    // C) Method 07 standard, per location/lot (no netting). One real $ row, one clean. Stable.
+    { id:'C1', account:'1110.142000', acctName:'Work in Process', glClass:'WP01', branch:'BR20', item:'STD-07', loc:'WIP1', lot:'L9', method:'07', level:3, qtyVar:0,   amtVar: 1310.00, blQty:880,  blAmt:43120.00, runsStable:5 },
+    { id:'C2', account:'1110.142000', acctName:'Work in Process', glClass:'WP01', branch:'BR20', item:'STD-07', loc:'WIP2', lot:'L4', method:'07', level:3, qtyVar:0,   amtVar: 0.00,    blQty:300,  blAmt:14700.00, runsStable:5 },
+
+    // D) Level-2 WAC, three locations -> net to branch+item residual. SETTLING (changed last run) -> not yet suggested.
+    { id:'D1', account:'1110.141500', acctName:'Finished Goods', glClass:'FG01', branch:'BR10', item:'WAC-2', loc:'A', lot:'',       method:'02', level:2, qtyVar: 12, amtVar: 48.00,  blQty:300, blAmt:1200.00, runsStable:1 },
+    { id:'D2', account:'1110.141500', acctName:'Finished Goods', glClass:'FG01', branch:'BR10', item:'WAC-2', loc:'B', lot:'',       method:'02', level:2, qtyVar:-12, amtVar:-48.00,  blQty:150, blAmt:600.00,  runsStable:1 },
+    { id:'D3', account:'1110.141500', acctName:'Finished Goods', glClass:'FG01', branch:'BR10', item:'WAC-2', loc:'C', lot:'',       method:'02', level:2, qtyVar:  5, amtVar: 20.00,  blQty:60,  blAmt:240.00,  runsStable:1 },
+
+    // E) Level-3 WAC, single location -> real quantity variance (per loc/lot). Stable -> IT (F41021).
+    { id:'E1', account:'1110.141000', acctName:'Raw Materials', glClass:'RM01', branch:'BR10', item:'QTY-9', loc:'L1', lot:'',       method:'02', level:3, qtyVar:-83, amtVar:-415.00, blQty:1200, blAmt:6000.00, runsStable:8 },
+
+    // F) Stable amount-only known to be a load-time baseline artifact -> fixable in RR (Adjust Beginning Balance).
+    { id:'F1', account:'1110.141000', acctName:'Raw Materials', glClass:'RM01', branch:'BR10', item:'BAS-1', loc:'', lot:'',         method:'02', level:2, qtyVar:0,   amtVar: 180.00, blQty:420, blAmt:2100.00, baselineArtifact:true, runsStable:5 }
+  ];
+
+  // override map: groupKey -> { targetQ, targetA }  (applied beginning-balance adjustment)
+  var overrides = {};
+  var ledger = [];
+  var seq = 1;
+
+  // ----- net grain key + label per cost method / level -----
+  function grain(line){
+    if (line.method === '07') return { key:['07','loc'], parts:['account','branch','item','loc','lot'], label:'Location / lot', m:'07' };
+    // 02 (and 09, by assumption) -> by cost level
+    if (line.level === 1) return { key:['02','1'], parts:['account','item'], label:'Item (all br/loc/lot)', m:'02 L1' };
+    if (line.level === 2) return { key:['02','2'], parts:['account','branch','item'], label:'Branch + item', m:'02 L2' };
+    return { key:['02','3'], parts:['account','branch','item','loc','lot'], label:'Location / lot', m:'02 L3' };
+  }
+  function groupKeyOf(line){
+    var g = grain(line);
+    return g.parts.map(function(p){ return line[p]; }).join('|') + '#' + g.key.join('');
+  }
+
+  // ----- build netted groups from raw lines -----
+  function buildGroups(){
+    var map = {};
+    LINES.forEach(function(line){
+      var gk = groupKeyOf(line);
+      if (!map[gk]) {
+        var g = grain(line);
+        map[gk] = { key:gk, grainLabel:g.label, grainM:g.m, account:line.account, acctName:line.acctName,
+                    branch:line.branch, item:line.item, method:line.method, level:line.level,
+                    glchg:false, glchgFrom:line.glchgFrom, glchgTo:line.glchgTo, baselineArtifact:false,
+                    kids:[], natQty:0, natAmt:0, natBlQty:0, natBlAmt:0,
+                    locs:{}, lots:{}, glcSet:{}, runsStable:Infinity };
+      }
+      var grp = map[gk];
+      grp.kids.push(line);
+      grp.natQty += line.qtyVar; grp.natAmt += line.amtVar;
+      grp.natBlQty += line.blQty; grp.natBlAmt += line.blAmt;
+      grp.glchg = grp.glchg || !!line.glchg;
+      grp.baselineArtifact = grp.baselineArtifact || !!line.baselineArtifact;
+      grp.runsStable = Math.min(grp.runsStable, (line.runsStable == null ? 0 : line.runsStable)); // group only as stable as its least-stable line
+      if (line.glClass) grp.glcSet[line.glClass]=1;
+      if (line.loc) grp.locs[line.loc]=1; if (line.lot) grp.lots[line.lot]=1;
+    });
+    // finalize: apply override + reason
+    return Object.keys(map).map(function(k){
+      var grp = map[k];
+      var ov = overrides[k];
+      grp.blQty = ov ? ov.targetQ : grp.natBlQty;
+      grp.blAmt = ov ? ov.targetA : grp.natBlAmt;
+      grp.qtyVar = grp.natQty + (grp.blQty - grp.natBlQty);   // linear: var moves with the beginning
+      grp.amtVar = grp.natAmt + (grp.blAmt - grp.natBlAmt);
+      var gc = Object.keys(grp.glcSet);
+      grp.glClass = gc.length === 1 ? gc[0] : 'mixed';
+      grp.adjusted = !!ov;
+      grp.reason = (Math.abs(round2(grp.qtyVar)) > QTY_TOL) ? 'Quantity'
+                 : (Math.abs(round2(grp.amtVar)) > THRESHOLD) ? 'Amount' : 'clean';
+      grp.isStable = grp.runsStable >= MIN_STABLE_RUNS;   // noise gate
+      classify(grp);                                      // suggestedAction / owner / needsValidation
+      return grp;
+    });
+  }
+  function round2(n){ return Math.round(n*100)/100; }
+
+  // Suggested corrective action per the classification rules (spec section 7).
+  // The system SUGGESTS; the analyst's JDE validation picks the final branch.
+  function classify(g){
+    if (g.reason === 'clean') { g.suggestedAction=''; g.owner=''; g.needsValidation=false; return; }
+    if (g.baselineArtifact) { g.suggestedAction='Adjust Beginning Balance';                       g.owner='RapidReconciler'; g.needsValidation=false; return; }
+    if (g.glchg)            { g.suggestedAction='Correct GL class / reclassify';                  g.owner='JD Edwards';      g.needsValidation=true;  return; }
+    if (g.reason === 'Quantity') { g.suggestedAction='Validate F4111 vs F41021 → F41021 correction'; g.owner='IT'; g.needsValidation=true; return; }
+    g.suggestedAction='Validate in JDE → dollars-only IA'; g.owner='JD Edwards'; g.needsValidation=true;   // amount, single account
+  }
+  var OWNERS = ['RapidReconciler','JD Edwards','IT'];
+  var workStatus = {};   // grainkey -> 'New'|'Working'|'Worked'|'Watch'  (rcardexworkstatus stand-in)
+
+  // ----- render -----
+  var expanded = {};
+  function render(){
+    var groups = buildGroups();
+    var showNetted = document.getElementById('show-netted').checked;
+    var showSettling = document.getElementById('show-settling').checked;
+
+    // group-by account
+    var byAcct = {};
+    groups.forEach(function(g){ (byAcct[g.account] = byAcct[g.account]||[]).push(g); });
+
+    var stableCount = 0, settlingCount = 0, netAmt = 0;
+    groups.forEach(function(g){
+      if (g.reason==='clean') return;
+      if (g.isStable) { stableCount++; netAmt += g.amtVar; } else { settlingCount++; }
+    });
+    document.getElementById('kpi-real').textContent = stableCount;
+    document.getElementById('kpi-settling').textContent = settlingCount;
+    document.getElementById('kpi-amt').innerHTML = '<span class="'+cls(netAmt)+'">'+money(netAmt)+'</span>';
+
+    var host = document.getElementById('accounts');
+    host.innerHTML = '';
+    Object.keys(byAcct).sort().forEach(function(acct){
+      var grps = byAcct[acct].filter(function(g){
+        if (g.reason==='clean') return showNetted;     // netted-clean noise
+        if (!g.isStable) return showSettling;          // real but still settling
+        return true;                                   // real + stable
+      });
+      if (!grps.length) return;
+      var acctNet = byAcct[acct].reduce(function(s,g){ return s+g.amtVar; },0);
+      var nm = byAcct[acct][0].acctName;
+
+      var sec = document.createElement('div'); sec.className='acct';
+      var rows = grps.map(function(g){ return groupRow(g); }).join('');
+      sec.innerHTML =
+        '<div class="acct-head"><span class="num">'+acct+'</span><span class="nm">'+nm+'</span>'+
+          '<span class="net">account net <b class="'+cls(acctNet)+'">'+money(acctNet)+'</b></span></div>'+
+        '<table><thead><tr>'+
+          '<th style="width:24px"></th><th>Item</th><th>GL Class</th><th>Grain</th><th>Branch</th><th>Loc / Lot</th>'+
+          '<th class="num">QtyVar</th><th class="num">AmtVar</th><th>Reason</th><th>Status</th><th style="width:90px"></th>'+
+        '</tr></thead><tbody>'+rows+'</tbody></table>';
+      host.appendChild(sec);
+    });
+    wireRows();
+    renderWorklist();
+  }
+
+  function groupRow(g){
+    var multi = g.kids.length > 1;
+    var isOpen = !!expanded[g.key];
+    var locLot = '';
+    if (g.method==='07' || (g.method==='02'&&g.level===3)) { var k=g.kids[0]; locLot = (k.loc||'&mdash;')+(k.lot?(' / '+k.lot):''); }
+    else if (g.level===1) locLot = '<span style="color:var(--text-muted)">all</span>';
+    else if (g.level===2) locLot = '<span style="color:var(--text-muted)">all in '+g.branch+'</span>';
+
+    var reasonChip = g.reason==='clean'
+      ? '<span class="chip clean">netted &check;</span>'
+      : '<span class="chip '+(g.reason==='Quantity'?'qty':'amt')+'">'+g.reason+'</span>';
+
+    var adjBtn = g.reason==='clean' ? '' :
+      '<button class="btn sm primary" data-adjust="'+g.key+'">Adjust</button>';
+    var statusBadge = g.reason==='clean' ? '' :
+      (g.isStable ? '<span class="sbadge stable"><span class="dot"></span>Stable &middot; '+g.runsStable+'</span>'
+                  : '<span class="sbadge settling"><span class="dot"></span>Settling</span>');
+    var adjMark = g.adjusted ? ' <span class="chip clean" title="beginning balance adjusted">adjusted</span>' : '';
+    var glcTitle = (g.glchg && g.glchgFrom && g.glchgTo) ? ' title="GL class changed '+g.glchgFrom+' &rarr; '+g.glchgTo+'"' : '';
+    var glcPill = g.glchg ? '<span class="glchg"'+glcTitle+'>GL-class change</span>' : '';
+    var glcCell = '<span class="mono">'+g.glClass+'</span>' +
+      (g.glchg && g.glchgFrom && g.glchgTo ? ' <span class="mono" style="font-size:11px;color:var(--red)">('+g.glchgFrom+'&rarr;'+g.glchgTo+')</span>' : '');
+
+    var head =
+      '<tr class="grp'+(g.reason==='clean'?' netted':'')+'">'+
+        '<td>'+(multi?'<button class="expander" data-exp="'+g.key+'">'+(isOpen?'&#9662;':'&#9656;')+'</button>':'')+'</td>'+
+        '<td><b class="mono">'+g.item+'</b>'+glcPill+adjMark+'</td>'+
+        '<td>'+glcCell+'</td>'+
+        '<td><span class="grain"><span class="m">'+g.grainM+'</span> '+g.grainLabel+'</span></td>'+
+        '<td>'+g.branch+'</td>'+
+        '<td>'+locLot+'</td>'+
+        '<td class="num">'+qtyCell(g.qtyVar)+'</td>'+
+        '<td class="num">'+moneyCell(g.amtVar)+'</td>'+
+        '<td>'+reasonChip+'</td>'+
+        '<td>'+statusBadge+'</td>'+
+        '<td>'+adjBtn+'</td>'+
+      '</tr>';
+
+    var kids = '';
+    if (multi && isOpen) {
+      kids = g.kids.map(function(k){
+        return '<tr class="kid"><td></td><td>'+k.item+'</td>'+
+          '<td class="mono">'+(k.glClass||'')+'</td>'+
+          '<td style="font-style:italic">constituent</td>'+
+          '<td>'+k.branch+'</td>'+
+          '<td>'+((k.loc?('loc '+k.loc):'')+(k.lot?(' &middot; lot '+k.lot):'')||'&mdash;')+'</td>'+
+          '<td class="num">'+qtyCell(k.qtyVar)+'</td>'+
+          '<td class="num">'+moneyCell(k.amtVar)+'</td>'+
+          '<td></td><td></td><td></td></tr>';
+      }).join('');
+    }
+    return head + kids;
+  }
+
+  function wireRows(){
+    document.querySelectorAll('[data-exp]').forEach(function(b){
+      b.onclick = function(){ var k=b.getAttribute('data-exp'); expanded[k]=!expanded[k]; render(); };
+    });
+    document.querySelectorAll('[data-adjust]').forEach(function(b){
+      b.onclick = function(){ openModal(b.getAttribute('data-adjust')); };
+    });
+  }
+
+  // ============================================================
+  //  Adjust modal
+  // ============================================================
+  var current = null;  // current group being adjusted
+  var activePreset = 'manual';
+
+  function openModal(key){
+    var g = buildGroups().find(function(x){ return x.key===key; });
+    if (!g) return;
+    current = g;
+    document.getElementById('m-ctx').innerHTML =
+      'Account <b class="mono">'+g.account+'</b> &middot; GL class <b class="mono">'+g.glClass+'</b> &middot; item <b class="mono">'+g.item+'</b> &middot; '+g.grainLabel+
+      (g.kids.length>1?(' &middot; '+g.kids.length+' lines'):'');
+    document.getElementById('m-grain').innerHTML = 'method '+g.method+' &middot; level '+g.level;
+    document.getElementById('cur-qty').textContent = 'current ' + qty(g.blQty);
+    document.getElementById('cur-amt').textContent = 'current ' + money(g.blAmt);
+    setPreset('manual');
+    document.getElementById('in-qty').value = round2(g.blQty);
+    document.getElementById('in-amt').value = round2(g.blAmt);
+    updatePreview();
+    document.getElementById('scrim').classList.add('open');
+  }
+  function closeModal(){ document.getElementById('scrim').classList.remove('open'); current=null; }
+
+  function setPreset(p){
+    activePreset = p;
+    document.querySelectorAll('.preset').forEach(function(el){ el.classList.toggle('active', el.getAttribute('data-preset')===p); });
+    if (!current) return;
+    if (p==='zero'){ document.getElementById('in-qty').value=0; document.getElementById('in-amt').value=0; }
+    else if (p==='clear'){
+      // target that zeroes the variance: newVar = natVar + (target - natBl) = 0  ->  target = natBl - natVar
+      document.getElementById('in-qty').value = round2(current.natBlQty - current.natQty);
+      document.getElementById('in-amt').value = round2(current.natBlAmt - current.natAmt);
+    }
+    updatePreview();
+  }
+
+  function updatePreview(){
+    if (!current) return;
+    var q = parseFloat(document.getElementById('in-qty').value)||0;
+    var a = parseFloat(document.getElementById('in-amt').value)||0;
+    var newQ = current.natQty + (q - current.natBlQty);
+    var newA = current.natAmt + (a - current.natBlAmt);
+    document.getElementById('pv-qty').innerHTML = '<span class="'+cls(newQ)+'">'+(Math.abs(newQ)<0.005?'0':qty(newQ))+'</span>';
+    document.getElementById('pv-amt').innerHTML = '<span class="'+cls(newA)+'">'+(Math.abs(newA)<0.005?'0.00':money(newA))+'</span>';
+    document.getElementById('pv-qty-from').textContent = 'from ' + qty(current.qtyVar);
+    document.getElementById('pv-amt-from').textContent = 'from ' + money(current.amtVar);
+    // implied-cost sanity warn
+    var warn = document.getElementById('warn');
+    if (Math.abs(q) > 0.005) {
+      var implied = a / q;
+      var ref = current.natBlQty ? (current.natBlAmt/current.natBlQty) : implied;
+      if (ref && Math.abs(implied - ref) / Math.abs(ref || 1) > 0.5) {
+        warn.classList.add('show');
+        warn.innerHTML = 'Implied unit cost <b class="mono">'+money(implied)+'</b> is well off the current <b class="mono">'+money(ref)+'</b> &mdash; check for a transposed digit.';
+      } else warn.classList.remove('show');
+    } else warn.classList.remove('show');
+  }
+
+  function applyAdjust(){
+    if (!current) return;
+    var key = current.key;
+    var q = round2(parseFloat(document.getElementById('in-qty').value)||0);
+    var a = round2(parseFloat(document.getElementById('in-amt').value)||0);
+    var before = { override: overrides[key] ? {targetQ:overrides[key].targetQ, targetA:overrides[key].targetA} : null,
+                   blQty: current.blQty, blAmt: current.blAmt, qtyVar: current.qtyVar, amtVar: current.amtVar };
+    overrides[key] = { targetQ:q, targetA:a };
+    var after = buildGroups().find(function(x){ return x.key===key; });
+    ledger.unshift({
+      id: seq++, t: stamp(), key: key, account: current.account, item: current.item,
+      preset: activePreset, before: before,
+      after: { blQty:q, blAmt:a, qtyVar:after.qtyVar, amtVar:after.amtVar },
+      status: 'applied'
+    });
+    closeModal(); render(); renderLedger();
+  }
+
+  function undo(id){
+    var e = ledger.find(function(x){ return x.id===id; });
+    if (!e || e.status==='reversed') return;
+    if (e.before.override) overrides[e.key] = { targetQ:e.before.override.targetQ, targetA:e.before.override.targetA };
+    else delete overrides[e.key];
+    e.status = 'reversed';
+    render(); renderLedger();
+  }
+
+  function stamp(){ var d=new Date(); return d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',second:'2-digit'}); }
+
+  function renderLedger(){
+    var host = document.getElementById('ledger-body');
+    if (!ledger.length){ host.innerHTML='<div class="ledger-empty">No adjustments yet &mdash; click an <b>Adjust</b> button above.</div>'; return; }
+    var rows = ledger.map(function(e){
+      var begin = qty(e.before.blQty)+' / '+money(e.before.blAmt)+' &rarr; '+qty(e.after.blQty)+' / '+money(e.after.blAmt);
+      var resQ = (Math.abs(e.after.qtyVar)<0.005?'0':qty(e.after.qtyVar));
+      var resA = (Math.abs(e.after.amtVar)<0.005?'0.00':money(e.after.amtVar));
+      var act = e.status==='applied' ? '<button class="btn sm" data-undo="'+e.id+'">Undo</button>' : '<span style="color:var(--text-muted);font-size:11px">reversed</span>';
+      return '<tr class="'+(e.status==='reversed'?'reversed':'')+'">'+
+        '<td class="mono" style="color:var(--text-muted)">'+e.t+'</td>'+
+        '<td><b class="mono">'+e.item+'</b><div style="font-size:11px;color:var(--text-muted)">'+e.account+' &middot; '+e.preset+'</div></td>'+
+        '<td style="font-size:11.5px" class="mono">'+begin+'</td>'+
+        '<td class="num">'+resQ+'</td>'+
+        '<td class="num">'+resA+'</td>'+
+        '<td><span class="led-status '+e.status+'">'+e.status+'</span></td>'+
+        '<td>'+act+'</td></tr>';
+    }).join('');
+    host.innerHTML = '<table><thead><tr><th>Time</th><th>Item</th><th>Beginning qty / amt</th><th class="num">QtyVar</th><th class="num">AmtVar</th><th>Status</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>';
+    host.querySelectorAll('[data-undo]').forEach(function(b){ b.onclick=function(){ undo(parseInt(b.getAttribute('data-undo'),10)); }; });
+  }
+
+  // ============================================================
+  //  Worklist — "what needs to be done": stable rows, grouped by owner
+  // ============================================================
+  function ownerCls(o){ return o === 'RapidReconciler' ? 'rr' : (o === 'JD Edwards' ? 'jde' : 'it'); }
+  function activeWorklist(){
+    return buildGroups().filter(function(g){
+      return g.reason !== 'clean' && g.isStable && workStatus[g.key] !== 'Worked';
+    });
+  }
+  function wlRow(g){
+    var nums = (g.reason === 'Quantity')
+      ? 'QtyVar <b>' + qty(g.qtyVar) + '</b>'
+      : 'AmtVar <b>' + money(g.amtVar) + '</b>';
+    var val = g.needsValidation ? '<span class="wl-val">needs JDE validation</span>' : '';
+    var adjBtn    = '<button class="btn sm primary" data-wl-adjust="'+g.key+'">Adjust</button>';
+    var workedBtn = '<button class="btn sm" data-wl-worked="'+g.key+'">Mark worked</button>';
+    // RR (baseline-artifact) rows clear by Adjust; JDE/IT rows are worked externally then marked.
+    var actions = (g.owner === 'RapidReconciler') ? adjBtn : (adjBtn + ' ' + workedBtn);
+    return '<div class="wl-row">'+
+      '<div class="wl-main">'+
+        '<b class="mono">'+g.item+'</b> <span class="mono" style="color:var(--text-muted)">'+g.account+'</span>'+
+        (g.glchg?' <span class="glchg">GL-class change</span>':'')+
+        '<div class="wl-action">'+g.suggestedAction+val+'</div>'+
+      '</div>'+
+      '<div class="wl-nums mono">'+nums+'</div>'+
+      '<div class="wl-actions">'+actions+'</div>'+
+    '</div>';
+  }
+  function renderWorklist(){
+    var host = document.getElementById('worklist-body');
+    var list = activeWorklist();
+    if (!list.length){ host.innerHTML = '<div class="wl-empty">Nothing actionable &mdash; every stable variance is cleared or marked worked.</div>'; return; }
+    var byOwner = {};
+    list.forEach(function(g){ (byOwner[g.owner] = byOwner[g.owner]||[]).push(g); });
+    var html = OWNERS.map(function(owner){
+      var rows = byOwner[owner]; if (!rows || !rows.length) return '';
+      var label = owner === 'RapidReconciler' ? 'In RapidReconciler' : (owner === 'JD Edwards' ? 'In JD Edwards' : 'With IT');
+      return '<div class="wl-group">'+
+        '<div class="wl-group-head"><span class="owner-pill owner-'+ownerCls(owner)+'">'+label+'</span>'+
+          '<span class="wl-count">'+rows.length+' item'+(rows.length>1?'s':'')+'</span></div>'+
+        rows.map(wlRow).join('')+
+      '</div>';
+    }).join('');
+    host.innerHTML = html;
+    host.querySelectorAll('[data-wl-adjust]').forEach(function(b){ b.onclick=function(){ openModal(b.getAttribute('data-wl-adjust')); }; });
+    host.querySelectorAll('[data-wl-worked]').forEach(function(b){ b.onclick=function(){ workStatus[b.getAttribute('data-wl-worked')]='Worked'; toast('Marked worked'); render(); }; });
+  }
+
+  // ----- toast -----
+  function toast(msg){
+    var t = document.getElementById('toast'); if (!t) return;
+    t.textContent = msg; t.classList.add('show');
+    clearTimeout(t._timer); t._timer = setTimeout(function(){ t.classList.remove('show'); }, 2200);
+  }
+
+  // ----- wire -----
+  document.getElementById('show-settling').addEventListener('change', render);
+  document.getElementById('wl-export').addEventListener('click', function(){
+    var n = activeWorklist().length;
+    toast('Exported ' + n + ' worklist item' + (n!==1?'s':'') + ' to Excel');
+  });
+  document.getElementById('show-netted').addEventListener('change', render);
+  document.getElementById('m-cancel').addEventListener('click', closeModal);
+  document.getElementById('m-apply').addEventListener('click', applyAdjust);
+  document.getElementById('scrim').addEventListener('click', function(e){ if(e.target===this) closeModal(); });
+  document.querySelectorAll('.preset').forEach(function(el){ el.addEventListener('click', function(){ setPreset(el.getAttribute('data-preset')); }); });
+  ['in-qty','in-amt'].forEach(function(id){ document.getElementById(id).addEventListener('input', function(){ activePreset='manual'; document.querySelectorAll('.preset').forEach(function(el){el.classList.toggle('active', el.getAttribute('data-preset')==='manual');}); updatePreview(); }); });
+
+  render(); renderLedger();
+})();
+</script>
+</body>
+</html>

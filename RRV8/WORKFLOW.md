@@ -677,49 +677,30 @@ complete** &mdash; until then it&rsquo;s frozen, not the dev workflow.
   accreted dev-time hacks. Saved as
   [`feedback_v8_agent_first`](../../../.claude/projects/C--source-repos-RapidReconciler-UI/memory/feedback_v8_agent_first.md).
 
-### SQL targets the lowest customer compat level
+### SQL compat floor: SQL 2017 (compat 140) for V8
 
 Every `.sql` file under `RRV8/sprocs/`, `RRV8/views/`, and
 `RRV8/scripts/` &mdash; plus inline SQL in capture scripts and any
-sproc the agent calls &mdash; must run at the lowest **database
-compatibility level** a customer might plausibly have, not just on
-the minimum engine version. These are two different things and they
-both matter:
+sproc the agent calls &mdash; must run at **compat level 140
+(SQL Server 2017)**. Raised from compat 100 on 2026-06-06: this is a
+**hard requirement for V8**. The V8 install + every upgrade runs
+`ALTER DATABASE ... SET COMPATIBILITY_LEVEL = 140`, so the
+migrated-from-2008 case (which used to keep a stale low compat) no
+longer applies &mdash; every V8 customer instance is SQL 2017+ and at
+compat 140. Bump the dev DB `RapidReconciler_Dev` to compat 140 so it
+keeps catching violations against the new floor.
 
-- **Engine version floor**: SQL Server 2017 per the install doc
-  ([`GSIRRTech/installing-production-database.html`](../GSIRRTech/installing-production-database.html);
-  the prep checklist at
-  [`GSIRRSales/rr-installation-prep.html`](../GSIRRSales/rr-installation-prep.html)
-  pins 2019, but the install accepts 2017+).
-- **Database compatibility level**: customer-controlled and not
-  enforced by the install script. A new SQL 2019 install lands at
-  compat 150, but a customer migrating an existing RR database from
-  SQL 2008 onto a fresh SQL 2019 server keeps the source compat (100)
-  unless someone explicitly runs
-  `ALTER DATABASE ... SET COMPATIBILITY_LEVEL = 150`. The migration
-  runbook at
-  [`RRUniversity/server-migration.html`](../RRUniversity/server-migration.html)
-  calls this out as a manual step, so we can&rsquo;t assume it happened.
+**Now allowed** (use freely; the old compat-100 workarounds are no
+longer needed): `STRING_SPLIT`, `STRING_AGG`, `TRIM`,
+`CONCAT`/`CONCAT_WS`, `IIF`, `OFFSET/FETCH NEXT`,
+`TRY_CAST`/`TRY_CONVERT`/`TRY_PARSE`, `LAG`/`LEAD`/`FIRST_VALUE`,
+`SUM(x) OVER (ORDER BY y)` cumulative, JSON (`OPENJSON`, `JSON_VALUE`,
+`FOR JSON`), `CREATE OR ALTER`, `DROP ... IF EXISTS`,
+`SESSION_CONTEXT()`.
 
-The dev DB on this box (`RapidReconciler_Dev`) sits at **compat level
-100 (SQL Server 2008)** &mdash; representative of the migrated-from-2008
-case. **If code errors at compat 100 here, it&rsquo;s the wrong syntax.**
-Test there before assuming something works.
-
-Things to avoid (and their compat-100-safe replacements):
-
-| Forbidden (min compat) | Replacement |
-|---|---|
-| `STRING_SPLIT` (130) | XML split via `nodes('/x')` |
-| `STRING_AGG` (140) | `FOR XML PATH('')` + `STUFF` |
-| `TRIM` (140) | `LTRIM(RTRIM(col))` |
-| `CREATE OR ALTER` (130 SP1) | `IF OBJECT_ID(...) DROP` then `GO CREATE` |
-| `DROP ... IF EXISTS` (130) | Same `IF OBJECT_ID(...)` pattern |
-| `IIF`, `CONCAT` (110) | `CASE WHEN`; `+` with `ISNULL` |
-| `OFFSET/FETCH NEXT` (110) | `ROW_NUMBER() OVER ...` + outer `WHERE rownum BETWEEN` |
-| `TRY_CAST / TRY_CONVERT` (110) | `CASE WHEN ISNUMERIC(s) = 1 THEN CAST(...) ELSE NULL END` |
-| `SUM(x) OVER (ORDER BY y)` cumulative (110) | self-join or correlated subquery |
-| JSON functions (130) | XML, or do the work client-side |
+**Still avoid** (compat 150+ / SQL 2019+, above the floor):
+`GREATEST`/`LEAST`, `GENERATE_SERIES`, `STRING_SPLIT(..., enable_ordinal)`,
+`DATE_BUCKET`, native `json` data type, `APPROX_PERCENTILE_*`.
 
 Full table + reasoning in
 [`feedback_sql_compat_floor`](../../../.claude/projects/C--source-repos-RapidReconciler-UI/memory/feedback_sql_compat_floor.md).
