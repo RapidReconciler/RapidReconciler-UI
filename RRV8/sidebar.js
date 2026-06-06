@@ -51,7 +51,6 @@
     reconciliation:    'inventory',
     transactions:      'inventory',
     asof:              'inventory',
-    'cardex-variance': 'inventory',
     'admin-companies': 'admin',
     'admin-users':     'admin'
     // dmaais is intentionally NOT in this map: the DMAAIs link lives
@@ -123,7 +122,7 @@
 
     // is-active classes per page
     const cls = (page) => activePage === page ? ' is-active' : '';
-    const isInventoryPage = activePage === 'reconciliation' || activePage === 'transactions' || activePage === 'asof' || activePage === 'cardex-variance';
+    const isInventoryPage = activePage === 'reconciliation' || activePage === 'transactions' || activePage === 'asof';
 
     // The period filter row only renders on Reconciliation. Its
     // popover/click wiring is page-specific (in the IIFE).
@@ -246,7 +245,6 @@
       <div class="sidebar-nav-children">
         <a href="inventory-reconciliation.html" class="sidebar-nav-child${cls('reconciliation')}" data-nav-page="reconciliation">Reconciliation</a>
         <a href="inventory-transactions.html"   class="sidebar-nav-child${cls('transactions')}"   data-nav-page="transactions">Transactions</a>
-        <a href="inventory-cardex-variance.html" class="sidebar-nav-child${cls('cardex-variance')}" data-nav-page="cardex-variance">Cardex Variance</a>
         <a href="inventory-asof.html"           class="sidebar-nav-child${cls('asof')}"           data-nav-page="asof">Perpetual</a>
       </div>
     </div>
@@ -568,10 +566,12 @@
   // Object / Subsidiary / Currency filters are dropped (they surface
   // as contributor dimensions), the period lives on the bar graph,
   // and Company (the permission-scoped one) is handled per-page.
+  // Cardex Variance is intentionally NOT here: it's an admin/analyst
+  // function reached from Home (a nav:false standalone surface, like the
+  // Model DMAAI Review), not an everyday inventory sub-nav tab.
   const WORKBAR_NAV = [
     { page: 'reconciliation',  href: 'inventory-reconciliation.html',  label: 'Reconciliation' },
     { page: 'transactions',    href: 'inventory-transactions.html',    label: 'Transactions' },
-    { page: 'cardex-variance', href: 'inventory-cardex-variance.html', label: 'Cardex Variance' },
     { page: 'asof',            href: 'inventory-asof.html',            label: 'Perpetual' }
   ];
 
