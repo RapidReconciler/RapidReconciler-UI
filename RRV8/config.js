@@ -129,6 +129,9 @@ window.RR_TEST_AGENT_AREAS = [
   'inventory/set-beginning-balance',
   'inventory/undo-adjustment',
   'inventory/cardex-work-status',
+  // Reload GL — self-service GL maintenance (ReloadGlController, admin-gated)
+  'inventory/reload-gl',
+  'inventory/reload-gl/preview',
   'poll',
   'system-status',
   'available-periods',
