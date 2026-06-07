@@ -30,6 +30,7 @@
 <link href="fonts/fonts.css" rel="stylesheet">
 <script src="config.js"></script>
 <script src="sidebar.js"></script>
+<script src="../Tools/home-search.js"></script>
 <style>
   :root {
     --navy: #1f2d4a;
@@ -446,6 +447,20 @@
   .support-card[data-card="helpdesk"] .dc-search:focus-within { border-color: var(--orange); box-shadow: 0 0 0 3px var(--orange-pale); }
   .support-card[data-card="helpdesk"] .dc-go { background: var(--orange); }
   .support-card[data-card="helpdesk"] .dc-go:hover { background: var(--orange-deep); }
+
+  /* Inline results drawer under a support card (lazy-loaded on first search). */
+  .dc-drawer { margin-top: 12px; border-top: 1px solid var(--rule); padding-top: 10px; }
+  .dc-drawer[hidden] { display: none; }
+  .dc-drawer-status { font-size: 11.5px; color: var(--text-muted); margin-bottom: 6px; }
+  .dc-results { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; max-height: 300px; overflow-y: auto; }
+  .dc-result { display: block; text-decoration: none; color: inherit; border-radius: 7px; padding: 7px 9px; }
+  .dc-result:hover { background: var(--bg-soft); }
+  .dc-result-title { font-size: 13px; font-weight: 700; color: var(--navy); line-height: 1.3; }
+  .dc-result-meta { font-size: 11.5px; color: var(--text-muted); margin-top: 1px; }
+  .dc-drawer-foot { margin-top: 10px; }
+  .dc-drawer-foot a { font-size: 12px; font-weight: 700; text-decoration: none; }
+  .support-card[data-card="university"] .dc-drawer-foot a { color: var(--blue); }
+  .support-card[data-card="helpdesk"]  .dc-drawer-foot a { color: var(--orange-deep); }
 
   /* Footer: a full-width navy band mirroring the header, to frame the page. */
   .foot {
@@ -930,6 +945,7 @@
           </button>
         </div>
       </form>
+      <div class="dc-drawer" hidden></div>
     </div>
     <div class="panel support-card is-input" data-card="helpdesk">
       <div class="panel-head">
@@ -946,6 +962,7 @@
           </button>
         </div>
       </form>
+      <div class="dc-drawer" hidden></div>
     </div>
   </div>
 
@@ -1175,6 +1192,20 @@
   // Strict admin signal — the same one login.html isAdminToken + the
   // sidebar trust. Used only for the role badge label (not for gating).
   function isAdmin() { var a = activeDb(); return !!(a && a.t && a.t.adm === true); }
+
+  // The RR University module filters the signed-in user can access, mapped from
+  // caps() to the university page's module keys. Exposed for the support-card
+  // search drawer (Tools/home-search.js) so University results are scoped to
+  // what the user can actually reach. Computed on demand so it tracks DB switch.
+  window.rrUserModules = function () {
+    var c = caps();
+    var out = [];
+    if (c.inv) out.push('inventory');
+    if (c.por) out.push('ap');            // PO Receipts == A/P
+    if (c.it)  out.push('transfers');     // In Transit == Transfer Orders
+    if (c.adm) out.push('administrators');
+    return out;
+  };
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (m) {
@@ -2400,23 +2431,83 @@
 </script>
 
 <script>
-  // Support cards (RR University / Help Desk): the embedded input deep-links
-  // into the full page with ?q= prefilled and run, in a new tab (matching the
-  // cards' Open link). Isolated from boot() so a failure here can't abort it.
+  // Support cards: inline results drawer. Lazy — nothing (Lunr, the ~1MB
+  // university index, the scenarios index) loads until the first keystroke,
+  // via Tools/home-search.js. University results are scoped to the user's
+  // accessible modules; Help Desk searches all scenarios. Enter / the arrow
+  // open the full page with the query (the "see everything" path). Clicking a
+  // result opens that doc/scenario. Isolated from boot() so a failure here
+  // can't abort it.
   (function () {
-    document.querySelectorAll('form.dc-input').forEach(function (form) {
-      var go    = form.getAttribute('data-go');
-      var field = form.querySelector('input[name="q"], textarea[name="q"]');
-      function submit() {
-        var q = (field && field.value || '').trim();
-        window.open(go + (q ? ('?q=' + encodeURIComponent(q)) : ''), '_blank', 'noopener');
+    function esc(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, function (m) {
+        return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[m];
+      });
+    }
+    document.querySelectorAll('.support-card.is-input').forEach(function (card) {
+      var which  = card.getAttribute('data-card');           // 'university' | 'helpdesk'
+      var form   = card.querySelector('form.dc-input');
+      var field  = card.querySelector('input[name="q"]');
+      var drawer = card.querySelector('.dc-drawer');
+      var go     = form && form.getAttribute('data-go');
+      if (!form || !field || !drawer) return;
+      var timer = null, seq = 0;
+
+      function fullUrl(q) {
+        var params = [];
+        if (q) params.push('q=' + encodeURIComponent(q));
+        if (which === 'university' && window.rrUserModules) {
+          var mods = window.rrUserModules();
+          if (mods && mods.length) params.push('mods=' + encodeURIComponent(mods.join(',')));
+        }
+        return go + (params.length ? ('?' + params.join('&')) : '');
       }
-      form.addEventListener('submit', function (e) { e.preventDefault(); submit(); });
-      if (field && field.tagName === 'TEXTAREA') {
-        field.addEventListener('keydown', function (e) {
-          if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
-        });
+      function footLink(q) {
+        var label = which === 'university' ? 'See all in RR University &rarr;' : 'Open the Help Desk &rarr;';
+        return '<div class="dc-drawer-foot"><a href="' + esc(fullUrl(q)) + '" target="_blank" rel="noopener">' + label + '</a></div>';
       }
+      function rowHtml(r) {
+        var title = which === 'university' ? (r.sectionTitle || r.pageTitle) : r.title;
+        var meta  = which === 'university' ? r.pageTitle : r.category;
+        return '<li><a class="dc-result" href="' + esc(r.href) + '" target="_blank" rel="noopener">' +
+                 '<span class="dc-result-title">' + esc(title) + '</span>' +
+                 (meta ? '<span class="dc-result-meta">' + esc(meta) + '</span>' : '') +
+               '</a></li>';
+      }
+      function render(q, results) {
+        if (!q) { drawer.hidden = true; drawer.innerHTML = ''; return; }
+        drawer.hidden = false;
+        var status = results.length
+          ? '<strong>' + results.length + '</strong> result' + (results.length === 1 ? '' : 's') + (results.length >= 8 ? '+' : '')
+          : 'No matches for &ldquo;' + esc(q.slice(0, 60)) + '&rdquo;.';
+        drawer.innerHTML =
+          '<div class="dc-drawer-status">' + status + '</div>' +
+          (results.length ? '<ul class="dc-results">' + results.map(rowHtml).join('') + '</ul>' : '') +
+          footLink(q);
+      }
+      function search() {
+        var q = (field.value || '').trim();
+        if (!q) { render('', []); return; }
+        if (!window.HomeSearch) { return; }   // engine missing — Enter still opens the full page
+        var my = ++seq;
+        drawer.hidden = false;
+        drawer.innerHTML = '<div class="dc-drawer-status">Searching&hellip;</div>';
+        var p = which === 'university'
+          ? window.HomeSearch.university(q, { limit: 8, modules: window.rrUserModules ? window.rrUserModules() : null })
+          : window.HomeSearch.helpdesk(q, { limit: 8 });
+        p.then(function (results) { if (my === seq) render(q, results || []); })
+         .catch(function () {
+           if (my !== seq) return;
+           drawer.hidden = false;
+           drawer.innerHTML = '<div class="dc-drawer-status">Search isn&rsquo;t available right now.</div>' + footLink(q);
+         });
+      }
+
+      field.addEventListener('input', function () { clearTimeout(timer); timer = setTimeout(search, 200); });
+      form.addEventListener('submit', function (e) {
+        e.preventDefault();
+        window.open(fullUrl((field.value || '').trim()), '_blank', 'noopener');
+      });
     });
   })();
 

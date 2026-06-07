@@ -1460,16 +1460,7 @@
        PAGE ACTIONS ROW — Common UOM / Summarize by Item / Re-roll
        ============================================================ -->
   <div class="page-actions-row">
-    <button type="button" class="action-control" id="company-pill" title="Narrow the page to a single company">
-      <span class="action-control-label">Company</span>
-      <span class="action-control-value" id="company-pill-value">All</span>
-      <svg class="pill-caret" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 6 8 10 12 6"/></svg>
-    </button>
-<div class="action-spacer"></div>
-    <div class="filter-banner" id="filter-banner" hidden>
-      <span id="filter-banner-text">&mdash;</span>
-      <button type="button" class="filter-banner-clear" id="filter-banner-clear">Clear &times;</button>
-    </div>
+    <div class="action-spacer"></div>
     <!-- Analyze integrity reports via the headless analyzer pipeline.
          Each button fetches an integrity view from the agent, builds
          the workbook shape the matching analyzer template expects,
@@ -1650,7 +1641,23 @@
   // (manageUser — As Of has no user menu of its own). Period lives on the
   // on-page bar graph.
   if (window.RRV8 && typeof window.RRV8.mountWorkbar === 'function') {
-    window.RRV8.mountWorkbar({ activePage: 'asof', manageUser: true });
+    window.RRV8.mountWorkbar({
+      activePage: 'asof',
+      manageUser: true,
+      company: true,
+      // Company pill lives in the workbar (same placement as Transactions /
+      // Reconciliation). Opens this page's existing company popover, anchored
+      // to the workbar chip.
+      onCompanyClick: function (chip) {
+        var pop = document.getElementById('filter-popover');
+        if (!pop) return;
+        var wasOpen = !pop.hidden && pop.dataset.group === '__company';
+        hideAllPopovers();
+        if (wasOpen) return;
+        buildCompanyPopover();
+        positionPopover(pop, chip);
+      }
+    });
   }
 
   // ============================================================
@@ -2661,10 +2668,13 @@ function updateLotDetailPill() {
     if (pill) pill.classList.toggle('is-active', !_state.summarize);
   }
   function updateCompanyPill() {
-    const val  = document.getElementById('company-pill-value');
-    const pill = document.getElementById('company-pill');
-    if (val) val.textContent = _state.companyFilter || 'All';
-    if (pill) pill.classList.toggle('is-active', !!_state.companyFilter);
+    // The company pill lives in the workbar now (mountWorkbar company:true) —
+    // update its status label, matching Transactions / Reconciliation.
+    const chip = document.querySelector('.workbar-company');
+    if (!chip) return;
+    const status = chip.querySelector('.sidebar-filter-status');
+    if (status) status.textContent = _state.companyFilter || 'All';
+    chip.classList.toggle('is-active', !!_state.companyFilter);
   }
   function updateResidualCard() {
     const card     = document.getElementById('residual-card');
@@ -2702,17 +2712,6 @@ function updateLotDetailPill() {
       fmtMoney(tgt) + ' target). Cumulative |Amount|: ' +
       fmtMoney(abs) + '.';
   }
-  function updateFilterBanner() {
-    const bar  = document.getElementById('filter-banner');
-    const text = document.getElementById('filter-banner-text');
-    if (!bar || !text) return;
-    const bits = [];
-    if (_state.companyFilter) bits.push('Company = ' + _state.companyFilter);
-    if (!bits.length) { bar.hidden = true; return; }
-    text.textContent = bits.join(' · ');
-    bar.hidden = false;
-  }
-
   function renderDetails() {
     const tbody = document.getElementById('details-tbody');
     const tfoot = document.getElementById('details-tfoot');
@@ -2871,7 +2870,6 @@ function updateLotDetailPill() {
     if (!_data) return;
     updateCompanyPill();
     updateLotDetailPill();
-    updateFilterBanner();
     renderDetails();
     updateResidualCard();
     // Publish current period + repaint sidebar so the Period row reflects
@@ -3414,8 +3412,7 @@ function updateLotDetailPill() {
   const previewExcelBtn = document.getElementById('preview-popover-excel');
   if (previewExcelBtn) previewExcelBtn.addEventListener('click', exportItemRollForwardToExcel);
 
-  // ----- Company dropdown popover -----
-  const companyPill = document.getElementById('company-pill');
+  // ----- Company dropdown popover (opened from the workbar company chip) -----
   function buildCompanyPopover() {
     const pop = document.getElementById('filter-popover');
     if (!pop || !_data) return;
@@ -3450,32 +3447,6 @@ function updateLotDetailPill() {
       });
     });
   }
-  if (companyPill) {
-    companyPill.setAttribute('data-pop-anchor', 'company');
-    companyPill.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const pop = document.getElementById('filter-popover');
-      if (!pop) return;
-      const wasOpen = !pop.hidden && pop.dataset.group === '__company';
-      hideAllPopovers();
-      if (wasOpen) return;
-      buildCompanyPopover();
-      positionPopover(pop, companyPill);
-    });
-  }
-
-  // ----- Filter-banner Clear -----
-  // The banner surfaces the active page-level filters (currently
-  // only Company). Click clears them all at once.
-  const fbClear = document.getElementById('filter-banner-clear');
-  if (fbClear) {
-    fbClear.addEventListener('click', () => {
-      _state.companyFilter = '';
-      saveCompany();
-      renderAll();
-    });
-  }
-
   // ============================================================
   //  Column drag-to-reorder
   // ============================================================
