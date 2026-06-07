@@ -1701,6 +1701,26 @@
     var a = activeDb();
     return 'rrv8.scope.v1.' + MODE + '.' + ((a && a.n) || '_') + '.accountsummary';
   }
+  function cardexCacheKey() {
+    var a = activeDb();
+    return 'rrv8.scope.v1.' + MODE + '.' + ((a && a.n) || '_') + '.cardexworklist';
+  }
+  // Preload the per-item cardex worklist behind the scenes (same pattern as the
+  // DMAAI / account-summary warms) so the Cardex Variance page opens from cache.
+  // Only when a variance break actually exists, once per DB per session. The query
+  // is heavy (several seconds) -- this is a non-blocking background fetch.
+  var _cardexAutoTried = {};
+  function autoWarmCardex() {
+    if (IS_DEMO || !activeDb() || !caps().inv) return;   // inventory module only
+    var key = cardexCacheKey();
+    try { var o = JSON.parse(sessionStorage.getItem(key) || 'null'); if (o && Array.isArray(o.payload) && o.payload.length) return; } catch (_) {}
+    if (_cardexAutoTried[key]) return;
+    _cardexAutoTried[key] = true;
+    rrFetch('inventory/integrity', { method: 'POST', body: { report: 'v6ui_itemrollintegritydialog' } })
+      .then(function (d) { var rows = Array.isArray(d) ? d : ((d && d.data) || []);
+        try { sessionStorage.setItem(key, JSON.stringify({ ts: Date.now(), payload: rows })); } catch (_) {} })
+      .catch(function () { _cardexAutoTried[key] = false; });   // allow a later load to retry
+  }
   // Authoritative light driver: any GL OK / Var OK = 'no' in any period -> red,
   // else green. Reads the same v6ui_raccountsummary the Account Roll Forward page
   // and the cardex card derive from (server-calculated; everything ties out).
@@ -1714,6 +1734,7 @@
         try { sessionStorage.setItem(acctSummaryCacheKey(), JSON.stringify({ ts: Date.now(), payload: rows })); } catch (_) {}
         var isNo = function (v) { return String(v == null ? '' : v).trim().toLowerCase() === 'no'; };
         var bad = rows.filter(function (r) { return isNo(r.GLOK) || isNo(r.VarOK); });
+        var varBad = rows.filter(function (r) { return isNo(r.VarOK); });
         _invLightFromData = true;
         if (bad.length) {
           paintInventoryLight('red', bad.length + ' roll-forward break' + (bad.length !== 1 ? 's' : '') +
@@ -1726,7 +1747,6 @@
         // -> green. The reload cutoff itself is still the admin's call (manual date).
         var cdot = $('rcdxDot');
         if (cdot) {
-          var varBad = rows.filter(function (r) { return isNo(r.VarOK); });
           cdot.className = 'row-dot ' + (varBad.length ? 'amber' : 'green');
           cdot.title = varBad.length
             ? (varBad.length + ' variance break' + (varBad.length !== 1 ? 's' : '') + ' — a cardex reload may be needed.')
@@ -2224,6 +2244,7 @@
       renderRoleView();
       reflectDmaai();
       autoWarmDmaais();
+      autoWarmCardex();
       loadModelApproval();
       loadPurgeInfo();
       loadReloadGlStatus();
@@ -2296,6 +2317,7 @@
       checkFirstRun();
       reflectDmaai();
       autoWarmDmaais();
+      autoWarmCardex();
       loadModelApproval();
       loadPurgeInfo();
       loadReloadGlStatus();
