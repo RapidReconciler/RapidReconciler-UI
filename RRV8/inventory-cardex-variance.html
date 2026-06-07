@@ -1,2324 +1,530 @@
 <!DOCTYPE html>
 <!--
   =============================================================================
-  MOCKUP: Inventory > Cardex Variance
+  Inventory > Cardex Variance  (Daren's per-item worklist)
   =============================================================================
-  Dedicated V8 surface for the per-item cardex-variance worklist. Same data
-  source as the Reconciliation page's "Cardex" variance Preview
-  (`v6ui_itemrollintegritydialog`) — per-item perpetual-vs-cardex drift —
-  elevated to its own page because it's the most actionable surface
-  outside Reconciliation itself.
+  The per-item companion to inventory-account-rollforward.html (Karen's
+  account-level view). Karen flags that variance exists at the account level;
+  Daren works it here, item by item: decide which rows are real, then correct
+  them with a logged, reversible "Adjust Beginning Balance".
 
-  Read-only V8 grid (no per-row Save yet — that joins when the responses
-  table is specced). 18-col grid (Reason / Company / LongAccount / Branch
-  / ShortItem / ItemNumber / ThirdItem / Location / Lot / Method /
-  AdjAmount / AdjQty / UOM / GLClass / CostLevel / LastActivity / TxCount
-  / QtyOnHand). The V7 "Comment" cell that packed Date / Count / QOH into
-  one string is un-lumped into LastActivity / TxCount / QOH; CostLevel is
-  added from ritems (it's a contributor for the cost-method rule review).
-  Standard V8 chrome: drag-to-reorder, click-to-sort, header search,
-  column chooser, Excel export.
+  DATA SOURCE (canonical): v6ui_itemrollintegritydialog via POST /inventory/
+  integrity (JWT-scoped, whitelisted) -- the SAME view the reconciliation cardex
+  preview reads, so the item rows here sum to the account-level CardexVar on the
+  roll-forward. The view's '00000' "Reset:" header row carries the reset date
+  (rendered as a banner, not a grid row).
 
-  Source: `RRV8/data/reconciliation.json#cardex` (783 rows, both companies
-  already in scope). Production wiring will hit
-  `POST /inventory/integrity` with `report: 'v6ui_itemrollintegritydialog'`
-  once we wire it (the IntegrityController is already mined in API.md).
+  CORRECTIVE ACTION: POST /inventory/set-beginning-balance (usp8_maint_set_
+  beginning_balance) -- presets Clear-to-JDE / Zero / Manual. Every adjustment
+  is logged to RAdjustLedger (GET /inventory/adjustment-ledger) and reversible
+  (POST /inventory/undo-adjustment). Delete-only data ops elsewhere re-pull on
+  the schedule; a beginning-balance edit is an in-place RR correction (JDE
+  untouched) that re-derives the roll-forward deterministically.
   =============================================================================
 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Cardex Variance &mdash; RapidReconciler Mockup</title>
+<title>Cardex Variance &mdash; RapidReconciler</title>
 <link href="fonts/fonts.css" rel="stylesheet">
-<link href="sidebar.css" rel="stylesheet">
-<link href="period-bars.css" rel="stylesheet">
 <script src="config.js"></script>
-<script src="sidebar.js"></script>
 <script src="vendor/xlsx.full.min.js" defer></script>
 <style>
   :root {
-    --navy:        #1f2d4a;
-    --navy-deep:   #142037;
-    --blue:        #2b5fb0;
-    --blue-bright: #3d8fd6;
-    --blue-pale:   #e6efff;
-    --orange:      #f08a24;
-    --orange-deep: #d97316;
-    --orange-pale: #fbe7ce;
-    --green:       #2e8a55;
-    --green-pale:  #def4e6;
-    --red:         #c0392b;
-    --red-pale:    #fce5e1;
-    --bg:          #fafbfd;
-    --bg-soft:     #f3f5f9;
-    --bg-card:     #ffffff;
-    --text:        #1f2d4a;
-    --text-soft:   #4a5468;
-    --text-muted:  #828a9a;
-    --rule:        #e6eaf0;
-    --rule-strong: #cfd6e0;
-    --shadow-sm:   0 1px 2px rgba(20, 32, 55, 0.04);
-    --shadow-md:   0 4px 12px -2px rgba(20, 32, 55, 0.08);
-    --shadow-lg:   0 14px 32px -10px rgba(20, 32, 55, 0.18);
+    --navy:#1f2d4a; --navy-deep:#142037; --blue:#2b5fb0; --blue-pale:#e6efff;
+    --green:#2e8a55; --green-pale:#def4e6; --orange:#f08a24; --orange-deep:#d97316; --orange-pale:#fbe7ce;
+    --red:#c0392b; --red-pale:#fce5e1; --grey-pale:#eceef3;
+    --bg:#fafbfd; --bg-soft:#f3f5f9; --bg-card:#fff; --text:#1f2d4a; --text-soft:#4a5468; --text-muted:#828a9a;
+    --rule:#e6eaf0; --rule-strong:#cfd6e0;
+    --shadow-sm:0 1px 2px rgba(20,32,55,.04); --shadow-md:0 4px 12px -2px rgba(20,32,55,.08);
   }
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    font-family: 'Open Sans', -apple-system, sans-serif;
-    background: var(--bg);
-    color: var(--text);
-    font-size: 14px;
-    line-height: 1.55;
-    -webkit-font-smoothing: antialiased;
-  }
-  h1, h2, h3, h4 { font-family: 'Source Sans 3', sans-serif; font-weight: 700; }
-  a { color: inherit; text-decoration: none; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'Open Sans',-apple-system,sans-serif; background:var(--bg); color:var(--text); font-size:14px; line-height:1.55; -webkit-font-smoothing:antialiased; }
+  h1,h2,h3,h4 { font-family:'Source Sans 3',sans-serif; font-weight:700; }
+  a { color:inherit; text-decoration:none; }
 
-  .app {
-    display: grid;
-    grid-template-columns: 1fr;
-    grid-template-rows: 56px 1fr;
-    grid-template-areas:
-      "topbar"
-      "main";
-    min-height: 100vh;
-  }
-  .topbar {
-    grid-area: topbar;
-    background: var(--bg-card);
-    border-bottom: 1px solid var(--rule);
-    display: flex;
-    align-items: center;
-    padding: 0 24px;
-    z-index: 50;
-    box-shadow: var(--shadow-sm);
-    gap: 14px;
-  }
-  .topbar-brand {
-    display: inline-flex;
-    align-items: center;
-    gap: 10px;
-    min-width: 0;
-  }
-  .topbar-brand-logo { height: 28px; width: auto; flex-shrink: 0; display: block; }
-  .topbar-brand-text { display: flex; flex-direction: column; line-height: 1.15; min-width: 0; }
-  .topbar-brand-name {
-    font-family: 'Source Sans 3', sans-serif;
-    font-weight: 800; font-size: 14px;
-    color: var(--navy); letter-spacing: -0.005em;
-  }
-  .topbar-brand-db {
-    font-family: 'Source Sans 3', sans-serif;
-    font-size: 11px; font-weight: 700;
-    letter-spacing: 0.04em; text-transform: uppercase;
-    color: var(--text-muted);
-  }
-  .main { grid-area: main; overflow-y: auto; }
-  .page { max-width: 1280px; margin: 0 auto; padding: 32px 28px 64px; }
+  .topbar { height:56px; background:var(--bg-card); border-bottom:1px solid var(--rule); display:flex; align-items:center; padding:0 24px; gap:10px; box-shadow:var(--shadow-sm); }
+  .topbar-logo { height:28px; }
+  .topbar-name { font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:14px; color:var(--navy); }
+  .topbar-db { font-family:'Source Sans 3',sans-serif; font-size:11px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; color:var(--text-muted); margin-left:auto; }
 
-  /* Page header */
-  .page-header {
-    display: flex;
-    align-items: flex-end;
-    justify-content: space-between;
-    gap: 24px;
-    margin-bottom: 22px;
-  }
-  .page-header-left { min-width: 0; }
-  .breadcrumb {
-    font-family: 'Source Sans 3', sans-serif;
-    font-size: 11.5px;
-    font-weight: 700;
-    letter-spacing: 0.10em;
-    text-transform: uppercase;
-    color: var(--text-muted);
-    margin-bottom: 8px;
-  }
-  .breadcrumb a { color: var(--text-muted); text-decoration: none; }
-  .breadcrumb a:hover { color: var(--blue); }
-  .breadcrumb-sep { margin: 0 8px; opacity: 0.5; }
-  .page-title {
-    font-family: 'Source Sans 3', sans-serif;
-    font-weight: 800;
-    font-size: 30px;
-    color: var(--navy);
-    letter-spacing: -0.02em;
-    line-height: 1.1;
-  }
-  .page-title-link {
-    color: inherit; text-decoration: none;
-    display: inline-flex; align-items: center; gap: 8px;
-  }
-  .page-title-link:hover { color: var(--blue); }
-  .page-title-ext-icon { width: 18px; height: 18px; opacity: 0.45; }
-  .page-title-link:hover .page-title-ext-icon { opacity: 0.85; }
-  .page-eyebrow {
-    font-family: 'Source Sans 3', sans-serif;
-    font-size: 12px; font-weight: 600;
-    color: var(--text-muted);
-    margin-top: 6px;
-    max-width: 720px;
-  }
-  .page-eyebrow code {
-    font-family: 'JetBrains Mono', ui-monospace, monospace;
-    font-size: 11.5px;
-    background: var(--bg-soft);
-    padding: 1px 6px;
-    border-radius: 4px;
-    color: var(--text);
-  }
+  .page { max-width:1320px; margin:0 auto; padding:28px 26px 64px; }
+  .breadcrumb { font-family:'Source Sans 3',sans-serif; font-size:11.5px; font-weight:700; letter-spacing:.10em; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px; }
+  .breadcrumb .sep { margin:0 8px; opacity:.5; }
+  .page-title { font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:28px; color:var(--navy); letter-spacing:-.02em; }
+  .page-eyebrow { font-size:12.5px; color:var(--text-muted); margin-top:5px; max-width:820px; }
 
-  /* Page-actions row (Company pill + Reason pill + spacer + filter banner) */
-  .page-actions-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 22px;
-    flex-wrap: wrap;
-  }
-  .action-control {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    background: var(--bg-card);
-    border: 1px solid var(--rule-strong);
-    border-radius: 100px;
-    padding: 6px 14px;
-    font-family: 'Source Sans 3', sans-serif;
-    font-weight: 700;
-    font-size: 12.5px;
-    color: var(--text);
-    box-shadow: var(--shadow-sm);
-    cursor: pointer;
-    user-select: none;
-  }
-  .action-control:hover { border-color: var(--blue); color: var(--blue); }
-  .action-control svg { width: 13px; height: 13px; flex-shrink: 0; }
-  .action-control.is-active {
-    background: var(--blue-pale);
-    border-color: var(--blue);
-    color: var(--blue);
-  }
-  .action-control-label {
-    font-size: 10.5px;
-    font-weight: 800;
-    letter-spacing: 0.10em;
-    text-transform: uppercase;
-    color: var(--text-muted);
-  }
-  .action-control.is-active .action-control-label { color: var(--blue); }
-  .action-control-value {
-    font-weight: 800;
-    font-size: 12.5px;
-    color: var(--navy);
-  }
-  .action-control.is-active .action-control-value { color: var(--blue); }
-  .action-button {
-    background: var(--orange);
-    color: #fff;
-    border-color: var(--orange);
-  }
-  .action-button:hover {
-    background: var(--orange-deep);
-    border-color: var(--orange-deep);
-    color: #fff;
-  }
-  .action-spacer { flex: 1 1 auto; }
-  .filter-banner {
-    display: inline-flex;
-    align-items: center;
-    gap: 10px;
-    background: var(--blue-pale);
-    color: var(--blue);
-    border-radius: 100px;
-    padding: 5px 14px;
-    font-family: 'Source Sans 3', sans-serif;
-    font-weight: 700;
-    font-size: 12px;
-  }
-  .filter-banner[hidden] { display: none; }
-  .filter-banner-clear {
-    background: transparent;
-    border: 0;
-    color: inherit;
-    cursor: pointer;
-    font-weight: 800;
-    padding: 0 0 0 4px;
-  }
-  .filter-banner-clear:hover { text-decoration: underline; }
+  .reset-banner { display:none; align-items:center; gap:9px; margin:16px 0 0; padding:9px 14px; background:var(--blue-pale); border:1px solid rgba(43,95,176,.25); border-radius:10px; font-size:12.5px; color:var(--navy); }
+  .reset-banner.show { display:flex; }
+  .reset-banner svg { width:15px; height:15px; color:var(--blue); flex-shrink:0; }
+  .reset-banner b { font-weight:800; }
 
-  /* Hero stats — 4 KPIs */
-  .stats-strip {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 14px;
-    margin-bottom: 24px;
-  }
-  .stat-tile {
-    background: var(--bg-card);
-    border: 1px solid var(--rule);
-    border-radius: 12px;
-    padding: 16px 18px 18px;
-    box-shadow: var(--shadow-sm);
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-  .stat-tile-label {
-    font-family: 'Source Sans 3', sans-serif;
-    font-size: 10.5px;
-    font-weight: 800;
-    letter-spacing: 0.10em;
-    text-transform: uppercase;
-    color: var(--text-muted);
-  }
-  .stat-tile-value {
-    font-family: 'JetBrains Mono', ui-monospace, monospace;
-    font-size: 22px;
-    font-weight: 700;
-    color: var(--navy);
-    font-variant-numeric: tabular-nums;
-    line-height: 1.15;
-  }
-  .stat-tile-value.is-neg { color: var(--red); }
-  .stat-tile-sub { font-size: 11.5px; color: var(--text-muted); }
+  .actions { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin:18px 0 18px; }
+  .picker-lbl { font-size:10px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); }
+  .seg { display:inline-flex; border:1px solid var(--rule-strong); border-radius:8px; overflow:hidden; }
+  .seg-btn { border:0; background:var(--bg-card); padding:6px 13px; font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:12.5px; color:var(--text-soft); cursor:pointer; border-right:1px solid var(--rule); }
+  .seg-btn:last-child { border-right:0; }
+  .seg-btn:hover { background:var(--bg-soft); color:var(--text); }
+  .seg-btn.is-on { background:var(--navy); color:#fff; }
+  .search-wrap { display:inline-flex; align-items:center; gap:7px; margin-left:14px; border:1px solid var(--rule-strong); border-radius:8px; padding:0 11px; background:var(--bg-card); }
+  .search-wrap svg { width:14px; height:14px; color:var(--text-muted); flex-shrink:0; }
+  .search-box { border:0; outline:none; background:transparent; padding:7px 0; font-family:'Open Sans',sans-serif; font-size:13px; color:var(--navy); min-width:230px; }
+  .spacer { flex:1 1 auto; }
+  .kpi { display:inline-flex; flex-direction:column; align-items:flex-end; }
+  .kpi .lbl { font-size:10px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); }
+  .kpi .val { font-family:'JetBrains Mono',ui-monospace,monospace; font-weight:700; font-size:17px; color:var(--navy); font-variant-numeric:tabular-nums; }
+  .kpi .val.neg { color:var(--red); }
 
-  /* Details card + V8 grid (same shape as Transactions) */
-  .details-card {
-    background: var(--bg-card);
-    border: 1px solid var(--rule);
-    border-radius: 14px;
-    box-shadow: var(--shadow-sm);
-    overflow: hidden;
-  }
-  .details-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 14px 22px 12px;
-    border-bottom: 1px solid var(--rule);
-    gap: 16px;
-  }
-  .details-title {
-    font-family: 'Source Sans 3', sans-serif;
-    font-weight: 800;
-    font-size: 15px;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    color: var(--navy);
-  }
-  .details-head-right { display: flex; align-items: center; gap: 10px; }
+  /* analysis card */
+  .analysis { background:var(--bg-card); border:1px solid var(--rule); border-radius:14px; box-shadow:var(--shadow-sm); padding:18px 20px; margin-bottom:18px; }
+  .an-headline { display:flex; align-items:center; gap:11px; }
+  .an-badge { width:34px; height:34px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; }
+  .an-badge.ok { background:var(--green-pale); color:var(--green); }
+  .an-badge.warn { background:var(--orange-pale); color:var(--orange-deep); }
+  .an-badge svg { width:19px; height:19px; }
+  .an-title { font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:16px; color:var(--navy); }
+  .an-sub { font-size:12.5px; color:var(--text-soft); margin-top:1px; }
+  .an-note { font-size:12px; color:var(--text-soft); border-left:3px solid var(--orange); background:var(--orange-pale); border-radius:0 8px 8px 0; padding:9px 12px; margin-top:14px; }
+  .an-note b { color:var(--orange-deep); }
 
-  .grid-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    font-family: 'Source Sans 3', sans-serif;
-    font-weight: 700;
-    font-size: 12.5px;
-    padding: 5px 10px;
-    border-radius: 100px;
-    border: 1px solid var(--rule-strong);
-    background: var(--bg-card);
-    color: var(--text-soft);
-    cursor: default;
-    transition: background 0.12s, color 0.12s, border-color 0.12s;
-    white-space: nowrap;
-  }
-  button.grid-pill { cursor: pointer; }
-  button.grid-pill:hover { background: var(--bg-soft); color: var(--text); }
-  button.grid-pill.is-narrowed {
-    background: rgba(241, 164, 67, 0.12);
-    color: #8a5a14;
-    border-color: rgba(241, 164, 67, 0.40);
-  }
-  .grid-pill svg { width: 12px; height: 12px; flex-shrink: 0; }
-  .grid-pill .pill-caret { opacity: 0.55; }
-  .grid-pill.is-loading { color: var(--text-muted); font-style: italic; }
-  .grid-state-cluster {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    margin-left: auto;
-  }
-  .grid-search {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 8px 4px 10px;
-    background: var(--bg-card);
-    border: 1px solid var(--rule);
-    border-radius: 100px;
-  }
-  .grid-search:focus-within {
-    border-color: var(--blue);
-    box-shadow: 0 0 0 2px rgba(43, 95, 176, 0.18);
-  }
-  .grid-search svg { width: 13px; height: 13px; color: var(--text-muted); flex-shrink: 0; }
-  .grid-search input {
-    border: 0;
-    outline: none;
-    background: transparent;
-    font-family: 'Source Sans 3', sans-serif;
-    font-size: 12.5px;
-    color: var(--text);
-    width: 160px;
-    padding: 0;
-  }
-  .grid-search input::placeholder { color: var(--text-muted); }
-  .grid-search input::-webkit-search-decoration,
-  .grid-search input::-webkit-search-cancel-button { -webkit-appearance: none; }
-  .grid-search-clear {
-    background: transparent;
-    border: 0;
-    cursor: pointer;
-    color: var(--text-muted);
-    font-size: 16px;
-    line-height: 1;
-    padding: 0 2px;
-    flex-shrink: 0;
-  }
-  .grid-search-clear:hover { color: var(--text); }
+  /* grid card */
+  .grid-card { background:var(--bg-card); border:1px solid var(--rule); border-radius:14px; box-shadow:var(--shadow-sm); overflow:hidden; }
+  .grid-head { display:flex; align-items:center; gap:14px; padding:13px 20px; border-bottom:1px solid var(--rule); }
+  .grid-title { font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:14px; letter-spacing:.04em; text-transform:uppercase; color:var(--navy); }
+  .grid-count { font-size:12px; color:var(--text-muted); }
+  .btn { display:inline-flex; align-items:center; gap:7px; border:1px solid var(--rule-strong); background:var(--bg-card); border-radius:8px; padding:6px 12px; font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:12.5px; color:var(--text-soft); cursor:pointer; }
+  .btn:hover { border-color:var(--blue); color:var(--blue); }
+  .btn svg { width:13px; height:13px; }
+  .btn.sm { padding:4px 10px; font-size:11.5px; }
+  .btn.primary { border-color:var(--blue); background:var(--blue); color:#fff; }
+  .btn.primary:hover { background:#24509a; color:#fff; }
+  .grid-scroll { max-height:640px; overflow:auto; }
+  table.rf { width:100%; border-collapse:separate; border-spacing:0; font-size:12.5px; }
+  table.rf thead th { position:sticky; top:0; z-index:2; background:var(--bg-soft); color:var(--text-muted); font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:10px; letter-spacing:.07em; text-transform:uppercase; text-align:left; padding:9px 11px; border-bottom:1px solid var(--rule); white-space:nowrap; }
+  table.rf thead th.num { text-align:right; }
+  table.rf tbody td { padding:8px 11px; border-bottom:1px solid var(--rule); white-space:nowrap; }
+  table.rf tbody td.num { text-align:right; font-variant-numeric:tabular-nums; font-family:'JetBrains Mono',ui-monospace,monospace; }
+  table.rf .mono { font-family:'JetBrains Mono',ui-monospace,monospace; }
+  table.rf .neg { color:var(--red); }
+  /* account group header rows */
+  tr.grp td { background:var(--bg-soft); border-bottom:1px solid var(--rule-strong); cursor:pointer; padding:9px 11px; font-weight:700; color:var(--navy); }
+  tr.grp:hover td { background:#e9edf4; }
+  tr.grp .caret { display:inline-block; width:12px; color:var(--text-muted); transition:transform .12s; }
+  tr.grp.collapsed .caret { transform:rotate(-90deg); }
+  tr.grp .acct { font-family:'JetBrains Mono',ui-monospace,monospace; font-weight:800; }
+  tr.grp .gmeta { font-weight:600; color:var(--text-muted); font-size:11.5px; margin-left:8px; }
+  tr.grp .gsub { float:right; font-family:'JetBrains Mono',ui-monospace,monospace; font-weight:800; }
+  tr.item td { padding-left:11px; }
+  tr.item:hover td { background:rgba(43,95,176,.04); }
+  tr.item.hide { display:none; }
+  .empty { padding:40px 20px; text-align:center; color:var(--text-muted); font-style:italic; }
 
-  .details-scroll {
-    max-height: 600px;
-    overflow: auto;
-  }
-  .details-table {
-    width: 100%;
-    border-collapse: separate;
-    border-spacing: 0;
-    font-family: 'Open Sans', sans-serif;
-    font-size: 13px;
-  }
-  .details-table thead th {
-    position: sticky;
-    top: 0;
-    z-index: 2;
-    background: var(--bg-soft);
-    color: var(--text-muted);
-    font-family: 'Source Sans 3', sans-serif;
-    font-weight: 700;
-    font-size: 10.5px;
-    text-transform: uppercase;
-    letter-spacing: 0.10em;
-    text-align: left;
-    padding: 10px 12px;
-    border-bottom: 1px solid var(--rule);
-    white-space: nowrap;
-  }
-  .details-table th.is-num { text-align: right; }
-  .details-table thead th[draggable="true"] { cursor: grab; user-select: none; }
-  .details-table thead th[draggable="true"]:active { cursor: grabbing; }
-  .details-table thead th.is-dragging { opacity: 0.35; }
-  .details-table thead th.is-drag-over {
-    box-shadow: inset 3px 0 0 var(--blue);
-    background: rgba(43, 95, 176, 0.08);
-  }
-  .details-table thead th[data-col-key]:hover { color: var(--blue); }
-  .details-table thead th.is-sort-active { color: var(--blue); }
-  /* §9 — Per-column funnel filter trigger (Excel-style picker). */
-  .col-filter-trigger {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 16px; height: 16px;
-    margin-left: 4px;
-    background: transparent;
-    border: 0;
-    padding: 0;
-    cursor: pointer;
-    color: var(--text-muted);
-    opacity: 0.45;
-    vertical-align: middle;
-    transition: opacity 0.12s, color 0.12s;
-  }
-  .details-table thead th:hover .col-filter-trigger { opacity: 0.9; }
-  .col-filter-trigger:hover { color: var(--blue); opacity: 1; }
-  .col-filter-trigger svg { width: 11px; height: 11px; display: block; }
-  .details-table thead th.is-filter-active { color: var(--blue); }
-  .details-table thead th.is-filter-active .col-filter-trigger {
-    color: var(--blue);
-    opacity: 1;
-  }
-  .col-filter-search {
-    display: block;
-    width: calc(100% - 24px);
-    margin: 4px 12px 6px;
-    padding: 5px 8px;
-    border: 1px solid var(--rule-strong);
-    border-radius: 6px;
-    font-family: 'Source Sans 3', sans-serif;
-    font-size: 12.5px;
-    outline: none;
-  }
-  .col-filter-search:focus {
-    border-color: var(--blue);
-    box-shadow: 0 0 0 2px rgba(43, 95, 176, 0.18);
-  }
-  .details-table thead th .sort-caret {
-    display: inline-block;
-    margin-left: 4px;
-    font-size: 9px;
-    line-height: 1;
-    color: var(--blue);
-    vertical-align: middle;
-  }
-  .details-table tbody td {
-    padding: 9px 12px;
-    border-bottom: 1px solid var(--rule);
-    color: var(--text);
-    white-space: nowrap;
-    vertical-align: middle;
-  }
-  .details-table tbody tr:hover td { background: rgba(43, 95, 176, 0.04); }
-  .details-table td.is-num {
-    text-align: right;
-    font-variant-numeric: tabular-nums;
-  }
-  .details-table td.is-money {
-    text-align: right;
-    font-variant-numeric: tabular-nums;
-    font-weight: 600;
-  }
-  .details-table td .neg { color: var(--red); }
-  .details-empty {
-    padding: 32px 22px;
-    text-align: center;
-    color: var(--text-muted);
-    font-style: italic;
-  }
-  .details-skeleton { padding: 32px 22px; text-align: center; color: var(--text-muted); font-style: italic; }
+  /* adjustment ledger */
+  .ledger { background:var(--bg-card); border:1px solid var(--rule); border-radius:14px; box-shadow:var(--shadow-sm); margin-top:22px; overflow:hidden; }
+  .ledger-head { padding:13px 20px; border-bottom:1px solid var(--rule); display:flex; align-items:center; gap:10px; }
+  .ledger-head h3 { font-size:14px; text-transform:uppercase; letter-spacing:.04em; color:var(--navy); font-weight:800; }
+  .ledger-head .hint { font-size:12px; color:var(--text-muted); }
+  .ledger-empty { padding:22px; text-align:center; color:var(--text-muted); font-style:italic; font-size:13px; }
+  .ledger table.rf tbody td { font-size:12px; }
+  .pill { display:inline-flex; align-items:center; font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:10.5px; padding:2px 8px; border-radius:100px; text-transform:capitalize; }
+  .pill.applied { background:var(--green-pale); color:var(--green); }
+  .pill.reversed { background:var(--grey-pale); color:var(--text-soft); }
 
-  /* Reset banner — the v6ui_itemrollintegritydialog Reset row is a
-     metadata marker carrying the date from which cardex variance is
-     measured. Rendered as a strip above the grid instead of a regular
-     row so the analyst sees it as context, not as one of the items. */
-  .reset-banner {
-    background: var(--bg-card);
-    border: 1px solid var(--rule);
-    border-radius: 14px;
-    box-shadow: var(--shadow-sm);
-    margin-bottom: 14px;
-    padding: 12px 18px 14px;
-    display: grid;
-    grid-template-columns: auto 1fr auto;
-    gap: 16px;
-    align-items: center;
-  }
-  .reset-banner[hidden] { display: none; }
-  .reset-banner-icon {
-    width: 32px; height: 32px;
-    border-radius: 50%;
-    background: var(--bg-soft);
-    color: var(--text-muted);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-  }
-  .reset-banner-icon svg { width: 18px; height: 18px; }
-  .reset-banner-body { min-width: 0; }
-  .reset-banner-label {
-    font-family: 'Source Sans 3', sans-serif;
-    font-size: 10.5px;
-    font-weight: 800;
-    letter-spacing: 0.10em;
-    text-transform: uppercase;
-    color: var(--text-muted);
-  }
-  .reset-banner-headline {
-    font-family: 'Source Sans 3', sans-serif;
-    font-weight: 800;
-    font-size: 14px;
-    color: var(--navy);
-    line-height: 1.25;
-    margin-top: 2px;
-  }
-  .reset-banner-headline strong {
-    font-family: 'JetBrains Mono', ui-monospace, monospace;
-    font-weight: 700;
-    color: var(--text);
-  }
-  .reset-banner-sub {
-    font-size: 12px;
-    color: var(--text-soft);
-    margin-top: 2px;
-  }
-  .reset-banner-meta {
-    font-family: 'JetBrains Mono', ui-monospace, monospace;
-    font-size: 11px;
-    color: var(--text-muted);
-    text-align: right;
-  }
+  /* adjust modal */
+  .ov { position:fixed; inset:0; background:rgba(20,32,55,.45); display:none; align-items:center; justify-content:center; z-index:60; padding:24px; }
+  .ov.show { display:flex; }
+  .card { background:var(--bg-card); border-radius:16px; box-shadow:0 18px 50px rgba(20,32,55,.28); width:100%; max-width:520px; max-height:90vh; overflow-y:auto; padding:22px 24px; }
+  .card h2 { font-size:18px; color:var(--navy); margin-bottom:3px; }
+  .card .who { font-size:12.5px; color:var(--text-muted); margin-bottom:10px; }
+  .card .who .mono { font-family:'JetBrains Mono',ui-monospace,monospace; font-weight:700; color:var(--navy); }
+  .adj-period { font-size:12px; color:var(--text-soft); background:var(--bg-soft); border:1px solid var(--rule); border-radius:8px; padding:8px 12px; margin-bottom:14px; }
+  .adj-period b { color:var(--navy); }
+  .adj-period .mono { font-family:'JetBrains Mono',ui-monospace,monospace; font-weight:700; color:var(--navy); }
+  .presets { display:flex; gap:8px; margin-bottom:14px; }
+  .preset { flex:1; border:1px solid var(--rule-strong); border-radius:10px; padding:9px 8px; text-align:center; cursor:pointer; background:#fff; }
+  .preset:hover { border-color:var(--blue); }
+  .preset.active { border-color:var(--blue); background:var(--blue-pale); }
+  .preset .pt { font-weight:800; font-size:12px; color:var(--navy); }
+  .preset .ps { font-size:10.5px; color:var(--text-muted); margin-top:2px; }
+  .fields { display:none; gap:12px; margin-bottom:14px; }
+  .fields.show { display:flex; }
+  .field { flex:1; }
+  .field label { display:block; font-size:11px; font-weight:800; letter-spacing:.04em; text-transform:uppercase; color:var(--text-muted); margin-bottom:5px; }
+  .field input { width:100%; border:1px solid var(--rule-strong); border-radius:8px; padding:8px 11px; font-family:'JetBrains Mono',ui-monospace,monospace; font-size:14px; font-weight:700; color:var(--navy); }
+  .explain { font-size:12.5px; color:var(--text-soft); background:var(--bg-soft); border:1px solid var(--rule); border-radius:10px; padding:11px 13px; line-height:1.5; margin-bottom:16px; }
+  .explain b { color:var(--navy); }
+  .adj-attest { display:flex; gap:10px; align-items:flex-start; background:var(--bg-soft); border:1px solid var(--rule); border-radius:10px; padding:11px 13px; font-size:12.5px; color:var(--text-soft); line-height:1.5; margin-bottom:16px; cursor:pointer; }
+  .adj-attest input { width:16px; height:16px; margin-top:1px; accent-color:var(--blue); flex-shrink:0; }
+  .adj-attest b { color:var(--navy); font-family:'JetBrains Mono',ui-monospace,monospace; font-weight:700; }
+  .row-actions { display:flex; justify-content:flex-end; gap:10px; }
+  .btn-ghost { border:1px solid var(--rule-strong); background:var(--bg-card); color:var(--text); border-radius:9px; padding:9px 18px; font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:13.5px; cursor:pointer; }
+  .btn-go { border:1px solid var(--blue); background:var(--blue); color:#fff; border-radius:9px; padding:9px 18px; font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:13.5px; cursor:pointer; }
+  .btn-go:disabled { opacity:.45; cursor:default; }
 
-  /* Reason chip (Amount vs Quantity) */
-  .reason-chip {
-    display: inline-flex;
-    align-items: center;
-    padding: 2px 9px;
-    border-radius: 100px;
-    font-family: 'Source Sans 3', sans-serif;
-    font-weight: 700;
-    font-size: 10.5px;
-    letter-spacing: 0.04em;
-    border: 1px solid transparent;
-  }
-  .reason-chip.is-amount {
-    background: rgba(43, 95, 176, 0.10);
-    color: var(--blue);
-    border-color: rgba(43, 95, 176, 0.28);
-  }
-  .reason-chip.is-quantity {
-    background: rgba(240, 138, 36, 0.12);
-    color: #8a5a14;
-    border-color: rgba(240, 138, 36, 0.32);
-  }
-
-  /* Popover (shared by Company / Reason / Column-chooser) */
-  .popover {
-    position: fixed;
-    background: var(--bg-card);
-    border: 1px solid var(--rule-strong);
-    border-radius: 10px;
-    box-shadow: var(--shadow-lg);
-    z-index: 200;
-    padding: 8px;
-    min-width: 220px;
-    max-height: 70vh;
-    overflow: auto;
-  }
-  .popover[hidden] { display: none; }
-  .popover-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px 12px;
-    border-radius: 6px;
-    font-family: 'Source Sans 3', sans-serif;
-    font-weight: 600;
-    font-size: 13.5px;
-    color: var(--text);
-    cursor: pointer;
-  }
-  .popover-row:hover { background: var(--bg-soft); }
-  .popover-section-label {
-    font-family: 'Source Sans 3', sans-serif;
-    font-size: 10.5px;
-    font-weight: 800;
-    letter-spacing: 0.10em;
-    text-transform: uppercase;
-    color: var(--text-muted);
-    padding: 6px 12px 4px;
-  }
-  .col-vis-list { margin-top: 4px; border-top: 1px solid var(--rule); padding-top: 4px; max-height: 360px; overflow: auto; }
-  .col-vis-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 6px 12px;
-    border-radius: 6px;
-    font-family: 'Source Sans 3', sans-serif;
-    font-weight: 600;
-    font-size: 13px;
-    color: var(--text);
-    cursor: pointer;
-  }
-  .col-vis-row:hover { background: var(--bg-soft); }
-  .col-vis-row input[type="checkbox"] { width: 14px; height: 14px; accent-color: var(--blue); cursor: pointer; }
-  .col-vis-row .col-vis-label { flex: 1; }
-  .col-vis-row.is-muted .col-vis-label { color: var(--text-muted); }
-  .uom-list { max-height: 360px; overflow: auto; }
-  .uom-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 7px 12px;
-    border-radius: 6px;
-    font-family: 'Source Sans 3', sans-serif;
-    font-weight: 600;
-    font-size: 13px;
-    cursor: pointer;
-  }
-  .uom-row:hover { background: var(--bg-soft); }
-  .uom-row.is-selected { background: var(--blue-pale); color: var(--blue); font-weight: 700; }
-  .uom-row .uom-count {
-    margin-left: auto;
-    font-size: 11px;
-    color: var(--text-muted);
-    font-variant-numeric: tabular-nums;
-  }
-
-  /* Toast */
-  .toast {
-    position: fixed;
-    bottom: 28px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: var(--navy);
-    color: #fff;
-    padding: 10px 18px;
-    border-radius: 100px;
-    font-family: 'Source Sans 3', sans-serif;
-    font-weight: 600;
-    font-size: 13px;
-    box-shadow: var(--shadow-lg);
-    z-index: 500;
-    opacity: 0;
-    transition: opacity 0.18s ease;
-    pointer-events: none;
-  }
-  .toast.is-visible { opacity: 1; }
-
-  @media (max-width: 900px) {
-    .stats-strip { grid-template-columns: repeat(2, 1fr); }
-  }
-
-  /* Clickable worklist rows */
-  .details-table tbody tr.is-adjustable { cursor: pointer; }
-
-  /* Adjust Beginning Balance modal */
-  .cx-scrim { position: fixed; inset: 0; background: rgba(20,32,55,.45); display: none; align-items: flex-start; justify-content: center; padding: 56px 16px; z-index: 400; }
-  .cx-scrim.is-open { display: flex; }
-  .cx-modal { background: var(--bg-card); border-radius: 16px; box-shadow: var(--shadow-lg); width: 540px; max-width: 100%; overflow: hidden; }
-  .cx-modal-head { padding: 16px 20px; border-bottom: 1px solid var(--rule); }
-  .cx-modal-head h2 { font-family: 'Source Sans 3', sans-serif; font-size: 17px; font-weight: 800; color: var(--navy); margin: 0; }
-  .cx-modal-head .cx-ctx { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
-  .cx-modal-body { padding: 18px 20px; }
-  .cx-modal-foot { padding: 14px 20px; border-top: 1px solid var(--rule); display: flex; gap: 10px; align-items: center; }
-  .cx-presets { display: flex; gap: 8px; margin-bottom: 14px; }
-  .cx-preset { flex: 1; border: 1px solid var(--rule-strong); border-radius: 10px; padding: 8px; background: #fff; cursor: pointer; text-align: center; display: flex; flex-direction: column; gap: 2px; }
-  .cx-preset:hover { border-color: var(--blue); }
-  .cx-preset.is-active { border-color: var(--blue); background: var(--blue-pale); }
-  .cx-preset b { font-family: 'Source Sans 3', sans-serif; font-size: 12px; color: var(--navy); }
-  .cx-preset span { font-size: 10.5px; color: var(--text-muted); }
-  .cx-field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-  .cx-field { display: block; }
-  .cx-field span { display: block; font-size: 11px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 4px; }
-  .cx-field input { width: 100%; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 15px; padding: 8px 10px; border: 1px solid var(--rule-strong); border-radius: 8px; }
-  .cx-field input:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 2px rgba(43,95,176,.18); }
-  .cx-note { margin-top: 12px; font-size: 11.5px; color: var(--text-soft); border-left: 3px solid var(--orange); padding-left: 10px; }
-
-  /* Adjustment ledger drawer */
-  .cx-drawer { position: fixed; top: 0; right: 0; width: 420px; max-width: 92vw; height: 100vh; background: var(--bg-card); border-left: 1px solid var(--rule); box-shadow: var(--shadow-lg); z-index: 350; transform: translateX(100%); transition: transform .2s ease; overflow: auto; }
-  .cx-drawer.is-open { transform: translateX(0); }
-  .cx-drawer-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px; border-bottom: 1px solid var(--rule); position: sticky; top: 0; background: var(--bg-card); }
-  .cx-drawer-body { padding: 10px 14px 40px; }
-  .cx-led-row { display: flex; align-items: center; gap: 12px; padding: 10px 6px; border-bottom: 1px solid var(--rule); }
-  .cx-led-row.is-reversed { opacity: .6; }
+  .toast { position:fixed; bottom:28px; left:50%; transform:translateX(-50%); background:var(--navy); color:#fff; padding:10px 18px; border-radius:100px; font-family:'Source Sans 3',sans-serif; font-weight:600; font-size:13px; box-shadow:var(--shadow-md); opacity:0; transition:opacity .18s; pointer-events:none; z-index:80; }
+  .toast.show { opacity:1; }
 </style>
 </head>
 <body>
 
-<div class="app">
-
-  <header class="topbar">
-    <div class="topbar-brand">
-      <img class="topbar-brand-logo" src="../Images/gsi-logo.png" alt="GSI">
-      <span class="topbar-brand-text">
-        <span class="topbar-brand-name">RapidReconciler</span>
-        <span class="topbar-brand-db" id="js-topbar-db">RapidReconciler_Dev</span>
-      </span>
-    </div>
-  </header>
-
-  <div class="popover" id="filter-popover" hidden role="menu" aria-label="Filter / chooser"></div>
-  <div class="popover" id="colfilter-popover" hidden role="menu" aria-label="Filter by column value"></div>
-  <div class="toast" id="js-toast" role="status" aria-live="polite"></div>
-
-  <!-- Adjust Beginning Balance modal -->
-  <div class="cx-scrim" id="cx-scrim">
-    <div class="cx-modal" role="dialog" aria-modal="true" aria-label="Adjust beginning balance">
-      <div class="cx-modal-head">
-        <h2>Adjust Beginning Balance</h2>
-        <div class="cx-ctx" id="cx-ctx">&mdash;</div>
-      </div>
-      <div class="cx-modal-body">
-        <div class="cx-presets">
-          <button type="button" class="cx-preset is-active" data-cx-preset="clear"><b>Clear to JDE</b><span>zero the variance</span></button>
-          <button type="button" class="cx-preset" data-cx-preset="zero"><b>Zero opening</b><span>begin 0 / 0</span></button>
-          <button type="button" class="cx-preset" data-cx-preset="manual"><b>Manual</b><span>type known values</span></button>
-        </div>
-        <div id="cx-manual-fields" style="display:none">
-          <div class="cx-field-row">
-            <label class="cx-field"><span>Beginning quantity</span><input type="number" step="0.01" id="cx-qty"></label>
-            <label class="cx-field"><span>Beginning amount</span><input type="number" step="0.01" id="cx-amt"></label>
-          </div>
-        </div>
-        <div class="cx-note">Clear / Zero are resolved on the server from the item’s current balance. The result (and undo) is logged to the Adjustment ledger.</div>
-      </div>
-      <div class="cx-modal-foot">
-        <button type="button" class="action-control action-button" id="cx-apply"><span>Apply adjustment</span></button>
-        <button type="button" class="grid-pill" id="cx-cancel">Cancel</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Adjustment ledger drawer -->
-  <aside class="cx-drawer" id="cx-drawer" aria-label="Adjustment ledger">
-    <div class="cx-drawer-head">
-      <span class="details-title">Adjustment ledger</span>
-      <button type="button" class="grid-pill" id="cx-drawer-close">Close &times;</button>
-    </div>
-    <div class="cx-drawer-body" id="cx-drawer-body"><div class="details-empty">No adjustments yet.</div></div>
-  </aside>
-
-  <main class="main">
+<header class="topbar">
+  <img class="topbar-logo" src="../Images/gsi-logo.png" alt="GSI">
+  <span class="topbar-name">RapidReconciler</span>
+  <span class="topbar-db" id="topbarDb">RapidReconciler_Dev</span>
+</header>
 
 <div class="page">
+  <nav class="breadcrumb"><a href="home.html">Inventory</a><span class="sep">/</span><span>Cardex Variance</span></nav>
+  <h1 class="page-title">Cardex Variance</h1>
+  <div class="page-eyebrow">The per-item cardex drift worklist &mdash; items whose perpetual valuation didn&rsquo;t roll cleanly. These sum to the account-level Cardex variance on the Account Roll Forward. Decide which rows are real, then correct one with a logged, reversible <b>Adjust Beginning Balance</b>.</div>
 
-  <!-- PAGE HEADER -->
-  <header class="page-header">
-    <div class="page-header-left">
-      <nav class="breadcrumb" aria-label="Breadcrumb">
-        <a href="#">Inventory</a><span class="breadcrumb-sep">/</span><span>Cardex Variance</span>
-      </nav>
-      <h1 class="page-title">
-        <a class="page-title-link" href="../RRUniversity/inventory-cardex-variance.html" target="_blank" rel="noopener">
-          Cardex Variance
-          <svg class="page-title-ext-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8">
-            <path d="M6 3h7v7M13 3L6 10M11 9v4H3V5h4"/>
-          </svg>
-        </a>
-      </h1>
-      <div class="page-eyebrow">
-        Items whose perpetual valuation didn&rsquo;t roll cleanly &mdash;
-        netted to one row per <strong>account &times; grain</strong> (the grain
-        set by cost method and cost level; the GL account is never crossed),
-        and shown only once a variance has held <strong>stable</strong> across
-        refreshes so daily blips don&rsquo;t clutter the list. Each row carries
-        a suggested corrective action. Click a row to set its corrected
-        <strong>beginning balance</strong> &mdash; logged and reversible from
-        the Adjustment ledger.
-      </div>
-    </div>
-  </header>
-
-  <!-- ACTIONS ROW -->
-  <div class="page-actions-row">
-    <button type="button" class="action-control" id="company-pill" title="Narrow to a single company">
-      <span class="action-control-label">Company</span>
-      <span class="action-control-value" id="company-pill-value">All</span>
-      <svg class="pill-caret" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 6 8 10 12 6"/></svg>
-    </button>
-    <button type="button" class="action-control" id="reason-pill" title="Narrow to Amount or Quantity variance">
-      <span class="action-control-label">Reason</span>
-      <span class="action-control-value" id="reason-pill-value">All</span>
-      <svg class="pill-caret" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 6 8 10 12 6"/></svg>
-    </button>
-    <button type="button" class="action-control" id="ledger-btn" title="Show the adjustment ledger (undo here)">
-      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8a5 5 0 0 1 9-3"/><path d="M12 3v3h-3"/><path d="M13 8a5 5 0 0 1-9 3"/><path d="M4 13v-3h3"/></svg>
-      <span>Adjustment ledger</span>
-      <span class="action-control-value" id="ledger-count"></span>
-    </button>
-    <div class="action-spacer"></div>
-    <div class="filter-banner" id="filter-banner" hidden>
-      <span id="filter-banner-text">&mdash;</span>
-      <button type="button" class="filter-banner-clear" id="filter-banner-clear">Clear &times;</button>
-    </div>
+  <div class="reset-banner" id="resetBanner">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9 9 0 0 0-6.36 2.64L3 8"/><path d="M3 4v4h4"/></svg>
+    <span id="resetText"></span>
   </div>
 
-  <!-- HERO STATS -->
-  <section class="stats-strip" aria-label="Variance totals">
-    <div class="stat-tile" title="Net amount variance across the stable, netted worklist rows.">
-      <span class="stat-tile-label">Net amount variance</span>
-      <span class="stat-tile-value" id="stat-reconcardex">&mdash;</span>
-      <span class="stat-tile-sub">across stable worklist rows</span>
+  <div class="actions">
+    <span class="picker-lbl">Company</span>
+    <span class="seg" id="companyPick"><button type="button" class="seg-btn is-on" data-co="">All</button></span>
+    <span class="search-wrap">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input type="search" id="search" class="search-box" placeholder="Search item, account, branch, method&hellip;" autocomplete="off">
+    </span>
+    <span class="spacer"></span>
+    <span class="kpi"><span class="lbl">Total variance</span><span class="val" id="kpiVar">&mdash;</span></span>
+    <span class="kpi" style="margin-left:22px;"><span class="lbl">Items</span><span class="val" id="kpiItems">&mdash;</span></span>
+    <span class="kpi" style="margin-left:22px;"><span class="lbl">Accounts</span><span class="val" id="kpiAccts">&mdash;</span></span>
+  </div>
+
+  <section class="analysis" id="analysis"><div class="empty">Loading&hellip;</div></section>
+
+  <section class="grid-card">
+    <div class="grid-head">
+      <span class="grid-title">Worklist</span>
+      <span class="grid-count" id="gridCount">&mdash;</span>
+      <span class="spacer"></span>
+      <button class="btn" id="exportBtn"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10v3h10v-3"/><path d="M8 2v9"/><polyline points="5 8 8 11 11 8"/></svg>Export to Excel</button>
     </div>
-    <div class="stat-tile" title="Stable, real variance rows — the actionable worklist.">
-      <span class="stat-tile-label">Actionable items</span>
-      <span class="stat-tile-value" id="stat-count">&mdash;</span>
-      <span class="stat-tile-sub">stable &amp; real variances</span>
-    </div>
-    <div class="stat-tile" title="Rows whose suggested action requires validating against JD Edwards first.">
-      <span class="stat-tile-label">Need JDE validation</span>
-      <span class="stat-tile-value" id="stat-netamt">&mdash;</span>
-      <span class="stat-tile-sub">confirm in JDE before posting</span>
-    </div>
-    <div class="stat-tile">
-      <span class="stat-tile-label">Net quantity variance</span>
-      <span class="stat-tile-value" id="stat-netqty">&mdash;</span>
-      <span class="stat-tile-sub">signed</span>
+    <div class="grid-scroll">
+      <table class="rf" id="rfTable"><thead id="rfHead"></thead><tbody id="rfBody"><tr><td class="empty">Loading worklist&hellip;</td></tr></tbody></table>
     </div>
   </section>
 
-  <!-- RESET BANNER — populated from the Reset row in
-       v6ui_itemrollintegritydialog. Hidden when there's no Reset row
-       (the view shouldn't realistically be empty here, but defensive). -->
-  <div class="reset-banner" id="reset-banner" hidden>
-    <div class="reset-banner-icon">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="12" cy="12" r="10"/>
-        <polyline points="12 6 12 12 16 14"/>
-      </svg>
+  <section class="ledger">
+    <div class="ledger-head">
+      <h3>Adjustment ledger</h3>
+      <span class="hint">every Adjust Beginning Balance is logged here and can be undone</span>
     </div>
-    <div class="reset-banner-body">
-      <div class="reset-banner-label">Variance reset</div>
-      <div class="reset-banner-headline" id="reset-banner-headline">&mdash;</div>
-      <div class="reset-banner-sub" id="reset-banner-sub">&mdash;</div>
-    </div>
-    <div class="reset-banner-meta" id="reset-banner-meta">&mdash;</div>
-  </div>
-
-  <!-- DETAILS GRID -->
-  <section class="details-card" id="details-card">
-    <div class="details-head">
-      <span class="details-title">Details</span>
-      <div class="details-head-right">
-        <div class="grid-state-cluster">
-          <label class="grid-search" title="Substring search across visible columns. Prefix the query with ^ to switch to starts-with (e.g. ^468- matches Item 468-... but not X-468-).">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="7" r="4"/><line x1="10" y1="10" x2="14" y2="14"/></svg>
-            <input type="search" id="grid-search-input" placeholder="Search rows&hellip; (^ for starts-with)" autocomplete="off" spellcheck="false">
-            <button type="button" class="grid-search-clear" id="grid-search-clear" hidden title="Clear search">&times;</button>
-          </label>
-          <button type="button" class="grid-pill grid-pill-export" id="grid-export-btn" title="Export current view (filters + visible columns + order) to Excel">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10v3h10v-3"/><path d="M8 2v9"/><polyline points="5 8 8 11 11 8"/></svg>
-            <span>Excel</span>
-          </button>
-          <button type="button" class="grid-pill grid-pill-cols" id="col-pill" title="Show or hide columns &middot; drag column headers to reorder">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="1"/><line x1="6" y1="3" x2="6" y2="13"/><line x1="10" y1="3" x2="10" y2="13"/></svg>
-            <span id="col-pill-label">Columns</span>
-            <svg class="pill-caret" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 6 8 10 12 6"/></svg>
-          </button>
-          <span class="grid-pill grid-pill-count is-loading" id="details-count">Loading&hellip;</span>
-        </div>
-      </div>
-    </div>
-    <div class="details-scroll">
-      <table class="details-table" id="details-table">
-        <thead>
-          <tr id="details-thead-row"></tr>
-        </thead>
-        <tbody id="details-tbody">
-          <tr><td class="details-skeleton" id="details-skeleton-cell">Loading cardex variance rows&hellip;</td></tr>
-        </tbody>
-      </table>
-    </div>
+    <div id="ledgerBody"><div class="ledger-empty">No adjustments yet &mdash; click an <b>Adjust</b> button above.</div></div>
   </section>
-
 </div>
-  </main>
 
+<!-- Adjust Beginning Balance modal -->
+<div class="ov" id="adjOverlay" role="dialog" aria-modal="true" aria-labelledby="adjTitle">
+  <div class="card">
+    <h2 id="adjTitle">Adjust Beginning Balance</h2>
+    <div class="who" id="adjWho"></div>
+    <div class="adj-period" id="adjPeriod"></div>
+
+    <div class="presets" id="adjPresets">
+      <div class="preset" data-preset="clear"><div class="pt">Clear to JDE</div><div class="ps">target zeroes the variance</div></div>
+      <div class="preset" data-preset="zero"><div class="pt">Zero opening</div><div class="ps">begin qty &amp; amt = 0</div></div>
+      <div class="preset active" data-preset="manual"><div class="pt">Manual</div><div class="ps">type known values</div></div>
+    </div>
+
+    <div class="fields show" id="adjFields">
+      <div class="field"><label for="adjQty">Beginning qty</label><input type="number" id="adjQty" step="any" value="0"></div>
+      <div class="field"><label for="adjAmt">Beginning amount</label><input type="number" id="adjAmt" step="any" value="0"></div>
+    </div>
+
+    <div class="explain" id="adjExplain"></div>
+
+    <label class="adj-attest" id="adjAttestRow">
+      <input type="checkbox" id="adjAttest">
+      <span>I understand I have verified the JDE cardex data. This is an in-place RapidReconciler correction (JDE is never changed) &mdash; logged as <b id="adjUser">&mdash;</b> and reversible with Undo.</span>
+    </label>
+
+    <div class="row-actions">
+      <button class="btn-ghost" id="adjCancel" type="button">Cancel</button>
+      <button class="btn-go" id="adjConfirm" type="button" disabled>Apply adjustment</button>
+    </div>
+  </div>
 </div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <script>
 (function () {
   'use strict';
+  var DATA = [];                 // worklist data rows (Reason <> 'Reset:')
+  var collapsed = {};            // acctKey -> true when collapsed
+  var _collapseInit = false;     // default-collapse all accounts on first load only
+  var state = { company:'', search:'' };
+  var adj = { itemId:null, preset:'manual' };
+  var resetDate = '';            // baseline/opening date from the '00000' Reset: row
 
-  // This is an admin/analyst function reached from Home, not an inventory
-  // sub-nav tab — so nav:false (like the Model DMAAI Review). mountWorkbar
-  // still mounts connectivity + Home link + identity chip; the page's own
-  // Company / Reason pills and grid chrome are unchanged.
-  if (window.RRV8 && typeof window.RRV8.mountWorkbar === 'function') {
-    window.RRV8.mountWorkbar({ manageUser: true, nav: false });
-  }
+  // ---- fmt ----
+  function num(n){ var x=Number(n)||0; var a=Math.abs(x).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); return x<0?'('+a+')':a; }
+  function qty(n){ var x=Number(n)||0; return x.toLocaleString('en-US',{maximumFractionDigits:2}); }
+  function moneyCell(n){ var x=Number(n)||0; if(Math.abs(x)<0.005) return '<span style="color:var(--text-muted)">&mdash;</span>'; return '<span class="'+(x<0?'neg':'')+'">'+num(x)+'</span>'; }
+  function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(m){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m];}); }
+  function toast(m){ var t=document.getElementById('toast'); if(!t) return; t.innerHTML=m; t.classList.add('show'); clearTimeout(t._t); t._t=setTimeout(function(){t.classList.remove('show');},2400); }
+  function acctKey(r){ return r.CompanyNumber+'|'+r.LongAccount; }
 
-  const RR_CONFIG = window.RR_CONFIG || { mode: 'demo', dataPath: 'data/' };
-  const MODE = (function () {
-    try {
-      const u = new URL(window.location.href);
-      const q = (u.searchParams.get('mode') || '').toLowerCase();
-      if (q === 'demo' || q === 'staging' || q === 'prod') return q;
-    } catch (_) {}
-    return RR_CONFIG.mode || 'demo';
-  })();
-  const IS_DEMO = MODE === 'demo';
-
-  // ============================================================
-  //  SESSION + rrFetch — agent-first per the V8 tenet.
-  //  Demo mode reads the static snapshot at data/reconciliation.json.
-  //  Staging/prod mode fetches per-section from the live agent.
-  // ============================================================
-  // sidebar.js seeds a bare `RR_SESSION = {}` in <head> before this runs,
-  // so the `|| {...}` default never fires — backfill the array shape so a
-  // cold load (no token yet) can't crash reconciliationFilterFromSession
-  // on `RR_SESSION.dbs[...]`.
-  window.RR_SESSION = window.RR_SESSION || { user: null, dbs: [], activeDbIndex: 0, token: null };
-  if (!Array.isArray(window.RR_SESSION.dbs)) window.RR_SESSION.dbs = [];
-  if (typeof window.RR_SESSION.activeDbIndex !== 'number') window.RR_SESSION.activeDbIndex = 0;
-  function rrParseJwt(token) {
-    try {
-      const part = String(token).split('.')[1];
-      if (!part) return null;
-      const b64 = part.replace(/-/g, '+').replace(/_/g, '/');
-      const pad = b64.length % 4;
-      const padded = pad ? b64 + '='.repeat(4 - pad) : b64;
-      const json = decodeURIComponent(atob(padded).split('').map(c =>
-        '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join(''));
-      return JSON.parse(json);
-    } catch (_) { return null; }
-  }
-  function hydrateSessionFromToken() {
-    try {
-      const token = localStorage.getItem('rrv8.token');
-      if (!token) return false;
-      const payload = rrParseJwt(token);
-      if (!payload) return false;
-      window.RR_SESSION.token = token;
-      window.RR_SESSION.user  = payload.user || null;
-      window.RR_SESSION.dbs   = Array.isArray(payload.dbs) ? payload.dbs : [];
-      if (window.RR_SESSION.activeDbIndex >= window.RR_SESSION.dbs.length) {
-        window.RR_SESSION.activeDbIndex = 0;
-      }
-      return window.RR_SESSION.dbs.length > 0;
-    } catch (_) { return false; }
-  }
-  if (!IS_DEMO) hydrateSessionFromToken();
-  function prodHeaders(contentType) {
-    const h = { 'Accept': 'application/json' };
-    if (window.RR_SESSION.token) h['Authorization'] = 'Bearer ' + window.RR_SESSION.token;
-    if (contentType) h['Content-Type'] = contentType;
-    return h;
-  }
-  // Endpoints owned by the green-field data-services test agent
-  // (RapidReconciler-Agent). Source of truth is RR_TEST_AGENT_AREAS
-  // in config.js; this local fallback covers the case where config.js
-  // failed to load.
-  const _testAgentAreas = new Set(window.RR_TEST_AGENT_AREAS || [
-    'inventory/reconciliation/rows',
-    'inventory/reconciliation/history',
-    'inventory/audit-detail',
-    'inventory/variance-component',
-    // V8 cardex corrective action (CardexCorrectionController)
-    'inventory/cardex-worklist',
-    'inventory/adjustment-ledger',
-    'inventory/set-beginning-balance',
-    'inventory/undo-adjustment',
-    'inventory/cardex-work-status'
-  ]);
-  const _testAgentPrefixes = window.RR_TEST_AGENT_PREFIXES || ['download-excel/'];
-  function _routesToTestAgent(area) {
-    if (_testAgentAreas.has(area)) return true;
-    for (let i = 0; i < _testAgentPrefixes.length; i++) {
-      if (area.startsWith(_testAgentPrefixes[i])) return true;
-    }
-    return false;
-  }
-  function rrFetch(area, opts) {
-    opts = opts || {};
-    if (IS_DEMO) {
-      const file = (opts.demoFile || area) + '.json';
-      return fetch((RR_CONFIG.dataPath || 'data/') + file, { cache: 'no-store' })
-        .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status + ' on ' + file); return r.json(); });
-    }
-    let base;
-    if (_routesToTestAgent(area)) {
-      {
-        // Route to the active DB's agent (dbs[activeDbIndex].ip). V7
-        // architecture: one Services jar per database on its own port.
-        // Switching the DB in the user-menu changes activeDbIndex and
-        // therefore the agent we hit. Static testAgentBase remains as
-        // a boot-race fallback when the session hasn't hydrated yet.
-        const _d = window.RR_SESSION && window.RR_SESSION.dbs && window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex || 0];
-        base = (_d && _d.ip)
-          ? ((/^(?:localhost|127\.0\.0\.1)\b/i.test(_d.ip) ? 'http://' : 'https://') + _d.ip)
-          : (RR_CONFIG.testAgentBase || 'http://localhost:34537');
-      }
-    } else {
-      const db = window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex];
-      if (!db || !db.ip) {
-        return Promise.reject(new Error('No active database in session — sign in via the hub first.'));
-      }
-      base = (/^(?:localhost|127\.0\.0\.1)\b/i.test(db.ip) ? 'http://' : 'https://') + db.ip;
-    }
-    const url = base + '/' + area;
-    return fetch(url, {
-      method:  opts.method || 'GET',
-      headers: prodHeaders(opts.body ? 'application/json;charset=UTF-8' : null),
-      body:    opts.body ? JSON.stringify(opts.body) : undefined
-    }).then(r => {
-      if (!r.ok) throw new Error('HTTP ' + r.status + ' on ' + url);
-      // r.json() parses JSON directly from the body buffer, skipping
-      // the intermediate JS-string allocation that r.text() +
-      // JSON.parse(t) needs. Void controllers (rollIItem) return 200
-      // with an empty body — r.json() throws SyntaxError on that,
-      // so treat it as null.
-      return r.json().catch(e => {
-        if (e instanceof SyntaxError) return null;
-        throw e;
-      });
-    });
-  }
-  function reconciliationFilterFromSession() {
-    // /inventory/integrity expects bare string arrays here. Companies +
-    // period default from the canonical session scope (set on Home), so the
-    // analyst's Home selection flows in; fall back to the JWT allowed
-    // companies (`dbs[i].i`) when no selection has been made.
-    const db = window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex] || {};
-    const scope = (window.RRV8 && window.RRV8.readSessionScope) ? window.RRV8.readSessionScope() : null;
-    const companies = (scope && Array.isArray(scope.activeCompanies) && scope.activeCompanies.length)
-      ? scope.activeCompanies
-      : (Array.isArray(db.i) ? db.i : []);
-    return {
-      companies:     companies,
-      businessUnits: [],
-      objects:       [],
-      subsidiaries:  [],
-      currencies:    [],
-      period:        (scope && scope.period) || ''
-    };
-  }
-  // Reconciliation-filtered wraps each dimension in {id, checked, show}
-  // — Jackson binds to a coral...Item array; bare strings here give a
-  // 400. EMPTY arrays cause a 500 (the sproc joins to nothing and
-  // explodes), so the body must carry the full filter universe with
-  // only the dimension(s) the caller wants to narrow set to a
-  // restricted list. Source the universe from GET /inventory/status.
-  function wrapItems(ids) {
-    return (ids || []).map(id => ({ id, checked: true, show: true }));
-  }
-  function buildReconFilteredBody(fullScope, narrowCompanyIds, period) {
-    return {
-      period:        period || (fullScope && fullScope.period) || '',
-      currencies:    wrapItems(fullScope && fullScope.currencies),
-      companies:     wrapItems(narrowCompanyIds && narrowCompanyIds.length
-                                  ? narrowCompanyIds
-                                  : (fullScope && fullScope.companies)),
-      objects:       wrapItems(fullScope && fullScope.objects),
-      businessUnits: wrapItems(fullScope && fullScope.businessUnits),
-      subsidiaries:  wrapItems(fullScope && fullScope.subsidiaries)
-    };
-  }
-  function readCurrentPeriodFromCache() {
-    let best = null;
-    try {
-      for (let i = 0; i < sessionStorage.length; i++) {
-        const k = sessionStorage.key(i);
-        if (!k || !/^rrv8\.scope\.v1\..+\.currentPeriod$/.test(k)) continue;
-        const raw = sessionStorage.getItem(k);
-        if (!raw) continue;
-        const obj = JSON.parse(raw);
-        if (obj && obj.payload && (!best || (obj.ts || 0) > (best.ts || 0))) best = obj;
-      }
-    } catch (_) {}
-    if (!best) return null;
-    return (typeof best.payload === 'string') ? best.payload : (best.payload && best.payload.period);
-  }
-
-  // ----- Toast -----
-  const toastEl = document.getElementById('js-toast');
-  let toastTimer = null;
-  function toast(msg) {
-    if (!toastEl) return;
-    toastEl.textContent = msg;
-    toastEl.classList.add('is-visible');
-    if (toastTimer) clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => toastEl.classList.remove('is-visible'), 2400);
-  }
-
-  // ----- Util -----
-  function escapeHtml(s) {
-    return String(s == null ? '' : s).replace(/[&<>"']/g, m =>
-      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m])
-    );
-  }
-  function fmtInt(n) {
-    const x = Number(n);
-    if (!isFinite(x)) return '';
-    return Math.round(x).toLocaleString('en-US');
-  }
-  function fmtQty(n) {
-    const x = Number(n);
-    if (!isFinite(x)) return '';
-    return x.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
-  }
-  function fmtMoney(n) {
-    const x = Number(n);
-    if (!isFinite(x)) return '';
-    const abs = Math.abs(x).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    return x < 0 ? '(' + abs + ')' : abs;
-  }
-  function moneyCell(n) {
-    const x = Number(n);
-    if (!isFinite(x) || x === 0) return '<span style="color:var(--text-muted)">&mdash;</span>';
-    const cls = x < 0 ? 'neg' : '';
-    const txt = fmtMoney(x);
-    return cls ? '<span class="' + cls + '">' + txt + '</span>' : txt;
-  }
-  function qtyCell(n) {
-    const x = Number(n);
-    if (!isFinite(x) || x === 0) return '<span style="color:var(--text-muted)">&mdash;</span>';
-    const cls = x < 0 ? 'neg' : '';
-    const txt = fmtQty(x);
-    return cls ? '<span class="' + cls + '">' + txt + '</span>' : txt;
-  }
-  function reasonCell(r) {
-    const v = (r.reason || '').trim();
-    if (!v) return '';
-    const cls = v === 'Amount' ? 'is-amount' : (v === 'Quantity' ? 'is-quantity' : '');
-    return '<span class="reason-chip ' + cls + '">' + escapeHtml(v) + '</span>';
-  }
-  function intCell(n) {
-    const x = Number(n);
-    if (!isFinite(x) || x === 0) return '<span style="color:var(--text-muted)">&mdash;</span>';
-    return fmtInt(x);
-  }
-  // "outside operations" and "gl class not in base table" are
-  // dummy/trash-bin longAccount values in v6ui_itemrollintegritydialog
-  // (and accountSummary). They're not real inventory accounts and
-  // shouldn't appear in any grid or contribute to totals. The
-  // Reconciliation page already filters them out via the accountRows
-  // intersection; we apply the same rule here so the Cardex Variance
-  // grid total reconciles to Recon's per-account view.
-  function isExcludedAccount(longAccount) {
-    const s = String(longAccount || '').toLowerCase();
-    return s.indexOf('outside operations') !== -1
-        || s.indexOf('not in base table') !== -1;
-  }
-
-  function shortMdy(s) {
-    // Accept "MM/DD/YY", "MM/DD/YYYY", or "YYYY-MM-DD" and emit
-    // a human-readable "Mon DD, YYYY". The Reset row stores its
-    // date in the ItemNumber column (12/11/14 style).
-    if (!s) return '';
-    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    let m = /^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/.exec(s);
-    if (m) {
-      const mm = parseInt(m[1], 10), dd = parseInt(m[2], 10);
-      let yy = parseInt(m[3], 10);
-      if (yy < 100) yy += yy < 50 ? 2000 : 1900;
-      if (mm >= 1 && mm <= 12) return months[mm - 1] + ' ' + dd + ', ' + yy;
-    }
-    m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
-    if (m) return months[parseInt(m[2], 10) - 1] + ' ' + parseInt(m[3], 10) + ', ' + m[1];
-    return s;
-  }
-
-  // ----- worklist-specific cell renderers -----
-  function grainCell(r) {
-    const g = (r.grainLevel || '').toLowerCase();
-    const label = g === 'item' ? 'Item' : (g === 'branch' ? 'Branch' : (g === 'loclot' ? 'Loc / Lot' : escapeHtml(r.grainLevel || '')));
-    const m = (r.costMethod || '').trim();
-    const lv = (r.costLevel || '').trim();
-    const tag = m ? ('<span style="font-family:\'JetBrains Mono\',monospace;font-weight:700;color:var(--navy);margin-right:5px">' + escapeHtml(m + (m === '02' && lv ? ' L' + lv : '')) + '</span>') : '';
-    return tag + '<span style="font-size:11.5px;color:var(--text-soft)">' + label + '</span>';
-  }
-  function glClassCell(r) {
-    const gc = escapeHtml((r.glClass || '').trim());
-    const chg = (r.glChangeOffset === true || r.glChangeOffset === 1 || r.glChangeOffset === '1')
-      ? ' <span style="font-size:10px;font-weight:800;letter-spacing:.03em;color:var(--red);background:var(--red-pale);border-radius:4px;padding:1px 5px">GL-class change</span>'
-      : '';
-    return gc + chg;
-  }
-  function ownerCell(r) {
-    const o = (r.actionOwner || '').trim();
-    if (!o) return '';
-    let bg = 'var(--bg-soft)', fg = 'var(--text-soft)';
-    if (o === 'RapidReconciler') { bg = 'var(--blue-pale)';  fg = 'var(--blue)'; }
-    else if (o === 'JD Edwards') { bg = 'rgba(240,138,36,.14)'; fg = '#8a5a14'; }
-    else if (o === 'IT')         { bg = '#ece8fb'; fg = '#6c4fd6'; }
-    return '<span style="font-family:\'Source Sans 3\',sans-serif;font-weight:800;font-size:10.5px;letter-spacing:.03em;padding:2px 9px;border-radius:100px;background:' + bg + ';color:' + fg + '">' + escapeHtml(o) + '</span>';
-  }
-  function actionCell(r) {
-    const a = escapeHtml(r.suggestedAction || '');
-    const v = (r.needsJdeValidation === true || r.needsJdeValidation === 1 || r.needsJdeValidation === '1')
-      ? ' <span style="font-size:10px;font-weight:800;color:var(--orange-deep);background:var(--orange-pale);border-radius:4px;padding:1px 5px">needs JDE validation</span>'
-      : '';
-    return '<span style="font-size:12px;color:var(--text-soft)">' + a + v + '</span>';
-  }
-  function stabilityCell(r) {
-    const n = Number(r.runsStable);
-    if (!isFinite(n) || n === 0) return '<span style="color:var(--text-muted)">&mdash;</span>';
-    return '<span style="font-size:11px;font-weight:800;color:var(--green)" title="refreshes the variance has held steady">&#10003; ' + n + '</span>';
-  }
-
-  // ============================================================
-  //  COLUMNS — the netted, stable cardex worklist (v8ui_cardexworklist
-  //  via GET /inventory/cardex-worklist). One row per account x grain;
-  //  the server already netted + filtered to stable/real rows. Click a
-  //  row to Adjust its beginning balance (uses repItemID).
-  // ============================================================
-  const COLUMNS = [
-    { key:'reason',          label:'Reason',           defaultOn:true,  render: reasonCell },
-    { key:'companyNumber',   label:'Company',          defaultOn:true,  render: r => escapeHtml((r.companyNumber || '').trim()) },
-    { key:'longAccount',     label:'Long Account',     defaultOn:true,  render: r => escapeHtml((r.longAccount || '').trim()) },
-    { key:'glClass',         label:'GL Class',         defaultOn:true,  render: glClassCell },
-    { key:'itemNumber',      label:'Item',             defaultOn:true,  render: r => escapeHtml((r.itemNumber || '').trim()) },
-    { key:'branchPlant',     label:'Branch',           defaultOn:true,  render: r => escapeHtml((r.branchPlant || '').trim()) },
-    { key:'location',        label:'Location',         defaultOn:false, render: r => escapeHtml((r.location || '').trim()) },
-    { key:'lot',             label:'Lot',              defaultOn:false, render: r => escapeHtml((r.lot || '').trim()) },
-    { key:'grainLevel',      label:'Grain',            defaultOn:true,  render: grainCell },
-    { key:'netAmtVar',       label:'Amt Var',          defaultOn:true,  numHeader:true, tdClass:'is-money', render: r => moneyCell(r.netAmtVar) },
-    { key:'netQtyVar',       label:'Qty Var',          defaultOn:true,  numHeader:true, tdClass:'is-num',   render: r => qtyCell(r.netQtyVar) },
-    { key:'suggestedAction', label:'Suggested action', defaultOn:true,  render: actionCell },
-    { key:'actionOwner',     label:'Owner',            defaultOn:true,  render: ownerCell },
-    { key:'runsStable',      label:'Stable',           defaultOn:true,  numHeader:true, tdClass:'is-num', render: stabilityCell },
-    { key:'workStatus',      label:'Status',           defaultOn:true,  render: r => escapeHtml(r.workStatus || 'New') }
-  ];
-  const COLUMNS_BY_KEY = {};
-  COLUMNS.forEach(c => { COLUMNS_BY_KEY[c.key] = c; });
-
-  // The agent's /inventory/cardex-worklist returns rows keyed by the SQL
-  // column aliases (PascalCase: CompanyNumber, NetAmtVar, SuggestedAction,
-  // RepItemID, GLChangeOffset, …). Normalize onto the camelCase keys the
-  // renderers + actions read. Case-insensitive match. Non-column fields
-  // (grainKey / repItemID / glChangeOffset / needsJdeValidation / shortItem)
-  // ride along for the Adjust action.
-  const CARDEX_FIELDS = COLUMNS.map(c => c.key)
-    .concat(['grainKey', 'repItemID', 'glChangeOffset', 'needsJdeValidation', 'shortItem', 'costMethod', 'costLevel']);
-  function normalizeCardexRow(r) {
-    if (!r || typeof r !== 'object') return r;
-    const lc = {};
-    Object.keys(r).forEach(k => { lc[k.toLowerCase()] = r[k]; });
-    const out = {};
-    CARDEX_FIELDS.forEach(key => {
-      const v = lc[key.toLowerCase()];
-      if (v !== undefined) out[key] = v;
-    });
-    return out;
-  }
-
-  const COL_LS_KEY       = 'rrv8-cardex-columns-v1';
-  const COL_ORDER_LS_KEY = 'rrv8-cardex-col-order-v1';
-  const SORT_LS_KEY      = 'rrv8-cardex-sort-v1';
-  const COMPANY_LS_KEY   = 'rrv8-cardex-company-v1';
-  const REASON_LS_KEY    = 'rrv8-cardex-reason-v1';
-  const COLFILTER_LS_KEY = 'rrv8-cardex-colfilter-v1';
-
-  function loadColVisibility() {
-    const out = {};
-    COLUMNS.forEach(c => { out[c.key] = c.defaultOn; });
-    try {
-      const raw = localStorage.getItem(COL_LS_KEY);
-      if (raw) {
-        const saved = JSON.parse(raw) || {};
-        Object.keys(saved).forEach(k => { if (k in out) out[k] = !!saved[k]; });
-      }
-    } catch (_) {}
-    return out;
-  }
-  function saveColVisibility() {
-    try { localStorage.setItem(COL_LS_KEY, JSON.stringify(_state.colVisibility)); } catch (_) {}
-  }
-  function loadColOrder() {
-    const allKeys = COLUMNS.map(c => c.key);
-    const knownSet = new Set(allKeys);
-    try {
-      const raw = localStorage.getItem(COL_ORDER_LS_KEY);
-      if (raw) {
-        const saved = JSON.parse(raw);
-        if (Array.isArray(saved)) {
-          const filtered = saved.filter(k => knownSet.has(k));
-          const present  = new Set(filtered);
-          const missing  = allKeys.filter(k => !present.has(k));
-          return filtered.concat(missing);
-        }
-      }
-    } catch (_) {}
-    return allKeys;
-  }
-  function saveColOrder() {
-    try { localStorage.setItem(COL_ORDER_LS_KEY, JSON.stringify(_state.colOrder)); } catch (_) {}
-  }
-  function loadSort() {
-    try {
-      const raw = localStorage.getItem(SORT_LS_KEY);
-      if (!raw) return { key: 'adjAmount', dir: 'desc' };  // default = biggest hits first
-      const s = JSON.parse(raw);
-      if (s && (s.key === null || typeof s.key === 'string') && (s.dir === 'asc' || s.dir === 'desc')) return s;
-    } catch (_) {}
-    return { key: 'adjAmount', dir: 'desc' };
-  }
-  function saveSort() {
-    try { localStorage.setItem(SORT_LS_KEY, JSON.stringify({ key: _state.sortKey, dir: _state.sortDir })); } catch (_) {}
-  }
-  function loadCompany() { try { return localStorage.getItem(COMPANY_LS_KEY) || ''; } catch (_) { return ''; } }
-  function saveCompany() {
-    try {
-      if (_state.companyFilter) localStorage.setItem(COMPANY_LS_KEY, _state.companyFilter);
-      else localStorage.removeItem(COMPANY_LS_KEY);
-    } catch (_) {}
-  }
-  function loadColumnFilters() {
-    const out = {};
-    try {
-      const raw = localStorage.getItem(COLFILTER_LS_KEY);
-      if (!raw) return out;
-      const saved = JSON.parse(raw) || {};
-      Object.keys(saved).forEach(k => {
-        if (COLUMNS_BY_KEY[k] && Array.isArray(saved[k]) && saved[k].length) {
-          out[k] = new Set(saved[k]);
-        }
-      });
-    } catch (_) {}
-    return out;
-  }
-  function saveColumnFilters() {
-    try {
-      const obj = {};
-      Object.keys(_state.columnFilters || {}).forEach(k => {
-        const s = _state.columnFilters[k];
-        if (s && s.size) obj[k] = Array.from(s);
-      });
-      localStorage.setItem(COLFILTER_LS_KEY, JSON.stringify(obj));
-    } catch (_) {}
-  }
-  function loadReason() { try { return localStorage.getItem(REASON_LS_KEY) || ''; } catch (_) { return ''; } }
-  function saveReason() {
-    try {
-      if (_state.reasonFilter) localStorage.setItem(REASON_LS_KEY, _state.reasonFilter);
-      else localStorage.removeItem(REASON_LS_KEY);
-    } catch (_) {}
-  }
-
-  const _state = {
-    colVisibility: loadColVisibility(),
-    colOrder:      loadColOrder(),
-    sortKey:       null,
-    sortDir:       'asc',
-    gridSearch:    '',
-    companyFilter: loadCompany(),
-    reasonFilter:  loadReason(),
-    columnFilters: loadColumnFilters()
-  };
-  const _savedSort = loadSort();
-  _state.sortKey = _savedSort.key;
-  _state.sortDir = _savedSort.dir;
-
-  let _data = null;
-  let _resetRow = null;  // the v6ui_itemrollintegritydialog Reset row,
-                         // surfaced as a meta strip above the grid.
-  let _reconCardexByCompany = null;  // {companyNumber: variance.cardex sum}
-                                     // for the latest period in accountRows.
-  let _reconCurrentPeriod = null;    // the latest accountRows period (ISO).
-
-  function visibleColumns() {
-    return _state.colOrder
-      .map(k => COLUMNS_BY_KEY[k])
-      .filter(c => c && _state.colVisibility[c.key]);
-  }
-  function visibleColspan() { return Math.max(1, visibleColumns().length); }
-
-  // ============================================================
-  //  Data load — the netted, stable cardex worklist. The server
-  //  (usp8_cardex_variance) already nets to one row per account x grain,
-  //  gates on stability, and classifies the action; v8ui_cardexworklist
-  //  serves only stable/real rows. Agent: GET /inventory/cardex-worklist.
-  //  Demo: an inline illustrative sample (public-safe) — the netted
-  //  worklist is a server-side product, so there's no static snapshot.
-  // ============================================================
-  const DEMO_WORKLIST = [
-    { reason:'Amount',   companyNumber:'00010', longAccount:'1110.141000', glClass:'RM01', itemNumber:'MFG-200', branchPlant:'BR10', location:'', lot:'', grainLevel:'branch', costMethod:'02', costLevel:'2', netQtyVar:0,   netAmtVar:-4250.00, suggestedAction:'Correct GL class / reclassify', actionOwner:'JD Edwards', needsJdeValidation:1, glChangeOffset:1, runsStable:6, workStatus:'New', grainKey:'00010~1110.141000~BR10~5001~~', repItemID:5001 },
-    { reason:'Amount',   companyNumber:'00010', longAccount:'1110.141500', glClass:'FG01', itemNumber:'MFG-200', branchPlant:'BR10', location:'', lot:'', grainLevel:'branch', costMethod:'02', costLevel:'2', netQtyVar:0,   netAmtVar:4250.00,  suggestedAction:'Correct GL class / reclassify', actionOwner:'JD Edwards', needsJdeValidation:1, glChangeOffset:1, runsStable:6, workStatus:'New', grainKey:'00010~1110.141500~BR10~5002~~', repItemID:5002 },
-    { reason:'Quantity', companyNumber:'00010', longAccount:'1110.141000', glClass:'RM01', itemNumber:'QTY-9',   branchPlant:'BR10', location:'L1', lot:'', grainLevel:'loclot', costMethod:'02', costLevel:'3', netQtyVar:-83, netAmtVar:-415.00,  suggestedAction:'Validate F4111 vs F41021 -> F41021 correction', actionOwner:'IT', needsJdeValidation:1, glChangeOffset:0, runsStable:8, workStatus:'New', grainKey:'00010~1110.141000~BR10~5003~L1~', repItemID:5003 },
-    { reason:'Amount',   companyNumber:'00010', longAccount:'1110.142000', glClass:'WP01', itemNumber:'STD-07',  branchPlant:'BR20', location:'WIP1', lot:'L9', grainLevel:'loclot', costMethod:'07', costLevel:'3', netQtyVar:0, netAmtVar:1310.00, suggestedAction:'Validate in JDE -> dollars-only IA', actionOwner:'JD Edwards', needsJdeValidation:1, glChangeOffset:0, runsStable:5, workStatus:'New', grainKey:'00010~1110.142000~BR20~5004~WIP1~L9', repItemID:5004 },
-    { reason:'Amount',   companyNumber:'00010', longAccount:'1110.141000', glClass:'RM01', itemNumber:'BAS-1',   branchPlant:'BR10', location:'', lot:'', grainLevel:'branch', costMethod:'02', costLevel:'2', netQtyVar:0,   netAmtVar:180.00,   suggestedAction:'Adjust Beginning Balance', actionOwner:'RapidReconciler', needsJdeValidation:0, glChangeOffset:0, runsStable:5, workStatus:'New', grainKey:'00010~1110.141000~BR10~5005~~', repItemID:5005 }
+  // ---- columns (item rows) ----
+  var COLS = [
+    { k:'ItemNumber',  label:'Item',     render:function(r){return '<span class="mono">'+esc(r.ItemNumber)+'</span>';} },
+    { k:'Branch',      label:'Branch',   render:function(r){return esc(r.Branch);} },
+    { k:'Location',    label:'Loc / Lot',render:function(r){return esc([r.Location,r.Lot].filter(Boolean).join(' / ')||'&mdash;');} },
+    { k:'Method',      label:'Method',   render:function(r){return esc(r.Method);} },
+    { k:'CostLevel',   label:'Lvl',      render:function(r){return esc(r.CostLevel);} },
+    { k:'AdjQty',      label:'Qty Var',  num:true, render:function(r){return moneyCell(r.AdjQty);} },
+    { k:'AdjAmount',   label:'Amt Var',  num:true, render:function(r){return moneyCell(r.AdjAmount);} },
+    { k:'QtyOnHand',   label:'QOH',      num:true, render:function(r){return qty(r.QtyOnHand);} },
+    { k:'LastActivity',label:'Last Activity', render:function(r){return esc(r.LastActivity)||'&mdash;';} },
+    { k:'TxCount',     label:'Tx',       num:true, render:function(r){return esc(r.TxCount);} },
+    { k:'_act',        label:'',         render:function(r){return '<button class="btn sm primary" data-adjust="'+esc(r.ItemID)+'">Adjust</button>';} }
   ];
 
-  async function loadData() {
-    const skeleton = document.getElementById('details-skeleton-cell');
-    if (skeleton) skeleton.colSpan = visibleColspan();
-    try {
-      let all;
-      if (IS_DEMO) {
-        all = DEMO_WORKLIST.slice();
-      } else {
-        const payload = await rrFetch('inventory/cardex-worklist');
-        all = (payload && Array.isArray(payload.data)) ? payload.data
-            : (Array.isArray(payload) ? payload : []);
-      }
-      _data = { rows: all.map(normalizeCardexRow) };
-    } catch (err) {
-      console.error('cardex worklist load failed:', err);
-      const tbody = document.getElementById('details-tbody');
-      if (tbody) {
-        tbody.innerHTML = '<tr><td colspan="' + visibleColspan() + '" class="details-empty">' +
-          'Couldn&rsquo;t load the cardex worklist &mdash; ' + escapeHtml(err.message) +
-        '</td></tr>';
-      }
-      return;
-    }
-    loadLedger();   // fire-and-forget; populates the Adjustment ledger drawer
-    renderAll();
+  function scoped(){ return state.company ? DATA.filter(function(r){return r.CompanyNumber===state.company;}) : DATA; }
+  // Free-text search across the human-meaningful fields; all tokens must match.
+  function matchRow(r){
+    var q=(state.search||'').trim().toLowerCase(); if(!q) return true;
+    var hay=[r.ItemNumber,r.LongAccount,r.Branch,r.Location,r.Lot,r.Method,r.GLClass,r.CostLevel].join(' ').toLowerCase();
+    return q.split(/\s+/).every(function(tok){ return hay.indexOf(tok)>=0; });
   }
+  function gridRows(){ return scoped().filter(matchRow); }   // company filter + search (KPIs use scoped())
 
-  // ============================================================
-  //  Filter + sort + search
-  // ============================================================
-  function filteredRows() {
-    if (!_data || !Array.isArray(_data.rows)) return [];
-    let rows = _data.rows;
-    if (_state.companyFilter) rows = rows.filter(r => (r.companyNumber || '') === _state.companyFilter);
-    if (_state.reasonFilter)  rows = rows.filter(r => (r.reason || '') === _state.reasonFilter);
-    rows = applyColumnFilters(rows);
-    return rows;
+  // ---- render ----
+  function renderKpis(){
+    var s=scoped();
+    var v=s.reduce(function(a,r){return a+(Number(r.AdjAmount)||0);},0);
+    var accts=new Set(s.map(acctKey)).size;
+    var k1=document.getElementById('kpiVar'); k1.textContent=num(v); k1.classList.toggle('neg',v<0);
+    document.getElementById('kpiItems').textContent=s.length.toLocaleString('en-US');
+    document.getElementById('kpiAccts').textContent=accts;
   }
-  function applyColumnFilters(rows) {
-    const cf = _state.columnFilters || {};
-    const keys = Object.keys(cf).filter(k => cf[k] && cf[k].size);
-    if (!keys.length) return rows;
-    return rows.filter(r => {
-      for (let i = 0; i < keys.length; i++) {
-        const k = keys[i];
-        const v = (r[k] == null) ? '' : String(r[k]);
-        if (!cf[k].has(v)) return false;
-      }
-      return true;
-    });
+  function renderAnalysis(){
+    var host=document.getElementById('analysis'); if(!host) return;
+    var s=scoped();
+    var accts=new Set(s.map(acctKey)).size;
+    var clean=s.length===0;
+    var badge=clean
+      ? '<span class="an-badge ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>'
+      : '<span class="an-badge warn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4M12 17h.01"/></svg></span>';
+    var headline=clean?'Cardex is clean':(s.length.toLocaleString('en-US')+' item'+(s.length!==1?'s':'')+' with cardex variance across '+accts+' account'+(accts!==1?'s':''));
+    var sub=clean?'No item shows perpetual drift in scope.':'Work the real rows; net offsets within an account cancel at the account level.';
+    host.innerHTML='<div class="an-headline">'+badge+'<div><div class="an-title">'+headline+'</div><div class="an-sub">'+sub+'</div></div></div>'+
+      (clean?'':'<div class="an-note"><b>Before adjusting:</b> confirm the row is a RapidReconciler baseline artifact, not a real JDE difference. A real JDE difference is fixed in JD Edwards and clears on the next refresh; Adjust Beginning Balance is for the load-time baseline desync only.</div>');
   }
-  function distinctValuesForColumn(colKey) {
-    if (!_data || !Array.isArray(_data.rows)) return [];
-    let rows = _data.rows;
-    if (_state.companyFilter) rows = rows.filter(r => (r.companyNumber || '') === _state.companyFilter);
-    if (_state.reasonFilter)  rows = rows.filter(r => (r.reason || '') === _state.reasonFilter);
-    const cf = _state.columnFilters || {};
-    const otherKeys = Object.keys(cf).filter(k => k !== colKey && cf[k] && cf[k].size);
-    if (otherKeys.length) {
-      rows = rows.filter(r => {
-        for (let i = 0; i < otherKeys.length; i++) {
-          const k = otherKeys[i];
-          const v = (r[k] == null) ? '' : String(r[k]);
-          if (!cf[k].has(v)) return false;
-        }
-        return true;
+  function renderGrid(){
+    var head=document.getElementById('rfHead'), body=document.getElementById('rfBody'), cnt=document.getElementById('gridCount');
+    head.innerHTML='<tr>'+COLS.map(function(c){return '<th class="'+(c.num?'num':'')+'">'+esc(c.label)+'</th>';}).join('')+'</tr>';
+    var searching=!!(state.search||'').trim();
+    var s=gridRows(), total=scoped().length;
+    cnt.textContent=searching
+      ? (s.length.toLocaleString('en-US')+' of '+total.toLocaleString('en-US')+' item'+(total!==1?'s':'')+' match')
+      : (s.length.toLocaleString('en-US')+' item'+(s.length!==1?'s':'')+' in scope');
+    if(!s.length){ body.innerHTML='<tr><td class="empty" colspan="'+COLS.length+'">'+(searching?'No items match your search.':'No cardex variance in scope.')+'</td></tr>'; return; }
+    // group by account
+    var groups={}, order=[];
+    s.forEach(function(r){ var k=acctKey(r); if(!groups[k]){ groups[k]=[]; order.push(k); } groups[k].push(r); });
+    var html='';
+    order.forEach(function(k){
+      var rows=groups[k], r0=rows[0];
+      var sub=rows.reduce(function(a,r){return a+(Number(r.AdjAmount)||0);},0);
+      var isCol=searching ? false : !!collapsed[k];   // auto-expand matches while searching
+      html+='<tr class="grp'+(isCol?' collapsed':'')+'" data-grp="'+esc(k)+'">'+
+        '<td colspan="'+COLS.length+'"><span class="caret">&#9660;</span> '+
+        '<span class="acct">'+esc(r0.LongAccount)+'</span>'+
+        '<span class="gmeta">Co '+esc(r0.CompanyNumber)+' &middot; '+rows.length+' item'+(rows.length!==1?'s':'')+'</span>'+
+        '<span class="gsub '+(sub<0?'neg':'')+'">'+num(sub)+'</span></td></tr>';
+      rows.forEach(function(r){
+        html+='<tr class="item'+(isCol?' hide':'')+'" data-grp="'+esc(k)+'">'+COLS.map(function(c){return '<td class="'+(c.num?'num':'')+'">'+c.render(r)+'</td>';}).join('')+'</tr>';
       });
-    }
-    const set = new Set();
-    rows.forEach(r => set.add((r[colKey] == null) ? '' : String(r[colKey])));
-    return Array.from(set).sort((a, b) =>
-      String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' })
-    );
-  }
-  function searchFilter(rows, q) {
-    let query = String(q || '').toLowerCase().trim();
-    if (!query) return rows;
-    // §8 starts-with anchor: a leading `^` switches to startsWith.
-    const anchored = query.charAt(0) === '^';
-    if (anchored) query = query.slice(1);
-    if (!query) return rows;
-    const cols = visibleColumns();
-    return rows.filter(r => {
-      for (let i = 0; i < cols.length; i++) {
-        const v = r[cols[i].key];
-        if (v == null) continue;
-        const s = String(v).toLowerCase();
-        if (anchored ? s.indexOf(query) === 0 : s.indexOf(query) !== -1) return true;
-      }
-      return false;
     });
+    body.innerHTML=html;
   }
-  function sortRows(rows, key, dir) {
-    if (!key) return rows;
-    const col = COLUMNS_BY_KEY[key];
-    if (!col) return rows;
-    const numeric = col.tdClass === 'is-money' || col.tdClass === 'is-num';
-    const isDate  = col.sortAs === 'date';
-    const mult = (dir === 'desc') ? -1 : 1;
-    return rows.slice().sort((a, b) => {
-      const av = a[key], bv = b[key];
-      if (numeric) {
-        const an = Number(av);
-        const bn = Number(bv);
-        const ax = isFinite(an) ? an : 0;
-        const bx = isFinite(bn) ? bn : 0;
-        return (ax - bx) * mult;
-      }
-      if (isDate) {
-        // lastActivity is MM/DD/YYYY — sort chronologically, blanks last.
-        const ad = Date.parse(av), bd = Date.parse(bv);
-        const ax = isFinite(ad) ? ad : (mult < 0 ? -Infinity : Infinity);
-        const bx = isFinite(bd) ? bd : (mult < 0 ? -Infinity : Infinity);
-        return (ax - bx) * mult;
-      }
-      const as = String(av == null ? '' : av);
-      const bs = String(bv == null ? '' : bv);
-      return as.localeCompare(bs, undefined, { numeric: true, sensitivity: 'base' }) * mult;
+  function renderAll(){ renderKpis(); renderAnalysis(); renderGrid(); }
+
+  // ---- company picker ----
+  function buildPicker(){
+    var cos=Array.from(new Set(DATA.map(function(r){return r.CompanyNumber;}))).sort();
+    var host=document.getElementById('companyPick');
+    host.innerHTML='<button type="button" class="seg-btn is-on" data-co="">All</button>'+
+      cos.map(function(c){return '<button type="button" class="seg-btn" data-co="'+esc(c)+'">'+esc(c)+'</button>';}).join('');
+  }
+
+  // ---- excel export ----
+  function exportXlsx(){
+    var s=gridRows();
+    if(!s.length){ toast('Nothing to export'); return; }
+    if(typeof XLSX==='undefined'){ toast('Excel library still loading &mdash; try again'); return; }
+    var labels=['Company','Long Account','Item','Branch','Location','Lot','Method','Cost Level','Qty Var','Amt Var','QOH','Last Activity','Tx Count'];
+    var aoa=[labels];
+    s.forEach(function(r){ aoa.push([r.CompanyNumber,r.LongAccount,r.ItemNumber,r.Branch,r.Location,r.Lot,r.Method,r.CostLevel,Number(r.AdjQty)||0,Number(r.AdjAmount)||0,Number(r.QtyOnHand)||0,r.LastActivity,Number(r.TxCount)||0]); });
+    var ws=XLSX.utils.aoa_to_sheet(aoa), wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb,ws,'Cardex Variance');
+    XLSX.writeFile(wb,'Cardex Variance.xlsx');
+    toast('Exported '+s.length+' item'+(s.length!==1?'s':'')+' to Excel');
+  }
+
+  // ---- adjust modal ----
+  function openAdjust(itemId){
+    var r=DATA.filter(function(x){return String(x.ItemID)===String(itemId);})[0];
+    if(!r){ toast('Item not found'); return; }
+    adj.itemId=itemId; adj.preset='manual';
+    document.getElementById('adjWho').innerHTML='<span class="mono">'+esc(r.ItemNumber)+'</span> &middot; '+esc(r.LongAccount)+' (Co '+esc(r.CompanyNumber)+') &middot; current variance <b class="'+((Number(r.AdjAmount)||0)<0?'neg':'')+'">'+num(r.AdjAmount)+'</b>';
+    document.getElementById('adjPeriod').innerHTML='<b>Period being adjusted:</b> opening balance'+(resetDate?' &middot; baseline <span class="mono">'+esc(resetDate)+'</span>':'')+'. The roll-forward re-derives from here through the current period.';
+    document.getElementById('adjUser').textContent=loginId()||'(unknown)';
+    document.getElementById('adjQty').value='0'; document.getElementById('adjAmt').value='0';
+    document.getElementById('adjAttest').checked=false;
+    document.getElementById('adjConfirm').disabled=true;
+    document.querySelectorAll('#adjPresets .preset').forEach(function(p){ p.classList.toggle('active',p.getAttribute('data-preset')==='manual'); });
+    syncPreset();
+    document.getElementById('adjOverlay').classList.add('show');
+  }
+  function closeAdjust(){ document.getElementById('adjOverlay').classList.remove('show'); }
+  function syncPreset(){
+    var manual=adj.preset==='manual';
+    document.getElementById('adjFields').classList.toggle('show',manual);
+    var ex={
+      clear:'<b>Clear to JDE.</b> Sets the beginning balance to the value that drives this item&rsquo;s variance to zero &mdash; computed on the server from the current balance and variance. Use when the variance is a known load-time baseline artifact.',
+      zero:'<b>Zero opening.</b> Sets beginning quantity and amount to 0. Use when the item should have started the period empty.',
+      manual:'<b>Manual.</b> Type the beginning quantity and amount you know are correct. The roll-forward and variance recompute from there.'
+    };
+    document.getElementById('adjExplain').innerHTML=ex[adj.preset]||'';
+  }
+  function confirmAdjust(){
+    if(adj.itemId==null) return;
+    if(!document.getElementById('adjAttest').checked){ toast('Confirm you have verified the JDE cardex data first.'); return; }
+    var btn=document.getElementById('adjConfirm'); btn.disabled=true; btn.textContent='Applying…';
+    var body={ itemId:Number(adj.itemId), preset:adj.preset, beginQty:0, beginAmt:0 };
+    if(adj.preset==='manual'){ body.beginQty=Number(document.getElementById('adjQty').value)||0; body.beginAmt=Number(document.getElementById('adjAmt').value)||0; }
+    agentFetch('/inventory/set-beginning-balance',{method:'POST',body:body})
+      .then(function(res){
+        var rv=(res&&(res.ResBaselineVar!=null?res.ResBaselineVar:res.resBaselineVar));
+        toast('Adjustment applied'+(rv!=null?' &mdash; resulting variance '+num(rv):'')+'.');
+        closeAdjust(); reload();
+      })
+      .catch(function(e){ toast('Adjustment failed: '+esc(e.message)); })
+      .then(function(){ btn.disabled=false; btn.textContent='Apply adjustment'; });
+  }
+
+  // ---- adjustment ledger ----
+  function renderLedger(rows){
+    var host=document.getElementById('ledgerBody');
+    if(!rows||!rows.length){ host.innerHTML='<div class="ledger-empty">No adjustments yet &mdash; click an <b>Adjust</b> button above.</div>'; return; }
+    var head='<tr><th>When</th><th>By</th><th>Account</th><th>Item</th><th>Preset</th><th class="num">Begin qty</th><th class="num">Begin amt</th><th class="num">Result var</th><th>Status</th><th></th></tr>';
+    var b=rows.map(function(r){
+      var applied=String(r.Status||'').toLowerCase()==='applied';
+      return '<tr><td>'+esc((r.AdjustTime||'').toString().replace('T',' ').slice(0,16))+'</td>'+
+        '<td>'+esc(r.Username||'&mdash;')+'</td>'+
+        '<td class="mono">'+esc(r.LongAccount)+'</td>'+
+        '<td class="mono">'+esc(r.ItemID)+'</td>'+
+        '<td>'+esc(r.Preset)+'</td>'+
+        '<td class="num">'+qty(r.New_BL_Qty)+'</td>'+
+        '<td class="num">'+num(r.New_BL_Amt)+'</td>'+
+        '<td class="num">'+moneyCell(r.Res_BaselineVar)+'</td>'+
+        '<td><span class="pill '+(applied?'applied':'reversed')+'">'+esc(r.Status||'')+'</span></td>'+
+        '<td>'+(applied?'<button class="btn sm" data-undo="'+esc(r.AdjustID)+'">Undo</button>':'')+'</td></tr>';
+    }).join('');
+    host.innerHTML='<div class="grid-scroll" style="max-height:320px"><table class="rf"><thead>'+head+'</thead><tbody>'+b+'</tbody></table></div>';
+  }
+  function undoAdjust(adjustId){
+    agentFetch('/inventory/undo-adjustment',{method:'POST',body:{adjustId:Number(adjustId)}})
+      .then(function(){ toast('Adjustment undone.'); reload(); })
+      .catch(function(e){ toast('Undo failed: '+esc(e.message)); });
+  }
+
+  // ---- agent I/O (JWT-scoped; same token pattern as Account Roll Forward) ----
+  function agentBaseFromToken(token){
+    try {
+      var b64=token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'); var pad=b64.length%4; if(pad) b64+='='.repeat(4-pad);
+      var p=JSON.parse(decodeURIComponent(atob(b64).split('').map(function(c){return '%'+('00'+c.charCodeAt(0).toString(16)).slice(-2);}).join('')));
+      var dbs=p.dbs||[]; var idx=Number(p.activeDbIndex)||0; var db=dbs[idx]||dbs[0];
+      if(db&&db.n){ var el=document.getElementById('topbarDb'); if(el) el.textContent=db.n; }
+      if(db&&db.ip) return (/^(localhost|127\.0\.0\.1)/i.test(db.ip)?'http://':'https://')+db.ip;
+    } catch(_){}
+    return null;
+  }
+  function token(){ try{ return localStorage.getItem('rrv8.token'); }catch(_){ return null; } }
+  function tokenPayload(){ var t=token(); if(!t) return null;
+    try { var b64=t.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'); var pad=b64.length%4; if(pad) b64+='='.repeat(4-pad);
+      return JSON.parse(decodeURIComponent(atob(b64).split('').map(function(c){return '%'+('00'+c.charCodeAt(0).toString(16)).slice(-2);}).join(''))); }
+    catch(_){ return null; } }
+  // The login id the agent records in the ledger (userRequest.getUsername() == JWT sub).
+  function loginId(){ var p=tokenPayload(); return p ? String(p.sub || (p.user&&p.user.u) || '') : ''; }
+  // Cross-page session cache, same key Home warms (rrv8.scope.v1.<mode>.<db>.cardexworklist).
+  // Home preloads this behind the scenes; this page renders from it instantly, then refreshes.
+  var RR_CONFIG = window.RR_CONFIG || {};
+  var MODE = (new URLSearchParams(window.location.search).get('mode')) || RR_CONFIG.mode || 'demo';
+  function activeDbName(){ var p=tokenPayload(); if(!p) return '_'; var dbs=p.dbs||[]; var db=dbs[Number(p.activeDbIndex)||0]||dbs[0]; return (db&&db.n)||'_'; }
+  function cardexCacheKey(){ return 'rrv8.scope.v1.'+MODE+'.'+activeDbName()+'.cardexworklist'; }
+  function readCardexCache(){ try{ var o=JSON.parse(sessionStorage.getItem(cardexCacheKey())||'null'); return o&&Array.isArray(o.payload)?o.payload:null; }catch(_){ return null; } }
+  function writeCardexCache(rows){ try{ sessionStorage.setItem(cardexCacheKey(), JSON.stringify({ts:Date.now(), payload:rows})); }catch(_){} }
+  function agentFetch(path,opts){
+    opts=opts||{}; var t=token(); var base=t&&agentBaseFromToken(t);
+    if(!base) return Promise.reject(new Error('not signed in'));
+    var h={'Authorization':'Bearer '+t,'Accept':'application/json'};
+    var init={method:opts.method||'GET',headers:h};
+    if(opts.body){ h['Content-Type']='application/json;charset=UTF-8'; init.body=JSON.stringify(opts.body); }
+    return fetch(base+path,init).then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.status===204?null:r.json(); });
+  }
+
+  function ingestWorklist(rows){
+    rows=Array.isArray(rows)?rows:[];
+    // pull the '00000' Reset: header row out for the banner
+    var reset=rows.filter(function(r){ return String(r.Reason||'').trim()==='Reset:'; })[0];
+    resetDate = reset ? String(reset.ItemNumber||'').trim() : '';
+    if(reset){ document.getElementById('resetText').innerHTML='Variance tracked from the reset date <b>'+esc(resetDate)+'</b> forward.'; document.getElementById('resetBanner').classList.add('show'); }
+    DATA=rows.filter(function(r){ return String(r.Reason||'').trim()!=='Reset:'; });
+    // Default-collapse every account on first load (page open); later reloads
+    // (after an adjust/undo) keep whatever the analyst had expanded.
+    if(!_collapseInit){ collapsed={}; DATA.forEach(function(r){ collapsed[acctKey(r)]=true; }); _collapseInit=true; }
+    buildPicker(); renderAll();
+  }
+  function loadWorklist(){
+    return agentFetch('/inventory/integrity',{method:'POST',body:{report:'v6ui_itemrollintegritydialog'}})
+      .then(function(d){ return Array.isArray(d)?d:((d&&d.data)||[]); });
+  }
+  function loadLedger(){ return agentFetch('/inventory/adjustment-ledger').then(function(d){ return (d&&d.data)||[]; }); }
+
+  function reload(){
+    // Cache-first: if Home already warmed the worklist, render it instantly; then
+    // refresh live in the background and re-cache. A failed refresh leaves the
+    // cached view in place rather than blanking it.
+    var cached=readCardexCache();
+    if(cached){ ingestWorklist(cached); }
+    loadWorklist().then(function(rows){ writeCardexCache(rows); ingestWorklist(rows); }).catch(function(err){
+      if(cached) { toast('Showing the last loaded worklist — refresh failed: '+esc(err.message)); return; }
+      document.getElementById('analysis').innerHTML='<div class="empty">Worklist isn&rsquo;t available.<br><span style="font-size:12px">Sign in so the page can read the cardex variance from the data service.</span></div>';
+      document.getElementById('rfBody').innerHTML='<tr><td class="empty" colspan="'+COLS.length+'">No data &mdash; '+esc(err.message)+'</td></tr>';
+      document.getElementById('gridCount').textContent='0 items';
     });
+    loadLedger().then(renderLedger).catch(function(){ /* ledger optional; leave empty state */ });
   }
 
-  // ============================================================
-  //  Render
-  // ============================================================
-  function setStat(id, txt, raw) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.textContent = txt || '0';
-    el.classList.toggle('is-neg', Number(raw) < 0);
-  }
-  function renderStats(rows) {
-    let netAmt = 0, netQty = 0, needVal = 0;
-    for (let i = 0; i < rows.length; i++) {
-      const r = rows[i];
-      netAmt += Number(r.netAmtVar) || 0;
-      netQty += Number(r.netQtyVar) || 0;
-      if (r.needsJdeValidation === true || r.needsJdeValidation === 1 || r.needsJdeValidation === '1') needVal++;
-    }
-    setStat('stat-reconcardex', fmtMoney(netAmt),                  netAmt);
-    setStat('stat-count',       rows.length.toLocaleString('en-US'), rows.length);
-    setStat('stat-netamt',      needVal.toLocaleString('en-US'),   needVal);
-    setStat('stat-netqty',      fmtQty(netQty),                    netQty);
-  }
-
-  function renderTableHeader() {
-    const tr = document.getElementById('details-thead-row');
-    if (!tr) return;
-    const cols = visibleColumns();
-    const cf = _state.columnFilters || {};
-    const html = cols.map(c => {
-      const classes = [];
-      if (c.numHeader) classes.push('is-num');
-      const isActive = _state.sortKey === c.key;
-      if (isActive) classes.push('is-sort-active', 'is-sort-' + _state.sortDir);
-      const filtered = !!(cf[c.key] && cf[c.key].size);
-      if (filtered) classes.push('is-filter-active');
-      const clsAttr = classes.length ? ' class="' + classes.join(' ') + '"' : '';
-      const caret = isActive
-        ? '<span class="sort-caret" aria-hidden="true">' + (_state.sortDir === 'desc' ? '&#9660;' : '&#9650;') + '</span>'
-        : '';
-      const funnel =
-        '<button class="col-filter-trigger" type="button" data-action="filter-col" data-col-key="' + escapeHtml(c.key) + '" title="Filter ' + escapeHtml(c.label) + '" aria-label="Filter ' + escapeHtml(c.label) + '">' +
-          '<svg viewBox="0 0 16 16" fill="' + (filtered ? 'currentColor' : 'none') + '" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-            '<polygon points="2 3 14 3 10 8 10 13 6 11 6 8 2 3"/>' +
-          '</svg>' +
-        '</button>';
-      return '<th' + clsAttr + ' draggable="true" data-col-key="' + escapeHtml(c.key) + '">' + escapeHtml(c.label) + caret + funnel + '</th>';
-    }).join('');
-    tr.innerHTML = html;
-  }
-  function updateColPill() {
-    const pill  = document.getElementById('col-pill');
-    const label = document.getElementById('col-pill-label');
-    if (!pill || !label) return;
-    const total = COLUMNS.length;
-    const on    = visibleColumns().length;
-    label.textContent = on === total ? 'Columns' : ('Columns: ' + on + ' / ' + total);
-    pill.classList.toggle('is-narrowed', on < total);
-  }
-  function updateCompanyPill() {
-    const val  = document.getElementById('company-pill-value');
-    const pill = document.getElementById('company-pill');
-    if (val) val.textContent = _state.companyFilter || 'All';
-    if (pill) pill.classList.toggle('is-active', !!_state.companyFilter);
-  }
-  function updateReasonPill() {
-    const val  = document.getElementById('reason-pill-value');
-    const pill = document.getElementById('reason-pill');
-    if (val) val.textContent = _state.reasonFilter || 'All';
-    if (pill) pill.classList.toggle('is-active', !!_state.reasonFilter);
-  }
-  function updateFilterBanner() {
-    const bar  = document.getElementById('filter-banner');
-    const text = document.getElementById('filter-banner-text');
-    if (!bar || !text) return;
-    const bits = [];
-    if (_state.companyFilter) bits.push('Company = ' + _state.companyFilter);
-    if (_state.reasonFilter)  bits.push('Reason = ' + _state.reasonFilter);
-    if (!bits.length) { bar.hidden = true; return; }
-    text.textContent = bits.join(' · ');
-    bar.hidden = false;
-  }
-
-  function renderDetails() {
-    const tbody = document.getElementById('details-tbody');
-    const count = document.getElementById('details-count');
-    if (!tbody) return;
-    renderTableHeader();
-    updateColPill();
-    const allFiltered = filteredRows();
-    renderStats(allFiltered);
-    const rows = searchFilter(sortRows(allFiltered, _state.sortKey, _state.sortDir), _state.gridSearch);
-    count.classList.remove('is-loading');
-    const total = (_data && _data.rows) ? _data.rows.length : rows.length;
-    count.textContent = rows.length.toLocaleString('en-US') + ' rows' +
-      (rows.length < total ? ' of ' + total.toLocaleString('en-US') : '');
-    const span = visibleColspan();
-    if (!rows.length) {
-      tbody.innerHTML = '<tr><td colspan="' + span + '" class="details-empty">No cardex variance rows match the current filter.</td></tr>';
-      return;
-    }
-    const MAX_RENDER = 500;
-    const slice = rows.slice(0, MAX_RENDER);
-    const cols = visibleColumns();
-    const html = slice.map(r => {
-      const cells = cols.map(c => {
-        const cls = c.tdClass ? ' class="' + c.tdClass + '"' : '';
-        return '<td' + cls + '>' + c.render(r) + '</td>';
-      }).join('');
-      const adjustable = r.repItemID != null && r.repItemID !== '';
-      return '<tr data-grainkey="' + escapeHtml(r.grainKey || '') + '"' +
-        (adjustable ? ' class="is-adjustable" title="Click to adjust this item’s beginning balance"' : '') +
-        '>' + cells + '</tr>';
-    }).join('');
-    let tail = '';
-    if (rows.length > MAX_RENDER) {
-      tail = '<tr><td colspan="' + span + '" class="details-empty">Showing first ' + MAX_RENDER +
-             ' of ' + rows.length.toLocaleString('en-US') + ' rows. Narrow the filter to see more.</td></tr>';
-    }
-    tbody.innerHTML = html + tail;
-  }
-  function renderResetBanner() {
-    const bar = document.getElementById('reset-banner');
-    if (!bar) return;
-    if (!_resetRow) { bar.hidden = true; return; }
-    const rawDate = (_resetRow.itemNumber || '').trim();   // Reset row stores its date in the ItemNumber column
-    const pretty  = shortMdy(rawDate);
-    const comment = (_resetRow.comment || '').trim();
-    const headline = document.getElementById('reset-banner-headline');
-    const sub      = document.getElementById('reset-banner-sub');
-    const meta     = document.getElementById('reset-banner-meta');
-    if (headline) headline.innerHTML = 'Variance measured from <strong>' + escapeHtml(pretty || rawDate || '&mdash;') + '</strong> forward';
-    if (sub)      sub.textContent    = comment || 'Cardex variance accumulates against the last roll-integrity reset.';
-    if (meta)     meta.textContent   = 'Reset row · ' + escapeHtml(rawDate || '');
-    bar.hidden = false;
-    // Also reflect the date in the eyebrow inline span.
-    const eyebrowDate = document.getElementById('js-reset-date');
-    if (eyebrowDate) eyebrowDate.textContent = pretty || rawDate || '—';
-  }
-  function renderAll() {
-    if (!_data) return;
-    updateCompanyPill();
-    updateReasonPill();
-    updateFilterBanner();
-    renderResetBanner();
-    renderDetails();
-  }
-
-  // ============================================================
-  //  Popovers (shared positioner)
-  // ============================================================
-  function hideAllPopovers() {
-    document.querySelectorAll('.popover').forEach(p => { p.hidden = true; p.dataset.group = ''; });
-  }
-  document.addEventListener('click', (e) => {
-    if (e.target.closest('.popover')) return;
-    if (e.target.closest('[data-pop-anchor]')) return;
-    hideAllPopovers();
+  // ---- wire ----
+  document.getElementById('companyPick').addEventListener('click',function(e){ var b=e.target.closest('.seg-btn'); if(!b) return;
+    state.company=b.getAttribute('data-co')||''; this.querySelectorAll('.seg-btn').forEach(function(x){x.classList.toggle('is-on',x===b);}); renderAll(); });
+  document.getElementById('search').addEventListener('input',function(){ state.search=this.value; renderGrid(); });
+  document.getElementById('exportBtn').addEventListener('click',exportXlsx);
+  document.getElementById('rfBody').addEventListener('click',function(e){
+    var g=e.target.closest('tr.grp'); if(g){ var k=g.getAttribute('data-grp'); collapsed[k]=!collapsed[k]; renderGrid(); return; }
+    var a=e.target.closest('[data-adjust]'); if(a){ openAdjust(a.getAttribute('data-adjust')); }
   });
-  function positionPopover(pop, anchor, opts) {
-    opts = opts || {};
-    pop.hidden = false;
-    const rect = anchor.getBoundingClientRect();
-    const popRect = pop.getBoundingClientRect();
-    let top  = rect.bottom + 6;
-    let left = rect.left;
-    if (opts.align === 'right') left = rect.right - popRect.width;
-    const margin = 8;
-    if (left + popRect.width > window.innerWidth - margin) left = window.innerWidth - margin - popRect.width;
-    if (left < margin) left = margin;
-    if (top + popRect.height > window.innerHeight - margin) {
-      top = Math.max(margin, rect.top - popRect.height - 6);
-    }
-    pop.style.top  = top  + 'px';
-    pop.style.left = left + 'px';
-  }
+  document.getElementById('ledgerBody').addEventListener('click',function(e){ var u=e.target.closest('[data-undo]'); if(u) undoAdjust(u.getAttribute('data-undo')); });
+  document.getElementById('adjPresets').addEventListener('click',function(e){ var p=e.target.closest('.preset'); if(!p) return;
+    adj.preset=p.getAttribute('data-preset'); this.querySelectorAll('.preset').forEach(function(x){x.classList.toggle('active',x===p);}); syncPreset(); });
+  document.getElementById('adjAttest').addEventListener('change',function(){ document.getElementById('adjConfirm').disabled=!this.checked; });
+  document.getElementById('adjCancel').addEventListener('click',closeAdjust);
+  document.getElementById('adjConfirm').addEventListener('click',confirmAdjust);
+  document.getElementById('adjOverlay').addEventListener('click',function(e){ if(e.target===this) closeAdjust(); });
 
-  // ----- Column chooser -----
-  const colPill = document.getElementById('col-pill');
-  function buildColPopover() {
-    const pop = document.getElementById('filter-popover');
-    if (!pop) return;
-    pop.dataset.group = '__col-vis';
-    const items = _state.colOrder.map(k => {
-      const c = COLUMNS_BY_KEY[k];
-      if (!c) return '';
-      const on = !!_state.colVisibility[c.key];
-      return '<label class="col-vis-row' + (on ? '' : ' is-muted') + '" data-col-key="' + escapeHtml(c.key) + '">' +
-        '<input type="checkbox"' + (on ? ' checked' : '') + '>' +
-        '<span class="col-vis-label">' + escapeHtml(c.label) + '</span>' +
-      '</label>';
-    }).join('');
-    pop.innerHTML =
-      '<div class="popover-section-label">Show columns</div>' +
-      '<div class="popover-row" data-col-action="all">Show all</div>' +
-      '<div class="popover-row" data-col-action="reset">Reset to defaults</div>' +
-      '<div class="col-vis-list">' + items + '</div>';
-    pop.querySelector('[data-col-action="all"]').addEventListener('click', () => {
-      COLUMNS.forEach(c => { _state.colVisibility[c.key] = true; });
-      saveColVisibility();
-      buildColPopover();
-      positionPopover(pop, colPill, { align: 'right' });
-      renderDetails();
-    });
-    pop.querySelector('[data-col-action="reset"]').addEventListener('click', () => {
-      COLUMNS.forEach(c => { _state.colVisibility[c.key] = c.defaultOn; });
-      _state.colOrder = COLUMNS.map(c => c.key);
-      saveColVisibility();
-      saveColOrder();
-      buildColPopover();
-      positionPopover(pop, colPill, { align: 'right' });
-      renderDetails();
-    });
-    pop.querySelectorAll('.col-vis-row').forEach(row => {
-      row.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        setTimeout(() => {
-          const cb  = row.querySelector('input[type="checkbox"]');
-          const key = row.dataset.colKey;
-          if (!cb || !key) return;
-          _state.colVisibility[key] = cb.checked;
-          row.classList.toggle('is-muted', !cb.checked);
-          saveColVisibility();
-          renderDetails();
-        }, 0);
-      });
-    });
-  }
-  if (colPill) {
-    colPill.setAttribute('data-pop-anchor', 'col');
-    colPill.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const pop = document.getElementById('filter-popover');
-      if (!pop) return;
-      const wasOpen = !pop.hidden && pop.dataset.group === '__col-vis';
-      hideAllPopovers();
-      if (wasOpen) return;
-      buildColPopover();
-      positionPopover(pop, colPill, { align: 'right' });
-    });
-  }
-
-  // ----- Company popover -----
-  const companyPill = document.getElementById('company-pill');
-  function buildCompanyPopover() {
-    const pop = document.getElementById('filter-popover');
-    if (!pop || !_data) return;
-    pop.dataset.group = '__company';
-    const counts = new Map();
-    (_data.rows || []).forEach(r => {
-      const c = (r.companyNumber || '').trim();
-      if (!c) return;
-      counts.set(c, (counts.get(c) || 0) + 1);
-    });
-    const list = Array.from(counts.entries()).sort((a, b) => a[0].localeCompare(b[0]));
-    const allRow = '<div class="uom-row' + (_state.companyFilter ? '' : ' is-selected') + '" data-company="">' +
-                     '<span>All companies</span>' +
-                     '<span class="uom-count">' + (_data.rows || []).length.toLocaleString('en-US') + '</span>' +
-                   '</div>';
-    const items = list.map(([c, n]) =>
-      '<div class="uom-row' + (_state.companyFilter === c ? ' is-selected' : '') + '" data-company="' + escapeHtml(c) + '">' +
-        '<span>' + escapeHtml(c) + '</span>' +
-        '<span class="uom-count">' + n.toLocaleString('en-US') + '</span>' +
-      '</div>'
-    ).join('');
-    pop.innerHTML =
-      '<div class="popover-section-label">Company</div>' +
-      '<div class="uom-list">' + allRow + items + '</div>';
-    pop.querySelectorAll('.uom-row').forEach(row => {
-      row.addEventListener('click', () => {
-        _state.companyFilter = row.dataset.company || '';
-        saveCompany();
-        hideAllPopovers();
-        renderAll();
-      });
-    });
-  }
-  if (companyPill) {
-    companyPill.setAttribute('data-pop-anchor', 'company');
-    companyPill.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const pop = document.getElementById('filter-popover');
-      if (!pop) return;
-      const wasOpen = !pop.hidden && pop.dataset.group === '__company';
-      hideAllPopovers();
-      if (wasOpen) return;
-      buildCompanyPopover();
-      positionPopover(pop, companyPill);
-    });
-  }
-
-  // ----- Reason popover -----
-  const reasonPill = document.getElementById('reason-pill');
-  function buildReasonPopover() {
-    const pop = document.getElementById('filter-popover');
-    if (!pop || !_data) return;
-    pop.dataset.group = '__reason';
-    const counts = new Map();
-    (_data.rows || []).forEach(r => {
-      const v = (r.reason || '').trim();
-      if (!v) return;
-      counts.set(v, (counts.get(v) || 0) + 1);
-    });
-    const list = Array.from(counts.entries()).sort((a, b) => a[0].localeCompare(b[0]));
-    const allRow = '<div class="uom-row' + (_state.reasonFilter ? '' : ' is-selected') + '" data-reason="">' +
-                     '<span>All reasons</span>' +
-                     '<span class="uom-count">' + (_data.rows || []).length.toLocaleString('en-US') + '</span>' +
-                   '</div>';
-    const items = list.map(([v, n]) =>
-      '<div class="uom-row' + (_state.reasonFilter === v ? ' is-selected' : '') + '" data-reason="' + escapeHtml(v) + '">' +
-        '<span>' + escapeHtml(v) + '</span>' +
-        '<span class="uom-count">' + n.toLocaleString('en-US') + '</span>' +
-      '</div>'
-    ).join('');
-    pop.innerHTML =
-      '<div class="popover-section-label">Reason</div>' +
-      '<div class="uom-list">' + allRow + items + '</div>';
-    pop.querySelectorAll('.uom-row').forEach(row => {
-      row.addEventListener('click', () => {
-        _state.reasonFilter = row.dataset.reason || '';
-        saveReason();
-        hideAllPopovers();
-        renderAll();
-      });
-    });
-  }
-  if (reasonPill) {
-    reasonPill.setAttribute('data-pop-anchor', 'reason');
-    reasonPill.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const pop = document.getElementById('filter-popover');
-      if (!pop) return;
-      const wasOpen = !pop.hidden && pop.dataset.group === '__reason';
-      hideAllPopovers();
-      if (wasOpen) return;
-      buildReasonPopover();
-      positionPopover(pop, reasonPill);
-    });
-  }
-
-  // ============================================================
-  //  Cardex corrective action — Adjust Beginning Balance + ledger.
-  //  Replaces the legacy reroll. Click a worklist row to adjust its
-  //  beginning balance (uses repItemID); the Adjustment ledger button
-  //  opens the drawer where edits can be undone.
-  //  Endpoints (CardexCorrectionController): set-beginning-balance,
-  //  undo-adjustment, adjustment-ledger.
-  // ============================================================
-  let _ledger = [];
-  let _adjustRow = null;
-  let _adjustPreset = 'clear';
-
-  function fmtVar(q, a) {
-    const qn = Number(q) || 0, an = Number(a) || 0;
-    return 'qty ' + (Math.abs(qn) < 0.005 ? '0' : fmtQty(qn)) + ' · amt ' + fmtMoney(an);
-  }
-  function normalizeLedgerRow(r) {
-    const lc = {}; Object.keys(r).forEach(k => { lc[k.toLowerCase()] = r[k]; });
-    return {
-      adjustId: lc['adjustid'], itemId: lc['itemid'], status: String(lc['status'] || '').trim(),
-      longAccount: String(lc['longaccount'] || '').trim(), preset: String(lc['preset'] || '').trim(),
-      newQty: lc['new_bl_qty'], newAmt: lc['new_bl_amt'],
-      resEst: lc['res_estunits'], resVar: lc['res_baselinevar']
-    };
-  }
-  async function loadLedger() {
-    try {
-      if (IS_DEMO) { _ledger = []; }
-      else {
-        const p = await rrFetch('inventory/adjustment-ledger');
-        _ledger = (p && Array.isArray(p.data)) ? p.data.map(normalizeLedgerRow) : [];
-      }
-    } catch (e) { console.warn('ledger load failed', e); _ledger = []; }
-    renderLedger();
-  }
-  function renderLedger() {
-    const c = document.getElementById('ledger-count');
-    if (c) c.textContent = _ledger.length ? String(_ledger.length) : '';
-    const body = document.getElementById('cx-drawer-body');
-    if (!body) return;
-    if (!_ledger.length) { body.innerHTML = '<div class="details-empty">No adjustments yet.</div>'; return; }
-    body.innerHTML = _ledger.map(e => {
-      const undo = e.status === 'applied'
-        ? '<button class="grid-pill" data-undo="' + e.adjustId + '">Undo</button>'
-        : '<span style="color:var(--text-muted);font-size:11px">reversed</span>';
-      return '<div class="cx-led-row' + (e.status !== 'applied' ? ' is-reversed' : '') + '">' +
-        '<div style="flex:1;min-width:0"><b class="mono">item ' + escapeHtml(String(e.itemId)) + '</b> ' +
-          '<span style="color:var(--text-muted)">' + escapeHtml(e.longAccount) + ' · ' + escapeHtml(e.preset) + '</span>' +
-          '<div style="font-size:11.5px;color:var(--text-soft)">&rarr; begin ' + fmtQty(Number(e.newQty) || 0) + ' / ' + fmtMoney(Number(e.newAmt) || 0) +
-          ' · result ' + fmtVar(e.resEst, e.resVar) + '</div></div>' +
-        '<div>' + undo + '</div></div>';
-    }).join('');
-    body.querySelectorAll('[data-undo]').forEach(b => {
-      b.onclick = () => undoAdjustment(parseInt(b.getAttribute('data-undo'), 10));
-    });
-  }
-
-  function setAdjustPreset(p) {
-    _adjustPreset = p;
-    document.querySelectorAll('[data-cx-preset]').forEach(el =>
-      el.classList.toggle('is-active', el.getAttribute('data-cx-preset') === p));
-    const mf = document.getElementById('cx-manual-fields');
-    if (mf) mf.style.display = (p === 'manual') ? '' : 'none';
-  }
-  function openAdjust(row) {
-    if (!row) return;
-    if (row.repItemID == null || row.repItemID === '') {
-      toast('Multi-line group — open the specific item line to adjust it.');
-      return;
-    }
-    _adjustRow = row;
-    document.getElementById('cx-ctx').innerHTML =
-      'Account <b class="mono">' + escapeHtml((row.longAccount || '').trim()) + '</b> &middot; ' +
-      'item <b class="mono">' + escapeHtml((row.itemNumber || '').trim()) + '</b> &middot; ' +
-      'current variance ' + fmtVar(row.netQtyVar, row.netAmtVar);
-    const q = document.getElementById('cx-qty'), a = document.getElementById('cx-amt');
-    if (q) q.value = ''; if (a) a.value = '';
-    setAdjustPreset('clear');
-    document.getElementById('cx-scrim').classList.add('is-open');
-  }
-  function closeAdjust() { document.getElementById('cx-scrim').classList.remove('is-open'); _adjustRow = null; }
-
-  async function applyAdjust() {
-    if (!_adjustRow) return;
-    if (IS_DEMO) { toast('Adjust requires a live agent connection — switch out of demo mode.'); return; }
-    const body = { itemId: Number(_adjustRow.repItemID), preset: _adjustPreset, beginQty: 0, beginAmt: 0 };
-    if (_adjustPreset === 'manual') {
-      body.beginQty = parseFloat(document.getElementById('cx-qty').value) || 0;
-      body.beginAmt = parseFloat(document.getElementById('cx-amt').value) || 0;
-    }
-    try {
-      const res = await rrFetch('inventory/set-beginning-balance', { method: 'POST', body: body });
-      const lc = {}; if (res) Object.keys(res).forEach(k => { lc[k.toLowerCase()] = res[k]; });
-      toast('Adjusted — new variance ' + fmtVar(lc['resestunits'], lc['resbaselinevar']));
-      closeAdjust();
-      loadData();
-    } catch (e) {
-      console.error('set-beginning-balance failed', e);
-      toast('Adjust failed — ' + e.message);
-    }
-  }
-  async function undoAdjustment(adjustId) {
-    if (IS_DEMO) { toast('Undo requires a live agent connection.'); return; }
-    try {
-      await rrFetch('inventory/undo-adjustment', { method: 'POST', body: { adjustId: adjustId } });
-      toast('Adjustment undone.');
-      loadData();
-    } catch (e) { console.error('undo failed', e); toast('Undo failed — ' + e.message); }
-  }
-
-  (function wireCardexActions() {
-    const lb = document.getElementById('ledger-btn');
-    if (lb) lb.addEventListener('click', () => document.getElementById('cx-drawer').classList.toggle('is-open'));
-    const dc = document.getElementById('cx-drawer-close');
-    if (dc) dc.addEventListener('click', () => document.getElementById('cx-drawer').classList.remove('is-open'));
-    document.querySelectorAll('[data-cx-preset]').forEach(el =>
-      el.addEventListener('click', () => setAdjustPreset(el.getAttribute('data-cx-preset'))));
-    const ap = document.getElementById('cx-apply'); if (ap) ap.addEventListener('click', applyAdjust);
-    const cn = document.getElementById('cx-cancel'); if (cn) cn.addEventListener('click', closeAdjust);
-    const sc = document.getElementById('cx-scrim'); if (sc) sc.addEventListener('click', e => { if (e.target === sc) closeAdjust(); });
-    const tbody = document.getElementById('details-tbody');
-    if (tbody) tbody.addEventListener('click', (e) => {
-      const tr = e.target.closest ? e.target.closest('tr[data-grainkey]') : null;
-      if (!tr) return;
-      const gk = tr.getAttribute('data-grainkey');
-      const row = ((_data && _data.rows) || []).find(r => (r.grainKey || '') === gk);
-      if (row) openAdjust(row);
-    });
-  })();
-
-  // ----- Filter banner Clear -----
-  const fbClear = document.getElementById('filter-banner-clear');
-  if (fbClear) {
-    fbClear.addEventListener('click', () => {
-      _state.companyFilter = '';
-      _state.reasonFilter  = '';
-      saveCompany();
-      saveReason();
-      renderAll();
-    });
-  }
-
-  // ============================================================
-  //  Column drag-to-reorder + click-to-sort + grid search
-  // ============================================================
-  let _colDragKey = null;
-  function wireColumnDrag() {
-    const tr = document.getElementById('details-thead-row');
-    if (!tr || tr.dataset.dragWired === '1') return;
-    tr.dataset.dragWired = '1';
-    tr.addEventListener('dragstart', (e) => {
-      const th = e.target.closest('th[data-col-key]');
-      if (!th) return;
-      _colDragKey = th.dataset.colKey;
-      th.classList.add('is-dragging');
-      try {
-        e.dataTransfer.effectAllowed = 'move';
-        e.dataTransfer.setData('text/plain', _colDragKey);
-      } catch (_) {}
-    });
-    tr.addEventListener('dragend', () => {
-      tr.querySelectorAll('th').forEach(t => t.classList.remove('is-dragging', 'is-drag-over'));
-      _colDragKey = null;
-    });
-    tr.addEventListener('dragover', (e) => {
-      const th = e.target.closest('th[data-col-key]');
-      if (!th || !_colDragKey) return;
-      e.preventDefault();
-      try { e.dataTransfer.dropEffect = 'move'; } catch (_) {}
-      tr.querySelectorAll('th').forEach(t => t.classList.toggle('is-drag-over', t === th));
-    });
-    tr.addEventListener('dragleave', (e) => {
-      const th = e.target.closest('th[data-col-key]');
-      if (th && !tr.contains(e.relatedTarget)) th.classList.remove('is-drag-over');
-    });
-    tr.addEventListener('drop', (e) => {
-      const th = e.target.closest('th[data-col-key]');
-      if (!th || !_colDragKey) return;
-      e.preventDefault();
-      const targetKey = th.dataset.colKey;
-      if (targetKey === _colDragKey) return;
-      const order = _state.colOrder.slice();
-      const fromIdx = order.indexOf(_colDragKey);
-      if (fromIdx < 0) return;
-      order.splice(fromIdx, 1);
-      const toIdx = order.indexOf(targetKey);
-      if (toIdx < 0) return;
-      order.splice(toIdx, 0, _colDragKey);
-      _state.colOrder = order;
-      saveColOrder();
-      renderDetails();
-    });
-  }
-  function wireColumnSort() {
-    const tr = document.getElementById('details-thead-row');
-    if (!tr || tr.dataset.sortWired === '1') return;
-    tr.dataset.sortWired = '1';
-    tr.addEventListener('click', (e) => {
-      // §9 — funnel button intercepts before sort.
-      const filterBtn = e.target.closest('[data-action="filter-col"]');
-      if (filterBtn) {
-        e.stopPropagation();
-        openColumnFilterPopover(filterBtn.dataset.colKey, filterBtn);
-        return;
-      }
-      const th = e.target.closest('th[data-col-key]');
-      if (!th) return;
-      const key = th.dataset.colKey;
-      if (_state.sortKey === key) {
-        _state.sortDir = _state.sortDir === 'asc' ? 'desc' : 'asc';
-      } else {
-        _state.sortKey = key;
-        _state.sortDir = 'asc';
-      }
-      saveSort();
-      renderDetails();
-    });
-  }
-
-  // ============================================================
-  //  §9 — Per-column funnel filter popover
-  // ============================================================
-  const _colFilterPop = document.getElementById('colfilter-popover');
-  function openColumnFilterPopover(colKey, anchor) {
-    const col = COLUMNS_BY_KEY[colKey];
-    if (!col || !_colFilterPop) return;
-    const values = distinctValuesForColumn(colKey);
-    const active = (_state.columnFilters || {})[colKey] || null;
-    function rowHtml(v) {
-      const checked = !active || active.has(v);
-      const label = (v === '' || v == null) ? '(blank)' : v;
-      return '<label class="col-vis-row">' +
-        '<input type="checkbox" data-value="' + escapeHtml(v) + '"' + (checked ? ' checked' : '') + '>' +
-        '<span class="col-vis-label">' + escapeHtml(label) + '</span>' +
-      '</label>';
-    }
-    _colFilterPop.innerHTML =
-      '<div class="popover-section-label">Filter: ' + escapeHtml(col.label) + '</div>' +
-      '<input type="search" class="col-filter-search" data-action="colfilter-search" ' +
-        'placeholder="Search values…" autocomplete="off" spellcheck="false">' +
-      '<div class="col-vis-list">' + values.map(rowHtml).join('') + '</div>' +
-      '<div class="popover-section">' +
-        '<div class="popover-row" data-action="select-all">Select all</div>' +
-        '<div class="popover-row" data-action="select-none">Select none</div>' +
-        '<div class="popover-row" data-action="clear-filter">Clear filter</div>' +
-      '</div>';
-    const r = anchor.getBoundingClientRect();
-    _colFilterPop.style.left = Math.min(window.innerWidth - 280, r.left) + 'px';
-    _colFilterPop.style.top  = (r.bottom + 6) + 'px';
-    _colFilterPop.style.right = 'auto';
-    _colFilterPop.style.minWidth = '240px';
-    _colFilterPop.hidden = false;
-
-    function readChecked() {
-      return Array.from(_colFilterPop.querySelectorAll('input[type="checkbox"]'))
-        .filter(cb => cb.checked).map(cb => cb.dataset.value);
-    }
-    function commit() {
-      const checked = readChecked();
-      const total = _colFilterPop.querySelectorAll('input[type="checkbox"]').length;
-      if (!_state.columnFilters) _state.columnFilters = {};
-      if (checked.length === total) delete _state.columnFilters[colKey];
-      else                          _state.columnFilters[colKey] = new Set(checked);
-      saveColumnFilters();
-      renderDetails();
-    }
-    _colFilterPop.oninput = e => {
-      if (e.target.dataset.action === 'colfilter-search') {
-        const q = e.target.value.toLowerCase();
-        _colFilterPop.querySelectorAll('.col-vis-row').forEach(row => {
-          const lbl = row.querySelector('.col-vis-label').textContent.toLowerCase();
-          row.style.display = (!q || lbl.indexOf(q) !== -1) ? '' : 'none';
-        });
-      }
-    };
-    _colFilterPop.onchange = e => {
-      if (e.target.matches('input[type="checkbox"]')) commit();
-    };
-    _colFilterPop.onclick = e => {
-      const action = e.target.closest('[data-action]');
-      if (!action) return;
-      const a = action.dataset.action;
-      if (a === 'select-all') {
-        _colFilterPop.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = true);
-        commit();
-      } else if (a === 'select-none') {
-        _colFilterPop.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = false);
-        commit();
-      } else if (a === 'clear-filter') {
-        if (!_state.columnFilters) _state.columnFilters = {};
-        delete _state.columnFilters[colKey];
-        saveColumnFilters();
-        _colFilterPop.hidden = true;
-        renderDetails();
-      }
-    };
-  }
-  document.addEventListener('click', e => {
-    if (!_colFilterPop) return;
-    if (_colFilterPop.contains(e.target) || e.target.closest('[data-action="filter-col"]')) return;
-    _colFilterPop.hidden = true;
-  });
-  function wireGridSearch() {
-    const input = document.getElementById('grid-search-input');
-    const clear = document.getElementById('grid-search-clear');
-    if (!input) return;
-    let t = null;
-    function applyNow() {
-      _state.gridSearch = input.value || '';
-      if (clear) clear.hidden = !_state.gridSearch;
-      renderDetails();
-    }
-    input.addEventListener('input', () => {
-      if (t) clearTimeout(t);
-      t = setTimeout(applyNow, 150);
-    });
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && _state.gridSearch) {
-        e.preventDefault();
-        input.value = '';
-        if (t) clearTimeout(t);
-        applyNow();
-      }
-    });
-    if (clear) {
-      clear.addEventListener('click', () => {
-        input.value = '';
-        if (t) clearTimeout(t);
-        applyNow();
-        input.focus();
-      });
-    }
-  }
-
-  // ============================================================
-  //  Excel export
-  // ============================================================
-  function exportGridToExcel() {
-    if (typeof XLSX === 'undefined') { toast('Excel library still loading — try again in a moment'); return; }
-    if (!_data) { toast('No data loaded yet'); return; }
-    const rows = searchFilter(sortRows(filteredRows(), _state.sortKey, _state.sortDir), _state.gridSearch);
-    if (!rows.length) { toast('No rows in scope — nothing to export'); return; }
-    const cols = visibleColumns();
-    if (!cols.length) { toast('No columns visible — turn at least one on'); return; }
-
-    const stamp = new Date().toLocaleString('en-US', {
-      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
-      hour: 'numeric', minute: '2-digit'
-    });
-    const banner    = ['Cardex Variance Generated ' + stamp].concat(new Array(Math.max(0, cols.length - 1)).fill(''));
-    const headerRow = cols.map(c => c.label);
-
-    // Summed in the Grand Summaries row (variance adjustments only —
-    // QOH / Tx Count are per-item snapshots, so they're never totalled).
-    const moneyKeys = new Set(['netAmtVar']);
-    const qtyKeys   = new Set(['netQtyVar']);
-    // Number-format sets for display: money, quantity, integer.
-    const qtyFmtKeys = new Set(['netQtyVar']);
-    const intKeys    = new Set(['shortItem', 'runsStable']);
-    const sums = { netAmtVar: 0, netQtyVar: 0 };
-    rows.forEach(r => {
-      sums.netAmtVar += Number(r.netAmtVar) || 0;
-      sums.netQtyVar += Number(r.netQtyVar) || 0;
-    });
-    const firstNonNumIdx = cols.findIndex(c => !(moneyKeys.has(c.key) || qtyKeys.has(c.key)));
-    const summary = cols.map((c, i) => {
-      if (i === Math.max(0, firstNonNumIdx)) return 'Grand Summaries';
-      if (moneyKeys.has(c.key) || qtyKeys.has(c.key)) {
-        const v = sums[c.key] || 0;
-        return Math.round(v * 1000) / 1000;
-      }
-      return '';
-    });
-
-    const dataRows = rows.map(r => cols.map(c => {
-      const v = r[c.key];
-      if (v === null || v === undefined) return '';
-      if (moneyKeys.has(c.key) || qtyFmtKeys.has(c.key)) {
-        const n = +v;
-        return isFinite(n) ? Math.round(n * 1000) / 1000 : '';
-      }
-      if (intKeys.has(c.key)) {
-        const n = +v;
-        if (!isFinite(n) || n === 0) return '';
-        return Math.round(n);
-      }
-      return typeof v === 'string' ? v : v;
-    }));
-
-    const aoa   = [banner, headerRow, summary].concat(dataRows);
-    const sheet = XLSX.utils.aoa_to_sheet(aoa);
-    sheet['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: Math.max(0, cols.length - 1) } }];
-    sheet['!rows'] = [{ hpt: 22 }, { hpt: 20 }];
-    const moneyFmt = '$#,##0.00;[Red]($#,##0.00);-';
-    const qtyFmt   = '#,##0.00;[Red](#,##0.00);-';
-    cols.forEach((c, i) => {
-      const isMoney = moneyKeys.has(c.key);
-      const isQty   = qtyFmtKeys.has(c.key);
-      if (!isMoney && !isQty) return;
-      const fmt = isMoney ? moneyFmt : qtyFmt;
-      for (let r = 2; r < aoa.length; r++) {
-        const ref = XLSX.utils.encode_cell({ r, c: i });
-        if (sheet[ref] && typeof sheet[ref].v === 'number') sheet[ref].z = fmt;
-      }
-    });
-    sheet['!cols'] = cols.map(c => ({ wch: Math.min(28, Math.max(10, (c.label || '').length + 4)) }));
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, sheet, 'Cardex Variance');
-    const fnStamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 13);
-    const fname = 'CardexVariance_' + fnStamp + '.xlsx';
-    XLSX.writeFile(wb, fname);
-    toast('Downloaded ' + fname);
-  }
-  const exportBtn = document.getElementById('grid-export-btn');
-  if (exportBtn) exportBtn.addEventListener('click', exportGridToExcel);
-
-  // ============================================================
-  //  Sidebar nav — carry URL query forward; suppress '#' clicks
-  // ============================================================
-  const search = window.location.search;
-  if (search) {
-    document.querySelectorAll('a[data-nav-page]').forEach(a => {
-      const base = a.getAttribute('href') || '';
-      if (base && !base.includes('?') && base !== '#') a.setAttribute('href', base + search);
-    });
-  }
-  document.querySelectorAll('.sidebar-nav-item, .sidebar-nav-child').forEach(a => {
-    a.addEventListener('click', (e) => {
-      if (a.classList.contains('is-active')) { e.preventDefault(); return; }
-      const href = a.getAttribute('href') || '';
-      if (!href || href === '#') { e.preventDefault(); }
-    });
-  });
-
-  // ============================================================
-  //  Boot
-  // ============================================================
-  renderTableHeader();
-  updateColPill();
-  updateCompanyPill();
-  updateReasonPill();
-  wireColumnDrag();
-  wireColumnSort();
-  wireGridSearch();
-  loadData();
-  // Seed the sidebar's filter universe cache (currencies / companies /
-  // BUs / objects / subsidiaries). Fire-and-forget — first page in the
-  // tab does the work; subsequent pages short-circuit to the cache.
-  if (window.RRV8 && typeof window.RRV8.ensureInventoryStatus === 'function') {
-    window.RRV8.ensureInventoryStatus(rrFetch);
-  }
-
+  reload();
 })();
 </script>
-
 </body>
 </html>
