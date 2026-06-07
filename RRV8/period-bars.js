@@ -67,52 +67,68 @@
       if (!state.data.length) { host.innerHTML = ''; return; }
 
       // Larger viewBox so the chart looks right when stretched into
-      // the page-header's right-side space. preserveAspectRatio="none"
-      // lets the SVG scale to whatever the container gives it.
-      const W = 400, H = 100, padX = 4, padY = 6;
+      // whatever width the container gives it. preserveAspectRatio="none"
+      // lets the line + zero rule scale to fill; the connecting line and
+      // baseline use non-scaling-stroke (set in CSS) so they stay crisp
+      // regardless of the stretch. The data-point markers are HTML dots
+      // (rendered below, positioned by %), so they stay perfectly round
+      // no matter how the SVG is scaled.
+      const W = 400, H = 100, padX = 10, padY = 14;
       const innerW = W - padX * 2;
       const innerH = H - padY * 2;
       const zeroY  = padY + innerH / 2;
       const maxAbs = Math.max.apply(null, state.data.map(p => Math.abs(p.value)).concat([1]));
       const n      = state.data.length;
-      const barGap = 6;
-      const barW   = Math.max(8, (innerW - barGap * (n - 1)) / n);
 
-      const bars = state.data.map((p, i) => {
-        const x = padX + i * (barW + barGap);
+      const xFor = (i) => n === 1 ? W / 2 : padX + i * (innerW / (n - 1));
+      const yFor = (v) => zeroY - (v / maxAbs) * (innerH / 2);
+
+      const xs = state.data.map((p, i) => xFor(i));
+      const ys = state.data.map(p => yFor(p.value));
+
+      // Connecting line through every period point.
+      const polyline = n > 1
+        ? '<polyline class="period-line" points="' +
+            xs.map((x, i) => x.toFixed(1) + ',' + ys[i].toFixed(1)).join(' ') +
+          '"/>'
+        : '';
+
+      // Full-height column hit targets (transparent), tiled across so
+      // every point — even where points crowd together — has a usable
+      // hover/click target. Boundaries fall at the midpoint between
+      // neighbouring points and clamp at the chart edges.
+      const hits = state.data.map((p, i) => {
+        const x        = xs[i];
+        const hitLeft  = i === 0     ? 0 : (xs[i - 1] + x) / 2;
+        const hitRight = i === n - 1 ? W : (x + xs[i + 1]) / 2;
+        const hitW     = hitRight - hitLeft;
+        return '<rect class="period-bar-hit"' +
+          ' x="' + hitLeft.toFixed(1) + '" y="0"' +
+          ' width="' + hitW.toFixed(1) + '" height="' + H + '"' +
+          ' data-period="' + escapeHtml(p.period) + '"' +
+          ' data-value="' + p.value + '"' +
+          ' role="button" tabindex="0"' +
+          ' aria-label="' + escapeHtml(state.labelFor(p.period) + ': ' + state.fmtValue(p.value)) + '"/>';
+      }).join('');
+
+      // Data-point markers as HTML dots overlaid on the SVG. Positioned
+      // by percentage of the same wrap the SVG fills, so they track the
+      // line at any container width while staying round (fixed px size).
+      const dots = state.data.map((p, i) => {
         const isCurrent = p.period === state.currentPeriod;
         const isNeg     = p.value < 0;
-        const half      = (Math.abs(p.value) / maxAbs) * (innerH / 2);
-        const y         = isNeg ? zeroY : zeroY - half;
-        const h         = Math.max(1, half);
-        const cls       = ['period-bar'];
+        const cls       = ['period-pt'];
         if (isCurrent) cls.push('is-current');
         if (isNeg)     cls.push('is-negative');
-        // Hit area: full chart height, tiled across the column so a
-        // 0-dollar period (visible bar collapses to 1px) still has a
-        // usable hover/click target. Tiles edge-to-edge by absorbing
-        // half the gap on each side and clamping at the chart edges.
-        const hitLeft  = i === 0     ? 0 : x - barGap / 2;
-        const hitRight = i === n - 1 ? W : x + barW + barGap / 2;
-        const hitW     = hitRight - hitLeft;
-        return '<g class="period-bar-group">' +
-          '<rect class="' + cls.join(' ') + '"' +
-            ' x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '"' +
-            ' width="' + barW.toFixed(1) + '" height="' + h.toFixed(1) + '"' +
-            ' rx="3"/>' +
-          '<rect class="period-bar-hit"' +
-            ' x="' + hitLeft.toFixed(1) + '" y="0"' +
-            ' width="' + hitW.toFixed(1) + '" height="' + H + '"' +
-            ' data-period="' + escapeHtml(p.period) + '"' +
-            ' data-value="' + p.value + '"' +
-            ' role="button" tabindex="0"' +
-            ' aria-label="' + escapeHtml(state.labelFor(p.period) + ': ' + state.fmtValue(p.value)) + '"/>' +
-          '</g>';
+        return '<span class="' + cls.join(' ') + '"' +
+          ' data-period="' + escapeHtml(p.period) + '"' +
+          ' style="left:' + (xs[i] / W * 100).toFixed(2) + '%;top:' +
+            (ys[i] / H * 100).toFixed(2) + '%"></span>';
       }).join('');
 
       // "You are here" cue in the top-right — the selected period
-       // label, sourced from the caller's labelFor() so format matches
-       // the page (e.g. "Aug 27, 2016").
+      // label, sourced from the caller's labelFor() so format matches
+      // the page (e.g. "Aug 27, 2016").
       const currentLabel = state.currentPeriod
         ? state.labelFor(state.currentPeriod)
         : '';
@@ -127,8 +143,10 @@
           '<svg class="period-bars-svg" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" aria-hidden="true">' +
             '<line class="period-bars-zero" x1="' + padX + '" y1="' + zeroY.toFixed(1) + '"' +
               ' x2="' + (W - padX) + '" y2="' + zeroY.toFixed(1) + '"/>' +
-            bars +
+            polyline +
+            hits +
           '</svg>' +
+          dots +
         '</div>' +
         '<div class="period-bars-tip">' +
           '<div class="period-bars-tip-date"></div>' +
@@ -161,6 +179,16 @@
         state.onSwitch(bar.dataset.period);
       });
 
+      // Pop the data-point dot matching a hit target (dots are HTML
+      // siblings of the SVG, so they can't use :hover themselves).
+      const setDotHover = (period) => {
+        host.querySelectorAll('.period-pt.is-hover')
+          .forEach(d => d.classList.remove('is-hover'));
+        if (period == null) return;
+        const dot = host.querySelector('.period-pt[data-period="' + CSS.escape(period) + '"]');
+        if (dot) dot.classList.add('is-hover');
+      };
+
       const showTip = (bar) => {
         const tip = getTip();
         if (!tip) return;
@@ -171,7 +199,8 @@
         valEl.textContent = state.fmtValue(value);
         valEl.classList.toggle('is-neg', value < 0);
         valEl.classList.toggle('is-pos', value > 0);
-        // Center above the hovered bar; clamp inside the host.
+        setDotHover(period);
+        // Center above the hovered point; clamp inside the host.
         const barRect = bar.getBoundingClientRect();
         const cRect   = host.getBoundingClientRect();
         const center  = barRect.left + barRect.width / 2 - cRect.left;
@@ -184,6 +213,7 @@
       const hideTip = () => {
         const tip = getTip();
         if (tip) tip.classList.remove('is-visible');
+        setDotHover(null);
       };
 
       host.addEventListener('mouseover', (e) => {
