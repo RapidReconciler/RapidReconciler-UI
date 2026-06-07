@@ -86,7 +86,9 @@ Full JWT payload shape:
 | `POST /inventory/transactions` | bare-string filter arrays + paging | Transactions | Single bulk fetch (`pageSize: 10000`), client-side filter/recompute on chip clicks. |
 | `POST /inventory/transactions/details` | `{company, doc, type}` | Transactions per-row Export | **`type`, not `docType`** (Jackson gotcha). |
 | `POST /inventory/transactions/save-notes` | `{period, notes: [...]}` | Transactions batch-edit modal | Field names camelCase first-letter-lowercase. |
-| `POST /inventory/integrity` | `{report, take/skip/page/pageSize, reconciliationFilter}` | DMAAIs (preload), planned for Cardex Variance | Integrity report `0` is `v_integrity_jde_aais`. |
+| `POST /inventory/integrity` | `{report, take/skip/page/pageSize, reconciliationFilter}` | DMAAIs (preload), planned for Cardex Variance | Integrity report `0` is `v_integrity_jde_aais`. Whitelisted views only. **`report: 'v6ui_raccountsummary'`** serves the account roll-forward (GL+variance roll by account/period, all periods, JWT-scoped) for the Account Roll Forward page + Home inventory validation light. |
+| `GET /inventory/reload-gl/preview` | (none) | Reload GL (Data card) | **Admin-gated.** Derives the earliest `GLOK='no'` period's begin date + counts F0911 rows at/after it. Read-only. Returns `{cutoffDate, affected}`. |
+| `POST /inventory/reload-gl` | `{cutoffDate}` | Reload GL (Data card) | **Admin-gated.** Batch-deletes the RR copy of F0911 from the (confirmed, derived) GL date forward, then starts the refresh — SSIS re-pulls from JDE. **JDE untouched.** `cutoffDate` is the derived value from preview (never user-entered). |
 | `POST /inventory/as-of` | `{daily, summarizeByItem, commonUom, reconciliationFilter, filters, ...}` | As Of | **The period field is `daily`, not `period`.** `reconciliationFilter` is bare strings here. |
 | `POST /inventory/as-of/details` | `{branchPlant, lot, company, itemNumber, location, glClass, uom, companyNumber}` | As Of Details popover | Returns the item ledger via `usp6ItemRollForward`. |
 | `POST /inventory/rollIItem` | (same as as-of body) | Cardex Variance Re-roll | Note **double-I** in the path. |

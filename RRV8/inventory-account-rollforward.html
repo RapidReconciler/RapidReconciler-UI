@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<!--
+  =============================================================================
+  Inventory > Account Roll Forward  (Karen's account-level view)
+  =============================================================================
+  The live equivalent of the "Account Roll Forward Analysis" Export Analyzer
+  workbook: the GL + variance roll-forward by account and period, sourced from
+  raccountsummary. Two halves, mirroring the workbook's two sheets:
+
+    1) ANALYSIS  — integrity headline (GLOK / VarOK breaks), scope, the
+                   verify-before-acting disclaimer, findings / no-findings, and
+                   the action plan. (workbook "Analysis" sheet)
+    2) ROLL-FORWARD GRID — Beg GL -> Period GL -> End GL vs Perpetual, with the
+                   Cardex variance per account/period. Exportable to Excel.
+                   (workbook "Roll Forward" sheet)
+
+  This is the account-level companion to inventory-cardex-variance.html (Daren's
+  per-item worklist): the end-period CardexVar here is the same number the
+  cardex card and the worklist reconcile to.
+
+  DEV DATA: reads data/account-rollforward.json — a real raccountsummary
+  snapshot for validation. That file is gitignored (real customer data); the
+  page degrades gracefully when it's absent. Production wiring will hit a
+  GET /inventory/account-rollforward agent endpoint (not yet built).
+  =============================================================================
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Account Roll Forward &mdash; RapidReconciler</title>
+<link href="fonts/fonts.css" rel="stylesheet">
+<script src="vendor/xlsx.full.min.js" defer></script>
+<style>
+  :root {
+    --navy:#1f2d4a; --navy-deep:#142037; --blue:#2b5fb0; --blue-pale:#e6efff;
+    --green:#2e8a55; --green-pale:#def4e6; --orange:#f08a24; --orange-deep:#d97316; --orange-pale:#fbe7ce;
+    --red:#c0392b; --red-pale:#fce5e1; --grey-pale:#eceef3;
+    --bg:#fafbfd; --bg-soft:#f3f5f9; --bg-card:#fff; --text:#1f2d4a; --text-soft:#4a5468; --text-muted:#828a9a;
+    --rule:#e6eaf0; --rule-strong:#cfd6e0;
+    --shadow-sm:0 1px 2px rgba(20,32,55,.04); --shadow-md:0 4px 12px -2px rgba(20,32,55,.08);
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'Open Sans',-apple-system,sans-serif; background:var(--bg); color:var(--text); font-size:14px; line-height:1.55; -webkit-font-smoothing:antialiased; }
+  h1,h2,h3,h4 { font-family:'Source Sans 3',sans-serif; font-weight:700; }
+  a { color:inherit; text-decoration:none; }
+
+  .topbar { height:56px; background:var(--bg-card); border-bottom:1px solid var(--rule); display:flex; align-items:center; padding:0 24px; gap:10px; box-shadow:var(--shadow-sm); }
+  .topbar-logo { height:28px; }
+  .topbar-name { font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:14px; color:var(--navy); }
+  .topbar-db { font-family:'Source Sans 3',sans-serif; font-size:11px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; color:var(--text-muted); margin-left:auto; }
+
+  .page { max-width:1320px; margin:0 auto; padding:28px 26px 64px; }
+  .breadcrumb { font-family:'Source Sans 3',sans-serif; font-size:11.5px; font-weight:700; letter-spacing:.10em; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px; }
+  .breadcrumb .sep { margin:0 8px; opacity:.5; }
+  .page-title { font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:28px; color:var(--navy); letter-spacing:-.02em; }
+  .page-eyebrow { font-size:12.5px; color:var(--text-muted); margin-top:5px; max-width:760px; }
+
+  /* action row: company picker + toggle + KPIs */
+  .actions { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin:20px 0 18px; }
+  .picker-lbl { font-size:10px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); }
+  .seg { display:inline-flex; border:1px solid var(--rule-strong); border-radius:8px; overflow:hidden; }
+  .seg-btn { border:0; background:var(--bg-card); padding:6px 13px; font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:12.5px; color:var(--text-soft); cursor:pointer; border-right:1px solid var(--rule); }
+  .seg-btn:last-child { border-right:0; }
+  .seg-btn:hover { background:var(--bg-soft); color:var(--text); }
+  .seg-btn.is-on { background:var(--navy); color:#fff; }
+  .toggle { display:inline-flex; align-items:center; gap:8px; font-size:12.5px; font-weight:700; color:var(--text-soft); cursor:pointer; user-select:none; }
+  .toggle input { width:15px; height:15px; accent-color:var(--blue); }
+  .spacer { flex:1 1 auto; }
+  .kpi { display:inline-flex; flex-direction:column; align-items:flex-end; }
+  .kpi .lbl { font-size:10px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); }
+  .kpi .val { font-family:'JetBrains Mono',ui-monospace,monospace; font-weight:700; font-size:17px; color:var(--navy); font-variant-numeric:tabular-nums; }
+  .kpi .val.neg { color:var(--red); }
+
+  /* analysis card */
+  .analysis { background:var(--bg-card); border:1px solid var(--rule); border-radius:14px; box-shadow:var(--shadow-sm); padding:18px 20px; margin-bottom:18px; }
+  .an-headline { display:flex; align-items:center; gap:11px; }
+  .an-badge { width:34px; height:34px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; }
+  .an-badge.ok { background:var(--green-pale); color:var(--green); }
+  .an-badge.warn { background:var(--orange-pale); color:var(--orange-deep); }
+  .an-badge svg { width:19px; height:19px; }
+  .an-title { font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:16px; color:var(--navy); }
+  .an-sub { font-size:12.5px; color:var(--text-soft); margin-top:1px; }
+  .an-scope { display:flex; gap:22px; flex-wrap:wrap; margin:14px 0 4px; padding-top:13px; border-top:1px solid var(--rule); }
+  .an-scope .k { font-size:10px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); }
+  .an-scope .v { font-family:'JetBrains Mono',ui-monospace,monospace; font-weight:700; font-size:13px; color:var(--navy); }
+  .an-note { font-size:12px; color:var(--text-soft); border-left:3px solid var(--orange); background:var(--orange-pale); border-radius:0 8px 8px 0; padding:9px 12px; margin-top:14px; }
+  .an-note b { color:var(--orange-deep); }
+  .an-find { font-size:13px; color:var(--text-soft); margin-top:14px; }
+  .an-find.ok { color:var(--green); font-weight:600; }
+  .ap { margin-top:16px; }
+  .ap h4 { font-size:12px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px; }
+  .ap-row { display:grid; grid-template-columns:26px 1fr; gap:12px; padding:9px 0; border-top:1px solid var(--rule); align-items:start; }
+  .ap-n { width:22px; height:22px; border-radius:50%; background:var(--navy); color:#fff; font-family:'JetBrains Mono',monospace; font-size:11px; font-weight:700; display:inline-flex; align-items:center; justify-content:center; }
+  .ap-txt { font-size:12.5px; color:var(--text); }
+  .ap-txt .owner { display:block; font-size:11px; color:var(--text-muted); margin-top:2px; }
+
+  /* grid card */
+  .grid-card { background:var(--bg-card); border:1px solid var(--rule); border-radius:14px; box-shadow:var(--shadow-sm); overflow:hidden; }
+  .grid-head { display:flex; align-items:center; gap:14px; padding:13px 20px; border-bottom:1px solid var(--rule); }
+  .grid-title { font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:14px; letter-spacing:.04em; text-transform:uppercase; color:var(--navy); }
+  .grid-count { font-size:12px; color:var(--text-muted); }
+  .btn { display:inline-flex; align-items:center; gap:7px; border:1px solid var(--rule-strong); background:var(--bg-card); border-radius:8px; padding:6px 12px; font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:12.5px; color:var(--text-soft); cursor:pointer; }
+  .btn:hover { border-color:var(--blue); color:var(--blue); }
+  .btn svg { width:13px; height:13px; }
+  .grid-scroll { max-height:620px; overflow:auto; }
+  table.rf { width:100%; border-collapse:separate; border-spacing:0; font-size:12.5px; }
+  table.rf thead th { position:sticky; top:0; z-index:2; background:var(--bg-soft); color:var(--text-muted); font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:10px; letter-spacing:.07em; text-transform:uppercase; text-align:left; padding:9px 11px; border-bottom:1px solid var(--rule); white-space:nowrap; cursor:pointer; }
+  table.rf thead th.num { text-align:right; }
+  table.rf thead th:hover { color:var(--blue); }
+  table.rf tbody td { padding:8px 11px; border-bottom:1px solid var(--rule); white-space:nowrap; }
+  table.rf tbody td.num { text-align:right; font-variant-numeric:tabular-nums; font-family:'JetBrains Mono',ui-monospace,monospace; }
+  table.rf tbody tr:hover td { background:rgba(43,95,176,.04); }
+  table.rf tbody tr.is-end td { background:var(--blue-pale); }
+  table.rf tbody tr.is-end:hover td { background:#dbe8fb; }
+  table.rf .mono { font-family:'JetBrains Mono',ui-monospace,monospace; }
+  table.rf .neg { color:var(--red); }
+  table.rf td .acct { font-weight:700; color:var(--navy); }
+  .chip { display:inline-flex; align-items:center; gap:5px; font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:10.5px; padding:2px 8px; border-radius:100px; }
+  .chip.baseline { background:var(--grey-pale); color:var(--text-soft); }
+  .chip.yes { background:var(--green-pale); color:var(--green); }
+  .chip.end { background:var(--blue-pale); color:var(--blue); border:1px solid rgba(43,95,176,.3); }
+  .chip.break { background:var(--red-pale); color:var(--red); }
+  .empty { padding:40px 20px; text-align:center; color:var(--text-muted); font-style:italic; }
+
+  .toast { position:fixed; bottom:28px; left:50%; transform:translateX(-50%); background:var(--navy); color:#fff; padding:10px 18px; border-radius:100px; font-family:'Source Sans 3',sans-serif; font-weight:600; font-size:13px; box-shadow:var(--shadow-md); opacity:0; transition:opacity .18s; pointer-events:none; }
+  .toast.show { opacity:1; }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <img class="topbar-logo" src="../Images/gsi-logo.png" alt="GSI">
+  <span class="topbar-name">RapidReconciler</span>
+  <span class="topbar-db" id="topbarDb">RapidReconciler_Dev</span>
+</header>
+
+<div class="page">
+  <nav class="breadcrumb"><a href="home.html">Inventory</a><span class="sep">/</span><span>Account Roll Forward</span></nav>
+  <h1 class="page-title">Account Roll Forward</h1>
+  <div class="page-eyebrow">The GL and perpetual roll-forward by account and period &mdash; how each account&rsquo;s beginning balance rolls to ending, whether GL and variance stay intact, and the cardex variance the per-item worklist reconciles to.</div>
+
+  <div class="actions">
+    <span class="picker-lbl">Company</span>
+    <span class="seg" id="companyPick"><button type="button" class="seg-btn is-on" data-co="">All</button></span>
+    <label class="toggle" style="margin-left:14px;"><input type="checkbox" id="showAll"> Show all periods (history)</label>
+    <span class="spacer"></span>
+    <span class="kpi"><span class="lbl">Cardex variance</span><span class="val" id="kpiCx">&mdash;</span></span>
+    <span class="kpi" style="margin-left:22px;"><span class="lbl">Out of balance</span><span class="val" id="kpiOob">&mdash;</span></span>
+  </div>
+
+  <!-- ANALYSIS (workbook "Analysis" sheet) -->
+  <section class="analysis" id="analysis"><div class="empty">Loading&hellip;</div></section>
+
+  <!-- ROLL-FORWARD GRID (workbook "Roll Forward" sheet) -->
+  <section class="grid-card">
+    <div class="grid-head">
+      <span class="grid-title">Roll forward</span>
+      <span class="grid-count" id="gridCount">&mdash;</span>
+      <span class="spacer"></span>
+      <button class="btn" id="exportBtn"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10v3h10v-3"/><path d="M8 2v9"/><polyline points="5 8 8 11 11 8"/></svg>Export to Excel</button>
+    </div>
+    <div class="grid-scroll">
+      <table class="rf" id="rfTable"><thead id="rfHead"></thead><tbody id="rfBody"><tr><td class="empty">Loading roll forward&hellip;</td></tr></tbody></table>
+    </div>
+  </section>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(function () {
+  'use strict';
+  var DATA = [];
+  var state = { company:'', showAll:false, sortKey:null, sortDir:'asc' };
+
+  // ---- fmt ----
+  function money(n){ var x=Number(n)||0; var a=Math.abs(x).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); return x<0?'('+a+')':a; }
+  function moneyCell(n){ var x=Number(n)||0; if(Math.abs(x)<0.005) return '<span style="color:var(--text-muted)">&mdash;</span>'; return '<span class="'+(x<0?'neg':'')+'">'+money(x)+'</span>'; }
+  function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(m){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m];}); }
+  function fmtDate(iso){ if(!iso) return ''; var p=String(iso).split('-'); if(p.length!==3) return iso; var mo=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; return mo[(+p[1])-1]+' '+(+p[2])+', '+p[0]; }
+  function chip(v){ var s=String(v==null?'':v).trim().toLowerCase(); var k=(s==='baseline'||s==='yes'||s==='end')?s:'break'; return '<span class="chip '+k+'">'+esc(v||'&mdash;')+'</span>'; }
+  function isNo(v){ return String(v==null?'':v).trim().toLowerCase()==='no'; }
+  function toast(m){ var t=document.getElementById('toast'); if(!t) return; t.textContent=m; t.classList.add('show'); clearTimeout(t._t); t._t=setTimeout(function(){t.classList.remove('show');},2200); }
+
+  // ---- columns (mirror the workbook Roll Forward sheet) ----
+  var COLS = [
+    { k:'companyNumber', label:'Co',          render:function(r){return '<span class="mono">'+esc(r.CompanyNumber)+'</span>';} },
+    { k:'longAccount',   label:'Long Account',render:function(r){return '<span class="mono acct">'+esc(r.LongAccount)+'</span>';} },
+    { k:'periodEnds',    label:'Period Ends', render:function(r){return fmtDate(r.PeriodEnds);} },
+    { k:'begGL',  label:'Beg GL',     num:true, render:function(r){return moneyCell(r.BegGL);} },
+    { k:'perGL',  label:'Period GL',  num:true, render:function(r){return moneyCell(r.PerGL);} },
+    { k:'endGL',  label:'End GL',     num:true, render:function(r){return moneyCell(r.EndGL);} },
+    { k:'glok',   label:'GL OK',      render:function(r){return chip(r.GLOK);} },
+    { k:'perpetual', label:'Perpetual', num:true, render:function(r){return moneyCell(r.Perpetual);} },
+    { k:'variance',  label:'Variance',  num:true, render:function(r){return moneyCell(r.Variance);} },
+    { k:'jes',    label:'JEs',        num:true, render:function(r){return moneyCell(r.JEs);} },
+    { k:'oob',    label:'OOB',        num:true, render:function(r){return moneyCell(r.OOB);} },
+    { k:'cardexVar', label:'Cardex Var', num:true, render:function(r){return moneyCell(r.CardexVar);} },
+    { k:'varok',  label:'Var OK',     render:function(r){return chip(r.VarOK);} }
+  ];
+  var SORTABLE = { companyNumber:'CompanyNumber', longAccount:'LongAccount', periodEnds:'PeriodEnds', begGL:'BegGL', perGL:'PerGL', endGL:'EndGL', glok:'GLOK', perpetual:'Perpetual', variance:'Variance', jes:'JEs', oob:'OOB', cardexVar:'CardexVar', varok:'VarOK' };
+  var NUMCOL = { begGL:1, perGL:1, endGL:1, perpetual:1, variance:1, jes:1, oob:1, cardexVar:1 };
+
+  // ---- filter / sort ----
+  function rows(){
+    var r = DATA;
+    if (state.company) r = r.filter(function(x){ return x.CompanyNumber===state.company; });
+    if (!state.showAll) r = r.filter(function(x){ return x.GLOK==='end'; });   // current period only by default
+    if (state.sortKey){
+      var f=SORTABLE[state.sortKey], num=NUMCOL[state.sortKey], mult=state.sortDir==='desc'?-1:1;
+      r = r.slice().sort(function(a,b){
+        if(num){ return ((Number(a[f])||0)-(Number(b[f])||0))*mult; }
+        return String(a[f]==null?'':a[f]).localeCompare(String(b[f]==null?'':b[f]),undefined,{numeric:true})*mult;
+      });
+    }
+    return r;
+  }
+
+  // ---- render ----
+  function renderKpis(){
+    var end = DATA.filter(function(r){ return r.GLOK==='end' && (!state.company || r.CompanyNumber===state.company); });
+    var cx = end.reduce(function(s,r){ return s+(Number(r.CardexVar)||0); },0);
+    var oob = end.reduce(function(s,r){ return s+(Number(r.OOB)||0); },0);
+    var k1=document.getElementById('kpiCx'), k2=document.getElementById('kpiOob');
+    k1.textContent=money(cx); k1.classList.toggle('neg',cx<0);
+    k2.textContent=money(oob); k2.classList.toggle('neg',oob<0);
+  }
+  function renderAnalysis(){
+    var host=document.getElementById('analysis'); if(!host) return;
+    var scope = DATA.filter(function(r){ return !state.company || r.CompanyNumber===state.company; });
+    var cos = Array.from(new Set(scope.map(function(r){return r.CompanyNumber;}))).sort();
+    var accts = new Set(scope.map(function(r){return r.CompanyNumber+'|'+r.LongAccount;})).size;
+    var periods = Array.from(new Set(scope.map(function(r){return r.PeriodEnds;}))).sort();
+    var latest = periods[periods.length-1] || '';
+    var glBreaks = scope.filter(function(r){ return isNo(r.GLOK); }).length;
+    var varBreaks = scope.filter(function(r){ return isNo(r.VarOK); }).length;
+    var intact = glBreaks===0 && varBreaks===0;
+    var badge = intact
+      ? '<span class="an-badge ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>'
+      : '<span class="an-badge warn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4M12 17h.01"/></svg></span>';
+    var headline = intact
+      ? 'GL and variance roll-forwards intact'
+      : (glBreaks+' GLOK break'+(glBreaks!==1?'s':'')+', '+varBreaks+' VarOK break'+(varBreaks!==1?'s':'')+' to investigate');
+    var sub = intact
+      ? ('0 GLOK breaks, 0 VarOK breaks across '+scope.length+' rows')
+      : ('across '+scope.length+' rows in scope');
+    var find = intact
+      ? '<div class="an-find ok">&check; No findings &mdash; GLOK and VarOK are intact across all rows in scope, and OOB / Cardex variance carry through cleanly. Continue periodic monitoring at each refresh.</div>'
+      : '<div class="an-find">Roll-forward breaks found &mdash; review the flagged rows in the grid below, correct in JD Edwards, then refresh and re-run.</div>';
+    // Action plan only when there's actually a break to work. When all is well,
+    // the "No findings" line stands alone -- no banner, no action plan.
+    var actionPlan = intact ? '' :
+      '<div class="ap"><h4>Action plan</h4>'+
+        '<div class="ap-row"><span class="ap-n">1</span><span class="ap-txt">Find the flagged row(s) below (GL OK or Var OK = &ldquo;no&rdquo;), correct the cause in JD Edwards, then refresh RapidReconciler and re-run the roll forward &mdash; confirm GL OK / Var OK return to &ldquo;yes&rdquo;.<span class="owner">Owner / Notes &mdash; RapidReconciler Administrator</span></span></div>'+
+      '</div>';
+    host.innerHTML =
+      '<div class="an-headline">'+badge+'<div><div class="an-title">'+headline+'</div><div class="an-sub">'+sub+' &middot; Period ending '+fmtDate(latest)+'</div></div></div>'+
+      '<div class="an-scope">'+
+        '<div><div class="k">Companies</div><div class="v">'+cos.join(', ')+'</div></div>'+
+        '<div><div class="k">Accounts</div><div class="v">'+accts+'</div></div>'+
+        '<div><div class="k">Period range</div><div class="v">through '+fmtDate(latest)+'</div></div>'+
+        '<div><div class="k">Rows</div><div class="v">'+scope.length+'</div></div>'+
+      '</div>'+
+      find+
+      actionPlan;
+  }
+  function renderGrid(){
+    var head=document.getElementById('rfHead'), body=document.getElementById('rfBody'), cnt=document.getElementById('gridCount');
+    head.innerHTML = '<tr>'+COLS.map(function(c){
+      var act = state.sortKey===c.k ? ' style="color:var(--blue)"' : '';
+      var car = state.sortKey===c.k ? (state.sortDir==='desc'?' &#9660;':' &#9650;') : '';
+      return '<th class="'+(c.num?'num':'')+'" data-k="'+c.k+'"'+act+'>'+esc(c.label)+car+'</th>';
+    }).join('')+'</tr>';
+    var data=rows();
+    var total=DATA.filter(function(r){ return !state.company || r.CompanyNumber===state.company; }).length;
+    cnt.textContent = data.length.toLocaleString('en-US')+' row'+(data.length!==1?'s':'')+(state.showAll?'':' (current period)')+' of '+total.toLocaleString('en-US');
+    if(!data.length){ body.innerHTML='<tr><td class="empty" colspan="'+COLS.length+'">No rows match.</td></tr>'; return; }
+    body.innerHTML = data.map(function(r){
+      return '<tr class="'+(r.GLOK==='end'?'is-end':'')+'">'+COLS.map(function(c){ return '<td class="'+(c.num?'num':'')+'">'+c.render(r)+'</td>'; }).join('')+'</tr>';
+    }).join('');
+  }
+  function renderAll(){ renderKpis(); renderAnalysis(); renderGrid(); }
+
+  // ---- company picker (built from data) ----
+  function buildPicker(){
+    var cos=Array.from(new Set(DATA.map(function(r){return r.CompanyNumber;}))).sort();
+    var host=document.getElementById('companyPick');
+    host.innerHTML='<button type="button" class="seg-btn is-on" data-co="">All</button>'+
+      cos.map(function(c){ return '<button type="button" class="seg-btn" data-co="'+esc(c)+'">'+esc(c)+'</button>'; }).join('');
+    host.addEventListener('click',function(e){ var b=e.target.closest('.seg-btn'); if(!b) return;
+      state.company=b.getAttribute('data-co')||''; host.querySelectorAll('.seg-btn').forEach(function(x){x.classList.toggle('is-on',x===b);}); renderAll(); });
+  }
+
+  // ---- excel export (real, via SheetJS) ----
+  function exportXlsx(){
+    var data=rows();
+    if(!data.length){ toast('Nothing to export'); return; }
+    if(typeof XLSX==='undefined'){ toast('Excel library still loading &mdash; try again'); return; }
+    var aoa=[COLS.map(function(c){return c.label;})];
+    data.forEach(function(r){ aoa.push(COLS.map(function(c){
+      var raw={companyNumber:r.CompanyNumber,longAccount:r.LongAccount,periodEnds:r.PeriodEnds,begGL:r.BegGL,perGL:r.PerGL,endGL:r.EndGL,glok:r.GLOK,perpetual:r.Perpetual,variance:r.Variance,jes:r.JEs,oob:r.OOB,cardexVar:r.CardexVar,varok:r.VarOK}[c.k];
+      return raw==null?'':raw; })); });
+    var ws=XLSX.utils.aoa_to_sheet(aoa), wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb,ws,'Roll Forward');
+    XLSX.writeFile(wb,'Account Roll Forward.xlsx');
+    toast('Exported '+data.length+' row'+(data.length!==1?'s':'')+' to Excel');
+  }
+
+  // ---- wire ----
+  document.getElementById('showAll').addEventListener('change',function(){ state.showAll=this.checked; renderAll(); });
+  document.getElementById('exportBtn').addEventListener('click',exportXlsx);
+  document.getElementById('rfHead').addEventListener('click',function(e){ var th=e.target.closest('th'); if(!th) return; var k=th.getAttribute('data-k');
+    if(state.sortKey===k){ state.sortDir=state.sortDir==='asc'?'desc':'asc'; } else { state.sortKey=k; state.sortDir='asc'; } renderGrid(); });
+
+  // ---- normalize GL OK / Var OK for display (raw v6ui_raccountsummary.oobrollok
+  //      carries recompute timestamps; the workbook/analyzer show baseline/yes/end/no).
+  //      'no' (a real break) is always preserved so the validation rule fires. ----
+  function normTok(v){ var s=String(v==null?'':v).trim().toLowerCase();
+    if(s==='no'||s==='baseline'||s==='yes'||s==='end') return s;
+    if(s.indexOf('end')===0) return 'end';            // "end - <timestamp>"
+    return 'yes';                                     // stale timestamp on a settled period
+  }
+  function ingest(rows){
+    DATA=(Array.isArray(rows)?rows:[]).map(function(r){ r.GLOK=normTok(r.GLOK); r.VarOK=normTok(r.VarOK); return r; });
+    buildPicker(); renderAll();
+  }
+
+  // ---- agent-first load: v6ui_raccountsummary from the active DB's agent
+  //      (JWT-scoped), via POST /inventory/integrity. Falls back to the local
+  //      dev snapshot for demo / deployed / no-token. ----
+  function agentBaseFromToken(token){
+    try {
+      var b64=token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/');
+      var pad=b64.length%4; if(pad) b64+='='.repeat(4-pad);
+      var p=JSON.parse(decodeURIComponent(atob(b64).split('').map(function(c){return '%'+('00'+c.charCodeAt(0).toString(16)).slice(-2);}).join('')));
+      var dbs=p.dbs||[]; var idx=Number(p.activeDbIndex)||0; var db=dbs[idx]||dbs[0];
+      if(db&&db.ip) return (/^(localhost|127\.0\.0\.1)/i.test(db.ip)?'http://':'https://')+db.ip;
+    } catch(_){}
+    return null;
+  }
+  function loadFromAgent(){
+    var token; try{ token=localStorage.getItem('rrv8.token'); }catch(_){}
+    var base=token&&agentBaseFromToken(token);
+    if(!base) return Promise.reject(new Error('no token'));
+    return fetch(base+'/inventory/integrity',{method:'POST',
+        headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json;charset=UTF-8','Accept':'application/json'},
+        body:JSON.stringify({report:'v6ui_raccountsummary'})})
+      .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+      .then(function(d){ return Array.isArray(d)?d:((d&&d.data)||[]); });
+  }
+  function loadSnapshot(){
+    return fetch('data/account-rollforward.json',{cache:'no-store'})
+      .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); });
+  }
+  loadFromAgent()
+    .then(ingest)
+    .catch(function(){ return loadSnapshot().then(ingest); })
+    .catch(function(err){
+      document.getElementById('analysis').innerHTML='<div class="empty">Roll-forward data isn&rsquo;t available.<br><span style="font-size:12px">Sign in so the page can read the account roll-forward from the data service.</span></div>';
+      document.getElementById('rfBody').innerHTML='<tr><td class="empty" colspan="'+COLS.length+'">No data &mdash; '+esc(err.message)+'</td></tr>';
+      document.getElementById('gridCount').textContent='0 rows';
+    });
+})();
+</script>
+</body>
+</html>

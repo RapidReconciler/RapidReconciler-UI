@@ -568,6 +568,22 @@
     </div>
   </div>
 
+  <!-- ===================== Database context (leads the page) =====================
+       The database is the install you're administering / working in. Per-database
+       admin tasks AND work-page scope both hang off it, so it sits above everything.
+       Working companies + period stay in the Scope bar below (they govern work pages,
+       not admin). -->
+  <div class="section-head" id="dbSectionHead">
+    <span class="sect-badge scope"><span class="sb-dot"></span>Database</span>
+    <span class="section-hint">The RapidReconciler install you&rsquo;re working in &mdash; everything below is scoped to it.</span>
+  </div>
+  <div class="ctx" id="dbBar">
+    <div class="ctx-cell">
+      <span class="ctx-k">Database</span>
+      <select class="ctx-select" id="dbSelect"></select>
+    </div>
+  </div>
+
   <!-- ============ ADMIN FIRST-RUN WIZARD (onboarding) ============
        Shown only to an admin whose team isn't set up yet (only the seeded
        RR Administrator exists). Replaces the steady-state surface until the
@@ -588,8 +604,10 @@
 
   <!-- ===================== ADMIN: action surface ===================== -->
   <div class="view" id="view-admin" hidden>
-    <!-- Administration sits ABOVE the scope bar on purpose: these actions
-         are independent of the working company/period below. -->
+    <!-- Administration sits ABOVE the company/period Scope bar on purpose: these
+         actions are independent of the working company/period (which govern work
+         pages, not admin). The Database picker leads the page above this — admin
+         tasks are per-database, so the install is chosen first. -->
     <div class="section-head" style="margin-top:28px;">
       <a class="sect-badge admin" href="../RRUniversity/administrator-start-here.html" target="_blank" rel="noopener" title="Open the Administrator how-to guide" style="text-decoration:none;"><span class="sb-dot"></span>Administration<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" style="margin-left:1px;"><path d="M7 17 17 7M9 7h8v8"/></svg></a>
       <span class="section-hint">Keep the system healthy and your team current &mdash; <a href="../RRUniversity/administrator-start-here.html" target="_blank" rel="noopener" style="color:inherit;font-weight:700;">open the step-by-step guide</a>.</span>
@@ -636,15 +654,25 @@
         </div>
       </div>
 
-      <!-- Inventory review: cardex-variance worklist + (upcoming) the
-           cost-method rule review. Reached from Home as standalone
-           analyst surfaces, not from the inventory sub-nav. -->
+      <!-- Inventory review: the Account Roll Forward (account-level, Karen's view)
+           and the Cardex Variance worklist (per-item, Daren's view) — two halves of
+           the same reconciliation. Reached from Home as standalone analyst surfaces,
+           not from the inventory sub-nav. -->
       <div class="panel" id="invReviewPanel">
         <div class="panel-head">
           <span class="panel-ico ico-dmaai"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 12l9 4 9-4"/><path d="M3 17l9 4 9-4"/></svg></span>
           <h3>Inventory review</h3>
         </div>
+        <a class="row" href="inventory-account-rollforward.html" style="text-decoration:none;">
+          <span class="row-dot grey" id="arfDot" title="Inventory validation light"></span>
+          <div class="row-main">
+            <div class="row-title">Account Roll Forward</div>
+            <div class="row-sub">GL and perpetual roll-forward by account and period &mdash; the account-level cardex variance the worklist reconciles to.</div>
+          </div>
+          <span class="btn-sm">Open</span>
+        </a>
         <a class="row" href="inventory-cardex-variance.html" style="text-decoration:none;">
+          <span class="row-dot grey" id="cxDot" title="Inventory validation light"></span>
           <div class="row-main">
             <div class="row-title">Cardex Variance</div>
             <div class="row-sub">Items whose perpetual valuation didn&rsquo;t roll cleanly &mdash; the per-item cardex drift worklist.</div>
@@ -730,13 +758,9 @@
        sits directly above the work it governs (Reconcile). -->
   <div class="section-head" id="scopeSectionHead">
     <span class="sect-badge scope"><span class="sb-dot"></span>Scope</span>
-    <span class="section-hint">The database, companies and period your work pages open on.</span>
+    <span class="section-hint">The companies and period your work pages open on.</span>
   </div>
   <div class="ctx" id="scopeBar">
-    <div class="ctx-cell">
-      <span class="ctx-k">Database</span>
-      <select class="ctx-select" id="dbSelect"></select>
-    </div>
     <div class="ctx-cell">
       <span class="ctx-k">Working companies</span>
       <div class="ctx-cos" id="coBox"></div>
@@ -1458,15 +1482,63 @@
     }).catch(function () { /* hard failures are covered by the connectivity banner */ });
   }
 
-  // ---- /inventory/status → open-period label + connectivity ----
-  // (The status "insight" banner was removed — a validation color on the
-  // home page isn't actionable here; the real analysis lives on the
-  // Reconciliation page.) This still drives the factual open-period label
-  // and the VPN-drop connectivity banner.
+  // ---- Inventory validation light (Inventory review card dots) ----
+  // PRIMARY driver: the account roll-forward itself — red if ANY period row has
+  // GL OK or Var OK = 'no', else green. Computed straight from the roll-forward
+  // data (loadInventoryLight). FALLBACK (deployed site, where the dev snapshot
+  // isn't present): /inventory/status validation.color via setInventoryLight.
+  var _invLightFromData = false;   // once the data rule sets the light, it wins
+  function paintInventoryLight(cls, tip) {
+    ['arfDot', 'cxDot'].forEach(function (id) {
+      var el = $(id); if (el) { el.className = 'row-dot ' + (cls || 'grey'); el.title = tip; }
+    });
+  }
+  function valDotClass(color) {
+    var c = String(color || '').toLowerCase();
+    if (/green|ok|success|pass/.test(c)) return 'green';
+    if (/red|error|fail|break/.test(c))  return 'red';
+    if (/amber|yellow|warn/.test(c))     return 'amber';
+    return '';
+  }
+  function setInventoryLight(validation) {
+    if (_invLightFromData) return;   // data-driven rule is authoritative
+    var v = validation || {};
+    paintInventoryLight(valDotClass(v.color), v.tooltip || 'Inventory validation light');
+  }
+  // Shared totals source: the account roll-forward (v6ui_raccountsummary) cached
+  // for the working pages to read, keyed per DB like the DMAAI cache.
+  function acctSummaryCacheKey() {
+    var a = activeDb();
+    return 'rrv8.scope.v1.' + MODE + '.' + ((a && a.n) || '_') + '.accountsummary';
+  }
+  // Authoritative light driver: any GL OK / Var OK = 'no' in any period -> red,
+  // else green. Reads the same v6ui_raccountsummary the Account Roll Forward page
+  // and the cardex card derive from (server-calculated; everything ties out).
+  function loadInventoryLight() {
+    rrFetch('inventory/integrity', { method: 'POST', body: { report: 'v6ui_raccountsummary' }, demoFile: 'account-rollforward' })
+      .then(function (d) {
+        var rows = Array.isArray(d) ? d : ((d && d.data) || []);
+        if (!rows.length) return;   // nothing to assert -> leave the validation.color fallback
+        // Warm the cross-page totals cache (working pages read their headline
+        // numbers from this instead of recomputing — guarantees they all agree).
+        try { sessionStorage.setItem(acctSummaryCacheKey(), JSON.stringify({ ts: Date.now(), payload: rows })); } catch (_) {}
+        var isNo = function (v) { return String(v == null ? '' : v).trim().toLowerCase() === 'no'; };
+        var bad = rows.filter(function (r) { return isNo(r.GLOK) || isNo(r.VarOK); });
+        _invLightFromData = true;
+        if (bad.length) {
+          paintInventoryLight('red', bad.length + ' roll-forward break' + (bad.length !== 1 ? 's' : '') +
+            ' — GL OK or Var OK is "no" in at least one period. Open Account Roll Forward to investigate.');
+        } else {
+          paintInventoryLight('green', 'Roll-forwards intact — no GL OK / Var OK = "no" in any period.');
+        }
+      })
+      .catch(function () { /* agent unavailable -> keep the validation.color fallback */ });
+  }
   function loadStatus() {
     rrFetch('inventory/status', { demoFile: 'inventory-status' }).then(function (payload) {
       setConn(false);
       if (!payload) return;
+      setInventoryLight(payload.validation);
       var rf = payload.reconciliationFilter || {};
       if (rf.period) {
         _period = fmtPeriod(rf.period);
@@ -1799,6 +1871,7 @@
       loadModelApproval();
       loadPurgeInfo();
       loadStatus();
+      loadInventoryLight();
       loadSystemStatus();
       loadPeriods();
       loadServiceMemory();
@@ -1827,6 +1900,7 @@
       loadModelApproval();
       loadPurgeInfo();
       loadStatus();
+      loadInventoryLight();
       loadSystemStatus();
       loadPeriods();
       loadServiceMemory();
