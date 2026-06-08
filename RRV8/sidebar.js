@@ -1575,4 +1575,45 @@
   global.RRV8.hydrateSession          = hydrateSession;
   global.RRV8.mountUserMenu           = mountUserMenu;
   global.RRV8.renderUserChip          = renderUserChip;
+
+  // --- Currency helpers (multi-currency display) -----------------------
+  // currencySymbol('GBP') -> 'GBP'->£ via the browser's ICU data; cached.
+  // An empty code falls back to '$' (the legacy USD default this system
+  // assumed); an unknown-but-present code returns the code itself so we
+  // never render a confidently-wrong glyph. No server table needed --
+  // JDE currency codes are ISO 4217 and covered by Intl.NumberFormat.
+  var _curSymCache = {};
+  function currencySymbol(code) {
+    code = (code == null ? '' : String(code)).trim().toUpperCase();
+    if (!code) return '$';
+    if (_curSymCache[code] !== undefined) return _curSymCache[code];
+    var sym = code;
+    try {
+      var parts = new Intl.NumberFormat('en-US', { style: 'currency', currency: code }).formatToParts(0);
+      for (var i = 0; i < parts.length; i++) {
+        if (parts[i].type === 'currency') { sym = parts[i].value; break; }
+      }
+    } catch (e) { /* invalid ISO code -> render the code as-is */ }
+    _curSymCache[code] = sym;
+    return sym;
+  }
+  // currencyOf(rows[, getter]) -> { code, mixed, codes[] }. code = the single
+  // currency every row shares (or '' if none carry one); mixed = true when the
+  // set spans >1 distinct currency, i.e. a blended sum would be meaningless and
+  // the caller should show a guard instead of a number. getter(row) overrides
+  // the default row.currency / row.Currency lookup.
+  function currencyOf(rows, getter) {
+    var set = {}, list = rows || [];
+    for (var i = 0; i < list.length; i++) {
+      var r = list[i];
+      var c = getter ? getter(r) : (r && (r.currency != null ? r.currency : r.Currency));
+      c = (c == null ? '' : String(c)).trim().toUpperCase();
+      if (c) set[c] = true;
+    }
+    var codes = Object.keys(set);
+    if (codes.length <= 1) return { code: codes[0] || '', mixed: false, codes: codes };
+    return { code: '', mixed: true, codes: codes };
+  }
+  global.RRV8.currencySymbol = currencySymbol;
+  global.RRV8.currencyOf     = currencyOf;
 })(window);

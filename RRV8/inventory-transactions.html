@@ -4210,6 +4210,21 @@
     const cls = v < 0 ? ' neg' : '';
     return '<span class="' + cls.trim() + '">' + fmtMoney(v) + '</span>';
   }
+  // Active-currency context for the AGGREGATES (Total Variance KPI, breakdown
+  // stat, contributors). Per-row grid cells stay bare. Set each render from
+  // the in-scope rows; mixed = scope spans >1 base currency → guard the total.
+  let _curCtx = { code: '', mixed: false, codes: [] };
+  function _sym(code) {
+    const c = (code !== undefined && code !== null) ? code : _curCtx.code;
+    return (window.RRV8 && RRV8.currencySymbol) ? RRV8.currencySymbol(c) : '$';
+  }
+  // Symbol-prefixed money for aggregates (symbol inside parens for negatives).
+  function curMoney(v) {
+    const x = Number(v) || 0;
+    const sym = _sym(_curCtx.code);
+    const abs = Math.abs(x).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return x < 0 ? '(' + sym + abs + ')' : sym + abs;
+  }
 
   // ============================================================
   //  START HERE &mdash; action cards
@@ -4223,6 +4238,9 @@
   // ============================================================
   function renderSubtotals() {
     const rows = filteredRows();
+    _curCtx = (window.RRV8 && RRV8.currencyOf)
+      ? RRV8.currencyOf(rows, function(r){ return r.Currency; })
+      : { code: '', mixed: false, codes: [] };
     const { groups, total } = computeGroupsAndTotal(rows);
     renderStartHere(rows, groups, total);
     renderTxContributors(rows);
@@ -4255,13 +4273,15 @@
     const kpiHintEl = document.getElementById('kpi-total-variance-hint');
     if (kpiEl) {
       const signedTotal = total.variance || 0;
-      kpiEl.textContent = fmtMoney(signedTotal);
-      kpiEl.classList.toggle('is-neg', signedTotal < 0);
+      kpiEl.textContent = _curCtx.mixed ? 'Mixed currencies' : curMoney(signedTotal);
+      kpiEl.classList.toggle('is-neg', !_curCtx.mixed && signedTotal < 0);
       if (kpiHintEl) {
-        kpiHintEl.textContent = totalRows === allRowsInDataset
-          ? 'matches Reconciliation'
-          : (totalRows.toLocaleString('en-US') + ' of ' +
-             allRowsInDataset.toLocaleString('en-US') + ' rows in scope');
+        kpiHintEl.textContent = _curCtx.mixed
+          ? ('scope spans ' + (_curCtx.codes || []).join(', ') + ' — narrow to one currency')
+          : (totalRows === allRowsInDataset
+            ? 'matches Reconciliation'
+            : (totalRows.toLocaleString('en-US') + ' of ' +
+               allRowsInDataset.toLocaleString('en-US') + ' rows in scope'));
       }
     }
 
@@ -4300,8 +4320,8 @@
     if (brRowsEl) brRowsEl.textContent = totalRows.toLocaleString('en-US');
     if (brVarEl) {
       const signedTotal = total.variance || 0;
-      brVarEl.textContent = fmtMoney(signedTotal);
-      brVarEl.classList.toggle('is-neg', signedTotal < 0);
+      brVarEl.textContent = _curCtx.mixed ? 'Mixed' : curMoney(signedTotal);
+      brVarEl.classList.toggle('is-neg', !_curCtx.mixed && signedTotal < 0);
     }
 
     // ---------- Card grid ----------
@@ -4447,6 +4467,13 @@
       btn.setAttribute('aria-selected', active ? 'true' : 'false');
     });
 
+    // Mixed-currency scope: contributor variance would sum unlike currencies.
+    if (_curCtx.mixed) {
+      list.innerHTML = '<div class="tx-contrib-empty">Scope spans multiple currencies (' +
+        (_curCtx.codes || []).join(', ') + '). Narrow to a single currency to see contributors.</div>';
+      return;
+    }
+
     const dim = TX_CONTRIB_DIMS[_txContribDim] || TX_CONTRIB_DIMS.businessUnits;
     // Which row (if any) is currently isolated — marked active so a
     // second click reads as "click again to restore".
@@ -4488,7 +4515,7 @@
         +   '<span class="tx-contrib-row-label">' + label
         +     '<span class="row-count">' + g.count.toLocaleString('en-US') + ' rows</span>'
         +   '</span>'
-        +   '<span class="tx-contrib-row-amount' + (isNeg ? ' is-negative' : '') + '">' + fmtMoney(g.variance) + '</span>'
+        +   '<span class="tx-contrib-row-amount' + (isNeg ? ' is-negative' : '') + '">' + curMoney(g.variance) + '</span>'
         +   '<span class="tx-contrib-row-bar-wrap"><span class="tx-contrib-row-bar' + (isNeg ? ' is-negative' : '') + '" style="width:' + pct.toFixed(1) + '%"></span></span>'
         + '</button>';
     }).join('') + (overflow > 0
@@ -5113,7 +5140,7 @@
       metaHtml +
       '<dl class="action-card-stats">' +
         '<div class="stat-row"><dt>Rows</dt><dd>' + it.rowCount.toLocaleString('en-US') + '</dd></div>' +
-        '<div class="stat-row"><dt>Total Variance</dt><dd' + (totalNeg ? ' class="neg"' : '') + '>' + fmtMoney(it.totalVariance) + '</dd></div>' +
+        '<div class="stat-row"><dt>Total Variance</dt><dd' + (totalNeg ? ' class="neg"' : '') + '>' + (_curCtx.mixed ? fmtMoney(it.totalVariance) : curMoney(it.totalVariance)) + '</dd></div>' +
       '</dl>' +
       '<span class="action-card-footer" aria-hidden="true">' +
         '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h12l-4.5 6V14l-3-1.5V9Z"/></svg>' +
@@ -5129,7 +5156,7 @@
       '</span>' +
       '<div>' +
         '<div class="start-here-clean-title">All ' + rows.length + ' transaction' + (rows.length === 1 ? '' : 's') + ' worked.</div>' +
-        '<div class="start-here-clean-sub">Net variance across the scope: <strong>' + fmtMoney(total) + '</strong>. Nothing left to triage on this page.</div>' +
+        '<div class="start-here-clean-sub">Net variance across the scope: <strong>' + (_curCtx.mixed ? fmtMoney(total) : curMoney(total)) + '</strong>. Nothing left to triage on this page.</div>' +
       '</div>' +
     '</div>';
   }

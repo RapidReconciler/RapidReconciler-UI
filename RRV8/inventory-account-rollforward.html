@@ -197,6 +197,21 @@
   // ---- fmt ----
   function money(n){ var x=Number(n)||0; var a=Math.abs(x).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); return x<0?'('+a+')':a; }
   function moneyCell(n){ var x=Number(n)||0; if(Math.abs(x)<0.005) return '<span style="color:var(--text-muted)">&mdash;</span>'; return '<span class="'+(x<0?'neg':'')+'">'+money(x)+'</span>'; }
+  // Currency context for the KPIs (Cardex variance / Out of balance). Grid
+  // cells stay bare. Set in renderKpis from the in-scope rows; mixed = scope
+  // spans >1 base currency, so the blended KPI is guarded. Self-contained
+  // (this page doesn't load sidebar.js): ISO-4217 symbol via Intl/ICU.
+  var _curCtx={code:'',mixed:false,codes:[]}, _curSymCache={};
+  function _sym(code){
+    var c=(code!==undefined&&code!==null)?code:_curCtx.code; c=(c||'').toString().trim().toUpperCase();
+    if(!c) return '$';
+    if(_curSymCache[c]!==undefined) return _curSymCache[c];
+    var sym=c;
+    try{ var parts=new Intl.NumberFormat('en-US',{style:'currency',currency:c}).formatToParts(0); for(var i=0;i<parts.length;i++){ if(parts[i].type==='currency'){ sym=parts[i].value; break; } } }catch(e){}
+    _curSymCache[c]=sym; return sym;
+  }
+  function curMoney(v){ var x=Number(v)||0; var s=_sym(_curCtx.code); var a=Math.abs(x).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); return x<0?'('+s+a+')':s+a; }
+  function _ctxOf(rows){ var set={}; (rows||[]).forEach(function(r){ var c=((r&&r.Currency)||'').toString().trim().toUpperCase(); if(c) set[c]=1; }); var codes=Object.keys(set); return codes.length<=1?{code:codes[0]||'',mixed:false,codes:codes}:{code:'',mixed:true,codes:codes}; }
   function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(m){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m];}); }
   function fmtDate(iso){ if(!iso) return ''; var p=String(iso).split('-'); if(p.length!==3) return iso; var mo=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; return mo[(+p[1])-1]+' '+(+p[2])+', '+p[0]; }
   function chip(v){ var s=String(v==null?'':v).trim().toLowerCase(); var k=(s==='baseline'||s==='yes'||s==='end')?s:'break'; return '<span class="chip '+k+'">'+esc(v||'&mdash;')+'</span>'; }
@@ -240,11 +255,17 @@
   // ---- render ----
   function renderKpis(){
     var end = DATA.filter(function(r){ return r.GLOK==='end' && (!state.company || r.CompanyNumber===state.company); });
+    _curCtx = _ctxOf(end);
     var cx = end.reduce(function(s,r){ return s+(Number(r.CardexVar)||0); },0);
     var oob = end.reduce(function(s,r){ return s+(Number(r.OOB)||0); },0);
     var k1=document.getElementById('kpiCx'), k2=document.getElementById('kpiOob');
-    k1.textContent=money(cx); k1.classList.toggle('neg',cx<0);
-    k2.textContent=money(oob); k2.classList.toggle('neg',oob<0);
+    if(_curCtx.mixed){
+      k1.textContent='Mixed'; k1.classList.remove('neg');
+      k2.textContent='Mixed'; k2.classList.remove('neg');
+    } else {
+      k1.textContent=curMoney(cx); k1.classList.toggle('neg',cx<0);
+      k2.textContent=curMoney(oob); k2.classList.toggle('neg',oob<0);
+    }
   }
   function renderAnalysis(){
     var host=document.getElementById('analysis'); if(!host) return;
