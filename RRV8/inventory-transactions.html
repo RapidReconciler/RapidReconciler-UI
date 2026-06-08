@@ -6895,22 +6895,29 @@
   // "all". Company (the surviving scope filter) keeps its saved selection.
   ['currencies', 'businessUnits', 'objects', 'subsidiaries'].forEach(g => { _glSelected[g] = new Set(); });
 
-  // Company scope flows from Home (the cross-page scope hub): if the
-  // analyst narrowed to a strict subset of their allowed companies
-  // there, open scoped to that selection so the headline / KPI /
-  // exports match the Reconciliation page. If they left it at "all",
-  // keep the page's own saved company filter. Mirrors the seeding in
-  // inventory-reconciliation.html.
-  try {
-    if (window.RRV8 && window.RRV8.readSessionScope) {
+  // Company scope flows from Home (the cross-page scope hub) and is
+  // authoritative: open scoped to exactly the companies active there —
+  // the full allowed set ("All companies" on Home) or a narrowed subset —
+  // so the headline / KPI / exports match the Reconciliation page. The
+  // page writes its own company changes back to the hub, so reloads
+  // re-seed from the same source and the page's stale localStorage filter
+  // never shadows Home's scope. Mirrors inventory-reconciliation.html.
+  //
+  // Applied AFTER bootSession() hydrates the session (see the boot chain
+  // below), NOT here at script-eval: pre-hydrate readSessionScope() reads an
+  // empty claim/scope, so the override silently no-ops and the stale saved
+  // single-company filter wins.
+  function applyHomeCompanyScope() {
+    try {
+      if (!(window.RRV8 && window.RRV8.readSessionScope)) return;
       const _sc = window.RRV8.readSessionScope();
       const _act = (_sc && _sc.activeCompanies) || [];
       const _allow = (_sc && _sc.allowedCompanies) || [];
-      if (_act.length && _allow.length && _act.length < _allow.length) {
+      if (_act.length && _allow.length) {
         _glSelected.companies = new Set(_act.map(String));
       }
-    }
-  } catch (_) {}
+    } catch (_) {}
+  }
 
   // Pin click wiring lives in sidebar.js.
 
@@ -7548,6 +7555,9 @@
       // and starts polling. Same data Reconciliation drives &mdash;
       // the light persists across page navigation.
       bootSystemStatus();
+      // Session is hydrated now — adopt Home's authoritative company scope
+      // before the first data load so the page opens on the right companies.
+      applyHomeCompanyScope();
       return loadData();
     })
     .catch(err => {
