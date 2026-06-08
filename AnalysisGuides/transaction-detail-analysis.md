@@ -316,7 +316,7 @@ Each F4111 row carries an **Account** value -- that's the GL account where Rapid
 
 Common causes when these disagree:
 - A DMAAI configuration that's been changed mid-period -- older cardex rows reference the prior account; newer GL entries reference the new account
-- A non-stock line on the same order routing through an inventory AAI (mixed-line-type pattern, Section 5.7)
+- A non-stock line on the same order routing through an inventory AAI (mixed-line-type pattern; analyzer pattern 5.7 -- documented here under the non-stock-line cause in Section 5.2)
 - A manual journal entry that miscoded an inventory amount to a different account (Section 5.2)
 
 **Rule 3 -- The F4111 row's Period and the matching F0911 row's Period should match.**
@@ -394,6 +394,28 @@ When an IM document shows a GL-excess pattern (F0911 exceeds F4111 for a specifi
 ---
 
 ## Section 5: Common Variance Patterns and Root Causes
+
+**Pattern index -- analyzer ID vs guide section.** The Export Analyzer assigns each Transaction Detail diagnosis an internal **pattern ID** (e.g. `5.18`). Those IDs are **not** the same as this guide's section numbers -- the analyst sees the pattern *label*, not the ID, and the two numbering schemes drifted as patterns were added over time. Use this table to cross-walk between the analyzer's pattern ID and the section here. Rows with **--** in the first column have no analyzer auto-detection; they are analyst reference material only.
+
+| Analyzer pattern ID | Pattern label | Guide section |
+|---|---|---|
+| 5.1 | Unassigned Account -- Missing Model Table Entry | 5.1 |
+| 5.2 | GL-Only Entry (No Cardex) | 5.2 |
+| 5.3 | Cardex-Only Entry (No GL) | 5.3 |
+| 5.4 | Account Mismatch | 5.4 |
+| 5.5 | Net-zero F0911 pair (DMAAI complement misrouted) | 5.10 |
+| 5.6 | Standard Cost Change after WO completion | 5.9 |
+| 5.7 | Mixed line types on a return doc | 5.2 (non-stock-line cause) |
+| 5.11 | GL-Excess / R31802A cross-WO summarization | 5.11 (IM variant: 5.12) |
+| 5.13 | Post-confirm order edit (sales) | 5.13 |
+| 5.14 | Period Mismatch | 5.5 |
+| 5.15 | R31802A orphan cardex row | 5.14 |
+| 5.16 | Manufacturing Cost Mismatch | 5.16 |
+| 5.17 | Voucher Variance on Inventory (PV) | 5.15 |
+| 5.18 | Duplicate shipment -- same order line | 5.17 |
+| -- | Tax Variance | 5.6 |
+| -- | Landed Cost Variance | 5.7 |
+| -- | "No Cx" in Batch Field | 5.8 |
 
 ### 5.1 Unassigned Account -- Missing Model Table Entry
 
@@ -851,6 +873,63 @@ When a PV doc shows up with **`F4111 empty + F0911 on inventory`**, that's wrong
 | Weighted-avg: P4314 didn't write F4111 | F4095 confirms 4330 routes to inventory; F4111 has no row for this doc | Confirm P4314 ran to completion (no partial-run / job-step failure on this batch). Post a manual cardex revaluation for the variance amount; coordinate with cost-accounting so the entry updates the item's average cost, not just sits on the cardex. |
 
 **Caveat:** the analyzer's data view of F0911 is filtered to inventory-relevant accounts (per RR's mirror filter). When confirming in JDE, query F0911 for the full batch without that filter -- the RNV (4320) and A/P legs are filtered out of RR's view but are part of the same voucher posting.
+
+### 5.16 Manufacturing Cost Mismatch (cardex unit cost vs GL unit cost)
+
+> Numbered 5.16 in this guide; the analyzer's internal pattern ID is also **5.16**.
+
+**Symptoms:**
+- Document type is a **manufacturing completion** -- **IC** (completion), **IH**, or **IS** (scrap)
+- Both F4111 cardex and F0911 GL have meaningful (non-zero) entries, so this is not a GL-only (5.2) or cardex-only (5.3) case
+- The **implied per-unit cost differs sharply between the two sides** -- the analyzer flags it at a **5x or greater** ratio. (F4111 carries qty + unit cost per row; F0911 carries no quantity, so the GL-implied unit cost is the F0911 inventory total divided by the F4111 quantity total.)
+- All rows sit on the same WIP/FG account and period -- which is why Account Mismatch (5.4) and Period Mismatch (5.14) do not catch it
+
+**What is happening:**
+
+The completion was recorded at **two different unit-cost bases**: the cardex (F4111) captured one cost, the GL (F0911) posted another, and the variance is the gap multiplied by the quantity. On a standard-cost item (cost method 07), one side used the frozen standard from F30026 and the other used the work-order actual. On manufacturing-last (09) or another actual method, the cardex captured the pre-completion basis while the GL captured the completion-time actual.
+
+The usual root cause is **R30822 (Frozen Cost Update) changing the standard after the completion posted, with R30837 (WIP Revaluation) failing to bridge cardex to GL.** R30837 does not bridge when the variance AAI (**3240 Material / 3260 Planned**) is not configured for the routing, its processing options suppress the GL write, or the work order has reached its **Closed status in UDC 00/SS** (typically 90 -- R30837 skips closed WOs).
+
+**Common causes and resolution:**
+
+> ⚠ **Before posting:** confirm with cost-accounting which side is the intended cost basis (frozen standard vs work-order actual). The corrective JE direction depends on that decision.
+
+| Cause | How to identify | Resolution |
+|---|---|---|
+| Standard cost changed after completion; R30837 did not revalue | Cost method 07; F30026 frozen standard changed after the completion's GL date; the higher cost is on the GL side | Post a corrective JE moving the excess between the WIP/FG account and the manufacturing variance AAI (3240 / 3260) -- credit inventory / debit variance when GL is over-stated, or the reverse when GL is under-stated. Then fix R30837 so it is called from R30822. |
+| WO at Closed status -- R30837 skips it | The work order's status in UDC 00/SS is the closed value (e.g. 90); R30837 logs no revaluation for it | Same corrective JE. Re-open the WO only if policy allows a revaluation; otherwise the JE is the permanent correction. |
+| Actual-cost (09 / other) timing window | Cost method is 09 or another actual method; cardex and GL picked up costs at different moments | Same corrective JE to the variance AAI; confirm the completion's cost source with cost-accounting. |
+
+**Prevention:** ensure R30837 (WIP Revaluation) is invoked from R30822 (Frozen Cost Update) so cardex and GL stay aligned through standard-cost changes -- otherwise this mismatch recurs on every future cost change.
+
+> **Analyzer output:** the analyzer computes the implied per-unit cost on each side, reports the ratio, names the dominant cost method from the F4111 Ext code, and pre-builds the corrective JE-flow matrix (Inventory vs AAI 3240/3260) with the variance direction filled in. It fires after the narrower 5.6 (Standard Cost Change comment) and 5.15 (orphan-row) detectors, and before 5.4 / 5.14.
+
+### 5.17 Duplicate Shipment -- Same Order Line Relieved Twice
+
+> Numbered 5.17 in this guide; the analyzer's internal pattern ID is **5.18**.
+
+**Symptoms:**
+- A **sales (SO / RI ship)** or **transfer (OT)** document
+- **Two or more F4111 cardex rows relieve the same order number + line number** -- the same line shipped more than once
+- F0911 booked the shipment **once**; the cardex total exceeds the GL total
+- The variance equals the value of the duplicate relief(s)
+
+**What is happening:**
+
+JDE never re-uses a line number for a partial shipment -- a genuine partial increments the line (e.g. 6.001, 6.100). So **a repeated line number on the cardex is a double relief, not a normal split.** The line was ship-confirmed more than once, relieving inventory each time. R42800 (Sales Update) posts GL from the **first occurrence** of the line, so the duplicate cardex relief hit inventory with **no matching GL entry** -- leaving inventory short by its value.
+
+**Resolution:**
+
+> ⚠ **Confirm the billing first:** one invoice (F4211 / RI) against a duplicate cardex relief is an inventory-only correction; a duplicate *invoice* is a separate A/R correction.
+
+1. **Verify in JDE** -- pull the F4111 (Item Ledger) for the order + line and confirm two ship-confirm records for the same quantity. Matching line numbers (rather than .001 / .100) confirm the double relief.
+2. **Confirm billing** -- check F4211 / RI for a single invoiced line.
+3. **Post an inventory adjustment (IA)** -- return the double-shipped item to its branch / location, putting back the value the second relief removed without a sale. This realigns the cardex to the GL.
+4. **Refresh RapidReconciler and re-analyze** -- the variance clears once the IA posts.
+
+**Prevention:** review the ship-confirm / RF workflow that allowed a closed line (NxtSts 999) to be confirmed a second time.
+
+> **Analyzer output:** the analyzer groups F4111 rows by (order, line); a group of 2 or more is the duplicate. It reports the per-relief amount and the group total and pre-fills the IA corrective steps. It outranks Mixed Line Types (5.7) when both could match the same doc.
 
 ---
 
