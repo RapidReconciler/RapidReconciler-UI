@@ -358,6 +358,21 @@
 
   // ---- fmt ----
   function num(n){ var x=Number(n)||0; var a=Math.abs(x).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); return x<0?'('+a+')':a; }
+  // Currency context for the Total-variance KPI. Per-item grid cells stay bare.
+  // mixed = scope spans >1 base currency (Currency now comes from the view).
+  // Self-contained (this page doesn't load sidebar.js): ISO-4217 symbol via
+  // the browser's Intl/ICU data; empty code falls back to '$'.
+  var _curCtx={code:'',mixed:false,codes:[]}, _curSymCache={};
+  function _sym(code){
+    var c=(code!==undefined&&code!==null)?code:_curCtx.code; c=(c||'').toString().trim().toUpperCase();
+    if(!c) return '$';
+    if(_curSymCache[c]!==undefined) return _curSymCache[c];
+    var sym=c;
+    try{ var parts=new Intl.NumberFormat('en-US',{style:'currency',currency:c}).formatToParts(0); for(var i=0;i<parts.length;i++){ if(parts[i].type==='currency'){ sym=parts[i].value; break; } } }catch(e){}
+    _curSymCache[c]=sym; return sym;
+  }
+  function curMoney(v){ var x=Number(v)||0; var s=_sym(_curCtx.code); var a=Math.abs(x).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); return x<0?'('+s+a+')':s+a; }
+  function _ctxOf(rows){ var set={}; (rows||[]).forEach(function(r){ var c=((r&&r.Currency)||'').toString().trim().toUpperCase(); if(c) set[c]=1; }); var codes=Object.keys(set); return codes.length<=1?{code:codes[0]||'',mixed:false,codes:codes}:{code:'',mixed:true,codes:codes}; }
   function qty(n){ var x=Number(n)||0; return x.toLocaleString('en-US',{maximumFractionDigits:2}); }
   function moneyCell(n){ var x=Number(n)||0; if(Math.abs(x)<0.005) return '<span style="color:var(--text-muted)">&mdash;</span>'; return '<span class="'+(x<0?'neg':'')+'">'+num(x)+'</span>'; }
   function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(m){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m];}); }
@@ -468,10 +483,13 @@
   // ---- render ----
   function renderKpis(){
     var s=scoped();
+    _curCtx=_ctxOf(s);
     var v=s.reduce(function(a,r){return a+(Number(r.AdjAmount)||0);},0);
     var items=new Set(s.map(function(r){return r.CompanyNumber+'|'+r.ItemNumber;})).size;
     var accts=new Set(s.map(acctKey)).size;
-    var k1=document.getElementById('kpiVar'); k1.textContent=num(v); k1.classList.toggle('neg',v<0);
+    var k1=document.getElementById('kpiVar');
+    if(_curCtx.mixed){ k1.textContent='Mixed currencies'; k1.classList.remove('neg'); }
+    else { k1.textContent=curMoney(v); k1.classList.toggle('neg',v<0); }
     document.getElementById('kpiItems').textContent=items.toLocaleString('en-US');
     document.getElementById('kpiAccts').textContent=accts;
   }

@@ -3028,6 +3028,7 @@
         <div class="hero-main">
           <div class="hero-label">Out of balance &middot; this period</div>
           <div class="hero-value" id="js-hero-value">13,203.53</div>
+          <div class="hero-sub" id="js-currency-note" style="display:none;"></div>
         </div>
         <div class="hero-sides">
           <div class="hero-side">
@@ -3866,29 +3867,86 @@
   }
 
   // ---------- Formatters ----------
-  function fmtMoney(v) {
+  // Active-currency context for on-screen formatting. Set each render from
+  // the filtered rows (renderAll); the PDF/Excel builders set it per company.
+  // `code` = the single currency in play ('' falls back to '$'); `mixed` =
+  // the scope spans >1 currency, so aggregate totals are guarded, not summed.
+  let _curCtx = { code: '', mixed: false };
+  function _sym(code) {
+    const c = (code !== undefined && code !== null) ? code : _curCtx.code;
+    return (window.RRV8 && RRV8.currencySymbol) ? RRV8.currencySymbol(c) : '$';
+  }
+  function fmtMoney(v, code) {
     if (v === null || v === undefined || isNaN(v)) return '—';
     const sign = v < 0 ? '(' : '';
     const close = v < 0 ? ')' : '';
     const n = Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    return sign + '$' + n + close;
+    return sign + _sym(code) + n + close;
   }
   function fmtVariance(v) {
-    // Variance step values don't carry a leading $ (matches the live RR UI).
+    // Variance step values don't carry a leading currency symbol (matches the live RR UI).
     if (v === null || v === undefined || isNaN(v)) return '—';
     const sign = v < 0 ? '(' : '';
     const close = v < 0 ? ')' : '';
     const n = Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     return sign + n + close;
   }
-  function fmtShortMoney(v) {
+  function fmtShortMoney(v, code) {
     if (v === null || v === undefined || isNaN(v)) return '—';
     const abs = Math.abs(v);
     let unit = '', scale = 1;
     if (abs >= 1e6) { unit = 'M'; scale = 1e6; }
     else if (abs >= 1e3) { unit = 'K'; scale = 1e3; }
     const formatted = (abs / scale).toFixed(scale === 1 ? 0 : 1);
-    return (v < 0 ? '-$' : '$') + formatted + unit;
+    return (v < 0 ? '-' : '') + _sym(code) + formatted + unit;
+  }
+
+  // Render the hero (OOB / GL / Perpetual) from a computeFilteredView result,
+  // setting the active-currency context. Single currency → symbol-prefixed
+  // totals; mixed → a guard (blended cross-currency totals are meaningless).
+  // Shared by the full render (renderAll) and the selection-change re-render.
+  function renderHero(view) {
+    _curCtx = (view && view.currency) || { code: '', mixed: false, codes: [] };
+    const v = view.valuation;
+    const heroEl = document.getElementById('js-hero-value');
+    const glEl   = document.getElementById('js-gl-balance');
+    const perpEl = document.getElementById('js-perp-balance');
+    const noteEl = document.getElementById('js-currency-note');
+    if (_curCtx.mixed) {
+      heroEl.textContent = 'Mixed currencies';
+      glEl.textContent   = '—';
+      perpEl.textContent = '—';
+      heroEl.classList.remove('is-negative');
+      glEl.classList.remove('is-negative');
+      perpEl.classList.remove('is-negative');
+      if (noteEl) {
+        noteEl.style.display = '';
+        noteEl.innerHTML = 'Scope spans <strong>' + (_curCtx.codes || []).join(', ') +
+          '</strong> — narrow to companies of a single currency to see totals.';
+      }
+    } else {
+      heroEl.textContent = fmtMoney(v.outOfBalance);
+      glEl.textContent   = fmtMoney(v.glBalance);
+      perpEl.textContent = fmtMoney(v.perpetualBalance);
+      heroEl.classList.toggle('is-negative', v.outOfBalance < 0);
+      glEl.classList.toggle('is-negative',   v.glBalance < 0);
+      perpEl.classList.toggle('is-negative', v.perpetualBalance < 0);
+      if (noteEl) noteEl.style.display = 'none';
+    }
+  }
+
+  // Period line chart, guarded for mixed-currency scope: a blended
+  // OOB-by-period trend (USD+GBP) is meaningless, so show a note instead.
+  // Requires _curCtx to be set first (renderHero / renderAll do this).
+  function renderPeriodChart(data) {
+    const el = document.getElementById('js-period-bars');
+    if (_curCtx.mixed) {
+      if (el) el.innerHTML = '<div style="padding:18px 16px;color:#667085;font-size:13px;line-height:1.5;">' +
+        'Period trend hidden &mdash; scope spans <strong>' + (_curCtx.codes || []).join(', ') +
+        '</strong>.<br>Narrow to companies of a single currency to see the trend.</div>';
+      return;
+    }
+    renderPeriodBars(computeFilteredHistory(data));
   }
 
   // ---------- Render ----------
@@ -3962,6 +4020,7 @@
       companyCount: companiesSeen.size,
       accountCount: accountsSeen.size,
       narrowed:     anyGroupNarrowed(data),
+      currency:     (window.RRV8 && RRV8.currencyOf) ? RRV8.currencyOf(rows) : { code: '', mixed: false, codes: [] },
       rows:         rows
     };
   }
@@ -4027,28 +4086,17 @@
     if (currentPeriod && window.RRV8 && typeof window.RRV8.publishCurrentPeriod === 'function') {
       window.RRV8.publishCurrentPeriod(currentPeriod);
     }
-    renderPeriodBars(computeFilteredHistory(data));
-
-    // Hydrate filter selections from data if not already populated
+    // Hydrate filter selections, then compute the filtered view + active-
+    // currency context up front so the period chart and hero share it.
     initSelectionsIfEmpty(data);
-
-    // Compute the filtered view from current selections + breakdown
     const view = computeFilteredView(data);
+    _curCtx = view.currency || { code: '', mixed: false, codes: [] };
 
-    // Hero
-    const v = view.valuation;
-    const heroEl = document.getElementById('js-hero-value');
-    const glEl   = document.getElementById('js-gl-balance');
-    const perpEl = document.getElementById('js-perp-balance');
-    // Hero amounts use fmtVariance (no $) — the filter scope can span
-    // multiple currencies (e.g. company 00010 = USD, 00050 = GBP), so
-    // a single $ symbol on the aggregate would be misleading.
-    heroEl.textContent = fmtVariance(v.outOfBalance);
-    glEl.textContent   = fmtVariance(v.glBalance);
-    perpEl.textContent = fmtVariance(v.perpetualBalance);
-    heroEl.classList.toggle('is-negative', v.outOfBalance < 0);
-    glEl.classList.toggle('is-negative',   v.glBalance < 0);
-    perpEl.classList.toggle('is-negative', v.perpetualBalance < 0);
+    // Period line chart (guarded when the scope spans >1 currency).
+    renderPeriodChart(data);
+
+    // Hero (re-applies the active-currency context for the formatters below).
+    renderHero(view);
 
     // Variance table — rows + running balance + total
     renderVarianceTable(view);
@@ -4474,6 +4522,14 @@
     const list   = document.getElementById('js-contrib-list');
     const footer = document.getElementById('js-contrib-footer');
     if (!list) return;
+    // Mixed-currency scope: contributor amounts would sum unlike currencies.
+    // Guard instead of rendering a misleading bar set (matches the hero guard).
+    if (_curCtx.mixed) {
+      list.innerHTML = '<div class="contributor-empty">Scope spans multiple currencies (' +
+        (_curCtx.codes || []).join(', ') + ').<br>Narrow to companies of a single currency to see contributors.</div>';
+      if (footer) footer.innerHTML = '';
+      return;
+    }
     // Reflect active tab in the tab strip.
     document.querySelectorAll('.contrib-tab').forEach(btn => {
       const active = btn.dataset.contribDim === _contribTab;
@@ -4763,26 +4819,14 @@
     renderFilterSummary(currentData);
     // Recompute hero / variance from the new filter view
     const view = computeFilteredView(currentData);
-    const v = view.valuation;
-    const heroEl = document.getElementById('js-hero-value');
-    const glEl   = document.getElementById('js-gl-balance');
-    const perpEl = document.getElementById('js-perp-balance');
-    // Hero amounts use fmtVariance (no $) — the filter scope can span
-    // multiple currencies (e.g. company 00010 = USD, 00050 = GBP), so
-    // a single $ symbol on the aggregate would be misleading.
-    heroEl.textContent = fmtVariance(v.outOfBalance);
-    glEl.textContent   = fmtVariance(v.glBalance);
-    perpEl.textContent = fmtVariance(v.perpetualBalance);
-    heroEl.classList.toggle('is-negative', v.outOfBalance < 0);
-    glEl.classList.toggle('is-negative',   v.glBalance < 0);
-    perpEl.classList.toggle('is-negative', v.perpetualBalance < 0);
+    renderHero(view);
     renderVarianceTable(view);
     // Recompute the contributor bars (their amounts scale with
     // the filtered total) and the bar-chart history (now filtered
     // too, since accountRows carries per-period rows).
     renderContributorsCard(currentData);
     renderHistory(computeFilteredHistory(currentData));
-    renderPeriodBars(computeFilteredHistory(currentData));
+    renderPeriodChart(currentData);
   }
 
   // ---------- Period popover ----------
@@ -5943,7 +5987,8 @@
     const moneyFmt = (n) => {
       const v = Number(n) || 0;
       const s = Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-      return v < 0 ? '($' + s + ')' : '$' + s;
+      const sym = _sym();   // ambient per-company currency (set by the export builders)
+      return v < 0 ? '(' + sym + s + ')' : sym + s;
     };
     return 'Residuals Audit: ' + stats.count.toLocaleString('en-US') +
       ' row' + (stats.count === 1 ? '' : 's') +
@@ -5973,6 +6018,9 @@
   function buildAuditCompanyTab(co, snap, detail, descMap) {
     const cnum = co.id;
     const currency = currencyOfCompanyLabel(co.label) || 'USD';
+    // This sheet is one company => one currency; format every money cell
+    // below in it (fmtMoney/fmtMoneyPdf default to this ambient context).
+    _curCtx = { code: currency, mixed: false, codes: [currency] };
     const aoa = [];
     const styles = [];   // [{ r:0-idx, c:0-idx, s:style }]
     function row(cells) { aoa.push(cells || []); return aoa.length - 1; }
@@ -6221,6 +6269,7 @@
         const auditCtx = mergeAuditContext(currentData, detail);
         const descMap = buildAccountDescMap(auditCtx);
         const wb = XLSX.utils.book_new();
+        const _savedCur = _curCtx;   // restore the on-screen currency after the per-company loop
         companiesInScope.forEach(co => {
           const sheet = buildAuditCompanyTab(co, auditCtx, detail, descMap);
           const currency = currencyOfCompanyLabel(co.label) || '';
@@ -6229,6 +6278,7 @@
           if (tabName.length > 31) tabName = tabName.slice(0, 31);
           XLSX.utils.book_append_sheet(wb, sheet, tabName);
         });
+        _curCtx = _savedCur;
         const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 13);
         const fname = 'PerpetualInventoryReconciliation_' + currentPeriod + '_' + stamp + '.xlsx';
         XLSX.writeFile(wb, fname);
@@ -6262,10 +6312,11 @@
   // Same data + filter chain as the Excel; rendered via jsPDF +
   // autoTable. One company per major page break; autoTable handles
   // intra-table pagination + repeating headers automatically.
-  function fmtMoneyPdf(v) {
+  function fmtMoneyPdf(v, code) {
     const n = Number(v) || 0;
     const abs = Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    return n < 0 ? '($' + abs + ')' : '$' + abs;
+    const sym = _sym(code);   // ambient _curCtx.code (set per company section) unless overridden
+    return n < 0 ? '(' + sym + abs + ')' : sym + abs;
   }
   function fmtQtyPdf(v) {
     const n = Number(v) || 0;
@@ -6350,6 +6401,8 @@
   function buildPdfCompanySection(doc, co, snap, detail, descMap, isFirst) {
     if (!isFirst) doc.addPage();
     const cnum = co.id;
+    // One company => one currency; fmtMoneyPdf below defaults to this.
+    _curCtx = { code: currencyOfCompanyLabel(co.label) || 'USD', mixed: false, codes: [currencyOfCompanyLabel(co.label) || 'USD'] };
     // Residuals audit stats for this company's perpetual rows —
     // same definition as the Excel cover line, surfaced as an
     // italic note under "Prepared by".
@@ -6615,9 +6668,11 @@
         const descMap = buildAccountDescMap(auditCtx);
         const { jsPDF } = window.jspdf;
         const doc = new jsPDF({ orientation: 'p', unit: 'pt', format: 'letter' });
+        const _savedCur = _curCtx;   // restore the on-screen currency after the per-company loop
         companiesInScope.forEach((co, idx) => {
           buildPdfCompanySection(doc, co, auditCtx, detail, descMap, idx === 0);
         });
+        _curCtx = _savedCur;
         addPdfFooter(doc);
         const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 13);
         const fname = 'PerpetualInventoryReconciliation_' + currentPeriod + '_' + stamp + '.pdf';

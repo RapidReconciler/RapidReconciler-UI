@@ -1904,6 +1904,23 @@
     const txt = fmtMoney(x);
     return cls ? '<span class="' + cls + '">' + txt + '</span>' : txt;
   }
+  // Active-currency context for the AGGREGATES (stat strip, totals row,
+  // contributors). Per-row grid cells stay bare (a number with no symbol is
+  // never wrong, even when the grid interleaves companies of different
+  // currencies). Set each render from the in-scope rows; mixed = the scope
+  // spans >1 base currency, so a blended total is guarded, not shown.
+  let _curCtx = { code: '', mixed: false, codes: [] };
+  function _sym(code) {
+    const c = (code !== undefined && code !== null) ? code : _curCtx.code;
+    return (window.RRV8 && RRV8.currencySymbol) ? RRV8.currencySymbol(c) : '$';
+  }
+  // Symbol-prefixed money for aggregates (symbol inside parens for negatives).
+  function curMoney(v) {
+    const x = Number(v) || 0;
+    const sym = _sym(_curCtx.code);
+    const abs = Math.abs(x).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return x < 0 ? '(' + sym + abs + ')' : sym + abs;
+  }
   function qtyCell(n) {
     const x = Number(n);
     if (!isFinite(x) || x === 0) return '<span style="color:var(--text-muted)">&mdash;</span>';
@@ -2554,7 +2571,8 @@
     for (let i = 0; i < rows.length; i++) {
       amt += Number(rows[i].Amount) || 0;
     }
-    setStat('stat-amt', fmtMoney(amt), amt);
+    // Mixed-currency scope: a summed Amount across currencies is meaningless.
+    setStat('stat-amt', _curCtx.mixed ? 'Mixed currencies' : curMoney(amt), _curCtx.mixed ? 0 : amt);
   }
   function setStat(id, txt, raw) {
     const el = document.getElementById(id);
@@ -2601,6 +2619,12 @@
       btn.classList.toggle('is-active', on);
       btn.setAttribute('aria-selected', on ? 'true' : 'false');
     });
+    // Mixed-currency scope: contributor amounts would sum unlike currencies.
+    if (_curCtx.mixed) {
+      list.innerHTML = '<div class="perp-contrib-empty">Scope spans multiple currencies (' +
+        (_curCtx.codes || []).join(', ') + '). Narrow to a single currency to see contributors.</div>';
+      return;
+    }
     const active = _state.perpContribFilter;
     const activeKey = (active && active.dim === _perpContribDim) ? active.value : null;
 
@@ -2632,7 +2656,7 @@
         +   '<span class="perp-contrib-row-label">' + escapeHtml(g.key)
         +     '<span class="row-count">' + g.count.toLocaleString('en-US') + ' rows</span>'
         +   '</span>'
-        +   '<span class="perp-contrib-row-amount' + (isNeg ? ' is-negative' : '') + '">' + fmtMoney(g.amount) + '</span>'
+        +   '<span class="perp-contrib-row-amount' + (isNeg ? ' is-negative' : '') + '">' + curMoney(g.amount) + '</span>'
         +   '<span class="perp-contrib-row-bar-wrap"><span class="perp-contrib-row-bar' + (isNeg ? ' is-negative' : '') + '" style="width:' + pct.toFixed(1) + '%"></span></span>'
         + '</button>';
     }).join('') + (overflow > 0
@@ -2796,6 +2820,9 @@ function updateLotDetailPill() {
     renderTableHeader();
     updateColPill();
     _viewRows = filteredRows();
+    _curCtx = (window.RRV8 && RRV8.currencyOf)
+      ? RRV8.currencyOf(_viewRows, function(r){ return r.Currency; })
+      : { code: '', mixed: false, codes: [] };
     renderStats();
     renderPerpetualContributors(_viewRows);
     const rows = searchFilter(sortRows(_viewRows, _state.sortKey, _state.sortDir), _state.gridSearch);
@@ -2900,8 +2927,11 @@ function updateLotDetailPill() {
     return v < 0 ? '<span class="neg">' + txt + '</span>' : txt;
   }
   function signedMoney(n) {
+    // Footer totals row. Mixed-currency scope: the blended total is
+    // meaningless, so guard rather than print a number.
+    if (_curCtx.mixed) return '<span style="color:var(--text-muted)">&mdash;</span>';
     const v = Number(n) || 0;
-    const txt = fmtMoney(v);
+    const txt = curMoney(v);
     return v < 0 ? '<span class="neg">' + txt + '</span>' : txt;
   }
 
