@@ -2920,6 +2920,23 @@
   .feb-detail + .feb-detail { margin-top: 3px; }
   .feb-detail a { color: var(--blue); font-weight: 700; text-decoration: none; }
   .feb-detail a:hover { text-decoration: underline; }
+
+  /* Footer — copied from the Home page. */
+  .foot {
+    margin-top: 48px;
+    background: linear-gradient(0deg, var(--navy) 0%, var(--navy-deep) 100%);
+    color: rgba(255,255,255,.72); font-size: 12px;
+  }
+  .foot-inner {
+    max-width: 1120px; margin: 0 auto; padding: 16px 24px;
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px;
+  }
+  .foot strong { color: #fff; font-weight: 800; }
+  .foot a { color: #fff; font-weight: 700; text-decoration: none; }
+  .foot a:hover { text-decoration: underline; }
+  .foot-left, .foot-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .foot-sep { opacity: .35; }
+  .foot-copy { font-weight: 600; color: rgba(255,255,255,.6); }
 </style>
 </head>
 <body>
@@ -3146,6 +3163,22 @@
         <span class="vt-value" id="js-variance-total">&nbsp;</span>
       </div>
     </section>
+
+    <!-- Footer — copied from the Home page. -->
+    <footer class="foot">
+      <div class="foot-inner">
+        <div class="foot-left">
+          <span>Signed in as <strong id="footName">&mdash;</strong></span>
+          <span class="foot-sep">&middot;</span>
+          <a href="#" id="footSignOut">Sign out</a>
+        </div>
+        <div class="foot-right">
+          <span class="foot-copy">&copy; 2026 GSI. All rights reserved.</span>
+          <span class="foot-sep">&middot;</span>
+          <span id="footVersion">RapidReconciler V8</span>
+        </div>
+      </div>
+    </footer>
 
   </main>
 
@@ -7955,6 +7988,12 @@
     // turns the loop into a real long-poll: server returns immediately
     // when state flips, otherwise hangs until its own timeout.
     let lastSeen = { updating: false, recalculating: false };
+    // Connectivity hysteresis: long-polls get recycled / blipped
+    // routinely, so flipping to "Reconnecting…" on the first failed
+    // poll makes the pill flicker even when the service is fine. Only
+    // show disconnected after CONN_FAIL_THRESHOLD consecutive failures.
+    const CONN_FAIL_THRESHOLD = 2;
+    let consecutiveFailures = 0;
     const tick = async () => {
       const t0 = Date.now();
       try {
@@ -7971,6 +8010,7 @@
         // Successful poll = agent reachable. Cached in sessionStorage
         // so non-polling pages can paint the sidebar dot from the
         // last known outcome at mount time.
+        consecutiveFailures = 0;
         if (window.RRV8 && window.RRV8.setAgentConnectivity) {
           window.RRV8.setAgentConnectivity('ok');
         }
@@ -7988,10 +8028,14 @@
           }
         }
       } catch (err) {
-        // Network blip or agent down. Flip the Agent dot red so the
-        // analyst sees the right indicator immediately; brief delay
-        // before reconnecting so we don't hammer it.
-        if (window.RRV8 && window.RRV8.setAgentConnectivity) {
+        // Absorb a single recycled / timed-out long-poll silently so
+        // the pill doesn't flicker; only flag unreachable after repeated
+        // failures (a genuinely down agent trips the threshold within a
+        // few seconds). Brief delay before reconnecting so we don't
+        // hammer it.
+        consecutiveFailures++;
+        if (consecutiveFailures >= CONN_FAIL_THRESHOLD &&
+            window.RRV8 && window.RRV8.setAgentConnectivity) {
           window.RRV8.setAgentConnectivity('unreachable',
             { message: err && err.message });
         }
@@ -9264,6 +9308,31 @@
   if (window.RRV8 && typeof window.RRV8.ensureInventoryStatus === 'function') {
     window.RRV8.ensureInventoryStatus(rrFetch);
   }
+})();
+</script>
+
+<script>
+/* Footer wiring (copied from Home): signed-in name, version, sign out. */
+(function () {
+  var name = '—';
+  try {
+    var u = (window.RR_SESSION && window.RR_SESSION.user) || null;
+    if (u) name = u.name || u.email || name;
+    else { var le = localStorage.getItem('rrv8.lastEmail'); if (le) name = le; }
+  } catch (_) {}
+  var el = document.getElementById('footName'); if (el) el.textContent = name;
+  try {
+    var ver = document.getElementById('footVersion');
+    if (ver && window.RR_CONFIG && window.RR_CONFIG.release) ver.textContent = 'RapidReconciler ' + window.RR_CONFIG.release;
+  } catch (_) {}
+  var out = document.getElementById('footSignOut');
+  if (out) out.addEventListener('click', function (e) {
+    e.preventDefault();
+    try { localStorage.removeItem('rrv8.token'); } catch (_) {}
+    try { localStorage.removeItem('rrv8.viewMode'); } catch (_) {}
+    try { localStorage.removeItem('rrv8.lastEmail'); } catch (_) {}
+    location.href = '../login.html';
+  });
 })();
 </script>
 

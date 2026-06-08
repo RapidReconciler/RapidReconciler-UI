@@ -5379,6 +5379,7 @@ const TXD_PATTERN_MODULES = {
   // Sales-only
   '5.7':  ['sales'], // Mixed Line Types on return doc
   '5.13': ['sales'], // Post-Confirm Order Edit
+  '5.18': ['sales', 'transfers'], // Duplicate shipment — same order line relieved twice
   // Purchasing-only
   '5.17': ['purchasing'] // Voucher Variance on Inventory (PV under std cost)
 };
@@ -5982,6 +5983,22 @@ const TransactionDetailTemplate = {
       cardexQtyTotal < orderQtyTotal - 0.001
     );
 
+    // Pattern 5.18 — Duplicate shipment on the same order line.
+    // In JDE a partial shipment increments the order line (6.000 ->
+    // 6.001 -> 6.100), so a single line relieves inventory through the
+    // cardex ONCE. Two or more F4111 rows sharing the same
+    // (ordernum, line) means the line was ship-confirmed twice — a
+    // double relief, not a normal split. Sales Update (R42800) books GL
+    // from the first occurrence of the line only, so the second relief
+    // hits the cardex with no matching GL entry and the variance equals
+    // its value. Fires BEFORE 5.7 (and well above the cardex-only /
+    // GL-excess fallbacks) so the double-shipment story wins over the
+    // mixed-line-types / generic diagnoses, which the same doc can also
+    // satisfy. Gated to sales / transfer modules — the line-per-shipment
+    // rule is a sales/transfer ship-confirm phenomenon.
+    const dupShipGroups = this._duplicateShipmentGroups(data);
+    const isDuplicateShipment = dupShipGroups.length > 0;
+
     // Pattern classification
     let pattern, patternLabel, patternExplanation;
     // Pattern 5.6 enrichment: if the loaded DMAAI integrity report tells us
@@ -5993,6 +6010,9 @@ const TransactionDetailTemplate = {
     if (inModule('5.1') && data.unassigned.length) {
       pattern = '5.1'; patternLabel = 'Unassigned Account — Missing Model Table Entry';
       patternExplanation = this._unassignedExplanation(data);
+    } else if (inModule('5.18') && isDuplicateShipment) {
+      pattern = '5.18'; patternLabel = 'Duplicate shipment — same order line relieved twice in the cardex';
+      patternExplanation = this._duplicateShipmentExplanation(data, dupShipGroups);
     } else if (inModule('5.7') && isLineTypeMix) {
       pattern = '5.7'; patternLabel = 'Mixed line types on a return doc (DMAAI routes both through the same AAI)';
       patternExplanation = this._lineTypeMixExplanation(data, stockLines, nonStockLines);
@@ -6507,6 +6527,7 @@ const TransactionDetailTemplate = {
     if (findings.pattern === '5.4')  return this._accountMismatchWhat(data, findings);
     if (findings.pattern === '5.5')  return this._netZeroWhat(data, findings);
     if (findings.pattern === '5.6')  return this._stdCostChangeWhat(data, findings);
+    if (findings.pattern === '5.18') return this._duplicateShipmentWhat(data, findings);
     if (findings.pattern === '5.7')  return this._lineTypeMixWhat(data, findings);
     if (findings.pattern === '5.11') return this._glExcessWhat(data, findings);
     if (findings.pattern === '5.13') return this._postConfirmOrderEditWhat(data, findings);
@@ -6566,6 +6587,7 @@ const TransactionDetailTemplate = {
         findings.mfgVarianceAaiContext
       );
     }
+    if (pattern === '5.18') return this._duplicateShipmentResolution(data, findings);
     if (pattern === '5.7')  return this._lineTypeMixResolution(data);
     if (pattern === '5.11') return this._glExcessResolution(data);
     if (pattern === '5.13') return this._postConfirmOrderEditResolution(data, findings);
@@ -6791,6 +6813,61 @@ const TransactionDetailTemplate = {
       `Step 3.  Systemic fix: in JDE, define separate order types — one for stock returns, one for dollars-only credits / adjustments. Update the order-entry workflow so each line type lands on the appropriate order type. DMAAI then routes each correctly without manual intervention at close.`,
       `Step 4.  Once the systemic fix is in place, audit any open RI / RM / CR / RE / SR documents to see if they need the same re-routing treatment. Future docs entered after the order-type split won't hit this issue.`,
       `Step 5.  Refresh RapidReconciler and re-analyze. The variance on this doc should clear once the Step 2 JE is posted.`
+    ].join('\n\n');
+  },
+
+  // Pattern 5.18 — Duplicate shipment on the same order line.
+  // Group the F4111 cardex rows by (ordernum, line); a group of 2+ is a
+  // line relieved more than once. Most-rows-first so groups[0] is the
+  // primary duplicate driving the variance.
+  _duplicateShipmentGroups(data) {
+    const byKey = new Map();
+    (data.f4111Rows || []).forEach(r => {
+      const on = String(r.ordernum || '').trim();
+      const ln = String(r.line || '').trim();
+      if (!on || !ln) return;
+      const k = on + '||' + ln;
+      let g = byKey.get(k);
+      if (!g) { g = { ordernum: on, line: ln, rows: [] }; byKey.set(k, g); }
+      g.rows.push(r);
+    });
+    return Array.from(byKey.values())
+      .filter(g => g.rows.length >= 2)
+      .sort((a, b) => b.rows.length - a.rows.length);
+  },
+  _duplicateShipmentWhat(data, findings) {
+    const groups = this._duplicateShipmentGroups(data);
+    const g = groups[0] || { ordernum: data.ordernum, line: '?', rows: [] };
+    const n = g.rows.length;
+    const item = ((g.rows.find(r => r.item) || {}).item) || '';
+    const perRow = g.rows[0] ? g.rows[0].cardexAmt : 0;
+    const grpTot = g.rows.reduce((a, r) => a + (r.cardexAmt || 0), 0);
+    const timesWord = n === 2 ? 'twice' : (n + ' times');
+    return [
+      `• ${n} F4111 cardex rows relieve order ${g.ordernum} line ${g.line}${item ? ' (' + item + ')' : ''} — ${Helpers.money(perRow)} each, ${Helpers.money(grpTot)} total`,
+      `• JDE increments the line for partial shipments (… 6.001, 6.100), so one line relieves inventory once — ${n} reliefs on line ${g.line} means it shipped ${timesWord}`,
+      `• F0911 booked the shipment once (${Helpers.money(data.f0911InvTot)}); Sales Update (R42800) reads only the first occurrence of a line number`,
+      `• Variance: ${Helpers.money(findings.variance, true)} — the duplicate relief, never recorded in GL`
+    ].join('\n');
+  },
+  _duplicateShipmentExplanation(data, groups) {
+    const g = (groups && groups[0]) || {};
+    return [
+      `• Order ${g.ordernum || data.ordernum} line ${g.line || '?'} was ship-confirmed more than once — JDE never re-uses a line number for a partial (it increments to .001 / .100), so a repeated line number is a double relief, not a normal split`,
+      `• R42800 (Sales Update) posts GL from the first occurrence of the line, so the duplicate cardex relief hit inventory with no matching GL entry — leaving inventory short by its value`
+    ].join('\n');
+  },
+  _duplicateShipmentResolution(data, findings) {
+    const groups = this._duplicateShipmentGroups(data);
+    const g = groups[0] || {};
+    const item = ((g.rows && g.rows.find(r => r.item) || {}).item) || 'the item';
+    const dupAbs = Helpers.money(Math.abs(findings.variance));
+    return [
+      `Step 1.  Verify in JDE — pull the F4111 (Item Ledger) for order ${g.ordernum || data.ordernum} line ${g.line || ''} and confirm two ship-confirm records for the same quantity. A genuine partial carries a different line number (.001 / .100); matching line numbers confirm the double relief.`,
+      `Step 2.  Confirm the billing — check the RI / F4211 for a single invoiced line. One invoice with a duplicate cardex relief is inventory-only; a duplicate invoice is a separate AR correction.`,
+      `Step 3.  Inventory adjustment — post an IA to return the double-shipped ${item} to its branch / location, putting back the ${dupAbs} the second relief removed without a sale. This brings the cardex back in line with the GL.`,
+      `Step 4.  Refresh RapidReconciler and re-analyze — the ${Helpers.money(findings.variance, true)} variance clears once the IA posts.`,
+      `Step 5.  Prevention: review the ship-confirm / RF workflow that let a closed line (NxtSts 999) be confirmed a second time.`
     ].join('\n\n');
   },
 
@@ -7509,6 +7586,7 @@ const TransactionDetailTemplate = {
       '5.5':  'NET-ZERO DMAAI PAIR',
       '5.6':  'STANDARD COST CHANGE',
       '5.7':  'MIXED LINE TYPES',
+      '5.18': 'DUPLICATE SHIPMENT',
       '5.11': 'GL EXCESS',
       '5.13': 'POST-CONFIRM ORDER EDIT',
       '5.14': 'PERIOD MISMATCH',

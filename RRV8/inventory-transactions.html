@@ -1162,6 +1162,7 @@
     transition: background 0.15s;
   }
   .tx-contrib-row:hover { background: var(--bg-soft); }
+  .tx-contrib-row.is-active { background: rgba(43, 95, 176, 0.10); box-shadow: inset 3px 0 0 var(--blue); }
   .tx-contrib-row-label {
     font-family: 'Source Sans 3', sans-serif;
     font-size: 12.5px;
@@ -2587,6 +2588,23 @@
     transition: opacity 0.15s ease;
   }
   .sidebar:hover .sidebar-status-label { opacity: 1; }
+
+  /* Footer — copied from the Home page. */
+  .foot {
+    margin-top: 48px;
+    background: linear-gradient(0deg, var(--navy) 0%, var(--navy-deep) 100%);
+    color: rgba(255,255,255,.72); font-size: 12px;
+  }
+  .foot-inner {
+    max-width: 1120px; margin: 0 auto; padding: 16px 24px;
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px;
+  }
+  .foot strong { color: #fff; font-weight: 800; }
+  .foot a { color: #fff; font-weight: 700; text-decoration: none; }
+  .foot a:hover { text-decoration: underline; }
+  .foot-left, .foot-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .foot-sep { opacity: .35; }
+  .foot-copy { font-weight: 600; color: rgba(255,255,255,.6); }
 </style>
 </head>
 <body>
@@ -2841,16 +2859,17 @@
 
   <!-- ============================================================
        VARIANCE CONTRIBUTORS — sits under the period graph (same
-       slot as the Reconciliation page). Collapsible, default-closed.
-       Lower-level drill (DT / OT / Sub / Type / Company); the
-       module cards in the Variance breakdown card below cover the
-       macro Sales / Purchasing / Inventory / Manufacturing view.
+       slot + dimensions as the Reconciliation page). Collapsible,
+       default-closed. Account-level drill (Business unit / Object /
+       Subsidiary, parsed from LongAccount); the module cards in the
+       Variance breakdown card below cover the macro Sales / Purchasing /
+       Inventory / Manufacturing view.
        ============================================================ -->
   <section class="tx-contrib-card is-collapsed" id="tx-contrib-card">
     <div class="tx-contrib-head" id="tx-contrib-toggle" role="button" tabindex="0" aria-expanded="false" aria-controls="tx-contrib-body" title="Show / hide the variance contributors breakdown">
       <div class="tx-contrib-title">Variance contributors</div>
       <div class="tx-contrib-head-right">
-        <a href="#" class="tx-contrib-help" data-action="tx-contrib-help" title="Click any row to narrow the Details grid to that single dimension value. Cards group rows by Doc Type / Order Type / Sub Type / Type / Company.">
+        <a href="#" class="tx-contrib-help" data-action="tx-contrib-help" title="Click any row to narrow the Details grid to that single dimension value. Rows group by Business unit / Object / Subsidiary.">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
         </a>
         <svg class="tx-contrib-chevron" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -2860,11 +2879,9 @@
     </div>
     <div class="tx-contrib-body" id="tx-contrib-body">
       <div class="tx-contrib-tabs" role="tablist" aria-label="Variance contributor dimension">
-        <button class="tx-contrib-tab is-active" type="button" role="tab" aria-selected="true" data-tx-contrib-dim="docTypes">Doc Type</button>
-        <button class="tx-contrib-tab" type="button" role="tab" aria-selected="false" data-tx-contrib-dim="orderTypes">Order Type</button>
-        <button class="tx-contrib-tab" type="button" role="tab" aria-selected="false" data-tx-contrib-dim="subTypes">Sub Type</button>
-        <button class="tx-contrib-tab" type="button" role="tab" aria-selected="false" data-tx-contrib-dim="types">Type</button>
-        <button class="tx-contrib-tab" type="button" role="tab" aria-selected="false" data-tx-contrib-dim="companies">Company</button>
+        <button class="tx-contrib-tab is-active" type="button" role="tab" aria-selected="true" data-tx-contrib-dim="businessUnits">Business unit</button>
+        <button class="tx-contrib-tab" type="button" role="tab" aria-selected="false" data-tx-contrib-dim="objects">Object</button>
+        <button class="tx-contrib-tab" type="button" role="tab" aria-selected="false" data-tx-contrib-dim="subsidiaries">Subsidiary</button>
       </div>
       <div class="tx-contrib-list" id="tx-contrib-list">
         <div class="tx-contrib-empty">Loading&hellip;</div>
@@ -2978,6 +2995,22 @@
   </section>
 
 </div>
+
+  <!-- Footer — copied from the Home page. -->
+  <footer class="foot">
+    <div class="foot-inner">
+      <div class="foot-left">
+        <span>Signed in as <strong id="footName">&mdash;</strong></span>
+        <span class="foot-sep">&middot;</span>
+        <a href="#" id="footSignOut">Sign out</a>
+      </div>
+      <div class="foot-right">
+        <span class="foot-copy">&copy; 2026 GSI. All rights reserved.</span>
+        <span class="foot-sep">&middot;</span>
+        <span id="footVersion">RapidReconciler V8</span>
+      </div>
+    </div>
+  </footer>
   </main>
 
 </div>
@@ -3484,6 +3517,15 @@
     // holds the connection up to 60s waiting for either flag to flip.
     // See specs/poll-longpoll.md for the contract.
     let lastSeen = { updating: false, recalculating: false };
+    // Connectivity hysteresis: long-polls get recycled / blipped
+    // routinely (the agent closes the held connection, a proxy times
+    // out, a brief network hiccup), so flipping the pill to
+    // "Reconnecting…" on the FIRST failed poll makes the status flicker
+    // even when the service is fine. Only show disconnected after
+    // CONN_FAIL_THRESHOLD consecutive failures; a single blip is
+    // absorbed silently and the next poll clears it.
+    const CONN_FAIL_THRESHOLD = 2;
+    let consecutiveFailures = 0;
     const tick = async () => {
       const t0 = Date.now();
       try {
@@ -3499,6 +3541,7 @@
         };
         // Successful poll = agent reachable. Cached so non-polling
         // pages paint the sidebar dot from the last known outcome.
+        consecutiveFailures = 0;
         if (window.RRV8 && window.RRV8.setAgentConnectivity) {
           window.RRV8.setAgentConnectivity('ok');
         }
@@ -3514,9 +3557,13 @@
           }
         }
       } catch (err) {
-        // Network blip or agent down — flip the Agent dot red so
-        // the analyst sees the cause immediately.
-        if (window.RRV8 && window.RRV8.setAgentConnectivity) {
+        // Only flag unreachable after repeated failures — absorb a
+        // single recycled / timed-out long-poll silently so the pill
+        // doesn't flicker. A genuinely down agent fails every poll and
+        // trips the threshold within a few seconds.
+        consecutiveFailures++;
+        if (consecutiveFailures >= CONN_FAIL_THRESHOLD &&
+            window.RRV8 && window.RRV8.setAgentConnectivity) {
           window.RRV8.setAgentConnectivity('unreachable',
             { message: err && err.message });
         }
@@ -3762,6 +3809,8 @@
     period:           null,                 // currently selected period
     activeType:       null,                 // 'Inventory' | 'Mfg' | 'Sales' | null
     activeCompany:    null,                 // CompanyNumber, or null
+    activeAcctSeg:    null,                 // { i: 0|1|2, value } — BU/Object/Sub from the contributors card
+
     activeModule:     null,                 // 'Sales' | 'Purchasing' | 'Inventory' | 'Manufacturing', or null
     activePattern:    null,                 // analyzer pattern code (5.2/5.3/5.4/5.6/5.16/5.17/5.11), or null
     workedFilter:     'all',                // 'all' | 'yes' | 'no'
@@ -4123,6 +4172,7 @@
       if (_state.activeCompany && r.CompanyNumber !== _state.activeCompany) return false;
       if (_state.activeModule  && moduleOf(r) !== _state.activeModule)      return false;
       if (_state.activePattern && r._pattern   !== _state.activePattern)    return false;
+      if (_state.activeAcctSeg && acctSeg(r, _state.activeAcctSeg.i) !== _state.activeAcctSeg.value) return false;
       if (_state.workedFilter === 'yes' && !r.Worked) return false;
       if (_state.workedFilter === 'no'  &&  r.Worked) return false;
       return passesExclusions(r, _state.exclusions);
@@ -4336,22 +4386,24 @@
   //  the Details grid via applyActionFilter — same flow the Start
   //  Here cards already use.
   // =========================================================
+  // Account segments parsed from LongAccount ("BU.Object.Sub", e.g.
+  // "1000000.141000.MM"). Transaction rows don't carry separate BU /
+  // Object / Subsidiary fields, so we split the account string. Mirrors
+  // the Reconciliation page's Out of Balance Contributors dimensions.
+  function acctSeg(r, i) {
+    const parts = String(r && r.LongAccount == null ? '' : r.LongAccount).split('.');
+    return (parts[i] || '').trim();
+  }
   const TX_CONTRIB_DIMS = {
-    docTypes:   { rowKey: 'DT',            label: 'Doc Type',
-                  describe: (v) => JDE_DOCTYPE_DESC[v]   || '',
-                  apply:    (v) => setOnlyChip('docTypes',   v) },
-    orderTypes: { rowKey: 'OT',            label: 'Order Type',
-                  describe: (v) => JDE_ORDERTYPE_DESC[v] || '',
-                  apply:    (v) => setOnlyChip('orderTypes', v) },
-    subTypes:   { rowKey: 'SubType',       label: 'Sub Type',
-                  describe: ()  => '',
-                  apply:    (v) => setOnlyChip('subTypes',   v) },
-    types:      { rowKey: 'Type',          label: 'Type',
-                  describe: ()  => '',
-                  apply:    (v) => { _state.activeType    = v; } },
-    companies:  { rowKey: 'CompanyNumber', label: 'Company',
-                  describe: ()  => '',
-                  apply:    (v) => { _state.activeCompany = v; } }
+    businessUnits: { label: 'Business unit', seg: 0, value: (r) => acctSeg(r, 0),
+                     describe: () => '',
+                     apply:    (v) => { _state.activeAcctSeg = { i: 0, value: v }; } },
+    objects:       { label: 'Object',        seg: 1, value: (r) => acctSeg(r, 1),
+                     describe: () => '',
+                     apply:    (v) => { _state.activeAcctSeg = { i: 1, value: v }; } },
+    subsidiaries:  { label: 'Subsidiary',    seg: 2, value: (r) => acctSeg(r, 2),
+                     describe: () => '',
+                     apply:    (v) => { _state.activeAcctSeg = { i: 2, value: v }; } }
   };
   const TX_CONTRIB_TOP_N = 8;
   const TX_CONTRIB_LS_KEY          = 'rrv8-tx-contrib-dim-v1';
@@ -4362,7 +4414,7 @@
       const raw = localStorage.getItem(TX_CONTRIB_LS_KEY);
       if (raw && TX_CONTRIB_DIMS[raw]) return raw;
     } catch (_) {}
-    return 'docTypes';
+    return 'businessUnits';
   }
   function saveTxContribDim(d) {
     try { localStorage.setItem(TX_CONTRIB_LS_KEY, d); } catch (_) {}
@@ -4395,14 +4447,18 @@
       btn.setAttribute('aria-selected', active ? 'true' : 'false');
     });
 
-    const dim = TX_CONTRIB_DIMS[_txContribDim] || TX_CONTRIB_DIMS.docTypes;
+    const dim = TX_CONTRIB_DIMS[_txContribDim] || TX_CONTRIB_DIMS.businessUnits;
+    // Which row (if any) is currently isolated — marked active so a
+    // second click reads as "click again to restore".
+    const activeKey = (_state.activeAcctSeg && typeof dim.seg === 'number'
+      && dim.seg === _state.activeAcctSeg.i) ? _state.activeAcctSeg.value : null;
 
     // Group by dimension value, sum |Variance| and count per group.
     // Empty / blank dimension values are skipped — they aren't
     // actionable from the contributors row (no narrow target).
     const groups = new Map();
     rows.forEach(r => {
-      const raw = r[dim.rowKey];
+      const raw = dim.value ? dim.value(r) : r[dim.rowKey];
       const key = String(raw == null ? '' : raw).trim();
       if (!key) return;
       const g = groups.get(key) || { key, count: 0, variance: 0 };
@@ -4411,7 +4467,7 @@
       groups.set(key, g);
     });
     const ranked = [...groups.values()]
-      .sort((a, b) => Math.abs(b.variance) - Math.abs(a.variance));
+      .sort((a, b) => String(a.key).localeCompare(String(b.key), undefined, { numeric: true, sensitivity: 'base' }));
 
     if (ranked.length === 0) {
       list.innerHTML = '<div class="tx-contrib-empty">No rows in scope &mdash; adjust filters or pattern.</div>';
@@ -4427,7 +4483,8 @@
       const isNeg = g.variance < 0;
       const desc  = dim.describe(g.key);
       const label = desc ? (escapeHtml(g.key) + ' &mdash; ' + escapeHtml(desc)) : escapeHtml(g.key);
-      return '<button class="tx-contrib-row" type="button" data-tx-contrib-value="' + escapeHtml(g.key) + '">'
+      const isActive = g.key === activeKey;
+      return '<button class="tx-contrib-row' + (isActive ? ' is-active' : '') + '" type="button" aria-pressed="' + (isActive ? 'true' : 'false') + '" data-tx-contrib-value="' + escapeHtml(g.key) + '">'
         +   '<span class="tx-contrib-row-label">' + label
         +     '<span class="row-count">' + g.count.toLocaleString('en-US') + ' rows</span>'
         +   '</span>'
@@ -4454,7 +4511,9 @@
   })();
 
   // Row click → narrow the Details grid the same way Start Here
-  // cards do, via applyActionFilter.
+  // cards do, via applyActionFilter. Clicking the row that's ALREADY
+  // isolated toggles the narrowing back off (restores the full grid),
+  // mirroring the Reconciliation page's contributors.
   (function wireTxContribRows() {
     document.addEventListener('click', (e) => {
       const row = e.target.closest && e.target.closest('.tx-contrib-row');
@@ -4462,7 +4521,17 @@
       const value = row.dataset.txContribValue;
       const dim   = TX_CONTRIB_DIMS[_txContribDim];
       if (!dim || !value) return;
-      applyActionFilter(() => dim.apply(value));
+      const seg = (dim && typeof dim.seg === 'number') ? dim.seg : null;
+      const cur = _state.activeAcctSeg;
+      const alreadyIsolated = seg !== null && cur && cur.i === seg && cur.value === value;
+      if (alreadyIsolated) {
+        // Toggle back: clear the card-driven narrowing and restore.
+        clearCardFilters();
+        if (typeof updateWorkedFilterPill === 'function') updateWorkedFilterPill();
+        renderAll();
+        return;
+      }
+      applyActionFilter(() => dim.apply(value), { scroll: false });
     });
   })();
 
@@ -4935,8 +5004,8 @@
   // Module-level summary cards &mdash; Sales / Purchasing /
   // Inventory / Manufacturing. Always emits a card per module that
   // has any unworked rows in scope, with click-to-narrow via
-  // _state.activeModule. The Variance contributors widget above
-  // handles finer-grained drill (DT / OT / Sub / Type / Company).
+  // _state.activeModule. The Out of Balance Contributors widget above
+  // handles account-level drill (Business unit / Object / Subsidiary).
   function buildModuleItems(unworked, allRows) {
     const items = [];
     // Group unworked rows by module — only emit a card when a
@@ -5083,6 +5152,7 @@
     _state.activeCompany = null;
     _state.activeModule  = null;
     _state.activePattern = null;
+    _state.activeAcctSeg = null;
     _state.workedFilter  = 'all';
     _state.exclusions.types      = new Set();
     _state.exclusions.subTypes   = new Set();
@@ -5098,6 +5168,7 @@
         || !!_state.activeCompany
         || !!_state.activeModule
         || !!_state.activePattern
+        || !!_state.activeAcctSeg
         || _state.workedFilter !== 'all'
         || _state.exclusions.types.size      > 0
         || _state.exclusions.subTypes.size   > 0
@@ -5114,7 +5185,8 @@
   // Card clicks NO LONGER call this directly — they open the work
   // panel (openTxWorkPanel) instead. The grid-narrow flow stays as
   // an escape hatch via the panel&rsquo;s "Open in grid" footer link.
-  function applyActionFilter(applyFn) {
+  function applyActionFilter(applyFn, opts) {
+    opts = opts || {};
     clearCardFilters();
     _state.workedFilter = 'no';
     if (typeof updateWorkedFilterPill === 'function') updateWorkedFilterPill();
@@ -5123,8 +5195,13 @@
     // collapsed Details card so the analyst sees the narrowed rows.
     if (typeof setDetailsCollapsed === 'function') setDetailsCollapsed(false);
     renderAll();
-    const grid = document.getElementById('details-card');
-    if (grid) grid.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    // Jump to the narrowed grid for explicit drill-ins (Start Here /
+    // pattern / module cards). Contributor-row toggles pass
+    // scroll:false so the view stays put on the contributors card.
+    if (opts.scroll !== false) {
+      const grid = document.getElementById('details-card');
+      if (grid) grid.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
   }
 
   // ============================================================
@@ -5610,6 +5687,10 @@
       const info = PATTERN_INFO[_state.activePattern];
       const lbl  = (info && info.label) || _state.activePattern;
       parts.push('Pattern ' + _state.activePattern + ' &mdash; ' + lbl);
+    }
+    if (_state.activeAcctSeg) {
+      const segName = ['Business unit', 'Object', 'Subsidiary'][_state.activeAcctSeg.i] || 'Account';
+      parts.push(segName + ' ' + _state.activeAcctSeg.value);
     }
     function only(setName, universeKey) {
       const set = _state.exclusions[setName];
@@ -6712,9 +6793,25 @@
       _glSelected[group] = newSet;
       saveFilterSelections();
       renderSidebarFilterStatus();
-      // Filter changed → invalidate session cache + re-fetch.
-      try { sessionStorage.clear(); } catch (_) {}
-      loadData();
+      if (group === 'companies') {
+        // Company is enforced CLIENT-SIDE (inCompanyScope — the
+        // /inventory/transactions endpoint ignores the companies filter)
+        // and is the cross-page scope. Publish to the hub so the other
+        // pages follow, then re-filter in place. No refetch, and DON'T
+        // wipe sessionStorage (that would nuke the scope hub).
+        try {
+          if (window.RRV8 && window.RRV8.setActiveScope) {
+            const arr = [...newSet];
+            const active = (arr.length && arr.length < all.length) ? arr : all.slice();
+            window.RRV8.setActiveScope({ activeCompanies: active });
+          }
+        } catch (_) {}
+        renderAll();
+      } else {
+        // Other dimensions filter server-side — invalidate caches + refetch.
+        try { sessionStorage.clear(); } catch (_) {}
+        loadData();
+      }
     }
     popFilter.querySelector('[data-filter-action="all"]').addEventListener('click', () => {
       applySelection(new Set(all));
@@ -6732,10 +6829,11 @@
         const v = cb.dataset.filterValue;
         if (cb.checked) _glSelected[group].add(v);
         else _glSelected[group].delete(v);
-        // Don't re-fetch on every checkbox flip; debounce via
-        // the closing click (next "outside click" hides + applies).
-        saveFilterSelections();
-        renderSidebarFilterStatus();
+        // Apply on each change so the page filters live. For company
+        // this is a client-side re-render (cheap); previously nothing
+        // applied unless All/None was used, so picking companies did
+        // nothing.
+        applySelection(new Set(_glSelected[group]));
       });
     });
   }
@@ -7430,6 +7528,31 @@
         console.error('Boot failed:', err);
       }
     });
+})();
+</script>
+
+<script>
+/* Footer wiring (copied from Home): signed-in name, version, sign out. */
+(function () {
+  var name = '—';
+  try {
+    var u = (window.RR_SESSION && window.RR_SESSION.user) || null;
+    if (u) name = u.name || u.email || name;
+    else { var le = localStorage.getItem('rrv8.lastEmail'); if (le) name = le; }
+  } catch (_) {}
+  var el = document.getElementById('footName'); if (el) el.textContent = name;
+  try {
+    var ver = document.getElementById('footVersion');
+    if (ver && window.RR_CONFIG && window.RR_CONFIG.release) ver.textContent = 'RapidReconciler ' + window.RR_CONFIG.release;
+  } catch (_) {}
+  var out = document.getElementById('footSignOut');
+  if (out) out.addEventListener('click', function (e) {
+    e.preventDefault();
+    try { localStorage.removeItem('rrv8.token'); } catch (_) {}
+    try { localStorage.removeItem('rrv8.viewMode'); } catch (_) {}
+    try { localStorage.removeItem('rrv8.lastEmail'); } catch (_) {}
+    location.href = '../login.html';
+  });
 })();
 </script>
 
