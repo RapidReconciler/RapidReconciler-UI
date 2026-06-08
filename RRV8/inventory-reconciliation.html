@@ -3891,6 +3891,15 @@
     const n = Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     return sign + n + close;
   }
+  // Quantities (AdjQty / QOH / Tx counts) are units, NOT money — never a
+  // currency symbol. Plain number, thousands-separated, parens for negative.
+  function fmtQty(v) {
+    if (v === null || v === undefined || isNaN(v)) return '—';
+    const sign = v < 0 ? '(' : '';
+    const close = v < 0 ? ')' : '';
+    const n = Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return sign + n + close;
+  }
   function fmtShortMoney(v, code) {
     if (v === null || v === undefined || isNaN(v)) return '—';
     const abs = Math.abs(v);
@@ -5728,20 +5737,30 @@
   // the way to narrow them. Company (the surviving scope filter) keeps
   // its saved selection.
   ['currencies', 'businessUnits', 'objects', 'subsidiaries'].forEach(g => selected[g].clear());
-  // Company scope flows from Home: if the analyst narrowed to specific
-  // companies there (a strict subset of their allowed set), open scoped to
-  // that selection. If they left it at "all", keep the page's own saved
-  // company filter. Per-page narrowing of other dimensions stays local.
-  try {
-    if (window.RRV8 && window.RRV8.readSessionScope) {
+  // Company scope flows from Home (the cross-page scope hub) and is
+  // authoritative: open scoped to exactly the companies active there —
+  // whether that's the full allowed set ("All companies" on Home) or a
+  // narrowed subset. The page writes its own company changes back to the
+  // hub (setActiveScope), so reloads re-seed from the same source and the
+  // page's stale localStorage company filter never shadows Home's scope.
+  // Per-page narrowing of OTHER dimensions stays local.
+  //
+  // Applied AFTER bootSession() hydrates the session (see the boot chain
+  // below), NOT here at script-eval: pre-hydrate readSessionScope() reads an
+  // empty claim/scope, so the override silently no-ops and the stale saved
+  // single-company filter wins — that was the "Home shows both, page opens
+  // one" bug.
+  function applyHomeCompanyScope() {
+    try {
+      if (!(window.RRV8 && window.RRV8.readSessionScope)) return;
       const _sc = window.RRV8.readSessionScope();
       const _act = (_sc && _sc.activeCompanies) || [];
       const _allow = (_sc && _sc.allowedCompanies) || [];
-      if (_act.length && _allow.length && _act.length < _allow.length) {
+      if (_act.length && _allow.length) {
         selected.companies = new Set(_act.map(String));
       }
-    }
-  } catch (_) {}
+    } catch (_) {}
+  }
 
   // Boot path: hydrate the session (demo JSON or VALC login),
   // refresh the user-menu/topbar chrome to reflect the real user,
@@ -5759,6 +5778,9 @@
       if (window.RRV8 && typeof window.RRV8.applyClientModuleCaps === 'function') {
         window.RRV8.applyClientModuleCaps();
       }
+      // Session is hydrated now — adopt Home's authoritative company scope
+      // before the first data load so the page opens on the right companies.
+      applyHomeCompanyScope();
       loadData();
     })
     .catch(err => {
@@ -6694,7 +6716,7 @@
     glBatches:            { label: 'GL Batches',             source: 'Un-posted GL batches hitting these inventory accounts.', view: 'v6_007_unpostedbatches' },
     endOfDay:             { label: 'End of Day',             source: 'Un-posted cardex transactions contributing to end-of-day valuation differences.', view: 'v6_006_unposted_cardex' },
     transactions:         { label: 'Transactions',           source: 'Transaction-level variance between GL and perpetual movement.' },
-    cardex:               { label: 'Cardex',                 source: 'Item-roll integrity issues &mdash; items where the perpetual valuation does not roll cleanly. Current-state report (not period-historical).', view: 'v6ui_itemrollintegritydialog' },
+    cardex:               { label: 'Cardex',                 source: 'Item-roll integrity issues — items where the perpetual valuation does not roll cleanly. Current-state report (not period-historical).', view: 'v6ui_itemrollintegritydialog' },
     manualJournalEntries: { label: 'Manual Journal Entries', source: 'Manual journal entries posted against these inventory accounts.', view: 'v6ui_manual_entries' }
   };
 
@@ -7218,13 +7240,13 @@
         { label: 'Lot',           key: 'lot',           kind: 'text' },
         { label: 'Method',        key: 'method',        kind: 'text' },
         { label: 'AdjAmount',     key: 'adjAmount',     kind: 'num'  },
-        { label: 'AdjQty',        key: 'adjQty',        kind: 'num'  },
+        { label: 'AdjQty',        key: 'adjQty',        kind: 'qty'  },
         { label: 'UOM',           key: 'uom',           kind: 'text' },
         { label: 'GLClass',       key: 'glClass',       kind: 'text' },
         { label: 'Cost Level',    key: 'costLevel',     kind: 'text' },
         { label: 'Last Activity', key: 'lastActivity',  kind: 'mono', sort: 'date' },
-        { label: 'Tx Count',      key: 'txCount',       kind: 'num'  },
-        { label: 'QOH',           key: 'qtyOnHand',     kind: 'num'  }
+        { label: 'Tx Count',      key: 'txCount',       kind: 'qty'  },
+        { label: 'QOH',           key: 'qtyOnHand',     kind: 'qty'  }
       ]
     }
   };
@@ -7356,7 +7378,7 @@
     if (!_previewSort || !_previewSort.key) return rows;
     const key = _previewSort.key, dir = _previewSort.dir;
     const col = (cfg.columns || []).find(c => c.key === key) || {};
-    const isNum = col.kind === 'num', isDate = col.sort === 'date';
+    const isNum = col.kind === 'num' || col.kind === 'qty', isDate = col.sort === 'date';
     return rows.slice().sort((a, b) => {
       let av = a[key], bv = b[key];
       if (isNum)  { return ((Number(av) || 0) - (Number(bv) || 0)) * dir; }
@@ -7456,7 +7478,7 @@
           _previewSort.dir = -_previewSort.dir;             // toggle
         } else {
           // First click: numbers + dates default to descending (largest / most recent first).
-          _previewSort = { key: key, dir: (col.kind === 'num' || col.sort === 'date') ? -1 : 1 };
+          _previewSort = { key: key, dir: (col.kind === 'num' || col.kind === 'qty' || col.sort === 'date') ? -1 : 1 };
         }
         renderPreviewModal();
       });
@@ -7476,10 +7498,10 @@
       tbody.innerHTML = rows.map(r => {
         const cells = cfg.columns.map(c => {
           const raw = r[c.key];
-          if (c.kind === 'num') {
+          if (c.kind === 'num' || c.kind === 'qty') {
             const v = round2(raw || 0);
             const cls = 'is-num' + (v < 0 ? ' is-negative' : '');
-            return '<td class="' + cls + '">' + fmtMoney(v) + '</td>';
+            return '<td class="' + cls + '">' + (c.kind === 'qty' ? fmtQty(v) : fmtMoney(v)) + '</td>';
           }
           const cls = c.kind === 'mono' ? 'is-mono' : '';
           return '<td class="' + cls + '">' + escapeHtml(raw == null || raw === '' ? '—' : String(raw)) + '</td>';
