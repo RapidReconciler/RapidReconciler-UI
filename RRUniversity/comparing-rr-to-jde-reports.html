@@ -797,12 +797,14 @@
         <li data-target="home"><button onclick="showView('home')">Index</button></li>
         <li data-target="stock-valuation"><button onclick="showView('topic-stock-valuation')">Stock Valuation total differs</button></li>
         <li data-target="calculated-cost"><button onclick="showView('topic-calculated-cost')">Calculated cost differs from JDE</button></li>
+        <li data-target="negative-onhand"><button onclick="showView('topic-negative-onhand')">Negative on-hand in RR / positive in JDE</button></li>
       </ul>
 
       <div class="sidebar-section-label">Concepts</div>
       <ul class="sidebar-nav">
         <li data-target="cardex-date-logic"><button onclick="showView('topic-cardex-date-logic')">Cardex date logic</button></li>
         <li data-target="cardex-variance"><button onclick="showView('topic-cardex-variance')">Cardex variance</button></li>
+        <li data-target="dmaai-scope"><button onclick="showView('topic-dmaai-scope')">DMAAI scope difference</button></li>
       </ul>
 
       <div class="sidebar-section-label">Get help</div>
@@ -845,6 +847,10 @@
             <tr>
               <td>The sum of cardex transactions for an item doesn&rsquo;t equal the on-hand JDE shows &mdash; <strong>quantity-level drift</strong>, not a date-placement issue</td>
               <td><a href="javascript:void(0)" onclick="showView('topic-cardex-variance')">Cardex variance</a></td>
+            </tr>
+            <tr>
+              <td>RR shows a <strong>negative</strong> on-hand (or negative valuation) for an item / branch where JDE shows a positive or zero balance</td>
+              <td><a href="javascript:void(0)" onclick="showView('topic-negative-onhand')">Negative on-hand in RR / positive in JDE</a></td>
             </tr>
             <tr>
               <td>RR&rsquo;s <strong>DMAAI Entry Integrity</strong> report (Integrity Report 2) and the <strong>JDE DMAAI&rsquo;s</strong> analyzer disagree on how many AAI issues exist</td>
@@ -1143,6 +1149,49 @@
         <div class="topic-footer-nav">
           <button class="back-btn" onclick="goHome()">&larr; Back to Index</button>
           <button class="prev-btn" onclick="showView('topic-cardex-date-logic')">&larr; Previous</button>
+          <button class="next-btn" onclick="showView('topic-dmaai-scope')">Next &rarr;</button>
+        </div>
+      </section>
+
+      <!-- ============ TOPIC: NEGATIVE ON-HAND ============ -->
+      <section id="topic-negative-onhand" class="view">
+        <h1>Negative on-hand in RR but positive in JDE</h1>
+        <p>RapidReconciler shows a <strong>negative</strong> quantity-on-hand (or a negative valuation) for an item or branch where JDE Stock Status / Item Availability shows a positive or zero balance. RR rebuilds on-hand by summing the F4111 cardex forward in date order, so a negative usually means an <em>outbound</em> movement got summed <em>before</em> the inbound that should cover it &mdash; or the inbound never made it into the cardex at all.</p>
+
+        <div class="diamond-divider"><span class="diamond"></span></div>
+
+        <h2>The three usual causes</h2>
+        <p>Almost every &ldquo;negative in RR, positive in JDE&rdquo; case is one of these:</p>
+        <ul>
+          <li><strong>Sequencing / timing.</strong> An issue, shipment, or transfer landed in an earlier RR period than the receipt that should precede it &mdash; often because the receipt&rsquo;s GL date hadn&rsquo;t been written when RR processed it, so the four-rule date logic placed it on its creation date. The running on-hand dips negative for that period even though JDE&rsquo;s current F41021 on-hand is positive. See <a href="javascript:void(0)" onclick="showView('topic-cardex-date-logic')">Cardex date logic</a>.</li>
+          <li><strong>Cardex variance (a missing receipt).</strong> A receipt&rsquo;s F4111 row was deleted or never written while F41021 kept the on-hand. RR&rsquo;s summed quantity is then short and can go negative, even though JDE&rsquo;s balance table still reads positive. This is a genuine F4111-vs-F41021 disagreement &mdash; see <a href="javascript:void(0)" onclick="showView('topic-cardex-variance')">Cardex variance</a>.</li>
+          <li><strong>3PL / consignment / in-transit branches.</strong> At a third-party-logistics or in-transit branch, the outbound is frequently captured before the 3PL confirms the matching inbound, so the branch reads negative until the receipt posts. Analyze these <strong>part-by-part, by branch</strong> &mdash; the negative is usually concentrated in the 3PL branch, not the owning plant.</li>
+        </ul>
+
+        <h2>How to investigate</h2>
+        <ol>
+          <li>Open the <strong>Inventory As Of</strong> page for the period, drill into the item, and export the transaction list to Excel &mdash; ordered by the RR <strong>period date</strong>.</li>
+          <li>Find the <strong>first row that drives the running on-hand negative</strong>. Note whether it&rsquo;s an issue / shipment / transfer (outbound) and what its period date is.</li>
+          <li>Pull the same item&rsquo;s F4111 cardex from JDE for the same range and compare:
+            <ul>
+              <li>If the matching <strong>receipt exists but is later-dated</strong> in RR than the outbound, it&rsquo;s <strong>sequencing / timing</strong> &mdash; it typically self-corrects on the next nightly job once the GL date posts.</li>
+              <li>If the receipt is <strong>missing from F4111 entirely</strong>, it&rsquo;s <strong>cardex variance</strong> &mdash; the fix is in JDE (record the missing cardex row, or back out a direct F41021 adjustment).</li>
+            </ul>
+          </li>
+          <li>If the item lives at a 3PL / in-transit branch, repeat the comparison scoped to that branch &mdash; the inbound confirmation often lags the outbound by design.</li>
+        </ol>
+
+        <div class="callout">
+          <div class="callout-label">When a negative is expected</div>
+          <p>A transient negative at a period boundary or a 3PL branch isn&rsquo;t necessarily a data problem &mdash; it reflects activity that hasn&rsquo;t fully settled. It matters when it&rsquo;s <strong>material to the close</strong> or it <strong>persists</strong> after the next nightly refresh. A persistent negative that isn&rsquo;t timing is cardex variance, and that&rsquo;s worth tracking to its source in JDE.</p>
+        </div>
+
+        <h2>When to escalate</h2>
+        <p>Email <a href="mailto:rrsupport@getgsi.com">rrsupport@getgsi.com</a> with a per-item example &mdash; item + branch, the JDE F4111 export, and the RR As Of Item Details export for the same period &mdash; if the negative persists after the next refresh and the cardex rows look complete on both sides. See <a href="javascript:void(0)" onclick="showView('topic-email-support')">Email RR Support</a> for the full per-item package.</p>
+
+        <div class="topic-footer-nav">
+          <button class="back-btn" onclick="goHome()">&larr; Back to Index</button>
+          <button class="prev-btn" onclick="showView('topic-cardex-variance')">&larr; Previous</button>
           <button class="next-btn" onclick="showView('topic-dmaai-scope')">Next &rarr;</button>
         </div>
       </section>
