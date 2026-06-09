@@ -53,21 +53,22 @@ thread. Never sourced from `data/*.json` (those hold real customer data).
 ## Personas & pain points
 
 Two different people with two different skill sets — both usually in the
-discovery call. The variance is the **handoff** between them.
+discovery call. They work the **same Home page** from different angles; no list
+is passed between them.
 
-| | **Business / Finance** (controller, cost accountant) | **Technical / IT** (JDE/system analyst, data owner) |
+| | **Business / Finance** (controller, cost accountant) — *Functional path* | **Analyst / IT** (JDE/system analyst, data owner) — *Analyst path* |
 |---|---|---|
 | **The pain** | "Does inventory tie to the GL? By how much — is it material? Give me the entry to post." | "Why did the cardex drift? Can I correct the data, and how do I stop it recurring?" |
 | **Owns** | The reconciliation result + the **balancing journal entry**. | **Cardex variance resolution** + **systematic/procedural prevention**. |
 | **Does NOT do** | Resolve cardex drift (technical skill set). | Calculate/post the balancing entry. |
 | **Their scenes** | 3 (headline), 7 (the entry), 8 (close-ready). As-Of is their *backup proof*. | 4–6 (cardex worklist + fix), Transactions (prevention). |
 
-**The handoff (the spine):** Finance surfaces "we're off by `$18,450` here" →
-Technical investigates the cardex drift and either **corrects the data** (the
-perpetual number was simply wrong) or confirms it's a **real difference** →
-Finance posts the balancing entry on what's genuinely real. The product — and
-the tour — should make that handoff legible, and let each persona see *their*
-pain resolved.
+**No hand-off — shared surfaces (the spine):** the Reconciliation **and** the
+full Cardex work screen both live on **Home**. Finance reads the variance and
+references the cardex detail; the admin/analyst opens the **same cardex worksheet
+and works the adjustment right there**. Nobody compiles or passes a list —
+each role self-serves the screen it needs. The tour should show both threads
+resolving on the one surface, each persona seeing *their* pain handled.
 
 > Tour treatment: signpost scenes by persona ("If you're in finance… / If you
 > own the system…") so each viewer in the call finds their thread fast.
@@ -135,11 +136,48 @@ Scene 7; the no-JE/process cards are evidence beats off Scene 3.
 
 ---
 
+## Tour structure: shared spine → fork → rejoin
+
+The tour is **one shared opening, then two chooseable paths, then a shared
+close** — decided 2026-06-09.
+
+- **Concept (everyone):** Scene 1 (scale/concept) → [Scene 2 Home + scope].
+- **Fork — right after the concept, BEFORE the reconciliation** (owner call
+  2026-06-09: pick your lens first, then see the deep content through it). A
+  path-chooser ("Which seat are you in?") with two cards — **Functional**
+  ("reconcile & post", for finance) and **Analyst** ("fix the data & stop
+  recurrence", for analysts; renamed from "Technical" — *analyst* names the role
+  that does cardex resolution, DMAAI review, and transaction analysis). One URL,
+  both lanes on the page; a presenter picks the lane live, a solo viewer can jump
+  straight to theirs or read on.
+- **Shared reconciliation:** Scene 3 (the triaged number) stays **shared** after
+  the fork ("continue as is") — everyone still sees the six sources sorted JE vs
+  no-JE; the Rec page's own split mirrors the two lanes.
+  - **Functional path:** Scene 7 (balancing-entry worksheet) + As-Of as backup.
+  - **Analyst path:** Scene 5–6 (cardex worksheet + adjustment = payoff) →
+    **Model DMAAI Review** (verify the accounting model that maps inventory → GL)
+    → Scene 7b (transactions → prevention / Export Analyzer).
+- **Rejoin (everyone):** Scene 8 close-ready (green light) + CTA — a mixed room
+  ends in the same place.
+
+**Admin is NOT a third path.** Admin/operate functions (roles & access,
+licensing & companies, nightly refresh, purge controls, service health) are
+operate-and-maintain plumbing, not a buying driver — and "Admin" is a role IT
+wears, not a discovery-call persona. Instead: a short **"Operate it"
+reassurance** near the close (Scene 8a) — *"set up once, runs nightly, minimal
+overhead"* — with role-based access + reversible/audited adjustments doubling as
+**governance/trust signals** for security-minded buyers. A *full* admin
+walkthrough is a **separate onboarding/operator tour** (future artifact; also
+serves the self-teaching-junior goal).
+
+---
+
 ## Narrative arc
 
-Problem → product → payoff, told as **two value tracks that meet at the
-variance**. Persona tag on each scene: **[Finance]**, **[Tech/IT]**, **[Both]**.
-Supporting pages are reframed by the role they serve, not as throwaway plumbing.
+Problem → product → payoff, told as **two value tracks** — the fork comes after
+the concept, *before* the shared reconciliation (see structure above). Persona
+tag on each scene: **[Finance]** (Functional path), **[Tech/IT]** (Analyst
+path), **[Both]**.
 
 ### Scene 1 — Cold open: the Key Concept (the scale) · [Both]
 **Beat:** Open on the **balance-scale mental model** (owner's training slide):
@@ -174,15 +212,16 @@ fork in the road — consider visually grouping/marking them **JE vs no-JE** (an
 by owner) so a viewer instantly sees which are Finance's and which are Ops/IT's,
 rather than reading them as six undifferentiated dollar buckets.
 
-### Scene 4 — Drill into the variance ★ (the handoff) · [Finance → Tech/IT]
-**Beat:** Finance clicks the **Cardex Variance** component → hands off to the
-technical worklist behind it. This is the role handoff made visible.
-**Screen:** the bridge from Reconciliation into Cardex Variance.
-**Redesign flag:** **THE BIG ONE.** Today the variance card opens a
-look-but-don't-act *preview modal* with no clear path to the full worklist —
-a dead-end at the most important turn. Add a prominent **"Open the Cardex
-Variance worklist →"** CTA so the drill actually lands on the per-item page.
-This fix matters for the live product as much as the tour.
+### Scene 4 — Open the cardex work screen (it's already on Home) · [Tech/IT]
+**Beat:** No list changes hands. The full **Cardex work screen** sits on Home
+(Administration → Inventory Review → Cardex Variance) — the admin/analyst opens
+it directly; Finance can also reach it for reference, or drill straight from the
+Reconciliation source. The point: the work surface is one click away, for
+whoever needs it.
+**Screen:** Home → Cardex Variance (and the optional Reconciliation drill-in).
+**Redesign flag:** the drill-in from the Rec source is a nice shortcut (today it
+dead-ends in a preview with no clear "open the worklist" path — worth a CTA), but
+it's a convenience, not the only route — Home already gets you there.
 
 ### Scene 5 — Cardex variance (F41021↔F4111): which items, and why · [Tech/IT]
 **Beat:** The per-item worklist for the *inventory-internal* break — on-hand
@@ -193,12 +232,15 @@ shows the qty/amount drift and a plain-language reason.
 so first-timers miss the 4-step flow) and **make the pattern grouping legible** —
 plain-language pattern names + the runbook line visible without expanding.
 
-### Scene 6 — The cardex fix: reversible, auditable · [Tech/IT]
-**Beat:** Click **Adjust** on `WIDGET-200`, pick a preset (e.g. "Clear to JDE"),
-confirm the attestation, **Apply**. Stress: this is an RR-side, **reversible**
-correction with a full ledger — JDE is never touched.
-**Screen:** the Adjust modal + adjustment ledger.
-**Redesign flag:** Solid; keep reversibility + attestation prominent.
+### Scene 6 — The cardex worksheet + adjustment ★ — THE payoff (analyst) · [Tech/IT]
+**Beat:** This is the payoff of the cardex track, not a footnote. Right on the
+worksheet, click **Adjust** on `WIDGET-200`, pick a preset (e.g. "Clear to JDE"),
+confirm the attestation, **Apply**. RR-side, **reversible**, full ledger — JDE is
+never touched. The worksheet *with the adjustment function* is the value the
+analyst came for.
+**Screen:** the Cardex worksheet's Adjust modal + adjustment ledger.
+**Redesign flag:** Solid; keep the adjustment function prominent on the
+worksheet, and reversibility + attestation front and centre.
 
 ### Scene 7 — The finance payoff: the balancing entry · [Finance]
 **Beat:** Once the explainable component imbalances are accounted for, RR gives
@@ -235,6 +277,17 @@ the slice (Scenes 1/3 are headline + triage).
 **Open Q for owner:** worth promoting the analyzer to its *own* scene given how
 strong the differentiator is? Parked.
 
+### Scene 8a — Operate it (reassurance, NOT a path) · [Both]
+**Beat:** Both lanes rejoin here. A short, compact acknowledgment that the admin
+surface exists and isn't a burden — a tile-grid: **roles & access · licensing &
+companies · nightly refresh · purge controls · service health** — framed as
+*"set up once, runs nightly, minimal overhead."*
+**Framing:** answers the inevitable "what does it take to run this?" without a
+guided admin path. Two tiles double as **governance/trust signals** for
+security-minded buyers: **role-based access** and the **reversible, audited
+adjustments**. A full admin walkthrough is a *separate* onboarding/operator tour
+(future artifact).
+
 ### Scene 8 — Close-readiness + CTA · [Both]
 **Beat:** Re-run **Account Roll Forward** → the integrity light is **green**:
 "GL and variance roll-forwards intact. You're ready to close." End on
@@ -252,6 +305,23 @@ Finance's trust in the number rather than standing on its own.
 reconciliation), not its own pillar.
 
 ---
+
+## Interaction model — a tour, not a deck
+
+Owner call 2026-06-09: this must feel **interactive and self-guided**, not a
+scroll-through of slides. Engagement comes from **hover + click**, not just
+reading:
+
+- **Click any variance source → a detail modal** (what it is / why / the fix /
+  who), color-coded JE (orange) vs no-JE (green). Wired on the 6 Reconciliation
+  cards AND the 3 scale-gap glossary items, by name in JS (no per-card markup).
+- **Hover a scale gap → its fix reveals**; **hover a card → a "click to explore"
+  cue.** Quick peek on hover, full story on click.
+- Modal closes on ✕ / backdrop / Esc; keyboard-operable (role=button, tabindex,
+  Enter/Space); focus returns to the trigger. Pure inline JS — no deps, works
+  from a file / GH Pages.
+- Extend this pattern outward: make the scale gaps themselves clickable, the
+  lane scenes interactive (drill-ins, the magnifier as a hover-zoom), etc.
 
 ## Build approach — vertical slice first
 
