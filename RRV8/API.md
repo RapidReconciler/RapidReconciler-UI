@@ -153,16 +153,51 @@ backend contract rather than synthesized client-side (per the
    branches on the richer field if present and falls back to
    validation otherwise. Until then, no count is shown (not faked).
 
-2. **Role label claim.** Home shows the `Administrator` badge only
-   from the reliable `dbs[i].t.adm === true` signal (the same one
-   `login.html` `isAdminToken` and `sidebar.js` trust). The other
-   assignable roles (Reconciliation Analyst, Read-Only, Cost
-   Accounting, A/P Clerk) are **not carried as a label in the JWT**
-   today &mdash; only as the per-module `m`/`t`/`perms` caps Home
-   already gates on. When VALC surfaces a role display-name (in the
-   login response `user.roleName`, or a per-db role claim), Home
-   shows it; until then it shows no non-admin role badge rather than
-   inferring a wrong one from caps.
+2. **Role claim + role-lane gating** *(updated 2026-06-09 &mdash;
+   supersedes the earlier "role label not in the JWT" note, which is
+   now stale).* The token **already carries the role**, per-db:
+   - `dbs[i].rn` &mdash; role display-name (`Administrator`,
+     `Reconciliation Analyst`, `Read-Only`, `Cost Accounting`,
+     `A/P Clerk`). Minted by `AuthController` (`entry.put("rn", ...)`)
+     from `RoleEntity.getName()`; documented in `JwtService` token
+     shape. Home labels the role badge off `rn` directly &mdash; no
+     longer "admin-only badge."
+   - `dbs[i].t` &mdash; per-user authorized tabs `{inv,it,adm,por}`
+     (the role's tab grants, AND-gated at mint against the client
+     license `m`).
+   - `dbs[i].perms` &mdash; function grants `{ij,rs,dm,ite,prs}` where
+     `dm` = `dmaais` (the role's grant to the **analyst surfaces**:
+     Cardex Variance, Account Roll Forward, Model DMAAI Review, DMAAI
+     Analysis).
+
+   **Home role-lane gating contract** (the role-based home layout):
+
+   | Lane | Cards | Gate |
+   |---|---|---|
+   | **Administration** | People & Licensing, Data Mgmt, Service Health, Utilities | `t.adm === true` |
+   | **Analyst** (daily) | Cardex Variance, Account Roll Forward, Model DMAAI Review, DMAAI Analysis | `perms.dm === true` |
+   | **Finance** (period-end) | Reconciliation, In Transit, PO Receipts | per-module caps `m`/`t` (`inv`/`it`/`por`) |
+
+   Fail-open per the existing `caps()` convention (a missing layer
+   doesn't lock a user out). **Gate the Analyst lane on `perms.dm`
+   directly, NOT on the existing `caps().dm`** &mdash; `caps().dm`
+   AND-gates against `m.adm` (the *admin-module* client license),
+   which was right for the admin-coupled DMAAI page guard but wrong
+   for an analyst lane: the analyst surfaces are inventory-recon
+   features, not admin-module features. The Analyst lane should show
+   for any role granted `dmaais`, regardless of the admin license.
+
+   **The one gap is policy, not plumbing.** Per V32/V35 seed, only
+   **Administrator** has `dmaais = TRUE`; `Reconciliation Analyst`
+   (and the rest) are `FALSE`. So today `perms.dm` lights up for
+   admins only &mdash; which is why the analyst surfaces still sit
+   inside the admin-only view. For the Analyst lane to reach its
+   intended audience, VALC must **grant `dmaais` to the analyst
+   role(s)** &mdash; at minimum `Reconciliation Analyst` &mdash; via a
+   new migration (V36). Which roles get it (just Reconciliation
+   Analyst? also Cost Accounting?) is a role-policy decision, not a
+   code one. Once granted, V8 gates the Analyst lane on `perms.dm`
+   with **no further token change**.
 
 Both are additive: the Home page is fully functional without them.
 
