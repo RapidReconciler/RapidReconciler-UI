@@ -388,14 +388,8 @@
   .svc-mem-fill { display: block; height: 100%; width: 0; border-radius: 4px; background: var(--green); transition: width .4s ease; }
   .svc-mem-fill.amber { background: var(--orange); }
   .svc-mem-fill.red { background: var(--red); }
-  .svc-mem-det { margin-top: 9px; }
-  .svc-mem-det summary { font-size: 11px; color: var(--text-muted); cursor: pointer; list-style: none; }
-  .svc-mem-det summary::-webkit-details-marker { display: none; }
-  .svc-mem-det summary::before { content: '\25B8'; margin-right: 5px; }
-  .svc-mem-det[open] summary::before { content: '\25BE'; }
-  .svc-mem-dl { margin: 9px 0 0; display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 11.5px; }
-  .svc-mem-dl dt { color: var(--text-muted); }
-  .svc-mem-dl dd { margin: 0; color: var(--navy); font-weight: 700; text-align: right; }
+  .svc-mem-cap { margin-top: 8px; font-size: 12px; color: var(--text-muted); }
+  .svc-mem-cap b { color: var(--navy); font-weight: 700; }
   .why {
     font-size: 12px; color: var(--text-muted); background: var(--bg-soft); border: 1px dashed var(--rule-strong);
     border-radius: 8px; padding: 9px 12px; margin-top: 10px; line-height: 1.45;
@@ -887,10 +881,7 @@
              connectivity signal when it doesn't. -->
         <div class="svc-mem" id="svcMem" hidden>
           <div class="svc-mem-bar" id="svcMemBar"><span class="svc-mem-fill" id="svcMemFill"></span></div>
-          <details class="svc-mem-det" id="svcMemDet" open>
-            <summary>Memory details</summary>
-            <dl class="svc-mem-dl" id="svcMemDl"></dl>
-          </details>
+          <div class="svc-mem-cap" id="svcMemCap"></div>
         </div>
       </div>
 
@@ -1264,7 +1255,16 @@
       headers: prodHeaders(opts.body ? 'application/json;charset=UTF-8' : null),
       body:    opts.body ? JSON.stringify(opts.body) : undefined
     }).then(function (r) {
-      if (!r.ok) throw new Error('HTTP ' + r.status + ' on ' + url);
+      if (!r.ok) {
+        // Surface the agent's JSON {reason} (e.g. "SQLServerAgent is not
+        // currently running") instead of a bare status code — admins get a
+        // fixable message, not "HTTP 502".
+        return r.text().then(function (t) {
+          var detail = '';
+          try { var j = JSON.parse(t); if (j && j.reason) detail = j.reason; } catch (e) {}
+          throw new Error('HTTP ' + r.status + (detail ? ' — ' + detail : '') + ' on ' + url);
+        });
+      }
       return r.json().catch(function (e) { return e instanceof SyntaxError ? null : Promise.reject(e); });
     });
   }
@@ -1440,15 +1440,19 @@
       bar.hidden = true;
     }
 
-    var rows = [['Up', humanizeDuration(m.uptimeMs)]];
-    if (m.liveSetMaxMb > 0) rows.push(['Memory in use (after cleanup)', m.liveSetMb + ' of ' + m.liveSetMaxMb + ' MB']);
-    rows.push(['Heap right now', m.heapUsedMb + (m.heapMaxMb > 0 ? ' of ' + m.heapMaxMb + ' MB' : ' MB')]);
-    rows.push(['Time spent reclaiming memory', m.gcOverheadPct + '%']);
-    rows.push(['Memory trend', m.trend === 'climbing' ? 'Climbing' : 'Stable']);
-    if (m.totalRamMb > 0) rows.push(['Free RAM on the server', m.freeRamMb + ' of ' + m.totalRamMb + ' MB']);
-    $('svcMemDl').innerHTML = rows.map(function (r) {
-      return '<dt>' + esc(r[0]) + '</dt><dd>' + esc(r[1]) + '</dd>';
-    }).join('');
+    // Andy the Admin needs one thing: how much memory RapidReconciler has,
+    // and how much it's using. Everything else (heap snapshots, GC %, server
+    // RAM) is technician triage — kept out of the admin view.
+    var cap = $('svcMemCap'); if (!cap) return;
+    var alloc = m.liveSetMaxMb > 0 ? m.liveSetMaxMb : m.heapMaxMb;   // memory allocated to RR
+    var used  = m.liveSetMaxMb > 0 ? m.liveSetMb    : m.heapUsedMb;  // what it's actually holding (post-cleanup)
+    function mb(n) { return Number(n).toLocaleString('en-US') + ' MB'; }
+    if (alloc > 0) {
+      var pct = Math.round(100 * used / alloc);
+      cap.innerHTML = 'Using <b>' + mb(used) + '</b> of <b>' + mb(alloc) + '</b> allocated (' + pct + '%)';
+    } else {
+      cap.innerHTML = 'Using <b>' + mb(used) + '</b>';
+    }
   }
   function emphasizeRestart(urgent) {
     var btn = $('restartBtn'); if (btn) btn.classList.toggle('is-urgent', !!urgent);
@@ -2365,8 +2369,16 @@
       _jobStatus = 'in progress';   // block re-launch until the next poll confirms
     }).catch(function (err) {
       var msg = String(err && err.message || err);
-      // 409 = the agent refused: either no job configured, or one is already running.
-      toast(/409/.test(msg) ? 'Can’t start now — a refresh is already running or no refresh job is configured (check VALC).' : 'Import JDE failed: ' + msg);
+      // SQL Server Agent stopped → the agent can't fire the refresh job
+      // (sp_start_job error 22022, surfaced as 502). Give the admin the fix.
+      if (/SQLServerAgent is not currently running|Agent service.*not.*running/i.test(msg)) {
+        toast('Can’t start the refresh — SQL Server Agent is stopped on the database server. Ask IT to start the SQL Server Agent service, then try again.');
+      } else if (/409/.test(msg)) {
+        // 409 = the agent refused: either no job configured, or one is already running.
+        toast('Can’t start now — a refresh is already running or no refresh job is configured (check VALC).');
+      } else {
+        toast('Import JDE failed: ' + msg);
+      }
     }).then(function () { _importing = false; reflectImportButton(); });
   }
 
