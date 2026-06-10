@@ -670,6 +670,14 @@
   .analyst-card .panel-head .row-dot { margin-left: auto; flex-shrink: 0; }
   .analyst-card .row-sub { font-size: 13px; color: var(--text-muted); line-height: 1.45; margin-top: 2px; flex: 1; }
   .analyst-card .btn-sm { align-self: flex-start; margin-top: 14px; }
+  /* Tint each analyst card to match its status dot — same pale-bg + inset
+     left-border treatment as the Service Health / Utilities cards. Driven
+     off the dot the existing status wiring already sets (green = clean,
+     amber = attention, red = break); a grey/unknown dot stays neutral.
+     Pure CSS via :has() so no JS change is needed; degrades to no tint. */
+  .analyst-card:has(.row-dot.green) { background: var(--green-pale);  border-color: #c5e6d2; box-shadow: inset 4px 0 0 var(--green),  var(--shadow-sm); }
+  .analyst-card:has(.row-dot.amber) { background: var(--orange-pale); border-color: #f0d2a8; box-shadow: inset 4px 0 0 var(--orange), var(--shadow-sm); }
+  .analyst-card:has(.row-dot.red)   { background: var(--red-pale);    border-color: #f1c9c3; box-shadow: inset 4px 0 0 var(--red),    var(--shadow-sm); }
   .tile-modtag {
     font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
     color: var(--blue); background: var(--blue-pale); padding: 3px 8px; border-radius: 100px;
@@ -1597,6 +1605,7 @@
     }
     window.RRV8.setActiveScope({ activeCompanies: next });
     renderScopeBar();
+    applyInventoryLight();   // re-flip arf/cx (+ cardex) dots for the new company scope, no refetch
   }
   function onPeriodChange(e) {
     if (!(window.RRV8 && window.RRV8.setActiveScope)) return;
@@ -1934,6 +1943,61 @@
   // Authoritative light driver: any GL OK / Var OK = 'no' in any period -> red,
   // else green. Reads the same v6ui_raccountsummary the Account Roll Forward page
   // and the cardex card derive from (server-calculated; everything ties out).
+  // Active company scope as a lookup, or null when all allowed companies are
+  // selected (no narrowing). Period is intentionally NOT part of this — the
+  // light scans EVERY period for the in-scope companies.
+  function scopedCompanySet() {
+    var sc = scope(); if (!sc) return null;
+    var act = (sc.activeCompanies || []).map(String);
+    var allow = (sc.allowedCompanies || []).map(String);
+    if (!act.length) return null;
+    if (allow.length && act.length >= allow.length) return null;   // all selected = no narrowing
+    return act.reduce(function (s, c) { s[c] = true; return s; }, {});
+  }
+  function _coOf(r) { return String((r && (r.CompanyNumber != null ? r.CompanyNumber : r.companyNumber)) || ''); }
+  var _invRows = null;
+  // Paint arf/cx (+ the cardex-reload dot) from the cached roll-forward rows,
+  // filtered to the active company scope. Synchronous + cheap, so it re-runs
+  // instantly when the analyst changes the company selection — no refetch.
+  function applyInventoryLight() {
+    var rows = _invRows; if (!rows || !rows.length) return;
+    var inScope = scopedCompanySet();
+    var scoped = inScope ? rows.filter(function (r) { return inScope[_coOf(r)]; }) : rows;
+    var isNo = function (v) { return String(v == null ? '' : v).trim().toLowerCase() === 'no'; };
+    var num  = function (x) { return Number(x) || 0; };
+    _invLightFromData = true;
+
+    // Account Roll Forward dot — GL/variance ROLL integrity (GL OK / Var OK = 'no').
+    var bad = scoped.filter(function (r) { return isNo(r.GLOK) || isNo(r.VarOK); });
+    var arf = $('arfDot');
+    if (arf) {
+      arf.className = 'row-dot ' + (bad.length ? 'red' : 'green');
+      arf.title = bad.length
+        ? (bad.length + ' roll-forward break' + (bad.length !== 1 ? 's' : '') + ' — GL OK / Var OK = "no" for a company in scope.')
+        : 'Roll-forwards intact for companies in scope.';
+    }
+
+    // Cardex Variance dot — actual per-item cardex drift to WORK (account-level
+    // CardexVar), NOT the roll-break. A company can roll cleanly yet still carry
+    // cardex variance (items whose perpetual didn't roll), so this is its own
+    // signal: any non-zero CardexVar in scope -> red (work to do), else green.
+    var cxSum = scoped.reduce(function (s, r) { return s + Math.abs(num(r.CardexVar != null ? r.CardexVar : r.cardexVar)); }, 0);
+    var hasCx = cxSum > 0.005;
+    var cx = $('cxDot');
+    if (cx) {
+      cx.className = 'row-dot ' + (hasCx ? 'red' : 'green');
+      cx.title = hasCx
+        ? ('Cardex variance to work for companies in scope (' + cxSum.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ').')
+        : 'No cardex variance for companies in scope.';
+    }
+
+    // Reload Cardex utility dot — same cardex signal, amber (a reload may help).
+    var cdot = $('rcdxDot');
+    if (cdot) {
+      cdot.className = 'row-dot ' + (hasCx ? 'amber' : 'green');
+      cdot.title = hasCx ? 'Cardex variance present for companies in scope — a reload may be needed.' : 'No cardex variance for companies in scope.';
+    }
+  }
   function loadInventoryLight() {
     rrFetch('inventory/integrity', { method: 'POST', body: { report: 'v6ui_raccountsummary' }, demoFile: 'account-rollforward' })
       .then(function (d) {
@@ -1942,26 +2006,8 @@
         // Warm the cross-page totals cache (working pages read their headline
         // numbers from this instead of recomputing — guarantees they all agree).
         try { sessionStorage.setItem(acctSummaryCacheKey(), JSON.stringify({ ts: Date.now(), payload: rows })); } catch (_) {}
-        var isNo = function (v) { return String(v == null ? '' : v).trim().toLowerCase() === 'no'; };
-        var bad = rows.filter(function (r) { return isNo(r.GLOK) || isNo(r.VarOK); });
-        var varBad = rows.filter(function (r) { return isNo(r.VarOK); });
-        _invLightFromData = true;
-        if (bad.length) {
-          paintInventoryLight('red', bad.length + ' roll-forward break' + (bad.length !== 1 ? 's' : '') +
-            ' — GL OK or Var OK is "no" in at least one period. Open Account Roll Forward to investigate.');
-        } else {
-          paintInventoryLight('green', 'Roll-forwards intact — no GL OK / Var OK = "no" in any period.');
-        }
-        // Reload Cardex Data dot: the cardex/variance side (Var OK = 'no') is the
-        // cardex analog of GL OK. A break -> amber (a reload may be needed); none
-        // -> green. The reload cutoff itself is still the admin's call (manual date).
-        var cdot = $('rcdxDot');
-        if (cdot) {
-          cdot.className = 'row-dot ' + (varBad.length ? 'amber' : 'green');
-          cdot.title = varBad.length
-            ? (varBad.length + ' variance break' + (varBad.length !== 1 ? 's' : '') + ' — a cardex reload may be needed.')
-            : 'No variance break — the cardex roll is clean.';
-        }
+        _invRows = rows;            // cache so a company-scope change repaints without refetching
+        applyInventoryLight();
       })
       .catch(function () { /* agent unavailable -> keep the validation.color fallback */ });
   }

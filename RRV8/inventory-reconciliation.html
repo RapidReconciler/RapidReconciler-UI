@@ -1369,6 +1369,90 @@
     font-variant-numeric: tabular-nums;
   }
   .variance-total-card .vt-value.is-negative { color: var(--red); }
+  .variance-total-card .vt-right { display: flex; align-items: center; gap: 12px; }
+  /* The bar becomes a toggle once there's a non-zero variance to break down. */
+  .variance-total-card.is-expandable { cursor: pointer; }
+  .vt-toggle {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 28px; height: 28px; padding: 0;
+    border: 1px solid var(--rule); border-radius: 7px;
+    background: var(--bg-card); color: var(--orange-deep);
+    cursor: pointer; transition: background 0.12s, border-color 0.12s, transform 0.18s;
+  }
+  .vt-toggle:hover { background: var(--bg-soft); border-color: var(--rule-strong); }
+  .vt-toggle svg { width: 16px; height: 16px; transition: transform 0.18s; }
+  .vt-toggle[aria-expanded="true"] svg { transform: rotate(180deg); }
+  .vt-toggle:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+  /* ============================================================
+     Closer insights — data-driven callouts above the variance grid
+     ============================================================ */
+  .recon-insights { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+  .recon-insight {
+    display: flex; gap: 10px; align-items: flex-start;
+    padding: 11px 14px; border-radius: 9px; font-size: 13px; line-height: 1.5;
+    border: 1px solid var(--rule); border-left: 4px solid var(--blue);
+    background: var(--bg-soft); color: var(--text);
+  }
+  .recon-insight.is-warn { border-left-color: var(--orange); background: var(--orange-pale); }
+  .recon-insight.is-info { border-left-color: var(--blue);   background: var(--blue-pale); }
+  .recon-insight-icon { flex-shrink: 0; width: 16px; height: 16px; margin-top: 1px; }
+  .recon-insight.is-warn .recon-insight-icon { color: var(--orange-deep); }
+  .recon-insight.is-info .recon-insight-icon { color: var(--blue); }
+  .recon-insight strong { color: var(--navy); font-weight: 800; }
+  .recon-insight b.amt { font-family: 'JetBrains Mono', ui-monospace, monospace; font-weight: 800; color: var(--navy); }
+
+  /* ============================================================
+     Balancing-entry worksheet
+     ============================================================ */
+  .worksheet {
+    margin-top: 12px;
+    background: var(--bg-card);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    padding: 18px 20px 20px;
+  }
+  .ws-intro-title {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 800; font-size: 16px; color: var(--navy);
+  }
+  .ws-intro-lede { margin: 4px 0 16px; font-size: 13px; color: var(--text-muted); line-height: 1.5; }
+  .ws-section { border-top: 1px solid var(--rule); padding-top: 14px; }
+  .ws-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+  .ws-section-title {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 800; font-size: 13px; letter-spacing: 0.04em;
+    text-transform: uppercase; color: var(--navy);
+  }
+  .ws-section-total {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-weight: 800; font-size: 16px; color: var(--navy);
+    font-variant-numeric: tabular-nums;
+  }
+  .ws-section-total.is-negative { color: var(--red); }
+  .ws-table { width: 100%; border-collapse: collapse; }
+  .ws-table th, .ws-table td {
+    text-align: left; padding: 8px 12px; font-size: 13px;
+    border-bottom: 1px solid var(--rule);
+  }
+  .ws-table thead th {
+    font-family: 'Source Sans 3', sans-serif;
+    font-weight: 800; font-size: 11px; letter-spacing: 0.05em;
+    text-transform: uppercase; color: var(--text-muted);
+    background: var(--bg-soft);
+  }
+  .ws-table tbody td:first-child {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-weight: 700; color: var(--navy); white-space: nowrap;
+  }
+  .ws-table .num {
+    text-align: right;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+  .ws-table td.num.is-negative { color: var(--red); }
+  .ws-table tbody tr:last-child td { border-bottom: none; }
+  .ws-section-empty { padding: 10px 12px; font-size: 13px; color: var(--text-muted); font-style: italic; }
 
   @media (max-width: 1000px) {
     .variance-grid { grid-template-columns: repeat(2, 1fr); }
@@ -3138,6 +3222,12 @@
       <div class="panel-head">
         <div class="panel-title">Variance breakdown</div>
       </div>
+      <!-- Data-driven insights for the closer — computed in-browser from
+           the per-period history cache (_periodBarsSnapshotCache). Flags
+           a manual JE that exceeds the explained variance, a carry-forward
+           that traces to an unreversed prior entry, and the non-JE
+           (cardex) slice. Hidden when there's nothing to say. -->
+      <div class="recon-insights" id="js-recon-insights" hidden></div>
       <!-- 6 action cards in a 3×2 grid. Click a card to open the
            preview modal (Transactions navigates to its own page).
            Zero-variance cards flip to a green "no action required"
@@ -3217,10 +3307,45 @@
         </div>
       </div>
 
-      <div class="variance-total-card">
+      <div class="variance-total-card" id="js-variance-total-card">
         <span class="vt-label">Unreconciled variance</span>
-        <span class="vt-value" id="js-variance-total">&nbsp;</span>
+        <div class="vt-right">
+          <span class="vt-value" id="js-variance-total">&nbsp;</span>
+          <button class="vt-toggle" id="js-worksheet-toggle" type="button" hidden
+                  aria-expanded="false" aria-controls="js-worksheet"
+                  title="Open the balancing-entry worksheet">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+          </button>
+        </div>
       </div>
+
+      <!-- ============================================================
+           Balancing-entry worksheet — expands from the unreconciled-
+           variance bar (chevron shows only when the variance is non-
+           zero). First pass: a Carry forward section listing the
+           accounts + amounts that make up the carry-forward variance.
+           Built to grow — each journal-entry source (Carry forward,
+           Transactions, Manual entries) gets its own section, then a
+           combining summary entry. Nothing is written to JD Edwards.
+           ============================================================ -->
+      <section class="worksheet" id="js-worksheet" hidden aria-label="Balancing-entry worksheet">
+        <div class="ws-intro">
+          <div class="ws-intro-title">Balancing-entry worksheet</div>
+          <p class="ws-intro-lede">The accounts behind each journal-entry source, ready to review and turn into a balancing entry. Nothing is written to JD&nbsp;Edwards from here.</p>
+        </div>
+
+        <div class="ws-section" data-source="carryForward">
+          <div class="ws-section-head">
+            <span class="ws-section-title">Carry forward</span>
+            <span class="ws-section-total" id="js-ws-cf-total">&mdash;</span>
+          </div>
+          <table class="ws-table">
+            <thead><tr><th>Account</th><th>Description</th><th class="num">Amount</th></tr></thead>
+            <tbody id="js-ws-cf-body"></tbody>
+          </table>
+          <div class="ws-section-empty" id="js-ws-cf-empty" hidden>No carry-forward variance in this period&rsquo;s scope.</div>
+        </div>
+      </section>
     </section>
 
     <!-- Footer — copied from the Home page. -->
@@ -4038,13 +4163,16 @@
   // backend will return. The renderer is just a downstream consumer
   // of computeFilteredView's output.
   const VARIANCE_KEYS = ['carryForward','glBatches','endOfDay','transactions','cardex','manualJournalEntries','unreconciledVariance'];
-  // Sign convention applied at aggregation. Transactions is stored
-  // in accountRows with the magnitude of the F0911-to-F4111 effect,
-  // but in the variance equation it SUBTRACTS from out-of-balance —
-  // so we negate it here so `unreconciledVariance = sum(components)`
-  // holds for every downstream consumer (variance table, audit
-  // report, JE export, Carry Forward preview, etc.).
-  const VARIANCE_SIGN = { transactions: -1 };
+  // Display/aggregation sign per component. As of the usp6_009 source
+  // flip, transactionvariance is stored GL − CX — the SAME perspective
+  // as OOB and BegVar — so the roll-forward is fully additive
+  // (OOB = BegVar + UnpostBatch + EndOfDay + Variance + CardexVar + JEs)
+  // and every surface shows the same sign: the Reconciliation card, the
+  // Account Roll Forward grid, the Transactions page KPI, and the
+  // Excel/PDF reconciliation export all read it straight through. No
+  // component is negated here, and the export no longer applies `* -1`.
+  // unreconciledVariance is summed independently from each row's OOB.
+  const VARIANCE_SIGN = {};
 
   function rowMatchesFilters(row, data) {
     // Currency is implicit on the row (via .currency for direct match).
@@ -4241,6 +4369,8 @@
       total.textContent = fmtVariance(unrec);
       total.classList.toggle('is-negative', unrec < 0);
     }
+    renderWorksheet(view);
+    renderReconInsights(view);
     // When the Inventory Validation light is red, shade the carry-
     // forward card red as well. The carry-forward number is the
     // symptom of the roll-forward break the validation light surfaces;
@@ -4252,6 +4382,171 @@
                   && currentData.validation.color === 'danger';
       cfCard.classList.toggle('is-validation-broken', broken);
     }
+  }
+
+  // ============================================================
+  //  Balancing-entry worksheet
+  //  Expands from the unreconciled-variance bar. First pass: a
+  //  Carry forward section listing every account that carries a
+  //  prior-period carry-forward variance in the current scope.
+  //  view.rows are the same period+scope-filtered account rows the
+  //  cards aggregate, so the section total ties to the Carry forward
+  //  card by construction. Built to grow — Transactions + Manual
+  //  entries sections and the combining summary entry come next.
+  // ============================================================
+  function setWorksheetExpanded(expanded) {
+    const ws = document.getElementById('js-worksheet');
+    const toggle = document.getElementById('js-worksheet-toggle');
+    if (!ws || !toggle) return;
+    ws.hidden = !expanded;
+    toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+  }
+
+  function renderWorksheet(view) {
+    const card   = document.getElementById('js-variance-total-card');
+    const toggle = document.getElementById('js-worksheet-toggle');
+    const body   = document.getElementById('js-ws-cf-body');
+    const totEl  = document.getElementById('js-ws-cf-total');
+    const empty  = document.getElementById('js-ws-cf-empty');
+    if (!card || !toggle || !body || !totEl || !empty) return;
+
+    const vc = (view && view.variance) || {};
+    const unrec = vc.unreconciledVariance || 0;
+    const expandable = Math.abs(unrec) >= 0.005;
+
+    // No variance to break down: hide the chevron and collapse.
+    toggle.hidden = !expandable;
+    card.classList.toggle('is-expandable', expandable);
+    if (!expandable) { setWorksheetExpanded(false); return; }
+
+    // Sum carry-forward per account across the filtered rows.
+    const descMap = (typeof currentData !== 'undefined') ? buildAccountDescMap(currentData) : new Map();
+    const byAccount = new Map();
+    (view.rows || []).forEach(r => {
+      const cf = (r.variance && r.variance.carryForward) || 0;
+      if (Math.abs(cf) < 0.005) return;
+      const longAccount = r.longAccount
+        || [r.businessUnit, r.object, r.subsidiary].filter(Boolean).join('.');
+      const key = (r.companyId || '') + '|' + longAccount;
+      const cur = byAccount.get(key)
+        || { longAccount: longAccount, company: r.companyId || '', amount: 0 };
+      cur.amount += cf;
+      byAccount.set(key, cur);
+    });
+
+    const lines = [...byAccount.values()]
+      .filter(l => Math.abs(l.amount) >= 0.005)
+      .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+
+    body.innerHTML = '';
+    let total = 0;
+    lines.forEach(l => {
+      total += l.amount;
+      const desc = descMap.get(l.company + '|' + l.longAccount) || '';
+      const tr = document.createElement('tr');
+      const tdAcct = document.createElement('td');
+      tdAcct.textContent = l.longAccount || '—';
+      const tdDesc = document.createElement('td');
+      tdDesc.textContent = desc;
+      const tdAmt = document.createElement('td');
+      tdAmt.className = 'num' + (l.amount < 0 ? ' is-negative' : '');
+      tdAmt.textContent = fmtVariance(l.amount);
+      tr.appendChild(tdAcct); tr.appendChild(tdDesc); tr.appendChild(tdAmt);
+      body.appendChild(tr);
+    });
+
+    empty.hidden = lines.length > 0;
+    totEl.textContent = fmtVariance(total);
+    totEl.classList.toggle('is-negative', total < 0);
+  }
+
+  // Wire the worksheet toggle once. Clicking the chevron — or the bar
+  // itself when it's expandable — opens/closes the worksheet.
+  (function wireWorksheetToggle() {
+    const card   = document.getElementById('js-variance-total-card');
+    const toggle = document.getElementById('js-worksheet-toggle');
+    if (!card || !toggle) return;
+    const flip = () => setWorksheetExpanded(toggle.getAttribute('aria-expanded') !== 'true');
+    toggle.addEventListener('click', (e) => { e.stopPropagation(); flip(); });
+    card.addEventListener('click', () => { if (!toggle.hidden) flip(); });
+  })();
+
+  // ============================================================
+  //  Closer insights — computed entirely in-browser from the
+  //  per-period history cache (_periodBarsSnapshotCache, loaded for
+  //  the bar chart + carry-forward preview). No extra fetch.
+  //  Flags, against the additive roll-forward:
+  //    A) a manual JE that far exceeds the explained variance
+  //       (carry-forward + transactions) this period;
+  //    B) a carry-forward that traces to such an over-booking in the
+  //       prior period — reverse it, don't re-book;
+  //    C) the cardex slice, which isn't a journal-entry fix.
+  // ============================================================
+  function _vnum(x) {
+    return (x && typeof x === 'object' && 'value' in x) ? (Number(x.value) || 0) : (Number(x) || 0);
+  }
+  function reconPeriodFigures(period, viewFallback) {
+    if (_periodBarsSnapshotCache) {
+      const r = _periodBarsSnapshotCache.find(x => x.period === period);
+      if (r && r.variance) {
+        return {
+          period: period,
+          cf:  _vnum(r.variance.carryForward),
+          tx:  _vnum(r.variance.transactions),
+          je:  _vnum(r.variance.manualJournalEntries),
+          cdx: _vnum(r.variance.cardex),
+          oob: (Number(r.glBalance) || 0) - (Number(r.perpetualBalance) || 0)
+        };
+      }
+    }
+    if (viewFallback && viewFallback.variance) {
+      const v = viewFallback.variance;
+      return { period: period, cf: _vnum(v.carryForward), tx: _vnum(v.transactions),
+               je: _vnum(v.manualJournalEntries), cdx: _vnum(v.cardex), oob: _vnum(v.unreconciledVariance) };
+    }
+    return null;
+  }
+  function computeReconInsights(view) {
+    const out = [];
+    const TOL = 500;                       // dollars; below this we don't nag
+    const cur = reconPeriodFigures(currentPeriod, view);
+    if (!cur) return out;
+    const explained = cur.cf + cur.tx;     // the JE-owned variance a balancing entry should clear
+    const overBooked = (m, x) => Math.abs(m.je) > 2 * Math.abs(x) && (Math.abs(m.je) - Math.abs(x)) > TOL;
+    // A) unsupported / over-booked manual entry this period
+    if (overBooked(cur, explained)) {
+      out.push({ sev: 'warn', html:
+        'A manual journal entry of <b class="amt">' + fmtVariance(Math.abs(cur.je)) +
+        '</b> this period is well above the explained variance (<b class="amt">' + fmtVariance(Math.abs(explained)) +
+        '</b>). <strong>Verify the account and amount</strong> &mdash; an unsupported entry rolls forward as next period’s carry-forward.' });
+    }
+    // B) carry-forward that traces to a prior over-booking
+    const prior = reconPeriodFigures(priorPeriod(), null);
+    if (prior && Math.abs(cur.cf) > TOL && overBooked(prior, prior.cf + prior.tx)) {
+      out.push({ sev: 'warn', html:
+        '<b class="amt">' + fmtVariance(Math.abs(cur.cf)) + '</b> of this out-of-balance carried in from <strong>' +
+        escapeHtml(PERIOD_LABELS[prior.period] || prior.period) +
+        '</strong>, where a manual entry exceeded the explained variance. <strong>Reverse that entry</strong> rather than booking a new balancing entry on top of it.' });
+    }
+    // C) cardex slice isn't a journal-entry fix
+    if (Math.abs(cur.cdx) > TOL) {
+      out.push({ sev: 'info', html:
+        '<b class="amt">' + fmtVariance(Math.abs(cur.cdx)) +
+        '</b> of the variance is a cardex (item-ledger) difference &mdash; a data correction for Ops / IT, not cleared by a journal entry.' });
+    }
+    return out;
+  }
+  function renderReconInsights(view) {
+    const host = document.getElementById('js-recon-insights');
+    if (!host) return;
+    const items = computeReconInsights(view);
+    if (!items.length) { host.hidden = true; host.innerHTML = ''; return; }
+    const warnSvg = '<svg class="recon-insight-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>';
+    const infoSvg = '<svg class="recon-insight-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>';
+    host.innerHTML = items.map(it =>
+      '<div class="recon-insight is-' + it.sev + '">' + (it.sev === 'warn' ? warnSvg : infoSvg) + '<div>' + it.html + '</div></div>'
+    ).join('');
+    host.hidden = false;
   }
 
   // History chart: gradient area fill + line + interactive hover.
@@ -4367,6 +4662,10 @@
         points = snapshotPoints;
       }
     }
+    // The per-period history cache is now loaded — (re)paint the closer
+    // insights, which need prior-period figures only this cache carries
+    // (the initial render fired before this async load resolved).
+    if (currentData) renderReconInsights(computeFilteredView(currentData));
     if (!_periodBars) {
       _periodBars = window.RRV8.mountPeriodBars({
         host,
@@ -5555,10 +5854,13 @@
           carryForward:         num(r.variance && r.variance.carryForward),
           glBatches:            num(r.variance && r.variance.glBatches),
           endOfDay:             num(r.variance && r.variance.endOfDay),
-          // Match V8's VARIANCE_SIGN convention: stored magnitude,
-          // signed at aggregation. The agent ships pre-signed for
-          // OOB contribution, so flip on the way in.
-          transactions:         -num(r.variance && r.variance.transactions),
+          // The rows endpoint ships the raw view Variance (its NATURAL
+          // sign), NOT pre-signed like the summary block — so store it
+          // as-is, matching the demo snapshot + the natural-sign
+          // convention every consumer now expects. (Was negated here on
+          // the false assumption the rows were pre-signed, which left the
+          // card and the Excel export wrong-signed on the live path.)
+          transactions:         num(r.variance && r.variance.transactions),
           cardex:               num(r.variance && r.variance.cardex),
           manualJournalEntries: num(r.variance && r.variance.manualJournalEntries),
           unreconciledVariance: num(r.variance && r.variance.unreconciledVariance)
@@ -5599,10 +5901,12 @@
     // periods only carry an unreconciledVariance value derived from
     // barChart so the trend chart populates.
     const history = (legacy.barChart && legacy.barChart[0] && legacy.barChart[0].data) || [];
-    // Note on transactions sign: legacy.summary.variance.transactions is
-    // already pre-signed for OOB contribution (e.g. -280.51). The V8
-    // aggregator applies VARIANCE_SIGN.transactions = -1 at aggregation,
-    // so we store the FLIPPED value here to round-trip correctly.
+    // legacy.summary.variance.transactions is pre-signed for OOB
+    // contribution (e.g. -280.51); flip it back to the NATURAL sign for
+    // storage so every path stores transactions consistently (matching
+    // the demo snapshot + the rows endpoint). Display keeps the natural
+    // sign so the card ties out to the Transactions page; see
+    // VARIANCE_SIGN above.
     const activeVariance = {
       carryForward:         num(vc.carryForward),
       glBatches:            flatten(vc.glBatches),
@@ -6194,7 +6498,7 @@
       const begVar  = s ? s.begVar   : (ar ? ar.variance.carryForward : 0);
       const unpstGL = s ? s.unpstGL  : 0;
       const eod     = s ? s.endofDay : 0;
-      const txVar   = s ? s.variance : (ar ? ar.variance.transactions * -1 : 0);
+      const txVar   = s ? s.variance : (ar ? ar.variance.transactions : 0);
       const itemRoll = s ? s.itemRoll : (ar ? ar.variance.cardex : 0);
       const jes     = s ? s.jes      : (ar ? ar.variance.manualJournalEntries : 0);
       r = row(['G/L Balance',           round2(gl)]);  styleCell(r, 1, _STY.money);
@@ -6564,7 +6868,7 @@
       const begVar  = s ? s.begVar   : (ar ? ar.variance.carryForward : 0);
       const unpstGL = s ? s.unpstGL  : 0;
       const eod     = s ? s.endofDay : 0;
-      const txVar   = s ? s.variance : (ar ? ar.variance.transactions * -1 : 0);
+      const txVar   = s ? s.variance : (ar ? ar.variance.transactions : 0);
       const itemRoll = s ? s.itemRoll : (ar ? ar.variance.cardex : 0);
       const jes     = s ? s.jes      : (ar ? ar.variance.manualJournalEntries : 0);
 

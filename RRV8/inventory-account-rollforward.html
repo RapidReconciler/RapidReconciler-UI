@@ -31,6 +31,7 @@
 <title>Account Roll Forward &mdash; RapidReconciler</title>
 <link href="fonts/fonts.css" rel="stylesheet">
 <link href="../Tools/howto.css" rel="stylesheet">
+<script src="config.js"></script>
 <script src="vendor/xlsx.full.min.js" defer></script>
 <style>
   :root {
@@ -104,6 +105,18 @@
   .btn { display:inline-flex; align-items:center; gap:7px; border:1px solid var(--rule-strong); background:var(--bg-card); border-radius:8px; padding:6px 12px; font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:12.5px; color:var(--text-soft); cursor:pointer; }
   .btn:hover { border-color:var(--blue); color:var(--blue); }
   .btn svg { width:13px; height:13px; }
+  /* grid-state cluster (per RRV8/GRID-STANDARDS.md): search + Excel pill + count pill, pinned right */
+  .grid-state-cluster { display:flex; align-items:center; gap:8px; margin-left:auto; }
+  .grid-search { position:relative; display:inline-flex; align-items:center; }
+  .grid-search input { border:1px solid var(--rule-strong); border-radius:100px; padding:5px 24px 5px 12px; font-family:'Source Sans 3',sans-serif; font-size:12.5px; color:var(--text); width:168px; }
+  .grid-search input:focus { outline:none; border-color:var(--blue); }
+  .grid-search-clear { position:absolute; right:5px; border:none; background:none; color:var(--text-muted); font-size:15px; line-height:1; cursor:pointer; padding:0 3px; }
+  .grid-search-clear:hover { color:var(--blue); }
+  .grid-pill { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--rule-strong); border-radius:100px; padding:5px 10px; font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:12.5px; color:var(--text-soft); background:var(--bg-card); }
+  .grid-pill-export { cursor:pointer; }
+  .grid-pill-export:hover { border-color:var(--blue); color:var(--blue); }
+  .grid-pill-export svg { width:13px; height:13px; }
+  .grid-pill-count { color:var(--text-muted); }
   .grid-scroll { max-height:620px; overflow:auto; }
   table.rf { width:100%; border-collapse:separate; border-spacing:0; font-size:12.5px; }
   table.rf thead th { position:sticky; top:0; z-index:2; background:var(--bg-soft); color:var(--text-muted); font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:10px; letter-spacing:.07em; text-transform:uppercase; text-align:left; padding:9px 11px; border-bottom:1px solid var(--rule); white-space:nowrap; cursor:pointer; }
@@ -176,9 +189,14 @@
   <section class="grid-card">
     <div class="grid-head">
       <span class="grid-title">Roll forward</span>
-      <span class="grid-count" id="gridCount">&mdash;</span>
-      <span class="spacer"></span>
-      <button class="btn" id="exportBtn"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10v3h10v-3"/><path d="M8 2v9"/><polyline points="5 8 8 11 11 8"/></svg>Export to Excel</button>
+      <div class="grid-state-cluster">
+        <span class="grid-search">
+          <input type="text" id="gridSearch" placeholder="Search rows&hellip;" autocomplete="off" spellcheck="false" aria-label="Search roll-forward rows">
+          <button class="grid-search-clear" id="gridSearchClear" type="button" aria-label="Clear search" hidden>&times;</button>
+        </span>
+        <button class="grid-pill grid-pill-export" id="exportBtn" type="button" title="Export the current view to Excel"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10v3h10v-3"/><path d="M8 2v9"/><polyline points="5 8 8 11 11 8"/></svg>Excel</button>
+        <span class="grid-pill grid-pill-count" id="gridCount">&mdash;</span>
+      </div>
     </div>
     <div class="grid-scroll">
       <table class="rf" id="rfTable"><thead id="rfHead"></thead><tbody id="rfBody"><tr><td class="empty">Loading roll forward&hellip;</td></tr></tbody></table>
@@ -192,7 +210,56 @@
 (function () {
   'use strict';
   var DATA = [];
-  var state = { company:'', showAll:false, sortKey:null, sortDir:'asc' };
+  var state = { company:'', showAll:false, sortKey:null, sortDir:'asc', gridSearch:'' };
+  // ---- company scope: the [All|co|co] filter IS the scope control. Reads /
+  //      writes the same session scope sidebar.js owns, so it syncs both ways
+  //      with Home and the other analyst pages. Company only — never period. ----
+  function _scopeCtx(){
+    try{
+      var token=localStorage.getItem('rrv8.token'); if(!token) return null;
+      var b64=token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'); var pad=b64.length%4; if(pad) b64+='='.repeat(4-pad);
+      var p=JSON.parse(decodeURIComponent(atob(b64).split('').map(function(c){return '%'+('00'+c.charCodeAt(0).toString(16)).slice(-2);}).join('')));
+      var dbs=p.dbs||[]; var idx=Number(p.activeDbIndex)||0; var dbObj=dbs[idx]||dbs[0]||{};
+      var mode=(window.RR_CONFIG&&RR_CONFIG.mode)||'demo';
+      return { key:'rrv8.scope.v1.'+mode+'.'+((dbObj.n)||'_')+'.scope', allowed:(Array.isArray(dbObj.i)?dbObj.i.map(String):[]) };
+    }catch(_){ return null; }
+  }
+  // Active scope as a single company ('' = all). The seg control is single-or-all.
+  function readScopeCompany(){
+    var ctx=_scopeCtx(); if(!ctx) return '';
+    try{
+      var raw=sessionStorage.getItem(ctx.key); var sc=raw?(JSON.parse(raw).payload||null):null;
+      var act=(sc&&Array.isArray(sc.activeCompanies)&&sc.activeCompanies.length)?sc.activeCompanies.map(String):null;
+      if(!act) return '';
+      if(ctx.allowed.length && act.length>=ctx.allowed.length) return '';   // all = no narrowing
+      return act.length===1 ? act[0] : '';
+    }catch(_){ return ''; }
+  }
+  function writeScopeCompany(co){
+    var ctx=_scopeCtx(); if(!ctx) return;
+    try{
+      var raw=sessionStorage.getItem(ctx.key); var cur=raw?(JSON.parse(raw).payload||{}):{};
+      cur.activeCompanies = co ? [String(co)] : ctx.allowed.slice();   // '' -> widen back to all allowed
+      sessionStorage.setItem(ctx.key, JSON.stringify({ ts:Date.now(), payload:cur }));
+    }catch(_){}
+  }
+  function rowMatchesCo(r){ return !state.company || r.CompanyNumber===state.company; }
+  // Raw cell value per column key — shared by Excel export + grid search so
+  // both stay in lockstep with the column set.
+  function rawVal(r,k){ return {companyNumber:r.CompanyNumber,longAccount:r.LongAccount,periodEnds:r.PeriodEnds,begGL:r.BegGL,perGL:r.PerGL,endGL:r.EndGL,unpostBatch:r.UnpostBatch,glok:r.GLOK,perpetual:r.Perpetual,perCX:r.PerCX,begVar:r.BegVar,endOfDay:r.EndofDay,variance:r.Variance,jes:r.JEs,oob:r.OOB,cardexVar:r.CardexVar,varok:r.VarOK}[k]; }
+  // Find-as-you-type: case-insensitive substring across visible columns; a
+  // leading ^ switches to starts-with (per GRID-STANDARDS.md §8).
+  function searchFilter(data,q){
+    q=String(q||'').trim().toLowerCase(); if(!q) return data;
+    var starts=q.charAt(0)==='^'; if(starts) q=q.slice(1); if(!q) return data;
+    function hit(s){ s=String(s==null?'':s).toLowerCase(); return starts?s.indexOf(q)===0:s.indexOf(q)!==-1; }
+    return data.filter(function(r){
+      return COLS.some(function(c){
+        if(hit(rawVal(r,c.k))) return true;
+        return c.k==='periodEnds' && hit(fmtDate(r.PeriodEnds));   // also match the displayed date ("Aug")
+      });
+    });
+  }
 
   // ---- fmt ----
   function money(n){ var x=Number(n)||0; var a=Math.abs(x).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); return x<0?'('+a+')':a; }
@@ -220,27 +287,33 @@
 
   // ---- columns (mirror the workbook Roll Forward sheet) ----
   var COLS = [
-    { k:'companyNumber', label:'Co',          render:function(r){return '<span class="mono">'+esc(r.CompanyNumber)+'</span>';} },
-    { k:'longAccount',   label:'Long Account',render:function(r){return '<span class="mono acct">'+esc(r.LongAccount)+'</span>';} },
-    { k:'periodEnds',    label:'Period Ends', render:function(r){return fmtDate(r.PeriodEnds);} },
-    { k:'begGL',  label:'Beg GL',     num:true, render:function(r){return moneyCell(r.BegGL);} },
-    { k:'perGL',  label:'Period GL',  num:true, render:function(r){return moneyCell(r.PerGL);} },
-    { k:'endGL',  label:'End GL',     num:true, render:function(r){return moneyCell(r.EndGL);} },
-    { k:'glok',   label:'GL OK',      render:function(r){return chip(r.GLOK);} },
-    { k:'perpetual', label:'Perpetual', num:true, render:function(r){return moneyCell(r.Perpetual);} },
-    { k:'variance',  label:'Variance',  num:true, render:function(r){return moneyCell(r.Variance);} },
-    { k:'jes',    label:'JEs',        num:true, render:function(r){return moneyCell(r.JEs);} },
-    { k:'oob',    label:'OOB',        num:true, render:function(r){return moneyCell(r.OOB);} },
-    { k:'cardexVar', label:'Cardex Var', num:true, render:function(r){return moneyCell(r.CardexVar);} },
-    { k:'varok',  label:'Var OK',     render:function(r){return chip(r.VarOK);} }
+    { k:'companyNumber', label:'Co',      render:function(r){return '<span class="mono">'+esc(r.CompanyNumber)+'</span>';} },
+    { k:'longAccount',   label:'Account', render:function(r){return '<span class="mono acct">'+esc(r.LongAccount)+'</span>';} },
+    { k:'periodEnds',    label:'Period',  render:function(r){return fmtDate(r.PeriodEnds);} },
+    { k:'begGL',  label:'Beg GL',   num:true, render:function(r){return moneyCell(r.BegGL);} },
+    { k:'perGL',  label:'Per GL',   num:true, render:function(r){return moneyCell(r.PerGL);} },
+    { k:'endGL',  label:'End GL',   num:true, render:function(r){return moneyCell(r.EndGL);} },
+    // Unposted Batches sits with the GL roll: End GL = Beg GL + Per GL - Unp Btch.
+    { k:'unpostBatch', label:'Unp Btch', num:true, render:function(r){return moneyCell(r.UnpostBatch);} },
+    { k:'glok',   label:'GL OK',    render:function(r){return chip(r.GLOK);} },
+    { k:'perpetual', label:'Perp',  num:true, render:function(r){return moneyCell(r.Perpetual);} },
+    { k:'perCX',  label:'Per CX',   num:true, render:function(r){return moneyCell(r.PerCX);} },
+    // Variance roll-forward components (fully additive post sign-flip):
+    //   OOB = BegVar + UnpBtch + EOD + Variance + CXVar + JEs.
+    { k:'begVar',  label:'Beg Var', num:true, render:function(r){return moneyCell(r.BegVar);} },
+    { k:'endOfDay',label:'EOD',     num:true, render:function(r){return moneyCell(r.EndofDay);} },
+    { k:'variance',  label:'Variance', num:true, render:function(r){return moneyCell(r.Variance);} },
+    { k:'jes',    label:'JEs',      num:true, render:function(r){return moneyCell(r.JEs);} },
+    { k:'oob',    label:'OOB',      num:true, render:function(r){return moneyCell(r.OOB);} },
+    { k:'cardexVar', label:'CX Var', num:true, render:function(r){return moneyCell(r.CardexVar);} },
+    { k:'varok',  label:'Var OK',   render:function(r){return chip(r.VarOK);} }
   ];
-  var SORTABLE = { companyNumber:'CompanyNumber', longAccount:'LongAccount', periodEnds:'PeriodEnds', begGL:'BegGL', perGL:'PerGL', endGL:'EndGL', glok:'GLOK', perpetual:'Perpetual', variance:'Variance', jes:'JEs', oob:'OOB', cardexVar:'CardexVar', varok:'VarOK' };
-  var NUMCOL = { begGL:1, perGL:1, endGL:1, perpetual:1, variance:1, jes:1, oob:1, cardexVar:1 };
+  var SORTABLE = { companyNumber:'CompanyNumber', longAccount:'LongAccount', periodEnds:'PeriodEnds', begGL:'BegGL', perGL:'PerGL', endGL:'EndGL', unpostBatch:'UnpostBatch', glok:'GLOK', perpetual:'Perpetual', perCX:'PerCX', begVar:'BegVar', endOfDay:'EndofDay', variance:'Variance', jes:'JEs', oob:'OOB', cardexVar:'CardexVar', varok:'VarOK' };
+  var NUMCOL = { begGL:1, perGL:1, endGL:1, unpostBatch:1, perpetual:1, perCX:1, begVar:1, endOfDay:1, variance:1, jes:1, oob:1, cardexVar:1 };
 
   // ---- filter / sort ----
   function rows(){
-    var r = DATA;
-    if (state.company) r = r.filter(function(x){ return x.CompanyNumber===state.company; });
+    var r = DATA.filter(rowMatchesCo);
     if (!state.showAll) r = r.filter(function(x){ return x.GLOK==='end'; });   // current period only by default
     if (state.sortKey){
       var f=SORTABLE[state.sortKey], num=NUMCOL[state.sortKey], mult=state.sortDir==='desc'?-1:1;
@@ -254,7 +327,7 @@
 
   // ---- render ----
   function renderKpis(){
-    var end = DATA.filter(function(r){ return r.GLOK==='end' && (!state.company || r.CompanyNumber===state.company); });
+    var end = DATA.filter(function(r){ return r.GLOK==='end' && rowMatchesCo(r); });
     _curCtx = _ctxOf(end);
     var cx = end.reduce(function(s,r){ return s+(Number(r.CardexVar)||0); },0);
     var oob = end.reduce(function(s,r){ return s+(Number(r.OOB)||0); },0);
@@ -269,7 +342,7 @@
   }
   function renderAnalysis(){
     var host=document.getElementById('analysis'); if(!host) return;
-    var scope = DATA.filter(function(r){ return !state.company || r.CompanyNumber===state.company; });
+    var scope = DATA.filter(rowMatchesCo);
     var cos = Array.from(new Set(scope.map(function(r){return r.CompanyNumber;}))).sort();
     var accts = new Set(scope.map(function(r){return r.CompanyNumber+'|'+r.LongAccount;})).size;
     var periods = Array.from(new Set(scope.map(function(r){return r.PeriodEnds;}))).sort();
@@ -313,8 +386,8 @@
       var car = state.sortKey===c.k ? (state.sortDir==='desc'?' &#9660;':' &#9650;') : '';
       return '<th class="'+(c.num?'num':'')+'" data-k="'+c.k+'"'+act+'>'+esc(c.label)+car+'</th>';
     }).join('')+'</tr>';
-    var data=rows();
-    var total=DATA.filter(function(r){ return !state.company || r.CompanyNumber===state.company; }).length;
+    var data=searchFilter(rows(),state.gridSearch);
+    var total=DATA.filter(rowMatchesCo).length;
     cnt.textContent = data.length.toLocaleString('en-US')+' row'+(data.length!==1?'s':'')+(state.showAll?'':' (current period)')+' of '+total.toLocaleString('en-US');
     if(!data.length){ body.innerHTML='<tr><td class="empty" colspan="'+COLS.length+'">No rows match.</td></tr>'; return; }
     body.innerHTML = data.map(function(r){
@@ -327,20 +400,22 @@
   function buildPicker(){
     var cos=Array.from(new Set(DATA.map(function(r){return r.CompanyNumber;}))).sort();
     var host=document.getElementById('companyPick');
-    host.innerHTML='<button type="button" class="seg-btn is-on" data-co="">All</button>'+
-      cos.map(function(c){ return '<button type="button" class="seg-btn" data-co="'+esc(c)+'">'+esc(c)+'</button>'; }).join('');
+    host.innerHTML='<button type="button" class="seg-btn'+(state.company===''?' is-on':'')+'" data-co="">All</button>'+
+      cos.map(function(c){ return '<button type="button" class="seg-btn'+(String(c)===state.company?' is-on':'')+'" data-co="'+esc(c)+'">'+esc(c)+'</button>'; }).join('');
     host.addEventListener('click',function(e){ var b=e.target.closest('.seg-btn'); if(!b) return;
-      state.company=b.getAttribute('data-co')||''; host.querySelectorAll('.seg-btn').forEach(function(x){x.classList.toggle('is-on',x===b);}); renderAll(); });
+      state.company=b.getAttribute('data-co')||'';
+      writeScopeCompany(state.company);   // sync the selection back to the shared scope (Home + other pages follow)
+      host.querySelectorAll('.seg-btn').forEach(function(x){x.classList.toggle('is-on',x===b);}); renderAll(); });
   }
 
   // ---- excel export (real, via SheetJS) ----
   function exportXlsx(){
-    var data=rows();
+    var data=searchFilter(rows(),state.gridSearch);
     if(!data.length){ toast('Nothing to export'); return; }
     if(typeof XLSX==='undefined'){ toast('Excel library still loading &mdash; try again'); return; }
     var aoa=[COLS.map(function(c){return c.label;})];
     data.forEach(function(r){ aoa.push(COLS.map(function(c){
-      var raw={companyNumber:r.CompanyNumber,longAccount:r.LongAccount,periodEnds:r.PeriodEnds,begGL:r.BegGL,perGL:r.PerGL,endGL:r.EndGL,glok:r.GLOK,perpetual:r.Perpetual,variance:r.Variance,jes:r.JEs,oob:r.OOB,cardexVar:r.CardexVar,varok:r.VarOK}[c.k];
+      var raw=rawVal(r,c.k);
       return raw==null?'':raw; })); });
     var ws=XLSX.utils.aoa_to_sheet(aoa), wb=XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb,ws,'Roll Forward');
@@ -353,6 +428,13 @@
   document.getElementById('exportBtn').addEventListener('click',exportXlsx);
   document.getElementById('rfHead').addEventListener('click',function(e){ var th=e.target.closest('th'); if(!th) return; var k=th.getAttribute('data-k');
     if(state.sortKey===k){ state.sortDir=state.sortDir==='asc'?'desc':'asc'; } else { state.sortKey=k; state.sortDir='asc'; } renderGrid(); });
+  (function(){
+    var inp=document.getElementById('gridSearch'), clr=document.getElementById('gridSearchClear'), t;
+    function apply(){ state.gridSearch=inp.value; clr.hidden=!inp.value; renderGrid(); }
+    inp.addEventListener('input',function(){ clearTimeout(t); t=setTimeout(apply,150); });   // 150ms debounce
+    inp.addEventListener('keydown',function(e){ if(e.key==='Escape'){ inp.value=''; apply(); } });
+    clr.addEventListener('click',function(){ inp.value=''; apply(); inp.focus(); });
+  })();
 
   // ---- normalize GL OK / Var OK for display (raw v6ui_raccountsummary.oobrollok
   //      carries recompute timestamps; the workbook/analyzer show baseline/yes/end/no).
@@ -364,6 +446,7 @@
   }
   function ingest(rows){
     DATA=(Array.isArray(rows)?rows:[]).map(function(r){ r.GLOK=normTok(r.GLOK); r.VarOK=normTok(r.VarOK); return r; });
+    state.company = readScopeCompany();    // open on the shared scope's company (Home selection)
     buildPicker(); renderAll();
   }
 
@@ -382,8 +465,12 @@
   }
   function loadFromAgent(){
     var token; try{ token=localStorage.getItem('rrv8.token'); }catch(_){}
-    var base=token&&agentBaseFromToken(token);
-    if(!base) return Promise.reject(new Error('no token'));
+    if(!token) return Promise.reject(new Error('no token'));
+    // Prefer the dev/test-agent override (RR_CONFIG.testAgentBase, e.g.
+    // localhost:34537) the live pages use; fall back to the token's
+    // activeDb host on a real install where testAgentBase is null.
+    var base=(window.RR_CONFIG && RR_CONFIG.testAgentBase) || agentBaseFromToken(token);
+    if(!base) return Promise.reject(new Error('no agent base'));
     return fetch(base+'/inventory/integrity',{method:'POST',
         headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json;charset=UTF-8','Accept':'application/json'},
         body:JSON.stringify({report:'v6ui_raccountsummary'})})
