@@ -96,6 +96,18 @@
   .ap-n { width:22px; height:22px; border-radius:50%; background:var(--navy); color:#fff; font-family:'JetBrains Mono',monospace; font-size:11px; font-weight:700; display:inline-flex; align-items:center; justify-content:center; }
   .ap-txt { font-size:12.5px; color:var(--text); }
   .ap-txt .owner { display:block; font-size:11px; color:var(--text-muted); margin-top:2px; }
+  /* Per-break what/how cards (the classified resolution playbook). */
+  .ap-cards { display:flex; flex-direction:column; gap:12px; }
+  .ap-card { border:1px solid var(--rule); border-left:4px solid var(--orange); border-radius:10px; padding:13px 15px; background:var(--bg-soft); }
+  .ap-card.var { border-left-color:var(--blue); }
+  .ap-cause { display:flex; align-items:center; gap:9px; flex-wrap:wrap; font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:14px; color:var(--navy); }
+  .ap-lever { font-size:10px; font-weight:800; letter-spacing:.05em; text-transform:uppercase; padding:2px 9px; border-radius:100px; background:var(--blue-pale); color:var(--blue); margin-left:auto; white-space:nowrap; }
+  .ap-where { font-family:'JetBrains Mono',ui-monospace,monospace; font-weight:700; font-size:11.5px; color:var(--text-soft); margin-top:3px; }
+  .ap-what { font-size:12.5px; color:var(--text); margin:7px 0 9px; line-height:1.5; }
+  ol.ap-how { margin:0; padding-left:18px; }
+  ol.ap-how li { font-size:12.5px; color:var(--text); line-height:1.5; margin-bottom:3px; }
+  .ap-wait { display:flex; gap:8px; margin-top:10px; padding:9px 11px; border-radius:8px; background:var(--orange-pale); border:1px solid #f0d2a8; font-size:11.5px; color:#7a4a13; line-height:1.45; }
+  .ap-wait b { color:var(--orange-deep); }
 
   /* grid card */
   .grid-card { background:var(--bg-card); border:1px solid var(--rule); border-radius:14px; box-shadow:var(--shadow-sm); overflow:hidden; }
@@ -107,11 +119,10 @@
   .btn svg { width:13px; height:13px; }
   /* grid-state cluster (per RRV8/GRID-STANDARDS.md): search + Excel pill + count pill, pinned right */
   .grid-state-cluster { display:flex; align-items:center; gap:8px; margin-left:auto; }
-  .grid-search { position:relative; display:inline-flex; align-items:center; }
-  .grid-search input { border:1px solid var(--rule-strong); border-radius:100px; padding:5px 24px 5px 12px; font-family:'Source Sans 3',sans-serif; font-size:12.5px; color:var(--text); width:168px; }
-  .grid-search input:focus { outline:none; border-color:var(--blue); }
-  .grid-search-clear { position:absolute; right:5px; border:none; background:none; color:var(--text-muted); font-size:15px; line-height:1; cursor:pointer; padding:0 3px; }
-  .grid-search-clear:hover { color:var(--blue); }
+  .grid-acct { display:inline-flex; align-items:center; gap:7px; }
+  .grid-acct-lbl { font-size:10px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); }
+  .grid-acct select { border:1px solid var(--rule-strong); border-radius:100px; padding:5px 12px; font-family:'Source Sans 3',sans-serif; font-size:12.5px; font-weight:700; color:var(--text); background:var(--bg-card); max-width:240px; cursor:pointer; }
+  .grid-acct select:focus { outline:none; border-color:var(--blue); }
   .grid-pill { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--rule-strong); border-radius:100px; padding:5px 10px; font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:12.5px; color:var(--text-soft); background:var(--bg-card); }
   .grid-pill-export { cursor:pointer; }
   .grid-pill-export:hover { border-color:var(--blue); color:var(--blue); }
@@ -190,9 +201,9 @@
     <div class="grid-head">
       <span class="grid-title">Roll forward</span>
       <div class="grid-state-cluster">
-        <span class="grid-search">
-          <input type="text" id="gridSearch" placeholder="Search rows&hellip;" autocomplete="off" spellcheck="false" aria-label="Search roll-forward rows">
-          <button class="grid-search-clear" id="gridSearchClear" type="button" aria-label="Clear search" hidden>&times;</button>
+        <span class="grid-acct">
+          <label class="grid-acct-lbl" for="accountPick">Account</label>
+          <select id="accountPick" aria-label="Filter roll-forward rows by account"><option value="">All accounts</option></select>
         </span>
         <button class="grid-pill grid-pill-export" id="exportBtn" type="button" title="Export the current view to Excel"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10v3h10v-3"/><path d="M8 2v9"/><polyline points="5 8 8 11 11 8"/></svg>Excel</button>
         <span class="grid-pill grid-pill-count" id="gridCount">&mdash;</span>
@@ -210,10 +221,11 @@
 (function () {
   'use strict';
   var DATA = [];
-  var state = { company:'', showAll:false, sortKey:null, sortDir:'asc', gridSearch:'' };
-  // ---- company scope: the [All|co|co] filter IS the scope control. Reads /
-  //      writes the same session scope sidebar.js owns, so it syncs both ways
-  //      with Home and the other analyst pages. Company only — never period. ----
+  var state = { company:'', account:'', showAll:false, sortKey:null, sortDir:'asc' };
+  // ---- company scope: the page honors the shared working-company scope
+  //      (set on Home, owned by sidebar.js) — it shows only the in-scope
+  //      companies. The [All|co|co] control is a local drill WITHIN that set;
+  //      it does not write back to the shared scope. Company only — never period. ----
   function _scopeCtx(){
     try{
       var token=localStorage.getItem('rrv8.token'); if(!token) return null;
@@ -224,42 +236,36 @@
       return { key:'rrv8.scope.v1.'+mode+'.'+((dbObj.n)||'_')+'.scope', allowed:(Array.isArray(dbObj.i)?dbObj.i.map(String):[]) };
     }catch(_){ return null; }
   }
-  // Active scope as a single company ('' = all). The seg control is single-or-all.
-  function readScopeCompany(){
-    var ctx=_scopeCtx(); if(!ctx) return '';
+  // Active working-company scope as a {company:true} lookup, or null when all
+  // allowed companies are selected (no narrowing). Read-only — drilling on this
+  // page never rewrites the shared scope.
+  function scopedCompanySet(){
+    var ctx=_scopeCtx(); if(!ctx) return null;
     try{
       var raw=sessionStorage.getItem(ctx.key); var sc=raw?(JSON.parse(raw).payload||null):null;
       var act=(sc&&Array.isArray(sc.activeCompanies)&&sc.activeCompanies.length)?sc.activeCompanies.map(String):null;
-      if(!act) return '';
-      if(ctx.allowed.length && act.length>=ctx.allowed.length) return '';   // all = no narrowing
-      return act.length===1 ? act[0] : '';
-    }catch(_){ return ''; }
+      if(!act) return null;
+      if(ctx.allowed.length && act.length>=ctx.allowed.length) return null;   // all = no narrowing
+      return act.reduce(function(s,c){ s[String(c)]=true; return s; },{});
+    }catch(_){ return null; }
   }
-  function writeScopeCompany(co){
-    var ctx=_scopeCtx(); if(!ctx) return;
-    try{
-      var raw=sessionStorage.getItem(ctx.key); var cur=raw?(JSON.parse(raw).payload||{}):{};
-      cur.activeCompanies = co ? [String(co)] : ctx.allowed.slice();   // '' -> widen back to all allowed
-      sessionStorage.setItem(ctx.key, JSON.stringify({ ts:Date.now(), payload:cur }));
-    }catch(_){}
-  }
-  function rowMatchesCo(r){ return !state.company || r.CompanyNumber===state.company; }
+  function inScopeCo(co){ var sc=scopedCompanySet(); return !sc || !!sc[String(co)]; }
+  // Row passes when it's in the working-company scope AND matches the local
+  // drill (state.company; '' = all companies in scope).
+  function rowMatchesCo(r){ return inScopeCo(r.CompanyNumber) && (!state.company || r.CompanyNumber===state.company); }
   // Raw cell value per column key — shared by Excel export + grid search so
   // both stay in lockstep with the column set.
   function rawVal(r,k){ return {companyNumber:r.CompanyNumber,longAccount:r.LongAccount,periodEnds:r.PeriodEnds,begGL:r.BegGL,perGL:r.PerGL,endGL:r.EndGL,unpostBatch:r.UnpostBatch,glok:r.GLOK,perpetual:r.Perpetual,perCX:r.PerCX,begVar:r.BegVar,endOfDay:r.EndofDay,variance:r.Variance,jes:r.JEs,oob:r.OOB,cardexVar:r.CardexVar,varok:r.VarOK}[k]; }
   // Find-as-you-type: case-insensitive substring across visible columns; a
   // leading ^ switches to starts-with (per GRID-STANDARDS.md §8).
-  function searchFilter(data,q){
-    q=String(q||'').trim().toLowerCase(); if(!q) return data;
-    var starts=q.charAt(0)==='^'; if(starts) q=q.slice(1); if(!q) return data;
-    function hit(s){ s=String(s==null?'':s).toLowerCase(); return starts?s.indexOf(q)===0:s.indexOf(q)!==-1; }
-    return data.filter(function(r){
-      return COLS.some(function(c){
-        if(hit(rawVal(r,c.k))) return true;
-        return c.k==='periodEnds' && hit(fmtDate(r.PeriodEnds));   // also match the displayed date ("Aug")
-      });
-    });
+  // Account picker: distinct accounts within the current company scope + drill
+  // (period-agnostic, so you can pick any account regardless of the period view).
+  function accountsInView(){
+    var base = DATA.filter(rowMatchesCo);
+    return Array.from(new Set(base.map(function(r){return r.LongAccount;}))).filter(Boolean)
+      .sort(function(a,b){ return String(a).localeCompare(String(b),undefined,{numeric:true,sensitivity:'base'}); });
   }
+  function byAccount(r){ return !state.account || r.LongAccount===state.account; }
 
   // ---- fmt ----
   function money(n){ var x=Number(n)||0; var a=Math.abs(x).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); return x<0?'('+a+')':a; }
@@ -321,8 +327,106 @@
         if(num){ return ((Number(a[f])||0)-(Number(b[f])||0))*mult; }
         return String(a[f]==null?'':a[f]).localeCompare(String(b[f]==null?'':b[f]),undefined,{numeric:true})*mult;
       });
+    } else {
+      // Default order: company, then account, then period (chronological by ISO
+      // date). Matters most with "Show all periods" on, where many periods per
+      // account would otherwise come back in source order.
+      r = r.slice().sort(function(a,b){
+        var c = String(a.CompanyNumber==null?'':a.CompanyNumber).localeCompare(String(b.CompanyNumber==null?'':b.CompanyNumber),undefined,{numeric:true}); if(c) return c;
+        c = String(a.LongAccount==null?'':a.LongAccount).localeCompare(String(b.LongAccount==null?'':b.LongAccount),undefined,{numeric:true,sensitivity:'base'}); if(c) return c;
+        return String(a.PeriodEnds==null?'':a.PeriodEnds).localeCompare(String(b.PeriodEnds==null?'':b.PeriodEnds));
+      });
     }
     return r;
+  }
+
+  // ============ GL-break classifier + Daren's what/how playbook ============
+  // Each red GLOK row is classified from the row + its prior-period row into one
+  // of four scenarios, then rendered as a what/how card. Reference "now" for the
+  // 35-day load window is the dataset's latest period (the 'end' snapshot), so
+  // the in/out-of-window split holds for historical data too.
+  var GL_WINDOW_DAYS = 35, GL_TOL = 0.01, AP_CARD_CAP = 12;
+  function n_(x){ return Number(x)||0; }
+  function r2_(x){ return Math.round(n_(x)*100)/100; }
+  function amtCur(r,v){ return _sym(r&&r.Currency)+money(v); }
+  function periodSeries(){
+    var m={};
+    DATA.forEach(function(r){ var k=r.CompanyNumber+'|'+r.LongAccount; (m[k]||(m[k]=[])).push(r); });
+    Object.keys(m).forEach(function(k){ m[k].sort(function(a,b){ return String(a.PeriodEnds).localeCompare(String(b.PeriodEnds)); }); });
+    return m;
+  }
+  function datasetEndIso(){ var mx=''; DATA.forEach(function(r){ var p=String(r.PeriodEnds||''); if(p>mx) mx=p; }); return mx; }
+  function daysBetween(aIso,bIso){ var a=new Date(aIso+'T00:00:00'),b=new Date(bIso+'T00:00:00'); return Math.round((b-a)/86400000); }
+  // Consecutive GLOK='no' run containing r that qualifies as a data-load pattern
+  // (length >= 2, PerGL ~ 0 throughout, BegGL varies). Returns [lo,hi] or null.
+  function dataLoadRun(r, ser){
+    var i=ser.indexOf(r); if(i<0) return null;
+    var lo=i, hi=i;
+    while(lo>0 && isNo(ser[lo-1].GLOK)) lo--;
+    while(hi<ser.length-1 && isNo(ser[hi+1].GLOK)) hi++;
+    if(hi-lo<1) return null;                       // need 2+ consecutive
+    var begs={}, zeroPer=true;
+    for(var j=lo;j<=hi;j++){ if(Math.abs(n_(ser[j].PerGL))>GL_TOL) zeroPer=false; begs[r2_(ser[j].BegGL)]=1; }
+    return (zeroPer && Object.keys(begs).length>1) ? [lo,hi] : null;
+  }
+  function glScenario(r, ser, endIso){
+    var run=dataLoadRun(r,ser);
+    if(run) return { code:'dataload', run:run };
+    var i=ser.indexOf(r), prior=i>0?ser[i-1]:null;
+    if(!prior) return { code:'misalign', gap:r2_(r.OOB) };
+    var gap=r2_(n_(r.BegGL)-n_(prior.EndGL)), ub=r2_(prior.UnpostBatch);
+    if(Math.abs(ub)>GL_TOL && Math.abs(gap-ub)<=GL_TOL){
+      var out=daysBetween(prior.PeriodEnds,endIso)>GL_WINDOW_DAYS;
+      return { code: out?'late-out':'late-in', amt:ub, prior:prior };
+    }
+    if(Math.abs(ub)>GL_TOL) return { code:'late-residual', amt:ub, gap:gap, prior:prior };
+    // F0902/F0911 disparity is the OOB column directly; fall back to the roll gap.
+    return { code:'misalign', gap:(Math.abs(r2_(r.OOB))>GL_TOL ? r2_(r.OOB) : gap) };
+  }
+  var AP_WAIT='<div class="ap-wait"><span><b>Expect two amber lights until the next refresh.</b> After you click Reload GL Data nothing changes today &mdash; the Reload GL card and the roll-forward light both stay amber until the next scheduled refresh re-pulls the GL. Don&rsquo;t click again or escalate; check back after the refresh.</span></div>';
+  function glCard(r, sc, ser){
+    var acct=esc(r.LongAccount), co=esc(r.CompanyNumber), per=fmtDate(r.PeriodEnds);
+    var cause, lever, what, how=[], wait='';
+    if(sc.code==='late-in' || sc.code==='late-out'){
+      cause='Late-posting batch'; lever='Unposted GL Batches';
+      what='A batch of '+amtCur(r,sc.amt)+' was approved but unposted at the close of '+fmtDate(sc.prior.PeriodEnds)+'; it posted afterward and moved that period&rsquo;s GL, so '+per+' didn&rsquo;t carry forward. RapidReconciler still holds the pre-posting balance.';
+      how=[
+        'Open <b>Unposted GL Batches</b> for account '+acct+' &mdash; it names the exact batch(es): number, type, amount, status.',
+        'Clear each in JD Edwards by status: Pending &rarr; approve in P0011; Approved &rarr; run R09801; In&nbsp;Use &rarr; reset posting status to blank in P0011, then approve + post; Error &rarr; fix per the message.'
+      ];
+      if(sc.code==='late-in'){ how.push('This period is inside the '+GL_WINDOW_DAYS+'-day load window &mdash; it clears on the next refresh. Nothing else to do.'); }
+      else { lever='Unposted GL Batches &rarr; Reload GL'; how.push('This period is older than the '+GL_WINDOW_DAYS+'-day load window, so posting alone won&rsquo;t reach RapidReconciler. After posting, click <b>Reload GL Data</b> to force a re-pull.'); wait=AP_WAIT; }
+    } else if(sc.code==='late-residual'){
+      cause='Late-posting batch + residual'; lever='Unposted GL Batches';
+      what='An unposted batch of '+amtCur(r,sc.amt)+' explains part of the '+amtCur(r,sc.gap)+' break on '+per+', but not all of it. Post the batch first, then re-check the remainder.';
+      how=[
+        'Open <b>Unposted GL Batches</b> for account '+acct+' and post the batch(es) in JD Edwards (P0011 / R09801).',
+        'After the next refresh, re-run the roll forward. If '+per+' still breaks, treat the remainder as balances out of sync (R099102 &mdash; see below).'
+      ];
+    } else if(sc.code==='misalign'){
+      cause='Balances out of sync (F0902 vs F0911)'; lever='R099102';
+      what='Every batch is posted, but the balance table (F0902) disagrees with the detail (F0911) by '+amtCur(r,sc.gap)+' on '+per+'. The detail is the source of truth; the balances need rebuilding.';
+      how=[
+        'In JD Edwards, run <b>R099102 (Account Balance Repost)</b> scoped to company '+co+', the fiscal year, and account '+acct+'.',
+        'Run <b>proof mode</b> first to confirm the scope, then <b>final mode</b> to rebuild F0902 from F0911. Have your JDE admin run/approve final mode.',
+        'Clears on the next refresh after the repost. Don&rsquo;t Reload GL &mdash; the fix is in JD Edwards, not RapidReconciler&rsquo;s copy.'
+      ];
+    } else { // dataload
+      cause='RapidReconciler&rsquo;s GL copy is stale'; lever='Reload GL';
+      var span='';
+      if(sc.run && ser){ span=' ('+fmtDate(ser[sc.run[0]].PeriodEnds)+' &ndash; '+fmtDate(ser[sc.run[1]].PeriodEnds)+')'; }
+      what='Account '+acct+' breaks across consecutive periods'+span+' with no posted activity to explain it &mdash; RapidReconciler&rsquo;s GL copy doesn&rsquo;t match JD Edwards. A normal refresh won&rsquo;t fix it.';
+      how=[
+        'Click <b>Reload GL Data</b> &mdash; it clears RapidReconciler&rsquo;s GL copy from the break period forward.',
+        'If the break is still red <i>after</i> the next refresh, escalate to GSI &mdash; at that point it&rsquo;s a real discrepancy, not a stale copy.'
+      ];
+      wait=AP_WAIT;
+    }
+    return '<div class="ap-card"><div class="ap-cause">'+esc(cause)+'<span class="ap-lever">'+lever+'</span></div>'+
+      '<div class="ap-where">Co '+co+' &middot; '+acct+' &middot; '+per+'</div>'+
+      '<div class="ap-what">'+what+'</div>'+
+      '<ol class="ap-how">'+how.map(function(s){return '<li>'+s+'</li>';}).join('')+'</ol>'+
+      wait+'</div>';
   }
 
   // ---- render ----
@@ -361,13 +465,29 @@
       : ('across '+scope.length+' rows in scope');
     var find = intact
       ? '<div class="an-find ok">&check; No findings &mdash; GLOK and VarOK are intact across all rows in scope, and OOB / Cardex variance carry through cleanly. Continue periodic monitoring at each refresh.</div>'
-      : '<div class="an-find">Roll-forward breaks found &mdash; review the flagged rows in the grid below, correct in JD Edwards, then refresh and re-run.</div>';
-    // Action plan only when there's actually a break to work. When all is well,
-    // the "No findings" line stands alone -- no banner, no action plan.
-    var actionPlan = intact ? '' :
-      '<div class="ap"><h4>Action plan</h4>'+
-        '<div class="ap-row"><span class="ap-n">1</span><span class="ap-txt">Find the flagged row(s) below (GL OK or Var OK = &ldquo;no&rdquo;), correct the cause in JD Edwards, then refresh RapidReconciler and re-run the roll forward &mdash; confirm GL OK / Var OK return to &ldquo;yes&rdquo;.<span class="owner">Owner / Notes &mdash; RapidReconciler Administrator</span></span></div>'+
-      '</div>';
+      : '';
+    // Classified what/how playbook: one card per GL break with the exact cause +
+    // resolution path (Daren never has to interpret which lever to pull).
+    var actionPlan = '';
+    if(!intact){
+      var ser=periodSeries(), endIso=datasetEndIso();
+      var glRows=scope.filter(function(r){ return isNo(r.GLOK); }).sort(function(a,b){
+        var c=String(a.CompanyNumber).localeCompare(String(b.CompanyNumber),undefined,{numeric:true}); if(c) return c;
+        c=String(a.LongAccount).localeCompare(String(b.LongAccount),undefined,{numeric:true,sensitivity:'base'}); if(c) return c;
+        return String(a.PeriodEnds).localeCompare(String(b.PeriodEnds));
+      });
+      var seen={}, cards=[], more=0;
+      glRows.forEach(function(r){
+        var s=ser[r.CompanyNumber+'|'+r.LongAccount]||[]; var sc=glScenario(r,s,endIso);
+        if(sc.code==='dataload' && sc.run){ var key=r.CompanyNumber+'|'+r.LongAccount+'|'+sc.run[0]; if(seen[key]) return; seen[key]=1; }
+        if(cards.length>=AP_CARD_CAP){ more++; return; }
+        cards.push(glCard(r,sc,s));
+      });
+      var varCount=scope.filter(function(r){ return isNo(r.VarOK); }).length;
+      var varNote = varCount ? ('<div class="ap-card var"><div class="ap-cause">Variance roll-forward break'+(varCount!==1?'s':'')+'<span class="ap-lever">Var OK</span></div><div class="ap-what">'+varCount+' account-period'+(varCount!==1?'s':'')+' where the variance didn&rsquo;t carry forward. Open the flagged Var&nbsp;OK = &ldquo;no&rdquo; rows in the grid; the per-item drill is on the Cardex Variance page.</div></div>') : '';
+      var moreNote = more ? ('<div class="an-find">+ '+more+' more GL break'+(more!==1?'s':'')+' &mdash; see the flagged rows in the grid.</div>') : '';
+      actionPlan = '<div class="ap"><h4>What to do</h4><div class="ap-cards">'+cards.join('')+varNote+'</div>'+moreNote+'</div>';
+    }
     host.innerHTML =
       '<div class="an-headline">'+badge+'<div><div class="an-title">'+headline+'</div><div class="an-sub">'+sub+' &middot; Period ending '+fmtDate(latest)+'</div></div></div>'+
       '<div class="an-scope">'+
@@ -386,7 +506,7 @@
       var car = state.sortKey===c.k ? (state.sortDir==='desc'?' &#9660;':' &#9650;') : '';
       return '<th class="'+(c.num?'num':'')+'" data-k="'+c.k+'"'+act+'>'+esc(c.label)+car+'</th>';
     }).join('')+'</tr>';
-    var data=searchFilter(rows(),state.gridSearch);
+    var data=rows().filter(byAccount);
     var total=DATA.filter(rowMatchesCo).length;
     cnt.textContent = data.length.toLocaleString('en-US')+' row'+(data.length!==1?'s':'')+(state.showAll?'':' (current period)')+' of '+total.toLocaleString('en-US');
     if(!data.length){ body.innerHTML='<tr><td class="empty" colspan="'+COLS.length+'">No rows match.</td></tr>'; return; }
@@ -394,23 +514,32 @@
       return '<tr class="'+(r.GLOK==='end'?'is-end':'')+'">'+COLS.map(function(c){ return '<td class="'+(c.num?'num':'')+'">'+c.render(r)+'</td>'; }).join('')+'</tr>';
     }).join('');
   }
-  function renderAll(){ renderKpis(); renderAnalysis(); renderGrid(); }
+  function renderAll(){ renderKpis(); renderAnalysis(); buildAccountPicker(); renderGrid(); }
 
   // ---- company picker (built from data) ----
   function buildPicker(){
-    var cos=Array.from(new Set(DATA.map(function(r){return r.CompanyNumber;}))).sort();
+    var cos=Array.from(new Set(DATA.map(function(r){return r.CompanyNumber;}))).sort().filter(inScopeCo);
     var host=document.getElementById('companyPick');
-    host.innerHTML='<button type="button" class="seg-btn'+(state.company===''?' is-on':'')+'" data-co="">All</button>'+
+    var allLabel=scopedCompanySet()?'All in scope':'All';
+    host.innerHTML='<button type="button" class="seg-btn'+(state.company===''?' is-on':'')+'" data-co="">'+allLabel+'</button>'+
       cos.map(function(c){ return '<button type="button" class="seg-btn'+(String(c)===state.company?' is-on':'')+'" data-co="'+esc(c)+'">'+esc(c)+'</button>'; }).join('');
     host.addEventListener('click',function(e){ var b=e.target.closest('.seg-btn'); if(!b) return;
-      state.company=b.getAttribute('data-co')||'';
-      writeScopeCompany(state.company);   // sync the selection back to the shared scope (Home + other pages follow)
+      state.company=b.getAttribute('data-co')||'';   // local drill within scope; not written back to the shared scope
       host.querySelectorAll('.seg-btn').forEach(function(x){x.classList.toggle('is-on',x===b);}); renderAll(); });
+  }
+
+  // ---- account picker (built from the in-scope rows; rebuilds on company drill) ----
+  function buildAccountPicker(){
+    var sel=document.getElementById('accountPick'); if(!sel) return;
+    var accts=accountsInView();
+    if(state.account && accts.indexOf(state.account)===-1) state.account='';   // company drill changed — reset
+    sel.innerHTML='<option value="">All accounts</option>'+
+      accts.map(function(a){ return '<option value="'+esc(a)+'"'+(a===state.account?' selected':'')+'>'+esc(a)+'</option>'; }).join('');
   }
 
   // ---- excel export (real, via SheetJS) ----
   function exportXlsx(){
-    var data=searchFilter(rows(),state.gridSearch);
+    var data=rows().filter(byAccount);
     if(!data.length){ toast('Nothing to export'); return; }
     if(typeof XLSX==='undefined'){ toast('Excel library still loading &mdash; try again'); return; }
     var aoa=[COLS.map(function(c){return c.label;})];
@@ -428,13 +557,7 @@
   document.getElementById('exportBtn').addEventListener('click',exportXlsx);
   document.getElementById('rfHead').addEventListener('click',function(e){ var th=e.target.closest('th'); if(!th) return; var k=th.getAttribute('data-k');
     if(state.sortKey===k){ state.sortDir=state.sortDir==='asc'?'desc':'asc'; } else { state.sortKey=k; state.sortDir='asc'; } renderGrid(); });
-  (function(){
-    var inp=document.getElementById('gridSearch'), clr=document.getElementById('gridSearchClear'), t;
-    function apply(){ state.gridSearch=inp.value; clr.hidden=!inp.value; renderGrid(); }
-    inp.addEventListener('input',function(){ clearTimeout(t); t=setTimeout(apply,150); });   // 150ms debounce
-    inp.addEventListener('keydown',function(e){ if(e.key==='Escape'){ inp.value=''; apply(); } });
-    clr.addEventListener('click',function(){ inp.value=''; apply(); inp.focus(); });
-  })();
+  document.getElementById('accountPick').addEventListener('change',function(){ state.account=this.value; renderGrid(); });
 
   // ---- normalize GL OK / Var OK for display (raw v6ui_raccountsummary.oobrollok
   //      carries recompute timestamps; the workbook/analyzer show baseline/yes/end/no).
@@ -446,8 +569,7 @@
   }
   function ingest(rows){
     DATA=(Array.isArray(rows)?rows:[]).map(function(r){ r.GLOK=normTok(r.GLOK); r.VarOK=normTok(r.VarOK); return r; });
-    state.company = readScopeCompany();    // open on the shared scope's company (Home selection)
-    buildPicker(); renderAll();
+    buildPicker(); renderAll();   // state.company defaults '' = all companies in scope
   }
 
   // ---- agent-first load: v6ui_raccountsummary from the active DB's agent
