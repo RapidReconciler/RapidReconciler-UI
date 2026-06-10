@@ -233,6 +233,130 @@ Both are additive: the Home page is fully functional without them.
 
 ---
 
+## Home awareness status (cross-role section pills)
+
+**Status: V8 UI shipped (neutral fallback when absent); agent endpoint
+implemented in RapidReconciler-Agent and running on the dev agents — ships to
+customers with the next Services jar release.** Home now shows **every**
+section to **every** role — Administration, Analyst, Finance, Support — and
+separates *visibility* from *authorization*: a user always sees a section's
+status pill, but the action cards inside render only if their role grants
+them (`t.adm` for Administration, `perms.dm` for Analyst, module caps for
+Finance). A lane the user can't act on collapses to its pill plus an
+**expandable, read-only summary** of what's open — so e.g. a Cost Accounting
+user closing the period can see at a glance that Administration or the
+Analyst lane has open items before they start, without being able to touch
+the controls.
+
+The pill + read-only summary need a status signal the viewer can read
+**regardless of role**. Rather than relax each per-section read
+(`/admin/service-health`, `/inventory/integrity/model-approval`,
+`/inventory/status`) to all roles, V8 reads **one role-agnostic roll-up**.
+The mutating actions behind each lane stay gated server-side exactly as
+today — this read only *reports*.
+
+- **Endpoint:** `GET /home/status-summary` on the per-DB Services jar
+  (agent-direct, like `inventory/status` / `admin/service-health`; route via
+  `RR_TEST_AGENT_AREAS` &rarr; `home/` in `config.js`). **Authenticated**,
+  but readable by **any** authenticated role on the DB — it carries no
+  actionable detail, only the rolled-up level + a few human-readable lines.
+  JWT-scoped by company for the analyst/finance counts.
+- **Response (`HomeStatusSummary`):**
+
+  ```json
+  {
+    "admin":   { "level": "ok | watch | attention", "headline": "Service healthy",
+                 "items": ["Data current as of 06/08", "All companies licensed"] },
+    "analyst": { "level": "ok | watch | attention", "headline": "2 items need review",
+                 "items": ["Model DMAAI review pending (1 company)",
+                           "Cardex drift on 3 items"] },
+    "finance": { "level": "ok | watch | attention", "headline": "1 account out of balance",
+                 "items": ["MFG01 4220 out of balance for the open period"] },
+    "db":      { "refreshedAt": "2026-06-08", "dataFrom": "2014-05-01",
+                 "sizePretty": "4.2 GB", "engine": "SQL Server 2019",
+                 "edition": "Standard Edition (64-bit)",
+                 "productVersion": "15.0.4385.2", "compatLevel": 140,
+                 "environment": "Dev" }
+  }
+  ```
+
+  - `level` drives the pill tint (`ok`&rarr;green, `watch`&rarr;amber,
+    `attention`&rarr;red). The three keys mirror the three gated lanes; a
+    key may be omitted if the server has nothing to report (V8 leaves that
+    pill neutral).
+  - `headline` is the one-line collapsed-state summary; `items` is the
+    expandable read-only list shown when the viewer lacks the lane's
+    actions. Both are **finance-safe prose** (no SQL/sproc/endpoint names),
+    server-owned so the wording stays one source of truth.
+  - **Roll-up definitions** (agent-side, one source of truth):
+    - **admin** &mdash; worst of service health (`service-health` verdict),
+      data freshness (last refresh), licensing (seats vs. companies).
+    - **analyst** &mdash; unreviewed model DMAAIs + cardex-drift count +
+      roll-forward break for the scoped companies/open period. *(This is the
+      per-company "needs attention" signal the Analyst lane has been waiting
+      on — defining it here settles it.)*
+    - **finance** &mdash; count of accounts out of balance for the open
+      period (the same count item (1) above anticipates).
+  - `db` &mdash; install facts for the **Database card's meta strip** in the
+    Scope hub (data currency, history-from, size, SQL engine/edition/build +
+    compat level, environment). `engine`/`edition`/`productVersion` come from
+    `SERVERPROPERTY('ProductLevel'|'Edition'|'ProductVersion')`; `compatLevel`
+    from `sys.databases.compatibility_level`; `sizePretty` from `sp_spaceused`;
+    `dataFrom` from the earliest period in the data; `refreshedAt` from the
+    last completed refresh. The exact **`productVersion`** is the build a
+    support ticket asks for ("what SQL version is the customer on?") &mdash;
+    surface it verbatim so it's copyable. All fields optional; V8 hides a fact
+    it doesn't get and falls back to `/poll` for `refreshedAt`. `environment`
+    is also derivable client-side from the DB name suffix, so it shows even
+    with no endpoint. These are non-sensitive install facts shown to **every**
+    role &mdash; no gating; a finance user simply skims past the SQL line.
+    Verify `rruser` can read the `SERVERPROPERTY`/`sp_spaceused` calls
+    agent-side before relying on them.
+- **Graceful fallback:** `loadHomeStatusSummary()` calls this once on load
+  (and on DB switch). If the endpoint is absent/unreachable (older jar), the
+  pills stay at their neutral identity color and each unauthorized lane shows
+  a plain "You don't have access to this section" note — no placeholder
+  counts, nothing faked. The page is fully functional without it.
+
+---
+
+## Cardex materiality tolerance (per-company status threshold)
+
+**Status: agent built (RapidReconciler-Agent) + table applied to the local
+DBs; V8 UI wiring in progress.** Cardex drift (per-item perpetual vs. F4111)
+is never truly zero in steady state, so a binary "any `CardexVar` &ne; 0 &rarr;
+red" makes the Cardex Variance status permanently red (and contradicts the
+"All clear" Analyst pill). Instead, each company carries an analyst-set
+**materiality tolerance**: the status reads **green while that company's total
+`|CardexVar|` is at/under its tolerance, red when over**. Per-company (chosen
+over a single total so it's robust to company-scope changes).
+
+- **Storage:** `dbo.RCardexTolerance` (one row per company; `Tolerance`
+  `decimal(18,2)`, default/absent = **0 = strict**, so no false greens until a
+  threshold is deliberately set). DDL ships in
+  `RapidReconciler-Agent/setup/sql/create-cardex-tolerance-table.sql`, applied
+  per-DB like the DMAAI overlay tables.
+- **Endpoints** (agent-direct; in `RR_TEST_AGENT_AREAS` &rarr;
+  `inventory/cardex-tolerance`):
+    - `GET /inventory/cardex-tolerance` &rarr; `{ "data": [ { "company",
+      "tolerance", "updatedBy", "updatedDate" } ] }`. **Any authenticated
+      role**; JWT-scoped to the caller's allowed companies. Only *set* rows are
+      returned — the UI defaults an unset company to 0.
+    - `PUT /inventory/cardex-tolerance` body `{ "company", "tolerance" }`
+      &rarr; the upserted row. **Analyst-gated** (`perms.dm`, or admin/
+      superuser); can only set a company in the caller's own scope. (Added
+      `dmaais` to the agent's `UserRequest` from `dbs[i].perms.dm`, fail-open
+      when the token has no `perms` block — matches the UI's `canAnalyst`.)
+- **Status rule** (UI): the Cardex Variance card/lane is green only when
+  **every** in-scope company's total `|CardexVar|` is within its own tolerance.
+  Home reads the tolerances and the per-company variance (from the roll-forward
+  rows); the Cardex Variance page (`inventory-cardex-variance.html`) hosts the
+  editable per-company threshold next to its "Total variance" KPI.
+- **Graceful fallback:** if the endpoint is absent, the UI treats every
+  tolerance as 0 (today's strict behavior) — nothing breaks.
+
+---
+
 ## Restart Services instance (self-serve, VALC-orchestrated)
 
 **Status: SHIPPED (B1a, local path) — VALC endpoint live.** The VALC

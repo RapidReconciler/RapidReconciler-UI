@@ -76,6 +76,16 @@
   .kpi .lbl { font-size:10px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); }
   .kpi .val { font-family:'JetBrains Mono',ui-monospace,monospace; font-weight:700; font-size:17px; color:var(--navy); font-variant-numeric:tabular-nums; }
   .kpi .val.neg { color:var(--red); }
+  /* Per-company cardex materiality tolerance editor (by the KPIs). */
+  .cx-tol .val.cx-tol-row { display:inline-flex; align-items:center; gap:6px; }
+  .cx-tol-dot { display:inline-block; width:9px; height:9px; border-radius:50%; background:var(--text-muted); margin-right:5px; vertical-align:middle; }
+  .cx-tol-dot.green { background:var(--green); }
+  .cx-tol-dot.red { background:var(--red); }
+  .cx-tol-input { width:84px; font-family:'JetBrains Mono',ui-monospace,monospace; font-weight:700; font-size:14px; color:var(--navy); text-align:right; border:1px solid var(--rule-strong); border-radius:6px; padding:3px 7px; background:var(--bg-card); }
+  .cx-tol-input:disabled { background:var(--grey-pale); color:var(--text-muted); }
+  .cx-tol-save { padding:4px 9px; font-size:11.5px; }
+  .cx-tol-save:disabled { opacity:.5; cursor:not-allowed; }
+  .cx-tol-hint { font-size:10.5px; color:var(--text-muted); font-style:italic; }
 
   /* analysis card */
   .analysis { background:var(--bg-card); border:1px solid var(--rule); border-radius:14px; box-shadow:var(--shadow-sm); padding:18px 20px; margin-bottom:18px; }
@@ -269,6 +279,14 @@
     <span class="kpi"><span class="lbl">Total variance</span><span class="val" id="kpiVar">&mdash;</span></span>
     <span class="kpi" style="margin-left:22px;"><span class="lbl">Items</span><span class="val" id="kpiItems">&mdash;</span></span>
     <span class="kpi" style="margin-left:22px;"><span class="lbl">Accounts</span><span class="val" id="kpiAccts">&mdash;</span></span>
+    <span class="kpi cx-tol" id="cxTolWrap" style="margin-left:22px;">
+      <span class="lbl"><span class="cx-tol-dot" id="cxTolDot"></span>Tolerance</span>
+      <span class="val cx-tol-row">
+        <input type="text" id="cxTolInput" class="cx-tol-input" inputmode="decimal" autocomplete="off" placeholder="set&hellip;">
+        <button type="button" class="btn cx-tol-save" id="cxTolSave">Save</button>
+        <span class="cx-tol-hint" id="cxTolHint">pick a company</span>
+      </span>
+    </span>
   </div>
 
   <section class="analysis" id="analysis"><div class="empty">Loading&hellip;</div></section>
@@ -353,6 +371,7 @@
   var itemExpanded = {};         // item key -> true when a multi-lot item is expanded
   var state = { company:'', search:'', groupBy:'pattern' };
   var _scopeInit = false;
+  var _cxTol = {};   // company -> materiality tolerance (GET /inventory/cardex-tolerance; absent = 0 = strict)
   // ---- company scope: the [All|co|co] filter IS the scope control; reads/writes
   //      the shared session scope so it syncs with Home + the other analyst pages. ----
   function _scopeCtx(){
@@ -519,6 +538,40 @@
     else { k1.textContent=curMoney(v); k1.classList.toggle('neg',v<0); }
     document.getElementById('kpiItems').textContent=items.toLocaleString('en-US');
     document.getElementById('kpiAccts').textContent=accts;
+    renderTol(s);
+  }
+  // Per-company cardex materiality tolerance: green while a company's net
+  // |variance| is at/under its tolerance, red when over. Editable only when a
+  // single company is picked (per-company grain); "All" shows the aggregate
+  // (green only if every in-scope company is within its own).
+  function renderTol(s){
+    s = s || scoped();
+    var dot=document.getElementById('cxTolDot'), inp=document.getElementById('cxTolInput'),
+        save=document.getElementById('cxTolSave'), hint=document.getElementById('cxTolHint');
+    if(!dot||!inp||!save||!hint) return;
+    var byCo={}; s.forEach(function(r){ var co=String(r.CompanyNumber||''); byCo[co]=(byCo[co]||0)+(Number(r.AdjAmount)||0); });
+    var tolOf=function(co){ return (_cxTol[co]!=null)?_cxTol[co]:0; };
+    var isOver=function(co){ return Math.abs(byCo[co]||0) > tolOf(co)+0.005; };
+    var co=state.company;
+    if(co){
+      var v=Math.abs(byCo[co]||0), tol=tolOf(co);
+      inp.disabled=false; save.disabled=false; hint.style.display='none';
+      if(document.activeElement!==inp) inp.value = tol ? String(tol) : '';
+      dot.className='cx-tol-dot '+(v>tol+0.005?'red':'green');
+      dot.title=co+': net |variance| '+curMoney(v)+' vs tolerance '+curMoney(tol);
+    } else {
+      inp.disabled=true; save.disabled=true; inp.value=''; hint.style.display='';
+      var anyOver=Object.keys(byCo).some(isOver);
+      dot.className='cx-tol-dot '+(anyOver?'red':'green');
+      dot.title=anyOver?'One or more companies over their cardex tolerance':'All in-scope companies within tolerance';
+    }
+  }
+  function loadCxTol(){
+    agentFetch('/inventory/cardex-tolerance').then(function(resp){
+      var rows=(resp&&resp.data)||[]; var m={};
+      rows.forEach(function(t){ if(t&&t.company!=null) m[String(t.company)]=Number(t.tolerance)||0; });
+      _cxTol=m; renderTol();
+    }).catch(function(){ /* endpoint absent -> tolerances default 0 (strict) */ });
   }
   function renderAnalysis(){
     var host=document.getElementById('analysis'); if(!host) return;
@@ -882,6 +935,23 @@
   document.getElementById('groupBy').addEventListener('click',function(e){ var b=e.target.closest('.seg-btn'); if(!b) return;
     state.groupBy=b.getAttribute('data-grp')||'pattern'; this.querySelectorAll('.seg-btn').forEach(function(x){x.classList.toggle('is-on',x===b);}); renderGrid(); });
   document.getElementById('exportBtn').addEventListener('click',exportXlsx);
+  // Save the picked company's cardex tolerance (analyst-gated server-side).
+  (function(){
+    var save=document.getElementById('cxTolSave'), inp=document.getElementById('cxTolInput');
+    if(!save||!inp) return;
+    function commit(){
+      var co=state.company; if(!co) return;
+      var tol=Number((inp.value||'').replace(/,/g,'').trim());
+      if(!isFinite(tol)||tol<0){ toast('Enter a tolerance of 0 or more.'); return; }
+      save.disabled=true;
+      agentFetch('/inventory/cardex-tolerance',{method:'PUT',body:{company:co,tolerance:tol}})
+        .then(function(){ _cxTol[co]=tol; toast('Cardex tolerance saved for company '+co+'.'); renderKpis(); })
+        .catch(function(err){ toast('Couldn’t save tolerance: '+esc(err.message)); })
+        .then(function(){ save.disabled=false; });
+    }
+    save.addEventListener('click',commit);
+    inp.addEventListener('keydown',function(e){ if(e.key==='Enter') commit(); });
+  })();
   document.getElementById('rfBody').addEventListener('click',function(e){
     var d=e.target.closest('[data-detail-id],[data-detail-item]'); if(d){ openDetail(d); return; }
     var a=e.target.closest('[data-adjust]'); if(a){ openAdjust(a.getAttribute('data-adjust')); return; }
@@ -903,6 +973,7 @@
     if(pop&&!pop.contains(e.target)&&!e.target.closest('[data-detail-id],[data-detail-item]')) closeDetail(); });
 
   reload();
+  loadCxTol();
 })();
 </script>
 </body>

@@ -156,7 +156,12 @@ window.RR_TEST_AGENT_AREAS = [
   'inventory/integrity/model-baseline',
   // Data purge — current cutoff/size/dates + set-cutoff write
   'inventory/integrity/purge-info',
-  'inventory/integrity/purge-cutoff'
+  'inventory/integrity/purge-cutoff',
+  // Home awareness pills — role-agnostic cross-section status roll-up
+  // (readable by any authenticated role; actions stay gated). See API.md.
+  'home/status-summary',
+  // Per-company cardex materiality tolerance (GET any role; PUT analyst-gated).
+  'inventory/cardex-tolerance'
 ];
 
 // Endpoints with a variable path segment that rrFetch needs to route
