@@ -349,10 +349,37 @@
 (function () {
   'use strict';
   var DATA = [];                 // worklist data rows (Reason <> 'Reset:')
-  var collapsed = {};            // group key -> true when collapsed
+  var collapsed = {};            // group key -> false when explicitly expanded; default (absent/true) = collapsed
   var itemExpanded = {};         // item key -> true when a multi-lot item is expanded
-  var _collapseInit = false;     // default-collapse all accounts on first load only
   var state = { company:'', search:'', groupBy:'pattern' };
+  var _scopeInit = false;
+  // ---- company scope: the [All|co|co] filter IS the scope control; reads/writes
+  //      the shared session scope so it syncs with Home + the other analyst pages. ----
+  function _scopeCtx(){
+    try{
+      var token=localStorage.getItem('rrv8.token'); if(!token) return null;
+      var b64=token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'); var pad=b64.length%4; if(pad) b64+='='.repeat(4-pad);
+      var p=JSON.parse(decodeURIComponent(atob(b64).split('').map(function(c){return '%'+('00'+c.charCodeAt(0).toString(16)).slice(-2);}).join('')));
+      var dbs=p.dbs||[]; var idx=Number(p.activeDbIndex)||0; var dbObj=dbs[idx]||dbs[0]||{};
+      var mode=(window.RR_CONFIG&&RR_CONFIG.mode)||'demo';
+      return { key:'rrv8.scope.v1.'+mode+'.'+((dbObj.n)||'_')+'.scope', allowed:(Array.isArray(dbObj.i)?dbObj.i.map(String):[]) };
+    }catch(_){ return null; }
+  }
+  function readScopeCompany(){
+    var ctx=_scopeCtx(); if(!ctx) return '';
+    try{ var raw=sessionStorage.getItem(ctx.key); var sc=raw?(JSON.parse(raw).payload||null):null;
+      var act=(sc&&Array.isArray(sc.activeCompanies)&&sc.activeCompanies.length)?sc.activeCompanies.map(String):null;
+      if(!act) return ''; if(ctx.allowed.length && act.length>=ctx.allowed.length) return '';
+      return act.length===1?act[0]:'';
+    }catch(_){ return ''; }
+  }
+  function writeScopeCompany(co){
+    var ctx=_scopeCtx(); if(!ctx) return;
+    try{ var raw=sessionStorage.getItem(ctx.key); var cur=raw?(JSON.parse(raw).payload||{}):{};
+      cur.activeCompanies = co?[String(co)]:ctx.allowed.slice();
+      sessionStorage.setItem(ctx.key, JSON.stringify({ts:Date.now(), payload:cur}));
+    }catch(_){}
+  }
   var adj = { itemId:null, preset:'manual' };
   var resetDate = '';            // baseline/opening date from the '00000' Reset: row
 
@@ -527,7 +554,7 @@
       var its=groups[k];
       its.sort(function(a,b){ return String(a.itemNumber).localeCompare(String(b.itemNumber),undefined,{numeric:true}); });  // default sort by item
       var sub=its.reduce(function(s,it){return s+it.amt;},0);
-      var isCol=searching ? false : !!collapsed[k];
+      var isCol=searching ? false : (collapsed[k] !== false);   // default collapsed; only an explicit expand (false) opens a group
       var label, meta;
       if(byPattern){ var p=PATTERNS[PATTERN_IX[k]]; label='<span class="gname">'+esc(p?p.name:k)+'</span>'; meta=its.length+' item'+(its.length!==1?'s':''); }
       else { var a0=its[0]; label='<span class="acct">'+esc(a0.longAccount)+'</span>'; meta='Co '+esc(a0.company)+' &middot; '+its.length+' item'+(its.length!==1?'s':''); }
@@ -579,8 +606,8 @@
   function buildPicker(){
     var cos=Array.from(new Set(DATA.map(function(r){return r.CompanyNumber;}))).sort();
     var host=document.getElementById('companyPick');
-    host.innerHTML='<button type="button" class="seg-btn is-on" data-co="">All</button>'+
-      cos.map(function(c){return '<button type="button" class="seg-btn" data-co="'+esc(c)+'">'+esc(c)+'</button>';}).join('');
+    host.innerHTML='<button type="button" class="seg-btn'+(state.company===''?' is-on':'')+'" data-co="">All</button>'+
+      cos.map(function(c){return '<button type="button" class="seg-btn'+(String(c)===state.company?' is-on':'')+'" data-co="'+esc(c)+'">'+esc(c)+'</button>';}).join('');
   }
 
   // ---- excel export ----
@@ -822,7 +849,7 @@
     DATA=rows.filter(function(r){ return String(r.Reason||'').trim()!=='Reset:'; });
     // Default-collapse every account on first load (page open); later reloads
     // (after an adjust/undo) keep whatever the analyst had expanded.
-    if(!_collapseInit){ collapsed={}; DATA.forEach(function(r){ collapsed[acctKey(r)]=true; }); _collapseInit=true; }
+    if(!_scopeInit){ state.company = readScopeCompany(); _scopeInit=true; }   // open on the shared scope (once; respect later user picks)
     buildPicker(); renderAll();
   }
   function loadWorklist(){
@@ -848,7 +875,9 @@
 
   // ---- wire ----
   document.getElementById('companyPick').addEventListener('click',function(e){ var b=e.target.closest('.seg-btn'); if(!b) return;
-    state.company=b.getAttribute('data-co')||''; this.querySelectorAll('.seg-btn').forEach(function(x){x.classList.toggle('is-on',x===b);}); renderAll(); });
+    state.company=b.getAttribute('data-co')||'';
+    writeScopeCompany(state.company);   // sync the selection back to the shared scope (Home + other pages follow)
+    this.querySelectorAll('.seg-btn').forEach(function(x){x.classList.toggle('is-on',x===b);}); renderAll(); });
   document.getElementById('search').addEventListener('input',function(){ state.search=this.value; renderGrid(); });
   document.getElementById('groupBy').addEventListener('click',function(e){ var b=e.target.closest('.seg-btn'); if(!b) return;
     state.groupBy=b.getAttribute('data-grp')||'pattern'; this.querySelectorAll('.seg-btn').forEach(function(x){x.classList.toggle('is-on',x===b);}); renderGrid(); });
@@ -856,7 +885,7 @@
   document.getElementById('rfBody').addEventListener('click',function(e){
     var d=e.target.closest('[data-detail-id],[data-detail-item]'); if(d){ openDetail(d); return; }
     var a=e.target.closest('[data-adjust]'); if(a){ openAdjust(a.getAttribute('data-adjust')); return; }
-    var g=e.target.closest('tr.grp'); if(g){ var k=g.getAttribute('data-grp'); collapsed[k]=!collapsed[k]; renderGrid(); return; }
+    var g=e.target.closest('tr.grp'); if(g){ var k=g.getAttribute('data-grp'); collapsed[k]=(collapsed[k]===false); renderGrid(); return; }
     var ih=e.target.closest('tr.itemhdr'); if(ih){ var ik=ih.getAttribute('data-item'); itemExpanded[ik]=!itemExpanded[ik]; renderGrid(); }
   });
   document.getElementById('ledgerBody').addEventListener('click',function(e){ var u=e.target.closest('[data-undo]'); if(u) undoAdjust(u.getAttribute('data-undo')); });

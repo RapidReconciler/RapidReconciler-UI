@@ -325,6 +325,7 @@ per-visit &ldquo;find,&rdquo; not a saved preference.
 | `accounting-dmaais.html` (module grids) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Reference implementation for column filter |
 | `inventory-asof.html` (Details grid) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Adds row-expand for lot detail (item rollup is the default view) |
 | `inventory-cardex-variance.html` (Details grid) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Default sort: adjAmount desc (biggest hits first). Reason chip on Amount/Quantity. Hero pairs Recon-authoritative cardex impact with the per-item grid sum. |
+| `inventory-account-rollforward.html` (Roll forward grid) | ✓ | ✓ | &mdash; | ✓ | ✓ | &mdash; | Read-only analyst grid. Header cluster (search + Excel + count), click-to-sort, sticky header, search. Drag-reorder / column chooser / per-column filter intentionally omitted — every roll-forward column is signal, so hide/reorder add little here. |
 | `inventory-reconciliation.html` (variance Preview tables) | &mdash; | &mdash; | &mdash; | &mdash; | &mdash; | &mdash; | Different surface (modal); revisit when modal grids get standardized |
 
 ## Conventions we&rsquo;ve NOT yet decided

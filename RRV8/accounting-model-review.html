@@ -341,10 +341,14 @@
       if (!map[key]) map[key] = { co: co, gl: gl, items: 0 };
       map[key].items++;
     });
-    var groups = Object.keys(map).map(function (k) { return map[k]; }).sort(function (a, b) { return b.items - a.items; });
-    var html = '<div class="tbl-wrap"><table><thead><tr><th>GL class</th><th>Company</th><th style="text-align:right">Items excluded</th></tr></thead><tbody>' +
+    // Company-first, sorted by company (then biggest exclusion within a company).
+    var groups = Object.keys(map).map(function (k) { return map[k]; }).sort(function (a, b) {
+      var c = String(a.co).localeCompare(String(b.co), undefined, { numeric: true }); if (c) return c;
+      return b.items - a.items;
+    });
+    var html = '<div class="tbl-wrap"><table><thead><tr><th>Company</th><th>GL class</th><th style="text-align:right">Items excluded</th></tr></thead><tbody>' +
       groups.map(function (g) {
-        return '<tr><td>' + esc(g.gl || '(blank)') + '</td><td>' + esc(g.co) + '</td><td style="text-align:right">' + g.items.toLocaleString('en-US') + '</td></tr>';
+        return '<tr><td>' + esc(g.co) + '</td><td>' + esc(g.gl || '(blank)') + '</td><td style="text-align:right">' + g.items.toLocaleString('en-US') + '</td></tr>';
       }).join('') +
       '</tbody></table></div>' +
       '<div class="tbl-foot">' + groups.length + ' GL class' + (groups.length === 1 ? '' : 'es') + ' excluded &middot; ' +
@@ -368,12 +372,17 @@
     if (docTypes.length) bits.push('document type ' + esc(docTypes.join(', ')));
     var caption = bits.length ? '<div class="tbl-cap">Model DMAAI ' + bits.join(' &middot; ') + '</div>' : '';
 
-    var shown = rows.slice(0, TABLE_CAP);
+    // Company-first ordering (company, then GL class) before the display cap.
+    var sorted = rows.slice().sort(function (a, b) {
+      var c = String(field(a, 'CompanyNumber')).localeCompare(String(field(b, 'CompanyNumber')), undefined, { numeric: true }); if (c) return c;
+      return String(field(a, 'GLClass')).localeCompare(String(field(b, 'GLClass')), undefined, { numeric: true, sensitivity: 'base' });
+    });
+    var shown = sorted.slice(0, TABLE_CAP);
     var html = caption + '<div class="tbl-wrap"><table><thead><tr>' +
       '<th>Company</th><th>GL class</th><th>Account</th><th>Account name</th><th>Review</th><th>Requested change</th>' +
       '</tr></thead><tbody>' +
       shown.map(function (r) {
-        var co = field(r, 'CompanyNumber'), gl = field(r, 'GLCLass');
+        var co = field(r, 'CompanyNumber'), gl = field(r, 'GLClass');
         var acct = field(r, 'LongAccount'), desc = field(r, 'AccountDescription');
         var rev = _reviews[co + '|' + gl];
         var status = rev ? rev.status : '';
