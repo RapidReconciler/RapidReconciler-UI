@@ -458,6 +458,7 @@
       $('approveBtn').textContent = 'Approve the model';
       $('approveHint').textContent = '';
     }
+    applyScopedStats();   // if companies are scoped, the headline counts follow the tables
   }
 
   function loadStatus() {
@@ -476,17 +477,52 @@
       .catch(function (err) { toast('Approval failed: ' + String(err && err.message || err)); btn.disabled = false; });
   }
 
-  // --- Company filter: a review aid that narrows both tables. Both datasets
-  // are kept whole; the picker just re-renders a company-scoped slice. Not
-  // permission-tied — the verdict + stats stay model-level. ---
+  // --- Company scope + local filter. The page honors the shared working-
+  // company scope (set on Home, via sidebar.js): the tables + headline stats
+  // show only the in-scope companies. WITHIN that, the picker is a local
+  // review aid that drills to a single company. Both datasets are kept whole;
+  // rendering applies scope first, then the picker. ---
   var _r3Rows = [], _r1Rows = [], _company = '';
+  var _r1Loaded = false, _r3Loaded = false;
   // Per-row reviews, keyed "company|glClass". Loaded from the agent; the
   // change report + the sign-off gate read from here.
   var _reviews = Object.create(null), _openChanges = 0;
 
+  // Active working-company scope as a lookup, or null when all allowed
+  // companies are selected (no narrowing). Mirrors home.html scopedCompanySet
+  // so this page narrows to the exact set chosen on Home.
+  function scopedCompanySet() {
+    var sc = (window.RRV8 && window.RRV8.readSessionScope) ? window.RRV8.readSessionScope() : null;
+    if (!sc) return null;
+    var act = (sc.activeCompanies || []).map(String);
+    var allow = (sc.allowedCompanies || []).map(String);
+    if (!act.length) return null;
+    if (allow.length && act.length >= allow.length) return null;   // all selected = no narrowing
+    return act.reduce(function (s, c) { s[String(c)] = true; return s; }, {});
+  }
+  function inScope(rows) {
+    var sc = scopedCompanySet();
+    if (!sc) return rows;
+    return rows.filter(function (r) { return sc[String(field(r, 'CompanyNumber'))]; });
+  }
+  // When scoped, recompute the headline numbers from the in-scope rows so they
+  // match the tables. Unscoped, leave the model-level counts from /model-approval.
+  function applyScopedStats() {
+    if (!scopedCompanySet()) return;
+    if (_r1Loaded) { var e1 = $('statR1'); if (e1) e1.textContent = inScope(_r1Rows).length.toLocaleString('en-US'); }
+    if (_r3Loaded) {
+      var seen = Object.create(null), n3 = 0;
+      inScope(_r3Rows).forEach(function (r) {
+        var k = String(field(r, 'CompanyNumber')) + '|' + String(field(r, 'GLClass'));
+        if (!seen[k]) { seen[k] = 1; n3++; }
+      });
+      var e3 = $('statR3'); if (e3) { e3.textContent = n3.toLocaleString('en-US'); e3.className = 'stat-n' + (n3 > 0 ? ' warn' : ''); }
+    }
+  }
+
   function distinctCompanies() {
     var seen = Object.create(null), out = [];
-    _r1Rows.concat(_r3Rows).forEach(function (r) {
+    inScope(_r1Rows.concat(_r3Rows)).forEach(function (r) {
       var c = field(r, 'CompanyNumber');
       if (c && !seen[c]) { seen[c] = 1; out.push(c); }
     });
@@ -495,12 +531,13 @@
   function rebuildCompanyPicker() {
     var cos = distinctCompanies(), sel = $('companyPick');
     if (cos.length < 2) { $('filterBar').hidden = true; return; }   // nothing to pick between
-    if (_company && cos.indexOf(_company) === -1) _company = '';     // prior pick no longer present
-    sel.innerHTML = '<option value="">All companies</option>' +
+    if (_company && cos.indexOf(_company) === -1) _company = '';     // prior pick no longer present (or now out of scope)
+    sel.innerHTML = '<option value="">' + (scopedCompanySet() ? 'All companies in scope' : 'All companies') + '</option>' +
       cos.map(function (c) { return '<option value="' + esc(c) + '"' + (c === _company ? ' selected' : '') + '>' + esc(c) + '</option>'; }).join('');
     $('filterBar').hidden = false;
   }
   function byCompany(rows) {
+    rows = inScope(rows);                          // honor the Home working-company scope first
     if (!_company) return rows;
     return rows.filter(function (r) { return field(r, 'CompanyNumber') === _company; });
   }
@@ -508,10 +545,12 @@
     renderExcluded($('r3Body'), byCompany(_r3Rows),
       _company ? ('No excluded GL classes for company ' + _company + '.')
                : 'No excluded GL classes — every GL class used in inventory is in the model.');
+    applyScopedStats();
   }
   function renderR1() {
     renderBaseline($('r1Body'), byCompany(_r1Rows),
       _company ? ('No model mappings for company ' + _company + '.') : 'The model baseline is empty.');
+    applyScopedStats();
   }
 
   // --- Per-row review: persist a verdict, recompute the change gate. ---
@@ -611,10 +650,10 @@
       (rows || []).forEach(function (rv) { _reviews[reviewKey(rv)] = rv; });
       renderR1(); applyGate();
     }).catch(function () { /* reviews unavailable on this DB — grid still loads, gate stays open */ });
-    integrityRows('v_integrity3_exc_glc').then(function (rows) { _r3Rows = rows || []; rebuildCompanyPicker(); renderR3(); })
+    integrityRows('v_integrity3_exc_glc').then(function (rows) { _r3Rows = rows || []; _r3Loaded = true; rebuildCompanyPicker(); renderR3(); })
       .catch(function () { $('r3Body').innerHTML = '<div class="empty">Couldn’t load excluded GL classes.</div>'; });
     // Lean baseline: agent returns Company / GL class / Account / Account name (+ Table/DocType for the caption).
-    rrFetch('inventory/integrity/model-baseline').then(pluck).then(function (rows) { _r1Rows = rows || []; rebuildCompanyPicker(); renderR1(); })
+    rrFetch('inventory/integrity/model-baseline').then(pluck).then(function (rows) { _r1Rows = rows || []; _r1Loaded = true; rebuildCompanyPicker(); renderR1(); })
       .catch(function () { $('r1Body').innerHTML = '<div class="empty">Couldn’t load the model baseline.</div>'; });
   }
 

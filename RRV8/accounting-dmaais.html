@@ -2293,6 +2293,23 @@
     } catch (_) {}
   }
 
+  // --- Shared working-company scope (set on Home, owned by sidebar.js). The
+  // page filters everything to the in-scope companies; the local company pill
+  // is a drill WITHIN that set, and is ignored if it falls out of scope. ---
+  function scopedCompanySet() {
+    const sc = (window.RRV8 && window.RRV8.readSessionScope) ? window.RRV8.readSessionScope() : null;
+    if (!sc) return null;
+    const act = (sc.activeCompanies || []).map(String);
+    const allow = (sc.allowedCompanies || []).map(String);
+    if (!act.length) return null;
+    if (allow.length && act.length >= allow.length) return null;   // all selected = no narrowing
+    return act.reduce((s, c) => { s[String(c)] = true; return s; }, {});
+  }
+  function inScopeCo(co) { const s = scopedCompanySet(); return !s || !!s[String(co)]; }
+  // The local pill only applies when it's within the current scope; a stale
+  // out-of-scope pick (persisted from another session) is ignored.
+  function effPageCompany() { return (_pageCompanyFilter && inScopeCo(_pageCompanyFilter)) ? _pageCompanyFilter : null; }
+
   function getAvailableCompanies() {
     const set = new Set();
     const a = window._dmaaiAnalysis;
@@ -2304,36 +2321,41 @@
       const rows = (_gridState[m] && _gridState[m].rows) || [];
       rows.forEach(r => { if (r.companyNumber) set.add(r.companyNumber); });
     });
-    return Array.from(set).sort();
+    return Array.from(set).filter(inScopeCo).sort();   // only companies in the Home scope
   }
 
   function findingPassesCompanyFilter(f) {
-    if (!_pageCompanyFilter) return true;
+    if (f.company != null && !inScopeCo(f.company)) return false;   // honor Home working-company scope
+    const pc = effPageCompany();
+    if (!pc) return true;
     if (f.company == null) return true;        // cross-company finding (e.g. unrec)
-    return f.company === _pageCompanyFilter;
+    return f.company === pc;
   }
   function rowPassesCompanyFilter(r) {
-    if (!_pageCompanyFilter) return true;
-    return r.companyNumber === _pageCompanyFilter;
+    if (!inScopeCo(r.companyNumber)) return false;   // honor Home working-company scope
+    const pc = effPageCompany();
+    return !pc || r.companyNumber === pc;
   }
 
   function paintCompanyPill() {
     const pill = document.getElementById('js-company-pill');
     const val  = document.getElementById('js-company-pill-value');
-    if (val) val.textContent = _pageCompanyFilter || 'All';
-    if (pill) pill.classList.toggle('is-narrowed', !!_pageCompanyFilter);
+    const pc = effPageCompany();
+    if (val) val.textContent = pc || (scopedCompanySet() ? 'All in scope' : 'All');
+    if (pill) pill.classList.toggle('is-narrowed', !!pc);
   }
 
   function openCompanyPopover(anchor) {
     const pop = document.getElementById('company-popover');
     if (!pop) return;
     const companies = getAvailableCompanies();
+    const pc = effPageCompany();
     const rows = [
       '<div class="popover-section-label">Company</div>',
-      '<div class="popover-row' + (!_pageCompanyFilter ? ' is-active' : '') + '" data-co="">All companies</div>',
+      '<div class="popover-row' + (!pc ? ' is-active' : '') + '" data-co="">' + (scopedCompanySet() ? 'All companies in scope' : 'All companies') + '</div>',
       '<div class="popover-section">',
         ...companies.map(co =>
-          '<div class="popover-row' + (co === _pageCompanyFilter ? ' is-active' : '') + '" data-co="' + escapeHtml(co) + '">' +
+          '<div class="popover-row' + (co === pc ? ' is-active' : '') + '" data-co="' + escapeHtml(co) + '">' +
             escapeHtml(co) +
           '</div>'
         ),
@@ -3093,8 +3115,7 @@
   // what's actually selectable). Used to populate the filter popover.
   function distinctValuesForColumn(module, colKey) {
     const st = _gridState[module];
-    let rows = st.rows;
-    if (_pageCompanyFilter) rows = rows.filter(rowPassesCompanyFilter);
+    let rows = st.rows.filter(rowPassesCompanyFilter);   // honor Home scope + local drill
     const set = new Set();
     rows.forEach(r => {
       const v = colValue(r, colKey);
@@ -3123,10 +3144,7 @@
 
   function filteredRows(module) {
     const st = _gridState[module];
-    let rows = st.rows.slice();
-    if (_pageCompanyFilter) {
-      rows = rows.filter(rowPassesCompanyFilter);
-    }
+    let rows = st.rows.filter(rowPassesCompanyFilter);   // honor Home scope + local drill
     if (st.findingFocus) {
       rows = rows.filter(r => r._findingId === st.findingFocus);
     }

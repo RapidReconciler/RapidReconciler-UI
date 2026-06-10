@@ -372,8 +372,9 @@
   var state = { company:'', search:'', groupBy:'pattern' };
   var _scopeInit = false;
   var _cxTol = {};   // company -> materiality tolerance (GET /inventory/cardex-tolerance; absent = 0 = strict)
-  // ---- company scope: the [All|co|co] filter IS the scope control; reads/writes
-  //      the shared session scope so it syncs with Home + the other analyst pages. ----
+  // ---- company scope: the page honors the shared working-company scope (set on
+  //      Home) — it shows only the in-scope companies. The [All|co|co] control is a
+  //      local drill WITHIN that set; it does not write back to the shared scope. ----
   function _scopeCtx(){
     try{
       var token=localStorage.getItem('rrv8.token'); if(!token) return null;
@@ -384,21 +385,18 @@
       return { key:'rrv8.scope.v1.'+mode+'.'+((dbObj.n)||'_')+'.scope', allowed:(Array.isArray(dbObj.i)?dbObj.i.map(String):[]) };
     }catch(_){ return null; }
   }
-  function readScopeCompany(){
-    var ctx=_scopeCtx(); if(!ctx) return '';
+  // Active working-company scope as a {company:true} lookup, or null when all
+  // allowed companies are selected (no narrowing). Read-only — drilling on this
+  // page never rewrites the shared scope.
+  function scopedCompanySet(){
+    var ctx=_scopeCtx(); if(!ctx) return null;
     try{ var raw=sessionStorage.getItem(ctx.key); var sc=raw?(JSON.parse(raw).payload||null):null;
       var act=(sc&&Array.isArray(sc.activeCompanies)&&sc.activeCompanies.length)?sc.activeCompanies.map(String):null;
-      if(!act) return ''; if(ctx.allowed.length && act.length>=ctx.allowed.length) return '';
-      return act.length===1?act[0]:'';
-    }catch(_){ return ''; }
+      if(!act) return null; if(ctx.allowed.length && act.length>=ctx.allowed.length) return null;
+      return act.reduce(function(s,c){ s[String(c)]=true; return s; },{});
+    }catch(_){ return null; }
   }
-  function writeScopeCompany(co){
-    var ctx=_scopeCtx(); if(!ctx) return;
-    try{ var raw=sessionStorage.getItem(ctx.key); var cur=raw?(JSON.parse(raw).payload||{}):{};
-      cur.activeCompanies = co?[String(co)]:ctx.allowed.slice();
-      sessionStorage.setItem(ctx.key, JSON.stringify({ts:Date.now(), payload:cur}));
-    }catch(_){}
-  }
+  function inScopeCo(co){ var sc=scopedCompanySet(); return !sc || !!sc[String(co)]; }
   var adj = { itemId:null, preset:'manual' };
   var resetDate = '';            // baseline/opening date from the '00000' Reset: row
 
@@ -449,7 +447,7 @@
     { k:'_act',        label:'',         render:function(r){return '<button class="btn sm primary" data-adjust="'+esc(r.ItemID)+'">Adjust</button>';} }
   ];
 
-  function scoped(){ return state.company ? DATA.filter(function(r){return r.CompanyNumber===state.company;}) : DATA; }
+  function scoped(){ return DATA.filter(function(r){ return inScopeCo(r.CompanyNumber) && (!state.company || r.CompanyNumber===state.company); }); }
   // Free-text search across the human-meaningful fields; all tokens must match.
   function matchRow(r){
     var q=(state.search||'').trim().toLowerCase(); if(!q) return true;
@@ -657,9 +655,10 @@
 
   // ---- company picker ----
   function buildPicker(){
-    var cos=Array.from(new Set(DATA.map(function(r){return r.CompanyNumber;}))).sort();
+    var cos=Array.from(new Set(DATA.map(function(r){return r.CompanyNumber;}))).sort().filter(inScopeCo);
     var host=document.getElementById('companyPick');
-    host.innerHTML='<button type="button" class="seg-btn'+(state.company===''?' is-on':'')+'" data-co="">All</button>'+
+    var allLabel=scopedCompanySet()?'All in scope':'All';
+    host.innerHTML='<button type="button" class="seg-btn'+(state.company===''?' is-on':'')+'" data-co="">'+allLabel+'</button>'+
       cos.map(function(c){return '<button type="button" class="seg-btn'+(String(c)===state.company?' is-on':'')+'" data-co="'+esc(c)+'">'+esc(c)+'</button>';}).join('');
   }
 
@@ -902,8 +901,7 @@
     DATA=rows.filter(function(r){ return String(r.Reason||'').trim()!=='Reset:'; });
     // Default-collapse every account on first load (page open); later reloads
     // (after an adjust/undo) keep whatever the analyst had expanded.
-    if(!_scopeInit){ state.company = readScopeCompany(); _scopeInit=true; }   // open on the shared scope (once; respect later user picks)
-    buildPicker(); renderAll();
+    buildPicker(); renderAll();   // state.company defaults '' = all companies in scope
   }
   function loadWorklist(){
     return agentFetch('/inventory/integrity',{method:'POST',body:{report:'v6ui_itemrollintegritydialog'}})
@@ -928,8 +926,7 @@
 
   // ---- wire ----
   document.getElementById('companyPick').addEventListener('click',function(e){ var b=e.target.closest('.seg-btn'); if(!b) return;
-    state.company=b.getAttribute('data-co')||'';
-    writeScopeCompany(state.company);   // sync the selection back to the shared scope (Home + other pages follow)
+    state.company=b.getAttribute('data-co')||'';   // local drill within scope; not written back to the shared scope
     this.querySelectorAll('.seg-btn').forEach(function(x){x.classList.toggle('is-on',x===b);}); renderAll(); });
   document.getElementById('search').addEventListener('input',function(){ state.search=this.value; renderGrid(); });
   document.getElementById('groupBy').addEventListener('click',function(e){ var b=e.target.closest('.seg-btn'); if(!b) return;
