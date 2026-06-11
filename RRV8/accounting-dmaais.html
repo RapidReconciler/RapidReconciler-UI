@@ -1151,6 +1151,22 @@
     text-transform: uppercase;
     color: var(--navy);
   }
+  /* Read-only model sign-off badge on the Model tab (the approve action itself
+     lives on Model DMAAI Review). */
+  .model-verdict {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: 'Source Sans 3', sans-serif; font-weight: 700; font-size: 11.5px;
+    padding: 3px 11px; border-radius: 100px; margin-left: 12px;
+  }
+  .model-verdict svg { width: 12px; height: 12px; flex: 0 0 auto; }
+  .model-verdict a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+  .model-verdict.is-approved { background: var(--green-pale); color: var(--green-deep); }
+  .model-verdict.is-amber    { background: var(--orange-pale); color: var(--orange-deep); }
+  .model-verdict.is-none     { background: var(--bg-soft); color: var(--text-soft); border: 1px solid var(--rule); }
+  /* tiny dot on the Model tab pill so approval reads at a glance without opening the tab */
+  .tab-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-left: 5px; vertical-align: middle; }
+  .tab-dot.is-approved { background: var(--green); }
+  .tab-dot.is-amber    { background: var(--orange); }
   .grid-pill {
     display: inline-flex;
     align-items: center;
@@ -1758,6 +1774,7 @@
     <button class="tab-pill" type="button" role="tab" data-tab="model" aria-selected="false" title="Baseline AAI configuration — what the rules SHOULD look like, per (Company, TxComp, Table, OrderType, DocType, GLClass).">
       Model
       <span class="tab-count" id="js-tab-count-model">0</span>
+      <span class="tab-dot" id="js-tab-dot-model" hidden></span>
     </button>
     <button class="tab-pill" type="button" role="tab" data-tab="exception-gl" aria-selected="false" title="Items with GL classes not in the AAI master — item / lot-level setup issue distinct from the AAI rule findings.">
       Exception GL
@@ -1794,6 +1811,7 @@
     <section class="grid-card">
       <div class="grid-head">
         <span class="grid-title">Model &middot; F4095 baseline</span>
+        <span class="model-verdict" id="js-model-verdict" hidden></span>
         <div class="grid-state-cluster">
           <label class="grid-search" title="Search across visible columns">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="7" r="4"/><line x1="10" y1="10" x2="14" y2="14"/></svg>
@@ -2619,14 +2637,11 @@
       subline.innerHTML = html || 'Analysis loaded';
     }
     if (metaList) {
-      // Lean meta strip — date + scope. The audited count + the
-      // analyzer-internal categorisation are not finance-facing.
+      // Lean meta strip — analysis date + audited count. Company scope is shown
+      // by the company pill at the top of the page, so it's not repeated here.
       const items = [];
       if (meta.analysisDateLabel || meta.analysisDate) {
         items.push(['Last analyzed', meta.analysisDateLabel || meta.analysisDate]);
-      }
-      if (meta.scopedCompanies && meta.scopedCompanies.length) {
-        items.push(['Companies in scope', meta.scopedCompanies.join(', ')]);
       }
       if (meta.totalRows) {
         items.push(['Configurations audited', meta.totalRows.toLocaleString()]);
@@ -3862,6 +3877,48 @@
   (function wireModelExport() {
     const btn = document.getElementById('js-model-export-btn');
     if (btn) btn.addEventListener('click', exportModel);
+  })();
+
+  // Read-only model sign-off status on the Model tab. The approve/re-approve
+  // action lives on Model DMAAI Review; here we just note where the baseline
+  // stands (approved / changed-since-approval / not yet approved).
+  function renderModelVerdict(m) {
+    if (!m) return;
+    const el = document.getElementById('js-model-verdict');
+    const dot = document.getElementById('js-tab-dot-model');
+    if (!el) return;
+    const CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+    const vdate = iso => { try { return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }); } catch (_) { return iso || ''; } };
+    const vname = n => {
+      n = String(n || '').trim(); if (!n) return '';
+      if (n.indexOf('@') > 0) n = n.split('@')[0].replace(/[._]+/g, ' ');
+      return n.replace(/\b\w/g, c => c.toUpperCase());
+    };
+    if (m.state === 'approved') {
+      const by = vname(m.approvedBy), on = vdate(m.approvedDate);
+      el.className = 'model-verdict is-approved';
+      el.innerHTML = CHECK + 'Model approved' + (by ? ' &middot; ' + escapeHtml(by) : '') + (on ? ' &middot; ' + escapeHtml(on) : '');
+      el.title = m.note ? ('Sign-off note: ' + m.note) : 'The F4095 baseline has been reviewed and signed off on Model DMAAI Review.';
+      el.hidden = false;
+      if (dot) { dot.className = 'tab-dot is-approved'; dot.title = 'Model approved'; dot.hidden = false; }
+    } else if (m.state === 'needs-review') {
+      el.className = 'model-verdict is-amber';
+      el.innerHTML = 'Model changed since approval &mdash; <a href="accounting-model-review.html">re-approve</a>';
+      el.hidden = false;
+      if (dot) { dot.className = 'tab-dot is-amber'; dot.title = 'Model changed since approval'; dot.hidden = false; }
+    } else {
+      el.className = 'model-verdict is-none';
+      el.innerHTML = 'Not yet approved &mdash; <a href="accounting-model-review.html">sign off</a>';
+      el.hidden = false;
+    }
+  }
+  // Fire-and-forget; independent of the Model grid load. Demo has no sidecar
+  // for this read, and an unreachable DB just leaves the badge hidden (no noise).
+  (function loadModelApproval() {
+    if (IS_DEMO) return;
+    rrFetch('inventory/integrity/model-approval')
+      .then(renderModelVerdict)
+      .catch(() => {});
   })();
 
   // ============================================================

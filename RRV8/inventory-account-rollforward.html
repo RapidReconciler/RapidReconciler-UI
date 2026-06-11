@@ -30,7 +30,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Account Roll Forward &mdash; RapidReconciler</title>
 <link href="fonts/fonts.css" rel="stylesheet">
-<link href="../Tools/howto.css" rel="stylesheet">
 <script src="config.js"></script>
 <script src="vendor/xlsx.full.min.js" defer></script>
 <style>
@@ -103,11 +102,18 @@
   .ap-cause { display:flex; align-items:center; gap:9px; flex-wrap:wrap; font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:14px; color:var(--navy); }
   .ap-lever { font-size:10px; font-weight:800; letter-spacing:.05em; text-transform:uppercase; padding:2px 9px; border-radius:100px; background:var(--blue-pale); color:var(--blue); margin-left:auto; white-space:nowrap; }
   .ap-where { font-family:'JetBrains Mono',ui-monospace,monospace; font-weight:700; font-size:11.5px; color:var(--text-soft); margin-top:3px; }
+  .ap-where.ap-jump { cursor:pointer; display:inline-flex; align-items:center; gap:5px; border-radius:6px; padding:1px 5px; margin-left:-5px; transition:background .12s,color .12s; }
+  .ap-where.ap-jump:hover { color:var(--blue); background:var(--blue-pale); }
+  .ap-where.ap-jump .ap-jump-ico { width:11px; height:11px; opacity:.7; }
+  .ap-acct { font-family:'JetBrains Mono',ui-monospace,monospace; font-weight:700; font-size:12px; color:var(--blue); background:none; border:none; padding:0; cursor:pointer; text-decoration:underline; text-underline-offset:2px; }
+  .ap-acct:hover { color:var(--navy); }
   .ap-what { font-size:12.5px; color:var(--text); margin:7px 0 9px; line-height:1.5; }
   ol.ap-how { margin:0; padding-left:18px; }
   ol.ap-how li { font-size:12.5px; color:var(--text); line-height:1.5; margin-bottom:3px; }
   .ap-wait { display:flex; gap:8px; margin-top:10px; padding:9px 11px; border-radius:8px; background:var(--orange-pale); border:1px solid #f0d2a8; font-size:11.5px; color:#7a4a13; line-height:1.45; }
   .ap-wait b { color:var(--orange-deep); }
+  .ap-subhead { font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:10.5px; letter-spacing:.07em; text-transform:uppercase; color:var(--text-muted); margin:14px 0 8px; }
+  .ap-subhead:first-child { margin-top:2px; }
 
   /* grid card */
   .grid-card { background:var(--bg-card); border:1px solid var(--rule); border-radius:14px; box-shadow:var(--shadow-sm); overflow:hidden; }
@@ -164,25 +170,6 @@
   <nav class="breadcrumb"><a href="home.html">Inventory</a><span class="sep">/</span><span>Account Roll Forward</span></nav>
   <h1 class="page-title">Account Roll Forward</h1>
   <div class="page-eyebrow">The GL and perpetual roll-forward by account and period &mdash; how each account&rsquo;s beginning balance rolls to ending, whether GL and variance stay intact, and the cardex variance the per-item worklist reconciles to.</div>
-
-  <details class="howto">
-    <summary>
-      <span class="howto-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span>
-      How this works
-      <span class="howto-sub">GL &amp; perpetual roll-forward by account</span>
-      <svg class="howto-chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
-    </summary>
-    <div class="howto-body">
-      <p>Account Roll Forward shows how each account&rsquo;s balance rolls from one period to the next &mdash; on both the GL balance and the variance &mdash; and surfaces where a period didn&rsquo;t roll cleanly.</p>
-      <ol class="howto-steps">
-        <li><b>Pick the period</b> you&rsquo;re closing.</li>
-        <li><b>Read the light.</b> Green means GL and variance carried forward; red means a period broke &mdash; that&rsquo;s the row to work.</li>
-        <li><b>Find the break.</b> A failed carry-forward is usually unposted GL batches in the prior period &mdash; post them in JDE and refresh.</li>
-        <li><b>Drill to the items.</b> The account-level cardex variance here is the sum of the per-item drift &mdash; open <b>Cardex Variance</b> to work it item by item.</li>
-      </ol>
-      <div class="howto-foot">Runbook: <a href="../Scenarios/scenario-inventory-validation-red-variance.html" target="_blank" rel="noopener">Inventory validation light is red &rarr;</a></div>
-    </div>
-  </details>
 
   <div class="actions">
     <span class="picker-lbl">Company</span>
@@ -412,21 +399,53 @@
         'Clears on the next refresh after the repost. Don&rsquo;t Reload GL &mdash; the fix is in JD Edwards, not RapidReconciler&rsquo;s copy.'
       ];
     } else { // dataload
-      cause='RapidReconciler&rsquo;s GL copy is stale'; lever='Reload GL';
+      cause="RapidReconciler's GL copy is stale"; lever='Reload GL';
       var span='';
       if(sc.run && ser){ span=' ('+fmtDate(ser[sc.run[0]].PeriodEnds)+' &ndash; '+fmtDate(ser[sc.run[1]].PeriodEnds)+')'; }
       what='Account '+acct+' breaks across consecutive periods'+span+' with no posted activity to explain it &mdash; RapidReconciler&rsquo;s GL copy doesn&rsquo;t match JD Edwards. A normal refresh won&rsquo;t fix it.';
       how=[
         'Click <b>Reload GL Data</b> &mdash; it clears RapidReconciler&rsquo;s GL copy from the break period forward.',
-        'If the break is still red <i>after</i> the next refresh, escalate to GSI &mdash; at that point it&rsquo;s a real discrepancy, not a stale copy.'
+        'If the break is still red <i>after</i> the next refresh, the stale copy wasn&rsquo;t the cause &mdash; run <b>R099102 (Account Balance Repost)</b> for company '+co+' &middot; account '+acct+' to rebuild F0902 from the F0911 detail (proof mode first, then final mode with your JDE admin).'
       ];
       wait=AP_WAIT;
     }
     return '<div class="ap-card"><div class="ap-cause">'+esc(cause)+'<span class="ap-lever">'+lever+'</span></div>'+
-      '<div class="ap-where">Co '+co+' &middot; '+acct+' &middot; '+per+'</div>'+
+      '<div class="ap-where ap-jump" data-acct="'+acct+'" role="button" tabindex="0" title="Show this account&rsquo;s full history in the grid below">Co '+co+' &middot; '+acct+' &middot; '+per+
+        '<svg class="ap-jump-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg></div>'+
       '<div class="ap-what">'+what+'</div>'+
       '<ol class="ap-how">'+how.map(function(s){return '<li>'+s+'</li>';}).join('')+'</ol>'+
       wait+'</div>';
+  }
+
+  // ============ VarOK breaks — Daren's variance playbook ============
+  // A VarOK = "no" row is a period where RapidReconciler's own variance roll
+  // forward didn't carry (BegVar != prior Variance). That's an RR-internal
+  // continuity issue — the GL side is handled by the GL cards above — so the
+  // only two levers are an RR re-roll or a cardex rebuild. One summary card,
+  // re-roll first, Reload Cardex if a break doesn't hold. No per-cause split.
+  function varSummaryCard(varRows){
+    var n=varRows.length, coSet={}, acctSet={}, accts=[];
+    varRows.forEach(function(r){
+      coSet[String(r.CompanyNumber)]=1;
+      var k=r.CompanyNumber+'|'+r.LongAccount;
+      if(!acctSet[k]){ acctSet[k]=1; accts.push(String(r.LongAccount)); }
+    });
+    var cos=Object.keys(coSet).sort(function(a,b){ return a.localeCompare(b,undefined,{numeric:true}); });
+    var coList=cos.map(esc).join(', ');
+    var many=cos.length!==1;
+    var acctList=accts.slice(0,10).map(function(a){ return '<button type="button" class="ap-acct" data-acct="'+esc(a)+'" title="Show this account&rsquo;s full history in the grid below">'+esc(a)+'</button>'; }).join(', ')+(accts.length>10?(' +'+(accts.length-10)+' more'):'');
+    var cause='Variance roll-forward break'+(n!==1?'s':'');
+    var lever='Re-roll, then Reload Cardex';
+    var what=n+' account-period'+(n!==1?'s':'')+' where the variance didn&rsquo;t carry forward ('+acctList+'). The variance roll-forward is RapidReconciler&rsquo;s own perpetual history rather than the GL, so it&rsquo;s fixed inside RapidReconciler &mdash; there&rsquo;s nothing to post or repost in JD Edwards.';
+    var how=[
+      'Re-roll the affected compan'+(many?'ies':'y')+' &mdash; open <b>Companies</b>, click <b>Reroll</b> on '+(many?'companies ':'company ')+coList+', and confirm. It recomputes the perpetual balance from the baseline date forward (a few minutes; nothing changes in JD Edwards) and settles most variance breaks.',
+      'If a break still doesn&rsquo;t hold after the re-roll, delete and rebuild RapidReconciler&rsquo;s cardex with <b>Reload Cardex</b> from the break period forward, then refresh and re-check.'
+    ];
+    return '<div class="ap-card var"><div class="ap-cause">'+esc(cause)+'<span class="ap-lever">'+lever+'</span></div>'+
+      '<div class="ap-where">Co '+coList+' &middot; '+n+' break'+(n!==1?'s':'')+'</div>'+
+      '<div class="ap-what">'+what+'</div>'+
+      '<ol class="ap-how">'+how.map(function(s){return '<li>'+s+'</li>';}).join('')+'</ol>'+
+      '</div>';
   }
 
   // ---- render ----
@@ -471,11 +490,13 @@
     var actionPlan = '';
     if(!intact){
       var ser=periodSeries(), endIso=datasetEndIso();
-      var glRows=scope.filter(function(r){ return isNo(r.GLOK); }).sort(function(a,b){
+      var bySeriesOrder=function(a,b){
         var c=String(a.CompanyNumber).localeCompare(String(b.CompanyNumber),undefined,{numeric:true}); if(c) return c;
         c=String(a.LongAccount).localeCompare(String(b.LongAccount),undefined,{numeric:true,sensitivity:'base'}); if(c) return c;
         return String(a.PeriodEnds).localeCompare(String(b.PeriodEnds));
-      });
+      };
+      // GL roll-forward breaks
+      var glRows=scope.filter(function(r){ return isNo(r.GLOK); }).sort(bySeriesOrder);
       var seen={}, cards=[], more=0;
       glRows.forEach(function(r){
         var s=ser[r.CompanyNumber+'|'+r.LongAccount]||[]; var sc=glScenario(r,s,endIso);
@@ -483,10 +504,16 @@
         if(cards.length>=AP_CARD_CAP){ more++; return; }
         cards.push(glCard(r,sc,s));
       });
-      var varCount=scope.filter(function(r){ return isNo(r.VarOK); }).length;
-      var varNote = varCount ? ('<div class="ap-card var"><div class="ap-cause">Variance roll-forward break'+(varCount!==1?'s':'')+'<span class="ap-lever">Var OK</span></div><div class="ap-what">'+varCount+' account-period'+(varCount!==1?'s':'')+' where the variance didn&rsquo;t carry forward. Open the flagged Var&nbsp;OK = &ldquo;no&rdquo; rows in the grid; the per-item drill is on the Cardex Variance page.</div></div>') : '';
-      var moreNote = more ? ('<div class="an-find">+ '+more+' more GL break'+(more!==1?'s':'')+' &mdash; see the flagged rows in the grid.</div>') : '';
-      actionPlan = '<div class="ap"><h4>What to do</h4><div class="ap-cards">'+cards.join('')+varNote+'</div>'+moreNote+'</div>';
+      // Variance roll-forward breaks — one summary card (re-roll first, Reload
+      // Cardex if a break doesn't hold); no per-cause classification.
+      var varRows=scope.filter(function(r){ return isNo(r.VarOK); }).sort(bySeriesOrder);
+      var varCards = varRows.length ? [varSummaryCard(varRows)] : [];
+      var moreNote =
+        (more ? ('<div class="an-find">+ '+more+' more GL break'+(more!==1?'s':'')+' &mdash; see the flagged rows in the grid.</div>') : '');
+      // Subheads only when BOTH kinds are present (otherwise the single label is noise).
+      var bothKinds = cards.length && varCards.length;
+      var apSect=function(title, list){ if(!list.length) return ''; return (bothKinds?('<div class="ap-subhead">'+title+'</div>'):'')+'<div class="ap-cards">'+list.join('')+'</div>'; };
+      actionPlan = '<div class="ap"><h4>What to do</h4>'+apSect('GL roll-forward breaks',cards)+apSect('Variance roll-forward breaks',varCards)+moreNote+'</div>';
     }
     host.innerHTML =
       '<div class="an-headline">'+badge+'<div><div class="an-title">'+headline+'</div><div class="an-sub">'+sub+' &middot; Period ending '+fmtDate(latest)+'</div></div></div>'+
@@ -558,6 +585,25 @@
   document.getElementById('rfHead').addEventListener('click',function(e){ var th=e.target.closest('th'); if(!th) return; var k=th.getAttribute('data-k');
     if(state.sortKey===k){ state.sortDir=state.sortDir==='asc'?'desc':'asc'; } else { state.sortKey=k; state.sortDir='asc'; } renderGrid(); });
   document.getElementById('accountPick').addEventListener('change',function(){ state.account=this.value; renderGrid(); });
+  // Card -> grid: clicking an account on any playbook card selects it, turns on
+  // "Show all periods", and jumps the grid to that account's full history.
+  function jumpToAccount(acct){
+    if(!acct) return;
+    var sa=document.getElementById('showAll'); if(sa) sa.checked=true; state.showAll=true;
+    state.account=acct;
+    buildAccountPicker(); renderGrid();
+    var gc=document.querySelector('.grid-card');
+    if(gc && gc.scrollIntoView) gc.scrollIntoView({behavior:'smooth',block:'start'});
+  }
+  document.getElementById('analysis').addEventListener('click',function(e){
+    var el=e.target.closest('[data-acct]'); if(!el||!this.contains(el)) return;
+    jumpToAccount(el.getAttribute('data-acct'));
+  });
+  document.getElementById('analysis').addEventListener('keydown',function(e){
+    if(e.key!=='Enter'&&e.key!==' ') return;
+    var el=e.target.closest('[data-acct]'); if(!el||!this.contains(el)) return;
+    e.preventDefault(); jumpToAccount(el.getAttribute('data-acct'));
+  });
 
   // ---- normalize GL OK / Var OK for display (raw v6ui_raccountsummary.oobrollok
   //      carries recompute timestamps; the workbook/analyzer show baseline/yes/end/no).
