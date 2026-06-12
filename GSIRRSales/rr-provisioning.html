@@ -1199,6 +1199,26 @@
         </tbody>
       </table>
 
+      <h2>How the Database Install Runs</h2>
+      <p>The RapidReconciler V8 database is installed remotely. GSI runs the install against your SQL Server during a scheduled maintenance window, following a fixed sequence:</p>
+      <ol>
+        <li><strong>Create the database</strong> &mdash; a single new SQL Server database is created (<code>CREATE DATABASE</code>).</li>
+        <li><strong>Publish the schema</strong> &mdash; the RapidReconciler V8 schema (delivered as a SQL Server dacpac) is published into the new database.</li>
+        <li><strong>Create the login</strong> &mdash; the <code>rruser</code> SQL Server login is created with the scope described under Security Posture.</li>
+        <li><strong>Register the database</strong> &mdash; the database is registered with GSI's control plane so it can be managed and monitored.</li>
+      </ol>
+
+      <h3>What You Provide for the Install Window</h3>
+      <ul>
+        <li>Temporary network access to the SQL Server from GSI for the duration of the scheduled window.</li>
+        <li>A sysadmin-level SQL install account &mdash; either a SQL login that is a member of the <code>sysadmin</code> server role, or a Windows account with sysadmin rights on the instance. The SQL Server <em>service</em> account itself does not serve as a connection credential; a separate login or Windows account is needed to connect and run the install.</li>
+      </ul>
+
+      <div class="callout info">
+        <div class="callout-label">Other ways to run the install</div>
+        <p>If your DBA prefers to review or run the deployment themselves rather than have GSI connect during the window, that is fully supported &mdash; see <strong>Security Posture &rarr; Installing on a Shared Production Server</strong> for the three available options.</p>
+      </div>
+
       <div class="topic-footer-nav">
         <button class="back-btn" onclick="showView('topic-about')">← Back: About</button>
         <button class="next-btn" onclick="showView('topic-servers')">Next: Server Requirements →</button>
@@ -1248,6 +1268,27 @@
           Each <strong>1M cardex (F4111) records added per month</strong> requires roughly <strong>100 GB</strong> of allocated disk space, sized to hold a one-year retention window.<br><br>
           <strong>Example:</strong> A site that generates 2M cardex records per month should plan for <strong>200 GB</strong> of allocated disk. Records may be purged after year-end close.
         </div>
+      </div>
+
+      <h3>Clustered and High-Availability SQL Targets</h3>
+      <p>RapidReconciler installs on a standalone SQL Server instance, a Failover Cluster Instance (FCI), or an Availability Group (AG). During installation prep we establish which of the three your target is, and capture the listener or Virtual Network Name used to connect &mdash; and, for an AG, the list of replicas. The install steps differ by target type.</p>
+
+      <h4>Failover Cluster Instance (FCI)</h4>
+      <p>Essentially no change from a standalone install. The connection uses the cluster's Virtual Network Name rather than an individual node. The database, schema, <code>rruser</code> login, and the SQL Agent refresh job all live on the single clustered instance and fail over with it. <code>SIMPLE</code> recovery is fine.</p>
+
+      <h4>Availability Group (AG)</h4>
+      <p>An AG target has several real differences from a standalone install:</p>
+      <ul>
+        <li><strong>Connect to the listener.</strong> The install connects to the AG listener, not a replica directly. For a multi-subnet AG, use <code>MultiSubnetFailover=True</code> on the connection.</li>
+        <li><strong>FULL recovery, not SIMPLE.</strong> A database must be in <code>FULL</code> recovery to join an AG, so an AG-targeted RapidReconciler database is created in <code>FULL</code> recovery.</li>
+        <li><strong>The database starts on the primary only.</strong> <code>CREATE DATABASE</code> lands on the primary replica and is not HA-protected until it is added to the AG &mdash; back up, restore <code>WITH NORECOVERY</code>, and join on each secondary. This is a DBA task.</li>
+        <li><strong>The login must exist on every replica with the same SID.</strong> Logins live in <code>master</code> and are not replicated by the AG (only the database user is). The <code>rruser</code> login must be created on every replica with the <em>same SID</em>; otherwise the database user is orphaned after a failover.</li>
+        <li><strong>msdb roles and the Agent job are not replicated either.</strong> The <code>msdb</code> role memberships and the SQL Agent refresh job must be created on every replica, ideally with failover-aware logic (for example, gating execution on <code>sys.fn_hadr_is_primary_replica</code>).</li>
+      </ul>
+
+      <div class="callout info">
+        <div class="callout-label">Recommended division of labor for an AG</div>
+        <p>GSI creates and deploys the RapidReconciler database and schema on the primary replica (in <code>FULL</code> recovery). Your DBA then adds the database to the AG and replicates the <code>rruser</code> login (same SID) and the SQL Agent job to the secondaries. This keeps the HA-sensitive steps in the hands of the team that owns the cluster.</p>
       </div>
 
       <h2>Application Server</h2>
@@ -1611,6 +1652,45 @@
       <div class="callout warning">
         <div class="callout-label">SQL Server mixed-mode authentication required</div>
         <p>Because the RapidReconciler application uses the <code>rruser</code> SQL login to connect to its database, the SQL Server instance hosting the RR database must be configured for <strong>mixed-mode authentication</strong> (SQL and Windows). Windows-only authentication mode is not supported for the application's database connection. If your security policy currently restricts SQL Server to Windows authentication only, surface this with your security team early &mdash; the change is straightforward but typically requires a SQL Server restart.</p>
+      </div>
+
+      <h3>The <code>rruser</code> Login &mdash; Credential Model</h3>
+      <p>GSI creates the <code>rruser</code> SQL Server login with <code>CHECK_POLICY = OFF</code> and <code>CHECK_EXPIRATION = OFF</code>, using a GSI-generated password that GSI manages on your behalf (stored and synced in GSI's VALC control plane).</p>
+      <p>With <code>CHECK_POLICY</code> off, the server-level password policy is bypassed for this one service login, which is deliberate:</p>
+      <ul>
+        <li>The GSI-managed password cannot violate your complexity or expiration rules, so it never trips a policy your team didn't set for it.</li>
+        <li>The service account never expires, so there are no surprise lockouts breaking scheduled data refreshes.</li>
+      </ul>
+      <p>As a backstop, the generated password is 28 alphanumeric characters and also satisfies 3-of-4 Windows complexity &mdash; it is strong regardless of the policy bypass.</p>
+
+      <p>The <code>rruser</code> login is scoped narrowly to exactly what RapidReconciler needs:</p>
+      <ul class="spec-list">
+        <li class="spec-row"><span class="spec-key">RapidReconciler database</span><span class="spec-val"><code>db_owner</code> &mdash; on the RapidReconciler database only.</span></li>
+        <li class="spec-row"><span class="spec-key"><code>msdb</code></span><span class="spec-val"><code>db_datareader</code>, <code>SQLAgentOperatorRole</code>, and <code>db_ssisadmin</code> &mdash; to run and monitor the scheduled refresh job.</span></li>
+        <li class="spec-row"><span class="spec-key"><code>SSISDB</code></span><span class="spec-val"><code>ssis_admin</code> &mdash; to deploy and execute the SSIS packages.</span></li>
+        <li class="spec-row"><span class="spec-key">Server level</span><span class="spec-val"><code>VIEW SERVER STATE</code> &mdash; for health and diagnostics only.</span></li>
+      </ul>
+      <p>The login has no rights on any other user database on the instance.</p>
+
+      <h2>Installing on a Shared Production Server</h2>
+      <p>A production DBA should never allow a blind <code>CREATE DATABASE</code> on a server that hosts their other production databases. RapidReconciler is built to be installed transparently on a shared instance, so here is exactly what the install creates &mdash; and the proof that it stays isolated.</p>
+
+      <p>The install adds exactly two objects, and nothing more:</p>
+      <ul>
+        <li><strong>One new database</strong>, named <code>RapidReconciler_&lt;suffix&gt;</code> (for example, <code>RapidReconciler_Prod</code>). No existing database is touched, altered, or read from during the install.</li>
+        <li><strong>The <code>rruser</code> server login</strong>, scoped exactly as described above &mdash; <code>db_owner</code> on the RapidReconciler database only, plus the limited <code>msdb</code> / <code>SSISDB</code> roles and server-level <code>VIEW SERVER STATE</code>.</li>
+      </ul>
+
+      <p>You choose how the install is run:</p>
+      <ol>
+        <li><strong>GSI runs it remotely</strong> during a supervised maintenance window.</li>
+        <li><strong>Your DBA reviews the script first, then approves.</strong> GSI provides the exact deployment script up front; your DBA reads it before anything runs.</li>
+        <li><strong>Your DBA runs the script themselves</strong>, using GSI's deployment artifact.</li>
+      </ol>
+
+      <div class="callout info">
+        <div class="callout-label">You see exactly what will run, before it runs</div>
+        <p>GSI can provide the exact, connection-independent deployment plan up front as a reviewable artifact. Your DBA sees precisely what will be created &mdash; the single new database and the scoped <code>rruser</code> login &mdash; before anything touches the server.</p>
       </div>
 
       <h2>Antivirus Considerations</h2>
