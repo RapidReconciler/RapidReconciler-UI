@@ -15,8 +15,9 @@ VALC/agent side it pairs with. Phase 2 = execute it; Phase 3 = rebuild + test.
 ## 1. The model (recap)
 
 > **DEPLOY MODEL DECISION (2026-06-12): PACKAGE deployment, not project.**
-> This supersedes the SSISDB-catalog/environment details that appear later in
-> §2a and §5 (kept for history). Package model was chosen because it **deletes
+> This supersedes the SSISDB-catalog/environment terminology that lingers in
+> §2a (kept for history); **§5 below is rewritten to the package-model deploy
+> half**. Package model was chosen because it **deletes
 > the SSISDB catalog entirely** — no CLR-enable, no `create_catalog` (often
 > blocked on a locked-down prod box), no folder, no `deploy_project`, no
 > environments. The catalog was the most fragile, hardest-to-automate part.
@@ -50,22 +51,23 @@ install.
 
 ## 2. Parameter inventory (the heart of the spec)
 
-Every per-customer value becomes a **project parameter**. Source column says
-where VALC gets the value when it generates the environment.
+Every per-customer value becomes a configurable package value (parameter,
+connection-manager property, or variable). Source column says where VALC gets
+the value when it generates the config rows (§5).
 
-### 2a. Project parameters — supplied per customer (SSISDB environment)
+### 2a. Per-customer values — supplied via the RR-DB config table
 
 | Project parameter | Type | VALC source | Notes |
 |---|---|---|---|
-| `CM.JDESource.ServerName` | str | `client_servers` JDE_SOURCE `host` | Topology JDE Source card (V44) |
-| `CM.JDESource.InitialCatalog` | str | `client_servers.jde_catalog` | SQL source only; blank for Oracle/AS400 |
-| `CM.JDESource.UserName` | str | JDE_SOURCE `credentials_username` | |
-| `CM.JDESource.Password` | str (sensitive) | JDE_SOURCE `credentials_password_encrypted` | |
-| `CM.JDESource` provider | str | `clients.jde_source_platform` | ORACLE→`OraOLEDB` / AS400→`IBMDA400` / SQLSERVER→`MSOLEDBSQL`; folded into the conn string |
-| `CM.RRLocal.ServerName` | str | `client_databases.db_address` | RR target SQL host |
-| `CM.RRLocal.InitialCatalog` | str | `client_databases.db_name` | the customer RR DB |
-| `CM.RRLocal.UserName` | str | `client_databases.db_username` | `rruser` |
-| `CM.RRLocal.Password` | str (sensitive) | `client_databases.db_password_encrypted` | |
+| `JDESource.ServerName` | str | `client_servers` JDE_SOURCE `host` | Topology JDE Source card (V44) |
+| `JDESource.InitialCatalog` | str | `client_servers.jde_catalog` | SQL source only; blank for Oracle/AS400 |
+| `JDESource.UserName` | str | JDE_SOURCE `credentials_username` | |
+| `JDESource.Password` | str (sensitive) | JDE_SOURCE `credentials_password_encrypted` | |
+| `JDESource` provider | str | `clients.jde_source_platform` | ORACLE→`OraOLEDB` / AS400→`IBMDA400` / SQLSERVER→`MSOLEDBSQL`; folded into the conn string |
+| `RRLocal.ServerName` | str | `client_databases.db_address` | RR target SQL host |
+| `RRLocal.InitialCatalog` | str | `client_databases.db_name` | the customer RR DB |
+| `RRLocal.UserName` | str | `client_databases.db_username` | `rruser` |
+| `RRLocal.Password` | str (sensitive) | `client_databases.db_password_encrypted` | |
 | `dbowner` | str | **baked default `dbo.`** | parameter only so a rare non-dbo install can override |
 | `tableQualifier` | str | `clients.jde_table_qualifier` | e.g. `proddta` (currently embedded per query — promote to one param) |
 | `RefreshDays` | int | `clients`/per-DB, **default −35** | steady-state; raise per customer for backdating shops (memory cost) |
@@ -102,13 +104,17 @@ where VALC gets the value when it generates the environment.
 ## 3. Package structural changes
 
 - **`ProtectionLevel` → `DontSaveSensitive`.** The single change that frees the
-  `.ispac` from a per-machine user key. All sensitive params arrive at runtime
-  from the environment.
-- **Promote every per-customer value to a project parameter** (§2). The
-  connection-manager properties are already parameterized; add `tableQualifier`,
-  `RefreshDays`/`RefreshDaysRNV`, the `Dec*`, `Mod*`, `BootstrapOnly`.
-- **Standardize the RRLocal driver on `MSOLEDBSQL`** (drop the deprecated
-  `SQLNCLI11` still in the JDELab variant).
+  `.dtsx` from a per-machine user key. All sensitive values arrive at runtime
+  from the RR-DB config table (§5).
+- **Expose every per-customer value to the SQL config** (§2). The two OLE DB
+  connection managers (`JDESource` / `RRLocal`) already exist; `RefreshDays`,
+  `RefreshDaysRNV`, `ModInv`, `ModRnv`, `InitLoad`, `aaStartDateGr`, `dbowner`,
+  and the four `Dec*` already exist as `User::` variables. **Add the two net-new
+  variables** the config will set: `tableQualifier` (today embedded per query)
+  and `BootstrapOnly` (§2c mode flag).
+- ~~**Standardize the RRLocal driver on `MSOLEDBSQL`**~~ — **already done in Prod**:
+  both connection managers are on `MSOLEDBSQL.1`. The deprecated `SQLNCLI11` lived
+  only in the now-deleted JDELab variant. No action.
 - **Drop `F4096old`** (the old-column-name container) — net-new customers won't
   be on old-column JDE. Ship the single new-column `F4096` path.
 - **Retire the per-container hardcoded date shadows** (`Date<table>` /
@@ -145,59 +151,127 @@ container drilling.
 
 ---
 
-## 5. VALC / agent side (pairs with the package)
+## 5. VALC / agent side (pairs with the package — PACKAGE deployment model)
 
-1. **Environment-generation service** — VALC renders the §2a values (incl. the
-   derivations: `10^decimal`, module→bool, platform→provider string) into an
-   SSISDB environment value-set per customer.
-2. **Agent T-SQL** — `catalog.deploy_project` (push the `.ispac`) +
-   `catalog.create_environment` / `create_environment_variable` / set values +
-   `set_object_parameter_value` (bind the project to its environment reference).
-   Same T-SQL channel the agent already uses for `sp_start_job`.
-3. **SSIS tab** in the Deployment Center — catalog/version the `.ispac` like the
-   dacpac + Services flows.
-4. **Bootstrap + full-load actions** — Deployment Center buttons that run the
-   package with `BootstrapOnly=true` then (later) `InitLoad=1`, via the agent.
-5. **Install bootstrap** — ensure the SSISDB catalog exists (CLR + master key +
-   `CREATE CATALOG`) and a per-platform OLE DB provider presence check.
+> This section is the package-model deploy half (per §1). **No SSISDB** — no
+> `deploy_project`, no `create_environment`, no catalog. The deploy half is:
+> place one `.dtsx`, write the per-customer config rows into the RR DB, and run
+> it from a SQL Agent SSIS-Package job step — all over the same agent T-SQL/file
+> channel that already serves `sp_start_job` and the dacpac flows.
+
+1. **Config-table generation (VALC).** VALC renders the §2a values — including
+   the derivations (`10^decimal` for the `Dec*`, module→`bool`, platform→provider
+   string) — into rows of the **standard SSIS package-configuration table** in the
+   customer's own RR database (default `[dbo].[SSIS Configurations]`:
+   `ConfigurationFilter` / `ConfiguredValue` / `PackagePath` /
+   `ConfiguredValueType`). One filter per customer; the `.dtsx` is built with a
+   **SQL Server package configuration** pointing at this table, so at run time it
+   pulls connections + parameters from it. The two passwords live only in this row
+   set — the DB is access-controlled and `DontSaveSensitive` keeps them out of the
+   artifact. Dovetails with the existing `rsystemvariables` sync (same DB, same
+   agent write path).
+2. **Agent deploy (T-SQL + file).** Per database the agent: (a) **places/updates
+   the `.dtsx`** at the box's package path (the install bundle delivers the first
+   copy; redeploys overwrite it — compare by version); (b) **upserts the config
+   rows** for that customer's filter; (c) **creates the SQL Agent job + "SSIS
+   Package" job step** via `msdb.dbo.sp_add_job` / `sp_add_jobstep` (subsystem
+   `SSIS`, `PackageSource = File system`, pointing at the deployed `.dtsx`; the
+   in-package SQL config points back at the RR DB for its values). The job name is
+   the per-DB value already captured on the Step-4 SSIS tab (`client_databases`
+   job field).
+3. **SSIS tab — versioning.** Register/version the `.dtsx` in `file_versions`
+   (`component='ssis'`) exactly like the dacpac (`component='database'`,
+   `syncDbReleases`) and the Services jar — pull a tagged build in, pick a
+   version, deploy. **Release pipeline built** (`release-ssis.yml`, `ssis-v*`
+   tags); `syncSsisReleases` + `?component=ssis` catalog it. The Deployment
+   Center version-picker UI is the remaining piece (part of the deploy half).
+4. **Bootstrap + full-load actions.** Deployment Center buttons set the run-mode
+   config rows then start the job via `sp_start_job`: **bootstrap** =
+   `BootstrapOnly=true` (companies/cutoffs only — §4); **full load** =
+   `BootstrapOnly=false`, `InitLoad=1`, `aaStartDateGr` from the bootstrap's
+   cutoffs; **steady state** = `InitLoad=0`. Each is an upsert to the customer's
+   config rows immediately before the start.
+5. **Install readiness (already built, s23).** No catalog/CLR/master-key step.
+   Readiness is just **`InstallProbeService.probeSsis`** — SQL Agent SSIS
+   subsystem present + IS service running — plus a per-platform OLE DB provider
+   presence check (`MSOLEDBSQL` / `OraOLEDB` / `IBMDA400`) on the box.
 
 ---
 
 ## 6. VS runbook (what to do in SSDT-BI)
 
-Owner-side, the only-VS-can-do part. Suggested order:
+Owner-side, the only-VS-can-do part. The structural conversion (deployment
+model, `ProtectionLevel` re-handling, container delete, precedence wiring)
+re-encrypts/re-writes the package — not safe to hand-edit the 6.4 MB XML, so
+it's done in VS. The names/counts below are **mined from the real
+`RapidReconciler_Prod.dtsx` (2026-06-12)**, so this is mechanical, not
+exploratory. Suggested order:
 
-1. Open the project; **set `ProtectionLevel = DontSaveSensitive`** on the
-   project and every package (use the project-level setting + the Sensitive
-   conversion prompt).
-2. **Delete the `F4096old` container** and its variables.
-3. **Fix the RRLocal connection manager** to `MSOLEDBSQL` (re-point provider).
-4. **Promote to project parameters:** `tableQualifier`, `RefreshDays`,
-   `RefreshDaysRNV`, `DecExtCost`, `DecUnitCost`, `DecQty`, `DecQtyCX`,
-   `ModInv`, `ModRnv`, `dbowner`, `BootstrapOnly`, `aaStartDateGr`, `InitLoad`.
-   Set the baked defaults (`dbowner=dbo.`, `RefreshDays=-35`, `RefreshDaysRNV=-90`).
-5. **Wire `BootstrapOnly`** — a precedence-constraint expression on the
-   transactional containers so they skip when `BootstrapOnly == true`.
-6. **Retire the hardcoded `Date<table>`/`Date<table>Gr` shadows** — confirm each
-   container's `qry<table>Date` drives the query off the global horizon, and
-   remove the static fallbacks.
-7. **Build** the `.ispac`. Hand it to the catalog flow.
+1. **Convert Project → Package deployment model** (Solution Explorer → project →
+   *Convert to Package Deployment Model*). The repo is now a single package
+   (`RapidReconciler_Prod.dtsx`); the other four `.dtsx` + their `.dtproj`
+   refs were removed.
+2. **Set `ProtectionLevel = DontSaveSensitive`** on the package (and project).
+   Currently implicit `EncryptSensitiveWithUserKey` — accept the Sensitive
+   conversion prompt so the two passwords stop being user-key-encrypted; they
+   arrive at runtime from the config table.
+3. **Delete the `F4096old` container + its `qryF4096_old` variable.** ~399
+   `F4096old` references vs ~1,678 `F4096` — net-new customers ship the single
+   new-column `F4096` path only. (Biggest single edit; do it first after the
+   model convert so the rest validates against the trimmed package.)
+4. ~~Fix the RRLocal driver~~ — **no action.** Both `JDESource` and `RRLocal`
+   are already OLE DB on `MSOLEDBSQL.1`.
+5. **Add the two net-new `User::` variables** the config sets:
+   `tableQualifier` (String; replace the per-query embedded qualifier with this
+   variable) and `BootstrapOnly` (Boolean, default `False`). The other config
+   targets already exist: connection managers `JDESource`/`RRLocal` and
+   variables `RefreshDays` (−35), `RefreshDaysRNV` (−90), `ModInv`, `ModRnv`,
+   `InitLoad`, `aaStartDateGr`, `dbowner` (`dbo.`), and the four `Dec*`.
+6. **Wire `BootstrapOnly`** — a precedence-constraint expression
+   (`@[User::BootstrapOnly] == false`) gating the transactional containers
+   (`General Ledger`, `Inventory`, `Item Branch`, `Purch Orders`, `Receipts`,
+   `Sales Orders`, `UOMs`, `Work Orders`) so bootstrap runs only `Initialize` +
+   `Companies` (+ its `usp6_002a_companies`) and stops (§4).
+7. **Add the decimals self-derive Execute SQL Task** (mirror the existing
+   Julian-date task that sets `branchdatejul`/`startdatejul`): read
+   `F9210.FRCDEC` for ECST/UNCS/PQOH/TRQT from the DD schema and set
+   `DecExtCost`/`DecUnitCost`/`DecQty`/`DecQtyCX` = `10^FRCDEC`. These stay
+   variables (they already are) — never config (§2a).
+8. **Consolidate the date logic** — full worksheet:
+   [`ssis-date-consolidation.md`](ssis-date-consolidation.md). Correction: the
+   `Date*` vars are **runtime-computed** from `aaStartDateGr` (not hardcoded
+   shadows). The real work is collapsing 6 date tasks + 7 query vars into one
+   `Compute Load Dates` task, dropping dead write-only vars + the dead `Branch
+   Date` task, and **fixing `Min UKID`'s 3 hardcoded `'2022-01-01'` literals** so
+   inventory finally tracks `aaStartDateGr` too.
+9. **Set up the SQL Server package configuration** pointing at
+   `[dbo].[SSIS Configurations]` in the RR DB (`EnableConfig` is already `True`),
+   so the package pulls the connection + variable values that
+   `SsisConfigService` writes (§5.1). Export/confirm the `PackagePath` strings
+   match `SsisConfigService.Paths`.
+10. **Build** the package (`.dtsx`). Hand it to the SSIS-tab deploy flow (§5).
 
-(Step 6 is the fiddliest; pair with the date discussion's diagnostic-toggle
-confirmation — the F0015 "Start"/"Stats" tasks — before finalizing.)
+(Steps 6 + 8 are the fiddliest. Steps 1–6, 9, 10 are **done + verified**
+(2026-06-12); the F0015 diagnostic tasks once referenced here were removed.
+Steps **7 (decimals task)** and **8 (date shadows)** remain — deferred to the
+correctness pass, along with the `tableQualifier` query-wiring.)
 
 ---
 
 ## 7. Open / deferred
 
-- **Diagnostic toggles** — confirm the disabled F0015 "Start"/"Stats" tasks are
-  diagnostics (leave off) vs. needed.
+- ~~**Diagnostic toggles**~~ — **resolved (2026-06-12):** the disabled F0015
+  "Start"/"Stats" tasks **and the whole F0015 load** were removed (confirmed
+  disabled long ago — zero behavior change). The now-orphan `aaStartF0015`
+  variable can be deleted (harmless to leave).
 - **Decimal source grain** — `Dec*` derive from `clients.jde_*`; confirm no
   per-DB override is needed.
 - **`RefreshDays` grain** — per-client vs per-RR-database (parked; default −35
   works until a customer needs otherwise).
-- **`.ispac` build tooling** on the GitHub runner (SSIS build target) for a
-  tag-triggered release — heavier than `.sqlproj`; needed before automated
-  Services-style releases of the package.
+- ~~**`.dtsx` build tooling**~~ — **built (2026-06-12):** `release-ssis.yml` in
+  the SSIS repo, on `ssis-v*` tags, attaches the committed
+  `RapidReconciler_Prod.dtsx` to a GitHub release. Hosted runner, **no compile**
+  (the package-deployment `.dtsx` *is* the artifact) — lighter than the dacpac.
+  `syncSsisReleases` catalogs it into `file_versions` (`component='ssis'`, §5.3).
 - **Incremental refinement** (Lever 1) — already largely present via the
   `max(date) + RefreshDays` pattern; revisit once the overhaul lands.
