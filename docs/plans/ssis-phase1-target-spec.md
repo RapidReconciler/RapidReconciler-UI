@@ -14,6 +14,25 @@ VALC/agent side it pairs with. Phase 2 = execute it; Phase 3 = rebuild + test.
 
 ## 1. The model (recap)
 
+> **⚠ SUPERSEDED (2026-06-13): REVERSED back to the SSISDB catalog.** The
+> PACKAGE/msdb decision recorded in this section was reversed — the deciding
+> fact was that the **vast majority of existing customers already run the SSIS
+> catalog**, so CLR + catalog are proven-acceptable for this base, and the
+> catalog **unifies old + new installs on one model** (one debugging story, one
+> runbook) instead of splitting the fleet. The catalog's `catalog.executions`
+> telemetry is also the exit-strategy lever a junior needs to self-diagnose a
+> failed load — the msdb store has no usable GUI in modern SSMS. The canonical,
+> build-ready design is now
+> [`ssis-catalog-reversal-spec.md`](ssis-catalog-reversal-spec.md) (verified
+> end-to-end), with the privileged-principal model in
+> [`ssis-deploy-service-account.md`](ssis-deploy-service-account.md). **Read
+> those, not the package-model text below.** What carries over from this spec is
+> deployment-model-agnostic: the package internal redesign (§3), bootstrap mode
+> + date horizon (§4), and the parameter inventory (§2) — only the *transport*
+> (deploy + config emit) changed from msdb/config-table to
+> `catalog.deploy_project` + an SSISDB environment. The package/msdb text below
+> is kept for history.
+
 > **DEPLOY MODEL DECISION (2026-06-12): PACKAGE deployment, not project.**
 > This supersedes the SSISDB-catalog/environment terminology that lingers in
 > §2a (kept for history); **§5 below is rewritten to the package-model deploy
@@ -152,6 +171,21 @@ container drilling.
 ---
 
 ## 5. VALC / agent side (pairs with the package — PACKAGE deployment model)
+
+> **⚠ SUPERSEDED (2026-06-13) — see §1.** This package-model deploy half was
+> replaced by the **SSISDB catalog** deploy in
+> [`ssis-catalog-reversal-spec.md`](ssis-catalog-reversal-spec.md) §5–§6 (built +
+> verified). In the shipped model the deploy half is: `catalog.deploy_project`
+> the `.ispac` (via `OPENROWSET(BULK …)` on the box) + provision an SSISDB
+> **environment** (the per-customer config, secrets encrypted in the catalog,
+> the connection-string/password split) + run via `catalog.create_execution`.
+> Catalog mutations reject SQL auth (Msg 27123) and SQL 2017 has no Entra, so
+> VALC routes them through a SQL Agent T-SQL job that runs under the Agent's
+> Windows account (member of SSISDB `ssis_admin`) — durable named steps on the
+> per-DB standard job for the secret-free ops (audit trail), a transient job for
+> the secret-bearing environment build (Phase 3 moves that to the on-box agent).
+> The config-table emit, `[dbo].[SSIS Configurations]`, and the msdb/`dtutil`
+> placement below are retired. The text below is kept for history.
 
 > This section is the package-model deploy half (per §1). **No SSISDB** — no
 > `deploy_project`, no `create_environment`, no catalog. The deploy half is:
