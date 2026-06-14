@@ -140,10 +140,169 @@ On db21 against `JDE_PRIST920`:
 
 ## Rollout after F0911 passes
 Same pattern, simpler (no deletes except F0911):
-- **F4111** (cardex) — keys `ilukid`; change cols per its current Conditional Split.
+- **F4111** (cardex) — keys `ilukid`. **DONE — design changed; see the F4111 section below.**
 - **F4102** (item branch) — keys `ibmcu, ibitm`.
 - **F43121** (receipts) — keys per `Update F43121`.
 - **F0011** (batch) — keys `icicut, icicu`.
 Each: reverse-engineer its Conditional Split (same method as F0911 above), write
 `Staging_<t>` + `usp8_apply_<t>`, rewire, parity-test. Append-only flows
 (F42119, F3106) and the truncate-reload masters are **unchanged**.
+
+---
+
+# F4111 (cardex) — DONE on the DB side (2026-06-14, s33). Not a byte-parity port.
+
+F4111 is two independent flows; **only the change flow is refactored** — the
+**New** flow (`Get F4111 New`: `ILUKID > maxUKID And ILIPCD != 'X' and ILCRDJ >=
+startdatejul`) is already a clean dumb pipe (no Sort/Merge Join) and stays as-is.
+
+## Why it's a redesign, not a parity port
+The old change flow (`Get F4111 Changes`) drives off RR's **open** rows
+(`No Batch from RR F4111` source = `ilicu = 0`) Merge-Joined against a JDE pull
+windowed `WHERE ILICU >= numBatch`. That JDE-side batch window is the defect:
+WO/SO transactions land in the cardex **incomplete** (`ilicu = 0`) before
+R31802/R42800 cut their batch, and a long-sitting one can get a batch number
+**below** the high-water `numBatch` → excluded from the pull → the completion is
+**missed**. `ILICU` isn't indexed either (the only seekable column on F4111 is the
+`ILUKID` clustered PK), so that window also scans.
+
+The fix keeps the open-set driver but fetches each open row's **current JDE state
+by `ILUKID`** (PK seeks, no batch-monotonicity assumption). So this is a behavioral
+**improvement**, validated by "converges to JDE truth + catches a completion the old
+window misses," NOT byte-identical to the old logic.
+
+## Self-deriving watch-set (the key design — confirmed against real client data)
+Don't hard-code which cardex doc types are "pending batch" — they vary by customer.
+**Derive them from posted GL**, keyed on the stable JDE **batch types**:
+- `dbo.RF4111ChangeBatchType` (config, seeded `'0'` = WO/mfg R31802, `'IB'` = sales
+  R42800) — the only knob, tunable per customer in SSMS.
+- The watch order-types = `SELECT DISTINCT gldcto FROM dbo.F0911 WHERE glicut IN
+  (RF4111ChangeBatchType) AND gldcto <> ''` (RR-local F0911; **non-blank** GLDCTO —
+  blank = manual JEs, would re-bloat). "As long as one such txn has posted, its order
+  type is learned."
+- Watch-set = `F4111 WHERE ilicu = 0 AND ildcto IN (derived gldcto)`.
+
+**Why `ilicu = 0` alone fails on real data** (client `jde_treatt`, 3.0M-row F4111):
+all `ilicu = 0` = **823,381 rows (27%)**, dominated by `IQ`/`IB`/`IZ` inventory
+adjustments that carry `ilicu = 0` *permanently* (never batched) → 316,596
+gaps-and-islands ranges, infeasible. The batch-type/GLDCTO filter cuts it to
+**316 rows / 199 ranges (~8 KB predicate)** — exactly the WO/SO pending set.
+
+## DB artifacts (shipped to the dacpac; deployed + tested on db21 / InstTest)
+1. `dbo.RF4111ChangeBatchType` — config reference table, seeded `0` + `IB`.
+2. `dbo.Staging_F4111` — 6-col landing (`ilukid, ildct, ildoc, ilicu, ilipcd,
+   ildgl`), clustered on `ilukid`. The 5 non-key cols = exactly what JDE rewrites at
+   batch completion (parity with the old `Update F4111 Changes` MERGE).
+3. `dbo.usp8_f4111_build_change_pull @dbowner, @sql OUTPUT` — derives the watch-set,
+   range-compresses the open ukids, emits `SELECT … FROM <dbowner>F4111 WHERE ILUKID
+   BETWEEN … OR …` (or `WHERE 1=0` when nothing qualifies). **No `ILUKID >= min`
+   fallback** — range-compression already bounds *rows* to the open count; a fallback
+   would widen to the whole table on an old straggler (verified: `>= min` = 11,309
+   rows vs 316 for the range path on treatt).
+4. `dbo.usp8_apply_f4111` — `MERGE dbo.F4111 USING Staging_F4111 ON ilukid`,
+   `WHEN MATCHED AND (any of the 5 cols differ)` → UPDATE + `ChangeDate`. No INSERT
+   (New flow owns inserts), no DELETE. No-ops on empty staging. PRINTs
+   `N open row(s) completed; M total changed`. **Verified**: synthetic completion
+   updated correctly; idempotent re-run = 0 changed.
+
+## SSIS rewiring (VS — `Get F4111 Changes` container)
+1. **Add Execute SQL Task "Build F4111 change pull"** (RRLocal):
+   `EXEC dbo.usp8_f4111_build_change_pull @dbowner=?`; **ResultSet = Single row**
+   (the proc returns the query as a single-row result set `[qry]` — an OLE DB OUTPUT
+   param truncates a long `NVARCHAR(MAX)`). Parameter Mapping: ord `0` =
+   `User::dbowner` (Input). Result Set tab: Result Name `0` → `User::qryF4111Changes`.
+   Set `User::qryF4111Changes` `EvaluateAsExpression = False` (drop the old
+   `ILICU >= numBatch` expression).
+2. **Truncate**: change the start Execute SQL to `TRUNCATE TABLE Staging_F4111`.
+   Order: Build pull → Truncate → Get F4111 Changes → Apply.
+3. **Data flow → dumb pipe**: JDE source data-access mode = **"SQL command from
+   variable"** = `User::qryF4111Changes`. **KEEP** `Remove Nulls 1` + `Dates and
+   decimals 1` (the `GrgILDGL` Julian→date). **DELETE** Union All, Sort, `No Batch
+   from RR F4111`, Merge Join, Conditional Split, the `Changed Rows` row-count, and
+   the `Changed_Rows_F4111` destination. **ADD** OLE DB Destination → `Staging_F4111`
+   (FASTLOAD + TABLOCK); map `ILUKID→ilukid, ILDCT→ildct, ILDOC→ildoc, ILICU→ilicu,
+   ILIPCD→ilipcd, GrgILDGL→ildgl`.
+4. **Replace** the post-flow `Update F4111 Changes` MERGE Execute SQL with
+   `EXEC dbo.usp8_apply_f4111` (no params).
+5. **Obsolete** (retire when convenient): `qryF4111Changes` expression,
+   `numBatch`/`qryminbatch` (verify nothing else uses them), `Changed_Rows_F4111`
+   table, `ctrF4111Chg`.
+
+## Dependency + cold-start
+The builder reads RR-local `F0911`, so the watch order-types come from already-loaded
+GL. On a **cold first load** F0911 is empty → derivation returns nothing → `WHERE
+1=0` → no changes applied (correct: a first load has no completions to catch; the New
+flow loads everything). In steady state the order-type set is stable, so no
+ordering dependency between the GL and Inv containers.
+
+## ⚠ Surfacing note (carries to NEXT#3, affects F0911 too)
+An **Execute SQL Task does NOT propagate T-SQL `PRINT` to
+`catalog.event_messages`** — confirmed on F0911 execs 190/191 (Verbose logging, 302
+OnInformation messages, none carrying the PRINT). The proc PRINTs are correct at the
+SQL level (visible in SSMS direct runs) but invisible to the catalog log. So VALC's
+planned per-run row-count line must read a **log table** the proc writes, not the
+SSIS info stream. The `usp8_apply_*` PRINTs stay (useful in SSMS) but aren't the
+surfacing mechanism.
+
+---
+
+# F0011 / F4102 — DONE on the DB side (2026-06-14, s33). Classic F0911-style ports.
+
+Both are the straightforward template: stage the existing windowed/full pull, then a
+set-based MERGE does **insert (new) + update (changed)**, **no delete** (parity — neither
+has one), and **no build-pull proc** (the source query is unchanged). Only the change
+flow's Sort + Merge Join + Conditional Split go away.
+
+## F0011 (batch control)
+- **Parity contract:** JDE pull `qryF0011` = `ICICUT, ICICU, ICUSER, ICIAPP, ICDICJ, ICIST
+  FROM <dbowner>F0011 WHERE ICDICJ >= minbatch AND ICICUT IN ('0','O','S','ST','IB','T',
+  'N','NC','G','V','I')`. RR side `qryF0011RR` pulls the **whole** RR F0011 (the Sort
+  cost). Merge Join on `(ICICUT, ICICU)` → Conditional Split → New (insert) / Changed
+  (update `iciapp, icist`). No delete.
+- **DB:** `dbo.Staging_F0011` (6 cols, clustered `icicut,icicu`), `dbo.usp8_apply_f0011`
+  (MERGE; update `iciapp,icist` when differ; insert the 6 pulled + InsertDate). Deployed
+  + smoke-tested on db21 (1 new + 1 updated, rolled back).
+- **VS steps (`Copy F0011` / its container):** keep `qryF0011` source + the Dates-and-
+  decimals (Julian `ICDICJ`→date). **Delete** `qryF0011RR` source, Sort, Merge Join,
+  Conditional Split, the New-insert dest, `Changed_Rows_F0011` dest. **Add** OLE DB dest
+  → `Staging_F0011` (FASTLOAD+TABLOCK). Change the start truncate to `TRUNCATE TABLE
+  Staging_F0011`. Replace the post `MERGE F0011 …` Execute SQL with `EXEC
+  dbo.usp8_apply_f0011`. Obsolete: `qryF0011RR`, `Changed_Rows_F0011`.
+
+## F4102 (item branch — master data)
+- **Parity contract:** JDE pull `qryF4102` = the 25 cols `IBMCU, IBITM, IBGLPT, IBSTKT,
+  IBSRP1..0, IBPRP1..0, IBUPMJ FROM <dbowner>F4102` (NO window — master). MERGE key
+  `(ibmcu, ibitm)`; update the 23 category/reporting cols + `ibupmj`; insert new. No
+  delete.
+- **DB:** `dbo.Staging_F4102` (25 cols, clustered `ibmcu,ibitm`), `dbo.usp8_apply_f4102`.
+  Deployed + smoke-tested on db21 (1 new + 1 updated, rolled back).
+- **VS steps:** same shape — keep `qryF4102` + Dates-and-decimals (Julian `IBUPMJ`→date);
+  delete the RR-compare source + Sort + Merge Join + Conditional Split + Changed_Rows
+  dest; add OLE DB dest → `Staging_F4102`; truncate `Staging_F4102`; replace the post
+  `MERGE f4102 …` with `EXEC dbo.usp8_apply_f4102`.
+
+# F43121 (receipts) — DESIGN ONLY, build DEFERRED (2026-06-14, s33)
+
+More complex than the others; **not built blind**. Reverse-engineered contract:
+- JDE pull `qryF43121` = ~60 cols from `<dbowner>F43121 LEFT JOIN <dbowner>F0101 ON
+  pran8 = aban8 WHERE PRDOCO > 0 AND PRDGL >= DateF43121` (the address-book join supplies
+  `abalph`). RR side `qryF43121RR` windowed `PRDGL >= DateF43121Gr`.
+- Apply (`update F43121 … from F43121 a join changed_rows_f43121 b on` an **8-col key**
+  `prmatc, prkcoo, prdoco, prdcto, prsfxo, prlnid, prnlin, prdoc`) updates 11 status cols
+  (`prnxtr, prupmj, prdgl, prpid, praopn, prarec, praptd, praclo, pruopn, prurec, pruclo`)
+  + `changedate`. New rows inserted separately.
+- **Open question before building:** the flow also truncates + writes a work table
+  **`F43121_rev`** (an OLE DB destination inside the flow). Determine its role (looks like
+  a revision/reversal staging branch) before collapsing to a single MERGE — it may carry
+  delete/reversal semantics the other tables don't.
+- **Recommended build (on return):** `Staging_F43121` mirroring the pulled cols (incl. the
+  F0101-derived `abalph`/`pran8`), `usp8_apply_f43121` = MERGE on the 8-col key (update the
+  11 status cols when differ; insert new; keep the `PRDGL >= DateF43121` window via the
+  staged pull). Resolve `F43121_rev` first. Same dumb-pipe rewiring as the others.
+
+# Surfacing foundation shipped (2026-06-14, s33)
+`dbo.RSsisLoadLog` (table) + all `usp8_apply_*` procs now INSERT a per-run row
+(`table_name, new_rows, changed_rows, note`). This is the durable record VALC's Load
+Progress card should read (since PRINT can't reach `catalog.event_messages`). The
+per-container execution time for the Tables headers comes from
+`catalog.executable_statistics` — both are the VALC surfacing task (UI, owner-reviewed).
