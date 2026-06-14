@@ -21,8 +21,8 @@ SSMS — not a 10-component pipeline graph.
 2. **Data Flow** — `JDE source (windowed SELECT) → Derived Column (glaa decimal
    scale, kept) → OLE DB Destination [Staging_F0911]`, FASTLOAD. **No Sort, no
    Merge Join, no Conditional Split.** Pure move.
-3. **Execute SQL** — `EXEC dbo.usp8_apply_f0911 @minGLDATE = ?` (parameter mapped
-   to the existing `User::minGLDATE` variable)
+3. **Execute SQL** — `EXEC dbo.usp8_apply_f0911` (no parameter; the proc
+   self-derives the window from the staged data)
 
 ## Exact current F0911 semantics (reverse-engineered — the parity contract)
 
@@ -65,10 +65,12 @@ CREATE TABLE [dbo].[Staging_F0911] (
 
 ### `dbo.usp8_apply_f0911` (new proc)
 ```sql
-CREATE OR ALTER PROCEDURE [dbo].[usp8_apply_f0911] @minGLDATE DATETIME
+CREATE OR ALTER PROCEDURE [dbo].[usp8_apply_f0911]   -- no param: window self-derived
 AS
 BEGIN
   SET NOCOUNT ON;
+  DECLARE @minGLDATE DATETIME = (SELECT MIN(gldgj) FROM dbo.Staging_F0911);
+  IF @minGLDATE IS NULL RETURN;   -- empty staging => no-op (never delete history on a failed/empty load)
   MERGE dbo.F0911 WITH (HOLDLOCK) AS t
   USING dbo.Staging_F0911 AS s
      ON t.glkco=s.glkco AND t.gldct=s.gldct AND t.gldoc=s.gldoc
@@ -103,7 +105,13 @@ END
 3. Add one **OLE DB Destination → `Staging_F0911`** (FASTLOAD, TABLOCK), map the
    Derived-Column output columns straight across.
 4. Replace the post-flow **Update F0911 Changes** Execute SQL (the old MERGE)
-   with **`EXEC dbo.usp8_apply_f0911 ?`**, parameter 0 = `User::minGLDATE`.
+   with **`EXEC dbo.usp8_apply_f0911`** — **no parameter, no mapping** (the proc
+   self-derives the window from `MIN(Staging_F0911.gldgj)`). Dodges the OLE-DB
+   ordinal-vs-name + Julian(`minGLDATE`)-vs-Gregorian(`minGLDATEgr`) parameter
+   pitfalls, and the proc no-ops on empty staging so a failed load can't delete
+   history. **PARITY VERIFIED 2026-06-14:** rebuilt F0911 from empty via real
+   staged JDE data = byte-identical to the old Sort/Merge-Join baseline (4220 rows,
+   both-way EXCEPT 0/0); idempotent (3 runs, 0 changes).
 5. `Changed_Rows_F0911` / `Deleted_Rows_F0911` become obsolete for F0911 (retire
    later; harmless to leave).
 
