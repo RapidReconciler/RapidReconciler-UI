@@ -281,24 +281,66 @@ flow's Sort + Merge Join + Conditional Split go away.
   dest; add OLE DB dest → `Staging_F4102`; truncate `Staging_F4102`; replace the post
   `MERGE f4102 …` with `EXEC dbo.usp8_apply_f4102`.
 
-# F43121 (receipts) — DESIGN ONLY, build DEFERRED (2026-06-14, s33)
+# F43121 (receipts) — DONE on the DB side (2026-06-15, s35). DB built + deployed; VS pass pending.
 
-More complex than the others; **not built blind**. Reverse-engineered contract:
-- JDE pull `qryF43121` = ~60 cols from `<dbowner>F43121 LEFT JOIN <dbowner>F0101 ON
-  pran8 = aban8 WHERE PRDOCO > 0 AND PRDGL >= DateF43121` (the address-book join supplies
-  `abalph`). RR side `qryF43121RR` windowed `PRDGL >= DateF43121Gr`.
-- Apply (`update F43121 … from F43121 a join changed_rows_f43121 b on` an **8-col key**
-  `prmatc, prkcoo, prdoco, prdcto, prsfxo, prlnid, prnlin, prdoc`) updates 11 status cols
-  (`prnxtr, prupmj, prdgl, prpid, praopn, prarec, praptd, praclo, pruopn, prurec, pruclo`)
-  + `changedate`. New rows inserted separately.
-- **Open question before building:** the flow also truncates + writes a work table
-  **`F43121_rev`** (an OLE DB destination inside the flow). Determine its role (looks like
-  a revision/reversal staging branch) before collapsing to a single MERGE — it may carry
-  delete/reversal semantics the other tables don't.
-- **Recommended build (on return):** `Staging_F43121` mirroring the pulled cols (incl. the
-  F0101-derived `abalph`/`pran8`), `usp8_apply_f43121` = MERGE on the 8-col key (update the
-  11 status cols when differ; insert new; keep the `PRDGL >= DateF43121` window via the
-  staged pull). Resolve `F43121_rev` first. Same dumb-pipe rewiring as the others.
+The open question is **RESOLVED**, and it's the decisive one:
+
+## `F43121_rev` is a DEAD-END (the reversal branch is vestigial — NO delete)
+The old `Copy F43121` flow Merge-Joins the windowed JDE pull against RR's F43121 on the
+**full 9-col PK** and Conditional-Splits 3 ways:
+- **New** (`ISNULL(PRMATC)`, in JDE not RR) → INSERT into F43121.
+- **Changed** (`grgPRDGL!=PRDGL || grgPRUPMJ!=PRUPMJ || strPRNXTR!=PRNXTR || fltPRAOPN!=PRAOPN`)
+  → `Changed_Rows_F43121` → post-flow `Update F43121 Changes` writes 11 status cols.
+- **Reversed** (`ISNULL(strPRMATC)`, in RR not the JDE window) → written to **`F43121_rev`**.
+
+**`F43121_rev` has no consumer anywhere** — not in the package (no `DELETE … F43121_rev`),
+not in any proc (`usp7_maint_set_display_date` only truncates `Changed_Rows_F43121`, never
+reads `_rev`). It's populated and never read — an "old artifact never removed" (owner
+confirmed). So the current package **does not delete** reversed receipts. **Parity =
+insert + update only**, same as F0011 / F4102. (If RR should ever start deleting reversed
+receipts, that's a deliberate behavior change needing sign-off + a parity-diff — add
+`WHEN NOT MATCHED BY SOURCE AND prdgl >= MIN(staging.prdgl) THEN DELETE`. Not done.)
+
+## DB artifacts (shipped to the dacpac; deployed + smoke-tested on Dev *and* InstTest)
+- `dbo.Staging_F43121` — the **62 pulled cols** at F43121's types (incl. the F0101-derived
+  `abalph` + `pran8`; excludes RR-computed `rrtax` and the `InsertDate`/`ChangeDate` stamps),
+  clustered on the **9-col PK** (`prmatc,prkcoo,prdoco,prdcto,prsfxo,prlnid,prnlin,prdoc,prsfx`).
+- `dbo.usp8_apply_f43121` — `MERGE dbo.F43121 USING Staging_F43121` on the **9-col PK**
+  (the old Merge Join keyed on 9; the legacy `Update F43121 Changes` joined on only 8 —
+  omitting `prsfx` — which MERGE can't do without risking multi-match, so MERGE uses 9).
+  `WHEN MATCHED AND (prdgl|prupmj|prnxtr|praopn differ)` → UPDATE the **11** status cols
+  + `ChangeDate` (detection on the same 4 the Conditional Split used; 11 written — a
+  faithful port of the detect-on-4/write-11 quirk). `WHEN NOT MATCHED BY TARGET` → INSERT
+  the full row + `InsertDate`. **No delete.** No-ops on empty staging; writes `RSsisLoadLog`
+  + PRINTs `N new; M updated`. **Smoke test PASSED** (changed row: 4-col trigger fired, 11
+  cols written, ChangeDate stamped; new row inserted; log new=1/changed=1).
+
+## SSIS rewiring (VS — `Receipts` container; same dumb-pipe collapse as F0911)
+Collapse the two flows (`Copy F43121` steady + `Copy F43121 Init` full) into **one**, and
+drop the `@InitLoad` branch — the MERGE handles new+changed uniformly:
+1. **F43121 Start** Execute SQL → `TRUNCATE TABLE Staging_F43121` (drop the
+   `Changed_Rows_F43121` / `F43121_rev` truncates).
+2. **Keep** the JDE **OLE DB Source** (`qryF43121` — windowed `PRDGL >= DateF43121`, the
+   F0101 LEFT JOIN for `abalph`) + the **Convert Strings / Dates to Gregorian / Convert
+   Numerics** derived columns. **Delete** the RR-compare source (`qryF43121RR`/`Get RR
+   F43121`), the **Sort**, the **Merge Join**, the **Conditional Split**, the 3 Row Counts
+   (`Changed/New/Reversed Count`), and the 3 destinations (`RR F43121`, `Changed_Rows_F43121`,
+   `RR F43121 Rev`). The `Pass converted columns only` Union All becomes a passthrough —
+   keep or remove.
+3. **Add** one OLE DB Destination → **`Staging_F43121`** (FASTLOAD + TABLOCK), mapping the
+   **converted** derived-column outputs (`grgPRDGL→prdgl`, `intPRDOCO→prdoco`,
+   `decPRLNID→prlnid`, etc.) straight across. Delete `Copy F43121 Init` + its precedence
+   branch so `F43121 Start` → the single `Copy F43121` → apply.
+4. **Replace** the post-flow `Update F43121 Changes` Execute SQL with
+   **`EXEC dbo.usp8_apply_f43121`** (no params; insert+update self-contained; no-ops on empty).
+5. **Obsolete** (retire — see the work-table sweep): `qryF43121RR`, `DateF43121Gr`, the
+   `ctrF43121Chg/New/Rev` vars, `Changed_Rows_F43121`, `F43121_rev`.
+
+## ⚠ Parity caveat to confirm on the test run
+`prsfx`/`prsfxo` are fixed-pad `NCHAR`, so `t.prsfx = s.prsfx` joins SARGably; the old RR
+source `LTRIM(RTRIM())`-ed them defensively. If the parity test shows key mismatches on
+`prsfx`/`prsfxo`, switch the MERGE `ON` to `LTRIM(RTRIM())` both sides (same call F0911's
+`glextl` note made).
 
 # Surfacing foundation shipped (2026-06-14, s33)
 `dbo.RSsisLoadLog` (table) + all `usp8_apply_*` procs now INSERT a per-run row

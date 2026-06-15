@@ -156,8 +156,7 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <tbody>
 <tr><td><code>JDESource</code></td><td>The customer&rsquo;s JDE database (read-only source). Driver varies by platform; <code>CM.JDESource.ConnectionString</code> + <code>CM.JDESource.Password</code> (sensitive) are bound from the environment.</td></tr>
 <tr><td><code>RRLocal</code></td><td>The RapidReconciler destination database, as <code>rruser</code>. <code>CM.RRLocal.ConnectionString</code> + <code>CM.RRLocal.Password</code> (sensitive).</td></tr>
-<tr><td><code>Cache - Objects</code>, <code>Cache - Short Items</code></td><td>In-package Cache connection managers used by the intra-container lookups (the supplemental/orders flows cache RR-local keys rather than re-query). These caches are intra-container only.</td></tr>
-<tr><td><code>ConfigDB</code> <em>(orphan)</em></td><td>Vestige of the retired config-table model. Left unset; slated for removal in a VS pass.</td></tr>
+<tr><td><code>Cache - Objects</code></td><td>In-package Cache connection manager used by an intra-container lookup (caches RR-local keys rather than re-query). Intra-container only. (The former <code>Cache - Short Items</code> CM was retired when the cardex item set moved to the <code>RShortItems</code> table &mdash; see &sect;9.)</td></tr>
 </tbody>
 </table></div>
 <div class="callout note"><p>The connection strings are split into a password-free <code>...ConnectionString</code> and a separate sensitive <code>...Password</code> on purpose &mdash; merging them in one sensitive string triggered catalog error 27221. VALC writes the two halves separately.</p></div>
@@ -165,12 +164,11 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 
 <section id="parameters">
 <h2>3. Parameters</h2>
-<p>Eighteen package parameters drive every per-customer and per-run decision. Types matter: a catalog environment variable bound to a parameter <strong>must match the parameter&rsquo;s type exactly</strong> or the bind fails. Booleans and Int32 0/1 flags are <em>not</em> interchangeable here.</p>
+<p>Seventeen package parameters drive every per-customer and per-run decision. Types matter: a catalog environment variable bound to a parameter <strong>must match the parameter&rsquo;s type exactly</strong> or the bind fails. Booleans and Int32 0/1 flags are <em>not</em> interchangeable here.</p>
 <div class="table-wrap"><table>
 <thead><tr><th>Parameter</th><th>Type</th><th>Default</th><th>Purpose</th></tr></thead>
 <tbody>
 <tr><td><code>dbowner</code></td><td>String</td><td><code>dbo.</code></td><td>JDE schema prefix used in the source queries (e.g. <code>PRODDTA.</code>, <code>PS920DTA.</code>). Includes the trailing dot.</td></tr>
-<tr><td><code>tableQualifier</code></td><td>String</td><td><code>PRODDTA.</code></td><td>Legacy JDE qualifier; largely superseded by <code>dbowner</code>. Slated for cleanup.</td></tr>
 <tr><td><code>InitLoad</code></td><td>Int32 (0/1)</td><td><code>0</code></td><td>1 = full initial load (widest history window); 0 = steady incremental refresh.</td></tr>
 <tr><td><code>BootstrapOnly</code></td><td>Boolean</td><td><code>False</code></td><td>True = seed companies + period cutoffs only (the bootstrap branch), then stop &mdash; unlocks licensing/handoff before the full load.</td></tr>
 <tr><td><code>LoadReference</code></td><td>Boolean</td><td><code>True</code></td><td>True = reload the reference/master tables (Initialize &rarr; Companies). A per-group <em>preload</em> sets this False so it skips the company/reference reload.</td></tr>
@@ -271,7 +269,7 @@ Compute Load Dates
 <tr><td><code>F4111</code> (cardex)</td><td><code>ilukid</code></td><td>new = watermark (unchanged); changes = re-pull <strong>open rows</strong> (ilicu=0) by PK, MERGE-update</td><td><code>Staging_F4111</code>, <code>usp8_f4111_build_change_pull</code>, <code>usp8_apply_f4111</code>, <code>RF4111ChangeBatchType</code></td><td>Done (DB) &mdash; see the cardex note below</td></tr>
 <tr><td><code>F0011</code> (batch)</td><td><code>icicut, icicu</code></td><td>insert + update (iciapp, icist), no delete; windowed by ICDICJ</td><td><code>Staging_F0011</code>, <code>usp8_apply_f0011</code></td><td>Done (DB)</td></tr>
 <tr><td><code>F4102</code> (item branch)</td><td><code>ibmcu, ibitm</code></td><td>insert + update (category + reporting codes), no delete; full-master (no window)</td><td><code>Staging_F4102</code>, <code>usp8_apply_f4102</code></td><td>Done (DB)</td></tr>
-<tr><td><code>F43121</code> (receipts)</td><td>8-col (prmatc&hellip;prdoc)</td><td>insert + update (11 status cols), windowed by PRDGL, F0101 join, <code>F43121_rev</code> work table</td><td><em>designed</em></td><td>Deferred &mdash; build pending (resolve <code>F43121_rev</code> role first)</td></tr>
+<tr><td><code>F43121</code> (receipts)</td><td>9-col PK (prmatc&hellip;prsfx)</td><td>insert + update (11 status cols; change trigger = prdgl/prupmj/prnxtr/praopn), windowed by PRDGL, F0101 join for <code>abalph</code>; <strong>no delete</strong></td><td><code>Staging_F43121</code>, <code>usp8_apply_f43121</code></td><td>Done (DB)</td></tr>
 </tbody>
 </table></div>
 
@@ -297,7 +295,7 @@ Compute Load Dates
 <section id="config">
 <h2>11. Configuration</h2>
 <p>All per-customer configuration is a catalog <strong>environment</strong> &mdash; one set of variables per RR database, bound to the &sect;3 parameters. VALC builds it from the customer&rsquo;s topology (the RRLocal host comes from the Topology, not an inline value) and the licensed modules. The two sensitive values (<code>CM.JDESource.Password</code>, <code>CM.RRLocal.Password</code>) are split out from the connection strings. The <code>Dec*</code> values are mined (&sect;6), not entered.</p>
-<p>There is no longer a SQL-Server config table or package configuration in the run path; the retired <code>RRConfig</code> / <code>ConfigDB</code> mechanism is vestigial.</p>
+<p>There is no longer a SQL-Server config table or package configuration in the run path; the retired <code>RRConfig</code> / <code>ConfigDB</code> mechanism has been removed from the package entirely.</p>
 </section>
 
 <section id="logging">
