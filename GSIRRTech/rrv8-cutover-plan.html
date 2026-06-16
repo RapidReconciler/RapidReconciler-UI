@@ -72,6 +72,11 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 .footer-sep{color:rgba(255,255,255,0.25);margin:0 6px}
 @media (max-width:960px){.layout{grid-template-columns:1fr;gap:24px}.toc{position:static;max-height:none;border:1px solid var(--rule);border-radius:6px;padding:14px 16px;background:var(--bg-soft)}.page-title{font-size:32px}.footer-line{gap:12px;font-size:12px}}
 @media (max-width:560px){.page-header{padding:24px 18px}.layout{padding:24px 18px 60px}}
+  /* SPA view-switching: one section shown at a time (JS-driven). The
+     body.spa class is added by the inline script, so with JS disabled the
+     page degrades to a normal top-to-bottom scroll. */
+  body.spa article section[id]        { display: none; }
+  body.spa article section[id].active { display: block; }
 </style>
 <link rel="stylesheet" href="../Tools/doc-header.css">
 <script defer src="../Tools/doc-chrome.js"></script>
@@ -418,8 +423,8 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <h3>Tier 3 &mdash; Feature completion (depends on Tier 1)</h3>
 <ol start="6">
   <li><strong>Permission gating in the V8 user menu</strong> &mdash; hide Import JDE / Restart Service / etc. based on the JWT's per-database flags. Requires the corrected flags from Tier 1 #1.</li>
-  <li><strong>Provisioning flow</strong> (Phase 0 #7) &mdash; Add Database &rarr; spawn Services jar, per the <a href="https://github.com/RapidReconciler/RapidReconciler-UI/blob/main/docs/plans/mini-valc-database-provisioning-production-ready.md">provisioning plan</a>. Pick the topology gate (per-customer vs central) before starting &mdash; every hardening choice depends on it.</li>
-  <li><strong>Deployment Center real wiring</strong> &mdash; the <code>/valc/deployment</code> DB-script execute and Services-release deploy currently render placeholder per-target results. Wire DB-script dispatch to the selected customer databases and Services-release push through the agent self-update path. Depends on #7.</li>
+  <li><strong>Provisioning flow</strong> (Phase 0 #7) &mdash; Add Database &rarr; spawn Services jar, per the <a href="https://github.com/RapidReconciler/RapidReconciler-UI/blob/main/docs/plans/mini-valc-database-provisioning-production-ready.md">provisioning plan</a>. Pick the topology gate (per-customer vs central) before starting &mdash; every hardening choice depends on it. <strong>Partially landed</strong>: the Installations-tab flow (create database &rarr; SSIS deploy &rarr; bootstrap &rarr; license &rarr; schedule) and the go-live administrator handoff have shipped; the central-broker Services-spawn hardening from the sub-plan is the remaining piece.</li>
+  <li><strong>Deployment Center real wiring</strong> &mdash; <strong>DONE.</strong> The <code>/valc/deployment</code> console is wired end-to-end as three banded tabs. <strong>Installations</strong>: readiness check, create-database + schema + <code>rruser</code>, SSIS catalog deploy, bootstrap + company licensing, bulk load with live progress, and the nightly refresh schedule. <strong>Upgrades</strong>: DB / Services / SSIS release deploys per database, with Build/Test pre-flight, data-loss blocking, and Services rollback. <strong>Troubleshooting</strong>: live agent-log triage, SSIS last execution, B&rarr;C reconcile, all-company roll-forward, and ad-hoc SQL. The earlier per-target placeholder results are gone.</li>
 </ol>
 
 <h3>Tier 4 &mdash; Module breadth (Phase 0 #4)</h3>
@@ -452,6 +457,12 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <section id="release-notes">
 <h2>Release notes &mdash; cutover-relevant commits</h2>
 <p>Curated list of merged PRs that materially advance the cutover. Append each new cutover-relevant commit at the <strong>top</strong> so the most recent landing reads first. Format: <code>YYYY-MM-DD &middot; repo#PR &middot; short summary &middot; tier / phase reference</code>.</p>
+
+<h3>2026-06</h3>
+<ul>
+  <li>2026-06-03 &middot; <strong>Valc #75</strong> / <strong>UI #188</strong> &middot; Per-client company-seat licensing &mdash; the negotiated company count (unlimited when unset) is restored and shown as &ldquo;X of N&rdquo; on both dashboards; advisory. &mdash; <em>Phase 0 #7 / provisioning &amp; licensing.</em></li>
+  <li>2026-06-03 &middot; <strong>Valc #71</strong> / <strong>UI #185</strong> &middot; Go-live customer handoff &mdash; the RR Administrator is seeded at handoff with a set-password link, and the install bundle no longer carries an app credential. &mdash; <em>Phase 0 #7 / provisioning.</em></li>
+</ul>
 
 <h3>2026-05</h3>
 <ul>
@@ -498,28 +509,32 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 </footer>
 
 <script>
+// SPA navigation — show one section at a time; the TOC swaps views.
+// goAnchor() keeps its name (the TOC + in-doc #links call it) but now
+// switches views instead of scrolling. body.spa is added here, so with
+// JS disabled the page degrades to a normal top-to-bottom scroll.
 (function () {
-  var links = Array.prototype.slice.call(document.querySelectorAll('.toc li[data-target]'));
-  if (!links.length) return;
-  var sections = links.map(function (li) { return document.getElementById(li.dataset.target); }).filter(Boolean);
-  function setActive(id) {
-    links.forEach(function (li) { li.classList.toggle('active', li.dataset.target === id); });
+  var views  = Array.prototype.slice.call(document.querySelectorAll('article section[id]'));
+  var tocLis = Array.prototype.slice.call(document.querySelectorAll('.toc li[data-target]'));
+  if (!views.length) return;
+
+  function showView(id) {
+    var target = document.getElementById(id);
+    if (!target) return;
+    views.forEach(function (v) { v.classList.toggle('active', v === target); });
+    tocLis.forEach(function (li) { li.classList.toggle('active', li.dataset.target === id); });
+    window.scrollTo({ top: 0, behavior: 'instant' });
+    try { history.replaceState(null, '', window.location.pathname + window.location.search + '#' + id); } catch (e) {}
   }
-  window.goAnchor = function (id) {
-    var el = document.getElementById(id);
-    if (!el) return;
-    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    setActive(id);
-    history.replaceState(null, '', window.location.pathname + window.location.search + '#' + id);
-  };
-  var observer = new IntersectionObserver(function (entries) {
-    entries.forEach(function (e) {
-      if (e.isIntersecting && e.intersectionRatio > 0.3) setActive(e.target.id);
-    });
-  }, { rootMargin: '-30% 0px -55% 0px', threshold: [0, 0.3, 0.7, 1] });
-  sections.forEach(function (s) { observer.observe(s); });
-  var hashId = (window.location.hash || '').replace(/^#/, '');
-  if (hashId) setActive(hashId);
+  window.goAnchor = showView;
+
+  function routeToHash() {
+    var id = (window.location.hash || '').replace(/^#/, '');
+    showView(id && document.getElementById(id) ? id : views[0].id);
+  }
+  document.body.classList.add('spa');
+  window.addEventListener('hashchange', routeToHash);
+  routeToHash();
 })();
 </script>
 

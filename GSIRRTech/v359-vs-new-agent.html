@@ -71,6 +71,11 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 .footer-sep{color:rgba(255,255,255,0.25);margin:0 6px}
 @media (max-width:960px){.layout{grid-template-columns:1fr;gap:24px}.toc{position:static;max-height:none;border:1px solid var(--rule);border-radius:6px;padding:14px 16px;background:var(--bg-soft)}.page-title{font-size:32px}.footer-line{gap:12px;font-size:12px}}
 @media (max-width:560px){.page-header{padding:24px 18px}.layout{padding:24px 18px 60px}}
+  /* SPA view-switching: one section shown at a time (JS-driven). The
+     body.spa class is added by the inline script, so with JS disabled the
+     page degrades to a normal top-to-bottom scroll. */
+  body.spa article section[id]        { display: none; }
+  body.spa article section[id].active { display: block; }
 </style>
 <link rel="stylesheet" href="../Tools/doc-header.css">
 <script defer src="../Tools/doc-chrome.js"></script>
@@ -477,29 +482,33 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 </footer>
 
 <script>
-  function goAnchor(id) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    const y = el.getBoundingClientRect().top + window.pageYOffset - 16;
-    window.scrollTo({ top: y, behavior: 'smooth' });
-    history.replaceState(null, '', '#' + id);
-  }
+  // SPA navigation — show one section at a time; the TOC swaps views.
+  // goAnchor() keeps its name (the TOC links call it) but now switches
+  // views instead of scrolling. body.spa is added here, so with JS
+  // disabled the page degrades to a normal top-to-bottom scroll.
+  (function () {
+    const views  = Array.from(document.querySelectorAll('article section[id]'));
+    const tocLis = Array.from(document.querySelectorAll('.toc li[data-target]'));
+    if (!views.length) return;
 
-  // Highlight the TOC entry for whichever section is most prominent
-  // in the viewport. Cheap scroll handler — IntersectionObserver
-  // is overkill for ~10 sections.
-  const sections = Array.from(document.querySelectorAll('article section[id]'));
-  const tocLis   = Array.from(document.querySelectorAll('.toc li[data-target]'));
-  function syncToc() {
-    let activeId = sections[0] && sections[0].id;
-    for (const s of sections) {
-      const r = s.getBoundingClientRect();
-      if (r.top <= 120) activeId = s.id;
+    function showView(id) {
+      const target = document.getElementById(id);
+      if (!target) return;
+      views.forEach(v => v.classList.toggle('active', v === target));
+      tocLis.forEach(li => li.classList.toggle('active', li.dataset.target === id));
+      window.scrollTo({ top: 0, behavior: 'instant' });
+      try { history.replaceState(null, '', location.pathname + location.search + '#' + id); } catch (e) {}
     }
-    tocLis.forEach(li => li.classList.toggle('active', li.dataset.target === activeId));
-  }
-  window.addEventListener('scroll', syncToc, { passive: true });
-  window.addEventListener('load',   syncToc);
+    window.goAnchor = showView;
+
+    function routeToHash() {
+      const id = (location.hash || '').replace(/^#/, '');
+      showView(id && document.getElementById(id) ? id : views[0].id);
+    }
+    document.body.classList.add('spa');
+    window.addEventListener('hashchange', routeToHash);
+    routeToHash();
+  })();
 </script>
 
 </body>

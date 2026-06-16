@@ -1041,6 +1041,7 @@
 
       <div class="sidebar-section-label">Reference</div>
       <ul class="sidebar-nav">
+        <li data-target="deployment-center"><button onclick="showView('topic-deployment-center')">Deployment Center</button></li>
         <li data-target="requests"><button onclick="showView('topic-requests')">Common Requests</button></li>
         <li data-target="troubleshooting"><button onclick="showView('topic-troubleshooting')">Troubleshooting</button></li>
         <li data-target="password-policy"><button onclick="showView('topic-password-policy')">Password Policy</button></li>
@@ -1939,6 +1940,58 @@ SUBMITTED BY
         <div class="topic-footer-nav">
           <button class="back-btn" onclick="goHome()">&larr; Back to Overview</button>
           <button class="prev-btn" onclick="showView('topic-step-10')">&larr; Previous</button>
+          <button class="next-btn" onclick="showView('topic-deployment-center')">Next: Deployment Center &rarr;</button>
+        </div>
+      </section>
+
+      <section id="topic-deployment-center" class="view">
+        <h2>The Deployment Center</h2>
+        <p>The <strong>Deployment Center</strong> is the single console for standing up and maintaining a customer&rsquo;s RapidReconciler databases. It has three tabs &mdash; <strong>Installations</strong>, <strong>Upgrades</strong>, and <strong>Troubleshooting</strong> &mdash; each working one customer (and usually one database) at a time. Every tab is laid out as numbered, top-to-bottom bands, so you work straight down the page.</p>
+
+        <div class="callout">
+          <div class="callout-label">Installations tab vs. the install bundle</div>
+          <p>The <a href="javascript:void(0)" onclick="showView('topic-step-4')">Generate Install Bundle</a> workflow (Steps 1&ndash;10) is the bundle-based install &mdash; the customer&rsquo;s database team runs the SQL scripts on their own SQL Server. The Installations tab is the alternative VALC-driven path: VALC connects to the target SQL Server with a privileged account and creates the database, schema, and login itself. Where a customer&rsquo;s DBA won&rsquo;t allow VALC to run <code>CREATE DATABASE</code> directly, the <strong>Build</strong> preview is the exact SQL for them to review and run by hand.</p>
+        </div>
+
+        <div class="diamond-divider"><span class="diamond"></span></div>
+
+        <h3 id="dc-installations">Installations Tab</h3>
+        <p>Installs a customer&rsquo;s database &mdash; a new customer&rsquo;s first install, or an additional database for an existing one. New customers awaiting their first install sort to the top of the picker. Work down the seven bands:</p>
+        <ol>
+          <li><strong>Which customer?</strong> Pick the customer; the summary shows what they already have installed.</li>
+          <li><strong>Readiness Check.</strong> Connects to the target SQL Server and verifies the environment is ready. Open the <strong>Connection</strong> panel to enter the <strong>sysadmin</strong> account that will perform the install &mdash; on a cold install, <code>rruser</code> doesn&rsquo;t exist until Deploy creates it. The password is used for the check only and is never stored. Then <strong>Run checks</strong>.</li>
+          <li><strong>Install a Database.</strong> Name it (the <code>RapidReconciler_</code> prefix is locked; the suffix defaults to <code>Prod</code>) and pick the install release. <strong>Build</strong> previews the create-database + schema + <code>rruser</code> SQL, <strong>Test</strong> confirms the account can create it and the name is free, and <strong>Deploy</strong> creates the database, publishes the schema, creates <code>rruser</code> (idempotent &mdash; a no-op if it already exists), and registers it.</li>
+          <li><strong>SSIS Package Configuration and Deploy.</strong> Per database: &#9312; pick the database; &#9313; <strong>Build environment</strong> resolves its SSISDB catalog environment and checks it&rsquo;s complete; &#9314; <strong>Check SSIS</strong> verifies the catalog is ready (CLR enabled, SSISDB present, SQL Agent running with its account in <code>ssis_admin</code>); &#9315; <strong>Deploy package</strong> lands the <code>.ispac</code> in the catalog; and &#9316; <strong>Validate</strong> runs a real <code>SELECT 1</code> against both the JDE source and the RR database.</li>
+          <li><strong>Bootstrap and Licensing.</strong> <strong>Bootstrap companies</strong> loads companies + period cutoffs only &mdash; a quick first pass that seeds the company list. Then tick the companies to license; each writes straight to the customer&rsquo;s licensing list, and the server applies the contract&rsquo;s seat limit and reserved-company rules. License the companies before the full data load.</li>
+          <li><strong>Load Staging Data.</strong> <strong>Full Load</strong> pulls the bounded transaction history (best run off-hours); <strong>Steady</strong> is the incremental refresh for afterward. Watch <strong>Load Progress</strong> and the <strong>Tables</strong> row counts fill; <strong>Stop load</strong> halts a run (leaving a partial load you&rsquo;d normally clear and reload).</li>
+          <li><strong>SQL Agent Job Schedule.</strong> Set the nightly steady-refresh run time and turn the schedule on &mdash; it defaults to <strong>daily at 02:00</strong>. <strong>Run refresh now</strong> seeds the data immediately instead of waiting for the next scheduled run. A DBA can still set a different cadence (weekly, specific days) in SQL Server Agent; this card sets the time + on/off and shows whatever cadence is configured.</li>
+        </ol>
+
+        <div class="diamond-divider"><span class="diamond"></span></div>
+
+        <h3 id="dc-upgrades">Upgrades Tab</h3>
+        <p>Moves an existing customer&rsquo;s database, Services jar, and SSIS package forward &mdash; one customer at a time. The Step&nbsp;1 drawer shows each database&rsquo;s current DB / Services / SSIS version with an <em>update available</em> pill wherever one is behind.</p>
+        <ol>
+          <li><strong>Which customer?</strong> Pick the customer; the drawer lists their databases and where each stands on all three release lanes. When a customer is fully current, a <strong>Re-deploy anyway</strong> button unlocks the Manual path for a forced re-push or repair.</li>
+          <li><strong>Upgrade type.</strong> <strong>Manual</strong> (pick each release yourself), <strong>V7 &rarr; V8</strong> (prefills the V8 releases), or <strong>Update all to latest</strong> (prefills the newest releases).</li>
+          <li><strong>Database.</strong> Pick the target database and a release. <strong>Build</strong> diffs the release against the database and previews the exact SQL (<strong>Export .sql</strong> for long scripts), <strong>Test</strong> is a dry-run reporting what would change plus any data-loss warnings, and <strong>Deploy</strong> publishes it. By default a data-loss change is <strong>blocked</strong>; <strong>Allow data loss</strong> permits it, but only after you&rsquo;ve reviewed the pre-flight.</li>
+          <li><strong>Services.</strong> Pick a Services release and <strong>Deploy</strong> it to the database from Step&nbsp;3 (Services run per database). Services <em>can</em> be rolled back to a prior version from here.</li>
+          <li><strong>SSIS Package.</strong> Pick a package version and <strong>Deploy</strong> &mdash; it lands the <code>.ispac</code> in the SSISDB catalog and (re)creates that database&rsquo;s SQL Agent job. Re-deploy is idempotent. The per-customer connections come from the catalog environment you build on the Installations tab.</li>
+        </ol>
+
+        <div class="callout warning">
+          <div class="callout-label">Rolling a database back isn&rsquo;t a reverse-deploy</div>
+          <p>A database release can&rsquo;t be cleanly undone &mdash; schema changes aren&rsquo;t reversible, so deploying an <em>older</em> release is blocked as data loss. To back out a bad database release, <strong>restore from backup</strong> or apply a <strong>forward-fix</strong>. Services is the exception: it rolls back from Step&nbsp;4.</p>
+        </div>
+
+        <div class="diamond-divider"><span class="diamond"></span></div>
+
+        <h3 id="dc-troubleshooting">Troubleshooting Tab</h3>
+        <p>Read-only diagnostics for one customer database, run straight from VALC &mdash; the agent log, SSIS last execution, B&rarr;C reconcile log, and all-company roll-forward, plus an ad-hoc SQL band. It&rsquo;s the first stop for a production issue. See <a href="javascript:void(0)" onclick="showView('topic-troubleshooting')">Troubleshooting</a> for the per-band walkthrough.</p>
+
+        <div class="topic-footer-nav">
+          <button class="back-btn" onclick="goHome()">&larr; Back to Overview</button>
+          <button class="prev-btn" onclick="showView('topic-checklist')">&larr; Previous</button>
           <button class="next-btn" onclick="showView('topic-requests')">Next: Common Requests &rarr;</button>
         </div>
       </section>
@@ -2038,14 +2091,14 @@ SUBMITTED BY
 
         <div class="topic-footer-nav">
           <button class="back-btn" onclick="goHome()">&larr; Back to Overview</button>
-          <button class="prev-btn" onclick="showView('topic-checklist')">&larr; Previous</button>
+          <button class="prev-btn" onclick="showView('topic-deployment-center')">&larr; Previous</button>
           <button class="next-btn" onclick="showView('topic-troubleshooting')">Next: Troubleshooting &rarr;</button>
         </div>
       </section>
 
       <section id="topic-troubleshooting" class="view">
         <h2>Troubleshooting</h2>
-        <p>Six diagnostic patterns for the most common install problems, with the agent log file as the primary diagnostic tool.</p>
+        <p>Diagnostic patterns for the most common install problems. The Deployment Center's <a href="javascript:void(0)" onclick="showView('topic-troubleshooting')">Troubleshooting tab</a> is the first stop &mdash; it reads the agent log, SSIS status, and roll-forward for a chosen database straight from VALC; the raw agent log file is the deeper fallback.</p>
 
         <div class="diamond-divider"><span class="diamond"></span></div>
 
@@ -2059,6 +2112,18 @@ SUBMITTED BY
         <div class="diamond-divider"><span class="diamond"></span></div>
 
         <h2 id="diagnostic-tools">Diagnostic Tools</h2>
+
+        <h3 id="deployment-center-troubleshooting">The Deployment Center Troubleshooting Tab</h3>
+        <p>Most of the checks below can now be run from VALC itself, without remoting into the customer's server. In the <strong>Deployment Center</strong>, the <strong>Troubleshooting</strong> tab &mdash; the third tab, alongside <strong>Installations</strong> and <strong>Upgrades</strong> &mdash; gives you read-only diagnostics for one customer database at a time. Start here before reaching for the raw log files.</p>
+        <p>Pick a customer and one of its databases in <strong>Step 1</strong>, then open whichever band you need:</p>
+        <ul>
+          <li><strong>Agent Log</strong> &mdash; pulls the customer agent's live <code>out.log</code> and runs the same rule-based triage as the standalone log analyzer: a verdict, the concerning lines lifted to the top, and benign noise suppressed. The <strong>Full analyzer</strong> link opens the complete tool in a new tab.</li>
+          <li><strong>SSIS Catalog</strong> &mdash; the last package execution for that database (status and timing), so you can confirm the JDE import is actually running.</li>
+          <li><strong>System Status</strong> &mdash; the recent B&rarr;C reconcile cycles with per-cycle analysis. <strong>Export to Excel</strong> saves the full log.</li>
+          <li><strong>Account Roll Forward</strong> &mdash; the GL and variance roll-forward summary across all companies, with an Excel export for the analysis workbook.</li>
+          <li><strong>Ad-Hoc Queries</strong> &mdash; run a curated maintenance script (version-controlled in the RapidReconciler-DB repo) or type SQL against the Step&nbsp;1 database, then read the result set and row counts back inline.</li>
+        </ul>
+        <p>The four diagnostic bands (Agent Log, SSIS Catalog, System Status, Account Roll Forward) are read-only; Ad-Hoc Queries runs whatever SQL you give it against the selected database. When the tab can't tell you what you need &mdash; or the agent isn't connecting at all &mdash; fall back to the raw log files below.</p>
 
         <h3 id="agent-log-files">Agent Log Files</h3>
         <p>The RapidReconciler Agent writes detailed log files on the customer's application server. These are the primary source of truth for diagnosing connectivity issues — when a scenario below says "check the agent logs," this is where to look.</p>
