@@ -138,11 +138,24 @@ server side; nothing reaches a customer until it's all done.
    using the legacy CORE protocol, the existing truststore, and
    the same hostname (post-DNS-flip). Validate end-to-end against
    a real legacy broker pointed at VALC 2.0.
+   **version2 update (Coral, 2026-06):** the legacy central stack moved
+   off Azure onto **getgsi.com Linux/Docker hosts** &mdash; the agent now
+   targets `rrjms-dev.getgsi.com:8001` (was port 443) and trusts a single
+   **getgsi wildcard cert** (PKCS12), not the old `coralsoftware` JKS. So
+   the parity target is concrete: our broker listens on that host/port and
+   presents the getgsi cert. The wire protocol is unchanged (`rr-common`
+   is not in version2), so the CORE-protocol DTOs still match.
 3. **Signing-key inheritance** &mdash; VALC 2.0 accepts Azure
    VALC's existing RSA private key as its signing key at cutover
    time. The new Services jar bundles the SAME `public.key`
    resource v359 does. Same trust anchor; v359 + new agent both
    verify the same tokens.
+   **version2 update (Coral, 2026-06):** version2 ships a **new getgsi
+   signing keypair** (`rr-valc/certs/private.key` + `public.key`). The
+   "inherit the existing key" plan becomes "inherit the *new* getgsi
+   keypair" &mdash; VALC 2.0's `JwtService` signs with it and the new
+   Services jar's bundled `public.key` must match it, or tokens won't
+   verify. Confirm whether it replaces the prior key before cutover.
 4. **V8 module coverage** &mdash; In Transit, PO Receipts, Roll
    Forward not yet built in the new agent or as V8 pages. The new
    agent today doesn't have these controllers; the legacy SPA hits
