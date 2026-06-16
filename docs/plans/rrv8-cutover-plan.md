@@ -2,8 +2,10 @@
 
 **Status:** Spec. In progress. Foundation pieces have landed
 (VALC 2.0 control plane, new Services jar core endpoints, JWT
-per-database scoping). Customer-facing rollout (V7 &rarr; V8) is
-phased.
+per-database scoping, the Deployment Center install / upgrade /
+troubleshoot console, per-client company-seat licensing, and the
+go-live administrator handoff). Customer-facing rollout
+(V7 &rarr; V8) is phased.
 
 **Source of this plan:** session conversations starting 2026-05-25
 covering what a real customer-facing cutover would actually look
@@ -585,17 +587,26 @@ breadth, then the cutover-infrastructure long poles.
 6. **Permission gating in the V8 user menu** &mdash; hide Import JDE /
    Restart Service / etc. based on the JWT's per-DB flags. Needs the
    corrected flags from Tier 1 #1, else everything reads false.
-7. **mini-VALC provisioning flow** (Phase 0 #7) &mdash; Add Database
+7. **VALC 2.0 provisioning flow** (Phase 0 #7) &mdash; Add Database
    &rarr; spawn Services jar, per
    [`mini-valc-database-provisioning-production-ready.md`](mini-valc-database-provisioning-production-ready.md).
    Pick the topology gate (per-customer vs central broker) before
    starting &mdash; every hardening choice depends on it.
-8. **Deployment Center real wiring** &mdash; the `/valc/deployment`
-   DB-script execute and Services-release deploy are stubs today
-   (per-target placeholder results). Wire DB-script dispatch to the
-   selected customer databases and Services-release push through the
-   agent self-update path. Depends on #7 (provisioning) for the
-   target-database plumbing.
+   **Partially landed**: the Installations-tab flow (create database
+   &rarr; SSIS deploy &rarr; bootstrap &rarr; license &rarr; schedule)
+   and the go-live administrator handoff have shipped (see #8 and the
+   release-notes section); the central-broker Services-spawn hardening
+   from the sub-plan is the remaining piece.
+8. **Deployment Center real wiring** &mdash; **DONE.** The
+   `/valc/deployment` console is wired end-to-end as three banded
+   tabs. **Installations**: readiness check, create-database + schema
+   + `rruser`, SSIS catalog deploy, bootstrap + company licensing,
+   bulk load with live progress, and the nightly refresh schedule.
+   **Upgrades**: DB / Services / SSIS release deploys per database,
+   with Build/Test pre-flight, data-loss blocking, and Services
+   rollback. **Troubleshooting**: live agent-log triage, SSIS last
+   execution, B&rarr;C reconcile, all-company roll-forward, and ad-hoc
+   SQL. The earlier per-target placeholder results are gone.
 
 ### Tier 4 &mdash; Module breadth (Phase 0 #4)
 
@@ -665,6 +676,18 @@ Curated list of merged PRs that materially advance the cutover.
 Append each new cutover-relevant commit at the **top** so the most
 recent landing reads first. Format: `YYYY-MM-DD &middot; repo#PR
 &middot; short summary &middot; tier / phase reference`.
+
+### 2026-06
+
+- 2026-06-03 &middot; **Valc #75** / **UI #188** &middot; Per-client
+  company-seat licensing &mdash; the negotiated company count
+  (unlimited when unset) is restored and shown as &ldquo;X of N&rdquo;
+  on both dashboards; advisory. &mdash; *Phase 0 #7 / provisioning &amp;
+  licensing.*
+- 2026-06-03 &middot; **Valc #71** / **UI #185** &middot; Go-live
+  customer handoff &mdash; the RR Administrator is seeded at handoff
+  with a set-password link, and the install bundle no longer carries
+  an app credential. &mdash; *Phase 0 #7 / provisioning.*
 
 ### 2026-05
 
