@@ -184,7 +184,7 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <tr><td><code>DecUnitCost</code></td><td>Int32</td><td><code>10000</code></td><td>Unit-cost decimal scale.</td></tr>
 <tr><td><code>DecQty</code></td><td>Int32</td><td><code>100</code></td><td>Quantity decimal scale.</td></tr>
 <tr><td><code>DecQtyCX</code></td><td>Int32</td><td><code>100</code></td><td>Cardex quantity decimal scale.</td></tr>
-<tr><td><code>MaxConcurrentExecutables</code></td><td>Int32</td><td><code>1</code></td><td>Engine concurrency dial &mdash; see the &sect;10 caveat (driven by a property expression; not honored at run time).</td></tr>
+<tr><td><code>MaxConcurrentExecutables</code></td><td>Int32</td><td><code>-1</code></td><td>Engine concurrency &mdash; <code>-1</code> auto-scales to logical CPUs + 2 at run time (adapts per customer). See &sect;10.</td></tr>
 </tbody>
 </table></div>
 </section>
@@ -284,9 +284,10 @@ Compute Load Dates
 
 <section id="performance">
 <h2>10. Performance model</h2>
-<p>The full load is <strong>resource / I-O-bound, not scheduling-bound</strong>. Profiling (SSISDB <code>executable_statistics</code>) showed the critical path is <code>Inventory &rarr; Orders</code> with GL as a parallel ceiling &mdash; roughly <code>Inventory(30s) &rarr; Orders/Inv-Supp(~76s)</code> alongside <code>GL(~80&ndash;100s)</code>, ~106s wall clock.</p>
+<p>The full load is <strong>resource / I-O-bound, not scheduling-bound</strong>. Profiling (SSISDB <code>executable_statistics</code>) shows the critical path is <code>Inventory &rarr; Orders</code> with GL as a parallel ceiling. On a real client-scale source (treatt, ~2.65M cardex rows) a clean full load runs <strong>~6m37s</strong> end-to-end and a steady incremental ~<strong>1m48s</strong>; <code>F4111</code> dominates the early phase and everything else overlaps it.</p>
 <div class="callout important">
-  <p><strong><code>MaxConcurrentExecutables</code> is applied but not honored at run time.</strong> Full loads at MCE 1/2/4 all took ~112s; even at MCE=1 the top-level containers ran concurrently. The dial is driven by a property expression that isn&rsquo;t taking effect; the dial is kept (operator&rsquo;s call) but tuning belongs in the pipelines, not the dial.</p>
+  <p><strong>The big lever was logging, not concurrency.</strong> <code>LOGGING_LEVEL = Basic</code> (set per execution, &sect;3 of the catalog model) is now used for every run. At <strong>Verbose</strong>, SSISDB writes several rows <em>per pipeline buffer</em>; on a multi-million-row load that write amplification dwarfs the data movement &mdash; it was the &ldquo;why is this so much slower than the Import Wizard&rdquo; symptom (a full load sitting at Verbose ran ~21 min). Nothing in the Load Progress UI reads the Verbose-only tables, so Basic costs nothing and is dramatically faster.</p>
+  <p><strong><code>MaxConcurrentExecutables = -1</code> (auto-scale).</strong> The package ships with the property at <code>-1</code> &mdash; SSIS scales to logical CPUs + 2 at run time, adapting per customer with no dial to pick. (The earlier per-run dial was driven by a property expression the runtime didn&rsquo;t honor; the load runs ~CPUs+2 wide regardless and is critical-path / I/O bound, so forcing a number bought nothing.)</p>
   <p><strong>Intra-container parallelism was tested and reverted.</strong> Fanning out independent sub-flows inside GL/InvSupp/Orders <em>regressed</em> 107s &rarr; 130s &mdash; unthrottled it floods one SQL instance (~10 concurrent flows) into I/O contention. The original serial-within-container design is near the box&rsquo;s sweet spot. The real memory/throughput win is the &sect;9 staging+MERGE refactor (it removes the Sort), not concurrency.</p>
 </div>
 <p>Destination policy is normalized across all flows: FASTLOAD + TABLOCK + bounded commit (10k) + <code>AutoAdjustBufferSize</code>.</p>
@@ -317,6 +318,15 @@ Compute Load Dates
   <li>Clean up the job + helper + staged file.</li>
 </ol>
 <p>A stored proc is <em>not</em> a catalog object, so the <code>usp8_*</code> procs and the <code>Staging_*</code> tables deploy normally with the database dacpac &mdash; only the <code>.ispac</code> and executions need the Agent-job route.</p>
+
+<h4>Cutting a release (the .ispac artifact)</h4>
+<p>The package ships as a tagged release, parallel to the DB dacpac and Services jar flows. The artifact is the project <code>.ispac</code>.</p>
+<ol>
+  <li><strong>Rebuild + commit the <code>.ispac</code>.</strong> Unlike the dacpac (built on the self-hosted runner), <code>release-ssis.yml</code> publishes the <strong>committed repo-root <code>.ispac</code></strong> &mdash; a hosted runner can&rsquo;t build an SSIS project. So rebuild the <code>.ispac</code> in Visual Studio from the committed <code>.dtsx</code> and commit it <em>before</em> tagging.</li>
+  <li><strong>Tag <code>ssis-v8.0-beta.N</code></strong> on <code>main</code> and push it; the <code>ssis-v*</code> prefix fires <code>release-ssis.yml</code>, which attaches the committed <code>.ispac</code> to a GitHub Release.</li>
+  <li><strong>Sync into VALC.</strong> The Deployment Center&rsquo;s <em>Sync from GitHub</em> for the SSIS component (or <code>POST /api/v1/file-versions/sync-from-github?component=ssis</code>) pulls the <code>.ispac</code> into <code>file_versions</code> (component <code>ssis</code>), where it becomes the deployable build.</li>
+</ol>
+<p>This is the release/version step; the deploy step above is per-customer. The DB dacpac (<a href="database-spec.html#release">Database Spec &sect;10</a>) and Services jar (<a href="services-version-control.html">Services Documentation</a>) follow the same tag &rarr; build &rarr; sync shape.</p>
 </section>
 
 <section id="see-also">
