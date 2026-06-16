@@ -151,6 +151,10 @@ window.RR_TEST_AGENT_AREAS = [
   'admin/companies',
   // Proactive memory-pressure read behind Home's Service-health card
   'admin/service-health',
+  // Data Refresh Schedule — read-only review card in Home's Administrator
+  // area (initial load + nightly refresh times). GSI manages the schedule;
+  // the customer admin reviews it only.
+  'admin/refresh-schedule',
   // Model DMAAI Review — sign-off read + the enriched model baseline
   'inventory/integrity/model-approval',
   'inventory/integrity/model-baseline',

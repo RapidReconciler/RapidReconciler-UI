@@ -359,6 +359,15 @@
   .row-dot.red { background: var(--red); }
   .row-dot.grey { background: var(--text-muted); }
 
+  /* Data Refresh Schedule (read-only review card) — On/Off pill next to the
+     row title + the muted GSI-managed note under the rows. */
+  .sched-pill { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+    font-size: 10.5px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase;
+    vertical-align: middle; background: var(--border, #e2e6ec); color: var(--text-muted); }
+  .sched-pill.on  { background: var(--green-pale); color: var(--green); }
+  .sched-pill.off { background: var(--border, #e2e6ec); color: var(--text-muted); }
+  .sched-note { font-size: 12px; color: var(--text-muted); margin-top: 4px; line-height: 1.45; }
+
   /* Panel status tint — an admin panel whose task dots report a status
      shades to match (worst dot wins: red > amber > green; grey ignored)
      so the at-a-glance health reads from across the page, not just the
@@ -1084,6 +1093,51 @@
           </div>
           <button class="btn-sm" id="reloadCardexBtn" type="button">Reload&hellip;</button>
         </div>
+        <!-- Review Job Schedule: read-only review of the data-refresh times.
+             Opens a panel showing the initial load + nightly refresh schedule.
+             GSI manages the schedule; the customer admin only reviews it. -->
+        <div class="row">
+          <span class="row-dot grey" id="schedDot"></span>
+          <div class="row-main">
+            <div class="row-title">Review Job Schedule</div>
+            <div class="row-sub">See the initial data load &amp; nightly refresh times. Managed by GSI &mdash; view only.</div>
+          </div>
+          <button class="btn-sm" id="reviewSchedBtn" type="button">Review&hellip;</button>
+        </div>
+      </div>
+
+      <!-- Data Refresh Schedule — READ-ONLY review card. Customer admins see
+           the schedule GSI set up for them (one-time initial load + nightly
+           refresh) but make no changes here. Populated by
+           GET /admin/refresh-schedule; degrades to a neutral "unavailable"
+           state when the agent/endpoint can't be reached. -->
+      <div class="panel is-collapsed" id="schedPanel">
+        <div class="panel-head">
+          <span class="panel-ico ico-util"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span>
+          <div class="panel-headings"><h3>Data Refresh Schedule</h3><div class="panel-summary">When your data loads &amp; refreshes</div></div>
+          <button type="button" class="panel-collapse" aria-expanded="false" title="Expand Data Refresh Schedule"><svg class="panel-collapse-chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg></button>
+        </div>
+
+        <!-- Initial data load (one-time full load) -->
+        <div class="row">
+          <span class="row-dot grey" id="schedInitDot"></span>
+          <div class="row-main">
+            <div class="row-title">Initial data load <span class="sched-pill" id="schedInitState">&mdash;</span></div>
+            <div class="row-sub" id="schedInitSub">A one-time full load of your history.</div>
+          </div>
+        </div>
+
+        <!-- Nightly refresh (recurring) -->
+        <div class="row">
+          <span class="row-dot grey" id="schedDailyDot"></span>
+          <div class="row-main">
+            <div class="row-title">Nightly refresh <span class="sched-pill" id="schedDailyState">&mdash;</span></div>
+            <div class="row-sub" id="schedDailySub">Pulls the latest from JDE each night.</div>
+          </div>
+        </div>
+
+        <!-- GSI-managed note (customer contacts GSI/support to change) -->
+        <div class="sched-note" id="schedNote">Your refresh times are managed by GSI &mdash; contact support to change them.</div>
       </div>
     </div>
       <!-- Read-only awareness: shown when the viewer lacks admin actions.
@@ -1869,6 +1923,9 @@
     // Utilities (Reload GL / Reload Cardex) are destructive maintenance — admin-only
     // (Reload GL's endpoint also 403s non-admins server-side).
     $('utilPanel').hidden = !c.adm;
+    // Data Refresh Schedule is a read-only review of GSI-managed times — admin-only
+    // (same surface as Utilities; the endpoint also 403s non-admins server-side).
+    $('schedPanel').hidden = !c.adm;
   }
 
   // ---- Role split: admins get the action surface; everyone else gets the
@@ -2675,6 +2732,111 @@
       .then(function () { _rcBusy = false; $('rcConfirm').disabled = false; $('rcConfirm').textContent = 'Reload cardex'; });
   }
 
+  // ---- Data Refresh Schedule (Utilities — READ-ONLY review) ----
+  // GET /admin/refresh-schedule returns the GSI-managed schedule for this
+  // database: a one-time initial load + a nightly refresh, each with On/Off,
+  // times, last run + outcome, and next run. The customer admin only REVIEWS
+  // it here — changes are made by GSI. Mirrors the loadReloadGlStatus pattern:
+  // admin-only, rrFetch with graceful fallback to a neutral "unavailable"
+  // state (never breaks the page).
+  function fmtTime12(hhmm) {
+    // "23:00" -> "11:00 PM", "02:00" -> "2:00 AM". Returns "—" on bad input.
+    if (!hhmm || typeof hhmm !== 'string') return '—';
+    var m = /^(\d{1,2}):(\d{2})$/.exec(hhmm.trim());
+    if (!m) return hhmm;
+    var h = parseInt(m[1], 10), min = m[2];
+    if (isNaN(h) || h < 0 || h > 23) return hhmm;
+    var ap = h < 12 ? 'AM' : 'PM';
+    var h12 = h % 12; if (h12 === 0) h12 = 12;
+    return h12 + ':' + min + ' ' + ap;
+  }
+  function fmtRunStamp(stamp) {
+    // Server gives "YYYY-MM-DD HH:mm" (or null). Render friendly date + 12h time.
+    if (!stamp) return null;
+    var parts = String(stamp).trim().split(/\s+/);
+    var d = fmtDateLong(parts[0]);
+    var t = parts[1] ? fmtTime12(parts[1].slice(0, 5)) : '';
+    return t ? (d + ' at ' + t) : d;
+  }
+  function outcomeNote(outcome) {
+    if (!outcome || outcome === 'Unknown') return '';
+    if (outcome === 'Succeeded') return ' (succeeded)';
+    if (outcome === 'Failed')    return ' (failed)';
+    if (outcome === 'Canceled')  return ' (canceled)';
+    return ' (' + esc(outcome) + ')';
+  }
+  function outcomeDotClass(seg) {
+    if (!seg) return 'grey';
+    if (seg.enabled === false) return 'grey';
+    if (seg.lastOutcome === 'Failed') return 'red';
+    if (seg.lastOutcome === 'Succeeded') return 'green';
+    return 'grey';
+  }
+  function paintScheduleSeg(seg, dotId, stateId, subId, scheduledLine) {
+    var dot = $(dotId), state = $(stateId), sub = $(subId);
+    if (state) {
+      var on = !!(seg && seg.enabled);
+      state.textContent = on ? 'On' : 'Off';
+      state.className = 'sched-pill ' + (on ? 'on' : 'off');
+    }
+    if (dot) dot.className = 'row-dot ' + outcomeDotClass(seg);
+    if (sub) {
+      var bits = [];
+      if (scheduledLine) bits.push(scheduledLine);
+      var last = seg && fmtRunStamp(seg.lastRun);
+      bits.push(last ? ('Last run ' + last + outcomeNote(seg.lastOutcome)) : 'Hasn’t run yet');
+      var next = seg && fmtRunStamp(seg.nextRun);
+      if (next) bits.push('Next run ' + next);
+      sub.innerHTML = bits.join(' &middot; ');
+    }
+  }
+  function renderSchedule(s) {
+    var init  = s && s.initialLoad;
+    var daily = s && s.dailyRefresh;
+    // Initial load — one-time full load. Scheduled line = date + time when set.
+    var initSched = init && (init.runDate || init.runTime)
+      ? ('Scheduled for ' + (init.runDate ? fmtDateLong(init.runDate) : 'a date to be set')
+          + (init.runTime ? (' at ' + fmtTime12(init.runTime)) : ''))
+      : 'A one-time full load of your history.';
+    paintScheduleSeg(init, 'schedInitDot', 'schedInitState', 'schedInitSub', initSched);
+    // Nightly refresh — recurring at runTime.
+    var dailySched = daily && daily.runTime
+      ? ('Runs nightly at ' + fmtTime12(daily.runTime))
+      : 'Pulls the latest from JDE each night.';
+    paintScheduleSeg(daily, 'schedDailyDot', 'schedDailyState', 'schedDailySub', dailySched);
+  }
+  function setScheduleUnavailable() {
+    ['schedInitState', 'schedDailyState'].forEach(function (id) {
+      var el = $(id); if (el) { el.textContent = '—'; el.className = 'sched-pill'; }
+    });
+    var dot = $('schedDot'); if (dot) dot.className = 'row-dot grey';
+    var iDot = $('schedInitDot'), dDot = $('schedDailyDot');
+    if (iDot) iDot.className = 'row-dot grey';
+    if (dDot) dDot.className = 'row-dot grey';
+    var iSub = $('schedInitSub'), dSub = $('schedDailySub');
+    if (iSub) iSub.textContent = 'Schedule unavailable right now.';
+    if (dSub) dSub.textContent = 'Schedule unavailable right now.';
+  }
+  function loadRefreshSchedule() {
+    if (IS_DEMO || !isAdmin()) return;
+    rrFetch('admin/refresh-schedule').then(function (s) {
+      if (!s || typeof s !== 'object') { setScheduleUnavailable(); return; }
+      renderSchedule(s);
+      // Roll the Utilities-row dot up to the worst segment outcome so the
+      // collapsed row hints at a failed refresh without expanding the card.
+      var dot = $('schedDot');
+      if (dot) {
+        var ic = outcomeDotClass(s.initialLoad), dc = outcomeDotClass(s.dailyRefresh);
+        var rank = { red: 3, green: 1, grey: 0 };
+        dot.className = 'row-dot ' + ((rank[ic] >= rank[dc]) ? ic : dc);
+      }
+    }).catch(function () {
+      // Endpoint not reachable (older agent, offline) -> neutral unavailable
+      // state. Never break the page.
+      setScheduleUnavailable();
+    });
+  }
+
   // ---- actions ----
   function doSignOut() {
     try { localStorage.removeItem('rrv8.token'); } catch (_) {}
@@ -2748,6 +2910,18 @@
     $('rgAttest').addEventListener('change', function () { if (_rgCutoff) $('rgConfirm').disabled = !this.checked; });
     $('rgOverlay').addEventListener('click', function (e) { if (e.target === this) closeReloadGl(); });
     $('reloadCardexBtn').addEventListener('click', openReloadCardex);
+    // Review Job Schedule — read-only; expand the Data Refresh Schedule panel
+    // and scroll it into view (no modal: there's nothing to edit).
+    var reviewSchedBtn = $('reviewSchedBtn');
+    if (reviewSchedBtn) reviewSchedBtn.addEventListener('click', function () {
+      var panel = $('schedPanel');
+      if (!panel) return;
+      panel.classList.remove('is-collapsed');
+      var btn = panel.querySelector('.panel-collapse');
+      if (btn) { btn.setAttribute('aria-expanded', 'true'); btn.title = 'Collapse Data Refresh Schedule'; }
+      loadRefreshSchedule();
+      try { panel.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (_) {}
+    });
     $('rcCancel').addEventListener('click', closeReloadCardex);
     $('rcConfirm').addEventListener('click', confirmReloadCardex);
     $('rcFromDate').addEventListener('change', loadReloadCardexPreview);
@@ -2831,6 +3005,7 @@
       loadModelApproval();
       loadPurgeInfo();
       loadReloadGlStatus();
+      loadRefreshSchedule();
       loadStatus();
       loadInventoryLight();
       loadCardexTolerance();
@@ -2885,7 +3060,8 @@
     'Inventory Review':   { none: 'GL & perpetual roll-forward', green: 'Roll-forwards intact', amber: 'Variance to review', red: 'Roll-forward breaks to review' },
     'Data Management':    { none: 'Nightly refresh + data purge', green: 'Data is current', amber: 'Refresh in progress', red: 'Last refresh failed' },
     'Service Health':     { none: 'Data service status', green: 'Service healthy', amber: 'Service under load', red: 'Restart recommended' },
-    'Utilities':          { none: 'GL & cardex data maintenance' }
+    'Utilities':          { none: 'GL & cardex data maintenance' },
+    'Data Refresh Schedule': { none: 'When your data loads & refreshes', green: 'Refreshes succeeding', red: 'Last refresh failed' }
   };
   function worstDot(panel) {
     var dots = panel.querySelectorAll('.row-dot');
@@ -3007,6 +3183,12 @@
     if (mdrTitle) mdrTitle.textContent = 'Model DMAAI Review';
     if (mdrSub)   mdrSub.innerHTML = 'Awaiting your accounting team&rsquo;s review &amp; approval.';
     var rgDot = $('reloadGlDot'); if (rgDot) { rgDot.className = 'row-dot grey'; rgDot.title = ''; }
+    // Data Refresh Schedule — neutralize the read-only review card for the new DB.
+    var scDot = $('schedDot'); if (scDot) scDot.className = 'row-dot grey';
+    ['schedInitDot', 'schedDailyDot'].forEach(function (id) { var d = $(id); if (d) d.className = 'row-dot grey'; });
+    ['schedInitState', 'schedDailyState'].forEach(function (id) { var e = $(id); if (e) { e.textContent = '—'; e.className = 'sched-pill'; } });
+    var siSub = $('schedInitSub'); if (siSub) siSub.textContent = 'A one-time full load of your history.';
+    var sdSub = $('schedDailySub'); if (sdSub) sdSub.textContent = 'Pulls the latest from JDE each night.';
     var rfDot = $('refreshDot'), rfSub = $('refreshSub');
     if (rfDot) rfDot.className = 'row-dot grey';
     if (rfSub) rfSub.textContent = 'Pull the latest from JDE into this database';
@@ -3039,6 +3221,7 @@
       loadModelApproval();
       loadPurgeInfo();
       loadReloadGlStatus();
+      loadRefreshSchedule();
       loadStatus();
       loadInventoryLight();
       loadCardexTolerance();
