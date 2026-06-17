@@ -185,14 +185,24 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 
 <div class="phase"><span class="phase-num">2</span><h3>JMS protocol parity</h3>
 <p>VALC 2.0's Artemis broker must accept connections from existing <code>rr-valc-agent.jar</code> instances using the legacy CORE protocol, the existing truststore, and the same hostname (post-DNS-flip). Validate end-to-end against a real legacy broker pointed at VALC 2.0.</p>
-<p><strong>version2 update (Coral, 2026-06):</strong> the legacy central stack moved off Azure onto <strong>getgsi.com Linux/Docker hosts</strong> &mdash; the agent now targets <code>rrjms-dev.getgsi.com:8001</code> (was port 443) and trusts a single <strong>getgsi wildcard cert</strong> (PKCS12), not the old <code>coralsoftware</code> JKS. So the parity target is concrete: our broker listens on that host/port and presents the getgsi cert. The wire protocol is unchanged (<code>rr-common</code> is not in version2), so the CORE-protocol DTOs still match.</p></div>
+<p><strong>version2 update (Coral, 2026-06):</strong> the legacy central stack moved off Azure onto <strong>getgsi.com Linux/Docker hosts</strong> &mdash; the agent now targets <code>rrjms-dev.getgsi.com:8001</code> (was port 443) and trusts a single <strong>getgsi wildcard cert</strong> (PKCS12), not the old <code>coralsoftware</code> JKS. So the parity target is concrete: our broker listens on that host/port and presents the getgsi cert. The wire protocol is unchanged (<code>rr-common</code> is not in version2), so the CORE-protocol DTOs still match.</p>
+<p><strong>version2 branch breakdown (confirmed by Mauro/Coral 2026-06-16):</strong></p>
+<table class="rn-table">
+<thead><tr><th>Repo</th><th>version2 vs develop</th><th>Nature</th></tr></thead>
+<tbody>
+<tr><td><code>rr-valc-agent</code> (the <strong>agent</strong>)</td><td>2 commits / 6 files</td><td><strong>Config + cert only &mdash; no code</strong> (the <code>JmsCustomizer</code> diff is empty vs develop).</td></tr>
+<tr><td><code>rr-valc</code> (the <strong>server</strong>)</td><td>3 commits / 11 files</td><td>Config + cert + real logic (IP detection / <code>X-Forwarded-For</code>) + the <strong>moved</strong> JWT signing keypair.</td></tr>
+<tr><td><code>rr-common</code> (JMS wire contract)</td><td>not in version2</td><td>Untouched &rarr; wire contract stable.</td></tr>
+</tbody>
+</table>
+<p><strong>Terminology (Coral, authoritative):</strong> &ldquo;<strong>v359</strong>&rdquo; is the latest <em>version number of <code>rr-services</code></em> (the Services) &mdash; <strong>it is not an agent</strong>. The <strong>agent</strong> (<code>rr-valc-agent.jar</code>) is the persistent on-box component that <strong>runs a Services version via the Windows command line and downloads a new Services version when told to from VALC admin</strong>. So the connectivity move (getgsi.com JMS host + cert) is an <strong>agent config/cert change with no agent code change</strong> &mdash; the Services version it runs is a separate, independently-updatable artifact.</p></div>
 
 <div class="phase"><span class="phase-num">3</span><h3>Signing-key inheritance</h3>
 <p>VALC 2.0 accepts Azure VALC's existing RSA private key as its signing key at cutover time. The new Services jar bundles the SAME <code>public.key</code> resource v359 does. Same trust anchor; v359 + new agent both verify the same tokens.</p>
-<p><strong>version2 update (Coral, 2026-06):</strong> version2 ships a <strong>new getgsi signing keypair</strong> (<code>rr-valc/certs/private.key</code> + <code>public.key</code>). The &ldquo;inherit the existing key&rdquo; plan becomes &ldquo;inherit the <em>new</em> getgsi keypair&rdquo; &mdash; VALC 2.0's <code>JwtService</code> signs with it and the new Services jar's bundled <code>public.key</code> must match it, or tokens won't verify. Confirm whether it replaces the prior key before cutover.</p></div>
+<p><strong>version2 update (Coral, 2026-06) &mdash; corrected by Mauro/Coral 2026-06-16:</strong> the JWT signing keypair is <strong>not new, only moved</strong>. The same RSA pair now lives at <code>rr-valc/certs/private.key</code> + <code>public.key</code> (relocated with the getgsi.com move) rather than being regenerated. So &ldquo;inherit the existing key&rdquo; still holds &mdash; same trust anchor; VALC 2.0's <code>JwtService</code> signs with it and the new Services jar's bundled <code>public.key</code> already matches. No token re-issue or key rotation is part of the cutover.</p></div>
 
 <div class="phase"><span class="phase-num">4</span><h3>V8 module coverage</h3>
-<p>In Transit, PO Receipts, Roll Forward not yet built in the new agent or as V8 pages. The new agent today doesn't have these controllers; the legacy SPA hits them when customers click those tabs. Build them in the new agent. Legacy V7 source is available as a paste-ready reference for the controller shapes &mdash; one controller (<code>OrdersController</code>) covers BOTH In Transit and PO Receipts order surfaces (8 endpoints); a second covers PO Receipts line-level analysis; <code>RollForwardController</code> is two endpoints. Detail at <a href="https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/docs/v359-vs-new-agent.md"><code>RapidReconciler-Agent/docs/v359-vs-new-agent.md</code></a> &sect; <em>Phase 0 #4 cutover blockers</em>.</p></div>
+<p>In Transit, PO Receipts, Roll Forward not yet built in the new Services version or as V8 pages. The current Services build doesn't have these controllers; the legacy SPA hits them when customers click those tabs. Build them into the new Services. Legacy V7 source is available as a paste-ready reference for the controller shapes &mdash; one controller (<code>OrdersController</code>) covers BOTH In Transit and PO Receipts order surfaces (8 endpoints); a second covers PO Receipts line-level analysis; <code>RollForwardController</code> is two endpoints. Detail at <a href="https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/docs/v359-vs-new-agent.md"><code>RapidReconciler-Agent/docs/v359-vs-new-agent.md</code></a> &sect; <em>Phase 0 #4 cutover blockers</em>.</p></div>
 
 <div class="phase"><span class="phase-num">5</span><h3>Schema ETL</h3>
 <p>Azure VALC's user / client / permissions / deploy-history data into VALC 2.0's Postgres. Coordinate the export and the import. Happens once at the DNS-flip moment.</p></div>
@@ -309,6 +319,30 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 
 <h3>Exit criterion for the V7 &harr; V8 dimension</h3>
 <p>Every customer's <code>ui_version</code> is <code>'v8'</code>, with no rollback-to-V7 flips in the last 30 days. At that point V7 can be considered for decommission (legacy SPA archive + 90-day fallback per Phase 4).</p>
+</section>
+
+<section id="v7-base-control-plane">
+<h2>VALC 2.0 as the control plane for the V7-stack base (ahead of cutover)</h2>
+<p>VALC 2.0 can be stood up to <strong>QA, then production, before the V8 UI is generally available</strong> and serve as the <strong>system of record + console for the entire customer base &mdash; including customers still on the V7 Services stack &mdash; with no customer-side deploy.</strong> Two layers, with a clean line between them:</p>
+<ul>
+  <li><strong>Registry / console layer (no customer touch).</strong> Everything VALC 2.0 reads from its own Postgres works for any customer regardless of stack version: the customer list, server topology, database inventory, licensing (seats / expiry), contacts, certificate tracking, and the per-customer V7&harr;V8 switch state. This makes VALC 2.0 usable as the day-to-day management console for the whole base immediately &mdash; the V7-stack customers simply appear as tracked records.</li>
+  <li><strong>Live / Services-dependent layer (gated on the Services cutover).</strong> Status liveness, version currency, log / SSIS troubleshooting, and the reconciliation / inventory views call <strong>new Services endpoints</strong> that a customer's <em>current</em> (v359) Services build does not serve. Those surfaces stay inert for a V7-stack customer until that customer is moved to the new Services version (and, for live heartbeat, the heartbeat-facts feature) &mdash; which is the per-customer cutover, not a separate chore.</li>
+</ul>
+<p><strong>Sequencing this implies (no deploys before each customer's flip):</strong></p>
+<ol>
+  <li>Stand up VALC 2.0 &rarr; QA &rarr; production as the registry/console for the whole base. Zero customer-box change; existing connectivity untouched (just unused by VALC 2.0 for the not-yet-cut customers).</li>
+  <li>Per-customer cutover (the existing Phase 2/3 push): move that customer to the new Services version + outbound connectivity, then flip their switch. <em>That</em> step lights up the live layer for them and closes the inbound path.</li>
+</ol>
+<p>The data side of step 1 is the <strong>schema ETL</strong> (Phase 0 #5): import the legacy Postgres control-plane data (clients / servers / databases / licensing / users) into VALC 2.0's schema. It is a <strong>mapping ETL, not a restore</strong> &mdash; the schemas differ &mdash; and it covers only control-plane records, never customer reconciliation data (that lives in each customer's SQL Server).</p>
+
+<h3>Connectivity modernization (inbound external-IP &rarr; outbound-only)</h3>
+<p>Today the V7-stack reaches a customer's box over its <strong>external IP (inbound)</strong> &mdash; an exposed surface and a firewall burden. The version2 posture removes it: the on-box <strong>agent dials home outbound</strong> (JMS to the getgsi.com broker) and reports out, so the central side never connects <em>in</em>. No inbound holes.</p>
+<p>Per the version2 breakdown above, the customer-side change for the connectivity move is <strong>agent config + cert only (no agent code)</strong> &mdash; re-point the agent at the getgsi.com JMS host and trust the moved cert. The <strong>live management</strong> features additionally need the <strong>new Services version</strong> on the box (the v359 Services build predates the new endpoints + heartbeat-facts). So:</p>
+<ul>
+  <li><em>Off external-IP</em> = agent config/cert re-point (small).</li>
+  <li><em>Off external-IP <strong>and</strong> live in VALC 2.0</em> = the above <strong>plus</strong> the new Services version &mdash; i.e. the full per-customer cutover.</li>
+</ul>
+<p>Either way it is <strong>not a fresh installer bundle from scratch</strong>: the broker binary is frozen and <code>rr-common</code> (the wire contract) is unchanged, so the delta is config/cert (+ the Services artifact the agent downloads on command).</p>
 </section>
 
 <section id="calendar">
