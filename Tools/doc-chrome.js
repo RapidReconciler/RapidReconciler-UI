@@ -37,6 +37,29 @@
 (function () {
   'use strict';
 
+  // Embed mode: when loaded inside the help-sidebar iframe (?embed=1), render
+  // the article only — hide the banner, page sidebar nav, footer, and feedback
+  // band so the doc section reads cleanly in a narrow panel. The SPA's own hash
+  // handler still selects the right topic from the URL #hash.
+  const EMBED = (function () {
+    try { return new URLSearchParams(location.search).has('embed'); }
+    catch (_) { return false; }
+  })();
+  if (EMBED) {
+    document.documentElement.classList.add('doc-embed');
+    const css =
+      'header.doc-header,footer,.doc-feedback{display:none!important}' +
+      '.sidebar{display:none!important}' +
+      '.spa-wrap{display:block!important}' +
+      '.content-card{box-shadow:none!important;border:0!important;padding:0!important;margin:0!important}' +
+      '.page-header{padding:10px 0 4px!important;background:none!important}' +
+      '.container{max-width:none!important;padding-left:18px!important;padding-right:18px!important}' +
+      'body{background:#fff!important}';
+    const s = document.createElement('style');
+    s.textContent = css;
+    (document.head || document.documentElement).appendChild(s);
+  }
+
   const script = document.currentScript;
   if (!script) return;
 
@@ -69,6 +92,7 @@
   };
 
   function render() {
+    if (EMBED) return;     // embed mode hides the banner via CSS; skip building it
     const header = document.querySelector('header.doc-header[data-doc-chrome]');
     if (!header) return;   // page didn't opt in; legacy inline header stays
 
