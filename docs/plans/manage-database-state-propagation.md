@@ -115,11 +115,56 @@ co-resident tracked DB on the instance when one deploys, since they share the
 catalog project). It writes deploy rows for DBs that didn't directly deploy, so
 it's best landed with a live catalog deploy to verify — pairs with Chunk 4.
 
-## Chunk 4 — phase-2 durability (#7/#9)
+## Chunk 4 — phase-2 durability (#7/#9) — DONE
 
-Persist a per-(db,step) "done" marker in VALC so Bootstrap/Load/Schedule green
-from a durable flag (not live catalog/msdb only); per-row DB probe on the
-Clients card (today one-probe-applies-to-all).
+**As built (Valc, V51).**
+
+**Part A — durable per-(db,step) "done" markers.** New table `client_database_steps`
+(`V51`, unique on `(client_database_id, step)`, `step ∈ {bootstrap, load, schedule}`)
++ `ClientDatabaseStepEntity` / repo / `DbStepMarkerService` (mark / clear / sync /
+completedSteps). Recording is **server-side at the same VALC endpoints each band
+already hits**, so markers accrue on the first reachable visit — no backfill:
+- `ClientDatabaseController.companiesLicensedForDb` — rcompanies rows present →
+  `mark(bootstrap)` (mark-only; an empty read is "not yet", and bootstrap is sticky).
+- `DeploymentController.ssisLastExecution` — execution `Succeeded`/`Completed` →
+  `mark(load)` (sticky; a later failed re-run doesn't un-load the data, and the live
+  read still shows the failure).
+- `DeploymentController.refreshSchedule` + the toggle — `sync(schedule, rfEnabled)`
+  (the msdb read/toggle reached the box, so it's authoritative — mark on, clear off).
+
+Read path: `GET /valc/deployment/db-step-markers?databaseId=` → `{bootstrap, load,
+schedule}`. The install tab's existing-DB select handler calls `mdSeedStepMarkers(dbId)`
+(awaited, **before** the live cascade) to toggle bands 5/6/7 `is-done` from the markers.
+The live probes then refine — each only writes `is-done` on a *reachable* success and
+leaves it untouched on failure/unreachable (verified in code: `instLoadCompanies`
+returns early without clearing, `instRenderTableCounts` early-returns on an empty list,
+`instLoadSchedules` returns on a non-ok read), so a marker-seeded green **survives a
+failed probe** — the durability win. Live wins when the box is reachable.
+
+**Part B — per-row Clients-card probe.** `DashboardController.snapshot()` now probes
+**every** database with a `service_port` once (keyed by db id), instead of probing one
+`_PROD`-preferred DB and applying it to all. Per-DB `online` + `systemStatusLabel` /
+`systemStatusKind` / `systemMessage` (new `AgentStatusDto.DatabaseStatus` fields) come
+from each row's own probe; the old "single-probe heuristic" re-rate is gone. The
+**card-level pill stays `_PROD`-preferred** (owner's call) — per-DB detail surfaces in
+the Database popover (Thymeleaf + the 5s JS poll renderer both updated; shared
+`jobStatusBadge` helper keeps the card pill and per-DB mapping from drifting). Footprint:
+`AgentHealthProbeService.probe()` now skips `/poll` when `/health` got no response, so a
+dead port costs one quick refused connection, not two 2s waits (prod is 1-DB-per-client
+anyway).
+
+**Verified live (2026-06-21):** V51 applied; markers auto-recorded for TR/NA
+(bootstrap+load) on reachable visits; `db-step-markers?databaseId=23` →
+`{bootstrap:true, load:true, schedule:false}`; install-tab bands 5/6 seed green on
+select (no console errors; R5a badges renumber); `/api/agents` carries genuinely
+per-DB status (Acme's TR/Dev/NA show distinct "data as of" times). The multi-DB card
+popover uses the same renderer over this verified data; owner to eyeball in the card
+view (the preview session was in the compact healthy-cell grid view).
+
+Minor known cosmetic: in the *reachable* case the Load band can blip green→gray→green
+on select (the marker seeds green, the first catalog render clears it before the
+done-sources accrue, then it re-greens). Ends correct; the unreachable/durability path
+doesn't flicker (early-return, no render). Smooth later only if it bothers.
 
 ---
 
@@ -179,6 +224,30 @@ A new customer's first DB can't build its environment or load until the package 
 on that server. The R3 env-build pill carries a **"package not on this server yet"**
 gate (env can't go green without the catalog project present) linking to the Fleet
 Rollout deploy step, so a fresh install doesn't dead-end.
+
+**R5a — hide the per-DB SSIS Package Deploy step for an existing database (DONE).**
+Because the package deploy is now a server-level operation (Upgrades tab, once per
+SQL instance), the Installations **Step 4 "SSIS Package Deploy"** band is redundant
+for an EXISTING database whose server already carries the shared catalog project.
+`showSsisDeployStep(show)` (deployment.html) hides `[data-inst-step="4"]` when an
+existing DB is picked and renumbers the trailing SSIS/load badges so the visible run
+is gap-free (`…S · 4 env-build · 5 bootstrap · 6 load · 7 schedule`); the new-install
+and no-selection paths keep the step + original `4·5·6·7·8` numbering. Wired into the
+no-selection / customer-reset / new-DB / existing-DB branches of the Step-1 selection
+handler; covers the `?add=1` / `?remove=` deep-links (both route through the same
+change handler). Verified live (preview): existing→hidden+renumbered, new→restored,
+no console errors.
+
+**R5b — env-build "package not on this server yet" gate (DEFERRED — failsafe only).**
+The case where an existing DB's server genuinely lacks the project is **already
+surfaced on the Upgrades tab**: `FleetRolloutService.ssisServerTargets` lists every
+active located server and sets `behind = (current == null || version mismatch)`, where
+`current = serverSsisVersion(sid)` is null when the server has no SUCCEEDED `ssis`
+deploy row. So a server missing the package shows up as a Step-2 target exactly like a
+behind one — the Upgrades tab is the authoritative surface. The install-tab env-build
+amber gate would only be a failsafe/signpost (point the operator to the Upgrades SSIS
+step), not the primary signal. Deferred per owner — build it only if the failsafe is
+worth the surface.
 
 ### Supersedes
 R2+R3 retire the **Chunk-1 needs-stamp amber chip** and make the **Chunk-3 SSIS
