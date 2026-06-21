@@ -120,3 +120,68 @@ it's best landed with a live catalog deploy to verify — pairs with Chunk 4.
 Persist a per-(db,step) "done" marker in VALC so Bootstrap/Load/Schedule green
 from a durable flag (not live catalog/msdb only); per-row DB probe on the
 Clients card (today one-probe-applies-to-all).
+
+---
+
+# SSIS package = server-instance (redesign, 2026-06-21)
+
+Owner-approved redesign. The SSISDB catalog **project is per SQL instance** (one
+project/package shared by every DB's environment on that server). Modeling
+*Package Deploy* as a per-database step was the root cause of the TR
+"deployed, no version" symptom + the Chunk-1 needs-stamp chip + the Chunk-3
+co-resident fan-out. Fix it at the true grain.
+
+**Decisions (owner):** key the package deploy to the **server instance**; keep the
+Services pill + version in Step 1 but show a **Start button when not running**;
+replace the Step-1 package-version pill with an **environment-build status**.
+
+### R1 — Services Start button (Step 1)  *(spec; needs a running-signal decision)*
+When a DB's Services instance is installed but **not running**, show a **Start**
+button in the Step-1 svc lane instead of "current"; keep version + currency when
+running. Reuse the per-row spawn endpoint (`ClientDatabaseController.start` →
+`AgentLifecycleService.start`). **Open fork:** the "running" signal needs a live
+probe. Eager (probe every fleet DB's `service_port` in `buildUpgradeClients`) is
+simple but raises the page's diagnostic footprint across the whole fleet (memory
+`feedback_low_diagnostic_footprint`). Lazy (probe only the selected DB on pick,
+like the existing per-DB cascade) keeps footprint low but only the selected row
+shows the button. **Recommend lazy** — decide with the owner.
+
+### R2 — Package version keyed to the server instance  *(schema + live deploy path)*
+- **Schema migration:** add `server_id` to `client_deploys` (nullable). An `ssis`
+  deploy is recorded with `client_database_id = null` + `server_id` set (the
+  instance the shared catalog project lives on); DB/Services rows are unchanged
+  (still per-DB).
+- **`SsisDeployService.deployPackage`** records the row server-keyed (resolve the
+  target DB's `server_id`; set it, leave `client_database_id` null).
+- **Reads:** `buildUpgradeClients` + `FleetRolloutService` read the SSIS package
+  version by **server** (latest SUCCEEDED `ssis` deploy for the DB's `server_id`),
+  not per-DB. Co-resident DBs then all read the one server row — the fan-out
+  problem disappears.
+- **Verification:** needs a live catalog deploy → do with the owner watching.
+
+### R3 — Manage Step-1 SSIS pill → environment-build status  *(DONE — safe/verifiable)*
+The env (connections, decimals, tunables) is the genuinely per-DB SSIS concern.
+`UpgradeDb.ssisEnvComplete` computed from `ssisConfig.missingConfig(dbId)` (cheap,
+VALC-side only). The Manage Step-1 SSIS lane shows **env built** (green) /
+**env not built** (amber) instead of the package version + the (now-removed)
+needs-stamp chip. The package version lives in Fleet Rollout (R4). `mdApplyRowLanes`
+handles the env pill on re-sync. Upgrade/Troubleshooting drawers keep the version
+pill (out of Step-1 scope).
+
+### R4 — Fleet Rollout SSIS step → per server instance  *(depends on R2)*
+Fleet Rollout already deploys SSIS, but **per database** (`runTarget` →
+`deployPackage` per target DB). Re-key it: dedupe SSIS targets by `server_id` so the
+shared package deploys **once per instance**, not once per co-resident DB. The
+package version column on the rollout board reads the server row.
+
+### R5 — Install-flow env-build gate  *(depends on R2)*
+A new customer's first DB can't build its environment or load until the package is
+on that server. The R3 env-build pill carries a **"package not on this server yet"**
+gate (env can't go green without the catalog project present) linking to the Fleet
+Rollout deploy step, so a fresh install doesn't dead-end.
+
+### Supersedes
+R2+R3 retire the **Chunk-1 needs-stamp amber chip** and make the **Chunk-3 SSIS
+co-resident fan-out** unnecessary — both existed only because of the per-DB row
+model. (Chunk-3's DB drift flag + cold-install deploy row are about the *database*
+version and stay valid.)
