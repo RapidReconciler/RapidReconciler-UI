@@ -90,14 +90,30 @@ row-order non-determinism); the endpoint returns data identical to the page mode
 (DB 23/TR `ssisVersionKnown:false`, DBs 1/24 version-known). The live deploy/stamp
 re-sync is owner-verified in the browser.
 
-## Chunk 3 — unify the version model (#1/#5/#6)
+## Chunk 3 — unify the version model (#1/#5/#6) — DONE (fan-out deferred)
 
-Record a `client_deploys` row for EVERY component on every install/deploy incl.
-**cold DB install** (`DbInstallService.install` writes only the `databaseVersion`
-column today — add the row like `publishDacpac`); badges read deploy-history
-uniformly (live `/health` only as a labeled "running" annotation); add a
-render-time DB drift flag (column vs latest SUCCEEDED `database` deploy). Also
-the SSIS co-resident fan-out deferred from Chunk 1.
+**As built.**
+- **Cold install records a deploy row.** `DbInstallService.install` published the
+  schema via its own SqlPackage call and stamped only the `databaseVersion`
+  column — no `client_deploys` row (unlike the upgrade path's `publishDacpac`).
+  It now records a SUCCEEDED `database` deploy row after register (component
+  derived from the linked `file_versions` row, as `publishDacpac`). Best-effort:
+  a history-write failure logs + continues (the install already succeeded).
+- **Render-time DB drift flag.** `UpgradeDb.dbDrift` + `deployedDbVersion`:
+  computed in `buildUpgradeClients` as the live/stamped column version vs the
+  latest SUCCEEDED `database` deploy. Flagged only when **both** exist and differ
+  (an out-of-band publish or a stamp that didn't take) — a column-only/legacy row
+  is *not* drift, just unrecorded (no false positives for pre-change installs).
+  Surfaced as a hidden-unless-drift amber `live ≠ deployed` chip on the Manage
+  drawer DB lane; `mdApplyRowLanes` toggles it on re-sync so a redeploy clears it.
+- The DB lane keeps the column as the displayed version (it's the authoritative
+  live stamp from the agent heartbeat); the deploy-history is the drift basis +
+  the now-uniform record. Services/SSIS already key off deploy-history.
+
+**Deferred: the SSIS co-resident fan-out** (write the `ssis` deploy row to every
+co-resident tracked DB on the instance when one deploys, since they share the
+catalog project). It writes deploy rows for DBs that didn't directly deploy, so
+it's best landed with a live catalog deploy to verify — pairs with Chunk 4.
 
 ## Chunk 4 — phase-2 durability (#7/#9)
 
