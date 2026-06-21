@@ -60,12 +60,35 @@ needed)** consistently — chip, band, and note — and offers a one-click stamp
   tracked DBs on the instance (the genuinely-complete fix for "even after a
   redeploy"). Lives near the deploy-recording unification.
 
-## Chunk 2 — one JSON refresh path (#2/#4, retires #3)
+## Chunk 2 — one JSON refresh path (#2/#4, retires #3) — DONE
 
-Add a JSON endpoint returning the picked customer's `UpgradeDatabase[]`; after
-ANY action re-fetch + re-render picker rows + re-run band tint, instead of
-in-place one-lane patching (`step1MarkDeployed`, L3155) and the register/install
-full-page-reload special-cases (L7692).
+**As built.** Adds `GET /valc/deployment/client-databases?clientId=` returning the
+picked customer's `UpgradeDb[]`, built from an extracted `buildUpgradeClients()`
+helper that the page handler now also calls — so the refresh data can never drift
+from the page model (single source).
+
+`step1MarkDeployed` (the brittle one-lane optimistic patch that only touched the
+deployed lane on one drawer and never picked up server-side effects like a
+catalog-only SSIS becoming version-known) is **retired**, replaced by
+`step1RefreshDeployed(dbId)` → re-fetch the endpoint → `mdApplyRowLanes` rewrites
+that row's three lanes (ver + currency pill, incl. the `is-needs-stamp` →
+`is-current` flip) in **both** drawers from server truth → re-run both band tints
+(`ugSyncStepTints` + `window.mdSyncStepTints`). Wired into all three deploys (DB /
+Services / SSIS) and the Chunk-1 SSIS stamp. `data-role` ver markers were added to
+the Manage drawer for uniform addressing (parity with the Upgrades drawer).
+
+**Deliberately kept as full-page reloads (structural add/remove, low-risk, rare):**
+register an unregistered DB and untrack/decommission — those add or remove a picker
+row, and a reload is the robust path (no bespoke client-side row-builder to drift
+from the Thymeleaf markup). A new-DB **install** stays mid-wizard (no reload) so the
+flow continues into Step 4; its row appears on the next natural reload. These three
+are the remaining candidates if a future pass wants zero reloads.
+
+**Verified:** VALC compiles + starts clean; `/valc/deployment` renders fully (no
+truncation; only the new `data-role` attrs differ from baseline, modulo pre-existing
+row-order non-determinism); the endpoint returns data identical to the page model
+(DB 23/TR `ssisVersionKnown:false`, DBs 1/24 version-known). The live deploy/stamp
+re-sync is owner-verified in the browser.
 
 ## Chunk 3 — unify the version model (#1/#5/#6)
 
