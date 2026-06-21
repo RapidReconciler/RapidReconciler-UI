@@ -1,0 +1,83 @@
+# Manage Database — state-propagation & tinting fixes
+
+Owner audited the VALC Deployment Center **Manage Database (Installations)**
+workflow and approved fixing all of it. This doc is the finding→fix table; work
+is sequenced into four chunks, each its own commit + VALC restart.
+
+**Symptom that triggered the audit:** on the co-resident instance
+`10.4.3.132` (NA / TR / Dev share one SQL Server + one SSISDB catalog
+project), TR's SSIS badge shows **"deployed"** with **no version** and **no
+amber prompt**, even after a redeploy.
+
+**Root cause:** the SSIS catalog *project* is shared per SQL instance, but the
+version badge reads a **per-DB `client_deploys` 'ssis' row**. Only the DB whose
+own *Package Deploy* (`deployPackage`) ran gets that row; co-resident siblings
+share the project but have no row → `ssisInstalled = true`, `ssisVersionKnown =
+false` (`DeploymentController` L317-331). The catalog-only state then renders
+**green** at every surface, so the operator gets no signal that a stamp is
+missing.
+
+---
+
+## Corrected findings (vs. the original handoff audit)
+
+The handoff audit predated Valc #140, which already added install-tab band
+tinting. Verified against the committed code (Valc `main=Dev=101e77b`):
+
+| Handoff claim | Actual state in code | Implication |
+|---|---|---|
+| "install tab doesn't tint component bands from the picked DB's pills at all" | **Stale.** `mdSyncStepTints` (deployment.html L7621) mirrors db-pill→band 9, svc-pill→band 8, ssis-pill→band 4, run on customer+DB change via `refreshBands()`. Mirrors the Upgrades-tab `ugSyncStepTints` (L2990). | "Tint-B" is essentially done. The remaining gap is that the SSIS *chip* is `is-current` (green), so the band tints green, not amber. |
+| "the 'deployed' chip is GREEN (`is-current`)" | **Confirmed.** L1403 / L2294 / L2425 — chip `is-current` "deployed", catalog-only. | Tint-A is the live fix: amber chip → drives `comp-behind`. |
+| SSIS band greened by deploy state | `instSsisRefreshStepState(complete, deployed)` sets band 4 `is-done` (green) when `deployed` (L4527-4529); `deployed` is true for catalog-only. | Band must read amber, not green, for the catalog-only/no-version case. |
+| deployed-note | `instSsisRenderDeployedNote` (L4578) shows a **green `is-ok`** banner for catalog-only ("Deploy a release to stamp this database's version"). | Make it amber + a one-click stamp action. |
+
+---
+
+## Chunk 1 — amber-signal cluster (fixes the TR experience) — IN PROGRESS
+
+Goal: the catalog-only / no-version-stamp SSIS state reads **amber (action
+needed)** consistently — chip, band, and note — and offers a one-click stamp.
+
+- **Tint-A — chip.** Replace the version-unknown "deployed" chip's `is-current`
+  (green) with a dedicated **`is-needs-stamp`** class (amber, same palette as
+  `is-behind`), in all 3 picker blocks (L1403 / L2294 / L2425). Add the CSS.
+  Keep the "deployed" text + the existing stamp tooltip.
+- **Tint band wiring.** Teach `mdSyncStepTints` (L7621) **and** `ugSyncStepTints`
+  (L2990) to treat `is-needs-stamp` like `is-behind` → `comp-behind`. Leave
+  `ugAllCurrent` (L3067, counts only `.is-behind`) untouched so the Upgrades-tab
+  "fully current" gate semantics don't shift — the needs-stamp signal is an
+  install-tab concern surfaced by the band + the note.
+- **Band 4 (SSIS Package Deploy).** Thread a `needsStamp` state into
+  `instSsisRefreshStepState` so the band reads amber (not green `is-done`) when
+  catalog-only-without-version.
+- **#8 endpoint.** `ssis-config-status` returns `needsVersionStamp:true` when
+  `inCatalog && no per-DB version` (DeploymentController L912-950).
+- **#8 prompt.** `instSsisRenderDeployedNote` (L4578) renders an amber note + a
+  one-click **"Package Deploy on this DB to stamp the version"** button
+  (preselect the latest SSIS release + trigger Deploy when SQL Agent is up).
+  `deployPackage` already records the per-DB row on completion.
+- **Deferred to Chunk 3:** optionally fan the deploy record to all co-resident
+  tracked DBs on the instance (the genuinely-complete fix for "even after a
+  redeploy"). Lives near the deploy-recording unification.
+
+## Chunk 2 — one JSON refresh path (#2/#4, retires #3)
+
+Add a JSON endpoint returning the picked customer's `UpgradeDatabase[]`; after
+ANY action re-fetch + re-render picker rows + re-run band tint, instead of
+in-place one-lane patching (`step1MarkDeployed`, L3155) and the register/install
+full-page-reload special-cases (L7692).
+
+## Chunk 3 — unify the version model (#1/#5/#6)
+
+Record a `client_deploys` row for EVERY component on every install/deploy incl.
+**cold DB install** (`DbInstallService.install` writes only the `databaseVersion`
+column today — add the row like `publishDacpac`); badges read deploy-history
+uniformly (live `/health` only as a labeled "running" annotation); add a
+render-time DB drift flag (column vs latest SUCCEEDED `database` deploy). Also
+the SSIS co-resident fan-out deferred from Chunk 1.
+
+## Chunk 4 — phase-2 durability (#7/#9)
+
+Persist a per-(db,step) "done" marker in VALC so Bootstrap/Load/Schedule green
+from a durable flag (not live catalog/msdb only); per-row DB probe on the
+Clients card (today one-probe-applies-to-all).
