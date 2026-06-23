@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<!--
+  =============================================================================
+  SSO landing — token hand-off from VALC's SAML sign-in
+  =============================================================================
+  VALC's SAML assertion-consuming filter (the per-customer SP) mints a normal
+  V8 session token after a successful Okta/IdP login, then redirects the
+  browser here:
+
+      {app-base}/sso-landing.html#token=<JWT>&email=<email>
+
+  The token rides in the URL *fragment* (#…), which browsers never send to a
+  server and which is dropped from the Referer — so it doesn't leak into VALC's
+  access logs or the next page's referrer. This page stores it exactly the way
+  login.html's storeToken() does, scrubs the fragment from history, and lands
+  the user on the role-aware Home.
+
+  This mirrors the legacy rr-sso "?ssoId=<token>" redirect, but minted
+  password-lessly server-side (no dummy-password bridge) and handed off via the
+  fragment instead of a query string. See the VALC SsoBridgeService.
+  =============================================================================
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex">
+<title>Signing you in &mdash; RapidReconciler</title>
+<link rel="icon" href="data:,">
+<link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&family=Source+Sans+3:wght@600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root { --navy: #1f2d4a; --blue: #2b5fb0; --rule: #e3e8f0; --text-soft: #54627b; --red: #b8463a; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    font-family: 'Open Sans', system-ui, sans-serif; color: var(--navy);
+    background: radial-gradient(1200px 600px at 50% -10%, #eaf1fb 0%, #f6f8fc 55%, #f6f8fc 100%);
+  }
+  .card {
+    background: #fff; border: 1px solid var(--rule); border-radius: 14px;
+    box-shadow: 0 18px 48px -20px rgba(20,32,55,0.32);
+    padding: 34px 38px; max-width: 420px; width: calc(100% - 32px); text-align: center;
+  }
+  h1 { font-family: 'Source Sans 3', sans-serif; font-size: 19px; margin: 0 0 8px; }
+  p { font-size: 13.5px; color: var(--text-soft); line-height: 1.55; margin: 0; }
+  .spinner {
+    width: 30px; height: 30px; margin: 0 auto 18px;
+    border: 3px solid #d7e0f0; border-top-color: var(--blue);
+    border-radius: 50%; animation: spin .7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .err .spinner { display: none; }
+  .err h1 { color: var(--red); }
+  a.btn {
+    display: inline-block; margin-top: 16px; padding: 8px 18px; border-radius: 6px;
+    background: var(--navy); color: #fff; text-decoration: none; font-size: 13px; font-weight: 700;
+  }
+  .hide { display: none; }
+</style>
+</head>
+<body>
+  <div class="card" id="card">
+    <div class="spinner" aria-hidden="true"></div>
+    <h1 id="title">Signing you in&hellip;</h1>
+    <p id="msg">Completing single sign-on with your identity provider.</p>
+    <a class="btn hide" id="retry" href="login.html">Go to sign in</a>
+  </div>
+
+<script>
+(function () {
+  'use strict';
+
+  function fail(message) {
+    var card = document.getElementById('card');
+    card.classList.add('err');
+    document.getElementById('title').textContent = 'Sign-in could not be completed';
+    document.getElementById('msg').textContent = message;
+    document.getElementById('retry').classList.remove('hide');
+  }
+
+  // Parse the fragment (#token=…&email=…). Fragment, not query: keeps the
+  // token out of server logs + the Referer header.
+  var frag = (window.location.hash || '').replace(/^#/, '');
+  var params = new URLSearchParams(frag);
+  var token = params.get('token');
+  var email = params.get('email') || '';
+
+  if (!token) {
+    fail('No sign-in token was returned. Start again from your identity provider, or use the sign-in page.');
+    return;
+  }
+
+  // Best-effort: pull the email from the JWT if the IdP didn't pass one.
+  if (!email) {
+    try {
+      var payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+      email = payload.email || payload.sub || payload.preferred_username || '';
+    } catch (_) { /* leave blank — non-fatal */ }
+  }
+
+  // Store exactly like login.html storeToken(): token + customer viewMode +
+  // last email + session-age stamp (the app's 1-hour auto-logout reads it).
+  try {
+    localStorage.setItem('rrv8.token', token);
+    localStorage.setItem('rrv8.viewMode', 'customer');
+    if (email) localStorage.setItem('rrv8.lastEmail', email);
+    localStorage.setItem('rrv8.sessionStart', String(Date.now()));
+  } catch (e) {
+    fail('Your browser blocked local storage, so the session could not be saved. Enable storage for this site and try again.');
+    return;
+  }
+
+  // Scrub the token from the URL/history so a Back / bookmark can't replay it.
+  try { history.replaceState(null, '', window.location.pathname); } catch (_) {}
+
+  // Land on the role-aware Home (same default as login.html).
+  window.location.replace('RRV8/home.html');
+})();
+</script>
+</body>
+</html>

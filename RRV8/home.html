@@ -712,6 +712,29 @@
   .ctx-flows b { color: var(--navy); }
   .ctx-flows svg { width: 14px; height: 14px; color: var(--blue); flex-shrink: 0; }
 
+  /* ---- Message Center ----
+     Operator-posted messages (from VALC), shown above everything. A
+     dismissible card per active message; severity drives the accent.
+     Hidden until at least one message loads. */
+  .msgcenter { margin-top: 22px; display: flex; flex-direction: column; gap: 10px; }
+  .msg-card {
+    position: relative; background: var(--bg-card); border: 1px solid var(--rule);
+    border-radius: 12px; padding: 14px 44px 14px 18px; box-shadow: var(--shadow-sm);
+    border-left: 5px solid var(--blue);
+  }
+  .msg-card.sev-warning  { border-left-color: #d9a118; background: #fffdf6; }
+  .msg-card.sev-critical { border-left-color: #c0392b; background: #fdf6f5; }
+  .msg-subject { font-family: 'Source Sans 3', sans-serif; font-weight: 800; color: var(--navy); font-size: 15px; margin: 0 0 4px; }
+  .msg-body { color: var(--text); font-size: 13.5px; line-height: 1.55; white-space: pre-wrap; margin: 0; }
+  .msg-link { display: inline-block; margin-top: 8px; font-size: 13px; font-weight: 700; color: var(--blue); text-decoration: none; }
+  .msg-link:hover { text-decoration: underline; }
+  .msg-dismiss {
+    position: absolute; top: 10px; right: 10px; width: 26px; height: 26px; border-radius: 50%;
+    border: none; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 17px; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .msg-dismiss:hover { background: var(--bg-soft); color: var(--navy); }
+
   /* ---- What's New ----
      Full-width row under the hero. Pulls the newest customer release notes
      live from release-notes.html, so it never drifts from the published
@@ -963,6 +986,11 @@
     </div>
     <ul class="wn-list" id="wnList"><li class="wn-empty">Loading the latest&hellip;</li></ul>
   </aside>
+
+  <!-- Message Center — operator messages posted from VALC, targeted at this
+       user. Dismissible (server-side, so it stays dismissed across devices).
+       Hidden until at least one active, undismissed message loads. -->
+  <section class="msgcenter" id="msgCenter" hidden aria-label="Messages"></section>
 
   <!-- ============ ADMIN FIRST-RUN WIZARD (onboarding) ============
        Shown only to an admin whose team isn't set up yet (only the seeded
@@ -3165,6 +3193,52 @@
     updateServiceCard();   // repaint the Service Health card from the now-cleared _svcMem
   }
 
+  // ---- Message Center: operator messages posted from VALC, targeted at this
+  //      user, shown above everything. Dismiss is server-side (sticks across
+  //      devices). Demo mode has no VALC, so it no-ops. Body is rendered
+  //      ESCAPED (operator-authored), and links are http(s)-only. A message
+  //      fetch must never block Home — failures leave the region hidden. ----
+  function mcEscape(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]; }); }
+  function loadMessages() {
+    var host = document.getElementById('msgCenter');
+    if (!host || IS_DEMO) return;
+    var base = (window.RR_CONFIG && RR_CONFIG.valcBase) || 'http://localhost:8080';
+    fetch(base + '/api/v1/messages', { headers: prodHeaders(), cache: 'no-store' })
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function (msgs) { renderMessages(host, base, msgs || []); })
+      .catch(function () { /* never block Home on a message fetch */ });
+  }
+  function renderMessages(host, base, msgs) {
+    if (!msgs.length) { host.hidden = true; host.innerHTML = ''; return; }
+    host.innerHTML = msgs.map(function (m) {
+      var sev = (m.severity === 'warning' || m.severity === 'critical') ? m.severity : 'info';
+      var safeLink = (m.linkUrl && /^https?:\/\//i.test(m.linkUrl)) ? m.linkUrl : '';
+      var link = safeLink
+        ? '<a class="msg-link" href="' + mcEscape(safeLink) + '" target="_blank" rel="noopener">Open link &rsaquo;</a>'
+        : '';
+      return '<div class="msg-card sev-' + sev + '" data-id="' + m.id + '">'
+        + '<button type="button" class="msg-dismiss" data-id="' + m.id + '" title="Dismiss" aria-label="Dismiss">&times;</button>'
+        + '<p class="msg-subject">' + mcEscape(m.subject) + '</p>'
+        + '<p class="msg-body">' + mcEscape(m.body) + '</p>'
+        + link + '</div>';
+    }).join('');
+    host.hidden = false;
+    Array.prototype.forEach.call(host.querySelectorAll('.msg-dismiss'), function (b) {
+      b.addEventListener('click', function () {
+        var id = b.getAttribute('data-id');
+        b.disabled = true;
+        fetch(base + '/api/v1/messages/' + encodeURIComponent(id) + '/dismiss', { method: 'POST', headers: prodHeaders() })
+          .then(function () {
+            var card = host.querySelector('.msg-card[data-id="' + id + '"]');
+            if (card) card.remove();
+            if (!host.querySelector('.msg-card')) host.hidden = true;
+          })
+          .catch(function () { b.disabled = false; });
+      });
+    });
+  }
+
   function boot() {
     // Auth gate: in real modes, no token → back to login.
     if (!IS_DEMO) {
@@ -3197,6 +3271,7 @@
       loadPeriods();
       loadServiceMemory();
       loadHomeStatusSummary();
+      loadMessages();
       // Proactive cadence: re-read service health every 60s so a problem
       // building under load surfaces on its own, not just on a reload.
       setInterval(loadServiceMemory, 60000);
