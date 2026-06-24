@@ -212,6 +212,14 @@ the audit lives in the catalog either way.
    re-provision — which needs auth on VALC's deployment endpoints (`permitAll`
    today). The pure state+confirm gate is now implementable without breaking dev;
    the role restriction layers on with deployment-endpoint auth.
+   **SHIPPED 2026-06-24 (Valc #160):** the server-enforced **Clear** refusal —
+   `SsisDeployService.clearTables` now returns an error up front when the DB's
+   client has `handed_off_at` set (`isClientLive` helper). Keyed strictly on
+   `handed_off_at`, so dev (no handed-off client) is unaffected. **Still pending
+   here:** the full-load re-provision **confirm** path (needs a UI confirm + the
+   confirm flag threaded through `ssis-run`) and the **role** layer (endpoint auth);
+   the Clear gate is server-only for now (UI-hide of the Clear button is a cosmetic
+   follow-up — clicking it on a live client surfaces the refusal banner).
 4. **Kill escalation via the agent (5.4) — BLOCKED, deferred.** Force-terminating
    `ISServerExec` needs the on-box agent's terminate op (VALC/SQL can't kill it —
    stop_operation is the only SQL lever). Lands with the Phase-3 executor +
