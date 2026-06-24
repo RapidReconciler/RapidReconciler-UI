@@ -204,3 +204,67 @@ required before this is called done:
   endpoints to extend.
 - Evidence: SSISDB exec 10334 (Canceled), `LOGGING_LEVEL=1`, 39
   `executable_statistics` rows / 266 `event_messages`.
+
+---
+
+## 10. As-built — server side DONE (2026-06-24, UNCOMMITTED on Valc `Dev`)
+
+**Built + compiles** (`mvn compile` → BUILD SUCCESS). All in
+`SsisDeployService.java`:
+
+- `TableCount` gained `state` + `substeps[]` (Lombok `@Data` → auto-serialized);
+  new `SubStep {kind,state,rows}` DTO. **No controller change** — `ssis-table-counts`
+  returns `List<TableCount>`, so the new fields ride the existing JSON (additive;
+  a not-yet-collapsed client just ignores them).
+- New engine: `S_*` state constants; `BoardExec` (latest exec id + status + per-task
+  started/finished/errored bits); `readBoardExec()` — **one cross-DB catalog read**
+  (rides rruser, reuses the canonical exec-selection incl. the abandoned-`Created`
+  guard); `sourceState` / `rollup` / `emptyIfZero` / `applyState`.
+- State computed **in `tableCounts()`**, not a separate `LoadBoardStatusService`
+  (deviation from §7 step 2): it already holds the table→task maps + the count query +
+  the rebuild probe, so co-locating avoids re-deriving the map. Same logic, fewer moving
+  parts.
+
+**Derivation validated** against three real Dev runs (all in the catalog, no new load
+needed): **10333 Succeeded** → every row `done`, 0-row tables `empty`; **10334 Canceled**
+→ reached tasks `done`, in-flight (`Get F4111 New`, `Merge into F0911`) `incomplete`
+(NOT spinning), unreached `not_started`; **287 Failed** → `Copy F4211` `failed` (caught
+via OnError). **Logging-independent:** `executable_statistics` was null on 287, so state
+keys on `event_messages` OnPre/OnPost/OnError; `executable_statistics` is duration-only.
+
+**Findings that shaped it:**
+- Net-change task names are **non-uniform** (`Copy F0911 to Staging` vs `Copy F4102` /
+  `Update Changes` vs `Apply F43121`). So the **staging** sub-step is derived from the
+  **control-flow gate** (apply can't start until staging finished → apply-started ⇒
+  staging done) + the staging row count — NOT a fragile per-table staging-task map.
+- F4111's index rebuild **is** a distinct task (`Rebuild Indexes`) → authoritative. The
+  net-change rebuild lives **inside** the apply proc (no separate event) → `done` when
+  the apply posts; the live `ALTER INDEX` probe is retained **only** as that sub-step's
+  *running* signal (the one place the catalog emits no per-substep event).
+
+## 11. Remaining — needs a VALC restart + owner eyes (next session)
+
+Deliberately NOT done blind, because it's interwoven with other cards and unverifiable
+without the running build:
+
+1. **Verify the server first** (no client change needed): after restart, GET
+   `/valc/deployment/ssis-table-counts?databaseId=<dev>` and diff each row's `state`
+   against the catalog for a Succeeded and a Canceled run. This confirms the engine
+   before any render change.
+2. **Collapse the client** — `instRenderTableCounts` → `switch(t.state)` + render
+   `t.substeps`; delete the inference layer (`_instTaskOrder`, accumulated
+   `_instDonePhases`, `climbed`, the ALTER-INDEX-probe *running* inference).
+3. **Clear marker** — keep Clear as a client concern: compare the current exec id
+   (from `instLoadLastExecution`) to the persisted `_instClearedExecId`; if equal,
+   render every row `not_started` (overrides the server's `empty`/`done`). Persisted, so
+   it survives reload. (Server-side persistence via `DbStepMarkerService` is the cleaner
+   long-term option per §6.)
+4. **Companies card is COUPLED** — `instRenderBootCounts` + the `ssis-bootstrap-table-counts`
+   endpoint use the same done-set inference. Collapsing the main board's `_instDonePhases`
+   means the bootstrap card needs the same server-state treatment (apply `applyState`-style
+   logic to `bootstrapTableCounts`) in the same pass, or it breaks.
+5. **Step-6 band tint** (`instRenderTableCounts` derives `instBand(6)` from
+   `_instDonePhases`/`_instBulkSources`) must move to deriving from row `state` too.
+
+Order: verify server (1) → collapse client + companies + band together (2,4,5) →
+clear marker (3) → run the §8 three-scenario check with the owner watching.
