@@ -109,6 +109,7 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <li data-target="deploy"><a href="#deploy" onclick="goAnchor('deploy'); return false;">9. Deploy model</a></li>
 <li data-target="release"><a href="#release" onclick="goAnchor('release'); return false;">10. Cutting a release</a></li>
 <li data-target="scheduling"><a href="#scheduling" onclick="goAnchor('scheduling'); return false;">11. Scheduling (SQL Agent)</a></li>
+<li data-target="conventions"><a href="#conventions" onclick="goAnchor('conventions'); return false;">12. SQL coding conventions</a></li>
 <li data-target="see-also"><a href="#see-also" onclick="goAnchor('see-also'); return false;">See also</a></li>
 </ul>
 </aside>
@@ -305,6 +306,39 @@ EXEC dbo.usp6_001_run_b_to_c
 <div class="callout note">
   <p><strong>V8 Deployment Center model (in progress):</strong> Step 7 of the Installations flow provisions two jobs &mdash; an <strong>Initial Load</strong> (one-time, the first full historical pull + reconcile) and an <strong>RR Refresh Cycle</strong> (nightly steady refresh) &mdash; both disabled on creation, with the nightly Refresh gated behind a successful Initial Load. The run-result cards read <code>RunHistory</code>, <code>RServer_Log</code>, <code>RSsisLoadLog</code> (&sect;4), and the SSIS catalog execution views.</p>
 </div>
+</section>
+
+<section id="conventions">
+<h2>12. SQL coding conventions (case, collation &amp; comments)</h2>
+<p>Two pressures shape how objects are written: a new DBA has to be able to read them, and a customer may host RR on the <strong>same SQL Server instance as JD Edwards</strong>, which requires a <strong>case-sensitive server collation</strong>. The conventions below serve both.</p>
+
+<h3>Collation &mdash; a CI database that tolerates a CS server</h3>
+<p>RR objects assume a <strong>case-insensitive</strong> database. Two layers keep that true even when a customer puts RR on a <strong>case-sensitive-server</strong> instance (the JD&nbsp;Edwards coexistence case):</p>
+<ul>
+  <li><strong>The database is pinned CI at creation.</strong> The creation script sets <code>COLLATE SQL_Latin1_General_CP1_CI_AS</code> explicitly, so the database never inherits a case-sensitive server default (a database&rsquo;s collation is independent of the server&rsquo;s). PostDeployment warns if it ever finds a case-sensitive database, since collation can&rsquo;t be safely re-set after the fact.</li>
+  <li><strong>Transient objects use <code>COLLATE DATABASE_DEFAULT</code>.</strong> <code>tempdb</code> (and <code>msdb</code>) follow the <em>server</em> collation, not the database&rsquo;s &mdash; so a <code>#temp</code> char column, or a comparison against a job-catalog string, can still collide. Pinning those to <code>DATABASE_DEFAULT</code> resolves them to the RR database collation; it&rsquo;s a no-op on a CI server.</li>
+</ul>
+
+<h3>Identifier case &mdash; match the defined case</h3>
+<p>Reference every table and column at its <strong>canonical (defined) case</strong>, not lowercase. A customer database is created case-<em>insensitive</em>, so case is cosmetic there &mdash; but on a case-<em>sensitive</em> server a lowercase reference to a mixed-case object fails with <code>Invalid object name</code>. Matching a reference to the defined case is a text-only change with no schema impact, so it is always safe to do.</p>
+<ul>
+  <li><strong>JD Edwards tables stay UPPERCASE</strong> (<code>F4111</code>, <code>F0911</code>, <code>F43121</code>) &mdash; that is how they read, and lowercasing them would be both a regression and a needless rename.</li>
+  <li><strong>Never rename an existing table or column just to change its case.</strong> A rename is a schema migration (it ripples into indexes, views, the SSIS column maps, and the Services jar), so it is out of scope for routine edits. New objects are written in canonical case from the start.</li>
+</ul>
+
+<h3>Formatting</h3>
+<p>For new or edited objects: UPPERCASE keywords; identifiers at their defined case; schema-qualified names (<code>dbo.</code>); explicit column lists (no <code>SELECT *</code> in a shipped object or view); one major clause per line; consistent indentation. Applied going forward, not as a mass reformat of existing files.</p>
+
+<h3>Annotate the object</h3>
+<p>When an object does something for case- or collation-safety that would otherwise look like an unexplained workaround, <strong>leave a short comment saying what it is doing and why</strong> &mdash; so the next DBA understands the intent instead of &ldquo;cleaning it up&rdquo; and reintroducing the bug. Two patterns already in the codebase:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Pattern</th><th>Why</th><th>Example</th></tr></thead>
+<tbody>
+<tr><td>Resolve a column name from <code>sys.columns</code> at runtime</td><td>A portable script that must run on an unknown collation without assuming the column&rsquo;s case</td><td><code>usp8_maint_update_periodends</code></td></tr>
+<tr><td><code>&hellip; COLLATE DATABASE_DEFAULT &hellip;</code> on a string comparison</td><td>Forces the comparison to the database collation when one side comes from a different one (e.g. <code>tempdb</code> or <code>msdb</code>, which follow the <em>server</em> collation)</td><td>the SQL Agent job-name checks in the diagnostic views</td></tr>
+</tbody>
+</table></div>
+<p>A one-line comment such as <code>-- resolve at the column's real case: case-sensitive-server safe</code> is enough.</p>
 </section>
 
 <section id="see-also">
