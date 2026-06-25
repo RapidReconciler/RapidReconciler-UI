@@ -132,6 +132,10 @@ window.RR_TEST_AGENT_AREAS = [
   // Reload GL — self-service GL maintenance (ReloadGlController, admin-gated)
   'inventory/reload-gl',
   'inventory/reload-gl/preview',
+  // Fiscal Period-End correction (FiscalPeriodEndController, admin-gated):
+  // preview the per-table row counts a date-swap would move, then apply.
+  'inventory/fiscal-period-end-preview',
+  'inventory/fiscal-period-end-apply',
   'poll',
   'system-status',
   'available-periods',

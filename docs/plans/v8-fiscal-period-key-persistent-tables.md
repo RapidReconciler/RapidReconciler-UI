@@ -1,5 +1,34 @@
 # V8 — fiscal period key on the period-persistent tables
 
+> ## ⚠ 2026-06-25 — DECISION CHANGE: schema re-key DEFERRED; ship the date-swap as a V8 admin utility
+>
+> Owner reframed the whole effort. A fiscal-calendar change is a **rare** event,
+> and **clients never rewrite history** (doing so would invalidate prior
+> financial reporting). That makes the heavy `FiscalYear`/`FiscalPeriod` re-key
+> below **over-engineered for V8**: because the stale OLD period-ending date only
+> ever lives in the *current* open period, a plain **from-date → to-date value
+> replacement across all companies** touches exactly the rows that need fixing —
+> no company filter, no history risk. So:
+>
+> - **V8 ships the corrected date-swap as an Administrator utility**, not the
+>   13-table schema change. New proc
+>   [`usp8_maint_update_periodends`](../../../RapidReconciler-DB/RapidReconciler/dbo/Stored%20Procedures/usp8_maint_update_periodends.sql)
+>   (preview + apply, guarded, metadata-driven so it's case-safe) ports the legacy
+>   `usp6` logic with the **corrected target list** — drops the two wasted updates
+>   (`RCardexLedgerCompare2`, `RNV_Validation`, which B→C rebuilds) and adds the
+>   three genuine misses (`RInvAsOf_Log`, `RUnpostedCardex`, `Transit_GL_Balance`).
+>   **Built + verified on Dev (preview) 2026-06-25.**
+> - This also retires the separate V7 "complete the table list" task — the V8
+>   utility serves both stacks. (`usp6_maint_update_periodends` stays in place for
+>   any legacy caller, but the V8 utility is the path forward.)
+> - **`usp8_maint_resync_periodends`** (the auto-resync that depended on the new
+>   columns) is **not being built.** The schema-key analysis below is preserved as
+>   rationale; revisit only if the value-swap proves insufficient in practice.
+>
+> **Remaining for the utility:** agent endpoints (`POST /inventory/fiscal-period-end-preview`
+> + `…-apply`) + `API.md`; V8 `admin-fiscal-period.html` (preview→confirm→apply)
+> + `config.js` area + Home admin tile + a help doc.
+
 **Status:** drafted 2026-06-24, **table list verified with owner.** Design = store
 the stable fiscal key (`FiscalYear` + `FiscalPeriod`) on the R-tables that retain
 history across a refresh, so a fiscal-calendar change auto-corrects instead of
