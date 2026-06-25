@@ -133,7 +133,9 @@ window.RR_TEST_AGENT_AREAS = [
   'inventory/reload-gl',
   'inventory/reload-gl/preview',
   // Fiscal Period-End correction (FiscalPeriodEndController, admin-gated):
-  // preview the per-table row counts a date-swap would move, then apply.
+  // detect the stale date, preview the per-table row counts a date-swap
+  // would move, then apply.
+  'inventory/fiscal-period-end-detect',
   'inventory/fiscal-period-end-preview',
   'inventory/fiscal-period-end-apply',
   'poll',
