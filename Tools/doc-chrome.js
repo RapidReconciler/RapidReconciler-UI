@@ -50,6 +50,8 @@
     const css =
       'header.doc-header,footer,.doc-feedback{display:none!important}' +
       '.sidebar{display:none!important}' +
+      // In-doc prev/next/back nav are dead-ends inside the help panel — hide them.
+      '.topic-footer-nav{display:none!important}' +
       '.spa-wrap{display:block!important}' +
       '.content-card{box-shadow:none!important;border:0!important;padding:0!important;margin:0!important}' +
       '.page-header{padding:10px 0 4px!important;background:none!important}' +
