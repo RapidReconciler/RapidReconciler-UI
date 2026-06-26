@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<!--
+  =============================================================================
+  Administrator > Data Management — Purge old data
+  =============================================================================
+  Move the data start date forward; the next refresh permanently purges
+  everything before it (one cutoff applied to every company at once). GET
+  inventory/integrity/purge-info returns the current cutoff, DB file size, and
+  the valid period-beginning candidate dates. POST inventory/integrity/purge-cutoff
+  {date} STAGES a new cutoff (reversible by Restore until the next refresh runs).
+  Admin-gated server-side. Standard chrome + help "?" circle + footer.
+  =============================================================================
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Purge Old Data &mdash; RapidReconciler Admin</title>
+<link href="fonts/fonts.css" rel="stylesheet">
+<link href="sidebar.css" rel="stylesheet">
+<link href="../Tools/help-sidebar.css" rel="stylesheet">
+<script src="config.js"></script>
+<script src="sidebar.js"></script>
+<script defer src="../Tools/help-sidebar.js"></script>
+<style>
+  :root {
+    --navy:#1f2d4a; --navy-deep:#142037; --blue:#2b5fb0; --blue-bright:#3d8fd6; --blue-pale:#e6efff;
+    --orange:#f08a24; --orange-deep:#c8700f; --orange-pale:#fdeed9; --green:#2e8a55; --green-pale:#def4e6;
+    --red:#c0392b; --red-pale:#fce5e1; --bg:#fafbfd; --bg-soft:#f3f5f9; --bg-card:#ffffff;
+    --text:#1f2d4a; --text-soft:#4a5468; --text-muted:#828a9a; --rule:#e6eaf0; --rule-strong:#cfd6e0;
+    --shadow-sm:0 1px 2px rgba(20,32,55,.04); --shadow-md:0 4px 12px -2px rgba(20,32,55,.08);
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'Open Sans',-apple-system,sans-serif; background:var(--bg); color:var(--text); font-size:14px; line-height:1.55; -webkit-font-smoothing:antialiased; }
+  h1,h2,h3,h4 { font-family:'Source Sans 3',sans-serif; font-weight:700; }
+  a { color:inherit; text-decoration:none; }
+  .app { display:grid; grid-template-columns:1fr; grid-template-rows:56px 1fr auto; grid-template-areas:"topbar" "main" "footer"; min-height:100vh; }
+  .topbar { grid-area:topbar; background:var(--bg-card); border-bottom:1px solid var(--rule); display:flex; align-items:center; padding:0 24px; z-index:50; }
+  .topbar-brand { display:flex; align-items:center; gap:12px; }
+  .topbar-brand-logo { height:28px; width:auto; display:block; }
+  .topbar-brand-text { display:flex; flex-direction:column; line-height:1.15; }
+  .topbar-brand-name { font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:15px; color:var(--navy); }
+  .topbar-brand-db { font-family:'Source Sans 3',sans-serif; font-size:11px; color:var(--text-muted); letter-spacing:.08em; text-transform:uppercase; }
+  .topbar-home { margin-left:auto; }
+  .main { grid-area:main; padding:24px 32px 48px; overflow-y:auto; }
+  .page { max-width:880px; margin:0 auto; }
+  .page-header { margin-bottom:18px; }
+  .breadcrumb { font-family:'Source Sans 3',sans-serif; font-size:11px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted); margin-bottom:6px; }
+  .breadcrumb a { color:var(--text-muted); } .breadcrumb a:hover { color:var(--blue); }
+  .breadcrumb-sep { margin:0 6px; opacity:.6; }
+  .page-title { font-size:26px; color:var(--navy); font-weight:800; }
+  .page-lede { color:var(--text-soft); margin-top:8px; max-width:64ch; }
+  .card { background:var(--bg-card); border:1px solid var(--rule); border-radius:10px; box-shadow:var(--shadow-sm); margin-bottom:18px; overflow:hidden; }
+  .card-head { padding:14px 18px; border-bottom:1px solid var(--rule); background:var(--bg-soft); }
+  .card-title { font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:14px; color:var(--navy); letter-spacing:.02em; }
+  .card-body { padding:18px; }
+  .field { display:flex; flex-direction:column; gap:5px; max-width:380px; margin:16px 0; }
+  .field-label { font-family:'Source Sans 3',sans-serif; font-size:11px; font-weight:700; color:var(--text-soft); letter-spacing:.04em; text-transform:uppercase; }
+  .field-hint { font-weight:600; color:var(--text-muted); text-transform:none; letter-spacing:0; }
+  .field select { font-family:inherit; font-size:14px; color:var(--navy); padding:9px 11px; border:1px solid var(--rule-strong); border-radius:6px; background:var(--bg-card); }
+  .field select:focus { outline:none; border-color:var(--blue); box-shadow:0 0 0 2px var(--blue-pale); }
+  .facts { display:flex; flex-wrap:wrap; gap:14px 40px; }
+  .fact-k { font-family:'Source Sans 3',sans-serif; font-size:11px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; color:var(--text-soft); }
+  .fact-v { font-size:20px; font-weight:800; color:var(--navy); margin-top:2px; }
+  .warn { display:flex; gap:12px; padding:13px 16px; border-radius:9px; background:var(--red-pale); border:1px solid #f1c9c3; color:var(--text); margin:14px 0; font-size:13.5px; }
+  .warn svg { width:18px; height:18px; flex-shrink:0; color:var(--red); margin-top:2px; }
+  .warn.amber { background:var(--orange-pale); border-color:#f0d2a8; }
+  .warn.amber svg { color:var(--orange-deep); }
+  .warn b { color:var(--navy); }
+  .warn[hidden] { display:none; }
+  .staged { display:none; margin:14px 0; padding:11px 14px; border-radius:8px; background:var(--blue-pale); border:1px solid #c2d8ef; color:var(--text); font-size:13.5px; }
+  .staged.is-visible { display:block; }
+  .staged b { color:var(--navy); }
+  .insight { margin:14px 0; padding:14px 16px; border-radius:9px; background:var(--bg-soft); border:1px solid var(--rule); }
+  .insight h4 { font-size:13px; color:var(--navy); margin-bottom:8px; }
+  .insight ul { margin:0; padding-left:18px; color:var(--text-soft); font-size:13px; line-height:1.6; }
+  .insight b { color:var(--navy); }
+  .attest { display:flex; gap:10px; align-items:flex-start; margin:16px 0 4px; font-size:13.5px; color:var(--text-soft); cursor:pointer; }
+  .attest input { margin-top:3px; flex-shrink:0; }
+  .btn { font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:13.5px; border-radius:6px; padding:9px 18px; cursor:pointer; border:1px solid transparent; }
+  .btn-danger { color:#fff; background:var(--red); border-color:var(--red); }
+  .btn-danger:hover:not(:disabled) { filter:brightness(1.06); }
+  .btn-ghost { color:var(--text-soft); background:var(--bg-card); border-color:var(--rule-strong); }
+  .btn-ghost:hover { color:var(--navy); border-color:var(--text-muted); }
+  .btn:disabled { opacity:.5; cursor:not-allowed; filter:none; }
+  .actions { margin-top:18px; display:flex; gap:10px; align-items:center; }
+  .fetch-error { display:none; background:var(--red-pale); border:1px solid var(--red); color:var(--red); padding:10px 14px; border-radius:6px; margin-bottom:16px; font-size:13px; font-weight:600; }
+  .fetch-error.is-visible { display:block; }
+  .toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%) translateY(20px); background:var(--navy); color:#fff; padding:10px 18px; border-radius:6px; font-family:'Source Sans 3',sans-serif; font-weight:600; font-size:13px; opacity:0; pointer-events:none; transition:opacity .2s ease,transform .2s ease; z-index:100; }
+  .toast.is-visible { opacity:1; transform:translateX(-50%) translateY(0); }
+  .gate-notice { display:none; gap:12px; padding:13px 16px; border-radius:9px; background:var(--blue-pale); border:1px solid #c2d8ef; color:var(--text); }
+  .gate-notice svg { width:18px; height:18px; flex-shrink:0; color:var(--blue); margin-top:2px; }
+  .gate-notice.is-visible { display:flex; }
+  body.is-gated #js-tool { display:none; }
+  .app-footer { grid-area:footer; border-top:1px solid var(--rule); background:var(--bg-card); color:var(--text-muted); font-size:12px; text-align:center; padding:12px 24px; }
+  .app-footer .af-ver { color:var(--text-soft); font-weight:600; }
+</style>
+</head>
+<body data-help-src="../RRUniversity/administrator-start-here.html#data" data-help-title="Purge old data">
+
+<div class="app">
+
+  <header class="topbar">
+    <div class="topbar-brand">
+      <img class="topbar-brand-logo" src="../Images/gsi-logo.png" alt="GSI">
+      <span class="topbar-brand-text">
+        <span class="topbar-brand-name">RapidReconciler</span>
+        <span class="topbar-brand-db" id="js-topbar-db">RapidReconciler_Dev</span>
+      </span>
+    </div>
+    <a class="topbar-home" href="home.html" title="Back to Home">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></svg>
+      Home
+    </a>
+  </header>
+
+  <div class="toast" id="js-toast" role="status" aria-live="polite"></div>
+
+  <main class="main">
+    <div class="page">
+
+      <header class="page-header">
+        <nav class="breadcrumb" aria-label="Breadcrumb">
+          <a href="home.html">Administrator</a><span class="breadcrumb-sep">/</span><span>Data Management</span><span class="breadcrumb-sep">/</span><span>Purge Old Data</span>
+        </nav>
+        <h1 class="page-title">Purge Old Data</h1>
+        <p class="page-lede">Move the start date forward and the next refresh permanently removes everything before it &mdash; the same cutoff is applied to every company at once, so you don&rsquo;t have to edit them one by one.</p>
+      </header>
+
+      <div class="note gate-notice" id="js-gate" role="alert">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
+        <div>This is an administrator function. <b>Contact your administrator</b> to purge old data.</div>
+      </div>
+
+      <div id="js-tool">
+
+        <div class="fetch-error" id="js-fetch-error" role="alert">Couldn&rsquo;t reach the data service &mdash; <span id="js-fetch-error-msg"></span></div>
+
+        <div class="card">
+          <div class="card-head"><span class="card-title">Set the data start date</span></div>
+          <div class="card-body">
+            <div class="facts">
+              <div><div class="fact-k">Current start date</div><div class="fact-v" id="js-current">&hellip;</div></div>
+              <div><div class="fact-k">Database file size</div><div class="fact-v" id="js-size">&hellip;</div></div>
+            </div>
+
+            <div class="field">
+              <label class="field-label" for="js-newdate">New start date <span class="field-hint">&mdash; period beginning dates from your fiscal calendar</span></label>
+              <select id="js-newdate"></select>
+            </div>
+
+            <div class="warn amber" id="js-diverge" hidden>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4M12 17h.01"/></svg>
+              <span><b>Companies don&rsquo;t share the same period beginning dates.</b> Review the fiscal calendars before purging &mdash; the cutoff may not line up the same way across every company.</span>
+            </div>
+
+            <div class="staged" id="js-staged"></div>
+
+            <div class="warn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4M12 17h.01"/></svg>
+              <span><b>This is permanent.</b> Once a new start date takes effect on the next refresh, all data before it is purged on the server &mdash; you can&rsquo;t go back without a full reset. <b>Strongly recommended:</b> have IT back up the database first. There is no other recovery.</span>
+            </div>
+
+            <div class="insight">
+              <h4>Why purge? Large databases cause real problems</h4>
+              <ul>
+                <li><b>Performance</b> &mdash; queries and refreshes slow down as history piles up.</li>
+                <li><b>Disk space</b> &mdash; the database file can grow until it fills the drive.</li>
+                <li><b>tempdb</b> &mdash; big operations can exhaust tempdb and crash the server.</li>
+                <li><b>Autogrowth</b> &mdash; frequent file growth fragments the database and stalls writes.</li>
+              </ul>
+            </div>
+
+            <label class="attest">
+              <input type="checkbox" id="js-attest">
+              <span>I understand this permanently purges data before the new start date and can&rsquo;t be undone, and a database backup has been taken.</span>
+            </label>
+
+            <div class="actions">
+              <button class="btn btn-danger" id="js-confirm" type="button" disabled>Set new cutoff</button>
+              <a class="btn btn-ghost" href="home.html">Back to Home</a>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </main>
+
+  <footer class="app-footer">
+    &copy; 2026 RapidReconciler &middot; GSI Inc. &middot; <span class="af-ver" id="js-app-ver"></span>
+  </footer>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+  const RR_CONFIG = window.RR_CONFIG || {};
+  const URL_MODE  = new URLSearchParams(window.location.search).get('mode');
+  const MODE      = URL_MODE || RR_CONFIG.mode || 'demo';
+  const IS_DEMO   = (MODE === 'demo');
+  const _testAgentAreas    = new Set(window.RR_TEST_AGENT_AREAS || []);
+  const _testAgentPrefixes = window.RR_TEST_AGENT_PREFIXES || [];
+  const _valcPrefixes      = window.RR_VALC_PREFIXES || [];
+  function _routesToTestAgent(area) {
+    if (_testAgentAreas.has(area)) return true;
+    for (let i = 0; i < _testAgentPrefixes.length; i++) if (area.startsWith(_testAgentPrefixes[i])) return true;
+    return false;
+  }
+  function _routesToValc(area) { for (let i = 0; i < _valcPrefixes.length; i++) if (area.startsWith(_valcPrefixes[i])) return true; return false; }
+  function prodHeaders(contentType) {
+    const h = { 'Accept': 'application/json' };
+    try { const t = localStorage.getItem('rrv8.token'); if (t) h['Authorization'] = 'Bearer ' + t; } catch (_) {}
+    if (contentType) h['Content-Type'] = contentType;
+    return h;
+  }
+  function rrFetch(area, opts) {
+    opts = opts || {};
+    let base;
+    if (_routesToValc(area)) { base = RR_CONFIG.valcBase || 'http://localhost:8080'; }
+    else if (_routesToTestAgent(area)) {
+      const _d = window.RR_SESSION && window.RR_SESSION.dbs && window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex || 0];
+      base = (_d && _d.ip) ? ((/^(?:localhost|127\.0\.0\.1)\b/i.test(_d.ip) ? 'http://' : 'https://') + _d.ip) : (RR_CONFIG.testAgentBase || 'http://localhost:34537');
+    } else {
+      const sess = window.RR_SESSION; const db = sess && sess.dbs && sess.dbs[sess.activeDbIndex || 0];
+      if (!db || !db.ip) return Promise.reject(new Error('No active database. Sign in first.'));
+      base = (/^(?:localhost|127\.0\.0\.1)\b/i.test(db.ip) ? 'http://' : 'https://') + db.ip;
+    }
+    const url = base + '/' + area + (opts.query ? '?' + new URLSearchParams(opts.query) : '');
+    const init = { method: opts.method || 'GET', headers: prodHeaders(opts.body ? 'application/json;charset=UTF-8' : null), body: opts.body ? JSON.stringify(opts.body) : undefined };
+    return fetch(url, init).then(async r => {
+      if (!r.ok) { let detail = 'HTTP ' + r.status; try { const j = await r.json(); if (j && (j.message || j.error)) detail = j.message || j.error; } catch (_) {} const e = new Error(detail); e.status = r.status; throw e; }
+      return r.json().catch(err => err instanceof SyntaxError ? null : Promise.reject(err));
+    });
+  }
+  function $(id) { return document.getElementById(id); }
+  function toast(msg) { const el = $('js-toast'); if (!el) return; el.textContent = msg; el.classList.add('is-visible'); setTimeout(() => el.classList.remove('is-visible'), 3000); }
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch])); }
+  function showFetchError(msg) { const b = $('js-fetch-error'); $('js-fetch-error-msg').textContent = msg; b.classList.add('is-visible'); }
+  function clearFetchError() { $('js-fetch-error').classList.remove('is-visible'); }
+  function activeDb() { const s = window.RR_SESSION || {}; const d = Array.isArray(s.dbs) ? s.dbs : []; return d[s.activeDbIndex || 0] || d[0] || null; }
+  function isAdmin() { const a = activeDb(); return !!(a && a.t && a.t.adm === true); }
+  function fmtDateLong(iso) {
+    if (!iso) return '—';
+    try { return new Date(iso + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }); }
+    catch (_) { return iso; }
+  }
+
+  let _info = null, _original = null, _staged = false, _busy = false;
+  function applyInfo(info) {
+    _info = info || {};
+    $('js-current').textContent = fmtDateLong(_info.currentCutoff);
+    $('js-size').textContent = _info.dbSizePretty || '—';
+    const sel = $('js-newdate'), cands = _info.candidates || [];
+    sel.innerHTML = cands.length
+      ? cands.map(iso => '<option value="' + iso + '">' + fmtDateLong(iso) + '</option>').join('')
+      : '<option value="">No later periods to move to</option>';
+    $('js-diverge').hidden = !_info.calendarDiverges;
+  }
+  function loadInfo() {
+    if (IS_DEMO) return;
+    clearFetchError();
+    rrFetch('inventory/integrity/purge-info').then(function (info) {
+      applyInfo(info);
+      if (!_staged) _original = info && info.currentCutoff;
+    }).catch(function (e) { showFetchError((e && e.message) || 'Could not load purge info.'); });
+  }
+  function setStaged(staged, dateIso) {
+    _staged = staged;
+    const confirm = $('js-confirm'), sel = $('js-newdate'), att = $('js-attest'), note = $('js-staged');
+    if (staged) {
+      confirm.textContent = 'Restore';
+      confirm.classList.remove('btn-danger'); confirm.classList.add('btn-ghost');
+      confirm.disabled = false;
+      sel.disabled = true; att.disabled = true;
+      note.classList.add('is-visible');
+      note.innerHTML = '<b>Cutoff set to ' + esc(fmtDateLong(dateIso)) + '.</b> Nothing is purged until the next refresh runs &mdash; <b>Restore</b> to undo before then.';
+    } else {
+      confirm.textContent = 'Set new cutoff';
+      confirm.classList.remove('btn-ghost'); confirm.classList.add('btn-danger');
+      confirm.disabled = !att.checked;
+      sel.disabled = false; att.disabled = false;
+      note.classList.remove('is-visible');
+    }
+  }
+  function toggle() {
+    if (_busy) return;
+    if (_staged) {
+      if (!_original) { setStaged(false, null); return; }
+      _busy = true; $('js-confirm').disabled = true;
+      rrFetch('inventory/integrity/purge-cutoff', { method: 'POST', body: { date: _original } })
+        .then(function (info) { applyInfo(info); setStaged(false, null); toast('Restored — cutoff back to ' + fmtDateLong(_original) + '.'); })
+        .catch(function (e) { showFetchError('Restore failed: ' + ((e && e.message) || e)); $('js-confirm').disabled = false; })
+        .then(function () { _busy = false; });
+    } else {
+      if (!$('js-attest').checked) return;
+      const date = $('js-newdate').value;
+      if (!date) { toast('Pick a new start date first.'); return; }
+      _busy = true; $('js-confirm').disabled = true;
+      rrFetch('inventory/integrity/purge-cutoff', { method: 'POST', body: { date: date } })
+        .then(function (info) { applyInfo(info); setStaged(true, date); toast('Cutoff set to ' + fmtDateLong(date) + ' — purges on the next refresh. Restore to undo.'); })
+        .catch(function (e) { showFetchError('Couldn’t set cutoff: ' + ((e && e.message) || e)); $('js-confirm').disabled = false; })
+        .then(function () { _busy = false; });
+    }
+  }
+
+  document.addEventListener('DOMContentLoaded', function () {
+    const a = activeDb();
+    if (a && a.n) $('js-topbar-db').textContent = a.n;
+    const ver = $('js-app-ver');
+    if (ver) ver.textContent = (RR_CONFIG.release || 'v8') + (RR_CONFIG.buildStamp ? ' · ' + RR_CONFIG.buildStamp : '');
+    if (window.RR_SESSION && !isAdmin()) { document.body.classList.add('is-gated'); $('js-gate').classList.add('is-visible'); return; }
+    $('js-attest').addEventListener('change', function () { if (!_staged) $('js-confirm').disabled = !this.checked; });
+    $('js-confirm').addEventListener('click', toggle);
+    setStaged(false, null);
+    loadInfo();
+  });
+})();
+</script>
+</body>
+</html>

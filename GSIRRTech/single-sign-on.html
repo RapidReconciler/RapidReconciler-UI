@@ -104,7 +104,8 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <li data-target="bridge"><a href="#bridge" onclick="goAnchor('bridge'); return false;">5. The token bridge</a></li>
 <li data-target="handoff"><a href="#handoff" onclick="goAnchor('handoff'); return false;">6. Hand-off to V8</a></li>
 <li data-target="status"><a href="#status" onclick="goAnchor('status'); return false;">7. Status &amp; roadmap</a></li>
-<li data-target="security"><a href="#security" onclick="goAnchor('security'); return false;">8. Security notes</a></li>
+<li data-target="testing"><a href="#testing" onclick="goAnchor('testing'); return false;">8. Testing with a simulated IdP</a></li>
+<li data-target="security"><a href="#security" onclick="goAnchor('security'); return false;">9. Security notes</a></li>
 <li data-target="see-also"><a href="#see-also" onclick="goAnchor('see-also'); return false;">See also</a></li>
 </ul>
 </aside>
@@ -114,7 +115,8 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <section id="overview">
 <h2>Overview</h2>
 <p>Most customers sign in to RapidReconciler with a username + password managed by VALC. <strong>Single sign-on (SSO)</strong> is an opt-in service for customers who want their people to sign in with their existing corporate identity provider instead &mdash; so access follows the customer&rsquo;s own joiners/leavers process and password policy, and there is one fewer credential to manage.</p>
-<p>SSO is implemented as <strong>SAML 2.0</strong>, where RapidReconciler is the <strong>Service Provider (SP)</strong> and the customer&rsquo;s identity provider (Okta, Entra ID, Ping, etc.) is the <strong>Identity Provider (IdP)</strong>. The first customer on this path is Kinross (Okta).</p>
+<p>SSO is offered over either <strong>SAML 2.0</strong> or <strong>OpenID Connect (OIDC)</strong> &mdash; RapidReconciler is the <strong>Service Provider</strong> / <strong>relying party</strong> and the customer&rsquo;s identity provider (Okta, Entra ID, Ping, etc.) is the <strong>Identity Provider (IdP)</strong>. Each customer is configured for one protocol. The first customer on this path is Kinross (Okta).</p>
+<div class="callout note"><p><strong>Which protocol?</strong> SAML 2.0 covers essentially every enterprise IdP and is the long-standing default. <strong>OIDC</strong> is the modern choice for Entra ID / Okta / Google, is lighter to set up (no certificate exchange), and &mdash; because its library ships from Maven Central rather than a vendor repo &mdash; is the build that goes live without external dependencies. When a customer offers both, OIDC is the simpler path.</p></div>
 <div class="callout note"><p>SSO <strong>complements</strong> email and password sign-in &mdash; it does not replace them. A few flows must reach people who can&rsquo;t (yet) sign in, so they stay on email: the go-live hand-off + 7-day set-password link, password resets, and license/account notices. SSO covers day-to-day sign-in for a customer&rsquo;s working users.</p></div>
 </section>
 
@@ -129,17 +131,27 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <li>The browser lands on the V8 <strong>Home</strong> page, signed in &mdash; exactly as if they&rsquo;d used the password form.</li>
 </ol>
 <p>The assertion is the proof of identity; from step&nbsp;4 onward the user holds the same token a password login would have produced, so every downstream page and permission works identically.</p>
+<div class="callout important"><p><strong>There is no separate SSO service to run or restart.</strong> The SSO runtime lives <em>inside</em> the VALC application &mdash; the same service that handles password sign-in, the dashboard, and the API. So SSO is available exactly when VALC is up; there is no standalone SSO daemon that can fail on its own while password login keeps working.</p>
+<p>This is the key difference from the <strong>legacy stack</strong>. There, SSO was a separate bolt-on component (<code>rr-sso</code>) that authenticated the user and then re-posted their email + a shared password to the login endpoint. Because it ran <em>beside</em> password login, it could go down on its own &mdash; SSO users would be stuck while password users carried on &mdash; and recovering it meant restarting that separate piece. VALC&nbsp;2.0 folds SSO into the application and removes that failure mode entirely.</p></div>
 </section>
 
 <section id="per-client">
 <h2>2. Per-customer model</h2>
 <p>SSO config is stored <strong>per client</strong> (one row per SSO-enabled customer in <code>client_sso</code>, keyed by <code>client_id</code>), not as a single global setting. That matters because VALC is multi-tenant: only the customers who buy SSO are federated, each against <em>their own</em> IdP, and a misconfigured row for one customer can never affect another.</p>
-<p>Each customer&rsquo;s config carries a stable <code>registration_id</code> (used in the SAML URLs), the IdP details (entity ID, SSO URL, signing certificate), our SP details (entity ID, ACS URL), the <code>email_domains</code> that route to this IdP, and the <strong>default role</strong> new users receive.</p>
+<p>Each customer&rsquo;s config carries a <code>protocol</code> (<code>SAML</code> or <code>OIDC</code>), a stable <code>registration_id</code> (used in the sign-in URLs), the <code>email_domains</code> that route to this IdP, the email claim/attribute, and the <strong>default role</strong> new users receive. The protocol-specific connection details sit alongside:</p>
+<ul>
+<li><strong>SAML</strong> &mdash; the IdP entity ID, SSO URL, and signing certificate; plus our SP entity ID + ACS URL.</li>
+<li><strong>OIDC</strong> &mdash; the IdP issuer URL, the client ID + client secret the IdP issued for us, and the requested scopes (default <code>openid,profile,email</code>); plus the redirect URI to register with the IdP. The client secret is write-only &mdash; the admin screen never echoes it back, only whether one is on file.</li>
+</ul>
 </section>
 
 <section id="setup">
 <h2>3. Setup runbook</h2>
-<p>SSO is configured in the <strong>Deployment Center &rarr; SSO tab</strong> (also reachable from a customer&rsquo;s Manage-Client card &rarr; &ldquo;Single sign-on&rdquo;). Pick the customer, then work the three bands:</p>
+<p>SSO is configured in the <strong>Deployment Center &rarr; SSO tab</strong> (also reachable from a customer&rsquo;s Manage-Client card &rarr; &ldquo;Single sign-on&rdquo;). Pick the customer, choose the <strong>sign-in protocol</strong> (SAML or OIDC), then work the bands the chosen protocol shows.</p>
+<h3>OIDC path</h3>
+<p>If you pick <strong>OpenID Connect</strong>, the tab shows a single config band. Register RapidReconciler as an app in the customer&rsquo;s IdP (Entra ID / Okta), hand their admin the <strong>Redirect URI</strong> the tab displays, and paste back the <strong>issuer URL</strong>, <strong>client ID</strong>, and <strong>client secret</strong> the IdP issues. Set scopes if they differ from <code>openid,profile,email</code>. Then set the email domain(s), default role, tick Enable, and Save. There is no certificate or metadata-file exchange &mdash; that&rsquo;s the OIDC simplification.</p>
+<h3>SAML path</h3>
+<p>If you pick <strong>SAML 2.0</strong>, work the SP &rarr; IdP bands:</p>
 <h3>Band 2 &mdash; hand the customer your SP details</h3>
 <p>The tab shows our <strong>Entity ID</strong>, <strong>Sign-on (ACS) URL</strong>, and a <strong>Download SP metadata</strong> button. Send the customer&rsquo;s IdP admin the metadata file (or the values) so they can register RapidReconciler as a SAML application on their side.</p>
 <h3>Band 3 &mdash; load the IdP metadata they return</h3>
@@ -180,17 +192,36 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <li>SP-metadata generation and IdP-metadata parsing (the customer-facing round-trip).</li>
 <li>The password-less auto-provision + token bridge, and the V8 hand-off landing.</li>
 </ul>
-<p>Staged, pending one external dependency &mdash; the live <strong>assertion-consuming filter</strong> (the runtime that actually receives the SAML POST and verifies it) is now written, built on Spring Security&rsquo;s SAML support. It sits behind an off-by-default build profile so the standard VALC build stays clean. The one thing it needs is the underlying SAML library (<code>opensaml</code>), which is published only to a vendor Maven repository the dev box can&rsquo;t currently reach; the build resolves it automatically from any machine with access. Until that build ships, a customer&rsquo;s IdP admin can complete their entire side of the setup against the metadata above; the final hop goes live the moment the library is in place.</p>
+<p>Both live login runtimes &mdash; the components that actually receive the IdP&rsquo;s response and verify it &mdash; are written and sit behind off-by-default build profiles, so the standard VALC build stays clean:</p>
+<ul>
+<li><strong>OIDC</strong> (<code>-Poidc</code>): the OAuth2 login filter, a DB-backed client registry, and the token bridge. Its library ships from Maven Central, so this build has <strong>no external blocker</strong> &mdash; it&rsquo;s the path to a live first-customer SSO.</li>
+<li><strong>SAML</strong> (<code>-Psaml</code>): the assertion-consuming filter built on Spring Security&rsquo;s SAML support. It needs the <code>opensaml</code> library, published only to a vendor Maven repository the dev box can&rsquo;t currently reach; the build resolves it automatically from any machine with access.</li>
+</ul>
+<p>Either way, a customer&rsquo;s IdP admin can complete their entire side of the setup against the values in the SSO tab; the final hop goes live when VALC is built with the matching profile (<code>mvn -Psaml,oidc clean package</code> for both).</p>
+</section>
+
+<section id="testing">
+<h2>8. Testing with a simulated IdP</h2>
+<p>You don&rsquo;t need a real customer (or their IdP) to prove SSO end-to-end &mdash; stand up a throwaway IdP and a test client. <strong>OIDC is the easier protocol to simulate</strong> and has no library blocker, so it&rsquo;s the recommended test path. What you need:</p>
+<ol>
+<li><strong>A test identity provider.</strong> Any one of: a free <strong>Okta</strong> or <strong>Auth0</strong> developer tenant; a <strong>Microsoft Entra ID</strong> test tenant; or a local <strong>Keycloak</strong> container (it speaks both OIDC and SAML, so it covers either protocol on your own machine). Create one app/registration in it, with a test user whose email is in a domain you control for the test (e.g.&nbsp;<code>example-sso.com</code>).</li>
+<li><strong>The redirect URI registered.</strong> In the IdP app, allow the redirect the SSO tab shows &mdash; <code>{valc-base}/login/oauth2/code/{registration-id}</code> for OIDC (or the ACS URL for SAML). For local testing that base is VALC on <code>:8080</code>.</li>
+<li><strong>A test client row in VALC.</strong> In the Deployment Center SSO tab, pick (or create) a test customer, choose <strong>OIDC</strong>, paste the IdP&rsquo;s <strong>issuer URL</strong>, <strong>client ID</strong>, and <strong>client secret</strong>, set the <strong>email domain</strong> to your test domain, pick a default role, and Enable.</li>
+<li><strong>A VALC build with the protocol on.</strong> Run VALC built with <code>-Poidc</code> (or <code>-Psaml</code>) so the live filter is present.</li>
+<li><strong>Drive it from the login page.</strong> Type a test-domain email on the V8 sign-in page; discovery flips it to &ldquo;Continue with single sign-on,&rdquo; which sends you to the test IdP and back to Home. First sign-in auto-provisions the user with the default role.</li>
+</ol>
+<div class="callout tip"><p>Keycloak is the most self-contained option &mdash; it runs locally, needs no cloud tenant, and can model either protocol, so it&rsquo;s ideal for repeatable testing before a real customer&rsquo;s Okta/Entra admin is in the loop.</p></div>
 </section>
 
 <section id="security">
-<h2>8. Security notes</h2>
+<h2>9. Security notes</h2>
 <ul>
 <li><strong>No shared secret.</strong> Trust is the IdP&rsquo;s signing certificate on the assertion &mdash; per customer, never a shared password.</li>
 <li><strong>Tenant isolation.</strong> Each customer&rsquo;s config and assertions resolve only to that customer&rsquo;s users; one customer&rsquo;s federation can&rsquo;t reach another&rsquo;s data.</li>
 <li><strong>Token in the fragment.</strong> The hand-off uses the URL fragment, not a query string, so the session token stays out of server logs and referrers; the landing page clears it from history.</li>
 <li><strong>Least privilege by default.</strong> Auto-provisioned users get Read-Only unless the operator chose a higher default role.</li>
 <li><strong>Hardened metadata parsing.</strong> Customer-supplied IdP XML is parsed with external entities and DTDs disabled.</li>
+<li><strong>OIDC secrets are write-only.</strong> The client secret is stored server-side and never returned to the admin screen &mdash; the SSO tab shows only whether one is on file, and a blank on save keeps the saved value.</li>
 </ul>
 </section>
 
