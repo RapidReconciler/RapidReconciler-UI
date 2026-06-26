@@ -69,7 +69,7 @@ Catches dangling links, stale demo file paths, broken vendor refs.
 | **`<img src>` and SVG `xlink:href`** | Same as above for images and icon sprites. |
 | **`href="../RRUniversity/…"` reference-guide links** | The customer-facing doc the V8 page-title links to exists. (Catches stale references when a customer doc gets renamed.) |
 | **`rrFetch(area, opts)` demo file mapping** | When `opts.demoFile` is supplied, the file `RRV8/data/<demoFile>.json` exists. When omitted, `RRV8/data/<area>.json` is checked. |
-| **Sidebar nav `data-nav-page` and `href`** | Every nav target either points at a real V8 page (`*.html`) OR is `href="#"` (intentional placeholder). No dangling internal hrefs. |
+| **Home / workbar nav links** | Every internal nav target (Home&rsquo;s role-lane rows, the workbar links) either points at a real V8 page (`*.html`) OR is `href="#"` (intentional placeholder). No dangling internal hrefs. Catches a card repointed at a renamed/never-built page. |
 
 **Source of truth**: the filesystem.
 
@@ -81,8 +81,8 @@ and the V8 tenets section of WORKFLOW.md.
 
 | Check | Rule | Source of truth |
 |---|---|---|
-| **Sidebar mount** | Every V8 page calls `window.RRV8.mountSidebar({activePage: '…', hasPeriodFilter: …})` exactly once. `activePage` is one of the known values (`reconciliation`, `transactions`, `asof`, `cardex-variance`, `dmaais`). | sidebar.js inventory comment + each page&rsquo;s boot section. |
-| **Sidebar status seed** | Every V8 page calls `window.RRV8.ensureInventoryStatus(rrFetch)` at boot (fire-and-forget). | The shared helper added to sidebar.js; documented in API.md. Pages without this call will leave the sidebar filter rows showing `—`. |
+| **Workbar mount** | Every V8 page calls `window.RRV8.mountWorkbar({…})` exactly once (the left rail was retired in the Phase-3 access-flow work &mdash; `mountSidebar` is gone). A working/inventory page passes `activePage`, one of the known values (`reconciliation`, `transactions`, `asof`, `cardex-variance`, `dmaais`, `model-review`); standalone admin pages (`admin-*.html`) and `home`/`login` mount it without `activePage`, typically `{manageUser:true, nav:false}`. | sidebar.js `mountWorkbar` + each page&rsquo;s boot section. Memory `project_access_flow_home_workbar`. |
+| **Inventory status seed** | Every inventory page calls `window.RRV8.ensureInventoryStatus(rrFetch)` at boot (fire-and-forget). | The shared helper in sidebar.js; documented in API.md. Pages without this call will leave the workbar filter rows showing `—`. |
 | **`rrFetch` exists** | Every V8 page defines a top-level `function rrFetch(area, opts)`. | The agent-first tenet: all dynamic data flows through `rrFetch`. |
 | **No raw `fetch('data/')`** | No V8 page issues `fetch('data/foo.json')` (or any path starting with `data/`) outside the `rrFetch` helper itself. **Whitelisted**: a small number of cases that are explicitly NOT agent-routed (period-bar chart history, demo-jwt-payload). Maintain the whitelist as comments. | Agent-first tenet. |
 | **No raw `fetch('http')`** | No V8 page issues `fetch('http…')` directly. Auth POSTs to the VALC base go through `rrFetch` too (or a tightly-scoped sibling helper). | Agent-first tenet. |
@@ -111,21 +111,28 @@ Catches plumbing language leaking into user-visible strings.
 ### 5. SQL compat-140 floor
 
 Catches modern T-SQL syntax that doesn&rsquo;t belong in the
-`RRV8/sprocs/` and `RRV8/views/` captures.
+`RRV8/sprocs/` and `RRV8/views/` captures. The floor is **SQL 2017
+(compat 140)** &mdash; raised from compat 100 on 2026-06-06; the V8
+install/upgrade runs `ALTER DATABASE … SET COMPATIBILITY_LEVEL = 140`,
+so only 2019+/compat-150 syntax (and above) is off-limits.
 
 | Forbidden token | Why |
 |---|---|
-| `\bTRIM\s*\(` | 140+, conservative buffer above the floor. Use `LTRIM(RTRIM(...))`. |
-| `\bSTRING_AGG\s*\(` | 140+, same buffer. Use `FOR XML PATH('')` + `STUFF`. |
-| `\bGREATEST\s*\(`, `\bLEAST\s*\(` | 160+ (SQL 2022). Use `CASE WHEN`. |
-| `\bDATE_BUCKET\s*\(` | 160+. Compute manually. |
-| `\bGENERATE_SERIES\s*\(` | 160+. Use a numbers table or recursive CTE. |
-| `\bWINDOW\b\s+\w+\s+AS\s*\(` (named windows) | 160+. Inline the OVER clause. |
+| `\bGREATEST\s*\(`, `\bLEAST\s*\(` | 150+ (SQL 2019). Use `CASE WHEN`. |
+| `\bGENERATE_SERIES\s*\(` | 150+. Use a numbers table or recursive CTE. |
+| `\bSTRING_SPLIT\s*\([^)]*,\s*[^)]*\)` with the 3rd `enable_ordinal` arg | 150+ &mdash; the ordinal overload only. Plain 2-arg `STRING_SPLIT` is fine. |
+| `\bDATE_BUCKET\s*\(` | 150+. Compute manually. |
+| native `json` type (column/param `\bjson\b` type, not the functions) | 150+. Use `nvarchar(max)` + the JSON functions. |
 
-**Allowed at 140 floor**: `STRING_SPLIT`, `IIF`, `CONCAT`, `TRY_CAST`,
-`OFFSET/FETCH`, JSON functions, `CREATE OR ALTER`, `DROP IF EXISTS`.
+**Now allowed at the 140 floor** (do NOT flag these &mdash; they were
+forbidden under the old compat-100 floor): `TRIM`, `STRING_AGG`,
+`STRING_SPLIT` (2-arg), `CONCAT`/`CONCAT_WS`, `IIF`, `OFFSET/FETCH`,
+`TRY_CAST`/`TRY_CONVERT`, `SUM() OVER (ORDER BY)` cumulative, JSON
+functions (`ISJSON`/`JSON_VALUE`/`JSON_QUERY`/`OPENJSON`),
+`CREATE OR ALTER`, `DROP … IF EXISTS`.
 
-**Source of truth**: [`feedback_sql_compat_floor`](../../../.claude/projects/C--source-repos-RapidReconciler-UI/memory/feedback_sql_compat_floor.md).
+**Source of truth**: [`feedback_sql_compat_floor`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/feedback_sql_compat_floor.md)
++ the workspace `CLAUDE.md` SQL-floor section.
 
 ### 6. Data-hygiene tenets
 
@@ -237,23 +244,38 @@ When the V8 surface changes in a way that introduces a new convention,
 add a row to the relevant table here AND wire a check. Conventions
 that aren&rsquo;t machine-checked tend to drift; ones that are
 checked stay. Examples that should each become a Tier 3 row when they
-land:
+land (some already shipped &mdash; convert them to checks rather than
+leaving them as prose):
 
-- Permission gating on the user-menu admin actions
+- **Standalone admin tool-page chrome** (shipped): `admin-*.html` pages
+  carry the topbar + `.topbar-home` Home link + `<body data-help-src>`
+  (the help &ldquo;?&rdquo; circle, injected by `Tools/help-sidebar.js`)
+  + the `.app-footer` &ldquo;© 2026 RapidReconciler · GSI Inc. · &lt;ver&gt;&rdquo;
+  line. A check would assert all four on every `admin-*.html`.
+- **Admin gating** (shipped): admin-only tool pages gate client-side on
+  `activeDb().t.adm` and add `body.is-gated` + show the gate notice when
+  the signed-in user isn&rsquo;t an admin.
 - Per-row Export button on new grids
 - Headless analyzer template handoff for new export types
-- New V8 module page (Roll Forward, Integrity, In Transit, PO Receipts)
+- New V8 module page (Integrity, In Transit, PO Receipts)
 
 When a tier-7 demo shape changes (e.g. the agent ships a new field on
 `/inventory/status`), update the row here and the demo file in the
 same commit.
 
 When the agent surface changes (the new agent expected per the
-[`new-agent-incoming`](../../../.claude/projects/C--source-repos-RapidReconciler-UI/memory/project_new_agent_incoming.md)
+[`new-agent-incoming`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/project_new_agent_incoming.md)
 memory), Tier 2 (`rrFetch` endpoint references) and Tier 8 (API.md
 catalog consistency) will likely flag the drift &mdash; that&rsquo;s
 the signal to re-mine the jar and update API.md before fixing the
 page code.
+
+Note that some V8 admin pages also call **VALC** directly over
+`RR_CONFIG.valcBase` (e.g. the Licensing license-usage read and the
+`admin-complex-passwords.html` company-password-policy read/write). Those
+`/api/v1/admin/**` paths are a separate surface from the agent endpoints
+&mdash; a future Tier 2/8 check should resolve them against the VALC
+controller catalog, not API.md.
 
 ---
 
