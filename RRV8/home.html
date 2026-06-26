@@ -375,10 +375,12 @@
   .panel.status-green { background: var(--green-pale); border-color: #c5e6d2; box-shadow: inset 4px 0 0 var(--green), var(--shadow-sm); }
   .panel.status-amber { background: var(--orange-pale); border-color: #f0d2a8; box-shadow: inset 4px 0 0 var(--orange), var(--shadow-sm); }
   .panel.status-red   { background: var(--red-pale); border-color: #f1c9c3; box-shadow: inset 4px 0 0 var(--red), var(--shadow-sm); }
-  /* People & Licensing has no health dot — it's setup, not a status. Give it
-     a permanent identity tint (the admin blue, matching its icon) so it
-     reads as a deliberate card, not an un-evaluated one. */
-  #adminPanel { background: var(--blue-pale); border-color: #c2d8ef; box-shadow: inset 4px 0 0 var(--blue), var(--shadow-sm); }
+  /* People & Licensing rolls up team sign-in health (RR Team row dot). Until
+     that's computed it shows the admin-blue identity tint; once a status is
+     known the status-* class (higher up) takes over via worst-dot tinting. */
+  #adminPanel:not(.status-green):not(.status-amber):not(.status-red) {
+    background: var(--blue-pale); border-color: #c2d8ef; box-shadow: inset 4px 0 0 var(--blue), var(--shadow-sm);
+  }
 
   /* ---- Per-panel collapse (each admin section opens/closes on its own) ----
      Default closed: panels render as a scannable row of titled, status-tinted
@@ -1033,11 +1035,13 @@
           <button type="button" class="panel-collapse" aria-expanded="false" title="Expand People &amp; Licensing"><svg class="panel-collapse-chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg></button>
         </div>
         <a class="row" href="admin-companies.html" style="text-decoration:none;">
+          <span class="row-dot grey" id="licenseDot"></span>
           <div class="row-main"><div class="row-title">Licensing</div><div class="row-sub" id="licenseSub">Company seats &amp; entitlements</div></div>
           <span class="btn-sm">Open</span>
         </a>
         <a class="row" href="admin-users.html" style="text-decoration:none;">
-          <div class="row-main"><div class="row-title">RR Team</div><div class="row-sub">Users, roles &amp; access</div></div>
+          <span class="row-dot grey" id="teamDot"></span>
+          <div class="row-main"><div class="row-title">RR Team</div><div class="row-sub" id="teamSub">Users, roles &amp; access</div></div>
           <span class="btn-sm">Open</span>
         </a>
       </div>
@@ -1989,8 +1993,44 @@
     rrFetch('api/v1/admin/users').then(function (rows) {
       var list = Array.isArray(rows) ? rows : (rows && rows.users) || [];
       _firstRun = list.length <= 1;
+      paintTeamHealth(list);
       renderRoleView();
     }).catch(function () { _firstRun = false; renderRoleView(); });
+  }
+
+  // People & Licensing health: roll up ACTIVE users by sign-in recency
+  // (amber 6+ months, red 12+ months — same thresholds as the RR Team grid
+  // and the server inactivity policy). Sets the RR Team row dot + sub-text,
+  // then re-tints the panel so the rolled-up health reads from the collapsed
+  // header. Inactive members don't count; never-signed-in members age from
+  // account creation (createdAt).
+  var TEAM_AMBER_DAYS = 182, TEAM_RED_DAYS = 365;
+  function paintTeamHealth(list) {
+    var dot = $('teamDot');
+    if (!dot) return;
+    var amber = 0, red = 0;
+    for (var i = 0; i < list.length; i++) {
+      var u = list[i];
+      if (!u || !u.active) continue;
+      // Most recent of sign-in or password set/change (same as the RR Team
+      // grid). A member who has never done either is amber (never set up).
+      var used = 0;
+      [u.lastLoginAt, u.passwordChangedAt].forEach(function (s) {
+        if (s) { var t = new Date(s).getTime(); if (!isNaN(t) && t > used) used = t; }
+      });
+      if (!used) { amber++; continue; }
+      var ageDays = (Date.now() - used) / 86400000;
+      if (ageDays >= TEAM_RED_DAYS) red++;
+      else if (ageDays >= TEAM_AMBER_DAYS) amber++;
+    }
+    dot.className = 'row-dot ' + (red ? 'red' : amber ? 'amber' : 'green');
+    var sub = $('teamSub');
+    if (sub) {
+      sub.textContent = red   ? (red + ' user' + (red > 1 ? 's' : '') + ' inactive 1+ year')
+                      : amber ? (amber + ' user' + (amber > 1 ? 's' : '') + ' inactive 6+ months')
+                      : 'Users, roles & access';
+    }
+    if (typeof tintPanels === 'function') tintPanels();
   }
 
   // ---- Onboarding wizard: Welcome -> Add your team -> Done ----
@@ -3064,7 +3104,7 @@
   // panel's status class colors it (CSS). Only textContent changes here, so
   // this never re-fires the class MutationObserver.
   var PANEL_SUMMARY = {
-    'People & Licensing': { none: 'Users, roles & company licensing' },
+    'People & Licensing': { none: 'Users, roles & company licensing', green: 'Team active & licensed', amber: 'Inactive users to review', red: 'Inactive users need attention' },
     'Accounting Set Up':  { none: 'Accounting configuration', green: 'DMAAIs reviewed & loaded', amber: 'Model DMAAI review pending', red: 'Accounting setup needs attention' },
     'Inventory Review':   { none: 'GL & perpetual roll-forward', green: 'Roll-forwards intact', amber: 'Variance to review', red: 'Roll-forward breaks to review' },
     'Data Management':    { none: 'Nightly refresh + data purge', green: 'Data is current', amber: 'Refresh in progress', red: 'Last refresh failed' },
