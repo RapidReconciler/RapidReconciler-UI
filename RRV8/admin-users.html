@@ -289,14 +289,17 @@
   .grid-table tr.row-health-red td { background: var(--red-pale, #fce5e1); }
   .grid-table tr.row-health-red:hover td { background: #f8d7d0; }
 
-  /* SSO badge — shown next to the name only for single-sign-on members
-     (ssoProvider set). Prep for the SSO offering; password members show none. */
-  .sso-badge {
-    display: inline-block; margin-left: 6px; padding: 1px 6px;
-    border-radius: 100px; background: var(--blue-pale, #e6efff); color: var(--blue, #2b5fb0);
-    font-family: 'Source Sans 3', sans-serif; font-size: 10px; font-weight: 700;
+  /* Sign-in method pill — its own column, shown for EVERY member (not
+     gated on SSO config). Password members read "Password"; once a member
+     signs in through single sign-on (ssoProvider set) it reads "SSO". */
+  .signin-pill {
+    display: inline-block; padding: 2px 9px;
+    border-radius: 100px;
+    font-family: 'Source Sans 3', sans-serif; font-size: 10.5px; font-weight: 700;
     letter-spacing: 0.04em; vertical-align: middle;
   }
+  .signin-pill.is-sso { background: var(--blue-pale, #e6efff); color: var(--blue, #2b5fb0); }
+  .signin-pill.is-pw  { background: var(--rule, #eef1f6); color: var(--text-soft, #5b6677); }
   .grid-table td.is-empty {
     text-align: center;
     color: var(--text-muted);
@@ -895,13 +898,14 @@
               <th>Full Name</th>
               <th>Username</th>
               <th>Role</th>
+              <th>Sign-in</th>
               <th class="col-opt">Last Login</th>
               <th class="col-opt">Last Pass Change</th>
               <th class="is-action">Options</th>
             </tr>
           </thead>
           <tbody id="js-users-tbody">
-            <tr><td class="is-empty" colspan="7">Loading team members&hellip;</td></tr>
+            <tr><td class="is-empty" colspan="8">Loading team members&hellip;</td></tr>
           </tbody>
         </table>
       </section>
@@ -1105,11 +1109,12 @@
         (sCls ? ' class="' + sCls + '"' : '') +
         (sTitle ? ' title="' + sTitle + '"' : '') + '>' +
       '<td data-label="Active"><span class="status-badge ' + badgeCls + '" data-help-topic="inactivity">' + badgeTxt + '</span></td>' +
-      '<td data-label="Full Name">' + fmt(r.fullName) +
-        (r.ssoProvider ? ' <span class="sso-badge" title="Signs in via single sign-on (' + fmt(r.ssoProvider) + ')">SSO</span>' : '') +
-      '</td>' +
+      '<td data-label="Full Name">' + fmt(r.fullName) + '</td>' +
       '<td data-label="Username">' + username + '</td>' +
       '<td data-label="Role">' + (r.roleName ? fmt(r.roleName) : '<span style="color:var(--text-soft,#5b6677);">&mdash;</span>') + '</td>' +
+      '<td data-label="Sign-in">' + (r.ssoProvider
+        ? '<span class="signin-pill is-sso" title="Signs in via single sign-on (' + fmt(r.ssoProvider) + ')">SSO</span>'
+        : '<span class="signin-pill is-pw">Password</span>') + '</td>' +
       '<td class="col-opt" data-label="Last Login">' + fmtDate(r.lastLoginAt) + '</td>' +
       '<td class="col-opt" data-label="Last Pass Change">' + fmtDate(r.passwordChangedAt) + '</td>' +
       '<td class="is-action" data-label="Options">' +
@@ -1149,7 +1154,7 @@
     if (_rowsById.size === 0) {
       const tbody = document.getElementById('js-users-tbody');
       if (tbody) {
-        tbody.innerHTML = '<tr><td class="is-empty" colspan="7">No team members.</td></tr>';
+        tbody.innerHTML = '<tr><td class="is-empty" colspan="8">No team members.</td></tr>';
       }
     }
   }
@@ -1638,7 +1643,7 @@
     (rows || []).forEach(r => { if (r && r.id != null) _rowsById.set(String(r.id), r); });
     if (!rows || rows.length === 0) {
       tbody.innerHTML =
-        '<tr><td class="is-empty" colspan="7">No team members.</td></tr>';
+        '<tr><td class="is-empty" colspan="8">No team members.</td></tr>';
       if (count) {
         count.textContent = '0 team members';
         count.classList.remove('is-loading');
@@ -1894,42 +1899,27 @@
   }
 
   // ---------- Contacts band ------------------------------------------
-  // V8's admin pages map to the customer's single client row in
-  // mini-VALC's clients table. For now the binding is the FIRST row
-  // returned — in dev there's effectively one client per V8 install;
-  // when a session→client mapping ships, swap this for the JWT-derived
-  // client id. PATCH-on-blur sends both fields so the server merge
-  // doesn't wipe the unedited one.
+  // The Project Sponsor / RR Administrator emails belong to the customer's
+  // OWN client. They load from the JWT-scoped GET api/v1/admin/clients/current
+  // (server resolves the client from the signed-in user's token), so this
+  // page never sees any other tenant's data. PATCH-on-blur sends both fields
+  // so the server merge doesn't wipe the unedited one.
   const _contact1Input = document.getElementById('js-contact-1-email');
   const _contact2Input = document.getElementById('js-contact-2-email');
   let _contactClientId = null;
 
   async function loadContacts() {
     try {
-      const rows = await rrFetch('api/v1/admin/clients');
-      if (!rows || rows.length === 0) {
-        console.warn('Contacts band: no client rows from mini-VALC');
+      // JWT-scoped: the server derives the client from the signed-in
+      // user's token and returns ONLY the two contact fields. This page
+      // must NEVER list every client (GET api/v1/admin/clients) — that
+      // shipped other customers' contacts/IPs/license terms to the
+      // browser and the old rows[0] fallback could show a different tenant.
+      const c = await rrFetch('api/v1/admin/clients/current');
+      if (!c || c.id == null) {
+        console.warn('Contacts band: no client resolved for this user');
         return;
       }
-      // Pick the client for THIS install: match the active database's
-      // agent host against the client's agent IP / domain; fall back to
-      // the first row (dev convenience, multiple clients on one broker).
-      // The robust + secure fix is a JWT-scoped GET clients/current so V8
-      // never lists every customer's client — see RRV8/API.md.
-      let c = null;
-      try {
-        const s = window.RR_SESSION || {};
-        const db = (s.dbs || [])[s.activeDbIndex || 0];
-        const host = db && db.ip ? String(db.ip).split(':')[0].toLowerCase() : '';
-        if (host) {
-          c = rows.find(function (r) {
-            return [r.agentInternalIp, r.agentExternalIp, r.domainUrl]
-              .filter(Boolean)
-              .some(function (v) { return String(v).toLowerCase().indexOf(host) !== -1; });
-          }) || null;
-        }
-      } catch (_) {}
-      if (!c) c = rows[0];
       _contactClientId = c.id;
       _contact1Input.value = c.contact1Email || '';
       _contact2Input.value = c.contact2Email || '';
@@ -1954,16 +1944,14 @@
     _contact1Input.classList.add('is-saving');
     _contact2Input.classList.add('is-saving');
     try {
-      const base = (window.RR_CONFIG && window.RR_CONFIG.valcBase) || 'http://localhost:8080';
-      const r = await fetch(
-        base + '/api/v1/admin/clients/' + encodeURIComponent(_contactClientId) + '/contacts',
-        {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-          body: JSON.stringify({ contact1Email: v1 || null, contact2Email: v2 || null })
-        }
-      );
-      if (!r.ok) throw new Error('HTTP ' + r.status);
+      // Token-scoped save: the server derives the client from the bearer
+      // and ignores any id, so a customer can only edit their own contacts.
+      // rrFetch attaches the Authorization header (the old raw fetch here
+      // sent none and targeted an arbitrary client id).
+      await rrFetch('api/v1/admin/clients/current/contacts', {
+        method: 'PATCH',
+        body: { contact1Email: v1 || null, contact2Email: v2 || null }
+      });
       _contact1Input.classList.remove('is-saving');
       _contact2Input.classList.remove('is-saving');
       _contact1Input.classList.add('is-saved');
@@ -1997,7 +1985,7 @@
       const tbody = document.getElementById('js-users-tbody');
       if (tbody) {
         tbody.innerHTML =
-          '<tr><td class="is-empty" colspan="7">Couldn&rsquo;t load team members. See the error banner above.</td></tr>';
+          '<tr><td class="is-empty" colspan="8">Couldn&rsquo;t load team members. See the error banner above.</td></tr>';
       }
       const count = document.getElementById('js-row-count');
       if (count) {
