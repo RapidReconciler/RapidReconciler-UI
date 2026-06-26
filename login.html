@@ -203,6 +203,13 @@
   .submit-btn:hover:not(:disabled) { filter: brightness(1.08); }
   .submit-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 
+  /* SSO panel — shown in place of the password field when the email's
+     domain routes to single sign-on (home-realm discovery). */
+  .sso-note { display:flex; gap:9px; align-items:flex-start; background:var(--blue-pale);
+    border:1px solid #cfe0f5; color:var(--navy); border-radius:6px; padding:10px 12px;
+    font-size:13px; margin-bottom:14px; line-height:1.45; }
+  .sso-note svg { width:17px; height:17px; flex-shrink:0; margin-top:1px; color:var(--blue); }
+
   .err {
     display: none;
     margin-top: 14px;
@@ -506,7 +513,7 @@
       <input type="email" id="js-email" name="username" autocomplete="username" required
              data-lpignore="true" data-form-type="other" data-1p-ignore="true" data-bwignore="true">
     </div>
-    <div class="field">
+    <div class="field" id="js-pw-field">
       <label for="js-pw">Password</label>
       <div class="pwd-wrap">
         <input type="password" id="js-pw" name="password" autocomplete="current-password" required
@@ -518,10 +525,22 @@
       </div>
     </div>
 
+    <div id="js-sso-panel" class="is-hidden">
+      <div class="sso-note">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        <span id="js-sso-text">This domain uses single sign-on.</span>
+      </div>
+      <button type="button" class="submit-btn" id="js-sso-btn" style="display:flex;align-items:center;justify-content:center;gap:8px">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22c-4.5-1.5-8-5.5-8-11V5l8-3 8 3v6c0 5.5-3.5 9.5-8 11z"/></svg>
+        Continue with single sign-on
+      </button>
+      <p class="form-link-row"><a href="#" id="js-sso-use-pw">Use a password instead</a></p>
+    </div>
+
     <button type="submit" class="submit-btn" id="js-submit">Sign in</button>
 
     <div class="err" id="js-err" role="alert"></div>
-    <p class="form-link-row"><a href="#" id="js-forgot-link">Forgot your password?</a></p>
+    <p class="form-link-row" id="js-forgot-row"><a href="#" id="js-forgot-link">Forgot your password?</a></p>
   </form>
 
   <!-- Screen 2 — Password reset request (V7 parity) -->
@@ -931,9 +950,64 @@
       items.map(t => '<li>' + t + '</li>').join('') + '</ul>';
   }
 
+  // ============================================================
+  //  SSO home-realm discovery (email-first)
+  //
+  //  As the user types their email, ask VALC whether the domain routes
+  //  to a client's single sign-on (GET /api/v1/auth/sso-discovery). If
+  //  so, swap the password field for "Continue with single sign-on",
+  //  which starts the SAML flow at {authBase}{startPath}. Otherwise keep
+  //  the password field. Public + CORS-open like /ping; any failure
+  //  (endpoint absent on an older VALC, unreachable) silently falls back
+  //  to the password field, so sign-in never breaks.
+  // ============================================================
+  const pwField   = document.getElementById('js-pw-field');
+  const forgotRow = document.getElementById('js-forgot-row');
+  const ssoPanel  = document.getElementById('js-sso-panel');
+  const ssoText   = document.getElementById('js-sso-text');
+  const ssoBtn    = document.getElementById('js-sso-btn');
+  let _sso = null;        // last discovery result { sso, startPath }
+  let _forcePw = false;   // user chose "use a password instead"
+
+  function applySsoMode() {
+    const on = !!(_sso && _sso.sso && !_forcePw);
+    pwField.classList.toggle('is-hidden', on);
+    submitEl.classList.toggle('is-hidden', on);
+    forgotRow.classList.toggle('is-hidden', on);
+    ssoPanel.classList.toggle('is-hidden', !on);
+    headSub.textContent = on ? 'Single sign-on' : 'Sign in';
+  }
+  function startSso() {
+    if (_sso && _sso.startPath) window.location.href = AUTH_BASE + _sso.startPath;
+  }
+  async function discoverSso() {
+    const email = emailEl.value.trim();
+    const at = email.indexOf('@');
+    if (at < 1 || at === email.length - 1) { _sso = null; applySsoMode(); return; }
+    try {
+      const res = await fetch(AUTH_BASE + '/api/v1/auth/sso-discovery?email=' + encodeURIComponent(email),
+        { method: 'GET', headers: { 'Accept': 'application/json' } });
+      _sso = res.ok ? await res.json().catch(() => null) : null;
+    } catch (_) { _sso = null; }   // older VALC / unreachable -> password path
+    if (_sso && _sso.sso) ssoText.textContent = email.slice(at + 1).toLowerCase() + ' uses single sign-on.';
+    applySsoMode();
+  }
+  let _discoverTimer = null;
+  emailEl.addEventListener('input', function () {
+    _forcePw = false;
+    clearTimeout(_discoverTimer);
+    _discoverTimer = setTimeout(discoverSso, 350);
+  });
+  ssoBtn.addEventListener('click', startSso);
+  document.getElementById('js-sso-use-pw').addEventListener('click', function (e) {
+    e.preventDefault(); _forcePw = true; applySsoMode(); setTimeout(function () { pwEl.focus(); }, 0);
+  });
+  if (emailEl.value.trim().indexOf('@') > 0) discoverSso();   // returning user (prefilled)
+
   // ---- Sign in ----
   loginForm.addEventListener('submit', async (e) => {
     e.preventDefault();
+    if (_sso && _sso.sso && !_forcePw) { startSso(); return; }   // SSO domain: go to IdP, not the password POST
     clearErr(errEl);
     const username = emailEl.value.trim();
     const password = pwEl.value;
