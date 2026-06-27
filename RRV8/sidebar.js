@@ -1639,6 +1639,10 @@
   global.RRV8 = global.RRV8 || {};
   global.RRV8.purgeRecommendation     = purgeRecommendation;
   global.RRV8.complexPwReviewLevel    = complexPwReviewLevel;
+  // Review Job Schedule uses the identical green/amber rule (future ISO date or
+  // 'never' = green, else amber), keyed at rrv8.scheduleReview.<db>. Aliased to
+  // the one function so the two no-attestation reminders can't drift.
+  global.RRV8.scheduleReviewLevel     = complexPwReviewLevel;
   global.RRV8.mountSidebar            = mountSidebar;
   global.RRV8.mountTopbar             = mountTopbar;
   global.RRV8.mountWorkbar            = mountWorkbar;
