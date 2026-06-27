@@ -74,6 +74,32 @@
   const imagesURL = new URL('Images/', rootURL);
   const RR_LOGO   = new URL('rr-logo.png',  imagesURL).href;
   const GSI_LOGO  = new URL('gsi-logo.png', imagesURL).href;
+  const PRINT_CSS = new URL('doc-print.css', toolsURL).href;
+
+  // Shared print fix: load doc-print.css (media=print, so screen is untouched)
+  // and give the Print button a screen style. One place covers every chrome doc.
+  (function injectPrintAssets() {
+    if (!document.querySelector('link[data-doc-print]')) {
+      const l = document.createElement('link');
+      l.rel = 'stylesheet'; l.href = PRINT_CSS; l.media = 'print';
+      l.setAttribute('data-doc-print', '');
+      (document.head || document.documentElement).appendChild(l);
+    }
+    if (!document.querySelector('style[data-doc-print-btn]')) {
+      const s = document.createElement('style');
+      s.setAttribute('data-doc-print-btn', '');
+      s.textContent =
+        '.doc-print-btn{display:inline-flex;align-items:center;gap:6px;border:1px solid #cfd6e0;' +
+        'background:#fff;color:#4a5468;border-radius:8px;padding:6px 12px;font:inherit;font-size:12.5px;' +
+        'font-weight:700;cursor:pointer;transition:border-color .12s,color .12s;}' +
+        '.doc-print-btn:hover{border-color:#2b5fb0;color:#2b5fb0;}' +
+        '.doc-print-btn svg{width:15px;height:15px;}';
+      (document.head || document.documentElement).appendChild(s);
+    }
+  })();
+
+  const PRINT_SVG =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>';
 
   // Pill content by doc-type. Mirrors the inline pill HTML the
   // un-migrated docs still carry; eventually those get migrated
@@ -115,6 +141,7 @@
             '<span class="doc-kind-pill">' + pill.svg + ' ' + pill.label + '</span>' +
             timeHTML +
           '</div>' +
+          '<button type="button" class="doc-print-btn" onclick="window.print()" title="Print this document" aria-label="Print this document">' + PRINT_SVG + 'Print</button>' +
           '<a class="doc-gsi" href="https://www.getgsi.com" target="_blank" rel="noopener" aria-label="GSI">' +
             '<img src="' + GSI_LOGO + '" alt="GSI" />' +
           '</a>' +

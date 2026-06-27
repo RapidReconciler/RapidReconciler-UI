@@ -56,6 +56,16 @@
   .note { display:flex; gap:12px; padding:13px 16px; border-radius:9px; background:var(--orange-pale); border:1px solid #f0d2a8; color:var(--text); margin-bottom:18px; }
   .note svg { width:18px; height:18px; flex-shrink:0; color:var(--orange-deep); margin-top:2px; }
   .note b { color:var(--navy); }
+  /* End-of-day check banner: amber when a reload is suggested, green when clean
+     or snoozed. The "Remind me in 30 days" button greens the Home card (a
+     client-side snooze) as an override to the suggestion. */
+  .eod-banner { display:flex; align-items:flex-start; gap:12px; padding:11px 14px; border-radius:8px; margin-bottom:16px; font-size:13px; line-height:1.5; }
+  .eod-banner.is-suggest { background:var(--orange-pale); border:1px solid #f0d2a8; color:var(--text); }
+  .eod-banner.is-clean   { background:var(--green-pale); border:1px solid #c5e6d2; color:var(--text); }
+  .eod-banner b { color:var(--navy); }
+  .eod-banner .eod-act { margin-left:auto; flex-shrink:0; }
+  .btn-snooze { font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:12.5px; border-radius:6px; padding:7px 12px; cursor:pointer; border:1px solid var(--rule-strong); background:var(--bg-card); color:var(--text-soft); white-space:nowrap; }
+  .btn-snooze:hover { color:var(--navy); border-color:var(--text-muted); }
   .field { display:flex; flex-direction:column; gap:5px; max-width:340px; margin-bottom:16px; }
   .field-label { font-family:'Source Sans 3',sans-serif; font-size:11px; font-weight:700; color:var(--text-soft); letter-spacing:.04em; text-transform:uppercase; }
   .field-hint { font-weight:600; color:var(--text-muted); text-transform:none; letter-spacing:0; }
@@ -125,6 +135,14 @@
 
         <div class="fetch-error" id="js-fetch-error" role="alert">Couldn&rsquo;t reach the data service &mdash; <span id="js-fetch-error-msg"></span></div>
 
+        <!-- Job guard: a reload mid-refresh would race the load rebuilding the
+             same cardex tables. Shown + the action disabled while a data refresh
+             is running; re-enables automatically when it finishes (polled). -->
+        <div class="note" id="js-job-guard" role="status" hidden style="background:var(--orange-pale); border-color:#f0d2a8;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 7v5l3 2"/></svg>
+          <span><b>A data refresh is running.</b> Reloading now would collide with the load that&rsquo;s rebuilding the cardex, so it&rsquo;s paused until the refresh finishes. This re-enables on its own.</span>
+        </div>
+
         <div class="note">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z"/><path d="M12 8v5M12 16h.01"/></svg>
           <span><b>Your JDE data is never changed, and this does not pull from JDE now.</b> It clears RapidReconciler&rsquo;s cardex copy from the date below; the cardex comes back on the next scheduled refresh. Refreshes load the JDE system, so they only run on the schedule.</span>
@@ -133,8 +151,9 @@
         <div class="card">
           <div class="card-head"><span class="card-title">Choose the cardex date to roll back to</span></div>
           <div class="card-body">
+            <div class="eod-banner" id="js-eod-banner" hidden></div>
             <div class="field">
-              <label class="field-label" for="js-from">Reload from <span class="field-hint">&mdash; this one&rsquo;s your call; it isn&rsquo;t derived</span></label>
+              <label class="field-label" for="js-from">Reload from <span class="field-hint">&mdash; suggested when end-of-day is detected; otherwise your call</span></label>
               <input type="date" id="js-from">
             </div>
 
@@ -213,9 +232,82 @@
   function activeDb() { const s = window.RR_SESSION || {}; const d = Array.isArray(s.dbs) ? s.dbs : []; return d[s.activeDbIndex || 0] || d[0] || null; }
   function isAdmin() { const a = activeDb(); return !!(a && a.t && a.t.adm === true); }
 
-  let _busy = false;
+  // ---- End-of-day check + 30-day remind (override) ----
+  // eod-check derives whether the prior two periods carry end-of-day values and,
+  // if so, a suggested reload date. The "Remind me in 30 days" snooze is a
+  // client-side override (shared key with Home, so it greens the Home dot too).
+  var RCDX_SNOOZE_DAYS = 30;
+  function cardexSnoozeKey() { var a = activeDb(); return 'rrv8.cardexReloadSnooze.' + ((a && a.n) || ''); }
+  function cardexSnoozeUntil() {
+    try {
+      var iso = localStorage.getItem(cardexSnoozeKey()); if (!iso) return null;
+      var d = new Date(iso + 'T00:00:00'); if (isNaN(d.getTime())) return null;
+      d.setDate(d.getDate() + RCDX_SNOOZE_DAYS); return d;
+    } catch (_) { return null; }
+  }
+  function cardexSnoozeActive() { var u = cardexSnoozeUntil(); return !!(u && u.getTime() > Date.now()); }
+  function fmtIso(iso) { try { return new Date(iso + 'T00:00:00').toLocaleDateString(); } catch (_) { return iso; } }
+  var _eod = null;
+  function renderEodBanner() {
+    var b = $('js-eod-banner'); if (!b) return;
+    if (cardexSnoozeActive()) {
+      var until = cardexSnoozeUntil().toISOString().slice(0, 10);
+      b.hidden = false; b.className = 'eod-banner is-clean';
+      b.innerHTML = '<div>End-of-day reminder set &mdash; we&rsquo;ll flag this again on <b>' + fmtIso(until) +
+        '</b>. You can still reload below if you want to.</div>' +
+        '<span class="eod-act"><button type="button" class="btn-snooze" id="js-eod-clear">Clear reminder</button></span>';
+    } else if (_eod && _eod.suggestedDate) {
+      b.hidden = false; b.className = 'eod-banner is-suggest';
+      b.innerHTML = '<div><b>End-of-day values in the prior two periods</b> (' + (_eod.eodCount || 0) +
+        ' rows). Suggested reload from <b>' + fmtIso(_eod.suggestedDate) + '</b> &mdash; prefilled below; change it if you need to.</div>' +
+        '<span class="eod-act"><button type="button" class="btn-snooze" id="js-eod-snooze">Remind me in 30 days</button></span>';
+    } else if (_eod) {
+      b.hidden = false; b.className = 'eod-banner is-clean';
+      b.innerHTML = '<div>No end-of-day values in the prior two periods &mdash; reload only if you have a specific reason.</div>';
+    } else {
+      b.hidden = true;
+    }
+  }
+  function loadEodCheck() {
+    if (IS_DEMO) return;
+    rrFetch('inventory/reload-cardex/eod-check').then(function (p) {
+      _eod = p || {};
+      if (_eod.suggestedDate && !cardexSnoozeActive() && !fromDate()) { $('js-from').value = _eod.suggestedDate; loadPreview(); }
+      renderEodBanner();
+    }).catch(function () { /* endpoint absent -> leave the page as-is */ });
+  }
+  // Snooze / clear live in the (re-rendered) banner, so delegate.
+  document.addEventListener('click', function (e) {
+    if (!e.target || !e.target.closest) return;
+    if (e.target.closest('#js-eod-snooze')) {
+      try { localStorage.setItem(cardexSnoozeKey(), new Date().toISOString().slice(0, 10)); } catch (_) {}
+      renderEodBanner(); return;
+    }
+    if (e.target.closest('#js-eod-clear')) {
+      try { localStorage.removeItem(cardexSnoozeKey()); } catch (_) {}
+      renderEodBanner(); return;
+    }
+  });
+
+  let _busy = false, _jobRunning = false;
   function fromDate() { return ($('js-from').value || '').trim(); }
-  function refreshConfirm() { $('js-confirm').disabled = !(fromDate() && $('js-attest').checked && !_busy); }
+  // Reload is allowed only with a date + attest + nothing in flight AND no data
+  // refresh running (a reload mid-refresh races the load rebuilding the cardex).
+  function refreshConfirm() { $('js-confirm').disabled = !(fromDate() && $('js-attest').checked && !_busy && !_jobRunning); }
+  function applyJobGuard(running) {
+    _jobRunning = running;
+    const g = $('js-job-guard'); if (g) g.hidden = !running;
+    const at = $('js-attest'); if (at) at.disabled = running;
+    refreshConfirm();
+  }
+  // GET /poll (same source as Home): "in progress" => guard on. Re-checks on a
+  // timer so the page re-enables itself when the refresh finishes.
+  function checkJob() {
+    rrFetch('poll').then(function (payload) {
+      const job = (payload && (payload.currentJob || payload)) || {};
+      applyJobGuard(/^in progress/i.test(String(job.jobStatus || '').trim()));
+    }).catch(function () { /* transient poll failure: leave the guard as-is */ });
+  }
   function loadPreview() {
     const d = fromDate();
     clearFetchError();
@@ -230,7 +322,7 @@
   }
   function confirmReload() {
     const d = fromDate();
-    if (_busy || !d || !$('js-attest').checked) return;
+    if (_busy || !d || !$('js-attest').checked || _jobRunning) return;
     _busy = true; $('js-confirm').disabled = true; $('js-confirm').textContent = 'Reloading…';
     rrFetch('inventory/reload-cardex', { method: 'POST', body: { fromDate: d } })
       .then(function (r) {
@@ -251,6 +343,17 @@
     $('js-from').addEventListener('change', loadPreview);
     $('js-attest').addEventListener('change', refreshConfirm);
     $('js-confirm').addEventListener('click', confirmReload);
+    // Pre-seed the date from the Home end-of-day suggestion (?from=yyyy-MM-dd).
+    // Still fully editable — it just saves retyping the suggested date.
+    try {
+      var from = new URLSearchParams(window.location.search).get('from');
+      if (from && /^\d{4}-\d{2}-\d{2}$/.test(from)) { $('js-from').value = from; loadPreview(); }
+    } catch (_) {}
+    // Run the end-of-day check so this page shows the suggestion + remind option
+    // on its own (not only when reached via the Home link).
+    loadEodCheck();
+    // Guard against running a reload while a data refresh is in progress.
+    if (!IS_DEMO) { checkJob(); setInterval(checkJob, 12000); }
   });
 })();
 </script>

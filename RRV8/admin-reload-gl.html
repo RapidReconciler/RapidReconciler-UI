@@ -145,6 +145,14 @@
 
         <div class="fetch-error" id="js-fetch-error" role="alert">Couldn&rsquo;t reach the data service &mdash; <span id="js-fetch-error-msg"></span></div>
 
+        <!-- Job guard: a reload mid-refresh would race the load that is rebuilding
+             the same tables. Shown + the action disabled while a data refresh is
+             running; re-enables automatically when it finishes (polled). -->
+        <div class="note" id="js-job-guard" role="status" hidden style="background:var(--orange-pale); border-color:#f0d2a8;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 7v5l3 2"/></svg>
+          <span><b>A data refresh is running.</b> Reloading now would collide with the load that&rsquo;s rebuilding these tables, so it&rsquo;s paused until the refresh finishes. This re-enables on its own.</span>
+        </div>
+
         <div class="note">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z"/><path d="M12 8v5M12 16h.01"/></svg>
           <span><b>Your JDE data is never changed, and this does not pull from JDE now.</b> It clears RapidReconciler&rsquo;s working copy; the GL comes back on the next scheduled refresh. Refreshes load the JDE system, so they only run on the schedule &mdash; that period stays incomplete until then.</span>
@@ -260,7 +268,29 @@
   // GET preview derives the cutoff (earliest broken period's begin date) + counts
   // the F0911 rows. The cutoff is server-DERIVED, shown read-only, and posted back
   // verbatim on execute (no re-derive, so preview and confirm never drift).
-  let _cutoff = null, _busy = false;
+  let _cutoff = null, _busy = false, _jobRunning = false;
+
+  // The reload can run only when there's a break, the attest box is checked,
+  // nothing's in flight, AND no data refresh is running (a reload mid-refresh
+  // would race the load rebuilding the same tables).
+  function syncConfirm() {
+    $('js-confirm').disabled = !(_cutoff && $('js-attest').checked && !_busy && !_jobRunning);
+  }
+  function applyJobGuard(running) {
+    _jobRunning = running;
+    const g = $('js-job-guard'); if (g) g.hidden = !running;
+    const at = $('js-attest'); if (at) at.disabled = running;
+    syncConfirm();
+  }
+  // Poll the data-refresh job state (GET /poll, same source as Home). "in
+  // progress" => guard on; anything else => guard off. Re-checks on a timer so
+  // the page re-enables itself when the refresh finishes.
+  function checkJob() {
+    rrFetch('poll').then(function (payload) {
+      const job = (payload && (payload.currentJob || payload)) || {};
+      applyJobGuard(/^in progress/i.test(String(job.jobStatus || '').trim()));
+    }).catch(function () { /* transient poll failure: leave the guard as-is */ });
+  }
 
   function loadPreview() {
     clearFetchError();
@@ -279,7 +309,7 @@
       $('js-affected').textContent = nf(p.affected);
       $('js-clean').classList.remove('is-visible');
       $('js-attest-row').hidden = false;
-      $('js-confirm').disabled = !$('js-attest').checked;
+      syncConfirm();
     }).catch(function (e) {
       $('js-cutoff').textContent = '—'; $('js-affected').textContent = '—';
       showFetchError((e && e.message) || 'Could not check GL reload.');
@@ -287,7 +317,7 @@
   }
 
   function confirmReload() {
-    if (_busy || !_cutoff || !$('js-attest').checked) return;
+    if (_busy || !_cutoff || !$('js-attest').checked || _jobRunning) return;
     _busy = true; $('js-confirm').disabled = true; $('js-confirm').textContent = 'Reloading…';
     rrFetch('inventory/reload-gl', { method: 'POST', body: { cutoffDate: _cutoff } })
       .then(function (r) {
@@ -296,7 +326,7 @@
         $('js-attest').checked = false;
       })
       .catch(function (e) { showFetchError('Reload GL failed: ' + ((e && e.message) || e)); })
-      .then(function () { _busy = false; $('js-confirm').textContent = 'Reload GL'; $('js-confirm').disabled = !$('js-attest').checked; });
+      .then(function () { _busy = false; $('js-confirm').textContent = 'Reload GL'; syncConfirm(); });
   }
 
   // ---------- boot ----------
@@ -314,11 +344,13 @@
       return;
     }
 
-    $('js-attest').addEventListener('change', function () { $('js-confirm').disabled = !this.checked || !_cutoff; });
+    $('js-attest').addEventListener('change', syncConfirm);
     $('js-confirm').addEventListener('click', confirmReload);
 
     if (IS_DEMO) { $('js-cutoff').textContent = '—'; $('js-affected').textContent = '—'; return; }
     loadPreview();
+    checkJob();
+    setInterval(checkJob, 12000);
   });
 })();
 </script>

@@ -132,6 +132,14 @@ window.RR_TEST_AGENT_AREAS = [
   // Reload GL — self-service GL maintenance (ReloadGlController, admin-gated)
   'inventory/reload-gl',
   'inventory/reload-gl/preview',
+  // Reload Cardex — self-service cardex maintenance (ReloadCardexController,
+  // admin-gated): end-of-day check (suggested reload date), per-date preview,
+  // and execute. These were MISSING from the route table, so the page fetched
+  // them against the JWT's db.ip without :34537 and silently failed (blank
+  // banner, no preview count).
+  'inventory/reload-cardex',
+  'inventory/reload-cardex/preview',
+  'inventory/reload-cardex/eod-check',
   // Fiscal Period-End correction (FiscalPeriodEndController, admin-gated):
   // detect the stale date, preview the per-table row counts a date-swap
   // would move, then apply.
