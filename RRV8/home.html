@@ -991,12 +991,13 @@
         <!-- Fiscal Period correction: rare-event remap of a stored period-ending
              date after a fiscal-calendar change. Full page (preview -> apply),
              admin-gated server-side. Lives here (data correction) rather than
-             Utilities; the transparent dot keeps it aligned with the rows above. -->
+             Utilities. The dot runs the detect check when the band opens:
+             green = no stale period-end found, amber = a correction is available. -->
         <a class="row" href="admin-fiscal-period.html" style="text-decoration:none;">
-          <span class="row-dot" style="background:transparent;" aria-hidden="true"></span>
+          <span class="row-dot grey" id="fiscalDot"></span>
           <div class="row-main">
             <div class="row-title">Correct a Period-End Date</div>
-            <div class="row-sub">After a fiscal-calendar change, update a stored period-ending date to its corrected value across every report &mdash; for all companies.</div>
+            <div class="row-sub" id="fiscalSub">After a fiscal-calendar change, update a stored period-ending date to its corrected value across every report &mdash; for all companies.</div>
           </div>
           <span class="btn-sm">Open</span>
         </a>
@@ -1778,9 +1779,11 @@
   // header. Inactive members don't count; never-signed-in members age from
   // account creation (createdAt).
   var TEAM_AMBER_DAYS = 182, TEAM_RED_DAYS = 365;
+  var _teamList = [], _reviewOverdue = false;
   function paintTeamHealth(list) {
     var dot = $('teamDot');
     if (!dot) return;
+    _teamList = list = list || [];
     var amber = 0, red = 0;
     for (var i = 0; i < list.length; i++) {
       var u = list[i];
@@ -1796,14 +1799,27 @@
       if (ageDays >= TEAM_RED_DAYS) red++;
       else if (ageDays >= TEAM_AMBER_DAYS) amber++;
     }
-    dot.className = 'row-dot ' + (red ? 'red' : amber ? 'amber' : 'green');
+    // Factor in the access-review state: an overdue review nudges an otherwise
+    // green dot to amber (a stale inactivity issue still wins as red/amber).
+    var lvl = red ? 'red' : (amber || _reviewOverdue) ? 'amber' : 'green';
+    dot.className = 'row-dot ' + lvl;
     var sub = $('teamSub');
     if (sub) {
       sub.textContent = red   ? (red + ' user' + (red > 1 ? 's' : '') + ' inactive 1+ year')
                       : amber ? (amber + ' user' + (amber > 1 ? 's' : '') + ' inactive 6+ months')
+                      : _reviewOverdue ? 'Access review overdue — confirm the team list'
                       : 'Users, roles & access';
     }
     if (typeof tintPanels === 'function') tintPanels();
+  }
+  // Access-review overdue state feeds the RR Team dot (server-computed `overdue`
+  // from the same endpoint the RR Team page uses). Re-paints with the cached
+  // user list so dot + sub reflect it whichever loads first.
+  function loadTeamReview() {
+    if (IS_DEMO || !isAdmin()) return;
+    rrFetch('api/v1/admin/clients/current/access-reviews')
+      .then(function (d) { _reviewOverdue = !!(d && d.overdue); paintTeamHealth(_teamList); })
+      .catch(function () { /* endpoint not live -> leave the activity-only dot */ });
   }
 
   // Licensing health: roll up company-seat usage so the Licensing row in the
@@ -2459,6 +2475,22 @@
       ? cands.map(function (iso) { return '<option value="' + iso + '">' + fmtDateLong(iso) + '</option>'; }).join('')
       : '<option value="">No later periods to move to</option>';
     if ($('pgDiverge')) $('pgDiverge').hidden = !_purgeInfo.calendarDiverges;
+    setPurgeDot(_purgeInfo);
+  }
+  // Purge dot — same recommendation algorithm + snooze as the Purge page card
+  // (RRV8.purgeRecommendation in sidebar.js), keyed on the same per-db snooze, so
+  // the dot and the page always agree (including snooze -> green). Grey until the
+  // agent reports the recommendation fields (older jar) or when nothing scores.
+  function setPurgeDot(info) {
+    var dot = $('purgeDot'); if (!dot) return;
+    if (!info || !window.RRV8 || !window.RRV8.purgeRecommendation) { dot.className = 'row-dot grey'; return; }
+    var a = activeDb(); var dbn = (a && a.n) || '';
+    var until = ''; try { until = localStorage.getItem('rrv8.purgeSnooze.' + dbn) || ''; } catch (_) {}
+    var today = new Date().toISOString().slice(0, 10);
+    var rec = window.RRV8.purgeRecommendation(info, { snoozeUntil: until, today: today });
+    if (!rec.known) { dot.className = 'row-dot grey'; dot.title = ''; return; }
+    dot.className = 'row-dot ' + (rec.effectiveLevel || 'grey');
+    dot.title = rec.snoozed ? 'Purge reminder set' : (rec.headline + (rec.detail ? ' — ' + rec.detail.replace(/<[^>]+>/g, '') : ''));
   }
   function loadPurgeInfo() {
     if (IS_DEMO || !isAdmin()) return;
@@ -2466,6 +2498,48 @@
       applyPurgeInfo(info);
       if (!_purgeStaged) _purgeOriginal = info && info.currentCutoff;
     }).catch(function () { /* endpoint not live — leave the default row text */ });
+  }
+  // ---- Correct a Period-End Date (detect check) ----
+  // Runs the agent's detect scan when the Administrator area initializes (so the
+  // dot reflects status as soon as the band is open): GREEN = no stale period-end
+  // found, AMBER = a correction is available (mismatchFound). Same source of truth
+  // as the page's Step-1 check, so the dot and the page agree. Grey until checked.
+  var _fiscalSubDefault = null;
+  function setFiscalDot(d) {
+    var dot = $('fiscalDot'); if (!dot) return;
+    var sub = $('fiscalSub');
+    if (_fiscalSubDefault === null && sub) _fiscalSubDefault = sub.textContent;
+    if (d && d.mismatchFound) {
+      dot.className = 'row-dot amber';
+      dot.title = 'A period-end date needs correcting'
+        + ((d.incorrectDate && d.correctedDate) ? ' (' + fmtDateLong(d.incorrectDate) + ' → ' + fmtDateLong(d.correctedDate) + ')' : '') + '.';
+      if (sub) sub.textContent = 'A stored period-end date looks off — open to review and correct it.';
+    } else {
+      dot.className = 'row-dot green';
+      dot.title = 'Period-end dates look correct — no action needed.';
+      if (sub && _fiscalSubDefault !== null) sub.textContent = _fiscalSubDefault;
+    }
+  }
+  function loadFiscalStatus() {
+    if (IS_DEMO || !isAdmin()) return;
+    rrFetch('inventory/fiscal-period-end-detect')
+      .then(function (d) { setFiscalDot(d); })
+      .catch(function () { /* endpoint not reachable -> leave the neutral grey dot */ });
+  }
+  // ---- Complex Passwords review reminder dot ----
+  // No fetch — a client-side reminder (rrv8.complexPwReview.<db>) shared with the
+  // Complex Passwords page via RRV8.complexPwReviewLevel. Green = reminder set or
+  // dismissed (Never); amber = review due / not yet set.
+  function setPwPolicyDot() {
+    var dot = $('pwPolicyDot'); if (!dot) return;
+    if (IS_DEMO || !isAdmin() || !(window.RRV8 && window.RRV8.complexPwReviewLevel)) { dot.className = 'row-dot grey'; return; }
+    var a = activeDb(); var dbn = (a && a.n) || '';
+    var val = ''; try { val = localStorage.getItem('rrv8.complexPwReview.' + dbn) || ''; } catch (_) {}
+    var level = window.RRV8.complexPwReviewLevel(val, new Date().toISOString().slice(0, 10));
+    dot.className = 'row-dot ' + level;
+    dot.title = level === 'green'
+      ? (val === 'never' ? 'Complex-password review reminders off' : 'Reviewed — reminder set')
+      : 'Review which companies require complex passwords';
   }
   // ---- Reload GL data (Utilities) ----
   // Self-service fix for a persistent GL roll-forward break. GET preview derives
@@ -2699,6 +2773,9 @@
       autoWarmCardex();
       loadModelApproval();
       loadPurgeInfo();
+      loadFiscalStatus();
+      loadTeamReview();
+      setPwPolicyDot();
       loadReloadGlStatus();
       loadRefreshSchedule();
       loadStatus();
@@ -2984,6 +3061,9 @@
       autoWarmCardex();
       loadModelApproval();
       loadPurgeInfo();
+      loadFiscalStatus();
+      loadTeamReview();
+      setPwPolicyDot();
       loadReloadGlStatus();
       loadRefreshSchedule();
       loadStatus();

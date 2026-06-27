@@ -70,12 +70,15 @@
   .app {
     display: grid;
     grid-template-columns: 1fr;
-    grid-template-rows: 56px 1fr;
+    grid-template-rows: 56px 1fr auto;
     grid-template-areas:
       "topbar"
-      "main";
+      "main"
+      "footer";
     min-height: 100vh;
   }
+  .app-footer { grid-area: footer; border-top: 1px solid var(--rule); background: var(--bg-card); color: var(--text-muted); font-size: 12px; text-align: center; padding: 12px 24px; }
+  .app-footer .af-ver { color: var(--text-soft); font-weight: 600; }
 
   .topbar {
     grid-area: topbar;
@@ -249,6 +252,30 @@
   }
   .grid-card-action:hover { color: var(--blue); border-color: var(--blue); background: var(--blue-pale); }
   .grid-card-action svg { width: 14px; height: 14px; display: block; }
+
+  /* Access review band — periodic admin sign-off that the team list is correct */
+  .review-band { display: flex; align-items: center; justify-content: space-between; gap: 18px; flex-wrap: wrap;
+    border: 1px solid var(--rule); border-left: 4px solid var(--rule-strong); border-radius: 10px;
+    background: var(--bg-card); box-shadow: var(--shadow-sm); padding: 13px 16px; margin-bottom: 16px; }
+  .review-band[hidden] { display: none; }
+  .review-band.is-green { border-left-color: var(--green); background: var(--green-pale); }
+  .review-band.is-amber { border-left-color: var(--orange); background: var(--orange-pale); }
+  .review-main { min-width: 240px; }
+  .review-status { display: flex; align-items: center; gap: 9px; }
+  .review-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; background: var(--text-muted); }
+  .review-band.is-green .review-dot { background: var(--green); }
+  .review-band.is-amber .review-dot { background: var(--orange); }
+  .review-headline { font-family: 'Source Sans 3', sans-serif; font-weight: 800; font-size: 14px; color: var(--navy); }
+  .review-sub { color: var(--text-soft); font-size: 12.5px; margin-top: 4px; }
+  .review-sub b { color: var(--navy); }
+  .review-action { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .review-ack { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--text-soft); cursor: pointer; }
+  .review-ack input { flex-shrink: 0; }
+  .review-cadence { font-size: 12.5px; color: var(--text-soft); font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
+  .review-cadence select { font-family: inherit; font-size: 12.5px; color: var(--navy); padding: 4px 6px; border: 1px solid var(--rule-strong); border-radius: 5px; background: var(--bg-card); }
+  .review-btn { font-family: 'Source Sans 3', sans-serif; font-weight: 700; font-size: 13px; color: #fff; background: var(--blue); border: 1px solid var(--blue); border-radius: 6px; padding: 7px 14px; cursor: pointer; }
+  .review-btn:hover:not(:disabled) { filter: brightness(1.06); }
+  .review-btn:disabled { opacity: .5; cursor: not-allowed; filter: none; }
 
   .grid-table {
     width: 100%;
@@ -881,6 +908,33 @@
         <span id="js-fetch-error-msg"></span>
       </div>
 
+      <!-- Access review: periodic admin sign-off that the team list is correct.
+           Server-recorded (the auditor trail); state + history come from
+           /api/v1/admin/clients/current/access-reviews. Amber = due/overdue. -->
+      <div class="review-band" id="js-review-band" role="status" hidden>
+        <div class="review-main">
+          <div class="review-status">
+            <span class="review-dot" id="js-review-dot" aria-hidden="true"></span>
+            <span class="review-headline" id="js-review-headline"></span>
+          </div>
+          <div class="review-sub" id="js-review-sub"></div>
+        </div>
+        <div class="review-action">
+          <label class="review-ack">
+            <input type="checkbox" id="js-review-ack">
+            <span>I&rsquo;ve reviewed the team list and it&rsquo;s correct</span>
+          </label>
+          <span class="review-cadence">Remind me in
+            <select id="js-review-cadence" aria-label="Re-review cadence">
+              <option value="30">30 days</option>
+              <option value="60" selected>60 days</option>
+              <option value="90">90 days</option>
+            </select>
+          </span>
+          <button type="button" class="review-btn" id="js-review-record" disabled>Record review</button>
+        </div>
+      </div>
+
       <section class="grid-card admin-grid" aria-label="Team Members">
         <div class="grid-card-head">
           <span class="grid-card-title">Team Members</span>
@@ -913,6 +967,10 @@
     </div>
 
   </main>
+
+  <footer class="app-footer">
+    &copy; 2026 RapidReconciler &middot; GSI Inc. &middot; <span class="af-ver" id="js-app-ver"></span>
+  </footer>
 
 </div>
 
@@ -1658,7 +1716,78 @@
     }
   }
 
+  // ---------- Access review (periodic team-list sign-off) ----------
+  // Server-recorded attestation (auditor trail). State + history come from
+  // /api/v1/admin/clients/current/access-reviews (token-scoped to this client);
+  // the latest row + server-computed `overdue` drive the band. Amber = due/
+  // overdue or never reviewed, green = current.
+  var _accessReview = null;
+  function escR(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+  function fmtReviewDate(v) {
+    if (!v) return '—';
+    try { return new Date(v).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }); }
+    catch (_) { return String(v); }
+  }
+  function renderReviewBand(d) {
+    var band = document.getElementById('js-review-band'); if (!band) return;
+    _accessReview = d || null;
+    var latest = d && d.latest;
+    var overdue = !d || d.overdue;
+    band.classList.remove('is-green', 'is-amber');
+    band.classList.add(overdue ? 'is-amber' : 'is-green');
+    var headline = document.getElementById('js-review-headline');
+    var sub = document.getElementById('js-review-sub');
+    if (!latest) {
+      headline.textContent = 'Access review needed';
+      sub.innerHTML = 'The team list hasn’t been reviewed yet — confirm it’s correct to start the audit trail.';
+    } else if (overdue) {
+      headline.textContent = 'Access review overdue';
+      var od = (d.daysUntilDue != null) ? Math.abs(d.daysUntilDue) : null;
+      sub.innerHTML = 'Last reviewed by <b>' + escR(latest.reviewedBy) + '</b> on <b>' + escR(fmtReviewDate(latest.reviewedAt)) +
+        '</b> — a re-review was due <b>' + escR(fmtReviewDate(latest.nextDue)) + '</b>' +
+        (od != null ? ' (' + od + ' day' + (od === 1 ? '' : 's') + ' ago)' : '') + '.';
+    } else {
+      headline.textContent = 'Access review up to date';
+      sub.innerHTML = 'Last reviewed by <b>' + escR(latest.reviewedBy) + '</b> on <b>' + escR(fmtReviewDate(latest.reviewedAt)) +
+        '</b> · ' + latest.userCount + ' member' + (latest.userCount === 1 ? '' : 's') +
+        ' · next due <b>' + escR(fmtReviewDate(latest.nextDue)) + '</b>.';
+    }
+    band.hidden = false;
+  }
+  function loadAccessReview() {
+    if (IS_DEMO) return;
+    rrFetch('api/v1/admin/clients/current/access-reviews')
+      .then(function (d) { renderReviewBand(d); })
+      .catch(function () { /* endpoint not live / not admin -> leave the band hidden */ });
+  }
+  (function wireReview() {
+    var ack = document.getElementById('js-review-ack');
+    var btn = document.getElementById('js-review-record');
+    if (!ack || !btn) return;
+    ack.addEventListener('change', function () { btn.disabled = !ack.checked; });
+    btn.addEventListener('click', function () {
+      if (!ack.checked) return;
+      var sel = document.getElementById('js-review-cadence');
+      var cadence = parseInt(sel && sel.value, 10) || 60;
+      var count = _rowsById ? _rowsById.size : 0;
+      btn.disabled = true;
+      rrFetch('api/v1/admin/clients/current/access-reviews', { method: 'POST', body: { cadenceDays: cadence, userCount: count } })
+        .then(function (d) {
+          ack.checked = false;
+          renderReviewBand(d);
+          toast('Access review recorded — next due ' + fmtReviewDate(d && d.latest && d.latest.nextDue) + '.');
+        })
+        .catch(function (e) { toast('Couldn’t record the review: ' + ((e && e.message) || 'try again'), 'err'); btn.disabled = false; });
+    });
+  })();
+
   // ---------- boot ----------
+  // Footer version stamp (matches the standalone admin tool pages).
+  (function () {
+    const ver = document.getElementById('js-app-ver');
+    if (ver) ver.textContent = (RR_CONFIG.release || 'v8') + (RR_CONFIG.buildStamp ? ' · ' + RR_CONFIG.buildStamp : '');
+  })();
+
   // No left rail — admin pages are reached from Home and return via the
   // topbar Home button. mountTopbar() adds just the connectivity pill +
   // Home link; account actions (sign out / DB switch) live on Home.
@@ -1680,9 +1809,11 @@
         if (dbEl && db && db.n) dbEl.textContent = db.n;
       } catch (_) {}
       loadContacts();
+      loadAccessReview();
     });
   } else {
     loadContacts();
+    loadAccessReview();
   }
 
   // Row-action handlers. Lock = Permissions (sidebar filter
@@ -1871,6 +2002,78 @@
           if (len > max) max = len;
         }
         ws.getColumn(ci + 1).width = Math.min(Math.max(max + 2, 10), ci === COMPANY_COL ? 48 : 30);
+      }
+
+      // --- Sheet 2: Access Review Log — the periodic sign-off audit trail ---
+      let reviewData = _accessReview;
+      if (!reviewData) {
+        try { reviewData = await rrFetch('api/v1/admin/clients/current/access-reviews'); } catch (_) { reviewData = null; }
+      }
+      const reviews = (reviewData && Array.isArray(reviewData.history)) ? reviewData.history : [];
+      const rws = wb.addWorksheet('Access Review Log', { views: [{ state: 'frozen', ySplit: 4 }] });
+      const RHEADERS = ['Reviewed', 'Reviewed By', 'Members', 'Cadence (days)', 'Next Due', 'Note'];
+      const RNCOLS = RHEADERS.length;
+      const rLastCol = String.fromCharCode(64 + RNCOLS);
+      rws.mergeCells('A1:' + rLastCol + '1');
+      const rTitle = rws.getCell('A1');
+      rTitle.value = 'RapidReconciler — Access Review Log';
+      rTitle.font = { name: 'Arial', size: 15, bold: true, color: { argb: 'FFFFFFFF' } };
+      rTitle.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
+      rTitle.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+      rws.getRow(1).height = 26;
+      rws.mergeCells('A2:' + rLastCol + '2');
+      const rMeta = rws.getCell('A2');
+      rMeta.value = 'Generated ' + today + '     ' + reviews.length + ' sign-off' + (reviews.length === 1 ? '' : 's') +
+        (reviewData && reviewData.latest
+          ? '     latest: ' + String(reviewData.latest.reviewedAt).substring(0, 10) + (reviewData.overdue ? '  (OVERDUE)' : '')
+          : '     (never reviewed)');
+      rMeta.font = { name: 'Arial', size: 10, italic: true, color: { argb: 'FF5A6479' } };
+      rMeta.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+      rws.getRow(2).height = 18;
+      rws.getRow(3).height = 6;
+      const rHeaderRow = rws.getRow(4);
+      RHEADERS.forEach((h, i) => {
+        const c = rHeaderRow.getCell(i + 1);
+        c.value = h;
+        c.font = { name: 'Arial', size: 11, bold: true, color: { argb: 'FFFFFFFF' } };
+        c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: HEAD } };
+        c.alignment = { vertical: 'middle', horizontal: 'left' };
+        c.border = { bottom: { style: 'thin', color: { argb: NAVY } } };
+      });
+      rHeaderRow.height = 20;
+      let rRowNum = 5;
+      const rBody = [];
+      reviews.forEach((rv, ri) => {
+        const cells = [
+          fmtIsoForExport(rv.reviewedAt) || '—',
+          rv.reviewedBy || '—',
+          (rv.userCount == null ? '' : rv.userCount),
+          (rv.cadenceDays == null ? '' : rv.cadenceDays),
+          rv.nextDue || '—',
+          rv.note || ''
+        ];
+        rBody.push(cells);
+        const row = rws.getRow(rRowNum++);
+        cells.forEach((val, ci) => {
+          const c = row.getCell(ci + 1);
+          c.value = val;
+          c.font = { name: 'Arial', size: 10, color: { argb: NAVY } };
+          c.alignment = { vertical: 'middle', horizontal: 'left', wrapText: ci === 5 };
+          if (ri % 2 === 1) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BAND } };
+          c.border = { bottom: { style: 'hair', color: { argb: RULE } } };
+        });
+      });
+      if (!reviews.length) {
+        const row = rws.getRow(rRowNum++);
+        const c = row.getCell(1);
+        c.value = 'No access reviews recorded yet.';
+        c.font = { name: 'Arial', size: 10, italic: true, color: { argb: 'FF8A93A6' } };
+      }
+      const rMeasure = [RHEADERS].concat(rBody);
+      for (let ci = 0; ci < RNCOLS; ci++) {
+        let max = 0;
+        for (const r of rMeasure) { const len = String(r[ci] == null ? '' : r[ci]).length; if (len > max) max = len; }
+        rws.getColumn(ci + 1).width = Math.min(Math.max(max + 2, 10), ci === 5 ? 40 : 22);
       }
 
       const buffer = await wb.xlsx.writeBuffer();
