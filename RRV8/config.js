@@ -164,9 +164,10 @@ window.RR_TEST_AGENT_AREAS = [
   // Model DMAAI Review — sign-off read + the enriched model baseline
   'inventory/integrity/model-approval',
   'inventory/integrity/model-baseline',
-  // Data purge — current cutoff/size/dates + set-cutoff write
+  // Data purge — current cutoff/size/dates + set-cutoff write + audit history
   'inventory/integrity/purge-info',
   'inventory/integrity/purge-cutoff',
+  'inventory/integrity/purge-log',
   // Home awareness pills — role-agnostic cross-section status roll-up
   // (readable by any authenticated role; actions stay gated). See API.md.
   'home/status-summary',
