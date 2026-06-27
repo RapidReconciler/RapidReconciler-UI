@@ -1337,6 +1337,41 @@ server.ssl.keyStoreType=PKCS12</code></pre>
           <p>Not built yet on either side. Listed here as a queued architecture improvement; the work is well-defined whenever the cadence pressure (or the next renewal headache) makes it worth doing. See <a href="services-version-control.html#post-release-internal">Services version control &sect; 4b</a> for the existing deploy pattern this would extend.</p>
         </div>
 
+        <h2 id="azure-auto">Future-state: automated renewal via Azure</h2>
+        <p>Decoupling the cert from the jar (above) is the prerequisite &mdash; it turns a renewal into an independent cert-only deploy. The step after that removes the manual procurement and manual upload entirely: <strong>Azure issues and auto-renews the wildcard, and VALC mines the renewed cert and pushes it to the fleet</strong> over the same Manage Deploy machinery. The frozen broker (<code>rr-valc-agent.jar</code>) is untouched throughout &mdash; everything here lives in the changeable Services jar config and the VALC control plane.</p>
+
+        <h3 id="azure-issuance">Issuance side (Azure)</h3>
+        <ul>
+          <li><strong>Azure Key Vault certificate</strong> for <code>*.getgsi.com</code> with <strong>auto-rotation</strong> enabled, validated by <strong>DNS-01 against Azure DNS</strong> (required for a wildcard). The issuer is either a Key Vault-integrated CA (DigiCert / GlobalSign partner integration) or an ACME / Let&rsquo;s Encrypt flow driven by an Azure Function &mdash; either way Key Vault ends up holding the renewed cert plus its private key.</li>
+          <li>The cert policy must be <strong>exportable as PKCS12 with the private key</strong> &mdash; the Services jar needs the full <code>.pfx</code>, not just the public cert.</li>
+          <li><strong>Notification:</strong> Key Vault &rarr; Event Grid <code>CertificateNewVersionCreated</code> (push, preferred), or VALC polls Key Vault for a new version on a daily schedule (simpler &mdash; no inbound endpoint to secure).</li>
+        </ul>
+
+        <h3 id="azure-connector">Ingest &amp; deploy side (VALC)</h3>
+        <p>A new <code>CertSyncService</code> closes the loop, reusing the <code>tls-cert</code> <code>file_versions</code> slot and the Manage Deploy orchestrator from the decoupling work above:</p>
+        <ol>
+          <li>On notification (or poll), authenticate to Key Vault &mdash; managed identity if VALC runs in Azure, otherwise a service principal &mdash; and pull the new <code>.pfx</code> plus its password.</li>
+          <li>Publish to <code>file_versions</code> as <code>component=&apos;tls-cert&apos;</code>, deduped by SHA-256 so a re-poll doesn&rsquo;t double-publish.</li>
+          <li><strong>Preflight</strong> &mdash; verify the new cert&rsquo;s validity window and SANs <em>before</em> rollout; refuse to deploy an already-expired or wrong-subject cert. This is the standing guard against repeating the expiry-during-rollout outage described above.</li>
+          <li>Trigger the per-customer rollout for the <code>tls-cert</code> component. Per-box verification = the existing health check <strong>plus</strong> an HTTPS handshake confirming the new expiry is live, and ideally an SSO round-trip &mdash; the two things that broke last time.</li>
+          <li>Record per-box deploy rows (append-only audit) and surface status on the VALC Certificate page.</li>
+        </ol>
+
+        <div class="callout">
+          <div class="callout-label">Reload semantics</div>
+          <p>Spring Boot&rsquo;s <code>server.ssl</code> does not hot-reload a cert file by default, so a cert deploy still <strong>restarts the Services instance(s)</strong> on the box &mdash; far lighter than a jar release (no version bump, seconds of downtime per instance, sequenced across databases). A later phase can adopt Spring Boot 3.2+ SSL-bundle reload-on-change to drop the restart, but for a six-month renewal cadence the restart is acceptable.</p>
+        </div>
+
+        <div class="callout warning">
+          <div class="callout-label">One cert, whole fleet</div>
+          <p>The wildcard is a single artifact pushed to every box &mdash; simpler than a per-customer cert matrix, but a bad cert breaks everyone at once. Hence the preflight check and a <strong>canary-then-fan-out</strong> rollout (one customer first, verify, then the rest) rather than a blast-to-all. The wildcard private key &mdash; in Key Vault, in transit, and at rest on each box &mdash; is SOC 2 in-scope; transit is already covered by the agent&rsquo;s TLS, so the new piece is at-rest handling of the on-box <code>.pfx</code> and Key Vault access scoping.</p>
+        </div>
+
+        <div class="callout">
+          <div class="callout-label">Hand-off contract (for the Azure side)</div>
+          <p>Once the cert is decoupled from the jar (our side, no broker work), the clean division is: <strong>Azure puts the renewed <code>*.getgsi.com</code> cert in Key Vault as an exportable PFX with auto-rotation + DNS-01, and notifies on new-version</strong> (Event Grid, or we poll). VALC mines it, validates it, and pushes it to every box &mdash; no more cert-driven Services releases, with a preflight so the expiry-during-rollout outage can&rsquo;t recur. The prerequisite decouple is the larger piece and is on our side; the Azure&rarr;fleet connector is thin once that lands. Full design + phasing is in the repo at <code>docs/plans/cert-renewal-azure-automation.md</code>.</p>
+        </div>
+
         <div class="topic-footer-nav">
           <button class="back-btn" onclick="goHome()">&larr; Back to Index</button>
           <button class="prev-btn" onclick="showView('topic-csr')">&larr; Previous</button>
