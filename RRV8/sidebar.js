@@ -1558,7 +1558,87 @@
     } catch (_) {}
   })();
 
+  // --- Purge recommendation (shared by the Purge page card + Home's dot) ------
+  // Single source of truth so the page card, its 1/3/6-month snooze, and Home's
+  // purge dot never disagree. `info` is the agent's purge-info; opts.snoozeUntil
+  // and opts.today are ISO date strings (the caller reads the localStorage
+  // snooze + today). Returns:
+  //   known          - false when there's nothing to score on (older agent) ->
+  //                    caller shows grey / hides the card
+  //   level          - raw 'green'|'amber'|'red'
+  //   effectiveLevel - level after the snooze override (a non-red recommendation
+  //                    snoozed until a future date reads 'green'; red always
+  //                    shows); null when !known
+  //   snoozed        - whether the snooze is currently suppressing a recommendation
+  //   headline,detail - plain-language strings for the page card (detail may
+  //                    carry <b> emphasis; rendered via innerHTML)
+  function _prettyMb(mb) { mb = Number(mb) || 0; return mb >= 1024 ? (mb / 1024).toFixed(1) + ' GB' : Math.round(mb) + ' MB'; }
+  function purgeRecommendation(info, opts) {
+    info = info || {}; opts = opts || {};
+    var TARGET_RETENTION_MONTHS = 24;
+    var HEADROOM_FLOOR_MB = 20480;            // 20 GB
+    var size   = Number(info.dbSizeMb) || 0;
+    var free   = (info.dataDriveFreeMb == null) ? null : Number(info.dataDriveFreeMb);
+    var months = (info.retainedMonths  == null) ? null : Number(info.retainedMonths);
+    var known  = (free != null) || (months != null);
+
+    // No history series yet -> estimate growth from size / months retained.
+    // Flagged so a runway shortfall can only reach AMBER, never RED.
+    var growthPerMonth = (months && months > 0 && size > 0) ? (size / months) : null;
+    var level = 'green', runway = null, reasons = [];
+    if (free != null) {
+      var headroom = Math.max(HEADROOM_FLOOR_MB, 0.5 * size);
+      if (free < headroom) {
+        level = 'red';                        // MEASURED low disk -> RED allowed
+        reasons.push('Only <b>' + _prettyMb(free) + '</b> free on the data drive &mdash; a refresh needs roughly <b>' + _prettyMb(headroom) + '</b> free to run safely.');
+      } else if (growthPerMonth) {
+        runway = free / growthPerMonth;
+        if (runway < 12) {                    // estimate -> capped at AMBER
+          if (level !== 'red') level = 'amber';
+          var m = Math.max(1, Math.round(runway));
+          reasons.push('About <b>' + m + ' month' + (m === 1 ? '' : 's') + '</b> of disk space left at the recent growth rate.');
+        }
+      }
+    }
+    if (months != null && months > 2 * TARGET_RETENTION_MONTHS) {
+      if (level !== 'red') level = 'amber';
+      reasons.push("You're keeping about <b>" + (months / 12).toFixed(months >= 24 ? 0 : 1) + " years</b> of history; around <b>2 years</b> is typical for reconciliation.");
+    }
+
+    var headline, detail;
+    if (level === 'green') {
+      headline = 'No purge needed right now';
+      var bits = [];
+      if (runway != null) bits.push('about ' + Math.round(runway) + ' months of disk runway');
+      if (months != null) bits.push((months / 12).toFixed(months >= 24 ? 0 : 1) + ' years retained');
+      detail = bits.length ? ('Looks healthy &mdash; ' + bits.join(', ') + '.') : 'Looks healthy.';
+    } else {
+      headline = (level === 'red') ? 'Purge recommended' : 'Worth planning a purge';
+      detail = reasons.join(' ');
+    }
+
+    var until = opts.snoozeUntil || '', today = opts.today || '';
+    var snoozed = !!(until && today && today < until && level !== 'red');
+    var effectiveLevel = known ? (snoozed ? 'green' : level) : null;
+    return { known: known, level: level, effectiveLevel: effectiveLevel, snoozed: snoozed,
+             headline: headline, detail: detail, reasons: reasons };
+  }
+
+  // --- Complex-password review reminder (page band + Home dot share it) -------
+  // A lightweight reminder (NOT an attestation): the admin sets "remind me in
+  // 3 / 6 months" or "never" to acknowledge the complex-password setup. Stored
+  // client-side per database (rrv8.complexPwReview.<db>). `value` is that stored
+  // string: 'never', a future ISO date (reminded later), or empty/past (review
+  // due). Returns 'green' (reminded or never) or 'amber' (due / not yet set).
+  function complexPwReviewLevel(value, todayISO) {
+    if (value === 'never') return 'green';
+    if (value && todayISO && value > todayISO) return 'green';
+    return 'amber';
+  }
+
   global.RRV8 = global.RRV8 || {};
+  global.RRV8.purgeRecommendation     = purgeRecommendation;
+  global.RRV8.complexPwReviewLevel    = complexPwReviewLevel;
   global.RRV8.mountSidebar            = mountSidebar;
   global.RRV8.mountTopbar             = mountTopbar;
   global.RRV8.mountWorkbar            = mountWorkbar;

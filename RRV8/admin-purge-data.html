@@ -176,9 +176,10 @@
         <div class="fetch-error" id="js-fetch-error" role="alert">Couldn&rsquo;t reach the data service &mdash; <span id="js-fetch-error-msg"></span></div>
 
         <!-- Advisory purge recommendation: green / amber / red with a reason and
-             a 1/3/6-month "remind me" snooze. Scored client-side by
-             computeRecommendation() from the purge-info signals — disk runway
-             when the agent reports free space, otherwise retention only. -->
+             a 1/3/6-month "remind me" snooze. Scored by RRV8.purgeRecommendation
+             (sidebar.js) from the purge-info signals — disk runway when the agent
+             reports free space, otherwise retention only. The SAME call colors
+             Home's purge dot, so the card and the dot can't disagree. -->
         <div class="purge-rec" id="js-purge-rec" role="status" hidden>
           <div class="purge-rec-head">
             <svg class="purge-rec-ico" id="js-rec-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"></svg>
@@ -322,92 +323,34 @@
   }
 
   // ---------- Purge recommendation (advisory) ----------
-  // Mirrors the Licensing term card: green / amber / red + a 1/3/6-month snooze
-  // (rrv8.purgeSnooze.<db>). Disk runway is the primary signal when the agent
-  // reports data-drive free space; otherwise it's retention-only. Two honesty
-  // guardrails: (1) never escalate to RED on the growth ESTIMATE — only a
-  // MEASURED low disk earns RED; (2) a measured-low-disk RED shows through the
-  // snooze (a retention nudge always respects it).
-  const TARGET_RETENTION_MONTHS = 24;     // keep ~current + prior year (tunable)
-  const HEADROOM_FLOOR_MB       = 20480;  // 20 GB; a refresh needs room for tempdb/log/index rebuilds
+  // The scoring algorithm lives in RRV8.purgeRecommendation (sidebar.js) so this
+  // card, its 1/3/6-month snooze, and Home's purge dot share ONE source of truth.
+  // This page renders the card from it; Home colors its dot from the same call.
   const REC_ICONS = {
     green: '<circle cx="12" cy="12" r="10"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/>',
     amber: '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4M12 17h.01"/>',
     red:   '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4M12 17h.01"/>'
   };
-  function recRank(l) { return { green: 0, amber: 1, red: 2 }[l] || 0; }
-  function recWorst(a, b) { return recRank(b) > recRank(a) ? b : a; }
-  function prettyMb(mb) { mb = Number(mb) || 0; return mb >= 1024 ? (mb / 1024).toFixed(1) + ' GB' : Math.round(mb) + ' MB'; }
   function purgeSnoozeKey() { return 'rrv8.purgeSnooze.' + (_dbName() || ''); }
   function _dbName() { const a = activeDb(); return a && a.n; }
 
-  function computeRecommendation(info) {
-    const size   = Number(info.dbSizeMb) || 0;
-    const free   = (info.dataDriveFreeMb == null) ? null : Number(info.dataDriveFreeMb);
-    const months = (info.retainedMonths  == null) ? null : Number(info.retainedMonths);
-
-    // No history series yet -> estimate monthly growth from size / months retained.
-    // Flagged so a runway shortfall can only reach AMBER, never RED.
-    const growthPerMonth = (months && months > 0 && size > 0) ? (size / months) : null;
-
-    let level = 'green';
-    let runway = null;
-    const reasons = [];
-
-    // Disk branch — only when the agent reports free space on the data drive.
-    if (free != null) {
-      const headroom = Math.max(HEADROOM_FLOOR_MB, 0.5 * size);
-      if (free < headroom) {
-        level = recWorst(level, 'red');   // MEASURED low disk — RED allowed
-        reasons.push('Only <b>' + prettyMb(free) + '</b> free on the data drive &mdash; a refresh needs roughly <b>' + prettyMb(headroom) + '</b> free to run safely.');
-      } else if (growthPerMonth) {
-        runway = free / growthPerMonth;
-        if (runway < 12) {
-          level = recWorst(level, 'amber');   // estimate -> capped at AMBER
-          const m = Math.max(1, Math.round(runway));
-          reasons.push('About <b>' + m + ' month' + (m === 1 ? '' : 's') + '</b> of disk space left at the recent growth rate.');
-        }
-      }
-    }
-
-    // Retention branch — oversized history hurts performance/tempdb even with disk to spare.
-    if (months != null && months > 2 * TARGET_RETENTION_MONTHS) {
-      level = recWorst(level, 'amber');
-      reasons.push("You&rsquo;re keeping about <b>" + (months / 12).toFixed(months >= 24 ? 0 : 1) + " years</b> of history; around <b>2 years</b> is typical for reconciliation.");
-    }
-
-    let headline, detail;
-    if (level === 'green') {
-      headline = 'No purge needed right now';
-      const bits = [];
-      if (runway != null) bits.push('about ' + Math.round(runway) + ' months of disk runway');
-      if (months != null) bits.push((months / 12).toFixed(months >= 24 ? 0 : 1) + ' years retained');
-      detail = bits.length ? ('Looks healthy &mdash; ' + bits.join(', ') + '.') : 'Looks healthy.';
-    } else {
-      headline = (level === 'red') ? 'Purge recommended' : 'Worth planning a purge';
-      detail = reasons.join(' ');
-    }
-    return { level, headline, detail };
-  }
-
   function renderRecommendation(info) {
     const card = $('js-purge-rec');
-    if (!card || !info) return;
-    // Nothing to score on (older agent without the recommendation fields) -> stay hidden.
-    if (info.dataDriveFreeMb == null && info.retainedMonths == null) { card.hidden = true; return; }
+    if (!card || !info || !window.RRV8 || !window.RRV8.purgeRecommendation) return;
 
-    const rec = computeRecommendation(info);
-
-    // Snooze greens a non-RED recommendation until the chosen date; a measured
-    // low-disk RED always shows through.
     let until = '';
     try { until = localStorage.getItem(purgeSnoozeKey()) || ''; } catch (_) {}
     const todayISO = new Date().toISOString().slice(0, 10);
-    const snoozed = !!(until && todayISO < until && rec.level !== 'red');
+    const rec = window.RRV8.purgeRecommendation(info, { snoozeUntil: until, today: todayISO });
 
-    const level  = snoozed ? 'green' : rec.level;
-    const title  = snoozed ? 'Reminder set' : rec.headline;
-    const detail = snoozed ? ('Reminder set &mdash; we&rsquo;ll flag this again on <b>' + fmtDateLong(until) + '</b>.') : rec.detail;
+    // Nothing to score on (older agent without the recommendation fields) -> stay hidden.
+    if (!rec.known) { card.hidden = true; return; }
+
+    const level  = rec.effectiveLevel;   // snooze already applied (red shows through)
+    const title  = rec.snoozed ? 'Reminder set' : rec.headline;
+    const detail = rec.snoozed
+      ? ('Reminder set &mdash; we&rsquo;ll flag this again on <b>' + fmtDateLong(until) + '</b>.')
+      : rec.detail;
 
     card.classList.remove('is-green', 'is-amber', 'is-red');
     card.classList.add('is-' + level);
@@ -416,7 +359,7 @@
     $('js-rec-sub').innerHTML = detail;
     // Offer the snooze only when there's a live (amber/red) recommendation that
     // isn't already snoozed.
-    $('js-rec-actions').hidden = !(rec.level !== 'green' && !snoozed);
+    $('js-rec-actions').hidden = !(rec.level !== 'green' && !rec.snoozed);
     card.hidden = false;
 
     $('js-rec-actions').querySelectorAll('.purge-snooze-btn').forEach(function (btn) {
@@ -437,9 +380,33 @@
     try { return new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }); }
     catch (_) { return iso; }
   }
+  // Reconstruct the "you can still Restore to <original>" state from the audit
+  // log, so undo survives a reload and lasts until a refresh actually RECORDS
+  // the purge — not just until you leave the page. The active staged purge =
+  // the most recent forward change(s) not yet run and not undone (status
+  // PENDING). Once a refresh records it (PENDING -> PURGED) or it's undone
+  // (SUPERSEDED/Restore), the Restore affordance drops. The log is the single
+  // source of truth; _staged/_original become a cache of it.
+  function reconcileStagedFromLog(rows) {
+    if (_busy) return;   // don't fight an in-flight stage/restore POST
+    const pending = (rows || []).filter(function (r) {
+      return r && r.status === 'PENDING' && r.direction === 'P' && r.fromCutoff;
+    });
+    if (pending.length) {
+      // Restore re-widens to the EARLIEST original among the pending companies
+      // (covers them all even if their start dates had diverged).
+      _original = pending.map(function (r) { return r.fromCutoff; }).sort()[0];
+      setStaged(true, pending[0].toCutoff);
+    } else {
+      _original = (_info && _info.currentCutoff) || _original;
+      setStaged(false, null);
+    }
+  }
+
   function renderLog(rows) {
     const body = $('js-log-body'), count = $('js-log-count');
     rows = Array.isArray(rows) ? rows : [];
+    reconcileStagedFromLog(rows);   // drive the Restore affordance from the log
     if (count) count.textContent = rows.length ? '· ' + rows.length + (rows.length === 1 ? ' change' : ' changes') : '';
     if (!rows.length) {
       body.innerHTML = '<tr><td class="log-empty" colspan="5">No start-date changes recorded yet.</td></tr>';

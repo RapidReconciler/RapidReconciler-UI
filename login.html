@@ -794,6 +794,16 @@
     || (window.RR_CONFIG && window.RR_CONFIG.authBase)
     || 'https://staging-valcspa.cloudapp.net';
 
+  // The data/application server (the Services agent). Used to verify the app
+  // server is reachable BEFORE the banner claims "Ready to sign in" — sign-in
+  // being up doesn't mean the post-login app will work. Sourced like the
+  // connection-check page (?agent= then RR_CONFIG.testAgentBase). Empty string
+  // = unknown here (pre-auth, per-customer host comes from the token), in which
+  // case the banner stays silent on success rather than overclaiming.
+  const APP_BASE = (new URLSearchParams(window.location.search).get('agent'))
+    || (window.RR_CONFIG && window.RR_CONFIG.testAgentBase)
+    || '';
+
   // Where to land after a successful sign-in. ?redirect=... wins.
   const params = new URLSearchParams(window.location.search);
   // Every role lands on the Home command center, which shapes itself per
@@ -919,7 +929,20 @@
     switch (result.kind) {
       case 'ok':
       case 'reachable':
-        state = 'ok'; text = 'All systems operational'; verdict = '';
+        // Reached only after BOTH the sign-in service AND the app server were
+        // confirmed reachable (see pingHealth -> checkAppServer). Green here is
+        // now honest end-to-end, not a sign-in-only claim.
+        state = 'ok'; text = 'Ready to sign in'; verdict = '';
+        break;
+      case 'appdown':
+        // Sign-in works, but the data/app server isn't reachable — so pages
+        // would fail to load after signing in. Warn rather than show green.
+        state = 'warn';
+        text = "Sign-in works, but the application server isn't responding";
+        verdict = '<b>You can sign in, but RapidReconciler&rsquo;s application server isn&rsquo;t '
+          + 'reachable right now</b>, so your data may not load after you sign in. This is usually '
+          + 'the application server being down, or a network / VPN / firewall issue between this '
+          + 'device and it. Run the connection check below to pinpoint it, or send the details to support.';
         break;
       case 'server':
         state = 'warn';
@@ -979,6 +1002,37 @@
     connToggle.setAttribute('aria-expanded', 'true');
   }
 
+  // Step 2: the sign-in service is reachable — now confirm the APP server is
+  // too before the banner claims "Ready to sign in" (sign-in being up doesn't
+  // mean the post-login app will work). Reachability only, via a no-cors GET to
+  // /health: an opaque resolve = the server answered; a reject/timeout = it's
+  // unreachable. no-cors sidesteps any CORS dependency and sends no auth
+  // (/health needs none). When APP_BASE is unknown here (pre-auth, per-customer
+  // host comes from the token), we can't vouch for it, so stay silent on
+  // success rather than overclaiming — problems still surface via the full
+  // connection check.
+  function checkAppServer() {
+    if (!APP_BASE) {
+      window.__rrDiag && window.__rrDiag.log('app-server check skipped: no APP_BASE pre-auth');
+      connEl.hidden = true;
+      return;
+    }
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 6000);
+    window.__rrDiag && window.__rrDiag.log('app-server ' + APP_BASE + '/health (no-cors reachability)');
+    fetch(APP_BASE + '/health', { method: 'GET', mode: 'no-cors', signal: ctrl.signal })
+      .then(() => {
+        clearTimeout(timer);
+        window.__rrDiag && window.__rrDiag.log('app-server reachable');
+        applyResult({ kind: 'ok' });
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        window.__rrDiag && window.__rrDiag.log('app-server unreachable: ' + (err && err.name) + ': ' + (err && err.message));
+        applyResult({ kind: 'appdown' });
+      });
+  }
+
   // Probe on load.
   (function pingHealth() {
     if (!navigator.onLine) {
@@ -1000,12 +1054,14 @@
         if (res.ok) {
           const body = await res.json().catch(() => ({}));
           window.__rrDiag && window.__rrDiag.log('ping ok: ' + (body.service || '?') + ' ' + (body.version || ''));
-          applyResult({ kind: 'ok' });
+          // Sign-in reachable; gate the green claim on the app server too.
+          checkAppServer();
         } else {
-          // 3xx/4xx — the server answered, so it's reachable (a 404
-          // just means this VALC predates the ping endpoint).
+          // 3xx/4xx — the server answered, so sign-in is reachable (a 404
+          // just means this VALC predates the ping endpoint). Still confirm
+          // the app server before claiming readiness.
           window.__rrDiag && window.__rrDiag.log('ping reachable (HTTP ' + res.status + ')');
-          applyResult({ kind: 'reachable', status: res.status });
+          checkAppServer();
         }
       })
       .catch((err) => {

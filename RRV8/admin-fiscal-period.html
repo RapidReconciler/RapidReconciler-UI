@@ -29,10 +29,10 @@
 <title>Fiscal Period &mdash; RapidReconciler Admin</title>
 <link href="fonts/fonts.css" rel="stylesheet">
 <link href="sidebar.css" rel="stylesheet">
-<link href="../Tools/help-modal.css" rel="stylesheet">
+<link href="../Tools/help-sidebar.css" rel="stylesheet">
 <script src="config.js"></script>
 <script src="sidebar.js"></script>
-<script defer src="../Tools/help-modal.js"></script>
+<script defer src="../Tools/help-sidebar.js"></script>
 <style>
   :root {
     --navy:        #1f2d4a;
@@ -68,9 +68,11 @@
   a { color: inherit; text-decoration: none; }
 
   .app {
-    display: grid; grid-template-columns: 1fr; grid-template-rows: 56px 1fr;
-    grid-template-areas: "topbar" "main"; min-height: 100vh;
+    display: grid; grid-template-columns: 1fr; grid-template-rows: 56px 1fr auto;
+    grid-template-areas: "topbar" "main" "footer"; min-height: 100vh;
   }
+  .app-footer { grid-area: footer; border-top: 1px solid var(--rule); background: var(--bg-card); color: var(--text-muted); font-size: 12px; text-align: center; padding: 12px 24px; }
+  .app-footer .af-ver { color: var(--text-soft); font-weight: 600; }
   .topbar {
     grid-area: topbar; background: var(--bg-card);
     border-bottom: 1px solid var(--rule); display: flex; align-items: center;
@@ -340,6 +342,10 @@
     </div>
   </main>
 
+  <footer class="app-footer">
+    &copy; 2026 RapidReconciler &middot; GSI Inc. &middot; <span class="af-ver" id="js-app-ver"></span>
+  </footer>
+
 </div>
 
 <script>
@@ -586,12 +592,15 @@
   }
 
   // ---------- boot ----------
-  document.addEventListener('DOMContentLoaded', function () {
+  // Run once the session is hydrated from the stored token (sidebar.js owns
+  // hydration; reading RR_SESSION before it resolves leaves the topbar db blank
+  // and the admin gate bypassed — same trap as the other admin pages).
+  function startWithSession() {
     const a = activeDb();
     if (a && a.n) $('js-topbar-db').textContent = a.n;
 
     // Client gate. The endpoints are also admin-gated server-side (403), so this
-    // is UX, not the security boundary. Fail open if the session hasn't hydrated.
+    // is UX, not the security boundary.
     if (window.RR_SESSION && !isAdmin()) {
       document.body.classList.add('is-gated');
       $('js-gate').classList.add('is-visible');
@@ -609,6 +618,21 @@
     document.addEventListener('keydown', e => { if (e.key === 'Escape') closeApplyModal(); });
 
     setLocked(true);   // Step 2 opens only after Step 1 finds a mismatch
+    // Run the check automatically on load so Step 1 lands already resolved —
+    // green (no mismatch) or amber with the incorrect date prefilled — instead
+    // of waiting for the user to click Check. The Check button stays as a manual
+    // re-run. Same detect call Home's band-open dot uses, so they agree.
+    if (!IS_DEMO) doCheck();
+  }
+
+  document.addEventListener('DOMContentLoaded', function () {
+    const ver = $('js-app-ver');
+    if (ver) ver.textContent = (RR_CONFIG.release || 'v8') + (RR_CONFIG.buildStamp ? ' · ' + RR_CONFIG.buildStamp : '');
+    if (window.RRV8 && typeof window.RRV8.hydrateSession === 'function') {
+      window.RRV8.hydrateSession().then(startWithSession).catch(startWithSession);
+    } else {
+      startWithSession();
+    }
   });
 })();
 </script>
