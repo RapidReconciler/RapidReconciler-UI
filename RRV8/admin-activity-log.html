@@ -64,6 +64,12 @@
   table.log tr:last-child td { border-bottom:none; }
   .log-empty { padding:34px 18px; text-align:center; color:var(--text-muted); }
   .log-empty b { color:var(--navy); display:block; margin-bottom:4px; font-family:'Source Sans 3',sans-serif; }
+  /* Search + type filter in the events card head — keeps the log scannable as it grows. */
+  .log-head { flex-wrap:wrap; gap:10px; }
+  .log-controls { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .log-controls input[type="search"], .log-controls select { font:inherit; font-size:13px; padding:6px 10px; border:1px solid var(--rule); border-radius:8px; background:var(--bg-card); color:var(--text); }
+  .log-controls input[type="search"] { min-width:170px; }
+  .log-count { font-size:12px; color:var(--text-muted); white-space:nowrap; }
 
   /* Review reminder band (7/14/30-day) — greens the Home "Activity Log" dot via
      rrv8.activityReview.<db> + RRV8.activityReviewLevel. Mirrors Review Job Schedule. */
@@ -151,7 +157,15 @@
         </div>
 
         <div class="card">
-          <div class="card-head" style="display:flex;align-items:center;justify-content:space-between;gap:10px;"><span class="card-title">Recent events</span><button type="button" id="js-log-refresh" class="review-btn">Refresh</button></div>
+          <div class="card-head log-head" style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+            <span class="card-title">Recent events</span>
+            <div class="log-controls">
+              <input type="search" id="js-log-search" placeholder="Search events, detail, or who&hellip;" aria-label="Search activity">
+              <select id="js-log-type" aria-label="Filter by event type"><option value="">All events</option></select>
+              <span class="log-count" id="js-log-count"></span>
+              <button type="button" id="js-log-refresh" class="review-btn">Refresh</button>
+            </div>
+          </div>
           <table class="log">
             <thead>
               <tr><th style="width:170px;">When</th><th style="width:150px;">Event</th><th>Detail</th><th style="width:140px;">Triggered by</th></tr>
@@ -200,11 +214,39 @@
     if (d && d.ip) return (/^(?:localhost|127\.0\.0\.1)\b/i.test(d.ip) ? 'http://' : 'https://') + d.ip;
     return RR_CONFIG.testAgentBase || 'http://localhost:34537';
   }
+  var _allEvents = [];   // full fetched window; the search/type filter narrows this view
+  function distinctTypes() {
+    var seen = {}; _allEvents.forEach(function (e) { if (e && e.event) seen[e.event] = 1; });
+    return Object.keys(seen).sort();
+  }
+  function populateTypeFilter() {
+    var sel = $('js-log-type'); if (!sel) return;
+    var cur = sel.value;
+    sel.innerHTML = '<option value="">All events</option>' +
+      distinctTypes().map(function (t) { return '<option value="' + esc(t) + '">' + esc(t) + '</option>'; }).join('');
+    if (cur) sel.value = cur;   // keep the selection across refreshes
+  }
+  function applyLogFilter() {
+    var q = (($('js-log-search') || {}).value || '').trim().toLowerCase();
+    var type = ($('js-log-type') || {}).value || '';
+    var filtered = _allEvents.filter(function (e) {
+      if (type && e.event !== type) return false;
+      if (!q) return true;
+      return [e.event, e.detail, e.by].some(function (f) {
+        return String(f == null ? '' : f).toLowerCase().indexOf(q) >= 0;
+      });
+    });
+    renderEvents(filtered);
+    var c = $('js-log-count'); if (c) c.textContent = _allEvents.length ? (filtered.length + ' of ' + _allEvents.length) : '';
+  }
   function renderEvents(list) {
     var body = $('js-log-body'); if (!body) return;
-    $('js-pending').style.display = 'none';            // capture is on; only errors reshow it
+    var p = $('js-pending'); if (p) p.style.display = 'none';   // capture is on; only errors reshow it
     if (!Array.isArray(list) || !list.length) {
-      body.innerHTML = '<tr><td colspan="4" class="log-empty"><b>No events recorded yet</b>Restarts, reloads, and refreshes will be listed here as they happen.</td></tr>';
+      var msg = _allEvents.length
+        ? '<b>No events match</b>Try a different search, or clear the filter.'
+        : '<b>No events recorded yet</b>Restarts, reloads, and refreshes will be listed here as they happen.';
+      body.innerHTML = '<tr><td colspan="4" class="log-empty">' + msg + '</td></tr>';
       return;
     }
     body.innerHTML = list.map(function (e) {
@@ -218,7 +260,7 @@
     try { var t = localStorage.getItem('rrv8.token'); if (t) headers['Authorization'] = 'Bearer ' + t; } catch (_) {}
     fetch(agentBase() + '/admin/activity?limit=50', { headers: headers })
       .then(function (r) { return r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)); })
-      .then(renderEvents)
+      .then(function (list) { _allEvents = Array.isArray(list) ? list : []; populateTypeFilter(); applyLogFilter(); })
       .catch(function () {
         // Unreachable (e.g. the engine is mid-restart) — say so honestly; a
         // manual Refresh or reopening retries.
@@ -272,6 +314,8 @@
     }
     loadEvents();
     var rb = $('js-log-refresh'); if (rb) rb.addEventListener('click', loadEvents);
+    var sb = $('js-log-search'); if (sb) sb.addEventListener('input', applyLogFilter);
+    var tf = $('js-log-type'); if (tf) tf.addEventListener('change', applyLogFilter);
     renderActReview();
     wireActReview();
   }
