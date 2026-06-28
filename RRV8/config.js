@@ -77,7 +77,8 @@ window.RR_CONFIG = {
 // Areas starting with any of these prefixes go to RR_CONFIG.valcBase
 // instead of the test agent or the active DB IP.
 window.RR_VALC_PREFIXES = [
-  'api/v1/admin/'    // /api/v1/admin/users, /api/v1/admin/clients, ...
+  'api/v1/admin/',   // /api/v1/admin/users, /api/v1/admin/clients, ...
+  'api/v1/ai/'       // AI Assistant gateway — key stays server-side in VALC
 ];
 
 // Areas served by the green-field test agent instead of v359. The set

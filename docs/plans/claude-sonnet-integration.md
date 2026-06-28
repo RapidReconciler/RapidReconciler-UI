@@ -176,6 +176,48 @@ and the opt-in plumbing are.
 
 ---
 
+## System Health card — locked design (2026-06-27)
+
+The V8 Home **Service Health** card is being reframed to mirror the **Utilities**
+card: a renamed **System Health** card with three rows, each a dot + title + sub
++ **Open** button that opens its own standard-format `admin-*.html` page. Decided
+with the owner this session:
+
+- **Rename** Service Health → **System Health**.
+- **Three cards** (each → a standard-format page):
+  1. **Data Service** → `admin-data-service.html` — the existing service-health
+     status, memory readout, and Restart, promoted off the Home card to its own
+     page. The Home row keeps a live status dot; detail + Restart live on the page.
+  2. **Claude Assistant** → `admin-claude-assistant.html` — the AI opt-in surface
+     (see below). The centerpiece; buildable now, live calls dark until the key.
+  3. **Activity Log** → `admin-activity-log.html` — an audit trail of recent
+     system events (restarts, reloads, refreshes) with timestamps + trigger.
+     (Owner's choice over a Connectivity/Refresh card; distinct from console logs,
+     which stay on the internal Help Desk `log-analyzer.html`.)
+
+- **Reachability confirmed (2026-06-27):** `POST api.anthropic.com/v1/messages`
+  from the GSI box returns `401` in ~28ms (DNS+TLS+HTTP all fine) — the path is
+  open; only the Sonnet key is pending.
+
+- **Opt-in = per-feature, not one global dial** (owner's choice). A client can
+  enable docs-grounded help while leaving data-sending features off. Builds on
+  the per-client opt-in flag above, scoped per (client, feature).
+
+- **Data-exposure ladder** (how each feature's opt-in reads), escalating:
+  | Level | What leaves the box |
+  |---|---|
+  | **Off** (default) | nothing |
+  | **Docs-grounded** | nothing customer — public KB only |
+  | **Scrubbed analysis** | numbers + pattern, identifiers redacted |
+  | **Full** | the actual rows (strongest disclosure + retention posture) |
+  Plus a **"show me what you'll send"** payload preview (orthogonal to level) for
+  trust, and the retention note from the Data-privacy section for the Full tier.
+
+- **Build order:** (1) Home card restructure + Data Service page (no backend
+  dependency, no regression). (2) Claude Assistant opt-in surface (UI now; wires
+  to the per-(client,feature) flag + `AiController` when the key lands). (3)
+  Activity Log (needs an event source — defer until one exists; scaffold first).
+
 ## Open questions for the owner
 
 - Which friendly client gets Phase 1 first (opt-in pilot)?

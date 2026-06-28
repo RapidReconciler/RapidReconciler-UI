@@ -1643,6 +1643,11 @@
   // 'never' = green, else amber), keyed at rrv8.scheduleReview.<db>. Aliased to
   // the one function so the two no-attestation reminders can't drift.
   global.RRV8.scheduleReviewLevel     = complexPwReviewLevel;
+  // Claude Assistant (30/60/Never, rrv8.aiReview.<db>) and Activity Log
+  // (7/14/30-day, rrv8.activityReview.<db>) use the identical green/amber rule —
+  // aliased to the one function so the page bands and the Home dots can't drift.
+  global.RRV8.aiReviewLevel           = complexPwReviewLevel;
+  global.RRV8.activityReviewLevel     = complexPwReviewLevel;
   global.RRV8.mountSidebar            = mountSidebar;
   global.RRV8.mountTopbar             = mountTopbar;
   global.RRV8.mountWorkbar            = mountWorkbar;
