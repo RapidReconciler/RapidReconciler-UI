@@ -1101,8 +1101,8 @@
         <div class="row">
           <span class="row-dot green" id="svcDot"></span>
           <div class="row-main">
-            <div class="row-title">Data Service</div>
-            <div class="row-sub" id="svcSub">The service that builds reports &amp; exports &mdash; status, memory, and restart.</div>
+            <div class="row-title">Report Engine</div>
+            <div class="row-sub" id="svcSub">The engine that builds reports &amp; exports &mdash; status, memory, and restart.</div>
           </div>
           <a class="btn-sm" href="admin-data-service.html">Open</a>
         </div>
@@ -1118,7 +1118,7 @@
           <span class="row-dot grey" id="activityDot"></span>
           <div class="row-main">
             <div class="row-title">Activity Log</div>
-            <div class="row-sub">Recent system events &mdash; restarts, data reloads, and scheduled refreshes.</div>
+            <div class="row-sub">Recent system events &mdash; restarts, data reloads, and refreshes.</div>
           </div>
           <a class="btn-sm" href="admin-activity-log.html">Open</a>
         </div>
@@ -1499,6 +1499,12 @@
 
   // ---- shared status state (feeds the Service-health card + readiness) ----
   var _connDown = false, _period = '', _jobStatus = '', _periods = [];
+  // Grace before a brief unreachability (e.g. a ~30s service restart) reads as a
+  // hard outage. Within the window the card shows "Reconnecting…" (amber); only
+  // sustained downtime escalates to red "Not responding". Mirrors the
+  // service-health verdict debounce — a planned restart shouldn't alarm anyone.
+  var _connDownSince = 0;
+  var CONN_GRACE_MS = 45000;
   var _dbRefresh = null;  // { dot, v } data-currency for the Database meta strip (from /poll)
   var _dbFacts = null;    // `db` block from /home/status-summary (size, SQL build, etc.)
   var _dbMetaOpen = false; // Database card's "Details" drawer (env/size/SQL); collapsed by default
@@ -1506,6 +1512,8 @@
 
   // ---- connectivity (reuses sidebar.js's cross-page cache) ----
   function setConn(down, message) {
+    if (down && !_connDown) _connDownSince = Date.now();   // first moment it went down
+    if (!down) _connDownSince = 0;
     _connDown = !!down;
     $('connBanner').classList.toggle('is-visible', !!down);
     var pill = $('connPill');
@@ -1516,6 +1524,9 @@
     }
     updateServiceCard();
     renderReadiness();
+    // Re-render once the grace elapses so a sustained outage escalates to red
+    // on its own, with no new event needed.
+    if (down) setTimeout(updateServiceCard, CONN_GRACE_MS + 500);
   }
   // Admin "Service health" card. Connectivity is the floor (can't be
   // healthy if it's unreachable); on top of that the memory read
@@ -1534,6 +1545,16 @@
 
     // Connectivity down trumps everything — nothing else is meaningful.
     if (_connDown) {
+      var downMs = _connDownSince ? (Date.now() - _connDownSince) : 0;
+      if (downMs < CONN_GRACE_MS) {
+        // Brief blip / planned restart — mirror the "Reconnecting…" pill instead
+        // of declaring an outage.
+        dot.className = 'row-dot amber';
+        sub.textContent = 'Reconnecting…';
+        setMemMeter(null);
+        emphasizeRestart(false);
+        return;
+      }
       dot.className = 'row-dot red';
       sub.textContent = 'Not responding — a restart usually clears it';
       setMemMeter(null);
@@ -1571,24 +1592,26 @@
     // The bar needs a known ceiling (post-GC old-gen max). If the JVM
     // doesn't report one, hide just the bar and keep the figures below.
     var bar = $('svcMemBar'), fill = $('svcMemFill');
-    if (m.liveSetMaxMb > 0) {
+    // "Used" is total committed memory (heap + JVM overhead) so it matches the
+    // process figure in Task Manager — heap-in-use alone reads far lower. The
+    // cap is the heap budget (-Xmx, the "2,048 MB"). Bar colour comes from the
+    // verdict (post-GC floor), so health and the meter never disagree. Falls
+    // back to heap-in-use for an older agent that doesn't send the total yet.
+    var used  = (m.processMemMb && m.processMemMb > 0) ? m.processMemMb : m.heapUsedMb;
+    var alloc = m.heapMaxMb;
+    if (alloc > 0) {
       bar.hidden = false;
-      var pct = Math.max(2, Math.min(100, Math.round(100 * m.liveSetMb / m.liveSetMaxMb)));
-      fill.style.width = pct + '%';
+      var barPct = Math.max(2, Math.min(100, Math.round(100 * used / alloc)));
+      fill.style.width = barPct + '%';
       fill.className = 'svc-mem-fill' + (m.state === 'restart' ? ' red' : m.state === 'watch' ? ' amber' : '');
     } else {
       bar.hidden = true;
     }
 
-    // Andy the Admin needs one thing: how much memory RapidReconciler has,
-    // and how much it's using. Everything else (heap snapshots, GC %, server
-    // RAM) is technician triage — kept out of the admin view.
     var cap = $('svcMemCap'); if (!cap) return;
-    var alloc = m.liveSetMaxMb > 0 ? m.liveSetMaxMb : m.heapMaxMb;   // memory allocated to RR
-    var used  = m.liveSetMaxMb > 0 ? m.liveSetMb    : m.heapUsedMb;  // what it's actually holding (post-cleanup)
     function mb(n) { return Number(n).toLocaleString('en-US') + ' MB'; }
     if (alloc > 0) {
-      var pct = Math.round(100 * used / alloc);
+      var pct = Math.min(100, Math.round(100 * used / alloc));
       cap.innerHTML = 'Using <b>' + mb(used) + '</b> of <b>' + mb(alloc) + '</b> allocated (' + pct + '%)';
     } else {
       cap.innerHTML = 'Using <b>' + mb(used) + '</b>';
@@ -2996,7 +3019,7 @@
     'Accounting Set Up':  { none: 'Accounting configuration', green: 'DMAAIs reviewed & loaded', amber: 'Model DMAAI review pending', red: 'Accounting setup needs attention' },
     'Inventory Review':   { none: 'GL & perpetual roll-forward', green: 'Roll-forwards intact', amber: 'Variance to review', red: 'Roll-forward breaks to review' },
     'Data Management':    { none: 'Nightly refresh + data purge', green: 'Data is current', amber: 'Refresh in progress', red: 'Last refresh failed' },
-    'Service Health':     { none: 'Data service status', green: 'Service healthy', amber: 'Service under load', red: 'Restart recommended' },
+    'System Health':      { none: 'Service, assistant & activity', green: 'All healthy', amber: 'Something to review', red: 'Service needs attention' },
     'Utilities':          { none: 'GL & cardex data maintenance', green: 'GL & cardex current', amber: 'Maintenance suggested', red: 'Maintenance needed' },
     'Data Refresh Schedule': { none: 'When your data loads & refreshes', green: 'Refreshes succeeding', red: 'Last refresh failed' }
   };
@@ -3307,6 +3330,31 @@
       setInterval(loadServiceMemory, 60000);
     });
   }
+
+  // Returning to an already-open Home tab (or acknowledging a reminder in
+  // another tab) shouldn't leave a stale dot. The client-side review-reminder
+  // dots are pure localStorage reads (no network), so repaint them whenever the
+  // tab regains visibility, on bfcache (back/forward) restore, and on cross-tab
+  // storage writes. The live-status cards (service health, system status,
+  // license, Reload GL/Cardex, periods, messages) are NOT repainted here — they
+  // reflect backend state, not something toggled on another page, and keep their
+  // own cadence (e.g. service health polls every 60s).
+  function refreshReminderDots() {
+    var a = activeDb();
+    if (!IS_DEMO && !(a && a.n)) return;   // session not hydrated yet — boot() paints
+    setAiDot();
+    setActivityDot();
+    setPwPolicyDot();
+    loadRefreshSchedule();
+  }
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'visible') refreshReminderDots();
+  });
+  window.addEventListener('pageshow', refreshReminderDots);
+  window.addEventListener('storage', function (e) {
+    if (!e || !e.key || e.key.indexOf('rrv8.') !== 0) return;
+    refreshReminderDots();
+  });
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
   else boot();

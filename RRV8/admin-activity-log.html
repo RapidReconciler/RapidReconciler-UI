@@ -120,7 +120,7 @@
           <a href="home.html">Administrator</a><span class="breadcrumb-sep">/</span><span>System Health</span><span class="breadcrumb-sep">/</span><span>Activity Log</span>
         </nav>
         <h1 class="page-title">Activity Log</h1>
-        <p class="page-lede">Recent system events &mdash; service restarts, data reloads (GL and cardex), and scheduled refreshes &mdash; with when they happened and what triggered them.</p>
+        <p class="page-lede">Recent system events &mdash; report-engine restarts, data reloads (GL and cardex), and refreshes &mdash; with when they happened and what triggered them.</p>
       </header>
 
       <!-- Non-admin gate -->
@@ -130,7 +130,7 @@
       </div>
 
       <div id="js-tool">
-        <div class="note" id="js-pending" role="status">
+        <div class="note" id="js-pending" role="status" style="display:none;">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 7v5l3 2"/></svg>
           <span><b>Event capture isn&rsquo;t turned on yet.</b> Once the service starts recording events, they&rsquo;ll appear here automatically &mdash; newest first.</span>
         </div>
@@ -151,7 +151,7 @@
         </div>
 
         <div class="card">
-          <div class="card-head"><span class="card-title">Recent events</span></div>
+          <div class="card-head" style="display:flex;align-items:center;justify-content:space-between;gap:10px;"><span class="card-title">Recent events</span><button type="button" id="js-log-refresh" class="review-btn">Refresh</button></div>
           <table class="log">
             <thead>
               <tr><th style="width:170px;">When</th><th style="width:150px;">Event</th><th>Detail</th><th style="width:140px;">Triggered by</th></tr>
@@ -179,10 +179,54 @@
   function activeDb() { const s = window.RR_SESSION || {}; const d = Array.isArray(s.dbs) ? s.dbs : []; return d[s.activeDbIndex || 0] || d[0] || null; }
   function isAdmin() { const a = activeDb(); return !!(a && a.t && a.t.adm === true); }
 
-  // When a server-side event source lands, fetch + render here (newest first),
-  // replacing the empty state. Columns: when | event | detail | triggeredBy.
-  // e.g. rrFetch('admin/activity?limit=50') -> [{ at, event, detail, by }]
-  function loadEvents() { /* no event source yet — keep the empty state */ }
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]; }); }
+  // Friendly relative/short time for the "When" column.
+  function fmtWhen(iso) {
+    try {
+      var d = new Date(iso), now = new Date();
+      var mins = Math.round((now - d) / 60000);
+      if (mins < 1) return 'Just now';
+      if (mins < 60) return mins + ' min ago';
+      var time = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+      if (d.toDateString() === now.toDateString()) return 'Today ' + time;
+      return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ', ' + time;
+    } catch (_) { return iso; }
+  }
+  // admin/activity lives on the data-services agent (same place as
+  // admin/service-health): resolve the active DB's agent, else the dev default.
+  function agentBase() {
+    var s = window.RR_SESSION || {};
+    var d = (Array.isArray(s.dbs) ? s.dbs : [])[s.activeDbIndex || 0];
+    if (d && d.ip) return (/^(?:localhost|127\.0\.0\.1)\b/i.test(d.ip) ? 'http://' : 'https://') + d.ip;
+    return RR_CONFIG.testAgentBase || 'http://localhost:34537';
+  }
+  function renderEvents(list) {
+    var body = $('js-log-body'); if (!body) return;
+    $('js-pending').style.display = 'none';            // capture is on; only errors reshow it
+    if (!Array.isArray(list) || !list.length) {
+      body.innerHTML = '<tr><td colspan="4" class="log-empty"><b>No events recorded yet</b>Restarts, reloads, and refreshes will be listed here as they happen.</td></tr>';
+      return;
+    }
+    body.innerHTML = list.map(function (e) {
+      return '<tr><td>' + esc(fmtWhen(e.at)) + '</td><td><b>' + esc(e.event) + '</b></td><td>' + esc(e.detail) + '</td><td>' + esc(e.by) + '</td></tr>';
+    }).join('');
+  }
+  // Fetch recent events (newest first) from the agent and render them.
+  function loadEvents() {
+    if (RR_CONFIG.mode === 'demo') return;             // agent-first; no demo source
+    var headers = { 'Accept': 'application/json' };
+    try { var t = localStorage.getItem('rrv8.token'); if (t) headers['Authorization'] = 'Bearer ' + t; } catch (_) {}
+    fetch(agentBase() + '/admin/activity?limit=50', { headers: headers })
+      .then(function (r) { return r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)); })
+      .then(renderEvents)
+      .catch(function () {
+        // Unreachable (e.g. the engine is mid-restart) — say so honestly; a
+        // manual Refresh or reopening retries.
+        var p = $('js-pending'); if (!p) return;
+        p.style.display = 'flex';
+        p.querySelector('span').innerHTML = '<b>Couldn&rsquo;t load activity.</b> The report engine may be restarting &mdash; try Refresh in a moment.';
+      });
+  }
 
   // ---- Review reminder (7/14/30-day) — greens the Home "Activity Log" dot ----
   // Client-side, no attestation, same pattern as Review Job Schedule. Amber until
@@ -227,6 +271,7 @@
       return;
     }
     loadEvents();
+    var rb = $('js-log-refresh'); if (rb) rb.addEventListener('click', loadEvents);
     renderActReview();
     wireActReview();
   }
