@@ -1665,6 +1665,22 @@
   global.RRV8.mountUserMenu           = mountUserMenu;
   global.RRV8.renderUserChip          = renderUserChip;
 
+  // --- Eager session hydration (durable fix for the recurring race) --------
+  // sidebar.js is loaded as a NON-defer <script> in <head>, so it runs before
+  // any page's inline boot script. For the token (staging/prod) path,
+  // hydrateSession() is fully synchronous (JWT decode), so calling it once here
+  // populates window.RR_SESSION.dbs BEFORE every page boots — pages no longer
+  // have to remember to await it for activeDb()/RR_SESSION to resolve. (Several
+  // minimal-topbar admin pages had forgotten, sending empty requests.) Pages
+  // that DO call hydrateSession() still work: it's idempotent (re-reads the same
+  // token). Demo mode stays lazy — it fetches a payload async, and the demo
+  // pages call hydrateSession() explicitly — so we don't kick a fetch here.
+  try {
+    var _eagerMode = (new URLSearchParams(global.location.search).get('mode'))
+                     || (global.RR_CONFIG && global.RR_CONFIG.mode) || 'demo';
+    if (_eagerMode !== 'demo') { hydrateSession(); }
+  } catch (_) { /* leave RR_SESSION empty; pages still call hydrateSession() */ }
+
   // --- Currency helpers (multi-currency display) -----------------------
   // currencySymbol('GBP') -> 'GBP'->£ via the browser's ICU data; cached.
   // An empty code falls back to '$' (the legacy USD default this system
