@@ -306,10 +306,7 @@
     if (_routesToValc(area)) {
       base = RR_CONFIG.valcBase || 'http://localhost:8080';
     } else if (_routesToTestAgent(area)) {
-      const _d = window.RR_SESSION && window.RR_SESSION.dbs && window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex || 0];
-      base = (_d && _d.ip)
-        ? ((/^(?:localhost|127\.0\.0\.1)\b/i.test(_d.ip) ? 'http://' : 'https://') + _d.ip)
-        : (RR_CONFIG.testAgentBase || 'http://localhost:34537');
+      base = window.RRDB.agentBase();   // canonical active-DB agent resolver (config.js RRDB)
     } else {
       const sess = window.RR_SESSION;
       const db = sess && sess.dbs && sess.dbs[sess.activeDbIndex || 0];
@@ -437,9 +434,24 @@
   // rrv8.aiReview.<db> + RRV8.aiReviewLevel with the Home row dot.
   function fmtDate(iso) { try { return new Date(iso + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }); } catch (_) { return iso; } }
   function aiReviewKey() { const a = activeDb() || {}; return 'rrv8.aiReview.' + (a.n || 'default'); }
+  // Server ack (kind 'ai-review') is the source of truth — recorded per database
+  // by the agent and shared with the Home dot via GET /admin/acks. localStorage
+  // is a write-through fallback for databases whose ack table predates this build.
+  var _aiAck = null;
+  function loadAiAck() {
+    if (!isAdmin()) return Promise.resolve();
+    return rrFetch('admin/acks').then(function (rows) {
+      _aiAck = null; (rows || []).forEach(function (r) { if (r && r.kind === 'ai-review') _aiAck = r; });
+    }).catch(function () { _aiAck = null; });
+  }
+  function aiReviewVal() {
+    var v = (_aiAck && window.RRV8 && window.RRV8.ackToReviewValue) ? window.RRV8.ackToReviewValue(_aiAck) : '';
+    if (!v) { try { v = localStorage.getItem(aiReviewKey()) || ''; } catch (_) {} }
+    return v;
+  }
   function renderAiReview() {
     const band = $('js-ai-review'); if (!band) return;
-    let val = ''; try { val = localStorage.getItem(aiReviewKey()) || ''; } catch (_) {}
+    let val = aiReviewVal();
     const today = new Date().toISOString().slice(0, 10);
     const level = (window.RRV8 && window.RRV8.aiReviewLevel) ? window.RRV8.aiReviewLevel(val, today) : 'amber';
     band.classList.remove('is-green', 'is-amber'); band.classList.add('is-' + level);
@@ -452,11 +464,13 @@
     const band = $('js-ai-review'); if (!band) return;
     band.querySelectorAll('.review-btn').forEach(function (btn) {
       btn.addEventListener('click', function () {
-        let val;
-        if (btn.dataset.never) { val = 'never'; }
-        else { const days = parseInt(btn.dataset.days, 10) || 30; const d = new Date(); d.setDate(d.getDate() + days); val = d.toISOString().slice(0, 10); }
-        try { localStorage.setItem(aiReviewKey(), val); } catch (_) {}
-        renderAiReview();
+        let val, cadenceDays = null, never = false;
+        if (btn.dataset.never) { never = true; val = 'never'; }
+        else { cadenceDays = parseInt(btn.dataset.days, 10) || 30; const d = new Date(); d.setDate(d.getDate() + cadenceDays); val = d.toISOString().slice(0, 10); }
+        rrFetch('admin/activity/ack', { method: 'POST', body: { kind: 'ai-review', cadenceDays: cadenceDays, never: never } })
+          .then(function (ack) { if (ack) _aiAck = ack; })
+          .catch(function () { /* no ack table on this DB — localStorage fallback below */ })
+          .then(function () { try { localStorage.setItem(aiReviewKey(), val); } catch (_) {} renderAiReview(); });
         toast(val === 'never' ? 'Reminders turned off.' : 'Reminder set for ' + fmtDate(val) + '.');
       });
     });
@@ -481,7 +495,8 @@
 
     renderFeatures();        // immediate paint (capped to Off) …
     applyEntitlement();      // … then refine from the purchased tier + set connection
-    renderAiReview();
+    renderAiReview();        // immediate paint from localStorage fallback …
+    loadAiAck().then(renderAiReview);   // … then refine from the server ack
     wireAiReview();
 
     // Preview toggles + level changes

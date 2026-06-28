@@ -85,14 +85,36 @@ reader. Revisit only if a second VALC-side ack appears.
 - **Phase 0 — DONE (2026-06-28):** Activity Log searchable + type-filterable
   (client-side over the loaded window). Server-side `?q=&type=` deferred until
   the log routinely exceeds the fetch window.
-- **Phase 1 — Agent:** `POST /admin/activity/ack` + `GET /admin/acks` +
-  persistence; document in API.md. (Agent rebuild.)
-- **Phase 2 — UI periodic reviews:** wire AI / Activity / Schedule /
-  Complex-passwords to POST acks; dots derive from `/admin/acks`; retire their
-  localStorage keys.
-- **Phase 3 — UI conditional snoozes:** cardex / purge / license snoozes → acks.
-- **Phase 4 — Team review:** emit the agent activity event on review so it shows
-  in the log; VALC stays authoritative.
+- **Phase 1 — Agent: DONE + VERIFIED (2026-06-28).** `POST /admin/activity/ack`
+  + `GET /admin/acks` + `RAdminReminderAck` persistence; documented in API.md.
+- **Phase 2 — UI periodic reviews: DONE + VERIFIED (2026-06-28).** AI / Activity /
+  Schedule / Complex-passwords pages POST acks; Home dots derive from
+  `/admin/acks` via `RRV8.ackToReviewValue` (server ack → legacy review value, so
+  `complexPwReviewLevel` is untouched). localStorage kept as a **write-through
+  fallback** (not retired) because NA/TR don't have the `RAdminReminderAck` table
+  yet — server-first, fall back to the old key. Full removal is a later cleanup
+  once every DB has the table.
+- **Phase 3 — UI conditional snoozes: DONE + VERIFIED (2026-06-28).** cardex /
+  purge / license snoozes POST acks (cardex "Clear reminder" = a cadence-0 ack,
+  since there's no DELETE). Same server-first/localStorage-fallback as Phase 2.
+  Verified live on Dev: all 7 reminders round-trip, all 7 Home dots derive from
+  the server, DB-switch isolation holds (NA falls back to amber, no Dev bleed;
+  switch back to Dev restores green), Activity Log shows the ack audit trail.
+- **Phase 4 — Team review: NOT STARTED.** Emit the agent activity event on RR
+  Team review so it shows in the log; VALC stays the system-of-record (it owns
+  the auditor export). Cross-repo (VALC + agent).
+
+### Implementation notes (Phases 2–3)
+- New shared helper `RRV8.ackToReviewValue(ack)` in `sidebar.js` converts a
+  `/admin/acks` row (`{kind, ackedDate, cadenceDays, never}`) into the legacy
+  review "value" (`'never'` / next-due ISO date / `''`).
+- `home.html`: `_acksByKind` cache + `loadAcks()` (in `loadActiveDbSurfaces()`
+  and `refreshReminderDots()`), `reviewValueFor(kind, lsPrefix)` (server-first),
+  `ackReminder(kind, opts)` (POST + local cache). `_acksByKind` reset in
+  `resetScopedState()` so a DB switch re-fetches.
+- Each reminder page: `loadXAck()` on boot + `xReviewVal()` server-first read +
+  the button handler POSTs `admin/activity/ack` then write-through localStorage.
+  (Two pages had GET-only `rrFetch` — body serialization was added.)
 
 ## Open questions
 

@@ -608,11 +608,36 @@
      single card with one group per role (only roles the viewer can act on),
      each listing the role's open items; an all-clear state when nothing's
      outstanding. */
+  /* Today's To Do reads as ONE component: the band is the header, the list is a
+     drawer attached directly beneath it — not a separate floating card. When the
+     band is expanded the two share a single border and the tint's left bar runs
+     the full height (coloured header strip → white drawer body). Collapsed, the
+     band falls back to a normal closed-drawer row. */
   #todoBody { margin-top: -2px; }
   .todo-card {
     background: var(--bg-card); border: 1px solid var(--rule); border-radius: 14px;
     box-shadow: var(--shadow-sm); padding: 4px 20px;
   }
+  /* Expanded: flatten the band's bottom so it merges into the drawer body. */
+  #todoSectionHead:has(+ #todoBody:not(.is-collapsed)) {
+    margin-bottom: 0; border-bottom: 0;
+    border-bottom-left-radius: 0; border-bottom-right-radius: 0;
+  }
+  #todoBody:not(.is-collapsed) {
+    margin-top: 0;
+    border: 1px solid var(--rule); border-top: 0; border-radius: 0 0 14px 14px;
+    background: var(--bg-card); box-shadow: var(--shadow-sm); padding: 0 20px;
+  }
+  /* The inner card chrome is redundant once the body IS the container. */
+  #todoBody:not(.is-collapsed) .todo-card {
+    background: transparent; border: 0; border-radius: 0; box-shadow: none; padding: 4px 0;
+  }
+  /* Tint-match the drawer to the band so the seam and the left accent bar read
+     continuous (tinted bands carry only the inset bar, no drop shadow — mirror
+     that on the body). */
+  #todoSectionHead.band-green + #todoBody:not(.is-collapsed) { border-color: #c5e6d2; box-shadow: inset 4px 0 0 var(--green); }
+  #todoSectionHead.band-amber + #todoBody:not(.is-collapsed) { border-color: #f0d2a8; box-shadow: inset 4px 0 0 var(--orange); }
+  #todoSectionHead.band-red   + #todoBody:not(.is-collapsed) { border-color: #f1c9c3; box-shadow: inset 4px 0 0 var(--red); }
   .todo-group { padding: 15px 0; border-bottom: 1px solid var(--rule); }
   .todo-group:last-child { border-bottom: 0; }
   .todo-group-head {
@@ -1385,10 +1410,7 @@
     if (_routesToValc(area)) {
       base = RR_CONFIG.valcBase || 'http://localhost:8080';
     } else if (_routesToTestAgent(area)) {
-      var _d = window.RR_SESSION && window.RR_SESSION.dbs && window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex || 0];
-      base = (_d && _d.ip)
-        ? ((/^(?:localhost|127\.0\.0\.1)\b/i.test(_d.ip) ? 'http://' : 'https://') + _d.ip)
-        : (RR_CONFIG.testAgentBase || 'http://localhost:34537');
+      base = window.RRDB.agentBase();   // canonical active-DB agent resolver (config.js RRDB)
     } else {
       var sess = window.RR_SESSION;
       var db = sess && sess.dbs && sess.dbs[sess.activeDbIndex || 0];
@@ -1515,10 +1537,13 @@
   // Modules customers license but that have no V8 page yet. Shown as
   // non-clickable "coming soon" tiles in the Reconcile grid so the roadmap
   // is visible rather than silently missing.
+  // Each carries its cap key so renderTiles only shows a coming-soon module
+  // the client actually licenses (m) and the user can reach (t) — same gate
+  // as the live Inventory tile. API.md §2: Finance lane gates on m/t per module.
   var SOON_TILES = [
-    { modtag: 'In Transit', title: 'In Transit', desc: 'Reconcile inventory moving between branches.',
+    { cap: 'it', modtag: 'In Transit', title: 'In Transit', desc: 'Reconcile inventory moving between branches.',
       icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="3" width="15" height="13" rx="1"/><path d="M16 8h4l3 3v5h-7V8z"/><circle cx="5.5" cy="18.5" r="2"/><circle cx="18.5" cy="18.5" r="2"/></svg>' },
-    { modtag: 'PO Receipts', title: 'PO Receipts', desc: 'Reconcile received purchase orders to the GL.',
+    { cap: 'por', modtag: 'PO Receipts', title: 'PO Receipts', desc: 'Reconcile received purchase orders to the GL.',
       icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2h9l5 5v15H6z"/><path d="M15 2v5h5"/><path d="M9 13h6M9 17h6"/></svg>' }
   ];
 
@@ -1839,6 +1864,9 @@
   function loadPeriods() {
     rrFetch('available-periods', { demoFile: 'available-periods' }).then(function (p) {
       _periods = (p && p.availablePeriods) || [];
+      // Cache the calendar's open period per-DB so any page (incl. ones that
+      // don't fetch the calendar) can default to it instead of a hardcoded date.
+      if (window.RRV8 && window.RRV8.cacheAvailablePeriods) window.RRV8.cacheAvailablePeriods(_periods, p && p.defaultPeriod);
       renderScopeBar();
     }).catch(function () { /* leave the picker showing just the open period */ });
   }
@@ -1858,8 +1886,10 @@
           (m.primary ? '<span class="tile-badge">Your starting point</span>' : '') +
         '</a>';
       }).join('');
-      // Coming-soon roadmap tiles (In Transit, PO Receipts) — non-clickable.
-      tilesHtml += SOON_TILES.map(function (m) {
+      // Coming-soon roadmap tiles (In Transit, PO Receipts) — non-clickable,
+      // and only for modules this client licenses + the user can reach. An
+      // unlicensed/unchecked module never appears here.
+      tilesHtml += SOON_TILES.filter(function (m) { return c[m.cap]; }).map(function (m) {
         return '<div class="tile soon" aria-disabled="true">' +
           '<span class="tile-modtag">' + esc(m.modtag) + '</span>' +
           '<div class="tile-icon">' + m.icon + '</div>' +
@@ -2048,9 +2078,9 @@
         var expLevel = 'green', expMsg = null;
         var days = (u.daysRemaining != null) ? Number(u.daysRemaining) : null;
         if (days != null) {
-          var snoozeUntil = '';
-          try { snoozeUntil = localStorage.getItem('rrv8.licenseSnooze.' + dbName) || ''; } catch (_) {}
-          var snoozed = !!(snoozeUntil && new Date().toISOString().slice(0, 10) < snoozeUntil);
+          var snoozeUntil = reviewValueFor('license-snooze', 'rrv8.licenseSnooze.');
+          var snoozed = !!(snoozeUntil && snoozeUntil !== 'never' && new Date().toISOString().slice(0, 10) < snoozeUntil)
+                       || snoozeUntil === 'never';
           if (days <= 0) { expLevel = 'red'; expMsg = 'License expired'; }
           else if (days <= 60 && !snoozed) { expLevel = 'amber'; expMsg = 'License expires in ' + days + (days === 1 ? ' day' : ' days'); }
         }
@@ -2551,7 +2581,7 @@
               businessUnits: rf.businessUnits || [],
               objects:       rf.objects       || [],
               subsidiaries:  rf.subsidiaries  || [],
-              period:        rf.period || '2016-08-27'
+              period:        rf.period || (window.RRV8 && window.RRV8.defaultPeriod()) || ''
             }
           }
         });
@@ -2676,8 +2706,7 @@
   function setPurgeDot(info) {
     var dot = $('purgeDot'); if (!dot) return;
     if (!info || !window.RRV8 || !window.RRV8.purgeRecommendation) { dot.className = 'row-dot grey'; return; }
-    var a = activeDb(); var dbn = (a && a.n) || '';
-    var until = ''; try { until = localStorage.getItem('rrv8.purgeSnooze.' + dbn) || ''; } catch (_) {}
+    var until = reviewValueFor('purge-snooze', 'rrv8.purgeSnooze.');
     var today = new Date().toISOString().slice(0, 10);
     var rec = window.RRV8.purgeRecommendation(info, { snoozeUntil: until, today: today });
     if (!rec.known) { dot.className = 'row-dot grey'; dot.title = ''; return; }
@@ -2718,15 +2747,62 @@
       .then(function (d) { setFiscalDot(d); })
       .catch(function () { /* endpoint not reachable -> leave the neutral grey dot */ });
   }
+  // ---- Reminder acknowledgements (server-recorded, per database) ----
+  // Review cadences (AI / Activity / Schedule / Complex-passwords) and conditional
+  // snoozes (cardex / purge / license) are recorded server-side by the per-DB
+  // agent (RAdminReminderAck) and read back via GET /admin/acks — so they're
+  // DB-scoped structurally and auditable in the Activity Log, retiring the
+  // per-browser rrv8.*Review/*Snooze localStorage scatter. _acksByKind is the
+  // loaded map (kind -> ack); null until loadAcks() resolves OR when the fetch
+  // fails (a database whose RAdminReminderAck table predates this release), in
+  // which case the dots fall back to the legacy localStorage key.
+  var _acksByKind = null;
+  function ackFor(kind) { return (_acksByKind && _acksByKind[kind]) || null; }
+  // The legacy review "value" (next-due ISO date / 'never' / '') for a kind:
+  // server ack first, else the old per-browser localStorage key (migration
+  // fallback). Once a reminder is re-set it writes server-side and wins after.
+  function reviewValueFor(kind, lsPrefix) {
+    var ack = ackFor(kind);
+    if (ack && window.RRV8 && window.RRV8.ackToReviewValue) return window.RRV8.ackToReviewValue(ack);
+    var a = activeDb(); var dbn = (a && a.n) || '';
+    try { return localStorage.getItem(lsPrefix + dbn) || ''; } catch (_) { return ''; }
+  }
+  // POST one ack (kind + cadenceDays/never) and cache it locally for an instant
+  // repaint. Resolves to the ack on success, or null if the server is unreachable
+  // / the table is absent — callers fall back to a localStorage write so the
+  // control still works on databases without the ack table.
+  function ackReminder(kind, opts) {
+    opts = opts || {};
+    var body = { kind: kind, cadenceDays: (opts.cadenceDays != null ? opts.cadenceDays : null), never: !!opts.never };
+    return rrFetch('admin/activity/ack', { method: 'POST', body: body }).then(function (ack) {
+      if (ack) { _acksByKind = _acksByKind || {}; _acksByKind[kind] = ack; }
+      return ack || null;
+    }).catch(function () { return null; });
+  }
+  // Load every ack for the active DB, then repaint each reminder dot from them.
+  // Graceful: on failure (older agent / table absent) leaves _acksByKind null so
+  // the dots use their localStorage fallback. Rides the per-DB rrFetch gen-guard.
+  function loadAcks() {
+    if (IS_DEMO || !isAdmin()) { _acksByKind = null; return Promise.resolve(); }
+    return rrFetch('admin/acks').then(function (rows) {
+      var m = {}; (rows || []).forEach(function (r) { if (r && r.kind) m[r.kind] = r; });
+      _acksByKind = m;
+    }).catch(function () { _acksByKind = null; }).then(function () {
+      setPwPolicyDot(); loadRefreshSchedule(); setAiDot(); setActivityDot();
+      if (_rcdxPreview) setReloadCardexDot(_rcdxPreview);
+      if (_purgeInfo)   setPurgeDot(_purgeInfo);
+      paintLicenseHealth();
+    });
+  }
+
   // ---- Complex Passwords review reminder dot ----
-  // No fetch — a client-side reminder (rrv8.complexPwReview.<db>) shared with the
-  // Complex Passwords page via RRV8.complexPwReviewLevel. Green = reminder set or
-  // dismissed (Never); amber = review due / not yet set.
+  // Reads the server ack (kind 'password-review') with the legacy
+  // rrv8.complexPwReview.<db> as fallback. Green = reminder set or dismissed
+  // (Never); amber = review due / not yet set.
   function setPwPolicyDot() {
     var dot = $('pwPolicyDot'); if (!dot) return;
     if (IS_DEMO || !isAdmin() || !(window.RRV8 && window.RRV8.complexPwReviewLevel)) { dot.className = 'row-dot grey'; return; }
-    var a = activeDb(); var dbn = (a && a.n) || '';
-    var val = ''; try { val = localStorage.getItem('rrv8.complexPwReview.' + dbn) || ''; } catch (_) {}
+    var val = reviewValueFor('password-review', 'rrv8.complexPwReview.');
     var level = window.RRV8.complexPwReviewLevel(val, new Date().toISOString().slice(0, 10));
     dot.className = 'row-dot ' + level;
     dot.title = level === 'green'
@@ -2770,8 +2846,7 @@
   function loadRefreshSchedule() {
     var dot = $('schedDot'); if (!dot) return;
     if (IS_DEMO || !isAdmin() || !(window.RRV8 && window.RRV8.scheduleReviewLevel)) { dot.className = 'row-dot grey'; return; }
-    var a = activeDb(); var dbn = (a && a.n) || '';
-    var val = ''; try { val = localStorage.getItem('rrv8.scheduleReview.' + dbn) || ''; } catch (_) {}
+    var val = reviewValueFor('schedule-review', 'rrv8.scheduleReview.');
     var level = window.RRV8.scheduleReviewLevel(val, new Date().toISOString().slice(0, 10));
     dot.className = 'row-dot ' + level;
     dot.title = level === 'green'
@@ -2786,8 +2861,7 @@
   function setAiDot() {
     var dot = $('aiDot'); if (!dot) return;
     if (IS_DEMO || !isAdmin() || !(window.RRV8 && window.RRV8.aiReviewLevel)) { dot.className = 'row-dot grey'; return; }
-    var a = activeDb(); var dbn = (a && a.n) || '';
-    var val = ''; try { val = localStorage.getItem('rrv8.aiReview.' + dbn) || ''; } catch (_) {}
+    var val = reviewValueFor('ai-review', 'rrv8.aiReview.');
     var level = window.RRV8.aiReviewLevel(val, new Date().toISOString().slice(0, 10));
     dot.className = 'row-dot ' + level;
     dot.title = level === 'green'
@@ -2800,8 +2874,7 @@
   function setActivityDot() {
     var dot = $('activityDot'); if (!dot) return;
     if (IS_DEMO || !isAdmin() || !(window.RRV8 && window.RRV8.activityReviewLevel)) { dot.className = 'row-dot grey'; return; }
-    var a = activeDb(); var dbn = (a && a.n) || '';
-    var val = ''; try { val = localStorage.getItem('rrv8.activityReview.' + dbn) || ''; } catch (_) {}
+    var val = reviewValueFor('activity-review', 'rrv8.activityReview.');
     var level = window.RRV8.activityReviewLevel(val, new Date().toISOString().slice(0, 10));
     dot.className = 'row-dot ' + level;
     dot.title = level === 'green' ? 'Reviewed — reminder set' : 'Review recent activity';
@@ -2820,9 +2893,18 @@
   var RCDX_DEFAULT_SUB = 'Clear the perpetual cardex (F4111) from a date you choose; it rebuilds on the next scheduled refresh &mdash; the V7 cardex-deletions utility.';
   var _rcdxPreview = null;   // last eod-check payload, so the snooze click can repaint without a refetch
   function cardexSnoozeKey() { var a = activeDb(); return 'rrv8.cardexReloadSnooze.' + ((a && a.n) || ''); }
-  // The snooze stores the date it was set; it stays green for RCDX_SNOOZE_DAYS,
-  // then the reminder fires again (amber). Returns the Date it greens-until, or null.
+  // Returns the Date the snooze greens-until, or null. Server ack first (kind
+  // 'cardex-snooze' — its value is already the until-date), else the legacy
+  // localStorage key, which stores the date the snooze was SET and stays green
+  // for RCDX_SNOOZE_DAYS after.
   function cardexSnoozeUntil() {
+    var ack = ackFor('cardex-snooze');
+    if (ack && window.RRV8 && window.RRV8.ackToReviewValue) {
+      var v = window.RRV8.ackToReviewValue(ack);
+      if (v === 'never') { var far = new Date(); far.setFullYear(far.getFullYear() + 50); return far; }
+      if (v) { var du = new Date(v + 'T00:00:00'); return isNaN(du.getTime()) ? null : du; }
+      return null;
+    }
     try {
       var iso = localStorage.getItem(cardexSnoozeKey()); if (!iso) return null;
       var d = new Date(iso + 'T00:00:00'); if (isNaN(d.getTime())) return null;
@@ -2870,8 +2952,11 @@
     var a = e.target && e.target.closest ? e.target.closest('[data-act="rcdx-snooze"]') : null;
     if (!a) return;
     e.preventDefault();
-    try { localStorage.setItem(cardexSnoozeKey(), new Date().toISOString().slice(0, 10)); } catch (_) {}
-    setReloadCardexDot(_rcdxPreview);   // repaint green with the reminder set
+    ackReminder('cardex-snooze', { cadenceDays: RCDX_SNOOZE_DAYS }).then(function (ack) {
+      // No table / server down: keep the legacy localStorage snooze so it works.
+      if (!ack) { try { localStorage.setItem(cardexSnoozeKey(), new Date().toISOString().slice(0, 10)); } catch (_) {} }
+      setReloadCardexDot(_rcdxPreview);   // repaint green with the reminder set
+    });
   });
 
   // ---- actions ----
@@ -3329,6 +3414,7 @@
     _purgeInfo = null;          // data-from + size (feeds the Scope strip) + the purge modal
     _svcMem = null;             // service-health memory snapshot (per Services instance)
     _rcdxPreview = null;        // cached cardex eod-check — clear so a mid-switch repaint can't use the prior DB's
+    _acksByKind = null;         // server reminder acks — re-fetched per DB by loadAcks() (DB-scoped agent)
     _dbFacts = null; _dbRefresh = null;   // install-facts strip (size / SQL build / data currency)
     _jobStatus = ''; _period = ''; _periods = [];
 
@@ -3455,6 +3541,7 @@
     loadRefreshSchedule();
     setAiDot();
     setActivityDot();
+    loadAcks();   // server acks for the review/snooze dots (repaints them on resolve)
     loadStatus();
     loadInventoryLight();
     loadCardexTolerance();
@@ -3500,10 +3587,13 @@
     setActivityDot();
     setPwPolicyDot();
     loadRefreshSchedule();
-    // Reload Cardex "Remind me" greens via a localStorage snooze; repaint it from
-    // the cached eod-check (preserved across a bfcache back-nav) so a reminder set
-    // on its page shows green the moment you return, without a refetch.
+    // Reload Cardex "Remind me" greens via the snooze ack; repaint it from the
+    // cached eod-check (preserved across a bfcache back-nav) so a reminder set on
+    // its page shows green the moment you return, without a refetch.
     if (_rcdxPreview) setReloadCardexDot(_rcdxPreview);
+    // Re-read server acks so an acknowledgement made on a reminder page (server-
+    // recorded) reflects on return, not just the legacy cross-tab localStorage event.
+    loadAcks();
   }
   document.addEventListener('visibilitychange', function () {
     if (document.visibilityState === 'visible') refreshReminderDots();

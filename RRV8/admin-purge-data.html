@@ -294,8 +294,7 @@
     let base;
     if (_routesToValc(area)) { base = RR_CONFIG.valcBase || 'http://localhost:8080'; }
     else if (_routesToTestAgent(area)) {
-      const _d = window.RR_SESSION && window.RR_SESSION.dbs && window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex || 0];
-      base = (_d && _d.ip) ? ((/^(?:localhost|127\.0\.0\.1)\b/i.test(_d.ip) ? 'http://' : 'https://') + _d.ip) : (RR_CONFIG.testAgentBase || 'http://localhost:34537');
+      base = window.RRDB.agentBase();   // canonical active-DB agent resolver (config.js RRDB)
     } else {
       const sess = window.RR_SESSION; const db = sess && sess.dbs && sess.dbs[sess.activeDbIndex || 0];
       if (!db || !db.ip) return Promise.reject(new Error('No active database. Sign in first.'));
@@ -332,13 +331,27 @@
   };
   function purgeSnoozeKey() { return 'rrv8.purgeSnooze.' + (_dbName() || ''); }
   function _dbName() { const a = activeDb(); return a && a.n; }
+  // Server ack (kind 'purge-snooze') is the source of truth, shared with the Home
+  // dot via GET /admin/acks; localStorage is a write-through fallback for databases
+  // whose ack table predates this build. The ack value is the snooze-until date.
+  var _purgeAck = null;
+  function loadPurgeAck() {
+    if (!isAdmin()) return Promise.resolve();
+    return rrFetch('admin/acks').then(function (rows) {
+      _purgeAck = null; (rows || []).forEach(function (r) { if (r && r.kind === 'purge-snooze') _purgeAck = r; });
+    }).catch(function () { _purgeAck = null; }).then(function () { if (_info) renderRecommendation(_info); });
+  }
+  function purgeSnoozeVal() {
+    var v = (_purgeAck && window.RRV8 && window.RRV8.ackToReviewValue) ? window.RRV8.ackToReviewValue(_purgeAck) : '';
+    if (!v) { try { v = localStorage.getItem(purgeSnoozeKey()) || ''; } catch (_) {} }
+    return v;
+  }
 
   function renderRecommendation(info) {
     const card = $('js-purge-rec');
     if (!card || !info || !window.RRV8 || !window.RRV8.purgeRecommendation) return;
 
-    let until = '';
-    try { until = localStorage.getItem(purgeSnoozeKey()) || ''; } catch (_) {}
+    let until = purgeSnoozeVal();
     const todayISO = new Date().toISOString().slice(0, 10);
     const rec = window.RRV8.purgeRecommendation(info, { snoozeUntil: until, today: todayISO });
 
@@ -366,8 +379,10 @@
         const m = parseInt(btn.getAttribute('data-months'), 10) || 1;
         const d = new Date(); d.setMonth(d.getMonth() + m);
         const iso = d.toISOString().slice(0, 10);
-        try { localStorage.setItem(purgeSnoozeKey(), iso); } catch (_) {}
-        renderRecommendation(info);
+        rrFetch('admin/activity/ack', { method: 'POST', body: { kind: 'purge-snooze', cadenceDays: m * 30, never: false } })
+          .then(function (ack) { if (ack) _purgeAck = ack; })
+          .catch(function () { /* no ack table — localStorage fallback */ })
+          .then(function () { try { localStorage.setItem(purgeSnoozeKey(), iso); } catch (_) {} renderRecommendation(info); });
         toast('Reminder set for ' + fmtDateLong(iso) + '.');
       };
     });
@@ -512,6 +527,7 @@
     $('js-confirm').addEventListener('click', toggle);
     setStaged(false, null);
     loadInfo();
+    loadPurgeAck();   // server snooze ack (re-renders the recommendation when info is in)
   }
 
   document.addEventListener('DOMContentLoaded', function () {

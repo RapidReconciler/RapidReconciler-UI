@@ -212,15 +212,18 @@
     let base;
     if (_routesToValc(area)) { base = RR_CONFIG.valcBase || 'http://localhost:8080'; }
     else if (_routesToTestAgent(area)) {
-      const _d = window.RR_SESSION && window.RR_SESSION.dbs && window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex || 0];
-      base = (_d && _d.ip) ? ((/^(?:localhost|127\.0\.0\.1)\b/i.test(_d.ip) ? 'http://' : 'https://') + _d.ip) : (RR_CONFIG.testAgentBase || 'http://localhost:34537');
+      base = window.RRDB.agentBase();   // canonical active-DB agent resolver (config.js RRDB)
     } else {
       const sess = window.RR_SESSION; const db = sess && sess.dbs && sess.dbs[sess.activeDbIndex || 0];
       if (!db || !db.ip) return Promise.reject(new Error('No active database. Sign in first.'));
       base = (/^(?:localhost|127\.0\.0\.1)\b/i.test(db.ip) ? 'http://' : 'https://') + db.ip;
     }
     const url = base + '/' + area + (opts.query ? '?' + new URLSearchParams(opts.query) : '');
-    const init = { method: opts.method || 'GET', headers: prodHeaders(null) };
+    const init = {
+      method:  opts.method || 'GET',
+      headers: prodHeaders(opts.body ? 'application/json;charset=UTF-8' : null),
+      body:    opts.body ? JSON.stringify(opts.body) : undefined
+    };
     return fetch(url, init).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json().catch(() => null); });
   }
   function $(id) { return document.getElementById(id); }
@@ -294,9 +297,25 @@
   // The nightly time itself is owned by the customer's on-site DBA; this only
   // records that the admin has recently confirmed it looks right.
   function reviewKey() { const a = activeDb(); return 'rrv8.scheduleReview.' + ((a && a.n) || ''); }
+  // Server ack (kind 'schedule-review') is the source of truth — recorded per
+  // database by the agent and shared with the Home dot via GET /admin/acks.
+  // localStorage is a write-through fallback for databases whose ack table
+  // predates this build.
+  var _schedAck = null;
+  function loadSchedAck() {
+    if (!isAdmin()) return Promise.resolve();
+    return rrFetch('admin/acks').then(function (rows) {
+      _schedAck = null; (rows || []).forEach(function (r) { if (r && r.kind === 'schedule-review') _schedAck = r; });
+    }).catch(function () { _schedAck = null; });
+  }
+  function schedReviewVal() {
+    var v = (_schedAck && window.RRV8 && window.RRV8.ackToReviewValue) ? window.RRV8.ackToReviewValue(_schedAck) : '';
+    if (!v) { try { v = localStorage.getItem(reviewKey()) || ''; } catch (_) {} }
+    return v;
+  }
   function renderReviewBand() {
     const band = $('js-review-band'); if (!band) return;
-    let val = ''; try { val = localStorage.getItem(reviewKey()) || ''; } catch (_) {}
+    let val = schedReviewVal();
     const today = new Date().toISOString().slice(0, 10);
     const level = (window.RRV8 && window.RRV8.scheduleReviewLevel)
       ? window.RRV8.scheduleReviewLevel(val, today) : 'amber';
@@ -311,15 +330,13 @@
     const band = $('js-review-band'); if (!band) return;
     band.querySelectorAll('.review-btn').forEach(function (btn) {
       btn.addEventListener('click', function () {
-        let val;
-        if (btn.dataset.never) { val = 'never'; }
-        else {
-          const days = parseInt(btn.dataset.days, 10) || 30;
-          const d = new Date(); d.setDate(d.getDate() + days);
-          val = d.toISOString().slice(0, 10);
-        }
-        try { localStorage.setItem(reviewKey(), val); } catch (_) {}
-        renderReviewBand();
+        let val, cadenceDays = null, never = false;
+        if (btn.dataset.never) { never = true; val = 'never'; }
+        else { cadenceDays = parseInt(btn.dataset.days, 10) || 30; const d = new Date(); d.setDate(d.getDate() + cadenceDays); val = d.toISOString().slice(0, 10); }
+        rrFetch('admin/activity/ack', { method: 'POST', body: { kind: 'schedule-review', cadenceDays: cadenceDays, never: never } })
+          .then(function (ack) { if (ack) _schedAck = ack; })
+          .catch(function () { /* no ack table on this DB — localStorage fallback below */ })
+          .then(function () { try { localStorage.setItem(reviewKey(), val); } catch (_) {} renderReviewBand(); });
         toast(val === 'never' ? 'Review reminders turned off.' : 'Confirmed — reminder set for ' + fmtDateLong(val) + '.');
       });
     });
@@ -353,7 +370,8 @@
     const a = activeDb();
     if (a && a.n) $('js-topbar-db').textContent = a.n;
     if (window.RR_SESSION && !isAdmin()) { document.body.classList.add('is-gated'); $('js-gate').classList.add('is-visible'); return; }
-    renderReviewBand();
+    renderReviewBand();                  // immediate paint from localStorage fallback …
+    loadSchedAck().then(renderReviewBand); // … then refine from the server ack
     wireReviewBand();
     wireRequestChange();
     rrFetch('admin/refresh-schedule').then(function (s) {

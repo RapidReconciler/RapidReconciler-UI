@@ -198,3 +198,63 @@ window.RR_AUTH_BASES = {
   staging: 'https://staging-valcspa.cloudapp.net',
   prod:    'https://rr-valc-spa.cloudapp.net'
 };
+
+/*
+ * RRDB — the ONE canonical active-database resolver. Every page MUST resolve
+ * "which DB am I scoped to / which agent do I call" through here. Do NOT
+ * hand-roll it per page — that drift is what caused the recurring cross-DB
+ * scoping bugs (pages variously read a hardcoded 0, a `activeDbIndex` field
+ * that the JWT does NOT carry, or preferred the single dev test agent).
+ *
+ * THE RULE: the active DB is the sticky `rrv8.activeDb` selection (set by
+ * RRV8.setActiveDatabase / RRDB.setActive on a DB switch), resolved BY NAME
+ * against the token's dbs[]. The JWT has no activeDbIndex — never read one.
+ *
+ * Self-sufficient: uses a hydrated window.RR_SESSION when present (sidebar.js /
+ * page boot), else decodes localStorage.rrv8.token directly — so the
+ * self-contained analyst pages (no sidebar.js) get the SAME answer.
+ *
+ * Usage in a page's fetch:
+ *   const base = window.RRDB.agentBase();   // active DB's agent (per-DB ip → testAgentBase)
+ *   const db   = window.RRDB.active();       // {n, ip, i, m, t, perms, rn, ...}
+ */
+window.RRDB = (function () {
+  function _session() {
+    try { var s = window.RR_SESSION; if (s && Array.isArray(s.dbs) && s.dbs.length) return s; } catch (_) {}
+    return null;
+  }
+  function _decodeToken() {
+    try {
+      var t = localStorage.getItem('rrv8.token'); if (!t) return null;
+      var b64 = t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+      var pad = b64.length % 4; if (pad) b64 += '='.repeat(4 - pad);
+      return JSON.parse(decodeURIComponent(atob(b64).split('').map(function (c) {
+        return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+      }).join('')));
+    } catch (_) { return null; }
+  }
+  function dbs() {
+    var s = _session(); if (s) return s.dbs;
+    var p = _decodeToken(); return (p && Array.isArray(p.dbs)) ? p.dbs : [];
+  }
+  function index() {
+    var list = dbs(), saved = null;
+    try { saved = localStorage.getItem('rrv8.activeDb'); } catch (_) {}
+    if (saved) for (var i = 0; i < list.length; i++) if (list[i] && list[i].n === saved) return i;
+    return 0;
+  }
+  function active() { var list = dbs(); return list[index()] || list[0] || {}; }
+  function name() { return active().n || '_'; }
+  function agentBase() {
+    var d = active();
+    if (d && d.ip) return (/^(?:localhost|127\.0\.0\.1)\b/i.test(d.ip) ? 'http://' : 'https://') + d.ip;
+    return (window.RR_CONFIG && window.RR_CONFIG.testAgentBase) || 'http://localhost:34537';
+  }
+  function setActive(n) {
+    if (!n) return;
+    try { localStorage.setItem('rrv8.activeDb', n); } catch (_) {}
+    var s = _session();
+    if (s) for (var i = 0; i < s.dbs.length; i++) if (s.dbs[i] && s.dbs[i].n === n) { s.activeDbIndex = i; break; }
+  }
+  return { dbs: dbs, index: index, active: active, name: name, agentBase: agentBase, setActive: setActive };
+})();

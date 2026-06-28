@@ -213,12 +213,16 @@
   //      (set on Home, owned by sidebar.js) — it shows only the in-scope
   //      companies. The [All|co|co] control is a local drill WITHIN that set;
   //      it does not write back to the shared scope. Company only — never period. ----
+  // Active DB index — delegate to the ONE canonical resolver (config.js RRDB),
+  // which resolves the sticky rrv8.activeDb by name. Never read p.activeDbIndex
+  // (the JWT has no such field; it was always 0 → every fetch hit Dev).
+  function _activeDbIdx(dbs){ return (window.RRDB && window.RRDB.index()) || 0; }
   function _scopeCtx(){
     try{
       var token=localStorage.getItem('rrv8.token'); if(!token) return null;
       var b64=token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'); var pad=b64.length%4; if(pad) b64+='='.repeat(4-pad);
       var p=JSON.parse(decodeURIComponent(atob(b64).split('').map(function(c){return '%'+('00'+c.charCodeAt(0).toString(16)).slice(-2);}).join('')));
-      var dbs=p.dbs||[]; var idx=Number(p.activeDbIndex)||0; var dbObj=dbs[idx]||dbs[0]||{};
+      var dbs=p.dbs||[]; var idx=_activeDbIdx(dbs); var dbObj=dbs[idx]||dbs[0]||{};
       var mode=(window.RR_CONFIG&&RR_CONFIG.mode)||'demo';
       return { key:'rrv8.scope.v1.'+mode+'.'+((dbObj.n)||'_')+'.scope', allowed:(Array.isArray(dbObj.i)?dbObj.i.map(String):[]) };
     }catch(_){ return null; }
@@ -621,23 +625,19 @@
   // ---- agent-first load: v6ui_raccountsummary from the active DB's agent
   //      (JWT-scoped), via POST /inventory/integrity. Falls back to the local
   //      dev snapshot for demo / deployed / no-token. ----
-  function agentBaseFromToken(token){
-    try {
-      var b64=token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/');
-      var pad=b64.length%4; if(pad) b64+='='.repeat(4-pad);
-      var p=JSON.parse(decodeURIComponent(atob(b64).split('').map(function(c){return '%'+('00'+c.charCodeAt(0).toString(16)).slice(-2);}).join('')));
-      var dbs=p.dbs||[]; var idx=Number(p.activeDbIndex)||0; var db=dbs[idx]||dbs[0];
-      if(db&&db.ip) return (/^(localhost|127\.0\.0\.1)/i.test(db.ip)?'http://':'https://')+db.ip;
-    } catch(_){}
-    return null;
-  }
+  // Active DB's agent base — the ONE canonical resolver (config.js RRDB):
+  // selected DB's ip first, dev test-agent only as the no-ip fallback.
+  function agentBaseFromToken(token){ return window.RRDB ? window.RRDB.agentBase() : null; }
   function loadFromAgent(){
     var token; try{ token=localStorage.getItem('rrv8.token'); }catch(_){}
     if(!token) return Promise.reject(new Error('no token'));
     // Prefer the dev/test-agent override (RR_CONFIG.testAgentBase, e.g.
     // localhost:34537) the live pages use; fall back to the token's
     // activeDb host on a real install where testAgentBase is null.
-    var base=(window.RR_CONFIG && RR_CONFIG.testAgentBase) || agentBaseFromToken(token);
+    // Route to the SELECTED DB's agent first; testAgentBase is only a
+    // pre-hydrate/no-ip fallback. (Was testAgentBase-first, which pinned every
+    // fetch to the single dev test agent = Dev, ignoring the selected DB.)
+    var base=agentBaseFromToken(token) || (window.RR_CONFIG && RR_CONFIG.testAgentBase);
     if(!base) return Promise.reject(new Error('no agent base'));
     return fetch(base+'/inventory/integrity',{method:'POST',
         headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json;charset=UTF-8','Accept':'application/json'},

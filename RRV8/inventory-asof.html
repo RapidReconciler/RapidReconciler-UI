@@ -1691,11 +1691,12 @@
       window.RR_SESSION.token = token;
       window.RR_SESSION.user  = payload.user || null;
       window.RR_SESSION.dbs   = Array.isArray(payload.dbs) ? payload.dbs : [];
-      // Pick the first DB by default; user-menu DB switcher (when wired)
-      // can override.
-      if (window.RR_SESSION.activeDbIndex >= window.RR_SESSION.dbs.length) {
-        window.RR_SESSION.activeDbIndex = 0;
-      }
+      // Honor the sticky rrv8.activeDb selection (set on Home / the switcher) so
+      // a DB switch + reload lands on the chosen DB. Fall back to a clamp when no
+      // saved DB or the resolver isn't loaded.
+      window.RR_SESSION.activeDbIndex = (window.RRV8 && window.RRV8.resolveActiveDbIndex)
+        ? window.RRV8.resolveActiveDbIndex(window.RR_SESSION.dbs)
+        : (window.RR_SESSION.activeDbIndex >= window.RR_SESSION.dbs.length ? 0 : window.RR_SESSION.activeDbIndex);
       return window.RR_SESSION.dbs.length > 0;
     } catch (_) { return false; }
   }
@@ -1739,10 +1740,7 @@
         // Switching the DB in the user-menu changes activeDbIndex and
         // therefore the agent we hit. Static testAgentBase remains as
         // a boot-race fallback when the session hasn't hydrated yet.
-        const _d = window.RR_SESSION && window.RR_SESSION.dbs && window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex || 0];
-        base = (_d && _d.ip)
-          ? ((/^(?:localhost|127\.0\.0\.1)\b/i.test(_d.ip) ? 'http://' : 'https://') + _d.ip)
-          : (RR_CONFIG.testAgentBase || 'http://localhost:34537');
+        base = window.RRDB.agentBase();   // canonical active-DB agent resolver (config.js RRDB)
       }
     } else {
       const db = window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex];
@@ -2344,21 +2342,16 @@
   }
 
   function readCurrentPeriodFromCache() {
-    // Mirrors RRV8.publishCurrentPeriod's scope key. Returns the most
-    // recently published period across any (mode, db) tuple, or null.
-    let best = null;
+    // Delegate to the shared per-DB reader (sidebar.js) so As-Of uses the SAME
+    // active-DB-scoped period as every other page. The old local scan returned
+    // the newest period across ANY (mode, db) tuple, which carried a prior DB's
+    // month onto this one after a switch (out-of-range → no data).
     try {
-      for (let i = 0; i < sessionStorage.length; i++) {
-        const k = sessionStorage.key(i);
-        if (!k || !/^rrv8\.scope\.v1\..+\.currentPeriod$/.test(k)) continue;
-        const raw = sessionStorage.getItem(k);
-        if (!raw) continue;
-        const obj = JSON.parse(raw);
-        if (obj && obj.payload && (!best || (obj.ts || 0) > (best.ts || 0))) best = obj;
+      if (window.RRV8 && typeof window.RRV8.readCurrentPeriod === 'function') {
+        return window.RRV8.readCurrentPeriod();
       }
     } catch (_) {}
-    if (!best) return null;
-    return (typeof best.payload === 'string') ? best.payload : (best.payload && best.payload.period);
+    return null;
   }
 
   // ============================================================
