@@ -459,6 +459,47 @@ restart *before* reports fail, instead of only flagging an outage after.
 
 ---
 
+## Activity Log + reminder acknowledgements
+
+**Status: agent shipped (Phase 1, 2026-06-28); UI wiring is Phases 2–4 of
+`docs/plans/reminders-as-activity-events.md`.** The Activity Log card reads a
+server event stream; reminder acknowledgements are recorded into that same
+stream **and** persisted per-database so the Home review/snooze dots derive
+green/amber from one source of truth instead of per-browser localStorage (which
+scattered across DBs — see `project_home_db_isolation`).
+
+All three are **agent-direct on the per-DB Services jar**, authenticated (admin
+card, carries the JWT; not in permitAll). Acks persist in `dbo.RAdminReminderAck`
+(one row per `kind`); because the agent's connection *is* the database, acks are
+DB-scoped automatically.
+
+- **`GET /admin/activity?limit=N`** — recent events, newest first.
+  Row: `{ at, event, detail, by }` (ISO instant / short label / one-line / who).
+- **`GET /admin/acks`** — current acks (one per kind), for the Home dots:
+
+  ```json
+  [ { "kind": "ai-review", "ackedDate": "2026-06-28T15:00:00Z",
+      "cadenceDays": 30, "never": false, "ackedBy": "ed@…", "detail": "" } ]
+  ```
+
+- **`POST /admin/activity/ack`** — record/refresh one ack; also appends a
+  matching Activity Log entry ("AI settings reviewed", "Cardex reload reminder
+  set", …). Admin-flag required server-side. Body:
+
+  ```json
+  { "kind": "schedule-review", "cadenceDays": 60, "never": false, "detail": "" }
+  ```
+
+  `kind` ∈ `ai-review | activity-review | schedule-review | password-review |
+  cardex-snooze | purge-snooze | license-snooze`. `cadenceDays` is cleared when
+  `never` is true.
+- **Requires** `dbo.RAdminReminderAck` in each RR database (in the SSDT project;
+  the install/upgrade creates it). If the table is absent the ack calls error —
+  the Home dots fall back to their existing client-side reminder read until
+  Phases 2–4 switch them to `/admin/acks`.
+
+---
+
 ## Model DMAAI Review (validate + approve the model)
 
 **Status: V8 wired (Home card + `accounting-model-review.html`); agent

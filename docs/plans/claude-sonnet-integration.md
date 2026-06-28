@@ -1,8 +1,12 @@
 # Claude (Sonnet) integration — VALC 2.0 + V8 UI
 
-**Status:** plan / not started. Owner is getting a Claude API key (Sonnet) next
-week. This doc proposes where it adds value, the architecture, and a phased
-rollout with a recommended Phase 1.
+**Status:** gateway built, live calls dark until the key lands. The VALC
+`AiService` + `AiController` (one-shot `/api/v1/ai/health` + `/explain`, Sonnet,
+server-side key, per-client tier cap) are in place, and the System Health
+surface shipped (UI #292/#293: Report Engine + Activity Log pages, and the
+per-feature AI Assistant opt-in page). Pending only `ANTHROPIC_API_KEY` on the
+VALC service → `/health` `configured:true` → smoke-test `/explain`. This doc
+proposes where it adds value, the architecture, and a phased rollout.
 
 **Model:** `claude-sonnet-4-6` — $3 / $15 per 1M tokens (in / out), 1M-token
 context, 64K max output. Sonnet is the right tier here: high-volume, latency-
@@ -217,6 +221,88 @@ with the owner this session:
   dependency, no regression). (2) Claude Assistant opt-in surface (UI now; wires
   to the per-(client,feature) flag + `AiController` when the key lands). (3)
   Activity Log (needs an event source — defer until one exists; scaffold first).
+
+## Home page — Support answers + To-Do enhancement (2026-06-28)
+
+Two home-page surfaces, decided with the owner this session. Both reuse the
+existing one-shot `/explain` (no new endpoint, no chat/conversation state) and
+both degrade to today's exact behavior when AI is off / unconfigured /
+unentitled. The Support work **concretizes Phase-2 items #5 and #6** against the
+real `HomeSearch` + `/explain` shapes; the To-Do work extends the deterministic
+`renderTodo()` roll-up.
+
+### Support section — docs-grounded grounded answers (recommended next surface)
+
+**Why first:** it's the **only AI surface that touches zero customer data** —
+answers come from the public KB, so it lives at the **docs** tier and is safe by
+construction. It's literally the "Help & how-to → Docs-grounded" feature already
+on the AI Assistant page, just not wired to anything yet.
+
+**Today** ([home.html:1282](../../RRV8/home.html)): two search cards — **RR
+University** (Lunr over the ~1 MB KB index, scoped to the user's modules) and
+**Help Desk** (custom matcher over the scenarios index). Each lazy-loads
+`Tools/home-search.js`, debounces keystrokes (200ms), and renders an inline
+drawer of doc/section links; Enter opens the full page with the query.
+
+**Pattern: retrieval-grounded answer layered on top of the existing search — not
+replacing it.**
+
+1. **Keystrokes stay local + instant** — the keyword drawer works exactly as
+   today (free, no latency, works for unentitled clients). This is the floor.
+2. **On Enter / an explicit "Ask AI" affordance**, take the top-K sections the
+   search already retrieved, send their text to `/explain`
+   (`feature=help`, `level=docs`) with a system prompt: *"answer using only these
+   RapidReconciler help excerpts; cite the doc titles; if it's not covered, say
+   so and point to the Help Desk."* Render the plain-English answer **above** the
+   link list, with the source docs linked beneath it.
+
+**Per-card prompts differ:**
+- **RR University** → conceptual ("what is RNV / how does weighted average
+  work") → a grounded explanation.
+- **Help Desk** → the higher-value one: the user is in a pain state with a
+  symptom, so synthesize the matching runbook into *"here's what to try, escalate
+  to `rrsupport@getgsi.com` if it persists"* instead of a list of links.
+  **Build Help Desk first** — biggest payoff, same risk profile.
+
+**Locked decisions:**
+- **Trigger** — keystroke = local search; Sonnet only on submit / explicit ask.
+  Cache by normalized query so re-asking is free.
+- **Gating** — show the AI answer only when `/ai/health` returns
+  `configured:true` **and** `maxLevel ≥ docs`; otherwise the section is unchanged.
+- **Citations are mandatory** — always show source links under the answer; an
+  unsourced paragraph isn't trustworthy and isn't the all-signal standard.
+- **Scope guard** — the prompt must keep the model inside the excerpts and inside
+  RR's model (RR has specific semantics — e.g. cardex aggregation grain — where
+  generic JDE advice would be wrong). "Not covered → say so."
+- **Latency** — list paints instantly; the answer loads into a labeled box above
+  it, never blocking.
+- **Open detail (confirm at build):** whether the search-index `body` field
+  carries enough text to ground a good answer, or retrieval should pull the
+  fuller doc section.
+
+### Today's To Do — enhance-on-expand (not a bot)
+
+**Today** ([home.html:3124](../../RRV8/home.html)): `renderTodo(s)` builds a
+deterministic per-role roll-up from the agent's `/home/status-summary` — for each
+role the viewer owns, if the section level isn't OK it lists the `items[]`. Pure
+data, no AI.
+
+**Enhancement:** keep the deterministic list as the source of truth + safety
+net, and fire a Sonnet pass **only when the To-Do lane is expanded** (the lane is
+already collapsible with persisted state) — once, **cached per (DB, day,
+status-hash)**. No cost on a collapsed or idle home load; the call happens only
+on a deliberate "show me." Sonnet **rewords + prioritizes** the existing items;
+it **never decides membership** (it must not drop or invent a real open item —
+the deterministic logic remains the gatekeeper).
+
+- **Data tier:** the roll-up names accounts/periods/companies → **scrubbed/full**.
+  Only entitled + configured clients get the AI version; everyone else keeps the
+  deterministic list (so the fallback is required regardless).
+- **Latency:** paint the deterministic list first, then progressively swap in the
+  AI-enhanced version; never block the home page on the model.
+
+Buildable now with graceful degradation — the unentitled/unconfigured path is
+fully testable without the key.
 
 ## Open questions for the owner
 

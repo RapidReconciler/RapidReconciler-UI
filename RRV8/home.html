@@ -913,27 +913,6 @@
     <span class="tag role" id="roleTag" hidden>&mdash;</span>
   </div>
 
-  <!-- ===================== Today's To Do (placeholder) =====================
-       A daily roll-up of what needs doing, grouped by role — the first thing
-       to act on, so it leads the page above Set Context. Populated client-side
-       by renderTodo() from the agent's /home/status-summary (the same source
-       as the lane headlines): deterministic + instant, no AI dependency. A
-       natural-language "here's your day" summary from Claude could later layer
-       on top once the key lands. Default expanded. Hidden during admin
-       first-run (see CSS). -->
-  <div class="section-head is-collapsible" id="todoSectionHead">
-    <span class="sect-badge todo"><span class="sb-dot"></span>Today&rsquo;s To Do</span>
-    <span class="sect-status" hidden></span>
-    <button type="button" class="sect-collapse" id="todoCollapse" aria-expanded="true" aria-controls="todoBody" title="Collapse Today&rsquo;s To Do">
-      <svg class="sect-collapse-chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
-    </button>
-  </div>
-  <div class="lane-body" id="todoBody">
-    <div class="todo-wrap" id="todoWrap">
-      <div class="todo-card"><div class="todo-allclear">Checking your open items&hellip;</div></div>
-    </div>
-  </div>
-
   <!-- ===================== Set Context (the scope hub) =====================
        Everything that answers "where am I working": the install (Database,
        tier 1 — the context the whole page is scoped to) and the working
@@ -981,6 +960,25 @@
       </div>
     </div>
    </div>
+  </div>
+
+  <!-- ===================== Today's To Do =====================
+       A daily roll-up of what needs doing, grouped by role. Sits directly
+       below Set Context (scope first, then the day's work). Populated client-
+       side by renderTodo() from /home/status-summary + the admin panel rollup
+       — the SAME counts the role bands show, so the To Do total always matches
+       the bands. Default expanded. Hidden during admin first-run (see CSS). -->
+  <div class="section-head is-collapsible" id="todoSectionHead">
+    <span class="sect-badge todo"><span class="sb-dot"></span>Today&rsquo;s To Do</span>
+    <span class="sect-status" hidden></span>
+    <button type="button" class="sect-collapse" id="todoCollapse" aria-expanded="true" aria-controls="todoBody" title="Collapse Today&rsquo;s To Do">
+      <svg class="sect-collapse-chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+    </button>
+  </div>
+  <div class="lane-body" id="todoBody">
+    <div class="todo-wrap" id="todoWrap">
+      <div class="todo-card"><div class="todo-allclear">Checking your open items&hellip;</div></div>
+    </div>
   </div>
 
   <!-- What's New — newest customer release notes, pulled live from
@@ -1365,6 +1363,10 @@
     if (contentType) h['Content-Type'] = contentType;
     return h;
   }
+  // Bumped on every database switch (see the #dbSelect handler). rrFetch
+  // captures it per call so a per-DB request still in flight when the user
+  // switches can't paint the new DB's surfaces with the prior DB's data.
+  var _dbGen = 0;
   function rrFetch(area, opts) {
     opts = opts || {};
     if (IS_DEMO) {
@@ -1372,6 +1374,13 @@
       return fetch((RR_CONFIG.dataPath || 'data/') + file, { cache: 'no-store' })
         .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status + ' on ' + file); return r.json(); });
     }
+    var gen = _dbGen;                     // DB generation at call time
+    // A response is dropped if the active DB changed while it was in flight, so
+    // a prior DB's data can never paint the new DB's surfaces. This covers
+    // db-parameterized VALC admin routes (e.g. license-usage?database=…) too —
+    // NOT just agent routes. Only genuinely user/client-global calls (the
+    // message center, AI health) are exempt, so a switch can't hide them.
+    var dbScoped = !/^api\/v1\/(messages|ai)\b/.test(area);
     var base;
     if (_routesToValc(area)) {
       base = RR_CONFIG.valcBase || 'http://localhost:8080';
@@ -1392,6 +1401,17 @@
       headers: prodHeaders(opts.body ? 'application/json;charset=UTF-8' : null),
       body:    opts.body ? JSON.stringify(opts.body) : undefined
     }).then(function (r) {
+      // Stale-switch guard: if the active database changed while this per-DB
+      // request was in flight, drop the response so the prior DB's data can't
+      // clobber the new DB's surfaces. Consume the body FIRST so the browser
+      // releases the socket — an unread fetch body pins the connection, and a
+      // few rapid switches would exhaust the per-host pool and hang every later
+      // request. The never-settling promise then keeps the caller's .then/.catch
+      // from running; the post-switch reload (new generation) owns the repaint.
+      if (dbScoped && gen !== _dbGen) {
+        return (r.body ? r.text().catch(function () {}) : Promise.resolve())
+          .then(function () { return new Promise(function () {}); });
+      }
       if (!r.ok) {
         // Surface the agent's JSON {reason} (e.g. "SQLServerAgent is not
         // currently running") instead of a bare status code — admins get a
@@ -1403,6 +1423,11 @@
         });
       }
       return r.json().catch(function (e) { return e instanceof SyntaxError ? null : Promise.reject(e); });
+    }, function (err) {
+      // Network-level failure: swallow it too if a switch superseded this
+      // request, so a stale rejection can't trip the caller's error fallback.
+      if (dbScoped && gen !== _dbGen) return new Promise(function () {});
+      throw err;
     });
   }
 
@@ -1499,6 +1524,11 @@
 
   // ---- shared status state (feeds the Service-health card + readiness) ----
   var _connDown = false, _period = '', _jobStatus = '', _periods = [];
+  // Set true by the #dbSelect handler so the next /inventory/status read resets
+  // the working period to the NEW database's open period (its sticky period from
+  // the prior DB isn't valid against the new calendar). A plain reload leaves it
+  // false, so the analyst's chosen month is preserved.
+  var _dbSwitched = false;
   // Grace before a brief unreachability (e.g. a ~30s service restart) reads as a
   // hard outage. Within the window the card shows "Reconnecting…" (amber); only
   // sustained downtime escalates to red "Not responding". Mirrors the
@@ -2442,14 +2472,18 @@
         _period = fmtPeriod(rf.period);
         $('periodPill').textContent = 'Period: ' + _period;
         $('periodPill').hidden = false;
-        // Seed the open period as the active default only when the analyst
-        // hasn't already picked one (don't clobber their choice on reload /
-        // DB switch). The picker (loadPeriods) lets them change it.
+        // Seed the open period as the active default when the analyst hasn't
+        // picked one yet, OR on a DB switch — the prior DB's sticky period isn't
+        // valid against the new calendar, so reset to this DB's open period
+        // (re-publishing it makes it the freshest cross-page cache entry, so the
+        // picker + every work page resolve to the new DB, not the old one). A
+        // plain reload (_dbSwitched false) preserves the analyst's chosen month.
         if (window.RRV8 && window.RRV8.setActiveScope && window.RRV8.readSessionScope
-            && !window.RRV8.readSessionScope().period) {
+            && (_dbSwitched || !window.RRV8.readSessionScope().period)) {
           window.RRV8.setActiveScope({ period: rf.period });
         }
       }
+      _dbSwitched = false;   // consume the switch flag once the new DB's status is in
       renderScopeBar();
       renderReadiness();
     }).catch(function (err) {
@@ -2935,43 +2969,18 @@
     $('dbSelect').addEventListener('change', function (e) {
       var i = parseInt(e.target.value, 10);
       if (isNaN(i)) return;
-      window.RR_SESSION.activeDbIndex = i;
-      // Wipe ALL per-DB derived state before the reloads fire, so nothing from
-      // the prior install bleeds onto the new one (stale cardex tolerances,
-      // roll-forward rows, install facts, service health, etc.).
-      resetScopedState();
-      // Persist the DB choice so it flows to the work pages (sticky like
-      // company/period), not just this page.
-      try {
-        var db = (window.RR_SESSION.dbs || [])[i];
-        if (db && db.n && window.RRV8 && window.RRV8.setActiveDatabase) {
-          window.RRV8.setActiveDatabase(db.n);
-        }
-      } catch (_) {}
-      renderDatabases();
-      renderScopeBar();
-      renderTiles();
-      renderRoleView();
-      reflectDmaai();
-      autoWarmDmaais();
-      autoWarmCardex();
-      loadModelApproval();
-      loadPurgeInfo();
-      loadFiscalStatus();
-      loadTeamReview();
-      setPwPolicyDot();
-      loadReloadGlStatus();
-      loadReloadCardexStatus();
-      loadRefreshSchedule();
-      setAiDot();
-      setActivityDot();
-      loadStatus();
-      loadInventoryLight();
-      loadCardexTolerance();
-      loadSystemStatus();
-      loadPeriods();
-      loadServiceMemory();
-      loadHomeStatusSummary();
+      var db = (window.RR_SESSION.dbs || [])[i];
+      if (!db || !db.n) return;
+      // Single source of truth for "the active database": persist by name AND
+      // point RR_SESSION at it in one call, so the in-memory index and the
+      // sticky localStorage value can never drift (the drift that scoped a
+      // reminder to the wrong DB). Everything below derives from this.
+      if (window.RRV8 && window.RRV8.setActiveDatabase) window.RRV8.setActiveDatabase(db.n);
+      else window.RR_SESSION.activeDbIndex = i;
+      _dbGen++;             // invalidate every in-flight per-DB request from the prior DB
+      _dbSwitched = true;   // reset the working period to the new DB's open period
+      resetScopedState();   // wipe every per-DB surface so nothing bleeds in the reload window
+      loadActiveDbSurfaces(); // the SAME loader list boot uses — paint the new DB end to end
     });
   }
 
@@ -3050,10 +3059,72 @@
     if (!grid) return;
     var panels = grid.querySelectorAll('.panel');
     for (var i = 0; i < panels.length; i++) { tintPanel(panels[i]); paintPanelSummary(panels[i]); }
-    // The role bands' status tint is driven by setSectStatus() off the
-    // /home/status-summary level (one source for the dot + the band), not from
-    // these per-panel tints. tintPanel above still colors the individual panels.
-    // Per-panel status still tints the individual panels (tintPanel above).
+    // Roll the per-panel states up into the Administrator band: the bar must
+    // never read calmer than its worst card. syncAdminBand() floors the band to
+    // the worst sub-panel (People & Licensing / Data Management / System Health
+    // / Utilities); the server's s.admin level wins only when it's MORE severe.
+    // (Previously the band was server-only and could show green over amber
+    // cards — the case the owner flagged on a _NA switch.)
+    syncAdminBand();
+    // Keep Today's To Do in lockstep: its admin items come from these same
+    // panels, so re-roll it whenever a panel dot changes (using the cached
+    // status-summary for the analyst/accountant rows).
+    if (typeof renderTodo === 'function') renderTodo(_lastStatusSummary);
+  }
+  // --- Administrator band roll-up ------------------------------------------
+  // The band's tint + collapsed headline reflect max(server s.admin level, worst
+  // admin sub-panel). The server level is captured on each /home/status-summary
+  // read (setSectStatus delegates here for the admin head); tintPanels() re-runs
+  // this whenever a panel dot changes, so the bar tracks the cards live.
+  var BAND_RANK = { '': 0, ok: 1, watch: 2, attention: 3 };
+  var _adminServerLvl = '';        // raw level the server reported for s.admin
+  var _adminServerHeadline = '';   // server's admin headline (used when server-driven)
+  function worstAdminPanelLvl() {
+    var grid = document.querySelector('#view-admin .lower-grid'); if (!grid) return '';
+    var panels = grid.querySelectorAll('.panel'), worst = '';
+    for (var i = 0; i < panels.length; i++) {
+      var p = panels[i];
+      var l = p.classList.contains('status-red') ? 'attention'
+            : p.classList.contains('status-amber') ? 'watch'
+            : p.classList.contains('status-green') ? 'ok' : '';
+      if (BAND_RANK[l] > BAND_RANK[worst]) worst = l;
+    }
+    return worst;
+  }
+  function countNonOkAdminPanels() {
+    var grid = document.querySelector('#view-admin .lower-grid'); if (!grid) return 0;
+    var panels = grid.querySelectorAll('.panel'), n = 0;
+    for (var i = 0; i < panels.length; i++) {
+      if (panels[i].classList.contains('status-amber') || panels[i].classList.contains('status-red')) n++;
+    }
+    return n;
+  }
+  function syncAdminBand() {
+    var head = document.querySelector('#adminSectionHead'); if (!head) return;
+    var server = _adminServerLvl, panel = worstAdminPanelLvl();
+    var flooredByPanel = BAND_RANK[panel] > BAND_RANK[server];
+    var lvl = flooredByPanel ? panel : server;
+    head.classList.remove('band-green', 'band-amber', 'band-red');
+    if (lvl === 'attention') head.classList.add('band-red');
+    else if (lvl === 'watch') head.classList.add('band-amber');
+    else if (lvl === 'ok')    head.classList.add('band-green');
+    var el = head.querySelector('.sect-status'); if (!el) return;
+    var dot = lvl === 'attention' ? 'red' : lvl === 'watch' ? 'amber' : lvl === 'ok' ? 'green' : '';
+    var headline;
+    if (lvl === 'ok')      headline = 'All clear';
+    else if (lvl === '')   headline = '';
+    else if (flooredByPanel) {
+      var n = countNonOkAdminPanels();
+      var noun = n === 1 ? '1 area' : n + ' areas';
+      headline = lvl === 'attention'
+        ? noun + (n === 1 ? ' needs attention' : ' need attention')
+        : noun + ' to review';
+    } else headline = _adminServerHeadline;
+    el.innerHTML = headline
+      ? '<span class="ss-dot ' + dot + '"></span><span class="ss-text">' + esc(headline) + '</span>'
+      : '';
+    var body = $('adminBody');
+    el.hidden = !(headline && body && body.classList.contains('is-collapsed'));
   }
   function watchPanelTints() {
     var grid = document.querySelector('#view-admin .lower-grid');
@@ -3091,6 +3162,14 @@
   // manager re-checks visibility on toggle.
   function setSectStatus(headSel, bodyId, sec) {
     var head = document.querySelector(headSel); if (!head) return;
+    // The Administrator band is owned by syncAdminBand(), which floors the
+    // server level to the worst sub-panel. Capture the server inputs + delegate.
+    if (headSel === '#adminSectionHead') {
+      _adminServerLvl = (sec && sec.level) || '';
+      _adminServerHeadline = (sec && sec.headline) || '';
+      syncAdminBand();
+      return;
+    }
     // Band STATUS tint follows the lane level (green/amber/red), independent of
     // the collapsed/expanded headline below. Cleared first so a recovery
     // (red->green) repaints; an unknown level leaves the band neutral.
@@ -3100,7 +3179,11 @@
     else if (lvl === 'watch') head.classList.add('band-amber');
     else if (lvl === 'ok')    head.classList.add('band-green');
     var el = head.querySelector('.sect-status'); if (!el) return;
-    var headline = sec && sec.headline;
+    // A healthy band reads uniformly as "All clear" (owner's call) — the server's
+    // per-role ok headline varies ("Service healthy", "In balance for the open
+    // period"), but green only needs to say it's green. Amber/red keep the
+    // server's specific, informative headline.
+    var headline = (sec && sec.level === 'ok') ? 'All clear' : (sec && sec.headline);
     if (headline) {
       var dot = sec.level === 'attention' ? 'red' : sec.level === 'watch' ? 'amber' : sec.level === 'ok' ? 'green' : '';
       el.innerHTML = '<span class="ss-dot ' + dot + '"></span><span class="ss-text">' + esc(headline) + '</span>';
@@ -3108,40 +3191,68 @@
     var body = $(bodyId);
     el.hidden = !(headline && body && body.classList.contains('is-collapsed'));
   }
-  // Today's To Do — the placeholder roll-up. Maps each role to its
-  // status-summary section, the cap that decides whether the viewer can act on
-  // it, and the role pill color (matches the role bands so the groups read at a
-  // glance). color is the analyst violet / accountant blue / admin navy.
+  // Today's To Do — the per-role roll-up. Maps each role to its source, the cap
+  // that decides whether the viewer can act on it, and the role pill color
+  // (matches the role bands). color is the analyst violet / accountant blue /
+  // admin navy.
   var TODO_ROLES = [
     { key: 'admin',   label: 'Administrator', color: '#3b4d72',      can: function () { return caps().adm; } },
     { key: 'analyst', label: 'Analyst',       color: 'var(--violet)', can: function () { return canAnalyst(); } },
     { key: 'finance', label: 'Accountant',    color: 'var(--blue)',   can: function () { return caps().inv; } }
   ];
-  // Build the per-role to-do card from the /home/status-summary roll-up. A role
-  // contributes only when the viewer can act on it AND its level isn't OK (an
-  // OK/empty role has nothing to do). Pass null (no endpoint / no answer) for a
-  // neutral placeholder; an all-good summary shows the all-clear state.
+  var _lastStatusSummary = null;   // last /home/status-summary, so tintPanels() can re-run renderTodo
+  // Admin to-do items come from the live admin PANELS (the same source the
+  // Administrator band rolls up via syncAdminBand), NOT s.admin — so the To Do
+  // count always matches the band. Each non-OK panel becomes one item:
+  // "<title> — <summary>" carrying its own level.
+  function adminTodoItems() {
+    var grid = document.querySelector('#view-admin .lower-grid'); if (!grid) return [];
+    var panels = grid.querySelectorAll('.panel'), out = [];
+    for (var i = 0; i < panels.length; i++) {
+      var p = panels[i];
+      var level = p.classList.contains('status-red') ? 'attention'
+                : p.classList.contains('status-amber') ? 'watch' : null;
+      if (!level) continue;
+      var h = p.querySelector('.panel-head h3');
+      var sum = p.querySelector('.panel-summary');
+      var title = h ? h.textContent.trim() : '';
+      var msg = sum ? sum.textContent.trim() : '';
+      out.push({ text: (title && msg) ? (title + ' — ' + msg) : (title || msg), level: level });
+    }
+    return out;
+  }
+  // Build the per-role to-do card. Admin pulls from adminTodoItems() (panel
+  // rollup); analyst/accountant from the status-summary (which also drives
+  // their bands). Pass null for a neutral placeholder; an all-good state shows
+  // the all-clear message.
   function renderTodo(s) {
     var wrap = $('todoWrap'); if (!wrap) return;
     var hasData = s && typeof s === 'object';
     var groups = [], total = 0;
     TODO_ROLES.forEach(function (r) {
       if (!r.can()) return;                          // only roles this user owns
-      var sec = hasData ? s[r.key] : null;
-      var level = sec && sec.level;
-      if (!sec || level === 'ok' || level === 'clear') return;   // nothing to do
-      var items = (sec && Array.isArray(sec.items) && sec.items.length)
-        ? sec.items
-        : (sec && sec.headline ? [sec.headline] : []);
+      var items;   // [{ text, level }]
+      if (r.key === 'admin') {
+        items = adminTodoItems();                    // same source as the Administrator band
+      } else {
+        var sec = hasData ? s[r.key] : null;
+        var level = sec && sec.level;
+        if (!sec || level === 'ok' || level === 'clear') { items = []; }
+        else {
+          var raw = (Array.isArray(sec.items) && sec.items.length) ? sec.items
+                  : (sec.headline ? [sec.headline] : []);
+          items = raw.map(function (t) { return { text: t, level: level }; });
+        }
+      }
       if (!items.length) return;
       total += items.length;
-      var dot = level === 'attention' ? 'red' : level === 'watch' ? 'amber' : '';
       groups.push(
         '<div class="todo-group">' +
           '<div class="todo-group-head"><span class="tg-dot" style="background:' + r.color + '"></span>' + esc(r.label) + '</div>' +
           '<ul class="todo-list">' +
-            items.map(function (t) {
-              return '<li><span class="ti-dot ' + dot + '"></span><span>' + esc(t) + '</span></li>';
+            items.map(function (it) {
+              var dot = it.level === 'attention' ? 'red' : it.level === 'watch' ? 'amber' : '';
+              return '<li><span class="ti-dot ' + dot + '"></span><span>' + esc(it.text) + '</span></li>';
             }).join('') +
           '</ul>' +
         '</div>'
@@ -3156,17 +3267,21 @@
       wrap.innerHTML = '<div class="todo-card"><div class="todo-allclear">' +
         'Your daily to-do list will appear here once the data service reports open items.</div></div>';
     }
-    setTodoStatus(hasData ? total : -1);
+    setTodoStatus((hasData || groups.length) ? total : -1);
   }
   // Collapsed-band headline for Today's To Do (shown only while collapsed).
   // total<0 = no data yet.
   function setTodoStatus(total) {
     var head = $('todoSectionHead'); if (!head) return;
     var el = head.querySelector('.sect-status'); if (!el) return;
+    // Tint the band like the role bands: green when caught up, amber when there
+    // are open items, neutral until data loads. The tint shows whether the lane
+    // is open or collapsed (the dot/text below only show while collapsed).
+    head.classList.remove('band-green', 'band-amber', 'band-red');
     var dot, txt;
     if (total < 0)       { dot = '';      txt = 'Your to-do list'; }
-    else if (total > 0)  { dot = 'amber'; txt = total + (total === 1 ? ' item needs attention' : ' items need attention'); }
-    else                 { dot = 'green'; txt = 'All caught up'; }
+    else if (total > 0)  { dot = 'amber'; txt = total + (total === 1 ? ' item needs attention' : ' items need attention'); head.classList.add('band-amber'); }
+    else                 { dot = 'green'; txt = 'All caught up'; head.classList.add('band-green'); }
     el.innerHTML = '<span class="ss-dot ' + dot + '"></span><span class="ss-text">' + txt + '</span>';
     var body = $('todoBody');
     el.hidden = !(body && body.classList.contains('is-collapsed'));
@@ -3177,6 +3292,7 @@
     var lockedAnalyst = !canAnalyst();
     rrFetch('home/status-summary').then(function (s) {
       if (!s || typeof s !== 'object') throw new Error('empty');
+      _lastStatusSummary = s;   // cached so tintPanels() can re-run renderTodo as admin panels resolve
       // Pills keep their stable lane-identity color; status is conveyed by the
       // headline dot below (setSectStatus), never by tinting the pill.
       if (lockedAdmin) fillLaneSummary('adminSummaryList', s.admin);
@@ -3192,6 +3308,7 @@
       // already explains the no-access state, so just clear the "Checking…".
       if (lockedAdmin)   fillLaneSummary('adminSummaryList', null);
       if (lockedAnalyst) fillLaneSummary('analystSummaryList', null);
+      _lastStatusSummary = null;
       renderTodo(null);   // neutral placeholder when the endpoint is absent
     });
   }
@@ -3211,6 +3328,7 @@
     _invLightFromData = false;  // re-arm the /inventory/status validation fallback for the new DB
     _purgeInfo = null;          // data-from + size (feeds the Scope strip) + the purge modal
     _svcMem = null;             // service-health memory snapshot (per Services instance)
+    _rcdxPreview = null;        // cached cardex eod-check — clear so a mid-switch repaint can't use the prior DB's
     _dbFacts = null; _dbRefresh = null;   // install-facts strip (size / SQL build / data currency)
     _jobStatus = ''; _period = ''; _periods = [];
 
@@ -3233,6 +3351,31 @@
     if (rfSub) rfSub.textContent = 'Pull the latest from JDE into this database';
     var sysPill = $('sysPill'); if (sysPill) { sysPill.classList.remove('good', 'warn', 'bad'); sysPill.hidden = true; }
     var pPill = $('periodPill'); if (pPill) { pPill.hidden = true; pPill.textContent = 'Period: —'; }
+    // People & Licensing — both rows read db-scoped data (license-usage by db,
+    // access-reviews for the client); grey them so the prior DB's seats/team
+    // status can't linger in the reload window.
+    var licDot = $('licenseDot'); if (licDot) { licDot.className = 'row-dot grey'; licDot.title = ''; }
+    var licSub = $('licenseSub'); if (licSub) licSub.textContent = 'Company seats & entitlements';
+    var tmDot = $('teamDot'); if (tmDot) { tmDot.className = 'row-dot grey'; tmDot.title = ''; }
+    var tmSub = $('teamSub'); if (tmSub) tmSub.textContent = 'Users, roles & access';
+    // Data Management — purge (db cutoff/size) + fiscal-period detect (db scan).
+    var pgDot = $('purgeDot'); if (pgDot) { pgDot.className = 'row-dot grey'; pgDot.title = ''; }
+    var pgSub = $('purgeSub'); if (pgSub) pgSub.textContent = 'Move the data start date forward to free up space.';
+    var fpDot = $('fiscalDot'); if (fpDot) { fpDot.className = 'row-dot grey'; fpDot.title = ''; }
+    // System Health review dots (AI / Activity / password) read the NEW db's key
+    // when their loaders run a beat later; grey them now so the prior DB's
+    // reviewed/amber state can't flash through the switch.
+    var aiD = $('aiDot'); if (aiD) aiD.className = 'row-dot grey';
+    var acD = $('activityDot'); if (acD) acD.className = 'row-dot grey';
+    var pwD = $('pwPolicyDot'); if (pwD) pwD.className = 'row-dot grey';
+    // Role-band tints + the To Do roll-up derive from all of the above. Clear the
+    // cached summary, the admin server-level, and every band tint so no stale
+    // band/summary survives into the new DB's load window.
+    _lastStatusSummary = null;
+    _adminServerLvl = ''; _adminServerHeadline = '';
+    ['adminSectionHead', 'analystSectionHead', 'modSectionHead', 'todoSectionHead'].forEach(function (id) {
+      var h = $(id); if (h) h.classList.remove('band-green', 'band-amber', 'band-red');
+    });
     updateServiceCard();   // repaint the Service Health card from the now-cleared _svcMem
   }
 
@@ -3285,6 +3428,42 @@
     });
   }
 
+  // Single source of truth for "paint everything that depends on the active
+  // database." Called once on boot (after hydrate) AND on every DB switch, so
+  // the two paths can NEVER diverge — every per-DB surface is (re)loaded for the
+  // active DB, and nothing from a prior DB is left behind. Add a new per-DB
+  // surface HERE (not in boot() or the switch handler) and it's covered in both.
+  // NOT included: user-identity (renderIdentity) and user-global (loadMessages) —
+  // those aren't per-database and live in boot() only.
+  function loadActiveDbSurfaces() {
+    renderDatabases();
+    renderScopeBar();
+    renderTiles();
+    renderRoleView();
+    checkFirstRun();
+    paintLicenseHealth();
+    reflectDmaai();
+    autoWarmDmaais();
+    autoWarmCardex();
+    loadModelApproval();
+    loadPurgeInfo();
+    loadFiscalStatus();
+    loadTeamReview();
+    setPwPolicyDot();
+    loadReloadGlStatus();
+    loadReloadCardexStatus();
+    loadRefreshSchedule();
+    setAiDot();
+    setActivityDot();
+    loadStatus();
+    loadInventoryLight();
+    loadCardexTolerance();
+    loadSystemStatus();
+    loadPeriods();
+    loadServiceMemory();
+    loadHomeStatusSummary();
+  }
+
   function boot() {
     // Auth gate: in real modes, no token → back to login.
     if (!IS_DEMO) {
@@ -3298,33 +3477,8 @@
       ? window.RRV8.hydrateSession() : Promise.resolve();
     hydrate.then(function () {
       renderIdentity();
-      renderDatabases();
-      renderScopeBar();
-      renderTiles();
-      renderRoleView();
-      checkFirstRun();
-      paintLicenseHealth();
-      reflectDmaai();
-      autoWarmDmaais();
-      autoWarmCardex();
-      loadModelApproval();
-      loadPurgeInfo();
-      loadFiscalStatus();
-      loadTeamReview();
-      setPwPolicyDot();
-      loadReloadGlStatus();
-      loadReloadCardexStatus();
-      loadRefreshSchedule();
-      setAiDot();
-      setActivityDot();
-      loadStatus();
-      loadInventoryLight();
-      loadCardexTolerance();
-      loadSystemStatus();
-      loadPeriods();
-      loadServiceMemory();
-      loadHomeStatusSummary();
-      loadMessages();
+      loadActiveDbSurfaces();   // everything per-DB, the same list the switch uses
+      loadMessages();           // user-global, not per-DB
       // Proactive cadence: re-read service health every 60s so a problem
       // building under load surfaces on its own, not just on a reload.
       setInterval(loadServiceMemory, 60000);
@@ -3346,6 +3500,10 @@
     setActivityDot();
     setPwPolicyDot();
     loadRefreshSchedule();
+    // Reload Cardex "Remind me" greens via a localStorage snooze; repaint it from
+    // the cached eod-check (preserved across a bfcache back-nav) so a reminder set
+    // on its page shows green the moment you return, without a refetch.
+    if (_rcdxPreview) setReloadCardexDot(_rcdxPreview);
   }
   document.addEventListener('visibilitychange', function () {
     if (document.visibilityState === 'visible') refreshReminderDots();
@@ -3456,8 +3614,8 @@
     function save() { try { localStorage.setItem(KEY, JSON.stringify({ s: sess(), c: state })); } catch (_) {} }
 
     var defs = [
-      { head: 'todoSectionHead',    grid: 'todoBody',    label: 'Today’s To Do', open: true },
       { head: 'scopeSectionHead',   grid: 'scopeBody',   label: 'Set Context' },
+      { head: 'todoSectionHead',    grid: 'todoBody',    label: 'Today’s To Do', open: true },
       { head: 'adminSectionHead',   grid: 'adminBody',   label: 'Administrator' },
       { head: 'analystSectionHead', grid: 'analystBody', label: 'Analyst' },
       { head: 'modSectionHead',     grid: 'moduleGrid',  label: 'Accountant' },
