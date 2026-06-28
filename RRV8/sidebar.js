@@ -1052,7 +1052,20 @@
    * @returns {string|null} ISO YYYY-MM-DD or null
    */
   function readCurrentPeriod() {
-    const raw = scanSessionForScope('currentPeriod');
+    // Read THIS database's published period only — never the newest across
+    // every (mode, db) tuple. The cross-DB "newest wins" scan carried a prior
+    // DB's month onto the active one, surfacing an out-of-range period with no
+    // data after a switch. Keyed exactly like publishCurrentPeriod, so
+    // cross-PAGE navigation within the SAME db still persists the picked month.
+    let raw = null;
+    try {
+      const session = global.RR_SESSION || {};
+      const dbs = Array.isArray(session.dbs) ? session.dbs : [];
+      const db = (dbs[session.activeDbIndex || 0] && dbs[session.activeDbIndex || 0].n) || '_';
+      const mode = (global.RR_CONFIG && global.RR_CONFIG.mode) || 'demo';
+      const stored = sessionStorage.getItem('rrv8.scope.v1.' + mode + '.' + db + '.currentPeriod');
+      if (stored) { const obj = JSON.parse(stored); raw = obj && obj.payload; }
+    } catch (_) {}
     if (raw == null) return null;
     const iso = (typeof raw === 'string') ? raw : (raw && raw.period) || null;
     return (iso && /^\d{4}-\d{2}-\d{2}$/.test(iso)) ? iso : null;
@@ -1077,6 +1090,36 @@
       const key = 'rrv8.scope.v1.' + mode + '.' + db + '.currentPeriod';
       sessionStorage.setItem(key, JSON.stringify({ ts: Date.now(), payload: period }));
     } catch (_) {}
+  }
+
+  // Per-DB cache of the fiscal calendar's newest closed period (the DB's "open
+  // period"), keyed like the scope cache. Pages that fetch /available-periods
+  // call cacheAvailablePeriods(); any page can then fall back to defaultPeriod()
+  // — the calendar's real open period — instead of a hardcoded date. Persisted
+  // in sessionStorage so a page that never fetches the calendar itself (e.g.
+  // Reconciliation) still gets the value once another page fetched it this DB.
+  function _openPeriodKey() {
+    const session = (global.RR_SESSION || {});
+    const dbs = Array.isArray(session.dbs) ? session.dbs : [];
+    const db = (dbs[session.activeDbIndex || 0] && dbs[session.activeDbIndex || 0].n) || '_';
+    const mode = (global.RR_CONFIG && global.RR_CONFIG.mode) || 'demo';
+    return 'rrv8.scope.v1.' + mode + '.' + db + '.openPeriod';
+  }
+  function cacheAvailablePeriods(list, serverDefault) {
+    try {
+      let newest = (typeof serverDefault === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(serverDefault))
+        ? serverDefault : null;
+      if (Array.isArray(list)) {
+        for (let i = 0; i < list.length; i++) {
+          const iso = (typeof list[i] === 'string') ? list[i] : (list[i] && list[i].period);
+          if (iso && /^\d{4}-\d{2}-\d{2}$/.test(iso) && (!newest || iso > newest)) newest = iso;
+        }
+      }
+      if (newest) sessionStorage.setItem(_openPeriodKey(), newest);
+    } catch (_) {}
+  }
+  function defaultPeriod() {
+    try { return sessionStorage.getItem(_openPeriodKey()) || ''; } catch (_) { return ''; }
   }
 
   // ============================================================
@@ -1430,10 +1473,17 @@
         e.stopPropagation();
         const idx = parseInt(btn.dataset.dbIndex, 10);
         if (isNaN(idx)) return;
-        global.RR_SESSION.activeDbIndex = idx;
-        renderUserChip();
-        buildUserMenu(opts);
-        positionUserMenu();
+        // Same DB picked — just close, no reload.
+        if (idx === (global.RR_SESSION.activeDbIndex || 0)) { closeUserMenu(); return; }
+        // Persist the sticky selection (single source of truth) and hard-reload
+        // so EVERY per-DB surface re-scopes to the new agent. Flipping
+        // activeDbIndex in place left the rendered/cached data from the prior
+        // DB on the page (cross-DB bleed); a reload re-boots cleanly against
+        // the new DB. DB switching is rare, so the reload cost is acceptable.
+        const dbs = (global.RR_SESSION && global.RR_SESSION.dbs) || [];
+        const name = dbs[idx] && dbs[idx].n;
+        if (name) { setActiveDatabase(name); } else { global.RR_SESSION.activeDbIndex = idx; }
+        global.location.reload();
       });
     });
 
@@ -1636,7 +1686,27 @@
     return 'amber';
   }
 
+  // --- Server ack -> legacy review "value" -----------------------------------
+  // Reminders are now recorded server-side per database (the per-DB agent's
+  // RAdminReminderAck, via GET /admin/acks). Each ack is
+  // { kind, ackedDate, cadenceDays, never, ... }. This converts one ack into the
+  // SAME "value" string the dot helpers above already understand — 'never', the
+  // next-due ISO date (ackedDate + cadenceDays), or '' (no ack / undecidable) —
+  // so complexPwReviewLevel / purgeRecommendation stay untouched while the
+  // source of truth moves from localStorage to the server. Retires the
+  // rrv8.*Review / *Snooze localStorage scatter (per-browser, drift-prone).
+  function ackToReviewValue(ack) {
+    if (!ack) return '';
+    if (ack.never) return 'never';
+    if (!ack.ackedDate || !ack.cadenceDays) return '';
+    var d = new Date(ack.ackedDate);
+    if (isNaN(d.getTime())) return '';
+    d.setDate(d.getDate() + Number(ack.cadenceDays));
+    return d.toISOString().slice(0, 10);
+  }
+
   global.RRV8 = global.RRV8 || {};
+  global.RRV8.ackToReviewValue        = ackToReviewValue;
   global.RRV8.purgeRecommendation     = purgeRecommendation;
   global.RRV8.complexPwReviewLevel    = complexPwReviewLevel;
   // Review Job Schedule uses the identical green/amber rule (future ISO date or
@@ -1660,6 +1730,9 @@
   global.RRV8.readSessionScope        = readSessionScope;
   global.RRV8.setActiveScope          = setActiveScope;
   global.RRV8.setActiveDatabase       = setActiveDatabase;
+  global.RRV8.resolveActiveDbIndex    = _resolveActiveDbIndex;
+  global.RRV8.cacheAvailablePeriods   = cacheAvailablePeriods;
+  global.RRV8.defaultPeriod           = defaultPeriod;
   global.RRV8.ensureInventoryStatus   = ensureInventoryStatus;
   global.RRV8.hydrateSession          = hydrateSession;
   global.RRV8.mountUserMenu           = mountUserMenu;

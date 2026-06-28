@@ -208,11 +208,24 @@
   }
   // admin/activity lives on the data-services agent (same place as
   // admin/service-health): resolve the active DB's agent, else the dev default.
-  function agentBase() {
-    var s = window.RR_SESSION || {};
-    var d = (Array.isArray(s.dbs) ? s.dbs : [])[s.activeDbIndex || 0];
-    if (d && d.ip) return (/^(?:localhost|127\.0\.0\.1)\b/i.test(d.ip) ? 'http://' : 'https://') + d.ip;
-    return RR_CONFIG.testAgentBase || 'http://localhost:34537';
+  function agentBase() { return window.RRDB.agentBase(); }   // canonical resolver (config.js RRDB)
+  // Minimal JSON helper against the active DB's agent (same base as agentBase()).
+  // Mirrors the rrFetch contract used by admin-claude-assistant.html for the
+  // ack endpoints: GET/POST JSON, Bearer auth, null body on empty 2xx.
+  function rrFetch(area, opts) {
+    opts = opts || {};
+    var headers = { 'Accept': 'application/json' };
+    try { var t = localStorage.getItem('rrv8.token'); if (t) headers['Authorization'] = 'Bearer ' + t; } catch (_) {}
+    if (opts.body) headers['Content-Type'] = 'application/json;charset=UTF-8';
+    var url = agentBase() + '/' + area + (opts.query ? '?' + new URLSearchParams(opts.query) : '');
+    return fetch(url, {
+      method: opts.method || 'GET',
+      headers: headers,
+      body: opts.body ? JSON.stringify(opts.body) : undefined
+    }).then(function (r) {
+      if (!r.ok) { var e = new Error('HTTP ' + r.status); e.status = r.status; throw e; }
+      return r.json().catch(function (err) { return err instanceof SyntaxError ? null : Promise.reject(err); });
+    });
   }
   var _allEvents = [];   // full fetched window; the search/type filter narrows this view
   function distinctTypes() {
@@ -276,9 +289,25 @@
   // RRV8.activityReviewLevel with the Home row dot.
   function fmtDate(iso) { try { return new Date(iso + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }); } catch (_) { return iso; } }
   function actReviewKey() { const a = activeDb() || {}; return 'rrv8.activityReview.' + (a.n || 'default'); }
+  // Server ack (kind 'activity-review') is the source of truth — recorded per
+  // database by the agent and shared with the Home dot via GET /admin/acks.
+  // localStorage is a write-through fallback for databases whose ack table
+  // predates this build.
+  var _actAck = null;
+  function loadActAck() {
+    if (!isAdmin()) return Promise.resolve();
+    return rrFetch('admin/acks').then(function (rows) {
+      _actAck = null; (rows || []).forEach(function (r) { if (r && r.kind === 'activity-review') _actAck = r; });
+    }).catch(function () { _actAck = null; });
+  }
+  function actReviewVal() {
+    var v = (_actAck && window.RRV8 && window.RRV8.ackToReviewValue) ? window.RRV8.ackToReviewValue(_actAck) : '';
+    if (!v) { try { v = localStorage.getItem(actReviewKey()) || ''; } catch (_) {} }
+    return v;
+  }
   function renderActReview() {
     const band = $('js-act-review'); if (!band) return;
-    let val = ''; try { val = localStorage.getItem(actReviewKey()) || ''; } catch (_) {}
+    let val = actReviewVal();
     const today = new Date().toISOString().slice(0, 10);
     const level = (window.RRV8 && window.RRV8.activityReviewLevel) ? window.RRV8.activityReviewLevel(val, today) : 'amber';
     band.classList.remove('is-green', 'is-amber'); band.classList.add('is-' + level);
@@ -290,10 +319,12 @@
     const band = $('js-act-review'); if (!band) return;
     band.querySelectorAll('.review-btn').forEach(function (btn) {
       btn.addEventListener('click', function () {
-        const days = parseInt(btn.dataset.days, 10) || 7;
-        const d = new Date(); d.setDate(d.getDate() + days);
-        try { localStorage.setItem(actReviewKey(), d.toISOString().slice(0, 10)); } catch (_) {}
-        renderActReview();
+        var cadenceDays = parseInt(btn.dataset.days, 10) || 7;
+        var d = new Date(); d.setDate(d.getDate() + cadenceDays); var val = d.toISOString().slice(0, 10);
+        rrFetch('admin/activity/ack', { method: 'POST', body: { kind: 'activity-review', cadenceDays: cadenceDays, never: false } })
+          .then(function (ack) { if (ack) _actAck = ack; })
+          .catch(function () { /* no ack table on this DB — localStorage fallback below */ })
+          .then(function () { try { localStorage.setItem(actReviewKey(), val); } catch (_) {} renderActReview(); });
       });
     });
   }
@@ -316,7 +347,8 @@
     var rb = $('js-log-refresh'); if (rb) rb.addEventListener('click', loadEvents);
     var sb = $('js-log-search'); if (sb) sb.addEventListener('input', applyLogFilter);
     var tf = $('js-log-type'); if (tf) tf.addEventListener('change', applyLogFilter);
-    renderActReview();
+    renderActReview();        // immediate paint from localStorage fallback …
+    loadActAck().then(renderActReview);   // … then refine from the server ack
     wireActReview();
   }
 

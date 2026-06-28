@@ -375,12 +375,16 @@
   // ---- company scope: the page honors the shared working-company scope (set on
   //      Home) — it shows only the in-scope companies. The [All|co|co] control is a
   //      local drill WITHIN that set; it does not write back to the shared scope. ----
+  // Active DB index — delegate to the ONE canonical resolver (config.js RRDB),
+  // which resolves the sticky rrv8.activeDb by name. Never read p.activeDbIndex
+  // (the JWT has no such field; it was always 0 → every fetch hit Dev).
+  function _activeDbIdx(dbs){ return (window.RRDB && window.RRDB.index()) || 0; }
   function _scopeCtx(){
     try{
       var token=localStorage.getItem('rrv8.token'); if(!token) return null;
       var b64=token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'); var pad=b64.length%4; if(pad) b64+='='.repeat(4-pad);
       var p=JSON.parse(decodeURIComponent(atob(b64).split('').map(function(c){return '%'+('00'+c.charCodeAt(0).toString(16)).slice(-2);}).join('')));
-      var dbs=p.dbs||[]; var idx=Number(p.activeDbIndex)||0; var dbObj=dbs[idx]||dbs[0]||{};
+      var dbs=p.dbs||[]; var idx=_activeDbIdx(dbs); var dbObj=dbs[idx]||dbs[0]||{};
       var mode=(window.RR_CONFIG&&RR_CONFIG.mode)||'demo';
       return { key:'rrv8.scope.v1.'+mode+'.'+((dbObj.n)||'_')+'.scope', allowed:(Array.isArray(dbObj.i)?dbObj.i.map(String):[]) };
     }catch(_){ return null; }
@@ -858,15 +862,14 @@
   }
 
   // ---- agent I/O (JWT-scoped; same token pattern as Account Roll Forward) ----
+  // Active DB's agent base — the ONE canonical resolver (config.js RRDB):
+  // selected DB's ip first, dev test-agent only as the no-ip fallback. Also
+  // paints the topbar DB name as a side-effect (kept from the old impl).
   function agentBaseFromToken(token){
-    try {
-      var b64=token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'); var pad=b64.length%4; if(pad) b64+='='.repeat(4-pad);
-      var p=JSON.parse(decodeURIComponent(atob(b64).split('').map(function(c){return '%'+('00'+c.charCodeAt(0).toString(16)).slice(-2);}).join('')));
-      var dbs=p.dbs||[]; var idx=Number(p.activeDbIndex)||0; var db=dbs[idx]||dbs[0];
-      if(db&&db.n){ var el=document.getElementById('topbarDb'); if(el) el.textContent=db.n; }
-      if(db&&db.ip) return (/^(localhost|127\.0\.0\.1)/i.test(db.ip)?'http://':'https://')+db.ip;
-    } catch(_){}
-    return null;
+    if(!window.RRDB) return null;
+    var db=window.RRDB.active();
+    if(db&&db.n){ var el=document.getElementById('topbarDb'); if(el) el.textContent=db.n; }
+    return window.RRDB.agentBase();
   }
   function token(){ try{ return localStorage.getItem('rrv8.token'); }catch(_){ return null; } }
   function tokenPayload(){ var t=token(); if(!t) return null;
@@ -879,7 +882,7 @@
   // Home preloads this behind the scenes; this page renders from it instantly, then refreshes.
   var RR_CONFIG = window.RR_CONFIG || {};
   var MODE = (new URLSearchParams(window.location.search).get('mode')) || RR_CONFIG.mode || 'demo';
-  function activeDbName(){ var p=tokenPayload(); if(!p) return '_'; var dbs=p.dbs||[]; var db=dbs[Number(p.activeDbIndex)||0]||dbs[0]; return (db&&db.n)||'_'; }
+  function activeDbName(){ return (window.RRDB && window.RRDB.name()) || '_'; }
   function cardexCacheKey(){ return 'rrv8.scope.v1.'+MODE+'.'+activeDbName()+'.cardexworklist'; }
   function readCardexCache(){ try{ var o=JSON.parse(sessionStorage.getItem(cardexCacheKey())||'null'); return o&&Array.isArray(o.payload)?o.payload:null; }catch(_){ return null; } }
   function writeCardexCache(rows){ try{ sessionStorage.setItem(cardexCacheKey(), JSON.stringify({ts:Date.now(), payload:rows})); }catch(_){} }

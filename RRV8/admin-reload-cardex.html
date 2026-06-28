@@ -209,8 +209,7 @@
     let base;
     if (_routesToValc(area)) { base = RR_CONFIG.valcBase || 'http://localhost:8080'; }
     else if (_routesToTestAgent(area)) {
-      const _d = window.RR_SESSION && window.RR_SESSION.dbs && window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex || 0];
-      base = (_d && _d.ip) ? ((/^(?:localhost|127\.0\.0\.1)\b/i.test(_d.ip) ? 'http://' : 'https://') + _d.ip) : (RR_CONFIG.testAgentBase || 'http://localhost:34537');
+      base = window.RRDB.agentBase();   // canonical active-DB agent resolver (config.js RRDB)
     } else {
       const sess = window.RR_SESSION; const db = sess && sess.dbs && sess.dbs[sess.activeDbIndex || 0];
       if (!db || !db.ip) return Promise.reject(new Error('No active database. Sign in first.'));
@@ -237,7 +236,23 @@
   // client-side override (shared key with Home, so it greens the Home dot too).
   var RCDX_SNOOZE_DAYS = 30;
   function cardexSnoozeKey() { var a = activeDb(); return 'rrv8.cardexReloadSnooze.' + ((a && a.n) || ''); }
+  // Server ack (kind 'cardex-snooze') is the source of truth, shared with the
+  // Home dot via GET /admin/acks; localStorage is a write-through fallback for
+  // databases whose ack table predates this build.
+  var _cdxAck = null;
+  function loadCdxAck() {
+    if (!isAdmin()) return Promise.resolve();
+    return rrFetch('admin/acks').then(function (rows) {
+      _cdxAck = null; (rows || []).forEach(function (r) { if (r && r.kind === 'cardex-snooze') _cdxAck = r; });
+    }).catch(function () { _cdxAck = null; });
+  }
   function cardexSnoozeUntil() {
+    if (_cdxAck && window.RRV8 && window.RRV8.ackToReviewValue) {
+      var v = window.RRV8.ackToReviewValue(_cdxAck);   // already the until-date (or 'never'/'' )
+      if (v === 'never') { var far = new Date(); far.setFullYear(far.getFullYear() + 50); return far; }
+      if (v) { var du = new Date(v + 'T00:00:00'); return isNaN(du.getTime()) ? null : du; }
+      return null;
+    }
     try {
       var iso = localStorage.getItem(cardexSnoozeKey()); if (!iso) return null;
       var d = new Date(iso + 'T00:00:00'); if (isNaN(d.getTime())) return null;
@@ -279,12 +294,20 @@
   document.addEventListener('click', function (e) {
     if (!e.target || !e.target.closest) return;
     if (e.target.closest('#js-eod-snooze')) {
-      try { localStorage.setItem(cardexSnoozeKey(), new Date().toISOString().slice(0, 10)); } catch (_) {}
-      renderEodBanner(); return;
+      rrFetch('admin/activity/ack', { method: 'POST', body: { kind: 'cardex-snooze', cadenceDays: RCDX_SNOOZE_DAYS, never: false } })
+        .then(function (ack) { if (ack) _cdxAck = ack; })
+        .catch(function () { /* no ack table — localStorage fallback */ })
+        .then(function () { try { localStorage.setItem(cardexSnoozeKey(), new Date().toISOString().slice(0, 10)); } catch (_) {} renderEodBanner(); });
+      return;
     }
     if (e.target.closest('#js-eod-clear')) {
-      try { localStorage.removeItem(cardexSnoozeKey()); } catch (_) {}
-      renderEodBanner(); return;
+      // No DELETE in the ack API — clear = a cadence-0 ack (reads as not-snoozed,
+      // i.e. the suggestion returns) while leaving an audit trail.
+      rrFetch('admin/activity/ack', { method: 'POST', body: { kind: 'cardex-snooze', cadenceDays: 0, never: false } })
+        .then(function (ack) { _cdxAck = ack || null; })
+        .catch(function () { _cdxAck = null; })
+        .then(function () { try { localStorage.removeItem(cardexSnoozeKey()); } catch (_) {} renderEodBanner(); });
+      return;
     }
   });
 
@@ -349,7 +372,9 @@
       if (from && /^\d{4}-\d{2}-\d{2}$/.test(from)) { $('js-from').value = from; loadPreview(); }
     } catch (_) {}
     // Run the end-of-day check so this page shows the suggestion + remind option
-    // on its own (not only when reached via the Home link).
+    // on its own (not only when reached via the Home link). Load the server snooze
+    // ack first so the banner reflects a reminder set on any browser.
+    loadCdxAck().then(renderEodBanner);
     loadEodCheck();
     // Guard against running a reload while a data refresh is in progress.
     if (!IS_DEMO) { checkJob(); setInterval(checkJob, 12000); }

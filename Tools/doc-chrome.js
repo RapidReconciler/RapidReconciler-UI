@@ -141,10 +141,12 @@
             '<span class="doc-kind-pill">' + pill.svg + ' ' + pill.label + '</span>' +
             timeHTML +
           '</div>' +
-          '<button type="button" class="doc-print-btn" onclick="window.print()" title="Print this document" aria-label="Print this document">' + PRINT_SVG + 'Print</button>' +
-          '<a class="doc-gsi" href="https://www.getgsi.com" target="_blank" rel="noopener" aria-label="GSI">' +
-            '<img src="' + GSI_LOGO + '" alt="GSI" />' +
-          '</a>' +
+          '<div class="doc-header-right">' +
+            '<button type="button" class="doc-print-btn" onclick="window.print()" title="Print this document" aria-label="Print this document">' + PRINT_SVG + 'Print</button>' +
+            '<a class="doc-gsi" href="https://www.getgsi.com" target="_blank" rel="noopener" aria-label="GSI">' +
+              '<img src="' + GSI_LOGO + '" alt="GSI" />' +
+            '</a>' +
+          '</div>' +
         '</div>' +
       '</div>';
   }

@@ -3201,7 +3201,10 @@
     if (!payload || !Array.isArray(payload.dbs) || !payload.dbs.length) return false;
     window.RR_SESSION.user = payload.user || null;
     window.RR_SESSION.dbs = payload.dbs;
-    window.RR_SESSION.activeDbIndex = 0;
+    // Honor the sticky rrv8.activeDb selection so a DB switch + reload lands on
+    // the chosen DB, not always dbs[0]. Falls to 0 when none is saved.
+    window.RR_SESSION.activeDbIndex = (window.RRV8 && window.RRV8.resolveActiveDbIndex)
+      ? window.RRV8.resolveActiveDbIndex(payload.dbs) : 0;
     window.RR_SESSION.token = token;
     return true;
   }
@@ -3211,7 +3214,8 @@
       const payload = await res.json();
       window.RR_SESSION.user = payload.user || null;
       window.RR_SESSION.dbs = payload.dbs || [];
-      window.RR_SESSION.activeDbIndex = 0;
+      window.RR_SESSION.activeDbIndex = (window.RRV8 && window.RRV8.resolveActiveDbIndex)
+        ? window.RRV8.resolveActiveDbIndex(window.RR_SESSION.dbs) : 0;
       window.RR_SESSION.token = null;
     } catch (_) { /* demo session is cosmetic; ignore failures */ }
   }
@@ -3267,10 +3271,7 @@
         // Switching the DB in the user-menu changes activeDbIndex and
         // therefore the agent we hit. Static testAgentBase remains as
         // a boot-race fallback when the session hasn't hydrated yet.
-        const _d = window.RR_SESSION && window.RR_SESSION.dbs && window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex || 0];
-        base = (_d && _d.ip)
-          ? ((/^(?:localhost|127\.0\.0\.1)\b/i.test(_d.ip) ? 'http://' : 'https://') + _d.ip)
-          : (RR_CONFIG.testAgentBase || 'http://localhost:34537');
+        base = window.RRDB.agentBase();   // canonical active-DB agent resolver (config.js RRDB)
       }
     } else {
       const db = window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex];
@@ -3357,6 +3358,10 @@
     const payload = await rrFetch('available-periods');
     _scopeMem.periods = payload;
     _scopeToStorage('periods', payload);
+    // Share the calendar's open period per-DB so other pages can default to it.
+    if (window.RRV8 && window.RRV8.cacheAvailablePeriods) {
+      window.RRV8.cacheAvailablePeriods(payload && payload.availablePeriods, payload && payload.defaultPeriod);
+    }
     return payload;
   }
   async function getInventoryStatus() {
@@ -3391,7 +3396,7 @@
     rf = rf || {};
     const period = _state.period
       || (window.RRV8 && window.RRV8.readCurrentPeriod && window.RRV8.readCurrentPeriod())
-      || rf.period || '2016-08-27';
+      || rf.period || (window.RRV8 && window.RRV8.defaultPeriod && window.RRV8.defaultPeriod()) || '';
     return {
       currencies:    applyGlNarrow(rf.currencies,    _glSelected.currencies),
       companies:     applyGlNarrow(rf.companies,     _glSelected.companies),
@@ -3796,10 +3801,7 @@
         // Switching the DB in the user-menu changes activeDbIndex and
         // therefore the agent we hit. Static testAgentBase remains as
         // a boot-race fallback when the session hasn't hydrated yet.
-        const _d = window.RR_SESSION && window.RR_SESSION.dbs && window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex || 0];
-        base = (_d && _d.ip)
-          ? ((/^(?:localhost|127\.0\.0\.1)\b/i.test(_d.ip) ? 'http://' : 'https://') + _d.ip)
-          : (RR_CONFIG.testAgentBase || 'http://localhost:34537');
+        base = window.RRDB.agentBase();   // canonical active-DB agent resolver (config.js RRDB)
       }
     } else {
       const db = window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex];
@@ -4059,7 +4061,7 @@
     return null;
   }
 
-  function defaultPeriod()       { return '2016-08-27'; } // fallback only — real value from /available-periods
+  function defaultPeriod()       { return (window.RRV8 && window.RRV8.defaultPeriod && window.RRV8.defaultPeriod()) || ''; } // calendar open period; real value from /available-periods
   function defaultPageSize()     { return 10000; }        // bulk fetch, see HANDOFF
   function defaultAggregateReq() {
     return [
@@ -6896,13 +6898,21 @@
     popUser.querySelectorAll('[data-db-index]').forEach(r => {
       r.addEventListener('click', () => {
         const idx = parseInt(r.dataset.dbIndex, 10);
-        if (!isNaN(idx)) {
+        if (isNaN(idx)) return;
+        // Same DB — no-op.
+        if (idx === (window.RR_SESSION.activeDbIndex || 0)) return;
+        // Persist the sticky selection and hard-reload so every per-DB surface
+        // re-scopes to the new agent. Flipping activeDbIndex in place left the
+        // prior DB's rows on the page — the cross-DB bleed. Reload is the cheap,
+        // bulletproof reset (DB switching is rare).
+        const _dbs = (window.RR_SESSION && window.RR_SESSION.dbs) || [];
+        const _name = _dbs[idx] && _dbs[idx].n;
+        if (_name && window.RRV8 && typeof window.RRV8.setActiveDatabase === 'function') {
+          window.RRV8.setActiveDatabase(_name);
+        } else {
           window.RR_SESSION.activeDbIndex = idx;
-          refreshUserChip();
-          buildUserPopover();
-          // In prod the DB switch should invalidate cache + refetch
-          // (next chunk). For now just rebuild the popover.
         }
+        location.reload();
       });
     });
     const signOut = popUser.querySelector('[data-action="sign-out"]');
