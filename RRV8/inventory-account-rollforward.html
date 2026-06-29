@@ -1,27 +1,26 @@
 <!DOCTYPE html>
 <!--
   =============================================================================
-  Inventory > Account Roll Forward  (Karen's account-level view)
+  Inventory > Account Roll Forward  (Andy the Analyst's workflow)
   =============================================================================
-  The live equivalent of the "Account Roll Forward Analysis" Export Analyzer
-  workbook: the GL + variance roll-forward by account and period, sourced from
-  raccountsummary. Two halves, mirroring the workbook's two sheets:
+  Home-style banded workflow for keeping the account roll-forward accurate.
+  Andy's question is simple: "is it accurate, and if not, which of my four
+  levers do I pull?" The four bands answer it top-to-bottom:
 
-    1) ANALYSIS  — integrity headline (GLOK / VarOK breaks), scope, the
-                   verify-before-acting disclaimer, findings / no-findings, and
-                   the action plan. (workbook "Analysis" sheet)
-    2) ROLL-FORWARD GRID — Beg GL -> Period GL -> End GL vs Perpetual, with the
-                   Cardex variance per account/period. Exportable to Excel.
-                   (workbook "Roll Forward" sheet)
+    1) TO DO              — break count + a drawer that summarizes what's off
+                            (GL side vs variance side, accounts/periods).
+    2) CONTEXT            — company scope (multi / All, JWT-scoped) + the
+                            period view; flows to the cards + the report.
+    3) CORRECTIVE ACTIONS — four live cards: Reload GL, R099102 repost,
+                            Re-roll companies, Reload Cardex.
+    4) AUDIT REPORT       — the roll-forward grid (Beg GL -> End GL vs
+                            Perpetual + cardex variance), Excel-exportable.
 
-  This is the account-level companion to inventory-cardex-variance.html (Daren's
-  per-item worklist): the end-period CardexVar here is the same number the
-  cardex card and the worklist reconcile to.
-
-  DEV DATA: reads data/account-rollforward.json — a real raccountsummary
-  snapshot for validation. That file is gitignored (real customer data); the
-  page degrades gracefully when it's absent. Production wiring will hit a
-  GET /inventory/account-rollforward agent endpoint (not yet built).
+  Data: v6ui_raccountsummary from the active DB's agent (POST /inventory/
+  integrity, JWT-scoped). Agent-first, no static fallback (production-only). The per-row GL
+  classifier + inline action-bar of the old page were retired — the levers now
+  live in band 3 (Reload GL / Reload Cardex reuse the admin pages; Re-roll is
+  its own page; R099102 is inline email + attest).
   =============================================================================
 -->
 <html lang="en">
@@ -31,11 +30,16 @@
 <title>Account Roll Forward &mdash; RapidReconciler</title>
 <link href="fonts/fonts.css" rel="stylesheet">
 <script src="config.js"></script>
-<script src="vendor/xlsx.full.min.js" defer></script>
+<!-- xlsx-js-style: SheetJS fork with cell styling (the community xlsx build can't
+     write fills) — used for the audit-quality export that highlights break rows. -->
+<script src="vendor/xlsx-js-style.min.js" defer></script>
+<!-- PDF text extraction for the R099102 report-checker (prototype; CDN). Production
+     should vendor this like xlsx/jspdf, or read the PDF natively via Claude. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" defer></script>
 <style>
   :root {
     --navy:#1f2d4a; --navy-deep:#142037; --blue:#2b5fb0; --blue-pale:#e6efff;
-    --green:#2e8a55; --green-pale:#def4e6; --orange:#f08a24; --orange-deep:#d97316; --orange-pale:#fbe7ce;
+    --green:#2e8a55; --green-pale:#def4e6; --amber:#f0a32a; --orange:#f08a24; --orange-deep:#d97316; --orange-pale:#fbe7ce;
     --red:#c0392b; --red-pale:#fce5e1; --grey-pale:#eceef3;
     --bg:#fafbfd; --bg-soft:#f3f5f9; --bg-card:#fff; --text:#1f2d4a; --text-soft:#4a5468; --text-muted:#828a9a;
     --rule:#e6eaf0; --rule-strong:#cfd6e0;
@@ -46,10 +50,15 @@
   h1,h2,h3,h4 { font-family:'Source Sans 3',sans-serif; font-weight:700; }
   a { color:inherit; text-decoration:none; }
 
-  .topbar { height:56px; background:var(--bg-card); border-bottom:1px solid var(--rule); display:flex; align-items:center; padding:0 24px; gap:10px; box-shadow:var(--shadow-sm); }
-  .topbar-logo { height:28px; }
-  .topbar-name { font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:14px; color:var(--navy); }
-  .topbar-db { font-family:'Source Sans 3',sans-serif; font-size:11px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; color:var(--text-muted); margin-left:auto; }
+  .topbar { height:56px; background:var(--bg-card); border-bottom:1px solid var(--rule); display:flex; align-items:center; padding:0 24px; box-shadow:var(--shadow-sm); }
+  .topbar-brand { display:flex; align-items:center; gap:12px; }
+  .topbar-brand-logo { height:28px; width:auto; display:block; }
+  .topbar-brand-text { display:flex; flex-direction:column; line-height:1.15; }
+  .topbar-brand-name { font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:15px; color:var(--navy); }
+  .topbar-brand-db { font-family:'Source Sans 3',sans-serif; font-size:11px; color:var(--text-muted); letter-spacing:.08em; text-transform:uppercase; }
+  .topbar-home { display:inline-flex; align-items:center; gap:6px; font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:12.5px; color:var(--text-soft); border:1px solid var(--rule-strong); border-radius:8px; padding:6px 12px; margin-left:auto; }
+  .topbar-home:hover { color:var(--blue); border-color:var(--blue); }
+  .topbar-home svg { width:14px; height:14px; }
 
   .page { max-width:1320px; margin:0 auto; padding:28px 26px 64px; }
   .breadcrumb { font-family:'Source Sans 3',sans-serif; font-size:11.5px; font-weight:700; letter-spacing:.10em; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px; }
@@ -57,74 +66,140 @@
   .page-title { font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:28px; color:var(--navy); letter-spacing:-.02em; }
   .page-eyebrow { font-size:12.5px; color:var(--text-muted); margin-top:5px; max-width:760px; }
 
-  /* action row: company picker + toggle + KPIs */
-  .actions { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin:20px 0 18px; }
+  /* ===== Bands (mirror Home's collapsible section-head + drawer body) ===== */
+  .band { margin:16px 0; }
+  .band-head {
+    cursor:pointer; padding:14px 18px; background:var(--bg-card); border:1px solid var(--rule);
+    border-radius:14px; box-shadow:var(--shadow-sm); transition:box-shadow .14s,border-color .14s,transform .14s;
+    display:flex; align-items:center; gap:14px;
+  }
+  .band-head:hover { border-color:var(--rule-strong); box-shadow:var(--shadow-md); transform:translateY(-1px); }
+  .band-head.band-green { background:var(--green-pale);  border-color:#c5e6d2; box-shadow:inset 4px 0 0 var(--green); }
+  .band-head.band-amber { background:var(--orange-pale); border-color:#f0d2a8; box-shadow:inset 4px 0 0 var(--orange); }
+  .band-head.band-red   { background:var(--red-pale);    border-color:#f1c9c3; box-shadow:inset 4px 0 0 var(--red); }
+  /* badge: the band's identity number + title */
+  .band-badge { display:inline-flex; align-items:center; gap:11px; }
+  .band-n { width:26px; height:26px; border-radius:8px; background:var(--navy); color:#fff; font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:13px; display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; }
+  .band-title { font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:15px; color:var(--navy); }
+  /* status: one-line roll-up shown in the head */
+  .band-status { flex:1; min-width:0; display:inline-flex; align-items:center; gap:8px; font-size:13px; font-weight:600; color:var(--text-soft); }
+  /* AI chip in the To Do header — shows the plan tier + signals AI is here. */
+  .ai-chip { display:inline-flex; align-items:center; gap:6px; flex-shrink:0; border:1px solid var(--rule-strong); background:var(--bg-card); border-radius:100px; padding:5px 12px; font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:11px; letter-spacing:.03em; color:var(--blue); cursor:pointer; }
+  .ai-chip:hover { border-color:var(--blue); background:var(--blue-pale); }
+  .ai-chip svg { width:14px; height:14px; }
+  .ai-chip.is-off { color:var(--text-muted); }
+  .ai-chip.is-off:hover { border-color:var(--rule-strong); background:var(--bg-card); }
+  .band-status .bs-text { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .band-status .bs-dot { width:11px; height:11px; border-radius:50%; background:var(--text-muted); flex-shrink:0; }
+  .band-status .bs-dot.green { background:var(--green); } .band-status .bs-dot.amber { background:var(--amber); } .band-status .bs-dot.red { background:var(--red); }
+  .band-chev { border:1px solid var(--rule-strong); background:var(--bg-card); color:var(--text-muted); border-radius:8px; width:30px; height:30px; display:inline-flex; align-items:center; justify-content:center; }
+  .band-head:hover .band-chev { color:var(--blue); border-color:var(--blue); background:var(--blue-pale); }
+  .band-chev svg { transition:transform .15s; }
+  .band-head[aria-expanded="false"] .band-chev svg { transform:rotate(-90deg); }
+  /* drawer body — merges into the band head (shared seam, continuous left bar) */
+  .band-body { border:1px solid var(--rule); border-top:0; border-radius:0 0 14px 14px; background:var(--bg-card); padding:18px; }
+  .band-head[aria-expanded="true"] { border-radius:14px 14px 0 0; }
+  .band-head.band-green[aria-expanded="true"] + .band-body { border-color:#c5e6d2; box-shadow:inset 4px 0 0 var(--green); }
+  .band-head.band-amber[aria-expanded="true"] + .band-body { border-color:#f0d2a8; box-shadow:inset 4px 0 0 var(--orange); }
+  .band-head.band-red[aria-expanded="true"]   + .band-body { border-color:#f1c9c3; box-shadow:inset 4px 0 0 var(--red); }
+  .band-body.is-collapsed { display:none; }
+
+  /* ===== Band 1 — To Do ===== */
+  .todo-side { margin-bottom:16px; } .todo-side:last-child { margin-bottom:0; }
+  .todo-side-h { font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:11px; letter-spacing:.07em; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px; display:flex; align-items:center; gap:8px; }
+  .todo-side-h .pip { width:9px; height:9px; border-radius:50%; }
+  .todo-side-h .pip.gl { background:var(--orange); } .todo-side-h .pip.var { background:var(--blue); }
+  .todo-line { font-size:13px; color:var(--text); line-height:1.55; }
+  .todo-accts { margin-top:6px; display:flex; flex-wrap:wrap; gap:6px; }
+  .todo-acct { font-family:'JetBrains Mono',ui-monospace,monospace; font-weight:700; font-size:11.5px; color:var(--blue); background:var(--blue-pale); border:1px solid rgba(43,95,176,.2); border-radius:6px; padding:2px 8px; cursor:pointer; }
+  .todo-acct:hover { background:#dbe8fb; }
+  .todo-rec { margin-top:14px; padding:10px 13px; border-radius:8px; background:var(--bg-soft); border:1px solid var(--rule); font-size:12.5px; color:var(--text-soft); }
+  .todo-rec b { color:var(--navy); }
+  .todo-clean { font-size:13.5px; color:var(--green); font-weight:600; display:flex; gap:9px; align-items:center; }
+  .todo-clean svg { width:18px; height:18px; flex-shrink:0; }
+
+  /* ===== Shared controls (company picker, period toggle) ===== */
   .picker-lbl { font-size:10px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); }
-  .seg { display:inline-flex; border:1px solid var(--rule-strong); border-radius:8px; overflow:hidden; }
+  .seg { display:inline-flex; border:1px solid var(--rule-strong); border-radius:8px; overflow:hidden; flex-wrap:wrap; }
   .seg-btn { border:0; background:var(--bg-card); padding:6px 13px; font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:12.5px; color:var(--text-soft); cursor:pointer; border-right:1px solid var(--rule); }
   .seg-btn:last-child { border-right:0; }
   .seg-btn:hover { background:var(--bg-soft); color:var(--text); }
   .seg-btn.is-on { background:var(--navy); color:#fff; }
   .toggle { display:inline-flex; align-items:center; gap:8px; font-size:12.5px; font-weight:700; color:var(--text-soft); cursor:pointer; user-select:none; }
   .toggle input { width:15px; height:15px; accent-color:var(--blue); }
-  .spacer { flex:1 1 auto; }
-  .kpi { display:inline-flex; flex-direction:column; align-items:flex-end; }
-  .kpi .lbl { font-size:10px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); }
-  .kpi .val { font-family:'JetBrains Mono',ui-monospace,monospace; font-weight:700; font-size:17px; color:var(--navy); font-variant-numeric:tabular-nums; }
-  .kpi .val.neg { color:var(--red); }
+  /* To Do scope row (company picker, now lives in Step 1) */
+  .todo-scope { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin:16px 0 4px; }
+  /* AI summary panel — appears when the band is expanded (AI kicks in). */
+  .ai-panel { border:1px solid #c2d8ef; background:var(--blue-pale); border-radius:10px; padding:14px 16px; margin-bottom:18px; }
+  .ai-panel[hidden] { display:none; }
+  .ai-panel-head { display:flex; align-items:center; gap:7px; font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:10.5px; letter-spacing:.07em; text-transform:uppercase; color:var(--blue); margin-bottom:9px; }
+  .ai-panel-head svg { width:14px; height:14px; }
+  .ai-panel-body { font-size:13.5px; color:var(--text); line-height:1.6; white-space:pre-wrap; }
+  .ai-panel.is-thinking .ai-panel-body { color:var(--text-muted); font-style:italic; }
+  .ai-panel.is-error { background:var(--orange-pale); border-color:#f0d2a8; }
+  .ai-panel-foot { margin-top:9px; font-size:10.5px; color:var(--text-muted); letter-spacing:.02em; }
 
-  /* analysis card */
-  .analysis { background:var(--bg-card); border:1px solid var(--rule); border-radius:14px; box-shadow:var(--shadow-sm); padding:18px 20px; margin-bottom:18px; }
-  .an-headline { display:flex; align-items:center; gap:11px; }
-  .an-badge { width:34px; height:34px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; }
-  .an-badge.ok { background:var(--green-pale); color:var(--green); }
-  .an-badge.warn { background:var(--orange-pale); color:var(--orange-deep); }
-  .an-badge svg { width:19px; height:19px; }
-  .an-title { font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:16px; color:var(--navy); }
-  .an-sub { font-size:12.5px; color:var(--text-soft); margin-top:1px; }
-  .an-scope { display:flex; gap:22px; flex-wrap:wrap; margin:14px 0 4px; padding-top:13px; border-top:1px solid var(--rule); }
-  .an-scope .k { font-size:10px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); }
-  .an-scope .v { font-family:'JetBrains Mono',ui-monospace,monospace; font-weight:700; font-size:13px; color:var(--navy); }
-  .an-note { font-size:12px; color:var(--text-soft); border-left:3px solid var(--orange); background:var(--orange-pale); border-radius:0 8px 8px 0; padding:9px 12px; margin-top:14px; }
-  .an-note b { color:var(--orange-deep); }
-  .an-find { font-size:13px; color:var(--text-soft); margin-top:14px; }
-  .an-find.ok { color:var(--green); font-weight:600; }
-  .ap { margin-top:16px; }
-  .ap h4 { font-size:12px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px; }
-  .ap-row { display:grid; grid-template-columns:26px 1fr; gap:12px; padding:9px 0; border-top:1px solid var(--rule); align-items:start; }
-  .ap-n { width:22px; height:22px; border-radius:50%; background:var(--navy); color:#fff; font-family:'JetBrains Mono',monospace; font-size:11px; font-weight:700; display:inline-flex; align-items:center; justify-content:center; }
-  .ap-txt { font-size:12.5px; color:var(--text); }
-  .ap-txt .owner { display:block; font-size:11px; color:var(--text-muted); margin-top:2px; }
-  /* Per-break what/how cards (the classified resolution playbook). */
-  .ap-cards { display:flex; flex-direction:column; gap:12px; }
-  .ap-card { border:1px solid var(--rule); border-left:4px solid var(--orange); border-radius:10px; padding:13px 15px; background:var(--bg-soft); }
-  .ap-card.var { border-left-color:var(--blue); }
-  .ap-cause { display:flex; align-items:center; gap:9px; flex-wrap:wrap; font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:14px; color:var(--navy); }
-  .ap-lever { font-size:10px; font-weight:800; letter-spacing:.05em; text-transform:uppercase; padding:2px 9px; border-radius:100px; background:var(--blue-pale); color:var(--blue); margin-left:auto; white-space:nowrap; }
-  .ap-where { font-family:'JetBrains Mono',ui-monospace,monospace; font-weight:700; font-size:11.5px; color:var(--text-soft); margin-top:3px; }
-  .ap-where.ap-jump { cursor:pointer; display:inline-flex; align-items:center; gap:5px; border-radius:6px; padding:1px 5px; margin-left:-5px; transition:background .12s,color .12s; }
-  .ap-where.ap-jump:hover { color:var(--blue); background:var(--blue-pale); }
-  .ap-where.ap-jump .ap-jump-ico { width:11px; height:11px; opacity:.7; }
-  .ap-acct { font-family:'JetBrains Mono',ui-monospace,monospace; font-weight:700; font-size:12px; color:var(--blue); background:none; border:none; padding:0; cursor:pointer; text-decoration:underline; text-underline-offset:2px; }
-  .ap-acct:hover { color:var(--navy); }
-  .ap-what { font-size:12.5px; color:var(--text); margin:7px 0 9px; line-height:1.5; }
-  ol.ap-how { margin:0; padding-left:18px; }
-  ol.ap-how li { font-size:12.5px; color:var(--text); line-height:1.5; margin-bottom:3px; }
-  .ap-wait { display:flex; gap:8px; margin-top:10px; padding:9px 11px; border-radius:8px; background:var(--orange-pale); border:1px solid #f0d2a8; font-size:11.5px; color:#7a4a13; line-height:1.45; }
-  .ap-wait b { color:var(--orange-deep); }
-  .ap-subhead { font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:10.5px; letter-spacing:.07em; text-transform:uppercase; color:var(--text-muted); margin:14px 0 8px; }
-  .ap-subhead:first-child { margin-top:2px; }
+  /* ===== Band 3 — Corrective Actions (four cards) ===== */
+  .corr-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(255px,1fr)); gap:14px; }
+  .corr-card { display:flex; flex-direction:column; border:1px solid var(--rule); border-radius:12px; padding:16px; background:var(--bg-card); transition:transform .12s,box-shadow .12s,border-color .12s; }
+  a.corr-card:hover { transform:translateY(-2px); box-shadow:var(--shadow-md); border-color:var(--rule-strong); }
+  .corr-card.gl   { border-top:3px solid var(--orange); }
+  .corr-card.var  { border-top:3px solid var(--blue); }
+  .corr-ico { width:36px; height:36px; border-radius:9px; display:grid; place-items:center; margin-bottom:11px; }
+  .corr-card.gl .corr-ico  { background:var(--orange-pale); color:var(--orange-deep); }
+  .corr-card.var .corr-ico { background:var(--blue-pale); color:var(--blue); }
+  .corr-ico svg { width:19px; height:19px; }
+  .corr-title { font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:14.5px; color:var(--navy); }
+  .corr-when { font-size:10px; font-weight:800; letter-spacing:.05em; text-transform:uppercase; color:var(--text-muted); margin:3px 0 7px; }
+  .corr-desc { font-size:12.5px; color:var(--text-soft); line-height:1.5; flex:1; }
+  .corr-foot { margin-top:12px; font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:12.5px; display:inline-flex; align-items:center; gap:6px; }
+  .corr-card.gl .corr-foot  { color:var(--orange-deep); }
+  .corr-card.var .corr-foot { color:var(--blue); }
+  .corr-foot svg { width:13px; height:13px; }
+  .corr-rec-banner { margin-bottom:14px; padding:10px 13px; border-radius:8px; background:var(--blue-pale); border:1px solid #c2d8ef; font-size:12.5px; color:var(--text); }
+  .corr-rec-banner b { color:var(--navy); }
+  /* GL workflow card states: R099102 (attest) gates Reload GL. */
+  .corr-card.state-active { background:var(--orange-pale); border-color:#f0d2a8; }
+  .corr-card.gl.state-active { border-top-color:var(--orange); }
+  .corr-card.state-done { background:var(--green-pale); border-color:#bfe6cd; }
+  .corr-card.gl.state-done { border-top-color:var(--green); }
+  .corr-card.is-gated { opacity:.5; pointer-events:none; background:var(--bg-soft); filter:grayscale(.35); }
+  .corr-state { margin-top:11px; font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:10px; letter-spacing:.06em; text-transform:uppercase; display:inline-flex; align-items:center; gap:6px; }
+  .corr-state[hidden] { display:none; }
+  .corr-state.active { color:var(--orange-deep); }
+  .corr-state.done { color:var(--green); }
+  .corr-state.gated { color:var(--text-muted); }
+  .corr-state svg { width:13px; height:13px; flex-shrink:0; }
+  /* R099102 inline drawer */
+  .r99-drawer { margin-top:13px; border-top:1px solid var(--rule); padding-top:13px; display:none; }
+  .r99-drawer.is-open { display:block; }
+  .r99-drawer p { font-size:12.5px; color:var(--text-soft); line-height:1.5; margin-bottom:10px; }
+  .r99-attest { display:flex; gap:9px; align-items:flex-start; font-size:12.5px; color:var(--text-soft); cursor:pointer; margin:10px 0; }
+  .r99-attest input { margin-top:3px; flex-shrink:0; }
+  .r99-actions { display:flex; gap:9px; flex-wrap:wrap; }
+  .btn-sm { font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:12.5px; border-radius:7px; padding:7px 13px; cursor:pointer; border:1px solid var(--rule-strong); background:var(--bg-card); color:var(--text-soft); display:inline-flex; align-items:center; gap:6px; }
+  .btn-sm:hover { border-color:var(--blue); color:var(--blue); }
+  .btn-sm.primary { background:var(--blue); border-color:var(--blue); color:#fff; }
+  .btn-sm.primary:hover { filter:brightness(1.06); color:#fff; }
+  .btn-sm:disabled { opacity:.5; cursor:not-allowed; }
+  /* R099102 AI report-checker (full tier only) */
+  .r99-ai { margin:13px 0; padding-top:13px; border-top:1px dashed var(--rule); }
+  .r99-ai-lbl { display:flex; align-items:center; gap:6px; font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:10.5px; letter-spacing:.05em; text-transform:uppercase; color:var(--blue); margin-bottom:7px; }
+  .r99-ai-lbl svg { width:13px; height:13px; }
+  .r99-file { display:inline-flex; align-items:center; gap:7px; border:1px dashed var(--rule-strong); border-radius:8px; padding:8px 14px; font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:12.5px; color:var(--blue); cursor:pointer; }
+  .r99-file:hover { border-color:var(--blue); background:var(--blue-pale); }
+  .r99-file svg { width:14px; height:14px; }
+  .r99-file-status { margin-left:10px; font-size:11.5px; color:var(--text-muted); }
+  .r99-ai-verdict { margin-top:10px; padding:10px 12px; border-radius:8px; font-size:12.5px; line-height:1.55; border:1px solid var(--rule); background:var(--bg-card); white-space:pre-wrap; }
+  .r99-ai-verdict.is-thinking { color:var(--text-muted); font-style:italic; }
+  .r99-ai-verdict.clean  { background:var(--green-pale);  border-color:#bfe6cd; }
+  .r99-ai-verdict.errors { background:var(--orange-pale); border-color:#f0d2a8; }
 
-  /* grid card */
+  /* ===== Band 4 — Audit Report (the grid) ===== */
   .grid-card { background:var(--bg-card); border:1px solid var(--rule); border-radius:14px; box-shadow:var(--shadow-sm); overflow:hidden; }
-  .grid-head { display:flex; align-items:center; gap:14px; padding:13px 20px; border-bottom:1px solid var(--rule); }
+  .grid-head { display:flex; align-items:center; gap:14px; padding:13px 20px; border-bottom:1px solid var(--rule); flex-wrap:wrap; }
   .grid-title { font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:14px; letter-spacing:.04em; text-transform:uppercase; color:var(--navy); }
-  .grid-count { font-size:12px; color:var(--text-muted); }
-  .btn { display:inline-flex; align-items:center; gap:7px; border:1px solid var(--rule-strong); background:var(--bg-card); border-radius:8px; padding:6px 12px; font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:12.5px; color:var(--text-soft); cursor:pointer; }
-  .btn:hover { border-color:var(--blue); color:var(--blue); }
-  .btn svg { width:13px; height:13px; }
-  /* grid-state cluster (per RRV8/GRID-STANDARDS.md): search + Excel pill + count pill, pinned right */
-  .grid-state-cluster { display:flex; align-items:center; gap:8px; margin-left:auto; }
+  .grid-state-cluster { display:flex; align-items:center; gap:8px; margin-left:auto; flex-wrap:wrap; }
   .grid-acct { display:inline-flex; align-items:center; gap:7px; }
   .grid-acct-lbl { font-size:10px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); }
   .grid-acct select { border:1px solid var(--rule-strong); border-radius:100px; padding:5px 12px; font-family:'Source Sans 3',sans-serif; font-size:12.5px; font-weight:700; color:var(--text); background:var(--bg-card); max-width:240px; cursor:pointer; }
@@ -161,45 +236,142 @@
 <body>
 
 <header class="topbar">
-  <img class="topbar-logo" src="../Images/gsi-logo.png" alt="GSI">
-  <span class="topbar-name">RapidReconciler</span>
-  <span class="topbar-db" id="topbarDb">RapidReconciler_Dev</span>
+  <div class="topbar-brand">
+    <img class="topbar-brand-logo" src="../Images/gsi-logo.png" alt="GSI">
+    <span class="topbar-brand-text">
+      <span class="topbar-brand-name">RapidReconciler</span>
+      <span class="topbar-brand-db" id="topbarDb">RapidReconciler_Dev</span>
+    </span>
+  </div>
+  <a class="topbar-home" href="home.html" title="Back to Home"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></svg>Home</a>
 </header>
 
 <div class="page">
   <nav class="breadcrumb"><a href="home.html">Inventory</a><span class="sep">/</span><span>Account Roll Forward</span></nav>
   <h1 class="page-title">Account Roll Forward</h1>
-  <div class="page-eyebrow">The GL and perpetual roll-forward by account and period &mdash; how each account&rsquo;s beginning balance rolls to ending, whether GL and variance stay intact, and the cardex variance the per-item worklist reconciles to.</div>
+  <div class="page-eyebrow">Keep the source accurate: see what&rsquo;s off, set the company scope, pull the right corrective lever, then verify against the roll-forward report.</div>
 
-  <div class="actions">
-    <span class="picker-lbl">Company</span>
-    <span class="seg" id="companyPick"><button type="button" class="seg-btn is-on" data-co="">All</button></span>
-    <label class="toggle" style="margin-left:14px;"><input type="checkbox" id="showAll"> Show all periods (history)</label>
-    <span class="spacer"></span>
-    <span class="kpi"><span class="lbl">Cardex variance</span><span class="val" id="kpiCx">&mdash;</span></span>
-    <span class="kpi" style="margin-left:22px;"><span class="lbl">Out of balance</span><span class="val" id="kpiOob">&mdash;</span></span>
+  <!-- ===== Step 1 — To Do (AI assistant; collapsed by default — AI kicks in on expand) ===== -->
+  <div class="band">
+    <div class="band-head band-green" id="todoHead" role="button" tabindex="0" aria-expanded="false" aria-controls="todoBody" data-band="todo">
+      <span class="band-badge"><span class="band-n">1</span><span class="band-title">To Do</span></span>
+      <span class="band-status" id="todoStatus"><span class="bs-dot"></span><span class="bs-text">Loading&hellip;</span></span>
+      <button type="button" class="ai-chip is-off" id="todoAiChip" title="Expand for an AI summary">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"/></svg>
+        <span id="todoAiTier">AI</span>
+      </button>
+      <span class="band-chev" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
+    </div>
+    <div class="band-body is-collapsed" id="todoBody">
+      <div class="ai-panel" id="todoAi" hidden>
+        <div class="ai-panel-head"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"/></svg>RapidReconciler AI</div>
+        <div class="ai-panel-body" id="todoAiBody"></div>
+        <div class="ai-panel-foot" id="todoAiFoot"></div>
+      </div>
+      <div class="todo-scope">
+        <span class="picker-lbl">Company</span>
+        <span class="seg" id="companyPick"><button type="button" class="seg-btn is-on" data-co="">All</button></span>
+      </div>
+      <div id="todoDetail"><div class="empty">Loading&hellip;</div></div>
+    </div>
   </div>
 
-  <!-- ANALYSIS (workbook "Analysis" sheet) -->
-  <section class="analysis" id="analysis"><div class="empty">Loading&hellip;</div></section>
+  <!-- ===== Step 2 — Corrective Actions ===== -->
+  <div class="band">
+    <div class="band-head" id="corrHead" role="button" tabindex="0" aria-expanded="true" aria-controls="corrBody" data-band="corr">
+      <span class="band-badge"><span class="band-n">2</span><span class="band-title">Corrective Actions</span></span>
+      <span class="band-status" id="corrStatus"><span class="bs-dot"></span><span class="bs-text">Four levers</span></span>
+      <span class="band-chev" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
+    </div>
+    <div class="band-body" id="corrBody">
+      <div class="corr-rec-banner" id="corrRec" hidden></div>
+      <div class="corr-grid">
 
-  <!-- ROLL-FORWARD GRID (workbook "Roll Forward" sheet) -->
-  <section class="grid-card">
-    <div class="grid-head">
-      <span class="grid-title">Roll forward</span>
-      <div class="grid-state-cluster">
-        <span class="grid-acct">
-          <label class="grid-acct-lbl" for="accountPick">Account</label>
-          <select id="accountPick" aria-label="Filter roll-forward rows by account"><option value="">All accounts</option></select>
-        </span>
-        <button class="grid-pill grid-pill-export" id="exportBtn" type="button" title="Export the current view to Excel"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10v3h10v-3"/><path d="M8 2v9"/><polyline points="5 8 8 11 11 8"/></svg>Excel</button>
-        <span class="grid-pill grid-pill-count" id="gridCount">&mdash;</span>
+        <!-- GL side · step 1: R099102 — request the JDE repost + attest. Gates Reload GL. -->
+        <div class="corr-card gl" id="r99Card">
+          <span class="corr-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v6H4z"/><path d="M4 14h16v6H4z"/><path d="M8 7h.01M8 17h.01"/></svg></span>
+          <div class="corr-title">R099102 Repost</div>
+          <div class="corr-when">GL break · balances out of sync</div>
+          <div class="corr-desc">Balances (F0902) out of sync with detail (F0911). Rebuild in JD Edwards, then attest.</div>
+          <div class="corr-state" id="r99State" hidden></div>
+          <span class="corr-foot" id="r99Toggle" role="button" tabindex="0">Email &amp; attest <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
+          <div class="r99-drawer" id="r99Drawer">
+            <p>Run R099102 in JD Edwards (proof, then final), then attest. A clean report reaches RapidReconciler only after <b>Reload GL</b> + rebuild.</p>
+            <div class="r99-actions">
+              <a class="btn-sm primary" id="r99Email" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"/><polyline points="22,6 12,13 2,6"/></svg>Compose email</a>
+            </div>
+            <!-- AI report-checker (full tier only; revealed by renderAiChip) -->
+            <div class="r99-ai" id="r99Ai" hidden>
+              <div class="r99-ai-lbl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"/></svg>Check the repost report with AI</div>
+              <label class="r99-file" for="r99File"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>Choose report (PDF)<input type="file" id="r99File" accept=".pdf,.txt" hidden></label>
+              <span class="r99-file-status" id="r99FileStatus">No file chosen</span>
+              <div class="r99-actions"><button class="btn-sm" id="r99Check" type="button" disabled>Check report</button></div>
+              <div class="r99-ai-verdict" id="r99Verdict" hidden></div>
+            </div>
+            <label class="r99-attest"><input type="checkbox" id="r99Chk"><span>I have received the results of the repost report and there are no errors.</span></label>
+            <div class="r99-actions">
+              <button class="btn-sm" id="r99Record" type="button" disabled>Record attestation</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- GL side · step 2: refresh RR's GL copy. Gated until R099102 is attested. -->
+        <a class="corr-card gl" id="reloadGlCard" href="admin-reload-gl.html">
+          <span class="corr-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg></span>
+          <div class="corr-title">Reload GL</div>
+          <div class="corr-when">GL break · stale copy</div>
+          <div class="corr-desc">Re-imports the GL (F0902) from the earliest broken period; JD Edwards re-pulls on the next refresh.</div>
+          <div class="corr-state" id="reloadGlState" hidden></div>
+          <span class="corr-foot">Open <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></span>
+        </a>
+
+        <!-- Variance side -->
+        <a class="corr-card var" href="inventory-reroll.html">
+          <span class="corr-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></span>
+          <div class="corr-title">Re-roll Companies</div>
+          <div class="corr-when">Variance break</div>
+          <div class="corr-desc">Recomputes the perpetual balance from baseline for the chosen companies. Settles most variance breaks.</div>
+          <span class="corr-foot">Open <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></span>
+        </a>
+
+        <!-- Variance side -->
+        <a class="corr-card var" href="admin-reload-cardex.html">
+          <span class="corr-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg></span>
+          <div class="corr-title">Reload Cardex</div>
+          <div class="corr-when">Variance break · re-roll didn&rsquo;t hold</div>
+          <div class="corr-desc">Rebuilds the cardex from the break period. Use if a re-roll didn&rsquo;t hold.</div>
+          <span class="corr-foot">Open <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></span>
+        </a>
+
       </div>
     </div>
-    <div class="grid-scroll">
-      <table class="rf" id="rfTable"><thead id="rfHead"></thead><tbody id="rfBody"><tr><td class="empty">Loading roll forward&hellip;</td></tr></tbody></table>
+  </div>
+
+  <!-- ===== Step 3 — Audit Report (the grid) ===== -->
+  <div class="band">
+    <div class="band-head" id="rptHead" role="button" tabindex="0" aria-expanded="true" aria-controls="rptBody" data-band="rpt">
+      <span class="band-badge"><span class="band-n">3</span><span class="band-title">Audit Report</span></span>
+      <span class="band-status" id="rptStatus"><span class="bs-dot"></span><span class="bs-text">Roll forward by account &amp; period</span></span>
+      <span class="band-chev" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
     </div>
-  </section>
+    <div class="band-body" id="rptBody" style="padding:0; padding-top:14px;">
+      <section class="grid-card" style="border:0; box-shadow:none; border-radius:0;">
+        <div class="grid-head">
+          <div class="grid-state-cluster">
+            <span class="grid-acct">
+              <label class="grid-acct-lbl" for="accountPick">Account</label>
+              <select id="accountPick" aria-label="Filter roll-forward rows by account"><option value="">All accounts</option></select>
+            </span>
+            <button class="grid-pill grid-pill-export" id="exportBtn" type="button" title="Export the current view to Excel"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10v3h10v-3"/><path d="M8 2v9"/><polyline points="5 8 8 11 11 8"/></svg>Excel</button>
+            <span class="grid-pill grid-pill-count" id="gridCount">&mdash;</span>
+          </div>
+        </div>
+        <div class="grid-scroll">
+          <table class="rf" id="rfTable"><thead id="rfHead"></thead><tbody id="rfBody"><tr><td class="empty">Loading roll forward&hellip;</td></tr></tbody></table>
+        </div>
+      </section>
+    </div>
+  </div>
 </div>
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
@@ -208,14 +380,11 @@
 (function () {
   'use strict';
   var DATA = [];
-  var state = { company:'', account:'', showAll:false, sortKey:null, sortDir:'asc' };
-  // ---- company scope: the page honors the shared working-company scope
-  //      (set on Home, owned by sidebar.js) — it shows only the in-scope
-  //      companies. The [All|co|co] control is a local drill WITHIN that set;
-  //      it does not write back to the shared scope. Company only — never period. ----
-  // Active DB index — delegate to the ONE canonical resolver (config.js RRDB),
-  // which resolves the sticky rrv8.activeDb by name. Never read p.activeDbIndex
-  // (the JWT has no such field; it was always 0 → every fetch hit Dev).
+  var state = { company:'', account:'', showAll:true, sortKey:null, sortDir:'asc' };
+
+  // ---- company scope: honors the shared working-company scope (set on Home,
+  //      owned by sidebar.js). The [All|co|co] control is a local drill WITHIN
+  //      that set; it never writes back to the shared scope. ----
   function _activeDbIdx(dbs){ return (window.RRDB && window.RRDB.index()) || 0; }
   function _scopeCtx(){
     try{
@@ -227,9 +396,6 @@
       return { key:'rrv8.scope.v1.'+mode+'.'+((dbObj.n)||'_')+'.scope', allowed:(Array.isArray(dbObj.i)?dbObj.i.map(String):[]) };
     }catch(_){ return null; }
   }
-  // Active working-company scope as a {company:true} lookup, or null when all
-  // allowed companies are selected (no narrowing). Read-only — drilling on this
-  // page never rewrites the shared scope.
   function scopedCompanySet(){
     var ctx=_scopeCtx(); if(!ctx) return null;
     try{
@@ -241,16 +407,8 @@
     }catch(_){ return null; }
   }
   function inScopeCo(co){ var sc=scopedCompanySet(); return !sc || !!sc[String(co)]; }
-  // Row passes when it's in the working-company scope AND matches the local
-  // drill (state.company; '' = all companies in scope).
   function rowMatchesCo(r){ return inScopeCo(r.CompanyNumber) && (!state.company || r.CompanyNumber===state.company); }
-  // Raw cell value per column key — shared by Excel export + grid search so
-  // both stay in lockstep with the column set.
   function rawVal(r,k){ return {companyNumber:r.CompanyNumber,longAccount:r.LongAccount,periodEnds:r.PeriodEnds,begGL:r.BegGL,perGL:r.PerGL,endGL:r.EndGL,unpostBatch:r.UnpostBatch,glok:r.GLOK,perpetual:r.Perpetual,perCX:r.PerCX,begVar:r.BegVar,endOfDay:r.EndofDay,variance:r.Variance,jes:r.JEs,oob:r.OOB,cardexVar:r.CardexVar,varok:r.VarOK}[k]; }
-  // Find-as-you-type: case-insensitive substring across visible columns; a
-  // leading ^ switches to starts-with (per GRID-STANDARDS.md §8).
-  // Account picker: distinct accounts within the current company scope + drill
-  // (period-agnostic, so you can pick any account regardless of the period view).
   function accountsInView(){
     var base = DATA.filter(rowMatchesCo);
     return Array.from(new Set(base.map(function(r){return r.LongAccount;}))).filter(Boolean)
@@ -261,10 +419,6 @@
   // ---- fmt ----
   function money(n){ var x=Number(n)||0; var a=Math.abs(x).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); return x<0?'('+a+')':a; }
   function moneyCell(n){ var x=Number(n)||0; if(Math.abs(x)<0.005) return '<span style="color:var(--text-muted)">&mdash;</span>'; return '<span class="'+(x<0?'neg':'')+'">'+money(x)+'</span>'; }
-  // Currency context for the KPIs (Cardex variance / Out of balance). Grid
-  // cells stay bare. Set in renderKpis from the in-scope rows; mixed = scope
-  // spans >1 base currency, so the blended KPI is guarded. Self-contained
-  // (this page doesn't load sidebar.js): ISO-4217 symbol via Intl/ICU.
   var _curCtx={code:'',mixed:false,codes:[]}, _curSymCache={};
   function _sym(code){
     var c=(code!==undefined&&code!==null)?code:_curCtx.code; c=(c||'').toString().trim().toUpperCase();
@@ -290,13 +444,10 @@
     { k:'begGL',  label:'Beg GL',   num:true, render:function(r){return moneyCell(r.BegGL);} },
     { k:'perGL',  label:'Per GL',   num:true, render:function(r){return moneyCell(r.PerGL);} },
     { k:'endGL',  label:'End GL',   num:true, render:function(r){return moneyCell(r.EndGL);} },
-    // Unposted Batches sits with the GL roll: End GL = Beg GL + Per GL - Unp Btch.
     { k:'unpostBatch', label:'Unp Btch', num:true, render:function(r){return moneyCell(r.UnpostBatch);} },
     { k:'glok',   label:'GL OK',    render:function(r){return chip(r.GLOK);} },
     { k:'perpetual', label:'Perp',  num:true, render:function(r){return moneyCell(r.Perpetual);} },
     { k:'perCX',  label:'Per CX',   num:true, render:function(r){return moneyCell(r.PerCX);} },
-    // Variance roll-forward components (fully additive post sign-flip):
-    //   OOB = BegVar + UnpBtch + EOD + Variance + CXVar + JEs.
     { k:'begVar',  label:'Beg Var', num:true, render:function(r){return moneyCell(r.BegVar);} },
     { k:'endOfDay',label:'EOD',     num:true, render:function(r){return moneyCell(r.EndofDay);} },
     { k:'variance',  label:'Variance', num:true, render:function(r){return moneyCell(r.Variance);} },
@@ -311,7 +462,7 @@
   // ---- filter / sort ----
   function rows(){
     var r = DATA.filter(rowMatchesCo);
-    if (!state.showAll) r = r.filter(function(x){ return x.GLOK==='end'; });   // current period only by default
+    // Always show all periods/rows (the current-period toggle was removed).
     if (state.sortKey){
       var f=SORTABLE[state.sortKey], num=NUMCOL[state.sortKey], mult=state.sortDir==='desc'?-1:1;
       r = r.slice().sort(function(a,b){
@@ -319,9 +470,6 @@
         return String(a[f]==null?'':a[f]).localeCompare(String(b[f]==null?'':b[f]),undefined,{numeric:true})*mult;
       });
     } else {
-      // Default order: company, then account, then period (chronological by ISO
-      // date). Matters most with "Show all periods" on, where many periods per
-      // account would otherwise come back in source order.
       r = r.slice().sort(function(a,b){
         var c = String(a.CompanyNumber==null?'':a.CompanyNumber).localeCompare(String(b.CompanyNumber==null?'':b.CompanyNumber),undefined,{numeric:true}); if(c) return c;
         c = String(a.LongAccount==null?'':a.LongAccount).localeCompare(String(b.LongAccount==null?'':b.LongAccount),undefined,{numeric:true,sensitivity:'base'}); if(c) return c;
@@ -331,205 +479,110 @@
     return r;
   }
 
-  // ============ GL-break classifier + Daren's what/how playbook ============
-  // Each red GLOK row is classified from the row + its prior-period row into one
-  // of four scenarios, then rendered as a what/how card. Reference "now" for the
-  // 35-day load window is the dataset's latest period (the 'end' snapshot), so
-  // the in/out-of-window split holds for historical data too.
-  var GL_WINDOW_DAYS = 35, GL_TOL = 0.01, AP_CARD_CAP = 12;
-  function n_(x){ return Number(x)||0; }
-  function r2_(x){ return Math.round(n_(x)*100)/100; }
-  function amtCur(r,v){ return _sym(r&&r.Currency)+money(v); }
-  function periodSeries(){
-    var m={};
-    DATA.forEach(function(r){ var k=r.CompanyNumber+'|'+r.LongAccount; (m[k]||(m[k]=[])).push(r); });
-    Object.keys(m).forEach(function(k){ m[k].sort(function(a,b){ return String(a.PeriodEnds).localeCompare(String(b.PeriodEnds)); }); });
-    return m;
-  }
-  function datasetEndIso(){ var mx=''; DATA.forEach(function(r){ var p=String(r.PeriodEnds||''); if(p>mx) mx=p; }); return mx; }
-  function daysBetween(aIso,bIso){ var a=new Date(aIso+'T00:00:00'),b=new Date(bIso+'T00:00:00'); return Math.round((b-a)/86400000); }
-  // Consecutive GLOK='no' run containing r that qualifies as a data-load pattern
-  // (length >= 2, PerGL ~ 0 throughout, BegGL varies). Returns [lo,hi] or null.
-  function dataLoadRun(r, ser){
-    var i=ser.indexOf(r); if(i<0) return null;
-    var lo=i, hi=i;
-    while(lo>0 && isNo(ser[lo-1].GLOK)) lo--;
-    while(hi<ser.length-1 && isNo(ser[hi+1].GLOK)) hi++;
-    if(hi-lo<1) return null;                       // need 2+ consecutive
-    var begs={}, zeroPer=true;
-    for(var j=lo;j<=hi;j++){ if(Math.abs(n_(ser[j].PerGL))>GL_TOL) zeroPer=false; begs[r2_(ser[j].BegGL)]=1; }
-    return (zeroPer && Object.keys(begs).length>1) ? [lo,hi] : null;
-  }
-  function glScenario(r, ser, endIso){
-    var run=dataLoadRun(r,ser);
-    if(run) return { code:'dataload', run:run };
-    var i=ser.indexOf(r), prior=i>0?ser[i-1]:null;
-    if(!prior) return { code:'misalign', gap:r2_(r.OOB) };
-    var gap=r2_(n_(r.BegGL)-n_(prior.EndGL)), ub=r2_(prior.UnpostBatch);
-    if(Math.abs(ub)>GL_TOL && Math.abs(gap-ub)<=GL_TOL){
-      var out=daysBetween(prior.PeriodEnds,endIso)>GL_WINDOW_DAYS;
-      return { code: out?'late-out':'late-in', amt:ub, prior:prior };
-    }
-    if(Math.abs(ub)>GL_TOL) return { code:'late-residual', amt:ub, gap:gap, prior:prior };
-    // F0902/F0911 disparity is the OOB column directly; fall back to the roll gap.
-    return { code:'misalign', gap:(Math.abs(r2_(r.OOB))>GL_TOL ? r2_(r.OOB) : gap) };
-  }
-  var AP_WAIT='<div class="ap-wait"><span><b>Expect two amber lights until the next refresh.</b> After you click Reload GL Data nothing changes today &mdash; the Reload GL card and the roll-forward light both stay amber until the next scheduled refresh re-pulls the GL. Don&rsquo;t click again or escalate; check back after the refresh.</span></div>';
-  function glCard(r, sc, ser){
-    var acct=esc(r.LongAccount), co=esc(r.CompanyNumber), per=fmtDate(r.PeriodEnds);
-    var cause, lever, what, how=[], wait='';
-    if(sc.code==='late-in' || sc.code==='late-out'){
-      cause='Late-posting batch'; lever='Unposted GL Batches';
-      what='A batch of '+amtCur(r,sc.amt)+' was approved but unposted at the close of '+fmtDate(sc.prior.PeriodEnds)+'; it posted afterward and moved that period&rsquo;s GL, so '+per+' didn&rsquo;t carry forward. RapidReconciler still holds the pre-posting balance.';
-      how=[
-        'Open <b>Unposted GL Batches</b> for account '+acct+' &mdash; it names the exact batch(es): number, type, amount, status.',
-        'Clear each in JD Edwards by status: Pending &rarr; approve in P0011; Approved &rarr; run R09801; In&nbsp;Use &rarr; reset posting status to blank in P0011, then approve + post; Error &rarr; fix per the message.'
-      ];
-      if(sc.code==='late-in'){ how.push('This period is inside the '+GL_WINDOW_DAYS+'-day load window &mdash; it clears on the next refresh. Nothing else to do.'); }
-      else { lever='Unposted GL Batches &rarr; Reload GL'; how.push('This period is older than the '+GL_WINDOW_DAYS+'-day load window, so posting alone won&rsquo;t reach RapidReconciler. After posting, click <b>Reload GL Data</b> to force a re-pull.'); wait=AP_WAIT; }
-    } else if(sc.code==='late-residual'){
-      cause='Late-posting batch + residual'; lever='Unposted GL Batches';
-      what='An unposted batch of '+amtCur(r,sc.amt)+' explains part of the '+amtCur(r,sc.gap)+' break on '+per+', but not all of it. Post the batch first, then re-check the remainder.';
-      how=[
-        'Open <b>Unposted GL Batches</b> for account '+acct+' and post the batch(es) in JD Edwards (P0011 / R09801).',
-        'After the next refresh, re-run the roll forward. If '+per+' still breaks, treat the remainder as balances out of sync (R099102 &mdash; see below).'
-      ];
-    } else if(sc.code==='misalign'){
-      cause='Balances out of sync (F0902 vs F0911)'; lever='R099102';
-      what='Every batch is posted, but the balance table (F0902) disagrees with the detail (F0911) by '+amtCur(r,sc.gap)+' on '+per+'. The detail is the source of truth; the balances need rebuilding.';
-      how=[
-        'In JD Edwards, run <b>R099102 (Account Balance Repost)</b> scoped to company '+co+', the fiscal year, and account '+acct+'.',
-        'Run <b>proof mode</b> first to confirm the scope, then <b>final mode</b> to rebuild F0902 from F0911. Have your JDE admin run/approve final mode.',
-        'Clears on the next refresh after the repost. Don&rsquo;t Reload GL &mdash; the fix is in JD Edwards, not RapidReconciler&rsquo;s copy.'
-      ];
-    } else { // dataload
-      cause="RapidReconciler's GL copy is stale"; lever='Reload GL';
-      var span='';
-      if(sc.run && ser){ span=' ('+fmtDate(ser[sc.run[0]].PeriodEnds)+' &ndash; '+fmtDate(ser[sc.run[1]].PeriodEnds)+')'; }
-      what='Account '+acct+' breaks across consecutive periods'+span+' with no posted activity to explain it &mdash; RapidReconciler&rsquo;s GL copy doesn&rsquo;t match JD Edwards. A normal refresh won&rsquo;t fix it.';
-      how=[
-        'Click <b>Reload GL Data</b> &mdash; it clears RapidReconciler&rsquo;s GL copy from the break period forward.',
-        'If the break is still red <i>after</i> the next refresh, the stale copy wasn&rsquo;t the cause &mdash; run <b>R099102 (Account Balance Repost)</b> for company '+co+' &middot; account '+acct+' to rebuild F0902 from the F0911 detail (proof mode first, then final mode with your JDE admin).'
-      ];
-      wait=AP_WAIT;
-    }
-    return '<div class="ap-card"><div class="ap-cause">'+esc(cause)+'<span class="ap-lever">'+lever+'</span></div>'+
-      '<div class="ap-where ap-jump" data-acct="'+acct+'" role="button" tabindex="0" title="Show this account&rsquo;s full history in the grid below">Co '+co+' &middot; '+acct+' &middot; '+per+
-        '<svg class="ap-jump-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg></div>'+
-      '<div class="ap-what">'+what+'</div>'+
-      '<ol class="ap-how">'+how.map(function(s){return '<li>'+s+'</li>';}).join('')+'</ol>'+
-      wait+'</div>';
-  }
-
-  // ============ VarOK breaks — Daren's variance playbook ============
-  // A VarOK = "no" row is a period where RapidReconciler's own variance roll
-  // forward didn't carry (BegVar != prior Variance). That's an RR-internal
-  // continuity issue — the GL side is handled by the GL cards above — so the
-  // only two levers are an RR re-roll or a cardex rebuild. One summary card,
-  // re-roll first, Reload Cardex if a break doesn't hold. No per-cause split.
-  function varSummaryCard(varRows){
-    var n=varRows.length, coSet={}, acctSet={}, accts=[];
-    varRows.forEach(function(r){
-      coSet[String(r.CompanyNumber)]=1;
-      var k=r.CompanyNumber+'|'+r.LongAccount;
-      if(!acctSet[k]){ acctSet[k]=1; accts.push(String(r.LongAccount)); }
-    });
-    var cos=Object.keys(coSet).sort(function(a,b){ return a.localeCompare(b,undefined,{numeric:true}); });
-    var coList=cos.map(esc).join(', ');
-    var many=cos.length!==1;
-    var acctList=accts.slice(0,10).map(function(a){ return '<button type="button" class="ap-acct" data-acct="'+esc(a)+'" title="Show this account&rsquo;s full history in the grid below">'+esc(a)+'</button>'; }).join(', ')+(accts.length>10?(' +'+(accts.length-10)+' more'):'');
-    var cause='Variance roll-forward break'+(n!==1?'s':'');
-    var lever='Re-roll, then Reload Cardex';
-    var what=n+' account-period'+(n!==1?'s':'')+' where the variance didn&rsquo;t carry forward ('+acctList+'). The variance roll-forward is RapidReconciler&rsquo;s own perpetual history rather than the GL, so it&rsquo;s fixed inside RapidReconciler &mdash; there&rsquo;s nothing to post or repost in JD Edwards.';
-    var how=[
-      'Re-roll the affected compan'+(many?'ies':'y')+' &mdash; open <b>Companies</b>, click <b>Reroll</b> on '+(many?'companies ':'company ')+coList+', and confirm. It recomputes the perpetual balance from the baseline date forward (a few minutes; nothing changes in JD Edwards) and settles most variance breaks.',
-      'If a break still doesn&rsquo;t hold after the re-roll, delete and rebuild RapidReconciler&rsquo;s cardex with <b>Reload Cardex</b> from the break period forward, then refresh and re-check.'
-    ];
-    return '<div class="ap-card var"><div class="ap-cause">'+esc(cause)+'<span class="ap-lever">'+lever+'</span></div>'+
-      '<div class="ap-where">Co '+coList+' &middot; '+n+' break'+(n!==1?'s':'')+'</div>'+
-      '<div class="ap-what">'+what+'</div>'+
-      '<ol class="ap-how">'+how.map(function(s){return '<li>'+s+'</li>';}).join('')+'</ol>'+
-      '</div>';
-  }
-
-  // ---- render ----
-  function renderKpis(){
-    var end = DATA.filter(function(r){ return r.GLOK==='end' && rowMatchesCo(r); });
-    _curCtx = _ctxOf(end);
-    var cx = end.reduce(function(s,r){ return s+(Number(r.CardexVar)||0); },0);
-    var oob = end.reduce(function(s,r){ return s+(Number(r.OOB)||0); },0);
-    var k1=document.getElementById('kpiCx'), k2=document.getElementById('kpiOob');
-    if(_curCtx.mixed){
-      k1.textContent='Mixed'; k1.classList.remove('neg');
-      k2.textContent='Mixed'; k2.classList.remove('neg');
-    } else {
-      k1.textContent=curMoney(cx); k1.classList.toggle('neg',cx<0);
-      k2.textContent=curMoney(oob); k2.classList.toggle('neg',oob<0);
-    }
-  }
-  function renderAnalysis(){
-    var host=document.getElementById('analysis'); if(!host) return;
+  // ============ Band 1 — To Do ============
+  // Count GL-side (GLOK) and variance-side (VarOK) breaks in scope and summarize
+  // them by account. No per-row cause classification — that interpretation moved
+  // off this page; the To Do band just tells Andy what's off and which side.
+  function breakSummary(){
     var scope = DATA.filter(rowMatchesCo);
-    var cos = Array.from(new Set(scope.map(function(r){return r.CompanyNumber;}))).sort();
-    var accts = new Set(scope.map(function(r){return r.CompanyNumber+'|'+r.LongAccount;})).size;
-    var periods = Array.from(new Set(scope.map(function(r){return r.PeriodEnds;}))).sort();
-    var latest = periods[periods.length-1] || '';
-    var glBreaks = scope.filter(function(r){ return isNo(r.GLOK); }).length;
-    var varBreaks = scope.filter(function(r){ return isNo(r.VarOK); }).length;
-    var intact = glBreaks===0 && varBreaks===0;
-    var badge = intact
-      ? '<span class="an-badge ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>'
-      : '<span class="an-badge warn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4M12 17h.01"/></svg></span>';
-    var headline = intact
-      ? 'GL and variance roll-forwards intact'
-      : (glBreaks+' GLOK break'+(glBreaks!==1?'s':'')+', '+varBreaks+' VarOK break'+(varBreaks!==1?'s':'')+' to investigate');
-    var sub = intact
-      ? ('0 GLOK breaks, 0 VarOK breaks across '+scope.length+' rows')
-      : ('across '+scope.length+' rows in scope');
-    var find = intact
-      ? '<div class="an-find ok">&check; No findings &mdash; GLOK and VarOK are intact across all rows in scope, and OOB / Cardex variance carry through cleanly. Continue periodic monitoring at each refresh.</div>'
-      : '';
-    // Classified what/how playbook: one card per GL break with the exact cause +
-    // resolution path (Daren never has to interpret which lever to pull).
-    var actionPlan = '';
-    if(!intact){
-      var ser=periodSeries(), endIso=datasetEndIso();
-      var bySeriesOrder=function(a,b){
-        var c=String(a.CompanyNumber).localeCompare(String(b.CompanyNumber),undefined,{numeric:true}); if(c) return c;
-        c=String(a.LongAccount).localeCompare(String(b.LongAccount),undefined,{numeric:true,sensitivity:'base'}); if(c) return c;
-        return String(a.PeriodEnds).localeCompare(String(b.PeriodEnds));
-      };
-      // GL roll-forward breaks
-      var glRows=scope.filter(function(r){ return isNo(r.GLOK); }).sort(bySeriesOrder);
-      var seen={}, cards=[], more=0;
-      glRows.forEach(function(r){
-        var s=ser[r.CompanyNumber+'|'+r.LongAccount]||[]; var sc=glScenario(r,s,endIso);
-        if(sc.code==='dataload' && sc.run){ var key=r.CompanyNumber+'|'+r.LongAccount+'|'+sc.run[0]; if(seen[key]) return; seen[key]=1; }
-        if(cards.length>=AP_CARD_CAP){ more++; return; }
-        cards.push(glCard(r,sc,s));
-      });
-      // Variance roll-forward breaks — one summary card (re-roll first, Reload
-      // Cardex if a break doesn't hold); no per-cause classification.
-      var varRows=scope.filter(function(r){ return isNo(r.VarOK); }).sort(bySeriesOrder);
-      var varCards = varRows.length ? [varSummaryCard(varRows)] : [];
-      var moreNote =
-        (more ? ('<div class="an-find">+ '+more+' more GL break'+(more!==1?'s':'')+' &mdash; see the flagged rows in the grid.</div>') : '');
-      // Subheads only when BOTH kinds are present (otherwise the single label is noise).
-      var bothKinds = cards.length && varCards.length;
-      var apSect=function(title, list){ if(!list.length) return ''; return (bothKinds?('<div class="ap-subhead">'+title+'</div>'):'')+'<div class="ap-cards">'+list.join('')+'</div>'; };
-      actionPlan = '<div class="ap"><h4>What to do</h4>'+apSect('GL roll-forward breaks',cards)+apSect('Variance roll-forward breaks',varCards)+moreNote+'</div>';
+    var glRows = scope.filter(function(r){ return isNo(r.GLOK); });
+    var varRows = scope.filter(function(r){ return isNo(r.VarOK); });
+    function acctsOf(rowsArr){
+      var seen={}, out=[];
+      rowsArr.forEach(function(r){ var k=r.CompanyNumber+'|'+r.LongAccount; if(!seen[k]){ seen[k]=1; out.push({co:String(r.CompanyNumber),acct:String(r.LongAccount)}); } });
+      return out;
     }
-    host.innerHTML =
-      '<div class="an-headline">'+badge+'<div><div class="an-title">'+headline+'</div><div class="an-sub">'+sub+' &middot; Period ending '+fmtDate(latest)+'</div></div></div>'+
-      '<div class="an-scope">'+
-        '<div><div class="k">Companies</div><div class="v">'+cos.join(', ')+'</div></div>'+
-        '<div><div class="k">Accounts</div><div class="v">'+accts+'</div></div>'+
-        '<div><div class="k">Period range</div><div class="v">through '+fmtDate(latest)+'</div></div>'+
-        '<div><div class="k">Rows</div><div class="v">'+scope.length+'</div></div>'+
-      '</div>'+
-      find+
-      actionPlan;
+    return { gl:{ rows:glRows.length, accts:acctsOf(glRows) }, varc:{ rows:varRows.length, accts:acctsOf(varRows) } };
   }
+  function setBand(headId, level){   // level: green | amber | red
+    var h=document.getElementById(headId); if(!h) return;
+    h.classList.remove('band-green','band-amber','band-red');
+    if(level) h.classList.add('band-'+level);
+  }
+  function setBandStatus(statusId, dot, text){
+    var s=document.getElementById(statusId); if(!s) return;
+    s.querySelector('.bs-dot').className='bs-dot'+(dot?(' '+dot):'');
+    s.querySelector('.bs-text').textContent=text;
+  }
+  function acctChips(accts){
+    var shown=accts.slice(0,12);
+    var html=shown.map(function(a){ return '<button type="button" class="todo-acct" data-acct="'+esc(a.acct)+'" title="Show this account&rsquo;s history in the report below">'+esc(a.acct)+'</button>'; }).join('');
+    if(accts.length>shown.length) html+='<span style="font-size:11.5px;color:var(--text-muted);align-self:center;">+'+(accts.length-shown.length)+' more</span>';
+    return html;
+  }
+  function renderToDo(){
+    var sum=breakSummary();
+    var glN=sum.gl.rows, varN=sum.varc.rows, total=glN+varN;
+    // Company numbers fold into the collapsed-band status (Context band retired).
+    var cos=Array.from(new Set(DATA.filter(rowMatchesCo).map(function(r){return r.CompanyNumber;}))).sort();
+    var coStr=cos.length?(' · '+cos.join(', ')):'';
+    var host=document.getElementById('todoDetail');
+    if(total===0){
+      setBand('todoHead','green');
+      setBandStatus('todoStatus','green','No breaks'+coStr);
+      host.innerHTML='<div class="todo-clean"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>No findings &mdash; GLOK and VarOK are intact across every row in scope. Continue periodic monitoring at each refresh.</div>';
+      renderCorrective();
+      return;
+    }
+    setBand('todoHead','amber');
+    setBandStatus('todoStatus','amber', glN+' GL break'+(glN!==1?'s':'')+', '+varN+' variance break'+(varN!==1?'s':'')+coStr);
+    var html='';
+    if(glN){
+      html+='<div class="todo-side"><div class="todo-side-h"><span class="pip gl"></span>General ledger &mdash; '+glN+' break'+(glN!==1?'s':'')+'</div>'+
+        '<div class="todo-line">'+sum.gl.accts.length+' account'+(sum.gl.accts.length!==1?'s':'')+' &mdash; fix in JD Edwards, then Reload GL.</div>'+
+        '<div class="todo-accts">'+acctChips(sum.gl.accts)+'</div></div>';
+    }
+    if(varN){
+      html+='<div class="todo-side"><div class="todo-side-h"><span class="pip var"></span>Variance &mdash; '+varN+' break'+(varN!==1?'s':'')+'</div>'+
+        '<div class="todo-line">'+sum.varc.accts.length+' account'+(sum.varc.accts.length!==1?'s':'')+' &mdash; internal; re-roll, then Reload Cardex if it doesn&rsquo;t hold.</div>'+
+        '<div class="todo-accts">'+acctChips(sum.varc.accts)+'</div></div>';
+    }
+    host.innerHTML=html;
+    renderCorrective();
+  }
+  // Corrective-band recommendation banner: GL precedence (fix GL first; a
+  // GL break can masquerade as a variance break). All four cards stay live.
+  // ---- R099102 attestation (per-DB); gates Reload GL ----
+  function r99Key(){ var ctx=_scopeCtx(); return (ctx&&ctx.key)?ctx.key.replace(/\.scope$/,'.r99attest'):'rrv8.r99attest'; }
+  function isR99Attested(){ try{ return !!localStorage.getItem(r99Key()); }catch(_){ return false; } }
+  function setR99Attested(v){ try{ if(v) localStorage.setItem(r99Key(), new Date().toISOString()); else localStorage.removeItem(r99Key()); }catch(_){} }
+  var ICO_CHK='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+  var ICO_LOCK='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>';
+  function setCardState(cardId, stateId, mode, text){
+    var card=document.getElementById(cardId), st=document.getElementById(stateId);
+    if(card){ card.classList.remove('state-active','state-done','is-gated'); if(mode==='active') card.classList.add('state-active'); else if(mode==='done') card.classList.add('state-done'); else if(mode==='gated') card.classList.add('is-gated'); }
+    if(st){ if(text){ st.hidden=false; st.className='corr-state '+(mode||''); st.innerHTML=text; } else { st.hidden=true; st.className='corr-state'; } }
+  }
+  // Recommendation banner + the GL workflow gate. R099102 (attest) must clear
+  // before Reload GL unlocks; once attested R099102 reads done and Reload GL is
+  // the active step. A resolved GL break (none in scope) clears the attestation.
+  function renderCorrective(){
+    var sum=breakSummary(); var glN=sum.gl.rows, varN=sum.varc.rows, glBreak=glN>0;
+    var rec=document.getElementById('corrRec');
+    if(rec){
+      if(glN && varN){ rec.hidden=false; rec.innerHTML='<b>Order:</b> fix GL first (R099102 &rarr; Reload GL), then re-roll any remaining variance.'; }
+      else if(glN){ rec.hidden=false; rec.innerHTML='<b>GL side:</b> R099102, attest, then Reload GL.'; }
+      else if(varN){ rec.hidden=false; rec.innerHTML='<b>Variance side:</b> re-roll; Reload Cardex if a break doesn&rsquo;t hold.'; }
+      else rec.hidden=true;
+    }
+    setBandStatus('corrStatus', (glN||varN)?'amber':'green', (glN||varN)?'Work the levers below':'All clear — nothing to correct');
+    var attested=isR99Attested();
+    if(!glBreak){
+      setR99Attested(false);
+      setCardState('r99Card','r99State',null,'');
+      setCardState('reloadGlCard','reloadGlState',null,'');
+    } else if(!attested){
+      setCardState('r99Card','r99State','active','Start here');
+      setCardState('reloadGlCard','reloadGlState','gated',ICO_LOCK+'Attest R099102 first');
+    } else {
+      setCardState('r99Card','r99State','done',ICO_CHK+'Attested');
+      setCardState('reloadGlCard','reloadGlState','active','Reload now');
+    }
+    // R099102 email body reflects the current GL-break scope.
+    syncR99Email(sum);
+  }
+
+  // ============ Audit Report (grid) ============
   function renderGrid(){
     var head=document.getElementById('rfHead'), body=document.getElementById('rfBody'), cnt=document.getElementById('gridCount');
     head.innerHTML = '<tr>'+COLS.map(function(c){
@@ -539,105 +592,319 @@
     }).join('')+'</tr>';
     var data=rows().filter(byAccount);
     var total=DATA.filter(rowMatchesCo).length;
-    cnt.textContent = data.length.toLocaleString('en-US')+' row'+(data.length!==1?'s':'')+(state.showAll?'':' (current period)')+' of '+total.toLocaleString('en-US');
+    cnt.textContent = data.length.toLocaleString('en-US')+' row'+(data.length!==1?'s':'')+' of '+total.toLocaleString('en-US');
     if(!data.length){ body.innerHTML='<tr><td class="empty" colspan="'+COLS.length+'">No rows match.</td></tr>'; return; }
     body.innerHTML = data.map(function(r){
       return '<tr class="'+(r.GLOK==='end'?'is-end':'')+'">'+COLS.map(function(c){ return '<td class="'+(c.num?'num':'')+'">'+c.render(r)+'</td>'; }).join('')+'</tr>';
     }).join('');
   }
-  function renderAll(){ renderKpis(); renderAnalysis(); buildAccountPicker(); renderGrid(); }
+  function renderAll(){ renderToDo(); buildAccountPicker(); renderGrid(); }
 
-  // ---- company picker (built from data) ----
+  // ---- company picker (now in Step 1) ----
   function buildPicker(){
     var cos=Array.from(new Set(DATA.map(function(r){return r.CompanyNumber;}))).sort().filter(inScopeCo);
     var host=document.getElementById('companyPick');
     var allLabel=scopedCompanySet()?'All in scope':'All';
     host.innerHTML='<button type="button" class="seg-btn'+(state.company===''?' is-on':'')+'" data-co="">'+allLabel+'</button>'+
       cos.map(function(c){ return '<button type="button" class="seg-btn'+(String(c)===state.company?' is-on':'')+'" data-co="'+esc(c)+'">'+esc(c)+'</button>'; }).join('');
-    host.addEventListener('click',function(e){ var b=e.target.closest('.seg-btn'); if(!b) return;
-      state.company=b.getAttribute('data-co')||'';   // local drill within scope; not written back to the shared scope
-      host.querySelectorAll('.seg-btn').forEach(function(x){x.classList.toggle('is-on',x===b);}); renderAll(); });
   }
+  document.getElementById('companyPick').addEventListener('click',function(e){ var b=e.target.closest('.seg-btn'); if(!b) return;
+    state.company=b.getAttribute('data-co')||'';
+    this.querySelectorAll('.seg-btn').forEach(function(x){x.classList.toggle('is-on',x===b);}); renderAll();
+    // scope changed — re-ask the AI if the band is open (aiScopeKey changes).
+    var th=document.getElementById('todoHead'); if(th && th.getAttribute('aria-expanded')!=='false') triggerTodoAi(); });
 
-  // ---- account picker (built from the in-scope rows; rebuilds on company drill) ----
+  // ---- account picker ----
   function buildAccountPicker(){
     var sel=document.getElementById('accountPick'); if(!sel) return;
     var accts=accountsInView();
-    if(state.account && accts.indexOf(state.account)===-1) state.account='';   // company drill changed — reset
+    if(state.account && accts.indexOf(state.account)===-1) state.account='';
     sel.innerHTML='<option value="">All accounts</option>'+
       accts.map(function(a){ return '<option value="'+esc(a)+'"'+(a===state.account?' selected':'')+'>'+esc(a)+'</option>'; }).join('');
   }
 
-  // ---- excel export (real, via SheetJS) ----
+  // ---- excel export (all rows in scope view, audit-quality) ----
+  function thinBorder(rgb){ var s={style:'thin',color:{rgb:rgb}}; return {top:s,bottom:s,left:s,right:s}; }
+  // Audit-quality Excel: navy header band, all rows in scope, numbers formatted +
+  // right-aligned, and the break ("No") rows highlighted light-red with the GL OK /
+  // Var OK = no cell bolded red. Needs xlsx-js-style (the community xlsx build can't fill).
   function exportXlsx(){
     var data=rows().filter(byAccount);
     if(!data.length){ toast('Nothing to export'); return; }
-    if(typeof XLSX==='undefined'){ toast('Excel library still loading &mdash; try again'); return; }
+    if(typeof XLSX==='undefined'){ toast('Excel library still loading — try again'); return; }
+    var NUM_FMT='#,##0.00;(#,##0.00)';
     var aoa=[COLS.map(function(c){return c.label;})];
     data.forEach(function(r){ aoa.push(COLS.map(function(c){
       var raw=rawVal(r,c.k);
-      return raw==null?'':raw; })); });
-    var ws=XLSX.utils.aoa_to_sheet(aoa), wb=XLSX.utils.book_new();
+      if(c.num){ var n=Number(raw); return isNaN(n)?'':n; }   // real numbers so the format + right-align apply
+      return raw==null?'':raw;
+    })); });
+    var ws=XLSX.utils.aoa_to_sheet(aoa);
+    var range=XLSX.utils.decode_range(ws['!ref']);
+    // header band
+    for(var hc=range.s.c;hc<=range.e.c;hc++){
+      var hr=XLSX.utils.encode_cell({r:0,c:hc}); if(!ws[hr]) continue;
+      ws[hr].s={ font:{bold:true,color:{rgb:'FFFFFF'}}, fill:{patternType:'solid',fgColor:{rgb:'1F2D4A'}},
+                 alignment:{horizontal:'center',vertical:'center'}, border:thinBorder('D0D0D0') };
+    }
+    // body rows
+    var breaks=0;
+    data.forEach(function(r,i){
+      var rr=i+1, isBreak=(r.GLOK==='no'||r.VarOK==='no'); if(isBreak) breaks++;
+      for(var c=range.s.c;c<=range.e.c;c++){
+        var ref=XLSX.utils.encode_cell({r:rr,c:c}), cell=ws[ref]; if(!cell) continue;
+        var key=COLS[c].k; cell.s=cell.s||{}; cell.s.border=thinBorder('ECECEC');
+        if(NUMCOL[key]){ cell.z=NUM_FMT; cell.s.alignment={horizontal:'right'}; }
+        if(isBreak){ cell.s.fill={patternType:'solid',fgColor:{rgb:'FCE5E1'}}; }
+        if((key==='glok'&&r.GLOK==='no')||(key==='varok'&&r.VarOK==='no')){ cell.s.font={bold:true,color:{rgb:'C0392B'}}; }
+      }
+    });
+    ws['!cols']=COLS.map(function(c){ return {wch: c.num?13:Math.max(8,c.label.length+3)}; });
+    var wb=XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb,ws,'Roll Forward');
     XLSX.writeFile(wb,'Account Roll Forward.xlsx');
-    toast('Exported '+data.length+' row'+(data.length!==1?'s':'')+' to Excel');
+    toast('Exported '+data.length+' row'+(data.length!==1?'s':'')+(breaks?(' · '+breaks+' break'+(breaks!==1?'s':'')+' highlighted'):'')+' to Excel');
   }
 
-  // ---- wire ----
-  document.getElementById('showAll').addEventListener('change',function(){ state.showAll=this.checked; renderAll(); });
+  // ---- collapse manager (Home-style band heads) ----
+  function wireBand(headId, bodyId, onExpand){
+    var head=document.getElementById(headId), body=document.getElementById(bodyId);
+    if(!head||!body) return;
+    function setOpen(open){ head.setAttribute('aria-expanded', open?'true':'false'); body.classList.toggle('is-collapsed', !open); if(open && onExpand) onExpand(); }
+    function toggle(){ setOpen(head.getAttribute('aria-expanded')==='false'); }
+    head.addEventListener('click',function(e){ if(e.target.closest('a,button,select,input,label,[role="button"]')) return; toggle(); });
+    head.addEventListener('keydown',function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); toggle(); } });
+    var chev=head.querySelector('.band-chev'); if(chev) chev.addEventListener('click',function(e){ e.stopPropagation(); toggle(); });
+    head._setOpen=setOpen;   // exposed so the AI chip can open the band (and trigger AI)
+  }
+
+  // ---- R099102 inline email + attest ----
+  function sum_for_email(){ return breakSummary(); }
+  function syncR99Email(sum){
+    var a=document.getElementById('r99Email'); if(!a) return;
+    var glAccts=(sum&&sum.gl&&sum.gl.accts)||[];
+    var cos=Array.from(new Set(glAccts.map(function(x){return x.co;}))).join(', ');
+    var acctList=glAccts.slice(0,20).map(function(x){return x.co+' · '+x.acct;}).join('\n');
+    var subj='R099102 Account Balance Repost request';
+    var body='Please run R099102 (Account Balance Repost) in JD Edwards — proof mode first, then final mode — scoped to:\n\n'+
+      'Company(ies): '+(cos||'(see below)')+'\nFiscal year: (current)\nAccounts:\n'+(acctList||'(GL accounts out of balance — see RapidReconciler Account Roll Forward)')+'\n\n'+
+      'Reason: the balance table (F0902) disagrees with the detail (F0911) on these accounts; the detail is the source of truth.'+
+      (_aiMaxLevel==='full' ? '\n\nPlease attach the repost report (PDF) to your reply so it can be reviewed.' : '')+
+      '\n\nThanks.';
+    a.setAttribute('href','mailto:?subject='+encodeURIComponent(subj)+'&body='+encodeURIComponent(body));
+  }
+  // Append an event to the data-service Activity Log (server audit trail).
+  // Graceful: no-ops until the agent's POST /admin/activity endpoint is deployed.
+  function logActivity(event, detail){
+    var t; try{ t=localStorage.getItem('rrv8.token'); }catch(_){}
+    var base=(window.RRDB && RRDB.agentBase())||(window.RR_CONFIG && RR_CONFIG.testAgentBase);
+    if(!t||!base) return;
+    fetch(base+'/admin/activity',{method:'POST',
+        headers:{'Authorization':'Bearer '+t,'Content-Type':'application/json','Accept':'application/json'},
+        body:JSON.stringify({event:event, detail:detail})}).catch(function(){});
+  }
+  // R099102 AI report-checker (prototype): pick the JDE repost PDF, extract its
+  // text client-side, AI judges clean vs errors and reminds that RR needs Reload
+  // GL + rebuild. Full tier only (the report carries account numbers/amounts →
+  // 'full' exposure). PDF text extraction via pdf.js; scanned/image PDFs won't
+  // yield text (production: vendor pdf.js or read the PDF natively via Claude).
+  var _r99ReportText='';
+  function extractPdfText(buf){
+    if(!window.pdfjsLib) return Promise.reject(new Error('PDF reader still loading — try again'));
+    try{ if(!pdfjsLib.GlobalWorkerOptions.workerSrc) pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'; }catch(_){}
+    return pdfjsLib.getDocument({data:buf}).promise.then(function(pdf){
+      var chain=Promise.resolve('');
+      for(var n=1;n<=pdf.numPages;n++){ (function(pn){ chain=chain.then(function(txt){
+        return pdf.getPage(pn).then(function(pg){ return pg.getTextContent(); })
+          .then(function(tc){ return txt+tc.items.map(function(it){return it.str;}).join(' ')+'\n'; });
+      }); })(n); }
+      return chain;
+    });
+  }
+  function onR99File(){
+    var inp=document.getElementById('r99File'), status=document.getElementById('r99FileStatus'), btn=document.getElementById('r99Check');
+    var f=inp&&inp.files&&inp.files[0]; if(!f) return;
+    _r99ReportText=''; if(btn) btn.disabled=true;
+    var isPdf=/\.pdf$/i.test(f.name)||f.type==='application/pdf';
+    status.textContent='Reading '+f.name+'…';
+    var reader=new FileReader();
+    reader.onload=function(){
+      if(isPdf){
+        extractPdfText(reader.result).then(function(txt){
+          _r99ReportText=(txt||'').trim();
+          if(!_r99ReportText){ status.textContent='No text in '+f.name+' (a scanned image?). Use a text-based PDF.'; return; }
+          status.textContent='✓ '+f.name+' ready'; if(btn) btn.disabled=false;
+        }).catch(function(e){ status.textContent='Couldn’t read '+f.name+' — '+((e&&e.message)||'error'); });
+      } else {
+        _r99ReportText=String(reader.result||'').trim();
+        status.textContent=_r99ReportText?('✓ '+f.name+' ready'):'Empty file';
+        if(btn) btn.disabled=!_r99ReportText;
+      }
+    };
+    reader.onerror=function(){ status.textContent='Couldn’t read the file.'; };
+    if(isPdf) reader.readAsArrayBuffer(f); else reader.readAsText(f);
+  }
+  function checkR99Report(){
+    var v=document.getElementById('r99Verdict'), btn=document.getElementById('r99Check');
+    if(!v) return;
+    var report=(_r99ReportText||'').trim();
+    if(!report){ v.hidden=false; v.className='r99-ai-verdict'; v.textContent='Choose the report PDF first.'; return; }
+    v.hidden=false; v.className='r99-ai-verdict is-thinking'; v.textContent='Checking…'; if(btn) btn.disabled=true;
+    var sys='You review JD Edwards R099102 (Account Balance Repost) reports for a finance analyst. Decide whether the run completed with NO errors. Reply in 2-3 short sentences: begin with "CLEAN" or "ERRORS FOUND", then the evidence, then the next step — a clean report still requires Reload GL (re-import F0902) and a roll-forward rebuild before RapidReconciler reflects it. Plain language.';
+    aiExplain(sys, 'R099102 report:\n'+report.slice(0,8000), _aiMaxLevel).then(function(text){
+      var clean=/^\s*clean/i.test(text||'');
+      v.className='r99-ai-verdict '+(clean?'clean':(/error/i.test(text||'')?'errors':''));
+      v.textContent=text||'(no reply)'; if(btn) btn.disabled=false;
+    }).catch(function(e){
+      v.className='r99-ai-verdict';
+      v.textContent='Couldn’t reach the assistant — '+((e&&e.message)||'try again')+'. Review the report manually.';
+      if(btn) btn.disabled=false;
+    });
+  }
+  (function wireR99(){
+    var toggle=document.getElementById('r99Toggle'), drawer=document.getElementById('r99Drawer'),
+        chk=document.getElementById('r99Chk'), rec=document.getElementById('r99Record'),
+        check=document.getElementById('r99Check');
+    if(toggle&&drawer){
+      function open(){ drawer.classList.toggle('is-open'); }
+      toggle.addEventListener('click',open);
+      toggle.addEventListener('keydown',function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); open(); } });
+    }
+    if(check){ check.addEventListener('click', checkR99Report); }
+    var file=document.getElementById('r99File'); if(file){ file.addEventListener('change', onR99File); }
+    if(chk&&rec){ chk.addEventListener('change',function(){ rec.disabled=!chk.checked; }); }
+    if(rec){ rec.addEventListener('click',function(){
+      // Persist the gate state (per-DB localStorage) AND record it in the server
+      // Activity Log for the audit trail. Flips R099102 -> done and unlocks
+      // Reload GL via renderCorrective().
+      setR99Attested(true);
+      rec.disabled=true; chk.checked=true;
+      if(drawer) drawer.classList.remove('is-open');
+      renderCorrective();
+      logActivity('R099102 repost confirmed', 'Repost report received with no errors. Reload GL (re-import F0902) + roll-forward rebuild to follow.');
+      toast('R099102 attestation recorded — Reload GL unlocked');
+    }); }
+  })();
+
+  // ---- normalize GL OK / Var OK for display ----
+  function normTok(v){ var s=String(v==null?'':v).trim().toLowerCase();
+    if(s==='no'||s==='baseline'||s==='yes'||s==='end') return s;
+    if(s.indexOf('end')===0) return 'end';
+    return 'yes';
+  }
+  function ingest(rows){
+    DATA=(Array.isArray(rows)?rows:[]).map(function(r){ r.GLOK=normTok(r.GLOK); r.VarOK=normTok(r.VarOK); return r; });
+    buildPicker(); renderAll();
+  }
+
+  // ============ AI assistant (Step 1) — VALC gateway /api/v1/ai ============
+  // First on-page AI integration. The deterministic checklist below is the
+  // "off" experience and always renders; when the band is expanded and the
+  // client's plan includes AI, the assistant summarizes what to do up top.
+  var TIER_LABEL={ off:'Off', docs:'Docs-grounded', scrubbed:'Scrubbed', full:'Full data' };
+  var _aiMaxLevel='off', _aiAskedKey=null;
+  function aiBase(){ return (window.RR_CONFIG && RR_CONFIG.valcBase) || 'http://localhost:8080'; }
+  function aiTok(){ try{ return localStorage.getItem('rrv8.token'); }catch(_){ return null; } }
+  function aiHealth(){
+    var t=aiTok(); if(!t) return Promise.resolve('off');
+    return fetch(aiBase()+'/api/v1/ai/health',{headers:{'Authorization':'Bearer '+t,'Accept':'application/json'}})
+      .then(function(r){ return r.ok?r.json():null; })
+      .then(function(j){ return (j&&j.maxLevel)||'off'; })
+      .catch(function(){ return 'off'; });
+  }
+  function aiExplain(system, prompt, level){
+    var t=aiTok();
+    // Client-side timeout: a hung gateway/model call must fall back to the
+    // deterministic checklist, never spin "Thinking…" forever.
+    var ctrl=('AbortController' in window)?new AbortController():null;
+    var timer=ctrl?setTimeout(function(){ ctrl.abort(); }, 45000):null;
+    return fetch(aiBase()+'/api/v1/ai/explain',{method:'POST',
+        headers:{'Authorization':'Bearer '+t,'Content-Type':'application/json','Accept':'application/json'},
+        body:JSON.stringify({system:system, prompt:prompt, level:level}),
+        signal:ctrl?ctrl.signal:undefined})
+      .then(function(r){ if(timer) clearTimeout(timer); if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+      .then(function(j){ return (j&&j.text)?String(j.text).trim():''; })
+      .catch(function(e){ if(timer) clearTimeout(timer); throw (e&&e.name==='AbortError')?new Error('the assistant timed out'):e; });
+  }
+  function renderAiChip(){
+    var chip=document.getElementById('todoAiChip'), tier=document.getElementById('todoAiTier');
+    if(!chip||!tier) return;
+    if(_aiMaxLevel==='off'){ chip.classList.add('is-off'); tier.textContent='AI · Off'; chip.title='The AI Assistant is not in your plan'; }
+    else { chip.classList.remove('is-off'); tier.textContent='AI · '+(TIER_LABEL[_aiMaxLevel]||_aiMaxLevel); chip.title='Expand for an AI summary of what to do'; }
+    // R099102 report-checker sends the report (account numbers/amounts) → full tier only.
+    var ai=document.getElementById('r99Ai'); if(ai) ai.hidden=(_aiMaxLevel!=='full');
+    // Re-sync the email so the "attach the report" line tracks the tier once known.
+    try{ syncR99Email(breakSummary()); }catch(_){}
+  }
+  function aiScopeKey(){ return (state.company||'all')+'|'+DATA.filter(rowMatchesCo).length; }
+  function aiPrompt(sum){
+    var cos=Array.from(new Set(DATA.filter(rowMatchesCo).map(function(r){return String(r.CompanyNumber);}))).sort();
+    var glN=sum.gl.rows, varN=sum.varc.rows;
+    if(glN+varN===0) return 'Companies in scope: '+cos.join(', ')+'. The GL and variance roll-forwards are intact (no breaks). In one sentence, confirm there is nothing to correct and what to watch at the next refresh.';
+    if(_aiMaxLevel==='full'){
+      var glA=sum.gl.accts.slice(0,12).map(function(x){return x.co+'·'+x.acct;}).join(', ');
+      var vrA=sum.varc.accts.slice(0,12).map(function(x){return x.co+'·'+x.acct;}).join(', ');
+      return 'Companies in scope: '+cos.join(', ')+'.\nGL breaks: '+glN+(glA?(' (accounts '+glA+')'):'')+'.\nVariance breaks: '+varN+(vrA?(' (accounts '+vrA+')'):'')+'.\nWhat should I do, and in what order?';
+    }
+    return glN+' GL break'+(glN!==1?'s':'')+' and '+varN+' variance break'+(varN!==1?'s':'')+' across '+cos.length+' compan'+(cos.length!==1?'ies':'y')+'. What should I do, and in what order?';
+  }
+  // Called when the To Do band is expanded (and on scope change while open).
+  function triggerTodoAi(){
+    var panel=document.getElementById('todoAi'), body=document.getElementById('todoAiBody'), foot=document.getElementById('todoAiFoot');
+    if(!panel||!body) return;
+    if(_aiMaxLevel==='off'){ panel.hidden=false; panel.classList.remove('is-thinking','is-error'); body.textContent='The AI Assistant isn’t part of your plan yet — the checklist below is the manual guide. Contact GSI to enable it.'; foot.textContent=''; return; }
+    if(!DATA.length){ panel.hidden=true; return; }
+    var key=aiScopeKey();
+    if(_aiAskedKey===key) return;   // already asked (or asking) for this scope
+    _aiAskedKey=key;
+    var sum=breakSummary();
+    panel.hidden=false; panel.classList.add('is-thinking'); panel.classList.remove('is-error'); body.textContent='Thinking…'; foot.textContent='';
+    var sys='You are RapidReconciler’s Account Roll Forward assistant, helping a finance analyst keep the inventory source-of-truth accurate. The four corrective levers are: R099102 repost and Reload GL (GL-side breaks), and Re-roll companies then Reload Cardex (variance-side breaks). Always recommend fixing GL-side breaks before variance. Be concise (2-4 sentences), plain finance language, no SQL/endpoint/table jargon beyond standard JDE references.';
+    aiExplain(sys, aiPrompt(sum), _aiMaxLevel).then(function(text){
+      panel.classList.remove('is-thinking');
+      body.textContent=text||'(the assistant returned an empty reply)';
+      foot.textContent='RapidReconciler AI · '+(TIER_LABEL[_aiMaxLevel]||_aiMaxLevel)+' · verify against the report below';
+    }).catch(function(e){
+      panel.classList.remove('is-thinking'); panel.classList.add('is-error');
+      body.textContent='Couldn’t reach the assistant right now — the checklist below is the manual guide.';
+      foot.textContent=(e&&e.message)?String(e.message):'';
+      _aiAskedKey=null;   // let a re-expand retry
+    });
+  }
+
+  // ---- wire grid + bands ----
+  // (Show-all-periods toggle removed — the grid always shows all rows.)
   document.getElementById('exportBtn').addEventListener('click',exportXlsx);
   document.getElementById('rfHead').addEventListener('click',function(e){ var th=e.target.closest('th'); if(!th) return; var k=th.getAttribute('data-k');
     if(state.sortKey===k){ state.sortDir=state.sortDir==='asc'?'desc':'asc'; } else { state.sortKey=k; state.sortDir='asc'; } renderGrid(); });
   document.getElementById('accountPick').addEventListener('change',function(){ state.account=this.value; renderGrid(); });
-  // Card -> grid: clicking an account on any playbook card selects it, turns on
-  // "Show all periods", and jumps the grid to that account's full history.
-  function jumpToAccount(acct){
-    if(!acct) return;
-    var sa=document.getElementById('showAll'); if(sa) sa.checked=true; state.showAll=true;
-    state.account=acct;
-    buildAccountPicker(); renderGrid();
-    var gc=document.querySelector('.grid-card');
-    if(gc && gc.scrollIntoView) gc.scrollIntoView({behavior:'smooth',block:'start'});
-  }
-  document.getElementById('analysis').addEventListener('click',function(e){
+  // To Do account chip -> jump the report to that account's full history.
+  document.getElementById('todoBody').addEventListener('click',function(e){
     var el=e.target.closest('[data-acct]'); if(!el||!this.contains(el)) return;
     jumpToAccount(el.getAttribute('data-acct'));
   });
-  document.getElementById('analysis').addEventListener('keydown',function(e){
-    if(e.key!=='Enter'&&e.key!==' ') return;
-    var el=e.target.closest('[data-acct]'); if(!el||!this.contains(el)) return;
-    e.preventDefault(); jumpToAccount(el.getAttribute('data-acct'));
-  });
-
-  // ---- normalize GL OK / Var OK for display (raw v6ui_raccountsummary.oobrollok
-  //      carries recompute timestamps; the workbook/analyzer show baseline/yes/end/no).
-  //      'no' (a real break) is always preserved so the validation rule fires. ----
-  function normTok(v){ var s=String(v==null?'':v).trim().toLowerCase();
-    if(s==='no'||s==='baseline'||s==='yes'||s==='end') return s;
-    if(s.indexOf('end')===0) return 'end';            // "end - <timestamp>"
-    return 'yes';                                     // stale timestamp on a settled period
+  function jumpToAccount(acct){
+    if(!acct) return;
+    state.account=acct;
+    buildAccountPicker(); renderGrid();
+    // make sure the report band is open, then scroll to it
+    var rh=document.getElementById('rptHead'), rb=document.getElementById('rptBody');
+    if(rh&&rb){ rh.setAttribute('aria-expanded','true'); rb.classList.remove('is-collapsed'); }
+    var gc=document.querySelector('.grid-card');
+    if(gc && gc.scrollIntoView) gc.scrollIntoView({behavior:'smooth',block:'start'});
   }
-  function ingest(rows){
-    DATA=(Array.isArray(rows)?rows:[]).map(function(r){ r.GLOK=normTok(r.GLOK); r.VarOK=normTok(r.VarOK); return r; });
-    buildPicker(); renderAll();   // state.company defaults '' = all companies in scope
-  }
+  wireBand('todoHead','todoBody', triggerTodoAi); wireBand('corrHead','corrBody'); wireBand('rptHead','rptBody');
+  // AI chip in the To Do header: open the band (which triggers the AI summary).
+  (function(){ var chip=document.getElementById('todoAiChip'), head=document.getElementById('todoHead'); if(chip&&head){ chip.addEventListener('click',function(e){ e.stopPropagation(); if(head._setOpen) head._setOpen(true); }); } })();
+  // Block navigation on the Reload GL card while it's gated (pointer-events:none
+  // stops the mouse, but a focused <a> can still be Enter-activated).
+  (function(){ var c=document.getElementById('reloadGlCard'); if(c){ c.addEventListener('click',function(e){ if(c.classList.contains('is-gated')) e.preventDefault(); }); } })();
 
-  // ---- agent-first load: v6ui_raccountsummary from the active DB's agent
-  //      (JWT-scoped), via POST /inventory/integrity. Falls back to the local
-  //      dev snapshot for demo / deployed / no-token. ----
-  // Active DB's agent base — the ONE canonical resolver (config.js RRDB):
-  // selected DB's ip first, dev test-agent only as the no-ip fallback.
-  function agentBaseFromToken(token){ return window.RRDB ? window.RRDB.agentBase() : null; }
+  // ---- agent-first load: v6ui_raccountsummary from the active DB's agent ----
   function loadFromAgent(){
     var token; try{ token=localStorage.getItem('rrv8.token'); }catch(_){}
     if(!token) return Promise.reject(new Error('no token'));
-    // Prefer the dev/test-agent override (RR_CONFIG.testAgentBase, e.g.
-    // localhost:34537) the live pages use; fall back to the token's
-    // activeDb host on a real install where testAgentBase is null.
-    // Route to the SELECTED DB's agent first; testAgentBase is only a
-    // pre-hydrate/no-ip fallback. (Was testAgentBase-first, which pinned every
-    // fetch to the single dev test agent = Dev, ignoring the selected DB.)
-    var base=agentBaseFromToken(token) || (window.RR_CONFIG && RR_CONFIG.testAgentBase);
+    var base=(window.RRDB ? window.RRDB.agentBase() : null) || (window.RR_CONFIG && RR_CONFIG.testAgentBase);
     if(!base) return Promise.reject(new Error('no agent base'));
     return fetch(base+'/inventory/integrity',{method:'POST',
         headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json;charset=UTF-8','Accept':'application/json'},
@@ -645,17 +912,23 @@
       .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
       .then(function(d){ return Array.isArray(d)?d:((d&&d.data)||[]); });
   }
-  function loadSnapshot(){
-    return fetch('data/account-rollforward.json',{cache:'no-store'})
-      .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); });
-  }
+  // topbar db name
+  (function(){ var ctx=_scopeCtx(); var nm=(ctx&&ctx.key)?ctx.key.split('.').slice(-2,-1)[0]:null; if(nm&&nm!=='_') document.getElementById('topbarDb').textContent=nm; })();
+  // AI plan tier — paint the header chip from the client's purchased level.
+  aiHealth().then(function(lvl){ _aiMaxLevel=lvl||'off'; renderAiChip(); });
+
+  // Agent-first, no static fallback (V8 is production-only): a failed load shows
+  // a clean "sign in / unavailable" rather than foreign snapshot data, which
+  // previously surfaced a stale company list (e.g. "100") that looked like a
+  // scope bug.
   loadFromAgent()
     .then(ingest)
-    .catch(function(){ return loadSnapshot().then(ingest); })
     .catch(function(err){
-      document.getElementById('analysis').innerHTML='<div class="empty">Roll-forward data isn&rsquo;t available.<br><span style="font-size:12px">Sign in so the page can read the account roll-forward from the data service.</span></div>';
+      console.error('account-rollforward load/render failed:', err);
+      document.getElementById('todoDetail').innerHTML='<div class="empty">Roll-forward data isn&rsquo;t available.<br><span style="font-size:12px">Sign in so the page can read the account roll-forward from the data service.</span></div>';
       document.getElementById('rfBody').innerHTML='<tr><td class="empty" colspan="'+COLS.length+'">No data &mdash; '+esc(err.message)+'</td></tr>';
       document.getElementById('gridCount').textContent='0 rows';
+      setBandStatus('todoStatus','','Data unavailable');
     });
 })();
 </script>

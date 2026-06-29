@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<!--
+  =============================================================================
+  Reconciliation > Account Roll Forward — Re-roll Companies
+  =============================================================================
+  Step 1 of the Account Roll Forward banded redesign (the only NEW surface —
+  Reload GL / Reload Cardex reuse the existing admin pages). This is the
+  VarOK corrective: re-roll the selected companies, then rebuild the account
+  summary so the report refreshes. Backed by the agent's async, activity-lock-
+  guarded POST /inventory/recalc (runs usp8_recalc_inventory_rollforward), with
+  DB-authoritative progress polled from GET /inventory/recalc-status.
+
+  Analyst-facing (perms.dm), NOT admin — the Reconciliation Analyst owns
+  keeping the source accurate. JD Edwards is never touched; this recomputes
+  RapidReconciler's perpetual balance from the baseline forward.
+
+  Standard admin-page chrome (topbar + help "?" + footer), mirrored from
+  admin-reload-gl.html. The re-roll/poll logic is lifted from the (superseded)
+  inline action-bar in inventory-account-rollforward.html.
+  =============================================================================
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Re-roll Companies &mdash; RapidReconciler</title>
+<link href="fonts/fonts.css" rel="stylesheet">
+<link href="sidebar.css" rel="stylesheet">
+<script src="config.js"></script>
+<script src="sidebar.js"></script>
+<style>
+  :root {
+    --navy:#1f2d4a; --navy-deep:#142037; --blue:#2b5fb0; --blue-bright:#3d8fd6; --blue-pale:#e6efff;
+    --orange:#f08a24; --orange-deep:#c8700f; --orange-pale:#fdeed9; --green:#2e8a55; --green-pale:#def4e6;
+    --red:#c0392b; --red-pale:#fce5e1; --bg:#fafbfd; --bg-soft:#f3f5f9; --bg-card:#ffffff;
+    --text:#1f2d4a; --text-soft:#4a5468; --text-muted:#828a9a; --rule:#e6eaf0; --rule-strong:#cfd6e0;
+    --shadow-sm:0 1px 2px rgba(20,32,55,.04); --shadow-md:0 4px 12px -2px rgba(20,32,55,.08);
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'Open Sans',-apple-system,sans-serif; background:var(--bg); color:var(--text); font-size:14px; line-height:1.55; -webkit-font-smoothing:antialiased; }
+  h1,h2,h3 { font-family:'Source Sans 3',sans-serif; font-weight:700; }
+  a { color:inherit; text-decoration:none; }
+
+  .app { display:grid; grid-template-columns:1fr; grid-template-rows:56px 1fr auto; grid-template-areas:"topbar" "main" "footer"; min-height:100vh; }
+  .topbar { grid-area:topbar; background:var(--bg-card); border-bottom:1px solid var(--rule); display:flex; align-items:center; padding:0 24px; z-index:50; }
+  .topbar-brand { display:flex; align-items:center; gap:12px; }
+  .topbar-brand-logo { height:28px; width:auto; display:block; }
+  .topbar-brand-text { display:flex; flex-direction:column; line-height:1.15; }
+  .topbar-brand-name { font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:15px; color:var(--navy); }
+  .topbar-brand-db { font-family:'Source Sans 3',sans-serif; font-size:11px; color:var(--text-muted); letter-spacing:.08em; text-transform:uppercase; }
+  .topbar-home { margin-left:auto; }
+
+  .main { grid-area:main; padding:24px 32px 48px; overflow-y:auto; }
+  .page { max-width:880px; margin:0 auto; }
+  .page-header { margin-bottom:18px; }
+  .breadcrumb { font-family:'Source Sans 3',sans-serif; font-size:11px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted); margin-bottom:6px; }
+  .breadcrumb a { color:var(--text-muted); } .breadcrumb a:hover { color:var(--blue); }
+  .breadcrumb-sep { margin:0 6px; opacity:.6; }
+  .page-title { font-size:26px; color:var(--navy); font-weight:800; }
+  .page-lede { color:var(--text-soft); margin-top:8px; max-width:64ch; }
+
+  .card { background:var(--bg-card); border:1px solid var(--rule); border-radius:10px; box-shadow:var(--shadow-sm); margin-bottom:18px; overflow:hidden; }
+  .card-head { padding:14px 18px; border-bottom:1px solid var(--rule); background:var(--bg-soft); display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  .card-title { font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:14px; color:var(--navy); letter-spacing:.02em; }
+  .card-body { padding:18px; }
+
+  .note { display:flex; gap:12px; padding:13px 16px; border-radius:9px; background:var(--blue-pale); border:1px solid #c2d8ef; color:var(--text); margin-bottom:18px; }
+  .note svg { width:18px; height:18px; flex-shrink:0; color:var(--blue); margin-top:2px; }
+  .note b { color:var(--navy); }
+
+  /* Company scope picker */
+  .scope-tools { display:flex; gap:10px; align-items:center; }
+  .scope-link { font-family:'Source Sans 3',sans-serif; font-size:12px; font-weight:700; color:var(--blue); cursor:pointer; background:none; border:none; padding:2px 4px; }
+  .scope-link:hover { text-decoration:underline; }
+  .scope-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:8px 16px; }
+  .scope-co { display:flex; gap:8px; align-items:center; font-size:13.5px; color:var(--text-soft); cursor:pointer; }
+  .scope-co input { flex-shrink:0; }
+  .scope-empty { color:var(--text-muted); font-size:13px; }
+  .scope-summary { font-size:12.5px; color:var(--text-muted); margin-top:12px; }
+  .scope-summary b { color:var(--navy); }
+
+  .attest { display:flex; gap:10px; align-items:flex-start; margin:16px 0 4px; font-size:13.5px; color:var(--text-soft); cursor:pointer; }
+  .attest input { margin-top:3px; flex-shrink:0; }
+
+  .btn { font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:13.5px; border-radius:6px; padding:9px 18px; cursor:pointer; border:1px solid transparent; }
+  .btn-primary { color:#fff; background:var(--blue); border-color:var(--blue); }
+  .btn-primary:hover:not(:disabled) { filter:brightness(1.06); }
+  .btn:disabled { opacity:.5; cursor:not-allowed; filter:none; }
+  .actions { margin-top:18px; display:flex; gap:10px; align-items:center; }
+
+  /* Progress / status line */
+  .run-status { display:none; margin-top:16px; padding:12px 15px; border-radius:8px; font-size:13.5px; border:1px solid var(--rule-strong); background:var(--bg-soft); color:var(--text-soft); align-items:center; gap:10px; }
+  .run-status.is-visible { display:flex; }
+  .run-status.ok  { background:var(--green-pale); border-color:#bfe6cd; color:var(--text); }
+  .run-status.err { background:var(--red-pale); border-color:#e8b8b0; color:var(--text); }
+  .run-status .spin { width:15px; height:15px; flex-shrink:0; border:2px solid var(--rule-strong); border-top-color:var(--blue); border-radius:50%; animation:spin 0.8s linear infinite; }
+  .run-status.ok .spin, .run-status.err .spin { display:none; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .run-status .spin { animation:none; } }
+
+  .fetch-error { display:none; background:var(--red-pale); border:1px solid var(--red); color:var(--red); padding:10px 14px; border-radius:6px; margin-bottom:16px; font-size:13px; font-weight:600; }
+  .fetch-error.is-visible { display:block; }
+
+  /* Busy guard: a re-roll can't run while a deploy / B-to-C / another recalc
+     holds the database activity lock. Shown + the action disabled while busy;
+     re-enables when the lock clears (polled). */
+  .busy-guard { display:none; gap:12px; padding:13px 16px; border-radius:9px; background:var(--orange-pale); border:1px solid #f0d2a8; color:var(--text); margin-bottom:18px; }
+  .busy-guard.is-visible { display:flex; }
+  .busy-guard svg { width:18px; height:18px; flex-shrink:0; color:var(--orange-deep); margin-top:2px; }
+
+  .gate-notice { display:none; gap:12px; padding:13px 16px; border-radius:9px; background:var(--blue-pale); border:1px solid #c2d8ef; color:var(--text); }
+  .gate-notice svg { width:18px; height:18px; flex-shrink:0; color:var(--blue); margin-top:2px; }
+  .gate-notice.is-visible { display:flex; }
+  body.is-gated #js-tool { display:none; }
+
+  .app-footer { grid-area:footer; border-top:1px solid var(--rule); background:var(--bg-card); color:var(--text-muted); font-size:12px; text-align:center; padding:12px 24px; }
+  .app-footer .af-ver { color:var(--text-soft); font-weight:600; }
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <header class="topbar">
+    <div class="topbar-brand">
+      <img class="topbar-brand-logo" src="../Images/gsi-logo.png" alt="GSI">
+      <span class="topbar-brand-text">
+        <span class="topbar-brand-name">RapidReconciler</span>
+        <span class="topbar-brand-db" id="js-topbar-db">RapidReconciler_Dev</span>
+      </span>
+    </div>
+    <a class="topbar-home" href="inventory-account-rollforward.html" title="Back to Account Roll Forward">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+      Account Roll Forward
+    </a>
+  </header>
+
+  <main class="main">
+    <div class="page">
+
+      <header class="page-header">
+        <nav class="breadcrumb" aria-label="Breadcrumb">
+          <a href="home.html">Reconciliation</a><span class="breadcrumb-sep">/</span><a href="inventory-account-rollforward.html">Account Roll Forward</a><span class="breadcrumb-sep">/</span><span>Re-roll</span>
+        </nav>
+        <h1 class="page-title">Re-roll Companies</h1>
+        <p class="page-lede">Recompute the perpetual inventory balance from the baseline date forward for the companies you choose, then rebuild the account roll-forward so the report reflects it. This settles most variance breaks. It runs for a few minutes and <b>changes nothing in JD Edwards</b>.</p>
+      </header>
+
+      <!-- Non-analyst gate -->
+      <div class="note gate-notice" id="js-gate" role="alert">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
+        <div>Re-rolling is a reconciliation function. <b>Contact your administrator</b> if you need access.</div>
+      </div>
+
+      <div id="js-tool">
+
+        <div class="fetch-error" id="js-fetch-error" role="alert"></div>
+
+        <!-- Activity-lock guard -->
+        <div class="busy-guard" id="js-busy-guard" role="status">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 7v5l3 2"/></svg>
+          <span id="js-busy-text"><b>The database is busy.</b> Another process is running, so a re-roll is paused until it finishes. This re-enables on its own.</span>
+        </div>
+
+        <div class="note">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z"/><path d="M12 8v5M12 16h.01"/></svg>
+          <span><b>This recomputes RapidReconciler&rsquo;s working balance &mdash; it does not pull from or write to JD Edwards.</b> A re-roll and a data refresh / deploy can&rsquo;t run at the same time, so it&rsquo;s safe to run whenever the database is idle.</span>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="card-title">Companies to re-roll</span>
+            <span class="scope-tools">
+              <button type="button" class="scope-link" id="js-scope-all">Select all</button>
+              <button type="button" class="scope-link" id="js-scope-none">Clear</button>
+            </span>
+          </div>
+          <div class="card-body">
+            <div class="scope-grid" id="js-scope-grid">
+              <span class="scope-empty" id="js-scope-empty">Loading your companies&hellip;</span>
+            </div>
+            <div class="scope-summary" id="js-scope-summary"></div>
+
+            <label class="attest" id="js-attest-row">
+              <input type="checkbox" id="js-attest">
+              <span>I understand this recomputes the perpetual balance from the baseline date forward for the selected companies, runs for a few minutes, and changes nothing in JD Edwards.</span>
+            </label>
+
+            <div class="actions">
+              <button class="btn btn-primary" id="js-run" type="button" disabled>Re-roll companies</button>
+            </div>
+
+            <div class="run-status" id="js-run-status" role="status" aria-live="polite">
+              <span class="spin" aria-hidden="true"></span>
+              <span id="js-run-status-text"></span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </main>
+
+  <footer class="app-footer">
+    &copy; 2026 RapidReconciler &middot; GSI Inc. &middot; <span class="af-ver" id="js-app-ver"></span>
+  </footer>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ---------- helpers ----------
+  function $(id) { return document.getElementById(id); }
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]; }); }
+  function showFetchError(msg) { var b = $('js-fetch-error'); b.textContent = msg; b.classList.add('is-visible'); }
+  function clearFetchError() { $('js-fetch-error').classList.remove('is-visible'); }
+
+  var RR_CONFIG = window.RR_CONFIG || {};
+  var MODE = (new URLSearchParams(window.location.search).get('mode')) || RR_CONFIG.mode || 'demo';
+  var IS_DEMO = (MODE === 'demo');
+
+  // ---------- agent API (mirrors the recalc caller in inventory-account-rollforward.html) ----------
+  function corrApi() {
+    var token; try { token = localStorage.getItem('rrv8.token'); } catch (_) {}
+    var base = (window.RRDB && RRDB.agentBase()) || (RR_CONFIG && RR_CONFIG.testAgentBase);
+    return (token && base) ? { base: base, token: token } : null;
+  }
+
+  // ---------- session: active DB + allowed companies (JWT db.i claim) ----------
+  // Decode the active DB's company allow-list straight from the token, the same
+  // source every inventory page uses (API.md: dbs[i].i drives the company universe).
+  function _scopeCtx() {
+    try {
+      var token = localStorage.getItem('rrv8.token'); if (!token) return null;
+      var b64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+      var pad = b64.length % 4; if (pad) b64 += '='.repeat(4 - pad);
+      var p = JSON.parse(decodeURIComponent(atob(b64).split('').map(function (c) { return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2); }).join('')));
+      var dbs = p.dbs || []; var idx = (window.RRDB && window.RRDB.index()) || 0; var dbObj = dbs[idx] || dbs[0] || {};
+      return { name: dbObj.n || null, allowed: (Array.isArray(dbObj.i) ? dbObj.i.map(String) : []), perms: p.perms || {} };
+    } catch (_) { return null; }
+  }
+  function isAnalyst(ctx) {
+    // perms.dm === true gates the Reconciliation Analyst lane (API.md §2). Fail
+    // open when the claim is absent so a hydrating session isn't locked out.
+    if (!ctx) return true;
+    return ctx.perms && ctx.perms.dm !== false;
+  }
+
+  // ---------- company picker ----------
+  function selectedCompanies() {
+    return Array.prototype.slice.call(document.querySelectorAll('.scope-co input:checked')).map(function (i) { return i.value; });
+  }
+  function renderScope(allowed) {
+    var grid = $('js-scope-grid');
+    if (!allowed || !allowed.length) {
+      grid.innerHTML = '<span class="scope-empty">No companies are in your scope. Contact your administrator.</span>';
+      $('js-attest-row').style.display = 'none';
+      return;
+    }
+    grid.innerHTML = allowed.map(function (co) {
+      return '<label class="scope-co"><input type="checkbox" value="' + esc(co) + '" checked>' + esc(co) + '</label>';
+    }).join('');
+    Array.prototype.forEach.call(grid.querySelectorAll('input'), function (i) { i.addEventListener('change', syncRun); });
+    syncScopeSummary();
+  }
+  function syncScopeSummary() {
+    var total = document.querySelectorAll('.scope-co input').length;
+    var picked = selectedCompanies().length;
+    var el = $('js-scope-summary');
+    if (!total) { el.textContent = ''; return; }
+    el.innerHTML = (picked === total)
+      ? '<b>All ' + total + '</b> of your companies will re-roll.'
+      : '<b>' + picked + '</b> of ' + total + ' companies selected.';
+  }
+
+  // ---------- run state ----------
+  var _running = false, _sawRunning = false, _startPolls = 0, _busy = false;
+
+  function syncRun() {
+    syncScopeSummary();
+    var picked = selectedCompanies().length;
+    $('js-run').disabled = !(picked > 0 && $('js-attest').checked && !_running && !_busy);
+  }
+  function setRunStatus(html, kind) {
+    var el = $('js-run-status'); if (!el) return;
+    el.className = 'run-status is-visible' + (kind ? (' ' + kind) : '');
+    $('js-run-status-text').innerHTML = html;
+  }
+
+  // Click -> POST /inventory/recalc -> poll /inventory/recalc-status -> done.
+  // Lifted from the (superseded) inline action-bar; the agent + the in-DB
+  // activity lock serialize everything, this just drives + reports it.
+  function runReroll() {
+    if (_running || _busy) return;
+    var api = corrApi();
+    if (!api) { setRunStatus('Sign in so the page can run this from the data service.', 'err'); return; }
+    var companies = selectedCompanies();
+    if (!companies.length) return;
+    _running = true; _sawRunning = false; _startPolls = 0;
+    $('js-run').disabled = true; $('js-run').textContent = 'Re-rolling…';
+    setRunStatus('Starting…');
+    fetch(api.base + '/inventory/recalc', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + api.token, 'Content-Type': 'application/json;charset=UTF-8', 'Accept': 'application/json' },
+      body: JSON.stringify({ reconciliationFilter: { companies: companies } })
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d || !d.started) {
+          // busyWith => another activity holds the lock; surface it cleanly.
+          var why = (d && d.busyWith) ? (' (' + esc(d.busyWith) + ' is running)') : '';
+          throw new Error(((d && d.message) || 'Could not start') + why);
+        }
+        setRunStatus('Running… ' + esc(d.message || ''));
+        setTimeout(function () { pollReroll(api); }, 2500);
+      })
+      .catch(function (e) { _running = false; resetRunBtn(); setRunStatus(esc(e.message || 'Could not start.'), 'err'); });
+  }
+  function pollReroll(api) {
+    fetch(api.base + '/inventory/recalc-status', { headers: { 'Authorization': 'Bearer ' + api.token, 'Accept': 'application/json' }, cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (s) {
+        if (s.running) { _sawRunning = true; setRunStatus('Running… ' + esc(s.currentStep || s.activity || 'working')); setTimeout(function () { pollReroll(api); }, 3000); return; }
+        // Not running. Until we've seen it start, treat as still spinning up so we
+        // don't read the prior run's last log line as this run's result.
+        if (!_sawRunning && _startPolls < 8) { _startPolls++; setTimeout(function () { pollReroll(api); }, 2000); return; }
+        _running = false; resetRunBtn();
+        if (s.ok) {
+          setRunStatus('Done &mdash; the companies re-rolled and the report rebuilt. <a href="inventory-account-rollforward.html">Review the roll-forward</a>.', 'ok');
+        } else {
+          var blocked = s.blockedBy ? (' &mdash; ' + esc(s.blockedBy) + ' is holding the database') : '';
+          setRunStatus('Finished, but the last step was &ldquo;' + esc(s.lastStep || 'unknown') + '&rdquo;' + (s.lastError ? (' (error ' + esc(s.lastError) + ')') : '') + blocked + '. Check with support if breaks remain.', 'err');
+        }
+      })
+      .catch(function () { setTimeout(function () { pollReroll(api); }, 3000); });  // transient blip — keep polling
+  }
+  function resetRunBtn() { $('js-run').textContent = 'Re-roll companies'; syncRun(); }
+
+  // ---------- busy guard: poll recalc-status on load so a deploy / B-to-C /
+  //            another recalc disables the button until the lock clears. ----------
+  function checkBusy() {
+    var api = corrApi(); if (!api) return;
+    fetch(api.base + '/inventory/recalc-status', { headers: { 'Authorization': 'Bearer ' + api.token, 'Accept': 'application/json' }, cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (s) {
+        // Busy when something OTHER than our own in-flight run holds the lock.
+        var blocking = (s.running && !_running) || !!s.blockedBy;
+        applyBusy(blocking, s.blockedBy || s.activity);
+      })
+      .catch(function () { /* leave guard as-is on a transient failure */ });
+  }
+  function applyBusy(busy, who) {
+    _busy = busy;
+    var g = $('js-busy-guard');
+    if (busy) {
+      $('js-busy-text').innerHTML = '<b>The database is busy' + (who ? (' (' + esc(who) + ')') : '') + '.</b> A re-roll is paused until it finishes. This re-enables on its own.';
+      g.classList.add('is-visible');
+    } else {
+      g.classList.remove('is-visible');
+    }
+    syncRun();
+  }
+
+  // ---------- boot ----------
+  function startBoot() {
+    var ctx = _scopeCtx();
+    if (ctx && ctx.name) $('js-topbar-db').textContent = ctx.name;
+    var ver = $('js-app-ver');
+    if (ver) ver.textContent = (RR_CONFIG.release || 'v8') + (RR_CONFIG.buildStamp ? ' · ' + RR_CONFIG.buildStamp : '');
+
+    // Client gate (UX only — the endpoint resolves scope from the JWT too).
+    if (localStorage.getItem('rrv8.token') && !isAnalyst(ctx)) {
+      document.body.classList.add('is-gated');
+      $('js-gate').classList.add('is-visible');
+      return;
+    }
+
+    $('js-attest').addEventListener('change', syncRun);
+    $('js-run').addEventListener('click', runReroll);
+    $('js-scope-all').addEventListener('click', function () { Array.prototype.forEach.call(document.querySelectorAll('.scope-co input'), function (i) { i.checked = true; }); syncRun(); });
+    $('js-scope-none').addEventListener('click', function () { Array.prototype.forEach.call(document.querySelectorAll('.scope-co input'), function (i) { i.checked = false; }); syncRun(); });
+
+    if (IS_DEMO) {
+      renderScope(['100', '200', '300']);   // illustrative only; live mode reads the JWT
+      syncRun();
+      return;
+    }
+
+    renderScope(ctx ? ctx.allowed : []);
+    syncRun();
+    checkBusy();
+    setInterval(checkBusy, 12000);
+  }
+
+  // Hydrate the session first (this minimal-topbar page doesn't mount the
+  // workbar that would auto-hydrate), so the token + active DB resolve before
+  // we read the company scope.
+  document.addEventListener('DOMContentLoaded', function () {
+    if (window.RRV8 && typeof window.RRV8.hydrateSession === 'function') {
+      window.RRV8.hydrateSession().then(startBoot).catch(startBoot);
+    } else {
+      startBoot();
+    }
+  });
+})();
+</script>
+</body>
+</html>

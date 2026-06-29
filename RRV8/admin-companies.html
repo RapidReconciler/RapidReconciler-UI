@@ -12,10 +12,11 @@
   the user can't see in Inventory don't come back.
 
   Columns: Number / Name / Start Date / Base Currency / AAI Doc /
-  Threshold / Options / Re-roll.
-  Options (edit company config: start date, AAI doc, threshold) and
-  Re-roll (re-roll the perpetual for a company) are both fully wired —
-  Options opens an edit modal (PUT), Re-roll confirms then POSTs.
+  Threshold / Options.
+  Options (edit company config: start date, AAI doc, threshold) opens an
+  edit modal (PUT). The per-company Re-roll was retired from this page;
+  the corrective now lives on the account roll-forward card, which runs
+  re-roll + the summary rebuild together (async, under the activity lock).
   =============================================================================
 -->
 <html lang="en">
@@ -532,33 +533,9 @@
     </div>
   </div>
 
-  <!-- Re-roll confirm modal — opened from the per-row Re-roll icon.
-       Fires POST /inventory/rollIItem (verbatim double-I from v359)
-       which loops dbo.usp6_maint_roll_inventory_from_baseline_comp
-       per company in scope. JWT-scope intersection happens
-       server-side. -->
-  <div class="modal-backdrop" id="js-reroll-modal" role="dialog" aria-modal="true" aria-labelledby="js-reroll-title">
-    <div class="modal" style="width: min(420px, 92vw);">
-      <div class="modal-head">
-        <span class="modal-title" id="js-reroll-title">Re-roll Item</span>
-        <button type="button" class="modal-close" id="js-reroll-close" aria-label="Close">
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="3" y1="3" x2="13" y2="13"/><line x1="13" y1="3" x2="3" y2="13"/>
-          </svg>
-        </button>
-      </div>
-      <div class="modal-body">
-        <p style="font-weight: 700; font-size: 14.5px; margin-bottom: 8px;">Are you sure you want to Re-roll?</p>
-        <p style="color: var(--text-soft); font-size: 13px;">
-          Company: <span id="js-reroll-company" style="font-weight: 700; color: var(--navy);"></span>
-        </p>
-        <div class="modal-error" id="js-reroll-error" role="alert"></div>
-      </div>
-      <div class="modal-foot">
-        <button type="button" class="modal-save-btn" id="js-reroll-confirm">Re-roll</button>
-      </div>
-    </div>
-  </div>
+  <!-- The per-company Re-roll was retired here: the corrective now lives on the
+       account roll-forward card (where the VarOK break is diagnosed), which runs
+       re-roll + the summary rebuild together, async, under the activity lock. -->
 
   <main class="main">
 
@@ -632,11 +609,10 @@
               <th class="is-num">AAI Doc</th>
               <th class="is-num">Threshold</th>
               <th class="is-action">Options</th>
-              <th class="is-action">Re-roll</th>
             </tr>
           </thead>
           <tbody id="js-companies-tbody">
-            <tr><td class="is-empty" colspan="8">Loading companies&hellip;</td></tr>
+            <tr><td class="is-empty" colspan="7">Loading companies&hellip;</td></tr>
           </tbody>
         </table>
       </section>
@@ -799,13 +775,6 @@
       '<path d="M11 2l3 3-8 8H3v-3z"/>' +
       '<path d="M10 3l3 3"/>' +
     '</svg>';
-  const SVG_REROLL =
-    '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' +
-      '<path d="M3 8a5 5 0 0 1 9-3"/>' +
-      '<path d="M12 3v3h-3"/>' +
-      '<path d="M13 8a5 5 0 0 1-9 3"/>' +
-      '<path d="M4 13v-3h3"/>' +
-    '</svg>';
 
   function fmt(v) {
     if (v === null || v === undefined || v === '') return '&mdash;';
@@ -832,7 +801,7 @@
     (rows || []).forEach(r => { if (r && r.companyNumber) _rowsByNumber.set(r.companyNumber, r); });
     if (!rows || rows.length === 0) {
       tbody.innerHTML =
-        '<tr><td class="is-empty" colspan="8">No licensed companies in scope.</td></tr>';
+        '<tr><td class="is-empty" colspan="7">No licensed companies in scope.</td></tr>';
       if (count) {
         count.textContent = '0 companies';
         count.classList.remove('is-loading');
@@ -861,11 +830,6 @@
       '<td class="is-action">' +
         '<button type="button" class="row-icon-btn" data-action="edit" data-company="' + fmt(r.companyNumber) + '" title="Edit company settings" aria-label="Edit">' +
           SVG_EDIT +
-        '</button>' +
-      '</td>' +
-      '<td class="is-action">' +
-        '<button type="button" class="row-icon-btn" data-action="reroll" data-company="' + fmt(r.companyNumber) + '" title="Re-roll the perpetual for this company" aria-label="Re-roll">' +
-          SVG_REROLL +
         '</button>' +
       '</td>' +
     '</tr>';
@@ -1026,79 +990,6 @@
     document.getElementById('js-edit-save').addEventListener('click', saveEditModal);
   })();
 
-  // ---------- re-roll confirm modal ----------
-  // SQL Server serializes concurrent rolls of the same company via
-  // row locks on rperpetualinv/rinvasof, so cross-user double-fires
-  // queue safely. Local button-disable covers the same-tab
-  // double-click case.
-  let _rerollingNumber = null;
-
-  function openRerollModal(companyNumber) {
-    if (!_rowsByNumber.has(companyNumber)) {
-      toast('Row not loaded — refresh and try again'); return;
-    }
-    _rerollingNumber = companyNumber;
-    document.getElementById('js-reroll-company').textContent = companyNumber;
-    document.getElementById('js-reroll-error').classList.remove('is-visible');
-    document.getElementById('js-reroll-error').textContent = '';
-    const btn = document.getElementById('js-reroll-confirm');
-    btn.disabled = false;
-    btn.textContent = 'Re-roll';
-    document.getElementById('js-reroll-modal').classList.add('is-visible');
-    setTimeout(() => btn.focus(), 0);
-  }
-
-  function closeRerollModal() {
-    _rerollingNumber = null;
-    document.getElementById('js-reroll-modal').classList.remove('is-visible');
-  }
-
-  function confirmReroll() {
-    if (!_rerollingNumber) return;
-    const number = _rerollingNumber;
-    const btn = document.getElementById('js-reroll-confirm');
-    const err = document.getElementById('js-reroll-error');
-    btn.disabled = true;
-    btn.textContent = 'Re-rolling…';
-    err.classList.remove('is-visible');
-
-    rrFetch('inventory/rollIItem', {
-      method: 'POST',
-      body:   { reconciliationFilter: { companies: [number] } }
-    })
-      .then(resp => {
-        const n = (resp && resp.rolledCompanies) || 0;
-        closeRerollModal();
-        if (n > 0) {
-          toast('Re-rolled ' + number);
-        } else {
-          // Agent skipped it (out-of-scope / sproc threw). Surface
-          // honestly rather than claiming success.
-          toast('Re-roll for ' + number + ' didn’t complete — check the agent log');
-        }
-      })
-      .catch(e => {
-        const m = (e && e.message) || 're-roll failed';
-        err.textContent = m;
-        err.classList.add('is-visible');
-        btn.disabled = false;
-        btn.textContent = 'Re-roll';
-      });
-  }
-
-  // Wire re-roll-modal dismissals once.
-  (function wireRerollModal() {
-    const backdrop = document.getElementById('js-reroll-modal');
-    document.getElementById('js-reroll-close').addEventListener('click', closeRerollModal);
-    backdrop.addEventListener('click', (e) => {
-      if (e.target === backdrop) closeRerollModal();
-    });
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && backdrop.classList.contains('is-visible')) closeRerollModal();
-    });
-    document.getElementById('js-reroll-confirm').addEventListener('click', confirmReroll);
-  })();
-
   // ---------- boot ----------
   // Footer version stamp (matches the standalone admin tool pages).
   (function () {
@@ -1173,9 +1064,8 @@
       });
   }
 
-  // Action handlers — Edit opens the edit modal; Re-roll opens the
-  // confirm modal which fires /inventory/rollIItem on Yes; Unlicense
-  // confirms then DELETEs against VALC.
+  // Action handlers — Edit opens the edit modal. (Re-roll was retired from this
+  // page; the corrective now lives on the account roll-forward card.)
   document.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-action]');
     if (!btn) return;
@@ -1183,8 +1073,6 @@
     const co     = btn.dataset.company;
     if (action === 'edit') {
       openEditModal(co);
-    } else if (action === 'reroll') {
-      openRerollModal(co);
     }
     // Licensing changes (license / unlicense) are a contract term set by
     // GSI — not available on the customer side. The Licensing page here is
@@ -1377,7 +1265,7 @@
       const licTbody = document.getElementById('js-companies-tbody');
       if (licTbody) {
         licTbody.innerHTML =
-          '<tr><td class="is-empty" colspan="8">Couldn&rsquo;t load companies. See the error banner above.</td></tr>';
+          '<tr><td class="is-empty" colspan="7">Couldn&rsquo;t load companies. See the error banner above.</td></tr>';
       }
       const licCount = document.getElementById('js-row-count');
       if (licCount) {

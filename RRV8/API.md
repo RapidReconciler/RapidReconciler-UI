@@ -500,6 +500,18 @@ DB-scoped automatically.
   the install/upgrade creates it). If the table is absent the ack calls error —
   the Home dots fall back to their existing client-side reminder read until
   Phases 2–4 switch them to `/admin/acks`.
+- **`POST /admin/activity`** — append a free-form event to the Activity Log
+  (audit trail), stamped with the caller from the JWT. Authenticated but **not**
+  admin-only (an analyst attesting a corrective records here). One-way append, no
+  ack/cadence semantics. Used by the Account Roll Forward R099102 lever to record
+  *"R099102 repost confirmed"* on attestation. Body:
+
+  ```json
+  { "event": "R099102 repost confirmed", "detail": "Repost report received with no errors…" }
+  ```
+
+  Returns `{ "ok": true }`. The UI call degrades gracefully (no-op) if the agent
+  predates this endpoint.
 
 ---
 
