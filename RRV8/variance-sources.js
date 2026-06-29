@@ -10,7 +10,10 @@
  * fetch kinds:
  *   'integrity'           POST /inventory/integrity {report}            (cardex)
  *   'variance-component'  POST /inventory/variance-component {component} (glBatches/endOfDay/JEs)
- *   'priorPeriodBreakdown' prior period's variance block (carry forward — not a view grid)
+ *   'priorPeriodBreakdown' POST /inventory/reconciliation/history — the prior period's
+ *                          6-component variance composition (carry forward); the grid's
+ *                          authoritative total is that period's unreconciledVariance, not
+ *                          a column sum (the components carry sign conventions).
  *   'page'                navigates to its own existing page (transactions)
  *
  * Column `kind`: text | mono | num | qty (+ optional sort:'date').
@@ -20,7 +23,11 @@ window.RR_VARIANCE_SOURCES = {
     label: 'Carry forward',
     lede: 'Prior-period unreconciled balance rolled into this period.',
     action: 'Book a journal entry to clear it', owner: 'Finance',
-    fetch: 'priorPeriodBreakdown'
+    fetch: 'priorPeriodBreakdown', amountField: 'amount',
+    columns: [
+      { label: 'Source', key: 'component', kind: 'text' },
+      { label: 'Amount', key: 'amount',    kind: 'num'  }
+    ]
   },
 
   glBatches: {
