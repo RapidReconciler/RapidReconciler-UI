@@ -153,7 +153,8 @@
   // ---- which source ----
   var key = new URLSearchParams(location.search).get('source') || '';
   var cfg = SOURCES[key];
-  // Transactions / carry-forward aren't view grids — bounce to where they live.
+  // Transactions has its own dedicated page (fetch:'page') — bounce there.
+  // Carry forward IS rendered here now (fetch:'priorPeriodBreakdown' + columns).
   if (cfg && cfg.fetch === 'page') { location.replace(cfg.href + (location.search ? location.search.replace(/source=[^&]*/, '') : '')); return; }
   if (!cfg || !Array.isArray(cfg.columns)) {
     document.getElementById('js-title').textContent = 'Unknown variance source';
@@ -201,11 +202,17 @@
   function fmtMoney(v){ if(v==null||isNaN(v))return '—'; var n=Math.abs(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); return (v<0?'(':'')+n+(v<0?')':''); }
   function fmtNum(v,dp){ if(v==null||v==='')return ''; var n=Number(v); if(isNaN(n))return String(v); return (n<0?'(':'')+Math.abs(n).toLocaleString('en-US',{minimumFractionDigits:dp,maximumFractionDigits:dp})+(n<0?')':''); }
   function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(m){return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[m];}); }
+  var MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  function fmtPeriodLabel(p){ if(!p) return ''; var m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(p); return m ? (MONTHS[+m[2]-1]+' '+ +m[3]+', '+m[1]) : p; }
 
   // ---- state ----
   var ROWS = [];               // normalized rows
   var sortKey = null, sortDir = 1;
   var search = '';
+  // Carry forward only: the grid lists the prior period's 6 variance components,
+  // but the authoritative "this source" total is that period's unreconciledVariance
+  // (a server field; the components carry sign conventions and don't plainly sum).
+  var _carryTotal = null;
 
   function showError(msg){ var b=document.getElementById('js-fetch-error'); document.getElementById('js-fetch-error-msg').textContent=msg||''; b.classList.add('is-on'); }
   function setScopeFacts(){
@@ -242,6 +249,56 @@
     if (cfg.fetch === 'integrity') {
       p = rrFetch('inventory/integrity', { method:'POST', body:{ report: cfg.report } })
             .then(function(resp){ return (resp && (resp.data || resp.rows)) || []; });
+    } else if (cfg.fetch === 'priorPeriodBreakdown') {
+      // Carry forward = the PRIOR period's unreconciled variance, rolled in. Mirror
+      // the recon page's carry-forward preview: pull the cross-period history
+      // (POST /inventory/reconciliation/history, company-scoped — the pre-aggregated
+      // points can't be re-filtered client-side), find the period just before the
+      // working period, and surface that period's 6-component composition.
+      p = rrFetch('inventory/status').then(function(status){
+        var rf = (status && status.reconciliationFilter) || {};
+        var cos = workingCompanies();
+        var wrap = function(ids){ return (ids||[]).map(function(id){ return { id: id, checked: true, show: true }; }); };
+        var body = {
+          period: null,
+          currencies:    wrap(rf.currencies),
+          companies:     wrap(cos.length ? cos : rf.companies),
+          objects:       wrap(rf.objects),
+          businessUnits: wrap(rf.businessUnits),
+          subsidiaries:  wrap(rf.subsidiaries)
+        };
+        return rrFetch('inventory/reconciliation/history', { method:'POST', body: body }).then(function(resp){
+          var points  = (resp && resp.points) || [];
+          var periods = points.map(function(pt){ return pt.period; }).filter(Boolean).sort();
+          var cur = readCurrentPeriod();
+          // prior = latest period strictly before the working period (matches recon's priorPeriod()).
+          var prior = null;
+          for (var i=0;i<periods.length;i++){ if (cur && periods[i] < cur) prior = periods[i]; }
+          var curLbl = fmtPeriodLabel(cur);
+          var ledeEl = document.getElementById('js-lede');
+          if (!prior) {
+            // First period in the data — carry forward is zero by definition.
+            _carryTotal = 0;
+            if (ledeEl) ledeEl.textContent = (cfg.lede||'') + ' ' + (curLbl || 'This period') + ' is the earliest period in the data — carry forward is zero by definition.';
+            var emptyEl = document.getElementById('js-empty');
+            if (emptyEl) emptyEl.textContent = 'No prior period to carry forward — ' + (curLbl || 'this period') + ' is the earliest in the data.';
+            return [];
+          }
+          var pt = points.find(function(x){ return x.period === prior; });
+          var v  = (pt && pt.variance) || {};
+          _carryTotal = (v.unreconciledVariance != null) ? Number(v.unreconciledVariance) : null;
+          if (ledeEl) ledeEl.textContent = (cfg.lede||'') + ' Composition of ' + fmtPeriodLabel(prior) +
+            (curLbl ? (', carried into ' + curLbl) : '') + '.';
+          return [
+            { component: 'Carry forward',          amount: (+v.carryForward         || 0) },
+            { component: 'GL batches',             amount: (+v.glBatches            || 0) },
+            { component: 'Orders (end of day)',    amount: (+v.endOfDay             || 0) },
+            { component: 'Transactions',           amount: (+v.transactions         || 0) },
+            { component: 'Cardex',                 amount: (+v.cardex               || 0) },
+            { component: 'Manual journal entries', amount: (+v.manualJournalEntries || 0) }
+          ];
+        });
+      });
     } else { // variance-component
       p = rrFetch('inventory/status').then(function(status){
         var rf = (status && status.reconciliationFilter) || {};
@@ -296,7 +353,12 @@
     document.getElementById('js-loading').hidden = true;
     setScopeFacts();
     var amountField = cfg.amountField;
-    var total = ROWS.reduce(function(s,r){ return s + (Number(r[amountField])||0); }, 0);
+    // Carry forward's total is the prior period's server-provided unreconciledVariance
+    // (the 6 listed components carry sign conventions and don't plainly sum); every
+    // other source's total is the sum of its own detail rows.
+    var total = (_carryTotal != null)
+      ? _carryTotal
+      : ROWS.reduce(function(s,r){ return s + (Number(r[amountField])||0); }, 0);
     var amtEl = document.getElementById('js-amount');
     amtEl.textContent = fmtMoney(total); amtEl.classList.toggle('is-neg', total<0);
     var dot = document.getElementById('js-src-dot');
