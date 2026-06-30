@@ -1130,15 +1130,20 @@
   // databases whose ack table predates this build. The ack value is the
   // snooze-until date.
   var _licAck = null;
+  var _acksLoaded = false;   // did GET /admin/acks actually respond? (table present)
   function loadLicAck() {
     return rrFetch('admin/acks').then(function (rows) {
       _licAck = null; (rows || []).forEach(function (r) { if (r && r.kind === 'license-snooze') _licAck = r; });
-    }).catch(function () { _licAck = null; });
+      _acksLoaded = true;
+    }).catch(function () { _licAck = null; _acksLoaded = false; });
   }
   function licSnoozeVal(snoozeKey) {
-    var v = (_licAck && window.RRV8 && window.RRV8.ackToReviewValue) ? window.RRV8.ackToReviewValue(_licAck) : '';
-    if (!v) { try { v = localStorage.getItem(snoozeKey) || ''; } catch (_) {} }
-    return v;
+    if (_licAck && window.RRV8 && window.RRV8.ackToReviewValue) return window.RRV8.ackToReviewValue(_licAck);
+    // Endpoint responded but no ack → cleared server-side; don't let a stale
+    // per-browser fallback mask it. Only use localStorage when the acks endpoint
+    // was unreachable (older DB without the RAdminReminderAck table).
+    if (_acksLoaded) return '';
+    try { return localStorage.getItem(snoozeKey) || ''; } catch (_) { return ''; }
   }
   function renderLicenseTerm(u, dbName) {
     const card = document.getElementById('js-lic-term');

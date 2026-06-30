@@ -250,22 +250,17 @@
   .pw-legend { font-size: 11px; font-weight: 600; color: var(--text-muted); display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
   .pw-legend-dim { width: 10px; height: 10px; border-radius: 2px; background: var(--blue); opacity: .42; }
 
-  /* Bottom-right action cluster (replaces the footer): Show-all toggle + sign out. */
+  /* Bottom-right action cluster (replaces the footer): database picker + view switcher + sign out. */
   .home-actions { position: fixed; right: 22px; bottom: 18px; z-index: 60; display: flex; align-items: center; gap: 13px; }
-  .ha-toggle { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; background: var(--bg-card); border: 1px solid var(--rule); border-radius: 100px; padding: 8px 14px; box-shadow: var(--shadow-md); font-size: 13px; font-weight: 700; color: var(--text-soft); user-select: none; }
-  .ha-toggle input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
-  .ha-track { width: 34px; height: 19px; border-radius: 100px; background: var(--rule-strong); position: relative; transition: background .15s; flex: 0 0 auto; }
-  .ha-knob { position: absolute; top: 2px; left: 2px; width: 15px; height: 15px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.3); transition: transform .15s; }
-  .ha-toggle input:checked + .ha-track { background: var(--blue); }
-  .ha-toggle input:checked + .ha-track .ha-knob { transform: translateX(15px); }
   .ha-signout { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; background: var(--navy); color: #fff; border: 1px solid var(--navy); border-radius: 100px; padding: 9px 18px; box-shadow: var(--shadow-md); font-family: 'Source Sans 3', sans-serif; font-weight: 700; font-size: 13px; }
   .ha-signout:hover { filter: brightness(1.14); }
   .ha-signout svg { width: 15px; height: 15px; }
-  /* "View as" role switcher in the bottom-right action cluster (the top header
-     that used to hold the account menu is hidden in this layout). Admin-only;
-     the menu pops upward. Reuses the .umr-label / .umr-opt styles. */
-  .ha-roles { position: relative; }
-  .ha-roles[hidden] { display: none; }
+  /* "View as" role switcher + database picker in the bottom-right action cluster
+     (the top header that used to hold the account menu is hidden in this layout).
+     Both pop a menu upward; the role switcher is admin-only, the DB picker shows
+     for everyone. Reuse the .ha-rolebtn / .ha-rolemenu / .umr-* styles. */
+  .ha-roles, .ha-db { position: relative; }
+  .ha-roles[hidden], .ha-db[hidden] { display: none; }
   .ha-rolebtn { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; background: var(--bg-card); border: 1px solid var(--rule); border-radius: 100px; padding: 8px 14px; box-shadow: var(--shadow-md); font-family: inherit; font-size: 13px; font-weight: 700; color: var(--text-soft); }
   .ha-rolebtn:hover { border-color: var(--blue); color: var(--blue); }
   .ha-rolebtn .ha-role-ico { width: 15px; height: 15px; }
@@ -274,14 +269,6 @@
   .ha-rolemenu { position: absolute; bottom: calc(100% + 8px); left: 0; min-width: 215px; background: var(--bg-card); border: 1px solid var(--rule); border-radius: 12px; box-shadow: 0 18px 48px rgba(8,18,38,.22); padding: 12px 14px; }
   .ha-rolemenu[hidden] { display: none; }
 
-  /* Show-all OFF (exception mode) hides role bands that are all-clear (green);
-     ON shows every band regardless of status. KPI cards (once built) hide in
-     the ON state. Pure CSS so it reacts live as a band's status changes. */
-  body:not(.home-show-all) #view-admin:has(#adminSectionHead.band-green) { display: none; }
-  body:not(.home-show-all) #analystSectionHead.band-green,
-  body:not(.home-show-all) #analystSectionHead.band-green + #analystBody,
-  body:not(.home-show-all) #modSectionHead.band-green,
-  body:not(.home-show-all) #modSectionHead.band-green + #moduleGrid { display: none; }
   /* Role-view lens: show only the active role's section(s). Layered over the caps
      gating (a section the token can't access stays hidden regardless). Set by
      applyViewRole() from the clamped viewRole. Accountant = modules; Analyst =
@@ -295,6 +282,10 @@
   body[data-view-role="analyst"] #view-admin { display: none !important; }
   body[data-view-role="admin"] #analystSectionHead,
   body[data-view-role="admin"] #analystBody { display: none !important; }
+  /* Admin doesn't need the out-of-balance-by-period chart — that's the
+     reconciliation (accountant/analyst) view. Admin gets the task grid + the
+     AI administration briefing instead. */
+  body[data-view-role="admin"] #periodWidget { display: none !important; }
 
   .home-ai {
     flex: 0 0 358px;
@@ -482,6 +473,119 @@
 
   .lower-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px; }
   @media (max-width: 820px) { .lower-grid { grid-template-columns: 1fr; } }
+
+  /* Admin task grid — the Administrator surface is a flat 3×3 grid of task
+     cards (no panel grouping). Each card is a former .row, now rendered as a
+     standalone card: status dot in the corner, title, sub, and an Open action.
+     Whole-card link (<a class="row">) or inner .btn-sm link both work. */
+  #adminGrid { grid-template-columns: repeat(3, minmax(0, 1fr)); grid-auto-rows: 1fr; }
+  @media (max-width: 1000px) { #adminGrid { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 640px)  { #adminGrid { grid-template-columns: 1fr; } }
+  #adminGrid .row {
+    position: relative; flex-direction: column; align-items: stretch; gap: 6px;
+    padding: 18px 18px 16px; margin-bottom: 0; min-height: 138px;
+    background: var(--bg-card); box-shadow: var(--shadow-sm); transition: border-color .12s, box-shadow .12s;
+  }
+  #adminGrid .row .row-dot { position: absolute; top: 16px; right: 16px; }
+  #adminGrid .row .row-main { flex: 1 1 auto; }
+  /* Uniform header zone so every card's title sits on the same line (the AI card
+     centers its emblem + title in the same 44px height). */
+  #adminGrid .row .row-title { font-size: 15px; font-weight: 800; padding-right: 18px; min-height: 44px; display: flex; align-items: center; }
+  #adminGrid .row .row-sub { font-size: 12.5px; line-height: 1.45; }
+  #adminGrid .row .btn-sm { align-self: flex-end; margin-top: 14px; }
+  /* Card footer row: a small secondary link on the left, the Open button on the
+     right (used by RR Team to carry the Complex Passwords link). */
+  #adminGrid .row .row-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 14px; }
+  #adminGrid .row .row-foot .btn-sm { align-self: auto; margin-top: 0; }
+  .row-mini-link { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 700; color: var(--text-soft); text-decoration: none; }
+  .row-mini-link:hover { color: var(--blue); }
+  #adminGrid .row .row-foot .row-dot { position: static; top: auto; right: auto; width: 8px; height: 8px; }
+  #adminGrid a.row { text-decoration: none; cursor: pointer; }
+  #adminGrid a.row:hover { border-color: var(--blue); box-shadow: var(--shadow-md); }
+  /* Per-card status accent — white body, with the status color carried by the
+     left inset stripe + a matching border tint (one dot per card). */
+  /* (.ai-card opts out — it has its own gradient face, see below.) */
+  #adminGrid .row:not(.ai-card):has(.row-dot.green) { background: var(--bg-card); border-color: #c5e6d2; box-shadow: inset 4px 0 0 var(--green),  var(--shadow-sm); }
+  #adminGrid .row:not(.ai-card):has(.row-dot.amber) { background: var(--bg-card); border-color: #f0d2a8; box-shadow: inset 4px 0 0 var(--orange), var(--shadow-sm); }
+  #adminGrid .row:not(.ai-card):has(.row-dot.red)   { background: var(--bg-card); border-color: #f1c9c3; box-shadow: inset 4px 0 0 var(--red),    var(--shadow-sm); }
+
+  /* Licensing card — the term shown as a mini month calendar with the expiry
+     day "selected", plus a "You have N days left" headline (set by
+     renderLicenseCalendar). Visual-first; the seats/expiry prose drops to a
+     small sub. The selected-day color tracks the status level. */
+  .lic-cal { margin: 9px 0 0; }
+  .lic-cal .cal-head { font-size: 10.5px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--navy); margin-bottom: 5px; }
+  .lic-cal .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px 1px; }
+  .lic-cal .cal-dow  { font-size: 8.5px; font-weight: 700; color: var(--text-muted); text-align: center; }
+  .lic-cal .cal-day  { font-size: 10px; line-height: 17px; height: 17px; text-align: center; color: var(--text-soft); border-radius: 50%; }
+  .lic-cal .cal-day.is-blank { visibility: hidden; }
+  .lic-cal .cal-day.is-exp   { background: var(--orange); color: #fff; font-weight: 800; }
+  .lic-card.lic-expired .lic-cal .cal-day.is-exp { background: var(--red); }
+  .lic-card.lic-ok      .lic-cal .cal-day.is-exp { background: var(--green); }
+  .lic-days { font-size: 16px; font-weight: 800; color: var(--navy); line-height: 1.15; margin-top: 16px; }
+  .lic-card.lic-expired .lic-days { color: var(--red); }
+
+  /* AI Assistant — the showcase card. The only non-white face: a navy→blue
+     gradient with a frosted sparkle emblem, so the platform's AI reads as the
+     hero. Overrides the generic white-card status accent (placed after the
+     :has() rules so it wins on source order). */
+  #adminGrid .row.ai-card {
+    background: linear-gradient(140deg, #1f2d4a 0%, #2c4a8c 52%, #3f74e8 100%);
+    border-color: transparent;
+    box-shadow: 0 14px 30px -10px rgba(31, 45, 74, .5);
+    color: #fff; overflow: hidden;
+  }
+  #adminGrid .row.ai-card::after {            /* soft top-right glow */
+    content: ""; position: absolute; right: -42px; top: -42px; width: 150px; height: 150px;
+    background: radial-gradient(circle, rgba(125, 175, 255, .55), transparent 70%); pointer-events: none;
+  }
+  #adminGrid .row.ai-card:hover { box-shadow: 0 18px 38px -10px rgba(31, 45, 74, .58); }
+  /* Emblem + title share one header row so "AI Assistant" lines up with the
+     Licensing / Data titles across the top row. */
+  .ai-card .ai-head { display: flex; align-items: center; gap: 12px; }
+  .ai-emblem { display: inline-grid; place-items: center; width: 44px; height: 44px; border-radius: 13px; flex-shrink: 0;
+    background: rgba(255, 255, 255, .16); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .22); }
+  .ai-emblem svg { width: 26px; height: 26px; color: #fff; filter: drop-shadow(0 1px 4px rgba(120, 170, 255, .8)); }
+  #adminGrid .row.ai-card .row-title { color: #fff; font-size: 17px; }
+  .ai-card .ai-tag { color: #fff; font-weight: 700; font-size: 13px; margin: 3px 0 7px; }
+  #adminGrid .row.ai-card .row-sub { color: rgba(255, 255, 255, .82); }
+  #adminGrid .row.ai-card .btn-sm { background: #fff; border-color: #fff; color: var(--navy); font-weight: 800; }
+  #adminGrid .row.ai-card .btn-sm:hover { background: #e9f0ff; border-color: #e9f0ff; color: var(--navy); }
+  #adminGrid .row.ai-card .row-dot { box-shadow: 0 0 0 2px rgba(255, 255, 255, .55); }
+  /* The header (emblem + title) stays at the top, in line with the Licensing /
+     Data titles. Only the tagline centers, in the body between header and foot;
+     the plan pill + actions sit in a foot pinned to the bottom (plan left, Open right). */
+  .ai-card .ai-body { flex: 1 1 auto; display: flex; flex-direction: column; justify-content: center; }
+  .ai-card .ai-foot { display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; margin-top: 14px; }
+  /* "Your plan" — the purchased tier, as a frosted pill (bottom-left). */
+  .ai-card .ai-plan { display: flex; flex-direction: column; gap: 4px; }
+  .ai-card .ai-plan-eyebrow { font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: rgba(255, 255, 255, .62); }
+  .ai-card .ai-plan-pill { align-self: flex-start; font-size: 12.5px; font-weight: 800; color: #fff; background: rgba(255, 255, 255, .18); border: 1px solid rgba(255, 255, 255, .32); border-radius: 100px; padding: 3px 12px; }
+  .ai-card .ai-plan-pill[data-tier="off"] { background: rgba(255, 255, 255, .08); color: rgba(255, 255, 255, .82); }
+  /* Two actions (Upgrade + Open) bottom-right; Upgrade is the secondary outline. */
+  #adminGrid .row.ai-card .ai-actions { display: flex; gap: 8px; align-items: center; }
+  #adminGrid .row.ai-card .ai-actions .btn-sm { margin-top: 0; align-self: auto; }
+  #adminGrid .row.ai-card .ai-upgrade { background: transparent; border-color: rgba(255, 255, 255, .55); color: #fff; }
+  #adminGrid .row.ai-card .ai-upgrade:hover { background: rgba(255, 255, 255, .14); border-color: #fff; color: #fff; }
+
+  /* Data card — three data-lifecycle rows (refresh / purge / calendar), each an
+     icon-link to its page. The icon badge is tinted by that row's status; the
+     card keeps its worst-of accent stripe via #dataDot. */
+  /* row-main is a flex column so the rows can fill the card's full height
+     (it stretches to the taller AI/Licensing cards). */
+  #adminGrid .row.data-card .row-main { display: flex; flex-direction: column; }
+  .data-card .data-rows { flex: 1 1 auto; display: flex; flex-direction: column; justify-content: center; margin-top: 6px; }
+  .data-card .data-row { flex: 1 1 0; display: flex; align-items: center; gap: 13px; padding: 4px 0; text-decoration: none; min-height: 0; }
+  .data-card .data-row + .data-row { border-top: 1px solid var(--rule); }
+  .data-card .data-row-ico { width: 36px; height: 36px; border-radius: 9px; display: grid; place-items: center; flex-shrink: 0; background: var(--bg-soft); color: var(--text-muted); transition: background .12s, color .12s; }
+  .data-card .data-row-ico svg { width: 19px; height: 19px; }
+  .data-card .data-row-text { font-size: 14px; font-weight: 600; color: var(--text-soft); line-height: 1.35; }
+  .data-card .data-row:hover .data-row-text { color: var(--blue); }
+  .data-card .data-row.lvl-green .data-row-ico { background: var(--green-pale);  color: var(--green); }
+  .data-card .data-row.lvl-amber .data-row-ico { background: var(--orange-pale); color: var(--orange); }
+  .data-card .data-row.lvl-red   .data-row-ico { background: var(--red-pale);    color: var(--red); }
+  .data-card .data-row.lvl-amber .data-row-text,
+  .data-card .data-row.lvl-red   .data-row-text { color: var(--navy); font-weight: 700; }
   .panel { background: var(--bg-card); border: 1px solid var(--rule); border-radius: 12px; padding: 20px; box-shadow: var(--shadow-sm); }
   .panel[hidden] { display: none; }
   .panel-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
@@ -519,13 +623,6 @@
   .panel.status-green { background: var(--green-pale); border-color: #c5e6d2; box-shadow: inset 4px 0 0 var(--green), var(--shadow-sm); }
   .panel.status-amber { background: var(--orange-pale); border-color: #f0d2a8; box-shadow: inset 4px 0 0 var(--orange), var(--shadow-sm); }
   .panel.status-red   { background: var(--red-pale); border-color: #f1c9c3; box-shadow: inset 4px 0 0 var(--red), var(--shadow-sm); }
-  /* People & Licensing rolls up team sign-in health (RR Team row dot). Until
-     that's computed it shows the admin-blue identity tint; once a status is
-     known the status-* class (higher up) takes over via worst-dot tinting. */
-  #adminPanel:not(.status-green):not(.status-amber):not(.status-red) {
-    background: var(--blue-pale); border-color: #c2d8ef; box-shadow: inset 4px 0 0 var(--blue), var(--shadow-sm);
-  }
-
   /* Role-band STATUS tint (bg wash + inset bar). The three role bands
      (Administrator / Analyst / Accountant) shade green / amber / red by their
      lane's live status — set by setSectStatus() off the /home/status-summary
@@ -563,7 +660,8 @@
   .panel.is-collapsed .panel-ico svg { width: 20px; height: 20px; }
   /* Title + at-a-glance status line (mirrors the "Am I ready to go?" card):
      the summary shows ONLY while collapsed; expanding reveals the tools. Its
-     color tracks the panel's rolled-up health (set by paintPanelSummary). */
+     color tracks the card's rolled-up health. (Used by the analyst lane now —
+     the admin panels that drove this are a flat task grid.) */
   .panel-headings { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
   .panel-summary { font-size: 12.5px; font-weight: 600; color: var(--text-muted); }
   .panel:not(.is-collapsed) .panel-summary { display: none; }
@@ -577,6 +675,7 @@
   }
   .btn-sm:hover { border-color: var(--blue); color: var(--blue); }
   .btn-sm:disabled { opacity: .5; cursor: default; }
+  .btn-sm[hidden] { display: none; }   /* .btn-sm sets display:inline-block, which would otherwise defeat [hidden] */
   /* Restart button escalates to a solid red call-to-action when the
      service-health read says a restart is in order. */
   .btn-sm.is-urgent { border-color: var(--red); background: var(--red); color: #fff; }
@@ -1126,173 +1225,116 @@
 
   <!-- ===================== ADMIN: action surface ===================== -->
   <div class="view" id="view-admin" hidden>
-    <!-- The Scope hub (Database + companies + period) leads the page above
-         every lane. Admin actions are independent of the working company/
-         period, but they ARE per-database, so the install chosen up in Scope
-         governs them too. -->
-    <div class="section-head is-collapsible" id="adminSectionHead">
-      <a class="sect-badge admin" href="../RRUniversity/administrator-start-here.html" target="_blank" rel="noopener" title="Open the Administrator how-to guide" style="text-decoration:none;"><span class="sb-dot"></span>Administrator<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" style="margin-left:1px;"><path d="M7 17 17 7M9 7h8v8"/></svg></a>
-      <span class="sect-status" hidden></span>
-      <button type="button" class="sect-collapse" id="adminCollapse" aria-expanded="true" aria-controls="adminBody" title="Collapse Administrator">
-        <svg class="sect-collapse-chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
-      </button>
-    </div>
-    <div class="lane-body" id="adminBody">
+    <!-- Admin task grid — a flat 3×3 of the nine admin tasks, taken out of the
+         old collapsible "Administrator" band/drawer (the AI rail now carries the
+         administration narrative and the view switcher names the role). Each
+         .row renders as a standalone card via #adminGrid CSS; IDs/dots/hrefs are
+         unchanged so the status-dot wiring keeps working. No cards are hidden —
+         the role-view lens (not per-card gating) decides what each role sees. -->
     <div class="lower-grid" id="adminGrid">
-      <!-- People & licensing -->
-      <div class="panel is-collapsed" id="adminPanel">
-        <div class="panel-head">
-          <span class="panel-ico ico-admin"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13A4 4 0 0 1 16 11"/></svg></span>
-          <div class="panel-headings"><h3>People &amp; Licensing</h3><div class="panel-summary">Users, roles &amp; company licensing</div></div>
-          <button type="button" class="panel-collapse" aria-expanded="false" title="Expand People &amp; Licensing"><svg class="panel-collapse-chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg></button>
+      <!-- AI Assistant — the showcase, top-left anchor. The one card with a
+           distinct gradient face. A <div> (not a whole-card link) so it can carry
+           both an Upgrade mailto and an Open link; aiDot kept for status/briefing
+           wiring. "Your plan" = the client's purchased tier (api/v1/ai/health →
+           maxLevel: off|docs|scrubbed|full), set by GSI on the VALC client card —
+           so upgrading is a sales action (mailto gsisales@). Painted by loadAiPlan(). -->
+      <div class="row ai-card">
+        <span class="row-dot grey" id="aiDot"></span>
+        <div class="ai-head">
+          <span class="ai-emblem" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 1.6l1.9 5.1a5 5 0 0 0 2.9 2.9l5.1 1.9-5.1 1.9a5 5 0 0 0-2.9 2.9L12 21.4l-1.9-5.1a5 5 0 0 0-2.9-2.9L2.1 11.5l5.1-1.9a5 5 0 0 0 2.9-2.9z"/><path d="M19 2.5l.7 1.9a2.2 2.2 0 0 0 1.3 1.3l1.9.7-1.9.7a2.2 2.2 0 0 0-1.3 1.3L19 10.3l-.7-1.9a2.2 2.2 0 0 0-1.3-1.3l-1.9-.7 1.9-.7a2.2 2.2 0 0 0 1.3-1.3z" opacity=".75"/></svg>
+          </span>
+          <div class="row-title">AI Assistant</div>
         </div>
-        <a class="row" href="admin-companies.html" style="text-decoration:none;">
-          <span class="row-dot grey" id="licenseDot"></span>
-          <div class="row-main"><div class="row-title">Licensing</div><div class="row-sub" id="licenseSub">Company seats &amp; entitlements</div></div>
-          <span class="btn-sm">Open</span>
-        </a>
-        <a class="row" href="admin-users.html" style="text-decoration:none;">
-          <span class="row-dot grey" id="teamDot"></span>
-          <div class="row-main"><div class="row-title">RR Team</div><div class="row-sub" id="teamSub">Users, roles &amp; access</div></div>
-          <span class="btn-sm">Open</span>
-        </a>
-        <!-- Complex Passwords — per-company policy (V56). Set which companies
-             require stronger passwords; most-restrictive-wins across the
-             companies a user can reach. SSO users are exempt. -->
-        <a class="row" href="admin-complex-passwords.html" style="text-decoration:none;">
-          <span class="row-dot grey" id="pwPolicyDot"></span>
-          <div class="row-main"><div class="row-title">Complex Passwords</div><div class="row-sub" id="pwPolicySub">Stronger password rules per company &mdash; length, character mix &amp; reuse history. SSO users are exempt.</div></div>
-          <span class="btn-sm">Open</span>
-        </a>
-      </div>
-
-      <!-- Data -->
-      <div class="panel is-collapsed">
-        <div class="panel-head">
-          <span class="panel-ico ico-db"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg></span>
-          <div class="panel-headings"><h3>Data Management</h3><div class="panel-summary">Nightly refresh + data purge</div></div>
-          <button type="button" class="panel-collapse" aria-expanded="false" title="Expand Data Management"><svg class="panel-collapse-chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg></button>
+        <div class="ai-body">
+          <div class="ai-tag">Ask about your data in plain English.</div>
         </div>
-        <div class="row" id="importRow" hidden>
-          <span class="row-dot grey" id="refreshDot"></span>
-          <div class="row-main">
-            <div class="row-title">JDE data refresh</div>
-            <div class="row-sub" id="refreshSub">Refreshes automatically every night</div>
+        <div class="ai-foot">
+          <div class="ai-plan">
+            <span class="ai-plan-eyebrow">Your plan</span>
+            <span class="ai-plan-pill" id="aiPlanPill" data-tier="">Checking&hellip;</span>
           </div>
-          <a class="btn-sm" href="admin-data-refresh.html">Open</a>
-        </div>
-        <div class="row" id="purgeRow" hidden>
-          <span class="row-dot grey" id="purgeDot"></span>
-          <div class="row-main">
-            <div class="row-title">Purge old data</div>
-            <div class="row-sub" id="purgeSub">Move the data start date forward to free up space.</div>
+          <div class="ai-actions">
+            <a class="btn-sm ai-upgrade" id="aiUpgrade" href="mailto:gsisales@getgsi.com" hidden>Upgrade</a>
+            <a class="btn-sm" href="admin-claude-assistant.html">Open</a>
           </div>
-          <a class="btn-sm" href="admin-purge-data.html">Open</a>
-        </div>
-        <!-- Fiscal Period correction: rare-event remap of a stored period-ending
-             date after a fiscal-calendar change. Full page (preview -> apply),
-             admin-gated server-side. Lives here (data correction) rather than
-             Utilities. The dot runs the detect check when the band opens:
-             green = no stale period-end found, amber = a correction is available. -->
-        <a class="row" href="admin-fiscal-period.html" style="text-decoration:none;">
-          <span class="row-dot grey" id="fiscalDot"></span>
-          <div class="row-main">
-            <div class="row-title">Correct a Period-End Date</div>
-            <div class="row-sub" id="fiscalSub">After a fiscal-calendar change, update a stored period-ending date to its corrected value across every report &mdash; for all companies.</div>
-          </div>
-          <span class="btn-sm">Open</span>
-        </a>
-      </div>
-
-      <!-- System Health: three admin tools, each opening its own standard-format
-           page (mirrors the Utilities card). Data Service keeps a live status dot
-           here; its detail + Restart + the memory readout moved to the page. The
-           AI Assistant + Activity Log rows are new. -->
-      <div class="panel is-collapsed" id="svcPanel">
-        <div class="panel-head">
-          <span class="panel-ico ico-support"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M2 12h4M18 12h4M4.9 19.1l2.8-2.8M16.3 7.7l2.8-2.8"/></svg></span>
-          <div class="panel-headings"><h3>System Health</h3><div class="panel-summary">Service, assistant &amp; activity</div></div>
-          <button type="button" class="panel-collapse" aria-expanded="false" title="Expand System Health"><svg class="panel-collapse-chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg></button>
-        </div>
-        <div class="row">
-          <span class="row-dot green" id="svcDot"></span>
-          <div class="row-main">
-            <div class="row-title">Report Engine</div>
-            <div class="row-sub" id="svcSub">The engine that builds reports &amp; exports &mdash; status, memory, and restart.</div>
-          </div>
-          <a class="btn-sm" href="admin-data-service.html">Open</a>
-        </div>
-        <div class="row">
-          <span class="row-dot grey" id="aiDot"></span>
-          <div class="row-main">
-            <div class="row-title">AI Assistant</div>
-            <div class="row-sub">Opt-in AI help &mdash; choose, per feature, what may be sent: from docs-only to full data.</div>
-          </div>
-          <a class="btn-sm" href="admin-claude-assistant.html">Open</a>
-        </div>
-        <div class="row">
-          <span class="row-dot grey" id="activityDot"></span>
-          <div class="row-main">
-            <div class="row-title">Activity Log</div>
-            <div class="row-sub">Recent system events &mdash; restarts, data reloads, and refreshes.</div>
-          </div>
-          <a class="btn-sm" href="admin-activity-log.html">Open</a>
         </div>
       </div>
-
-      <!-- Utilities: data-maintenance tools (admin-gated). Reload GL clears
-           RapidReconciler's COPY of the GL from the earliest broken period and
-           re-pulls it from JDE on the next refresh (JDE is never touched).
-           Reload Cardex does the same for the perpetual cardex (F4111) + its
-           transaction detail (rtransactions) from a user-chosen date, keyed by
-           ilukid — a faithful port of the V7 cardex-deletions utility
-           (dbo.usp8_reload_cardex; preview + batched delete). -->
-
-      <div class="panel is-collapsed" id="utilPanel">
-        <div class="panel-head">
-          <span class="panel-ico ico-util"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18v3h3l6.7-6.7a4 4 0 0 0 5.4-5.4l-2.6 2.6-2-2 2.2-2.2z"/></svg></span>
-          <div class="panel-headings"><h3>Utilities</h3><div class="panel-summary">GL &amp; cardex data maintenance</div></div>
-          <button type="button" class="panel-collapse" aria-expanded="false" title="Expand Utilities"><svg class="panel-collapse-chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg></button>
+      <a class="row lic-card" href="admin-companies.html">
+        <span class="row-dot grey" id="licenseDot"></span>
+        <div class="row-main">
+          <div class="row-title">Licensing</div>
+          <!-- Mini month calendar with the expiry day "selected"; built by
+               renderLicenseCalendar() from license-usage.licenseEndDate. -->
+          <div class="lic-cal" id="licCal" aria-hidden="true"></div>
+          <div class="lic-days" id="licDays">&mdash;</div>
+          <!-- Expiry date is on the calendar already — keep the sub in the DOM
+               (hidden) so paintLicenseHealth can still feed the AI briefing. -->
+          <div class="row-sub" id="licenseSub" hidden>Company seats &amp; entitlements</div>
         </div>
-        <div class="row">
-          <span class="row-dot grey" id="reloadGlDot"></span>
-          <div class="row-main">
-            <div class="row-title">Reload GL Data</div>
-            <div class="row-sub" id="reloadGlSub">Clear the GL copy when a roll-forward break won&rsquo;t clear by posting batches &mdash; it rebuilds on the next scheduled refresh.</div>
+        <span class="btn-sm">Open</span>
+      </a>
+      <!-- Data — three data-lifecycle concerns in one card, each row an icon-link
+           to its existing page: nightly refresh (freshness), purge (storage
+           runway), and the period-end/calendar correction. renderDataCard() paints
+           all three rows + the worst-of status dot (#dataDot) from /poll, the
+           purge-info, and the fiscal detect; the hidden .row-sub carries the worst
+           row's text for the AI briefing. -->
+      <div class="row data-card" id="importRow">
+        <span class="row-dot grey" id="dataDot"></span>
+        <div class="row-main">
+          <div class="row-title">Data</div>
+          <div class="data-rows">
+            <a class="data-row lvl-grey" id="dataRefreshRow" href="admin-data-refresh.html" title="Data refresh">
+              <span class="data-row-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.36"/><polyline points="21 3 21 9 15 9"/></svg></span>
+              <span class="data-row-text">Checking&hellip;</span>
+            </a>
+            <a class="data-row lvl-grey" id="dataPurgeRow" href="admin-purge-data.html" title="Purge old data">
+              <span class="data-row-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.66 3.58 3 8 3s8-1.34 8-3"/><path d="M4 11v6c0 1.66 3.58 3 8 3s8-1.34 8-3"/></svg></span>
+              <span class="data-row-text">Checking&hellip;</span>
+            </a>
+            <a class="data-row lvl-grey" id="dataFiscalRow" href="admin-fiscal-period.html" title="Calendar change">
+              <span class="data-row-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></span>
+              <span class="data-row-text">Checking&hellip;</span>
+            </a>
           </div>
-          <a class="btn-sm" href="admin-reload-gl.html">Open</a>
-        </div>
-        <div class="row">
-          <span class="row-dot grey" id="rcdxDot"></span>
-          <div class="row-main">
-            <div class="row-title">Reload Cardex Data</div>
-            <div class="row-sub" id="rcdxSub">Clear the perpetual cardex (F4111) from a date you choose; it rebuilds on the next scheduled refresh &mdash; the V7 cardex-deletions utility.</div>
-          </div>
-          <a class="btn-sm" id="rcdxOpen" href="admin-reload-cardex.html">Open</a>
-        </div>
-        <!-- Review Job Schedule: confirm the nightly refresh time is right. The
-             customer's on-site DBA sets/changes it at the user's request (NOT GSI);
-             the page carries a 30/60/Never review reminder + a request-a-change
-             action. Dot = the review reminder (green confirmed/off, amber due). -->
-        <div class="row">
-          <span class="row-dot grey" id="schedDot"></span>
-          <div class="row-main">
-            <div class="row-title">Review Job Schedule</div>
-            <div class="row-sub">Confirm your nightly refresh time is still right &mdash; your on-site DBA changes it at your request.</div>
-          </div>
-          <a class="btn-sm" href="admin-job-schedule.html">Open</a>
+          <div class="row-sub" id="dataBriefSummary" hidden></div>
         </div>
       </div>
-
+      <!-- RR Team — users/roles/access. Complex Passwords folded in as a small
+           bottom-left link (its status dot, pwPolicyDot, rides along); a <div>
+           (not whole-card link) so the two links don't nest. -->
+      <div class="row" id="teamRow">
+        <span class="row-dot grey" id="teamDot"></span>
+        <div class="row-main"><div class="row-title">RR Team</div><div class="row-sub" id="teamSub">Users, roles &amp; access</div></div>
+        <div class="row-foot">
+          <a class="row-mini-link" href="admin-complex-passwords.html" title="Complex passwords — per-company policy"><span class="row-dot grey" id="pwPolicyDot"></span>Complex passwords</a>
+          <a class="btn-sm" href="admin-users.html">Open</a>
+        </div>
+      </div>
+      <div class="row">
+        <span class="row-dot green" id="svcDot"></span>
+        <div class="row-main">
+          <div class="row-title">Report Engine</div>
+          <div class="row-sub" id="svcSub">The engine that builds reports &amp; exports &mdash; status, memory, and restart.</div>
+        </div>
+        <a class="btn-sm" href="admin-data-service.html">Open</a>
+      </div>
+      <div class="row">
+        <span class="row-dot grey" id="activityDot"></span>
+        <div class="row-main">
+          <div class="row-title">Activity Log</div>
+          <div class="row-sub">Recent system events &mdash; restarts, data reloads, and refreshes.</div>
+        </div>
+        <a class="btn-sm" href="admin-activity-log.html">Open</a>
+      </div>
     </div>
-      <!-- Read-only awareness: shown when the viewer lacks admin actions.
-           Pill (above) carries the rolled-up level; this lists what's open,
-           with no controls. Populated by loadHomeStatusSummary(). -->
-      <div class="lane-summary" id="adminSummary" hidden>
-        <span class="lane-summary-lock"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>View only</span>
-        <ul class="lane-summary-list" id="adminSummaryList"><li class="ls-muted"><span class="ls-dot"></span>Checking&hellip;</li></ul>
-        <div class="lane-summary-note">You don&rsquo;t have access to Administration &mdash; contact your administrator.</div>
-      </div>
+    <!-- Read-only awareness: shown when the viewer lacks admin actions — lists
+         what's open, with no controls. Populated by loadHomeStatusSummary(). -->
+    <div class="lane-summary" id="adminSummary" hidden>
+      <span class="lane-summary-lock"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>View only</span>
+      <ul class="lane-summary-list" id="adminSummaryList"><li class="ls-muted"><span class="ls-dot"></span>Checking&hellip;</li></ul>
+      <div class="lane-summary-note">You don&rsquo;t have access to Administration &mdash; contact your administrator.</div>
     </div>
   </div>
 
@@ -1390,9 +1432,19 @@
   </div><!-- /.home-main -->
 </div>
 
-<!-- Footer retired — sign-out + the show-all toggle live in a fixed
-     bottom-right cluster instead. -->
+<!-- Footer retired — the database picker, view switcher and sign-out live in a
+     fixed bottom-right cluster instead. -->
 <div class="home-actions" id="homeActions">
+  <div class="ha-db" id="haDb" hidden>
+    <div class="ha-rolemenu" id="haDbMenu" hidden>
+      <div class="umr-label">Active database</div>
+    </div>
+    <button type="button" class="ha-rolebtn" id="haDbBtn" aria-haspopup="true" aria-expanded="false" title="Switch which database Home is scoped to">
+      <svg class="ha-role-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></svg>
+      <span id="haDbLabel">Database</span>
+      <svg class="ha-role-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+    </button>
+  </div>
   <div class="ha-roles" id="haRoles" hidden>
     <div class="ha-rolemenu" id="haRoleMenu" hidden>
       <div class="umr-label">View dashboard as</div>
@@ -1406,11 +1458,6 @@
       <svg class="ha-role-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
     </button>
   </div>
-  <label class="ha-toggle" title="Show every card in scope, regardless of status">
-    <span>Show all</span>
-    <input type="checkbox" id="showAllToggle">
-    <span class="ha-track"><span class="ha-knob"></span></span>
-  </label>
   <button type="button" class="ha-signout" id="haSignOut">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
     Sign out
@@ -1577,7 +1624,9 @@
     var roles = $('haRoles'); if (roles) roles.hidden = !_canSwitchRole();   // bottom-right cluster control
     var lbl = $('haRoleLabel'); if (lbl) lbl.textContent = cur === 'admin' ? 'Administrator' : cur === 'analyst' ? 'Analyst' : 'Accountant';
     var hdr = $('userMenuRoles'); if (hdr) hdr.hidden = !_canSwitchRole();    // legacy copy in the (hidden) header
-    Array.prototype.forEach.call(document.querySelectorAll('.umr-opt'), function (b) {
+    // Scope to the role menus only — the DB picker menu also uses .umr-opt but
+    // marks its own active option (see renderHaDb), so don't clobber it here.
+    Array.prototype.forEach.call(document.querySelectorAll('#haRoleMenu .umr-opt, #userMenuRoles .umr-opt'), function (b) {
       b.classList.toggle('is-active', b.getAttribute('data-role') === cur);
     });
   }
@@ -1660,7 +1709,7 @@
   ];
 
   // ---- shared status state (feeds the Service-health card + readiness) ----
-  var _connDown = false, _period = '', _jobStatus = '', _periods = [];
+  var _connDown = false, _period = '', _jobStatus = '', _periods = [], _refreshWhen = '';
   // Set true by the #dbSelect handler so the next /inventory/status read resets
   // the working period to the NEW database's open period (its sticky period from
   // the prior DB isn't valid against the new calendar). A plain reload leaves it
@@ -1851,6 +1900,34 @@
         esc(db.n) + '</option>';
     }).join('');
     sel.disabled = dbs.length < 2;
+    renderHaDb();   // keep the bottom-right cluster picker in sync (boot + every switch)
+  }
+
+  // The cluster shows only the segment after the underscore (RapidReconciler_Dev
+  // -> Dev, _NA -> NA, _TR -> TR); falls back to the full name if there's no
+  // underscore.
+  function dbShortName(n) {
+    n = String(n || '');
+    var i = n.lastIndexOf('_');
+    return i >= 0 && i < n.length - 1 ? n.slice(i + 1) : n;
+  }
+
+  // Bottom-right database picker: a button + upward menu mirroring the view
+  // switcher, driving the hidden #dbSelect. Built from the session db list.
+  function renderHaDb() {
+    var wrap = $('haDb'), menu = $('haDbMenu'), label = $('haDbLabel');
+    if (!wrap || !menu || !label) return;
+    var s = window.RR_SESSION || {};
+    var dbs = Array.isArray(s.dbs) ? s.dbs : [];
+    var idx = s.activeDbIndex || 0;
+    if (!dbs.length) { wrap.hidden = true; return; }
+    wrap.hidden = false;
+    label.textContent = dbShortName((dbs[idx] || dbs[0] || {}).n);
+    var opts = dbs.map(function (db, i) {
+      return '<button type="button" class="umr-opt' + (i === idx ? ' is-active' : '') +
+        '" data-db="' + i + '">' + esc(dbShortName(db.n)) + '</button>';
+    }).join('');
+    menu.innerHTML = '<div class="umr-label">Active database</div>' + opts;
   }
 
   // Scope bar: the active company picker (over the allowed set) + the open
@@ -1997,19 +2074,15 @@
     // read-only awareness summary in its place (the pill shows for both).
     setHidden('adminGrid', !c.adm);
     setHidden('adminSummary', c.adm);
-    setHidden('adminPanel', !c.adm);
-    // Import row (Data card) — perm-gated, only meaningful with a DB.
-    setHidden('importRow', !(c.ij && activeDb()));
-    // Purge row (Data card) — admin-only destructive function.
-    setHidden('purgeRow', !(c.adm && activeDb()));
+    // No per-card hiding inside the admin grid — the role-view lens decides which
+    // surface a role sees; within a view every task card always shows. (The
+    // capability gating that used to hide the Data/Purge cards was removed.)
     // Analyst lane (Cardex Variance, Account Roll Forward, Model DMAAI Review,
     // DMAAI Analysis) — gated on the role's dmaais grant; the action cards vs. the
     // read-only summary swap on the grant so a non-analyst still sees what's open.
     var _analyst = canAnalyst();
     setHidden('analystLane', !_analyst);
     setHidden('analystSummary', _analyst);
-    // Utilities (Reload GL / Reload Cardex) are destructive maintenance — admin-only.
-    setHidden('utilPanel', !c.adm);
   }
 
   // ---- Role split: admins get the action surface; everyone else gets the
@@ -2156,13 +2229,51 @@
           else if (days <= 60 && !snoozed) { expLevel = 'amber'; expMsg = 'License expires in ' + days + (days === 1 ? ' day' : ' days'); }
         }
 
-        // Worst of the two drives the dot; the winning reason drives the sub.
+        // Worst of the two drives the dot (and the card accent + band rollup).
         dot.className = 'row-dot ' + (rank[expLevel] >= rank[seatLevel] ? expLevel : seatLevel);
-        if (sub) sub.textContent = (expMsg && rank[expLevel] >= rank[seatLevel]) ? expMsg : seatMsg;
+
+        // Visual: the term as a mini calendar with the expiry day selected, and
+        // a "You have N days left" headline. The seat/expiry prose drops to the
+        // small sub. No term on file (perpetual) → no calendar, seats lead.
+        var card = dot.closest ? dot.closest('.lic-card') : null;
+        var daysEl = $('licDays');
+        if (card) card.classList.remove('lic-expired', 'lic-ok');
+        if (days != null) {
+          renderLicenseCalendar(u.licenseEndDate);
+          if (card) card.classList.add(expLevel === 'red' ? 'lic-expired' : expLevel === 'green' ? 'lic-ok' : 'lic-soon');
+          if (daysEl) daysEl.textContent = (days <= 0)
+            ? 'License expired'
+            : ('You have ' + days + (days === 1 ? ' day left' : ' days left'));
+          if (sub) sub.textContent = u.licenseEndDate
+            ? ('Expires ' + new Date(u.licenseEndDate + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }))
+            : seatMsg;
+        } else {
+          renderLicenseCalendar(null);                 // perpetual / no term
+          if (daysEl) daysEl.textContent = u.unlimited ? 'Unlimited license' : seatMsg;
+          if (sub) sub.textContent = seatMsg;
+        }
 
         if (typeof tintPanels === 'function') tintPanels();
       })
       .catch(function () { /* leave grey + neutral on error */ });
+  }
+
+  // Render a compact month calendar for the license expiry, with the expiry day
+  // "selected" (filled). Pass a falsy date to clear it (perpetual / no term).
+  function renderLicenseCalendar(endIso) {
+    var box = $('licCal'); if (!box) return;
+    var d = endIso ? new Date(String(endIso) + 'T00:00:00') : null;
+    if (!d || isNaN(d.getTime())) { box.innerHTML = ''; return; }
+    var y = d.getFullYear(), m = d.getMonth(), expDay = d.getDate();
+    var head = d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    var firstDow = new Date(y, m, 1).getDay();
+    var dim = new Date(y, m + 1, 0).getDate();
+    var cells = ['S', 'M', 'T', 'W', 'T', 'F', 'S'].map(function (w) { return '<span class="cal-dow">' + w + '</span>'; });
+    for (var i = 0; i < firstDow; i++) cells.push('<span class="cal-day is-blank"></span>');
+    for (var day = 1; day <= dim; day++) {
+      cells.push('<span class="cal-day' + (day === expDay ? ' is-exp' : '') + '">' + day + '</span>');
+    }
+    box.innerHTML = '<div class="cal-head">' + esc(head) + '</div><div class="cal-grid">' + cells.join('') + '</div>';
   }
 
   // ---- Onboarding wizard: Welcome -> Add your team -> Done ----
@@ -2402,19 +2513,14 @@
 
       // Feed the Data card's refresh row (admin) + the readiness check.
       _jobStatus = status;
+      _refreshWhen = when;
       // Data-currency fact in the Database meta strip (shown to every role).
       _dbRefresh = /^success/i.test(status)            ? { dot: 'green', v: when || 'Current' }
                  : /^in progress/i.test(status)        ? { dot: 'amber', v: 'Refreshing…' }
                  : /^(failed|cancelled)/i.test(status) ? { dot: 'red',   v: 'May be stale' }
                  :                                        { dot: 'grey',  v: when || 'Unknown' };
       renderDbMeta();
-      var rDot = $('refreshDot'), rSub = $('refreshSub');
-      if (rDot && rSub) {
-        if (/^success/i.test(status))          { rDot.className = 'row-dot green'; rSub.textContent = when ? 'Last refresh succeeded · ' + when : 'Last refresh succeeded'; }
-        else if (/^in progress/i.test(status)) { rDot.className = 'row-dot amber'; rSub.textContent = 'Refresh in progress…'; }
-        else if (/^(failed|cancelled)/i.test(status)) { rDot.className = 'row-dot red'; rSub.textContent = 'Last refresh failed'; }
-        else { rDot.className = 'row-dot grey'; rSub.textContent = 'Pull the latest from JDE into this database'; }
-      }
+      renderDataCard();   // refresh row (+ purge/calendar rows) of the merged Data card
       reflectImportButton();
       renderReadiness();
     }).catch(function () { /* hard failures are covered by the connectivity banner */ });
@@ -2755,37 +2861,69 @@
     try { return new Date(iso + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }); }
     catch (_) { return iso; }
   }
+  // ---- Merged Data card (refresh + purge + calendar-change) ----
+  var _fiscalDetect = null;   // last fiscal-period-end detect result (calendar row)
+  function _lvlRank(l) { return l === 'red' ? 3 : l === 'amber' ? 2 : l === 'green' ? 1 : 0; }
+  function _setDataRow(rowId, level, text) {
+    var row = $(rowId); if (!row) return;
+    row.classList.remove('lvl-green', 'lvl-amber', 'lvl-red', 'lvl-grey');
+    row.classList.add('lvl-' + (level || 'grey'));
+    var t = row.querySelector('.data-row-text'); if (t) t.textContent = text;
+  }
+  // "Jun 23 2026 12:43PM" -> "Jun 23, 2026" (drop the time for the as-of line).
+  function _fmtAsOf(s) {
+    s = String(s || '').replace(/\s*\d{1,2}:\d{2}\s*[AP]M\s*$/i, '');
+    return s.replace(/^(\w+\s+\d{1,2})\s+(\d{4})$/, '$1, $2');
+  }
+  // Paint the Data card's three rows + the worst-of status dot, from _jobStatus
+  // (/poll), _purgeInfo (purge-info), and _fiscalDetect (period-end detect). Each
+  // source's loader calls this as it resolves; rows read "Checking…" until in.
+  function renderDataCard() {
+    if (!$('dataDot')) return;   // card not on the page (e.g. non-admin view)
+    var s = _jobStatus || '', refLvl, refTxt;
+    if (/^success/i.test(s))                 { refLvl = 'green'; refTxt = _refreshWhen ? ('As of ' + _fmtAsOf(_refreshWhen)) : 'Up to date'; }
+    else if (/^in progress/i.test(s))        { refLvl = 'amber'; refTxt = 'Refreshing now'; }
+    else if (/^(failed|cancelled)/i.test(s)) { refLvl = 'red';   refTxt = 'Last refresh failed'; }
+    else if (s)                              { refLvl = 'grey';  refTxt = 'No refresh yet'; }
+    else                                     { refLvl = 'grey';  refTxt = 'Checking…'; }
+    _setDataRow('dataRefreshRow', refLvl, refTxt);
+
+    var pLvl = 'grey', pTxt = 'Checking…';
+    if (_purgeInfo && window.RRV8 && window.RRV8.purgeRecommendation) {
+      var until = reviewValueFor('purge-snooze', 'rrv8.purgeSnooze.');
+      var rec = window.RRV8.purgeRecommendation(_purgeInfo, { snoozeUntil: until, today: new Date().toISOString().slice(0, 10) });
+      if (rec.known) {
+        pLvl = rec.effectiveLevel || 'green';
+        if (rec.runway != null) { var mo = Math.max(1, Math.round(rec.runway)); pTxt = '~' + mo + ' month' + (mo === 1 ? '' : 's') + ' of storage left'; }
+        else if (rec.retainedMonths != null) { pTxt = 'Keeping ~' + (rec.retainedMonths / 12).toFixed(rec.retainedMonths >= 24 ? 0 : 1) + ' yrs of data'; }
+        else { pTxt = _purgeInfo.dbSizePretty ? ('Using ' + _purgeInfo.dbSizePretty) : 'Storage healthy'; }
+      } else { pTxt = _purgeInfo.dbSizePretty ? ('Using ' + _purgeInfo.dbSizePretty) : 'Storage'; }
+    }
+    _setDataRow('dataPurgeRow', pLvl, pTxt);
+
+    var fLvl = 'grey', fTxt = 'Checking…';
+    if (_fiscalDetect) {
+      if (_fiscalDetect.mismatchFound) { fLvl = 'amber'; fTxt = 'Correction available'; }
+      else { fLvl = 'green'; fTxt = 'No calendar changes'; }
+    }
+    _setDataRow('dataFiscalRow', fLvl, fTxt);
+
+    var worst = ''; [refLvl, pLvl, fLvl].forEach(function (l) { if (_lvlRank(l) > _lvlRank(worst)) worst = l; });
+    var dot = $('dataDot'); if (dot) dot.className = 'row-dot ' + (worst || 'grey');
+    var sub = $('dataBriefSummary');
+    if (sub) sub.textContent = (worst === 'amber' || worst === 'red')
+      ? (refLvl === worst ? refTxt : pLvl === worst ? pTxt : fTxt) : '';
+    if (typeof tintPanels === 'function') tintPanels();
+  }
   function applyPurgeInfo(info) {
     _purgeInfo = info || {};
-    var cur = _purgeInfo.currentCutoff, size = _purgeInfo.dbSizePretty || '';
-    var sub = $('purgeSub');
-    if (sub) sub.textContent = cur
-      ? ('Data starts ' + fmtDateLong(cur) + ' · database ' + size)
-      : 'Move the data start date forward to free up space.';
-    if ($('pgCurrent')) $('pgCurrent').textContent = fmtDateLong(cur);
-    if ($('pgSize')) $('pgSize').textContent = size || '—';
-    renderDbMeta();   // surface History from + Database size in the Scope strip
-    var sel = $('pgNewDate'), cands = _purgeInfo.candidates || [];
-    if (sel) sel.innerHTML = cands.length
-      ? cands.map(function (iso) { return '<option value="' + iso + '">' + fmtDateLong(iso) + '</option>'; }).join('')
-      : '<option value="">No later periods to move to</option>';
-    if ($('pgDiverge')) $('pgDiverge').hidden = !_purgeInfo.calendarDiverges;
-    setPurgeDot(_purgeInfo);
+    renderDbMeta();   // History-from + Database size in the (hidden) Scope strip
+    setPurgeDot(_purgeInfo);   // -> renderDataCard(): the "storage remaining" row
   }
-  // Purge dot — same recommendation algorithm + snooze as the Purge page card
-  // (RRV8.purgeRecommendation in sidebar.js), keyed on the same per-db snooze, so
-  // the dot and the page always agree (including snooze -> green). Grey until the
-  // agent reports the recommendation fields (older jar) or when nothing scores.
-  function setPurgeDot(info) {
-    var dot = $('purgeDot'); if (!dot) return;
-    if (!info || !window.RRV8 || !window.RRV8.purgeRecommendation) { dot.className = 'row-dot grey'; return; }
-    var until = reviewValueFor('purge-snooze', 'rrv8.purgeSnooze.');
-    var today = new Date().toISOString().slice(0, 10);
-    var rec = window.RRV8.purgeRecommendation(info, { snoozeUntil: until, today: today });
-    if (!rec.known) { dot.className = 'row-dot grey'; dot.title = ''; return; }
-    dot.className = 'row-dot ' + (rec.effectiveLevel || 'grey');
-    dot.title = rec.snoozed ? 'Purge reminder set' : (rec.headline + (rec.detail ? ' — ' + rec.detail.replace(/<[^>]+>/g, '') : ''));
-  }
+  // Purge state now lives in the merged Data card's "storage remaining" row —
+  // store the info and repaint. (Recommendation + snooze handled in renderDataCard
+  // via RRV8.purgeRecommendation, same algorithm the Purge page uses.)
+  function setPurgeDot(info) { if (info) _purgeInfo = info; renderDataCard(); }
   function loadPurgeInfo() {
     if (IS_DEMO || !isAdmin()) return;
     rrFetch('inventory/integrity/purge-info').then(function (info) {
@@ -2793,27 +2931,11 @@
       if (!_purgeStaged) _purgeOriginal = info && info.currentCutoff;
     }).catch(function () { /* endpoint not live — leave the default row text */ });
   }
-  // ---- Correct a Period-End Date (detect check) ----
-  // Runs the agent's detect scan when the Administrator area initializes (so the
-  // dot reflects status as soon as the band is open): GREEN = no stale period-end
-  // found, AMBER = a correction is available (mismatchFound). Same source of truth
-  // as the page's Step-1 check, so the dot and the page agree. Grey until checked.
-  var _fiscalSubDefault = null;
-  function setFiscalDot(d) {
-    var dot = $('fiscalDot'); if (!dot) return;
-    var sub = $('fiscalSub');
-    if (_fiscalSubDefault === null && sub) _fiscalSubDefault = sub.textContent;
-    if (d && d.mismatchFound) {
-      dot.className = 'row-dot amber';
-      dot.title = 'A period-end date needs correcting'
-        + ((d.incorrectDate && d.correctedDate) ? ' (' + fmtDateLong(d.incorrectDate) + ' → ' + fmtDateLong(d.correctedDate) + ')' : '') + '.';
-      if (sub) sub.textContent = 'A stored period-end date looks off — open to review and correct it.';
-    } else {
-      dot.className = 'row-dot green';
-      dot.title = 'Period-end dates look correct — no action needed.';
-      if (sub && _fiscalSubDefault !== null) sub.textContent = _fiscalSubDefault;
-    }
-  }
+  // ---- Calendar-change (period-end detect) — the Data card's third row ----
+  // GREEN = no stale period-end found, AMBER = a correction is available
+  // (mismatchFound). Same detect the Period-End page's Step-1 check uses. Store
+  // the result and repaint the Data card.
+  function setFiscalDot(d) { _fiscalDetect = d || _fiscalDetect; renderDataCard(); }
   function loadFiscalStatus() {
     if (IS_DEMO || !isAdmin()) return;
     rrFetch('inventory/fiscal-period-end-detect')
@@ -2837,6 +2959,13 @@
   function reviewValueFor(kind, lsPrefix) {
     var ack = ackFor(kind);
     if (ack && window.RRV8 && window.RRV8.ackToReviewValue) return window.RRV8.ackToReviewValue(ack);
+    // The server ack table is the source of truth. When the acks endpoint
+    // responded (_acksByKind is a map, even if empty), a missing kind means the
+    // ack is absent/CLEARED server-side — return '' and do NOT consult the local
+    // fallback (else a stale per-browser snooze masks a server-side clear). Only
+    // fall back to localStorage when the endpoint was unreachable (null) — e.g. a
+    // database whose RAdminReminderAck table predates this build.
+    if (_acksByKind) return '';
     var a = activeDb(); var dbn = (a && a.n) || '';
     try { return localStorage.getItem(lsPrefix + dbn) || ''; } catch (_) { return ''; }
   }
@@ -2940,6 +3069,43 @@
     dot.title = level === 'green'
       ? (val === 'never' ? 'AI assistant reminders off' : 'Acknowledged — reminder set')
       : 'Set up or acknowledge the AI Assistant';
+  }
+  // AI Assistant "Your plan" pill + Upgrade affordance. The purchased tier is
+  // GSI-set on the VALC client card and read via api/v1/ai/health → maxLevel
+  // (off|docs|scrubbed|full); it's a per-client entitlement, not per-DB. Upgrading
+  // isn't self-serve, so the CTA is a sales mailto (shown only below the top tier).
+  var AI_TIERS = {
+    off:      { label: 'Not included',      cta: 'Add AI Assistant' },
+    docs:     { label: 'Docs-grounded',     cta: 'Upgrade' },
+    scrubbed: { label: 'Scrubbed analysis', cta: 'Upgrade' },
+    full:     { label: 'Full data' }
+  };
+  function loadAiPlan() {
+    var pill = $('aiPlanPill'); if (!pill) return;
+    if (IS_DEMO || !isAdmin()) return;
+    var up = $('aiUpgrade');
+    rrFetch('api/v1/ai/health').then(function (r) {
+      var lvl = (r && r.maxLevel) || 'off';
+      var t = AI_TIERS[lvl] || AI_TIERS.off;
+      pill.textContent = t.label;
+      pill.setAttribute('data-tier', lvl);
+      if (up) {
+        if (lvl === 'full') { up.hidden = true; }   // already top tier — nothing to upgrade
+        else {
+          up.hidden = false;
+          up.textContent = t.cta;
+          var subject = 'RapidReconciler AI Assistant — ' + (lvl === 'off' ? 'add to our plan' : 'upgrade our tier');
+          var body = (lvl === 'off'
+            ? 'We’d like to add the AI Assistant to our RapidReconciler plan.'
+            : 'We’d like to upgrade our RapidReconciler AI Assistant tier (currently ' + t.label + ').')
+            + '\n\nPlease send options and pricing.\n';
+          up.href = 'mailto:gsisales@getgsi.com?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
+        }
+      }
+    }).catch(function () {
+      pill.textContent = 'Unavailable'; pill.setAttribute('data-tier', 'off');
+      if (up) up.hidden = true;
+    });
   }
   // Activity Log row dot — client-side review reminder (rrv8.activityReview.<db> +
   // RRV8.activityReviewLevel), set on the Activity Log page (7/14/30-day). Green =
@@ -3096,20 +3262,33 @@
     }
     // (The single "Review the details" button was retired — each briefing bullet
     // now carries its own scoped action; see _decorateBriefActions.)
-    // Show-all toggle (bottom-right): off = exception mode (hide all-clear bands),
-    // on = show every band. Default ON for now so the page stays populated until
-    // the KPI/dashboard cards exist to fill the exception (off) state.
-    (function initShowAll() {
-      var t = $('showAllToggle'); if (!t) return;
-      var on = true;
-      try { var v = localStorage.getItem('rrv8.home.showAll'); if (v === '0') on = false; } catch (_) {}
-      t.checked = on;
-      document.body.classList.toggle('home-show-all', on);
-      t.addEventListener('change', function () {
-        document.body.classList.toggle('home-show-all', t.checked);
-        try { localStorage.setItem('rrv8.home.showAll', t.checked ? '1' : '0'); } catch (_) {}
+    // Bottom-right database picker — drives the canonical (hidden) #dbSelect so
+    // all the switch logic (setActiveDatabase, gen-guard, resetScopedState,
+    // loadActiveDbSurfaces) is reused. Pops a small menu upward like the view
+    // switcher. The label + menu are (re)built by renderHaDb() on boot and on
+    // every switch (via renderDatabases()).
+    var haDbBtn = $('haDbBtn'), haDbMenu = $('haDbMenu');
+    if (haDbBtn && haDbMenu) {
+      haDbBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var willOpen = haDbMenu.hidden;
+        haDbMenu.hidden = !willOpen;
+        haDbBtn.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
       });
-    })();
+      haDbMenu.addEventListener('click', function (e) {
+        var b = e.target.closest ? e.target.closest('.umr-opt') : null; if (!b) return;
+        e.stopPropagation();
+        haDbMenu.hidden = true;
+        haDbBtn.setAttribute('aria-expanded', 'false');
+        var i = parseInt(b.getAttribute('data-db'), 10);
+        var sel = $('dbSelect');
+        if (sel && !isNaN(i) && i !== (window.RR_SESSION.activeDbIndex || 0)) {
+          sel.value = String(i);
+          sel.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      });
+      document.addEventListener('click', function () { if (!haDbMenu.hidden) { haDbMenu.hidden = true; haDbBtn.setAttribute('aria-expanded', 'false'); } });
+    }
     // Utilities / Data-Management actions are now standalone pages (the Home
     // rows link to them with "Open"); their former in-page modals + handlers
     // are retired. The at-a-glance row dots/text still come from the status
@@ -3186,118 +3365,47 @@
   }
 
   // ---- boot ----
-  // ---- Panel status tint -------------------------------------------------
-  // Roll each admin panel's task dots up to a single panel shade so the
-  // health reads from across the page. Worst dot wins (red > amber > green);
-  // grey/unset dots are ignored. Panels with no status dots (e.g. People &
-  // licensing) stay neutral. Driven off the same .row-dot classes the rest
-  // of the page already sets, so there's one source of truth.
-  var PANEL_RANK = { red: 3, amber: 2, green: 1 };
-  function tintPanel(panel) {
-    var dots = panel.querySelectorAll('.row-dot');
-    var best = null, bestRank = 0;
-    for (var i = 0; i < dots.length; i++) {
-      var cls = ['red', 'amber', 'green'];
-      for (var j = 0; j < cls.length; j++) {
-        if (dots[i].classList.contains(cls[j]) && PANEL_RANK[cls[j]] > bestRank) {
-          bestRank = PANEL_RANK[cls[j]]; best = cls[j];
-        }
-      }
-    }
-    // Only tint a panel for a state it can actually explain: a panel tints
-    // only for states its PANEL_SUMMARY map defines copy for. A panel with
-    // just a neutral `none` summary stays neutral even when an in-row dot is
-    // colored, so the tint and the summary message never disagree. (Utilities
-    // now defines green/amber/red — it tints to its worst row dot, e.g. the
-    // Reload Cardex end-of-day suggestion.)
-    var h3t = panel.querySelector('.panel-head h3');
-    var smap = PANEL_SUMMARY[h3t ? h3t.textContent.trim() : ''] || {};
-    var want = (best && smap[best]) ? 'status-' + best : '';
-    var have = panel.classList.contains('status-red') ? 'status-red'
-             : panel.classList.contains('status-amber') ? 'status-amber'
-             : panel.classList.contains('status-green') ? 'status-green' : '';
-    if (want === have) return;  // no-op guard: don't re-mutate (would re-fire the observer)
-    panel.classList.remove('status-red', 'status-amber', 'status-green');
-    if (want) panel.classList.add(want);
+  // ---- Admin task-card roll-up -------------------------------------------
+  // The admin surface is a flat 3×3 grid of task cards (one .row-dot each).
+  // Per-card tint is pure CSS (#adminGrid .row:has(.row-dot.*)); JS only rolls
+  // the cards up into the Administrator band + Today's To Do. Worst dot wins
+  // (red > amber > green; grey/unset ignored). Driven off the same .row-dot
+  // classes the rest of the page already sets — one source of truth.
+  // Visible admin task cards — skips capability-hidden rows (import/purge).
+  function _adminCards() {
+    var grid = document.querySelector('#view-admin .lower-grid'); if (!grid) return [];
+    return Array.prototype.filter.call(grid.querySelectorAll('.row'), function (c) { return !c.hidden; });
   }
-  // Collapsed-header status line (the "Am I ready to go?"-style at-a-glance
-  // message). Keyed by section title; the worst dot picks the message, the
-  // panel's status class colors it (CSS). Only textContent changes here, so
-  // this never re-fires the class MutationObserver.
-  var PANEL_SUMMARY = {
-    'People & Licensing': { none: 'Users, roles & company licensing', green: 'Team active & licensed', amber: 'Users or seats to review', red: 'Users or seats need attention' },
-    'Accounting Set Up':  { none: 'Accounting configuration', green: 'DMAAIs reviewed & loaded', amber: 'Model DMAAI review pending', red: 'Accounting setup needs attention' },
-    'Inventory Review':   { none: 'GL & perpetual roll-forward', green: 'Roll-forwards intact', amber: 'Variance to review', red: 'Roll-forward breaks to review' },
-    'Data Management':    { none: 'Nightly refresh + data purge', green: 'Data is current', amber: 'Refresh in progress', red: 'Last refresh failed' },
-    'System Health':      { none: 'Service, assistant & activity', green: 'All healthy', amber: 'Something to review', red: 'Service needs attention' },
-    'Utilities':          { none: 'GL & cardex data maintenance', green: 'GL & cardex current', amber: 'Maintenance suggested', red: 'Maintenance needed' },
-    'Data Refresh Schedule': { none: 'When your data loads & refreshes', green: 'Refreshes succeeding', red: 'Last refresh failed' }
-  };
-  function worstDot(panel) {
-    var dots = panel.querySelectorAll('.row-dot');
-    var best = null, bestRank = 0, cls = ['red', 'amber', 'green'];
-    for (var i = 0; i < dots.length; i++) {
-      for (var j = 0; j < cls.length; j++) {
-        if (dots[i].classList.contains(cls[j]) && PANEL_RANK[cls[j]] > bestRank) {
-          bestRank = PANEL_RANK[cls[j]]; best = cls[j];
-        }
-      }
-    }
-    return best;
-  }
-  function paintPanelSummary(panel) {
-    var h3 = panel.querySelector('.panel-head h3');
-    var el = panel.querySelector('.panel-summary');
-    if (!h3 || !el) return;
-    var map = PANEL_SUMMARY[h3.textContent.trim()] || {};
-    var best = worstDot(panel);
-    var msg = (best && map[best]) || map.none || map.green || '';
-    if (msg && el.textContent !== msg) el.textContent = msg;
+  function _cardLevel(card) {
+    var dot = card.querySelector('.row-dot'); if (!dot) return '';
+    return dot.classList.contains('red') ? 'attention'
+         : dot.classList.contains('amber') ? 'watch'
+         : dot.classList.contains('green') ? 'ok' : '';
   }
   function tintPanels() {
-    if (!caps().adm) return;   // non-admins don't see the panels; pills come from the summary read
-    var grid = document.querySelector('#view-admin .lower-grid');
-    if (!grid) return;
-    var panels = grid.querySelectorAll('.panel');
-    for (var i = 0; i < panels.length; i++) { tintPanel(panels[i]); paintPanelSummary(panels[i]); }
-    // Roll the per-panel states up into the Administrator band: the bar must
-    // never read calmer than its worst card. syncAdminBand() floors the band to
-    // the worst sub-panel (People & Licensing / Data Management / System Health
-    // / Utilities); the server's s.admin level wins only when it's MORE severe.
-    // (Previously the band was server-only and could show green over amber
-    // cards — the case the owner flagged on a _NA switch.)
+    if (!caps().adm) return;   // non-admins don't see the cards; pills come from the summary read
+    // Per-card tint is CSS now; JS only rolls the cards up into the band + To Do
+    // and refreshes the admin AI briefing as dots resolve.
     syncAdminBand();
-    // Keep Today's To Do in lockstep: its admin items come from these same
-    // panels, so re-roll it whenever a panel dot changes (using the cached
-    // status-summary for the analyst/accountant rows).
     if (typeof renderTodo === 'function') renderTodo(_lastStatusSummary);
+    if (_viewRole() === 'admin' && typeof _scheduleAdminBrief === 'function') _scheduleAdminBrief();
   }
   // --- Administrator band roll-up ------------------------------------------
   // The band's tint + collapsed headline reflect max(server s.admin level, worst
-  // admin sub-panel). The server level is captured on each /home/status-summary
+  // admin task card). The server level is captured on each /home/status-summary
   // read (setSectStatus delegates here for the admin head); tintPanels() re-runs
-  // this whenever a panel dot changes, so the bar tracks the cards live.
+  // this whenever a card dot changes, so the bar tracks the cards live.
   var BAND_RANK = { '': 0, ok: 1, watch: 2, attention: 3 };
   var _adminServerLvl = '';        // raw level the server reported for s.admin
   var _adminServerHeadline = '';   // server's admin headline (used when server-driven)
   function worstAdminPanelLvl() {
-    var grid = document.querySelector('#view-admin .lower-grid'); if (!grid) return '';
-    var panels = grid.querySelectorAll('.panel'), worst = '';
-    for (var i = 0; i < panels.length; i++) {
-      var p = panels[i];
-      var l = p.classList.contains('status-red') ? 'attention'
-            : p.classList.contains('status-amber') ? 'watch'
-            : p.classList.contains('status-green') ? 'ok' : '';
-      if (BAND_RANK[l] > BAND_RANK[worst]) worst = l;
-    }
+    var worst = '';
+    _adminCards().forEach(function (c) { var l = _cardLevel(c); if (BAND_RANK[l] > BAND_RANK[worst]) worst = l; });
     return worst;
   }
   function countNonOkAdminPanels() {
-    var grid = document.querySelector('#view-admin .lower-grid'); if (!grid) return 0;
-    var panels = grid.querySelectorAll('.panel'), n = 0;
-    for (var i = 0; i < panels.length; i++) {
-      if (panels[i].classList.contains('status-amber') || panels[i].classList.contains('status-red')) n++;
-    }
+    var n = 0;
+    _adminCards().forEach(function (c) { var l = _cardLevel(c); if (l === 'watch' || l === 'attention') n++; });
     return n;
   }
   function syncAdminBand() {
@@ -3404,22 +3512,19 @@
   var _lastStatusSummary = null;   // last /home/status-summary, so tintPanels() can re-run renderTodo
   // Admin to-do items come from the live admin PANELS (the same source the
   // Administrator band rolls up via syncAdminBand), NOT s.admin — so the To Do
-  // count always matches the band. Each non-OK panel becomes one item:
-  // "<title> — <summary>" carrying its own level.
+  // count always matches the band. Each non-OK task card becomes one item:
+  // "<title> — <sub>" carrying its own level.
   function adminTodoItems() {
-    var grid = document.querySelector('#view-admin .lower-grid'); if (!grid) return [];
-    var panels = grid.querySelectorAll('.panel'), out = [];
-    for (var i = 0; i < panels.length; i++) {
-      var p = panels[i];
-      var level = p.classList.contains('status-red') ? 'attention'
-                : p.classList.contains('status-amber') ? 'watch' : null;
-      if (!level) continue;
-      var h = p.querySelector('.panel-head h3');
-      var sum = p.querySelector('.panel-summary');
+    var out = [];
+    _adminCards().forEach(function (c) {
+      var level = _cardLevel(c);
+      if (level !== 'watch' && level !== 'attention') return;
+      var h = c.querySelector('.row-title');
+      var sub = c.querySelector('.row-sub');
       var title = h ? h.textContent.trim() : '';
-      var msg = sum ? sum.textContent.trim() : '';
+      var msg = sub ? sub.textContent.trim() : '';
       out.push({ text: (title && msg) ? (title + ' — ' + msg) : (title || msg), level: level });
-    }
+    });
     return out;
   }
   // Build the per-role to-do card. Admin pulls from adminTodoItems() (panel
@@ -3774,6 +3879,9 @@
   }
   function renderAiBriefing() {
     var brief = $('haiBrief'); if (!brief) return;
+    // The Administrator view gets its own briefing — an overview of the admin
+    // job + the task cards that need a look, not a per-period reconciliation read.
+    if (_viewRole() === 'admin') { renderAdminBriefing(true); return; }
     _setBriefPeriod();
     var gen = ++_briefGen;                       // supersede any in-flight briefing (DB/scope switch)
     var d = _briefData();
@@ -3838,6 +3946,96 @@
       brief.classList.remove('is-loading');
       _fallbackBrief();
     });
+  }
+  // ---- Admin briefing (left rail, Administrator view) --------------------
+  // A welcome overview of the administrator's job + either the task cards that
+  // need a look (amber/red dots) or an all-clear. Reads the live task-card dots
+  // (the SAME source the band rolls up), so it's never period-scoped. Routes
+  // through /ai/explain for the prose with a deterministic client-side fallback;
+  // re-fires (debounced) as dots resolve, via the grid observer in tintPanels().
+  var WELCOME_ADMIN = 'Welcome to RR Administration! Your job is to keep RapidReconciler ready to reconcile — the data current, the right people with the right access, and the engine healthy.';
+  function _adminBriefTasks() {
+    return _adminCards().map(function (c) {
+      var t = c.querySelector('.row-title'), s = c.querySelector('.row-sub');
+      return {
+        title: t ? t.textContent.trim() : '',
+        sub: s ? s.textContent.replace(/\s+/g, ' ').trim() : '',
+        level: _cardLevel(c)   // attention | watch | ok | '' (grey/unknown)
+      };
+    }).filter(function (x) { return x.title; });
+  }
+  // Deterministic, no-AI version — always correct, shown instantly + on any AI
+  // miss. Welcome line as verdict; review items or a single all-clear as points.
+  function _adminBriefFallback() {
+    var tasks = _adminBriefTasks();
+    var review = tasks.filter(function (t) { return t.level === 'attention' || t.level === 'watch'; });
+    if (!review.length) {
+      _setBrief('ok', WELCOME_ADMIN, ['All clear — nothing needs your attention right now.']);
+      return;
+    }
+    var lvl = review.some(function (t) { return t.level === 'attention'; }) ? 'attention' : 'watch';
+    _setBrief(lvl, WELCOME_ADMIN, review.slice(0, 5).map(function (t) {
+      return t.title + (t.sub ? ' — ' + t.sub : '');
+    }));
+  }
+  // Signature of the current admin task set (title + level). The card dots
+  // repaint on every poll — service health re-reads every 60s — and each repaint
+  // fires the grid observer. Without this guard the briefing would re-call the AI
+  // on every poll and the prose would subtly shift ("flicker"). We only
+  // regenerate when the task set actually CHANGED; a user-driven view/DB/period
+  // switch passes force=true to refresh regardless.
+  var _lastAdminBriefSig = null;
+  function renderAdminBriefing(force) {
+    var brief = $('haiBrief'); if (!brief) return;
+    var tasks = _adminBriefTasks();
+    var sig = tasks.map(function (t) { return t.title + ':' + t.level; }).join('|');
+    if (!force && sig === _lastAdminBriefSig) return;   // nothing changed — don't re-fire the AI
+    _lastAdminBriefSig = sig;
+    var pe = $('haiPeriod'); if (pe) pe.textContent = '';   // not a period-scoped read
+    var gen = ++_briefGen;
+    var review = tasks.filter(function (t) { return t.level === 'attention' || t.level === 'watch'; });
+    var lvl = review.some(function (t) { return t.level === 'attention'; }) ? 'attention'
+            : review.length ? 'watch' : 'ok';
+    // Paint the deterministic version immediately so the rail is never blank or
+    // stale while the AI thinks (and so it's correct if AI is off/unreachable).
+    _adminBriefFallback();
+    // Honor the customer's AI exposure choice (same per-DB pref the recon read uses).
+    if (_recsummaryLevel() === 'off') return;
+    brief.classList.add('is-loading');
+    var taskLines = tasks.map(function (t) {
+      var tag = t.level === 'attention' ? '[NEEDS ATTENTION]' : t.level === 'watch' ? '[REVIEW]' : '[OK]';
+      return tag + ' ' + t.title + (t.sub ? ': ' + t.sub : '');
+    });
+    var prompt = 'You are RapidReconciler AI, briefing an Administrator on their RapidReconciler install.\n'
+      + 'Open the "verdict" with exactly this welcome, verbatim: "' + WELCOME_ADMIN + '"\n'
+      + 'Then, in "points", help the admin know where to look. Each task below is tagged [NEEDS ATTENTION], [REVIEW], or [OK]:\n'
+      + (taskLines.length ? taskLines.join('\n') : '(no admin tasks reported)') + '\n\n'
+      + 'RULES:\n'
+      + '- If NOTHING is tagged [NEEDS ATTENTION] or [REVIEW], give the all-clear: ONE point, e.g. "All clear — your install is in good shape; nothing needs you right now."\n'
+      + '- Otherwise list ONLY the [NEEDS ATTENTION] and [REVIEW] tasks, worst first, one point each: name the task, then in plain English what to check and why it matters. Never invent a task that is not listed; never list an [OK] task.\n'
+      + '- Calm and factual, never alarmist. Plain admin English — no JDE table names, no SQL, no endpoint or file names. Each point 22 words MAX.\n'
+      + 'Respond with ONLY a JSON object, nothing else:\n'
+      + '{"verdict":"the welcome line, verbatim","points":["one line per task to review, or a single all-clear line"]}';
+    var timed = setTimeout(function () { if (gen === _briefGen) { brief.classList.remove('is-loading'); _adminBriefFallback(); } }, 14000);
+    rrFetch('api/v1/ai/explain', { method: 'POST', body: { prompt: prompt } }).then(function (r) {
+      if (gen !== _briefGen) return;
+      clearTimeout(timed);
+      brief.classList.remove('is-loading');
+      var o = _parseBrief(r && r.text);
+      if (o && o.verdict) _setBrief(lvl, o.verdict, o.points || []); else _adminBriefFallback();
+    }).catch(function () {
+      if (gen !== _briefGen) return;
+      clearTimeout(timed);
+      brief.classList.remove('is-loading');
+      _adminBriefFallback();
+    });
+  }
+  // Debounced admin-briefing refresh — the task-card dots resolve over a couple
+  // seconds (each loader is async), so coalesce the changes into one AI call.
+  var _adminBriefTimer = null;
+  function _scheduleAdminBrief() {
+    if (_adminBriefTimer) clearTimeout(_adminBriefTimer);
+    _adminBriefTimer = setTimeout(function () { _adminBriefTimer = null; if (_viewRole() === 'admin') renderAdminBriefing(); }, 700);
   }
   // ---- Period-health widget (out-of-balance by period) -------------------
   // Built from the SAME live roll-forward (_invRows) as the briefing + detail.
@@ -3966,7 +4164,7 @@
     _rcdxPreview = null;        // cached cardex eod-check — clear so a mid-switch repaint can't use the prior DB's
     _acksByKind = null;         // server reminder acks — re-fetched per DB by loadAcks() (DB-scoped agent)
     _dbFacts = null; _dbRefresh = null;   // install-facts strip (size / SQL build / data currency)
-    _jobStatus = ''; _period = ''; _periods = [];
+    _jobStatus = ''; _refreshWhen = ''; _period = ''; _periods = [];
 
     // Neutralize the DOM these feed so no stale color survives the switch.
     paintInventoryLight('grey', 'Checking…');     // arfDot + cxDot
@@ -3982,9 +4180,6 @@
     // Review Job Schedule — neutralize the row dot for the new DB (the dot is a
     // client-side review reminder, repainted by loadRefreshSchedule).
     var scDot = $('schedDot'); if (scDot) scDot.className = 'row-dot grey';
-    var rfDot = $('refreshDot'), rfSub = $('refreshSub');
-    if (rfDot) rfDot.className = 'row-dot grey';
-    if (rfSub) rfSub.textContent = 'Pull the latest from JDE into this database';
     var sysPill = $('sysPill'); if (sysPill) { sysPill.classList.remove('good', 'warn', 'bad'); sysPill.hidden = true; }
     var pPill = $('periodPill'); if (pPill) { pPill.hidden = true; pPill.textContent = 'Period: —'; }
     // People & Licensing — both rows read db-scoped data (license-usage by db,
@@ -3994,10 +4189,8 @@
     var licSub = $('licenseSub'); if (licSub) licSub.textContent = 'Company seats & entitlements';
     var tmDot = $('teamDot'); if (tmDot) { tmDot.className = 'row-dot grey'; tmDot.title = ''; }
     var tmSub = $('teamSub'); if (tmSub) tmSub.textContent = 'Users, roles & access';
-    // Data Management — purge (db cutoff/size) + fiscal-period detect (db scan).
-    var pgDot = $('purgeDot'); if (pgDot) { pgDot.className = 'row-dot grey'; pgDot.title = ''; }
-    var pgSub = $('purgeSub'); if (pgSub) pgSub.textContent = 'Move the data start date forward to free up space.';
-    var fpDot = $('fiscalDot'); if (fpDot) { fpDot.className = 'row-dot grey'; fpDot.title = ''; }
+    // Data card — refresh/purge/calendar rows reset to "Checking…" for the new DB.
+    _fiscalDetect = null; renderDataCard();
     // System Health review dots (AI / Activity / password) read the NEW db's key
     // when their loaders run a beat later; grey them now so the prior DB's
     // reviewed/amber state can't flash through the switch.
@@ -4087,10 +4280,8 @@
     loadFiscalStatus();
     loadTeamReview();
     setPwPolicyDot();
-    loadReloadGlStatus();
-    loadReloadCardexStatus();
-    loadRefreshSchedule();
     setAiDot();
+    loadAiPlan();
     setActivityDot();
     loadAcks();   // server acks for the review/snooze dots (repaints them on resolve)
     loadStatus();
@@ -4305,33 +4496,8 @@
     save();
   })();
 
-  // Per-panel collapse: panels open/close, and a panel opens/closes together
-  // with its horizontal row-neighbor so the two cards in a grid row stay the
-  // same height (an opened card next to a collapsed one looks lopsided). The
-  // 2-col grid pairs panels by DOM order: (0,1) and (2,3) — neighbor = i XOR 1.
-  // Panels ship collapsed (markup carries .is-collapsed).
-  (function () {
-    var panels = Array.prototype.slice.call(document.querySelectorAll('#adminGrid .panel'));
-    function syncBtn(panel, collapsed) {
-      var btn = panel.querySelector('.panel-collapse');
-      var h3  = panel.querySelector('.panel-head h3');
-      var name = h3 ? h3.textContent.trim() : 'section';
-      if (btn) {
-        btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-        btn.title = (collapsed ? 'Expand ' : 'Collapse ') + name;
-      }
-    }
-    panels.forEach(function (panel, i) {
-      var btn = panel.querySelector('.panel-collapse');
-      if (!btn) return;
-      btn.addEventListener('click', function () {
-        var collapsed = panel.classList.toggle('is-collapsed');
-        syncBtn(panel, collapsed);
-        var neighbor = panels[i ^ 1];   // open/close the row-mate together
-        if (neighbor) { neighbor.classList.toggle('is-collapsed', collapsed); syncBtn(neighbor, collapsed); }
-      });
-    });
-  })();
+  // (Per-panel collapse retired — the Administrator surface is now a flat 3×3
+  // grid of task cards, no panel grouping to expand/collapse.)
 </script>
 </body>
 </html>
