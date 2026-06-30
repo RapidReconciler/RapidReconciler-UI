@@ -95,6 +95,8 @@ window.RR_TEST_AGENT_AREAS = [
   'inventory/reconciliation/rows',
   'inventory/reconciliation/history',
   'inventory/reconciliation/by-company',
+  // Period-end journal-entry source: account-level reconciling lines
+  'inventory/suggested-je',
   'inventory/audit-detail',
   'inventory/variance-component',
   // DMAAI overlay (analyzer worklist persistence)
@@ -166,6 +168,8 @@ window.RR_TEST_AGENT_AREAS = [
   'admin/companies',
   // Proactive memory-pressure read behind Home's Service-health card
   'admin/service-health',
+  // Recent system events — the Activity Log page + Home's mini activity feed
+  'admin/activity',
   // Data Refresh Schedule — read-only review card in Home's Administrator
   // area (initial load + nightly refresh times). GSI manages the schedule;
   // the customer admin reviews it only.
