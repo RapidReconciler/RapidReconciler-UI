@@ -1671,7 +1671,8 @@
     var snoozed = !!(until && today && today < until && level !== 'red');
     var effectiveLevel = known ? (snoozed ? 'green' : level) : null;
     return { known: known, level: level, effectiveLevel: effectiveLevel, snoozed: snoozed,
-             headline: headline, detail: detail, reasons: reasons };
+             headline: headline, detail: detail, reasons: reasons,
+             runway: runway, retainedMonths: months };
   }
 
   // --- Complex-password review reminder (page band + Home dot share it) -------
