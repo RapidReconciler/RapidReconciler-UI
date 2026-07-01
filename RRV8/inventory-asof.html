@@ -800,6 +800,27 @@
     border-radius: 3px; transition: width 0.25s ease;
   }
   .perp-contrib-row-bar.is-negative { background: var(--red); }
+  /* AI inventory insight band */
+  .asof-ai { display: flex; align-items: flex-start; gap: 13px; padding: 15px 17px; border-radius: 12px; box-shadow: var(--shadow-sm); margin: 0 0 14px; background: linear-gradient(140deg, #1f2d4a 0%, #2c4a8c 52%, #3f74e8 100%); }
+  .asof-ai[hidden] { display: none; }
+  .asof-ai-emblem { display: inline-grid; place-items: center; width: 32px; height: 32px; border-radius: 9px; flex-shrink: 0; background: rgba(255,255,255,0.14); margin-top: 1px; }
+  .asof-ai-emblem svg { width: 18px; height: 18px; color: #dfe7ff; }
+  .asof-ai-body { flex: 1 1 auto; min-width: 0; }
+  .asof-ai-head { font-family: 'Source Sans 3', sans-serif; font-weight: 800; font-size: 14px; color: #fff; }
+  .asof-ai-scope { font-weight: 600; font-size: 12.5px; color: rgba(255,255,255,0.72); margin-left: 8px; }
+  .asof-ai-chips { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
+  .asof-ai-chip { font-size: 12px; padding: 5px 11px; border-radius: 999px; background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.32); color: #fff; cursor: pointer; font-family: inherit; }
+  .asof-ai-chip:hover { background: rgba(255,255,255,0.22); }
+  .asof-ai-form { display: flex; gap: 8px; margin-top: 10px; }
+  .asof-ai-form input { flex: 1 1 auto; min-width: 0; border: 1px solid rgba(255,255,255,0.34); background: rgba(255,255,255,0.14); border-radius: 9px; padding: 8px 12px; font-family: inherit; font-size: 13.5px; color: #fff; }
+  .asof-ai-form input::placeholder { color: rgba(255,255,255,0.7); }
+  .asof-ai-form input:focus { outline: none; border-color: #fff; background: rgba(255,255,255,0.22); }
+  .asof-ai-form button { flex-shrink: 0; background: #fff; color: var(--navy); border: 0; border-radius: 9px; padding: 8px 18px; font-weight: 800; font-size: 13.5px; cursor: pointer; font-family: inherit; }
+  .asof-ai-form button:hover { filter: brightness(0.94); }
+  .asof-ai-form button:disabled { opacity: .5; cursor: default; }
+  .asof-ai-answer { margin-top: 11px; background: rgba(255,255,255,0.14); border: 1px solid rgba(255,255,255,0.28); border-radius: 9px; padding: 11px 13px; font-size: 13.5px; line-height: 1.5; white-space: pre-wrap; color: #fff; }
+  .asof-ai-answer[hidden] { display: none; }
+  .asof-ai-answer.is-loading { color: rgba(255,255,255,0.75); font-style: italic; }
   .perp-contrib-empty {
     padding: 26px 12px; text-align: center; color: var(--text-muted);
     font-size: 12.5px; font-style: italic;
@@ -1515,8 +1536,30 @@
         <button class="perp-contrib-tab" type="button" role="tab" aria-selected="false" data-perp-contrib-dim="objects">Object</button>
         <button class="perp-contrib-tab" type="button" role="tab" aria-selected="false" data-perp-contrib-dim="subsidiaries">Subsidiary</button>
         <button class="perp-contrib-tab" type="button" role="tab" aria-selected="false" data-perp-contrib-dim="branches">Branch plant</button>
+        <button class="perp-contrib-tab" type="button" role="tab" aria-selected="false" data-perp-contrib-dim="glClasses">GL class</button>
       </div>
       <div class="perp-contrib-list" id="perp-contrib-list"></div>
+    </div>
+  </section>
+
+  <!-- AI inventory insight — grounded in the loaded scope's aggregates
+       (value by branch / GL class / business unit, totals). Least-moved pulls
+       the item ledger (inventory/transactions). Falls back to a deterministic
+       client-side summary if the AI service is unavailable. -->
+  <section class="asof-ai" id="asof-ai" hidden aria-label="Ask about this inventory">
+    <span class="asof-ai-emblem" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 1.6l1.9 5.1a5 5 0 0 0 2.9 2.9l5.1 1.9-5.1 1.9a5 5 0 0 0-2.9 2.9L12 21.4l-1.9-5.1a5 5 0 0 0-2.9-2.9L2.1 11.5l5.1-1.9a5 5 0 0 0 2.9-2.9z"/></svg></span>
+    <div class="asof-ai-body">
+      <div class="asof-ai-head">Ask about this inventory<span class="asof-ai-scope" id="asof-ai-scope"></span></div>
+      <div class="asof-ai-chips">
+        <button type="button" class="asof-ai-chip" data-asof-ask="branch">Summarize value by branch</button>
+        <button type="button" class="asof-ai-chip" data-asof-ask="glclass">Break down by GL class</button>
+        <button type="button" class="asof-ai-chip" data-asof-ask="leastmoved">Which items have moved the least?</button>
+      </div>
+      <form class="asof-ai-form" id="asof-ai-form">
+        <input type="text" id="asof-ai-input" autocomplete="off" placeholder="Ask about this inventory">
+        <button type="submit" id="asof-ai-btn">Ask</button>
+      </form>
+      <div class="asof-ai-answer" id="asof-ai-answer" hidden></div>
     </div>
   </section>
 
@@ -2588,6 +2631,7 @@
   // Hoisted (function declaration) so filteredRows can use it too.
   function perpContribValueOf(r, dim) {
     if (dim === 'branches') return String(r && r.Branch == null ? '' : r.Branch).trim();
+    if (dim === 'glClasses') return String(r && r.GLClass == null ? '' : r.GLClass).trim();
     const i = (dim === 'businessUnits') ? 0 : (dim === 'objects') ? 1 : 2;
     const parts = String(r && r.LongAccount == null ? '' : r.LongAccount).split('.');
     return (parts[i] || '').trim();
@@ -2596,7 +2640,8 @@
     businessUnits: { label: 'Business unit' },
     objects:       { label: 'Object' },
     subsidiaries:  { label: 'Subsidiary' },
-    branches:      { label: 'Branch plant' }
+    branches:      { label: 'Branch plant' },
+    glClasses:     { label: 'GL class' }
   };
   function loadPerpContribDim() {
     try { const raw = localStorage.getItem(PERP_CONTRIB_LS_KEY); if (raw && PERP_CONTRIB_DIMS[raw]) return raw; } catch (_) {}
@@ -2656,6 +2701,130 @@
       ? '<div class="perp-contrib-empty" style="padding:8px 12px;text-align:left;">+ ' + overflow + ' more &mdash; top ' + PERP_CONTRIB_TOP_N + ' shown</div>'
       : '');
   }
+
+  // ---- AI inventory insight -----------------------------------------------
+  // Grounded in the loaded scope's aggregates (value by branch / GL class / BU
+  // + totals off _viewRows) — never the raw rows, so it's fast and can't
+  // invent a figure. Least-moved rides the item ledger (inventory/transactions).
+  // Deterministic client-side fallback if the AI service is unreachable.
+  let _asofAiBusy = false;
+  function asofAggregates() {
+    const rows = _viewRows || [];
+    let total = 0;
+    const byBranch = {}, byGl = {}, byBu = {};
+    rows.forEach(r => {
+      const amt = Number(r.Amount) || 0; total += amt;
+      const br = (String(r.Branch == null ? '' : r.Branch).trim()) || '(none)';
+      const gl = (String(r.GLClass == null ? '' : r.GLClass).trim()) || '(none)';
+      const bu = (String(r.LongAccount == null ? '' : r.LongAccount).split('.')[0] || '').trim() || '(none)';
+      byBranch[br] = (byBranch[br] || 0) + amt;
+      byGl[gl] = (byGl[gl] || 0) + amt;
+      byBu[bu] = (byBu[bu] || 0) + amt;
+    });
+    const topN = (obj, k) => Object.keys(obj).map(key => ({ key, amt: obj[key] }))
+      .sort((a, b) => Math.abs(b.amt) - Math.abs(a.amt)).slice(0, k);
+    return { total, n: rows.length, byBranch: topN(byBranch, 8), byGl: topN(byGl, 8), byBu: topN(byBu, 6),
+      branchCount: Object.keys(byBranch).length, glCount: Object.keys(byGl).length };
+  }
+  function asofScopeText() {
+    const scope = (window.RRV8 && window.RRV8.readSessionScope) ? window.RRV8.readSessionScope() : null;
+    const cos = (scope && scope.activeCompanies) || [];
+    const per = (_data && _data._meta && _data._meta.period) || '';
+    const coTxt = cos.length === 1 ? ('Co ' + cos[0]) : (cos.length ? (cos.length + ' companies') : 'all companies');
+    return coTxt + (per ? ' · ' + formatPeriod(per) : '');
+  }
+  function asofAiSync() {
+    const band = document.getElementById('asof-ai'); if (!band) return;
+    band.hidden = false;
+    const s = document.getElementById('asof-ai-scope'); if (s) s.textContent = ' — ' + asofScopeText();
+  }
+  const _fmtAgg = list => list.map(x => x.key + ' ' + curMoney(x.amt)).join(', ');
+  function asofFacts() {
+    const a = asofAggregates();
+    return 'Scope: ' + asofScopeText() + ' (' + (_curCtx.code || 'USD') + ').\n'
+      + 'Total on-hand value ' + curMoney(a.total) + ' across ' + a.n.toLocaleString('en-US') + ' item rows, '
+      + a.branchCount + ' branches, ' + a.glCount + ' GL classes.\n'
+      + 'Value by branch (top): ' + _fmtAgg(a.byBranch) + '.\n'
+      + 'Value by GL class (top): ' + _fmtAgg(a.byGl) + '.\n'
+      + 'Value by business unit (top): ' + _fmtAgg(a.byBu) + '.';
+  }
+  function asofDeterministic(kind) {
+    const a = asofAggregates();
+    if (kind === 'branch') return 'By branch — ' + _fmtAgg(a.byBranch) + '.\nTotal ' + curMoney(a.total) + ' across ' + a.branchCount + ' branches.';
+    if (kind === 'glclass') return 'By GL class — ' + _fmtAgg(a.byGl) + '.\nTotal ' + curMoney(a.total) + ' across ' + a.glCount + ' classes.';
+    return '';
+  }
+  function asofAnswer(txt, loading) {
+    const el = document.getElementById('asof-ai-answer'); if (!el) return;
+    el.hidden = false; el.textContent = txt; el.classList.toggle('is-loading', !!loading);
+  }
+  function asofAiExplain(prompt) {
+    return rrFetch('api/v1/ai/explain', { method: 'POST', body: { prompt } })
+      .then(r => (r && r.text) ? String(r.text).trim() : '');
+  }
+  function asofLeastMovedFacts() {
+    const rf = reconciliationFilterFromSession();
+    const per = (_data && _data._meta && _data._meta.period) || '';
+    const body = { take: 100000, skip: 0, page: 1, pageSize: 100000,
+      reconciliationFilter: { currencies: rf.currencies || [], companies: rf.companies || [], businessUnits: [], objects: [], subsidiaries: [], period: per },
+      groupingType: 'NONE', exclusions: { types: [], orderTypes: [], subTypes: [], docTypes: [] }, cacheKey: null };
+    return rrFetch('inventory/transactions', { method: 'POST', body, demoFile: 'transactions' }).then(resp => {
+      const rows = (resp && resp.data) || [];
+      const last = {};
+      rows.forEach(r => {
+        const item = String(r.Item || r.ItemNumber || r.ShortItem || r.LongItem || '').trim(); if (!item) return;
+        const d = String(r.GLDate || r.TransactionDate || r.Date || r.TransDate || '').slice(0, 10); if (!d) return;
+        if (!last[item] || d > last[item].d) last[item] = { d, desc: String(r.Description || r.ItemDescription || '').trim() };
+      });
+      const arr = Object.keys(last).map(it => ({ item: it, d: last[it].d, desc: last[it].desc }))
+        .sort((a, b) => a.d < b.d ? -1 : a.d > b.d ? 1 : 0).slice(0, 8);
+      if (!arr.length) return '';
+      return 'Least-moved items (item — last activity date): ' + arr.map(x => x.item + (x.desc ? ' ' + x.desc : '') + ' — ' + x.d).join('; ') + '.';
+    }).catch(() => '');
+  }
+  function asofAsk(kind, freeText) {
+    if (_asofAiBusy) return;
+    const btn = document.getElementById('asof-ai-btn');
+    _asofAiBusy = true; if (btn) btn.disabled = true;
+    asofAnswer('Thinking…', true);
+    const facts = asofFacts();
+    let run;
+    if (kind === 'leastmoved') {
+      run = asofLeastMovedFacts().then(least => {
+        if (!least) return 'Movement history for this scope isn’t available from the item ledger (inventory/transactions) on this agent, so least-moved can’t be ranked here.';
+        const prompt = 'You are RapidReconciler AI. An analyst is looking at perpetual inventory. Using ONLY these facts, name the items that have moved the least (oldest last activity) and note what that may indicate (possible slow-moving or obsolete stock). Do NOT invent numbers.\n'
+          + facts + '\n' + least + '\nPlain analyst English, 2-4 sentences, no preamble, no markdown, no JDE table names.';
+        return asofAiExplain(prompt);
+      });
+    } else {
+      const q = freeText || (kind === 'branch'
+        ? 'Summarize the inventory value by branch — which branches carry the most, and any concentration worth noting.'
+        : kind === 'glclass' ? 'Break down the inventory value by GL class — which classes dominate.' : '');
+      const prompt = 'You are RapidReconciler AI. An analyst asked about perpetual inventory: "' + q + '"\n'
+        + 'Answer using ONLY these facts — do NOT invent any number not listed:\n' + facts + '\n'
+        + 'Plain analyst English, 2-4 sentences, no preamble, no markdown, no JDE table names.';
+      run = asofAiExplain(prompt);
+    }
+    run.then(txt => {
+      if (txt) { asofAnswer(txt, false); return; }
+      asofAnswer(asofDeterministic(kind) || 'No response — the AI service may be unavailable.', false);
+    }).catch(() => {
+      asofAnswer(asofDeterministic(kind) || 'Could not reach the AI service. Try again in a moment.', false);
+    }).then(() => { _asofAiBusy = false; if (btn) btn.disabled = false; });
+  }
+  document.addEventListener('click', (e) => {
+    const chip = e.target.closest && e.target.closest('.asof-ai-chip'); if (!chip) return;
+    asofAsk(chip.getAttribute('data-asof-ask'), null);
+  });
+  (() => {
+    const form = document.getElementById('asof-ai-form');
+    if (form) form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const inp = document.getElementById('asof-ai-input');
+      const q = inp ? inp.value.trim() : '';
+      if (q) asofAsk(null, q);
+    });
+  })();
 
   // Tab switch → re-render against the current filtered scope.
   document.addEventListener('click', (e) => {
@@ -2818,6 +2987,7 @@ function updateLotDetailPill() {
       : { code: '', mixed: false, codes: [] };
     renderStats();
     renderPerpetualContributors(_viewRows);
+    asofAiSync();
     const rows = searchFilter(sortRows(_viewRows, _state.sortKey, _state.sortDir), _state.gridSearch);
     count.classList.remove('is-loading');
     const total = _data && Array.isArray(_data.rows) ? _data.rows.length : rows.length;
