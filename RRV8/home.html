@@ -314,6 +314,24 @@
   .acct-co-dot.is-out { background: var(--orange); }
   .acct-co-name { font-size: 13.5px; font-weight: 700; color: var(--navy); }
   .acct-co-amt { margin-left: auto; font-size: 13.5px; font-weight: 700; color: var(--orange); }
+  /* Account roll-forward drill (Where-you-stand expand) */
+  .acct-co-row.is-expandable { cursor: pointer; }
+  .acct-co-caret { width: 10px; text-align: center; font-size: 9px; color: var(--text-muted); flex-shrink: 0; transition: transform .15s ease; }
+  .acct-co-row.is-open .acct-co-caret { transform: rotate(90deg); }
+  .acct-co-dot.rf-ok { background: var(--green); }
+  .acct-co-dot.rf-break { background: var(--red, #d64545); }
+  .acct-acct-wrap { display: none; padding: 2px 0 10px 28px; }
+  .acct-co-row.is-open + .acct-acct-wrap { display: block; }
+  .acct-acct-wrap + .acct-co-row { border-top: 1px solid var(--rule); }
+  .acct-acct-tbl { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+  .acct-acct-tbl th { text-align: right; font-weight: 700; color: var(--text-muted); padding: 2px 5px 5px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .02em; }
+  .acct-acct-tbl th.acct-acct-h-name { text-align: left; }
+  .acct-acct-tbl td { text-align: right; padding: 4px 5px; color: var(--text-soft); white-space: nowrap; }
+  .acct-acct-tbl td.acct-acct-name { text-align: left; font-weight: 600; color: var(--navy); max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
+  .acct-acct-tbl tbody tr + tr td { border-top: 1px solid var(--rule); }
+  .acct-rf { display: inline-block; width: 8px; height: 8px; border-radius: 50%; vertical-align: middle; }
+  .acct-rf.rf-ok { background: var(--green); }
+  .acct-rf.rf-break { background: var(--red, #d64545); }
   .acct-co-status { margin-left: auto; font-size: 12px; font-weight: 700; color: var(--green); }
   /* Primary path into the reconciliation page — the accountant's work surface.
      Solid navy (gradient stays reserved for the AI faces). Replaces the old
@@ -4286,13 +4304,53 @@
     var noun = function (n) { return n === 1 ? 'company' : 'companies'; };
     var cap = clear ? ('All ' + cos.length + ' ' + noun(cos.length) + ' reconcile')
                     : (outCos.length + ' of ' + cos.length + ' ' + noun(cos.length) + ' out of balance');
+    // Account roll-forward drill: group the SAME live rows (_invRows) under each
+    // company for the viewed period. Columns come straight off v6ui_raccountsummary
+    // (the source-of-truth roll forward). The dot is roll-forward INTEGRITY (red if
+    // GLOK or VarOK = 'no') — distinct from the $ out-of-balance shown as the amount.
+    var drillPe = d.viewedPeriod || d.latestPeriod || '';
+    var acctByCo = {};
+    (_invRows || []).forEach(function (r) {
+      if (drillPe && String(r.PeriodEnds || '').slice(0, 10) !== drillPe) return;
+      var co = _coOf(r) || '?';
+      (acctByCo[co] || (acctByCo[co] = [])).push(r);
+    });
+    var _rfNo = function (v) { return String(v).trim().toLowerCase() === 'no'; };
+    var _amt = function (v) { return esc(_roundAmt(Number(v) || 0)); };
     var rows = cos.map(function (c) {
       var out = Math.abs(c.oob) > 1;
-      return '<div class="acct-co-row"><span class="acct-co-dot' + (out ? ' is-out' : '') + '"></span>'
+      var broke = (c.breaks || 0) > 0;
+      var accts = (acctByCo[c.co] || []).slice()
+        .sort(function (a, b) { return Math.abs(Number(b.OOB) || 0) - Math.abs(Number(a.OOB) || 0); });
+      var head = '<div class="acct-co-row' + (accts.length ? ' is-expandable' : '') + '">'
+        + '<span class="acct-co-caret">' + (accts.length ? '▸' : '') + '</span>'
+        + '<span class="acct-co-dot ' + (broke ? 'rf-break' : 'rf-ok') + '" title="'
+          + (broke ? 'Roll-forward break — needs re-roll / GL fix' : 'Rolls forward OK') + '"></span>'
         + '<span class="acct-co-name">Co ' + esc(c.co) + '</span>'
         + (out ? '<span class="acct-co-amt">' + esc(_ccyAmt(c.ccy, c.oob)) + ' out</span>'
                : '<span class="acct-co-status">in balance</span>')
         + '</div>';
+      if (!accts.length) return head;
+      var trs = accts.map(function (r) {
+        var brk = _rfNo(r.GLOK) || _rfNo(r.VarOK);
+        var which = [_rfNo(r.GLOK) ? 'GL roll-forward' : '', _rfNo(r.VarOK) ? 'variance roll-forward' : '']
+          .filter(Boolean).join(' + ');
+        var nm = String(r.ObjectAccount || '').trim();
+        var sub = String(r.SubAccount || '').trim();
+        if (sub) nm += '.' + sub;
+        if (!nm) nm = String(r.LongAccount || '').trim();
+        return '<tr><td class="acct-acct-name" title="' + esc(String(r.LongAccount || '')) + '">' + esc(nm) + '</td>'
+          + '<td>' + _amt(r.EndGL) + '</td>'
+          + '<td>' + _amt(r.Perpetual) + '</td>'
+          + '<td>' + _amt(r.UnpostBatch) + '</td>'
+          + '<td>' + _amt(r.EndofDay) + '</td>'
+          + '<td><span class="acct-rf ' + (brk ? 'rf-break' : 'rf-ok') + '" title="'
+            + (brk ? ('Roll-forward break — ' + which) : 'Rolls forward OK') + '"></span></td></tr>';
+      }).join('');
+      return head
+        + '<div class="acct-acct-wrap"><table class="acct-acct-tbl">'
+        + '<thead><tr><th class="acct-acct-h-name">Account</th><th>GL</th><th>Perpetual</th><th>Unposted</th><th>End&nbsp;of&nbsp;Day</th><th></th></tr></thead>'
+        + '<tbody>' + trs + '</tbody></table></div>';
     }).join('');
     el.innerHTML =
       '<div class="acct-snap-head"><span class="acct-snap-title">Where you stand</span>'
@@ -4300,6 +4358,13 @@
       + '<div class="acct-snap-headline"><span class="acct-snap-amt ' + (clear ? 'is-clear' : 'is-out') + '">' + esc(headAmt) + '</span>'
       + '<span class="acct-snap-cap">' + esc(cap) + '</span></div>'
       + '<div class="acct-co-list">' + rows + '</div>';
+    if (!el._wiredExpand) {
+      el._wiredExpand = true;
+      el.addEventListener('click', function (e) {
+        var row = e.target && e.target.closest ? e.target.closest('.acct-co-row.is-expandable') : null;
+        if (row) row.classList.toggle('is-open');
+      });
+    }
   }
 
   // Close-status strip — where the viewed period sits in the close cycle.
