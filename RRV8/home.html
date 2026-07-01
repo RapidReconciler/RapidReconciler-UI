@@ -31,6 +31,9 @@
 <script src="config.js"></script>
 <script src="sidebar.js"></script>
 <script src="../Tools/home-search.js"></script>
+<!-- SheetJS (xlsx-js-style) — the period-end balancing entry exports to Excel
+     (JDE P0911 paste shape). Same vendored lib the rec page uses. -->
+<script src="vendor/xlsx-js-style.min.js" defer></script>
 <style>
   :root {
     --navy: #1f2d4a;
@@ -251,7 +254,12 @@
   .pw-legend-dim { width: 10px; height: 10px; border-radius: 2px; background: var(--blue); opacity: .42; }
 
   /* Bottom-right action cluster (replaces the footer): database picker + view switcher + sign out. */
-  .home-actions { position: fixed; right: 22px; bottom: 18px; z-index: 60; display: flex; align-items: center; gap: 13px; }
+  /* Bottom control cluster: a full-width transparent track (so it doesn't block
+     clicks) centered on the same 1340px box as .wrap. Pills left-align starting
+     at the main column (right of the 358px AI rail); Sign out is pinned right. */
+  .home-actions { position: fixed; left: 0; right: 0; bottom: 18px; z-index: 60; display: flex; align-items: center; gap: 13px; max-width: 1340px; margin: 0 auto; padding: 0 24px 0 404px; pointer-events: none; }
+  .home-actions > * { pointer-events: auto; }
+  .home-actions .ha-signout { margin-left: auto; }
   /* Welcome pill — leftmost item in the control cluster; same pill styling. */
   .home-welcome { display: inline-flex; align-items: center; gap: 8px; background: var(--bg-card); border: 1px solid var(--rule); border-radius: 100px; padding: 9px 18px; box-shadow: var(--shadow-md); font-family: 'Source Sans 3', sans-serif; font-weight: 700; font-size: 13px; color: var(--text-soft); }
   .home-welcome[hidden] { display: none; }
@@ -259,6 +267,11 @@
   .ha-signout { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; background: var(--navy); color: #fff; border: 1px solid var(--navy); border-radius: 100px; padding: 9px 18px; box-shadow: var(--shadow-md); font-family: 'Source Sans 3', sans-serif; font-weight: 700; font-size: 13px; }
   .ha-signout:hover { filter: brightness(1.14); }
   .ha-signout svg { width: 15px; height: 15px; }
+  /* Open Reconciliation pill — accountant's primary action (navy, filled). */
+  .ha-openrec { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; text-decoration: none; background: var(--navy); color: #fff; border: 1px solid var(--navy); border-radius: 100px; padding: 9px 18px; box-shadow: var(--shadow-md); font-family: 'Source Sans 3', sans-serif; font-weight: 700; font-size: 13px; }
+  .ha-openrec[hidden] { display: none; }
+  .ha-openrec:hover { filter: brightness(1.16); text-decoration: none; }
+  .ha-openrec svg { width: 15px; height: 15px; }
   /* "View as" role switcher + database picker in the bottom-right action cluster
      (the top header that used to hold the account menu is hidden in this layout).
      Both pop a menu upward; the role switcher is admin-only, the DB picker shows
@@ -298,55 +311,76 @@
   body:not([data-view-role="accountant"]) #acctPanels { display: none !important; }
   .acct-panels { display: grid; gap: 16px; margin-bottom: 18px; }
   .acct-panels[hidden] { display: none; }
+  /* Accountant view reclaims the AI rail's width — the compact triage strip +
+     inline Ask carry the AI presence instead of a full-height column. */
+  body[data-view-role="accountant"] #homeAi { display: none !important; }
+  /* AI triage strip — gradient (the AI face), compact. */
+  .acct-triage { display: flex; align-items: center; gap: 13px; padding: 13px 16px; border-radius: 12px; box-shadow: var(--shadow-sm);
+    background: linear-gradient(140deg, #1f2d4a 0%, #2c4a8c 52%, #3f74e8 100%); }
+  .acct-triage[hidden] { display: none; }
+  .acct-triage-emblem { display: inline-grid; place-items: center; width: 32px; height: 32px; border-radius: 9px; flex-shrink: 0; background: rgba(255,255,255,0.14); }
+  .acct-triage-emblem svg { width: 18px; height: 18px; color: #dfe7ff; }
+  .acct-triage-body { min-width: 0; }
+  .acct-triage-head { display: block; font-size: 13.5px; font-weight: 800; color: #fff; }
+  .acct-triage-sub { display: block; font-size: 12.5px; color: rgba(255,255,255,0.72); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   /* Snapshot — where the accountant stands this period. */
   .acct-snapshot { background: var(--bg-card); border: 1px solid var(--rule); border-radius: 12px; padding: 18px 20px; box-shadow: var(--shadow-sm); }
   .acct-snap-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
   .acct-snap-title { font-size: 15px; font-weight: 800; color: var(--navy); }
   .acct-snap-period { font-size: 12.5px; color: var(--text-muted); font-weight: 700; }
-  .acct-snap-headline { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+  /* Headline doubles as the whole-grid toggle (default collapsed). */
+  .acct-snap-headline { display: flex; align-items: center; gap: 10px; margin-bottom: 0; width: 100%; padding: 0; background: none; border: none; text-align: left; cursor: pointer; font: inherit; color: inherit; }
   .acct-snap-amt { font-size: 27px; font-weight: 800; line-height: 1; color: var(--navy); }
   .acct-snap-amt.is-clear { color: var(--green); }
   .acct-snap-amt.is-out { color: var(--orange); }
-  .acct-snap-cap { font-size: 13px; color: var(--text-soft); }
-  .acct-co-row { display: flex; align-items: center; gap: 10px; padding: 7px 0; }
-  .acct-co-row + .acct-co-row { border-top: 1px solid var(--rule); }
-  .acct-co-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--green); }
-  .acct-co-dot.is-out { background: var(--orange); }
-  .acct-co-name { font-size: 13.5px; font-weight: 700; color: var(--navy); }
-  .acct-co-amt { margin-left: auto; font-size: 13.5px; font-weight: 700; color: var(--orange); }
-  /* Account roll-forward drill (Where-you-stand expand) */
-  .acct-co-row.is-expandable { cursor: pointer; }
-  .acct-co-caret { width: 10px; text-align: center; font-size: 9px; color: var(--text-muted); flex-shrink: 0; transition: transform .15s ease; }
-  .acct-co-row.is-open .acct-co-caret { transform: rotate(90deg); }
-  .acct-co-dot.rf-ok { background: var(--green); }
-  .acct-co-dot.rf-break { background: var(--red, #d64545); }
-  .acct-acct-wrap { display: none; padding: 2px 0 10px 28px; }
-  .acct-co-row.is-open + .acct-acct-wrap { display: block; }
-  .acct-acct-wrap + .acct-co-row { border-top: 1px solid var(--rule); }
-  .acct-acct-tbl { width: 100%; border-collapse: collapse; font-size: 11.5px; }
-  .acct-acct-tbl th { text-align: right; font-weight: 700; color: var(--text-muted); padding: 2px 5px 5px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .02em; }
-  .acct-acct-tbl th.acct-acct-h-name { text-align: left; }
-  .acct-acct-tbl td { text-align: right; padding: 4px 5px; color: var(--text-soft); white-space: nowrap; }
-  .acct-acct-tbl td.acct-acct-name { text-align: left; font-weight: 600; color: var(--navy); max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
-  .acct-acct-tbl tbody tr + tr td { border-top: 1px solid var(--rule); }
-  .acct-rf { display: inline-block; width: 8px; height: 8px; border-radius: 50%; vertical-align: middle; }
-  .acct-rf.rf-ok { background: var(--green); }
-  .acct-rf.rf-break { background: var(--red, #d64545); }
-  .acct-co-status { margin-left: auto; font-size: 12px; font-weight: 700; color: var(--green); }
-  /* Primary path into the reconciliation page — the accountant's work surface.
-     Solid navy (gradient stays reserved for the AI faces). Replaces the old
-     3 variance cards, which duplicated the rec page and buried the path. */
-  .acct-open { display: flex; align-items: center; gap: 16px; background: var(--navy); border: 1px solid var(--navy);
-    border-radius: 12px; padding: 16px 20px; text-decoration: none; box-shadow: var(--shadow-sm);
-    transition: transform .12s, box-shadow .12s, background .12s; }
-  .acct-open:hover { background: #16223c; box-shadow: var(--shadow-md); transform: translateY(-1px); }
-  .acct-open-main { display: flex; flex-direction: column; gap: 3px; flex: 1 1 auto; }
-  .acct-open-title { font-size: 16px; font-weight: 800; color: #fff; }
-  .acct-open-sub { font-size: 12.5px; line-height: 1.4; color: rgba(255,255,255,0.74); }
-  .acct-open-arrow { font-size: 22px; font-weight: 800; color: #fff; flex-shrink: 0; }
+  .acct-snap-toggle { margin-left: auto; font-size: 13px; color: var(--text-muted); transition: transform .15s ease; }
+  .acct-snapshot.is-open .acct-snap-toggle { transform: rotate(90deg); }
+  .acct-grid-wrap { display: none; margin-top: 14px; border-top: 1px solid var(--rule); padding-top: 12px; }
+  .acct-snapshot.is-open .acct-grid-wrap { display: block; }
+  /* Where-you-stand — collapsible grid. Each company is a <tbody> group: a
+     parent company row (aligned component totals + net) that toggles its
+     per-account child rows. */
+  .acct-grid { width: 100%; border-collapse: collapse; font-size: 12.5px; table-layout: fixed; }
+  .acct-grid col.acct-g-col-name { width: 26%; }
+  .acct-grid th { text-align: right; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: var(--text-muted); padding: 0 6px 8px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+  .acct-grid th.acct-g-h-name { text-align: left; }
+  .acct-grid td { text-align: right; padding: 7px 6px; white-space: nowrap; color: var(--text-soft); overflow: hidden; text-overflow: ellipsis; }
+  .acct-grid td.acct-g-name { text-align: left; font-weight: 700; color: var(--navy); }
+  .acct-grid td.acct-g-out { font-weight: 700; color: var(--orange); }
+  .acct-grid td.acct-g-out.is-clear { color: var(--green); }
+  /* company parent rows */
+  .acct-g-group.is-expandable .acct-g-co { cursor: pointer; }
+  .acct-g-group.is-expandable .acct-g-co:hover td { background: rgba(31,45,74,0.03); }
+  .acct-g-group + .acct-g-group .acct-g-co td { border-top: 1px solid var(--rule); }
+  .acct-g-caret { display: inline-block; width: 11px; font-size: 9px; color: var(--text-muted); transition: transform .15s ease; }
+  .acct-g-group.is-open .acct-g-caret { transform: rotate(90deg); }
+  .acct-g-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin: 0 8px 0 3px; vertical-align: middle; background: var(--green); }
+  .acct-g-dot.rf-break { background: var(--red, #d64545); }
+  /* expanded-company detail — the JE evidence links + actions (hidden until open) */
+  .acct-g-group .acct-g-detail { display: none; }
+  .acct-g-group.is-open .acct-g-detail { display: table-row; }
+  .acct-g-detail > td { padding: 0 6px 12px 6px; }
+  .acct-g-panel { background: var(--bg-soft); border-radius: 8px; padding: 11px 14px; margin-left: 25px; }
+  .acct-g-panel-label { font-size: 10px; text-transform: uppercase; letter-spacing: .03em; color: var(--text-muted); margin-bottom: 4px; }
+  .acct-g-panel-label-2 { margin-top: 12px; }
+  .acct-ev { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--rule); cursor: pointer; }
+  .acct-ev:last-of-type { border-bottom: none; }
+  .acct-ev:hover .acct-ev-name, .acct-ev:hover .acct-ev-go { color: var(--blue); }
+  .acct-ev-name { font-size: 12.5px; font-weight: 600; color: var(--navy); }
+  .acct-ev-sub { font-weight: 400; font-size: 11.5px; color: var(--text-muted); }
+  .acct-ev-amt { font-size: 12.5px; font-weight: 700; color: var(--navy); }
+  .acct-ev-go { color: var(--blue); margin-left: 8px; font-weight: 700; }
+  .acct-g-note { font-size: 12px; color: var(--text-soft); }
+  .acct-g-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  .acct-g-actions button { font-family: inherit; font-size: 12.5px; font-weight: 700; border-radius: 8px; padding: 8px 14px; cursor: pointer; background: var(--bg-card); border: 1px solid var(--rule); color: var(--text-soft); }
+  .acct-g-actions button:hover { border-color: var(--blue); color: var(--blue); }
+  .acct-g-actions .acct-g-btn-primary { background: var(--navy); border-color: var(--navy); color: #fff; }
+  .acct-g-actions .acct-g-btn-primary:hover { filter: brightness(1.14); color: #fff; }
   /* AI ask — the data-question moment for the accountant. White card, gradient
      sparkle emblem (the rail stays the one dark AI face). */
-  .acct-ask { background: var(--bg-card); border: 1px solid var(--rule); border-radius: 12px; padding: 16px 18px; box-shadow: var(--shadow-sm); }
+  /* Ask is merged into the Where-you-stand card — a plain in-card section
+     (top-ruled), not a standalone card. */
+  .acct-ask { border-top: 1px solid var(--rule); padding-top: 14px; margin-top: 14px; }
   .acct-ask-head { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 14px; color: var(--navy); margin-bottom: 12px; }
   .acct-ask-emblem { display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; flex-shrink: 0; background: linear-gradient(140deg, #2c4a8c, #3f74e8); }
   .acct-ask-emblem svg { width: 17px; height: 17px; color: #fff; }
@@ -440,6 +474,81 @@
   .hist-modal-status { display: inline-flex; align-items: center; gap: 7px; font-weight: 700; font-size: 13px; padding: 6px 12px; border-radius: 999px; }
   .hist-modal-status.resolved { background: var(--green-pale); color: var(--green); }
   .hist-modal-status.open { background: var(--amber-pale); color: var(--amber); }
+  /* Balancing-entry modal (period-end JE, merged from the rec page). */
+  .je-modal[hidden] { display: none; }
+  .je-modal { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center; padding: 20px; }
+  .je-modal-backdrop { position: absolute; inset: 0; background: rgba(8,18,38,0.55); }
+  .je-modal-card { position: relative; z-index: 1; width: min(780px, 100%); max-height: 88vh; overflow-y: auto; background: var(--bg-card); border: 1px solid var(--rule); border-radius: 16px; box-shadow: 0 24px 60px rgba(8,18,38,0.34); padding: 24px 26px; }
+  .je-modal-x { position: absolute; top: 12px; right: 12px; width: 30px; height: 30px; border: 0; background: transparent; color: var(--text-muted); font-size: 22px; line-height: 1; cursor: pointer; border-radius: 8px; }
+  .je-modal-x:hover { background: var(--bg-soft); color: var(--navy); }
+  .je-modal-eyebrow { font-size: 11px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; color: var(--text-muted); margin: 0 0 4px; }
+  .je-modal-title { font-family: 'Source Sans 3', sans-serif; font-weight: 800; font-size: 19px; color: var(--navy); margin: 0 0 8px; }
+  .je-modal-lede { margin: 0 0 16px; font-size: 12.5px; line-height: 1.5; color: var(--text-muted); }
+  .je-modal-foot { display: flex; align-items: center; gap: 14px; margin-top: 18px; flex-wrap: wrap; }
+  .je-modal-foot .btn-navy { background: var(--navy); color: #fff; border: 1px solid var(--navy); border-radius: 9px; padding: 10px 18px; font-weight: 800; font-size: 13px; font-family: inherit; cursor: pointer; }
+  .je-modal-foot .btn-navy:hover { filter: brightness(1.14); }
+  .je-clearing-note { font-size: 12px; color: var(--text-muted); }
+  .je-clearing-note a { color: var(--blue); font-weight: 700; cursor: pointer; }
+  /* Variance-source detail modal (drill-down table). */
+  .pv-modal[hidden] { display: none; }
+  .pv-modal { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center; padding: 20px; }
+  .pv-modal-backdrop { position: absolute; inset: 0; background: rgba(8,18,38,0.55); }
+  .pv-modal-card { position: relative; z-index: 1; width: min(940px, 100%); max-height: 88vh; display: flex; flex-direction: column; background: var(--bg-card); border: 1px solid var(--rule); border-radius: 16px; box-shadow: 0 24px 60px rgba(8,18,38,0.34); padding: 22px 24px; }
+  .pv-scroll { overflow: auto; margin-top: 8px; min-height: 80px; }
+  .pv-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .pv-table th { position: sticky; top: 0; z-index: 1; background: var(--bg-soft); text-align: left; font-weight: 800; font-size: 10px; text-transform: uppercase; letter-spacing: .03em; color: var(--text-muted); padding: 7px 9px; border-bottom: 1px solid var(--rule); cursor: pointer; white-space: nowrap; }
+  .pv-table th.is-num { text-align: right; }
+  .pv-table th.is-sorted { color: var(--navy); }
+  .pv-table td { padding: 6px 9px; border-bottom: 1px solid var(--rule); color: var(--text-soft); white-space: nowrap; }
+  .pv-table td.is-num { text-align: right; font-family: ui-monospace, Consolas, monospace; font-variant-numeric: tabular-nums; }
+  .pv-table td.is-mono { font-family: ui-monospace, Consolas, monospace; }
+  .pv-table td.is-num.is-neg { color: var(--red, #d64545); }
+  .pv-sort-caret { margin-left: 3px; font-size: 9px; }
+  .pv-note { padding: 20px 8px; text-align: center; color: var(--text-muted); font-size: 13px; }
+  /* Account x source matrix + AI reveal (ported from the rec page). */
+  .ws-co { margin-top: 16px; } .ws-co:first-child { margin-top: 4px; }
+  .ws-co-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; }
+  .ws-co-name { font-family: 'Source Sans 3', sans-serif; font-weight: 800; font-size: 13px; color: var(--navy); }
+  .ws-co-cur { font-size: 11px; font-weight: 700; letter-spacing: .04em; color: var(--text-muted); }
+  .ws-matrix { width: 100%; border-collapse: collapse; }
+  .ws-matrix th, .ws-matrix td { padding: 7px 12px; font-size: 13px; border-bottom: 1px solid var(--rule); text-align: left; }
+  .ws-matrix thead th { font-family: 'Source Sans 3', sans-serif; font-weight: 800; font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: var(--text-muted); background: var(--bg-soft); }
+  .ws-matrix th.num, .ws-matrix td.num { text-align: right; font-family: ui-monospace, Consolas, monospace; font-variant-numeric: tabular-nums; }
+  .ws-matrix tbody td:first-child { font-family: ui-monospace, Consolas, monospace; font-weight: 700; color: var(--navy); white-space: nowrap; }
+  .ws-matrix td.num.is-negative { color: var(--red, #d64545); }
+  .ws-matrix td.ws-net { font-weight: 800; color: var(--navy); border-left: 1px solid var(--rule); }
+  .ws-matrix td.ws-net.is-negative { color: var(--red, #d64545); }
+  .ws-matrix tfoot .ws-clearing-row td { border-top: 1px solid var(--rule-strong); }
+  .ws-matrix tfoot .ws-clearing-row td:first-child { color: var(--text-soft); font-style: italic; }
+  .ws-matrix tfoot .ws-total-row td { font-weight: 800; color: var(--navy); border-bottom: none; background: var(--bg-soft); }
+  /* General-journal format: Account | Debit | Credit, credits indented. */
+  .ws-je-acct { font-family: ui-monospace, Consolas, monospace; font-weight: 700; color: var(--navy); }
+  .ws-je-setclr { cursor: pointer; }
+  .ws-je-setclr:hover { color: var(--blue); }
+  .ws-je-why { display: block; font-family: 'Open Sans', sans-serif; font-weight: 400; font-size: 11px; color: var(--text-muted); margin-top: 1px; }
+  .ws-je-narration { margin: 10px 2px 0; font-size: 12.5px; font-style: italic; color: var(--text-soft); }
+  /* Column dividers group the three regions: variance (input) | Debit · Credit
+     (the entry) | Total (the check); plus a rule between Debit and Credit. */
+  .ws-je td.ws-je-var, .ws-je th:nth-child(2) { color: var(--text-soft); }
+  .ws-je td.ws-je-dr, .ws-je th.ws-je-dr,
+  .ws-je td:nth-child(4), .ws-je th:nth-child(4) { border-left: 1px solid var(--rule); }
+  .ws-je td.ws-je-tot, .ws-je th.ws-je-tot { border-left: 1px solid var(--rule); font-weight: 700; }
+  .ws-ai-banner { display: flex; align-items: center; gap: 11px; margin: 4px 0 14px; padding: 12px 16px; border-radius: 11px; color: #fff; font-family: 'Source Sans 3', sans-serif; font-weight: 800; font-size: 14px; background: linear-gradient(110deg, #1f2d4a 0%, #2c4a8c 50%, #3f74e8 100%); background-size: 200% 100%; animation: wsAiSheen 2.2s linear infinite; }
+  .ws-ai-banner[hidden] { display: none; }
+  @keyframes wsAiSheen { 0% { background-position: 0% 0; } 100% { background-position: -200% 0; } }
+  .ws-ai-emblem { display: inline-grid; place-items: center; width: 26px; height: 26px; flex-shrink: 0; }
+  .ws-ai-emblem svg { width: 22px; height: 22px; color: #fff; animation: wsAiSpin 3.5s linear infinite; }
+  @keyframes wsAiSpin { to { transform: rotate(360deg); } }
+  .ws-matrix td.ws-cell.ws-skel { color: transparent; }
+  .ws-matrix td.ws-cell.ws-skel::after { content: ""; display: inline-block; width: 56%; height: 11px; border-radius: 3px; background: linear-gradient(90deg, var(--bg-soft) 25%, #e7edf6 37%, var(--bg-soft) 63%); background-size: 400% 100%; animation: wsSkel 1.3s ease infinite; vertical-align: middle; }
+  @keyframes wsSkel { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
+  .ws-matrix td.ws-cell.ws-pop { animation: wsPop .35s ease; }
+  @keyframes wsPop { 0% { transform: scale(.86); opacity: 0; } 60% { transform: scale(1.04); } 100% { transform: scale(1); opacity: 1; } }
+  .ws-ai-summary { display: none; margin-top: 14px; padding: 13px 16px; border-radius: 11px; background: var(--blue-pale, #eef3fc); border: 1px solid #cfe0f7; font-size: 13.5px; line-height: 1.5; color: var(--navy); }
+  .ws-ai-summary.is-shown { display: block; }
+  .ws-ai-summary .ws-ai-summary-tag { display: flex; align-items: center; gap: 6px; font-weight: 800; font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: var(--blue); margin-bottom: 6px; }
+  .ws-ai-summary .ws-ai-summary-tag svg { width: 13px; height: 13px; }
+  @media (prefers-reduced-motion: reduce) { .ws-ai-banner, .ws-ai-emblem svg, .ws-matrix td.ws-cell.ws-skel::after, .ws-matrix td.ws-cell.ws-pop { animation: none; } }
 
   /* Briefing point dots follow the AI's read of the period: clear=green,
      watch=amber, attention=red. */
@@ -453,6 +562,8 @@
   @media (max-width: 980px) {
     .wrap { flex-direction: column; }
     .home-ai { position: static; flex-basis: auto; width: 100%; max-height: none; }
+    /* Rail no longer a left column → drop the pill-cluster left offset. */
+    .home-actions { padding-left: 24px; }
   }
 
   .cta {
@@ -1271,19 +1382,39 @@
        cards + AI ask. Painted by renderAccountantPanels() from the live
        roll-forward (_briefData); shown only in the accountant view. -->
   <section class="acct-panels" id="acctPanels" hidden aria-label="Reconciliation">
-    <div class="acct-snapshot" id="acctSnapshot"></div>
-    <div class="acct-variance" id="acctVariance"></div>
-    <div class="acct-ask">
-      <div class="acct-ask-head">
-        <span class="acct-ask-emblem" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 1.6l1.9 5.1a5 5 0 0 0 2.9 2.9l5.1 1.9-5.1 1.9a5 5 0 0 0-2.9 2.9L12 21.4l-1.9-5.1a5 5 0 0 0-2.9-2.9L2.1 11.5l5.1-1.9a5 5 0 0 0 2.9-2.9z"/></svg></span>
-        Ask about your reconciliation
+    <!-- Compact AI triage strip — the "start here" the accountant sees first,
+         replacing the full-height rail (hidden in this view). Deterministic
+         (derived from the live roll-forward), AI-branded; the inline Ask below
+         is the AI question surface. Populated by renderAcctTriage(). -->
+    <div class="acct-triage" id="acctTriage" hidden>
+      <span class="acct-triage-emblem" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 1.6l1.9 5.1a5 5 0 0 0 2.9 2.9l5.1 1.9-5.1 1.9a5 5 0 0 0-2.9 2.9L12 21.4l-1.9-5.1a5 5 0 0 0-2.9-2.9L2.1 11.5l5.1-1.9a5 5 0 0 0 2.9-2.9z"/></svg></span>
+      <span class="acct-triage-body"><span class="acct-triage-head" id="acctTriageHead"></span><span class="acct-triage-sub" id="acctTriageSub"></span></span>
+    </div>
+    <!-- Where-you-stand card: title/period + net headline (doubles as the
+         grid toggle), the AI ask merged in as the "what to do first" prompt,
+         then the collapsible company grid. The ask form is a PERSISTENT child
+         (not re-rendered) so a background repaint can't clobber a typed
+         question; renderAcctSnapshot only repaints #acctSnapHead / #acctSnapAmt
+         / #acctSnapGrid. -->
+    <div class="acct-snapshot" id="acctSnapshot">
+      <div class="acct-snap-head" id="acctSnapHead"></div>
+      <button type="button" class="acct-snap-headline" id="acctSnapHeadline" aria-expanded="false" title="Show companies">
+        <span class="acct-snap-amt" id="acctSnapAmt"></span>
+        <span class="acct-snap-toggle" aria-hidden="true">&#9656;</span>
+      </button>
+      <div class="acct-ask">
+        <div class="acct-ask-head">
+          <span class="acct-ask-emblem" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 1.6l1.9 5.1a5 5 0 0 0 2.9 2.9l5.1 1.9-5.1 1.9a5 5 0 0 0-2.9 2.9L12 21.4l-1.9-5.1a5 5 0 0 0-2.9-2.9L2.1 11.5l5.1-1.9a5 5 0 0 0 2.9-2.9z"/></svg></span>
+          Ask about your reconciliation
+        </div>
+        <form class="acct-ask-form" id="acctAskForm">
+          <input class="acct-ask-input" type="text" id="acctAskInput" autocomplete="off" placeholder="e.g. What should I look at first this period?">
+          <button class="acct-ask-btn" type="submit" id="acctAskBtn">Ask</button>
+        </form>
+        <div class="acct-ask-note" id="acctAskNote" hidden></div>
+        <div class="acct-ask-answer" id="acctAskAnswer" hidden></div>
       </div>
-      <form class="acct-ask-form" id="acctAskForm">
-        <input class="acct-ask-input" type="text" id="acctAskInput" autocomplete="off" placeholder="e.g. Why is Co 00010 out of balance this period?">
-        <button class="acct-ask-btn" type="submit" id="acctAskBtn">Ask</button>
-      </form>
-      <div class="acct-ask-note" id="acctAskNote" hidden></div>
-      <div class="acct-ask-answer" id="acctAskAnswer" hidden></div>
+      <div class="acct-grid-wrap" id="acctSnapGrid"></div>
     </div>
   </section>
 
@@ -1643,6 +1774,18 @@
       <svg class="ha-role-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
     </button>
   </div>
+  <!-- Open Reconciliation — the accountant's primary action, in the pill
+       cluster. Shown only in the accountant view (toggled by renderAccountantPanels). -->
+  <a class="ha-openrec" id="haOpenRec" href="inventory-reconciliation.html" hidden title="Open the reconciliation workspace">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"></path><rect x="9" y="3" width="6" height="4" rx="1"></rect><path d="M9 13l2 2 4-4"></path></svg>
+    Open Reconciliation
+  </a>
+  <!-- Audit report — the accountant's period-level auditor backup (Excel now,
+       PDF next). Accountant-view only (toggled by renderAccountantPanels). -->
+  <button type="button" class="ha-rolebtn" id="haAuditRep" hidden title="Download the period reconciliation as an auditor backup workbook">
+    <svg class="ha-role-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"></path><polyline points="14 3 14 8 19 8"></polyline><line x1="9" y1="13" x2="15" y2="13"></line><line x1="9" y1="17" x2="15" y2="17"></line></svg>
+    Audit report
+  </button>
   <button type="button" class="ha-signout" id="haSignOut">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
     Sign out
@@ -1660,6 +1803,47 @@
     <p class="hist-modal-eyebrow">Historical period &middot; what happened</p>
     <h3 class="hist-modal-title" id="histModalTitle">&mdash;</h3>
     <div class="hist-modal-body" id="histModalBody"></div>
+  </div>
+</div>
+
+<!-- Balancing-entry modal — the period-end JE assembled on Home (merged from the
+     retiring rec page). Account x source matrix (the 3 JE-owned sources) for the
+     chosen company, a clearing line that balances to zero, an AI-assembled reveal,
+     and a JDE P0911 Excel export. Opened from a company's "Create balancing
+     entry" action; built by openJeModal(). -->
+<div class="je-modal" id="jeModal" hidden role="dialog" aria-modal="true" aria-labelledby="jeModalTitle">
+  <div class="je-modal-backdrop" data-je-close></div>
+  <div class="je-modal-card">
+    <button type="button" class="je-modal-x" data-je-close aria-label="Close">&times;</button>
+    <p class="je-modal-eyebrow">Period-end balancing entry</p>
+    <h3 class="je-modal-title" id="jeModalTitle">&mdash;</h3>
+    <p class="je-modal-lede">Each account&rsquo;s variance and the reversing Dr/(Cr) that clears it &mdash; the row Total nets to zero. Confirm the direction against your P0911 setup before posting.</p>
+    <div class="ws-ai-banner" id="jeAiBanner" hidden>
+      <span class="ws-ai-emblem" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 1.6l1.9 5.1a5 5 0 0 0 2.9 2.9l5.1 1.9-5.1 1.9a5 5 0 0 0-2.9 2.9L12 21.4l-1.9-5.1a5 5 0 0 0-2.9-2.9L2.1 11.5l5.1-1.9a5 5 0 0 0 2.9-2.9z"/></svg></span>
+      RapidReconciler AI is assembling your balancing entry&hellip;
+    </div>
+    <div class="je-modal-body" id="jeModalBody"></div>
+    <div class="ws-ai-summary" id="jeAiSummary" hidden></div>
+    <div class="je-modal-foot">
+      <button type="button" class="btn-navy" id="jeExportBtn">Export to Excel &middot; JDE P0911</button>
+    </div>
+  </div>
+</div>
+
+<!-- Variance-source detail modal — the drill-down for a single variance source
+     (manual entries / unposted GL batches / end of day), scoped to a company +
+     period, fetched from inventory/variance-component. Merged from the rec page
+     so its preview modals can retire. Opened by openPreview(); Cardex stays in
+     the Analyst view. -->
+<div class="pv-modal" id="pvModal" hidden role="dialog" aria-modal="true" aria-labelledby="pvModalTitle">
+  <div class="pv-modal-backdrop" data-pv-close></div>
+  <div class="pv-modal-card">
+    <button type="button" class="je-modal-x" data-pv-close aria-label="Close">&times;</button>
+    <p class="je-modal-eyebrow">Variance source &middot; detail</p>
+    <h3 class="je-modal-title" id="pvModalTitle">&mdash;</h3>
+    <p class="je-modal-lede" id="pvModalSub"></p>
+    <div class="pv-scroll" id="pvModalBody"></div>
+    <div class="je-modal-foot"><button type="button" class="btn-navy" id="pvExportBtn">Export to Excel &middot; auditor backup</button></div>
   </div>
 </div>
 
@@ -3524,6 +3708,7 @@
 
     $('signOutBtn').addEventListener('click', doSignOut);
     var haSignOut = $('haSignOut'); if (haSignOut) haSignOut.addEventListener('click', doSignOut);
+    var haAuditRep = $('haAuditRep'); if (haAuditRep) haAuditRep.addEventListener('click', function () { if (typeof genAuditExcel === 'function') genAuditExcel(); });
     // "View as" role switcher (admins only; gated by syncRoleMenu) — reshapes the
     // dashboard in place and re-tiers the AI briefing, no reload.
     var roleBox = $('userMenuRoles');
@@ -4183,6 +4368,9 @@
   function renderAiBriefing() {
     var brief = $('haiBrief'); if (!brief) return;
     renderAccountantPanels();   // accountant working panels ride the same triggers (self-gates by view)
+    // Accountant view hides the AI rail (full-width work surface) — the triage
+    // strip + inline Ask carry the AI, so skip the rail briefing + its AI call.
+    if (_viewRole() === 'accountant') return;
     // The Administrator view gets its own briefing — an overview of the admin
     // job + the task cards that need a look, not a per-period reconciliation read.
     if (_viewRole() === 'admin') { renderAdminBriefing(true); return; }
@@ -4259,7 +4447,7 @@
   // no new endpoint. renderAccountantPanels() rides every briefing trigger
   // (data load, DB / company / period / role switch) and self-gates to the
   // accountant view. The AI ask reuses the briefing's data-exposure tier.
-  var _acctData = null, _acctAsking = false;
+  var _acctData = null, _acctAsking = false, _acctCtxKey = '';
   function _ccySym(c) { c = String(c || '').toUpperCase(); return c === 'GBP' ? '£' : c === 'EUR' ? '€' : c === 'USD' ? '$' : (c ? c + ' ' : '$'); }
   function _moneyK(n) {
     n = Number(n) || 0; var a = Math.abs(n), s = n < 0 ? '-' : '';
@@ -4281,16 +4469,521 @@
 
   function renderAccountantPanels() {
     var sec = $('acctPanels'); if (!sec) return;
-    if (_viewRole() !== 'accountant') { sec.hidden = true; return; }
+    var openRec = $('haOpenRec'), auditRep = $('haAuditRep');   // accountant-only pill-cluster actions
+    var _hidePills = function () { if (openRec) openRec.hidden = true; if (auditRep) auditRep.hidden = true; };
+    if (_viewRole() !== 'accountant') { sec.hidden = true; _hidePills(); return; }
     var d = _briefData();
-    if (!d || !d.companies.length) { sec.hidden = true; return; }
+    if (!d || !d.companies.length) { sec.hidden = true; _hidePills(); return; }
     sec.hidden = false;
+    if (openRec) openRec.hidden = false;
+    if (auditRep) auditRep.hidden = false;
     _acctData = d;
-    // Context changed — clear any prior answer so it can't read as current.
-    if (!_acctAsking) { var ans = $('acctAskAnswer'); if (ans) { ans.hidden = true; ans.textContent = ''; } }
+    // Clear any prior answer only when the reconciliation CONTEXT changed (new
+    // period / scope / company set) — not on background repaints, which would
+    // otherwise wipe an answer the user is reading.
+    var ctxKey = (d.viewedPeriod || '') + '|' + (d.periodScoped ? 'p' : 'a') + '|' + d.companies.length;
+    if (ctxKey !== _acctCtxKey) {
+      _acctCtxKey = ctxKey;
+      if (!_acctAsking) { var ans = $('acctAskAnswer'); if (ans) { ans.hidden = true; ans.textContent = ''; } }
+    }
+    renderAcctTriage(d);
     renderAcctSnapshot(d);
-    renderAcctOpen();
     setupAcctAsk();
+  }
+
+  // Compact "start here" triage — deterministic, from the same live roll-forward.
+  // Counts the companies with a material JE-owned driver (Accountant-role
+  // component) and names the top few + their biggest driver.
+  function renderAcctTriage(d) {
+    var strip = $('acctTriage'); if (!strip) return;
+    var isJe = function (c) { return _COMPONENTS.some(function (k) { return k.role === 'Accountant' && Math.abs(c.comp[k.name]) >= 1; }); };
+    var jeCos = d.companies.filter(isJe).sort(function (a, b) { return Math.abs(b.oob) - Math.abs(a.oob); });
+    var n = jeCos.length;
+    var headEl = $('acctTriageHead'), subEl = $('acctTriageSub');
+    if (headEl) headEl.textContent = n === 0
+      ? 'You’re all set — no journal entries needed this period'
+      : 'Start here — ' + n + (n === 1 ? ' company needs' : ' companies need') + ' a journal entry';
+    if (subEl) subEl.textContent = jeCos.slice(0, 3).map(function (c) {
+      var top = _COMPONENTS.filter(function (k) { return k.role === 'Accountant' && Math.abs(c.comp[k.name]) >= 1; })
+        .sort(function (a, b) { return Math.abs(c.comp[b.name]) - Math.abs(c.comp[a.name]); })[0];
+      return 'Co ' + c.co + (top ? ' ' + top.name.toLowerCase() : '');
+    }).join('  ·  ');
+    strip.hidden = false;
+  }
+
+  // ---- Balancing entry (period-end JE) — merged from the retiring rec page --
+  // Account × source matrix for one company: columns = the 3 JE-owned sources
+  // (carry forward / transactions / manual entries), Net = the Dr/(Cr) to post,
+  // a clearing line balancing to zero. Built from _invRows (BegVar/Variance/JEs)
+  // scoped to the company + viewed period. AI reveal + P0911 export follow.
+  function _jeAmt(n) {
+    n = Number(n) || 0;
+    var s = Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return n < 0 ? '(' + s + ')' : s;
+  }
+  function _jeClearingAccount() {
+    var v = ''; try { v = localStorage.getItem('rrv8.je.clearingAccount') || ''; } catch (_) {}
+    return v || '(clearing account — set on export)';
+  }
+  var _jeCo = null, _jeWired = false, _jeData = null;
+  var _jeFillQueue = [], _jeRevealing = false, _jeSummary = [];
+  // A numeric matrix cell — a real value renders as a shimmering skeleton queued
+  // for the AI reveal; a blank cell renders empty immediately.
+  function _jeCell(value, strong, blank) {
+    var td = document.createElement('td');
+    td.className = 'num' + (strong ? ' ws-net' : '');
+    if (blank) { td.textContent = ''; return td; }
+    td.classList.add('ws-cell', 'ws-skel');
+    _jeFillQueue.push({ td: td, value: value });
+    return td;
+  }
+  function openJeModal(co) {
+    var modal = $('jeModal'), body = $('jeModalBody'), titleEl = $('jeModalTitle');
+    if (!modal || !body) return;
+    _jeCo = co; _wireJeModal();
+    var d = _acctData || {};
+    var per = d.viewedPeriod || d.latestPeriod || '';
+    var accts = {}, ccy = '';
+    (_invRows || []).forEach(function (r) {
+      if (per && String(r.PeriodEnds || '').slice(0, 10) !== per) return;
+      if ((_coOf(r) || '?') !== co) return;
+      // Variance components (the account's out-of-balance): carry forward
+      // (BegVar) + transactions (Variance) + manual entries (JEs). net = the
+      // account variance; the posting to CLEAR it is the reverse (computed below).
+      var cf = Number(r.BegVar) || 0, tx = Number(r.Variance) || 0, je = Number(r.JEs) || 0;
+      if (Math.abs(cf) < 0.005 && Math.abs(tx) < 0.005 && Math.abs(je) < 0.005) return;
+      var la = String(r.LongAccount || '').trim();
+      if (!la) { la = String(r.ObjectAccount || '').trim(); var sub = String(r.SubAccount || '').trim(); if (sub) la += '.' + sub; }
+      var a = accts[la] || (accts[la] = { cf: 0, tx: 0, je: 0, bu: String(r.BusinessUnit || '').trim(), obj: String(r.ObjectAccount || '').trim(), sub: String(r.SubAccount || '').trim() });
+      a.cf += cf; a.tx += tx; a.je += je;
+      if (!ccy && r.Currency) ccy = r.Currency;
+    });
+    var list = Object.keys(accts).map(function (k) { var a = accts[k]; return { name: k, cf: a.cf, tx: a.tx, je: a.je, net: a.cf + a.tx + a.je, bu: a.bu, obj: a.obj, sub: a.sub }; })
+      .sort(function (x, y) { return Math.abs(y.net) - Math.abs(x.net); });
+    // Fresh assembly — reset the reveal state, banner, and summary.
+    _jeFillQueue = []; _jeRevealing = false; _jeSummary = [];
+    var banner = $('jeAiBanner'); if (banner) banner.hidden = true;
+    var sum = $('jeAiSummary'); if (sum) { sum.hidden = true; sum.classList.remove('is-shown'); sum.innerHTML = ''; }
+    body.innerHTML = '';
+    var clearing = _jeClearingAccount();
+    var exp = $('jeExportBtn');
+    if (titleEl) titleEl.textContent = 'Balancing entry — Co ' + co + (per ? '  ·  ' + per : '');
+    if (!list.length) {
+      body.innerHTML = '<p class="je-clearing-note">Nothing to journal for Co ' + esc(co) + ' this period.</p>';
+      if (exp) exp.disabled = true;
+      _jeData = null; modal.hidden = false; return;
+    }
+    var mat = 0.005, nettot = 0, scf = 0, stx = 0, sje = 0;
+    list.forEach(function (a) { nettot += a.net; scf += a.cf; stx += a.tx; sje += a.je; });
+    var SRC = { cf: 'carry forward', tx: 'transactions', je: 'manual entries' };
+    // One line per account: its VARIANCE (sum of the 3 sources) and the reversing
+    // posting (opposite sign) as Debit/Credit; the row Total (variance + posting)
+    // is 0 — proof the account clears. The clearing line (no variance) takes the
+    // net residual so the whole entry balances. Debits listed first.
+    var lines = list.filter(function (a) { return Math.abs(a.net) >= mat; }).map(function (a) {
+      var drv = [['cf', a.cf], ['tx', a.tx], ['je', a.je]].filter(function (p) { return Math.abs(p[1]) >= 1; })
+        .sort(function (x, y) { return Math.abs(y[1]) - Math.abs(x[1]); })[0];
+      return { acct: a.name || '—', variance: a.net, posting: -a.net, why: drv ? ('mostly ' + SRC[drv[0]]) : '' };
+    });
+    lines.push({ acct: 'Clearing Account', variance: null, posting: nettot, why: 'net residual', clearing: true });
+    lines.sort(function (x, y) {
+      if (x.clearing !== y.clearing) return x.clearing ? 1 : -1;      // clearing always last
+      var sx = x.posting >= 0 ? 0 : 1, sy = y.posting >= 0 ? 0 : 1;   // then debits before credits
+      if (sx !== sy) return sx - sy;
+      return Math.abs(y.posting) - Math.abs(x.posting);
+    });
+    var varTot = 0, drTot = 0, crTot = 0, totTot = 0;
+    var block = document.createElement('div'); block.className = 'ws-co';
+    var head = document.createElement('div'); head.className = 'ws-co-head';
+    head.innerHTML = '<span class="ws-co-name">Company ' + esc(co) + '</span>' + (ccy ? '<span class="ws-co-cur">' + esc(ccy) + '</span>' : '');
+    block.appendChild(head);
+    var table = document.createElement('table'); table.className = 'ws-matrix ws-je';
+    var thead = document.createElement('thead');
+    thead.innerHTML = '<tr><th>Account</th><th class="num">Variance</th><th class="num ws-je-dr">Debit</th><th class="num">Credit</th><th class="num ws-je-tot">Total</th></tr>';
+    table.appendChild(thead);
+    var tbody = document.createElement('tbody');
+    lines.forEach(function (ln) {
+      var v = ln.variance, p = ln.posting, isCr = p < 0;
+      var rowTot = (v || 0) + p;
+      varTot += (v || 0); if (isCr) crTot += -p; else drTot += p; totTot += rowTot;
+      var tr = document.createElement('tr');
+      if (ln.clearing) tr.className = 'ws-clearing-row';
+      var tdA = document.createElement('td'); tdA.className = 'ws-je-acct' + (ln.clearing ? ' ws-je-setclr' : '');
+      if (ln.clearing) { tdA.setAttribute('data-je-setclearing', ''); tdA.title = 'Set the clearing GL account used on the export'; }
+      tdA.innerHTML = esc(ln.acct) + (ln.why ? '<span class="ws-je-why">' + esc(ln.why) + '</span>' : '');
+      tr.appendChild(tdA);
+      var vCell = _jeCell(v == null ? '' : v, false, v == null); vCell.classList.add('ws-je-var'); tr.appendChild(vCell);
+      var dCell = _jeCell(isCr ? '' : p, false, isCr); dCell.classList.add('ws-je-dr'); tr.appendChild(dCell);
+      tr.appendChild(_jeCell(isCr ? -p : '', false, !isCr));            // Credit
+      var tCell = _jeCell(rowTot, false, false); tCell.classList.add('ws-je-tot'); tr.appendChild(tCell);
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    var tfoot = document.createElement('tfoot');
+    var trTot = document.createElement('tr'); trTot.className = 'ws-total-row';
+    var tdT = document.createElement('td'); tdT.textContent = 'Totals'; trTot.appendChild(tdT);
+    trTot.appendChild(_jeCell(varTot, false, false));
+    var dTot = _jeCell(drTot, false, false); dTot.classList.add('ws-je-dr'); trTot.appendChild(dTot);
+    trTot.appendChild(_jeCell(crTot, false, false));
+    var tTot = _jeCell(totTot, false, false); tTot.classList.add('ws-je-tot'); trTot.appendChild(tTot);
+    tfoot.appendChild(trTot);
+    table.appendChild(tfoot);
+    block.appendChild(table);
+    var narr = document.createElement('p'); narr.className = 'ws-je-narration';
+    narr.textContent = 'To clear the period-end inventory-to-GL reconciliation — Co ' + co + (per ? ', period ' + per : '') + '.';
+    block.appendChild(narr);
+    body.appendChild(block);
+    var driver = [['carry forward', scf], ['transactions', stx], ['manual entries', sje]]
+      .sort(function (x, y) { return Math.abs(y[1]) - Math.abs(x[1]); })[0];
+    _jeSummary.push({ co: co, currency: ccy, net: nettot, driver: driver[0] });
+    _jeData = { co: co, per: per, ccy: ccy, list: list, clearing: clearing, nettot: nettot };
+    if (exp) { exp.disabled = false; exp.title = 'Download the entry as Excel for JDE P0911'; }
+    modal.hidden = false;
+    revealJeMatrix();
+  }
+  // The "AI fills it in" reveal — assembling banner, then real figures cell by
+  // cell, then the AI read. AI is the FACE; every number is the deterministic value.
+  function revealJeMatrix() {
+    if (_jeRevealing || !_jeFillQueue.length) return;
+    _jeRevealing = true;
+    var banner = $('jeAiBanner'); if (banner) banner.hidden = false;
+    var q = _jeFillQueue.slice(), step = q.length > 60 ? 22 : 48, i = 0;
+    var tick = function () {
+      if (i >= q.length) { if (banner) banner.hidden = true; _jeRevealing = false; fetchJeAiSummary(); return; }
+      var c = q[i++]; c.td.classList.remove('ws-skel'); c.td.textContent = _jeAmt(c.value);
+      if (Number(c.value) < 0) c.td.classList.add('is-negative');
+      c.td.classList.add('ws-pop');
+      setTimeout(tick, step);
+    };
+    setTimeout(tick, 380);
+  }
+  // AI's one-line read of the assembled entry — real /ai/explain over the figures
+  // just shown (VALC-routed via rrFetch). Best-effort: hides if AI is unavailable.
+  function fetchJeAiSummary() {
+    var el = $('jeAiSummary'); if (!el || !_jeSummary.length || typeof rrFetch !== 'function') return;
+    var tag = '<span class="ws-ai-summary-tag"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 1.6l1.9 5.1a5 5 0 0 0 2.9 2.9l5.1 1.9-5.1 1.9a5 5 0 0 0-2.9 2.9L12 21.4l-1.9-5.1a5 5 0 0 0-2.9-2.9L2.1 11.5l5.1-1.9a5 5 0 0 0 2.9-2.9z"/></svg>RapidReconciler AI</span>';
+    var lines = _jeSummary.map(function (c) { return 'Co ' + c.co + ' (' + (c.currency || '?') + '): net to clear ' + _jeAmt(c.net) + ', mostly ' + c.driver + '.'; });
+    var prompt = 'You are RapidReconciler AI. In ONE or TWO short sentences, summarize this period-end INVENTORY-to-GL balancing entry for an accountant.\n'
+      + 'This entry CLEARS the period now by posting to the GL — do NOT describe carrying the balance forward to a future period, and do NOT call it "intercompany" (these are inventory accounts).\n'
+      + 'Facts (the ONLY facts you may use):\n' + lines.join('\n')
+      + '\nRound amounts (e.g. "$18.5K"). Plain accountant English, no preamble, no markdown.';
+    el.hidden = false; el.classList.add('is-shown');
+    el.innerHTML = tag + '<span class="ws-ai-summary-text">Reading the entry…</span>';
+    rrFetch('api/v1/ai/explain', { method: 'POST', body: { prompt: prompt } }).then(function (r) {
+      var txt = (r && r.text) ? String(r.text).trim() : '';
+      if (!txt) { el.hidden = true; el.classList.remove('is-shown'); return; }
+      el.innerHTML = tag + '<span class="ws-ai-summary-text">' + esc(txt) + '</span>';
+    }).catch(function () { el.hidden = true; el.classList.remove('is-shown'); });
+  }
+  // ---- P0911 Excel export — writes the exact matrix shown (single source of
+  // truth), one company per sheet, JDE P0911 Account-Distribution columns.
+  // Sign direction is the accountant's to confirm against their P0911 setup
+  // (flagged on the sheet) — there is no single JDE import standard.
+  function _jeMoney(n) { n = Math.round((Number(n) || 0) * 100) / 100; return n < 0 ? '(' + Math.abs(n).toFixed(2) + ')' : n.toFixed(2); }
+  function _jeWhy(a) {
+    var parts = [['carry forward', a.cf], ['transactions', a.tx], ['manual entries', a.je]]
+      .filter(function (p) { return Math.abs(Number(p[1]) || 0) >= 1; })
+      .sort(function (x, y) { return Math.abs(y[1]) - Math.abs(x[1]); });
+    return parts.length ? ('Inventory reconciliation — mostly ' + parts[0][0]) : 'Inventory reconciliation';
+  }
+  function jeExport() {
+    if (!window.XLSX) { if (typeof toast === 'function') toast('Excel library still loading — try again in a moment'); return; }
+    var d = _jeData; if (!d || !d.list.length) return;
+    var aoa = [];
+    aoa.push(['Period-End Inventory Reconciliation — Journal Entry']);
+    aoa.push(['Company', d.co]);
+    aoa.push(['Period ending', d.per]);
+    aoa.push(['Clearing account', d.clearing]);
+    aoa.push(['Amounts are the reversing entry that clears the period out-of-balance (Dr positive, (Cr) in parentheses). Confirm the debit/credit direction against your P0911 setup before posting.']);
+    aoa.push([]);
+    aoa.push(['Paste the rows below into the P0911 Account Distribution grid (exclude the lines above and the header row).']);
+    aoa.push(['Account Number', 'Business Unit', 'Object', 'Subsidiary', 'Amount', 'Explanation']);
+    var totalPost = 0;
+    d.list.slice().sort(function (a, b) { return Math.abs(b.net) - Math.abs(a.net); }).forEach(function (a) {
+      var p = -a.net;   // posting to clear = reverse of the account variance
+      totalPost += p;
+      aoa.push([a.name || '', a.bu || '', a.obj || '', a.sub || '', _jeMoney(p), _jeWhy(a)]);
+    });
+    aoa.push([d.clearing, '', '', '', _jeMoney(-totalPost), 'Inventory reconciliation clearing']);
+    aoa.push([]);
+    aoa.push(['Lines', String(d.list.length)]);
+    aoa.push(['Net out of balance', _jeMoney(d.nettot)]);
+    var wb = XLSX.utils.book_new();
+    var tab = (d.co + (d.ccy ? ' - ' + d.ccy : '')).slice(0, 31);
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), tab);
+    XLSX.writeFile(wb, 'PeriodEndJournalEntry_Co' + d.co + '_' + (d.per || 'period') + '.xlsx');
+    if (typeof toast === 'function') toast('Downloaded the balancing entry for Co ' + d.co);
+  }
+  // Shared audit-quality Excel template (navy header band, #,##0.00;(…) numbers,
+  // thin borders, merged title lines, optional bold total). Ported from the rec
+  // page so the preview drill-downs + audit reports export the same way.
+  // columns: [{label, num}]; rows: arrays of raw cell values (numbers stay
+  // numbers so the format applies); titleLines render above; totalRow is bolded.
+  var AUDIT_NUM_FMT = '#,##0.00;(#,##0.00)';
+  function _auditBorder(rgb) { var s = { style: 'thin', color: { rgb: rgb } }; return { top: s, bottom: s, left: s, right: s }; }
+  function buildAuditWorkbook(opts) {
+    if (!window.XLSX) { if (typeof toast === 'function') toast('Excel library still loading — try again in a moment'); return false; }
+    var cols = opts.columns || [], ncol = cols.length || 1, titleLines = opts.titleLines || [];
+    var aoa = [];
+    titleLines.forEach(function (t) { var row = new Array(ncol).fill(''); row[0] = t; aoa.push(row); });
+    if (titleLines.length) aoa.push(new Array(ncol).fill(''));
+    var headRowIdx = aoa.length;
+    aoa.push(cols.map(function (c) { return c.label; }));
+    (opts.rows || []).forEach(function (r) { aoa.push(r.slice()); });
+    var totalRowIdx = -1;
+    if (opts.totalRow) { totalRowIdx = aoa.length; aoa.push(opts.totalRow.slice()); }
+    var ws = XLSX.utils.aoa_to_sheet(aoa);
+    var range = XLSX.utils.decode_range(ws['!ref']);
+    for (var t = 0; t < titleLines.length; t++) {
+      var tref = XLSX.utils.encode_cell({ r: t, c: 0 }); if (!ws[tref]) continue;
+      ws[tref].s = { font: { bold: t === 0, sz: t === 0 ? 14 : 10, color: { rgb: t === 0 ? '1F2D4A' : '6B7280' } } };
+    }
+    for (var c = range.s.c; c <= range.e.c; c++) {
+      var href = XLSX.utils.encode_cell({ r: headRowIdx, c: c }); if (!ws[href]) continue;
+      ws[href].s = { font: { bold: true, color: { rgb: 'FFFFFF' } }, fill: { patternType: 'solid', fgColor: { rgb: '1F2D4A' } }, alignment: { horizontal: (cols[c] && cols[c].num) ? 'right' : 'left', vertical: 'center' }, border: _auditBorder('D0D0D0') };
+    }
+    for (var rr = headRowIdx + 1; rr <= range.e.r; rr++) {
+      var isTotal = rr === totalRowIdx;
+      for (var cc = range.s.c; cc <= range.e.c; cc++) {
+        var cref = XLSX.utils.encode_cell({ r: rr, c: cc }); var cell = ws[cref]; if (!cell) continue;
+        cell.s = cell.s || {}; cell.s.border = _auditBorder('ECECEC');
+        if (cols[cc] && cols[cc].num) { cell.z = AUDIT_NUM_FMT; cell.s.alignment = { horizontal: 'right' }; }
+        if (isTotal) { cell.s.font = { bold: true, color: { rgb: '1F2D4A' } }; cell.s.fill = { patternType: 'solid', fgColor: { rgb: 'F1F4F9' } }; }
+      }
+    }
+    ws['!cols'] = cols.map(function (c) { return { wch: c.num ? 16 : Math.max(16, (c.label || '').length + 4) }; });
+    if (titleLines.length) { ws['!merges'] = ws['!merges'] || []; for (var m = 0; m < titleLines.length; m++) ws['!merges'].push({ s: { r: m, c: 0 }, e: { r: m, c: ncol - 1 } }); }
+    var wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, (opts.sheetName || 'Report').slice(0, 31));
+    XLSX.writeFile(wb, opts.fileName || 'Report.xlsx');
+    return true;
+  }
+  // Period audit report (auditor backup) — one sheet per company: the account
+  // reconciliation + full variance composition, from the loaded roll-forward
+  // (_invRows / v6ui_raccountsummary). No fetch — this IS the authoritative
+  // record the accountant view already reads; per-source transaction detail
+  // lives in the drill-down exports.
+  var _AUDIT_COLS = [
+    { label: 'Account' }, { label: 'GL balance', num: true }, { label: 'Perpetual', num: true },
+    { label: 'Carry forward', num: true }, { label: 'Transactions', num: true }, { label: 'Manual entries', num: true },
+    { label: 'Unposted', num: true }, { label: 'End of Day', num: true }, { label: 'Cardex', num: true },
+    { label: 'Out of balance', num: true }
+  ];
+  function _auditNum(v) { return Math.round((Number(v) || 0) * 100) / 100; }
+  function _styleAuditSheet(ws, cols, headRowIdx, totalRowIdx, titleCount, ncol) {
+    var range = XLSX.utils.decode_range(ws['!ref']);
+    for (var t = 0; t < titleCount; t++) {
+      var tref = XLSX.utils.encode_cell({ r: t, c: 0 }); if (!ws[tref]) continue;
+      ws[tref].s = { font: { bold: t === 0, sz: t === 0 ? 14 : 10, color: { rgb: t === 0 ? '1F2D4A' : '6B7280' } } };
+    }
+    for (var c = range.s.c; c <= range.e.c; c++) {
+      var href = XLSX.utils.encode_cell({ r: headRowIdx, c: c }); if (!ws[href]) continue;
+      ws[href].s = { font: { bold: true, color: { rgb: 'FFFFFF' } }, fill: { patternType: 'solid', fgColor: { rgb: '1F2D4A' } }, alignment: { horizontal: (cols[c] && cols[c].num) ? 'right' : 'left', vertical: 'center' }, border: _auditBorder('D0D0D0') };
+    }
+    for (var rr = headRowIdx + 1; rr <= range.e.r; rr++) {
+      var isTotal = rr === totalRowIdx;
+      for (var cc = range.s.c; cc <= range.e.c; cc++) {
+        var cref = XLSX.utils.encode_cell({ r: rr, c: cc }); var cell = ws[cref]; if (!cell) continue;
+        cell.s = cell.s || {}; cell.s.border = _auditBorder('ECECEC');
+        if (cols[cc] && cols[cc].num) { cell.z = AUDIT_NUM_FMT; cell.s.alignment = { horizontal: 'right' }; }
+        if (isTotal) { cell.s.font = { bold: true, color: { rgb: '1F2D4A' } }; cell.s.fill = { patternType: 'solid', fgColor: { rgb: 'F1F4F9' } }; }
+      }
+    }
+    ws['!cols'] = cols.map(function (c) { return { wch: c.num ? 15 : Math.max(16, (c.label || '').length + 4) }; });
+    ws['!merges'] = ws['!merges'] || [];
+    for (var m = 0; m < titleCount; m++) ws['!merges'].push({ s: { r: m, c: 0 }, e: { r: m, c: ncol - 1 } });
+  }
+  function genAuditExcel() {
+    if (!window.XLSX) { if (typeof toast === 'function') toast('Excel library still loading — try again in a moment'); return; }
+    var d = _acctData; if (!d || !d.companies.length) { if (typeof toast === 'function') toast('No reconciliation loaded yet'); return; }
+    var per = d.viewedPeriod || d.latestPeriod || '', prepared = '';
+    try { prepared = new Date().toISOString().slice(0, 10); } catch (_) {}
+    var cos = d.companies.slice().sort(function (a, b) { return (Number(a.co) || 0) - (Number(b.co) || 0); });
+    var ncol = _AUDIT_COLS.length, wb = XLSX.utils.book_new();
+    cos.forEach(function (c) {
+      var accts = (_invRows || []).filter(function (r) { return (_coOf(r) || '') === c.co && (!per || String(r.PeriodEnds || '').slice(0, 10) === per); })
+        .sort(function (a, b) { return Math.abs(Number(b.OOB) || 0) - Math.abs(Number(a.OOB) || 0); });
+      var aoa = [];
+      aoa.push(['Perpetual Inventory Reconciliation']);
+      aoa.push(['Company: Co ' + c.co + (c.ccy ? '  ·  ' + c.ccy : '')]);
+      aoa.push(['Period ending: ' + per]);
+      aoa.push(['Prepared: ' + prepared]);
+      aoa.push([]);
+      var headIdx = aoa.length;
+      aoa.push(_AUDIT_COLS.map(function (x) { return x.label; }));
+      var t = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+      accts.forEach(function (r) {
+        var nm = String(r.ObjectAccount || '').trim(); var sub = String(r.SubAccount || '').trim(); if (sub) nm += '.' + sub; if (!nm) nm = String(r.LongAccount || '').trim();
+        var v = [_auditNum(r.EndGL), _auditNum(r.Perpetual), _auditNum(r.BegVar), _auditNum(r.Variance), _auditNum(r.JEs), _auditNum(r.UnpostBatch), _auditNum(r.EndofDay), _auditNum(r.CardexVar), _auditNum(r.OOB)];
+        for (var i = 0; i < 9; i++) t[i] += v[i];
+        aoa.push([nm].concat(v));
+      });
+      var totIdx = aoa.length;
+      aoa.push(['Total'].concat(t.map(_auditNum)));
+      var ws = XLSX.utils.aoa_to_sheet(aoa);
+      _styleAuditSheet(ws, _AUDIT_COLS, headIdx, totIdx, 4, ncol);
+      XLSX.utils.book_append_sheet(wb, ws, ('Co ' + c.co + (c.ccy ? ' ' + c.ccy : '')).slice(0, 31));
+    });
+    XLSX.writeFile(wb, 'PerpetualInventoryReconciliation_' + (per || 'period') + '.xlsx');
+    if (typeof toast === 'function') toast('Downloaded the audit report — ' + cos.length + ' ' + (cos.length === 1 ? 'company' : 'companies'));
+  }
+  function _closeJeModal() { var m = $('jeModal'); if (m) m.hidden = true; }
+  function _wireJeModal() {
+    if (_jeWired) return; _jeWired = true;
+    var modal = $('jeModal'); if (!modal) return;
+    modal.addEventListener('click', function (e) {
+      if (!e.target || !e.target.closest) return;
+      if (e.target.closest('[data-je-close]')) { _closeJeModal(); return; }
+      var expBtn = e.target.closest('#jeExportBtn');
+      if (expBtn) { if (!expBtn.disabled) jeExport(); return; }
+      if (e.target.closest('[data-je-setclearing]')) {
+        var cur = ''; try { cur = localStorage.getItem('rrv8.je.clearingAccount') || ''; } catch (_) {}
+        var v = window.prompt('Clearing / suspense account for the balancing line (JDE account number):', cur);
+        if (v != null) { try { localStorage.setItem('rrv8.je.clearingAccount', v.trim()); } catch (_) {} if (_jeCo) openJeModal(_jeCo); }
+      }
+    });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && modal && !modal.hidden) _closeJeModal(); });
+  }
+
+  // ---- Variance-source detail modal (drill-down) — merged from the rec page --
+  // The 3 view-backed sources: fetched from inventory/variance-component (same
+  // body shape the rec page used), canonicalized, filtered to the company +
+  // period, and rendered as a sortable table. Cardex stays in the Analyst view.
+  var _PV_META = {
+    manualJournalEntries: { label: 'Manual entries', amount: 'amount' },
+    glBatches:            { label: 'Unposted GL batches', amount: 'amount' },
+    endOfDay:             { label: 'End of Day', amount: 'transactionAmount' }
+  };
+  var _PV_COLS = {
+    glBatches: [
+      { label: 'Company', key: 'companyNumber', kind: 'text' }, { label: 'Batch date', key: 'batchDate', kind: 'mono' },
+      { label: 'Period', key: 'periodEnds', kind: 'mono' }, { label: 'User', key: 'username', kind: 'text' },
+      { label: 'Account', key: 'longAccount', kind: 'mono' }, { label: 'Batch #', key: 'batchNumber', kind: 'mono' },
+      { label: 'Type', key: 'type', kind: 'text' }, { label: 'Amount', key: 'amount', kind: 'num' },
+      { label: 'Approval', key: 'apprsts', kind: 'text' }, { label: 'Posting', key: 'poststs', kind: 'text' }
+    ],
+    endOfDay: [
+      { label: 'Txn date', key: 'transactionDate', kind: 'mono' }, { label: 'Company', key: 'companyNumber', kind: 'text' },
+      { label: 'Type', key: 'type', kind: 'text' }, { label: 'Order type', key: 'orderType', kind: 'text' },
+      { label: 'Account', key: 'longAccount', kind: 'mono' }, { label: 'Doc type', key: 'docType', kind: 'text' },
+      { label: 'Doc #', key: 'docNumber', kind: 'mono' }, { label: 'Branch', key: 'branchPlant', kind: 'text' },
+      { label: 'Status', key: 'status', kind: 'text' }, { label: 'Amount', key: 'transactionAmount', kind: 'num' }
+    ],
+    manualJournalEntries: [
+      { label: 'Company', key: 'companyNumber', kind: 'text' }, { label: 'Period', key: 'periodEnds', kind: 'mono' },
+      { label: 'Doc type', key: 'docType', kind: 'text' }, { label: 'Doc #', key: 'docNumber', kind: 'mono' },
+      { label: 'Account', key: 'longAccount', kind: 'mono' }, { label: 'Amount', key: 'amount', kind: 'num' },
+      { label: 'User', key: 'username', kind: 'text' }, { label: 'Originator', key: 'originator', kind: 'text' },
+      { label: 'Explanation', key: 'explanation', kind: 'text' }, { label: 'Remark', key: 'remark', kind: 'text' }
+    ]
+  };
+  var _pvComp = null, _pvCo = null, _pvSort = null, _pvWired = false, _pvCache = {};
+  function _pvNum(v) { v = Number(v) || 0; var s = Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); return v < 0 ? '(' + s + ')' : s; }
+  function _pvPeriod() { return (_acctData && (_acctData.viewedPeriod || _acctData.latestPeriod)) || ''; }
+  function _pvNote(msg) { var b = $('pvModalBody'); if (b) b.innerHTML = '<div class="pv-note">' + esc(msg) + '</div>'; var s = $('pvModalSub'); if (s) s.textContent = ''; }
+  function _pvBody(rf, period) {
+    var wrap = function (ids) { return (ids || []).map(function (id) { return { id: id, checked: true, show: true }; }); };
+    return { period: period || (rf && rf.period), currencies: wrap(rf && rf.currencies), companies: wrap(rf && rf.companies), objects: wrap(rf && rf.objects), businessUnits: wrap(rf && rf.businessUnits), subsidiaries: wrap(rf && rf.subsidiaries) };
+  }
+  function openPreview(component, co) {
+    // Carry forward + Transactions are the special renders (Chunk C) — until
+    // they're ported, bridge those to the rec page scoped to the company.
+    if (!_PV_COLS[component]) {
+      try { if (window.RRV8 && window.RRV8.setActiveScope) window.RRV8.setActiveScope({ activeCompanies: [co], period: _pvPeriod() }); } catch (_) {}
+      window.location.href = 'inventory-reconciliation.html'; return;
+    }
+    var modal = $('pvModal'); if (!modal) return;
+    _pvComp = component; _pvCo = co; _pvSort = null; _pvWirePreview();
+    var t = $('pvModalTitle'); if (t) t.textContent = _PV_META[component].label + ' — Co ' + co;
+    modal.hidden = false;
+    var per = _pvPeriod(), key = component + '|' + per;
+    if (_pvCache[key]) { _pvRender(); return; }
+    _pvNote('Loading…');
+    rrFetch('inventory/status').then(function (status) {
+      var rf = status && status.reconciliationFilter;
+      var body = _pvBody(rf, per); body.component = component;
+      return rrFetch('inventory/variance-component', { method: 'POST', body: body });
+    }).then(function (resp) {
+      var raw = (resp && resp.rows) || [];
+      var fields = _PV_COLS[component].map(function (c) { return c.key; }).concat(['periodEnds', 'companyNumber']);
+      _pvCache[key] = raw.map(function (r) {
+        var lc = {}; Object.keys(r).forEach(function (k) { lc[k.toLowerCase()] = r[k]; });
+        var out = {}; fields.forEach(function (f) { var v = lc[f.toLowerCase()]; if (v !== undefined) out[f] = v; }); return out;
+      });
+      if (_pvComp === component) _pvRender();
+    }).catch(function () { if (_pvComp === component) _pvNote('Could not load the detail — the data service may be unavailable.'); });
+  }
+  function _pvRows() {
+    var per = _pvPeriod(), all = _pvCache[_pvComp + '|' + per] || [], amt = _PV_META[_pvComp].amount;
+    var rows = all.filter(function (r) { return String(r.companyNumber == null ? '' : r.companyNumber).trim() === String(_pvCo).trim(); })
+      .filter(function (r) { return !r.periodEnds || String(r.periodEnds).slice(0, 10) === per; });
+    if (_pvSort && _pvSort.key) {
+      var col = _PV_COLS[_pvComp].filter(function (c) { return c.key === _pvSort.key; })[0] || {};
+      var num = col.kind === 'num', d = _pvSort.dir;
+      rows = rows.slice().sort(function (a, b) {
+        var av = a[_pvSort.key], bv = b[_pvSort.key];
+        if (num) return ((Number(av) || 0) - (Number(bv) || 0)) * d;
+        av = av == null ? '' : String(av); bv = bv == null ? '' : String(bv); return av.localeCompare(bv) * d;
+      });
+      return rows;
+    }
+    return rows.slice().sort(function (a, b) { return Math.abs(Number(b[amt]) || 0) - Math.abs(Number(a[amt]) || 0); });
+  }
+  function _pvRender() {
+    var body = $('pvModalBody'); if (!body || !_pvComp) return;
+    var cols = _PV_COLS[_pvComp], amt = _PV_META[_pvComp].amount, rows = _pvRows(), per = _pvPeriod();
+    var total = rows.reduce(function (s, r) { return s + (Number(r[amt]) || 0); }, 0);
+    var sub = $('pvModalSub');
+    if (sub) sub.innerHTML = 'Period <strong>' + esc(per) + '</strong> &middot; ' + rows.length + ' ' + (rows.length === 1 ? 'row' : 'rows') + ' &middot; net ' + esc(_pvNum(total));
+    if (!rows.length) { body.innerHTML = '<div class="pv-note">No ' + esc(_PV_META[_pvComp].label.toLowerCase()) + ' for Co ' + esc(_pvCo) + ' in ' + esc(per) + '.</div>'; return; }
+    var thead = '<tr>' + cols.map(function (c) {
+      var sorted = _pvSort && _pvSort.key === c.key;
+      return '<th class="' + (c.kind === 'num' ? 'is-num ' : '') + (sorted ? 'is-sorted' : '') + '" data-pv-sort="' + esc(c.key) + '">' + esc(c.label)
+        + (sorted ? '<span class="pv-sort-caret">' + (_pvSort.dir < 0 ? '▼' : '▲') + '</span>' : '') + '</th>';
+    }).join('') + '</tr>';
+    var tb = rows.map(function (r) {
+      return '<tr>' + cols.map(function (c) {
+        var raw = r[c.key];
+        if (c.kind === 'num') { var n = Number(raw) || 0; return '<td class="is-num' + (n < 0 ? ' is-neg' : '') + '">' + esc(_pvNum(n)) + '</td>'; }
+        return '<td class="' + (c.kind === 'mono' ? 'is-mono' : '') + '">' + esc(raw == null ? '' : String(raw)) + '</td>';
+      }).join('') + '</tr>';
+    }).join('');
+    body.innerHTML = '<table class="pv-table"><thead>' + thead + '</thead><tbody>' + tb + '</tbody></table>';
+  }
+  // Excel export of the drill-down — the auditor backup for this variance source.
+  function pvExport() {
+    if (!_pvComp || !_PV_COLS[_pvComp]) return;
+    var cols = _PV_COLS[_pvComp], amt = _PV_META[_pvComp].amount, rows = _pvRows(), per = _pvPeriod(), label = _PV_META[_pvComp].label;
+    var acols = cols.map(function (c) { return { label: c.label, num: c.kind === 'num' }; });
+    var arows = rows.map(function (r) { return cols.map(function (c) { var v = r[c.key]; return c.kind === 'num' ? (Number(v) || 0) : (v == null ? '' : String(v)); }); });
+    var total = rows.reduce(function (s, r) { return s + (Number(r[amt]) || 0); }, 0);
+    var totalRow = cols.map(function (c, i) { return i === 0 ? 'Total' : (c.key === amt ? total : ''); });
+    var ok = buildAuditWorkbook({
+      sheetName: label,
+      fileName: label + ' — Co ' + _pvCo + ' — ' + (per || 'period') + '.xlsx',
+      titleLines: [label + ' — reconciliation detail', 'Company ' + _pvCo + ' · period ' + per + ' · ' + rows.length + ' rows'],
+      columns: acols, rows: arows, totalRow: totalRow
+    });
+    if (ok && typeof toast === 'function') toast('Exported ' + label + ' for Co ' + _pvCo);
+  }
+  function _closePreview() { var m = $('pvModal'); if (m) m.hidden = true; _pvComp = null; }
+  function _pvWirePreview() {
+    if (_pvWired) return; _pvWired = true;
+    var modal = $('pvModal'); if (!modal) return;
+    modal.addEventListener('click', function (e) {
+      if (!e.target || !e.target.closest) return;
+      if (e.target.closest('[data-pv-close]')) { _closePreview(); return; }
+      if (e.target.closest('#pvExportBtn')) { pvExport(); return; }
+      var th = e.target.closest('th[data-pv-sort]');
+      if (th && _pvComp) {
+        var key = th.getAttribute('data-pv-sort');
+        var col = _PV_COLS[_pvComp].filter(function (c) { return c.key === key; })[0] || {};
+        if (_pvSort && _pvSort.key === key) _pvSort.dir = -_pvSort.dir;
+        else _pvSort = { key: key, dir: col.kind === 'num' ? -1 : 1 };
+        _pvRender();
+      }
+    });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && modal && !modal.hidden) _closePreview(); });
   }
 
   function renderAcctSnapshot(d) {
@@ -4301,9 +4994,6 @@
     var outCos = cos.filter(function (c) { return Math.abs(c.oob) > 1; });
     var clear = outCos.length === 0;
     var headAmt = clear ? 'In balance' : _fmtCcyMap(_sumByCcy(outCos, function (c) { return c.oob; }));
-    var noun = function (n) { return n === 1 ? 'company' : 'companies'; };
-    var cap = clear ? ('All ' + cos.length + ' ' + noun(cos.length) + ' reconcile')
-                    : (outCos.length + ' of ' + cos.length + ' ' + noun(cos.length) + ' out of balance');
     // Account roll-forward drill: group the SAME live rows (_invRows) under each
     // company for the viewed period. Columns come straight off v6ui_raccountsummary
     // (the source-of-truth roll forward). The dot is roll-forward INTEGRITY (red if
@@ -4315,72 +5005,110 @@
       var co = _coOf(r) || '?';
       (acctByCo[co] || (acctByCo[co] = [])).push(r);
     });
-    var _rfNo = function (v) { return String(v).trim().toLowerCase() === 'no'; };
-    var _amt = function (v) { return esc(_roundAmt(Number(v) || 0)); };
+    // Plain-English subtitle + preview-component key for each variance source.
+    var _COMP_SUB = { 'Carry forward': 'prior-period balance', 'Transactions': 'item ledger vs GL', 'Manual entries': 'no inventory offset', 'Unposted GL batches': 'batches not yet posted', 'End of Day': 'sales / EOD not finalized' };
+    var _COMP_KEY = { 'Carry forward': 'carryForward', 'Transactions': 'transactions', 'Manual entries': 'manualJournalEntries', 'Unposted GL batches': 'glBatches', 'End of Day': 'endOfDay' };
+    // Collapsible grid: one <tbody> group per company. The parent row shows the
+    // balance columns (GL / Perpetual / Unposted / End of Day) + net. Expanding
+    // shows the 5 variance sources (Cardex belongs in the Analyst view), grouped
+    // by how they're resolved: the JE-owned three feed the balancing entry; the
+    // operations two are fixed at the source. Each opens its detail.
     var rows = cos.map(function (c) {
       var out = Math.abs(c.oob) > 1;
       var broke = (c.breaks || 0) > 0;
-      var accts = (acctByCo[c.co] || []).slice()
-        .sort(function (a, b) { return Math.abs(Number(b.OOB) || 0) - Math.abs(Number(a.OOB) || 0); });
-      var head = '<div class="acct-co-row' + (accts.length ? ' is-expandable' : '') + '">'
-        + '<span class="acct-co-caret">' + (accts.length ? '▸' : '') + '</span>'
-        + '<span class="acct-co-dot ' + (broke ? 'rf-break' : 'rf-ok') + '" title="'
-          + (broke ? 'Roll-forward break — needs re-roll / GL fix' : 'Rolls forward OK') + '"></span>'
-        + '<span class="acct-co-name">Co ' + esc(c.co) + '</span>'
-        + (out ? '<span class="acct-co-amt">' + esc(_ccyAmt(c.ccy, c.oob)) + ' out</span>'
-               : '<span class="acct-co-status">in balance</span>')
+      var accts = (acctByCo[c.co] || []);
+      // Column totals (balance composition) — summed across the company's accounts.
+      var tot = { gl: 0, pp: 0, un: 0, eod: 0 };
+      accts.forEach(function (r) {
+        tot.gl += Number(r.EndGL) || 0; tot.pp += Number(r.Perpetual) || 0;
+        tot.un += Number(r.UnpostBatch) || 0; tot.eod += Number(r.EndofDay) || 0;
+      });
+      var hasCols = accts.length > 0;
+      var _matComps = function (role) {
+        return _COMPONENTS.filter(function (k) { return k.role === role && k.name !== 'Cardex' && Math.abs(c.comp[k.name]) >= 1; })
+          .sort(function (a, b) { return Math.abs(c.comp[b.name]) - Math.abs(c.comp[a.name]); });
+      };
+      var jeComps = _matComps('Accountant');   // carry forward / transactions / manual entries
+      var opsComps = _matComps('Analyst');     // unposted GL batches / end of day (cardex excluded)
+      var evLink = function (k) {
+        return '<div class="acct-ev" data-acct-nav="preview" data-co="' + esc(c.co) + '" data-comp="' + (_COMP_KEY[k.name] || '') + '">'
+          + '<span class="acct-ev-name">' + esc(k.name)
+            + ' <span class="acct-ev-sub">· ' + esc(_COMP_SUB[k.name] || '') + '</span></span>'
+          + '<span style="white-space:nowrap"><span class="acct-ev-amt">' + esc(_ccyAmt(c.ccy, c.comp[k.name])) + '</span>'
+          + '<span class="acct-ev-go">&rarr;</span></span></div>';
+      };
+      var panel = '<div class="acct-g-panel">'
+        + (jeComps.length ? '<div class="acct-g-panel-label">Needs a journal entry</div>' + jeComps.map(evLink).join('') : '')
+        + (opsComps.length ? '<div class="acct-g-panel-label acct-g-panel-label-2">Fix at the source &mdash; operations</div>' + opsComps.map(evLink).join('') : '')
+        + (!jeComps.length && !opsComps.length ? '<div class="acct-g-note">This company reconciles this period.</div>' : '')
+        + '<div class="acct-g-actions">'
+        + (jeComps.length ? '<button type="button" class="acct-g-btn-primary" data-acct-nav="je" data-co="' + esc(c.co) + '">Create balancing entry</button>' : '')
+        + '<button type="button" data-acct-nav="asof" data-co="' + esc(c.co) + '">Perpetual (As Of)</button>'
+        + '</div>'
         + '</div>';
-      if (!accts.length) return head;
-      var trs = accts.map(function (r) {
-        var brk = _rfNo(r.GLOK) || _rfNo(r.VarOK);
-        var which = [_rfNo(r.GLOK) ? 'GL roll-forward' : '', _rfNo(r.VarOK) ? 'variance roll-forward' : '']
-          .filter(Boolean).join(' + ');
-        var nm = String(r.ObjectAccount || '').trim();
-        var sub = String(r.SubAccount || '').trim();
-        if (sub) nm += '.' + sub;
-        if (!nm) nm = String(r.LongAccount || '').trim();
-        return '<tr><td class="acct-acct-name" title="' + esc(String(r.LongAccount || '')) + '">' + esc(nm) + '</td>'
-          + '<td>' + _amt(r.EndGL) + '</td>'
-          + '<td>' + _amt(r.Perpetual) + '</td>'
-          + '<td>' + _amt(r.UnpostBatch) + '</td>'
-          + '<td>' + _amt(r.EndofDay) + '</td>'
-          + '<td><span class="acct-rf ' + (brk ? 'rf-break' : 'rf-ok') + '" title="'
-            + (brk ? ('Roll-forward break — ' + which) : 'Rolls forward OK') + '"></span></td></tr>';
-      }).join('');
-      return head
-        + '<div class="acct-acct-wrap"><table class="acct-acct-tbl">'
-        + '<thead><tr><th class="acct-acct-h-name">Account</th><th>GL</th><th>Perpetual</th><th>Unposted</th><th>End&nbsp;of&nbsp;Day</th><th></th></tr></thead>'
-        + '<tbody>' + trs + '</tbody></table></div>';
+      var coRow = '<tr class="acct-g-co">'
+        + '<td class="acct-g-name">'
+          + '<span class="acct-g-caret">&#9656;</span>'
+          + '<span class="acct-g-dot ' + (broke ? 'rf-break' : 'rf-ok') + '" title="'
+            + (broke ? 'Roll-forward break — needs re-roll / GL fix' : 'Rolls forward OK') + '"></span>'
+          + 'Co ' + esc(c.co) + '</td>'
+        + '<td>' + (hasCols ? esc(_ccyAmt(c.ccy, tot.gl)) : '') + '</td>'
+        + '<td>' + (hasCols ? esc(_ccyAmt(c.ccy, tot.pp)) : '') + '</td>'
+        + '<td>' + (hasCols ? esc(_ccyAmt(c.ccy, tot.un)) : '') + '</td>'
+        + '<td>' + (hasCols ? esc(_ccyAmt(c.ccy, tot.eod)) : '') + '</td>'
+        + '<td class="acct-g-out' + (out ? '' : ' is-clear') + '">'
+          + (out ? esc(_ccyAmt(c.ccy, c.oob)) : 'In balance') + '</td>'
+        + '</tr>';
+      var detailRow = '<tr class="acct-g-detail"><td colspan="6">' + panel + '</td></tr>';
+      return '<tbody class="acct-g-group is-expandable">' + coRow + detailRow + '</tbody>';
     }).join('');
-    el.innerHTML =
-      '<div class="acct-snap-head"><span class="acct-snap-title">Where you stand</span>'
-      + '<span class="acct-snap-period">' + esc(period) + '</span></div>'
-      + '<div class="acct-snap-headline"><span class="acct-snap-amt ' + (clear ? 'is-clear' : 'is-out') + '">' + esc(headAmt) + '</span>'
-      + '<span class="acct-snap-cap">' + esc(cap) + '</span></div>'
-      + '<div class="acct-co-list">' + rows + '</div>';
+    var title = d.isHistorical ? 'Where you stood' : 'Where you stand';
+    // Repaint only the sub-regions — the Ask form between them is persistent.
+    var head = $('acctSnapHead');
+    if (head) head.innerHTML = '<span class="acct-snap-title">' + title + '</span>'
+      + '<span class="acct-snap-period">' + esc(period) + '</span>';
+    var amtEl = $('acctSnapAmt');
+    if (amtEl) { amtEl.textContent = headAmt; amtEl.className = 'acct-snap-amt ' + (clear ? 'is-clear' : 'is-out'); }
+    var gridEl = $('acctSnapGrid');
+    if (gridEl) gridEl.innerHTML =
+      '<table class="acct-grid"><colgroup><col class="acct-g-col-name"><col><col><col><col><col></colgroup>'
+      + '<thead><tr><th class="acct-g-h-name">Company</th><th>GL</th><th>Perpetual</th><th>Unposted</th><th>End&nbsp;of&nbsp;Day</th><th>Out&nbsp;of&nbsp;balance</th></tr></thead>'
+      + rows
+      + '</table>';
+    // Default OPEN on first render; preserve the user's toggle on later repaints.
+    if (!el._gridInit) { el._gridInit = true; el.classList.add('is-open'); }
+    var hlEl = $('acctSnapHeadline');
+    if (hlEl) hlEl.setAttribute('aria-expanded', el.classList.contains('is-open') ? 'true' : 'false');
     if (!el._wiredExpand) {
       el._wiredExpand = true;
       el.addEventListener('click', function (e) {
-        var row = e.target && e.target.closest ? e.target.closest('.acct-co-row.is-expandable') : null;
-        if (row) row.classList.toggle('is-open');
+        if (!e.target || !e.target.closest) return;
+        // Evidence link / action button → scope to that company + period, then
+        // open the reconciliation workspace (or the As Of perpetual detail).
+        var nav = e.target.closest('[data-acct-nav]');
+        if (nav) {
+          e.stopPropagation();
+          var co = nav.getAttribute('data-co');
+          var kind = nav.getAttribute('data-acct-nav');
+          if (kind === 'je') { openJeModal(co); return; }   // assemble on Home, no hop
+          if (kind === 'preview') { openPreview(nav.getAttribute('data-comp'), co); return; }   // source drill-down on Home
+          var per = _acctData ? (_acctData.viewedPeriod || '') : '';
+          try { if (window.RRV8 && window.RRV8.setActiveScope) window.RRV8.setActiveScope({ activeCompanies: [co], period: per }); } catch (_) {}
+          window.location.href = (kind === 'asof') ? 'inventory-asof.html' : 'inventory-reconciliation.html';
+          return;
+        }
+        var headline = e.target.closest('.acct-snap-headline');
+        if (headline) {
+          var open = el.classList.toggle('is-open');
+          headline.setAttribute('aria-expanded', open ? 'true' : 'false');
+          return;
+        }
+        var coRow = e.target.closest('.acct-g-co');
+        if (!coRow) return;
+        var grp = coRow.closest('.acct-g-group.is-expandable');
+        if (grp) grp.classList.toggle('is-open');
       });
     }
-  }
-
-  // Close-status strip — where the viewed period sits in the close cycle.
-  // Adds cadence/audit context (the article's "periodic reconciliation" idea)
-  // without re-stating the snapshot's per-company balances. Period-scoped only.
-  // Primary path into the reconciliation page — the accountant's work surface.
-  // Replaces the old 3 variance cards (which duplicated the rec page and buried
-  // the path); the breakdown by component lives on the rec page itself.
-  function renderAcctOpen() {
-    var el = $('acctVariance'); if (!el) return;
-    el.innerHTML =
-      '<a class="acct-open" href="inventory-reconciliation.html">'
-      + '<span class="acct-open-main">'
-      + '<span class="acct-open-title">Open Reconciliation</span>'
-      + '<span class="acct-open-sub">Work carry forward, transactions, and manual entries by account — with RapidReconciler AI alongside.</span>'
-      + '</span><span class="acct-open-arrow" aria-hidden="true">→</span></a>';
   }
 
   // Per-company facts for the ask, honoring the data-exposure tier (scrub →
