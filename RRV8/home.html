@@ -34,6 +34,10 @@
 <!-- SheetJS (xlsx-js-style) — the period-end balancing entry exports to Excel
      (JDE P0911 paste shape). Same vendored lib the rec page uses. -->
 <script src="vendor/xlsx-js-style.min.js" defer></script>
+<!-- jsPDF + autoTable: client-side PDF of the period audit report (accountant
+     view). Vendored (same files the rec page uses); autoTable paginates. -->
+<script src="vendor/jspdf.umd.min.js" defer></script>
+<script src="vendor/jspdf.plugin.autotable.min.js" defer></script>
 <style>
   :root {
     --navy: #1f2d4a;
@@ -197,7 +201,7 @@
   /* Two-column Home: persistent "RapidReconciler AI" rail (left, mirrors the
      login's left panel for continuity) + the working bands (right). */
   .wrap { max-width: 1340px; margin: 0 auto; padding: 18px 24px 56px; display: flex; gap: 22px; align-items: flex-start; }
-  .home-main { flex: 1 1 auto; min-width: 0; }
+  .home-main { flex: 1 1 auto; min-width: 0; padding-bottom: 96px; }   /* clearance so the fixed action cluster never covers the last grid rows */
   /* Topbar retired on Home — it duplicated the AI rail (brand), Set Context
      (data-currency + period) and the footer (name + sign-out). Hidden now;
      markup + its boot JS get fully excised in the cleanup sweep. */
@@ -264,20 +268,21 @@
   .home-welcome { display: inline-flex; align-items: center; gap: 8px; background: var(--bg-card); border: 1px solid var(--rule); border-radius: 100px; padding: 9px 18px; box-shadow: var(--shadow-md); font-family: 'Source Sans 3', sans-serif; font-weight: 700; font-size: 13px; color: var(--text-soft); }
   .home-welcome[hidden] { display: none; }
   .home-welcome svg { width: 15px; height: 15px; color: var(--navy); }
-  .ha-signout { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; background: var(--navy); color: #fff; border: 1px solid var(--navy); border-radius: 100px; padding: 9px 18px; box-shadow: var(--shadow-md); font-family: 'Source Sans 3', sans-serif; font-weight: 700; font-size: 13px; }
-  .ha-signout:hover { filter: brightness(1.14); }
+  /* Sign out — quiet chrome pill (matches the DB / View / Welcome pills so the
+     cluster recedes; the work + the one action carry the weight). */
+  .ha-signout { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; background: var(--bg-card); color: var(--text-soft); border: 1px solid var(--rule); border-radius: 100px; padding: 9px 18px; box-shadow: var(--shadow-md); font-family: 'Source Sans 3', sans-serif; font-weight: 700; font-size: 13px; }
+  .ha-signout:hover { border-color: var(--blue); color: var(--blue); }
   .ha-signout svg { width: 15px; height: 15px; }
-  /* Open Reconciliation pill — accountant's primary action (navy, filled). */
-  .ha-openrec { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; text-decoration: none; background: var(--navy); color: #fff; border: 1px solid var(--navy); border-radius: 100px; padding: 9px 18px; box-shadow: var(--shadow-md); font-family: 'Source Sans 3', sans-serif; font-weight: 700; font-size: 13px; }
-  .ha-openrec[hidden] { display: none; }
-  .ha-openrec:hover { filter: brightness(1.16); text-decoration: none; }
-  .ha-openrec svg { width: 15px; height: 15px; }
+  /* Audit report is the one real action in the cluster — give it the single
+     filled (navy) treatment so there's one clear affordance, not a wall. */
+  #haAuditRep { background: var(--navy); color: #fff; border-color: var(--navy); }
+  #haAuditRep:hover { border-color: var(--navy); color: #fff; filter: brightness(1.14); }
   /* "View as" role switcher + database picker in the bottom-right action cluster
      (the top header that used to hold the account menu is hidden in this layout).
      Both pop a menu upward; the role switcher is admin-only, the DB picker shows
      for everyone. Reuse the .ha-rolebtn / .ha-rolemenu / .umr-* styles. */
-  .ha-roles, .ha-db { position: relative; }
-  .ha-roles[hidden], .ha-db[hidden] { display: none; }
+  .ha-roles, .ha-db, .ha-audit { position: relative; }
+  .ha-roles[hidden], .ha-db[hidden], .ha-audit[hidden] { display: none; }
   .ha-rolebtn { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; background: var(--bg-card); border: 1px solid var(--rule); border-radius: 100px; padding: 8px 14px; box-shadow: var(--shadow-md); font-family: inherit; font-size: 13px; font-weight: 700; color: var(--text-soft); }
   .ha-rolebtn:hover { border-color: var(--blue); color: var(--blue); }
   .ha-rolebtn .ha-role-ico { width: 15px; height: 15px; }
@@ -314,27 +319,57 @@
   /* Accountant view reclaims the AI rail's width — the compact triage strip +
      inline Ask carry the AI presence instead of a full-height column. */
   body[data-view-role="accountant"] #homeAi { display: none !important; }
+  /* Admin view drops the rail too — a horizontal AI band (#adminBrief) leads the
+     task grid, so the cards get the full width. */
+  body[data-view-role="admin"] #homeAi { display: none !important; }
+  body:not([data-view-role="admin"]) #adminBrief { display: none; }
+  .admin-ai { border-radius: 14px; box-shadow: var(--shadow-sm); padding: 16px 20px; margin-bottom: 18px;
+    background: linear-gradient(120deg, #1f2d4a 0%, #2c4a8c 55%, #3f74e8 100%); }
+  .admin-ai-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 9px; }
+  .admin-ai-brand { display: inline-flex; align-items: center; gap: 8px; font-family: 'Source Sans 3', sans-serif; font-weight: 800; font-size: 15px; color: #fff; }
+  .admin-ai-brand .ai-accent { color: #9ec2ff; }
+  .admin-ai-brand svg { width: 20px; height: 20px; color: #fff; }
+  .admin-ai .hai-eyebrow { font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: rgba(255,255,255,0.7); margin: 0; }
+  .admin-ai .hai-verdict { font-family: 'Source Sans 3', sans-serif; font-weight: 800; font-size: 16px; color: #fff; margin: 0 0 12px; line-height: 1.4; }
+  .admin-ai .hai-points { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px 22px; }
+  .admin-ai .hai-points li { position: relative; padding-left: 16px; font-size: 13px; line-height: 1.5; color: rgba(255,255,255,0.9); }
+  .admin-ai .hai-points li::before { content: ""; position: absolute; left: 0; top: 8px; width: 6px; height: 6px; border-radius: 50%; background: #9ec2ff; }
+  .admin-ai.is-loading .hai-verdict { opacity: .7; }
   /* AI triage strip — gradient (the AI face), compact. */
-  .acct-triage { display: flex; align-items: center; gap: 13px; padding: 13px 16px; border-radius: 12px; box-shadow: var(--shadow-sm);
+  .acct-triage { display: flex; align-items: flex-start; gap: 13px; padding: 15px 17px; border-radius: 12px; box-shadow: var(--shadow-sm);
     background: linear-gradient(140deg, #1f2d4a 0%, #2c4a8c 52%, #3f74e8 100%); }
   .acct-triage[hidden] { display: none; }
-  .acct-triage-emblem { display: inline-grid; place-items: center; width: 32px; height: 32px; border-radius: 9px; flex-shrink: 0; background: rgba(255,255,255,0.14); }
+  .acct-triage-emblem { display: inline-grid; place-items: center; width: 32px; height: 32px; border-radius: 9px; flex-shrink: 0; background: rgba(255,255,255,0.14); margin-top: 1px; }
   .acct-triage-emblem svg { width: 18px; height: 18px; color: #dfe7ff; }
-  .acct-triage-body { min-width: 0; }
-  .acct-triage-head { display: block; font-size: 13.5px; font-weight: 800; color: #fff; }
-  .acct-triage-sub { display: block; font-size: 12.5px; color: rgba(255,255,255,0.72); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .acct-triage-body { min-width: 0; flex: 1 1 auto; }
+  .acct-triage-head { display: block; font-size: 14px; font-weight: 800; color: #fff; line-height: 1.4; }
+  /* Ask box lives in the AI band now — styled for the gradient (translucent
+     field, white action). Overrides the light base .acct-ask-* below. */
+  .acct-triage .acct-ask-form { display: flex; gap: 8px; margin-top: 10px; }
+  .acct-triage .acct-ask-input { flex: 1 1 auto; min-width: 0; border: 1px solid rgba(255,255,255,0.34); background: rgba(255,255,255,0.14); border-radius: 9px; padding: 8px 12px; font-family: inherit; font-size: 13.5px; color: #fff; }
+  .acct-triage .acct-ask-input::placeholder { color: rgba(255,255,255,0.7); }
+  .acct-triage .acct-ask-input:focus { outline: none; border-color: #fff; background: rgba(255,255,255,0.22); }
+  .acct-triage .acct-ask-btn { flex-shrink: 0; background: #fff; color: var(--navy); border: 0; border-radius: 9px; padding: 8px 18px; font-weight: 800; font-size: 13.5px; cursor: pointer; font-family: inherit; }
+  .acct-triage .acct-ask-btn:hover { filter: brightness(0.94); }
+  .acct-triage .acct-ask-btn:disabled { opacity: .5; cursor: default; }
+  .acct-triage .acct-ask-answer { margin-top: 11px; background: rgba(255,255,255,0.14); border: 1px solid rgba(255,255,255,0.28); border-radius: 9px; padding: 11px 13px; font-size: 13.5px; line-height: 1.5; white-space: pre-wrap; color: #fff; }
+  .acct-triage .acct-ask-answer[hidden] { display: none; }
+  .acct-triage .acct-ask-note { margin-top: 7px; font-size: 12px; color: rgba(255,255,255,0.75); }
+  .acct-triage .acct-ask-note[hidden] { display: none; }
   /* Snapshot — where the accountant stands this period. */
   .acct-snapshot { background: var(--bg-card); border: 1px solid var(--rule); border-radius: 12px; padding: 18px 20px; box-shadow: var(--shadow-sm); }
   .acct-snap-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
   .acct-snap-title { font-size: 15px; font-weight: 800; color: var(--navy); }
-  .acct-snap-period { font-size: 12.5px; color: var(--text-muted); font-weight: 700; }
+  .acct-snap-period { font-size: 16px; color: var(--navy); font-weight: 800; }
   /* Headline doubles as the whole-grid toggle (default collapsed). */
   .acct-snap-headline { display: flex; align-items: center; gap: 10px; margin-bottom: 0; width: 100%; padding: 0; background: none; border: none; text-align: left; cursor: pointer; font: inherit; color: inherit; }
   .acct-snap-amt { font-size: 27px; font-weight: 800; line-height: 1; color: var(--navy); }
   .acct-snap-amt.is-clear { color: var(--green); }
   .acct-snap-amt.is-out { color: var(--orange); }
-  .acct-snap-toggle { margin-left: auto; font-size: 13px; color: var(--text-muted); transition: transform .15s ease; }
-  .acct-snapshot.is-open .acct-snap-toggle { transform: rotate(90deg); }
+  .acct-snap-toggle { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; font-weight: 700; color: var(--blue); }
+  .acct-snap-chev { width: 15px; height: 15px; transition: transform .15s ease; }
+  .acct-snapshot.is-open .acct-snap-chev { transform: rotate(180deg); }
+  .acct-snap-headline:hover .acct-snap-toggle { text-decoration: underline; }
   .acct-grid-wrap { display: none; margin-top: 14px; border-top: 1px solid var(--rule); padding-top: 12px; }
   .acct-snapshot.is-open .acct-grid-wrap { display: block; }
   /* Where-you-stand — collapsible grid. Each company is a <tbody> group: a
@@ -346,6 +381,8 @@
   .acct-grid th.acct-g-h-name { text-align: left; }
   .acct-grid td { text-align: right; padding: 7px 6px; white-space: nowrap; color: var(--text-soft); overflow: hidden; text-overflow: ellipsis; }
   .acct-grid td.acct-g-name { text-align: left; font-weight: 700; color: var(--navy); }
+  .acct-g-coname { font-weight: 500; color: var(--text-muted); margin-left: 8px; font-size: 12px; }
+  .acct-grid td.acct-g-zero { color: var(--text-faint, #b7c0cd); }   /* dim exact-zero balances so real numbers pop */
   .acct-grid td.acct-g-out { font-weight: 700; color: var(--orange); }
   .acct-grid td.acct-g-out.is-clear { color: var(--green); }
   /* company parent rows */
@@ -505,6 +542,9 @@
   .pv-table td.is-num.is-neg { color: var(--red, #d64545); }
   .pv-sort-caret { margin-left: 3px; font-size: 9px; }
   .pv-note { padding: 20px 8px; text-align: center; color: var(--text-muted); font-size: 13px; }
+  .pv-cf-note { padding: 14px 6px 6px; font-size: 13px; line-height: 1.55; color: var(--text-soft); }
+  .pv-cf-note p { margin: 0 0 10px; }
+  .pv-cf-note .btn-navy { margin-top: 4px; }
   /* Account x source matrix + AI reveal (ported from the rec page). */
   .ws-co { margin-top: 16px; } .ws-co:first-child { margin-top: 4px; }
   .ws-co-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; }
@@ -1386,34 +1426,31 @@
          replacing the full-height rail (hidden in this view). Deterministic
          (derived from the live roll-forward), AI-branded; the inline Ask below
          is the AI question surface. Populated by renderAcctTriage(). -->
+    <!-- AI hub band: one prioritized "start here" lead (largest material
+         company + its driver) + the Ask box. The lead replaces the old count +
+         arbitrary 3-company sample (the grid already carries the full list).
+         The Ask form is PERSISTENT — renderAcctTriage only writes #acctTriageHead,
+         never the form, so a typed question survives a background repaint. -->
     <div class="acct-triage" id="acctTriage" hidden>
       <span class="acct-triage-emblem" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 1.6l1.9 5.1a5 5 0 0 0 2.9 2.9l5.1 1.9-5.1 1.9a5 5 0 0 0-2.9 2.9L12 21.4l-1.9-5.1a5 5 0 0 0-2.9-2.9L2.1 11.5l5.1-1.9a5 5 0 0 0 2.9-2.9z"/></svg></span>
-      <span class="acct-triage-body"><span class="acct-triage-head" id="acctTriageHead"></span><span class="acct-triage-sub" id="acctTriageSub"></span></span>
-    </div>
-    <!-- Where-you-stand card: title/period + net headline (doubles as the
-         grid toggle), the AI ask merged in as the "what to do first" prompt,
-         then the collapsible company grid. The ask form is a PERSISTENT child
-         (not re-rendered) so a background repaint can't clobber a typed
-         question; renderAcctSnapshot only repaints #acctSnapHead / #acctSnapAmt
-         / #acctSnapGrid. -->
-    <div class="acct-snapshot" id="acctSnapshot">
-      <div class="acct-snap-head" id="acctSnapHead"></div>
-      <button type="button" class="acct-snap-headline" id="acctSnapHeadline" aria-expanded="false" title="Show companies">
-        <span class="acct-snap-amt" id="acctSnapAmt"></span>
-        <span class="acct-snap-toggle" aria-hidden="true">&#9656;</span>
-      </button>
-      <div class="acct-ask">
-        <div class="acct-ask-head">
-          <span class="acct-ask-emblem" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 1.6l1.9 5.1a5 5 0 0 0 2.9 2.9l5.1 1.9-5.1 1.9a5 5 0 0 0-2.9 2.9L12 21.4l-1.9-5.1a5 5 0 0 0-2.9-2.9L2.1 11.5l5.1-1.9a5 5 0 0 0 2.9-2.9z"/></svg></span>
-          Ask about your reconciliation
-        </div>
+      <div class="acct-triage-body">
+        <span class="acct-triage-head" id="acctTriageHead"></span>
         <form class="acct-ask-form" id="acctAskForm">
-          <input class="acct-ask-input" type="text" id="acctAskInput" autocomplete="off" placeholder="e.g. What should I look at first this period?">
+          <input class="acct-ask-input" type="text" id="acctAskInput" autocomplete="off" placeholder="Ask about your reconciliation — e.g. what should I look at first?">
           <button class="acct-ask-btn" type="submit" id="acctAskBtn">Ask</button>
         </form>
         <div class="acct-ask-note" id="acctAskNote" hidden></div>
         <div class="acct-ask-answer" id="acctAskAnswer" hidden></div>
       </div>
+    </div>
+    <!-- Where-you-stand card: title/period + net headline (doubles as the grid
+         toggle), then the collapsible company grid. -->
+    <div class="acct-snapshot" id="acctSnapshot">
+      <div class="acct-snap-head" id="acctSnapHead"></div>
+      <button type="button" class="acct-snap-headline" id="acctSnapHeadline" aria-expanded="false" title="Show the per-company breakdown">
+        <span class="acct-snap-amt" id="acctSnapAmt"></span>
+        <span class="acct-snap-toggle">Details<svg class="acct-snap-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg></span>
+      </button>
       <div class="acct-grid-wrap" id="acctSnapGrid"></div>
     </div>
   </section>
@@ -1501,6 +1538,17 @@
 
   <!-- ===================== ADMIN: action surface ===================== -->
   <div class="view" id="view-admin" hidden>
+    <!-- AI administration band — horizontal, on top of the task grid (replaces
+         the left rail for admin; mirrors the accountant + perpetual AI bands).
+         Populated by renderAdminBriefing() via _setBrief() → _activeBriefEl(). -->
+    <section class="admin-ai" id="adminBrief">
+      <div class="admin-ai-head">
+        <span class="admin-ai-brand"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2l1.9 5.6L19.5 9l-5.6 1.4L12 16l-1.9-5.6L4.5 9l5.6-1.4L12 2z"/><circle cx="18.5" cy="17.5" r="1.4"/><circle cx="5.5" cy="16" r="1"/></svg>RapidReconciler <span class="ai-accent">AI</span></span>
+        <span class="hai-eyebrow">Your To Do&rsquo;s, triaged by AI</span>
+      </div>
+      <h2 class="hai-verdict">Reading your data&hellip;</h2>
+      <ul class="hai-points"></ul>
+    </section>
     <!-- Admin task grid — a flat 3×3 of the nine admin tasks, taken out of the
          old collapsible "Administrator" band/drawer (the AI rail now carries the
          administration narrative and the view switcher names the role). Each
@@ -1774,18 +1822,21 @@
       <svg class="ha-role-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
     </button>
   </div>
-  <!-- Open Reconciliation — the accountant's primary action, in the pill
-       cluster. Shown only in the accountant view (toggled by renderAccountantPanels). -->
-  <a class="ha-openrec" id="haOpenRec" href="inventory-reconciliation.html" hidden title="Open the reconciliation workspace">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"></path><rect x="9" y="3" width="6" height="4" rx="1"></rect><path d="M9 13l2 2 4-4"></path></svg>
-    Open Reconciliation
-  </a>
-  <!-- Audit report — the accountant's period-level auditor backup (Excel now,
-       PDF next). Accountant-view only (toggled by renderAccountantPanels). -->
-  <button type="button" class="ha-rolebtn" id="haAuditRep" hidden title="Download the period reconciliation as an auditor backup workbook">
-    <svg class="ha-role-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"></path><polyline points="14 3 14 8 19 8"></polyline><line x1="9" y1="13" x2="15" y2="13"></line><line x1="9" y1="17" x2="15" y2="17"></line></svg>
-    Audit report
-  </button>
+  <!-- Audit report — the accountant's period-level auditor backup. Pops a small
+       menu to download as Excel or PDF. Accountant-view only (the wrapper is
+       toggled by renderAccountantPanels). -->
+  <div class="ha-audit" id="haAudit" hidden>
+    <div class="ha-rolemenu" id="haAuditMenu" hidden>
+      <div class="umr-label">Download as</div>
+      <button type="button" class="umr-opt" data-fmt="xlsx">Excel workbook</button>
+      <button type="button" class="umr-opt" data-fmt="pdf">PDF document</button>
+    </div>
+    <button type="button" class="ha-rolebtn" id="haAuditRep" aria-haspopup="true" aria-expanded="false" title="Download the period reconciliation as an auditor backup (Excel or PDF)">
+      <svg class="ha-role-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"></path><polyline points="14 3 14 8 19 8"></polyline><line x1="9" y1="13" x2="15" y2="13"></line><line x1="9" y1="17" x2="15" y2="17"></line></svg>
+      Audit report
+      <svg class="ha-role-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+    </button>
+  </div>
   <button type="button" class="ha-signout" id="haSignOut">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
     Sign out
@@ -3708,7 +3759,27 @@
 
     $('signOutBtn').addEventListener('click', doSignOut);
     var haSignOut = $('haSignOut'); if (haSignOut) haSignOut.addEventListener('click', doSignOut);
-    var haAuditRep = $('haAuditRep'); if (haAuditRep) haAuditRep.addEventListener('click', function () { if (typeof genAuditExcel === 'function') genAuditExcel(); });
+    // Audit report — pops a small Excel/PDF menu upward (same pattern as the
+    // view + database switchers). Both formats render the same per-company
+    // period reconciliation from the loaded roll-forward.
+    var haAuditBtn = $('haAuditRep'), haAuditMenu = $('haAuditMenu');
+    if (haAuditBtn && haAuditMenu) {
+      haAuditBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var willOpen = haAuditMenu.hidden;
+        haAuditMenu.hidden = !willOpen;
+        haAuditBtn.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+      });
+      haAuditMenu.addEventListener('click', function (e) {
+        var b = e.target.closest ? e.target.closest('.umr-opt') : null; if (!b) return;
+        e.stopPropagation();
+        haAuditMenu.hidden = true;
+        haAuditBtn.setAttribute('aria-expanded', 'false');
+        if (b.getAttribute('data-fmt') === 'pdf') { if (typeof genAuditPdf === 'function') genAuditPdf(); }
+        else if (typeof genAuditExcel === 'function') genAuditExcel();
+      });
+      document.addEventListener('click', function () { if (!haAuditMenu.hidden) { haAuditMenu.hidden = true; haAuditBtn.setAttribute('aria-expanded', 'false'); } });
+    }
     // "View as" role switcher (admins only; gated by syncRoleMenu) — reshapes the
     // dashboard in place and re-tiers the AI briefing, no reload.
     var roleBox = $('userMenuRoles');
@@ -4219,8 +4290,12 @@
     });
     return worst;
   }
+  // The active briefing element: the horizontal band in the admin view, the
+  // left rail otherwise. Lets _setBrief / renderAdminBriefing write to whichever
+  // is on screen (admin drops the rail for a top band; analyst keeps the rail).
+  function _activeBriefEl() { return (_viewRole() === 'admin') ? ($('adminBrief') || $('haiBrief')) : $('haiBrief'); }
   function _setBrief(level, verdict, points) {
-    var brief = $('haiBrief'); if (!brief) return;
+    var brief = _activeBriefEl(); if (!brief) return;
     brief.classList.remove('lvl-ok', 'lvl-watch', 'lvl-attention');
     brief.classList.add('lvl-' + (level || 'ok'));
     var vEl = brief.querySelector('.hai-verdict'), pEl = brief.querySelector('.hai-points');
@@ -4467,15 +4542,28 @@
     return keys.sort().map(function (k) { return _ccyAmt(k, m[k]); }).join(' · ');
   }
 
+  // Company display names (number → F0010 name) for the accountant grid.
+  // GET /admin/companies is JWT-scoped; fetched once per DB, numbers-only on
+  // failure. Reset in resetScopedState.
+  var _coNames = null, _coNamesTried = false;
+  function _ensureCompanyNames() {
+    if (_coNames || _coNamesTried) return;
+    _coNamesTried = true;
+    rrFetch('admin/companies', { demoFile: 'admin-companies' }).then(function (resp) {
+      var m = {}; ((resp && resp.companies) || []).forEach(function (c) { if (c && c.companyNumber != null) m[String(c.companyNumber).trim()] = String(c.name || '').trim(); });
+      _coNames = m;
+      if (_viewRole() === 'accountant') renderAccountantPanels();   // repaint the grid now the names are in
+    }).catch(function () { _coNames = {}; });   // graceful — show numbers only
+  }
   function renderAccountantPanels() {
     var sec = $('acctPanels'); if (!sec) return;
-    var openRec = $('haOpenRec'), auditRep = $('haAuditRep');   // accountant-only pill-cluster actions
-    var _hidePills = function () { if (openRec) openRec.hidden = true; if (auditRep) auditRep.hidden = true; };
+    var auditRep = $('haAudit');   // accountant-only pill-cluster action (Excel/PDF audit menu)
+    var _hidePills = function () { if (auditRep) auditRep.hidden = true; };
     if (_viewRole() !== 'accountant') { sec.hidden = true; _hidePills(); return; }
+    _ensureCompanyNames();   // F0010 names for the grid; async, repaints when they land
     var d = _briefData();
     if (!d || !d.companies.length) { sec.hidden = true; _hidePills(); return; }
     sec.hidden = false;
-    if (openRec) openRec.hidden = false;
     if (auditRep) auditRep.hidden = false;
     _acctData = d;
     // Clear any prior answer only when the reconciliation CONTEXT changed (new
@@ -4494,20 +4582,30 @@
   // Compact "start here" triage — deterministic, from the same live roll-forward.
   // Counts the companies with a material JE-owned driver (Accountant-role
   // component) and names the top few + their biggest driver.
+  // One prioritized "start here" lead: the largest MATERIAL out-of-balance
+  // company that needs a journal entry + its dominant driver, then a count of
+  // the rest. Beats the old count + arbitrary 3-company sample — the grid below
+  // already carries the full list.
   function renderAcctTriage(d) {
     var strip = $('acctTriage'); if (!strip) return;
     var isJe = function (c) { return _COMPONENTS.some(function (k) { return k.role === 'Accountant' && Math.abs(c.comp[k.name]) >= 1; }); };
     var jeCos = d.companies.filter(isJe).sort(function (a, b) { return Math.abs(b.oob) - Math.abs(a.oob); });
-    var n = jeCos.length;
-    var headEl = $('acctTriageHead'), subEl = $('acctTriageSub');
-    if (headEl) headEl.textContent = n === 0
-      ? 'You’re all set — no journal entries needed this period'
-      : 'Start here — ' + n + (n === 1 ? ' company needs' : ' companies need') + ' a journal entry';
-    if (subEl) subEl.textContent = jeCos.slice(0, 3).map(function (c) {
-      var top = _COMPONENTS.filter(function (k) { return k.role === 'Accountant' && Math.abs(c.comp[k.name]) >= 1; })
-        .sort(function (a, b) { return Math.abs(c.comp[b.name]) - Math.abs(c.comp[a.name]); })[0];
-      return 'Co ' + c.co + (top ? ' ' + top.name.toLowerCase() : '');
-    }).join('  ·  ');
+    var headEl = $('acctTriageHead');
+    if (headEl) {
+      if (!jeCos.length) {
+        headEl.textContent = 'You’re all set — no journal entries needed this period';
+      } else {
+        var c = jeCos[0];
+        var top = _COMPONENTS.filter(function (k) { return k.role === 'Accountant' && Math.abs(c.comp[k.name]) >= 1; })
+          .sort(function (a, b) { return Math.abs(c.comp[b.name]) - Math.abs(c.comp[a.name]); })[0];
+        var name = (_coNames && _coNames[String(c.co).trim()]) || '';
+        var more = jeCos.length - 1;
+        headEl.innerHTML = 'Start with <strong>Co ' + esc(c.co) + '</strong>' + (name ? ' ' + esc(name) : '')
+          + ' — ' + esc(_ccyAmt(c.ccy, c.oob)) + ' out of balance'
+          + (top ? ', mostly ' + esc(top.name.toLowerCase()) : '')
+          + (more > 0 ? '. ' + more + (more === 1 ? ' other company needs' : ' others need') + ' a journal entry.' : '.');
+      }
+    }
     strip.hidden = false;
   }
 
@@ -4763,69 +4861,422 @@
   // (_invRows / v6ui_raccountsummary). No fetch — this IS the authoritative
   // record the accountant view already reads; per-source transaction detail
   // lives in the drill-down exports.
-  var _AUDIT_COLS = [
-    { label: 'Account' }, { label: 'GL balance', num: true }, { label: 'Perpetual', num: true },
-    { label: 'Carry forward', num: true }, { label: 'Transactions', num: true }, { label: 'Manual entries', num: true },
-    { label: 'Unposted', num: true }, { label: 'End of Day', num: true }, { label: 'Cardex', num: true },
-    { label: 'Out of balance', num: true }
-  ];
   function _auditNum(v) { return Math.round((Number(v) || 0) * 100) / 100; }
-  function _styleAuditSheet(ws, cols, headRowIdx, totalRowIdx, titleCount, ncol) {
-    var range = XLSX.utils.decode_range(ws['!ref']);
-    for (var t = 0; t < titleCount; t++) {
-      var tref = XLSX.utils.encode_cell({ r: t, c: 0 }); if (!ws[tref]) continue;
-      ws[tref].s = { font: { bold: t === 0, sz: t === 0 ? 14 : 10, color: { rgb: t === 0 ? '1F2D4A' : '6B7280' } } };
+  // ---- Full audit report (Excel + PDF) — the V7-mirrored per-account report,
+  //      ported from the rec page so Home fully replaces it. Account-level
+  //      figures come from the loaded roll-forward (_invRows); the per-account
+  //      supporting sections (Unposted GL Batches / End of Day / Journal
+  //      Entries / Variances / Perpetual Details) come from inventory/audit-
+  //      detail. That request is scoped by COMPANY + PERIOD ONLY — passing the
+  //      reconciliation filter's object/BU/subsidiary selections zeroes the
+  //      item-level perpetual rowset (usp6getasof_v2); the As Of grid scopes
+  //      it the same way. Every section is narrowed to the in-scope accounts
+  //      client-side by longAccount. ------------------------------------------
+  var _AUDIT_STY = {
+    title:       { font: { bold: true, sz: 16, color: { rgb: '1F2D4A' } } },
+    coverMeta:   { font: { sz: 10, color: { rgb: '6B7280' } } },
+    section:     { font: { bold: true, sz: 13, color: { rgb: '1F2D4A' } }, fill: { patternType: 'solid', fgColor: { rgb: 'E8ECF3' } } },
+    accountHead: { font: { bold: true, sz: 12, color: { rgb: '1F2D4A' } } },
+    subsection:  { font: { bold: true, sz: 11, color: { rgb: '1F2D4A' } } },
+    tableHead:   { font: { bold: true, color: { rgb: 'FFFFFF' } }, fill: { patternType: 'solid', fgColor: { rgb: '1F2D4A' } } },
+    bold:        { font: { bold: true } },
+    money:       { numFmt: AUDIT_NUM_FMT },
+    moneyBold:   { font: { bold: true }, numFmt: AUDIT_NUM_FMT },
+    qty:         { numFmt: '#,##0.00;(#,##0.00)' },
+    sep:         { font: { color: { rgb: '999999' } } },
+    aiSummary:   { font: { sz: 11 }, alignment: { wrapText: true, vertical: 'top' } },
+    disclaimer:  { font: { italic: true, sz: 9, color: { rgb: '888888' } } }
+  };
+  var _AUDIT_PDF = {
+    head:   { fillColor: [31, 45, 74], textColor: [255, 255, 255], fontStyle: 'bold', halign: 'left', fontSize: 9 },
+    foot:   { fillColor: [241, 244, 249], textColor: [31, 45, 74], fontStyle: 'bold', halign: 'left', fontSize: 9 },
+    body:   { fontSize: 9, cellPadding: 3, overflow: 'linebreak' },
+    margin: { left: 36, right: 36 }
+  };
+
+  // audit-detail fetch (cached per period) — the five supporting rowsets +
+  // account descriptions. Demo reads the committed snapshot; prod POSTs the
+  // company+period-only scope.
+  var _auditDetail = null, _auditDetailKey = null;
+  function _normAuditDetail(resp) {
+    if (!resp) return { reconcilingItems: [], perpetual: [], accountSummary: [], accountDescriptions: [], unpostedBatchesUi: [], unpostedCardexUi: [], manualJournalEntries: [] };
+    var lc = function (row) { var out = {}; Object.keys(row).forEach(function (k) { out[k.charAt(0).toLowerCase() + k.slice(1)] = row[k]; }); return out; };
+    var alias = function (row, map) { Object.keys(map).forEach(function (from) { if (row[from] !== undefined && row[map[from]] === undefined) row[map[from]] = row[from]; }); return row; };
+    var arr = function (key, m) { return Array.isArray(resp[key]) ? resp[key].map(lc).map(function (r) { return m ? alias(r, m) : r; }) : []; };
+    return {
+      reconcilingItems:     arr('reconcilingItems'),
+      perpetual:            arr('perpetual'),
+      accountSummary:       arr('accountSummary'),
+      accountDescriptions:  arr('accountDescriptions', { accountDescription: 'description' }),
+      unpostedBatchesUi:    arr('unpostedBatchesUi'),
+      unpostedCardexUi:     arr('unpostedCardexUi'),
+      manualJournalEntries: arr('manualJournalEntries', { userName: 'username' })
+    };
+  }
+  function _ensureAuditDetail(per) {
+    var key = per || '';
+    if (_auditDetail && _auditDetailKey === key) return Promise.resolve(_auditDetail);
+    var p;
+    if (IS_DEMO) {
+      p = rrFetch('audit-report-detail', { demoFile: 'audit-report-detail' });
+    } else {
+      p = rrFetch('inventory/status').then(function (status) {
+        var rf = (status && status.reconciliationFilter) || {};
+        var wrap = function (a) { return (a || []).map(function (id) { return { id: id, checked: true, show: true }; }); };
+        // Company + period ONLY. objects/BU/subsidiaries left empty so the
+        // perpetual (usp6getasof_v2) rowset isn't zeroed — see block note above.
+        return rrFetch('inventory/audit-detail', { method: 'POST', body: {
+          period: per, currencies: wrap(rf.currencies), companies: wrap(rf.companies),
+          objects: [], businessUnits: [], subsidiaries: []
+        } });
+      });
     }
-    for (var c = range.s.c; c <= range.e.c; c++) {
-      var href = XLSX.utils.encode_cell({ r: headRowIdx, c: c }); if (!ws[href]) continue;
-      ws[href].s = { font: { bold: true, color: { rgb: 'FFFFFF' } }, fill: { patternType: 'solid', fgColor: { rgb: '1F2D4A' } }, alignment: { horizontal: (cols[c] && cols[c].num) ? 'right' : 'left', vertical: 'center' }, border: _auditBorder('D0D0D0') };
+    return p.then(_normAuditDetail).then(function (j) { _auditDetail = j; _auditDetailKey = key; return j; });
+  }
+  function _auditDescMap(detail) {
+    var m = {};
+    (detail.accountDescriptions || []).forEach(function (dd) {
+      m[String(dd.companyNumber == null ? '' : dd.companyNumber).trim() + '|' + String(dd.longAccount == null ? '' : dd.longAccount).trim()] = dd.description;
+    });
+    return m;
+  }
+  // Account-level figures for one company + period from the loaded roll-forward.
+  // Keyed by longAccount; summed in case the view yields more than one row.
+  function _auditAccts(co, per) {
+    var byLA = {}, C = String(co).trim();
+    (_invRows || []).forEach(function (r) {
+      if (String(_coOf(r) || '').trim() !== C) return;
+      if (per && String(r.PeriodEnds || '').slice(0, 10) !== per) return;
+      var la = String(r.LongAccount || '').trim(); if (!la) return;
+      var m = byLA[la] || (byLA[la] = { la: la, gl: 0, pp: 0, oob: 0, cf: 0, glb: 0, eod: 0, tx: 0, cdx: 0, je: 0 });
+      m.gl += Number(r.EndGL) || 0; m.pp += Number(r.Perpetual) || 0; m.oob += Number(r.OOB) || 0;
+      m.cf += Number(r.BegVar) || 0; m.glb += Number(r.UnpostBatch) || 0; m.eod += Number(r.EndofDay) || 0;
+      m.tx += Number(r.Variance) || 0; m.cdx += Number(r.CardexVar) || 0; m.je += Number(r.JEs) || 0;
+    });
+    return byLA;
+  }
+  // Filter a detail rowset to one company + account (+ period, except perpetual
+  // which is a current-state as-of snapshot with no period column).
+  function _dfil(list, co, la, per, usePeriod) {
+    var C = String(co).trim(), L = String(la).trim();
+    return (list || []).filter(function (x) {
+      if (String(x.companyNumber == null ? '' : x.companyNumber).trim() !== C) return false;
+      if (String(x.longAccount == null ? '' : x.longAccount).trim() !== L) return false;
+      if (usePeriod && x.periodEnds && String(x.periodEnds).slice(0, 10) !== per) return false;
+      return true;
+    });
+  }
+  // Residuals audit (cover line) — Qty=0 rows whose cumulative signed amount
+  // sits within ±target, drop-largest-first. Mirrors the As Of residual filter.
+  function _auditResidualTarget() {
+    try { var raw = localStorage.getItem('rrv8-asof-residual-target-v1'); if (raw === null) return 10; var n = Number(raw); return (isFinite(n) && n >= 0) ? n : 10; } catch (_) { return 10; }
+  }
+  function _auditResiduals(perpRows, target) {
+    var cand = [], signedAll = 0, absAll = 0;
+    for (var i = 0; i < perpRows.length; i++) {
+      if ((Number(perpRows[i].quantityOnHand) || 0) !== 0) continue;
+      cand.push(perpRows[i]); var a = Number(perpRows[i].amountOnHand) || 0; signedAll += a; absAll += Math.abs(a);
     }
-    for (var rr = headRowIdx + 1; rr <= range.e.r; rr++) {
-      var isTotal = rr === totalRowIdx;
-      for (var cc = range.s.c; cc <= range.e.c; cc++) {
-        var cref = XLSX.utils.encode_cell({ r: rr, c: cc }); var cell = ws[cref]; if (!cell) continue;
-        cell.s = cell.s || {}; cell.s.border = _auditBorder('ECECEC');
-        if (cols[cc] && cols[cc].num) { cell.z = AUDIT_NUM_FMT; cell.s.alignment = { horizontal: 'right' }; }
-        if (isTotal) { cell.s.font = { bold: true, color: { rgb: '1F2D4A' } }; cell.s.fill = { patternType: 'solid', fgColor: { rgb: 'F1F4F9' } }; }
+    var pop = cand.slice().sort(function (a, b) { return Math.abs(Number(b.amountOnHand) || 0) - Math.abs(Number(a.amountOnHand) || 0); });
+    var removed = 0, cumSigned = signedAll, cumAbs = absAll;
+    for (var j = 0; j < pop.length && Math.abs(cumSigned) > target; j++) { var av = Number(pop[j].amountOnHand) || 0; removed++; cumSigned -= av; cumAbs -= Math.abs(av); }
+    return { count: cand.length - removed, amount: cumSigned, amountAbs: cumAbs, target: target };
+  }
+  function _auditMoney(n) { n = Number(n) || 0; var s = Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); return n < 0 ? '(' + s + ')' : s; }
+  function _auditResidualLine(stats) {
+    return 'Residuals Audit: ' + stats.count.toLocaleString('en-US') + ' row' + (stats.count === 1 ? '' : 's')
+      + ' in perpetual data — residual amount ' + _auditMoney(stats.amount) + ' (within ±' + _auditMoney(stats.target)
+      + ' target; Quantity = 0; cumulative |Amount| ' + _auditMoney(stats.amountAbs) + '). Included in this report for audit completeness.';
+  }
+  // AI cover summary — grounded in the report's own figures, exposure-gated,
+  // best-effort (a failure just omits that company's paragraph). Off in demo.
+  function _auditCoFacts(c, per) {
+    var byLA = _auditAccts(c.co, per), las = Object.keys(byLA);
+    var gl = 0, perp = 0, cf = 0, glb = 0, eod = 0, tx = 0, cdx = 0, je = 0;
+    las.forEach(function (la) { var m = byLA[la]; gl += m.gl; perp += m.pp; cf += m.cf; glb += m.glb; eod += m.eod; tx += m.tx; cdx += m.cdx; je += m.je; });
+    return { co: c.co, ccy: c.ccy || 'USD', gl: gl, perp: perp, oob: gl - perp, n: las.length,
+      comps: { 'carry forward': cf, 'transactions': tx, 'manual entries': je, 'cardex': cdx, 'GL batches': glb, 'end of day': eod } };
+  }
+  function _auditCoSummary(f, scrub, idx) {
+    var label = scrub ? ('Entity ' + String.fromCharCode(65 + (idx % 26))) : ('Co ' + f.co);
+    var money = function (n) { n = Number(n) || 0; var s = Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); return (n < 0 ? '-' : '') + '$' + s; };
+    var comps = Object.keys(f.comps).filter(function (k) { return Math.abs(f.comps[k]) >= 1; }).sort(function (a, b) { return Math.abs(f.comps[b]) - Math.abs(f.comps[a]); });
+    var compStr = comps.length ? comps.map(function (k) { return k + ' ' + money(f.comps[k]); }).join(', ') : 'no material components';
+    var facts = [
+      label + ' (' + f.ccy + ').',
+      'GL balance ' + money(f.gl) + ', perpetual balance ' + money(f.perp) + ', net out of balance ' + money(f.oob) + ' across ' + f.n + ' inventory accounts.',
+      'Variance by source: ' + compStr + '.'
+    ];
+    var prompt = 'You are RapidReconciler AI. Write a 2-3 sentence plain-English summary of this company\'s inventory-to-GL reconciliation for an AUDIT report cover.\n'
+      + 'Facts — the ONLY facts you may use. Do NOT introduce any number not listed here; use them verbatim and rounded:\n' + facts.join('\n') + '\n'
+      + 'Describe what the figures show and name the single largest driver. Do NOT give a verdict (never "safe to post"), do NOT recommend actions or next steps, do NOT say "this period". Plain accountant English, no preamble, no markdown, no JDE table names.';
+    return rrFetch('api/v1/ai/explain', { method: 'POST', body: { prompt: prompt } })
+      .then(function (r) { return (r && r.text) ? String(r.text).trim() : ''; }).catch(function () { return ''; });
+  }
+  function _auditAiSummaries(cos, per) {
+    if (IS_DEMO) return Promise.resolve({});
+    if (typeof _recsummaryLevel === 'function' && _recsummaryLevel() === 'off') return Promise.resolve({});
+    var scrub = (typeof _recsummaryLevel === 'function' && _recsummaryLevel() === 'scrubbed');
+    var jobs = cos.map(function (c, i) { return _auditCoSummary(_auditCoFacts(c, per), scrub, i).then(function (txt) { return { co: c.co, txt: txt }; }); });
+    var all = Promise.all(jobs).then(function (arr) { var m = {}; arr.forEach(function (x) { m[x.co] = x.txt; }); return m; });
+    var guard = new Promise(function (res) { setTimeout(function () { res(null); }, 15000); });   // never let a slow AI block the download
+    return Promise.race([all, guard]).then(function (m) { return m || {}; });
+  }
+
+  // ---- Excel: one sheet per company, the full per-account report -----------
+  function _buildAuditSheet(c, per, detail, descMap, aiSummary) {
+    var cnum = c.co, ccy = c.ccy || '';
+    var aoa = [], styles = [], aiRow = -1;
+    function row(cells) { aoa.push(cells || []); return aoa.length - 1; }
+    function sc(r, col, s) { styles.push({ r: r, c: col, s: s }); }
+    var prepared = ''; try { prepared = fmtPeriod(new Date().toISOString().slice(0, 10)); } catch (_) {}
+    var perLbl = fmtPeriod(per) || per;
+    var rH = row(['Perpetual Inventory Reconciliation']); sc(rH, 0, _AUDIT_STY.title);
+    row(['Company: Co ' + cnum + (ccy ? '  ·  ' + ccy : '')]);
+    row(['Period ending: ' + perLbl]);
+    row(['Prepared: ' + prepared]);
+    var coPerp = (detail.perpetual || []).filter(function (p) { return String(p.companyNumber == null ? '' : p.companyNumber).trim() === String(cnum).trim(); });
+    var rRes = row([_auditResidualLine(_auditResiduals(coPerp, _auditResidualTarget()))]); sc(rRes, 0, _AUDIT_STY.coverMeta);
+    if (aiSummary) {
+      row([]);
+      var rSm = row(['Summary']); sc(rSm, 0, _AUDIT_STY.section);
+      aiRow = row([aiSummary]); sc(aiRow, 0, _AUDIT_STY.aiSummary);
+      var rDs = row(['AI-generated narrative. The figures and tables below are the authoritative record of this reconciliation.']); sc(rDs, 0, _AUDIT_STY.disclaimer);
+    }
+    var rSec = row(['Account Summary']); sc(rSec, 0, _AUDIT_STY.section);
+    row([]);
+    var byLA = _auditAccts(cnum, per), las = Object.keys(byLA).sort();
+    var rHd = row(['Account', 'GL Balance', 'Perpetual Balance', 'Out of Balance']);
+    [0, 1, 2, 3].forEach(function (col) { sc(rHd, col, _AUDIT_STY.tableHead); });
+    var tGl = 0, tPp = 0;
+    las.forEach(function (la) {
+      var m = byLA[la]; tGl += m.gl; tPp += m.pp;
+      var r = row([la, _auditNum(m.gl), _auditNum(m.pp), _auditNum(m.oob)]);
+      sc(r, 1, _AUDIT_STY.money); sc(r, 2, _AUDIT_STY.money); sc(r, 3, _AUDIT_STY.money);
+    });
+    var rTot = row(['', _auditNum(tGl), _auditNum(tPp), _auditNum(tGl - tPp)]);
+    sc(rTot, 1, _AUDIT_STY.moneyBold); sc(rTot, 2, _AUDIT_STY.moneyBold); sc(rTot, 3, _AUDIT_STY.moneyBold);
+    las.forEach(function (la) {
+      var m = byLA[la], r;
+      row([]);
+      var desc = descMap[String(cnum).trim() + '|' + la];
+      var rA = row([la + (desc ? ' - ' + desc : '')]); sc(rA, 0, _AUDIT_STY.accountHead);
+      var rSs = row(['Accounts Summary']); sc(rSs, 0, _AUDIT_STY.subsection);
+      r = row(['G/L Balance', _auditNum(m.gl)]); sc(r, 1, _AUDIT_STY.money);
+      r = row(['Perpetual Balance', _auditNum(m.pp)]); sc(r, 1, _AUDIT_STY.money);
+      r = row(['Variance', _auditNum(m.oob)]); sc(r, 1, _AUDIT_STY.money);
+      row([]);
+      r = row(['Beginning Variance', _auditNum(m.cf)]); sc(r, 1, _AUDIT_STY.money);
+      r = row(['Unposted Batches', _auditNum(m.glb)]); sc(r, 1, _AUDIT_STY.money);
+      r = row(['End of Day', _auditNum(m.eod)]); sc(r, 1, _AUDIT_STY.money);
+      r = row(['Transactional Variance', _auditNum(m.tx)]); sc(r, 1, _AUDIT_STY.money);
+      r = row(['Cardex Variance', _auditNum(m.cdx)]); sc(r, 1, _AUDIT_STY.money);
+      r = row(['Manual Journal Entries', _auditNum(m.je)]); sc(r, 1, _AUDIT_STY.money);
+      row([]);
+      r = row(['Unreconciled Variance', _auditNum(m.oob)]); sc(r, 0, _AUDIT_STY.bold); sc(r, 1, _AUDIT_STY.moneyBold);
+      row([]);
+      r = row(['Unposted GL Batches']); sc(r, 0, _AUDIT_STY.subsection);
+      var batches = _dfil(detail.unpostedBatchesUi, cnum, la, per, true);
+      if (!batches.length) { row(['All batches posted for this period']); }
+      else {
+        r = row(['Batch Date', 'Username', 'Batch Number', 'Type', 'Approval Status', 'Posting Status', 'Amount']);
+        [0, 1, 2, 3, 4, 5, 6].forEach(function (col) { sc(r, col, _AUDIT_STY.tableHead); });
+        var tot = 0;
+        batches.forEach(function (b) { var rr = row([b.batchDate, b.username, b.batchNumber, b.type, (b.approval_Status || b.apprsts || ''), (b.posting_Status || b.poststs || ''), _auditNum(b.amount)]); sc(rr, 6, _AUDIT_STY.money); tot += Number(b.amount) || 0; });
+        var rt = row(['', '', '', '', '', '', _auditNum(tot)]); sc(rt, 6, _AUDIT_STY.moneyBold);
       }
+      row([]);
+      r = row(['End Of Day']); sc(r, 0, _AUDIT_STY.subsection);
+      var eodRows = _dfil(detail.unpostedCardexUi, cnum, la, per, true);
+      if (!eodRows.length) { row(['All inventory transactions were successfully processed for this period']); }
+      else {
+        r = row(['Transaction Date', 'Type', 'Order Type', 'Doc Type', 'Doc Number', 'Branch Plant', 'Status', 'Transaction Amount']);
+        [0, 1, 2, 3, 4, 5, 6, 7].forEach(function (col) { sc(r, col, _AUDIT_STY.tableHead); });
+        var tot2 = 0;
+        eodRows.forEach(function (e) { var rr = row([e.transactionDate, e.type, e.orderType, e.docType, e.docNumber, e.branchPlant, e.status, _auditNum(e.transactionAmount)]); sc(rr, 7, _AUDIT_STY.money); tot2 += Number(e.transactionAmount) || 0; });
+        var rt2 = row(['', '', '', '', '', '', '', _auditNum(tot2)]); sc(rt2, 7, _AUDIT_STY.moneyBold);
+      }
+      row([]);
+      r = row(['Journal Entries']); sc(r, 0, _AUDIT_STY.subsection);
+      var jeRows = _dfil(detail.manualJournalEntries, cnum, la, per, true);
+      if (!jeRows.length) { row(['No manual journal entries for this period']); }
+      else {
+        r = row(['Doc No', 'Doc Type', 'User', 'Amount']);
+        [0, 1, 2, 3].forEach(function (col) { sc(r, col, _AUDIT_STY.tableHead); });
+        var tot3 = 0;
+        jeRows.forEach(function (je) { var rr = row([je.docNumber, je.docType, je.username, _auditNum(je.amount)]); sc(rr, 3, _AUDIT_STY.money); tot3 += Number(je.amount) || 0; });
+        var rt3 = row(['', '', '', _auditNum(tot3)]); sc(rt3, 3, _AUDIT_STY.moneyBold);
+      }
+      row([]);
+      r = row(['Variances']); sc(r, 0, _AUDIT_STY.subsection);
+      var recon = _dfil(detail.reconcilingItems, cnum, la, per, true);
+      if (!recon.length) { row(['No transaction variances for this period']); }
+      else {
+        r = row(['Worked', 'DT', 'Doc No', 'OT', 'Mfg Batch', 'Cardex Amount', 'Ledger Amount', 'Cardex Ledger Variance']);
+        [0, 1, 2, 3, 4, 5, 6, 7].forEach(function (col) { sc(r, col, _AUDIT_STY.tableHead); });
+        recon.forEach(function (rec) {
+          var dr = row([rec.worked ? 'Yes' : 'No', rec.dt, rec.docNumber, rec.ot, (rec.batch || ''), _auditNum(rec.cardexAmount), _auditNum(rec.ledgerAmount), _auditNum(rec.variance)]);
+          sc(dr, 5, _AUDIT_STY.money); sc(dr, 6, _AUDIT_STY.money); sc(dr, 7, _AUDIT_STY.money);
+          if (rec.note) { row(['', 'Note:']); row(['', '', rec.note]); }
+        });
+      }
+      row([]);
+      r = row(['Perpetual Details']); sc(r, 0, _AUDIT_STY.subsection);
+      var perp = _dfil(detail.perpetual, cnum, la, per, false);
+      if (!perp.length) { row(['No data']); }
+      else {
+        r = row(['Branch', 'Item Number', 'Item Description', 'UM', 'QOH', 'Amount on Hand']);
+        [0, 1, 2, 3, 4, 5].forEach(function (col) { sc(r, col, _AUDIT_STY.tableHead); });
+        var aoh = 0;
+        perp.forEach(function (p) { var rr = row([p.branch, p.itemNumber, p.itemDescription, p.uom, _auditNum(p.quantityOnHand), _auditNum(p.amountOnHand)]); sc(rr, 4, _AUDIT_STY.qty); sc(rr, 5, _AUDIT_STY.money); aoh += Number(p.amountOnHand) || 0; });
+        var rt4 = row(['', '', '', '', '', _auditNum(aoh)]); sc(rt4, 5, _AUDIT_STY.moneyBold);
+      }
+      row([]);
+      var rSep = row(['-------------------------------------------------------------']); sc(rSep, 0, _AUDIT_STY.sep);
+    });
+    var ws = XLSX.utils.aoa_to_sheet(aoa);
+    styles.forEach(function (spec) {
+      var ref = XLSX.utils.encode_cell({ r: spec.r, c: spec.c });
+      if (ws[ref]) { ws[ref].s = Object.assign({}, ws[ref].s || {}, spec.s); if (spec.s.numFmt) ws[ref].z = spec.s.numFmt; }
+    });
+    ws['!cols'] = [{ wch: 28 }, { wch: 16 }, { wch: 18 }, { wch: 14 }, { wch: 14 }, { wch: 18 }, { wch: 18 }, { wch: 22 }];
+    if (aiRow >= 0) { ws['!merges'] = (ws['!merges'] || []).concat([{ s: { r: aiRow, c: 0 }, e: { r: aiRow, c: 3 } }]); ws['!rows'] = ws['!rows'] || []; ws['!rows'][aiRow] = { hpt: 56 }; }
+    return ws;
+  }
+
+  // ---- PDF: one company per page-break, autoTable per section --------------
+  function _auditPdfCover(doc, c, per, res, aiSummary) {
+    var ccy = c.ccy || 'USD', y = 50;
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(16); doc.setTextColor(31, 45, 74);
+    doc.text('Perpetual Inventory Reconciliation', 36, y); y += 22;
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(50, 50, 50);
+    doc.text('Company: Co ' + c.co, 36, y); y += 14;
+    doc.text('Currency Code: ' + ccy, 36, y); y += 14;
+    doc.text('Period Ends: ' + (fmtPeriod(per) || per), 36, y); y += 14;
+    var prep = ''; try { prep = fmtPeriod(new Date().toISOString().slice(0, 10)); } catch (_) {}
+    doc.text('Prepared: ' + prep, 36, y); y += 14;
+    if (res) {
+      doc.setFont('helvetica', 'italic');
+      var wrapW = doc.internal.pageSize.getWidth() - 72;
+      var lines = doc.splitTextToSize(_auditResidualLine(res), wrapW);
+      doc.text(lines, 36, y); y += 14 * lines.length; doc.setFont('helvetica', 'normal');
     }
-    ws['!cols'] = cols.map(function (c) { return { wch: c.num ? 15 : Math.max(16, (c.label || '').length + 4) }; });
-    ws['!merges'] = ws['!merges'] || [];
-    for (var m = 0; m < titleCount; m++) ws['!merges'].push({ s: { r: m, c: 0 }, e: { r: m, c: ncol - 1 } });
+    if (aiSummary) {
+      y += 8;
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.setTextColor(31, 45, 74);
+      doc.text('Summary', 36, y); y += 15;
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(40, 40, 40);
+      var wrapW2 = doc.internal.pageSize.getWidth() - 72;
+      var l2 = doc.splitTextToSize(aiSummary, wrapW2);
+      doc.text(l2, 36, y); y += 13 * l2.length + 4;
+      doc.setFont('helvetica', 'italic'); doc.setFontSize(8); doc.setTextColor(136, 136, 136);
+      var disc = doc.splitTextToSize('AI-generated narrative. The figures and tables below are the authoritative record of this reconciliation.', wrapW2);
+      doc.text(disc, 36, y); y += 11 * disc.length; doc.setFont('helvetica', 'normal');
+    }
+    doc.setTextColor(0, 0, 0);
+    return y + 8;
+  }
+  function _pdfSecTitle(doc, text, y) {
+    if (y > doc.internal.pageSize.getHeight() - 80) { doc.addPage(); y = 50; }
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.setTextColor(31, 45, 74);
+    doc.text(text, 36, y); doc.setTextColor(0, 0, 0); return y + 6;
+  }
+  function _pdfEmpty(doc, text, y) {
+    if (y > doc.internal.pageSize.getHeight() - 60) { doc.addPage(); y = 50; }
+    doc.setFont('helvetica', 'italic'); doc.setFontSize(9); doc.setTextColor(110, 110, 110);
+    doc.text(text, 50, y + 12); doc.setTextColor(0, 0, 0); return y + 26;
+  }
+  function _buildAuditPdfSection(doc, c, per, detail, descMap, isFirst, aiSummary) {
+    if (!isFirst) doc.addPage();
+    var cnum = c.co;
+    var coPerp = (detail.perpetual || []).filter(function (p) { return String(p.companyNumber == null ? '' : p.companyNumber).trim() === String(cnum).trim(); });
+    var y = _auditPdfCover(doc, c, per, _auditResiduals(coPerp, _auditResidualTarget()), aiSummary);
+    var byLA = _auditAccts(cnum, per), las = Object.keys(byLA).sort();
+    if (!las.length) { _pdfEmpty(doc, 'No accounts in scope for this company.', y); return; }
+    y = _pdfSecTitle(doc, 'Account Summary', y);
+    var tGl = 0, tPp = 0;
+    var sumBody = las.map(function (la) { var m = byLA[la]; tGl += m.gl; tPp += m.pp; return [la, _pvNum(m.gl), _pvNum(m.pp), _pvNum(m.oob)]; });
+    doc.autoTable({ startY: y, head: [['Account', 'GL Balance', 'Perpetual Balance', 'Out of Balance']], body: sumBody,
+      foot: [['Total', _pvNum(tGl), _pvNum(tPp), _pvNum(tGl - tPp)]],
+      styles: _AUDIT_PDF.body, headStyles: _AUDIT_PDF.head, footStyles: _AUDIT_PDF.foot, margin: _AUDIT_PDF.margin,
+      columnStyles: { 1: { halign: 'right' }, 2: { halign: 'right' }, 3: { halign: 'right' } } });
+    y = doc.lastAutoTable.finalY + 18;
+    las.forEach(function (la) {
+      var m = byLA[la], desc = descMap[String(cnum).trim() + '|' + la];
+      y = _pdfSecTitle(doc, la + (desc ? ' - ' + desc : ''), y);
+      doc.autoTable({ startY: y, head: [['Accounts Summary', '']], body: [
+        ['G/L Balance', _pvNum(m.gl)], ['Perpetual Balance', _pvNum(m.pp)], ['Variance', _pvNum(m.oob)], ['', ''],
+        ['Beginning Variance', _pvNum(m.cf)], ['Unposted Batches', _pvNum(m.glb)], ['End of Day', _pvNum(m.eod)],
+        ['Transactional Variance', _pvNum(m.tx)], ['Cardex Variance', _pvNum(m.cdx)], ['Manual Journal Entries', _pvNum(m.je)]
+      ], foot: [['Unreconciled Variance', _pvNum(m.oob)]], styles: _AUDIT_PDF.body, headStyles: _AUDIT_PDF.head, footStyles: _AUDIT_PDF.foot, margin: _AUDIT_PDF.margin, tableWidth: 320, columnStyles: { 0: { cellWidth: 200 }, 1: { halign: 'right', cellWidth: 120 } } });
+      y = doc.lastAutoTable.finalY + 14;
+      y = _pdfSecTitle(doc, 'Unposted GL Batches', y);
+      var batches = _dfil(detail.unpostedBatchesUi, cnum, la, per, true);
+      if (!batches.length) { y = _pdfEmpty(doc, 'All batches posted for this period', y); }
+      else { var tot = 0; var b2 = batches.map(function (b) { tot += Number(b.amount) || 0; return [b.batchDate, b.username, String(b.batchNumber || ''), b.type, (b.approval_Status || b.apprsts || ''), (b.posting_Status || b.poststs || ''), _pvNum(b.amount)]; });
+        doc.autoTable({ startY: y, head: [['Batch Date', 'Username', 'Batch #', 'Type', 'Approval', 'Posting', 'Amount']], body: b2, foot: [['', '', '', '', '', 'Total', _pvNum(tot)]], styles: _AUDIT_PDF.body, headStyles: _AUDIT_PDF.head, footStyles: _AUDIT_PDF.foot, margin: _AUDIT_PDF.margin, columnStyles: { 6: { halign: 'right' } } }); y = doc.lastAutoTable.finalY + 14; }
+      y = _pdfSecTitle(doc, 'End Of Day', y);
+      var eod = _dfil(detail.unpostedCardexUi, cnum, la, per, true);
+      if (!eod.length) { y = _pdfEmpty(doc, 'All inventory transactions were successfully processed for this period', y); }
+      else { var tot2 = 0; var e2 = eod.map(function (e) { tot2 += Number(e.transactionAmount) || 0; return [e.transactionDate, e.type, e.orderType, e.docType, String(e.docNumber || ''), e.branchPlant, e.status, _pvNum(e.transactionAmount)]; });
+        doc.autoTable({ startY: y, head: [['Trans Date', 'Type', 'OT', 'DocType', 'DocNumber', 'Branch', 'Status', 'Amount']], body: e2, foot: [['', '', '', '', '', '', 'Total', _pvNum(tot2)]], styles: _AUDIT_PDF.body, headStyles: _AUDIT_PDF.head, footStyles: _AUDIT_PDF.foot, margin: _AUDIT_PDF.margin, columnStyles: { 7: { halign: 'right' } } }); y = doc.lastAutoTable.finalY + 14; }
+      y = _pdfSecTitle(doc, 'Journal Entries', y);
+      var je = _dfil(detail.manualJournalEntries, cnum, la, per, true);
+      if (!je.length) { y = _pdfEmpty(doc, 'No manual journal entries for this period', y); }
+      else { var tot3 = 0; var j2 = je.map(function (x) { tot3 += Number(x.amount) || 0; return [String(x.docNumber || ''), x.docType, x.username, _pvNum(x.amount)]; });
+        doc.autoTable({ startY: y, head: [['Doc No', 'Doc Type', 'User', 'Amount']], body: j2, foot: [['', '', 'Total', _pvNum(tot3)]], styles: _AUDIT_PDF.body, headStyles: _AUDIT_PDF.head, footStyles: _AUDIT_PDF.foot, margin: _AUDIT_PDF.margin, columnStyles: { 3: { halign: 'right' } } }); y = doc.lastAutoTable.finalY + 14; }
+      y = _pdfSecTitle(doc, 'Variances', y);
+      var recon = _dfil(detail.reconcilingItems, cnum, la, per, true);
+      if (!recon.length) { y = _pdfEmpty(doc, 'No transaction variances for this period', y); }
+      else { var v2 = []; recon.forEach(function (rec) { v2.push([rec.worked ? 'Yes' : 'No', rec.dt, String(rec.docNumber || ''), rec.ot, String(rec.batch || ''), _pvNum(rec.cardexAmount), _pvNum(rec.ledgerAmount), _pvNum(rec.variance)]); if (rec.note) v2.push([{ content: 'Note: ' + rec.note, colSpan: 8, styles: { fontStyle: 'italic', textColor: [90, 90, 90], fillColor: [250, 250, 250] } }]); });
+        doc.autoTable({ startY: y, head: [['Worked', 'DT', 'Doc No', 'OT', 'Mfg Batch', 'Cardex', 'Ledger', 'CL Variance']], body: v2, styles: _AUDIT_PDF.body, headStyles: _AUDIT_PDF.head, margin: _AUDIT_PDF.margin, columnStyles: { 5: { halign: 'right' }, 6: { halign: 'right' }, 7: { halign: 'right' } } }); y = doc.lastAutoTable.finalY + 14; }
+      y = _pdfSecTitle(doc, 'Perpetual Details', y);
+      var perp = _dfil(detail.perpetual, cnum, la, per, false);
+      if (!perp.length) { y = _pdfEmpty(doc, 'No data', y); }
+      else { var aoh = 0; var p2 = perp.map(function (p) { aoh += Number(p.amountOnHand) || 0; return [p.branch, p.itemNumber, p.itemDescription, p.uom, _pvNum(p.quantityOnHand), _pvNum(p.amountOnHand)]; });
+        doc.autoTable({ startY: y, head: [['Branch', 'Item Number', 'Item Description', 'UM', 'QOH', 'Amount on Hand']], body: p2, foot: [['', '', '', '', 'Total', _pvNum(aoh)]], styles: _AUDIT_PDF.body, headStyles: _AUDIT_PDF.head, footStyles: _AUDIT_PDF.foot, margin: _AUDIT_PDF.margin, columnStyles: { 4: { halign: 'right' }, 5: { halign: 'right' } } }); y = doc.lastAutoTable.finalY + 22; }
+    });
   }
   function genAuditExcel() {
     if (!window.XLSX) { if (typeof toast === 'function') toast('Excel library still loading — try again in a moment'); return; }
     var d = _acctData; if (!d || !d.companies.length) { if (typeof toast === 'function') toast('No reconciliation loaded yet'); return; }
-    var per = d.viewedPeriod || d.latestPeriod || '', prepared = '';
-    try { prepared = new Date().toISOString().slice(0, 10); } catch (_) {}
-    var cos = d.companies.slice().sort(function (a, b) { return (Number(a.co) || 0) - (Number(b.co) || 0); });
-    var ncol = _AUDIT_COLS.length, wb = XLSX.utils.book_new();
-    cos.forEach(function (c) {
-      var accts = (_invRows || []).filter(function (r) { return (_coOf(r) || '') === c.co && (!per || String(r.PeriodEnds || '').slice(0, 10) === per); })
-        .sort(function (a, b) { return Math.abs(Number(b.OOB) || 0) - Math.abs(Number(a.OOB) || 0); });
-      var aoa = [];
-      aoa.push(['Perpetual Inventory Reconciliation']);
-      aoa.push(['Company: Co ' + c.co + (c.ccy ? '  ·  ' + c.ccy : '')]);
-      aoa.push(['Period ending: ' + per]);
-      aoa.push(['Prepared: ' + prepared]);
-      aoa.push([]);
-      var headIdx = aoa.length;
-      aoa.push(_AUDIT_COLS.map(function (x) { return x.label; }));
-      var t = [0, 0, 0, 0, 0, 0, 0, 0, 0];
-      accts.forEach(function (r) {
-        var nm = String(r.ObjectAccount || '').trim(); var sub = String(r.SubAccount || '').trim(); if (sub) nm += '.' + sub; if (!nm) nm = String(r.LongAccount || '').trim();
-        var v = [_auditNum(r.EndGL), _auditNum(r.Perpetual), _auditNum(r.BegVar), _auditNum(r.Variance), _auditNum(r.JEs), _auditNum(r.UnpostBatch), _auditNum(r.EndofDay), _auditNum(r.CardexVar), _auditNum(r.OOB)];
-        for (var i = 0; i < 9; i++) t[i] += v[i];
-        aoa.push([nm].concat(v));
+    var per = d.viewedPeriod || d.latestPeriod || '';
+    if (typeof toast === 'function') toast('Building the audit report…');
+    _ensureAuditDetail(per).then(function (detail) {
+      var descMap = _auditDescMap(detail);
+      return _auditAiSummaries(d.companies, per).then(function (aiMap) {
+        var cos = d.companies.slice().sort(function (a, b) { return (Number(a.co) || 0) - (Number(b.co) || 0); });
+        var wb = XLSX.utils.book_new();
+        cos.forEach(function (c) {
+          var ws = _buildAuditSheet(c, per, detail, descMap, aiMap[c.co] || '');
+          XLSX.utils.book_append_sheet(wb, ws, ('Co ' + c.co + (c.ccy ? ' ' + c.ccy : '')).slice(0, 31));
+        });
+        XLSX.writeFile(wb, 'PerpetualInventoryReconciliation_' + (per || 'period') + '.xlsx');
+        if (typeof toast === 'function') toast('Downloaded the audit report — ' + cos.length + ' ' + (cos.length === 1 ? 'company' : 'companies'));
       });
-      var totIdx = aoa.length;
-      aoa.push(['Total'].concat(t.map(_auditNum)));
-      var ws = XLSX.utils.aoa_to_sheet(aoa);
-      _styleAuditSheet(ws, _AUDIT_COLS, headIdx, totIdx, 4, ncol);
-      XLSX.utils.book_append_sheet(wb, ws, ('Co ' + c.co + (c.ccy ? ' ' + c.ccy : '')).slice(0, 31));
-    });
-    XLSX.writeFile(wb, 'PerpetualInventoryReconciliation_' + (per || 'period') + '.xlsx');
-    if (typeof toast === 'function') toast('Downloaded the audit report — ' + cos.length + ' ' + (cos.length === 1 ? 'company' : 'companies'));
+    }).catch(function (e) { if (window.console) console.error('audit report (excel) failed', e); if (typeof toast === 'function') toast('Could not build the audit report — the data service may be unavailable.'); });
+  }
+  // PDF twin — same data + sections as the Excel, one company per page-break,
+  // rendered via jsPDF + autoTable (navy header band; portrait like the V7 report).
+  function genAuditPdf() {
+    if (!(window.jspdf && window.jspdf.jsPDF)) { if (typeof toast === 'function') toast('PDF library still loading — try again in a moment'); return; }
+    var d = _acctData; if (!d || !d.companies.length) { if (typeof toast === 'function') toast('No reconciliation loaded yet'); return; }
+    var per = d.viewedPeriod || d.latestPeriod || '';
+    if (typeof toast === 'function') toast('Building the audit report…');
+    _ensureAuditDetail(per).then(function (detail) {
+      var descMap = _auditDescMap(detail);
+      return _auditAiSummaries(d.companies, per).then(function (aiMap) {
+        var cos = d.companies.slice().sort(function (a, b) { return (Number(a.co) || 0) - (Number(b.co) || 0); });
+        var jsPDF = window.jspdf.jsPDF;
+        var doc = new jsPDF({ orientation: 'p', unit: 'pt', format: 'letter' });
+        cos.forEach(function (c, i) { _buildAuditPdfSection(doc, c, per, detail, descMap, i === 0, aiMap[c.co] || ''); });
+        var pc = doc.internal.getNumberOfPages(), w = doc.internal.pageSize.getWidth(), h = doc.internal.pageSize.getHeight(), ts = '';
+        try { ts = new Date().toLocaleString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); } catch (_) {}
+        for (var i = 1; i <= pc; i++) { doc.setPage(i); doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(120, 120, 120); doc.text('Generated ' + ts, 36, h - 18); doc.text('Page ' + i + ' of ' + pc, w - 36, h - 18, { align: 'right' }); }
+        doc.save('PerpetualInventoryReconciliation_' + (per || 'period') + '.pdf');
+        if (typeof toast === 'function') toast('Downloaded the audit report (PDF) — ' + cos.length + ' ' + (cos.length === 1 ? 'company' : 'companies'));
+      });
+    }).catch(function (e) { if (window.console) console.error('audit report (pdf) failed', e); if (typeof toast === 'function') toast('Could not build the audit report — the data service may be unavailable.'); });
   }
   function _closeJeModal() { var m = $('jeModal'); if (m) m.hidden = true; }
   function _wireJeModal() {
@@ -4886,16 +5337,19 @@
     return { period: period || (rf && rf.period), currencies: wrap(rf && rf.currencies), companies: wrap(rf && rf.companies), objects: wrap(rf && rf.objects), businessUnits: wrap(rf && rf.businessUnits), subsidiaries: wrap(rf && rf.subsidiaries) };
   }
   function openPreview(component, co) {
-    // Carry forward + Transactions are the special renders (Chunk C) — until
-    // they're ported, bridge those to the rec page scoped to the company.
-    if (!_PV_COLS[component]) {
-      try { if (window.RRV8 && window.RRV8.setActiveScope) window.RRV8.setActiveScope({ activeCompanies: [co], period: _pvPeriod() }); } catch (_) {}
-      window.location.href = 'inventory-reconciliation.html'; return;
-    }
     var modal = $('pvModal'); if (!modal) return;
     _pvComp = component; _pvCo = co; _pvSort = null; _pvWirePreview();
-    var t = $('pvModalTitle'); if (t) t.textContent = _PV_META[component].label + ' — Co ' + co;
     modal.hidden = false;
+    // Carry forward isn't a drill-down — it IS the prior period's net
+    // out-of-balance. Point the accountant at the prior period instead.
+    if (component === 'carryForward') { _pvCarryForwardNote(co); return; }
+    // Transactions → account × Sales/Purchasing/Mfg/Inventory matrix, scoped to
+    // this company + period (ported from the rec page).
+    if (component === 'transactions') { _pvTransactions(co); return; }
+    // The 3 view-backed sources (manual entries / GL batches / end of day).
+    var exp = $('pvExportBtn'); if (exp) exp.hidden = false;
+    if (!_PV_COLS[component]) { var tt = $('pvModalTitle'); if (tt) tt.textContent = 'Detail — Co ' + co; _pvNote('No detail available for this source here.'); return; }
+    var t = $('pvModalTitle'); if (t) t.textContent = _PV_META[component].label + ' — Co ' + co;
     var per = _pvPeriod(), key = component + '|' + per;
     if (_pvCache[key]) { _pvRender(); return; }
     _pvNote('Loading…');
@@ -4952,6 +5406,7 @@
   }
   // Excel export of the drill-down — the auditor backup for this variance source.
   function pvExport() {
+    if (_pvComp === 'transactions') { _pvTxExport(); return; }
     if (!_pvComp || !_PV_COLS[_pvComp]) return;
     var cols = _PV_COLS[_pvComp], amt = _PV_META[_pvComp].amount, rows = _pvRows(), per = _pvPeriod(), label = _PV_META[_pvComp].label;
     var acols = cols.map(function (c) { return { label: c.label, num: c.kind === 'num' }; });
@@ -4966,6 +5421,130 @@
     });
     if (ok && typeof toast === 'function') toast('Exported ' + label + ' for Co ' + _pvCo);
   }
+
+  // ---- Carry forward: a pointer to the prior period, not a drill-down ------
+  // Carry forward into a period equals the previous period's net out-of-
+  // balance, so its composition IS that prior period's grid. Rather than
+  // duplicate the breakdown here, send the accountant there.
+  function _pvCarryForwardNote(co) {
+    var exp = $('pvExportBtn'); if (exp) exp.hidden = true;
+    var t = $('pvModalTitle'); if (t) t.textContent = 'Carry forward — Co ' + co;
+    var s = $('pvModalSub'); if (s) s.textContent = '';
+    var body = $('pvModalBody'); if (!body) return;
+    var prior = (_acctData && _acctData.priorPeriod) || '';
+    if (!prior) {
+      body.innerHTML = '<div class="pv-cf-note"><p>This is the earliest period in the loaded data, so carry forward is zero by definition &mdash; there is no prior period to open.</p></div>';
+      return;
+    }
+    var lbl = fmtPeriod(prior);
+    body.innerHTML = '<div class="pv-cf-note">'
+      + '<p>Carry forward is the prior period&rsquo;s net out-of-balance rolled into this one &mdash; it has no breakdown of its own here.</p>'
+      + '<p>To see what makes it up, view <strong>' + esc(lbl) + '</strong>. Its out-of-balance <em>is</em> this period&rsquo;s carry forward, split by source.</p>'
+      + '<button type="button" class="btn-navy" data-pv-viewprior="' + esc(prior) + '">View ' + esc(lbl) + '</button>'
+      + '</div>';
+  }
+
+  // ---- Transactions matrix (accountant drill-down) — ported from the rec
+  //      page. Account × Sales/Purchasing/Mfg/Inventory (Item Ledger vs GL
+  //      variance), scoped to the single company the drill was opened for.
+  //      /inventory/transactions takes BARE-STRING filter arrays, NOT the
+  //      {id,checked,show} wrapper the variance-component endpoints want.
+  var TX_TYPES = ['Sales', 'Purchasing', 'Manufacturing', 'Inventory'];
+  var TX_TYPE_LABEL = { Sales: 'Sales', Purchasing: 'Purchasing', Manufacturing: 'Mfg', Inventory: 'Inventory' };
+  var _txMatrix = null, _txKey = null;
+  // Mirrors inventory-transactions.html moduleOf(): OP / PV / OV → Purchasing;
+  // Type Sales / Mfg as tagged; everything else → Inventory.
+  function _txModuleOf(row) {
+    var ot = String(row.OT || '').trim().toUpperCase();
+    var dt = String(row.DT || '').trim().toUpperCase();
+    var type = String(row.Type || '').trim();
+    if (ot === 'OP' || dt === 'PV' || dt === 'OV' || dt === 'OP') return 'Purchasing';
+    if (type === 'Sales') return 'Sales';
+    if (type === 'Mfg' || type === 'Manufacturing') return 'Manufacturing';
+    return 'Inventory';
+  }
+  function _pvTransactions(co) {
+    var exp = $('pvExportBtn'); if (exp) exp.hidden = false;
+    var per = _pvPeriod();
+    var t = $('pvModalTitle'); if (t) t.textContent = 'Transactions — Co ' + co;
+    var key = 'transactions|' + co + '|' + per;
+    if (_txMatrix && _txKey === key) { _pvTxRender(); return; }
+    _txMatrix = null; _txKey = key;
+    _pvNote('Loading…');
+    rrFetch('inventory/status').then(function (status) {
+      var rf = (status && status.reconciliationFilter) || {};
+      var arr = function (x) { return Array.isArray(x) ? x : []; };
+      var body = {
+        take: 100000, skip: 0, page: 1, pageSize: 100000,
+        reconciliationFilter: {
+          currencies: arr(rf.currencies), companies: [String(co)],
+          businessUnits: arr(rf.businessUnits), objects: arr(rf.objects),
+          subsidiaries: arr(rf.subsidiaries), period: per
+        },
+        groupingType: 'TYPE',
+        exclusions: { types: [], orderTypes: [], subTypes: [], docTypes: [] },
+        cacheKey: null
+      };
+      return rrFetch('inventory/transactions', { method: 'POST', body: body });
+    }).then(function (resp) {
+      if (_txKey !== key) return;   // a later open superseded this fetch
+      var rows = (resp && resp.data) || [];
+      var byAcct = {}, order = [];
+      var colTotals = { Sales: 0, Purchasing: 0, Manufacturing: 0, Inventory: 0 }, grand = 0;
+      rows.forEach(function (r) {
+        var acct = String(r.LongAccount || '').trim(); if (!acct) return;
+        var mod = _txModuleOf(r), v = Number(r.Variance) || 0, m = byAcct[acct];
+        if (!m) { m = byAcct[acct] = { account: acct, Sales: 0, Purchasing: 0, Manufacturing: 0, Inventory: 0, total: 0 }; order.push(acct); }
+        m[mod] += v; m.total += v; colTotals[mod] += v; grand += v;
+      });
+      var accounts = order.map(function (a) { return byAcct[a]; }).sort(function (a, b) { return a.account.localeCompare(b.account); });
+      _txMatrix = { accounts: accounts, colTotals: colTotals, grand: grand };
+      if (_pvComp === 'transactions' && _txKey === key) _pvTxRender();
+    }).catch(function () {
+      if (_txKey !== key) return;
+      _txMatrix = { error: true, accounts: [], colTotals: { Sales: 0, Purchasing: 0, Manufacturing: 0, Inventory: 0 }, grand: 0 };
+      if (_pvComp === 'transactions') _pvTxRender();
+    });
+  }
+  function _pvTxRender() {
+    var body = $('pvModalBody'); if (!body || _pvComp !== 'transactions') return;
+    var per = _pvPeriod(), perLbl = fmtPeriod(per) || per, s = $('pvModalSub');
+    if (!_txMatrix) { _pvNote('Loading…'); return; }
+    if (_txMatrix.error) {
+      var exp = $('pvExportBtn'); if (exp) exp.hidden = true;
+      if (s) s.textContent = '';
+      body.innerHTML = '<div class="pv-note">Transaction variance by type needs the inventory/transactions endpoint, which isn’t available on this agent yet. The full breakdown is on the Transactions page in the Analyst view.</div>';
+      return;
+    }
+    var accts = _txMatrix.accounts, ct = _txMatrix.colTotals;
+    if (s) s.innerHTML = 'Item Ledger to GL variance by account and type &middot; <strong>' + esc(perLbl) + '</strong> &middot; '
+      + accts.length + ' ' + (accts.length === 1 ? 'account' : 'accounts') + ' &middot; net ' + esc(_pvNum(_txMatrix.grand));
+    if (!accts.length) { body.innerHTML = '<div class="pv-note">No transaction variance for Co ' + esc(_pvCo) + ' in ' + esc(perLbl) + '.</div>'; return; }
+    var cell = function (v) { return '<td class="is-num' + (v < 0 ? ' is-neg' : '') + '">' + (Math.abs(v) < 0.005 ? '&mdash;' : esc(_pvNum(v))) + '</td>'; };
+    var thead = '<tr><th>Account</th>' + TX_TYPES.map(function (ty) { return '<th class="is-num">' + esc(TX_TYPE_LABEL[ty]) + '</th>'; }).join('') + '<th class="is-num">Total</th></tr>';
+    var tb = accts.map(function (a) {
+      return '<tr><td class="is-mono">' + esc(a.account) + '</td>' + TX_TYPES.map(function (ty) { return cell(a[ty]); }).join('')
+        + '<td class="is-num" style="font-weight:700">' + esc(_pvNum(a.total)) + '</td></tr>';
+    }).join('');
+    var tf = '<tr><td style="font-weight:800">Total</td>' + TX_TYPES.map(function (ty) { return '<td class="is-num" style="font-weight:800">' + esc(_pvNum(ct[ty])) + '</td>'; }).join('')
+      + '<td class="is-num" style="font-weight:800">' + esc(_pvNum(_txMatrix.grand)) + '</td></tr>';
+    body.innerHTML = '<table class="pv-table"><thead>' + thead + '</thead><tbody>' + tb + '</tbody><tfoot>' + tf + '</tfoot></table>';
+  }
+  function _pvTxExport() {
+    if (!_txMatrix || _txMatrix.error || !_txMatrix.accounts.length) { if (typeof toast === 'function') toast('Nothing to export yet'); return; }
+    var per = _pvPeriod();
+    var acols = [{ label: 'Account' }].concat(TX_TYPES.map(function (ty) { return { label: TX_TYPE_LABEL[ty], num: true }; })).concat([{ label: 'Total', num: true }]);
+    var arows = _txMatrix.accounts.map(function (a) { return [a.account, a.Sales, a.Purchasing, a.Manufacturing, a.Inventory, a.total]; });
+    var ct = _txMatrix.colTotals;
+    var totalRow = ['Total', ct.Sales, ct.Purchasing, ct.Manufacturing, ct.Inventory, _txMatrix.grand];
+    var ok = buildAuditWorkbook({
+      sheetName: 'Transactions',
+      fileName: 'Transactions — Co ' + _pvCo + ' — ' + (per || 'period') + '.xlsx',
+      titleLines: ['Transactions — Item Ledger to GL variance by account and type', 'Company ' + _pvCo + ' · period ' + (per || '') + ' · ' + arows.length + ' accounts'],
+      columns: acols, rows: arows, totalRow: totalRow
+    });
+    if (ok && typeof toast === 'function') toast('Exported Transactions for Co ' + _pvCo);
+  }
   function _closePreview() { var m = $('pvModal'); if (m) m.hidden = true; _pvComp = null; }
   function _pvWirePreview() {
     if (_pvWired) return; _pvWired = true;
@@ -4974,6 +5553,17 @@
       if (!e.target || !e.target.closest) return;
       if (e.target.closest('[data-pv-close]')) { _closePreview(); return; }
       if (e.target.closest('#pvExportBtn')) { pvExport(); return; }
+      var vp = e.target.closest('[data-pv-viewprior]');
+      if (vp) {
+        var p = vp.getAttribute('data-pv-viewprior');
+        try { if (window.RRV8 && window.RRV8.setActiveScope) window.RRV8.setActiveScope({ period: p }); } catch (_) {}
+        _briefPeriodOverride = null;                                  // the selector wins, not a clicked bar
+        var pSel = $('periodSelect'); if (pSel) pSel.value = p;
+        if (typeof renderScopeBar === 'function') renderScopeBar();   // reflect the new active period in the picker
+        if (typeof renderAiBriefing === 'function') renderAiBriefing(); // repaints the accountant grid for the prior period
+        _closePreview();
+        return;
+      }
       var th = e.target.closest('th[data-pv-sort]');
       if (th && _pvComp) {
         var key = th.getAttribute('data-pv-sort');
@@ -5046,16 +5636,19 @@
         + '<button type="button" data-acct-nav="asof" data-co="' + esc(c.co) + '">Perpetual (As Of)</button>'
         + '</div>'
         + '</div>';
+      var coName = (_coNames && _coNames[String(c.co).trim()]) || '';
+      // Dim exact-zero balance cells so the real numbers carry the eye.
+      var cell = function (v) { var z = Math.abs(Number(v) || 0) < 0.005; return '<td' + (z ? ' class="acct-g-zero"' : '') + '>' + (hasCols ? esc(_ccyAmt(c.ccy, v)) : '') + '</td>'; };
       var coRow = '<tr class="acct-g-co">'
         + '<td class="acct-g-name">'
           + '<span class="acct-g-caret">&#9656;</span>'
           + '<span class="acct-g-dot ' + (broke ? 'rf-break' : 'rf-ok') + '" title="'
             + (broke ? 'Roll-forward break — needs re-roll / GL fix' : 'Rolls forward OK') + '"></span>'
-          + 'Co ' + esc(c.co) + '</td>'
-        + '<td>' + (hasCols ? esc(_ccyAmt(c.ccy, tot.gl)) : '') + '</td>'
-        + '<td>' + (hasCols ? esc(_ccyAmt(c.ccy, tot.pp)) : '') + '</td>'
-        + '<td>' + (hasCols ? esc(_ccyAmt(c.ccy, tot.un)) : '') + '</td>'
-        + '<td>' + (hasCols ? esc(_ccyAmt(c.ccy, tot.eod)) : '') + '</td>'
+          + 'Co ' + esc(c.co) + (coName ? '<span class="acct-g-coname">' + esc(coName) + '</span>' : '') + '</td>'
+        + cell(tot.gl)
+        + cell(tot.pp)
+        + cell(tot.un)
+        + cell(tot.eod)
         + '<td class="acct-g-out' + (out ? '' : ' is-clear') + '">'
           + (out ? esc(_ccyAmt(c.ccy, c.oob)) : 'In balance') + '</td>'
         + '</tr>';
@@ -5206,7 +5799,7 @@
   // switch passes force=true to refresh regardless.
   var _lastAdminBriefSig = null;
   function renderAdminBriefing(force) {
-    var brief = $('haiBrief'); if (!brief) return;
+    var brief = _activeBriefEl(); if (!brief) return;
     var tasks = _adminBriefTasks();
     var sig = tasks.map(function (t) { return t.title + ':' + t.level; }).join('|');
     if (!force && sig === _lastAdminBriefSig) return;   // nothing changed — don't re-fire the AI
@@ -5383,6 +5976,9 @@
     _purgeInfo = null;          // data-from + size (feeds the Scope strip) + the purge modal
     _svcMem = null;             // service-health memory snapshot (per Services instance)
     _rcdxPreview = null;        // cached cardex eod-check — clear so a mid-switch repaint can't use the prior DB's
+    _pvCache = {}; _txMatrix = null; _txKey = null;   // variance-source + transactions drill-down caches (per-DB scoped)
+    _auditDetail = null; _auditDetailKey = null;      // audit-report detail cache (per-DB scoped)
+    _coNames = null; _coNamesTried = false;           // company display names (per-DB scoped)
     _acksByKind = null;         // server reminder acks — re-fetched per DB by loadAcks() (DB-scoped agent)
     _dbFacts = null; _dbRefresh = null;   // install-facts strip (size / SQL build / data currency)
     _jobStatus = ''; _refreshWhen = ''; _period = ''; _periods = [];
