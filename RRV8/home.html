@@ -315,17 +315,17 @@
   .acct-co-name { font-size: 13.5px; font-weight: 700; color: var(--navy); }
   .acct-co-amt { margin-left: auto; font-size: 13.5px; font-weight: 700; color: var(--orange); }
   .acct-co-status { margin-left: auto; font-size: 12px; font-weight: 700; color: var(--green); }
-  /* Variance correction cards — the 3 JE-owning components. */
-  .acct-variance { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-  @media (max-width: 760px) { .acct-variance { grid-template-columns: 1fr; } }
-  .acct-var-card { display: flex; flex-direction: column; background: var(--bg-card); border: 1px solid var(--rule); border-radius: 12px; padding: 15px 16px; box-shadow: var(--shadow-sm); text-decoration: none; transition: border-color .12s, box-shadow .12s; }
-  .acct-var-card:hover { border-color: var(--blue); box-shadow: var(--shadow-md); }
-  .acct-var-card.is-material { border-color: #f0d2a8; box-shadow: inset 4px 0 0 var(--orange), var(--shadow-sm); }
-  .acct-var-name { font-size: 13px; font-weight: 800; color: var(--navy); }
-  .acct-var-amt { font-size: 21px; font-weight: 800; margin: 8px 0 4px; color: var(--text-muted); }
-  .acct-var-card.is-material .acct-var-amt { color: var(--navy); }
-  .acct-var-blurb { font-size: 12px; line-height: 1.4; color: var(--text-soft); flex: 1 1 auto; }
-  .acct-var-cta { margin-top: 10px; font-size: 12px; font-weight: 700; color: var(--blue); }
+  /* Primary path into the reconciliation page — the accountant's work surface.
+     Solid navy (gradient stays reserved for the AI faces). Replaces the old
+     3 variance cards, which duplicated the rec page and buried the path. */
+  .acct-open { display: flex; align-items: center; gap: 16px; background: var(--navy); border: 1px solid var(--navy);
+    border-radius: 12px; padding: 16px 20px; text-decoration: none; box-shadow: var(--shadow-sm);
+    transition: transform .12s, box-shadow .12s, background .12s; }
+  .acct-open:hover { background: #16223c; box-shadow: var(--shadow-md); transform: translateY(-1px); }
+  .acct-open-main { display: flex; flex-direction: column; gap: 3px; flex: 1 1 auto; }
+  .acct-open-title { font-size: 16px; font-weight: 800; color: #fff; }
+  .acct-open-sub { font-size: 12.5px; line-height: 1.4; color: rgba(255,255,255,0.74); }
+  .acct-open-arrow { font-size: 22px; font-weight: 800; color: #fff; flex-shrink: 0; }
   /* AI ask — the data-question moment for the accountant. White card, gradient
      sparkle emblem (the rail stays the one dark AI face). */
   .acct-ask { background: var(--bg-card); border: 1px solid var(--rule); border-radius: 12px; padding: 16px 18px; box-shadow: var(--shadow-sm); }
@@ -3937,6 +3937,17 @@
       if (String(r.GLOK).trim().toLowerCase() === 'no' || String(r.VarOK).trim().toLowerCase() === 'no') b.breaks++;
     });
     var cos = order.map(function (k) { return byCo[k]; });
+    // Per-company NEXT-period net OOB — lets the briefing read whether a historical
+    // out-of-balance was cleared the following period (net ~0 = resolved).
+    if (nextPeriod) {
+      var nextByCo = {};
+      coScoped.forEach(function (r) {
+        if (String(r.PeriodEnds || '').slice(0, 10) === nextPeriod) {
+          var co = _coOf(r) || '?'; nextByCo[co] = (nextByCo[co] || 0) + (Number(r.OOB) || 0);
+        }
+      });
+      cos.forEach(function (c) { c.nextOob = (c.co in nextByCo) ? nextByCo[c.co] : null; });
+    }
     var ccy = {}; cos.forEach(function (c) { if (c.ccy) ccy[c.ccy] = 1; });
     return { companies: cos, currencies: Object.keys(ccy), periodScoped: perScoped.length > 0, priorPeriod: priorPeriod, latestPeriod: latestPeriod, viewedPeriod: perKey, isHistorical: isHistorical, nextPeriod: nextPeriod };
   }
@@ -3964,9 +3975,9 @@
         .map(function (k) { return { name: k.name, role: k.role, v: c.comp[k.name] }; })
         .filter(function (x) { return Math.abs(x.v) >= 1; })
         .sort(function (a, b) { return Math.abs(b.v) - Math.abs(a.v); });
-      if (Math.abs(c.oob) < 1 || !comps.length) { recon.push({ reconciled: true, co: c.co, ccy: c.ccy, idx: i, oob: c.oob, mag: 0 }); return; }
+      if (Math.abs(c.oob) < 1 || !comps.length) { recon.push({ reconciled: true, co: c.co, ccy: c.ccy, idx: i, oob: c.oob, mag: 0, nextOob: c.nextOob }); return; }
       var driver = comps[0];   // the company item is RANKED on + OWNED by its NET oob, attributed to the largest component
-      items.push({ tier: TIER[driver.role], role: driver.role, mag: Math.abs(c.oob), oob: c.oob, co: c.co, ccy: c.ccy, idx: i, driver: driver, comps: comps });
+      items.push({ tier: TIER[driver.role], role: driver.role, mag: Math.abs(c.oob), oob: c.oob, co: c.co, ccy: c.ccy, idx: i, driver: driver, comps: comps, nextOob: c.nextOob });
     });
     // Sorted/grouped by COMPANY NUMBER ascending (Co 00010 before Co 00050 …),
     // material and in-balance together — the panel reads as a per-company status
@@ -4176,7 +4187,9 @@
       if (!it.co) return '[Admin] ' + it.text;
       if (it.reconciled) return '[OK] ' + coLabel(it) + ' (' + (it.ccy || '?') + '): reconciled — net ~0, in balance';
       var comp = it.comps.map(function (x) { return x.name + ' ' + _money(x.v); }).join(', ');
-      return '[' + it.role + '] ' + coLabel(it) + ' (' + (it.ccy || '?') + '): NET out-of-balance ' + _money(it.oob) + ', composed of ' + comp;
+      var resolvedNext = d.isHistorical && it.nextOob != null && Math.abs(it.nextOob) < 1;
+      return '[' + it.role + '] ' + coLabel(it) + ' (' + (it.ccy || '?') + '): NET out-of-balance ' + _money(it.oob) + ', composed of ' + comp
+        + (resolvedNext ? ' [RESOLVED next period — the following period reconciled to ~0]' : '');
     });
     // For any material carry forward, hand the AI that company's recent history
     // so it can trace the origin (carry forward into a period = prior period's net).
@@ -4197,7 +4210,7 @@
       + (trailBlocks.length ? '\nHistory — use it to TRACE each material carry forward back to the period and entry that created it (often a manual journal entry that was never offset):\n' + trailBlocks.join('\n') + '\n' : '')
       + (d.currencies.length > 1 ? '\nDifferent currencies are present — never combine them; keep each company separate.\n' : '')
       + '\nTONE: calm and factual, never urgent or alarmist. A carry forward does NOT need immediate action — it can be cleared now OR folded into the coming period-end journal entry; say so plainly.\n'
-      + (historical ? 'HISTORICAL PERIOD: this period is older than the two most recent periods — it is TOO LATE to act. DESCRIBE what happened (the cause, in past tense) and who owned it; do NOT recommend reversing, posting, offsetting, or any action, and never say "this period" about a fix.\n' : '')
+      + (historical ? 'HISTORICAL PERIOD: this period is older than the two most recent periods — it is TOO LATE to act. DESCRIBE what happened (the cause, in past tense) and who owned it; do NOT recommend reversing, posting, offsetting, or any action, and never say "this period" about a fix. If a line is tagged [RESOLVED next period], add that the out-of-balance was CLEARED the following period (e.g. "…mostly manual entries, cleared the next period") — this reassures the reader it did not persist.\n' : '')
       + 'ROUND every amount to a readable figure — e.g. "£18K", "$3.4K" — never cents or exact change.\n'
       + 'Refer to each company by its number ONLY (e.g. "Co 00010"); do NOT print the currency code (USD/GBP) — the £/$ symbol on the amount already conveys the currency.\n'
       + 'FORMAT every line as a header + colon + detail. For a company with an owner: "<Role> — Co <number>: <detail>" (e.g. "Accountant — Co 00010: …") — the role-first header makes WHO IS RESPONSIBLE obvious, so do NOT repeat the role at the end of the line. For an in-balance company (marked [OK]): "Co <number>: in balance" (no role, no action).\n'
@@ -4258,7 +4271,7 @@
     // Context changed — clear any prior answer so it can't read as current.
     if (!_acctAsking) { var ans = $('acctAskAnswer'); if (ans) { ans.hidden = true; ans.textContent = ''; } }
     renderAcctSnapshot(d);
-    renderAcctVariance(d);
+    renderAcctOpen();
     setupAcctAsk();
   }
 
@@ -4289,25 +4302,20 @@
       + '<div class="acct-co-list">' + rows + '</div>';
   }
 
-  // The 3 accountant-owned reconciliation components → the page where each is
-  // worked. (Carry forward / Transactions / Manual entries are the JE-owning
-  // components; Cardex / Unposted GL / End of Day are the analyst's.)
-  var _ACCT_FIX = [
-    { name: 'Carry forward',  href: 'inventory-reconciliation.html', blurb: 'Unresolved balance rolled in from the prior period.' },
-    { name: 'Transactions',   href: 'inventory-transactions.html',        blurb: 'Inventory movement not yet matched in the GL.' },
-    { name: 'Manual entries', href: 'inventory-reconciliation.html',      blurb: 'GL journal entries with no inventory offset.' }
-  ];
-  function renderAcctVariance(d) {
+  // Close-status strip — where the viewed period sits in the close cycle.
+  // Adds cadence/audit context (the article's "periodic reconciliation" idea)
+  // without re-stating the snapshot's per-company balances. Period-scoped only.
+  // Primary path into the reconciliation page — the accountant's work surface.
+  // Replaces the old 3 variance cards (which duplicated the rec page and buried
+  // the path); the breakdown by component lives on the rec page itself.
+  function renderAcctOpen() {
     var el = $('acctVariance'); if (!el) return;
-    el.innerHTML = _ACCT_FIX.map(function (fx) {
-      var m = _sumByCcy(d.companies, function (c) { return c.comp[fx.name] || 0; });
-      var material = Object.keys(m).some(function (k) { return Math.abs(m[k]) >= 1; });
-      return '<a class="acct-var-card' + (material ? ' is-material' : '') + '" href="' + fx.href + '">'
-        + '<span class="acct-var-name">' + esc(fx.name) + '</span>'
-        + '<span class="acct-var-amt">' + (material ? esc(_fmtCcyMap(m)) : '&mdash;') + '</span>'
-        + '<span class="acct-var-blurb">' + esc(fx.blurb) + '</span>'
-        + '<span class="acct-var-cta">' + (material ? 'Review &rarr;' : 'Open &rarr;') + '</span></a>';
-    }).join('');
+    el.innerHTML =
+      '<a class="acct-open" href="inventory-reconciliation.html">'
+      + '<span class="acct-open-main">'
+      + '<span class="acct-open-title">Open Reconciliation</span>'
+      + '<span class="acct-open-sub">Work carry forward, transactions, and manual entries by account — with RapidReconciler AI alongside.</span>'
+      + '</span><span class="acct-open-arrow" aria-hidden="true">→</span></a>';
   }
 
   // Per-company facts for the ask, honoring the data-exposure tier (scrub →

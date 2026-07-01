@@ -41,12 +41,12 @@
 <link href="fonts/fonts.css" rel="stylesheet">
 <link href="sidebar.css" rel="stylesheet">
 <link href="period-bars.css" rel="stylesheet">
-<!-- SheetJS for client-side .xlsx export (Audit Report). The
-     "community" build is enough for our needs (no styling, no
-     formulas — just typed cells + multi-sheet workbooks).
-     Vendored locally so demo mode runs without an internet
-     connection. Source: cdn.sheetjs.com/xlsx-0.20.3. -->
-<script src="vendor/xlsx.full.min.js" defer></script>
+<!-- xlsx-js-style: SheetJS fork with cell styling (fills/fonts/borders),
+     so every .xlsx export uses the audit-quality template (navy header
+     band, formatted numbers). Drop-in replacement for the community build
+     — exposes the same window.XLSX + utils. Same vendored file the Account
+     Roll Forward audit export uses. -->
+<script src="vendor/xlsx-js-style.min.js" defer></script>
 <!-- jsPDF + autoTable for client-side PDF export of the Audit Report.
      autoTable handles per-section tables, automatic page breaks, and
      repeating headers — same data shape we feed into the Excel.
@@ -1099,6 +1099,10 @@
   .ai-ask-btn:disabled { opacity: .5; cursor: default; }
   .ai-ask-answer { margin-top: 11px; font-size: 13px; line-height: 1.5; color: var(--text); white-space: pre-wrap; overflow-y: auto; }
   .ai-ask-answer[hidden] { display: none; }
+  /* Grounded per-card help, rendered into the answer area. */
+  .ai-help-eyebrow { display: block; font-size: 10.5px; font-weight: 800; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--blue); margin-bottom: 5px; }
+  .ai-help-text { display: block; }
   /* Suggested-question chips. */
   .ai-ask-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
   .ai-ask-chip { border: 1px solid var(--rule-strong); background: var(--bg-card); border-radius: 100px;
@@ -1369,6 +1373,10 @@
   /* Green cards drop the "No action required" badge — the green dot + tint
      already say it. They show their amount (0.00) like every other card. */
   .variance-card.is-zero .vc-zero-state { display: none; }
+  /* Offset pair (Transactions ↔ Journal Entries net to within materiality):
+     show the reason chip so a large green number reads as intentional, not a
+     mistake. Comes after the .is-zero rule above so it wins (same specificity). */
+  .variance-card.is-offset .vc-zero-state { display: inline-flex; }
   /* Action + owner — the mirror of the zero-state badge. Whenever a card
      carries a variance it says what to do and who owns it, so the grid
      reads symmetrically: an action to take, or "No action required."
@@ -1496,6 +1504,21 @@
     color: var(--blue); white-space: nowrap; display: inline-flex; align-items: center; gap: 4px;
   }
   .vc-open:hover { text-decoration: underline; }
+
+  /* Per-card "?" — grounded KB explainer. Routes a doc-search summary into
+     the Ask RapidReconciler AI panel. Flex space-between in .vc-head pushes
+     it to the card's top-right. Click is stopped from card navigation. */
+  .vc-help {
+    flex: 0 0 auto; width: 16px; height: 16px; padding: 0; margin-top: -1px;
+    border: 1px solid var(--rule-strong); border-radius: 50%;
+    background: var(--bg-card); color: var(--text-soft);
+    font-family: inherit; font-weight: 800; font-size: 10px; line-height: 1;
+    cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+    transition: color .12s, border-color .12s, background .12s;
+  }
+  .vc-help:hover, .vc-help:focus-visible {
+    color: #fff; border-color: var(--blue); background: var(--blue); outline: none;
+  }
 
   /* Total — full-width band below the variance grid. Soft light
      palette + thin orange accent stripe so it echoes the hero card
@@ -3382,8 +3405,9 @@
           <!-- Suggested questions — click to ask. -->
           <div class="ai-ask-chips" id="js-ai-ask-chips">
             <button class="ai-ask-chip" type="button">What&rsquo;s driving the variance?</button>
+            <button class="ai-ask-chip" type="button">Explain the trend</button>
             <button class="ai-ask-chip" type="button">Which account is worst?</button>
-            <button class="ai-ask-chip" type="button">Is this safe to post?</button>
+            <button class="ai-ask-chip" type="button" id="js-chip-post">Is this safe to post?</button>
           </div>
           <!-- AI read of this period (auto-loaded) / answer to a question. -->
           <div class="ai-ask-answer" id="js-ai-ask-answer" hidden></div>
@@ -3459,6 +3483,7 @@
           <div class="variance-card variance-step" data-component="carryForward" tabindex="0" role="button" aria-label="Carry forward — open preview">
             <div class="vc-head">
               <span class="vc-label">Carry forward</span>
+              <button class="vc-help" type="button" aria-label="Explain Carry forward with RapidReconciler AI" title="Explain this with AI">?</button>
             </div>
             <div class="vc-sub">Prior-period unreconciled balance</div>
             <div class="vc-amount"><span class="variance-step-value">&nbsp;</span></div>
@@ -3466,9 +3491,10 @@
             <div class="vc-foot"><button class="vc-open" type="button">Details &rarr;</button></div>
           </div>
 
-          <div class="variance-card variance-step" data-component="transactions" data-card-action="navigate" tabindex="0" role="button" aria-label="Transactions — open the Transactions page">
+          <div class="variance-card variance-step" data-component="transactions" tabindex="0" role="button" aria-label="Transactions — open preview">
             <div class="vc-head">
               <span class="vc-label">Transactions</span>
+              <button class="vc-help" type="button" aria-label="Explain Transactions with RapidReconciler AI" title="Explain this with AI">?</button>
             </div>
             <div class="vc-sub">Item Ledger to General Ledger discrepancies</div>
             <div class="vc-amount"><span class="variance-step-value">&nbsp;</span></div>
@@ -3479,6 +3505,7 @@
           <div class="variance-card variance-step" data-component="manualJournalEntries" tabindex="0" role="button" aria-label="Journal Entries — open preview">
             <div class="vc-head">
               <span class="vc-label">Journal Entries</span>
+              <button class="vc-help" type="button" aria-label="Explain Journal Entries with RapidReconciler AI" title="Explain this with AI">?</button>
             </div>
             <div class="vc-sub">Manual journal entries posted to inventory accounts</div>
             <div class="vc-amount"><span class="variance-step-value">&nbsp;</span></div>
@@ -3495,6 +3522,7 @@
           <div class="variance-card variance-step" data-component="glBatches" tabindex="0" role="button" aria-label="GL batches — open preview">
             <div class="vc-head">
               <span class="vc-label">GL batches</span>
+              <button class="vc-help" type="button" aria-label="Explain GL batches with RapidReconciler AI" title="Explain this with AI">?</button>
             </div>
             <div class="vc-sub">Un-posted GL batches</div>
             <div class="vc-amount"><span class="variance-step-value">&nbsp;</span></div>
@@ -3502,11 +3530,12 @@
             <div class="vc-foot"><button class="vc-open" type="button">Details &rarr;</button></div>
           </div>
 
-          <div class="variance-card variance-step" data-component="endOfDay" tabindex="0" role="button" aria-label="Orders — open preview">
+          <div class="variance-card variance-step" data-component="endOfDay" tabindex="0" role="button" aria-label="End of Day — open preview">
             <div class="vc-head">
-              <span class="vc-label">Orders</span>
+              <span class="vc-label">End of Day</span>
+              <button class="vc-help" type="button" aria-label="Explain End of Day with RapidReconciler AI" title="Explain this with AI">?</button>
             </div>
-            <div class="vc-sub">SO/WO waiting for end of day</div>
+            <div class="vc-sub">Sales/work orders not yet posted to the GL</div>
             <div class="vc-amount"><span class="variance-step-value">&nbsp;</span></div>
             <div class="vc-zero-state">No action required</div>
             <div class="vc-foot"><button class="vc-open" type="button">Details &rarr;</button></div>
@@ -3515,6 +3544,7 @@
           <div class="variance-card variance-step" data-component="cardex" tabindex="0" role="button" aria-label="Cardex — open preview">
             <div class="vc-head">
               <span class="vc-label">Cardex</span>
+              <button class="vc-help" type="button" aria-label="Explain Cardex with RapidReconciler AI" title="Explain this with AI">?</button>
             </div>
             <div class="vc-sub">Summarized item ledger to item balance discrepancies</div>
             <div class="vc-amount"><span class="variance-step-value">&nbsp;</span></div>
@@ -3550,7 +3580,7 @@
         <p class="help-runbook-lede">Closing this period is your job. Start by confirming the routine processing is done, then clear what's left. Every source should tie out to zero; the breakdown cards flag the ones that still need attention.</p>
         <ul class="help-route">
           <li><span class="hr-src">GL batches</span><span class="hr-do">Verify every GL batch has posted — this should be zero. If any remain, have accounting ops post them, then re-check.</span><span class="hr-who">You</span></li>
-          <li><span class="hr-src">Orders</span><span class="hr-do">Verify all orders have been processed and end of day has run — should be zero. If not, have ops / IT complete it, then re-check.</span><span class="hr-who">You</span></li>
+          <li><span class="hr-src">End of Day</span><span class="hr-do">Verify all orders have been processed and end of day has run — should be zero. If not, have ops / IT complete it, then re-check.</span><span class="hr-who">You</span></li>
           <li><span class="hr-src">Carry forward</span><span class="hr-do">Book a journal entry to clear any prior-period residual.</span><span class="hr-who">You</span></li>
           <li><span class="hr-src">Transactions</span><span class="hr-do">Review on the Transactions page, then book a journal entry for the variance.</span><span class="hr-who">You</span></li>
           <li><span class="hr-src">Cardex</span><span class="hr-do">The item roll-forward didn't tie — hand to Tech / IT to correct, then re-check.</span><span class="hr-who">Tech / IT</span></li>
@@ -4512,6 +4542,27 @@
   // Walks the variance components in display order (matching the
   // accounting math), writes the per-row amount + running balance,
   // mutes zero rows, and sets the bottom-bar total. Order matches
+  // Materiality = a percent of the period's GL balance, so it scales with
+  // company size. A residual at/below it reads green — "close enough," not an
+  // action — and it's the tolerance for the Transactions↔Journal-Entries offset.
+  // A small absolute floor keeps a few cents of rounding green even when the GL
+  // balance is ~0. Percent tunable per analyst via localStorage.
+  const RECON_MATERIALITY_PCT_DEFAULT = 0.0001;   // 0.01% of GL balance
+  const RECON_MATERIALITY_ABS_FLOOR   = 1;        // dollars
+  function reconMaterialityPct() {
+    try {
+      const r = localStorage.getItem('rrv8.recon.materiality.pct');
+      if (r !== null) { const n = Number(r); if (Number.isFinite(n) && n >= 0) return n; }
+    } catch (_) {}
+    return RECON_MATERIALITY_PCT_DEFAULT;
+  }
+  function reconMateriality(view) {
+    const v = view || _lastReconView;
+    let gl = 0;
+    if (v && v.valuation) { const n = Number(v.valuation.glBalance); if (Number.isFinite(n)) gl = Math.abs(n); }
+    return Math.max(RECON_MATERIALITY_ABS_FLOOR, reconMaterialityPct() * gl);
+  }
+
   // VARIANCE_KEYS minus the trailing unreconciledVariance total.
   const VARIANCE_TABLE_KEYS = ['carryForward', 'glBatches', 'endOfDay', 'transactions', 'cardex', 'manualJournalEntries'];
   function renderVarianceTable(view) {
@@ -4521,28 +4572,47 @@
     const broken = !!(currentData && currentData.validation && currentData.validation.color === 'danger');
     const RANK = { green: 0, amber: 1, red: 2 };
     let worst = 'green';
+    // Materiality + the offset rule span cards, so read every component first.
+    const valOf = k => { const raw = vc[k]; return (raw && typeof raw === 'object') ? (Number(raw.value) || 0) : (Number(raw) || 0); };
+    const M = reconMateriality(view);
+    // Perfect process: the JE-owned financial-adjustment sources — carry forward,
+    // transactions, manual entries — offset one another. The classic case is a
+    // prior-period carry-forward corrected by THIS period's transactions + a
+    // journal entry (e.g. a November break cleared in December). When the three
+    // net to within materiality, the adjustment is complete: all three read green
+    // even when individual cells are large. Requires at least one of the three to
+    // be material (three ~0 cells are just plain green, not an "offset").
+    // Operations sources (GL batches, end of day, cardex) are resolved at the
+    // source, not by netting, so they're excluded from the group.
+    const FA_KEYS = ['carryForward', 'transactions', 'manualJournalEntries'];
+    const faNet = FA_KEYS.reduce((s, k) => s + valOf(k), 0);
+    const faOffset = Math.abs(faNet) < M && FA_KEYS.some(k => Math.abs(valOf(k)) >= M);
     VARIANCE_TABLE_KEYS.forEach(key => {
       const card = document.querySelector('.variance-card[data-component="' + key + '"]');
       if (!card) return;
-      const raw = vc[key];
-      const value = (raw && typeof raw === 'object') ? raw.value : (raw || 0);
-      const isZero = Math.abs(value) < 0.005;
+      const value = valOf(key);
+      const immaterial = Math.abs(value) < M;
+      const isOffset = faOffset && FA_KEYS.indexOf(key) !== -1 && !immaterial;
+      const cleared = immaterial || isOffset;   // reads green
 
       const valEl = card.querySelector('.variance-step-value');
-      if (valEl) {
-        valEl.textContent = fmtVariance(value);
-      }
-      // Toggle the amount's red-on-negative + card-level state classes
+      if (valEl) valEl.textContent = fmtVariance(value);
+      // A cleared card never reads red, even when its raw value is negative.
       const amount = card.querySelector('.vc-amount');
-      if (amount) amount.classList.toggle('is-negative', value < 0);
-      card.classList.toggle('is-zero', isZero);
-      card.classList.toggle('is-negative', value < 0);
+      if (amount) amount.classList.toggle('is-negative', value < 0 && !cleared);
+      card.classList.toggle('is-zero', cleared);
+      card.classList.toggle('is-negative', value < 0 && !cleared);
+      card.classList.toggle('is-offset', isOffset);
+      // Offset cards explain WHY a large number is green; immaterial/zero cards
+      // just show the amount + green dot (no badge).
+      const badge = card.querySelector('.vc-zero-state');
+      if (badge) badge.textContent = isOffset ? 'Nets to balanced' : 'No action required';
       // Every card opens (green sources can still carry page actions).
       card.setAttribute('aria-disabled', 'false');
-      // Per-source status (drives the dot + amber tint + the band floor):
-      // red = roll-forward break (carry-forward only), green = at/within zero
-      // (no action), amber = non-zero action required.
-      const status = (key === 'carryForward' && broken) ? 'red' : (isZero ? 'green' : 'amber');
+      // Per-source status (drives the dot + tint + the band floor):
+      // red = roll-forward break (carry-forward only), green = cleared
+      // (immaterial or offset), amber = action required.
+      const status = (key === 'carryForward' && broken) ? 'red' : (cleared ? 'green' : 'amber');
       card.setAttribute('data-status', status);
       if (RANK[status] > RANK[worst]) worst = status;
       // Status dot lives inside the label (injected once).
@@ -4829,19 +4899,74 @@
       body: JSON.stringify({ prompt: prompt })
     }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
   }
+  // The viewed period is CLOSED/historical when it isn't the latest period in
+  // the snapshot — it has already been posted, so posting/closing questions no
+  // longer apply (only describe what happened).
+  function _recIsHistorical() {
+    try {
+      const periods = (_periodBarsSnapshotCache || []).map(r => r.period).filter(Boolean).sort();
+      const latest = periods.length ? periods[periods.length - 1] : null;
+      return !!(currentPeriod && latest && currentPeriod < latest);
+    } catch (_) { return false; }
+  }
   // The live figures the AI may use — total OOB + the six variance sources.
+  // Carries the materiality + offset reading so the AI's "where to look" agrees
+  // with the cards (a card that reads green must not be called a problem).
   function _recAiFacts() {
     const v = (_lastReconView && _lastReconView.variance) || {};
-    return [
+    const M = reconMateriality(_lastReconView);
+    const pctLbl = (reconMaterialityPct() * 100).toFixed(3).replace(/\.?0+$/, '') + '%';
+    const cf = _vnum(v.carryForward), tx = _vnum(v.transactions), je = _vnum(v.manualJournalEntries), oob = _vnum(v.unreconciledVariance);
+    const faNet = cf + tx + je;
+    const facts = [
       'Period: ' + (currentPeriod || '?') + '.',
-      'Total out of balance: ' + fmtVariance(_vnum(v.unreconciledVariance)) + '.',
+      'Total out of balance: ' + fmtVariance(oob) + '.',
       'Variance by source: carry forward ' + fmtVariance(_vnum(v.carryForward))
-        + ', transactions ' + fmtVariance(_vnum(v.transactions))
-        + ', manual entries ' + fmtVariance(_vnum(v.manualJournalEntries))
+        + ', transactions ' + fmtVariance(tx)
+        + ', manual entries ' + fmtVariance(je)
         + ', cardex ' + fmtVariance(_vnum(v.cardex))
         + ', GL batches ' + fmtVariance(_vnum(v.glBatches))
-        + ', end of day ' + fmtVariance(_vnum(v.endOfDay)) + '.'
+        + ', end of day ' + fmtVariance(_vnum(v.endOfDay)) + '.',
+      'Materiality threshold: ' + fmtMoney(M) + ' (' + pctLbl + ' of GL balance) — any source at or below this is immaterial and counts as cleared (no action).'
     ];
+    if (_recIsHistorical()) {
+      facts.push('This period (' + (PERIOD_LABELS[currentPeriod] || currentPeriod) + ') is CLOSED and historical — it has already been posted. It is NOT the open period. Any question about whether it is "safe to post" or "safe to close" does not apply: the period was already posted; say so rather than judging whether to post it.');
+    }
+    if (Math.abs(faNet) < M && (Math.abs(cf) >= M || Math.abs(tx) >= M || Math.abs(je) >= M)) {
+      facts.push('The financial-adjustment sources (carry forward, transactions, manual entries) net to ' + fmtVariance(faNet)
+        + ' — within materiality. They offset one another (e.g. a prior-period carry-forward break corrected by this period\'s transactions and journal entry); the adjustment is complete. Treat all three as cleared, not problems.');
+    }
+    if (Math.abs(oob) < M) {
+      facts.push('The net out of balance is within materiality — the reconciliation is effectively balanced; no action needed.');
+    }
+    // Period trend (the "Out of Bal by Period" chart) — without this the AI can't
+    // explain a spike/dip. Compact OOB-by-period series + the biggest swing and
+    // its dominant source, read from the same snapshot the chart renders.
+    const snap = (_periodBarsSnapshotCache || []).slice()
+      .sort((a, b) => String(a.period).localeCompare(String(b.period)));
+    if (snap.length) {
+      const lbl = p => PERIOD_LABELS[p] || p;
+      const oobOf = r => (r.variance && r.variance.unreconciledVariance != null)
+        ? _vnum(r.variance.unreconciledVariance)
+        : ((Number(r.glBalance) || 0) - (Number(r.perpetualBalance) || 0));
+      const series = snap.map(r => lbl(r.period) + ' ' + fmtVariance(oobOf(r)));
+      facts.push('Out of balance by period (the trend chart, oldest to newest): ' + series.join('; ') + '.');
+      let spike = null;
+      snap.forEach(r => { if (!spike || Math.abs(oobOf(r)) > Math.abs(oobOf(spike))) spike = r; });
+      if (spike && Math.abs(oobOf(spike)) >= M) {
+        const sv = spike.variance || {};
+        const COMP = [
+          ['carry forward', _vnum(sv.carryForward)], ['transactions', _vnum(sv.transactions)],
+          ['manual entries', _vnum(sv.manualJournalEntries)], ['cardex', _vnum(sv.cardex)],
+          ['GL batches', _vnum(sv.glBatches)], ['end of day', _vnum(sv.endOfDay)]
+        ];
+        let top = COMP[0];
+        COMP.forEach(c => { if (Math.abs(c[1]) > Math.abs(top[1])) top = c; });
+        facts.push('The largest swing in the trend is ' + lbl(spike.period) + ' at ' + fmtVariance(oobOf(spike))
+          + (Math.abs(top[1]) >= M ? (', driven mostly by ' + top[0] + ' (' + fmtVariance(top[1]) + ')') : '') + '.');
+      }
+    }
+    return facts;
   }
   function askRecAi() {
     if (_recAsking) return;
@@ -4850,9 +4975,14 @@
     const ans   = document.getElementById('js-ai-ask-answer');
     const q = (input && input.value || '').trim();
     if (!q || typeof rrFetch !== 'function') return;
+    const _hist = _recIsHistorical();
+    const _perLbl = PERIOD_LABELS[currentPeriod] || currentPeriod || 'this period';
     const prompt = 'You are RapidReconciler AI, helping an accountant with inventory-to-GL reconciliation.\n'
       + 'Facts in scope — the ONLY facts you may use:\n' + _recAiFacts().join('\n') + '\n\n'
       + 'Definitions: carry forward = unresolved balance rolled in from the prior period; transactions = inventory movement not matched in the GL; manual entries = GL journal entries with no inventory offset; cardex = perpetual vs item-ledger difference.\n'
+      + (_hist
+          ? ('The viewed period (' + _perLbl + ') is CLOSED and historical — it has already been posted. Describe what happened in past tense; do NOT suggest next steps, drill-downs, or actions. If asked whether it is "safe to post" or "safe to close", answer that the period has ALREADY been posted/closed and the question no longer applies — do not assess postability.\n')
+          : ('The viewed period (' + _perLbl + ') is the open period. Prior/historical periods (including any spike or trend point before it) are CLOSED — describe those, never recommend actions for them.\n'))
       + 'Question: ' + q + '\n'
       + 'Answer in 2-4 sentences of plain accountant English. Round amounts (e.g. "$18.5K"). Use ONLY the facts above; if they do not contain the answer, say so plainly. No JDE table names, no preamble, no markdown.';
     _recAsking = true; _recDefaultGen++;   // supersede any pending default read
@@ -4869,9 +4999,9 @@
     const ans = document.getElementById('js-ai-ask-answer');
     if (!ans || typeof rrFetch !== 'function' || !_lastReconView || _recAsking) return;
     const gen = ++_recDefaultGen;
-    const prompt = 'You are RapidReconciler AI. In ONE or TWO short sentences, give an accountant a plain-English read of this period’s reconciliation — where to look first.\n'
+    const prompt = 'You are RapidReconciler AI. In ONE or TWO short sentences, give an accountant a plain-English read of this period’s reconciliation: if something needs attention, say where to look first; if every source is cleared (immaterial or offset), confirm plainly that it is balanced and ready.\n'
       + 'Facts — the ONLY facts you may use:\n' + _recAiFacts().join('\n')
-      + '\nRound amounts (e.g. "$18.5K"). Plain accountant English, no preamble, no markdown.';
+      + '\nDo not flag a source the facts say is cleared. Round amounts (e.g. "$18.5K"). Plain accountant English, no preamble, no markdown.';
     ans.hidden = false; ans.textContent = 'Reading this period…';
     aiExplain(prompt)
       .then(r => { if (gen !== _recDefaultGen) return; const t = (r && r.text) ? String(r.text).trim() : ''; if (t) ans.textContent = t; else ans.hidden = true; })
@@ -4879,6 +5009,10 @@
   }
   // Debounced so rapid company/period switches coalesce into one call.
   function scheduleRecAiDefault() {
+    // "Is this safe to post?" doesn't apply to a closed/historical period — hide
+    // that chip there (the period is already posted).
+    const postChip = document.getElementById('js-chip-post');
+    if (postChip) postChip.style.display = _recIsHistorical() ? 'none' : '';
     if (_recDefaultTimer) clearTimeout(_recDefaultTimer);
     _recDefaultTimer = setTimeout(() => { _recDefaultTimer = null; loadRecAiDefault(); }, 500);
   }
@@ -4890,6 +5024,104 @@
         const input = document.getElementById('js-ai-ask-input');
         if (input) input.value = chip.textContent.trim();
         askRecAi();
+      });
+    });
+  })();
+
+  // ---- Per-card grounded help → AI panel --------------------------------
+  // Each variance card carries a "?" that routes a KNOWLEDGE-BASE-grounded
+  // explanation into the Ask RapidReconciler AI panel. Retrieval is fully
+  // client-side: fetch the RR University search index (same origin as this
+  // page — repo root is the :8765 static root), score the top sections for
+  // the card's topic, then let /ai/explain summarize using ONLY those
+  // excerpts. Same "AI is the face, the grounding is deterministic" posture
+  // as the rest of the page — the model explains repo docs, not model recall.
+  const CARD_HELP = {
+    carryForward:         { topic: 'Carry forward',   query: 'carry forward prior period unreconciled balance roll forward reconciliation' },
+    transactions:         { topic: 'Transactions',    query: 'transactions item ledger general ledger discrepancy F4111 F0911 reconciliation' },
+    manualJournalEntries: { topic: 'Journal Entries', query: 'manual journal entries posted inventory accounts reconciliation' },
+    glBatches:            { topic: 'GL batches',      query: 'unposted GL batches general ledger post batch reconciliation' },
+    endOfDay:             { topic: 'End of Day',      query: 'end of day variance transactions not yet posted period close R31802A reconciliation' },
+    cardex:               { topic: 'Cardex variance', query: 'cardex variance F4111 item ledger F41021 item balance difference reconciling item' }
+  };
+  const KB_STOPWORDS = new Set(('a an and are as at be by for from has in is it of on or that the to with this these their what').split(' '));
+  let _kbIndexPromise = null;
+  function loadKbIndex() {
+    if (_kbIndexPromise) return _kbIndexPromise;
+    _kbIndexPromise = fetch('../RRUniversity/search-index.json')
+      .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(idx => Array.isArray(idx) ? idx : [])
+      .catch(() => []);
+    return _kbIndexPromise;
+  }
+  function _kbTokens(s) {
+    return String(s || '').toLowerCase().split(/[^a-z0-9]+/)
+      .filter(t => t.length > 2 && !KB_STOPWORDS.has(t));
+  }
+  // Top-N index records by token overlap (section title weighted highest).
+  function kbRetrieve(index, query, n) {
+    const toks = _kbTokens(query);
+    if (!toks.length) return [];
+    const scored = [];
+    for (const rec of index) {
+      const body = (rec.body || '').toLowerCase();
+      const sec  = (rec.section_title || '').toLowerCase();
+      const page = (rec.page_title || '').toLowerCase();
+      let score = 0;
+      for (const t of toks) {
+        if (sec.indexOf(t)  !== -1) score += 5;
+        if (page.indexOf(t) !== -1) score += 3;
+        if (body.indexOf(t) !== -1) score += 1;
+      }
+      if (score > 0) scored.push({ rec: rec, score: score });
+    }
+    scored.sort((a, b) => b.score - a.score);
+    return scored.slice(0, n).map(s => s.rec);
+  }
+
+  let _kbHelping = false;
+  async function kbHelpForComponent(componentKey) {
+    const meta = CARD_HELP[componentKey];
+    const ans  = document.getElementById('js-ai-ask-answer');
+    if (!meta || !ans) return;
+    _kbHelping = true; _recAsking = true; _recDefaultGen++;   // supersede a pending default read
+    const esc = s => String(s).replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
+    const eyebrow = '<span class="ai-help-eyebrow">About this card · ' + esc(meta.topic) + '</span>';
+    ans.hidden = false; ans.innerHTML = eyebrow + '<span class="ai-help-text">Looking that up…</span>';
+    if (ans.scrollIntoView) ans.scrollIntoView({ block: 'nearest' });
+    let excerpts = '';
+    try {
+      const index = await loadKbIndex();
+      const hits  = kbRetrieve(index, meta.query, 4);
+      excerpts = hits.map(h =>
+        '- ' + (h.page_title || '') + ' › ' + (h.section_title || '') + ': '
+        + String(h.body || '').replace(/\s+/g, ' ').trim().slice(0, 600)).join('\n');
+    } catch (_) { excerpts = ''; }
+    // Fallback ground truth when the index has no hit: the card's own meta.
+    if (!excerpts) {
+      const cm = COMPONENT_META[componentKey];
+      excerpts = '- ' + (cm ? cm.label + ': ' + cm.source : meta.topic);
+    }
+    const prompt = 'You are RapidReconciler AI, helping a finance user understand one part of inventory-to-GL reconciliation.\n'
+      + 'In 1-2 sentences, explain ONLY what "' + meta.topic + '" represents and why it appears — a plain definition, not advice.\n'
+      + 'Do NOT suggest remediation steps, next actions, or anything to check or fix. Do NOT reference any on-screen control, indicator, light, button, status, or page. Use ONLY the reference excerpts; if they do not define the term, say so plainly rather than guessing.\n'
+      + 'Plain accountant English. No preamble, no markdown. JDE references like F4111 or DMAAI are fine; never mention software internals, database views, or endpoints.\n\n'
+      + 'Reference excerpts:\n' + excerpts;
+    aiExplain(prompt)
+      .then(r => { const t = (r && r.text) ? String(r.text).trim() : '';
+        ans.innerHTML = eyebrow + '<span class="ai-help-text">'
+          + (t ? esc(t) : 'No summary came back — open Details for this card.') + '</span>'; })
+      .catch(() => { ans.innerHTML = eyebrow
+          + '<span class="ai-help-text">Could not reach the AI just now. Try again in a moment.</span>'; })
+      .then(() => { _kbHelping = false; _recAsking = false; });
+  }
+  (function wireCardHelp() {
+    document.querySelectorAll('.vc-help').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const card = btn.closest('.variance-card');
+        const key  = card && card.getAttribute('data-component');
+        if (key) kbHelpForComponent(key);
       });
     });
   })();
@@ -6049,13 +6281,13 @@
     if (el) return el;
     el = document.createElement('div');
     el.id = 'js-export-advisory';
-    el.style.cssText = 'position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:300;max-width:680px;width:calc(100% - 32px);background:#fff;border:1px solid #f1c9c3;border-left:4px solid #c0392b;border-radius:10px;box-shadow:0 16px 40px -12px rgba(20,32,55,0.3);padding:14px 16px;display:none;font-family:Open Sans,sans-serif;';
+    el.style.cssText = 'position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:300;max-width:680px;width:calc(100% - 32px);background:#fff;border:1px solid #f0d2a8;border-left:4px solid #f08a24;border-radius:10px;box-shadow:0 16px 40px -12px rgba(20,32,55,0.3);padding:14px 16px;display:none;font-family:Open Sans,sans-serif;';
     el.innerHTML =
       '<div style="display:flex;align-items:flex-start;gap:12px;">' +
-        '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#c0392b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>' +
+        '<svg id="js-export-advisory-ico" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#f08a24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>' +
         '<div style="flex:1;min-width:0;">' +
-          '<div style="font-family:Source Sans 3,sans-serif;font-weight:800;color:#1f2d4a;font-size:14.5px;">Reports are responding slowly</div>' +
-          '<div style="color:#5a6478;font-size:13px;margin-top:2px;line-height:1.45;">The data service is taking longer than usual to build this export &mdash; usually a sign it needs a quick restart (common when the server is busy or low on memory). Your data is safe; a restart takes about 30&nbsp;seconds.</div>' +
+          '<div id="js-export-advisory-title" style="font-family:Source Sans 3,sans-serif;font-weight:800;color:#1f2d4a;font-size:14.5px;">Reports are responding slowly</div>' +
+          '<div id="js-export-advisory-msg" style="color:#5a6478;font-size:13px;margin-top:2px;line-height:1.45;"></div>' +
           '<div id="js-export-advisory-actions" style="display:flex;gap:8px;margin-top:11px;flex-wrap:wrap;"></div>' +
         '</div>' +
         '<button type="button" id="js-export-advisory-x" aria-label="Dismiss" style="background:none;border:0;color:#9aa3b2;font-size:20px;line-height:1;cursor:pointer;padding:0 4px;">&times;</button>' +
@@ -6064,20 +6296,51 @@
     document.getElementById('js-export-advisory-x').addEventListener('click', hideExportAdvisory);
     return el;
   }
+  // Two causes, two messages. A slow export is usually the SERVER being BUSY
+  // (CPU/IO) — a restart won't help and shouldn't be pushed. Only when a real
+  // memory check shows the data service near its heap ceiling do we surface the
+  // "low on memory → restart" path. (Memory is rarely the culprit — verified.)
+  function _setExportAdvisory(mode) {
+    const el = document.getElementById('js-export-advisory'); if (!el) return;
+    const title = el.querySelector('#js-export-advisory-title');
+    const msg   = el.querySelector('#js-export-advisory-msg');
+    const acts  = el.querySelector('#js-export-advisory-actions');
+    const ico   = el.querySelector('#js-export-advisory-ico');
+    const canRestart = activeDbPerms().rs !== false; // fail-open, same as the admin menu
+    if (mode === 'memory') {
+      el.style.borderColor = '#f1c9c3'; el.style.borderLeftColor = '#c0392b';
+      if (ico) ico.setAttribute('stroke', '#c0392b');
+      if (title) title.textContent = 'Data service is low on memory';
+      if (msg) msg.innerHTML = 'The data service is running low on memory, which slows reports. Your data is safe; a restart takes about 30&nbsp;seconds and clears it.';
+      acts.innerHTML =
+        (canRestart ? '<button type="button" class="btn btn-primary" id="js-export-advisory-restart">Restart the data service</button>' : '') +
+        '<button type="button" class="btn" id="js-export-advisory-wait">Keep waiting</button>';
+      if (canRestart) el.querySelector('#js-export-advisory-restart').addEventListener('click', () => { hideExportAdvisory(); restartService(); });
+    } else {
+      el.style.borderColor = '#f0d2a8'; el.style.borderLeftColor = '#f08a24';
+      if (ico) ico.setAttribute('stroke', '#f08a24');
+      if (title) title.textContent = 'Reports are responding slowly';
+      if (msg) msg.innerHTML = 'The server is busy right now, so this export is taking longer than usual &mdash; this is not a memory problem and usually clears on its own. Your data is safe.';
+      acts.innerHTML = '<button type="button" class="btn" id="js-export-advisory-wait">Keep waiting</button>';
+    }
+    el.querySelector('#js-export-advisory-wait').addEventListener('click', hideExportAdvisory);
+  }
   function showExportAdvisory() {
     if (_exportAdvisoryShown) return;
     _exportAdvisoryShown = true;
-    const el = buildExportAdvisory();
-    const actions = el.querySelector('#js-export-advisory-actions');
-    const canRestart = activeDbPerms().rs !== false; // fail-open, same as the admin menu
-    actions.innerHTML =
-      (canRestart ? '<button type="button" class="btn btn-primary" id="js-export-advisory-restart">Restart the data service</button>' : '') +
-      '<button type="button" class="btn" id="js-export-advisory-wait">Keep waiting</button>';
-    if (canRestart) {
-      el.querySelector('#js-export-advisory-restart').addEventListener('click', () => { hideExportAdvisory(); restartService(); });
+    buildExportAdvisory();
+    _setExportAdvisory('busy');   // default: assume server-busy, not memory
+    document.getElementById('js-export-advisory').style.display = 'block';
+    // Escalate to the memory/restart path ONLY if a real health check shows the
+    // data service near its heap ceiling. Best-effort; stays "busy" otherwise.
+    if (!IS_DEMO && typeof rrFetch === 'function') {
+      rrFetch('admin/service-health').then(h => {
+        if (!_exportAdvisoryShown) return;
+        const used = (h && (h.heapUsedMb || h.processMemMb)) || 0;
+        const max  = (h && h.heapMaxMb) || 0;
+        if (max > 0 && used / max >= 0.85) _setExportAdvisory('memory');
+      }).catch(() => {});
     }
-    el.querySelector('#js-export-advisory-wait').addEventListener('click', hideExportAdvisory);
-    el.style.display = 'block';
   }
   function hideExportAdvisory() {
     _exportAdvisoryShown = false;
@@ -6916,12 +7179,15 @@
     money:       { numFmt: '$#,##0.00;[Red]($#,##0.00);-' },
     moneyBold:   { font: { name: 'Calibri', bold: true }, numFmt: '$#,##0.00;[Red]($#,##0.00);-' },
     qty:         { numFmt: '#,##0.00;[Red](#,##0.00);-' },
-    sep:         { font: { name: 'Calibri', color: { rgb: '999999' } } }
+    sep:         { font: { name: 'Calibri', color: { rgb: '999999' } } },
+    aiSummary:   { font: { name: 'Calibri', sz: 11 }, alignment: { wrapText: true, vertical: 'top' } },
+    disclaimer:  { font: { name: 'Calibri', italic: true, sz: 9, color: { rgb: '888888' } } }
   };
 
   // Build one company's worksheet. Returns { aoa, styles, colWidths }.
-  function buildAuditCompanyTab(co, snap, detail, descMap) {
+  function buildAuditCompanyTab(co, snap, detail, descMap, aiSummary) {
     const cnum = co.id;
+    let _aiSumRow = -1;   // row index of the AI summary cell (for merge + height)
     const currency = currencyOfCompanyLabel(co.label) || 'USD';
     // This sheet is one company => one currency; format every money cell
     // below in it (fmtMoney/fmtMoneyPdf default to this ambient context).
@@ -6948,6 +7214,16 @@
     const _residualStats = computeResidualsForPerpetual(_coPerpetual, _residualTgt);
     r = row([formatResidualAuditLine(_residualStats)]);
     styleCell(r, 0, _STY.coverMeta);
+    // AI narrative summary — clearly labeled so the prose is never mistaken for
+    // the authoritative figures below. Grounded + descriptive; omitted when AI
+    // exposure is off (see _auditAiLevel / auditCoSummary).
+    if (aiSummary) {
+      row([]);
+      r = row(['Summary']); styleCell(r, 0, _STY.section);
+      _aiSumRow = row([aiSummary]); styleCell(_aiSumRow, 0, _STY.aiSummary);
+      r = row(['AI-generated narrative. The figures and tables below are the authoritative record of this reconciliation.']);
+      styleCell(r, 0, _STY.disclaimer);
+    }
     r = row(['Account Summary']);
     styleCell(r, 0, _STY.section);
     row([]);
@@ -7153,7 +7429,67 @@
       { wch: 28 }, { wch: 16 }, { wch: 18 }, { wch: 14 },
       { wch: 14 }, { wch: 18 }, { wch: 18 }, { wch: 22 }
     ];
+    // Merge the AI summary across the table width + give it room to wrap.
+    if (_aiSumRow >= 0) {
+      sheet['!merges'] = (sheet['!merges'] || []).concat([{ s: { r: _aiSumRow, c: 0 }, e: { r: _aiSumRow, c: 3 } }]);
+      sheet['!rows'] = sheet['!rows'] || [];
+      sheet['!rows'][_aiSumRow] = { hpt: 56 };
+    }
     return sheet;
+  }
+
+  // Customer's per-DB AI data-exposure for the reconciliation summary
+  // (mirrors home.html _recsummaryLevel): off | scrubbed | full. Default full.
+  // 'off' => no AI summary on the report, no data leaves the page.
+  function _auditAiLevel() {
+    try {
+      const db = (window.RR_SESSION && RR_SESSION.dbs && RR_SESSION.dbs[RR_SESSION.activeDbIndex]) || null;
+      const name = (db && db.n) || 'default';
+      const prefs = JSON.parse(localStorage.getItem('rrv8.ai.prefs.' + name) || '{}') || {};
+      const lv = prefs.recsummary;
+      return (lv === 'off' || lv === 'scrubbed' || lv === 'full') ? lv : 'full';
+    } catch (_) { return 'full'; }
+  }
+  // Deterministic per-company facts for the audit summary — the SAME figures the
+  // cover + account-summary table show (GL, perpetual, OOB, the six components).
+  // The AI only narrates these; it never originates a number.
+  function auditCoFacts(co, snap) {
+    const cnum = co.id;
+    const currency = currencyOfCompanyLabel(co.label) || 'USD';
+    const acctRows = (snap.accountRows || []).filter(ar =>
+      ar.period === currentPeriod && ar.companyId === cnum && rowMatchesFilters(ar, snap));
+    const longAccounts = [...new Set(acctRows.map(ar => ar.longAccount))];
+    const byLA = new Map();
+    (snap.accountSummary || []).forEach(s => {
+      if (s.periodEnds === currentPeriod && s.companyNumber === cnum) byLA.set(s.longAccount, s);
+    });
+    let gl = 0, perp = 0, cf = 0, glb = 0, eod = 0, tx = 0, cdx = 0, je = 0;
+    longAccounts.forEach(la => {
+      const s = byLA.get(la); if (!s) return;
+      gl += s.endGLBal || 0; perp += s.perpetual || 0;
+      cf += s.begVar || 0; glb += s.unpstGL || 0; eod += s.endofDay || 0;
+      tx += s.variance || 0; cdx += s.itemRoll || 0; je += s.jes || 0;
+    });
+    return { cnum: cnum, currency: currency, gl: gl, perp: perp, oob: gl - perp, n: longAccounts.length,
+      comps: { 'carry forward': cf, 'transactions': tx, 'manual entries': je, 'cardex': cdx, 'GL batches': glb, 'end of day': eod } };
+  }
+  // Best-effort grounded AI narrative for one company. Returns '' on any failure
+  // so the report still produces. Descriptive only — no verdicts, no actions.
+  function auditCoSummary(f, scrub, idx) {
+    if (typeof aiExplain !== 'function') return Promise.resolve('');
+    const label = scrub ? ('Entity ' + String.fromCharCode(65 + (idx % 26))) : ('Co ' + f.cnum);
+    const comps = Object.keys(f.comps).filter(k => Math.abs(f.comps[k]) >= 1)
+      .sort((a, b) => Math.abs(f.comps[b]) - Math.abs(f.comps[a]));
+    const compStr = comps.length ? comps.map(k => k + ' ' + fmtVariance(f.comps[k])).join(', ') : 'no material components';
+    const facts = [
+      label + ' (' + f.currency + ').',
+      'GL balance ' + fmtMoney(f.gl) + ', perpetual balance ' + fmtMoney(f.perp) + ', net out of balance ' + fmtVariance(f.oob) + ' across ' + f.n + ' inventory accounts.',
+      'Variance by source: ' + compStr + '.'
+    ];
+    const prompt = 'You are RapidReconciler AI. Write a 2-3 sentence plain-English summary of this company\'s inventory-to-GL reconciliation for an AUDIT report cover.\n'
+      + 'Facts — the ONLY facts you may use. Do NOT introduce any number not listed here; use them verbatim and rounded:\n' + facts.join('\n') + '\n'
+      + 'Describe what the figures show and name the single largest driver. Do NOT give a verdict (never "safe to post"), do NOT recommend actions or next steps, do NOT say "this period". Plain accountant English, no preamble, no markdown, no JDE table names.';
+    return aiExplain(prompt).then(r => (r && r.text) ? String(r.text).trim() : '').catch(() => '');
   }
 
   function generateAuditReport() {
@@ -7173,21 +7509,38 @@
         }
         const auditCtx = mergeAuditContext(currentData, detail);
         const descMap = buildAccountDescMap(auditCtx);
-        const wb = XLSX.utils.book_new();
-        const _savedCur = _curCtx;   // restore the on-screen currency after the per-company loop
-        companiesInScope.forEach(co => {
-          const sheet = buildAuditCompanyTab(co, auditCtx, detail, descMap);
-          const currency = currencyOfCompanyLabel(co.label) || '';
-          // Tab name max 31 chars; "00010 - USD" is a safe shape
-          let tabName = co.id + (currency ? ' - ' + currency : '');
-          if (tabName.length > 31) tabName = tabName.slice(0, 31);
-          XLSX.utils.book_append_sheet(wb, sheet, tabName);
+        // AI cover summary — exposure-gated, grounded in the report's own figures,
+        // best-effort (a failure just omits that company's paragraph). Gathered
+        // BEFORE the workbook is built so the async narrative can land on the cover.
+        const level = _auditAiLevel();
+        const scrub = level === 'scrubbed';
+        const sumP = (level === 'off' || IS_DEMO)
+          ? Promise.resolve({})
+          : (flashStatus('Generating AI summaries…'),
+             Promise.all(companiesInScope.map((co, i) =>
+               auditCoSummary(auditCoFacts(co, auditCtx), scrub, i).then(txt => ({ id: co.id, txt: txt }))
+             )).then(arr => { const m = {}; arr.forEach(x => { m[x.id] = x.txt; }); return m; }));
+        // Never let a slow/hung AI block the download — cap the wait, then ship
+        // the report without summaries if it didn't come back in time.
+        const sumGuard = new Promise(res => setTimeout(() => res(null), 15000));
+        return Promise.race([sumP, sumGuard]).then(sumMapRaw => {
+          const sumMap = sumMapRaw || {};
+          const wb = XLSX.utils.book_new();
+          const _savedCur = _curCtx;   // restore the on-screen currency after the per-company loop
+          companiesInScope.forEach(co => {
+            const sheet = buildAuditCompanyTab(co, auditCtx, detail, descMap, sumMap[co.id] || '');
+            const currency = currencyOfCompanyLabel(co.label) || '';
+            // Tab name max 31 chars; "00010 - USD" is a safe shape
+            let tabName = co.id + (currency ? ' - ' + currency : '');
+            if (tabName.length > 31) tabName = tabName.slice(0, 31);
+            XLSX.utils.book_append_sheet(wb, sheet, tabName);
+          });
+          _curCtx = _savedCur;
+          const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 13);
+          const fname = 'PerpetualInventoryReconciliation_' + currentPeriod + '_' + stamp + '.xlsx';
+          XLSX.writeFile(wb, fname);
+          flashStatus('Downloaded ' + fname);
         });
-        _curCtx = _savedCur;
-        const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 13);
-        const fname = 'PerpetualInventoryReconciliation_' + currentPeriod + '_' + stamp + '.xlsx';
-        XLSX.writeFile(wb, fname);
-        flashStatus('Downloaded ' + fname);
       })
       .catch(err => {
         console.error('Audit report failed:', err);
@@ -7341,7 +7694,7 @@
     margin: { left: 36, right: 36 }
   };
 
-  function addPdfCover(doc, co, snap, periodLabel, residualStats) {
+  function addPdfCover(doc, co, snap, periodLabel, residualStats, aiSummary) {
     const currency = currencyOfCompanyLabel(co.label) || 'USD';
     const instance = (snap._meta && snap._meta.instance) ? snap._meta.instance : '';
     let y = 50;
@@ -7367,6 +7720,21 @@
       const lines = doc.splitTextToSize(text, wrapW);
       doc.text(lines, 36, y);
       y += 14 * lines.length;
+      doc.setFont('helvetica', 'normal');
+    }
+    // AI narrative summary — labeled so the prose is never mistaken for the
+    // authoritative figures below. Grounded + descriptive; omitted when AI off.
+    if (aiSummary) {
+      y += 10;
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.setTextColor(31, 45, 74);
+      doc.text('Summary', 36, y); y += 15;
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(40, 40, 40);
+      const wrapW = doc.internal.pageSize.getWidth() - 72;
+      const lines = doc.splitTextToSize(aiSummary, wrapW);
+      doc.text(lines, 36, y); y += 13 * lines.length + 4;
+      doc.setFont('helvetica', 'italic'); doc.setFontSize(8); doc.setTextColor(136, 136, 136);
+      const disc = doc.splitTextToSize('AI-generated narrative. The figures and tables below are the authoritative record of this reconciliation.', wrapW);
+      doc.text(disc, 36, y); y += 11 * disc.length;
       doc.setFont('helvetica', 'normal');
     }
     y += 8;
@@ -7409,7 +7777,7 @@
     return y + 26;
   }
 
-  function buildPdfCompanySection(doc, co, snap, detail, descMap, isFirst) {
+  function buildPdfCompanySection(doc, co, snap, detail, descMap, isFirst, aiSummary) {
     if (!isFirst) doc.addPage();
     const cnum = co.id;
     // One company => one currency; fmtMoneyPdf below defaults to this.
@@ -7420,7 +7788,7 @@
     const _residualTgt = getAuditResidualTarget();
     const _coPerpetual = (detail.perpetual || []).filter(p => p.companyNumber === cnum);
     const _residualStats = computeResidualsForPerpetual(_coPerpetual, _residualTgt);
-    let y = addPdfCover(doc, co, snap, currentPeriod, _residualStats);
+    let y = addPdfCover(doc, co, snap, currentPeriod, _residualStats, aiSummary);
 
     // Filter scope
     const acctRows = (snap.accountRows || []).filter(ar =>
@@ -7677,18 +8045,32 @@
         }
         const auditCtx = mergeAuditContext(currentData, detail);
         const descMap = buildAccountDescMap(auditCtx);
-        const { jsPDF } = window.jspdf;
-        const doc = new jsPDF({ orientation: 'p', unit: 'pt', format: 'letter' });
-        const _savedCur = _curCtx;   // restore the on-screen currency after the per-company loop
-        companiesInScope.forEach((co, idx) => {
-          buildPdfCompanySection(doc, co, auditCtx, detail, descMap, idx === 0);
+        // AI cover summary — same grounded + exposure-gated + timeout-guarded
+        // path as the Excel report (see auditCoSummary / _auditAiLevel).
+        const level = _auditAiLevel();
+        const scrub = level === 'scrubbed';
+        const sumP = (level === 'off' || IS_DEMO)
+          ? Promise.resolve({})
+          : (flashStatus('Generating AI summaries…'),
+             Promise.all(companiesInScope.map((co, i) =>
+               auditCoSummary(auditCoFacts(co, auditCtx), scrub, i).then(txt => ({ id: co.id, txt: txt }))
+             )).then(arr => { const m = {}; arr.forEach(x => { m[x.id] = x.txt; }); return m; }));
+        const sumGuard = new Promise(res => setTimeout(() => res(null), 15000));
+        return Promise.race([sumP, sumGuard]).then(sumMapRaw => {
+          const sumMap = sumMapRaw || {};
+          const { jsPDF } = window.jspdf;
+          const doc = new jsPDF({ orientation: 'p', unit: 'pt', format: 'letter' });
+          const _savedCur = _curCtx;   // restore the on-screen currency after the per-company loop
+          companiesInScope.forEach((co, idx) => {
+            buildPdfCompanySection(doc, co, auditCtx, detail, descMap, idx === 0, sumMap[co.id] || '');
+          });
+          _curCtx = _savedCur;
+          addPdfFooter(doc);
+          const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 13);
+          const fname = 'PerpetualInventoryReconciliation_' + currentPeriod + '_' + stamp + '.pdf';
+          doc.save(fname);
+          flashStatus('Downloaded ' + fname);
         });
-        _curCtx = _savedCur;
-        addPdfFooter(doc);
-        const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 13);
-        const fname = 'PerpetualInventoryReconciliation_' + currentPeriod + '_' + stamp + '.pdf';
-        doc.save(fname);
-        flashStatus('Downloaded ' + fname);
       })
       .catch(err => {
         console.error('PDF audit report failed:', err);
@@ -7758,20 +8140,133 @@
       .sort((a, b) => Math.abs((b[amt] || 0)) - Math.abs((a[amt] || 0)));
   }
 
+  // ---- Audit-quality Excel template (shared) -----------------------------
+  // Navy header band, formatted/right-aligned numbers, thin borders, an
+  // optional bolded total row, and title lines merged across the table.
+  // Mirrors the Account Roll Forward audit sheet. Needs xlsx-js-style (the
+  // page now loads it). columns: [{label, num}]; rows: arrays of raw cell
+  // values (numbers stay numbers so the format applies); titleLines render
+  // above the table; totalRow (optional) is bolded.
+  const AUDIT_NUM_FMT = '#,##0.00;(#,##0.00)';
+  function _auditBorder(rgb) { const s = { style: 'thin', color: { rgb: rgb } }; return { top: s, bottom: s, left: s, right: s }; }
+  function buildAuditWorkbook(opts) {
+    if (!window.XLSX) { flashStatus('Excel library still loading — try again in a sec'); return false; }
+    const cols = opts.columns || [];
+    const ncol = cols.length || 1;
+    const titleLines = opts.titleLines || [];
+    const aoa = [];
+    titleLines.forEach(t => { const row = new Array(ncol).fill(''); row[0] = t; aoa.push(row); });
+    if (titleLines.length) aoa.push(new Array(ncol).fill(''));          // spacer row
+    const headRowIdx = aoa.length;
+    aoa.push(cols.map(c => c.label));
+    (opts.rows || []).forEach(r => aoa.push(r.slice()));
+    let totalRowIdx = -1;
+    if (opts.totalRow) { totalRowIdx = aoa.length; aoa.push(opts.totalRow.slice()); }
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    const range = XLSX.utils.decode_range(ws['!ref']);
+    // title / subtitle lines
+    for (let t = 0; t < titleLines.length; t++) {
+      const ref = XLSX.utils.encode_cell({ r: t, c: 0 }); if (!ws[ref]) continue;
+      ws[ref].s = { font: { bold: t === 0, sz: t === 0 ? 14 : 10, color: { rgb: t === 0 ? '1F2D4A' : '6B7280' } } };
+    }
+    // header band
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const ref = XLSX.utils.encode_cell({ r: headRowIdx, c: c }); if (!ws[ref]) continue;
+      ws[ref].s = { font: { bold: true, color: { rgb: 'FFFFFF' } },
+        fill: { patternType: 'solid', fgColor: { rgb: '1F2D4A' } },
+        alignment: { horizontal: (cols[c] && cols[c].num) ? 'right' : 'left', vertical: 'center' },
+        border: _auditBorder('D0D0D0') };
+    }
+    // body + total
+    for (let rr = headRowIdx + 1; rr <= range.e.r; rr++) {
+      const isTotal = rr === totalRowIdx;
+      for (let c = range.s.c; c <= range.e.c; c++) {
+        const ref = XLSX.utils.encode_cell({ r: rr, c: c }); const cell = ws[ref]; if (!cell) continue;
+        cell.s = cell.s || {};
+        cell.s.border = _auditBorder('ECECEC');
+        if (cols[c] && cols[c].num) { cell.z = AUDIT_NUM_FMT; cell.s.alignment = { horizontal: 'right' }; }
+        if (isTotal) {
+          cell.s.font = { bold: true, color: { rgb: '1F2D4A' } };
+          cell.s.fill = { patternType: 'solid', fgColor: { rgb: 'F1F4F9' } };
+        }
+      }
+    }
+    ws['!cols'] = cols.map(c => ({ wch: c.num ? 16 : Math.max(16, (c.label || '').length + 4) }));
+    if (titleLines.length) {
+      ws['!merges'] = ws['!merges'] || [];
+      for (let t = 0; t < titleLines.length; t++) ws['!merges'].push({ s: { r: t, c: 0 }, e: { r: t, c: ncol - 1 } });
+    }
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, (opts.sheetName || 'Report').slice(0, 31));
+    XLSX.writeFile(wb, opts.fileName || 'Report.xlsx');
+    return true;
+  }
+
+  // Carry forward "Details" → audit-quality export of the prior period's
+  // 6-source composition (rolled into this period). Replaces the standalone
+  // variance-source page for this card: the data shown there IS this export.
+  // Total = prior period's server unreconciledVariance (the listed components
+  // carry sign conventions and don't plainly sum). Reads the history snapshot
+  // the bar chart already loaded — no extra fetch.
+  async function exportCarryForwardAudit() {
+    if (!window.XLSX) { flashStatus('Excel library still loading — try again in a sec'); return; }
+    try { await loadPeriodBarsSnapshot(); } catch (_) {}
+    const curLbl = PERIOD_LABELS[currentPeriod] || currentPeriod;
+    let scopeLbl = '';
+    try {
+      const a = (window.RRV8 && window.RRV8.readSessionScope && window.RRV8.readSessionScope().activeCompanies) || [];
+      if (a.length) scopeLbl = (a.length === 1 ? 'Company ' : 'Companies ') + a.join(', ');
+    } catch (_) {}
+    const prior = priorPeriod();
+    const view  = prior ? priorPeriodViewFromSnapshot(prior) : null;
+    const cols  = [{ label: 'Source' }, { label: 'Amount', num: true }];
+    if (!prior || !view || !view.variance) {
+      buildAuditWorkbook({
+        sheetName: 'Carry Forward',
+        fileName: 'Carry Forward — ' + curLbl + '.xlsx',
+        titleLines: ['Carry Forward — Prior-Period Composition',
+          curLbl + ' is the earliest period in the data — carry forward is zero by definition.'
+          + (scopeLbl ? (' · ' + scopeLbl) : '')],
+        columns: cols, rows: [], totalRow: ['Total', 0]
+      });
+      flashStatus('Exported Carry forward (zero — earliest period)');
+      return;
+    }
+    const v = view.variance;
+    const priorLbl = PERIOD_LABELS[prior] || prior;
+    const rows = [
+      ['Carry forward',          _vnum(v.carryForward)],
+      ['GL batches',             _vnum(v.glBatches)],
+      ['End of Day',             _vnum(v.endOfDay)],
+      ['Transactions',           _vnum(v.transactions)],
+      ['Cardex',                 _vnum(v.cardex)],
+      ['Manual journal entries', _vnum(v.manualJournalEntries)]
+    ];
+    const total = _vnum(v.unreconciledVariance);
+    buildAuditWorkbook({
+      sheetName: 'Carry Forward',
+      fileName: 'Carry Forward — ' + curLbl + '.xlsx',
+      titleLines: [
+        'Carry Forward — Prior-Period Composition',
+        'Composition of ' + priorLbl + ', carried into ' + curLbl + (scopeLbl ? (' · ' + scopeLbl) : '')
+      ],
+      columns: cols, rows: rows, totalRow: ['Total', total]
+    });
+    flashStatus('Exported Carry forward composition');
+  }
+
+  // All variance-component Excel exports use the shared AUDIT-QUALITY template
+  // (navy header band, formatted/right-aligned numbers, bolded total). Columns
+  // come from PREVIEW_COLUMNS[componentKey] so Preview + Excel stay in lockstep.
+  // (carryForward exports its prior-period composition — exportCarryForwardAudit.)
   async function generateVarianceExcel(componentKey) {
     if (!window.XLSX) { flashStatus('Excel library still loading — try again in a sec'); return; }
     if (!currentData) { flashStatus('No data loaded'); return; }
-
     const meta = COMPONENT_META[componentKey] || { label: componentKey, source: '' };
-
-    // In prod/staging the four view-backed drilldown arrays are only
-    // populated when the preview modal opens (loadVarianceComponentRows
-    // is wired from openVariancePreview). Clicking the Excel icon
-    // directly bypasses the modal, so without this lazy-fetch the
-    // workbook came out with headers + the empty-state sentinel.
     const cfg = PREVIEW_COLUMNS[componentKey];
-    if (cfg && cfg.source === 'view-backed' && !IS_DEMO &&
-        !_varianceComponentFetched.has(componentKey)) {
+    if (!cfg || !cfg.columns) { flashStatus('Export not configured for ' + meta.label); return; }
+    // Lazy-fetch the view-backed rows if the modal wasn't opened first.
+    if (cfg.source === 'view-backed' && !IS_DEMO && !_varianceComponentFetched.has(componentKey)) {
       try {
         flashStatus('Fetching ' + meta.label + ' rows…');
         await loadVarianceComponentRows(componentKey, cfg);
@@ -7781,364 +8276,39 @@
         return;
       }
     }
-
-    // GL Batches branches to the real per-batch shape from
-    // v6_007_unpostedbatches, formatted to match the production
-    // Unposted GL Batches report: single merged title row with a
-    // generated-on timestamp, header row at 2, data from row 3, no
-    // separate metadata block (PeriodEnds rides on each data row).
-    if (componentKey === 'glBatches') {
-      const batches = filterViewBackedRows('glBatches', 'amount');
-
-      const titleStamp = new Date().toLocaleString('en-US', {
-        weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
-        hour: 'numeric', minute: '2-digit'
-      });
-      const headers = ['CompanyNumber', 'BatchDate', 'PeriodEnds', 'Username', 'LongAccount', 'BatchNumber', 'Type', 'Amount', 'Approval_Status', 'Posting_Status'];
-
-      const aoa = [
-        ['Unposted GL Batches Generated ' + titleStamp],
-        headers
-      ];
-      batches.forEach(b => {
-        aoa.push([
-          b.companyNumber || '',
-          b.batchDate || '',
-          b.periodEnds || '',
-          b.username || '',
-          b.longAccount || '',
-          b.batchNumber || '',
-          b.type || '',
-          round2(b.amount || 0),
-          b.apprsts || '',
-          b.poststs || ''
-        ]);
-      });
-      if (batches.length === 0) {
-        // Empty-state hint sits below the headers as a faint note so
-        // the workbook still opens with the right shape.
-        aoa.push([]);
-        aoa.push(['No un-posted batches hit these inventory accounts in the current scope.']);
-      }
-
-      const sheet = XLSX.utils.aoa_to_sheet(aoa);
-      // Production column widths (from UnpostedGLBatches_2026-03-31).
-      sheet['!cols'] = [
-        { wch: 20.25 }, { wch: 13.68 }, { wch: 14.43 }, { wch: 13.57 }, { wch: 15.98 },
-        { wch: 16.79 }, { wch: 8.86 }, { wch: 11.75 }, { wch: 19.23 }, { wch: 17.61 }
-      ];
-      // Merge the title across all 10 columns (A1:J1).
-      sheet['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: headers.length - 1 } }];
-      // Title row a bit taller so the bold heading reads as a section bar.
-      sheet['!rows'] = [{ hpt: 22 }, { hpt: 22 }];
-      // Best-effort cell styling — SheetJS CE honors basic font/fill
-      // hints when present; full fidelity needs SheetJS Pro.
-      if (sheet['A1']) {
-        sheet['A1'].s = { font: { bold: true, sz: 14, name: 'Calibri' }, alignment: { vertical: 'center' } };
-      }
-      headers.forEach((_, i) => {
-        const ref = XLSX.utils.encode_cell({ r: 1, c: i });
-        if (sheet[ref]) {
-          sheet[ref].s = {
-            font: { bold: true, name: 'Calibri' },
-            fill: { fgColor: { rgb: 'D4D0C8' }, patternType: 'solid' },
-            alignment: { vertical: 'center' }
-          };
-        }
-      });
-
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, sheet, 'Unposted GL Batches');
-
-      const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 13);
-      const fname = 'UnpostedGLBatches_' + currentPeriod + '_' + stamp + '.xlsx';
-      // Route through the analyzer's GLBatchTemplate (same bridge
-      // pattern as Transactions per-row Export). The analyzer
-      // auto-detects from the "Unposted GL Batches" sheet name +
-      // Approval_Status / Posting_Status columns, runs its findings,
-      // and auto-downloads the analyzed workbook.
-      const buffer = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
-      handOffToAnalyzer(buffer, fname);
-      flashStatus('Opening Unposted GL Batches in analyzer&hellip;');
-      return;
+    let rows = filterViewBackedRows(componentKey, cfg.amountField) || [];
+    // Cardex surfaces its Reason='Reset:' marker as a banner, not a data row.
+    if (cfg.resetBanner) rows = rows.filter(r => String(r.reason == null ? '' : r.reason).trim() !== 'Reset:');
+    const cols = cfg.columns.map(c => ({ label: c.label, num: (c.kind === 'num' || c.kind === 'qty') }));
+    const aoaRows = rows.map(r => cfg.columns.map(c => {
+      const v = r[c.key];
+      if (c.kind === 'num' || c.kind === 'qty') { const n = Number(v); return isNaN(n) ? '' : n; }
+      return (v == null) ? '' : v;
+    }));
+    // Total row on the amount column (bolded by the template).
+    const amtIdx = cfg.columns.findIndex(c => c.key === cfg.amountField);
+    let totalRow = null;
+    if (amtIdx >= 0) {
+      const sum = rows.reduce((s, r) => s + (Number(r[cfg.amountField]) || 0), 0);
+      totalRow = cfg.columns.map((c, i) => (i === 0 ? 'Total' : (i === amtIdx ? sum : '')));
     }
-
-    // End of Day branches to v6_006_unposted_cardex — un-posted cardex
-    // transactions contributing to end-of-day valuation differences.
-    if (componentKey === 'endOfDay') {
-      const txns = filterViewBackedRows('endOfDay', 'transactionAmount');
-      const total = round2(txns.reduce((s, t) => s + (t.transactionAmount || 0), 0));
-
-      const headerRows = [
-        ['Variance component: ' + meta.label],
-        [meta.source],
-        [],
-        ['Period',       periodDisplay()],
-        ['Period End',   currentPeriod],
-        ['Database',     currentDbLabel()],
-        ['Module',       'Inventory'],
-        ['Source view',  meta.view || ''],
-        ['Generated',    new Date().toISOString().slice(0, 19).replace('T', ' ')],
-        ['Generated by', USER.name + ' <' + USER.email + '>'],
-        ['Transactions in scope', txns.length],
-        ['Net amount',   total],
-        [],
-        ['Transaction Date', 'Company', 'Type', 'Order Type', 'Long Account', 'Doc Type', 'Doc Number', 'Branch Plant', 'Status', 'Transaction Amount']
-      ];
-      txns.forEach(t => {
-        headerRows.push([
-          t.transactionDate || '',
-          t.companyNumber || '',
-          t.type || '',
-          t.orderType || '',
-          t.longAccount || '',
-          t.docType || '',
-          t.docNumber || '',
-          t.branchPlant || '',
-          t.status || '',
-          round2(t.transactionAmount || 0)
-        ]);
-      });
-      if (txns.length === 0) {
-        headerRows.push(['(none)', '—', '—', '—', '—', '—', '—', '—', '—', 0]);
-        headerRows.push([]);
-        headerRows.push(['No un-posted cardex transactions hit these inventory accounts in the current scope.']);
-      } else {
-        headerRows.push([]);
-        headerRows.push(['', '', '', '', '', '', '', '', 'Total', total]);
-      }
-
-      const sheet = XLSX.utils.aoa_to_sheet(headerRows);
-      sheet['!cols'] = [
-        { wch: 16 }, { wch: 10 }, { wch: 8 }, { wch: 10 }, { wch: 28 },
-        { wch: 10 }, { wch: 12 }, { wch: 14 }, { wch: 10 }, { wch: 18 }
-      ];
-
-      const wb = XLSX.utils.book_new();
-      // Use the exact sheet name the analyzer&rsquo;s EndOfDayTemplate
-      // looks for so detection wins cleanly. (The variance step
-      // label is "End of Day" so this matches what we&rsquo;d have
-      // sliced to anyway.)
-      XLSX.utils.book_append_sheet(wb, sheet, 'End of Day');
-
-      const fname = 'variance-endofday-' + currentPeriod + '.xlsx';
-      // Route through the analyzer's EndOfDayTemplate (Type / Status /
-      // DocType / TransactionAmount columns detect cleanly above the
-      // metadata block). Same bridge pattern as the GL Batches export.
-      const buffer = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
-      handOffToAnalyzer(buffer, fname);
-      flashStatus('Opening End of Day in analyzer&hellip;');
-      return;
-    }
-
-    // Manual JEs — per-doc rows from v6ui_manual_entries, joined to
-    // inventory accounts via rinvaccountlist. Currency + Rate columns
-    // from the view are dropped per the same convention as GL Batches.
-    if (componentKey === 'manualJournalEntries') {
-      const entries = filterViewBackedRows('manualJournalEntries', 'amount');
-
-      const titleStamp = new Date().toLocaleString('en-US', {
-        weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
-        hour: 'numeric', minute: '2-digit'
-      });
-      const headers = ['CompanyNumber', 'PeriodEnds', 'DocType', 'DocNumber', 'LongAccount', 'Amount', 'UserName', 'Originator', 'Explanation', 'Remark'];
-
-      const aoa = [
-        ['Manual Journal Entries Generated ' + titleStamp],
-        headers
-      ];
-      entries.forEach(e => {
-        aoa.push([
-          e.companyNumber || '',
-          e.periodEnds || '',
-          e.docType || '',
-          e.docNumber || '',
-          e.longAccount || '',
-          round2(e.amount || 0),
-          e.username || '',
-          e.originator || '',
-          e.explanation || '',
-          e.remark || ''
-        ]);
-      });
-      if (entries.length === 0) {
-        aoa.push([]);
-        aoa.push(['No manual JEs hit these inventory accounts in the current scope.']);
-      }
-
-      const sheet = XLSX.utils.aoa_to_sheet(aoa);
-      sheet['!cols'] = [
-        { wch: 14 }, { wch: 13 }, { wch: 9 }, { wch: 14 }, { wch: 26 },
-        { wch: 14 }, { wch: 12 }, { wch: 14 }, { wch: 36 }, { wch: 18 }
-      ];
-      sheet['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: headers.length - 1 } }];
-      sheet['!rows'] = [{ hpt: 22 }, { hpt: 22 }];
-      if (sheet['A1']) {
-        sheet['A1'].s = { font: { bold: true, sz: 14, name: 'Calibri' }, alignment: { vertical: 'center' } };
-      }
-      headers.forEach((_, i) => {
-        const ref = XLSX.utils.encode_cell({ r: 1, c: i });
-        if (sheet[ref]) {
-          sheet[ref].s = {
-            font: { bold: true, name: 'Calibri' },
-            fill: { fgColor: { rgb: 'D4D0C8' }, patternType: 'solid' },
-            alignment: { vertical: 'center' }
-          };
-        }
-      });
-
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, sheet, 'Manual JEs');
-
-      const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 13);
-      const fname = 'ManualJournalEntries_' + currentPeriod + '_' + stamp + '.xlsx';
-      XLSX.writeFile(wb, fname);
-      flashStatus('Downloaded ' + fname);
-      return;
-    }
-
-    // Cardex — current-state item-roll integrity report from
-    // v6ui_itemrollintegritydialog. No period dimension: the rows
-    // show items that currently fail integrity, regardless of which
-    // period the user is viewing. Only company + long-account filters
-    // narrow the export.
-    if (componentKey === 'cardex') {
-      const items = filterViewBackedRows('cardex', 'adjAmount', { requirePeriod: false });
-
-      const titleStamp = new Date().toLocaleString('en-US', {
-        weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
-        hour: 'numeric', minute: '2-digit'
-      });
-      const headers = ['Reason', 'CompanyNumber', 'LongAccount', 'Branch', 'ShortItem', 'ItemNumber', 'ThirdItem', 'Location', 'Lot', 'Method', 'AdjAmount', 'AdjQty', 'UOM', 'GLClass', 'Cost Level', 'Last Activity', 'Tx Count', 'QOH'];
-
-      const aoa = [
-        ['Item Roll Integrity Generated ' + titleStamp],
-        headers
-      ];
-      items.forEach(it => {
-        aoa.push([
-          it.reason || '',
-          it.companyNumber || '',
-          it.longAccount || '',
-          it.branch || '',
-          it.shortItem || '',
-          it.itemNumber || '',
-          it.thirdItem || '',
-          it.location || '',
-          it.lot || '',
-          it.method || '',
-          round2(it.adjAmount || 0),
-          round2(it.adjQty || 0),
-          it.uom || '',
-          it.glClass || '',
-          it.costLevel || '',
-          it.lastActivity || '',
-          it.txCount || 0,
-          round2(it.qtyOnHand || 0)
-        ]);
-      });
-      if (items.length === 0) {
-        aoa.push([]);
-        aoa.push(['No item-roll integrity issues against these inventory accounts in the current scope.']);
-      }
-
-      const sheet = XLSX.utils.aoa_to_sheet(aoa);
-      sheet['!cols'] = [
-        { wch: 10 }, { wch: 14 }, { wch: 22 }, { wch: 8 }, { wch: 12 },
-        { wch: 18 }, { wch: 18 }, { wch: 10 }, { wch: 10 }, { wch: 8 },
-        { wch: 14 }, { wch: 12 }, { wch: 6 }, { wch: 9 }, { wch: 10 },
-        { wch: 13 }, { wch: 10 }, { wch: 12 }
-      ];
-      sheet['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: headers.length - 1 } }];
-      sheet['!rows'] = [{ hpt: 22 }, { hpt: 22 }];
-      if (sheet['A1']) {
-        sheet['A1'].s = { font: { bold: true, sz: 14, name: 'Calibri' }, alignment: { vertical: 'center' } };
-      }
-      headers.forEach((_, i) => {
-        const ref = XLSX.utils.encode_cell({ r: 1, c: i });
-        if (sheet[ref]) {
-          sheet[ref].s = {
-            font: { bold: true, name: 'Calibri' },
-            fill: { fgColor: { rgb: 'D4D0C8' }, patternType: 'solid' },
-            alignment: { vertical: 'center' }
-          };
-        }
-      });
-
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, sheet, 'Item Roll Integrity');
-
-      const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 13);
-      const fname = 'ItemRollIntegrity_' + stamp + '.xlsx';
-      XLSX.writeFile(wb, fname);
-      flashStatus('Downloaded ' + fname);
-      return;
-    }
-
-    // Default path — per-account aggregate from accountRows[].variance.
-    const drill = componentDrilldownRows(componentKey);
-    const total = round2(drill.reduce((s, r) => s + r.amount, 0));
-    const totalAbs = Math.abs(total) < 0.005 ? 1 : Math.abs(total);
-
-    const headerRows = [
-      ['Variance component: ' + meta.label],
-      [meta.source],
-      [],
-      ['Period',      periodDisplay()],
-      ['Period End',  currentPeriod],
-      ['Database',    currentDbLabel()],
-      ['Module',      'Inventory'],
-      ['Generated',   new Date().toISOString().slice(0, 19).replace('T', ' ')],
-      ['Generated by', USER.name + ' <' + USER.email + '>'],
-      ['Accounts with contribution', drill.length],
-      ['Net amount',  total],
-      [],
-      ['Company', 'Business Unit', 'Object', 'Subsidiary', 'Long Account', 'Currency', 'Amount', '% of |net|']
-    ];
-    drill.forEach(r => {
-      const pct = Math.abs(total) < 0.005 ? '' : (Math.abs(r.amount) / totalAbs);
-      headerRows.push([
-        r.companyId,
-        r.businessUnit,
-        r.object,
-        r.subsidiary || '(none)',
-        r.longAccount,
-        r.currency,
-        r.amount,
-        pct
-      ]);
+    let scopeLbl = '';
+    try {
+      const a = (window.RRV8 && RRV8.readSessionScope && RRV8.readSessionScope().activeCompanies) || [];
+      if (a.length) scopeLbl = (a.length === 1 ? 'Company ' : 'Companies ') + a.join(', ');
+    } catch (_) {}
+    const perLbl = (cfg.requirePeriod === false) ? 'Current state' : (PERIOD_LABELS[currentPeriod] || currentPeriod);
+    const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 13);
+    const fname = meta.label.replace(/[^A-Za-z0-9]+/g, '') + '_' + currentPeriod + '_' + stamp + '.xlsx';
+    const ok = buildAuditWorkbook({
+      sheetName: meta.label,
+      fileName: fname,
+      titleLines: [meta.label, perLbl + (scopeLbl ? (' · ' + scopeLbl) : '')],
+      columns: cols,
+      rows: aoaRows,
+      totalRow: totalRow
     });
-    if (drill.length === 0) {
-      headerRows.push(['(none)', '—', '—', '—', '—', '—', 0, '']);
-      headerRows.push([]);
-      headerRows.push(['No accounts contribute to ' + meta.label + ' in the current scope.']);
-    } else {
-      headerRows.push([]);
-      headerRows.push(['', '', '', '', '', 'Total', total, '']);
-    }
-
-    const sheet = XLSX.utils.aoa_to_sheet(headerRows);
-    sheet['!cols'] = [
-      { wch: 10 }, { wch: 14 }, { wch: 10 }, { wch: 12 }, { wch: 28 },
-      { wch: 9 }, { wch: 16 }, { wch: 12 }
-    ];
-    // Percentage format for the % column on the data rows
-    if (drill.length) {
-      const firstDataRow = 14;
-      for (let i = 0; i < drill.length; i++) {
-        const cellRef = XLSX.utils.encode_cell({ r: firstDataRow - 1 + i, c: 7 });
-        if (sheet[cellRef] && typeof sheet[cellRef].v === 'number') {
-          sheet[cellRef].z = '0.0%';
-        }
-      }
-    }
-
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, sheet, meta.label.slice(0, 31));
-
-    const fname = 'variance-' + componentKey + '-' + currentPeriod + '.xlsx';
-    XLSX.writeFile(wb, fname);
-    flashStatus('Downloaded ' + fname);
+    if (ok !== false) flashStatus('Exported ' + meta.label + ' (' + rows.length + ' row' + (rows.length === 1 ? '' : 's') + ')');
   }
 
   // ---------- Preview modal ----------
@@ -8153,6 +8323,10 @@
   // shape as their Excel export; cardex (the only remaining fallback)
   // uses the per-account aggregate shape.
   const PREVIEW_COLUMNS = {
+    // Accountant summary matrix (accounts × Sales/Purchasing/Mfg/Inventory),
+    // built + rendered specially (renderTransactionsMatrix). The full
+    // Transactions page moves to the Analyst view.
+    transactions: { source: 'txMatrix' },
     glBatches: {
       source: 'view-backed',
       arrayKey: 'glBatches',
@@ -8250,10 +8424,23 @@
     if (!cfg) { flashStatus('Preview not configured for ' + componentKey); return; }
     _previewComponent = componentKey;
     _previewSort = null;            // reset to default (|amount| desc) per open
+    if (cfg.source === 'txMatrix') _txMatrix = null;   // force a fresh matrix per open
     const modal = document.getElementById('js-preview-modal');
     modal.hidden = false;
     document.body.style.overflow = 'hidden';
     renderPreviewModal();
+    // Transactions summary matrix — fetch + cross-tab, then re-render. Degrades
+    // gracefully in the modal (no scary page banner) if /inventory/transactions
+    // isn't wired on this agent yet.
+    if (cfg.source === 'txMatrix' && !IS_DEMO) {
+      try {
+        await loadTransactionsMatrix();
+        if (_previewComponent === componentKey) renderPreviewModal();
+      } catch (err) {
+        _txMatrix = { error: true };
+        if (_previewComponent === componentKey) renderPreviewModal();
+      }
+    }
     // Lazy-load the view-backed rows on first open. The legacy
     // /inventory/reconciliation-filtered response returns SUMMARY ONLY;
     // the four variance-component views are served separately by the
@@ -8408,6 +8595,10 @@
       renderCarryForwardPreview();
       return;
     }
+    if (cfg.source === 'txMatrix') {
+      renderTransactionsMatrix();
+      return;
+    }
 
     // Default flow — table-backed rendering.
     document.getElementById('js-preview-scroll').hidden = false;
@@ -8523,7 +8714,7 @@
   function renderCarryForwardPreview() {
     document.getElementById('js-preview-scroll').hidden = true;
     document.getElementById('js-preview-vc').hidden = false;
-    document.getElementById('js-preview-export').hidden = true;
+    document.getElementById('js-preview-export').hidden = false;   // exportable via exportCarryForwardAudit()
 
     const meta = COMPONENT_META.carryForward;
     document.getElementById('js-preview-title').textContent = meta.label;
@@ -8600,8 +8791,118 @@
   document.getElementById('js-preview-close').addEventListener('click', closeVariancePreview);
   document.getElementById('js-preview-cancel').addEventListener('click', closeVariancePreview);
   document.getElementById('js-preview-backdrop').addEventListener('click', closeVariancePreview);
+  // ---- Transactions summary matrix (accountant view) ---------------------
+  // The accountant gets a quick-glance matrix (accounts × Sales/Purchasing/Mfg/
+  // Inventory + Total) — not the full Transactions page (that moves to the
+  // Analyst view). Built from /inventory/transactions (same source + Type
+  // classifier the page uses); exportable audit-quality.
+  const TX_TYPES = ['Sales', 'Purchasing', 'Manufacturing', 'Inventory'];
+  const TX_TYPE_LABEL = { Sales: 'Sales', Purchasing: 'Purchasing', Manufacturing: 'Mfg', Inventory: 'Inventory' };
+  let _txMatrix = null;   // { accounts:[{account, Sales, Purchasing, Manufacturing, Inventory, total}], colTotals, grand }
+  // Mirrors inventory-transactions.html moduleOf(): OP / PV / OV / OP → Purchasing;
+  // Type Sales / Mfg as tagged; everything else → Inventory.
+  function _txModuleOf(row) {
+    const ot = String(row.OT || '').trim().toUpperCase();
+    const dt = String(row.DT || '').trim().toUpperCase();
+    const type = String(row.Type || '').trim();
+    if (ot === 'OP' || dt === 'PV' || dt === 'OV' || dt === 'OP') return 'Purchasing';
+    if (type === 'Sales') return 'Sales';
+    if (type === 'Mfg' || type === 'Manufacturing') return 'Manufacturing';
+    return 'Inventory';
+  }
+  async function loadTransactionsMatrix() {
+    const status = await rrFetch('inventory/status');
+    const rf = (status && status.reconciliationFilter) || {};
+    const scoped = Object.assign({}, rf);
+    try { const act = (window.RRV8 && RRV8.readSessionScope && RRV8.readSessionScope().activeCompanies) || []; if (act.length) scoped.companies = act; } catch (_) {}
+    // /inventory/transactions takes BARE-STRING filter arrays (per API.md) —
+    // NOT the {id,checked,show} wrapper the variance-component endpoints want.
+    const arr = x => Array.isArray(x) ? x : [];
+    const body = {
+      take: 100000, skip: 0, page: 1, pageSize: 100000,
+      reconciliationFilter: {
+        currencies:    arr(scoped.currencies),
+        companies:     arr(scoped.companies),
+        businessUnits: arr(scoped.businessUnits),
+        objects:       arr(scoped.objects),
+        subsidiaries:  arr(scoped.subsidiaries),
+        period:        currentPeriod
+      },
+      groupingType: 'TYPE',
+      exclusions: { types: [], orderTypes: [], subTypes: [], docTypes: [] },
+      cacheKey: null
+    };
+    const resp = await rrFetch('inventory/transactions', { method: 'POST', body });
+    const rows = (resp && resp.data) || [];
+    const byAcct = new Map();
+    const colTotals = { Sales: 0, Purchasing: 0, Manufacturing: 0, Inventory: 0 };
+    let grand = 0;
+    rows.forEach(r => {
+      const acct = String(r.LongAccount || '').trim(); if (!acct) return;
+      const mod = _txModuleOf(r);
+      const v = Number(r.Variance) || 0;
+      let m = byAcct.get(acct);
+      if (!m) { m = { account: acct, Sales: 0, Purchasing: 0, Manufacturing: 0, Inventory: 0, total: 0 }; byAcct.set(acct, m); }
+      m[mod] += v; m.total += v; colTotals[mod] += v; grand += v;
+    });
+    _txMatrix = { accounts: [...byAcct.values()].sort((a, b) => a.account.localeCompare(b.account)), colTotals: colTotals, grand: grand };
+  }
+  function renderTransactionsMatrix() {
+    document.getElementById('js-preview-scroll').hidden = false;
+    document.getElementById('js-preview-vc').hidden = true;
+    const meta = COMPONENT_META.transactions || { label: 'Transactions' };
+    document.getElementById('js-preview-title').textContent = meta.label;
+    const sub = document.getElementById('js-preview-sub');
+    if (sub) sub.textContent = 'Item Ledger to GL variance by account and type · ' + (PERIOD_LABELS[currentPeriod] || currentPeriod);
+    const thead = document.getElementById('js-preview-thead');
+    const tbody = document.getElementById('js-preview-tbody');
+    const tfoot = document.getElementById('js-preview-tfoot');
+    const empty = document.getElementById('js-preview-empty');
+    document.getElementById('js-preview-export').hidden = !(_txMatrix && _txMatrix.accounts && _txMatrix.accounts.length);
+    if (_txMatrix && _txMatrix.error) {
+      thead.innerHTML = ''; tbody.innerHTML = ''; tfoot.innerHTML = '';
+      if (empty) { empty.hidden = false; empty.textContent = 'Transaction variance by type needs the inventory/transactions endpoint, which isn’t available on this agent yet. (Full breakdown is on the Transactions page in the Analyst view.)'; }
+      return;
+    }
+    if (!_txMatrix) { thead.innerHTML = ''; tbody.innerHTML = ''; tfoot.innerHTML = ''; if (empty) { empty.hidden = false; empty.textContent = 'Loading…'; } return; }
+    thead.innerHTML = '<th style="text-align:left">Account</th>' + TX_TYPES.map(t => '<th style="text-align:right">' + TX_TYPE_LABEL[t] + '</th>').join('') + '<th style="text-align:right">Total</th>';
+    if (!_txMatrix.accounts.length) { tbody.innerHTML = ''; tfoot.innerHTML = ''; if (empty) { empty.hidden = false; empty.textContent = 'No transaction variance in the current scope.'; } return; }
+    if (empty) empty.hidden = true;
+    const cell = v => '<td class="num' + (v < 0 ? ' is-negative' : '') + '" style="text-align:right">' + (Math.abs(v) < 0.005 ? '&mdash;' : fmtMoney(v)) + '</td>';
+    tbody.innerHTML = _txMatrix.accounts.map(a =>
+      '<tr><td>' + escapeHtml(a.account) + '</td>' + TX_TYPES.map(t => cell(a[t])).join('')
+      + '<td class="num" style="text-align:right;font-weight:700">' + fmtMoney(a.total) + '</td></tr>').join('');
+    const ct = _txMatrix.colTotals;
+    tfoot.innerHTML = '<tr><td style="font-weight:800">Total</td>'
+      + TX_TYPES.map(t => '<td class="num" style="text-align:right;font-weight:800">' + fmtMoney(ct[t]) + '</td>').join('')
+      + '<td class="num" style="text-align:right;font-weight:800">' + fmtMoney(_txMatrix.grand) + '</td></tr>';
+  }
+  function exportTransactionsMatrix() {
+    if (!_txMatrix) { flashStatus('Nothing to export yet'); return; }
+    let scopeLbl = '';
+    try { const a = (window.RRV8 && RRV8.readSessionScope && RRV8.readSessionScope().activeCompanies) || []; if (a.length) scopeLbl = (a.length === 1 ? 'Company ' : 'Companies ') + a.join(', '); } catch (_) {}
+    const cols = [{ label: 'Account' }].concat(TX_TYPES.map(t => ({ label: TX_TYPE_LABEL[t], num: true }))).concat([{ label: 'Total', num: true }]);
+    const rows = _txMatrix.accounts.map(a => [a.account, a.Sales, a.Purchasing, a.Manufacturing, a.Inventory, a.total]);
+    const ct = _txMatrix.colTotals;
+    const totalRow = ['Total', ct.Sales, ct.Purchasing, ct.Manufacturing, ct.Inventory, _txMatrix.grand];
+    const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 13);
+    buildAuditWorkbook({
+      sheetName: 'Transactions',
+      fileName: 'TransactionsByType_' + currentPeriod + '_' + stamp + '.xlsx',
+      titleLines: ['Transactions — Item Ledger to GL variance by account and type',
+        (PERIOD_LABELS[currentPeriod] || currentPeriod) + (scopeLbl ? (' · ' + scopeLbl) : '')],
+      columns: cols, rows: rows, totalRow: totalRow
+    });
+    flashStatus('Exported Transactions matrix');
+  }
+
   document.getElementById('js-preview-export').addEventListener('click', () => {
-    if (_previewComponent) generateVarianceExcel(_previewComponent);
+    if (!_previewComponent) return;
+    // Carry forward exports the prior-period composition; transactions exports
+    // the account×type matrix; the view-backed components export their row grid.
+    if (_previewComponent === 'carryForward') exportCarryForwardAudit();
+    else if (_previewComponent === 'transactions') exportTransactionsMatrix();
+    else generateVarianceExcel(_previewComponent);
   });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && _previewComponent) {
@@ -10274,17 +10575,14 @@
     const key = card.dataset.component;
     if (!key) return;
     const label = (COMPONENT_META[key] && COMPONENT_META[key].label) || (card.querySelector('.vc-label').textContent || 'Variance step');
-    const cardAction = card.dataset.cardAction || 'preview';
-    // View-grid sources open their standalone page; Transactions has its own
-    // page. Carry forward now opens its page too (prior-period composition grid),
-    // replacing the old preview modal.
-    const SOURCE_PAGE = { carryForward: 1, glBatches: 1, endOfDay: 1, cardex: 1, manualJournalEntries: 1 };
-    if (cardAction === 'navigate' && key === 'transactions') {
-      window.location.href = 'inventory-transactions.html' + (window.location.search || '');
-    } else if (SOURCE_PAGE[key]) {
-      const q = window.location.search ? (window.location.search + '&source=' + key) : ('?source=' + key);
+    // Standardized: five cards open a quick-glance PREVIEW MODAL (Excel export
+    // inside) — carry forward, transactions (account×type matrix), journal
+    // entries, GL batches, end of day. Cardex keeps its dedicated page (the one
+    // exception; the full Transactions page moves to the Analyst view later).
+    if (key === 'cardex') {
+      const q = window.location.search ? (window.location.search + '&source=cardex') : ('?source=cardex');
       window.location.href = 'inventory-variance-source.html' + q;
-    } else if (cardAction === 'preview' && PREVIEW_COLUMNS[key]) {
+    } else if (PREVIEW_COLUMNS[key]) {   // transactions, carryForward, glBatches, endOfDay, manualJournalEntries
       openVariancePreview(key);
     } else {
       flashStatus('Preview pane for ' + label + ' not yet configured');
@@ -10292,12 +10590,12 @@
   }
   document.querySelectorAll('.variance-card').forEach(card => {
     card.addEventListener('click', (e) => {
-      if (e.target.closest('.variance-step-action')) return;
+      if (e.target.closest('.variance-step-action') || e.target.closest('.vc-help')) return;
       _runVarianceCardAction(card);
     });
     card.addEventListener('keydown', (e) => {
       if (e.key !== 'Enter' && e.key !== ' ') return;
-      if (e.target.closest('.variance-step-action')) return;
+      if (e.target.closest('.variance-step-action') || e.target.closest('.vc-help')) return;
       e.preventDefault();
       _runVarianceCardAction(card);
     });
@@ -10329,13 +10627,13 @@
         || (step ? step.querySelector('.variance-step-label').textContent : 'Variance step');
 
       if (action === 'excel' && componentKey) {
-        generateVarianceExcel(componentKey);
+        if (componentKey === 'carryForward') exportCarryForwardAudit();
+        else if (componentKey === 'transactions') exportTransactionsMatrix();
+        else generateVarianceExcel(componentKey);
       } else if (action === 'navigate') {
-        // The Transactions row navigates to its dedicated page;
-        // carry the URL query (?mode=staging etc.) forward so the
-        // destination boots in the same mode.
+        // Transactions now opens the account×type matrix modal (was a page).
         if (componentKey === 'transactions') {
-          window.location.href = 'inventory-transactions.html' + (window.location.search || '');
+          openVariancePreview('transactions');
         } else {
           flashStatus(label + ' page not built yet');
         }
