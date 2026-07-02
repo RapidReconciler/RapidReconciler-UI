@@ -930,6 +930,91 @@
       document.getElementById('gridCount').textContent='0 rows';
       setBandStatus('todoStatus','','Data unavailable');
     });
+
+  // ============================================================
+  //  System Status — analyzer pipeline (ported from the retired
+  //  inventory-reconciliation.html). POST /system-status → { fileName }
+  //  → GET /download-excel/{id} → ArrayBuffer → rrv8-analyze bridge →
+  //  Tools/analysis-workbook picks up the SystemStatusTemplate and
+  //  produces the analyzed workbook. One click → analyzed workbook.
+  //  Reached via ?statusDownload=1 (the DMAAI "full diagnostic
+  //  pipeline" deep-link). Production-only: hits the active DB agent
+  //  with Bearer auth; no demo synthesis path (this page has none).
+  // ============================================================
+  function ssAgent(){
+    var base=(window.RRDB ? window.RRDB.agentBase() : null) || (window.RR_CONFIG && RR_CONFIG.testAgentBase);
+    var tok; try{ tok=localStorage.getItem('rrv8.token'); }catch(_){}
+    return { base:base, tok:tok };
+  }
+  // Run the analyzer HEADLESSLY in a hidden iframe and hand a workbook
+  // buffer over via the `rrv8-analyze` postMessage handshake. The
+  // analyzer's rrv8AutoAnalyze runs from the iframe context and triggers
+  // its usual download() — the browser surfaces the analyzed file in the
+  // parent window's downloads bar with no visible analyzer tab popping up.
+  // Falls back to a plain download of the raw buffer if the analyzer
+  // fails to acknowledge within the timeout (e.g. schema mismatch).
+  function handOffToAnalyzer(buffer, fallbackName){
+    var iframe=document.createElement('iframe');
+    iframe.src='../Tools/analysis-workbook.html';
+    iframe.setAttribute('aria-hidden','true');
+    iframe.style.cssText='position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;border:0;opacity:0;pointer-events:none;';
+    document.body.appendChild(iframe);
+    var sent=false, done=false;
+    function fallbackDownload(reason){
+      console.warn('Analyzer headless run failed — falling back to direct download:', reason);
+      var blob=new Blob([buffer],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+      var url=URL.createObjectURL(blob), a=document.createElement('a');
+      a.href=url; a.download=fallbackName||'workbook.xlsx';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast('Analyzer unavailable — downloaded the raw workbook');
+    }
+    function cleanup(){
+      window.removeEventListener('message', onMsg);
+      clearInterval(pingTimer); clearTimeout(failTimer);
+      setTimeout(function(){ try{ iframe.remove(); }catch(_){} }, 1500);
+    }
+    function onMsg(ev){
+      if(ev.source!==iframe.contentWindow || ev.origin!==location.origin) return;
+      if(!ev.data) return;
+      if(ev.data.type==='rrv8-analyze-ready' && !sent){
+        sent=true;
+        try{ iframe.contentWindow.postMessage({type:'rrv8-analyze',detail:buffer}, location.origin); }
+        catch(e){ fallbackDownload(e.message); cleanup(); }
+      } else if(ev.data.type==='rrv8-analyze-done'){ done=true; cleanup(); }
+      else if(ev.data.type==='rrv8-analyze-error'){ fallbackDownload(ev.data.message||'analyzer reported error'); cleanup(); }
+    }
+    window.addEventListener('message', onMsg);
+    var pingTimer=setInterval(function(){
+      if(sent){ clearInterval(pingTimer); return; }
+      try{ iframe.contentWindow.postMessage({type:'rrv8-analyze-ping'}, location.origin); }catch(_){}
+    }, 500);
+    var failTimer=setTimeout(function(){ if(!done){ fallbackDownload('timed out'); cleanup(); } }, 30000);
+  }
+  function runSystemStatusAnalysis(){
+    toast('Generating diagnostic Excel…');
+    var a=ssAgent();
+    if(!a.base||!a.tok){ toast('Sign in to run the System Status diagnostic'); return; }
+    fetch(a.base+'/system-status',{method:'POST',
+        headers:{'Authorization':'Bearer '+a.tok,'Content-Type':'application/json;charset=UTF-8','Accept':'application/json'},
+        body:'{}'})
+      .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+      .then(function(resp){
+        var fileName=resp&&resp.fileName;
+        if(!fileName) throw new Error('Agent did not return a fileName');
+        return fetch(a.base+'/download-excel/'+encodeURIComponent(fileName),{
+          headers:{'Authorization':'Bearer '+a.tok,'Accept':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}});
+      })
+      .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.arrayBuffer(); })
+      .then(function(buffer){ handOffToAnalyzer(buffer,'SystemStatus.xlsx'); })
+      .catch(function(err){ console.error('System Status analysis failed:', err); toast('Failed to run System Status analysis — '+(err&&err.message?err.message:err)); });
+  }
+  // ?statusDownload=1 — the DMAAI "full diagnostic pipeline" deep-link opens
+  // this page in a new tab to run the System Status diagnostic through the
+  // analyzer. Independent of the roll-forward data load above.
+  (function(){
+    try{ if(new URLSearchParams(window.location.search).get('statusDownload')==='1') runSystemStatusAnalysis(); }catch(_){}
+  })();
 })();
 </script>
 </body>

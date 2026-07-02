@@ -7,7 +7,7 @@
  * Usage (each page calls once at the top of its IIFE):
  *
  *   RRV8.mountSidebar({
- *     activePage:    'reconciliation' | 'transactions' | 'asof' | 'cardex-variance' | 'dmaais',
+ *     activePage:    'rollforward' | 'transactions' | 'asof' | 'cardex-variance' | 'dmaais',
  *     hasPeriodFilter: true,        // adds the "Period" filter row
  *                                   // above Currency on Reconciliation
  *   });
@@ -48,7 +48,7 @@
   // 'scope' when the active page doesn't belong to a module
   // (matches the pre-accordion UX where Scope was always visible).
   const PAGE_TO_SECTION = {
-    reconciliation:    'inventory',
+    rollforward:       'inventory',
     transactions:      'inventory',
     asof:              'inventory',
     'admin-companies': 'admin',
@@ -122,7 +122,7 @@
 
     // is-active classes per page
     const cls = (page) => activePage === page ? ' is-active' : '';
-    const isInventoryPage = activePage === 'reconciliation' || activePage === 'transactions' || activePage === 'asof';
+    const isInventoryPage = activePage === 'rollforward' || activePage === 'transactions' || activePage === 'asof';
 
     // The period filter row only renders on Reconciliation. Its
     // popover/click wiring is page-specific (in the IIFE).
@@ -243,7 +243,7 @@
         <svg class="sidebar-nav-caret" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 6 8 10 12 6"/></svg>
       </button>
       <div class="sidebar-nav-children">
-        <a href="inventory-reconciliation.html" class="sidebar-nav-child${cls('reconciliation')}" data-nav-page="reconciliation">Reconciliation</a>
+        <a href="inventory-account-rollforward.html" class="sidebar-nav-child${cls('rollforward')}" data-nav-page="rollforward">Account Roll Forward</a>
         <a href="inventory-transactions.html"   class="sidebar-nav-child${cls('transactions')}"   data-nav-page="transactions">Transactions</a>
         <a href="inventory-asof.html"           class="sidebar-nav-child${cls('asof')}"           data-nav-page="asof">Perpetual</a>
       </div>
@@ -570,7 +570,7 @@
   // function reached from Home (a nav:false standalone surface, like the
   // Model DMAAI Review), not an everyday inventory sub-nav tab.
   const WORKBAR_NAV = [
-    { page: 'reconciliation',  href: 'inventory-reconciliation.html',  label: 'Reconciliation' },
+    { page: 'rollforward',     href: 'inventory-account-rollforward.html', label: 'Account Roll Forward' },
     { page: 'transactions',    href: 'inventory-transactions.html',    label: 'Transactions' },
     { page: 'asof',            href: 'inventory-asof.html',            label: 'Perpetual' }
   ];
@@ -1225,6 +1225,11 @@
   // in localStorage (rrv8.lastActivity) so it's shared across tabs/pages.
   // The token's own exp still applies as a hard backstop. The manually-set
   // dev token (no sessionStart, far-future exp) is exempt.
+  // Auto-signout master switch. DISABLED for dev/demo per owner 2026-07-02 —
+  // the 30-min idle timeout was kicking working sessions to login mid-task.
+  // Re-enable before production by setting this to true (nothing else changes;
+  // markActivity/watchSession still run so the clock is warm when it's flipped).
+  const AUTO_SIGNOUT_ENABLED = false;
   const IDLE_MAX_MS = 30 * 60 * 1000;
   let _lastActivityWrite = 0;
   function markActivity() {
@@ -1240,6 +1245,7 @@
     } catch (_) {}
   }
   function sessionExpired() {
+    if (!AUTO_SIGNOUT_ENABLED) return false;   // dev/demo: never auto-expire (see flag above)
     try {
       const start = localStorage.getItem('rrv8.sessionStart');
       if (start) {
