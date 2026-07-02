@@ -111,3 +111,26 @@ summary cards that **deep-link to the pages that already exist** — no logic po
 Then **switch hard to the 3 demo DBs** (Demo1 fixed today; Demo2/Demo3 = TR/NA
 sanitize + rename + reload per the NA/TR runbook). Detail-palette polish is
 low-priority until the DBs are up.
+
+## Deferred — Perpetual contributor bar drill (tabled 2026-07-02)
+
+The Perpetual contributor strip (BU / Object / Subsidiary / Branch plant / GL
+class) is now a **de-emphasized** supporting visual: compact bars (68px track),
+top **25** by materiality (largest |$|), laid out in code order; per-bar $/count
+labels only show at <=12 bars, otherwise hover carries the detail.
+
+**Tabled interaction:** the bars are *not* clickable yet. First-instinct on a bar
+chart is to click a bar, so plan a real **drill**, not the free-text row search:
+
+- Click a bar -> set a `_perpContribFilter = { dim, value }` (e.g. Branch = "2")
+  and filter the grid to rows where that dimension value matches. Distinct from
+  `_perpSearchFilter` (which scans all columns as text and would over-match a
+  short code like "2").
+- Active bar gets a selected state; a clearable chip ("Branch 2 x") near the
+  toolbar; re-click or chip-x clears. Composes with residual/search/view + the
+  count line.
+- The on-hand headline stays the full period total (a filter narrows the grid,
+  not the scope) - same rule as row search.
+- Open question for the owner: does a bar click filter **in place** on Home, or
+  deep-link to the Full Perpetual page pre-filtered? Lean in-place (keeps the
+  glance a glance); revisit at demo-polish time.
