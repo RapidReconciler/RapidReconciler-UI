@@ -587,42 +587,69 @@
     if (nav) nav.style.display = inv ? '' : 'none';
   }
 
-  // Demo-only AI-plan tier pill in the workbar. Mirrors home.html's haiTierSeg:
-  // builds a segmented pill from RRAI.TIERS, flips the GLOBAL tier via RRAI.set()
-  // (which fires rrv8:aitierchange → every AI surface re-runs at the new exposure
-  // level) and reflects the active tier. Only mounted in non-prod (see mountWorkbar).
-  var _workbarAiTierBound = false;
-  function renderWorkbarAiTier() {
-    var seg = document.getElementById('js-workbar-aitier-seg');
-    if (!seg || !global.RRAI) return;
+  // Global AI governance selector — a fixed bottom-left dock present on EVERY V8
+  // page (non-prod only), so it's never hunted for and one control drives the whole
+  // app. Builds a segmented Off/Grounded/Scrubbed/Full pill from RRAI, flips the
+  // GLOBAL tier via RRAI.set() (fires rrv8:aitierchange → every AI surface re-runs
+  // at the new exposure), and reflects the active tier. Pages with no AI just don't
+  // react — the control still shows.
+  function _aiDockMode() {
+    try { return (new URLSearchParams(global.location.search).get('mode')) || (global.RR_CONFIG && global.RR_CONFIG.mode) || 'demo'; }
+    catch (_) { return 'demo'; }
+  }
+  function syncAiTierDock() {
+    var seg = document.getElementById('rrai-dock-seg'); if (!seg || !global.RRAI) return;
     var cur = global.RRAI.get();
-    if (!seg.children.length) {
-      global.RRAI.TIERS.forEach(function (t) {
-        var b = document.createElement('button');
-        b.type = 'button';
-        b.className = 'workbar-aitier-opt';
-        b.setAttribute('data-tier', t);
-        b.textContent = global.RRAI.LABELS[t];
-        b.title = (global.RRAI.BLURB && global.RRAI.BLURB[t]) || '';
-        b.addEventListener('click', function (e) {
-          e.stopPropagation();
-          if (global.RRAI.get() === t) return;
-          global.RRAI.set(t);   // persists + fires rrv8:aitierchange (global)
-        });
-        seg.appendChild(b);
-      });
-    }
-    Array.prototype.forEach.call(seg.children, function (b) {
-      b.classList.toggle('is-active', b.getAttribute('data-tier') === cur);
+    Array.prototype.forEach.call(seg.children, function (b) { b.classList.toggle('is-active', b.getAttribute('data-tier') === cur); });
+  }
+  // The dock carries its OWN styles so it renders identically on every page —
+  // home.html, for one, doesn't load sidebar.css (it's all inline), which left the
+  // dock unstyled (a plain block at page-bottom that vanished on layout).
+  function _ensureAiDockStyle() {
+    if (document.getElementById('rrai-dock-style')) return;
+    var css =
+      '.rrai-dock{position:fixed;left:16px;bottom:16px;z-index:60;display:inline-flex;align-items:center;gap:8px;' +
+      'padding:5px 8px 5px 12px;border-radius:100px;background:rgba(31,45,74,.92);border:1px solid rgba(255,255,255,.14);' +
+      'box-shadow:0 8px 24px -8px rgba(8,18,38,.5);font-family:"Source Sans 3",sans-serif;}' +
+      '.rrai-dock-lbl{font-size:10px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:rgba(255,255,255,.62);}' +
+      '.rrai-dock-seg{display:inline-flex;gap:2px;padding:2px;border-radius:100px;background:rgba(255,255,255,.08);}' +
+      '.rrai-dock-opt{-webkit-appearance:none;appearance:none;border:0;background:transparent;font-family:inherit;font-size:11.5px;' +
+      'font-weight:700;color:rgba(255,255,255,.8);padding:5px 10px;border-radius:100px;cursor:pointer;white-space:nowrap;' +
+      'transition:background .12s,color .12s,box-shadow .12s;}' +
+      '.rrai-dock-opt:hover{color:#fff;background:rgba(255,255,255,.10);}' +
+      '.rrai-dock-opt.is-active{background:linear-gradient(135deg,#7c5cff,#3d8fd6);color:#fff;box-shadow:0 2px 8px rgba(124,92,255,.4);}' +
+      '@media (prefers-reduced-motion:reduce){.rrai-dock-opt{transition:none;}}' +
+      '@media (max-width:900px){.rrai-dock-lbl{display:none;}.rrai-dock{left:10px;bottom:10px;}}';
+    var st = document.createElement('style');
+    st.id = 'rrai-dock-style';
+    st.textContent = css;
+    (document.head || document.documentElement).appendChild(st);
+  }
+  function mountAiTierDock() {
+    if (!global.RRAI || _aiDockMode() === 'prod') return;                 // non-prod only
+    if (!document.body || document.getElementById('rrai-dock')) return;   // idempotent
+    _ensureAiDockStyle();
+    var dock = document.createElement('div');
+    dock.className = 'rrai-dock'; dock.id = 'rrai-dock';
+    dock.setAttribute('role', 'group');
+    dock.setAttribute('aria-label', 'AI governance level (demo switcher)');
+    dock.innerHTML = '<span class="rrai-dock-lbl" title="Switch the AI governance level — every AI surface re-runs at that level of data access">AI</span>' +
+                     '<span class="rrai-dock-seg" id="rrai-dock-seg"></span>';
+    var seg = dock.querySelector('#rrai-dock-seg');
+    global.RRAI.TIERS.forEach(function (t) {
+      var b = document.createElement('button');
+      b.type = 'button'; b.className = 'rrai-dock-opt'; b.setAttribute('data-tier', t);
+      b.textContent = global.RRAI.LABELS[t];
+      b.title = (global.RRAI.BLURB && global.RRAI.BLURB[t]) || '';
+      b.addEventListener('click', function (e) { e.stopPropagation(); if (global.RRAI.get() !== t) global.RRAI.set(t); });
+      seg.appendChild(b);
     });
+    document.body.appendChild(dock);
+    syncAiTierDock();
   }
-  function wireWorkbarAiTier() {
-    renderWorkbarAiTier();
-    if (!_workbarAiTierBound) {
-      _workbarAiTierBound = true;
-      global.addEventListener('rrv8:aitierchange', renderWorkbarAiTier);
-    }
-  }
+  global.addEventListener('rrv8:aitierchange', syncAiTierDock);
+  if (document.readyState === 'loading') global.addEventListener('DOMContentLoaded', mountAiTierDock);
+  else mountAiTierDock();
 
   function mountWorkbar(opts) {
     opts = opts || {};
@@ -652,20 +679,9 @@
     const down = seed.cls.indexOf('is-red') !== -1;
     const right = document.createElement('div');
     right.className = 'workbar-right';
-    // Demo-only AI-plan tier pill (non-prod): a global switcher that sits with the
-    // other workbar pills. Flipping it drives the global RRAI tier, so every AI
-    // surface re-runs at the chosen exposure level. Auto-hidden when mode === 'prod'.
-    const showAiTier = (function () {
-      try { return !!global.RRAI && !!global.RR_CONFIG && global.RR_CONFIG.mode !== 'prod'; }
-      catch (_) { return false; }
-    })();
+    // (The AI governance selector moved to a global fixed bottom-left dock —
+    // mountAiTierDock() — so it's identical on every page and never hunted for.)
     right.innerHTML =
-      (showAiTier
-        ? '<span class="workbar-aitier" id="js-workbar-aitier" role="group" aria-label="AI plan tier (demo switcher)">' +
-            '<span class="workbar-aitier-lbl" title="Demo: switch the AI plan tier — every AI surface re-runs at that level of data access">AI</span>' +
-            '<span class="workbar-aitier-seg" id="js-workbar-aitier-seg"></span>' +
-          '</span>'
-        : '') +
       '<span class="topbar-conn' + (down ? ' is-down' : '') + '" id="js-topbar-conn" title="' + escapeHtml(seed.title) + '">' +
         '<span class="topbar-conn-dot"></span>' +
         '<span class="topbar-conn-text">' + (down ? 'Reconnecting…' : 'Connected') + '</span>' +
@@ -717,8 +733,6 @@
     }
 
     bar.appendChild(right);
-
-    if (showAiTier) wireWorkbarAiTier();
 
     const paintDbLabel = function () {
       try {
@@ -1319,8 +1333,8 @@
     try { localStorage.removeItem('rrv8.viewMode'); } catch (_) {}
     try { localStorage.removeItem('rrv8.sessionStart'); } catch (_) {}
     try { localStorage.removeItem('rrv8.lastActivity'); } catch (_) {}
-    try { localStorage.removeItem('rrv8.activeDb'); } catch (_) {}
-    // Keep rrv8.lastEmail so the login page can pre-fill the address.
+    // Keep rrv8.lastEmail (pre-fill) AND rrv8.activeDb (next sign-in resumes the
+    // last-used database, resolved by name; falls back to the first DB otherwise).
     global.location.href = '../login.html?reason=timeout';
   }
   let _sessionWatchStarted = false;

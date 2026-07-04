@@ -262,3 +262,89 @@ window.RRDB = (function () {
   }
   return { dbs: dbs, index: index, active: active, name: name, agentBase: agentBase, setActive: setActive };
 })();
+
+/*
+ * RRAI — the ONE global AI-plan-tier setting, shared across every page that
+ * loads config.js. This is the DEMO plan switcher: it lets a presenter flip the
+ * level of AI integration live and re-run the SAME question to show how the
+ * result changes per purchased tier. Four tiers, escalating by how much / how
+ * identifiable the data sent to the model is:
+ *
+ *   off      — AI disabled. No data leaves the page; the surface shows only the
+ *              deterministic figures (visible-but-disabled / upsell state).
+ *   grounded — shown as "Basic". The model sees ONLY the on-screen deterministic
+ *              figures already computed (no history/tracing, minimal data).
+ *              ("Docs-grounded" in the server's ai/health vocabulary — normalized here.)
+ *   scrubbed — shown as "Enhanced". Fuller underlying data, but customer-identifying
+ *              fields are masked before the call (e.g. "Co 00010" → "Entity A").
+ *   full     — full real data with identifiers + full generative latitude.
+ *
+ * Persisted to localStorage.rrv8.aiTier (one global key, not per-DB, so the
+ * demo setting is consistent everywhere). setTier fires a 'rrv8:aitierchange'
+ * window event so any open surface can re-run its AI read against the new tier.
+ * Each AI-using page reads RRAI.get() when building its prompt and applies the
+ * matching transform (see home.html _recsummaryLevel / renderAiBriefing).
+ */
+window.RRAI = (function () {
+  var TIERS  = ['off', 'grounded', 'scrubbed', 'full'];
+  // Display labels are plain-language tiers (Off / Basic / Enhanced / Full) — the
+  // old "Grounded" / "Scrubbed" read as jargon and invited questions. Internal keys
+  // ('grounded' / 'scrubbed') stay unchanged so logic + saved prefs keep working.
+  var LABELS = { off: 'Off', grounded: 'Basic', scrubbed: 'Enhanced', full: 'Full' };
+  var BLURB  = {
+    off:      'AI turned off — deterministic figures only, no data leaves the page',
+    grounded: 'AI sees only the on-screen figures',
+    scrubbed: 'AI sees fuller data with identities masked',
+    full:     'AI sees full data with identities'
+  };
+  // Normalize any input (incl. the server's ai/health 'docs' level) to a tier key.
+  function norm(t) {
+    t = String(t == null ? '' : t).toLowerCase();
+    if (t === 'docs') t = 'grounded';   // ai/health maxLevel vocabulary → our key
+    return TIERS.indexOf(t) >= 0 ? t : null;
+  }
+  function get() {
+    try { return norm(localStorage.getItem('rrv8.aiTier')) || 'full'; } catch (_) { return 'full'; }
+  }
+  function setTier(t) {
+    t = norm(t); if (!t) return;
+    try { localStorage.setItem('rrv8.aiTier', t); } catch (_) {}
+    try { window.dispatchEvent(new CustomEvent('rrv8:aitierchange', { detail: { tier: t } })); } catch (_) {}
+    return t;
+  }
+  return {
+    TIERS: TIERS, LABELS: LABELS, BLURB: BLURB,
+    norm: norm, get: get, set: setTier, label: function (t) { return LABELS[norm(t) || 'full']; }
+  };
+})();
+
+/*
+ * RRDEMO — staged, non-production sample data for the demo. Callers gate on
+ * RR_CONFIG.mode !== 'prod', so production always renders live data; this only
+ * surfaces in demo/staging. Timestamps are relative to page load so the feed
+ * always reads "recent". No customer identifiers — generic counts/dates only.
+ */
+window.RRDEMO = window.RRDEMO || {};
+// A realistic Application Activity Log (newest first) shared by the Home card
+// mini-feed and the full Activity Log page, so the two always agree.
+window.RRDEMO.activityLog = function () {
+  var now = Date.now(), M = 60000, H = 3600000, D = 86400000;
+  function at(ago) { return new Date(now - ago).toISOString(); }
+  return [
+    { at: at(2 * H),               event: 'Report engine started',  detail: 'Service resumed after the nightly maintenance window',                by: 'System' },
+    { at: at(6 * H),               event: 'Data refresh completed', detail: 'Scheduled JDE import finished — 1,284,102 rows across 3 companies',    by: 'Scheduler' },
+    { at: at(6 * H + 52 * M),      event: 'Data refresh started',   detail: 'Nightly scheduled import from JD Edwards began',                       by: 'Scheduler' },
+    { at: at(20 * H),              event: 'Reconciliation reviewed',detail: 'Period 2026-06 inventory reconciliation opened and reviewed',          by: 'Administrator' },
+    { at: at(1 * D + 2 * H),       event: 'Cardex reloaded',        detail: 'Perpetual cardex rebuilt from 2026-05-01',                             by: 'Administrator' },
+    { at: at(1 * D + 3 * H),       event: 'GL reloaded',            detail: 'GL roll-forward reloaded from 2026-04-01 to clear a balance break',    by: 'Administrator' },
+    { at: at(1 * D + 4 * H),       event: 'User signed in',         detail: 'Administrator session started',                                        by: 'Administrator' },
+    { at: at(2 * D + 1 * H),       event: 'Access review completed',detail: 'Team access reviewed and confirmed — next review Jul 27, 2026',        by: 'Administrator' },
+    { at: at(2 * D + 5 * H),       event: 'User added',             detail: 'New team member granted the Accountant role',                          by: 'Administrator' },
+    { at: at(3 * D),               event: 'Password policy updated',detail: 'Complex-password requirement enabled for 2 companies',                 by: 'Administrator' },
+    { at: at(3 * D + 6 * H),       event: 'Report engine started',  detail: 'Service started after an application update',                          by: 'System' },
+    { at: at(3 * D + 6 * H + 40 * M), event: 'Data refresh completed', detail: 'Scheduled JDE import finished — 1,190,447 rows across 3 companies', by: 'Scheduler' },
+    { at: at(4 * D + 3 * H),       event: 'Fiscal calendar checked',detail: 'No period-end date changes detected',                                 by: 'Scheduler' },
+    { at: at(5 * D + 2 * H),       event: 'Purge completed',        detail: 'Removed data older than the 24-month retention window',                by: 'Scheduler' },
+    { at: at(6 * D + 5 * H),       event: 'Report engine started',  detail: 'Initial service start',                                                by: 'System' }
+  ];
+};

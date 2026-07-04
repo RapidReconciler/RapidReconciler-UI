@@ -2610,6 +2610,19 @@
   // invent a figure. Least-moved rides the item ledger (inventory/transactions).
   // Deterministic client-side fallback if the AI service is unreachable.
   let _asofAiBusy = false;
+  let _asofLastAsk = null;   // {kind, freeText} of the current answer, for re-run on tier change
+  // Effective AI tier (gateway vocab: off|docs|scrubbed|full). In demo/non-prod the
+  // global RRAI plan pill is authoritative and drives this page's AI exposure live;
+  // in prod this page carries no plan gate, so it stays 'full' as before.
+  function asofEffTier() {
+    try {
+      if (window.RR_CONFIG && RR_CONFIG.mode !== 'prod' && window.RRAI) {
+        const g = window.RRAI.get();
+        if (g) return g === 'grounded' ? 'docs' : g;
+      }
+    } catch (_) {}
+    return 'full';
+  }
   function asofAggregates() {
     const rows = _viewRows || [];
     let total = 0;
@@ -2661,7 +2674,7 @@
     el.hidden = false; el.textContent = txt; el.classList.toggle('is-loading', !!loading);
   }
   function asofAiExplain(prompt) {
-    return rrFetch('api/v1/ai/explain', { method: 'POST', body: { prompt } })
+    return rrFetch('api/v1/ai/explain', { method: 'POST', body: { prompt, level: asofEffTier() } })
       .then(r => (r && r.text) ? String(r.text).trim() : '');
   }
   function asofLeastMovedFacts() {
@@ -2686,7 +2699,14 @@
   }
   function asofAsk(kind, freeText) {
     if (_asofAiBusy) return;
+    _asofLastAsk = { kind: kind, freeText: freeText };   // remember for re-run on tier flip
     const btn = document.getElementById('asof-ai-btn');
+    // AI off (demo pill): deterministic figures only — nothing leaves the page.
+    if (asofEffTier() === 'off') {
+      const det = asofDeterministic(kind);
+      asofAnswer(det || 'AI is turned off in this plan — the figures above show the on-hand value by branch and GL class.', false);
+      return;
+    }
     _asofAiBusy = true; if (btn) btn.disabled = true;
     asofAnswer('Thinking…', true);
     const facts = asofFacts();
@@ -2727,6 +2747,12 @@
       if (q) asofAsk(null, q);
     });
   })();
+  // Demo AI-tier pill flipped (global RRAI): re-run the answer that's currently
+  // showing at the new exposure so the pill visibly drives this page's AI.
+  window.addEventListener('rrv8:aitierchange', () => {
+    const ans = document.getElementById('asof-ai-answer');
+    if (_asofLastAsk && ans && !ans.hidden) asofAsk(_asofLastAsk.kind, _asofLastAsk.freeText);
+  });
 
   // Tab switch → re-render against the current filtered scope.
   document.addEventListener('click', (e) => {
@@ -2955,6 +2981,8 @@ function updateLotDetailPill() {
     _state.residualTarget = opt.target; _state.hideResiduals = true; _state.residualView = 'kept';
     saveResidualTarget(); saveHideResiduals();
     renderAll();   // recomputes _residualStats at the new target
+    // AI off (demo pill): the deterministic cutoff stands on its own — no AI refine.
+    if (asofEffTier() === 'off') { _fpShowNote(_fpPlainNote(opt), true); return; }
     _fpShowNote(_fpPlainNote(opt) + '  Refining…', true);
     _fpOptRunning = true; _fpSyncOptBtn();
     const z = _residualCandAbs || [];
@@ -2964,7 +2992,7 @@ function updateLotDetailPill() {
       + 'There are ' + z.length + ' such zero-quantity rows. Their absolute valuations, smallest first: ' + sample + (z.length > 40 ? ', …' : '') + '.\n'
       + 'A deterministic pass suggests a cutoff of ' + fmtMoney(opt.target) + ', hiding the ' + opt.count + ' smallest rows; the next row up is ' + fmtMoney(opt.nextUp) + '.\n'
       + 'Confirm or adjust the dollar cutoff that best separates rounding dust from a balance worth reviewing. Reply with the FIRST line exactly "TARGET: <dollars>" (a number), then ONE sentence in plain accountant English on why that cutoff. No markdown, no preamble.';
-    rrFetch('api/v1/ai/explain', { method: 'POST', body: { prompt } }).then(r => {
+    rrFetch('api/v1/ai/explain', { method: 'POST', body: { prompt, level: asofEffTier() } }).then(r => {
       const txt = (r && r.text) ? String(r.text).trim() : '';
       const m = txt.match(/TARGET:\s*\$?\s*([\d.]+)/i);
       if (m) { const tt = Number(m[1]); if (Number.isFinite(tt) && tt >= 0) { _state.residualTarget = tt; saveResidualTarget(); } }
