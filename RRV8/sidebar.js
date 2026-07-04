@@ -587,6 +587,43 @@
     if (nav) nav.style.display = inv ? '' : 'none';
   }
 
+  // Demo-only AI-plan tier pill in the workbar. Mirrors home.html's haiTierSeg:
+  // builds a segmented pill from RRAI.TIERS, flips the GLOBAL tier via RRAI.set()
+  // (which fires rrv8:aitierchange → every AI surface re-runs at the new exposure
+  // level) and reflects the active tier. Only mounted in non-prod (see mountWorkbar).
+  var _workbarAiTierBound = false;
+  function renderWorkbarAiTier() {
+    var seg = document.getElementById('js-workbar-aitier-seg');
+    if (!seg || !global.RRAI) return;
+    var cur = global.RRAI.get();
+    if (!seg.children.length) {
+      global.RRAI.TIERS.forEach(function (t) {
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'workbar-aitier-opt';
+        b.setAttribute('data-tier', t);
+        b.textContent = global.RRAI.LABELS[t];
+        b.title = (global.RRAI.BLURB && global.RRAI.BLURB[t]) || '';
+        b.addEventListener('click', function (e) {
+          e.stopPropagation();
+          if (global.RRAI.get() === t) return;
+          global.RRAI.set(t);   // persists + fires rrv8:aitierchange (global)
+        });
+        seg.appendChild(b);
+      });
+    }
+    Array.prototype.forEach.call(seg.children, function (b) {
+      b.classList.toggle('is-active', b.getAttribute('data-tier') === cur);
+    });
+  }
+  function wireWorkbarAiTier() {
+    renderWorkbarAiTier();
+    if (!_workbarAiTierBound) {
+      _workbarAiTierBound = true;
+      global.addEventListener('rrv8:aitierchange', renderWorkbarAiTier);
+    }
+  }
+
   function mountWorkbar(opts) {
     opts = opts || {};
     const bar = document.querySelector('.topbar');
@@ -615,7 +652,20 @@
     const down = seed.cls.indexOf('is-red') !== -1;
     const right = document.createElement('div');
     right.className = 'workbar-right';
+    // Demo-only AI-plan tier pill (non-prod): a global switcher that sits with the
+    // other workbar pills. Flipping it drives the global RRAI tier, so every AI
+    // surface re-runs at the chosen exposure level. Auto-hidden when mode === 'prod'.
+    const showAiTier = (function () {
+      try { return !!global.RRAI && !!global.RR_CONFIG && global.RR_CONFIG.mode !== 'prod'; }
+      catch (_) { return false; }
+    })();
     right.innerHTML =
+      (showAiTier
+        ? '<span class="workbar-aitier" id="js-workbar-aitier" role="group" aria-label="AI plan tier (demo switcher)">' +
+            '<span class="workbar-aitier-lbl" title="Demo: switch the AI plan tier — every AI surface re-runs at that level of data access">AI</span>' +
+            '<span class="workbar-aitier-seg" id="js-workbar-aitier-seg"></span>' +
+          '</span>'
+        : '') +
       '<span class="topbar-conn' + (down ? ' is-down' : '') + '" id="js-topbar-conn" title="' + escapeHtml(seed.title) + '">' +
         '<span class="topbar-conn-dot"></span>' +
         '<span class="topbar-conn-text">' + (down ? 'Reconnecting…' : 'Connected') + '</span>' +
@@ -667,6 +717,8 @@
     }
 
     bar.appendChild(right);
+
+    if (showAiTier) wireWorkbarAiTier();
 
     const paintDbLabel = function () {
       try {
