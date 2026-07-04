@@ -689,7 +689,7 @@
     var body='Please run R099102 (Account Balance Repost) in JD Edwards — proof mode first, then final mode — scoped to:\n\n'+
       'Company(ies): '+(cos||'(see below)')+'\nFiscal year: (current)\nAccounts:\n'+(acctList||'(GL accounts out of balance — see RapidReconciler Account Roll Forward)')+'\n\n'+
       'Reason: the balance table (F0902) disagrees with the detail (F0911) on these accounts; the detail is the source of truth.'+
-      (_aiMaxLevel==='full' ? '\n\nPlease attach the repost report (PDF) to your reply so it can be reviewed.' : '')+
+      (effTier()==='full' ? '\n\nPlease attach the repost report (PDF) to your reply so it can be reviewed.' : '')+
       '\n\nThanks.';
     a.setAttribute('href','mailto:?subject='+encodeURIComponent(subj)+'&body='+encodeURIComponent(body));
   }
@@ -751,7 +751,7 @@
     if(!report){ v.hidden=false; v.className='r99-ai-verdict'; v.textContent='Choose the report PDF first.'; return; }
     v.hidden=false; v.className='r99-ai-verdict is-thinking'; v.textContent='Checking…'; if(btn) btn.disabled=true;
     var sys='You review JD Edwards R099102 (Account Balance Repost) reports for a finance analyst. Decide whether the run completed with NO errors. Reply in 2-3 short sentences: begin with "CLEAN" or "ERRORS FOUND", then the evidence, then the next step — a clean report still requires Reload GL (re-import F0902) and a roll-forward rebuild before RapidReconciler reflects it. Plain language.';
-    aiExplain(sys, 'R099102 report:\n'+report.slice(0,8000), _aiMaxLevel).then(function(text){
+    aiExplain(sys, 'R099102 report:\n'+report.slice(0,8000), effTier()).then(function(text){
       var clean=/^\s*clean/i.test(text||'');
       v.className='r99-ai-verdict '+(clean?'clean':(/error/i.test(text||'')?'errors':''));
       v.textContent=text||'(no reply)'; if(btn) btn.disabled=false;
@@ -795,15 +795,39 @@
   function ingest(rows){
     DATA=(Array.isArray(rows)?rows:[]).map(function(r){ r.GLOK=normTok(r.GLOK); r.VarOK=normTok(r.VarOK); return r; });
     buildPicker(); renderAll();
+    maybeAutoOpenTodo();
+  }
+  // Land the page on content: open the To Do band (its AI summary) once, on the
+  // first data load. Gated to non-prod so the AI-forward demo shows the assistant
+  // immediately, while production keeps AI opt-in (no per-load model call).
+  var _autoOpenedTodo=false;
+  function maybeAutoOpenTodo(){
+    if(_autoOpenedTodo || !DATA.length) return;
+    try{ if(window.RR_CONFIG && RR_CONFIG.mode==='prod') return; }catch(_){}
+    _autoOpenedTodo=true;
+    var h=document.getElementById('todoHead'); if(h&&h._setOpen) h._setOpen(true);
   }
 
   // ============ AI assistant (Step 1) — VALC gateway /api/v1/ai ============
   // First on-page AI integration. The deterministic checklist below is the
   // "off" experience and always renders; when the band is expanded and the
   // client's plan includes AI, the assistant summarizes what to do up top.
-  var TIER_LABEL={ off:'Off', docs:'Docs-grounded', scrubbed:'Scrubbed', full:'Full data' };
+  var TIER_LABEL={ off:'Off', docs:'Basic', scrubbed:'Enhanced', full:'Full' };
   var _aiMaxLevel='off', _aiAskedKey=null;
   function aiBase(){ return (window.RR_CONFIG && RR_CONFIG.valcBase) || 'http://localhost:8080'; }
+  // Effective AI tier. In demo/non-prod the global RRAI plan pill (the presenter's
+  // live switcher) is authoritative and drives this page's AI exposure; in prod it
+  // falls back to the purchased plan from ai/health (no behavior change there).
+  // RRAI's 'grounded' maps to this page's 'docs' vocabulary.
+  function effTier(){
+    try {
+      if (window.RR_CONFIG && RR_CONFIG.mode !== 'prod' && window.RRAI) {
+        var g = window.RRAI.get();
+        if (g) return g === 'grounded' ? 'docs' : g;
+      }
+    } catch(_){}
+    return _aiMaxLevel;
+  }
   function aiTok(){ try{ return localStorage.getItem('rrv8.token'); }catch(_){ return null; } }
   function aiHealth(){
     var t=aiTok(); if(!t) return Promise.resolve('off');
@@ -829,19 +853,20 @@
   function renderAiChip(){
     var chip=document.getElementById('todoAiChip'), tier=document.getElementById('todoAiTier');
     if(!chip||!tier) return;
-    if(_aiMaxLevel==='off'){ chip.classList.add('is-off'); tier.textContent='AI · Off'; chip.title='The AI Assistant is not in your plan'; }
-    else { chip.classList.remove('is-off'); tier.textContent='AI · '+(TIER_LABEL[_aiMaxLevel]||_aiMaxLevel); chip.title='Expand for an AI summary of what to do'; }
+    var lvl=effTier();
+    if(lvl==='off'){ chip.classList.add('is-off'); tier.textContent='AI · Off'; chip.title='The AI Assistant is not in your plan'; }
+    else { chip.classList.remove('is-off'); tier.textContent='AI · '+(TIER_LABEL[lvl]||lvl); chip.title='Expand for an AI summary of what to do'; }
     // R099102 report-checker sends the report (account numbers/amounts) → full tier only.
-    var ai=document.getElementById('r99Ai'); if(ai) ai.hidden=(_aiMaxLevel!=='full');
+    var ai=document.getElementById('r99Ai'); if(ai) ai.hidden=(lvl!=='full');
     // Re-sync the email so the "attach the report" line tracks the tier once known.
     try{ syncR99Email(breakSummary()); }catch(_){}
   }
-  function aiScopeKey(){ return (state.company||'all')+'|'+DATA.filter(rowMatchesCo).length; }
+  function aiScopeKey(){ return effTier()+'|'+(state.company||'all')+'|'+DATA.filter(rowMatchesCo).length; }
   function aiPrompt(sum){
     var cos=Array.from(new Set(DATA.filter(rowMatchesCo).map(function(r){return String(r.CompanyNumber);}))).sort();
     var glN=sum.gl.rows, varN=sum.varc.rows;
     if(glN+varN===0) return 'Companies in scope: '+cos.join(', ')+'. The GL and variance roll-forwards are intact (no breaks). In one sentence, confirm there is nothing to correct and what to watch at the next refresh.';
-    if(_aiMaxLevel==='full'){
+    if(effTier()==='full'){
       var glA=sum.gl.accts.slice(0,12).map(function(x){return x.co+'·'+x.acct;}).join(', ');
       var vrA=sum.varc.accts.slice(0,12).map(function(x){return x.co+'·'+x.acct;}).join(', ');
       return 'Companies in scope: '+cos.join(', ')+'.\nGL breaks: '+glN+(glA?(' (accounts '+glA+')'):'')+'.\nVariance breaks: '+varN+(vrA?(' (accounts '+vrA+')'):'')+'.\nWhat should I do, and in what order?';
@@ -852,7 +877,7 @@
   function triggerTodoAi(){
     var panel=document.getElementById('todoAi'), body=document.getElementById('todoAiBody'), foot=document.getElementById('todoAiFoot');
     if(!panel||!body) return;
-    if(_aiMaxLevel==='off'){ panel.hidden=false; panel.classList.remove('is-thinking','is-error'); body.textContent='The AI Assistant isn’t part of your plan yet — the checklist below is the manual guide. Contact GSI to enable it.'; foot.textContent=''; return; }
+    if(effTier()==='off'){ panel.hidden=false; panel.classList.remove('is-thinking','is-error'); body.textContent='The AI Assistant isn’t part of your plan yet — the checklist below is the manual guide. Contact GSI to enable it.'; foot.textContent=''; return; }
     if(!DATA.length){ panel.hidden=true; return; }
     var key=aiScopeKey();
     if(_aiAskedKey===key) return;   // already asked (or asking) for this scope
@@ -860,10 +885,10 @@
     var sum=breakSummary();
     panel.hidden=false; panel.classList.add('is-thinking'); panel.classList.remove('is-error'); body.textContent='Thinking…'; foot.textContent='';
     var sys='You are RapidReconciler’s Account Roll Forward assistant, helping a finance analyst keep the inventory source-of-truth accurate. The four corrective levers are: R099102 repost and Reload GL (GL-side breaks), and Re-roll companies then Reload Cardex (variance-side breaks). Always recommend fixing GL-side breaks before variance. Be concise (2-4 sentences), plain finance language, no SQL/endpoint/table jargon beyond standard JDE references.';
-    aiExplain(sys, aiPrompt(sum), _aiMaxLevel).then(function(text){
+    aiExplain(sys, aiPrompt(sum), effTier()).then(function(text){
       panel.classList.remove('is-thinking');
       body.textContent=text||'(the assistant returned an empty reply)';
-      foot.textContent='RapidReconciler AI · '+(TIER_LABEL[_aiMaxLevel]||_aiMaxLevel)+' · verify against the report below';
+      foot.textContent='RapidReconciler AI · '+(TIER_LABEL[effTier()]||effTier())+' · verify against the report below';
     }).catch(function(e){
       panel.classList.remove('is-thinking'); panel.classList.add('is-error');
       body.textContent='Couldn’t reach the assistant right now — the checklist below is the manual guide.';
@@ -896,6 +921,15 @@
   wireBand('todoHead','todoBody', triggerTodoAi); wireBand('corrHead','corrBody'); wireBand('rptHead','rptBody');
   // AI chip in the To Do header: open the band (which triggers the AI summary).
   (function(){ var chip=document.getElementById('todoAiChip'), head=document.getElementById('todoHead'); if(chip&&head){ chip.addEventListener('click',function(e){ e.stopPropagation(); if(head._setOpen) head._setOpen(true); }); } })();
+  // Demo AI-tier pill flipped (global RRAI): re-label the chip and, if the To Do
+  // band is open, re-run the summary at the new exposure so the pill visibly drives
+  // this page's AI the same way it drives Home.
+  window.addEventListener('rrv8:aitierchange', function(){
+    renderAiChip();
+    _aiAskedKey=null;   // invalidate the cached answer so the re-ask lands
+    var tb=document.getElementById('todoBody');
+    if(tb && !tb.classList.contains('is-collapsed')) triggerTodoAi();
+  });
   // Block navigation on the Reload GL card while it's gated (pointer-events:none
   // stops the mouse, but a focused <a> can still be Enter-activated).
   (function(){ var c=document.getElementById('reloadGlCard'); if(c){ c.addEventListener('click',function(e){ if(c.classList.contains('is-gated')) e.preventDefault(); }); } })();
