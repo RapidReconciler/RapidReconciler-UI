@@ -526,7 +526,12 @@ record a **single model-level sign-off** — GSI surfaces the diagnostic but
 cannot approve the setup (only the customer's accounting team can).
 
 - **Endpoints** (agent-direct, authenticated; in `RR_TEST_AGENT_AREAS`):
-    - `GET /inventory/integrity/model-approval` — the verdict + counts.
+    - `GET /inventory/integrity/model-approval[?company=NN]` — the verdict +
+      counts. `?company=NN` narrows the materiality **counts**
+      (`report3Count` / `report3GlClassCount`) to one company for the analyst
+      Briefing (which scopes to a single company); the **verdict**
+      (`state` / drift) stays client-wide (the model DMAAI table is
+      client-wide, not per-company).
     - `POST /inventory/integrity/model-approval` — record the attestation
       (body `{ "note": "<optional>" }`; the approver is taken from the JWT,
       never the body).

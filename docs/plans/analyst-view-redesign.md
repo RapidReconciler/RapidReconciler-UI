@@ -182,3 +182,52 @@ AI narrates the beat.
 - **Model DMAAI review / DMAAI analysis** — setup-side approvals.
 
 Hold each for the owner's call on order + drill depth (Home vs. dedicated pages).
+
+## Transaction Variance tab — the prioritized corrective-action plan (BUILT 2026-07-05, UNCOMMITTED)
+
+New analyst sub-view **Transaction Variance** (key `txvar`), added to
+`SUBVIEWS.analyst` between Briefing and Reports. The demo "wow" surface: not a
+chart — a **prioritized plan** that answers "what's the shortest path to fewer
+manual entries?" Scoped to the single company in the banner; reuses the shared
+`_txVarCache` raw rows (recstatus=1 residual from `/inventory/transactions`).
+
+**Two lanes (`renderAnalystTxVar`):**
+- 🍃 **Low-hanging fruit — clear now, no journal entry:**
+  1. **Netting finder** (`_txvNetting`) — groups residuals **by account** (never
+     across accounts), flags accounts whose rows mostly offset (|net| < 15 % of
+     gross, both signs, ≥2 rows) as cross-period/timing washes proc 008_1 couldn't
+     pair. Shows gross → nets-to → **clearable with no entry**. This is the true
+     lowest-hanging fruit + a preview of DAC-8.
+  2. **No-JE rebalance patterns** — GL-Only (5.2) / Cardex-Only (5.3) from the
+     ported `_txvClassify`; Reload Cardex / re-roll, no JE.
+- 💰 **Biggest bang — fix the source, stop it recurring:**
+  1. **DMAAI configs behind the residual** (`_txvDmaaiPlays`) — fetches
+     `aai-analysis-latest` FIX-FIRST findings, **attributes residual $ to each by
+     (company, docType) overlap**, and shows **only findings with real residual $**
+     (the "which DMAAIs actually need review" filter), ranked by $. Reflects the
+     owner's "75 % of variance is DMAAI root-cause."
+  2. **Expense/JE patterns** — Mfg Cost Mismatch (5.16) / PV (5.17): genuine, needs
+     an entry, last.
+
+**AI (`_txvBuildPlan`):** deterministic plan paints instantly (no AI on load);
+"Build my plan with AI" sends the full deterministic breakdown to
+`api/v1/ai/explain` for the consultant narrative in priority order (net → fix
+configs → JE), calling out offsetting pairs. Tier-gated (off disables).
+
+**Deep-links (the "jump to the full page" flow):**
+- Cards → `inventory-transactions.html?company=NN&pattern=5.2` (added `company` +
+  `pattern` URL intake to that page).
+- DMAAI cards → `accounting-dmaais.html?tab=analysis&company=NN&finding=Fn` (added
+  `company`/`finding`/`tab` intake to that page).
+
+**Ranking:** lanes sort by $ (materiality); effort is implicit in lane placement
+(netting < rebalance < DMAAI-fix < JE). Recurrence (period spread) + a formal
+(materiality × recurrence) ÷ effort score + recency weighting are the next tuning
+step, plus per-card sequential AI reveal and the residual-over-periods "are we
+winning?" strip.
+
+**Follow-ups / known gaps:** docType-level DMAAI attribution is coarse (refine to
+account/AAI join once validated); Account-Mismatch (5.4) + Period-Mismatch (5.14)
+patterns aren't detected on Home yet (they need the DMAAI/cross-period indexes the
+full page builds) — the DMAAI lane covers the account-mismatch story via findings
+attribution instead.
