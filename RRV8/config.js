@@ -276,7 +276,7 @@ window.RRDB = (function () {
  *              figures already computed (no history/tracing, minimal data).
  *              ("Docs-grounded" in the server's ai/health vocabulary — normalized here.)
  *   scrubbed — shown as "Enhanced". Fuller underlying data, but customer-identifying
- *              fields are masked before the call (e.g. "Co 00010" → "Entity A").
+ *              fields are masked before the call (e.g. "Co 90001" → "Entity A").
  *   full     — full real data with identifiers + full generative latitude.
  *
  * Persisted to localStorage.rrv8.aiTier (one global key, not per-DB, so the
