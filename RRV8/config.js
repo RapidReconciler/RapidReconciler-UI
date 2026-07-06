@@ -319,6 +319,71 @@ window.RRAI = (function () {
 })();
 
 /*
+ * RRV8 shared helpers (config-level, so every page that loads config.js gets them
+ * regardless of sidebar.js load order — sidebar.js also does `RRV8 = RRV8 || {}`).
+ *
+ *  - exportName(): the ONE download-filename convention. Any .xlsx / .pdf export
+ *    routes through this so a downloaded file is self-describing out of context:
+ *      RR_<Surface>_<DB>_<Scope>_<Period>_<YYYYMMDD-HHmm>.<ext>
+ *    (illegal filesystem chars stripped, spaces → hyphens). company:number → CoNN,
+ *    company 'all'/null → AllCos; drill appended with '-'; period + tokens omitted
+ *    when not supplied. DB is the active database name.
+ *
+ *  - logActivity(): one-way, best-effort append to the server Activity Log
+ *    (POST /admin/activity on the active DB's Services jar — an audit trail read by
+ *    the Activity Log page + the Home mini-feed). Self-contained (own fetch + JWT)
+ *    so it doesn't depend on a page's local rrFetch. Never throws / never blocks the
+ *    UI — a logging failure must not break the action it records. Call it AFTER the
+ *    primary action succeeds.
+ */
+window.RRV8 = window.RRV8 || {};
+(function () {
+  function clean(s) {
+    return String(s == null ? '' : s).trim()
+      .replace(/[\\/:*?"<>|]+/g, '')   // filesystem-illegal
+      .replace(/\s+/g, '-');           // no spaces in filenames
+  }
+  function stamp() {
+    var d = new Date(), p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return '' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes());
+  }
+  window.RRV8.exportName = function (opts) {
+    opts = opts || {};
+    var parts = ['RR'];
+    if (opts.surface) parts.push(clean(opts.surface));
+    var db = '';
+    try { db = (window.RRDB && RRDB.name && RRDB.name()) || ''; } catch (_) {}
+    if (db && db !== '_') parts.push(clean(db));
+    var scope = [];
+    if (opts.company != null && String(opts.company).trim() !== '') {
+      var c = String(opts.company).trim();
+      scope.push(c.toLowerCase() === 'all' ? 'AllCos' : ('Co' + clean(c)));
+    } else if (opts.scope) {
+      scope.push(clean(opts.scope));
+    }
+    if (opts.drill) scope.push(clean(opts.drill));
+    if (scope.length) parts.push(scope.join('-'));
+    if (opts.period) parts.push(clean(opts.period));
+    parts.push(stamp());
+    var ext = (clean(opts.ext) || 'xlsx').replace(/^\.+/, '');
+    return parts.join('_') + '.' + ext;
+  };
+  window.RRV8.logActivity = function (event, detail) {
+    try {
+      var base = (window.RRDB && RRDB.agentBase && RRDB.agentBase())
+        || (window.RR_CONFIG && RR_CONFIG.testAgentBase);
+      if (!base) return Promise.resolve();
+      var h = { 'Content-Type': 'application/json;charset=UTF-8', 'Accept': 'application/json' };
+      try { var t = localStorage.getItem('rrv8.token'); if (t) h['Authorization'] = 'Bearer ' + t; } catch (_) {}
+      return fetch(base + '/admin/activity', {
+        method: 'POST', headers: h,
+        body: JSON.stringify({ event: String(event == null ? '' : event), detail: String(detail == null ? '' : detail) })
+      }).then(function () {}).catch(function () {});   // one-way audit append; swallow all errors
+    } catch (_) { return Promise.resolve(); }
+  };
+})();
+
+/*
  * RRDEMO — staged, non-production sample data for the demo. Callers gate on
  * RR_CONFIG.mode !== 'prod', so production always renders live data; this only
  * surfaces in demo/staging. Timestamps are relative to page load so the feed

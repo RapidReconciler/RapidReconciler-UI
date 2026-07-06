@@ -3143,7 +3143,12 @@ function updateLotDetailPill() {
       + 'There are ' + z.length + ' such zero-quantity rows. Their absolute valuations, smallest first: ' + sample + (z.length > 40 ? ', …' : '') + '.\n'
       + 'A deterministic pass suggests a cutoff of ' + fmtMoney(opt.target) + ', hiding the ' + opt.count + ' smallest rows; the next row up is ' + fmtMoney(opt.nextUp) + '.\n'
       + 'Confirm or adjust the dollar cutoff that best separates rounding dust from a balance worth reviewing. Reply with the FIRST line exactly "TARGET: <dollars>" (a number), then ONE sentence in plain accountant English on why that cutoff. No markdown, no preamble.';
-    rrFetch('api/v1/ai/explain', { method: 'POST', body: { prompt, level: asofEffTier() } }).then(r => {
+    // AI-tier gate: Off sends nothing to the model — the deterministic cutoff still
+    // applies via the same handler (empty text → target unchanged, renderAll).
+    const _asofOptAi = (window.RRAI && RRAI.get && RRAI.get() === 'off')
+      ? Promise.resolve({ text: '' })
+      : rrFetch('api/v1/ai/explain', { method: 'POST', body: { prompt, level: asofEffTier() } });
+    _asofOptAi.then(r => {
       const txt = (r && r.text) ? String(r.text).trim() : '';
       const m = txt.match(/TARGET:\s*\$?\s*([\d.]+)/i);
       if (m) { const tt = Number(m[1]); if (Number.isFinite(tt) && tt >= 0) { _state.residualTarget = tt; saveResidualTarget(); } }
@@ -3908,8 +3913,7 @@ function updateLotDetailPill() {
     XLSX.utils.book_append_sheet(wb, sheet, 'Item Roll Forward');
     const branchSeg = String(row.Branch || '').trim() || 'branch';
     const itemSeg   = String(row.ItemNumber || '').trim() || 'item';
-    const fnStamp   = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 13);
-    const fname = 'ItemRollForward_' + branchSeg + '_' + itemSeg + '_' + fnStamp + '.xlsx';
+    const fname = RRV8.exportName({ surface: 'ItemRollForward', scope: branchSeg, drill: itemSeg });
     XLSX.writeFile(wb, fname);
     toast('Downloaded ' + fname);
   }
@@ -4354,9 +4358,7 @@ function updateLotDetailPill() {
       XLSX.utils.book_append_sheet(wb, resSheet, 'Residuals');
     }
 
-    const period = (_data && _data._meta && _data._meta.period) || 'period';
-    const fnStamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 13);
-    const fname = 'AsOf_' + period + '_' + fnStamp + '.xlsx';
+    const fname = RRV8.exportName({ surface: 'AsOf', period: (_data && _data._meta && _data._meta.period) || null });
     XLSX.writeFile(wb, fname);
     toast('Downloaded ' + fname);
   }
@@ -4559,8 +4561,7 @@ function updateLotDetailPill() {
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.aoa_to_sheet(aoa);
     XLSX.utils.book_append_sheet(wb, ws, 'Report');
-    const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 13);
-    XLSX.writeFile(wb, report.fileName + '_' + stamp + '.xlsx');
+    XLSX.writeFile(wb, RRV8.exportName({ surface: report.fileName }));
     return true;
   }
 
