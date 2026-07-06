@@ -439,7 +439,11 @@
      COMBINED FILTERS + SUBTOTALS WIDGET
      ============================================================ */
   /* Page title + read-only scope band (drill-in surface) */
-  .tx-page-title { font-family: 'Source Sans 3', sans-serif; font-size: 24px; font-weight: 800; color: var(--navy); margin: 4px 0 12px; }
+  .tx-page-title { font-family: 'Source Sans 3', sans-serif; font-size: 32px; font-weight: 800; letter-spacing: -0.01em; color: var(--navy); margin: 2px 0 16px; }
+  /* Total-variance item in the scope band reads as the headline figure. */
+  .tx-scope-total { padding-left: 18px; border-left: 1px solid var(--rule); }
+  .tx-scope-total .tx-scope-v { font-size: 18px; }
+  .tx-scope-v.is-neg { color: var(--red); }
   .tx-scope-band { display: flex; gap: 28px; flex-wrap: wrap; align-items: center; margin: 0 0 18px; padding: 12px 18px; background: var(--bg-soft); border: 1px solid var(--rule); border-radius: 12px; box-shadow: var(--shadow-sm); }
   .tx-scope-item { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
   .tx-scope-k { font-size: 10.5px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; color: var(--text-muted); }
@@ -767,6 +771,27 @@
     flex-direction: column;
     gap: 10px;
   }
+  /* Findings panel (above the grid) — AI-draftable worklog for the drilled slice. */
+  .tx-findings { margin: 0 0 18px; padding: 14px 18px; background: var(--bg-card); border: 1px solid var(--rule); border-left: 3px solid var(--navy); border-radius: 12px; box-shadow: var(--shadow-sm); }
+  .tx-findings-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 10px; }
+  .tx-findings-title { font-family: 'Source Sans 3', sans-serif; font-weight: 800; font-size: 15px; color: var(--navy); }
+  .tx-findings-sub { font-size: 12.5px; color: var(--text-muted); margin-top: 2px; }
+  .tx-findings-sub strong { color: var(--text-soft); font-weight: 700; }
+  .tx-findings-done { color: var(--green-deep); font-weight: 700; }
+  .tx-findings-actions { display: flex; gap: 8px; flex-shrink: 0; }
+  .tx-findings-ai, .tx-findings-save { font-family: inherit; font-size: 13px; font-weight: 700; border-radius: 8px; padding: 7px 14px; cursor: pointer; border: 1px solid var(--rule); }
+  .tx-findings-ai { background: #ece8fb; color: #5a43c9; border-color: #d8d0f5; display: inline-flex; align-items: center; gap: 6px; }
+  .tx-findings-ai:hover { background: #e2dcf8; }
+  .tx-findings-ai:disabled { opacity: .5; cursor: not-allowed; }
+  .tx-findings-save { background: var(--navy); color: #fff; border-color: var(--navy); }
+  .tx-findings-save:hover { opacity: .92; }
+  .tx-findings-save:disabled { opacity: .6; cursor: not-allowed; }
+  .tx-findings-note { width: 100%; box-sizing: border-box; resize: vertical; font-family: inherit; font-size: 13.5px; line-height: 1.5; color: var(--text); border: 1px solid var(--rule); border-radius: 8px; padding: 10px 12px; background: var(--bg-soft); }
+  .tx-findings-note:focus { outline: none; border-color: var(--navy); box-shadow: 0 0 0 3px rgba(31,45,74,.12); background: var(--bg-card); }
+  .tx-findings-status { margin-top: 8px; font-size: 12.5px; font-weight: 600; }
+  .tx-findings-status.is-ok { color: var(--green-deep); }
+  .tx-findings-status.is-error { color: var(--red); }
+  .tx-findings-status.is-muted { color: var(--text-muted); }
   .tx-work-panel-note-label {
     font-family: 'Source Sans 3', sans-serif;
     font-size: 10.5px;
@@ -2782,84 +2807,51 @@
 
 <div class="page">
 
-  <!-- Title + read-only scope band (single company passed via ?company= — no
-       picker on this drill-in surface). -->
-  <h1 class="tx-page-title">Transactions</h1>
+  <!-- Prominent page title + read-only scope band (single company via ?company=).
+       The variance breakdown + period chart live on the Home Transaction-Variance
+       tab now; this drill-in is just the scope band + the full Details grid. The
+       Total-variance + Rows totals are painted into the scope band (paintScopeBand). -->
+  <h1 class="tx-page-title">Transaction Details</h1>
   <div class="tx-scope-band" id="tx-scope-band">
     <span class="tx-scope-item"><span class="tx-scope-k">Database</span><span class="tx-scope-v" id="tx-scope-db">&mdash;</span></span>
     <span class="tx-scope-item"><span class="tx-scope-k">Company</span><span class="tx-scope-v" id="tx-scope-co">&mdash;</span></span>
   </div>
 
   <!-- ============================================================
-       TOP STRIP — Total Variance card (~25%) on the left, the period
-       chart (~75%) on the right. Total Variance ties to the
-       Reconciliation page's Transactions component. (Rows Unworked /
-       Worked % retired from the strip; scope progress lives in the
-       Variance breakdown card head below.)
+       FINDINGS PANEL — the analyst logs what they found + the
+       corrective action for the drilled slice, optionally drafted by
+       AI, then Saves. Save marks every row in the current filtered
+       view Worked=true with the note and persists via the existing
+       /inventory/transactions/save-notes endpoint (server worknote
+       table). The Home pattern card reads Worked back inline on its
+       bulk fetch and flips to complete. Manual input always allowed;
+       "Fill with AI" only pre-fills the editable textarea.
        ============================================================ -->
-  <div class="page-topstrip">
-    <section class="tx-kpi-strip" aria-label="Transactions KPIs">
-      <div class="tx-kpi-tile" title="Sum of Variance across the filtered rows, sign-matched to the Reconciliation page's Transactions component. Should match the value for the current period in the Transaction Variance by Period chart.">
-        <div class="tx-kpi-label">Total Variance</div>
-        <div class="tx-kpi-value" id="kpi-total-variance">&mdash;</div>
-        <div class="tx-kpi-hint" id="kpi-total-variance-hint">matches Reconciliation</div>
+  <section class="tx-findings" id="tx-findings">
+    <div class="tx-findings-head">
+      <div>
+        <div class="tx-findings-title">Findings</div>
+        <div class="tx-findings-sub" id="tx-findings-scope">Enter what you found and the corrective action &mdash; saving marks these rows worked.</div>
       </div>
-    </section>
-
-    <!-- Period line chart — framed as a card to match the Total
-         Variance card on its left. -->
-    <div id="js-period-bars" role="group" aria-label="Period selector — transaction variance across periods"></div>
-  </div>
-
-  <!-- Variance contributors widget removed — the Variance breakdown cards below
-       cover the actionable groupings for this drill-in surface. -->
-
-  <!-- ============================================================
-       VARIANCE BREAKDOWN
-       Pattern cards (likely failure modes) above module cards
-       (Sales / Purchasing / Inventory / Manufacturing). The lower-
-       level dimension drilldown lives in the Variance contributors
-       widget above.
-       ============================================================ -->
-  <section class="breakdown-card is-collapsed" aria-label="Variance breakdown — pattern + module cards">
-    <div class="breakdown-head">
-      <div class="breakdown-head-left">
-        <button type="button" class="breakdown-toggle" id="breakdown-toggle" aria-expanded="false">
-          <svg class="breakdown-caret" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 6 8 10 12 6"/></svg>
-          <span class="breakdown-title">Variance breakdown</span>
+      <div class="tx-findings-actions">
+        <button type="button" class="tx-findings-ai" id="tx-findings-ai" title="Draft the finding + corrective action with AI">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M12 1.6l1.9 5.1a5 5 0 0 0 2.9 2.9l5.1 1.9-5.1 1.9a5 5 0 0 0-2.9 2.9L12 21.4l-1.9-5.1a5 5 0 0 0-2.9-2.9L2.1 11.5l5.1-1.9a5 5 0 0 0 2.9-2.9z"/></svg>
+          Fill with AI
         </button>
-        <div class="breakdown-helper" id="start-here-helper">Click a card to narrow the Details grid to that subset.</div>
-      </div>
-      <div class="breakdown-head-stats" aria-label="Current scope">
-        <div class="breakdown-stat">
-          <span class="breakdown-stat-label">Rows</span>
-          <span class="breakdown-stat-value" id="breakdown-stat-rows">&mdash;</span>
-        </div>
-        <div class="breakdown-stat" title="This total may differ from the Transaction Variance by Period chart and the Reconciliation page &mdash; those count every transaction. This number reflects only transactions flagged by the page&rsquo;s tolerance rules.">
-          <span class="breakdown-stat-label">Total variance</span>
-          <span class="breakdown-stat-value" id="breakdown-stat-variance">&mdash;</span>
-        </div>
+        <button type="button" class="tx-findings-save" id="tx-findings-save">Save findings</button>
       </div>
     </div>
-
-    <!-- Horizontal action-card grid. Pattern cards group unworked
-         rows by likely failure mode (5.x codes from the analyzer);
-         module cards group by Sales / Purchasing / Inventory /
-         Manufacturing. Every card click narrows the Details grid. -->
-    <div class="start-here-cards" id="start-here-cards">
-      <div class="actions-skeleton">Computing recommended actions&hellip;</div>
-    </div>
+    <textarea class="tx-findings-note" id="tx-findings-note" rows="4" placeholder="Findings and corrective action for this pattern &mdash; type your own, or Fill with AI and edit before saving."></textarea>
+    <div class="tx-findings-status" id="tx-findings-status" hidden></div>
   </section>
 
   <!-- ============================================================
-       DETAILS TABLE
-       Collapsible, default-closed. The cards above are where the
-       work happens; this grid is the backup detail view for when
-       the analyst wants to spot-check the underlying rows.
+       DETAILS TABLE — expanded by default. This drill-in IS the grid;
+       the actionable breakdown lives on the Home tab.
        ============================================================ -->
-  <section class="details-card is-collapsed" id="details-card">
+  <section class="details-card" id="details-card">
     <div class="details-head">
-      <button type="button" class="details-toggle" id="details-toggle" aria-expanded="false" aria-controls="details-scroll" title="Show / hide the Details grid">
+      <button type="button" class="details-toggle" id="details-toggle" aria-expanded="true" aria-controls="details-scroll" title="Show / hide the Details grid">
         <svg class="details-toggle-chevron" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <polyline points="5 8 10 13 15 8"/>
         </svg>
@@ -3036,6 +3028,14 @@
     }
     return false;
   }
+  // VALC-served areas (api/v1/admin/*, api/v1/ai/* — the AI gateway keeps the
+  // key server-side). Must route to valcBase, NOT the per-DB agent. Kept in
+  // sync with RR_VALC_PREFIXES + the same helper on every other page.
+  const _valcPrefixes = window.RR_VALC_PREFIXES || [];
+  function _routesToValc(area) {
+    for (let i = 0; i < _valcPrefixes.length; i++) if (area.startsWith(_valcPrefixes[i])) return true;
+    return false;
+  }
   function rrFetch(area, opts) {
     opts = opts || {};
     if (IS_DEMO) {
@@ -3044,7 +3044,10 @@
         .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status + ' on ' + file); return r.json(); });
     }
     let base;
-    if (_routesToTestAgent(area)) {
+    if (_routesToValc(area)) {
+      // VALC broker (admin + AI gateway). Not per-DB.
+      base = RR_CONFIG.valcBase || 'http://localhost:8080';
+    } else if (_routesToTestAgent(area)) {
       {
         // Route to the active DB's agent (dbs[activeDbIndex].ip). V7
         // architecture: one Services jar per database on its own port.
@@ -3742,6 +3745,7 @@
       var acct = (u.searchParams.get('account') || '').trim();
       if (co) _state.activeCompany = co;
       if (/^\d+\.\d+$/.test(pat)) _state.activePattern = pat;
+      else if (/^(mto|trf|ico)$/i.test(pat)) _state.activePattern = pat.toUpperCase();
       if (acct) _state.activeAccount = acct;
     } catch (_) {}
   })();
@@ -4165,6 +4169,20 @@
   }
 
   function renderStartHere(rows, groups, total) {
+    // The KPI strip, breakdown stats, and action cards were removed from this
+    // drill-in page — they live on the Home Transaction-Variance tab. All that
+    // remains here is painting the totals into the scope band. (Everything below
+    // the return is unreachable legacy, pruned before commit.)
+    var _sv = document.getElementById('tx-scope-var');
+    var _sr = document.getElementById('tx-scope-rows');
+    var _signed = (total && total.variance) || 0;
+    if (_sr) _sr.textContent = rows.length.toLocaleString('en-US');
+    if (_sv) {
+      _sv.textContent = _curCtx.mixed ? 'Mixed currencies' : curMoney(_signed);
+      _sv.classList.toggle('is-neg', !_curCtx.mixed && _signed < 0);
+    }
+    return;
+    // eslint-disable-next-line
     const cardsEl  = document.getElementById('start-here-cards');
     const helperEl = document.getElementById('start-here-helper');
     if (!cardsEl) return;
@@ -4692,6 +4710,24 @@
       desc:   'This sales order has more than one F4111 record at the same (line, branch, item, location, lot) — possible re-entry of an order that was already posted.',
       action: 'Investigate which copy is the duplicate. Reverse the dup; leave the original. The dup may be unposted (R09800 didn\'t run) or may be a true re-entry from a process step that fired twice.',
       disposition: 'triage'
+    },
+    'MTO': {
+      label:  'Make to Order',
+      desc:   'Work-order manufacturing costs produced for a specific customer order (make-to-order) — each row is linked to its originating sales order and posts to the project business unit, not a general inventory account.',
+      action: 'This is the WIP-to-fulfillment timing across the sales order and its work order; it normally clears as the order completes. Investigate only the ones that persist across periods.',
+      disposition: 'self'
+    },
+    'TRF': {
+      label:  'Transfers',
+      desc:   'An inter-branch transfer (ST/OT) whose shipping and receiving legs posted to inventory in different periods or at different costs — the two sides haven\'t met yet.',
+      action: 'Confirm both legs posted; if the cost differs, the receiving branch carries the shipping cost. Usually self-clears once both legs land in the same period.',
+      disposition: 'rebalance'
+    },
+    'ICO': {
+      label:  'Intercompany',
+      desc:   'An intercompany order (OK/SK) where the selling and buying companies\' inventory legs haven\'t fully offset — a timing gap across the two companies\' books.',
+      action: 'Verify the matching leg posted in the counterpart company; the pair nets once both sides complete.',
+      disposition: 'rebalance'
     }
   };
 
@@ -4704,101 +4740,42 @@
     triage:    'Triage'
   };
 
-  // Returns a pattern code (key of PATTERN_INFO) or null when no
-  // pattern fires. Order matters — narrower / higher-signal
-  // patterns come first so they win over the generic GL-only /
-  // cardex-only fallback when both could apply.
+  // Row → pattern code (key of PATTERN_INFO). SUBTYPE-FIRST: the 008 pipeline's
+  // server-set subtype (+ the duplicate-sales integrity flag) is the
+  // authoritative business classification and wins over the raw cardex/GL grid
+  // pattern; only rows with no subtype fall through to the grid patterns. Every
+  // row lands in exactly one code (5.11 catch-all). MUST STAY IN SYNC with
+  // _txvClassifyCode() in home.html — that parity is what makes each analyst
+  // card's total tie exactly to this page's drill-through filter. Account (5.4)
+  // and Period (5.14) mismatches now arrive as the server's 'Accounts' /
+  // 'Periods' subtypes rather than the old client index heuristics, so both
+  // pages agree; the DMAAI / cross-period / duplicate-sales indexes are still
+  // loaded for other consumers, just no longer consulted here.
   function classifyGridRow(row) {
-    const cardex   = Number(row.CardexAmount) || 0;
-    const ledger   = Number(row.LedgerAmount) || 0;
-    const variance = Number(row.Variance)     || 0;
-    const ot = String(row.OT || '').trim().toUpperCase();
-    const dt = String(row.DT || '').trim().toUpperCase();
     const eps = 0.01;
+    const st  = String(row.SubType || '').trim().toLowerCase();
+    const cmt = String(row.Comment || '').trim().toLowerCase();
+    const ot  = String(row.OT || '').trim().toUpperCase();
+    const dt  = String(row.DT || '').trim().toUpperCase();
+    const cardex = Number(row.CardexAmount) || 0;
+    const ledger = Number(row.LedgerAmount) || 0;
 
-    // 5.17 — AP voucher variance posted directly to inventory.
+    // 1. Duplicate-sales integrity flag — actionable root cause; wins over subtype.
+    if (cmt === 'check duplicate sales integrity') return '5.18';
+    // 2. Server subtype — authoritative business classification.
+    if (st === 'make to order') return 'MTO';
+    if (st === 'transfers' || st === 'direct ship') return 'TRF';
+    if (st === 'intercompany') return 'ICO';
+    if (st === 'vouchers') return '5.17';
+    if (st === 'periods')  return '5.14';
+    if (st === 'accounts') return '5.4';
+    // 3. No subtype → cardex/GL grid pattern.
     if (ot === 'OP' && dt === 'PV') return '5.17';
-
-    // 5.16 — work-order completion cardex vs GL unit cost diverged.
     if (ot === 'WO' && (dt === 'IM' || dt === 'IC' || dt === 'IH')) return '5.16';
-
-    // 5.6 — F4111 cardex revaluation from a cost roll.
     if (dt === 'BV' || (dt === 'IB' && Math.abs(ledger) < eps)) return '5.6';
-
-    // 5.4 — offset account differs from DMAAI-configured account.
-    // Disabled until the DMAAI index is built (preloadDmaais).
-    if (_dmaaiIndex && row.OffsetAccount) {
-      const co = String(row.CompanyNumber || '').trim();
-      const gc = String(row.GLClass       || '').trim();
-      const offsetTrim = String(row.OffsetAccount).replace(/\s+/g, '');
-      if (co && dt) {
-        const expected = _dmaaiIndex.exact.get(co + '|' + ot + '|' + dt + '|' + gc) ||
-                         _dmaaiIndex.wild.get(co  + '|' + ot + '|' + dt);
-        if (expected && expected !== offsetTrim) return '5.4';
-      }
-    }
-
-    // 5.14 — period mismatch / cut-off. CardexPeriod != GLPeriod
-    // for this doc (the cardex side and the GL side posted to
-    // different periods — timing variance, not a real out-of-
-    // balance).
-    //
-    // Authoritative source: v_integrity11_crossperiods, preloaded
-    // into _crossPeriodIndex on boot. Lookup by (Co, DT, Doc). The
-    // view enumerates every real cross-period doc; an absence
-    // means this doc is NOT 5.14 even if its TransDate and
-    // PeriodEnds fall in different months (fiscal-calendar edge
-    // cases the YYYY-MM heuristic would have falsely flagged).
-    //
-    // Fallback: when the preload hasn't completed yet, fall back
-    // to the prior YYYY-MM(TransDate) vs YYYY-MM(PeriodEnds) grid
-    // heuristic so the page still produces 5.14 marks during the
-    // brief boot window before the index lands.
-    if (_crossPeriodIndex) {
-      const co  = String(row.CompanyNumber || '').trim();
-      const dtt = String(row.DocType       || '').trim();
-      const doc = String(row.DocNumber     || '').trim();
-      if (co && dtt && doc && _crossPeriodIndex.has(co + '|' + dtt + '|' + doc)) {
-        return '5.14';
-      }
-      // Index present but doc not in it — definitively not 5.14.
-    } else {
-      const td = String(row.TransDate  || '').trim();
-      const pe = String(row.PeriodEnds || '').trim();
-      if (td.length >= 7 && pe.length >= 7 &&
-          td.substring(0, 7) !== pe.substring(0, 7)) {
-        return '5.14';
-      }
-    }
-
-    // 5.18 — duplicate sales. The same (Company, OrderNumber,
-    // OrderType, LineID) appears more than once in F4111 — usually
-    // an order that got re-entered after the original was already
-    // posted. Match at order grain (Co, OT, Order) since the grid
-    // doesn't carry LineID; any line being duplicated flags the
-    // whole order. No grid-only fallback heuristic — without the
-    // view we can't tell duplicates from legitimate repeat entries.
-    if (_duplicateSalesIndex) {
-      const co    = String(row.CompanyNumber || '').trim();
-      const ot    = String(row.OT            || '').trim();
-      const order = String(row.OrderNumber   || '').trim();
-      if (co && ot && order && _duplicateSalesIndex.has(co + '|' + ot + '|' + order)) {
-        return '5.18';
-      }
-    }
-
-    // 5.2 — manual JE against an inventory account with no cardex.
     if (Math.abs(cardex) < eps && Math.abs(ledger) >= eps) return '5.2';
-
-    // 5.3 — cardex movement with no GL counterpart (likely
-    // unposted batch).
     if (Math.abs(ledger) < eps && Math.abs(cardex) >= eps) return '5.3';
-
-    // 5.11 — catch-all; the analyzer&rsquo;s per-detail classifier
-    // refines this into 5.5 / 5.7 / 5.13 / 5.14 / 5.15 on Export.
-    if (Math.abs(variance) >= eps) return '5.11';
-
-    return null;
+    return '5.11';
   }
 
   // Stamp _pattern on every row in place. Called whenever
@@ -5586,7 +5563,7 @@
     try { localStorage.setItem(DETAILS_COLLAPSE_LS_KEY, collapsed ? '1' : '0'); } catch (_) {}
   }
   (function wireDetailsCollapse() {
-    setDetailsCollapsed(loadDetailsCollapsed());
+    setDetailsCollapsed(false);   // drill-in grid is expanded by default (the toggle still collapses it)
     const toggle = document.getElementById('details-toggle');
     if (!toggle) return;
     toggle.addEventListener('click', () => {
@@ -6117,7 +6094,8 @@
   var _TX_PATTERN_NAMES = {
     '5.2': 'GL-Only Entry', '5.3': 'Cardex-Only Entry', '5.4': 'Account Mismatch',
     '5.6': 'Balance / Adjustment', '5.11': 'Other Variance', '5.14': 'Period Mismatch',
-    '5.16': 'Mfg Cost Mismatch', '5.17': 'Purchase Variance', '5.18': 'Duplicate Sales'
+    '5.16': 'Mfg Cost Mismatch', '5.17': 'Purchase Variance', '5.18': 'Duplicate Sales',
+    'MTO': 'Make to Order', 'TRF': 'Transfers', 'ICO': 'Intercompany'
   };
   // Scope bar — reflects the FULL active scope so a drill-in from the plan shows
   // exactly what's filtering the grid: Database · Company · Period · drill.
@@ -6132,12 +6110,135 @@
     if (_state.activePattern) html += item('Pattern', escapeHtml(_TX_PATTERN_NAMES[_state.activePattern] || _state.activePattern));
     if (_state.activeModule)  html += item('Module',  escapeHtml(_state.activeModule));
     if (_state.activeAccount) html += item('Account', escapeHtml(_state.activeAccount));
+    // Totals live in the scope band now (top strip removed) — populated by renderStartHere.
+    html += '<span class="tx-scope-item tx-scope-total"><span class="tx-scope-k">Total variance</span><span class="tx-scope-v" id="tx-scope-var">&mdash;</span></span>';
+    html += '<span class="tx-scope-item"><span class="tx-scope-k">Rows</span><span class="tx-scope-v" id="tx-scope-rows">&mdash;</span></span>';
     band.innerHTML = html;
   }
+
+  // ============================================================
+  //  FINDINGS PANEL logic. Targets the current filtered slice
+  //  (filteredRows() — the drilled pattern/company/period). Save
+  //  marks every row Worked + Note and persists via the existing
+  //  server endpoint; the Home card reads Worked back and completes.
+  //  Production-only: the server worknote table is the source of
+  //  truth — no client-side persistence.
+  // ============================================================
+  var _findingsBusy = false;
+  var _findingsScopeKey = null;
+  function _findingsRows() { return filteredRows(); }
+  function _findingsMoney(v) {
+    return (v < 0 ? '-$' : '$') + Math.abs(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  function _findingsStatus(msg, kind) {
+    var el = document.getElementById('tx-findings-status'); if (!el) return;
+    if (!msg) { el.hidden = true; el.textContent = ''; el.className = 'tx-findings-status'; return; }
+    el.hidden = false; el.textContent = msg; el.className = 'tx-findings-status is-' + (kind || 'muted');
+  }
+  function paintFindingsScope() {
+    var sub = document.getElementById('tx-findings-scope'); if (!sub) return;
+    var note = document.getElementById('tx-findings-note');
+    var rows = _findingsRows();
+    var n = rows.length, workedN = rows.filter(function (r) { return r.Worked; }).length;
+    var bits = [];
+    if (_state.activePattern) bits.push((PATTERN_INFO[_state.activePattern] && PATTERN_INFO[_state.activePattern].label) || _state.activePattern);
+    if (_state.activeCompany) bits.push('Co ' + _state.activeCompany);
+    var per = (_data && _data.period) || _state.period; if (per) bits.push(formatPeriod(per));
+    var scope = bits.length ? bits.join(' · ') : 'the current view';
+    sub.innerHTML = 'Applies to <strong>' + escapeHtml(scope) + '</strong> &mdash; ' + n + ' row' + (n === 1 ? '' : 's')
+      + (workedN ? (' · <span class="tx-findings-done">' + workedN + ' already worked</span>') : '')
+      + '. Saving marks ' + (n === 1 ? 'it' : 'them') + ' worked and completes the Home card.';
+    // On a scope change, reset the textarea to the slice's uniform note (or blank);
+    // while the analyst stays on one slice, preserve whatever they've typed.
+    var key = [_state.activePattern || '', _state.activeCompany || '', per || ''].join('|');
+    if (note && key !== _findingsScopeKey) {
+      _findingsScopeKey = key;
+      var notes = rows.map(function (r) { return r.Note || ''; }).filter(Boolean);
+      note.value = (notes.length && notes.every(function (x) { return x === notes[0]; })) ? notes[0] : '';
+      note.dataset.dirty = '';
+    }
+  }
+  function _findingsFillAI() {
+    if (_findingsBusy) return;
+    var tier = (window.RRAI && window.RRAI.get) ? window.RRAI.get() : 'full';
+    if (tier === 'off') { _findingsStatus('AI is turned off — turn it on to draft findings, or type your own.', 'muted'); return; }
+    var note = document.getElementById('tx-findings-note'), aiBtn = document.getElementById('tx-findings-ai');
+    var rows = _findingsRows();
+    if (!rows.length) { _findingsStatus('No rows in the current view to analyze.', 'muted'); return; }
+    var code = _state.activePattern || (rows[0] && rows[0]._pattern) || '';
+    var info = PATTERN_INFO[code] || {};
+    var net = rows.reduce(function (a, r) { return a + (Number(r.Variance) || 0); }, 0);
+    var byAcct = {}; rows.forEach(function (r) { var a = String(r.LongAccount || '').trim(); if (a) byAcct[a] = (byAcct[a] || 0) + (Number(r.Variance) || 0); });
+    var accts = Object.keys(byAcct).sort(function (a, b) { return Math.abs(byAcct[b]) - Math.abs(byAcct[a]); }).slice(0, 5);
+    var co = _state.activeCompany || (rows[0] && rows[0].CompanyNumber) || '';
+    var per = (_data && _data.period) || _state.period || '';
+    var lines = [];
+    lines.push('Pattern: ' + (info.label || code) + '.');
+    if (info.desc)   lines.push('Root cause: ' + info.desc);
+    if (info.action) lines.push('Standard fix: ' + info.action);
+    lines.push('Scope: Company ' + co + ', period ' + (per ? formatPeriod(per) : 'current') + ', ' + rows.length + ' rows, net variance ' + _findingsMoney(net) + '.');
+    if (accts.length) { lines.push('Top accounts by variance:'); accts.forEach(function (a) { lines.push('  - ' + a + ': ' + _findingsMoney(byAcct[a])); }); }
+    var prompt =
+      'You are RapidReconciler AI, a senior JDE inventory-reconciliation consultant writing a WORKLOG entry an analyst will save as the finding + corrective action for this group of transactions. Use ONLY these deterministic facts (never invent a number or account):\n'
+      + lines.join('\n') + '\n\n'
+      + 'Write the finding and the specific corrective action for THIS pattern and scope: what it is, why it happened, and the exact steps to clear it (name the accounts / AAIs / JDE programs involved). Assume JDE fluency. At most 4 sentences, under 90 words, plain sentences — no preamble, no markdown, no bullet characters.';
+    _findingsBusy = true; if (aiBtn) aiBtn.disabled = true;
+    _findingsStatus('Drafting with AI…', 'muted');
+    rrFetch('api/v1/ai/explain', { method: 'POST', body: { prompt: prompt } }).then(function (r) {
+      var txt = (r && r.text) ? String(r.text).trim() : '';
+      if (txt && note) { note.value = txt; note.dataset.dirty = '1'; _findingsStatus('AI draft ready — edit if needed, then Save.', 'ok'); }
+      else _findingsStatus('No draft came back — try again or type your own.', 'muted');
+    }).catch(function () { _findingsStatus('Could not reach AI just now — try again in a moment.', 'error'); })
+      .then(function () { _findingsBusy = false; if (aiBtn) aiBtn.disabled = (window.RRAI && window.RRAI.get && window.RRAI.get() === 'off'); });
+  }
+  function _findingsSave() {
+    if (_findingsBusy) return;
+    var note = document.getElementById('tx-findings-note'), saveBtn = document.getElementById('tx-findings-save');
+    var val = note ? note.value.trim() : '';
+    var rows = _findingsRows();
+    if (!rows.length) { _findingsStatus('No rows in the current view to mark.', 'muted'); return; }
+    if (!val) { _findingsStatus('Enter your findings first (or Fill with AI), then Save.', 'muted'); if (note) note.focus(); return; }
+    // Optimistic in-memory update so the grid reflects worked immediately.
+    rows.forEach(function (r) {
+      r.Worked = true; r.Note = val;
+      _workNotes.set(workNoteKey(r), { Worked: true, Note: val });
+    });
+    renderAll();
+    _findingsBusy = true;
+    if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving…'; }
+    _findingsStatus('', '');
+    rrFetch('inventory/transactions/save-notes', { method: 'POST', body: {
+      period: (_data && _data.period) || _state.period || defaultPeriod(),
+      notes:  rows.map(toTransactionNote)
+    } }).then(function () {
+      _findingsStatus('Saved — ' + rows.length + ' row' + (rows.length === 1 ? '' : 's') + ' marked worked. The Home card for this pattern is now complete.', 'ok');
+      if (note) note.dataset.dirty = '';
+      // Audit trail: record the corrective on the Activity Log (best-effort, one-way).
+      if (window.RRV8 && RRV8.logActivity) {
+        var _pat = _state.activePattern ? ((PATTERN_INFO[_state.activePattern] && PATTERN_INFO[_state.activePattern].label) || _state.activePattern) : '';
+        RRV8.logActivity('Reconciliation findings saved',
+          rows.length + ' transaction' + (rows.length === 1 ? '' : 's') + ' marked worked'
+          + (_pat ? ' — ' + _pat : '') + ' · Co ' + (_state.activeCompany || '?')
+          + ' · ' + ((_data && _data.period) || _state.period || ''));
+      }
+    }).catch(function (err) {
+      _findingsStatus('Save failed — ' + (err && err.message ? err.message : String(err)), 'error');
+    }).then(function () { _findingsBusy = false; if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Save findings'; } });
+  }
+  (function wireFindings() {
+    var ai = document.getElementById('tx-findings-ai'), save = document.getElementById('tx-findings-save'), note = document.getElementById('tx-findings-note');
+    if (ai)   ai.addEventListener('click', _findingsFillAI);
+    if (save) save.addEventListener('click', _findingsSave);
+    if (note) note.addEventListener('input', function () { note.dataset.dirty = '1'; });
+    function syncTier() { if (!ai) return; var off = !!(window.RRAI && window.RRAI.get && window.RRAI.get() === 'off'); ai.disabled = off; ai.title = off ? 'AI is off — turn it on to draft findings' : 'Draft the finding + corrective action with AI'; }
+    syncTier();
+    try { window.addEventListener('rrv8:aitierchange', syncTier); } catch (_) {}
+  })();
 
   function renderAll() {
     if (!_data) return;
     paintScopeBand();
+    paintFindingsScope();
     renderSubtotals();
     renderActiveFilterBar();
     renderDetails();
@@ -6441,7 +6542,7 @@
       const blob = new Blob([detailBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
       const url  = URL.createObjectURL(blob);
       const a    = document.createElement('a');
-      a.href = url; a.download = 'Transaction Details.xlsx';
+      a.href = url; a.download = RRV8.exportName({ surface: 'Transactions', company: _state.activeCompany, period: (_data && _data.period) || _state.period });
       document.body.appendChild(a); a.click(); document.body.removeChild(a);
       URL.revokeObjectURL(url);
     }
@@ -7323,9 +7424,7 @@
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, sheet, 'Transactions');
 
-    const period = (_data && _data.period) || _state.period || 'period';
-    const fnStamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 13);
-    const fname = 'Transactions_' + period + '_' + fnStamp + '.xlsx';
+    const fname = RRV8.exportName({ surface: 'Transactions', company: _state.activeCompany, period: (_data && _data.period) || _state.period, drill: _state.activePattern || undefined });
     XLSX.writeFile(wb, fname);
     flashStatus('Downloaded ' + fname);
   }
@@ -7428,8 +7527,7 @@
 
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, sheet, cfg.sheet);
-      const fnStamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 13);
-      const fname = cfg.file + '_' + fnStamp + '.xlsx';
+      const fname = RRV8.exportName({ surface: cfg.file, company: _state.activeCompany, period: (_data && _data.period) || _state.period });
       XLSX.writeFile(wb, fname);
       flashStatus('Downloaded ' + fname);
     } catch (err) {
