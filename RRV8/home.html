@@ -6393,24 +6393,30 @@
   var _txvDmaai = { key: null, findings: null, loading: null };
   var _txvBusy = false;
 
-  // Card metadata per pattern code: title (card heading), kind (chip + accent
-  // stripe), lane (🍃 low-hanging fruit vs 💰 biggest bang). Display order within
-  // a lane follows _TXV_LANE_ORDER. Shared by the classifier and the card build.
+  // The 10-card taxonomy (WORKLIST DAC-16 / docs/usp8-txv-classifier-design.md), driven
+  // by the server-set subtype (cards 1-6) and type (terminal cards 7-10). Vouchers +
+  // duplicate-sales are FLAGS (badges on the terminal card the row lands in), not cards.
+  // `scope` = what the "Open in worklist" deep-link passes so the details page filters to
+  // exactly this card (subtype for 1-6, module for the terminal type cards).
   var _TXV_CODE_META = {
-    '5.3':  { title: 'Cardex-Only Entry (No GL)',          kind: 'rebalance', lane: 'lhf'  },
-    '5.2':  { title: 'GL-Only Entry (No Cardex)',          kind: 'rebalance', lane: 'lhf'  },
-    '5.4':  { title: 'Account Mismatch',                   kind: 'rebalance', lane: 'lhf'  },
-    'TRF':  { title: 'Transfers',                          kind: 'rebalance', lane: 'lhf'  },
-    'ICO':  { title: 'Intercompany',                       kind: 'rebalance', lane: 'lhf'  },
-    '5.14': { title: 'Period Mismatch',                    kind: 'self',      lane: 'lhf'  },
-    '5.6':  { title: 'Standard Cost Change',               kind: 'self',      lane: 'lhf'  },
-    'MTO':  { title: 'Make to Order',                      kind: 'mto',       lane: 'bang' },
-    '5.16': { title: 'Manufacturing Cost Mismatch',        kind: 'expense',   lane: 'bang' },
-    '5.18': { title: 'Duplicate Sales',                    kind: 'triage',    lane: 'bang' },
-    '5.17': { title: 'Voucher Variance on Inventory (PV)', kind: 'expense',   lane: 'bang' },
-    '5.11': { title: 'Other Variance',                     kind: 'triage',    lane: 'bang' }
+    // Quick wins (1 document) — deterministic corrective action
+    'ACCT':    { title: 'Account Mismatch',            kind: 'rebalance', tier: 'quick',    scope: { subtype: 'Accounts' } },
+    'PER':     { title: 'Period Mismatch',             kind: 'self',      tier: 'quick',    scope: { subtype: 'Periods' } },
+    // Complex (3 documents)
+    'MTO':     { title: 'Make to Order',               kind: 'mto',       tier: 'complex',  scope: { subtype: 'Make to Order' } },
+    'ICO':     { title: 'Intercompany Sales',          kind: 'ico',       tier: 'complex',  scope: { subtype: 'Intercompany' } },
+    // Linked pairs (2 documents, 1:1 SO↔PO)
+    'TRF':     { title: 'Transfers',                   kind: 'linked',    tier: 'linked',   scope: { subtype: 'Transfers' } },
+    'DS':      { title: 'Direct Ship',                 kind: 'linked',    tier: 'linked',   scope: { subtype: 'Direct Ship' } },
+    // Terminal — the unclassified residual, split by transaction type
+    'T-SALES': { title: 'Unclassified — Sales',          kind: 'review', tier: 'terminal', scope: { module: 'Sales' } },
+    'T-PURCH': { title: 'Unclassified — Purchasing',     kind: 'review', tier: 'terminal', scope: { module: 'Purchasing' } },
+    'T-MFG':   { title: 'Unclassified — Manufacturing',  kind: 'review', tier: 'terminal', scope: { module: 'Manufacturing' } },
+    'T-INV':   { title: 'Unclassified — Inventory',      kind: 'review', tier: 'terminal', scope: { module: 'Inventory' } }
   };
-  var _TXV_LANE_ORDER = ['5.3', '5.2', '5.4', 'TRF', 'ICO', '5.14', '5.6', 'MTO', '5.16', '5.18', '5.17', '5.11'];
+  var _TXV_CODE_ORDER = ['ACCT', 'PER', 'MTO', 'ICO', 'TRF', 'DS', 'T-SALES', 'T-PURCH', 'T-MFG', 'T-INV'];
+  var _TXV_TIER_ORDER = ['quick', 'complex', 'linked', 'terminal'];
+  var _TXV_TIER_LABEL = { quick: 'Quick wins', complex: 'Complex transactions', linked: 'Linked pairs', terminal: 'Needs review' };
 
   // Row → pattern code. SUBTYPE-FIRST: the 008 pipeline's server-set subtype (and
   // the duplicate-sales integrity flag) is the authoritative business
@@ -6421,27 +6427,23 @@
   // lands in exactly one code (5.11 is the catch-all), so the cards partition the
   // residual and sum to the graph total.
   function _txvClassifyCode(r) {
-    var eps = 0.01;
-    var st  = String(r.SubType || '').trim().toLowerCase();
-    var cmt = String(r.Comment || '').trim().toLowerCase();
-    var ot  = String(r.OT || '').trim().toUpperCase(), dt = String(r.DT || '').trim().toUpperCase();
-    var cx  = Number(r.CardexAmount) || 0, lg = Number(r.LedgerAmount) || 0;
-    // 1. Duplicate-sales integrity flag — the actionable root cause; wins over subtype.
-    if (cmt === 'check duplicate sales integrity') return '5.18';
-    // 2. Server subtype — authoritative business classification.
+    // SUBTYPE-FIRST: the 008 pipeline's server-set subtype is the authoritative
+    // classification (cards 1-6). Rows with no subtype are the terminal residual and
+    // fall to a card by transaction TYPE (cards 7-10). Vouchers + duplicate-sales are
+    // FLAGS handled separately (see the bucket loop), not their own cards.
+    var st = String(r.SubType || '').trim().toLowerCase();
     if (st === 'make to order') return 'MTO';
-    if (st === 'transfers' || st === 'direct ship') return 'TRF';
-    if (st === 'intercompany') return 'ICO';
-    if (st === 'vouchers') return '5.17';
-    if (st === 'periods') return '5.14';
-    if (st === 'accounts') return '5.4';
-    // 3. No subtype → cardex/GL grid pattern.
-    if (ot === 'OP' && dt === 'PV') return '5.17';
-    if (ot === 'WO' && (dt === 'IM' || dt === 'IC' || dt === 'IH')) return '5.16';
-    if (dt === 'BV' || (dt === 'IB' && Math.abs(lg) < eps)) return '5.6';
-    if (Math.abs(cx) < eps && Math.abs(lg) >= eps) return '5.2';
-    if (Math.abs(lg) < eps && Math.abs(cx) >= eps) return '5.3';
-    return '5.11';
+    if (st === 'intercompany')  return 'ICO';
+    if (st === 'transfers')     return 'TRF';
+    if (st === 'direct ship')   return 'DS';
+    if (st === 'accounts')      return 'ACCT';
+    if (st === 'periods')       return 'PER';
+    // No subtype → terminal card by type.
+    var ty = String(r.Type || '').trim().toLowerCase();
+    if (ty === 'sales')      return 'T-SALES';
+    if (ty === 'purchasing') return 'T-PURCH';
+    if (ty === 'mfg')        return 'T-MFG';
+    return 'T-INV';   // Inventory (and any unrecognized type)
   }
   function _txvClassify(r) {
     var c = _txvClassifyCode(r), m = _TXV_CODE_META[c] || {};
@@ -6452,28 +6454,26 @@
   // ported from). Keep the two in sync: that page is the source of truth for the
   // JDE-correct diagnosis and fix. _txvCause() joins cause + fix for the card body.
   var _TXV_PATTERN = {
-    '5.2':  { desc: 'An F0911 journal entry sits against an inventory account with no F4111 cardex counterpart — usually a manual JE posted without a matching cardex adjustment.',
-              action: 'Post the matching cardex movement, or reverse the JE if it was misposted.' },
-    '5.3':  { desc: 'An F4111 cardex movement has no F0911 journal posting — usually an unposted GL batch.',
-              action: 'Run R09800 (General Ledger Post) against the open batch; if it errors, check the batch in the JDE Work Center.' },
-    '5.16': { desc: 'A work-order completion posted at the standard cost then in effect, but a later R30822 (Frozen Cost Update) changed the standard and R30837 (WIP Revaluation) never carried it to the GL — so cardex and GL unit costs diverged.',
-              action: 'Post a corrective JE between the inventory (WIP/FG) account and the manufacturing variance AAI (3240 Material / 3260 Planned); then set R30837 to run from R30822 so future standard-cost changes stay aligned.' },
-    '5.17': { desc: 'An AP voucher variance posted to an inventory account instead of the AP variance account — DMAAI 4220 likely routes inventory items there.',
-              action: 'Check DMAAI 4220 for this company / GL class; reverse the JE, correct the AAI route, and re-post.' },
-    '5.14': { desc: 'The transaction date and the period the document is reported in fall in different months — a cut-off issue, where the cardex landed in one period and its GL counterpart in another.',
+    'ACCT': { desc: 'The offset account on this doc differs from the account JDE’s DMAAI table (F4095) routes to for this (Order Type, Doc Type, GL Class).',
+              action: 'Look up the expected account in F4095 for this combination; reverse the JE and re-post to the configured account.' },
+    'PER':  { desc: 'The transaction date and the period the document is reported in fall in different months — a cut-off issue, where the cardex landed in one period and its GL counterpart in another.',
               action: 'Compare the F4111 transaction date against the F0911 GL date; if the cardex side is misposted, reverse it and re-post to the correct period.' },
-    'MTO':  { desc: 'Work-order manufacturing costs produced for a specific customer order (make-to-order) — each row is linked to its originating sales order, and posts to the project business unit, not a general inventory account.',
+    'MTO':  { desc: 'Work-order manufacturing costs produced for a specific customer order (make-to-order) — every leg of the work order is held together here, linked to its originating sales order, posting to the project business unit rather than a general inventory account.',
               action: 'This is the WIP-to-fulfillment timing across the sales order and its work order; it normally clears as the order completes. Investigate only the ones that persist across periods.' },
+    'ICO':  { desc: 'An intercompany order (OK/SK) where the selling and buying companies’ inventory legs haven’t fully offset — a three-document timing gap across the two companies’ books, held together here.',
+              action: 'Verify the matching leg posted in the counterpart company; the pair nets once both sides complete.' },
     'TRF':  { desc: 'An inter-branch transfer (ST/OT) whose shipping and receiving legs posted to inventory in different periods or at different costs — the two sides haven’t met yet.',
               action: 'Confirm both legs posted; if the cost differs, the receiving branch carries the shipping cost. Usually self-clears once both legs land in the same period.' },
-    'ICO':  { desc: 'An intercompany order (OK/SK) where the selling and buying companies’ inventory legs haven’t fully offset — a timing gap across the two companies’ books.',
-              action: 'Verify the matching leg posted in the counterpart company; the pair nets once both sides complete.' },
-    '5.4':  { desc: 'The offset account on this doc differs from the account JDE’s DMAAI table (F4095) routes to for this (Order Type, Doc Type, GL Class).',
-              action: 'Look up the expected account in F4095 for this combination; reverse the JE and re-post to the configured account.' },
-    '5.6':  { desc: 'An F4111 cardex revaluation from a standard cost change (DT=BV) or an unposted cardex-only IB revaluation.',
-              action: 'Usually transient — reconciles when the matching GL revaluation lands in the next batch post. No action if the next period clears it.' },
-    '5.18': { desc: 'This sales order has more than one F4111 record at the same (line, branch, item, location, lot) — a likely re-entry of an order that was already posted.',
-              action: 'Identify which copy is the duplicate; reverse the dup and leave the original. The dup may be unposted (R09800 didn’t run) or a true re-entry from a step that fired twice.' }
+    'DS':   { desc: 'A direct-ship order (transship) — the sales order and its linked purchase order ship straight to the customer, and the two legs haven’t fully offset yet.',
+              action: 'Confirm both the SO and PO legs posted; the pair nets once both land in the same period at the same cost.' },
+    'T-SALES': { desc: 'Sales-side variance that didn’t match any known pattern — cardex and GL both posted but disagree, and it isn’t a transfer, direct-ship, intercompany, or a clean account/period offset.',
+                 action: 'Export a representative row to investigate; a voucher or duplicate-sales badge on a row points at the likely root cause.' },
+    'T-PURCH': { desc: 'Purchasing-side variance that didn’t match any known pattern — cardex and GL disagree and it isn’t a transfer, direct-ship, or intercompany.',
+                 action: 'Export a representative row to investigate; a voucher badge points at an AP-voucher root cause.' },
+    'T-MFG':   { desc: 'Manufacturing variance that didn’t match make-to-order or a clean account/period offset — a genuine cost difference between cardex and GL.',
+                 action: 'Export a representative row; check for a standard-cost change (R30822/R30837) or a work-order that hasn’t revalued to the GL.' },
+    'T-INV':   { desc: 'Inventory variance that didn’t match any known pattern — cardex and GL both posted but disagree.',
+                 action: 'Export a representative row to investigate the specific documents behind it.' }
   };
   function _txvCause(code) {
     var p = _TXV_PATTERN[code]; if (!p) return '';
@@ -6538,8 +6538,8 @@
   function _txvTxHref(co, p) {
     p = p || {};
     var q = ['company=' + encodeURIComponent(co)];
-    if (p.pattern) q.push('pattern=' + encodeURIComponent(p.pattern));
-    if (p.module)  q.push('module='  + encodeURIComponent(p.module));
+    if (p.subtype) q.push('subtype=' + encodeURIComponent(p.subtype));   // cards 1-6 filter by server subtype
+    if (p.module)  q.push('module='  + encodeURIComponent(p.module));    // terminal cards 7-10 filter by type
     if (p.account) q.push('account=' + encodeURIComponent(p.account));
     if (p.period)  q.push('period='  + encodeURIComponent(p.period));
     return 'inventory-transactions.html?' + q.join('&');
@@ -6622,37 +6622,45 @@
       // as classifyGridRow on the details page, so clicking a card's "Open in
       // worklist" filters the grid to exactly this bucket and the totals tie.
       function _bucketKey(r) { return _txvClassifyCode(r); }
-      var BUCKET_META = _TXV_CODE_META;
-      var LANE_ORDER = _TXV_LANE_ORDER;
       var buckets = {};
       perRows.forEach(function (r) {
         var k = _bucketKey(r);
-        var b = buckets[k] || (buckets[k] = { code: k, net: 0, gross: 0, rows: 0, worked: 0, accts: {} });
+        var b = buckets[k] || (buckets[k] = { code: k, net: 0, gross: 0, rows: 0, worked: 0, vouchers: 0, dupsales: 0 });
         var v = Number(r.Variance) || 0;
         b.net += v; b.gross += Math.abs(v); b.rows++;
         if (r.Worked) b.worked++;   // Worked arrives inline from the bulk fetch (server worknote left-join)
-        var a = String(r.LongAccount || '').trim(); if (a) b.accts[a] = (b.accts[a] || 0) + v;
+        var cmt = String(r.Comment || '').trim().toLowerCase();   // server annotations — surfaced as a badge
+        if (cmt.indexOf('duplicate sales') >= 0) b.dupsales++;
+        if (cmt.indexOf('voucher') >= 0 || String(r.BatchType || '').trim().toUpperCase() === 'V') b.vouchers++;
       });
 
-      // Build one card per non-empty bucket, in lane order. amount = bucket NET,
-      // so Σ(cards) = netTotal exactly (every row is in exactly one bucket; only
-      // truly-empty buckets are skipped). Lane by disposition: rebalance/mismatch
-      // = low-hanging fruit, expense/triage = biggest bang.
-      var lhf = [], bang = [];
-      LANE_ORDER.forEach(function (code) {
-        var b = buckets[code]; if (!b || (Math.abs(b.net) < 0.005 && b.gross < 0.005)) return;
-        var m = BUCKET_META[code];
-        var cause = _txvCause(code) || 'Cardex and GL both posted but disagree, and it doesn’t fit a narrower pattern — export a representative row to refine the diagnosis.';
-        var href = _txvTxHref(solo, { pattern: code, period: focusP });
-        var done = b.rows > 0 && b.worked === b.rows;   // all rows worked → card complete
-        (m.lane === 'lhf' ? lhf : bang).push({
+      // New kinds reuse existing CSS accents; the chip label is set per kind.
+      var KIND_CSS = { rebalance: 'rebalance', self: 'self', mto: 'mto', ico: 'expense', linked: 'triage', review: 'net' };
+      var KIND_TAG = { rebalance: 'Reclassify', self: 'Self-corrects', mto: 'Make to order', ico: 'Intercompany', linked: 'Linked pair', review: 'Review' };
+
+      // One card per non-empty bucket, in code order, grouped into the four tiers.
+      // amount = bucket NET, so Σ(cards) = netTotal. A card shows whenever it has rows —
+      // a near-$0 card can still carry many rows worth working (e.g. account offsets).
+      var cardsByTier = { quick: [], complex: [], linked: [], terminal: [] };
+      _TXV_CODE_ORDER.forEach(function (code) {
+        var b = buckets[code]; if (!b || b.rows === 0) return;
+        var m = _TXV_CODE_META[code];
+        var flags = [];
+        if (b.dupsales) flags.push(b.dupsales + ' dup-sales');
+        if (b.vouchers) flags.push(b.vouchers + ' voucher' + (b.vouchers === 1 ? '' : 's'));
+        var done = b.worked === b.rows;   // all rows worked → card complete
+        cardsByTier[m.tier].push({
           kind: m.kind, title: m.title, amount: b.net,
-          meta: b.rows + ' row' + (b.rows === 1 ? '' : 's') + (b.worked && !done ? ' · ' + b.worked + ' worked' : ''),
-          cause: cause, href: href, btn: 'Open in worklist', done: done
+          meta: b.rows + ' row' + (b.rows === 1 ? '' : 's')
+              + (b.worked && !done ? ' · ' + b.worked + ' worked' : '')
+              + (flags.length ? ' · ' + flags.join(' · ') : ''),
+          cause: _txvCause(code) || 'Cardex and GL both posted but disagree — export a representative row to refine the diagnosis.',
+          href: _txvTxHref(solo, Object.assign({ period: focusP }, m.scope || {})),
+          btn: 'Open in worklist', done: done
         });
       });
 
-      if (!lhf.length && !bang.length) {
+      if (!_TXV_TIER_ORDER.some(function (t) { return cardsByTier[t].length; })) {
         host.innerHTML = '<div class="txv-empty-plan">' + esc(fmtPeriod(focusP)) + ' is clean for Co ' + esc(solo) + ' — nothing to chase. 🎉</div>';
         return;
       }
@@ -6665,16 +6673,20 @@
         + '</div>';
 
       var card = function (p) {
-        return '<div class="txv-card is-' + p.kind + (p.done ? ' is-complete' : '') + '"><div class="txv-card-top"><div>'
-          + '<div class="txv-card-title">' + esc(p.title) + '<span class="txv-tag txv-tag-' + p.kind + '">' + (p.kind === 'net' ? 'No entry' : p.kind === 'rebalance' ? 'Rebalance' : p.kind === 'dmaai' ? 'Fix config' : p.kind === 'mto' ? 'Make to order' : p.kind === 'self' ? 'Self-corrects' : p.kind === 'triage' ? 'Triage' : 'Journal entry') + '</span>'
+        var acc = KIND_CSS[p.kind] || 'net';
+        return '<div class="txv-card is-' + acc + (p.done ? ' is-complete' : '') + '"><div class="txv-card-top"><div>'
+          + '<div class="txv-card-title">' + esc(p.title) + '<span class="txv-tag txv-tag-' + acc + '">' + esc(KIND_TAG[p.kind] || 'Review') + '</span>'
           + (p.done ? '<span class="txv-tag txv-tag-done">✓ Worked</span>' : '') + '</div>'
           + '<div class="txv-card-meta">' + esc(p.meta) + '</div></div>'
           + '<div class="txv-card-amt">' + money(p.amount) + '</div></div>'
           + '<div class="txv-card-cause">' + esc(p.cause) + '</div>'
           + '<div class="txv-card-actions"><a class="txv-cardlink" href="' + p.href + '">' + (p.done ? 'Review worklist' : p.btn) + ' ' + _TXV_ARROW + '</a></div></div>';
       };
-      // Flat stack of cards (no lane grouping) in LANE_ORDER order.
-      host.innerHTML = headline + lhf.concat(bang).map(card).join('');
+      // Tier-grouped: a heading per non-empty tier, then its cards (Quick wins first).
+      host.innerHTML = headline + _TXV_TIER_ORDER.map(function (t) {
+        var cs = cardsByTier[t]; if (!cs.length) return '';
+        return '<div class="txv-tier"><h3 class="txv-tier-head">' + esc(_TXV_TIER_LABEL[t]) + '</h3>' + cs.map(card).join('') + '</div>';
+      }).join('');
     }).catch(function () {
       if (gen !== _txvGen) return;
       host.innerHTML = '<div class="txv-empty-plan">Couldn’t build the plan just now — try again in a moment.</div>';
