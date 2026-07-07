@@ -946,6 +946,9 @@
   .txv-seg:hover { opacity: .82; }
   .txv-xlab { font-family: 'Source Sans 3', sans-serif; font-size: 15px; fill: var(--text-muted); }
   .txv-empty { padding: 18px 4px; font-size: 13px; color: var(--text-muted); }
+  /* Source-of-truth eyebrow on the tx-variance headline (UI-28) — a muted inline tag
+     that labels the leading figure as the authoritative account roll-forward total. */
+  .txv-sot { font-size: 11px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: var(--text-muted); white-space: nowrap; }
   /* Analyst workspace — same white-card + report-list look as the Reports tab. */
   .analyst-workspace { background: var(--bg-card); border: 1px solid var(--rule); border-radius: 12px; padding: 18px 20px; box-shadow: var(--shadow-sm); margin-bottom: 18px; }
   .analyst-workspace[hidden] { display: none; }
@@ -6917,9 +6920,22 @@
       var plist = Object.keys(pset).sort();
       if (plist.indexOf(focusP) === -1 && plist.length) focusP = plist[plist.length - 1];
       var perRows = rows.filter(function (r) { return String(r.PeriodEnds || '').slice(0, 10) === focusP; });
-      // NET variance for the focused period = the graph's Total for that period.
+      // netTotal = the DETAILS total: sum of the reconciling-items residual (_txvRows)
+      // for the focused period — the population the cards itemize.
       var netTotal = perRows.reduce(function (a, r) { return a + (Number(r.Variance) || 0); }, 0);
       var grossTotal = perRows.reduce(function (a, r) { return a + Math.abs(Number(r.Variance) || 0); }, 0);
+      // UI-28 — reconciliation honesty: the SOURCE OF TRUTH for the period is the
+      // account roll-forward Variance (v6ui_raccountsummary / _invRows — the same
+      // series the graph's readout uses), a DIFFERENT dataset from the reconciling-items
+      // cards. They won't tie exactly (tolerance / netting), so show BOTH + the delta
+      // rather than claim a tie. See docs/plans/transaction-variance-process.md
+      // §Reconciliation honesty.
+      var sourceTotal = (_invRows || []).reduce(function (a, r) {
+        if (String(_coOf(r)) !== String(solo)) return a;
+        if (String(r.PeriodEnds || '').slice(0, 10) !== focusP) return a;
+        return a + (Number(r.Variance) || 0);
+      }, 0);
+      var tolDelta = sourceTotal - netTotal;   // within-tolerance / netted remainder the cards don't itemize
 
       // ---- TIE-OUT PARTITION: every residual row of the focused period lands in
       // EXACTLY ONE bucket; each card amount = that bucket's NET; the cards SUM to
@@ -6989,9 +7005,18 @@
         return;
       }
 
+      // UI-28: lead with the SOURCE OF TRUTH (account roll-forward), then the cards'
+      // details total, then the honest delta — within-tolerance / netted, so the two
+      // won't tie exactly. No false "sum back to the graph's total" claim.
+      var _tolMaterial = Math.abs(tolDelta) >= 1;   // sub-$1 = rounding, treat as tied
       var headline =
         '<div class="txv-headline"><div class="txv-headline-main">'
-        + '<strong>' + money(netTotal) + '</strong> of net variance to resolve in ' + esc(fmtPeriod(focusP)) + ' for Co ' + esc(solo) + ' — the cards below break it down and sum back to it (ties to the graph’s total above). '
+        + '<strong>' + money(sourceTotal) + '</strong> net variance to resolve in ' + esc(fmtPeriod(focusP)) + ' for Co ' + esc(solo)
+        + ' <span class="txv-sot">source of truth · account roll-forward</span>. '
+        + 'The cards below total ' + money(netTotal)
+        + (_tolMaterial
+            ? ('; the ' + money(tolDelta) + ' difference is within tolerance / netted — not individually actionable. ')
+            : ' and tie to it. ')
         + (grossTotal > Math.abs(netTotal) * 1.05 ? ('From ' + money(grossTotal) + ' of gross activity; the rest offsets within accounts. ') : '')
         + '</div>'
         + '</div>';
