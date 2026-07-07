@@ -249,7 +249,10 @@
         return String(f == null ? '' : f).toLowerCase().indexOf(q) >= 0;
       });
     });
-    renderEvents(filtered);
+    // Collapse consecutive identical events (a burst of restarts → one "×N" row)
+    // so meaningful events stay visible; the count still reports raw events.
+    var view = (window.RRV8 && RRV8.collapseActivity) ? RRV8.collapseActivity(filtered) : filtered;
+    renderEvents(view);
     var c = $('js-log-count'); if (c) c.textContent = _allEvents.length ? (filtered.length + ' of ' + _allEvents.length) : '';
   }
   function renderEvents(list) {
@@ -263,25 +266,41 @@
       return;
     }
     body.innerHTML = list.map(function (e) {
-      return '<tr><td>' + esc(fmtWhen(e.at)) + '</td><td><b>' + esc(e.event) + '</b></td><td>' + esc(e.detail) + '</td><td>' + esc(e.by) + '</td></tr>';
+      var ev = esc(e.event) + (e._count > 1 ? ' ×' + e._count : '');
+      var det = esc(e.detail);
+      if (e._count > 1 && e._oldestAt) det += ' &middot; ' + e._count + ' occurrences, oldest ' + esc(fmtWhen(e._oldestAt));
+      return '<tr><td>' + esc(fmtWhen(e.at)) + '</td><td><b>' + ev + '</b></td><td>' + det + '</td><td>' + esc(e.by) + '</td></tr>';
     }).join('');
   }
   // Fetch recent events (newest first) from the agent and render them.
+  // Staged fallback (non-prod only) — the SAME RRDEMO feed the Home card falls back
+  // to, so the full log and the card agree when the live feed is empty/unreachable.
+  function _demoEvents() {
+    return (RR_CONFIG.mode !== 'prod' && window.RRDEMO && window.RRDEMO.activityLog) ? window.RRDEMO.activityLog() : [];
+  }
+  // Newest-first (ISO timestamps sort lexicographically = chronologically) — the
+  // SAME ordering the Home card applies, so the card's top-3 are this log's top rows.
+  function _byNewest(list) {
+    return (list || []).slice().sort(function (a, b) { return String(b.at || '').localeCompare(String(a.at || '')); });
+  }
   function loadEvents() {
-    // Demo/non-prod: realistic staged events (shared with the Home card via RRDEMO)
-    // so the log reads true to life. Production uses the live agent feed.
-    if (RR_CONFIG.mode !== 'prod' && window.RRDEMO && window.RRDEMO.activityLog) {
-      _allEvents = window.RRDEMO.activityLog();
-      populateTypeFilter(); applyLogFilter();
-      return;
-    }
+    // LIVE-first: read the agent's GET /admin/activity (the same source the Home
+    // card reads) so the two never diverge — real events (refreshes, reloads,
+    // reconciliation attestations / sign-offs) show here AND on the card. The
+    // staged RRDEMO feed is only a fallback for an empty / unreachable feed in a
+    // non-prod demo; prod with no events shows the honest "couldn't load" note.
     var headers = { 'Accept': 'application/json' };
     try { var t = localStorage.getItem('rrv8.token'); if (t) headers['Authorization'] = 'Bearer ' + t; } catch (_) {}
     fetch(agentBase() + '/admin/activity?limit=50', { headers: headers })
       .then(function (r) { return r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)); })
-      .then(function (list) { _allEvents = Array.isArray(list) ? list : []; populateTypeFilter(); applyLogFilter(); })
+      .then(function (list) {
+        _allEvents = _byNewest((Array.isArray(list) && list.length) ? list : _demoEvents());
+        populateTypeFilter(); applyLogFilter();
+      })
       .catch(function () {
-        // Unreachable (e.g. the engine is mid-restart) — say so honestly; a
+        var demo = _demoEvents();
+        if (demo.length) { _allEvents = _byNewest(demo); populateTypeFilter(); applyLogFilter(); return; }
+        // Unreachable in prod (e.g. the engine is mid-restart) — say so honestly; a
         // manual Refresh or reopening retries.
         var p = $('js-pending'); if (!p) return;
         p.style.display = 'flex';
