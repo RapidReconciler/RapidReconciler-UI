@@ -381,6 +381,44 @@ window.RRV8 = window.RRV8 || {};
       }).then(function () {}).catch(function () {});   // one-way audit append; swallow all errors
     } catch (_) { return Promise.resolve(); }
   };
+  // collapseActivity(): fold a run of CONSECUTIVE identical events (same label +
+  // same actor) into one row carrying a _count (and _oldestAt) — so a burst of
+  // "Report engine started" (a rebuild bounce logs one per boot) shows as a single
+  // "×N" line and the meaningful events stay visible. Shared by the Home card
+  // mini-feed and the full Activity Log so the two agree. Input expected newest-first.
+  window.RRV8.collapseActivity = function (list) {
+    if (!Array.isArray(list)) return [];
+    var out = [];
+    for (var i = 0; i < list.length; i++) {
+      var e = list[i], prev = out[out.length - 1];
+      if (prev && String(prev.event == null ? '' : prev.event) === String(e.event == null ? '' : e.event)
+               && String(prev.by == null ? '' : prev.by) === String(e.by == null ? '' : e.by)) {
+        prev._count = (prev._count || 1) + 1;
+        prev._oldestAt = e.at;   // newest-first → each subsequent row is older
+        continue;
+      }
+      var copy = {}; for (var k in e) if (Object.prototype.hasOwnProperty.call(e, k)) copy[k] = e[k];
+      copy._count = 1; copy._oldestAt = e.at;
+      out.push(copy);
+    }
+    return out;
+  };
+  // ACCT_GROUNDING — the AI's compact copy of the accountant playbook. Prepended to
+  // every accountant-facing AI prompt so the reads reason from firm policy, not
+  // generic LLM accounting. SOURCE OF TRUTH = docs/plans/accounting-reference.md;
+  // keep this in sync with it (same discipline as dmaai-reference.md ↔
+  // AiService.DMAAI_GROUNDING). Owner (accounting SME) curates the policy values.
+  window.RRV8.ACCT_GROUNDING = [
+    'ACCOUNTING POLICY (reconciliation) — reason from these rules:',
+    '- RR reconciles inventory to GL; JDE is the book of record. You surface the gap, explain it, and produce the correcting entry the accountant posts in JDE. RR does not post, hold the ledger, or run schedules.',
+    '- Materiality: an out-of-balance under $100 is immaterial regardless of %; a GL balance under $1,000 is dormant/near-zero — frame by absolute amount and suppress the %. Otherwise judge by the gap as a share of the GL balance (well under ~1% is immaterial).',
+    '- The out-of-balance decomposes into components. ACCOUNTANT-OWNED (journal these): carry forward, transactions, manual entries. NOT the accountant\'s: unposted GL batches + end-of-day (operations timing — self-clears when operations posts, never journal it) and cardex (an analyst re-roll, not a JE). The adjusting entry uses ONLY the accountant-owned amount; never journal the timing.',
+    '- Reclass vs JE: a transaction in the wrong period/account is a reclass, not a new balancing JE. A roll-forward break (red dot) is an analyst re-roll, not the accountant\'s and not a JE.',
+    '- Large carry-forward: the accountant may absorb it over several periods rather than book it all at once, to avoid a lumpy P&L hit. Advise the option and the per-period amount; the amortization schedule lives in JDE, not RR.',
+    '- Adjusting entry: one real offset account per inventory account (no generic clearing account); excludes timing; two lines per gap (original account + its offset).',
+    '- Closed/prior periods are already journaled — never prescribe an entry for them; a carry-forward\'s source is the prior period.',
+    '- Audience is JDE-fluent finance, not IT: plain accountant English; JDE artifacts (F4111, F0911, AAI) are fine, no plumbing terms.'
+  ].join('\n');
 })();
 
 /*
