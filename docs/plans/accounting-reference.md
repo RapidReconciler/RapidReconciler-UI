@@ -62,19 +62,20 @@ period. (Wired 2026-07-07: `_oeBuild` + the timing soft-warning.)
 - A roll-forward **break** (red dot) → **analyst re-roll**, not the accountant's and
   not a JE. Hand it off.
 
-## 4. Carry-forward — amortization / absorption  [OWNER — this section is the stub you asked for]
+## 4. Carry-forward — amortization / absorption
 A large carry-forward is the prior period's unresolved balance rolling in. Options:
 - **Book it now** — one adjusting entry this period.
-- **Absorb over N periods** — when the carry-forward is large relative to
-  **[OWNER: threshold — e.g. > $X, or > Y% of the GL balance]**, the accountant may
-  spread it over **N** periods rather than take it all at once, to avoid a lumpy P&L
-  hit. [OWNER: set the default N and when this is appropriate.]
+- **Absorb over N periods** — when the carry-forward is **> 25% of the company's GL
+  balance OR > $50,000** (whichever hits first) [OWNER — threshold confirmed
+  2026-07-07], the accountant may spread it over **6 periods** (default N) rather than
+  take it all at once, to avoid a lumpy P&L hit. [OWNER — default N=6 confirmed 2026-07-07]
 
-**How RR helps (and where it stops):** RR *advises* (the AI flags a large
-carry-forward and suggests absorbing over N periods, with the per-period figure),
-and can produce **this period's fraction** as an adjusting entry. RR does **not**
-track the remaining balance or auto-generate future entries — the **schedule lives
-in JDE** (recurring JE / allocation). [OWNER: confirm this is the intended boundary.]
+**How RR helps (and where it stops):** RR *advises only* — when the threshold hits,
+the per-company AI read flags the large carry-forward and states the per-period figure
+(**carry-forward ÷ 6**). RR does **not** build the fractional entry, track the
+remaining balance, or auto-generate future entries — the **schedule lives in JDE**
+(recurring JE / allocation). [OWNER — boundary confirmed 2026-07-07]  *(Advisory only:
+no split-builder, no deferral account, no schedule — UI-20.)*
 
 ## 5. The adjusting entry — mechanics
 - One offset account **per inventory account**, entered on the grid — no generic
