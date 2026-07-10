@@ -1,25 +1,29 @@
 <!DOCTYPE html>
 <!--
   =============================================================================
-  Inventory > Cardex Variance  (Daren's per-item worklist)
+  Inventory > Cardex Variance  (item-focused SYNC engine)
   =============================================================================
-  The per-item companion to inventory-account-rollforward.html (Karen's
-  account-level view). Karen flags that variance exists at the account level;
-  Daren works it here, item by item: decide which rows are real, then correct
-  them with a logged, reversible "Adjust Beginning Balance".
+  The per-item sync tool. Browse/surfacing lives on Home's "Cardex Variance"
+  tab (3 cards -> drawer item grids); a drawer item deep-links HERE with
+  ?company&item&branch&dim&method. This page focuses ONE item: review its
+  RapidReconciler cardex position against JDE, then sync RR with a logged,
+  reversible "Adjust Beginning Balance". You can also type any item in
+  (item # + branch). Sync is not variance-bound -- an analyst may sync an
+  item with no current variance too.
 
   DATA SOURCE (canonical): v6ui_itemrollintegritydialog via POST /inventory/
-  integrity (JWT-scoped, whitelisted) -- the SAME view the reconciliation cardex
-  preview reads, so the item rows here sum to the account-level CardexVar on the
-  roll-forward. The view's '00000' "Reset:" header row carries the reset date
-  (rendered as a banner, not a grid row).
+  integrity (JWT-scoped, whitelisted) -- the SAME view Home's cardex cards and
+  the reconciliation cardex preview read, warmed into a per-DB session cache
+  (rrv8.scope.v1.<mode>.<db>.cardexworklist) so this page opens instantly.
 
   CORRECTIVE ACTION: POST /inventory/set-beginning-balance (usp8_maint_set_
   beginning_balance) -- presets Clear-to-JDE / Zero / Manual. Every adjustment
   is logged to RAdjustLedger (GET /inventory/adjustment-ledger) and reversible
-  (POST /inventory/undo-adjustment). Delete-only data ops elsewhere re-pull on
-  the schedule; a beginning-balance edit is an in-place RR correction (JDE
-  untouched) that re-derives the roll-forward deterministically.
+  (POST /inventory/undo-adjustment). RR is a tool, not a system of record; JDE
+  is the source of truth -- a sync moves RR TO JDE, never the reverse. The
+  guided question-set workflow + richer noise-vs-real rules are still being
+  designed (docs/plans/transaction-variance-process.md Cardex) -- this page
+  keeps the shipped Adjust presets until that workflow lands.
   =============================================================================
 -->
 <html lang="en">
@@ -63,14 +67,11 @@
 
   .actions { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin:18px 0 18px; }
   .picker-lbl { font-size:10px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); }
-  .seg { display:inline-flex; border:1px solid var(--rule-strong); border-radius:8px; overflow:hidden; }
-  .seg-btn { border:0; background:var(--bg-card); padding:6px 13px; font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:12.5px; color:var(--text-soft); cursor:pointer; border-right:1px solid var(--rule); }
-  .seg-btn:last-child { border-right:0; }
-  .seg-btn:hover { background:var(--bg-soft); color:var(--text); }
-  .seg-btn.is-on { background:var(--navy); color:#fff; }
-  .search-wrap { display:inline-flex; align-items:center; gap:7px; margin-left:14px; border:1px solid var(--rule-strong); border-radius:8px; padding:0 11px; background:var(--bg-card); }
-  .search-wrap svg { width:14px; height:14px; color:var(--text-muted); flex-shrink:0; }
-  .search-box { border:0; outline:none; background:transparent; padding:7px 0; font-family:'Open Sans',sans-serif; font-size:13px; color:var(--navy); min-width:230px; }
+  /* item-focus entry box (type any item -> item # + branch) */
+  .entry-wrap { display:inline-flex; align-items:center; border:1px solid var(--rule-strong); border-radius:8px; padding:0 11px; background:var(--bg-card); }
+  .entry-wrap:focus-within { border-color:var(--blue); }
+  .entry-in { border:0; outline:none; background:transparent; padding:7px 0; font-family:'JetBrains Mono',ui-monospace,monospace; font-size:13px; font-weight:700; color:var(--navy); min-width:150px; }
+  .entry-in.sm { min-width:88px; }
   .spacer { flex:1 1 auto; }
   .kpi { display:inline-flex; flex-direction:column; align-items:flex-end; }
   .kpi .lbl { font-size:10px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); }
@@ -87,15 +88,18 @@
   .cx-tol-save:disabled { opacity:.5; cursor:not-allowed; }
   .cx-tol-hint { font-size:10.5px; color:var(--text-muted); font-style:italic; }
 
-  /* analysis card */
+  /* focus header card */
   .analysis { background:var(--bg-card); border:1px solid var(--rule); border-radius:14px; box-shadow:var(--shadow-sm); padding:18px 20px; margin-bottom:18px; }
   .an-headline { display:flex; align-items:center; gap:11px; }
   .an-badge { width:34px; height:34px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; }
   .an-badge.ok { background:var(--green-pale); color:var(--green); }
   .an-badge.warn { background:var(--orange-pale); color:var(--orange-deep); }
+  .an-badge.info { background:var(--blue-pale); color:var(--blue); }
   .an-badge svg { width:19px; height:19px; }
   .an-title { font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:16px; color:var(--navy); }
   .an-sub { font-size:12.5px; color:var(--text-soft); margin-top:1px; }
+  .an-meta { font-family:'JetBrains Mono',ui-monospace,monospace; font-size:12px; color:var(--text-soft); margin-top:3px; }
+  .an-chip { display:inline-flex; align-items:center; gap:6px; font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:10.5px; letter-spacing:.03em; text-transform:uppercase; color:var(--blue); background:var(--blue-pale); border-radius:100px; padding:2px 10px; margin-left:8px; vertical-align:middle; }
   .an-note { font-size:12px; color:var(--text-soft); border-left:3px solid var(--orange); background:var(--orange-pale); border-radius:0 8px 8px 0; padding:9px 12px; margin-top:14px; }
   .an-note b { color:var(--orange-deep); }
 
@@ -118,35 +122,7 @@
   table.rf tbody td.num { text-align:right; font-variant-numeric:tabular-nums; font-family:'JetBrains Mono',ui-monospace,monospace; }
   table.rf .mono { font-family:'JetBrains Mono',ui-monospace,monospace; }
   table.rf .neg { color:var(--red); }
-  /* account group header rows */
-  tr.grp td { background:var(--bg-soft); border-bottom:1px solid var(--rule-strong); cursor:pointer; padding:9px 11px; font-weight:700; color:var(--navy); }
-  tr.grp:hover td { background:#e9edf4; }
-  tr.grp .caret { display:inline-block; width:12px; color:var(--text-muted); transition:transform .12s; }
-  tr.grp.collapsed .caret { transform:rotate(-90deg); }
-  tr.grp .acct { font-family:'JetBrains Mono',ui-monospace,monospace; font-weight:800; }
-  tr.grp .gmeta { font-weight:600; color:var(--text-muted); font-size:11.5px; margin-left:8px; }
-  tr.grp .gsub { float:right; font-family:'JetBrains Mono',ui-monospace,monospace; font-weight:800; }
-  tr.item td { padding-left:11px; }
   tr.item:hover td { background:rgba(43,95,176,.04); }
-  tr.item.hide { display:none; }
-  /* runbook-style action plan under a pattern group: the pattern, then the steps */
-  tr.plan td { background:#fbfcfe; border-bottom:1px solid var(--rule); padding:12px 16px 14px 30px; }
-  tr.plan.hide { display:none; }
-  .plan-blurb { font-size:12.5px; color:var(--text-soft); margin-bottom:8px; max-width:900px; }
-  .plan-steps { margin:0; padding:0; list-style:none; counter-reset:step; }
-  .plan-steps li { position:relative; padding:3px 0 3px 26px; font-size:12.5px; color:var(--text); line-height:1.5; max-width:900px; }
-  .plan-steps li::before { counter-increment:step; content:counter(step); position:absolute; left:0; top:2px; width:18px; height:18px; border-radius:50%; background:var(--navy); color:#fff; font-family:'JetBrains Mono',monospace; font-size:10.5px; font-weight:700; display:inline-flex; align-items:center; justify-content:center; }
-  .plan-steps b { color:var(--navy); }
-  tr.grp .gname { font-family:'Source Sans 3',sans-serif; }
-  /* item rollup header (multi-lot item) + its indented lot rows */
-  tr.itemhdr td { background:#fcfdff; cursor:pointer; border-bottom:1px solid var(--rule); }
-  tr.itemhdr:hover td { background:rgba(43,95,176,.05); }
-  tr.itemhdr.hide { display:none; }
-  tr.itemhdr .lots { font-size:10.5px; font-weight:700; color:var(--text-muted); margin-left:7px; background:var(--grey-pale); padding:1px 7px; border-radius:100px; }
-  .item-caret { display:inline-block; width:11px; color:var(--text-muted); transition:transform .12s; }
-  .item-caret.collapsed { transform:rotate(-90deg); }
-  tr.item.lot td:first-child { padding-left:30px; }
-  tr.item.lot td { color:var(--text-soft); }
   .empty { padding:40px 20px; text-align:center; color:var(--text-muted); font-style:italic; }
 
   /* details drill-in — eye button per row opens the RR cardex transactions
@@ -238,22 +214,22 @@
 <div class="page">
   <nav class="breadcrumb"><a href="home.html">Inventory</a><span class="sep">/</span><span>Cardex Variance</span></nav>
   <h1 class="page-title">Cardex Variance</h1>
-  <div class="page-eyebrow">The per-item cardex drift worklist &mdash; items whose perpetual valuation didn&rsquo;t roll cleanly. These sum to the account-level Cardex variance on the Account Roll Forward. Decide which rows are real, then correct one with a logged, reversible <b>Adjust Beginning Balance</b>.</div>
+  <div class="page-eyebrow">The item-focused cardex sync tool. Enter an item &mdash; or arrive from a Home <b>Cardex Variance</b> card &mdash; to review its RapidReconciler cardex position against JDE, then sync RapidReconciler with a logged, reversible <b>Adjust Beginning Balance</b>. Browse variance items on Home; sync them here.</div>
 
   <details class="howto" style="--howto-accent:#f08a24;--howto-accent-pale:#fbe7ce;">
     <summary>
       <span class="howto-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span>
       How this works
-      <span class="howto-sub">Per-item cardex drift worklist</span>
+      <span class="howto-sub">Item-focused cardex sync</span>
       <svg class="howto-chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
     </summary>
     <div class="howto-body">
-      <p>Cardex Variance is the per-item companion to Account Roll Forward &mdash; items whose perpetual valuation didn&rsquo;t roll cleanly. They sum to the account-level cardex variance.</p>
+      <p>Cardex Variance compares an item&rsquo;s position in RapidReconciler (built from JDE) against JDE itself. When they differ, this page syncs RapidReconciler back to a validated JDE position &mdash; it never changes JDE.</p>
       <ol class="howto-steps">
-        <li><b>Group by pattern</b> to see the worklist sorted into known causes, each with a short action plan.</li>
-        <li><b>Open the cardex detail</b> on a row to see the transactions behind its variance before you act.</li>
-        <li><b>Confirm it&rsquo;s real.</b> A true JDE difference is fixed in JDE and clears on refresh; Adjust Beginning Balance is only for a load-time baseline artifact.</li>
-        <li><b>Adjust &amp; verify.</b> <b>Adjust Beginning Balance</b> opens on the pattern&rsquo;s likely fix &mdash; it&rsquo;s logged and reversible from the ledger below.</li>
+        <li><b>Focus an item.</b> Type an item number (and branch) above, or click an item on Home&rsquo;s <b>Cardex Variance</b> tab.</li>
+        <li><b>Validate against JDE</b> &mdash; the source of truth. Check <b>quantity first</b>, then amount. Confirm JDE is correct before you change anything in RapidReconciler.</li>
+        <li><b>Open the cardex detail</b> on a row to see the transactions behind the variance.</li>
+        <li><b>Sync &amp; verify.</b> <b>Adjust Beginning Balance</b> is logged and reversible from the ledger below. The result confirms after the next refresh.</li>
       </ol>
     </div>
   </details>
@@ -264,27 +240,22 @@
   </div>
 
   <div class="actions">
-    <span class="picker-lbl">Company</span>
-    <span class="seg" id="companyPick"><button type="button" class="seg-btn is-on" data-co="">All</button></span>
-    <span class="picker-lbl" style="margin-left:14px;">Group by</span>
-    <span class="seg" id="groupBy">
-      <button type="button" class="seg-btn is-on" data-grp="pattern">Pattern</button>
-      <button type="button" class="seg-btn" data-grp="account">Account</button>
-    </span>
-    <span class="search-wrap">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-      <input type="search" id="search" class="search-box" placeholder="Search item, account, branch, method&hellip;" autocomplete="off">
-    </span>
+    <span class="picker-lbl">Item</span>
+    <span class="entry-wrap"><input type="text" id="itemInput" class="entry-in" placeholder="item number&hellip;" autocomplete="off" spellcheck="false"></span>
+    <span class="picker-lbl" style="margin-left:6px;">Branch</span>
+    <span class="entry-wrap"><input type="text" id="branchInput" class="entry-in sm" placeholder="optional" autocomplete="off" spellcheck="false"></span>
+    <button class="btn primary" id="itemGo" type="button">Sync this item</button>
+    <button class="btn sm" id="itemClear" type="button" style="display:none;">Clear</button>
     <span class="spacer"></span>
-    <span class="kpi"><span class="lbl">Total variance</span><span class="val" id="kpiVar">&mdash;</span></span>
-    <span class="kpi" style="margin-left:22px;"><span class="lbl">Items</span><span class="val" id="kpiItems">&mdash;</span></span>
-    <span class="kpi" style="margin-left:22px;"><span class="lbl">Accounts</span><span class="val" id="kpiAccts">&mdash;</span></span>
+    <span class="kpi"><span class="lbl">Qty variance</span><span class="val" id="kpiQty">&mdash;</span></span>
+    <span class="kpi" style="margin-left:22px;"><span class="lbl">Amt variance</span><span class="val" id="kpiAmt">&mdash;</span></span>
+    <span class="kpi" style="margin-left:22px;"><span class="lbl">On hand</span><span class="val" id="kpiQoh">&mdash;</span></span>
     <span class="kpi cx-tol" id="cxTolWrap" style="margin-left:22px;">
-      <span class="lbl"><span class="cx-tol-dot" id="cxTolDot"></span>Tolerance</span>
+      <span class="lbl"><span class="cx-tol-dot" id="cxTolDot"></span>Co tolerance</span>
       <span class="val cx-tol-row">
         <input type="text" id="cxTolInput" class="cx-tol-input" inputmode="decimal" autocomplete="off" placeholder="set&hellip;">
         <button type="button" class="btn cx-tol-save" id="cxTolSave">Save</button>
-        <span class="cx-tol-hint" id="cxTolHint">pick a company</span>
+        <span class="cx-tol-hint" id="cxTolHint">focus an item</span>
       </span>
     </span>
   </div>
@@ -293,13 +264,13 @@
 
   <section class="grid-card">
     <div class="grid-head">
-      <span class="grid-title">Worklist</span>
+      <span class="grid-title">Item position</span>
       <span class="grid-count" id="gridCount">&mdash;</span>
       <span class="spacer"></span>
       <button class="btn" id="exportBtn"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10v3h10v-3"/><path d="M8 2v9"/><polyline points="5 8 8 11 11 8"/></svg>Export to Excel</button>
     </div>
     <div class="grid-scroll">
-      <table class="rf" id="rfTable"><thead id="rfHead"></thead><tbody id="rfBody"><tr><td class="empty">Loading worklist&hellip;</td></tr></tbody></table>
+      <table class="rf" id="rfTable"><thead id="rfHead"></thead><tbody id="rfBody"><tr><td class="empty">Loading&hellip;</td></tr></tbody></table>
     </div>
   </section>
 
@@ -366,18 +337,15 @@
 <script>
 (function () {
   'use strict';
-  var DATA = [];                 // worklist data rows (Reason <> 'Reset:')
-  var collapsed = {};            // group key -> false when explicitly expanded; default (absent/true) = collapsed
-  var itemExpanded = {};         // item key -> true when a multi-lot item is expanded
-  var state = { company:'', search:'', groupBy:'pattern' };
-  var _scopeInit = false;
+  var DATA = [];                 // full warmed worklist (Reason <> 'Reset:')
+  // state.focus = { item, branch, company, dim, method } | null. The page shows
+  // ONE item (arrived via ?item=... or typed in the entry box). Browse lives on Home.
+  var state = { focus:null };
   var _cxTol = {};   // company -> materiality tolerance (GET /inventory/cardex-tolerance; absent = 0 = strict)
   // ---- company scope: the page honors the shared working-company scope (set on
-  //      Home) — it shows only the in-scope companies. The [All|co|co] control is a
-  //      local drill WITHIN that set; it does not write back to the shared scope. ----
+  //      Home) — it only focuses items in the in-scope companies. ----
   // Active DB index — delegate to the ONE canonical resolver (config.js RRDB),
-  // which resolves the sticky rrv8.activeDb by name. Never read p.activeDbIndex
-  // (the JWT has no such field; it was always 0 → every fetch hit Dev).
+  // which resolves the sticky rrv8.activeDb by name.
   function _activeDbIdx(dbs){ return (window.RRDB && window.RRDB.index()) || 0; }
   function _scopeCtx(){
     try{
@@ -390,8 +358,7 @@
     }catch(_){ return null; }
   }
   // Active working-company scope as a {company:true} lookup, or null when all
-  // allowed companies are selected (no narrowing). Read-only — drilling on this
-  // page never rewrites the shared scope.
+  // allowed companies are selected (no narrowing). Read-only.
   function scopedCompanySet(){
     var ctx=_scopeCtx(); if(!ctx) return null;
     try{ var raw=sessionStorage.getItem(ctx.key); var sc=raw?(JSON.parse(raw).payload||null):null;
@@ -406,10 +373,7 @@
 
   // ---- fmt ----
   function num(n){ var x=Number(n)||0; var a=Math.abs(x).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); return x<0?'('+a+')':a; }
-  // Currency context for the Total-variance KPI. Per-item grid cells stay bare.
-  // mixed = scope spans >1 base currency (Currency now comes from the view).
-  // Self-contained (this page doesn't load sidebar.js): ISO-4217 symbol via
-  // the browser's Intl/ICU data; empty code falls back to '$'.
+  // Currency context for the Amt-variance KPI. Per-item grid cells stay bare.
   var _curCtx={code:'',mixed:false,codes:[]}, _curSymCache={};
   function _sym(code){
     var c=(code!==undefined&&code!==null)?code:_curCtx.code; c=(c||'').toString().trim().toUpperCase();
@@ -425,7 +389,8 @@
   function moneyCell(n){ var x=Number(n)||0; if(Math.abs(x)<0.005) return '<span style="color:var(--text-muted)">&mdash;</span>'; return '<span class="'+(x<0?'neg':'')+'">'+num(x)+'</span>'; }
   function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(m){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m];}); }
   function toast(m){ var t=document.getElementById('toast'); if(!t) return; t.innerHTML=m; t.classList.add('show'); clearTimeout(t._t); t._t=setTimeout(function(){t.classList.remove('show');},2400); }
-  function acctKey(r){ return r.CompanyNumber+'|'+r.LongAccount; }
+  function uniq(a){ return Array.from(new Set(a.filter(function(x){return x!=null&&String(x).trim()!=='';}))); }
+  function maxDate(rows){ var best='', bt=-1; rows.forEach(function(r){ var s=String(r.LastActivity||''); var t=Date.parse(s); if(!isNaN(t)&&t>bt){bt=t;best=s;} else if(bt<0&&s){best=s;} }); return best; }
   // eye icon → opens the cardex transaction popover for a row (data-detail-id =
   // one concrete lot row's ItemID) or a whole item (data-detail-item = Co|Item).
   function detailBtn(attr,val){
@@ -435,14 +400,14 @@
   }
   function colClass(c){ return [c.num?'num':'',c.cls||''].filter(Boolean).join(' '); }
 
-  // ---- columns (item rows) ----
+  // ---- columns (per-lot rows for the focused item) ----
   var COLS = [
     { k:'_detail',     label:'',  cls:'col-detail', render:function(r){return detailBtn('data-detail-id',r.ItemID);} },
-    { k:'ItemNumber',  label:'Item',     render:function(r){return '<span class="mono">'+esc(r.ItemNumber)+'</span>';} },
     { k:'Branch',      label:'Branch',   render:function(r){return esc(r.Branch);} },
     { k:'Location',    label:'Loc / Lot',render:function(r){return esc([r.Location,r.Lot].filter(Boolean).join(' / ')||'&mdash;');} },
     { k:'Method',      label:'Method',   render:function(r){return esc(r.Method);} },
     { k:'CostLevel',   label:'Lvl',      render:function(r){return esc(r.CostLevel);} },
+    { k:'LongAccount', label:'Account',  render:function(r){return '<span class="mono">'+esc(r.LongAccount)+'</span>';} },
     { k:'AdjQty',      label:'Qty Var',  num:true, render:function(r){return moneyCell(r.AdjQty);} },
     { k:'AdjAmount',   label:'Amt Var',  num:true, render:function(r){return moneyCell(r.AdjAmount);} },
     { k:'QtyOnHand',   label:'QOH',      num:true, render:function(r){return qty(r.QtyOnHand);} },
@@ -451,224 +416,185 @@
     { k:'_act',        label:'',         render:function(r){return '<button class="btn sm primary" data-adjust="'+esc(r.ItemID)+'">Adjust</button>';} }
   ];
 
-  function scoped(){ return DATA.filter(function(r){ return inScopeCo(r.CompanyNumber) && (!state.company || r.CompanyNumber===state.company); }); }
-  // Free-text search across the human-meaningful fields; all tokens must match.
-  function matchRow(r){
-    var q=(state.search||'').trim().toLowerCase(); if(!q) return true;
-    var hay=[r.ItemNumber,r.LongAccount,r.Branch,r.Location,r.Lot,r.Method,r.GLClass,r.CostLevel].join(' ').toLowerCase();
-    return q.split(/\s+/).every(function(tok){ return hay.indexOf(tok)>=0; });
+  // ---- focus resolution ----
+  // The rows (per lot/branch/location) for the focused item, within the working
+  // scope. When focus.company is blank (typed entry), the company is adopted from
+  // the matched rows.
+  function focusRows(){
+    var f=state.focus; if(!f||!f.item) return [];
+    var itemL=String(f.item).trim().toLowerCase(), brL=String(f.branch||'').trim().toLowerCase();
+    return DATA.filter(function(r){
+      if(!inScopeCo(r.CompanyNumber)) return false;
+      if(f.company && String(r.CompanyNumber)!==String(f.company)) return false;
+      if(String(r.ItemNumber||'').trim().toLowerCase()!==itemL) return false;
+      if(brL && String(r.Branch||'').trim().toLowerCase()!==brL) return false;
+      return true;
+    });
   }
-  function gridRows(){ return scoped().filter(matchRow); }   // company filter + search (KPIs use scoped())
+  function resolvedCompany(){ var f=state.focus; if(!f) return ''; if(f.company) return String(f.company); var r=focusRows()[0]; return r?String(r.CompanyNumber):''; }
 
-  // ---- pattern detection + runbook action plans (first guess; refine from here) ----
-  // Each pattern: how to detect it from the worklist fields, and a simple runbook
-  // (the pattern, then the steps). Order = display order (most actionable first).
-  var PATTERNS = [
-    { key:'depleted', name:'Depleted standard-cost residual',
-      blurb:'Item is empty &mdash; no quantity on hand (or a sub-unit crumb) &mdash; but a valuation amount is still on the books.',
-      steps:['Confirm the item is empty in JDE.',
-             'Open <b>Adjust</b> &mdash; it lands on <b>Clear</b> &mdash; and Apply.',
-             'The variance clears in RapidReconciler; JDE is untouched.'] },
-    { key:'amountstock', name:'Amount off, stock on hand',
-      blurb:'Quantity ties, but the valuation is off while the item still holds stock.',
-      steps:['Check the item&rsquo;s cost in JDE for a recent change.',
-             'Cost changed in JDE &rarr; refresh RapidReconciler and re-check.',
-             'Baseline carryover &rarr; <b>Adjust</b> (opens on <b>Clear</b>) and Apply.'] },
-    { key:'qty', name:'Quantity variance',
-      blurb:'The perpetual quantity doesn&rsquo;t match the cardex.',
-      steps:['Open the cardex detail; check <b>Last Activity</b> and <b>Tx</b> for missing or unposted movement.',
-             'Missing or unposted &rarr; post it in JDE and refresh.',
-             'Baseline carryover &rarr; <b>Adjust</b> (opens on <b>Manual</b>) to the correct quantity.'] },
-    { key:'rounding', name:'Rounding noise',
-      blurb:'Sub-dollar valuation difference from cumulative rounding.',
-      steps:['Immaterial &mdash; no per-item action needed.',
-             'Optionally clear alongside the depleted residuals.'] },
-    { key:'other', name:'Uncategorized',
-      blurb:'Flagged, but nets to about zero on both quantity and amount &mdash; often lots that offset within the item.',
-      steps:['Expand the item (or open the cardex detail) to see the offsetting lots.',
-             'Usually safe to leave; refine the patterns if a real case appears.'] }
-  ];
-  var PATTERN_IX = {}; PATTERNS.forEach(function(p,i){ PATTERN_IX[p.key]=i; });
-  // Each pattern's most-likely corrective preset — the Adjust modal opens on it
-  // (the attestation still gates Apply; this only preselects).
+  // Preset preselect for the Adjust modal: classify the focused item once
+  // (quantity-first) and open on its most-likely corrective preset.
   var PRESET_FOR_PATTERN = { depleted:'clear', amountstock:'clear', qty:'manual', rounding:'clear', other:'manual' };
-  function presetForRow(r){
-    var rows=DATA.filter(function(x){return x.CompanyNumber===r.CompanyNumber && String(x.ItemNumber)===String(r.ItemNumber);});
-    var it=itemsOf(rows)[0];
-    return (it && PRESET_FOR_PATTERN[it.pattern]) || 'manual';
-  }
-  // The ITEM (Company|ItemNumber, across its lots/branches) is the unit of analysis:
-  // aggregate its lot rows, classify ONCE, so an item lands in exactly one pattern.
-  function uniq(a){ return Array.from(new Set(a.filter(function(x){return x!=null&&String(x).trim()!=='';}))); }
-  function maxDate(rows){ var best='', bt=-1; rows.forEach(function(r){ var s=String(r.LastActivity||''); var t=Date.parse(s); if(!isNaN(t)&&t>bt){bt=t;best=s;} else if(bt<0&&s){best=s;} }); return best; }
   function classifyItem(it){
     var isQty = it.qty!==0 || it.reasons.some(function(x){return /quantity/i.test(x);});
     if(isQty) return 'qty';                                          // quantity-first precedence
-    if(Math.abs(it.amt)<1) return Math.abs(it.amt)<0.005 ? 'other' : 'rounding';  // nets to ~0 = safety net; else rounding noise
-    if(Math.abs(it.qoh)<1) return 'depleted';                        // empty, or a sub-unit residual crumb
+    if(Math.abs(it.amt)<1) return Math.abs(it.amt)<0.005 ? 'other' : 'rounding';
+    if(Math.abs(it.qoh)<1) return 'depleted';
     return 'amountstock';
   }
-  function itemsOf(rows){
-    var m={}, order=[];
-    rows.forEach(function(r){ var k=r.CompanyNumber+'|'+r.ItemNumber;
-      if(!m[k]){ m[k]={ key:k, company:r.CompanyNumber, itemNumber:r.ItemNumber, longAccount:r.LongAccount, rows:[] }; order.push(k); }
-      m[k].rows.push(r); });
-    return order.map(function(k){ var it=m[k], R=it.rows;
-      it.amt=R.reduce(function(s,r){return s+(Number(r.AdjAmount)||0);},0);
-      it.qty=R.reduce(function(s,r){return s+(Number(r.AdjQty)||0);},0);
-      it.qoh=R.reduce(function(s,r){return s+(Number(r.QtyOnHand)||0);},0);
-      it.tx =R.reduce(function(s,r){return s+(Number(r.TxCount)||0);},0);
-      it.last=maxDate(R); it.method=uniq(R.map(function(r){return r.Method;}));
-      it.costLevel=uniq(R.map(function(r){return r.CostLevel;}));
-      it.reasons=R.map(function(r){return String(r.Reason||'');});
-      it.pattern=classifyItem(it); return it; });
+  function presetForRow(r){
+    var rows=DATA.filter(function(x){return x.CompanyNumber===r.CompanyNumber && String(x.ItemNumber)===String(r.ItemNumber);});
+    var it={ qty:0, amt:0, qoh:0, reasons:[] };
+    rows.forEach(function(x){ it.qty+=Number(x.AdjQty)||0; it.amt+=Number(x.AdjAmount)||0; it.qoh+=Number(x.QtyOnHand)||0; it.reasons.push(String(x.Reason||'')); });
+    return PRESET_FOR_PATTERN[classifyItem(it)] || 'manual';
   }
-  // Items in scope (company filter); search keeps items with any matching lot.
-  function itemsForGrid(){ var items=itemsOf(scoped());
-    if((state.search||'').trim()) items=items.filter(function(it){ return it.rows.some(matchRow); });
-    return items; }
 
   // ---- render ----
   function renderKpis(){
-    var s=scoped();
-    _curCtx=_ctxOf(s);
-    var v=s.reduce(function(a,r){return a+(Number(r.AdjAmount)||0);},0);
-    var items=new Set(s.map(function(r){return r.CompanyNumber+'|'+r.ItemNumber;})).size;
-    var accts=new Set(s.map(acctKey)).size;
-    var k1=document.getElementById('kpiVar');
-    if(_curCtx.mixed){ k1.textContent='Mixed currencies'; k1.classList.remove('neg'); }
-    else { k1.textContent=curMoney(v); k1.classList.toggle('neg',v<0); }
-    document.getElementById('kpiItems').textContent=items.toLocaleString('en-US');
-    document.getElementById('kpiAccts').textContent=accts;
-    renderTol(s);
+    var rows=focusRows();
+    _curCtx=_ctxOf(rows);
+    var kQty=document.getElementById('kpiQty'), kAmt=document.getElementById('kpiAmt'), kQoh=document.getElementById('kpiQoh');
+    if(!state.focus){ kQty.textContent='—'; kAmt.textContent='—'; kAmt.classList.remove('neg'); kQoh.textContent='—'; renderTol(''); return; }
+    var qv=rows.reduce(function(a,r){return a+(Number(r.AdjQty)||0);},0);
+    var av=rows.reduce(function(a,r){return a+(Number(r.AdjAmount)||0);},0);
+    var qoh=rows.reduce(function(a,r){return a+(Number(r.QtyOnHand)||0);},0);
+    kQty.textContent=qty(qv); kQty.classList.toggle('neg',qv<0);
+    if(_curCtx.mixed){ kAmt.textContent='Mixed'; kAmt.classList.remove('neg'); }
+    else { kAmt.textContent=curMoney(av); kAmt.classList.toggle('neg',av<0); }
+    kQoh.textContent=qty(qoh);
+    renderTol(resolvedCompany());
   }
-  // Per-company cardex materiality tolerance: green while a company's net
-  // |variance| is at/under its tolerance, red when over. Editable only when a
-  // single company is picked (per-company grain); "All" shows the aggregate
-  // (green only if every in-scope company is within its own).
-  function renderTol(s){
-    s = s || scoped();
+  // Per-company cardex materiality tolerance: green while the focused company's
+  // net |variance| (across all its items) is at/under its tolerance, red when
+  // over. Editable only when an item (hence a company) is focused.
+  function renderTol(co){
     var dot=document.getElementById('cxTolDot'), inp=document.getElementById('cxTolInput'),
         save=document.getElementById('cxTolSave'), hint=document.getElementById('cxTolHint');
     if(!dot||!inp||!save||!hint) return;
-    var byCo={}; s.forEach(function(r){ var co=String(r.CompanyNumber||''); byCo[co]=(byCo[co]||0)+(Number(r.AdjAmount)||0); });
-    var tolOf=function(co){ return (_cxTol[co]!=null)?_cxTol[co]:0; };
-    var isOver=function(co){ return Math.abs(byCo[co]||0) > tolOf(co)+0.005; };
-    var co=state.company;
+    var tolOf=function(c){ return (_cxTol[c]!=null)?_cxTol[c]:0; };
     if(co){
-      var v=Math.abs(byCo[co]||0), tol=tolOf(co);
+      var net=DATA.reduce(function(a,r){ return (inScopeCo(r.CompanyNumber)&&String(r.CompanyNumber)===String(co))?a+(Number(r.AdjAmount)||0):a; },0);
+      var v=Math.abs(net), tol=tolOf(co);
       inp.disabled=false; save.disabled=false; hint.style.display='none';
       if(document.activeElement!==inp) inp.value = tol ? String(tol) : '';
       dot.className='cx-tol-dot '+(v>tol+0.005?'red':'green');
-      dot.title=co+': net |variance| '+curMoney(v)+' vs tolerance '+curMoney(tol);
+      dot.title='Co '+co+': net |variance| '+curMoney(v)+' vs tolerance '+curMoney(tol);
     } else {
-      inp.disabled=true; save.disabled=true; inp.value=''; hint.style.display='';
-      var anyOver=Object.keys(byCo).some(isOver);
-      dot.className='cx-tol-dot '+(anyOver?'red':'green');
-      dot.title=anyOver?'One or more companies over their cardex tolerance':'All in-scope companies within tolerance';
+      inp.disabled=true; save.disabled=true; inp.value=''; hint.style.display=''; dot.className='cx-tol-dot'; dot.title='';
     }
   }
   function loadCxTol(){
     agentFetch('/inventory/cardex-tolerance').then(function(resp){
       var rows=(resp&&resp.data)||[]; var m={};
       rows.forEach(function(t){ if(t&&t.company!=null) m[String(t.company)]=Number(t.tolerance)||0; });
-      _cxTol=m; renderTol();
+      _cxTol=m; renderTol(resolvedCompany());
     }).catch(function(){ /* endpoint absent -> tolerances default 0 (strict) */ });
   }
-  function renderAnalysis(){
+  var IC_SEARCH='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>';
+  var IC_OK='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+  var IC_WARN='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4M12 17h.01"/></svg>';
+  var VALIDATE_NOTE='<div class="an-note"><b>Before you adjust:</b> validate this item against JDE (the source of truth) &mdash; <b>quantity first</b>, then amount. Adjust Beginning Balance syncs RapidReconciler to JDE; it never changes JDE. Confirm JDE is correct first &mdash; syncing to a wrong JDE only launders the error.</div>';
+  function fromChip(f){
+    if(!f) return '';
+    if(f.dim==='qty') return '<span class="an-chip">from Quantity card</span>';
+    if(f.method==='07') return '<span class="an-chip">from Amount &middot; Standard</span>';
+    if(f.method==='02') return '<span class="an-chip">from Amount &middot; Average</span>';
+    if(f.dim==='amt') return '<span class="an-chip">from Amount card</span>';
+    return '';
+  }
+  function renderFocusHeader(){
     var host=document.getElementById('analysis'); if(!host) return;
-    var s=scoped();
-    var accts=new Set(s.map(acctKey)).size;
-    var itemCount=new Set(s.map(function(r){return r.CompanyNumber+'|'+r.ItemNumber;})).size;
-    var clean=s.length===0;
-    var badge=clean
-      ? '<span class="an-badge ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>'
-      : '<span class="an-badge warn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4M12 17h.01"/></svg></span>';
-    var headline=clean?'Cardex is clean':(itemCount.toLocaleString('en-US')+' item'+(itemCount!==1?'s':'')+' with cardex variance across '+accts+' account'+(accts!==1?'s':''));
-    var sub=clean?'No item shows perpetual drift in scope.':'Work the real rows; net offsets within an account cancel at the account level.';
-    host.innerHTML='<div class="an-headline">'+badge+'<div><div class="an-title">'+headline+'</div><div class="an-sub">'+sub+'</div></div></div>'+
-      (clean?'':'<div class="an-note"><b>Before adjusting:</b> confirm the row is a RapidReconciler baseline artifact, not a real JDE difference. A real JDE difference is fixed in JD Edwards and clears on the next refresh; Adjust Beginning Balance is for the load-time baseline desync only.</div>');
+    var f=state.focus;
+    if(!f){
+      host.innerHTML='<div class="an-headline"><span class="an-badge info">'+IC_SEARCH+'</span>'+
+        '<div><div class="an-title">Enter an item to sync</div>'+
+        '<div class="an-sub">Type an item number above, or open a card on Home&rsquo;s <b>Cardex Variance</b> tab and click an item. This page reviews one item&rsquo;s RapidReconciler cardex position against JDE, then syncs RapidReconciler with a logged, reversible Adjust Beginning Balance.</div></div></div>';
+      return;
+    }
+    var rows=focusRows(), co=resolvedCompany();
+    if(!rows.length){
+      host.innerHTML='<div class="an-headline"><span class="an-badge info">'+IC_SEARCH+'</span>'+
+        '<div><div class="an-title">No cardex variance on record for '+esc(f.item)+fromChip(f)+'</div>'+
+        '<div class="an-sub">'+(f.branch?'Branch <b>'+esc(f.branch)+'</b> &middot; ':'')+'nothing to sync in the current scope. Check the item number'+(f.branch?' and branch':'')+', or browse variance items on Home&rsquo;s <b>Cardex Variance</b> tab.</div></div></div>';
+      return;
+    }
+    var qv=rows.reduce(function(a,r){return a+(Number(r.AdjQty)||0);},0);
+    var av=rows.reduce(function(a,r){return a+(Number(r.AdjAmount)||0);},0);
+    var hasVar = Math.abs(qv)>=1 || Math.abs(av)>0.005;
+    var branches=uniq(rows.map(function(r){return r.Branch;}));
+    var methods=uniq(rows.map(function(r){return r.Method;}));
+    var levels=uniq(rows.map(function(r){return r.CostLevel;}));
+    var accts=uniq(rows.map(function(r){return r.LongAccount;}));
+    var badge=hasVar?'<span class="an-badge warn">'+IC_WARN+'</span>':'<span class="an-badge ok">'+IC_OK+'</span>';
+    var title=(hasVar?'Cardex position for ':'In sync &mdash; ')+esc(f.item)+fromChip(f);
+    var sub=hasVar
+      ? (rows.length+' lot'+(rows.length!==1?'s':'')+' with variance &mdash; work the real ones, then Adjust to sync.')
+      : 'No perpetual drift on this item in scope. You can still Adjust the beginning balance if JDE confirms a change.';
+    var meta='Co '+esc(co)+' &middot; Branch '+esc(branches.join('/')||'&mdash;')+' &middot; Method '+esc(methods.join('/')||'&mdash;')+' &middot; Lvl '+esc(levels.join('/')||'&mdash;')+' &middot; '+accts.length+' account'+(accts.length!==1?'s':'');
+    host.innerHTML='<div class="an-headline">'+badge+'<div><div class="an-title">'+title+'</div><div class="an-sub">'+sub+'</div><div class="an-meta">'+meta+'</div></div></div>'+
+      (hasVar?VALIDATE_NOTE:'');
   }
   function renderGrid(){
     if(dpop.key) closeDetail();   // the table is about to be rebuilt; drop the anchored popover
     var head=document.getElementById('rfHead'), body=document.getElementById('rfBody'), cnt=document.getElementById('gridCount');
     head.innerHTML='<tr>'+COLS.map(function(c){return '<th class="'+colClass(c)+'">'+esc(c.label)+'</th>';}).join('')+'</tr>';
-    var searching=!!(state.search||'').trim();
-    var byPattern = state.groupBy==='pattern';
-    var items=itemsForGrid(), totalItems=itemsOf(scoped()).length;
-    cnt.textContent=searching
-      ? (items.length.toLocaleString('en-US')+' of '+totalItems.toLocaleString('en-US')+' item'+(totalItems!==1?'s':'')+' match')
-      : (items.length.toLocaleString('en-US')+' item'+(items.length!==1?'s':'')+' in scope');
-    if(!items.length){ body.innerHTML='<tr><td class="empty" colspan="'+COLS.length+'">'+(searching?'No items match your search.':'No cardex variance in scope.')+'</td></tr>'; return; }
-    // group items by pattern (or account)
-    var groups={}, order=[];
-    items.forEach(function(it){ var k=byPattern?it.pattern:(it.company+'|'+it.longAccount); if(!groups[k]){groups[k]=[];order.push(k);} groups[k].push(it); });
-    if(byPattern) order.sort(function(a,b){ return (PATTERN_IX[a]==null?99:PATTERN_IX[a])-(PATTERN_IX[b]==null?99:PATTERN_IX[b]); });
-    var html='';
-    order.forEach(function(k){
-      var its=groups[k];
-      its.sort(function(a,b){ return String(a.itemNumber).localeCompare(String(b.itemNumber),undefined,{numeric:true}); });  // default sort by item
-      var sub=its.reduce(function(s,it){return s+it.amt;},0);
-      var isCol=searching ? false : (collapsed[k] !== false);   // default collapsed; only an explicit expand (false) opens a group
-      var label, meta;
-      if(byPattern){ var p=PATTERNS[PATTERN_IX[k]]; label='<span class="gname">'+esc(p?p.name:k)+'</span>'; meta=its.length+' item'+(its.length!==1?'s':''); }
-      else { var a0=its[0]; label='<span class="acct">'+esc(a0.longAccount)+'</span>'; meta='Co '+esc(a0.company)+' &middot; '+its.length+' item'+(its.length!==1?'s':''); }
-      html+='<tr class="grp'+(isCol?' collapsed':'')+'" data-grp="'+esc(k)+'">'+
-        '<td colspan="'+COLS.length+'"><span class="caret">&#9660;</span> '+label+
-        '<span class="gmeta">'+meta+'</span><span class="gsub '+(sub<0?'neg':'')+'">'+num(sub)+'</span></td></tr>';
-      if(byPattern){ var p2=PATTERNS[PATTERN_IX[k]]; if(p2){
-        html+='<tr class="plan'+(isCol?' hide':'')+'" data-grp="'+esc(k)+'"><td colspan="'+COLS.length+'">'+
-          '<div class="plan-blurb">'+p2.blurb+'</div>'+
-          '<ol class="plan-steps">'+p2.steps.map(function(st){return '<li>'+st+'</li>';}).join('')+'</ol></td></tr>'; } }
-      its.forEach(function(it){ html+=renderItem(it, k, isCol); });
-    });
-    body.innerHTML=html;
-  }
-  // One item = one row when it has a single lot; multi-lot items get a rollup header
-  // (expandable) + indented per-lot rows (each lot keeps its own Adjust).
-  function renderItem(it, grpKey, grpCollapsed){
-    var hide=grpCollapsed?' hide':'';
-    if(it.rows.length===1){
-      var r=it.rows[0];
-      return '<tr class="item'+hide+'" data-grp="'+esc(grpKey)+'">'+COLS.map(function(c){return '<td class="'+colClass(c)+'">'+c.render(r)+'</td>';}).join('')+'</tr>';
+    if(!state.focus){
+      cnt.textContent='—';
+      body.innerHTML='<tr><td class="empty" colspan="'+COLS.length+'">Enter an item above, or open a card on Home&rsquo;s <b>Cardex Variance</b> tab to jump straight to an item.</td></tr>';
+      return;
     }
-    var iExp=!!itemExpanded[it.key];
-    var cell=function(k){
-      switch(k){
-        case '_detail': return detailBtn('data-detail-item',it.key);
-        case 'ItemNumber': return '<span class="item-caret'+(iExp?'':' collapsed')+'">&#9660;</span> <span class="mono"><b>'+esc(it.itemNumber)+'</b></span> <span class="lots">'+it.rows.length+' lots</span>';
-        case 'Method': return esc(it.method.join('/'));
-        case 'CostLevel': return esc(it.costLevel.join('/'));
-        case 'AdjQty': return moneyCell(it.qty);
-        case 'AdjAmount': return moneyCell(it.amt);
-        case 'QtyOnHand': return qty(it.qoh);
-        case 'LastActivity': return esc(it.last)||'&mdash;';
-        case 'TxCount': return esc(it.tx);
-        default: return '';
-      }
-    };
-    var html='<tr class="itemhdr'+hide+'" data-item="'+esc(it.key)+'" data-grp="'+esc(grpKey)+'">'+
-      COLS.map(function(c){return '<td class="'+colClass(c)+'">'+cell(c.k)+'</td>';}).join('')+'</tr>';
-    var lotHide=(grpCollapsed||!iExp)?' hide':'';
-    it.rows.forEach(function(r){
-      html+='<tr class="item lot'+lotHide+'" data-grp="'+esc(grpKey)+'">'+COLS.map(function(c){return '<td class="'+colClass(c)+'">'+c.render(r)+'</td>';}).join('')+'</tr>';
+    var rows=focusRows();
+    if(!rows.length){
+      cnt.textContent='0 rows';
+      body.innerHTML='<tr><td class="empty" colspan="'+COLS.length+'">No cardex variance on record for '+esc(state.focus.item)+(state.focus.branch?' &middot; '+esc(state.focus.branch):'')+' in scope.</td></tr>';
+      return;
+    }
+    cnt.textContent=rows.length.toLocaleString('en-US')+' lot'+(rows.length!==1?'s':'');
+    rows=rows.slice().sort(function(a,b){
+      return String(a.Branch||'').localeCompare(String(b.Branch||''))
+          || String(a.Location||'').localeCompare(String(b.Location||''))
+          || String(a.Lot||'').localeCompare(String(b.Lot||''));
     });
-    return html;
+    body.innerHTML=rows.map(function(r){
+      return '<tr class="item">'+COLS.map(function(c){return '<td class="'+colClass(c)+'">'+c.render(r)+'</td>';}).join('')+'</tr>';
+    }).join('');
   }
-  function renderAll(){ renderKpis(); renderAnalysis(); renderGrid(); }
-
-  // ---- company picker ----
-  function buildPicker(){
-    var cos=Array.from(new Set(DATA.map(function(r){return r.CompanyNumber;}))).sort().filter(inScopeCo);
-    var host=document.getElementById('companyPick');
-    var allLabel=scopedCompanySet()?'All in scope':'All';
-    host.innerHTML='<button type="button" class="seg-btn'+(state.company===''?' is-on':'')+'" data-co="">'+allLabel+'</button>'+
-      cos.map(function(c){return '<button type="button" class="seg-btn'+(String(c)===state.company?' is-on':'')+'" data-co="'+esc(c)+'">'+esc(c)+'</button>';}).join('');
+  function renderAll(){
+    document.getElementById('itemClear').style.display = state.focus ? '' : 'none';
+    renderKpis(); renderFocusHeader(); renderGrid();
   }
 
-  // ---- excel export ----
+  // ---- focus control ----
+  function setFocus(f){
+    state.focus = (f && f.item) ? {
+      item:String(f.item).trim(), branch:String(f.branch||'').trim(), company:String(f.company||'').trim(),
+      dim:String(f.dim||''), method:String(f.method||'')
+    } : null;
+    // reflect in the URL so a reload keeps the focus (mode is preserved)
+    try{
+      var q=new URLSearchParams(window.location.search);
+      if(state.focus){ q.set('item',state.focus.item);
+        if(state.focus.branch) q.set('branch',state.focus.branch); else q.delete('branch');
+        if(state.focus.company) q.set('company',state.focus.company); else q.delete('company');
+      } else { q.delete('item'); q.delete('branch'); q.delete('company'); q.delete('dim'); q.delete('method'); }
+      history.replaceState(null,'',window.location.pathname+(q.toString()?'?'+q.toString():'')+window.location.hash);
+    }catch(_){}
+    var ii=document.getElementById('itemInput'), bi=document.getElementById('branchInput');
+    if(ii) ii.value=state.focus?state.focus.item:'';
+    if(bi) bi.value=state.focus?state.focus.branch:'';
+    renderAll();
+  }
+  function applyEntry(){
+    var ii=document.getElementById('itemInput'), bi=document.getElementById('branchInput');
+    var it=(ii.value||'').trim(), br=(bi.value||'').trim();
+    if(!it){ toast('Enter an item number.'); ii.focus(); return; }
+    setFocus({ item:it, branch:br, company:'' });   // company adopted from matched rows
+  }
+
+  // ---- excel export (focused item) ----
   function exportXlsx(){
-    var s=gridRows();
+    var s=focusRows();
     if(!s.length){ toast('Nothing to export'); return; }
     if(typeof XLSX==='undefined'){ toast('Excel library still loading &mdash; try again'); return; }
     var labels=['Company','Long Account','Item','Branch','Location','Lot','Method','Cost Level','Qty Var','Amt Var','QOH','Last Activity','Tx Count'];
@@ -676,16 +602,14 @@
     s.forEach(function(r){ aoa.push([r.CompanyNumber,r.LongAccount,r.ItemNumber,r.Branch,r.Location,r.Lot,r.Method,r.CostLevel,Number(r.AdjQty)||0,Number(r.AdjAmount)||0,Number(r.QtyOnHand)||0,r.LastActivity,Number(r.TxCount)||0]); });
     var ws=XLSX.utils.aoa_to_sheet(aoa), wb=XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb,ws,'Cardex Variance');
-    XLSX.writeFile(wb, RRV8.exportName({ surface: 'CardexVariance' }));
-    toast('Exported '+s.length+' item'+(s.length!==1?'s':'')+' to Excel');
+    XLSX.writeFile(wb, RRV8.exportName({ surface:'CardexVariance', drill:(state.focus&&state.focus.item)||'' }));
+    toast('Exported '+s.length+' lot'+(s.length!==1?'s':'')+' to Excel');
   }
 
   // ---- cardex detail drill-in ----
   // Clicking a row's eye icon opens the RR cardex transactions behind that
   // variance. Backed by POST /inventory/as-of/details (usp6ItemRollForward) --
-  // the same endpoint the As Of perpetual grid previews. A concrete lot row
-  // sends its exact Branch/Location/Lot; a multi-lot item header sends empty
-  // Location+Lot so the sproc returns the union across the item's lots.
+  // the same endpoint the As Of perpetual grid previews.
   var dpop = { key:null, btn:null, ctx:null, cache:{}, inflight:null };
   function dTxt(v){ return esc(String(v==null?'':v).trim()); }
   function dDate(v){ var m=/^(\d{4})-(\d{2})-(\d{2})/.exec(String(v||'')); return m?(parseInt(m[2],10)+'/'+parseInt(m[3],10)+'/'+m[1]):esc(String(v||'')); }
@@ -729,14 +653,14 @@
       return arr;
     });
   }
-  function renderDetail(state, ctx){
+  function renderDetail(st, ctx){
     var body=document.getElementById('detailBody'), sub=document.getElementById('detailSub'), xls=document.getElementById('detailXls'), ttl=document.getElementById('detailTitle');
     if(ttl) ttl.innerHTML=ctx?ctx.title:'Cardex detail';
     if(sub) sub.textContent=ctx?ctx.sub:'';
     if(xls) xls.disabled=true;
-    if(state==='loading'){ body.innerHTML='<div class="detail-pop-state">Loading cardex transactions&hellip;</div>'; return; }
-    if(state&&state.error){ body.innerHTML='<div class="detail-pop-state">Couldn&rsquo;t load the cardex detail for this position.'+(state.message?'<br><br><span class="mono" style="font-size:11px;color:var(--text)">'+esc(state.message)+'</span>':'')+'</div>'; return; }
-    var rows=state.rows||[];
+    if(st==='loading'){ body.innerHTML='<div class="detail-pop-state">Loading cardex transactions&hellip;</div>'; return; }
+    if(st&&st.error){ body.innerHTML='<div class="detail-pop-state">Couldn&rsquo;t load the cardex detail for this position.'+(st.message?'<br><br><span class="mono" style="font-size:11px;color:var(--text)">'+esc(st.message)+'</span>':'')+'</div>'; return; }
+    var rows=st.rows||[];
     if(!rows.length){ body.innerHTML='<div class="detail-pop-state">No cardex transactions found for this position.</div>'; return; }
     if(xls) xls.disabled=false;
     var head=DCOLS.map(function(c){return '<th class="'+(c.num?'num':'')+'">'+esc(c.l)+'</th>';}).join('');
@@ -789,7 +713,7 @@
       return typeof v==='string'?v.trim():v; }); });
     var ws=XLSX.utils.aoa_to_sheet([headers].concat(data)), wb=XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb,ws,'Cardex Detail');
-    XLSX.writeFile(wb, RRV8.exportName({ surface: 'CardexDetail', drill: (ctx.seed.ItemNumber || 'item') }));
+    XLSX.writeFile(wb, RRV8.exportName({ surface:'CardexDetail', drill:(ctx.seed.ItemNumber || 'item') }));
     toast('Exported '+rows.length+' transaction'+(rows.length!==1?'s':'')+' to Excel');
   }
 
@@ -862,9 +786,6 @@
   }
 
   // ---- agent I/O (JWT-scoped; same token pattern as Account Roll Forward) ----
-  // Active DB's agent base — the ONE canonical resolver (config.js RRDB):
-  // selected DB's ip first, dev test-agent only as the no-ip fallback. Also
-  // paints the topbar DB name as a side-effect (kept from the old impl).
   function agentBaseFromToken(token){
     if(!window.RRDB) return null;
     var db=window.RRDB.active();
@@ -879,9 +800,9 @@
   // The login id the agent records in the ledger (userRequest.getUsername() == JWT sub).
   function loginId(){ var p=tokenPayload(); return p ? String(p.sub || (p.user&&p.user.u) || '') : ''; }
   // Cross-page session cache, same key Home warms (rrv8.scope.v1.<mode>.<db>.cardexworklist).
-  // Home preloads this behind the scenes; this page renders from it instantly, then refreshes.
   var RR_CONFIG = window.RR_CONFIG || {};
-  var MODE = (new URLSearchParams(window.location.search).get('mode')) || RR_CONFIG.mode || 'demo';
+  var Q = new URLSearchParams(window.location.search);
+  var MODE = Q.get('mode') || RR_CONFIG.mode || 'demo';
   function activeDbName(){ return (window.RRDB && window.RRDB.name()) || '_'; }
   function cardexCacheKey(){ return 'rrv8.scope.v1.'+MODE+'.'+activeDbName()+'.cardexworklist'; }
   function readCardexCache(){ try{ var o=JSON.parse(sessionStorage.getItem(cardexCacheKey())||'null'); return o&&Array.isArray(o.payload)?o.payload:null; }catch(_){ return null; } }
@@ -902,9 +823,7 @@
     resetDate = reset ? String(reset.ItemNumber||'').trim() : '';
     if(reset){ document.getElementById('resetText').innerHTML='Variance tracked from the reset date <b>'+esc(resetDate)+'</b> forward.'; document.getElementById('resetBanner').classList.add('show'); }
     DATA=rows.filter(function(r){ return String(r.Reason||'').trim()!=='Reset:'; });
-    // Default-collapse every account on first load (page open); later reloads
-    // (after an adjust/undo) keep whatever the analyst had expanded.
-    buildPicker(); renderAll();   // state.company defaults '' = all companies in scope
+    renderAll();
   }
   function loadWorklist(){
     return agentFetch('/inventory/integrity',{method:'POST',body:{report:'v6ui_itemrollintegritydialog'}})
@@ -920,27 +839,34 @@
     if(cached){ ingestWorklist(cached); }
     loadWorklist().then(function(rows){ writeCardexCache(rows); ingestWorklist(rows); }).catch(function(err){
       if(cached) { toast('Showing the last loaded worklist — refresh failed: '+esc(err.message)); return; }
-      document.getElementById('analysis').innerHTML='<div class="empty">Worklist isn&rsquo;t available.<br><span style="font-size:12px">Sign in so the page can read the cardex variance from the data service.</span></div>';
+      document.getElementById('analysis').innerHTML='<div class="empty">Cardex data isn&rsquo;t available.<br><span style="font-size:12px">Sign in so the page can read the cardex variance from the data service.</span></div>';
       document.getElementById('rfBody').innerHTML='<tr><td class="empty" colspan="'+COLS.length+'">No data &mdash; '+esc(err.message)+'</td></tr>';
-      document.getElementById('gridCount').textContent='0 items';
+      document.getElementById('gridCount').textContent='—';
     });
     loadLedger().then(renderLedger).catch(function(){ /* ledger optional; leave empty state */ });
   }
 
   // ---- wire ----
-  document.getElementById('companyPick').addEventListener('click',function(e){ var b=e.target.closest('.seg-btn'); if(!b) return;
-    state.company=b.getAttribute('data-co')||'';   // local drill within scope; not written back to the shared scope
-    this.querySelectorAll('.seg-btn').forEach(function(x){x.classList.toggle('is-on',x===b);}); renderAll(); });
-  document.getElementById('search').addEventListener('input',function(){ state.search=this.value; renderGrid(); });
-  document.getElementById('groupBy').addEventListener('click',function(e){ var b=e.target.closest('.seg-btn'); if(!b) return;
-    state.groupBy=b.getAttribute('data-grp')||'pattern'; this.querySelectorAll('.seg-btn').forEach(function(x){x.classList.toggle('is-on',x===b);}); renderGrid(); });
+  // seed the focus from the URL (?item=... arrives from a Home Cardex Variance drawer)
+  (function(){
+    var it=(Q.get('item')||'').trim();
+    if(it){ state.focus={ item:it, branch:(Q.get('branch')||'').trim(), company:(Q.get('company')||'').trim(), dim:(Q.get('dim')||'').trim(), method:(Q.get('method')||'').trim() }; }
+    var ii=document.getElementById('itemInput'), bi=document.getElementById('branchInput');
+    if(ii) ii.value=state.focus?state.focus.item:'';
+    if(bi) bi.value=state.focus?state.focus.branch:'';
+    document.getElementById('itemClear').style.display=state.focus?'':'none';
+  })();
+  document.getElementById('itemGo').addEventListener('click',applyEntry);
+  document.getElementById('itemClear').addEventListener('click',function(){ setFocus(null); document.getElementById('itemInput').focus(); });
+  document.getElementById('itemInput').addEventListener('keydown',function(e){ if(e.key==='Enter'){ e.preventDefault(); applyEntry(); } });
+  document.getElementById('branchInput').addEventListener('keydown',function(e){ if(e.key==='Enter'){ e.preventDefault(); applyEntry(); } });
   document.getElementById('exportBtn').addEventListener('click',exportXlsx);
-  // Save the picked company's cardex tolerance (analyst-gated server-side).
+  // Save the focused company's cardex tolerance (analyst-gated server-side).
   (function(){
     var save=document.getElementById('cxTolSave'), inp=document.getElementById('cxTolInput');
     if(!save||!inp) return;
     function commit(){
-      var co=state.company; if(!co) return;
+      var co=resolvedCompany(); if(!co){ toast('Focus an item first.'); return; }
       var tol=Number((inp.value||'').replace(/,/g,'').trim());
       if(!isFinite(tol)||tol<0){ toast('Enter a tolerance of 0 or more.'); return; }
       save.disabled=true;
@@ -955,8 +881,6 @@
   document.getElementById('rfBody').addEventListener('click',function(e){
     var d=e.target.closest('[data-detail-id],[data-detail-item]'); if(d){ openDetail(d); return; }
     var a=e.target.closest('[data-adjust]'); if(a){ openAdjust(a.getAttribute('data-adjust')); return; }
-    var g=e.target.closest('tr.grp'); if(g){ var k=g.getAttribute('data-grp'); collapsed[k]=(collapsed[k]===false); renderGrid(); return; }
-    var ih=e.target.closest('tr.itemhdr'); if(ih){ var ik=ih.getAttribute('data-item'); itemExpanded[ik]=!itemExpanded[ik]; renderGrid(); }
   });
   document.getElementById('ledgerBody').addEventListener('click',function(e){ var u=e.target.closest('[data-undo]'); if(u) undoAdjust(u.getAttribute('data-undo')); });
   document.getElementById('adjPresets').addEventListener('click',function(e){ var p=e.target.closest('.preset'); if(!p) return;
