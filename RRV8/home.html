@@ -896,6 +896,10 @@
   .analyst-wl-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
   .analyst-wl-band.is-attention .analyst-wl-dot { background: var(--orange); box-shadow: 0 0 0 3px rgba(241,164,67,.22); }
   .analyst-wl-band.is-clean .analyst-wl-dot { background: var(--green); box-shadow: 0 0 0 3px rgba(46,138,85,.18); }
+  /* Overview bands group under two section headings: Validation, then Configuration. */
+  .analyst-wl-group { margin-top: 18px; }
+  .analyst-wl-group:first-child { margin-top: 0; }
+  .analyst-wl-grouphead { font-family: 'Source Sans 3', sans-serif; font-size: 11.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted); margin: 0 2px 10px; }
   .analyst-wl-title { font-family: 'Source Sans 3', sans-serif; font-size: 16px; font-weight: 800; color: var(--navy); margin: 0; }
   .analyst-wl-lede { margin: 3px 0 0; font-size: 12.5px; line-height: 1.45; color: var(--text-soft); max-width: 72ch; }
   .analyst-wl-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
@@ -955,6 +959,15 @@
   .cxh-mv-val { font-weight: 800; white-space: nowrap; }
   .cxh-mv-val.neg { color: #b42318; }
   .cxh-mv-empty { font-size: 12px; color: var(--text-muted); }
+  /* Overview-tab summary cards reuse .cxh-card chrome; is-nav makes the whole card
+     a link to its detail tab, with a bottom-pinned "View" affordance. */
+  .cxh-card.is-nav { cursor: pointer; align-items: center; text-align: center; transition: border-color .14s ease, box-shadow .14s ease, transform .14s ease; }
+  .cxh-card.is-nav .cxh-head { min-height: 40px; }   /* both variance cards' figures start at the same offset regardless of subtitle length */
+  .cxh-card.is-nav:hover { border-color: var(--blue); box-shadow: 0 6px 18px rgba(31,45,74,.10); transform: translateY(-1px); }
+  .cxh-card.is-nav:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+  .cxh-go { margin-top: auto; display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 800; color: var(--blue); }
+  .cxh-go .arr { transition: transform .14s ease; }
+  .cxh-card.is-nav:hover .cxh-go .arr { transform: translateX(3px); }
   @media (max-width: 860px) { #periodWidget.pw-cardex { display: block; } .cxh-row { flex-direction: column; } }
   .txv-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 12px 0 6px; }
   .txv-leg { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; color: var(--text-soft); }
@@ -6678,6 +6691,87 @@
       +   moverList('Amount', topAmt, 'AdjAmount', 'amt', true) + '</div></div>';
     box.innerHTML = '<div class="cxh-row">' + moverCard + sotCard + '</div>';
   }
+
+  // ---- Overview tab (analyst 'work' sub-view) top row ------------------------
+  // TWO summary cards replacing the tx-variance-by-period chart on the Overview
+  // tab (the chart stays on the Transaction Variance tab, where a per-period trend
+  // belongs). Card 1 = current Transaction Variance (Account Roll Forward net,
+  // this period vs prior); card 2 = Cardex Variance (perpetual roll-forward amount
+  // + quantity off). Each card navigates to its detail tab. Same warmed sources the
+  // detail tabs use (v6ui_raccountsummary via _invRows; v6ui_itemrollintegritydialog
+  // via the cardex cache) — no new endpoint. Reuses the .cxh-card chrome so the row
+  // reads AI · Transaction Variance · Cardex Variance, aligned with the AI card.
+  function renderAnalystOverviewCards(box) {
+    if (!box) return;
+    box.hidden = false;
+    box.classList.add('pw-cardex');   // strip the grey chart wrapper; cards float like the AI card
+    var d = _acctData || (typeof _briefData === 'function' ? _briefData() : null);
+    var solo = _ensureAnalystSolo((d && d.companies) || []);
+    var soloCo = ((d && d.companies) || []).filter(function (c) { return String(c.co) === String(solo); })[0] || null;
+    var ccy = (soloCo && soloCo.ccy) || ((d && d.currencies && d.currencies[0]) || '');
+    var fmtAmt = function (v) { return (typeof _ccyAmt === 'function') ? _ccyAmt(ccy, v) : ('$' + Math.round(v).toLocaleString('en-US')); };
+    var n2 = function (v) { return (Math.round(v * 100) / 100).toLocaleString('en-US', { maximumFractionDigits: 2 }); };
+    var neg = function (v) { return (Number(v) || 0) < 0 ? ' neg' : ''; };
+
+    // Card 1 — Transaction Variance: Account Roll Forward net per period for the
+    // solo company (the same Variance series the tx chart/tab tie to), current vs prior.
+    var pmap = {}, plist = [];
+    (_invRows || []).forEach(function (r) {
+      if (String(_coOf(r)) !== String(solo)) return;
+      var p = String(r.PeriodEnds || '').slice(0, 10); if (!p) return;
+      if (!(p in pmap)) { pmap[p] = 0; plist.push(p); }
+      pmap[p] += Number(r.Variance) || 0;
+    });
+    plist.sort();
+    var focP = (_briefPeriodOverride && plist.indexOf(_briefPeriodOverride) >= 0) ? _briefPeriodOverride
+             : (plist.length ? plist[plist.length - 1] : '');
+    var focIdx = plist.indexOf(focP);
+    var curNet = focIdx >= 0 ? pmap[focP] : 0;
+    var priorP = focIdx > 0 ? plist[focIdx - 1] : '';
+    var priorNet = priorP ? pmap[priorP] : null;
+    var txSub = 'Account roll-forward &middot; Co ' + esc(String(solo || '')) + (focP ? ' &middot; ' + esc(_pwLabel(focP)) : '');
+    var txCard = '<div class="cxh-card is-nav" data-ov-nav="txvar" role="button" tabindex="0" aria-label="Open Transaction Variance detail">'
+      + '<div class="cxh-head"><div class="cxh-name">Transaction Variance</div><div class="cxh-sub2">' + txSub + '</div></div>'
+      + '<div class="cxh-figs">'
+      +   '<div class="cxh-fig"><div class="cxh-fig-k">Net variance &middot; current period</div><div class="cxh-fig-v' + neg(curNet) + '">' + esc(fmtAmt(curNet)) + '</div></div>'
+      +   '<div class="cxh-fig"><div class="cxh-fig-k">Prior period' + (priorP ? ' &middot; ' + esc(_pwLabel(priorP)) : '') + '</div><div class="cxh-fig-v' + (priorNet == null ? '' : neg(priorNet)) + '">' + (priorNet == null ? '&mdash;' : esc(fmtAmt(priorNet))) + '</div></div>'
+      + '</div>'
+      + '<div class="cxh-go">View Transaction Variance <span class="arr" aria-hidden="true">&rarr;</span></div>'
+      + '</div>';
+
+    // Card 2 — Cardex Variance: perpetual roll-forward source-of-truth totals from
+    // the warmed cardex cache (same cache + cold-warm as renderCardexHeadline).
+    var rows = [];
+    try { var o = JSON.parse(sessionStorage.getItem(cardexCacheKey()) || 'null'); if (o && Array.isArray(o.payload)) rows = o.payload; } catch (_) {}
+    var scoped = rows.filter(function (r) { return String(r.CompanyNumber) === String(solo); });
+    if (!scoped.length && typeof autoWarmCardex === 'function') {
+      autoWarmCardex(function () {
+        if (typeof _viewRole === 'function' && _viewRole() === 'analyst'
+            && typeof _curSubView === 'function' && _curSubView() === 'work'
+            && typeof renderAnalystPalette === 'function') renderAnalystPalette();
+      });
+    }
+    var qtyTot = 0, amtTot = 0, itemSet = {};
+    scoped.forEach(function (r) { qtyTot += Number(r.AdjQty) || 0; amtTot += Number(r.AdjAmount) || 0; if (r.ItemID != null) itemSet[r.ItemID] = 1; });
+    var nItems = Object.keys(itemSet).length;
+    var cxSub = 'Perpetual roll-forward &middot; Co ' + esc(String(solo || '')) + ' &middot; ' + nItems + ' item' + (nItems === 1 ? '' : 's');
+    var cxCard = '<div class="cxh-card is-nav" data-ov-nav="reports" role="button" tabindex="0" aria-label="Open Cardex Variance detail">'
+      + '<div class="cxh-head"><div class="cxh-name">Cardex Variance</div><div class="cxh-sub2">' + cxSub + '</div></div>'
+      + '<div class="cxh-figs">'
+      +   '<div class="cxh-fig"><div class="cxh-fig-k">Amount variance</div><div class="cxh-fig-v' + neg(amtTot) + '">' + esc(fmtAmt(amtTot)) + '</div></div>'
+      +   '<div class="cxh-fig"><div class="cxh-fig-k">Quantity variance</div><div class="cxh-fig-v' + neg(qtyTot) + '">' + esc(n2(qtyTot)) + '</div></div>'
+      + '</div>'
+      + '<div class="cxh-go">View Cardex Variance <span class="arr" aria-hidden="true">&rarr;</span></div>'
+      + '</div>';
+
+    box.innerHTML = '<div class="cxh-row">' + txCard + cxCard + '</div>';
+    if (!box._ovWired) {
+      box._ovWired = true;   // delegated; survives innerHTML swaps and no-ops when the box holds the chart/headline
+      var go = function (t) { var el = (t && t.closest) ? t.closest('[data-ov-nav]') : null; if (el && typeof _setSubView === 'function') _setSubView(el.getAttribute('data-ov-nav')); };
+      box.addEventListener('click', function (e) { go(e.target); });
+      box.addEventListener('keydown', function (e) { if ((e.key === 'Enter' || e.key === ' ') && e.target && e.target.closest && e.target.closest('[data-ov-nav]')) { e.preventDefault(); go(e.target); } });
+    }
+  }
   function renderTxVarWidget(box) {
     if (!box) return;
     var d = _acctData || (typeof _briefData === 'function' ? _briefData() : null);
@@ -7241,20 +7335,30 @@
     host.hidden = false;
     var gen = ++_analystTaskGen;   // supersede an in-flight sequence (DB/scope/subview switch)
     host.innerHTML = '';
-    // SEQUENCE MATTERS — tasks reveal top-to-bottom. Accuracy checks: roll-forward
-    // integrity → model DMAAI → the three data-integrity checks (order among the
-    // three is arbitrary). (Transaction variance is the top-row chart, not a card.)
-    var tasks = [
-      _analystRollForwardTask,
-      _analystModelDmaaiTask,
-      _analystIntegrityTask('uom',     'UOM Conversion'),
-      _analystIntegrityTask('frozen',  'Frozen Cost'),
-      _analystIntegrityTask('glclass', 'GL-Class')
+    // Two groups, revealed top-to-bottom. VALIDATION = is the model + roll-forward
+    // sound (model DMAAI sign-off, then account roll-forward integrity).
+    // CONFIGURATION = the JDE config checks (UOM / Frozen Cost / GL-Class; order
+    // among the three is arbitrary). (Transaction variance is the top-row card.)
+    var groups = [
+      { label: 'Validation', tasks: [ _analystModelDmaaiTask, _analystRollForwardTask ] },
+      { label: 'Configuration', tasks: [
+          _analystIntegrityTask('uom',     'UOM Conversion'),
+          _analystIntegrityTask('frozen',  'Frozen Cost'),
+          _analystIntegrityTask('glclass', 'GL-Class')
+      ] }
     ];
+    var steps = [];
+    groups.forEach(function (g) { steps.push({ head: g.label }); g.tasks.forEach(function (t) { steps.push({ task: t }); }); });
     (function next(i) {
-      if (gen !== _analystTaskGen || i >= tasks.length) return;
+      if (gen !== _analystTaskGen || i >= steps.length) return;
+      var s = steps[i];
+      if (s.head) {   // group heading — synchronous; advance immediately
+        var h = document.createElement('div'); h.className = 'analyst-wl-group';
+        h.innerHTML = '<h3 class="analyst-wl-grouphead">' + esc(s.head) + '</h3>';
+        host.appendChild(h); next(i + 1); return;
+      }
       var slot = document.createElement('div'); slot.className = 'analyst-task'; host.appendChild(slot);
-      tasks[i](slot, d, gen).then(function () { if (gen === _analystTaskGen) next(i + 1); });
+      s.task(slot, d, gen).then(function () { if (gen === _analystTaskGen) next(i + 1); });
     })(0);
   }
   // ----- Scope banner + single-of company selector (analyst Workspace) -----
@@ -7675,17 +7779,22 @@
     var tier = (typeof _recsummaryLevel === 'function') ? _recsummaryLevel() : 'full';
     card.setAttribute('data-ai-tier', tier);
     var status = { off: 'Off', grounded: 'Basic', scrubbed: 'Enhanced', full: 'Full Plan' }[tier] || 'Assistant';
+    // Role-specific: analyst prevents variances AT THE SOURCE; accountant clears the
+    // ones that remain (the role split — analyst fixes source, accountant records JEs).
+    var _isAnalyst = (typeof _viewRole === 'function' && _viewRole() === 'analyst');
     var greet = {
       off:      'Switched off. Turn AI on for reconciliation help.',
       grounded: 'Ask me about the figures on screen.',
       scrubbed: 'I read across your sources — ask about a pattern.',
-      full:     'I’m reading your full reconciliation. Ask me anything about it.'
+      full:     _isAnalyst
+                  ? 'I’m here to help you prevent variances at the source. Ask me anything about it.'
+                  : 'I’m here to help you reconcile and clear these variances. Ask me anything about it.'
     }[tier] || '';
     var st = $('acctAiStatusText'); if (st) st.textContent = status;
     var g = $('acctAiGreeting'); if (g) g.textContent = greet;
     // Role-specific name — the same card serves accountant + analyst, and the analyst does
     // variance/source work, not accounting, so it isn't an "Accounting" assistant there.
-    var _aiNm = (typeof _viewRole === 'function' && _viewRole() === 'analyst') ? 'RR Analyst Assistant' : 'RR Accounting Assistant';
+    var _aiNm = _isAnalyst ? 'RR Analyst Assistant' : 'RR Accounting Assistant';
     var nmEl = $('aiAsstName'); if (nmEl) nmEl.textContent = _aiNm;
     var alEl = $('aiAnsLabel'); if (alEl) alEl.textContent = _aiNm;
   }
@@ -9735,13 +9844,15 @@
   function renderPeriodWidget() {
     var box = $('periodWidget'); if (!box) return;
     box.classList.remove('pw-cardex');   // default = grey chart wrapper; the cardex branch re-adds it
-    // Analyst view → the top-row chart is Transaction Variance by Period (it
-    // REPLACES the out-of-balance-by-period chart for this role). Accountant /
-    // admin keep OOB / Perpetual below.
+    // Analyst view → the top-row content is per-tab (each REPLACES the accountant's
+    // OOB/Perpetual-by-period chart for this role):
+    //   Overview ('work')            → two summary cards (Transaction + Cardex variance)
+    //   Transaction Variance ('txvar') → the tx-variance-by-period chart (trend belongs here)
+    //   Cardex Variance ('reports')  → the 3-card cardex header (top movers · SOT totals)
     if (typeof _viewRole === 'function' && _viewRole() === 'analyst') {
-      // Cardex Variance tab (reports sub-view): the tx-variance-by-period chart is
-      // irrelevant here — show the 3-card cardex header (AI · top movers · SOT totals).
-      if (typeof _curSubView === 'function' && _curSubView() === 'reports') { renderCardexHeadline(box); return; }
+      var _asv = (typeof _curSubView === 'function') ? _curSubView() : 'work';
+      if (_asv === 'reports') { renderCardexHeadline(box); return; }
+      if (_asv === 'work')    { renderAnalystOverviewCards(box); return; }
       renderTxVarWidget(box); return;
     }
     // Perpetual tab → perpetual on-hand balance by period; every other tab → the
