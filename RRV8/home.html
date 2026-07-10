@@ -952,6 +952,42 @@
   /* Analyst workspace — same white-card + report-list look as the Reports tab. */
   .analyst-workspace { background: var(--bg-card); border: 1px solid var(--rule); border-radius: 12px; padding: 18px 20px; box-shadow: var(--shadow-sm); margin-bottom: 18px; }
   .analyst-workspace[hidden] { display: none; }
+  /* Cardex "Cost Variance Framework" (UI-29) — 2 cost-method containers (Standard /
+     Average-Revaluing), each with a Quantity + an Amount card. Each card = totals face +
+     an expandable 14-col drawer grid; a drawer row links to the sync page for that item.
+     Rows summarize by cost level + method; immaterial rows (|AmtVar| < company Threshold)
+     drop. See docs/plans/transaction-variance-process.md §Cardex. */
+  .cx-fw-label { font-family: 'Source Sans 3', sans-serif; font-size: 12.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 12px; }
+  .cx-container { background: var(--bg-soft); border: 1px solid var(--rule); border-radius: 12px; padding: 12px 14px 14px; margin-bottom: 14px; }
+  .cx-container-head { font-family: 'Source Sans 3', sans-serif; font-size: 13px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: var(--navy); padding: 2px 4px 11px; display: flex; align-items: center; gap: 10px; }
+  .cx-container-total { margin-left: auto; font-size: 12px; font-weight: 700; color: var(--text-muted); text-transform: none; letter-spacing: 0; }
+  .cx-container-body { display: flex; flex-direction: column; gap: 10px; }
+  /* white card + subtle shadow + 3px accent left border — matches .txv-card. */
+  .cx-card { background: var(--bg-card); border: 1px solid var(--rule); border-left: 3px solid var(--blue); border-radius: 12px; box-shadow: var(--shadow-sm); overflow: hidden; }
+  .cx-card.is-clean { opacity: .6; border-left-color: var(--rule); }
+  .cx-card-face { width: 100%; display: flex; align-items: center; gap: 14px; text-align: left; background: none; border: 0; padding: 13px 16px; cursor: pointer; font-family: inherit; transition: background .12s; }
+  .cx-card-face:hover:not(:disabled) { background: var(--bg-soft); }
+  .cx-card-face:disabled { cursor: default; }
+  .cx-card-head { flex: 1 1 auto; min-width: 0; }
+  .cx-card-title { font-family: 'Source Sans 3', sans-serif; font-size: 14px; font-weight: 800; color: var(--navy); }
+  .cx-card-sub { font-size: 11.5px; color: var(--text-muted); line-height: 1.4; margin-top: 2px; }
+  .cx-card-figs { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; flex-shrink: 0; }
+  .cx-card-count { font-size: 11.5px; font-weight: 700; color: var(--text-soft); }
+  .cx-card-amt { font-family: 'Source Sans 3', sans-serif; font-size: 18px; font-weight: 800; color: var(--navy); }
+  .cx-card-go { flex-shrink: 0; font-size: 12px; font-weight: 700; color: var(--blue); min-width: 96px; text-align: right; }
+  .cx-card.is-clean .cx-card-go { color: var(--green); }
+  .cx-card-drawer { border-top: 1px solid var(--rule); padding: 4px 8px 8px; overflow-x: auto; }
+  .cx-card-drawer[hidden] { display: none; }
+  .cx-drawer-empty { padding: 12px 8px; font-size: 12.5px; color: var(--text-muted); line-height: 1.5; }
+  .cx-drawer-tbl { width: 100%; border-collapse: collapse; font-size: 12px; white-space: nowrap; }
+  .cx-drawer-tbl th { text-align: left; padding: 6px 9px; font-size: 10.5px; font-weight: 800; letter-spacing: .03em; text-transform: uppercase; color: var(--text-muted); border-bottom: 1px solid var(--rule); }
+  .cx-drawer-tbl th.num, .cx-drawer-tbl td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .cx-drawer-tbl td { padding: 6px 9px; border-bottom: 1px solid var(--rule); color: var(--text); }
+  .cx-drawer-tbl td.neg { color: var(--red); }
+  .cx-drawer-tbl td.mute { color: var(--text-muted); }
+  .cx-drawer-tbl tbody tr:last-child td { border-bottom: 0; }
+  .cx-di { font-weight: 700; color: var(--blue); text-decoration: none; }
+  .cx-di:hover { text-decoration: underline; }
   @media (max-width: 900px) { .reports-cols { grid-template-columns: 1fr; } }
   /* AI ask — the data-question moment for the accountant. White card, gradient
      sparkle emblem (the rail stays the one dark AI face). */
@@ -7295,7 +7331,131 @@
     }
     if (sv === 'txvar') { renderAnalystTxVar(_analystScopedData(d)); }
     else { _txvGen++; if (tv) tv.hidden = true; }   // leaving the plan — supersede any in-flight render
-    if (sv === 'reports') renderReportsPalette(d);
+    if (sv === 'reports') { renderCardexCards(d); renderReportsPalette(d); }
+  }
+  // Cardex "Cost Variance Framework" (UI-29). Two cost-method containers — Standard (07)
+  // and Average / Revaluing (02 / 09 / 01 / …) — each with a Quantity and an Amount card,
+  // built client-side from the warmed cardex worklist (v6ui_itemrollintegritydialog via
+  // autoWarmCardex → cardexCacheKey). Rules (docs/plans/transaction-variance-process.md
+  // §Cardex): container = method 07 → Standard, any other real method → Average/Revaluing,
+  // XX/blank excluded; rows summarize by cost level + method (07 = full lot grain; the
+  // revaluing methods collapse Location+Lot except at cost level 3); a summarized row is
+  // immaterial (dropped) when |AmtVar| < the company Threshold (rcompanies, carried on the
+  // row); quantity-first — a summarized row with |QtyVar| ≥ 1 → Quantity card, else Amount.
+  // A drawer row deep-links to the sync page for that item.
+  function renderCardexCards(d) {
+    var host = $('analystWorkspace'); if (!host) return;
+    var solo = _ensureAnalystSolo((d && d.companies) || []);
+    var rows = [];
+    try { var o = JSON.parse(sessionStorage.getItem(cardexCacheKey()) || 'null'); if (o && Array.isArray(o.payload)) rows = o.payload; } catch (_) {}
+    if (typeof autoWarmCardex === 'function' && !rows.length) autoWarmCardex();   // warm if cold
+    var co = encodeURIComponent(String(solo || ''));
+    var money = function (v) { return '$' + Math.round(v).toLocaleString('en-US'); };
+    var n2 = function (v) { return (Math.round(v * 100) / 100).toLocaleString('en-US', { maximumFractionDigits: 2 }); };
+    var n4 = function (v) { return (Math.round(v * 10000) / 10000).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 }); };
+    function cellText(v) { return v ? esc(v) : '&mdash;'; }
+    // Container by cost method: 07 = Standard (fixed); any other real method = Average /
+    // Revaluing (02 WAC, 09 Manufacturing Last, 01 Last-In, …); XX / blank = uncosted, excluded.
+    function containerOf(m) { m = String(m || '').trim().toUpperCase(); if (m === '07') return 'std'; if (!m || m === 'XX') return null; return 'avg'; }
+    // Grain: standard shows full lot detail; revaluing collapses Location+Lot except at level 3.
+    function fullGrain(container, lvl) { return container === 'std' || String(lvl).trim() === '3'; }
+    // Summarize the warmed rows into container → grain-collapsed rows.
+    var groups = {};
+    rows.forEach(function (r) {
+      if (String(r.CompanyNumber) !== String(solo)) return;
+      var m = String(r.Method || '').trim();
+      var container = containerOf(m); if (!container) return;   // uncosted / excluded
+      var lvl = String(r.CostLevel || '').trim();
+      var full = fullGrain(container, lvl);
+      var branch = String(r.Branch || ''), loc = String(r.Location || ''), lot = String(r.Lot || ''), item = String(r.ItemNumber);
+      var key = container + '|' + m + '|' + lvl + '|' + item + '|' + branch + (full ? '|' + loc + '|' + lot : '');
+      var g = groups[key] || (groups[key] = { container: container, method: m, level: lvl, item: item, branch: branch,
+        full: full, uom: String(r.UOM || ''), qoh: 0, aoh: 0, qv: 0, av: 0, tx: 0, thr: 0,
+        loc: full ? loc : '', lot: full ? lot : '', locSet: {}, lotSet: {}, last: '', _lt: -1 });
+      g.qoh += Number(r.QtyOnHand) || 0; g.aoh += Number(r.AmountOnHand) || 0;
+      g.qv += Number(r.AdjQty) || 0; g.av += Number(r.AdjAmount) || 0; g.tx += Number(r.TxCount) || 0;
+      g.thr = Number(r.Threshold) || 0;
+      if (!g.uom && r.UOM) g.uom = String(r.UOM);
+      if (loc) g.locSet[loc] = 1; if (lot) g.lotSet[lot] = 1;
+      var la = String(r.LastActivity || ''), lt = Date.parse(la);
+      if (la && (isFinite(lt) ? lt > g._lt : !g.last)) { g.last = la; if (isFinite(lt)) g._lt = lt; }
+    });
+    // Bucket: materiality (dollars, both cards) then quantity-first.
+    var B = { std: { qty: [], amt: [] }, avg: { qty: [], amt: [] } };
+    Object.keys(groups).forEach(function (k) {
+      var g = groups[k];
+      if (Math.abs(g.av) < (g.thr || 0)) return;                          // immaterial: |AmtVar| < company Threshold
+      B[g.container][Math.abs(g.qv) >= 1 ? 'qty' : 'amt'].push(g);        // quantity-first
+    });
+    var COLS = ['Item', 'Branch', 'Location', 'Lot', 'Method', 'Level', 'QOH', 'UOM', 'Unit Cost', 'AOH', 'Qty Var', 'Amt Var', 'Last Activity', 'Tx'];
+    var NUMCOL = { 'QOH': 1, 'Unit Cost': 1, 'AOH': 1, 'Qty Var': 1, 'Amt Var': 1, 'Tx': 1 };
+    // A collapsed Location/Lot cell shows the single value muted, or (multi) when the grain folded several.
+    function grainTd(full, val, set) {
+      if (full) return '<td>' + cellText(val) + '</td>';
+      var n = Object.keys(set).length;
+      return '<td class="mute">' + (n > 1 ? '(multi)' : cellText(val)) + '</td>';
+    }
+    function drawer(list, dim) {
+      list.sort(function (a, c) { return Math.abs(c.av) - Math.abs(a.av); });
+      if (!list.length) return '<div class="cx-drawer-empty">Clean &mdash; no material variance in scope for this cost method.</div>';
+      var head = '<tr>' + COLS.map(function (h) { return '<th' + (NUMCOL[h] ? ' class="num"' : '') + '>' + esc(h) + '</th>'; }).join('') + '</tr>';
+      var body = list.map(function (g) {
+        var uc = g.qoh ? g.aoh / g.qoh : 0;
+        var href = 'inventory-cardex-variance.html?company=' + co + '&item=' + encodeURIComponent(g.item)
+          + (g.branch ? '&branch=' + encodeURIComponent(g.branch) : '') + '&dim=' + dim + (g.method ? '&method=' + encodeURIComponent(g.method) : '');
+        return '<tr>'
+          + '<td><a class="cx-di" href="' + href + '">' + esc(g.item) + '</a></td>'
+          + '<td>' + cellText(g.branch) + '</td>'
+          + grainTd(g.full, g.loc, g.locSet)
+          + grainTd(g.full, g.lot, g.lotSet)
+          + '<td>' + cellText(g.method) + '</td>'
+          + '<td>' + cellText(g.level) + '</td>'
+          + '<td class="num">' + esc(n2(g.qoh)) + '</td>'
+          + '<td>' + cellText(g.uom) + '</td>'
+          + '<td class="num">' + esc(n4(uc)) + '</td>'
+          + '<td class="num">' + esc(money(g.aoh)) + '</td>'
+          + '<td class="num' + (g.qv < 0 ? ' neg' : '') + '">' + esc(n2(g.qv)) + '</td>'
+          + '<td class="num' + (g.av < 0 ? ' neg' : '') + '">' + esc(n2(g.av)) + '</td>'
+          + '<td>' + cellText(g.last) + '</td>'
+          + '<td class="num">' + esc(String(g.tx || 0)) + '</td>'
+          + '</tr>';
+      }).join('');
+      return '<table class="cx-drawer-tbl"><thead>' + head + '</thead><tbody>' + body + '</tbody></table>';
+    }
+    function card(id, title, sub, list, dim) {
+      var n = list.length, clean = n === 0;
+      var amt = list.reduce(function (s, g) { return s + Math.abs(g.av); }, 0);
+      return '<div class="cx-card' + (clean ? ' is-clean' : '') + '">'
+        + '<button type="button" class="cx-card-face" data-cx-toggle="' + id + '"' + (clean ? ' disabled' : '') + '>'
+        +   '<div class="cx-card-head"><div class="cx-card-title">' + esc(title) + '</div><div class="cx-card-sub">' + esc(sub) + '</div></div>'
+        +   '<div class="cx-card-figs"><span class="cx-card-count">' + n + ' item' + (n === 1 ? '' : 's') + '</span>'
+        +     '<span class="cx-card-amt">' + money(amt) + '</span></div>'
+        +   '<div class="cx-card-go">' + (clean ? 'Clean' : 'Show items &#9662;') + '</div>'
+        + '</button>'
+        + '<div class="cx-card-drawer" id="cxdr-' + id + '" hidden>' + drawer(list, dim) + '</div>'
+        + '</div>';
+    }
+    function container(label, key) {
+      var b = B[key], cnt = b.qty.length + b.amt.length;
+      var tot = b.qty.concat(b.amt).reduce(function (s, g) { return s + Math.abs(g.av); }, 0);
+      return '<div class="cx-container">'
+        + '<div class="cx-container-head">' + esc(label)
+        +   '<span class="cx-container-total">' + (cnt ? cnt + ' item' + (cnt === 1 ? '' : 's') + ' &middot; ' + money(tot) : 'clean') + '</span></div>'
+        + '<div class="cx-container-body">'
+        +   card(key + '-qty', 'Quantity Variance', 'Units off — sync to JDE; escalate what survives', b.qty, 'qty')
+        +   card(key + '-amt', 'Amount Variance', 'Value off — dollars-only sync', b.amt, 'amt')
+        + '</div></div>';
+    }
+    host.innerHTML = '<div class="cx-fw-label">Cost Variance Framework &middot; Co ' + esc(String(solo || '')) + ' &mdash; expand a card, click an item to sync it</div>'
+      + container('Standard Cost', 'std')
+      + container('Average / Revaluing Cost', 'avg');
+    if (!host._cxWired) {   // delegated once; survives innerHTML repaints (listener is on host)
+      host._cxWired = true;
+      host.addEventListener('click', function (e) {
+        var t = e.target.closest && e.target.closest('[data-cx-toggle]'); if (!t) return;
+        var dr = document.getElementById('cxdr-' + t.getAttribute('data-cx-toggle')); if (dr) dr.hidden = !dr.hidden;
+      });
+    }
   }
   // Shared Reports hub (accountant + analyst). Cards are mostly static links; the
   // audit buttons call the existing generators. Ensures _acctData is populated so

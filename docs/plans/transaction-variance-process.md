@@ -38,6 +38,15 @@ a pile of variances into a prioritized, root-cause-attributed plan ("fix these 3
 
 ## Closed-card face — a *resolution record*, not the problem
 
+**Voice / audience (owner 2026-07-07): the card-face TEXT is an AUDITOR-facing problem → recommendation
+narrative.** Not analyst shorthand — an auditor reading the reconciliation wants (1) the **problem**
+stated clearly (what's out, how much, why it matters / materiality) and (2) the **recommendation** (the
+corrective action). Open card = problem + recommended fix; worked/closed card = problem + what was done
+(the resolution). Same two-beat shape throughout. This is a deliberate departure from the analyst
+"assume JDE fluency, terse bullets" mantra *for this surface* — the card face feeds the audit trail
+(Audit Support Center / audit report), so it reads for an auditor, not the JDE-fluent analyst working
+it. *(Open: how much JDE artifact naming an auditor tolerates — see the question logged for the owner.)*
+
 Once worked, the face flips from "here's the variance" to "here's what I did," compact enough to
 collapse out of the active list (fold into a "Resolved this cycle: N" line, like reconciled
 companies fold into a green line; extends the existing UI-15 "✓ Worked" dim):
@@ -50,6 +59,23 @@ companies fold into a green line; extends the existing UI-15 "✓ Worked" dim):
 - **Expected effect** — "should stop recurring next period" OR, if not fixable at source, a
   **"real residual"** flag (→ accountant reconciles it).
 - **Verify-next-period hook** — the field that makes closure mean anything: *did it not come back?*
+
+**Storage (owner-agreed 2026-07-07 — replaces the legacy per-row work-note table for tx-variance):**
+a **card-keyed store** — ONE record per **`(database, company, card_code, period_end)`** (~10 rows per
+company per period, vs. thousands of row-notes). Columns: card_code · period_end · company · db ·
+**status** (open/worked/complete/reopened) · **note** · source-fix-applied · who · when. **Musts:**
+(a) key on the **stable classifier code** (`_txvClassifyCode`), NOT the 1–10 display order — a taxonomy
+reorder must not corrupt history; (b) company + db IN the key (the tab is single-company); (c) this IS
+the closed-card record AND the remediation-log/audit spine — build it ONCE as the shared store feeding
+UI-15 (rewrite: Findings writes here, not per-row), UI-26 (this lifecycle), UI-27 (Audit Support Center).
+It survives B→C row churn (row-notes orphan when the residual set changes; a card-keyed note doesn't)
+and enables the period-N-vs-N+1 auto-reopen. **Manual reopen/edit:** the analyst can mark a card
+complete then reopen it to edit the note/fix and re-complete — edits the SAME period's record (distinct
+from auto-reopen, which opens a NEW period's record on recurrence). A reopen+edit **overwrites the
+note + stamps last-edited who/when — no note-versioning** (owner-decided 2026-07-07: RR is a tool, not
+a system of record; JDE is the SoR — see [[project_rr_tool_not_system_of_record]]). **Tradeoff:** loses per-row annotation — a note is about
+the whole card; a one-off row exception goes in the card-note text. Net-new v8 backend (`v8_`/`usp8_`
+table + endpoints + owner VALC/agent rebuild); spec the endpoint first.
 
 ## Flow-outs (closure is data, not a dead-end) — priority order
 
@@ -82,6 +108,9 @@ that touched the numbers this period" trail. Aggregates:
 
 Purpose: one browsable place for the accountant/auditor to see the full story of the period's data
 — remediation + reconciliation + system events — with the Audit Report as the exportable snapshot.
+**It is a convenience / backup VIEW, not an audit-of-record** — RR is a tool, not a system of record
+([[project_rr_tool_not_system_of_record]]; JDE is the SoR). Build it as a readable trail, not a
+compliance system with immutability / legal-hold obligations.
 
 ## Architecture note — ONE audit-activity spine, not three logs
 
@@ -98,6 +127,264 @@ owner builds the VALC side on rebuild.
 
 > Captured so far, but the owner has more to add. Treat every conclusion below as partial. Do NOT
 > declare this module done or start building it — the owner sets the pace and says when it's complete.
+
+**⚑ MODULE PURPOSE — REFRAME (owner, cardex teaching):** this module is NOT a root-cause diagnostic
+engine — it's a **guided SYNCHRONIZATION tool.** The analyst does the JDE validation and decides whether
+RR matches JDE or not. **The *reason* (glitch vs. revaluation) is almost moot — there is no reliable way
+to tell whether JDE glitched, which is exactly why this is one of the biggest headaches in JDE inventory
+management.** RR's job is to **sync RR to the validated JDE position**, not to diagnose the cause. Therefore:
+- The cause taxonomy below (timing / glitch / revaluation) is **BACKGROUND ONLY** — the tool does NOT
+  branch on it. The earlier "diagnostic (two splits)", "analyst decision tree", and cause-based "dispose"
+  content is **SUPERSEDED as the tool's logic** (kept below only as background on why variances arise).
+- Instead, RR asks the analyst a **FIXED set of input questions** (e.g., *"Is the beginning balance OK —
+  quantity and amount?"*) whose answers **drive which Re-Roll option + parameters execute.**
+- **Q1 (glitch-vs-revaluation discriminator) = RESOLVED → moot; do not build it.**
+- **NEXT (wraps the design):** define the Re-Roll options + the fixed question set that maps to them (the
+  workflow). Owner-led.
+
+**⚑ DIVISION OF LABOR — REVISED (owner, cardex teaching): sync ≠ variance.** An analyst sometimes needs to
+sync an item with NO current variance, so the *find-variance* surface and the *do-the-sync* surface split:
+- **Home cards = variance surfacing (browse).** Each card FACE shows **totals** (count + $); an expandable
+  **drawer** holds the **item grid** (item/branch/loc/method/QtyVar/AmtVar/QOH), from the warmed data. A
+  drawer row → opens the sync page **for that item**. (Grid lives on Home — NOT on the page.)
+- **Cardex page = the SYNC ENGINE only.** Item-focused: arrive with an item (drawer drill) or **type any
+  item in** (start simple: item # + branch — no catalog picker yet), then validate-JDE → question workflow
+  → Adjust Beginning Balance → Adjustment Ledger. Works on items with **no** variance too.
+- **Formally diverges from the tx-variance wiring** (owner-confirmed) — there the action is bound to the
+  card; here sync is not variance-bound, so the action surface (page) is decoupled from the browse surface
+  (cards/drawer). Principled divergence, not inconsistency.
+- The "3 cards → filtered worklist" description below is **superseded** by this (cards now carry drawers on
+  Home; the page is sync-only). Card taxonomy + quantity-first precedence are unchanged.
+
+**⚑ ITEM SELECTION MOVES TO THE FULL PERPETUAL DETAILS PAGE (owner 2026-07-09).** The sync tool
+needs **no item search of its own** — drop the typed "enter any item" box. Instead, add a **launch
+affordance on a ROW of the full perpetual details page** (the As Of perpetual grid,
+`inventory-asof.html`) → opens `inventory-cardex-variance.html?company&item&branch&…` focused on that
+item. So there are two launch sources, both param-only: (a) Home Cardex Variance drawer (variance items);
+(b) a perpetual-details row (ANY item). This is the clean answer to "sync an item with no variance" — the
+perpetual page already lists every on-hand item, so it's the natural picker; the sync page stays a pure
+param-driven engine. **Build implication (still real):** for a NO-variance item the sync page can't get
+its `ItemID`/position from the warmed variance cache (the view only carries variance rows) — the launch
+must pass the item's `ItemID` (the perpetual row has it) and the Adjust flow must fetch that item's
+`rperpetualinv` row on demand (a per-item lookup / small endpoint), rather than reading it from the cache.
+**Caveat to confirm:** does the perpetual details page list depleted (QOH=0) items? If not, a
+depleted-but-variance item wouldn't be launchable from there (Home drawer still covers variance ones).
+Sequencing: keep the typed box until the perpetual-row launch replaces it (don't regress arbitrary-item
+access in between); build both together.
+
+**⚑ QUANTITY VARIANCE = A DIFFERENT CORRECTIVE ACTION → ITS OWN CARD + WORKFLOW (owner 2026-07-09).**
+Confirmed by the authoritative RRU flow: **amount** variance → a **dollars-only Inventory Adjustment
+(P4114)** the sync tool drives (validate JDE → dollars-only IA → Re-Roll → reload). **Quantity** variance
+is explicitly **NOT** that path — the RRU guide says a quantity mismatch is "not covered — investigate
+separately, may require IT." So its corrective action diverges: either **Re-Roll** (if RR-only artifact,
+JDE qty is right) or **escalate to a JDE data fix / re-post** (the F4111↔F41021 "system glitch" — a
+movement hit one table not the other; a re-roll only helps after JDE is corrected). The 3-card split
+already isolates Quantity as card 1 — the NEW requirement is that the Quantity card **routes to its own
+question-set + action path**, NOT the amount cards' dollars-only IA. This is a primary input to the
+Re-Roll↔question-set workflow (still owner-led): the fixed questions and the resulting action **branch on
+variance type** (quantity vs amount·std vs amount·avg). **RESOLVED (owner 2026-07-09) — the corrective
+action is gated on noise-vs-real, not a fixed ladder:** **noise → sync** (the analyst syncs RR to the
+validated JDE position — this is the mechanic formerly called "Re-Roll"); **real → escalate** (a genuine
+JDE-side problem the analyst hands off, since RR shouldn't launder it). So the **noise-vs-real rules are
+the linchpin** — they no longer just decide *what shows on a card*, they **decide the corrective action
+itself** (sync vs escalate). The whole quantity workflow is therefore blocked on those rules (owner to
+develop). Applies to quantity first; whether amount's "real" case is the same escalate — or the RRU
+dollars-only P4114 IA, which posts to GL and reads more like an accountant action — is the muddier
+role-split question still open.
+
+**⚑ TERMINOLOGY (owner 2026-07-09): drop "Re-Roll" → say "SYNC"** in all V8 tool + design language. The
+user-facing verb is "sync (RR to JDE)". Backend proc names (`usp6_roll_item_from_baseline`, etc.) and the
+customer RRU doc (which describes JDE's actual Re-Roll buttons) keep their names — this is the V8 sync
+tool's vocabulary only.
+
+**⚑ HOME LAYOUT — 2 COST-METHOD CONTAINERS, 2 cards each (owner 2026-07-09).** Supersedes the flat 3-card
+stack. Two OUTER containers split by cost method; each holds two detail cards (the two variance dimensions):
+
+```
+┌─ Standard cost (07) ────────────┐   ┌─ Weighted Average cost (02) ────┐
+│  [ Quantity ]    [ Amount ]     │   │  [ Quantity ]    [ Amount ]     │
+└─────────────────────────────────┘   └─────────────────────────────────┘
+```
+
+Every item lands in exactly one (container × card) cell = (its cost method) × (Quantity if qty-var else
+Amount), preserving quantity-first precedence WITHIN each cost-method container. Rationale: standard and
+average items are handled differently (the average amount fix needs the UDC `40/AV` dance; standard
+doesn't) and — per the next thread — their **grid columns + row sequence differ**, so cost method is the
+right outer partition. *(Reconciles the earlier "quantity is cost-method-agnostic": the quantity FIX
+doesn't depend on std-vs-avg mechanics, but each ITEM still carries a cost method, and grouping by it keeps
+the grid + handling consistent per container.)*
+
+**⚑ NEXT THREAD (owner to teach): grid columns + row sequence, standard vs average.** The drawer/grid
+inside each card differs by cost method (e.g., the `Method` column is redundant inside a single-method
+container; column set + sort order differ std vs avg). Owner-led — do NOT design it yet.
+
+**Build sequencing:** hold the Home restructure (2×2) until the grid columns/sequence are defined — build
+the containers + drawers together in one pass rather than shelling the containers now and reworking the
+grids next.
+
+**⚑ NOISE-VS-REAL RULES — RESOLVED (owner 2026-07-09), the linchpin is now concrete:**
+- **Materiality (per-row):** a row is **immaterial** when its variance is **under the company's
+  `rcompanies.Threshold`** (int, =1 today → under $1). Authoritative single source — the SAME threshold
+  `usp6_006b` netting + the `usp8_txv` classifier already use. **SUPERSEDES** the separate
+  `dbo.RCardexTolerance` table + the sync-page tolerance editor (`/inventory/cardex-tolerance`) — **retire
+  both** in the rebuild; if the threshold needs editing it lives on `admin-companies.html` (a company
+  attribute). *(Open: for the QUANTITY card, does materiality test the row's $ impact (`AmtVar` = qty×cost,
+  natural since one $ threshold covers both dimensions) or units? — confirm. Threshold is int → no
+  sub-dollar; fine at $1.)*
+- **Persistence:** a variance that **survives a reset unchanged is REAL**; one that clears was noise
+  (timing). *(Open: "reset" = the SYNC / re-baseline op (my read), or the nightly refresh, or a full data
+  reset? confirm the mechanic.)*
+- **The operating loop this implies (confirm):** under threshold → **immaterial → leave**; at/over
+  threshold → **material → SYNC** (RR→JDE re-baseline; the mechanic formerly "Re-Roll"); **survives the
+  sync unchanged → REAL → ESCALATE**. So we DON'T pre-label noise vs real — the analyst **syncs everything
+  material, and whatever survives the sync is real**. Matches "noise we can sync; real needs escalation."
+  **Consequence:** "real" can't be known from one snapshot — it needs the **per-item history store**
+  (records the pre-sync variance to compare post-reset), so the cardex-storage thread is confirmed on the
+  critical path.
+
+**⚑ GRID COLUMNS — SET (owner 2026-07-09), SAME grid for every one of the 4 cards:** Item · Branch ·
+Location · Lot · Method · Level (CostLevel) · QOH · UOM · UnitCost · AOH (amountonhand) · QtyVar · AmtVar ·
+Last Activity · TX Count. (All 14 exist in `rperpetualinv`+`ritems`+the view — nothing new to source.
+`Method` is uniform even inside a single-method container, by design — uniform grid over de-duped columns.)
+**Rows are SUMMARIZED by cost level + method** — the grain rules are the NEXT thread (owner to teach).
+Note the grain interacts with the columns: when a grain nets above branch/loc/lot (e.g., 02 level-1 =
+item-wide), those columns show `(multi)`/blank and QOH/AOH sum while UnitCost needs a weighted read — to
+be defined in the grid-rules discussion.
+
+**Concept mock (owner 2026-07-09):** "Cost Variance Framework" — 2 navy outer containers (Standard Cost /
+Weighted Average Cost), each with Quantity Variance + Amount Variance detail cards. Concept only, not to be
+mirrored pixel-for-pixel; the Home cards keep their totals-face + expandable-drawer, wrapped in the 2
+containers.
+
+**⚑ CONFIRMED (owner 2026-07-09):** materiality tests **DOLLARS for BOTH cards** (a row is immaterial when
+`|AmtVar| < rcompanies.Threshold`; on the Quantity card that's still the row's $ impact, since AmtVar =
+qty×cost). **"Reset" = the SYNC itself** — a variance that survives the sync unchanged is REAL. Note
+`Threshold` = 1 (int) today, so the bar is $1 — strict; most current NA rows ($2–$178, −$4) stay material.
+Per-company, editable on `admin-companies.html`.
+
+**⚑ GRID SUMMARIZATION GRAIN (owner image 2026-07-09) — rows group by (method, cost level):**
+
+| Method | Cost Level | Group-by grain (X = kept) | Collapsed → blank/`(multi)` |
+|---|---|---|---|
+| 02 WAC | 1 | Item · Branch | Location, Lot |
+| 02 WAC | 2 | Item · Branch | Location, Lot |
+| 02 WAC | 3 | Item · Branch · Location · Lot | — (full) |
+| 07 Std | 1 | Item · Branch · Location · Lot | — (full) |
+| 07 Std | 2 | Item · Branch · Location · Lot | — (full) |
+| 07 Std | 3 | Item · Branch · Location · Lot | — (full) |
+
+So: **07 (standard) always shows full lot-level detail; 02 (WAC) collapses Location+Lot except at level 3.**
+Aggregation on a collapsed row: QOH/AOH/QtyVar/AmtVar **sum**; UnitCost = **weighted (AOH÷QOH)** not a
+plain value; TX Count sums; Last Activity = max.
+
+**⚑ ONE DIVERGENCE TO CONFIRM:** this grid grain differs from the shipped `usp6_006b` **netting** grain at
+**02 Level 1** — the proc nets 02-L1 **item-wide (across branches)**, but the image keeps **Branch** at
+02-L1 (Item · Branch). Likely moot in practice (anything the proc netted to 0 drops out by the $1
+materiality gate before display), but confirm the intent: the grid **displays** finer (per-branch) than the
+proc **nets** — OK? (09 Actual isn't in the image — treat as full grain like 07 until told otherwise.)
+
+**BUILDABLE NOW (Home side):** with the 02-L1 confirm, the Home 2×2 + drawers are fully specified —
+client-side from the warmed cache: filter rows to `|AmtVar| ≥ Threshold`, group by the grain table, render
+the 14-col grid. The **sync-page corrective flow** (sync button, survives-sync detection, escalate, the
+per-item history store) needs backend (endpoints + `v8_` store → owner VALC/agent rebuild) and comes after.
+
+**⚑ 02-L1 GRAIN — RESOLVED (owner 2026-07-09): leave it.** WAC level-1 is rare (NA: 3 items), and
+item-level netting on WAC is harmless. The grid displays per-branch at 02-L1 while the engine nets
+item-wide — accepted, no reconciliation needed.
+
+**⚑ COST METHODS — CORRECTED + CONTAINER MODEL REFRAMED (owner 2026-07-09).** The `usp6_006b` comment
+mislabels method **09 as "Actual" — it is NOT.** Method **09 = Manufacturing Last Cost** (JDE): for
+engineered / made-to-order items; **revalues inventory on each work-order completion** (owner-provided
+definition). So 09 is an **average-type (revaluing) method, not standard.**
+- **The two containers are really FIXED vs REVALUING, not literally Standard vs WAC.** The distinguishing
+  feature is the corrective mechanic: the dollars-only IA on a revaluing method needs the **UDC `40/AV`
+  disable→restore dance**; standard (fixed) skips it. So:
+  - **Standard / fixed container** = `07`.
+  - **Average / revaluing container** = `02` + **`09`** (+ likely `01` Last-In, also revalues). Container
+    label TBD — keep "Weighted Average" or broaden to **"Average / Revaluing Cost"** (owner to pick; the
+    label should signal which sync mechanic applies).
+- **Method coverage rule (owner to confirm):** NA is 100% `02` + **55 `XX`** rows (uncosted/placeholder),
+  levels 1 (3 items) & 2 only — **no 07, 09, or level-3 in NA**, so the Standard container + the level-3
+  lot grain + any 09 path **cannot be demoed on NA**. Proposed leftover rule: `XX`/zero-cost methods
+  **excluded** (nothing to value-adjust); other methods bucketed by "does it revalue?".
+- **`[VERIFY]` (not in the `jdesource` extract — F0005/UDC absent; needs live JDE or v359):** (1) does
+  method **09 need the `40/AV` dance** like 02 (confirms it shares the average corrective path)? (2) the
+  customer's actual `40/CM` descriptions.
+- **09 = the MTO items** → cross-links the cardex "revaluing" population to the **DAC-16 make-to-stock /
+  MTO work-order** thread (same items, two angles).
+
+**⚑ RESOLVED (owner 2026-07-09/10):**
+- **Container label = "Average / Revaluing Cost"** (broadened from "Weighted Average" to honestly hold 02 + 09).
+- **Method 09 = "Manufacturing Last Cost" — WEB-VERIFIED against Oracle 9.2 docs** (not CoPilot): manufacturing
+  accounting R31802A uses only methods **02, 07, 09**; for 09/actual the system computes cost from actual WO
+  hours + parts and "updates the cost based on the most current information" (revalues on WO completion). So
+  09 is revaluing/average-like → the Average/Revaluing container. (The `usp6_006b` "Actual" comment and
+  CoPilot's "Manufacturing Last Cost" describe the SAME method — both right.)
+- **`40/AV` — WEB-VERIFIED**: it's the UDC listing which programs update the unit cost for **average-cost**
+  items; toggling **P4114**'s second description `Y`→`N` suppresses the auto-update (that's the dollars-only-IA
+  dance; GSI's own blog documents the exact P4114 procedure). **STILL OPEN (unverifiable from public docs,
+  MOOT for NA — zero 09 items):** whether **09** is subject to 40/AV. Inference: 09 revalues via WO completion
+  (manufacturing accounting), not the average-cost workfile, so it likely does NOT use the 40/AV P4114 dance —
+  meaning a 09 item's amount corrective may differ from 02's. Resolve against a customer's live `40/AV` when a
+  09-carrying customer appears; don't block the demo on it.
+
+**⚑ XX-METHOD STUDY — RESOLVED (owner asked 2026-07-10): NOT a load bug.** All 55 `XX` rows are
+**zero-QOH, zero-variance** (inert — can't surface on a card). 53/55 have F4105 cost rows in `jdesource`, and
+**every source cost method is `02`** (155 F4105 rows, all `coledg='02'`). The `XX` arises because at the
+**specific branch** RR carries the item there is **no F4105 cost record** (e.g., item 65509 is costed at
+branches 2 & 22, not branch 3 where RR lists it). Cost level 2 = cost per item-branch, so an item-branch with
+no F4105 row is uncosted → RR faithfully defaults to `XX`. **The item IS a 02 item; the data isn't lost — it's
+a JDE branch-level cost gap (stocked/listed at a branch it was never costed at).** **Rule:** exclude `XX`
+(uncosted) rows from the containers — treating them as 02 gives the same result (zero cost → zero variance →
+never material). Latent data-quality note (owner's domain): these are stocked-but-uncosted item-branch combos —
+harmless while zero-QOH, a gap only if one ever gets stock.
+
+**⚑ ANALYST FIRST ACTION = SEE THE CARDEX ROWS (owner 2026-07-10).** From a card-drawer row, the analyst's
+first move is to look at the **F4111 cardex movement rows** to trace *where the cost/qty came from* —
+especially the tell-tale **zero-unit-cost amount variance** (unit cost 0, AOH $0, qty var 0, yet a non-zero
+AmtVar: the cardex rolled value the on-hand valuation doesn't reflect — a stray cost posting / revaluation
+/ rounding that only the movement rows explain). The evidence source already exists: the sync page's
+cardex-detail drill (`/inventory/as-of/details` = `usp6ItemRollForward` → transactions with
+qty/cost/value/running totals). **DESIGN: the drill should LEAD with the cardex rows, not bury them behind
+an eye icon.** Open fork (owner to pick): (A) drawer row → sync page that **auto-shows** the cardex
+transaction rows on arrival (respects Home=browse / page=investigate; endpoint already wired there);
+(B) **inline on Home** — the drawer row expands a second level showing the cardex rows (fastest, zero
+navigation, but duplicates the detail fetch on Home); (C) both. Recommend (A).
+
+**⚑ CORRECTION + STAGING APPROACH (owner 2026-07-10): a full reset+reload ZEROES all cardex variance —
+pre-staged source edits do NOT survive as variance.** Cardex variance is divergence SINCE the baseline
+(`estunits = (qic − baselineqic) − (qoh − baselineqoh)`); a reset re-establishes the baseline = the current
+position, so every item ties to zero at reload (my `jdesource` F41021 QOH bumps just bake into
+`baselineqoh` → zero variance — cf. item 236069: qoh 60 / qic 9 yet `estunits` 0, because that spread
+predates its baseline). **Therefore staging cardex variance belongs POST-LOAD, through the SYNC PAGE:**
+Adjust Beginning Balance sets a beginning balance that diverges from the rolled position, creating the
+variance in **any** db, after the fact, with no source dependency — and it dogfoods the sync flow we're
+building. This **supersedes** the jdesource F41021 pre-staging (now moot; the reload zeroes it). Sequence
+for the demo: sanitize + reset + reload → clean Demo2 (zero cardex variance) → stage the demo variances via
+the sync page once it's working.
+
+**PAGE DESIGN (owner, cardex teaching) — 3 cards → filtered worklist → per-item Adjust Beginning Balance.**
+The cardex page (`RRV8/inventory-cardex-variance.html`) gets a **3-card summary** with the SAME drill wiring
+as tx-variance (card → params → filtered worklist below), but a different work grain:
+1. **Quantity variance** — cost-method-agnostic (a quantity fix doesn't depend on standard vs. average).
+2. **Amount variance — Standard cost (07)** — dollars-only IA, no UDC dance.
+3. **Amount variance — Average cost (02)** — dollars-only IA WITH the UDC `40/AV` disable→restore.
+- **Quantity-first precedence:** a quantity discrepancy forces an amount discrepancy too (qty off ⇒ amount
+  off, unless zero cost), so any row with QtyVar lands in card 1; only quantity-clean rows populate cards
+  2/3. Every row in exactly one card (tie-out partition, like tx-variance).
+- Each card feeds the existing worklist (Item/Branch/Loc/Method/LVL/QtyVar/AmtVar/QOH/…) scoped by
+  (dimension, cost method, company, period); the per-item action is the existing **Adjust Beginning Balance**
+  (logged + reversible in the Adjustment Ledger) — the Re-Roll options collapsed behind a **fixed question
+  set** (e.g., "Is the beginning balance OK — qty and amount?") the analyst answers after validating JDE.
+- **Work grain = per ITEM** (the Adjustment Ledger), NOT per card → cardex needs its **own storage strategy**,
+  not the UI-26 card-note store.
+
+**Two open sub-threads (owner to lead):**
+- **Noise-vs-real rules** — separate noise (rounding / timing) from real discrepancies, richer than the single
+  tolerance floor; decides what even shows on a card. Owner to define.
+- **Cardex storage strategy** — the per-item Adjust-Beginning-Balance record (item + branch/loc/lot + dimension
+  + cost method + adjust params + who/when + reversible/undo). TBD.
+- **Still pending (wraps it):** the Re-Roll-option ↔ question-set mapping (the workflow).
 
 **What it compares:** an item's **position in JDE vs. in RR**. RR is built from JDE, so they
 should match. Sources: **F4111** (item ledger / cardex — movement detail) and **F41021**
