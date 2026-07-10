@@ -938,6 +938,32 @@
   .pw-head.txv-head { justify-content: flex-start; padding-right: 130px; }
   .txv-total-k { font-size: 10.5px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; color: var(--text-muted); }
   .txv-total-v { font-family: 'Source Sans 3', sans-serif; font-size: 32px; font-weight: 800; color: var(--navy); letter-spacing: -0.01em; }
+  /* Cardex Variance tab header — two standalone cards styled like the AI assistant
+     card (.acct-triage), sitting beside it. pw-cardex strips #periodWidget's grey
+     chart wrapper so the cards float on their own (matching the AI card). */
+  #periodWidget.pw-cardex { background: none; border: none; box-shadow: none; padding: 0; display: flex; }
+  .cxh-row { flex: 1 1 auto; display: flex; gap: 16px; align-items: stretch; min-width: 0; }
+  .cxh-card { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 12px;
+    border-radius: 12px; background: var(--bg-card); border: 1px solid var(--rule); box-shadow: var(--shadow-sm); padding: 16px 17px; }
+  .cxh-head { display: flex; flex-direction: column; gap: 3px; }
+  .cxh-name { font-family: 'Source Sans 3', sans-serif; font-size: 16px; font-weight: 800; color: var(--navy); line-height: 1.15; }
+  .cxh-sub2 { font-size: 12px; font-weight: 700; color: var(--text-muted); }
+  .cxh-figs { display: flex; flex-direction: column; gap: 14px; margin-top: 2px; }
+  .cxh-fig-k { font-size: 12px; font-weight: 700; color: var(--text-muted); }
+  .cxh-fig-v { font-family: 'Source Sans 3', sans-serif; font-size: 28px; font-weight: 800; color: var(--navy); letter-spacing: -0.01em; line-height: 1.05; }
+  .cxh-fig-v.neg { color: #b42318; }
+  .cxh-fig-u { font-size: 12px; font-weight: 700; color: var(--text-muted); margin-left: 6px; }
+  .cxh-mv-cols { display: flex; gap: 16px; flex: 1 1 auto; }
+  .cxh-mv-col { flex: 1 1 0; min-width: 0; }
+  .cxh-mv-h { font-size: 11px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px; }
+  .cxh-mv-row { display: flex; justify-content: space-between; gap: 8px; padding: 4px 0; text-decoration: none; color: var(--navy); font-size: 12.5px; border-bottom: 1px solid var(--rule); }
+  .cxh-mv-row:last-child { border-bottom: none; }
+  .cxh-mv-row:hover .cxh-mv-item { text-decoration: underline; }
+  .cxh-mv-item { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cxh-mv-val { font-weight: 800; white-space: nowrap; }
+  .cxh-mv-val.neg { color: #b42318; }
+  .cxh-mv-empty { font-size: 12px; color: var(--text-muted); }
+  @media (max-width: 860px) { #periodWidget.pw-cardex { display: block; } .cxh-row { flex-direction: column; } }
   .txv-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 12px 0 6px; }
   .txv-leg { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; color: var(--text-soft); }
   .txv-swatch { width: 11px; height: 11px; border-radius: 3px; display: inline-block; flex-shrink: 0; }
@@ -3789,7 +3815,7 @@
   // Only when a variance break actually exists, once per DB per session. The query
   // is heavy (several seconds) -- this is a non-blocking background fetch.
   var _cardexAutoTried = {};
-  function autoWarmCardex() {
+  function autoWarmCardex(cb) {
     if (IS_DEMO || !activeDb() || !caps().inv) return;   // inventory module only
     var key = cardexCacheKey();
     try { var o = JSON.parse(sessionStorage.getItem(key) || 'null'); if (o && Array.isArray(o.payload) && o.payload.length) return; } catch (_) {}
@@ -3797,7 +3823,8 @@
     _cardexAutoTried[key] = true;
     rrFetch('inventory/integrity', { method: 'POST', body: { report: 'v6ui_itemrollintegritydialog' } })
       .then(function (d) { var rows = Array.isArray(d) ? d : ((d && d.data) || []);
-        try { sessionStorage.setItem(key, JSON.stringify({ ts: Date.now(), payload: rows })); } catch (_) {} })
+        try { sessionStorage.setItem(key, JSON.stringify({ ts: Date.now(), payload: rows })); } catch (_) {}
+        if (typeof cb === 'function') cb(); })   // fresh data landed → cold caller repaints ONCE (the warm early-return above carries no cb, so no loop)
       .catch(function () { _cardexAutoTried[key] = false; });   // allow a later load to retry
   }
   // Authoritative light driver: any GL OK / Var OK = 'no' in any period -> red,
@@ -6585,6 +6612,74 @@
   // Period-column click → focus that period (stays on the page).
   var _txVarReqKey = null;
   var _txVarContext = null;   // { total, current:[periods], historical:[periods] } — for AI grounding
+  // ---- Cardex Variance tab header (analyst 'reports' sub-view) --------------------
+  // TWO standalone cards (styled like the AI assistant card and sitting beside it, so
+  // the row reads AI · top movers · SOT) replacing the irrelevant-here tx-variance
+  // chart: top-3 quantity + top-3 amount movers, and source-of-truth totals. SOURCE
+  // OF TRUTH = the perpetual roll-forward (rperpetualinv), surfaced as the warmed
+  // v6ui_itemrollintegritydialog worklist where AdjQty = estunits (units off) and
+  // AdjAmount = BaselineVar (dollars off), scoped to the single company. Same warmed
+  // cache the cardex cards read — no new endpoint. (No AI card here — the existing
+  // #acctTriage assistant to the left already is it.)
+  function renderCardexHeadline(box) {
+    if (!box) return;
+    box.hidden = false;
+    box.classList.add('pw-cardex');   // strip the grey chart wrapper so the 2 cards float standalone like the AI card
+    var d = _acctData || (typeof _briefData === 'function' ? _briefData() : null);
+    var solo = _ensureAnalystSolo((d && d.companies) || []);
+    var soloCo = ((d && d.companies) || []).filter(function (c) { return String(c.co) === String(solo); })[0] || null;
+    var ccy = (soloCo && soloCo.ccy) || ((d && d.currencies && d.currencies[0]) || '');
+    var fmtAmt = function (v) { return (typeof _ccyAmt === 'function') ? _ccyAmt(ccy, v) : ('$' + Math.round(v).toLocaleString('en-US')); };
+    var n2 = function (v) { return (Math.round(v * 100) / 100).toLocaleString('en-US', { maximumFractionDigits: 2 }); };
+    var rows = [];
+    try { var o = JSON.parse(sessionStorage.getItem(cardexCacheKey()) || 'null'); if (o && Array.isArray(o.payload)) rows = o.payload; } catch (_) {}
+    var scoped = rows.filter(function (r) { return String(r.CompanyNumber) === String(solo); });
+    // cold cache → warm behind the scenes, then repaint the whole analyst palette once it lands
+    if (!scoped.length && typeof autoWarmCardex === 'function') {
+      autoWarmCardex(function () {
+        if (typeof _viewRole === 'function' && _viewRole() === 'analyst'
+            && typeof _curSubView === 'function' && _curSubView() === 'reports'
+            && typeof renderAnalystPalette === 'function') renderAnalystPalette();
+      });
+    }
+    var qtyTot = 0, amtTot = 0, itemSet = {};
+    scoped.forEach(function (r) { qtyTot += Number(r.AdjQty) || 0; amtTot += Number(r.AdjAmount) || 0; if (r.ItemID != null) itemSet[r.ItemID] = 1; });
+    var nItems = Object.keys(itemSet).length;
+    function movers(field) {
+      return scoped.filter(function (r) { return Math.abs(Number(r[field]) || 0) > 0; })
+        .sort(function (a, b) { return Math.abs(Number(b[field]) || 0) - Math.abs(Number(a[field]) || 0); }).slice(0, 3);
+    }
+    var topQty = movers('AdjQty'), topAmt = movers('AdjAmount');
+    var co = encodeURIComponent(String(solo || ''));
+    function moverRow(r, field, dim, isAmt) {
+      var v = Number(r[field]) || 0;
+      var href = 'inventory-cardex-variance.html?company=' + co + '&item=' + encodeURIComponent(String(r.ItemNumber || r.ShortItem || ''))
+        + (r.Branch ? '&branch=' + encodeURIComponent(r.Branch) : '') + '&dim=' + dim + (r.Method ? '&method=' + encodeURIComponent(r.Method) : '');
+      var val = isAmt ? fmtAmt(v) : (n2(v) + (r.UOM ? ' ' + String(r.UOM) : ''));   // esc once, below
+      return '<a class="cxh-mv-row" href="' + href + '"><span class="cxh-mv-item">'
+        + esc(String(r.ItemNumber || r.ShortItem || '—')) + '</span>'
+        + '<span class="cxh-mv-val' + (v < 0 ? ' neg' : '') + '">' + esc(val) + '</span></a>';
+    }
+    function moverList(title, list, field, dim, isAmt) {
+      var body = list.length ? list.map(function (r) { return moverRow(r, field, dim, isAmt); }).join('')
+        : '<div class="cxh-mv-empty">None</div>';
+      return '<div class="cxh-mv-col"><div class="cxh-mv-h">' + esc(title) + '</div>' + body + '</div>';
+    }
+    var sub = nItems + ' item' + (nItems === 1 ? '' : 's') + ' &middot; Co ' + esc(String(solo || ''));
+    var sotCard = '<div class="cxh-card">'
+      + '<div class="cxh-head"><div class="cxh-name">Source-of-truth totals</div>'
+      +   '<div class="cxh-sub2">' + sub + ' &middot; perpetual roll-forward</div></div>'
+      + '<div class="cxh-figs">'
+      +   '<div class="cxh-fig"><div class="cxh-fig-k">Quantity variance</div><div class="cxh-fig-v' + (qtyTot < 0 ? ' neg' : '') + '">' + esc(n2(qtyTot)) + '<span class="cxh-fig-u">units</span></div></div>'
+      +   '<div class="cxh-fig"><div class="cxh-fig-k">Amount variance</div><div class="cxh-fig-v' + (amtTot < 0 ? ' neg' : '') + '">' + esc(fmtAmt(amtTot)) + '</div></div>'
+      + '</div></div>';
+    var moverCard = '<div class="cxh-card">'
+      + '<div class="cxh-head"><div class="cxh-name">Top variance items</div>'
+      +   '<div class="cxh-sub2">Biggest movers &middot; quantity and amount</div></div>'
+      + '<div class="cxh-mv-cols">' + moverList('Quantity', topQty, 'AdjQty', 'qty', false)
+      +   moverList('Amount', topAmt, 'AdjAmount', 'amt', true) + '</div></div>';
+    box.innerHTML = '<div class="cxh-row">' + moverCard + sotCard + '</div>';
+  }
   function renderTxVarWidget(box) {
     if (!box) return;
     var d = _acctData || (typeof _briefData === 'function' ? _briefData() : null);
@@ -8772,6 +8867,24 @@
       }
     });
   }
+  // UI-20 (advise-only): a large carry-forward → the accountant MAY absorb it over
+  // ~6 periods instead of a lumpy one-period hit. Trigger = |carry-forward| > 25% of
+  // the GL balance OR > $50,000. The %-of-GL arm is suppressed on near-zero/dormant
+  // companies (a % of ~0 is meaningless — same guard as UI-17). Advice only: RR
+  // states the option + per-period figure; the schedule lives in JDE (no split-builder).
+  function _wlAmortFact(c) {
+    var cf = Number(c.comp && c.comp['Carry forward']) || 0;
+    if (Math.abs(cf) < 1) return '';
+    var gl = Math.abs(Number(c.glBal) || 0);
+    var m = _wlMateriality(c);
+    var byPct = !m.nearZero && gl > 0 && Math.abs(cf) > 0.25 * gl;
+    var byAbs = Math.abs(cf) > 50000;
+    if (!byPct && !byAbs) return '';
+    var amt = function (v) { return _ccyAmt(c.ccy, v); };
+    var mag = (gl > 0 && byPct) ? (Math.round(Math.abs(cf) / gl * 100) + '% of the GL balance') : 'over $50,000';
+    return 'Carry-forward ' + amt(cf) + ' is large (' + mag + ') — the accountant MAY absorb it over ~6 periods (~'
+      + amt(cf / 6) + '/period) rather than book it all this period; advise the option only, the amortization schedule lives in JDE.';
+  }
   function _wlCauseFacts(c, exposure) {
     var comps = _COMPONENTS.filter(function (k) { return k.name !== 'Cardex' && Math.abs(c.comp[k.name]) >= 1; })
       .sort(function (a, b) { return Math.abs(c.comp[b.name]) - Math.abs(c.comp[a.name]); });
@@ -8787,6 +8900,7 @@
     var lines = [matLine, 'By source: '
       + comps.map(function (k) { return k.name.toLowerCase() + ' ' + amt(c.comp[k.name]); }).join(', ') + '.'];
     var pn = _wlOffsetNote(c); if (pn) lines.push(pn);   // top-tier process-quality observation
+    var af = _wlAmortFact(c); if (af) lines.push(af);    // UI-20: large-carry-forward amortization advice (advise only)
     if (exposure === 'full') {
       lines.unshift('Company Co ' + c.co + (c.ccy ? ' (' + c.ccy + ')' : '') + '.');
       var trail = (typeof _companyTrail === 'function') ? _companyTrail(c.co, 3) : [];
@@ -9598,10 +9712,16 @@
   var _PW_WINDOW = 12, _pwExpanded = false;   // UI-16: default to the most recent 12 periods; the toggle shows full history
   function renderPeriodWidget() {
     var box = $('periodWidget'); if (!box) return;
+    box.classList.remove('pw-cardex');   // default = grey chart wrapper; the cardex branch re-adds it
     // Analyst view → the top-row chart is Transaction Variance by Period (it
     // REPLACES the out-of-balance-by-period chart for this role). Accountant /
     // admin keep OOB / Perpetual below.
-    if (typeof _viewRole === 'function' && _viewRole() === 'analyst') { renderTxVarWidget(box); return; }
+    if (typeof _viewRole === 'function' && _viewRole() === 'analyst') {
+      // Cardex Variance tab (reports sub-view): the tx-variance-by-period chart is
+      // irrelevant here — show the 3-card cardex header (AI · top movers · SOT totals).
+      if (typeof _curSubView === 'function' && _curSubView() === 'reports') { renderCardexHeadline(box); return; }
+      renderTxVarWidget(box); return;
+    }
     // Perpetual tab → perpetual on-hand balance by period; every other tab → the
     // out-of-balance by period.
     var metric = ((typeof _curSubView === 'function') && _curSubView() === 'perpetual') ? 'perp' : 'oob';
