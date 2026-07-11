@@ -875,6 +875,20 @@
   .txv-btn:hover { border-color: var(--blue); color: var(--blue); }
   .txv-btn-primary { background: var(--navy); border-color: var(--navy); color: #fff; }
   .txv-btn-primary:hover { background: #172238; color: #fff; }
+  /* UI-26 — recurrence / auto-reopen chip: a category resolved in a prior period
+     that is material again this period (the fix didn't hold). Amber, plain-case
+     (it carries a sentence, not a label), so it reads distinct from the kind pills. */
+  .txv-tag-recur { background: var(--amber-pale); color: var(--amber); text-transform: none; letter-spacing: 0; }
+  /* Convergence rollup line in the headline — how many current-period cards are resolved. */
+  .txv-headline-conv { margin-top: 10px; font-size: 13px; font-weight: 700; color: var(--green-deep); }
+  /* Inline resolution-note editor on a card (Mark resolved / Reopen to edit). */
+  .txv-card.is-editing { opacity: 1; }   /* un-dim a complete card while its editor is open */
+  .txv-card-editor { margin-top: 11px; border-top: 1px dashed var(--rule); padding-top: 11px; }
+  .txv-card-editor[hidden] { display: none; }
+  .txv-card-editor-lbl { display: block; font-size: 11px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px; }
+  .txv-card-editor-txt { width: 100%; box-sizing: border-box; border: 1px solid var(--rule-strong); background: var(--bg-card); border-radius: 8px; padding: 9px 11px; font-family: inherit; font-size: 13px; line-height: 1.5; color: var(--text); resize: vertical; min-height: 66px; }
+  .txv-card-editor-txt:focus { outline: none; border-color: var(--blue); }
+  .txv-card-editor-actions { margin-top: 9px; display: flex; gap: 8px; justify-content: flex-end; }
   /* Card → Details link: a light text link, not a filled button. */
   .txv-cardlink { display: inline-flex; align-items: center; gap: 5px; font-family: inherit; font-weight: 800; font-size: 12.5px; color: var(--blue); text-decoration: none; cursor: pointer; }
   .txv-cardlink:hover { text-decoration: underline; }
@@ -4584,7 +4598,7 @@
         if (solo) {
           var soloCo = String(solo.getAttribute('data-cos-solo')).trim();
           haCosMenu.hidden = true; haCosBtn.setAttribute('aria-expanded', 'false');
-          if (soloCo && soloCo !== String(_analystSoloCo)) { _analystSoloCo = soloCo; renderAnalystPalette(); }   // repaints the pill (new solo + checked radio) too
+          if (soloCo && soloCo !== String(_analystSoloCo)) { _analystSoloCo = soloCo; _clearAiBand(); renderAnalystPalette(); }   // clear the prior company's Ask answer, then repaint the pill (new solo + checked radio) too
           return;
         }
         // Accountant detail-tab single-select: pick one company → re-scope Accounts / On Hand.
@@ -4595,7 +4609,11 @@
           if (acctCo && acctCo !== String(_acctGlScopeCo)) {
             _acctGlScopeCo = acctCo;
             _perpPeriodKey = null; _perpRows = null;   // company changed → perpetual cache is stale
+            _clearAiBand();                            // drop the prior company's analysis/answer before the repaint
             renderAccountantPanels();                  // repaints the active detail tab + the pill
+            // On the Accounts tab, re-read the new company aloud (same helper the
+            // worklist "See accounts" drill uses) so the AI band tracks the pill.
+            if ((typeof _curSubView === 'function') && _curSubView() === 'account') _acctAutoAnalyze(acctCo);
           }
           return;
         }
@@ -5551,6 +5569,19 @@
   var _jeOffsets = {};        // key(co|account) -> offset account the accountant typed in the GL grid; assembles the self-clearing balancing entry
   var _acctDispo = {};        // key(db|period|co) -> 'adjusted' (a balancing entry was attested); other dispositions are computed from the data
   var _acctClosed = {};       // key(db|period) -> { by, at } once the period is signed off + closed
+  // Clear the SHARED AI answer band (both role views reuse #acctAnsBand). Called
+  // whenever the single-select company changes so a prior company's analysis / Ask
+  // answer never lingers under the new company (UI-31). Guarded on _acctAsking so an
+  // in-flight question isn't wiped mid-request; also drops the follow-up-continuity
+  // turn so a typed follow-up can't bind to the company we just left.
+  function _clearAiBand() {
+    if (_acctAsking) return;
+    var band = $('acctAnsBand'); if (band) band.hidden = true;
+    var ans = $('acctAskAnswer'); if (ans) ans.textContent = '';
+    var qEl = $('acctAnsQ'); if (qEl) { qEl.textContent = ''; qEl.hidden = true; }
+    _aiRenderDocStrip(ans && ans.parentNode, [], 'acctDocStrip');
+    _acctConvo = null;
+  }
   // GL palette drill-down scope: a company number when reached via a worklist
   // "See accounts" click (shows only that company), null when the GL tab is
   // opened directly (shows the full roll-up). Cleared on direct tab clicks and
@@ -6678,17 +6709,23 @@
     }
     var sub = nItems + ' item' + (nItems === 1 ? '' : 's') + ' &middot; Co ' + esc(String(solo || ''));
     var sotCard = '<div class="cxh-card">'
-      + '<div class="cxh-head"><div class="cxh-name">Source-of-truth totals</div>'
+      + '<div class="cxh-head"><div class="cxh-name">Cardex variance totals</div>'
       +   '<div class="cxh-sub2">' + sub + ' &middot; perpetual roll-forward</div></div>'
       + '<div class="cxh-figs">'
       +   '<div class="cxh-fig"><div class="cxh-fig-k">Quantity variance</div><div class="cxh-fig-v' + (qtyTot < 0 ? ' neg' : '') + '">' + esc(n2(qtyTot)) + '<span class="cxh-fig-u">units</span></div></div>'
       +   '<div class="cxh-fig"><div class="cxh-fig-k">Amount variance</div><div class="cxh-fig-v' + (amtTot < 0 ? ' neg' : '') + '">' + esc(fmtAmt(amtTot)) + '</div></div>'
       + '</div></div>';
+    // Link the card straight to the sync page (scoped to the company) — the entry
+    // point to Cardex Variance even when NO variance exists, where the analyst types
+    // any item to sync. .cxh-go pins to the card bottom (margin-top:auto).
+    var cxHref = 'inventory-cardex-variance.html?company=' + encodeURIComponent(String(solo || ''));
     var moverCard = '<div class="cxh-card">'
-      + '<div class="cxh-head"><div class="cxh-name">Top variance items</div>'
+      + '<div class="cxh-head"><div class="cxh-name">Top Cardex Variance items</div>'
       +   '<div class="cxh-sub2">Biggest movers &middot; quantity and amount</div></div>'
       + '<div class="cxh-mv-cols">' + moverList('Quantity', topQty, 'AdjQty', 'qty', false)
-      +   moverList('Amount', topAmt, 'AdjAmount', 'amt', true) + '</div></div>';
+      +   moverList('Amount', topAmt, 'AdjAmount', 'amt', true) + '</div>'
+      + '<a class="cxh-go" href="' + cxHref + '" style="text-decoration:none;">Open Cardex Variance <span class="arr" aria-hidden="true">&rarr;</span></a>'
+      + '</div>';
     box.innerHTML = '<div class="cxh-row">' + moverCard + sotCard + '</div>';
   }
 
@@ -7012,6 +7049,22 @@
     return p.desc + ' ' + p.action;
   }
 
+  // UI-26 recurrence / auto-reopen (DERIVED, not stored): a category resolved in a
+  // PRIOR period (a `complete` card-store record with periodEnd < focus) that is
+  // material again this period is the "the fix didn't hold" signal. Returns the most
+  // recent prior period-end that was completed, or '' if none. YYYY-MM-DD strings
+  // compare lexicographically in date order. Guarded — no store, no recurrence.
+  function _txvRecurPrior(co, code, focusP) {
+    if (!(typeof RRV8 !== 'undefined' && RRV8.cardStore)) return '';
+    var recs = RRV8.cardStore.forCompany(co) || [], best = '', fp = String(focusP);
+    for (var i = 0; i < recs.length; i++) {
+      var r = recs[i];
+      if (String(r.cardCode) === String(code) && String(r.status) === 'complete'
+          && String(r.periodEnd) < fp && String(r.periodEnd) > best) best = String(r.periodEnd);
+    }
+    return best;
+  }
+
   // (Client-side netting was removed 2026-07-05: netting is done SERVER-SIDE by
   // usp6_008_1_netting, and v6ui_reconcilingitems returns only the recstatus=1
   // residual — the netted rows are already filtered out. Re-netting client-side
@@ -7122,7 +7175,13 @@
     if (!solo) { host.innerHTML = '<div class="txv-empty-plan">Pick a company in the scope banner to build its variance plan.</div>'; return; }
     host.innerHTML = '<div class="txv-headline"><div class="txv-thinking">' + _TXV_ICON.replace('fill="currentColor"', 'fill="none" stroke="currentColor" stroke-width="2"') + 'Building Co ' + esc(solo) + '’s corrective-action plan…</div></div>';
 
-    Promise.all([_txvRows(solo ? [String(solo)] : []), _txvLoadDmaai()]).then(function (res) {
+    // Third promise: the UI-26 card-keyed resolution store for this company (all
+    // periods, so recurrence can be derived). Populates RRV8.cardStore's cache so
+    // .get()/.forCompany() answer synchronously while cards are built. Graceful:
+    // resolves to {} when the store module or agent isn't present.
+    var _cardLoad = (typeof RRV8 !== 'undefined' && RRV8.cardStore)
+      ? RRV8.cardStore.load(solo) : Promise.resolve({});
+    Promise.all([_txvRows(solo ? [String(solo)] : []), _txvLoadDmaai(), _cardLoad]).then(function (res) {
       if (gen !== _txvGen) return;   // scope/DB/tab switched mid-flight
       // Scope the reconciling-items rows to the SELECTED company client-side, on
       // CompanyNumber — the same filter the comparison used to prove the tie-out,
@@ -7195,31 +7254,35 @@
       // One card per non-empty bucket, in code order, grouped into the four tiers.
       // amount = bucket NET, so Σ(cards) = netTotal. A card shows whenever it has rows —
       // a near-$0 card can still carry many rows worth working (e.g. account offsets).
+      // UI-26: the CARD status now comes from the card-keyed store, NOT the per-row
+      // Worked/Note left-join. A card is complete when its store record's status is
+      // 'complete'; the saved finding is that record's note. The inline per-row
+      // b.worked count stays as SECONDARY info in the meta line (progress within the
+      // slice), but it no longer decides the card's done state or its finding text.
       var cardsByTier = { quick: [], complex: [], linked: [], terminal: [] };
+      var resolvedThisCycle = 0;   // current-period cards whose store record is complete (headline rollup)
+      var _store = (typeof RRV8 !== 'undefined' && RRV8.cardStore) ? RRV8.cardStore : null;
       _TXV_CODE_ORDER.forEach(function (code) {
         var b = buckets[code]; if (!b || b.rows === 0) return;
         var m = _TXV_CODE_META[code];
         var flags = [];
         if (b.dupsales) flags.push(b.dupsales + ' dup-sales');
         if (b.vouchers) flags.push(b.vouchers + ' voucher' + (b.vouchers === 1 ? '' : 's'));
-        var done = b.worked === b.rows;   // all rows worked → card complete
-        // Once the slice is fully worked, the card face shows the analyst's SAVED
-        // finding in place of the generic cause. If a card spans several saves with
-        // different notes, show the most common one.
-        var _noteKeys = Object.keys(b.notes);
-        var savedFinding = (done && _noteKeys.length)
-          ? (_noteKeys.length === 1 ? _noteKeys[0]
-             : _noteKeys.sort(function (x, y) { return b.notes[y] - b.notes[x]; })[0])
-          : '';
+        var rec = _store ? _store.get(solo, code, focusP) : null;
+        var done = !!(rec && rec.status === 'complete');   // card complete = store record complete
+        if (done) resolvedThisCycle++;
+        var savedFinding = (rec && rec.note) ? rec.note : '';
+        // Recurrence / auto-reopen: resolved in a prior period + material again now.
+        var recurPrior = (Math.abs(b.net) >= 1) ? _txvRecurPrior(solo, code, focusP) : '';
         cardsByTier[m.tier].push({
-          kind: m.kind, title: m.title, amount: b.net,
+          code: code, kind: m.kind, title: m.title, amount: b.net, rec: rec,
           meta: b.rows + ' row' + (b.rows === 1 ? '' : 's')
-              + (b.worked && !done ? ' · ' + b.worked + ' worked' : '')
+              + (b.worked && b.worked !== b.rows ? ' · ' + b.worked + ' worked' : '')
               + (flags.length ? ' · ' + flags.join(' · ') : ''),
           cause: savedFinding || _txvCause(code) || 'Cardex and GL both posted but disagree — export a representative row to refine the diagnosis.',
           isFinding: !!savedFinding,
           href: _txvTxHref(solo, { period: focusP, card: code }),
-          btn: 'Open in worklist', done: done
+          btn: 'Open in worklist', done: done, recurPrior: recurPrior
         });
       });
 
@@ -7242,25 +7305,83 @@
             : ' and tie to it. ')
         + (grossTotal > Math.abs(netTotal) * 1.05 ? ('From ' + money(grossTotal) + ' of gross activity; the rest offsets within accounts. ') : '')
         + '</div>'
+        + (resolvedThisCycle > 0
+            ? '<div class="txv-headline-conv">Resolved this cycle: <strong>' + resolvedThisCycle + '</strong> of ' + (cardsByTier.quick.length + cardsByTier.complex.length + cardsByTier.linked.length + cardsByTier.terminal.length) + ' cards</div>'
+            : '')
         + '</div>';
 
       var card = function (p) {
         var acc = KIND_CSS[p.kind] || 'net';
-        return '<div class="txv-card is-' + acc + (p.done ? ' is-complete' : '') + '"><div class="txv-card-top"><div>'
+        // UI-26 recurrence chip: resolved in a prior period, material again now.
+        var recurChip = p.recurPrior
+          ? '<span class="txv-tag txv-tag-recur" title="This category was marked resolved in ' + esc(_pwLabelFull(p.recurPrior)) + ' but is material again this period — the source fix did not hold.">Recurred &middot; was resolved ' + esc(_pwLabel(p.recurPrior)) + '</span>'
+          : '';
+        // Reopen prefills the saved finding to edit; a fresh resolve starts blank.
+        var prefill = (p.done && p.cause) ? p.cause : '';
+        var editBtn = p.done
+          ? '<button type="button" class="txv-btn" data-txv-act="reopen">Reopen to edit</button>'
+          : '<button type="button" class="txv-btn" data-txv-act="resolve">Mark resolved</button>';
+        return '<div class="txv-card is-' + acc + (p.done ? ' is-complete' : '') + '"'
+          + ' data-txv-card="1" data-cc="' + esc(p.code) + '" data-cp="' + esc(focusP) + '" data-co="' + esc(solo) + '" data-camt="' + esc(String(p.amount)) + '">'
+          + '<div class="txv-card-top"><div>'
           + '<div class="txv-card-title">' + esc(p.title) + '<span class="txv-tag txv-tag-' + acc + '">' + esc(KIND_TAG[p.kind] || 'Review') + '</span>'
-          + (p.done ? '<span class="txv-tag txv-tag-done">✓ Worked</span>' : '') + '</div>'
+          + (p.done ? '<span class="txv-tag txv-tag-done">✓ Worked</span>' : '') + recurChip + '</div>'
           + '<div class="txv-card-meta">' + esc(p.meta) + '</div></div>'
           + '<div class="txv-card-amt">' + money(p.amount) + '</div></div>'
           + (p.isFinding
               ? '<div class="txv-card-cause is-finding"><span class="txv-card-finding-lbl">Finding</span><span class="txv-card-finding-txt">' + esc(p.cause) + '</span></div>'
               : '<div class="txv-card-cause">' + esc(p.cause) + '</div>')
-          + '<div class="txv-card-actions"><a class="txv-cardlink" href="' + p.href + '">' + (p.done ? 'Review worklist' : p.btn) + ' ' + _TXV_ARROW + '</a></div></div>';
+          // Inline resolution editor (UI-26) — hidden until Mark resolved / Reopen.
+          + '<div class="txv-card-editor" hidden>'
+          +   '<label class="txv-card-editor-lbl">What was the source fix?</label>'
+          +   '<textarea class="txv-card-editor-txt" placeholder="e.g. AAI 3120 remapped to 140050; re-rolled + reloaded cardex.">' + esc(prefill) + '</textarea>'
+          +   '<div class="txv-card-editor-actions">'
+          +     '<button type="button" class="txv-btn" data-txv-act="cancel">Cancel</button>'
+          +     '<button type="button" class="txv-btn txv-btn-primary" data-txv-act="save">Save &amp; mark resolved</button>'
+          +   '</div>'
+          + '</div>'
+          + '<div class="txv-card-actions"><a class="txv-cardlink" href="' + p.href + '">' + (p.done ? 'Review worklist' : p.btn) + ' ' + _TXV_ARROW + '</a>' + editBtn + '</div></div>';
       };
       // Tier-grouped: a heading per non-empty tier, then its cards (Quick wins first).
       host.innerHTML = headline + _TXV_TIER_ORDER.map(function (t) {
         var cs = cardsByTier[t]; if (!cs.length) return '';
         return '<div class="txv-tier"><h3 class="txv-tier-head">' + esc(_TXV_TIER_LABEL[t]) + '</h3>' + cs.map(card).join('') + '</div>';
       }).join('');
+      // UI-26 resolution-editor wiring — delegated on the persistent host once, so it
+      // survives the innerHTML swaps above. Reads company/card/period/amount from the
+      // card's data attrs (never a stale closure), writes the card-keyed resolution to
+      // RRV8.cardStore (server-first, localStorage fallback), then re-renders the tab
+      // so the ✓ Worked state + the "Resolved this cycle" rollup update.
+      if (!host._txvCardWired) {
+        host._txvCardWired = true;
+        host.addEventListener('click', function (e) {
+          var btn = e.target.closest ? e.target.closest('[data-txv-act]') : null; if (!btn) return;
+          var cardEl = btn.closest('[data-txv-card]'); if (!cardEl) return;
+          var act = btn.getAttribute('data-txv-act');
+          var ed = cardEl.querySelector('.txv-card-editor');
+          if (act === 'resolve' || act === 'reopen') {
+            if (ed) { ed.hidden = false; cardEl.classList.add('is-editing'); var ta = ed.querySelector('.txv-card-editor-txt'); if (ta) { ta.focus(); try { ta.setSelectionRange(ta.value.length, ta.value.length); } catch (_) {} } }
+            return;
+          }
+          if (act === 'cancel') { if (ed) ed.hidden = true; cardEl.classList.remove('is-editing'); return; }
+          if (act === 'save') {
+            var ta2 = ed && ed.querySelector('.txv-card-editor-txt');
+            var note = ta2 ? String(ta2.value || '').trim() : '';
+            if (!note) { if (ta2) ta2.focus(); return; }   // a finding is required before completing
+            if (!(typeof RRV8 !== 'undefined' && RRV8.cardStore)) return;
+            btn.disabled = true; btn.textContent = 'Saving…';
+            RRV8.cardStore.save({
+              company:   cardEl.getAttribute('data-co'),
+              cardCode:  cardEl.getAttribute('data-cc'),
+              periodEnd: cardEl.getAttribute('data-cp'),
+              status:    'complete', note: note, sourceFix: note,
+              varAmount: (function (x) { var n = Number(x); return isFinite(n) ? n : null; })(cardEl.getAttribute('data-camt'))
+            }).then(function () {
+              if (typeof renderAnalystTxVar === 'function') renderAnalystTxVar(_acctData || (typeof _briefData === 'function' ? _briefData() : null));
+            });
+          }
+        });
+      }
     }).catch(function () {
       if (gen !== _txvGen) return;
       host.innerHTML = '<div class="txv-empty-plan">Couldn’t build the plan just now — try again in a moment.</div>';
@@ -9811,11 +9932,19 @@
   function _periodWidgetData(metric) {
     metric = metric || 'oob';
     var rows = _invRows; if (!rows || !rows.length) return null;
+    // On the accountant single-company detail tabs (Accounts / On Hand) the chart
+    // scopes to the SAME focused company as the table + AI band below it, so
+    // switching the workbar company re-scopes the whole surface (UI-31). The
+    // Overview tab stays portfolio-wide (all non-excluded companies).
+    var _sv = (typeof _curSubView === 'function') ? _curSubView() : '';
+    var _focusCo = ((typeof _viewRole === 'function') && _viewRole() === 'accountant' && (_sv === 'account' || _sv === 'perpetual'))
+      ? String(_acctFocusCo(_fullCosFromRows()) || '') : '';
     var byPeriod = {};   // full authorized view — every company, not the cross-page narrowing
     rows.forEach(function (r) {
       var p = String(r.PeriodEnds || '').slice(0, 10); if (!p) return;
       var co = _coOf(r) || '?';
       if (_isExcludedCo(co)) return;   // what-if company exclude
+      if (_focusCo && String(co) !== _focusCo) return;   // detail tab → single focused company only
       var g = byPeriod[p] || (byPeriod[p] = { byCo: {}, ccy: {}, total: 0 });
       // Accumulate BOTH metrics per company: net signed OOB (a company's own
       // account-level +/- offsets cancel; magnitude taken per company below) and

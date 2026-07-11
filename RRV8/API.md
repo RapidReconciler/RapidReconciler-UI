@@ -515,6 +515,67 @@ DB-scoped automatically.
 
 ---
 
+## Transaction-variance card resolutions (UI-26)
+
+**Status: UI wired against `RRV8.cardStore` with a per-browser localStorage
+fallback; agent endpoints + table are the owner's backend build (spec
+`RapidReconciler-Agent/specs/txv-card-resolution.md`, DDL
+`RapidReconciler-Agent/setup/sql/create-txv-card-resolution-table.sql`).** The
+analyst Transaction-Variance view keeps ONE resolution record per
+`(database, company, card_code, period_end)` — the closed-card resolution record
+and the convergence auto-reopen spine — replacing the legacy per-row
+`RCardexLedgerCompare2WorkNote` left-join *for tx-variance*. A card carries ~10
+rows per company per period, not thousands of row-notes, and survives B→C row
+churn (a card-keyed note doesn't orphan when the residual set changes).
+
+Both endpoints are **agent-direct on the per-DB Services jar**, authenticated
+with the JWT (not `permitAll`), and **DB-scoped automatically** because the
+agent's connection *is* the database. `by` is always taken from the JWT, never
+the request body. The store keys on the **stable classifier code**
+(`_txvClassifyCode` → `ACCT | PER | MTO | ICO | TRF | DS | T-SALES | T-PURCH |
+T-MFG | T-INV`), NOT the 1–10 display order, so a taxonomy reorder never
+corrupts history.
+
+- **`GET /inventory/txv/resolutions?company=NN[&period=YYYY-MM-DD]`** — the
+  resolution records for one company in the current DB, **all periods** (so the
+  client derives recurrence / auto-reopen across periods). `&period=` optionally
+  narrows to one period-end; omit it for the full history the recurrence check
+  needs. Returns an array:
+
+  ```json
+  [ { "cardCode": "ACCT", "company": "00010", "periodEnd": "2026-06-30",
+      "status": "complete", "note": "AAI 3120 remapped to 140050; re-rolled + reloaded cardex.",
+      "sourceFix": "AAI remap", "varAmount": 1284.55,
+      "by": "name@customer.com", "at": "2026-07-08T15:30:00Z" } ]
+  ```
+
+- **`POST /inventory/txv/resolution`** — upsert ONE record keyed on
+  `(company, cardCode, periodEnd)` (one current row per key). Body:
+
+  ```json
+  { "company": "00010", "cardCode": "ACCT", "periodEnd": "2026-06-30",
+    "status": "complete", "note": "…", "sourceFix": "…", "varAmount": 1284.55 }
+  ```
+
+  `status` ∈ `open | worked | complete | reopened`. The actor (`by`) is taken
+  from the JWT, never the body; `at` is stamped server-side. A reopen+edit
+  overwrites the SAME period's record (no note-versioning — RR is a tool, not a
+  system of record; JDE is the SoR). Returns `{ "ok": true }`.
+
+- **Backing table `dbo.RTxvCardResolution`** — one current row per
+  `(CompanyNumber, CardCode, PeriodEnd)`, unique-indexed on that key (the upsert
+  target). DDL ships with the SSDT project **and** the agent setup
+  (`create-txv-card-resolution-table.sql`). **The standalone `.sql` must still be
+  added to the `RapidReconciler-DB` `.sqlproj` (explicit Build Include) to enter
+  the dacpac** — a sqlcmd-applied file alone isn't in the dacpac (see memory
+  `reference_db_objects_must_be_in_sqlproj`). If the table or the endpoints are
+  absent, the UI falls back to a per-browser localStorage map
+  (`rrv8.txvCards.<dbName>.<company>`) with zero console errors — the card
+  lifecycle works locally, it just doesn't persist server-side or share across
+  browsers until the backend lands.
+
+---
+
 ## Model DMAAI Review (validate + approve the model)
 
 **Status: V8 wired (Home card + `accounting-model-review.html`); agent
