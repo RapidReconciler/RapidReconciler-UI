@@ -283,7 +283,13 @@
      at the main column (right of the 358px AI rail); Sign out is pinned right. */
   .home-actions { position: fixed; left: 0; right: 0; bottom: 18px; z-index: 60; display: flex; align-items: center; gap: 13px; max-width: 1340px; margin: 0 auto; padding: 0 24px 0 404px; pointer-events: none; }
   .home-actions > * { pointer-events: auto; }
-  .home-actions .ha-db { margin-left: auto; }   /* DB pill sits last / right (swapped with the account pill per owner preference) */
+  /* Workbar pill sequence (owner 2026-07-11): Welcome, Database, Company, View.
+     Welcome stays pinned left; margin-left:auto on the DB pill (now 2nd) groups
+     Database / Company / View together to the right, in that order. */
+  .home-actions .ha-user  { order: 1; }
+  .home-actions .ha-db    { order: 2; margin-left: auto; }
+  .home-actions .ha-cos   { order: 3; }
+  .home-actions .ha-roles { order: 4; }
   /* Uniform pills — every cluster control is the same size; label left, chevron
      pinned right (space-between) so the row reads as a tidy set. */
   .home-actions .ha-rolebtn { min-width: 196px; justify-content: space-between; }
@@ -897,6 +903,16 @@
   .txv-thinking svg { width: 15px; height: 15px; color: #6b57c9; animation: txv-spin 1.4s linear infinite; }
   @keyframes txv-spin { to { transform: rotate(360deg); } }
   @media (prefers-reduced-motion: reduce) { .txv-thinking svg { animation: none; } }
+  /* Prominent inline "still working" indicator with a flashing dot — used for the
+     several-second waits (period chart load, corrective-action plan build) so it's
+     obvious the page is thinking, not stuck. */
+  .rr-busy { display: inline-flex; align-items: center; gap: 10px; font-family: 'Source Sans 3', sans-serif;
+    font-weight: 800; font-size: 14.5px; color: var(--navy); letter-spacing: .01em; padding: 6px 0; }
+  .rr-busy-dot { width: 10px; height: 10px; border-radius: 50%; background: #6b57c9; flex-shrink: 0;
+    box-shadow: 0 0 0 0 rgba(107,87,201,.5); animation: rr-busy-flash 1s ease-in-out infinite; }
+  @keyframes rr-busy-flash { 0%,100% { opacity: 1; transform: scale(1); box-shadow: 0 0 0 0 rgba(107,87,201,.5); }
+    50% { opacity: .3; transform: scale(.6); box-shadow: 0 0 0 6px rgba(107,87,201,0); } }
+  @media (prefers-reduced-motion: reduce) { .rr-busy-dot { animation: none; } }
   .txv-empty-plan { padding: 22px; text-align: center; color: var(--text-muted); font-size: 13.5px; background: var(--bg-card); border: 1px solid var(--rule); border-radius: 12px; }
   /* Status band — amber when a company needs a re-roll, calm green when all
      clean. The right-side arrow always opens the account roll-forward detail
@@ -1006,6 +1022,7 @@
   .cx-fw-details { font-size: 12px; font-weight: 800; letter-spacing: .03em; color: var(--navy); text-decoration: none; white-space: nowrap; text-transform: none; }
   .cx-fw-details:hover { text-decoration: underline; }
   .cx-container { background: var(--bg-soft); border: 1px solid var(--rule); border-radius: 12px; padding: 12px 14px 14px; margin-bottom: 14px; }
+  .cx-fw-clean { padding: 20px 16px; text-align: center; font-size: 13.5px; color: var(--text-muted); background: var(--bg-soft); border: 1px solid var(--rule); border-radius: 12px; }
   .cx-container-head { font-family: 'Source Sans 3', sans-serif; font-size: 13px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: var(--navy); padding: 2px 4px 11px; display: flex; align-items: center; gap: 10px; }
   .cx-container-total { margin-left: auto; font-size: 12px; font-weight: 700; color: var(--text-muted); text-transform: none; letter-spacing: 0; }
   .cx-container-body { display: flex; flex-direction: column; gap: 10px; }
@@ -3087,10 +3104,15 @@
       return;
     }
     // Database name only -- the host/server is plumbing the user doesn't care about.
-    sel.innerHTML = dbs.map(function (db, i) {
-      return '<option value="' + i + '"' + (i === idx ? ' selected' : '') + '>' +
-        esc(db.n) + '</option>';
-    }).join('');
+    // Options sorted by display name; the value stays the ORIGINAL dbs[] index so
+    // the change handler (which indexes RR_SESSION.dbs) maps correctly regardless
+    // of display order.
+    sel.innerHTML = dbs.map(function (db, i) { return i; })
+      .sort(function (a, b) { return dbShortName(dbs[a].n).localeCompare(dbShortName(dbs[b].n), undefined, { numeric: true, sensitivity: 'base' }); })
+      .map(function (i) {
+        return '<option value="' + i + '"' + (i === idx ? ' selected' : '') + '>' +
+          esc(dbs[i].n) + '</option>';
+      }).join('');
     sel.disabled = dbs.length < 2;
     renderHaDb();   // keep the bottom-right cluster picker in sync (boot + every switch)
   }
@@ -3115,10 +3137,14 @@
     if (!dbs.length) { wrap.hidden = true; return; }
     wrap.hidden = false;
     label.textContent = dbShortName((dbs[idx] || dbs[0] || {}).n);
-    var opts = dbs.map(function (db, i) {
-      return '<button type="button" class="umr-opt' + (i === idx ? ' is-active' : '') +
-        '" data-db="' + i + '">' + esc(dbShortName(db.n)) + '</button>';
-    }).join('');
+    // Sorted by display name; data-db stays the ORIGINAL index (the menu handler
+    // reads it via getAttribute('data-db') to index RR_SESSION.dbs).
+    var opts = dbs.map(function (db, i) { return i; })
+      .sort(function (a, b) { return dbShortName(dbs[a].n).localeCompare(dbShortName(dbs[b].n), undefined, { numeric: true, sensitivity: 'base' }); })
+      .map(function (i) {
+        return '<button type="button" class="umr-opt' + (i === idx ? ' is-active' : '') +
+          '" data-db="' + i + '">' + esc(dbShortName(dbs[i].n)) + '</button>';
+      }).join('');
     menu.innerHTML = '<div class="umr-label">Active database</div>' + opts;
   }
 
@@ -4598,7 +4624,13 @@
         if (solo) {
           var soloCo = String(solo.getAttribute('data-cos-solo')).trim();
           haCosMenu.hidden = true; haCosBtn.setAttribute('aria-expanded', 'false');
-          if (soloCo && soloCo !== String(_analystSoloCo)) { _analystSoloCo = soloCo; _clearAiBand(); renderAnalystPalette(); }   // clear the prior company's Ask answer, then repaint the pill (new solo + checked radio) too
+          if (soloCo && soloCo !== String(_analystSoloCo)) {
+            // Company change = full page reload so EVERY widget re-renders for the
+            // new company (UI-31). Persist first so the reload lands on it.
+            _analystSoloCo = soloCo;
+            try { localStorage.setItem('rrv8.analystCompany.' + ((activeDb() && activeDb().n) || '_'), String(soloCo)); } catch (_) {}
+            location.reload();
+          }
           return;
         }
         // Accountant detail-tab single-select: pick one company → re-scope Accounts / On Hand.
@@ -4607,13 +4639,11 @@
           var acctCo = String(acctSolo.getAttribute('data-cos-acctco')).trim();
           haCosMenu.hidden = true; haCosBtn.setAttribute('aria-expanded', 'false');
           if (acctCo && acctCo !== String(_acctGlScopeCo)) {
+            // Company change = full page reload so EVERY widget re-renders for the
+            // new company (UI-31). Persist first so the reload lands on it.
             _acctGlScopeCo = acctCo;
-            _perpPeriodKey = null; _perpRows = null;   // company changed → perpetual cache is stale
-            _clearAiBand();                            // drop the prior company's analysis/answer before the repaint
-            renderAccountantPanels();                  // repaints the active detail tab + the pill
-            // On the Accounts tab, re-read the new company aloud (same helper the
-            // worklist "See accounts" drill uses) so the AI band tracks the pill.
-            if ((typeof _curSubView === 'function') && _curSubView() === 'account') _acctAutoAnalyze(acctCo);
+            try { localStorage.setItem('rrv8.acctCompany.' + ((activeDb() && activeDb().n) || '_'), String(acctCo)); } catch (_) {}
+            location.reload();
           }
           return;
         }
@@ -5569,19 +5599,6 @@
   var _jeOffsets = {};        // key(co|account) -> offset account the accountant typed in the GL grid; assembles the self-clearing balancing entry
   var _acctDispo = {};        // key(db|period|co) -> 'adjusted' (a balancing entry was attested); other dispositions are computed from the data
   var _acctClosed = {};       // key(db|period) -> { by, at } once the period is signed off + closed
-  // Clear the SHARED AI answer band (both role views reuse #acctAnsBand). Called
-  // whenever the single-select company changes so a prior company's analysis / Ask
-  // answer never lingers under the new company (UI-31). Guarded on _acctAsking so an
-  // in-flight question isn't wiped mid-request; also drops the follow-up-continuity
-  // turn so a typed follow-up can't bind to the company we just left.
-  function _clearAiBand() {
-    if (_acctAsking) return;
-    var band = $('acctAnsBand'); if (band) band.hidden = true;
-    var ans = $('acctAskAnswer'); if (ans) ans.textContent = '';
-    var qEl = $('acctAnsQ'); if (qEl) { qEl.textContent = ''; qEl.hidden = true; }
-    _aiRenderDocStrip(ans && ans.parentNode, [], 'acctDocStrip');
-    _acctConvo = null;
-  }
   // GL palette drill-down scope: a company number when reached via a worklist
   // "See accounts" click (shows only that company), null when the GL tab is
   // opened directly (shows the full roll-up). Cleared on direct tab clicks and
@@ -5592,6 +5609,11 @@
   // Shared by both detail tabs + their single-select workbar picker. Overview is unaffected.
   function _acctFocusCo(cos) {
     var list = (cos && cos.length ? cos : _fullCosFromRows()).map(String);
+    if (_acctGlScopeCo == null) {
+      // Seed from the per-DB persisted selection so a full-page reload (the
+      // company-change refresh) lands back on the chosen company (UI-31).
+      try { var sv = localStorage.getItem('rrv8.acctCompany.' + ((activeDb() && activeDb().n) || '_')); if (sv && list.indexOf(sv) >= 0) _acctGlScopeCo = sv; } catch (_) {}
+    }
     if (_acctGlScopeCo == null || list.indexOf(String(_acctGlScopeCo)) < 0) _acctGlScopeCo = list[0] || null;
     return _acctGlScopeCo;
   }
@@ -5608,6 +5630,7 @@
   // all share one scale (no M/K mix within a company's row).
   function _moneyInUnit(a, unit) {
     a = Math.abs(Number(a) || 0);
+    if (unit === '1') { return Math.round(a).toLocaleString('en-US'); }   // whole pounds, thousands-separated — a sub-million set ties out exactly
     if (unit === 'M') { var m = a / 1e6; return (m < 100 ? m.toFixed(1) : Math.round(m).toLocaleString('en-US')) + 'M'; }
     var k = a / 1000; return (k < 10 ? k.toFixed(1) : Math.round(k).toLocaleString('en-US')) + 'K';
   }
@@ -6905,7 +6928,7 @@
     }
     if (_txVarCache.key === key && _txVarCache.amt) { paint(); _txVarUpdateTotal(fmtAmt); return; }   // cached — no refetch
     box.hidden = false;
-    box.innerHTML = titleHead + '<div class="txv-empty">Loading…</div>';
+    box.innerHTML = titleHead + '<div class="rr-busy" style="padding:18px 2px;"><span class="rr-busy-dot"></span>Loading variance by period…</div>';
     _txVarReqKey = key;
     rrFetch('inventory/status').then(function (status) {
       var rf = (status && status.reconciliationFilter) || {};
@@ -7171,9 +7194,10 @@
     var solo = _ensureAnalystSolo((d && d.companies) || []);
     var soloCo = ((d && d.companies) || []).filter(function (c) { return String(c.co) === String(solo); })[0] || null;
     var ccy = (soloCo && soloCo.ccy) || ((d && d.currencies && d.currencies[0]) || '');
-    var money = function (v) { return _ccyAmt(ccy, v); };
+    var _txvU = null;   // one unit for the whole tab (set below, once totals are known) so the headline + cards visually sum
+    var money = function (v) { return _txvU ? _ccyAmtUnit(ccy, v, _txvU) : _ccyAmt(ccy, v); };
     if (!solo) { host.innerHTML = '<div class="txv-empty-plan">Pick a company in the scope banner to build its variance plan.</div>'; return; }
-    host.innerHTML = '<div class="txv-headline"><div class="txv-thinking">' + _TXV_ICON.replace('fill="currentColor"', 'fill="none" stroke="currentColor" stroke-width="2"') + 'Building Co ' + esc(solo) + '’s corrective-action plan…</div></div>';
+    host.innerHTML = '<div class="txv-headline"><div class="rr-busy"><span class="rr-busy-dot"></span>Building Co ' + esc(solo) + '’s corrective-action plan…</div></div>';
 
     // Third promise: the UI-26 card-keyed resolution store for this company (all
     // periods, so recurrence can be derived). Populates RRV8.cardStore's cache so
@@ -7294,6 +7318,12 @@
       // UI-28: lead with the SOURCE OF TRUTH (account roll-forward), then the cards'
       // details total, then the honest delta — within-tolerance / netted, so the two
       // won't tie exactly. No false "sum back to the graph's total" claim.
+      // One consistent unit for the whole tab so the headline and every card read in the
+      // same scale and visibly sum. Plain whole pounds while the set is sub-million (ties
+      // exactly); M above that so millions stay short.
+      var _txvMaxAbs = Math.max(Math.abs(sourceTotal || 0), Math.abs(netTotal || 0), Math.abs(grossTotal || 0));
+      _TXV_TIER_ORDER.forEach(function (t) { (cardsByTier[t] || []).forEach(function (c) { _txvMaxAbs = Math.max(_txvMaxAbs, Math.abs(c.amount || 0)); }); });
+      _txvU = _txvMaxAbs >= 1e6 ? 'M' : '1';
       var _tolMaterial = Math.abs(tolDelta) >= 1;   // sub-$1 = rounding, treat as tied
       var headline =
         '<div class="txv-headline"><div class="txv-headline-main">'
@@ -7666,7 +7696,11 @@
     var solo = _ensureAnalystSolo((d && d.companies) || []);
     var rows = [];
     try { var o = JSON.parse(sessionStorage.getItem(cardexCacheKey()) || 'null'); if (o && Array.isArray(o.payload)) rows = o.payload; } catch (_) {}
-    if (typeof autoWarmCardex === 'function' && !rows.length) autoWarmCardex();   // warm if cold
+    // Warm if cold AND repaint when the (heavy, async) fetch lands — without the
+    // callback these tab cards stay on the stale/empty cache until a manual reload,
+    // while the sibling summary cards (which pass a cb) fill in. The autoWarmCardex
+    // _cardexAutoTried guard stops any re-render loop when the DB is genuinely clean.
+    if (typeof autoWarmCardex === 'function' && !rows.length) autoWarmCardex(function () { renderCardexCards(d); });   // warm if cold, then repaint
     var co = encodeURIComponent(String(solo || ''));
     var money = function (v) { return '$' + Math.round(v).toLocaleString('en-US'); };
     var n2 = function (v) { return (Math.round(v * 100) / 100).toLocaleString('en-US', { maximumFractionDigits: 2 }); };
@@ -7755,6 +7789,7 @@
     }
     function container(label, key) {
       var b = B[key], cnt = b.qty.length + b.amt.length;
+      if (!cnt) return '';   // hide a cost method with no material variance — this is the variance view, not an inventory of methods; empty "clean" cards are noise
       var tot = b.qty.concat(b.amt).reduce(function (s, g) { return s + Math.abs(g.av); }, 0);
       return '<div class="cx-container">'
         + '<div class="cx-container-head">' + esc(label)
@@ -7767,10 +7802,10 @@
     var latestP = '';   // cardex is a current snapshot → the perpetual-details link always uses the latest period
     (_invRows || []).forEach(function (r) { var p = String(r.PeriodEnds || '').slice(0, 10); if (p && p > latestP) latestP = p; });
     var perQ = latestP ? '&period=' + encodeURIComponent(latestP) : '';
+    var _cxBody = container('Standard Cost', 'std') + container('Average / Revaluing Cost', 'avg');
     host.innerHTML = '<div class="cx-fw-label"><span>Cost Variance Framework &middot; Co ' + esc(String(solo || '')) + ' &mdash; expand a card, click an item to sync it</span>'
       + '<a class="cx-fw-details" href="inventory-asof.html?company=' + co + perQ + '">Full details &rarr;</a></div>'
-      + container('Standard Cost', 'std')
-      + container('Average / Revaluing Cost', 'avg');
+      + (_cxBody || '<div class="cx-fw-clean">No material cardex variance in scope &mdash; inventory reconciles to GL for Co ' + esc(String(solo || '')) + '.</div>');
     if (!host._cxWired) {   // delegated once; survives innerHTML repaints (listener is on host)
       host._cxWired = true;
       host.addEventListener('click', function (e) {
@@ -10072,6 +10107,13 @@
   function resetScopedState() {
     // JS caches that drive the analyst dots, the install strip, and readiness.
     _invRows = null;            // roll-forward rows → Account Roll Forward + Cardex Variance dots
+    _acctData = null;           // shared brief/recon cache (analyst + accountant). MUST clear on DB switch:
+                                // the bands read `_acctData || _briefData()`, so a stale _acctData paints the
+                                // PRIOR DB's companies on the first render before the reload lands (the
+                                // "company number on the bands doesn't match" after a DB switch).
+    _analystSoloCo = null;      // analyst single-company scope — re-resolve per new DB (its own
+                                // rrv8.analystCompany.<db>), never carry the prior DB's company across.
+    _acctGlScopeCo = null;      // accountant single-company scope — same: re-resolve per new DB.
     var _ap = $('acctPanels'); if (_ap) _ap.hidden = true;   // accountant panels repaint when the new DB's roll-forward loads
     _cardexTol = {};            // per-company cardex materiality tolerances (DB A's must never judge DB B)
     _invLightFromData = false;  // re-arm the /inventory/status validation fallback for the new DB
