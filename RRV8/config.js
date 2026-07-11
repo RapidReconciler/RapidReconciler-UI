@@ -422,6 +422,135 @@ window.RRV8 = window.RRV8 || {};
 })();
 
 /*
+ * RRV8.cardStore — the card-keyed resolution store for the analyst
+ * Transaction-Variance view (UI-26). ONE record per
+ * (database, company, card_code, period_end) — the closed-card resolution
+ * record + the convergence auto-reopen spine. Replaces the legacy per-row
+ * work-note derivation FOR TX-VARIANCE (a card carries ~10 rows per company
+ * per period, not thousands of row-notes, and survives B->C row churn).
+ *
+ * Self-contained (own fetch + JWT + RRDB.agentBase base) exactly like
+ * exportName / logActivity — never throws, always resolves. Server-first with a
+ * per-browser localStorage fallback (key rrv8.txvCards.<dbName>.<company>, a
+ * JSON map) so the card lifecycle works with ZERO console errors before the
+ * owner ships the /inventory/txv endpoints + dbo.RTxvCardResolution.
+ *
+ *   load(company)              -> Promise<map>  keyed "<co>|<cardCode>|<periodEnd>";
+ *                                 cached per (activeDb, company); tries the agent,
+ *                                 falls back to localStorage on any failure OR empty.
+ *   save(record)               -> Promise       optimistic in-memory + localStorage
+ *                                 mirror immediately, then POST; resolves regardless
+ *                                 (server failure = localStorage-only persistence).
+ *   get(company, code, period) -> record | null (SYNC; caller must load() first)
+ *   forCompany(company)        -> [record, ...] all cached records for a company
+ *                                 across periods (for recurrence derivation).
+ *
+ * record = { company, cardCode, periodEnd, status, note, sourceFix, varAmount, by, at }
+ * status in { open | worked | complete | reopened }. `by` is filled server-side
+ * from the JWT; the localStorage mirror stores by:'' (the browser can't attest
+ * identity). periodEnd is the 10-char YYYY-MM-DD.
+ */
+window.RRV8 = window.RRV8 || {};
+(function () {
+  var _cache = {};   // "<dbName>|<company>" -> { map: { "<co>|<code>|<period>": record } }
+  function _db() {
+    try { return (window.RRDB && RRDB.name && RRDB.name()) || '_'; } catch (_) { return '_'; }
+  }
+  function _base() {
+    try {
+      return (window.RRDB && RRDB.agentBase && RRDB.agentBase())
+        || (window.RR_CONFIG && RR_CONFIG.testAgentBase) || '';
+    } catch (_) { return ''; }
+  }
+  function _auth(h) {
+    try { var t = localStorage.getItem('rrv8.token'); if (t) h['Authorization'] = 'Bearer ' + t; } catch (_) {}
+    return h;
+  }
+  function _p10(p) { return String(p == null ? '' : p).slice(0, 10); }
+  function _key(co, code, periodEnd) { return String(co) + '|' + String(code) + '|' + _p10(periodEnd); }
+  function _cacheKey(co) { return _db() + '|' + String(co); }
+  function _lsKey(co) { return 'rrv8.txvCards.' + _db() + '.' + String(co); }
+  function _lsRead(co) {
+    try { var raw = localStorage.getItem(_lsKey(co)); return raw ? (JSON.parse(raw) || {}) : {}; }
+    catch (_) { return {}; }
+  }
+  function _lsWrite(co, map) {
+    try { localStorage.setItem(_lsKey(co), JSON.stringify(map || {})); } catch (_) {}
+  }
+  function _norm(rec) {
+    rec = rec || {};
+    return {
+      company:   String(rec.company == null ? '' : rec.company),
+      cardCode:  String(rec.cardCode == null ? '' : rec.cardCode),
+      periodEnd: _p10(rec.periodEnd),
+      status:    String(rec.status == null ? '' : rec.status),
+      note:      String(rec.note == null ? '' : rec.note),
+      sourceFix: rec.sourceFix == null ? '' : String(rec.sourceFix),
+      varAmount: (rec.varAmount == null || rec.varAmount === '') ? null : Number(rec.varAmount),
+      by:        rec.by == null ? '' : String(rec.by),
+      at:        rec.at == null ? '' : String(rec.at)
+    };
+  }
+  function _fallback(company, ck) {
+    var map = {}, ls = _lsRead(company);
+    for (var k in ls) if (Object.prototype.hasOwnProperty.call(ls, k)) map[k] = _norm(ls[k]);
+    _cache[ck] = { map: map };
+    return map;
+  }
+  function load(company) {
+    var ck = _cacheKey(company), base = _base();
+    if (!base) return Promise.resolve(_fallback(company, ck));
+    var h = _auth({ 'Accept': 'application/json' });
+    return fetch(base + '/inventory/txv/resolutions?company=' + encodeURIComponent(company), { headers: h })
+      .then(function (r) { if (!r.ok) throw 0; return r.json(); })
+      .then(function (arr) {
+        if (!Array.isArray(arr) || !arr.length) return _fallback(company, ck);
+        var map = {};
+        arr.forEach(function (rec) {
+          var n = _norm(rec);
+          if (!n.company) n.company = String(company);
+          map[_key(n.company, n.cardCode, n.periodEnd)] = n;
+        });
+        _cache[ck] = { map: map };
+        _lsWrite(company, map);   // mirror server truth locally so a later offline read agrees
+        return map;
+      })
+      .catch(function () { return _fallback(company, ck); });   // any failure -> localStorage
+  }
+  function get(company, cardCode, periodEnd) {
+    var c = _cache[_cacheKey(company)];
+    return c ? (c.map[_key(company, cardCode, periodEnd)] || null) : null;
+  }
+  function forCompany(company) {
+    var c = _cache[_cacheKey(company)]; if (!c) return [];
+    var out = [];
+    for (var k in c.map) if (Object.prototype.hasOwnProperty.call(c.map, k)) out.push(c.map[k]);
+    return out;
+  }
+  function save(record) {
+    var n = _norm(record);
+    n.at = new Date().toISOString();   // mirror stamp; the server overwrites `by`/`at` authoritatively
+    var ck = _cacheKey(n.company);
+    var c = _cache[ck] || (_cache[ck] = { map: {} });
+    c.map[_key(n.company, n.cardCode, n.periodEnd)] = n;   // optimistic in-memory update
+    var mirror = {};                                       // mirror the whole company map to localStorage now
+    for (var k in c.map) if (Object.prototype.hasOwnProperty.call(c.map, k)) mirror[k] = c.map[k];
+    _lsWrite(n.company, mirror);
+    var base = _base();
+    if (!base) return Promise.resolve(n);
+    var h = _auth({ 'Content-Type': 'application/json;charset=UTF-8', 'Accept': 'application/json' });
+    return fetch(base + '/inventory/txv/resolution', {
+      method: 'POST', headers: h,
+      body: JSON.stringify({
+        company: n.company, cardCode: n.cardCode, periodEnd: n.periodEnd,
+        status: n.status, note: n.note, sourceFix: n.sourceFix, varAmount: n.varAmount
+      })
+    }).then(function () { return n; }).catch(function () { return n; });   // localStorage already holds it
+  }
+  window.RRV8.cardStore = { load: load, save: save, get: get, forCompany: forCompany, key: _key };
+})();
+
+/*
  * RRDEMO — staged, non-production sample data for the demo. Callers gate on
  * RR_CONFIG.mode !== 'prod', so production always renders live data; this only
  * surfaces in demo/staging. Timestamps are relative to page load so the feed
