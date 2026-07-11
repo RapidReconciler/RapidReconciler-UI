@@ -366,3 +366,63 @@ RItems) — re-keying is the §B remap, not a description change.
 and BU codes (each source is scrubbed independently, so the object/BU values differ) — pick the
 same inventory-ladder semantics (raw material / purchased parts / WIP / packaging / finished goods)
 per their object accounts, and a distinct plant name per BU. Add to the NA/TR runbook.
+
+---
+
+## Conversion-factor / line-id un-encoding — root cause + fix (2026-07-10)
+
+**Symptom:** As-Of quantities showed the `-9999` sentinel across most cross-UOM items in
+Demo1 + Demo2. `usp6getasof_v2` emits `-9999` when an item is in `v6_006_uom_conv` (the
+missing-conversion list = `rtransactions.confact = 0 AND transactionuom <> unitofmeasure`).
+
+**Root cause — `build-jdesource.sql` `#fac` map was incomplete.** The map re-encodes the
+F9210-driven cost/qty/GL columns but MISSED the columns the SSIS package divides by a
+**hardcoded, F9210-independent** literal:
+- conversion factors `/ 10000000` — F41002 `UMCONV`,`UMCNV1`; F41003 `UCCONV`
+- line/order-id family `/ 1000` — `GLLNID` (F0911), `ILLNID` (F4111), `SDLNID`/`SDRLLN`/
+  `SDOGNO` (F4211+F42119), `PDLNID`/`PDRLLN` (F4311), `PRLNID` (F43121)
+
+Those columns fell through to factor `1` → landed **un-encoded** in the reverse-engineered
+sources. SSIS then `/ 10^7` → confact ≈ 0 → `-9999`. **`tr` is a REAL (non-reverse-engineered)
+copy — correctly 7-decimal encoded (F41002 UMCONV max 5.23e12), 0 missing-conversion items —
+so it was never touched.** F9210 cost/qty decimals in demo were verified correct (UNCS=4,
+PAID=2, PQOH=2, TRQT=2) — no F9210 fix needed.
+
+**Durable fix (applied to `RapidReconciler-SSIS/setup/build-jdesource.sql`, 2026-07-10):**
+added `@DecConv=7` (UMCONV/UMCNV1/UCCONV) and `@DecLineId=3` (the 8 line-id columns) to the
+`#fac` map. Verified against `tr`'s round-trip (staging `gllnid` 491 → source 491000; staging
+`umconv` decoded → source ×10^7). **NOTE: `setup/` is untracked local tooling — the edit lives
+on the SQL box only; decide whether to git-track it.** One-time remediation script saved as
+`setup/reencode-demo-source-confact.sql`.
+
+**One-time remediation applied to Demo1 + Demo2 (guarded, idempotent, tr skipped):**
+1. `UPDATE jdesource_demoN.PRODDTA` — the 14 fields ×divisor, guarded (`MAX < 1e7` for conv,
+   `MAX < 1e5` for line-ids) so it can't double-encode an already-encoded source; `WHERE fld<>0`
+   (zeros stay zero — SSIS applies its own `==0?1` / `ISNULL?0` defaults at load).
+2. Reloaded each DB by **running its per-DB Agent job** (`RapidReconciler_DemoN`: A→B SSIS →
+   B→C) — **no reset** (preserves `RCompanies.AAIDocType` → preserves the healthy 19-row account
+   list; a reset would re-trip the blank-AAIDocType→sentinels bug, whose durable patch is still
+   absent in both DBs).
+
+**Verified after reload:** conv factors decode to real values (Demo1 `EA→EA 50000`,
+`BX→EA 10000`; Demo2 `KG→MG 1000000`, `LB→MG 453592`); 0 broken-tiny rows;
+`RAccountSummary` clean (Demo1 171 / Demo2 323 rows, 0 sentinels); account list intact (19 each).
+
+**Rejected approach:** the earlier plan to `×10⁷` the RR-side staging table + partial reset was
+UNSAFE — staging F41002 holds ~6,339 `==0?1` guard rows at exactly `1.0`; a blanket multiply
+corrupts them to `1e7`. Reload-from-corrected-source (this doc's canonical process) avoids that.
+
+### Two open items
+
+1. **Residual `-9999` — genuinely-missing conversion rows (data gap, NOT scaling).** After the
+   fix: **Demo1 = 70 items / 630 rows**, **Demo2 = 201 items / 3417 rows** still show `-9999`.
+   These items have **no F41002 row for the needed pair** (Demo2 source F41002 = only 107 rows
+   vs Demo1 53K vs tr 186K), transacting LB→EA, FT→EA, CS→EA, etc. — physical, item-specific
+   conversions whose correct factor is unknowable. `tr` has 0. **Options:** (a) leave, documented;
+   (b) suppress the `-9999` sentinel in `v6_006_uom_conv`/`usp6getasof_v2` (show blank) for the
+   demo; (c) fabricate plausible factors (rejected — invented data). **Owner decision.**
+2. **Line-id fix did NOT propagate to current staging.** The big transactional tables load
+   **incrementally**, so the value-only source UPDATE didn't re-pull them: Demo1 staging `gllnid`
+   still 0.17-scale vs tr's correct 491-scale. Line-ids are `$`-neutral identity fields (recon
+   unaffected), so this is latent. To propagate, the transactional F-tables need a **full
+   (non-incremental) reload** — fold into the next canonical full rebuild (with AAIDocType handled).
