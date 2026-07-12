@@ -35,7 +35,7 @@
 <script src="config.js"></script>
 <script src="sidebar.js"></script>
 <script defer src="../Tools/help-sidebar.js"></script>
-<script src="vendor/xlsx.full.min.js" defer></script>
+<script src="vendor/xlsx-js-style.min.js" defer></script>
 <style>
   :root {
     --navy:        #1f2d4a;
@@ -3588,31 +3588,68 @@
     });
   }
 
+  // ---- audit-quality Excel builder (title band, navy header, bordered body,
+  //      bold total row, money format on numeric columns) — mirrors home.html. ----
+  const AUDIT_NUM_FMT = '#,##0.00;(#,##0.00)';
+  function _auditBorder(rgb) { const s = { style: 'thin', color: { rgb } }; return { top: s, bottom: s, left: s, right: s }; }
+  function buildAuditWorkbook(opts) {
+    if (typeof XLSX === 'undefined') { return false; }
+    const cols = opts.columns || [], ncol = cols.length || 1, titleLines = opts.titleLines || [];
+    const aoa = [];
+    titleLines.forEach(t => { const row = new Array(ncol).fill(''); row[0] = t; aoa.push(row); });
+    if (titleLines.length) aoa.push(new Array(ncol).fill(''));
+    const headRowIdx = aoa.length;
+    aoa.push(cols.map(c => c.label));
+    (opts.rows || []).forEach(r => aoa.push(r.slice()));
+    let totalRowIdx = -1;
+    if (opts.totalRow) { totalRowIdx = aoa.length; aoa.push(opts.totalRow.slice()); }
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    const range = XLSX.utils.decode_range(ws['!ref']);
+    for (let t = 0; t < titleLines.length; t++) {
+      const tref = XLSX.utils.encode_cell({ r: t, c: 0 }); if (!ws[tref]) continue;
+      ws[tref].s = { font: { bold: t === 0, sz: t === 0 ? 14 : 10, color: { rgb: t === 0 ? '1F2D4A' : '6B7280' } } };
+    }
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const href = XLSX.utils.encode_cell({ r: headRowIdx, c }); if (!ws[href]) continue;
+      ws[href].s = { font: { bold: true, color: { rgb: 'FFFFFF' } }, fill: { patternType: 'solid', fgColor: { rgb: '1F2D4A' } }, alignment: { horizontal: (cols[c] && cols[c].num) ? 'right' : 'left', vertical: 'center' }, border: _auditBorder('D0D0D0') };
+    }
+    for (let rr = headRowIdx + 1; rr <= range.e.r; rr++) {
+      const isTotal = rr === totalRowIdx;
+      for (let cc = range.s.c; cc <= range.e.c; cc++) {
+        const cref = XLSX.utils.encode_cell({ r: rr, c: cc }); const cell = ws[cref]; if (!cell) continue;
+        cell.s = cell.s || {}; cell.s.border = _auditBorder('ECECEC');
+        if (cols[cc] && cols[cc].num) { cell.z = cols[cc].fmt || AUDIT_NUM_FMT; cell.s.alignment = { horizontal: 'right' }; }
+        if (isTotal) { cell.s.font = { bold: true, color: { rgb: '1F2D4A' } }; cell.s.fill = { patternType: 'solid', fgColor: { rgb: 'F1F4F9' } }; }
+      }
+    }
+    ws['!cols'] = cols.map(c => ({ wch: c.num ? 16 : Math.max(14, (c.label || '').length + 4) }));
+    if (titleLines.length) { ws['!merges'] = ws['!merges'] || []; for (let m = 0; m < titleLines.length; m++) ws['!merges'].push({ s: { r: m, c: 0 }, e: { r: m, c: ncol - 1 } }); }
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, (opts.sheetName || 'Report').slice(0, 31));
+    XLSX.writeFile(wb, opts.fileName || RRV8.exportName({ surface: 'Report' }));
+    return true;
+  }
+  function _dmaaiDbName() {
+    const db = (typeof activeDb === 'function') ? activeDb() : null;
+    return (db && db.n) || (document.getElementById('js-topbar-db') || {}).textContent || 'RapidReconciler';
+  }
+
   function exportGridToExcel(module) {
     if (typeof XLSX === 'undefined') { return; }
-    const st = _gridState[module];
     const rows = filteredRows(module);
     const cols = visibleColumns(module);
     const stamp = new Date();
-    const stampStr = stamp.toISOString().slice(0, 13).replace(/[-:T]/g, '').slice(0, 11) + 'h';
-    const banner = module + ' DMAAIs Generated ' +
-      stamp.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) +
-      ' ' + stamp.toLocaleTimeString('en-US');
-
-    const aoa = [];
-    aoa.push([banner].concat(Array(Math.max(0, cols.length - 1)).fill('')));
-    aoa.push(cols.map(c => c.label));
-    rows.forEach(r => aoa.push(cols.map(c => r[c.key] || '')));
-
-    const ws = XLSX.utils.aoa_to_sheet(aoa);
-    if (cols.length > 1) {
-      ws['!merges'] = ws['!merges'] || [];
-      ws['!merges'].push({ s: { r: 0, c: 0 }, e: { r: 0, c: cols.length - 1 } });
-    }
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, module);
-    const fn = RRV8.exportName({ surface: 'DMAAI', drill: module });
-    XLSX.writeFile(wb, fn);
+    buildAuditWorkbook({
+      sheetName: module,
+      fileName: RRV8.exportName({ surface: 'DMAAI', drill: module }),
+      titleLines: [
+        module + ' DMAAIs',
+        'Database ' + _dmaaiDbName(),
+        'Generated ' + stamp.toLocaleString('en-US') + '  ·  ' + rows.length.toLocaleString('en-US') + ' row' + (rows.length !== 1 ? 's' : '')
+      ],
+      columns: cols.map(c => ({ label: c.label })),
+      rows: rows.map(r => cols.map(c => (r[c.key] == null ? '' : r[c.key])))
+    });
   }
 
   // ============================================================
@@ -3847,13 +3884,18 @@
       return;
     }
     const rows = modelFilteredRows();
-    const aoa = [MODEL_COLUMNS.map(c => c.label)].concat(
-      rows.map(r => MODEL_COLUMNS.map(c => r[c.key] == null ? '' : r[c.key]))
-    );
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet(aoa);
-    XLSX.utils.book_append_sheet(wb, ws, 'Model');
-    XLSX.writeFile(wb, RRV8.exportName({ surface: 'AAIModel' }));
+    // All columns are JDE mapping identifiers (text) — no numeric total is meaningful.
+    buildAuditWorkbook({
+      sheetName: 'Model',
+      fileName: RRV8.exportName({ surface: 'AAIModel' }),
+      titleLines: [
+        'AAI Model — F4095 Baseline',
+        'Database ' + _dmaaiDbName(),
+        'Generated ' + new Date().toLocaleString('en-US') + '  ·  ' + rows.length.toLocaleString('en-US') + ' row' + (rows.length !== 1 ? 's' : '')
+      ],
+      columns: MODEL_COLUMNS.map(c => ({ label: c.label })),
+      rows: rows.map(r => MODEL_COLUMNS.map(c => (r[c.key] == null ? '' : r[c.key])))
+    });
   }
 
   // Fire-and-forget. Model is independent of the Analysis flow.
@@ -4036,13 +4078,34 @@
       return;
     }
     const rows = excGlcFilteredRows();
-    const aoa = [EXC_GLC_COLUMNS.map(c => c.label)].concat(
-      rows.map(r => EXC_GLC_COLUMNS.map(c => r[c.key] == null ? '' : r[c.key]))
-    );
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet(aoa);
-    XLSX.utils.book_append_sheet(wb, ws, 'ExceptionGL');
-    XLSX.writeFile(wb, RRV8.exportName({ surface: 'ExceptionGL' }));
+    const isNumCol = c => c.numFmt === 'money' || c.numFmt === 'qty';
+    const sumQty = rows.reduce((s, r) => s + (Number(r.Quantity) || 0), 0);
+    const sumAmt = rows.reduce((s, r) => s + (Number(r.Amount) || 0), 0);
+    buildAuditWorkbook({
+      sheetName: 'ExceptionGL',
+      fileName: RRV8.exportName({ surface: 'ExceptionGL' }),
+      titleLines: [
+        'Exception GL',
+        'Database ' + _dmaaiDbName(),
+        'Generated ' + new Date().toLocaleString('en-US') + '  ·  ' + rows.length.toLocaleString('en-US') + ' row' + (rows.length !== 1 ? 's' : '')
+      ],
+      columns: EXC_GLC_COLUMNS.map(c => ({
+        label: c.label,
+        num: isNumCol(c),
+        fmt: c.numFmt === 'qty' ? '#,##0.00;(#,##0.00)' : undefined
+      })),
+      rows: rows.map(r => EXC_GLC_COLUMNS.map(c => {
+        const v = r[c.key];
+        if (isNumCol(c)) { const n = Number(v); return isFinite(n) ? n : ''; }
+        return v == null ? '' : v;
+      })),
+      totalRow: EXC_GLC_COLUMNS.map((c, i) => {
+        if (i === 0) return 'TOTAL — ' + rows.length.toLocaleString('en-US') + ' row' + (rows.length !== 1 ? 's' : '');
+        if (c.key === 'Quantity') return Math.round(sumQty * 1000) / 1000;
+        if (c.key === 'Amount') return Math.round(sumAmt * 100) / 100;
+        return '';
+      })
+    });
   }
 
   // Fire-and-forget. Exception GL is independent of the Analysis flow.

@@ -3876,14 +3876,41 @@ function updateLotDetailPill() {
       'location','lot','glclass','transdate','periodends','comm',
       'runqty','runamt','dt','doc','qty','uom','cost','val','qtyvar','amtvar'
     ];
+    // Human-readable header labels (audit quality — no raw view column names).
+    const LABELS = {
+      companynumber: 'Company', longaccount: 'Account', ukid: 'UKID', branch: 'Branch',
+      itemnumber: 'Item', location: 'Location', lot: 'Lot', glclass: 'GL Class',
+      transdate: 'Trans Date', periodends: 'Period', comm: 'Comm',
+      runqty: 'Running Qty', runamt: 'Running Amt', dt: 'DT', doc: 'Doc',
+      qty: 'Qty', uom: 'UOM', cost: 'Unit Cost', val: 'Value', qtyvar: 'Qty Var', amtvar: 'Amt Var'
+    };
     const moneyKeys = new Set(['runamt','cost','val','amtvar']);
     const qtyKeys   = new Set(['runqty','qty','qtyvar']);
     const intKeys   = new Set(['ukid','doc']);
+    // Running balances + unit cost aren't additive; only movement/variance
+    // columns roll into a meaningful Grand Summaries total.
+    const sumKeys   = new Set(['qty','val','qtyvar','amtvar']);
     const stamp = new Date().toLocaleString('en-US', {
       weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
       hour: 'numeric', minute: '2-digit'
     });
-    const banner = ['Item Roll Forward Generated ' + stamp].concat(new Array(headers.length - 1).fill(''));
+    const branchSeg = String(row.Branch || '').trim() || 'branch';
+    const itemSeg   = String(row.ItemNumber || '').trim() || 'item';
+    const banner = ['Item Roll Forward — Item ' + itemSeg + ' @ Branch ' + branchSeg +
+      '  ·  ' + rows.length.toLocaleString('en-US') + ' ledger row' + (rows.length !== 1 ? 's' : '') +
+      '  ·  Generated ' + stamp].concat(new Array(headers.length - 1).fill(''));
+    const headerRow = headers.map(k => LABELS[k] || k);
+    const sums = {};
+    rows.forEach(r => headers.forEach(k => {
+      if (!sumKeys.has(k)) return;
+      const n = Number(r[k]);
+      if (Number.isFinite(n)) sums[k] = (sums[k] || 0) + n;
+    }));
+    const summary = headers.map((k, i) => {
+      if (i === 0) return 'Grand Summaries';
+      if (sumKeys.has(k)) return Math.round((sums[k] || 0) * 1000) / 1000;
+      return '';
+    });
     const dataRows = rows.map(r => headers.map(k => {
       const v = r[k];
       if (v === null || v === undefined || v === '') return '';
@@ -3897,25 +3924,24 @@ function updateLotDetailPill() {
       }
       return typeof v === 'string' ? v.trim() : v;
     }));
-    const aoa = [banner, headers].concat(dataRows);
+    const aoa = [banner, headerRow, summary].concat(dataRows);
     const sheet = XLSX.utils.aoa_to_sheet(aoa);
     sheet['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: headers.length - 1 } }];
-    sheet['!rows'] = [{ hpt: 22 }, { hpt: 18 }];
+    sheet['!rows'] = [{ hpt: 22 }, { hpt: 18 }, { hpt: 18 }];
     const moneyFmt = '$#,##0.00;[Red]($#,##0.00);-';
     const qtyFmt   = '#,##0.00;[Red](#,##0.00);-';
     headers.forEach((k, i) => {
       const fmt = moneyKeys.has(k) ? moneyFmt : (qtyKeys.has(k) ? qtyFmt : null);
       if (!fmt) return;
+      // Format the Grand Summaries row (index 2) + every data row (3..N).
       for (let r = 2; r < aoa.length; r++) {
         const ref = XLSX.utils.encode_cell({ r: r, c: i });
         if (sheet[ref] && typeof sheet[ref].v === 'number') sheet[ref].z = fmt;
       }
     });
-    sheet['!cols'] = headers.map(h => ({ wch: Math.min(22, Math.max(10, h.length + 4)) }));
+    sheet['!cols'] = headers.map(k => ({ wch: Math.min(22, Math.max(10, (LABELS[k] || k).length + 4)) }));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, sheet, 'Item Roll Forward');
-    const branchSeg = String(row.Branch || '').trim() || 'branch';
-    const itemSeg   = String(row.ItemNumber || '').trim() || 'item';
     const fname = RRV8.exportName({ surface: 'ItemRollForward', scope: branchSeg, drill: itemSeg });
     XLSX.writeFile(wb, fname);
     toast('Downloaded ' + fname);
@@ -4547,21 +4573,41 @@ function updateLotDetailPill() {
   const UOM_REPORT = {
     viewName: 'v_integrity4_uom_conv',
     fileName: 'UOMConversion',
+    title:    'UOM Conversions — Missing Setup',
     demoFile: 'v-integrity4-uom-conv',
-    columns:  ['CompanyNumber', 'BranchPlant', 'ShortItem', 'ItemNumber', 'ThirdItem', 'TransUOM', 'PrimeUOM']
+    columns:  ['CompanyNumber', 'BranchPlant', 'ShortItem', 'ItemNumber', 'ThirdItem', 'TransUOM', 'PrimeUOM'],
+    columnLabels: {
+      CompanyNumber: 'Company', BranchPlant: 'Branch/Plant', ShortItem: 'Short Item',
+      ItemNumber: 'Item', ThirdItem: 'Third Item', TransUOM: 'Trans UOM', PrimeUOM: 'Prime UOM'
+    }
   };
 
+  // Titled, human-labeled Excel for the simple identifier-only setup reports
+  // (UOM Conversions). No numeric columns, so no total row is meaningful.
   function exportRowsToExcel(report, rows) {
     if (typeof XLSX === 'undefined') {
       toast('Excel library still loading - try again in a moment');
       return false;
     }
     if (!rows || !rows.length) return false;
-    const aoa = [report.columns].concat(
-      rows.map(r => report.columns.map(c => r[c] == null ? '' : r[c]))
-    );
-    const wb = XLSX.utils.book_new();
+    const labels = report.columnLabels || {};
+    const ncol = report.columns.length;
+    const db = (window.RRDB && RRDB.name && RRDB.name()) || 'RapidReconciler';
+    const stamp = new Date().toLocaleString('en-US', {
+      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit'
+    });
+    const banner = [(report.title || report.fileName) +
+      '  ·  Database ' + db +
+      '  ·  ' + rows.length.toLocaleString('en-US') + ' row' + (rows.length !== 1 ? 's' : '') +
+      '  ·  Generated ' + stamp].concat(new Array(Math.max(0, ncol - 1)).fill(''));
+    const headerRow = report.columns.map(c => labels[c] || c);
+    const dataRows = rows.map(r => report.columns.map(c => r[c] == null ? '' : r[c]));
+    const aoa = [banner, headerRow].concat(dataRows);
     const ws = XLSX.utils.aoa_to_sheet(aoa);
+    if (ncol > 1) ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: ncol - 1 } }];
+    ws['!rows'] = [{ hpt: 22 }, { hpt: 18 }];
+    ws['!cols'] = report.columns.map(c => ({ wch: Math.min(24, Math.max(10, (labels[c] || c).length + 4)) }));
+    const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Report');
     XLSX.writeFile(wb, RRV8.exportName({ surface: report.fileName }));
     return true;
