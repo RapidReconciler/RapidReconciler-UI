@@ -419,6 +419,23 @@ window.RRV8 = window.RRV8 || {};
     '- Closed/prior periods are already journaled — never prescribe an entry for them; a carry-forward\'s source is the prior period.',
     '- Audience is JDE-fluent finance, not IT: plain accountant English; JDE artifacts (F4111, F0911, AAI) are fine, no plumbing terms.'
   ].join('\n');
+  // ANALYST_GROUNDING — the AI's compact copy of the transaction-variance playbook.
+  // Prepended to the analyst-facing AI prompts (the Transaction-Variance recurrence /
+  // "Investigate recurrence" note) so the reads reason per-document instead of
+  // hallucinating an in-transit / stranded-leg cause. SOURCE OF TRUTH =
+  // AnalysisGuides/transaction-detail-analysis.md; keep this in sync with it.
+  // Owner (analyst SME) curates the rules.
+  window.RRV8.ANALYST_GROUNDING = [
+    'ANALYST POLICY (transaction variance) — reason from these rules:',
+    '- A transaction variance reconciles ONE document: F4111 (item ledger / cardex) extended value vs F0911 (GL / ledger) for the SAME document and account. Variance = cardex − ledger for that document. Explain each document on its own terms.',
+    '- Check DUPLICATE SALES FIRST — rare, but cheap and definitive, so screen for it before any cost / mapping / timing reasoning. When a line is written to the cardex (F4111 / RTransactions) twice, the cardex is overstated by that line while the GL has it once, so the variance EQUALS the duplicated line. dbo.RDuplicateSales flags it. If the facts carry a duplicate-sales flag, LEAD with it — the fix is at the source (reverse the double relief), never a journal entry.',
+    '- A transfer ships and receives as TWO INDEPENDENT transactions; each reconciles on its own document. Never explain one leg\'s variance by whether or when the other leg posted.',
+    '- In-transit reconciliation (ST↔OT pairing, the 4220 / 4245 in-transit clearing account, the transfer-order Orders page) is a SEPARATE surface. Do NOT invoke a stranded-leg / in-transit / clearing model to explain a per-document cardex-vs-ledger variance — that conflation is wrong.',
+    '- A GL-ONLY row (cardex 0, ledger ≠ 0) is most often a NON-STOCK / surcharge line: the order line type (F4211 / F42119 SDLNTY) is "N", so it posts to the GL but moves no inventory (no F4111 row) — expected behavior, not a variance to chase. Check the order line type before flagging a GL-only row; a non-stock surcharge needs no correction. Do NOT call it a stranded leg or escalate it.',
+    '- Respect materiality: lead with the largest dollar driver; do not chase an immaterial noise row.',
+    '- This is SOURCE / analyst work — fix the double-write, the AAI mapping, or the period at the source. The accountant owns journal entries; the analyst does not post JEs.',
+    '- Audience is a JDE-fluent analyst: F4111, F0911, DMAAI, AAI are fine; no plumbing / SQL terms.'
+  ].join('\n');
 })();
 
 /*

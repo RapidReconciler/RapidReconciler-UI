@@ -345,6 +345,14 @@ The F4111 Data and F0911 Inv Acct sections both contain raw rows; the **RR Summa
 
 The RR Summary is the section to read first. The F4111 and F0911 sections back up the diagnosis once the Summary points you at the right rows.
 
+**Rule 6 -- One document reconciles on its own; screen for a duplicate relief first.**
+
+A transaction variance reconciles **one document**: the F4111 (item ledger / cardex) extended value against the F0911 (GL / ledger) for the *same* company, document, and account. The variance is `cardex − ledger` for that document and nothing else. Two habits follow from this:
+
+- **Duplicate sales are the first-order check.** They are rare, but the test is cheap and definitive, so run it before reaching for a cost, mapping, or timing explanation. When a line is written to the cardex more than once (two F4111 relief rows for the same order + line) but the GL books it once, the cardex is overstated by exactly that line and the **variance equals the duplicated relief**. `dbo.RDuplicateSales` is the ready-made flag -- it keys on OrderNumber + OrderType + LineID + item / branch / location / lot, with `Records` as the repeat count and `Amount` as the duplicate value. When it fires, lead with it and fix the double relief at the source (an inventory adjustment); it is never a journal entry. Full procedure in Section 5.17.
+
+- **A transfer's two legs are independent, and in-transit is a separate surface.** A transfer ships and receives as two independent transactions (ST shipment, OT receipt); each reconciles on its own document. Never explain one leg's variance by whether or when the other leg posted. The pairing of the two legs -- the ST↔OT match, the 4220 / 4245 in-transit clearing account, the exclusions -- is a **different reconciliation** that lives on the transfer-order Orders page (see `../RRUniversity/transfer-order-reconcile.html`). Do **not** invoke a stranded-leg or in-transit clearing model to explain a per-document cardex-vs-ledger variance. That conflation produces a plausible-but-wrong diagnosis on a variance that is really a duplicate relief, an account mismatch, or a period mismatch.
+
 ---
 
 ## Section 4: How RapidReconciler Matches Transactions
@@ -450,6 +458,8 @@ This means the **true variance is larger than what RapidReconciler is showing**.
 - F4111 Total = $0.00
 - F0911 Total has a non-zero amount
 - RR Summary shows CardexAmount = 0, LedgerAmount = non-zero
+
+**Check the order line type FIRST.** The most common GL-only cause is a **non-stock / surcharge line** (line type `N`, `F`, and similar in the Header Comp / Orders section -- the "Non-stock line posted to inventory account" row below). A non-stock line routes a charge to an inventory GL class but writes **no cardex**, so a GL-only row for it is *expected behavior*, not a defect -- rule it out before investigating the manual-entry causes. It is often immaterial (a small surcharge on a shipped item); confirm the line type off the export's `LineTy` column and move on.
 
 **Common causes:**
 
@@ -907,6 +917,8 @@ The usual root cause is **R30822 (Frozen Cost Update) changing the standard afte
 ### 5.17 Duplicate Shipment -- Same Order Line Relieved Twice
 
 > Numbered 5.17 in this guide; the analyzer's internal pattern ID is **5.18**.
+
+> **First-order check.** Screen for this pattern before reaching for a cost, mapping, or timing explanation -- it is rare but cheap to confirm and definitive when it fires. `dbo.RDuplicateSales` flags the affected order lines directly (keyed on OrderNumber + OrderType + LineID + item / branch / location / lot; `Records` is the repeat count, `Amount` is the duplicate value), so you do not have to eyeball the cardex to find it. On the Transactions page the flag arrives as the Comment "check duplicate sales integrity" and lands the row on the Duplicate Sales card. When a document is flagged, the variance equals the duplicate relief and the fix is at the source -- do not chase an in-transit or account explanation for it.
 
 **Symptoms:**
 - A **sales (SO / RI ship)** or **transfer (OT)** document

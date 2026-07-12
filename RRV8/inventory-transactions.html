@@ -6505,8 +6505,25 @@
   // different root causes, so we surface each type's cardex→GL account swap, its
   // net/gross, the matching DMAAI model routing (AAI · GL class · expected
   // account), and whether the model matches the cardex. Facts only.
+  // Is this grid row flagged as a duplicate sale? The 008 classifier stamps
+  // Comment='check duplicate sales integrity' (from dbo.RDuplicateSales via
+  // usp8_txv_flags) → _pattern '5.18'. Belt-and-suspenders: also consult the
+  // preloaded RDuplicateSales index by (Company|OT|Order) when it landed.
+  function _txvIsDupSale(r) {
+    if (String(r._pattern || '') === '5.18') return true;
+    if (String(r.Comment || '').trim().toLowerCase() === 'check duplicate sales integrity') return true;
+    try {
+      if (typeof _duplicateSalesIndex !== 'undefined' && _duplicateSalesIndex) {
+        var co = String(r.CompanyNumber || '').trim();
+        var ot = String(r.OT || '').trim();
+        var ord = String(r.OrderNumber || '').trim();
+        if (co && ot && ord && _duplicateSalesIndex.has(co + '|' + ot + '|' + ord)) return true;
+      }
+    } catch (_) {}
+    return false;
+  }
   function _txvFingerprint(byRoute) {
-    var rows = filteredRows(), net = 0, gross = 0, perSet = {}, byType = {};
+    var rows = filteredRows(), net = 0, gross = 0, perSet = {}, byType = {}, dupByKey = {};
     rows.forEach(function (r) {
       var v = Number(r.Variance) || 0; net += v; gross += Math.abs(v);
       var p = String(r.PeriodEnds || '').slice(0, 10); if (p) perSet[p] = 1;
@@ -6517,18 +6534,40 @@
       var a = String(r.LongAccount || '').trim();
       if (a && (Number(r.CardexAmount) || 0) !== 0) g.cx[a] = 1;
       if (a && (Number(r.LedgerAmount) || 0) !== 0) g.gl[a] = 1;
+      // First-order duplicate-sales screen: a flagged doc's cardex carries the
+      // line twice while the GL has it once, so this row's variance IS the
+      // duplicated relief. Group per (co|ot|order|doc) so one fact per document.
+      if (_txvIsDupSale(r)) {
+        var dk = String(r.CompanyNumber || '').trim() + '|' + ot + '|' + String(r.OrderNumber || '').trim() + '|' + String(r.DocNumber || '').trim();
+        var d = dupByKey[dk] || (dupByKey[dk] = { co: String(r.CompanyNumber || '').trim(), ot: ot, dt: dt, order: String(r.OrderNumber || '').trim(), doc: String(r.DocNumber || '').trim(), variance: 0, count: 0 });
+        d.variance += v; d.count++;
+      }
     });
+    var dupSales = Object.keys(dupByKey).map(function (dk) {
+      var d = dupByKey[dk]; d.variance = Math.round(d.variance * 100) / 100; return d;
+    }).sort(function (a, b) { return Math.abs(b.variance) - Math.abs(a.variance); });
     var types = Object.keys(byType).map(function (k) {
       var g = byType[k], cx = Object.keys(g.cx), gl = Object.keys(g.gl);
       var model = byRoute ? _txvModelFor(byRoute, g.co, g.ot, g.dt) : null;
       var modelMatch = !!(model && model.accts.length && cx.some(function (a) { return model.accts.indexOf(a) >= 0; }));
       return { key: g.key, count: g.count, net: Math.round(g.net * 100) / 100, gross: Math.round(g.gross * 100) / 100, cx: cx, gl: gl, model: model, modelMatch: modelMatch };
     }).sort(function (a, b) { return b.gross - a.gross; });
-    return { rows: rows.length, net: Math.round(net * 100) / 100, gross: Math.round(gross * 100) / 100, types: types, periods: Object.keys(perSet).sort(), homogeneous: types.length === 1 };
+    return { rows: rows.length, net: Math.round(net * 100) / 100, gross: Math.round(gross * 100) / 100, types: types, periods: Object.keys(perSet).sort(), homogeneous: types.length === 1, dupSales: dupSales };
   }
   function _txvFingerprintText(fp) {
     var L = [];
     L.push('Drilled slice: ' + fp.rows + ' rows, net ' + _txMoney(fp.net) + ', gross ' + _txMoney(fp.gross) + '; periods ' + (fp.periods.join(', ') || 'n/a') + '.');
+    // First-order duplicate-sales screen — surfaced ABOVE the per-type breakdown so
+    // the AI leads with it when present (grounding forbids inventing the number, so
+    // this fact is the only way the note can cite a real duplicate).
+    if (fp.dupSales && fp.dupSales.length) {
+      L.push('DUPLICATE-SALES CHECK (first-order, from dbo.RDuplicateSales): ' + fp.dupSales.length + ' document(s) in this slice are flagged as a duplicated cardex relief — the F4111 line was written more than once while the GL booked it once, so the variance EQUALS the duplicate. This is a source fix (reverse the double relief), NOT a journal entry:');
+      fp.dupSales.forEach(function (d) {
+        L.push('  - Company ' + (d.co || '?') + ', order ' + (d.order || '?') + ' (' + (d.ot || '—') + '/' + (d.dt || '—') + '), doc ' + (d.doc || '?') + ': variance ' + _txMoney(d.variance) + ' = the duplicated cardex line.');
+      });
+    } else {
+      L.push('Duplicate-sales check (first-order): no document in this slice carries the RDuplicateSales flag.');
+    }
     L.push('By transaction type (Type · OrderType · DocType):');
     fp.types.forEach(function (t) {
       L.push('  - ' + t.key + ' — ' + t.count + ' rows, net ' + _txMoney(t.net) + ', gross ' + _txMoney(t.gross)
@@ -6557,14 +6596,15 @@
     _txvLoadDmaaiModel().then(function (byRoute) {
       var fp = _txvFingerprint(byRoute);
       var prompt =
-        'You are RapidReconciler AI. Give a SHORT, scannable recurrence note — about 80 words, never more than 110. Use ONLY the fingerprint facts; never invent an account, number, DMAAI id, or GL class.\n\n'
+        (window.RRV8 && RRV8.ANALYST_GROUNDING ? RRV8.ANALYST_GROUNDING + '\n\n' : '')
+        + 'You are RapidReconciler AI. Give a SHORT, scannable recurrence note — about 80 words, never more than 110. Use ONLY the fingerprint facts; never invent an account, number, DMAAI id, or GL class.\n\n'
         + 'Card: ' + (_TXV_CARD_TITLE[code] || code || 'variance') + '. ' + post.posture + '\n'
         + 'Company ' + co + ', period ' + (per ? formatPeriod(per) : 'current') + '. RR’s F4095 extract is FILTERED, so confirm setup against live JDE.\n\n'
         + _txvFingerprintText(fp) + '\n\n'
         + 'Return EXACTLY three short markdown sections, each a bold label then its content, and nothing else:\n'
-        + '**Likely cause:** one sentence appropriate to THIS card — configuration for mismatches; timing or a stranded leg for Make-to-Order / Transfers / Direct Ship / Intercompany; a genuine cost or variance for the unclassified cards.\n'
-        + '**Checked:** 2-4 bullets ("- ") naming the concrete coordinates — company, order type, doc type, the cardex→GL account swap, and (when a Model DMAAI line is present) the AAI and whether the model matches. One bullet per transaction-type pattern.\n'
-        + '**Do next:** 1-2 bullets — monitor going forward; confirm against the full JDE F4095 (RR’s copy is filtered) and, when the config looks clean, check Oracle / My Oracle Support for a known issue (SAR).\n'
+        + '**Likely cause:** one sentence appropriate to THIS card. If the facts carry a duplicate-sales flag, LEAD with it (a cardex line written twice; the variance equals the duplicate). Otherwise: configuration / AAI mapping for account mismatches; a genuine cost or variance for the unclassified cards. Do NOT attribute a per-document variance to a stranded leg or in-transit clearing — each shipment and receipt reconciles independently and in-transit is a separate surface.\n'
+        + '**Checked:** 2-4 bullets ("- ") naming the concrete coordinates — company, order type, doc type, the cardex→GL account swap (or the duplicated doc + variance when flagged), and (when a Model DMAAI line is present) the AAI and whether the model matches. One bullet per pattern.\n'
+        + '**Do next:** 1-2 bullets — for a duplicate sale, reverse the duplicated cardex relief at the source (an inventory adjustment, not a journal entry); otherwise monitor going forward, confirm against the full JDE F4095 (RR’s copy is filtered), and when the config looks clean check Oracle / My Oracle Support for a known issue (SAR).\n'
         + 'No preamble, no extra headings, no closing paragraph.';
       return rrFetch('api/v1/ai/explain', { method: 'POST', body: { prompt: prompt } });
     }).then(function (r) {
