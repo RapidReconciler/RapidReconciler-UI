@@ -481,6 +481,18 @@
   .audit-who { font-weight: 700; color: #4a5568; }
   .audit-empty { font-size: 13.5px; color: var(--text-muted); padding: 22px 6px; text-align: center; }
   @media (max-width: 640px) { .audit-row { grid-template-columns: 1fr; gap: 6px; } }
+  /* Completed-review summary cards — the hero content of the Audit tab. */
+  .audit-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; margin: 2px 0 4px; }
+  .audit-card { border: 1px solid var(--rule); border-left: 3px solid var(--green); border-radius: 10px; background: #fff; padding: 13px 15px; }
+  .audit-card-head { display: flex; align-items: center; gap: 9px; }
+  .audit-card-title { font-size: 15px; font-weight: 800; color: var(--navy); }
+  .audit-card-head .audit-badge-remediation { margin-left: auto; }
+  .audit-card-amt { font-family: 'Source Sans 3', sans-serif; font-weight: 800; font-size: 16px; color: var(--navy); white-space: nowrap; }
+  .audit-card-scope { font-size: 12px; font-weight: 600; color: var(--text-muted); margin-top: 3px; }
+  .audit-card-msg { font-size: 13px; color: #2b3345; line-height: 1.5; margin-top: 9px; white-space: pre-wrap; word-break: break-word; }
+  .audit-card-msg.is-empty { color: var(--text-muted); font-style: italic; }
+  .audit-card-meta { font-size: 12px; color: var(--text-muted); margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--rule); }
+  .audit-sys-head { font-size: 12.5px; font-weight: 800; letter-spacing: .02em; text-transform: uppercase; color: var(--text-muted); margin: 20px 0 4px; }
   /* Soft-grey tray behind the company cards so the white cards read as distinct,
      liftable objects rather than blending into the white container. */
   .acct-grid-wrap { display: block; background: #e8ecf3; border: 1px solid var(--rule); border-radius: 10px; padding: 14px; }
@@ -492,7 +504,8 @@
   .subnav-tab.is-active { color: var(--navy); border-bottom-color: var(--blue); }
   /* New accountant palettes hide outside the accountant view (JS also gates). */
   body:not([data-view-role="accountant"]) #acctAccount,
-  body:not([data-view-role="accountant"]) #acctPerpetual { display: none !important; }
+  body:not([data-view-role="accountant"]) #acctPerpetual,
+  body:not([data-view-role="accountant"]) #acctAudit { display: none !important; }
   /* Account palette — per-account rows indented under each company subtotal. The
      company subtotal row reuses .acct-g-co so it ties visually to the Rec line. */
   tbody.acct-g-cogroup + tbody.acct-g-cogroup .acct-g-co td { border-top: 1px solid var(--rule); }
@@ -888,6 +901,11 @@
   .txv-tag-done { background: var(--green-pale); color: var(--green-deep); }
   .txv-card.is-complete { opacity: .6; }
   .txv-card.is-complete .txv-card-amt { color: var(--text-muted); }
+  /* Two-step (UI-27): a card whose finding was drafted from the worklist Save but
+     not yet resolved — soft blue tint + a "Finding drafted" tag calling for review
+     (distinct from the dimmed, done .is-complete state). */
+  .txv-tag-draft { background: #e6effb; color: #2b5c9e; }
+  .txv-card.is-draft { background: #f5f9ff; }
   .txv-card-amt { font-family: 'Source Sans 3', sans-serif; font-weight: 800; font-size: 26px; line-height: 1.05; color: var(--navy); letter-spacing: -0.01em; white-space: nowrap; text-align: right; }
   .txv-card-meta { font-size: 12px; color: var(--text-muted); margin-top: 3px; }
   .txv-card-cause { font-size: 13px; line-height: 1.5; color: var(--text-soft); margin-top: 8px; }
@@ -7407,16 +7425,22 @@
         var recurChip = p.recurPrior
           ? '<span class="txv-tag txv-tag-recur" title="This category was marked resolved in ' + esc(_pwLabelFull(p.recurPrior)) + ' but is material again this period — the source fix did not hold.">Recurred &middot; was resolved ' + esc(_pwLabel(p.recurPrior)) + '</span>'
           : '';
-        // Reopen prefills the saved finding to edit; a fresh resolve starts blank.
-        var prefill = (p.done && p.cause) ? p.cause : '';
+        // A saved finding prefills the editor for review. BOTH the 'worked' draft
+        // (pushed from the worklist Save) and the 'complete' state carry the note,
+        // so reopen-to-edit and review-a-draft both start from the saved text; only
+        // a never-touched card starts blank. A 'worked'-but-not-'complete' card is a
+        // DRAFT — the two-step: finding captured on the worklist, confirmed here →
+        // complete → lands on the accountant Audit tab.
+        var draft = !!(p.rec && p.rec.status === 'worked');
+        var prefill = (p.rec && p.rec.note) ? p.rec.note : '';
         var editBtn = p.done
           ? '<button type="button" class="txv-btn" data-txv-act="reopen">Reopen to edit</button>'
-          : '<button type="button" class="txv-btn" data-txv-act="resolve">Mark resolved</button>';
-        return '<div class="txv-card is-' + acc + (p.done ? ' is-complete' : '') + '"'
+          : '<button type="button" class="txv-btn' + (draft ? ' txv-btn-primary' : '') + '" data-txv-act="resolve">' + (draft ? 'Review &amp; resolve' : 'Mark resolved') + '</button>';
+        return '<div class="txv-card is-' + acc + (p.done ? ' is-complete' : (draft ? ' is-draft' : '')) + '"'
           + ' data-txv-card="1" data-cc="' + esc(p.code) + '" data-cp="' + esc(focusP) + '" data-co="' + esc(solo) + '" data-camt="' + esc(String(p.amount)) + '">'
           + '<div class="txv-card-top"><div>'
           + '<div class="txv-card-title">' + esc(p.title) + '<span class="txv-tag txv-tag-' + acc + '">' + esc(KIND_TAG[p.kind] || 'Review') + '</span>'
-          + (p.done ? '<span class="txv-tag txv-tag-done">✓ Worked</span>' : '') + recurChip + '</div>'
+          + (p.done ? '<span class="txv-tag txv-tag-done">✓ Resolved</span>' : (draft ? '<span class="txv-tag txv-tag-draft">Finding drafted</span>' : '')) + recurChip + '</div>'
           + '<div class="txv-card-meta">' + esc(p.meta) + '</div></div>'
           + '<div class="txv-card-amt">' + money(p.amount) + '</div></div>'
           + (p.isFinding
@@ -7989,16 +8013,21 @@
   // cardStore resolution record -> a Remediation trail entry (skip untouched 'open').
   function _auditFromCard(rec) {
     var st = String((rec && rec.status) || '').toLowerCase();
-    if (!st || st === 'open') return null;
-    var evt = st === 'complete' ? 'Variance resolved at source'
-            : st === 'reopened' ? 'Resolution reopened'
-            : 'Variance worked';
-    var bits = [];
-    var nm = _txvCodeName[rec.cardCode] || rec.cardCode; if (nm) bits.push(nm);
-    if (rec.sourceFix) bits.push(rec.sourceFix);
-    if (rec.varAmount != null && !isNaN(rec.varAmount) && Math.abs(rec.varAmount) >= 1) bits.push(money(rec.varAmount));
-    if (rec.note) bits.push(rec.note);
-    return { type: 'remediation', at: rec.at || '', event: evt, detail: bits.join(' · '), by: rec.by || '', co: rec.company || '' };
+    // Only RESOLVED cards land on the Audit screen — a 'worked' draft is still on the
+    // analyst's Home card awaiting Mark resolved (the two-step), and 'reopened'/'open'
+    // are in-progress. This is the auditor-facing record of a COMPLETED review.
+    if (st !== 'complete') return null;
+    var nm  = _txvCodeName[rec.cardCode] || rec.cardCode || 'Variance';
+    var amt = (rec.varAmount != null && !isNaN(rec.varAmount)) ? Number(rec.varAmount) : null;
+    var msg = rec.note || rec.sourceFix || '';
+    return {
+      type: 'remediation', card: true,
+      at: rec.at || '', by: rec.by || '', co: rec.company || '', per: rec.periodEnd || '',
+      cardName: nm, message: msg, amount: amt,
+      // event/detail keep the flat shape the Excel export consumes.
+      event: nm + ' — resolved at source',
+      detail: msg + (amt != null && Math.abs(amt) >= 1 ? ' · ' + money(amt) : '')
+    };
   }
   function _auditPass(e) { return _auditFilter === 'all' || e.type === _auditFilter; }
   function _auditDemoActivity() {
@@ -8029,6 +8058,37 @@
       return out;
     });
   }
+  var AUDIT_CHIP_LABEL = { all: 'All', remediation: 'Reviews', reconciliation: 'Reconciliation', system: 'System' };
+  // A resolved variance review → a summary card (the hero content: what the analyst
+  // found + fixed, front and centre).
+  function _renderAuditCard(e) {
+    var co = _auditCoLabel(e.co);
+    return '<div class="audit-card">'
+      + '<div class="audit-card-head">'
+      +   '<span class="audit-card-title">' + esc(e.cardName || 'Variance') + '</span>'
+      +   '<span class="audit-badge audit-badge-remediation">✓ Resolved</span>'
+      +   (e.amount != null && Math.abs(e.amount) >= 1 ? '<span class="audit-card-amt">' + esc(money(e.amount)) + '</span>' : '')
+      + '</div>'
+      + '<div class="audit-card-scope">' + (co ? esc(co) : '') + (e.per ? ' &middot; ' + esc(fmtPeriod(e.per) || e.per) : '') + '</div>'
+      + (e.message
+          ? '<div class="audit-card-msg">' + esc(e.message) + '</div>'
+          : '<div class="audit-card-msg is-empty">No finding text recorded.</div>')
+      + '<div class="audit-card-meta">' + (e.by ? 'Resolved by <span class="audit-who">' + esc(e.by) + '</span> &middot; ' : 'Resolved &middot; ')
+      +   '<span class="audit-when" title="' + esc(_auditAbs(e.at)) + '">' + esc(fmtAgo(e.at) || _auditAbs(e.at)) + '</span></div>'
+      + '</div>';
+  }
+  // A system / reconciliation event → a compact secondary row.
+  function _renderAuditRow(e) {
+    var co = _auditCoLabel(e.co);
+    return '<div class="audit-row audit-' + e.type + '">'
+      + '<span class="audit-badge audit-badge-' + e.type + '">' + (AUDIT_TYPES[e.type] || e.type) + '</span>'
+      + '<div class="audit-main">'
+      +   '<div class="audit-evt">' + esc(e.event || 'Activity') + (co ? '<span class="audit-co">' + esc(co) + '</span>' : '') + '</div>'
+      + (e.detail ? '<div class="audit-detail">' + esc(e.detail) + '</div>' : '')
+      +   '<div class="audit-meta">' + (e.by ? '<span class="audit-who">' + esc(e.by) + '</span> &middot; ' : '')
+      +     '<span class="audit-when" title="' + esc(_auditAbs(e.at)) + '">' + esc(fmtAgo(e.at) || _auditAbs(e.at)) + '</span></div>'
+      + '</div></div>';
+  }
   function _paintAuditTrail() {
     var box = $('auditTrail'); if (!box) return;
     var all = _auditEntries || [];
@@ -8037,30 +8097,31 @@
     var chips = $('auditFilters');
     if (chips) {
       chips.innerHTML = ['all', 'remediation', 'reconciliation', 'system'].map(function (k) {
-        var label = k === 'all' ? 'All' : AUDIT_TYPES[k];
         return '<button type="button" class="audit-chip audit-chip-' + k + (k === _auditFilter ? ' is-active' : '')
-          + '" data-af="' + k + '" role="tab" aria-selected="' + (k === _auditFilter) + '">' + label
+          + '" data-af="' + k + '" role="tab" aria-selected="' + (k === _auditFilter) + '">' + AUDIT_CHIP_LABEL[k]
           + ' <span class="audit-chip-n">' + counts[k] + '</span></button>';
       }).join('');
     }
-    var rows = all.filter(_auditPass);
-    if (!rows.length) {
-      box.innerHTML = '<div class="audit-empty">' + (all.length
-        ? 'No ' + (AUDIT_TYPES[_auditFilter] || '').toLowerCase() + ' entries in view.'
-        : 'No recorded activity for this database yet. Reconciliation sign-offs, analyst source-fixes, and system loads appear here as they happen.') + '</div>';
-      return;
+    // The MAIN content is what the analyst has resolved (completed variance reviews),
+    // rendered as summary cards. Reconciliation + system events are secondary context
+    // below. The chips narrow to one stream.
+    var reviews = all.filter(function (e) { return e.type === 'remediation'; });
+    var sysrec  = all.filter(function (e) { return e.type !== 'remediation'; }).filter(_auditPass);
+    var showReviews = _auditFilter === 'all' || _auditFilter === 'remediation';
+    var showSys     = _auditFilter === 'all' || _auditFilter === 'reconciliation' || _auditFilter === 'system';
+    var html = '';
+    if (showReviews) {
+      html += reviews.length
+        ? '<div class="audit-cards">' + reviews.map(_renderAuditCard).join('') + '</div>'
+        : '<div class="audit-empty">No resolved variance reviews yet. When the analyst works a Transaction Variance card and marks it resolved, its finding lands here as a completed review.</div>';
     }
-    box.innerHTML = rows.map(function (e) {
-      var co = _auditCoLabel(e.co);
-      return '<div class="audit-row audit-' + e.type + '">'
-        + '<span class="audit-badge audit-badge-' + e.type + '">' + (AUDIT_TYPES[e.type] || e.type) + '</span>'
-        + '<div class="audit-main">'
-        +   '<div class="audit-evt">' + esc(e.event || 'Activity') + (co ? '<span class="audit-co">' + esc(co) + '</span>' : '') + '</div>'
-        + (e.detail ? '<div class="audit-detail">' + esc(e.detail) + '</div>' : '')
-        +   '<div class="audit-meta">' + (e.by ? '<span class="audit-who">' + esc(e.by) + '</span> &middot; ' : '')
-        +     '<span class="audit-when" title="' + esc(_auditAbs(e.at)) + '">' + esc(fmtAgo(e.at) || _auditAbs(e.at)) + '</span></div>'
-        + '</div></div>';
-    }).join('');
+    if (showSys && sysrec.length) {
+      html += (showReviews ? '<div class="audit-sys-head">System &amp; reconciliation activity</div>' : '')
+        + '<div class="audit-trail-rows">' + sysrec.map(_renderAuditRow).join('') + '</div>';
+    } else if (showSys && !showReviews) {
+      html += '<div class="audit-empty">No ' + (AUDIT_CHIP_LABEL[_auditFilter] || '').toLowerCase() + ' activity in view.</div>';
+    }
+    box.innerHTML = html || '<div class="audit-empty">No recorded activity for this database yet.</div>';
   }
   function _auditExportExcel() {
     var list = (_auditEntries || []).filter(_auditPass);
