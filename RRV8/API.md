@@ -611,6 +611,90 @@ corrupts history.
   lifecycle works locally, it just doesn't persist server-side or share across
   browsers until the backend lands.
 
+### Balancing-entry export + verification (UI-27, accountant side)
+
+When the accountant exports a period-end balancing entry, RR mints a short
+**verification token** (`RR-XXXXXX`, Crockford base32) and records the export as
+`unverified`. The token is handed to them as a ready-to-paste JDE P0911
+**Explanation** (`F0911.GLEXA`, confirmed **30 chars**, propagates to every line
+of a document). When they post the JE with that Explanation, a later read matches
+the token against `dbo.F0911` and flips the record to `verified` with the matched
+batch — turning a self-reported "I posted it" into evidence reconciled against the
+system of record (JDE).
+
+- **`GET /inventory/balancing-entry/exports?company=NN[&period=YYYY-MM-DD]`** —
+  the export records for one company, newest first. **The GET runs a match pass
+  first**: it pulls the RR-tagged posted lines from `dbo.F0911`
+  (`GLEXA LIKE 'RR-%'` — a highly selective subset of the ~3M-row table) and
+  verifies any pending token found in a posted Explanation. So the list is
+  self-updating; there is no separate verify call. Returns an array:
+
+  ```json
+  [ { "company": "00010", "periodEnd": "2026-06-30", "token": "RR-7K2P9Q",
+      "amount": -9377.00, "clearingAccount": "1.4900", "status": "verified",
+      "matchedBatch": "11616", "by": "name@customer.com",
+      "at": "2026-07-12T15:30:00Z" } ]
+  ```
+
+  `status` ∈ `unverified | verified`. `matchedBatch` (F0911 `GLICU`) is present
+  once verified. `matchedAmount` is reserved for a future posted-amount
+  cross-check (v1 verifies token presence + reports the batch).
+
+- **`POST /inventory/balancing-entry/export`** — record ONE export, keyed on the
+  unique `token`. Body:
+
+  ```json
+  { "company": "00010", "periodEnd": "2026-06-30", "token": "RR-7K2P9Q",
+    "amount": -9377.00, "clearingAccount": "1.4900" }
+  ```
+
+  The actor (`by`) is taken from the JWT, never the body; `at` is stamped
+  server-side; `status` is always created as `unverified`. Insert is idempotent on
+  the token (a retried POST is a no-op). Returns `{ "ok": true }`.
+
+- **Backing table `dbo.RBalancingEntryExport`** — one row per `Token`,
+  unique-indexed on it. DDL: `create-balancing-entry-export-table.sql` (agent
+  setup; **also add to the `RapidReconciler-DB` `.sqlproj`** to enter the dacpac).
+  If the table or endpoints are absent, the UI falls back to a per-browser
+  localStorage map (`rrv8.beExports.<dbName>.<company>`) with zero console errors —
+  the token flow works locally and records stay `unverified` (no server match)
+  until the backend lands.
+
+### Accountant per-company disposition (UI-27 / UI-34)
+
+When the accountant marks a company complete for the period, the chosen
+**disposition reason** (`immaterial | corrected | analyst | timing`) is recorded
+server-side — the "record the decision" half of the Audit spine, and the shared
+signal the analyst view reads (a company handed to the analyst should elevate the
+analyst's source-fix card, not suppress it). One current row per
+`(company, periodEnd)`.
+
+- **`GET /inventory/disposition/list?company=NN[&period=YYYY-MM-DD]`** — the
+  disposition records for one company, all periods (omit `&period=` for the full
+  set). Returns an array:
+
+  ```json
+  [ { "company": "00010", "periodEnd": "2026-06-30", "reason": "immaterial",
+      "by": "name@customer.com", "at": "2026-07-12T15:30:00Z" } ]
+  ```
+
+- **`POST /inventory/disposition`** — mark complete: upsert ONE record keyed on
+  `(company, periodEnd)`. Body `{ "company": "00010", "periodEnd": "2026-06-30",
+  "reason": "corrected" }`. `reason` ∈ `immaterial | corrected | analyst | timing`.
+  The actor (`by`) is from the JWT; `at` is server-stamped. Returns `{ "ok": true }`.
+
+- **`POST /inventory/disposition/reopen`** — reopen: delete the record. Body
+  `{ "company": "00010", "periodEnd": "2026-06-30" }`. Returns `{ "ok": true }`.
+  (POST, not DELETE, so the dev CORS path needs no proxy.)
+
+- **Backing table `dbo.RAcctCompanyDisposition`** — one current row per
+  `(CompanyNumber, PeriodEnd)`, unique-indexed on that key. DDL:
+  `create-acct-disposition-table.sql` (agent setup; **also add to the
+  `RapidReconciler-DB` `.sqlproj`** to enter the dacpac). If the table or endpoints
+  are absent, the UI falls back to a per-browser localStorage map
+  (`rrv8.dispos.<dbName>.<company>`) with zero console errors — a mark persists
+  locally (survives reload) but isn't shared across sessions until the backend lands.
+
 ---
 
 ## Model DMAAI Review (validate + approve the model)
