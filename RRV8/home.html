@@ -8498,9 +8498,11 @@
     narr.textContent = 'To clear the period-end inventory-to-GL reconciliation — Co ' + co + (per ? ', period ' + per : '') + '.';
     block.appendChild(narr);
     body.appendChild(block);
-    var driver = [['carry forward', scf], ['transactions', stx], ['manual entries', sje]]
-      .sort(function (x, y) { return Math.abs(y[1]) - Math.abs(x[1]); })[0];
-    _jeSummary.push({ co: co, currency: ccy, net: nettot, driver: driver[0] });
+    var comps = [['carry forward', scf], ['transactions', stx], ['manual entries', sje]]
+      .sort(function (x, y) { return Math.abs(y[1]) - Math.abs(x[1]); });
+    // Carry the per-source component totals (not just the winning label) so the AI
+    // summary is anchored to the real figures and can't name a smaller driver (UI-33).
+    _jeSummary.push({ co: co, currency: ccy, net: nettot, driver: comps[0][0], comps: comps });
     // Mint the verification token up front so it's visible in the modal — the same
     // token the export records and that the accountant types into the JDE Explanation.
     var token = _beMintToken();
@@ -8537,10 +8539,16 @@
   function fetchJeAiSummary() {
     var el = $('jeAiSummary'); if (!el || !_jeSummary.length || typeof rrFetch !== 'function') return;
     var tag = '<span class="ws-ai-summary-tag"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 1.6l1.9 5.1a5 5 0 0 0 2.9 2.9l5.1 1.9-5.1 1.9a5 5 0 0 0-2.9 2.9L12 21.4l-1.9-5.1a5 5 0 0 0-2.9-2.9L2.1 11.5l5.1-1.9a5 5 0 0 0 2.9-2.9z"/></svg>RapidReconciler AI</span>';
-    var lines = _jeSummary.map(function (c) { return 'Co ' + c.co + ' (' + (c.currency || '?') + '): net to clear ' + _jeAmt(c.net) + ', mostly ' + c.driver + '.'; });
+    var lines = _jeSummary.map(function (c) {
+      var parts = (c.comps || []).filter(function (p) { return Math.abs(p[1]) >= 1; })
+        .map(function (p) { return p[0] + ' ' + _jeAmt(p[1]); }).join(', ');
+      return 'Co ' + c.co + ' (' + (c.currency || '?') + '): net to clear ' + _jeAmt(c.net)
+        + '. Components: ' + (parts || 'none material') + '. Largest component: ' + c.driver + '.';
+    });
     var prompt = 'You are RapidReconciler AI. In ONE or TWO short sentences, summarize this period-end INVENTORY-to-GL balancing entry for an accountant.\n'
       + 'This entry CLEARS the period now by posting to the GL — do NOT describe carrying the balance forward to a future period, and do NOT call it "intercompany" (these are inventory accounts).\n'
-      + 'Facts (the ONLY facts you may use):\n' + lines.join('\n')
+      + 'If you state what the entry is mostly made of, use ONLY the "Largest component" value given for that company — NEVER name a smaller component as the primary driver.\n'
+      + 'Facts (the ONLY facts you may use, verbatim and rounded):\n' + lines.join('\n')
       + '\nRound amounts (e.g. "$18.5K"). Plain accountant English, no preamble, no markdown.';
     // AI-tier gate: Off = no AI narrative; hide the summary strip entirely.
     if (_recsummaryLevel && _recsummaryLevel() === 'off') { el.hidden = true; el.classList.remove('is-shown'); return; }
