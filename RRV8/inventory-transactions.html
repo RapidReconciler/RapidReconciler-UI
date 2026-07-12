@@ -6273,7 +6273,7 @@
     var scope = bits.length ? bits.join(' · ') : 'the current view';
     sub.innerHTML = 'Applies to <strong>' + escapeHtml(scope) + '</strong> &mdash; ' + n + ' row' + (n === 1 ? '' : 's')
       + (workedN ? (' · <span class="tx-findings-done">' + workedN + ' already worked</span>') : '')
-      + '. Saving marks ' + (n === 1 ? 'it' : 'them') + ' worked and completes the Home card.';
+      + '. Saving marks ' + (n === 1 ? 'it' : 'them') + ' worked and drafts this finding onto the Home card — review it there and Mark resolved to complete.';
     // On a scope change, reset the textarea to the slice's uniform note (or blank);
     // while the analyst stays on one slice, preserve whatever they've typed.
     var key = [_state.activeCard || '', _state.activeGroupCode || '', _state.activeCompany || '', per || ''].join('|');
@@ -6594,6 +6594,20 @@
       _workNotes.set(workNoteKey(r), { Worked: true, Note: val });
     });
     renderAll();
+    // Two-step card resolution (UI-26/UI-27): push the finding to the card-keyed
+    // store as 'worked' — this becomes the Home txv card's "what was the source
+    // fix" text, where the analyst reviews it and clicks Mark resolved to complete
+    // (→ the card lands on the accountant Audit tab). Best-effort + independent of
+    // the per-row save-notes POST below (cardStore has its own localStorage
+    // fallback and never throws).
+    try {
+      var _cc  = _state.activeCard || (rows[0] ? txvCardCode(rows[0]) : '');
+      var _co  = _state.activeCompany || (rows[0] && rows[0].CompanyNumber) || '';
+      var _per = (_data && _data.period) || _state.period || '';
+      if (_cc && _co && _per && window.RRV8 && RRV8.cardStore) {
+        RRV8.cardStore.save({ company: _co, cardCode: _cc, periodEnd: _per, status: 'worked', note: val, sourceFix: val, varAmount: null });
+      }
+    } catch (_) {}
     _findingsBusy = true;
     if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving…'; }
     _findingsStatus('', '');
@@ -6601,7 +6615,7 @@
       period: (_data && _data.period) || _state.period || defaultPeriod(),
       notes:  rows.map(toTransactionNote)
     } }).then(function () {
-      _findingsStatus('Saved — ' + rows.length + ' row' + (rows.length === 1 ? '' : 's') + ' marked worked. The Home card for this pattern is now complete.', 'ok');
+      _findingsStatus('Saved — ' + rows.length + ' row' + (rows.length === 1 ? '' : 's') + ' marked worked. This finding is now on the Home card — review it there and Mark resolved to complete.', 'ok');
       if (note) note.dataset.dirty = '';
       // Audit trail: record the corrective on the Activity Log (best-effort, one-way).
       if (window.RRV8 && RRV8.logActivity) {
