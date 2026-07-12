@@ -13,7 +13,7 @@
 <script src="config.js"></script>
 <script src="sidebar.js"></script>
 <script src="variance-sources.js"></script>
-<script src="vendor/xlsx.full.min.js"></script>
+<script src="vendor/xlsx-js-style.min.js"></script>
 <script defer src="../Tools/help-sidebar.js"></script>
 <style>
   :root{
@@ -398,6 +398,34 @@
     document.getElementById('js-grid-foot').innerHTML = '<tr>'+foot+'</tr>';
   }
 
+  // ---- audit-quality Excel builder (title band, navy header, bordered body,
+  //      bold total row, money format on numeric columns) — mirrors home.html. ----
+  var AUDIT_NUM_FMT = '#,##0.00;(#,##0.00)';
+  function _auditBorder(rgb){ var s={style:'thin',color:{rgb:rgb}}; return {top:s,bottom:s,left:s,right:s}; }
+  function buildAuditWorkbook(opts){
+    if(!window.XLSX) return false;
+    var cols=opts.columns||[], ncol=cols.length||1, titleLines=opts.titleLines||[];
+    var aoa=[];
+    titleLines.forEach(function(t){ var row=new Array(ncol).fill(''); row[0]=t; aoa.push(row); });
+    if(titleLines.length) aoa.push(new Array(ncol).fill(''));
+    var headRowIdx=aoa.length;
+    aoa.push(cols.map(function(c){return c.label;}));
+    (opts.rows||[]).forEach(function(r){ aoa.push(r.slice()); });
+    var totalRowIdx=-1;
+    if(opts.totalRow){ totalRowIdx=aoa.length; aoa.push(opts.totalRow.slice()); }
+    var ws=XLSX.utils.aoa_to_sheet(aoa);
+    var range=XLSX.utils.decode_range(ws['!ref']);
+    for(var t=0;t<titleLines.length;t++){ var tref=XLSX.utils.encode_cell({r:t,c:0}); if(!ws[tref])continue; ws[tref].s={font:{bold:t===0,sz:t===0?14:10,color:{rgb:t===0?'1F2D4A':'6B7280'}}}; }
+    for(var c=range.s.c;c<=range.e.c;c++){ var href=XLSX.utils.encode_cell({r:headRowIdx,c:c}); if(!ws[href])continue; ws[href].s={font:{bold:true,color:{rgb:'FFFFFF'}},fill:{patternType:'solid',fgColor:{rgb:'1F2D4A'}},alignment:{horizontal:(cols[c]&&cols[c].num)?'right':'left',vertical:'center'},border:_auditBorder('D0D0D0')}; }
+    for(var rr=headRowIdx+1;rr<=range.e.r;rr++){ var isTotal=rr===totalRowIdx; for(var cc=range.s.c;cc<=range.e.c;cc++){ var cref=XLSX.utils.encode_cell({r:rr,c:cc}); var cell=ws[cref]; if(!cell)continue; cell.s=cell.s||{}; cell.s.border=_auditBorder('ECECEC'); if(cols[cc]&&cols[cc].num){ cell.z=cols[cc].fmt||AUDIT_NUM_FMT; cell.s.alignment={horizontal:'right'}; } if(isTotal){ cell.s.font={bold:true,color:{rgb:'1F2D4A'}}; cell.s.fill={patternType:'solid',fgColor:{rgb:'F1F4F9'}}; } } }
+    ws['!cols']=cols.map(function(c){ return {wch: c.num?16:Math.max(16,(c.label||'').length+4)}; });
+    if(titleLines.length){ ws['!merges']=ws['!merges']||[]; for(var m=0;m<titleLines.length;m++) ws['!merges'].push({s:{r:m,c:0},e:{r:m,c:ncol-1}}); }
+    var wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, (opts.sheetName||'Report').slice(0,31));
+    XLSX.writeFile(wb, opts.fileName || RRV8.exportName({surface:'Report'}));
+    return true;
+  }
+
   // ---- interactions ----
   document.getElementById('js-grid-head').addEventListener('click', function(e){
     var th = e.target.closest('th'); if(!th) return;
@@ -408,12 +436,48 @@
   document.getElementById('js-search').addEventListener('input', function(e){ search = e.target.value||''; render(); });
   document.getElementById('js-export').addEventListener('click', function(){
     if (!window.XLSX) return;
-    var aoa = [cfg.columns.map(function(c){return c.label;})];
-    visibleRows().forEach(function(r){ aoa.push(cfg.columns.map(function(c){ var v=r[c.key]; return (c.kind==='num'||c.kind==='qty')?(Number(v)||0):(v==null?'':v); })); });
-    var ws = XLSX.utils.aoa_to_sheet(aoa);
-    var wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, cfg.label.slice(0,31));
-    XLSX.writeFile(wb, RRV8.exportName({ surface: 'Variance', drill: key }));
+    var list = visibleRows();
+    if (!list.length) return;
+    var amountField = cfg.amountField;
+    // Authoritative total mirrors the on-screen footer: carry-forward uses the
+    // server-provided prior-period unreconciledVariance; every other source sums
+    // its own detail rows on the amount column.
+    var total = (_carryTotal != null)
+      ? _carryTotal
+      : list.reduce(function(s,r){ return s + (Number(r[amountField])||0); }, 0);
+    var columns = cfg.columns.map(function(c){
+      var isNum = (c.kind==='num'||c.kind==='qty');
+      var col = { label: c.label, num: isNum };
+      if (c.kind==='qty') col.fmt = '#,##0';
+      return col;
+    });
+    var rows = list.map(function(r){
+      return cfg.columns.map(function(c){
+        var v=r[c.key];
+        if (c.kind==='num'||c.kind==='qty') return Number(v)||0;
+        return v==null?'':v;
+      });
+    });
+    var totalRow = cfg.columns.map(function(c,i){
+      if (c.key===amountField) return total;
+      if (i===0) return 'TOTAL — ' + list.length.toLocaleString('en-US') + ' rows';
+      return '';
+    });
+    var db  = (document.getElementById('js-topbar-db')||{}).textContent || 'RapidReconciler';
+    var cos = (document.getElementById('js-companies')||{}).textContent || 'All';
+    var per = (document.getElementById('js-period')||{}).textContent || '—';
+    buildAuditWorkbook({
+      sheetName: cfg.label.slice(0,31),
+      fileName:  RRV8.exportName({ surface: 'Variance', drill: key }),
+      titleLines: [
+        cfg.label + ' — Variance Source Detail',
+        'Database ' + db + '  ·  Companies ' + cos + '  ·  Period ' + per + (search ? ('  ·  search: "' + search + '"') : ''),
+        'Generated ' + new Date().toLocaleString('en-US') + '  ·  ' + list.length.toLocaleString('en-US') + ' rows'
+      ],
+      columns: columns,
+      rows: rows,
+      totalRow: totalRow
+    });
   });
 
   // ---- boot: hydrate the session (RRDB decodes the token), then load ----

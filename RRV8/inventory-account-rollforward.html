@@ -633,24 +633,55 @@
     if(!data.length){ toast('Nothing to export'); return; }
     if(typeof XLSX==='undefined'){ toast('Excel library still loading — try again'); return; }
     var NUM_FMT='#,##0.00;(#,##0.00)';
-    var aoa=[COLS.map(function(c){return c.label;})];
+    var ncol=COLS.length;
+    // ----- title band (what · db/company · generated + row count) -----
+    var db=(window.RRDB&&RRDB.name&&RRDB.name())||(document.getElementById('topbarDb')||{}).textContent||'RapidReconciler';
+    var coText=state.company?('Company '+state.company):'All companies in scope';
+    var acctText=state.account?('  ·  Account '+state.account):'';
+    var titleLines=[
+      'Account Roll Forward',
+      'Database '+db+'  ·  '+coText+acctText,
+      'Generated '+new Date().toLocaleString('en-US')+'  ·  '+data.length.toLocaleString('en-US')+' account'+(data.length!==1?'s':'')
+    ];
+    var aoa=[];
+    titleLines.forEach(function(t){ var row=new Array(ncol).fill(''); row[0]=t; aoa.push(row); });
+    aoa.push(new Array(ncol).fill(''));                     // spacer
+    var headRowIdx=aoa.length;
+    aoa.push(COLS.map(function(c){return c.label;}));
+    var firstDataIdx=aoa.length;
     data.forEach(function(r){ aoa.push(COLS.map(function(c){
       var raw=rawVal(r,c.k);
       if(c.num){ var n=Number(raw); return isNaN(n)?'':n; }   // real numbers so the format + right-align apply
       return raw==null?'':raw;
     })); });
+    // ----- bold total row (sum the numeric columns) -----
+    var sums={};
+    data.forEach(function(r){ COLS.forEach(function(c){ if(NUMCOL[c.k]){ var n=Number(rawVal(r,c.k)); if(!isNaN(n)) sums[c.k]=(sums[c.k]||0)+n; } }); });
+    var totalRowIdx=aoa.length;
+    aoa.push(COLS.map(function(c,i){
+      if(i===0) return 'TOTAL — '+data.length.toLocaleString('en-US')+' account'+(data.length!==1?'s':'');
+      if(NUMCOL[c.k]) return Math.round((sums[c.k]||0)*100)/100;
+      return '';
+    }));
     var ws=XLSX.utils.aoa_to_sheet(aoa);
     var range=XLSX.utils.decode_range(ws['!ref']);
+    // title styling + full-width merges
+    ws['!merges']=ws['!merges']||[];
+    for(var ti=0;ti<titleLines.length;ti++){
+      var tref=XLSX.utils.encode_cell({r:ti,c:0});
+      if(ws[tref]) ws[tref].s={ font:{bold:ti===0,sz:ti===0?14:10,color:{rgb:ti===0?'1F2D4A':'6B7280'}} };
+      ws['!merges'].push({s:{r:ti,c:0},e:{r:ti,c:ncol-1}});
+    }
     // header band
     for(var hc=range.s.c;hc<=range.e.c;hc++){
-      var hr=XLSX.utils.encode_cell({r:0,c:hc}); if(!ws[hr]) continue;
+      var hr=XLSX.utils.encode_cell({r:headRowIdx,c:hc}); if(!ws[hr]) continue;
       ws[hr].s={ font:{bold:true,color:{rgb:'FFFFFF'}}, fill:{patternType:'solid',fgColor:{rgb:'1F2D4A'}},
                  alignment:{horizontal:'center',vertical:'center'}, border:thinBorder('D0D0D0') };
     }
     // body rows
     var breaks=0;
     data.forEach(function(r,i){
-      var rr=i+1, isBreak=(r.GLOK==='no'||r.VarOK==='no'); if(isBreak) breaks++;
+      var rr=firstDataIdx+i, isBreak=(r.GLOK==='no'||r.VarOK==='no'); if(isBreak) breaks++;
       for(var c=range.s.c;c<=range.e.c;c++){
         var ref=XLSX.utils.encode_cell({r:rr,c:c}), cell=ws[ref]; if(!cell) continue;
         var key=COLS[c].k; cell.s=cell.s||{}; cell.s.border=thinBorder('ECECEC');
@@ -659,6 +690,13 @@
         if((key==='glok'&&r.GLOK==='no')||(key==='varok'&&r.VarOK==='no')){ cell.s.font={bold:true,color:{rgb:'C0392B'}}; }
       }
     });
+    // total row styling (bold, light-navy fill)
+    for(var tc=range.s.c;tc<=range.e.c;tc++){
+      var trf=XLSX.utils.encode_cell({r:totalRowIdx,c:tc}), tcell=ws[trf]; if(!tcell) continue;
+      var tkey=COLS[tc].k; tcell.s=tcell.s||{}; tcell.s.border=thinBorder('D0D0D0');
+      tcell.s.font={bold:true,color:{rgb:'1F2D4A'}}; tcell.s.fill={patternType:'solid',fgColor:{rgb:'F1F4F9'}};
+      if(NUMCOL[tkey]){ tcell.z=NUM_FMT; tcell.s.alignment={horizontal:'right'}; }
+    }
     ws['!cols']=COLS.map(function(c){ return {wch: c.num?13:Math.max(8,c.label.length+3)}; });
     var wb=XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb,ws,'Roll Forward');
