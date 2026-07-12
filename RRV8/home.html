@@ -554,7 +554,7 @@
   .acct-g-morebtn:hover { text-decoration: underline; }
   /* GL palette drill-down scope bar — breadcrumb back to the full roll-up when
      the grid was opened via a worklist "See accounts" click. */
-  .acct-g-scopebar { display: flex; align-items: center; gap: 12px; padding: 2px 2px 12px; }
+  .acct-g-scopebar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 2px 2px 12px; }
   .acct-g-scopelabel { font-size: 13px; font-weight: 700; color: var(--navy); }
   /* In-grid offset-account entry: the accountant types the REAL offset account per
      out-of-balance row; those rows assemble into a self-clearing balancing entry
@@ -605,6 +605,12 @@
   .acct-grid td.acct-g-zero { color: var(--text-faint, #b7c0cd); }   /* dim exact-zero balances so real numbers pop */
   .acct-grid td.acct-g-out { font-weight: 700; color: var(--orange); }
   .acct-grid td.acct-g-out.is-clear { color: var(--green); }
+  /* Recurrence lens: the out-of-balance figure over a 6-period sparkline. */
+  .acct-g-outrow { display: inline-flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+  .acct-g-outrow-inline { flex-direction: row; align-items: baseline; gap: 8px; }   /* company row: spark beside the amount */
+  .acct-g-spark { display: inline-flex; align-items: center; gap: 5px; cursor: help; }
+  .acct-g-spark .oob-spark { display: block; }
+  .acct-g-sparklbl { font-size: 10px; font-weight: 700; color: var(--text-muted); font-variant-numeric: tabular-nums; }
   /* Totals row — sums across companies; strong top rule, bold navy. */
   .acct-g-total .acct-g-totalrow td { border-top: 2px solid var(--rule-strong, #cfd6e0); font-weight: 800; color: var(--navy); background: var(--bg-soft); padding-top: 9px; padding-bottom: 9px; }
   .acct-g-totalrow td.acct-g-out { color: var(--orange); font-weight: 800; }
@@ -665,19 +671,18 @@
   .wl-fig-lbl { font-size: 13px; font-weight: 600; color: var(--text-muted); margin-right: 6px; }
   .wl-fig-val { font-size: 17px; font-weight: 800; color: var(--navy); font-variant-numeric: tabular-nums; }
   .wl-fig-out { color: var(--orange); }   /* the out-of-balance — same size/measure as the balances, just tinted */
-  /* The out-of-balance figure doubles as the drill into the account detail (the
-     GL roll-forward for this company) — the natural "click the number" gesture, so
-     it replaces the old "Details" footer link. Reset the button chrome; hint
-     clickability on hover/focus. */
-  .wl-fig-outbtn { background: none; border: 0; padding: 0; margin: 0; font: inherit; cursor: pointer; }
-  .wl-fig-outbtn:hover .wl-fig-val { text-decoration: underline; }
-  .wl-fig-outbtn:focus-visible { outline: 2px solid var(--navy); outline-offset: 2px; border-radius: 4px; }
-  /* The out-of-balance figure doubles as a shortcut into the account detail (same
-     destination as the "Details →" footer link) — the natural "click the number"
-     gesture. Reset the button chrome; hint clickability on hover/focus. */
-  .wl-fig-outbtn { background: none; border: 0; padding: 0; margin: 0; font: inherit; cursor: pointer; }
-  .wl-fig-outbtn:hover .wl-fig-val { text-decoration: underline; }
-  .wl-fig-outbtn:focus-visible { outline: 2px solid var(--navy); outline-offset: 2px; border-radius: 4px; }
+  /* The out-of-balance figure doubles as the drill into the account detail (the GL
+     roll-forward for this company). It sits beside the STATIC GL/Inventory figures,
+     so make its clickability obvious AT REST — a trailing arrow + an underlined
+     value — matching the "value →" drill language the footer variance pills teach.
+     Hover/focus just strengthen it. */
+  .wl-fig-outbtn { display: inline-flex; align-items: baseline; gap: 5px; background: none; border: 0;
+    padding: 3px 7px; margin: -3px -4px; border-radius: 8px; font: inherit; cursor: pointer; }
+  .wl-fig-outbtn .wl-fig-val { text-decoration: underline; text-decoration-color: rgba(214,120,42,0.5); text-underline-offset: 3px; }
+  .wl-fig-outbtn::after { content: "\2192"; font-size: 14px; font-weight: 800; color: var(--orange); align-self: center; }
+  .wl-fig-outbtn:hover { background: rgba(214,120,42,0.10); }
+  .wl-fig-outbtn:hover .wl-fig-val { text-decoration-color: var(--orange); }
+  .wl-fig-outbtn:focus-visible { outline: 2px solid var(--navy); outline-offset: 1px; }
   .wl-closed { font-size: 13px; font-weight: 700; color: var(--text-muted); }
   /* Roll-forward integrity dot — green = closed clean (safe to reconcile), red =
      break (analyst re-roll). Same semantics as the GL grid's .acct-g-dot; this is
@@ -5898,6 +5903,39 @@
       if (drillPe && String(r.PeriodEnds || '').slice(0, 10) !== drillPe) return;
       var co = _coOf(r) || '?'; (acctByCo[co] || (acctByCo[co] = [])).push(r);
     });
+    // Recurrence lens — per (company|account) out-of-balance across ALL loaded periods
+    // (NOT drillPe-filtered), one pass over the same _invRows. A row sparkline reads
+    // the shape at a glance: a flat line of bars = chronic (fix the source, don't
+    // journal it every month); a lone current spike = one-off (book it / accept).
+    var _trendIdx = {};
+    (_invRows || []).forEach(function (r) {
+      var tco = String(_coOf(r) || ''), tp = String(r.PeriodEnds || '').slice(0, 10); if (!tp) return;
+      var oob = Number(r.OOB) || 0, acct = String(r.LongAccount || '').trim();
+      var ka = tco + '|' + acct, kc = tco + '|';
+      (_trendIdx[ka] || (_trendIdx[ka] = {}))[tp] = (_trendIdx[ka][tp] || 0) + oob;
+      (_trendIdx[kc] || (_trendIdx[kc] = {}))[tp] = (_trendIdx[kc][tp] || 0) + oob;
+    });
+    var _sparkSvg = function (pts) {
+      var mx = 1; pts.forEach(function (d) { mx = Math.max(mx, Math.abs(d.oob)); });
+      var bw = 6, gap = 3, H = 18, W = pts.length * (bw + gap);
+      var bars = pts.map(function (d, i) {
+        var h = Math.max(1, Math.round(Math.abs(d.oob) / mx * (H - 2)));
+        var cur = d.p === drillPe, matl = Math.abs(d.oob) >= MAT_OOB_FLOOR;
+        var fill = cur ? 'var(--orange)' : (matl ? 'rgba(214,120,42,0.45)' : 'rgba(120,130,150,0.22)');
+        return '<rect x="' + (i * (bw + gap)) + '" y="' + (H - h) + '" width="' + bw + '" height="' + h + '" rx="1" fill="' + fill + '"/>';
+      }).join('');
+      return '<svg class="oob-spark" viewBox="0 0 ' + W + ' ' + H + '" width="' + W + '" height="' + H + '" preserveAspectRatio="xMinYMax meet" aria-hidden="true">' + bars + '</svg>';
+    };
+    var _sparkCell = function (co, account) {
+      var m = _trendIdx[String(co) + '|' + (account == null ? '' : String(account).trim())]; if (!m) return '';
+      var pts = Object.keys(m).sort().map(function (p) { return { p: p, oob: m[p] }; }).slice(-6);
+      if (pts.length < 2) return '';   // need a trend to show one
+      var outN = pts.filter(function (d) { return Math.abs(d.oob) >= MAT_OOB_FLOOR; }).length;
+      var read = (outN >= pts.length - 1 && pts.length >= 3) ? 'Recurring — likely a source fix, not a one-off journal entry.'
+               : (outN <= 1) ? 'First appearance — a one-off.' : 'Intermittent.';
+      return '<span class="acct-g-spark" title="Out of balance in ' + outN + ' of the last ' + pts.length + ' periods (current highlighted). ' + esc(read) + '">'
+        + _sparkSvg(pts) + '<span class="acct-g-sparklbl">' + outN + '/' + pts.length + '</span></span>';
+    };
     var cos = (d.companies || []).slice().sort(function (a, b) { return (Number(a.co) || 0) - (Number(b.co) || 0); });
     // Drill-down scope: reached via a worklist "See accounts" click narrows the
     // grid to that one company. Validate it's still in the active set (period /
@@ -5923,7 +5961,7 @@
     // company's break lives. The GL side reads as a roll-forward: Beginning +
     // Activity = Ending.
     var acctRowHtml = function (r, co, ccy, u, inbal) {
-      var aout = Math.abs(Number(r.OOB) || 0) > 1;
+      var aout = Math.abs(Number(r.OOB) || 0) >= MAT_OOB_FLOOR;
       var brk = String(r.GLOK).trim().toLowerCase() === 'no' || String(r.VarOK).trim().toLowerCase() === 'no';
       var nm = nameOf(co, r.LongAccount);
       // Out-of-balance rows expand to their variance-source breakdown (a chevron
@@ -5933,7 +5971,7 @@
         + '<td class="acct-g-name"><span class="acct-g-acctchev" aria-hidden="true"></span><span class="acct-g-dot' + (brk ? ' rf-break' : '') + '" title="' + (brk ? 'Roll-forward break on this account — analyst re-roll' : 'Roll-forward closed clean') + '"></span><span class="acct-g-acctnum">' + esc(r.LongAccount || '') + '</span>'
         + (nm ? '<span class="acct-g-acctname">' + esc(nm) + '</span>' : '') + '</td>'
         + cellFn(r.BegGL, ccy, u) + cellFn(r.PerGL, ccy, u) + cellFn(r.EndGL, ccy, u) + cellFn(r.Perpetual, ccy, u) + cellFn(r.UnpostBatch, ccy, u) + cellFn(r.EndofDay, ccy, u)
-        + '<td class="acct-g-out' + (aout ? '' : ' is-clear') + '">' + (aout ? esc(_ccyAmtUnit(ccy, Number(r.OOB) || 0, u)) : '&mdash;') + '</td>'
+        + '<td class="acct-g-out' + (aout ? '' : ' is-clear') + '">' + (aout ? '<span class="acct-g-outrow"><span class="acct-g-outfig">' + esc(_ccyAmtUnit(ccy, Number(r.OOB) || 0, u)) + '</span>' + _sparkCell(co, r.LongAccount) + '</span>' : '&mdash;') + '</td>'
         + (aout
             ? '<td class="acct-g-offcell"><input type="text" class="acct-g-offset" data-co="' + esc(co) + '" data-acct="' + esc(r.LongAccount || '') + '" value="' + esc(_jeOffsets[co + '|' + (r.LongAccount || '')] || '') + '" placeholder="Offset acct" autocomplete="off" spellcheck="false" aria-label="Offset account for ' + esc(r.LongAccount || '') + '"></td>'
             : '<td class="acct-g-offcell"></td>')
@@ -5945,7 +5983,13 @@
     var _srcPreviewKey = { 'Carry forward': 'carryForward', 'Transactions': 'transactions', 'Manual entries': 'manualJournalEntries', 'Unposted GL batches': 'glBatches', 'End of Day': 'endOfDay' };
     var acctDetailRow = function (r, co, ccy, u) {
       var srcs = _COMPONENTS.filter(function (k) { return k.name !== 'Cardex' && _srcPreviewKey[k.name] && Math.abs(Number(r[k.f]) || 0) >= 1; })
-        .sort(function (a, b) { return Math.abs(Number(r[b.f]) || 0) - Math.abs(Number(r[a.f]) || 0); });
+        // Carry forward always leads (the opening balance / starting point), then the
+        // rest biggest-first — matches the overview card's pill order.
+        .sort(function (a, b) {
+          if (a.name === 'Carry forward') return -1;
+          if (b.name === 'Carry forward') return 1;
+          return Math.abs(Number(r[b.f]) || 0) - Math.abs(Number(r[a.f]) || 0);
+        });
       var inner = srcs.length
         ? srcs.map(function (k) { return '<button type="button" class="acct-g-srcpill" data-comp="' + _srcPreviewKey[k.name] + '" data-co="' + esc(co) + '" data-acct="' + esc(r.LongAccount || '') + '" title="See the ' + esc(k.name.toLowerCase()) + ' detail for this account — export to Excel">' + esc(k.name) + ' <span class="acct-g-srcamt">' + esc(_ccyAmtUnit(ccy, Number(r[k.f]) || 0, u)) + '</span></button>'; }).join('')
         : '<span class="acct-g-srcnone">No itemized sources — the gap is perpetual-vs-GL only (cardex).</span>';
@@ -5955,7 +5999,7 @@
       var accts = (acctByCo[c.co] || []).slice().sort(function (a, b) { return String(a.LongAccount || '').localeCompare(String(b.LongAccount || ''), undefined, { numeric: true, sensitivity: 'base' }); });
       var tot = { beg: 0, act: 0, gl: 0, pp: 0, un: 0, eod: 0 };
       accts.forEach(function (r) { tot.beg += Number(r.BegGL) || 0; tot.act += Number(r.PerGL) || 0; tot.gl += Number(r.EndGL) || 0; tot.pp += Number(r.Perpetual) || 0; tot.un += Number(r.UnpostBatch) || 0; tot.eod += Number(r.EndofDay) || 0; });
-      var out = Math.abs(c.oob) > 1;
+      var out = Math.abs(c.oob) >= MAT_OOB_FLOOR;
       var u = unitOf(c);   // one M/K scale for this whole company block
       var coBrk = (c.breaks || 0) > 0;
       var coName = (_coNames && _coNames[String(c.co).trim()]) || '';
@@ -5965,17 +6009,19 @@
       var coRow = '<tr class="acct-g-co" aria-expanded="' + (scopeCo != null ? 'true' : 'false') + '">'
         + '<td class="acct-g-name"><span class="acct-g-cochev" aria-hidden="true"></span><span class="acct-g-dot' + (coBrk ? ' rf-break' : '') + '" title="' + (coBrk ? 'A roll-forward break is inside — expand to see which account' : 'Every account rolled clean') + '"></span>Co ' + esc(c.co) + (coName ? '<span class="acct-g-coname">' + esc(coName) + '</span>' : '') + '</td>'
         + cellFn(tot.beg, c.ccy, u) + cellFn(tot.act, c.ccy, u) + cellFn(tot.gl, c.ccy, u) + cellFn(tot.pp, c.ccy, u) + cellFn(tot.un, c.ccy, u) + cellFn(tot.eod, c.ccy, u)
-        + '<td class="acct-g-out' + (out ? '' : ' is-clear') + '">' + (out ? esc(_ccyAmtUnit(c.ccy, c.oob, u)) : 'In balance') + '</td>'
-        + '<td class="acct-g-offcell">' + (out ? '<button type="button" class="acct-g-attestbtn" data-oe-open="' + esc(c.co) + '">Preview entry</button>' : '') + '</td></tr>';
+        + '<td class="acct-g-out' + (out ? '' : ' is-clear') + '">' + (out ? '<span class="acct-g-outrow acct-g-outrow-inline"><span class="acct-g-outfig">' + esc(_ccyAmtUnit(c.ccy, c.oob, u)) + '</span>' + _sparkCell(c.co, null) + '</span>' : 'In balance') + '</td>'
+        + '<td class="acct-g-offcell"></td></tr>';
       var acctRows;
       if (!accts.length) {
         acctRows = '<tr class="acct-g-acct"><td colspan="9" style="color:var(--text-muted)">No accounts loaded for this company / period.</td></tr>';
       } else {
-        // Signal first: out-of-balance accounts always show, biggest gap first;
-        // in-balance ones fold behind an expander so only what needs a look shows.
-        var outA = accts.filter(function (r) { return Math.abs(Number(r.OOB) || 0) > 1; })
+        // Signal first: MATERIALLY out-of-balance accounts (>= the $100 materiality
+        // floor, same as the overview) always show, biggest gap first; everything
+        // below the floor folds behind the expander — so a $40 gap that rounds to
+        // "$0.0K" no longer sits in the out-of-balance list looking like a puzzle.
+        var outA = accts.filter(function (r) { return Math.abs(Number(r.OOB) || 0) >= MAT_OOB_FLOOR; })
           .sort(function (a, b) { return Math.abs(Number(b.OOB) || 0) - Math.abs(Number(a.OOB) || 0); });
-        var inA  = accts.filter(function (r) { return Math.abs(Number(r.OOB) || 0) <= 1; });
+        var inA  = accts.filter(function (r) { return Math.abs(Number(r.OOB) || 0) < MAT_OOB_FLOOR; });
         acctRows = outA.map(function (r) { return acctRowHtml(r, c.co, c.ccy, u, false) + acctDetailRow(r, c.co, c.ccy, u); }).join('')
           + (inA.length ? '<tr class="acct-g-more"><td colspan="9"><button type="button" class="acct-g-morebtn">+ ' + inA.length + ' account' + (inA.length !== 1 ? 's' : '') + ' in balance</button></td></tr>' : '')
           + inA.map(function (r) { return acctRowHtml(r, c.co, c.ccy, u, true); }).join('');
@@ -5988,8 +6034,11 @@
     var scopeBar = '';
     if (scopeCo != null) {
       var scName = (_coNames && _coNames[String(scopeCo).trim()]) || '';
+      var scOut = cos[0] && Math.abs(cos[0].oob) >= MAT_OOB_FLOOR;   // Preview entry only when materially out
       scopeBar = '<div class="acct-g-scopebar">'
-        + '<span class="acct-g-scopelabel">Showing Co ' + esc(scopeCo) + (scName ? ' &middot; ' + esc(scName) : '') + '</span></div>';
+        + '<span class="acct-g-scopelabel">Showing Co ' + esc(scopeCo) + (scName ? ' &middot; ' + esc(scName) : '') + '</span>'
+        + (scOut ? '<button type="button" class="acct-g-attestbtn" data-oe-open="' + esc(scopeCo) + '">Preview entry</button>' : '')
+        + '</div>';
     }
     var grid = $('acctAcctGrid');
     if (grid) {
