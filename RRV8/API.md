@@ -631,26 +631,30 @@ system of record (JDE).
 
   ```json
   [ { "company": "00010", "periodEnd": "2026-06-30", "token": "RR-7K2P9Q",
-      "amount": -9377.00, "clearingAccount": "1.4900", "status": "verified",
-      "matchedBatch": "11616", "by": "name@customer.com",
+      "amount": -9377.00, "clearingAccount": "1.4900", "entryType": "adjusting",
+      "status": "verified", "matchedBatch": "11616", "by": "name@customer.com",
       "at": "2026-07-12T15:30:00Z" } ]
   ```
 
-  `status` ∈ `unverified | verified`. `matchedBatch` (F0911 `GLICU`) is present
-  once verified. `matchedAmount` is reserved for a future posted-amount
-  cross-check (v1 verifies token presence + reports the batch).
+  `status` ∈ `unverified | verified`. `entryType` ∈ `balancing | adjusting` — which
+  entry path minted the export (Overview clearing-account entry vs. Accounts
+  deep-dive per-account offset entry); it titles the Audit card. `matchedBatch`
+  (F0911 `GLICU`) is present once verified. `matchedAmount` is reserved for a future
+  posted-amount cross-check (v1 verifies token presence + reports the batch).
 
 - **`POST /inventory/balancing-entry/export`** — record ONE export, keyed on the
   unique `token`. Body:
 
   ```json
   { "company": "00010", "periodEnd": "2026-06-30", "token": "RR-7K2P9Q",
-    "amount": -9377.00, "clearingAccount": "1.4900" }
+    "amount": -9377.00, "clearingAccount": "1.4900", "entryType": "adjusting" }
   ```
 
   The actor (`by`) is taken from the JWT, never the body; `at` is stamped
-  server-side; `status` is always created as `unverified`. Insert is idempotent on
-  the token (a retried POST is a no-op). Returns `{ "ok": true }`.
+  server-side; `status` is always created as `unverified`. `entryType` normalizes to
+  `balancing` unless the body sends `adjusting` (so an older client that omits it
+  reads as `balancing`). Insert is idempotent on the token (a retried POST is a
+  no-op). Returns `{ "ok": true }`.
 
 - **Backing table `dbo.RBalancingEntryExport`** — one row per `Token`,
   unique-indexed on it. DDL: `create-balancing-entry-export-table.sql` (agent
