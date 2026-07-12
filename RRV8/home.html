@@ -8229,6 +8229,12 @@
   // lands here — a 'worked' draft is still on the Home card awaiting Mark resolved
   // (the two-step); 'reopened'/'open' are in-progress. detailsHref → the worklist
   // where it was worked, so the auditor can open the rows behind it.
+  // Currency-format an audit amount. The module-level `_money` carries no symbol and
+  // the per-function `money` locals aren't in scope here, so this sign-aware helper
+  // keeps the two audit call sites from reaching for an undefined `money`. Audit
+  // entries don't carry a currency code today, so this uses $; thread ccy onto the
+  // entry if per-symbol Audit amounts are ever needed.
+  function _audMoney(n) { n = Number(n) || 0; return (n < 0 ? '-$' : '$') + _money(Math.abs(n)); }
   function _auditFromCard(rec) {
     var st = String((rec && rec.status) || '').toLowerCase();
     if (st !== 'complete') return null;
@@ -8244,7 +8250,7 @@
       message: msg, amount: amt, detailsHref: href,
       // event/detail keep the flat shape the Excel export consumes.
       event: nm + ' — resolved at source',
-      detail: msg + (amt != null && Math.abs(amt) >= 1 ? ' · ' + money(amt) : '')
+      detail: msg + (amt != null && Math.abs(amt) >= 1 ? ' · ' + _audMoney(amt) : '')
     };
   }
   // A balancing-entry export (RRV8.beStore) -> an ACCOUNTANT transaction. Carries a
@@ -8292,8 +8298,32 @@
     try { if ((!window.RR_CONFIG || RR_CONFIG.mode !== 'prod') && window.RRDEMO && RRDEMO.activityLog) return RRDEMO.activityLog() || []; } catch (_) {}
     return [];
   }
-  // Merge the three streams. Never throws: activity + each company's resolutions
-  // fall back independently; a total miss yields an empty (not broken) trail.
+  // The client-level DMAAI model attestation (RDmaaiModelApproval, via
+  // /inventory/integrity/model-approval) -> a STANDING accountant entry. A model
+  // approval is a control sign-off over the whole account model, not a per-company /
+  // per-period transaction, so it carries standing:true and is exempt from the
+  // company/period filter -- shown on every scope until the model changes and it
+  // needs re-approval (state 'needs-review' / changedSinceApproval).
+  function _auditFromModelApproval(st) {
+    if (!st || !st.approvedBy || !st.approvedDate) return null;   // nothing signed off yet
+    var stale = (st.changedSinceApproval === true) || (String(st.state || '') === 'needs-review');
+    var n = (st.companiesInScope && st.companiesInScope.length) || 0;
+    var scope = n ? (n + ' compan' + (n === 1 ? 'y' : 'ies') + ' in scope') : '';
+    var msg = 'Signed off the DMAAI account model'
+      + (scope ? ' · ' + scope : '')
+      + (st.note ? ' — ' + st.note : '')
+      + (stale ? ' · model changed since approval, re-approval needed' : '');
+    return {
+      actor: 'accountant',
+      trigger: stale ? 'Model DMAAI approval · needs re-approval' : 'Model DMAAI approved',
+      title: 'Model Approved', at: st.approvedDate || '', by: st.approvedBy || '',
+      co: '', per: '', standing: true,
+      message: msg, detailsHref: '',
+      event: 'Model DMAAI approved', detail: msg
+    };
+  }
+  // Merge the streams. Never throws: activity + each company's resolutions + the model
+  // attestation fall back independently; a total miss yields an empty (not broken) trail.
   function _auditFetch(d) {
     var cos = ((d && d.companies) || []).map(function (c) { return c.co; }).filter(function (v, i, a) { return v != null && a.indexOf(v) === i; });
     var actP = (typeof rrFetch === 'function')
@@ -8316,12 +8346,17 @@
         ? RRV8.dispoStore.load(co).then(function () { return RRV8.dispoStore.forCompany(co); }).catch(function () { return []; })
         : Promise.resolve([]);
     }));
-    return Promise.all([actP, remP, beP, dispoP]).then(function (res) {
+    // Client-level model attestation (one row, not per-company). Best-effort; a miss = no entry.
+    var maP = (typeof rrFetch === 'function')
+      ? rrFetch('inventory/integrity/model-approval').then(function (s) { return s || null; }).catch(function () { return null; })
+      : Promise.resolve(null);
+    return Promise.all([actP, remP, beP, dispoP, maP]).then(function (res) {
       var acts = res[0] || [], remGroups = res[1] || [], beGroups = res[2] || [], dispoGroups = res[3] || [], out = [];
       acts.forEach(function (e) { var m = _auditFromActivity(e); if (m) out.push(m); });
       remGroups.forEach(function (recs) { (recs || []).forEach(function (rec) { var m = _auditFromCard(rec); if (m) out.push(m); }); });
       beGroups.forEach(function (recs) { (recs || []).forEach(function (rec) { var m = _auditFromBe(rec); if (m) out.push(m); }); });
       dispoGroups.forEach(function (recs) { (recs || []).forEach(function (rec) { var m = _auditFromDispo(rec); if (m) out.push(m); }); });
+      var mm = _auditFromModelApproval(res[4]); if (mm) out.push(mm);
       out.sort(function (a, b) { return String(b.at || '').localeCompare(String(a.at || '')); });   // newest-first (ISO sorts chronologically)
       return out;
     });
@@ -8341,7 +8376,7 @@
       +     '<span class="audit-band-title">' + esc(e.title || 'Entry') + '</span>'
       +     vpill
       +     (co ? '<span class="audit-band-scope">' + esc(co) + '</span>' : '')
-      +     (e.amount != null && Math.abs(e.amount) >= 1 ? '<span class="audit-band-amt">' + esc(money(e.amount)) + '</span>' : '')
+      +     (e.amount != null && Math.abs(e.amount) >= 1 ? '<span class="audit-band-amt">' + esc(_audMoney(e.amount)) + '</span>' : '')
       +   '</div>'
       +   (e.message ? '<div class="audit-band-msg">' + esc(e.message) + '</div>' : '<div class="audit-band-msg is-empty">No finding recorded.</div>')
       +   '<div class="audit-band-meta">' + meta + '</div>'
@@ -8357,8 +8392,11 @@
     var total = (_auditEntries || []).length;
     // Single-company tab: scope to the focus company + the exact selected period.
     var all = (_auditEntries || []).filter(function (e) {
-      return (!_auditCo || String(e.co).trim() === _auditCo.trim())
-          && (!_auditPeriod || e.per === _auditPeriod);
+      // Standing entries (e.g. the client-level model approval) aren't company/period
+      // scoped -- always show them; everything else scopes to the focus company + period.
+      return e.standing === true
+          || ((!_auditCo || String(e.co).trim() === _auditCo.trim())
+              && (!_auditPeriod || e.per === _auditPeriod));
     });
     var counts = { all: all.length, analyst: 0, accountant: 0 };
     all.forEach(function (e) { if (counts[e.actor] != null) counts[e.actor]++; });
@@ -8460,6 +8498,13 @@
       if (gen !== _auditGen) return;   // a newer render (DB/tab switch) superseded this one
       _auditEntries = entries;
       _paintAuditTrail();
+    }).catch(function (err) {
+      if (gen !== _auditGen) return;
+      try { if (window.console && console.error) console.error('Audit trail render failed', err); } catch (_) {}
+      // A thrown mapper (or any hiccup) must not leave the tab spinning forever.
+      _auditKey = '';   // let a later render retry from scratch
+      var b = $('auditTrail');
+      if (b) b.innerHTML = '<div class="audit-empty">The audit trail couldn&rsquo;t be loaded. Switch away and back to retry.</div>';
     });
   }
   function renderReportsPalette(d) {
