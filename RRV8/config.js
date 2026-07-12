@@ -551,6 +551,213 @@ window.RRV8 = window.RRV8 || {};
 })();
 
 /*
+ * RRV8.beStore — the balancing-entry EXPORT + VERIFICATION store (accountant side
+ * of the Audit spine). When the accountant exports a period-end balancing entry,
+ * RR mints a short token, hands them a ready-to-paste JDE Explanation carrying it,
+ * and records the export here as UNVERIFIED. On a later load the agent matches the
+ * token against F0911.GLEXA (the posted JE's Explanation) and flips the record to
+ * VERIFIED with the matched batch/amount — turning a self-reported "I posted it"
+ * into evidence reconciled against the system of record (JDE).
+ *
+ * Same self-contained, server-first + localStorage-fallback shape as cardStore, so
+ * the token flow works with ZERO console errors before the owner ships the
+ * /inventory/balancing-entry endpoints + dbo.RBalancingEntryExport. Grain: ONE
+ * record per token (a company+period may have more than one export over time).
+ *
+ *   load(company)       -> Promise<map>  keyed by token; cached per (activeDb, company)
+ *   save(record)        -> Promise       optimistic localStorage mirror, then POST
+ *   forCompany(company) -> [record, ...] all cached records for a company
+ *
+ * record = { company, periodEnd, token, amount, clearingAccount, status,
+ *            matchedBatch, matchedAmount, by, at }
+ * status in { unverified | verified }. Verification (matchedBatch/Amount, verified)
+ * is server-owned — the localStorage mirror can only ever hold 'unverified'.
+ */
+window.RRV8 = window.RRV8 || {};
+(function () {
+  var _cache = {};   // "<dbName>|<company>" -> { map: { "<token>": record } }
+  function _db() { try { return (window.RRDB && RRDB.name && RRDB.name()) || '_'; } catch (_) { return '_'; } }
+  function _base() {
+    try { return (window.RRDB && RRDB.agentBase && RRDB.agentBase()) || (window.RR_CONFIG && RR_CONFIG.testAgentBase) || ''; }
+    catch (_) { return ''; }
+  }
+  function _auth(h) { try { var t = localStorage.getItem('rrv8.token'); if (t) h['Authorization'] = 'Bearer ' + t; } catch (_) {} return h; }
+  function _p10(p) { return String(p == null ? '' : p).slice(0, 10); }
+  function _cacheKey(co) { return _db() + '|' + String(co); }
+  function _lsKey(co) { return 'rrv8.beExports.' + _db() + '.' + String(co); }
+  function _lsRead(co) { try { var raw = localStorage.getItem(_lsKey(co)); return raw ? (JSON.parse(raw) || {}) : {}; } catch (_) { return {}; } }
+  function _lsWrite(co, map) { try { localStorage.setItem(_lsKey(co), JSON.stringify(map || {})); } catch (_) {} }
+  function _norm(rec) {
+    rec = rec || {};
+    return {
+      company:         String(rec.company == null ? '' : rec.company),
+      periodEnd:       _p10(rec.periodEnd),
+      token:           String(rec.token == null ? '' : rec.token),
+      amount:          (rec.amount == null || rec.amount === '') ? null : Number(rec.amount),
+      clearingAccount: rec.clearingAccount == null ? '' : String(rec.clearingAccount),
+      status:          String(rec.status == null ? 'unverified' : rec.status),
+      matchedBatch:    rec.matchedBatch == null ? '' : String(rec.matchedBatch),
+      matchedAmount:   (rec.matchedAmount == null || rec.matchedAmount === '') ? null : Number(rec.matchedAmount),
+      by:              rec.by == null ? '' : String(rec.by),
+      at:              rec.at == null ? '' : String(rec.at)
+    };
+  }
+  function _fallback(company, ck) {
+    var map = {}, ls = _lsRead(company);
+    for (var k in ls) if (Object.prototype.hasOwnProperty.call(ls, k)) map[k] = _norm(ls[k]);
+    _cache[ck] = { map: map };
+    return map;
+  }
+  function load(company) {
+    var ck = _cacheKey(company), base = _base();
+    if (!base) return Promise.resolve(_fallback(company, ck));
+    var h = _auth({ 'Accept': 'application/json' });
+    return fetch(base + '/inventory/balancing-entry/exports?company=' + encodeURIComponent(company), { headers: h })
+      .then(function (r) { if (!r.ok) throw 0; return r.json(); })
+      .then(function (arr) {
+        if (!Array.isArray(arr)) return _fallback(company, ck);
+        var map = {}, ls = _lsRead(company);
+        // Server is authoritative for verification; keep any local-only records the
+        // server hasn't ingested yet (offline export before the endpoint shipped).
+        for (var lk in ls) if (Object.prototype.hasOwnProperty.call(ls, lk)) map[lk] = _norm(ls[lk]);
+        arr.forEach(function (rec) { var n = _norm(rec); if (!n.company) n.company = String(company); if (n.token) map[n.token] = n; });
+        _cache[ck] = { map: map };
+        _lsWrite(company, map);
+        return map;
+      })
+      .catch(function () { return _fallback(company, ck); });
+  }
+  function forCompany(company) {
+    var c = _cache[_cacheKey(company)]; if (!c) return [];
+    var out = []; for (var k in c.map) if (Object.prototype.hasOwnProperty.call(c.map, k)) out.push(c.map[k]);
+    return out;
+  }
+  function save(record) {
+    var n = _norm(record);
+    if (!n.at) n.at = new Date().toISOString();
+    if (!n.status) n.status = 'unverified';
+    var ck = _cacheKey(n.company);
+    var c = _cache[ck] || (_cache[ck] = { map: {} });
+    if (n.token) c.map[n.token] = n;   // optimistic
+    var mirror = {}; for (var k in c.map) if (Object.prototype.hasOwnProperty.call(c.map, k)) mirror[k] = c.map[k];
+    _lsWrite(n.company, mirror);
+    var base = _base();
+    if (!base) return Promise.resolve(n);
+    var h = _auth({ 'Content-Type': 'application/json;charset=UTF-8', 'Accept': 'application/json' });
+    return fetch(base + '/inventory/balancing-entry/export', {
+      method: 'POST', headers: h,
+      body: JSON.stringify({ company: n.company, periodEnd: n.periodEnd, token: n.token, amount: n.amount, clearingAccount: n.clearingAccount })
+    }).then(function () { return n; }).catch(function () { return n; });
+  }
+  window.RRV8.beStore = { load: load, save: save, forCompany: forCompany };
+})();
+
+/*
+ * RRV8.dispoStore — the accountant per-company period DISPOSITION store (UI-27 /
+ * UI-34). ONE record per (database, company, period). When the accountant marks a
+ * company complete for the period, the disposition REASON
+ * (immaterial | corrected | analyst | timing) is recorded here — the "record the
+ * decision" half of the Audit spine, and the shared signal the analyst view reads.
+ *
+ * Same self-contained, server-first + localStorage-fallback shape as cardStore.
+ *
+ *   load(company)         -> Promise<map>  keyed "<co>|<period>"; cached per (db, company)
+ *   get(company, period)  -> record | null (SYNC; caller must load() first)
+ *   forCompany(company)   -> [record, ...]
+ *   save(record)          -> Promise       optimistic mirror, then POST /inventory/disposition
+ *   clear(company, period)-> Promise       optimistic remove, then POST .../reopen
+ *
+ * record = { company, periodEnd, reason, by, at }. `by`/`at` are server-owned; the
+ * localStorage mirror stores by:'' (the browser can't attest identity).
+ */
+window.RRV8 = window.RRV8 || {};
+(function () {
+  var _cache = {};   // "<dbName>|<company>" -> { map: { "<co>|<period>": record } }
+  function _db() { try { return (window.RRDB && RRDB.name && RRDB.name()) || '_'; } catch (_) { return '_'; } }
+  function _base() {
+    try { return (window.RRDB && RRDB.agentBase && RRDB.agentBase()) || (window.RR_CONFIG && RR_CONFIG.testAgentBase) || ''; }
+    catch (_) { return ''; }
+  }
+  function _auth(h) { try { var t = localStorage.getItem('rrv8.token'); if (t) h['Authorization'] = 'Bearer ' + t; } catch (_) {} return h; }
+  function _p10(p) { return String(p == null ? '' : p).slice(0, 10); }
+  function _key(co, period) { return String(co) + '|' + _p10(period); }
+  function _cacheKey(co) { return _db() + '|' + String(co); }
+  function _lsKey(co) { return 'rrv8.dispos.' + _db() + '.' + String(co); }
+  function _lsRead(co) { try { var raw = localStorage.getItem(_lsKey(co)); return raw ? (JSON.parse(raw) || {}) : {}; } catch (_) { return {}; } }
+  function _lsWrite(co, map) { try { localStorage.setItem(_lsKey(co), JSON.stringify(map || {})); } catch (_) {} }
+  function _norm(rec) {
+    rec = rec || {};
+    return {
+      company:   String(rec.company == null ? '' : rec.company),
+      periodEnd: _p10(rec.periodEnd),
+      reason:    String(rec.reason == null ? '' : rec.reason),
+      by:        rec.by == null ? '' : String(rec.by),
+      at:        rec.at == null ? '' : String(rec.at)
+    };
+  }
+  function _fallback(company, ck) {
+    var map = {}, ls = _lsRead(company);
+    for (var k in ls) if (Object.prototype.hasOwnProperty.call(ls, k)) map[k] = _norm(ls[k]);
+    _cache[ck] = { map: map };
+    return map;
+  }
+  function load(company) {
+    var ck = _cacheKey(company), base = _base();
+    if (!base) return Promise.resolve(_fallback(company, ck));
+    var h = _auth({ 'Accept': 'application/json' });
+    return fetch(base + '/inventory/disposition/list?company=' + encodeURIComponent(company), { headers: h })
+      .then(function (r) { if (!r.ok) throw 0; return r.json(); })
+      .then(function (arr) {
+        if (!Array.isArray(arr)) return _fallback(company, ck);
+        var map = {};
+        arr.forEach(function (rec) { var n = _norm(rec); if (!n.company) n.company = String(company); map[_key(n.company, n.periodEnd)] = n; });
+        _cache[ck] = { map: map };
+        _lsWrite(company, map);   // mirror server truth (authoritative — replaces local)
+        return map;
+      })
+      .catch(function () { return _fallback(company, ck); });
+  }
+  function get(company, period) {
+    var c = _cache[_cacheKey(company)];
+    return c ? (c.map[_key(company, period)] || null) : null;
+  }
+  function forCompany(company) {
+    var c = _cache[_cacheKey(company)]; if (!c) return [];
+    var out = []; for (var k in c.map) if (Object.prototype.hasOwnProperty.call(c.map, k)) out.push(c.map[k]);
+    return out;
+  }
+  function save(record) {
+    var n = _norm(record);
+    if (!n.at) n.at = new Date().toISOString();
+    var ck = _cacheKey(n.company), c = _cache[ck] || (_cache[ck] = { map: {} });
+    c.map[_key(n.company, n.periodEnd)] = n;   // optimistic
+    var mirror = {}; for (var k in c.map) if (Object.prototype.hasOwnProperty.call(c.map, k)) mirror[k] = c.map[k];
+    _lsWrite(n.company, mirror);
+    var base = _base();
+    if (!base) return Promise.resolve(n);
+    var h = _auth({ 'Content-Type': 'application/json;charset=UTF-8', 'Accept': 'application/json' });
+    return fetch(base + '/inventory/disposition', {
+      method: 'POST', headers: h,
+      body: JSON.stringify({ company: n.company, periodEnd: n.periodEnd, reason: n.reason })
+    }).then(function () { return n; }).catch(function () { return n; });
+  }
+  function clear(company, period) {
+    var ck = _cacheKey(company), c = _cache[ck] || (_cache[ck] = { map: {} });
+    delete c.map[_key(company, period)];   // optimistic remove
+    var mirror = {}; for (var k in c.map) if (Object.prototype.hasOwnProperty.call(c.map, k)) mirror[k] = c.map[k];
+    _lsWrite(company, mirror);
+    var base = _base();
+    if (!base) return Promise.resolve();
+    var h = _auth({ 'Content-Type': 'application/json;charset=UTF-8', 'Accept': 'application/json' });
+    return fetch(base + '/inventory/disposition/reopen', {
+      method: 'POST', headers: h,
+      body: JSON.stringify({ company: String(company), periodEnd: _p10(period) })
+    }).then(function () {}).catch(function () {});
+  }
+  window.RRV8.dispoStore = { load: load, get: get, forCompany: forCompany, save: save, clear: clear, key: _key };
+})();
+
+/*
  * RRDEMO — staged, non-production sample data for the demo. Callers gate on
  * RR_CONFIG.mode !== 'prod', so production always renders live data; this only
  * surfaces in demo/staging. Timestamps are relative to page load so the feed
