@@ -478,12 +478,11 @@ DB-scoped automatically.
 
 - **`GET /admin/activity?limit=N`** — recent events, newest first.
   Row: `{ at, event, detail, by }` (ISO instant / short label / one-line / who).
-  **Optional (UI-27):** a row MAY also carry `type` ∈
-  `remediation | reconciliation | system` — the audit-trail classification the
-  Audit Support Center tab groups by. It is purely additive; the field is absent
-  on the current agent, and the UI derives the type from the event text when it's
-  missing (see *Audit Support Center* below), so tagging is a refinement, never a
-  contract the UI depends on.
+  **Optional (UI-27):** a row MAY also carry `type: "accountant"` to mark it as
+  an accountant reconciliation completion for the Audit Support Center tab (see
+  below). Purely additive; the field is absent on the current agent, and the UI
+  falls back to an event-text keyword read when it's missing, so tagging is a
+  refinement, never a contract the UI depends on.
 - **`GET /admin/acks`** — current acks (one per kind), for the Home dots:
 
   ```json
@@ -517,34 +516,39 @@ DB-scoped automatically.
   ```
 
   Returns `{ "ok": true }`. The UI call degrades gracefully (no-op) if the agent
-  predates this endpoint. **Optional (UI-27):** the body MAY include
-  `type` ∈ `remediation | reconciliation | system` so the writer classifies the
-  entry explicitly rather than leaving the reader to infer it from the text. An
-  agent that doesn't persist `type` simply drops it (Jackson ignores unknown
-  fields) with no error — see the fallback note below.
+  predates this endpoint. **Optional (UI-27):** an accountant reconciliation
+  completion MAY include `type: "accountant"` so the Audit tab classifies it
+  without relying on event-text keywords. An agent that doesn't persist `type`
+  simply drops it (Jackson ignores unknown fields) with no error.
 
 ### Audit Support Center (UI-27)
 
-The accountant **Audit** tab renders a convenience VIEW over one shared
-audit-activity spine — **not** an audit-of-record (RR is a tool; JDE is the SoR,
-so no immutability / versioning / legal-hold). It is a read-only projection of
-two feeds that already exist:
+The accountant **Audit** tab renders a convenience VIEW of the analyst /
+accountant **transactions** behind the numbers — **not** an audit-of-record (RR
+is a tool; JDE is the SoR, so no immutability / versioning / legal-hold).
+**Inputs are analyst or accountant transactions ONLY** — system events (loads /
+B→C / deploys / review acks) are **not** inputs and are dropped. Each entry is
+one **actor** + a **trigger** + (ideally) a **details link** to where the work
+was done, so the framework extends simply by adding triggers. Two are wired
+today, both from feeds that already exist:
 
-- **Reconciliation** + **System** entries come from `GET /admin/activity`
-  (sign-offs, JE-Complete markers, and recorded adjusting entries are written
-  there via `RRV8.logActivity`; loads / B→C / deploys / review acks land there
-  too).
-- **Remediation** entries come from `GET /inventory/txv/resolutions` per company
-  (the analyst's card resolutions, one per `(company, cardCode, periodEnd)`).
+- **Analyst** — resolved transaction-variance reviews from
+  `GET /inventory/txv/resolutions` per company (one per
+  `(company, cardCode, periodEnd)`; only `status: complete` appears). Details
+  link → the worklist (`inventory-transactions.html?company&card&period`).
+  *(Cardex variance will add a second analyst trigger once designed.)*
+- **Accountant** — reconciliation completions (attest / sign-off / journal
+  entry / balancing / adjusting) written to `GET /admin/activity` via
+  `RRV8.logActivity`. Everything else on that feed is system and is filtered
+  out.
 
-The UI classifies each entry by the optional `type` tag when present, else by a
-keyword read of the `event`/`detail` text, and merges the streams into one
-newest-first, type-filterable trail (All / Remediation / Reconciliation /
-System) plus an Excel "Audit report" snapshot. **No new endpoint is required** —
-both feeds already ship, and both degrade to a per-browser/localStorage fallback
-with zero console errors when the agent is absent. Adding `type` to the activity
-write is the only (optional) backend refinement; when the owner adds it,
-classification gets exact without any UI change.
+Filter chips are **All / Analyst / Accountant**. The trail renders as summary
+cards (title · trigger · company · period · message · amount · by/when · details
+link) plus an Excel "Audit report" snapshot. **No new endpoint is required** —
+both feeds already ship and degrade to a per-browser/localStorage fallback with
+zero console errors when the agent is absent. The optional `type` tag on
+`/admin/activity` (documented above) still helps: an entry tagged
+`type: accountant` is classified without relying on the event-text keywords.
 
 ---
 
