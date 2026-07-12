@@ -460,6 +460,27 @@
   .acct-snap-right { justify-self: end; display: inline-flex; flex-direction: column; align-items: flex-end; gap: 3px; }
   .perp-fulllink { font-size: 12.5px; font-weight: 700; color: var(--blue); text-decoration: none; cursor: pointer; }
   .perp-fulllink:hover { text-decoration: underline; }
+  /* ---- Audit Support Center (UI-27) — typed activity trail ---- */
+  .audit-filters { display: flex; gap: 6px; flex-wrap: wrap; margin: 2px 6px 14px; }
+  .audit-chip { font: inherit; font-size: 12.5px; font-weight: 700; color: var(--navy); background: #eef1f6; border: 1px solid var(--rule); border-radius: 999px; padding: 5px 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 7px; }
+  .audit-chip:hover { background: #e3e8f0; }
+  .audit-chip.is-active { background: var(--navy); border-color: var(--navy); color: #fff; }
+  .audit-chip-n { font-size: 11px; font-weight: 800; background: rgba(0,0,0,.10); border-radius: 999px; padding: 1px 7px; min-width: 20px; text-align: center; }
+  .audit-chip.is-active .audit-chip-n { background: rgba(255,255,255,.22); }
+  .audit-row { display: grid; grid-template-columns: 132px 1fr; align-items: start; gap: 14px; padding: 12px 6px; border-bottom: 1px solid var(--rule); }
+  .audit-row:last-child { border-bottom: 0; }
+  .audit-badge { justify-self: start; font-size: 11px; font-weight: 800; letter-spacing: .02em; text-transform: uppercase; padding: 3px 10px; border-radius: 6px; white-space: nowrap; }
+  .audit-badge-remediation    { color: #1c6b3a; background: #e3f4ea; }
+  .audit-badge-reconciliation { color: #1f2d4a; background: #e6ecf6; }
+  .audit-badge-system         { color: #5a4b12; background: #f3eecf; }
+  .audit-main { min-width: 0; }
+  .audit-evt { font-size: 14.5px; font-weight: 700; color: var(--navy); display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .audit-co { font-size: 12px; font-weight: 600; color: var(--text-muted); }
+  .audit-detail { font-size: 13px; color: #3a4356; margin-top: 3px; line-height: 1.45; word-break: break-word; }
+  .audit-meta { font-size: 12px; color: var(--text-muted); margin-top: 5px; }
+  .audit-who { font-weight: 700; color: #4a5568; }
+  .audit-empty { font-size: 13.5px; color: var(--text-muted); padding: 22px 6px; text-align: center; }
+  @media (max-width: 640px) { .audit-row { grid-template-columns: 1fr; gap: 6px; } }
   /* Soft-grey tray behind the company cards so the white cards read as distinct,
      liftable objects rather than blending into the white container. */
   .acct-grid-wrap { display: block; background: #e8ecf3; border: 1px solid var(--rule); border-radius: 10px; padding: 14px; }
@@ -2158,6 +2179,30 @@
       <div class="perp-opt-note" id="perpOptNote" hidden></div>
       <!-- As-of item grid. -->
       <div class="perp-grid-wrap" id="acctPerpGrid"></div>
+    </div>
+  </section>
+
+  <!-- Accountant · Audit palette (UI-27) — the auditor-facing "everything that
+       touched the numbers this period" trail. A convenience VIEW over the shared
+       audit-activity spine, NOT an audit-of-record (RR is a tool; JDE is the SoR
+       — no immutability/versioning). Merges three typed streams: Remediation
+       (analyst card resolutions, GET /inventory/txv/resolutions), Reconciliation
+       (JE-Complete markers + recorded adjusting entries + sign-offs, from
+       /admin/activity), and System (loads / B->C / deploys, from /admin/activity).
+       Graceful localStorage/RRDEMO fallback. Rendered by renderAuditPanel(). -->
+  <section class="acct-panels" id="acctAudit" hidden aria-label="Audit Support Center">
+    <div class="acct-snapshot">
+      <div class="acct-snap-headline">
+        <span class="acct-snap-title">Audit Support Center</span>
+        <span class="acct-snap-period" id="acctAuditPeriod"></span>
+        <span class="acct-snap-right">
+          <a class="perp-fulllink" id="auditExportLink" href="#" role="button">Audit report &rarr;</a>
+        </span>
+      </div>
+      <!-- Type filter chips (All / Remediation / Reconciliation / System). -->
+      <div class="audit-filters" id="auditFilters" role="tablist" aria-label="Audit entry type"></div>
+      <!-- The typed, newest-first trail. -->
+      <div class="audit-trail" id="auditTrail"><div class="audit-empty">Loading the audit trail&hellip;</div></div>
     </div>
   </section>
 
@@ -5679,7 +5724,8 @@
     accountant: [
       { k: 'rec',       label: 'Overview' },
       { k: 'account',   label: 'Accounts' },
-      { k: 'perpetual', label: 'On Hand' }
+      { k: 'perpetual', label: 'On Hand' },
+      { k: 'audit',     label: 'Audit' }
     ],
     analyst: [
       { k: 'work',    label: 'Overview' },
@@ -5725,10 +5771,11 @@
     renderWhatifBanner();    // loud rail whenever a company is excluded
     var vr = _viewRole();
     var trg = $('acctTriage');
-    var rec = $('acctPanels'), acct = $('acctAccount'), perp = $('acctPerpetual');
+    var rec = $('acctPanels'), acct = $('acctAccount'), perp = $('acctPerpetual'), audit = $('acctAudit');
     var hideAll = function () {
       if (trg) trg.hidden = true;
       if (rec) rec.hidden = true; if (acct) acct.hidden = true; if (perp) perp.hidden = true;
+      if (audit) audit.hidden = true;
       var rp0 = $('reportsPalette'); if (rp0) rp0.hidden = true;
     };
     if (vr !== 'accountant') { hideAll(); if (vr === 'analyst') renderAnalystPalette(); return; }
@@ -5753,10 +5800,12 @@
     if (rec)  rec.hidden  = (sv !== 'rec');
     if (acct) acct.hidden = (sv !== 'account');
     if (perp) perp.hidden = (sv !== 'perpetual');
+    if (audit) audit.hidden = (sv !== 'audit');
     if (reports) reports.hidden = (sv !== 'reports');
     if (sv === 'account')        renderAccountPalette(d);
     else if (sv === 'perpetual') renderPerpetualPalette(d);
     else if (sv === 'reports')   renderReportsPalette(d);
+    else if (sv === 'audit')     renderAuditPanel(d);
     else                         renderAcctSnapshot(d);
     // Prewarm the Perpetual as-of in the background (the ~2.4s query is the
     // bottleneck) so switching to that tab is instant. Skip when already there
@@ -7889,6 +7938,161 @@
         rows: body, sheetName: 'Integrity', fileName: RRV8.exportName({ surface: rep.file, company: (onlyCo != null ? onlyCo : 'all'), period: per })
       });
     }).catch(function (err) { if (typeof toast === 'function') toast('Could not build the report — ' + ((err && err.message) || 'try again')); });
+  }
+  // ---- Accountant · Audit Support Center (UI-27) --------------------------------
+  // A convenience VIEW over the shared audit-activity spine — NOT an audit-of-record
+  // (RR is a tool; JDE is the SoR — no immutability/versioning here). Merges three
+  // typed streams into one newest-first, filterable trail:
+  //   Remediation    — analyst card resolutions (RRV8.cardStore / GET /inventory/txv/resolutions)
+  //   Reconciliation — JE-Complete markers, adjusting entries, sign-offs (/admin/activity)
+  //   System         — loads / B->C / deploys / reviews (/admin/activity)
+  // Server-first with graceful localStorage/RRDEMO fallback (zero console noise).
+  var _auditFilter = 'all', _auditEntries = null, _auditGen = 0, _auditWired = false, _auditKey = '';
+  var AUDIT_TYPES = { remediation: 'Remediation', reconciliation: 'Reconciliation', system: 'System' };
+  var _txvCodeName = {
+    ACCT: 'Account mismatch', PER: 'Period timing', MTO: 'Make-to-order', ICO: 'Intercompany',
+    TRF: 'Transfer', DS: 'Direct ship', 'T-SALES': 'Sales', 'T-PURCH': 'Purchasing',
+    'T-MFG': 'Manufacturing', 'T-INV': 'Inventory'
+  };
+  // Type from an explicit server `type` tag (my API.md spec) else a keyword read of
+  // the event/detail text — backward-compatible with the current untagged feed.
+  function _auditClassify(e) {
+    var t = String((e && e.type) || '').toLowerCase();
+    if (t === 'remediation' || t === 'reconciliation' || t === 'system') return t;
+    var s = ((e && e.event) || '') + ' ' + ((e && e.detail) || '');
+    if (/reconcil|journal entr|balancing|attest|sign(ed)?[ -]?off|repost|adjust|r099102|period (complete|closed|reopen)/i.test(s)) return 'reconciliation';
+    if (/remediat|source fix|re-?roll|re-?sync|synced|variance resolved/i.test(s)) return 'remediation';
+    return 'system';
+  }
+  function _auditCoLabel(co) {
+    var c = String(co == null ? '' : co).trim(); if (!c) return '';
+    var nm = (_coNames && _coNames[c]) || '';
+    return nm ? (nm + ' (Co ' + c + ')') : ('Co ' + c);
+  }
+  function _auditAbs(at) {
+    if (!at) return '';
+    try { var dt = new Date(at); if (!isNaN(dt.getTime())) return dt.toLocaleString(); } catch (_) {}
+    return String(at);
+  }
+  // cardStore resolution record -> a Remediation trail entry (skip untouched 'open').
+  function _auditFromCard(rec) {
+    var st = String((rec && rec.status) || '').toLowerCase();
+    if (!st || st === 'open') return null;
+    var evt = st === 'complete' ? 'Variance resolved at source'
+            : st === 'reopened' ? 'Resolution reopened'
+            : 'Variance worked';
+    var bits = [];
+    var nm = _txvCodeName[rec.cardCode] || rec.cardCode; if (nm) bits.push(nm);
+    if (rec.sourceFix) bits.push(rec.sourceFix);
+    if (rec.varAmount != null && !isNaN(rec.varAmount) && Math.abs(rec.varAmount) >= 1) bits.push(money(rec.varAmount));
+    if (rec.note) bits.push(rec.note);
+    return { type: 'remediation', at: rec.at || '', event: evt, detail: bits.join(' · '), by: rec.by || '', co: rec.company || '' };
+  }
+  function _auditPass(e) { return _auditFilter === 'all' || e.type === _auditFilter; }
+  function _auditDemoActivity() {
+    try { if ((!window.RR_CONFIG || RR_CONFIG.mode !== 'prod') && window.RRDEMO && RRDEMO.activityLog) return RRDEMO.activityLog() || []; } catch (_) {}
+    return [];
+  }
+  // Merge the three streams. Never throws: activity + each company's resolutions
+  // fall back independently; a total miss yields an empty (not broken) trail.
+  function _auditFetch(d) {
+    var cos = ((d && d.companies) || []).map(function (c) { return c.co; }).filter(function (v, i, a) { return v != null && a.indexOf(v) === i; });
+    var actP = (typeof rrFetch === 'function')
+      ? rrFetch('admin/activity', { query: { limit: 200 } }).then(function (list) {
+          return (Array.isArray(list) && list.length) ? list : _auditDemoActivity();
+        }).catch(function () { return _auditDemoActivity(); })
+      : Promise.resolve(_auditDemoActivity());
+    var remP = Promise.all(cos.map(function (co) {
+      return (window.RRV8 && RRV8.cardStore)
+        ? RRV8.cardStore.load(co).then(function () { return RRV8.cardStore.forCompany(co); }).catch(function () { return []; })
+        : Promise.resolve([]);
+    }));
+    return Promise.all([actP, remP]).then(function (res) {
+      var acts = res[0] || [], remGroups = res[1] || [], out = [];
+      acts.forEach(function (e) {
+        out.push({ type: _auditClassify(e), at: e.at || '', event: e.event || 'Activity', detail: e.detail || '', by: e.by || '', co: e.co || '' });
+      });
+      remGroups.forEach(function (recs) { (recs || []).forEach(function (rec) { var m = _auditFromCard(rec); if (m) out.push(m); }); });
+      out.sort(function (a, b) { return String(b.at || '').localeCompare(String(a.at || '')); });   // newest-first (ISO sorts chronologically)
+      return out;
+    });
+  }
+  function _paintAuditTrail() {
+    var box = $('auditTrail'); if (!box) return;
+    var all = _auditEntries || [];
+    var counts = { all: all.length, remediation: 0, reconciliation: 0, system: 0 };
+    all.forEach(function (e) { counts[e.type] = (counts[e.type] || 0) + 1; });
+    var chips = $('auditFilters');
+    if (chips) {
+      chips.innerHTML = ['all', 'remediation', 'reconciliation', 'system'].map(function (k) {
+        var label = k === 'all' ? 'All' : AUDIT_TYPES[k];
+        return '<button type="button" class="audit-chip audit-chip-' + k + (k === _auditFilter ? ' is-active' : '')
+          + '" data-af="' + k + '" role="tab" aria-selected="' + (k === _auditFilter) + '">' + label
+          + ' <span class="audit-chip-n">' + counts[k] + '</span></button>';
+      }).join('');
+    }
+    var rows = all.filter(_auditPass);
+    if (!rows.length) {
+      box.innerHTML = '<div class="audit-empty">' + (all.length
+        ? 'No ' + (AUDIT_TYPES[_auditFilter] || '').toLowerCase() + ' entries in view.'
+        : 'No recorded activity for this database yet. Reconciliation sign-offs, analyst source-fixes, and system loads appear here as they happen.') + '</div>';
+      return;
+    }
+    box.innerHTML = rows.map(function (e) {
+      var co = _auditCoLabel(e.co);
+      return '<div class="audit-row audit-' + e.type + '">'
+        + '<span class="audit-badge audit-badge-' + e.type + '">' + (AUDIT_TYPES[e.type] || e.type) + '</span>'
+        + '<div class="audit-main">'
+        +   '<div class="audit-evt">' + esc(e.event || 'Activity') + (co ? '<span class="audit-co">' + esc(co) + '</span>' : '') + '</div>'
+        + (e.detail ? '<div class="audit-detail">' + esc(e.detail) + '</div>' : '')
+        +   '<div class="audit-meta">' + (e.by ? '<span class="audit-who">' + esc(e.by) + '</span> &middot; ' : '')
+        +     '<span class="audit-when" title="' + esc(_auditAbs(e.at)) + '">' + esc(fmtAgo(e.at) || _auditAbs(e.at)) + '</span></div>'
+        + '</div></div>';
+    }).join('');
+  }
+  function _auditExportExcel() {
+    var list = (_auditEntries || []).filter(_auditPass);
+    if (!list.length) { if (typeof toast === 'function') toast('No audit entries to export'); return; }
+    var dbName = ((typeof activeDb === 'function' && activeDb()) || {}).n || '';
+    var per = (_acctData && (_acctData.viewedPeriod || _acctData.latestPeriod)) || '';
+    var cols = [{ label: 'When' }, { label: 'Type' }, { label: 'Event' }, { label: 'Detail' }, { label: 'Who' }, { label: 'Company' }];
+    var rows = list.map(function (e) { return [_auditAbs(e.at), AUDIT_TYPES[e.type] || e.type, e.event || '', e.detail || '', e.by || '', _auditCoLabel(e.co)]; });
+    var ok = buildAuditWorkbook({
+      sheetName: 'Audit',
+      fileName: RRV8.exportName({ surface: 'Audit', period: per }),
+      titleLines: ['Audit Support Center — activity trail', (dbName ? dbName + ' · ' : '') + (per ? 'through ' + (fmtPeriod(per) || per) + ' · ' : '') + rows.length + ' entr' + (rows.length !== 1 ? 'ies' : 'y')],
+      columns: cols, rows: rows
+    });
+    if (ok) { try { if (window.RRV8 && RRV8.logActivity) RRV8.logActivity('Audit report exported', rows.length + ' entries'); } catch (_) {} }
+  }
+  function renderAuditPanel(d) {
+    if (d && d.companies && !_acctData) _acctData = d;
+    d = d || _acctData || { companies: [] };
+    var per = (d && (d.viewedPeriod || d.latestPeriod)) || '';
+    var pl = $('acctAuditPeriod'); if (pl) pl.textContent = per ? ('through ' + (fmtPeriod(per) || per)) : '';
+    if (!_auditWired) {
+      _auditWired = true;
+      var chips = $('auditFilters');
+      if (chips) chips.addEventListener('click', function (ev) {
+        var b = (ev.target && ev.target.closest) ? ev.target.closest('[data-af]') : null; if (!b) return;
+        _auditFilter = b.getAttribute('data-af') || 'all'; _paintAuditTrail();
+      });
+      var xl = $('auditExportLink');
+      if (xl) xl.addEventListener('click', function (ev) { ev.preventDefault(); _auditExportExcel(); });
+    }
+    // Re-fetch only when the DB/period/roster changes; otherwise repaint the cache
+    // (keeps the SQL box quiet on incidental repaints — e.g. company-name landings).
+    var dbName = ((typeof activeDb === 'function' && activeDb()) || {}).n || '';
+    var key = dbName + '|' + per + '|' + ((d.companies || []).length);
+    if (_auditEntries && key === _auditKey) { _paintAuditTrail(); return; }
+    _auditKey = key;
+    var gen = ++_auditGen;
+    if (!_auditEntries) { var b0 = $('auditTrail'); if (b0) b0.innerHTML = '<div class="audit-empty">Loading the audit trail&hellip;</div>'; }
+    _auditFetch(d).then(function (entries) {
+      if (gen !== _auditGen) return;   // a newer render (DB/tab switch) superseded this one
+      _auditEntries = entries;
+      _paintAuditTrail();
+    });
   }
   function renderReportsPalette(d) {
     if (d && d.companies && !_acctData) _acctData = d;
