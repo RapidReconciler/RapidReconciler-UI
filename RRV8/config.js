@@ -568,8 +568,9 @@ window.RRV8 = window.RRV8 || {};
  *   save(record)        -> Promise       optimistic localStorage mirror, then POST
  *   forCompany(company) -> [record, ...] all cached records for a company
  *
- * record = { company, periodEnd, token, amount, clearingAccount, status,
+ * record = { company, periodEnd, token, amount, clearingAccount, entryType, status,
  *            matchedBatch, matchedAmount, by, at }
+ * entryType in { balancing | adjusting } — which entry path minted it (Audit title).
  * status in { unverified | verified }. Verification (matchedBatch/Amount, verified)
  * is server-owned — the localStorage mirror can only ever hold 'unverified'.
  */
@@ -595,6 +596,10 @@ window.RRV8 = window.RRV8 || {};
       token:           String(rec.token == null ? '' : rec.token),
       amount:          (rec.amount == null || rec.amount === '') ? null : Number(rec.amount),
       clearingAccount: rec.clearingAccount == null ? '' : String(rec.clearingAccount),
+      // Which entry path minted it: 'balancing' (Overview clearing-account entry) or
+      // 'adjusting' (Accounts deep-dive per-account offset entry). Drives the Audit
+      // card title. Defaults to 'balancing' so pre-tag records read as before.
+      entryType:       String(rec.entryType == null || rec.entryType === '' ? 'balancing' : rec.entryType),
       status:          String(rec.status == null ? 'unverified' : rec.status),
       matchedBatch:    rec.matchedBatch == null ? '' : String(rec.matchedBatch),
       matchedAmount:   (rec.matchedAmount == null || rec.matchedAmount === '') ? null : Number(rec.matchedAmount),
@@ -646,7 +651,7 @@ window.RRV8 = window.RRV8 || {};
     var h = _auth({ 'Content-Type': 'application/json;charset=UTF-8', 'Accept': 'application/json' });
     return fetch(base + '/inventory/balancing-entry/export', {
       method: 'POST', headers: h,
-      body: JSON.stringify({ company: n.company, periodEnd: n.periodEnd, token: n.token, amount: n.amount, clearingAccount: n.clearingAccount })
+      body: JSON.stringify({ company: n.company, periodEnd: n.periodEnd, token: n.token, amount: n.amount, clearingAccount: n.clearingAccount, entryType: n.entryType })
     }).then(function () { return n; }).catch(function () { return n; });
   }
   window.RRV8.beStore = { load: load, save: save, forCompany: forCompany };
