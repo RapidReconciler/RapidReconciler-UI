@@ -7355,8 +7355,8 @@
   var _txvBusy = false;
 
   // The 10-card taxonomy (WORKLIST DAC-16 / docs/usp8-txv-classifier-design.md), driven
-  // by the server-set subtype (cards 1-6) and type (terminal cards 7-10). Vouchers +
-  // duplicate-sales are FLAGS (badges on the terminal card the row lands in), not cards.
+  // by the server-set subtype (cards 1-6) and type (terminal cards 7-10). A/P vouchers +
+  // duplicate-sales are now their OWN cards too (DAC-28, subtype-claimed by usp8_txv_flags).
   // `scope` = what the "Open in worklist" deep-link passes so the details page filters to
   // exactly this card (subtype for 1-6, module for the terminal type cards).
   // The card's own code is the drill-through key (passed as ?card=CODE); the
@@ -7372,13 +7372,16 @@
     // Linked pairs (2 documents, 1:1 SO↔PO)
     'TRF':     { title: 'Transfer Orders',             kind: 'linked',    tier: 'linked'  },
     'DS':      { title: 'Direct Ship',                 kind: 'linked',    tier: 'linked'  },
+    // DAC-28 — promoted from Comment-only annotations to their own cards.
+    'VCHR':    { title: 'A/P Voucher on Inventory',    kind: 'rebalance', tier: 'quick'   },
+    'DUP':     { title: 'Duplicate Sales',             kind: 'rebalance', tier: 'quick'   },
     // Terminal — the unclassified residual, split by transaction type
     'T-SALES': { title: 'Unclassified — Sales',          kind: 'review', tier: 'terminal' },
     'T-PURCH': { title: 'Unclassified — Purchasing',     kind: 'review', tier: 'terminal' },
     'T-MFG':   { title: 'Unclassified — Manufacturing',  kind: 'review', tier: 'terminal' },
     'T-INV':   { title: 'Unclassified — Inventory',      kind: 'review', tier: 'terminal' }
   };
-  var _TXV_CODE_ORDER = ['ACCT', 'PER', 'MTO', 'ICO', 'TRF', 'DS', 'T-SALES', 'T-PURCH', 'T-MFG', 'T-INV'];
+  var _TXV_CODE_ORDER = ['ACCT', 'PER', 'VCHR', 'DUP', 'MTO', 'ICO', 'TRF', 'DS', 'T-SALES', 'T-PURCH', 'T-MFG', 'T-INV'];
   var _TXV_TIER_ORDER = ['quick', 'complex', 'linked', 'terminal'];
   var _TXV_TIER_LABEL = { quick: 'Quick wins', complex: 'Complex transactions', linked: 'Linked pairs', terminal: 'Needs review' };
 
@@ -7393,8 +7396,8 @@
   function _txvClassifyCode(r) {
     // SUBTYPE-FIRST: the 008 pipeline's server-set subtype is the authoritative
     // classification (cards 1-6). Rows with no subtype are the terminal residual and
-    // fall to a card by transaction TYPE (cards 7-10). Vouchers + duplicate-sales are
-    // FLAGS handled separately (see the bucket loop), not their own cards.
+    // fall to a card by transaction TYPE (cards 7-10). A/P vouchers + duplicate-sales are
+    // now claimed subtypes (DAC-28) → their own cards (VCHR / DUP).
     var st = String(r.SubType || '').trim().toLowerCase();
     if (st === 'make to order') return 'MTO';
     if (st === 'intercompany')  return 'ICO';
@@ -7402,6 +7405,8 @@
     if (st === 'direct ship')   return 'DS';
     if (st === 'accounts')      return 'ACCT';
     if (st === 'periods')       return 'PER';
+    if (st === 'vouchers')        return 'VCHR';   // DAC-28: A/P voucher on inventory, promoted to a card
+    if (st === 'duplicate sales') return 'DUP';    // DAC-28: duplicate cardex relief, promoted to a card
     // No subtype → terminal card by type.
     var ty = String(r.Type || '').trim().toLowerCase();
     if (ty === 'sales')      return 'T-SALES';
@@ -7762,6 +7767,8 @@
       // Orders is one — the duplicate-cardex quirk is specific to Sales Update (R42800)
       // abending on ST/OT orders. Falls back to KIND_EXPLAIN. SME to refine.
       var CODE_EXPLAIN = {
+        VCHR: 'An A/P voucher (batch type V) posted to an inventory account instead of the A/P variance account — DMAAI 4220 is routing voucher variances into inventory. The fix is at the source: correct the 4220 routing so voucher variances land on the variance account, not inventory.',
+        DUP:  'The cardex relief posted twice while the GL posted once (RDuplicateSales flags the order) — the extra F4111 line IS the variance, a source double-write, not a mapping issue. Reverse the duplicated cardex relief at the source.',
         TRF: 'Transfer Orders (ST/OT) relieve inventory and post the GL through Sales Update (R42800). If that run is interrupted or crashes, its workfile can survive and a re-run duplicates the CARDEX relief — the F4111 line is written twice while the GL posts once — so the variance sits in the cardex, not the GL. It is a known JDE quirk, not a mapping error, and it can recur: reverse the duplicated cardex relief at the source. An adjusting entry only balances the GL this period; it will not remove the extra cardex line or stop it recurring if R42800 abends.'
       };
 
@@ -7801,9 +7808,11 @@
       _TXV_CODE_ORDER.forEach(function (code) {
         var b = buckets[code]; if (!b || b.rows === 0) return;
         var m = _TXV_CODE_META[code];
+        // DAC-28: A/P-voucher and duplicate-sales are now their own cards (VCHR / DUP), so
+        // the old secondary badges on OTHER cards are dropped — a row's card IS its
+        // classification now (all signal, no noise), and it keeps voucher/dup symmetric
+        // (the comment-keyed dup badge could no longer fire once flags claims by SubType).
         var flags = [];
-        if (b.dupsales) flags.push(b.dupsales + ' dup-sales');
-        if (b.vouchers) flags.push(b.vouchers + ' voucher' + (b.vouchers === 1 ? '' : 's'));
         var rec = _store ? _store.get(solo, code, focusP) : null;
         var done = !!(rec && rec.status === 'complete');   // card complete = store record complete
         if (done) resolvedThisCycle++;
