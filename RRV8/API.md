@@ -736,6 +736,41 @@ analyst's source-fix card, not suppress it). One current row per
   (`rrv8.dispos.<dbName>.<company>`) with zero console errors — a mark persists
   locally (survives reload) but isn't shared across sessions until the backend lands.
 
+### Analyst per-company period review (txv Pass 1)
+
+**Status: server-pending — UI wired, localStorage fallback in place.** The
+analyst counterpart to the accountant disposition. When the analyst finishes the
+Transaction-Variance plan for a company+period — fixing some sources at the root
+and letting the immaterial remainder ride — they mark the period reviewed. RR
+records the tally (how many card slices were source-fixed vs. let ride) so Pass 2
+can surface the analyst's review alongside the card outcomes in the Audit Center.
+One current row per `(company, periodEnd)`.
+
+- **`GET /inventory/txv/period-review?company=NN[&period=YYYY-MM-DD]`** — the
+  review records for one company, all periods (omit `&period=` for the full set).
+  Returns an array:
+
+  ```json
+  [ { "company": "00010", "periodEnd": "2025-07-31", "sourcesFixed": 3,
+      "letRide": 2, "note": "", "by": "name@customer.com",
+      "at": "2026-07-13T15:30:00Z" } ]
+  ```
+
+- **`POST /inventory/txv/period-review`** — mark reviewed: upsert ONE record keyed
+  on `(company, periodEnd)`. Body `{ "company": "00010", "periodEnd": "2025-07-31",
+  "sourcesFixed": 3, "letRide": 2, "note": "" }`. `sourcesFixed` / `letRide` are
+  integer card counts. The actor (`by`) is from the JWT; `at` is server-stamped.
+  Returns `{ "ok": true }`.
+
+- **Backing table `dbo.RTxvPeriodReview`** — one current row per
+  `(CompanyNumber, PeriodEnd)`, unique-indexed on that key. DDL:
+  `create-txv-period-review-table.sql` (agent setup; **also add to the
+  `RapidReconciler-DB` `.sqlproj`** to enter the dacpac). If the table or endpoints
+  are absent, the UI falls back to a per-browser localStorage map
+  (`rrv8.analystReview.<dbName>.<company>`) with zero console errors — a mark
+  persists locally (survives reload) but isn't shared across sessions until the
+  backend lands.
+
 ---
 
 ## Model DMAAI Review (validate + approve the model)

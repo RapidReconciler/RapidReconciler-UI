@@ -103,6 +103,10 @@ window.RR_TEST_AGENT_AREAS = [
   'inventory/integrity/aai-analysis-latest',
   'inventory/integrity/aai-responses',
   'inventory/integrity/aai-save-responses',
+  // DMAAI account resolver — per-account 4152-model vs 4240-GL pivot + mismatch
+  // flags for the analyst Transaction-Variance analyzer + Home txv card diagnosis.
+  // Read the same view at two depths (compact card line + full details analyzer).
+  'inventory/integrity/dmaai-resolve',
   // v359 migration — endpoints absorbed by the test agent in order:
   //   inventory/status                          2026-05-24  (boot-time filter universe + validation light)
   //   inventory/reconciliation-filtered         2026-05-24  (Recon summary + barChart)
@@ -777,6 +781,105 @@ window.RRV8 = window.RRV8 || {};
     }).then(function () {}).catch(function () {});
   }
   window.RRV8.dispoStore = { load: load, get: get, forCompany: forCompany, save: save, clear: clear, key: _key };
+})();
+
+/*
+ * RRV8.analystReviewStore — the per-company period REVIEW store for the analyst
+ * Transaction-Variance view (Pass 1). ONE record per (database, company, period).
+ * When the analyst finishes a period — some sources fixed, the rest let to ride —
+ * they mark the period reviewed; the tally (how many card slices they fixed at the
+ * source vs. let ride) is recorded here. This is the analyst counterpart to the
+ * accountant dispoStore: the "I've looked, here's what I did" signal that Pass 2
+ * will surface into the Audit Center.
+ *
+ * Same self-contained, server-first + localStorage-fallback shape as cardStore /
+ * dispoStore, so the review flow works with ZERO console errors before the owner
+ * ships the /inventory/txv/period-review endpoints + dbo.RTxvPeriodReview.
+ *
+ *   load(company)         -> Promise<map>  keyed "<co>|<period>"; cached per (db, company)
+ *   get(company, period)  -> record | null (SYNC; caller must load() first)
+ *   forCompany(company)   -> [record, ...]
+ *   save(record)          -> Promise       optimistic mirror, then POST
+ *
+ * record = { company, periodEnd, sourcesFixed, letRide, note, by, at }. `by`/`at`
+ * are server-owned; the localStorage mirror stores by:'' (the browser can't attest
+ * identity). sourcesFixed / letRide are integer card counts.
+ */
+window.RRV8 = window.RRV8 || {};
+(function () {
+  var _cache = {};   // "<dbName>|<company>" -> { map: { "<co>|<period>": record } }
+  function _db() { try { return (window.RRDB && RRDB.name && RRDB.name()) || '_'; } catch (_) { return '_'; } }
+  function _base() {
+    try { return (window.RRDB && RRDB.agentBase && RRDB.agentBase()) || (window.RR_CONFIG && RR_CONFIG.testAgentBase) || ''; }
+    catch (_) { return ''; }
+  }
+  function _auth(h) { try { var t = localStorage.getItem('rrv8.token'); if (t) h['Authorization'] = 'Bearer ' + t; } catch (_) {} return h; }
+  function _p10(p) { return String(p == null ? '' : p).slice(0, 10); }
+  function _int(v) { var n = parseInt(v, 10); return isFinite(n) ? n : 0; }
+  function _key(co, period) { return String(co) + '|' + _p10(period); }
+  function _cacheKey(co) { return _db() + '|' + String(co); }
+  function _lsKey(co) { return 'rrv8.analystReview.' + _db() + '.' + String(co); }
+  function _lsRead(co) { try { var raw = localStorage.getItem(_lsKey(co)); return raw ? (JSON.parse(raw) || {}) : {}; } catch (_) { return {}; } }
+  function _lsWrite(co, map) { try { localStorage.setItem(_lsKey(co), JSON.stringify(map || {})); } catch (_) {} }
+  function _norm(rec) {
+    rec = rec || {};
+    return {
+      company:      String(rec.company == null ? '' : rec.company),
+      periodEnd:    _p10(rec.periodEnd),
+      sourcesFixed: _int(rec.sourcesFixed),
+      letRide:      _int(rec.letRide),
+      note:         String(rec.note == null ? '' : rec.note),
+      by:           rec.by == null ? '' : String(rec.by),
+      at:           rec.at == null ? '' : String(rec.at)
+    };
+  }
+  function _fallback(company, ck) {
+    var map = {}, ls = _lsRead(company);
+    for (var k in ls) if (Object.prototype.hasOwnProperty.call(ls, k)) map[k] = _norm(ls[k]);
+    _cache[ck] = { map: map };
+    return map;
+  }
+  function load(company) {
+    var ck = _cacheKey(company), base = _base();
+    if (!base) return Promise.resolve(_fallback(company, ck));
+    var h = _auth({ 'Accept': 'application/json' });
+    return fetch(base + '/inventory/txv/period-review?company=' + encodeURIComponent(company), { headers: h })
+      .then(function (r) { if (!r.ok) throw 0; return r.json(); })
+      .then(function (arr) {
+        if (!Array.isArray(arr)) return _fallback(company, ck);
+        var map = {};
+        arr.forEach(function (rec) { var n = _norm(rec); if (!n.company) n.company = String(company); map[_key(n.company, n.periodEnd)] = n; });
+        _cache[ck] = { map: map };
+        _lsWrite(company, map);   // mirror server truth (authoritative — replaces local)
+        return map;
+      })
+      .catch(function () { return _fallback(company, ck); });
+  }
+  function get(company, period) {
+    var c = _cache[_cacheKey(company)];
+    return c ? (c.map[_key(company, period)] || null) : null;
+  }
+  function forCompany(company) {
+    var c = _cache[_cacheKey(company)]; if (!c) return [];
+    var out = []; for (var k in c.map) if (Object.prototype.hasOwnProperty.call(c.map, k)) out.push(c.map[k]);
+    return out;
+  }
+  function save(record) {
+    var n = _norm(record);
+    if (!n.at) n.at = new Date().toISOString();
+    var ck = _cacheKey(n.company), c = _cache[ck] || (_cache[ck] = { map: {} });
+    c.map[_key(n.company, n.periodEnd)] = n;   // optimistic
+    var mirror = {}; for (var k in c.map) if (Object.prototype.hasOwnProperty.call(c.map, k)) mirror[k] = c.map[k];
+    _lsWrite(n.company, mirror);
+    var base = _base();
+    if (!base) return Promise.resolve(n);
+    var h = _auth({ 'Content-Type': 'application/json;charset=UTF-8', 'Accept': 'application/json' });
+    return fetch(base + '/inventory/txv/period-review', {
+      method: 'POST', headers: h,
+      body: JSON.stringify({ company: n.company, periodEnd: n.periodEnd, sourcesFixed: n.sourcesFixed, letRide: n.letRide, note: n.note })
+    }).then(function () { return n; }).catch(function () { return n; });
+  }
+  window.RRV8.analystReviewStore = { load: load, get: get, forCompany: forCompany, save: save, key: _key };
 })();
 
 /*
