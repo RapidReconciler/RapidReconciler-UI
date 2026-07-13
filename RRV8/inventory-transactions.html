@@ -799,6 +799,13 @@
   .tx-analyzer-sub { font-size: 12px; color: var(--text-muted); margin-top: 3px; line-height: 1.45; max-width: 62ch; }
   .tx-analyzer-body { margin-top: 13px; font-size: 13.5px; line-height: 1.5; color: var(--text); }
   .tx-analyzer-body[hidden] { display: none; }
+  /* Grid-scoped distinct-combo list — the (company · order type · doc type · GL class)
+     the drilled grid actually touches (these are the DMAAI resolution keys). */
+  .tx-combos-hd { font-weight: 700; color: var(--navy); margin: 2px 0 8px; }
+  .tx-resolve td.tx-num, .tx-resolve th.tx-num { text-align: right; font-variant-numeric: tabular-nums; }
+  .tx-resolve tr.is-mismatch td { background: var(--orange-pale); }
+  .tx-resolve-flag.is-warn { color: var(--orange-deep, #b0641f); background: var(--orange-pale); }
+  .tx-combo-detail td { color: var(--text-muted); font-size: 12.5px; padding-top: 2px; border-top: 0; }
   /* The lead: a colored diagnostic strip. Mismatch = orange (a source fix is
      available); accounts-agree = quiet green; unavailable/degraded = neutral. */
   .tx-analyzer-lead { display: flex; gap: 11px; padding: 11px 13px; border-radius: 10px; border: 1px solid var(--rule); background: var(--bg-soft); }
@@ -6383,6 +6390,72 @@
   // Reads the drilled group's rows + the resolver, in parallel, then renders
   // ONE of the states: mismatch (source fix), accounts-agree (timing/pairing),
   // or degraded (resolver absent). Re-runs on scope change + on AI-tier flip.
+  // The DMAAI resolution keys off (company, order type, doc type, GL class), so the
+  // analyzer starts from the DISTINCT set of those combinations ACTUALLY present in the
+  // drilled grid — not every AAI in the system (owner 2026-07-13). Sorted by materiality.
+  function _txGridCombos(rows) {
+    var m = {};
+    (rows || []).forEach(function (r) {
+      var co = String(r.CompanyNumber || '').trim();
+      var ot = String(r.OrderType || r.OT || '').trim();
+      var dt = String(r.DocType || r.DT || '').trim();
+      var gc = String(r.GLClass || '').trim();
+      var k = co + '|' + ot + '|' + dt + '|' + gc;
+      var e = m[k] || (m[k] = { co: co, ot: ot, dt: dt, gc: gc, rows: 0, variance: 0, cx: {}, gl: {} });
+      e.rows++; e.variance += Number(r.Variance) || 0;
+      // Resolution signal straight from the rows: which account the CARDEX relieved
+      // vs where the GL posted, for this combo.
+      var a = String(r.LongAccount || '').trim();
+      if (a && (Number(r.CardexAmount) || 0) !== 0) e.cx[a] = 1;
+      if (a && (Number(r.LedgerAmount) || 0) !== 0) e.gl[a] = 1;
+    });
+    return Object.keys(m).map(function (k) {
+      var e = m[k];
+      e.cxAccts = Object.keys(e.cx); e.glAccts = Object.keys(e.gl);
+      var both = e.cxAccts.length > 0 && e.glAccts.length > 0;
+      var same = both && e.cxAccts.length === e.glAccts.length
+        && e.cxAccts.every(function (a) { return e.gl[a]; });
+      // aligned = cardex + GL land on the SAME account(s); mismatch = they diverge
+      // (the object/BU swap); one-sided = a missing leg (non-stock / unposted).
+      e.status = both ? (same ? 'aligned' : 'mismatch')
+        : (e.cxAccts.length ? 'cardex-only' : (e.glAccts.length ? 'gl-only' : 'none'));
+      return e;
+    }).sort(function (a, b) { return Math.abs(b.variance) - Math.abs(a.variance); });
+  }
+  function _txMoneyShort(v) {
+    var n = Math.round(Number(v) || 0);
+    return (n < 0 ? '-$' : '$') + Math.abs(n).toLocaleString('en-US');
+  }
+  var _TX_STAT = {
+    aligned:       { c: 'ok',       t: 'Aligned' },
+    mismatch:      { c: 'mismatch', t: 'Mismatch' },
+    'cardex-only': { c: 'warn',     t: 'Cardex only' },
+    'gl-only':     { c: 'warn',     t: 'GL only' },
+    none:          { c: 'warn',     t: '—' }
+  };
+  function _txCombosHtml(combos) {
+    if (!combos.length) return '';
+    var trs = combos.map(function (c) {
+      var s = _TX_STAT[c.status] || _TX_STAT.none;
+      var row = '<tr' + (c.status === 'mismatch' ? ' class="is-mismatch"' : '') + '>'
+        + '<td>' + escapeHtml(c.co || '—') + '</td>'
+        + '<td>' + escapeHtml(c.ot || '—') + '</td>'
+        + '<td>' + escapeHtml(c.dt || '—') + '</td>'
+        + '<td>' + escapeHtml(c.gc || '(none)') + '</td>'
+        + '<td class="tx-num">' + c.rows.toLocaleString('en-US') + '</td>'
+        + '<td class="tx-num">' + escapeHtml(_txMoneyShort(c.variance)) + '</td>'
+        + '<td><span class="tx-resolve-flag is-' + s.c + '">' + s.t + '</span></td></tr>';
+      return row;
+    }).join('');
+    var nMis = combos.filter(function (c) { return c.status === 'mismatch'; }).length;
+    var hd = nMis
+      ? nMis + ' of ' + combos.length + ' combination' + (combos.length === 1 ? '' : 's') + ' post the cardex and GL to different accounts:'
+      : combos.length + ' combination' + (combos.length === 1 ? '' : 's') + ' — all resolve cleanly (cardex and GL post to the same account):';
+    return '<div class="tx-analyzer-combos"><div class="tx-combos-hd">' + escapeHtml(hd) + '</div>'
+      + '<table class="tx-resolve"><thead><tr><th>Company</th><th>Order Type</th><th>Doc Type</th>'
+      + '<th>GL Class</th><th class="tx-num">Rows</th><th class="tx-num">Variance</th><th>Mapping</th></tr></thead><tbody>'
+      + trs + '</tbody></table></div>';
+  }
   function _txAnalyze() {
     var body = document.getElementById('tx-analyzer-body'); if (!body) return;
     var gen = ++_txAnalyzeGen;
@@ -6395,37 +6468,28 @@
     var co = _state.activeCompany || String(rows[0].CompanyNumber || '').trim();
     var per = (_data && _data.period) || _state.period || '';
     var card = _state.activeCard || (typeof txvCardCode === 'function' ? txvCardCode(rows[0]) : '');
+    var combos = _txGridCombos(rows);   // grid-scoped resolution: cardex-vs-GL account per combo
     body.hidden = false;
-    body.innerHTML = '<div class="tx-analyzer-lead is-muted"><div><div class="tx-analyzer-lead-line">Resolving the accounts this group touches…</div></div></div>';
-    // Fingerprint (dup-sales / non-stock) is row-truth — available even when the
-    // resolver is down — so both reads run together and either can drive the lead.
+    body.innerHTML = _txCombosHtml(combos) + '<div class="tx-analyzer-lead is-muted"><div><div class="tx-analyzer-lead-line">Checking the row-level signals…</div></div></div>';
+    // Fingerprint (dup-sales / non-stock) is row-truth — layered on top of the
+    // grid-derived cardex↔GL resolution (no server resolver needed).
     var pFp = _txvLoadDmaaiModel().then(function (byRoute) { return _txvFingerprint(byRoute); }).catch(function () { return null; });
-    Promise.all([_txResolve(co, per, card), pFp]).then(function (res) {
+    pFp.then(function (fp) {
       if (gen !== _txAnalyzeGen) return;   // a newer drill superseded this one
-      _txRenderAnalyzer(res[0], res[1], co, per, card);
+      _txRenderAnalyzer(fp, co, per, card, combos);
     });
   }
   // Pick the lead + fix copy, render the deterministic per-account table, wire
   // the Use-as-finding push, and (Full tier + a mismatch) kick off narration.
-  function _txRenderAnalyzer(resolve, fp, co, per, card) {
+  function _txRenderAnalyzer(fp, co, per, card, combos) {
     var body = document.getElementById('tx-analyzer-body'); if (!body) return;
-    var accts = (resolve && resolve.accounts) || [];
-    var resolverOk = !!(resolve && resolve.ok);
+    combos = combos || [];
     var dup = !!(fp && fp.dupSales && fp.dupSales.length);
     var nonStock = !!(fp && fp.sawLineType && fp.nonStock && fp.nonStock.length);
-    var objRow = null, buRow = null, model = null, gl = null, glc = '';
-    accts.forEach(function (a) {
-      if (a.objMis && !objRow) objRow = a;
-      if (a.buMis && !buRow) buRow = a;
-      if (a.isModel && !model) model = a;
-      if (a.isGl && !gl) gl = a;
-      if (!glc && a.glc) glc = a.glc;
-    });
-    var glcTxt = glc ? (' for GL class ' + glc) : '';
+    var mis = combos.filter(function (c) { return c.status === 'mismatch'; });
     var kind, leadLine, fixTxt;
-    // Order: row-truth signals first (definitive, resolver-independent — matches
-    // the "check duplicate sales first" grounding), then the resolver mismatch,
-    // then accounts-agree, then the degraded note.
+    // Row-truth signals first (definitive — the "check duplicate sales first" grounding),
+    // then the grid-derived cardex↔GL account resolution (per combo), then all-clean.
     if (dup) {
       kind = 'mismatch';
       leadLine = 'duplicated cardex relief — the line posted to the cardex more than once';
@@ -6434,46 +6498,27 @@
       kind = 'mismatch';
       leadLine = 'non-stock line (type N) posted to an inventory account · routing mismatch';
       fixTxt = 'This is a non-stock line (type N) whose GL value posted to an inventory account. Non-stock lines move no inventory, so they belong on a P&L / clearing account — correct the line-type / AAI routing so future non-stock lines post off inventory.';
-    } else if (resolverOk && objRow) {
+    } else if (mis.length) {
       kind = 'mismatch';
-      var objA = (model && model.obj) || '', objB = objRow.obj || '';
-      leadLine = 'cardex → 4152 model' + (objA ? ' (' + objA + ')' : '') + ' · GL → 4240' + (objB ? ' (' + objB + ')' : '') + ' · object mismatch';
-      fixTxt = 'The cardex relieves the 4152 model account' + (objA ? ' (object ' + objA + ')' : '') + ', but the GL posts inventory to the 4240 account' + (objB ? ' (object ' + objB + ')' : '') + glcTxt + '. Align the object on one of the two AAIs so both resolve to the same account.';
-    } else if (resolverOk && buRow) {
-      kind = 'mismatch';
-      var mbu = (model && model.bu) || '', gbu = buRow.bu || '';
-      leadLine = 'cardex BU' + (mbu ? ' ' + mbu : '') + ' · GL BU' + (gbu ? ' ' + gbu : '') + ' · business-unit mismatch';
-      fixTxt = 'The cardex relieves inventory to business unit ' + (mbu || '—') + ', but the GL posts to business unit ' + (gbu || '—') + glcTxt + '. Point the 4152 and 4240 AAIs at the same business unit so the cardex and GL land together — then it stops at the source.';
-    } else if (resolverOk) {
+      leadLine = mis.length + ' of ' + combos.length + ' combination' + (combos.length === 1 ? '' : 's') + ' post the cardex and the GL to different accounts';
+      fixTxt = 'For the flagged combination' + (mis.length === 1 ? '' : 's') + ' above, the cardex relieves a different account than the GL posts to (see the cardex → GL detail under each). Align the DMAAI routing for that (company · order type · doc type · GL class) so both sides resolve to the same account — then it stops at the source.';
+    } else if (combos.length) {
       kind = 'agree';
-      leadLine = 'accounts resolve cleanly — timing / pairing, not a mapping issue';
-      fixTxt = 'The cardex and GL resolve to the same account — not a mapping problem. It’s order-lifecycle timing (or transfer pairing) that clears as the order completes; investigate only the ones that persist across periods.';
+      leadLine = 'every combination resolves cleanly — cardex and GL post to the same account';
+      fixTxt = 'No mapping mismatch in this grid: for every (company · order type · doc type · GL class) here, the cardex and GL land on the same account. What remains is order-lifecycle timing (or transfer pairing) that clears as the orders complete — investigate only what persists across periods.';
     } else {
       kind = 'muted';
-      leadLine = 'DMAAI resolution unavailable until the agent is rebuilt';
-      fixTxt = 'The account-mapping check will run here once the data-services agent is rebuilt — nothing is broken. Re-open this group then to see the per-account 4152-vs-4240 resolution.';
+      leadLine = 'No rows in the current view.';
+      fixTxt = '';
     }
     var icon = kind === 'mismatch'
       ? '<svg class="tx-analyzer-lead-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>'
       : kind === 'agree'
         ? '<svg class="tx-analyzer-lead-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>'
         : '<svg class="tx-analyzer-lead-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>';
-    var html = '<div class="tx-analyzer-lead is-' + kind + '">' + icon
+    var html = _txCombosHtml(combos) + '<div class="tx-analyzer-lead is-' + kind + '">' + icon
       + '<div><div class="tx-analyzer-lead-line">' + escapeHtml(leadLine) + '</div>'
-      + '<div class="tx-analyzer-fix">' + escapeHtml(fixTxt) + '</div></div></div>';
-    // Deterministic per-account resolution table — the workbook's Model/Inv/Exp +
-    // Mismatch output, live in the app. Only when the resolver actually answered.
-    if (resolverOk && accts.length) {
-      var trs = accts.map(function (a) {
-        var mis = a.objMis || a.buMis;
-        var buobj = [a.bu, a.obj].filter(Boolean).join(' · ');
-        return '<tr><td>' + escapeHtml(a.item || '—') + '</td>'
-          + '<td class="tx-resolve-acct">' + escapeHtml(a.acct || '—') + '</td>'
-          + '<td>' + escapeHtml(buobj || '—') + '</td>'
-          + '<td><span class="tx-resolve-flag is-' + (mis ? 'mismatch' : 'ok') + '">' + (mis ? 'Mismatch' : 'Aligned') + '</span></td></tr>';
-      }).join('');
-      html += '<table class="tx-resolve"><thead><tr><th>AAI</th><th>Account</th><th>BU · Object</th><th>Mapping</th></tr></thead><tbody>' + trs + '</tbody></table>';
-    }
+      + (fixTxt ? '<div class="tx-analyzer-fix">' + escapeHtml(fixTxt) + '</div>' : '') + '</div></div>';
     var wantAi = (_txAiTier() === 'full') && (kind === 'mismatch');
     if (wantAi) html += '<div class="tx-analyzer-ai" id="tx-analyzer-ai" hidden></div>';
     html += '<button type="button" class="tx-analyzer-use" id="tx-analyzer-use">Use as finding →</button>';
@@ -6481,7 +6526,12 @@
     _txAnalyzeStatus('', '');
     var useBtn = document.getElementById('tx-analyzer-use');
     if (useBtn) useBtn.addEventListener('click', function () {
-      _txUseAsFinding((kind === 'agree' ? 'DMAAI analyzer — no mapping issue:\n' : 'DMAAI source fix:\n') + leadLine + '\n\n' + fixTxt);
+      // Finding = the lead + fix, plus the per-combo cardex → GL detail for each mismatch.
+      var misTxt = mis.map(function (c) {
+        return '- ' + (c.co || '—') + ' · ' + (c.ot || '—') + ' · ' + (c.dt || '—') + ' · ' + (c.gc || '(none)')
+          + ': cardex → ' + (c.cxAccts.join(', ') || '—') + ' · GL → ' + (c.glAccts.join(', ') || '—');
+      }).join('\n');
+      _txUseAsFinding((kind === 'agree' ? 'DMAAI analyzer — no mapping issue:\n' : 'DMAAI source fix:\n') + leadLine + '\n\n' + fixTxt + (misTxt ? '\n\n' + misTxt : ''));
     });
     if (wantAi) _txAnalyzeNarrate(co, per, leadLine, fixTxt, fp);
   }
