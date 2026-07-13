@@ -944,6 +944,26 @@
   .txv-tag-recur { background: var(--amber-pale); color: var(--amber); text-transform: none; letter-spacing: 0; }
   /* Convergence rollup line in the headline — how many current-period cards are resolved. */
   .txv-headline-conv { margin-top: 10px; font-size: 13px; font-weight: 700; color: var(--green-deep); }
+  /* UI-34 — cross-role disposition context. When the accountant has dispositioned this
+     company for the focused period, each card carries the decision as CONTEXT (never a
+     suppressor of the analyst's source work — it sets priority). Three tones:
+     corrected = neutral/active, analyst = elevated (accent), riding = de-prioritized. */
+  .txv-dispo { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-top: 9px; padding: 8px 10px; border-radius: 8px; font-size: 12.5px; line-height: 1.5; }
+  .txv-dispo-tag { flex: 0 0 auto; font-size: 10px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; border-radius: 6px; padding: 2px 7px; white-space: nowrap; }
+  .txv-dispo-txt { color: var(--text-soft); }
+  .txv-dispo-corrected { background: var(--bg-soft); border: 1px solid var(--rule); }
+  .txv-dispo-corrected .txv-dispo-tag { background: #e6effb; color: #2b5c9e; }
+  .txv-dispo-analyst { background: var(--amber-pale); border: 1px solid var(--amber); }
+  .txv-dispo-analyst .txv-dispo-tag { background: var(--amber); color: #fff; }
+  .txv-dispo-analyst .txv-dispo-txt { color: var(--text); }
+  .txv-dispo-riding { background: var(--bg-soft); border: 1px dashed var(--rule); }
+  .txv-dispo-riding .txv-dispo-tag { background: #eef0f3; color: var(--text-muted); }
+  /* Card-level treatment: analyst-held is bumped (accent border + ring); riding is
+     de-emphasized but stays readable. A completed card stays clearly dimmed. */
+  .txv-card.is-elevated { border-left-width: 4px; border-left-color: var(--amber); box-shadow: 0 0 0 1px var(--amber-pale), var(--shadow-sm); }
+  .txv-card.is-riding { opacity: .82; }
+  .txv-card.is-riding .txv-card-amt { color: var(--text-soft); }
+  .txv-card.is-complete.is-riding { opacity: .6; }
   /* Inline resolution-note editor on a card (Mark resolved / Reopen to edit). */
   .txv-card.is-editing { opacity: 1; }   /* un-dim a complete card while its editor is open */
   .txv-card-editor { margin-top: 11px; border-top: 1px dashed var(--rule); padding-top: 11px; }
@@ -7460,6 +7480,27 @@
   // single-period, and client-side period-mismatch detection is gone — 5.14 is
   // server-side authoritative, not a TransDate-vs-PeriodEnds month compare.)
 
+  // UI-34 — accountant disposition -> analyst card CONTEXT. One RRV8.dispoStore record
+  // per (company, period); the txv tab is already scoped to one company + one period, so
+  // a single disposition (if any) colors every card of the focused period. It NEVER
+  // suppresses the source work — it sets context/priority: 'corrected' stays active,
+  // 'analyst' is elevated (accountant is waiting on the analyst), 'immaterial'/'timing'
+  // ride (low priority). Copy is owner-signed-off, verbatim. Absent/unknown reason -> null.
+  var _TXV_DISPO = {
+    corrected:  { tag: 'Cleared in the GL', tone: 'corrected',
+                  text: 'Accounting cleared this in the GL this period. The source still needs your fix so it won’t come back.' },
+    analyst:    { tag: 'Held for your fix', tone: 'analyst',
+                  text: 'Accounting is holding this for your source fix — no journal entry was posted.' },
+    immaterial: { tag: 'Riding · immaterial', tone: 'riding',
+                  text: 'Accounting accepted this as immaterial. Low priority unless it grows.' },
+    timing:     { tag: 'Riding · timing', tone: 'riding',
+                  text: 'Accounting expects this to clear on its own next period.' }
+  };
+  function _txvDispoCtx(rec) {
+    if (!rec || !rec.reason) return null;
+    return _TXV_DISPO[String(rec.reason)] || null;
+  }
+
   var _txvGen = 0;
   function renderAnalystTxVar(d) {
     var host = $('analystTxVar'); if (!host) return;
@@ -7479,7 +7520,11 @@
     // resolves to {} when the store module or agent isn't present.
     var _cardLoad = (typeof RRV8 !== 'undefined' && RRV8.cardStore)
       ? RRV8.cardStore.load(solo) : Promise.resolve({});
-    Promise.all([_txvRows(solo ? [String(solo)] : []), _txvLoadDmaai(), _cardLoad]).then(function (res) {
+    // UI-34: warm the accountant disposition cache for this company so the cross-role
+    // context chip can read it synchronously once the focused period is known. Graceful.
+    var _dispoLoad = (typeof RRV8 !== 'undefined' && RRV8.dispoStore)
+      ? RRV8.dispoStore.load(solo).catch(function () { return {}; }) : Promise.resolve({});
+    Promise.all([_txvRows(solo ? [String(solo)] : []), _txvLoadDmaai(), _cardLoad, _dispoLoad]).then(function (res) {
       if (gen !== _txvGen) return;   // scope/DB/tab switched mid-flight
       // Scope the reconciling-items rows to the SELECTED company client-side, on
       // CompanyNumber — the same filter the comparison used to prove the tie-out,
@@ -7560,6 +7605,10 @@
       var cardsByTier = { quick: [], complex: [], linked: [], terminal: [] };
       var resolvedThisCycle = 0;   // current-period cards whose store record is complete (headline rollup)
       var _store = (typeof RRV8 !== 'undefined' && RRV8.cardStore) ? RRV8.cardStore : null;
+      // UI-34: the accountant's disposition for THIS company + focused period (if any).
+      // One record colors every card of the period. Sync read — cache was warmed above.
+      var _dispoCtx = _txvDispoCtx((typeof RRV8 !== 'undefined' && RRV8.dispoStore)
+        ? RRV8.dispoStore.get(solo, focusP) : null);
       _TXV_CODE_ORDER.forEach(function (code) {
         var b = buckets[code]; if (!b || b.rows === 0) return;
         var m = _TXV_CODE_META[code];
@@ -7580,7 +7629,7 @@
           cause: savedFinding || _txvCause(code) || 'Cardex and GL both posted but disagree — export a representative row to refine the diagnosis.',
           isFinding: !!savedFinding,
           href: _txvTxHref(solo, { period: focusP, card: code }),
-          btn: 'Open in worklist', done: done, recurPrior: recurPrior
+          btn: 'Open in worklist', done: done, recurPrior: recurPrior, dispo: _dispoCtx
         });
       });
 
@@ -7631,13 +7680,20 @@
         var editBtn = p.done
           ? '<button type="button" class="txv-btn" data-txv-act="reopen">Reopen to edit</button>'
           : '<button type="button" class="txv-btn' + (draft ? ' txv-btn-primary' : '') + '" data-txv-act="resolve">' + (draft ? 'Review &amp; resolve' : 'Mark resolved') + '</button>';
-        return '<div class="txv-card is-' + acc + (p.done ? ' is-complete' : (draft ? ' is-draft' : '')) + '"'
+        // UI-34: accountant disposition context. Elevated (analyst) bumps the card;
+        // riding (immaterial/timing) de-prioritizes it; corrected leaves it active.
+        var dispoCls = p.dispo ? (p.dispo.tone === 'analyst' ? ' is-elevated' : (p.dispo.tone === 'riding' ? ' is-riding' : '')) : '';
+        var dispoHtml = p.dispo
+          ? '<div class="txv-dispo txv-dispo-' + p.dispo.tone + '"><span class="txv-dispo-tag">' + esc(p.dispo.tag) + '</span><span class="txv-dispo-txt">' + esc(p.dispo.text) + '</span></div>'
+          : '';
+        return '<div class="txv-card is-' + acc + dispoCls + (p.done ? ' is-complete' : (draft ? ' is-draft' : '')) + '"'
           + ' data-txv-card="1" data-cc="' + esc(p.code) + '" data-cp="' + esc(focusP) + '" data-co="' + esc(solo) + '" data-camt="' + esc(String(p.amount)) + '">'
           + '<div class="txv-card-top"><div>'
           + '<div class="txv-card-title">' + esc(p.title) + '<span class="txv-tag txv-tag-' + acc + '">' + esc(KIND_TAG[p.kind] || 'Review') + '</span>'
           + (p.done ? '<span class="txv-tag txv-tag-done">✓ Resolved</span>' : (draft ? '<span class="txv-tag txv-tag-draft">Finding drafted</span>' : '')) + recurChip + '</div>'
           + '<div class="txv-card-meta">' + esc(p.meta) + '</div></div>'
           + '<div class="txv-card-amt">' + money(p.amount) + '</div></div>'
+          + dispoHtml
           + (p.isFinding
               ? '<div class="txv-card-cause is-finding"><span class="txv-card-finding-lbl">Finding</span><span class="txv-card-finding-txt">' + esc(p.cause) + '</span></div>'
               : '<div class="txv-card-cause">' + esc(p.cause) + '</div>')
