@@ -83,7 +83,7 @@ Full JWT payload shape:
 | `POST /inventory/reconciliation/history` | Item-wrapped filter arrays | Reconciliation header bar chart | **Live on test agent.** Spec: [reconciliation-history.md](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/specs/reconciliation-history.md). |
 | `POST /inventory/audit-detail` | Item-wrapped filter arrays | Audit Report Excel + PDF | **Live on test agent.** Spec: [audit-detail.md](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/specs/audit-detail.md). |
 | `POST /inventory/variance-component` | `{component, ...recon-filter}` | Preview modals for GL Batches / End of Day / Manual JEs / Cardex | **Live on test agent.** Spec: [variance-component-drilldown.md](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/specs/variance-component-drilldown.md). |
-| `POST /inventory/transactions` | bare-string filter arrays + paging | Transactions | Single bulk fetch (`pageSize: 10000`), client-side filter/recompute on chip clicks. |
+| `POST /inventory/transactions` | bare-string filter arrays + paging | Transactions | Single bulk fetch (`pageSize: 10000`), client-side filter/recompute on chip clicks. **Planned enrichment:** an `SDLNTY` (order line type) field per row &mdash; see [Order line type (SDLNTY)](#order-line-type-sdlnty--planned-row-enrichment) below. |
 | `POST /inventory/transactions/details` | `{company, doc, type}` | Transactions per-row Export | **`type`, not `docType`** (Jackson gotcha). |
 | `POST /inventory/transactions/save-notes` | `{period, notes: [...]}` | Transactions batch-edit modal | Field names camelCase first-letter-lowercase. |
 | `POST /inventory/integrity` | `{report, take/skip/page/pageSize, reconciliationFilter}` | DMAAIs (preload), planned for Cardex Variance | Integrity report `0` is `v_integrity_jde_aais`. Whitelisted views only. **`report: 'v6ui_raccountsummary'`** serves the account roll-forward (GL+variance roll by account/period, all periods, JWT-scoped) for the Account Roll Forward page + Home inventory validation light. |
@@ -138,6 +138,43 @@ exercise yet):
    row-level breakdowns, etc.) need new server-side endpoints; none
    of the existing `/inventory/*` endpoints return row-level data
    today. Specs go into the agent repo as they ripen.
+
+### Order line type (SDLNTY) &mdash; planned row enrichment
+
+The Transactions fact block (`inventory-transactions.html` &rarr;
+`_txvFingerprint` / `_txvFingerprintText`) has a **non-stock line
+check** &mdash; a sibling to the duplicate-sales check. It flags a
+GL-only reconciling-items row (cardex 0, ledger &ne; 0) whose order
+line type is **N** (non-stock / surcharge). Because every
+reconciling-items row is on an inventory account, a type-N GL-only
+hit there is a routing variance to correct at the source, not an
+expected off-inventory posting. The check drives a grounding fact
+for the analyst AI note.
+
+**Status: specced, not wired live.** The check reads an `SDLNTY`
+field off each row and **degrades safe** &mdash; when no row carries
+`SDLNTY`, the fact never fires and makes no claim either way. The
+day the agent adds the field, the fact lights up with **no client
+change**.
+
+**Why it isn't a live join yet.** `SDLNTY` lives in
+`F4211` / `F42119` at the **line** grain (PK includes `sdlnid`).
+The Transactions payload comes from `dbo.v6ui_reconcilingitems`,
+which rolls to the **document** grain (company / order type / doc
+type / doc number / batch &mdash; no line number). Joining SDLNTY on
+doc/order alone is ambiguous: one document can carry several lines
+with mixed line types (e.g. a stock line **S** plus a freight line
+**N**), and an open order's line sits in `F4211` while a
+shipped/closed one has moved to `F42119`. Threading it cleanly
+requires the reconciling-items view (or an agent-side join) to
+expose the line number first, so the source stays authoritative
+rather than synthesized.
+
+**Agent contract when it ripens:** add `SDLNTY` (JDE `sdlnty`,
+2-char) to each `/inventory/transactions` row, resolved per
+document line via `F4211` &rarr; `F42119` fallback keyed on
+`sdkcoo`/`sddoco`/`sddcto`/`sdlnid`. Spec:
+`RapidReconciler-Agent/specs/txv-sdlnty-line-type.md`.
 
 ---
 
