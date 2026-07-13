@@ -6524,6 +6524,10 @@
   }
   function _txvFingerprint(byRoute) {
     var rows = filteredRows(), net = 0, gross = 0, perSet = {}, byType = {}, dupByKey = {};
+    // UI-35: non-stock line-type screen. SDLNTY (order line type) rides IN on the row
+    // when the agent has joined F4211/F42119 (spec: RRV8/API.md). Absent -> sawLineType
+    // stays false and the fact never fires (degrade safe; no negative claim either).
+    var nonStockByKey = {}, sawLineType = false;
     rows.forEach(function (r) {
       var v = Number(r.Variance) || 0; net += v; gross += Math.abs(v);
       var p = String(r.PeriodEnds || '').slice(0, 10); if (p) perSet[p] = 1;
@@ -6532,8 +6536,9 @@
       var g = byType[k] || (byType[k] = { key: k, ot: ot, dt: dt, co: String(r.CompanyNumber || '').trim(), count: 0, net: 0, gross: 0, cx: {}, gl: {} });
       g.count++; g.net += v; g.gross += Math.abs(v);
       var a = String(r.LongAccount || '').trim();
-      if (a && (Number(r.CardexAmount) || 0) !== 0) g.cx[a] = 1;
-      if (a && (Number(r.LedgerAmount) || 0) !== 0) g.gl[a] = 1;
+      var cardex = Number(r.CardexAmount) || 0, ledger = Number(r.LedgerAmount) || 0;
+      if (a && cardex !== 0) g.cx[a] = 1;
+      if (a && ledger !== 0) g.gl[a] = 1;
       // First-order duplicate-sales screen: a flagged doc's cardex carries the
       // line twice while the GL has it once, so this row's variance IS the
       // duplicated relief. Group per (co|ot|order|doc) so one fact per document.
@@ -6542,9 +6547,23 @@
         var d = dupByKey[dk] || (dupByKey[dk] = { co: String(r.CompanyNumber || '').trim(), ot: ot, dt: dt, order: String(r.OrderNumber || '').trim(), doc: String(r.DocNumber || '').trim(), variance: 0, count: 0 });
         d.variance += v; d.count++;
       }
+      // UI-35 non-stock screen: a GL-only row (cardex 0, ledger != 0) whose order line
+      // type is N (non-stock / surcharge). These reconciling-items rows are all on an
+      // inventory account (LongAccount from the inv account list), so a type-N GL-only
+      // hit here is a routing variance to correct at the source. Group per document.
+      var lnty = String(r.SDLNTY == null ? '' : r.SDLNTY).trim().toUpperCase();
+      if (lnty) sawLineType = true;
+      if (lnty === 'N' && cardex === 0 && ledger !== 0) {
+        var nk = String(r.CompanyNumber || '').trim() + '|' + ot + '|' + String(r.OrderNumber || '').trim() + '|' + String(r.DocNumber || '').trim();
+        var ns = nonStockByKey[nk] || (nonStockByKey[nk] = { co: String(r.CompanyNumber || '').trim(), ot: ot, dt: dt, order: String(r.OrderNumber || '').trim(), doc: String(r.DocNumber || '').trim(), acct: a, variance: 0, count: 0 });
+        ns.variance += v; ns.count++;
+      }
     });
     var dupSales = Object.keys(dupByKey).map(function (dk) {
       var d = dupByKey[dk]; d.variance = Math.round(d.variance * 100) / 100; return d;
+    }).sort(function (a, b) { return Math.abs(b.variance) - Math.abs(a.variance); });
+    var nonStock = Object.keys(nonStockByKey).map(function (nk) {
+      var n = nonStockByKey[nk]; n.variance = Math.round(n.variance * 100) / 100; return n;
     }).sort(function (a, b) { return Math.abs(b.variance) - Math.abs(a.variance); });
     var types = Object.keys(byType).map(function (k) {
       var g = byType[k], cx = Object.keys(g.cx), gl = Object.keys(g.gl);
@@ -6552,7 +6571,7 @@
       var modelMatch = !!(model && model.accts.length && cx.some(function (a) { return model.accts.indexOf(a) >= 0; }));
       return { key: g.key, count: g.count, net: Math.round(g.net * 100) / 100, gross: Math.round(g.gross * 100) / 100, cx: cx, gl: gl, model: model, modelMatch: modelMatch };
     }).sort(function (a, b) { return b.gross - a.gross; });
-    return { rows: rows.length, net: Math.round(net * 100) / 100, gross: Math.round(gross * 100) / 100, types: types, periods: Object.keys(perSet).sort(), homogeneous: types.length === 1, dupSales: dupSales };
+    return { rows: rows.length, net: Math.round(net * 100) / 100, gross: Math.round(gross * 100) / 100, types: types, periods: Object.keys(perSet).sort(), homogeneous: types.length === 1, dupSales: dupSales, nonStock: nonStock, sawLineType: sawLineType };
   }
   function _txvFingerprintText(fp) {
     var L = [];
@@ -6567,6 +6586,19 @@
       });
     } else {
       L.push('Duplicate-sales check (first-order): no document in this slice carries the RDuplicateSales flag.');
+    }
+    // UI-35 non-stock line-type screen — sibling to the duplicate-sales fact. Only
+    // surfaced when SDLNTY rode in on the rows (sawLineType); otherwise the join isn't
+    // present yet and we make NO claim either way.
+    if (fp.sawLineType) {
+      if (fp.nonStock && fp.nonStock.length) {
+        L.push('NON-STOCK LINE CHECK (order line type N, from F4211/F42119 SDLNTY): ' + fp.nonStock.length + ' document(s) in this slice post to the GL with no cardex relief on a non-stock / surcharge line (type N). Non-stock GL-only is expected off inventory; posted to the inventory account it is a routing variance to correct at the source:');
+        fp.nonStock.forEach(function (n) {
+          L.push('  - Company ' + (n.co || '?') + ', order ' + (n.order || '?') + ' (' + (n.ot || '—') + '/' + (n.dt || '—') + '), doc ' + (n.doc || '?') + (n.acct ? ', account ' + n.acct : '') + ': variance ' + _txMoney(n.variance) + ' on a type-N line.');
+        });
+      } else {
+        L.push('Non-stock line check: no non-stock (type N) GL-only line in this slice.');
+      }
     }
     L.push('By transaction type (Type · OrderType · DocType):');
     fp.types.forEach(function (t) {
@@ -6602,7 +6634,7 @@
         + 'Company ' + co + ', period ' + (per ? formatPeriod(per) : 'current') + '. RR’s F4095 extract is FILTERED, so confirm setup against live JDE.\n\n'
         + _txvFingerprintText(fp) + '\n\n'
         + 'Return EXACTLY three short markdown sections, each a bold label then its content, and nothing else:\n'
-        + '**Likely cause:** one sentence appropriate to THIS card. If the facts carry a duplicate-sales flag, LEAD with it (a cardex line written twice; the variance equals the duplicate). Otherwise: configuration / AAI mapping for account mismatches; a genuine cost or variance for the unclassified cards. Do NOT attribute a per-document variance to a stranded leg or in-transit clearing — each shipment and receipt reconciles independently and in-transit is a separate surface.\n'
+        + '**Likely cause:** one sentence appropriate to THIS card. If the facts carry a duplicate-sales flag, LEAD with it (a cardex line written twice; the variance equals the duplicate). If the facts flag a non-stock (type N) GL-only line on the inventory account, treat it as a routing variance to correct at the source (a non-stock line should post off inventory). Otherwise: configuration / AAI mapping for account mismatches; a genuine cost or variance for the unclassified cards. Do NOT attribute a per-document variance to a stranded leg or in-transit clearing — each shipment and receipt reconciles independently and in-transit is a separate surface.\n'
         + '**Checked:** 2-4 bullets ("- ") naming the concrete coordinates — company, order type, doc type, the cardex→GL account swap (or the duplicated doc + variance when flagged), and (when a Model DMAAI line is present) the AAI and whether the model matches. One bullet per pattern.\n'
         + '**Do next:** 1-2 bullets — for a duplicate sale, reverse the duplicated cardex relief at the source (an inventory adjustment, not a journal entry); otherwise monitor going forward, confirm against the full JDE F4095 (RR’s copy is filtered), and when the config looks clean check Oracle / My Oracle Support for a known issue (SAR).\n'
         + 'No preamble, no extra headings, no closing paragraph.';
