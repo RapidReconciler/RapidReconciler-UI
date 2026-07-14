@@ -3868,6 +3868,7 @@
     if (st === 'periods')       return 'PER';
     if (st === 'vouchers')        return 'VCHR';   // DAC-28 — parity with home _txvClassifyCode
     if (st === 'duplicate sales') return 'DUP';    // DAC-28
+    if (st === 'transfer integrity') return 'TXI'; // IT cardex-only integrity — parity with home
     var ty = String(r.Type || '').trim().toLowerCase();
     if (ty === 'sales')      return 'T-SALES';
     if (ty === 'purchasing') return 'T-PURCH';
@@ -4862,6 +4863,12 @@
       action: 'Investigate which copy is the duplicate. Reverse the dup; leave the original. The dup may be unposted (R09800 didn\'t run) or may be a true re-entry from a process step that fired twice.',
       disposition: 'triage'
     },
+    '5.19': {
+      label:  'Transfer Integrity (IT)',
+      desc:   'An inventory-transfer (IT) document relieved value on the cardex (F4111) that the GL never recorded — the receipt leg carried a unit cost but a zero extended cost, so a value-neutral within-branch location move destroyed inventory value. Seen on cost-level-3 / standard-cost transfers (the JDE item-ledger one-sided-entry integrity defect).',
+      action: 'This is a JDE item-ledger integrity error, not a mapping or journal-entry fix. Run the item-ledger integrity programs (R41543 / R41544) and restore the extended cost with a dollars-only IA adjustment at the source so the cardex and GL agree.',
+      disposition: 'triage'
+    },
     'MTO': {
       label:  'Make to Order',
       desc:   'Work-order manufacturing costs produced for a specific customer order (make-to-order) — each row is linked to its originating sales order and posts to the project business unit, not a general inventory account.',
@@ -4926,6 +4933,7 @@
     if (st === 'intercompany') return 'ICO';
     if (st === 'vouchers') return '5.17';
     if (st === 'duplicate sales') return '5.18';   // DAC-28 — subtype now claimed by usp8_txv_flags
+    if (st === 'transfer integrity') return '5.19'; // IT cardex-only integrity — claimed by usp8_txv_flags
     if (st === 'periods')  return '5.14';
     if (st === 'accounts') return '5.4';
     // 3. No subtype → cardex/GL grid pattern.
@@ -6263,6 +6271,7 @@
     '5.2': 'GL-Only Entry', '5.3': 'Cardex-Only Entry', '5.4': 'Account Mismatch',
     '5.6': 'Balance / Adjustment', '5.11': 'Other Variance', '5.14': 'Period Mismatch',
     '5.16': 'Mfg Cost Mismatch', '5.17': 'Purchase Variance', '5.18': 'Duplicate Sales',
+    '5.19': 'Transfer Integrity',
     'MTO': 'Make to Order', 'TRF': 'Transfers', 'DS': 'Direct Ship', 'ICO': 'Intercompany'
   };
   // Scope bar — reflects the FULL active scope so a drill-in from the plan shows
@@ -6750,7 +6759,16 @@
           + ': model ' + m.modelTable + ' ' + m.modelAcct + ' → inv ' + m.invDmaai + ' ' + m.invAcct
           + (m.invAcctDesc ? ' (' + m.invAcctDesc + ')' : '');
       }).join('\n');
-      _txUseAsFinding((kind === 'agree' ? 'DMAAI analyzer — no mapping issue:\n' : 'DMAAI source fix:\n') + leadLine + '\n\n' + fixTxt + (misTxt ? '\n\n' + misTxt : ''));
+      // Prefix keys off the pattern that actually fired — only the model↔inv account
+      // mismatch is a DMAAI fix. Duplicate-sales, non-stock, and IT cardex-integrity are
+      // NOT DMAAI issues, so they must not carry a "DMAAI source fix" label.
+      var findingPrefix = kind === 'agree' ? 'DMAAI analyzer — no mapping issue:\n'
+        : dup            ? 'Duplicate cardex relief — source fix:\n'
+        : nonStock       ? 'Non-stock routing — source fix:\n'
+        : itDominant     ? 'Inventory-transfer integrity — source fix:\n'
+        : misRows.length ? 'DMAAI source fix:\n'
+        :                  'Source fix:\n';
+      _txUseAsFinding(findingPrefix + leadLine + '\n\n' + fixTxt + (misTxt ? '\n\n' + misTxt : ''));
     });
     if (wantAi) _txAnalyzeNarrate(co, per, leadLine, fixTxt, fp);
   }
