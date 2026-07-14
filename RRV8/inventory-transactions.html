@@ -4894,9 +4894,9 @@
     },
     'MTO': {
       label:  'Make to Order',
-      desc:   'Work-order manufacturing costs produced for a specific customer order (make-to-order) — each row is linked to its originating sales order and posts to the project business unit, not a general inventory account.',
-      action: 'This is the WIP-to-fulfillment timing across the sales order and its work order; it normally clears as the order completes. Investigate only the ones that persist across periods.',
-      disposition: 'self'
+      desc:   'A work order linked to its customer sales order — a business grouping, not one variance type. The routings match the cardex model and the sales orders shipped, so the residual is manufacturing cardex-vs-GL, and it splits three ways: GL-only standard-cost variances, both-sides-differ completion cost differences, and cardex-only completions never journaled to the GL.',
+      action: 'Work the shapes: GL-only rows are expected standard-cost variances (no action); both-sides-differ rows are completion std-on-cardex vs actual-in-GL (investigate the large ones — 5.16); cardex-only rows are a real posting gap — repost the completion via R31802A at the source, not a journal entry (5.20).',
+      disposition: 'triage'
     },
     'TRF': {
       label:  'Transfers',
@@ -6706,6 +6706,48 @@
       + '</tr></thead><tbody>'
       + trs + '</tbody></table></div>';
   }
+  // Make-to-Order decomposition. MTO is a BUSINESS grouping (a WO linked to its
+  // customer SO — usp6_008 stamps the subtype from the sales-order link), not a
+  // variance type; its residual is ordinary manufacturing cardex-vs-GL. Split each
+  // row by shape: GL-only = standard-cost variances (EXPECTED, no action);
+  // both-sides-differ = completion valued std-on-cardex vs actual-in-GL (5.16 —
+  // investigate the large ones); cardex-only = a completion never journaled to the
+  // GL (5.19 — repost via R31802A at the source, not a JE). Held under MTO because
+  // usp6_008 stamped it before the CNJ pass could claim it. Rows are already
+  // MTO-only when drilled from the MTO card (filteredRows honors activeCard); the
+  // txvCardCode guard keeps the buckets MTO-accurate in a mixed/browsed view too.
+  // One source: AnalysisGuides/transaction-detail-analysis.md §5.20; mirrored in
+  // ANALYST_GROUNDING (config.js) + the classifier subtypes.
+  function _txMtoBuckets(rows) {
+    var eps = 0.01;
+    var b = { glOnly: { n: 0, amt: 0 }, both: { n: 0, amt: 0 }, cardexOnly: { n: 0, amt: 0 }, total: { n: 0, amt: 0 } };
+    (rows || []).forEach(function (r) {
+      if (typeof txvCardCode === 'function' && txvCardCode(r) !== 'MTO') return;
+      var cx = Number(r.CardexAmount) || 0, gl = Number(r.LedgerAmount) || 0, v = Number(r.Variance) || 0;
+      var k = (Math.abs(cx) < eps && Math.abs(gl) >= eps) ? 'glOnly'
+        : (Math.abs(gl) < eps && Math.abs(cx) >= eps) ? 'cardexOnly'
+        : (Math.abs(cx) >= eps && Math.abs(gl) >= eps) ? 'both' : null;
+      if (!k) return;
+      b[k].n++; b[k].amt += v; b.total.n++; b.total.amt += v;
+    });
+    return b;
+  }
+  function _txMtoBucketsHtml(b) {
+    if (!b || !b.total.n) return '';
+    var defs = [
+      { k: 'GL only',     n: b.glOnly.n,     amt: b.glOnly.amt,     note: 'Standard-cost variances — GL-only is expected on make-to-order. No action.' },
+      { k: 'Both differ', n: b.both.n,       amt: b.both.amt,       note: 'Completion valued at standard on the cardex vs actual in the GL. Investigate the large ones.' },
+      { k: 'Cardex only', n: b.cardexOnly.n, amt: b.cardexOnly.amt, note: 'Completion posted to the cardex but never journaled to the GL. Repost via R31802A at the source — not a JE.' }
+    ];
+    var trs = defs.map(function (r) {
+      return '<tr><td>' + escapeHtml(r.k) + '</td><td>' + r.n + '</td><td>'
+        + escapeHtml(_txMoneyShort(r.amt)) + '</td><td>' + escapeHtml(r.note) + '</td></tr>';
+    }).join('');
+    return '<div class="tx-analyzer-combos"><div class="tx-combos-hd">Make-to-order residual by cardex/GL shape — '
+      + b.total.n + ' row' + (b.total.n === 1 ? '' : 's') + ' / ' + escapeHtml(_txMoneyShort(b.total.amt)) + ':</div>'
+      + '<table class="tx-resolve"><thead><tr><th>Shape</th><th>Rows</th><th>Amount</th><th>What it means</th></tr></thead><tbody>'
+      + trs + '</tbody></table></div>';
+  }
   function _txAnalyze() {
     var body = document.getElementById('tx-analyzer-body'); if (!body) return;
     _txWireAnalyzerToggle();
@@ -6740,6 +6782,11 @@
   function _txRenderAnalyzer(fp, co, per, card, combos) {
     var body = document.getElementById('tx-analyzer-body'); if (!body) return;
     combos = combos || [];
+    // Make-to-order card → decompose the residual by cardex/GL shape (buckets +
+    // the R31802A source fix on the cardex-only slice) instead of the generic
+    // routings-match / timing hedge. Only for the MTO drill; null everywhere else.
+    var _mtoB = (card === 'MTO') ? _txMtoBuckets(filteredRows()) : null;
+    var _mtoOn = !!(_mtoB && _mtoB.total.n);
     var dup = !!(fp && fp.dupSales && fp.dupSales.length);
     var nonStock = !!(fp && fp.sawLineType && fp.nonStock && fp.nonStock.length);
     // Model-vs-inv account mismatch — the SAME comparison the table shows (4152
@@ -6782,6 +6829,15 @@
       kind = 'mismatch';
       leadLine = misRows.length + ' inventory routing' + (misRows.length === 1 ? '' : 's') + ' post to a different account than the cardex model';
       fixTxt = 'For the routing' + (misRows.length === 1 ? '' : 's') + ' flagged above, the inventory AAI (the Inv DMAAI) relieves inventory to a different account than the 4152 cardex model for that GL class. Align the AAI so the inventory leg resolves to the model account — then the source stops producing the divergence.';
+    } else if (_mtoOn) {
+      // MTO: routings match (no misRows) and the SOs shipped — the residual is
+      // manufacturing cardex-vs-GL cost shape, not a mapping or offset issue.
+      var _gap = _mtoB.cardexOnly.n > 0;
+      kind = _gap ? 'mismatch' : 'agree';
+      leadLine = 'make-to-order manufacturing — the routings match; the residual is cardex-vs-GL cost shape, not a mapping issue';
+      fixTxt = _gap
+        ? _mtoB.cardexOnly.n + ' completion' + (_mtoB.cardexOnly.n === 1 ? '' : 's') + ' posted to the cardex but never journaled to the GL — a real posting gap. Repost via R31802A (Manufacturing Accounting) at the source, not a journal entry. The rest is standard-cost variances (GL-only, expected) and completion cost differences (investigate the large ones):'
+        : 'The residual is standard-cost variances (GL-only, expected) and completion cost differences that clear as the orders complete — investigate only the large or persistent ones:';
     } else if (combos.length) {
       kind = 'agree';
       leadLine = 'every inventory routing matches the cardex model account';
@@ -6799,17 +6855,21 @@
     var html = '<div class="tx-analyzer-lead is-' + kind + '">' + icon
       + '<div><div class="tx-analyzer-lead-line">' + escapeHtml(leadLine) + '</div>'
       + (fixTxt ? '<div class="tx-analyzer-fix">' + escapeHtml(fixTxt) + '</div>' : '') + '</div></div>'
+      + (_mtoOn ? _txMtoBucketsHtml(_mtoB) : '')
       + _txCombosHtml(combos);
-    var wantAi = (_txAiTier() === 'full') && (kind === 'mismatch');
+    // MTO is NOT a DMAAI mapping finding — the narration prompt is mapping-framed,
+    // so suppress it here; the deterministic shape breakdown stands on its own.
+    var wantAi = (_txAiTier() === 'full') && (kind === 'mismatch') && !_mtoOn;
     if (wantAi) html += '<div class="tx-analyzer-ai" id="tx-analyzer-ai" hidden></div>';
     // Subtle at-rest status in the header so the analyst can decide to expand
     // without the loud colored band. Keys off the pattern that fired.
     var flagState = kind === 'agree' ? 'agree' : (kind === 'mismatch' ? 'mismatch' : 'muted');
-    var flagTxt = kind === 'agree' ? 'Routings match'
+    var flagTxt = kind === 'agree' ? (_mtoOn ? 'Cost timing — routings match' : 'Routings match')
       : dup            ? 'Duplicate cardex relief'
       : nonStock       ? 'Non-stock routing'
       : itDominant     ? 'Inventory-transfer integrity'
       : misRows.length ? (misRows.length + ' routing mismatch' + (misRows.length === 1 ? '' : 'es'))
+      : _mtoOn         ? 'Completion gap + cost variances'
       : (combos.length ? 'Review' : 'No rows');
     _txAnalyzerFlag(flagState, flagTxt);
     body.innerHTML = html;   // populated but stays collapsed until the analyst opens the panel
@@ -6824,13 +6884,21 @@
     // Prefix keys off the pattern that actually fired — only the model↔inv account
     // mismatch is a DMAAI fix. Duplicate-sales, non-stock, and IT cardex-integrity are
     // NOT DMAAI issues, so they must not carry a "DMAAI source fix" label.
-    var findingPrefix = kind === 'agree' ? 'DMAAI analyzer — no mapping issue:\n'
+    var findingPrefix = kind === 'agree' ? (_mtoOn ? 'Make-to-order — cardex-vs-GL cost shape:\n' : 'DMAAI analyzer — no mapping issue:\n')
       : dup            ? 'Duplicate cardex relief — source fix:\n'
       : nonStock       ? 'Non-stock routing — source fix:\n'
       : itDominant     ? 'Inventory-transfer integrity — source fix:\n'
       : misRows.length ? 'DMAAI source fix:\n'
+      : _mtoOn         ? 'Make-to-order — completion not journaled (source fix):\n'
       :                  'Source fix:\n';
-    if (kind !== 'muted') _txAutoDraftFinding(findingPrefix + leadLine + '\n\n' + fixTxt + (misTxt ? '\n\n' + misTxt : ''));
+    // MTO auto-draft carries the shape breakdown so the Findings panel records the
+    // per-bucket counts + the R31802A action, not just the lead.
+    var mtoTxt = _mtoOn ? [
+      '- GL only: ' + _mtoB.glOnly.n + ' rows / ' + _txMoneyShort(_mtoB.glOnly.amt) + ' — standard-cost variances, expected, no action.',
+      '- Both differ: ' + _mtoB.both.n + ' rows / ' + _txMoneyShort(_mtoB.both.amt) + ' — completion std-on-cardex vs actual-in-GL; investigate the large ones.',
+      '- Cardex only: ' + _mtoB.cardexOnly.n + ' rows / ' + _txMoneyShort(_mtoB.cardexOnly.amt) + ' — completion not journaled; repost via R31802A at the source, not a JE.'
+    ].join('\n') : '';
+    if (kind !== 'muted') _txAutoDraftFinding(findingPrefix + leadLine + '\n\n' + fixTxt + (misTxt ? '\n\n' + misTxt : '') + (mtoTxt ? '\n\n' + mtoTxt : ''));
     if (wantAi) _txAnalyzeNarrate(co, per, leadLine, fixTxt, fp);
   }
   // Full-tier narration: plain-analyst-English over the RESOLVED facts. Grounded
