@@ -297,16 +297,19 @@ The Transaction Detail sections are not independent. Each carries an expectation
 
 **Rule 1 -- LineTy on the Header Comp / Orders section predicts F4111 presence.**
 
-Every order line in the Header Comp section (both purchase and sales orders) carries a **LineTy** code (S, N, J, F, T, M, W, B, D, O, R, or a customer-defined variant). The **Inventory Interface** flag on the line-type constant (`F40205`) determines whether the line writes to the item ledger:
+Every order line in the Header Comp section (both purchase and sales orders) carries a **LineTy** code (S, N, J, F, T, M, W, B, D, and site-defined variants). The **Inventory Interface** flag on the line-type constant (`F40205`) is the cardex-vs-GL lever -- it decides whether the line writes to the item ledger (F4111) or posts to the GL only:
 
-| Inventory Interface | F4111 expectation | Common line types |
-|---|---|---|
-| **Y** | At least one F4111 row should exist for the line (often several, one per lot picked) | S (stock), W (work order), B (bulk) |
-| **N** | No F4111 row should exist for the line | N (non-stock), J (job cost), F (freight), T (text), M (misc charge), D (direct ship), O (outside ops), R (recurring) |
+| Inventory Interface | Writes cardex (F4111)? | What the line is | Typical codes |
+|---|---|---|---|
+| **Y** | Yes | Full inventory processing -- F41021 availability, F4111 cardex, costing, and the GL | S (stock), W (work order) |
+| **D** | Yes | Direct-ship inventory processing (same cardex handling as Y) | D (direct ship) |
+| **A** | No -- GL only | The line carries a G/L account number and a lump-sum amount, no item | J (G/L account / non-stock), IC (intercompany non-stock) |
+| **B** | No -- GL only | Like A, but an item number is also required (bulk / commingled) | B, SI (internal sales) |
+| **N** | No | Treated as a text line -- little editing; no item-ledger, and often GL-only or nothing | N / NS (non-stock), T (text), F (freight), M (misc), % (tax) |
 
-Violations of this rule are diagnostic:
-- A line with Inventory Interface = Y and **no F4111** is either an unshipped backorder (NxtSts < ship-confirm), an unwritten cardex (rare), or -- if NxtSts &ge; ship-confirm -- a partial / missing-row case worth investigating (Pattern 5.13 is the closed-order variant).
-- A line with Inventory Interface = N and **an F4111 record** is unusual and warrants explanation; it may indicate a misconfigured line type or a posting that bypassed the standard interface.
+**This is the classification rule the reconciliation leans on:** a GL-only reconciling row (F0911 present, F4111 absent) on an **A / B / N** line is **expected** -- a non-inventory line posting straight to the GL -- **not a variance**. The anomalies are the inverse: a **Y / D** line missing its cardex (Pattern 5.13 is the closed-order variant -- could be an unshipped backorder when NxtSts < ship-confirm, or a genuinely unwritten cardex), or an **A / B / N** line that somehow *did* write cardex (a misconfigured line type or a posting that bypassed the interface).
+
+**Do not trust a generic "standard" F40205 -- the interface is per-JDE-environment.** A line type's code is whatever that customer configured; a code *named* "non-stock" can be set inventory-writing, and assuming the textbook value will misclassify real volume. Validate a line type's true interface against the database's **own cardex footprint**: join the order lines (sales `F4211`/`F42119.sdlnty`, purchase `F4311.pdlnty`) to `F4111` on the originating order (`ildoco` / `ildcto` / `ilkco` / `illnid`) and measure what fraction of that line type's lines actually produced cardex rows. A true stock line runs ~80--90%; a genuine non-cardex line runs 0%. *(Worked case: one shop's `NS` line fired cardex on 89% of its lines -- inventory-writing despite the "non-stock" name, so its real interface is `Y`, not the standard `N`. A generic seed would have mislabeled ~60K inventory movements as expected GL-only.)* RapidReconciler now carries each customer's `F40205` as a **per-database table** (mined from their `PRODCTL.F40205`), so the classifier and this analyzer resolve the *actual* interface per line type rather than guessing.
 
 See `RRUniversity/inventory-line-types.html` for the full LineTy reference, including which flags each code carries.
 
