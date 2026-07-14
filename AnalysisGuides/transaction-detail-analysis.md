@@ -313,6 +313,8 @@ Every order line in the Header Comp section (both purchase and sales orders) car
 
 See `RRUniversity/inventory-line-types.html` for the full LineTy reference, including which flags each code carries.
 
+**Sales-order lines — always resolve through `vcr_f42119`** (the union of `F4211` open/active + `F42119` history), never `F4211` or `F42119` alone. An **empty `F42119` is a valid customer process choice, not missing data**: JDE Sales Update (`R42800`) moves a line from `F4211` to `F42119` only when its purge-to-history processing option is set; if the customer doesn't purge, closed/shipped orders (status `620`/`999`) simply stay in `F4211` by status. So don't read "no shipments / no sales history" from an empty `F42119` — query `vcr_f42119` and filter by status (`sdnxtr`; `999` = closed/shipped). This is how the WO↔SO link resolves for a Make-to-Order card: the WO's completions load Finished Goods, and the originating sales order (stamped on `OrigOrder`) relieves it when it ships — a residual there is open WIP/FG timing, not a mapping error.
+
 **Rule 2 -- The F4111 row's Account column is the expected GL account.**
 
 Each F4111 row carries an **Account** value -- that's the GL account where RapidReconciler expects the corresponding F0911 inventory entry to land, based on the DMAAI configuration that fired for the transaction. When the F0911 Inv Acct entry lands on a **different account**, the variance is an **account mismatch** (Section 5.4). The mismatch is read directly off the two sections without any DMAAI configuration lookup -- F4111 has the expected account, F0911 has the actual posted account.
