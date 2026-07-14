@@ -378,7 +378,7 @@ Common mismatch scenarios:
 | Account mismatch | CardexAmount and LedgerAmount on separate rows | DMAAI misconfiguration; GL class code change |
 | Period mismatch | Same amounts but in different period rows | Backdating; Sales Update or Manufacturing Accounting processed in a different period than the cardex |
 | GL-only entry | CardexAmount = 0, LedgerAmount has a value | Manual journal entry to inventory account; payment or discount entry coded to inventory; voucher with no receipt |
-| Cardex-only entry | LedgerAmount = 0, CardexAmount has a value | Unposted batch; cardex written but GL not updated |
+| Cardex-only entry | LedgerAmount = 0, CardexAmount has a value | Unposted batch (batch = 0) with cardex written but GL not updated -- **except** IC/IM/IH work-order docs with batch &gt; 0, where the GL is posted under an R31802A-renumbered document and must be matched by the subledger (work order); see "Manufacturing Accounting GL Summarization" below |
 | Partial cardex-only entry | Both totals are non-zero but unequal; one or more RR Summary rows show LedgerAmount = $0.00 for a specific batch/account | A single line item within an otherwise-posted batch has no GL counterpart -- see Section 5.3 |
 | GL-excess entry | Both totals are non-zero but unequal; the GL amount for a specific account and batch exceeds the corresponding cardex; net variance is positive | GL entry is a summarized manufacturing posting spanning multiple work orders; manual journal entry miscoded to inventory; cardex row excluded from report -- see Sections 4.11 and 4.12 |
 
@@ -386,12 +386,16 @@ Common mismatch scenarios:
 
 R31802A (Manufacturing Accounting) summarizes GL postings for work order transactions. A single F0911 entry may represent costs from multiple work orders, multiple completion batches, or multiple material issue documents processed in the same run. The GL document number in F0911 for IC, IM, and IH transactions is therefore almost always different from the cardex document number -- and a single GL entry may be larger than any individual cardex row because it covers activity from other work orders not shown in this report.
 
-**Implication for RapidReconciler matching:** RapidReconciler matches on the batch number, not the GL document number. For manufacturing transactions, always verify the scope of an F0911 entry by querying F0911 for the GL document number across all order numbers before concluding that a GL entry is erroneous or missing.
+**Implication for RapidReconciler matching:** because R31802A renumbers the GL document, cardex and GL for IC / IM / IH transactions cannot be paired on the document number. The reliable key is the **work order**, carried in the F0911 **subledger** (`GLSBL`, subledger type `W`): match the cardex completion to the GL entry whose subledger equals the work order, on the same account. Where a customer does not populate the subledger, fall back to the **F3106** document cross-reference (`sddoco` = work order &rarr; `sddoc` = GL document). Matching that ignores the subledger strands work-order completions as false **cardex-only** rows -- they look like an unposted batch but the GL completion is fully posted under a renumbered document. On one live customer, 452 of 647 such stranded IC rows (£11.0M) tied out exactly once matched by subledger. The true residual after the match was two real patterns, not artifacts: £0.1M of cost differences (5.16 Mfg Cost Mismatch, GL completion present but at a different amount) and £1.6M of **completions never journaled** -- the work order's material issues (IM) are posted to the GL but the completion (IC) was never posted at all, so the cardex shows finished goods in inventory that the GL never received (WIP overstated, FG understated). That last one is a genuine posting gap to work, not a match artifact, and it only becomes visible once the false cardex-only rows are matched away by subledger.
+
+**Do not read a cardex-only IC/IM/IH row as an unposted batch when its batch number is non-zero.** Batch = 0 means unposted; batch &gt; 0 means the GL posted and the match is failing on the key, not the posting. Resolve it by the subledger before treating it as a posting gap.
 
 **Applies to:** IC (work order completion), IM (material issue to work order), IH (manufacturing accounting journal entry). Does not apply to standard inventory transactions (IA, IT, II, IB).
 
+**One caveat on F3106:** it has been seen to cross-reference a work order to its material-*issue* document rather than the *completion* document, so treat the subledger as authoritative when present and use F3106 only as the fallback.
+
 **How to verify the scope of a GL entry:**
-1. Note the GL document number in the F0911 Inv Acct section.
+1. Query F0911 by the **work order in the subledger** (`GLSBL`, type `W`) to find the completion regardless of its renumbered document, then note the GL document number.
 2. Query F0911 for that GL document number with no other filters.
 3. If the GL document number references multiple order numbers or subledgers, the entry is a summarized posting -- the variance is attributable to the combination of all work orders, and RapidReconciler will reflect the full variance across all affected transaction records.
 
@@ -422,6 +426,7 @@ When an IM document shows a GL-excess pattern (F0911 exceeds F4111 for a specifi
 | 5.17 | Voucher Variance on Inventory (PV) | 5.15 |
 | 5.18 | Duplicate shipment -- same order line | 5.17 |
 | 5.19 | Transfer Integrity -- IT relieved cardex value with no GL | 5.18 |
+| 5.20 | Completion Not Journaled -- WO completion on cardex, not in GL | 5.19 |
 | -- | Tax Variance | 5.6 |
 | -- | Landed Cost Variance | 5.7 |
 | -- | "No Cx" in Batch Field | 5.8 |
@@ -974,6 +979,35 @@ A within-branch location transfer should be value-neutral: the out leg relieves 
 **Prevention:** fix the cost-component / standard-cost setup for the cost-level-3 items so future IT transfers extend a cost, then re-run R41543 / R41544 to confirm the population is clean.
 
 > **Analyzer output:** the analyzer fires this ahead of the generic Cardex-Only diagnosis (5.3) for any IT document that relieved the cardex with no GL, so the item-ledger-integrity story wins over "go post the batch." The classifier stamps the same rows **Transfer Integrity**, and they group on their own card on the Transactions page.
+
+---
+
+### 5.19 Completion Not Journaled -- Work-Order Completion Posted to Cardex, Not to GL
+
+> Numbered 5.19 in this guide; the analyzer's internal pattern ID is **5.20**.
+
+> **This is the residual left AFTER the subledger match runs.** The "Manufacturing Accounting GL Summarization" subledger match (above) pairs a cardex completion with its GL completion by the work order (`GLSBL`) across batches, so a completion that WAS journaled -- even under a renumbered R31802A document in a different batch -- reconciles and clears. What survives as a cardex-only `IC` is either a genuine cost variance (a GL completion exists, amount differs -- that is **5.16 Manufacturing Cost Mismatch**) or a completion that was **never journaled to the GL at all**. This section is the second case.
+
+**Symptoms:**
+- A **work-order completion (DT `IC`)** relieved finished goods into inventory on the cardex (F4111); `CardexAmount` has a value, `LedgerAmount` = 0, and the batch is non-zero
+- Querying F0911 by the **work order in the subledger** (`GLSBL`, type `W`) finds the WO's **material issues (IM)** posted to the GL, but **no completion (IC)** on any account
+- Distinguish from 5.16: there, a GL completion (IC) *does* exist for the WO and only the amount differs
+
+**What is happening:**
+
+R31802A (Manufacturing Accounting) posts the completion's CARDEX under the transaction batch and its completion JE under the R31802A run batch -- different batches. When the run for this completion did not journal it (interrupted run, a completion left un-processed by R31802A, or a work order completed on the cardex but never run through Manufacturing Accounting), the material issues can still be in the GL while the completion is not. Finished-goods cost never reached the general ledger, so WIP is overstated and finished goods understated in the GL. It is an item-ledger gap, not a mapping gap and not a timing gap that clears on its own.
+
+**Resolution:**
+
+> ⚠ **This is a source fix, not a journal entry.** A JE balances the GL for the period but does not carry the finished-goods cost into the item ledger, and the gap returns on the next completion. Correct it in JDE.
+
+1. **Confirm the signature** -- query F0911 by the work order (`GLSBL`, type `W`). Confirm the material issues (IM) posted but no completion (IC) exists on the finished-goods account. The cardex shows the completion; the GL does not.
+2. **Repost the completion via R31802A** (Manufacturing Accounting) for the work order, so the finished-goods cost journals to the GL and ties back to the cardex.
+3. **Refresh RapidReconciler and re-analyze** -- the variance clears once R31802A journals the completion.
+
+**Prevention:** review the R31802A schedule / exception handling so every completed work order is run through Manufacturing Accounting -- a completion posted to the cardex but skipped by R31802A is the root cause.
+
+> **Analyzer output:** the analyzer fires this ahead of the generic Cardex-Only diagnosis (5.3) for any `IC` completion that relieved the cardex with no GL, so the manufacturing-accounting story wins over "go post the batch." The classifier stamps the same rows **Completion Not Journaled** (`usp8_txv_flags`, correlated against F0911 by subledger: the WO has GL issues but no GL completion), and they group on their own card on the Transactions page.
 
 ---
 
