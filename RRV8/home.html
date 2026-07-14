@@ -7377,13 +7377,15 @@
     'DUP':     { title: 'Duplicate Sales',             kind: 'rebalance', tier: 'quick'   },
     // IT cardex-integrity (owner 2026-07-14) — item-ledger fix at source, not a JE.
     'TXI':     { title: 'Transfer Integrity',          kind: 'review',    tier: 'quick'   },
+    // Mfg completion posted to cardex, never journaled to GL (owner 2026-07-14) — repost via R31802A.
+    'CNJ':     { title: 'Completion Not Journaled',    kind: 'review',    tier: 'quick'   },
     // Terminal — the unclassified residual, split by transaction type
     'T-SALES': { title: 'Unclassified — Sales',          kind: 'review', tier: 'terminal' },
     'T-PURCH': { title: 'Unclassified — Purchasing',     kind: 'review', tier: 'terminal' },
     'T-MFG':   { title: 'Unclassified — Manufacturing',  kind: 'review', tier: 'terminal' },
     'T-INV':   { title: 'Unclassified — Inventory',      kind: 'review', tier: 'terminal' }
   };
-  var _TXV_CODE_ORDER = ['ACCT', 'PER', 'VCHR', 'DUP', 'TXI', 'MTO', 'ICO', 'TRF', 'DS', 'T-SALES', 'T-PURCH', 'T-MFG', 'T-INV'];
+  var _TXV_CODE_ORDER = ['ACCT', 'PER', 'VCHR', 'DUP', 'TXI', 'CNJ', 'MTO', 'ICO', 'TRF', 'DS', 'T-SALES', 'T-PURCH', 'T-MFG', 'T-INV'];
   var _TXV_TIER_ORDER = ['quick', 'complex', 'linked', 'terminal'];
   var _TXV_TIER_LABEL = { quick: 'Quick wins', complex: 'Complex transactions', linked: 'Linked pairs', terminal: 'Needs review' };
 
@@ -7410,6 +7412,7 @@
     if (st === 'vouchers')        return 'VCHR';   // DAC-28: A/P voucher on inventory, promoted to a card
     if (st === 'duplicate sales') return 'DUP';    // DAC-28: duplicate cardex relief, promoted to a card
     if (st === 'transfer integrity') return 'TXI'; // IT cardex-only integrity — item-ledger fix at source
+    if (st === 'completion not journaled') return 'CNJ'; // mfg IC cardex-only, completion never journaled to GL
     // No subtype → terminal card by type.
     var ty = String(r.Type || '').trim().toLowerCase();
     if (ty === 'sales')      return 'T-SALES';
@@ -7773,6 +7776,7 @@
         VCHR: 'An A/P voucher (batch type V) posted to an inventory account instead of the A/P variance account — DMAAI 4220 is routing voucher variances into inventory. The fix is at the source: correct the 4220 routing so voucher variances land on the variance account, not inventory.',
         DUP:  'The cardex relief posted twice while the GL posted once (RDuplicateSales flags the order) — the extra F4111 line IS the variance, a source double-write, not a mapping issue. Reverse the duplicated cardex relief at the source.',
         TXI:  'An inventory-transfer (IT) document relieved value on the cardex that the GL never recorded — the receipt leg carried a unit cost but a zero extended cost, so a value-neutral location move destroyed inventory value. This is a JDE item-ledger integrity error (seen on cost-level-3 / standard-cost transfers, the one-sided-entry defect), not a mapping or journal-entry fix. Run the item-ledger integrity programs (R41543 / R41544) and restore the extended cost with a dollars-only IA adjustment at the source so the cardex and GL agree. A journal entry only balances the GL this period; it will not restore the lost cardex value or stop it recurring.',
+        CNJ:  'A work-order completion posted finished goods into inventory on the cardex (IC), but the completion journal (IC) never posted to the GL — the WO\'s material issues (IM) did, so WIP is overstated and finished goods understated in the GL. The two halves post under different batches (the cardex under the transaction batch, the completion JE under the R31802A run batch), which is why the completion can go missing without the issues. Fix it at the source: post or repost the completion through R31802A (Manufacturing Accounting). A manual journal entry only balances the GL this period; it will not carry the finished-goods cost into the item ledger or stop the gap recurring on the next completion.',
         TRF: 'Transfer Orders (ST/OT) relieve inventory and post the GL through Sales Update (R42800). If that run is interrupted or crashes, its workfile can survive and a re-run duplicates the CARDEX relief — the F4111 line is written twice while the GL posts once — so the variance sits in the cardex, not the GL. It is a known JDE quirk, not a mapping error, and it can recur: reverse the duplicated cardex relief at the source. An adjusting entry only balances the GL this period; it will not remove the extra cardex line or stop it recurring if R42800 abends.'
       };
 
