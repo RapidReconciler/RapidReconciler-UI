@@ -794,8 +794,8 @@
      agree). Deterministic at all tiers; Full tier appends grounded narration. */
   .tx-analyzer { margin: 0 0 18px; padding: 16px 18px; background: var(--bg-card); border: 1px solid var(--rule); border-left: 4px solid var(--navy); border-radius: 12px; box-shadow: var(--shadow-sm); }
   .tx-analyzer-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-  .tx-analyzer-title { font-family: 'Source Sans 3', sans-serif; font-weight: 800; font-size: 15px; color: var(--navy); display: inline-flex; align-items: center; gap: 7px; }
-  .tx-analyzer-title svg { width: 15px; height: 15px; color: var(--navy); }
+  .tx-analyzer-title { font-family: 'Source Sans 3', sans-serif; font-weight: 800; font-size: 20px; color: var(--navy); display: inline-flex; align-items: center; gap: 9px; }
+  .tx-analyzer-title svg { width: 19px; height: 19px; color: var(--navy); }
   .tx-analyzer-sub { font-size: 12px; color: var(--text-muted); margin-top: 3px; line-height: 1.45; max-width: 62ch; }
   .tx-analyzer-body { margin-top: 13px; font-size: 13.5px; line-height: 1.5; color: var(--text); }
   .tx-analyzer-body[hidden] { display: none; }
@@ -804,6 +804,10 @@
   .tx-combos-hd { font-weight: 700; color: var(--navy); margin: 2px 0 8px; }
   .tx-resolve td.tx-num, .tx-resolve th.tx-num { text-align: right; font-variant-numeric: tabular-nums; }
   .tx-resolve tr.is-mismatch td { background: var(--orange-pale); }
+  /* First row of each combo group carries a stronger top rule so a multi-row
+     (per-cost-type) combo reads as one block; inner rows separate lightly. */
+  .tx-resolve tbody tr td { border-bottom-color: var(--rule-soft, #eef1f5); }
+  .tx-resolve tbody tr.tx-combo-first td { border-top: 2px solid var(--rule); }
   .tx-resolve-flag.is-warn { color: var(--orange-deep, #b0641f); background: var(--orange-pale); }
   .tx-combo-detail td { color: var(--text-muted); font-size: 12.5px; padding-top: 2px; border-top: 0; }
   /* The lead: a colored diagnostic strip. Mismatch = orange (a source fix is
@@ -821,10 +825,16 @@
   .tx-analyzer-fix { margin-top: 5px; font-size: 13px; line-height: 1.55; color: var(--text-soft); }
   /* Deterministic per-account resolution table — the workbook's Model/Inv/Exp +
      Mismatch output, brought live. Shows at every tier when the resolver answers. */
-  .tx-resolve { width: 100%; border-collapse: collapse; margin: 12px 0 2px; font-size: 12.5px; }
-  .tx-resolve th, .tx-resolve td { padding: 6px 10px; border-bottom: 1px solid var(--rule); text-align: left; }
+  /* Auto width (not 100%) so the columns pack to the left instead of spreading
+     across the panel; nowrap keeps each short cell on one line. */
+  .tx-resolve { width: auto; max-width: 100%; border-collapse: collapse; margin: 12px 0 2px; font-size: 12.5px; }
+  .tx-resolve th, .tx-resolve td { padding: 6px 34px 6px 0; border-bottom: 1px solid var(--rule); text-align: left; white-space: nowrap; }
+  .tx-resolve th:last-child, .tx-resolve td:last-child { padding-right: 0; }
   .tx-resolve thead th { font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); font-weight: 800; }
   .tx-resolve .tx-resolve-acct { font-family: 'Source Sans 3', sans-serif; font-weight: 600; color: var(--navy); }
+  /* Inv account resolves to a different account than the cardex model — the routing
+     source-fix signal. */
+  .tx-resolve .tx-resolve-acct.tx-acct-mis { color: var(--orange-deep, #b0641f); font-weight: 800; }
   .tx-resolve-flag { display: inline-block; font-size: 10px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; border-radius: 6px; padding: 2px 7px; }
   .tx-resolve-flag.is-mismatch { color: var(--orange-deep, #b0641f); background: var(--orange-pale, #fdf1e3); }
   .tx-resolve-flag.is-ok { color: var(--green-deep); background: var(--green-pale, #e7f6ec); }
@@ -2886,9 +2896,8 @@
       <div>
         <div class="tx-analyzer-title">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
-          DMAAI analyzer
+          DMAAI Analyzer
         </div>
-        <div class="tx-analyzer-sub">Resolves the accounts this group touches and tells you whether it&rsquo;s a mapping fix at the source or timing that clears on its own.</div>
       </div>
     </div>
     <div class="tx-analyzer-body" id="tx-analyzer-body" hidden></div>
@@ -3288,6 +3297,34 @@
     }
     _scopeMem.dmaais = payload;
     _scopeToStorage('dmaais', payload);
+    return payload;
+  }
+  // DMAAI ROUTING view (v8ui_dmaai_routes) for the analyst analyzer: RR's
+  // canonical reconciliation-AAI set (v6_003_expanded_aais) + the F0901 account
+  // description + the 'base aai' 4152-model flag. Same generic-view fetch shape
+  // as getIntegrityDmaais, but a SEPARATE cache so it never disturbs the
+  // classifier's v_integrity_jde_aais preload.
+  async function getDmaaiRoutes() {
+    if (_scopeMem.dmaaiRoutes) return _scopeMem.dmaaiRoutes;
+    const cached = _scopeFromStorage('dmaaiRoutes');
+    if (cached) { _scopeMem.dmaaiRoutes = cached; return cached; }
+    let payload;
+    if (IS_DEMO) {
+      payload = await rrFetch('inventory/integrity', { demoFile: 'v8ui-dmaai-routes' });
+    } else {
+      const status = await getInventoryStatus();
+      const rf = (status && status.reconciliationFilter) || {};
+      payload = await rrFetch('inventory/integrity', {
+        method: 'POST',
+        body: {
+          take: 50000, skip: 0, page: 1, pageSize: 50000,
+          report: 'v8ui_dmaai_routes',
+          reconciliationFilter: scopedIntegrityFilter(rf)
+        }
+      });
+    }
+    _scopeMem.dmaaiRoutes = payload;
+    _scopeToStorage('dmaaiRoutes', payload);
     return payload;
   }
   // Cross-period mismatch report (v_integrity11_crossperiods).
@@ -6386,6 +6423,127 @@
       .then(function (d) { return { ok: true, accounts: _txResolveAccounts(d) }; })
       .catch(function () { return { ok: false, accounts: [] }; });
   }
+  // Cost-type-aware DMAAI model for the combo table's Model Account column.
+  // Reads the SAME F4095 config the classifier preloads (v_integrity_jde_aais,
+  // via the session-cached getIntegrityDmaais), but keyed
+  // (Co|OT|DT|GLClass) -> [{costType, acct}] WITHOUT collapsing cost types.
+  // buildDmaaiIndex keeps ONE account per key (enough for the 5.4 detector),
+  // but a manufacturing AAI (e.g. 3130 work-order completions) routes EACH cost
+  // component (A1/B1/C1...) to its own account, so the combo table must keep
+  // them all. Cached per active DB, like _txvLoadDmaaiModel.
+  var _txAaiCfg = { key: null, cfg: null, loading: null };
+  function _txvLoadAaiConfig() {
+    var key = (window.RR_SESSION && RR_SESSION.dbs && RR_SESSION.dbs[RR_SESSION.activeDbIndex] && RR_SESSION.dbs[RR_SESSION.activeDbIndex].n) || '_';
+    if (_txAaiCfg.key === key && _txAaiCfg.cfg) return Promise.resolve(_txAaiCfg.cfg);
+    if (_txAaiCfg.loading && _txAaiCfg.key === key) return _txAaiCfg.loading;
+    _txAaiCfg.key = key; _txAaiCfg.cfg = null;
+    _txAaiCfg.loading = Promise.resolve(getDmaaiRoutes()).then(function (payload) {
+      var rows = (payload && payload.data) || (Array.isArray(payload) ? payload : []);
+      var byCombo = {};   // (Co|OT|DT|GLClass) -> [{costType, acct, table, descr}]  posting routings
+      var model = {};     // (Co|GLClass) -> { acct, doctype }  from the 'base aai' 4152 model row
+      rows.forEach(function (r) {
+        var co = String(r.companynumber || r.CompanyNumber || '').trim();
+        var ot = String(r.ordertype || r.OrderType || '').trim();
+        var dt = String(r.doctype || r.DocType || '').trim();
+        var gc = String(r.glclass || r.GLClass || '').trim();
+        var ct = String(r.costtype || r.CostType || '').trim();
+        var bu = String(r.businessunit || r.BusUnit || r.BusinessUnit || '').trim();
+        var ob = String(r.object || r.Object || '').trim();
+        var sb = String(r.subsidiary || r.Sub || r.Subsidiary || '').trim();
+        var objSub = (ob + (sb ? '.' + sb : '')).replace(/\s+/g, '');
+        // BUFlex = the AAI's BU field was blank -> branch plant IS the BU; the BU
+        // then varies by branch and its "mismatch" is ignored (compare obj+sub).
+        var bfRaw = (r.BUFlex !== undefined) ? r.BUFlex : r.buflex;
+        var buFlex = (bfRaw === true || bfRaw === 1 || String(bfRaw).trim().toLowerCase() === '1'
+          || String(bfRaw).trim().toLowerCase() === 'true' || String(bfRaw).trim().toLowerCase() === 'yes');
+        var tbl = String(r.tablenumber || r.TableNumber || '').trim();
+        var descr = String(r.AcctDescription || r.acctdescription || '').trim();
+        var cmt = String(r.comment || r.Comment || '').trim().toLowerCase();
+        var acct = (bu + (ob ? '.' + ob : '') + (sb ? '.' + sb : '')).replace(/\s+/g, '');
+        if (!co || !dt || !acct) return;
+        var k = co + '|' + ot + '|' + dt + '|' + gc;
+        (byCombo[k] || (byCombo[k] = [])).push({ costType: ct, acct: acct, objSub: objSub, table: tbl, descr: descr, buFlex: buFlex });
+        // 'base aai' flags the 4152 model row whose DocType = the company's
+        // AAIDocType (computed in v6_003_expanded_aais) — the cardex model account,
+        // resolved WITHOUT a separate /admin/companies lookup.
+        if (cmt === 'base aai' && gc && !model[co + '|' + gc]) model[co + '|' + gc] = { acct: acct, objSub: objSub, doctype: dt, buFlex: buFlex };
+      });
+      Object.keys(byCombo).forEach(function (k) {
+        var seen = {}, out = [];
+        byCombo[k].forEach(function (e) { var sig = e.table + '|' + e.costType + '|' + e.acct; if (!seen[sig]) { seen[sig] = 1; out.push(e); } });
+        byCombo[k] = out;
+      });
+      _txAaiCfg.cfg = { byCombo: byCombo, model: model }; return _txAaiCfg.cfg;
+    }).catch(function () { _txAaiCfg.cfg = { byCombo: {}, model: {} }; return _txAaiCfg.cfg; });
+    return _txAaiCfg.loading;
+  }
+  // Attach the model routing rows to each grid combo, ONE GL-class code per row
+  // (owner 2026-07-13). v8ui concatenates every distinct F4111.ilglpt on the doc
+  // into a comma-joined GLClass, but the DMAAI config keys on a SINGLE GL class,
+  // so a comma-set never matches — explode it and resolve each code on its own,
+  // crossing with that code's cost types. JDE resolves by exact GL class, else
+  // the '****' wildcard — mirror that fallback. No model match -> one dashed row
+  // (that the code has no AAI routing is itself a signal).
+  // The inventory-side AAI tables — the Inv DMAAI. Filters out the P&L / variance
+  // / tax / clearing legs (4220 COGS, 4230 revenue, 4320 RNV, 43xx, 3220-3280) so
+  // Model Account and Inv Acct show the inventory model, not a P&L leg.
+  // Aligned 2026-07-14 to RR's authoritative reconciliation set (v6_003_expanded_aais),
+  // which deliberately EXCLUDES 4141/4140 (inventory issue/physical) and 3120 (WIP) —
+  // including 4141 produced spurious mismatches. Kept: 3110/3130 (WO issue/completion),
+  // 4122 (inventory move), 4152 (cost model), 4240 (sales relief), 4310 (PO receipt),
+  // 4385 (landed cost).
+  var _TX_INV_DMAAIS = { '3110': 1, '3130': 1, '4122': 1, '4152': 1, '4240': 1, '4310': 1, '4385': 1 };
+  function _txAttachModel(combos, cfg) {
+    cfg = cfg || {};
+    var byCombo = cfg.byCombo || {};
+    var model = cfg.model || {};
+    (combos || []).forEach(function (c) {
+      var codes = String(c.gc || '').split(',').map(function (s) { return s.trim(); }).filter(function (s) { return s; });
+      if (!codes.length) codes = [''];
+      var out = [];
+      codes.forEach(function (code) {
+        // Cardex MODEL = the 'base aai' 4152 row for (company, GL class); its
+        // DocType is the company's AAIDocType, so Model Table = "4152 <doctype>".
+        var m = model[c.co + '|' + code];
+        var modelAcct = m ? m.acct : '';
+        var modelObjSub = m ? m.objSub : '';
+        var modelTable = (m && m.doctype) ? '4152 ' + m.doctype : '4152';
+        // JDE keys inventory AAIs differently by family: manufacturing on
+        // (order type + doc type); SALES leaves OrderType BLANK and stores the
+        // ORDER type (SA/SO/SD/SK...) in the DocType column; inventory moves put
+        // the doc type (IA/II...) there, order type blank. The grid's DocType is
+        // a GL journal type (JS), NOT the AAI key. So try, in order:
+        //   (gridOT, gridDT) -> (blank, gridOT) -> (blank, gridDT)
+        // each with an exact GL class then the '****' wildcard; first inventory
+        // hit wins. This resolves sales orders (grid OT SA -> config DocType SA).
+        var isInv = function (e) { return _TX_INV_DMAAIS[e.table]; };
+        var forms = [[c.ot, c.dt], ['', c.ot], ['', c.dt]];
+        var inv = [];
+        for (var fi = 0; fi < forms.length && !inv.length; fi++) {
+          var kBase = c.co + '|' + forms[fi][0] + '|' + forms[fi][1] + '|';
+          inv = (byCombo[kBase + code] || []).filter(isInv);
+          if (!inv.length) inv = (byCombo[kBase + '****'] || []).filter(isInv);
+        }
+        if (!inv.length) { out.push({ glCode: code, costType: '', modelTable: modelTable, modelAcct: modelAcct, invDmaai: '', invAcct: '', invAcctDesc: '', acctMis: false }); return; }
+        inv.forEach(function (e) {
+          // Compare the FULL account, EXCEPT when the BU is flex on either side —
+          // the AAI's BU field was blank, so the branch plant IS the BU (it varies
+          // by branch, not a routing choice). Then compare object+subsidiary only.
+          var flex = (m && m.buFlex) || e.buFlex;
+          var acctMis = flex
+            ? !!(modelObjSub && e.objSub && modelObjSub !== e.objSub)
+            : !!(modelAcct && e.acct && modelAcct !== e.acct);
+          out.push({ glCode: code, costType: e.costType, modelTable: modelTable, modelAcct: modelAcct, invDmaai: e.table, invAcct: e.acct, invAcctDesc: e.descr, acctMis: acctMis });
+        });
+      });
+      out.sort(function (a, b) {
+        return (a.glCode || '').localeCompare(b.glCode || '')
+          || (a.invDmaai || '').localeCompare(b.invDmaai || '')
+          || (a.costType || '').localeCompare(b.costType || '');
+      });
+      c.modelRows = out;
+    });
+  }
   // ---- The analyzer ------------------------------------------------------
   // Reads the drilled group's rows + the resolver, in parallel, then renders
   // ONE of the states: mismatch (source fix), accounts-agree (timing/pairing),
@@ -6420,7 +6578,14 @@
       e.status = both ? (same ? 'aligned' : 'mismatch')
         : (e.cxAccts.length ? 'cardex-only' : (e.glAccts.length ? 'gl-only' : 'none'));
       return e;
-    }).sort(function (a, b) { return Math.abs(b.variance) - Math.abs(a.variance); });
+    }).sort(function (a, b) {
+      // Owner 2026-07-13: sort by company, order type, doc type, GL class — not
+      // materiality — so the combo list reads like the JDE AAI setup screen.
+      return (a.co || '').localeCompare(b.co || '')
+        || (a.ot || '').localeCompare(b.ot || '')
+        || (a.dt || '').localeCompare(b.dt || '')
+        || (a.gc || '').localeCompare(b.gc || '');
+    });
   }
   function _txMoneyShort(v) {
     var n = Math.round(Number(v) || 0);
@@ -6435,25 +6600,49 @@
   };
   function _txCombosHtml(combos) {
     if (!combos.length) return '';
-    var trs = combos.map(function (c) {
-      var s = _TX_STAT[c.status] || _TX_STAT.none;
-      var row = '<tr' + (c.status === 'mismatch' ? ' class="is-mismatch"' : '') + '>'
-        + '<td>' + escapeHtml(c.co || '—') + '</td>'
-        + '<td>' + escapeHtml(c.ot || '—') + '</td>'
-        + '<td>' + escapeHtml(c.dt || '—') + '</td>'
-        + '<td>' + escapeHtml(c.gc || '(none)') + '</td>'
-        + '<td class="tx-num">' + c.rows.toLocaleString('en-US') + '</td>'
-        + '<td class="tx-num">' + escapeHtml(_txMoneyShort(c.variance)) + '</td>'
-        + '<td><span class="tx-resolve-flag is-' + s.c + '">' + s.t + '</span></td></tr>';
-      return row;
+    // Flatten every combo's model routings into ONE distinct list (owner
+    // 2026-07-14) — no per-combo grouping. Each distinct
+    // (Co · OT · DT · Cost · GL · Model Table · Model Acct · Inv DMAAI · Inv Acct)
+    // routing appears once, every cell populated.
+    var seen = {}, list = [];
+    combos.forEach(function (c) {
+      var rows = (c.modelRows && c.modelRows.length) ? c.modelRows : [{ glCode: (c.gc || ''), costType: '', modelTable: '', modelAcct: '', invDmaai: '', invAcct: '', invAcctDesc: '', acctMis: false }];
+      rows.forEach(function (e) {
+        var r = { co: c.co || '', ot: c.ot || '', dt: c.dt || '', costType: e.costType || '', glCode: e.glCode || '',
+          modelTable: e.modelTable || '', modelAcct: e.modelAcct || '', invDmaai: e.invDmaai || '', invAcct: e.invAcct || '', invAcctDesc: e.invAcctDesc || '', acctMis: !!e.acctMis };
+        var sig = [r.co, r.ot, r.dt, r.costType, r.glCode, r.modelTable, r.modelAcct, r.invDmaai, r.invAcct].join('');
+        if (!seen[sig]) { seen[sig] = 1; list.push(r); }
+      });
+    });
+    list.sort(function (a, b) {
+      return a.co.localeCompare(b.co) || a.ot.localeCompare(b.ot) || a.dt.localeCompare(b.dt)
+        || a.glCode.localeCompare(b.glCode) || a.invDmaai.localeCompare(b.invDmaai) || a.costType.localeCompare(b.costType);
+    });
+    var trs = list.map(function (r) {
+      // Highlight where the inventory AAI resolves to a DIFFERENT account than
+      // the cardex model (the source-fix signal).
+      var acctMis = r.acctMis;
+      return '<tr>'
+        + '<td>' + escapeHtml(r.co || '—') + '</td>'
+        + '<td>' + escapeHtml(r.ot || '—') + '</td>'
+        + '<td>' + escapeHtml(r.dt || '—') + '</td>'
+        + '<td>' + escapeHtml(r.costType || '—') + '</td>'
+        + '<td>' + escapeHtml(r.glCode || '(none)') + '</td>'
+        + '<td>' + escapeHtml(r.modelTable || '—') + '</td>'
+        + '<td class="tx-resolve-acct">' + escapeHtml(r.modelAcct || '—') + '</td>'
+        + '<td>' + escapeHtml(r.invDmaai || '—') + '</td>'
+        + '<td class="tx-resolve-acct' + (acctMis ? ' tx-acct-mis' : '') + '">' + escapeHtml(r.invAcct || '—') + '</td>'
+        + '<td>' + escapeHtml(r.invAcctDesc || '—') + '</td>'
+        + '</tr>';
     }).join('');
-    var nMis = combos.filter(function (c) { return c.status === 'mismatch'; }).length;
+    var nMis = list.filter(function (r) { return r.acctMis; }).length;
     var hd = nMis
-      ? nMis + ' of ' + combos.length + ' combination' + (combos.length === 1 ? '' : 's') + ' post the cardex and GL to different accounts:'
-      : combos.length + ' combination' + (combos.length === 1 ? '' : 's') + ' — all resolve cleanly (cardex and GL post to the same account):';
+      ? nMis + ' of ' + list.length + ' inventory routing' + (list.length === 1 ? '' : 's') + ' resolve to a different account than the cardex model:'
+      : list.length + ' inventory routing' + (list.length === 1 ? '' : 's') + ' — all match the cardex model account:';
     return '<div class="tx-analyzer-combos"><div class="tx-combos-hd">' + escapeHtml(hd) + '</div>'
-      + '<table class="tx-resolve"><thead><tr><th>Company</th><th>Order Type</th><th>Doc Type</th>'
-      + '<th>GL Class</th><th class="tx-num">Rows</th><th class="tx-num">Variance</th><th>Mapping</th></tr></thead><tbody>'
+      + '<table class="tx-resolve"><thead><tr><th>Co</th><th>OT</th><th>DT</th>'
+      + '<th>Cost</th><th>GL</th><th>Model Table</th><th>Model Acct</th><th>Inv DMAAI</th><th>Inv Acct</th><th>Inv Acct Desc</th>'
+      + '</tr></thead><tbody>'
       + trs + '</tbody></table></div>';
   }
   function _txAnalyze() {
@@ -6470,13 +6659,17 @@
     var card = _state.activeCard || (typeof txvCardCode === 'function' ? txvCardCode(rows[0]) : '');
     var combos = _txGridCombos(rows);   // grid-scoped resolution: cardex-vs-GL account per combo
     body.hidden = false;
-    body.innerHTML = _txCombosHtml(combos) + '<div class="tx-analyzer-lead is-muted"><div><div class="tx-analyzer-lead-line">Checking the row-level signals…</div></div></div>';
+    body.innerHTML = '<div class="tx-analyzer-lead is-muted"><div><div class="tx-analyzer-lead-line">Checking the row-level signals…</div></div></div>' + _txCombosHtml(combos);
     // Fingerprint (dup-sales / non-stock) is row-truth — layered on top of the
-    // grid-derived cardex↔GL resolution (no server resolver needed).
+    // grid-derived cardex↔GL resolution (no server resolver needed). In parallel,
+    // load the cost-type-aware DMAAI model so each combo carries its expected
+    // (model) account(s) — one per cost component for work-order/mfg combos.
     var pFp = _txvLoadDmaaiModel().then(function (byRoute) { return _txvFingerprint(byRoute); }).catch(function () { return null; });
-    pFp.then(function (fp) {
+    var pCfg = _txvLoadAaiConfig().catch(function () { return {}; });
+    Promise.all([pFp, pCfg]).then(function (res) {
       if (gen !== _txAnalyzeGen) return;   // a newer drill superseded this one
-      _txRenderAnalyzer(fp, co, per, card, combos);
+      _txAttachModel(combos, res[1]);
+      _txRenderAnalyzer(res[0], co, per, card, combos);
     });
   }
   // Pick the lead + fix copy, render the deterministic per-account table, wire
@@ -6486,10 +6679,30 @@
     combos = combos || [];
     var dup = !!(fp && fp.dupSales && fp.dupSales.length);
     var nonStock = !!(fp && fp.sawLineType && fp.nonStock && fp.nonStock.length);
-    var mis = combos.filter(function (c) { return c.status === 'mismatch'; });
+    // Model-vs-inv account mismatch — the SAME comparison the table shows (4152
+    // cardex model vs where the transaction's inventory AAI posts), deduped the
+    // same way as the table's distinct list, so the lead can never contradict
+    // the table above it.
+    var _misSeen = {}, misRows = [];
+    combos.forEach(function (c) {
+      (c.modelRows || []).forEach(function (e) {
+        if (!e.acctMis) return;
+        var sig = [c.co, c.ot, c.dt, e.costType, e.glCode, e.modelTable, e.modelAcct, e.invDmaai, e.invAcct].join('|');
+        if (_misSeen[sig]) return; _misSeen[sig] = 1;
+        misRows.push({ co: c.co || '', ot: c.ot || '', dt: c.dt || '', glCode: e.glCode || '',
+          modelTable: e.modelTable || '', modelAcct: e.modelAcct || '', invDmaai: e.invDmaai || '', invAcct: e.invAcct || '', invAcctDesc: e.invAcctDesc || '' });
+      });
+    });
+    // Inventory-transfer (IT) cardex integrity: within-branch location moves that
+    // relieved value on the cardex but never re-booked it on the receipt (F4111
+    // extended cost = 0 with a valid unit cost). Doc-grain signature = DT 'IT' +
+    // cardex-only. Must lead BEFORE the model/inv check — an IT group has no GL to
+    // compare, so it would otherwise fall through to "resolves cleanly."
+    var itCombos = combos.filter(function (c) { return String(c.dt || '').toUpperCase() === 'IT' && c.status === 'cardex-only'; });
+    var itDominant = combos.length > 0 && (itCombos.length / combos.length) >= 0.5;
     var kind, leadLine, fixTxt;
     // Row-truth signals first (definitive — the "check duplicate sales first" grounding),
-    // then the grid-derived cardex↔GL account resolution (per combo), then all-clean.
+    // then the IT cardex-integrity pattern, then the model↔inv account resolution, then all-clean.
     if (dup) {
       kind = 'mismatch';
       leadLine = 'duplicated cardex relief — the line posted to the cardex more than once';
@@ -6498,14 +6711,18 @@
       kind = 'mismatch';
       leadLine = 'non-stock line (type N) posted to an inventory account · routing mismatch';
       fixTxt = 'This is a non-stock line (type N) whose GL value posted to an inventory account. Non-stock lines move no inventory, so they belong on a P&L / clearing account — correct the line-type / AAI routing so future non-stock lines post off inventory.';
-    } else if (mis.length) {
+    } else if (itDominant) {
       kind = 'mismatch';
-      leadLine = mis.length + ' of ' + combos.length + ' combination' + (combos.length === 1 ? '' : 's') + ' post the cardex and the GL to different accounts';
-      fixTxt = 'For the flagged combination' + (mis.length === 1 ? '' : 's') + ' above, the cardex relieves a different account than the GL posts to (see the cardex → GL detail under each). Align the DMAAI routing for that (company · order type · doc type · GL class) so both sides resolve to the same account — then it stops at the source.';
+      leadLine = 'inventory transfer (IT) — cardex value relieved but not re-booked on the receipt · extended-cost integrity error';
+      fixTxt = 'These IT documents move stock between locations in the same branch, so they should net to zero and post no GL. Here the receipt line carries a unit cost but a zero extended cost — the item-ledger amount never calculated — so the cardex lost value the GL never recorded. It is a JDE item-ledger integrity error (seen on cost-level-3 / standard-cost transfers and the P4113 one-sided-entry defect), not a DMAAI or journal-entry fix. Correct it at the source: run the item-ledger integrity (R41543 / R41544) and restore the extended cost with a dollars-only IA adjustment.';
+    } else if (misRows.length) {
+      kind = 'mismatch';
+      leadLine = misRows.length + ' inventory routing' + (misRows.length === 1 ? '' : 's') + ' post to a different account than the cardex model';
+      fixTxt = 'For the routing' + (misRows.length === 1 ? '' : 's') + ' flagged above, the inventory AAI (the Inv DMAAI) relieves inventory to a different account than the 4152 cardex model for that GL class. Align the AAI so the inventory leg resolves to the model account — then the source stops producing the divergence.';
     } else if (combos.length) {
       kind = 'agree';
-      leadLine = 'every combination resolves cleanly — cardex and GL post to the same account';
-      fixTxt = 'No mapping mismatch in this grid: for every (company · order type · doc type · GL class) here, the cardex and GL land on the same account. What remains is order-lifecycle timing (or transfer pairing) that clears as the orders complete — investigate only what persists across periods.';
+      leadLine = 'every inventory routing matches the cardex model account';
+      fixTxt = 'No routing mismatch here: for each GL class in this grid, the inventory AAI resolves to the same account as the 4152 cardex model. What remains is order-lifecycle timing (or transfer pairing) that clears as the orders complete — investigate only what persists across periods.';
     } else {
       kind = 'muted';
       leadLine = 'No rows in the current view.';
@@ -6516,9 +6733,10 @@
       : kind === 'agree'
         ? '<svg class="tx-analyzer-lead-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>'
         : '<svg class="tx-analyzer-lead-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>';
-    var html = _txCombosHtml(combos) + '<div class="tx-analyzer-lead is-' + kind + '">' + icon
+    var html = '<div class="tx-analyzer-lead is-' + kind + '">' + icon
       + '<div><div class="tx-analyzer-lead-line">' + escapeHtml(leadLine) + '</div>'
-      + (fixTxt ? '<div class="tx-analyzer-fix">' + escapeHtml(fixTxt) + '</div>' : '') + '</div></div>';
+      + (fixTxt ? '<div class="tx-analyzer-fix">' + escapeHtml(fixTxt) + '</div>' : '') + '</div></div>'
+      + _txCombosHtml(combos);
     var wantAi = (_txAiTier() === 'full') && (kind === 'mismatch');
     if (wantAi) html += '<div class="tx-analyzer-ai" id="tx-analyzer-ai" hidden></div>';
     html += '<button type="button" class="tx-analyzer-use" id="tx-analyzer-use">Use as finding →</button>';
@@ -6526,10 +6744,11 @@
     _txAnalyzeStatus('', '');
     var useBtn = document.getElementById('tx-analyzer-use');
     if (useBtn) useBtn.addEventListener('click', function () {
-      // Finding = the lead + fix, plus the per-combo cardex → GL detail for each mismatch.
-      var misTxt = mis.map(function (c) {
-        return '- ' + (c.co || '—') + ' · ' + (c.ot || '—') + ' · ' + (c.dt || '—') + ' · ' + (c.gc || '(none)')
-          + ': cardex → ' + (c.cxAccts.join(', ') || '—') + ' · GL → ' + (c.glAccts.join(', ') || '—');
+      // Finding = the lead + fix, plus the per-routing model → inv detail for each mismatch.
+      var misTxt = misRows.map(function (m) {
+        return '- ' + m.co + ' · ' + m.ot + ' · ' + m.dt + ' · ' + (m.glCode || '(none)')
+          + ': model ' + m.modelTable + ' ' + m.modelAcct + ' → inv ' + m.invDmaai + ' ' + m.invAcct
+          + (m.invAcctDesc ? ' (' + m.invAcctDesc + ')' : '');
       }).join('\n');
       _txUseAsFinding((kind === 'agree' ? 'DMAAI analyzer — no mapping issue:\n' : 'DMAAI source fix:\n') + leadLine + '\n\n' + fixTxt + (misTxt ? '\n\n' + misTxt : ''));
     });
