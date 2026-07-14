@@ -432,6 +432,7 @@ When an IM document shows a GL-excess pattern (F0911 exceeds F4111 for a specifi
 | 5.18 | Duplicate shipment -- same order line | 5.17 |
 | 5.19 | Transfer Integrity -- IT relieved cardex value with no GL | 5.18 |
 | 5.20 | Completion Not Journaled -- WO completion on cardex, not in GL | 5.19 |
+| -- (card) | Make to Order -- manufacturing residual, decomposed by shape | 5.20 |
 | -- | Tax Variance | 5.6 |
 | -- | Landed Cost Variance | 5.7 |
 | -- | "No Cx" in Batch Field | 5.8 |
@@ -1013,6 +1014,30 @@ R31802A (Manufacturing Accounting) posts the completion's CARDEX under the trans
 **Prevention:** review the R31802A schedule / exception handling so every completed work order is run through Manufacturing Accounting -- a completion posted to the cardex but skipped by R31802A is the root cause.
 
 > **Analyzer output:** the analyzer fires this ahead of the generic Cardex-Only diagnosis (5.3) for any `IC` completion that relieved the cardex with no GL, so the manufacturing-accounting story wins over "go post the batch." The classifier stamps the same rows **Completion Not Journaled** (`usp8_txv_flags`, correlated against F0911 by subledger: the WO has GL issues but no GL completion), and they group on their own card on the Transactions page.
+
+---
+
+### 5.20 Make to Order -- Manufacturing Residual, Decomposed by Shape
+
+> A card-level analysis, not a single analyzer pattern. **Make to Order** is a *business* grouping, not a variance type: `usp6_008` stamps the subtype on any work-order row whose originating sales order is on the sales side (`vcr_f42119.sdrorn` = the work order), so a make-to-order job's costs stay together on one card linked to the customer order. The variance inside that group is ordinary manufacturing cardex-vs-GL, and it splits into three shapes, each with its own action. The card carries all three so the analyst works the whole job in one place.
+
+**First, rule out the two things it is not:**
+- **Not a DMAAI mapping issue.** The inventory routings resolve to the same account as the 4152 cardex model -- the analyzer's routing check comes back clean. Do not chase an AAI here.
+- **Not a missing sales offset.** The sales orders shipped and closed (status 999 in `vcr_f42119`); there is no stranded in-transit leg waiting to net. The residual is between the cardex and the GL on the manufacturing side, one document at a time.
+
+**The three shapes** (split each row by whether the cardex and GL sides carry a value):
+
+| Shape | Cardex / GL | What it is | Action |
+|---|---|---|---|
+| **GL only** | cardex 0, GL &ne; 0 | Standard-cost variances -- the completion posted to the cardex at standard while the GL carried the actual-cost variance components (labor, overhead, material burden) that never move inventory. | **Expected. No action.** GL-only on a make-to-order job is the variance side of standard costing landing in the GL, not a reconciliation gap. See 5.2. |
+| **Both differ** | both &ne;, unequal | The completion was valued at **standard on the cardex** and **actual in the GL** -- the gap is quantity &times; cost-basis difference. | **Investigate the large ones.** This is 5.16 Manufacturing Cost Mismatch scoped to the job; confirm the intended cost basis with cost accounting, then the accountant posts the corrective JE. |
+| **Cardex only** | cardex &ne;, GL 0 | A completion (`IC`) that relieved finished goods into inventory on the cardex but was **never journaled to the GL**. | **A real posting gap -- fix at the source.** Repost the completion via **R31802A** (Manufacturing Accounting) so the finished-goods cost reaches the GL. Not a journal entry. This is 5.19 Completion Not Journaled, held under the make-to-order subtype because `usp6_008` stamped it first. |
+
+**Why the cardex-only slice stays here and not on the Completion Not Journaled card:** the make-to-order subtype is assigned in `usp6_008` from the sales-order link; the `usp8_txv_flags` Completion-Not-Journaled pass only claims rows with **no** subtype, so a make-to-order completion keeps its business grouping. The decomposition surfaces the same gap and the same R31802A fix in place -- the analyst sees the whole job on one card rather than having the posting-gap rows split off. (If a future call moves them, it is a classifier-ordering change, not a copy change.)
+
+**Worked shape (one make-to-order company, one period):** 271 rows netting about -$11K -- roughly 158 GL-only (+$22.8K, expected standard-cost variances), 81 both-differ (-$26.6K, completion cost differences to investigate), 32 cardex-only (-$7.4K, completions to repost via R31802A). The net is small, so read the gross: only two of the three shapes need any work.
+
+> **Analyzer output:** for a Make-to-Order drill the analyzer skips the generic "routings match, it's timing" line and instead reports the three-shape breakdown with row counts and dollars, leading with the R31802A source fix when any cardex-only completions are present. Same knowledge in the classifier (the subtype + the Completion-Not-Journaled correlation) and the AI grounding.
 
 ---
 

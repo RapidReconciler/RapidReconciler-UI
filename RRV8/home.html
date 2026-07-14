@@ -1057,7 +1057,13 @@
   /* Status band — amber when a company needs a re-roll, calm green when all
      clean. The right-side arrow always opens the account roll-forward detail
      page, so the analyst can inspect even on a clean period. */
-  .analyst-wl-band { display: flex; align-items: center; gap: 14px; margin: 2px 0 14px; padding: 13px 14px 13px 17px; border-radius: 12px; border: 1px solid var(--rule); background: var(--bg-card); box-shadow: var(--shadow-sm); }
+  /* Outer frame (the Golden-Harvest look): a white card wrapping each band; the
+     band itself becomes the inner tinted box. Applied to the band's task slot, so
+     no content changes — just the nested container. The thinking placeholder goes
+     flat inside the frame so it doesn't read as a card-in-a-card while loading. */
+  .analyst-wl-frame { background: var(--bg-card); border: 1px solid var(--rule); border-radius: 14px; padding: 11px; box-shadow: 0 1px 3px rgba(20,32,55,0.10), 0 2px 8px -4px rgba(20,32,55,0.14); }
+  .analyst-wl-frame .analyst-task-thinking { border: 0; box-shadow: none; background: transparent; padding: 4px 6px; }
+  .analyst-wl-band { display: flex; align-items: center; gap: 14px; margin: 0; padding: 13px 14px 13px 17px; border-radius: 10px; border: 1px solid var(--rule); background: var(--bg-soft); }
   /* White card for both states (matches the accountant recon cards / Image A); the
      status DOT carries healthy vs. needs-attention — no full-card tint (UI-23). A
      subtle amber border is kept for attention so it still reads at a glance. */
@@ -1071,7 +1077,8 @@
   .analyst-wl-group:first-child { margin-top: 0; }
   .analyst-wl-grouphead { font-family: 'Source Sans 3', sans-serif; font-size: 11.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted); margin: 0 2px 10px; }
   .analyst-wl-title { font-family: 'Source Sans 3', sans-serif; font-size: 16px; font-weight: 800; color: var(--navy); margin: 0; }
-  .analyst-wl-lede { margin: 3px 0 0; font-size: 12.5px; line-height: 1.45; color: var(--text-soft); max-width: 72ch; }
+  .analyst-wl-band-main > div { min-width: 0; }   /* let the title/lede column shrink so the lede can ellipsize instead of wrapping */
+  .analyst-wl-lede { margin: 3px 0 0; font-size: 12.5px; line-height: 1.45; color: var(--text-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .analyst-wl-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
   .analyst-wl-open { flex-shrink: 0; display: inline-grid; place-items: center; width: 34px; height: 34px; border-radius: 9px; border: 1px solid var(--rule-strong, #cfd6e0); background: var(--bg-card); color: var(--navy); text-decoration: none; }
   .analyst-wl-open:hover { border-color: var(--blue); color: var(--blue); background: var(--bg-soft); }
@@ -2342,7 +2349,7 @@
       <!-- Actor filter chips (All / Analyst / Accountant) + trail export on one bar. -->
       <div class="audit-filterbar">
         <div class="audit-filters" id="auditFilters" role="tablist" aria-label="Filter by actor"></div>
-        <a class="perp-fulllink" id="auditExportLink" href="#" role="button">Export trail &rarr;</a>
+        <a class="perp-fulllink" id="auditExportLink" href="#" role="button">Period Activity</a>
       </div>
       <!-- The newest-first summary cards. -->
       <div class="audit-trail" id="auditTrail"><div class="audit-empty">Loading the audit trail&hellip;</div></div>
@@ -5311,12 +5318,13 @@
   }
   function renderWhatifBanner() {
     var b = $('whatifBanner'); if (!b) return;
-    // The analyst Transaction-Variance sub-view is single-company by design and its
-    // headline already names the company + period, so the "Viewing Co X · Show all"
-    // rail is redundant there (and the multi-company "Show all" isn't a real path on
-    // that page). Suppress the banner ONLY in that sub-view; every other view
-    // (Overview, accountant) keeps the exclusion rail below.
-    if (typeof _curSubView === 'function' && _viewRole() === 'analyst' && _curSubView() === 'txvar') { b.hidden = true; return; }
+    // The ENTIRE analyst view is single-company by design (one company at a time —
+    // one currency, no mixed-currency noise), and its company control is the bottom
+    // workbar "Companies" pill, not this rail. The multi-company "Show all" isn't a
+    // real path here, so suppress the banner across every analyst sub-view (Overview,
+    // Transaction Variance, Cardex Variance). The accountant view below still uses the
+    // exclusion rail for genuine multi-company what-if.
+    if (_viewRole() === 'analyst') { b.hidden = true; return; }
     var _au = document.getElementById('acctAudit'); if (_au && !_au.hidden) { b.hidden = true; return; }
     if (!_anyExcluded() || _viewRole() === 'admin') { b.hidden = true; return; }
     var all = _fullCosFromRows();
@@ -5368,6 +5376,39 @@
     var deflt = plist.length >= 2 ? plist[plist.length - 2] : (plist[plist.length - 1] || '');
     if (deflt) { _briefPeriodOverride = deflt; _briefPeriodDefaulted = true; }
   }
+  // GL roll discontinuity per company for the Account Roll Forward band note.
+  // GLOK='no' means a period's Beg GL didn't tie to the prior period's End GL for
+  // that account; the amount off = Beg − prior End, summed by period across the
+  // company's accounts. Returns { co: { period, amount, nPeriods } } naming the
+  // largest-magnitude broken period (what the band note calls out).
+  function _glBreaksByCo(rows) {
+    var byAcct = {};
+    (rows || []).forEach(function (r) {
+      var k = (_coOf(r) || '?') + '|' + String(r.LongAccount || '');
+      (byAcct[k] || (byAcct[k] = [])).push(r);
+    });
+    var perByCo = {};
+    Object.keys(byAcct).forEach(function (k) {
+      var series = byAcct[k].slice().sort(function (a, b) {
+        return String(a.PeriodEnds || '').localeCompare(String(b.PeriodEnds || ''));
+      });
+      for (var i = 0; i < series.length; i++) {
+        var r = series[i];
+        if (String(r.GLOK).trim().toLowerCase() !== 'no') continue;
+        var prevEnd = i > 0 ? (Number(series[i - 1].EndGL) || 0) : 0;
+        var offBy = (Number(r.BegGL) || 0) - prevEnd;
+        var co = _coOf(r) || '?', p = String(r.PeriodEnds || '').slice(0, 10);
+        (perByCo[co] || (perByCo[co] = {}))[p] = (perByCo[co][p] || 0) + offBy;
+      }
+    });
+    var out = {};
+    Object.keys(perByCo).forEach(function (co) {
+      var pers = perByCo[co], best = null;
+      Object.keys(pers).forEach(function (p) { if (best === null || Math.abs(pers[p]) > Math.abs(pers[best])) best = p; });
+      out[co] = { period: best, amount: best ? pers[best] : 0, nPeriods: Object.keys(pers).length };
+    });
+    return out;
+  }
   function _briefData() {
     var rows = _invRows; if (!rows || !rows.length) return null;
     // Home is the FULL authorized view — every company in the install. It ignores
@@ -5391,6 +5432,19 @@
     var nextPeriod = (pi >= 0 && pi < plist.length - 1) ? plist[pi + 1] : '';
     var perScoped = perKey ? coScoped.filter(function (r) { return String(r.PeriodEnds || '').slice(0, 10) === perKey; }) : [];
     var use = perScoped.length ? perScoped : coScoped;
+    // Roll-forward INTEGRITY (GL OK / Var OK = 'no') is a STANDING condition, not a
+    // per-period one: count breaks over ALL of the company's periods (coScoped), NOT
+    // the period-scoped subset the OOB narrative uses. The overview shows the user no
+    // period selector, so scoping the break to the latest period made the band read
+    // "rolled forward cleanly this period" while a prior period (e.g. Jun 2022) sat
+    // out of balance — contradicting the arfDot, which already scans every period. A
+    // break in any period needs a re-roll regardless of the period the overview lands on.
+    var brkByCo = {};
+    coScoped.forEach(function (r) {
+      if (String(r.GLOK).trim().toLowerCase() === 'no' || String(r.VarOK).trim().toLowerCase() === 'no') {
+        var bc = _coOf(r) || '?'; brkByCo[bc] = (brkByCo[bc] || 0) + 1;
+      }
+    });
     var byCo = {}, order = [];
     use.forEach(function (r) {
       var co = _coOf(r) || '?';
@@ -5399,9 +5453,13 @@
       b.oob += Number(r.OOB) || 0;
       b.cardex += Math.abs(Number(r.CardexVar) || 0);
       _COMPONENTS.forEach(function (k) { b.comp[k.name] += Number(r[k.f]) || 0; });
-      if (String(r.GLOK).trim().toLowerCase() === 'no' || String(r.VarOK).trim().toLowerCase() === 'no') b.breaks++;
     });
+    // Break count is period-agnostic (all periods for the company), so the band, the
+    // accountant company dot, and the AI prompts all agree with the arfDot.
+    Object.keys(byCo).forEach(function (co) { byCo[co].breaks = brkByCo[co] || 0; });
+    var glByCo = _glBreaksByCo(coScoped);   // GL roll discontinuity per company (period + amount off) for the band note
     var cos = order.map(function (k) { return byCo[k]; }).filter(function (c) { return !_isExcludedCo(c.co); });   // what-if company exclude
+    cos.forEach(function (c) { c.glBreak = glByCo[c.co] || null; });
     // Per-company NEXT-period net OOB — lets the briefing read whether a historical
     // out-of-balance was cleared the following period (net ~0 = resolved).
     if (nextPeriod) {
@@ -6936,55 +6994,44 @@
   // Deterministic fallback lede for the roll-forward task (always correct).
   function _rollForwardLede(d) {
     var cos = (d && d.companies) || [];
-    // Single-select scope → name the company. (Defensive multi-company fallback
-    // avoids the "1 companies" wording if the scope ever widens.)
+    var monYr = function (p) { var t = String(p).split('-'); return (t.length >= 3) ? ((PW_MONTHS[parseInt(t[1], 10) - 1] || t[1]) + ' ' + t[0]) : String(p); };
+    // Single-select scope → name the company. A break names the period + the GL
+    // amount off (Beg GL vs prior End GL); clean names the intact state. (Defensive
+    // multi-company fallback avoids the "1 companies" wording if scope ever widens.)
     if (cos.length === 1) {
       var co = String(cos[0].co);
-      return (cos[0].breaks || 0) > 0
-        ? ('Company ' + co + ': didn’t roll forward cleanly this period — re-roll to restore trustworthy balances before it can reconcile.')
-        : ('Company ' + co + ': rolled forward cleanly this period — open the account roll-forward any time to review balances.');
+      if ((cos[0].breaks || 0) > 0) {
+        var gb = cos[0].glBreak;
+        if (gb && gb.period) {
+          var more = gb.nPeriods > 1 ? (' (' + gb.nPeriods + ' periods off; largest shown)') : '';
+          return 'Company ' + co + ': GL balance in ' + monYr(gb.period) + ' is off by ' + _money(gb.amount) + more + '.';
+        }
+        return 'Company ' + co + ': a period didn’t roll forward cleanly — re-roll to restore trustworthy balances before it can reconcile.';
+      }
+      return 'Company ' + co + ': every period rolled forward cleanly — open the account roll-forward any time to review balances.';
     }
     var nb = cos.filter(function (c) { return (c.breaks || 0) > 0; }).length;
     return nb
-      ? (nb.toLocaleString('en-US') + ' of ' + cos.length + ' companies didn’t roll forward cleanly — re-roll to restore trustworthy balances.')
-      : 'All companies rolled forward cleanly this period — open the account roll-forward to review balances.';
+      ? (nb.toLocaleString('en-US') + ' of ' + cos.length + ' companies have a roll-forward break — re-roll to restore trustworthy balances.')
+      : 'Every company rolled forward cleanly — open the account roll-forward to review balances.';
   }
   // Pure HTML for the roll-forward integrity task: status band (amber = a company
   // needs a re-roll, green = all clean) + a right-side arrow that ALWAYS opens the
   // roll-forward detail page, then the per-company break cards. `lede` = the band
   // sentence (deterministic — see _rollForwardLede).
+  // Just the status band: amber + the GL-off-by note when the company has a break,
+  // green + the all-clean line otherwise. The right-side arrow always opens the
+  // roll-forward detail (where the analyst re-rolls); no separate break card.
   function _rollForwardHtml(d, lede) {
-    var svgCheck = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
-    var svgRoll  = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 12l9 4 9-4"/><path d="M3 17l9 4 9-4"/></svg>';
-    var svgCx    = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 3v18h18"/><path d="m7 14 3-3 3 3 5-5"/></svg>';
     var svgArrow = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>';
     var cos = (d && d.companies) || [];
-    var breaks = cos.filter(function (c) { return (c.breaks || 0) > 0; })
-                    .sort(function (a, b) { return Math.abs(Number(b.oob) || 0) - Math.abs(Number(a.oob) || 0); });
-    var cleanN = cos.length - breaks.length;
-    var attn = breaks.length > 0;
-    var band = '<div class="analyst-wl-band ' + (attn ? 'is-attention' : 'is-clean') + '">'
+    var attn = cos.some(function (c) { return (c.breaks || 0) > 0; });
+    return '<div class="analyst-wl-band ' + (attn ? 'is-attention' : 'is-clean') + '">'
       + '<div class="analyst-wl-band-main"><span class="analyst-wl-dot" aria-hidden="true"></span>'
       + '<div><h3 class="analyst-wl-title">Account Roll Forward</h3>'
       + '<p class="analyst-wl-lede">' + esc(lede || _rollForwardLede(d)) + '</p></div></div>'
       + '<a class="analyst-wl-open" href="inventory-account-rollforward.html" title="Open the account roll-forward" aria-label="Open the account roll-forward">' + svgArrow + '</a>'
       + '</div>';
-    if (!breaks.length) return band;   // band conveys the all-clean state
-    var card = function (c) {
-      var coName = (_coNames && _coNames[String(c.co).trim()]) || '';
-      var dot = '<span class="wl-dot wl-dot-red" title="Roll-forward break — needs re-roll" aria-label="Roll-forward break"></span>';
-      var idH = '<div class="wl-id">' + dot
-        + (coName ? '<span class="wl-name">' + esc(coName) + '</span><span class="wl-co">Co ' + esc(c.co) + '</span>'
-                  : '<span class="wl-name">Co ' + esc(c.co) + '</span>') + '</div>';
-      return '<div class="wl-card wl-break"><div class="wl-top">'
-        + '<div>' + idH + '<div class="wl-driver">roll-forward break</div></div>'
-        + '<div class="wl-amt">can’t reconcile yet</div></div>'
-        + '<div class="wl-cause">This company’s roll-forward didn’t hold, so its balances can’t be trusted until it’s re-rolled. Open the account roll-forward to re-roll; a cardex drift is the usual root cause.</div>'
-        + '<div class="wl-actions"><a class="wl-btn wl-btn-primary" href="inventory-account-rollforward.html">' + svgRoll + 'Open Roll Forward</a>'
-        + '<a class="wl-btn" href="inventory-cardex-variance.html">' + svgCx + 'Cardex Variance</a></div></div>';
-    };
-    return band + '<div class="wl-list">' + breaks.map(card).join('')
-      + (cleanN ? '<div class="wl-reconciled">' + svgCheck + ' ' + cleanN + ' compan' + (cleanN === 1 ? 'y' : 'ies') + ' rolled clean</div>' : '') + '</div>';
   }
   // Task 1 — Account Roll Forward. Thinking beat → deterministic status band (no
   // AI call on load, per the tab's no-auto-AI rule; the reveal is a factual
@@ -7433,8 +7480,8 @@
               action: 'Look up the expected account in F4095 for this combination; reverse the JE and re-post to the configured account.' },
     'PER':  { desc: 'The transaction date and the period the document is reported in fall in different months — a cut-off issue, where the cardex landed in one period and its GL counterpart in another.',
               action: 'Compare the F4111 transaction date against the F0911 GL date; if the cardex side is misposted, reverse it and re-post to the correct period.' },
-    'MTO':  { desc: 'Work-order manufacturing costs produced for a specific customer order (make-to-order) — every leg of the work order is held together here, linked to its originating sales order, posting to the project business unit rather than a general inventory account.',
-              action: 'This is the WIP-to-fulfillment timing across the sales order and its work order; it normally clears as the order completes. Investigate only the ones that persist across periods.' },
+    'MTO':  { desc: 'A work order linked to its customer sales order — a business grouping, not one variance type. The routings match the cardex model and the sales orders shipped, so the residual is manufacturing cardex-vs-GL, splitting three ways: GL-only standard-cost variances, both-sides-differ completion cost differences, and cardex-only completions never journaled to the GL.',
+              action: 'Work the shapes: GL-only rows are expected standard-cost variances (no action); both-sides-differ rows are completion std-on-cardex vs actual-in-GL (investigate the large ones); cardex-only rows are a real posting gap — repost the completion via R31802A at the source, not a journal entry.' },
     'ICO':  { desc: 'An intercompany order (OK/SK) where the selling and buying companies’ inventory legs haven’t fully offset — a three-document timing gap across the two companies’ books, held together here.',
               action: 'Verify the matching leg posted in the counterpart company; the pair nets once both sides complete.' },
     'TRF':  { desc: 'An inter-branch transfer (ST/OT) whose shipping and receiving legs posted to inventory in different periods or at different costs — the two sides haven’t met yet.',
@@ -7773,6 +7820,7 @@
       // Orders is one — the duplicate-cardex quirk is specific to Sales Update (R42800)
       // abending on ST/OT orders. Falls back to KIND_EXPLAIN. SME to refine.
       var CODE_EXPLAIN = {
+        MTO:  'Make to Order groups a work order with its customer sales order — a business view, not one variance type. The routings match the cardex model and the sales orders shipped, so the residual is ordinary manufacturing cardex-vs-GL, and it splits three ways. GL-only rows are standard-cost variances that belong in the GL — expected, no action. Both-sides-differ rows are the completion valued at standard on the cardex versus actual in the GL — investigate the large ones with cost accounting. Cardex-only rows are a completion that posted to the cardex but was never journaled to the GL — a real posting gap; repost it through R31802A (Manufacturing Accounting) at the source, not a journal entry. Drill in for the counts and dollars per shape.',
         VCHR: 'An A/P voucher (batch type V) posted to an inventory account instead of the A/P variance account — DMAAI 4220 is routing voucher variances into inventory. The fix is at the source: correct the 4220 routing so voucher variances land on the variance account, not inventory.',
         DUP:  'The cardex relief posted twice while the GL posted once (RDuplicateSales flags the order) — the extra F4111 line IS the variance, a source double-write, not a mapping issue. Reverse the duplicated cardex relief at the source.',
         TXI:  'An inventory-transfer (IT) document relieved value on the cardex that the GL never recorded — the receipt leg carried a unit cost but a zero extended cost, so a value-neutral location move destroyed inventory value. This is a JDE item-ledger integrity error (seen on cost-level-3 / standard-cost transfers, the one-sided-entry defect), not a mapping or journal-entry fix. Run the item-ledger integrity programs (R41543 / R41544) and restore the extended cost with a dollars-only IA adjustment at the source so the cardex and GL agree. A journal entry only balances the GL this period; it will not restore the lost cardex value or stop it recurring.',
@@ -8271,7 +8319,7 @@
         h.innerHTML = '<h3 class="analyst-wl-grouphead">' + esc(s.head) + '</h3>';
         host.appendChild(h); next(i + 1); return;
       }
-      var slot = document.createElement('div'); slot.className = 'analyst-task'; host.appendChild(slot);
+      var slot = document.createElement('div'); slot.className = 'analyst-task analyst-wl-frame'; host.appendChild(slot);
       s.task(slot, d, gen).then(function () { if (gen === _analystTaskGen) next(i + 1); });
     })(0);
   }
@@ -8907,24 +8955,76 @@
         + '</div>';
     }).join('');
   }
-  function _auditExportExcel() {
+  // "Period Activity" — the Reconciliation Activity Log as an audit-quality PDF:
+  // the company name + log header, then each activity card rendered as a paragraph
+  // block (title · scope · amount, the finding body, an italic meta line), grouped
+  // by actor (Analyst, then Accountant). Scoped to the focus company + selected
+  // period + the active actor filter — the same set the screen shows. Absolute
+  // timestamps (a saved audit artifact, not a live "11h ago" view). Replaces the
+  // Excel trail export (owner 2026-07-14).
+  function _auditExportPdf() {
+    if (!(window.jspdf && window.jspdf.jsPDF)) { if (typeof toast === 'function') toast('PDF library still loading — try again in a moment'); return; }
     var per = _auditPeriod || '', co = _auditCo || '';
     var list = (_auditEntries || []).filter(function (e) {
-      return (!co || String(e.co).trim() === co.trim()) && (!per || e.per === per);
-    }).filter(_auditPass);
-    if (!list.length) { if (typeof toast === 'function') toast('No audit entries to export'); return; }
-    var dbName = ((typeof activeDb === 'function' && activeDb()) || {}).n || '';
-    var coName = (_coNames && _coNames[co.trim()]) || '';
-    var scopeTxt = (co ? ((coName ? coName + ' · ' : '') + 'Co ' + co) : '') + (per ? (co ? ' · ' : '') + (fmtPeriod(per) || per) : '');
-    var cols = [{ label: 'When' }, { label: 'Actor' }, { label: 'Trigger' }, { label: 'Item' }, { label: 'Company' }, { label: 'Period' }, { label: 'By whom' }, { label: 'Detail' }];
-    var rows = list.map(function (e) { return [_auditAbs(e.at), AUDIT_ACTORS[e.actor] || e.actor, e.trigger || '', e.title || '', _auditCoLabel(e.co), (e.per ? (fmtPeriod(e.per) || e.per) : ''), e.by || '', e.message || '']; });
-    var ok = buildAuditWorkbook({
-      sheetName: 'Audit',
-      fileName: RRV8.exportName({ surface: 'Audit', company: (co || undefined), period: per }),
-      titleLines: ['Audit Support Center', (dbName ? dbName + ' · ' : '') + (scopeTxt ? scopeTxt + ' · ' : '') + rows.length + ' entr' + (rows.length !== 1 ? 'ies' : 'y')],
-      columns: cols, rows: rows
+      return (e.standing === true || ((!co || String(e.co).trim() === co.trim()) && (!per || e.per === per))) && _auditPass(e);
     });
-    if (ok) { try { if (window.RRV8 && RRV8.logActivity) RRV8.logActivity('Audit report exported', rows.length + ' entries'); } catch (_) {} }
+    if (!list.length) { if (typeof toast === 'function') toast('No activity to export'); return; }
+    var coName = (_coNames && _coNames[co.trim()]) || '';
+    var doc = new window.jspdf.jsPDF({ orientation: 'p', unit: 'pt', format: 'letter' });
+    var W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight();
+    var ML = 40, MR = 40, wrapW = W - ML - MR, y = 54;
+    var ensure = function (need) { if (y + (need || 0) > H - 46) { doc.addPage(); y = 54; } };
+    // jsPDF's standard helvetica is WinAnsi (Latin-1): a character outside it (the
+    // arrow →, em dash —, curly quotes) corrupts the entire wrapped line it lands in,
+    // and the auto-drafted finding text carries "→" in its routing lines. Fold the
+    // known offenders to ASCII (and drop anything else non-Latin-1) before rendering.
+    var _pdfSafe = function (s) {
+      return String(s == null ? '' : s)
+        .replace(/→/g, '->').replace(/[–—]/g, '-')
+        .replace(/[‘’]/g, "'").replace(/[“”]/g, '"')
+        .replace(/…/g, '...').replace(/[^\x00-\xFF]/g, '?');
+    };
+    // Header — company name, then the log title + scope/period/count.
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(16); doc.setTextColor(31, 45, 74);
+    doc.text(_pdfSafe(coName || (co ? 'Company ' + co : 'Reconciliation Activity Log')), ML, y); y += 20;
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(11); doc.setTextColor(60, 70, 90);
+    doc.text(_pdfSafe('Reconciliation Activity Log' + (co ? '  ·  Co ' + co : '')), ML, y); y += 15;
+    doc.setFontSize(10); doc.setTextColor(95, 95, 95);
+    doc.text('Period: ' + (per ? (fmtPeriod(per) || per) : 'all periods') + '   ·   ' + list.length + ' entr' + (list.length !== 1 ? 'ies' : 'y'), ML, y); y += 10;
+    doc.setDrawColor(210, 216, 226); doc.setLineWidth(0.8); doc.line(ML, y, W - MR, y); y += 20;
+    // Cards as paragraphs, grouped by actor (Analyst above Accountant).
+    var actors = _auditFilter === 'all' ? ['analyst', 'accountant'] : [_auditFilter];
+    actors.forEach(function (actor) {
+      var group = list.filter(function (e) { return e.actor === actor; });
+      if (!group.length) return;
+      ensure(26);
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(120, 128, 140);
+      doc.text((AUDIT_ACTORS[actor] || actor).toUpperCase(), ML, y); y += 16;
+      group.forEach(function (e) {
+        var head = (e.title || 'Entry');
+        var scope = _auditCoLabel(e.co); if (scope) head += '  —  ' + scope;
+        if (e.amount != null && Math.abs(e.amount) >= 1) head += '     ' + _audMoney(e.amount);
+        var hLines = doc.splitTextToSize(_pdfSafe(head), wrapW);
+        var bLines = doc.splitTextToSize(_pdfSafe(e.message || 'No finding recorded.'), wrapW);
+        var metaBits = [(e.by ? 'By ' + e.by : ''), _auditAbs(e.at), (e.trigger || ''),
+          (e.verified === true ? 'Verified' : e.verified === false ? 'Awaiting posting' : '')].filter(Boolean);
+        var mLines = doc.splitTextToSize(_pdfSafe(metaBits.join('  ·  ')), wrapW);
+        ensure(hLines.length * 13 + bLines.length * 12 + mLines.length * 11 + 24);
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(10.5); doc.setTextColor(31, 45, 74);
+        doc.text(hLines, ML, y); y += hLines.length * 13 + 4;
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(9.5); doc.setTextColor(45, 55, 75);
+        doc.text(bLines, ML, y); y += bLines.length * 12 + 4;
+        doc.setFont('helvetica', 'italic'); doc.setFontSize(8.5); doc.setTextColor(120, 120, 120);
+        doc.text(mLines, ML, y); y += mLines.length * 11 + 16;
+      });
+      y += 6;
+    });
+    var pc = doc.internal.getNumberOfPages(), ts = '';
+    try { ts = new Date().toLocaleString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); } catch (_) {}
+    for (var i = 1; i <= pc; i++) { doc.setPage(i); doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(120, 120, 120); doc.text('Generated ' + ts, ML, H - 18); doc.text('Page ' + i + ' of ' + pc, W - MR, H - 18, { align: 'right' }); }
+    doc.save(RRV8.exportName({ surface: 'ReconciliationActivityLog', company: (co || undefined), period: per, ext: 'pdf' }));
+    if (typeof toast === 'function') toast('Downloaded Period Activity (PDF) — ' + list.length + ' entr' + (list.length !== 1 ? 'ies' : 'y'));
+    try { if (window.RRV8 && RRV8.logActivity) RRV8.logActivity('Period Activity exported', list.length + ' entries'); } catch (_) {}
   }
   function renderAuditPanel(d) {
     if (d && d.companies && !_acctData) _acctData = d;
@@ -8956,7 +9056,7 @@
         _auditFilter = b.getAttribute('data-af') || 'all'; _paintAuditTrail();
       });
       var xl = $('auditExportLink');
-      if (xl) xl.addEventListener('click', function (ev) { ev.preventDefault(); _auditExportExcel(); });
+      if (xl) xl.addEventListener('click', function (ev) { ev.preventDefault(); _auditExportPdf(); });
       // Per-company reconciliation report (relocated from the worklist cards) — scoped
       // to the focused company. Excel / PDF use the same scoped generators as before.
       var arm = $('auditReportMenu');
