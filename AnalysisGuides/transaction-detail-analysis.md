@@ -421,6 +421,7 @@ When an IM document shows a GL-excess pattern (F0911 exceeds F4111 for a specifi
 | 5.16 | Manufacturing Cost Mismatch | 5.16 |
 | 5.17 | Voucher Variance on Inventory (PV) | 5.15 |
 | 5.18 | Duplicate shipment -- same order line | 5.17 |
+| 5.19 | Transfer Integrity -- IT relieved cardex value with no GL | 5.18 |
 | -- | Tax Variance | 5.6 |
 | -- | Landed Cost Variance | 5.7 |
 | -- | "No Cx" in Batch Field | 5.8 |
@@ -942,6 +943,37 @@ JDE never re-uses a line number for a partial shipment -- a genuine partial incr
 **Prevention:** review the ship-confirm / RF workflow that allowed a closed line (NxtSts 999) to be confirmed a second time.
 
 > **Analyzer output:** the analyzer groups F4111 rows by (order, line); a group of 2 or more is the duplicate. It reports the per-relief amount and the group total and pre-fills the IA corrective steps. It outranks Mixed Line Types (5.7) when both could match the same doc.
+
+---
+
+### 5.18 Transfer Integrity -- Inventory Transfer Relieved Cardex Value with No GL
+
+> Numbered 5.18 in this guide; the analyzer's internal pattern ID is **5.19**.
+
+> **Screen IT documents for this before treating a cardex-only transfer as an unposted batch.** An inventory transfer (DT `IT`) that relieved value on the cardex with no GL counterpart is usually not a batch waiting to post -- it is a one-sided item-ledger entry. The classifier claims it as **Transfer Integrity** (`usp8_txv_flags`, DT=IT + cardex-only residual, after netting), so any IT that balanced is already cleared and only the genuinely-stuck relief lands here. The analyst analyzer and the Export Analyzer lead with the same diagnosis.
+
+**Symptoms:**
+- An **inventory transfer (DT `IT`)** document -- a location-to-location move within one branch
+- The cardex (F4111) relieved value; there is **no matching GL (F0911)** entry, so LedgerAmount = 0
+- The receipt leg carries a **valid unit cost but a zero extended cost** -- the item-ledger amount never calculated
+- Concentrated on **cost-level-3 (location / lot) items** (F4101 `IMCLEV`) under a standard cost method
+
+**What is happening:**
+
+A within-branch location transfer should be value-neutral: the out leg relieves the location and the in leg receives it at the same cost, so the two net to zero with no GL impact. Here the receiving leg priced the quantity but never extended it to a dollar amount, so the move relieved inventory value the GL never recorded. This is a JDE item-ledger integrity error -- the one-sided-entry defect that surfaces on standard-cost, cost-level-3 items -- not a mapping gap, and not a timing gap that clears on its own.
+
+**Resolution:**
+
+> ⚠ **This is a source fix, not a journal entry.** A JE balances the GL for the period but leaves the cardex short, and the break returns on the next transfer. Correct it in JDE.
+
+1. **Confirm the signature** -- pull the F4111 for the IT document and check that the receipt leg has a unit cost with a zero extended cost, and that the item is cost-level 3 (F4101 `IMCLEV`) under a standard cost method.
+2. **Run the item-ledger integrity reports** -- R41543 (Item Ledger / Account Integrity) and R41544 (Item Balance / Ledger Integrity) surface every one-sided IT relief, not only the document in front of you.
+3. **Restore the value with a dollars-only inventory adjustment (IA)** -- book the missing extended cost so the cardex ties back to the GL.
+4. **Refresh RapidReconciler and re-analyze** -- the variance clears once the integrity reports and the IA post.
+
+**Prevention:** fix the cost-component / standard-cost setup for the cost-level-3 items so future IT transfers extend a cost, then re-run R41543 / R41544 to confirm the population is clean.
+
+> **Analyzer output:** the analyzer fires this ahead of the generic Cardex-Only diagnosis (5.3) for any IT document that relieved the cardex with no GL, so the item-ledger-integrity story wins over "go post the batch." The classifier stamps the same rows **Transfer Integrity**, and they group on their own card on the Transactions page.
 
 ---
 
