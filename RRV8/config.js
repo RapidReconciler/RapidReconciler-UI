@@ -442,6 +442,23 @@ window.RRV8 = window.RRV8 || {};
     '- This is SOURCE / analyst work — fix the double-write, the AAI mapping, or the period at the source. The accountant owns journal entries; the analyst does not post JEs.',
     '- Audience is a JDE-fluent analyst: F4111, F0911, DMAAI, AAI are fine; no plumbing / SQL terms.'
   ].join('\n');
+  // CARDEX_GROUNDING — the AI's compact copy of the cardex-variance playbook.
+  // Prepended to the Cardex Variance page's Root-cause read. The model's job is to
+  // FRAME THE JDE VALIDATION, not to auto-diagnose the cause — the analyst's manual
+  // JDE check decides the remedy, and RR cannot see live JDE (a trust boundary).
+  // SOURCE OF TRUTH = the analyst's JDE validation workflow (P4111 export + sum vs
+  // F41021 header); keep this in sync as the model evolves. Owner (analyst SME)
+  // curates the rules.
+  window.RRV8.CARDEX_GROUNDING = [
+    'ANALYST POLICY (cardex variance) — reason from these rules:',
+    '- DEFINITION: cardex variance = the item ledger (F4111) does not sum to the on-hand balance (F41021) for one item. QUANTITY variance = the sum of F4111 primary-UoM quantity does NOT equal the F41021 Quantity On Hand. AMOUNT variance = the sum of F4111 extended cost does NOT equal the F41021 on-hand Value. Nothing else is cardex variance. It is inventory-internal, NOT the ledger-vs-GL gap (that is transaction variance).',
+    '- STEP 1 IS ALWAYS THE JDE VALIDATION. The analyst opens Work With Item Ledger (P4111) in JDE, exports the grid, and checks that the F4111 primary quantity sums to the header Quantity On Hand and the extended cost sums to the header Value. Anything wrong in JDE is corrected in JDE FIRST. RR cannot verify JDE — it TRUSTS the analyst did this. Never imply RR confirmed JDE.',
+    '- THE REMEDY FORK, decided by that validation, not by RR: (a) if JDE itself is out of balance (F4111 does not sum to F41021 in JDE), the variance is REAL — fix it at the source in JDE. The common real case is F41021 not updating for one or more cardex transactions (a system glitch that needs IT). An RR adjustment is at best a stopgap. (b) If JDE ties but RR still shows a variance, RR\'s load/roll is the artifact (e.g. F4111 and F41021 captured out of sync during a live load) — sync RR to the JDE figure with the in-place, reversible Adjust Beginning Balance.',
+    '- DO NOT auto-classify a real glitch vs load-timing noise from RR data. Both can persist (especially from the initial baseline perpetual build), and RR cannot see live JDE, so a heuristic would only guess. Surface the variance and the two sums (F4111 total vs F41021 on-hand); let the analyst\'s JDE validation determine the cause. Name a LIKELY cause tentatively if asked, never as a verdict.',
+    '- Quantity first: when units are off, lead with the quantity — the dollars usually follow at cost. Amount-only (units tie, value off) points at cost/valuation, not counting.',
+    '- Cardex variance CANNOT be journaled — people try. It is analyst / operations work: fix the data at the source in JDE, or apply the in-place reversible sync once JDE is validated. The accountant\'s journal entry never touches it.',
+    '- Audience is a JDE-fluent analyst: F4111, F41021, P4111, UOM, cost method / level are fine; no SQL or plumbing terms.'
+  ].join('\n');
 })();
 
 /*
