@@ -1196,6 +1196,15 @@
   .cx-drawer-tbl tbody tr:last-child td { border-bottom: 0; }
   .cx-di { font-weight: 700; color: var(--blue); text-decoration: none; }
   .cx-di:hover { text-decoration: underline; }
+  /* Separate "Cleared" list — cleared cardex items collect here (collapsed) so they don't
+     pile up in the active variance cards. */
+  .cx-cleared { margin-top: 12px; border: 1px solid var(--rule); border-radius: 12px; background: var(--bg-soft); padding: 2px 12px; }
+  .cx-cleared > summary { cursor: pointer; font-family: 'Source Sans 3', sans-serif; font-size: 12.5px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: #1a7f5a; padding: 10px 4px; list-style: none; }
+  .cx-cleared > summary::-webkit-details-marker { display: none; }
+  .cx-cleared > summary::before { content: '\25B8'; margin-right: 8px; display: inline-block; transition: transform .15s; }
+  .cx-cleared[open] > summary::before { transform: rotate(90deg); }
+  .cx-cleared-tbl { margin-bottom: 10px; }
+  .cx-cleared-tbl td { color: var(--text-muted); }
   @media (max-width: 900px) { .reports-cols { grid-template-columns: 1fr; } }
   /* AI ask — the data-question moment for the accountant. White card, gradient
      sparkle emblem (the rail stays the one dark AI face). */
@@ -8469,6 +8478,10 @@
   function renderCardexCards(d) {
     var host = $('analystWorkspace'); if (!host) return;
     var solo = _ensureAnalystSolo((d && d.companies) || []);
+    // Cross-page "cleared" signal from the cardex Adjust flow (localStorage, per DB): tint
+    // the closed row + drop it from the card/container totals. Keyed co|item|branch.
+    var _cxCleared = (function () { try { var db = (window.RRDB && RRDB.name && RRDB.name()) || '_'; return JSON.parse(localStorage.getItem('rrv8.cardex.cleared.v1.' + db) || '{}') || {}; } catch (_) { return {}; } })();
+    function _cxIsClosed(item, branch) { return !!_cxCleared[[String(solo || ''), String(item || '').trim().toLowerCase(), String(branch || '').trim().toLowerCase()].join('|')]; }
     var rows = [];
     try { var o = JSON.parse(sessionStorage.getItem(cardexCacheKey()) || 'null'); if (o && Array.isArray(o.payload)) rows = o.payload; } catch (_) {}
     // Warm if cold AND repaint when the (heavy, async) fetch lands — without the
@@ -8511,6 +8524,7 @@
     var B = { std: { qty: [], amt: [] }, avg: { qty: [], amt: [] } };
     Object.keys(groups).forEach(function (k) {
       var g = groups[k];
+      if (_cxIsClosed(g.item, g.branch)) return;                          // cleared → shown in the separate Cleared list below, not the active cards
       if (Math.abs(g.av) < (g.thr || 0)) return;                          // immaterial: |AmtVar| < company Threshold
       B[g.container][Math.abs(g.qv) >= 1 ? 'qty' : 'amt'].push(g);        // quantity-first
     });
@@ -8564,15 +8578,46 @@
     }
     function container(label, key) {
       var b = B[key], cnt = b.qty.length + b.amt.length;
-      if (!cnt) return '';   // hide a cost method with no material variance — this is the variance view, not an inventory of methods; empty "clean" cards are noise
+      if (!cnt) return '';   // hide a cost method with no material variance — this is the variance view, not an inventory of methods
       var tot = b.qty.concat(b.amt).reduce(function (s, g) { return s + Math.abs(g.av); }, 0);
       return '<div class="cx-container">'
         + '<div class="cx-container-head">' + esc(label)
-        +   '<span class="cx-container-total">' + (cnt ? cnt + ' item' + (cnt === 1 ? '' : 's') + ' &middot; ' + money(tot) : 'clean') + '</span></div>'
+        +   '<span class="cx-container-total">' + cnt + ' item' + (cnt === 1 ? '' : 's') + ' &middot; ' + money(tot) + '</span></div>'
         + '<div class="cx-container-body">'
         +   card(key + '-qty', 'Quantity Variance', 'Units off — sync to JDE; escalate what survives', b.qty, 'qty')
         +   card(key + '-amt', 'Amount Variance', 'Value off — dollars-only sync', b.amt, 'amt')
         + '</div></div>';
+    }
+    // Separate "Cleared" list — cleared items collect here (collapsed) instead of piling
+    // up in the active variance cards. Newest first, per active company.
+    function clearedList() {
+      var ks = Object.keys(_cxCleared).filter(function (k) { return String(_cxCleared[k].co) === String(solo); });
+      if (!ks.length) return '';
+      var items = ks.map(function (k) { return _cxCleared[k]; }).sort(function (a, c) { return String(c.at || '').localeCompare(String(a.at || '')); });
+      var body = items.map(function (c) {
+        var s = c.snap || {};
+        var qv = (s.qv != null ? s.qv : -(c.qv || 0));   // stored c.qv is display-negated; snap.qv is raw (matches the active cards)
+        var av = (s.av != null ? s.av : -(c.av || 0));
+        var when = String(c.at || '').replace('T', ' ').slice(0, 16);
+        var href = 'inventory-cardex-variance.html?company=' + co + '&item=' + encodeURIComponent(c.item)
+          + (c.branch ? '&branch=' + encodeURIComponent(c.branch) : '')
+          + '&dim=' + (Math.abs(qv) >= 1 ? 'qty' : 'amt')
+          + (s.method ? '&method=' + encodeURIComponent(s.method) : '')
+          + (c.itemId != null ? '&itemId=' + encodeURIComponent(c.itemId) : '');   // reach the reopen (ledger Undo) even when the item's out of the worklist
+        return '<tr>'
+          + '<td><a class="cx-di" href="' + href + '">' + esc(c.item) + '</a></td>'
+          + '<td>' + cellText(c.branch) + '</td>'
+          + '<td>' + cellText(s.method) + '</td>'
+          + '<td class="num">' + esc(n2(qv)) + '</td>'
+          + '<td class="num">' + esc(n2(av)) + '</td>'
+          + '<td>' + cellText(c.by) + '</td>'
+          + '<td>' + esc(when) + '</td>'
+          + '</tr>';
+      }).join('');
+      return '<details class="cx-cleared"><summary>Cleared &middot; ' + items.length + ' item' + (items.length === 1 ? '' : 's') + '</summary>'
+        + '<table class="cx-drawer-tbl cx-cleared-tbl"><thead><tr>'
+        + '<th>Item</th><th>Branch</th><th>Method</th><th class="num">Qty Var</th><th class="num">Amt Var</th><th>Cleared By</th><th>When</th>'
+        + '</tr></thead><tbody>' + body + '</tbody></table></details>';
     }
     var latestP = '';   // cardex is a current snapshot → the perpetual-details link always uses the latest period
     (_invRows || []).forEach(function (r) { var p = String(r.PeriodEnds || '').slice(0, 10); if (p && p > latestP) latestP = p; });
@@ -8580,7 +8625,8 @@
     var _cxBody = container('Standard Cost', 'std') + container('Average / Revaluing Cost', 'avg');
     host.innerHTML = '<div class="cx-fw-label"><span>Cost Variance Framework &middot; Co ' + esc(String(solo || '')) + ' &mdash; expand a card, click an item to sync it</span>'
       + '<a class="cx-fw-details" href="inventory-asof.html?company=' + co + perQ + '">Full details &rarr;</a></div>'
-      + (_cxBody || '<div class="cx-fw-clean">No material cardex variance in scope &mdash; inventory reconciles to GL for Co ' + esc(String(solo || '')) + '.</div>');
+      + (_cxBody || '<div class="cx-fw-clean">No material cardex variance in scope &mdash; inventory reconciles to GL for Co ' + esc(String(solo || '')) + '.</div>')
+      + clearedList();
     if (!host._cxWired) {   // delegated once; survives innerHTML repaints (listener is on host)
       host._cxWired = true;
       host.addEventListener('click', function (e) {
