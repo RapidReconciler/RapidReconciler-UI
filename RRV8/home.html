@@ -8422,9 +8422,9 @@
   }
   // Facts for AI grounding — the ONLY facts the model may use. Marks current vs
   // total per category so the model can tell live issues from resolved ones.
-  function _analystTxFacts(stats, focusPeriod, ccy, co) {
+  function _analystTxFacts(stats, focusPeriod, ccy, co, scrub) {
     var f = [];
-    f.push('Company: Co ' + co + ' · currency ' + (ccy || 'n/a') + ' · ' + stats.n + ' periods loaded.');
+    f.push('Company: ' + (scrub ? 'Entity A' : ('Co ' + co)) + ' · currency ' + (ccy || 'n/a') + ' · ' + stats.n + ' periods loaded.');
     f.push('CURRENT (still-actionable) period(s): ' + (stats.curPeriods.map(fmtPeriod).join(', ') || 'n/a') + '. ONLY these are actionable — prior periods are closed and already journaled.');
     f.push('By category — CURRENT-period actionable amount + how often it recurs (prior-period amounts are journaled, NOT money to chase):');
     (stats.rankedAll.length ? stats.rankedAll : []).forEach(function (m) {
@@ -8451,14 +8451,14 @@
   }
   // Cardex-variance facts from the warmed worklist (F41021 on-hand vs F4111 cardex) for the
   // scoped company — so a cardex question is grounded in the REAL figures, not the tx feed.
-  function _analystCardexFacts(co, ccy) {
+  function _analystCardexFacts(co, ccy, scrub) {
     var rows = [];
     try { var o = JSON.parse(sessionStorage.getItem(cardexCacheKey()) || 'null'); if (o && Array.isArray(o.payload)) rows = o.payload; } catch (_) {}
     var scoped = rows.filter(function (r) { return String(r.CompanyNumber) === String(co) && String(r.Reason || '').trim() !== 'Reset:'; });
     var qty = 0, amt = 0, items = {};
     scoped.forEach(function (r) { qty += Number(r.AdjQty) || 0; amt += Number(r.AdjAmount) || 0; if (r.ItemID != null) items[r.ItemID] = 1; });
     var n = Object.keys(items).length;
-    var f = ['Company: Co ' + co + ' · currency ' + (ccy || 'n/a') + '.'];
+    var f = ['Company: ' + (scrub ? 'Entity A' : ('Co ' + co)) + ' · currency ' + (ccy || 'n/a') + '.'];
     if (!n || (Math.abs(qty) < 0.05 && Math.abs(amt) < 0.005)) {
       f.push('CURRENT CARDEX VARIANCE: none material — on-hand ties to the cardex for every item in scope.');
     } else {
@@ -8492,9 +8492,10 @@
     // Route cardex questions (or any question asked from the Cardex tab) to the cardex
     // playbook + live cardex figures; everything else uses the transaction-variance grounding.
     var _cardexMode = (typeof _curSubView === 'function' && _curSubView() === 'reports') || /cardex/i.test(q);
+    var _scrub = _recsummaryLevel() === 'scrubbed';
     var prompt = _cardexMode
-      ? _analystCardexPrompt(q, _analystCardexFacts(solo, ccy))
-      : _analystPrompt(q, _analystTxFacts(_analystTxStats(), focusPeriod || _briefPeriodOverride || '', ccy, solo));
+      ? _analystCardexPrompt(q, _analystCardexFacts(solo, ccy, _scrub))
+      : _analystPrompt(q, _analystTxFacts(_analystTxStats(), focusPeriod || _briefPeriodOverride || '', ccy, solo, _scrub));
     rrFetch('api/v1/ai/explain', { method: 'POST', body: { prompt: prompt } }).then(function (r) {
       var txt = (r && r.text) ? String(r.text).trim() : '';
       if (ans) ans.textContent = txt || 'No answer came back — try rephrasing.';
