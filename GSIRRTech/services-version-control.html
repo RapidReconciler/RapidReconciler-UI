@@ -260,6 +260,9 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <div class="callout note">
   <p><strong>Watch the component slot.</strong> The artifact upload form asks for a component value. Services jars (this doc&rsquo;s artifact) go into <code>component='services'</code>. The other slot, <code>component='agent'</code>, is reserved for <code>rr-valc-agent.jar</code> &mdash; the legacy v359 JMS broker client. Uploading a Services jar into the agent slot will fail SHA1 verification on the customer side because the Agent&rsquo;s <code>HealthService</code> expects a different Actuator contract than the Services jar exposes.</p>
 </div>
+<div class="callout important">
+  <p><strong>The broker is no longer frozen.</strong> The JMS broker &mdash; the central VALC SPA plus the customer&rsquo;s <code>rr-valc-agent.jar</code> &mdash; used to be fixed. It is now changeable, delivered by a clean install per customer or at upgrade, which lets VALC 2.0 take over the broker role over time. That swap happens <em>outside</em> this Services release flow: the broker is replaced by reinstall, not by a tag-triggered release, so <code>component='agent'</code> still has no release pipeline on our side. Until a given customer&rsquo;s broker is migrated, their Services updates keep arriving over the legacy JMS path described above.</p>
+</div>
 </section>
 
 <section id="post-release-internal">
@@ -315,6 +318,21 @@ git push origin v0.2.0-rc1</pre>
 <h2>6. VALC 2.0 parallel</h2>
 <p>The VALC 2.0 repo (<code>RapidReconciler-Valc</code>) has the same <code>release.yml</code> workflow. Same tag flow, same Action behavior, same Release page. The only difference is the artifact filename: <code>valc-X.Y.Z.jar</code> instead of <code>client-services-X.Y.Z.jar</code>.</p>
 <p>Different consumer model, though. VALC 2.0 isn&rsquo;t a customer-deployed artifact &mdash; it&rsquo;s the parallel dev-side broker + dashboard that replaces the central VALC SPA for local development. Its release jar doesn&rsquo;t land in <code>file_versions</code>; it&rsquo;s just downloaded and run directly via <code>setup/run-mini-valc.ps1</code> or its successor. VALC 2.0&rsquo;s version surfaces on its <code>/actuator/info</code> endpoint and in the dashboard sidebar footer once that&rsquo;s wired through.</p>
+
+<h3>Target Linux/Docker deploy (VALC 2.0 control plane)</h3>
+<p>Beyond the local dev run above, the released <code>valc-X.Y.Z.jar</code> is headed for a GSI-operated Linux/Docker deployment &mdash; a real, isolated, authenticated control plane rather than a reachable dev box. This is the intended flow; the pieces are being built up in sequence (QA first, then production), so treat the steps below as the target, not as something already shipped end to end.</p>
+<ol>
+  <li><strong>Promote the released jar into a container image.</strong> The same <code>valc-X.Y.Z.jar</code> from the Release page is baked into a Docker image (JDK 21 base, non-root, a healthcheck on <code>/actuator/health</code>) &mdash; no rebuild per environment. The image, not the loose jar, is what gets deployed.</li>
+  <li><strong>Run the image on GSI-managed Linux.</strong> A compose stack (or equivalent manifest) brings up the VALC app container alongside its Postgres. QA and production run the identical image; only the injected configuration differs.</li>
+  <li><strong>Inject configuration and secrets from the environment.</strong> Per-environment values &mdash; Postgres credentials, the agent shared-secret, base URLs, and the allowed CORS origin &mdash; come from an <code>application-qa.yml</code> (or <code>-production.yml</code>) profile plus environment variables sourced from the host&rsquo;s secret store. Nothing sensitive is committed to the repo or copied in as a config file.</li>
+  <li><strong>Terminate TLS in front of the web tier.</strong> A reverse proxy in the container stack (or <code>server.ssl</code>) fronts the 8080 web tier with HTTPS &mdash; required both because operator sign-in moves to Microsoft Entra ID single sign-on (its OAuth redirect needs HTTPS) and because a SOC-isolated control plane over plaintext isn&rsquo;t defensible.</li>
+  <li><strong>Provision a clean Postgres.</strong> Flyway migrations run against an empty database on first boot; the environment comes up isolated, with no dev-seed clients or placeholder users.</li>
+</ol>
+<p>QA proves the control plane; production then follows the same discipline &mdash; promote the same artifact, change only the externalized configuration.</p>
+<div class="callout important">
+  <p><strong>Containerization is the control plane only.</strong> The Docker/Linux target here is for VALC 2.0 itself &mdash; the app, its Postgres, its config, secrets, and TLS. It does <em>not</em> change how the customer-side Services agent is installed: that continues to run as a Windows service (WinSW) on the customer&rsquo;s application server, deployed by installer, and receives updates over the paths in &sect; 4. Don&rsquo;t read the VALC container work as a move to ship the customer agent in Docker &mdash; the two install models stay separate.</p>
+</div>
+
 <p>Tag-cutting cadence is independent of the Services repo &mdash; release each repo when its work is release-worthy.</p>
 </section>
 

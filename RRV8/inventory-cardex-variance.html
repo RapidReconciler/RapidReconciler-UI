@@ -874,7 +874,10 @@
     rows.forEach(function(r){ qv+=Number(r.AdjQty)||0; av+=Number(r.AdjAmount)||0; qoh+=Number(r.QtyOnHand)||0; aoh+=Number(r.AmountOnHand)||0; });
     // Target the largest |amount| lot (single-lot for the curated demo items).
     var tgt=rows.slice().sort(function(a,b){ return Math.abs(Number(b.AdjAmount)||0)-Math.abs(Number(a.AdjAmount)||0); })[0];
-    var shape = Math.abs(qv)>=1 ? 'Quantity' : (Math.abs(av)>0.005 ? 'Amount' : null);
+    // Qty floor mirrors usp6_006b's @qtytol (0.05). Was >=1, which hid genuine
+    // 0.05-1 unit quantity variances the proc keeps (fractional-UOM items) behind
+    // an Amount label or dropped them from the fork. Align UI to the proc tolerance.
+    var shape = Math.abs(qv)>0.05 ? 'Quantity' : (Math.abs(av)>0.005 ? 'Amount' : null);
     return { rows:rows, qty:qv, amt:av, qoh:qoh, amtOnHand:aoh, tgt:tgt, shape:shape,
       co:resolvedCompany(), item:(state.focus&&state.focus.item)||'',
       method:tgt.Method, level:tgt.CostLevel, unitCost:Number(tgt.UnitCost)||0 };
@@ -1160,6 +1163,12 @@
     _cxProj=null;              // actual zero now, not a projection
     renderKpis(); renderGrid();
     if(_cxApprovedCtx) _cxClearedRecord(_cxApprovedCtx);   // record to the cross-page cleared store NOW (not gated on Approved) so Home lists it immediately
+    // Server-durable audit trail: the CLEAR is the audited disposition (surfaces as an
+    // analyst entry in the accountant Audit Center). Fires on every clear, not just Approved.
+    if(window.RRV8 && RRV8.logActivity && _cxApprovedCtx){
+      RRV8.logActivity('Cardex variance — cleared (in-place RapidReconciler correction, reversible)',
+        'Co '+_cxApprovedCtx.co+' · item '+_cxApprovedCtx.item+' · cleared '+qty(-_cxApprovedCtx.qty)+' units / '+curMoney(-_cxApprovedCtx.amt));
+    }
     agentFetch('/inventory/set-beginning-balance',{method:'POST',body:body})
       .catch(function(){})     // UI already cleared; server persistence is best-effort
       .then(function(){ if(btn) btn.disabled=false; });
@@ -1182,10 +1191,9 @@
   function cxvApproved(){
     var c=_cxApprovedCtx;
     if(c) _cxClearedRecord(c);   // cross-page signal so Home tints the row + reduces its totals
-    if(window.RRV8 && RRV8.logActivity && c){
-      RRV8.logActivity('Cardex variance — cleared & approved (in-place RapidReconciler correction, reversible)',
-        'Co '+c.co+' · item '+c.item+' · cleared '+qty(-c.qty)+' units / '+curMoney(-c.amt));
-    }
+    // No audit log here: the clear (confirmAdjust) already wrote the audited disposition.
+    // Approved is a UI close-out, not a separate attestation (RR is a utility) — logging it
+    // again would double-list one clear in the Audit Center.
     toast('Approved &mdash; closed.');
     closeAdjust();
   }
@@ -1275,7 +1283,11 @@
     var reset=rows.filter(function(r){ return String(r.Reason||'').trim()==='Reset:'; })[0];
     resetDate = reset ? String(reset.ItemNumber||'').trim() : '';
     var _sr=document.getElementById('scopeReset'); if(_sr) _sr.textContent=resetDate||'—';
-    DATA=rows.filter(function(r){ return String(r.Reason||'').trim()!=='Reset:'; });
+    // Drop resolved-but-stale "zombie" rows: a variance synced to ~0 whose reason
+    // wasn't re-cleared until the nightly usp6_006b still carries a reason string.
+    // A zero-variance row on a variance worklist is noise. Tolerances mirror the
+    // proc (qty 0.05 / amt 0.005). (Durable fix = clear reason at sync time: DAC-31.)
+    DATA=rows.filter(function(r){ if(String(r.Reason||'').trim()==='Reset:') return false; return Math.abs(Number(r.AdjQty)||0)>0.05 || Math.abs(Number(r.AdjAmount)||0)>0.005; });
     renderAll();
   }
   function loadWorklist(){
