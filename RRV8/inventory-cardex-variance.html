@@ -458,6 +458,13 @@
 (function () {
   'use strict';
   var DATA = [];                 // full warmed worklist (Reason <> 'Reset:')
+  // Off-worklist focus: rows for ONE item fetched on demand from
+  // /inventory/as-of/item-position when the analyst opens an item from the Full
+  // Perpetual Details grid that RR ties out (so it isn't on the variance
+  // worklist). Kept SEPARATE from DATA so it bypasses the zombie/near-zero filter
+  // in ingestWorklist — a tied item is here on purpose, not noise. Never cached,
+  // never counted on Home.
+  var _offWorklistRows = [];
   // state.focus = { item, branch, company, dim, method } | null. The page shows
   // ONE item (arrived via ?item=... or typed in the entry box). Browse lives on Home.
   var state = { focus:null };
@@ -540,16 +547,28 @@
   // The rows (per lot/branch/location) for the focused item, within the working
   // scope. When focus.company is blank (typed entry), the company is adopted from
   // the matched rows.
+  function _matchesFocus(r,f,itemL,brL){
+    if(!inScopeCo(r.CompanyNumber)) return false;
+    if(f.company && String(r.CompanyNumber)!==String(f.company)) return false;
+    if(String(r.ItemNumber||'').trim().toLowerCase()!==itemL) return false;
+    if(brL && String(r.Branch||'').trim().toLowerCase()!==brL) return false;
+    return true;
+  }
   function focusRows(){
     var f=state.focus; if(!f||!f.item) return [];
     var itemL=String(f.item).trim().toLowerCase(), brL=String(f.branch||'').trim().toLowerCase();
-    return DATA.filter(function(r){
-      if(!inScopeCo(r.CompanyNumber)) return false;
-      if(f.company && String(r.CompanyNumber)!==String(f.company)) return false;
-      if(String(r.ItemNumber||'').trim().toLowerCase()!==itemL) return false;
-      if(brL && String(r.Branch||'').trim().toLowerCase()!==brL) return false;
-      return true;
-    });
+    var hit=DATA.filter(function(r){ return _matchesFocus(r,f,itemL,brL); });
+    if(hit.length) return hit;
+    // Not on the variance worklist — serve the on-demand off-worklist position
+    // (item opened from the perpetual grid that RR ties out). Same predicate.
+    return _offWorklistRows.filter(function(r){ return _matchesFocus(r,f,itemL,brL); });
+  }
+  // The focused item isn't on the variance worklist (RR ties it out); it's being
+  // served from the on-demand position fetch. Drives the "Adjust balances" framing.
+  function _focusIsOffWorklist(){
+    var f=state.focus; if(!f||!f.item) return false;
+    var itemL=String(f.item).trim().toLowerCase(), brL=String(f.branch||'').trim().toLowerCase();
+    return !DATA.some(function(r){ return _matchesFocus(r,f,itemL,brL); });
   }
   function resolvedCompany(){ var f=state.focus; if(!f) return ''; if(f.company) return String(f.company); var r=focusRows()[0]; return r?String(r.CompanyNumber):''; }
 
@@ -903,6 +922,17 @@
     var agg=_cxFocusAgg(); _cxAgg=agg;
     [syncBody,causeBody].forEach(function(b){ if(b){ b.hidden=true; b.innerHTML=''; } });
     if(!agg || !agg.shape){
+      // Tied-out item opened from Full Perpetual Details to align against a JDE
+      // finding: RR shows no variance, but the analyst still needs to Adjust
+      // Balances. Keep the adjust path LIVE (creating a variance is the point).
+      if(agg && _focusIsOffWorklist()){
+        causeBtn.disabled=true; causeBtn.title='This item ties in RR — no variance to diagnose';
+        if(srcBtn){ srcBtn.disabled=true; srcBtn.title='Nothing to record — RR shows this item in balance'; }
+        syncBtn.disabled=false; syncBtn.title='Adjust balances — enter the correction that aligns RR to JDE';
+        syncBody.hidden=false;
+        syncBody.innerHTML='<div class="cxv-aicard-note">RapidReconciler shows this item <b>in balance</b>. You opened it from Full Perpetual Details to <b>adjust balances</b> &mdash; enter the beginning-balance correction that aligns RapidReconciler to what you found in JDE. Creating a variance here is expected; it&rsquo;s reversible and logged.</div>';
+        return;
+      }
       syncBtn.disabled=true; causeBtn.disabled=true; if(srcBtn) srcBtn.disabled=true;
       syncBtn.title=causeBtn.title = agg ? 'This item ties — nothing to validate' : 'Focus an item first';
       return;
@@ -1123,9 +1153,19 @@
 
   // ---- adjust modal ----
   function openAdjust(itemId){
-    var r=DATA.filter(function(x){return String(x.ItemID)===String(itemId);})[0];
+    var r=DATA.filter(function(x){return String(x.ItemID)===String(itemId);})[0]
+        || _offWorklistRows.filter(function(x){return String(x.ItemID)===String(itemId);})[0];
     if(!r){ toast('Item not found'); return; }
     adj.itemId=itemId;
+    // Contextual action label: a tied-out item opened from the perpetual grid is
+    // an ALIGNMENT (type the JDE-correct balance, which creates a variance), not a
+    // clear-to-tie. Relabel the commit link so the verb fits both entry points.
+    var offWl=_focusIsOffWorklist(), lnk=document.getElementById('adjConfirm');
+    if(lnk){
+      lnk.textContent = offWl ? 'adjust balances' : 'clear it';
+      lnk.title = offWl ? 'Commit the beginning balance you entered (aligns RapidReconciler to JDE)'
+                        : 'Set the variance to zero and clear it';
+    }
     // Period being adjusted = the opening-balance (BL) row's period end (e.g. 12/31/2024),
     // NOT the data-load / reset date. Read it from the roll's BL row.
     var blRow=null, _rr=_cxRollRows||[]; for(var _i=0;_i<_rr.length;_i++){ if(_rollBL(_rr[_i].BL)){ blRow=_rr[_i]; break; } }
@@ -1146,6 +1186,12 @@
   // KPIs + Item Position read 0, then persist the cleared baseline best-effort.
   function confirmAdjust(){
     if(adj.itemId==null) return;
+    // Off-worklist ALIGN: the analyst opened a tied-out item from Full Perpetual
+    // Details and typed the JDE-correct beginning balance. Commit it AS TYPED --
+    // that shift creates a real cardex variance (the whole point), which then
+    // rides the normal worklist/clear flow. Do NOT force the variance to zero,
+    // and do NOT record it to the cleared store (nothing was cleared).
+    if(_focusIsOffWorklist()){ _cxAlignBalances(); return; }
     var vq=document.getElementById('adjVarQty'), va=document.getElementById('adjVarAmt');
     if(vq){ vq.value='0'; _cxAdjOnVariance('q'); }   // recomputes beginning-balance qty + projected roll (keeps it visible)
     if(va){ va.value='0'; _cxAdjOnVariance('a'); }   // recomputes beginning-balance amount
@@ -1173,6 +1219,24 @@
       .catch(function(){})     // UI already cleared; server persistence is best-effort
       .then(function(){ if(btn) btn.disabled=false; });
     toast('Variance cleared.');
+  }
+  // Commit the TYPED beginning balance for a tied-out item opened from the
+  // perpetual grid (align RapidReconciler to a JDE finding). Persists as typed
+  // (no forced zero), logs it as an adjustment (not a clear), then reloads so the
+  // freshly-created variance appears through the normal worklist path.
+  function _cxAlignBalances(){
+    var a=_cxAgg;
+    var bq=Number(document.getElementById('adjQty').value)||0, ba=Number(document.getElementById('adjAmt').value)||0;
+    var btn=document.getElementById('adjConfirm'); if(btn) btn.disabled=true;
+    var co=(a&&a.co)||resolvedCompany()||'', item=(a&&a.item)||(state.focus&&state.focus.item)||'';
+    if(window.RRV8 && RRV8.logActivity){
+      RRV8.logActivity('Cardex balances — adjusted to align with JDE (reversible)',
+        'Co '+co+' · item '+item+' · beginning balance set to '+qty(bq)+' units / '+curMoney(ba));
+    }
+    agentFetch('/inventory/set-beginning-balance',{method:'POST',body:{ itemId:Number(adj.itemId), preset:'manual', beginQty:bq, beginAmt:ba }})
+      .then(function(){ toast('Balances adjusted &mdash; RapidReconciler re-checked against the new baseline.'); })
+      .catch(function(){ toast('Balances adjusted locally; server persistence will retry.'); })
+      .then(function(){ if(btn) btn.disabled=false; _offWorklistRows=[]; reload(); });   // item now carries a variance -> normal worklist path
   }
   function _cxZeroFocusedLocal(){ focusRows().forEach(function(r){ r.AdjQty=0; r.AdjAmount=0; }); }
   // "Approved" — the behind-the-scenes close-out: Audit Center entry + close the panel and
@@ -1294,6 +1358,26 @@
     return agentFetch('/inventory/integrity',{method:'POST',body:{report:'v6ui_itemrollintegritydialog'}})
       .then(function(d){ return Array.isArray(d)?d:((d&&d.data)||[]); });
   }
+  // On-demand: the cardex-variance row(s) for the focused item regardless of
+  // whether it carries a variance. Only fetched when the item isn't already on
+  // the worklist (the analyst opened it from Full Perpetual Details). Populates
+  // _offWorklistRows, which focusRows() falls back to. Graceful on 404/403 (the
+  // usp8_item_position proc / endpoint arrives with the next Services rebuild).
+  function loadItemPosition(){
+    var f=state.focus; if(!f||!f.item){ _offWorklistRows=[]; return Promise.resolve(); }
+    return agentFetch('/inventory/as-of/item-position',{method:'POST',body:{
+        itemNumber:f.item, companyNumber:f.company||'', company:f.company||'', branchPlant:f.branch||''
+      }})
+      .then(function(d){ _offWorklistRows=Array.isArray(d)?d:((d&&d.data)||[]); })
+      .catch(function(){ _offWorklistRows=[]; });
+  }
+  // After the worklist lands: if the focused item isn't on it, pull its position
+  // on demand so the analyst can still Adjust Balances (align RR to a JDE finding).
+  function maybeLoadOffWorklist(){
+    if(!state.focus || !state.focus.item){ _offWorklistRows=[]; return; }
+    if(!_focusIsOffWorklist()){ _offWorklistRows=[]; return; }   // already on the worklist
+    loadItemPosition().then(function(){ renderAll(); });
+  }
   function loadLedger(){ return agentFetch('/inventory/adjustment-ledger').then(function(d){ return (d&&d.data)||[]; }); }
 
   function reload(){
@@ -1301,8 +1385,8 @@
     // refresh live in the background and re-cache. A failed refresh leaves the
     // cached view in place rather than blanking it.
     var cached=readCardexCache();
-    if(cached){ ingestWorklist(cached); }
-    loadWorklist().then(function(rows){ writeCardexCache(rows); ingestWorklist(rows); }).catch(function(err){
+    if(cached){ ingestWorklist(cached); maybeLoadOffWorklist(); }
+    loadWorklist().then(function(rows){ writeCardexCache(rows); ingestWorklist(rows); maybeLoadOffWorklist(); }).catch(function(err){
       if(cached) { toast('Showing the last loaded worklist — refresh failed: '+esc(err.message)); return; }
       toast('Cardex data isn&rsquo;t available &mdash; sign in so the page can read it from the data service.');
       document.getElementById('rfBody').innerHTML='<tr><td class="empty" colspan="'+COLS.length+'">No data &mdash; '+esc(err.message)+'</td></tr>';
