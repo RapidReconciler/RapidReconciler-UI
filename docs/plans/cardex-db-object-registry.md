@@ -6,6 +6,11 @@ Convention in force: net-new procs/views use the **v8** prefix (`feedback_v8_pre
 
 Last updated: 2026-06-06 (after DB steps 1&ndash;4; agent/UI rows pending step 5).
 
+> ### ⚠ CORRECTION 2026-07-16 &mdash; the 006b&rarr;usp8 migration was REVERTED; the tables below were inverted and dangerous
+> **Verified in code 2026-07-16:** `usp6_006_inventory` calls **`usp6_006b_cardex_variance`** (line 448), NOT `usp8_cardex_variance`. Its inline comment (L443&ndash;445) states 006b "is the canonical source `v6ui_itemrollintegritydialog` reads; `usp8_cardex_variance` was a parallel recomputation that diverged." The 2026-06-06 migration recorded here (repoint 006b&rarr;usp8, mark 006b deletable) was later **reverted**, and this doc was never updated &mdash; so it told a reader the **live** proc was "safe to drop."
+> **Live cardex-variance path (verified):** `usp6_006b_cardex_variance` &rarr; writes **`rperpetualinv`** (variance + `reason`; 11 UPDATE passes, netting hardened in build 178: account partition + cost-method/level grain) &rarr; **`v6ui_itemrollintegritydialog`** &rarr; agent `/inventory/integrity` &rarr; `RRV8/inventory-cardex-variance.html`.
+> Read the corrected "Superseded" section below, NOT the pre-correction rows, before dropping anything.
+
 ---
 
 ## New objects &mdash; RapidReconciler-DB
@@ -15,7 +20,7 @@ Last updated: 2026-06-06 (after DB steps 1&ndash;4; agent/UI rows pending step 5
 | `RCardexVariance` | table | `dbo/Tables/RCardexVariance.sql` | `usp8_cardex_variance` (MERGE target), `v8ui_cardexworklist`, sqlproj | _TBD_ |
 | `RAdjustLedger` | table | `dbo/Tables/RAdjustLedger.sql` | `usp8_maint_set_beginning_balance`, `usp8_maint_undo_beginning_balance`, sqlproj, (agent ledger endpoint) | _TBD_ |
 | `RCardexWorkStatus` | table | `dbo/Tables/RCardexWorkStatus.sql` | `v8ui_cardexworklist`, sqlproj, (agent mark-worked endpoint) | _TBD_ |
-| `usp8_cardex_variance` | proc | `dbo/Stored Procedures/usp8_cardex_variance.sql` | `usp6_006_inventory` (exec, line ~400), sqlproj | _TBD_ |
+| `usp8_cardex_variance` | proc | `dbo/Stored Procedures/usp8_cardex_variance.sql` | ~~`usp6_006_inventory` (exec)~~ **NOT called (2026-07-16 verify: no `exec` anywhere)** &mdash; parallel recompute, superseded by the reverted 006b path; sqlproj | _TBD_ |
 | `usp8_maint_set_beginning_balance` | proc | `dbo/Stored Procedures/usp8_maint_set_beginning_balance.sql` | agent `POST /inventory/set-beginning-balance` (step 5), sqlproj | _TBD_ |
 | `usp8_maint_undo_beginning_balance` | proc | `dbo/Stored Procedures/usp8_maint_undo_beginning_balance.sql` | agent `POST /inventory/undo-adjustment` (step 5), sqlproj | _TBD_ |
 | `v8ui_cardexworklist` | view | `dbo/Views/v8ui_cardexworklist.sql` | agent `GET /inventory/cardex-worklist` (step 5), sqlproj | _TBD_ |
@@ -24,19 +29,31 @@ Last updated: 2026-06-06 (after DB steps 1&ndash;4; agent/UI rows pending step 5
 
 | Object | Change | Referenced by |
 |---|---|---|
-| `usp6_006_inventory` | nightly call repointed `usp6_006b_cardex_variance` &rarr; `usp8_cardex_variance` (line ~400) | the nightly pipeline |
+| `usp6_006_inventory` | ~~repointed 006b &rarr; usp8~~ **REVERTED (2026-07-16 verify):** calls **`usp6_006b_cardex_variance`** (line 448) &mdash; the canonical path. `usp8_cardex_variance` is NOT called. | the nightly pipeline |
 | `RapidReconciler.sqlproj` | `<Build Include>` entries for the 7 new objects | SSDT build |
 
-## Superseded &mdash; deletable candidates (retire in step 6, after UI cutover)
+## Superseded / deletable candidates (CORRECTED 2026-07-16 &mdash; canonical&harr;orphaned was inverted)
 
+### DO NOT DROP &mdash; LIVE
+| Object | Role |
+|---|---|
+| `usp6_006b_cardex_variance` | **CANONICAL** cardex variance + netting proc; called by `usp6_006_inventory` L448; writes `rperpetualinv`; feeds `v6ui_itemrollintegritydialog` &rarr; the live UI. **The pre-correction "safe to drop" entry was WRONG &mdash; dropping this breaks the entire cardex pipeline.** |
+
+### Not on the live 006b path &mdash; verify a current reader before dropping ANY of these
+| Object | Status (2026-07-16) |
+|---|---|
+| `usp8_cardex_variance` | Orphaned &mdash; **no `exec` anywhere** (grep). Its header claims to supersede 006b, but `usp6_006` doesn't call it. The parallel recompute that diverged. |
+| `RCardexVariance` (table) | Written ONLY by `usp8_cardex_variance` (its MERGE target) &rarr; dormant with it. NB the `RCardexVariance.sql` comment "nightly MERGE (usp6_006b) joins on" is stale &mdash; **006b writes `rperpetualinv`, not this table.** |
+| `v8ui_cardexworklist` (view) | Reads `RCardexVariance`; fed the old `GET /inventory/cardex-worklist`. The live UI was rebuilt onto `v6ui_itemrollintegritydialog` &mdash; confirm the current agent/UI has no reader before dropping. |
+
+### Legacy reroll procs (unchanged status)
 | Object | Superseded by | Still referenced? |
 |---|---|---|
-| `usp6_006b_cardex_variance` | `usp8_cardex_variance` | **No** &mdash; call removed from `usp6_006_inventory`; safe to drop |
-| `usp6_maint_reset_item_balance` | `usp8_maint_set_beginning_balance` (Manual preset) | Yes &mdash; legacy reroll endpoint until UI cuts over |
+| `usp6_maint_reset_item_balance` | `usp8_maint_set_beginning_balance` (Manual preset) | Yes &mdash; legacy reroll until UI cuts over |
 | `usp6_set_beginning_balances_zero` | `usp8_maint_set_beginning_balance` (Zero preset) | Yes &mdash; legacy reroll |
 | `usp6_maint_reset_cardex_variance` | `usp8_maint_set_beginning_balance` (Clear-to-JDE preset) | Yes &mdash; legacy reroll |
 
-> Before dropping any deletable candidate: confirm no other proc/agent path calls it (grep the DB repo + `RapidReconciler-Agent`). `usp6_006b` is already orphaned; the three reroll procs drop only once the dedicated Cardex page stops calling the old `rollIItem` flow.
+> ⚠ **This registry inverted canonical&harr;orphaned once and told a reader to drop the LIVE proc.** Before dropping ANY object: grep `RapidReconciler-DB` + `RapidReconciler-Agent` + `RapidReconciler-AI/RRV8` for a live caller/reader and confirm against the CURRENT agent endpoints + UI data source &mdash; trust the code, not this doc's history. The `usp8_maint_*` procs + `RAdjustLedger` remain LIVE (they back the current adjust/roll-forward flow) &mdash; do not confuse them with the orphaned `usp8_cardex_variance` stack. The three reroll procs drop only once the Cardex page stops calling the old `rollIItem` flow.
 
 ## Agent objects &mdash; RapidReconciler-Agent (step 5, done)
 
