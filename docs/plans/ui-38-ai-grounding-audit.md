@@ -32,9 +32,18 @@ sent the real company number at exactly the tier meant to hide it.
 | `ANALYST_GROUNDING` | Transaction variance (F4111 vs F0911, per document) |
 | `CARDEX_GROUNDING` | Cardex variance (F4111 vs F41021 on-hand, account-blind) |
 
-DMAAI grounding lives server-side (`AiService.DMAAI_GROUNDING`); there is no
-client mirror. Any client surface reasoning about the model DMAAI (4152) either
-hand-rolls its own definition or relies on the server injecting one.
+Two more were added in the session #15 consolidation:
+
+| Catalog | Scope |
+|---|---|
+| `ROLLFORWARD_GROUNDING` | Account roll-forward corrective levers (GL-side before variance) |
+| `ASOF_GROUNDING` | Perpetual-inventory + residual-noise definitions |
+
+DMAAI grounding lives server-side (`AiService.DMAAI_GROUNDING`) and — confirmed
+this pass — `AiService.complete()` prepends it to the system prompt of **every**
+`/api/v1/ai/explain` call. So every client surface already reasons from the
+authoritative model-DMAAI (4152) rules without a client mirror. Adding one would
+be a second copy to drift, so we deliberately did not.
 
 ## Fixed this pass
 
@@ -49,25 +58,30 @@ hand-rolls its own definition or relies on the server injecting one.
    flag into both builders; the company now renders "Entity A" at scrubbed,
    currency and amounts unchanged.
 
-## Deferred — consolidation backlog (correct today, drift-prone)
+## Consolidated (session #15, attended go-ahead)
 
-These surfaces hand-roll their reconciliation policy inline instead of pulling the
-shared catalog. **None is wrong today.** The risk is silent drift the next time
-the SME edits a catalog and these copies don't get the change — the same shape as
-the original Home bug. Deferred deliberately: rerouting them changes live AI
-narration and wants SME eyes on the output, and a wrong AI answer to an AI-first
-buyer is the fatal case. Do these attended.
+The six surfaces that hand-rolled reconciliation policy inline now pull the shared
+catalog, so a future SME edit propagates instead of leaving stale copies. Each was
+verified live at `:8765` (page loads clean, catalogs present, an AI round-trip
+returns 200 with both groundings in the chain).
 
-- `accounting-model-review.html` `assessExclusions`/`draftNote` — inline DMAAI 4152
-  exclusion policy while the real `DMAAI_GROUNDING` is server-side. Add a client
-  mirror, or confirm + document that the server injects it on every call.
-- `inventory-account-rollforward.html` `triggerTodoAi` (~:915) — inline
-  corrective-lever policy, no catalog. Candidate: a `ROLLFORWARD_GROUNDING` block.
-- `inventory-asof.html` `asofAsk` (~:2860) — inline perpetual/residual definitions,
-  no catalog.
-- `home.html` `renderAiBriefing` (~:5846), `fetchJeAiSummary` (~:9458),
-  `_auditCoSummary` (~:9803) — accountant-facing prose that skips `ACCT_GROUNDING`.
-  Inline rules agree with the catalog today.
+- `home.html` `renderAiBriefing`, `fetchJeAiSummary`, `_auditCoSummary` — now
+  prepend `ACCT_GROUNDING`, matching the convention already used by the Home Ask
+  boxes (`askAcct` / worklist cause analysis). The three prompts keep their own
+  task and format rules; the catalog supplies the shared policy.
+- `inventory-account-rollforward.html` `triggerTodoAi` — its inline corrective-lever
+  system prompt is now `ROLLFORWARD_GROUNDING` (new catalog), with the old inline
+  string kept as a fallback if `config.js` fails to load.
+- `inventory-asof.html` `asofAsk` — the perpetual and residual-noise definitions
+  moved to `ASOF_GROUNDING` (new catalog); the calc and free-text prompts prepend
+  it and drop the duplicated definition text. Page-feature help (the Company
+  selector, Excel sheets) stays inline — it's page-specific, not reconciliation
+  policy.
+- `accounting-model-review.html` `assessExclusions`/`draftNote` — no client mirror
+  added. The DMAAI 4152 policy is already injected server-side on every call (see
+  above); the inline text is task framing, not a policy definition. Added a code
+  comment recording that so the next reader doesn't "fix" it by duplicating the
+  server block.
 
 ## Not a problem
 
