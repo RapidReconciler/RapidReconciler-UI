@@ -1,5 +1,12 @@
 # Claude (Sonnet) integration — VALC 2.0 + V8 UI
 
+> **⚠ Model updated 2026-07-06 — this doc is now historical on the model choice.**
+> The live model is **`claude-opus-4-8`** (Opus 4.8), switched from Sonnet for
+> reasoning quality (VALC #184; `AiService.MODEL`). Opus 4.8 rejects the
+> `temperature` param, so it is omitted (see `reference_opus_deprecates_temperature`).
+> The Sonnet model IDs, per-token pricing, and tier rationale below are kept for
+> context but no longer reflect the running system.
+
 **Status:** gateway built, live calls dark until the key lands. The VALC
 `AiService` + `AiController` (one-shot `/api/v1/ai/health` + `/explain`, Sonnet,
 server-side key, per-client tier cap) are in place, and the System Health

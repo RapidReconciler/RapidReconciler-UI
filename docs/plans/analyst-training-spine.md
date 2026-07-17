@@ -2,6 +2,8 @@
 
 **Status:** spec, not built. Gated on UI-38 (grounding must be trustworthy first).
 **Date:** 2026-07-16 (session #13). Owner-designed; this doc is the end-to-end spec.
+**Extended:** 2026-07-17 (session #16) — the two-altitude framing tying training to
+the instance-explainers (UI-49); see "Two altitudes" below.
 
 ## What this is
 
@@ -125,10 +127,42 @@ JDE tables they know; never explain the domain." The assistant generates the rib
 from grounding plus live data. The only genuinely new content is the spine's
 structural map, the six rib topics.
 
+## Two altitudes: training and the instance-explainers share one entry
+
+The one-catalog section above lists three consumers that already existed. The
+instance-explainers — the roll-forward "why is this account off, and run the
+Repost Account Ledger" card (UI-49), the per-surface AI Ask, the recommendation
+ladders — are a fourth, and the key realization (owner, 2026-07-17) is that they
+are not a separate feature from training. They are the same catalog entry read at
+a different altitude.
+
+Instance altitude answers "*this* account, Co 30001, is off by −68,972.11 because
+balances don't match detail, so run the repost." General altitude answers "here is
+how RR draws a roll-forward break, the causes it can have, and the decision you
+make" — which is Rib 3 for the roll-forward surface. Same knowledge, two zoom
+levels. The explainer grounds it to the live row; the rib teaches the shape.
+
+So each pattern is one **structured** catalog entry — cause, the live facts that
+ground it, the remedy or remedy ladder, and a one-line orientation blurb — carrying
+two projections: *explain-instance* (what the explainer renders) and *teach-pattern*
+(what the rib renders). A rib is a projection of that entry, never a re-authoring of
+it. The failure this prevents is specific to training: a rib that re-states the
+decision logic in its own words drifts, and a drifted rib is the assistant
+*confidently teaching the wrong decision* — worse than a one-off wrong card, because
+it poisons every judgment the analyst makes afterward.
+
+**Proof-of-shape is UI-49.** Its roll-forward cause→remedy ladder is built as that
+structured entry first; the first explainer sets the schema, then this spine's ribs
+project the teach-pattern altitude from it. The guardrail runs both ways: don't
+design a grand unified training schema up front (over-abstraction before we have one
+working explainer), but don't build any explainer inline in a way that forces a rib
+to duplicate its knowledge. Grows the `feedback_analytical_knowledge_one_source`
+rule from three consumers to five, at two altitudes.
+
 ## AI wiring
 
 Reuse the analyst assistant already on Home and the per-surface assistants (cardex
-Investigate, txv recurrence). They POST to VALC `/api/v1/ai/explain` (Sonnet). Add
+Investigate, txv recurrence). They POST to VALC `/api/v1/ai/explain` (Opus, `claude-opus-4-8`). Add
 an orientation intent that carries the training prompt template. Training honors
 the tier ladder (grounded / scrubbed / full): the spine map is about the tool, so
 scrubbing barely applies, but any rib that cites a live example masks per the

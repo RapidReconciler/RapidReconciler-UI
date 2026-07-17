@@ -40,6 +40,7 @@ small, targeted set, not a rewrite. Full catalog:
 | home | `.cxh-sub2` (card sub-subhead) | 12 | → 13.5 ✅ fixed (s#15) |
 | transactions | `.tx-work-panel-apply` (button label) | 13 | → 13.5 ✅ fixed (s#15) |
 | transactions | `.tx-work-panel-grid-link` (link label) | 12 | → 13.5 ✅ fixed (s#15) |
+| home (analyst Overview) | `.analyst-wl-lede` (check-band subtext) | 12.5 | → 14 ✅ fixed |
 
 **Fixed** = at the floor; verified live — no reflow, no horizontal overflow,
 console clean. The six header / dense-card / control cases were the deferred set;
@@ -47,6 +48,32 @@ in session #15 the owner gave the go-ahead to take them to the floor and eyeball
 alignment during the demo build, so they're now fixed too. If any header or dense
 card reads crowded at 13.5px on his screen, the fix is a layout tweak (gap /
 line-height), not dropping back below the floor.
+
+## Analyst check-band cards — inline is the standard
+
+The analyst Overview tab's check bands (VALIDATION: Model reviewed, Account Roll
+Forward; CONFIGURATION: UOM Conversion, Frozen Cost, GL-Class — all rendered by
+`_analystCheckBand` / `_rollForwardHtml` in `home.html`) had a stacked
+title-over-lede layout with 12.5px subtext, leaving the whole right side of each
+row empty and each card two lines tall.
+
+New standard for these cards:
+
+- **Subtext (`.analyst-wl-lede`) sits at 14px**, above the 13.5px floor.
+- **Title and lede read inline on one baseline**, not stacked: bold navy title
+  (`flex: 0 0 auto`, never wraps), a subtle 1px vertical-rule separator
+  (`.analyst-wl-lede::before`), then the lede filling the remaining width
+  (`flex: 1 1 auto; min-width: 0`) with tail ellipsis. Because every lede is
+  front-loaded (the company + the count / dollar variance / approval leads the
+  sentence), the ellipsis only ever eats a non-material tail.
+- **Vertical rhythm tightened** to remove the empty space: frame padding 11→9px,
+  band padding 13→10px vertical, inter-card margin 14→10px, group gap 18→14px.
+  Card height dropped ~67px → 56px (clean) / 58px (with a View button).
+
+Verified live at ~1233px render width (analyst view, Demo1 / Co 80002 — two clean
+green + arrow cards and three orange + View-button cards): dot / text / action
+all share one vertical center, longest lede ellipsizes gracefully, modal still
+opens from View, console clean.
 
 ## Copy
 
