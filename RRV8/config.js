@@ -459,6 +459,32 @@ window.RRV8 = window.RRV8 || {};
     '- Cardex variance CANNOT be journaled — people try. It is analyst / operations work: fix the data at the source in JDE, or apply the in-place reversible sync once JDE is validated. The accountant\'s journal entry never touches it.',
     '- Audience is a JDE-fluent analyst: F4111, F41021, P4111, UOM, cost method / level are fine; no SQL or plumbing terms.'
   ].join('\n');
+  // ROLLFORWARD_GROUNDING — the AI's compact copy of the Account Roll-Forward
+  // corrective playbook. Prepended to the roll-forward assistant's system prompt
+  // (inventory-account-rollforward.html triggerTodoAi) so its lever advice reasons
+  // from RR's actual corrective order instead of a generic guess. Was inline-only
+  // in that one page; lifted here so it lives with the other catalogs and a future
+  // surface (e.g. the analyst-training spine) can read the same source. SOURCE OF
+  // TRUTH = the roll-forward corrective workflow; keep in sync as the SME curates it.
+  window.RRV8.ROLLFORWARD_GROUNDING = [
+    'ROLL-FORWARD POLICY (account roll-forward) — reason from these rules:',
+    '- The account roll-forward keeps the inventory source-of-truth accurate period over period. A break is either GL-side (the GL roll-forward does not tie) or variance-side (the cardex-to-GL variance roll-forward does not tie).',
+    '- Four corrective levers: R099102 repost and Reload GL fix GL-side breaks; Re-roll companies then Reload Cardex fix variance-side breaks.',
+    '- ALWAYS fix GL-side breaks before variance-side — a GL break feeds the variance, so clearing GL first often clears the variance without a re-roll.',
+    '- This is analyst / operations maintenance, never a journal entry: the accountant does not journal a roll-forward break.',
+    '- Audience is a JDE-fluent finance analyst: answer in 2-4 sentences, plain finance language; standard JDE program references (R099102) are fine; no SQL, endpoint, or table terms.'
+  ].join('\n');
+  // ASOF_GROUNDING — the AI's compact copy of the perpetual / as-of definitions.
+  // Prepended to the As-Of page's AI reads (inventory-asof.html asofAsk) so the
+  // perpetual-inventory and residual-noise explanations stay consistent app-wide
+  // instead of being re-described inline. SOURCE OF TRUTH = the perpetual-inventory
+  // model + Residual Optimizer behavior; keep in sync.
+  window.RRV8.ASOF_GROUNDING = [
+    'ANALYST POLICY (perpetual / as-of inventory) — reason from these definitions:',
+    '- PERPETUAL INVENTORY is established at go-live from an initial load of each item’s on-hand quantity and unit cost (the opening valuation baseline), then maintained as a running total transaction by transaction — every receipt, issue, adjustment, and transfer updates the on-hand quantity and its extended value immediately. Reconciliation compares that perpetual total to the GL inventory accounts.',
+    '- RESIDUAL NOISE is zero-quantity rows that still carry a tiny valuation — rounding dust left in the perpetual, not real inventory. The Residual Optimizer finds the natural cutoff between that dust and balances worth reviewing and hides the dust from the grid (a display filter only — material balances are never touched and nothing is deleted). "Re-optimize" re-runs that cutoff.',
+    '- Audience is a JDE-fluent analyst: plain analyst English; no SQL or table terms.'
+  ].join('\n');
 })();
 
 /*

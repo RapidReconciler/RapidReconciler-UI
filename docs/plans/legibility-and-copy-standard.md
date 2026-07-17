@@ -34,16 +34,19 @@ small, targeted set, not a rewrite. Full catalog:
 | cardex-variance | `.ledger-empty` (empty state) | 13 | → 13.5 ✅ fixed |
 | transactions | `.tx-findings-sub` (subtext) | 12.5 | → 13.5 ✅ fixed |
 | transactions | `.tx-findings-status` (status line) | 12.5 | → 13.5 ✅ fixed |
-| cardex-variance | `.ledger-head .hint` (in a header row) | 12 | defer — header-crowd risk |
-| home | `.cx-fw-headline .acct-snap-period` (under a headline) | 12.5 | defer — headline-crowd risk |
-| home | `.cx-container-total` (dense card metadata) | 12 | defer — dense card |
-| home | `.cxh-sub2` (card sub-subhead) | 12 | defer — dense card |
-| transactions | `.tx-work-panel-apply` (button label) | 13 | defer — control, not prose |
-| transactions | `.tx-work-panel-grid-link` (link label) | 12 | defer — control, not prose |
+| cardex-variance | `.ledger-head .hint` (in a header row) | 12 | → 13.5 ✅ fixed (s#15) |
+| home | `.cx-fw-headline .acct-snap-period` (under a headline) | 12.5 | → 13.5 ✅ fixed (s#15) |
+| home | `.cx-container-total` (dense card metadata) | 12 | → 13.5 ✅ fixed (s#15) |
+| home | `.cxh-sub2` (card sub-subhead) | 12 | → 13.5 ✅ fixed (s#15) |
+| transactions | `.tx-work-panel-apply` (button label) | 13 | → 13.5 ✅ fixed (s#15) |
+| transactions | `.tx-work-panel-grid-link` (link label) | 12 | → 13.5 ✅ fixed (s#15) |
 
-**Fixed** = roomy containers; verified live — offenders cleared, no reflow, no
-horizontal overflow, console clean. **Defer** = header / dense-card / control
-cases where a bump risks the alignment the owner notices; an attended call.
+**Fixed** = at the floor; verified live — no reflow, no horizontal overflow,
+console clean. The six header / dense-card / control cases were the deferred set;
+in session #15 the owner gave the go-ahead to take them to the floor and eyeball
+alignment during the demo build, so they're now fixed too. If any header or dense
+card reads crowded at 13.5px on his screen, the fix is a layout tweak (gap /
+line-height), not dropping back below the floor.
 
 ## Copy
 
@@ -55,7 +58,7 @@ cases where a bump risks the alignment the owner notices; an attended call.
 
 ## Deferred / attended
 
-- The six deferred legibility cases above — the owner's eye.
+- ~~The six deferred legibility cases above~~ — done in session #15 (see the table).
 - **Bullets-over-paragraphs + reduce-clicks-to-value** — not a floor question; a
   content/IA judgment per surface. Not attempted here.
 - **Title-suffix consistency** — "&mdash; RapidReconciler" vs "&mdash;
