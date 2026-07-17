@@ -1347,6 +1347,12 @@
   .je-modal-foot { display: flex; align-items: center; gap: 14px; margin-top: 18px; flex-wrap: wrap; }
   .je-modal-foot .btn-navy { background: var(--navy); color: #fff; border: 1px solid var(--navy); border-radius: 9px; padding: 10px 18px; font-weight: 800; font-size: 13px; font-family: inherit; cursor: pointer; }
   .je-modal-foot .btn-navy:hover { filter: brightness(1.14); }
+  /* Configuration integrity detail table (UI-45 View modal) */
+  .intg-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .intg-table th { position: sticky; top: 0; background: var(--navy); color: #fff; font-weight: 700; text-align: left; padding: 7px 10px; white-space: nowrap; }
+  .intg-table td { padding: 6px 10px; border-bottom: 1px solid var(--rule); color: var(--text); white-space: nowrap; }
+  .intg-table tr:nth-child(even) td { background: var(--bg-soft); }
+  .intg-table .intg-num { text-align: right; font-variant-numeric: tabular-nums; }
   /* Verification code shown in the modal — the value the accountant types into GLEXA. */
   .je-vcode { display: inline-flex; align-items: center; gap: 9px; flex-wrap: wrap; }
   .je-vcode-lbl { font-size: 10.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: var(--text-muted); }
@@ -2905,6 +2911,22 @@
       <span class="je-vcode" id="oeVcode" hidden></span>
       <button type="button" class="btn-navy" id="oeAttestBtn">Attest &middot; export &amp; record</button>
     </div>
+  </div>
+</div>
+
+<!-- Configuration integrity detail — the analyst clicks "View" on a Configuration
+     card (UOM Conversion / Frozen Cost / GL-Class) to read the flagged items on
+     screen, then exports the same rows to Excel from the footer (UI-45). Reuses the
+     pv-modal chrome. _openIntegrityModal(). -->
+<div class="pv-modal" id="intgModal" hidden role="dialog" aria-modal="true" aria-labelledby="intgModalTitle">
+  <div class="pv-modal-backdrop" data-intg-close></div>
+  <div class="pv-modal-card">
+    <button type="button" class="je-modal-x" data-intg-close aria-label="Close">&times;</button>
+    <p class="je-modal-eyebrow">Configuration check &middot; detail</p>
+    <h3 class="je-modal-title" id="intgModalTitle">&mdash;</h3>
+    <p class="je-modal-lede" id="intgModalSub"></p>
+    <div class="pv-scroll" id="intgModalBody"></div>
+    <div class="je-modal-foot"><button type="button" class="btn-navy" id="intgExportBtn">Export to Excel</button></div>
   </div>
 </div>
 
@@ -5931,6 +5953,7 @@
   // (data load, DB / company / period / role switch) and self-gates to the
   // accountant view. The AI ask reuses the briefing's data-exposure tier.
   var _acctData = null, _acctAsking = false, _acctCtxKey = '';
+  var _acctClearable = null;   // UI-46 opener state: true/false once the worklist renders, null before
   var _acctLastAsk = null;   // { q, trend } of the last pill/typed question — re-run on tier flip while its answer is showing
   var _acctConvo = null;     // { sig, q, a } — one prior Q&A turn for follow-up continuity; invalidated when the scope (DB · period · company set) changes so "it" never binds to a different company
   var _acctAnalyzeCache = {}; // key(co|period|db|tier) -> auto-analysis text, so re-drilling the same company doesn't re-hit the AI
@@ -8311,10 +8334,10 @@
         if (rows == null) { slot.innerHTML = _analystCheckBand('attention', title, 'Company ' + co + ': couldn’t check just now — try again in a moment.', ''); return; }
         var n = rows.length;
         var lede = 'Company ' + co + ': ' + (n > 0 ? (n.toLocaleString('en-US') + ' item' + (n === 1 ? '' : 's') + ' flagged.') : 'all clean — nothing flagged.');
-        var act = n > 0 ? '<button type="button" class="wl-btn" data-intg-xlsx="' + key + '">Excel</button>' : '';
+        var act = n > 0 ? '<button type="button" class="wl-btn" data-intg-view="' + key + '">View</button>' : '';
         slot.innerHTML = _analystCheckBand(n > 0 ? 'attention' : 'clean', title, lede, act);
-        var xb = slot.querySelector('[data-intg-xlsx]');
-        if (xb) xb.addEventListener('click', function () { _downloadIntegrityExcel(key, co); });
+        var xb = slot.querySelector('[data-intg-view]');
+        if (xb) xb.addEventListener('click', function () { _openIntegrityModal(key, co, title, rows); });
       });
     };
   }
@@ -8817,6 +8840,41 @@
       });
     }).catch(function (err) { if (typeof toast === 'function') toast('Could not build the report — ' + ((err && err.message) || 'try again')); });
   }
+  // UI-45 — "View" modal for a Configuration integrity check: read the flagged rows
+  // on screen first, then export the SAME rows from the footer (reuses the
+  // audit-quality _downloadIntegrityExcel). Rows are the ones the card already
+  // fetched, so no re-fetch on open. Columns/number formatting come from the ONE
+  // INTG_REPORTS config the export uses, so the table and the workbook always agree.
+  var _intgModalCtx = null;   // { key, co } for the footer Export button
+  function _closeIntegrityModal() { var m = $('intgModal'); if (m) m.hidden = true; }
+  function _openIntegrityModal(key, co, title, rows) {
+    var rep = INTG_REPORTS[key], m = $('intgModal'); if (!rep || !m) return;
+    rows = rows || [];
+    _intgModalCtx = { key: key, co: co };
+    if (!m._wired) {   // wire once, on first open (element guaranteed present here)
+      m._wired = true;
+      m.addEventListener('click', function (e) {
+        if (!e.target || !e.target.closest) return;
+        if (e.target.closest('[data-intg-close]')) { _closeIntegrityModal(); return; }
+        if (e.target.closest('#intgExportBtn')) { if (_intgModalCtx) _downloadIntegrityExcel(_intgModalCtx.key, _intgModalCtx.co); }
+      });
+      document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !m.hidden) _closeIntegrityModal(); });
+    }
+    var t = $('intgModalTitle'); if (t) t.textContent = title + (co ? ' — Co ' + co : '');
+    var sub = $('intgModalSub'); if (sub) sub.textContent = rows.length.toLocaleString('en-US') + ' item' + (rows.length !== 1 ? 's' : '') + ' flagged' + (co ? ' · Company ' + co : '') + '.';
+    var numSet = {}; (rep.num || []).forEach(function (n) { numSet[n] = 1; });
+    var head = '<tr>' + rep.cols.map(function (c) { return '<th' + (numSet[c] ? ' class="intg-num"' : '') + '>' + esc(c) + '</th>'; }).join('') + '</tr>';
+    var body = rows.map(function (r) {
+      return '<tr>' + rep.cols.map(function (c) {
+        var v = r[c];
+        if (numSet[c]) { var nnum = Number(v) || 0; return '<td class="intg-num">' + nnum.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '</td>'; }
+        return '<td>' + esc(v == null ? '' : v) + '</td>';
+      }).join('') + '</tr>';
+    }).join('');
+    var bodyEl = $('intgModalBody');
+    if (bodyEl) bodyEl.innerHTML = rows.length ? ('<table class="intg-table">' + head + body + '</table>') : '<div class="wl-reconciled">Nothing flagged in scope.</div>';
+    m.hidden = false;
+  }
   // ---- Accountant · Audit Support Center (UI-27) --------------------------------
   // A convenience VIEW of the analyst / accountant TRANSACTIONS behind the numbers —
   // NOT an audit-of-record (RR is a tool; JDE is the SoR — no immutability here).
@@ -9259,6 +9317,16 @@
       return _pwLabelFull(p) + ': total out of balance ' + _moneyK(g.total) + ' across ' + nOut + ' compan' + (nOut === 1 ? 'y' : 'ies') + ' out of balance';
     });
   }
+  // True when at least one company in the accountant's current data has an
+  // accountant-clearable gap (a balancing entry to post); false when none does;
+  // null when the data isn't loaded yet (caller keeps the default greeting, so we
+  // never wrongly claim "nothing to clear"). Drives the UI-46 opener adaptation.
+  // Tri-state: true when the accountant worklist has at least one card with a
+  // Balancing Entry to post, false when none, null before the worklist has
+  // rendered (caller keeps the default greeting). Set authoritatively by
+  // renderAcctSnapshot using the SAME predicate that decides a card shows the JE
+  // button, so the opener can never contradict the cards on screen (UI-46).
+  function _acctHasClearable() { return _acctClearable; }
   // Make the assistant card reflect the active AI tier: orb awake/asleep, a status
   // label, and a conversational greeting that scales with what the tier can see.
   function _setAiAsstTier() {
@@ -9269,13 +9337,19 @@
     // Role-specific: analyst prevents variances AT THE SOURCE; accountant clears the
     // ones that remain (the role split — analyst fixes source, accountant records JEs).
     var _isAnalyst = (typeof _viewRole === 'function' && _viewRole() === 'analyst');
+    // Don't promise to "clear these variances" when every open company on screen is
+    // an analyst re-roll (nothing the accountant can post). Only downgrade on a
+    // definite false; null/true keep the standard line (UI-46).
+    var _acctFull = (_acctHasClearable() === false)
+      ? 'The open items here are with your analyst to re-roll — nothing for you to clear yet. Ask me anything about them.'
+      : 'I’m here to help you reconcile and clear these variances. Ask me anything about it.';
     var greet = {
       off:      'Switched off. Turn AI on for reconciliation help.',
       grounded: 'Ask me about the figures on screen.',
       scrubbed: 'I read across your sources — ask about a pattern.',
       full:     _isAnalyst
                   ? 'I’m here to help you prevent variances at the source. Ask me anything about it.'
-                  : 'I’m here to help you reconcile and clear these variances. Ask me anything about it.'
+                  : _acctFull
     }[tier] || '';
     var st = $('acctAiStatusText'); if (st) st.textContent = status;
     var g = $('acctAiGreeting'); if (g) g.textContent = greet;
@@ -10876,8 +10950,8 @@
       // Break card keeps its framing pill; both break and operations cards show
       // just the headline row + cause + actions (no variance-pill breakdown).
       return '<div class="wl-card wl-break"><div class="wl-top">'
-        + (broke ? '<div>' + idH + '<div class="wl-driver">roll-forward break · not yours to fix</div></div>' : idH)
-        + (broke ? '<span class="wl-amt">can’t reconcile yet</span>' : wlFigs(c)) + '</div>'
+        + (broke ? '<div>' + idH + '<div class="wl-driver">roll-forward break · waiting on an analyst re-roll</div></div>' : idH)
+        + (broke ? '<span class="wl-amt">with the analyst</span>' : wlFigs(c)) + '</div>'
         + wlAiBox(c.co, cause, '', wlExp === 'off')
         // Break cards show "can't reconcile yet" (no clickable Out figure), so they
         // keep an explicit Details button; ops cards show the figures, whose Out
@@ -10887,7 +10961,26 @@
         + (broke ? '<div class="wl-actions"><button type="button" class="wl-btn" data-acct-nav="accounts" data-co="' + esc(c.co) + '">Details</button></div>' : '')
         + '</div>';
     };
-    var wlCases = outCos.slice().sort(function (a, b) { return (Number(a.co) || 0) - (Number(b.co) || 0); });   // by company number, ascending
+    // Lead with the accountant's actionable work; sink the blocked companies.
+    // Rank: 0 = accountant-clearable (a balancing entry to post), 1 = other
+    // out-of-balance (operations / immaterial, no JE to post), 2 = roll-forward
+    // break (blocked until an analyst re-rolls). Within a rank, ascending by
+    // company number. Prevents the view opening on a "not yours to fix" dead end
+    // just because it has the lowest company number (UI-46).
+    function _wlActionRank(c) {
+      if ((c.breaks || 0) > 0) return 2;                       // roll-forward break -> waiting on the analyst
+      return (wlMat(c, 'Accountant').length > 0) ? 0 : 1;      // 0 = clearable, 1 = other out
+    }
+    var wlCases = outCos.slice().sort(function (a, b) {
+      var ra = _wlActionRank(a), rb = _wlActionRank(b);
+      return (ra !== rb) ? (ra - rb) : ((Number(a.co) || 0) - (Number(b.co) || 0));
+    });
+    // Authoritative clearable-state for the assistant opener (UI-46) — same
+    // predicate as the JE-button card below (a non-broke company with an
+    // accountant-owned component). Refresh the opener now: renderAcctTriage ran
+    // _setAiAsstTier earlier, before this was computable.
+    _acctClearable = wlCases.some(function (c) { return !((c.breaks || 0) > 0) && wlMat(c, 'Accountant').length > 0; });
+    try { _setAiAsstTier(); } catch (_) {}
     var wlRecon = cos.length - outCos.length;
     var wlHtml = wlCases.length
       ? '<div class="wl-list">' + wlCases.map(wlCard).join('')
