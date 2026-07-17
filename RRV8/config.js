@@ -485,6 +485,30 @@ window.RRV8 = window.RRV8 || {};
     '- RESIDUAL NOISE is zero-quantity rows that still carry a tiny valuation — rounding dust left in the perpetual, not real inventory. The Residual Optimizer finds the natural cutoff between that dust and balances worth reviewing and hides the dust from the grid (a display filter only — material balances are never touched and nothing is deleted). "Re-optimize" re-runs that cutoff.',
     '- Audience is a JDE-fluent analyst: plain analyst English; no SQL or table terms.'
   ].join('\n');
+  // ADMIN_GROUNDING — the AI's compact copy of the RRUniversity admin docs
+  // (rapidreconciler-licensing, administrator-managing-users,
+  // administrator-managing-companies, administrator-complex-password,
+  // login-and-access). Prepended to the Administrator Ask-AI pills (home.html
+  // askAdmin) so procedural questions — renewal first — answer from the
+  // documented process, while live-status questions still answer from the admin
+  // cards. SOURCE OF TRUTH = those RRUniversity pages; keep this in sync as they
+  // change (same discipline as the other grounding catalogs —
+  // feedback_analytical_knowledge_one_source). This is generic procedural
+  // knowledge with NO customer data, so it is tier-safe at every level.
+  window.RRV8.ADMIN_GROUNDING = [
+    'ADMIN POLICY (RapidReconciler administration) — reason from these rules:',
+    '- LICENSING IS PER JDE COMPANY NUMBER, not per user seat. Adding users never needs a license change; the administrator adds and removes team members directly.',
+    '- RENEWALS AND ADDITIONAL COMPANIES GO THROUGH GSI SALES (gsisales@getgsi.com), NOT RR Support. Sales owns the entitlement; RR Support (rrsupport@getgsi.com) owns the running application. Only GSI can add or remove a licensed company.',
+    '- RR does NOT display a license expiry or renewal date — there is no countdown in the app. The Licensing page shows company-seat USAGE, not a renewal date. So "when does our license expire" is a question for GSI Sales; what RR can show is how many company seats are in use.',
+    '- Check usage first: Administration → People & Licensing → Licensing. A read-only banner reads "Using N of M company licenses" — amber at the limit, red over it. The same page has a "Check JDE for more companies" scan that lists JDE companies with activity that are not licensed yet, to help decide which numbers to request.',
+    '- To request more or renew: email GSI Sales with the customer or instance name, the JDE company number(s) to add, when it is needed by, and who to copy. After Sales confirms, an administrator configures the company (Managing Companies → Adding a Company License); a licensing change may need a RapidReconciler Agent restart to take effect.',
+    '- TEAM (People & Licensing → RR Team): the admin invites and removes members and assigns each ONE named role (e.g. RR Administrator, Reconciliation Analyst, Cost Accounting, A/P Clerk) that decides module access; database and company access decides where they work. Need a role that does not exist yet → ask GSI Support. New members get an emailed single-use, time-limited link to set their own password — admins never set, see, or hand out passwords; re-send the invite to issue a fresh link.',
+    '- INACTIVITY: at 12 months idle a member is emailed a 14-day warning, then auto-deactivated if they do not sign in; administrators, service accounts, and the last remaining administrator are never auto-deactivated. Reactivate with the pencil icon (Active on).',
+    '- COMPANY SETTINGS (Licensing page, per company): Company Number and Base Currency are read-only from JDE; editable are Start Date (earliest reconcilable period — moves only forward, and advancing PURGES prior history), AAI Doc (default PI, change only with GSI), and Threshold (variance tolerance in base currency; at or below it is within tolerance). The Re-roll icon recalculates the perpetual balance from the baseline forward — used for a carry-forward break (e.g. VarOK No while GLOK Yes).',
+    '- COMPLEX PASSWORDS (People & Licensing → Complex Passwords): a per-company on/off toggle, or "Require for all." Because a person can reach several companies, the strongest rule wins — if any reachable company requires complex, they are asked for one. Standard = 8+ characters and no reuse of the current password; complex adds 3 of 4 character groups, no 3+ character run from the name or email, no match to the last 10, and a 90-day expiry. SSO users are exempt. Existing users keep their password until it expires or they change it.',
+    '- LOGIN / ACCESS problems are usually the user side, not GSI: expired password (90-day rotation) → Forgot Your Password; account locked after failed attempts → wait for the lockout to clear or have an admin unlock; missing menu items → a role/permissions gap the admin fixes, then the user logs out and back in; blank screen after login → network, VPN, or browser (RR is reachable only on the corporate network or VPN); a "Not Secure" warning → an SSL certificate only GSI can renew. Escalate unresolved cases to rrsupport@getgsi.com.',
+    '- Audience is an RR Administrator (finance or IT): plain English; no SQL, table, endpoint, or file names.'
+  ].join('\n');
 })();
 
 /*
