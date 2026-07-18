@@ -447,11 +447,6 @@
   .lic-btn-primary { background: var(--blue, #2b5fb0); border-color: var(--blue, #2b5fb0); color: #fff; }
   .lic-btn-primary:hover { filter: brightness(1.07); }
   .lic-btn svg { width: 15px; height: 15px; }
-  .lic-snooze { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; font-size: 12.5px; color: var(--text-soft, #4a5468); }
-  .lic-snooze-btn { font-family: 'Source Sans 3', sans-serif; font-weight: 700; font-size: 12.5px;
-    border: 1px solid var(--rule-strong, #cfd6e0); background: var(--bg-card, #fff); color: var(--navy, #1f2d4a);
-    border-radius: 100px; padding: 5px 11px; cursor: pointer; }
-  .lic-snooze-btn:hover { border-color: var(--green, #2e8a55); color: var(--green, #2e8a55); }
 </style>
 </head>
 <body data-help-src="../RRUniversity/administrator-managing-companies.html"
@@ -554,12 +549,6 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16l-3-2-2 2-3-2-3 2-2-2-3 2V4z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
             Request an invoice
           </a>
-          <span class="lic-snooze" id="js-lic-snooze">
-            Remind me in
-            <button type="button" class="lic-snooze-btn" data-days="10">10 days</button>
-            <button type="button" class="lic-snooze-btn" data-days="20">20 days</button>
-            <button type="button" class="lic-snooze-btn" data-days="30">30 days</button>
-          </span>
         </div>
       </div>
 
@@ -1101,39 +1090,19 @@
       if (overLimit) { el.style.background = '#fbe6e3'; el.style.borderColor = '#f1c3bc'; el.style.color = 'var(--red, #c0392b)'; }
       else if (atLimit) { el.style.background = '#fff5e8'; el.style.borderColor = '#ffd9a6'; el.style.color = 'var(--orange-deep, #b45309)'; }
       el.hidden = false;
-      await loadLicAck();          // server snooze ack before first paint (shared with Home dot)
       renderLicenseTerm(u, dbName);
     } catch (_) { /* leave hidden on error */ }
   }
 
   // ---------- License term: days remaining + expire-soon state ----------
   // Amber inside 60 days (red once expired), with a request-invoice mailto to
-  // accounting@getgsi.com and a 10/20/30-day snooze that greens it until the
-  // chosen reminder date. Snooze is per-database, stored browser-local.
+  // accounting@getgsi.com. Purely a function of daysRemaining (server-level, so
+  // it reads the same on every database) — a license expiry is renew-or-lose-
+  // service and is NOT dismissable.
   function fmtLicDate(iso) {
     if (!iso) return '';
     try { return new Date(String(iso) + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }); }
     catch (_) { return String(iso); }
-  }
-  // Server ack (kind 'license-snooze') is the source of truth, shared with the
-  // Home dot via GET /admin/acks; localStorage is a write-through fallback for
-  // databases whose ack table predates this build. The ack value is the
-  // snooze-until date.
-  var _licAck = null;
-  var _acksLoaded = false;   // did GET /admin/acks actually respond? (table present)
-  function loadLicAck() {
-    return rrFetch('admin/acks').then(function (rows) {
-      _licAck = null; (rows || []).forEach(function (r) { if (r && r.kind === 'license-snooze') _licAck = r; });
-      _acksLoaded = true;
-    }).catch(function () { _licAck = null; _acksLoaded = false; });
-  }
-  function licSnoozeVal(snoozeKey) {
-    if (_licAck && window.RRV8 && window.RRV8.ackToReviewValue) return window.RRV8.ackToReviewValue(_licAck);
-    // Endpoint responded but no ack → cleared server-side; don't let a stale
-    // per-browser fallback mask it. Only use localStorage when the acks endpoint
-    // was unreachable (older DB without the RAdminReminderAck table).
-    if (_acksLoaded) return '';
-    try { return localStorage.getItem(snoozeKey) || ''; } catch (_) { return ''; }
   }
   function renderLicenseTerm(u, dbName) {
     const card = document.getElementById('js-lic-term');
@@ -1144,13 +1113,8 @@
     const daysEl = document.getElementById('js-lic-days');
     const subEl  = document.getElementById('js-lic-sub');
     const actEl  = document.getElementById('js-lic-actions');
-    const snoozeWrap = document.getElementById('js-lic-snooze');
     const invoice = document.getElementById('js-lic-invoice');
 
-    const snoozeKey = 'rrv8.licenseSnooze.' + (dbName || '');
-    let snoozeUntil = licSnoozeVal(snoozeKey);
-    const todayISO = new Date().toISOString().slice(0, 10);
-    const snoozed = !!(snoozeUntil && todayISO < snoozeUntil);
     const expired = days <= 0;
     const soon = days > 0 && days <= 60;
 
@@ -1167,17 +1131,12 @@
       card.classList.add('is-red');
       daysEl.textContent = 'Expired';
       subEl.innerHTML = 'Your license expired on <b>' + fmtLicDate(end) + '</b>. Request a renewal invoice to restore it.';
-      actEl.hidden = false; snoozeWrap.style.display = 'none';
-    } else if (soon && !snoozed) {
+      actEl.hidden = false;
+    } else if (soon) {
       card.classList.add('is-amber');
       daysEl.textContent = days + (days === 1 ? ' day left' : ' days left');
-      subEl.innerHTML = 'Your license expires soon &mdash; on <b>' + fmtLicDate(end) + '</b>. Request a renewal invoice, or set a reminder.';
-      actEl.hidden = false; snoozeWrap.style.display = '';
-    } else if (snoozed) {
-      card.classList.add('is-green');
-      daysEl.textContent = days + (days === 1 ? ' day left' : ' days left');
-      subEl.innerHTML = 'Renewal reminder set &mdash; we&rsquo;ll flag this again on <b>' + fmtLicDate(snoozeUntil) + '</b>.';
-      actEl.hidden = false; snoozeWrap.style.display = 'none';
+      subEl.innerHTML = 'Your license expires soon &mdash; on <b>' + fmtLicDate(end) + '</b>. Request a renewal invoice.';
+      actEl.hidden = false;
     } else {
       card.classList.add('is-green');
       daysEl.textContent = days + ' days left';
@@ -1185,19 +1144,6 @@
       actEl.hidden = true;
     }
     card.hidden = false;
-
-    snoozeWrap.querySelectorAll('.lic-snooze-btn').forEach(function (btn) {
-      btn.onclick = function () {
-        const n = parseInt(btn.getAttribute('data-days'), 10) || 10;
-        const d = new Date(); d.setDate(d.getDate() + n);
-        const iso = d.toISOString().slice(0, 10);
-        rrFetch('admin/activity/ack', { method: 'POST', body: { kind: 'license-snooze', cadenceDays: n, never: false } })
-          .then(function (ack) { if (ack) _licAck = ack; })
-          .catch(function () { /* no ack table — localStorage fallback */ })
-          .then(function () { try { localStorage.setItem(snoozeKey, iso); } catch (_) {} renderLicenseTerm(u, dbName); });
-        if (typeof toast === 'function') toast('Reminder set for ' + fmtLicDate(iso) + '.');
-      };
-    });
   }
 
   // ---------- Not-licensed: deferred JDE scan ----------
