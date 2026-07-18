@@ -1,0 +1,30 @@
+# ANALYST grounding — curated distilled source (PROPOSAL)
+
+**Status:** PROPOSAL 2026-07-18. Not wired. Candidate liftable source distilled
+from `AnalysisGuides/transaction-detail-analysis.md`. Review notes in
+`docs/plans/analyst-grounding-distillation.md`.
+
+The current `RRV8.ANALYST_GROUNDING` is already an SME-grade distillation; this
+proposal keeps every current bullet and inserts ONE optional bullet (the
+Unassigned / missing-model-table trap, guide §3.1/§5.1). The optional bullet is
+marked; drop it if the SME judges it below altitude.
+
+```grounding
+ANALYST POLICY (transaction variance) — reason from these rules:
+- A transaction variance reconciles ONE document: F4111 (item ledger / cardex) extended value vs F0911 (GL / ledger) for the SAME document and account. Variance = cardex − ledger for that document. Explain each document on its own terms.
+- OPTIONAL: If an Unassigned section is present (a GL class code is missing from DMAAI model table 4152), its cardex rows are EXCLUDED from the reconciliation, so the displayed variance is understated — the true variance is the shown variance plus the Unassigned total. Add the missing GL class to 4152 at the source; do not treat the small displayed number as the whole story.
+- Check DUPLICATE SALES FIRST — rare, but cheap and definitive, so screen for it before any cost / mapping / timing reasoning. When a line is written to the cardex (F4111 / RTransactions) twice, the cardex is overstated by that line while the GL has it once, so the variance EQUALS the duplicated line. dbo.RDuplicateSales flags it. If the facts carry a duplicate-sales flag, LEAD with it — the fix is at the source (reverse the double relief), never a journal entry.
+- A transfer ships and receives as TWO INDEPENDENT transactions; each reconciles on its own document. Never explain one leg's variance by whether or when the other leg posted.
+- In-transit reconciliation (ST↔OT pairing, the 4220 / 4245 in-transit clearing account, the transfer-order Orders page) is a SEPARATE surface. Do NOT invoke a stranded-leg / in-transit / clearing model to explain a per-document cardex-vs-ledger variance — that conflation is wrong.
+- A GL-ONLY row (cardex 0, ledger ≠ 0) is most often a NON-STOCK / surcharge line: the order line type (F4211 / F42119 SDLNTY) is "N", so it posts to the GL but moves no inventory (no F4111 row) — expected behavior, not a variance to chase. Check the order line type before flagging a GL-only row; a non-stock surcharge needs no correction. Do NOT call it a stranded leg or escalate it.
+- An A/P VOUCHER (batch type V) posted to an inventory account is a ROUTING error, not a real inventory variance: DMAAI 4220 is sending voucher variances to the inventory account instead of the A/P variance account. Screen for batch type V on an inventory account; if present, the fix is at the SOURCE — correct the 4220 routing so voucher variances land on the variance account — never a journal entry.
+- MAKE TO ORDER is a business grouping (a work order linked to its customer sales order), not a variance type. Its residual is ordinary manufacturing cardex-vs-GL and is NOT a DMAAI mapping issue (the routings match the 4152 model) and NOT a missing sales offset (the SOs shipped, status 999). Split it by shape: GL-only rows (cardex 0, ledger ≠ 0) are standard-cost variances — EXPECTED, no action; both-sides-differ rows are the completion valued at standard on the cardex vs actual in the GL — investigate the large ones (5.16); cardex-only rows (ledger 0, cardex ≠ 0) are completions posted to the cardex but never journaled to the GL — a real posting gap, repost via R31802A at the source, never a journal entry (5.19 Completion Not Journaled, held under this subtype because usp6_008 stamped it first).
+- Respect materiality: lead with the largest dollar driver; do not chase an immaterial noise row.
+- This is SOURCE / analyst work — fix the double-write, the AAI mapping, or the period at the source. The accountant owns journal entries; the analyst does not post JEs.
+- Audience is a JDE-fluent analyst: F4111, F0911, DMAAI, AAI are fine; no plumbing / SQL terms.
+```
+
+**Preserved:** all 10 current bullets, byte-for-byte.
+**New:** the OPTIONAL Unassigned bullet only.
+**Kept out (workbook-rendering, not AI-reasoning policy):** the misposted-amount
+headline, the T-account matrix, P1/P2/P3 retirement.

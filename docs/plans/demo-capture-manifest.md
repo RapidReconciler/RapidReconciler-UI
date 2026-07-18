@@ -297,3 +297,208 @@ a **fresh login** at `localhost:8765/login.html` — the new token picks up Demo
   (`client_database_id 23`, licensed 2026-06-20) — optional cleanup, not a blocker.
 - Correcting the local dev token directly was intentionally NOT done (auth edit;
   belongs to the owner). Fresh login is the clean path.
+
+---
+
+# ADMIN capture manifest (recording-admin.json + the next pass)
+
+Status: active. Grounded 2026-07-18 against the live code
+(`RRV8/home.html`, `RRV8/config.js`, `RRV8/admin-*.html`,
+`Tools/help-sidebar.js`) and the existing recording
+(`RapidReconciler-Demo/publish/capture/recording-admin.json`, 19 distinct
+paths, 1.8 MB).
+
+The admin chunk was walked once already. That first pass has two known
+holes the owner flagged: it fired the admin AI pills only at the **Full**
+tier, and it opened **no** help panels. This section is the turnkey plan
+for the next pass so those holes close in one walk.
+
+## What recording-admin.json already covers
+
+Pages walked: the admin `home.html` view, `admin-companies.html`,
+`admin-users.html`, `admin-claude-assistant.html`,
+`admin-activity-log.html`.
+
+The admin surface is almost entirely **DB-global**: the reads scope to the
+active database and the signed-in user, not to a company or a period. So
+one pass per DB is enough. There is nothing to re-walk per company or per
+period the way the analyst work pages need (those carry
+`{companies,period}` in the body). Captured reads, each recorded once:
+
+| Path | Count | Scope |
+|---|---|---|
+| `/api/v1/ai/explain` | 7 | prompt-keyed (see below) |
+| `/admin/acks` | 5 | DB-global |
+| `/api/v1/admin/clients/license-usage` | 4 | DB-global |
+| `/inventory/status` | 3 | DB-global |
+| `/inventory/integrity` | 3 | DB-global |
+| `/api/v1/ai/health` | 2 | DB-global |
+| `/api/v1/admin/users` | 2 | DB-global |
+| `/api/v1/admin/clients/current/access-reviews` | 2 | DB-global |
+| `/admin/service-health` | 2 | DB-global |
+| `/admin/activity` | 2 | DB-global |
+| `/poll`, `/inventory/integrity/purge-info`, `/inventory/fiscal-period-end-detect`, `/inventory/cardex-tolerance`, `/home/status-summary`, `/available-periods`, `/api/v1/messages`, `/api/v1/admin/clients/current`, `/admin/companies` | 1 each | DB-global |
+
+The 7 `ai/explain` entries are the 6 admin pills fired at Full, plus one
+extra (a re-fire, or the pill re-run the tier-change handler triggers).
+None of the `ai/explain` entries carry a 403, so the AI path was healthy
+for this walk.
+
+Do not re-walk these reads. They are done for this DB.
+
+## Mechanism 1: the AI tier control (why each tier is a separate capture)
+
+The tier switcher lives in `RRV8/config.js` as `window.RRAI` and renders
+on `home.html` via `_renderAiTierSwitch()` into `#haiTierSeg`.
+
+Confirmed tier keys and labels (from `config.js`):
+
+| Internal key | UI label | ai/explain fires? |
+|---|---|---|
+| `off` | Off | **No** (short-circuits) |
+| `grounded` | Basic | Yes |
+| `scrubbed` | Enhanced | Yes |
+| `full` | Full | Yes |
+
+`RRAI.set(t)` persists to `localStorage.rrv8.aiTier` and dispatches the
+`rrv8:aitierchange` window event. Default when unset is `full`.
+
+Why the tier multiplies the captures: `askAdmin()` in `home.html` reads
+the live tier through `_recsummaryLevel()` (which returns `RRAI.get()`)
+and bakes it straight into the prompt it POSTs. Three parts of the prompt
+body change with the tier:
+
+- the `expNote` "DATA ACCESS" line (a distinct sentence for `grounded`
+  / `scrubbed` / `full`),
+- the team-inactivity line (count only at `grounded`, role-masked at
+  `scrubbed`, named at `full`),
+- the tagged task lines drawn from the cards.
+
+The record shim signs each POST as `signature(method, url, body)` with the
+body hashed in. Different tier means a different prompt means a different
+signature. **A pill answer captured at Full is a MISS if the presenter
+flips to Basic at replay.** So every pill the tour uses has to be fired
+once at every tier the tour lets the presenter reach.
+
+`off` is the exception. `askAdmin()` returns before any POST when the tier
+is `off`, painting a static client-side line ("The AI assistant is off for
+this database..."). Nothing hits the network, so `off` needs no capture
+and replays for free.
+
+### Tier set to walk
+
+Fire all **6 admin pills** at each of **`grounded` (Basic)**,
+**`scrubbed` (Enhanced)**, and **`full` (Full)**. Full is already in
+recording-admin.json, so the next pass strictly needs Basic and Enhanced:
+2 tiers x 6 pills = **12 new `ai/explain` captures**. Skip `off`.
+
+The 6 pills (each pill's `data-q` is the exact capture key; they are
+verbatim in `#adminAskBar`):
+
+1. What needs my attention right now?
+2. When does our license expire, and what is the renewal step?
+3. Who has not signed in lately, and should I remove them?
+4. How do I add a new team member?
+5. Is the instance healthy, or is anything starting to degrade?
+6. What does the activity log tell me?
+
+Per-tier walk step: set the tier, then click all 6 pills in turn, gating
+each on a terminal `api/v1/ai/explain` status before the next. Set the
+tier either by clicking `#haiTierSeg` on the admin home or, for a
+deterministic driver, by calling `window.RRAI.set('grounded')` /
+`window.RRAI.set('scrubbed')` in the walk tab before the pill loop. Both
+routes fire `rrv8:aitierchange` and repoint `_recsummaryLevel()`.
+
+Note the same tier-keying applies to every other `ai/explain` surface
+(the analyst and accountant AI on `inventory-transactions.html`,
+`inventory-asof.html`, `accounting-model-review.html`, and the home
+briefing all read `RRAI`). If the tour lets the presenter flip tiers on
+those pages too, the same "fire per tier" rule extends there. This
+section scopes only the admin pills.
+
+## Mechanism 2: the "?" help panels (fetched, but the shim never sees them)
+
+`Tools/help-sidebar.js` reads `<body data-help-src>`, injects the dark "?"
+circle next to the header Home link, and on click opens a right-docked
+companion panel whose body is an **iframe**. It sets the iframe `src` to
+the doc URL with `?embed=1` inserted before any `#hash`, lazy-loading the
+doc as a full-document navigation on first open.
+
+That load is a native browser navigation, not `fetch` or `XHR`. The record
+shim patches only the top window's `fetch` and `XMLHttpRequest`, and its
+XHR branch explicitly drops `document`/`blob` responses. The iframe has its
+own window the shim never touches. **So help content is never written to
+recording.json, at any tier, by any walk.** The fetch-vs-inline question
+resolves to: fetched into an iframe, but out of the shim's reach, and the
+underlying doc is a static HTML file.
+
+Consequence: the help panels are not a capture task at all. They are a
+**static-bundling** task. For a panel to render, both the capture-staging
+serve (so it renders during the walk) and the replay bundle (so it renders
+in the demo) must carry the help docs and their chrome as real files.
+
+### Bundle gap to fix before this matters
+
+Both `build-capture-staging.ps1` and `build-demo.ps1` copy only
+`RRV8/*`. The help docs live in `RRUniversity/` and their chrome in
+`Tools/` (`help-sidebar.js`, `help-sidebar.css`, `doc-chrome.js`,
+`doc-header.css`, plus the logo images `doc-chrome.js` derives from its own
+`src`). Neither folder is staged today. In the flattened layout the admin
+pages reference `../Tools/...` and `../RRUniversity/...`, which resolve
+above the bundle root once `RRV8/` is flattened to the root. Result as it
+stands: `help-sidebar.js` 404s, so the "?" circle never even appears, and
+if it did the iframe doc would 404 too.
+
+To make help panels work, the build needs to also stage `Tools/` and the
+relevant `RRUniversity/administrator-*.html` docs at paths the flattened
+pages can reach (either preserve the `Tools/` + `RRUniversity/` subtrees
+one level up from the flattened root, or rewrite the `../` prefixes at
+stage time). This is a `RapidReconciler-Demo` build change, tracked here
+because it is the real blocker, not a walk step.
+
+### Help panels to open during the walk (verification only)
+
+Opening them records nothing, but the walk should open each once to
+confirm the panel renders (proof the bundling fix landed). The network
+request drops the `#hash`, so each distinct doc is one static asset no
+matter which anchor the page requests.
+
+| Admin page | data-help-src (as authored) | Static asset fetched | Panel title |
+|---|---|---|---|
+| `admin-companies.html` | `../RRUniversity/administrator-managing-companies.html` | `administrator-managing-companies.html?embed=1` | Licensing & company seats |
+| `admin-users.html` | `../RRUniversity/administrator-managing-users.html` | `administrator-managing-users.html?embed=1` | RR Team |
+| `admin-claude-assistant.html` | `../RRUniversity/administrator-start-here.html#ai-assistant` | `administrator-start-here.html?embed=1` | **AI Assistant & Your Data** |
+| `admin-activity-log.html` | `../RRUniversity/administrator-start-here.html#system-health` | `administrator-start-here.html?embed=1` | Activity Log |
+
+`home.html` has no `data-help-src`, so the admin home shows no "?" panel.
+
+**The AI Assistant help panel** (`admin-claude-assistant.html`) is the one
+the owner called out: the data-exposure and policy content. It is the
+inline `<section id="topic-ai-assistant">` inside
+`administrator-start-here.html`, shown by that doc's own `showView()` SPA
+and deep-linked by `#ai-assistant`. All of it is static HTML in one file.
+Nothing about it goes over `ai/explain`, so no AI capture covers it. It
+rides entirely on the bundling fix above. The same file backs the Activity
+Log panel via `#system-health`, so staging `administrator-start-here.html`
+once serves both.
+
+## The next admin pass, end to end
+
+What recording-admin.json already covers:
+
+- Every admin DB-global read (the whole table above), once for this DB.
+- The 6 admin pills at the **Full** tier.
+
+What the next pass adds:
+
+- The 6 admin pills at **Basic** (`grounded`) and **Enhanced**
+  (`scrubbed`): 12 new `ai/explain` captures. No `off` capture.
+- Nothing new on the network for help panels. Instead: land the
+  `Tools/` + `RRUniversity/` bundling fix, then open the 4 help panels
+  during the walk to verify they render (the AI Assistant one especially).
+
+Do not re-walk the DB-global admin reads or the Full-tier pills; they are
+already in the recording. If this admin chunk is later captured against a
+second demo DB, the DB-global reads collide on signature the same way the
+analyst globals do (see the Cross-DB collision section above), so the same
+partition-by-DB recording applies.

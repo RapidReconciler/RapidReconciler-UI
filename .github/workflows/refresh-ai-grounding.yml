@@ -1,0 +1,89 @@
+name: Refresh AI grounding
+
+# Regenerates the marker-delimited AI-grounding block in RRV8/config.js from the
+# knowledge-base docs whenever a source doc (or the generator) changes on main,
+# then commits the regenerated config.js back.
+#
+# Mirrors refresh-indices.yml (Python generator -> commit regenerated artifact
+# back with a pull-rebase-retry push loop). Two differences, both deliberate:
+#   * Runs on the self-hosted Windows dev-box runner, which has NO bash, so every
+#     step uses `shell: powershell` (see memory reference_dev_box_runner_no_bash).
+#   * The generator has no third-party dependencies (stdlib html.parser only), so
+#     there is no `pip install` step -- it just needs `python` on PATH.
+#
+# RRV8/config.js is deliberately NOT in the trigger paths: the bot's own commit
+# to it must not retrigger this workflow (same guard refresh-indices uses for its
+# output JSONs). The commit also carries [skip ci] for belt-and-suspenders.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'RRUniversity/administrator-start-here.html'
+      - 'RRUniversity/administrator-managing-users.html'
+      - 'RRUniversity/administrator-managing-companies.html'
+      - 'RRUniversity/administrator-complex-password.html'
+      - 'RRUniversity/rapidreconciler-licensing.html'
+      # Sources for analyst catalogs, live once those catalogs move off
+      # passthrough (see docs/plans/ai-grounding-from-docs.md):
+      - 'AnalysisGuides/**.md'
+      - 'Tools/build-ai-grounding.py'
+      - '.github/workflows/refresh-ai-grounding.yml'
+  # Also runnable on demand from the Actions tab
+  workflow_dispatch:
+
+# The default GITHUB_TOKEN needs write access to commit the regenerated config.js
+permissions:
+  contents: write
+
+# Queue a second run rather than racing it against the first -- both would push
+# a commit to the same file on main.
+concurrency:
+  group: refresh-ai-grounding-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  regen:
+    runs-on: [self-hosted, windows]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Regenerate AI grounding block
+        shell: powershell
+        run: |
+          python --version
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "python not found on the runner -- cannot regenerate grounding."
+            exit 1
+          }
+          python Tools/build-ai-grounding.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Commit and push regenerated grounding
+        # Pull-rebase-retry loop because a sibling bot workflow can land its own
+        # commit on main between this workflow's checkout and push.
+        shell: powershell
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add RRV8/config.js
+          git diff --staged --quiet
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "No grounding changes -- nothing to commit."
+            exit 0
+          }
+          git commit -m "chore: refresh AI grounding [skip ci]"
+          for ($attempt = 1; $attempt -le 5; $attempt++) {
+            git push
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host "Push succeeded on attempt $attempt."
+              exit 0
+            }
+            Write-Host "Push rejected on attempt $attempt -- rebasing on origin/main and retrying."
+            git pull --rebase origin main
+            Start-Sleep -Seconds 2
+          }
+          Write-Error "Push still failing after 5 attempts; giving up."
+          exit 1
