@@ -1695,6 +1695,15 @@
   .ihs-chip-text { font-size: 14px; font-weight: 600; color: var(--navy); white-space: nowrap; }
   .ihs-chip-link { font-size: 13.5px; font-weight: 700; color: var(--blue); text-decoration: none; white-space: nowrap; }
   .ihs-chip-link:hover { text-decoration: underline; }
+  /* Reveal-all toggle for the attention-only strip. Low-emphasis escape hatch,
+     not a primary control — right-aligned below the cards/strip whether or not
+     the strip is showing. */
+  .ihs-showall { display: block; width: fit-content; margin: 8px 0 0 auto; padding: 2px 4px;
+    background: none; border: 0; font: inherit; font-size: 12.5px; font-weight: 700;
+    color: var(--blue); cursor: pointer; }
+  .ihs-showall[hidden] { display: none; }
+  .ihs-showall:hover { text-decoration: underline; }
+  .ihs-showall[aria-pressed="true"] { color: var(--text-muted); }
 
   /* Activity Log card — recent-events feed rendered with the shared .data-row
      pattern (see above). The default lede shows until the feed loads (or when
@@ -2783,6 +2792,10 @@
       <span class="row-dot grey" id="dataDot" hidden></span>
       <span class="row-sub" id="dataBriefSummary" hidden></span>
     </div>
+    <!-- Reveal the quiet OK items the attention-only strip hides (data refresh,
+         storage, fiscal calendar, AI plan). Off by default; _syncInstanceHealth()
+         manages its label + shows it only when there's something quiet to surface. -->
+    <button type="button" class="ihs-showall" id="ihsShowAll" aria-pressed="false" hidden>Show all</button>
     <!-- Read-only awareness: shown when the viewer lacks admin actions — lists
          what's open, with no controls. Populated by loadHomeStatusSummary(). -->
     <div class="lane-summary" id="adminSummary" hidden>
@@ -4516,20 +4529,33 @@
   // "everything's fine" is the absence of anything flagged, not a row of green
   // chips. Data freshness/storage/fiscal flag on lvl-amber/red; the AI-plan chip
   // flags on its review dot (setup/acknowledge due), never on the plan name.
+  // "Show all" reveals the quiet OK chips the strip normally hides, so an admin
+  // can reach an item they know exists. Off by default (attention-only stays the
+  // resting state); toggled by #ihsShowAll.
+  var _showAllHealth = false;
   function _syncInstanceHealth() {
     var strip = $('instanceHealth'); if (!strip) return;
-    var anyShown = false;
+    var showAll = _showAllHealth;
+    var anyAttn = false, anyQuiet = false;
     ['dataRefreshRow', 'dataPurgeRow', 'dataFiscalRow'].forEach(function (id) {
       var el = $(id); if (!el) return;
       var attn = el.classList.contains('lvl-amber') || el.classList.contains('lvl-red');
-      el.hidden = !attn;
-      if (attn) anyShown = true;
+      el.hidden = !(attn || showAll);
+      if (attn) anyAttn = true; else anyQuiet = true;
     });
     var aiChip = $('aiPlanChip'), aiDot = $('aiDot');
     var aiAttn = !!(aiDot && (aiDot.classList.contains('amber') || aiDot.classList.contains('red')));
-    if (aiChip) aiChip.hidden = !aiAttn;
-    if (aiAttn) anyShown = true;
-    strip.hidden = !anyShown;
+    if (aiChip) aiChip.hidden = !(aiAttn || showAll);
+    if (aiAttn) anyAttn = true; else anyQuiet = true;
+    strip.hidden = !(anyAttn || showAll);
+    // Reveal-all toggle: only meaningful when there are quiet chips to surface.
+    // Hidden when everything's already flagged (nothing left to reveal).
+    var tgl = $('ihsShowAll');
+    if (tgl) {
+      tgl.hidden = !(anyQuiet || showAll);
+      tgl.setAttribute('aria-pressed', showAll ? 'true' : 'false');
+      tgl.textContent = showAll ? 'Show attention only' : 'Show all';
+    }
   }
   // Paint the Data card's three rows + the worst-of status dot, from _jobStatus
   // (/poll), _purgeInfo (purge-info), and _fiscalDetect (period-end detect). Each
@@ -5076,6 +5102,12 @@
     // Report Engine restarts in place from its card (POSTs through VALC) — the
     // card is self-sufficient, so there's no separate admin-data-service page.
     var _restartBtn = $('restartBtn'); if (_restartBtn) _restartBtn.addEventListener('click', restartService);
+    // Instance-health "Show all" — flip the reveal state and repaint the strip.
+    var _ihsShowAll = $('ihsShowAll');
+    if (_ihsShowAll) _ihsShowAll.addEventListener('click', function () {
+      _showAllHealth = !_showAllHealth;
+      _syncInstanceHealth();
+    });
     if (typeof _wireAdminPills === 'function') _wireAdminPills();   // admin Ask-AI pills → askAdmin()
     $('bannerRetry').addEventListener('click', function () { setConn(false); loadStatus(); loadServiceMemory(); loadActivityFeed(); });
     $('coBox').addEventListener('change', onCompanyChange);
@@ -5164,8 +5196,35 @@
          : dot.classList.contains('amber') ? 'watch'
          : dot.classList.contains('green') ? 'ok' : '';
   }
+  // Status-first ordering: cards needing attention sort LEFT (red first, then
+  // amber) so the eye lands on what needs work; clear/quiet cards (green/grey)
+  // hold the right. Runs AFTER dots resolve — tintPanels() calls it, and the grid
+  // MutationObserver re-fires tintPanels on every dot class change. MOVES the
+  // existing card elements (appendChild), never recreates them, so the status-dot
+  // wiring (which keys off the stable element IDs) is untouched. An appendChild
+  // reorder is a childList mutation, which the observer (attributes-only) ignores,
+  // so there's no feedback loop; the changed-guard also skips no-op reorders.
+  function _cardAttnRank(card) {
+    var dot = card.querySelector('.row-dot'); if (!dot) return 1;
+    if (dot.classList.contains('red'))   return 3;
+    if (dot.classList.contains('amber')) return 2;
+    return 1;   // green / grey / unset — clear, holds the right
+  }
+  function reorderAdminCards() {
+    var grid = document.querySelector('#view-admin .lower-grid'); if (!grid) return;
+    var cards = Array.prototype.slice.call(grid.querySelectorAll('.row'));
+    if (cards.length < 2) return;
+    var ordered = cards
+      .map(function (c, i) { return { c: c, i: i, r: _cardAttnRank(c) }; })
+      .sort(function (a, b) { return b.r - a.r || a.i - b.i; })   // attention first; stable within a level
+      .map(function (o) { return o.c; });
+    var changed = ordered.some(function (c, i) { return cards[i] !== c; });
+    if (!changed) return;   // already in status order — leave the DOM alone
+    ordered.forEach(function (c) { grid.appendChild(c); });
+  }
   function tintPanels() {
     if (!caps().adm) return;   // non-admins don't see the cards; pills come from the summary read
+    reorderAdminCards();       // status-first: attention left, clear right (post-resolve)
     // Per-card tint is CSS now; JS only rolls the cards up into the band + To Do
     // and refreshes the admin AI briefing as dots resolve.
     syncAdminBand();
@@ -11530,6 +11589,30 @@
   // Tier-gated via _recsummaryLevel() (same lever as the briefing); a later click
   // supersedes an in-flight one through _adminAskGen.
   var _adminAskGen = 0;
+  // Progressive "typing" reveal for an AI answer. After the Thinking… beat, the
+  // returned text types into `el` so it reads as a live answer rather than pasted.
+  // Plain text only (matches textContent rendering). `stillCurrent()` is polled each
+  // tick — if a newer ask won or the panel closed, the reveal stops mid-word. Honors
+  // prefers-reduced-motion (renders instantly). Speed-capped so long answers still
+  // finish in ~1.8s — a demo beat, not a wait. Reusable across every AI answer surface.
+  function _aiTypeReveal(el, text, stillCurrent, onDone) {
+    if (!el) { if (onDone) onDone(); return; }
+    text = text || '';
+    var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reduce || !text) { el.textContent = text; if (onDone) onDone(); return; }
+    el.textContent = '';
+    var total = text.length, TICK = 22, TARGET_MS = 1800;
+    var chunk = Math.max(1, Math.ceil(total / (TARGET_MS / TICK)));   // chars/tick to hit the target
+    var pos = 0;
+    (function step() {
+      if (typeof stillCurrent === 'function' && !stillCurrent()) return;   // superseded — stop typing
+      pos = Math.min(total, pos + chunk);
+      el.textContent = text.slice(0, pos);
+      if (pos < total) { setTimeout(step, TICK); }
+      else if (onDone) { onDone(); }
+    })();
+  }
+
   function askAdmin(q) {
     q = (q != null ? String(q) : '').trim(); if (!q) return;
     var panel = $('adminAnsPanel'), qEl = $('adminAnsQ'), ans = $('adminAnsText');
@@ -11615,8 +11698,10 @@
       var raw = (r && r.text) ? String(r.text).trim() : '';
       var doc = _aiExtractDocs(raw);      // pull + strip the @@DOCS@@ line
       var txt = doc.text;
-      if (ans) ans.textContent = txt || 'No answer came back — try rephrasing.';
-      _aiRenderDocStrip(ans && ans.parentNode, txt ? doc.slugs : [], 'adminAnsDocStrip');
+      var finalTxt = txt || 'No answer came back — try rephrasing.';
+      _aiTypeReveal(ans, finalTxt, function () { return gen === _adminAskGen; }, function () {
+        _aiRenderDocStrip(ans && ans.parentNode, txt ? doc.slugs : [], 'adminAnsDocStrip');
+      });
     }).catch(function () {
       if (gen !== _adminAskGen) return;
       if (ans) ans.textContent = 'Could not reach the AI just now. Try again in a moment.';
