@@ -231,3 +231,70 @@ account/AAI join once validated); Account-Mismatch (5.4) + Period-Mismatch (5.14
 patterns aren't detected on Home yet (they need the DMAAI/cross-period indexes the
 full page builds) — the DMAAI lane covers the account-mismatch story via findings
 attribution instead.
+
+## Data health landing REDESIGN (BUILT 2026-07-20, UNCOMMITTED — owner-eyeball pending)
+
+Supersedes the "thinking-beat task sequence" Briefing tab. Owner approved the
+pattern via a mockup (`scratchpad/analyst-home-proposed.html`); this is that
+mockup landed in `home.html`. Fixes the two problems in the old landing: the
+cold open, and the "2 ambers but good to go" contradiction (readiness shouting
+while the briefing said you're fine).
+
+**The pattern, top to bottom:**
+1. **Header** — `renderAnalystHeader(d)` (home.html:8541) rewrites the analyst
+   `role-hero-item` in place: H1 = "&lt;First&gt;, here's where you stand today"
+   (first name from `RR_SESSION.user.fn`; graceful fallback, never `undefined`),
+   subline trimmed to "analyst · &lt;DB&gt; · Company &lt;co&gt;" (name lives in
+   the H1 only, not said twice).
+2. **Quiet readiness strip** — `renderAnalystReady(d)` (8558) + `#analystReady`
+   (2382). Plumbing ONLY (connectivity / data currency / inventory loaded), green
+   single row + "N checks" disclosure. Calm-amber on `_connDown`, never loud.
+   Page-level (above the tabs), CSS-gated to the analyst view (home.html:1121).
+3. **AI briefing leads** — `_analystDayBrief()` (8706) reuses the live grounded
+   pipeline (`POST api/v1/ai/explain`, same `_recsummaryLevel()` tier gating,
+   scrubbed-tier masks the company to "this company", generation-guarded, 12s
+   timed fallback). Grounded STRICTLY in the settled check classification — NOT
+   the mockup's illustrative copy. AI Off → deterministic sentence, nothing leaves
+   the page.
+4. **"Needs your attention · N"** — `_analystInlineRow()`, each check a SINGLE
+   inline row `▲ &lt;title&gt; · &lt;detail&gt; [action]`. Roll-forward sorts
+   first (it blocks the period from tying out).
+5. **"Cleared · N" rollup** — `_analystClearedHtml()`, collapsible.
+
+**Checks** (`renderAnalystWorkspace`, 8797) reuse the existing live fetches,
+reclassified by state into readiness / amber / green: roll-forward from
+`c.breaks`/`c.glBreak` (same source as the accountant worklist, so the two never
+disagree), model DMAAI via `inventory/integrity/model-approval`, UOM/Frozen/
+GL-Class via `_intgFetch`. View buttons reopen `_openIntegrityModal`; deep links
+preserved. **Subtext floor: 15px** everywhere (uppercase labels 12.5px, titles
+larger) — see the CSS block home.html:1121-1175 + `.acct-top[hidden]` at 247.
+
+**Cross-view safety:** the shared `#acctTop` (Ask card + period chart) is hidden
+only on the analyst `work` tab (`_at.hidden = (sv==='work')`, home.html:9012) so
+the day-brief leads; every other sub-view shows it, and the accountant path
+reshows it explicitly (6409). No stranding.
+
+**Preserved:** `_analystTaskGen` supersession, `_analystScopedData`/
+`_analystSoloCo` single-select, tier gating, graceful degrade (no `_acctData` →
+strip + tab hide, never broken).
+
+**Verified:** static delimiter balance (whole inline script, 0 errors) + a
+code review + a live load at :8765 (parse-clean, zero console errors on load,
+seams present in the DOM). NOT visually confirmed in the analyst view — that
+needs the owner's eye (forcing the analyst view means mutating the shared
+`rrv8.viewRole`, declined while the owner is away).
+
+**Open seams / TODO:**
+- **Explained variance · no-action** — the third bucket + section markup are
+  built (`_analystRenderChecks`, `#analystExplainedWrap`), but `explained` is
+  always `[]`: no classifier signal exists yet, so it renders nothing. No
+  fabricated entries. Populate it in `renderAnalystWorkspace` once the classifier
+  emits the signal (owner's open item — see [[reference_variance_is_always_a_difference]]).
+- **AI day-brief copy** is a first pass — grounded correctly, wording needs an
+  owner read.
+- **Transaction variance + Cardex variance tabs** — the header + readiness strip
+  are already page-level, so they inherit those. Applying the rest of the
+  guidelines (AI-leads framing, work-headline, subtext floor, "expected · no
+  action") to their bodies is the NEXT increment — do it mockup-first (the flow
+  that worked for this landing), NOT speculatively, since the mockup only
+  detailed Data health.
