@@ -5,26 +5,29 @@
   =============================================================================
   Home-style banded workflow for keeping the account roll-forward accurate.
   Andy's question is simple: "is it accurate, and if not, what do I do?" The
-  bands answer it top-to-bottom:
+  page answers it top-to-bottom:
 
-    1) TO DO              — break count + a drawer that summarizes what's off
-                            (GL side vs variance side, accounts/periods).
-    2) CONTEXT            — company scope (multi / All, JWT-scoped) + the
-                            period view; flows to the cards + the report.
-    3) CORRECTIVE ACTIONS — GL side: R099102 repost (attest) gates Reload GL.
-                            Variance side: nothing to pull — the as-of recompute
-                            (usp6_006a) self-heals it on every refresh; a break
-                            that survives a refresh is a GSI escalation.
-    4) AUDIT REPORT       — the roll-forward grid (Beg GL -> End GL vs
-                            Perpetual + cardex variance), Excel-exportable.
+    AI brief   — one grounded narrative of THIS company's roll-forward (what's
+                 off, which accounts, the next step in order). Replaces the old
+                 deterministic To Do card.
+    1) RELOAD GL   — the one corrective lever, ungated. A single "Reload GL"
+                     band (no attestation, no email). The R099102 repost is
+                     guidance in the AI brief + the reload modal, not a gate.
+                     The variance side has no lever: the as-of recompute
+                     (usp6_006a) clears it on every refresh; a break that
+                     survives a refresh goes to the customer's IT department.
+    2) AUDIT REPORT — the roll-forward grid (Beg GL -> End GL vs Perpetual +
+                     cardex variance), Excel-exportable.
 
   Data: v6ui_raccountsummary from the active DB's agent (POST /inventory/
-  integrity, JWT-scoped). Agent-first, no static fallback (production-only). The per-row GL
-  classifier + inline action-bar of the old page were retired — the levers now
-  live in band 3 (Reload GL reuses the admin page; R099102 is inline email +
-  attest). Re-roll (retired by 006a) and Reload Cardex (a standalone cardex
-  data-integrity utility, NOT a roll-forward fix) were removed from this band
-  2026-07-21; the variance side self-heals on refresh.
+  integrity, JWT-scoped). Agent-first, no static fallback (production-only). The
+  per-row GL classifier + inline action-bar of the old page were retired — the
+  one lever now lives in the Reload GL band (an in-page modal; no nav to the
+  admin page). The R099102 repost is guidance in the AI brief + the reload
+  modal, not a gate — no attestation, no email. Re-roll (retired by 006a) and
+  Reload Cardex (a standalone cardex data-integrity utility, NOT a roll-forward
+  fix) were removed from this band 2026-07-21; the variance side clears on every
+  refresh, and a break that survives goes to the customer's IT department.
   =============================================================================
 -->
 <html lang="en">
@@ -34,13 +37,12 @@
 <title>Account Roll Forward &mdash; RapidReconciler</title>
 <link href="fonts/fonts.css" rel="stylesheet">
 <link href="admin-chrome.css" rel="stylesheet">
+<link href="../Tools/help-sidebar.css" rel="stylesheet">
 <script src="config.js"></script>
+<script defer src="../Tools/help-sidebar.js"></script>
 <!-- xlsx-js-style: SheetJS fork with cell styling (the community xlsx build can't
      write fills) — used for the audit-quality export that highlights break rows. -->
 <script src="vendor/xlsx-js-style.min.js" defer></script>
-<!-- PDF text extraction for the R099102 report-checker (prototype; CDN). Production
-     should vendor this like xlsx/jspdf, or read the PDF natively via Claude. -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" defer></script>
 <style>
   /* Shared chrome (canonical palette, command-center wash, corner-chrome Home
      button) lives in admin-chrome.css, linked above. Only page-specific rules
@@ -78,7 +80,7 @@
   .ai-chip.is-off:hover { border-color:var(--rule-strong); background:var(--bg-card); }
   .band-status .bs-text { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .band-status .bs-dot { width:11px; height:11px; border-radius:50%; background:var(--text-muted); flex-shrink:0; }
-  .band-status .bs-dot.green { background:var(--green); } .band-status .bs-dot.amber { background:var(--amber); } .band-status .bs-dot.red { background:var(--red); }
+  .band-status .bs-dot.green { background:var(--green); } .band-status .bs-dot.amber { background:var(--amber); } .band-status .bs-dot.red { background:var(--red); } .band-status .bs-dot.blue { background:var(--blue); }
   .band-chev { border:1px solid var(--rule-strong); background:var(--bg-card); color:var(--text-muted); border-radius:8px; width:30px; height:30px; display:inline-flex; align-items:center; justify-content:center; }
   .band-head:hover .band-chev { color:var(--blue); border-color:var(--blue); background:var(--blue-pale); }
   .band-chev svg { transition:transform .15s; }
@@ -141,68 +143,27 @@
   .ai-panel.is-error { background:var(--orange-pale); border-color:#f0d2a8; }
   .ai-panel-foot { margin-top:9px; font-size:10.5px; color:var(--text-muted); letter-spacing:.02em; }
 
-  /* ===== Band 3 — Corrective Actions (four cards) ===== */
-  .corr-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(255px,1fr)); gap:14px; }
-  .corr-card { display:flex; flex-direction:column; border:1px solid var(--rule); border-radius:12px; padding:16px; background:var(--bg-card); transition:transform .12s,box-shadow .12s,border-color .12s; }
-  a.corr-card:hover { transform:translateY(-2px); box-shadow:var(--shadow-md); border-color:var(--rule-strong); }
-  .corr-card.gl   { border-top:3px solid var(--orange); }
-  .corr-card.var  { border-top:3px solid var(--blue); }
-  .corr-ico { width:36px; height:36px; border-radius:9px; display:grid; place-items:center; margin-bottom:11px; }
-  .corr-card.gl .corr-ico  { background:var(--orange-pale); color:var(--orange-deep); }
-  .corr-card.var .corr-ico { background:var(--blue-pale); color:var(--blue); }
-  .corr-ico svg { width:19px; height:19px; }
-  .corr-title { font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:14.5px; color:var(--navy); }
-  .corr-when { font-size:10px; font-weight:800; letter-spacing:.05em; text-transform:uppercase; color:var(--text-muted); margin:3px 0 7px; }
-  .corr-desc { font-size:12.5px; color:var(--text-soft); line-height:1.5; flex:1; }
-  .corr-foot { margin-top:12px; font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:12.5px; display:inline-flex; align-items:center; gap:6px; }
-  .corr-card.gl .corr-foot  { color:var(--orange-deep); }
-  .corr-card.var .corr-foot { color:var(--blue); }
-  .corr-foot svg { width:13px; height:13px; }
-  .corr-rec-banner { margin-bottom:14px; padding:10px 13px; border-radius:8px; background:var(--blue-pale); border:1px solid #c2d8ef; font-size:12.5px; color:var(--text); }
-  .corr-rec-banner b { color:var(--navy); }
-  /* Variance side — no lever to pull (self-heals on refresh). A quiet, non-actionable
-     note spanning the grid, distinct from the two GL action cards above it. */
-  .corr-note { grid-column:1 / -1; display:flex; gap:12px; align-items:flex-start; border:1px solid var(--rule); border-left:3px solid var(--blue); border-radius:10px; padding:14px 16px; background:var(--bg-soft); }
-  .corr-note-ico { width:32px; height:32px; flex-shrink:0; border-radius:8px; display:grid; place-items:center; background:var(--blue-pale); color:var(--blue); }
-  .corr-note-ico svg { width:17px; height:17px; }
-  .corr-note-title { font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:13px; color:var(--navy); margin-bottom:3px; }
-  .corr-note-body { font-size:12.5px; color:var(--text-soft); line-height:1.5; }
-  /* GL workflow card states: R099102 (attest) gates Reload GL. */
-  .corr-card.state-active { background:var(--orange-pale); border-color:#f0d2a8; }
-  .corr-card.gl.state-active { border-top-color:var(--orange); }
-  .corr-card.state-done { background:var(--green-pale); border-color:#bfe6cd; }
-  .corr-card.gl.state-done { border-top-color:var(--green); }
-  .corr-card.is-gated { opacity:.5; pointer-events:none; background:var(--bg-soft); filter:grayscale(.35); }
-  .corr-state { margin-top:11px; font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:10px; letter-spacing:.06em; text-transform:uppercase; display:inline-flex; align-items:center; gap:6px; }
-  .corr-state[hidden] { display:none; }
-  .corr-state.active { color:var(--orange-deep); }
-  .corr-state.done { color:var(--green); }
-  .corr-state.gated { color:var(--text-muted); }
-  .corr-state svg { width:13px; height:13px; flex-shrink:0; }
-  /* R099102 inline drawer */
-  .r99-drawer { margin-top:13px; border-top:1px solid var(--rule); padding-top:13px; display:none; }
-  .r99-drawer.is-open { display:block; }
-  .r99-drawer p { font-size:12.5px; color:var(--text-soft); line-height:1.5; margin-bottom:10px; }
-  .r99-attest { display:flex; gap:9px; align-items:flex-start; font-size:12.5px; color:var(--text-soft); cursor:pointer; margin:10px 0; }
-  .r99-attest input { margin-top:3px; flex-shrink:0; }
-  .r99-actions { display:flex; gap:9px; flex-wrap:wrap; }
-  .btn-sm { font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:12.5px; border-radius:7px; padding:7px 13px; cursor:pointer; border:1px solid var(--rule-strong); background:var(--bg-card); color:var(--text-soft); display:inline-flex; align-items:center; gap:6px; }
-  .btn-sm:hover { border-color:var(--blue); color:var(--blue); }
-  .btn-sm.primary { background:var(--blue); border-color:var(--blue); color:#fff; }
-  .btn-sm.primary:hover { filter:brightness(1.06); color:#fff; }
-  .btn-sm:disabled { opacity:.5; cursor:not-allowed; }
-  /* R099102 AI report-checker (full tier only) */
-  .r99-ai { margin:13px 0; padding-top:13px; border-top:1px dashed var(--rule); }
-  .r99-ai-lbl { display:flex; align-items:center; gap:6px; font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:10.5px; letter-spacing:.05em; text-transform:uppercase; color:var(--blue); margin-bottom:7px; }
-  .r99-ai-lbl svg { width:13px; height:13px; }
-  .r99-file { display:inline-flex; align-items:center; gap:7px; border:1px dashed var(--rule-strong); border-radius:8px; padding:8px 14px; font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:12.5px; color:var(--blue); cursor:pointer; }
-  .r99-file:hover { border-color:var(--blue); background:var(--blue-pale); }
-  .r99-file svg { width:14px; height:14px; }
-  .r99-file-status { margin-left:10px; font-size:11.5px; color:var(--text-muted); }
-  .r99-ai-verdict { margin-top:10px; padding:10px 12px; border-radius:8px; font-size:12.5px; line-height:1.55; border:1px solid var(--rule); background:var(--bg-card); white-space:pre-wrap; }
-  .r99-ai-verdict.is-thinking { color:var(--text-muted); font-style:italic; }
-  .r99-ai-verdict.clean  { background:var(--green-pale);  border-color:#bfe6cd; }
-  .r99-ai-verdict.errors { background:var(--orange-pale); border-color:#f0d2a8; }
+  /* ===== Band 1 — Reload GL (the one corrective lever; ungated) =====
+     The R099102 repost card + attestation gate were removed 2026-07-21 (the gate
+     read as law enforcement, and RR can't verify JDE anyway — RR is a utility, not
+     an enforcement gate). GL-only now; the AI brief carries the R099102-first
+     ordering + the variance clears-on-refresh message. */
+  .rlg { display:flex; gap:16px; align-items:flex-start; flex-wrap:wrap; }
+  .rlg-ico { width:40px; height:40px; flex-shrink:0; border-radius:10px; display:grid; place-items:center; background:var(--orange-pale); color:var(--orange-deep); }
+  .rlg-ico svg { width:20px; height:20px; }
+  .rlg-main { flex:1; min-width:260px; }
+  .rlg-lede { font-size:13px; color:var(--text-soft); line-height:1.55; }
+  .rlg-lede b { color:var(--navy); }
+  .rlg-accts { margin-top:11px; display:flex; flex-wrap:wrap; gap:6px; }
+  .rlg-accts[hidden] { display:none; }
+  .rlg-acct { font-family:'JetBrains Mono',ui-monospace,monospace; font-weight:700; font-size:11.5px; color:var(--orange-deep); background:var(--orange-pale); border:1px solid #f0d2a8; border-radius:6px; padding:2px 8px; }
+  .rlg-btn { flex-shrink:0; align-self:center; display:inline-flex; align-items:center; gap:8px; font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:13.5px; border-radius:9px; padding:11px 20px; background:var(--orange-deep); color:#fff; text-decoration:none; border:1px solid var(--orange-deep); transition:filter .12s,transform .12s; }
+  .rlg-btn:hover { filter:brightness(1.06); transform:translateY(-1px); }
+  .rlg-btn svg { width:15px; height:15px; }
+  /* Clean state: GL rolled forward fine — calm the accent, mute the button. */
+  .rlg.is-clear .rlg-ico { background:var(--green-pale); color:var(--green); }
+  .rlg.is-clear .rlg-btn { background:var(--bg-card); color:var(--text-soft); border-color:var(--rule-strong); }
+  .rlg.is-clear .rlg-btn:hover { border-color:var(--blue); color:var(--blue); filter:none; }
 
   /* ===== Band 4 — Audit Report (the grid) ===== */
   .grid-card { background:var(--bg-card); border:1px solid var(--rule); border-radius:14px; box-shadow:var(--shadow-sm); overflow:hidden; }
@@ -240,9 +201,37 @@
 
   .toast { position:fixed; bottom:28px; left:50%; transform:translateX(-50%); background:var(--navy); color:#fff; padding:10px 18px; border-radius:100px; font-family:'Source Sans 3',sans-serif; font-weight:600; font-size:13px; box-shadow:var(--shadow-md); opacity:0; transition:opacity .18s; pointer-events:none; }
   .toast.show { opacity:1; }
+
+  /* ===== Reload GL modal (in-page; replaces the nav to admin-reload-gl.html) =====
+     RR is a utility, not an enforcement gate — no attestation checkbox. Go is
+     shown only to admins (the reload endpoints are admin-gated server-side); a
+     non-admin sees the description plus a "contact your administrator" note. */
+  .modal-backdrop { position:fixed; inset:0; background:rgba(20,32,55,.42); display:none; align-items:center; justify-content:center; padding:24px; z-index:120; }
+  .modal-backdrop.is-open { display:flex; }
+  .modal { background:var(--bg-card); border:1px solid var(--rule); border-radius:14px; box-shadow:var(--shadow-md); width:100%; max-width:520px; overflow:hidden; }
+  .modal-head { display:flex; align-items:center; gap:12px; padding:16px 20px; border-bottom:1px solid var(--rule); }
+  .modal-head .rlg-ico { width:34px; height:34px; }
+  .modal-title { font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:16px; color:var(--navy); flex:1; }
+  .modal-x { border:1px solid var(--rule-strong); background:var(--bg-card); color:var(--text-muted); border-radius:8px; width:30px; height:30px; display:inline-flex; align-items:center; justify-content:center; cursor:pointer; flex-shrink:0; }
+  .modal-x:hover { color:var(--blue); border-color:var(--blue); background:var(--blue-pale); }
+  .modal-x svg { width:16px; height:16px; }
+  .modal-body { padding:18px 20px; font-size:13.5px; color:var(--text); line-height:1.6; }
+  .modal-body b { color:var(--navy); }
+  /* Order reminder: subtle caution that the R099102 repost comes first. Not a
+     gate — Go stays enabled. Shown only when there's something to reload. */
+  .modal-note { margin-top:14px; padding:10px 13px; border-radius:8px; background:var(--orange-pale); border:1px solid #f0d2a8; font-size:12.5px; color:var(--text-soft); line-height:1.5; }
+  .modal-note[hidden] { display:none; }
+  .modal-note b { color:var(--orange-deep); }
+  .modal-foot { display:flex; justify-content:flex-end; gap:10px; padding:14px 20px; border-top:1px solid var(--rule); background:var(--bg-soft); }
+  .modal-btn { font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:13.5px; border-radius:8px; padding:9px 18px; cursor:pointer; border:1px solid transparent; }
+  .modal-btn-primary { color:#fff; background:var(--orange-deep); border-color:var(--orange-deep); }
+  .modal-btn-primary:hover:not(:disabled) { filter:brightness(1.06); }
+  .modal-btn-primary:disabled { opacity:.5; cursor:not-allowed; filter:none; }
+  .modal-btn-ghost { color:var(--text-soft); background:var(--bg-card); border-color:var(--rule-strong); }
+  .modal-btn-ghost:hover { color:var(--navy); border-color:var(--text-muted); }
 </style>
 </head>
-<body>
+<body data-help-src="../RRUniversity/inventory-account-roll-forward.html" data-help-title="Account Roll Forward">
 
 <div class="corner-chrome">
   <a class="home-fab topbar-home" href="home.html" title="Back to Home">
@@ -262,68 +251,27 @@
     <p class="alh-brief-body is-thinking" id="rfBriefBody">Reading this company&rsquo;s roll-forward&hellip;</p>
   </div>
 
-  <!-- ===== Step 1 — Corrective Actions ===== -->
+  <!-- ===== Reload GL — the one corrective lever (ungated) =====
+       The R099102 repost card + attestation gate were removed 2026-07-21: the
+       gate read as law enforcement, and RR can't verify JDE anyway (RR is a
+       utility, not an enforcement gate). The R099102-first ordering now lives in
+       the AI brief up top as guidance, not a lock. This band is GL-only — a
+       variance break has no lever (clears on every refresh) and is narrated by
+       the brief, not shown here. -->
   <div class="band">
     <div class="band-head" id="corrHead" role="button" tabindex="0" aria-expanded="true" aria-controls="corrBody" data-band="corr">
-      <span class="band-badge"><span class="band-n">1</span><span class="band-title">Corrective Actions</span></span>
-      <span class="band-status" id="corrStatus"><span class="bs-dot"></span><span class="bs-text">GL levers &middot; variance self-heals</span></span>
+      <span class="band-badge"><span class="band-n">1</span><span class="band-title">Reload GL</span></span>
+      <span class="band-status" id="corrStatus"><span class="bs-dot"></span><span class="bs-text">GL roll-forward</span></span>
       <span class="band-chev" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
     </div>
     <div class="band-body" id="corrBody">
-      <div class="corr-rec-banner" id="corrRec" hidden></div>
-      <div class="corr-grid">
-
-        <!-- GL side · step 1: R099102 — request the JDE repost + attest. Gates Reload GL. -->
-        <div class="corr-card gl" id="r99Card">
-          <span class="corr-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v6H4z"/><path d="M4 14h16v6H4z"/><path d="M8 7h.01M8 17h.01"/></svg></span>
-          <div class="corr-title">R099102 Repost</div>
-          <div class="corr-when">GL break · balances out of sync</div>
-          <div class="corr-desc">Balances (F0902) out of sync with detail (F0911). Rebuild in JD Edwards, then attest.</div>
-          <div class="corr-state" id="r99State" hidden></div>
-          <span class="corr-foot" id="r99Toggle" role="button" tabindex="0">Email &amp; attest <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
-          <div class="r99-drawer" id="r99Drawer">
-            <p>Run R099102 in JD Edwards (proof, then final), then attest. A clean report reaches RapidReconciler only after <b>Reload GL</b> + rebuild.</p>
-            <div class="r99-actions">
-              <a class="btn-sm primary" id="r99Email" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"/><polyline points="22,6 12,13 2,6"/></svg>Compose email</a>
-            </div>
-            <!-- AI report-checker (full tier only; revealed by syncR99Exposure) -->
-            <div class="r99-ai" id="r99Ai" hidden>
-              <div class="r99-ai-lbl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"/></svg>Check the repost report with AI</div>
-              <label class="r99-file" for="r99File"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>Choose report (PDF)<input type="file" id="r99File" accept=".pdf,.txt" hidden></label>
-              <span class="r99-file-status" id="r99FileStatus">No file chosen</span>
-              <div class="r99-actions"><button class="btn-sm" id="r99Check" type="button" disabled>Check report</button></div>
-              <div class="r99-ai-verdict" id="r99Verdict" hidden></div>
-            </div>
-            <label class="r99-attest"><input type="checkbox" id="r99Chk"><span>I have received the results of the repost report and there are no errors.</span></label>
-            <div class="r99-actions">
-              <button class="btn-sm" id="r99Record" type="button" disabled>Record attestation</button>
-            </div>
-          </div>
+      <div class="rlg" id="rlgPanel">
+        <span class="rlg-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg></span>
+        <div class="rlg-main">
+          <div class="rlg-lede" id="rlgLede">Re-pulls RapidReconciler&rsquo;s copy of the general ledger from JD Edwards, from the earliest period that doesn&rsquo;t tie forward. If an account is out of balance, run <b>Repost Account Balances (R099102)</b> in JD Edwards first to rebuild the balances, then reload here so the corrected figures flow into RapidReconciler on the next refresh.</div>
+          <div class="rlg-accts" id="rlgAccts" hidden></div>
         </div>
-
-        <!-- GL side · step 2: refresh RR's GL copy. Gated until R099102 is attested. -->
-        <a class="corr-card gl" id="reloadGlCard" href="admin-reload-gl.html">
-          <span class="corr-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg></span>
-          <div class="corr-title">Reload GL</div>
-          <div class="corr-when">GL break · stale copy</div>
-          <div class="corr-desc">Re-imports the GL (F0902) from the earliest broken period; JD Edwards re-pulls on the next refresh.</div>
-          <div class="corr-state" id="reloadGlState" hidden></div>
-          <span class="corr-foot">Open <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></span>
-        </a>
-
-        <!-- Variance side · no lever to pull. The as-of recompute (usp6_006a) rebuilds
-             the full period timeline on every refresh, so a variance-roll-forward break
-             self-heals on the next run. Re-roll (retired by 006a) and Reload Cardex (a
-             standalone cardex data-integrity utility, not a roll-forward fix) were removed
-             from this band 2026-07-21 — see the roll-forward guide §5.5. -->
-        <div class="corr-note" id="varNote">
-          <span class="corr-note-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></span>
-          <div>
-            <div class="corr-note-title">Variance side &mdash; nothing to pull</div>
-            <div class="corr-note-body" id="varNoteBody">A variance-roll-forward break clears itself. RapidReconciler recomputes the entire roll-forward timeline on every refresh, so a variance that failed to carry forward is recalculated from the current cardex on the next run &mdash; no manual step. If the same break survives a refresh, it&rsquo;s not a self-service fix; contact GSI to investigate.</div>
-          </div>
-        </div>
-
+        <button class="rlg-btn" id="rlgBtn" type="button">Reload GL <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
       </div>
     </div>
   </div>
@@ -355,13 +303,44 @@
   </div>
 </div>
 
+<!-- ===== Reload GL modal (opens on THIS page; no nav to a dead-end admin page) =====
+     Preview on open (GET inventory/reload-gl/preview → cutoff + affected). Go
+     POSTs inventory/reload-gl. No attestation checkbox (RR is a utility). Reload
+     GL is analyst-authorized (owner 2026-07-21) — no client permission gate; the
+     server enforces authorization. Go is disabled only when there's nothing to
+     reload (a data state, not a permission state). -->
+<div class="modal-backdrop" id="rlgModal" role="dialog" aria-modal="true" aria-labelledby="rlgModalTitle">
+  <div class="modal">
+    <div class="modal-head">
+      <span class="rlg-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg></span>
+      <span class="modal-title" id="rlgModalTitle">Reload GL</span>
+      <button class="modal-x" id="rlgModalX" type="button" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <div id="rlgModalDesc">Checking what will reload&hellip;</div>
+      <div class="modal-note" id="rlgModalReminder" hidden>This assumes you&rsquo;ve already run <b>Repost Account Balances (R099102)</b> in JD Edwards. If you haven&rsquo;t, do that first &mdash; reloading now would just pull the same out-of-balance figures back in.</div>
+    </div>
+    <div class="modal-foot">
+      <button class="modal-btn modal-btn-ghost" id="rlgModalCancel" type="button">Cancel</button>
+      <button class="modal-btn modal-btn-primary" id="rlgModalGo" type="button">Go</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <script>
 (function () {
   'use strict';
   var DATA = [];
+  var _coNames = null;   // company# -> name, lazily fetched from the agent's /admin/companies
   var state = { company:'', account:'', showAll:true, sortKey:null, sortDir:'asc' };
+  // Set true after a successful Reload GL for the current company. The break
+  // stays in the loaded data until the next scheduled refresh, so the band shows
+  // a PENDING state instead of amber "out of balance" in the meantime. In-memory
+  // for the page session; reset when the company context changes (see
+  // ensureSoloCompany) so it never bleeds across companies.
+  var _reloadRequested=false, _lastSoloCompany=null;
 
   // ---- company scope: honors the shared working-company scope (set on Home,
   //      owned by sidebar.js). The company control is SINGLE-SELECT — exactly
@@ -408,6 +387,10 @@
         : list.slice().sort(function(a,b){ return a.localeCompare(b,undefined,{numeric:true}); })[0];
     }
     try{ if(state.company) localStorage.setItem(soloKey(), String(state.company)); }catch(_){}
+    // Company changed since the last resolve — a pending reload belongs to the
+    // company it was requested for, so drop it when we switch.
+    if(_lastSoloCompany!==null && _lastSoloCompany!==state.company) _reloadRequested=false;
+    _lastSoloCompany=state.company;
     return state.company;
   }
   function rowMatchesCo(r){ return inScopeCo(r.CompanyNumber) && String(r.CompanyNumber)===String(state.company); }
@@ -502,50 +485,38 @@
     s.querySelector('.bs-dot').className='bs-dot'+(dot?(' '+dot):'');
     s.querySelector('.bs-text').textContent=text;
   }
-  // Corrective-band recommendation banner: GL precedence (fix GL first; a
-  // GL break can masquerade as a variance break). All four cards stay live.
-  // ---- R099102 attestation (per-DB); gates Reload GL ----
-  function r99Key(){ var ctx=_scopeCtx(); return (ctx&&ctx.key)?ctx.key.replace(/\.scope$/,'.r99attest'):'rrv8.r99attest'; }
-  function isR99Attested(){ try{ return !!localStorage.getItem(r99Key()); }catch(_){ return false; } }
-  function setR99Attested(v){ try{ if(v) localStorage.setItem(r99Key(), new Date().toISOString()); else localStorage.removeItem(r99Key()); }catch(_){} }
-  var ICO_CHK='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
-  var ICO_LOCK='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>';
-  function setCardState(cardId, stateId, mode, text){
-    var card=document.getElementById(cardId), st=document.getElementById(stateId);
-    if(card){ card.classList.remove('state-active','state-done','is-gated'); if(mode==='active') card.classList.add('state-active'); else if(mode==='done') card.classList.add('state-done'); else if(mode==='gated') card.classList.add('is-gated'); }
-    if(st){ if(text){ st.hidden=false; st.className='corr-state '+(mode||''); st.innerHTML=text; } else { st.hidden=true; st.className='corr-state'; } }
-  }
-  // Recommendation banner + the GL workflow gate. R099102 (attest) must clear
-  // before Reload GL unlocks; once attested R099102 reads done and Reload GL is
-  // the active step. A resolved GL break (none in scope) clears the attestation.
+  // Reload GL band — ungated (owner 2026-07-21). The old R099102 attestation
+  // gate read as law enforcement, and RR can't verify JDE anyway, so it's gone;
+  // the R099102-first ordering now lives in the AI brief as guidance, not a lock.
+  // GL-only: a variance break has no lever (clears on every refresh) and is
+  // narrated by the brief, not shown in this band.
+  //
+  // Three states: PENDING (a reload was requested this session and the break is
+  // still in the loaded data — re-pulls on the next scheduled refresh), amber
+  // (out of balance, nothing requested yet), and green (clean).
   function renderCorrective(){
-    var sum=breakSummary(); var glN=sum.gl.rows, varN=sum.varc.rows, glBreak=glN>0;
-    var rec=document.getElementById('corrRec');
-    if(rec){
-      if(glN && varN){ rec.hidden=false; rec.innerHTML='<b>Order:</b> fix the GL side first (R099102 &rarr; Reload GL). The variance side recomputes on the next refresh &mdash; often the GL fix clears it too.'; }
-      else if(glN){ rec.hidden=false; rec.innerHTML='<b>GL side:</b> R099102, attest, then Reload GL.'; }
-      else if(varN){ rec.hidden=false; rec.innerHTML='<b>Variance side:</b> no action &mdash; it self-heals on the next refresh. If it survives one, contact GSI.'; }
-      else rec.hidden=true;
-    }
-    // Status: a GL break has levers to work; a variance-only break is a real
-    // break but has no lever (self-heals) — say so rather than "work the levers".
-    if(glN) setBandStatus('corrStatus','amber','Work the GL side below');
-    else if(varN) setBandStatus('corrStatus','amber','Variance break — self-heals at the next refresh');
-    else setBandStatus('corrStatus','green','All clear — nothing to correct');
-    var attested=isR99Attested();
-    if(!glBreak){
-      setR99Attested(false);
-      setCardState('r99Card','r99State',null,'');
-      setCardState('reloadGlCard','reloadGlState',null,'');
-    } else if(!attested){
-      setCardState('r99Card','r99State','active','Start here');
-      setCardState('reloadGlCard','reloadGlState','gated',ICO_LOCK+'Attest R099102 first');
+    var sum=breakSummary(); var glAccts=sum.gl.accts, glA=glAccts.length;
+    var panel=document.getElementById('rlgPanel'), lede=document.getElementById('rlgLede'), accts=document.getElementById('rlgAccts');
+    if(glA && _reloadRequested){
+      // Reload was requested but the refresh hasn't run yet — the break is still
+      // in the data. Neutral/blue, not amber, so it doesn't read as "nothing
+      // happened". The Reload GL button stays available (harmless to re-run).
+      setBandStatus('corrStatus','blue','Reload requested — re-pulls on the next scheduled refresh');
+      if(panel) panel.classList.remove('is-clear');
+      if(lede) lede.innerHTML='You&rsquo;ve requested a GL reload for this account. RapidReconciler clears its copy and re-pulls the corrected balances from JD Edwards on the next scheduled refresh &mdash; check back after it runs.';
+      if(accts){ accts.innerHTML=glAccts.slice(0,24).map(function(x){ return '<span class="rlg-acct">'+esc(x.acct)+'</span>'; }).join(''); accts.hidden=false; }
+    } else if(glA){
+      setBandStatus('corrStatus','amber', glA+' GL account'+(glA!==1?'s':'')+' out of balance');
+      if(panel) panel.classList.remove('is-clear');
+      if(lede) lede.innerHTML='The Account Balances (F0902) don&rsquo;t tie to the posted Account Ledger (F0911) on the account'+(glA!==1?'s':'')+' below. Run <b>Repost Account Balances (R099102)</b> in JD Edwards first to rebuild the balances, then reload here so the corrected figures flow into RapidReconciler on the next refresh.';
+      if(accts){ accts.innerHTML=glAccts.slice(0,24).map(function(x){ return '<span class="rlg-acct">'+esc(x.acct)+'</span>'; }).join(''); accts.hidden=false; }
     } else {
-      setCardState('r99Card','r99State','done',ICO_CHK+'Attested');
-      setCardState('reloadGlCard','reloadGlState','active','Reload now');
+      _reloadRequested=false;   // refresh ran and the break cleared — back to clean
+      setBandStatus('corrStatus','green','GL rolled forward cleanly — nothing to reload');
+      if(panel) panel.classList.add('is-clear');
+      if(lede) lede.innerHTML='The GL rolled forward cleanly &mdash; nothing to reload right now. If a repost (R099102) is ever run in JD Edwards, reload here afterward so the corrected balances flow into RapidReconciler.';
+      if(accts){ accts.hidden=true; accts.innerHTML=''; }
     }
-    // R099102 email body reflects the current GL-break scope.
-    syncR99Email(sum);
   }
 
   // ============ Audit Report (grid) ============
@@ -570,12 +541,31 @@
   //      company from Home). No switcher — resolve the one company in scope and
   //      stamp it in the header (mirrors Home's .rh-co). Change it upstream on
   //      Home + re-navigate. ----
+  // Company# -> name, from the SAME agent as the roll-forward data
+  // (GET /admin/companies -> {companies:[{companyNumber, name}]}, as home.html uses).
+  // Idempotent + best-effort: fetches once, then repaints the header when it lands.
+  function ensureCoNames(){
+    if(_coNames) return;
+    var token; try{ token=localStorage.getItem('rrv8.token'); }catch(_){}
+    var base=(window.RRDB?RRDB.agentBase():null)||(window.RR_CONFIG&&RR_CONFIG.testAgentBase);
+    if(!token||!base) return;
+    fetch(base+'/admin/companies',{headers:{'Authorization':'Bearer '+token,'Accept':'application/json'}})
+      .then(function(r){ return r.ok?r.json():null; })
+      .then(function(d){
+        var m={};
+        ((d&&d.companies)||[]).forEach(function(c){ if(c&&c.companyNumber!=null) m[String(c.companyNumber).trim()]=String(c.name||'').trim(); });
+        _coNames=m; renderCompanyContext();
+      })
+      .catch(function(){});
+  }
   function renderCompanyContext(){
+    ensureCoNames();
     var cos=Array.from(new Set(DATA.map(function(r){return String(r.CompanyNumber);}))).filter(inScopeCo)
       .sort(function(a,b){ return a.localeCompare(b,undefined,{numeric:true}); });
     ensureSoloCompany(cos);
     var el=document.getElementById('rfCoContext'); if(!el) return;
-    el.textContent = state.company ? ('Company '+state.company) : 'No company in scope';
+    var nm=(_coNames && state.company) ? (_coNames[String(state.company).trim()]||'') : '';
+    el.textContent = state.company ? ('Company '+state.company+(nm?(' — '+nm):'')) : 'No company in scope';
   }
 
   // ---- account picker ----
@@ -680,114 +670,6 @@
     head._setOpen=setOpen;   // exposed so the AI chip can open the band (and trigger AI)
   }
 
-  // ---- R099102 inline email + attest ----
-  function sum_for_email(){ return breakSummary(); }
-  function syncR99Email(sum){
-    var a=document.getElementById('r99Email'); if(!a) return;
-    var glAccts=(sum&&sum.gl&&sum.gl.accts)||[];
-    var cos=Array.from(new Set(glAccts.map(function(x){return x.co;}))).join(', ');
-    var acctList=glAccts.slice(0,20).map(function(x){return x.co+' · '+x.acct;}).join('\n');
-    var subj='R099102 Account Balance Repost request';
-    var body='Please run R099102 (Account Balance Repost) in JD Edwards — proof mode first, then final mode — scoped to:\n\n'+
-      'Company(ies): '+(cos||'(see below)')+'\nFiscal year: (current)\nAccounts:\n'+(acctList||'(GL accounts out of balance — see RapidReconciler Account Roll Forward)')+'\n\n'+
-      'Reason: the balance table (F0902) disagrees with the detail (F0911) on these accounts; the detail is the source of truth.'+
-      (effTier()==='full' ? '\n\nPlease attach the repost report (PDF) to your reply so it can be reviewed.' : '')+
-      '\n\nThanks.';
-    a.setAttribute('href','mailto:?subject='+encodeURIComponent(subj)+'&body='+encodeURIComponent(body));
-  }
-  // Append an event to the data-service Activity Log (server audit trail).
-  // Graceful: no-ops until the agent's POST /admin/activity endpoint is deployed.
-  function logActivity(event, detail){
-    var t; try{ t=localStorage.getItem('rrv8.token'); }catch(_){}
-    var base=(window.RRDB && RRDB.agentBase())||(window.RR_CONFIG && RR_CONFIG.testAgentBase);
-    if(!t||!base) return;
-    fetch(base+'/admin/activity',{method:'POST',
-        headers:{'Authorization':'Bearer '+t,'Content-Type':'application/json','Accept':'application/json'},
-        body:JSON.stringify({event:event, detail:detail})}).catch(function(){});
-  }
-  // R099102 AI report-checker (prototype): pick the JDE repost PDF, extract its
-  // text client-side, AI judges clean vs errors and reminds that RR needs Reload
-  // GL + rebuild. Full tier only (the report carries account numbers/amounts →
-  // 'full' exposure). PDF text extraction via pdf.js; scanned/image PDFs won't
-  // yield text (production: vendor pdf.js or read the PDF natively via Claude).
-  var _r99ReportText='';
-  function extractPdfText(buf){
-    if(!window.pdfjsLib) return Promise.reject(new Error('PDF reader still loading — try again'));
-    try{ if(!pdfjsLib.GlobalWorkerOptions.workerSrc) pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'; }catch(_){}
-    return pdfjsLib.getDocument({data:buf}).promise.then(function(pdf){
-      var chain=Promise.resolve('');
-      for(var n=1;n<=pdf.numPages;n++){ (function(pn){ chain=chain.then(function(txt){
-        return pdf.getPage(pn).then(function(pg){ return pg.getTextContent(); })
-          .then(function(tc){ return txt+tc.items.map(function(it){return it.str;}).join(' ')+'\n'; });
-      }); })(n); }
-      return chain;
-    });
-  }
-  function onR99File(){
-    var inp=document.getElementById('r99File'), status=document.getElementById('r99FileStatus'), btn=document.getElementById('r99Check');
-    var f=inp&&inp.files&&inp.files[0]; if(!f) return;
-    _r99ReportText=''; if(btn) btn.disabled=true;
-    var isPdf=/\.pdf$/i.test(f.name)||f.type==='application/pdf';
-    status.textContent='Reading '+f.name+'…';
-    var reader=new FileReader();
-    reader.onload=function(){
-      if(isPdf){
-        extractPdfText(reader.result).then(function(txt){
-          _r99ReportText=(txt||'').trim();
-          if(!_r99ReportText){ status.textContent='No text in '+f.name+' (a scanned image?). Use a text-based PDF.'; return; }
-          status.textContent='✓ '+f.name+' ready'; if(btn) btn.disabled=false;
-        }).catch(function(e){ status.textContent='Couldn’t read '+f.name+' — '+((e&&e.message)||'error'); });
-      } else {
-        _r99ReportText=String(reader.result||'').trim();
-        status.textContent=_r99ReportText?('✓ '+f.name+' ready'):'Empty file';
-        if(btn) btn.disabled=!_r99ReportText;
-      }
-    };
-    reader.onerror=function(){ status.textContent='Couldn’t read the file.'; };
-    if(isPdf) reader.readAsArrayBuffer(f); else reader.readAsText(f);
-  }
-  function checkR99Report(){
-    var v=document.getElementById('r99Verdict'), btn=document.getElementById('r99Check');
-    if(!v) return;
-    var report=(_r99ReportText||'').trim();
-    if(!report){ v.hidden=false; v.className='r99-ai-verdict'; v.textContent='Choose the report PDF first.'; return; }
-    v.hidden=false; v.className='r99-ai-verdict is-thinking'; v.textContent='Checking…'; if(btn) btn.disabled=true;
-    var sys='You review JD Edwards R099102 (Account Balance Repost) reports for a finance analyst. Decide whether the run completed with NO errors. Reply in 2-3 short sentences: begin with "CLEAN" or "ERRORS FOUND", then the evidence, then the next step — a clean report still requires Reload GL (re-import F0902) and a roll-forward rebuild before RapidReconciler reflects it. Plain language.';
-    aiExplain(sys, 'R099102 report:\n'+report.slice(0,8000), effTier()).then(function(text){
-      var clean=/^\s*clean/i.test(text||'');
-      v.className='r99-ai-verdict '+(clean?'clean':(/error/i.test(text||'')?'errors':''));
-      v.textContent=text||'(no reply)'; if(btn) btn.disabled=false;
-    }).catch(function(e){
-      v.className='r99-ai-verdict';
-      v.textContent='Couldn’t reach the assistant — '+((e&&e.message)||'try again')+'. Review the report manually.';
-      if(btn) btn.disabled=false;
-    });
-  }
-  (function wireR99(){
-    var toggle=document.getElementById('r99Toggle'), drawer=document.getElementById('r99Drawer'),
-        chk=document.getElementById('r99Chk'), rec=document.getElementById('r99Record'),
-        check=document.getElementById('r99Check');
-    if(toggle&&drawer){
-      function open(){ drawer.classList.toggle('is-open'); }
-      toggle.addEventListener('click',open);
-      toggle.addEventListener('keydown',function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); open(); } });
-    }
-    if(check){ check.addEventListener('click', checkR99Report); }
-    var file=document.getElementById('r99File'); if(file){ file.addEventListener('change', onR99File); }
-    if(chk&&rec){ chk.addEventListener('change',function(){ rec.disabled=!chk.checked; }); }
-    if(rec){ rec.addEventListener('click',function(){
-      // Persist the gate state (per-DB localStorage) AND record it in the server
-      // Activity Log for the audit trail. Flips R099102 -> done and unlocks
-      // Reload GL via renderCorrective().
-      setR99Attested(true);
-      rec.disabled=true; chk.checked=true;
-      if(drawer) drawer.classList.remove('is-open');
-      renderCorrective();
-      logActivity('R099102 repost confirmed', 'Repost report received with no errors. Reload GL (re-import F0902) + roll-forward rebuild to follow.');
-      toast('R099102 attestation recorded — Reload GL unlocked');
-    }); }
-  })();
-
   // ---- normalize GL OK / Var OK for display ----
   function normTok(v){ var s=String(v==null?'':v).trim().toLowerCase();
     if(s==='no'||s==='baseline'||s==='yes'||s==='end') return s;
@@ -844,12 +726,6 @@
       .then(function(j){ return (j&&j.text)?String(j.text).trim():''; })
       .catch(function(e){ if(timer) clearTimeout(timer); throw (e&&e.name==='AbortError')?new Error('the assistant timed out'):e; });
   }
-  // R099102 report-checker sends the report (account numbers/amounts) → full tier
-  // only; and the email body tracks the GL-break scope. Re-run when the tier changes.
-  function syncR99Exposure(){
-    var ai=document.getElementById('r99Ai'); if(ai) ai.hidden=(effTier()!=='full');
-    try{ syncR99Email(breakSummary()); }catch(_){}
-  }
   function aiScopeKey(){ return effTier()+'|'+state.company+'|'+DATA.filter(rowMatchesCo).length; }
   // Grounded prompt for the brief — the ONLY facts the model may use are the real
   // break counts + the affected accounts for THIS one company.
@@ -858,19 +734,19 @@
     var glN=sum.gl.rows, varN=sum.varc.rows;
     if(glN+varN===0){
       return 'You are briefing a JDE inventory-reconciliation analyst on company '+co+'. '
-        + 'The GL and variance roll-forwards are BOTH intact — no breaks. '
+        + 'The roll-forward is intact — the GL balance and the reconciliation variance both carried forward cleanly, no breaks. '
         + 'In ONE short sentence, confirm there is nothing to correct and what to watch at the next refresh. No preamble.';
     }
     var glA=sum.gl.accts.slice(0,12).map(function(x){return x.acct;}).join(', ');
     var vrA=sum.varc.accts.slice(0,12).map(function(x){return x.acct;}).join(', ');
     var facts=[];
-    if(glN) facts.push('GL-side breaks: '+glN+' row'+(glN!==1?'s':'')+' across '+sum.gl.accts.length+' account'+(sum.gl.accts.length!==1?'s':'')+(glA?(' ('+glA+')'):'')+'. Corrective lever: run R099102 in JD Edwards, then Reload GL.');
-    if(varN) facts.push('Variance-side breaks: '+varN+' row'+(varN!==1?'s':'')+' across '+sum.varc.accts.length+' account'+(sum.varc.accts.length!==1?'s':'')+(vrA?(' ('+vrA+')'):'')+'. There is NO variance lever: the roll-forward recomputes the full period timeline on every refresh, so a variance break self-heals on the next run. If it survives a refresh, escalate to GSI — never invent a re-roll or a reload as the fix.');
+    if(glN) facts.push('On the account'+(sum.gl.accts.length!==1?'s':'')+' below'+(glA?(' ('+glA+')'):'')+', Account Balances (F0902) don\'t tie to the posted Account Ledger (F0911) — '+glN+' row'+(glN!==1?'s':'')+' across '+sum.gl.accts.length+' account'+(sum.gl.accts.length!==1?'s':'')+' don\'t roll forward. Clear the balance in order: FIRST run Repost Account Balances (R099102) in JD Edwards to rebuild the balances from the posted detail; once those tie, THEN reload the GL on this page so the corrected balances flow into RapidReconciler. State the order plainly as the next step — RapidReconciler does not verify the repost and must not ask the analyst to prove or attest it ran clean.');
+    if(varN) facts.push('On the account'+(sum.varc.accts.length!==1?'s':'')+(vrA?(' ('+vrA+')'):'')+', the reconciliation variance is off — '+varN+' row'+(varN!==1?'s':'')+' across '+sum.varc.accts.length+' account'+(sum.varc.accts.length!==1?'s':'')+'. There is nothing to reload for it: RapidReconciler recomputes the full period timeline on every refresh, so it clears on the next run. If it survives a refresh, escalate to your IT department to investigate — never invent a re-roll or a cardex reload for it.');
     return 'You are briefing a JDE inventory-reconciliation analyst on company '+co+' at the start of their day.\n'
-      + 'These are the ONLY facts you may use (never invent a number, an account, or a lever):\n' + facts.join('\n') + '\n'
-      + (glN&&varN ? 'Fix GL-side breaks BEFORE variance (a GL break can masquerade as a variance break, and the GL fix plus a refresh often clears the variance too).\n' : '')
+      + 'These are the ONLY facts you may use (never invent a number, an account, or a step):\n' + facts.join('\n') + '\n'
+      + (glN&&varN ? 'Clear the GL first — the repost followed by a reload usually squares the variance too, so the variance may need no separate attention.\n' : '')
       + 'Write 2-3 short sentences in plain analyst English (the reader is JDE-fluent — do not expand acronyms). '
-      + 'Name what is off, the account(s) involved, and which lever to pull first and why. No preamble, no greeting, no markdown, no lists.';
+      + 'Name what is off, the account(s) involved, and the next step in order. No preamble, no greeting, no markdown, no lists.';
   }
   // Render the AI brief band. AI-only, no deterministic fallback: on failure the
   // band is left empty (owner decision). Guarded so the same scope isn't re-asked.
@@ -885,7 +761,7 @@
     // inline copy if config.js didn't load, so the assistant never loses its policy.
     var sys=(window.RRV8 && RRV8.ROLLFORWARD_GROUNDING)
       ? RRV8.ROLLFORWARD_GROUNDING
-      : 'You are RapidReconciler’s Account Roll Forward assistant, helping a finance analyst keep the inventory source-of-truth accurate. GL-side breaks have two levers, in order: R099102 repost (in JD Edwards), then Reload GL. Variance-side breaks have NO lever — the roll-forward recomputes the full period timeline on every refresh, so a variance break self-heals on the next run; one that survives a refresh is escalated to GSI, never a re-roll or a cardex reload. Always fix GL-side breaks before variance. Be concise (2-4 sentences), plain finance language, no SQL/endpoint/table jargon beyond standard JDE references.';
+      : 'You are RapidReconciler’s Account Roll Forward assistant, helping a JDE cost accountant keep the inventory source-of-truth accurate. When Account Balances (F0902) don\'t tie to the posted Account Ledger (F0911), clear the balance in order: FIRST run Repost Account Balances (R099102) in JD Edwards to rebuild the balances from the posted detail, THEN reload the GL on this page so the corrected balances flow into RapidReconciler — state the order as the next step, never as a checkpoint the analyst must prove to RapidReconciler. When the reconciliation variance is off, there is no manual step: RapidReconciler recomputes the full period timeline on every refresh, so it clears on the next run; one that survives a refresh goes to your IT department to investigate, never a re-roll or a cardex reload. When both are off, clear the GL first — the repost and reload usually square the variance too. Be concise (2-4 sentences), plain accounting language, no SQL/endpoint/table jargon beyond standard JDE references.';
     aiExplain(sys, briefPrompt(sum)).then(function(text){
       body.classList.remove('is-thinking');
       body.textContent=text||'';   // empty reply → empty band (no fallback)
@@ -904,15 +780,103 @@
   document.getElementById('accountPick').addEventListener('change',function(){ state.account=this.value; renderGrid(); });
   wireBand('corrHead','corrBody'); wireBand('rptHead','rptBody');
   // Demo AI-tier pill flipped (global RRAI): re-run the brief at the new exposure
-  // (and re-gate the R099102 report-checker) so the pill visibly drives this page's
-  // AI the same way it drives Home.
+  // so the pill visibly drives this page's AI the same way it drives Home.
   window.addEventListener('rrv8:aitierchange', function(){
-    syncR99Exposure();
     renderBrief(true);   // force a re-ask at the new tier
   });
-  // Block navigation on the Reload GL card while it's gated (pointer-events:none
-  // stops the mouse, but a focused <a> can still be Enter-activated).
-  (function(){ var c=document.getElementById('reloadGlCard'); if(c){ c.addEventListener('click',function(e){ if(c.classList.contains('is-gated')) e.preventDefault(); }); } })();
+
+  // ============ Reload GL modal (in-page) ============
+  // Opens on THIS page instead of navigating to admin-reload-gl.html (a dead end
+  // from the analyst flow). Reuses that page's endpoints:
+  //   GET  inventory/reload-gl/preview  -> {cutoffDate, affected}  (null = nothing)
+  //   POST inventory/reload-gl {cutoffDate} -> {affected}
+  // Reload GL is analyst-authorized (owner 2026-07-21): this IS the analyst's
+  // page and everyone here holds the data-management grant, so there is NO
+  // permission gate on the client — Go is always available and the server
+  // enforces authorization. RR is a utility, not an enforcement gate — no
+  // attestation checkbox either. Go is disabled ONLY as a data state (nothing to
+  // reload), never as a permission state.
+  var _rlgCutoff=null, _rlgBusy=false;
+  function rlgFetch(area, opts){
+    opts=opts||{};
+    var token; try{ token=localStorage.getItem('rrv8.token'); }catch(_){}
+    var base=(window.RRDB?RRDB.agentBase():null)||(window.RR_CONFIG&&RR_CONFIG.testAgentBase);
+    if(!token||!base) return Promise.reject(new Error('not signed in'));
+    var init={ method:opts.method||'GET', headers:{'Authorization':'Bearer '+token,'Accept':'application/json'} };
+    if(opts.body){ init.headers['Content-Type']='application/json;charset=UTF-8'; init.body=JSON.stringify(opts.body); }
+    return fetch(base+'/'+area, init).then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); });
+  }
+  // Full 'Month D, YYYY' date (matches admin-reload-gl.html's fmtDateLong; the
+  // grid's fmtDate abbreviates months, which the modal copy shouldn't).
+  function rlgFmtDate(iso){
+    var m=/^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso||''));
+    if(!m) return String(iso||'');
+    var d=new Date(Number(m[1]),Number(m[2])-1,Number(m[3]));
+    return d.toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'});
+  }
+  function rlgEls(){
+    return { back:document.getElementById('rlgModal'), desc:document.getElementById('rlgModalDesc'),
+             reminder:document.getElementById('rlgModalReminder'),
+             go:document.getElementById('rlgModalGo'),
+             cancel:document.getElementById('rlgModalCancel'), x:document.getElementById('rlgModalX') };
+  }
+  function rlgClose(){ var m=rlgEls(); if(m.back) m.back.classList.remove('is-open'); }
+  function rlgOpen(){
+    var m=rlgEls(); if(!m.back) return;
+    _rlgCutoff=null;
+    m.go.disabled=true; m.go.textContent='Go';
+    m.desc.textContent='Checking what will reload…';
+    if(m.reminder) m.reminder.hidden=true;   // hidden until we know there's something to reload
+    m.back.classList.add('is-open');
+    rlgFetch('inventory/reload-gl/preview').then(function(p){
+      var cutoff=p&&p.cutoffDate;
+      if(!cutoff){                     // null cutoff = GL rolled forward clean (data state, not permission)
+        _rlgCutoff=null;
+        m.desc.textContent='The GL rolled forward cleanly — there’s nothing to reload.';
+        if(m.reminder) m.reminder.hidden=true;
+        m.go.disabled=true;
+        return;
+      }
+      _rlgCutoff=cutoff;
+      var n=Number(p.affected)||0;
+      m.desc.textContent='This clears RapidReconciler’s copy of the general ledger for company '
+        +(state.company||'—')+' from '+rlgFmtDate(cutoff)+' forward ('+n.toLocaleString('en-US')+' row'+(n!==1?'s':'')
+        +') and re-pulls it from JD Edwards on the next scheduled refresh. Your JD Edwards data is never changed.';
+      if(m.reminder) m.reminder.hidden=false;   // there IS something to reload — show the R099102-first reminder
+      m.go.disabled=false;
+    }).catch(function(e){
+      _rlgCutoff=null;
+      m.desc.textContent='Couldn’t check the GL reload — '+((e&&e.message)||e)+'.';
+      if(m.reminder) m.reminder.hidden=true;
+      m.go.disabled=true;
+    });
+  }
+  function rlgGo(){
+    if(_rlgBusy||!_rlgCutoff) return;
+    var m=rlgEls();
+    _rlgBusy=true; m.go.disabled=true; m.go.textContent='Reloading…';
+    rlgFetch('inventory/reload-gl',{method:'POST',body:{cutoffDate:_rlgCutoff}}).then(function(r){
+      var n=Number(r&&r.affected)||0;
+      // The break is still in the loaded data until the next scheduled refresh —
+      // flag it so the band shows the PENDING state, not amber "out of balance".
+      _reloadRequested=true; renderCorrective();
+      toast('GL copy cleared — '+n.toLocaleString('en-US')+' row'+(n!==1?'s':'')+'. It rebuilds on the next scheduled refresh.');
+      rlgClose();
+    }).catch(function(e){
+      m.desc.textContent='Reload GL failed — '+((e&&e.message)||e)+'.';
+    }).then(function(){
+      _rlgBusy=false; m.go.textContent='Go';
+    });
+  }
+  (function wireReloadModal(){
+    var btn=document.getElementById('rlgBtn'); if(btn) btn.addEventListener('click',rlgOpen);
+    var m=rlgEls();
+    if(m.x) m.x.addEventListener('click',rlgClose);
+    if(m.cancel) m.cancel.addEventListener('click',rlgClose);
+    if(m.go) m.go.addEventListener('click',rlgGo);
+    if(m.back) m.back.addEventListener('click',function(e){ if(e.target===m.back) rlgClose(); });
+    document.addEventListener('keydown',function(e){ if(e.key==='Escape' && m.back && m.back.classList.contains('is-open')) rlgClose(); });
+  })();
 
   // ---- agent-first load: v6ui_raccountsummary from the active DB's agent ----
   function loadFromAgent(){
@@ -928,9 +892,9 @@
   }
   // topbar db name
   (function(){ var ctx=_scopeCtx(); var nm=(ctx&&ctx.key)?ctx.key.split('.').slice(-2,-1)[0]:null; var dbEl=document.getElementById('topbarDb'); if(nm&&nm!=='_'&&dbEl) dbEl.textContent=nm; })();
-  // AI plan tier from the client's purchased level — then re-gate the R099102
-  // checker and (re)render the brief now the real tier is known.
-  aiHealth().then(function(lvl){ _aiMaxLevel=lvl||'off'; syncR99Exposure(); renderBrief(); });
+  // AI plan tier from the client's purchased level — then (re)render the brief
+  // now the real tier is known.
+  aiHealth().then(function(lvl){ _aiMaxLevel=lvl||'off'; renderBrief(); });
 
   // Agent-first, no static fallback (V8 is production-only): a failed load shows
   // a clean "sign in / unavailable" rather than foreign snapshot data, which
