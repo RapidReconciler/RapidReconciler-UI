@@ -8,7 +8,8 @@
   period's begin date + counts the F0911 rows); after the operator attests,
   POST inventory/reload-gl clears RapidReconciler's GL COPY from that date.
   JDE is never touched — the GL comes back on the next scheduled refresh.
-  Both endpoints are admin-gated server-side; the client gate here is UX.
+  Both endpoints are gated on the data-management (analyst) permission
+  server-side; the client gate here is UX.
 
   Standard admin-page chrome: floating Home button (corner-chrome) + the help "?"
   circle (help-sidebar.js, from body data-help-src -> administrator-start-here#reload-gl).
@@ -91,7 +92,7 @@
       <!-- Non-admin gate -->
       <div class="note gate-notice" id="js-gate" role="alert">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
-        <div>This is an administrator function. <b>Contact your administrator</b> to reload GL data.</div>
+        <div>This needs the data-management (analyst) permission. <b>Contact your administrator</b> if you need access.</div>
       </div>
 
       <div id="js-tool">
@@ -207,7 +208,11 @@
   function showFetchError(msg) { const b = $('js-fetch-error'); $('js-fetch-error-msg').textContent = msg; b.classList.add('is-visible'); }
   function clearFetchError() { $('js-fetch-error').classList.remove('is-visible'); }
   function activeDb() { const s = window.RR_SESSION || {}; const d = Array.isArray(s.dbs) ? s.dbs : []; return d[s.activeDbIndex || 0] || d[0] || null; }
-  function isAdmin() { const a = activeDb(); return !!(a && a.t && a.t.adm === true); }
+  // Analyst-authorized when the role's data-management grant isn't explicitly
+  // off (perms.dm !== false, fail-open) — mirrors home.html canAnalyst() and the
+  // server's requireAnalyst(). No superuser (su) flag exists in the client token,
+  // so we gate solely on perms.dm, matching every other analyst surface.
+  function canReload() { const a = activeDb(); if (!a) return false; const perms = a.perms || {}; return perms.dm !== false; }
 
   // ---------- Reload GL ----------
   // GET preview derives the cutoff (earliest broken period's begin date) + counts
@@ -238,7 +243,7 @@
       // Fail safe to "not running". A poll error must NOT leave the "data refresh
       // is running" banner latched: once shown, a failing poll can never report
       // not-in-progress, so the stale banner would stick forever (and block the
-      // reload) even though nothing is running. The reload endpoint is admin-gated
+      // reload) even though nothing is running. The reload endpoint is analyst-gated
       // server-side — the client banner is a UX hint, not the real collision guard.
       applyJobGuard(false);
     });
@@ -292,9 +297,9 @@
     const ver = $('js-app-ver');
     if (ver) ver.textContent = (RR_CONFIG.release || 'v8') + (RR_CONFIG.buildStamp ? ' · ' + RR_CONFIG.buildStamp : '');
 
-    // Client gate (UX only — the endpoints are admin-gated server-side too).
+    // Client gate (UX only — the endpoints are analyst-gated server-side too).
     // Fail open if the session hasn't hydrated yet.
-    if (window.RR_SESSION && !isAdmin()) {
+    if (window.RR_SESSION && !canReload()) {
       document.body.classList.add('is-gated');
       $('js-gate').classList.add('is-visible');
       return;

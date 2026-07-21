@@ -54,8 +54,7 @@ This section captures only the **GL Class Integrity-specific** content that the 
 
 **Finding cards** (formatting spec, Section 7.2): one card per issue type. Typical findings:
 
-- `Blank LocationClass on Stock items` (P1 — JDE cannot route the transaction; falls back to wildcard or errors)
-- `GL Class Mismatch — branch and location codes differ` (P2 — same item posts to different accounts depending on transaction type)
+- `GL Class Mismatch — branch and location codes differ` (P1 — work-order moves via R31802A read the F4102 branch class while all other F4111 moves read the F41021 location class; when the two resolve to different accounts, the same item posts to two accounts depending on transaction type. A blank F41021 class is one case of this split — it routes through the DMAAI `****` default like any class — not a separate finding.)
 
 When the data shows clear sub-patterns within a finding (e.g., a single branch concentration, a recurring branch→location class pair), describe these in the Pattern field rather than splitting into separate findings — the resolution path is the same.
 
@@ -65,25 +64,23 @@ Each card has the standard Scope / Pattern / Resolution sub-fields. **Do not use
 
 | Priority | Issue type |
 |---|---|
-| **P1** | Blank LocationClass on Stocking Type S (stock) items — JDE cannot determine the inventory account |
-| **P2** | GL Class Mismatch (both populated, values differ) — transactions split across two accounts depending on type |
+| **P1** | GL Class Mismatch — branch (F4102) and location (F41021) classes resolve to different accounts, gated on IC/IM manufacturing activity. A blank F41021 class is one case of the split (it routes through the DMAAI `****` default), not a separate issue type. |
 
 **Sub-tables** (formatting spec, Section 7.3): for small exports (≤30 rows total, the typical case for GL Class), inline a sub-table under each Finding card listing the affected item-branch-location records. Sort sub-tables by Company → Branch → Item ascending (the natural source-sheet reading order).
 
 **Action Plan** (formatting spec, Section 7.4): in execution order. Typical sequence:
 
-1. Investigate any branch-wide blank-location clusters first — a single setup-process gap may explain many rows.
-2. For each blank row, populate F41021 GL class via P41024 (typically matching the branch class unless a location-specific class is intended).
-3. For each mismatch row, determine which side is correct and update the other; for systematic patterns (same branch→location class pair across many items), apply the fix as a single batch.
-4. Review historical GL postings for corrected items — transactions posted before the correction may have routed to the fallback AAI; post a reclassification journal entry if material amounts are involved.
-5. Re-run Integrity Report 5 to confirm the corrected items have cleared.
+1. For each mismatch, determine which side is correct (branch or location) and align the other; for systematic patterns (same branch→location class pair across many items), apply the fix as a single batch.
+2. A blank F41021 class needs action only when it is part of a mismatch that splits an IC/IM item across two accounts — resolve it as part of that split, not as a blanket cleanup. A blank that resolves through the DMAAI `****` default and reconciles is not a finding.
+3. Review historical GL postings for any items whose split was corrected — transactions posted before the correction may have routed to the account for the old class; post a reclassification journal entry if material amounts are involved.
+4. Re-run Integrity Report 5 to confirm the corrected items have cleared.
 
 **Source sheet handling** (formatting spec, Section 10): GL Class Integrity exports are typically small. **Pattern B — highlight all rows by issue type** when the export has ≤30 rows and the partition is clean (every row is either Blank or Mismatch). For larger exports, **Pattern A — no highlights, AutoFilter only**.
 
 ### 1.4 Notes and Limitations
 
 - **Blank LocationClass detection:** The LocationClass column may contain space-padded values (e.g., four spaces) rather than true empty cells. Claude strips whitespace from GL class fields before classifying rows — a cell containing only spaces is treated as blank, not as a GL class code.
-- Claude analyzes the data as exported. The StockType column is used to determine whether a blank LocationClass is a red flag — blank LocationClass on Stocking Type S is always Priority 1.
+- Claude analyzes the data as exported. A blank LocationClass is treated as just another class — it routes through the DMAAI `****` default and reconciles on its own. It is called out only when it is part of a branch/location split (see Section 2); the StockType column helps identify which blanks sit on items with IC/IM manufacturing activity, where a split would matter.
 - GL class code interpretation (whether a code is stock vs. non-stock) requires JDE access to the chart of accounts and DMAAI setup. Claude flags codes that appear unusual based on the data pattern (e.g., 7xxx-range codes when the inventory series is 6xxx) but cannot confirm their purpose without JDE access.
 - Mismatch resolution requires JDE access to confirm which GL class (branch or location) is correct for each item.
 - For exports with many mismatches following the same GL class pair pattern, Claude groups findings by pattern in the Pattern field of the relevant card to keep the summary workable.
@@ -115,17 +112,13 @@ The GL class code exists in two places for each item:
 
 When the two records carry the same GL class code, all transaction types for that item post to the same inventory account — and reconciliation works cleanly. When they differ, the same physical item will post to different accounts depending on how it is transacted, creating a structural account mismatch.
 
-### The Blank Location GL Class — Red Flag
+### A Blank Location GL Class Is Just Another Code
 
-A blank GL class code on the Item Location record is the most serious finding in this report. When the location record has no GL class:
+A blank GL class on the Item Location record is not special and is not a finding on its own. It resolves through the DMAAI exactly like any class: either a specific entry, or the `****` wildcard/default row — JDE's catch-all for any class not explicitly set up, blank included. When that coverage exists, a blank-class transaction routes and posts normally.
 
-- JD Edwards cannot look up the inventory account from the DMAAI table for that transaction
-- JDE falls back to the Item Branch GL class or a wildcard AAI entry — which may map to a different account, or error entirely
-- RapidReconciler cannot assign the item's transactions to the correct inventory account during import
+Reconciliation ties regardless: both the cardex side and the GL side resolve through the same DMAAI, so a blank-class transaction lands on the same account on both sides and reconciles — no variance. RapidReconciler does not police JDE item setup, so a blank class is not a RapidReconciler reconciliation finding by itself.
 
-**Blank location GL class codes on stock items (Stocking Type S) are never expected and should always be treated as data quality errors requiring correction.**
-
-A blank location GL class may be acceptable only for non-stock items (Stocking Type N or similar) that are intentionally excluded from perpetual inventory tracking. If the report shows blank location GL classes on Stocking Type S items, those require immediate investigation.
+A blank matters only when it is part of a **branch/location split** — the case covered above, where the F4102 branch class and the F41021 location class route the same item to different accounts. A blank F41021 class is one way the two sides can resolve to different accounts (the location side takes the `****` default while a work-order move takes the F4102 class), and that split is the real, IC/IM-gated finding. A blank that is not part of a split reconciles and needs no action.
 
 ---
 
@@ -142,25 +135,25 @@ A blank location GL class may be acceptable only for non-stock items (Stocking T
 | **Description** | Item description from the Item Master | |
 | **Location** | The specific bin/rack/location within the branch | Blank indicates no location-level tracking |
 | **Lot** | Lot number, if lot-controlled | Blank for non-lot items |
-| **StockType** | Stocking Type from the Item Branch record | S = stock; N = non-stock. Blank location GL class is only acceptable for non-stock types |
+| **StockType** | Stocking Type from the Item Branch record | S = stock; N = non-stock. Helps identify which items have IC/IM manufacturing activity, where a branch/location split would matter |
 | **BranchClass** | GL class code on the Item Branch record (F4102) | Source for work order transactions |
-| **LocationClass** | GL class code on the Item Location record (F41021) | Source for inventory transactions. **Blank = red flag for stock items** |
+| **LocationClass** | GL class code on the Item Location record (F41021) | Source for inventory transactions. Blank is just another class — it routes through the DMAAI `****` default; relevant only when it forms a branch/location split |
 
 ---
 
 ## Section 4: Issue Type Reference
 
-Integrity Report 5 produces two types of findings:
+Integrity Report 5 surfaces one finding — the branch/location GL class split — which shows up in two data conditions: rows where both classes are populated but differ, and rows where the location class is blank.
 
 ### Blank Location GL Class
 
 **LocationClass field is empty on one or more rows.**
 
-**Impact:** The item location record has no GL class code. JD Edwards cannot route inventory transactions to the correct account via the DMAAI lookup. The system falls back to the branch record GL class or a wildcard AAI — which may post to a different account or generate an AAI error.
+**Impact:** A blank class is not a finding on its own. It resolves through the DMAAI like any class — a specific entry, or the `****` wildcard/default row that covers any class not explicitly set up (blank included) — and reconciles, because the cardex side and the GL side resolve through the same DMAAI and land on the same account. RapidReconciler does not police JDE item setup, so a blank class is not a RapidReconciler reconciliation finding by itself.
 
-**Severity:** HIGH for Stocking Type S items. This is a data quality error, not a configuration mismatch.
+**When it matters:** A blank becomes relevant only as one case of the branch/location split below — when a work-order move (R31802A) reads the F4102 branch class and posts to one account while the location side takes the `****` default and posts to another. That split is the real finding, and only on items with IC/IM manufacturing activity.
 
-**Example:** An item with Branch GL class 6180 has a blank Location GL class. Every inventory adjustment and PO receipt for that item at that location will use the fallback AAI path rather than the intended account for GL class 6180.
+**Example:** An item with Branch GL class 6180 and a blank Location class. Inventory adjustments and PO receipts route through the `****` default and reconcile; only if this item also has work-order activity — so that R31802A posts to the 6180 account while the location side resolves elsewhere — is there a split to investigate.
 
 ### GL Class Mismatch
 
@@ -201,11 +194,11 @@ One row per issue type found in the export:
 | **Companies Affected** | Company numbers present for this issue type |
 | **Description** | Plain-language description of the finding and its impact |
 
-Color-code rows: Priority 1 / red for Blank LocationClass; Priority 2 / orange for GL Class Mismatch.
+Color-code rows by the branch/location split: highlight rows where the two classes resolve to different accounts on an item with IC/IM activity (the P1 finding). Blank-location rows that reconcile through the DMAAI `****` default are not a finding and need no highlight.
 
 ### Row Count by Company
 
-Summarize total rows, blank LocationClass count, and GL class mismatch count for each company. Flag any company with blank location GL class rows at Priority 1 (red).
+Summarize total rows, blank LocationClass count, and GL class mismatch count for each company. Flag any company whose rows form a branch/location split on IC/IM items at Priority 1 (red); a blank count on its own is descriptive, not a priority flag.
 
 ---
 
@@ -217,8 +210,8 @@ This section is populated by Claude based on the uploaded export. One sub-sectio
 
 | Priority | Condition | Severity |
 |---|---|---|
-| **Priority 1** | Blank LocationClass on any Stocking Type S item | HIGH |
-| **Priority 2** | GL class mismatch — branch and location GL class codes differ (both populated) | MEDIUM-HIGH |
+| **Priority 1** | Branch/location split — F4102 and F41021 classes resolve to different accounts on an item with IC/IM manufacturing activity (whether both are populated and differ, or the location is blank and takes the `****` default while a work-order move takes the branch class) | HIGH |
+| **No finding** | Blank LocationClass that reconciles through the DMAAI `****` default with no offsetting split — RapidReconciler does not police JDE setup | — |
 
 ### Finding Sub-Section Template
 
@@ -247,11 +240,13 @@ Decision table:
 
 ## Section 7: Common Root Causes
 
-### Blank Location GL Class
+### Blank Location Class — Only When It Forms a Split
+
+A blank location class is a finding only when it forms a branch/location split on an IC/IM item (the location side takes the DMAAI `****` default while a work-order move takes the F4102 branch class, and the two resolve to different accounts). A blank that reconciles through the `****` default is not a finding and needs no correction. The causes below explain how such a split arises; the resolutions apply only once a genuine split is confirmed, not as blanket cleanup of every blank.
 
 | Cause | How to Identify | Resolution |
 |---|---|---|
-| Item was received into a new location before GL class was set up | Location record creation date earlier than GL class setup date | Populate GL class on the Item Location record to match the branch record |
+| Item was received into a new location before GL class was set up | Location record creation date earlier than GL class setup date | If it forms a split, align the F41021 location class with the branch class |
 | GL class changed on Item Branch but location records were not updated | Branch GL class differs from the expected value for that product category | Update all location records for the item to match the new branch GL class |
 | Consignment / temporary / external location where GL class was not configured | Location code suffix (e.g., -CF, -CONS, -EXT) or description indicates non-standard location | Determine intended GL class for that location type; populate accordingly, or change Stocking Type if truly non-stock |
 | Item was set up incorrectly at initial data load | Blank appears on multiple items across the same branch | Bulk update location records via SQL or JDE mass update tool (if available) |
@@ -283,15 +278,17 @@ Decision table:
 
 Use this procedure each time an Integrity Report 5 export is received.
 
-**Step 1 — Scan for Blank Location GL Class First**
+**Step 1 — Assess GL Class Mismatches (Splits) First**
 
-Filter the LocationClass column for blank values. Any blank on a Stocking Type S item is Priority 1. Group blank items by branch plant — a cluster of blanks at the same branch or location type often indicates a systemic setup gap rather than individual data entry errors.
-
-**Step 2 — Assess GL Class Mismatches**
-
-For each mismatch row, compare the branch and location GL class codes. Identify patterns:
+Compare the branch and location GL class codes on every row where they differ. Identify patterns:
 - Same GL class pair appearing multiple times (e.g., many items with 6101 branch vs 6102 location) suggests a batch GL class change that was not fully propagated
 - Single-item mismatches with unusual GL classes (e.g., non-inventory class codes on what appears to be a stock item) suggest item setup errors
+
+A mismatch is a finding only when it splits an item across two accounts on IC/IM manufacturing activity — a work-order move (R31802A) takes the F4102 branch class while other F4111 moves take the F41021 location class.
+
+**Step 2 — Handle Blank Location Classes**
+
+Filter the LocationClass column for blank values. A blank is not a finding on its own — it routes through the DMAAI `****` default and reconciles like any class, and RapidReconciler does not police JDE setup. Treat a blank as a finding only when it forms a split (the location side takes the `****` default while a work-order move takes the branch class, and the two resolve to different accounts). Group any such blanks by branch plant — a cluster at the same branch often indicates one setup-process gap rather than many separate ones.
 
 **Step 3 — Cross-Reference with DMAAI Model Table**
 
@@ -317,9 +314,9 @@ Maintain a log of each finding, the determination (error vs intentional), the ac
 ## Section 10: Related Documentation
 
 - [DMAAI Analysis Guide](dmaai-analysis.md) — Reference for Integrity Report 2 (DMAAI Entry Integrity). GL class codes that appear in this report should also be present in the model DMAAI table (4152 PI).
-- [Cardex Variance Analysis Guide](cardex-variance-analysis.md) — If a blank or mismatched GL class has caused transactions to post to the wrong account, cardex variances may result.
+- [Cardex Variance Analysis Guide](cardex-variance-analysis.md) — If a branch/location GL class split has posted an item's work-order and other movements to different accounts, cardex variances may result.
 - [End of Day Analysis Guide](end-of-day-analysis.md) — AAI errors caused by missing GL class entries produce End of Day variances.
 
 ---
 
-*For support, contact GSI at [rrsupport@getgsi.com](mailto:rrsupport@getgsi.com)*
+*For support, contact your IT department.*

@@ -1,31 +1,33 @@
 <!DOCTYPE html>
 <!--
   =============================================================================
-  RRV8: Accounting > Model DMAAI Review  (lean review + approve)
+  RRV8: Accounting > Model DMAAI Review  (AI-led, no sign-off)
   =============================================================================
-  A focused surface for the model DMAAI strategy: the model DMAAI table
-  (4152 PI) maps every inventory GL class to a GL account. GSI surfaces the
-  diagnostic, but only the customer's accounting team can attest the mappings
-  are correct, so this page ends in a single MODEL-LEVEL sign-off.
+  An AI-led review surface for the model DMAAI strategy. The model DMAAI table
+  (4152) maps every inventory GL class to a GL account. The only question this
+  page answers is: does every GL class an item uses map into the model?
 
-  Three sections (grids first, both collapsible + default-collapsed; sign-off last):
-    - Model DMAAI Table    (Integrity Report 1 / v_integrity1_aai_base) —
-      the GL-class -> account mappings the model defines (reference only;
-      corrections are made in JDE).
-    - Excluded GL classes  (Integrity Report 3 / v_integrity3_exc_glc) —
-      items whose GL class isn't in the model, so their value is NOT counted.
-    - Approve the model    — GET/POST /inventory/integrity/model-approval.
-      Records who/when (a small model-level attestation); the Home card's
-      verdict reads from the same endpoint.
+    - report3GlClassCount === 0  -> CLEAN. Every GL class used in inventory is
+      in the model; nothing falls out of reconciliation, nothing to review.
+    - report3GlClassCount  >  0  -> ISSUE. N GL classes are excluded, so their
+      items' value is NOT counted in reconciliation. Review whether each
+      exclusion is intentional (non-stock / expense) or a real inventory class
+      wrongly left out. Corrections are made at the SOURCE (in JD Edwards).
+
+  There is NO sign-off / attestation on this page: no approve button, no POST.
+  The model-approval endpoint is read for its three counts only (report1Count,
+  report3Count, report3GlClassCount); the retired sign-off fields are ignored.
+
+  Layout mirrors the analyst Data Health landing: the AI verdict leads, the
+  excluded GL classes surface only when there are any (quiet when clean), and
+  the model baseline mapping table sits last as collapsible reference.
 
   Everything below the scope band is scoped to the one company passed from the
   prior page (?company= / the per-DB analyst hand-off key), or all companies
-  when none is passed. Both tables use curated columns (not the raw view
-  schema), capped for display: Excluded rolls items up to a per-(GL class,
-  company) count; the Model DMAAI Table shows Company / GL class / Account /
-  Account name and folds the constant DMAAI key (table 4152, document type)
-  into a caption. The agent's /model-baseline endpoint returns the lean
-  projection. Deliberately leaner than the full worklist on accounting-dmaais.html.
+  when none is passed.
+
+  Chrome: admin-chrome.css palette + the floating corner-chrome Home button +
+  the shared help "?" (help-sidebar.js reads body data-help-src). No sidebar.
   =============================================================================
 -->
 <html lang="en">
@@ -34,36 +36,28 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Model DMAAI Review &mdash; RapidReconciler V8</title>
 <link href="fonts/fonts.css" rel="stylesheet">
-<link href="sidebar.css" rel="stylesheet">
+<link href="admin-chrome.css" rel="stylesheet">
 <link href="../Tools/help-sidebar.css" rel="stylesheet">
 <script src="config.js"></script>
-<script src="sidebar.js"></script>
 <script defer src="../Tools/help-sidebar.js"></script>
 <style>
-  :root {
-    --navy: #1f2d4a; --blue: #2b5fb0; --blue-pale: #e6efff;
-    --orange: #f08a24; --orange-pale: #fbe7ce; --orange-deep: #d97316;
-    --green: #2e8a55; --green-pale: #def4e6; --green-deep: #1a6b3f;
-    --red: #c0392b; --red-pale: #fce5e1;
-    --bg: #fafbfd; --bg-soft: #f3f5f9; --bg-card: #ffffff;
-    --text: #1f2d4a; --text-soft: #4a5468; --text-muted: #828a9a;
-    --rule: #e6eaf0; --rule-strong: #cfd6e0;
-    --shadow-sm: 0 1px 2px rgba(20,32,55,.04);
-    --shadow-md: 0 4px 14px rgba(20,32,55,.08);
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text); font-family: 'Open Sans', sans-serif; }
-  .page { max-width: 1080px; margin: 0 auto; padding: 26px 28px 60px; }
-  h1 { font-family: 'Source Sans 3', sans-serif; font-size: 26px; margin: 0 0 4px; color: var(--navy); }
-  .lede { color: var(--text-soft); font-size: 14.5px; line-height: 1.55; margin: 0 0 4px; max-width: 760px; }
-  .card { background: var(--bg-card); border: 1px solid var(--rule); border-radius: 14px; box-shadow: var(--shadow-sm); padding: 22px; margin-top: 18px; }
-  .card h2 { font-family: 'Source Sans 3', sans-serif; font-size: 17px; margin: 0 0 3px; color: var(--navy); }
-  .card .sub { color: var(--text-muted); font-size: 12.5px; margin: 0 0 14px; }
-  .note-band { display: flex; gap: 10px; align-items: flex-start; background: var(--bg-soft); border: 1px solid var(--rule); border-radius: 10px; padding: 12px 14px; font-size: 13px; color: var(--text-soft); line-height: 1.5; margin-top: 14px; }
-  .note-band svg { width: 16px; height: 16px; color: var(--blue); flex-shrink: 0; margin-top: 2px; }
+  /* Shared chrome (canonical palette, command-center wash, corner-chrome Home
+     button, page shell, card primitives) lives in admin-chrome.css, linked
+     above. Only page-specific rules below. --green-deep is the one palette token
+     this page uses that admin-chrome.css does not define. */
+  :root { --green-deep: #1a6b3f; }
 
-  /* Scope band — read-only reminder of the database + company in view
-     (passed from the prior page). */
+  h1 { font-family: 'Source Sans 3', sans-serif; }
+  /* Wider than the admin-chrome default so the reference tables have room. */
+  .page { max-width: 1040px; }
+  .lede { color: var(--text-soft); font-size: 14.5px; line-height: 1.55; margin: 8px 0 0; max-width: 760px; }
+
+  .card { padding: 22px; border-radius: 14px; }
+  .card h2 { font-family: 'Source Sans 3', sans-serif; font-size: 17px; margin: 0 0 3px; color: var(--navy); }
+  .card .sub { color: var(--text-muted); font-size: 13px; margin: 0 0 14px; line-height: 1.5; }
+  .card[hidden] { display: none; }
+
+  /* Scope band — read-only reminder of the database + company in view. */
   .scope-band { display: flex; gap: 34px; flex-wrap: wrap; align-items: center; margin-top: 14px; padding: 18px 24px; background: var(--bg-soft); border: 1px solid var(--rule); border-left: 4px solid var(--navy); border-radius: 12px; box-shadow: var(--shadow-sm); }
   .scope-item { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
   .scope-k { font-size: 12.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted); }
@@ -76,158 +70,118 @@
   .card.is-collapsed .card-caret { transform: rotate(-90deg); }
   .card.is-collapsed .card-collapsible { display: none; }
 
-  /* AI exclusion-assessment card (decision support for the sign-off) */
-  .ai-card { border-color: #d9e2f2; background: linear-gradient(180deg, #fbfcff 0%, var(--bg-card) 60%); }
-  .ai-head { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
+  /* AI-led verdict card — leads the page. */
+  .ai-card { border-color: #d9e2f2; background: linear-gradient(180deg, #fbfcff 0%, var(--bg-card) 60%); margin-top: 18px; }
+  .ai-head { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
   .ai-spark { width: 18px; height: 18px; color: var(--blue); flex-shrink: 0; }
   .ai-title { font-family: 'Source Sans 3', sans-serif; font-weight: 800; font-size: 14px; color: var(--navy); }
   .ai-tier { margin-left: auto; font-size: 10px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: var(--text-muted); background: var(--bg-soft); border: 1px solid var(--rule); border-radius: 999px; padding: 2px 9px; }
-  .ai-lead { font-size: 14px; line-height: 1.55; color: var(--text); }
-  .ai-actions { margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .ai-lead { margin-top: 14px; font-size: 14px; line-height: 1.55; color: var(--text); }
+  .ai-lead[hidden] { display: none; }
+  .ai-actions { margin-top: 14px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .ai-actions[hidden] { display: none; }
   .ai-pill { border: 1px solid var(--blue); background: var(--blue-pale); color: var(--blue); border-radius: 999px; padding: 7px 15px; font-family: inherit; font-weight: 800; font-size: 12.5px; cursor: pointer; }
   .ai-pill:hover:not(:disabled) { background: #dbe8ff; }
   .ai-pill:disabled { opacity: .5; cursor: default; }
   .ai-answer { margin-top: 12px; font-size: 13.5px; line-height: 1.6; color: var(--text-soft); background: var(--bg-soft); border: 1px solid var(--rule); border-radius: 10px; padding: 12px 14px; white-space: pre-wrap; }
+  .ai-answer[hidden] { display: none; }
 
-  /* Draft-note button inside the sign-off card */
-  .note-draft { margin-top: 10px; }
-  .note-draft-btn { border: 1px solid var(--rule-strong); background: #fff; color: var(--text); border-radius: 8px; padding: 6px 12px; font-family: inherit; font-weight: 800; font-size: 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
-  .note-draft-btn:hover:not(:disabled) { border-color: var(--blue); color: var(--blue); }
-  .note-draft-btn:disabled { opacity: .5; cursor: default; }
-  .note-draft-btn svg { width: 13px; height: 13px; }
-
-  /* Card header row (heading left) */
-  .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
-  .card-head > div { min-width: 0; }
-
-  /* Verdict banner */
-  .verdict { display: flex; align-items: center; gap: 14px; border-radius: 12px; padding: 16px 18px; border: 1px solid var(--rule); }
-  .verdict.is-approved { background: var(--green-pale); border-color: #cfe6d8; }
-  .verdict.is-amber { background: var(--orange-pale); border-color: #f0d2a8; }
-  .verdict-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
-  .verdict.is-approved .verdict-dot { background: var(--green); }
-  .verdict.is-amber .verdict-dot { background: var(--orange); }
+  /* Verdict banner (inside the AI card). */
+  .verdict { display: flex; align-items: center; gap: 14px; border-radius: 12px; padding: 16px 18px; border: 1px solid var(--rule); background: var(--bg-soft); }
+  .verdict.is-clean { background: var(--green-pale); border-color: #cfe6d8; }
+  .verdict.is-issue { background: var(--orange-pale); border-color: #f0d2a8; }
+  .verdict-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; background: var(--text-muted); }
+  .verdict.is-clean .verdict-dot { background: var(--green); }
+  .verdict.is-issue .verdict-dot { background: var(--orange); }
   .verdict-main { flex: 1; min-width: 0; }
   .verdict-title { font-weight: 800; font-size: 15px; color: var(--navy); }
-  .verdict-sub { font-size: 13px; color: var(--text-soft); margin-top: 2px; }
-
-  .stat-row { display: flex; gap: 26px; margin: 16px 0 4px; flex-wrap: wrap; }
-  .stat { }
-  .stat-n { font-family: 'Source Sans 3', sans-serif; font-weight: 800; font-size: 22px; color: var(--navy); }
-  .stat-n.warn { color: var(--orange-deep); }
-  .stat-k { font-size: 11.5px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .07em; font-weight: 700; }
-
-  /* Approve controls */
-  .approve-row { margin-top: 16px; }
-  .attest { display: flex; gap: 9px; align-items: flex-start; font-size: 13.5px; color: var(--text); cursor: pointer; line-height: 1.5; }
-  .attest input { width: 16px; height: 16px; margin-top: 1px; accent-color: var(--green); flex-shrink: 0; }
-  textarea#note { width: 100%; margin-top: 12px; border: 1px solid var(--rule-strong); border-radius: 9px; padding: 10px 12px; font-family: inherit; font-size: 13.5px; color: var(--navy); resize: vertical; min-height: 64px; }
-  .btn { border: 1px solid var(--rule-strong); background: var(--bg-card); border-radius: 9px; padding: 9px 18px; font-weight: 800; font-size: 13.5px; cursor: pointer; font-family: inherit; color: var(--text); }
-  .btn-primary { background: var(--green); border-color: var(--green); color: #fff; }
-  .btn-primary:hover { background: var(--green-deep); border-color: var(--green-deep); }
-  .btn-primary:disabled { opacity: .5; cursor: default; }
-  .btn-row { display: flex; gap: 10px; align-items: center; margin-top: 14px; }
+  .verdict-sub { font-size: 13px; color: var(--text-soft); margin-top: 3px; line-height: 1.5; }
 
   /* Tables */
   .tbl-wrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 10px; margin-top: 4px; }
-  table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
-  th, td { text-align: left; padding: 7px 11px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 11px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
   th { background: var(--bg-soft); color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; font-size: 10.5px; font-weight: 800; position: sticky; top: 0; }
   tbody tr:last-child td { border-bottom: 0; }
-  .tbl-foot { font-size: 12px; color: var(--text-muted); padding: 8px 2px 0; }
-  .tbl-cap { font-size: 12px; color: var(--text-muted); padding: 0 2px 8px; }
-  .empty { padding: 26px; text-align: center; color: var(--text-muted); font-size: 13px; }
-  .loading { padding: 26px; text-align: center; color: var(--text-muted); font-size: 13px; }
-  .toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); background: var(--navy); color: #fff; padding: 11px 18px; border-radius: 10px; font-size: 13.5px; box-shadow: var(--shadow-md); opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 50; }
-  .toast.show { opacity: 1; }
+  .tbl-foot { font-size: 12.5px; color: var(--text-muted); padding: 8px 2px 0; }
+  .tbl-cap { font-size: 12.5px; color: var(--text-muted); padding: 0 2px 8px; }
+  .empty { padding: 26px; text-align: center; color: var(--text-muted); font-size: 13.5px; }
+  .loading { padding: 26px; text-align: center; color: var(--text-muted); font-size: 13.5px; }
 </style>
 </head>
-<body>
+<body
+  data-help-src="../RRUniversity/inventory-jde-account-structure.html#dmaai"
+  data-help-title="Looking up accounts in DMAAI tables">
 
-  <main class="page" id="js-page">
-    <h1>Model DMAAI Review</h1>
-    <p class="lede" id="modelKeyLine">Your model table is <strong>4152</strong>.</p>
+<div class="app">
 
-    <!-- Scope band — reminds the user which database + company they're viewing
-         (passed in from the page they came from). -->
-    <div class="scope-band" id="scopeBand">
-      <span class="scope-item"><span class="scope-k">Database</span><span class="scope-v" id="scopeDb">&mdash;</span></span>
-      <span class="scope-item"><span class="scope-k">Company</span><span class="scope-v" id="scopeCo">&mdash;</span></span>
-    </div>
+  <!-- ==================== CHROME ==================== -->
+  <div class="corner-chrome">
+    <a class="home-fab topbar-home" href="home.html" title="Back to Home">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></svg>
+      Home
+    </a>
+  </div>
 
-    <!-- ===== Report 1: model baseline (reference + per-row review) ===== -->
-    <!-- Grids come first and default COLLAPSED; the sign-off card sits last. -->
-    <section class="card is-collapsed" id="baselineCard">
-      <div class="card-head">
-        <div>
-          <h2 class="card-toggle" role="button" tabindex="0" aria-expanded="false" data-collapse>
-            <svg class="card-caret" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 6 8 10 12 6"/></svg>
-            Model DMAAI Table
-          </h2>
-          <p class="sub card-collapsible">The GL-class &rarr; account mappings the model defines, per company &mdash; with each account&rsquo;s description. Review the account on each row; corrections are made in JDE.</p>
-        </div>
+  <!-- ==================== MAIN ==================== -->
+  <main class="main">
+    <div class="page" id="js-page">
+
+      <header class="page-header">
+        <h1 class="page-title">Model DMAAI Review</h1>
+        <p class="lede" id="modelKeyLine">Your model table is <strong>4152</strong>.</p>
+      </header>
+
+      <!-- Scope band — reminds the user which database + company they're viewing
+           (passed in from the page they came from). -->
+      <div class="scope-band" id="scopeBand">
+        <span class="scope-item"><span class="scope-k">Database</span><span class="scope-v" id="scopeDb">&mdash;</span></span>
+        <span class="scope-item"><span class="scope-k">Company</span><span class="scope-v" id="scopeCo">&mdash;</span></span>
       </div>
-      <div class="card-collapsible"><div id="r1Body"><div class="loading">Loading&hellip;</div></div></div>
-    </section>
 
-    <!-- ===== Report 3: excluded GL classes ===== -->
-    <section class="card is-collapsed" id="excludedCard">
-      <h2 class="card-toggle" role="button" tabindex="0" aria-expanded="false" data-collapse>
-        <svg class="card-caret" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 6 8 10 12 6"/></svg>
-        Excluded GL Class Codes
-      </h2>
-      <div class="card-collapsible">
-        <p class="sub">GL classes used by items but not in the model &mdash; those items&rsquo; inventory value is <strong>not counted</strong> in reconciliation. Some exclusions are intended (non-stock / expense classes); confirm each is deliberate before you approve.</p>
+      <!-- ===== AI-led verdict (leads the page) ===== -->
+      <section class="card ai-card" id="verdictCard">
+        <div class="ai-head">
+          <svg class="ai-spark" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 1.6l1.9 5.1a5 5 0 0 0 2.9 2.9l5.1 1.9-5.1 1.9a5 5 0 0 0-2.9 2.9L12 21.4l-1.9-5.1a5 5 0 0 0-2.9-2.9L2.1 11.5l5.1-1.9a5 5 0 0 0 2.9-2.9z"/></svg>
+          <span class="ai-title">RapidReconciler AI</span>
+          <span class="ai-tier" id="aiTier">Full</span>
+        </div>
+        <div class="verdict" id="verdictBanner">
+          <span class="verdict-dot" aria-hidden="true"></span>
+          <div class="verdict-main">
+            <div class="verdict-title" id="verdictTitle">Reviewing the model&hellip;</div>
+            <div class="verdict-sub" id="verdictSub"></div>
+          </div>
+        </div>
+        <div class="ai-lead" id="aiLead" hidden></div>
+        <div class="ai-actions" id="aiActions" hidden>
+          <button type="button" class="ai-pill" id="aiAssessBtn" disabled>Assess these exclusions</button>
+        </div>
+        <div class="ai-answer" id="aiAnswer" hidden></div>
+      </section>
+
+      <!-- ===== Excluded GL classes (surfaced only when there are any) ===== -->
+      <section class="card" id="excludedCard" hidden>
+        <h2>Excluded GL class codes</h2>
+        <p class="sub">GL classes used by items but not in the model &mdash; those items&rsquo; inventory value is <strong>not counted</strong> in reconciliation. Some exclusions are intended (non-stock / expense classes); confirm each is deliberate, and correct any real inventory class at the source in JD Edwards.</p>
         <div id="r3Body"><div class="loading">Loading&hellip;</div></div>
-      </div>
-    </section>
+      </section>
 
-    <!-- ===== AI exclusion assessment (decision support for sign-off) ===== -->
-    <section class="card ai-card" id="aiCard">
-      <div class="ai-head">
-        <svg class="ai-spark" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 1.6l1.9 5.1a5 5 0 0 0 2.9 2.9l5.1 1.9-5.1 1.9a5 5 0 0 0-2.9 2.9L12 21.4l-1.9-5.1a5 5 0 0 0-2.9-2.9L2.1 11.5l5.1-1.9a5 5 0 0 0 2.9-2.9z"/></svg>
-        <span class="ai-title">RapidReconciler AI</span>
-        <span class="ai-tier" id="aiTier">Full</span>
-      </div>
-      <div class="ai-lead" id="aiLead">Reviewing the excluded value&hellip;</div>
-      <div class="ai-actions">
-        <button type="button" class="ai-pill" id="aiAssessBtn" disabled>Assess these exclusions</button>
-      </div>
-      <div class="ai-answer" id="aiAnswer" hidden></div>
-    </section>
-
-    <!-- ===== Approve / sign-off (last) ===== -->
-    <section class="card" id="approveCard">
-      <h2>Review &amp; approve the model</h2>
-      <p class="sub">One sign-off for the whole model table on this database.</p>
-
-      <div class="stat-row">
-        <div class="stat"><div class="stat-n" id="statR1">&mdash;</div><div class="stat-k">GL-class &rarr; account mappings</div></div>
-        <div class="stat"><div class="stat-n" id="statR3">&mdash;</div><div class="stat-k">GL classes excluded</div></div>
-        <div class="stat"><div class="stat-n warn" id="statExclAmt">&mdash;</div><div class="stat-k">On-hand value not accounted for</div></div>
-      </div>
-
-      <div class="approve-row" id="approveControls" hidden>
-        <label class="attest">
-          <input type="checkbox" id="attestChk">
-          <span>I confirm my accounting team has reviewed the model DMAAI mappings above (including any excluded GL classes) and they are correct for inventory transaction processing.</span>
-        </label>
-        <textarea id="note" placeholder="Optional: note which exclusions are intended, or anything worth recording with this sign-off."></textarea>
-        <div class="note-draft">
-          <button type="button" class="note-draft-btn" id="draftNoteBtn" disabled>
-            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 1.6l1.9 5.1a5 5 0 0 0 2.9 2.9l5.1 1.9-5.1 1.9a5 5 0 0 0-2.9 2.9L12 21.4l-1.9-5.1a5 5 0 0 0-2.9-2.9L2.1 11.5l5.1-1.9a5 5 0 0 0 2.9-2.9z"/></svg>
-            Draft note with AI
-          </button>
+      <!-- ===== Model baseline mapping table (collapsible reference, last) ===== -->
+      <section class="card is-collapsed" id="baselineCard">
+        <h2 class="card-toggle" role="button" tabindex="0" aria-expanded="false" data-collapse>
+          <svg class="card-caret" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 6 8 10 12 6"/></svg>
+          Model DMAAI table
+        </h2>
+        <div class="card-collapsible">
+          <p class="sub">The GL-class &rarr; account mappings the model defines, per company &mdash; with each account&rsquo;s description. Reference for the review above; corrections are made in JD Edwards.</p>
+          <div id="r1Body"><div class="loading">Loading&hellip;</div></div>
         </div>
-        <div class="btn-row">
-          <button class="btn btn-primary" id="approveBtn" type="button" disabled>Approve the model</button>
-          <span class="verdict-sub" id="approveHint"></span>
-        </div>
-      </div>
-    </section>
+      </section>
+
+    </div>
   </main>
-
-  <div class="toast" id="toast"></div>
+</div>
 
 <script>
 (function () {
@@ -293,8 +247,6 @@
   }
 
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (m) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[m]; }); }
-  var _toastT;
-  function toast(msg) { var t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(_toastT); _toastT = setTimeout(function () { t.classList.remove('show'); }, 3200); }
 
   var TABLE_CAP = 250;
 
@@ -306,8 +258,12 @@
     return '';
   }
 
+  // On-hand value, 2dp with thousands separators. No currency symbol — a company
+  // can be USD or GBP etc. and this page doesn't carry the currency.
+  function fmtMoney(v) { return (Number(v) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+
   // Excluded GL classes: roll the item rows up to a per-(GL class, company)
-  // item COUNT — no item detail. The count is the materiality.
+  // item COUNT + on-hand $ — no item detail. The dollars are the materiality.
   function renderExcluded(container, rows, emptyMsg) {
     if (!rows || !rows.length) { container.innerHTML = '<div class="empty">' + esc(emptyMsg) + '</div>'; return; }
     var map = Object.create(null), grandAmt = 0;
@@ -391,54 +347,12 @@
   }
   function pluck(p) { return (p && Array.isArray(p.data)) ? p.data : (Array.isArray(p) ? p : []); }
 
-  function shortName(s) { return String(s).split('@')[0]; }
-  function fmtDate(iso) { try { return new Date(iso).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }); } catch (_) { return iso; } }
-  // On-hand value, 2dp with thousands separators. No currency symbol — a company
-  // can be USD or GBP etc. and this page doesn't carry the currency.
-  function fmtMoney(v) { return (Number(v) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
-
-  var _status = null;
-  function renderVerdict(m) {
-    _status = m;
-    var approved = (m.state === 'approved');
-    $('statR1').textContent = (m.report1Count != null ? m.report1Count.toLocaleString('en-US') : '—');
-    var r3 = (m.report3GlClassCount || 0);   // distinct GL classes (not item rows)
-    var r3el = $('statR3'); r3el.textContent = r3.toLocaleString('en-US'); r3el.className = 'stat-n' + (r3 > 0 ? ' warn' : '');
-
-    $('approveControls').hidden = false;
-    if (approved) {
-      $('attestChk').checked = false; $('approveBtn').disabled = true;
-      $('approveBtn').textContent = 'Re-approve the model';
-      $('approveHint').textContent = 'Re-approve only if you changed the model in JDE.';
-    } else {
-      $('approveBtn').textContent = 'Approve the model';
-      $('approveHint').textContent = '';
-    }
-    applyScopedStats();   // if companies are scoped, the headline counts follow the tables
-  }
-
-  function loadStatus() {
-    // ?company= narrows the endpoint's materiality counts; skipped in demo (the
-    // query would break the static fixture filename) and when no company scope.
-    var area = 'inventory/integrity/model-approval' + ((!IS_DEMO && _company) ? ('?company=' + encodeURIComponent(_company)) : '');
-    return rrFetch(area).then(renderVerdict).catch(function (err) {
-      $('approveControls').hidden = true;
-    });
-  }
-
-  function doApprove() {
-    if (!$('attestChk').checked) return;
-    var btn = $('approveBtn'); btn.disabled = true; btn.textContent = 'Approving…';
-    rrFetch('inventory/integrity/model-approval', { method: 'POST', body: { note: $('note').value || null } })
-      .then(function (m) { renderVerdict(m); toast('Model approved — recorded with your name and today’s date.'); if (window.RRV8 && RRV8.logActivity) RRV8.logActivity('DMAAI model approved', 'GL-class model mappings signed off' + (_company ? ' · Co ' + _company : '') + ($('note').value ? ' — ' + $('note').value : '')); })
-      .catch(function (err) { toast('Approval failed: ' + String(err && err.message || err)); btn.disabled = false; });
-  }
-
   // --- Company scope. The page shows one company (passed from the prior page)
   // or, absent that, the shared working-company scope. Both datasets are kept
   // whole; rendering applies the scope. ---
   var _r3Rows = [], _r1Rows = [], _company = QP_COMPANY;
-  var _r1Loaded = false, _r3Loaded = false;
+  var _r3Loaded = false;
+  var _endpointGlClass = null;   // report3GlClassCount from /model-approval (pre-load fallback)
 
   // Active working-company scope as a lookup, or null when all allowed
   // companies are selected (no narrowing). Mirrors home.html scopedCompanySet
@@ -457,31 +371,6 @@
     if (!sc) return rows;
     return rows.filter(function (r) { return sc[String(field(r, 'CompanyNumber'))]; });
   }
-  // When scoped, recompute the headline numbers from the in-scope rows so they
-  // match the tables. Unscoped, leave the model-level counts from /model-approval.
-  function applyScopedStats() {
-    if (!_company && !scopedCompanySet()) return;
-    if (_r1Loaded) { var e1 = $('statR1'); if (e1) e1.textContent = byCompany(_r1Rows).length.toLocaleString('en-US'); }
-    if (_r3Loaded) {
-      var seen = Object.create(null), n3 = 0;
-      byCompany(_r3Rows).forEach(function (r) {
-        var k = String(field(r, 'CompanyNumber')) + '|' + String(field(r, 'GLClass'));
-        if (!seen[k]) { seen[k] = 1; n3++; }
-      });
-      var e3 = $('statR3'); if (e3) { e3.textContent = n3.toLocaleString('en-US'); e3.className = 'stat-n' + (n3 > 0 ? ' warn' : ''); }
-    }
-  }
-
-  // Header key line: "Your model table is 4152 <doc type>". The doc type is the
-  // company's AAIDocType (RCompanies), carried per row on the baseline — one
-  // value when scoped to a company; listed if somehow more than one.
-  function updateModelKeyLine() {
-    var el = $('modelKeyLine'); if (!el) return;
-    var seen = Object.create(null), types = [];
-    byCompany(_r1Rows).forEach(function (r) { var t = field(r, 'DocType'); if (t && !seen[t]) { seen[t] = 1; types.push(t); } });
-    var key = '4152' + (types.length ? ' ' + types.join(', ') : '');
-    el.innerHTML = 'Your model table is <strong>' + esc(key) + '</strong>.';
-  }
   function byCompany(rows) {
     // An explicitly-passed company (from the prior page) is authoritative — it
     // wins over any Home working-company scope so the page always shows exactly
@@ -489,27 +378,26 @@
     if (_company) return rows.filter(function (r) { return field(r, 'CompanyNumber') === _company; });
     return inScope(rows);
   }
-  function renderR3() {
-    var scoped = byCompany(_r3Rows);
-    renderExcluded($('r3Body'), scoped,
-      _company ? ('No excluded GL classes for company ' + _company + '.')
-               : 'No excluded GL classes — every GL class used in inventory is in the model.');
-    // Grand total of on-hand value excluded → the sign-off card, so the reviewer
-    // sees how much money isn't accounted for before they attest.
-    var total = scoped.reduce(function (s, r) { return s + (Number(field(r, 'Amount')) || 0); }, 0);
-    var el = $('statExclAmt'); if (el) el.textContent = fmtMoney(total);
-    renderAiCard();
-    applyScopedStats();
-  }
-  function renderR1() {
-    renderBaseline($('r1Body'), byCompany(_r1Rows),
-      _company ? ('No model mappings for company ' + _company + '.') : 'The model baseline is empty.');
-    applyScopedStats();
+
+  // The actionable number: distinct excluded (company, GL class) in the scoped
+  // set. Once Report 3 rows are loaded this is authoritative (it honors the
+  // ?company + Home scope exactly); before then we fall back to the endpoint's
+  // report3GlClassCount. Returns -1 while still unknown.
+  function glClassCount() {
+    if (_r3Loaded) {
+      var seen = Object.create(null), n = 0;
+      byCompany(_r3Rows).forEach(function (r) {
+        var k = String(field(r, 'CompanyNumber')) + '|' + String(field(r, 'GLClass'));
+        if (!seen[k]) { seen[k] = 1; n++; }
+      });
+      return n;
+    }
+    return (_endpointGlClass == null) ? -1 : _endpointGlClass;
   }
 
-  // ---- AI: exclusion assessment + note drafting (sign-off decision support) ----
-  // The excluded GL class codes, aggregated per code for the scoped company:
-  // { groups:[{code,items,amount}] biggest-$-first, total, items }.
+  // ---- AI: exclusion assessment (the AI's read on whether each exclusion is
+  // intentional). The excluded GL class codes, aggregated per code for the
+  // scoped company: { groups:[{code,items,amount}] biggest-$-first, total, items }.
   function _exclSummary() {
     var rows = byCompany(_r3Rows), map = Object.create(null), total = 0;
     rows.forEach(function (r) {
@@ -532,30 +420,62 @@
       .then(function (r) { return (r && r.text) ? String(r.text).trim() : ''; });
   }
 
-  // Deterministic lead (instant, no AI call) + en/disable the pills by tier/data.
-  function renderAiCard() {
-    var off = _aiTier() === 'off';
+  // The verdict banner + AI band. CLEAN (no excluded classes) is quiet/green with
+  // no work to do; ISSUE (>0) surfaces the excluded classes and the AI read.
+  function renderVerdict() {
     var tierEl = $('aiTier'); if (tierEl) tierEl.textContent = (window.RRAI && RRAI.label) ? RRAI.label(_aiTier()) : 'Full';
-    var s = _exclSummary(), lead = $('aiLead');
+    var n = glClassCount();
+    var banner = $('verdictBanner'), title = $('verdictTitle'), sub = $('verdictSub');
+    var exCard = $('excludedCard'), lead = $('aiLead'), acts = $('aiActions'), ans = $('aiAnswer');
+
+    if (n < 0) {   // still loading
+      if (banner) banner.className = 'verdict';
+      if (title) title.textContent = 'Reviewing the model…';
+      if (sub) sub.textContent = '';
+      return;
+    }
+    if (n === 0) {
+      if (banner) banner.className = 'verdict is-clean';
+      if (title) title.textContent = 'All GL classes used in inventory are in the model';
+      if (sub) sub.textContent = 'Nothing to review — every GL class an item uses maps to an account in the model, so no inventory value falls out of reconciliation.';
+      if (exCard) exCard.hidden = true;
+      if (lead) { lead.hidden = true; lead.textContent = ''; }
+      if (acts) acts.hidden = true;
+      if (ans) ans.hidden = true;
+      return;
+    }
+    // ISSUE
+    if (banner) banner.className = 'verdict is-issue';
+    if (title) title.textContent = n.toLocaleString('en-US') + ' GL class' + (n === 1 ? '' : 'es') + ' excluded from the model';
+    if (sub) sub.textContent = 'Their items fall out of reconciliation. Review whether each exclusion is intentional (non-stock / expense) or a real inventory class wrongly left out — correct any real inventory class at the source in JD Edwards.';
+    if (exCard) exCard.hidden = false;
+    renderAiBand();
+  }
+
+  // Deterministic AI lead (instant, no AI call) + en/disable the assess pill by
+  // tier/data. Only meaningful in the ISSUE state (called from renderVerdict).
+  function renderAiBand() {
+    var off = _aiTier() === 'off';
+    var s = _exclSummary(), lead = $('aiLead'), acts = $('aiActions'), ab = $('aiAssessBtn');
     if (lead) {
-      if (!_r3Loaded) lead.textContent = 'Reviewing the excluded value…';
-      else if (!s.groups.length) lead.textContent = 'Every GL class code used in inventory is in the model — nothing is excluded from reconciliation.';
+      if (!s.groups.length) { lead.hidden = true; }
       else {
         var top = s.groups[0];
+        lead.hidden = false;
         lead.textContent = fmtMoney(s.total) + ' of on-hand value sits outside the model across ' + s.groups.length
           + ' GL class code' + (s.groups.length === 1 ? '' : 's') + ' — the largest is ' + top.code + ' at ' + fmtMoney(top.amount)
-          + ' (' + top.items.toLocaleString('en-US') + ' item' + (top.items === 1 ? '' : 's') + '). Ask AI whether any of it needs a closer look before you sign off.';
+          + ' (' + top.items.toLocaleString('en-US') + ' item' + (top.items === 1 ? '' : 's') + '). Ask AI whether any of it looks like real inventory to add back.';
       }
     }
-    var ab = $('aiAssessBtn'); if (ab) ab.disabled = off || !_r3Loaded || !s.groups.length;
-    var db = $('draftNoteBtn'); if (db) db.disabled = off;
+    if (acts) acts.hidden = off || !s.groups.length;
+    if (ab) ab.disabled = off || !_r3Loaded || !s.groups.length;
     if (off) { var a = $('aiAnswer'); if (a) a.hidden = true; }
   }
 
   // DMAAI grounding note (UI-38 consolidation): the model-DMAAI (4152) policy is
   // NOT hand-rolled here. The server (AiService.complete) prepends its canonical
-  // DMAAI_GROUNDING catalog to EVERY /api/v1/ai/explain call, so both reads below
-  // already reason from the authoritative model-table rules. The prompt text here
+  // DMAAI_GROUNDING catalog to EVERY /api/v1/ai/explain call, so the read below
+  // already reasons from the authoritative model-table rules. The prompt text here
   // is task framing (which exclusions are benign vs. worth investigating), not a
   // duplicate policy definition — deliberately no client mirror, which would be a
   // second copy to drift. Keep the framing; the policy lives server-side.
@@ -573,14 +493,14 @@
     var scrub = _aiTier() === 'scrubbed';
     var who = _company ? (scrub ? 'the entity under review' : ('Company ' + _company)) : 'all companies';
     var prompt =
-      'You are RapidReconciler AI, a JDE inventory-reconciliation consultant advising an accountant about to sign off on the model DMAAI (table 4152) for ' + who + '.\n' +
+      'You are RapidReconciler AI, a JDE inventory-reconciliation consultant advising an analyst reviewing the model DMAAI (table 4152) for ' + who + '.\n' +
       'These GL class codes are used by inventory items but are NOT in the model, so their on-hand value is EXCLUDED from reconciliation:\n' +
       _exclFactLines(s) + '\n' +
       'Total excluded on-hand value: ' + fmtMoney(s.total) + '.\n' +
-      'Some exclusions are legitimate (non-stock, expense, supplies or tooling classes carry no reconcilable inventory value); others may be real stocked inventory that has fallen out of the model and should be added.\n' +
+      'Some exclusions are legitimate (non-stock, expense, supplies or tooling classes carry no reconcilable inventory value); others may be real stocked inventory that has fallen out of the model and should be added back at the source.\n' +
       (basic
-        ? 'In ONE sentence, say whether the total excluded value is material enough to warrant a closer look before sign-off. Use only the figures above.'
-        : 'Say in a few words which codes look like legitimate exclusions and which look like real inventory to INVESTIGATE before sign-off — lead with the biggest concern by value. Judge from the code, item count, and amount.') + '\n' +
+        ? 'In ONE sentence, say whether the total excluded value is material enough to warrant a closer look. Use only the figures above.'
+        : 'Say in a few words which codes look like legitimate exclusions and which look like real inventory to INVESTIGATE — lead with the biggest concern by value. Judge from the code, item count, and amount.') + '\n' +
       'The reader is JDE-fluent. Answer in at most ' + (basic ? '1 sentence, under 35 words' : '3 sentences, under 70 words') + '. No preamble, no markdown, no lists.';
     _aiExplain(prompt).then(function (txt) {
       if (ans) ans.textContent = txt || 'No assessment came back — try again.';
@@ -589,37 +509,46 @@
     }).then(function () { if (btn) btn.disabled = _aiTier() === 'off'; });
   }
 
-  // "Draft note with AI" — pre-fills the sign-off textarea with an EDITABLE,
-  // factual draft (never an auto-asserted attestation). The reviewer edits + owns it.
-  function draftNote() {
-    if (_aiTier() === 'off') return;
-    var s = _exclSummary(), btn = $('draftNoteBtn'), ta = $('note');
-    if (btn) btn.disabled = true;
-    var scrub = _aiTier() === 'scrubbed';
-    var who = _company ? (scrub ? 'the entity under review' : ('Company ' + _company)) : 'all companies';
-    var prompt =
-      'Draft a short, factual sign-off note for a JDE model DMAAI (table 4152) approval for ' + who + '. The accountant will EDIT it before signing, so do not assert intent they have not confirmed.\n' +
-      (s.groups.length
-        ? ('GL class codes excluded from the model (on-hand value not reconciled):\n' + _exclFactLines(s) + '\nTotal excluded: ' + fmtMoney(s.total) + '.\n' +
-           'Write 1-2 sentences recording the review: name the excluded codes, note that standard non-stock/expense classes are intended, and prompt the reviewer to confirm any large-value code is deliberately excluded.')
-        : 'No GL class codes are excluded. Write one sentence recording that the model covers every GL class used in inventory and was reviewed.') + '\n' +
-      'Plain text, first person ("Reviewed…"), no preamble, no markdown, under 45 words.';
-    _aiExplain(prompt).then(function (txt) {
-      if (ta && txt) { ta.value = txt; ta.focus(); }
-      else toast('No draft came back — try again.');
-    }).catch(function () { toast('Could not reach AI just now. Try again in a moment.'); })
-      .then(function () { if (btn) btn.disabled = _aiTier() === 'off'; });
+  // Header key line: "Your model table is 4152 <doc type>". The doc type is the
+  // company's AAIDocType (RCompanies), carried per row on the baseline — one
+  // value when scoped to a company; listed if somehow more than one.
+  function updateModelKeyLine() {
+    var el = $('modelKeyLine'); if (!el) return;
+    var seen = Object.create(null), types = [];
+    byCompany(_r1Rows).forEach(function (r) { var t = field(r, 'DocType'); if (t && !seen[t]) { seen[t] = 1; types.push(t); } });
+    var key = '4152' + (types.length ? ' ' + types.join(', ') : '');
+    el.innerHTML = 'Your model table is <strong>' + esc(key) + '</strong>.';
+  }
+  function renderR3() {
+    var scoped = byCompany(_r3Rows);
+    renderExcluded($('r3Body'), scoped,
+      _company ? ('No excluded GL classes for company ' + _company + '.')
+               : 'No excluded GL classes — every GL class used in inventory is in the model.');
+    renderVerdict();
+  }
+  function renderR1() {
+    renderBaseline($('r1Body'), byCompany(_r1Rows),
+      _company ? ('No model mappings for company ' + _company + '.') : 'The model baseline is empty.');
+  }
+
+  // Read the model-approval endpoint for its counts ONLY (report1Count /
+  // report3Count / report3GlClassCount). The retired sign-off fields
+  // (state / approved / approvedBy / approvedDate / changedSinceApproval) are
+  // deliberately NOT read — sign-off has been removed from this surface.
+  function loadVerdict() {
+    var area = 'inventory/integrity/model-approval' + ((!IS_DEMO && _company) ? ('?company=' + encodeURIComponent(_company)) : '');
+    return rrFetch(area).then(function (m) {
+      _endpointGlClass = (m && m.report3GlClassCount != null) ? Number(m.report3GlClassCount) : null;
+      renderVerdict();
+    }).catch(function () { /* endpoint unreachable — the loaded Report 3 rows drive the verdict */ });
   }
 
   function boot() {
-    $('attestChk').addEventListener('change', function () { if (!this.disabled) $('approveBtn').disabled = !this.checked; });
-    $('approveBtn').addEventListener('click', doApprove);
     $('aiAssessBtn').addEventListener('click', assessExclusions);
-    $('draftNoteBtn').addEventListener('click', draftNote);
-    // Re-render the AI card (tier label + enable/disable) when the demo tier flips.
-    window.addEventListener('rrv8:aitierchange', renderAiCard);
+    // Re-render the verdict/AI band (tier label + enable/disable) when the demo tier flips.
+    window.addEventListener('rrv8:aitierchange', renderVerdict);
 
-    // Collapsible grid sections — click (or Enter/Space) the heading to fold.
+    // Collapsible reference section — click (or Enter/Space) the heading to fold.
     Array.prototype.forEach.call(document.querySelectorAll('.card-toggle'), function (h) {
       function toggle() {
         var card = h.closest('.card'); if (!card) return;
@@ -643,12 +572,12 @@
     var scopeDbEl = $('scopeDb'); if (scopeDbEl) scopeDbEl.textContent = (QP_DB || (db && db.n) || '').replace(/^RapidReconciler_/, '') || '—';   // short DB name (drop the platform prefix)
     var scopeCoEl = $('scopeCo'); if (scopeCoEl) scopeCoEl.textContent = _company ? ('Company ' + _company) : 'All companies';
 
-    renderAiCard();   // tier label + initial lead (before excluded data lands)
-    loadStatus();
+    renderVerdict();   // loading state (tier label + "Reviewing…")
+    loadVerdict();
     integrityRows('v_integrity3_exc_glc').then(function (rows) { _r3Rows = rows || []; _r3Loaded = true; renderR3(); })
       .catch(function () { $('r3Body').innerHTML = '<div class="empty">Couldn’t load excluded GL classes.</div>'; });
     // Lean baseline: agent returns Company / GL class / Account / Account name (+ Table/DocType for the caption).
-    rrFetch('inventory/integrity/model-baseline').then(pluck).then(function (rows) { _r1Rows = rows || []; _r1Loaded = true; updateModelKeyLine(); renderR1(); })
+    rrFetch('inventory/integrity/model-baseline').then(pluck).then(function (rows) { _r1Rows = rows || []; updateModelKeyLine(); renderR1(); })
       .catch(function () { $('r1Body').innerHTML = '<div class="empty">Couldn’t load the model baseline.</div>'; });
   }
 

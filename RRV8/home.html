@@ -2582,7 +2582,7 @@
        grouped into the analyst sub-views (Set Up / Data Integrity /
        Troubleshooting). Shown in the analyst view; renderAnalystPalette() shows
        the active sub-view. Cards keep their original IDs so the status-dot wiring
-       (mdrDot / arfDot / dmaaiDot / cxDot) keeps working. Gated to the analyst
+       (arfDot / dmaaiDot / cxDot) keeps working. Gated to the analyst
        view by CSS on #analystBody. -->
   <div class="lane-body" id="analystBody">
     <!-- Roll-forward integrity worklist — the analyst's re-roll queue: the
@@ -2914,7 +2914,7 @@
        the accounting model). Gated on perms.dm (the role's dmaais grant); lives
        OUTSIDE #view-admin so a non-admin Reconciliation Analyst reaches it.
        Cards keep their original element IDs so the status-dot wiring (arfDot /
-       cxDot inventory light, mdr* model-review status, dmaai* analysis status)
+       cxDot inventory light, dmaai* analysis status)
        keeps working unchanged. See RRV8/API.md §2. -->
 
   <!-- shared: working entry point (Finance lane — period-end reconciliation) -->
@@ -4574,49 +4574,6 @@
     if (_dmaaiAutoTried[key]) return;
     _dmaaiAutoTried[key] = true;
     loadDmaaisNow({ auto: true });
-  }
-
-  // Accounting Set Up — row 2: Model DMAAI Review. The model DMAAI table
-  // (4152 PI) maps every inventory GL class to a GL account; this row reports
-  // whether the customer's accounting team has reviewed + approved that model.
-  // Verdict (state) is agent-side; V8 owns the copy. Admin-only; graceful
-  // fallback to a neutral "open the review" state when the endpoint isn't live.
-  var DMAAI_COPY = {
-    approved:       { dot: 'green', title: 'Model reviewed & approved' },
-    'needs-review': { dot: 'amber', title: 'Model DMAAI table changed' },
-    unapproved:     { dot: 'amber', title: 'Model awaiting your review' }
-  };
-  function loadModelApproval() {
-    if (IS_DEMO || !isAdmin()) return;
-    if (!$('mdrDot')) return;   // the Reports "Model DMAAI Review" row was retired — it's a Briefing task now
-    rrFetch('inventory/integrity/model-approval').then(function (m) {
-      if (!m || !m.state) return;  // unreadable verdict — keep the amber "awaiting review" default
-      var c = DMAAI_COPY[m.state] || DMAAI_COPY.unapproved;
-      $('mdrDot').className = 'row-dot ' + c.dot;
-      $('mdrTitle').textContent = c.title;
-      $('mdrSub').textContent = modelApprovalSub(m);
-      var btn = $('mdrBtn');
-      if (btn) btn.textContent = (m.state === 'approved') ? 'View' : 'Review & approve';
-    }).catch(function () { /* endpoint not reachable — leave the amber awaiting-review default (an unconfirmed model is open work, not "unknown") */ });
-  }
-  function modelApprovalSub(m) {
-    var gl = (m.report3GlClassCount || 0), items = (m.report3Count || 0);
-    var exclTxt = gl === 0
-      ? 'Every GL class used in inventory is in the model.'
-      : gl + ' GL class' + (gl === 1 ? '' : 'es') + ' excluded' +
-        (items ? ' (' + items.toLocaleString('en-US') + ' item' + (items === 1 ? '' : 's') + ' not counted)' : '') + '.';
-    if (m.state === 'approved') {
-      var who = m.approvedBy ? (' by ' + shortName(m.approvedBy)) : '';
-      var when = m.approvedDate ? (' · ' + fmtApprovalDate(m.approvedDate)) : '';
-      return 'Approved' + who + when + '. ' + exclTxt;
-    }
-    if (m.state === 'needs-review') return 'Excluded GL classes changed since sign-off. ' + exclTxt;
-    return 'Your accounting team needs to review + approve it. ' + exclTxt;
-  }
-  function shortName(s) { return String(s).split('@')[0]; }
-  function fmtApprovalDate(iso) {
-    try { var d = new Date(iso); return d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }); }
-    catch (_) { return ''; }
   }
 
   // ---- Purge old data (MOCK) ----
@@ -8655,27 +8612,33 @@
       clearedSummary: 'roll-forward', clearedLine: 'Account roll forward — every period rolled forward cleanly'
     });
   }
-  // Model DMAAI sign-off — client-wide VERDICT (the 4152 PI model table is one
-  // client-wide table you can't approve per company); the materiality counts in
-  // the sub narrow to the scoped company via ?company=.
+  // Model DMAAI check — the actionable signal is report3GlClassCount: the number
+  // of distinct GL classes used by inventory items that are NOT in the 4152 model
+  // (so their value falls out of reconciliation). 0 = clean (nothing to review);
+  // >0 = review whether each exclusion is intentional. No sign-off. The counts
+  // narrow to the scoped company via ?company=.
   function _analystModelCheck(d, co) {
     return rrFetch('inventory/integrity/model-approval', co ? { query: { company: co } } : undefined)
       .then(function (m) { return m; }).catch(function () { return null; })
       .then(function (m) {
-        if (m && m.state === 'approved') {
+        var n = (m && m.report3GlClassCount != null) ? Number(m.report3GlClassCount) : 0;
+        if (n === 0) {
           return {
             id: 'model', prio: 5, state: 'clean',
-            title: 'Model DMAAI reviewed and approved', factTitle: 'Model DMAAI', factDetail: 'reviewed and approved',
-            clearedSummary: 'model reviewed and approved', clearedLine: 'Model DMAAI — reviewed and approved'
+            title: 'Model DMAAI — every GL class in the model', factTitle: 'Model DMAAI',
+            factDetail: 'every GL class used in inventory is in the model',
+            clearedSummary: 'model covers every GL class', clearedLine: 'Model DMAAI — every GL class used in inventory is in the model'
           };
         }
-        var title = (m && m.state && DMAAI_COPY[m.state] && DMAAI_COPY[m.state].title) || 'Model awaiting your review';
-        var sub = (m && m.state) ? modelApprovalSub(m) : 'Your accounting team needs to review and approve the inventory-account model.';
+        var items = (m && m.report3Count != null) ? Number(m.report3Count) : 0;
+        var glTxt = n.toLocaleString('en-US') + ' GL class' + (n === 1 ? '' : 'es') + ' excluded from the model';
+        var sub = glTxt + (items ? ' (' + items.toLocaleString('en-US') + ' item' + (items === 1 ? '' : 's') + ' out of reconciliation)' : '')
+          + ' — review whether each exclusion is intentional.';
         var dbn = (activeDb() && activeDb().n) || '';
         var href = 'accounting-model-review.html?company=' + encodeURIComponent(co || '') + (dbn ? '&db=' + encodeURIComponent(dbn) : '');
         return {
           id: 'model', prio: 2, state: 'attention',
-          title: title, factTitle: 'Model DMAAI', detailHtml: esc(sub), factDetail: sub,
+          title: glTxt, factTitle: 'Model DMAAI', detailHtml: esc(sub), factDetail: sub,
           actionHtml: '<a class="alh-act ghost" href="' + href + '" title="Open the model review">Review <span aria-hidden="true">→</span></a>'
         };
       });
@@ -9286,8 +9249,11 @@
     uom:     { view: 'v_integrity4_uom_conv',    demoFile: 'v-integrity4-uom-conv',    dot: 'intgUomDot', file: 'UOMConversionIntegrity', title: 'UOM Conversion Integrity',
                cols: ['CompanyNumber', 'BranchPlant', 'ShortItem', 'ItemNumber', 'ThirdItem', 'TransUOM', 'PrimeUOM'] },
     frozen:  { view: 'v_integrity7_frozen_cost', demoFile: 'v-integrity7-frozen-cost', dot: 'intgFrzDot', file: 'FrozenCostIntegrity', title: 'Frozen Cost Integrity',
-               cols: ['CompanyNumber', 'BranchPlant', 'ShortItem', 'ItemNumber', 'ThirdItem', 'CostLevel', 'Location', 'Lot', 'ST', 'UnitCost', 'FrzCost', 'Variance', 'Prodplant', 'Prodcost'],
-               num:  ['UnitCost', 'FrzCost', 'Variance', 'Prodcost'] },
+               cols: ['CompanyNumber', 'BranchPlant', 'ShortItem', 'ItemNumber', 'ThirdItem', 'CostLevel', 'CostMethod', 'Location', 'Lot', 'QtyOnHand', 'ST', 'UnitCost', 'FrzCost', 'Variance', 'Prodplant', 'Prodcost'],
+               num:  ['UnitCost', 'FrzCost', 'Variance', 'Prodcost', 'QtyOnHand'],
+               // Prodplant/Prodcost are a Cavendish-only customization — empty on every
+               // demo DB. Candidates for the all-empty drop below; kept when populated.
+               hideEmpty: ['Prodplant', 'Prodcost'] },
     glclass: { view: 'v_integrity5_gl_class',    demoFile: 'v-integrity5-gl-class',    dot: 'intgGlcDot', file: 'GLClassIntegrity', title: 'GL-Class Integrity',
                cols: ['CompanyNumber', 'BranchPlant', 'ItemNumber', 'ThirdItem', 'Description', 'Location', 'Lot', 'StockType', 'BranchClass', 'LocationClass'] }
   };
@@ -9341,8 +9307,9 @@
     _intgFetch(rep, onlyCo).then(function (rows) {
       if (!rows.length) { if (typeof toast === 'function') toast('No ' + rep.title + ' rows in scope — nothing to export'); return; }
       var numSet = {}; (rep.num || []).forEach(function (n) { numSet[n] = 1; });
-      var columns = rep.cols.map(function (c) { return { key: c, label: c, num: !!numSet[c] }; });
-      var body = rows.map(function (r) { return rep.cols.map(function (c) { var v = r[c]; return numSet[c] ? (Number(v) || 0) : (v == null ? '' : v); }); });
+      var cols = _intgEffectiveCols(rep, rows);
+      var columns = cols.map(function (c) { return { key: c, label: c, num: !!numSet[c] }; });
+      var body = rows.map(function (r) { return cols.map(function (c) { var v = r[c]; return numSet[c] ? (Number(v) || 0) : (v == null ? '' : v); }); });
       var per = (_acctData && (_acctData.viewedPeriod || _acctData.latestPeriod)) || '';
       buildAuditWorkbook({
         columns: columns,
@@ -9366,11 +9333,28 @@
     ItemNumber: 'Item',         ThirdItem: '3rd Item',    Description: 'Description',
     Location: 'Loc',            Lot: 'Lot',               StockType: 'Type',
     ST: 'ST',                   TransUOM: 'Trans UOM',    PrimeUOM: 'Prime UOM',
-    CostLevel: 'Cost Lvl',      UnitCost: 'Unit Cost',    FrzCost: 'Frz Cost',
-    Variance: 'Variance',       Prodplant: 'Prod Plant',  Prodcost: 'Prod Cost',
+    CostLevel: 'Cost Lvl',      CostMethod: 'Cost Method', QtyOnHand: 'Qty On Hand',
+    UnitCost: 'Unit Cost',      FrzCost: 'Frz Cost',      Variance: 'Variance',
+    Prodplant: 'Prod Plant',    Prodcost: 'Prod Cost',
     BranchClass: 'Br Class',    LocationClass: 'Loc Class'
   };
   function _intgColLabel(c) { return INTG_COL_ABBR[c] || c; }
+  // Drop candidate columns that carry no data across the whole row set. Keyed on
+  // the data being empty — NOT a blanket "always hide". A column named in the
+  // report's optional `hideEmpty` list is dropped from BOTH the on-screen table
+  // and the Excel export only when EVERY row is null/blank for it, so a real
+  // Cavendish dataset that populates Prodplant/Prodcost still shows those columns.
+  function _intgIsBlank(v) { return v == null || String(v).trim() === ''; }
+  function _intgEffectiveCols(rep, rows) {
+    var cols = rep.cols || [];
+    var candidates = rep.hideEmpty;
+    if (!candidates || !candidates.length || !rows || !rows.length) return cols;
+    return cols.filter(function (c) {
+      if (candidates.indexOf(c) === -1) return true;   // not a hide-empty candidate → always keep
+      for (var i = 0; i < rows.length; i++) { if (!_intgIsBlank(rows[i][c])) return true; }   // any data → keep
+      return false;   // every row blank for this candidate → drop
+    });
+  }
   var _intgModalCtx = null;   // { key, co } for the footer Export button
   function _closeIntegrityModal() { var m = $('intgModal'); if (m) m.hidden = true; }
   function _openIntegrityModal(key, co, title, rows) {
@@ -9389,9 +9373,10 @@
     var t = $('intgModalTitle'); if (t) t.textContent = title + (co ? ' — Co ' + co : '');
     var sub = $('intgModalSub'); if (sub) sub.textContent = rows.length.toLocaleString('en-US') + ' item' + (rows.length !== 1 ? 's' : '') + ' flagged' + (co ? ' · Company ' + co : '') + '.';
     var numSet = {}; (rep.num || []).forEach(function (n) { numSet[n] = 1; });
-    var head = '<tr>' + rep.cols.map(function (c) { return '<th' + (numSet[c] ? ' class="intg-num"' : '') + ' title="' + esc(c) + '">' + esc(_intgColLabel(c)) + '</th>'; }).join('') + '</tr>';
+    var cols = _intgEffectiveCols(rep, rows);
+    var head = '<tr>' + cols.map(function (c) { return '<th' + (numSet[c] ? ' class="intg-num"' : '') + ' title="' + esc(c) + '">' + esc(_intgColLabel(c)) + '</th>'; }).join('') + '</tr>';
     var body = rows.map(function (r) {
-      return '<tr>' + rep.cols.map(function (c) {
+      return '<tr>' + cols.map(function (c) {
         var v = r[c];
         if (numSet[c]) { var nnum = Number(v) || 0; return '<td class="intg-num">' + nnum.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '</td>'; }
         return '<td>' + esc(v == null ? '' : v) + '</td>';
@@ -12234,10 +12219,6 @@
 
     // Neutralize the DOM these feed so no stale color survives the switch.
     paintInventoryLight('grey', 'Checking…');     // arfDot + cxDot
-    var mdrDot = $('mdrDot'), mdrTitle = $('mdrTitle'), mdrSub = $('mdrSub');
-    if (mdrDot)   mdrDot.className = 'row-dot amber';
-    if (mdrTitle) mdrTitle.textContent = 'Model DMAAI Review';
-    if (mdrSub)   mdrSub.innerHTML = 'Awaiting your accounting team&rsquo;s review &amp; approval.';
     var rgDot = $('reloadGlDot'); if (rgDot) { rgDot.className = 'row-dot grey'; rgDot.title = ''; }
     // Reload Cardex end-of-day check is per-DB; neutralize the dot + restore the
     // default sub so a prior DB's suggestion never bleeds onto the new one.
@@ -12346,7 +12327,6 @@
     reflectDmaai();
     autoWarmDmaais();
     autoWarmCardex();
-    loadModelApproval();
     loadPurgeInfo();
     loadFiscalStatus();
     loadTeamReview();
