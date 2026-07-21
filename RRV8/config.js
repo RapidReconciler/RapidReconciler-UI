@@ -417,8 +417,8 @@ window.RRV8 = window.RRV8 || {};
     'ACCOUNTING POLICY (reconciliation) — reason from these rules:',
     '- RR reconciles inventory to GL; JDE is the book of record. You surface the gap, explain it, and produce the correcting entry the accountant posts in JDE. RR does not post, hold the ledger, or run schedules.',
     '- Materiality: an out-of-balance under $100 is immaterial regardless of %; a GL balance under $1,000 is dormant/near-zero — frame by absolute amount and suppress the %. Otherwise judge by the gap as a share of the GL balance (well under ~1% is immaterial).',
-    '- The out-of-balance decomposes into components. ACCOUNTANT-OWNED (journal these): carry forward, transactions, manual entries. NOT the accountant\'s: unposted GL batches + end-of-day (operations timing — self-clears when operations posts, never journal it) and cardex (an analyst re-roll, not a JE). The adjusting entry uses ONLY the accountant-owned amount; never journal the timing.',
-    '- Reclass vs JE: a transaction in the wrong period/account is a reclass, not a new balancing JE. A roll-forward break (red dot) is an analyst re-roll, not the accountant\'s and not a JE.',
+    '- The out-of-balance decomposes into components. ACCOUNTANT-OWNED (journal these): carry forward, transactions, manual entries. NOT the accountant\'s: unposted GL batches + end-of-day (operations timing — self-clears when operations posts, never journal it) and cardex (self-heals on the analyst\'s roll-forward refresh, not a JE). The adjusting entry uses ONLY the accountant-owned amount; never journal the timing.',
+    '- Reclass vs JE: a transaction in the wrong period/account is a reclass, not a new balancing JE. A roll-forward break (red dot) resolves on the analyst side at the next refresh, not the accountant\'s and not a JE.',
     '- Large carry-forward: when a company\'s carry-forward exceeds 25% of its GL balance OR $50,000 (whichever first), advise absorbing it over ~6 periods (per-period = carry-forward / 6) rather than booking it all at once, to avoid a lumpy P&L hit. Advise ONLY — do not build the fractional entry; the amortization schedule lives in JDE, not RR.',
     '- Adjusting entry: one real offset account per inventory account (no generic clearing account); excludes timing; two lines per gap (original account + its offset).',
     '- Closed/prior periods are already journaled — never prescribe an entry for them; a carry-forward\'s source is the prior period.',
@@ -471,8 +471,9 @@ window.RRV8 = window.RRV8 || {};
   window.RRV8.ROLLFORWARD_GROUNDING = [
     'ROLL-FORWARD POLICY (account roll-forward) — reason from these rules:',
     '- The account roll-forward keeps the inventory source-of-truth accurate period over period. A break is either GL-side (the GL roll-forward does not tie) or variance-side (the cardex-to-GL variance roll-forward does not tie).',
-    '- Four corrective levers: R099102 repost and Reload GL fix GL-side breaks; Re-roll companies then Reload Cardex fix variance-side breaks.',
-    '- ALWAYS fix GL-side breaks before variance-side — a GL break feeds the variance, so clearing GL first often clears the variance without a re-roll.',
+    '- GL-side breaks have TWO corrective levers, applied in order: R099102 (Account Balance Repost, run in JD Edwards to rebuild F0902 from F0911) then Reload GL (re-import the GL into RapidReconciler from the earliest broken period). The repost comes first — it exonerates JD Edwards before any RapidReconciler data is touched — and RapidReconciler trusts the analyst that the repost ran clean; it cannot verify JD Edwards.',
+    '- Variance-side breaks have NO lever. The roll-forward recomputes the entire period timeline on every refresh, so a variance break self-heals on the next run. A break that survives a refresh is not a self-service fix — escalate to GSI. Never prescribe a re-roll (retired — the recompute made it obsolete) or Reload Cardex (a separate cardex data-integrity utility, not a roll-forward corrective) for a variance break.',
+    '- ALWAYS fix GL-side breaks before variance-side — a GL break feeds the variance, so clearing the GL side and refreshing often clears the variance too.',
     '- This is analyst / operations maintenance, never a journal entry: the accountant does not journal a roll-forward break.',
     '- Audience is a JDE-fluent finance analyst: answer in 2-4 sentences, plain finance language; standard JDE program references (R099102) are fine; no SQL, endpoint, or table terms.'
   ].join('\n');

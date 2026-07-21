@@ -95,7 +95,7 @@ The materiality threshold is data-dependent — for datasets where the typical i
 4. For clusters of OOBs on the same date across multiple accounts, investigate whether a single posting incident explains them all.
 5. For end-period CardexVar residuals, run the Cardex Variance Analysis report for each affected account to identify the specific F4111 records that don't reconcile. First check: confirm R30837 (WIP Revaluation) was run after the most recent R30822 (Frozen Cost Update).
 6. After any R099102 or other corrections, refresh RapidReconciler and re-run the report to confirm anomalies have cleared.
-7. When GLOK and VarOK are intact, state explicitly that no batch posting, R099102, or Reroll is required for chain continuity — continue periodic monitoring at each refresh.
+7. When GLOK and VarOK are intact, state explicitly that no batch posting or R099102 is required for chain continuity — continue periodic monitoring at each refresh.
 
 Include the standard period-close gate caution: do not post period-close journal entries until variance is at expected levels.
 
@@ -329,39 +329,36 @@ A reset clears the accumulated variance history and starts fresh from the curren
 | **Out of Balance (OOB)** | Non-zero OOB in column R in a **closed historical period** alongside VarOK = "no"; F0902 vs F0911 misalignment. OOB in the current (end) period is expected and not a cause for action. | Run R099102 (Account Balance Repost) for the affected account and period |
 | **Retroactive journal entry** | Non-zero JEs in column Q; GL-only entry posted to a prior period's inventory account | Investigate who posted the entry; recode if incorrect |
 | **Cardex integrity issue** | Non-zero CardexVar in column S | Run Cardex Variance report; investigate F4111 discrepancies |
-| **Aged VarOK = "no" (> 3 periods old)** | VarOK = "no" rows that are more than 3 periods older than the current (end) period | Use the Reroll function on the Companies page in RapidReconciler — see Section 5.5 |
+| **Aged VarOK = "no" (> 3 periods old)** | VarOK = "no" rows that are more than 3 periods older than the current (end) period | Self-heals at the next refresh — the as-of roll forward recomputes the whole timeline on every run. If a break survives a refresh, contact GSI to investigate — see Section 5.5 |
 
 ### 5.4 Reading a VarOK = "no" Row
 
 When you see VarOK = "no":
 
-1. **Is the "no" more than 3 periods older than the current (end) period?** → Use the Reroll function — see Section 5.5.
+1. **Is the "no" more than 3 periods older than the current (end) period?** → It should clear on its own at the next refresh; if it survives a refresh, contact GSI to investigate — see Section 5.5.
 2. Compare `BegVar(current)` to `Variance(prior period)`. Note the difference.
 3. Check column R (OOB) — a non-zero OOB in a **closed historical period** is the most serious cause and should be addressed first. OOB in the current (end) period is expected and does not require investigation.
 4. Check column Q (JEs) — significant JE activity may explain variance jumps but should be investigated.
 5. Check whether GLOK = "no" on the same row — if both fail, a late-posting batch is the most likely common cause.
 6. Check the next period's BegVar — if it equals zero rather than carrying this period's Variance, a RapidReconciler reset occurred between the two periods.
 
-### 5.5 Aged VarOK = "no" — Use Reroll
+### 5.5 Aged VarOK = "no" — Self-Heals at Refresh; Escalate if It Persists
 
-When VarOK = "no" rows are more than 3 periods older than the current period, the variance roll forward has drifted too far from the current state to self-correct through normal batch posting or R099102 operations. The recommended resolution is to use the **Reroll** function in RapidReconciler, which recalculates the perpetual balance for the affected company from the baseline date forward.
+Age no longer puts a variance break out of reach, and there is no manual variance lever to pull. The as-of recompute that runs inside every RapidReconciler refresh rebuilds the full period timeline on each run — beginning balance, per-period activity, and the cumulative roll forward across every period, not only the most recent few. A variance that failed to carry forward in any period is recomputed from the current cardex on the next refresh, so an aged VarOK = "no" that reflects a stale calculation clears on its own once the refresh completes. A manual per-company recalculation is no longer needed for this.
 
 **How to identify aged VarOK = "no":**
 - Filter column T for "no"
 - Note the period in column A for each "no" row
 - If the period is more than 3 months before the current (end) period date, it qualifies as aged
 
-**Resolution — use the Reroll function:**
+**Resolution:**
 
-1. Navigate to **Admin > Companies** in the RapidReconciler main navigation panel. Administrator rights are required for this option to be visible.
-2. The Companies page lists all licensed companies. Locate the affected company.
-3. Click the **Reroll** link in the far-right column of that company's row.
-4. Confirm the action when prompted. Reroll recalculates the perpetual balance for the company from the baseline date forward — this process may take several minutes depending on data volume.
-5. After the reroll completes, return to the Roll Forward report and refresh. Verify that the aged VarOK = "no" rows have resolved.
+1. Refresh the Roll Forward report and re-run it. In most cases the aged "no" has already resolved, because the last refresh recomputed that period along with the rest of the timeline.
+2. If the same VarOK = "no" survives a refresh, the roll forward math is not the problem, and no self-service step will clear it — the break points at something deeper (RapidReconciler's copy of the cardex for that stretch may be out of step with JD Edwards, which recomputing over cannot fix). Contact GSI at [rrsupport@getgsi.com](mailto:rrsupport@getgsi.com) to investigate before taking any other action.
 
-> **Note on Reroll:** Reroll is typically used when transactions have been backdated more than one period, or when the variance roll forward chain has drifted beyond what incremental corrections can address. It does not change JD Edwards data — it only recalculates RapidReconciler's internal perpetual balance history. Only RapidReconciler administrators can access the Companies page and perform a reroll.
+> **Reload Cardex is not a roll-forward fix.** Reload Cardex is a separate cardex data-integrity utility, not a corrective action for a variance roll-forward break — do not reach for it to clear a persistent VarOK = "no". If a variance break survives a refresh, the next step is a GSI investigation, not a self-service reload.
 
-> **When to contact GSI:** If the Reroll does not resolve the aged VarOK = "no" rows, or if the same accounts show persistent failures across multiple rerolls, contact GSI at [rrsupport@getgsi.com](mailto:rrsupport@getgsi.com) for investigation.
+> **When to contact GSI:** If a VarOK = "no" persists after a refresh, or the same accounts break repeatedly, contact GSI at [rrsupport@getgsi.com](mailto:rrsupport@getgsi.com) for investigation.
 
 ---
 
@@ -522,17 +519,14 @@ Post all unposted batches before period-end to prevent recurrence. See Section 4
 - VarOK = "no" rows exist in column T
 - The period in column A for the "no" rows is more than 3 months before the current (end) period
 
-**What happened:** The variance roll forward chain for the affected company has drifted too far from the current state to self-correct through normal remediation. Backdated transactions, repeated resets, or prolonged unresolved variances can push the roll forward chain into a state where incremental corrections are no longer practical.
+**What happened:** In most cases nothing is wrong with the underlying data — the roll-forward calculation for those periods was simply stale. RapidReconciler's as-of recompute rebuilds the entire period timeline on every refresh, so a variance that failed to carry forward in an old period is recalculated from the current cardex the next time the refresh runs. A backdated cardex transaction is picked up the same way — the next refresh loads it and slots it into its correct period, then the full-timeline recompute re-rolls every period after it. Age alone no longer puts a break out of reach.
 
-**Resolution:** Use the **Reroll** function in RapidReconciler:
+**Resolution:**
 
-1. Navigate to **Admin > Companies** in the RapidReconciler main navigation panel. Administrator rights are required.
-2. Locate the affected company in the Companies list.
-3. Click the **Reroll** link in the far-right column of that company's row.
-4. Confirm when prompted. Reroll recalculates the perpetual balance from the baseline date forward. Allow several minutes for the process to complete depending on data volume.
-5. Refresh the Roll Forward report and confirm aged VarOK = "no" rows have resolved.
+1. Refresh the Roll Forward report and re-run it. An aged VarOK = "no" driven by stale roll-forward math resolves once the refresh recomputes that period.
+2. If the same VarOK = "no" survives a refresh, recomputation has not corrected it and there is no self-service step that will — the break points at something deeper than stale math. Contact GSI at [rrsupport@getgsi.com](mailto:rrsupport@getgsi.com) to investigate. See Section 5.5.
 
-> **Reroll does not modify JD Edwards data.** It only recalculates RapidReconciler's internal perpetual balance history. If the same aged VarOK = "no" rows persist after a reroll, contact GSI at [rrsupport@getgsi.com](mailto:rrsupport@getgsi.com).
+> **Reload Cardex is not the fix here.** Reload Cardex is a standalone cardex data-integrity utility, not a corrective action on the roll-forward. Do not use it to chase a persistent VarOK = "no" — a break that survives a refresh goes to GSI for investigation.
 
 ---
 
@@ -555,7 +549,7 @@ Filter column J for "no". For each occurrence:
 **Step 3 — Scan for VarOK = "no" Rows**
 
 Filter column T for "no". For each occurrence:
-- **First, check the period age:** if the "no" is more than 3 periods older than the current (end) period, use the Reroll function on the Companies page (Section 7.8 and Section 5.5)
+- **First, check the period age:** if the "no" is more than 3 periods older than the current (end) period, refresh and re-run — the full-timeline recompute clears stale roll-forward math on its own; if it survives a refresh, contact GSI to investigate (Section 7.8 and Section 5.5)
 - Otherwise: compare BegVar to prior period Variance; check OOB (column R) first — non-zero OOB is always the highest priority; check JEs (column Q) for unexpected manual entry activity; note whether GLOK is also "no" on the same row
 
 **Step 4 — Review the End Period (GLOK = "end")**
