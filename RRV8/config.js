@@ -407,6 +407,47 @@ window.RRV8 = window.RRV8 || {};
     }
     return out;
   };
+  // dataAccessLine(): the per-tier "DATA ACCESS — <Tier>" instruction line that
+  // EVERY analyst-facing ai/explain prompt must carry. Two jobs in one line:
+  //   (1) it instructs the model per the exposure ladder (Grounded = on-screen
+  //       figures only; Scrubbed = generic labels / roles, no real names; Full =
+  //       specifics + provenance), so Full genuinely differs from Grounded; and
+  //   (2) it is the drift-stable REPLAY KEY discriminator — request-signature.js
+  //       aiExplainKey() reads the tier out of this exact "DATA ACCESS … <Tier>"
+  //       marker. WITHOUT it, all three tiers hash to ONE signature (tier=na) and
+  //       a demo recording cannot replay per tier. Keep the words Grounded /
+  //       Scrubbed / Full verbatim (the key regex matches them); the UI labels
+  //       (Basic / Enhanced / Full) are cosmetic and live in RRAI.LABELS.
+  window.RRV8.dataAccessLine = function (exposure) {
+    var e = (window.RRAI && RRAI.norm(exposure)) || exposure;
+    switch (e) {
+      case 'grounded':
+        return 'DATA ACCESS — Grounded: use ONLY the on-screen figures already shown; do not trace history, name source tables, or add provenance.';
+      case 'scrubbed':
+        return 'DATA ACCESS — Scrubbed: refer to every company, account, and person by a generic label or role only — never by a real name or number.';
+      case 'full':
+        return 'DATA ACCESS — Full: you may cite specifics — company and account numbers, item and document IDs, exact dates, and the source of each figure.';
+      default:
+        return '';   // 'off' never reaches the model; unknown → no line
+    }
+  };
+  // aiCtx(): a stable, server-IGNORED disambiguator appended to an analyst
+  // ai/explain URL as ?ctx=… . It exists ONLY to make the demo replay signature
+  // unique per (surface, company, period): request-signature.js folds the sorted
+  // query into the key, so two briefings that produce the SAME model prompt (e.g.
+  // Scrubbed masks the company to "this company" for both Co A and Co B) still get
+  // DISTINCT recordings. It travels in the URL, never the body, so it never
+  // reaches the model — Scrubbed masking and Full latitude are untouched, and the
+  // gateway ignores the unknown param (verified 200). Pair it with dataAccessLine
+  // (which carries the tier in the body): together the key is (surface, co,
+  // period, tier). Real company numbers are fine here — the demo companies are
+  // fictional and the value never leaves the box.
+  window.RRV8.aiCtx = function (surface, co, period) {
+    var parts = [String(surface || 'ai')];
+    if (co != null && String(co).trim() !== '') parts.push('co' + String(co).trim());
+    if (period != null && String(period).trim() !== '') parts.push(String(period).trim());
+    return encodeURIComponent(parts.join('-').replace(/\s+/g, ''));
+  };
   // <<AI-GROUNDING GENERATED START -- do not edit by hand>>
   // ACCT_GROUNDING — the AI's compact copy of the accountant playbook. Prepended to
   // every accountant-facing AI prompt so the reads reason from firm policy, not

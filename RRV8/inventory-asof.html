@@ -2854,7 +2854,15 @@
     el.hidden = false; el.textContent = txt; el.classList.toggle('is-loading', !!loading);
   }
   function asofAiExplain(prompt) {
-    return rrFetch('api/v1/ai/explain', { method: 'POST', body: { prompt, level: asofEffTier() } })
+    // Tier rides in the prompt's DATA ACCESS marker (dataAccessLine), NOT a `level`
+    // body field — a `level` field 403s at the gateway; the entitled tier is enforced
+    // server-side from the JWT. ?ctx= is a server-ignored replay-key discriminator so
+    // (surface, company, period) stay distinct in the demo capture.
+    let _co = '', _per = '';
+    try { _co = _ensureSolo() || ''; } catch (_) {}
+    _per = (_data && _data._meta && _data._meta.period) || '';
+    const _u = 'api/v1/ai/explain' + (window.RRV8 && RRV8.aiCtx ? ('?ctx=' + RRV8.aiCtx('asof', _co, _per)) : '');
+    return rrFetch(_u, { method: 'POST', body: { prompt } })
       .then(r => (r && r.text) ? String(r.text).trim() : '');
   }
   function asofAsk(kind, freeText) {
@@ -2875,6 +2883,7 @@
       const prompt = (window.RRV8 && RRV8.ASOF_GROUNDING ? RRV8.ASOF_GROUNDING + '\n\n' : '')
         + 'You are RapidReconciler AI helping an analyst understand perpetual inventory.\n'
         + 'Explain how the perpetual inventory balance is established and maintained. Cover BOTH parts — the go-live opening baseline FIRST, then the ongoing transaction-by-transaction maintenance.\n'
+        + (window.RRV8 && RRV8.dataAccessLine ? RRV8.dataAccessLine(asofEffTier()) + '\n' : '')
         + 'Plain analyst English, 3-5 sentences, no preamble, no markdown, no JDE table names.';
       run = asofAiExplain(prompt);
     } else if (kind === 'trend') {
@@ -2886,6 +2895,7 @@
           + 'Scope: ' + asofScopeText() + '.\n'
           + 'Perpetual on-hand balance by period (oldest first): ' + series + '.\n'
           + 'Using ONLY these figures, say whether the balance is growing or shrinking overall and call out any period that stands out. Do NOT invent numbers.\n'
+          + (window.RRV8 && RRV8.dataAccessLine ? RRV8.dataAccessLine(asofEffTier()) + '\n' : '')
           + 'Plain analyst English, 2-4 sentences, no preamble, no markdown, no JDE table names.';
         return asofAiExplain(prompt);
       });
@@ -2896,6 +2906,7 @@
         + 'If the question is about the Residual Optimizer or "Re-optimize", explain it from the policy above in plain terms. A slider fine-tunes how many dust rows are hidden, and the Inventory / Filtered view switch shows either the kept inventory or exactly the dust set aside.\n'
         + 'Other features on this page you can explain if asked: the Company selector at the top switches which single company you are viewing (one at a time); "Perpetual" is the on-hand valuation total; Excel export downloads two sheets — the full inventory list, and the residual dust split onto its own sheet.\n'
         + 'Answer using ONLY these figures — do NOT invent any number not listed:\n' + asofFacts() + '\n'
+        + (window.RRV8 && RRV8.dataAccessLine ? RRV8.dataAccessLine(asofEffTier()) + '\n' : '')
         + 'Plain analyst English, 2-4 sentences, no preamble, no markdown, no JDE table names.';
       run = asofAiExplain(prompt);
     }
@@ -3176,12 +3187,19 @@ function updateLotDetailPill() {
       + '"Residual noise" = items with ZERO on-hand quantity that still carry a small valuation — rounding dust left in the perpetual. Hiding it declutters the grid without touching material balances.\n'
       + 'There are ' + z.length + ' such zero-quantity rows. Their absolute valuations, smallest first: ' + sample + (z.length > 40 ? ', …' : '') + '.\n'
       + 'A deterministic pass suggests a cutoff of ' + fmtMoney(opt.target) + ', hiding the ' + opt.count + ' smallest rows; the next row up is ' + fmtMoney(opt.nextUp) + '.\n'
+      + (window.RRV8 && RRV8.dataAccessLine ? RRV8.dataAccessLine(asofEffTier()) + '\n' : '')
       + 'Confirm or adjust the dollar cutoff that best separates rounding dust from a balance worth reviewing. Reply with the FIRST line exactly "TARGET: <dollars>" (a number), then ONE sentence in plain accountant English on why that cutoff. No markdown, no preamble.';
     // AI-tier gate: Off sends nothing to the model — the deterministic cutoff still
-    // applies via the same handler (empty text → target unchanged, renderAll).
+    // applies via the same handler (empty text → target unchanged, renderAll). Tier
+    // rides in the DATA ACCESS marker above (no `level` body field — that 403s);
+    // ?ctx= keeps the demo replay signature distinct per (surface, company, period).
+    let _optCo = '', _optPer = '';
+    try { _optCo = _ensureSolo() || ''; } catch (_) {}
+    _optPer = (_data && _data._meta && _data._meta.period) || '';
+    const _optUrl = 'api/v1/ai/explain' + (window.RRV8 && RRV8.aiCtx ? ('?ctx=' + RRV8.aiCtx('asof', _optCo, _optPer)) : '');
     const _asofOptAi = (window.RRAI && RRAI.get && RRAI.get() === 'off')
       ? Promise.resolve({ text: '' })
-      : rrFetch('api/v1/ai/explain', { method: 'POST', body: { prompt, level: asofEffTier() } });
+      : rrFetch(_optUrl, { method: 'POST', body: { prompt } });
     _asofOptAi.then(r => {
       const txt = (r && r.text) ? String(r.text).trim() : '';
       const m = txt.match(/TARGET:\s*\$?\s*([\d.]+)/i);

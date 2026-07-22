@@ -4459,6 +4459,12 @@
           window.RRV8.setActiveScope({ period: rf.period });
         }
       }
+      if (_dbSwitched) {
+        // DB switch → land on each role's PRIMARY page (analyst: Data Health).
+        // The prior DB's remembered sub-view shouldn't carry across a DB change
+        // (owner call); a plain reload keeps it.
+        try { var _svm = JSON.parse(localStorage.getItem('rrv8.subview') || '{}') || {}; var _r = _viewRole(); if (_subDefault[_r]) { _svm[_r] = _subDefault[_r]; localStorage.setItem('rrv8.subview', JSON.stringify(_svm)); } } catch (_) {}
+      }
       _dbSwitched = false;   // consume the switch flag once the new DB's status is in
       renderScopeBar();
       renderReadiness();
@@ -5115,7 +5121,14 @@
             // Company change = full page reload so EVERY widget re-renders for the
             // new company (UI-31). Persist first so the reload lands on it.
             _analystSoloCo = soloCo;
-            try { localStorage.setItem('rrv8.analystCompany.' + ((activeDb() && activeDb().n) || '_'), String(soloCo)); } catch (_) {}
+            try {
+              var _dbn = (activeDb() && activeDb().n) || '_';
+              localStorage.setItem('rrv8.analystCompany.' + _dbn, String(soloCo));
+              // Stamp the pick with the current sign-in session so _ensureAnalystSolo
+              // restores it across THIS reload (and plain F5s) but a fresh sign-in
+              // still lands on the smallest company (owner call).
+              localStorage.setItem('rrv8.analystCompany.' + _dbn + '.s', localStorage.getItem('rrv8.sessionStart') || '');
+            } catch (_) {}
             location.reload();
           }
           return;
@@ -8738,11 +8751,14 @@
     if (!attention.length) facts.push('Nothing needs attention - every accuracy check is clean.');
     var prompt = 'You are RapidReconciler AI briefing a JDE inventory-reconciliation analyst on ' + coLabel + ' at the start of their day.\n'
       + 'These are the ONLY facts you may use (never invent a number, an item, or a check):\n' + facts.join('\n') + '\n'
+      + (window.RRV8 && RRV8.dataAccessLine ? RRV8.dataAccessLine(exposure) + '\n' : '')
       + 'Write 1-2 short sentences, UNDER 45 words, in plain analyst English (the reader is JDE-fluent — do not expand acronyms). '
       + 'If anything needs attention: say how many things, name the biggest one first with its amount, and say which to start with and why. '
       + 'If nothing needs attention: say so plainly and reassure. No preamble, no greeting, no markdown, no lists.';
+    var _per = ''; try { _per = (window.RRV8 && RRV8.readSessionScope && RRV8.readSessionScope().period) || ''; } catch (_) {}
+    var _ctxUrl = 'api/v1/ai/explain' + (window.RRV8 && RRV8.aiCtx ? ('?ctx=' + RRV8.aiCtx('datahealth', co, _per)) : '');
     var timed = setTimeout(function () { if (gen === _analystTaskGen) { bodyEl.classList.remove('is-thinking'); bodyEl.innerHTML = fallback; } }, 12000);
-    rrFetch('api/v1/ai/explain', { method: 'POST', body: { prompt: prompt } }).then(function (r) {
+    rrFetch(_ctxUrl, { method: 'POST', body: { prompt: prompt } }).then(function (r) {
       if (gen !== _analystTaskGen) return;
       clearTimeout(timed);
       var txt = (r && r.text) ? String(r.text).trim() : '';
@@ -8855,10 +8871,20 @@
     var list = (cos || []).map(function (c) { return String(c.co); }).filter(Boolean);
     var _db = (activeDb() && activeDb().n) || '_';
     if (!_analystSoloCo || list.indexOf(String(_analystSoloCo)) < 0) {
-      // Restore the last-selected company (survives a browser refresh; keyed per
-      // DB) when it's still in scope; otherwise default to the first.
-      var saved = ''; try { saved = (localStorage.getItem('rrv8.analystCompany.' + _db) || '').trim(); } catch (_) {}
-      _analystSoloCo = (saved && list.indexOf(saved) >= 0)
+      // Restore the analyst's picked company ONLY within the same sign-in session:
+      // the solo-switch persists it + reloads (UI-31), so that reload (and plain
+      // F5s) must land on it. A FRESH sign-in (rrv8.sessionStart changed) drops the
+      // stale pick and lands on the SMALLEST company number (owner call:
+      // deterministic landing) — the session match is what tells "just switched"
+      // apart from "stale from a prior login". The per-DB key still hands off to
+      // standalone pages (e.g. Model DMAAI Review).
+      var saved = '', savedSess = '', curSess = '';
+      try {
+        saved     = (localStorage.getItem('rrv8.analystCompany.' + _db) || '').trim();
+        savedSess = localStorage.getItem('rrv8.analystCompany.' + _db + '.s') || '';
+        curSess   = localStorage.getItem('rrv8.sessionStart') || '';
+      } catch (_) {}
+      _analystSoloCo = (saved && savedSess && savedSess === curSess && list.indexOf(saved) >= 0)
         ? saved
         : (list.slice().sort(function (a, b) { return a.localeCompare(b, undefined, { numeric: true }); })[0] || null);
     }
