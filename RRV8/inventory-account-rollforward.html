@@ -713,12 +713,12 @@
   // client's entitled tier is enforced server-side from the JWT, not the body.
   // Server-side grounding still applies; `system` (our roll-forward grounding) is
   // accepted (verified 200).
-  function aiExplain(system, prompt){
+  function aiExplain(system, prompt, ctx){
     var t=aiTok();
     // Client-side timeout so a hung gateway/model call rejects rather than spinning.
     var ctrl=('AbortController' in window)?new AbortController():null;
     var timer=ctrl?setTimeout(function(){ ctrl.abort(); }, 45000):null;
-    return fetch(aiBase()+'/api/v1/ai/explain',{method:'POST',
+    return fetch(aiBase()+'/api/v1/ai/explain'+(ctx?('?ctx='+ctx):''),{method:'POST',
         headers:{'Authorization':'Bearer '+t,'Content-Type':'application/json','Accept':'application/json'},
         body:JSON.stringify({system:system, prompt:prompt}),
         signal:ctrl?ctrl.signal:undefined})
@@ -734,7 +734,8 @@
     var glN=sum.gl.rows, varN=sum.varc.rows;
     if(glN+varN===0){
       return 'You are briefing a JDE inventory-reconciliation analyst on company '+co+'. '
-        + 'The roll-forward is intact — the GL balance and the reconciliation variance both carried forward cleanly, no breaks. '
+        + 'The roll-forward is intact — the GL balance and the reconciliation variance both carried forward cleanly, no breaks.\n'
+        + (window.RRV8 && RRV8.dataAccessLine ? RRV8.dataAccessLine(effTier()) + '\n' : '')
         + 'In ONE short sentence, confirm there is nothing to correct and what to watch at the next refresh. No preamble.';
     }
     var glA=sum.gl.accts.slice(0,12).map(function(x){return x.acct;}).join(', ');
@@ -744,6 +745,7 @@
     if(varN) facts.push('On the account'+(sum.varc.accts.length!==1?'s':'')+(vrA?(' ('+vrA+')'):'')+', the reconciliation variance is off — '+varN+' row'+(varN!==1?'s':'')+' across '+sum.varc.accts.length+' account'+(sum.varc.accts.length!==1?'s':'')+'. There is nothing to reload for it: RapidReconciler recomputes the full period timeline on every refresh, so it clears on the next run. If it survives a refresh, escalate to your IT department to investigate — never invent a re-roll or a cardex reload for it.');
     return 'You are briefing a JDE inventory-reconciliation analyst on company '+co+' at the start of their day.\n'
       + 'These are the ONLY facts you may use (never invent a number, an account, or a step):\n' + facts.join('\n') + '\n'
+      + (window.RRV8 && RRV8.dataAccessLine ? RRV8.dataAccessLine(effTier()) + '\n' : '')
       + (glN&&varN ? 'Clear the GL first — the repost followed by a reload usually squares the variance too, so the variance may need no separate attention.\n' : '')
       + 'Write 2-3 short sentences in plain analyst English (the reader is JDE-fluent — do not expand acronyms). '
       + 'Name what is off, the account(s) involved, and the next step in order. No preamble, no greeting, no markdown, no lists.';
@@ -762,7 +764,7 @@
     var sys=(window.RRV8 && RRV8.ROLLFORWARD_GROUNDING)
       ? RRV8.ROLLFORWARD_GROUNDING
       : 'You are RapidReconciler’s Account Roll Forward assistant, helping a JDE cost accountant keep the inventory source-of-truth accurate. When Account Balances (F0902) don\'t tie to the posted Account Ledger (F0911), clear the balance in order: FIRST run Repost Account Balances (R099102) in JD Edwards to rebuild the balances from the posted detail, THEN reload the GL on this page so the corrected balances flow into RapidReconciler — state the order as the next step, never as a checkpoint the analyst must prove to RapidReconciler. When the reconciliation variance is off, there is no manual step: RapidReconciler recomputes the full period timeline on every refresh, so it clears on the next run; one that survives a refresh goes to your IT department to investigate, never a re-roll or a cardex reload. When both are off, clear the GL first — the repost and reload usually square the variance too. Be concise (2-4 sentences), plain accounting language, no SQL/endpoint/table jargon beyond standard JDE references.';
-    aiExplain(sys, briefPrompt(sum)).then(function(text){
+    aiExplain(sys, briefPrompt(sum), (window.RRV8 && RRV8.aiCtx ? RRV8.aiCtx('rollforward', state.company, '') : '')).then(function(text){
       body.classList.remove('is-thinking');
       body.textContent=text||'';   // empty reply → empty band (no fallback)
     }).catch(function(){
