@@ -242,7 +242,7 @@ The Beg bal row carries the JD Edwards Inventory Cost Level in its `dt` field. T
 | `2` | Level 2 | Cost maintained at item/branch level but quantity tracked by location and lot |
 | `3` | Level 3 | Cost maintained at item/branch/location/lot level — each lot carries its own cost |
 
-> **Reconciliation relevance:** The cost level affects the correct scope for the F4111 summary and F41021 comparison in Step 5.1. For Level 1 and 2 items, the cardex integrity check is performed at the branch and item level, inclusive of all locations and lots. For Level 3 items, each location and lot combination must be reconciled independently. Misidentifying the cost level can produce a false variance if the wrong aggregation level is used.
+> **Reconciliation relevance:** Cost method and cost level together set the correct scope for the F4111 summary and F41021 comparison in Step 5.1 — the cost level alone does not decide it. Under **average cost (`02`)**: a Level 1 item nets item-wide, across every branch as well as every location and lot; a Level 2 item nets at branch and item, inclusive of all locations and lots; a Level 3 item is reconciled per location and lot. Under **standard cost (`07`)**: location and lot, at every cost level. Under **actual cost (`09`)**: branch and item. The GL account is never crossed at any scope — one item can carry two real variances on two accounts, and netting across them would cancel both to zero and hide them. Misidentifying either the cost method or the cost level can produce a false variance, or net away a real one.
 
 **WAC-specific analysis steps (cost method 02):**
 
@@ -266,7 +266,7 @@ If using RapidReconciler, open the Cardex Integrity pop-up by hovering over the 
 Also read the following two `dt` field values before proceeding — both are required for a complete analysis:
 
 - **Cost method** — `dt` on the **Curr bal row** (`ukid = 999999999999`): `02` = Weighted Average, `07` = Standard Cost, `09` = Actual Cost. Determines which additional checks apply (see Section 3.4).
-- **Cost level** — `dt` on the **Beg bal row** (`ukid = 0`): `1`, `2`, or `3`. Determines the correct aggregation scope for the F4111 vs F41021 comparison in Step 5.1 — Level 1 and 2 items are reconciled at branch/item level inclusive of all locations and lots; Level 3 items are reconciled per location and lot (see Section 3.4).
+- **Cost level** — `dt` on the **Beg bal row** (`ukid = 0`): `1`, `2`, or `3`. Read together with the cost method, this sets the aggregation scope for the F4111 vs F41021 comparison in Step 5.1 — under average cost, Level 1 nets item-wide across all branches, Level 2 nets at branch/item inclusive of locations and lots, and Level 3 is reconciled per location and lot; under standard cost the scope is location and lot at every level; under actual cost it is branch and item. The GL account is never netted across at any scope (see Section 3.4).
 
 ### Step 2 — Determine the Variance Type and Branch
 
@@ -349,7 +349,7 @@ Where a single driver is not obvious, decompose into sub-components (see Section
 - Were there backdated transactions that disturbed the WAC sequence?
 
 **Quantity variance path:** Identify the transaction type and period where F4111 and F41021 diverged:
-- Are there IA transactions where the F4111 record exists but F41021 was not updated? Query F4111 for IA rows where ILIPCD ≠ "P".
+- Are there IA transactions where the F4111 record exists but F41021 was not updated? Isolate the IA document whose quantity equals the gap, then take that row's batch number and look the batch up in F0911 — the posted status lives there. `ILIPCD` flags the F41112 update, so it cannot answer this.
 - Does the quantity gap pre-date RR go-live? If so, it may be embedded in the beginning balance.
 - Is the gap consistent with a single transaction failure, or spread across multiple periods?
 
@@ -425,10 +425,12 @@ Component B = AmtVar – Component A  ← resolved by dollars-only IA if materia
 
 | Cause | How to Identify | Resolution |
 |---|---|---|
-| IA transaction recorded in F4111 but F41021 was not updated | Query F4111 IA rows for ILIPCD ≠ "P"; gap is consistent with a specific IA document | Determine whether the IA failed to post or whether F41021 simply did not update; post the IA if unposted, or request an F41021 SQL correction from IT if the IA is confirmed posted |
-| IA transaction posted to F4111 but failed to update F41021 | ILIPCD = "P" on all IA rows but F41021 qty still doesn't match; gap consistent with a specific IA document | Coordinate with IT; F41021 SQL correction required |
+| IA recorded in F4111 but never posted | Isolate the IA document whose quantity equals the gap, take its batch number off the cardex row, and look that batch up in F0911. The batch is missing there, or present and unposted | Post the batch in JD Edwards, then recheck F41021. Find out why the batch stalled — an unposted batch that nobody caught will recur on the next one |
+| IA posted but F41021 never updated | The same batch lookup shows the detail in F0911 and posted, yet F41021 qty still doesn't match; gap consistent with that one IA document | Coordinate with IT; F41021 SQL correction required. Treat the failed update itself as the finding — the same document class will strand again until it is addressed |
 | Quantity gap pre-dates RR go-live | Discrepancy visible at the Beg bal level; gap has been stable across all periods without a clear transaction source | Determine whether F41021 or F4111 was correct at go-live; correct F41021 via SQL if F4111 is the accurate record; or post an IA to align F4111 to F41021 if F41021 is the accurate record |
 | IB zero-qty cost adjustment pairs with unequal amounts | Two IB rows with zero qty but different absolute values netting to a non-zero amount | Confirm both IB entries were authorized; if one is erroneous, reverse it |
+
+> **The posting test lives on F0911, not on the cardex row.** `ILIPCD` is not a posting flag — it records whether the row was updated into F41112. Nor does the presence of a batch number settle anything: every cardex transaction carries one, because the accounting program writes it. The batch number's value is that it is the **join key** — look it up in F0911 and you learn which of three states you are in: no GL detail, detail present but unposted, or detail posted somewhere the match isn't looking (different company, account, period, or a renumbered document). That fork, not a flag on F4111, tells you what to fix.
 
 *Indicators:* QtyVar ≠ 0; F4111 ledger is internally consistent (beg bal + net trans = curr runqty); stable cost throughout history (ruling out cost escalation); high volume of IA transactions across many periods; gap is small relative to total IA activity (consistent with a single failed F41021 update).
 
@@ -537,12 +539,13 @@ Use this procedure when Step 5.1 confirms that F4111 and F41021 quantities do no
 
 **5.7.1 — Locate the source of the gap**
 
-Query F4111 for the affected item, branch, location, and lot. Filter for IA rows where ILIPCD ≠ "P" to identify any transactions that did not complete posting.
+Query F4111 for the affected item, branch, location, and lot. Isolate the IA document whose quantity equals the gap, then take that row's batch number and look the batch up in F0911. That lookup establishes whether the transaction posted. Do not filter on `ILIPCD` for this — it reports the F41112 update, not posting.
 
 | Finding | Next Action |
 |---|---|
-| One or more IA rows with ILIPCD ≠ "P" found | Post the transaction(s) in JD Edwards. Recheck F41021 qty after posting before taking any further action. |
-| All IA rows have ILIPCD = "P" but gap remains | The F41021 record did not update correctly when the IA was processed. Proceed to Step 5.7.2. |
+| The batch is absent from F0911, or present and unposted | Post the batch in JD Edwards. Recheck F41021 qty after posting before taking any further action. |
+| The batch is posted in F0911 but the gap remains | The F41021 record did not update correctly when the IA was processed. Proceed to Step 5.7.2. |
+| The batch is posted, but to a different company, account, or period than expected | This is a mapping problem, not a posting failure. Trace where the relief actually landed and correct the mapping at the source so it stops recurring. |
 | No IA transaction explains the gap | The discrepancy may pre-date RR go-live and be embedded in the beginning balance. Proceed to Step 5.7.3. |
 
 **5.7.2 — F41021 correction (all batches confirmed posted)**
@@ -689,7 +692,7 @@ Use this checklist for each Cardex variance investigation:
 - [ ] Export F4111; exclude ILIPCD = "X" rows; summarize qty and extended amount
 - [ ] Compare to F41021 on-hand qty and value
 - [ ] If qty matches but amount doesn't: dollar-only IA path (Steps 5.2–5.6)
-- [ ] If qty doesn't match: query F4111 IA rows for ILIPCD ≠ "P" to identify any transactions that did not complete
+- [ ] If qty doesn't match: isolate the IA document whose quantity equals the gap, then look its batch number up in F0911 to establish whether it posted (`ILIPCD` is the F41112-update flag, not a posting test)
 - [ ] If unposted IA found: post in JDE; recheck F41021
 - [ ] If all IAs posted but gap remains: coordinate with IT for F41021 SQL correction (Step 5.7.2)
 - [ ] If gap pre-dates RR go-live: determine which system was accurate; correct accordingly (Step 5.7.3)
@@ -727,7 +730,7 @@ Use this checklist for each Cardex variance investigation:
 | **PI** | Purchase Invoice or Period Invoice; when qty = 0, it is a cost revaluation entry that resets WAC without a physical receipt |
 | **IA** | Inventory Adjustment — quantity or dollars-only correction; high-volume items may have hundreds of IA transactions per period; an IA that fails to update F41021 is the most common source of quantity variances |
 | **IB** | Inventory Balance — covers zero balance adjustments, beginning-balance adjustment entries, and P4105 manual cost revisions; created by manual P4105 changes but **not** by system-driven WAC recalculations; presence on a WAC item warrants authorisation confirmation |
-| **ILIPCD** | Item Ledger Internal Posting Code in F4111; rows where this = "X" are memo transactions and must be excluded from cardex reconciliation |
+| **ILIPCD** | Item Ledger Internal Posting Code in F4111; rows where this = "X" are memo transactions and must be excluded from cardex reconciliation. It flags the F41112 update, **not** GL posting — never use it as a posting test (the posted status lives on F0911; reach it with the cardex row's batch number) |
 | **F4105** | JD Edwards Item Cost file — stores all cost method buckets in the primary unit of measure; the Sales/Inventory cost method set here determines how inventory transactions are valued |
 | **F4111** | JD Edwards item ledger (transaction detail) table |
 | **F41021** | JD Edwards item location (on-hand balance) table |

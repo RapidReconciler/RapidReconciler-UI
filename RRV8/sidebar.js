@@ -575,6 +575,24 @@
     { page: 'asof',            href: 'inventory-asof.html',            label: 'Perpetual' }
   ];
 
+  // Params that carry cleanly across the three inventory tabs. `company` and `period`
+  // scope every one of them; `mode` and `db` are environment, not scope. Everything
+  // else on a drill-through URL (card, groupcode, account, item, branch, dim, method,
+  // expect, finding, tab, statusDownload) is page-specific and gets dropped rather
+  // than trailing onto a page that will quietly ignore it.
+  const CROSS_TAB_PARAMS = ['company', 'period', 'mode', 'db'];
+  function crossTabQuery(search) {
+    if (!search) return '';
+    try {
+      const src = new URLSearchParams(search), out = [];
+      CROSS_TAB_PARAMS.forEach(k => {
+        const v = src.get(k);
+        if (v != null && v !== '') out.push(k + '=' + encodeURIComponent(v));
+      });
+      return out.length ? '?' + out.join('&') : '';
+    } catch (_) { return ''; }
+  }
+
   function applyWorkbarCaps() {
     // The inventory sub-nav requires the Inventory module. Fail open
     // (show) when there's no active-db claim yet (dev token / pre-
@@ -657,7 +675,12 @@
     if (!bar) return null;
     if (bar.querySelector('.workbar-right')) return bar;  // idempotent
     const activePage = opts.activePage || '';
-    const search = global.location.search || '';
+    // Carry only the params that mean the SAME thing on all three inventory tabs.
+    // The whole querystring used to ride along, so a drill-through's card= /
+    // groupcode= / account= / expect= followed the analyst onto pages that don't
+    // apply them — params a destination silently ignores are indistinguishable from
+    // params it silently fails to apply, which is the bug class this guards.
+    const search = crossTabQuery(global.location.search || '');
 
     // Standalone surfaces (e.g. the Model DMAAI Review flow) pass nav:false —
     // they're reached from Home and don't belong to the inventory page set,
@@ -1801,6 +1824,7 @@
   global.RRV8.publishCurrentPeriod    = publishCurrentPeriod;
   global.RRV8.readCurrentPeriod       = readCurrentPeriod;
   global.RRV8.readSessionScope        = readSessionScope;
+  global.RRV8.crossTabQuery           = crossTabQuery;   // ONE definition of "which params survive a tab switch"
   global.RRV8.setActiveScope          = setActiveScope;
   global.RRV8.setActiveDatabase       = setActiveDatabase;
   global.RRV8.resolveActiveDbIndex    = _resolveActiveDbIndex;

@@ -2028,6 +2028,26 @@
     page.insertBefore(banner, page.firstChild);
   }
 
+  // Plain-English banner for a failure whose CONSEQUENCE the reader needs to
+  // understand, not its endpoint. Same slot + styling as showFetchError; used where
+  // an unexplained empty state would read as a real answer.
+  function showNotice(id, title, detail) {
+    const page = document.getElementById('js-page');
+    if (!page) return;
+    let banner = document.getElementById('js-notice-' + id);
+    if (banner) banner.remove();
+    banner = document.createElement('div');
+    banner.id = 'js-notice-' + id;
+    banner.className = 'fetch-error-banner';
+    banner.innerHTML =
+      '<div class="feb-icon">!</div>' +
+      '<div class="feb-body">' +
+        '<div class="feb-title">' + escapeHtml(title) + '</div>' +
+        '<div class="feb-detail">' + escapeHtml(detail) + '</div>' +
+      '</div>';
+    page.insertBefore(banner, page.firstChild);
+  }
+
   // ============================================================
   //  System status — shared sessionStorage cache with the other
   //  V8 pages so the sidebar light + drawer banner reflect the
@@ -2048,6 +2068,13 @@
     try { sessionStorage.setItem(_statusKey(), JSON.stringify(s)); } catch (_) {}
   }
 
+  // Paint the System Status dot + drawer banner. NO-SIGNAL IS NOT GREEN: the
+  // defaults here used to be color 'green' / headline 'Up to date', so an absent
+  // or unreadable status painted a confident all-clear. sidebar.js reports the
+  // same dot as amber "no live read yet" when nothing has been read, and the two
+  // have to agree — a health light that goes green on no data is worse than no
+  // light at all.
+  const STATUS_UNKNOWN = { color: 'amber', eyebrow: 'System Status', headline: 'No live read yet', sub: 'Open Reconciliation or Account Roll Forward to check the latest refresh.' };
   function paintStatusDot(status) {
     const dot    = document.getElementById('js-status-dot');
     const banner = document.getElementById('status-banner');
@@ -2055,12 +2082,12 @@
     const head   = document.getElementById('status-banner-headline');
     const sub    = document.getElementById('status-banner-sub');
     if (!dot || !banner) return;
-    const color = (status && status.color) || 'green';
-    dot.className = 'sidebar-status-dot is-' + color;
-    banner.className = 'status-banner is-' + color;
-    if (eye)  eye.textContent  = (status && status.eyebrow) || 'System Status';
-    if (head) head.textContent = (status && status.headline) || 'Up to date';
-    if (sub)  sub.textContent  = (status && status.sub) || '';
+    const s = (status && status.color && status.headline) ? status : STATUS_UNKNOWN;
+    dot.className = 'sidebar-status-dot is-' + s.color;
+    banner.className = 'status-banner is-' + s.color;
+    if (eye)  eye.textContent  = s.eyebrow || 'System Status';
+    if (head) head.textContent = s.headline;
+    if (sub)  sub.textContent  = s.sub || '';
   }
 
   function loadStatus() {
@@ -2087,11 +2114,15 @@
           };
           _writeStatus(s); paintStatusDot(s); return s;
         })
-        .catch(() => null);
+        .catch(() => { paintStatusDot(null); return null; });
     }
-    // Prod path: rely on whatever the Reconciliation page wrote;
-    // poll lightly so we update without a refresh.
-    paintStatusDot({ color: 'green', eyebrow: 'System Status', headline: 'Up to date', sub: '' });
+    // Prod path: this page has no status read of its own — it relies on whatever
+    // Reconciliation / Account Roll Forward wrote into the shared cache. When that
+    // cache is empty (the analyst landed here first) we know NOTHING about the last
+    // refresh, so say that. This used to hard-code green "Up to date" with no read
+    // behind it, which told the accountant the nightly refresh was fine on a page
+    // that had never asked.
+    paintStatusDot(null);
     return Promise.resolve(null);
   }
 
@@ -2168,17 +2199,25 @@
   //    - Module grids (rows with the matching `companyNumber`)
   //    - Tab counts (recomputed inside the filter)
   // ============================================================
-  const COMPANY_LS_KEY = 'rrv8-dmaai-page-company-v1';
+  // Keyed PER DATABASE. The old key was global, so a company picked on one
+  // database stayed in force after switching to another — where the same company
+  // number is a different company (or doesn't exist). Every other persisted V8
+  // preference is per-db for exactly this reason; the pill is no different.
+  function companyLsKey() {
+    let db = '';
+    try { db = (window.RRDB && RRDB.name && RRDB.name()) || ''; } catch (_) {}
+    return 'rrv8-dmaai-page-company-v1.' + (db || '_');
+  }
   let _pageCompanyFilter = null;
   try {
-    const v = localStorage.getItem(COMPANY_LS_KEY);
+    const v = localStorage.getItem(companyLsKey());
     if (v) _pageCompanyFilter = v;
   } catch (_) {}
 
   function saveCompanyFilter() {
     try {
-      if (_pageCompanyFilter) localStorage.setItem(COMPANY_LS_KEY, _pageCompanyFilter);
-      else localStorage.removeItem(COMPANY_LS_KEY);
+      if (_pageCompanyFilter) localStorage.setItem(companyLsKey(), _pageCompanyFilter);
+      else localStorage.removeItem(companyLsKey());
     } catch (_) {}
   }
 
@@ -2194,7 +2233,9 @@
     if (allow.length && act.length >= allow.length) return null;   // all selected = no narrowing
     return act.reduce((s, c) => { s[String(c)] = true; return s; }, {});
   }
-  function inScopeCo(co) { const s = scopedCompanySet(); return !s || !!s[String(co)]; }
+  // Trimmed: company codes arrive padded from some sources and bare from others, and
+  // an untrimmed key miss reads as "out of scope" rather than as a formatting problem.
+  function inScopeCo(co) { const s = scopedCompanySet(); return !s || !!s[String(co == null ? '' : co).trim()]; }
   // The local pill only applies when it's within the current scope; a stale
   // out-of-scope pick (persisted from another session) is ignored.
   function effPageCompany() { return (_pageCompanyFilter && inScopeCo(_pageCompanyFilter)) ? _pageCompanyFilter : null; }
@@ -2213,25 +2254,36 @@
     return Array.from(set).filter(inScopeCo).sort();   // only companies in the Home scope
   }
 
+  // Set when ?company= named a company outside the working scope. Without this the
+  // page kept whatever company was persisted in localStorage from a PRIOR session and
+  // rendered a full, plausible grid for the WRONG company — the analyst clicked a card
+  // for company A and read company B's configs believing they were A's.
+  let _scopeError = null;
+  const _coEq = (a, b) => String(a == null ? '' : a).trim() === String(b == null ? '' : b).trim();
+
   function findingPassesCompanyFilter(f) {
+    if (_scopeError) return false;                                  // unhonorable URL scope → show nothing
     if (f.company != null && !inScopeCo(f.company)) return false;   // honor Home working-company scope
     const pc = effPageCompany();
     if (!pc) return true;
     if (f.company == null) return true;        // cross-company finding (e.g. unrec)
-    return f.company === pc;
+    return _coEq(f.company, pc);
   }
   function rowPassesCompanyFilter(r) {
+    if (_scopeError) return false;
     if (!inScopeCo(r.companyNumber)) return false;   // honor Home working-company scope
     const pc = effPageCompany();
-    return !pc || r.companyNumber === pc;
+    return !pc || _coEq(r.companyNumber, pc);
   }
 
   function paintCompanyPill() {
     const pill = document.getElementById('js-company-pill');
     const val  = document.getElementById('js-company-pill-value');
     const pc = effPageCompany();
-    if (val) val.textContent = pc || (scopedCompanySet() ? 'All in scope' : 'All');
-    if (pill) pill.classList.toggle('is-narrowed', !!pc);
+    if (val) val.textContent = _scopeError
+      ? ('Company ' + _scopeError.value + ' not in scope')
+      : (pc || (scopedCompanySet() ? 'All in scope' : 'All'));
+    if (pill) pill.classList.toggle('is-narrowed', !!pc || !!_scopeError);
   }
 
   function openCompanyPopover(anchor) {
@@ -2738,6 +2790,12 @@
     MODULE_ORDER.forEach(m => {
       if (_gridState[m]) renderTableBody(m);
     });
+    // The Model + Exception GL grids are scoped by the same working-company scope
+    // and the same _scopeError, so they have to repaint on a scope change too. They
+    // load independently of the module grids, so this can run before or after their
+    // first render — both are declared above and guard on their own DOM nodes.
+    if (typeof renderModel === 'function') renderModel();
+    if (typeof renderExcGlc === 'function') renderExcGlc();
   }
 
   // ============================================================
@@ -2782,6 +2840,13 @@
   //  Tab switching
   // ============================================================
   function activateTab(tabId) {
+    // An unrecognized tab id used to deactivate EVERY panel, leaving a blank page with
+    // no explanation. Ignore it instead and say so — the page keeps its current tab.
+    const known = ['model', 'exception-gl', 'analysis'].concat(MODULE_ORDER);
+    if (known.indexOf(tabId) < 0) {
+      console.error('[drill] ?tab=' + tabId + ' is not a tab on this page (known: ' + known.join(', ') + ') — keeping the current tab.');
+      return;
+    }
     document.querySelectorAll('.tab-pill').forEach(p => {
       const active = p.dataset.tab === tabId;
       p.classList.toggle('is-active', active);
@@ -3516,6 +3581,27 @@
     return (db && db.n) || (document.getElementById('js-topbar-db') || {}).textContent || 'RapidReconciler';
   }
 
+  // Every export is scoped — by the working companies, and on the module tabs by
+  // the company pill too. A workbook that doesn't SAY which companies it covers
+  // reads as complete to whoever opens it next (often an auditor), so the scope
+  // rides in the title block and in the filename.
+  function _exportScopeLabel(includesPagePill) {
+    const pc = includesPagePill ? effPageCompany() : null;
+    if (pc) return 'Company ' + pc;
+    return scopedCompanySet() ? 'Companies you’re working in' : 'All companies';
+  }
+  // RRV8.exportName renders `company` as CoNN (or AllCos for 'all') and `scope` as
+  // a free label — pick whichever matches how the sheet is actually narrowed.
+  function _exportNameScope(surface, drill, includesPagePill) {
+    const o = { surface: surface };
+    if (drill) o.drill = drill;
+    const pc = includesPagePill ? effPageCompany() : null;
+    if (pc) o.company = pc;
+    else if (scopedCompanySet()) o.scope = 'InScope';
+    else o.company = 'all';
+    return RRV8.exportName(o);
+  }
+
   function exportGridToExcel(module) {
     if (typeof XLSX === 'undefined') { return; }
     const rows = filteredRows(module);
@@ -3523,10 +3609,10 @@
     const stamp = new Date();
     buildAuditWorkbook({
       sheetName: module,
-      fileName: RRV8.exportName({ surface: 'DMAAI', drill: module }),
+      fileName: _exportNameScope('DMAAI', module, true),
       titleLines: [
         module + ' DMAAIs',
-        'Database ' + _dmaaiDbName(),
+        'Database ' + _dmaaiDbName() + '  ·  ' + _exportScopeLabel(true),
         'Generated ' + stamp.toLocaleString('en-US') + '  ·  ' + rows.length.toLocaleString('en-US') + ' row' + (rows.length !== 1 ? 's' : '')
       ],
       columns: cols.map(c => ({ label: c.label })),
@@ -3636,13 +3722,19 @@
     return rrFetch('inventory/integrity/aai-analysis-latest');
   }
 
+  // Prior triage decisions (answer / decision / status per finding). A failure here
+  // used to resolve to null, which is indistinguishable from "nothing has been
+  // triaged yet" — so every finding the analyst had already closed reappeared as
+  // Open and the worklist read as untouched work. Resolve to a marked failure so
+  // the boot can say the decisions are missing instead of implying there are none.
   function loadResponses(runId) {
     if (IS_DEMO) {
       return fetch('data/dmaai-responses.json', { cache: 'no-cache' })
-        .then(r => r.ok ? r.json() : null).catch(() => null);
+        .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+        .catch(err => ({ _loadFailed: err }));
     }
     const q = runId ? '?runId=' + encodeURIComponent(runId) : '';
-    return rrFetch('inventory/integrity/aai-responses' + q).catch(() => null);
+    return rrFetch('inventory/integrity/aai-responses' + q).catch(err => ({ _loadFailed: err }));
   }
 
   // ============================================================
@@ -3672,12 +3764,17 @@
   ];
   let _modelRows  = [];
   let _modelQuery = '';
+  // Set when the baseline read failed. An empty _modelRows is otherwise
+  // indistinguishable from "the model table is empty", and the tab badge, the row
+  // count and the export would all report a confident 0 off a read that never
+  // returned. Rendering keys off this to say the rows are missing instead.
+  let _modelFailed = false;
 
   function loadModel() {
     if (IS_DEMO) {
       return fetch('data/v-integrity1-aai-base.json', { cache: 'no-cache' })
-        .then(r => r.ok ? r.json() : { data: [] })
-        .catch(() => ({ data: [] }));
+        .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+        .catch(err => { _modelFailed = true; console.error('Model baseline fetch failed:', err); return { data: [] }; });
     }
     // /inventory/integrity ignores reconciliationFilter contents
     // (IntegrityViewRepository.findRows post-filters by JWT
@@ -3691,7 +3788,8 @@
         take: 1000, skip: 0, page: 1, pageSize: 1000
       }
     }).catch(err => {
-      console.warn('Model fetch failed:', err);
+      _modelFailed = true;
+      console.error('Model fetch failed:', err);
       return { data: [] };
     });
   }
@@ -3703,10 +3801,24 @@
       '<th class="is-mono" title="' + escapeHtml(c.key) + '">' + escapeHtml(c.label) + '</th>'
     ).join('');
   }
+  // The Model + Exception GL tabs read whole views and used to render EVERY
+  // company's rows regardless of scope — while the worklist, the module grids and
+  // the company pill next to them were narrowed. Worse, when ?company= named a
+  // company outside the working scope (_scopeError), those surfaces correctly went
+  // empty and the pill said "not in scope" while these two tabs kept showing the
+  // full unscoped dataset right beside that message. Both now honor the Home
+  // working-company scope, the same scope accounting-model-review.html applies to
+  // this very view. The local company pill is deliberately NOT applied here: these
+  // two tabs are reference/setup data read across the in-scope companies.
+  function inWorkingScope(rows) {
+    if (_scopeError) return [];
+    return (rows || []).filter(r => inScopeCo(r && r.CompanyNumber));
+  }
   function modelFilteredRows() {
+    const scoped = inWorkingScope(_modelRows);
     const q = String(_modelQuery || '').toLowerCase().trim();
-    if (!q) return _modelRows;
-    return _modelRows.filter(r => {
+    if (!q) return scoped;
+    return scoped.filter(r => {
       for (let i = 0; i < MODEL_COLUMNS.length; i++) {
         const v = r[MODEL_COLUMNS[i].key];
         if (v != null && String(v).toLowerCase().indexOf(q) !== -1) return true;
@@ -3721,15 +3833,23 @@
     if (!tbody) return;
     renderModelHeader();
     const rows = modelFilteredRows();
+    const scopedTotal = inWorkingScope(_modelRows).length;
     if (count) {
       count.classList.remove('is-loading');
-      const total = _modelRows.length;
-      count.textContent = rows.length.toLocaleString('en-US') + ' rows' +
-        (rows.length < total ? ' of ' + total.toLocaleString('en-US') : '');
+      count.textContent = _modelFailed ? 'not loaded'
+        : (rows.length.toLocaleString('en-US') + ' rows' +
+           (rows.length < scopedTotal ? ' of ' + scopedTotal.toLocaleString('en-US') : ''));
     }
-    if (badge) badge.textContent = _modelRows.length.toLocaleString('en-US');
+    // A count of 0 on a failed read reads as "the model is empty" — show nothing
+    // rather than a number we don't have.
+    if (badge) badge.textContent = _modelFailed ? '' : scopedTotal.toLocaleString('en-US');
     if (!rows.length) {
-      tbody.innerHTML = '<tr><td colspan="' + MODEL_COLUMNS.length + '" class="details-empty">No rows match the current search.</td></tr>';
+      const msg = _modelFailed
+        ? 'Couldn’t load the model table. Reopen the page in a moment; if it keeps failing, ask your IT department to check that RapidReconciler’s data service is running.'
+        : _scopeError
+          ? ('This link asked for company ' + escapeHtml(_scopeError.value) + ', which is outside the companies you’re working in. Nothing is shown, because showing it would ignore that scope.')
+          : (_modelQuery ? 'No rows match the current search.' : 'No model mappings for the companies you’re working in.');
+      tbody.innerHTML = '<tr><td colspan="' + MODEL_COLUMNS.length + '" class="details-empty">' + msg + '</td></tr>';
       return;
     }
     tbody.innerHTML = rows.map(r =>
@@ -3765,14 +3885,21 @@
       console.warn('Excel library still loading — Model export skipped');
       return;
     }
+    // Never write a workbook off a failed read: a zero-row "AAI Model" sheet is
+    // indistinguishable from a model with no mappings once it leaves this page.
+    if (_modelFailed) {
+      showNotice('model-export', 'Nothing to export yet',
+        'The model table didn’t load, so an export would be an empty sheet rather than the baseline. Reopen the page and try again.');
+      return;
+    }
     const rows = modelFilteredRows();
     // All columns are JDE mapping identifiers (text) — no numeric total is meaningful.
     buildAuditWorkbook({
       sheetName: 'Model',
-      fileName: RRV8.exportName({ surface: 'AAIModel' }),
+      fileName: _exportNameScope('AAIModel', null, false),
       titleLines: [
         'AAI Model — F4095 Baseline',
-        'Database ' + _dmaaiDbName(),
+        'Database ' + _dmaaiDbName() + '  ·  ' + _exportScopeLabel(false),
         'Generated ' + new Date().toLocaleString('en-US') + '  ·  ' + rows.length.toLocaleString('en-US') + ' row' + (rows.length !== 1 ? 's' : '')
       ],
       columns: MODEL_COLUMNS.map(c => ({ label: c.label })),
@@ -3819,10 +3946,18 @@
       el.innerHTML = 'Model changed since approval &mdash; <a href="accounting-model-review.html">re-approve</a>';
       el.hidden = false;
       if (dot) { dot.className = 'tab-dot is-amber'; dot.title = 'Model changed since approval'; dot.hidden = false; }
-    } else {
+    } else if (m.state === 'unapproved') {   // the endpoint's three states are approved | needs-review | unapproved
       el.className = 'model-verdict is-none';
       el.innerHTML = 'Not yet approved &mdash; <a href="accounting-model-review.html">sign off</a>';
       el.hidden = false;
+    } else {
+      // A payload we can't classify (empty body, or a state a newer Services jar
+      // reports that this page doesn't know) used to land in the "Not yet approved"
+      // branch — telling the accountant the baseline was never signed off when the
+      // truth is we couldn't read the sign-off. Make no claim instead.
+      console.warn('[dmaais] unrecognized model-approval state:', m && m.state);
+      el.hidden = true;
+      if (dot) dot.hidden = true;
     }
   }
   // Fire-and-forget; independent of the Model grid load. Demo has no sidecar
@@ -3854,12 +3989,15 @@
   ];
   let _excGlcRows  = [];
   let _excGlcQuery = '';
+  // Same reason as _modelFailed: "0 items with a GL class outside the master" is an
+  // all-clear an analyst acts on, so it must never be produced by a failed read.
+  let _excGlcFailed = false;
 
   function loadExcGlc() {
     if (IS_DEMO) {
       return fetch('data/v-integrity3-exc-glc.json', { cache: 'no-cache' })
-        .then(r => r.ok ? r.json() : { data: [] })
-        .catch(() => ({ data: [] }));
+        .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+        .catch(err => { _excGlcFailed = true; console.error('Exception GL fetch failed:', err); return { data: [] }; });
     }
     return rrFetch('inventory/integrity', {
       method: 'POST',
@@ -3869,7 +4007,8 @@
         take: 5000, skip: 0, page: 1, pageSize: 5000
       }
     }).catch(err => {
-      console.warn('Exception GL fetch failed:', err);
+      _excGlcFailed = true;
+      console.error('Exception GL fetch failed:', err);
       return { data: [] };
     });
   }
@@ -3899,9 +4038,10 @@
     }).join('');
   }
   function excGlcFilteredRows() {
+    const scoped = inWorkingScope(_excGlcRows);
     const q = String(_excGlcQuery || '').toLowerCase().trim();
-    if (!q) return _excGlcRows;
-    return _excGlcRows.filter(r => {
+    if (!q) return scoped;
+    return scoped.filter(r => {
       for (let i = 0; i < EXC_GLC_COLUMNS.length; i++) {
         const v = r[EXC_GLC_COLUMNS[i].key];
         if (v != null && String(v).toLowerCase().indexOf(q) !== -1) return true;
@@ -3916,15 +4056,21 @@
     if (!tbody) return;
     renderExcGlcHeader();
     const rows = excGlcFilteredRows();
+    const scopedTotal = inWorkingScope(_excGlcRows).length;
     if (count) {
       count.classList.remove('is-loading');
-      const total = _excGlcRows.length;
-      count.textContent = rows.length.toLocaleString('en-US') + ' rows' +
-        (rows.length < total ? ' of ' + total.toLocaleString('en-US') : '');
+      count.textContent = _excGlcFailed ? 'not loaded'
+        : (rows.length.toLocaleString('en-US') + ' rows' +
+           (rows.length < scopedTotal ? ' of ' + scopedTotal.toLocaleString('en-US') : ''));
     }
-    if (badge) badge.textContent = _excGlcRows.length.toLocaleString('en-US');
+    if (badge) badge.textContent = _excGlcFailed ? '' : scopedTotal.toLocaleString('en-US');
     if (!rows.length) {
-      tbody.innerHTML = '<tr><td colspan="' + EXC_GLC_COLUMNS.length + '" class="details-empty">No rows match the current search.</td></tr>';
+      const msg = _excGlcFailed
+        ? 'Couldn’t load the excluded GL classes, so this is not an all-clear. Reopen the page in a moment; if it keeps failing, ask your IT department to check that RapidReconciler’s data service is running.'
+        : _scopeError
+          ? ('This link asked for company ' + escapeHtml(_scopeError.value) + ', which is outside the companies you’re working in. Nothing is shown, because showing it would ignore that scope.')
+          : (_excGlcQuery ? 'No rows match the current search.' : 'No items use a GL class that’s missing from the AAI master.');
+      tbody.innerHTML = '<tr><td colspan="' + EXC_GLC_COLUMNS.length + '" class="details-empty">' + msg + '</td></tr>';
       return;
     }
     tbody.innerHTML = rows.map(r =>
@@ -3959,16 +4105,23 @@
       console.warn('Excel library still loading — Exception GL export skipped');
       return;
     }
+    // A zero-row Exception GL sheet reads as a clean bill of health, so refuse to
+    // produce one when the read is what failed.
+    if (_excGlcFailed) {
+      showNotice('excglc-export', 'Nothing to export yet',
+        'The excluded GL classes didn’t load, so an export would read as a clean result rather than an unknown one. Reopen the page and try again.');
+      return;
+    }
     const rows = excGlcFilteredRows();
     const isNumCol = c => c.numFmt === 'money' || c.numFmt === 'qty';
     const sumQty = rows.reduce((s, r) => s + (Number(r.Quantity) || 0), 0);
     const sumAmt = rows.reduce((s, r) => s + (Number(r.Amount) || 0), 0);
     buildAuditWorkbook({
       sheetName: 'ExceptionGL',
-      fileName: RRV8.exportName({ surface: 'ExceptionGL' }),
+      fileName: _exportNameScope('ExceptionGL', null, false),
       titleLines: [
         'Exception GL',
-        'Database ' + _dmaaiDbName(),
+        'Database ' + _dmaaiDbName() + '  ·  ' + _exportScopeLabel(false),
         'Generated ' + new Date().toLocaleString('en-US') + '  ·  ' + rows.length.toLocaleString('en-US') + ' row' + (rows.length !== 1 ? 's' : '')
       ],
       columns: EXC_GLC_COLUMNS.map(c => ({
@@ -4011,6 +4164,14 @@
     (data.askCustomer || []).forEach(r => { idx[r.id] = r; });
     data._findingIndex = idx;
 
+    // Prior decisions couldn't be read: every finding below will show as untriaged.
+    // Say so, or the worklist reads as "nobody has looked at any of this".
+    if (savedResponses && savedResponses._loadFailed) {
+      console.error('[dmaais] prior decisions failed to load:', savedResponses._loadFailed);
+      showNotice('responses',
+        'Your earlier decisions on these findings didn’t load',
+        'Every finding below is showing as untriaged, which may not reflect the work already done. Reopen the page in a moment before recording anything new — saving now would only add to what’s already stored, but the list you see is incomplete.');
+    }
     // Seed responses from any persisted set (demo round-trip JSON).
     if (savedResponses && Array.isArray(savedResponses.responses)) {
       savedResponses.responses.forEach(r => {
@@ -4103,11 +4264,28 @@
       if (co && typeof inScopeCo === 'function' && inScopeCo(co)) {
         _pageCompanyFilter = co; saveCompanyFilter(); paintCompanyPill();
         rerenderAllModuleGrids(); refreshTabCounts();
+      } else if (co) {
+        // Present but unhonorable. Do NOT leave the previously persisted company in
+        // force — that shows one company's configs under another company's question.
+        _scopeError = { param: 'company', value: co, label: 'company' };
+        _pageCompanyFilter = null; saveCompanyFilter(); paintCompanyPill();
+        rerenderAllModuleGrids(); refreshTabCounts();
+        console.error('[drill] ?company=' + co + ' is outside this session’s working company scope'
+          + ' — cleared the saved company filter rather than showing a different company’s configs.');
       }
       if (finding && data._findingIndex && data._findingIndex[finding]) {
         focusFindingInModule(finding);
+      } else if (finding) {
+        // A finding id we don't have must not silently degrade into a tab switch.
+        console.error('[drill] ?finding=' + finding + ' is not in this analysis — leaving the page on its default tab.');
       } else if (tab) {
         activateTab(tab);
+      }
+      if (window.RRV8 && RRV8.drillReport) {
+        RRV8.drillReport({ surface: 'DMAAIs',
+          applied: { company: _scopeError ? '' : (effPageCompany() || ''), finding: finding, tab: tab },
+          ignored: _scopeError ? ['company (out of scope)'] : [],
+          actual: null });
       }
     } catch (_) {}
   }).catch(err => {

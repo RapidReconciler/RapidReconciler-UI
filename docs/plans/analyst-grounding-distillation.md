@@ -127,6 +127,21 @@ Every rule in the current catalog traces to the guide:
   fix → §5.15.
 - MTO = business grouping, split by shape (GL-only expected; both-differ = 5.16
   investigate large; cardex-only = 5.19 repost via R31802A) → §5.20.
+
+  > **Superseded 2026-08-03.** The "repost via R31802A" remedy recorded above is a
+  > fabrication. It has since been removed from the classifier, the analyst guide, the
+  > AI grounding, the UI copy and the analyzer engine. There is no repost. A completion
+  > reaches F4111 with no batch number and no G/L date, and R31802A stamps the batch and
+  > writes the F0911 journal entries in the same step, so a batch on the row means the
+  > program already ran. The same run resets Unaccounted Units, which are what drive its
+  > selection, so it cannot pick the transaction up a second time. The cardex-only shape
+  > is a genuine gap: the run wrote no F0911 completion detail for the order.
+  > Vendor-documented as Oracle Support KB 420628, abstract only, body behind the My
+  > Oracle Support login, so the remedy is unknown. Match failures are the secondary set,
+  > and confirmation is per work order rather than per batch. The rest of the bullet
+  > stands: MTO is still a business grouping split by shape, and the GL-only and
+  > both-differ branches are unaffected. Current text: `usp8_txv_flags` block `-- D.` and
+  > `AnalysisGuides/manufacturing-accounting-flow.md`.
 - Materiality lead; analyst does source work, accountant owns JEs; JDE-fluent
   audience → §1.4, §5, §7.
 

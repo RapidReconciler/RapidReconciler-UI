@@ -848,7 +848,11 @@
       body:   { name: name, startDate: startDate, aaiDoc: aaiDoc, threshold: threshold }
     })
       .then(resp => {
-        patchRow(resp);
+        // patchRow ignores a reply that carries no row, which left the grid showing
+        // the OLD threshold / start date under a "Saved" toast — the admin had no way
+        // to tell whether the change took. Re-read from the agent in that case.
+        if (resp && resp.companyNumber) patchRow(resp);
+        else refreshCompanies();
         closeEditModal();
         toast('Saved ' + number);
       })
@@ -938,16 +942,26 @@
   let _inlineUnlicensed = null;
   let _unlicensedLoaded = false;
 
+  // Re-read the grid from the agent. Called after a save whose reply didn't carry
+  // the updated row, so what's on screen is what the server actually holds.
   function refreshCompanies() {
     return rrFetch('admin/companies')
       .then(resp => {
-        renderCompanies(resp && resp.companies);
-        _inlineUnlicensed = (resp && resp.unlicensed) || null;
-        if (_unlicensedLoaded) renderUnlicensed(_inlineUnlicensed);
+        // Same rule as the initial load: no array means no answer. Leave the grid as
+        // it stands rather than blanking it into "No licensed companies in scope."
+        if (!resp || !Array.isArray(resp.companies)) {
+          console.error('[companies] refresh reply carried no company list:', resp);
+          showFetchError(new Error('the company list didn’t come back, so what’s shown may be out of date'));
+          return;
+        }
+        renderCompanies(resp.companies);
+        _inlineUnlicensed = Array.isArray(resp.unlicensed) ? resp.unlicensed : null;
+        if (_unlicensedLoaded && _inlineUnlicensed) renderUnlicensed(_inlineUnlicensed);
         applyF0010Check(resp);
       })
       .catch(err => {
-        console.warn('Companies: refresh failed —', err.message);
+        console.error('[companies] refresh failed:', err);
+        showFetchError(new Error('couldn’t re-read the company list, so what’s shown may be out of date'));
       });
   }
 
@@ -1082,7 +1096,12 @@
         showUnlicensedTable(rows);
       })
       .catch(err2 => {
-        if (_inlineUnlicensed != null) { showUnlicensedTable(_inlineUnlicensed); return; }
+        // The inline fallback is only a real answer when it actually carries rows.
+        // An empty inline array used to satisfy `!= null` and render "No unlicensed
+        // JDE companies have F4111 activity on this DB" — presenting a scan that
+        // FAILED as a scan that found nothing.
+        if (_inlineUnlicensed && _inlineUnlicensed.length) { showUnlicensedTable(_inlineUnlicensed); return; }
+        console.error('[companies] unlicensed JDE scan failed:', err2);
         if (btn) { btn.disabled = false; btn.innerHTML = btn.dataset.label; }
         if (errEl) {
           errEl.textContent = 'Couldn’t check JDE right now — ' + ((err2 && err2.message) || 'try again');
@@ -1103,11 +1122,19 @@
   // ships the dedicated scan endpoint (see API.md / agent spec).
   rrFetch('admin/companies')
     .then(resp => {
-      const companies = (resp && resp.companies) || [];
+      // A reply with no company ARRAY is not "zero licensed companies". `|| []` made
+      // an empty 2xx body or a shape change render "No licensed companies in scope."
+      // and, worse, fed 0 into the seat banner as "Using 0 of N company licenses" —
+      // an entitlement figure the admin would act on. Treat it as a failed read.
+      if (!resp || !Array.isArray(resp.companies)) {
+        console.error('[companies] reply carried no company list:', resp);
+        throw new Error('the company list didn’t come back — this is not a sign there are none');
+      }
+      const companies = resp.companies;
       renderCompanies(companies);
       applyF0010Check(resp);
       renderLicenseUsage(companies.length);
-      _inlineUnlicensed = (resp && resp.unlicensed) || null;
+      _inlineUnlicensed = Array.isArray(resp.unlicensed) ? resp.unlicensed : null;
     })
     .catch(err => {
       showFetchError(err);

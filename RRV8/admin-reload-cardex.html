@@ -34,6 +34,9 @@
   .eod-banner { display:flex; align-items:flex-start; gap:12px; padding:11px 14px; border-radius:8px; margin-bottom:16px; font-size:13px; line-height:1.5; }
   .eod-banner.is-suggest { background:var(--orange-pale); border:1px solid #f0d2a8; color:var(--text); }
   .eod-banner.is-clean   { background:var(--green-pale); border:1px solid #c5e6d2; color:var(--text); }
+  /* Neutral: the check couldn't answer. Deliberately NOT green — an unknown result
+     must not look like a clean one. */
+  .eod-banner.is-unknown { background:var(--bg-soft); border:1px solid var(--rule); color:var(--text-soft); }
   .eod-banner b { color:var(--navy); }
   .eod-banner .eod-act { margin-left:auto; flex-shrink:0; }
   .btn-snooze { font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:12.5px; border-radius:6px; padding:7px 12px; cursor:pointer; border:1px solid var(--rule-strong); background:var(--bg-card); color:var(--text-soft); white-space:nowrap; }
@@ -218,6 +221,7 @@
   function cardexSnoozeActive() { var u = cardexSnoozeUntil(); return !!(u && u.getTime() > Date.now()); }
   function fmtIso(iso) { try { return new Date(iso + 'T00:00:00').toLocaleDateString(); } catch (_) { return iso; } }
   var _eod = null;
+  var _eodFailed = false;   // the end-of-day check didn't answer — that is not "clean"
   function renderEodBanner() {
     var b = $('js-eod-banner'); if (!b) return;
     if (cardexSnoozeActive()) {
@@ -231,7 +235,11 @@
       b.innerHTML = '<div><b>End-of-day values in the prior two periods</b> (' + (_eod.eodCount || 0) +
         ' rows). Suggested reload from <b>' + fmtIso(_eod.suggestedDate) + '</b> &mdash; prefilled below; change it if you need to.</div>' +
         '<span class="eod-act"><button type="button" class="btn-snooze" id="js-eod-snooze">Remind me in 30 days</button></span>';
-    } else if (_eod) {
+    } else if (_eodFailed) {
+      // Distinct from the clean banner below: we asked and got no answer.
+      b.hidden = false; b.className = 'eod-banner is-unknown';
+      b.innerHTML = '<div>Couldn&rsquo;t check for end-of-day values just now, so this isn&rsquo;t a clean result. Reopen this page in a moment; if it keeps happening, ask your IT department to confirm RapidReconciler&rsquo;s data service is running.</div>';
+    } else if (_eod && _eod._answered) {
       b.hidden = false; b.className = 'eod-banner is-clean';
       b.innerHTML = '<div>No end-of-day values in the prior two periods &mdash; reload only if you have a specific reason.</div>';
     } else {
@@ -241,10 +249,25 @@
   function loadEodCheck() {
     if (IS_DEMO) return;
     rrFetch('inventory/reload-cardex/eod-check').then(function (p) {
+      // `p || {}` used to make an empty 2xx body truthy, and the branch above then
+      // announced "No end-of-day values in the prior two periods" — an all-clear on
+      // a reply that carried nothing. Require the answer to actually be present.
+      var answered = !!(p && typeof p === 'object' && ('suggestedDate' in p || 'eodCount' in p));
       _eod = p || {};
-      if (_eod.suggestedDate && !cardexSnoozeActive() && !fromDate()) { $('js-from').value = _eod.suggestedDate; loadPreview(); }
+      _eod._answered = answered;
+      _eodFailed = !answered;
+      if (!answered) console.error('[reload cardex] end-of-day check returned no usable answer:', p);
+      if (answered && _eod.suggestedDate && !cardexSnoozeActive() && !fromDate()) { $('js-from').value = _eod.suggestedDate; loadPreview(); }
       renderEodBanner();
-    }).catch(function () { /* endpoint absent -> leave the page as-is */ });
+    }).catch(function (e) {
+      // A 404 is an older Services build that doesn't have this check — nothing to
+      // report, so stay quiet. Anything else means the check failed and the admin
+      // should not read the absence of a banner as "nothing to reload".
+      if (e && e.status === 404) { console.warn('[reload cardex] end-of-day check not available on this build'); return; }
+      _eodFailed = true;
+      console.error('[reload cardex] end-of-day check failed:', e);
+      renderEodBanner();
+    });
   }
   // Snooze / clear live in the (re-rendered) banner, so delegate.
   document.addEventListener('click', function (e) {
@@ -284,7 +307,16 @@
     rrFetch('poll').then(function (payload) {
       const job = (payload && (payload.currentJob || payload)) || {};
       applyJobGuard(/^in progress/i.test(String(job.jobStatus || '').trim()));
-    }).catch(function () { /* transient poll failure: leave the guard as-is */ });
+    }).catch(function () {
+      // Fail safe to "not running", matching admin-reload-gl.html which polls the
+      // same endpoint for the same purpose. Leaving the guard as-is meant that once
+      // the "a data refresh is running" banner had been shown, a failing poll could
+      // never report not-in-progress again — so a stale banner latched permanently
+      // and blocked the reload while nothing was actually running. The reload
+      // endpoint is gated server-side; this banner is a UX hint, not the real
+      // collision guard.
+      applyJobGuard(false);
+    });
   }
   function loadPreview() {
     const d = fromDate();

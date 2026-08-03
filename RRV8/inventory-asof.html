@@ -1798,12 +1798,20 @@
   // if none was passed). Kept page-local — we never mutate the shared cross-page
   // scope, so navigating back keeps the analyst's original multi-company selection.
   let _soloCompany = null;
+  // Set when a URL scope param arrived that this page cannot honor. The grid then
+  // renders a named message instead of a plausible-looking view of the WRONG scope.
+  let _scopeError = null;
   // The full company universe the user can switch between (the JWT-allowed set,
   // unioned with whatever scope was passed) — NOT just the active companies, so
   // the single-of picker always offers every company the user can view.
   function _soloCandidates() {
     const scope = (window.RRV8 && window.RRV8.readSessionScope) ? window.RRV8.readSessionScope() : null;
-    const db = window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex] || {};
+    // Guarded: a pre-hydrate RR_SESSION used to throw a TypeError out of here and
+    // abort the whole boot IIFE, leaving the page on its skeleton placeholders. An
+    // empty candidate list is the honest answer, and _ensureSolo fails CLOSED on it.
+    const _sess = window.RR_SESSION || {};
+    const _dbs = Array.isArray(_sess.dbs) ? _sess.dbs : [];
+    const db = _dbs[_sess.activeDbIndex || 0] || {};
     const allowed = (scope && scope.allowedCompanies || []).map(String).filter(Boolean);
     const dbi     = Array.isArray(db.i) ? db.i.map(String).filter(Boolean) : [];
     const active  = (scope && scope.activeCompanies  || []).map(String).filter(Boolean);
@@ -1822,7 +1830,22 @@
       const scope = (window.RRV8 && window.RRV8.readSessionScope) ? window.RRV8.readSessionScope() : null;
       const active = (scope && scope.activeCompanies || []).map(String).filter(Boolean)
         .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+      // A ?company= we cannot honor must NOT quietly become a different company: the
+      // analyst clicked a figure for one company and would be shown another company's
+      // rows under that expectation. Record it so the page says so out loud.
+      if (urlCo && list.indexOf(urlCo) < 0) {
+        _scopeError = { param: 'company', value: urlCo, label: 'company' };
+        console.error('[drill] ?company=' + urlCo + ' is not in this session\'s company list ('
+          + (list.join(', ') || 'none') + ') — refusing to silently substitute another company.');
+      }
       _soloCompany = (urlCo && list.indexOf(urlCo) >= 0 ? urlCo : null) || active[0] || list[0] || null;
+      // NOT latched into _scopeError: the candidate list can legitimately be empty for
+      // a moment during boot and fill in afterwards, and a latched error would freeze
+      // the page on that instant. The fail-closed behaviour lives in filteredRows()
+      // instead, which re-evaluates on every render and self-heals.
+      if (!_soloCompany) {
+        console.warn('[scope] no company resolved yet — the grid stays empty rather than showing every company.');
+      }
     }
     return _soloCompany;
   }
@@ -1860,6 +1883,33 @@
                : (r.companyNumber != null ? r.companyNumber : r.Company);
       return co == null || set.has(String(co).trim());
     });
+  }
+  // Narrow an integrity-report payload to the ONE company this page is showing.
+  //
+  // WHY THIS EXISTS SEPARATELY FROM scopeRowsByCompany: that one filters on the
+  // SESSION's activeCompanies, and only when they are a STRICT SUBSET of the allowed
+  // set. So an analyst whose scope is "all nine of my companies" got no filtering at
+  // all — and the Frozen Cost / GL Class / UOM workbooks left the building with nine
+  // companies in them, off a page whose header names one. The /inventory/integrity
+  // views ignore the request company filter server-side, so this client-side narrow
+  // is the only thing between a single-company screen and a nine-company export.
+  //
+  // Returns { rows, dropped, untagged } so the caller can SAY what happened rather
+  // than shipping a wider set quietly. Rows with no company tag are dropped, not
+  // kept — an untagged row cannot be attributed to the company on screen.
+  function scopeRowsToSoloCompany(rows) {
+    const all = Array.isArray(rows) ? rows : [];
+    const solo = String(_ensureSolo() || '').trim();
+    if (!solo) return { rows: [], dropped: all.length, untagged: 0, unresolved: true };
+    let untagged = 0;
+    const kept = all.filter(r => {
+      const raw = r.CompanyNumber != null ? r.CompanyNumber
+                : (r.companyNumber != null ? r.companyNumber : r.Company);
+      const co = String(raw == null ? '' : raw).trim();
+      if (!co) { untagged++; return false; }
+      return co === solo;
+    });
+    return { rows: kept, dropped: all.length - kept.length, untagged: untagged, unresolved: false };
   }
   // Normalize agent response keys to match the page's COLUMNS map
   // (which uses the legacy xlsx-export labels). The agent's
@@ -2426,10 +2476,18 @@
   // ============================================================
   function filteredRows() {
     if (!_data || !Array.isArray(_data.rows)) return [];
+    // Unhonorable URL scope → show nothing. An unscoped superset reads as an answer.
+    if (_scopeError) return [];
     let rows = _data.rows;
-    if (_state.companyFilter) {
-      rows = rows.filter(r => (r.CompanyNumber || '') === _state.companyFilter);
-    }
+    // FAIL CLOSED. This page shows ONE company; if we could not resolve which one,
+    // the honest result is no rows. The old `if (_state.companyFilter)` skipped the
+    // filter on an unresolved company and rendered EVERY company's perpetual
+    // positions under a header naming one — and the /inventory/* views ignore the
+    // request company filter, so nothing server-side would have caught it.
+    if (!_state.companyFilter) return [];
+    // String-normalized on both sides: companyFilter comes from _soloCandidates()
+    // (always strings), CompanyNumber may arrive numeric from the sproc.
+    rows = rows.filter(r => String(r.CompanyNumber == null ? '' : r.CompanyNumber).trim() === String(_state.companyFilter).trim());
     if (_state.summarize) rows = summarizeRows(rows);
     // §9 — per-column funnel filters. Applied AFTER rollup so the
     // distinct values reflect what's actually visible in the grid.
@@ -2515,8 +2573,10 @@
     // Pool = rows that pass everything except this column's own filter,
     // so unchecking values doesn't make them disappear from the picker.
     if (!_data || !Array.isArray(_data.rows)) return [];
-    let rows = _data.rows;
-    if (_state.companyFilter) rows = rows.filter(r => (r.CompanyNumber || '') === _state.companyFilter);
+    // Fail closed, same as filteredRows: with no resolved company this picker would
+    // offer values drawn from every company's rows — values the grid can never match.
+    if (!_state.companyFilter) return [];
+    let rows = _data.rows.filter(r => String(r.CompanyNumber == null ? '' : r.CompanyNumber).trim() === String(_state.companyFilter).trim());
     if (_state.summarize)     rows = summarizeRows(rows);
     const cf = _state.columnFilters || {};
     const otherKeys = Object.keys(cf).filter(k => k !== colKey && cf[k] && cf[k].size);
@@ -2630,6 +2690,10 @@
   //  matches my find query".
   // ============================================================
   function renderStats() {
+    // Refused / unresolved scope = no answer, not an answer of zero. A headline
+    // reading "$0.00" above a scope-refusal message is still a number an analyst can
+    // quote.
+    if (_scopeError || !_state.companyFilter) { setStat('stat-amt', '—', 0); return; }
     const rows = _viewRows || [];
     let amt = 0;
     for (let i = 0; i < rows.length; i++) {
@@ -2802,7 +2866,9 @@
   function renderAsOfTotals() {
     const el = document.getElementById('details-totals'); if (!el) return;
     const codes = Object.keys(_perpBaseByCcy).filter(c => c && c !== '?').sort();
-    const perp = codes.length ? codes.map(c => _ccyMoney(_perpBaseByCcy[c], c)).join(' · ') : _ccyMoney(0);
+    // Same rule as renderStats: a refused or unresolved scope has no total. Never $0.
+    const perp = (_scopeError || !_state.companyFilter) ? '—'
+      : (codes.length ? codes.map(c => _ccyMoney(_perpBaseByCcy[c], c)).join(' · ') : _ccyMoney(0));
     el.innerHTML =
         '<span class="details-total"><span class="details-total-label">Perpetual</span>'
       +   '<span class="details-total-value">' + escapeHtml(perp) + '</span></span>';
@@ -2813,11 +2879,17 @@
   function renderAsOfHero() {
     const el = document.getElementById('fp-scope-items'); if (!el) return;
     const per = (_data && _data._meta && _data._meta.period) || readCurrentPeriodFromCache() || '';
-    const db  = ((window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex] || {}).n) || '';
+    // Guarded — this runs at boot, before hydrate in some paths; an unguarded
+    // RR_SESSION read threw here and killed the rest of the boot chain.
+    const _s = window.RR_SESSION || {}, _d = Array.isArray(_s.dbs) ? _s.dbs : [];
+    const db  = ((_d[_s.activeDbIndex || 0] || {}).n) || '';
     const ccy = _curCtx.mixed ? ('Mixed (' + (_curCtx.codes || []).join(', ') + ')') : (_curCtx.code || '');
     const solo = _ensureSolo();
     const multi = _soloCandidates().length > 1;
-    const coValue = solo ? ('Co ' + solo) : 'All companies';
+    // NEVER "All companies" — this page renders one company or none. Claiming "All
+    // companies" while _ensureSolo failed to resolve one described a scope the page
+    // does not have.
+    const coValue = solo ? ('Co ' + solo) : 'Not resolved';
     const item = (label, value) =>
       '<span class="fp-scope-item"><span class="fp-scope-label">' + label + '</span>'
       + '<span class="fp-scope-value">' + escapeHtml(value) + '</span></span>';
@@ -3255,9 +3327,37 @@ function updateLotDetailPill() {
     count.textContent = rows.length.toLocaleString('en-US') + ' rows' +
       (rows.length < total ? ' of ' + total.toLocaleString('en-US') : '');
     const span = visibleColspan();
+    if (_scopeError) {
+      tbody.innerHTML = '<tr><td colspan="' + span + '" class="details-empty">'
+        + 'This link asked for a ' + escapeHtml(_scopeError.label)
+        + ' you do not have access to in this session: &ldquo;' + escapeHtml(_scopeError.value) + '&rdquo;. '
+        + 'No rows are shown, because showing a different company here would answer a question you did not ask. '
+        + 'Pick a company from the selector above, or ask your IT department to check your company access.'
+        + '</td></tr>';
+      count.textContent = 'Scope not recognized';
+      if (tfoot) tfoot.innerHTML = '';
+      _drillReport(0);
+      return;
+    }
+    // No company resolved: filteredRows() fails closed above, so distinguish that
+    // from "your filter matched nothing" — otherwise the analyst tweaks filters
+    // chasing rows the page was never going to show.
+    if (!_state.companyFilter) {
+      tbody.innerHTML = '<tr><td colspan="' + span + '" class="details-empty">'
+        + 'RapidReconciler couldn&rsquo;t work out which company to show you, so it is showing none. '
+        + 'This page reports one company at a time, and an all-company grid here would read as that one '
+        + 'company&rsquo;s inventory. Sign in again, or ask your IT department to check which companies '
+        + 'your sign-in covers.'
+        + '</td></tr>';
+      count.textContent = 'Company not resolved';
+      if (tfoot) tfoot.innerHTML = '';
+      _drillReport(0);
+      return;
+    }
     if (!rows.length) {
       tbody.innerHTML = '<tr><td colspan="' + span + '" class="details-empty">No rows match the current filter.</td></tr>';
       if (tfoot) tfoot.innerHTML = '';
+      _drillReport(0);
       return;
     }
     const MAX_RENDER = 500;
@@ -3316,6 +3416,62 @@ function updateLotDetailPill() {
     }
     tbody.innerHTML = html + tail;
     if (tfoot) tfoot.innerHTML = buildTotalsRow(rows, cols, isRollup);
+    _drillReport(rows.length);
+  }
+
+  // Drill tie-out — console only, once per landing. Names which scope dimensions the
+  // grid applied and which URL params it read but never turned into a filter, so a
+  // scope that silently stops applying announces itself instead of hiding. Note the
+  // honest reporting of `period`: it is sent to the Services request but is NOT a
+  // client-side row predicate here, so it is listed as request-only, not applied.
+  let _drillReported = false;
+  function _drillReport(actual) {
+    if (_drillReported || !(window.RRV8 && RRV8.drillReport)) return;
+    let expect = null;
+    try {
+      const e = (new URLSearchParams(window.location.search).get('expect') || '').trim();
+      if (/^\d+$/.test(e)) expect = parseInt(e, 10);
+    } catch (_) {}
+    // A pre-data render with a live ?expect= is the mismatch worth shouting about
+    // (card counted N, grid rendered 0), so only bail out when nothing is expected.
+    if (!_data && !_scopeError && expect === null) return;
+    _drillReported = true;
+    const ignored = [];
+    try {
+      const sp = new URLSearchParams(window.location.search);
+      // Params that ride along from a sibling tab's querystring and mean nothing here.
+      // `expect` is NOT listed — it is the tie-out input below, not a dropped filter.
+      ['card', 'groupcode', 'account', 'item', 'branch', 'dim', 'method'].forEach(k => { if (sp.get(k)) ignored.push(k); });
+      if (sp.get('period')) ignored.push('period (sent with the request, not applied to rows)');
+    } catch (_) {}
+    // Report EVERY predicate filteredRows() applied, not just the company. The
+    // residual budget, the per-column funnel filters and the contributor narrow all
+    // PERSIST IN localStorage across sessions, so a landing can arrive with rows
+    // already being dropped — which is the likeliest innocent explanation for a
+    // count mismatch and the one a tie-out must never leave out.
+    const cf = _state.columnFilters || {};
+    const cfBits = Object.keys(cf).filter(k => cf[k] && cf[k].size)
+      .map(k => k + ':' + cf[k].size + ' value(s)').join(' ');
+    RRV8.drillReport({
+      surface: 'as-of',
+      applied: {
+        company:        _state.companyFilter,
+        search:         _state.gridSearch || '',
+        summarize:      _state.summarize ? 'yes (rolled up by item)' : '',
+        residualsHidden: _state.hideResiduals
+                           ? ('yes, target ' + _state.residualTarget + ' — ' + (_residualStats.count || 0) + ' row(s) dropped')
+                           : '',
+        residualView:   _state.residualView === 'filtered' ? 'residual rows ONLY' : '',
+        columnFilters:  cfBits,
+        contributor:    _state.perpContribFilter
+                          ? (_state.perpContribFilter.dim + '=' + _state.perpContribFilter.value) : '',
+        excludedAccountRows: (_data && _data._meta && _data._meta._excludedAccountRows) || '',
+        scopeRefused:   _scopeError ? 'yes' : ''
+      },
+      ignored: ignored,
+      expected: _scopeError ? null : expect,
+      actual: actual
+    });
   }
 
   // Totals row sums the 4 numeric columns (Quantity / Amount / QtyVar
@@ -3908,7 +4064,7 @@ function updateLotDetailPill() {
   });
   // Adjust-balances icon → open this item in Cardex Variance. Works for any
   // item, flagged or not: the cardex page fetches the item's position on
-  // demand when it isn't already on the variance worklist (?from=perpetual).
+  // demand when it isn't already on the variance worklist.
   document.addEventListener('click', (e) => {
     const btn = e.target.closest && e.target.closest('.adjust-open-btn');
     if (!btn) return;
@@ -3917,7 +4073,9 @@ function updateLotDetailPill() {
     const co     = btn.getAttribute('data-adjust-company')  || '';
     const branch = btn.getAttribute('data-adjust-branch')   || '';
     if (!item) return;
-    const q = ['item=' + encodeURIComponent(item), 'from=perpetual'];
+    // No `from=` here: nothing on the destination has ever read it, and a param the
+    // destination ignores is indistinguishable from one it silently fails to apply.
+    const q = ['item=' + encodeURIComponent(item)];
     if (co)     q.push('company=' + encodeURIComponent(co));
     if (branch) q.push('branch='  + encodeURIComponent(branch));
     window.location.href = 'inventory-cardex-variance.html?' + q.join('&');
@@ -4035,7 +4193,11 @@ function updateLotDetailPill() {
     const cur = _ensureSolo();
     const counts = new Map();
     (_data && _data.rows || []).forEach(r => {
-      const c = (r.CompanyNumber || '').trim();
+      // String() FIRST: CompanyNumber can arrive as a JSON number (the rest of this
+      // file normalizes it that way for exactly this reason). `(5 || '').trim()` is a
+      // TypeError, which threw out of buildCompanyPopover and left the popover
+      // showing whatever it held last.
+      const c = String(r.CompanyNumber == null ? '' : r.CompanyNumber).trim();
       if (c) counts.set(c, (counts.get(c) || 0) + 1);
     });
     const rowHtml = (c) => {
@@ -4300,6 +4462,9 @@ function updateLotDetailPill() {
       return;
     }
     if (!_data) { toast('No data loaded yet'); return; }
+    if (_scopeError || !_ensureSolo()) { toast(_scopeError
+        ? 'Company scope isn’t recognized — nothing was exported.'
+        : 'RapidReconciler couldn’t work out which company this is for — nothing was exported.'); return; }
     // The report ALWAYS splits residual dust onto its own page, independent of the
     // grid's residual toggle: page 1 = the full list minus dust, page 2 = the dust.
     // Force residuals in while we gather the full set, then restore the grid state.
@@ -4318,7 +4483,25 @@ function updateLotDetailPill() {
       weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
       hour: 'numeric', minute: '2-digit'
     });
-    const banner    = ['As Of Generated ' + stamp].concat(new Array(Math.max(0, cols.length - 1)).fill(''));
+    // The band has to carry the SCOPE, not just the timestamp. Once this file is
+    // detached from the screen nobody can tell which company, period or search it
+    // covers — and an unlabelled workbook in front of an auditor reads as everything.
+    const _bDb  = (window.RRDB && RRDB.name && RRDB.name()) || '';
+    const _bCo  = String(_ensureSolo() || '').trim();
+    const _bPer = (_data && _data._meta && _data._meta.period) || '';
+    const _bCcy = _curCtx.mixed ? ('mixed: ' + (_curCtx.codes || []).join(', ')) : (_curCtx.code || '');
+    const _bParts = ['As Of'];
+    if (_bDb)  _bParts.push('Database ' + _bDb.replace(/^RapidReconciler_/, ''));
+    _bParts.push(_bCo ? ('Company ' + _bCo) : 'Company not resolved');
+    if (_bPer) _bParts.push('Period ' + formatPeriod(_bPer));
+    if (_bCcy) _bParts.push('Currency ' + _bCcy);
+    if (_state.summarize) _bParts.push('rolled up by item');
+    if (_state.gridSearch) _bParts.push('search "' + _state.gridSearch + '"');
+    if (_state.perpContribFilter) _bParts.push(_state.perpContribFilter.dim + ' = ' + _state.perpContribFilter.value);
+    const _bCf = Object.keys(_state.columnFilters || {}).filter(k => _state.columnFilters[k] && _state.columnFilters[k].size);
+    if (_bCf.length) _bParts.push('column filters on ' + _bCf.join(', '));
+    _bParts.push('Generated ' + stamp);
+    const banner    = [_bParts.join('  ·  ')].concat(new Array(Math.max(0, cols.length - 1)).fill(''));
 
     // Residuals audit row — sits directly under the banner so the
     // analyst can see at a glance how many rows the residual budget
@@ -4548,6 +4731,11 @@ function updateLotDetailPill() {
     btn.disabled = true;
     btn.innerHTML = 'Analyzing&hellip;';
     try {
+      // Refused scope means we don't know whose rows these would be — an export is
+      // exactly the wrong place to guess, because it leaves the building.
+      if (_scopeError || !_ensureSolo()) { toast(_scopeError
+        ? 'Company scope isn’t recognized — nothing was exported.'
+        : 'RapidReconciler couldn’t work out which company this is for — nothing was exported.'); return; }
       const payload = await rrFetch('inventory/integrity', {
         method: 'POST',
         body: {
@@ -4557,9 +4745,26 @@ function updateLotDetailPill() {
         },
         demoFile: opts.demoFile
       });
-      let rows = (payload && payload.data) || (Array.isArray(payload) ? payload : []);
-      rows = scopeRowsByCompany(rows);   // endpoint ignores company; scope client-side
-      if (!rows.length) { toast(opts.emptyMessage || 'No rows in scope'); return; }
+      // A 200 in a shape we don't recognize is an unanswered question, not zero rows.
+      const raw = (payload && Array.isArray(payload.data)) ? payload.data
+                : (Array.isArray(payload) ? payload : null);
+      if (raw === null) throw new Error('the data service returned a response this report could not read');
+      // Scope to the ONE company on screen (the view ignores the request filter).
+      const scoped = scopeRowsToSoloCompany(raw);
+      let rows = scoped.rows;
+      if (scoped.untagged) {
+        console.warn('[scope] ' + opts.errorContext + ': dropped ' + scoped.untagged +
+          ' row(s) with no company on them — they cannot be attributed to company ' + (_ensureSolo() || '?') + '.');
+      }
+      if (!rows.length) {
+        // Distinguish "the check is clean for this company" from "rows came back but
+        // none belonged to this company" — the second is a data problem, not a pass.
+        toast(raw.length
+          ? ('No rows for company ' + (_ensureSolo() || '?') + ' in this report (' +
+             raw.length.toLocaleString('en-US') + ' row(s) came back for other companies).')
+          : (opts.emptyMessage || 'No rows in scope'));
+        return;
+      }
 
       if (typeof XLSX === 'undefined') {
         toast('Excel library still loading — try again in a moment');
@@ -4669,8 +4874,13 @@ function updateLotDetailPill() {
     const stamp = new Date().toLocaleString('en-US', {
       weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit'
     });
+    // Name the COMPANY on the band. Without it an auditor holding this sheet cannot
+    // tell whose setup gaps these are, and the page's single-company scope is
+    // invisible once the file is detached from the screen.
+    const _bco = String(_ensureSolo() || '').trim();
     const banner = [(report.title || report.fileName) +
       '  ·  Database ' + db +
+      (_bco ? ('  ·  Company ' + _bco) : '') +
       '  ·  ' + rows.length.toLocaleString('en-US') + ' row' + (rows.length !== 1 ? 's' : '') +
       '  ·  Generated ' + stamp].concat(new Array(Math.max(0, ncol - 1)).fill(''));
     const headerRow = report.columns.map(c => labels[c] || c);
@@ -4691,6 +4901,9 @@ function updateLotDetailPill() {
     const origInner = btn ? btn.innerHTML : null;
     if (btn) { btn.disabled = true; btn.innerHTML = 'Loading&hellip;'; }
     try {
+      if (_scopeError || !_ensureSolo()) { toast(_scopeError
+        ? 'Company scope isn’t recognized — nothing was exported.'
+        : 'RapidReconciler couldn’t work out which company this is for — nothing was exported.'); return; }
       const payload = await rrFetch('inventory/integrity', {
         method: 'POST',
         body: {
@@ -4700,9 +4913,23 @@ function updateLotDetailPill() {
         },
         demoFile: UOM_REPORT.demoFile
       });
-      let rows = (payload && payload.data) || (Array.isArray(payload) ? payload : []);
-      rows = scopeRowsByCompany(rows);   // endpoint ignores company; scope client-side
-      if (!rows.length) { toast('No items missing UOM conversion in scope'); return; }
+      const raw = (payload && Array.isArray(payload.data)) ? payload.data
+                : (Array.isArray(payload) ? payload : null);
+      if (raw === null) throw new Error('the data service returned a response this report could not read');
+      // ONE company — the view ignores the request filter, so narrow here or the
+      // workbook carries every company off a single-company page.
+      const scoped = scopeRowsToSoloCompany(raw);
+      let rows = scoped.rows;
+      if (scoped.untagged) {
+        console.warn('[scope] UOM conversions: dropped ' + scoped.untagged +
+          ' row(s) with no company on them.');
+      }
+      if (!rows.length) {
+        toast(raw.length
+          ? ('No items missing UOM conversion for company ' + (_ensureSolo() || '?') + '.')
+          : 'No items missing UOM conversion in scope');
+        return;
+      }
       if (exportRowsToExcel(UOM_REPORT, rows)) {
         toast(rows.length.toLocaleString('en-US') + ' item' + (rows.length === 1 ? '' : 's') +
               ' missing UOM conversion - downloading.');
@@ -4735,20 +4962,32 @@ function updateLotDetailPill() {
     { badgeId: 'badge-frozen-cost', viewName: 'v_integrity7_frozen_cost', demoFile: 'v-integrity7-frozen-cost' },
     { badgeId: 'badge-gl-class',    viewName: 'v_integrity5_gl_class',    demoFile: 'v-integrity5-gl-class' }
   ];
+  // Keyed on the SOLO company, because that is what the counts are now scoped to
+  // (scopeRowsToSoloCompany). Keying on the session's activeCompanies meant switching
+  // the company on this page left the previous company's badge counts on screen.
   function reportBadgeScopeKey() {
-    try {
-      const sc = window.RRV8 && window.RRV8.readSessionScope && window.RRV8.readSessionScope();
-      return ((sc && sc.activeCompanies) || []).slice().sort().join(',');
-    } catch (_) { return ''; }
+    try { return String(_ensureSolo() || ''); } catch (_) { return ''; }
   }
   function compactCount(n) {
     if (n < 1000) return String(n);
     if (n < 1000000) return (n / 1000).toFixed(n < 10000 ? 1 : 0).replace(/\.0$/, '') + 'k';
     return (n / 1000000).toFixed(1).replace(/\.0$/, '') + 'm';
   }
+  // Three states, all distinguishable:
+  //   n = 0     → hidden. Genuinely nothing to act on.
+  //   n > 0     → the count.
+  //   n = null  → "?" — the count could NOT be read. Hiding the badge on a failed
+  //               fetch (the old behaviour) rendered "we don't know" as "you're
+  //               clean", which is the one reading that stops the analyst looking.
   function setReportBadge(badgeId, n) {
     const el = document.getElementById(badgeId);
     if (!el) return;
+    if (n == null) {
+      el.textContent = '?';
+      el.title = 'RapidReconciler couldn’t read this report’s row count. Open the report to check — this is not a zero.';
+      el.hidden = false;
+      return;
+    }
     if (!n) { el.hidden = true; el.textContent = ''; el.removeAttribute('title'); return; }
     el.textContent = compactCount(n);
     el.title = n.toLocaleString('en-US') + ' row' + (n === 1 ? '' : 's') + ' in scope';
@@ -4771,10 +5010,16 @@ function updateLotDetailPill() {
         demoFile: b.demoFile
       }).then(payload => {
         if (reportBadgeScopeKey() !== _badgeScopeKey) return;   // scope changed mid-flight
-        let rows = (payload && payload.data) || (Array.isArray(payload) ? payload : []);
-        rows = scopeRowsByCompany(rows);
-        setReportBadge(b.badgeId, rows.length);
-      }).catch(() => { setReportBadge(b.badgeId, 0); });   // hide on error
+        const raw = (payload && Array.isArray(payload.data)) ? payload.data
+                  : (Array.isArray(payload) ? payload : null);
+        // Unreadable shape → unknown, same as a failed fetch.
+        if (raw === null) { setReportBadge(b.badgeId, null); return; }
+        setReportBadge(b.badgeId, scopeRowsToSoloCompany(raw).rows.length);
+      }).catch(err => {
+        if (reportBadgeScopeKey() !== _badgeScopeKey) return;
+        console.warn('[badge] ' + b.viewName + ' count unavailable:', err && err.message);
+        setReportBadge(b.badgeId, null);   // unknown, NOT zero
+      });
     });
   }
 
@@ -4825,10 +5070,20 @@ function updateLotDetailPill() {
       const resp = await rrFetch('inventory/reconciliation/history',
                                  { method: 'POST', body });
       const points = (resp && resp.points) || [];
-      return points.map(p => ({
-        period: p.period,
-        value:  Math.round((p.perpetualBalance || 0) * 100) / 100
-      }));
+      // A point whose perpetualBalance didn't arrive is NOT a period worth $0 — and a
+      // zero bar among real ones reads as a real balance the analyst can click into.
+      // Drop it and say so in the console instead of drawing a number nobody sent.
+      const usable = [], skipped = [];
+      points.forEach(p => {
+        const n = Number(p && p.perpetualBalance);
+        if (p && p.period && Number.isFinite(n)) usable.push({ period: p.period, value: Math.round(n * 100) / 100 });
+        else if (p && p.period) skipped.push(p.period);
+      });
+      if (skipped.length) {
+        console.warn('[period-bars] no perpetual balance returned for ' + skipped.join(', ') +
+          ' — those periods are omitted rather than drawn as zero.');
+      }
+      return usable;
     } catch (err) {
       console.warn('[period-bars] history endpoint failed:', err && err.message);
       return [];
@@ -4880,7 +5135,10 @@ function updateLotDetailPill() {
   // ============================================================
   //  Sidebar nav — carry URL query forward, suppress '#' clicks
   // ============================================================
-  const search = window.location.search;
+  // Only the params that mean the same thing on every inventory tab (RRV8.crossTabQuery
+  // in sidebar.js is the ONE definition) — a page-specific param that rides onto a page
+  // which ignores it is indistinguishable from one that fails to apply.
+  const search = (window.RRV8 && RRV8.crossTabQuery) ? RRV8.crossTabQuery(window.location.search) : '';
   if (search) {
     document.querySelectorAll('a[data-nav-page]').forEach(a => {
       const base = a.getAttribute('href') || '';

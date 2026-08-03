@@ -328,9 +328,20 @@
   }
 
   function integrityRows(report) {
-    if (IS_DEMO) return rrFetch('inventory/integrity', { demoFile: report.replace(/_/g, '-') }).then(pluck).catch(function () { return []; });
+    // NOTE: no .catch here on purpose. A failed read used to resolve to [], which
+    // set _r3Loaded and made glClassCount() return 0 — the verdict then announced
+    // "every GL class is in the model" on the strength of a read that never
+    // happened. The caller now handles the rejection and says so instead.
+    if (IS_DEMO) return rrFetch('inventory/integrity', { demoFile: report.replace(/_/g, '-') }).then(pluck);
     return rrFetch('inventory/status').catch(function () { return {}; }).then(function (status) {
+      // A missing status only costs us the period hint (the report is model-level,
+      // not period-scoped), so an empty object is a genuine "no hint" default here.
+      // defaultPeriod lives in sidebar.js, which this page doesn't load — call it
+      // only when it's actually there, or this line throws instead of defaulting.
       var rf = (status && status.reconciliationFilter) || {};
+      var period = rf.period
+        || ((window.RRV8 && typeof window.RRV8.defaultPeriod === 'function') ? window.RRV8.defaultPeriod() : '')
+        || '';
       return rrFetch('inventory/integrity', {
         method: 'POST',
         body: {
@@ -339,7 +350,7 @@
           // Model-level: no company narrowing (the agent still JWT-scopes).
           reconciliationFilter: {
             currencies: [], companies: [], businessUnits: [], objects: [], subsidiaries: [],
-            period: rf.period || (window.RRV8 && window.RRV8.defaultPeriod()) || ''
+            period: period
           }
         }
       }).then(pluck);
@@ -351,14 +362,47 @@
   // or, absent that, the shared working-company scope. Both datasets are kept
   // whole; rendering applies the scope. ---
   var _r3Rows = [], _r1Rows = [], _company = QP_COMPANY;
+  // Set when ?company= names a company outside the working scope — the tables then
+  // say so instead of rendering the scope-check-bypassed result.
+  var _scopeError = null;
+  var _drillReported = false;   // drill tie-out fires once per landing (console only)
   var _r3Loaded = false;
+  var _r3Failed = false;         // the excluded-GL-class read errored — the verdict is UNKNOWN, not clean
   var _endpointGlClass = null;   // report3GlClassCount from /model-approval (pre-load fallback)
+
+  // Read the shared working-company scope. sidebar.js owns RRV8.readSessionScope,
+  // and THIS page deliberately doesn't load sidebar.js (no sidebar chrome) — so
+  // that helper is absent here and the scope read used to come back null on every
+  // call. Null means "no narrowing", which silently turned the whole scope check
+  // below into a no-op: inScopeCo() answered true for any company, so the
+  // ?company= scope guard could never fire and the page rendered whatever company
+  // the URL named. Resolve it locally instead, from the same two sources
+  // sidebar.js uses (the active-db claim's allowed list + the per-db sessionStorage
+  // scope payload Home writes), so a page without the sidebar gets the SAME answer.
+  function _readScope() {
+    if (window.RRV8 && window.RRV8.readSessionScope) return window.RRV8.readSessionScope();
+    var db = activeDb() || {};
+    var allowed = Array.isArray(db.i) ? db.i.slice() : [];
+    // Key shape must match sidebar.js _sessionScopeKey(): rrv8.scope.v1.<mode>.<db>.scope,
+    // built from RR_CONFIG.mode (not the ?mode= override) and the active database name.
+    var key = 'rrv8.scope.v1.' + ((window.RR_CONFIG && RR_CONFIG.mode) || 'demo') + '.' + (db.n || '_') + '.scope';
+    var stored = null;
+    try { var raw = sessionStorage.getItem(key); stored = raw ? (JSON.parse(raw).payload || null) : null; } catch (_) { stored = null; }
+    var active = (stored && Array.isArray(stored.activeCompanies) && stored.activeCompanies.length)
+      ? stored.activeCompanies.slice() : allowed.slice();
+    if (!allowed.length && !_scopeWarned) {
+      _scopeWarned = true;   // scopedCompanySet() runs per render — warn once, not per row
+      console.warn('[scope] no allowed-company claim on the active database — the company scope check cannot narrow.');
+    }
+    return { allowedCompanies: allowed, activeCompanies: active };
+  }
+  var _scopeWarned = false;
 
   // Active working-company scope as a lookup, or null when all allowed
   // companies are selected (no narrowing). Mirrors home.html scopedCompanySet
   // so this page narrows to the exact set chosen on Home.
   function scopedCompanySet() {
-    var sc = (window.RRV8 && window.RRV8.readSessionScope) ? window.RRV8.readSessionScope() : null;
+    var sc = _readScope();
     if (!sc) return null;
     var act = (sc.activeCompanies || []).map(String);
     var allow = (sc.allowedCompanies || []).map(String);
@@ -371,11 +415,30 @@
     if (!sc) return rows;
     return rows.filter(function (r) { return sc[String(field(r, 'CompanyNumber'))]; });
   }
+  function inScopeCo(co) {
+    var sc = scopedCompanySet();
+    return !sc || !!sc[String(co == null ? '' : co).trim()];
+  }
   function byCompany(rows) {
-    // An explicitly-passed company (from the prior page) is authoritative — it
-    // wins over any Home working-company scope so the page always shows exactly
-    // the company the user selected. With no company passed, honor Home scope.
-    if (_company) return rows.filter(function (r) { return field(r, 'CompanyNumber') === _company; });
+    // An explicitly-passed company (from the prior page) narrows to exactly that
+    // company — but it is ANDed with the Home working-company scope, never a
+    // replacement for it. Letting ?company= win outright meant a URL param could
+    // turn the scope check off, which is the one thing a scope check must not do.
+    // A company outside the working scope is a scope error, not a filter.
+    if (_company && !inScopeCo(_company)) {
+      if (!_scopeError) {
+        _scopeError = { param: 'company', value: _company, label: 'company' };
+        console.error('[drill] ?company=' + _company + ' is outside this session’s working company scope'
+          + ' — refusing to bypass the scope check and show it anyway.');
+      }
+      return [];
+    }
+    if (_company) {
+      return rows.filter(function (r) {
+        return inScopeCo(field(r, 'CompanyNumber'))
+          && String(field(r, 'CompanyNumber')).trim() === String(_company).trim();
+      });
+    }
     return inScope(rows);
   }
 
@@ -428,6 +491,20 @@
     var banner = $('verdictBanner'), title = $('verdictTitle'), sub = $('verdictSub');
     var exCard = $('excludedCard'), lead = $('aiLead'), acts = $('aiActions'), ans = $('aiAnswer');
 
+    // Read failed and no count came back from the endpoint either: the verdict is
+    // UNKNOWN. Saying so beats the two wrong alternatives — a green "nothing to
+    // review" (what an empty row list produced) or a "Reviewing the model…" that
+    // never resolves.
+    if (_r3Failed && _endpointGlClass == null) {
+      if (banner) banner.className = 'verdict';
+      if (title) title.textContent = 'Couldn’t review the model right now';
+      if (sub) sub.textContent = 'The excluded GL classes didn’t load, so this page can’t tell you whether the model is complete. Reopen it in a moment; if it keeps failing, ask your IT department to check that RapidReconciler’s data service is running.';
+      if (exCard) exCard.hidden = true;
+      if (lead) { lead.hidden = true; lead.textContent = ''; }
+      if (acts) acts.hidden = true;
+      if (ans) ans.hidden = true;
+      return;
+    }
     if (n < 0) {   // still loading
       if (banner) banner.className = 'verdict';
       if (title) title.textContent = 'Reviewing the model…';
@@ -519,16 +596,33 @@
     var key = '4152' + (types.length ? ' ' + types.join(', ') : '');
     el.innerHTML = 'Your model table is <strong>' + esc(key) + '</strong>.';
   }
+  // The empty-state line when a scope param could not be honored. Says WHY nothing is
+  // shown and names the value, rather than reading as a clean "nothing to review".
+  function _scopeErrText() {
+    return 'This link asked for a ' + _scopeError.label + ' outside your current working scope: “'
+      + _scopeError.value + '”. Nothing is shown, because showing it would ignore the scope you are working in. '
+      + 'Change your working companies, or ask your IT department to check your company access.';
+  }
   function renderR3() {
     var scoped = byCompany(_r3Rows);
     renderExcluded($('r3Body'), scoped,
-      _company ? ('No excluded GL classes for company ' + _company + '.')
+      _scopeError ? _scopeErrText()
+      : _company ? ('No excluded GL classes for company ' + _company + '.')
                : 'No excluded GL classes — every GL class used in inventory is in the model.');
     renderVerdict();
   }
   function renderR1() {
-    renderBaseline($('r1Body'), byCompany(_r1Rows),
-      _company ? ('No model mappings for company ' + _company + '.') : 'The model baseline is empty.');
+    var _r1Scoped = byCompany(_r1Rows);
+    renderBaseline($('r1Body'), _r1Scoped,
+      _scopeError ? _scopeErrText()
+      : _company ? ('No model mappings for company ' + _company + '.') : 'The model baseline is empty.');
+    if (window.RRV8 && RRV8.drillReport && !_drillReported && (_r1Rows.length || _scopeError)) {
+      _drillReported = true;
+      RRV8.drillReport({ surface: 'model review',
+        applied: { company: _scopeError ? '' : _company, workingScope: scopedCompanySet() ? 'narrowed' : 'all' },
+        ignored: QP_DB ? ['db (label only)'] : [],
+        actual: _r1Scoped.length });
+    }
   }
 
   // Read the model-approval endpoint for its counts ONLY (report1Count /
@@ -540,7 +634,13 @@
     return rrFetch(area).then(function (m) {
       _endpointGlClass = (m && m.report3GlClassCount != null) ? Number(m.report3GlClassCount) : null;
       renderVerdict();
-    }).catch(function () { /* endpoint unreachable — the loaded Report 3 rows drive the verdict */ });
+    }).catch(function (e) {
+      // Endpoint unreachable — the loaded Report 3 rows drive the verdict instead.
+      // _endpointGlClass stays null so nothing reads a count we never got; if the
+      // row read ALSO failed, renderVerdict reports the verdict as unknown.
+      console.warn('[model review] model-approval counts unavailable:', e);
+      renderVerdict();
+    });
   }
 
   function boot() {
@@ -574,8 +674,15 @@
 
     renderVerdict();   // loading state (tier label + "Reviewing…")
     loadVerdict();
-    integrityRows('v_integrity3_exc_glc').then(function (rows) { _r3Rows = rows || []; _r3Loaded = true; renderR3(); })
-      .catch(function () { $('r3Body').innerHTML = '<div class="empty">Couldn’t load excluded GL classes.</div>'; });
+    integrityRows('v_integrity3_exc_glc').then(function (rows) { _r3Rows = rows || []; _r3Loaded = true; _r3Failed = false; renderR3(); })
+      .catch(function (e) {
+        // Leave _r3Loaded false so glClassCount() never reports 0 off a failed read,
+        // and mark the failure so the verdict says UNKNOWN instead of CLEAN.
+        _r3Failed = true;
+        console.error('[model review] excluded GL classes failed to load:', e);
+        $('r3Body').innerHTML = '<div class="empty">Couldn’t load the excluded GL classes, so this list is not a complete picture. Reopen the page in a moment.</div>';
+        renderVerdict();
+      });
     // Lean baseline: agent returns Company / GL class / Account / Account name (+ Table/DocType for the caption).
     rrFetch('inventory/integrity/model-baseline').then(pluck).then(function (rows) { _r1Rows = rows || []; updateModelKeyLine(); renderR1(); })
       .catch(function () { $('r1Body').innerHTML = '<div class="empty">Couldn’t load the model baseline.</div>'; });

@@ -222,26 +222,48 @@
     return 'grey';
   }
   function renderSchedule(s) {
-    const daily = s && s.dailyRefresh;
-    _schedRunTime = (daily && daily.runTime) || null;
+    // Three cases, and they used to collapse into one wrong one. The endpoint
+    // documents dailyRefresh as the schedule entry OR null when the job/schedule is
+    // absent, so:
+    //   key absent   -> we didn't get an answer. Say unavailable.
+    //   key null     -> a real answer: no nightly refresh job exists. Say THAT.
+    //   entry object -> render it.
+    // Previously all three fell through with `daily` possibly undefined, and the
+    // pill read "Off" / "Hasn't run yet" — an admin sees that as "someone disabled
+    // our nightly refresh" and escalates over a field the page never received.
+    if (!s || typeof s !== 'object' || !('dailyRefresh' in s)) {
+      console.error('[job schedule] refresh-schedule reply carried no dailyRefresh field:', s);
+      setUnavailable();
+      return;
+    }
+    const daily = s.dailyRefresh;
+    if (!daily || typeof daily !== 'object') {
+      _schedRunTime = null;
+      setUnavailable('No nightly refresh job is set up on this database. Ask your IT department to have the RapidReconciler refresh job created.');
+      return;
+    }
+    _schedRunTime = daily.runTime || null;
     const dot = $('js-daily-dot'), state = $('js-daily-state'), time = $('js-daily-time'), sub = $('js-daily-sub');
-    const on = !!(daily && daily.enabled);
-    state.textContent = on ? 'On' : 'Off';
-    state.className = 'sched-pill ' + (on ? 'on' : 'off');
-    dot.className = 'row-dot ' + outcomeDotClass(daily);
-    if (time) time.textContent = (daily && daily.runTime) ? fmtTime12(daily.runTime) : '—';
+    // `enabled` is a documented field. Absent means unknown, not off.
+    const known = (daily.enabled != null);
+    const on = !!daily.enabled;
+    state.textContent = known ? (on ? 'On' : 'Off') : '—';
+    state.className = 'sched-pill ' + (known ? (on ? 'on' : 'off') : '');
+    dot.className = 'row-dot ' + (known ? outcomeDotClass(daily) : 'grey');
+    if (time) time.textContent = daily.runTime ? fmtTime12(daily.runTime) : '—';
     const bits = [];
-    const last = daily && fmtRunStamp(daily.lastRun);
+    if (!known) bits.push('Couldn’t tell whether the schedule is switched on');
+    const last = fmtRunStamp(daily.lastRun);
     bits.push(last ? ('Last run ' + last + outcomeNote(daily.lastOutcome)) : 'Hasn’t run yet');
-    const next = daily && fmtRunStamp(daily.nextRun);
+    const next = fmtRunStamp(daily.nextRun);
     if (next) bits.push('Next run ' + next);
     sub.innerHTML = bits.join(' &middot; ');
   }
-  function setUnavailable() {
+  function setUnavailable(msg) {
     $('js-daily-state').textContent = '—'; $('js-daily-state').className = 'sched-pill';
     $('js-daily-dot').className = 'row-dot grey';
     const t = $('js-daily-time'); if (t) t.textContent = '—';
-    $('js-daily-sub').textContent = 'Schedule unavailable right now.';
+    $('js-daily-sub').textContent = msg || 'Couldn’t read the refresh schedule just now — this isn’t a sign the schedule is off. Reopen this page in a moment.';
   }
 
   var _schedRunTime = null;
@@ -333,10 +355,12 @@
     loadSchedAck().then(renderReviewBand); // … then refine from the server ack
     wireReviewBand();
     wireRequestChange();
-    rrFetch('admin/refresh-schedule').then(function (s) {
-      if (!s || typeof s !== 'object') { setUnavailable(); return; }
-      renderSchedule(s);
-    }).catch(setUnavailable);
+    rrFetch('admin/refresh-schedule').then(renderSchedule).catch(function (e) {
+      // Wrapped, not passed directly: setUnavailable now takes a MESSAGE, and
+      // handing it the error object would print the error into the card.
+      console.error('[job schedule] refresh-schedule failed:', e);
+      setUnavailable();
+    });
   }
 
   document.addEventListener('DOMContentLoaded', function () {

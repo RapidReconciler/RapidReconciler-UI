@@ -157,23 +157,53 @@
       ? '<b>A refresh is running.</b> Let it finish before starting another.'
       : 'Starts a one-time pull from JD&nbsp;Edwards into RapidReconciler.';
   }
+  // "A refresh is running" was set optimistically on the POST and then never
+  // re-checked, so the page went on asserting it for the rest of the session — and
+  // on a fresh load it claimed the opposite ("starts a one-time pull") while a
+  // nightly refresh was mid-flight. Poll the job state, same endpoint and same
+  // reading as the Reload GL / Reload Cardex pages, so the sentence is true.
+  let _starting = false;   // a start POST is in flight — don't let a poll race it
+  function checkJob() {
+    if (IS_DEMO || _starting) return;
+    rrFetch('poll').then(function (payload) {
+      if (_starting) return;
+      const job = (payload && (payload.currentJob || payload)) || {};
+      setRunning(/^in progress/i.test(String(job.jobStatus || '').trim()));
+    }).catch(function () {
+      // Fail safe to "not running": a failing poll must not latch the button
+      // disabled forever. The start endpoint answers 409 if one is already running,
+      // and that message is handled below — the server is the real guard.
+      setRunning(false);
+    });
+  }
   function doRefresh() {
     if (_running) { toast('A refresh is already running — let it finish first.'); return; }
     if (IS_DEMO) { toast('Data refresh — demo mode, no agent call'); return; }
     clearFetchError();
+    _starting = true;
     setRunning(true);
     toast('Starting data refresh…');
     rrFetch('jobs/refresh/start', { method: 'POST' })
-      .then(function () { toast('Data refresh started. It runs in the background.'); if (window.RRV8 && RRV8.logActivity) RRV8.logActivity('Data refresh started', 'One-time JD Edwards data pull started from the Data Refresh page'); })
+      .then(function () {
+        toast('Data refresh started. It runs in the background.');
+        if (window.RRV8 && RRV8.logActivity) RRV8.logActivity('Data refresh started', 'One-time JD Edwards data pull started from the Data Refresh page');
+        // Let the job register in SQL Agent, then hand the state back to the poll so
+        // the "a refresh is running" line reflects the job, not our optimism.
+        setTimeout(function () { _starting = false; checkJob(); }, 4000);
+      })
       .catch(function (err) {
         const msg = String(err && err.message || err);
         if (/SQLServerAgent is not currently running|Agent service.*not.*running/i.test(msg)) {
           showFetchError('Can’t start the refresh — SQL Server Agent is stopped on the database server. Ask IT to start the SQL Server Agent service, then try again.');
         } else if (err && err.status === 409) {
-          showFetchError('Can’t start now — a refresh is already running, or the nightly refresh job hasn’t been set up yet. If this keeps happening, contact RapidReconciler support.');
+          // Escalation points at the customer's own IT department: both causes here
+          // (a refresh already in flight, or a missing SQL Agent job) live on their
+          // database server and are theirs to check.
+          showFetchError('Can’t start now — a refresh is already running, or the nightly refresh job hasn’t been set up yet. If this keeps happening, ask your IT department to check the RapidReconciler refresh job on the database server.');
         } else {
           showFetchError('Data refresh failed: ' + msg);
         }
+        _starting = false;
         setRunning(false);
       });
   }
@@ -188,6 +218,8 @@
     if (ver) ver.textContent = (RR_CONFIG.release || 'v8') + (RR_CONFIG.buildStamp ? ' · ' + RR_CONFIG.buildStamp : '');
     if (window.RR_SESSION && !isAdmin()) { document.body.classList.add('is-gated'); $('js-gate').classList.add('is-visible'); return; }
     $('js-refresh').addEventListener('click', doRefresh);
+    checkJob();
+    if (!IS_DEMO) setInterval(checkJob, 15000);
   }
 
   // Hydrate the session FIRST (minimal-topbar page, no workbar auto-hydrate) so

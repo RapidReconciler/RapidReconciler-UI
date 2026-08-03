@@ -200,20 +200,32 @@
   // ---------- session: active DB + allowed companies (JWT db.i claim) ----------
   // Decode the active DB's company allow-list straight from the token, the same
   // source every inventory page uses (API.md: dbs[i].i drives the company universe).
+  // Three outcomes, all distinguishable — the old single `null` conflated them, and
+  // renderScope(null ? … : []) then told the analyst "No companies are in your scope.
+  // Contact your administrator." off a session it simply could not READ. That sends
+  // them to an administrator to fix a licence that is probably fine.
+  //   null            -> no token at all (not signed in)
+  //   {unreadable:1}  -> a token is present but could not be decoded
+  //   {name,allowed}  -> read successfully
   function _scopeCtx() {
+    var token = null;
+    try { token = localStorage.getItem('rrv8.token'); } catch (_) { return { unreadable: true }; }
+    if (!token) return null;
     try {
-      var token = localStorage.getItem('rrv8.token'); if (!token) return null;
       var b64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
       var pad = b64.length % 4; if (pad) b64 += '='.repeat(4 - pad);
       var p = JSON.parse(decodeURIComponent(atob(b64).split('').map(function (c) { return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2); }).join('')));
       var dbs = p.dbs || []; var idx = (window.RRDB && window.RRDB.index()) || 0; var dbObj = dbs[idx] || dbs[0] || {};
       return { name: dbObj.n || null, allowed: (Array.isArray(dbObj.i) ? dbObj.i.map(String) : []), perms: p.perms || {} };
-    } catch (_) { return null; }
+    } catch (e) {
+      console.error('[scope] could not decode the session token:', e && e.message);
+      return { unreadable: true };
+    }
   }
   function isAnalyst(ctx) {
     // perms.dm === true gates the Reconciliation Analyst lane (API.md §2). Fail
     // open when the claim is absent so a hydrating session isn't locked out.
-    if (!ctx) return true;
+    if (!ctx || ctx.unreadable) return true;
     return ctx.perms && ctx.perms.dm !== false;
   }
 
@@ -221,8 +233,17 @@
   function selectedCompanies() {
     return Array.prototype.slice.call(document.querySelectorAll('.scope-co input:checked')).map(function (i) { return i.value; });
   }
-  function renderScope(allowed) {
+  // `why` distinguishes an empty company list from a session we couldn't read.
+  function renderScope(allowed, why) {
     var grid = $('js-scope-grid');
+    if (why === 'unreadable' || why === 'signedout') {
+      grid.innerHTML = '<span class="scope-empty">' + (why === 'signedout'
+        ? 'You&rsquo;re not signed in, so RapidReconciler can&rsquo;t tell which companies you can re-roll. Sign in and reopen this page.'
+        : 'RapidReconciler couldn&rsquo;t read your sign-in, so it can&rsquo;t tell which companies you can re-roll. This is not the same as having no companies &mdash; sign out and back in, and if it keeps happening ask your IT department to check it.')
+        + '</span>';
+      $('js-attest-row').style.display = 'none';
+      return;
+    }
     if (!allowed || !allowed.length) {
       grid.innerHTML = '<span class="scope-empty">No companies are in your scope. Contact your administrator.</span>';
       $('js-attest-row').style.display = 'none';
@@ -246,6 +267,11 @@
 
   // ---------- run state ----------
   var _running = false, _sawRunning = false, _startPolls = 0, _busy = false;
+  // Consecutive failed status polls. The poll loop used to retry forever on any
+  // failure, so a dropped connection left the page spinning "Running…" indefinitely —
+  // a confident claim about a job whose state we had stopped being able to read.
+  var _pollFails = 0;
+  var POLL_FAIL_LIMIT = 5;
 
   function syncRun() {
     syncScopeSummary();
@@ -267,7 +293,7 @@
     if (!api) { setRunStatus('Sign in so the page can run this from the data service.', 'err'); return; }
     var companies = selectedCompanies();
     if (!companies.length) return;
-    _running = true; _sawRunning = false; _startPolls = 0;
+    _running = true; _sawRunning = false; _startPolls = 0; _pollFails = 0;
     $('js-run').disabled = true; $('js-run').textContent = 'Re-rolling…';
     setRunStatus('Starting…');
     fetch(api.base + '/inventory/recalc', {
@@ -290,8 +316,12 @@
   }
   function pollReroll(api) {
     fetch(api.base + '/inventory/recalc-status', { headers: { 'Authorization': 'Bearer ' + api.token, 'Accept': 'application/json' }, cache: 'no-store' })
-      .then(function (r) { return r.json(); })
+      // A non-2xx body is not a status. Reading `{}` out of a 401 and then reporting
+      // "Finished, but the last step was unknown" declares an outcome for a job that
+      // may still be running.
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
       .then(function (s) {
+        _pollFails = 0;
         if (s.running) { _sawRunning = true; setRunStatus('Running… ' + esc(s.currentStep || s.activity || 'working')); setTimeout(function () { pollReroll(api); }, 3000); return; }
         // Not running. Until we've seen it start, treat as still spinning up so we
         // don't read the prior run's last log line as this run's result.
@@ -304,7 +334,17 @@
           setRunStatus('Finished, but the last step was &ldquo;' + esc(s.lastStep || 'unknown') + '&rdquo;' + (s.lastError ? (' (error ' + esc(s.lastError) + ')') : '') + blocked + '. Check with support if breaks remain.', 'err');
         }
       })
-      .catch(function () { setTimeout(function () { pollReroll(api); }, 3000); });  // transient blip — keep polling
+      .catch(function () {
+        // Retry a few times for a transient blip, then STOP claiming to know what the
+        // re-roll is doing. An endless "Running…" is a status we can no longer read
+        // dressed up as a status we can.
+        if (++_pollFails < POLL_FAIL_LIMIT) { setTimeout(function () { pollReroll(api); }, 3000); return; }
+        _running = false; resetRunBtn();
+        setRunStatus('RapidReconciler lost contact with the data service, so it can no longer tell you '
+          + 'whether the re-roll is still running. It was started, and it does not stop when this page does. '
+          + 'Reopen this page in a few minutes, or <a href="inventory-account-rollforward.html">check the roll-forward</a> '
+          + 'to see whether it finished. If the connection stays down, ask your IT department to check it.', 'err');
+      });
   }
   function resetRunBtn() { $('js-run').textContent = 'Re-roll companies'; syncRun(); }
 
@@ -313,7 +353,7 @@
   function checkBusy() {
     var api = corrApi(); if (!api) return;
     fetch(api.base + '/inventory/recalc-status', { headers: { 'Authorization': 'Bearer ' + api.token, 'Accept': 'application/json' }, cache: 'no-store' })
-      .then(function (r) { return r.json(); })
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
       .then(function (s) {
         // Busy when something OTHER than our own in-flight run holds the lock.
         var blocking = (s.running && !_running) || !!s.blockedBy;
@@ -361,7 +401,8 @@
       return;
     }
 
-    renderScope(ctx ? ctx.allowed : []);
+    renderScope(ctx && !ctx.unreadable ? ctx.allowed : [],
+                ctx == null ? 'signedout' : (ctx.unreadable ? 'unreadable' : ''));
     syncRun();
     checkBusy();
     setInterval(checkBusy, 12000);

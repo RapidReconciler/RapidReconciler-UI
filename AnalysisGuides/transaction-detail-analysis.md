@@ -988,32 +988,79 @@ A within-branch location transfer should be value-neutral: the out leg relieves 
 
 ---
 
-### 5.19 Completion Not Journaled -- Work-Order Completion Posted to Cardex, Not to GL
+### 5.19 Completion Not Journaled -- Cardex Completion Whose GL Completion Cannot Be Found
 
 > Numbered 5.19 in this guide; the analyzer's internal pattern ID is **5.20**.
 
-> **This is the residual left AFTER the subledger match runs.** The "Manufacturing Accounting GL Summarization" subledger match (above) pairs a cardex completion with its GL completion by the work order (`GLSBL`) across batches, so a completion that WAS journaled -- even under a renumbered R31802A document in a different batch -- reconciles and clears. What survives as a cardex-only `IC` is either a genuine cost variance (a GL completion exists, amount differs -- that is **5.16 Manufacturing Cost Mismatch**) or a completion that was **never journaled to the GL at all**. This section is the second case.
+> **The card name predates what the data says.** It reads as a posting gap; the gate makes it mostly a match failure. Keep the name (it is what the analyst sees on the card) and read the section for what it actually is.
+
+> **This is the residual left AFTER the subledger match runs.** The "Manufacturing Accounting GL Summarization" subledger match (above) pairs a cardex completion with its GL completion by the work order (`GLSBL`) across batches, so a completion that WAS journaled -- even under a renumbered R31802A document in a different batch -- reconciles and clears. What survives as a cardex-only `IC` is either a genuine cost variance (a GL completion exists, amount differs -- that is **5.16 Manufacturing Cost Mismatch**) or a completion whose GL leg the correlation could not locate. This section is the second case.
 
 **Symptoms:**
-- A **work-order completion (DT `IC`)** relieved finished goods into inventory on the cardex (F4111); `CardexAmount` has a value, `LedgerAmount` = 0, and the batch is non-zero
-- Querying F0911 by the **work order in the subledger** (`GLSBL`, type `W`) finds the WO's **material issues (IM)** posted to the GL, but **no completion (IC)** on any account
+- A **work-order completion (DT `IC`)** relieved finished goods into inventory on the cardex (F4111); `CardexAmount` has a value, `LedgerAmount` = 0, and **the batch is non-zero**
+- An F0911 aggregate keyed on the **document company** (`GLKCO`) plus the **numeric work-order subledger** (`GLSBL`), counting only `IC` and `IM`, finds the WO's **material issues (IM)** and **no completion (IC)** -- on any account, in any period, posted or not
 - Distinguish from 5.16: there, a GL completion (IC) *does* exist for the WO and only the amount differs
 
-**What is happening:**
+**What happened -- read the batch first:**
 
-R31802A (Manufacturing Accounting) posts the completion's CARDEX under the transaction batch and its completion JE under the R31802A run batch -- different batches. When the run for this completion did not journal it (interrupted run, a completion left un-processed by R31802A, or a work order completed on the cardex but never run through Manufacturing Accounting), the material issues can still be in the GL while the completion is not. Finished-goods cost never reached the general ledger, so WIP is overstated and finished goods understated in the GL. It is an item-ledger gap, not a mapping gap and not a timing gap that clears on its own.
+Material issues and completions are written to F4111 with **no batch number and no G/L date**. R31802A stamps the batch onto those rows *and* creates the F0911 journal entries in the same step, so a batch on the cardex row means **R31802A already processed this transaction and wrote GL detail.** (Sequence: `AnalysisGuides/manufacturing-accounting-flow.md`.)
 
-**Resolution:**
+That reframes the card. Something processed the completion; the question is whether it wrote the GL detail at all or wrote it somewhere the correlation cannot reach.
 
-> ⚠ **This is a source fix, not a journal entry.** A JE balances the GL for the period but does not carry the finished-goods cost into the item ledger, and the gap returns on the next completion. Correct it in JDE.
+> ⚠ **There is no repost.** R31802A resets Unaccounted Units on F4801 / F3111 / F3112 in the same run that stamps the batch, and unaccounted units are what drive its selection. After it has run, the program has nothing left to select, so "repost through R31802A" does nothing at all.
 
-1. **Confirm the signature** -- query F0911 by the work order (`GLSBL`, type `W`). Confirm the material issues (IM) posted but no completion (IC) exists on the finished-goods account. The cardex shows the completion; the GL does not.
-2. **Repost the completion via R31802A** (Manufacturing Accounting) for the work order, so the finished-goods cost journals to the GL and ties back to the cardex.
-3. **Refresh RapidReconciler and re-analyze** -- the variance clears once R31802A journals the completion.
+**Why -- leading cause: a genuine gap, vendor-documented and data-confirmed**
 
-**Prevention:** review the R31802A schedule / exception handling so every completed work order is run through Manufacturing Accounting -- a completion posted to the cardex but skipped by R31802A is the root cause.
+R31802A stamps the cardex batch and writes **no F0911 completion detail for the order.** Oracle Support KB 420628 documents exactly that: the cardex row is correctly updated with a batch number while no journal entries and no batch number reach F0911, so the batch never appears on the R09801 report and **cannot be posted.** The article documents the `IM` variant; the `IC` analog is what produces this card. Full write-up, including the article's three caveats, in `AnalysisGuides/manufacturing-accounting-flow.md`.
 
-> **Analyzer output:** the analyzer fires this ahead of the generic Cardex-Only diagnosis (5.3) for any `IC` completion that relieved the cardex with no GL, so the manufacturing-accounting story wins over "go post the batch." The classifier stamps the same rows **Completion Not Journaled** (`usp8_txv_flags`, correlated against F0911 by subledger: the WO has GL issues but no GL completion), and they group on their own card on the Transactions page.
+The evidence from a specimen dataset (one company, 39 rows in one period):
+
+| Test | Result |
+|---|---|
+| F0911 per work order, matched on company + numeric subledger | All 39 orders: **0 `IC` rows**, 1-29 `IM` rows |
+| Same orders, **no** company and **no** document-type restriction | **507 rows, all `IM`. No `IC` anywhere** |
+| F3106 cross-reference | **543 rows covering all 39** -- the run did process them |
+| The 7 batches those rows belong to | **1,080 `IC` rows**, posted, document company matching, **every one with a numeric subledger** |
+| The account 37 of the 39 sit on | **293 `IC` rows in those same batches for 260 other orders** |
+| Per period, Jan-Aug 2025 | 42, 51, 57, 25, 14, 71, 39, 21 rows -- roughly **10-15% of each run's completions**, across order types `WO` / `WR` / `W1` and 7 batches |
+
+Same run, same batches, same account: 260 orders got their completion entries and these 39 did not. The shape is **standing, not a one-off.** Repeat these queries on a customer database to confirm it beyond the one dataset.
+
+**Why -- secondary causes: match failures.** Every one was refuted on the specimen above, but they remain real possibilities at other sites, so rule them out with the batch lookup rather than assuming them.
+
+1. **R31802A summarized the journal entries, so the completion carries no work-order subledger.** The subledger processing option does not apply to summarized entries, and summarization combines entries **by account across work orders**, dropping the order number. "Summarize Material Issues within Work Order" creates one entry per account **plus** work order and keeps it. Issues keyed to the order and completions not keyed to it would give the same `IM`-present / `IC`-absent asymmetry. *(Refuted on the specimen: every `IC` row in those batches carries a numeric subledger.)*
+2. **The completion journaled under a document type the correlation does not count.** Only `IC` and `IM` are counted; scrap defaults to `IS` and variance is `IV`, both processing-option driven. *(Refuted: no `IC` for those orders with the restriction removed.)*
+3. **A different document company on the GL side,** so the company leg of the join misses while the order number matches. *(Refuted: still no `IC` with the company restriction removed.)*
+4. **The GL completion sits outside RapidReconciler's loaded F0911 window.** The pull is windowed on G/L date, 35 days back by default, so a backdated manufacturing run drops the population from RR's copy while the cardex rows are present. *(Refuted: the batches and their other `IC` rows are loaded.)*
+5. **Something other than R31802A stamped the batch** -- interoperability, EDI, a custom program. `ILPID` identifies the writer.
+
+**Refuted -- none of these can put a row on this card at all:**
+- R31802A never ran, errored and skipped the order, was blocked by work-order status, or the completion cost zero -- all excluded by the batch and cardex-amount conditions
+- **An unposted batch.** RapidReconciler loads unposted F0911 and the correlation has no posted filter, so an unposted `IC` *suppresses* this card. That break surfaces as a GL Batches variance instead
+- **Posted to a different account or period.** The correlation carries no account and no period predicate
+- **An F0911 purge.** JDE's purge targets the F0911Z1 staging table
+
+**Confirm it -- one lookup, then fork**
+
+Take the batch number off the cardex row and read F0911 for that batch, manufacturing batch type `'0'`. **Read it for the work order, not just for the batch** -- the specimen batches were full of `IC` rows, just none for the 39 orders on the card.
+
+| What the batch holds | Diagnosis | Next |
+|---|---|---|
+| `IC` rows carrying **this order's** subledger | **Match failure** | Check the subledger for blank or non-numeric first, then the document company, then the document type |
+| `IC` rows present, but **none for this order**, while F3106 still names the batch for it | **The genuine gap** (specimen shape) | R31802A processed the order and wrote no completion detail for it. F3106 is the cross-reference it updates with work order, document, type, G/L date and batch |
+| **No `IC` anywhere** in the batch | **The gap, run-wide** | The whole run's completions failed rather than a subset. Same conclusion, wider blast radius |
+| `IC` absent from RR's F0911, present in JDE's | **Load window** | The G/L date falls outside the loaded window; widen the pull or reload the GL for the period |
+
+**Prevention -- match the shape, not the rows**
+
+At 10-15% of completions every period, the recurrence lives in the **run**, not in the orders. Working individual work orders is the wrong action: it addresses one symptom while the next run reproduces the rest.
+
+- **Bound the exposure with R41543 (Item Ledger / Account Integrity) on a monthly schedule.** It reports this exact shape and updates no tables, so it runs freely and turns the card from discovery into monitoring.
+- **Pursue the R31802A behaviour with Oracle through the customer's own IT department,** which owns the support contract. The KB body is login-gated, so the vendor remedy is unknown until IT retrieves it. Do not substitute a guess for it.
+- **For the match-failure branch only: hold one R31802A summarization and subledger policy across every version in use.** A second version with different options reintroduces the split. Where summarized entries are the deliberate business choice, the fix belongs on the correlation side, because the subledger will never be there.
+- **Do not delete unposted manufacturing batches.** The unaccounted units are already cleared, so nothing in JDE regenerates the detail.
+
+> **Analyzer output:** the analyzer fires this ahead of the generic Cardex-Only diagnosis (5.3) for any `IC` completion that relieved the cardex with no GL, so the batch-first reading wins over "go post the batch." The classifier stamps the same rows **Completion Not Journaled** (`usp8_txv_flags`, correlated against F0911 by company + numeric subledger), and they group on their own card on the Transactions page.
 
 ---
 
@@ -1031,13 +1078,13 @@ R31802A (Manufacturing Accounting) posts the completion's CARDEX under the trans
 |---|---|---|---|
 | **GL only** | cardex 0, GL &ne; 0 | Standard-cost variances -- the completion posted to the cardex at standard while the GL carried the actual-cost variance components (labor, overhead, material burden) that never move inventory. | **Expected. No action.** GL-only on a make-to-order job is the variance side of standard costing landing in the GL, not a reconciliation gap. See 5.2. |
 | **Both differ** | both &ne;, unequal | The completion was valued at **standard on the cardex** and **actual in the GL** -- the gap is quantity &times; cost-basis difference. | **Investigate the large ones.** This is 5.16 Manufacturing Cost Mismatch scoped to the job; confirm the intended cost basis with cost accounting, then the accountant posts the corrective JE. |
-| **Cardex only** | cardex &ne;, GL 0 | A completion (`IC`) that relieved finished goods into inventory on the cardex but was **never journaled to the GL**. | **A real posting gap -- fix at the source.** Repost the completion via **R31802A** (Manufacturing Accounting) so the finished-goods cost reaches the GL. Not a journal entry. This is 5.19 Completion Not Journaled, held under the make-to-order subtype because `usp6_008` stamped it first. |
+| **Cardex only** | cardex &ne;, GL 0 | A completion (`IC`) on the cardex with no GL completion for the order, while the same work order's material issues (`IM`) are in the GL. **Check the batch:** it is non-zero, so R31802A already processed the transaction. | **Do not repost -- there is nothing left for R31802A to select.** Read F0911 for the cardex row's batch, looking for this order's subledger specifically, and fork from there. Most often the run wrote no completion detail for the order at all (the vendor-documented gap). See 5.19 Completion Not Journaled. Held under the make-to-order subtype because `usp6_008` stamped it first. |
 
-**Why the cardex-only slice stays here and not on the Completion Not Journaled card:** the make-to-order subtype is assigned in `usp6_008` from the sales-order link; the `usp8_txv_flags` Completion-Not-Journaled pass only claims rows with **no** subtype, so a make-to-order completion keeps its business grouping. The decomposition surfaces the same gap and the same R31802A fix in place -- the analyst sees the whole job on one card rather than having the posting-gap rows split off. (If a future call moves them, it is a classifier-ordering change, not a copy change.)
+**Why the cardex-only slice stays here and not on the Completion Not Journaled card:** the make-to-order subtype is assigned in `usp6_008` from the sales-order link; the `usp8_txv_flags` Completion-Not-Journaled pass only claims rows with **no** subtype, so a make-to-order completion keeps its business grouping. The decomposition surfaces the same shape and the same lookup in place -- the analyst sees the whole job on one card rather than having those rows split off. (If a future call moves them, it is a classifier-ordering change, not a copy change.)
 
-**Worked shape (one make-to-order company, one period):** 271 rows netting about -$11K -- roughly 158 GL-only (+$22.8K, expected standard-cost variances), 81 both-differ (-$26.6K, completion cost differences to investigate), 32 cardex-only (-$7.4K, completions to repost via R31802A). The net is small, so read the gross: only two of the three shapes need any work.
+**Worked shape (one make-to-order company, one period):** 271 rows netting about -$11K -- roughly 158 GL-only (+$22.8K, expected standard-cost variances), 81 both-differ (-$26.6K, completion cost differences to investigate), 32 cardex-only (-$7.4K, completions whose GL leg has to be located by batch). The net is small, so read the gross: only two of the three shapes need any work.
 
-> **Analyzer output:** for a Make-to-Order drill the analyzer skips the generic "routings match, it's timing" line and instead reports the three-shape breakdown with row counts and dollars, leading with the R31802A source fix when any cardex-only completions are present. Same knowledge in the classifier (the subtype + the Completion-Not-Journaled correlation) and the AI grounding.
+> **Analyzer output:** for a Make-to-Order drill the analyzer skips the generic "routings match, it's timing" line and instead reports the three-shape breakdown with row counts and dollars, leading with the batch lookup when any cardex-only completions are present. Same knowledge in the classifier (the subtype + the Completion-Not-Journaled correlation) and the AI grounding.
 
 ---
 

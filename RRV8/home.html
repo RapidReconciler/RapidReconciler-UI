@@ -1155,6 +1155,27 @@
   @keyframes alh-think { 0%, 100% { opacity: .5; } 50% { opacity: 1; } }
   @media (prefers-reduced-motion: reduce) { .alh-brief-body.is-thinking { animation: none; opacity: .75; } }
   .alh-brief-body b { color: #fff; font-weight: 800; }
+  /* Day-brief chips — one clickable summary per analyst surface (Data Health,
+     Transaction Variance, Cardex), on the navy brief. attn = actionable (orange),
+     clean = tied out (green), wait = cache still warming. */
+  .alh-chips { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 14px; align-items: stretch; }
+  .alh-chips[hidden] { display: none; }
+  .alh-chip { display: flex; flex-direction: column; gap: 6px; min-height: 66px; text-decoration: none; cursor: pointer;
+    background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.16); border-left-width: 3px;
+    border-radius: 12px; padding: 12px 14px; font-family: inherit; color: #eaf0fb; text-align: left;
+    transition: background .13s ease, border-color .13s ease, transform .13s ease; }
+  .alh-chip:hover { background: rgba(255,255,255,.12); transform: translateY(-1px); }
+  .alh-chip:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
+  .alh-chip-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .alh-chip-label { font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: #b8c8e6; white-space: nowrap; }
+  .alh-chip-text { font-size: 13.5px; font-weight: 600; line-height: 1.35; color: #f2f6fd; }
+  .alh-chip-go { font-size: 14px; color: #9fb4d8; flex: 0 0 auto; }
+  .alh-chip-attn { border-left-color: var(--orange); }
+  .alh-chip-attn .alh-chip-label { color: #ffd9ad; }
+  .alh-chip-clean { border-left-color: #46c07a; opacity: .85; }
+  .alh-chip-wait { border-left-color: rgba(255,255,255,.28); opacity: .6; }
+  .alh-chip-wait .alh-chip-go { display: none; }
+  @media (max-width: 640px) { .alh-chips { grid-template-columns: 1fr; } }
 
   .alh-seclabel { margin: 0 2px 10px; font-size: 12.5px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; color: var(--text-muted); }
   .alh-attn, .alh-explained { margin: 0 0 16px; }
@@ -2402,6 +2423,18 @@
        graph (right ~2/3). The AI band is accountant-only; when it's hidden
        (analyst) the graph fills the row. Admin hides the row (its AI lives in
        #adminBrief). Painted by renderAcctTriage() + renderPeriodWidget(). -->
+  <!-- Analyst day-brief — constant chrome ABOVE the tab strip. One grounded AI
+       "start here" lead synthesizing all three analyst surfaces (Data Health,
+       Transaction Variance, Cardex) + a clickable chip per surface that deep-links
+       to its tab (the roll-forward chip deep-links to the corrective page). The tabs
+       below are the drill-downs. Analyst view only; painted by
+       renderAnalystDayBriefTop(). Chips are deterministic (miss-free); the lead is AI. -->
+  <div class="alh-brief alh-brief-top" id="analystDayBriefTop" hidden>
+    <div class="alh-brief-eyebrow"><span class="alh-brief-spark" aria-hidden="true">✦</span> RapidReconciler AI · Here’s your day</div>
+    <p class="alh-brief-body" id="analystDayBriefBody">Reading your day…</p>
+    <div class="alh-chips" id="analystDayBriefChips" hidden></div>
+  </div>
+
   <div class="acct-top" id="acctTop">
     <!-- AI hub band: one prioritized "start here" lead (largest material company
          + its driver) + the Ask box. The Ask form is PERSISTENT — renderAcctTriage
@@ -4323,12 +4356,71 @@
   // Only when a variance break actually exists, once per DB per session. The query
   // is heavy (several seconds) -- this is a non-blocking background fetch.
   var _cardexAutoTried = {};
+  // Every caller's callback runs — the old single-cb early-return dropped all but the
+  // first, and within one analyst repaint the brief is always the second caller (so
+  // its chip hung on "Checking…" with the data already in sessionStorage). Callers
+  // that can't take a synchronous callback (the brief renderer would recurse) ASK
+  // instead, via cardexWarmState(): '' unknown / 'done' / 'na' / 'failed'.
+  var _cardexWarmQ = {};      // key -> [cb] pending this fetch
+  var _cardexWarmBusy = {};   // key -> true while the fetch is in flight
+  var _cardexWarmState = {};  // key -> 'done' | 'na' | 'failed'
+  function cardexWarmState() { return _cardexWarmState[cardexCacheKey()] || ''; }
+  // ONE reader for the warmed cardex worklist, and the ONE place that decides
+  // whether a cardex figure may be shown at all. Three intake cases, kept apart
+  // deliberately:
+  //   loaded      — a SUCCESSFUL parse. Its rows are the answer, even when empty.
+  //   warming     — nothing readable yet, but a warm is on its way -> "Checking…".
+  //   unavailable — the warm went terminal ('failed' / 'na'), or an entry exists
+  //                 but is unreadable. Nothing more is coming this session, so the
+  //                 surface must SAY it couldn't check, never print a figure.
+  // Reading the cache inline (three copies did) let a cold, failed, or truncated
+  // entry render as "$0 · Clean", which is a wrong answer rather than a missing
+  // one. _analystCardexSummary / _analystCardexFacts already drew this line for
+  // the chips and the AI facts; every cardex surface now shares it.
+  function _cardexRead(co) {
+    var rows = null;
+    try {
+      var o = JSON.parse(sessionStorage.getItem(cardexCacheKey()) || 'null');
+      if (o && Array.isArray(o.payload)) rows = o.payload;
+    } catch (_) {}
+    var state = cardexWarmState();
+    var loaded = rows !== null;
+    return {
+      loaded: loaded,
+      unavailable: !loaded && (state === 'failed' || state === 'na'),
+      reason: state,
+      rows: loaded ? rows : [],
+      scoped: loaded ? rows.filter(function (r) { return String(r.CompanyNumber) === String(co); }) : []
+    };
+  }
+  // The user-visible line when a cardex read produced no figures. Plain English,
+  // names what couldn't be read, no endpoint or table names. Mirrors the wording
+  // the day-brief Cardex chip already uses for the same two states.
+  function _cardexUnreadText(r) {
+    if (r.unavailable) {
+      return r.reason === 'na'
+        ? 'Cardex figures aren’t available for this database.'
+        : 'Couldn’t read the cardex figures just now.';
+    }
+    return 'Checking the cardex…';
+  }
+  function _cardexWarmFlush(key) {
+    var q = _cardexWarmQ[key] || []; _cardexWarmQ[key] = [];
+    q.forEach(function (fn) { try { fn(); } catch (e) { console.warn('[home] a cardex warm callback threw', e); } });   // one bad callback must not starve the rest
+  }
   function autoWarmCardex(cb) {
-    if (IS_DEMO || !activeDb() || !caps().inv) return;   // inventory module only
     var key = cardexCacheKey();
-    try { var o = JSON.parse(sessionStorage.getItem(key) || 'null'); if (o && Array.isArray(o.payload) && o.payload.length) return; } catch (_) {}
-    if (_cardexAutoTried[key]) return;
+    if (IS_DEMO || !activeDb() || !caps().inv) { _cardexWarmState[key] = 'na'; return; }   // inventory module only
+    try { var o = JSON.parse(sessionStorage.getItem(key) || 'null'); if (o && Array.isArray(o.payload) && o.payload.length) { _cardexWarmState[key] = 'done'; return; } } catch (_) {}
+    // A failed warm must not re-fire from a render: firing the callbacks on failure
+    // repaints, and the repaint calls back in here. Render-driven callers (cb) go
+    // terminal via cardexWarmState(); a load-driven warm (no cb) still retries.
+    if (_cardexWarmState[key] === 'failed' && typeof cb === 'function') return;
+    if (typeof cb === 'function' && (_cardexWarmBusy[key] || !_cardexAutoTried[key])) (_cardexWarmQ[key] = _cardexWarmQ[key] || []).push(cb);
+    if (_cardexWarmBusy[key]) return;      // in flight — the queued cb fires when it settles
+    if (_cardexAutoTried[key]) return;     // already settled this session; nothing more is coming
     _cardexAutoTried[key] = true;
+    _cardexWarmBusy[key] = true;
     rrFetch('inventory/integrity', { method: 'POST', body: { report: 'v6ui_itemrollintegritydialog' } })
       .then(function (d) { var rows = Array.isArray(d) ? d : ((d && d.data) || []);
         // Drop resolved-but-stale "zombie" rows (variance synced to ~0, reason not
@@ -4337,8 +4429,14 @@
         // page reads it for the banner). Tolerances mirror the proc (qty 0.05 / amt 0.005).
         rows = rows.filter(function (r) { return String((r && r.Reason) || '').trim() === 'Reset:' || Math.abs(Number(r.AdjQty) || 0) > 0.05 || Math.abs(Number(r.AdjAmount) || 0) > 0.005; });
         try { sessionStorage.setItem(key, JSON.stringify({ ts: Date.now(), payload: rows })); } catch (_) {}
-        if (typeof cb === 'function') cb(); })   // fresh data landed → cold caller repaints ONCE (the warm early-return above carries no cb, so no loop)
-      .catch(function () { _cardexAutoTried[key] = false; });   // allow a later load to retry
+        _cardexWarmBusy[key] = false; _cardexWarmState[key] = 'done';
+        _cardexWarmFlush(key); })   // fresh data landed → every cold caller repaints ONCE (the warm early-return above queues nothing, so no loop)
+      .catch(function (e) {
+        _cardexAutoTried[key] = false;   // allow a later load to retry
+        _cardexWarmBusy[key] = false; _cardexWarmState[key] = 'failed';
+        console.warn('[home] cardex warm failed — the Cardex chip and cards will report they couldn’t check', e);
+        _cardexWarmFlush(key);           // fire callbacks on failure too, so callers can reach a terminal state
+      });
   }
   // Authoritative light driver: any GL OK / Var OK = 'no' in any period -> red,
   // else green. Reads the same v6ui_raccountsummary the Account Roll Forward page
@@ -4357,6 +4455,49 @@
   function _coOf(r) { return String((r && (r.CompanyNumber != null ? r.CompanyNumber : r.companyNumber)) || ''); }
   var _invRows = null;
   var _cardexTol = {};   // company -> materiality tolerance (from /inventory/cardex-tolerance; absent = 0 = strict)
+  // ONE resolver for that map. Everything on this page that decides "is this
+  // company's cardex clean?" goes through it, so an accountant who sets a $500
+  // tolerance gets ONE answer per company per page load. Before this, the cardex
+  // dot and the band honored the tolerance while the day-brief chip, the AI facts
+  // and both card faces hard-coded 0.005 — the dot read "within tolerance" beside a
+  // chip reporting items off, two conclusions about one company on one screen.
+  // Absent = 0 = strict, matching the documented endpoint default.
+  function cardexTolOf(co) {
+    var t = _cardexTol[String(co == null ? '' : co)];
+    return (t != null) ? (Number(t) || 0) : 0;
+  }
+  // The shared "is anything actually off?" test for one company's cardex.
+  //
+  // AMOUNT arm: judged against the company's own tolerance. Note the honest grain
+  // caveat — the tolerance is documented against total |CardexVar| (account grain),
+  // while this reads AdjAmount (item/branch/location/lot grain). They are the SAME
+  // money: usp6_009 sets balcxvar (-> CardexVar) to SUM(adjamount) from the item
+  // worklist grouped to company+account, so the two differ only in how far the
+  // netting runs before the absolute is taken — item magnitude is always >= the
+  // account-netted magnitude. Judging the stricter of the two against the analyst's
+  // dollar threshold keeps the threshold's meaning (dollars of cardex drift this
+  // company tolerates) intact; it just refuses to net two separate items' drift away
+  // before asking the question.
+  //
+  // QUANTITY arm stays on the proc floor (0.05) ON PURPOSE: the tolerance endpoint
+  // carries an AMOUNT only, no quantity threshold. Don't "fix" this asymmetry by
+  // feeding a dollar tolerance into the units test — units aren't dollars.
+  //
+  // Both arms are MAGNITUDE totals, never a signed net: two items off by +5,000 and
+  // -5,000 net to zero, and the Cardex Variance detail page filters per ROW on
+  // magnitude, so it lists both. A signed-net test called that company clean.
+  function cardexIsOff(co, qtyMag, amtMag, nItems) {
+    if (!nItems) return false;
+    return (Number(qtyMag) || 0) > 0.05 || (Number(amtMag) || 0) > cardexTolOf(co) + 0.005;
+  }
+  // True when the SIGNED net alone would read clean while the magnitude says the
+  // company is off — i.e. offsetting items are hiding the exposure. Only then is a
+  // gross figure signal; on an ordinary variance the net stands on its own and a
+  // second number beside it is noise.
+  function cardexNetMasks(co, net, mag) {
+    var t = cardexTolOf(co) + 0.005;
+    return Math.abs(Number(net) || 0) <= t && (Number(mag) || 0) > t;
+  }
   // Paint arf/cx (+ the cardex-reload dot) from the cached roll-forward rows,
   // filtered to the active company scope. Synchronous + cheap, so it re-runs
   // instantly when the analyst changes the company selection — no refetch.
@@ -4391,7 +4532,7 @@
     var over = [];
     Object.keys(cxByCo).forEach(function (co) {
       cxSum += cxByCo[co];
-      var tol = (_cardexTol[co] != null) ? _cardexTol[co] : 0;
+      var tol = cardexTolOf(co);
       if (cxByCo[co] > tol + 0.005) over.push(co);
     });
     var hasCx = over.length > 0;
@@ -4423,7 +4564,12 @@
         renderAiBriefing();         // left-rail AI read, off the SAME roll-forward the bands/detail use
         renderPeriodWidget();       // out-of-balance-by-period bars, same source
       })
-      .catch(function () { /* agent unavailable -> keep the validation.color fallback */ });
+      .catch(function (e) {
+        // _invRows stays null, so the WHOLE analyst surface (brief + worklist) stays
+        // hidden with no message on screen. Say so in the console at least.
+        console.warn('[home] roll-forward load failed — _invRows stays null, so the analyst brief and worklist will not render', e);
+        /* agent unavailable -> keep the validation.color fallback */
+      });
   }
   // Per-company cardex materiality tolerances. GET /inventory/cardex-tolerance
   // -> { data:[{company,tolerance}] }. Repaints the cardex light once loaded so
@@ -5723,7 +5869,7 @@
       var k = (_coOf(r) || '?') + '|' + String(r.LongAccount || '');
       (byAcct[k] || (byAcct[k] = [])).push(r);
     });
-    var perByCo = {};
+    var perByCo = {}, acctByCo = {};
     Object.keys(byAcct).forEach(function (k) {
       var series = byAcct[k].slice().sort(function (a, b) {
         return String(a.PeriodEnds || '').localeCompare(String(b.PeriodEnds || ''));
@@ -5734,14 +5880,22 @@
         var prevEnd = i > 0 ? (Number(series[i - 1].EndGL) || 0) : 0;
         var offBy = (Number(r.BegGL) || 0) - prevEnd;
         var co = _coOf(r) || '?', p = String(r.PeriodEnds || '').slice(0, 10);
+        var acct = String(r.LongAccount || '').trim();
         (perByCo[co] || (perByCo[co] = {}))[p] = (perByCo[co][p] || 0) + offBy;
+        if (acct) { (acctByCo[co] || (acctByCo[co] = {}))[acct] = (acctByCo[co][acct] || 0) + offBy; }   // net off-by per account, so the brief can name the driver account(s)
       }
     });
     var out = {};
     Object.keys(perByCo).forEach(function (co) {
       var pers = perByCo[co], best = null;
       Object.keys(pers).forEach(function (p) { if (best === null || Math.abs(pers[p]) > Math.abs(pers[best])) best = p; });
-      out[co] = { period: best, amount: best ? pers[best] : 0, nPeriods: Object.keys(pers).length };
+      // Accounts that broke, largest absolute off-by first — the roll-forward fact
+      // names the driver account(s) (e.g. B000022.1121) so the day-brief reads like
+      // the roll-forward PAGE, not a period+amount filter.
+      var am = acctByCo[co] || {};
+      var accts = Object.keys(am).sort(function (a, b) { return Math.abs(am[b]) - Math.abs(am[a]); })
+        .map(function (a) { return { acct: a, amount: am[a] }; });
+      out[co] = { period: best, amount: best ? pers[best] : 0, nPeriods: Object.keys(pers).length, accts: accts };
     });
     return out;
   }
@@ -5865,15 +6019,27 @@
       return _pwLabel(p) + ': ' + (bits.length ? bits.join(', ') : 'no activity') + ' → net ' + _moneyK(g.OOB);
     });
   }
+  // UI-17 near-zero / dormant materiality floors (owner call 2026-07-07): an
+  // out-of-balance below MAT_OOB_FLOOR is immaterial regardless of %, and a GL
+  // balance below DORMANT_GL_FLOOR is "dormant" — a % of a ~0 balance is
+  // meaningless (a $3 gap reads as an alarming 100%), so we frame by absolute
+  // amount and suppress the %. Declared HERE, above every reader (_briefLevel is
+  // the first), not down beside _wlMateriality where they used to sit: read
+  // before the assignment ran they were undefined, and every `>= undefined`
+  // materiality test is false — i.e. everything reads in balance.
+  var MAT_OOB_FLOOR = 100, DORMANT_GL_FLOOR = 1000;
   // Truthful band level computed from the data (NOT the AI) so the dot can never
-  // contradict the numbers: any roll-forward break = attention; a material OOB
-  // (> ~1.00) or over-tolerance cardex = watch; cents = ok.
+  // contradict the numbers: any roll-forward break = attention; a MATERIAL OOB
+  // (>= MAT_OOB_FLOOR) or over-tolerance cardex = watch; anything under = ok.
+  // The floor is the same one _wlMateriality / _dispoOf disposition on, so the band
+  // can't paint amber "watch" over a company whose own worklist card says the gap
+  // is immaterial and needs no action.
   function _briefLevel(d) {
     var worst = 'ok';
     d.companies.forEach(function (c) {
-      var tol = (_cardexTol[c.co] != null) ? _cardexTol[c.co] : 0;
+      var tol = cardexTolOf(c.co);
       if (c.breaks > 0) worst = 'attention';
-      else if (worst !== 'attention' && (Math.abs(c.oob) > 1 || c.cardex > tol + 0.005)) worst = 'watch';
+      else if (worst !== 'attention' && (Math.abs(c.oob) >= MAT_OOB_FLOOR || c.cardex > tol + 0.005)) worst = 'watch';
     });
     return worst;
   }
@@ -6208,6 +6374,23 @@
       }
     });
     var historical = d.isHistorical;   // older than the two most recent periods → too late to act
+    // Tier-aware company REFERENCE, because the facts above are tier-aware: under the
+    // scrubbed tier coLabel masks every company to "Entity A" / "Entity B", so the
+    // model is handed no real company numbers. The output-format instructions used to
+    // demand "Co <number>" regardless — asking for an identifier that was deliberately
+    // withheld, which invites the model to invent one and state it authoritatively.
+    // The masking of the facts themselves is unchanged; only how the model is told to
+    // REFER to a company moves with the tier.
+    var idRule = scrub
+      ? 'Refer to each company ONLY by the exact entity label it was given above (e.g. "Entity A"). The real company numbers were deliberately withheld — NEVER print a company number, and never guess or invent one.'
+      : 'Refer to each company by its number ONLY (e.g. "Co 90001").';
+    var idSlot  = scrub ? '<entity label>' : 'Co <number>';                  // the header/line slot
+    var idEg1   = scrub ? 'Entity A' : 'Co 90001';
+    var idEg2   = scrub ? 'Entity B' : 'Co 90002';
+    var idTerm  = scrub ? 'entity label only' : 'company number only';
+    var idOrder = scrub
+      ? 'ORDER: keep the lines in the SAME order the entities are listed above (Entity A before Entity B …)'
+      : 'ORDER: sort ALL lines by COMPANY NUMBER ASCENDING (Co 90001 before Co 90002 …)';
     var prompt = (window.RRV8 && RRV8.ACCT_GROUNDING ? RRV8.ACCT_GROUNDING + '\n\n' : '')
       + 'You are RapidReconciler AI. Brief ' + roleLabel + ' who just wants to know WHERE TO LOOK FIRST.\n'
       + 'Each item below is tagged [Admin]/[Analyst]/[Accountant] (the role that OWNS its fix) or [OK] (in balance), and is already in this user’s scope.\n'
@@ -6220,16 +6403,18 @@
       + '\nTONE: calm and factual, never urgent or alarmist. A carry forward does NOT need immediate action — it can be cleared now OR folded into the coming period-end journal entry; say so plainly.\n'
       + (historical ? 'HISTORICAL PERIOD: this period is older than the two most recent periods — it is TOO LATE to act. DESCRIBE what happened (the cause, in past tense) and who owned it; do NOT recommend reversing, posting, offsetting, or any action, and never say "this period" about a fix. If a line is tagged [RESOLVED next period], add that the out-of-balance was CLEARED the following period (e.g. "…mostly manual entries, cleared the next period") — this reassures the reader it did not persist.\n' : '')
       + 'ROUND every amount to a readable figure — e.g. "£18K", "$3.4K" — never cents or exact change.\n'
-      + 'Refer to each company by its number ONLY (e.g. "Co 90001"); do NOT print the currency code (USD/GBP) — the £/$ symbol on the amount already conveys the currency.\n'
-      + 'FORMAT every line as a header + colon + detail. For a company with an owner: "<Role> — Co <number>: <detail>" (e.g. "Accountant — Co 90001: …") — the role-first header makes WHO IS RESPONSIBLE obvious, so do NOT repeat the role at the end of the line. For an in-balance company (marked [OK]): "Co <number>: in balance" (no role, no action).\n'
-      + 'ORDER: sort ALL lines by COMPANY NUMBER ASCENDING (Co 90001 before Co 90002 …) and keep each company\'s lines together — do NOT reorder by amount or by in-balance status. Cover every company in scope (AT LEAST one line each). A company earns a SECOND line ONLY for a second SUBSTANTIAL, same-direction component of similar magnitude to its driver (e.g. a material carry forward AND material transactions) — never for a small, offsetting, or trivial amount. AIM for about FOUR lines total to fill the space, but show fewer rather than pad with clutter or invent items.\n'
-      + 'Each line: rounded amounts (e.g. "£18K"), 20 words MAX, ONE clause, company number only. A MATERIAL line states the net out-of-balance and its single largest driver' + (historical ? ', in PAST TENSE, with NO fix, NO "should", NO recommendation, and never "this period" — it is too late to act.' : ', plus the LIKELY FIX as a likelihood (never a command); do not add the words "this period".') + ' An in-balance company is just "Co <number>: in balance". NEVER add components or state a number larger than the net; only call something an unoffset/missing journal entry when Manual entries is the largest driver.\n'
-      + 'Required line format, e.g.: ' + (historical ? '"Accountant — Co 90001: was ~$29K out of balance, mostly manual entries."  and  "Co 90002: in balance".' : '"Accountant — Co 90001: ~$29K out of balance, mostly manual entries; should likely reverse them."  and  "Co 90002: in balance".') + '\n'
-      + 'The FIRST line (lowest company number) goes in "verdict"; every remaining line, in the same company-number order, goes in "points". They obey the SAME rules — "verdict" is simply the first line, NOT necessarily the biggest. If EVERY company is in balance, verdict = "Everything reconciles for ' + (sc.period || 'this period') + '." and put one "Co <number>: in balance" line per company in "points".\n'
+      + idRule + ' Do NOT print the currency code (USD/GBP) — the £/$ symbol on the amount already conveys the currency.\n'
+      + 'FORMAT every line as a header + colon + detail. For a company with an owner: "<Role> — ' + idSlot + ': <detail>" (e.g. "Accountant — ' + idEg1 + ': …") — the role-first header makes WHO IS RESPONSIBLE obvious, so do NOT repeat the role at the end of the line. For an in-balance company (marked [OK]): "' + idSlot + ': in balance" (no role, no action).\n'
+      + idOrder + ' and keep each company\'s lines together — do NOT reorder by amount or by in-balance status. Cover every company in scope (AT LEAST one line each). A company earns a SECOND line ONLY for a second SUBSTANTIAL, same-direction component of similar magnitude to its driver (e.g. a material carry forward AND material transactions) — never for a small, offsetting, or trivial amount. AIM for about FOUR lines total to fill the space, but show fewer rather than pad with clutter or invent items.\n'
+      + 'Each line: rounded amounts (e.g. "£18K"), 20 words MAX, ONE clause, ' + idTerm + '. A MATERIAL line states the net out-of-balance and its single largest driver' + (historical ? ', in PAST TENSE, with NO fix, NO "should", NO recommendation, and never "this period" — it is too late to act.' : ', plus the LIKELY FIX as a likelihood (never a command); do not add the words "this period".') + ' An in-balance company is just "' + idSlot + ': in balance". NEVER add components or state a number larger than the net; only call something an unoffset/missing journal entry when Manual entries is the largest driver.\n'
+      + 'Required line format, e.g.: ' + (historical ? '"Accountant — ' + idEg1 + ': was ~$29K out of balance, mostly manual entries."  and  "' + idEg2 + ': in balance".' : '"Accountant — ' + idEg1 + ': ~$29K out of balance, mostly manual entries; should likely reverse them."  and  "' + idEg2 + ': in balance".') + '\n'
+      + 'The FIRST line goes in "verdict"; every remaining line, in the same order, goes in "points". They obey the SAME rules — "verdict" is simply the first line, NOT necessarily the biggest. If EVERY company is in balance, verdict = "Everything reconciles for ' + (sc.period || 'this period') + '." and put one "' + idSlot + ': in balance" line per company in "points".\n'
       + 'Plain accountant English, no JDE table names, no step lists, no preamble. Use ONLY the facts above.\n'
       + _aiDocCatalogPrompt('json')
       + 'Respond with ONLY a JSON object, nothing else:\n'
-      + '{"verdict":"first line (lowest company number)","points":["each remaining line, company-number order"],"docs":["optional slug"]}';
+      + (scrub
+          ? '{"verdict":"first line (first entity listed)","points":["each remaining line, in the listed entity order"],"docs":["optional slug"]}'
+          : '{"verdict":"first line (lowest company number)","points":["each remaining line, company-number order"],"docs":["optional slug"]}');
     var timed = setTimeout(function () { if (gen === _briefGen) { brief.classList.remove('is-loading'); _fallbackBrief(); } }, 14000);
     rrFetch('api/v1/ai/explain', { method: 'POST', body: { prompt: prompt } }).then(function (r) {
       if (gen !== _briefGen) return;
@@ -6256,7 +6441,16 @@
   var _acctConvo = null;     // { sig, q, a } — one prior Q&A turn for follow-up continuity; invalidated when the scope (DB · period · company set) changes so "it" never binds to a different company
   var _acctAnalyzeCache = {}; // key(co|period|db|tier) -> auto-analysis text, so re-drilling the same company doesn't re-hit the AI
   var _acctAnalyzeReq = null; // in-flight drill key — drop a stale response if the user drills elsewhere before it lands
-  var _jeOffsets = {};        // key(co|account) -> offset account the accountant typed in the GL grid; assembles the self-clearing balancing entry
+  var _jeOffsets = {};        // key(db|co|account) -> offset account the accountant typed in the GL grid; assembles the self-clearing balancing entry
+  // The DB segment is load-bearing: two installs routinely carry the SAME company
+  // number (the demo databases all do), so a co|account key let DB A's typed offset
+  // account surface on DB B's grid and ride into DB B's adjusting entry. In-memory
+  // only — nothing is persisted, so there are no stored entries to migrate — and
+  // resetScopedState wipes it on every DB switch alongside the other per-DB caches.
+  function _jeOffKey(co, acct) {
+    var db = (typeof activeDb === 'function' && activeDb() && activeDb().n) || '';
+    return db + '|' + String(co == null ? '' : co) + '|' + String(acct == null ? '' : acct);
+  }
   var _acctDispo = {};        // key(db|period|co) -> 'adjusted' (a balancing entry was attested); other dispositions are computed from the data
   // Accountant per-company period dispositions persist via RRV8.dispoStore (server +
   // localStorage fallback), not a local object — so a mark survives reload and is
@@ -6279,7 +6473,18 @@
     if (_acctGlScopeCo == null || list.indexOf(String(_acctGlScopeCo)) < 0) _acctGlScopeCo = list[0] || null;
     return _acctGlScopeCo;
   }
-  function _ccySym(c) { c = String(c || '').toUpperCase(); return c === 'GBP' ? '£' : c === 'EUR' ? '€' : c === 'USD' ? '$' : (c ? c + ' ' : '$'); }
+  // Delegates to the shared resolver (RRV8.currencySymbol) so Home prints the SAME
+  // symbol as every destination page — it resolves through Intl and deliberately
+  // returns the currency CODE for a code it doesn't know, rather than a confidently-
+  // wrong glyph. The old three-entry map printed "CAD 1,250" where the working pages
+  // print "CA$1,250", including inside AI-generated narrative. _perpSym in this file
+  // already delegates. The literal map survives only as a guarded fallback for the
+  // case where the shared script didn't load.
+  function _ccySym(c) {
+    c = String(c || '').toUpperCase();
+    try { if (window.RRV8 && RRV8.currencySymbol) return RRV8.currencySymbol(c); } catch (_) {}
+    return c === 'GBP' ? '£' : c === 'EUR' ? '€' : c === 'USD' ? '$' : (c ? c + ' ' : '$');
+  }
   function _moneyK(n) {
     n = Number(n) || 0; var a = Math.abs(n), s = n < 0 ? '-' : '';
     if (a < 1000) return s + Math.round(a).toLocaleString('en-US');
@@ -6402,6 +6607,7 @@
       if (rec) rec.hidden = true; if (acct) acct.hidden = true; if (perp) perp.hidden = true;
       if (audit) audit.hidden = true;
       var rp0 = $('reportsPalette'); if (rp0) rp0.hidden = true;
+      var bt = $('analystDayBriefTop'); if (bt) bt.hidden = true;   // analyst-only chrome
     };
     if (vr !== 'accountant') { hideAll(); if (vr === 'analyst') renderAnalystPalette(); return; }
     var _atA = $('acctTop'); if (_atA) _atA.hidden = false;   // the analyst 'work' tab may have hidden it — restore for the accountant view
@@ -6541,7 +6747,7 @@
         + cellFn(r.BegGL, ccy, u) + cellFn(r.PerGL, ccy, u) + cellFn(r.EndGL, ccy, u) + cellFn(r.Perpetual, ccy, u) + cellFn(r.UnpostBatch, ccy, u) + cellFn(r.EndofDay, ccy, u)
         + '<td class="acct-g-out' + (aout ? '' : ' is-clear') + '">' + (aout ? esc(_ccyAmtUnit(ccy, Number(r.OOB) || 0, u)) : '&mdash;') + '</td>'
         + (aout
-            ? '<td class="acct-g-offcell"><input type="text" class="acct-g-offset" data-co="' + esc(co) + '" data-acct="' + esc(r.LongAccount || '') + '" value="' + esc(_jeOffsets[co + '|' + (r.LongAccount || '')] || '') + '" placeholder="Offset acct" autocomplete="off" spellcheck="false" aria-label="Offset account for ' + esc(r.LongAccount || '') + '"></td>'
+            ? '<td class="acct-g-offcell"><input type="text" class="acct-g-offset" data-co="' + esc(co) + '" data-acct="' + esc(r.LongAccount || '') + '" value="' + esc(_jeOffsets[_jeOffKey(co, r.LongAccount || '')] || '') + '" placeholder="Offset acct" autocomplete="off" spellcheck="false" aria-label="Offset account for ' + esc(r.LongAccount || '') + '"></td>'
             : '<td class="acct-g-offcell"></td>')
         + '</tr>';
     };
@@ -6628,7 +6834,7 @@
         // it survives repaints and feeds the balancing-entry preview.
         grid.addEventListener('input', function (e) {
           var inp = e.target && e.target.closest ? e.target.closest('.acct-g-offset') : null; if (!inp) return;
-          var k = inp.getAttribute('data-co') + '|' + inp.getAttribute('data-acct'), v = inp.value.trim();
+          var k = _jeOffKey(inp.getAttribute('data-co'), inp.getAttribute('data-acct')), v = inp.value.trim();
           if (v) _jeOffsets[k] = v; else delete _jeOffsets[k];
         });
         grid.addEventListener('click', function (e) {
@@ -6709,7 +6915,7 @@
       // EVERY journal-able account appears — a row Karen hasn't filled defaults to an
       // "Offset account" placeholder so the preview always shows the full entry; a
       // typed value overrides it. Defaults are flagged (not attestable as-is).
-      var typed = (_jeOffsets[co + '|' + (r.LongAccount || '')] || '').trim();
+      var typed = (_jeOffsets[_jeOffKey(co, r.LongAccount || '')] || '').trim();
       var off = typed || 'Offset account';
       var amt = Math.abs(je);
       // One direction: DEBIT the inventory account (bring GL up to perpetual), CREDIT
@@ -7382,6 +7588,15 @@
   // period + module. The head shows the Account-Roll-Forward total (source of
   // truth), not the chart's own sum.
   var _txVarCache = { key: null, amt: null, cnt: null };
+  // The cache is keyed company|db and the DB switch repaints in place (no reload),
+  // so EVERY reader must key-check or it serves the prior database's series. This
+  // rebuilds the key exactly as the two writers do (renderTxVarWidget / _txvRows).
+  function _txVarKeyNow() {
+    var d = _acctData || (typeof _briefData === 'function' ? _briefData() : null);
+    var solo = _ensureAnalystSolo((d && d.companies) || []);
+    return (solo ? String(solo) : '') + '|' + ((activeDb() && activeDb().n) || '');
+  }
+  function _txVarWarm() { return !!(_txVarCache && _txVarCache.amt && _txVarCache.key === _txVarKeyNow()); }
   var _TXV_MODS = ['Sales', 'Purchasing', 'Manufacturing', 'Inventory'];
   var _TXV_COLORS = { Sales: '#3f74e8', Purchasing: '#2e8a55', Manufacturing: '#e0872b', Inventory: '#5a6b8c' };
   function _txVarBucket(rows) {
@@ -7444,20 +7659,40 @@
     var ccy = (soloCo && soloCo.ccy) || ((d && d.currencies && d.currencies[0]) || '');
     var fmtAmt = function (v) { return (typeof _ccyAmt === 'function') ? _ccyAmt(ccy, v) : ('$' + Math.round(v).toLocaleString('en-US')); };
     var n2 = function (v) { return (Math.round(v * 100) / 100).toLocaleString('en-US', { maximumFractionDigits: 2 }); };
-    var rows = [];
-    try { var o = JSON.parse(sessionStorage.getItem(cardexCacheKey()) || 'null'); if (o && Array.isArray(o.payload)) rows = o.payload; } catch (_) {}
-    var scoped = rows.filter(function (r) { return String(r.CompanyNumber) === String(solo); });
-    // cold cache → warm behind the scenes, then repaint the whole analyst palette once it lands
-    if (!scoped.length && typeof autoWarmCardex === 'function') {
+    var cxr = _cardexRead(solo);
+    var scoped = cxr.scoped;
+    // Nothing readable yet → warm behind the scenes, then repaint the whole analyst
+    // palette once it lands. A warm that already went terminal queues no callback,
+    // which is exactly the case the honesty guard below catches.
+    if (!cxr.loaded && typeof autoWarmCardex === 'function') {
       autoWarmCardex(function () {
         if (typeof _viewRole === 'function' && _viewRole() === 'analyst'
             && typeof _curSubView === 'function' && _curSubView() === 'reports'
             && typeof renderAnalystPalette === 'function') renderAnalystPalette();
       });
     }
-    var qtyTot = 0, amtTot = 0, itemSet = {};
-    scoped.forEach(function (r) { qtyTot += Number(r.AdjQty) || 0; amtTot += Number(r.AdjAmount) || 0; if (r.ItemID != null) itemSet[r.ItemID] = 1; });
+    // Unparsed cache = UNKNOWN, not zero. Printing "Units 0 · Amount $0" off a cold,
+    // failed, or truncated entry states a variance-free company as fact — say what
+    // happened instead. (A LOADED-but-empty cache is a real answer and falls through.)
+    if (!cxr.loaded) {
+      box.innerHTML = '<div class="cxh-row"><div class="cxh-card cxh-card--wide">'
+        + '<div class="cxh-head"><div class="cxh-name">Cardex Variance</div>'
+        +   '<div class="cxh-sub2">Co ' + esc(String(solo || '')) + '</div></div>'
+        + '<div class="cxh-mv-empty">' + esc(_cardexUnreadText(cxr)) + '</div>'
+        + '</div></div>';
+      return;
+    }
+    // Signed totals for the face (a net is what the analyst reconciles to); magnitude
+    // totals for the clean/off decision, which the detail page makes per ROW.
+    var qtyTot = 0, amtTot = 0, qtyMag = 0, amtMag = 0, itemSet = {};
+    scoped.forEach(function (r) {
+      var q = Number(r.AdjQty) || 0, a = Number(r.AdjAmount) || 0;
+      qtyTot += q; amtTot += a;
+      qtyMag += Math.abs(q); amtMag += Math.abs(a);
+      if (r.ItemID != null) itemSet[r.ItemID] = 1;
+    });
     var nItems = Object.keys(itemSet).length;
+    var cxOff = cardexIsOff(solo, qtyMag, amtMag, nItems);
     function movers(field) {
       return scoped.filter(function (r) { return Math.abs(Number(r[field]) || 0) > 0; })
         .sort(function (a, b) { return Math.abs(Number(b[field]) || 0) - Math.abs(Number(a[field]) || 0); }).slice(0, 3);
@@ -7484,10 +7719,14 @@
         : '<div class="cxh-mv-empty">None</div>';
       return '<div class="cxh-mv-col"><div class="cxh-mv-h">' + esc(title) + '</div>' + body + '</div>';
     }
-    var sub = nItems + ' item' + (nItems === 1 ? '' : 's') + ' &middot; Co ' + esc(String(solo || ''));
+    // The figures below are the signed net. When offsetting items pull that net to
+    // ~0 while items are genuinely off, "Amount $0" reads as clean — so the count
+    // says "off" and the gross rides beside it. Terse: no gross on an ordinary variance.
+    var totSub = nItems + ' Item' + (nItems === 1 ? '' : 's') + (cxOff ? ' off' : '');
+    if (cxOff && cardexNetMasks(solo, amtTot, amtMag)) totSub += ' &middot; gross ' + esc(fmtAmt(amtMag));
     var sotCard = '<div class="cxh-card cxh-card--narrow">'
       + '<div class="cxh-head"><div class="cxh-name">Variance Totals</div>'
-      +   '<div class="cxh-sub2">' + nItems + ' Item' + (nItems === 1 ? '' : 's') + '</div></div>'
+      +   '<div class="cxh-sub2">' + totSub + '</div></div>'
       + '<div class="cxh-figs cxh-figs-inline">'
       +   '<div class="cxh-fig"><div class="cxh-fig-k">Units</div><div class="cxh-fig-v' + (qtyTot < 0 ? ' neg' : '') + '">' + esc(n2(qtyTot)) + '</div></div>'
       +   '<div class="cxh-fig cxh-fig-amt"><div class="cxh-fig-k">Amount</div><div class="cxh-fig-v' + (amtTot < 0 ? ' neg' : '') + '">' + esc(fmtAmt(amtTot)) + '</div></div>'
@@ -7554,26 +7793,48 @@
 
     // Card 2 — Cardex Variance: perpetual roll-forward source-of-truth totals from
     // the warmed cardex cache (same cache + cold-warm as renderCardexHeadline).
-    var rows = [];
-    try { var o = JSON.parse(sessionStorage.getItem(cardexCacheKey()) || 'null'); if (o && Array.isArray(o.payload)) rows = o.payload; } catch (_) {}
-    var scoped = rows.filter(function (r) { return String(r.CompanyNumber) === String(solo); });
-    if (!scoped.length && typeof autoWarmCardex === 'function') {
+    var cxr = _cardexRead(solo);
+    var scoped = cxr.scoped;
+    if (!cxr.loaded && typeof autoWarmCardex === 'function') {
       autoWarmCardex(function () {
         if (typeof _viewRole === 'function' && _viewRole() === 'analyst'
             && typeof _curSubView === 'function' && _curSubView() === 'work'
             && typeof renderAnalystPalette === 'function') renderAnalystPalette();
       });
     }
-    var qtyTot = 0, amtTot = 0, itemSet = {};
-    scoped.forEach(function (r) { qtyTot += Number(r.AdjQty) || 0; amtTot += Number(r.AdjAmount) || 0; if (r.ItemID != null) itemSet[r.ItemID] = 1; });
+    // Signed totals for the two figures; magnitude totals for the clean/off call —
+    // the detail page tests each ROW on |AdjQty| / |AdjAmount|, so two items off by
+    // +5,000 and -5,000 belong on this card even though they net to zero.
+    var qtyTot = 0, amtTot = 0, qtyMag = 0, amtMag = 0, itemSet = {};
+    scoped.forEach(function (r) {
+      var q = Number(r.AdjQty) || 0, a = Number(r.AdjAmount) || 0;
+      qtyTot += q; amtTot += a;
+      qtyMag += Math.abs(q); amtMag += Math.abs(a);
+      if (r.ItemID != null) itemSet[r.ItemID] = 1;
+    });
     var nItems = Object.keys(itemSet).length;
-    var cxSub = 'Perpetual roll-forward &middot; Co ' + esc(String(solo || '')) + ' &middot; ' + nItems + ' item' + (nItems === 1 ? '' : 's');
+    var cxOff = cardexIsOff(solo, qtyMag, amtMag, nItems);
+    // An unparsed cardex cache is UNKNOWN, not zero: this card used to read
+    // "Amount variance $0 · Quantity variance 0" off a cold, failed, or truncated
+    // entry — a company declared clean on nothing. Show em-dashes and say why.
+    // The loaded line names the item COUNT and, when a near-zero net is hiding
+    // offsetting items, the gross — so "Amount variance $0" can never read as clean.
+    var cxSub = cxr.loaded
+      ? ('Perpetual roll-forward &middot; Co ' + esc(String(solo || '')) + ' &middot; ' + nItems + ' item' + (nItems === 1 ? '' : 's') + (cxOff ? ' off' : '')
+         + ((cxOff && cardexNetMasks(solo, amtTot, amtMag)) ? (' &middot; gross ' + esc(fmtAmt(amtMag))) : ''))
+      : ((solo ? 'Co ' + esc(String(solo)) + ' &middot; ' : '') + esc(_cardexUnreadText(cxr)));
+    var cxFigs = cxr.loaded
+      ? ('<div class="cxh-figs">'
+        +   '<div class="cxh-fig"><div class="cxh-fig-k">Amount variance</div><div class="cxh-fig-v' + neg(amtTot) + '">' + esc(fmtAmt(amtTot)) + '</div></div>'
+        +   '<div class="cxh-fig"><div class="cxh-fig-k">Quantity variance</div><div class="cxh-fig-v' + neg(qtyTot) + '">' + esc(n2(qtyTot)) + '</div></div>'
+        + '</div>')
+      : ('<div class="cxh-figs">'
+        +   '<div class="cxh-fig"><div class="cxh-fig-k">Amount variance</div><div class="cxh-fig-v">&mdash;</div></div>'
+        +   '<div class="cxh-fig"><div class="cxh-fig-k">Quantity variance</div><div class="cxh-fig-v">&mdash;</div></div>'
+        + '</div>');
     var cxCard = '<div class="cxh-card is-nav" data-ov-nav="reports" role="button" tabindex="0" aria-label="Open Cardex Variance detail">'
       + '<div class="cxh-head"><div class="cxh-name">Cardex Variance</div><div class="cxh-sub2">' + cxSub + '</div></div>'
-      + '<div class="cxh-figs">'
-      +   '<div class="cxh-fig"><div class="cxh-fig-k">Amount variance</div><div class="cxh-fig-v' + neg(amtTot) + '">' + esc(fmtAmt(amtTot)) + '</div></div>'
-      +   '<div class="cxh-fig"><div class="cxh-fig-k">Quantity variance</div><div class="cxh-fig-v' + neg(qtyTot) + '">' + esc(n2(qtyTot)) + '</div></div>'
-      + '</div>'
+      + cxFigs
       + '<div class="cxh-go">View Cardex Variance <span class="arr" aria-hidden="true">&rarr;</span></div>'
       + '</div>';
 
@@ -7703,6 +7964,7 @@
       _txVarCache = { key: key, amt: b.amt, cnt: b.cnt, rows: _rows };   // keep raw rows for the Transaction Variance tab
       paint();
       _txVarUpdateTotal(fmtAmt);
+      if (_viewRole() === 'analyst' && typeof renderAnalystDayBriefTop === 'function') renderAnalystDayBriefTop(_acctData || _briefData());   // tx cache warmed → fill the Transaction Variance chip
     }).catch(function () {
       if (_txVarReqKey !== key) return;
       box.innerHTML = titleHead + '<div class="txv-empty">Couldn’t load transaction variance just now.</div>';
@@ -7735,101 +7997,70 @@
   var _txvDmaai = { key: null, findings: null, loading: null };
   var _txvBusy = false;
 
-  // The 10-card taxonomy (WORKLIST DAC-16 / docs/usp8-txv-classifier-design.md), driven
-  // by the server-set subtype (cards 1-6) and type (terminal cards 7-10). A/P vouchers +
-  // duplicate-sales are now their OWN cards too (DAC-28, subtype-claimed by usp8_txv_flags).
-  // `scope` = what the "Open in worklist" deep-link passes so the details page filters to
-  // exactly this card (subtype for 1-6, module for the terminal type cards).
-  // The card's own code is the drill-through key (passed as ?card=CODE); the
-  // Details page re-derives the same code per row via txvCardCode(), so scope
-  // needs no separate subtype/module hint here.
-  var _TXV_CODE_META = {
-    // Quick wins (1 document) — deterministic corrective action
-    'ACCT':    { title: 'Account Mismatch',            kind: 'rebalance', tier: 'quick'   },
-    'PER':     { title: 'Period Mismatch',             kind: 'self',      tier: 'quick'   },
-    // Complex (3 documents)
-    'MTO':     { title: 'Make to Order',               kind: 'mto',       tier: 'complex' },
-    'ICO':     { title: 'Intercompany Sales',          kind: 'ico',       tier: 'complex' },
-    // Linked pairs (2 documents, 1:1 SO↔PO)
-    'TRF':     { title: 'Transfer Orders',             kind: 'linked',    tier: 'linked'  },
-    'DS':      { title: 'Direct Ship',                 kind: 'linked',    tier: 'linked'  },
-    // DAC-28 — promoted from Comment-only annotations to their own cards.
-    'VCHR':    { title: 'A/P Voucher on Inventory',    kind: 'rebalance', tier: 'quick'   },
-    'DUP':     { title: 'Duplicate Sales',             kind: 'rebalance', tier: 'quick'   },
-    // IT cardex-integrity (owner 2026-07-14) — item-ledger fix at source, not a JE.
-    'TXI':     { title: 'Transfer Integrity',          kind: 'review',    tier: 'quick'   },
-    // Mfg completion posted to cardex, never journaled to GL (owner 2026-07-14) — repost via R31802A.
-    'CNJ':     { title: 'Completion Not Journaled',    kind: 'review',    tier: 'quick'   },
-    // Terminal — the unclassified residual, split by transaction type
-    'T-SALES': { title: 'Unclassified — Sales',          kind: 'review', tier: 'terminal' },
-    'T-PURCH': { title: 'Unclassified — Purchasing',     kind: 'review', tier: 'terminal' },
-    'T-MFG':   { title: 'Unclassified — Manufacturing',  kind: 'review', tier: 'terminal' },
-    'T-INV':   { title: 'Unclassified — Inventory',      kind: 'review', tier: 'terminal' }
-  };
-  var _TXV_CODE_ORDER = ['ACCT', 'PER', 'VCHR', 'DUP', 'TXI', 'CNJ', 'MTO', 'ICO', 'TRF', 'DS', 'T-SALES', 'T-PURCH', 'T-MFG', 'T-INV'];
+  // The card taxonomy (WORKLIST DAC-16 / docs/usp8-txv-classifier-design.md), driven by
+  // the server-set subtype (the classified cards) and by transaction type (the terminal
+  // cards). A/P vouchers + duplicate-sales are their OWN cards too (DAC-28,
+  // subtype-claimed by usp8_txv_flags). The card's own code is the drill-through key
+  // (passed as ?card=CODE); the Details page re-derives the same code per row via the
+  // SAME classifier, so no separate subtype/module hint travels on the link.
+  // SINGLE SOURCE OF TRUTH: RRV8.txv in config.js. The taxonomy used to be
+  // declared here AND again in inventory-transactions.html; the two drifted
+  // (TXI + CNJ were added here and never there), which silently disabled the
+  // ?card= filter on the drill-through and showed the analyst every card's rows.
+  // Add a card in config.js and both surfaces pick it up.
+  var _TXV_CODE_META  = (window.RRV8 && RRV8.txv) ? RRV8.txv.META  : {};
+  var _TXV_CODE_ORDER = (window.RRV8 && RRV8.txv) ? RRV8.txv.ORDER : [];
+  if (!(window.RRV8 && RRV8.txv)) console.error('[txv] card taxonomy missing — config.js did not load; the variance cards cannot render.');
   var _TXV_TIER_ORDER = ['quick', 'complex', 'linked', 'terminal'];
   var _TXV_TIER_LABEL = { quick: 'Quick wins', complex: 'Complex transactions', linked: 'Linked pairs', terminal: 'Needs review' };
 
-  // Row → pattern code. SUBTYPE-FIRST: the 008 pipeline's server-set subtype (and
-  // the duplicate-sales integrity flag) is the authoritative business
-  // classification, so it wins over the raw cardex/GL grid pattern; only rows with
-  // no subtype fall through to the cardex/GL patterns. MUST STAY IN SYNC with
-  // classifyGridRow() in inventory-transactions.html — that parity is what makes a
-  // card's total tie exactly to the details drill-through it links to. Every row
-  // lands in exactly one code (5.11 is the catch-all), so the cards partition the
-  // residual and sum to the graph total.
-  function _txvClassifyCode(r) {
-    // SUBTYPE-FIRST: the 008 pipeline's server-set subtype is the authoritative
-    // classification (cards 1-6). Rows with no subtype are the terminal residual and
-    // fall to a card by transaction TYPE (cards 7-10). A/P vouchers + duplicate-sales are
-    // now claimed subtypes (DAC-28) → their own cards (VCHR / DUP).
-    var st = String(r.SubType || '').trim().toLowerCase();
-    if (st === 'make to order') return 'MTO';
-    if (st === 'intercompany')  return 'ICO';
-    if (st === 'transfers')     return 'TRF';
-    if (st === 'direct ship')   return 'DS';
-    if (st === 'accounts')      return 'ACCT';
-    if (st === 'periods')       return 'PER';
-    if (st === 'vouchers')        return 'VCHR';   // DAC-28: A/P voucher on inventory, promoted to a card
-    if (st === 'duplicate sales') return 'DUP';    // DAC-28: duplicate cardex relief, promoted to a card
-    if (st === 'transfer integrity') return 'TXI'; // IT cardex-only integrity — item-ledger fix at source
-    if (st === 'completion not journaled') return 'CNJ'; // mfg IC cardex-only, completion never journaled to GL
-    // No subtype → terminal card by type.
-    var ty = String(r.Type || '').trim().toLowerCase();
-    if (ty === 'sales')      return 'T-SALES';
-    if (ty === 'purchasing') return 'T-PURCH';
-    if (ty === 'mfg')        return 'T-MFG';
-    return 'T-INV';   // Inventory (and any unrecognized type)
-  }
+  // Row → card code. The classifier is shared (RRV8.txv.code in config.js) with the
+  // Details grid's txvCardCode, so a card's total ties EXACTLY to its drill-through
+  // by construction rather than by two hand-maintained copies agreeing. Every row
+  // lands in exactly one code, so the cards partition the residual.
+  function _txvClassifyCode(r) { return RRV8.txv.code(r); }
   function _txvClassify(r) {
     var c = _txvClassifyCode(r), m = _TXV_CODE_META[c] || {};
     return { code: c, name: m.title || 'Other Variance', action: m.kind || 'triage' };
   }
-  // Authoritative pattern copy — root cause + the analyst's next step — MIRRORED
-  // from PATTERN_INFO in inventory-transactions.html (the page this classifier was
-  // ported from). Keep the two in sync: that page is the source of truth for the
-  // JDE-correct diagnosis and fix. _txvCause() joins cause + fix for the card body.
+  // Authoritative pattern copy — what happened, why, and the change that stops it
+  // recurring — MIRRORED from PATTERN_INFO in inventory-transactions.html (the page
+  // this classifier was ported from). Keep the two in sync: that page is the source
+  // of truth for the JDE-correct diagnosis. _txvCause() joins desc + action for the
+  // card body. The finding travels to the Audit Center, so it must read as evidence
+  // a third party relies on months later — mechanism, cause, corrective action. It
+  // must NOT discuss the journal entry; that is the accountant's role. And it must
+  // never invent a preventive action: where no grounded cause exists, say so and
+  // give the research path.
   var _TXV_PATTERN = {
-    'ACCT': { desc: 'The offset account on this doc differs from the account JDE’s DMAAI table (F4095) routes to for this (Order Type, Doc Type, GL Class).',
-              action: 'Look up the expected account in F4095 for this combination; reverse the JE and re-post to the configured account.' },
-    'PER':  { desc: 'The transaction date and the period the document is reported in fall in different months — a cut-off issue, where the cardex landed in one period and its GL counterpart in another.',
-              action: 'Compare the F4111 transaction date against the F0911 GL date; if the cardex side is misposted, reverse it and re-post to the correct period.' },
-    'MTO':  { desc: 'A work order linked to its customer sales order — a business grouping, not one variance type. The routings match the cardex model and the sales orders shipped, so the residual is manufacturing cardex-vs-GL, splitting three ways: GL-only standard-cost variances, both-sides-differ completion cost differences, and cardex-only completions never journaled to the GL.',
-              action: 'Work the shapes: GL-only rows are expected standard-cost variances (no action); both-sides-differ rows are completion std-on-cardex vs actual-in-GL (investigate the large ones); cardex-only rows are a real posting gap — repost the completion via R31802A at the source, not a journal entry.' },
-    'ICO':  { desc: 'An intercompany order (OK/SK) where the selling and buying companies’ inventory legs haven’t fully offset — a three-document timing gap across the two companies’ books, held together here.',
-              action: 'Verify the matching leg posted in the counterpart company; the pair nets once both sides complete.' },
-    'TRF':  { desc: 'An inter-branch transfer (ST/OT) whose shipping and receiving legs posted to inventory in different periods or at different costs — the two sides haven’t met yet.',
-              action: 'Confirm both legs posted; if the cost differs, the receiving branch carries the shipping cost. Usually self-clears once both legs land in the same period.' },
-    'DS':   { desc: 'A direct-ship order (transship) — the sales order and its linked purchase order ship straight to the customer, and the two legs haven’t fully offset yet.',
-              action: 'Confirm both the SO and PO legs posted; the pair nets once both land in the same period at the same cost.' },
-    'T-SALES': { desc: 'Sales-side variance that didn’t match any known pattern — cardex and GL both posted but disagree, and it isn’t a transfer, direct-ship, intercompany, or a clean account/period offset.',
-                 action: 'Export a representative row to investigate; a voucher or duplicate-sales badge on a row points at the likely root cause.' },
-    'T-PURCH': { desc: 'Purchasing-side variance that didn’t match any known pattern — cardex and GL disagree and it isn’t a transfer, direct-ship, or intercompany.',
-                 action: 'Export a representative row to investigate; a voucher badge points at an AP-voucher root cause.' },
-    'T-MFG':   { desc: 'Manufacturing variance that didn’t match make-to-order or a clean account/period offset — a genuine cost difference between cardex and GL.',
-                 action: 'Export a representative row; check for a standard-cost change (R30822/R30837) or a work-order that hasn’t revalued to the GL.' },
-    'T-INV':   { desc: 'Inventory variance that didn’t match any known pattern — cardex and GL both posted but disagree.',
-                 action: 'Export a representative row to investigate the specific documents behind it.' }
+    'ACCT': { desc: 'The GL posted these documents to a different account than the DMAAI routes to. The item ledger used the right one.',
+              action: 'Correct the DMAAI for this combination. Turn off account entry and override on the version in use. On sales documents, check R42800 PO 5, Business Unit Source.' },
+    'PER':  { desc: 'The item ledger and the GL recorded these documents in different months.',
+              action: 'Set GL Date Source to follow the transaction date, and schedule the batch runs to finish before the period closes.' },
+    'VCHR': { desc: 'A/P vouchers posted to an inventory account instead of the A/P variance account.',
+              action: 'Correct the DMAAI 4220 route, then restrict who can override the GL account on the voucher-match version.' },
+    'DUP':  { desc: 'The same order line was relieved from inventory twice. The GL booked it once.',
+              action: 'Reverse the duplicate relief at the source. Then restrict the statuses at which ship-confirm is allowed, or recover the Sales Update workfile before any re-run.' },
+    'TXI':  { desc: 'Location transfers relieved inventory value the GL never recorded. The receipt leg carried a unit cost and never extended it.',
+              action: 'Correct the cost-component setup for these cost-level-3 items. Run R41543 and R41544, then restore the missing value with a dollars-only adjustment.' },
+    'CNJ':  { desc: 'Work-order completions received finished goods into inventory with no GL entry. The material issues for the same orders did post.',
+              action: 'Do not work the orders one at a time — the fault is in the run. Run R41543 monthly and take the defect to Oracle through IT.' },
+    'MTO':  { desc: 'Make-to-order work orders. Not one variance type: expected standard-cost variances, cost-basis differences on completions, and completions with no GL entry.',
+              action: 'Work the cost-basis rows largest first and get R30837 called from R30822. GL-only rows need no action. The missing completions are a run-level fault.' },
+    'ICO':  { desc: 'Intercompany orders whose selling and buying legs have not offset.',
+              action: 'Confirm the matching leg posted in the counterpart company. Compare against the prior period to tell a pair that clears from one that is stuck.' },
+    'TRF':  { desc: 'Inter-branch transfers whose shipping and receiving legs have not met. A duplicated item-ledger relief also lands here.',
+              action: 'Correct the receiving cost where it differs. Where the relief is duplicated, recover the Sales Update workfile before any re-run. Confirm both plants sit in one company.' },
+    'DS':   { desc: 'Direct-ship orders whose sales and purchase legs have not offset.',
+              action: 'Confirm both legs posted and compare their costs. Compare against the prior period to tell a pair that clears from one that is stuck.' },
+    'T-SALES': { desc: 'Sales documents where both sides posted and disagree. No known pattern fits, so the cause is not identified yet.',
+                 action: 'Take the largest documents first and compare the item-ledger detail against the GL amount. Check the order line type before chasing a GL-only row.' },
+    'T-PURCH': { desc: 'Purchasing documents where both sides posted and disagree. No known pattern fits, so the cause is not identified yet.',
+                 action: 'Take the largest documents first. Compare the receipt cost against the voucher cost, then the item-ledger detail against the GL amount.' },
+    'T-MFG':   { desc: 'Manufacturing documents where both sides disagree. No known pattern fits, so the cause is not identified yet.',
+                 action: 'Take the largest documents first and match by work order, not document number. Check for a cost change that never reached the GL as a WIP revaluation.' },
+    'T-INV':   { desc: 'Inventory documents where both sides posted and disagree. No known pattern fits, so the cause is not identified yet.',
+                 action: 'Take the largest documents first and compare the item-ledger detail against the GL amount. Then compare the item’s branch GL class against its location GL class.' }
   };
   function _txvCause(code) {
     var p = _TXV_PATTERN[code]; if (!p) return '';
@@ -7919,6 +8150,10 @@
     if (p.account)   q.push('account='   + encodeURIComponent(p.account));
     if (p.groupcode) q.push('groupcode=' + encodeURIComponent(p.groupcode));  // isolate one multi-doc transaction's legs
     if (p.period)    q.push('period='    + encodeURIComponent(p.period));
+    // Tie-out: carry the count THIS card is showing so the Details page can
+    // console.error when its own re-derivation of the same slice disagrees.
+    // Diagnostic only — never read as a filter (see RRV8.drillReport).
+    if (p.expect != null && p.expect !== '') q.push('expect=' + encodeURIComponent(p.expect));
     return 'inventory-transactions.html?' + q.join('&');
   }
   function _txvDmaaiHref(co, findingId) {
@@ -8154,12 +8389,12 @@
       // Orders is one — the duplicate-cardex quirk is specific to Sales Update (R42800)
       // abending on ST/OT orders. Falls back to KIND_EXPLAIN. SME to refine.
       var CODE_EXPLAIN = {
-        MTO:  'Make to Order groups a work order with its customer sales order — a business view, not one variance type. The routings match the cardex model and the sales orders shipped, so the residual is ordinary manufacturing cardex-vs-GL, and it splits three ways. GL-only rows are standard-cost variances that belong in the GL — expected, no action. Both-sides-differ rows are the completion valued at standard on the cardex versus actual in the GL — investigate the large ones with cost accounting. Cardex-only rows are a completion that posted to the cardex but was never journaled to the GL — a real posting gap; repost it through R31802A (Manufacturing Accounting) at the source, not a journal entry. Drill in for the counts and dollars per shape.',
-        VCHR: 'An A/P voucher (batch type V) posted to an inventory account instead of the A/P variance account — DMAAI 4220 is routing voucher variances into inventory. The fix is at the source: correct the 4220 routing so voucher variances land on the variance account, not inventory.',
-        DUP:  'The cardex relief posted twice while the GL posted once (RDuplicateSales flags the order) — the extra F4111 line IS the variance, a source double-write, not a mapping issue. Reverse the duplicated cardex relief at the source.',
-        TXI:  'An inventory-transfer (IT) document relieved value on the cardex that the GL never recorded — the receipt leg carried a unit cost but a zero extended cost, so a value-neutral location move destroyed inventory value. This is a JDE item-ledger integrity error (seen on cost-level-3 / standard-cost transfers, the one-sided-entry defect), not a mapping or journal-entry fix. Run the item-ledger integrity programs (R41543 / R41544) and restore the extended cost with a dollars-only IA adjustment at the source so the cardex and GL agree. A journal entry only balances the GL this period; it will not restore the lost cardex value or stop it recurring.',
-        CNJ:  'A work-order completion posted finished goods into inventory on the cardex (IC), but the completion journal (IC) never posted to the GL — the WO\'s material issues (IM) did, so WIP is overstated and finished goods understated in the GL. The two halves post under different batches (the cardex under the transaction batch, the completion JE under the R31802A run batch), which is why the completion can go missing without the issues. Fix it at the source: post or repost the completion through R31802A (Manufacturing Accounting). A manual journal entry only balances the GL this period; it will not carry the finished-goods cost into the item ledger or stop the gap recurring on the next completion.',
-        TRF: 'Transfer Orders (ST/OT) relieve inventory and post the GL through Sales Update (R42800). If that run is interrupted or crashes, its workfile can survive and a re-run duplicates the CARDEX relief — the F4111 line is written twice while the GL posts once — so the variance sits in the cardex, not the GL. It is a known JDE quirk, not a mapping error, and it can recur: reverse the duplicated cardex relief at the source. An adjusting entry only balances the GL this period; it will not remove the extra cardex line or stop it recurring if R42800 abends.'
+        MTO:  'Make-to-order work orders, grouped with their customer sales orders. Not one variance type: the residual splits into expected standard-cost variances, completions valued on a different cost basis in the GL than in the item ledger, and completions with no GL entry at all. Drill in for the counts and dollars per shape.',
+        VCHR: 'A/P vouchers posted to an inventory account instead of the A/P variance account. DMAAI 4220 is routing voucher variances into inventory. Correcting that route stops it; restricting account overrides on the voucher-match version keeps it corrected.',
+        DUP:  'The same order line was relieved from inventory twice while the GL booked it once, so the extra item-ledger line is the variance. Either the line was ship-confirmed again after it closed, or Sales Update abended and the re-run wrote the relief a second time.',
+        TXI:  'Location transfers relieved inventory value the GL never recorded: the receipt leg carried a unit cost but never extended it. The JDE one-sided item-ledger defect, on cost-level-3 items under standard costing. It repeats until the cost-component setup is corrected.',
+        CNJ:  'Work-order completions received finished goods into inventory with no GL entry for them, while the material issues for the same orders did post. Manufacturing accounting stamped the item ledger and wrote no entry — a documented Oracle defect that skips a fraction of every run. The fault is in the run, not these orders.',
+        TRF: 'Inter-branch transfers whose shipping and receiving legs have not met — different periods, or the receiving branch carrying the shipping cost. A second case lands here too: Sales Update abends and the re-run duplicates the item-ledger relief while the GL posts once.'
       };
 
       // One card per non-empty bucket, in code order, grouped into the four tiers.
@@ -8223,7 +8458,7 @@
           meta: _metaBits.join(' · '),
           cause: savedFinding || CODE_EXPLAIN[code] || KIND_EXPLAIN[m.kind] || _txvCause(code) || 'Drill in to see what is driving this variance.',
           isFinding: !!savedFinding,
-          href: _txvTxHref(solo, { period: focusP, card: code }),
+          href: _txvTxHref(solo, { period: focusP, card: code, expect: b.rows }),
           btn: 'Open in worklist', done: done, recurPrior: recurPrior
         });
       });
@@ -8607,11 +8842,14 @@
         var amt = Number(gb.amount) || 0;
         var exact = (amt < 0 ? '-' : '') + _ccySym(c.ccy) + _money(Math.abs(amt));   // exact figure in the row (rounded $K goes to the AI band)
         var more = gb.nPeriods > 1 ? ' <span class="alh-item-more">(' + gb.nPeriods + ' periods off; largest shown)</span>' : '';
-        detailHtml = 'GL balance in ' + esc(monYr(gb.period)) + ' is off by <span class="alh-amt">' + esc(exact) + '</span>' + more;
-        factDetail = 'GL balance in ' + monYr(gb.period) + ' is off by ' + _ccyAmt(c.ccy, amt) + ' (blocks the period from tying out; fix this first)';
+        var acctList = (gb.accts || []).map(function (a) { return a.acct; }).filter(Boolean);
+        var acctHtml = acctList.length ? (' on <b>' + esc(acctList.slice(0, 3).join(', ')) + '</b>' + (acctList.length > 3 ? ' <span class="alh-item-more">+' + (acctList.length - 3) + ' more</span>' : '')) : '';
+        var acctFact = acctList.length ? ('account' + (acctList.length > 1 ? 's' : '') + ' ' + acctList.slice(0, 6).join(', ')) : 'an account';
+        detailHtml = 'Account Balances (F0902) don’t tie to the posted Account Ledger (F0911)' + acctHtml + ' — ' + esc(monYr(gb.period)) + ' off by <span class="alh-amt">' + esc(exact) + '</span>' + more;
+        factDetail = 'ACCOUNT ROLL-FORWARD GL BREAK: Account Balances (F0902) do not tie to the posted Account Ledger (F0911) on ' + acctFact + '; ' + monYr(gb.period) + ' is off by ' + _ccyAmt(c.ccy, amt) + (gb.nPeriods > 1 ? ' (largest of ' + gb.nPeriods + ' periods off)' : '') + '. Corrective order: run Repost Account Balances (R099102) in JD Edwards FIRST to rebuild the balances, then Reload GL so the corrected figures flow in on the next refresh.';
       } else {
-        detailHtml = 'A period didn’t roll forward cleanly — re-roll to restore trustworthy balances';
-        factDetail = 'a period did not roll forward cleanly (blocks the period from tying out; fix this first)';
+        detailHtml = 'The reconciliation variance didn’t carry forward — it re-clears on the next refresh (no manual step)';
+        factDetail = 'ACCOUNT ROLL-FORWARD VARIANCE BREAK: the cardex-to-GL reconciliation variance did not carry forward. There is NO manual step — RapidReconciler recomputes the full period timeline every refresh, so it clears on the next run. If it survives a refresh, escalate to the customer’s IT department; never re-roll or Reload Cardex for it.';
       }
     } else {
       detailHtml = 'Every period rolled forward cleanly';
@@ -8631,10 +8869,16 @@
   // >0 = review whether each exclusion is intentional. No sign-off. The counts
   // narrow to the scoped company via ?company=.
   function _analystModelCheck(d, co) {
+    var FAILED = {};   // sentinel: a rejected fetch must NOT collapse to 0 and read as "clean" to the AI
     return rrFetch('inventory/integrity/model-approval', co ? { query: { company: co } } : undefined)
-      .then(function (m) { return m; }).catch(function () { return null; })
+      .then(function (m) { return m; }).catch(function () { return FAILED; })
       .then(function (m) {
-        var n = (m && m.report3GlClassCount != null) ? Number(m.report3GlClassCount) : 0;
+        if (m === FAILED || m == null || m.report3GlClassCount == null) {
+          // Unknown, not clean. prio 5 keeps an un-run check below every confirmed finding.
+          return { id: 'model', prio: 5, state: 'attention', title: 'Model DMAAI', factTitle: 'Model DMAAI',
+            detailHtml: 'Couldn’t check just now — try again in a moment', factDetail: 'could not be checked just now', actionHtml: '' };
+        }
+        var n = Number(m.report3GlClassCount);
         if (n === 0) {
           return {
             id: 'model', prio: 5, state: 'clean',
@@ -8692,11 +8936,11 @@
               fact = nTxt + ' (GL-class config flagged; could not check for IC/IM manufacturing activity)';
             }
             return { id: key, prio: prio, state: 'attention', title: title, factTitle: title,
-              detailHtml: detail, factDetail: fact, actionHtml: _view };
+              detailHtml: detail, factDetail: fact, actionHtml: _view, rows: rows };
           });
         }
         return { id: key, prio: prio, state: 'attention', title: title, factTitle: title,
-          detailHtml: nTxt + ' on company ' + esc(String(co)), factDetail: nTxt, actionHtml: _view };
+          detailHtml: nTxt + ' on company ' + esc(String(co)), factDetail: nTxt, actionHtml: _view, rows: rows };
       }
       return { id: key, prio: prio, state: 'clean', title: title, factTitle: title, factDetail: 'clean — nothing flagged',
         clearedSummary: title.toLowerCase(), clearedLine: title + ' — clean, nothing flagged' };
@@ -8724,59 +8968,260 @@
       + '</ul>';
   }
   var _ALH_WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'];
-  function _analystDayBriefFallback(co, attention) {
-    if (!attention.length) return 'Everything checks out for company ' + esc(String(co)) + ' — every accuracy check is clean. Nothing needs you today.';
-    var n = attention.length;
-    var word = n <= 9 ? (_ALH_WORDS[n].charAt(0).toUpperCase() + _ALH_WORDS[n].slice(1)) : String(n);
-    var lead = word + ' thing' + (n === 1 ? '' : 's') + ' need' + (n === 1 ? 's' : '') + ' you today';
-    var first = attention[0];
-    return esc(lead) + '. Start with <b>' + esc(first.factTitle) + '</b> — ' + esc(first.factDetail) + '.';
+
+  // ===== Analyst day-brief — constant chrome ABOVE the tab strip ================
+  // Gathers the SAME Data-Health checks the Data Health tab renders, plus the
+  // Transaction-Variance + Cardex signals, and synthesizes ONE grounded "start
+  // here" lead across all three surfaces + a clickable chip per surface. Shared
+  // gather (cached per db|co|dataset) so the brief and the Data Health tab issue
+  // one set of check requests, not two.
+  var _analystBriefGen = 0;
+  var _analystLeadSig = '';          // last tier|db|company|facts the AI lead was asked about — stops a refire on benign repaints
+  var _analystTxWarmFailed = false;  // the off-tab transaction-variance probe failed: the chip says so instead of "Checking…" forever
+  var _analystTxWarmBusy = false;    // _txvRows only dedupes once it RESOLVES, and the brief re-renders several times a load — one probe at a time
+  var _analystHealthCache = { key: null, promise: null };
+  function _analystHealthKey(co) {
+    var db = (activeDb() && activeDb().n) || '_';
+    return db + '|' + co + '|' + ((_invRows && _invRows.length) || 0);
   }
-  // AI day-brief — reuses the live grounded pipeline (POST api/v1/ai/explain, same
-  // tier gating as the accountant briefing) but oriented as "here's your day" and
-  // GROUNDED in the settled accuracy-check classification. AI Off -> deterministic
-  // sentence only (nothing leaves the page). Generation-guarded + timed fallback.
-  function _analystDayBrief(gen, co, attention, cleared) {
-    var band = document.getElementById('analystDayBrief'); if (!band) return;
-    var bodyEl = band.querySelector('.alh-brief-body'); if (!bodyEl) return;
-    var fallback = _analystDayBriefFallback(co, attention);
-    var exposure = _recsummaryLevel();
-    if (exposure === 'off') { bodyEl.innerHTML = fallback; return; }   // deterministic only — no data leaves the page
-    bodyEl.textContent = 'Reading your day…'; bodyEl.classList.add('is-thinking');
-    var scrub = exposure === 'scrubbed';
+  function _analystGatherHealth(d, co) {
+    var key = _analystHealthKey(co);
+    if (_analystHealthCache.key === key && _analystHealthCache.promise) return _analystHealthCache.promise;
+    var scratch = {};   // the integrity checks stash View-modal rows on a host; the shared gather uses a scratch (rows also ride the result for the tab to re-stash)
+    var p = Promise.all([
+      _analystRollForwardCheck(d, co),
+      _analystModelCheck(d, co),
+      _analystIntegrityCheck(scratch, 'uom', 'UOM Conversion', co, 6),
+      _analystIntegrityCheck(scratch, 'frozen', 'Frozen Cost', co, 7),
+      _analystIntegrityCheck(scratch, 'glclass', 'GL-Class', co, 3)
+    ]).then(function (checks) {
+      var attention = checks.filter(function (c) { return c && c.state === 'attention'; })
+        .sort(function (a, b) { return (a.prio || 0) - (b.prio || 0); });
+      var cleared = checks.filter(function (c) { return c && c.state === 'clean'; });
+      return { checks: checks, attention: attention, cleared: cleared };
+    });
+    _analystHealthCache = { key: key, promise: p };
+    // The key can't change without a reload, so a memoized rejection would kill the
+    // brief AND the Data Health tab for the whole session. Evict on failure so the
+    // next render retries. (Consumers catch their own; this branch only un-caches.)
+    p.catch(function (e) {
+      if (_analystHealthCache.promise === p) _analystHealthCache = { key: null, promise: null };
+      console.warn('[home] accuracy-check gather failed — evicted so the next render retries', e);
+    });
+    return p;
+  }
+  // Cardex on-hand-vs-cardex summary (numbers, plus a warm flag so a cold cache
+  // reads "Checking…", never a misleading "clean"). Same scope as _analystCardexFacts.
+  function _analystCardexSummary(co) {
+    // warm comes from a SUCCESSFUL parse, not from "something was in storage" — a
+    // truncated entry throws, leaves rows empty, and would otherwise read as clean.
+    // That distinction lives in _cardexRead now, so every cardex surface shares it.
+    var cxr = _cardexRead(co);
+    var scoped = cxr.rows.filter(function (r) { return String(r.CompanyNumber) === String(co) && String(r.Reason || '').trim() !== 'Reset:'; });
+    // TWO totals per company, and they answer different questions:
+    //   qty / amt       — the SIGNED net. What a card face displays; what the
+    //                     analyst reconciles to.
+    //   qtyMag / amtMag — the per-row MAGNITUDE total. The only honest input to
+    //                     "is anything off?", because the Cardex Variance detail
+    //                     page filters per ROW on |AdjQty| / |AdjAmount|. Two items
+    //                     off by +5,000 and -5,000 net to zero, so the signed test
+    //                     called the company clean while the drill-through listed
+    //                     both rows. (applyInventoryLight already accumulated
+    //                     Math.abs per row; this brings the rest of the page onto
+    //                     the same convention.)
+    var qty = 0, amt = 0, qtyMag = 0, amtMag = 0, items = {};
+    scoped.forEach(function (r) {
+      var q = Number(r.AdjQty) || 0, a = Number(r.AdjAmount) || 0;
+      qty += q; amt += a;
+      qtyMag += Math.abs(q); amtMag += Math.abs(a);
+      if (r.ItemID != null) items[r.ItemID] = 1;
+    });
+    var blocked = cxr.reason;   // 'na' | 'failed' → the chip goes terminal instead of "Checking…"
+    if (blocked === 'done') blocked = '';
+    return { warm: cxr.loaded, blocked: blocked, n: Object.keys(items).length, qty: qty, amt: amt, qtyMag: qtyMag, amtMag: amtMag };
+  }
+  // The brief's system prompt — the three surface playbooks combined, so the lead
+  // REASONS (repost-first order, the F4102/F41021 split, cardex account-blindness,
+  // priority ranking) rather than restating a count. Sourced from the shared
+  // config.js catalog when present.
+  function _analystDayBriefGrounding() {
+    var parts = ['You are RapidReconciler AI, a senior JDE inventory-reconciliation consultant. Reason from these rules:'];
+    if (window.RRV8 && RRV8.ROLLFORWARD_GROUNDING) { var rf = RRV8.ROLLFORWARD_GROUNDING; parts.push(Array.isArray(rf) ? rf.join('\n') : rf); }
+    parts.push('GL-CLASS: a blank GL class is just another code — it posts when the DMAAI carries a **** wildcard/default. The real finding is the F4102 (Item Branch) vs F41021 (Item Location) GL-class SPLIT, which only misroutes through R31802A on manufacturing (IC/IM) documents; no IC/IM activity in scope means nothing to misroute.');
+    parts.push('CARDEX: cardex variance is F41021 on-hand vs the F4111 cardex, account-blind — NOT the ledger-vs-GL gap. Validate in JD Edwards (P4111), then fix at source or apply the reversible sync; never a journal entry.');
+    parts.push('PRIORITY: rank by what is actionable in the current period. A GL roll-forward break blocks the period from tying out and outranks a recurring transaction variance; a variance that self-clears on the next refresh is not a priority to chase.');
+    return parts.join('\n');
+  }
+  // Deterministic chips — one per surface, always correct from the live figures
+  // (the brief is miss-free even if the model is off/slow). A cold tx/cardex cache
+  // shows "Checking…" (warms in a beat), never a false "clean".
+  function _analystBriefChips(co, ccy, h, txStats) {
+    var chips = [];
+    var topH = (h.attention && h.attention[0]) || null;
+    if (topH) {
+      var dhText = (topH.id === 'rollforward') ? 'Account won’t roll forward — repost, then Reload GL'
+        : (topH.id === 'glclass') ? 'GL-class split to assess'
+        : topH.title;
+      var extra = h.attention.length > 1 ? (' · +' + (h.attention.length - 1) + ' more') : '';
+      chips.push({ key: 'work', label: 'Data Health', text: dhText + extra, state: 'attn',
+        href: (topH.id === 'rollforward') ? ('inventory-account-rollforward.html?company=' + encodeURIComponent(co)) : null });
+    } else {
+      chips.push({ key: 'work', label: 'Data Health', text: 'Clean — every accuracy check passes', state: 'clean', href: null });
+    }
+    if (!txStats || !txStats.warm) {
+      chips.push({ key: 'txvar', label: 'Transaction Variance', text: _analystTxWarmFailed ? 'Couldn’t check just now' : 'Checking…', state: 'wait', href: null });
+    } else {
+      var top = txStats.top, s = top && txStats.byMod[top];
+      if (s && s.current >= 1) {
+        chips.push({ key: 'txvar', label: 'Transaction Variance', text: top + ' ' + _ccyAmt(ccy, s.current) + ' this period' + (s.recur > 1 ? ' · recurs' : ''), state: 'attn', href: null });
+      } else {
+        chips.push({ key: 'txvar', label: 'Transaction Variance', text: txStats.n ? 'Clean — nothing actionable this period' : 'No variance in scope', state: 'clean', href: null });
+      }
+    }
+    var cx = _analystCardexSummary(co);
+    if (!cx.warm && cx.blocked) {
+      chips.push({ key: 'reports', label: 'Cardex', text: cx.blocked === 'na' ? 'Not available for this install' : 'Couldn’t check just now', state: 'wait', href: null });
+    } else if (!cx.warm) {
+      chips.push({ key: 'reports', label: 'Cardex', text: 'Checking…', state: 'wait', href: null });
+    } else if (cardexIsOff(co, cx.qtyMag, cx.amtMag, cx.n)) {
+      // Magnitude decides; the SIGNED net is what's shown — plus the gross when the
+      // net alone would read clean (offsetting items), so "2 items off · $0" can't happen.
+      var cxAmtText = _ccyAmt(ccy, cx.amt) + (cardexNetMasks(co, cx.amt, cx.amtMag) ? (' net · gross ' + _ccyAmt(ccy, cx.amtMag)) : '');
+      chips.push({ key: 'reports', label: 'Cardex', text: cx.n + ' item' + (cx.n === 1 ? '' : 's') + ' off · ' + cxAmtText, state: 'attn', href: null });
+    } else {
+      chips.push({ key: 'reports', label: 'Cardex', text: 'Clean — on-hand ties to the cardex', state: 'clean', href: null });
+    }
+    return chips;
+  }
+  function _analystRenderBriefChips(chips) {
+    var host = $('analystDayBriefChips'); if (!host) return;
+    host.innerHTML = chips.map(function (c) {
+      var tag = c.href ? 'a' : 'button';
+      var attrs = c.href ? ('href="' + esc(c.href) + '"') : ('type="button" data-alh-chip="' + esc(c.key) + '"');
+      return '<' + tag + ' class="alh-chip alh-chip-' + c.state + '" data-chip="' + esc(c.key) + '" ' + attrs + '>'
+        + '<span class="alh-chip-top"><span class="alh-chip-label">' + esc(c.label) + '</span><span class="alh-chip-go" aria-hidden="true">→</span></span>'
+        + '<span class="alh-chip-text">' + esc(c.text) + '</span>'
+        + '</' + tag + '>';
+    }).join('');
+    host.hidden = false;
+    if (!host._wired) {
+      host._wired = true;
+      host.addEventListener('click', function (e) {   // chip → its tab (href chips navigate natively to the corrective page)
+        var b = e.target && e.target.closest ? e.target.closest('[data-alh-chip]') : null; if (!b) return;
+        var k = b.getAttribute('data-alh-chip'); if (k && typeof _setSubView === 'function') _setSubView(k);
+      });
+    }
+  }
+  // The AI lead — one grounded "start here" sentence synthesizing all three
+  // surfaces. AI Off -> deterministic lead (nothing leaves the page). Generation-
+  // guarded + timed fallback. Sends {system, prompt} (never a `level` field — the
+  // gateway 403s it).
+  function _analystBriefLead(gen, co, ccy, scrub, h, txStats) {
+    var bodyEl = $('analystDayBriefBody'); if (!bodyEl) return;
+    var nAttn = (h.attention || []).length;
     var coLabel = scrub ? 'this company' : ('company ' + co);
+    var fallback = nAttn
+      ? ((_ALH_WORDS[nAttn] ? (_ALH_WORDS[nAttn].charAt(0).toUpperCase() + _ALH_WORDS[nAttn].slice(1)) : String(nAttn)) + ' thing' + (nAttn === 1 ? '' : 's') + ' need' + (nAttn === 1 ? 's' : '') + ' you today — start with <b>' + esc((h.attention[0] && h.attention[0].factTitle) || 'the top item') + '</b>.')
+      : ('Everything checks out for ' + esc(coLabel) + ' — nothing needs you today.');
+    var exposure = _recsummaryLevel();
+    if (exposure === 'off') { bodyEl.classList.remove('is-thinking'); bodyEl.innerHTML = fallback; _analystLeadSig = ''; return; }   // deterministic only — no data leaves the page; clear the sig so flipping the tier back on re-runs
     var facts = [];
-    attention.forEach(function (c) { facts.push('NEEDS ATTENTION - ' + c.factTitle + ': ' + c.factDetail); });
-    cleared.forEach(function (c) { facts.push('CLEARED - ' + c.factTitle + ': ' + (c.factDetail || 'clean')); });
-    if (!attention.length) facts.push('Nothing needs attention - every accuracy check is clean.');
-    var prompt = 'You are RapidReconciler AI briefing a JDE inventory-reconciliation analyst on ' + coLabel + ' at the start of their day.\n'
-      + 'These are the ONLY facts you may use (never invent a number, an item, or a check):\n' + facts.join('\n') + '\n'
+    facts.push('COMPANY: ' + (scrub ? 'this company' : ('Co ' + co)) + ' · currency ' + (ccy || 'n/a') + '.');
+    facts.push('== DATA HEALTH ==');
+    (h.attention || []).forEach(function (c) { facts.push('NEEDS ATTENTION - ' + c.factTitle + ': ' + c.factDetail); });
+    (h.cleared || []).forEach(function (c) { facts.push('CLEARED - ' + c.factTitle + ': ' + (c.factDetail || 'clean')); });
+    if (!nAttn) facts.push('All accuracy checks are clean.');
+    facts.push('== TRANSACTION VARIANCE ==');
+    _analystTxFacts(txStats, '', ccy, co, scrub).forEach(function (f) { facts.push(f); });
+    facts.push('== CARDEX (F41021 on-hand vs F4111 cardex; account-blind) ==');
+    _analystCardexFacts(co, ccy, scrub).forEach(function (f) { facts.push(f); });
+    // Signature guard (same idiom as the accountant worklist's _wlCurSig). The
+    // renderer re-enters on every cache warm, sub-view switch and company-names
+    // fetch; without this the finished sentence reverts to "Reading your day…" two
+    // or three times a load and each pass pays for another AI round-trip. The tier
+    // is IN the signature, so flipping tiers still re-asks (required).
+    var sig = exposure + '|' + ((activeDb() && activeDb().n) || '') + '|' + co + '|' + facts.join('~');
+    if (sig === _analystLeadSig) return;   // nothing the lead reads has changed — leave the sentence alone
+    _analystLeadSig = sig;
+    bodyEl.textContent = 'Reading your day…'; bodyEl.classList.add('is-thinking');
+    var sys = _analystDayBriefGrounding();
+    var prompt = 'You are giving a JDE inventory-reconciliation analyst the ONE thing to start with today, across their three surfaces (Data Health, Transaction Variance, Cardex).\n'
+      + 'These are the ONLY facts you may use (never invent a number, an account, an item, or a step):\n' + facts.join('\n') + '\n'
       + (window.RRV8 && RRV8.dataAccessLine ? RRV8.dataAccessLine(exposure) + '\n' : '')
-      + 'Write 1-2 short sentences, UNDER 45 words, in plain analyst English (the reader is JDE-fluent — do not expand acronyms). '
-      + 'If anything needs attention: say how many things, name the biggest one first with its amount, and say which to start with and why. '
-      + 'If nothing needs attention: say so plainly and reassure. No preamble, no greeting, no markdown, no lists.';
+      + 'The three surfaces are shown as clickable chips below your sentence, so DO NOT list all of them. Write ONE lead sentence, UNDER 32 words, in plain analyst English (JDE-fluent reader — do not expand acronyms): name the single highest-priority thing to work FIRST and why, ranked by what is actionable NOW. If nothing is actionable, say so plainly. No preamble, no greeting, no markdown, no lists.';
     var _per = ''; try { _per = (window.RRV8 && RRV8.readSessionScope && RRV8.readSessionScope().period) || ''; } catch (_) {}
-    var _ctxUrl = 'api/v1/ai/explain' + (window.RRV8 && RRV8.aiCtx ? ('?ctx=' + RRV8.aiCtx('datahealth', co, _per)) : '');
-    var timed = setTimeout(function () { if (gen === _analystTaskGen) { bodyEl.classList.remove('is-thinking'); bodyEl.innerHTML = fallback; } }, 12000);
-    rrFetch(_ctxUrl, { method: 'POST', body: { prompt: prompt } }).then(function (r) {
-      if (gen !== _analystTaskGen) return;
+    var _ctxUrl = 'api/v1/ai/explain' + (window.RRV8 && RRV8.aiCtx ? ('?ctx=' + RRV8.aiCtx('daybrief', co, _per)) : '');
+    // Currency check is the SIGNATURE, not `gen`: a benign repaint bumps the
+    // generation but re-enters with the same facts and returns above, so a gen-guarded
+    // reply would be dropped with nothing left to re-ask and the pulse stuck on. The
+    // sig carries tier + DB + company + facts, and resetScopedState clears it, so a
+    // reply that no longer matches what the analyst is looking at still can't paint.
+    var timed = setTimeout(function () { if (sig === _analystLeadSig) { bodyEl.classList.remove('is-thinking'); bodyEl.innerHTML = fallback; } }, 12000);
+    rrFetch(_ctxUrl, { method: 'POST', body: { system: sys, prompt: prompt } }).then(function (r) {
+      if (sig !== _analystLeadSig) return;
       clearTimeout(timed);
       var txt = (r && r.text) ? String(r.text).trim() : '';
       bodyEl.classList.remove('is-thinking');
       if (txt) bodyEl.textContent = txt; else bodyEl.innerHTML = fallback;
     }).catch(function () {
-      if (gen !== _analystTaskGen) return;
+      if (sig !== _analystLeadSig) return;
       clearTimeout(timed);
       bodyEl.classList.remove('is-thinking');
       bodyEl.innerHTML = fallback;
     });
   }
+  // Paint the constant-chrome day-brief (called on every analyst sub-view). Warms
+  // the off-tab tx + cardex caches so the chips can summarize all three surfaces
+  // from any landing; each warm re-renders. Analyst view only.
+  function renderAnalystDayBriefTop(d) {
+    var wrap = $('analystDayBriefTop'); if (!wrap) return;
+    if (_viewRole() !== 'analyst' || !canAnalyst()) { wrap.hidden = true; return; }
+    var cos = (d && d.companies) || [];
+    var co = _ensureAnalystSolo(cos);
+    if (!co) { wrap.hidden = true; return; }
+    wrap.hidden = false;
+    var gen = ++_analystBriefGen;
+    var scrub = _recsummaryLevel() === 'scrubbed';
+    var soloCo = cos.filter(function (c) { return String(c.co) === String(co); })[0] || null;
+    var ccy = (soloCo && soloCo.ccy) || ((d && d.currencies && d.currencies[0]) || '');
+    if (typeof autoWarmCardex === 'function') autoWarmCardex(function () { if (gen === _analystBriefGen) renderAnalystDayBriefTop(_acctData || d); });   // warm cardex → re-render when it lands
+    // Same for transaction variance: its series is only written by the txvar tab, so
+    // an analyst who stays on Data Health would leave that chip on "Checking…" all
+    // session. _txvRows is cached + key-guarded, so this is ONE request per company
+    // per DB, shared with the tab — and the re-render below finds it warm and skips.
+    if (!_analystTxWarmFailed && !_analystTxWarmBusy && !_txVarWarm() && typeof _txvRows === 'function') {
+      _analystTxWarmBusy = true;
+      _txvRows([String(co)]).then(function () {
+        _analystTxWarmBusy = false;
+        if (gen === _analystBriefGen) renderAnalystDayBriefTop(_acctData || d);
+      }).catch(function (e) {
+        _analystTxWarmBusy = false;
+        _analystTxWarmFailed = true;   // terminal — the chip reports it couldn't check
+        console.warn('[home] transaction-variance warm failed — the day-brief chip will report it couldn’t check', e);
+        if (gen === _analystBriefGen) renderAnalystDayBriefTop(_acctData || d);
+      });
+    }
+    _analystGatherHealth(d, co).then(function (hh) {
+      if (gen !== _analystBriefGen) return;
+      var txStats = _analystTxStats();
+      _analystRenderBriefChips(_analystBriefChips(co, ccy, hh, txStats));
+      _analystBriefLead(gen, co, ccy, scrub, hh, txStats);
+    }).catch(function (e) {
+      if (gen !== _analystBriefGen) return;
+      console.warn('[home] day-brief accuracy checks failed to load', e);
+      var bodyEl = $('analystDayBriefBody');
+      if (bodyEl) { bodyEl.classList.remove('is-thinking'); bodyEl.textContent = 'Couldn’t read your accuracy checks just now — reload the page. If it keeps happening, contact your IT department.'; }
+      _analystLeadSig = '';   // nothing was said; let the next good pass speak
+      // ONE explicit failure chip. NEVER fall through to the chip builder with an
+      // empty attention list — that paints "Clean — every accuracy check passes".
+      _analystRenderBriefChips([{ key: 'work', label: 'Data Health', text: 'Couldn’t check just now', state: 'wait', href: null }]);
+    });
+  }
+  // The Data Health tab body: the amber "Needs your attention" rows + the green
+  // "Cleared" rollup. The AI day-brief no longer lives here — it moved above the tab
+  // strip as constant chrome (renderAnalystDayBriefTop), summarizing all three tabs.
   function _analystLandingScaffold() {
     return ''
-      + '<div class="alh-brief" id="analystDayBrief">'
-      +   '<div class="alh-brief-eyebrow"><span class="alh-brief-spark" aria-hidden="true">✦</span> RapidReconciler AI · Here’s your day</div>'
-      +   '<p class="alh-brief-body">Reading your day…</p>'
-      + '</div>'
       + '<div class="alh-attn" id="analystAttnWrap" hidden></div>'
       + '<div class="alh-explained" id="analystExplainedWrap" hidden></div>'
       + '<div class="alh-clr" id="analystClearedWrap" hidden></div>';
@@ -8843,20 +9288,25 @@
     host.innerHTML = _analystLandingScaffold();
     _ensureAlhDiscWired();
     _wireAnalystIntgView(host);
-    Promise.all([
-      _analystRollForwardCheck(d, co),
-      _analystModelCheck(d, co),
-      _analystIntegrityCheck(host, 'uom', 'UOM Conversion', co, 6),
-      _analystIntegrityCheck(host, 'frozen', 'Frozen Cost', co, 7),
-      _analystIntegrityCheck(host, 'glclass', 'GL-Class', co, 3)
-    ]).then(function (checks) {
+    // Shared gather (same request set as the day-brief above the strip). Re-stash
+    // each integrity check's rows onto THIS host so the "View" modal reads the
+    // current set. The AI day-brief is painted by renderAnalystDayBriefTop now.
+    _analystGatherHealth(d, co).then(function (hh) {
       if (gen !== _analystTaskGen) return;   // superseded — drop this paint
-      var attention = checks.filter(function (c) { return c && c.state === 'attention'; })
-        .sort(function (a, b) { return (a.prio || 0) - (b.prio || 0); });
-      var cleared = checks.filter(function (c) { return c && c.state === 'clean'; });
-      var explained = [];   // SEAM: no classifier signal for explained/no-action variance yet
-      _analystRenderChecks(host, gen, attention, cleared, explained);
-      _analystDayBrief(gen, co, attention, cleared);
+      hh.checks.forEach(function (c) { if (c && c.rows && c.rows.length) host._alhIntg[c.id] = { co: co, title: c.title, rows: c.rows }; });
+      _analystRenderChecks(host, gen, hh.attention, hh.cleared, []);   // explained: no classifier signal yet (SEAM)
+    }).catch(function (e) {
+      if (gen !== _analystTaskGen) return;   // superseded — drop this paint
+      console.warn('[home] Data Health checks failed to load', e);
+      var attnWrap = document.getElementById('analystAttnWrap');
+      if (!attnWrap) return;
+      attnWrap.hidden = false;
+      attnWrap.innerHTML = '<div class="alh-item">'
+        + '<span class="alh-item-warn" aria-hidden="true">▲</span>'
+        + '<span class="alh-item-line"><span class="alh-item-t">Accuracy checks</span>'
+        + '<span class="alh-item-sep" aria-hidden="true">·</span>'
+        + '<span class="alh-item-d">Couldn’t run just now — reload the page. If it keeps happening, contact your IT department.</span></span>'
+        + '</div>';
     });
   }
   // ----- Scope banner + single-of company selector (analyst Workspace) -----
@@ -8928,7 +9378,7 @@
   // big `total` but `current` ~0 is likely RESOLVED, not a target. `top` is the
   // biggest CURRENT variance (what's happening now), not the biggest historically.
   function _analystTxStats() {
-    var series = _txVarCache.amt || [];
+    var series = _txVarWarm() ? (_txVarCache.amt || []) : [];   // key-checked: never the prior DB's series
     var curPeriods = (_txVarContext && _txVarContext.current && _txVarContext.current.length)
       ? _txVarContext.current : (series.length ? [series[series.length - 1].period] : []);
     var curSet = {}; curPeriods.forEach(function (p) { curSet[p] = 1; });
@@ -8939,7 +9389,7 @@
     });
     var rankedCurrent = _TXV_MODS.slice().filter(function (m) { return byMod[m].current >= 1; }).sort(function (a, b) { return byMod[b].current - byMod[a].current; });
     var rankedAll     = _TXV_MODS.slice().filter(function (m) { return byMod[m].total   >= 1; }).sort(function (a, b) { return byMod[b].total   - byMod[a].total;   });
-    return { n: series.length, byMod: byMod, curPeriods: curPeriods, rankedCurrent: rankedCurrent, rankedAll: rankedAll, top: rankedCurrent[0] || null };
+    return { n: series.length, byMod: byMod, curPeriods: curPeriods, rankedCurrent: rankedCurrent, rankedAll: rankedAll, top: rankedCurrent[0] || null, warm: _txVarWarm() };
   }
   // Facts for AI grounding — the ONLY facts the model may use. Marks current vs
   // total per category so the model can tell live issues from resolved ones.
@@ -8952,11 +9402,12 @@
       var s = stats.byMod[m];
       f.push('  ' + m + ': current ' + _ccyAmt(ccy, s.current) + (s.current < 1 ? ' (CLEAN now — resolved, do not act)' : '') + '; recurs in ' + s.recur + ' of ' + stats.n + ' periods — recurrence flags an unfixed root cause (fix the source), but only the current amount is actionable.');
     });
-    if (!stats.rankedAll.length) f.push('  (no material variance in any category)');
+    // Cold/failed series must not read as "clean" — an empty series is unknown, not zero.
+    if (!stats.rankedAll.length) f.push(stats.warm ? '  (no material variance in any category)' : '  (TRANSACTION VARIANCE NOT LOADED — do not state it is clean and do not cite a figure)');
     // (Client-side period-mismatch detection removed — 5.14 is server-side
     // authoritative, not a naive TransDate-vs-PeriodEnds month compare.)
     if (focusPeriod) {
-      var fs = (_txVarCache.amt || []).filter(function (x) { return x.period === focusPeriod; })[0];
+      var fs = (_txVarWarm() ? (_txVarCache.amt || []) : []).filter(function (x) { return x.period === focusPeriod; })[0];   // key-checked — this feeds the AI prompt
       if (fs) f.push('Analyst is focused on ' + fmtPeriod(focusPeriod) + ': ' + (_TXV_MODS.filter(function (m) { return fs.seg[m] >= 1; }).map(function (m) { return m + ' ' + _ccyAmt(ccy, fs.seg[m]); }).join(', ') || 'nothing material') + '.');
     }
     return f;
@@ -8973,17 +9424,28 @@
   // Cardex-variance facts from the warmed worklist (F41021 on-hand vs F4111 cardex) for the
   // scoped company — so a cardex question is grounded in the REAL figures, not the tx feed.
   function _analystCardexFacts(co, ccy, scrub) {
-    var rows = [];
-    try { var o = JSON.parse(sessionStorage.getItem(cardexCacheKey()) || 'null'); if (o && Array.isArray(o.payload)) rows = o.payload; } catch (_) {}
-    var scoped = rows.filter(function (r) { return String(r.CompanyNumber) === String(co) && String(r.Reason || '').trim() !== 'Reset:'; });
-    var qty = 0, amt = 0, items = {};
-    scoped.forEach(function (r) { qty += Number(r.AdjQty) || 0; amt += Number(r.AdjAmount) || 0; if (r.ItemID != null) items[r.ItemID] = 1; });
+    var cxr = _cardexRead(co);   // loaded = a SUCCESSFUL parse — a truncated cache must not report "none material"
+    var scoped = cxr.rows.filter(function (r) { return String(r.CompanyNumber) === String(co) && String(r.Reason || '').trim() !== 'Reset:'; });
+    // Signed net for the figure the analyst reconciles to, magnitude for the
+    // "is it material?" decision — see _analystCardexSummary. A signed test told the
+    // model "none material" for a company whose detail page listed offsetting rows.
+    var qty = 0, amt = 0, qtyMag = 0, amtMag = 0, items = {};
+    scoped.forEach(function (r) {
+      var q = Number(r.AdjQty) || 0, a = Number(r.AdjAmount) || 0;
+      qty += q; amt += a;
+      qtyMag += Math.abs(q); amtMag += Math.abs(a);
+      if (r.ItemID != null) items[r.ItemID] = 1;
+    });
     var n = Object.keys(items).length;
     var f = ['Company: ' + (scrub ? 'Entity A' : ('Co ' + co)) + ' · currency ' + (ccy || 'n/a') + '.'];
-    if (!n || (Math.abs(qty) < 0.05 && Math.abs(amt) < 0.005)) {
-      f.push('CURRENT CARDEX VARIANCE: none material — on-hand ties to the cardex for every item in scope.');
+    if (!cxr.loaded) {
+      f.push('CARDEX: NOT LOADED — the cardex figures could not be read. Do not state that the cardex is clean and do not cite a cardex figure.');
+      return f;
+    }
+    if (!cardexIsOff(co, qtyMag, amtMag, n)) {
+      f.push('CURRENT CARDEX VARIANCE: none material — on-hand ties to the cardex for every item in scope, within this company’s materiality tolerance.');
     } else {
-      f.push('CURRENT CARDEX VARIANCE (this company, actionable now): ' + n + ' item' + (n === 1 ? '' : 's') + ' off — quantity variance ' + (Math.round(qty * 100) / 100) + ' units; amount variance ' + _ccyAmt(ccy, amt) + '.');
+      f.push('CURRENT CARDEX VARIANCE (this company, actionable now): ' + n + ' item' + (n === 1 ? '' : 's') + ' off — quantity variance ' + (Math.round(qty * 100) / 100) + ' units net, ' + (Math.round(qtyMag * 100) / 100) + ' units gross; amount variance ' + _ccyAmt(ccy, amt) + ' net, ' + _ccyAmt(ccy, amtMag) + ' gross. Items offset each other, so the NET can be near zero while items are genuinely off — never call the cardex clean off the net alone.');
     }
     return f;
   }
@@ -9055,8 +9517,11 @@
     // single-company transaction-variance chart into the top row.
     renderAnalystScope(d);
     renderPeriodWidget();
-    // Data health leads with its OWN AI day-brief (in #analystWorklist), so hide the
-    // shared top row (AI Ask card + period chart) on that tab; the other tabs keep it.
+    // The AI day-brief is constant chrome ABOVE the tab strip now
+    // (renderAnalystDayBriefTop), synthesizing all three tabs. On the Data Health tab
+    // we still hide the shared Ask card + period chart (the brief + health rows carry
+    // the tab); the analytical tabs keep them below the brief.
+    renderAnalystDayBriefTop(d);
     var _at = $('acctTop'); if (_at) _at.hidden = (sv === 'work');
     // Tools card moved to the Reports tab "for now" — relocate it into the reports
     // palette once (renderReportsPalette never rewrites the palette's innerHTML),
@@ -9092,13 +9557,18 @@
     // the closed row + drop it from the card/container totals. Keyed co|item|branch.
     var _cxCleared = (function () { try { var db = (window.RRDB && RRDB.name && RRDB.name()) || '_'; return JSON.parse(localStorage.getItem('rrv8.cardex.cleared.v1.' + db) || '{}') || {}; } catch (_) { return {}; } })();
     function _cxIsClosed(item, branch) { return !!_cxCleared[[String(solo || ''), String(item || '').trim().toLowerCase(), String(branch || '').trim().toLowerCase()].join('|')]; }
-    var rows = [];
-    try { var o = JSON.parse(sessionStorage.getItem(cardexCacheKey()) || 'null'); if (o && Array.isArray(o.payload)) rows = o.payload; } catch (_) {}
+    var cxr = _cardexRead(solo);
+    var rows = cxr.rows;
     // Warm if cold AND repaint when the (heavy, async) fetch lands — without the
     // callback these tab cards stay on the stale/empty cache until a manual reload,
     // while the sibling summary cards (which pass a cb) fill in. The autoWarmCardex
     // _cardexAutoTried guard stops any re-render loop when the DB is genuinely clean.
-    if (typeof autoWarmCardex === 'function' && !rows.length) autoWarmCardex(function () { renderCardexCards(d); });   // warm if cold, then repaint
+    if (typeof autoWarmCardex === 'function' && !cxr.loaded) {
+      autoWarmCardex(function () {   // role + sub-view guarded like renderCardexHeadline: don't repaint a tab the analyst has left
+        if (typeof _viewRole === 'function' && _viewRole() === 'analyst'
+            && typeof _curSubView === 'function' && _curSubView() === 'reports') renderCardexCards(_acctData || d);
+      });
+    }
     var co = encodeURIComponent(String(solo || ''));
     var money = function (v) { return '$' + Math.round(v).toLocaleString('en-US'); };
     var n2 = function (v) { return (Math.round(v * 100) / 100).toLocaleString('en-US', { maximumFractionDigits: 2 }); };
@@ -9243,8 +9713,15 @@
         + '<th>Item</th><th>Branch</th><th>Method</th><th class="num">Qty Var</th><th class="num">Amt Var</th><th>Cleared By</th><th>When</th>'
         + '</tr></thead><tbody>' + body + '</tbody></table></details>';
     }
-    var latestP = '';   // cardex is a current snapshot → the perpetual-details link always uses the latest period
-    (_invRows || []).forEach(function (r) { var p = String(r.PeriodEnds || '').slice(0, 10); if (p && p > latestP) latestP = p; });
+    // Cardex is a current snapshot → the perpetual-details link always uses the latest
+    // period. Scoped to THIS company: an unscoped scan takes the newest period across
+    // every company the user can see, and on a multi-company install where companies
+    // close on different cadences that hands As-Of a period this company has no rows in.
+    var latestP = '';
+    (_invRows || []).forEach(function (r) {
+      if (String(_coOf(r)) !== String(solo)) return;
+      var p = String(r.PeriodEnds || '').slice(0, 10); if (p && p > latestP) latestP = p;
+    });
     var perQ = latestP ? '&period=' + encodeURIComponent(latestP) : '';
     var _cxBody = container('Standard Cost', 'std') + container('Average / Revaluing Cost', 'avg');
     var _cxCoName = (_coNames && _coNames[String(solo).trim()]) || '';
@@ -9254,7 +9731,13 @@
       + '<div class="acct-snap-titlestack"><span class="acct-snap-title">Cardex Variance Framework</span>'
       +   '<span class="acct-snap-period">expand a card, click an item to sync it</span></div>'
       + '<a class="cx-fw-details cx-fw-details-r" href="inventory-asof.html?company=' + co + perQ + '">Full details &rarr;</a></div>'
-      + (_cxBody || '<div class="cx-fw-clean">No material cardex variance in scope &mdash; inventory reconciles to GL for Co ' + esc(String(solo || '')) + '.</div>')
+      // An unparsed cardex cache is UNKNOWN, not clean: an empty `rows` off a cold,
+      // failed, or truncated entry used to render the "inventory reconciles to GL"
+      // all-clear, which declares the company variance-free on nothing. Only a
+      // LOADED-and-empty read earns that line.
+      + (!cxr.loaded
+          ? ('<div class="cx-fw-clean">' + esc(_cardexUnreadText(cxr)) + '</div>')
+          : (_cxBody || '<div class="cx-fw-clean">No material cardex variance in scope &mdash; inventory reconciles to GL for Co ' + esc(String(solo || '')) + '.</div>'))
       + clearedList();
     if (!host._cxWired) {   // delegated once; survives innerHTML repaints (listener is on host)
       host._cxWired = true;
@@ -9429,11 +9912,13 @@
   // B->C / deploys never appear here). Extensible: a new trigger just maps to one
   // actor and (ideally) a detailsHref. More triggers get added as the processes grow.
   var AUDIT_ACTORS = { analyst: 'Analyst', accountant: 'Accountant' };
-  var _txvCodeName = {
-    ACCT: 'Account mismatch', PER: 'Period timing', MTO: 'Make-to-order', ICO: 'Intercompany',
-    TRF: 'Transfer', DS: 'Direct ship', 'T-SALES': 'Sales', 'T-PURCH': 'Purchasing',
-    'T-MFG': 'Manufacturing', 'T-INV': 'Inventory'
-  };
+  // Card code → display name for an Audit Center row. Reads the SHARED taxonomy so a
+  // newly added card is named here automatically — this map used to be a third
+  // hand-kept copy of the code list and had gone stale (VCHR / DUP / TXI / CNJ were
+  // missing), so a resolved Transfer Integrity card showed as the bare code "TXI".
+  function _txvCodeName(code) {
+    return ((window.RRV8 && RRV8.txv) ? RRV8.txv.title(code) : '') || '';
+  }
   // An /admin/activity row → an ACCOUNTANT transaction, but ONLY if it's a
   // reconciliation COMPLETION (attest / sign-off / journal entry / balancing /
   // adjusting / period close). Everything else on that feed — loads, B->C, deploys,
@@ -9494,11 +9979,14 @@
   function _auditFromCard(rec) {
     var st = String((rec && rec.status) || '').toLowerCase();
     if (st !== 'complete') return null;
-    var nm  = _txvCodeName[rec.cardCode] || rec.cardCode || 'Variance';
+    var nm  = _txvCodeName(rec.cardCode) || rec.cardCode || 'Variance';
     var amt = (rec.varAmount != null && !isNaN(rec.varAmount)) ? Number(rec.varAmount) : null;
     var msg = rec.note || '';   // sourceFix now carries the resolution TYPE, not message text
+    // Built through the ONE href builder so this link carries the same contract as
+    // the card's own "Open in worklist" (a hand-rolled twin is how params drift).
+    // No expect= here: a stored resolution record has no live row count to tie out.
     var href = (rec.company && rec.cardCode && rec.periodEnd)
-      ? ('inventory-transactions.html?company=' + encodeURIComponent(rec.company) + '&card=' + encodeURIComponent(rec.cardCode) + '&period=' + encodeURIComponent(rec.periodEnd))
+      ? _txvTxHref(rec.company, { card: rec.cardCode, period: String(rec.periodEnd).slice(0, 10) })
       : '';
     return {
       actor: 'analyst', trigger: 'Transaction variance resolved', title: nm,
@@ -10071,10 +10559,16 @@
   function fetchJeAiSummary() {
     var el = $('jeAiSummary'); if (!el || !_jeSummary.length || typeof rrFetch !== 'function') return;
     var tag = '<span class="ws-ai-summary-tag"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 1.6l1.9 5.1a5 5 0 0 0 2.9 2.9l5.1 1.9-5.1 1.9a5 5 0 0 0-2.9 2.9L12 21.4l-1.9-5.1a5 5 0 0 0-2.9-2.9L2.1 11.5l5.1-1.9a5 5 0 0 0 2.9-2.9z"/></svg>RapidReconciler AI</span>';
-    var lines = _jeSummary.map(function (c) {
+    // Scrubbed ("Enhanced") means no real identifier reaches the model — the SAME
+    // Entity-letter transform _acctFactLines / _auditCoSummary / renderAiBriefing
+    // apply. This surface only gated 'off', so the real company number went out at
+    // Scrubbed too: a masked tier that silently didn't mask.
+    var _jeScrub = (typeof _recsummaryLevel === 'function') && _recsummaryLevel() === 'scrubbed';
+    var lines = _jeSummary.map(function (c, i) {
       var parts = (c.comps || []).filter(function (p) { return Math.abs(p[1]) >= 1; })
         .map(function (p) { return p[0] + ' ' + _jeAmt(p[1]); }).join(', ');
-      return 'Co ' + c.co + ' (' + (c.currency || '?') + '): net to clear ' + _jeAmt(c.net)
+      var label = _jeScrub ? ('Entity ' + String.fromCharCode(65 + (i % 26))) : ('Co ' + c.co);
+      return label + ' (' + (c.currency || '?') + '): net to clear ' + _jeAmt(c.net)
         + '. Components: ' + (parts || 'none material') + '. Largest component: ' + c.driver + '.';
     });
     var prompt = (window.RRV8 && RRV8.ACCT_GROUNDING ? RRV8.ACCT_GROUNDING + '\n\n' : '')
@@ -11091,12 +11585,11 @@
     return 'Process note: transactions (' + _ccyAmt(c.ccy, tx) + ') and manual entries (' + _ccyAmt(c.ccy, me)
       + ') nearly cancel — the manual journal entries offsetting this period\'s unmatched inventory transactions were posted, so this period\'s activity is fully reflected in the GL and the remaining out-of-balance is prior-period carry-forward.';
   }
-  // UI-17 near-zero / dormant materiality floors (owner call 2026-07-07): an
-  // out-of-balance below MAT_OOB_FLOOR is immaterial regardless of %, and a GL
-  // balance below DORMANT_GL_FLOOR is "dormant" — a % of a ~0 balance is
-  // meaningless (a $3 gap reads as an alarming 100%), so we frame by absolute
-  // amount and suppress the %.
-  var MAT_OOB_FLOOR = 100, DORMANT_GL_FLOOR = 1000;
+  // (MAT_OOB_FLOOR / DORMANT_GL_FLOOR now live up by _briefLevel. They used to be
+  // declared right here, thousands of lines BELOW their first read: hoisting made
+  // the identifiers exist but left them undefined until this point in the script
+  // ran, and `Math.abs(x) >= undefined` is false — i.e. every account would read
+  // silently "in balance". Keep the declaration above its first reader.)
   function _wlMateriality(c) {
     var bal = Math.abs(c.glBal || 0), oob = Math.abs(c.oob || 0);
     var pct = bal > 0 ? (oob / bal) * 100 : 0;
@@ -11847,20 +12340,35 @@
     _aiRenderDocStrip(ans && ans.parentNode, [], 'acctDocStrip');
     if (!top) { _acctAnalyzeCache[key] = lead; return; }   // in balance — no AI call needed
     // Account-level facts — grounds the read in the exact rows now on screen.
-    var facts = ['Company Co ' + co + ' (' + (c.ccy || '?') + '): net out of balance ' + (m.nearZero ? _wlExact(c.ccy, c.oob) + ' — immaterial by amount' + (m.dormant ? ' (dormant / near-zero balance; do NOT express as a % of the balance)' : '') : _ccyAmt(c.ccy, c.oob) + ' = ' + m.pctStr + ' of the ' + _ccyAmt(c.ccy, c.glBal) + ' GL balance') + '.'
+    // TIER TRANSFORM: this surface only gated 'off', so the real company number,
+    // real long-account numbers, AND the F0910 account descriptions went to the
+    // model at Scrubbed ("Enhanced") too — a masked tier that silently didn't mask.
+    // Scrubbed now uses a generic company label and POSITIONAL account labels
+    // (Account A, B, C … biggest gap first), so the answer can still name the
+    // driving account without emitting an identifier. Grounded keeps the real
+    // identifiers by design: it is limited to what is already on the analyst's own
+    // screen (same rule as renderAiBriefing's coLabel).
+    var _aaScrub = tier === 'scrubbed';
+    var _coLbl = _aaScrub ? 'this company' : ('Co ' + co);
+    var _acctLbl = function (r, i) {
+      if (_aaScrub) return 'Account ' + String.fromCharCode(65 + (i % 26));
+      var nm = nameOf(r);
+      return r.LongAccount + (nm ? ' ' + nm : '');
+    };
+    var facts = ['Company ' + _coLbl + ' (' + (c.ccy || '?') + '): net out of balance ' + (m.nearZero ? _wlExact(c.ccy, c.oob) + ' — immaterial by amount' + (m.dormant ? ' (dormant / near-zero balance; do NOT express as a % of the balance)' : '') : _ccyAmt(c.ccy, c.oob) + ' = ' + m.pctStr + ' of the ' + _ccyAmt(c.ccy, c.glBal) + ' GL balance') + '.'
       + ((c.breaks || 0) > 0 ? ' This company has a roll-forward BREAK (analyst re-roll, not a journal entry).' : '')];
     facts.push('Out-of-balance accounts (biggest gap first) — account: Out (Ending GL vs Perpetual):');
-    outA.slice(0, 12).forEach(function (r) {
-      var nm = nameOf(r), brk = String(r.GLOK).trim().toLowerCase() === 'no' || String(r.VarOK).trim().toLowerCase() === 'no';
+    outA.slice(0, 12).forEach(function (r, i) {
+      var brk = String(r.GLOK).trim().toLowerCase() === 'no' || String(r.VarOK).trim().toLowerCase() === 'no';
       var rec = _oobRecurrence(co, r.LongAccount);
       var recTxt = rec ? '; out in ' + rec.outN + ' of the last ' + rec.of + ' periods' + (rec.chronic ? ' (RECURRING)' : rec.oneOff ? ' (first appearance / one-off)' : ' (intermittent)') : '';
-      facts.push('  ' + r.LongAccount + (nm ? ' ' + nm : '') + ': out ' + _ccyAmt(c.ccy, Number(r.OOB) || 0)
+      facts.push('  ' + _acctLbl(r, i) + ': out ' + _ccyAmt(c.ccy, Number(r.OOB) || 0)
         + ' (Ending GL ' + _ccyAmt(c.ccy, Number(r.EndGL) || 0) + ' vs Perpetual ' + _ccyAmt(c.ccy, Number(r.Perpetual) || 0) + ')' + (brk ? ' [roll-forward BREAK on this account]' : '') + recTxt);
     });
     if (outA.length > 12) facts.push('  …and ' + (outA.length - 12) + ' more smaller out-of-balance accounts.');
     var _sig = db + '|' + (per || '') + '|' + ((d.companies || []).map(function (x) { return x.co; }).join(','));
     var prompt = (window.RRV8 && RRV8.ACCT_GROUNDING ? RRV8.ACCT_GROUNDING + '\n\n' : '')
-      + 'You are RapidReconciler AI, sitting beside an accountant who just opened Co ' + co + '\'s account roll-forward (the "Accounts" tab) for ' + fmtPeriod(per) + ' to see the detail behind its out-of-balance.\n'
+      + 'You are RapidReconciler AI, sitting beside an accountant who just opened ' + _coLbl + '\'s account roll-forward (the "Accounts" tab) for ' + fmtPeriod(per) + ' to see the detail behind its out-of-balance.\n'
       + 'The roll-forward is Beginning + Activity = Ending GL, compared to Perpetual (RR\'s inventory valuation); the gap is Out of balance. Judge materiality by the out-of-balance as a share of the GL balance — well under ~1% is immaterial timing/dust. A "roll-forward break" on an account is an analyst re-roll, NOT a journal entry. Never add accounts together beyond the stated company net, and never cite a number larger than that net.\n'
       + 'Facts — the ONLY facts you may use:\n' + facts.join('\n') + '\n'
       + 'Recurrence: some account lines show how many of the last several periods that account was out of balance. An account out in NEARLY EVERY recent period is RECURRING — a journal entry only clears it this period, so the durable fix is at the source (an analyst source-data or account-configuration fix); frame it that way rather than implying a monthly journal entry. An account out for the FIRST time is a one-off to book or accept. Cite a recurrence count only when it changes what you would advise, and use ONLY the counts stated above.\n'
@@ -11956,7 +12464,15 @@
     // status rather than guesses.
     var tasks = (typeof _adminBriefTasks === 'function') ? _adminBriefTasks() : [];
     var taskLines = tasks.map(function (t) {
-      var tag = t.level === 'attention' ? '[NEEDS ATTENTION]' : t.level === 'watch' ? '[REVIEW]' : '[OK]';
+      // _cardLevel returns '' for a GREY dot, which means UNKNOWN — the card's
+      // loader is still in flight, or its endpoint never answered. The old
+      // else-branch tagged that [OK], so a card that was never checked reached the
+      // model as a CLEARED fact and "is my instance healthy?" answered yes off
+      // nothing. Only a green dot is [OK]; grey says it wasn't checked.
+      var tag = t.level === 'attention' ? '[NEEDS ATTENTION]'
+              : t.level === 'watch'     ? '[REVIEW]'
+              : t.level === 'ok'        ? '[OK]'
+              :                           '[NOT CHECKED]';
       return tag + ' ' + t.title + (t.sub ? ': ' + t.sub : '');
     });
     var expNote = tier === 'grounded'
@@ -12012,8 +12528,9 @@
     var grounding = (window.RRV8 && window.RRV8.ADMIN_GROUNDING) ? window.RRV8.ADMIN_GROUNDING + '\n\n' : '';
     var prompt = 'You are RapidReconciler AI, answering an Administrator\'s question about their RapidReconciler install.\n'
       + grounding
-      + 'Current status of this admin console — each item tagged [NEEDS ATTENTION], [REVIEW], [INFORMATIONAL], or [OK] — is the live state of the install:\n'
-      + (taskLines.length ? taskLines.join('\n') : '(no admin status reported yet)') + '\n\n'
+      + 'Current status of this admin console — each item tagged [NEEDS ATTENTION], [REVIEW], [INFORMATIONAL], [OK], or [NOT CHECKED] — is the live state of the install:\n'
+      + (taskLines.length ? taskLines.join('\n') : '(no admin status reported yet)') + '\n'
+      + '[NOT CHECKED] means that area has not reported its status yet — it is UNKNOWN, not clear. NEVER describe a [NOT CHECKED] item as fine, healthy, clear, or in order, and never count it toward an all-clear. If the question asks whether everything is in order, name the areas that have not reported yet and say their status is unknown.\n\n'
       + expNote + '\n'
       + 'Question: ' + q + '\n'
       + 'Answer in 2-4 short, plain-English sentences — or up to 4 brief bullets, each starting with "• ", if the question asks for a list. Calm and factual, never alarmist. Answer how-to and procedure questions from the admin policy above, and any statement about current state ONLY from the status above; if the answer is in neither, say what you can see and where to look. No JDE table names, no SQL, no endpoint or file names, no preamble, no headings, no markdown, no asterisks, no bold.\n'
@@ -12229,6 +12746,9 @@
     _analystSoloCo = null;      // analyst single-company scope — re-resolve per new DB (its own
                                 // rrv8.analystCompany.<db>), never carry the prior DB's company across.
     _acctGlScopeCo = null;      // accountant single-company scope — same: re-resolve per new DB.
+    _jeOffsets = {};            // typed offset accounts in the GL grid — keyed per DB, and cleared
+                                // here too so a mid-session switch can't carry one install's offset
+                                // account into another install's adjusting entry.
     var _ap = $('acctPanels'); if (_ap) _ap.hidden = true;   // accountant panels repaint when the new DB's roll-forward loads
     _cardexTol = {};            // per-company cardex materiality tolerances (DB A's must never judge DB B)
     _invLightFromData = false;  // re-arm the /inventory/status validation fallback for the new DB
@@ -12236,6 +12756,14 @@
     _svcMem = null;             // service-health memory snapshot (per Services instance)
     _rcdxPreview = null;        // cached cardex eod-check — clear so a mid-switch repaint can't use the prior DB's
     _pvCache = {}; _txMatrix = null; _txKey = null;   // variance-source + transactions drill-down caches (per-DB scoped)
+    // Analyst caches. The DB switch repaints in place, so anything the brief / chips
+    // read must go with it or the new DB inherits the old one's answers.
+    _txVarCache = { key: null, amt: null, cnt: null };   // variance-by-period series
+    _txVarReqKey = null; _txVarContext = null;           // in-flight request key + the current/historical split fed to AI
+    _analystHealthCache = { key: null, promise: null };  // shared accuracy-check gather (keyed db|co|rowcount)
+    _analystTxWarmFailed = false; _analystTxWarmBusy = false;   // re-arm the off-tab tx warm for the new DB
+    _analystLeadSig = '';                                // the AI lead's currency check — a reply for the prior DB must not land
+    _analystBriefGen++; _analystTaskGen++; _txvGen++;     // supersede any in-flight analyst paint
     _auditDetail = null; _auditDetailKey = null;      // audit-report detail cache (per-DB scoped)
     _coNames = null; _coNamesTried = false;           // company display names (per-DB scoped)
     _acctNames = null; _acctNamesKey = null;           // account descriptions (per-DB / per-period)
