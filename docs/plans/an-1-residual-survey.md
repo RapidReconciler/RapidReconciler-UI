@@ -21,6 +21,17 @@ Two cautions on the table before anyone acts on it:
   not that a JE is owed. Several of the biggest clusters are fixed at source
   (repost via R31802A, re-mine decimals, re-roll cardex), not with a journal
   entry.
+
+  > SUPERSEDED 2026-08-03: "repost via R31802A" is a fabrication and has since
+  > been removed from the classifier, the analyst guide, the AI grounding, the UI
+  > copy and the analyzer engine. There is no repost. A completion reaches F4111
+  > with no batch number and no G/L date, and R31802A stamps the batch and writes
+  > the F0911 journal entries in the same step, so a batch on the row means the
+  > program already ran. The same run resets Unaccounted Units, which are what
+  > drive its selection, so it cannot pick the transaction up a second time. The
+  > rest of the bullet stands: the source-fix-not-a-JE point holds, and re-mine
+  > decimals and re-roll cardex are unaffected. Current text: usp8_txv_flags
+  > block "-- D." and AnalysisGuides/manufacturing-accounting-flow.md.
 - Demo3's 11.5M abs is misleading. About 96% of it is a single data defect (a
   100x decimal-scaling mismatch), not 1,860 pieces of analyst work. See the Demo3
   section. Treat that number as "one config fix worth 11M," not "11M of residual
@@ -68,6 +79,14 @@ Clusters and candidate actions:
   rows lands in the generic Mfg bucket. Corrective action: investigate standard
   versus actual completion cost and repost via R31802A. Nameable. This is the
   single largest reclaim in Demo1 at 54.5% of abs $.
+
+  > SUPERSEDED 2026-08-03: strike "and repost via R31802A" from the corrective
+  > action. Investigating standard versus actual completion cost still stands;
+  > the repost does not exist. A batch on the cardex row means R31802A already
+  > stamped it and wrote the F0911 entries in the same step, and that same run
+  > cleared the unaccounted units its selection depends on, so it cannot
+  > reprocess the transaction. See usp8_txv_flags block "-- D." for the current
+  > reasoning.
 - **Sales shipment not journaled (cardex-only, RI).** 134 rows, 241,516 abs.
   Inventory was relieved on the cardex (RI, batchtype IB) with no GL leg. Order
   types span SI, CW, CO, C2. This is the sales-side mirror of CNJ: the shipment

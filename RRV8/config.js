@@ -474,15 +474,22 @@ window.RRV8 = window.RRV8 || {};
   window.RRV8.ANALYST_GROUNDING = [
     'ANALYST POLICY (transaction variance) — reason from these rules:',
     '- A transaction variance reconciles ONE document: F4111 (item ledger / cardex) extended value vs F0911 (GL / ledger) for the SAME document and account. Variance = cardex − ledger for that document. Explain each document on its own terms.',
-    '- Check DUPLICATE SALES FIRST — rare, but cheap and definitive, so screen for it before any cost / mapping / timing reasoning. When a line is written to the cardex (F4111 / RTransactions) twice, the cardex is overstated by that line while the GL has it once, so the variance EQUALS the duplicated line. dbo.RDuplicateSales flags it. If the facts carry a duplicate-sales flag, LEAD with it — the fix is at the source (reverse the double relief), never a journal entry.',
+    '- Check DUPLICATE SALES FIRST — rare, but cheap and definitive, so screen for it before any cost / mapping / timing reasoning. When a line is written to the cardex (F4111 / RTransactions) twice, the cardex is overstated by that line while the GL has it once, so the variance EQUALS the duplicated line. dbo.RDuplicateSales flags it. If the facts carry a duplicate-sales flag, LEAD with it — the fix is at the source: reverse the double relief, then close whichever door let it happen (a closed order line re-confirmed at ship-confirm, or an interrupted Sales Update re-run against a workfile that still held its records).',
     '- A transfer ships and receives as TWO INDEPENDENT transactions; each reconciles on its own document. Never explain one leg\'s variance by whether or when the other leg posted.',
     '- In-transit reconciliation (ST↔OT pairing, the 4220 / 4245 in-transit clearing account, the transfer-order Orders page) is a SEPARATE surface. Do NOT invoke a stranded-leg / in-transit / clearing model to explain a per-document cardex-vs-ledger variance — that conflation is wrong.',
     '- A GL-ONLY row (cardex 0, ledger ≠ 0) is most often a NON-STOCK / surcharge line: the order line type (F4211 / F42119 SDLNTY) is "N", so it posts to the GL but moves no inventory (no F4111 row) — expected behavior, not a variance to chase. Check the order line type before flagging a GL-only row; a non-stock surcharge needs no correction. Do NOT call it a stranded leg or escalate it.',
-    '- An A/P VOUCHER (batch type V) posted to an inventory account is a ROUTING error, not a real inventory variance: DMAAI 4220 is sending voucher variances to the inventory account instead of the A/P variance account. Screen for batch type V on an inventory account; if present, the fix is at the SOURCE — correct the 4220 routing so voucher variances land on the variance account — never a journal entry.',
-    '- MAKE TO ORDER is a business grouping (a work order linked to its customer sales order), not a variance type. Its residual is ordinary manufacturing cardex-vs-GL and is NOT a DMAAI mapping issue (the routings match the 4152 model) and NOT a missing sales offset (the SOs shipped, status 999). Split it by shape: GL-only rows (cardex 0, ledger ≠ 0) are standard-cost variances — EXPECTED, no action; both-sides-differ rows are the completion valued at standard on the cardex vs actual in the GL — investigate the large ones (5.16); cardex-only rows (ledger 0, cardex ≠ 0) are completions posted to the cardex but never journaled to the GL — a real posting gap, repost via R31802A at the source, never a journal entry (5.19 Completion Not Journaled, held under this subtype because usp6_008 stamped it first).',
-    '- MANUFACTURING GL-CLASS SOURCE: work-order material issues and completions (R31802A) take their GL class from the item BRANCH record (F4102); every OTHER F4111 transaction (adjustments, transfers, PO receipts) uses the item LOCATION record (F41021). RR assigns accounts off F41021, so when the F4102 and F41021 GL classes DIFFER, a manufacturing move (IM / IC / IH) posts to a different account than other movements of the same item — a structural account mismatch that recurs on every work order; fix at the source (align the F4102 / F41021 GL class), never a JE. A blank F41021 GL class is not special — it resolves through the DMAAI like any class: a specific entry, or the `****` wildcard/default row that covers any class not explicitly set up (blank included). It posts normally when that coverage exists, and only fails to resolve when the DMAAI has neither a specific entry nor a `****` default — the same condition as any GL class.',
+    '- An A/P VOUCHER (batch type V) posted to an inventory account is a ROUTING error, not a real inventory variance: DMAAI 4220 is sending voucher variances to the inventory account instead of the A/P variance account. Screen for batch type V on an inventory account; if present, the fix is at the SOURCE — correct the 4220 routing so voucher variances land on the variance account, and restrict posting-time GL-account overrides on the voucher-match version so the route cannot be keyed over again.',
+    '- MAKE TO ORDER is a business grouping (a work order linked to its customer sales order), not a variance type. Its residual is ordinary manufacturing cardex-vs-GL and is NOT a DMAAI mapping issue (the routings match the 4152 model) and NOT a missing sales offset (the SOs shipped, status 999). Split it by shape: GL-only rows (cardex 0, ledger ≠ 0) are standard-cost variances — EXPECTED, no action; both-sides-differ rows are the completion valued at standard on the cardex vs actual in the GL — investigate the large ones with cost accounting, then get R30837 (WIP Revaluation) called from R30822 (Frozen Cost Update) so the next cost change reaches both sides (5.16); cardex-only rows (ledger 0, cardex ≠ 0) are completions Manufacturing Accounting never journaled — work those work orders by status and confirm the manufacturing AAIs and the batch posting (5.19 Completion Not Journaled, held under this subtype because usp6_008 stamped it first).',
+    '- MANUFACTURING GL-CLASS SOURCE: work-order material issues and completions (R31802A) take their GL class from the item BRANCH record (F4102); every OTHER F4111 transaction (adjustments, transfers, PO receipts) uses the item LOCATION record (F41021). RR assigns accounts off F41021, so when the F4102 and F41021 GL classes DIFFER, a manufacturing move (IM / IC / IH) posts to a different account than other movements of the same item — a structural account mismatch that recurs on every work order; fix at the source (align the F4102 / F41021 GL class). A blank F41021 GL class is not special — it resolves through the DMAAI like any class: a specific entry, or the `****` wildcard/default row that covers any class not explicitly set up (blank included). It posts normally when that coverage exists, and only fails to resolve when the DMAAI has neither a specific entry nor a `****` default — the same condition as any GL class.',
+    '- MANUFACTURING ACCOUNTING SEQUENCE (authoritative): material issues (IM) and completions (IC) are written to F4111 with NO batch number and NO G/L date. R31802A stamps the batch and G/L date onto those existing F4111 rows and creates the F0911 journal entries in the same step. So a batch and G/L date ABSENT is the literal un-processed state. But a batch number PRESENT means only that R31802A processed the row — it is NOT a guarantee the journal entry was written: R31802A is OBSERVED stamping the cardex batch and writing NO completion entry for a subset of each run. Never infer "the entry therefore exists" from a batch number. R31804 (not R31802A) creates the IV variance entries, and R09801 only updates F0902 — unposted journal entries still exist in F0911.',
+    '- COMPLETION NOT JOURNALED is a GENUINE POSTING GAP, not a matching artifact. A completion sits on the cardex with a batch stamped and the GL holds no completion entry for that work order, while the material issues for the SAME order did post. Confirmed by widening the search past the company and the document type and still finding no completion. The finished-goods cost never reached the general ledger: WIP overstated, finished goods understated.',
+    '- A HEALTHY BATCH AND A HEALTHY ACCOUNT DO NOT CLEAR IT. The same run\'s other work orders journal their completions normally, on the same account, so "the batch posted fine" and "that account carries completions constantly" are not answers. Confirm PER WORK ORDER, never per batch. These must not LEAD the read either, though they stay the secondary list to rule out because each is real at other sites: summarization dropping the work-order reference, a different document company, an unposted batch, a document type outside completions and issues, and a missed GL data load. Never a work order awaiting the run, held in error, or a run that failed before stamping a batch — those carry no batch and cannot reach this card.',
+    '- THE SHAPE: R31802A stamps the cardex batch and writes no completion entry for a FRACTION of each run\'s completions, recurring across periods, spread across order types and batches rather than concentrated in one failed run. That is what makes it a recurrence problem rather than a one-off. It matches a documented JDE defect shape in its completion variant; the vendor article body needs a support login, so the corrective the vendor recommends is NOT known and must not be invented.',
+    '- PREVENTING IT: because the recurrence is in the RUN and not in the orders, working the orders one at a time is the WRONG action — clearing this period\'s list leaves the next period identical. Bound the exposure instead: R41543 (Item Ledger / Account Integrity) reports this exact shape and changes no data, so it is safe to schedule monthly and gives a count to trend. Then take the defect to Oracle through the CUSTOMER\'S OWN IT DEPARTMENT. Do NOT delete unposted manufacturing batches — R31802A has already cleared the unaccounted units, so nothing in JDE regenerates the entry.',
+    '- The BATCH NUMBER is a research handle: it is how you find the document in F0911, and it is NOT evidence the transaction reached the GL. Neither is the PC field, which is the F41112-update flag. Never present either as proof of GL posting.',
     '- Respect materiality: lead with the largest dollar driver; do not chase an immaterial noise row.',
-    '- The analyst does NOT care about journal entries. Analyst work is SOURCE work: check what needs checking to PREVENT RECURRENCE (the double-write, the AAI / DMAAI mapping, the routing, the period), fix it at the source, and hand the FINDING to accounting via the Audit Center. Whether a residual is cleared in the GL with an entry is for the accountant, not the analyst — never frame an analyst action as posting or needing a JE.',
+    '- ROLE SPLIT, not a disagreement about the entry: the corrective accounting action for a transaction variance IS a journal entry, and the ACCOUNTANT books it. The ANALYST prevents recurrence. So never argue against the entry — no "not a journal entry", no "a JE only balances the GL this period" — and do not instruct one either. Stay in the analyst\'s lane: what was checked, what the cause is, and the change that stops it coming back.',
+    '- THE FINDING IS THE ANALYST\'S INVESTIGATION REPORT to the customer, and it travels to the Audit Center where a third party reads it months later. Write it in three parts under these headings: "What I checked" — one check per bullet, each ending ruled out or confirmed; "What I found" — the exact cause, or if it cannot be pinned down ONE or TWO likely causes said plainly to be unconfirmed; "To stop it recurring" — short bullets. Terse, one idea per bullet, no stacked clauses. Name a table only when the analyst has to go look in it.',
     '- Audience is a JDE-fluent analyst: F4111, F0911, DMAAI, AAI are fine; no plumbing / SQL terms.'
   ].join('\n');
   // CARDEX_GROUNDING — the AI's compact copy of the cardex-variance playbook.
@@ -777,6 +784,146 @@ window.RRV8 = window.RRV8 || {};
   ].join('\n');
   // <<AI-GROUNDING GENERATED END>>
 })();
+
+/*
+ * RRV8.txv — the ONE Transaction-Variance card taxonomy.
+ *
+ * WHY THIS LIVES IN config.js: the taxonomy used to be duplicated — home.html
+ * held _TXV_CODE_META / _TXV_CODE_ORDER / _txvClassifyCode, and
+ * inventory-transactions.html held TXV_CARD_CODES / _TXV_CARD_TITLE /
+ * txvCardCode. Two copies that MUST agree is two copies that WILL drift, and
+ * the drift is silent: Home renders a card whose code the Details page doesn't
+ * recognize, the ?card= filter is skipped, and the grid shows every card's rows
+ * for the period while still looking like working software. That shipped twice
+ * (TXI + CNJ were added to Home and never to Details). One literal, both pages.
+ *
+ *   META   { code: { title, kind, tier } }  — insertion order IS the Home card
+ *                                            display order.
+ *   ORDER  [code, ...]                      — derived from META, never hand-kept.
+ *   TITLE  { code: title }                  — derived from META.
+ *   code(row)                               — the row → card-code classifier.
+ *                                            SUBTYPE-FIRST (the 008 pipeline's
+ *                                            server-set subtype is the
+ *                                            authoritative business class),
+ *                                            falling back to a terminal card by
+ *                                            transaction TYPE. Every row lands in
+ *                                            exactly one code, so the cards
+ *                                            partition the residual.
+ *   isCode(v)                               — whitelist test for a ?card= value.
+ *
+ * Adding a card = add ONE entry to META and (if the class is subtype-driven) ONE
+ * entry to SUBTYPE. Both surfaces pick it up with no further edits.
+ */
+window.RRV8 = window.RRV8 || {};
+(function () {
+  var META = {
+    // Quick wins (1 document) — deterministic corrective action
+    'ACCT':    { title: 'Account Mismatch',              kind: 'rebalance', tier: 'quick'    },
+    'PER':     { title: 'Period Mismatch',               kind: 'self',      tier: 'quick'    },
+    // DAC-28 — promoted from Comment-only annotations to their own cards.
+    'VCHR':    { title: 'A/P Voucher on Inventory',      kind: 'rebalance', tier: 'quick'    },
+    'DUP':     { title: 'Duplicate Sales',               kind: 'rebalance', tier: 'quick'    },
+    // IT cardex-integrity — cost-component setup fix at the source.
+    'TXI':     { title: 'Transfer Integrity',            kind: 'review',    tier: 'quick'    },
+    // Mfg completion on the cardex with NO completion entry in the GL — a
+    // genuine posting gap. R31802A stamps the cardex batch and skips a fraction
+    // of each run's completions; the same run's other orders journal fine, so a
+    // healthy batch/account doesn't clear it. KB 420628 shape, IC variant.
+    // No repost exists. Specimen evidence lives in the guide, not here.
+    'CNJ':     { title: 'Completion Not Journaled',      kind: 'review',    tier: 'quick'    },
+    // Complex (3 documents)
+    'MTO':     { title: 'Make to Order',                 kind: 'mto',       tier: 'complex'  },
+    'ICO':     { title: 'Intercompany Sales',            kind: 'ico',       tier: 'complex'  },
+    // Linked pairs (2 documents, 1:1 SO<->PO)
+    'TRF':     { title: 'Transfer Orders',               kind: 'linked',    tier: 'linked'   },
+    'DS':      { title: 'Direct Ship',                   kind: 'linked',    tier: 'linked'   },
+    // Terminal — the unclassified residual, split by transaction type
+    'T-SALES': { title: 'Unclassified — Sales',          kind: 'review', tier: 'terminal' },
+    'T-PURCH': { title: 'Unclassified — Purchasing',     kind: 'review', tier: 'terminal' },
+    'T-MFG':   { title: 'Unclassified — Manufacturing',  kind: 'review', tier: 'terminal' },
+    'T-INV':   { title: 'Unclassified — Inventory',      kind: 'review', tier: 'terminal' }
+  };
+  // Server-set SubType (lower-cased, trimmed) -> card code. Cards 1-10.
+  var SUBTYPE = {
+    'make to order':           'MTO',
+    'intercompany':            'ICO',
+    'transfers':               'TRF',
+    'direct ship':             'DS',
+    'accounts':                'ACCT',
+    'periods':                 'PER',
+    'vouchers':                'VCHR',
+    'duplicate sales':         'DUP',
+    'transfer integrity':      'TXI',
+    'completion not journaled': 'CNJ'
+  };
+  // No subtype -> terminal card by transaction Type. Anything else (including
+  // 'Inventory' and an unrecognized type) falls to T-INV.
+  var TYPE = { 'sales': 'T-SALES', 'purchasing': 'T-PURCH', 'mfg': 'T-MFG' };
+
+  // Codes are non-numeric string keys, so Object.keys returns them in insertion
+  // order — the ORDER array and META can never disagree.
+  var ORDER = Object.keys(META);
+  var TITLE = {};
+  ORDER.forEach(function (c) { TITLE[c] = META[c].title; });
+
+  function code(r) {
+    r = r || {};
+    var st = String(r.SubType == null ? '' : r.SubType).trim().toLowerCase();
+    if (Object.prototype.hasOwnProperty.call(SUBTYPE, st)) return SUBTYPE[st];
+    var ty = String(r.Type == null ? '' : r.Type).trim().toLowerCase();
+    return Object.prototype.hasOwnProperty.call(TYPE, ty) ? TYPE[ty] : 'T-INV';
+  }
+  // Normalize a ?card= value the same way both surfaces emit it, then whitelist.
+  function normCode(v) { return String(v == null ? '' : v).trim().toUpperCase(); }
+  function isCode(v) { return Object.prototype.hasOwnProperty.call(META, normCode(v)); }
+  function title(v) { var m = META[normCode(v)]; return m ? m.title : ''; }
+
+  window.RRV8.txv = {
+    META: META, ORDER: ORDER, TITLE: TITLE, SUBTYPE: SUBTYPE,
+    code: code, isCode: isCode, normCode: normCode, title: title
+  };
+})();
+
+/*
+ * RRV8.drillReport — the permanent tie-out for count-then-drill navigation.
+ *
+ * Every Home card / worklist row shows a COUNT computed on one surface, then
+ * links to a details page that RE-DERIVES the same slice from the same data.
+ * Those two derivations are separate code paths, so they drift. This makes the
+ * drift announce itself instead of hiding behind a plausible-looking grid.
+ *
+ * The source builds its link with `&expect=<rowCount>`; the destination calls
+ * this once per drill landing, after its first render. Console only — never a
+ * visible diagnostic. Cheap (one string join) and safe (never throws).
+ *
+ *   surface  short page name, e.g. 'transactions'
+ *   applied  { dimension: value } the destination ACTUALLY filtered on
+ *   ignored  [param, ...] URL params the destination read but did NOT apply
+ *   expected the source's row count from ?expect= (may be null)
+ *   actual   the destination's rendered row count
+ */
+window.RRV8.drillReport = function (o) {
+  try {
+    o = o || {};
+    var applied = o.applied || {}, bits = [];
+    for (var k in applied) {
+      if (!Object.prototype.hasOwnProperty.call(applied, k)) continue;
+      if (applied[k] == null || applied[k] === '') continue;
+      bits.push(k + '=' + applied[k]);
+    }
+    var ign = (o.ignored || []).filter(Boolean);
+    console.log('[drill] ' + (o.surface || '?')
+      + ' | applied: ' + (bits.length ? bits.join(' ') : '(none)')
+      + ' | ignored: ' + (ign.length ? ign.join(' ') : '(none)')
+      + ' | rows: ' + (o.actual == null ? '?' : o.actual));
+    var exp = (o.expected == null || o.expected === '') ? null : parseInt(o.expected, 10);
+    if (exp != null && isFinite(exp) && o.actual != null && exp !== o.actual) {
+      console.error('[drill] TIE-OUT MISMATCH on ' + (o.surface || '?')
+        + ' — the card counted ' + exp + ' rows, the details grid rendered ' + o.actual
+        + '. Scope filters applied: ' + (bits.length ? bits.join(' ') : '(none)') + '.');
+    }
+  } catch (_) { /* a diagnostic must never break the page */ }
+};
 
 /*
  * RRV8.cardStore — the card-keyed resolution store for the analyst

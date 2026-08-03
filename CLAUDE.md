@@ -634,9 +634,12 @@ versed analyst, not a layperson. Keep that voice:
 
 - **After every PR merge, auto-pull origin/main into the owner's main
   clone — no "say synced" handshake.** The worktree shares its `.git/`
-  dir with the owner's main clone at `C:/source/repos/RapidReconciler-UI`,
-  so once the bots have settled, run
-  `git -C "C:/source/repos/RapidReconciler-UI" pull --ff-only origin main`
+  dir with the owner's main clone at `C:/source/repos/RapidReconciler-AI`
+  (the GitHub repo was renamed to `RapidReconciler-UI`, but the local
+  directory kept the old `RapidReconciler-AI` name — the remote name and
+  the on-disk name differ on purpose; don't "correct" this path to match
+  the remote), so once the bots have settled, run
+  `git -C "C:/source/repos/RapidReconciler-AI" pull --ff-only origin main`
   to update the main clone, then fast-forward / reset the worktree
   branch to match. Report the new main SHA + which bot commits landed.
   If the pull fails (uncommitted changes in the main clone, owner on a

@@ -1806,6 +1806,11 @@
       const rows  = [];         // { cells, band } data row, or { spacer:true }
       const dbSet = new Set();
       let userIdx = 0;
+      // dbSet only collects from members whose access we actually read. Counting the
+      // failures lets the metadata band say the report is incomplete — otherwise it
+      // reads "All granted database permissions … N databases" to whoever opens it,
+      // while some members' access silently never made it in.
+      let unreadable = 0;
       results.forEach(({ u, assigns, err }) => {
         if (rows.length) rows.push({ spacer: true });   // blank row between members
         const identity = [
@@ -1819,7 +1824,7 @@
           u.superuser ? 'Yes' : 'No'
         ];
         let pairs;
-        if (err)                  pairs = [['—', '(could not load access)']];
+        if (err)                  { unreadable++; pairs = [['—', '(could not load access)']]; }
         else if (!assigns.length) pairs = [['—', 'No database access']];
         else pairs = assigns.map(a => {
           const list  = a && a.companyScope === 'LIST' && Array.isArray(a.companies) ? a.companies : null;
@@ -1865,8 +1870,14 @@
       const meta = ws.getCell('A2');
       meta.value = 'Generated ' + today + '     All granted database permissions     ' +
                    users.length + ' team member' + (users.length === 1 ? '' : 's') +
-                   '     ' + dbText;
-      meta.font = { name: 'Arial', size: 10, italic: true, color: { argb: 'FF5A6479' } };
+                   '     ' + dbText +
+                   (unreadable
+                     ? '     INCOMPLETE — access could not be read for ' + unreadable +
+                       ' team member' + (unreadable === 1 ? '' : 's') + ' (see the rows marked below)'
+                     : '');
+      meta.font = { name: 'Arial', size: 10, italic: true,
+                    bold: unreadable > 0,
+                    color: { argb: unreadable ? 'FFB4530A' : 'FF5A6479' } };
       meta.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
       ws.getRow(2).height = 18;
       ws.getRow(3).height = 6;   // thin spacer

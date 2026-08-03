@@ -300,9 +300,16 @@
     }).catch(function () { _purgeAck = null; }).then(function () { if (_info) renderRecommendation(_info); });
   }
   function purgeSnoozeVal() {
-    var v = (_purgeAck && window.RRV8 && window.RRV8.ackToReviewValue) ? window.RRV8.ackToReviewValue(_purgeAck) : '';
-    if (!v) { try { v = localStorage.getItem(purgeSnoozeKey()) || ''; } catch (_) {} }
-    return v;
+    // The server ack is authoritative WHEN THERE IS ONE — including when it says
+    // "not snoozed". RRV8.ackToReviewValue returns '' for a cadence-0 ack, which is
+    // exactly how a reminder gets cleared; falling through to localStorage on that
+    // empty string resurrected a stale local snooze date and the card claimed a
+    // reminder was set after the server record said it wasn't. Only reach for
+    // localStorage when no ack exists at all (older databases without the table).
+    if (_purgeAck && window.RRV8 && window.RRV8.ackToReviewValue) {
+      return window.RRV8.ackToReviewValue(_purgeAck) || '';
+    }
+    try { return localStorage.getItem(purgeSnoozeKey()) || ''; } catch (_) { return ''; }
   }
 
   function renderRecommendation(info) {
@@ -377,6 +384,16 @@
 
   function renderLog(rows) {
     const body = $('js-log-body'), count = $('js-log-count');
+    // A failed read must not masquerade as an empty audit trail. Two things went
+    // wrong when it did: the history said "No start-date changes recorded yet" on a
+    // page whose whole job is a permanent purge, and reconcileStagedFromLog([]) saw
+    // no PENDING row and dropped the Restore button — so an admin who had staged a
+    // purge and reloaded during a blip lost the undo before the next refresh.
+    if (rows === LOG_UNREADABLE) {
+      if (count) count.textContent = '';
+      body.innerHTML = '<tr><td class="log-empty" colspan="5">Couldn’t load the change history, so this is not a record of "no changes". If a start date was recently moved, reopen this page before doing anything else.</td></tr>';
+      return;   // deliberately no reconcileStagedFromLog — leave the staged state alone
+    }
     rows = Array.isArray(rows) ? rows : [];
     reconcileStagedFromLog(rows);   // drive the Restore affordance from the log
     if (count) count.textContent = rows.length ? '· ' + rows.length + (rows.length === 1 ? ' change' : ' changes') : '';
@@ -404,14 +421,15 @@
       '</tr>';
     }).join('');
   }
+  // Sentinel for "the history could not be read" — distinct from an empty history.
+  const LOG_UNREADABLE = Object.freeze({ unreadable: true });
   function loadLog() {
     if (IS_DEMO) return;
     rrFetch('inventory/integrity/purge-log', { query: { limit: 100 } })
-      .then(renderLog)
-      // Older agent without the endpoint (pre-rebuild), or a transient outage:
-      // fall to the empty state rather than leaving "Loading…" stuck. Real
-      // outages still surface via the main fetch-error banner.
-      .catch(function () { renderLog([]); });
+      .then(function (rows) { renderLog(Array.isArray(rows) ? rows : LOG_UNREADABLE); })
+      // Older agent without the endpoint (pre-rebuild), or a transient outage.
+      // Either way we do NOT know the history, so don't render one.
+      .catch(function (e) { console.error('[purge] change history failed to load:', e); renderLog(LOG_UNREADABLE); });
   }
 
   let _info = null, _original = null, _staged = false, _busy = false;

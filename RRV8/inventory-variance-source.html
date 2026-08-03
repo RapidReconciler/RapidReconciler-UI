@@ -129,7 +129,15 @@
   var cfg = SOURCES[key];
   // Transactions has its own dedicated page (fetch:'page') — bounce there.
   // Carry forward IS rendered here now (fetch:'priorPeriodBreakdown' + columns).
-  if (cfg && cfg.fetch === 'page') { location.replace(cfg.href + (location.search ? location.search.replace(/source=[^&]*/, '') : '')); return; }
+  // Strip the leading delimiter with the key, then repair a now-leading '&' into '?'
+  // — the old pattern left the delimiter behind and produced '?&company=…' (or a bare
+  // dangling '?'), so the forwarded scope arrived malformed. Same shape as the
+  // roll-forward link below; keep the two identical.
+  if (cfg && cfg.fetch === 'page') {
+    var _fwd = location.search ? location.search.replace(/[?&]source=[^&]*/, '').replace(/^&/, '?') : '';
+    location.replace(cfg.href + (_fwd === '?' ? '' : _fwd));
+    return;
+  }
   if (!cfg || !Array.isArray(cfg.columns)) {
     document.getElementById('js-title').textContent = 'Unknown variance source';
     document.getElementById('js-lede').textContent = 'Open this page from a source card on the Reconciliation page.';
@@ -189,6 +197,21 @@
   // but the authoritative "this source" total is that period's unreconciledVariance
   // (a server field; the components carry sign conventions and don't plainly sum).
   var _carryTotal = null;
+  // TRUE once a load has failed. Without this, the failure path (ROWS=[] then
+  // render()) drew the page's whole verdict as CLEAN: the "This source" figure summed
+  // an empty array to 0.00, the status dot went GREEN because |0| < 0.005, and the
+  // grid read "No rows for this source in the current scope." A fetch failure and a
+  // reconciled source rendered identically.
+  var _loadFailed = false;
+  // TRUE when the authoritative total for this source could not be determined (carry
+  // forward whose prior-period unreconciledVariance the server didn't send).
+  var _totalUnknown = false;
+  // The empty-state sentence for a SUCCESSFUL load with no rows. Captured from the
+  // markup so the failure copy below can be swapped in and back out without the
+  // "no rows in scope" wording leaking onto a failure (or vice versa). The
+  // carry-forward branch overwrites it deliberately for the earliest-period case.
+  var _emptyMsg = (document.getElementById('js-empty') || {}).textContent || '';
+  function setEmptyMsg(t){ _emptyMsg = t; }
 
   function showError(msg){ var b=document.getElementById('js-fetch-error'); document.getElementById('js-fetch-error-msg').textContent=msg||''; b.classList.add('is-on'); }
   function setScopeFacts(){
@@ -220,13 +243,20 @@
     if (IS_DEMO) {
       // Demo: the recon snapshot carries the arrays; fall back to empty.
       rrFetch('reconciliation').then(function(d){ ROWS = normalize((d && d[cfg.arrayKey]) || []); render(); })
-        .catch(function(){ ROWS=[]; render(); });
+        .catch(function(err){ _loadFailed = true; showError((err&&err.message)||String(err)); ROWS=[]; render(); });
       return;
     }
     var p;
     if (cfg.fetch === 'integrity') {
       p = rrFetch('inventory/integrity', { method:'POST', body:{ report: cfg.report } })
-            .then(function(resp){ return (resp && (resp.data || resp.rows)) || []; });
+            .then(function(resp){
+              // rrFetch turns a non-JSON 200 into null, and `|| []` turned that into
+              // "no rows in this scope" — a clean-looking answer off an unreadable
+              // response. An unrecognized shape is a failure, not an empty result.
+              if (resp && Array.isArray(resp.data)) return resp.data;
+              if (resp && Array.isArray(resp.rows)) return resp.rows;
+              throw new Error('the data service returned a response this page could not read');
+            });
     } else if (cfg.fetch === 'priorPeriodBreakdown') {
       // Carry forward = the PRIOR period's unreconciled variance, rolled in. Mirror
       // the recon page's carry-forward preview: pull the cross-period history
@@ -258,13 +288,24 @@
             // First period in the data — carry forward is zero by definition.
             _carryTotal = 0;
             if (ledeEl) ledeEl.textContent = (cfg.lede||'') + ' ' + (curLbl || 'This period') + ' is the earliest period in the data — carry forward is zero by definition.';
-            var emptyEl = document.getElementById('js-empty');
-            if (emptyEl) emptyEl.textContent = 'No prior period to carry forward — ' + (curLbl || 'this period') + ' is the earliest in the data.';
+            setEmptyMsg('No prior period to carry forward — ' + (curLbl || 'this period') + ' is the earliest in the data.');
             return [];
           }
           var pt = points.find(function(x){ return x.period === prior; });
           var v  = (pt && pt.variance) || {};
-          _carryTotal = (v.unreconciledVariance != null) ? Number(v.unreconciledVariance) : null;
+          var _u = (v.unreconciledVariance != null) ? Number(v.unreconciledVariance) : NaN;
+          if (isFinite(_u)) {
+            _carryTotal = _u;
+          } else {
+            // The authoritative carry-forward figure is the prior period's
+            // unreconciledVariance. Leaving _carryTotal null fell through to summing
+            // the 6 components — a total this very code documents as NOT summable
+            // (they carry opposing sign conventions). Better to show no figure than
+            // one arrived at by a method we know is wrong.
+            _carryTotal = null; _totalUnknown = true;
+            console.error('[variance-source] carry forward: the prior period (' + prior +
+              ') returned no unreconciledVariance — refusing to sum the 6 components, which do not add up to it.');
+          }
           if (ledeEl) ledeEl.textContent = (cfg.lede||'') + ' Composition of ' + fmtPeriodLabel(prior) +
             (curLbl ? (', carried into ' + curLbl) : '') + '.';
           return [
@@ -295,11 +336,19 @@
           subsidiaries:  wrap(rf.subsidiaries),
           component: cfg.component
         };
-        return rrFetch('inventory/variance-component', { method:'POST', body: body }).then(function(resp){ return (resp && resp.rows) || []; });
+        return rrFetch('inventory/variance-component', { method:'POST', body: body }).then(function(resp){
+          if (resp && Array.isArray(resp.rows)) return resp.rows;
+          throw new Error('the data service returned a response this page could not read');
+        });
       });
     }
     p.then(function(rows){ ROWS = normalize(rows); render(); })
-     .catch(function(err){ showError((err&&err.message)||String(err)); ROWS=[]; render(); });
+     .catch(function(err){
+       // Flag the failure BEFORE rendering, so render() shows "unknown" rather than a
+       // green dot over a $0.00 total.
+       _loadFailed = true;
+       showError((err&&err.message)||String(err)); ROWS=[]; render();
+     });
   }
 
   // ---- render ----
@@ -354,13 +403,29 @@
       ? _carryTotal
       : ROWS.reduce(function(s,r){ return s + (Number(r[amountField])||0); }, 0);
     var amtEl = document.getElementById('js-amount');
-    amtEl.textContent = fmtMoney(total); amtEl.classList.toggle('is-neg', total<0);
     var dot = document.getElementById('js-src-dot');
-    dot.className = 'src-dot ' + (Math.abs(total)<0.005 ? 'green' : 'amber');
-
-    var rows = visibleRows();
     var grid = document.getElementById('js-grid');
     var empty = document.getElementById('js-empty');
+    // Unknown is its own state — never zero, never green.
+    if (_loadFailed || _totalUnknown) {
+      amtEl.textContent = '—'; amtEl.classList.remove('is-neg');
+      dot.className = 'src-dot';        // neutral grey; NOT the green "reconciled" dot
+      dot.title = _loadFailed
+        ? 'RapidReconciler couldn’t read this source, so it isn’t saying whether it is clean.'
+        : 'This source’s total couldn’t be determined from the data returned.';
+      grid.hidden = true;
+      empty.textContent = _loadFailed
+        ? 'This source couldn’t be read, so nothing is shown. This is not the same as “nothing to reconcile” — try again, and if it keeps happening ask your IT department to check that the data service is reachable.'
+        : 'This source’s total couldn’t be determined from the data returned. Nothing is shown rather than a figure that may be wrong.';
+      empty.hidden = false;
+      return;
+    }
+    amtEl.textContent = fmtMoney(total); amtEl.classList.toggle('is-neg', total<0);
+    dot.className = 'src-dot ' + (Math.abs(total)<0.005 ? 'green' : 'amber');
+    dot.removeAttribute('title');
+    empty.textContent = _emptyMsg;
+
+    var rows = visibleRows();
     if (!ROWS.length) { grid.hidden=true; empty.hidden=false; return; }
     empty.hidden = true; grid.hidden = false;
 
@@ -384,9 +449,27 @@
     }).join('');
     document.getElementById('js-grid-body').innerHTML = body;
 
-    // foot — total on the amount column
-    var foot = cfg.columns.map(function(c){
-      if (c.key===amountField) return '<td class="num">'+esc(fmtMoney(total))+'</td>';
+    // foot — total on the amount column. This total must tie to the ROWS ABOVE IT.
+    // It used to print the whole-source total under a search-filtered body, so a
+    // filtered grid showed a footer figure that no visible row contributed to. The
+    // "This source" fact above stays the whole-source figure; the footer is the
+    // subtotal of what is displayed, and says so when a filter is active.
+    var footTotal, footLbl = '';
+    if (search) {
+      if (_carryTotal != null) {
+        // Carry forward's components don't sum to its authoritative total, so a
+        // filtered subtotal is not derivable. Show nothing rather than a wrong figure.
+        footTotal = null; footLbl = 'Filtered — see "This source" for the total';
+      } else {
+        footTotal = rows.reduce(function(s,r){ return s + (Number(r[amountField])||0); }, 0);
+        footLbl = 'Filtered subtotal';
+      }
+    } else {
+      footTotal = total;
+    }
+    var foot = cfg.columns.map(function(c,i){
+      if (c.key===amountField) return '<td class="num">'+(footTotal==null?'&mdash;':esc(fmtMoney(footTotal)))+'</td>';
+      if (i===0 && footLbl) return '<td style="text-align:left;font-weight:700;color:var(--text-muted);font-size:11px">'+esc(footLbl)+'</td>';
       return '<td></td>';
     }).join('');
     document.getElementById('js-grid-foot').innerHTML = '<tr>'+foot+'</tr>';
@@ -430,6 +513,14 @@
   document.getElementById('js-search').addEventListener('input', function(e){ search = e.target.value||''; render(); });
   document.getElementById('js-export').addEventListener('click', function(){
     if (!window.XLSX) return;
+    // Never export off a failed / undetermined load — the workbook would carry a
+    // total that RapidReconciler itself couldn't stand behind.
+    if (_loadFailed || _totalUnknown) {
+      showError(_loadFailed
+        ? 'This source couldn’t be read, so there is nothing to export.'
+        : 'This source’s total couldn’t be determined, so there is nothing to export.');
+      return;
+    }
     var list = visibleRows();
     if (!list.length) return;
     var amountField = cfg.amountField;
@@ -452,9 +543,16 @@
         return v==null?'':v;
       });
     });
+    // Label the total for what it IS. With a search active on a carry-forward source
+    // the figure is the whole source's authoritative total, not the sum of the rows
+    // listed above it — an unlabelled total row that doesn't add up is exactly the
+    // thing an auditor stops on.
+    var totalLbl = (_carryTotal != null && search)
+      ? ('TOTAL for this source (whole source, not the ' + list.length.toLocaleString('en-US') + ' filtered rows above)')
+      : ('TOTAL — ' + list.length.toLocaleString('en-US') + ' rows');
     var totalRow = cfg.columns.map(function(c,i){
       if (c.key===amountField) return total;
-      if (i===0) return 'TOTAL — ' + list.length.toLocaleString('en-US') + ' rows';
+      if (i===0) return totalLbl;
       return '';
     });
     var db  = (document.getElementById('js-topbar-db')||{}).textContent || 'RapidReconciler';
