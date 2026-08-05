@@ -57,6 +57,16 @@ selection, so once it has run there is nothing left for it to pick up. Telling a
 analyst to repost is not merely mislabelled, it is inert. Any surface that prescribes
 it is prescribing a remedy that does not exist.
 
+## The population is `RCardexLedgerCompare2`, always
+
+**`RCardexLedgerCompare2` is the document source of truth for transaction
+variances — the sole reason the table exists is to list the documents that need
+analysis. Any other document in a result set is wrong.** (Owner ruling
+2026-08-05, HARD.) `RCardexLedgerCompare` without the `2` is the pre-netting
+table holding both sides of everything; counting from it produces figures that
+describe the whole ledger and mean nothing about the variance population. Full
+statement and worked failures in `transaction-detail-analysis.md` § Section 0.
+
 ## Grain: what you may and may not aggregate
 
 Owner rulings, 2026-08-05. These govern every manufacturing comparison and each one
