@@ -2907,7 +2907,7 @@
        mapping-only verdict. The resolution is a deterministic lookup,
        shown at ALL tiers; Full tier narrates ONLY a mapping mismatch. The
        drafted finding lands in the Findings note below and rides the
-       existing Mark-resolved loop.
+       existing Mark-reviewed loop.
        ============================================================ -->
   <section class="tx-analyzer" id="tx-analyzer">
     <button type="button" class="tx-analyzer-head" id="tx-analyzer-toggle" aria-expanded="false" aria-controls="tx-analyzer-body">
@@ -2925,23 +2925,24 @@
   <!-- ============================================================
        FINDINGS PANEL — the finding is DRAFTED AUTOMATICALLY from the
        analysis above (no manual "use as finding" step); the analyst
-       reviews/edits, then dispositions: "Mark resolved" records the
-       source fix (marks every row in the filtered view Worked=true,
-       persists via /inventory/transactions/save-notes, and drafts the
-       Home pattern card → accountant Audit), or "Clear — not a real
-       variance" marks them worked silently with NO card/Audit entry.
+       reviews/edits, then dispositions: "Mark reviewed" records the
+       identified root cause (marks every row in the filtered view
+       Worked=true, persists via /inventory/transactions/save-notes, and
+       drafts the Home pattern card → accountant Audit). That save button
+       is the only disposition in the DOM; an earlier note here described
+       a second "Clear — not a real variance" button that does not exist.
        ============================================================ -->
   <section class="tx-findings" id="tx-findings">
     <div class="tx-findings-head">
       <div>
         <div class="tx-findings-title"><svg viewBox="0 0 24 24" width="15" height="15" fill="var(--blue)" aria-hidden="true" style="vertical-align:-2px;margin-right:6px"><path d="M12 1.6l1.9 5.1a5 5 0 0 0 2.9 2.9l5.1 1.9-5.1 1.9a5 5 0 0 0-2.9 2.9L12 21.4l-1.9-5.1a5 5 0 0 0-2.9-2.9L2.1 11.5l5.1-1.9a5 5 0 0 0 2.9-2.9z"/></svg>Findings</div>
-        <div class="tx-findings-sub" id="tx-findings-scope">The finding drafts automatically from the analysis &mdash; review the source fix, then Mark resolved.</div>
+        <div class="tx-findings-sub" id="tx-findings-scope">The finding drafts automatically from the analysis &mdash; review the source fix, then Mark reviewed.</div>
       </div>
       <div class="tx-findings-actions">
-        <button type="button" class="tx-findings-save" id="tx-findings-save">Mark resolved</button>
+        <button type="button" class="tx-findings-save" id="tx-findings-save">Mark reviewed</button>
       </div>
     </div>
-    <textarea class="tx-findings-note" id="tx-findings-note" rows="4" placeholder="The finding drafts here automatically from the analysis above &mdash; the mechanism, the corrective action at the source, then what to check. Review and edit, then Mark resolved."></textarea>
+    <textarea class="tx-findings-note" id="tx-findings-note" rows="4" placeholder="The finding drafts here automatically from the analysis above &mdash; the mechanism, the corrective action at the source, then what to check. Review and edit, then Mark reviewed."></textarea>
     <div class="tx-findings-status" id="tx-findings-status" hidden></div>
   </section>
 
@@ -4133,8 +4134,8 @@
       _workNotes = buildWorkNotesMap(workNotesPayload, _data.rows);
       applyWorkNotesOverlay(_data.rows);
       // Classify every row by the analyzer's 5.x pattern codes so
-      // the Start Here strip can group by likely root cause. Re-runs
-      // when the DMAAI index lands (preloadDmaais) since 5.4 needs it.
+      // the Start Here strip can group by likely root cause. Re-runs via
+      // noteIndexLanded() if a detector index lands after this point.
       stampPatterns(_data.rows);
       // Fresh data invalidates any stale row selection (the GLXref
       // universe just changed).
@@ -5102,14 +5103,57 @@
     return '5.11';
   }
 
+  // True once the grid has been classified at least once. Set by
+  // stampPatterns, read by the re-stamp gate below; declared ahead of both
+  // so neither depends on the temporal dead zone.
+  let _dataStamped = false;
+
   // Stamp _pattern on every row in place. Called whenever
   // _data.rows is rebuilt (initial load + revalidation) and
-  // again once the DMAAI index lands (so 5.4 can fire). Label
-  // and description live on PATTERN_INFO &mdash; consumers look
-  // them up by code rather than denormalizing onto every row.
+  // again once a detector index lands late (so 5.4 / 5.14 / 5.18 can
+  // fire). Label and description live on PATTERN_INFO &mdash; consumers
+  // look them up by code rather than denormalizing onto every row.
   function stampPatterns(rows) {
     if (!Array.isArray(rows)) return;
     rows.forEach(r => { r._pattern = classifyGridRow(r); });
+    _dataStamped = true;
+  }
+
+  // ---- Late-index re-stamp gate -------------------------------------------
+  // Three detector indexes load in parallel with loadData(): _dmaaiIndex
+  // (5.4 Account Mismatch), _crossPeriodIndex (5.14 Period Mismatch),
+  // _duplicateSalesIndex (5.18 Duplicate Sales). Each can land on either
+  // side of the first stampPatterns() call:
+  //
+  //   index lands FIRST  -> the first stamp already sees it. Nothing to do.
+  //   index lands SECOND -> the first stamp ran blind and those rows carry
+  //                         a weaker code (or none). They must be re-stamped.
+  //
+  // Before this gate only the first case produced correct marks, so 5.4 was
+  // present or absent depending on which fetch won — silently, with no way
+  // for the analyst to tell. 5.14 degraded to the YYYY-MM heuristic and 5.18
+  // just stayed at zero.
+  //
+  // The original objection to re-rendering here was that _data might still be
+  // mid-fetch during boot. That is exactly what _dataStamped guards: until the
+  // first stamp has run, a landing index needs no action, because the stamp
+  // that is still coming will read it. After the stamp, the fetch is done and
+  // a render is safe.
+  //
+  // Landings are debounced so three indexes arriving together cost one render,
+  // and the re-render only fires when a pattern actually changed.
+  let _restampTimer = null;
+  function noteIndexLanded() {
+    if (!_dataStamped) return;
+    if (_restampTimer) clearTimeout(_restampTimer);
+    _restampTimer = setTimeout(() => {
+      _restampTimer = null;
+      if (!_data || !Array.isArray(_data.rows) || !_data.rows.length) return;
+      const before = _data.rows.map(r => r._pattern);
+      stampPatterns(_data.rows);
+      const changed = _data.rows.some((r, i) => r._pattern !== before[i]);
+      if (changed) renderAll();
+    }, 60);
   }
 
   // Variance breakdown for the slice of rows a card represents.
@@ -6559,7 +6603,7 @@
     var scope = bits.length ? bits.join(' · ') : 'the current view';
     sub.innerHTML = 'Applies to <strong>' + escapeHtml(scope) + '</strong> &mdash; ' + n + ' row' + (n === 1 ? '' : 's')
       + (workedN ? (' · <span class="tx-findings-done">' + workedN + ' already worked</span>') : '')
-      + '. The finding drafts from the analysis above &mdash; review the source fix, then <strong>Mark resolved</strong> to record it.';
+      + '. The finding drafts from the analysis above &mdash; review the source fix, then <strong>Mark reviewed</strong> to record it.';
     // On a scope change, reset the textarea. A previously-saved finding stands (marked
     // dirty) so the auto-draft won't clobber it; a blank slice invites the fresh draft.
     var key = [_state.activeCard || '', _state.activeGroupCode || '', _state.activeCompany || '', per || ''].join('|');
@@ -6585,7 +6629,7 @@
   //  account" as the finding on a completion-posting gap. The resolution is
   //  a deterministic lookup (not an AI opinion), so it shows at ALL tiers;
   //  Full tier narrates a mapping mismatch only. The finding auto-drafts
-  //  into the Findings note and rides the existing Mark-resolved loop.
+  //  into the Findings note and rides the existing Mark-reviewed loop.
   //  Degrade-safe: if the resolver endpoint isn't live yet it shows the
   //  row-level signals only (non-stock / duplicate-sales) plus a quiet
   //  "not checked" note — never a console error or a broken card.
@@ -6652,7 +6696,7 @@
     if (note.dataset.dirty === '1') return;
     note.value = text || '';
     _txFindingsAutosize();
-    _findingsStatus(text ? (statusMsg || 'Drafted from the analysis — review the source fix, then Mark resolved.') : '', 'muted');
+    _findingsStatus(text ? (statusMsg || 'Drafted from the analysis — review the source fix, then Mark reviewed.') : '', 'muted');
   }
   // ---- Resolver plumbing -------------------------------------------------
   // Tolerant field read: first present, non-empty value from a list of key
@@ -7086,7 +7130,7 @@
   //  nothing to do with account mapping — Completion Not Journaled is the
   //  clearest case, a completion that reached the cardex and never reached the
   //  GL — that produced "every inventory routing matches the cardex model
-  //  account" as the finding, next to a Mark-resolved button, with no
+  //  account" as the finding, next to a Mark-reviewed button, with no
   //  corrective action anywhere on the page. A true statement about an
   //  irrelevant question reads as "nothing to do here". The mapping verdict is
   //  now demoted to ONE line AFTER the action, and it never supplies the
@@ -7740,8 +7784,8 @@
         checked: _arr(sel.checked).concat(routeChecks),
         found: sel.found, fix: sel.fix, tail: tail
       }), sel.triage
-        ? 'Drafted from the analysis — the cause is not identified yet; work the next steps before Mark resolved.'
-        : 'Drafted from the analysis — review it, then Mark resolved.');
+        ? 'Drafted from the analysis — the cause is not identified yet; work the next steps before Mark reviewed.'
+        : 'Drafted from the analysis — review it, then Mark reviewed.');
     }
     if (wantAi) _txAnalyzeNarrate(co, per, sel.mech, (Array.isArray(sel.fix) ? sel.fix.join(' ') : sel.fix), fp);
   }
@@ -7968,7 +8012,7 @@
     renderAll();
     // Two-step card resolution (UI-26/UI-27): push the finding to the card-keyed
     // store as 'worked' — this becomes the Home txv card's "what was the source
-    // fix" text, where the analyst reviews it and clicks Mark resolved to complete
+    // fix" text, where the analyst reviews it and clicks Mark reviewed to complete
     // (→ the card lands on the accountant Audit tab). Best-effort + independent of
     // the per-row save-notes POST below (cardStore has its own localStorage
     // fallback and never throws).
@@ -7987,7 +8031,7 @@
       period: (_data && _data.period) || _state.period || defaultPeriod(),
       notes:  rows.map(toTransactionNote)
     } }).then(function () {
-      _findingsStatus('Saved — ' + rows.length + ' row' + (rows.length === 1 ? '' : 's') + ' marked worked. This finding is now on the Home card — review it there and Mark resolved to complete.', 'ok');
+      _findingsStatus('Saved — ' + rows.length + ' row' + (rows.length === 1 ? '' : 's') + ' marked worked. This finding is now on the Home card — review it there and Mark reviewed to hand it to the Audit Center.', 'ok');
       if (note) note.dataset.dirty = '';
       // Audit trail: record the corrective on the Activity Log (best-effort, one-way).
       if (window.RRV8 && RRV8.logActivity) {
@@ -7999,7 +8043,7 @@
       }
     }).catch(function (err) {
       _findingsStatus('Save failed — ' + (err && err.message ? err.message : String(err)), 'error');
-    }).then(function () { _findingsBusy = false; if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Mark resolved'; } });
+    }).then(function () { _findingsBusy = false; if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Mark reviewed'; } });
   }
   (function wireFindings() {
     var save = document.getElementById('tx-findings-save'), note = document.getElementById('tx-findings-note');
@@ -9482,37 +9526,42 @@
       const payload = await getIntegrityDmaais();
       const rows = (payload && payload.data) || (Array.isArray(payload) ? payload : []);
       // Build the (Co|OT|DT|GLClass) → expected-account lookup so the
-      // classifier can detect 5.4 Account Mismatch on the next stamp
-      // pass. Intentionally NO renderAll() here — _data may still be
-      // mid-fetch and a concurrent re-render during boot was suspected
-      // of interfering with the inventory/transactions request.
+      // classifier can detect 5.4 Account Mismatch. noteIndexLanded()
+      // re-stamps if the grid was already classified without it; it
+      // no-ops while the load is still in flight, so the old worry about
+      // rendering over an in-flight fetch is handled by the gate rather
+      // than by leaving the rows wrong.
       _dmaaiIndex = buildDmaaiIndex(payload);
       setAaiStatus('ready', { count: rows.length });
+      noteIndexLanded();
     } catch (err) {
       console.warn('DMAAI preload failed:', err);
       setAaiStatus('error', err);
     }
   }
   // v_integrity11_crossperiods preload — drives the 5.14 Period
-  // Mismatch detector. Mirrors preloadDmaais's pattern; same
-  // boot-race concession (no re-stamp after the index lands —
-  // rows only get authoritative 5.14 marks if the preload
-  // completes before stampPatterns runs).
+  // Mismatch detector. Mirrors preloadDmaais's pattern, including the
+  // late-landing re-stamp: rows classified before this index arrived
+  // fell back to the YYYY-MM grid heuristic and now get the
+  // authoritative mark.
   async function preloadCrossPeriods() {
     try {
       const payload = await getIntegrityCrossPeriods();
       _crossPeriodIndex = buildCrossPeriodIndex(payload);
+      noteIndexLanded();
     } catch (err) {
       console.warn('CrossPeriods preload failed:', err);
     }
   }
   // v_integrity10_duplicate_sales preload — drives the 5.18
-  // Duplicate Sales detector. Same boot-race concession as
-  // DMAAIs / cross-periods.
+  // Duplicate Sales detector. No heuristic fallback, so before the
+  // re-stamp gate a slow landing left the card reading zero for the
+  // life of the tab.
   async function preloadDuplicateSales() {
     try {
       const payload = await getIntegrityDuplicateSales();
       _duplicateSalesIndex = buildDuplicateSalesIndex(payload);
+      noteIndexLanded();
     } catch (err) {
       console.warn('DuplicateSales preload failed:', err);
     }
@@ -9523,20 +9572,13 @@
   // ============================================================
   bootSession()
     .then(() => {
-      // Fire DMAAI preload in parallel with the main data load.
-      // Two-phase render: main page renders against /inventory/
-      // transactions; the pill flips green once DMAAIs land.
-      preloadDmaais();
-      // Cross-periods preload — authoritative 5.14 Period Mismatch
-      // source. Same boot-race trade-off as DMAAIs: rows get the
-      // authoritative mark only if this completes before
-      // stampPatterns() runs; the YYYY-MM heuristic fallback in
-      // classifyGridRow covers the brief window if not.
-      preloadCrossPeriods();
-      // Duplicate-sales preload — drives 5.18. No fallback
-      // heuristic; if this is slow the pattern card just stays
-      // at 0 until the index lands.
-      preloadDuplicateSales();
+      // The three detector indexes load in parallel with the main data
+      // load. Order no longer matters: whichever finishes second calls
+      // noteIndexLanded() and the grid re-stamps. See the re-stamp gate
+      // next to stampPatterns() for why this is safe mid-boot.
+      preloadDmaais();          // 5.4  Account Mismatch
+      preloadCrossPeriods();    // 5.14 Period Mismatch
+      preloadDuplicateSales();  // 5.18 Duplicate Sales
       // System Status light reads the shared sessionStorage cache
       // (instant paint), then refreshes from v_diagnostic5_job_status
       // and starts polling. Same data Reconciliation drives &mdash;

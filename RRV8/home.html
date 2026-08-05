@@ -1004,7 +1004,8 @@
   .txv-overview .wl-ai { background: var(--bg-card); }
   .wl-fig-clear { color: var(--green); }
   .txv-status-suffix { font-size: 10px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: var(--text-muted); margin-left: 8px; vertical-align: middle; }
-  /* Resolved-this-cycle rollup — how many current-period cards are resolved. */
+  /* Handed-off-this-cycle rollup — how many current-period cards the analyst reviewed
+     and handed to the Audit Center. */
   .txv-conv { font-size: 12px; font-weight: 700; color: var(--green-deep); }
   .txv-conv strong { color: var(--green-deep); }
   /* Reviewed chip — the resolved counterpart to the Mark-period-reviewed button. */
@@ -1016,7 +1017,7 @@
   .txv-card.is-riding { opacity: .82; }
   .txv-card.is-riding .txv-card-amt { color: var(--text-soft); }
   .txv-card.is-complete.is-riding { opacity: .6; }
-  /* Inline resolution-note editor on a card (Mark resolved / Reopen to edit). */
+  /* Inline resolution-note editor on a card (Mark reviewed / Reopen to edit). */
   .txv-card.is-editing { opacity: 1; }   /* un-dim a complete card while its editor is open */
   .txv-card-editor { margin-top: 11px; border-top: 1px dashed var(--rule); padding-top: 11px; }
   .txv-card-editor[hidden] { display: none; }
@@ -1025,14 +1026,15 @@
   .txv-card-editor-txt:focus { outline: none; border-color: var(--blue); }
   .txv-card-editor-actions { margin-top: 9px; display: flex; gap: 8px; justify-content: flex-end; }
   /* The footer button STAYS visible while editing — it's the single action that morphs
-     from "Reopen to edit" / "Mark resolved" (open) into "Mark resolved" (save + close).
+     from "Reopen to edit" / "Mark reviewed" (open) into "Mark reviewed" (save + close).
      Two actions total, no Cancel (owner 2026-07-13). */
   /* Card → Details link: a light text link, not a filled button. */
   .txv-cardlink { display: inline-flex; align-items: center; gap: 5px; font-family: inherit; font-weight: 800; font-size: 12.5px; color: var(--blue); text-decoration: none; cursor: pointer; }
   .txv-cardlink:hover { text-decoration: underline; }
   .txv-cardlink svg { width: 14px; height: 14px; }
   /* Pass 2 — accountant-parity card layout. Header strip holds identity + the
-     resolution status chip (parity with the Overview card's ✓ Corrected). */
+     review status chip. (An earlier note here claimed parity with a "✓ Corrected"
+     chip on the Overview card; no such chip exists.) */
   .txv-card-hdr-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 7px; }
   .txv-card-hdr-row .txv-card-hdr { margin-bottom: 0; }
   .txv-statuschip { flex: 0 0 auto; font-size: 11px; font-weight: 800; border-radius: 8px; padding: 3px 9px; white-space: nowrap; }
@@ -4686,6 +4688,22 @@
     });
   }
 
+  // Readiness of the CLASSIFIER's DMAAI universe (v_integrity_jde_aais) for the
+  // active DB. Scope is deliberately just this one dataset — v8ui_dmaai_routes
+  // (the combo table's Model Account column) stays lazy, and aai-analysis-latest
+  // has its own 60-minute server cache. Warming here means Transaction Variance
+  // opens already classified instead of re-classifying a second after it paints.
+  //   'pending'  warm in flight or not yet attempted
+  //   'ready'    cached for this DB
+  //   'degraded' the warm failed; the page loads it itself on first open
+  //   'na'       demo mode, or this user has no DMAAI grant
+  var _dmaaiReady = 'pending';
+  function setDmaaiReady(state) {
+    if (_dmaaiReady === state) return;
+    _dmaaiReady = state;
+    refreshAnalystReady();
+  }
+
   // Accounting Set Up — row 1: DMAAI preload state. Reflects the cross-page
   // session cache the V8 pages write (rrv8.scope.v1.<mode>.<db>.dmaais), so
   // loading here warms the very cache the working pages read.
@@ -4720,14 +4738,19 @@
     if (sub) sub.textContent = 'Loads automatically';
   }
 
-  // Optional manual warm — mirrors Reconciliation's preloadDmaaisInBackground
-  // (POST /inventory/integrity[v_integrity_jde_aais]) and writes the shared
-  // cache key, so the first Export is instant. Honest: it's not required.
+  // Warm the classifier's DMAAI universe — mirrors Reconciliation's
+  // preloadDmaaisInBackground (POST /inventory/integrity[v_integrity_jde_aais])
+  // and writes the shared cache key. Not required for correctness: every page
+  // that needs it loads it itself and re-classifies when it lands. What this
+  // buys is that the analyst never sees Transaction Variance re-classify under
+  // them, and that a failure shows up on Home rather than as a card that
+  // quietly never appears.
   var _dmaaiLoading = false;
   function loadDmaaisNow(opts) {
     var auto = !!(opts && opts.auto);   // auto warm stays quiet (no success toast)
     if (_dmaaiLoading) return;
     _dmaaiLoading = true;
+    setDmaaiReady('pending');
     var _dDot = $('dmaaiDot'), _dSub = $('dmaaiSub');
     if (_dDot) _dDot.className = 'row-dot amber';
     if (_dSub) _dSub.textContent = 'Loading the DMAAI universe…';
@@ -4756,16 +4779,18 @@
       });
     }
 
-    fetchP.then(function (payload) {
+    return fetchP.then(function (payload) {
       try { sessionStorage.setItem(dmaaiCacheKey(), JSON.stringify({ ts: Date.now(), payload: payload })); } catch (_) {}
       if (window.RRV8 && window.RRV8.setDmaaiStatus) {
         window.RRV8.setDmaaiStatus('ready', { count: dmaaiRows(payload).length });
       }
+      setDmaaiReady(dmaaiRows(payload).length ? 'ready' : 'degraded');
       if (!auto) toast('DMAAIs loaded.');
     }).catch(function (err) {
       var eDot = $('dmaaiDot'), eSub = $('dmaaiSub');
       if (eDot) eDot.className = 'row-dot red';
       if (eSub) eSub.textContent = 'Couldn’t load — it will still load on first export';
+      setDmaaiReady('degraded');
       if (!auto) toast('DMAAI load failed: ' + String(err && err.message || err));
     }).then(function () {
       _dmaaiLoading = false;
@@ -4781,14 +4806,20 @@
   // Forward already auto-loads via loadInventoryLight; this matches it for DMAAIs.
   var _dmaaiAutoTried = {};
   function autoWarmDmaais() {
-    if (IS_DEMO) return;                       // demo uses the static reflected state
-    if (!(caps().dm && activeDb())) return;    // needs DMAAI access + a chosen DB
+    if (IS_DEMO) { setDmaaiReady('na'); return; }                    // demo uses the static reflected state
+    if (!(caps().dm && activeDb())) { setDmaaiReady('na'); return; } // needs DMAAI access + a chosen DB
     var key = dmaaiCacheKey();
     try {
       var obj = JSON.parse(sessionStorage.getItem(key) || 'null');
-      if (dmaaiRows(obj && obj.payload).length) return;   // already warmed this session
+      if (dmaaiRows(obj && obj.payload).length) { setDmaaiReady('ready'); return; }   // already warmed this session
     } catch (_) {}
-    if (_dmaaiAutoTried[key]) return;
+    // One attempt per DB per session. Reaching here means this DB's cache is
+    // empty (the check above returns 'ready' when it isn't), so a prior attempt
+    // means a prior failure — report 'degraded' rather than implying a retry
+    // that isn't coming. Unconditional because _dmaaiReady is global while the
+    // cache is per-DB: switching from a warmed DB to a cold one must not carry
+    // the old 'ready' across.
+    if (_dmaaiAutoTried[key]) { setDmaaiReady('degraded'); return; }
     _dmaaiAutoTried[key] = true;
     loadDmaaisNow({ auto: true });
   }
@@ -8594,7 +8625,10 @@
         ? '<span class="txv-reviewed-chip">✓ Reviewed' + (_reviewedLbl ? ' ' + esc(_reviewedLbl) : '') + '</span>'
         : '<button type="button" class="txv-btn txv-review-btn" data-txv-review="1"'
             + ' data-co="' + esc(solo) + '" data-cp="' + esc(focusP)
-            + '" data-fixed="' + resolvedThisCycle + '" data-ride="' + _letRide + '">Mark reviewed</button>';
+            // Disambiguated from the per-card "Mark reviewed" that now sits ~8 lines below it in the
+            // same panel: identical text, different act, different store (analystReviewStore vs
+            // cardStore). The period wording has to carry the scope or the two read as one control.
+            + '" data-fixed="' + resolvedThisCycle + '" data-ride="' + _letRide + '">Mark period reviewed</button>';
 
       // Transaction Overview — structurally MIRRORS the accountant "Inventory
       // Reconciliation" snapshot so the two roles read as one system. Same shell
@@ -8629,9 +8663,9 @@
         + (_acctStatus.suffix ? '<span class="txv-status-suffix">' + esc(_acctStatus.suffix) + '</span>' : '') + '</div>'
         + '<div class="wl-ai-rec"><span class="wl-ai-rec-txt">You can still research root causes if you choose, or just mark the period reviewed.</span></div>'
         + '</div>';
-      // Bottom row — ONLY the resolved-this-cycle rollup.
+      // Bottom row — ONLY the handed-off-this-cycle rollup.
       var _ovFoot = '<div class="wl-foot"><span class="wl-foot-links">'
-        + '<small class="txv-conv">Resolved this cycle: <strong>' + resolvedThisCycle + '</strong> of ' + _totalCards + ' cards</small>'
+        + '<small class="txv-conv">Handed off this cycle: <strong>' + resolvedThisCycle + '</strong> of ' + _totalCards + ' cards</small>'
         + '</span></div>';
       var headline =
         '<section class="acct-snapshot txv-overview">'
@@ -8660,9 +8694,9 @@
         // DRAFT — the two-step: finding captured on the worklist, confirmed here →
         // complete → lands on the accountant Audit tab.
         var draft = !!(p.rec && p.rec.status === 'worked');
-        // 'reopened' = a resolved card the analyst reopened to edit. It is a PERSISTED
+        // 'reopened' = a reviewed card the analyst reopened to edit. It is a PERSISTED
         // status (survives a browser refresh), so the card renders with its editor already
-        // OPEN and the single "Mark resolved" button — not a transient UI toggle.
+        // OPEN and the single "Mark reviewed" button — not a transient UI toggle.
         var reopened = !!(p.rec && p.rec.status === 'reopened');
         // Finding text (company echo stripped) split into the LIKELY CAUSE and, when the
         // finding carries a "Do next:" section, its RECOMMENDATIONS (owner 2026-07-13).
@@ -8677,16 +8711,18 @@
         var _storedRes = (_resRaw && _resRaw !== _findRaw && _resRaw !== 'source' && _resRaw !== 'je') ? _resRaw : '';
         var whatDoneVal = _storedRes || _split.recs || 'Waiting investigation';
         var editBtn = reopened
-          ? '<button type="button" class="txv-btn" data-txv-act="save">Mark resolved</button>'
+          ? '<button type="button" class="txv-btn" data-txv-act="save">Mark reviewed</button>'
           : p.done
             ? '<button type="button" class="txv-btn" data-txv-act="reopen">Reopen to edit</button>'
-            : '<button type="button" class="txv-btn" data-txv-act="resolve">' + (draft ? 'Review &amp; resolve' : 'Mark resolved') + '</button>';
-        // (1) Header strip — identity (left) + resolution status chip (right),
-        // parity with the accountant card's ✓ Corrected chip. Reviewed = the period
-        // was reviewed with this card let to ride (not individually resolved).
+            : '<button type="button" class="txv-btn" data-txv-act="resolve">' + (draft ? 'Review &amp; submit' : 'Mark reviewed') + '</button>';
+        // (1) Header strip — identity (left) + review status chip (right). (An earlier
+        // note here claimed parity with an accountant "✓ Corrected" chip; no such chip
+        // exists.) Reviewed = the PERIOD was reviewed with this card let to ride, not
+        // individually reviewed.
         var reviewed = !p.done && !draft && !!_review;
-        // No chip on a resolved card — it never over-claims a fix. Draft/Reviewed keep theirs.
-        var statusChip = p.done ? ''
+        // Done card — the chip states the HAND-OFF, not a fix: the analyst identified the
+        // root cause and passed it on. Draft/Reviewed keep their own chips.
+        var statusChip = p.done ? '<span class="txv-statuschip is-fixed" title="Reviewed by the analyst and handed to the Audit Center.">&rarr; Audit Center</span>'
           : draft ? '<span class="txv-statuschip is-draft">Finding drafted</span>'
           : reviewed ? '<span class="txv-statuschip is-reviewed">Reviewed</span>' : '';
         // (2) Panel header — the V8 standard (identity LEFT · pattern title + period
@@ -8724,7 +8760,7 @@
           + msg
           + recurRow
           // Inline resolution editor (UI-26) — open when the card is 'reopened' (persisted),
-          // else hidden until Mark resolved / Reopen is clicked.
+          // else hidden until Mark reviewed / Reopen is clicked.
           + '<div class="txv-card-editor"' + (reopened ? '' : ' hidden') + '>'
           +   '<label class="txv-card-editor-lbl">Recommendations</label>'
           +   '<textarea class="txv-card-editor-txt" placeholder="Waiting investigation — replaced with recommendations from the transaction details page.">' + esc(whatDoneVal) + '</textarea>'
@@ -8747,7 +8783,8 @@
       // survives the innerHTML swaps above. Reads company/card/period/amount from the
       // card's data attrs (never a stale closure), writes the card-keyed resolution to
       // RRV8.cardStore (server-first, localStorage fallback), then re-renders the tab
-      // so the ✓ Worked state + the "Resolved this cycle" rollup update.
+      // so the card's done state + the "Handed off this cycle" rollup update. (An earlier
+      // note here named a "✓ Worked" state; no such state renders.)
       if (!host._txvCardWired) {
         host._txvCardWired = true;
         host.addEventListener('click', function (e) {
@@ -8791,14 +8828,14 @@
               });
             } else if (ed) {   // no store — fall back to a transient open
               ed.hidden = false; cardEl.classList.add('is-editing');
-              btn.textContent = 'Mark resolved'; btn.setAttribute('data-txv-act', 'save');
+              btn.textContent = 'Mark reviewed'; btn.setAttribute('data-txv-act', 'save');
             }
             return;
           }
           if (act === 'resolve') {
-            // Fresh / draft card — open the editor and MORPH this button into "Mark resolved".
+            // Fresh / draft card — open the editor and MORPH this button into "Mark reviewed".
             if (ed) { ed.hidden = false; cardEl.classList.add('is-editing'); var ta = ed.querySelector('.txv-card-editor-txt'); if (ta) { ta.focus(); try { ta.setSelectionRange(ta.value.length, ta.value.length); } catch (_) {} } }
-            btn.textContent = 'Mark resolved';
+            btn.textContent = 'Mark reviewed';
             btn.setAttribute('data-txv-act', 'save');
             return;
           }
@@ -8860,8 +8897,27 @@
   // loaded). Deliberately calm: the loud connection banner already handles a real
   // outage, so this just confirms the plumbing and lets the accuracy work be the
   // headline. Page-level (renders across all analyst sub-views, above the tabs).
+  // Fourth readiness line — the classifier's DMAAI universe. It belongs in the
+  // collapsed detail list rather than the lead: on the happy path it is a line
+  // the analyst reads once and skims forever after. The lead speaks up only
+  // when the warm did NOT happen, because that is the state with a consequence
+  // the analyst can see (account-mismatch marks arrive a beat after the tab
+  // paints, or never, if the load fails there too).
+  function _dmaaiReadyLine() {
+    if (_dmaaiReady === 'na')       return '';
+    if (_dmaaiReady === 'ready')    return 'DMAAI model loaded';
+    if (_dmaaiReady === 'degraded') return 'DMAAI model loads when you open Transaction Variance';
+    return 'DMAAI model loading';
+  }
+  // Last data into renderAnalystReady — replayed when the DMAAI warm settles
+  // after the strip has already painted (same pattern as _lastAnalystHeroData).
+  var _lastAnalystReadyData = null;
+  function refreshAnalystReady() {
+    if (_lastAnalystReadyData) renderAnalystReady(_lastAnalystReadyData);
+  }
   function renderAnalystReady(d) {
     var el = $('analystReady'); if (!el) return;
+    _lastAnalystReadyData = d;
     var cos = (d && d.companies) || [];
     if (_viewRole() !== 'analyst' || !cos.length) { el.hidden = true; el.innerHTML = ''; return; }
     el.hidden = false;
@@ -8870,9 +8926,17 @@
     var checks = ['Connected to data services'];
     if (cur) checks.push('Numbers current to ' + cur);
     checks.push('Inventory loaded');
-    var lead = down
-      ? 'Reconnecting to the data service — showing the last figures loaded'
-      : ('System ready — connected' + (cur ? ', numbers current to ' + cur : '') + ', inventory loaded');
+    var modelLine = _dmaaiReadyLine();
+    if (modelLine) checks.push(modelLine);
+    var lead;
+    if (down) {
+      lead = 'Reconnecting to the data service — showing the last figures loaded';
+    } else if (_dmaaiReady === 'degraded') {
+      lead = 'System ready' + (cur ? ' — numbers current to ' + cur : '')
+           + '. Account-mismatch checks load when you open Transaction Variance.';
+    } else {
+      lead = 'System ready — connected' + (cur ? ', numbers current to ' + cur : '') + ', inventory loaded';
+    }
     el.innerHTML =
       '<div class="analyst-ready-row' + (down ? ' is-down' : '') + '">'
       +   '<span class="ar-tick" aria-hidden="true">' + (down ? '⚠' : '✓') + '</span>'
@@ -9966,7 +10030,7 @@
   // Inputs are analyst or accountant transactions ONLY; system events (loads / B->C /
   // deploys / reviews) are NOT inputs and are dropped. Each entry is one actor + a
   // trigger + (ideally) a detailsHref, so the framework extends by adding triggers:
-  //   analyst    — resolved variance reviews (RRV8.cardStore; details → the worklist)
+  //   analyst    — completed variance reviews (RRV8.cardStore; details → the worklist)
   //                + cardex variance clears (/admin/activity "Cardex variance — cleared";
   //                details → the cardex variance page)
   //   accountant — reconciliation completions (attest / sign-off / journal entry,
@@ -10031,8 +10095,8 @@
     try { var dt = new Date(at); if (!isNaN(dt.getTime())) return dt.toLocaleString(); } catch (_) {}
     return String(at);
   }
-  // cardStore resolution record -> an ANALYST transaction. Only a RESOLVED review
-  // lands here — a 'worked' draft is still on the Home card awaiting Mark resolved
+  // cardStore resolution record -> an ANALYST transaction. Only a COMPLETED review
+  // lands here — a 'worked' draft is still on the Home card awaiting Mark reviewed
   // (the two-step); 'reopened'/'open' are in-progress. detailsHref → the worklist
   // where it was worked, so the auditor can open the rows behind it.
   // Currency-format an audit amount. The module-level `_money` carries no symbol and
@@ -10054,11 +10118,11 @@
       ? _txvTxHref(rec.company, { card: rec.cardCode, period: String(rec.periodEnd).slice(0, 10) })
       : '';
     return {
-      actor: 'analyst', trigger: 'Transaction variance resolved', title: nm,
+      actor: 'analyst', trigger: 'Transaction variance reviewed', title: nm,
       at: rec.at || '', by: rec.by || '', co: rec.company || '', per: rec.periodEnd || '',
       message: msg, amount: amt, detailsHref: href,
       // event/detail keep the flat shape the Excel export consumes.
-      event: nm + ' — resolved at source',
+      event: nm + ' — root cause identified',
       detail: msg + (amt != null && Math.abs(amt) >= 1 ? ' · ' + _audMoney(amt) : '')
     };
   }
@@ -10218,7 +10282,7 @@
       }).join('');
     }
     if (!total) {
-      box.innerHTML = '<div class="audit-empty">No completed reviews yet. When the analyst resolves a variance card — or an accountant records a reconciliation — it appears here, with a link to the details behind it.</div>';
+      box.innerHTML = '<div class="audit-empty">No completed reviews yet. When the analyst reviews a variance card — or an accountant records a reconciliation — it appears here, with a link to the details behind it.</div>';
       return;
     }
     var perLabel = _auditPeriod ? (fmtPeriod(_auditPeriod) || _auditPeriod) : 'this period';
