@@ -4,6 +4,57 @@
 
 ---
 
+## Section 0: The population — read this before writing any query
+
+**`RCardexLedgerCompare2` is the document source of truth for transaction
+variances. That is the sole purpose the table exists: to hold just the list of
+documents that need analysis. Including any other document in a result set is
+wrong.** (Owner ruling 2026-08-05, HARD.)
+
+A document not in `RCardexLedgerCompare2` does not need analysis, by
+definition — it already tied and was cleared.
+
+**Do not confuse it with `RCardexLedgerCompare`** (no `2`). That is the
+*pre-netting* table holding BOTH sides of EVERY transaction. `...Compare2` is
+what survives netting. They are not two views of the same thing: one is the
+whole ledger, the other is the worklist. Counting from the wrong one produces
+numbers that look authoritative and mean nothing.
+
+Worked examples of getting this wrong, all from a single session:
+
+- Counting cardex-only `IT` documents in `RCardexLedgerCompare` gave **124,397**
+  and read as a large inventory matching failure. Scoped to `...Compare2` the
+  real figure is **3 rows on one database and 102 on another**, all already
+  claimed by Transfer Integrity. The other 124,000-odd had matched and cleared.
+- A study of which match key minimises residual, run against
+  `RCardexLedgerCompare`, produced figures such as "$2.68M sales residual". They
+  describe the full ledger, support no conclusion about the variance
+  population, and were discarded.
+
+**The correct shape** — anchor on the variance population, then reach outward
+only to *explain* those rows:
+
+```sql
+with p as (select * from dbo.RCardexLedgerCompare2
+           where recstatus < 2 and <the card's own predicates>)
+-- every other table joins TO p. Nothing else supplies the population.
+```
+
+The classifier already follows this: every claim in `usp8_txv_flags` scopes its
+temp tables with `exists (select 1 from RCardexLedgerCompare2 ...)`, so F0911
+and F4211 are never aggregated whole. Match that pattern.
+
+⚠ **The dangerous case is a test that asks whether something exists OUTSIDE the
+table** — *is there any F0911 row for this document?* It is anchored on a
+`...Compare2` row, but its answer depends on a match key that may be wrong for
+that transaction type, and a wrong key returns "nothing found" rather than an
+error. The withdrawn `Sales Not Journaled` claim shipped exactly this way. See
+§ Grain in `manufacturing-accounting-flow.md` for the per-type match keys, and
+never conclude an entry is *absent* without first establishing the key for that
+type.
+
+---
+
 ## Section 1: Using Claude for Automated Analysis
 
 Claude can perform a full Transaction Detail analysis automatically and return an updated `.xlsx` workbook with the analysis written to a card-layout sheet, the source sheet highlighted with priority colours and equipped with jump-to-row hyperlinks, and the priority level computed from the variance against the document amount. This eliminates manual annotation and ensures consistent output across analysts.
