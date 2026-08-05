@@ -145,6 +145,8 @@
 
   .gate-notice { display: none; }
   .gate-notice.is-visible { display: block; }
+  .gate-notice.halt-notice { background: var(--red-pale); border-color: var(--red); }
+  .gate-notice.halt-notice svg { color: var(--red); }
   body.is-gated #js-tool { display: none; }
 </style>
 </head>
@@ -192,6 +194,20 @@
       <div class="note gate-notice" id="js-gate" role="alert">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
         <div>This is an administrator function. <b>Contact your administrator</b> to correct a period-ending date.</div>
+      </div>
+
+      <!-- Halt states. Neither one is a permission answer: the first means a
+           required part of the page never loaded, the second means the sign-in
+           carried no answer about this user's access either way. Both close the
+           page instead of rendering the admin surface on a guess. -->
+      <div class="note gate-notice halt-notice" id="js-halt-asset" role="alert">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
+        <div>Part of this page didn&rsquo;t load, so RapidReconciler can&rsquo;t tell what you&rsquo;re allowed to see here &mdash; nothing was loaded. Reload the page. If it happens again, <b>contact your IT department</b>.</div>
+      </div>
+
+      <div class="note gate-notice halt-notice" id="js-halt-claim" role="alert">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
+        <div>Your sign-in didn&rsquo;t say what you&rsquo;re allowed to do here, so nothing was loaded. Reload the page. If it happens again, ask your <b>IT department</b> to check your RapidReconciler account.</div>
       </div>
 
       <div id="js-tool">
@@ -338,6 +354,15 @@
     return d[s.activeDbIndex || 0] || d[0] || null;
   }
   function isAdmin() { const a = activeDb(); return !!(a && a.t && a.t.adm === true); }
+  // The access claim has THREE states and each gets its own answer. `true` opens
+  // the page; `false` is a real "no" and shows the gate notice above; anything
+  // else (no session, no tab claims, an older token shape) means we were never
+  // told, so the page halts visibly instead of guessing. Guessing "false" would
+  // lock out a legitimate admin whose token carries a different shape; guessing
+  // "true" is the fail-open this replaces.
+  function admClaim() { const a = activeDb(); return (a && a.t && typeof a.t.adm === 'boolean') ? a.t.adm : null; }
+  // Close the page loudly. `id` names one of the halt notices in the markup.
+  function haltPage(id) { document.body.classList.add('is-gated'); const el = $(id); if (el) el.classList.add('is-visible'); }
 
   // Friendly names for the persistent tables the proc touches. Finance-facing:
   // the analyst sees "Report area", not raw table names. Falls back to the
@@ -526,11 +551,13 @@
 
     // Client gate. The endpoints are also admin-gated server-side (403), so this
     // is UX, not the security boundary.
-    if (window.RR_SESSION && !isAdmin()) {
+    const _adm = admClaim();
+    if (_adm === false) {
       document.body.classList.add('is-gated');
       $('js-gate').classList.add('is-visible');
       return;
     }
+    if (_adm !== true) { haltPage('js-halt-claim'); return; }
 
     $('js-check').addEventListener('click', doCheck);
     $('js-preview').addEventListener('click', doPreview);
@@ -556,7 +583,10 @@
     if (window.RRV8 && typeof window.RRV8.hydrateSession === 'function') {
       window.RRV8.hydrateSession().then(startWithSession).catch(startWithSession);
     } else {
-      startWithSession();
+      // sidebar.js owns session hydration. If it did not load there is no session
+      // to read, so close the page and say so -- never render admin controls on a
+      // blind guess. (This branch used to boot the page wide open.)
+      haltPage('js-halt-asset');
     }
   });
 })();

@@ -367,6 +367,15 @@
   .lic-btn-primary { background: var(--blue, #2b5fb0); border-color: var(--blue, #2b5fb0); color: #fff; }
   .lic-btn-primary:hover { filter: brightness(1.07); }
   .lic-btn svg { width: 15px; height: 15px; }
+  /* Non-admin gate + halt states. Mirrors the standard on the other admin tool
+     pages (admin-purge-data.html et al): the page header stays, the tool region
+     is hidden, and one notice says why. */
+  .gate-notice { display:none; gap:12px; padding:13px 16px; border-radius:9px; background:var(--blue-pale); border:1px solid #c2d8ef; color:var(--text); margin-bottom:18px; }
+  .gate-notice svg { width:18px; height:18px; flex-shrink:0; color:var(--blue); margin-top:2px; }
+  .gate-notice.is-visible { display:flex; }
+  .gate-notice.halt-notice { background:var(--red-pale); border-color:var(--red); }
+  .gate-notice.halt-notice svg { color:var(--red); }
+  body.is-gated #js-tool { display:none; }
 </style>
 </head>
 <body data-help-src="../RRUniversity/administrator-managing-companies.html"
@@ -446,106 +455,130 @@
         <h1 class="page-title">Licensing</h1>
       </header>
 
-      <!-- Read-only company-seat usage. Customer admins see their entitlement
-           ("Using X of N company licenses") but can't change it — the seat
-           count is a contract term set by GSI. Populated from /license-usage. -->
-      <div id="js-license-usage" role="status" hidden
-           style="margin:0 0 14px; padding:10px 14px; border-radius:8px; font-size:13.5px; font-weight:600;
-                  background:#eef3f9; border:1px solid #cfe0f5; color:var(--navy);"></div>
-
-      <!-- License term: days remaining + expire-soon (within 60 days) state.
-           Amber inside the window, with a request-invoice mailto and a snooze
-           that greens it until the chosen reminder date. Populated from
-           /license-usage (licenseEndDate + daysRemaining). -->
-      <div class="lic-term" id="js-lic-term" role="status" hidden>
-        <div class="lic-term-head">
-          <span class="lic-term-title">License</span>
-          <span class="lic-term-days" id="js-lic-days"></span>
-        </div>
-        <div class="lic-term-sub" id="js-lic-sub"></div>
-        <div class="lic-term-actions" id="js-lic-actions" hidden>
-          <a class="lic-btn lic-btn-primary" id="js-lic-invoice" href="#">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16l-3-2-2 2-3-2-3 2-2-2-3 2V4z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
-            Request an invoice
-          </a>
-        </div>
+      <!-- Non-admin gate -->
+      <div class="gate-notice" id="js-gate" role="alert">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
+        <div>This is an administrator function. <b>Contact your administrator</b> if you need licensing details.</div>
       </div>
 
-      <div class="fetch-error" id="js-fetch-error" role="alert">
-        Couldn&rsquo;t reach <code>/admin/companies</code> &mdash;
-        <span id="js-fetch-error-msg"></span>
+      <!-- Halt states. Neither one is a permission answer: the first means a
+           required part of the page never loaded, the second means the sign-in
+           carried no answer about this user's access either way. Both close the
+           page instead of rendering the admin surface on a guess. -->
+      <div class="gate-notice halt-notice" id="js-halt-asset" role="alert">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
+        <div>Part of this page didn&rsquo;t load, so RapidReconciler can&rsquo;t tell what you&rsquo;re allowed to see here &mdash; nothing was loaded. Reload the page. If it happens again, <b>contact your IT department</b>.</div>
       </div>
 
-      <!-- F0010 data check: shown when the agent reports 0 JDE company
-           constants (companyConstantsCount). Toggled by the admin/companies
-           load. Mirrors the VALC Manage Client > Companies banner. -->
-      <div class="f0010-banner" id="js-f0010-banner" hidden>
-        <strong>No JDE company data yet.</strong> Company numbers come from this database&rsquo;s
-        JDE company constants (<code>F0010</code>), populated by the import / SSIS sync.
-        Run <strong>Import JDE</strong> (or wait for the scheduled run), then reload &mdash;
-        companies appear here once F0010 has data.
+      <div class="gate-notice halt-notice" id="js-halt-claim" role="alert">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
+        <div>Your sign-in didn&rsquo;t say what you&rsquo;re allowed to do here, so nothing was loaded. Reload the page. If it happens again, ask your <b>IT department</b> to check your RapidReconciler account.</div>
       </div>
 
-      <section class="grid-card" aria-label="Licensed Companies">
-        <div class="grid-card-head">
-          <span class="grid-card-title">Licensed Companies</span>
-          <span class="grid-card-count is-loading" id="js-row-count">Loading&hellip;</span>
-        </div>
-        <table class="grid-table" id="js-companies-table">
-          <thead>
-            <tr>
-              <th>Number</th>
-              <th>Name</th>
-              <th>Start Date</th>
-              <th>Base Currency</th>
-              <th class="is-num">AAI Doc</th>
-              <th class="is-num">Threshold</th>
-              <th class="is-action">Options</th>
-            </tr>
-          </thead>
-          <tbody id="js-companies-tbody">
-            <tr><td class="is-empty" colspan="7">Loading companies&hellip;</td></tr>
-          </tbody>
-        </table>
-      </section>
+      <div id="js-tool">
 
-      <!-- Companies with F4111 activity but no rcompanies row.
-           Surfaces "JDE companies that exist on this DB but aren't
-           licensed in RR" — the at-a-glance "is there value in
-           licensing this one?" signal. Bars are last-12-months of
-           F4111 activity anchored at MAX(ildgl), height-scaled
-           globally across the section so cross-company comparison
-           reads at a glance. -->
-      <section class="grid-card" aria-label="Not Licensed Companies">
-        <div class="grid-card-head">
-          <span class="grid-card-title">Not Licensed</span>
-          <span class="grid-card-count" id="js-unlicensed-count" hidden></span>
+        <!-- Read-only company-seat usage. Customer admins see their entitlement
+             ("Using X of N company licenses") but can't change it — the seat
+             count is a contract term set by GSI. Populated from /license-usage. -->
+        <div id="js-license-usage" role="status" hidden
+             style="margin:0 0 14px; padding:10px 14px; border-radius:8px; font-size:13.5px; font-weight:600;
+                    background:#eef3f9; border:1px solid #cfe0f5; color:var(--navy);"></div>
+
+        <!-- License term: days remaining + expire-soon (within 60 days) state.
+             Amber inside the window, with a request-invoice mailto and a snooze
+             that greens it until the chosen reminder date. Populated from
+             /license-usage (licenseEndDate + daysRemaining). -->
+        <div class="lic-term" id="js-lic-term" role="status" hidden>
+          <div class="lic-term-head">
+            <span class="lic-term-title">License</span>
+            <span class="lic-term-days" id="js-lic-days"></span>
+          </div>
+          <div class="lic-term-sub" id="js-lic-sub"></div>
+          <div class="lic-term-actions" id="js-lic-actions" hidden>
+            <a class="lic-btn lic-btn-primary" id="js-lic-invoice" href="#">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16l-3-2-2 2-3-2-3 2-2-2-3 2V4z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
+              Request an invoice
+            </a>
+          </div>
         </div>
-        <!-- Deferred scan: the not-licensed grid needs a JDE activity scan
-             (F4111) that's slow, so it runs on demand rather than on every
-             page load. Mirrors the VALC #81 Licensing tab. -->
-        <div class="unlicensed-cta" id="js-unlicensed-cta">
-          <p>JD Edwards companies with activity on this database that aren&rsquo;t licensed in RapidReconciler. This checks JDE activity and can take a moment.</p>
-          <button type="button" class="btn-check-jde" id="js-check-jde">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
-            </svg>
-            Check JDE for more companies
-          </button>
-          <div class="cta-err" id="js-unlicensed-err" hidden></div>
+
+        <div class="fetch-error" id="js-fetch-error" role="alert">
+          Couldn&rsquo;t reach <code>/admin/companies</code> &mdash;
+          <span id="js-fetch-error-msg"></span>
         </div>
-        <table class="grid-table" id="js-unlicensed-table" hidden>
-          <thead>
-            <tr>
-              <th>Number</th>
-              <th>Name</th>
-              <th class="is-num">Items</th>
-              <th>Activity &middot; 12 mo</th>
-            </tr>
-          </thead>
-          <tbody id="js-unlicensed-tbody"></tbody>
-        </table>
-      </section>
+
+        <!-- F0010 data check: shown when the agent reports 0 JDE company
+             constants (companyConstantsCount). Toggled by the admin/companies
+             load. Mirrors the VALC Manage Client > Companies banner. -->
+        <div class="f0010-banner" id="js-f0010-banner" hidden>
+          <strong>No JDE company data yet.</strong> Company numbers come from this database&rsquo;s
+          JDE company constants (<code>F0010</code>), populated by the import / SSIS sync.
+          Run <strong>Import JDE</strong> (or wait for the scheduled run), then reload &mdash;
+          companies appear here once F0010 has data.
+        </div>
+
+        <section class="grid-card" aria-label="Licensed Companies">
+          <div class="grid-card-head">
+            <span class="grid-card-title">Licensed Companies</span>
+            <span class="grid-card-count is-loading" id="js-row-count">Loading&hellip;</span>
+          </div>
+          <table class="grid-table" id="js-companies-table">
+            <thead>
+              <tr>
+                <th>Number</th>
+                <th>Name</th>
+                <th>Start Date</th>
+                <th>Base Currency</th>
+                <th class="is-num">AAI Doc</th>
+                <th class="is-num">Threshold</th>
+                <th class="is-action">Options</th>
+              </tr>
+            </thead>
+            <tbody id="js-companies-tbody">
+              <tr><td class="is-empty" colspan="7">Loading companies&hellip;</td></tr>
+            </tbody>
+          </table>
+        </section>
+
+        <!-- Companies with F4111 activity but no rcompanies row.
+             Surfaces "JDE companies that exist on this DB but aren't
+             licensed in RR" — the at-a-glance "is there value in
+             licensing this one?" signal. Bars are last-12-months of
+             F4111 activity anchored at MAX(ildgl), height-scaled
+             globally across the section so cross-company comparison
+             reads at a glance. -->
+        <section class="grid-card" aria-label="Not Licensed Companies">
+          <div class="grid-card-head">
+            <span class="grid-card-title">Not Licensed</span>
+            <span class="grid-card-count" id="js-unlicensed-count" hidden></span>
+          </div>
+          <!-- Deferred scan: the not-licensed grid needs a JDE activity scan
+               (F4111) that's slow, so it runs on demand rather than on every
+               page load. Mirrors the VALC #81 Licensing tab. -->
+          <div class="unlicensed-cta" id="js-unlicensed-cta">
+            <p>JD Edwards companies with activity on this database that aren&rsquo;t licensed in RapidReconciler. This checks JDE activity and can take a moment.</p>
+            <button type="button" class="btn-check-jde" id="js-check-jde">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+              </svg>
+              Check JDE for more companies
+            </button>
+            <div class="cta-err" id="js-unlicensed-err" hidden></div>
+          </div>
+          <table class="grid-table" id="js-unlicensed-table" hidden>
+            <thead>
+              <tr>
+                <th>Number</th>
+                <th>Name</th>
+                <th class="is-num">Items</th>
+                <th>Activity &middot; 12 mo</th>
+              </tr>
+            </thead>
+            <tbody id="js-unlicensed-tbody"></tbody>
+          </table>
+        </section>
+
+      </div>
 
     </div>
 
@@ -562,6 +595,39 @@
   const URL_MODE  = new URLSearchParams(window.location.search).get('mode');
   const MODE      = URL_MODE || RR_CONFIG.mode || 'demo';
   const IS_DEMO   = (MODE === 'demo');
+
+  // ---------- session + client admin gate ----------
+  // The same gate the other admin tool pages carry (admin-purge-data.html et
+  // al). UX only -- the endpoints are admin-gated server-side too -- but until
+  // this page had one it issued its reads before anyone read the claim.
+  function activeDb() { const s = window.RR_SESSION || {}; const d = Array.isArray(s.dbs) ? s.dbs : []; return d[s.activeDbIndex || 0] || d[0] || null; }
+  // The admin claim has THREE states and each gets its own answer. `true` opens
+  // the page; `false` is a real "no" and shows the gate notice; anything else
+  // (no session, no tab claims, an older token shape) means we were never told,
+  // so the page halts visibly instead of guessing. Guessing "false" would lock
+  // out a legitimate admin whose token carries a different shape; guessing
+  // "true" is the fail-open this replaces.
+  function admClaim() { const a = activeDb(); return (a && a.t && typeof a.t.adm === 'boolean') ? a.t.adm : null; }
+  // Close the page loudly. `id` names one of the halt notices in the markup.
+  function haltPage(id) {
+    document.body.classList.add('is-gated');
+    const el = document.getElementById(id);
+    if (el) el.classList.add('is-visible');
+  }
+  /** True when the page may load its data. A non-admin (or a session that never
+   *  said) gets a notice and the page issues no calls at all. */
+  function adminGateOpen() {
+    const adm = admClaim();
+    if (adm === true) return true;
+    if (adm === false) {
+      document.body.classList.add('is-gated');
+      const g = document.getElementById('js-gate');
+      if (g) g.classList.add('is-visible');
+    } else {
+      haltPage('js-halt-claim');
+    }
+    return false;
+  }
 
   const _testAgentAreas    = new Set(window.RR_TEST_AGENT_AREAS || []);
   const _testAgentPrefixes = window.RR_TEST_AGENT_PREFIXES || ['download-excel/'];
@@ -894,21 +960,32 @@
   // by help-sidebar.js via the .topbar-home hook class. mountTopbar() and its
   // connectivity pill were retired here along with the header (matches the
   // admin-page standard, admin-claude-assistant.html).
-  // Fire-and-forget filter-universe seed so other pages have a warm
-  // sidebar cache after the analyst visits this one.
-  if (window.RRV8 && typeof window.RRV8.ensureInventoryStatus === 'function') {
-    try { window.RRV8.ensureInventoryStatus(rrFetch); } catch (_) {}
+
+  // Hydrate the session first, then gate, then load. The licensed-companies read
+  // and the seat/term banners all hang off startWithSession, so a non-admin
+  // session issues nothing.
+  function startWithSession() {
+    if (!adminGateOpen()) return;
+    // Fire-and-forget filter-universe seed so other pages have a warm sidebar
+    // cache after the analyst visits this one.
+    if (window.RRV8 && typeof window.RRV8.ensureInventoryStatus === 'function') {
+      try { window.RRV8.ensureInventoryStatus(rrFetch); } catch (_) {}
+    }
+    try {
+      const s = window.RR_SESSION || {};
+      const db = (s.dbs || [])[s.activeDbIndex || 0];
+      const dbEl = document.getElementById('js-topbar-db');
+      if (dbEl && db && db.n) dbEl.textContent = db.n;
+    } catch (_) {}
+    loadCompaniesInitial();
   }
-  // Hydrate the session, then reflect the active database in the topbar.
   if (window.RRV8 && typeof window.RRV8.hydrateSession === 'function') {
-    window.RRV8.hydrateSession().then(() => {
-      try {
-        const s = window.RR_SESSION || {};
-        const db = (s.dbs || [])[s.activeDbIndex || 0];
-        const dbEl = document.getElementById('js-topbar-db');
-        if (dbEl && db && db.n) dbEl.textContent = db.n;
-      } catch (_) {}
-    });
+    window.RRV8.hydrateSession().then(startWithSession).catch(startWithSession);
+  } else {
+    // sidebar.js owns session hydration. If it did not load there is no session
+    // to read, so close the page and say so -- never render admin controls on a
+    // blind guess.
+    haltPage('js-halt-asset');
   }
 
   // ---------- Licensing writes (VALC) ----------
@@ -1120,35 +1197,39 @@
   // more companies" button (loadUnlicensed). Today's agent still bundles
   // `unlicensed` here; stashed as the button's fallback until the agent
   // ships the dedicated scan endpoint (see API.md / agent spec).
-  rrFetch('admin/companies')
-    .then(resp => {
-      // A reply with no company ARRAY is not "zero licensed companies". `|| []` made
-      // an empty 2xx body or a shape change render "No licensed companies in scope."
-      // and, worse, fed 0 into the seat banner as "Using 0 of N company licenses" —
-      // an entitlement figure the admin would act on. Treat it as a failed read.
-      if (!resp || !Array.isArray(resp.companies)) {
-        console.error('[companies] reply carried no company list:', resp);
-        throw new Error('the company list didn’t come back — this is not a sign there are none');
-      }
-      const companies = resp.companies;
-      renderCompanies(companies);
-      applyF0010Check(resp);
-      renderLicenseUsage(companies.length);
-      _inlineUnlicensed = Array.isArray(resp.unlicensed) ? resp.unlicensed : null;
-    })
-    .catch(err => {
-      showFetchError(err);
-      const licTbody = document.getElementById('js-companies-tbody');
-      if (licTbody) {
-        licTbody.innerHTML =
-          '<tr><td class="is-empty" colspan="7">Couldn&rsquo;t load companies. See the error banner above.</td></tr>';
-      }
-      const licCount = document.getElementById('js-row-count');
-      if (licCount) {
-        licCount.textContent = 'Error';
-        licCount.classList.remove('is-loading');
-      }
-    });
+  // Invoked from boot only after the admin claim is confirmed, so a non-admin
+  // session issues no reads at all.
+  function loadCompaniesInitial() {
+    rrFetch('admin/companies')
+      .then(resp => {
+        // A reply with no company ARRAY is not "zero licensed companies". `|| []` made
+        // an empty 2xx body or a shape change render "No licensed companies in scope."
+        // and, worse, fed 0 into the seat banner as "Using 0 of N company licenses" —
+        // an entitlement figure the admin would act on. Treat it as a failed read.
+        if (!resp || !Array.isArray(resp.companies)) {
+          console.error('[companies] reply carried no company list:', resp);
+          throw new Error('the company list didn’t come back — this is not a sign there are none');
+        }
+        const companies = resp.companies;
+        renderCompanies(companies);
+        applyF0010Check(resp);
+        renderLicenseUsage(companies.length);
+        _inlineUnlicensed = Array.isArray(resp.unlicensed) ? resp.unlicensed : null;
+      })
+      .catch(err => {
+        showFetchError(err);
+        const licTbody = document.getElementById('js-companies-tbody');
+        if (licTbody) {
+          licTbody.innerHTML =
+            '<tr><td class="is-empty" colspan="7">Couldn&rsquo;t load companies. See the error banner above.</td></tr>';
+        }
+        const licCount = document.getElementById('js-row-count');
+        if (licCount) {
+          licCount.textContent = 'Error';
+          licCount.classList.remove('is-loading');
+        }
+      });
+  }
 
 })();
 </script>

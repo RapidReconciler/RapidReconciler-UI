@@ -473,6 +473,15 @@ where they differ** (esp.: validate-JDE-FIRST, not re-roll-first; the manual exp
 the R41543/R41544 integrity programs I guessed). The exploratory notes above stay as background on
 causes; the steps below are the real procedure.
 
+> **Refuted by the owner 2026-08-03 — kept here as history, do not act on it.** The R41543/R41544
+> guess recorded above later leaked out of these notes into shipped copy: the Completion Not
+> Journaled material first, then the Transfer Integrity (IT) corrective action on the 5.19 catalog
+> entry, the Home and Transactions card findings, the analyzer's `_transferIntegrityResolution`,
+> `usp8_txv_flags` block C, and the classifier design doc. The owner refuted the pairing for
+> Completion Not Journaled earlier and for Transfer Integrity on 2026-08-03; both are purged, and
+> each of those sites now carries a guard forbidding its reintroduction. This paragraph is the
+> provenance record of where the guess came from — that is why it stays.
+
 - **Definition:** a cardex integrity variance = summarized **quantity** or **extended amount** in the
   item ledger (F4111) ≠ the on-hand balance in JDE Item Location (F41021). RR compares summarized F4111
   ↔ F41021 automatically every nightly import (excluding memo txns `ILIPCD="X"`, applying UOM

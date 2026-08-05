@@ -254,7 +254,17 @@ leaving them as prose):
   line. A check would assert all four on every `admin-*.html`.
 - **Admin gating** (shipped): admin-only tool pages gate client-side on
   `activeDb().t.adm` and add `body.is-gated` + show the gate notice when
-  the signed-in user isn&rsquo;t an admin.
+  the signed-in user isn&rsquo;t an admin. The claim has **three** states,
+  each with its own answer: `true` opens the page, `false` shows
+  `#js-gate` (&ldquo;contact your administrator&rdquo;), and anything else
+  &mdash; no session, no tab claims, an older token shape &mdash; shows
+  `#js-halt-claim`, because &ldquo;we were never told&rdquo; is not the
+  same answer as &ldquo;no&rdquo;. A page whose `sidebar.js` never loaded
+  has no claim to read at all, so the boot `else` branch shows
+  `#js-halt-asset` instead of booting; it must never call the page&rsquo;s
+  start function. A check would assert (a) no `admin-*.html` contains
+  `else { startBoot(); }` / `else { startWithSession(); }`, and (b) every
+  one carries both halt notices.
 - Per-row Export button on new grids
 - Headless analyzer template handoff for new export types
 - New V8 module page (Integrity, In Transit, PO Receipts)

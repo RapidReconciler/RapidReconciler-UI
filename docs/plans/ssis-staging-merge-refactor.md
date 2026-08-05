@@ -182,7 +182,7 @@ Don't hard-code which cardex doc types are "pending batch" — they vary by cust
   type is learned."
 - Watch-set = `F4111 WHERE ilicu = 0 AND ildcto IN (derived gldcto)`.
 
-**Why `ilicu = 0` alone fails on real data** (client `jde_treatt`, 3.0M-row F4111):
+**Why `ilicu = 0` alone fails on real data** (a real client JDE source, 3.0M-row F4111):
 all `ilicu = 0` = **823,381 rows (27%)**, dominated by `IQ`/`IB`/`IZ` inventory
 adjustments that carry `ilicu = 0` *permanently* (never batched) → 316,596
 gaps-and-islands ranges, infeasible. The batch-type/GLDCTO filter cuts it to
@@ -198,7 +198,7 @@ gaps-and-islands ranges, infeasible. The batch-type/GLDCTO filter cuts it to
    BETWEEN … OR …` (or `WHERE 1=0` when nothing qualifies). **No `ILUKID >= min`
    fallback** — range-compression already bounds *rows* to the open count; a fallback
    would widen to the whole table on an old straggler (verified: `>= min` = 11,309
-   rows vs 316 for the range path on treatt).
+   rows vs 316 for the range path on that client).
 4. `dbo.usp8_apply_f4111` — `MERGE dbo.F4111 USING Staging_F4111 ON ilukid`,
    `WHEN MATCHED AND (any of the 5 cols differ)` → UPDATE + `ChangeDate`. No INSERT
    (New flow owns inserts), no DELETE. No-ops on empty staging. PRINTs

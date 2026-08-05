@@ -123,7 +123,7 @@ Every rule in the current catalog traces to the guide:
   → §3.10 Rule 6, §5.18.
 - GL-only row = non-stock/surcharge line type N (F40205 Inventory Interface),
   expected, check line type first → §5.2, §3.10 Rule 1.
-- A/P voucher (batch type V) on an inventory account = 4220 routing error, source
+- A/P voucher (batch type V) on an inventory account = 4330 routing error, source
   fix → §5.15.
 - MTO = business grouping, split by shape (GL-only expected; both-differ = 5.16
   investigate large; cardex-only = 5.19 repost via R31802A) → §5.20.
@@ -136,8 +136,13 @@ Every rule in the current catalog traces to the guide:
   > program already ran. The same run resets Unaccounted Units, which are what drive its
   > selection, so it cannot pick the transaction up a second time. The cardex-only shape
   > is a genuine gap: the run wrote no F0911 completion detail for the order.
-  > Vendor-documented as Oracle Support KB 420628, abstract only, body behind the My
-  > Oracle Support login, so the remedy is unknown. Match failures are the secondary set,
+  > No vendor article matches it. Oracle Support KB 420628 was retrieved in full and
+  > ruled out on shape: its failure drops the material issue's own F0911 entry, the
+  > inverse of this card, where the issues are present and only the completion is
+  > absent, so that failure would suppress this card rather than create it. Its cause
+  > (an issue quantity under 0.0050 blanking the 2-decimal CTS1 on the F3111 part
+  > list) and its remedy (manual journal entries) belong to a different condition.
+  > Match failures are the secondary set,
   > and confirmation is per work order rather than per batch. The rest of the bullet
   > stands: MTO is still a business grouping split by shape, and the GL-only and
   > both-differ branches are unaffected. Current text: `usp8_txv_flags` block `-- D.` and

@@ -16,7 +16,7 @@
   finds it without manual setup; pass -OutFile for a different location.
 
 .PARAMETER Database
-  Customer database name (e.g. 'rrv7-acme', 'rrv7-treatt', 'rrv7-NACoal').
+  Customer database name (e.g. 'rrv7-acme', 'rrv7-northwind', 'rrv7-lakeside').
 
 .PARAMETER OutFile
   Explicit output path. When omitted, writes to
@@ -34,10 +34,10 @@
   $env:USERPROFILE\.rr-sql-pwd.
 
 .EXAMPLE
-  .\f4095-preload-workflow.ps1 -Database rrv7-treatt
+  .\f4095-preload-workflow.ps1 -Database rrv7-northwind
 
 .EXAMPLE
-  .\f4095-preload-workflow.ps1 -Database rrv7-NACoal -OutFile 'C:\tmp\nacoal-f4095.xlsx'
+  .\f4095-preload-workflow.ps1 -Database rrv7-lakeside -OutFile 'C:\tmp\lakeside-f4095.xlsx'
 #>
 [CmdletBinding()]
 param(
