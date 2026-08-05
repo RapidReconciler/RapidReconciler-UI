@@ -5092,6 +5092,19 @@
     if (st === 'duplicate sales') return '5.18';   // DAC-28 — subtype now claimed by usp8_txv_flags
     if (st === 'transfer integrity') return '5.19'; // IT cardex-only integrity — claimed by usp8_txv_flags
     if (st === 'completion not journaled') return '5.20'; // WO completion missing from GL — claimed by usp8_txv_flags
+    // Session #28 subtypes that shipped in the DB and were never added here, so their
+    // rows fell through to the grid-shape branch below and rendered under the wrong
+    // pattern. The exact drift this ladder exists to prevent.
+    if (st === 'offsetting entries') return 'OFF';
+    if (st === 'non-stock sales lines') return 'NSL';
+    // DB beta.74 / beta.75. 'Mfg Cost Mismatch' maps onto the EXISTING 5.16 code —
+    // same mechanism, already labelled 'Manufacturing Cost Mismatch' — rather than
+    // minting a duplicate. The other three are new.
+    if (st === 'mfg cost mismatch') return '5.16';
+    if (st === 'cross-batch completion') return '5.21';
+    if (st === 'dmaai net zero') return '5.22';
+    if (st === 'sales not journaled') return '5.23';
+    if (st === 'non-stock charge lines') return '5.24';
     if (st === 'periods')  return '5.14';
     if (st === 'accounts') return '5.4';
     // 3. No subtype → cardex/GL grid pattern.
@@ -6545,6 +6558,9 @@
     '5.6': 'Balance / Adjustment', '5.11': 'Other Variance', '5.14': 'Period Mismatch',
     '5.16': 'Manufacturing Cost Mismatch', '5.17': 'Purchase Variance', '5.18': 'Duplicate Sales',
     '5.19': 'Transfer Integrity (IT)', '5.20': 'Completion Not Journaled',
+    '5.21': 'Cross-Batch Completion', '5.22': 'DMAAI Net Zero',
+    '5.23': 'Sales Not Journaled', '5.24': 'Non-Stock Charge Lines',
+    'OFF': 'Offsetting GL Entries', 'NSL': 'Non-Stock Sales Lines',
     'MTO': 'Make to Order', 'TRF': 'Transfers', 'DS': 'Direct Ship', 'ICO': 'Intercompany'
   };
   // Scope bar — reflects the FULL active scope so a drill-in from the plan shows
@@ -7257,6 +7273,100 @@
         'The accountant reclassifies the non-stock value already posted out of the inventory account.',
         'Check whether other non-stock line types carry the same overridden class before assuming these items are the only ones.',
         'Re-run this company and period. A document that comes back was not corrected.'
+      ]
+    },
+    'XBC': {
+      flag: 'Ties at work-order grain',
+      mech: 'The completion was journaled in a later batch than the one stamped on the item ledger.',
+      checked: [
+        'An F0911 completion exists for this work order on this account. Confirmed.',
+        'Regrained to work order, account and doc type across every batch and period, the two sides agree to the penny. Confirmed.',
+        'Batch present on the item-ledger row, so R31802A ran and wrote the journal in the same step.'
+      ],
+      found: [
+        'Not a variance. A work order issues material over weeks, each issue in its own batch, and the completion is not generated until the product is finished — days or weeks later, in a batch of its own.',
+        'It appears here because the comparison pairs the two sides within a batch. Match by work order and it ties.',
+        'Nothing to correct on the transaction. Reading it as a shortfall and posting an entry would create the error it looks like.'
+      ],
+      fix: [
+        'Confirm on one document before dismissing the rest: the item-ledger completion against F0911 for the same work order, ignoring the batch.',
+        'No journal entry. No source fix. Close the card.',
+        'If the count grows period over period, the correlation grain is the thing to raise, not the transactions.'
+      ]
+    },
+    'MCM': {
+      flag: 'Does not tie',
+      mech: 'A GL completion exists on this account for the work order and the amount disagrees with the item ledger.',
+      checked: [
+        'An F0911 completion exists for the work order on this account, so the completion-gap shape is ruled out.',
+        'Compared at work-order grain across every batch and period, not within a batch. The amounts still differ.',
+        'Issues and completions compared separately: the completion carries labor and overhead out of WIP and the issue does not, so the two never net against each other.'
+      ],
+      found: [
+        'The cost basis behind the journal is not the cost basis behind the item-ledger row.',
+        'The usual driver is a cost that moved between the item-ledger write and the accounting run. The item ledger itself is the cost history — read the unit cost transaction by transaction and the steps are the changes.',
+        'A cost adjustment journals as its own zero-quantity ledger row carrying the DELTA, not the new cost. Read it that way or the arithmetic will not close.'
+      ],
+      fix: [
+        'Order this item and branch by the ledger sequence and find the step. Compare the cost in force when the transaction was written against the cost the journal used.',
+        'A correction is required — the GL does not tie to the item ledger, and naming the cause is not the same as leaving it.',
+        'Prevention is sequencing: cost the item before it is issued, and keep a cost update from landing between a transaction and the run that journals it.'
+      ]
+    },
+    'NZR': {
+      flag: 'Account setup, not a transaction',
+      mech: 'Raw-material relief and finished-goods receipt resolve to the same account, so both legs land there and cancel.',
+      checked: [
+        'DMAAI 3110 and 3130 resolve to one account for these order types and GL classes. Confirmed against the account instructions, not the account description.',
+        'DMAAI 3120 is not configured, so there is no work-in-process leg to offset against.',
+        'The transactions themselves are ordinary. Nothing is wrong with the documents on this card.'
+      ],
+      found: [
+        'Both sides of every work order post to a single account and net there, so the movement between raw material and finished goods never happens in the GL.',
+        'It is silent by construction: the postings cancel, so nothing shows on the P&L and only the balance sheet is wrong.',
+        'This reproduces every period until the setup changes. No journal entry ends it.'
+      ],
+      fix: [
+        'Split the account instructions: 3110 to raw material, 3130 to finished goods, 3120 to work in process. Three distinct accounts.',
+        'Judge the accounts by their instruction, not by their name. An account described as work in process may be the declared inventory account for thousands of items.',
+        'The accountant restates the affected balances once the routing is correct.'
+      ]
+    },
+    'SNJ': {
+      flag: 'No GL entry exists',
+      mech: 'Inventory was relieved on the item ledger with a batch stamped, and the GL holds nothing for the document.',
+      checked: [
+        'F0911 searched for this document under its own type and under every other type. Nothing.',
+        'Batch present on the item-ledger row, so the update that stamps it ran.',
+        'Not an unposted batch — unposted entries are loaded and would suppress this card. That break surfaces as a GL batch variance instead.',
+        'Order lines still open rather than completed, which is where to start.'
+      ],
+      found: [
+        'The item ledger recorded the relief and the GL never received it, so inventory is understated against the ledger by the full value.',
+        'Absent, not misrouted and not misdated. Searching other accounts and other periods will not find it.'
+      ],
+      fix: [
+        'Read the run that stamped these documents and its error report, starting with the earliest.',
+        'Confirm on one document first: the item-ledger relief against F0911 for that document number, with no account or period filter.',
+        'The accountant books the missing value. The source fix is whatever the run report shows, and a document that comes back was not fixed.'
+      ]
+    },
+    'NCL': {
+      flag: 'No item-ledger row was due',
+      mech: 'Every line on the order is non-stock, so the GL posts and inventory never moves.',
+      checked: [
+        'Line type on every line resolves to an Inventory Interface of N. Confirmed against F40205, not inferred from the line-type letters.',
+        'No item-ledger row exists for these documents, which is correct for a non-stock line rather than a gap.',
+        'Separate from the non-stock sales card: that one matches when the non-stock cost equals the variance, and a charge line carries no extended cost to match with.'
+      ],
+      found: [
+        'GL-only is what correct processing looks like for these lines. The line type is the first question on any GL-only row and it answers this one.',
+        'Where the charge is a customer-specific process, the card names it and stops. There is no source fix to chase.'
+      ],
+      fix: [
+        'Confirm the line types on one order before accepting the rest.',
+        'If these should not be reaching an inventory account at all, the lever is the GL class on the line, not the non-stock account instruction.',
+        'Otherwise no action on the transaction. The tie-out still fails, so the accountant decides whether the balance needs restating.'
       ]
     },
     'DUP': {

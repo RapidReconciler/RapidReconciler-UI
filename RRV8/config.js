@@ -837,6 +837,11 @@ window.RRV8 = window.RRV8 || {};
     // A correction IS required: F0911 does not tie to F4111. The lever is the item's
     // G/L class, NOT the non-stock DMAAI (that entry is correct).
     'NSL':     { title: 'Non-Stock Sales Lines',         kind: 'rebalance', tier: 'quick'    },
+    // Every line on the order is non-stock (F40205 Inventory Interface 'N'), so no
+    // cardex row was ever due and GL-only is correct processing. Sibling of NSL and
+    // deliberately separate: NSL needs the non-stock cost to TIE to the variance, and a
+    // CHARGE line has no extended cost to tie with, so NSL never reaches these.
+    'NCL':     { title: 'Non-Stock Charge Lines',        kind: 'rebalance', tier: 'quick'    },
     // IT cardex-integrity — cost-component setup fix at the source.
     'TXI':     { title: 'Transfer Integrity',            kind: 'review',    tier: 'quick'    },
     // Mfg completion on the cardex with NO completion entry in the GL — a
@@ -850,6 +855,31 @@ window.RRV8 = window.RRV8 || {};
     // entry, which would SUPPRESS this card). No repost exists. Specimen
     // evidence lives in the guide, not here.
     'CNJ':     { title: 'Completion Not Journaled',      kind: 'review',    tier: 'quick'    },
+    // The sales-side analog of CNJ: cardex relieved inventory, a batch is stamped, and
+    // F0911 holds NOTHING for the document under ANY doc type. Not posted elsewhere and
+    // not posted in another period — absent. An UNPOSTED batch is not this (RR loads
+    // unposted F0911, so an unposted entry SUPPRESSES the card and surfaces as the
+    // separate GL Batches variance).
+    'SNJ':     { title: 'Sales Not Journaled',           kind: 'review',    tier: 'quick'    },
+    // BATCH CANNOT AGGREGATE MANUFACTURING AMOUNTS (owner ruling 2026-08-05). A work
+    // order issues material over weeks, each issue in its own batch, and the IC is not
+    // generated until the product is complete — days or weeks later, in its own batch.
+    // Regrained to (work order, account, doc type) these tie to the penny, so the row is
+    // NOT a variance: it is the batch key stranding a completion journaled in a later
+    // run. Claimed rather than suppressed so the analyst is told why it appeared.
+    'XBC':     { title: 'Cross-Batch Completion',        kind: 'review',    tier: 'quick'    },
+    // Journaled, same account, amount DIFFERS at work-order grain. The population CNJ
+    // explicitly hands off ("completion posted, amount differs") and nothing implemented
+    // until now. Still a tie-out failure: a correction IS required. Usual driver is a
+    // cost basis that moved between the cardex write and the R31802A run — and F4111
+    // ordered by ilukid IS the unit-cost history, since JDE has no cost-history table.
+    'MCM':     { title: 'Mfg Cost Mismatch',             kind: 'review',    tier: 'quick'    },
+    // AAI 3110 (raw-material relief) and 3130 (finished-goods receipt) resolving to the
+    // SAME account, so both legs of every work order land there and cancel; 3120 (WIP)
+    // unconfigured, so there is no holding leg to offset against. The analyzer's own
+    // 'nz' net-zero pattern. CONFIGURATION, not transaction: no journal entry fixes it
+    // and every future period reproduces it until the AAIs are split.
+    'NZR':     { title: 'DMAAI Net Zero',                kind: 'review',    tier: 'quick'    },
     // Complex (3 documents)
     'MTO':     { title: 'Make to Order',                 kind: 'mto',       tier: 'complex'  },
     'ICO':     { title: 'Intercompany Sales',            kind: 'ico',       tier: 'complex'  },
@@ -875,7 +905,14 @@ window.RRV8 = window.RRV8 || {};
     'transfer integrity':      'TXI',
     'completion not journaled': 'CNJ',
     'offsetting entries':      'OFF',
-    'non-stock sales lines':   'NSL'
+    'non-stock sales lines':   'NSL',
+    // DB beta.74 / beta.75 — the five claims that took the manufacturing residual to
+    // zero on every demo database. Keys are the server SubType lower-cased and trimmed.
+    'non-stock charge lines':  'NCL',
+    'sales not journaled':     'SNJ',
+    'cross-batch completion':  'XBC',
+    'mfg cost mismatch':       'MCM',
+    'dmaai net zero':          'NZR'
   };
   // No subtype -> terminal card by transaction Type. Anything else (including
   // 'Inventory' and an unrecognized type) falls to T-INV.
