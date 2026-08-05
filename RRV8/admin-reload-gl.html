@@ -65,6 +65,8 @@
   .gate-notice { display:none; gap:12px; padding:13px 16px; border-radius:9px; background:var(--blue-pale); border:1px solid #c2d8ef; color:var(--text); }
   .gate-notice svg { width:18px; height:18px; flex-shrink:0; color:var(--blue); margin-top:2px; }
   .gate-notice.is-visible { display:flex; }
+  .gate-notice.halt-notice { background:var(--red-pale); border-color:var(--red); }
+  .gate-notice.halt-notice svg { color:var(--red); }
   body.is-gated #js-tool { display:none; }
 </style>
 </head>
@@ -93,6 +95,20 @@
       <div class="note gate-notice" id="js-gate" role="alert">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
         <div>This needs the data-management (analyst) permission. <b>Contact your administrator</b> if you need access.</div>
+      </div>
+
+      <!-- Halt states. Neither one is a permission answer: the first means a
+           required part of the page never loaded, the second means the sign-in
+           carried no answer about this user's access either way. Both close the
+           page instead of rendering the admin surface on a guess. -->
+      <div class="note gate-notice halt-notice" id="js-halt-asset" role="alert">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
+        <div>Part of this page didn&rsquo;t load, so RapidReconciler can&rsquo;t tell what you&rsquo;re allowed to see here &mdash; nothing was loaded. Reload the page. If it happens again, <b>contact your IT department</b>.</div>
+      </div>
+
+      <div class="note gate-notice halt-notice" id="js-halt-claim" role="alert">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
+        <div>Your sign-in didn&rsquo;t say what you&rsquo;re allowed to do here, so nothing was loaded. Reload the page. If it happens again, ask your <b>IT department</b> to check your RapidReconciler account.</div>
       </div>
 
       <div id="js-tool">
@@ -213,6 +229,10 @@
   // server's requireAnalyst(). No superuser (su) flag exists in the client token,
   // so we gate solely on perms.dm, matching every other analyst surface.
   function canReload() { const a = activeDb(); if (!a) return false; const perms = a.perms || {}; return perms.dm !== false; }
+  // Close the page loudly. `id` names one of the halt notices in the markup.
+  // Used when we can't read the session at all -- distinct from canReload()
+  // returning false, which is an actual answer about the user's permission.
+  function haltPage(id) { document.body.classList.add('is-gated'); const el = $(id); if (el) el.classList.add('is-visible'); }
 
   // ---------- Reload GL ----------
   // GET preview derives the cutoff (earliest broken period's begin date) + counts
@@ -312,8 +332,11 @@
     if (ver) ver.textContent = (RR_CONFIG.release || 'v8') + (RR_CONFIG.buildStamp ? ' · ' + RR_CONFIG.buildStamp : '');
 
     // Client gate (UX only — the endpoints are analyst-gated server-side too).
-    // Fail open if the session hasn't hydrated yet.
-    if (window.RR_SESSION && !canReload()) {
+    // No active database in the session means nothing told us what this user
+    // may do -- not a permission answer. Halt rather than run, or claim they
+    // lack a permission we never actually read.
+    if (!activeDb()) { haltPage('js-halt-claim'); return; }
+    if (!canReload()) {
       document.body.classList.add('is-gated');
       $('js-gate').classList.add('is-visible');
       return;
@@ -335,7 +358,10 @@
     if (window.RRV8 && typeof window.RRV8.hydrateSession === 'function') {
       window.RRV8.hydrateSession().then(startBoot).catch(startBoot);
     } else {
-      startBoot();
+      // sidebar.js owns session hydration. If it did not load there is no session
+      // to read, so close the page and say so -- never render admin controls on a
+      // blind guess. (This branch used to boot the page wide open.)
+      haltPage('js-halt-asset');
     }
   });
 })();

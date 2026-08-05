@@ -105,9 +105,91 @@
     return out;
   }
 
+  // ---------------------------------------------------------------
+  //                              Administrator group (conditional)
+  // ---------------------------------------------------------------
+  // The admin doorway is BUILT, not hidden. An absent claim is not a
+  // grant: `t.adm` must be positively true before the group enters the
+  // DOM at all. Hiding it with style.display left the hrefs
+  // (admin-companies.html / admin-users.html) readable in view-source
+  // and copyable out of devtools by any role, and left the wrapping
+  // .sidebar-section + its "Administrator" label behind as an orphan
+  // (sidebar.css has no :empty rule for a section).
+  //
+  // Timing: sidebar.js hydrates the session eagerly at script-eval in
+  // <head> (see the hydrateSession() call near the bottom of this file),
+  // and the token path is a synchronous JWT decode — so on staging/prod
+  // the claim IS known before any page calls mountSidebar(), and a real
+  // admin gets the group in the FIRST paint with no flash and no delay.
+  // If the claim lands later (async demo payload, or a DB switch that
+  // changes the grant), syncAdminSection() attaches it then, so an
+  // admin can never be left without their nav.
+  function grantsAdminTab() {
+    const active = readActiveDbClaim();
+    if (!active) return false;             // unknown claim -> not a grant
+    const m = active.m || {};
+    const t = active.t || {};
+    // m.adm is the CLIENT's module license (fail-open when the block is
+    // absent, matching the other modules). t.adm is the USER's tab grant
+    // and must be positively true — VALC 2.0 always emits it as an
+    // explicit boolean, so `=== true` costs a real admin nothing.
+    return (m.adm !== false) && (t.adm === true);
+  }
+
+  function buildAdminSectionHtml(activePage) {
+    activePage = activePage || '';
+    const expanded = loadExpandedSection(activePage) === 'admin';
+    function childCls(page) { return activePage === page ? ' is-active' : ''; }
+    return '' +
+'  <div class="sidebar-section" data-section="admin">\n' +
+'    <div class="sidebar-section-label">Administrator</div>\n' +
+'    <div class="sidebar-module' + (expanded ? ' is-expanded' : '') + '" data-module="admin">\n' +
+'      <button type="button" class="sidebar-nav-item" data-module-toggle="admin" aria-expanded="' + (expanded ? 'true' : 'false') + '">\n' +
+'        <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>\n' +
+'        <span class="sidebar-nav-text">Administrator</span>\n' +
+'        <svg class="sidebar-nav-caret" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 6 8 10 12 6"/></svg>\n' +
+'      </button>\n' +
+'      <div class="sidebar-nav-children">\n' +
+'        <a href="admin-companies.html" class="sidebar-nav-child' + childCls('admin-companies') + '" data-nav-page="admin-companies">Licensing</a>\n' +
+'        <a href="admin-users.html" class="sidebar-nav-child' + childCls('admin-users') + '" data-nav-page="admin-users">RR Team</a>\n' +
+'        <a href="#" class="sidebar-nav-child" data-nav-page="admin-cardex-deletions">Utilities</a>\n' +
+'      </div>\n' +
+'    </div>\n' +
+'  </div>';
+  }
+
+  // activePage of the CURRENT mount, so a late attach can mark the
+  // right child link active and read the right default-expansion.
+  var _mountedActivePage = '';
+
+  // Attach or detach the Administrator group to match the claim.
+  // Idempotent in both directions: safe to call on every
+  // applyClientModuleCaps() pass (mount, the hydrate retry, a DB switch).
+  function syncAdminSection(show) {
+    const aside = document.querySelector('.sidebar');
+    if (!aside) return;
+    const existing = aside.querySelector('.sidebar-section[data-section="admin"]');
+    if (!show) {
+      if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+      return;
+    }
+    if (existing) return;
+    const brand = aside.querySelector('.sidebar-brand');
+    const holder = document.createElement('div');
+    holder.innerHTML = buildAdminSectionHtml(_mountedActivePage);
+    const node = holder.firstElementChild;
+    if (!node) return;
+    if (brand) aside.insertBefore(node, brand.nextSibling);
+    else aside.insertBefore(node, aside.firstChild);
+    wireSectionToggle(node.querySelector('.sidebar-module'));
+  }
+
   function buildSidebarHtml(opts) {
     const activePage = opts.activePage || '';
     const hasPeriod  = !!opts.hasPeriodFilter;
+    // Omit-by-default: an un-hydrated / thin / non-admin claim renders
+    // nothing here rather than everything.
+    const adminSection = grantsAdminTab() ? buildAdminSectionHtml(activePage) : '';
 
     // Hydrate persisted state UP FRONT so it lives in the initial
     // template — no post-mount class swaps, no flicker. Accordion
@@ -161,22 +243,10 @@
   <!-- Administrator — its own group above Reconcile. Admin tasks are
        set-and-forget; pulling them out of the main nav keeps the
        reconciliation flow uncluttered while keeping admin one click
-       away. -->
-  <div class="sidebar-section">
-    <div class="sidebar-section-label">Administrator</div>
-    <div class="sidebar-module${expCls('admin')}" data-module="admin">
-      <button type="button" class="sidebar-nav-item" data-module-toggle="admin" aria-expanded="${expAria('admin')}">
-        <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-        <span class="sidebar-nav-text">Administrator</span>
-        <svg class="sidebar-nav-caret" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 6 8 10 12 6"/></svg>
-      </button>
-      <div class="sidebar-nav-children">
-        <a href="admin-companies.html" class="sidebar-nav-child${cls('admin-companies')}" data-nav-page="admin-companies">Licensing</a>
-        <a href="admin-users.html" class="sidebar-nav-child${cls('admin-users')}" data-nav-page="admin-users">RR Team</a>
-        <a href="#" class="sidebar-nav-child" data-nav-page="admin-cardex-deletions">Utilities</a>
-      </div>
-    </div>
-  </div>
+       away. Built by buildAdminSectionHtml() ONLY when the active db's
+       claim positively grants the admin tab; omitted entirely (label
+       and all) otherwise. -->
+${adminSection}
 
   <!-- Reconcile (main nav). Scope is the first accordion item so the
        analyst sets context (Company / BU / Account / Sub / Currency)
@@ -337,27 +407,37 @@
     // mountSidebar() so there's no first-paint flicker. We only
     // attach click handlers + keep the persisted id in sync.
     const all = document.querySelectorAll('.sidebar-module');
-    all.forEach(el => {
-      const id  = el.dataset.module;
-      const btn = el.querySelector('[data-module-toggle]');
-      if (!btn) return;
-      btn.addEventListener('click', () => {
-        const wasExpanded = el.classList.contains('is-expanded');
-        // Collapse every section first — guarantees only one open.
-        all.forEach(other => {
-          if (!other.classList.contains('is-expanded')) return;
-          other.classList.remove('is-expanded');
-          const t = other.querySelector('[data-module-toggle]');
-          if (t) t.setAttribute('aria-expanded', 'false');
-        });
-        if (!wasExpanded) {
-          el.classList.add('is-expanded');
-          btn.setAttribute('aria-expanded', 'true');
-          saveExpandedSection(id);
-        } else {
-          saveExpandedSection('');
-        }
+    all.forEach(wireSectionToggle);
+  }
+
+  // One module's accordion handler. Split out of wireSectionToggles so
+  // syncAdminSection() can wire a group attached AFTER mount. The peer
+  // set is queried LIVE inside the handler (it used to be a mount-time
+  // NodeList) — otherwise a late-attached Administrator group would
+  // neither collapse its peers nor be collapsed by them.
+  function wireSectionToggle(el) {
+    if (!el || el.__rrToggleWired) return;
+    const btn = el.querySelector('[data-module-toggle]');
+    if (!btn) return;
+    el.__rrToggleWired = true;
+    const id = el.dataset.module;
+    btn.addEventListener('click', () => {
+      const wasExpanded = el.classList.contains('is-expanded');
+      // Collapse every section first — guarantees only one open.
+      const peers = document.querySelectorAll('.sidebar-module');
+      Array.prototype.forEach.call(peers, other => {
+        if (!other.classList.contains('is-expanded')) return;
+        other.classList.remove('is-expanded');
+        const t = other.querySelector('[data-module-toggle]');
+        if (t) t.setAttribute('aria-expanded', 'false');
       });
+      if (!wasExpanded) {
+        el.classList.add('is-expanded');
+        btn.setAttribute('aria-expanded', 'true');
+        saveExpandedSection(id);
+      } else {
+        saveExpandedSection('');
+      }
     });
   }
 
@@ -805,6 +885,7 @@
    */
   function mountSidebar(opts) {
     opts = opts || {};
+    _mountedActivePage = opts.activePage || '';
     // Insert the sidebar DOM into a placeholder element (preferred) or
     // as the first child of .app.
     let host = opts.target || document.getElementById('js-sidebar-mount');
@@ -868,11 +949,17 @@
   //  if the customer is licensed for it AND the user is granted the
   //  matching authorized tab.
   //
-  //  Fail-open semantics:
-  //   - No `m` claim on the active db -> show everything (back-compat
-  //     with older tokens, and with the synthetic dev token which
-  //     never carried this block).
-  //   - No active db at all -> show everything (admin landing pages).
+  //  Fail-open semantics — for the LICENSED MODULES only (inv / it / por):
+  //   - No `m` claim on the active db -> show them (back-compat with
+  //     older tokens, and with the synthetic dev token which never
+  //     carried this block).
+  //   - No active db at all -> show them (admin landing pages).
+  //
+  //  `adm` is the ONE exception and fails CLOSED. It's an authorization
+  //  question, not a licensing one: the group is attached to the DOM only
+  //  when `t.adm === true`, and is absent (not display:none) otherwise, so
+  //  a non-admin has no admin href to read out of view-source or copy out
+  //  of devtools. See grantsAdminTab() + syncAdminSection().
   //
   //  Module -> sidebar-nav-item data-module mapping:
   //    inv -> "inventory" (also the four /inventory pages)
@@ -890,7 +977,13 @@
 
   function applyClientModuleCaps() {
     const active = readActiveDbClaim();
-    if (!active) return;  // fail-open: no active db -> show everything
+    if (!active) {
+      // Fail-open for the licensed MODULES (back-compat with older tokens
+      // and the synthetic dev token) — but never for the admin doorway.
+      // No claim means "unknown", and unknown must not render the group.
+      syncAdminSection(false);
+      return;
+    }
 
     // Layered filter per Prompt #4:
     //   1. Client-level module cap (active.m) -- customer's licensed modules
@@ -906,9 +999,21 @@
       inv: (m.inv !== false) && (t.inv !== false),
       it:  (m.it  !== false) && (t.it  !== false),
       por: (m.por !== false) && (t.por !== false),
-      adm: (m.adm !== false) && (t.adm !== false),
+      // adm does NOT fail open. The three modules above are licensing
+      // questions (an absent claim means "old token, show it"); the admin
+      // tab is an authorization question, where an absent claim means
+      // "unknown" and unknown must not open the door. VALC 2.0 always
+      // emits t.adm as an explicit boolean, so requiring `=== true` costs
+      // a real admin nothing. See grantsAdminTab().
+      adm: (m.adm !== false) && (t.adm === true),
       dm:  (m.adm !== false) && (perms.dm !== false)   // DMAAIs gated by admin module + user perm
     };
+    // Attach / detach the whole Administrator group (label included) —
+    // never style.display, so a non-admin has no admin href in the DOM.
+    // Runs before the aside guard: it no-ops on its own when there's no
+    // sidebar, and a DB switch that REVOKES admin must detach the group
+    // even on a page that never mounted one.
+    syncAdminSection(cap.adm);
     const aside = document.querySelector('.sidebar');
     if (!aside) return;
 

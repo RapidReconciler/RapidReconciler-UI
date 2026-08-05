@@ -63,6 +63,8 @@
   .gate-notice { display:none; gap:12px; padding:13px 16px; border-radius:9px; background:var(--blue-pale); border:1px solid #c2d8ef; color:var(--text); }
   .gate-notice svg { width:18px; height:18px; flex-shrink:0; color:var(--blue); margin-top:2px; }
   .gate-notice.is-visible { display:flex; }
+  .gate-notice.halt-notice { background:var(--red-pale); border-color:var(--red); }
+  .gate-notice.halt-notice svg { color:var(--red); }
   body.is-gated #js-tool { display:none; }
 
 </style>
@@ -90,6 +92,20 @@
       <div class="note gate-notice" id="js-gate" role="alert" style="margin-bottom:18px; background:var(--blue-pale); border-color:#c2d8ef;">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
         <div>This is an administrator function. <b>Contact your administrator</b> to view the activity log.</div>
+      </div>
+
+      <!-- Halt states. Neither one is a permission answer: the first means a
+           required part of the page never loaded, the second means the sign-in
+           carried no answer about this user's access either way. Both close the
+           page instead of rendering the admin surface on a guess. -->
+      <div class="note gate-notice halt-notice" id="js-halt-asset" role="alert" style="margin-bottom:18px;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
+        <div>Part of this page didn&rsquo;t load, so RapidReconciler can&rsquo;t tell what you&rsquo;re allowed to see here &mdash; nothing was loaded. Reload the page. If it happens again, <b>contact your IT department</b>.</div>
+      </div>
+
+      <div class="note gate-notice halt-notice" id="js-halt-claim" role="alert" style="margin-bottom:18px;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
+        <div>Your sign-in didn&rsquo;t say what you&rsquo;re allowed to do here, so nothing was loaded. Reload the page. If it happens again, ask your <b>IT department</b> to check your RapidReconciler account.</div>
       </div>
 
       <div id="js-tool">
@@ -146,6 +162,15 @@
   const RR_CONFIG = window.RR_CONFIG || {};
   function activeDb() { const s = window.RR_SESSION || {}; const d = Array.isArray(s.dbs) ? s.dbs : []; return d[s.activeDbIndex || 0] || d[0] || null; }
   function isAdmin() { const a = activeDb(); return !!(a && a.t && a.t.adm === true); }
+  // The access claim has THREE states and each gets its own answer. `true` opens
+  // the page; `false` is a real "no" and shows the gate notice above; anything
+  // else (no session, no tab claims, an older token shape) means we were never
+  // told, so the page halts visibly instead of guessing. Guessing "false" would
+  // lock out a legitimate admin whose token carries a different shape; guessing
+  // "true" is the fail-open this replaces.
+  function admClaim() { const a = activeDb(); return (a && a.t && typeof a.t.adm === 'boolean') ? a.t.adm : null; }
+  // Close the page loudly. `id` names one of the halt notices in the markup.
+  function haltPage(id) { document.body.classList.add('is-gated'); const el = $(id); if (el) el.classList.add('is-visible'); }
 
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]; }); }
   // Friendly relative/short time for the "When" column.
@@ -325,11 +350,13 @@
     const ver = $('js-app-ver');
     if (ver) ver.textContent = (RR_CONFIG.release || 'v8') + (RR_CONFIG.buildStamp ? ' · ' + RR_CONFIG.buildStamp : '');
 
-    if (window.RR_SESSION && !isAdmin()) {
+    const _adm = admClaim();
+    if (_adm === false) {
       document.body.classList.add('is-gated');
       $('js-gate').classList.add('is-visible');
       return;
     }
+    if (_adm !== true) { haltPage('js-halt-claim'); return; }
     loadEvents();
     var rb = $('js-log-refresh'); if (rb) rb.addEventListener('click', loadEvents);
     var sb = $('js-log-search'); if (sb) sb.addEventListener('input', applyLogFilter);
@@ -343,7 +370,10 @@
     if (window.RRV8 && typeof window.RRV8.hydrateSession === 'function') {
       window.RRV8.hydrateSession().then(startWithSession).catch(startWithSession);
     } else {
-      startWithSession();
+      // sidebar.js owns session hydration. If it did not load there is no session
+      // to read, so close the page and say so -- never render admin controls on a
+      // blind guess. (This branch used to boot the page wide open.)
+      haltPage('js-halt-asset');
     }
   });
 })();

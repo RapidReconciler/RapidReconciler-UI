@@ -728,10 +728,10 @@ user-visible text. Saved as
 - **No credentials in committed files.** The dev-box SQL password lives
   in `$env:USERPROFILE\.rr-sql-pwd` &mdash; that file is outside the
   repo. Scripts in `RRV8/scripts/` read it at run time, never embed it.
-- **Customer-named schema objects.** The live DB has a few view names
-  that bake in a customer name (`v6_008a_cavendish_producing_plant` is
-  the known one). Don&rsquo;t pull their DDL into `RRV8/views/`
-  without sanitizing the filename + contents.
+- **Customer-named schema objects.** The live DB has a few `v6_008a_*`
+  view names that bake in a real customer name (one known instance &mdash;
+  a producing-plant customization). Don&rsquo;t pull their DDL into
+  `RRV8/views/` without sanitizing the filename + contents.
 
 ---
 

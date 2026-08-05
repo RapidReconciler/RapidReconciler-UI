@@ -400,11 +400,16 @@ default). For belt-and-suspenders on a chore commit, also add
   analyzer itself — is readable by anyone who finds the repo.
   Don't paste real customer account numbers (`1000000.142000`,
   `5077777.501010.51`, etc.), branch / company numbers (`00010`),
-  doc numbers (`1324740`), or customer names (`Acme`) into prose,
+  doc numbers (`1324740`), or real customer names into prose,
   tables, callouts, examples, or code comments. Use clean fictional
   generics (`5000.140000`, `100.5100.MKTG`, `MFG01.4220`) that
   demonstrate the same concept without tracing back to a real
-  customer.
+  customer. **`Acme` is fictional and safe to use** as the stand-in
+  customer name (owner ruling 2026-08-03; it matches the
+  data-hygiene reminder in `RRV8/WORKFLOW.md`). It was previously
+  listed here as a real name to avoid, which contradicted that
+  reminder and made the `RR F4095 Acme.xlsx` / `jde-dmaais-analyzed-acme.xlsx`
+  fixture names look like a leak. They are fine as-is.
 - **Test fixtures with real customer data are gitignored, not
   committed.** `Tools/_test_corpus/fixtures/` is in `.gitignore`.
   Customer F4095 extracts, Transaction Detail / Item Ledger

@@ -4306,6 +4306,102 @@
       return passesExclusions(r, _state.exclusions);
     });
   }
+  // ---- Recurrence, computed from the LOADED rows (UI-59) ------------------
+  // A card is (company, period), and its ROWS stay period-scoped in
+  // filteredRows() -- that is UI-37 and it must not regress. Recurrence is
+  // inherently a CROSS-period quantity, so this deliberately reads a WIDER
+  // slice than the card's own scope band. That widening is stated in the
+  // sentence it produces ("N of the M loaded periods"): a card that quietly
+  // reports a figure from outside its own scope is the same defect class as a
+  // drill that leaks other periods' rows, so the window is named, never implied.
+  //
+  // Company scope IS still honored -- same _coKey / inCompanyScope test the
+  // grid uses, plus the drilled company when one is pinned.
+  //
+  // DELIBERATELY NOT COMPUTED: a per-run "dropped share" percentage. That
+  // needs the count of ALL transactions per batch as its denominator, and a
+  // VARIANCE payload only carries the ones that broke. Deriving a percentage
+  // from these rows would put a fabricated denominator in front of an analyst.
+  // Those figures are specimen evidence and stay in the analysis guide.
+  // `extra` is an optional row predicate for a SUB-SHAPE of a card, so a slice
+  // gets the recurrence of that slice and not of its whole card. The MTO
+  // cardex-only (completion-gap) branch uses it: those rows classify as MTO,
+  // and counting all MTO rows there would attribute the wrong population.
+  function _cardRecurrence(cardCode, extra) {
+    if (!_data || !Array.isArray(_data.rows) || _state.scopeError) return null;
+    // TRUNCATION GUARD. The bulk fetch takes ONE page (defaultPageSize, 10000).
+    // On a small install that spans the whole history; on a large one it is a
+    // slice, and then "3 of 16 loaded periods" measures the PAGE rather than the
+    // data — a period count that looks like evidence and is an artifact of
+    // pagination. _data.total is the server's full count, so when we hold less
+    // than all of it, say nothing and let the general prose stand.
+    if (typeof _data.total === 'number' && _data.total > _data.rows.length) return null;
+    var co = _state.activeCompany ? _coKey(_state.activeCompany) : '';
+    var perAll = Object.create(null), perCard = Object.create(null);
+    var batches = Object.create(null), rows = 0;
+    _data.rows.forEach(function (r) {
+      if (!inCompanyScope(r)) return;
+      if (co && _coKey(r.CompanyNumber) !== co) return;
+      var p = String(r.PeriodEnds || '').slice(0, 10);
+      if (!p) return;
+      perAll[p] = true;
+      if (txvCardCode(r) !== cardCode) return;
+      if (typeof extra === 'function' && !extra(r)) return;
+      perCard[p] = (perCard[p] || 0) + 1;
+      rows += 1;
+      var b = String((r.MfgBatch != null ? r.MfgBatch : r.Batch) || '').trim();
+      if (b && b !== '0') batches[b] = true;
+    });
+    var loaded = Object.keys(perAll).sort(), hit = Object.keys(perCard).sort();
+    // A single loaded period cannot evidence recurrence in either direction.
+    if (loaded.length < 2 || !hit.length) return null;
+    var counts = hit.map(function (p) { return perCard[p]; });
+    var latest = loaded[loaded.length - 1];
+    return {
+      loadedPeriods: loaded.length, hitPeriods: hit.length,
+      firstHit: hit[0], lastHit: hit[hit.length - 1],
+      latestLoaded: latest, latestClean: !perCard[latest],
+      minPerPeriod: Math.min.apply(null, counts),
+      maxPerPeriod: Math.max.apply(null, counts),
+      batches: Object.keys(batches).length, rows: rows,
+      everyPeriod: hit.length === loaded.length
+    };
+  }
+  function _recurrenceSentence(rc) {
+    if (!rc) return null;
+    var s = rc.rows + ' row' + (rc.rows === 1 ? '' : 's')
+          + ' across ' + rc.hitPeriods + ' of the ' + rc.loadedPeriods + ' loaded periods';
+    // Only when the batch actually GROUPS the rows. 320 rows on 58 batches says
+    // the failure is per-run; 69 rows on 69 batches is 1:1 and says nothing, so
+    // it is noise on the card rather than a fact ("all signal, no noise").
+    if (rc.batches && rc.batches < rc.rows) {
+      s += ', on ' + rc.batches + ' batch' + (rc.batches === 1 ? '' : 'es');
+    }
+    s += '. ';
+    if (rc.everyPeriod) {
+      s += 'Every loaded period is affected, ' + rc.minPerPeriod + ' to ' + rc.maxPerPeriod
+        + ' per period, so this recurs rather than being a one-off.';
+    } else if (rc.latestClean) {
+      s += 'The most recent loaded period, ' + rc.latestLoaded + ', is clean, so the run from '
+        + rc.firstHit + ' to ' + rc.lastHit + ' stopped rather than continuing. Confirm the same '
+        + 'activity was running in that clean period before treating it as fixed.';
+    } else {
+      s += 'It reaches the most recent loaded period, ' + rc.minPerPeriod + ' to '
+        + rc.maxPerPeriod + ' per period, so it is still live.';
+    }
+    return s;
+  }
+  // Substitute the computed recurrence for the catalog's general fallback at
+  // `idx`. Returns the array unchanged when there is nothing to say, so a caller
+  // never has to decide whether a number exists. Used by both render paths (the
+  // generic card injection and the MTO branch, which builds its own `sel`).
+  function _withRecurrence(found, idx, rc) {
+    var s = _recurrenceSentence(rc);
+    if (!s || !Array.isArray(found) || typeof idx !== 'number') return found;
+    var out = found.slice();
+    out[idx] = s;
+    return out;
+  }
   function computeGroupsAndTotal(rows) {
     const groups = {};
     let cardex = 0, ledger = 0, variance = 0, count = 0;
@@ -4865,14 +4961,14 @@
   const PATTERN_INFO = {
     '5.17': {
       label:  'Voucher Variance on Inventory (PV)',
-      desc:   'AP voucher variance posted to an inventory account instead of the AP variance account — DMAAI 4220 likely routes inventory items there.',
-      action: 'Check DMAAI 4220 for this company / GL class. Reverse the JE, fix the AAI route, and re-post.',
+      desc:   'AP voucher variance posted to an inventory account instead of the AP variance account — DMAAI 4330 likely routes inventory items there.',
+      action: 'Check DMAAI 4330 for this company / GL class. Reverse the JE, fix the AAI route, and re-post.',
       disposition: 'expense'
     },
     '5.16': {
       label:  'Manufacturing Cost Mismatch',
       desc:   'The item ledger and the GL valued the same completion quantity at different unit costs. The variance is quantity times the difference. Likely cause: a frozen cost update moved the standard after the completion posted, and WIP revaluation never carried it through. WIP revaluation is optional under standard costing, needs the variance AAI configured for the routing, and skips work orders already closed.',
-      action: 'Have R30837 called from R30822 so the next cost roll reaches the GL as well as the item ledger. Confirm the variance AAI, 3240 or 3260, is configured for the routings in use. Closed work orders are outside its reach, so time cost rolls against the open population. Confirm with cost accounting which cost basis was intended before treating the difference as an error.',
+      action: 'Confirm the gap is actually a cost-basis difference before treating it as one: it should be a modest share of the transaction and fall either side of it. A gap exceeding half the item-ledger amount, or running one direction across the population, is a different problem. Then have WIP revaluation run as part of the cost update so the next roll reaches the GL as well as the item ledger — confirm the program and version in this customer JDE rather than assuming a report number. Confirm the variance AAI, 3240 or 3260, is configured for the routings in use. Closed work orders are outside its reach, so time cost rolls against the open population. Confirm with cost accounting which cost basis was intended before treating the difference as an error.',
       disposition: 'expense'
     },
     '5.6': {
@@ -4895,8 +4991,8 @@
     },
     '5.2': {
       label:  'GL-Only Entry (No Cardex)',
-      desc:   'An F0911 entry sits on an inventory account with no F4111 counterpart. Read the order line type first: a non-stock or surcharge line (type N, F) routes a charge to an inventory GL class and moves no inventory, so a GL-only row for it is expected behavior. Otherwise the value was keyed straight onto an inventory account, or a return went through a correction batch (IB rather than I) that posted the GL without writing a cardex record.',
-      action: 'Check the LineTy column before treating the row as a gap. Where a non-stock line is landing on inventory, correct the line-type definition\'s GL offset for that order type so future non-stock charges post to the expense or COGS account — one line-type fix clears the whole recurring population instead of document-by-document work. Where an inventory account is being keyed directly, restrict who can post to inventory accounts on the entry program, or route those entries through an approval step, so the next one cannot be keyed the same way.',
+      desc:   'An F0911 entry sits on an inventory account with no F4111 counterpart. Read the order line type first: a non-stock line (type N, Inventory Interface N) posts to the GL and moves no inventory, so no cardex row exists. That names the cause; the value still sits on an inventory account it does not belong on, so a correction is required. Otherwise the value was keyed straight onto an inventory account, or a return went through a correction batch (IB rather than I) that posted the GL without writing a cardex record.',
+      action: 'Read the LineTy column, then read which account the GL leg landed on. Where a non-stock line is landing on inventory, correct the DMAAI for that non-stock line type so the cost posts to its own non-inventory account — one DMAAI fix stops the whole recurring population instead of document-by-document work. The value already posted stays in the inventory account until the accountant reclassifies it out. Where an inventory account is being keyed directly, restrict who can post to inventory accounts on the entry program, or route those entries through an approval step, so the next one cannot be keyed the same way.',
       disposition: 'rebalance'
     },
     '5.3': {
@@ -4919,20 +5015,20 @@
     },
     '5.19': {
       label:  'Transfer Integrity (IT)',
-      desc:   'An inventory-transfer (IT) document relieved value on the cardex (F4111) that the GL never recorded — the receipt leg carried a unit cost but a zero extended cost, so a value-neutral within-branch location move destroyed inventory value. Seen on cost-level-3 / standard-cost transfers (the JDE item-ledger one-sided-entry integrity defect).',
-      action: 'Correct the cost-component setup for these cost-level-3 items so future transfers extend a cost. Until that is done the defect repeats on every transfer of them. Run R41543 and R41544: they surface every one-sided relief, not just this document. Restore the missing value with a dollars-only adjustment. Re-check next period for new transfers carrying a zero extended cost.',
+      desc:   'An inventory-transfer (IT) document relieved value on the cardex (F4111) that the GL never recorded — a leg carried a unit cost but a zero extended cost, so a move that should be value-neutral destroyed inventory value. The shape is narrow: a zero extended cost on a transfer leg is common and harmless, and zero-extended legs appear on the relief and receipt sides in equal numbers, so it is the unit-cost-without-extension combination that lands a document here. No vendor article has been cited for it, so do not name it as a known defect.',
+      action: 'Confirm each document on both sides first: the item-ledger legs against the GL for the same document. Then compare the cost setup of the failing items against items that transferred cleanly in the same period — that difference is the lead. Count the failures per period before treating the setup as still wrong: this arrives in bursts with clean stretches between them, so a recent clean period at normal transfer volume points at a cost change or a specific set of items rather than a permanent setup fault. This card already holds every one-sided relief, so it is the population. Restoring the lost value is a dollars-only adjustment the accountant books.',
       disposition: 'triage'
     },
     '5.20': {
       label:  'Completion Not Journaled',
-      desc:   'A work-order completion received finished goods into inventory with no GL entry for it. The material issues for the same order did post. Manufacturing accounting stamped the batch on the item-ledger row, so it processed the row and wrote no entry. The batches and the account are healthy: both carry completions for many other orders. Matches a documented Oracle defect that skips a fraction of each run, every period. The article body needs a support login, so the vendor remedy is unknown.',
-      action: 'Confirm in three checks. Search the GL for the work order: issues present, completion absent. Widen the search, no company or document-type restriction: still no completion. Check that the same batch and account carry completions for other orders: if they do, the gap is real. Then do not work the orders one at a time — the fault is in the run. Run R41543 monthly; it reports this exact shape and changes nothing. Take the defect to Oracle through IT. Do not delete an unposted manufacturing batch, because nothing regenerates the entry.',
+      desc:   'A work-order completion received finished goods into inventory with no GL entry for it. The material issues for the same order did post. Manufacturing accounting stamped the batch on the item-ledger row, so it processed the row and wrote no entry. The batches and the account are healthy: both carry completions for many other orders. The pattern is a run that journals most of its completions and drops a slice, never a whole run failing outright, at a severity that moves from run to run. The finding below states the recurrence measured across the periods loaded here. No Oracle Support article matches the shape; KB 420628 is a near miss whose failure drops the material issue entry, which would suppress this card rather than create it.',
+      action: 'Confirm in three checks. Search the GL for the work order: issues present, completion absent. Widen the search, no company or document-type restriction: still no completion. Check that the same batch and account carry completions for other orders: if they do, the gap is real. Then have whoever runs R31802A read the error report that run produces. Take it to Oracle through IT as an undocumented R31802A condition, not as KB 420628 — that article has a different cause and its manual-journal-entry remedy does not fit. Do not delete an unposted manufacturing batch, because nothing regenerates the entry.',
       disposition: 'triage'
     },
     'MTO': {
       label:  'Make to Order',
       desc:   'A work order linked to its customer sales order — a business grouping, not one variance type. The residual is ordinary manufacturing cardex-vs-GL and splits three ways by shape: GL-only standard-cost variances, both-sides-differ completion cost differences, and cardex-only completions the GL holds no entry for. Account mapping is not the mechanism here.',
-      action: 'Work the shapes. Both-differ rows are a cost-basis difference on the completion: confirm the intended basis with cost accounting, then have R30837 called from R30822. Item-ledger-only rows are completions missing from the GL, which is a run-level fault, not these orders. GL-only rows need no action. Match by work order, not document number.',
+      action: 'Work the shapes separately. Both-differ rows have no confirmed cause: the gap is too large a share of the transaction and too one-directional for the cost-basis story, so take them by account, largest account first, with cost accounting. Item-ledger-only rows are completions missing from the GL, which is a run-level fault, not these orders, and they belong in the completion-gap workflow. GL-only rows need no action. Match by work order, not document number.',
       disposition: 'triage'
     },
     'TRF': {
@@ -5107,7 +5203,7 @@
     },
     'Purchasing': {
       desc:   'AP voucher variances (PV), purchase-order receipts (OP), and receiver-routing variances posted to inventory.',
-      action: 'Most variances here are DMAAI 4220 routing voucher variances to the inventory account instead of the AP variance account. Reverse the JE, fix the AAI route, re-post.',
+      action: 'Most variances here are DMAAI 4330 routing voucher variances to the inventory account instead of the AP variance account. Reverse the JE, fix the AAI route, re-post.',
       disposition: 'triage'
     },
     'Inventory': {
@@ -6818,7 +6914,7 @@
     var _pending = combos.some(function (c) { return c.modelRows === undefined && !c.modelUnresolved; });
     if (_pending) {
       return '<div class="tx-analyzer-combos"><div class="tx-combos-hd">'
-        + escapeHtml('Reading the DMAAI account setup for these ' + combos.length + ' routing'
+        + escapeHtml('Reading the DMAAI account setup for these ' + combos.length + ' combination'
           + (combos.length === 1 ? '' : 's') + '…')
         + '</div></div>';
     }
@@ -6832,7 +6928,7 @@
       }).join('');
       return '<div class="tx-analyzer-combos"><div class="tx-combos-hd">'
         + escapeHtml('RapidReconciler could not read the DMAAI account setup for these '
-          + combos.length + ' routing' + (combos.length === 1 ? '' : 's') + ', so it is not saying whether they '
+          + combos.length + ' combination' + (combos.length === 1 ? '' : 's') + ', so it is not saying whether they '
           + 'match the cardex model account. Do not read the blanks below as "no mapping" — they mean "not checked". '
           + 'Reload the page; if it keeps happening, ask your IT department to confirm the data service is reachable.')
         + '</div>'
@@ -6878,8 +6974,8 @@
     }).join('');
     var nMis = list.filter(function (r) { return r.acctMis; }).length;
     var hd = nMis
-      ? nMis + ' of ' + list.length + ' inventory routing' + (list.length === 1 ? '' : 's') + ' resolve to a different account than the cardex model:'
-      : list.length + ' inventory routing' + (list.length === 1 ? '' : 's') + ' checked — no account mismatch. This rules out mapping only; it does not explain the variance:';
+      ? nMis + ' of ' + list.length + ' inventory DMAAI' + (list.length === 1 ? '' : 's') + ' resolve to a different account than the cardex model:'
+      : list.length + ' inventory DMAAI' + (list.length === 1 ? '' : 's') + ' checked — no account mismatch. This rules out mapping only; it does not explain the variance:';
     return '<div class="tx-analyzer-combos"><div class="tx-combos-hd">' + escapeHtml(hd) + '</div>'
       + '<table class="tx-resolve"><thead><tr><th>Co</th><th>OT</th><th>DT</th>'
       + '<th>Cost</th><th class="tx-sec-start tx-sec-mid">GL</th><th class="tx-sec-mid">Model Table</th><th class="tx-sec-mid">Model Acct</th><th class="tx-sec-mid">Model Acct Desc</th><th class="tx-sec-start">Inv DMAAI</th><th>Inv Acct</th><th>Inv Acct Desc</th>'
@@ -6894,8 +6990,11 @@
   // (analyzer pattern 5.16 — investigate the large ones); cardex-only = a
   // completion GENUINELY absent from F0911 (analyzer pattern 5.20 — verified
   // in Demo1 under any company and any doc type; R31802A stamps the cardex
-  // batch and skips ~10-15% of each run's completions, so the recurrence is
-  // in the RUN, not these orders). Held under MTO
+  // batch and drops a slice of EVERY run's completions, so the recurrence is in
+  // the RUN and not these orders. SPECIMEN figures for that ONE dataset — 58
+  // batches over 8 periods, none clean, none empty, 0.6%-24.6% per batch — are
+  // NOT to be shipped as copy; the finding computes its own from the loaded
+  // rows (UI-59, _cardRecurrence)). Held under MTO
   // because usp6_008 stamped it before the CNJ pass could claim it. Rows are
   // already MTO-only when drilled
   // from the MTO card (filteredRows honors activeCard); the txvCardCode guard
@@ -6906,14 +7005,22 @@
   // §5.19). Source: AnalysisGuides/transaction-detail-analysis.md (guide §5.19 =
   // Completion Not Journaled); mirrored in ANALYST_GROUNDING (config.js) + the
   // classifier subtypes.
+  var _TX_SHAPE_EPS = 0.01;
+  // The cardex-only (completion-gap) shape test, defined ONCE. The bucket
+  // counter below and the recurrence computation both read it, so the count
+  // shown in the buckets and the count in the finding cannot disagree.
+  function _isCardexOnlyRow(r) {
+    var cx = Number(r.CardexAmount) || 0, gl = Number(r.LedgerAmount) || 0;
+    return Math.abs(gl) < _TX_SHAPE_EPS && Math.abs(cx) >= _TX_SHAPE_EPS;
+  }
   function _txMtoBuckets(rows) {
-    var eps = 0.01;
+    var eps = _TX_SHAPE_EPS;
     var b = { glOnly: { n: 0, amt: 0 }, both: { n: 0, amt: 0 }, cardexOnly: { n: 0, amt: 0 }, total: { n: 0, amt: 0 } };
     (rows || []).forEach(function (r) {
       if (typeof txvCardCode === 'function' && txvCardCode(r) !== 'MTO') return;
       var cx = Number(r.CardexAmount) || 0, gl = Number(r.LedgerAmount) || 0, v = Number(r.Variance) || 0;
       var k = (Math.abs(cx) < eps && Math.abs(gl) >= eps) ? 'glOnly'
-        : (Math.abs(gl) < eps && Math.abs(cx) >= eps) ? 'cardexOnly'
+        : _isCardexOnlyRow(r) ? 'cardexOnly'
         : (Math.abs(cx) >= eps && Math.abs(gl) >= eps) ? 'both' : null;
       if (!k) return;
       b[k].n++; b[k].amt += v; b.total.n++; b.total.amt += v;
@@ -6998,12 +7105,12 @@
   var _TX_CARD_FINDING = {
     'ACCT': {
       dmaai: true,
-      flag: 'Account routing',
-      mech: 'The GL posted these documents to a different account than the DMAAI routes to.',
+      flag: 'DMAAI account mismatch',
+      mech: 'The GL posted these documents to a different account than the DMAAI directs.',
       checked: [
         'Cardex and GL both posted. Missing entry ruled out.',
         'Period matches on both sides. Cut-off ruled out.',
-        'Posted account against the account the DMAAI routes to for this order type, doc type and GL class: they differ. Confirmed.'
+        'Posted account against the account the DMAAI directs for this order type, doc type and GL class: they differ. Confirmed.'
       ],
       found: [
         'The GL side landed on the wrong account. The item ledger used the account the DMAAI specifies.',
@@ -7038,7 +7145,7 @@
     },
     'VCHR': {
       dmaai: true,
-      flag: 'Voucher routing',
+      flag: 'Voucher on inventory account',
       mech: 'A/P vouchers posted to an inventory account instead of the A/P variance account.',
       checked: [
         'Batch type on these documents: V, an A/P voucher. Confirmed.',
@@ -7046,13 +7153,66 @@
         'Item-ledger side: nothing. A voucher moves no inventory, so there is nothing to match.'
       ],
       found: [
-        'DMAAI 4220 is sending voucher variances to inventory for this company and GL class.',
-        'Alternative, if 4220 reads correctly in JDE: the account was overridden at posting time.'
+        'DMAAI 4330 is sending voucher variances to inventory for this company and GL class.',
+        'Alternative, if 4330 reads correctly in JDE: the account was overridden at posting time.'
       ],
       fix: [
-        'Correct the 4220 route so voucher variances land on the variance account.',
+        'Correct DMAAI 4330 so voucher variances land on the variance account.',
         'Restrict who can override the GL account on the voucher-match version, or route those overrides through approval.',
         'Put the next voucher through and confirm its variance lands off inventory.'
+      ]
+    },
+    'OFF': {
+      flag: 'Entries that cancel',
+      mech: 'The GL posted two entries that cancel each other, and neither one reached the inventory account.',
+      checked: [
+        'The GL for each document: two entries, both posted, in the same batch as the item ledger. Nothing failed to post.',
+        'The two amounts: equal and opposite. They cancel, so the document nets to zero in the GL.',
+        'The accounts they landed on: two accounts, neither of them the inventory account the item ledger used.',
+        'The order line type: stock. A stock line is due a GL entry against inventory, so this is not an expected non-stock case.',
+        'The batches: healthy. Each holds a few hundred other documents that posted normally.'
+      ],
+      found: [
+        'Inventory came off the item ledger. The GL never touched the inventory account for it.',
+        'The two entries cancel, so your profit and loss shows nothing. Only the balance sheet moves, and it is out by the full item-ledger amount.',
+        'That is why this went unnoticed. There is no profit-and-loss signal for anyone to review.',
+        // recurrenceIdx points here.
+        'Read the periods either side before treating this as a one-off.',
+        'The DMAAIs for this order type are sending both sides of the entry to a pair of accounts that offset each other, instead of to inventory and its counterpart.'
+      ],
+      recurrenceIdx: 3,
+      fix: [
+        'Correct the DMAAIs for this order type and document type so one side lands on the inventory account.',
+        'Check the other order types that share those DMAAIs before assuming this one is isolated.',
+        'The accountant restores the inventory account for the documents already posted.',
+        'Re-run this company and period. A document that comes back was not corrected.'
+      ]
+    },
+    'NSL': {
+      flag: 'Non-stock cost in inventory',
+      mech: 'A non-stock line posted its cost to an inventory account. The non-stock cost accounts for the whole variance.',
+      checked: [
+        'The order lines: one or more are non-stock. A non-stock line posts to the GL and moves no inventory, so no item-ledger row exists for it.',
+        'The non-stock cost against the variance: they tie exactly, either on this document or across the order.',
+        'The account the GL used: the inventory account.',
+        'The non-stock DMAAI itself: correct. It points away from inventory, so it is not the fault.',
+        'The GL class carried on the non-stock lines: a stock item class, not the non-stock class. That is what resolves to inventory.'
+      ],
+      found: [
+        'The variance is the non-stock cost, to the penny. The cause is identified.',
+        'Non-stock cost is sitting in an inventory account. A non-stock item holds no inventory, so it does not belong there.',
+        'Your GL inventory balance is overstated against the item ledger by exactly this amount, on every order carrying a non-stock line.',
+        // recurrenceIdx points here.
+        'Read the periods either side before treating this as a one-off.',
+        'This is not a leave-it row. The two sides do not tie, so it needs a correction.'
+      ],
+      recurrenceIdx: 3,
+      fix: [
+        'Correct the GL class on these items so a non-stock line stops resolving to the inventory account.',
+        'Do not change the non-stock DMAAI. It is already pointing at the right account, and changing it will not fix this.',
+        'The accountant reclassifies the non-stock value already posted out of the inventory account.',
+        'Check whether other non-stock line types carry the same overridden class before assuming these items are the only ones.',
+        'Re-run this company and period. A document that comes back was not corrected.'
       ]
     },
     'DUP': {
@@ -7079,20 +7239,26 @@
       flag: 'Item-ledger integrity',
       mech: 'Location transfers relieved inventory value that the GL never recorded.',
       checked: [
-        'A within-branch location move should be value-neutral and post no GL. These relieved value. Confirmed.',
-        'Receipt leg: valid unit cost, zero extended cost. The value never calculated. Confirmed.',
-        'Items involved are cost-level 3 under a standard cost method. Confirmed.',
+        'A location move should be value-neutral and post no GL. These relieved value with no GL entry. Confirmed.',
+        'Both legs of each document are present in the item ledger. A missing leg is ruled out.',
+        'Extended cost on the legs: a leg carries a unit cost and no extended value, so the value never calculated. Confirmed on the documents on this card.',
         'DMAAI routings on these documents resolve correctly. Mapping ruled out.'
       ],
       found: [
-        'This is the JDE one-sided item-ledger entry defect. The receiving leg priced the quantity and never extended it, so the move destroyed inventory value.',
-        'It is a setup fault, not timing. It will not clear on its own.'
+        'A leg priced the quantity and never extended it, so the move destroyed inventory value the GL never saw.',
+        'Cause not confirmed, and the shape is narrow rather than general: a zero extended cost on a transfer leg is common and harmless, and only a small fraction of those legs also carry a unit cost. That combination is what lands a document here.',
+        // recurrenceIdx points here — replaced at render with the count from the
+        // loaded rows (UI-59). This general form must state no figure, because
+        // the burst pattern verified on two companies is not a universal rate.
+        'It arrives in bursts, not every period. Read the periods either side before calling it a standing fault: a recent clean period at normal transfer volume means the trigger stopped, which is a different problem from a setup that is still wrong.'
       ],
+      recurrenceIdx: 2,
       fix: [
-        'Correct the cost-component setup for these cost-level-3 items so future transfers extend a cost.',
-        'Run R41543 and R41544. They surface every one-sided relief, not just these documents.',
-        'Restore the missing value with a dollars-only inventory adjustment.',
-        'Re-check next period for new transfers carrying a zero extended cost. That means the setup is still wrong.'
+        'Compare the cost setup of the items on this card against items that transferred cleanly in the same period. That difference is the lead.',
+        'Confirm each document on both sides: the item-ledger legs against the GL for the same document.',
+        'This card already holds every one-sided relief. It is the population; there is nothing else to run to find them.',
+        'Check the periods either side and count the failures per period. A burst that starts and stops points at a cost change or a specific set of items rather than a permanent setup fault.',
+        'Restoring the lost value is a dollars-only inventory adjustment, which the accountant books.'
       ]
     },
     'CNJ': {
@@ -7111,13 +7277,18 @@
       found: [
         'The GL completion entries were never written for these work orders. The material issues for the same orders were.',
         'Manufacturing accounting stamped the batch on the item-ledger rows, so it processed them and wrote no entry.',
-        'Not a one-off. It recurs every period, affecting a fraction of each run’s completions.',
-        'Matches a documented Oracle defect: manufacturing accounting stamps the item ledger and writes no GL entry. The article body needs a support login, so the vendor’s remedy is unknown.'
+        // recurrenceIdx points here. Replaced at render with the count from the
+        // loaded rows (UI-59). This general form stands only when the loaded
+        // window is too short to evidence recurrence either way — it must not
+        // state a figure, because the figure differs per install.
+        'Read the periods either side before treating this as a one-off. The pattern is a run that journals most of its completions and drops a slice, at a severity that moves from run to run.',
+        'A batch that posted most of its completions is not evidence this order posted. Confirm per work order, never per batch.',
+        'No Oracle Support article matches this. KB 420628 is the near miss, ruled out on shape: its failure drops the material issue entry, which would suppress this card rather than create it.'
       ],
+      recurrenceIdx: 2,
       fix: [
-        'Do not work the orders one at a time. The fault is in the run, not the orders.',
-        'Run R41543 monthly. It reports this exact shape and changes nothing, so it is safe to schedule.',
-        'Take the defect to Oracle through IT. The remedy is a vendor fix.',
+        'Have whoever runs R31802A read the error report that run produces.',
+        'Take it to Oracle through IT as an undocumented R31802A condition, not as KB 420628. That article has a different cause, and its manual-journal-entry remedy does not fit this.',
         'Do not delete an unposted manufacturing batch. The unaccounted units are already cleared, so nothing regenerates the entry.'
       ]
     },
@@ -7188,51 +7359,63 @@
       checked: [
         'DMAAI routings resolve to the same account as the item-ledger model. Mapping ruled out.',
         'Sales orders shipped and closed. A missing sales offset is ruled out.',
-        'Each row sorted by which side carries a value: GL only, both differ, or item ledger only.'
+        'Each row sorted by which side carries a value: GL only, both differ, or item ledger only.',
+        'On the both-differ rows, the size of the gap against the size of the transaction, and the direction of the gap. Both come back wrong for a cost-basis difference.'
       ],
       found: [
-        'GL-only rows are standard-cost variance components. They belong in the GL. Expected.',
-        'Both-differ rows: the completion was valued at standard in the item ledger and at actual in the GL.',
-        'Likely cause of the both-differ rows, not yet confirmed: a frozen cost update moved the standard after the completion posted, and WIP revaluation never carried it through.'
+        'This is three different problems under one grouping, so do not work it as one. The shape split above is the finding.',
+        'GL-only rows are standard-cost variance components. They belong in the GL. Explained, no action.',
+        'Item-ledger-only rows are the completion-gap shape: a completion on the cardex with no GL entry for the order. That is the Completion Not Journaled investigation, not cost work, and it is grouped here only because the make-to-order claim reached these rows first.',
+        // recurrenceIdx points here.
+        'Read the periods either side before treating any slice as a one-off.',
+        'Both-differ rows do NOT fit a cost basis difference, which is what this card used to assert. A standard-versus-actual gap is a modest slice of the transaction and falls either side of it. Here most of the value sits on rows where the gap exceeds HALF the item-ledger amount, and the GL side is the larger one in roughly two thirds of the rows and the large majority of the value. Cause NOT confirmed.',
+        'The both-differ value also concentrates on very few accounts rather than spreading across the card, so one account will explain most of it.'
       ],
+      recurrenceIdx: 3,
       fix: [
-        'Work the both-differ rows largest first, with cost accounting, to settle which cost basis was intended.',
-        'Have R30837 called from R30822 so the next cost roll reaches the GL as well as the item ledger.',
-        'GL-only rows need no action.',
+        'Split the card by shape first and route each slice separately. Working it as one variance is what makes it unworkable.',
+        'Take the both-differ rows by account, largest account first, with cost accounting. The concentration means the top account is most of the answer.',
+        'Do not carry the old cost-basis story into that conversation. The gap is too large a share of the transaction and too one-directional for it, so the question is open.',
+        'Where a standard cost did move after a completion posted, WIP revaluation is the mechanism that carries it to the GL. Confirm the program and version in this customer JDE rather than assuming a report number, then have it run as part of the cost update.',
+        'Send the item-ledger-only rows to the completion-gap workflow instead. Cost accounting cannot act on a missing GL entry.',
         'Match item ledger to GL by work order, not document number. Manufacturing accounting assigns its own GL document number.'
       ]
     },
     // Row-truth signals — definitive from the rows themselves, so they pre-empt
     // the card mechanism (the "check duplicate sales first" grounding).
     'NON-STOCK': {
-      flag: 'Non-stock routing',
+      flag: 'Non-stock on inventory account',
       mech: 'Non-stock lines posted their GL value to an inventory account.',
       checked: [
-        'Order line type on these rows: non-stock. Confirmed.',
-        'Item-ledger side: nothing. A non-stock line moves no inventory, so there is nothing to match.',
-        'Account posted to: an inventory account.'
+        'Order line type on these rows: N, Non-Stock. Inventory Interface N on the line-type constant. Confirmed.',
+        'Item-ledger side: nothing. A non-stock line moves no inventory, so no cardex row exists.',
+        'Account the GL leg posted to: the inventory account the cardex uses. Confirmed.',
+        'Non-stock extended cost on those lines against the GL amount: it accounts for the variance exactly.'
       ],
       found: [
-        'The line-type definition carries a GL offset pointing at an inventory class, so every order using that line type routes the same way.',
-        'A non-stock line already routed to a P&L account is expected behaviour and needs no correction.'
+        'The non-stock cost is sitting in an inventory account. A non-stock item holds no inventory, so that value does not belong there.',
+        'The tie between the non-stock cost and the GL amount identifies the cause. It does not clear the row — a correction is required.',
+        'The DMAAI directing this non-stock line type is sending non-stock cost to the inventory account, so every order carrying such a line repeats it.',
+        'Until it is corrected, the GL inventory balance is overstated against the item ledger by exactly the non-stock total.'
       ],
       fix: [
-        'Correct the line-type definition’s GL offset for this order type so the value posts to a P&L or clearing account.',
-        'One line-type fix clears the whole population. Do not work these document by document.',
+        'Correct the DMAAI for this non-stock line type so the cost lands on its own non-inventory account.',
+        'One DMAAI fix stops the whole population. Do not work these document by document.',
+        'The value already posted stays in the inventory account until the accountant reclassifies it out. That reclass is the accountant’s lane.',
         'Put the next order carrying a non-stock line through and confirm its value lands off inventory.'
       ]
     },
     'DMAAI-MIS': {
       dmaai: true,
-      flag: 'Routing mismatch',
+      flag: 'DMAAI mismatch',
       mech: '',    // set per-render from the mismatch count
       found: [
-        'The inventory AAI for these routings points somewhere other than the item-ledger model account.',
-        'Every document on the routing relieves inventory at the wrong account, so this repeats until the AAI is aligned.'
+        'The inventory AAI for these DMAAIs points somewhere other than the item-ledger model account.',
+        'Every document on the DMAAI relieves inventory at the wrong account, so this repeats until the AAI is aligned.'
       ],
       fix: [
-        'Align the inventory AAI for the flagged routings so it resolves to the model account.',
-        'Re-run this company and period. Every posted account in the routings table should then match its model account.',
+        'Align the inventory AAI for the flagged DMAAIs so it resolves to the model account.',
+        'Re-run this company and period. Every posted account in the DMAAI table should then match its model account.',
         'Documents already posted keep the old account. They need their own correction.'
       ]
     },
@@ -7250,7 +7433,7 @@
       found: [
         'Cause not identified. I have not pinned it to one mechanism yet.',
         'Next: take the largest documents first and compare the item-ledger detail, quantity times unit cost, against the GL amount for the same document and account.',
-        'Check the order line type before chasing a GL-only row. A non-stock line posts to the GL and moves no inventory, which is expected.'
+        'Read the order line type on any GL-only row. A type-N non-stock line posts to the GL and moves no inventory, which names the cause but still leaves a correction to make — check which account the GL leg landed on.'
       ],
       fix: ['Whatever the comparison names, fix it at the source and re-run this company and period. A document that comes back was not fixed.']
     },
@@ -7425,10 +7608,11 @@
       // Make-to-order splits by cardex/GL shape. A cardex-only slice is the
       // completion-not-journaled shape: the GL holds NO completion entry for
       // those orders (verified in Demo1 under any company and any doc type),
-      // even though R31802A stamped the cardex batch. So the action is the
-      // run-level one — never a "repost" (there isn't one), never "the GL
-      // entry is there, the match missed it", never "routings match, nothing
-      // to do".
+      // even though R31802A stamped the cardex batch. So the action is that
+      // run's error report plus the vendor path — never a "repost" (there
+      // isn't one), never R41543 (it has nothing to do with this card, owner
+      // 2026-08-03), never "the GL entry is there, the match missed it",
+      // never "routings match, nothing to do".
       var _gap = _mtoB.cardexOnly.n > 0;
       var _n = _mtoB.cardexOnly.n, _one = (_n === 1);
       sel = {
@@ -7442,13 +7626,18 @@
         found: _gap
           ? [_n + ' completion' + (_one ? ' has' : 's have') + ' no GL entry. The finished-goods cost never reached the general ledger.',
              'Manufacturing accounting stamped the batch on ' + (_one ? 'that row' : 'those rows') + ', so it processed ' + (_one ? 'it' : 'them') + ' and wrote no entry.',
-             'It skips a fraction of every run, so this recurs.',
-             'The rest of the card is cost-basis differences and expected standard-cost variances.']
-          : _TX_CARD_FINDING['MTO'].found,
+             // Computed for the cardex-only SLICE, not the whole MTO card (UI-59).
+             (_recurrenceSentence(_cardRecurrence('MTO', _isCardexOnlyRow))
+               || 'Read the periods either side before treating this as a one-off. The pattern is a run that journals most of its completions and drops a slice.'),
+             'No Oracle Support article matches this. KB 420628 is the near miss, ruled out on shape: its failure drops the material issue entry, which would suppress these rows rather than create them.',
+             'The rest of the card is expected standard-cost variances plus a both-differ slice whose cause is not confirmed. Work those by account, largest first, and do not assume a cost-basis difference.']
+          // No cardex-only slice: the whole-card MTO recurrence, computed.
+          : _withRecurrence(_TX_CARD_FINDING['MTO'].found,
+                            _TX_CARD_FINDING['MTO'].recurrenceIdx,
+                            _cardRecurrence('MTO')),
         fix: _gap
-          ? ['Do not work the missing completions one at a time. The fault is in the run.',
-             'Run R41543 monthly. It reports this exact shape and changes nothing.',
-             'Take the defect to Oracle through IT. The remedy is a vendor fix.',
+          ? ['Have whoever runs R31802A read the error report that run produces.',
+             'Take it to Oracle through IT as an undocumented R31802A condition, not as KB 420628. That article has a different cause, and its manual-journal-entry remedy does not fit this.',
              'Separately, work the cost-basis rows largest first with cost accounting.']
           : _TX_CARD_FINDING['MTO'].fix
       };
@@ -7457,11 +7646,11 @@
     else if (misRows.length && (!mech || mech.dmaai)) {
       var _nm = misRows.length, _nm1 = (_nm === 1);
       sel = {
-        flag: _nm + ' routing mismatch' + (_nm1 ? '' : 'es'),
-        mech: _nm + ' inventory routing' + (_nm1 ? '' : 's')
+        flag: _nm + ' DMAAI mismatch' + (_nm1 ? '' : 'es'),
+        mech: _nm + ' inventory DMAAI' + (_nm1 ? '' : 's')
           + ' resolve to a different account than the item-ledger model for their GL class.',
         checked: [
-          'Inventory AAI for each routing in this view against the item-ledger model account.',
+          'Inventory AAI for each DMAAI in this view against the item-ledger model account.',
           _nm + ' of them resolve somewhere else. Confirmed. Listed below.'
         ],
         found: _TX_CARD_FINDING['DMAAI-MIS'].found,
@@ -7472,6 +7661,25 @@
     else if (mech) { sel = mech; kind = mech.triage ? 'open' : 'mismatch'; }
     else if (combos.length) { sel = _TX_CARD_FINDING['UNSCOPED']; kind = 'open'; }
     else { kind = 'muted'; }
+    // UI-59 — a card that makes a recurrence claim gets it COMPUTED from the
+    // loaded rows, replacing the general fallback bullet held in the catalog.
+    // Hardcoding one dataset's counts here shipped a number that is false on
+    // every other install. If the loaded window cannot evidence recurrence,
+    // the fallback stands and no number is invented.
+    // Clone rather than mutate: _TX_CARD_FINDING is shared across renders.
+    //
+    // GATED ON sel === mech, i.e. the finding shown IS this card's own
+    // mechanism. A row-truth signal (duplicate relief, non-stock, IT
+    // extended-cost) can pre-empt the card and put ANOTHER entry's text on
+    // screen — TXI's text on a T-INV drill, say. Counting the active card's
+    // rows there would attribute a real number to the wrong population, which
+    // is the defect this whole change exists to remove. When they diverge the
+    // general fallback stands. The MTO cardex-only slice is handled on its own
+    // path above, where it passes an explicit row predicate.
+    if (sel && sel === mech && typeof sel.recurrenceIdx === 'number' && Array.isArray(sel.found)) {
+      var _rcFound = _withRecurrence(sel.found, sel.recurrenceIdx, _cardRecurrence(card));
+      if (_rcFound !== sel.found) sel = Object.assign({}, sel, { found: _rcFound });
+    }
     // The lead band was redundant clutter (owner 2026-07-14): the collapsed-header
     // flag already states the status, the table states the routings, and the AI
     // explanation (Full tier) + the auto-drafted finding carry the fix. Body = the
@@ -7505,17 +7713,17 @@
     var routeChecks = [], tail = [];
     if (!lensLed) {
       if (misRows.length) {
-        routeChecks.push('Account routing: ' + misRows.length + ' routing'
+        routeChecks.push('DMAAI account assignment: ' + misRows.length + ' DMAAI'
           + (misRows.length === 1 ? '' : 's') + ' resolve to a different account than the item-ledger model. '
           + 'Confirmed, and a separate fix from this one. Listed below.');
       } else if (_modelUnresolved) {
-        routeChecks.push('Account routing: could not be read, so not checked. Neither confirmed nor ruled out. '
+        routeChecks.push('DMAAI account assignment: could not be read, so not checked. Neither confirmed nor ruled out. '
           + 'Reload the page; if it persists, ask IT to confirm the data service is reachable.');
       } else if (combos.length) {
-        routeChecks.push('Account routing: every routing here resolves to the item-ledger model account. Ruled out.');
+        routeChecks.push('DMAAI account assignment: every DMAAI here resolves to the item-ledger model account. Ruled out.');
       }
     }
-    if (misRows.length) tail.push('Routings that differ from the model:\n' + misTxt);
+    if (misRows.length) tail.push('DMAAIs that differ from the model:\n' + misTxt);
     // MTO records the per-shape counts so the finding carries the decomposition.
     if (_mtoOn) {
       tail.push('Residual by shape:\n' + [

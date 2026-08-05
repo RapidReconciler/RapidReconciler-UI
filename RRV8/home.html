@@ -373,10 +373,18 @@
      Context band are shared across all roles. */
   /* Accountant = AI rail + period chart only (the AI-forward reconciliation view);
      Analyst adds the analyst lane; Admin adds the operate panels. */
+  /* #adminSummary is named alongside #view-admin in both rules below because it
+     used to be a CHILD of #view-admin and inherited this hide. It moved out
+     (renderRoleView now DETACHES #view-admin for a non-admin, and the read-only
+     summary is the one thing in that block a non-admin should keep), so it needs
+     the lens rule in its own right — otherwise the analyst / accountant views
+     would gain a "no access to Administration" card they never showed before. */
   body[data-view-role="accountant"] #view-admin,
+  body[data-view-role="accountant"] #adminSummary,
   body[data-view-role="accountant"] #analystSectionHead,
   body[data-view-role="accountant"] #analystBody { display: none !important; }
-  body[data-view-role="analyst"] #view-admin { display: none !important; }
+  body[data-view-role="analyst"] #view-admin,
+  body[data-view-role="analyst"] #adminSummary { display: none !important; }
   body[data-view-role="admin"] #analystSectionHead,
   body[data-view-role="admin"] #analystBody { display: none !important; }
   /* Admin doesn't need the out-of-balance-by-period chart — that's the
@@ -2916,13 +2924,18 @@
          storage, fiscal calendar, AI plan). Off by default; _syncInstanceHealth()
          manages its label + shows it only when there's something quiet to surface. -->
     <button type="button" class="ihs-showall" id="ihsShowAll" aria-pressed="false" hidden>Show all</button>
-    <!-- Read-only awareness: shown when the viewer lacks admin actions — lists
-         what's open, with no controls. Populated by loadHomeStatusSummary(). -->
-    <div class="lane-summary" id="adminSummary" hidden>
-      <span class="lane-summary-lock"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>View only</span>
-      <ul class="lane-summary-list" id="adminSummaryList"><li class="ls-muted"><span class="ls-dot"></span>Checking&hellip;</li></ul>
-      <div class="lane-summary-note">You don&rsquo;t have access to Administration &mdash; contact your administrator.</div>
-    </div>
+  </div>
+
+  <!-- Read-only awareness: shown when the viewer lacks admin actions — lists
+       what's open, with no controls. Populated by loadHomeStatusSummary().
+       Lives OUTSIDE #view-admin (moved out of it) because #view-admin is now
+       DETACHED from the DOM for a non-admin — and this lane is the one thing
+       in that block a non-admin is meant to see. Same placement rationale as
+       #analystSummary, which sits outside its gated grid for the same reason. -->
+  <div class="lane-summary" id="adminSummary" hidden>
+    <span class="lane-summary-lock"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>View only</span>
+    <ul class="lane-summary-list" id="adminSummaryList"><li class="ls-muted"><span class="ls-dot"></span>Checking&hellip;</li></ul>
+    <div class="lane-summary-note">You don&rsquo;t have access to Administration &mdash; contact your administrator.</div>
   </div>
 
   <!-- ================== NON-ADMIN: Am I Ready to Go? ==================
@@ -3252,7 +3265,14 @@
       inv: (m.inv !== false) && (t.inv !== false),
       it:  (m.it  !== false) && (t.it  !== false),
       por: (m.por !== false) && (t.por !== false),
-      adm: (m.adm !== false) && (t.adm !== false),
+      // adm does NOT fail open, unlike the three module caps above. Those are
+      // licensing questions (absent claim = old token, show it); the admin tab is
+      // an authorization question, where absent = unknown and unknown must not
+      // open the door. This keeps caps().adm consistent with isAdmin() below —
+      // they used to disagree (fail-open vs. fail-closed), which let a thin token
+      // un-hide #adminGrid. VALC 2.0 always emits t.adm as an explicit boolean,
+      // so requiring `=== true` costs a real admin nothing.
+      adm: (m.adm !== false) && (t.adm === true),
       ij:  (p.ij  !== false),
       dm:  (m.adm !== false) && (p.dm !== false)
     };
@@ -3824,16 +3844,52 @@
   var FORCE_FIRSTRUN = false;
   try { FORCE_FIRSTRUN = new URLSearchParams(window.location.search).get('firstrun') === '1'; } catch (_) {}
 
+  // #view-admin holds admin-only surfaces: the AI ask band (#adminBrief, which
+  // links admin-claude-assistant.html), the task grid (#adminGrid, eight admin
+  // hrefs), and the instance-health strip (three more). A non-admin must not
+  // merely have them HIDDEN — a hidden node is still readable in view-source,
+  // walkable in devtools, and its hrefs are still copyable. So the whole block is
+  // DETACHED from the DOM. The node is kept in a variable with a comment anchor
+  // marking its slot, so a DB switch that regains the admin grant re-attaches the
+  // identical element: an admin loses nothing, and nothing is rebuilt.
+  var _adminViewNode = null, _adminViewAnchor = null;
+  function setAdminViewPresent(present) {
+    var el = $('view-admin');
+    if (present) {
+      if (el) return;                                       // already attached
+      if (!_adminViewNode || !_adminViewAnchor || !_adminViewAnchor.parentNode) return;
+      _adminViewAnchor.parentNode.insertBefore(_adminViewNode, _adminViewAnchor);
+      return;
+    }
+    if (!el || !el.parentNode) return;                      // already detached
+    if (!_adminViewAnchor) {
+      _adminViewAnchor = document.createComment(' #view-admin — admin only, detached ');
+      el.parentNode.insertBefore(_adminViewAnchor, el);
+    }
+    _adminViewNode = el.parentNode.removeChild(el);
+  }
+
   function renderRoleView() {
-    var admin = isAdmin() || FORCE_FIRSTRUN;
+    // FORCE_FIRSTRUN (?firstrun=1) may only REORDER an admin's own view — it can
+    // never stand in for isAdmin(). It used to be OR'd in here, which let any
+    // role fabricate admin status and click the wizard's step-1 action link
+    // (admin-users.html).
+    var admin = isAdmin();
     var firstRun = admin && (FORCE_FIRSTRUN || _firstRun === true);
     document.body.classList.toggle('is-firstrun', !!firstRun);
     $('view-firstrun').hidden = !firstRun;
-    // Administration is visible to EVERY role now — the action cards inside are
-    // gated (adminGrid vs. the read-only adminSummary), but the section + its
-    // status pill always show so any role has cross-lane awareness. Only the
-    // first-run wizard replaces the whole admin surface.
-    $('view-admin').hidden = firstRun;
+    // Administration is admin-only. The read-only #adminSummary lane moved OUT of
+    // #view-admin so a non-admin still gets cross-lane awareness without the
+    // container (and its eleven admin hrefs) being in their DOM at all.
+    setAdminViewPresent(admin);
+    var va = $('view-admin');
+    if (va) va.hidden = firstRun;
+    // #adminBrief carries the admin-claude-assistant.html link and was gated by
+    // CSS alone. Belt-and-suspenders for the case where #view-admin is present
+    // (an admin previewing a lower-rank view): the CSS rule at
+    // body:not([data-view-role="admin"]) #adminBrief stays as the backup.
+    var ab = $('adminBrief');
+    if (ab) ab.hidden = !admin;
     $('view-ready').hidden = admin;
     if (firstRun) renderWizard();
     else if (!admin) renderReadiness();
@@ -3843,8 +3899,12 @@
   // Administrator. Data + licensing are handled upstream, so "set up your
   // team" is the whole first-run job. Defaults to steady-state on any error.
   function checkFirstRun() {
-    if (FORCE_FIRSTRUN) { _firstRun = true; renderRoleView(); return; }
+    // isAdmin() is checked FIRST. The FORCE_FIRSTRUN early return used to sit
+    // above it and skipped it entirely, so ?firstrun=1 set _firstRun = true for
+    // any role. Order reversed: a non-admin falls out here, and the owner's
+    // admin-account wizard preview still short-circuits the /admin/users read.
     if (!isAdmin()) { _firstRun = false; return; }
+    if (FORCE_FIRSTRUN) { _firstRun = true; renderRoleView(); return; }
     rrFetch('api/v1/admin/users').then(function (rows) {
       var list = Array.isArray(rows) ? rows : (rows && rows.users) || [];
       // GSI Internal is a GSI-staff role — never a customer team member. Drop it
@@ -4047,7 +4107,12 @@
   var WZ_DONE = { key: 'done', eyebrow: 'Your team is ready', h: 'Your team can sign in',
     lede: 'Everyone you added has an email to set their password and will land on a Home scoped to this database and the open period, with Reconciliation ready to go.', isDone: true };
 
-  function renderWizard() { renderWzStrip(); renderWzBody(); renderWzFoot(); }
+  // Guarded at the single entry point: #view-firstrun's Back / Later buttons are
+  // static markup, so they stay in a non-admin's DOM even though the block is
+  // hidden and firstRun can no longer be true for them. Without this, a
+  // dispatched click on one of those buttons would have renderWzBody() inject
+  // the step-1 action link (admin-users.html) into #wzBody.
+  function renderWizard() { if (!isAdmin()) return; renderWzStrip(); renderWzBody(); renderWzFoot(); }
   function renderWzStrip() {
     var el = $('wzStrip'); if (!el) return;
     var html = WZ_STEPS.map(function (s, i) {
@@ -8038,15 +8103,15 @@
     'PER':  { desc: 'The item ledger and the GL recorded these documents in different months.',
               action: 'Set GL Date Source to follow the transaction date, and schedule the batch runs to finish before the period closes.' },
     'VCHR': { desc: 'A/P vouchers posted to an inventory account instead of the A/P variance account.',
-              action: 'Correct the DMAAI 4220 route, then restrict who can override the GL account on the voucher-match version.' },
+              action: 'Correct the DMAAI 4330 route, then restrict who can override the GL account on the voucher-match version.' },
     'DUP':  { desc: 'The same order line was relieved from inventory twice. The GL booked it once.',
               action: 'Reverse the duplicate relief at the source. Then restrict the statuses at which ship-confirm is allowed, or recover the Sales Update workfile before any re-run.' },
     'TXI':  { desc: 'Location transfers relieved inventory value the GL never recorded. The receipt leg carried a unit cost and never extended it.',
-              action: 'Correct the cost-component setup for these cost-level-3 items. Run R41543 and R41544, then restore the missing value with a dollars-only adjustment.' },
-    'CNJ':  { desc: 'Work-order completions received finished goods into inventory with no GL entry. The material issues for the same orders did post.',
-              action: 'Do not work the orders one at a time — the fault is in the run. Run R41543 monthly and take the defect to Oracle through IT.' },
+              action: 'Correct the cost-component setup for these cost-level-3 items, then restore the missing value with a dollars-only adjustment. Confirm each document on both sides first; this card is already the full population of one-sided reliefs.' },
+    'CNJ':  { desc: 'Work-order completions received finished goods into inventory with no GL entry. The material issues for the same orders did post. The pattern is a run that journals most of its completions and drops a slice, so open the card for the recurrence across your loaded periods.',
+              action: 'Have whoever runs R31802A read the error report that run produces, then take it to Oracle through IT as an undocumented R31802A condition, not as KB 420628.' },
     'MTO':  { desc: 'Make-to-order work orders. Not one variance type: expected standard-cost variances, cost-basis differences on completions, and completions with no GL entry.',
-              action: 'Work the cost-basis rows largest first and get R30837 called from R30822. GL-only rows need no action. The missing completions are a run-level fault.' },
+              action: 'Split by shape and route each slice separately. Take the both-differ rows by account, largest account first, with cost accounting: the value concentrates on very few accounts, and the old cost-basis explanation does not fit the gap profile. GL-only rows need no action. The missing completions are a run-level fault and belong in the completion-gap workflow.' },
     'ICO':  { desc: 'Intercompany orders whose selling and buying legs have not offset.',
               action: 'Confirm the matching leg posted in the counterpart company. Compare against the prior period to tell a pair that clears from one that is stuck.' },
     'TRF':  { desc: 'Inter-branch transfers whose shipping and receiving legs have not met. A duplicated item-ledger relief also lands here.',
@@ -8389,11 +8454,11 @@
       // Orders is one — the duplicate-cardex quirk is specific to Sales Update (R42800)
       // abending on ST/OT orders. Falls back to KIND_EXPLAIN. SME to refine.
       var CODE_EXPLAIN = {
-        MTO:  'Make-to-order work orders, grouped with their customer sales orders. Not one variance type: the residual splits into expected standard-cost variances, completions valued on a different cost basis in the GL than in the item ledger, and completions with no GL entry at all. Drill in for the counts and dollars per shape.',
-        VCHR: 'A/P vouchers posted to an inventory account instead of the A/P variance account. DMAAI 4220 is routing voucher variances into inventory. Correcting that route stops it; restricting account overrides on the voucher-match version keeps it corrected.',
+        MTO:  'Make-to-order work orders, grouped with their customer sales orders. Not one variance type: the residual splits into expected standard-cost variances, completions where both sides carry value and disagree, and completions with no GL entry at all. The three need different work, and the middle slice no longer has a confirmed cause. Drill in for the counts and dollars per shape.',
+        VCHR: 'A/P vouchers posted to an inventory account instead of the A/P variance account. DMAAI 4330 is routing voucher variances into inventory. Correcting that route stops it; restricting account overrides on the voucher-match version keeps it corrected.',
         DUP:  'The same order line was relieved from inventory twice while the GL booked it once, so the extra item-ledger line is the variance. Either the line was ship-confirmed again after it closed, or Sales Update abended and the re-run wrote the relief a second time.',
-        TXI:  'Location transfers relieved inventory value the GL never recorded: the receipt leg carried a unit cost but never extended it. The JDE one-sided item-ledger defect, on cost-level-3 items under standard costing. It repeats until the cost-component setup is corrected.',
-        CNJ:  'Work-order completions received finished goods into inventory with no GL entry for them, while the material issues for the same orders did post. Manufacturing accounting stamped the item ledger and wrote no entry — a documented Oracle defect that skips a fraction of every run. The fault is in the run, not these orders.',
+        TXI:  'Location transfers relieved inventory value the GL never recorded: a leg carried a unit cost but never extended it, so a move that should be value-neutral destroyed inventory value. A zero extended cost on a transfer leg is common and harmless on its own; it is the unit-cost-without-extension combination that lands a document here. It arrives in bursts rather than every period, so read the periods either side before calling the setup still wrong.',
+        CNJ:  'Work-order completions received finished goods into inventory with no GL entry for them, while the material issues for the same orders did post. Manufacturing accounting stamped the item ledger and wrote no entry. The pattern is a run that journals most of its completions and drops a slice, at a severity that moves from run to run; the card states the recurrence across your loaded periods. No Oracle Support article matches the shape. The fault is in the run, not these orders.',
         TRF: 'Inter-branch transfers whose shipping and receiving legs have not met — different periods, or the receiving branch carrying the shipping cost. A second case lands here too: Sales Update abends and the re-run duplicates the item-ledger relief while the GL posts once.'
       };
 
@@ -9760,8 +9825,8 @@
     frozen:  { view: 'v_integrity7_frozen_cost', demoFile: 'v-integrity7-frozen-cost', dot: 'intgFrzDot', file: 'FrozenCostIntegrity', title: 'Frozen Cost Integrity',
                cols: ['CompanyNumber', 'BranchPlant', 'ShortItem', 'ItemNumber', 'ThirdItem', 'CostLevel', 'CostMethod', 'Location', 'Lot', 'QtyOnHand', 'ST', 'UnitCost', 'FrzCost', 'Variance', 'Prodplant', 'Prodcost'],
                num:  ['UnitCost', 'FrzCost', 'Variance', 'Prodcost', 'QtyOnHand'],
-               // Prodplant/Prodcost are a Cavendish-only customization — empty on every
-               // demo DB. Candidates for the all-empty drop below; kept when populated.
+               // Prodplant/Prodcost come from a single-customer customization — empty on
+               // every demo DB. Candidates for the all-empty drop below; kept when populated.
                hideEmpty: ['Prodplant', 'Prodcost'] },
     glclass: { view: 'v_integrity5_gl_class',    demoFile: 'v-integrity5-gl-class',    dot: 'intgGlcDot', file: 'GLClassIntegrity', title: 'GL-Class Integrity',
                cols: ['CompanyNumber', 'BranchPlant', 'ItemNumber', 'ThirdItem', 'Description', 'Location', 'Lot', 'StockType', 'BranchClass', 'LocationClass'] }
@@ -9852,7 +9917,7 @@
   // the data being empty — NOT a blanket "always hide". A column named in the
   // report's optional `hideEmpty` list is dropped from BOTH the on-screen table
   // and the Excel export only when EVERY row is null/blank for it, so a real
-  // Cavendish dataset that populates Prodplant/Prodcost still shows those columns.
+  // customer dataset that populates Prodplant/Prodcost still shows those columns.
   function _intgIsBlank(v) { return v == null || String(v).trim() === ''; }
   function _intgEffectiveCols(rep, rows) {
     var cols = rep.cols || [];
@@ -12872,8 +12937,14 @@
   function loadActiveDbSurfaces() {
     renderDatabases();
     renderScopeBar();
-    renderTiles();
+    // renderRoleView() must run BEFORE renderTiles(). It attaches/detaches the
+    // whole #view-admin container; renderTiles() gates the children INSIDE it
+    // (#adminGrid, #instanceHealth). In the other order, a DB switch from a
+    // non-admin db (container detached) to an admin one would have renderTiles
+    // no-op on the missing children, then re-attach them still carrying the
+    // previous db's hidden state — an admin with an empty Administration block.
     renderRoleView();
+    renderTiles();
     applyViewRole();   // role-view lens (which lanes render) — clamped to the active DB's grant
     _openPrimaryLaneOnFresh();   // fresh sign-in: land the role on its primary lane, once
     checkFirstRun();

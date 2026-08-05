@@ -964,25 +964,52 @@ JDE never re-uses a line number for a partial shipment -- a genuine partial incr
 > **Screen IT documents for this before treating a cardex-only transfer as an unposted batch.** An inventory transfer (DT `IT`) that relieved value on the cardex with no GL counterpart is usually not a batch waiting to post -- it is a one-sided item-ledger entry. The classifier claims it as **Transfer Integrity** (`usp8_txv_flags`, DT=IT + cardex-only residual, after netting), so any IT that balanced is already cleared and only the genuinely-stuck relief lands here. The analyst analyzer and the Export Analyzer lead with the same diagnosis.
 
 **Symptoms:**
-- An **inventory transfer (DT `IT`)** document -- a location-to-location move within one branch
+- An **inventory transfer (DT `IT`)** document -- a location-to-location move
 - The cardex (F4111) relieved value; there is **no matching GL (F0911)** entry, so LedgerAmount = 0
-- The receipt leg carries a **valid unit cost but a zero extended cost** -- the item-ledger amount never calculated
-- Concentrated on **cost-level-3 (location / lot) items** (F4101 `IMCLEV`) under a standard cost method
+- A leg carries a **unit cost with a zero extended cost** -- the item-ledger amount never calculated
 
 **What is happening:**
 
-A within-branch location transfer should be value-neutral: the out leg relieves the location and the in leg receives it at the same cost, so the two net to zero with no GL impact. Here the receiving leg priced the quantity but never extended it to a dollar amount, so the move relieved inventory value the GL never recorded. This is a JDE item-ledger integrity error -- the one-sided-entry defect that surfaces on standard-cost, cost-level-3 items -- not a mapping gap, and not a timing gap that clears on its own.
+A location transfer should be value-neutral: the out leg relieves the location and the in leg receives it at the same cost, so the two net to zero with no GL impact. Here a leg priced the quantity but never extended it to a dollar amount, so the move relieved inventory value the GL never recorded.
+
+**The discriminator is narrower than it looks, and two earlier readings of it were wrong.** Both were corrected against the data on 2026-08-03; the queries are in the evidence table below.
+
+- **It is not "the receiving leg."** Across the loaded window, zero-extended legs occur on the relief and receipt sides in **equal numbers** (one company: 232,427 each at cost level 2; 11,738 receipt against 11,722 relief at cost level 3). Leg direction does not separate the failures from the healthy transfers.
+- **A zero extended cost is ordinary.** It is present on roughly a third of all IT item-ledger rows in one company and is harmless there. Only the small slice that **also carries a unit cost** produces this card: 632 rows out of 488,314 zero-extended rows in that company, 139 of 1,843 in the other.
+- **Cost level is not a property of the pattern.** One company's failures are cost level 3 throughout (69 of 69 documents). The other mixes levels 2 and 3, and **only 11 of its 32 documents match the unit-cost-without-extension shape at all**, so the remaining 21 have a cause this section does not yet name.
+- **No vendor article has been cited for it.** Do not call it a named JDE or Oracle defect. The shape is real and confirmed in the data; the vendor attribution was never sourced.
+
+**It is episodic, not a standing setup fault.** Across 16 loaded periods in two companies the failures cluster into bursts separated by long clean stretches, while transfer volume runs steadily throughout. One company ran nine consecutive clean periods, then failed in three consecutive periods at rising severity, then ran two more clean periods at normal volume. Per transfer the rate is low, about **0.2% across the whole window and 1.7% in the worst single month**, while the dollars concentrate sharply: 69 documents carried roughly $246K. That combination, rare events and heavy value, is what makes it worth an analyst's time. It also means **"it will not clear on its own" is the wrong reading** -- count the failures per period before deciding whether the setup is still broken.
+
+The evidence, from two companies over 16 loaded periods:
+
+| Test | Result |
+|---|---|
+| Zero-extended IT legs by direction | **Even split.** 232,427 receipt against 232,427 relief at cost level 2; 11,738 against 11,722 at cost level 3. Leg direction is not the discriminator |
+| Zero-extended legs that also carry a unit cost | **632 of 488,314** in one company, **139 of 1,843** in the other. The combination is the discriminator, and it is rare |
+| Card documents matching the unit-cost-without-extension shape | **69 of 69** in one company, **11 of 32** in the other. The remaining 21 documents are unexplained by this section |
+| Cost level of the card documents | Level 3 throughout in one company; a **mix of levels 2 and 3** in the other. Not a property of the pattern |
+| Periods affected | **5 of 16** per company. Nine consecutive clean periods, then three consecutive failing periods at rising severity, then two clean periods at normal volume |
+| Failure rate per transfer | **0.2%** across the window, **1.7%** in the worst single month (32 of 1,837 transfers) |
+| Value concentration | **69 documents carried roughly $246K**, with $153K in one period and $76K in the next |
+| Both item-ledger legs present | Yes, on every document checked. A missing leg is not the mechanism |
+
+Repeat these on a customer database before generalizing. The shape is confirmed here; the rates are these datasets'.
 
 **Resolution:**
 
 > ⚠ **This is a source fix, not a journal entry.** A JE balances the GL for the period but leaves the cardex short, and the break returns on the next transfer. Correct it in JDE.
 
-1. **Confirm the signature** -- pull the F4111 for the IT document and check that the receipt leg has a unit cost with a zero extended cost, and that the item is cost-level 3 (F4101 `IMCLEV`) under a standard cost method.
-2. **Run the item-ledger integrity reports** -- R41543 (Item Ledger / Account Integrity) and R41544 (Item Balance / Ledger Integrity) surface every one-sided IT relief, not only the document in front of you.
-3. **Restore the value with a dollars-only inventory adjustment (IA)** -- book the missing extended cost so the cardex ties back to the GL.
-4. **Refresh RapidReconciler and re-analyze** -- the variance clears once the integrity reports and the IA post.
+1. **Confirm the signature** -- pull the F4111 legs for the IT document and check that a leg carries a unit cost with a zero extended cost. Do not screen on leg direction or cost level; neither separates these documents from healthy transfers.
+2. **Confirm both sides of the document** -- read the F4111 legs against F0911 for the same document, so the one-sided relief is established from the data rather than inferred from the card. You do not need to run anything to find the rest of the population: the classifier stamps every one-sided IT relief `Transfer Integrity`, so the card already holds them all.
+3. **Count the failures per period, either side of the one you are working** -- this is the step that tells you which problem you have. A burst that starts and stops, with clean periods afterwards at normal transfer volume, is a cost change or a specific set of items. Failures in every period are a setup that is still wrong.
+4. **Compare the cost setup of the failing items against items that transferred cleanly in the same period** -- that difference is the lead, and it is a narrower question than auditing the cost setup as a whole.
+5. **Restoring the value is a dollars-only inventory adjustment (IA)**, booked by the accountant, so the cardex ties back to the GL.
+6. **Refresh RapidReconciler and re-analyze** once the source correction and the IA post.
 
-**Prevention:** fix the cost-component / standard-cost setup for the cost-level-3 items so future IT transfers extend a cost, then re-run R41543 / R41544 to confirm the population is clean.
+**Prevention:** the target depends on step 3. Where the failures cluster into a burst, find what changed in that window (a cost roll, a new item set, a conversion) rather than treating the whole cost setup as broken. Where they run every period, the cost setup for the affected items is not extending a cost and that is the fix. Either way, re-check the next period: new IT documents carrying a unit cost with no extended cost mean the condition is still live.
+
+> ⚠ **Do not prescribe R41543 / R41544 for this pattern.** The pairing was a guess and the owner refuted it 2026-08-03, the same ruling that pulled the programs off Completion Not Journaled (§5.19). The remedy is the item cost setup plus the dollars-only IA. And there is no population-finding step to replace: the classifier's `Transfer Integrity` claim already is the population of one-sided IT reliefs.
 
 > **Analyzer output:** the analyzer fires this ahead of the generic Cardex-Only diagnosis (5.3) for any IT document that relieved the cardex with no GL, so the item-ledger-integrity story wins over "go post the batch." The classifier stamps the same rows **Transfer Integrity**, and they group on their own card on the Transactions page.
 
@@ -1009,9 +1036,23 @@ That reframes the card. Something processed the completion; the question is whet
 
 > ⚠ **There is no repost.** R31802A resets Unaccounted Units on F4801 / F3111 / F3112 in the same run that stamps the batch, and unaccounted units are what drive its selection. After it has run, the program has nothing left to select, so "repost through R31802A" does nothing at all.
 
-**Why -- leading cause: a genuine gap, vendor-documented and data-confirmed**
+**Why -- leading cause: a genuine gap, data-confirmed, with no vendor-documented match**
 
-R31802A stamps the cardex batch and writes **no F0911 completion detail for the order.** Oracle Support KB 420628 documents exactly that: the cardex row is correctly updated with a batch number while no journal entries and no batch number reach F0911, so the batch never appears on the R09801 report and **cannot be posted.** The article documents the `IM` variant; the `IC` analog is what produces this card. Full write-up, including the article's three caveats, in `AnalysisGuides/manufacturing-accounting-flow.md`.
+R31802A stamps the cardex batch and writes **no F0911 completion detail for the order.** The shape is confirmed in the data (evidence table below). It is **not** matched by any Oracle Support article we have found, so describe it as an observed condition and not as a known defect.
+
+> **Oracle Support KB 420628 is a near miss, not our case.** The article is retrieved in full. Its symptom looks like ours at a glance: R31802A updates the cardex correctly, including the batch number, while no journal entries and no batch number reach F0911, so the batch never appears on the R09801 report and cannot be posted. Its **cause does not apply to us.** The article's trigger is an issue quantity below **0.0050**. Transaction quantity carries 4 decimals and the part list cost field `CTS1` in F3111 carries only 2, so a quantity that small rounds `CTS1` to blank, and without a value there R31802A cannot write the journal entries. Its remedy is **manual journal entries**, which is accounting work rather than analysis. Two things rule it out here: the quantities are far too large, and the failure lands on the wrong transaction type.
+
+**The distinguishing test, and how the specimen answers it:**
+
+| KB 420628 requires | The specimen shows |
+|---|---|
+| An issue quantity below `0.0050` | **No row qualifies.** Across the full population the completions bottom out at `1.0000` and the material issues at exactly `0.0100`. Nothing falls below `0.0050`, and nothing falls below `0.01` |
+| The **issue** (`IM`) journal entry to be missing from F0911 | The opposite. `IM` entries are **present** (thousands of them) and only `IC` is absent. The article's failure striking `IM` would *suppress* this card rather than produce it |
+| A blank `CTS1` on the work order's F3111 part list | **Untested.** F3111 is a JDE part list table that RapidReconciler does not load, so `CTS1` is not reachable from an RR database or an export |
+
+Whether a blank `CTS1` could block only *part* of a run's output, the completion leg while the issue leg still writes, is **not addressed by the article and is not something to assume.** Settling it takes a query against the customer's own `PRODDTA.F3111`: look for the card's work orders carrying a blank or zero `CTS1` while their transaction quantity sits at or above `0.0050`, then check whether those same orders' `IM` entries reached F0911. Until someone runs that, KB 420628 stays a near miss worth knowing and nothing more.
+
+Keep the quantity check in the workflow regardless. It is one column on the export and it cleanly separates the two conditions.
 
 The evidence from a specimen dataset (one company, 39 rows in one period):
 
@@ -1022,9 +1063,13 @@ The evidence from a specimen dataset (one company, 39 rows in one period):
 | F3106 cross-reference | **543 rows covering all 39** -- the run did process them |
 | The 7 batches those rows belong to | **1,080 `IC` rows**, posted, document company matching, **every one with a numeric subledger** |
 | The account 37 of the 39 sit on | **293 `IC` rows in those same batches for 260 other orders** |
-| Per period, Jan-Aug 2025 | 42, 51, 57, 25, 14, 71, 39, 21 rows -- roughly **10-15% of each run's completions**, across order types `WO` / `WR` / `W1` and 7 batches |
+| Per period, Jan-Aug 2025 | 42, 51, 57, 25, 14, 71, 39, 21 rows, across order types `WO` / `WR` / `W1` |
+| Every batch across those 8 periods | **58 manufacturing batches**, 4-11 per period, roughly one per business day the job fired. **Every one journaled the large majority of its completions and dropped a slice. Not one batch was clean, and not one failed outright.** The dropped share runs **0.6%-24.6% per batch** and **3.2%-11.3% per period** |
+| The 39 rows' G/L dates | **7 distinct dates, Jul 8-30, one date per batch.** F4111 agrees on `ildgl` / `ilcrdj` / `perioddate`, and `iluser` is a single value, so the writer is not the variable |
 
-Same run, same batches, same account: 260 orders got their completion entries and these 39 did not. The shape is **standing, not a one-off.** Repeat these queries on a customer database to confirm it beyond the one dataset.
+Same run, same batches, same account: 260 orders got their completion entries and these 39 did not. The shape is **standing, not a one-off.**
+
+Read the batch counts carefully, because they change what this is. Zero whole-run failures across all 58 batches, and zero clean ones. That makes it a **partial-run failure repeating on every run**, not one bad run that needs finding. The roughly 40x spread between the lightest and heaviest batch says run conditions move the severity without ever eliminating it. Repeat these queries on a customer database to confirm it beyond the one dataset.
 
 **Why -- secondary causes: match failures.** Every one was refuted on the specimen above, but they remain real possibilities at other sites, so rule them out with the batch lookup rather than assuming them.
 
@@ -1047,16 +1092,15 @@ Take the batch number off the cardex row and read F0911 for that batch, manufact
 | What the batch holds | Diagnosis | Next |
 |---|---|---|
 | `IC` rows carrying **this order's** subledger | **Match failure** | Check the subledger for blank or non-numeric first, then the document company, then the document type |
-| `IC` rows present, but **none for this order**, while F3106 still names the batch for it | **The genuine gap** (specimen shape) | R31802A processed the order and wrote no completion detail for it. F3106 is the cross-reference it updates with work order, document, type, G/L date and batch |
+| `IC` rows present, but **none for this order**, while F3106 still names the batch for it | **The genuine gap** (specimen shape, no vendor article matches it) | R31802A processed the order and wrote no completion detail for it. F3106 is the cross-reference it updates with work order, document, type, G/L date and batch |
 | **No `IC` anywhere** in the batch | **The gap, run-wide** | The whole run's completions failed rather than a subset. Same conclusion, wider blast radius |
 | `IC` absent from RR's F0911, present in JDE's | **Load window** | The G/L date falls outside the loaded window; widen the pull or reload the GL for the period |
 
-**Prevention -- match the shape, not the rows**
+**Prevention**
 
-At 10-15% of completions every period, the recurrence lives in the **run**, not in the orders. Working individual work orders is the wrong action: it addresses one symptom while the next run reproduces the rest.
-
-- **Bound the exposure with R41543 (Item Ledger / Account Integrity) on a monthly schedule.** It reports this exact shape and updates no tables, so it runs freely and turns the card from discovery into monitoring.
-- **Pursue the R31802A behaviour with Oracle through the customer's own IT department,** which owns the support contract. The KB body is login-gated, so the vendor remedy is unknown until IT retrieves it. Do not substitute a guess for it.
+- **Read the error report R31802A produces.** Have whoever runs the job pull it for the run that stamped these completions.
+- **Pursue the R31802A behaviour with Oracle through the customer's own IT department,** which owns the support contract. Ask for it as an undocumented condition rather than as KB 420628, and hand over the evidence: batch stamped on the cardex, no `IC` detail in F0911 for the order, other orders in the same batch journaled normally, quantities well above the `0.0050` threshold that KB 420628 turns on. Naming the wrong article invites a remedy that does not fit.
+- **Check the quantities before reaching for KB 420628.** Any completion or issue below `0.0050` puts that article back in play, and its remedy is manual journal entries rather than anything an analyst can prevent. Above that threshold the article is the wrong lead.
 - **For the match-failure branch only: hold one R31802A summarization and subledger policy across every version in use.** A second version with different options reintroduces the split. Where summarized entries are the deliberate business choice, the fix belongs on the correlation side, because the subledger will never be there.
 - **Do not delete unposted manufacturing batches.** The unaccounted units are already cleared, so nothing in JDE regenerates the detail.
 
@@ -1077,14 +1121,66 @@ At 10-15% of completions every period, the recurrence lives in the **run**, not 
 | Shape | Cardex / GL | What it is | Action |
 |---|---|---|---|
 | **GL only** | cardex 0, GL &ne; 0 | Standard-cost variances -- the completion posted to the cardex at standard while the GL carried the actual-cost variance components (labor, overhead, material burden) that never move inventory. | **Expected. No action.** GL-only on a make-to-order job is the variance side of standard costing landing in the GL, not a reconciliation gap. See 5.2. |
-| **Both differ** | both &ne;, unequal | The completion was valued at **standard on the cardex** and **actual in the GL** -- the gap is quantity &times; cost-basis difference. | **Investigate the large ones.** This is 5.16 Manufacturing Cost Mismatch scoped to the job; confirm the intended cost basis with cost accounting, then the accountant posts the corrective JE. |
-| **Cardex only** | cardex &ne;, GL 0 | A completion (`IC`) on the cardex with no GL completion for the order, while the same work order's material issues (`IM`) are in the GL. **Check the batch:** it is non-zero, so R31802A already processed the transaction. | **Do not repost -- there is nothing left for R31802A to select.** Read F0911 for the cardex row's batch, looking for this order's subledger specifically, and fork from there. Most often the run wrote no completion detail for the order at all (the vendor-documented gap). See 5.19 Completion Not Journaled. Held under the make-to-order subtype because `usp6_008` stamped it first. |
+| **Both differ** | both &ne;, unequal | **Cause not confirmed.** This slice was read as a cost-basis difference (standard on the cardex, actual in the GL, gap = quantity &times; cost-basis difference). Tested 2026-08-04 against the full loaded population and **the profile does not fit** -- see the evidence below. | **Work by account, largest account first,** with cost accounting, and do not carry the cost-basis story into that conversation. 5.16 Manufacturing Cost Mismatch remains a real mechanism, but it has to be *confirmed* on these rows rather than assumed. |
+| **Cardex only** | cardex &ne;, GL 0 | A completion (`IC`) on the cardex with no GL completion for the order, while the same work order's material issues (`IM`) are in the GL. **Check the batch:** it is non-zero, so R31802A already processed the transaction. | **Do not repost -- there is nothing left for R31802A to select.** Read F0911 for the cardex row's batch, looking for this order's subledger specifically, and fork from there. Most often the run wrote no completion detail for the order at all (the observed gap, not matched by any vendor article). See 5.19 Completion Not Journaled. Held under the make-to-order subtype because `usp6_008` stamped it first. |
 
 **Why the cardex-only slice stays here and not on the Completion Not Journaled card:** the make-to-order subtype is assigned in `usp6_008` from the sales-order link; the `usp8_txv_flags` Completion-Not-Journaled pass only claims rows with **no** subtype, so a make-to-order completion keeps its business grouping. The decomposition surfaces the same shape and the same lookup in place -- the analyst sees the whole job on one card rather than having those rows split off. (If a future call moves them, it is a classifier-ordering change, not a copy change.)
 
 **Worked shape (one make-to-order company, one period):** 271 rows netting about -$11K -- roughly 158 GL-only (+$22.8K, expected standard-cost variances), 81 both-differ (-$26.6K, completion cost differences to investigate), 32 cardex-only (-$7.4K, completions whose GL leg has to be located by batch). The net is small, so read the gross: only two of the three shapes need any work.
 
+**Full population, same company, all eight loaded periods (queried 2026-08-04).** 2,865 rows, about $330K gross:
+
+| Shape | Rows | Gross | Share of gross |
+|---|---|---|---|
+| GL only | 1,088 | ~$129.5K | 39% |
+| Both differ | 1,400 | ~$133.0K | 40% |
+| Cardex only | 377 | ~$67.7K | 21% |
+
+Two things follow that the single-period view did not show.
+
+**The cost-basis cause does not fit the both-differ slice.** A standard-versus-actual gap is a modest share of the transaction and falls either side of it. This population does neither:
+
+| Test | Expected for a cost-basis difference | What the rows show |
+|---|---|---|
+| Size of gap vs size of transaction | A modest percentage | **577 of 1,400 rows exceed 50%** of the item-ledger amount, carrying ~$110.7K, i.e. **83% of the slice's value** |
+| Is that an artifact of a near-zero cardex side? | Would explain it away | **No.** Only 26 of those rows have a cardex side under \$1. **104 rows with a cardex of \$100 or more carry ~$86.5K**, still differing by over half |
+| Direction of the gap | Roughly symmetric | **Asymmetric.** GL exceeds cardex on 958 of 1,400 rows and ~$111.5K of ~$133.0K, so **84% of the value runs one way** |
+| Spread across accounts | Broad, following production | **Concentrated.** One account carries 453 rows and ~$89.4K (**67% of the slice**); two carry ~$109.4K (82%) |
+
+So something systematically puts more value in the GL than on the cardex, on a small number of accounts, at magnitudes a cost-basis delta would not produce. Name it as unconfirmed and work the concentration.
+
+**The cardex-only slice is a fifth of the card and is not cost work.** 377 rows and ~$67.7K carry the completion-gap shape, which is the &sect;5.19 investigation. Sending them to cost accounting wastes the analyst's and the accountant's time, because there is no cost to reconcile when there is no GL entry at all.
+
+Repeat these on a customer database before generalizing. The shapes and the tests generalize; the rates are this dataset's.
+
 > **Analyzer output:** for a Make-to-Order drill the analyzer skips the generic "routings match, it's timing" line and instead reports the three-shape breakdown with row counts and dollars, leading with the batch lookup when any cardex-only completions are present. Same knowledge in the classifier (the subtype + the Completion-Not-Journaled correlation) and the AI grounding.
+
+---
+
+### 5.21 Item Location GL Class Blank -- Variance Equals the Whole Balance
+
+**Signature.** The item confirms a quantity and an amount, then shows a variance of the *same* quantity and amount. The variance equals the balance rather than the difference between two balances. When you see those figures agree exactly, stop looking for a timing or a costing difference and go read the GL class.
+
+**Cause.** GL class lives at three levels: F4101 `IMGLPT` (item master), F4102 `IBGLPT` (item branch), and F41021 `LIGLPT` (item location). Amending one does not propagate to the others, and the location value is the one that governs. A class amended on the item master while the location record stays blank splits the two sides of the reconciliation. The amendment is often days old, so nothing about the current period looks unusual.
+
+**Why the whole balance moves rather than a delta.** RapidReconciler carries GL class inside the item identity. `RItems` is built from a union of distinct (branch, item, location, lot, glclass, cost level, primary UOM) across F4111 `ILGLPT` and F41021 `LIGLPT` (`v6_006_items`), and the itemid binds join on `LIGLPT = glclass` for the location and `ILGLPT = glclass` for the cardex (`usp6_006_inventory_data_prep`). A blank location class beside a populated cardex class therefore resolves to two different itemids. `RPerpetualInv` is keyed on itemid alone and holds the on-hand pair next to the cardex pair, so one row receives the quantity and amount on hand with no cardex, and the other receives the cardex with no on-hand. Neither nets against the other, and both read as a full variance.
+
+**The test that settles it in one pass.** Restore live production into test and rerun the refresh. If the variance survives both, it is source data and not RapidReconciler state, because anything internal (a stale load, an unbound itemid, a partial refresh) clears on the reload. That result redirects the investigation to JDE master data instead of to the reconciliation.
+
+Which configuration check catches it:
+
+| Check | What it covers |
+|---|---|
+| GL Class Integrity (Integrity Report 5, `v_integrity5_gl_class`) | Compares F4102 `IBGLPT` against F41021 `LIGLPT`, so it catches a branch against location split. It does not read F4101 `IMGLPT`. A master-only amendment that leaves both lower levels blank passes clean, since blank equals blank. |
+| Unassigned Account (Integrity Report 3, `v_integrity3_exc_glc`) | Lists items whose GL class resolved to no base account and renders a blank class as `*blank*`. A blank location class surfaces here even when Report 5 is quiet. Check it second. |
+
+**Resolution.** Set the GL class on the item location record in JDE, then refresh. No journal entry is involved; the amounts were never misposted, they were split across two item identities.
+
+**Recurrence prevention.** This is master-data hygiene on the customer's side. Whoever amends an item's GL class has to amend the item location, and the item branch, in the same change. Route that to the customer's IT or data-governance owner rather than treating it as a reconciliation task.
+
+> **Worked shape (fictional):** item `SI-100200` in branch `MFG01` is amended from blank to GL class `IN20` on the item master. The location record for `MFG01` / location `A-01-02` stays blank. The next refresh produces one RItems row at class `IN20` holding the cardex activity and one at blank holding 4,300 units and $86,000 on hand. Both rows report a variance of 4,300 units and $86,000.
+
+> **Keep the GL Class column visible.** In practice the fastest diagnosis of this pattern has come from an analyst reading GL Class = blank directly off the RapidReconciler display. The column earns its place on the analysis surface.
 
 ---
 

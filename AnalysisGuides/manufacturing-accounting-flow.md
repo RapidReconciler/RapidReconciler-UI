@@ -61,11 +61,14 @@ it is prescribing a remedy that does not exist.
 
 The card only claims cardex rows that carry a **batch number**. By the sequence
 above, a batch means R31802A ran and wrote F0911 in the same step, so the card never
-contains a transaction awaiting the run. Everything on it was already processed.
+contains a transaction awaiting the run. Everything on it was already processed —
+confirmed at population scale: **320 of 320** card rows carry a batch. The batch
+proves R31802A ran; it is not proof the F0911 entry exists.
 
 **The leading cause is a genuine gap: the run stamped the cardex batch and wrote no
-F0911 completion detail for the order.** That is the vendor-documented defect below,
-and it is what a specimen dataset shows. One company, 39 rows in one period:
+F0911 completion detail for the order.** It is what a specimen dataset shows, and no
+vendor article matches it (the near miss is ruled out below). One company, 39 rows in
+one period:
 
 - All 39 work orders carry `IM` rows and **zero** `IC` rows in F0911, matched on
   company plus numeric subledger. Widened to those order numbers with **no** company
@@ -76,9 +79,17 @@ and it is what a specimen dataset shows. One company, 39 rows in one period:
   subledger here.
 - 37 of the 39 sit on one short account that carries **293 `IC` rows in those same
   batches for 260 other orders.**
-- The shape is standing, not a one-off: every period from January to August 2025
-  (42, 51, 57, 25, 14, 71, 39, 21 rows), roughly **10-15% of each run's
-  completions**, across order types `WO` / `WR` / `W1` and 7 separate batches.
+- The shape is standing, not a one-off. Every period from January to August 2025
+  carries it (42, 51, 57, 25, 14, 71, 39, 21 rows), across order types `WO` / `WR` /
+  `W1`. The 39 rows in one period sit on **7 distinct G/L dates spanning three weeks**,
+  one date per batch, so the miss follows the runs rather than a single bad day. Each
+  period ran **4 to 11 batches**, essentially one per business day the job fired.
+- Across all **58 batches in the 8 periods, every batch journaled the large majority
+  of its completions and dropped a slice, and not one batch was empty of completions.**
+  The dropped share ranges **0.6% to 24.6% per batch** and **3.2% to 11.3% per
+  period.** A ~40x swing between the best and worst run says run conditions modulate
+  the severity without ever eliminating it. This is a partial-run failure repeating on
+  every run, not one bad run.
 
 Same run, same batches, same account: 260 orders got their completion entries and
 these 39 did not. The specimen queries want repeating against a customer database to
@@ -109,21 +120,21 @@ Document renumbering is a related reason manufacturing document types must match
 subledger rather than document number, but it is not itself a cause of this card:
 the correlation never looks at the document number.
 
-**Prevention belongs on the run, not the orders.** At 10-15% of completions every
-period, working individual work orders addresses one symptom while the next run
-reproduces the rest. Bound the exposure with R41543 (Item Ledger / Account
-Integrity) monthly, and pursue the R31802A behaviour with Oracle through the
-customer's own IT department, which owns the support contract. The KB body is
-login-gated, so the vendor remedy is unknown until IT retrieves it.
+**Prevention.** Have whoever runs R31802A read the error report that run produces,
+starting with the run that stamped these completions. Then pursue the R31802A
+behaviour with Oracle through the customer's own IT department, which owns the
+support contract. Ask for it as an **undocumented condition, not as KB 420628** —
+naming the wrong article invites a remedy built for a different cause.
 
-## Vendor-confirmed defect: R31802A stamps the cardex batch and writes no GL
+## Near miss, tested and ruled out: Oracle Support KB 420628
 
 Oracle Support **KB 420628**, *"E1: 31A: When Running (R31802A) Manufacturing
 Accounting No IM Journal Entry Or Batch Number Created In (F0911) But Cardex Is
 Updated Correctly"*, last updated 2025-11-15. Applies to JD Edwards EnterpriseOne
 Shop Floor Control, version XE and later.
 
-**What the abstract states.** When Manufacturing Accounting (R31802A) is run, no
+**What the article states** (retrieved in full). When Manufacturing Accounting
+(R31802A) is run, no
 journal entries and no batch number are created in the G/L (F0911), while the record
 in the P4111 / F4111 cardex is updated correctly. The example: a work-order
 inventory issue is performed via P31113 and the cardex is correctly updated with the
@@ -132,21 +143,37 @@ correctly updated with a batch number — but no journal entries and no batch nu
 are written to F0911. The batch therefore does not appear in the R09801 report and
 **cannot be posted**.
 
-Three caveats bound what the article can be used for:
+**Its cause and remedy, both stated in the body.** The trigger is an issue quantity
+(`TRQT`, 4 decimals) below **0.0050**. The part list cost field `CTS1` in F3111 carries
+only 2 decimals, so a quantity that small rounds `CTS1` to blank, and without a value
+there R31802A cannot write the journal entries. The remedy Oracle gives is **manual
+journal entries** — accounting work, not analysis, and not a prevention.
 
-- **Only the public abstract is available.** The article body sits behind the My
-  Oracle Support login and could not be retrieved, so the Cause and Solution are
-  unknown. Do not infer them. Working a confirmed instance requires the article body
-  or Oracle Support.
-- **The article documents the IM (material issue) variant; the Completion Not
-  Journaled card is the IC (completion) variant** — same program, same failure mode,
-  different transaction type. The distinction matters: the card fires only when an IM
-  row is *present* in F0911, so this defect striking IM would **suppress** the card
-  rather than cause it. The IC analog is what produces CNJ.
-- **The stranded state is the point.** The batch is stamped on the cardex, no GL
-  detail exists, the batch cannot be posted, and R31802A will not reprocess because
-  the unaccounted units are already cleared. That combination is why the transaction
-  is stuck — and why "repost" is inert.
+**Two grounds rule it out. Only the second carries the ruling:**
 
-Cite it as: Oracle Support KB 420628 (My Oracle Support, login required), abstract
-only.
+- **Shape — inverted, and this is the decisive ground.** The article's symptom is the
+  IM's **own** entry missing from F0911. This card is the opposite: across the full
+  card population IM is present in volume (5,059 F0911 rows for those work orders,
+  every one of them IM, zero IC) and only the completion is absent. The article's
+  failure mode striking IM would **suppress** this card rather than create it. This
+  ground is precision-independent and generalizes to any dataset.
+- **Quantity — true here, but does not generalize.** No row in the population
+  qualifies: the smallest issue quantity anywhere is `0.0100`, twice the threshold.
+  ⚠ Do **not** lean on this ground alone. The specimen database's sanitization
+  quantized quantities to 2 decimals, so the article's precondition is structurally
+  impossible there — the test cannot fail in that data and therefore proves nothing
+  about a customer's live data.
+
+**Untested, and not to be dismissed:** whether a blank `CTS1` could block only *part*
+of a run's output — the completion leg while the issue leg still writes. The article
+does not address it. RapidReconciler does not load F3111 at all, so `CTS1` is not
+reachable from an RR database or an export; settling it takes a query against the
+customer's own part list.
+
+**The stranded state is still the point,** whatever the cause turns out to be. The
+batch is stamped on the cardex, no GL detail exists, the batch cannot be posted, and
+R31802A will not reprocess because the unaccounted units are already cleared. That
+combination is why the transaction is stuck — and why "repost" is inert.
+
+Cite it as: Oracle Support KB 420628, retrieved in full, **a near miss ruled out on
+shape — never as a match.**
