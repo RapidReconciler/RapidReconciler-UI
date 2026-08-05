@@ -64,7 +64,10 @@ variances — the sole reason the table exists is to list the documents that nee
 analysis. Any other document in a result set is wrong.** (Owner ruling
 2026-08-05, HARD.) `RCardexLedgerCompare` without the `2` is the pre-netting
 table holding both sides of everything; counting from it produces figures that
-describe the whole ledger and mean nothing about the variance population. Full
+describe the whole ledger and mean nothing about the variance population.
+
+**Scope to `recstatus = 1`, never `< 2`** — `recstatus = 2` rows have already
+been resolved by server-side processes and are not analysis work. Full
 statement and worked failures in `transaction-detail-analysis.md` § Section 0.
 
 ## Grain: what you may and may not aggregate
