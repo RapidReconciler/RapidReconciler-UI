@@ -183,7 +183,10 @@ rules; the reference AI should recognize them by name:
 | Intercompany | 4162 · OK/SK sales-purchase | counterpart-company leg timing |
 | Transfers | IT 4122/4124 · ST/OT 4245↔4320 | branch wash / clearing drift |
 | Direct Ship | 43xx 4365 (OD) · sales | SO+PO leg timing |
-| Unclassified — Mfg | 31xx | std-cost change (5.9) · R31802A summarization (5.12) |
+| Cross-Batch Completion (5.21) | 31xx (3130) | completion journaled in a LATER batch than the one stamped on the cardex; amounts tie at work-order grain — not a variance |
+| Mfg Cost Mismatch (5.16) | 31xx (3120→3130) | GL completion exists on the account but the amount differs; cost basis moved between the cardex write and the R31802A run |
+| DMAAI Net Zero (5.22) | 31xx (3110 = 3130) | raw-material relief and finished-goods receipt resolve to ONE account so both legs cancel; 3120 unconfigured. The `nz` pattern, configuration not transaction |
+| ~~Unclassified — Mfg~~ | 31xx | **retired 2026-08-05** — the three claims above take the whole manufacturing residual (Demo1 1082→0, Demo3 562→0, Demo2 166→0). 5.9 and 5.12 remain the causes to *reason* about inside 5.16, but no longer describe an unclaimed population |
 | Unclassified — Purchasing | 43xx | landed cost (5.7) · voucher variance (5.15) · No Cx (5.8) · non-F4111 |
 | Unclassified — Sales | 42xx | relief/COGS routing |
 | Unclassified — Inventory | 41xx | missing model (5.1) · account mismatch (5.4) |

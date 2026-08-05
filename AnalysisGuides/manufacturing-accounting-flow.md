@@ -57,6 +57,67 @@ selection, so once it has run there is nothing left for it to pick up. Telling a
 analyst to repost is not merely mislabelled, it is inert. Any surface that prescribes
 it is prescribing a remedy that does not exist.
 
+## Grain: what you may and may not aggregate
+
+Owner rulings, 2026-08-05. These govern every manufacturing comparison and each one
+invalidates a reading that looks obviously right.
+
+**Batch cannot be used to aggregate manufacturing amounts.** A work order sits on the
+floor for weeks. It issues material many times on different days, and **each issue gets
+its own batch.** The IC is not generated until the product is fully complete — days or
+weeks after the last issue — **in a batch of its own.** So a document's cardex rows and
+its GL entries routinely live in different batches, and pairing them within a batch
+reports a difference where none exists.
+
+**Doc type is part of the grain.** The IC carries labor and overhead out of WIP; the IM
+does not. **An IM total will therefore never match an IC total,** and netting them is
+meaningless. Compare IM against IM and IC against IC.
+
+**The correct grain is (work order, account, doc type) across ALL batches and periods.**
+Match manufacturing by the work order in `GLSBL`, never by batch and never by document
+number.
+
+Measured consequence on a specimen database: at batch grain the unclassified manufacturing
+residual read **562 rows / −$11,309,997.50**. Regrained, **450 of 551 IC pairs tie to
+exactly zero** and account for **$11,006,129.37** of it. That money was never a variance.
+Worked row — cardex IC $305,521.99 stamped batch 3263483 on 08-09; GL IC $305,521.99 on the
+**same account** in batch 3295108 on 08-25. Same penny, sixteen days later.
+
+**3120 carries no inventory.** In JDE the WIP account is a **dollars-only holding
+account**. Only **3110** (raw material) and **3130** (finished goods) belong in a
+cardex-to-GL inventory comparison.
+
+⚠ **Identify WIP by its AAI, never by its F0901 description.** On the specimen database the
+accounts *named* "Work in Process" were reached by **3110 and 3130** — and were the declared
+inventory account for **20,875 items** across GL classes MLDP / SECD / PRSP / SUBC / SUBA.
+AAI 3120 was not configured at all. Excluding on the description would have deleted **837
+legitimate inventory rows.** The description is a label; the AAI is the fact.
+
+That same finding is itself a defect worth claiming: where **3110 and 3130 resolve to the
+same account**, both legs of every work order land there and cancel. It is the analyzer's
+`nz` net-zero pattern, it is configuration rather than transaction, and no journal entry
+fixes it — every future period reproduces it until the AAIs are split and 3120 is set.
+
+## Unit-cost history: `F4111` ordered by `ilukid`
+
+JDE has no unit-cost history table, and `F4105` / `F30026` are current-state only — so
+comparing a transaction's `iluncs` to today's `F4105` proves nothing. **Order `F4111` by
+`ilukid` within (item, branch) and read `iluncs` transaction by transaction. The steps are
+the cost changes.** The roll journals itself in the cardex as its own row: doc type **`IB`,
+quantity 0, and `iluncs` = the cost DELTA**, not the new cost.
+
+Worked chain, item 525541 at one branch: `0.0514` → `IB` +0.0002 → `0.0516` → `IB` +5.4629
+→ `5.5145` → `IB` −1.6779 → `3.8366`, which is exactly the current `F4105` value. Every step
+reconciles.
+
+Consequence: **"the transaction cost differs from the current standard" is not a finding.**
+It is usually just a later roll. The real test is whether the cost was the *prevailing* cost
+at its own `ilukid` position.
+
+⚠ Branch codes in `F30026` and `F4111` are **left-padded** (`'        P027'`). `rtrim()`
+alone matches nothing. Use `ltrim(rtrim(...))`. A filter returning zero rows against a table
+you just proved is populated is this.
+
 ## Consequences for a Completion Not Journaled card
 
 The card only claims cardex rows that carry a **batch number**. By the sequence
