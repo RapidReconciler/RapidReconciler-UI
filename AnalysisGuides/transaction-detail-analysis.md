@@ -31,12 +31,19 @@ Worked examples of getting this wrong, all from a single session:
   describe the full ledger, support no conclusion about the variance
   population, and were discarded.
 
+**Scope to `recstatus = 1`, never `< 2`.** (Owner 2026-08-05.) **`recstatus = 2`
+rows have already been resolved by server-side processes** — they are not
+analysis work and do not belong in a result set either. The domain is only
+{1, 2} today, so the two predicates return the same rows; `= 1` states the
+intent and stays correct if a status is ever added. For scale: 5,354 / 229,
+2,093 / 2 and 4,684 / 135 across the three demo databases.
+
 **The correct shape** — anchor on the variance population, then reach outward
 only to *explain* those rows:
 
 ```sql
 with p as (select * from dbo.RCardexLedgerCompare2
-           where recstatus < 2 and <the card's own predicates>)
+           where recstatus = 1 and <the card's own predicates>)
 -- every other table joins TO p. Nothing else supplies the population.
 ```
 
