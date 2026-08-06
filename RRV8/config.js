@@ -828,7 +828,14 @@ window.RRV8 = window.RRV8 || {};
  *   title        the ONE name. Every surface shows this string — card header,
  *                scope band, work panel, export filename.
  *   kind         Home chip (rebalance | self | mto | ico | linked | review).
- *   tier         Home tier lane (quick | complex | linked | terminal).
+ *   tier         Home lane (linked | single | terminal). The lanes are the
+ *                classifier's own phases, and the order of entries WITHIN a lane
+ *                is the order usp8_txv_classify claims them. So the Home page
+ *                reads top to bottom as the pipeline actually runs: groups form
+ *                first, then the single-document claims in precedence order,
+ *                then whatever nothing claimed. Moving an entry changes what the
+ *                analyst is told runs first -- only move one to match a change in
+ *                the procs.
  *   disposition  Details chip (rebalance | expense | self | triage).
  *   cause        Home card body. Short: what happened plus the lever.
  *   desc         Details "What it is". Long form; feeds the card tooltip and
@@ -857,9 +864,14 @@ window.RRV8 = window.RRV8 || {};
 window.RRV8 = window.RRV8 || {};
 (function () {
   var META = {
-    // ---- Quick wins (1 document) — deterministic corrective action ----------
+    // ---- SINGLE DOCUMENT (Phase 2) — in usp8_txv_classify claim order ---------
+    //      usp8_txv_net runs first (it nets, it does not stamp a card), then
+    //      account_mismatch, period_mismatch, and the ten claims inside
+    //      usp8_txv_flags. The order below IS that order, read off a run log — a
+    //      card earlier in this list has PRECEDENCE over one later, because it
+    //      claims first and every claim guards on an unclaimed SubType.
     'ACCT': {
-      title: 'Account Mismatch', kind: 'rebalance', tier: 'quick', disposition: 'rebalance',
+      title: 'Account Mismatch', kind: 'rebalance', tier: 'single', disposition: 'rebalance',
       cause: 'The GL posted these documents to a different account than the DMAAI routes to. The item ledger used the right one. Correct the DMAAI for this combination, turn off account entry and override on the version in use, and on sales documents check R42800 PO 5, Business Unit Source.',
       desc: 'Cardex and GL both posted, but the GL side landed on a different account than JDE\'s DMAAI table routes to for this (Order Type, Doc Type, GL Class). Usual causes: the DMAAI itself is wrong for that combination, the item\'s GL class changed after the document posted, or the program version lets the operator key a GL account at entry — the AAI account goes to F4111 while the keyed account goes to F0911.',
       action: 'Correct the DMAAI for this combination. On inventory documents, turn off Allow Entry of GL Account (PO 1) and Allow Override of GL Account (PO 2) on the version in use: either one left on lets the account be keyed over the AAI every time. On sales documents, check R42800 PO 5, Business Unit Source. Re-run the company and period, and corrected documents drop off.',
@@ -886,7 +898,7 @@ window.RRV8 = window.RRV8 || {};
       }
     },
     'PER': {
-      title: 'Period Mismatch', kind: 'self', tier: 'quick', disposition: 'self',
+      title: 'Period Mismatch', kind: 'self', tier: 'single', disposition: 'self',
       cause: 'The item ledger and the GL recorded these documents in different months. Set GL Date Source to follow the transaction date, and schedule the batch runs to finish before the period closes.',
       desc: 'The cardex movement and its GL counterpart landed in different months — the document is reported in one period and posted in another. Usual causes: a GL Date Source processing option pointed at the invoice or promised date rather than the item-ledger date, or a batch program (Sales Update, Manufacturing Accounting, the cycle-count update) that ran after the period closed.',
       action: 'Set the GL Date Source option so the GL date follows the item-ledger date — P4312 PO 2 on PO receipts, P4314 PO 2 on voucher match, R42800 PO 1 (Defaults tab) on Sales Update, the GL Date option in R41413 / R41610 on cycle counts. Schedule those runs to complete before the period closes so the two dates cannot straddle a period end. Re-run both periods afterwards: the document should net to zero across the two, and a gap that survives the next close is not a cut-off.',
@@ -911,33 +923,8 @@ window.RRV8 = window.RRV8 || {};
       }
     },
     // DAC-28 — promoted from Comment-only annotations to their own cards.
-    'VCHR': {
-      title: 'A/P Voucher on Inventory', kind: 'rebalance', tier: 'quick', disposition: 'expense',
-      cause: 'A/P vouchers posted to an inventory account instead of the A/P variance account. DMAAI 4330 is routing voucher variances into inventory. Correcting that route stops it; restricting account overrides on the voucher-match version keeps it corrected.',
-      desc: 'A/P voucher variance posted to an inventory account instead of the A/P variance account — DMAAI 4330 routes inventory items there. A voucher moves no inventory, so there is no item-ledger side to match against; the whole amount is the variance.',
-      action: 'Check DMAAI 4330 for this company and GL class. Correct the route so voucher variances land on the variance account, then restrict who can override the GL account on the voucher-match version. The value already posted stays in the inventory account until the accountant reclassifies it out.',
-      finding: {
-        dmaai: true,
-        flag: 'Voucher on inventory account',
-        mech: 'A/P vouchers posted to an inventory account instead of the A/P variance account.',
-        checked: [
-          'Batch type on these documents: V, an A/P voucher. Confirmed.',
-          'Account posted to: an inventory account. Confirmed.',
-          'Item-ledger side: nothing. A voucher moves no inventory, so there is nothing to match.'
-        ],
-        found: [
-          'DMAAI 4330 is sending voucher variances to inventory for this company and GL class.',
-          'Alternative, if 4330 reads correctly in JDE: the account was overridden at posting time.'
-        ],
-        fix: [
-          'Correct DMAAI 4330 so voucher variances land on the variance account.',
-          'Restrict who can override the GL account on the voucher-match version, or route those overrides through approval.',
-          'Put the next voucher through and confirm its variance lands off inventory.'
-        ]
-      }
-    },
     'DUP': {
-      title: 'Duplicate Sales', kind: 'rebalance', tier: 'quick', disposition: 'triage',
+      title: 'Duplicate Sales', kind: 'rebalance', tier: 'single', disposition: 'triage',
       cause: 'The same order line was relieved from inventory twice while the GL booked it once, so the extra item-ledger line is the variance. Either the line was ship-confirmed again after it closed, or Sales Update abended and the re-run wrote the relief a second time.',
       desc: 'The same order line was relieved on the cardex more than once at the same (line, branch, item, location, lot) while the GL booked it once, so the variance equals the duplicated relief. JDE increments the line number for a genuine partial shipment, so a repeated line number is a double relief, not a split. Either the line was ship-confirmed a second time, or an interrupted Sales Update re-ran against a workfile that still held its records.',
       action: 'Reverse the duplicate relief at the source and leave the original. Then establish which case it was, because the preventive change differs. A re-confirmed line means restricting the statuses at which ship-confirm is allowed. An abended Sales Update means recovering its workfile before any re-run, and finding out why it abended. Check next period: a step that fires twice duplicates the next order too.',
@@ -964,105 +951,33 @@ window.RRV8 = window.RRV8 || {};
     },
     // Two F0911 legs that cancel, neither on the inventory account. LedgerAmount = 0
     // here does NOT mean "no G/L entry" — the entry posted and self-cancelled elsewhere.
-    'OFF': {
-      title: 'Offsetting GL Entries', kind: 'rebalance', tier: 'quick', disposition: 'rebalance',
-      cause: 'The GL posted two entries that cancel each other and neither reached the inventory account, so the document nets to zero in the GL while inventory came off the item ledger. Nothing shows on the P&L — only the balance sheet moves, which is why it went unnoticed. Correct the DMAAIs for this order type and document type so one side lands on the inventory account.',
-      desc: 'Two F0911 legs for the same document, equal and opposite, both posted, in the same batch as the item ledger — and neither on the inventory account the item ledger used. LedgerAmount nets to zero, which does NOT mean the GL entry is missing: it posted and cancelled itself somewhere else. The order line type is stock, so a GL entry against inventory was due.',
-      action: 'Correct the DMAAIs for this order type and document type so one side lands on the inventory account. Check the other order types sharing those DMAAIs before assuming this one is isolated. The accountant restores the inventory account for the documents already posted. Re-run this company and period: a document that comes back was not corrected.',
+    'VCHR': {
+      title: 'A/P Voucher on Inventory', kind: 'rebalance', tier: 'single', disposition: 'expense',
+      cause: 'A/P vouchers posted to an inventory account instead of the A/P variance account. DMAAI 4330 is routing voucher variances into inventory. Correcting that route stops it; restricting account overrides on the voucher-match version keeps it corrected.',
+      desc: 'A/P voucher variance posted to an inventory account instead of the A/P variance account — DMAAI 4330 routes inventory items there. A voucher moves no inventory, so there is no item-ledger side to match against; the whole amount is the variance.',
+      action: 'Check DMAAI 4330 for this company and GL class. Correct the route so voucher variances land on the variance account, then restrict who can override the GL account on the voucher-match version. The value already posted stays in the inventory account until the accountant reclassifies it out.',
       finding: {
-        flag: 'Entries that cancel',
-        mech: 'The GL posted two entries that cancel each other, and neither one reached the inventory account.',
+        dmaai: true,
+        flag: 'Voucher on inventory account',
+        mech: 'A/P vouchers posted to an inventory account instead of the A/P variance account.',
         checked: [
-          'The GL for each document: two entries, both posted, in the same batch as the item ledger. Nothing failed to post.',
-          'The two amounts: equal and opposite. They cancel, so the document nets to zero in the GL.',
-          'The accounts they landed on: two accounts, neither of them the inventory account the item ledger used.',
-          'The order line type: stock. A stock line is due a GL entry against inventory, so this is not an expected non-stock case.',
-          'The batches: healthy. Each holds a few hundred other documents that posted normally.'
+          'Batch type on these documents: V, an A/P voucher. Confirmed.',
+          'Account posted to: an inventory account. Confirmed.',
+          'Item-ledger side: nothing. A voucher moves no inventory, so there is nothing to match.'
         ],
         found: [
-          'Inventory came off the item ledger. The GL never touched the inventory account for it.',
-          'The two entries cancel, so your profit and loss shows nothing. Only the balance sheet moves, and it is out by the full item-ledger amount.',
-          'That is why this went unnoticed. There is no profit-and-loss signal for anyone to review.',
-          // recurrenceIdx points here.
-          'Read the periods either side before treating this as a one-off.',
-          'The DMAAIs for this order type are sending both sides of the entry to a pair of accounts that offset each other, instead of to inventory and its counterpart.'
+          'DMAAI 4330 is sending voucher variances to inventory for this company and GL class.',
+          'Alternative, if 4330 reads correctly in JDE: the account was overridden at posting time.'
         ],
-        recurrenceIdx: 3,
         fix: [
-          'Correct the DMAAIs for this order type and document type so one side lands on the inventory account.',
-          'Check the other order types that share those DMAAIs before assuming this one is isolated.',
-          'The accountant restores the inventory account for the documents already posted.',
-          'Re-run this company and period. A document that comes back was not corrected.'
+          'Correct DMAAI 4330 so voucher variances land on the variance account.',
+          'Restrict who can override the GL account on the voucher-match version, or route those overrides through approval.',
+          'Put the next voucher through and confirm its variance lands off inventory.'
         ]
       }
     },
-    // The non-stock line cost ties to the variance and sits in an inventory account.
-    // A correction IS required: F0911 does not tie to F4111. The lever is the item's
-    // G/L class, NOT the non-stock DMAAI (that entry is correct).
-    'NSL': {
-      title: 'Non-Stock Sales Lines', kind: 'rebalance', tier: 'quick', disposition: 'rebalance',
-      cause: 'A non-stock line posted its cost to an inventory account, and that cost accounts for the whole variance to the penny. The non-stock account instruction is correct — the GL class carried on those lines is a stock class, and that is what resolves to inventory. Correct the GL class on the items.',
-      desc: 'A non-stock line posted its GL cost to an inventory account, and the non-stock extended cost ties exactly to the variance, either on the document or across the order. The non-stock DMAAI itself points away from inventory, so it is not the fault: the GL class carried on the non-stock lines is a stock item class, and that is what resolves to inventory. A non-stock item holds no inventory, so the value does not belong there.',
-      action: 'Correct the GL class on these items so a non-stock line stops resolving to the inventory account. Do not change the non-stock DMAAI — it already points at the right account. Check whether other non-stock line types carry the same overridden class before assuming these items are the only ones. The accountant reclassifies the value already posted out of the inventory account. Re-run this company and period: a document that comes back was not corrected.',
-      finding: {
-        flag: 'Non-stock cost in inventory',
-        mech: 'A non-stock line posted its cost to an inventory account. The non-stock cost accounts for the whole variance.',
-        checked: [
-          'The order lines: one or more are non-stock. A non-stock line posts to the GL and moves no inventory, so no item-ledger row exists for it.',
-          'The non-stock cost against the variance: they tie exactly, either on this document or across the order.',
-          'The account the GL used: the inventory account.',
-          'The non-stock DMAAI itself: correct. It points away from inventory, so it is not the fault.',
-          'The GL class carried on the non-stock lines: a stock item class, not the non-stock class. That is what resolves to inventory.'
-        ],
-        found: [
-          'The variance is the non-stock cost, to the penny. The cause is identified.',
-          'Non-stock cost is sitting in an inventory account. A non-stock item holds no inventory, so it does not belong there.',
-          'Your GL inventory balance is overstated against the item ledger by exactly this amount, on every order carrying a non-stock line.',
-          // recurrenceIdx points here.
-          'Read the periods either side before treating this as a one-off.',
-          'This is not a leave-it row. The two sides do not tie, so it needs a correction.'
-        ],
-        recurrenceIdx: 3,
-        fix: [
-          'Correct the GL class on these items so a non-stock line stops resolving to the inventory account.',
-          'Do not change the non-stock DMAAI. It is already pointing at the right account, and changing it will not fix this.',
-          'The accountant reclassifies the non-stock value already posted out of the inventory account.',
-          'Check whether other non-stock line types carry the same overridden class before assuming these items are the only ones.',
-          'Re-run this company and period. A document that comes back was not corrected.'
-        ]
-      }
-    },
-    // Every line on the order is non-stock (F40205 Inventory Interface 'N'), so no
-    // cardex row was ever due and GL-only is correct processing. Sibling of NSL and
-    // deliberately separate: NSL needs the non-stock cost to TIE to the variance, and a
-    // CHARGE line has no extended cost to tie with, so NSL never reaches these.
-    'NCL': {
-      title: 'Non-Stock Charge Lines', kind: 'rebalance', tier: 'quick', disposition: 'triage',
-      cause: 'Every line on the order is non-stock, so the GL posts and inventory never moves. GL-only is correct processing here, not a gap. Confirm the line types on one order; if these should not reach an inventory account at all, the lever is the GL class on the line, not the non-stock account instruction.',
-      desc: 'Every line on the order resolves to an F40205 Inventory Interface of N, so no item-ledger row was ever due and GL-only is what correct processing looks like. Separate from the non-stock sales card: that one matches when the non-stock cost equals the variance, and a charge line carries no extended cost to match with. The tie-out still fails, so the balance may need restating even though nothing is wrong with the transaction.',
-      action: 'Confirm the line types on one order against F40205 rather than inferring from the line-type letters. If these should not be reaching an inventory account at all, the lever is the GL class on the line, not the non-stock account instruction. Otherwise there is no action on the transaction, and the accountant decides whether the balance needs restating.',
-      finding: {
-        flag: 'No item-ledger row was due',
-        mech: 'Every line on the order is non-stock, so the GL posts and inventory never moves.',
-        checked: [
-          'Line type on every line resolves to an Inventory Interface of N. Confirmed against F40205, not inferred from the line-type letters.',
-          'No item-ledger row exists for these documents, which is correct for a non-stock line rather than a gap.',
-          'Separate from the non-stock sales card: that one matches when the non-stock cost equals the variance, and a charge line carries no extended cost to match with.'
-        ],
-        found: [
-          'GL-only is what correct processing looks like for these lines. The line type is the first question on any GL-only row and it answers this one.',
-          'Where the charge is a customer-specific process, the card names it and stops. There is no source fix to chase.'
-        ],
-        fix: [
-          'Confirm the line types on one order before accepting the rest.',
-          'If these should not be reaching an inventory account at all, the lever is the GL class on the line, not the non-stock account instruction.',
-          'Otherwise no action on the transaction. The tie-out still fails, so the accountant decides whether the balance needs restating.'
-        ]
-      }
-    },
-    // IT cardex-integrity — cost-component setup fix at the source.
     'TXI': {
-      title: 'Transfer Integrity', kind: 'review', tier: 'quick', disposition: 'triage',
+      title: 'Transfer Integrity', kind: 'review', tier: 'single', disposition: 'triage',
       cause: 'Location transfers relieved inventory value the GL never recorded: a leg carried a unit cost but never extended it, so a move that should be value-neutral destroyed inventory value. A zero extended cost on a transfer leg is common and harmless on its own; it is the unit-cost-without-extension combination that lands a document here. It arrives in bursts rather than every period, so read the periods either side before calling the setup still wrong.',
       desc: 'An inventory-transfer (IT) document relieved value on the cardex (F4111) that the GL never recorded — a leg carried a unit cost but a zero extended cost, so a move that should be value-neutral destroyed inventory value. The shape is narrow: a zero extended cost on a transfer leg is common and harmless, and zero-extended legs appear on the relief and receipt sides in equal numbers, so it is the unit-cost-without-extension combination that lands a document here. No vendor article has been cited for it, so do not name it as a known defect.',
       action: 'Confirm each document on both sides first: the item-ledger legs against the GL for the same document. Then compare the cost setup of the failing items against items that transferred cleanly in the same period — that difference is the lead. Count the failures per period before treating the setup as still wrong: this arrives in bursts with clean stretches between them, so a recent clean period at normal transfer volume points at a cost change or a specific set of items rather than a permanent setup fault. This card already holds every one-sided relief, so it is the population. Restoring the lost value is a dollars-only adjustment the accountant books.',
@@ -1103,7 +1018,7 @@ window.RRV8 = window.RRV8 || {};
     // ruled out on shape (its failure drops the IM entry, which would SUPPRESS
     // this card). No repost exists. Specimen evidence lives in the guide.
     'CNJ': {
-      title: 'Completion Not Journaled', kind: 'review', tier: 'quick', disposition: 'triage',
+      title: 'Completion Not Journaled', kind: 'review', tier: 'single', disposition: 'triage',
       cause: 'Work-order completions received finished goods into inventory with no GL entry for them, while the material issues for the same orders did post. Manufacturing accounting stamped the item ledger and wrote no entry. The pattern is a run that journals most of its completions and drops a slice, at a severity that moves from run to run; the card states the recurrence across your loaded periods. No Oracle Support article matches the shape. The fault is in the run, not these orders.',
       desc: 'A work-order completion received finished goods into inventory with no GL entry for it. The material issues for the same order did post. Manufacturing accounting stamped the batch on the item-ledger row, so it processed the row and wrote no entry. The batches and the account are healthy: both carry completions for many other orders. The pattern is a run that journals most of its completions and drops a slice, never a whole run failing outright, at a severity that moves from run to run. The finding below states the recurrence measured across the periods loaded here. No Oracle Support article matches the shape; KB 420628 is a near miss whose failure drops the material issue entry, which would suppress this card rather than create it.',
       action: 'Confirm in three checks. Search the GL for the work order: issues present, completion absent. Widen the search, no company or document-type restriction: still no completion. Check that the same batch and account carry completions for other orders: if they do, the gap is real. Then have whoever runs R31802A read the error report that run produces. Take it to Oracle through IT as an undocumented R31802A condition, not as KB 420628 — that article has a different cause and its manual-journal-entry remedy does not fit. Do not delete an unposted manufacturing batch, because nothing regenerates the entry.',
@@ -1157,39 +1072,80 @@ window.RRV8 = window.RRV8 || {};
     // which relieve the cardex and journal nothing. See transaction-detail-analysis.md
     // Section 5.22 and WORKLIST AN-11. The successor claim keys on ORDER TYPE plus
     // location, never on document type.
-    'SNJ': {
-      title: 'Sales Not Journaled', kind: 'review', tier: 'quick', disposition: 'rebalance',
-      cause: 'Inventory was relieved on the item ledger with a batch stamped, and the GL holds nothing for the document under any type. Absent rather than misrouted or misdated. Read the error report from the run that stamped these documents; a document that returns next period was not fixed.',
-      desc: 'The item ledger relieved inventory with a batch stamped on the row, and F0911 holds nothing for the document under its own type or any other. Absent, not misrouted and not misdated — searching other accounts and other periods will not find it. An unposted batch is NOT this case: RR loads unposted F0911, so an unposted entry suppresses this card and surfaces as a GL batch variance instead.',
-      action: 'Read the error report from the run that stamped these documents, starting with the earliest. Confirm on one document first: the item-ledger relief against F0911 for that document number, with no account or period filter. The accountant books the missing value; the source fix is whatever the run report shows, and a document that comes back next period was not fixed.',
+    'OFF': {
+      title: 'Offsetting GL Entries', kind: 'rebalance', tier: 'single', disposition: 'rebalance',
+      cause: 'The GL posted two entries that cancel each other and neither reached the inventory account, so the document nets to zero in the GL while inventory came off the item ledger. Nothing shows on the P&L — only the balance sheet moves, which is why it went unnoticed. Correct the DMAAIs for this order type and document type so one side lands on the inventory account.',
+      desc: 'Two F0911 legs for the same document, equal and opposite, both posted, in the same batch as the item ledger — and neither on the inventory account the item ledger used. LedgerAmount nets to zero, which does NOT mean the GL entry is missing: it posted and cancelled itself somewhere else. The order line type is stock, so a GL entry against inventory was due.',
+      action: 'Correct the DMAAIs for this order type and document type so one side lands on the inventory account. Check the other order types sharing those DMAAIs before assuming this one is isolated. The accountant restores the inventory account for the documents already posted. Re-run this company and period: a document that comes back was not corrected.',
       finding: {
-        flag: 'No GL entry exists',
-        mech: 'Inventory was relieved on the item ledger with a batch stamped, and the GL holds nothing for the document.',
+        flag: 'Entries that cancel',
+        mech: 'The GL posted two entries that cancel each other, and neither one reached the inventory account.',
         checked: [
-          'F0911 searched for this document under its own type and under every other type. Nothing.',
-          'Batch present on the item-ledger row, so the update that stamps it ran.',
-          'Not an unposted batch — unposted entries are loaded and would suppress this card. That break surfaces as a GL batch variance instead.',
-          'Order lines still open rather than completed, which is where to start.'
+          'The GL for each document: two entries, both posted, in the same batch as the item ledger. Nothing failed to post.',
+          'The two amounts: equal and opposite. They cancel, so the document nets to zero in the GL.',
+          'The accounts they landed on: two accounts, neither of them the inventory account the item ledger used.',
+          'The order line type: stock. A stock line is due a GL entry against inventory, so this is not an expected non-stock case.',
+          'The batches: healthy. Each holds a few hundred other documents that posted normally.'
         ],
         found: [
-          'The item ledger recorded the relief and the GL never received it, so inventory is understated against the ledger by the full value.',
-          'Absent, not misrouted and not misdated. Searching other accounts and other periods will not find it.'
+          'Inventory came off the item ledger. The GL never touched the inventory account for it.',
+          'The two entries cancel, so your profit and loss shows nothing. Only the balance sheet moves, and it is out by the full item-ledger amount.',
+          'That is why this went unnoticed. There is no profit-and-loss signal for anyone to review.',
+          // recurrenceIdx points here.
+          'Read the periods either side before treating this as a one-off.',
+          'The DMAAIs for this order type are sending both sides of the entry to a pair of accounts that offset each other, instead of to inventory and its counterpart.'
         ],
+        recurrenceIdx: 3,
         fix: [
-          'Read the run that stamped these documents and its error report, starting with the earliest.',
-          'Confirm on one document first: the item-ledger relief against F0911 for that document number, with no account or period filter.',
-          'The accountant books the missing value. The source fix is whatever the run report shows, and a document that comes back was not fixed.'
+          'Correct the DMAAIs for this order type and document type so one side lands on the inventory account.',
+          'Check the other order types that share those DMAAIs before assuming this one is isolated.',
+          'The accountant restores the inventory account for the documents already posted.',
+          'Re-run this company and period. A document that comes back was not corrected.'
         ]
       }
     },
-    // BATCH CANNOT AGGREGATE MANUFACTURING AMOUNTS (owner ruling 2026-08-05). A work
-    // order issues material over weeks, each issue in its own batch, and the IC is not
-    // generated until the product is complete — days or weeks later, in its own batch.
-    // Regrained to (work order, account, doc type) these tie to the penny, so the row is
-    // NOT a variance: it is the batch key stranding a completion journaled in a later
-    // run. Claimed rather than suppressed so the analyst is told why it appeared.
+    // The non-stock line cost ties to the variance and sits in an inventory account.
+    // A correction IS required: F0911 does not tie to F4111. The lever is the item's
+    // G/L class, NOT the non-stock DMAAI (that entry is correct).
+    'NSL': {
+      title: 'Non-Stock Sales Lines', kind: 'rebalance', tier: 'single', disposition: 'rebalance',
+      cause: 'A non-stock line posted its cost to an inventory account, and that cost accounts for the whole variance to the penny. The non-stock account instruction is correct — the GL class carried on those lines is a stock class, and that is what resolves to inventory. Correct the GL class on the items.',
+      desc: 'A non-stock line posted its GL cost to an inventory account, and the non-stock extended cost ties exactly to the variance, either on the document or across the order. The non-stock DMAAI itself points away from inventory, so it is not the fault: the GL class carried on the non-stock lines is a stock item class, and that is what resolves to inventory. A non-stock item holds no inventory, so the value does not belong there.',
+      action: 'Correct the GL class on these items so a non-stock line stops resolving to the inventory account. Do not change the non-stock DMAAI — it already points at the right account. Check whether other non-stock line types carry the same overridden class before assuming these items are the only ones. The accountant reclassifies the value already posted out of the inventory account. Re-run this company and period: a document that comes back was not corrected.',
+      finding: {
+        flag: 'Non-stock cost in inventory',
+        mech: 'A non-stock line posted its cost to an inventory account. The non-stock cost accounts for the whole variance.',
+        checked: [
+          'The order lines: one or more are non-stock. A non-stock line posts to the GL and moves no inventory, so no item-ledger row exists for it.',
+          'The non-stock cost against the variance: they tie exactly, either on this document or across the order.',
+          'The account the GL used: the inventory account.',
+          'The non-stock DMAAI itself: correct. It points away from inventory, so it is not the fault.',
+          'The GL class carried on the non-stock lines: a stock item class, not the non-stock class. That is what resolves to inventory.'
+        ],
+        found: [
+          'The variance is the non-stock cost, to the penny. The cause is identified.',
+          'Non-stock cost is sitting in an inventory account. A non-stock item holds no inventory, so it does not belong there.',
+          'Your GL inventory balance is overstated against the item ledger by exactly this amount, on every order carrying a non-stock line.',
+          // recurrenceIdx points here.
+          'Read the periods either side before treating this as a one-off.',
+          'This is not a leave-it row. The two sides do not tie, so it needs a correction.'
+        ],
+        recurrenceIdx: 3,
+        fix: [
+          'Correct the GL class on these items so a non-stock line stops resolving to the inventory account.',
+          'Do not change the non-stock DMAAI. It is already pointing at the right account, and changing it will not fix this.',
+          'The accountant reclassifies the non-stock value already posted out of the inventory account.',
+          'Check whether other non-stock line types carry the same overridden class before assuming these items are the only ones.',
+          'Re-run this company and period. A document that comes back was not corrected.'
+        ]
+      }
+    },
+    // Every line on the order is non-stock (F40205 Inventory Interface 'N'), so no
+    // cardex row was ever due and GL-only is correct processing. Sibling of NSL and
+    // deliberately separate: NSL needs the non-stock cost to TIE to the variance, and a
+    // CHARGE line has no extended cost to tie with, so NSL never reaches these.
     'XBC': {
-      title: 'Cross-Batch Completion', kind: 'review', tier: 'quick', disposition: 'triage',
+      title: 'Cross-Batch Completion', kind: 'review', tier: 'single', disposition: 'triage',
       cause: 'Completions journaled in a later batch than the one stamped on the item ledger. Matched by work order rather than by batch, these tie exactly — a work order issues material over weeks in separate batches and completes later in its own. Confirm one document with the batch ignored, then close the card. Posting an entry would create the shortfall it looks like.',
       desc: 'The completion was journaled in a later batch than the one stamped on the item ledger, so a comparison that pairs the two sides within a batch shows a gap. Regrained to (work order, account, doc type) across every batch and period, the two sides agree to the penny. A work order issues material over weeks, each issue in its own batch, and the completion is not generated until the product is finished — days or weeks later, in a batch of its own. Not a variance.',
       action: 'Confirm on one document before dismissing the rest: the item-ledger completion against F0911 for the same work order, ignoring the batch. Then close the card — no journal entry and no source fix. Reading it as a shortfall and posting an entry would create the error it looks like. If the count grows period over period, the correlation grain is what to raise, not the transactions.',
@@ -1219,7 +1175,7 @@ window.RRV8 = window.RRV8 || {};
     // cost basis that moved between the cardex write and the R31802A run — and F4111
     // ordered by ilukid IS the unit-cost history, since JDE has no cost-history table.
     'MCM': {
-      title: 'Mfg Cost Mismatch', kind: 'review', tier: 'quick', disposition: 'expense',
+      title: 'Mfg Cost Mismatch', kind: 'review', tier: 'single', disposition: 'expense',
       cause: 'A GL completion exists for the work order on the same account and the amount disagrees with the item ledger. The cost basis behind the journal is not the one behind the ledger row. Order the item and branch by the ledger sequence to find the cost step — the item ledger is the cost history, and an adjustment journals as a zero-quantity row carrying the delta. Prevention is sequencing: cost the item before it is issued.',
       desc: 'The item ledger and the GL valued the same completion quantity at different unit costs. The variance is quantity times the difference. The usual driver is a cost that moved between the item-ledger write and the accounting run: a frozen cost update moved the standard after the completion posted and WIP revaluation never carried it through. WIP revaluation is optional under standard costing, needs the variance AAI configured for the routing, and skips work orders already closed.',
       action: 'Confirm the gap is actually a cost-basis difference before treating it as one: it should be a modest share of the transaction and fall either side of it. A gap exceeding half the item-ledger amount, or running one direction across the population, is a different problem. Order the item and branch by the ledger sequence to find the cost step — the item ledger IS the cost history, and a cost adjustment journals as its own zero-quantity row carrying the delta, not the new cost. Then have WIP revaluation run as part of the cost update so the next roll reaches the GL as well as the item ledger — confirm the program and version in this customer JDE rather than assuming a report number. Confirm the variance AAI, 3240 or 3260, is configured for the routings in use. Closed work orders are outside its reach, so time cost rolls against the open population.',
@@ -1249,7 +1205,7 @@ window.RRV8 = window.RRV8 || {};
     // 'nz' net-zero pattern. CONFIGURATION, not transaction: no journal entry fixes it
     // and every future period reproduces it until the AAIs are split.
     'NZR': {
-      title: 'DMAAI Net Zero', kind: 'review', tier: 'quick', disposition: 'rebalance',
+      title: 'DMAAI Net Zero', kind: 'review', tier: 'single', disposition: 'rebalance',
       cause: 'Raw-material relief and finished-goods receipt resolve to the same account, so both legs of every work order cancel there and the movement never happens in the GL. Work in process is unconfigured, so there is no offsetting leg. Split the account instructions into three distinct accounts, judged by their instruction rather than their description. This reproduces every period until the setup changes; no journal entry ends it.',
       desc: 'DMAAI 3110 (raw-material relief) and 3130 (finished-goods receipt) resolve to ONE account for these order types and GL classes, so both legs of every work order land there and cancel. 3120 (work in process) is not configured, so there is no holding leg to offset against. The transactions themselves are ordinary — nothing is wrong with the documents. It is silent by construction: the postings cancel, so nothing shows on the P&L and only the balance sheet is wrong. Configuration, not transaction.',
       action: 'Split the account instructions into three distinct accounts: 3110 to raw material, 3130 to finished goods, 3120 to work in process. Judge the accounts by their instruction, not by their name — an account described as work in process may be the declared inventory account for thousands of items. The accountant restates the affected balances once the routing is correct. This reproduces every period until the setup changes, and no journal entry ends it.',
@@ -1273,9 +1229,68 @@ window.RRV8 = window.RRV8 || {};
         ]
       }
     },
-    // ---- Complex (3 documents) ---------------------------------------------
+    'NCL': {
+      title: 'Non-Stock Charge Lines', kind: 'rebalance', tier: 'single', disposition: 'triage',
+      cause: 'Every line on the order is non-stock, so the GL posts and inventory never moves. GL-only is correct processing here, not a gap. Confirm the line types on one order; if these should not reach an inventory account at all, the lever is the GL class on the line, not the non-stock account instruction.',
+      desc: 'Every line on the order resolves to an F40205 Inventory Interface of N, so no item-ledger row was ever due and GL-only is what correct processing looks like. Separate from the non-stock sales card: that one matches when the non-stock cost equals the variance, and a charge line carries no extended cost to match with. The tie-out still fails, so the balance may need restating even though nothing is wrong with the transaction.',
+      action: 'Confirm the line types on one order against F40205 rather than inferring from the line-type letters. If these should not be reaching an inventory account at all, the lever is the GL class on the line, not the non-stock account instruction. Otherwise there is no action on the transaction, and the accountant decides whether the balance needs restating.',
+      finding: {
+        flag: 'No item-ledger row was due',
+        mech: 'Every line on the order is non-stock, so the GL posts and inventory never moves.',
+        checked: [
+          'Line type on every line resolves to an Inventory Interface of N. Confirmed against F40205, not inferred from the line-type letters.',
+          'No item-ledger row exists for these documents, which is correct for a non-stock line rather than a gap.',
+          'Separate from the non-stock sales card: that one matches when the non-stock cost equals the variance, and a charge line carries no extended cost to match with.'
+        ],
+        found: [
+          'GL-only is what correct processing looks like for these lines. The line type is the first question on any GL-only row and it answers this one.',
+          'Where the charge is a customer-specific process, the card names it and stops. There is no source fix to chase.'
+        ],
+        fix: [
+          'Confirm the line types on one order before accepting the rest.',
+          'If these should not be reaching an inventory account at all, the lever is the GL class on the line, not the non-stock account instruction.',
+          'Otherwise no action on the transaction. The tie-out still fails, so the accountant decides whether the balance needs restating.'
+        ]
+      }
+    },
+    // IT cardex-integrity — cost-component setup fix at the source.
+    'SNJ': {
+      title: 'Sales Not Journaled', kind: 'review', tier: 'single', disposition: 'rebalance',
+      cause: 'Inventory was relieved on the item ledger with a batch stamped, and the GL holds nothing for the document under any type. Absent rather than misrouted or misdated. Read the error report from the run that stamped these documents; a document that returns next period was not fixed.',
+      desc: 'The item ledger relieved inventory with a batch stamped on the row, and F0911 holds nothing for the document under its own type or any other. Absent, not misrouted and not misdated — searching other accounts and other periods will not find it. An unposted batch is NOT this case: RR loads unposted F0911, so an unposted entry suppresses this card and surfaces as a GL batch variance instead.',
+      action: 'Read the error report from the run that stamped these documents, starting with the earliest. Confirm on one document first: the item-ledger relief against F0911 for that document number, with no account or period filter. The accountant books the missing value; the source fix is whatever the run report shows, and a document that comes back next period was not fixed.',
+      finding: {
+        flag: 'No GL entry exists',
+        mech: 'Inventory was relieved on the item ledger with a batch stamped, and the GL holds nothing for the document.',
+        checked: [
+          'F0911 searched for this document under its own type and under every other type. Nothing.',
+          'Batch present on the item-ledger row, so the update that stamps it ran.',
+          'Not an unposted batch — unposted entries are loaded and would suppress this card. That break surfaces as a GL batch variance instead.',
+          'Order lines still open rather than completed, which is where to start.'
+        ],
+        found: [
+          'The item ledger recorded the relief and the GL never received it, so inventory is understated against the ledger by the full value.',
+          'Absent, not misrouted and not misdated. Searching other accounts and other periods will not find it.'
+        ],
+        fix: [
+          'Read the run that stamped these documents and its error report, starting with the earliest.',
+          'Confirm on one document first: the item-ledger relief against F0911 for that document number, with no account or period filter.',
+          'The accountant books the missing value. The source fix is whatever the run report shows, and a document that comes back was not fixed.'
+        ]
+      }
+    },
+    // BATCH CANNOT AGGREGATE MANUFACTURING AMOUNTS (owner ruling 2026-08-05). A work
+    // order issues material over weeks, each issue in its own batch, and the IC is not
+    // generated until the product is complete — days or weeks later, in its own batch.
+    // Regrained to (work order, account, doc type) these tie to the penny, so the row is
+    // NOT a variance: it is the batch key stranding a completion journaled in a later
+    // run. Claimed rather than suppressed so the analyst is told why it appeared.
+    // ---- LINKED TRANSACTIONS (Phase 0-1) — grouped before anything is claimed -
+    //      usp8_txv_build stamps Make to Order and Intercompany and assigns every
+    //      groupcode; usp8_txv_group then disposes each group WHOLE. These form
+    //      first, so their rows never reach the single-document claims below.
     'MTO': {
-      title: 'Make to Order', kind: 'mto', tier: 'complex', disposition: 'triage',
+      title: 'Make to Order', kind: 'mto', tier: 'linked', disposition: 'triage',
       cause: 'Make-to-order work orders, grouped with their customer sales orders. Not one variance type: the residual splits into expected standard-cost variances, completions where both sides carry value and disagree, and completions with no GL entry at all. The three need different work, and the middle slice no longer has a confirmed cause. Drill in for the counts and dollars per shape.',
       desc: 'A work order linked to its customer sales order — a business grouping, not one variance type. The residual is ordinary manufacturing cardex-vs-GL and splits three ways by shape: GL-only standard-cost variances, both-sides-differ completion cost differences, and cardex-only completions the GL holds no entry for. Account mapping is not the mechanism here.',
       action: 'Work the shapes separately. Both-differ rows have no confirmed cause: the gap is too large a share of the transaction and too one-directional for the cost-basis story, so take them by account, largest account first, with cost accounting. Item-ledger-only rows are completions missing from the GL, which is a run-level fault, not these orders, and they belong in the completion-gap workflow. GL-only rows need no action. Match by work order, not document number.',
@@ -1309,7 +1324,7 @@ window.RRV8 = window.RRV8 || {};
       }
     },
     'ICO': {
-      title: 'Intercompany Sales', kind: 'ico', tier: 'complex', disposition: 'rebalance',
+      title: 'Intercompany Sales', kind: 'ico', tier: 'linked', disposition: 'rebalance',
       cause: 'Intercompany orders whose selling and buying legs have not offset. Confirm the matching leg posted in the counterpart company, and compare against the prior period to tell a pair that clears from one that is stuck.',
       desc: 'An intercompany order (OK/SK) where the selling and buying companies\' inventory legs haven\'t fully offset — a three-document timing gap across the two companies\' books.',
       action: 'Verify the matching leg posted in the counterpart company; the pair nets once both sides complete, and a leg that never arrives is chased in the counterpart company rather than adjusted on this side. Why a pair persists past both companies\' closes is not yet determined — establish it before changing anything upstream: compare the same orders against the prior period to separate a self-clearing pair from a stuck one, and use the batch number on the row as the join key for the F0911 search in the counterpart company.',
@@ -1334,7 +1349,7 @@ window.RRV8 = window.RRV8 || {};
         ]
       }
     },
-    // ---- Linked pairs (2 documents, 1:1 SO<->PO) ----------------------------
+    //      Transfers and Direct Ship — 2 documents, 1:1 SO<->PO.
     'TRF': {
       title: 'Transfer Orders', kind: 'linked', tier: 'linked', disposition: 'rebalance',
       cause: 'Inter-branch transfers whose shipping and receiving legs have not met — different periods, or the receiving branch carrying the shipping cost. A second case lands here too: Sales Update abends and the re-run duplicates the item-ledger relief while the GL posts once.',
@@ -1388,7 +1403,7 @@ window.RRV8 = window.RRV8 || {};
         ]
       }
     },
-    // ---- Terminal — the unclassified residual, split by transaction type -----
+    // ---- NOTHING CLAIMED THESE (Phase 3) — the residual, split by type -------
     'T-SALES': {
       title: 'Unclassified — Sales', kind: 'review', tier: 'terminal', disposition: 'triage',
       cause: 'Sales documents where both sides posted and disagree. No known pattern fits, so the cause is not identified yet. Take the largest documents first and compare the item-ledger detail against the GL amount. Check the order line type before chasing a GL-only row.',
