@@ -1144,6 +1144,19 @@ window.RRV8 = window.RRV8 || {};
     // not posted in another period — absent. An UNPOSTED batch is not this (RR loads
     // unposted F0911, so an unposted entry SUPPRESSES the card and surfaces as the
     // separate GL Batches variance).
+    // ⚠ WITHDRAWN SERVER-SIDE (DB PR #97). This card CANNOT currently fire and the copy
+    // below describes behaviour that is no longer produced. Verified 2026-08-06: the
+    // SubType is absent from usp8_txv_flags (the only proc that emits SubTypes), and
+    // zero rows carry it on Demo1, Demo2 or Demo3. The entry is retained deliberately so
+    // that a stale database still emitting it renders a titled card rather than the bare
+    // string 'SNJ' — do NOT treat its presence here as evidence the claim is live.
+    // WHY it was withdrawn, and the part that matters for whatever replaces it: the test
+    // asked "is there an F0911 row for this DocNumber". Sales doc type JS posts internal
+    // GL document numbers, so that question answers no regardless of truth. The rows it
+    // held on Demo3 are order type SA, sample and lab issues out of sample locations,
+    // which relieve the cardex and journal nothing. See transaction-detail-analysis.md
+    // Section 5.22 and WORKLIST AN-11. The successor claim keys on ORDER TYPE plus
+    // location, never on document type.
     'SNJ': {
       title: 'Sales Not Journaled', kind: 'review', tier: 'quick', disposition: 'rebalance',
       cause: 'Inventory was relieved on the item ledger with a batch stamped, and the GL holds nothing for the document under any type. Absent rather than misrouted or misdated. Read the error report from the run that stamped these documents; a document that returns next period was not fixed.',
