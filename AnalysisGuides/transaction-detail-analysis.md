@@ -60,6 +60,71 @@ error. The withdrawn `Sales Not Journaled` claim shipped exactly this way. See
 never conclude an entry is *absent* without first establishing the key for that
 type.
 
+### 0.1 `Type` comes from BATCH type, not document type
+
+**Batch type is what discriminates manufacturing. Document type does not, because
+`IM` is repurposable.** The batch type is stamped by the program that created the
+batch: manufacturing accounting (R31802A) writes batch type **`0`**; inventory
+programs write **`N`**. RR's own configuration agrees, listing exactly two
+programs of interest: batch type `0` for WO/manufacturing accounting and `IB` for
+sales inventory (R42800).
+
+Shipped 2026-08-06 (DB PR #100): `Type` now derives batch-type-first, document
+type only as a last resort when no batch type is resolvable. What it corrected:
+
+- One specimen database holds batch types `N`, `G`, `O`, `V` and `IB` and **no
+  batch type `0` anywhere**, meaning it does no manufacturing at all. Yet 166
+  rows were typed `Mfg` purely because their document type was `IM`. They are
+  inventory transactions run through an inventory program configured with a
+  work-order document type. After the fix: 2 rows, and those two sit on batches
+  absent from both F0011 and F0911, so no batch type exists to discriminate them.
+- Lean manufacturing was ruled out against Oracle's documentation as an
+  alternative explanation: lean uses `LM` / `LL` / `LC` / `LP` / `LO` / `LV`,
+  never `IM`.
+- Blank batch type in the compare was RR-produced, not JDE's. F0011 carried a
+  batch type on batches the compare showed as empty. One database went from 825
+  blank to 0. Once carried, blank versus populated separates **"the GL for this
+  transaction was never loaded"** from **"the GL loaded and disagrees"** — two
+  conditions with different corrective actions.
+- Where F0911 and F0011 both carry a batch type they agree on all 2,180 compare
+  batches checked, zero disagreements, so the F0011 fallback is safe rather than
+  a guess. F0911 still wins when present.
+
+**Consequence for analysis:** a manufacturing card firing on a company that does
+no manufacturing is a typing error, not a finding. Check the company's batch
+types before believing a manufacturing diagnosis.
+
+### 0.2 Intercompany is an ORDER-type property, and `SI` is always intercompany
+
+Owner ruling 2026-08-06: **an `SI` order is an intercompany order, always.** The
+three intercompany order types are `SI` (the originating sales order), `SK` (the
+inter-branch sales leg) and `OK` (the purchase leg). The document types they post
+under — `JS`, `RI`, `OV` — are ordinary sales and purchasing types shared with
+non-intercompany traffic, so **diagnosing at document-type grain averages
+incompatible subgroups.**
+
+Do not treat the `F4211.SDSO11` / `F4311.PDPS01` = `3` flag as the definition of
+intercompany. It only detects it, and it does not hold up: on one database the
+flag is blank on all 23,130 sales-order rows while that same database carries 261
+`SK` orders; another uses values `2` and `4` but never `3`. The order type is the
+reliable signal.
+
+**Only the `SI` leg touches the item ledger.** The `SK` leg is line type `IC`
+(Intercompany Non-Stock, inventory interface `N`), so it posts GL and never the
+cardex. The `OK` leg is direct ship, so goods never enter the buying company and
+**no receipt exists to find** — all `OK` lines close at status 999 with quantity
+and amount received of zero. `F4111` holding zero `SK` rows is therefore correct,
+not an extract gap. Full treatment in
+[`analyst-reference.md`](../docs/plans/analyst-reference.md) § Module:
+Intercompany Order processing.
+
+⚠ **Never measure an intercompany tie-out *through* `RIntercoXref`.** That table
+is incomplete by design of its source flag — on one order the GL held four
+intercompany invoices and the xref carried two. A tie-out joined through it
+under-reports the GL and manufactures phantom variance. Two wrong root-cause
+hypotheses were published off exactly that mistake on 2026-08-06. Measure F0911
+directly, then use the xref to *explain* what you found, never to scope it.
+
 ---
 
 ## Section 1: Using Claude for Automated Analysis
