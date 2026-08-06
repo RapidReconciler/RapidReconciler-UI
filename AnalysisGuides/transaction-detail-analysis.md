@@ -470,30 +470,52 @@ When an IM document shows a GL-excess pattern (F0911 exceeds F4111 for a specifi
 
 ## Section 5: Common Variance Patterns and Root Causes
 
-**Pattern index -- analyzer ID vs guide section.** The Export Analyzer assigns each Transaction Detail diagnosis an internal **pattern ID** (e.g. `5.18`). Those IDs are **not** the same as this guide's section numbers -- the analyst sees the pattern *label*, not the ID, and the two numbering schemes drifted as patterns were added over time. Use this table to cross-walk between the analyzer's pattern ID and the section here. Rows with **--** in the first column have no analyzer auto-detection; they are analyst reference material only.
+**Pattern index -- analyzer ID vs app code vs guide section.** Three numbering
+schemes exist and none of them is the other. The Export Analyzer (the workbook)
+assigns each Transaction Detail diagnosis an internal **pattern ID** (e.g.
+`5.18`). This guide's **section numbers** drifted from those IDs as patterns were
+added. And the **application** -- the Transaction Variance cards on Home and the
+pattern cards on the details page -- identifies patterns by **named code**
+(`ACCT`, `DUP`, `CNJ`), never by number: it used to mirror the analyzer's `5.x`
+IDs one-for-one-ish, which read as an alignment that was never true, so the app
+codes were renamed to names. The analyst sees a *label* on every surface, never
+an ID. Use this table to cross-walk. **--** in a column means that scheme has no
+entry for the row.
 
-| Analyzer pattern ID | Pattern label | Guide section |
-|---|---|---|
-| 5.1 | Unassigned Account -- Missing Model Table Entry | 5.1 |
-| 5.2 | GL-Only Entry (No Cardex) | 5.2 |
-| 5.3 | Cardex-Only Entry (No GL) | 5.3 |
-| 5.4 | Account Mismatch | 5.4 |
-| 5.5 | Net-zero F0911 pair (DMAAI complement misrouted) | 5.10 |
-| 5.6 | Standard Cost Change after WO completion | 5.9 |
-| 5.7 | Mixed line types on a return doc | 5.2 (non-stock-line cause) |
-| 5.11 | GL-Excess / R31802A cross-WO summarization | 5.11 (IM variant: 5.12) |
-| 5.13 | Post-confirm order edit (sales) | 5.13 |
-| 5.14 | Period Mismatch | 5.5 |
-| 5.15 | R31802A orphan cardex row | 5.14 |
-| 5.16 | Manufacturing Cost Mismatch | 5.16 |
-| 5.17 | Voucher Variance on Inventory (PV) | 5.15 |
-| 5.18 | Duplicate shipment -- same order line | 5.17 |
-| 5.19 | Transfer Integrity -- IT relieved cardex value with no GL | 5.18 |
-| 5.20 | Completion Not Journaled -- WO completion on cardex, not in GL | 5.19 |
-| -- (card) | Make to Order -- manufacturing residual, decomposed by shape | 5.20 |
-| -- | Tax Variance | 5.6 |
-| -- | Landed Cost Variance | 5.7 |
-| -- | "No Cx" in Batch Field | 5.8 |
+| Analyzer pattern ID | Pattern label | App code | Guide section |
+|---|---|---|---|
+| 5.1 | Unassigned Account -- Missing Model Table Entry | -- | 5.1 |
+| 5.2 | GL-Only Entry (No Cardex) | `GL-ONLY` | 5.2 |
+| 5.3 | Cardex-Only Entry (No GL) | `CDX-ONLY` | 5.3 |
+| 5.4 | Account Mismatch | `ACCT` | 5.4 |
+| 5.5 | Net-zero F0911 pair (DMAAI complement misrouted) | `NZR` (net-zero AAI pair, mfg) | 5.10 |
+| 5.6 | Standard Cost Change after WO completion | `STD-COST` (Cardex Revaluation) | 5.9 |
+| 5.7 | Mixed line types on a return doc | `NSL` / `NCL` | 5.2 (non-stock-line cause) |
+| 5.11 | GL-Excess / R31802A cross-WO summarization | `OTHER` | 5.11 (IM variant: 5.12) |
+| 5.13 | Post-confirm order edit (sales) | -- | 5.13 |
+| 5.14 | Period Mismatch | `PER` | 5.5 |
+| 5.15 | R31802A orphan cardex row | -- | 5.14 |
+| 5.16 | Manufacturing Cost Mismatch | `MCM` | 5.16 |
+| 5.17 | Voucher Variance on Inventory (PV) | `VCHR` | 5.15 |
+| 5.18 | Duplicate shipment -- same order line | `DUP` | 5.17 |
+| 5.19 | Transfer Integrity -- IT relieved cardex value with no GL | `TXI` | 5.18 |
+| 5.20 | Completion Not Journaled -- WO completion on cardex, not in GL | `CNJ` | 5.19 |
+| -- (card) | Make to Order -- manufacturing residual, decomposed by shape | `MTO` | 5.20 |
+| 5.21 | Cross-Batch Completion -- ties at work-order grain | `XBC` | not written up yet |
+| 5.22 | DMAAI Net Zero -- 3110 and 3130 resolve to one account | `NZR` | not written up yet |
+| 5.23 | Sales Not Journaled -- relief stamped, no GL entry | `SNJ` | not written up yet; read the match-key warning in Section 0 before trusting an *absent* verdict on this claim |
+| 5.24 | Non-Stock Charge Lines -- every line non-stock | `NCL` | not written up yet |
+| -- | Offsetting GL entries that cancel off inventory | `OFF` | not written up yet |
+| -- | Intercompany / Transfer / Direct Ship leg pairing | `ICO` / `TRF` / `DS` | 5.20 (mfg), leg pairing not written up yet |
+| -- | Unclassified residual by transaction type | `T-SALES` / `T-PURCH` / `T-MFG` / `T-INV` | -- |
+| -- | Tax Variance | -- | 5.6 |
+| -- | Landed Cost Variance | -- | 5.7 |
+| -- | "No Cx" in Batch Field | -- | 5.8 |
+
+Every app code's name, mechanism, corrective action and structured finding is
+declared once, in the application's own catalog (`RRV8/config.js`, `RRV8.txv`).
+The copy an analyst reads on a card, in the scope band, in the work panel and in
+a saved finding all comes from that one entry.
 
 ### 5.1 Unassigned Account -- Missing Model Table Entry
 
@@ -1242,6 +1264,69 @@ Which configuration check catches it:
 
 ---
 
+### 5.22 Sample Despatch -- Cardex Relief With No GL Posting
+
+> Numbered 5.22 in this guide. The classifier does not yet claim this pattern, so there is no analyzer pattern ID for it. Analyzer IDs 5.21 through 5.24 belong to the claims shipped 2026-08-05 (Cross-Batch Completion, DMAAI Net Zero, the withdrawn Sales Not Journaled, Non-Stock Charge Lines), none of which are written up in this guide yet.
+
+> **Read the order type before reading the document type.** A `JS` document is a sales-order shipment cost-of-sales entry, and one `JS` population can contain order types with completely different accounting behaviour. Diagnosing at document-type grain averages them together and produces a conclusion that is wrong for every subgroup.
+
+**Symptoms:**
+- Document type `JS`, order type **`SA`**, cardex-only, so LedgerAmount = 0
+- Many rows, each carrying a **trivial amount**, against a real inventory account
+- The stock location names the movement: `SAMPDESP`, `SAMPWIP`, `SAMPRACK*`, `LABWIP`, `CLEANROOM`, `S1ASAMP*`
+- The batch reads **posted** in F0011 (status `D`) yet holds no F0911 detail
+- RCardexLedgerCompare2 shows **BatchType blank** on the affected rows
+
+**What is happening:**
+
+Samples and lab draws are issued out of sample and lab locations against a sales order. The item ledger relieves inventory value. No GL journal line is ever written for the sample document, so the relief has no counterpart and the variance equals the full relieved amount. The batch shows posted because JD Edwards closed it, not because the sample document produced a journal entry.
+
+**Establish the order-type split first.** On a specimen database the `JS` population decomposes cleanly, and only one of the three order types leaves a residual:
+
+| Order type | Cardex rows | Cardex value | GL leg on same document and batch | Unmatched |
+|---|---|---|---|---|
+| `SK` intercompany inter-branch | 249 | -$6,465,601.39 | **249, all** | **$0.00** |
+| `SP` | 104 | -$1,372,370.78 | 103 | -$15,447.20 |
+| `SA` sample and lab issues | 5,563 | -$23,322.79 | **none** | -$23,322.79 |
+
+The two unmatched figures sum to -$38,769.99, which is the whole cardex-to-GL gap for `JS` on that database (-$7,861,294.96 against -$7,822,524.97). Nothing else is outstanding.
+
+**The match key is not the problem, and assuming it is will cost you a claim.** `SK` ties on document number plus batch, to the penny, on every row. A specimen: cardex `JS` document 774875, batch 3039815, order 1272190, -$27,718.35, against F0911 document 774875, batch 3039815, object 1121, -$27,718.35. Before concluding that `JS` cannot be matched per document, split by order type and re-test.
+
+The evidence, one database:
+
+| Test | Result |
+|---|---|
+| Batches containing `SA` sample rows | **271**, every one present in F0011 |
+| Of those, batch status posted (`D`) | **271 of 271.** Posted status does not imply a journal line exists |
+| Of those, holding any F0911 leg at all | **64 of 271** |
+| Those 64 against batches also containing `SK` or `SP` rows | **Exactly the same 64.** The GL belongs to the real shipments sharing the batch, never to the sample document |
+| `SA` rows with a GL leg on their own document and batch | **0 of 5,563** |
+| Cardex document numbers for unresolved rows found anywhere in F0911 | **0 of 1,291.** Genuinely absent, not keyed differently |
+| RCLC2 BatchType against F0011 for the same batches | F0011 reads `G` on **all 229**; RCLC2 records `G` on 59 and **blank on 170** |
+| `JS` rows carrying comment "Standard Cost Change" | **0 of 5,916.** Every row reads "Inventory transaction" |
+| Incidence across the three loaded databases | `JS` exists on **one only**. The other two hold zero `JS` rows and are null tests for it |
+
+**Rule out the documented cost-change pattern before using this section.** Section 5.9 describes a `JS` failure where a second item-ledger row appears with zero quantity and comment "Standard Cost Change," meaning the GL revaluation is missing. That is a different condition and it is not present here: no `JS` row carries that comment, and only one row across the whole population has zero quantity.
+
+**Blank BatchType is a usable signal, and RapidReconciler is producing it.** F0011 carries a batch type on every one of these batches. RCLC2 leaves it blank on the majority, because the value is derived from the GL side and there is no GL side to derive it from. Once carried through, blank against populated separates two conditions the analyst treats differently: the GL for this transaction was never written, against the GL was written and disagrees.
+
+**Resolution:**
+
+> This is a posting-setup fix, not a journal entry. A correcting entry balances the period and the next sample issue reopens the variance.
+
+1. **Confirm the order type and the location.** Pull the item-ledger rows for the document and read order type and stock location. Order type `SA` out of a sample or lab location is the signature. Order type `SK` on the same document type is a different transaction and it ties.
+2. **Confirm the GL is absent rather than differently keyed.** Read F0911 for the document number, then for the batch. Both empty is the finding. Do not stop at the document number alone.
+3. **Check the batch composition.** A batch holding both sample and shipment rows will show GL for the shipment rows only. That is expected and is not evidence the sample posted.
+4. **Establish whether the sample order type is configured to post.** The question for the customer is whether sample and lab issues are meant to relieve inventory value at all, and if so which expense account the relief is meant to reach. An issue that moves stock without a GL rule produces this variance every period by design.
+5. **Quantify before escalating.** The row count is high and the value is low. Confirm the value against the customer's materiality threshold before spending analyst time, and say plainly that the row count is what makes it visible, not the dollars.
+
+**Prevention:** either give the sample order type a posting rule so the relief reaches a sample or promotional expense account, or move sample movements onto a document type that already posts. Both are source-side configuration owned by the customer. Re-check the following period: new `SA` rows out of sample locations with no GL leg mean the condition is still live.
+
+> **Materiality reads backwards on this pattern, and that is the point worth telling the analyst.** On the specimen database these rows are 1,292 of 1,308 unresolved documents, roughly 99% of the residual by count, and -$22,926.26 by value. It dominates the worklist and barely moves the balance sheet. Report both numbers together so nobody triages it on count alone or dismisses it on value alone.
+
+---
+
 ## Section 6: DMAAI Analysis
 
 The DMAAs section at the bottom of the Transaction Detail report is critical for diagnosing account-level mismatches. Work through it in the following order:
@@ -1473,9 +1558,11 @@ Common document types appearing in the Transaction Detail report:
 | **ST** | Transfer order sales (shipment) |
 | **OT** | Transfer order purchase (receipt) |
 | **SI** | Intercompany sales order |
-| **SK** | Intercompany sales (inter-branch) |
+| **SK** | Intercompany sales (inter-branch). Under document type `JS` this leg ties on document number plus batch; confirmed to the penny on every row of a specimen population. Do not assume `JS` cannot be matched per document until you have split the population by order type |
 | **OK** | Intercompany purchase order |
-| **JS** | Sales order shipment (cost-of-sales entry). The same standard cost change after shipment pattern seen on IC transactions can occur on JS -- if a second F4111 row appears with zero quantity and comment "Standard Cost Change," the GL revaluation entry is missing. See Section 5.9. |
+| **SA** | Standard sales order. Under document type `JS`, `SA` lines issued out of sample or lab locations (`SAMPDESP`, `SAMPWIP`, `SAMPRACK*`, `LABWIP`, `CLEANROOM`) relieve inventory value and post **no GL line**. High row count, low value. See Section 5.22 |
+| **SP** | Sales order type appearing under `JS` alongside `SA` and `SK`, including returns (`B4RRETURN` and similar return locations). Substantially matched on document plus batch in the observed population, with a small unmatched remainder that Section 5.22 does not explain |
+| **JS** | Sales order shipment (cost-of-sales entry). **Read the order type before diagnosing a JS document.** One JS population routinely spans several order types with different accounting behaviour -- on a specimen database, `SK` (intercompany inter-branch) ties 100% on document plus batch, while `SA` sample and lab issues relieve the cardex and post no GL line at all. Diagnosing at document-type grain averages them and is wrong for every subgroup. See Section 5.22. The standard cost change after shipment pattern seen on IC transactions can also occur on JS -- if a second F4111 row appears with zero quantity and comment "Standard Cost Change," the GL revaluation entry is missing. See Section 5.9. |
 | **RI** | Sales invoice / shipment. Covers standard SO and direct ship S6 order types. For account mismatches, R42800 PO 5 (Business Unit Source) is the most common cause — it controls where the business unit portion of the GL account is sourced from and a wrong setting affects all sales entries in that version. For period mismatches, check R42800 PO 1 (GL Date). If F0911 Comment reads "Non stock line in Inv acct," a non-stock line type (N, F, or similar) posted to the inventory account -- investigate line type definition. Lines showing GL date 2000-01-01 and document 0 were never processed through Sales Update. |
 | **RM** | Sales return / credit memo. If the batch type is **IB** rather than I, the return was processed via a manual correction batch that posted to the inventory account without writing a cardex record -- this produces a GL-only variance. Investigate who created the IB batch and whether the inventory account coding is correct. |
 

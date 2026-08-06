@@ -793,152 +793,896 @@ window.RRV8 = window.RRV8 || {};
 })();
 
 /*
- * RRV8.txv — the ONE Transaction-Variance card taxonomy.
+ * RRV8.txv — the ONE transaction-variance catalog. Taxonomy AND copy.
  *
- * WHY THIS LIVES IN config.js: the taxonomy used to be duplicated — home.html
- * held _TXV_CODE_META / _TXV_CODE_ORDER / _txvClassifyCode, and
- * inventory-transactions.html held TXV_CARD_CODES / _TXV_CARD_TITLE /
- * txvCardCode. Two copies that MUST agree is two copies that WILL drift, and
- * the drift is silent: Home renders a card whose code the Details page doesn't
- * recognize, the ?card= filter is skipped, and the grid shows every card's rows
- * for the period while still looking like working software. That shipped twice
- * (TXI + CNJ were added to Home and never to Details). One literal, both pages.
+ * WHY EVERYTHING LIVES HERE: the taxonomy was split across nine maps in three
+ * files, and every one of them was a copy that MUST agree with the others —
+ * which is a copy that WILL drift, silently:
  *
- *   META   { code: { title, kind, tier } }  — insertion order IS the Home card
- *                                            display order.
- *   ORDER  [code, ...]                      — derived from META, never hand-kept.
- *   TITLE  { code: title }                  — derived from META.
- *   code(row)                               — the row → card-code classifier.
- *                                            SUBTYPE-FIRST (the 008 pipeline's
- *                                            server-set subtype is the
- *                                            authoritative business class),
- *                                            falling back to a terminal card by
- *                                            transaction TYPE. Every row lands in
- *                                            exactly one code, so the cards
- *                                            partition the residual.
- *   isCode(v)                               — whitelist test for a ?card= value.
+ *   config.js                     META, SUBTYPE
+ *   home.html                     _TXV_PATTERN, KIND_EXPLAIN, CODE_EXPLAIN
+ *   inventory-transactions.html   PATTERN_INFO, the classifyGridRow if-ladder,
+ *                                 _TX_PATTERN_NAMES, _TX_CARD_FINDING
  *
- * Adding a card = add ONE entry to META and (if the class is subtype-driven) ONE
- * entry to SUBTYPE. Both surfaces pick it up with no further edits.
+ * Each drift shipped as working software. TXI and CNJ were added to Home and
+ * never to Details, so the ?card= filter was skipped and the analyst saw every
+ * card's rows. Five SubTypes shipped in the DB and were never added to the
+ * Details if-ladder, so correctly-classified rows rendered under the wrong
+ * card. One pattern carried three different names across three maps. Codes
+ * outside CODE_EXPLAIN's six keys fell through to a per-kind sentence reading
+ * "these transactions do not fit a known pattern yet" on a card that names a
+ * confirmed mechanism (UI-62). None of it threw.
+ *
+ * So: ONE entry per code, carrying its identity AND every string any surface
+ * shows for it. Three sections, one shape:
+ *
+ *   META     the Home cards. Insertion order IS the Home display order.
+ *   GRID     Details-only shapes for rows the server left without a SubType.
+ *            Never a Home card (those rows roll into the T-* terminals), so
+ *            they carry no `cause`.
+ *   SIGNAL   pseudo-codes the Details finding engine selects instead of the
+ *            card when the ROWS are definitive (non-stock cost, a confirmed
+ *            routing mismatch) or when no card is in scope.
+ *
+ * Per-entry fields:
+ *   title        the ONE name. Every surface shows this string — card header,
+ *                scope band, work panel, export filename.
+ *   kind         Home chip (rebalance | self | mto | ico | linked | review).
+ *   tier         Home tier lane (quick | complex | linked | terminal).
+ *   disposition  Details chip (rebalance | expense | self | triage).
+ *   cause        Home card body. Short: what happened plus the lever.
+ *   desc         Details "What it is". Long form; feeds the card tooltip and
+ *                the work panel.
+ *   action       Details "Likely fix". Long form, same two consumers.
+ *   finding      the structured investigation report the analyst files:
+ *                { flag, mech, checked[], found[], fix[], recurrenceIdx?,
+ *                  dmaai?, triage? }. See _txFindingText in
+ *                inventory-transactions.html for how it renders.
+ *
+ * Classifiers, also here so no consumer re-implements one:
+ *   code(row)      Home: SubType -> code, else transaction Type -> a T-*
+ *                  terminal. Every row lands in exactly one code, so the cards
+ *                  partition the residual.
+ *   gridCode(row)  Details: the duplicate-relief flag, then SubType, then the
+ *                  cardex/GL grid shape. Finer than code() only for rows the
+ *                  server left unclassified.
+ *   Both route through subtypeCode(), which console.warns ONCE per unmapped
+ *   SubType. An unmapped SubType used to fall silently into the grid-shape
+ *   branch and render under the wrong card; now it is noisy.
+ *
+ * ADDING A CARD: one META entry, one SUBTYPE entry. Every surface picks it up.
+ * A code with no `cause` / no `finding` warns in the console rather than
+ * rendering a generic sentence nobody notices.
  */
 window.RRV8 = window.RRV8 || {};
 (function () {
   var META = {
-    // Quick wins (1 document) — deterministic corrective action
-    'ACCT':    { title: 'Account Mismatch',              kind: 'rebalance', tier: 'quick'    },
-    'PER':     { title: 'Period Mismatch',               kind: 'self',      tier: 'quick'    },
+    // ---- Quick wins (1 document) — deterministic corrective action ----------
+    'ACCT': {
+      title: 'Account Mismatch', kind: 'rebalance', tier: 'quick', disposition: 'rebalance',
+      cause: 'The GL posted these documents to a different account than the DMAAI routes to. The item ledger used the right one. Correct the DMAAI for this combination, turn off account entry and override on the version in use, and on sales documents check R42800 PO 5, Business Unit Source.',
+      desc: 'Cardex and GL both posted, but the GL side landed on a different account than JDE\'s DMAAI table routes to for this (Order Type, Doc Type, GL Class). Usual causes: the DMAAI itself is wrong for that combination, the item\'s GL class changed after the document posted, or the program version lets the operator key a GL account at entry — the AAI account goes to F4111 while the keyed account goes to F0911.',
+      action: 'Correct the DMAAI for this combination. On inventory documents, turn off Allow Entry of GL Account (PO 1) and Allow Override of GL Account (PO 2) on the version in use: either one left on lets the account be keyed over the AAI every time. On sales documents, check R42800 PO 5, Business Unit Source. Re-run the company and period, and corrected documents drop off.',
+      finding: {
+        dmaai: true,
+        flag: 'DMAAI account mismatch',
+        mech: 'The GL posted these documents to a different account than the DMAAI directs.',
+        checked: [
+          'Cardex and GL both posted. Missing entry ruled out.',
+          'Period matches on both sides. Cut-off ruled out.',
+          'Posted account against the account the DMAAI directs for this order type, doc type and GL class: they differ. Confirmed.'
+        ],
+        found: [
+          'The GL side landed on the wrong account. The item ledger used the account the DMAAI specifies.',
+          'Likely cause, not yet confirmed: the DMAAI is set wrong for this combination, or the item’s GL class changed after these documents posted.',
+          'Second possibility: the entry program allows an account to be keyed at entry, overriding the DMAAI.'
+        ],
+        fix: [
+          'Correct the DMAAI for this combination.',
+          'On inventory documents, turn off Allow Entry of GL Account (PO 1) and Allow Override of GL Account (PO 2) in the version in use.',
+          'On sales documents, check R42800 PO 5, Business Unit Source. It drives most systematic sales account mismatches.',
+          'Re-run this company and period. Corrected documents resolve to the right account and drop off.'
+        ]
+      }
+    },
+    'PER': {
+      title: 'Period Mismatch', kind: 'self', tier: 'quick', disposition: 'self',
+      cause: 'The item ledger and the GL recorded these documents in different months. Set GL Date Source to follow the transaction date, and schedule the batch runs to finish before the period closes.',
+      desc: 'The cardex movement and its GL counterpart landed in different months — the document is reported in one period and posted in another. Usual causes: a GL Date Source processing option pointed at the invoice or promised date rather than the item-ledger date, or a batch program (Sales Update, Manufacturing Accounting, the cycle-count update) that ran after the period closed.',
+      action: 'Set the GL Date Source option so the GL date follows the item-ledger date — P4312 PO 2 on PO receipts, P4314 PO 2 on voucher match, R42800 PO 1 (Defaults tab) on Sales Update, the GL Date option in R41413 / R41610 on cycle counts. Schedule those runs to complete before the period closes so the two dates cannot straddle a period end. Re-run both periods afterwards: the document should net to zero across the two, and a gap that survives the next close is not a cut-off.',
+      finding: {
+        flag: 'Period cut-off',
+        mech: 'The item ledger and the GL recorded these documents in different months.',
+        checked: [
+          'Both sides posted, and the amounts agree. Missing entry ruled out.',
+          'Accounts agree on both sides. Account mismatch ruled out.',
+          'Item-ledger date against GL date: different fiscal periods. Confirmed.'
+        ],
+        found: [
+          'Likely cause, not yet confirmed: a GL Date Source option is set to the invoice or promised date instead of the transaction date.',
+          'Second possibility: a batch program ran after the period closed.'
+        ],
+        fix: [
+          'Set GL Date Source to follow the transaction date. PO receipts P4312 PO 2. Voucher match P4314 PO 2. Sales Update R42800 PO 1, Defaults tab. Cycle counts R41413 and R41610.',
+          'Schedule those runs to finish before the period closes.',
+          'Re-run both periods. The document should net to zero across the two.',
+          'A gap still there after the next close is a posting error, not a cut-off.'
+        ]
+      }
+    },
     // DAC-28 — promoted from Comment-only annotations to their own cards.
-    'VCHR':    { title: 'A/P Voucher on Inventory',      kind: 'rebalance', tier: 'quick'    },
-    'DUP':     { title: 'Duplicate Sales',               kind: 'rebalance', tier: 'quick'    },
+    'VCHR': {
+      title: 'A/P Voucher on Inventory', kind: 'rebalance', tier: 'quick', disposition: 'expense',
+      cause: 'A/P vouchers posted to an inventory account instead of the A/P variance account. DMAAI 4330 is routing voucher variances into inventory. Correcting that route stops it; restricting account overrides on the voucher-match version keeps it corrected.',
+      desc: 'A/P voucher variance posted to an inventory account instead of the A/P variance account — DMAAI 4330 routes inventory items there. A voucher moves no inventory, so there is no item-ledger side to match against; the whole amount is the variance.',
+      action: 'Check DMAAI 4330 for this company and GL class. Correct the route so voucher variances land on the variance account, then restrict who can override the GL account on the voucher-match version. The value already posted stays in the inventory account until the accountant reclassifies it out.',
+      finding: {
+        dmaai: true,
+        flag: 'Voucher on inventory account',
+        mech: 'A/P vouchers posted to an inventory account instead of the A/P variance account.',
+        checked: [
+          'Batch type on these documents: V, an A/P voucher. Confirmed.',
+          'Account posted to: an inventory account. Confirmed.',
+          'Item-ledger side: nothing. A voucher moves no inventory, so there is nothing to match.'
+        ],
+        found: [
+          'DMAAI 4330 is sending voucher variances to inventory for this company and GL class.',
+          'Alternative, if 4330 reads correctly in JDE: the account was overridden at posting time.'
+        ],
+        fix: [
+          'Correct DMAAI 4330 so voucher variances land on the variance account.',
+          'Restrict who can override the GL account on the voucher-match version, or route those overrides through approval.',
+          'Put the next voucher through and confirm its variance lands off inventory.'
+        ]
+      }
+    },
+    'DUP': {
+      title: 'Duplicate Sales', kind: 'rebalance', tier: 'quick', disposition: 'triage',
+      cause: 'The same order line was relieved from inventory twice while the GL booked it once, so the extra item-ledger line is the variance. Either the line was ship-confirmed again after it closed, or Sales Update abended and the re-run wrote the relief a second time.',
+      desc: 'The same order line was relieved on the cardex more than once at the same (line, branch, item, location, lot) while the GL booked it once, so the variance equals the duplicated relief. JDE increments the line number for a genuine partial shipment, so a repeated line number is a double relief, not a split. Either the line was ship-confirmed a second time, or an interrupted Sales Update re-ran against a workfile that still held its records.',
+      action: 'Reverse the duplicate relief at the source and leave the original. Then establish which case it was, because the preventive change differs. A re-confirmed line means restricting the statuses at which ship-confirm is allowed. An abended Sales Update means recovering its workfile before any re-run, and finding out why it abended. Check next period: a step that fires twice duplicates the next order too.',
+      finding: {
+        flag: 'Duplicate cardex relief',
+        mech: 'The same order line was relieved from inventory twice. The GL booked it once.',
+        checked: [
+          'Duplicate-sales integrity check flags these orders. Confirmed.',
+          'Repeated line number, not an incremented one. JDE increments for a genuine partial, so this is a double relief, not a split shipment.',
+          'Variance equals the value of the extra relief. Confirmed.'
+        ],
+        found: [
+          'Inventory was relieved twice for one shipment, so the item ledger is short by that value.',
+          'Likely cause, not yet confirmed: the line was ship-confirmed a second time after it closed.',
+          'Second possibility: Sales Update abended and the re-run wrote the relief again from a workfile that still held it.'
+        ],
+        fix: [
+          'Reverse the duplicate relief at the source with an inventory adjustment. Leave the original.',
+          'If the line was re-confirmed: restrict the statuses at which ship-confirm is allowed.',
+          'If Sales Update abended: recover its workfile before any re-run, and find out why it abended.',
+          'Check next period. A step that fires twice will duplicate the next order too.'
+        ]
+      }
+    },
     // Two F0911 legs that cancel, neither on the inventory account. LedgerAmount = 0
     // here does NOT mean "no G/L entry" — the entry posted and self-cancelled elsewhere.
-    'OFF':     { title: 'Offsetting GL Entries',         kind: 'rebalance', tier: 'quick'    },
+    'OFF': {
+      title: 'Offsetting GL Entries', kind: 'rebalance', tier: 'quick', disposition: 'rebalance',
+      cause: 'The GL posted two entries that cancel each other and neither reached the inventory account, so the document nets to zero in the GL while inventory came off the item ledger. Nothing shows on the P&L — only the balance sheet moves, which is why it went unnoticed. Correct the DMAAIs for this order type and document type so one side lands on the inventory account.',
+      desc: 'Two F0911 legs for the same document, equal and opposite, both posted, in the same batch as the item ledger — and neither on the inventory account the item ledger used. LedgerAmount nets to zero, which does NOT mean the GL entry is missing: it posted and cancelled itself somewhere else. The order line type is stock, so a GL entry against inventory was due.',
+      action: 'Correct the DMAAIs for this order type and document type so one side lands on the inventory account. Check the other order types sharing those DMAAIs before assuming this one is isolated. The accountant restores the inventory account for the documents already posted. Re-run this company and period: a document that comes back was not corrected.',
+      finding: {
+        flag: 'Entries that cancel',
+        mech: 'The GL posted two entries that cancel each other, and neither one reached the inventory account.',
+        checked: [
+          'The GL for each document: two entries, both posted, in the same batch as the item ledger. Nothing failed to post.',
+          'The two amounts: equal and opposite. They cancel, so the document nets to zero in the GL.',
+          'The accounts they landed on: two accounts, neither of them the inventory account the item ledger used.',
+          'The order line type: stock. A stock line is due a GL entry against inventory, so this is not an expected non-stock case.',
+          'The batches: healthy. Each holds a few hundred other documents that posted normally.'
+        ],
+        found: [
+          'Inventory came off the item ledger. The GL never touched the inventory account for it.',
+          'The two entries cancel, so your profit and loss shows nothing. Only the balance sheet moves, and it is out by the full item-ledger amount.',
+          'That is why this went unnoticed. There is no profit-and-loss signal for anyone to review.',
+          // recurrenceIdx points here.
+          'Read the periods either side before treating this as a one-off.',
+          'The DMAAIs for this order type are sending both sides of the entry to a pair of accounts that offset each other, instead of to inventory and its counterpart.'
+        ],
+        recurrenceIdx: 3,
+        fix: [
+          'Correct the DMAAIs for this order type and document type so one side lands on the inventory account.',
+          'Check the other order types that share those DMAAIs before assuming this one is isolated.',
+          'The accountant restores the inventory account for the documents already posted.',
+          'Re-run this company and period. A document that comes back was not corrected.'
+        ]
+      }
+    },
     // The non-stock line cost ties to the variance and sits in an inventory account.
     // A correction IS required: F0911 does not tie to F4111. The lever is the item's
     // G/L class, NOT the non-stock DMAAI (that entry is correct).
-    'NSL':     { title: 'Non-Stock Sales Lines',         kind: 'rebalance', tier: 'quick'    },
+    'NSL': {
+      title: 'Non-Stock Sales Lines', kind: 'rebalance', tier: 'quick', disposition: 'rebalance',
+      cause: 'A non-stock line posted its cost to an inventory account, and that cost accounts for the whole variance to the penny. The non-stock account instruction is correct — the GL class carried on those lines is a stock class, and that is what resolves to inventory. Correct the GL class on the items.',
+      desc: 'A non-stock line posted its GL cost to an inventory account, and the non-stock extended cost ties exactly to the variance, either on the document or across the order. The non-stock DMAAI itself points away from inventory, so it is not the fault: the GL class carried on the non-stock lines is a stock item class, and that is what resolves to inventory. A non-stock item holds no inventory, so the value does not belong there.',
+      action: 'Correct the GL class on these items so a non-stock line stops resolving to the inventory account. Do not change the non-stock DMAAI — it already points at the right account. Check whether other non-stock line types carry the same overridden class before assuming these items are the only ones. The accountant reclassifies the value already posted out of the inventory account. Re-run this company and period: a document that comes back was not corrected.',
+      finding: {
+        flag: 'Non-stock cost in inventory',
+        mech: 'A non-stock line posted its cost to an inventory account. The non-stock cost accounts for the whole variance.',
+        checked: [
+          'The order lines: one or more are non-stock. A non-stock line posts to the GL and moves no inventory, so no item-ledger row exists for it.',
+          'The non-stock cost against the variance: they tie exactly, either on this document or across the order.',
+          'The account the GL used: the inventory account.',
+          'The non-stock DMAAI itself: correct. It points away from inventory, so it is not the fault.',
+          'The GL class carried on the non-stock lines: a stock item class, not the non-stock class. That is what resolves to inventory.'
+        ],
+        found: [
+          'The variance is the non-stock cost, to the penny. The cause is identified.',
+          'Non-stock cost is sitting in an inventory account. A non-stock item holds no inventory, so it does not belong there.',
+          'Your GL inventory balance is overstated against the item ledger by exactly this amount, on every order carrying a non-stock line.',
+          // recurrenceIdx points here.
+          'Read the periods either side before treating this as a one-off.',
+          'This is not a leave-it row. The two sides do not tie, so it needs a correction.'
+        ],
+        recurrenceIdx: 3,
+        fix: [
+          'Correct the GL class on these items so a non-stock line stops resolving to the inventory account.',
+          'Do not change the non-stock DMAAI. It is already pointing at the right account, and changing it will not fix this.',
+          'The accountant reclassifies the non-stock value already posted out of the inventory account.',
+          'Check whether other non-stock line types carry the same overridden class before assuming these items are the only ones.',
+          'Re-run this company and period. A document that comes back was not corrected.'
+        ]
+      }
+    },
     // Every line on the order is non-stock (F40205 Inventory Interface 'N'), so no
     // cardex row was ever due and GL-only is correct processing. Sibling of NSL and
     // deliberately separate: NSL needs the non-stock cost to TIE to the variance, and a
     // CHARGE line has no extended cost to tie with, so NSL never reaches these.
-    'NCL':     { title: 'Non-Stock Charge Lines',        kind: 'rebalance', tier: 'quick'    },
+    'NCL': {
+      title: 'Non-Stock Charge Lines', kind: 'rebalance', tier: 'quick', disposition: 'triage',
+      cause: 'Every line on the order is non-stock, so the GL posts and inventory never moves. GL-only is correct processing here, not a gap. Confirm the line types on one order; if these should not reach an inventory account at all, the lever is the GL class on the line, not the non-stock account instruction.',
+      desc: 'Every line on the order resolves to an F40205 Inventory Interface of N, so no item-ledger row was ever due and GL-only is what correct processing looks like. Separate from the non-stock sales card: that one matches when the non-stock cost equals the variance, and a charge line carries no extended cost to match with. The tie-out still fails, so the balance may need restating even though nothing is wrong with the transaction.',
+      action: 'Confirm the line types on one order against F40205 rather than inferring from the line-type letters. If these should not be reaching an inventory account at all, the lever is the GL class on the line, not the non-stock account instruction. Otherwise there is no action on the transaction, and the accountant decides whether the balance needs restating.',
+      finding: {
+        flag: 'No item-ledger row was due',
+        mech: 'Every line on the order is non-stock, so the GL posts and inventory never moves.',
+        checked: [
+          'Line type on every line resolves to an Inventory Interface of N. Confirmed against F40205, not inferred from the line-type letters.',
+          'No item-ledger row exists for these documents, which is correct for a non-stock line rather than a gap.',
+          'Separate from the non-stock sales card: that one matches when the non-stock cost equals the variance, and a charge line carries no extended cost to match with.'
+        ],
+        found: [
+          'GL-only is what correct processing looks like for these lines. The line type is the first question on any GL-only row and it answers this one.',
+          'Where the charge is a customer-specific process, the card names it and stops. There is no source fix to chase.'
+        ],
+        fix: [
+          'Confirm the line types on one order before accepting the rest.',
+          'If these should not be reaching an inventory account at all, the lever is the GL class on the line, not the non-stock account instruction.',
+          'Otherwise no action on the transaction. The tie-out still fails, so the accountant decides whether the balance needs restating.'
+        ]
+      }
+    },
     // IT cardex-integrity — cost-component setup fix at the source.
-    'TXI':     { title: 'Transfer Integrity',            kind: 'review',    tier: 'quick'    },
+    'TXI': {
+      title: 'Transfer Integrity', kind: 'review', tier: 'quick', disposition: 'triage',
+      cause: 'Location transfers relieved inventory value the GL never recorded: a leg carried a unit cost but never extended it, so a move that should be value-neutral destroyed inventory value. A zero extended cost on a transfer leg is common and harmless on its own; it is the unit-cost-without-extension combination that lands a document here. It arrives in bursts rather than every period, so read the periods either side before calling the setup still wrong.',
+      desc: 'An inventory-transfer (IT) document relieved value on the cardex (F4111) that the GL never recorded — a leg carried a unit cost but a zero extended cost, so a move that should be value-neutral destroyed inventory value. The shape is narrow: a zero extended cost on a transfer leg is common and harmless, and zero-extended legs appear on the relief and receipt sides in equal numbers, so it is the unit-cost-without-extension combination that lands a document here. No vendor article has been cited for it, so do not name it as a known defect.',
+      action: 'Confirm each document on both sides first: the item-ledger legs against the GL for the same document. Then compare the cost setup of the failing items against items that transferred cleanly in the same period — that difference is the lead. Count the failures per period before treating the setup as still wrong: this arrives in bursts with clean stretches between them, so a recent clean period at normal transfer volume points at a cost change or a specific set of items rather than a permanent setup fault. This card already holds every one-sided relief, so it is the population. Restoring the lost value is a dollars-only adjustment the accountant books.',
+      finding: {
+        flag: 'Item-ledger integrity',
+        mech: 'Location transfers relieved inventory value that the GL never recorded.',
+        checked: [
+          'A location move should be value-neutral and post no GL. These relieved value with no GL entry. Confirmed.',
+          'Both legs of each document are present in the item ledger. A missing leg is ruled out.',
+          'Extended cost on the legs: a leg carries a unit cost and no extended value, so the value never calculated. Confirmed on the documents on this card.',
+          'DMAAI routings on these documents resolve correctly. Mapping ruled out.'
+        ],
+        found: [
+          'A leg priced the quantity and never extended it, so the move destroyed inventory value the GL never saw.',
+          'Cause not confirmed, and the shape is narrow rather than general: a zero extended cost on a transfer leg is common and harmless, and only a small fraction of those legs also carry a unit cost. That combination is what lands a document here.',
+          // recurrenceIdx points here — replaced at render with the count from the
+          // loaded rows (UI-59). This general form must state no figure, because
+          // the burst pattern verified on two companies is not a universal rate.
+          'It arrives in bursts, not every period. Read the periods either side before calling it a standing fault: a recent clean period at normal transfer volume means the trigger stopped, which is a different problem from a setup that is still wrong.'
+        ],
+        recurrenceIdx: 2,
+        fix: [
+          'Compare the cost setup of the items on this card against items that transferred cleanly in the same period. That difference is the lead.',
+          'Confirm each document on both sides: the item-ledger legs against the GL for the same document.',
+          'This card already holds every one-sided relief. It is the population; there is nothing else to run to find them.',
+          'Check the periods either side and count the failures per period. A burst that starts and stops points at a cost change or a specific set of items rather than a permanent setup fault.',
+          'Restoring the lost value is a dollars-only inventory adjustment, which the accountant books.'
+        ]
+      }
+    },
     // Mfg completion on the cardex with NO completion entry in the GL — a
     // genuine posting gap. R31802A stamps the cardex batch and drops a slice of
     // EVERY run's completions (SPECIMEN figures, ONE dataset, do NOT ship them
     // as copy: 58 batches / 8 periods, none clean, none empty, 0.6%-24.6% per
     // batch — the card computes its own from the loaded rows, see UI-59);
-    // the same run's other orders journal fine, so a
-    // healthy batch/account doesn't clear it. NO vendor article matches it —
-    // KB 420628 is a near miss ruled out on shape (its failure drops the IM
-    // entry, which would SUPPRESS this card). No repost exists. Specimen
-    // evidence lives in the guide, not here.
-    'CNJ':     { title: 'Completion Not Journaled',      kind: 'review',    tier: 'quick'    },
+    // the same run's other orders journal fine, so a healthy batch/account
+    // doesn't clear it. NO vendor article matches it — KB 420628 is a near miss
+    // ruled out on shape (its failure drops the IM entry, which would SUPPRESS
+    // this card). No repost exists. Specimen evidence lives in the guide.
+    'CNJ': {
+      title: 'Completion Not Journaled', kind: 'review', tier: 'quick', disposition: 'triage',
+      cause: 'Work-order completions received finished goods into inventory with no GL entry for them, while the material issues for the same orders did post. Manufacturing accounting stamped the item ledger and wrote no entry. The pattern is a run that journals most of its completions and drops a slice, at a severity that moves from run to run; the card states the recurrence across your loaded periods. No Oracle Support article matches the shape. The fault is in the run, not these orders.',
+      desc: 'A work-order completion received finished goods into inventory with no GL entry for it. The material issues for the same order did post. Manufacturing accounting stamped the batch on the item-ledger row, so it processed the row and wrote no entry. The batches and the account are healthy: both carry completions for many other orders. The pattern is a run that journals most of its completions and drops a slice, never a whole run failing outright, at a severity that moves from run to run. The finding below states the recurrence measured across the periods loaded here. No Oracle Support article matches the shape; KB 420628 is a near miss whose failure drops the material issue entry, which would suppress this card rather than create it.',
+      action: 'Confirm in three checks. Search the GL for the work order: issues present, completion absent. Widen the search, no company or document-type restriction: still no completion. Check that the same batch and account carry completions for other orders: if they do, the gap is real. Then have whoever runs R31802A read the error report that run produces. Take it to Oracle through IT as an undocumented R31802A condition, not as KB 420628 — that article has a different cause and its manual-journal-entry remedy does not fit. Do not delete an unposted manufacturing batch, because nothing regenerates the entry.',
+      finding: {
+        flag: 'Completion missing from the GL',
+        mech: 'Work-order completions received finished goods into inventory with no GL entry for them.',
+        checked: [
+          'Every completion on this card: no GL completion entry for the work order. Not under this company, not under any company, not under any document type.',
+          'Material issues for the same work orders: present in the GL. So the orders did go through manufacturing accounting.',
+          'The batches involved: they carry completion entries posting normally for other work orders. Batches are fine.',
+          'The account these sit on: it carries completion entries for many other orders in the same batches. Account and AAI are fine.',
+          'Work-order reference on those other entries: present. Summarized entries ruled out.',
+          'Posting status: posted. Unposted batch ruled out.',
+          'Document company: matches the item ledger. Mismatch ruled out.',
+          'Our GL copy: the batches are all present. Missed data load ruled out.'
+        ],
+        found: [
+          'The GL completion entries were never written for these work orders. The material issues for the same orders were.',
+          'Manufacturing accounting stamped the batch on the item-ledger rows, so it processed them and wrote no entry.',
+          // recurrenceIdx points here. Replaced at render with the count from the
+          // loaded rows (UI-59). This general form stands only when the loaded
+          // window is too short to evidence recurrence either way — it must not
+          // state a figure, because the figure differs per install.
+          'Read the periods either side before treating this as a one-off. The pattern is a run that journals most of its completions and drops a slice, at a severity that moves from run to run.',
+          'A batch that posted most of its completions is not evidence this order posted. Confirm per work order, never per batch.',
+          'No Oracle Support article matches this. KB 420628 is the near miss, ruled out on shape: its failure drops the material issue entry, which would suppress this card rather than create it.'
+        ],
+        recurrenceIdx: 2,
+        fix: [
+          'Have whoever runs R31802A read the error report that run produces.',
+          'Take it to Oracle through IT as an undocumented R31802A condition, not as KB 420628. That article has a different cause, and its manual-journal-entry remedy does not fit this.',
+          'Do not delete an unposted manufacturing batch. The unaccounted units are already cleared, so nothing regenerates the entry.'
+        ]
+      }
+    },
     // The sales-side analog of CNJ: cardex relieved inventory, a batch is stamped, and
     // F0911 holds NOTHING for the document under ANY doc type. Not posted elsewhere and
     // not posted in another period — absent. An UNPOSTED batch is not this (RR loads
     // unposted F0911, so an unposted entry SUPPRESSES the card and surfaces as the
     // separate GL Batches variance).
-    'SNJ':     { title: 'Sales Not Journaled',           kind: 'review',    tier: 'quick'    },
+    'SNJ': {
+      title: 'Sales Not Journaled', kind: 'review', tier: 'quick', disposition: 'rebalance',
+      cause: 'Inventory was relieved on the item ledger with a batch stamped, and the GL holds nothing for the document under any type. Absent rather than misrouted or misdated. Read the error report from the run that stamped these documents; a document that returns next period was not fixed.',
+      desc: 'The item ledger relieved inventory with a batch stamped on the row, and F0911 holds nothing for the document under its own type or any other. Absent, not misrouted and not misdated — searching other accounts and other periods will not find it. An unposted batch is NOT this case: RR loads unposted F0911, so an unposted entry suppresses this card and surfaces as a GL batch variance instead.',
+      action: 'Read the error report from the run that stamped these documents, starting with the earliest. Confirm on one document first: the item-ledger relief against F0911 for that document number, with no account or period filter. The accountant books the missing value; the source fix is whatever the run report shows, and a document that comes back next period was not fixed.',
+      finding: {
+        flag: 'No GL entry exists',
+        mech: 'Inventory was relieved on the item ledger with a batch stamped, and the GL holds nothing for the document.',
+        checked: [
+          'F0911 searched for this document under its own type and under every other type. Nothing.',
+          'Batch present on the item-ledger row, so the update that stamps it ran.',
+          'Not an unposted batch — unposted entries are loaded and would suppress this card. That break surfaces as a GL batch variance instead.',
+          'Order lines still open rather than completed, which is where to start.'
+        ],
+        found: [
+          'The item ledger recorded the relief and the GL never received it, so inventory is understated against the ledger by the full value.',
+          'Absent, not misrouted and not misdated. Searching other accounts and other periods will not find it.'
+        ],
+        fix: [
+          'Read the run that stamped these documents and its error report, starting with the earliest.',
+          'Confirm on one document first: the item-ledger relief against F0911 for that document number, with no account or period filter.',
+          'The accountant books the missing value. The source fix is whatever the run report shows, and a document that comes back was not fixed.'
+        ]
+      }
+    },
     // BATCH CANNOT AGGREGATE MANUFACTURING AMOUNTS (owner ruling 2026-08-05). A work
     // order issues material over weeks, each issue in its own batch, and the IC is not
     // generated until the product is complete — days or weeks later, in its own batch.
     // Regrained to (work order, account, doc type) these tie to the penny, so the row is
     // NOT a variance: it is the batch key stranding a completion journaled in a later
     // run. Claimed rather than suppressed so the analyst is told why it appeared.
-    'XBC':     { title: 'Cross-Batch Completion',        kind: 'review',    tier: 'quick'    },
+    'XBC': {
+      title: 'Cross-Batch Completion', kind: 'review', tier: 'quick', disposition: 'triage',
+      cause: 'Completions journaled in a later batch than the one stamped on the item ledger. Matched by work order rather than by batch, these tie exactly — a work order issues material over weeks in separate batches and completes later in its own. Confirm one document with the batch ignored, then close the card. Posting an entry would create the shortfall it looks like.',
+      desc: 'The completion was journaled in a later batch than the one stamped on the item ledger, so a comparison that pairs the two sides within a batch shows a gap. Regrained to (work order, account, doc type) across every batch and period, the two sides agree to the penny. A work order issues material over weeks, each issue in its own batch, and the completion is not generated until the product is finished — days or weeks later, in a batch of its own. Not a variance.',
+      action: 'Confirm on one document before dismissing the rest: the item-ledger completion against F0911 for the same work order, ignoring the batch. Then close the card — no journal entry and no source fix. Reading it as a shortfall and posting an entry would create the error it looks like. If the count grows period over period, the correlation grain is what to raise, not the transactions.',
+      finding: {
+        flag: 'Ties at work-order grain',
+        mech: 'The completion was journaled in a later batch than the one stamped on the item ledger.',
+        checked: [
+          'An F0911 completion exists for this work order on this account. Confirmed.',
+          'Regrained to work order, account and doc type across every batch and period, the two sides agree to the penny. Confirmed.',
+          'Batch present on the item-ledger row, so R31802A ran and wrote the journal in the same step.'
+        ],
+        found: [
+          'Not a variance. A work order issues material over weeks, each issue in its own batch, and the completion is not generated until the product is finished — days or weeks later, in a batch of its own.',
+          'It appears here because the comparison pairs the two sides within a batch. Match by work order and it ties.',
+          'Nothing to correct on the transaction. Reading it as a shortfall and posting an entry would create the error it looks like.'
+        ],
+        fix: [
+          'Confirm on one document before dismissing the rest: the item-ledger completion against F0911 for the same work order, ignoring the batch.',
+          'No journal entry. No source fix. Close the card.',
+          'If the count grows period over period, the correlation grain is the thing to raise, not the transactions.'
+        ]
+      }
+    },
     // Journaled, same account, amount DIFFERS at work-order grain. The population CNJ
     // explicitly hands off ("completion posted, amount differs") and nothing implemented
     // until now. Still a tie-out failure: a correction IS required. Usual driver is a
     // cost basis that moved between the cardex write and the R31802A run — and F4111
     // ordered by ilukid IS the unit-cost history, since JDE has no cost-history table.
-    'MCM':     { title: 'Mfg Cost Mismatch',             kind: 'review',    tier: 'quick'    },
+    'MCM': {
+      title: 'Mfg Cost Mismatch', kind: 'review', tier: 'quick', disposition: 'expense',
+      cause: 'A GL completion exists for the work order on the same account and the amount disagrees with the item ledger. The cost basis behind the journal is not the one behind the ledger row. Order the item and branch by the ledger sequence to find the cost step — the item ledger is the cost history, and an adjustment journals as a zero-quantity row carrying the delta. Prevention is sequencing: cost the item before it is issued.',
+      desc: 'The item ledger and the GL valued the same completion quantity at different unit costs. The variance is quantity times the difference. The usual driver is a cost that moved between the item-ledger write and the accounting run: a frozen cost update moved the standard after the completion posted and WIP revaluation never carried it through. WIP revaluation is optional under standard costing, needs the variance AAI configured for the routing, and skips work orders already closed.',
+      action: 'Confirm the gap is actually a cost-basis difference before treating it as one: it should be a modest share of the transaction and fall either side of it. A gap exceeding half the item-ledger amount, or running one direction across the population, is a different problem. Order the item and branch by the ledger sequence to find the cost step — the item ledger IS the cost history, and a cost adjustment journals as its own zero-quantity row carrying the delta, not the new cost. Then have WIP revaluation run as part of the cost update so the next roll reaches the GL as well as the item ledger — confirm the program and version in this customer JDE rather than assuming a report number. Confirm the variance AAI, 3240 or 3260, is configured for the routings in use. Closed work orders are outside its reach, so time cost rolls against the open population.',
+      finding: {
+        flag: 'Does not tie',
+        mech: 'A GL completion exists on this account for the work order and the amount disagrees with the item ledger.',
+        checked: [
+          'An F0911 completion exists for the work order on this account, so the completion-gap shape is ruled out.',
+          'Compared at work-order grain across every batch and period, not within a batch. The amounts still differ.',
+          'Issues and completions compared separately: the completion carries labor and overhead out of WIP and the issue does not, so the two never net against each other.'
+        ],
+        found: [
+          'The cost basis behind the journal is not the cost basis behind the item-ledger row.',
+          'The usual driver is a cost that moved between the item-ledger write and the accounting run. The item ledger itself is the cost history — read the unit cost transaction by transaction and the steps are the changes.',
+          'A cost adjustment journals as its own zero-quantity ledger row carrying the DELTA, not the new cost. Read it that way or the arithmetic will not close.'
+        ],
+        fix: [
+          'Order this item and branch by the ledger sequence and find the step. Compare the cost in force when the transaction was written against the cost the journal used.',
+          'A correction is required — the GL does not tie to the item ledger, and naming the cause is not the same as leaving it.',
+          'Prevention is sequencing: cost the item before it is issued, and keep a cost update from landing between a transaction and the run that journals it.'
+        ]
+      }
+    },
     // AAI 3110 (raw-material relief) and 3130 (finished-goods receipt) resolving to the
     // SAME account, so both legs of every work order land there and cancel; 3120 (WIP)
     // unconfigured, so there is no holding leg to offset against. The analyzer's own
     // 'nz' net-zero pattern. CONFIGURATION, not transaction: no journal entry fixes it
     // and every future period reproduces it until the AAIs are split.
-    'NZR':     { title: 'DMAAI Net Zero',                kind: 'review',    tier: 'quick'    },
-    // Complex (3 documents)
-    'MTO':     { title: 'Make to Order',                 kind: 'mto',       tier: 'complex'  },
-    'ICO':     { title: 'Intercompany Sales',            kind: 'ico',       tier: 'complex'  },
-    // Linked pairs (2 documents, 1:1 SO<->PO)
-    'TRF':     { title: 'Transfer Orders',               kind: 'linked',    tier: 'linked'   },
-    'DS':      { title: 'Direct Ship',                   kind: 'linked',    tier: 'linked'   },
-    // Terminal — the unclassified residual, split by transaction type
-    'T-SALES': { title: 'Unclassified — Sales',          kind: 'review', tier: 'terminal' },
-    'T-PURCH': { title: 'Unclassified — Purchasing',     kind: 'review', tier: 'terminal' },
-    'T-MFG':   { title: 'Unclassified — Manufacturing',  kind: 'review', tier: 'terminal' },
-    'T-INV':   { title: 'Unclassified — Inventory',      kind: 'review', tier: 'terminal' }
+    'NZR': {
+      title: 'DMAAI Net Zero', kind: 'review', tier: 'quick', disposition: 'rebalance',
+      cause: 'Raw-material relief and finished-goods receipt resolve to the same account, so both legs of every work order cancel there and the movement never happens in the GL. Work in process is unconfigured, so there is no offsetting leg. Split the account instructions into three distinct accounts, judged by their instruction rather than their description. This reproduces every period until the setup changes; no journal entry ends it.',
+      desc: 'DMAAI 3110 (raw-material relief) and 3130 (finished-goods receipt) resolve to ONE account for these order types and GL classes, so both legs of every work order land there and cancel. 3120 (work in process) is not configured, so there is no holding leg to offset against. The transactions themselves are ordinary — nothing is wrong with the documents. It is silent by construction: the postings cancel, so nothing shows on the P&L and only the balance sheet is wrong. Configuration, not transaction.',
+      action: 'Split the account instructions into three distinct accounts: 3110 to raw material, 3130 to finished goods, 3120 to work in process. Judge the accounts by their instruction, not by their name — an account described as work in process may be the declared inventory account for thousands of items. The accountant restates the affected balances once the routing is correct. This reproduces every period until the setup changes, and no journal entry ends it.',
+      finding: {
+        flag: 'Account setup, not a transaction',
+        mech: 'Raw-material relief and finished-goods receipt resolve to the same account, so both legs land there and cancel.',
+        checked: [
+          'DMAAI 3110 and 3130 resolve to one account for these order types and GL classes. Confirmed against the account instructions, not the account description.',
+          'DMAAI 3120 is not configured, so there is no work-in-process leg to offset against.',
+          'The transactions themselves are ordinary. Nothing is wrong with the documents on this card.'
+        ],
+        found: [
+          'Both sides of every work order post to a single account and net there, so the movement between raw material and finished goods never happens in the GL.',
+          'It is silent by construction: the postings cancel, so nothing shows on the P&L and only the balance sheet is wrong.',
+          'This reproduces every period until the setup changes. No journal entry ends it.'
+        ],
+        fix: [
+          'Split the account instructions: 3110 to raw material, 3130 to finished goods, 3120 to work in process. Three distinct accounts.',
+          'Judge the accounts by their instruction, not by their name. An account described as work in process may be the declared inventory account for thousands of items.',
+          'The accountant restates the affected balances once the routing is correct.'
+        ]
+      }
+    },
+    // ---- Complex (3 documents) ---------------------------------------------
+    'MTO': {
+      title: 'Make to Order', kind: 'mto', tier: 'complex', disposition: 'triage',
+      cause: 'Make-to-order work orders, grouped with their customer sales orders. Not one variance type: the residual splits into expected standard-cost variances, completions where both sides carry value and disagree, and completions with no GL entry at all. The three need different work, and the middle slice no longer has a confirmed cause. Drill in for the counts and dollars per shape.',
+      desc: 'A work order linked to its customer sales order — a business grouping, not one variance type. The residual is ordinary manufacturing cardex-vs-GL and splits three ways by shape: GL-only standard-cost variances, both-sides-differ completion cost differences, and cardex-only completions the GL holds no entry for. Account mapping is not the mechanism here.',
+      action: 'Work the shapes separately. Both-differ rows have no confirmed cause: the gap is too large a share of the transaction and too one-directional for the cost-basis story, so take them by account, largest account first, with cost accounting. Item-ledger-only rows are completions missing from the GL, which is a run-level fault, not these orders, and they belong in the completion-gap workflow. GL-only rows need no action. Match by work order, not document number.',
+      finding: {
+        flag: 'Cost shape — work the largest',
+        mech: 'Make-to-order work orders. A business grouping, not one variance type — the residual splits three ways by shape.',
+        checked: [
+          'DMAAI routings resolve to the same account as the item-ledger model. Mapping ruled out.',
+          'Sales orders shipped and closed. A missing sales offset is ruled out.',
+          'Each row sorted by which side carries a value: GL only, both differ, or item ledger only.',
+          'On the both-differ rows, the size of the gap against the size of the transaction, and the direction of the gap. Both come back wrong for a cost-basis difference.'
+        ],
+        found: [
+          'This is three different problems under one grouping, so do not work it as one. The shape split above is the finding.',
+          'GL-only rows are standard-cost variance components. They belong in the GL. Explained, no action.',
+          'Item-ledger-only rows are the completion-gap shape: a completion on the cardex with no GL entry for the order. That is the Completion Not Journaled investigation, not cost work, and it is grouped here only because the make-to-order claim reached these rows first.',
+          // recurrenceIdx points here.
+          'Read the periods either side before treating any slice as a one-off.',
+          'Both-differ rows do NOT fit a cost basis difference, which is what this card used to assert. A standard-versus-actual gap is a modest slice of the transaction and falls either side of it. Here most of the value sits on rows where the gap exceeds HALF the item-ledger amount, and the GL side is the larger one in roughly two thirds of the rows and the large majority of the value. Cause NOT confirmed.',
+          'The both-differ value also concentrates on very few accounts rather than spreading across the card, so one account will explain most of it.'
+        ],
+        recurrenceIdx: 3,
+        fix: [
+          'Split the card by shape first and route each slice separately. Working it as one variance is what makes it unworkable.',
+          'Take the both-differ rows by account, largest account first, with cost accounting. The concentration means the top account is most of the answer.',
+          'Do not carry the old cost-basis story into that conversation. The gap is too large a share of the transaction and too one-directional for it, so the question is open.',
+          'Where a standard cost did move after a completion posted, WIP revaluation is the mechanism that carries it to the GL. Confirm the program and version in this customer JDE rather than assuming a report number, then have it run as part of the cost update.',
+          'Send the item-ledger-only rows to the completion-gap workflow instead. Cost accounting cannot act on a missing GL entry.',
+          'Match item ledger to GL by work order, not document number. Manufacturing accounting assigns its own GL document number.'
+        ]
+      }
+    },
+    'ICO': {
+      title: 'Intercompany Sales', kind: 'ico', tier: 'complex', disposition: 'rebalance',
+      cause: 'Intercompany orders whose selling and buying legs have not offset. Confirm the matching leg posted in the counterpart company, and compare against the prior period to tell a pair that clears from one that is stuck.',
+      desc: 'An intercompany order (OK/SK) where the selling and buying companies\' inventory legs haven\'t fully offset — a three-document timing gap across the two companies\' books.',
+      action: 'Verify the matching leg posted in the counterpart company; the pair nets once both sides complete, and a leg that never arrives is chased in the counterpart company rather than adjusted on this side. Why a pair persists past both companies\' closes is not yet determined — establish it before changing anything upstream: compare the same orders against the prior period to separate a self-clearing pair from a stuck one, and use the batch number on the row as the join key for the F0911 search in the counterpart company.',
+      finding: {
+        flag: 'Counterpart leg',
+        mech: 'Intercompany orders whose selling and buying inventory legs have not offset.',
+        checked: [
+          'Both companies are in scope on the same order. Confirmed.',
+          'This company’s leg posted. Confirmed.',
+          'DMAAI routings on these documents resolve correctly. Mapping ruled out.'
+        ],
+        found: [
+          'One side of the pair is missing or late, so the two legs do not net.',
+          'Cause not confirmed. Most likely the counterpart company’s leg simply has not posted yet, which clears on its own.',
+          'Second possibility: the counterpart document was never created, which does not clear.',
+          'To tell them apart: compare the same orders against the prior period. A pair that persists is the second case.'
+        ],
+        fix: [
+          'Confirm the matching leg posted in the counterpart company.',
+          'Where a leg is missing, trace the document in that company using the batch number on this row. Do not adjust this side.',
+          'Re-check next period. A pair still open after both companies close is a posting failure, not timing.'
+        ]
+      }
+    },
+    // ---- Linked pairs (2 documents, 1:1 SO<->PO) ----------------------------
+    'TRF': {
+      title: 'Transfer Orders', kind: 'linked', tier: 'linked', disposition: 'rebalance',
+      cause: 'Inter-branch transfers whose shipping and receiving legs have not met — different periods, or the receiving branch carrying the shipping cost. A second case lands here too: Sales Update abends and the re-run duplicates the item-ledger relief while the GL posts once.',
+      desc: 'An inter-branch transfer (ST/OT) whose shipping and receiving legs posted to inventory in different periods or at different costs — the two sides haven\'t met yet. A second signature lands on this card too: a duplicated cardex relief, where Sales Update (R42800) abends, its workfile keeps the records, and the re-run writes the F4111 relief twice while the GL posts once.',
+      action: 'Confirm both legs posted. Where the cost differs, the receiving branch is carrying the shipping cost, so correct the receiving cost at the source. Where the relief is duplicated, find out why Sales Update abended and recover its workfile before any re-run. Confirm both branch plants sit in the same company: a cross-company move belongs on the intercompany flow. Re-check next period, since a pair still open after both legs posted is a cost difference, not timing.',
+      finding: {
+        flag: 'Leg pairing',
+        mech: 'Inter-branch transfers whose shipping and receiving legs have not met.',
+        checked: [
+          'Shipping leg posted. Confirmed.',
+          'Receiving leg: check whether it posted, and at what cost.',
+          'DMAAI routings on these documents resolve correctly. Mapping ruled out.',
+          'Item ledger for a duplicated relief: if the relief appears twice, this is the duplicate case below, not a pairing gap.'
+        ],
+        found: [
+          'Cause not confirmed. Two likely causes, and they need different fixes.',
+          'The legs landed in different periods or at different costs, so the receiving branch is carrying the shipping cost.',
+          'Or Sales Update abended and the re-run wrote the item-ledger relief a second time while the GL posted once. A known JDE quirk.'
+        ],
+        fix: [
+          'Where the cost differs: correct the receiving cost at the source.',
+          'Where the relief is duplicated: find out why Sales Update abended, and recover its workfile before any re-run.',
+          'Confirm both branch plants sit in the same company. A cross-company move belongs on the intercompany flow, and forcing it through a transfer order leaves the in-transit account permanently out.',
+          'Re-check next period. A pair still open after both legs posted is a cost difference, not timing.'
+        ]
+      }
+    },
+    'DS': {
+      title: 'Direct Ship', kind: 'linked', tier: 'linked', disposition: 'rebalance',
+      cause: 'Direct-ship orders whose sales and purchase legs have not offset. Confirm both legs posted and compare their costs, then compare against the prior period to tell a pair that clears from one that is stuck.',
+      desc: 'A direct-ship order (transship) — the sales order and its linked purchase order ship straight to the customer, and the two legs haven\'t fully offset yet.',
+      action: 'Confirm both legs posted and compare the purchase cost against the sales relief. The pair nets once both land in the same period at the same cost. Why a pair persists instead of clearing is not yet established, so do not change anything upstream first. Compare the same orders against the prior period, and trace whichever leg is short using its batch number.',
+      finding: {
+        flag: 'Leg pairing',
+        mech: 'Direct-ship orders whose sales and purchase legs have not offset.',
+        checked: [
+          'Sales leg posted. Confirmed.',
+          'Purchase leg: check whether it posted, and at what cost.',
+          'DMAAI routings on these documents resolve correctly. Mapping ruled out.'
+        ],
+        found: [
+          'The two legs have not met, so they do not net.',
+          'Cause not confirmed. Most likely the legs landed in different periods, which clears on its own.',
+          'Second possibility: the purchase cost and the sales relief differ, which does not clear.',
+          'To tell them apart: compare the purchase cost against the sales relief, and compare the same orders against the prior period.'
+        ],
+        fix: [
+          'Confirm both legs posted and compare their costs.',
+          'Where a leg is short, trace it using the batch number on this row.',
+          'Re-check next period. A pair still open after both legs posted is a cost difference, not timing.'
+        ]
+      }
+    },
+    // ---- Terminal — the unclassified residual, split by transaction type -----
+    'T-SALES': {
+      title: 'Unclassified — Sales', kind: 'review', tier: 'terminal', disposition: 'triage',
+      cause: 'Sales documents where both sides posted and disagree. No known pattern fits, so the cause is not identified yet. Take the largest documents first and compare the item-ledger detail against the GL amount. Check the order line type before chasing a GL-only row.',
+      desc: 'Sales documents where both sides posted and disagree, and no known pattern fits. The cause is undetermined, not absent.',
+      action: 'Take the largest documents first and compare the item-ledger detail, quantity times unit cost, against the GL amount for the same document and account. Read the order line type on any GL-only row before chasing it. Whatever the comparison names, fix it at the source and re-run this company and period.',
+      finding: {
+        triage: true,
+        flag: 'Cause not yet identified',
+        mech: 'Sales documents where both sides posted and disagree, and no known pattern fits.',
+        checked: [
+          'Not a transfer, direct ship or intercompany order. Ruled out.',
+          'Not a clean account or period offset. Ruled out.',
+          'No duplicate-sales or voucher flag on these rows. Ruled out.'
+        ],
+        found: [
+          'Cause not identified. I have not pinned it to one mechanism yet.',
+          'Next: take the largest documents first and compare the item-ledger detail, quantity times unit cost, against the GL amount for the same document and account.',
+          'Read the order line type on any GL-only row. A type-N non-stock line posts to the GL and moves no inventory, which names the cause but still leaves a correction to make — check which account the GL leg landed on.'
+        ],
+        fix: ['Whatever the comparison names, fix it at the source and re-run this company and period. A document that comes back was not fixed.']
+      }
+    },
+    'T-PURCH': {
+      title: 'Unclassified — Purchasing', kind: 'review', tier: 'terminal', disposition: 'triage',
+      cause: 'Purchasing documents where both sides posted and disagree. No known pattern fits, so the cause is not identified yet. Take the largest documents first, compare the receipt cost against the voucher cost, then the item-ledger detail against the GL amount.',
+      desc: 'Purchasing documents where both sides posted and disagree, and no known pattern fits. The cause is undetermined, not absent.',
+      action: 'Compare the receipt cost against the voucher cost — a landed-cost or price difference posts to the GL with no matching inventory move. Then compare the item-ledger detail against the GL amount for the same document and account. Whatever the comparison names, fix it at the source and re-run this company and period.',
+      finding: {
+        triage: true,
+        flag: 'Cause not yet identified',
+        mech: 'Purchasing documents where both sides posted and disagree, and no known pattern fits.',
+        checked: [
+          'Not a transfer, direct ship or intercompany order. Ruled out.',
+          'Not a clean account or period offset. Ruled out.',
+          'No A/P voucher on an inventory account in this set. Ruled out.'
+        ],
+        found: [
+          'Cause not identified. I have not pinned it to one mechanism yet.',
+          'Next: compare the receipt cost against the voucher cost. A landed-cost or price difference posts to the GL with no matching inventory move.',
+          'Then compare the item-ledger detail against the GL amount for the same document and account.'
+        ],
+        fix: ['Whatever the comparison names, fix it at the source and re-run this company and period. A document that comes back was not fixed.']
+      }
+    },
+    'T-MFG': {
+      title: 'Unclassified — Manufacturing', kind: 'review', tier: 'terminal', disposition: 'triage',
+      cause: 'Manufacturing documents where both sides disagree. No known pattern fits, so the cause is not identified yet. Take the largest documents first and match by work order, not document number. Check for a cost change that never reached the GL as a WIP revaluation.',
+      desc: 'Manufacturing documents where both sides disagree, and no known pattern fits. The cause is undetermined, not absent.',
+      action: 'Match item ledger to GL by work order, not document number — manufacturing accounting assigns its own GL document number. Check for a standard-cost change that landed on the item ledger without the matching WIP revaluation in the GL. A batch number means the row was processed; it does not prove the GL entry exists, so confirm the entry rather than assuming it.',
+      finding: {
+        triage: true,
+        flag: 'Cause not yet identified',
+        mech: 'Manufacturing documents where both sides disagree, and no known pattern fits.',
+        checked: [
+          'Not make-to-order. Ruled out.',
+          'Not a clean account or period offset. Ruled out.',
+          'Not a completion missing from the GL. Ruled out.'
+        ],
+        found: [
+          'Cause not identified. I have not pinned it to one mechanism yet.',
+          'Most likely a cost-basis difference: a standard-cost change landed on the item ledger without the matching WIP revaluation in the GL.',
+          'Next: match item ledger to GL by work order, not document number. Manufacturing accounting assigns its own GL document number.',
+          'A batch number means manufacturing accounting processed the row. It does not prove the GL entry exists, so confirm the entry rather than assuming it.'
+        ],
+        fix: ['Whatever the comparison names, fix it at the source and re-run this company and period. A document that comes back was not fixed.']
+      }
+    },
+    'T-INV': {
+      title: 'Unclassified — Inventory', kind: 'review', tier: 'terminal', disposition: 'triage',
+      cause: 'Inventory documents where both sides posted and disagree. No known pattern fits, so the cause is not identified yet. Take the largest documents first and compare the item-ledger detail against the GL amount, then compare the item’s branch GL class against its location GL class.',
+      desc: 'Inventory documents where both sides posted and disagree, and no known pattern fits. The cause is undetermined, not absent.',
+      action: 'Compare the item-ledger detail against the GL amount for the same document and account. Then compare the item’s branch GL class against its location GL class — a split only misroutes manufacturing moves, so it is only in play when work-order documents are in scope. Whatever the comparison names, fix it at the source and re-run this company and period.',
+      finding: {
+        triage: true,
+        flag: 'Cause not yet identified',
+        mech: 'Inventory documents where both sides posted and disagree, and no known pattern fits.',
+        checked: [
+          'Not a one-sided location transfer. Ruled out.',
+          'Not a clean account or period offset. Ruled out.'
+        ],
+        found: [
+          'Cause not identified. I have not pinned it to one mechanism yet.',
+          'Next: compare the item-ledger detail against the GL amount for the same document and account.',
+          'Then compare the item’s branch GL class against its location GL class. A split only misroutes manufacturing moves, so it is only in play when work-order documents are in scope.'
+        ],
+        fix: ['Whatever the comparison names, fix it at the source and re-run this company and period. A document that comes back was not fixed.']
+      }
+    }
   };
-  // Server-set SubType (lower-cased, trimmed) -> card code. Cards 1-10.
+
+  // Server-set SubType (lower-cased, trimmed) -> card code.
   var SUBTYPE = {
-    'make to order':           'MTO',
-    'intercompany':            'ICO',
-    'transfers':               'TRF',
-    'direct ship':             'DS',
-    'accounts':                'ACCT',
-    'periods':                 'PER',
-    'vouchers':                'VCHR',
-    'duplicate sales':         'DUP',
-    'transfer integrity':      'TXI',
+    'make to order':            'MTO',
+    'intercompany':             'ICO',
+    'transfers':                'TRF',
+    'direct ship':              'DS',
+    'accounts':                 'ACCT',
+    'periods':                  'PER',
+    'vouchers':                 'VCHR',
+    'duplicate sales':          'DUP',
+    'transfer integrity':       'TXI',
     'completion not journaled': 'CNJ',
-    'offsetting entries':      'OFF',
-    'non-stock sales lines':   'NSL',
+    'offsetting entries':       'OFF',
+    'non-stock sales lines':    'NSL',
     // DB beta.74 / beta.75 — the five claims that took the manufacturing residual to
     // zero on every demo database. Keys are the server SubType lower-cased and trimmed.
-    'non-stock charge lines':  'NCL',
-    'sales not journaled':     'SNJ',
-    'cross-batch completion':  'XBC',
-    'mfg cost mismatch':       'MCM',
-    'dmaai net zero':          'NZR'
+    'non-stock charge lines':   'NCL',
+    'sales not journaled':      'SNJ',
+    'cross-batch completion':   'XBC',
+    'mfg cost mismatch':        'MCM',
+    'dmaai net zero':           'NZR'
   };
   // No subtype -> terminal card by transaction Type. Anything else (including
   // 'Inventory' and an unrecognized type) falls to T-INV.
   var TYPE = { 'sales': 'T-SALES', 'purchasing': 'T-PURCH', 'mfg': 'T-MFG' };
+
+  // ---- GRID: Details-only shapes for rows the server left without a SubType --
+  // These never become Home cards (those rows roll into the T-* terminals by
+  // transaction type), so they carry no `cause`. One name each — the scope band,
+  // the pattern card and the work panel all read `title`.
+  var GRID = {
+    'GL-ONLY': {
+      title: 'GL-Only Entry (No Cardex)', disposition: 'rebalance',
+      desc: 'An F0911 entry sits on an inventory account with no F4111 counterpart. Read the order line type first: a non-stock line (type N, Inventory Interface N) posts to the GL and moves no inventory, so no cardex row exists. That names the cause; the value still sits on an inventory account it does not belong on, so a correction is required. Otherwise the value was keyed straight onto an inventory account, or a return went through a correction batch (IB rather than I) that posted the GL without writing a cardex record.',
+      action: 'Read the LineTy column, then read which account the GL leg landed on. Where a non-stock line is landing on inventory, correct the DMAAI for that non-stock line type so the cost posts to its own non-inventory account — one DMAAI fix stops the whole recurring population instead of document-by-document work. The value already posted stays in the inventory account until the accountant reclassifies it out. Where an inventory account is being keyed directly, restrict who can post to inventory accounts on the entry program, or route those entries through an approval step, so the next one cannot be keyed the same way.'
+    },
+    'CDX-ONLY': {
+      title: 'Cardex-Only Entry (No GL)', disposition: 'rebalance',
+      desc: 'An F4111 movement with no F0911 posting on the same account. The batch is usually still open — the cardex writes at transaction time and the GL entry only exists once the batch posts. Where the batch already shows posted and one line is still missing, that single line failed the GL interface while its siblings in the same batch went through.',
+      action: 'Post the open batch. If the post errors, the batch is waiting in the Work Center. Where the batch already shows posted, search the GL for the document across all accounts, not just inventory: a misrouted entry looks identical to a missing one from this side. If open batches keep appearing, confirm the post is scheduled for the batch types carrying inventory activity, and that approval is automatic on the system-generated types. Manual approval is what leaves them sitting.'
+    },
+    // DT=BV is a standard-cost revaluation; DT=IB with no GL leg is a balance
+    // adjustment. ONE name has to cover both, so it names the mechanism they
+    // share rather than either specific trigger (this code carried two different
+    // names across two maps until UI-63).
+    'STD-COST': {
+      title: 'Cardex Revaluation', disposition: 'self',
+      desc: 'An F4111 cardex revaluation from a standard cost change (DT=BV), or an unposted cardex-only balance adjustment (DT=IB with no GL leg). The item ledger revalued and the GL side has not landed yet.',
+      action: 'Confirm the matching GL revaluation posts in the next batch — this reconciles itself when it does. A revaluation still cardex-only after the next close is not timing: chase the unposted batch at the source.'
+    },
+    'OTHER': {
+      title: 'Other Variance', disposition: 'triage',
+      desc: 'Cardex and GL both posted but disagree, and the variance doesn\'t fit a narrower grid-level pattern. The cause is undetermined, not absent.',
+      action: 'Take the largest documents first. Export a representative row: the analyzer reads the line detail and names a narrower pattern. Search the GL for the document across all accounts. On work-order documents, match by work order rather than document number. Compare against the prior period to separate a gap that self-clears from one that persists. Do not adopt a preventive change before the cause is named.'
+    }
+  };
+
+  // ---- SIGNAL: pseudo-codes the Details finding engine selects instead of the
+  // card. Row-truth signals are definitive from the rows themselves, so they
+  // pre-empt the card mechanism (the "check duplicate sales first" rule);
+  // UNSCOPED covers a grid the analyst reached without drilling a card.
+  var SIGNAL = {
+    'NON-STOCK': {
+      title: 'Non-stock on inventory account',
+      finding: {
+        flag: 'Non-stock on inventory account',
+        mech: 'Non-stock lines posted their GL value to an inventory account.',
+        checked: [
+          'Order line type on these rows: N, Non-Stock. Inventory Interface N on the line-type constant. Confirmed.',
+          'Item-ledger side: nothing. A non-stock line moves no inventory, so no cardex row exists.',
+          'Account the GL leg posted to: the inventory account the cardex uses. Confirmed.',
+          'Non-stock extended cost on those lines against the GL amount: it accounts for the variance exactly.'
+        ],
+        found: [
+          'The non-stock cost is sitting in an inventory account. A non-stock item holds no inventory, so that value does not belong there.',
+          'The tie between the non-stock cost and the GL amount identifies the cause. It does not clear the row — a correction is required.',
+          'The DMAAI directing this non-stock line type is sending non-stock cost to the inventory account, so every order carrying such a line repeats it.',
+          'Until it is corrected, the GL inventory balance is overstated against the item ledger by exactly the non-stock total.'
+        ],
+        fix: [
+          'Correct the DMAAI for this non-stock line type so the cost lands on its own non-inventory account.',
+          'One DMAAI fix stops the whole population. Do not work these document by document.',
+          'The value already posted stays in the inventory account until the accountant reclassifies it out. That reclass is the accountant’s lane.',
+          'Put the next order carrying a non-stock line through and confirm its value lands off inventory.'
+        ]
+      }
+    },
+    'DMAAI-MIS': {
+      title: 'DMAAI mismatch',
+      finding: {
+        dmaai: true,
+        flag: 'DMAAI mismatch',
+        mech: '',    // set per-render from the mismatch count
+        found: [
+          'The inventory AAI for these DMAAIs points somewhere other than the item-ledger model account.',
+          'Every document on the DMAAI relieves inventory at the wrong account, so this repeats until the AAI is aligned.'
+        ],
+        fix: [
+          'Align the inventory AAI for the flagged DMAAIs so it resolves to the model account.',
+          'Re-run this company and period. Every posted account in the DMAAI table should then match its model account.',
+          'Documents already posted keep the old account. They need their own correction.'
+        ]
+      }
+    },
+    'UNSCOPED': {
+      title: 'Cause not yet identified',
+      finding: {
+        triage: true,
+        flag: 'Cause not yet identified',
+        mech: 'Both sides posted on these documents and disagree. The view is not scoped to one card, so no single mechanism covers it.',
+        found: [
+          'Cause not identified. This view mixes several mechanisms.',
+          'Next: scope the view to one card. Each card carries its own findings and corrective action.',
+          'Or take the largest documents first and compare the item-ledger detail against the GL amount for the same document and account.'
+        ],
+        fix: ['Whatever the comparison names, fix it at the source and re-run this company and period. A document that comes back was not fixed.']
+      }
+    }
+  };
 
   // Codes are non-numeric string keys, so Object.keys returns them in insertion
   // order — the ORDER array and META can never disagree.
   var ORDER = Object.keys(META);
   var TITLE = {};
   ORDER.forEach(function (c) { TITLE[c] = META[c].title; });
+  Object.keys(GRID).forEach(function (c) { TITLE[c] = GRID[c].title; });
 
+  // ---- Drift alarms ---------------------------------------------------------
+  // Every miss below used to render a plausible-looking generic string. Warn
+  // once per distinct key so a real drift is noisy without spamming per row.
+  var _warned = {};
+  function warnOnce(key, msg) {
+    if (_warned[key]) return;
+    _warned[key] = 1;
+    console.warn('[txv] ' + msg);
+  }
+
+  function normCode(v) { return String(v == null ? '' : v).trim().toUpperCase(); }
+  function entry(v) {
+    var c = normCode(v);
+    return META[c] || GRID[c] || SIGNAL[c] || null;
+  }
+  // info(code) — the copy bundle every surface reads. A missing code is a drift,
+  // not a display case: warn and hand back a shape the caller can render.
+  function info(v) {
+    var c = normCode(v), e = entry(c);
+    if (!e) {
+      warnOnce('info:' + c, 'no catalog entry for code "' + c + '" — add one to META / GRID / SIGNAL in config.js. Surfaces will show the bare code.');
+      return { title: c, desc: '', action: '', disposition: 'triage' };
+    }
+    if (!e.desc && !e.action && !e.finding) {
+      warnOnce('copy:' + c, 'catalog entry "' + c + '" carries no desc / action / finding — the analyst gets a bare title.');
+    }
+    return e;
+  }
+  function cause(v) {
+    var c = normCode(v), e = entry(c);
+    if (e && e.cause) return e.cause;
+    if (e && (e.desc || e.action)) return [e.desc, e.action].filter(Boolean).join(' ');
+    warnOnce('cause:' + c, 'no `cause` copy for card "' + c + '" — the card falls back to a generic line. Add `cause` to its META entry in config.js.');
+    return '';
+  }
+  function finding(v) {
+    var c = normCode(v), e = entry(c);
+    if (e && e.finding) return e.finding;
+    if (e) warnOnce('finding:' + c, 'no `finding` block for code "' + c + '" — the findings panel cannot draft an investigation report for it. Add `finding` to its catalog entry in config.js.');
+    return null;
+  }
+  function isCode(v) { return !!(META[normCode(v)]); }
+  function title(v) { var e = entry(v); return e ? e.title : ''; }
+
+  // ---- Classifiers ---------------------------------------------------------
+  // subtypeCode — the ONE place a server SubType becomes a card code. An
+  // unmapped non-empty SubType is the failure that shipped twice: the row is
+  // correctly classified by the server and lands under the wrong card because
+  // the client never learned the name. It warns now.
+  function subtypeCode(r) {
+    var st = String((r && r.SubType) == null ? '' : r.SubType).trim().toLowerCase();
+    if (!st) return '';
+    if (Object.prototype.hasOwnProperty.call(SUBTYPE, st)) return SUBTYPE[st];
+    warnOnce('subtype:' + st, 'server SubType "' + st + '" has no card code — rows carrying it are falling back to a generic classification. Add it to SUBTYPE in config.js.');
+    return '';
+  }
+  // Home: SubType -> card, else transaction Type -> a T-* terminal. Every row
+  // lands in exactly one code, so the cards partition the residual.
   function code(r) {
     r = r || {};
-    var st = String(r.SubType == null ? '' : r.SubType).trim().toLowerCase();
-    if (Object.prototype.hasOwnProperty.call(SUBTYPE, st)) return SUBTYPE[st];
+    var c = subtypeCode(r);
+    if (c) return c;
     var ty = String(r.Type == null ? '' : r.Type).trim().toLowerCase();
     return Object.prototype.hasOwnProperty.call(TYPE, ty) ? TYPE[ty] : 'T-INV';
   }
-  // Normalize a ?card= value the same way both surfaces emit it, then whitelist.
-  function normCode(v) { return String(v == null ? '' : v).trim().toUpperCase(); }
-  function isCode(v) { return Object.prototype.hasOwnProperty.call(META, normCode(v)); }
-  function title(v) { var m = META[normCode(v)]; return m ? m.title : ''; }
+  // Details: the duplicate-relief integrity flag (actionable root cause, wins
+  // over SubType), then SubType, then the cardex/GL grid shape. Finer than
+  // code() only for rows the server left without a SubType.
+  function gridCode(r) {
+    r = r || {};
+    var eps = 0.01;
+    if (String(r.Comment == null ? '' : r.Comment).trim().toLowerCase() === 'check duplicate sales integrity') return 'DUP';
+    var c = subtypeCode(r);
+    if (c) return c;
+    var ot = String(r.OT == null ? '' : r.OT).trim().toUpperCase();
+    var dt = String(r.DT == null ? '' : r.DT).trim().toUpperCase();
+    var cardex = Number(r.CardexAmount) || 0;
+    var ledger = Number(r.LedgerAmount) || 0;
+    if (ot === 'OP' && dt === 'PV') return 'VCHR';
+    if (ot === 'WO' && (dt === 'IM' || dt === 'IC' || dt === 'IH')) return 'MCM';
+    if (dt === 'BV' || (dt === 'IB' && Math.abs(ledger) < eps)) return 'STD-COST';
+    if (Math.abs(cardex) < eps && Math.abs(ledger) >= eps) return 'GL-ONLY';
+    if (Math.abs(ledger) < eps && Math.abs(cardex) >= eps) return 'CDX-ONLY';
+    return 'OTHER';
+  }
 
   window.RRV8.txv = {
-    META: META, ORDER: ORDER, TITLE: TITLE, SUBTYPE: SUBTYPE,
-    code: code, isCode: isCode, normCode: normCode, title: title
+    META: META, GRID: GRID, SIGNAL: SIGNAL, ORDER: ORDER, TITLE: TITLE, SUBTYPE: SUBTYPE,
+    code: code, gridCode: gridCode, isCode: isCode, normCode: normCode, title: title,
+    info: info, cause: cause, finding: finding
   };
 })();
 

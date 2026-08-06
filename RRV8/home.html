@@ -7,8 +7,8 @@
 <!--
   RRV8 Home — the post-login command center every role lands on.
 
-  Phase 1 of the access-flow milestone (see
-  docs/plans/home-command-center-mockup.html for the design mock).
+  Phase 1 of the access-flow milestone (the original layout study is
+  kept at docs/plans/home-command-center-mockup.html).
   This page is ADDITIVE: it does not touch the working-page sidebar.
   login.html routes here after sign-in; the page reads the JWT caps
   the same way sidebar.js does and shapes itself per role.
@@ -23,7 +23,9 @@
 
   Deliberately NOT here yet (no wired backend — would be theater):
     - Restart Service (no V8 endpoint exists)
-    - out-of-balance account count (no endpoint; see API.md spec stub)
+    - out-of-balance account count (no endpoint returns it; API.md
+      "Out-of-balance account count" holds the request shape for when
+      one lands, and this page already branches on the richer field)
     - In Transit / PO Receipts module pages (don't exist in V8 yet —
       surfaced honestly as "not in V8 yet" rather than mis-landing)
 -->
@@ -2556,9 +2558,9 @@
     </div>
   </section>
 
-  <!-- Accountant · Perpetual palette — per-ITEM as-of detail. Ports from
-       inventory-asof.html (Ask band + GL-class contributor + item detail); stub
-       for now. renderPerpetualPalette(). -->
+  <!-- Accountant · Perpetual palette — per-ITEM as-of detail, ported from
+       inventory-asof.html (Ask band + GL-class contributor + item detail).
+       Painted by renderPerpetualPalette(). -->
   <section class="acct-panels" id="acctPerpetual" hidden aria-label="On Hand">
     <div class="acct-snapshot">
       <div class="acct-snap-headline">
@@ -4844,16 +4846,14 @@
     loadDmaaisNow({ auto: true });
   }
 
-  // ---- Purge old data (MOCK) ----
+  // ---- Purge old data ----
   // Moving the start date forward sets the period cutoff for every company;
-  // the next server-side refresh purges everything before it. MOCK for now:
-  // current start date + DB file size are placeholders, and confirming just
-  // toasts. Real wiring needs an agent read (min period start across the
-  // companies + database file size) + a write that updates all the cutoffs.
-  // Reads GET /inventory/integrity/purge-info (current cutoff, DB file size,
-  // valid period-beginning dates). Setting a new (later) cutoff POSTs
-  // purge-cutoff and STAGES it — the next refresh purges server-side, so it's
-  // reversible by Restore (POST the prior cutoff) until that refresh runs.
+  // the next server-side refresh purges everything before it. Reads GET
+  // /inventory/integrity/purge-info for the current cutoff, the database file
+  // size and the valid period-beginning dates. Setting a new (later) cutoff
+  // POSTs purge-cutoff and STAGES it — the next refresh purges server-side, so
+  // it stays reversible by Restore (POST the prior cutoff) until that refresh
+  // runs.
   var _purgeInfo = null, _purgeOriginal = null, _purgeStaged = false, _purgeBusy = false;
   function fmtDateLong(iso) {
     if (!iso) return '—';
@@ -8139,58 +8139,19 @@
     var c = _txvClassifyCode(r), m = _TXV_CODE_META[c] || {};
     return { code: c, name: m.title || 'Other Variance', action: m.kind || 'triage' };
   }
-  // Authoritative pattern copy — what happened, why, and the change that stops it
-  // recurring — MIRRORED from PATTERN_INFO in inventory-transactions.html (the page
-  // this classifier was ported from). Keep the two in sync: that page is the source
-  // of truth for the JDE-correct diagnosis. _txvCause() joins desc + action for the
-  // card body. The finding travels to the Audit Center, so it must read as evidence
-  // a third party relies on months later — mechanism, cause, corrective action. It
-  // must NOT discuss the journal entry; that is the accountant's role. And it must
-  // never invent a preventive action: where no grounded cause exists, say so and
-  // give the research path.
-  var _TXV_PATTERN = {
-    'ACCT': { desc: 'The GL posted these documents to a different account than the DMAAI routes to. The item ledger used the right one.',
-              action: 'Correct the DMAAI for this combination. Turn off account entry and override on the version in use. On sales documents, check R42800 PO 5, Business Unit Source.' },
-    'PER':  { desc: 'The item ledger and the GL recorded these documents in different months.',
-              action: 'Set GL Date Source to follow the transaction date, and schedule the batch runs to finish before the period closes.' },
-    'VCHR': { desc: 'A/P vouchers posted to an inventory account instead of the A/P variance account.',
-              action: 'Correct the DMAAI 4330 route, then restrict who can override the GL account on the voucher-match version.' },
-    'DUP':  { desc: 'The same order line was relieved from inventory twice. The GL booked it once.',
-              action: 'Reverse the duplicate relief at the source. Then restrict the statuses at which ship-confirm is allowed, or recover the Sales Update workfile before any re-run.' },
-    'TXI':  { desc: 'Location transfers relieved inventory value the GL never recorded. The receipt leg carried a unit cost and never extended it.',
-              action: 'Correct the cost-component setup for these cost-level-3 items, then restore the missing value with a dollars-only adjustment. Confirm each document on both sides first; this card is already the full population of one-sided reliefs.' },
-    'CNJ':  { desc: 'Work-order completions received finished goods into inventory with no GL entry. The material issues for the same orders did post. The pattern is a run that journals most of its completions and drops a slice, so open the card for the recurrence across your loaded periods.',
-              action: 'Have whoever runs R31802A read the error report that run produces, then take it to Oracle through IT as an undocumented R31802A condition, not as KB 420628.' },
-    'XBC':  { desc: 'Completions journaled in a later batch than the one stamped on the item ledger. Matched by work order rather than by batch, these tie exactly — a work order issues material over weeks in separate batches and completes later in its own.',
-              action: 'Confirm one document against the GL for the same work order with the batch ignored, then close the card. No journal entry and no source fix; posting one would create the shortfall it looks like.' },
-    'MCM':  { desc: 'A GL completion exists for the work order on the same account and the amount disagrees with the item ledger. The cost basis behind the journal is not the one behind the ledger row.',
-              action: 'Order the item and branch by the ledger sequence to find the cost step — the item ledger is the cost history, and an adjustment journals as a zero-quantity row carrying the delta. Prevention is sequencing: cost the item before it is issued.' },
-    'NZR':  { desc: 'Raw-material relief and finished-goods receipt resolve to the same account, so both legs of every work order cancel there and the movement never happens in the GL. Work in process is unconfigured, so there is no offsetting leg.',
-              action: 'Split the account instructions into three distinct accounts. Judge them by their instruction, not their description. This reproduces every period until the setup changes; no journal entry ends it.' },
-    'SNJ':  { desc: 'Inventory was relieved on the item ledger with a batch stamped, and the GL holds nothing for the document under any type. Absent rather than misrouted or misdated.',
-              action: 'Read the error report from the run that stamped these documents. The accountant books the missing value; a document that returns next period was not fixed.' },
-    'NCL':  { desc: 'Every line on the order is non-stock, so the GL posts and inventory never moves. GL-only is correct processing here, not a gap.',
-              action: 'Confirm the line types on one order. If these should not reach an inventory account at all, the lever is the GL class on the line, not the non-stock account instruction.' },
-    'MTO':  { desc: 'Make-to-order work orders. Not one variance type: expected standard-cost variances, cost-basis differences on completions, and completions with no GL entry.',
-              action: 'Split by shape and route each slice separately. Take the both-differ rows by account, largest account first, with cost accounting: the value concentrates on very few accounts, and the old cost-basis explanation does not fit the gap profile. GL-only rows need no action. The missing completions are a run-level fault and belong in the completion-gap workflow.' },
-    'ICO':  { desc: 'Intercompany orders whose selling and buying legs have not offset.',
-              action: 'Confirm the matching leg posted in the counterpart company. Compare against the prior period to tell a pair that clears from one that is stuck.' },
-    'TRF':  { desc: 'Inter-branch transfers whose shipping and receiving legs have not met. A duplicated item-ledger relief also lands here.',
-              action: 'Correct the receiving cost where it differs. Where the relief is duplicated, recover the Sales Update workfile before any re-run. Confirm both plants sit in one company.' },
-    'DS':   { desc: 'Direct-ship orders whose sales and purchase legs have not offset.',
-              action: 'Confirm both legs posted and compare their costs. Compare against the prior period to tell a pair that clears from one that is stuck.' },
-    'T-SALES': { desc: 'Sales documents where both sides posted and disagree. No known pattern fits, so the cause is not identified yet.',
-                 action: 'Take the largest documents first and compare the item-ledger detail against the GL amount. Check the order line type before chasing a GL-only row.' },
-    'T-PURCH': { desc: 'Purchasing documents where both sides posted and disagree. No known pattern fits, so the cause is not identified yet.',
-                 action: 'Take the largest documents first. Compare the receipt cost against the voucher cost, then the item-ledger detail against the GL amount.' },
-    'T-MFG':   { desc: 'Manufacturing documents where both sides disagree. No known pattern fits, so the cause is not identified yet.',
-                 action: 'Take the largest documents first and match by work order, not document number. Check for a cost change that never reached the GL as a WIP revaluation.' },
-    'T-INV':   { desc: 'Inventory documents where both sides posted and disagree. No known pattern fits, so the cause is not identified yet.',
-                 action: 'Take the largest documents first and compare the item-ledger detail against the GL amount. Then compare the item’s branch GL class against its location GL class.' }
-  };
+  // Card copy — what happened, why, and the change that stops it recurring — comes
+  // from the ONE catalog in config.js (RRV8.txv). This file used to hold its own
+  // _TXV_PATTERN copy of it, mirrored by hand from PATTERN_INFO on the Details
+  // page, with CODE_EXPLAIN and KIND_EXPLAIN layered on top: four maps of the same
+  // strings across two files. See the RRV8.txv header for why they are gone.
+  //
+  // The finding travels to the Audit Center, so it must read as evidence a third
+  // party relies on months later — mechanism, cause, corrective action. It must NOT
+  // discuss the journal entry; that is the accountant's role. And it must never
+  // invent a preventive action: where no grounded cause exists, say so and give the
+  // research path. Edit the copy in config.js, not here.
   function _txvCause(code) {
-    var p = _TXV_PATTERN[code]; if (!p) return '';
-    return p.desc + ' ' + p.action;
+    return (window.RRV8 && RRV8.txv) ? RRV8.txv.cause(code) : '';
   }
 
   // UI-26 recurrence / auto-reopen (DERIVED, not stored): a category resolved in a
@@ -8499,37 +8460,15 @@
       // New kinds reuse existing CSS accents; the chip label is set per kind.
       var KIND_CSS = { rebalance: 'rebalance', self: 'self', mto: 'mto', ico: 'expense', linked: 'triage', review: 'net' };
       var KIND_TAG = { rebalance: 'Reclassify', self: 'Self-corrects', mto: 'Make to order', ico: 'Intercompany', linked: 'Linked pair', review: 'Review' };
-      // Opening card text — a plain description of the PROCESS this pattern covers, NOT a
-      // diagnosis (owner 2026-07-13). The diagnosis replaces it only after the analyst
-      // drills in and we have a result. PLACEHOLDER copy — SME to refine per the pattern
-      // catalog (one source feeds classifier + AI grounding + this text).
-      var KIND_EXPLAIN = {
-        mto:       'Make-to-Order items are built and costed through work orders, so inventory and the GL update at different steps as the order moves from build to ship. The open transaction variance on those orders collects here — drill in to pinpoint the driver.',
-        ico:       'Intercompany transactions post to two companies at once. Variance collects here when the sending and receiving sides land in different accounts or periods — drill in to pinpoint the driver.',
-        rebalance: 'These rows posted to the cardex or the GL but not both — usually a reclassification between accounts rather than a true value gap. Drill in to confirm the accounts involved.',
-        self:      'These transactions carry an offsetting entry that clears them as it posts — typically a timing difference that resolves on its own. Drill in if the offset has not landed.',
-        linked:    'These are matched transaction pairs whose two sides posted to different places. Work them together — drill in to see both legs.',
-        review:    'These transactions do not fit a known pattern yet. Drill in to see what is driving the variance.'
-      };
-      // Some patterns need a code-specific explanation (finer than the kind). Transfer
-      // Orders is one — the duplicate-cardex quirk is specific to Sales Update (R42800)
-      // abending on ST/OT orders.
-      // PRECEDENCE (UI-62): CODE_EXPLAIN, then _txvCause(code) (the per-code
-      // desc + action pair), and only then KIND_EXPLAIN. KIND_EXPLAIN used to sit
-      // ahead of _txvCause, and because every card has a `kind` it ALWAYS resolved —
-      // so _txvCause was dead code and every card outside CODE_EXPLAIN's six keys
-      // rendered the kind's generic line. The `review` kind's line reads "these
-      // transactions do not fit a known pattern yet", which is flatly wrong on
-      // NCL / SNJ / XBC / MCM / NZR: those cards name a specific, confirmed
-      // mechanism. Code-specific copy wins; the kind line is the last resort.
-      var CODE_EXPLAIN = {
-        MTO:  'Make-to-order work orders, grouped with their customer sales orders. Not one variance type: the residual splits into expected standard-cost variances, completions where both sides carry value and disagree, and completions with no GL entry at all. The three need different work, and the middle slice no longer has a confirmed cause. Drill in for the counts and dollars per shape.',
-        VCHR: 'A/P vouchers posted to an inventory account instead of the A/P variance account. DMAAI 4330 is routing voucher variances into inventory. Correcting that route stops it; restricting account overrides on the voucher-match version keeps it corrected.',
-        DUP:  'The same order line was relieved from inventory twice while the GL booked it once, so the extra item-ledger line is the variance. Either the line was ship-confirmed again after it closed, or Sales Update abended and the re-run wrote the relief a second time.',
-        TXI:  'Location transfers relieved inventory value the GL never recorded: a leg carried a unit cost but never extended it, so a move that should be value-neutral destroyed inventory value. A zero extended cost on a transfer leg is common and harmless on its own; it is the unit-cost-without-extension combination that lands a document here. It arrives in bursts rather than every period, so read the periods either side before calling the setup still wrong.',
-        CNJ:  'Work-order completions received finished goods into inventory with no GL entry for them, while the material issues for the same orders did post. Manufacturing accounting stamped the item ledger and wrote no entry. The pattern is a run that journals most of its completions and drops a slice, at a severity that moves from run to run; the card states the recurrence across your loaded periods. No Oracle Support article matches the shape. The fault is in the run, not these orders.',
-        TRF: 'Inter-branch transfers whose shipping and receiving legs have not met — different periods, or the receiving branch carrying the shipping cost. A second case lands here too: Sales Update abends and the re-run duplicates the item-ledger relief while the GL posts once.'
-      };
+      // Card body copy lives in the ONE catalog (RRV8.txv in config.js) as each
+      // code's `cause`. This file used to hold two more layers of it — KIND_EXPLAIN
+      // (per kind) and CODE_EXPLAIN (per code) — and the precedence bug they caused
+      // is exactly why they are gone. KIND_EXPLAIN sat AHEAD of the per-code copy,
+      // and because every card has a `kind` it always resolved: the `review` kind's
+      // line ("these transactions do not fit a known pattern yet") rendered on
+      // NCL / SNJ / XBC / MCM / NZR, cards that each name a confirmed mechanism
+      // (UI-62). One layer now, and a code with no `cause` warns in the console
+      // instead of quietly borrowing a generic sentence (UI-63).
 
       // One card per non-empty bucket, in code order, grouped into the four tiers.
       // amount = bucket NET, so Σ(cards) = netTotal. A card shows whenever it has rows —
@@ -8590,7 +8529,7 @@
           code: code, kind: m.kind, title: m.title, amount: b.net, rec: rec,
           rowCount: b.rows, cardex: b.cardex, ledger: b.ledger, sawAmt: b.sawAmt, accts: _accts,
           meta: _metaBits.join(' · '),
-          cause: savedFinding || CODE_EXPLAIN[code] || _txvCause(code) || KIND_EXPLAIN[m.kind] || 'Drill in to see what is driving this variance.',
+          cause: savedFinding || _txvCause(code) || 'Drill in to see what is driving this variance.',
           isFinding: !!savedFinding,
           href: _txvTxHref(solo, { period: focusP, card: code, expect: b.rows }),
           btn: 'Open in worklist', done: done, recurPrior: recurPrior
@@ -8812,10 +8751,11 @@
         var cs = cardsByTier[t]; if (!cs.length) return '';
         return '<div class="txv-tier"><h3 class="txv-tier-head">' + esc(_TXV_TIER_LABEL[t]) + '</h3>' + cs.map(card).join('') + '</div>';
       }).join('');
-      // Render-time diagnosis DISABLED (owner 2026-07-13): the opening card text is a
-      // plain description of the process (KIND_EXPLAIN), not a diagnosis. _txvRunDiagnoses
-      // is kept for the post-drill update — once the analyst investigates and we have a
-      // result, re-run it to replace the explanation with the mismatch findings.
+      // Render-time diagnosis DISABLED (owner 2026-07-13): the opening card text is the
+      // catalog's `cause` for the code — what this pattern IS, not a diagnosis of these
+      // rows. _txvRunDiagnoses is kept for the post-drill update — once the analyst
+      // investigates and we have a result, re-run it to replace the cause with the
+      // mismatch findings.
       // _txvRunDiagnoses(host);
       // UI-26 resolution-editor wiring — delegated on the persistent host once, so it
       // survives the innerHTML swaps above. Reads company/card/period/amount from the
