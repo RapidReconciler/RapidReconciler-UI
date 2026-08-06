@@ -76,6 +76,37 @@ Two mechanically distinct flows land under this module:
 - **Intercompany billing and settlement.** The receivable, payable and settlement legs route through
   **DMAAI 4400** (document types `IV`, `OB`, `OC`, `OP`).
 
+**There is no intercompany receipt leg, and there never will be. This is line-type configuration, not
+missing data.** Established 2026-08-06 after searching every table that could hold one. The two
+counterpart legs use line types whose `F40205` setup rules out a cardex presence:
+
+| Line type | Description | Inventory interface | GL interface | GL offset |
+|---|---|---|---|---|
+| `IC` (the `SK` sales leg) | Intercompany Non-Stock | **`N`** | `Y` | `NS20` |
+| `D` (the `OK` purchase leg) | Direct Ship Item | **`D`** | `Y` | `IN99` |
+| `S` (ordinary stock, for contrast) | Stock Inventory Item | `Y` | `Y` | `IN99` |
+
+Read that table before concluding anything is missing:
+
+- The `SK` sales leg is **intercompany non-stock with inventory interface `N`**, so it writes to the GL
+  and **never to the item ledger**. Every `SK` row you see in the compare arrives from the **GL side
+  only**. On one specimen database `F4111` holds 284 `SI` rows and **zero** `SK` rows, which is correct
+  behaviour and not an extract gap.
+- The `OK` purchase leg is **direct ship**, so the goods move from the supplying branch straight to the
+  customer and are never received into the buying company's inventory. All 181 `OK` order lines on that
+  database sit at next status **`999` (closed)** with **quantity received `0` and amount received `0`**
+  against $689,404.01 of extended cost. `F43121` holds no receipt for them, in the RR database or in the
+  JDE source.
+- So the **`SI` originating sales order is the only intercompany leg with a real item-ledger presence.**
+  That is why grouping matters so much here: the group is what pairs the GL-only `SK` leg with the
+  cardex-only `SI` leg so the two can net. An ungrouped `SI` row cannot net against anything and falls to
+  triage carrying its full value.
+
+Consequence for anyone reading `RIntercoXref`: its `porec` / `porectype` columns are **structurally
+unpopulatable** on this configuration (measured 0 of 160), because they are joined from the cardex and
+the receipt does not exist. Do not treat that as a defect to fix, and do not build a pass that depends on
+them.
+
 ### Root cause(s)
 
 - **Counterpart-company leg timing.** The two companies' legs post in different periods, so a
