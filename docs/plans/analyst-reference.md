@@ -53,6 +53,14 @@ population routinely mixes `SK` intercompany lines with plain `SA` lines that be
 Split by order type before drawing any conclusion. On the source records, `F4211.SDSO11` and
 `F4311.PDPS01` set to `3` mark the order as intercompany.
 
+**`SI` is ALWAYS intercompany** (owner ruling 2026-08-06). There is no exception to check for and no
+qualifying condition: an `SI` order is an intercompany order. `SI` is the **originating** sales order,
+`SK` the inter-branch sales leg, `OK` the purchase leg. Do not treat the `SDSO11` = `3` flag as the
+definition of intercompany, only as one way to detect it. The flag is unreliable across databases: on
+one specimen it is blank on all 23,130 sales-order rows while that same database carries 261 `SK`
+orders, and on another it uses values `2` and `4` but never `3`. **The order type is the reliable
+signal; the flag is the convenient one.**
+
 ### Process
 
 One economic transaction, two companies' books. The selling company relieves inventory and recognises
