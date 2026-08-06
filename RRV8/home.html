@@ -1002,8 +1002,25 @@
   /* Distinguish the Transaction Overview summary from the action cards below: tint its
      inner card and make its message box white — the inverse of the action cards (white
      card, gray box) so the two read as different things at a glance. */
-  .txv-overview .wl-card { background: #eef2f9; border-color: #dbe3ef; }
+  .txv-overview .wl-card {
+    background: linear-gradient(180deg, #e3ebf7 0%, #eef2f9 100%);
+    border-color: #b9c8e0;
+    border-left: 4px solid var(--navy);
+    box-shadow: 0 1px 3px rgba(31, 45, 74, .10);
+  }
   .txv-overview .wl-ai { background: var(--bg-card); }
+  /* Lane headings. The three lanes are usp8_txv_classify's own phases and the cards
+     inside each are in the order it claims them, so this heading is telling the analyst
+     WHERE IN THE RUN they are, not just naming a bucket. It carried no styling at all
+     until 2026-08-06 — a bare <h3> — which is why the lane structure did not read.
+     Matches .audit-group-head so the two grouped surfaces look like one system. */
+  .txv-tier + .txv-tier { margin-top: 22px; }
+  .txv-tier-head {
+    font-size: 12px; font-weight: 800; letter-spacing: .03em; text-transform: uppercase;
+    color: var(--text-muted); margin: 0 0 2px; padding-bottom: 6px;
+    border-bottom: 1px solid var(--rule);
+  }
+  .txv-tier-note { font-size: 13.5px; color: var(--text-muted); margin: 6px 0 10px; }
   .wl-fig-clear { color: var(--green); }
   .txv-status-suffix { font-size: 10px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: var(--text-muted); margin-left: 8px; vertical-align: middle; }
   /* Handed-off-this-cycle rollup — how many current-period cards the analyst reviewed
@@ -8127,8 +8144,21 @@
   var _TXV_CODE_META  = (window.RRV8 && RRV8.txv) ? RRV8.txv.META  : {};
   var _TXV_CODE_ORDER = (window.RRV8 && RRV8.txv) ? RRV8.txv.ORDER : [];
   if (!(window.RRV8 && RRV8.txv)) console.error('[txv] card taxonomy missing — config.js did not load; the variance cards cannot render.');
-  var _TXV_TIER_ORDER = ['quick', 'complex', 'linked', 'terminal'];
-  var _TXV_TIER_LABEL = { quick: 'Quick wins', complex: 'Complex transactions', linked: 'Linked pairs', terminal: 'Needs review' };
+  // The lanes ARE the classifier's phases, and the cards inside each lane are in the
+  // order usp8_txv_classify claims them (config.js META order). So this tab reads top
+  // to bottom as the pipeline runs: groups form first and are disposed whole, then the
+  // single-document claims in precedence order, then whatever nothing claimed.
+  // "Quick wins" was retired 2026-08-06 — it held 13 of the 21 cards and nothing about
+  // an account mismatch or a missing completion journal is quick.
+  var _TXV_TIER_ORDER = ['linked', 'single', 'terminal'];
+  var _TXV_TIER_LABEL = { linked: 'Linked transactions', single: 'Single documents', terminal: 'Nothing claimed these' };
+  // One line per lane, under the heading — what the analyst is looking at and why it
+  // sits here rather than elsewhere.
+  var _TXV_TIER_NOTE  = {
+    linked: 'Grouped with their related documents before anything else runs, and judged as a whole.',
+    single: 'One document each, in the order the reconciliation claims them.',
+    terminal: 'No pattern matched these. Work them by amount, largest first.'
+  };
 
   // Row → card code. The classifier is shared (RRV8.txv.code in config.js) with the
   // Details grid's txvCardCode, so a card's total ties EXACTLY to its drill-through
@@ -8478,7 +8508,7 @@
       // 'complete'; the saved finding is that record's note. The inline per-row
       // b.worked count stays as SECONDARY info in the meta line (progress within the
       // slice), but it no longer decides the card's done state or its finding text.
-      var cardsByTier = { quick: [], complex: [], linked: [], terminal: [] };
+      var cardsByTier = { linked: [], single: [], terminal: [] };
       var resolvedThisCycle = 0;   // current-period cards whose store record is complete (headline rollup)
       var _store = (typeof RRV8 !== 'undefined' && RRV8.cardStore) ? RRV8.cardStore : null;
       // Pass 1 — PLAIN STATUS, not reason tone. Roles are parallel: there is no
@@ -8594,7 +8624,7 @@
 
       // Pass 1 — analyst period-review state (part E). A saved review swaps the
       // "Mark period reviewed" button for a "Reviewed <when>" chip. Sync read (warmed).
-      var _totalCards = cardsByTier.quick.length + cardsByTier.complex.length + cardsByTier.linked.length + cardsByTier.terminal.length;
+      var _totalCards = _TXV_TIER_ORDER.reduce(function (n, t) { return n + (cardsByTier[t] || []).length; }, 0);
       var _letRide = Math.max(0, _totalCards - resolvedThisCycle);
       var _review = (typeof RRV8 !== 'undefined' && RRV8.analystReviewStore) ? RRV8.analystReviewStore.get(solo, focusP) : null;
       var _reviewedLbl = (_review && _review.at && typeof _pwLabelFull === 'function') ? _pwLabelFull(String(_review.at).slice(0, 10)) : '';
@@ -8746,10 +8776,13 @@
           // with the header Variance drill, removed 2026-07-13).
           + '<div class="txv-card-actions">' + editBtn + '</div></div>';
       };
-      // Tier-grouped: a heading per non-empty tier, then its cards (Quick wins first).
+      // Lane-grouped: a heading + one-line note per non-empty lane, then its cards in
+      // claim order. Lanes are the classifier's phases (see _TXV_TIER_ORDER).
       host.innerHTML = headline + _TXV_TIER_ORDER.map(function (t) {
         var cs = cardsByTier[t]; if (!cs.length) return '';
-        return '<div class="txv-tier"><h3 class="txv-tier-head">' + esc(_TXV_TIER_LABEL[t]) + '</h3>' + cs.map(card).join('') + '</div>';
+        return '<div class="txv-tier"><h3 class="txv-tier-head">' + esc(_TXV_TIER_LABEL[t]) + '</h3>'
+             + (_TXV_TIER_NOTE[t] ? '<p class="txv-tier-note">' + esc(_TXV_TIER_NOTE[t]) + '</p>' : '')
+             + cs.map(card).join('') + '</div>';
       }).join('');
       // Render-time diagnosis DISABLED (owner 2026-07-13): the opening card text is the
       // catalog's `cause` for the code — what this pattern IS, not a diagnosis of these
