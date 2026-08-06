@@ -1210,6 +1210,26 @@
   .alh-allclear { display: flex; align-items: center; gap: 12px; background: var(--green-pale); border: 1px solid rgba(46,138,85,.24); border-radius: 12px; padding: 13px 18px; font-size: 15px; font-weight: 600; color: #2b4c39; }
   .alh-allclear .alh-cleared-tick { color: var(--green); font-weight: 800; font-size: 15px; }
 
+  /* Model DMAAI reference band (UI-66) — ALWAYS on the Data Health tab, cleared
+     state included. The 4152 model table is the routing every account assignment
+     resolves through, so it is reference the analyst opens on demand, not a
+     finding that appears only when something is wrong. Styled as reference
+     (navy left accent, no amber/green state colour) so it never reads as an
+     alert. The routing list rides the shared [data-alh-target] disclosure. */
+  .alh-model { margin: 0 0 16px; background: var(--bg-card); border: 1px solid var(--rule); border-left: 3px solid var(--navy); border-radius: 12px; padding: 13px 18px; box-shadow: var(--shadow-sm); }
+  .alh-model[hidden] { display: none; }
+  .alh-model-row { display: flex; align-items: center; gap: 12px; }
+  .alh-model-t { flex: 0 0 auto; font-family: 'Source Sans 3', sans-serif; font-weight: 800; color: var(--navy); font-size: 16px; }
+  .alh-model-d { flex: 1 1 auto; min-width: 0; font-size: 15px; color: var(--text); font-weight: 500; }
+  .alh-model-d b { color: var(--navy); font-weight: 700; font-variant-numeric: tabular-nums; }
+  .alh-model-wrap { display: none; margin-top: 12px; max-height: 340px; overflow: auto; border: 1px solid var(--rule); border-radius: 9px; }
+  .alh-model-wrap[data-open="true"] { display: block; }
+  .alh-model-tbl { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  .alh-model-tbl th { position: sticky; top: 0; z-index: 1; background: var(--bg-soft); text-align: left; padding: 8px 12px; font-size: 11.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted); border-bottom: 1px solid var(--rule); white-space: nowrap; }
+  .alh-model-tbl td { padding: 7px 12px; border-bottom: 1px solid var(--rule); color: var(--text); vertical-align: top; }
+  .alh-model-tbl tr:last-child td { border-bottom: 0; }
+  .alh-model-tbl td.mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; color: var(--navy); font-weight: 600; white-space: nowrap; }
+
   /* Cleared rollup — quiet, collapsible. */
   .alh-cleared { display: flex; align-items: center; gap: 12px; background: var(--bg-soft); border: 1px solid var(--rule); border-radius: 12px; padding: 12px 18px; }
   .alh-cleared-tick { flex: 0 0 auto; color: var(--green); font-weight: 800; font-size: 15px; line-height: 1; }
@@ -8493,7 +8513,15 @@
       };
       // Some patterns need a code-specific explanation (finer than the kind). Transfer
       // Orders is one — the duplicate-cardex quirk is specific to Sales Update (R42800)
-      // abending on ST/OT orders. Falls back to KIND_EXPLAIN. SME to refine.
+      // abending on ST/OT orders.
+      // PRECEDENCE (UI-62): CODE_EXPLAIN, then _txvCause(code) (the per-code
+      // desc + action pair), and only then KIND_EXPLAIN. KIND_EXPLAIN used to sit
+      // ahead of _txvCause, and because every card has a `kind` it ALWAYS resolved —
+      // so _txvCause was dead code and every card outside CODE_EXPLAIN's six keys
+      // rendered the kind's generic line. The `review` kind's line reads "these
+      // transactions do not fit a known pattern yet", which is flatly wrong on
+      // NCL / SNJ / XBC / MCM / NZR: those cards name a specific, confirmed
+      // mechanism. Code-specific copy wins; the kind line is the last resort.
       var CODE_EXPLAIN = {
         MTO:  'Make-to-order work orders, grouped with their customer sales orders. Not one variance type: the residual splits into expected standard-cost variances, completions where both sides carry value and disagree, and completions with no GL entry at all. The three need different work, and the middle slice no longer has a confirmed cause. Drill in for the counts and dollars per shape.',
         VCHR: 'A/P vouchers posted to an inventory account instead of the A/P variance account. DMAAI 4330 is routing voucher variances into inventory. Correcting that route stops it; restricting account overrides on the voucher-match version keeps it corrected.',
@@ -8562,7 +8590,7 @@
           code: code, kind: m.kind, title: m.title, amount: b.net, rec: rec,
           rowCount: b.rows, cardex: b.cardex, ledger: b.ledger, sawAmt: b.sawAmt, accts: _accts,
           meta: _metaBits.join(' · '),
-          cause: savedFinding || CODE_EXPLAIN[code] || KIND_EXPLAIN[m.kind] || _txvCause(code) || 'Drill in to see what is driving this variance.',
+          cause: savedFinding || CODE_EXPLAIN[code] || _txvCause(code) || KIND_EXPLAIN[m.kind] || 'Drill in to see what is driving this variance.',
           isFinding: !!savedFinding,
           href: _txvTxHref(solo, { period: focusP, card: code, expect: b.rows }),
           btn: 'Open in worklist', done: done, recurPrior: recurPrior
@@ -9359,11 +9387,141 @@
   // The Data Health tab body: the amber "Needs your attention" rows + the green
   // "Cleared" rollup. The AI day-brief no longer lives here — it moved above the tab
   // strip as constant chrome (renderAnalystDayBriefTop), summarizing all three tabs.
+  // The model-DMAAI reference band is LAST in the DOM (attention rows lead) but it
+  // is never hidden — see _analystRenderModelBand.
   function _analystLandingScaffold() {
     return ''
       + '<div class="alh-attn" id="analystAttnWrap" hidden></div>'
       + '<div class="alh-explained" id="analystExplainedWrap" hidden></div>'
-      + '<div class="alh-clr" id="analystClearedWrap" hidden></div>';
+      + '<div class="alh-clr" id="analystClearedWrap" hidden></div>'
+      + '<div class="alh-model" id="analystModelBand"></div>';
+  }
+  // ---- Model DMAAI (4152) reference band — UI-66 -------------------------------
+  // The analyst could not reach the model table when it was healthy: the model
+  // check reported 'clean', clean checks collapse into the "Cleared · N" rollup,
+  // and the rollup carries no action link. So the foundation every account
+  // assignment resolves through became unreachable exactly when the instance was
+  // in good shape ("I cannot bring up the form because it is in the cleared
+  // category", owner 2026-08-05). This band renders on every paint, in every
+  // state, with the routing list one click away.
+  //
+  // Source: the SAME whitelisted view the Transaction Variance DMAAI analyzer
+  // reads — POST /inventory/integrity with report 'v8ui_dmaai_routes', narrowed
+  // client-side to tablenumber 4152. No new endpoint. The view carries the
+  // wildcards already EXPANDED, so the concrete GL classes an analyst sees in
+  // the app are all present; raw F4095 would show mostly '****' and miss them.
+  var _analystModelRoutes = { key: null, promise: null };
+  function _analystModelRoutesFetch(co) {
+    var key = ((activeDb() && activeDb().n) || '_') + '|' + String(co || '');
+    if (_analystModelRoutes.key === key && _analystModelRoutes.promise) return _analystModelRoutes.promise;
+    var p = rrFetch('inventory/integrity', {
+      method: 'POST',
+      body: {
+        take: 50000, skip: 0, page: 1, pageSize: 50000,
+        report: 'v8ui_dmaai_routes',
+        reconciliationFilter: { companies: co ? [String(co)] : [], businessUnits: [], objects: [], subsidiaries: [], currencies: [] }
+      },
+      demoFile: 'v8ui-dmaai-routes'
+    }).then(function (payload) {
+      var rows = (payload && payload.data) || (Array.isArray(payload) ? payload : []);
+      var out = [];
+      rows.forEach(function (r) {
+        if (String(r.tablenumber == null ? (r.TableNumber == null ? '' : r.TableNumber) : r.tablenumber).trim() !== '4152') return;
+        var rco = String(r.companynumber == null ? (r.CompanyNumber == null ? '' : r.CompanyNumber) : r.companynumber).trim();
+        if (co && rco && rco !== String(co).trim()) return;      // the endpoint ignores the company filter; scope here
+        var bu = String(r.businessunit || r.BusUnit || r.BusinessUnit || '').trim();
+        var ob = String(r.object || r.Object || '').trim();
+        var sb = String(r.subsidiary || r.Sub || r.Subsidiary || '').trim();
+        out.push({
+          co: rco,
+          glclass: String(r.glclass || r.GLClass || '').trim(),
+          costtype: String(r.costtype || r.CostType || '').trim(),
+          doctype: String(r.doctype || r.DocType || '').trim(),
+          acct: (bu + (ob ? '.' + ob : '') + (sb ? '.' + sb : '')).replace(/\s+/g, ''),
+          descr: String(r.AcctDescription || r.acctdescription || '').trim(),
+          // Blank AAI business unit = the branch plant supplies it, so the account
+          // varies by branch. Worth stating: a "different" BU is not a mismatch here.
+          buFlex: !bu
+        });
+      });
+      // GL class, then cost type — the order an analyst scans a model table in.
+      out.sort(function (a, b) {
+        return a.glclass.localeCompare(b.glclass, undefined, { numeric: true })
+            || a.costtype.localeCompare(b.costtype, undefined, { numeric: true })
+            || a.acct.localeCompare(b.acct, undefined, { numeric: true });
+      });
+      return out;
+    });
+    _analystModelRoutes.key = key;
+    _analystModelRoutes.promise = p;
+    // A failure must not be cached as "the model has no routings".
+    p.catch(function () { if (_analystModelRoutes.key === key) { _analystModelRoutes.key = null; _analystModelRoutes.promise = null; } });
+    return p;
+  }
+  function _analystModelBandHtml(co, routes) {
+    var dbn = (activeDb() && activeDb().n) || '';
+    var href = 'accounting-model-review.html?company=' + encodeURIComponent(co || '') + (dbn ? '&db=' + encodeURIComponent(dbn) : '');
+    var open = '<a class="alh-act ghost" href="' + href + '" title="Open the model DMAAI review">Review <span aria-hidden="true">&rarr;</span></a>';
+    if (routes === null) {
+      return '<div class="alh-model-row">'
+        + '<span class="alh-model-t">Model DMAAI 4152</span>'
+        + '<span class="alh-model-d">Couldn’t read the routing table just now &mdash; reload the page to try again.</span>'
+        + open + '</div>';
+    }
+    var glSet = {}, acctSet = {}, flex = 0;
+    routes.forEach(function (r) {
+      if (r.glclass) glSet[r.glclass] = 1;
+      if (r.acct) acctSet[r.acct] = 1;
+      if (r.buFlex) flex++;
+    });
+    var nGl = Object.keys(glSet).length, nAcct = Object.keys(acctSet).length;
+    var summary;
+    if (!routes.length) {
+      // Genuinely empty is a finding, not a quiet state: nothing resolves.
+      summary = 'No 4152 routings in scope for this company. Nothing resolves through the model until it is configured.';
+    } else {
+      summary = '<b>' + nGl.toLocaleString('en-US') + '</b> GL class' + (nGl === 1 ? '' : 'es')
+        + ' routing to <b>' + nAcct.toLocaleString('en-US') + '</b> account' + (nAcct === 1 ? '' : 's')
+        + (flex ? (' &middot; ' + flex.toLocaleString('en-US') + ' branch-plant derived') : '');
+    }
+    var rows = routes.map(function (r) {
+      return '<tr>'
+        + '<td class="mono">' + esc(r.glclass || '&mdash;') + '</td>'
+        + '<td class="mono">' + esc(r.acct || '&mdash;') + '</td>'
+        + '<td>' + esc(r.descr || '') + '</td>'
+        + '<td class="mono">' + esc(r.costtype || '&mdash;') + '</td>'
+        + '<td class="mono">' + esc(r.doctype || '&mdash;') + '</td>'
+        + '</tr>';
+    }).join('');
+    return '<div class="alh-model-row">'
+      + '<span class="alh-model-t">Model DMAAI 4152</span>'
+      + '<span class="alh-model-d">' + summary + '</span>'
+      + (routes.length
+          ? '<button type="button" class="alh-disc" aria-expanded="false" data-alh-target="analystModelList">Routing list <span class="alh-car" aria-hidden="true">&#9662;</span></button>'
+          : '')
+      + open
+      + '</div>'
+      + (routes.length
+          ? ('<div class="alh-model-wrap" id="analystModelList">'
+              + '<table class="alh-model-tbl"><thead><tr>'
+              + '<th>GL class</th><th>Account</th><th>Account description</th><th>Cost type</th><th>Doc type</th>'
+              + '</tr></thead><tbody>' + rows + '</tbody></table></div>')
+          : '');
+  }
+  function _analystRenderModelBand(gen, co) {
+    var band = document.getElementById('analystModelBand'); if (!band) return;
+    band.innerHTML = '<div class="alh-model-row"><span class="alh-model-t">Model DMAAI 4152</span>'
+      + '<span class="alh-model-d">Reading the routing table…</span></div>';
+    _analystModelRoutesFetch(co).then(function (routes) {
+      if (gen !== _analystTaskGen) return;                 // superseded paint
+      var el = document.getElementById('analystModelBand'); if (!el) return;
+      el.innerHTML = _analystModelBandHtml(co, routes);
+    }).catch(function (e) {
+      if (gen !== _analystTaskGen) return;
+      console.warn('[home] model DMAAI routing table unavailable', e);
+      var el = document.getElementById('analystModelBand'); if (!el) return;
+      el.innerHTML = _analystModelBandHtml(co, null);
+    });
   }
   function _analystRenderChecks(host, gen, attention, cleared, explained) {
     if (gen !== _analystTaskGen) return;
@@ -9427,6 +9585,10 @@
     host.innerHTML = _analystLandingScaffold();
     _ensureAlhDiscWired();
     _wireAnalystIntgView(host);
+    // The model-DMAAI reference band paints on its own request, independent of the
+    // health gather: it must be there whether the checks pass, fail, or never
+    // return (UI-66). Its own generation guard drops a superseded paint.
+    _analystRenderModelBand(gen, co);
     // Shared gather (same request set as the day-brief above the strip). Re-stash
     // each integrity check's rows onto THIS host so the "View" modal reads the
     // current set. The AI day-brief is painted by renderAnalystDayBriefTop now.
