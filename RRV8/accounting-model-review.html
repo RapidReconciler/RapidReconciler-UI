@@ -39,6 +39,10 @@
 <link href="admin-chrome.css" rel="stylesheet">
 <link href="../Tools/help-sidebar.css" rel="stylesheet">
 <script src="config.js"></script>
+<!-- SheetJS (xlsx-js-style): the community build ignores cell styling, so the
+     audit-quality template needs this fork. Feeds ../Tools/audit-workbook.js. -->
+<script src="vendor/xlsx-js-style.min.js" defer></script>
+<script defer src="../Tools/audit-workbook.js"></script>
 <script defer src="../Tools/help-sidebar.js"></script>
 <style>
   /* Shared chrome (canonical palette, command-center wash, corner-chrome Home
@@ -89,13 +93,52 @@
   /* Verdict banner (inside the AI card). */
   .verdict { display: flex; align-items: center; gap: 14px; border-radius: 12px; padding: 16px 18px; border: 1px solid var(--rule); background: var(--bg-soft); }
   .verdict.is-clean { background: var(--green-pale); border-color: #cfe6d8; }
-  .verdict.is-issue { background: var(--orange-pale); border-color: #f0d2a8; }
+  /* .verdict.is-issue retired 2026-08-07 (owner: "the amber band and other text is
+     just noise"). In the ISSUE state the banner is hidden entirely and the
+     excluded table speaks for itself; CLEAN and UNKNOWN keep the banner because
+     there is no table under them to carry the message. */
   .verdict-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; background: var(--text-muted); }
   .verdict.is-clean .verdict-dot { background: var(--green); }
-  .verdict.is-issue .verdict-dot { background: var(--orange); }
   .verdict-main { flex: 1; min-width: 0; }
   .verdict-title { font-weight: 800; font-size: 15px; color: var(--navy); }
-  .verdict-sub { font-size: 13px; color: var(--text-soft); margin-top: 3px; line-height: 1.5; }
+  .verdict-sub { font-size: 13.5px; color: var(--text-soft); margin-top: 3px; line-height: 1.5; }
+
+  /* ---- Excluded-slice review controls (DAC-55) ------------------------------
+     One row per (GL class, stocking type), because a class routinely spans
+     several and they do not deserve the same verdict. The zero-value rows are
+     meant to disappear visually: they are the ones that need no thought. */
+  .xd-zero td { color: var(--text-muted); }
+  .xd-amt-live { font-weight: 800; color: var(--navy); }
+  .xd-stale { display: inline-block; margin-left: 6px; font-size: 11px; font-weight: 800; letter-spacing: .03em;
+              text-transform: uppercase; color: #8a5a00; background: var(--orange-pale);
+              border: 1px solid #f0d2a8; border-radius: 6px; padding: 1px 6px; }
+  .xd-status { font-size: 13px; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 7px;
+               background: var(--bg-card); color: var(--navy); max-width: 150px; }
+  .xd-status.is-intended { background: var(--green-pale); border-color: #cfe6d8; }
+  .xd-status.is-fixed    { background: var(--bg-soft); }
+  .xd-view { font-size: 12.5px; font-weight: 700; padding: 4px 10px; border: 1px solid var(--rule);
+             border-radius: 7px; background: var(--bg-card); color: var(--navy); cursor: pointer; }
+  .xd-view:hover { background: var(--bg-soft); }
+  .xd-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 12px; }
+
+  /* ---- Item-detail modal ---------------------------------------------------- */
+  .xd-scrim { position: fixed; inset: 0; background: rgba(16, 24, 40, .45); display: flex;
+              align-items: center; justify-content: center; padding: 24px; z-index: 60; }
+  .xd-scrim[hidden] { display: none; }
+  .xd-modal { background: var(--bg-card); border-radius: 14px; width: min(1080px, 100%);
+              max-height: 86vh; display: flex; flex-direction: column; overflow: hidden;
+              box-shadow: 0 18px 48px rgba(16, 24, 40, .28); }
+  .xd-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px;
+             padding: 16px 18px; border-bottom: 1px solid var(--rule); }
+  .xd-title { font-weight: 800; font-size: 16px; color: var(--navy); }
+  .xd-sub { font-size: 13.5px; color: var(--text-soft); margin-top: 3px; line-height: 1.5; }
+  .xd-close { border: 0; background: transparent; font-size: 26px; line-height: 1; color: var(--text-muted);
+              cursor: pointer; padding: 0 4px; }
+  .xd-close:hover { color: var(--navy); }
+  .xd-body { overflow: auto; padding: 0 18px; }
+  .xd-foot { display: flex; align-items: center; justify-content: space-between; gap: 16px;
+             padding: 14px 18px; border-top: 1px solid var(--rule); background: var(--bg-soft); }
+  .xd-foot-note { font-size: 13px; color: var(--text-soft); }
 
   /* Tables */
   .tbl-wrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 10px; margin-top: 4px; }
@@ -154,18 +197,33 @@
           </div>
         </div>
         <div class="ai-lead" id="aiLead" hidden></div>
-        <div class="ai-actions" id="aiActions" hidden>
-          <button type="button" class="ai-pill" id="aiAssessBtn" disabled>Assess these exclusions</button>
-        </div>
         <div class="ai-answer" id="aiAnswer" hidden></div>
       </section>
 
       <!-- ===== Excluded GL classes (surfaced only when there are any) ===== -->
       <section class="card" id="excludedCard" hidden>
         <h2>Excluded GL class codes</h2>
-        <p class="sub">GL classes used by items but not in the model &mdash; those items&rsquo; inventory value is <strong>not counted</strong> in reconciliation. Some exclusions are intended (non-stock / expense classes); confirm each is deliberate, and correct any real inventory class at the source in JD Edwards.</p>
+        <p class="sub">GL classes used by items in the inventory tables but not carried in the model DMAAI table (4152) &mdash; so those items&rsquo; on-hand value is <strong>not counted</strong> in reconciliation. <strong>The amount is what decides each row</strong>, not the class code: a slice holding nothing costs you nothing and can be marked intended, while a slice holding value is real inventory sitting outside the reconciliation whatever it is called. Add a real inventory class at the source in JD Edwards, DMAAI 4152.</p>
         <div id="r3Body"><div class="loading">Loading&hellip;</div></div>
       </section>
+
+      <!-- ===== Item detail for one excluded slice (opened from a row's View) ===== -->
+      <div class="xd-scrim" id="xdScrim" hidden>
+        <div class="xd-modal" role="dialog" aria-modal="true" aria-labelledby="xdTitle">
+          <div class="xd-head">
+            <div>
+              <div class="xd-title" id="xdTitle">Excluded items</div>
+              <div class="xd-sub" id="xdSub"></div>
+            </div>
+            <button type="button" class="xd-close" id="xdClose" aria-label="Close">&times;</button>
+          </div>
+          <div class="xd-body" id="xdBody"></div>
+          <div class="xd-foot">
+            <span class="xd-foot-note" id="xdFootNote"></span>
+            <button type="button" class="ai-pill" id="xdExport">Export to Excel</button>
+          </div>
+        </div>
+      </div>
 
       <!-- ===== Model baseline mapping table (collapsible reference, last) ===== -->
       <section class="card is-collapsed" id="baselineCard">
@@ -262,30 +320,105 @@
   // can be USD or GBP etc. and this page doesn't carry the currency.
   function fmtMoney(v) { return (Number(v) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
-  // Excluded GL classes: roll the item rows up to a per-(GL class, company)
-  // item COUNT + on-hand $ — no item detail. The dollars are the materiality.
-  function renderExcluded(container, rows, emptyMsg) {
-    if (!rows || !rows.length) { container.innerHTML = '<div class="empty">' + esc(emptyMsg) + '</div>'; return; }
-    var map = Object.create(null), grandAmt = 0;
-    rows.forEach(function (r) {
+  // Excluded GL classes, ONE ROW PER (company, GL class, STOCKING TYPE).
+  //
+  // Not per GL class. A class routinely spans several stocking types that do not
+  // deserve the same verdict: on a demo company NS40 spans four, and 138 items on
+  // one of them hold 94% of that class's excluded value while the other three hold
+  // nothing at all. Judged as a single class you either wave real money through or
+  // block a class that is mostly fine. Split, six of ten rows on that company are
+  // $0.00 and dismissible on sight and only two are material.
+  //
+  // Safe to split: F4102 is unique on (item, branch) — verified, zero duplicate
+  // keys — so the stocking type cannot fan a row out, and the split totals still
+  // tie to the unsplit card exactly (440 items / 140,346.16 on the demo).
+  //
+  // The GL-CLASS count stays the headline in the footer even though the table now
+  // has more rows than classes: the class is what maps to a DMAAI 4152 fix, and
+  // the agent-side model-approval count is per class too. Showing rows there
+  // instead would quietly disagree with the rest of the product.
+  //
+  // Sorted by absolute amount, biggest first. That is the whole triage order —
+  // the amount, not the class code, is what decides a row.
+  var _r3Groups = [];   // last rendered slices, for the modal + exports
+  function _sliceKey(co, gl, stkt) { return co + '' + gl + '' + stkt; }
+  function excludedSlices(rows) {
+    var map = Object.create(null);
+    (rows || []).forEach(function (r) {
       var co = field(r, 'CompanyNumber'), gl = field(r, 'GLClass');
-      var amt = Number(field(r, 'Amount')) || 0;   // on-hand $ value (rperpetualinv), summed in the view
-      var key = co + ' ' + gl;
-      if (!map[key]) map[key] = { co: co, gl: gl, items: 0, amount: 0 };
-      map[key].items++; map[key].amount += amt; grandAmt += amt;
+      // '' is a REAL stocking type: the item has no F4102 record for its branch.
+      // It gets its own row rather than being folded in with a real code.
+      var stkt = String(field(r, 'StockingType') || '');
+      var amt = Number(field(r, 'Amount')) || 0;   // on-hand $ (rperpetualinv), summed in the view
+      var key = _sliceKey(co, gl, stkt);
+      if (!map[key]) map[key] = { key: key, co: co, gl: gl, stkt: stkt, items: 0, amount: 0, qty: 0, rows: [] };
+      map[key].items++; map[key].amount += amt;
+      map[key].qty += Number(field(r, 'Quantity')) || 0;
+      map[key].rows.push(r);
     });
-    // Biggest dollar exclusion first — that's the materiality (money not counted).
-    var groups = Object.keys(map).map(function (k) { return map[k]; }).sort(function (a, b) {
-      return Math.abs(b.amount) - Math.abs(a.amount);
-    });
-    var html = '<div class="tbl-wrap"><table><thead><tr><th>Company</th><th>GL class</th><th style="text-align:right">Items excluded</th><th style="text-align:right">Amount excluded</th></tr></thead><tbody>' +
-      groups.map(function (g) {
-        return '<tr><td>' + esc(g.co) + '</td><td>' + esc(g.gl || '(blank)') + '</td><td style="text-align:right">' + g.items.toLocaleString('en-US') + '</td><td style="text-align:right">' + fmtMoney(g.amount) + '</td></tr>';
-      }).join('') +
-      '</tbody></table></div>' +
-      '<div class="tbl-foot">' + groups.length + ' GL class' + (groups.length === 1 ? '' : 'es') + ' excluded &middot; ' +
-      rows.length.toLocaleString('en-US') + ' item' + (rows.length === 1 ? '' : 's') + ' affected &middot; ' +
-      fmtMoney(grandAmt) + ' on-hand value excluded</div>';
+    return Object.keys(map).map(function (k) {
+      // Order the ITEMS the same way the slices are ordered — biggest first. A
+      // 183-row detail list opening on a zero-value item makes the analyst scroll
+      // to find the money, and the money is the only reason the list is open.
+      map[k].rows.sort(function (x, y) {
+        return Math.abs(Number(field(y, 'Amount')) || 0) - Math.abs(Number(field(x, 'Amount')) || 0);
+      });
+      return map[k];
+    }).sort(function (a, b) { return Math.abs(b.amount) - Math.abs(a.amount); });
+  }
+  // No F0005 in the RR database, so there is no stocking-type description to show
+  // and the raw JDE code is all we have. 'P' and 'M' a JDE analyst reads; '0' and
+  // 'X' they may not, and inventing a meaning for them would be worse than leaving
+  // the code bare. The empty code gets named, because a missing branch record is a
+  // different thing from an unfamiliar code.
+  function stktLabel(s) { return s === '' ? '(no branch record)' : s; }
+
+  function renderExcluded(container, rows, emptyMsg) {
+    if (!rows || !rows.length) { container.innerHTML = '<div class="empty">' + esc(emptyMsg) + '</div>'; _r3Groups = []; return; }
+    var groups = excludedSlices(rows);
+    _r3Groups = groups;
+    var grandAmt = 0, classes = Object.create(null);
+    groups.forEach(function (g) { grandAmt += g.amount; classes[g.co + ' ' + g.gl] = 1; });
+    var classCount = Object.keys(classes).length;
+
+    var html = '<div class="tbl-wrap"><table><thead><tr>'
+      + '<th>Company</th><th>GL class</th>'
+      + '<th title="Item-level stocking type from the item branch record (F4102)">Stocking type</th>'
+      + '<th style="text-align:right">Items</th>'
+      + '<th style="text-align:right">Amount excluded</th>'
+      + '<th>Reviewed as</th><th></th></tr></thead><tbody>'
+      + groups.map(function (g) {
+          var rev = _r3Reviews[g.key];
+          // A verdict recorded when the slice held nothing is not the same verdict
+          // now it holds money. Compare against the snapshot and say so rather
+          // than honouring it silently.
+          var stale = rev && rev.amountSnapshot != null
+                   && Math.abs((Number(rev.amountSnapshot) || 0) - g.amount) >= 0.01;
+          var status = rev ? String(rev.status || '') : '';
+          var cls = status === 'Intended' ? ' is-intended' : (status === 'Fixed' ? ' is-fixed' : '');
+          return '<tr' + (Math.abs(g.amount) < 0.005 ? ' class="xd-zero"' : '') + '>'
+            + '<td>' + esc(g.co) + '</td>'
+            + '<td>' + esc(g.gl || '(blank)') + '</td>'
+            + '<td>' + esc(stktLabel(g.stkt)) + '</td>'
+            + '<td style="text-align:right">' + g.items.toLocaleString('en-US') + '</td>'
+            + '<td style="text-align:right"' + (Math.abs(g.amount) >= 0.005 ? ' class="xd-amt-live"' : '') + '>' + fmtMoney(g.amount) + '</td>'
+            + '<td><select class="xd-status' + cls + '" data-xd-status="' + esc(g.key) + '">'
+            +   '<option value=""' + (status === '' ? ' selected' : '') + '>&mdash;</option>'
+            +   '<option value="Intended"' + (status === 'Intended' ? ' selected' : '') + '>Intended</option>'
+            +   '<option value="Needs review"' + (status === 'Needs review' ? ' selected' : '') + '>Needs review</option>'
+            +   '<option value="Fixed"' + (status === 'Fixed' ? ' selected' : '') + '>Fixed</option>'
+            + '</select>'
+            + (stale ? '<span class="xd-stale" title="Reviewed when this slice held ' + esc(fmtMoney(rev.amountSnapshot)) + '">amount changed</span>' : '')
+            + '</td>'
+            + '<td style="text-align:right"><button type="button" class="xd-view" data-xd-view="' + esc(g.key) + '">View</button></td>'
+            + '</tr>';
+        }).join('')
+      + '</tbody></table></div>'
+      + '<div class="tbl-foot">' + classCount + ' GL class' + (classCount === 1 ? '' : 'es')
+      +   ' excluded across ' + groups.length + ' stocking type' + (groups.length === 1 ? '' : 's') + ' &middot; '
+      +   rows.length.toLocaleString('en-US') + ' item' + (rows.length === 1 ? '' : 's') + ' &middot; '
+      +   fmtMoney(grandAmt) + ' on-hand value excluded</div>'
+      + '<div class="xd-actions"><button type="button" class="ai-pill" id="xdExportAll">Export all excluded items</button></div>';
     container.innerHTML = html;
   }
 
@@ -496,7 +629,7 @@
     // review" (what an empty row list produced) or a "Reviewing the model…" that
     // never resolves.
     if (_r3Failed && _endpointGlClass == null) {
-      if (banner) banner.className = 'verdict';
+      if (banner) { banner.hidden = false; banner.className = 'verdict'; }
       if (title) title.textContent = 'Couldn’t review the model right now';
       if (sub) sub.textContent = 'The excluded GL classes didn’t load, so this page can’t tell you whether the model is complete. Reopen it in a moment; if it keeps failing, ask your IT department to check that RapidReconciler’s data service is running.';
       if (exCard) exCard.hidden = true;
@@ -506,13 +639,13 @@
       return;
     }
     if (n < 0) {   // still loading
-      if (banner) banner.className = 'verdict';
+      if (banner) { banner.hidden = false; banner.className = 'verdict'; }
       if (title) title.textContent = 'Reviewing the model…';
       if (sub) sub.textContent = '';
       return;
     }
     if (n === 0) {
-      if (banner) banner.className = 'verdict is-clean';
+      if (banner) { banner.hidden = false; banner.className = 'verdict is-clean'; }
       if (title) title.textContent = 'All GL classes used in inventory are in the model';
       if (sub) sub.textContent = 'Nothing to review — every GL class an item uses maps to an account in the model, so no inventory value falls out of reconciliation.';
       if (exCard) exCard.hidden = true;
@@ -521,10 +654,14 @@
       if (ans) ans.hidden = true;
       return;
     }
-    // ISSUE
-    if (banner) banner.className = 'verdict is-issue';
-    if (title) title.textContent = n.toLocaleString('en-US') + ' GL class' + (n === 1 ? '' : 'es') + ' excluded from the model';
-    if (sub) sub.textContent = 'Their items fall out of reconciliation. Review whether each exclusion is intentional (non-stock / expense) or a real inventory class wrongly left out — correct any real inventory class at the source in JD Edwards.';
+    // ISSUE — banner HIDDEN. Owner 2026-08-07: "the amber band and other text is
+    // just noise." It restated, in prose, the count and the instruction that the
+    // table underneath already carries per row, and it repeated on every visit,
+    // which is the definition of something an analyst learns to skim past. The
+    // AI lead gives the materiality read; the table gives the detail and the
+    // decision. CLEAN and UNKNOWN keep their banner — there is no table under
+    // those states to say anything.
+    if (banner) banner.hidden = true;
     if (exCard) exCard.hidden = false;
     renderAiBand();
   }
@@ -533,7 +670,7 @@
   // tier/data. Only meaningful in the ISSUE state (called from renderVerdict).
   function renderAiBand() {
     var off = _aiTier() === 'off';
-    var s = _exclSummary(), lead = $('aiLead'), acts = $('aiActions'), ab = $('aiAssessBtn');
+    var s = _exclSummary(), lead = $('aiLead'), acts = $('aiActions');
     if (lead) {
       if (!s.groups.length) { lead.hidden = true; }
       else {
@@ -541,12 +678,21 @@
         lead.hidden = false;
         lead.textContent = fmtMoney(s.total) + ' of on-hand value sits outside the model across ' + s.groups.length
           + ' GL class code' + (s.groups.length === 1 ? '' : 's') + ' — the largest is ' + top.code + ' at ' + fmtMoney(top.amount)
-          + ' (' + top.items.toLocaleString('en-US') + ' item' + (top.items === 1 ? '' : 's') + '). Ask AI whether any of it looks like real inventory to add back.';
+          + ' (' + top.items.toLocaleString('en-US') + ' item' + (top.items === 1 ? '' : 's') + ').'
+          // No "ask AI" call to action: the read below runs on its own now, so
+          // inviting a press on a button that no longer exists was the first
+          // thing to go stale when the assess pill was retired.
+          + ' Each row below is judged on its amount — a slice holding nothing costs nothing;'
+          + ' a slice holding value is real inventory outside the reconciliation.';
       }
     }
-    if (acts) acts.hidden = off || !s.groups.length;
-    if (ab) ab.disabled = off || !_r3Loaded || !s.groups.length;
-    if (off) { var a = $('aiAnswer'); if (a) a.hidden = true; }
+    if (acts) acts.hidden = true;   // the assess button is gone; the read runs itself
+    if (off) { var a = $('aiAnswer'); if (a) a.hidden = true; return; }
+    // Owner 2026-08-07: the AI should assess the exclusions on its own rather than
+    // waiting behind a button nobody has a reason not to press. Fires once per
+    // (tier, scoped exclusion set) — the signature guard keeps a re-render, a
+    // company switch and a tier flip from re-billing the same question.
+    if (_r3Loaded && s.groups.length) autoAssess(s);
   }
 
   // DMAAI grounding note (UI-38 consolidation): the model-DMAAI (4152) policy is
@@ -560,11 +706,21 @@
   // "Assess these exclusions" — AI classifies benign vs. investigate, grounded in
   // the on-screen codes + amounts. Tier: Basic = one-line materiality read;
   // Enhanced/Full = per-code judgment, biggest concern first.
+  // Fires the read once per (tier, scoped exclusion set). A re-render, a company
+  // switch and a tier flip all change that signature and legitimately re-ask; a
+  // plain repaint does not and must not.
+  var _autoSig = null;
+  function autoAssess(s) {
+    var sig = _aiTier() + '|' + (_company || 'all') + '|'
+            + s.groups.map(function (g) { return g.code + ':' + g.items + ':' + g.amount.toFixed(2); }).join(',');
+    if (sig === _autoSig) return;
+    _autoSig = sig;
+    assessExclusions();
+  }
   function assessExclusions() {
     if (_aiTier() === 'off') return;
     var s = _exclSummary(); if (!s.groups.length) return;
-    var btn = $('aiAssessBtn'), ans = $('aiAnswer');
-    if (btn) btn.disabled = true;
+    var ans = $('aiAnswer');
     if (ans) { ans.hidden = false; ans.textContent = 'Thinking…'; }
     var basic = _aiTier() === 'grounded';
     var scrub = _aiTier() === 'scrubbed';
@@ -603,6 +759,109 @@
       + _scopeError.value + '”. Nothing is shown, because showing it would ignore the scope you are working in. '
       + 'Change your working companies, or ask your IT department to check your company access.';
   }
+  // ---- Per-slice verdicts (DAC-55) -----------------------------------------
+  // Server-persisted in RExcludedGlClassReview via /inventory/integrity/
+  // excluded-class-review{s}. Keyed (company, GL class, stocking type).
+  //
+  // NOT the JDE doc-type-98 path. A DMAAI 4152 entry with document type 98
+  // already suppresses an excluded class at source — see the anti-join in
+  // v_integrity3_exc_glc — and where it fits that is the better fix, because it
+  // travels with the customer's own configuration. But it keys on (company, GL
+  // class) and cannot say "the purchased items are fine, the others are not,"
+  // which is exactly the call this table exists to support.
+  //
+  // Degrades quietly: an older Services build has no endpoint, so the GET 404s,
+  // the store stays empty and the selects render blank. The page still shows
+  // every exclusion — it just cannot remember a verdict. Losing the memo is
+  // acceptable; hiding an exclusion never is.
+  var _r3Reviews = Object.create(null);
+  function loadExcludedReviews() {
+    return rrFetch('inventory/integrity/excluded-class-reviews')
+      .then(function (m) {
+        var list = (m && (m.data || m.rows)) || [];
+        _r3Reviews = Object.create(null);
+        list.forEach(function (r) {
+          _r3Reviews[_sliceKey(r.companyNumber, r.glClass, r.stockingType || '')] = r;
+        });
+      })
+      .catch(function (e) {
+        console.warn('[model review] excluded-class verdicts unavailable (older Services build?) —', (e && e.message) || e);
+      });
+  }
+  function saveExcludedReview(g, status) {
+    return rrFetch('inventory/integrity/excluded-class-review', {
+      method: 'POST',
+      body: { company: g.co, glClass: g.gl, stockingType: g.stkt, status: status }
+    }).then(function (saved) {
+      if (saved && saved.companyNumber) _r3Reviews[g.key] = saved;
+      else delete _r3Reviews[g.key];
+      renderR3();
+    });
+  }
+
+  // ---- Item detail modal + exports ------------------------------------------
+  // Columns are declared ONCE and drive both the on-screen table and the
+  // workbook, so the two can never disagree. Short labels on screen with the
+  // full field name in the <th title> (UI-47); the export keeps the full label
+  // (audit quality, UI-32).
+  var XD_COLS = [
+    { key: 'Item',         label: 'Item',        abbr: 'Item' },
+    { key: 'ThirdItem',    label: 'Third Item',  abbr: '3rd Item' },
+    { key: 'Description',  label: 'Description', abbr: 'Description' },
+    { key: 'Branch',       label: 'Branch',      abbr: 'Branch' },
+    { key: 'GLClass',      label: 'GL Class',    abbr: 'GL Class' },
+    { key: 'StockingType', label: 'Stocking Type', abbr: 'Stk' },
+    { key: 'Quantity',     label: 'Quantity On Hand', abbr: 'Qty', num: true, sum: true },
+    { key: 'Amount',       label: 'Amount On Hand',   abbr: 'Amount', num: true, sum: true }
+  ];
+  function xdCell(r, c) {
+    var v = field(r, c.key);
+    if (c.key === 'StockingType') return stktLabel(String(v || ''));
+    return c.num ? (Number(v) || 0) : (v == null ? '' : v);
+  }
+  var _xdOpen = null;   // the slice currently in the modal
+  function openSliceModal(g) {
+    _xdOpen = g;
+    $('xdTitle').textContent = 'GL class ' + (g.gl || '(blank)') + ' · stocking type ' + stktLabel(g.stkt);
+    $('xdSub').textContent = 'Company ' + g.co + ' — ' + g.items.toLocaleString('en-US')
+      + ' item' + (g.items === 1 ? '' : 's') + ' holding ' + fmtMoney(g.amount)
+      + ' of on-hand value that is not counted in reconciliation.';
+    $('xdBody').innerHTML = '<div class="tbl-wrap"><table><thead><tr>'
+      + XD_COLS.map(function (c) {
+          return '<th title="' + esc(c.label) + '"' + (c.num ? ' style="text-align:right"' : '') + '>' + esc(c.abbr) + '</th>';
+        }).join('')
+      + '</tr></thead><tbody>'
+      + g.rows.map(function (r) {
+          return '<tr>' + XD_COLS.map(function (c) {
+            var v = xdCell(r, c);
+            return '<td' + (c.num ? ' style="text-align:right"' : '') + '>' + esc(c.num ? fmtMoney(v) : v) + '</td>';
+          }).join('') + '</tr>';
+        }).join('')
+      + '</tbody></table></div>';
+    $('xdFootNote').textContent = 'Correct a real inventory class at the source in JD Edwards, DMAAI 4152.';
+    $('xdScrim').hidden = false;
+  }
+  function closeSliceModal() { $('xdScrim').hidden = true; _xdOpen = null; }
+
+  function xdExport(slices, titleLine, surface) {
+    if (typeof buildAuditWorkbook !== 'function') { alert('Excel library still loading — try again in a moment.'); return; }
+    var rows = [];
+    slices.forEach(function (g) { g.rows.forEach(function (r) { rows.push(XD_COLS.map(function (c) { return xdCell(r, c); })); }); });
+    if (!rows.length) return;
+    var totals = XD_COLS.map(function (c, i) {
+      if (i === 0) return 'TOTAL — ' + rows.length.toLocaleString('en-US') + ' items';
+      if (!c.sum) return '';
+      var s = 0; slices.forEach(function (g) { g.rows.forEach(function (r) { s += Number(field(r, c.key)) || 0; }); });
+      return s;
+    });
+    buildAuditWorkbook({
+      columns: XD_COLS.map(function (c) { return { label: c.label, num: !!c.num }; }),
+      titleLines: [titleLine, 'Value shown is on-hand inventory NOT counted in reconciliation  ·  Generated ' + new Date().toLocaleString()],
+      rows: rows, totalRow: totals, sheetName: 'Excluded',
+      fileName: RRV8.exportName({ surface: surface, company: (_company || 'all') })
+    });
+  }
+
   function renderR3() {
     var scoped = byCompany(_r3Rows);
     renderExcluded($('r3Body'), scoped,
@@ -644,7 +903,43 @@
   }
 
   function boot() {
-    $('aiAssessBtn').addEventListener('click', assessExclusions);
+    // Delegated on the persistent card, so the handlers survive every re-render.
+    var exCard = $('excludedCard');
+    if (exCard) {
+      exCard.addEventListener('change', function (e) {
+        var sel = e.target && e.target.closest ? e.target.closest('[data-xd-status]') : null;
+        if (!sel) return;
+        var g = _r3Groups.filter(function (x) { return x.key === sel.getAttribute('data-xd-status'); })[0];
+        if (!g) return;
+        sel.disabled = true;
+        saveExcludedReview(g, sel.value).catch(function (err) {
+          sel.disabled = false;
+          alert('Could not save that verdict — ' + ((err && err.message) || 'try again.'));
+        });
+      });
+      exCard.addEventListener('click', function (e) {
+        var t = e.target && e.target.closest ? e.target.closest('[data-xd-view], #xdExportAll') : null;
+        if (!t) return;
+        if (t.id === 'xdExportAll') {
+          xdExport(_r3Groups,
+            'Excluded GL classes — ' + (_company ? 'Co ' + _company : 'all companies'),
+            'ExcludedGlClasses');
+          return;
+        }
+        var g = _r3Groups.filter(function (x) { return x.key === t.getAttribute('data-xd-view'); })[0];
+        if (g) openSliceModal(g);
+      });
+    }
+    $('xdClose').addEventListener('click', closeSliceModal);
+    $('xdScrim').addEventListener('click', function (e) { if (e.target === $('xdScrim')) closeSliceModal(); });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !$('xdScrim').hidden) closeSliceModal(); });
+    $('xdExport').addEventListener('click', function () {
+      if (!_xdOpen) return;
+      xdExport([_xdOpen],
+        'Excluded items — GL class ' + (_xdOpen.gl || '(blank)') + ' · stocking type ' + stktLabel(_xdOpen.stkt) + ' · Co ' + _xdOpen.co,
+        'ExcludedGlClass-' + (_xdOpen.gl || 'blank'));
+    });
+
     // Re-render the verdict/AI band (tier label + enable/disable) when the demo tier flips.
     window.addEventListener('rrv8:aitierchange', renderVerdict);
 
@@ -674,7 +969,9 @@
 
     renderVerdict();   // loading state (tier label + "Reviewing…")
     loadVerdict();
-    integrityRows('v_integrity3_exc_glc').then(function (rows) { _r3Rows = rows || []; _r3Loaded = true; _r3Failed = false; renderR3(); })
+    loadExcludedReviews()
+      .then(function () { return integrityRows('v_integrity3_exc_glc'); })
+      .then(function (rows) { _r3Rows = rows || []; _r3Loaded = true; _r3Failed = false; renderR3(); })
       .catch(function (e) {
         // Leave _r3Loaded false so glClassCount() never reports 0 off a failed read,
         // and mark the failure so the verdict says UNKNOWN instead of CLEAN.
