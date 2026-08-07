@@ -1,0 +1,89 @@
+/* =============================================================================
+   Shared audit-quality Excel template.
+   =============================================================================
+   Navy header band, #,##0.00;(#,##0.00) numbers, thin borders, merged title
+   lines, optional bold total row. Every export a HUMAN downloads goes through
+   this so the workbooks look like one product (UI-32).
+
+   WHY THIS FILE EXISTS. The same function was copy-pasted into home.html,
+   accounting-dmaais.html and inventory-variance-source.html. Three private
+   copies of one template is three ways for the exports to drift apart, and the
+   drift would show up in a customer's inbox rather than in a test. Extracted
+   2026-08-07 when a fourth page needed it.
+
+   ⚠ THE THREE EXISTING COPIES ARE STILL IN PLACE and are NOT loaded from here.
+   Consolidating them means touching three working pages, so it is deliberately
+   a follow-up rather than a drive-by. New pages load this file; when the three
+   are migrated, delete their inline copies in the same commit.
+
+   Requires: vendor/xlsx-js-style.min.js (the community SheetJS build ignores
+   cell styling — the -js-style fork is the one that honours it) and, for the
+   default filename, RRV8.exportName from config.js.
+
+   Usage:
+     buildAuditWorkbook({
+       columns:    [{ label: 'Item', num: false }, { label: 'Amount', num: true }],
+       titleLines: ['Excluded GL classes — Co 80002', 'Generated ...'],
+       rows:       [['ABC', 1234.5], ...],   // numbers stay numbers
+       totalRow:   ['TOTAL — 2 rows', 1234.5],
+       sheetName:  'Excluded',
+       fileName:   RRV8.exportName({ surface: 'ExcludedGlClasses', company: '80002' })
+     });
+   ============================================================================= */
+(function (global) {
+  'use strict';
+
+  // Shared audit-quality Excel template (navy header band, #,##0.00;(…) numbers,
+  // thin borders, merged title lines, optional bold total). Ported from the rec
+  // page so the preview drill-downs + audit reports export the same way.
+  // columns: [{label, num}]; rows: arrays of raw cell values (numbers stay
+  // numbers so the format applies); titleLines render above; totalRow is bolded.
+  var AUDIT_NUM_FMT = '#,##0.00;(#,##0.00)';
+  function _auditBorder(rgb) { var s = { style: 'thin', color: { rgb: rgb } }; return { top: s, bottom: s, left: s, right: s }; }
+  // Build ONE audit-styled worksheet (title band, navy header, bordered body,
+  // bold total row, money format on num cols). Returns the ws; caller appends +
+  // writes — so multiple sheets can share one workbook.
+  function _buildStyledSheet(opts) {
+    var cols = opts.columns || [], ncol = cols.length || 1, titleLines = opts.titleLines || [];
+    var aoa = [];
+    titleLines.forEach(function (t) { var row = new Array(ncol).fill(''); row[0] = t; aoa.push(row); });
+    if (titleLines.length) aoa.push(new Array(ncol).fill(''));
+    var headRowIdx = aoa.length;
+    aoa.push(cols.map(function (c) { return c.label; }));
+    (opts.rows || []).forEach(function (r) { aoa.push(r.slice()); });
+    var totalRowIdx = -1;
+    if (opts.totalRow) { totalRowIdx = aoa.length; aoa.push(opts.totalRow.slice()); }
+    var ws = XLSX.utils.aoa_to_sheet(aoa);
+    var range = XLSX.utils.decode_range(ws['!ref']);
+    for (var t = 0; t < titleLines.length; t++) {
+      var tref = XLSX.utils.encode_cell({ r: t, c: 0 }); if (!ws[tref]) continue;
+      ws[tref].s = { font: { bold: t === 0, sz: t === 0 ? 14 : 10, color: { rgb: t === 0 ? '1F2D4A' : '6B7280' } } };
+    }
+    for (var c = range.s.c; c <= range.e.c; c++) {
+      var href = XLSX.utils.encode_cell({ r: headRowIdx, c: c }); if (!ws[href]) continue;
+      ws[href].s = { font: { bold: true, color: { rgb: 'FFFFFF' } }, fill: { patternType: 'solid', fgColor: { rgb: '1F2D4A' } }, alignment: { horizontal: (cols[c] && cols[c].num) ? 'right' : 'left', vertical: 'center' }, border: _auditBorder('D0D0D0') };
+    }
+    for (var rr = headRowIdx + 1; rr <= range.e.r; rr++) {
+      var isTotal = rr === totalRowIdx;
+      for (var cc = range.s.c; cc <= range.e.c; cc++) {
+        var cref = XLSX.utils.encode_cell({ r: rr, c: cc }); var cell = ws[cref]; if (!cell) continue;
+        cell.s = cell.s || {}; cell.s.border = _auditBorder('ECECEC');
+        if (cols[cc] && cols[cc].num) { cell.z = AUDIT_NUM_FMT; cell.s.alignment = { horizontal: 'right' }; }
+        if (isTotal) { cell.s.font = { bold: true, color: { rgb: '1F2D4A' } }; cell.s.fill = { patternType: 'solid', fgColor: { rgb: 'F1F4F9' } }; }
+      }
+    }
+    ws['!cols'] = cols.map(function (c) { return { wch: c.num ? 16 : Math.max(16, (c.label || '').length + 4) }; });
+    if (titleLines.length) { ws['!merges'] = ws['!merges'] || []; for (var m = 0; m < titleLines.length; m++) ws['!merges'].push({ s: { r: m, c: 0 }, e: { r: m, c: ncol - 1 } }); }
+    return ws;
+  }
+  function buildAuditWorkbook(opts) {
+    if (!window.XLSX) { if (typeof toast === 'function') toast('Excel library still loading — try again in a moment'); return false; }
+    var ws = _buildStyledSheet(opts); if (!ws) return false;
+    var wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, (opts.sheetName || 'Report').slice(0, 31));
+    XLSX.writeFile(wb, opts.fileName || RRV8.exportName({ surface: 'Report' }));
+    return true;
+  }
+  global.buildAuditWorkbook = buildAuditWorkbook;
+  global.buildAuditSheet    = _buildStyledSheet;
+}(window));

@@ -806,6 +806,30 @@ cannot approve the setup (only the customer's accounting team can).
       server-side from the live baseline).
     - `GET /inventory/integrity/model-change-report` — the flagged rows as a
       change-request `.xlsx` (POI, `Content-Disposition: attachment`).
+    - `GET /inventory/integrity/excluded-class-reviews` — analyst verdicts on
+      excluded GL classes (`{ total, data:[ExcludedClassReview] }`), JWT-scoped.
+    - `POST /inventory/integrity/excluded-class-review` — upsert one slice's
+      verdict (body `{ company, glClass, stockingType, status, note }`;
+      `status` is `Intended` | `Needs review` | `Fixed`).
+
+      Keyed on `(company, glClass, stockingType)` — one level finer than the
+      row-review above — because a single excluded GL class routinely spans
+      several stocking types that do not deserve the same verdict. `""` is a
+      legitimate `stockingType`: the item has no `F4102` record for its branch.
+
+      The reviewer comes from the JWT and the item/amount snapshots are taken
+      server-side from the live `v_integrity3_exc_glc` rows in the caller's
+      scope, so a client cannot assert what it approved. A slice that is no
+      longer excluded returns `404` rather than being stored.
+
+      The snapshots are the point: marking a slice intended while it holds
+      nothing is a safe call, the same slice holding $50,000 later is not, and
+      the page compares the two and shows an outgrown approval as stale.
+
+      Persisted in `dbo.RExcludedGlClassReview`. Distinct from the JDE-side
+      path — a DMAAI 4152 entry with document type `98` already suppresses an
+      excluded class at source (the anti-join in `v_integrity3_exc_glc`) but
+      keys on `(company, glClass)` and cannot express a per-stocking-type call.
 - **`GET` response (`ModelApprovalStatus`):**
 
   ```json
