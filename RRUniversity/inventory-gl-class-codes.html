@@ -102,7 +102,7 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <section class="page-header"><div class="page-header-inner">
 <h1 class="page-title">GL <em>Class Codes</em> — Management &amp; Change Procedures</h1>
 <p class="page-subtitle">How GL class codes flow through JD Edwards, why mid-stream changes break reconciliation, and the correct procedure for changing them safely.</p>
-<p class="search-aliases" style="margin-top:8px;font-size:13.5px;color:var(--text-soft);font-style:italic;">Also searches: <strong>GL class</strong>, <strong>GL class code change</strong>, <strong>item GL class wrong</strong>, <strong>wrong account on receipt</strong>, <strong>class code hierarchy</strong>.</p>
+<p class="search-aliases" style="margin-top:8px;font-size:13.5px;color:var(--text-soft);font-style:italic;">Also searches: <strong>GL class</strong>, <strong>GL class code change</strong>, <strong>item GL class wrong</strong>, <strong>wrong account on receipt</strong>, <strong>class code hierarchy</strong>, <strong>excluded GL class</strong>, <strong>class not in the model</strong>, <strong>missing 4152 entry</strong>, <strong>document type 98</strong>, <strong>uncosted stock</strong>.</p>
 </div></section>
 
 <div class="layout">
@@ -115,9 +115,10 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <li><a href="#section-3">3. The Risk of Changing Codes</a></li>
 <li><a href="#section-4">4. Procedure for Changing a Code</a></li>
 <li><a href="#section-5">5. Inventory Integrity Report 5</a></li>
-<li><a href="#section-6">6. Organizational Best Practices</a></li>
-<li><a href="#section-7">7. Quick Reference Summary</a></li>
-<li><a href="#section-8">8. Related Documentation</a></li>
+<li><a href="#section-6">6. When a Code Is Missing from Your Model</a></li>
+<li><a href="#section-7">7. Organizational Best Practices</a></li>
+<li><a href="#section-8">8. Quick Reference Summary</a></li>
+<li><a href="#section-9">9. Related Documentation</a></li>
 </ul>
 </aside>
 
@@ -285,9 +286,47 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 
 <p>Integrity Report 5 can be accessed via the RapidReconciler application under the Inventory Integrity Reports menu. Review the report output for any items listed and take corrective action as needed to ensure GL Class Codes are consistent across all levels of the hierarchy.</p>
 
-<h2 id="section-6">Organizational Best Practices</h2>
+<h2 id="section-6">When a GL Class Code Is Missing from Your Model</h2>
+<p>Your model DMAAI &mdash; table <code>4152</code> &mdash; is the list of GL Class Codes RapidReconciler can map to an inventory account. If an item uses a GL Class Code that has no <code>4152</code> entry for its company, there is no account to reconcile that item against, so its entire on-hand value is left out of the reconciliation. It is not reported as a variance. It is simply absent, and your reconciliation ties without it.</p>
+<p>The <strong>Accounting Model Review</strong> page lists every excluded code, split one row per stocking type, with the value and item count behind each one.</p>
 
-<h3 id="section-6-1"><span class="num">6.1</span>Establish a Formal Change Procedure</h3>
+<h3 id="section-6-1"><span class="num">6.1</span>The Amount Decides, Not the Code</h3>
+<p>The instinct is to read the code and settle it there: a class named for supplies, tooling, or non-stock parts sounds like something that was never meant to carry inventory value. Do not settle it that way. Class-code names are yours to choose and they drift from what the items under them actually are. On a live company, the supplies class can hold more excluded value than every other excluded class combined.</p>
+<p>Stocking type does not settle it either. Excluded items sit on purchased and manufactured stocking types like any other stock. Judge each row on what it holds.</p>
+
+<h3 id="section-6-2"><span class="num">6.2</span>Two Causes, Opposite Fixes</h3>
+<p>An excluded class that holds on-hand value is a contradiction: the item is on the shelf and valued, but no account is watching it. There are two ways to arrive there, and the correct fix for one is the wrong fix for the other.</p>
+<ul>
+<li><strong>It is real stock wearing the wrong class.</strong> The item stocks, issues, and revalues like inventory, and the only thing missing is the mapping. Add the class to <code>4152</code>, or correct the GL Class Code on the item so it falls under a class you already map.</li>
+<li><strong>It is genuinely non-stock and should never have held a balance.</strong> Something upstream put quantity on an item that was meant to expense on receipt &mdash; most often an order line type whose inventory interface writes to inventory when it should not, or a receipt posted against the wrong item. The fix is at that source. Adding the class to <code>4152</code> here would map the error to an account and carry it into your reconciliation as though it were correct.</li>
+</ul>
+<p>What separates the two is the item, not the class: what the items are, how they are described, whether they move, and whether the order lines behind them were meant to stock. Open the row detail and read the items before you decide.</p>
+
+<h3 id="section-6-3"><span class="num">6.3</span>A Row Showing 0.00 Is Not Automatically Settled</h3>
+<p>Two different situations both show as zero excluded value, and neither is the same as "nothing here".</p>
+<ul>
+<li><strong>Empty, not free.</strong> The items carry a unit cost but nothing is on hand right now. The row is marked <strong>carries cost</strong>. It excludes nothing today and starts excluding real value on the next receipt.</li>
+<li><strong>A costing gap.</strong> There is quantity on the shelf and not one item carries a unit cost, so the value calculates to zero. The row is marked <strong>uncosted stock</strong>. The exclusion is free only because the cost was never set; the moment costing is corrected, real value drops out of reconciliation.</li>
+</ul>
+<p>A class that is genuinely finished with &mdash; no cost, no quantity, no activity &mdash; carries neither marker.</p>
+
+<h3 id="section-6-4"><span class="num">6.4</span>When the Branch and Location Codes Disagree</h3>
+<p>As Section 1 covers, the GL Class Code is set at each level of the hierarchy independently. The excluded-class list groups by the <strong>Item Location</strong> code, and the row detail shows the <strong>Item Branch</strong> code beside it. Where the two differ, the item's activity splits: work order moves take the code from the branch record while other movements take it from the location. If one of those codes is in your model and the other is not, part of that item's activity reconciles and part disappears, which reads on a report as a class that is only partly a problem. It is not. Run <strong>Integrity Report 5</strong> (Section 5) and bring the two levels back into agreement.</p>
+
+<h3 id="section-6-5"><span class="num">6.5</span>Recording a Verdict</h3>
+<p>Each row carries a verdict you set: <strong>Intended</strong>, <strong>Needs review</strong>, or <strong>Fixed</strong>. The verdict is a record of your judgment, and RapidReconciler keeps it until the facts underneath it move. It does not expire on its own.</p>
+<p>When you record a verdict, RapidReconciler stores the amount and the item count the row held at that moment. If either changes later, the row is flagged <strong>amount changed</strong> or <strong>items changed</strong> and comes back for a second look. The item count matters as much as the amount: a reclassification can swap the items under a class while leaving the total at zero, and your decision was about those items.</p>
+<p>Once every row has a verdict, the page says so &mdash; and deliberately does not call it clean. Reviewed and accepted means the value is still outside your reconciliation, by decision. Only adding the class at the source in JD Edwards brings it back in.</p>
+
+<h3 id="section-6-6"><span class="num">6.6</span>Suppressing a Class at the Source with Document Type 98</h3>
+<p>There is a second way to settle an excluded class, and it lives in JD Edwards rather than in RapidReconciler. A DMAAI <code>4152</code> entry written with <strong>document type 98</strong> tells RapidReconciler that the class is excluded on purpose. The class then stops appearing on the excluded list entirely, for that company.</p>
+<p>Use it where the exclusion is a standing decision rather than a case-by-case one. Because it lives in your own DMAAI configuration, it travels with the company: it survives upgrades, it applies to every user, and an auditor reading your <code>4152</code> table can see the decision alongside every other account mapping.</p>
+<div class="callout note"><p><strong>Which to use.</strong> Document type 98 keys on the company and the GL Class Code, so it suppresses the whole class. Use the in-app verdict when the answer differs by stocking type under one class &mdash; for example when the purchased items under a class are a deliberate exclusion and the manufactured ones are not.</p></div>
+<div class="callout important"><p><strong>Suppression hides the row; it does not bring the value back.</strong> A class suppressed with document type 98 still holds on-hand value outside your reconciliation, and you will no longer be reminded of it. Only add the suppression once you are satisfied the class holds nothing you need to reconcile &mdash; and check the row for the <strong>carries cost</strong> and <strong>uncosted stock</strong> markers first, because both mean the value is coming.</p></div>
+
+<h2 id="section-7">Organizational Best Practices</h2>
+
+<h3 id="section-7-1"><span class="num">7.1</span>Establish a Formal Change Procedure</h3>
 <p>Establish a formal procedure within your organization that requires on-hand quantity to be at zero before any GL Class Code change is processed. This discipline prevents significant reconciliation issues at month end.</p>
 <p>Consider requiring the following approvals before a GL Class Code change is processed:</p>
 <ul>
@@ -296,10 +335,10 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <li>Sign-off that all hierarchy levels have been updated</li>
 </ul>
 
-<h3 id="section-6-2"><span class="num">6.2</span>Keep GL Class Codes Consistent Across All Levels</h3>
+<h3 id="section-7-2"><span class="num">7.2</span>Keep GL Class Codes Consistent Across All Levels</h3>
 <p>GL Class Codes should always be the same across all levels for a given item. Run Integrity Report 5 regularly to identify and correct any mismatches.</p>
 
-<h3 id="section-6-3"><span class="num">6.3</span>Document All Changes</h3>
+<h3 id="section-7-3"><span class="num">7.3</span>Document All Changes</h3>
 <p>Document GL Class Code changes with clear remarks on the adjustment transactions and maintain a log of changes for audit purposes. Include:</p>
 <ul>
 <li>The item number and description</li>
@@ -309,10 +348,10 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <li>The adjustment transaction document numbers</li>
 </ul>
 
-<h3 id="section-6-4"><span class="num">6.4</span>Timing of Changes</h3>
+<h3 id="section-7-4"><span class="num">7.4</span>Timing of Changes</h3>
 <p>Where possible, schedule GL Class Code changes during periods of low inventory activity — ideally when on-hand quantity is naturally at zero — to minimize the number of adjustment transactions required and reduce the risk of timing errors.</p>
 
-<h2 id="section-7">Quick Reference Summary</h2>
+<h2 id="section-8">Quick Reference Summary</h2>
 <div class="table-wrap"><table>
 <thead><tr><th>Topic</th><th>Key Point</th></tr></thead>
 <tbody>
@@ -324,9 +363,13 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <tr><td><strong>Verification</strong></td><td>Run Integrity Report 5 after every GL Class Code change</td></tr>
 <tr><td><strong>Audit trail</strong></td><td>Document all adjustments with clear remarks referencing the change</td></tr>
 <tr><td><strong>Timing</strong></td><td>Schedule changes during periods of low or zero inventory activity</td></tr>
+<tr><td><strong>Code missing from the model</strong></td><td>No <code>4152</code> entry means no account &mdash; that item&rsquo;s value is left out of reconciliation entirely</td></tr>
+<tr><td><strong>Judging an exclusion</strong></td><td>Judge on what the row holds, never on what the class code is named</td></tr>
+<tr><td><strong>A row showing 0.00</strong></td><td><strong>carries cost</strong> = empty, not free &middot; <strong>uncosted stock</strong> = quantity on hand with no cost set</td></tr>
+<tr><td><strong>Standing exclusion</strong></td><td>DMAAI <code>4152</code> document type <strong>98</strong> suppresses a class at the source, per company</td></tr>
 </tbody></table></div>
 
-<h2 id="section-8">Related Documentation</h2>
+<h2 id="section-9">Related Documentation</h2>
 <ul>
 <li>DMAAI Reference Guide</li>
 <li>Account Management — Adding an Inventory Account</li>
