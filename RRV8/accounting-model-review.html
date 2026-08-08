@@ -369,7 +369,7 @@
       var stkt = String(field(r, 'StockingType') || '');
       var amt = Number(field(r, 'Amount')) || 0;   // on-hand $ (rperpetualinv), summed in the view
       var key = _sliceKey(co, gl, stkt);
-      if (!map[key]) map[key] = { key: key, co: co, gl: gl, stkt: stkt, items: 0, amount: 0, qty: 0, costed: 0, rowsTotal: 0, rows: [], _seen: Object.create(null) };
+      if (!map[key]) map[key] = { key: key, co: co, gl: gl, stkt: stkt, items: 0, amount: 0, qty: 0, costed: 0, split: 0, brClasses: [], rowsTotal: 0, rows: [], _seen: Object.create(null), _br: Object.create(null) };
       // The view is at item/LOCATION/LOT grain (DAC-56), so one item in three
       // locations is three rows. "Items" must stay an ITEM count or the headline
       // silently doubles and stops meaning what the column says. The modal shows
@@ -380,6 +380,14 @@
       // Rows carrying a unit cost. Drives the latent-exclusion marker below:
       // 0.00 with a cost behind it is empty, not free.
       if ((Number(field(r, 'UnitCost')) || 0) !== 0) map[key].costed++;
+      // Rows whose BRANCH class disagrees with the LOCATION class this slice is
+      // grouped by. Work-order moves take the class from the branch and every other
+      // move takes it from the location, so a split means part of these items'
+      // activity routes to an account that IS in the model and part does not. The
+      // modal shows the pair side by side; counting it here is what lets the AI read
+      // and the export say so without the analyst spotting it column by column.
+      var bc = String(field(r, 'BranchClass') || '');
+      if (bc && bc !== String(gl || '')) { map[key].split++; map[key]._br[bc] = 1; }
       map[key].rowsTotal++;
       map[key].qty += Number(field(r, 'Quantity')) || 0;
       map[key].rows.push(r);
@@ -391,6 +399,7 @@
       map[k].rows.sort(function (x, y) {
         return Math.abs(Number(field(y, 'Amount')) || 0) - Math.abs(Number(field(x, 'Amount')) || 0);
       });
+      map[k].brClasses = Object.keys(map[k]._br);
       return map[k];
     }).sort(function (a, b) { return Math.abs(b.amount) - Math.abs(a.amount); });
   }
@@ -429,11 +438,30 @@
   // says everything the marker would, so it would be noise. Three of six
   // zero-value slices on the demo company are genuinely costless and stay clean;
   // three carry costs on 97 rows and are flagged.
+  //
+  // The MIRROR CASE gets its own marker (UI-68). A slice can read 0.00 while holding
+  // real quantity, because not one of its items has a unit cost — one demo slice
+  // holds 582 units at nothing. Unmarked it looks identical to a genuinely empty
+  // slice, and it is a different finding with a different owner: the exclusion costs
+  // nothing today only because the item cost was never set, and it starts excluding
+  // real value the moment costing is fixed. Same test the AI read applies, so the
+  // table and the read cannot tell the analyst two different stories.
   function _latentChip(g) {
-    if (Math.abs(g.amount) >= 0.005 || !g.costed) return '';
-    var tip = g.costed + ' of ' + g.rowsTotal + ' rows carry a unit cost. This slice reads 0.00 because '
-            + 'nothing is on hand, not because the items are free — it will exclude value once stock arrives.';
-    return '<span class="xd-latent" title="' + esc(tip) + '">carries cost</span>';
+    if (Math.abs(g.amount) >= 0.005) return '';
+    if (g.costed) {
+      return '<span class="xd-latent" title="' + esc(g.costed + ' of ' + g.rowsTotal
+        + ' rows carry a unit cost. This slice reads 0.00 because nothing is on hand, not because '
+        + 'the items are free — it will exclude value once stock arrives.')
+        + '">carries cost</span>';
+    }
+    if (Math.abs(g.qty) >= 0.0005) {
+      return '<span class="xd-latent" title="' + esc(fmtNum(g.qty, 0) + ' on hand across ' + g.rowsTotal
+        + ' row' + (g.rowsTotal === 1 ? '' : 's') + ', and no row carries a unit cost. This slice reads '
+        + '0.00 because the item cost is not set, not because the shelf is empty — set the cost and the '
+        + 'exclusion starts holding real value.')
+        + '">uncosted stock</span>';
+    }
+    return '';
   }
   function renderExcluded(container, rows, emptyMsg) {
     if (!rows || !rows.length) { container.innerHTML = '<div class="empty">' + esc(emptyMsg) + '</div>'; _r3Groups = []; return; }
@@ -711,9 +739,50 @@
     };
   }
   function _aiTier() { return (window.RRAI && RRAI.get) ? RRAI.get() : 'full'; }
-  function _exclFactLines(s) {
-    return s.groups.map(function (g) {
-      return '- ' + g.code + ': ' + g.items + ' item' + (g.items === 1 ? '' : 's') + ', ' + fmtMoney(g.amount) + ' on hand';
+
+  // The fact block the AI reasons from. SLICE grain, not GL-class grain (UI-68).
+  //
+  // What it used to send was (class code, item count, amount) per GL CLASS, under an
+  // instruction to "judge from the code" — and the class code is precisely the field
+  // that does not discriminate here. On a demo company SUPP (supplies) is the LARGEST
+  // exclusion, and no stocking type N exists across 161,612 item-branch records on
+  // three databases, so neither the name nor the type rescues the judgement. That is
+  // the UI-38 wrong-grounding failure mode living inside a prompt: an instruction
+  // asking for a call the facts could not support, which the model answers anyway.
+  //
+  // Everything that DOES discriminate sits at the slice — stocking type, quantity,
+  // whether the rows behind a 0.00 carry a unit cost, whether the branch class
+  // disagrees with the location class, and the verdict the analyst already recorded.
+  // Grounding beats instruction, so all of it goes in.
+  //
+  // Item descriptions ride along on the slices that hold value. On a real customer
+  // they are the one field that separates a consumable that should never hold a
+  // balance from a component wearing the wrong class. Suppressed at the Enhanced
+  // (scrubbed) tier: item text is customer content and that tier's contract is that
+  // identities do not leave the page.
+  function _exclFactLines(withDesc) {
+    return _r3Groups.map(function (g) {
+      var rev = _r3Reviews[g.key];
+      var bits = ['- GL class ' + (g.gl || '(blank)') + ', stocking type ' + stktLabel(g.stkt) + ': '
+        + g.items.toLocaleString('en-US') + ' item' + (g.items === 1 ? '' : 's') + ', '
+        + fmtMoney(g.amount) + ' on hand, quantity ' + fmtNum(g.qty, 0)];
+      if (g.costed) bits.push(g.rowsTotal === 1 ? 'its one row carries a unit cost'
+        : g.costed + ' of ' + g.rowsTotal + ' rows carry a unit cost');
+      else if (Math.abs(g.qty) >= 0.0005) bits.push('there is stock on hand and NO row carries a unit cost');
+      if (g.split) bits.push(g.split + ' row' + (g.split === 1 ? '' : 's')
+        + ' sit on a branch GL class that differs from this location class ('
+        + g.brClasses.join(', ') + ')');
+      bits.push(rev && rev.status ? 'verdict already recorded by the analyst: ' + rev.status : 'no verdict yet');
+      var line = bits.join('; ') + '.';
+      if (withDesc && Math.abs(g.amount) >= 0.005) {
+        var seen = Object.create(null), d = [];
+        g.rows.forEach(function (r) {
+          var t = String(field(r, 'Description') || '').trim();
+          if (t && !seen[t] && d.length < 4) { seen[t] = 1; d.push(t); }
+        });
+        if (d.length) line += '\n  its largest items by value are described as: ' + d.join('; ') + '.';
+      }
+      return line;
     }).join('\n');
   }
   function _aiExplain(prompt) {
@@ -833,7 +902,7 @@
     // waiting behind a button nobody has a reason not to press. Fires once per
     // (tier, scoped exclusion set) — the signature guard keeps a re-render, a
     // company switch and a tier flip from re-billing the same question.
-    if (_r3Loaded && s.groups.length) autoAssess(s);
+    if (_r3Loaded && _r3Groups.length) autoAssess();
   }
 
   // DMAAI grounding note (UI-38 consolidation): the model-DMAAI (4152) policy is
@@ -844,38 +913,56 @@
   // duplicate policy definition — deliberately no client mirror, which would be a
   // second copy to drift. Keep the framing; the policy lives server-side.
   //
-  // "Assess these exclusions" — AI classifies benign vs. investigate, grounded in
-  // the on-screen codes + amounts. Tier: Basic = one-line materiality read;
-  // Enhanced/Full = per-code judgment, biggest concern first.
-  // Fires the read once per (tier, scoped exclusion set). A re-render, a company
-  // switch and a tier flip all change that signature and legitimately re-ask; a
-  // plain repaint does not and must not.
-  var _autoSig = null;
-  function autoAssess(s) {
+  // "Assess these exclusions" — which slices are a real hole in reconciliation and
+  // what to do about each. Basic = one-line materiality read; Enhanced/Full = up to
+  // four lines, worst by value first.
+  //
+  // Re-asks when the SIGNATURE changes: tier, scoped company, the slice set, or a
+  // recorded verdict. Verdicts belong in it — a read that still names an accepted
+  // slice as the top concern is stale the moment the analyst answers it — but that
+  // makes every dropdown a candidate re-ask, so the fire is debounced and a run of
+  // verdicts settles into one call. A plain repaint changes nothing and must not
+  // re-bill.
+  var _autoSig = null, _autoTimer = null;
+  function autoAssess() {
+    if (!_r3Groups.length) return;
     var sig = _aiTier() + '|' + (_company || 'all') + '|'
-            + s.groups.map(function (g) { return g.code + ':' + g.items + ':' + g.amount.toFixed(2); }).join(',');
+            + _r3Groups.map(function (g) {
+                var rev = _r3Reviews[g.key];
+                return g.key + ':' + g.items + ':' + g.amount.toFixed(2) + ':' + ((rev && rev.status) || '');
+              }).join(',');
     if (sig === _autoSig) return;
     _autoSig = sig;
-    assessExclusions();
+    clearTimeout(_autoTimer);
+    _autoTimer = setTimeout(assessExclusions, 1200);
   }
   function assessExclusions() {
     if (_aiTier() === 'off') return;
-    var s = _exclSummary(); if (!s.groups.length) return;
+    if (!_r3Groups.length) return;
     var ans = $('aiAnswer');
     if (ans) { ans.hidden = false; ans.textContent = 'Thinking…'; }
     var basic = _aiTier() === 'grounded';
     var scrub = _aiTier() === 'scrubbed';
     var who = _company ? (scrub ? 'the entity under review' : ('Company ' + _company)) : 'all companies';
+    var p = _exclProgress();
+    var reg = (window.RRV8 && RRV8.AI_REGISTER) ? ('\n' + RRV8.AI_REGISTER) : '';
     var prompt =
-      'You are RapidReconciler AI, a JDE inventory-reconciliation consultant advising an analyst reviewing the model DMAAI (table 4152) for ' + who + '.\n' +
-      'These GL class codes are used by inventory items but are NOT in the model, so their on-hand value is EXCLUDED from reconciliation:\n' +
-      _exclFactLines(s) + '\n' +
-      'Total excluded on-hand value: ' + fmtMoney(s.total) + '.\n' +
-      'Some exclusions are legitimate (non-stock, expense, supplies or tooling classes carry no reconcilable inventory value); others may be real stocked inventory that has fallen out of the model and should be added back at the source.\n' +
+      'An analyst is reviewing the model DMAAI (table 4152) for ' + who + '. A GL class that an inventory item uses but that has no 4152 entry has no account to reconcile against, so the whole on-hand value of those items sits outside reconciliation.\n' +
+      'One line per slice — (GL class, stocking type) — biggest value first:\n' +
+      _exclFactLines(!basic && !scrub) + '\n' +
+      fmtMoney(p.totalAmt) + ' is excluded in total; ' + fmtMoney(p.openAmt) + ' across '
+        + p.openClasses + ' GL class code' + (p.openClasses === 1 ? '' : 's') + ' carries no verdict yet.\n' +
+      'HOW TO READ THIS — every line below is measured, not assumed:\n' +
+      '- The AMOUNT decides, never the class code. A name like SUPP, TOOL or NS40 is not evidence that the value is unreconcilable — on real data supplies is routinely the largest exclusion in the set. Never argue from what a code sounds like.\n' +
+      '- Stocking type does not settle it either. Excluded items sit on purchased and manufactured types like any other stock.\n' +
+      '- A slice holding value is the contradiction worth naming, and it has TWO readings with OPPOSITE fixes. Either it is real stock wearing the wrong class, and the fix is to add the class to 4152 or correct the GL class on the item; or it is genuinely non-stock that should never have carried a balance, and the fix is upstream at the order line type or the receipt — adding that one to 4152 would make the error permanent and audited. Say which reading the evidence favours and name the one thing to check to settle it.\n' +
+      '- A slice at 0.00 whose rows carry a unit cost is empty, not free. It excludes value on the next receipt, and an item holding a cost it should not have will value every future receipt, so the exposure grows with nobody watching it.\n' +
+      '- A slice at 0.00 that holds quantity with no unit cost anywhere is the mirror image: the exclusion is costing nothing today only because the item cost is not set. That is a costing gap to close first, and it starts excluding real value the moment a cost lands.\n' +
+      '- Where a branch GL class differs from the location class, work-order moves on those items route to an account that IS in the model while every other move does not. The class reads as partly reconciled and is not.\n' +
+      '- A recorded verdict is the analyst’s own decision. Do not re-argue Intended or Fixed. The one case that reopens: a slice accepted while it held nothing, whose rows carry a unit cost or whose shelf holds uncosted quantity. That verdict was given when nothing was at stake and the figures have since moved under it.\n' +
       (basic
-        ? 'In ONE sentence, say whether the total excluded value is material enough to warrant a closer look. Use only the figures above.'
-        : 'Say in a few words which codes look like legitimate exclusions and which look like real inventory to INVESTIGATE — lead with the biggest concern by value. Judge from the code, item count, and amount.') + '\n' +
-      'The reader is JDE-fluent. Answer in at most ' + (basic ? '1 sentence, under 35 words' : '3 sentences, under 70 words') + '. No preamble, no markdown, no lists.';
+        ? 'TASK: in ONE sentence under 45 words, say whether the amount still without a verdict is worth working now and what the first move is. Quote the figures above exactly as given; never add two of them together into a new total.'
+        : 'TASK: at most four lines, each beginning "- " and under about 30 words, worst by value first. Per line: the slice, which reading fits it, the action. Drop any line that does not change what the analyst does next. Where a slice already carries a verdict that its own figures now contradict, that line earns one of the four whatever its value — a decision made when nothing was at stake is the one thing the table cannot show.') + reg;
     _aiExplain(prompt).then(function (txt) {
       if (ans) ans.textContent = txt || 'No assessment came back — try again.';
     }).catch(function () {
