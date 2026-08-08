@@ -357,8 +357,14 @@
       var stkt = String(field(r, 'StockingType') || '');
       var amt = Number(field(r, 'Amount')) || 0;   // on-hand $ (rperpetualinv), summed in the view
       var key = _sliceKey(co, gl, stkt);
-      if (!map[key]) map[key] = { key: key, co: co, gl: gl, stkt: stkt, items: 0, amount: 0, qty: 0, rows: [] };
-      map[key].items++; map[key].amount += amt;
+      if (!map[key]) map[key] = { key: key, co: co, gl: gl, stkt: stkt, items: 0, amount: 0, qty: 0, rows: [], _seen: Object.create(null) };
+      // The view is at item/LOCATION/LOT grain (DAC-56), so one item in three
+      // locations is three rows. "Items" must stay an ITEM count or the headline
+      // silently doubles and stops meaning what the column says. The modal shows
+      // every row; this counts the distinct items behind them.
+      var ik = String(field(r, 'ShortItem')) + '' + String(field(r, 'Branch'));
+      if (!map[key]._seen[ik]) { map[key]._seen[ik] = 1; map[key].items++; }
+      map[key].amount += amt;
       map[key].qty += Number(field(r, 'Quantity')) || 0;
       map[key].rows.push(r);
     });
@@ -415,8 +421,20 @@
           // A verdict recorded when the slice held nothing is not the same verdict
           // now it holds money. Compare against the snapshot and say so rather
           // than honouring it silently.
-          var stale = rev && rev.amountSnapshot != null
-                   && Math.abs((Number(rev.amountSnapshot) || 0) - g.amount) >= 0.01;
+          // Reopen a verdict when EITHER the money or the item set moved. The
+          // amount alone misses a reclassification that swaps the items under a
+          // slice while leaving the total at zero — the decision was made about
+          // those items, not about the number.
+          var staleAmt = rev && rev.amountSnapshot != null
+                      && Math.abs((Number(rev.amountSnapshot) || 0) - g.amount) >= 0.01;
+          var staleItems = rev && rev.itemsSnapshot != null
+                        && Number(rev.itemsSnapshot) !== g.items;
+          var stale = staleAmt || staleItems;
+          var staleWhy = staleAmt && staleItems ? 'amount and items changed'
+                       : staleAmt ? 'amount changed' : 'items changed';
+          var staleTip = rev ? ('Reviewed when this slice held ' + fmtMoney(rev.amountSnapshot)
+                        + ' across ' + (rev.itemsSnapshot == null ? '?' : rev.itemsSnapshot) + ' item'
+                        + (rev.itemsSnapshot === 1 ? '' : 's')) : '';
           var status = rev ? String(rev.status || '') : '';
           var cls = status === 'Intended' ? ' is-intended' : (status === 'Fixed' ? ' is-fixed' : '');
           return '<tr' + (Math.abs(g.amount) < 0.005 ? ' class="xd-zero"' : '') + '>'
@@ -431,13 +449,14 @@
             +   '<option value="Needs review"' + (status === 'Needs review' ? ' selected' : '') + '>Needs review</option>'
             +   '<option value="Fixed"' + (status === 'Fixed' ? ' selected' : '') + '>Fixed</option>'
             + '</select>'
-            + (stale ? '<span class="xd-stale" title="Reviewed when this slice held ' + esc(fmtMoney(rev.amountSnapshot)) + '">amount changed</span>' : '')
+            + (stale ? '<span class="xd-stale" title="' + esc(staleTip) + '">' + esc(staleWhy) + '</span>' : '')
             + '</td>'
             + '<td style="text-align:right"><button type="button" class="xd-view" data-xd-view="' + esc(g.key) + '">View</button></td>'
             + '</tr>';
         }).join('')
       + '</tbody></table></div>'
-      + _exclFooter(classCount, groups.length, rows.length, grandAmt)
+      + _exclFooter(classCount, groups.length,
+          groups.reduce(function (n, g) { return n + g.items; }, 0), grandAmt)
       + '<div class="xd-actions"><button type="button" class="ai-pill" id="xdExportAll">Export all excluded items</button></div>';
     container.innerHTML = html;
   }
@@ -892,15 +911,24 @@
   // workbook, so the two can never disagree. Short labels on screen with the
   // full field name in the <th title> (UI-47); the export keeps the full label
   // (audit quality, UI-32).
+  // BOTH GL classes ride here on purpose. The card groups by the LOCATION class;
+  // the BRANCH class (F4102) is set independently, and work-order moves take the
+  // class from the branch while every other F4111 move takes it from the location.
+  // Where the two differ, part of an item's activity routes to an account that IS
+  // in the model and part does not — six excluded item-branches on a demo company
+  // carry exactly that split. It is invisible unless the pair is side by side.
   var XD_COLS = [
-    { key: 'Item',         label: 'Item',        abbr: 'Item' },
-    { key: 'ThirdItem',    label: 'Third Item',  abbr: '3rd Item' },
-    { key: 'Description',  label: 'Description', abbr: 'Description' },
-    { key: 'Branch',       label: 'Branch',      abbr: 'Branch' },
-    { key: 'GLClass',      label: 'GL Class',    abbr: 'GL Class' },
-    { key: 'StockingType', label: 'Stocking Type', abbr: 'Stk' },
-    { key: 'Quantity',     label: 'Quantity On Hand', abbr: 'Qty', num: true, sum: true },
-    { key: 'Amount',       label: 'Amount On Hand',   abbr: 'Amount', num: true, sum: true }
+    { key: 'Item',         label: 'Item',              abbr: 'Item' },
+    { key: 'ThirdItem',    label: 'Third Item',        abbr: '3rd Item' },
+    { key: 'Description',  label: 'Description',       abbr: 'Description' },
+    { key: 'Branch',       label: 'Branch',            abbr: 'Branch' },
+    { key: 'Location',     label: 'Location',          abbr: 'Loc' },
+    { key: 'Lot',          label: 'Lot',               abbr: 'Lot' },
+    { key: 'GLClass',      label: 'Location GL Class', abbr: 'Loc Class' },
+    { key: 'BranchClass',  label: 'Branch GL Class',   abbr: 'Br Class' },
+    { key: 'StockingType', label: 'Stocking Type',     abbr: 'Stk' },
+    { key: 'Quantity',     label: 'Quantity On Hand',  abbr: 'Qty', num: true, sum: true },
+    { key: 'Amount',       label: 'Amount On Hand',    abbr: 'Amount', num: true, sum: true }
   ];
   function xdCell(r, c) {
     var v = field(r, c.key);
