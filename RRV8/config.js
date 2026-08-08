@@ -816,6 +816,16 @@ window.RRV8 = window.RRV8 || {};
  * own domain back to them costs adoption ([[UI-40]] audience note; CLAUDE.md
  * "Assume JDE fluency"). Both rules stand. What changes is that naming a
  * mechanism now has to earn its place by changing what the reader DOES.
+ *
+ * PROSE OR BULLETS — settled here, once. The per-surface caps disagreed with each
+ * other: one page banned lists outright while another allowed up to four bullets,
+ * and the tightest cap (one sentence, 35 words) could not carry what happened AND
+ * what to do, so the model dropped the action every time. The ruling is BULLETS for
+ * anything with more than one finding, because a paragraph holding two findings
+ * makes the analyst re-read it to separate them. Plain "- " lines, not markdown:
+ * every answer surface renders textContent, so a markdown bullet would show its
+ * asterisk. Surfaces still set their own LENGTH, which is a materiality judgement;
+ * they no longer set their own FORMAT.
  */
 window.RRV8 = window.RRV8 || {};
 window.RRV8.AI_REGISTER = [
@@ -826,7 +836,9 @@ window.RRV8.AI_REGISTER = [
   '- Prefer the plain word where it costs nothing: "the item ledger" over F4111 in a sentence that is not about the table itself.',
   '- Say the amount and the scope in figures the reader can act on. Never a percentage of a tie-out.',
   '- If the evidence does not support a cause, say what is known and what to check next. Never invent a mechanism to fill the sentence.',
-  '- No preamble, no restating the question, no markdown.'
+  '- No preamble and no restating the question. Plain text only: no headings, no bold, no numbered lists.',
+  '- One point, one sentence. More than one point, one line each beginning with "- ", with no blank line between them. Never a paragraph that holds two findings.',
+  '- Quote the figures given, exactly as given. Never add two of them together into a total the surface does not show.'
 ].join('\n');
 
 /*
