@@ -93,6 +93,12 @@
   /* Verdict banner (inside the AI card). */
   .verdict { display: flex; align-items: center; gap: 14px; border-radius: 12px; padding: 16px 18px; border: 1px solid var(--rule); background: var(--bg-soft); }
   .verdict.is-clean { background: var(--green-pale); border-color: #cfe6d8; }
+  /* ACCEPTED — every exclusion reviewed, value still outside reconciliation.
+     Deliberately NOT green: clean and accepted are different states and the
+     analyst must be able to tell them apart at a glance. Navy rule + neutral
+     wash reads as "settled", never as "nothing here". */
+  .verdict.is-accepted { background: var(--bg-soft); border-color: #c7d2e4; border-left: 4px solid var(--navy); }
+  .verdict.is-accepted .verdict-dot { background: var(--navy); }
   /* .verdict.is-issue retired 2026-08-07 (owner: "the amber band and other text is
      just noise"). In the ISSUE state the banner is hidden entirely and the
      excluded table speaks for itself; CLEAN and UNKNOWN keep the banner because
@@ -373,6 +379,23 @@
   // different thing from an unfamiliar code.
   function stktLabel(s) { return s === '' ? '(no branch record)' : s; }
 
+  // Footer. Leads on what is STILL OUTSTANDING, because a count that never moves
+  // no matter how much the analyst reviews is noise, and because rows-reviewed on
+  // its own overstates progress when the reviewed rows carry no value.
+  function _exclFooter(classCount, sliceCount, itemCount, grandAmt) {
+    var p = _exclProgress();
+    var head = p.openClasses === 0
+      ? '<strong>All ' + classCount + ' GL class' + (classCount === 1 ? '' : 'es') + ' reviewed</strong>'
+      : '<strong>' + p.openClasses + ' of ' + classCount + ' GL class'
+        + (classCount === 1 ? '' : 'es') + ' still to review</strong>';
+    var money = p.openAmt === 0
+      ? fmtMoney(p.totalAmt) + ' reviewed and accepted'
+      : '<strong>' + fmtMoney(p.openAmt) + '</strong> of ' + fmtMoney(p.totalAmt) + ' outstanding';
+    return '<div class="tbl-foot">' + head + ' &middot; '
+      + p.reviewed + ' of ' + sliceCount + ' stocking type' + (sliceCount === 1 ? '' : 's') + ' reviewed &middot; '
+      + money + ' &middot; '
+      + itemCount.toLocaleString('en-US') + ' item' + (itemCount === 1 ? '' : 's') + '</div>';
+  }
   function renderExcluded(container, rows, emptyMsg) {
     if (!rows || !rows.length) { container.innerHTML = '<div class="empty">' + esc(emptyMsg) + '</div>'; _r3Groups = []; return; }
     var groups = excludedSlices(rows);
@@ -414,10 +437,7 @@
             + '</tr>';
         }).join('')
       + '</tbody></table></div>'
-      + '<div class="tbl-foot">' + classCount + ' GL class' + (classCount === 1 ? '' : 'es')
-      +   ' excluded across ' + groups.length + ' stocking type' + (groups.length === 1 ? '' : 's') + ' &middot; '
-      +   rows.length.toLocaleString('en-US') + ' item' + (rows.length === 1 ? '' : 's') + ' &middot; '
-      +   fmtMoney(grandAmt) + ' on-hand value excluded</div>'
+      + _exclFooter(classCount, groups.length, rows.length, grandAmt)
       + '<div class="xd-actions"><button type="button" class="ai-pill" id="xdExportAll">Export all excluded items</button></div>';
     container.innerHTML = html;
   }
@@ -605,6 +625,38 @@
       .sort(function (a, b) { return Math.abs(b.amount) - Math.abs(a.amount); });
     return { groups: groups, total: total, items: rows.length };
   }
+  // Review-aware progress over the SCOPED slices. One model, three consumers
+  // (footer, verdict banner, AI lead) so they can never quote different numbers
+  // at each other.
+  //
+  // OUTSTANDING is the honest measure, not the gross total. Marking the six
+  // zero-value slices intended on a demo company cleared six of ten rows and
+  // ZERO dollars — the money was all in the four that were left. A summary that
+  // only reports the gross would have read as progress; one that only reports
+  // rows reviewed would read as more progress still. Report both, and lead on
+  // the dollars.
+  //
+  // A class counts as outstanding while ANY of its stocking types is unreviewed:
+  // the class is what maps to a DMAAI 4152 fix, so it is not settled until every
+  // slice under it is.
+  function _exclProgress() {
+    var classes = Object.create(null), open = Object.create(null);
+    var slices = _r3Groups.length, reviewed = 0, totalAmt = 0, openAmt = 0;
+    _r3Groups.forEach(function (g) {
+      var ck = g.co + '' + g.gl;
+      classes[ck] = 1;
+      totalAmt += g.amount;
+      if (_r3Reviews[g.key] && _r3Reviews[g.key].status) reviewed++;
+      else { open[ck] = 1; openAmt += g.amount; }
+    });
+    var nClasses = Object.keys(classes).length, nOpen = Object.keys(open).length;
+    return {
+      classes: nClasses, openClasses: nOpen, slices: slices, reviewed: reviewed,
+      totalAmt: totalAmt, openAmt: openAmt,
+      // "Every exclusion has a verdict" — NOT the same as "nothing is excluded".
+      allReviewed: slices > 0 && reviewed === slices
+    };
+  }
   function _aiTier() { return (window.RRAI && RRAI.get) ? RRAI.get() : 'full'; }
   function _exclFactLines(s) {
     return s.groups.map(function (g) {
@@ -654,15 +706,40 @@
       if (ans) ans.hidden = true;
       return;
     }
-    // ISSUE — banner HIDDEN. Owner 2026-08-07: "the amber band and other text is
-    // just noise." It restated, in prose, the count and the instruction that the
-    // table underneath already carries per row, and it repeated on every visit,
-    // which is the definition of something an analyst learns to skim past. The
-    // AI lead gives the materiality read; the table gives the detail and the
-    // decision. CLEAN and UNKNOWN keep their banner — there is no table under
-    // those states to say anything.
-    if (banner) banner.hidden = true;
+    // ISSUE — banner HIDDEN while any exclusion is still unreviewed. Owner
+    // 2026-08-07: "the amber band and other text is just noise." It restated, in
+    // prose, the count and the instruction the table already carries per row, on
+    // every visit, which is the definition of something an analyst learns to skim
+    // past. The AI lead gives the materiality read; the table gives the detail
+    // and the decision.
+    //
+    // ACCEPTED — every exclusion carries a verdict. The banner comes BACK here,
+    // and deliberately NOT green (owner 2026-08-08). This is a different state
+    // from CLEAN and conflating them would be the dangerous direction of the
+    // error: CLEAN means nothing falls out of reconciliation, ACCEPTED means
+    // everything that falls out has been looked at and accepted, and the value
+    // is still outside the reconciliation. A fully-reviewed $140K exclusion
+    // reading green would tell the analyst the opposite of the truth.
+    //
+    // It surfaces exactly when the table stops prompting: with every row
+    // answered there is nothing left in the grid to carry the message, so the
+    // banner fills back in and names the standing exposure. Verdicts do not
+    // expire (owner 2026-08-08) — the "amount changed" badge is what reopens a
+    // row, not the passage of time.
     if (exCard) exCard.hidden = false;
+    var p = _exclProgress();
+    if (banner && p.allReviewed) {
+      banner.hidden = false;
+      banner.className = 'verdict is-accepted';
+      if (title) title.textContent = 'All ' + n.toLocaleString('en-US') + ' excluded GL class'
+        + (n === 1 ? '' : 'es') + ' reviewed and accepted';
+      if (sub) sub.textContent = p.totalAmt === 0
+        ? 'Every excluded slice has been reviewed, and none of them holds on-hand value — nothing is missing from reconciliation.'
+        : fmtMoney(p.totalAmt) + ' of on-hand value remains outside reconciliation by decision. This is accepted, not clean — '
+          + 'to bring it back in, add the class at the source in JD Edwards, DMAAI 4152.';
+    } else if (banner) {
+      banner.hidden = true;
+    }
     renderAiBand();
   }
 
@@ -675,15 +752,26 @@
       if (!s.groups.length) { lead.hidden = true; }
       else {
         var top = s.groups[0];
+        var p = _exclProgress();
         lead.hidden = false;
-        lead.textContent = fmtMoney(s.total) + ' of on-hand value sits outside the model across ' + s.groups.length
-          + ' GL class code' + (s.groups.length === 1 ? '' : 's') + ' — the largest is ' + top.code + ' at ' + fmtMoney(top.amount)
-          + ' (' + top.items.toLocaleString('en-US') + ' item' + (top.items === 1 ? '' : 's') + ').'
-          // No "ask AI" call to action: the read below runs on its own now, so
-          // inviting a press on a button that no longer exists was the first
-          // thing to go stale when the assess pill was retired.
-          + ' Each row below is judged on its amount — a slice holding nothing costs nothing;'
-          + ' a slice holding value is real inventory outside the reconciliation.';
+        // Lead on what is STILL OUTSTANDING. Quoting the gross once rows have
+        // been accepted tells the analyst nothing about the work left, and on a
+        // company whose reviewed rows were all zero-value it actively misleads:
+        // the row count moves, the exposure does not.
+        // No "ask AI" call to action — the read below runs on its own now, so
+        // inviting a press on a button that no longer exists was the first thing
+        // to go stale when the assess pill was retired.
+        lead.textContent = p.openAmt === 0
+          ? (p.totalAmt === 0
+              ? 'Every excluded slice has been reviewed and none holds on-hand value — nothing is missing from reconciliation.'
+              : fmtMoney(p.totalAmt) + ' of on-hand value has been reviewed and accepted outside the model. '
+                + 'It is still not counted in reconciliation; adding the class at the source in JD Edwards brings it back in.')
+          : fmtMoney(p.openAmt) + ' of on-hand value is still to review across '
+            + p.openClasses + ' GL class code' + (p.openClasses === 1 ? '' : 's')
+            + ' — the largest is ' + top.code + ' at ' + fmtMoney(top.amount)
+            + ' (' + top.items.toLocaleString('en-US') + ' item' + (top.items === 1 ? '' : 's') + ').'
+            + ' Each row is judged on its amount: a slice holding nothing costs nothing;'
+            + ' a slice holding value is real inventory outside the reconciliation.';
       }
     }
     if (acts) acts.hidden = true;   // the assess button is gone; the read runs itself
