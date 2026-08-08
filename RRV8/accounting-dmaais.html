@@ -37,6 +37,7 @@
 <script src="sidebar.js"></script>
 <script defer src="../Tools/help-sidebar.js"></script>
 <script src="vendor/xlsx-js-style.min.js" defer></script>
+<script defer src="../Tools/audit-workbook.js"></script>
 <style>
   /* Shared chrome (canonical palette, command-center wash, corner-chrome Home
      button) lives in admin-chrome.css, linked above. Only page-specific rules
@@ -3535,47 +3536,9 @@
     });
   }
 
-  // ---- audit-quality Excel builder (title band, navy header, bordered body,
-  //      bold total row, money format on numeric columns) — mirrors home.html. ----
-  const AUDIT_NUM_FMT = '#,##0.00;(#,##0.00)';
-  function _auditBorder(rgb) { const s = { style: 'thin', color: { rgb } }; return { top: s, bottom: s, left: s, right: s }; }
-  function buildAuditWorkbook(opts) {
-    if (typeof XLSX === 'undefined') { return false; }
-    const cols = opts.columns || [], ncol = cols.length || 1, titleLines = opts.titleLines || [];
-    const aoa = [];
-    titleLines.forEach(t => { const row = new Array(ncol).fill(''); row[0] = t; aoa.push(row); });
-    if (titleLines.length) aoa.push(new Array(ncol).fill(''));
-    const headRowIdx = aoa.length;
-    aoa.push(cols.map(c => c.label));
-    (opts.rows || []).forEach(r => aoa.push(r.slice()));
-    let totalRowIdx = -1;
-    if (opts.totalRow) { totalRowIdx = aoa.length; aoa.push(opts.totalRow.slice()); }
-    const ws = XLSX.utils.aoa_to_sheet(aoa);
-    const range = XLSX.utils.decode_range(ws['!ref']);
-    for (let t = 0; t < titleLines.length; t++) {
-      const tref = XLSX.utils.encode_cell({ r: t, c: 0 }); if (!ws[tref]) continue;
-      ws[tref].s = { font: { bold: t === 0, sz: t === 0 ? 14 : 10, color: { rgb: t === 0 ? '1F2D4A' : '6B7280' } } };
-    }
-    for (let c = range.s.c; c <= range.e.c; c++) {
-      const href = XLSX.utils.encode_cell({ r: headRowIdx, c }); if (!ws[href]) continue;
-      ws[href].s = { font: { bold: true, color: { rgb: 'FFFFFF' } }, fill: { patternType: 'solid', fgColor: { rgb: '1F2D4A' } }, alignment: { horizontal: (cols[c] && cols[c].num) ? 'right' : 'left', vertical: 'center' }, border: _auditBorder('D0D0D0') };
-    }
-    for (let rr = headRowIdx + 1; rr <= range.e.r; rr++) {
-      const isTotal = rr === totalRowIdx;
-      for (let cc = range.s.c; cc <= range.e.c; cc++) {
-        const cref = XLSX.utils.encode_cell({ r: rr, c: cc }); const cell = ws[cref]; if (!cell) continue;
-        cell.s = cell.s || {}; cell.s.border = _auditBorder('ECECEC');
-        if (cols[cc] && cols[cc].num) { cell.z = cols[cc].fmt || AUDIT_NUM_FMT; cell.s.alignment = { horizontal: 'right' }; }
-        if (isTotal) { cell.s.font = { bold: true, color: { rgb: '1F2D4A' } }; cell.s.fill = { patternType: 'solid', fgColor: { rgb: 'F1F4F9' } }; }
-      }
-    }
-    ws['!cols'] = cols.map(c => ({ wch: c.num ? 16 : Math.max(14, (c.label || '').length + 4) }));
-    if (titleLines.length) { ws['!merges'] = ws['!merges'] || []; for (let m = 0; m < titleLines.length; m++) ws['!merges'].push({ s: { r: m, c: 0 }, e: { r: m, c: ncol - 1 } }); }
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, (opts.sheetName || 'Report').slice(0, 31));
-    XLSX.writeFile(wb, opts.fileName || RRV8.exportName({ surface: 'Report' }));
-    return true;
-  }
+  // Audit-quality Excel builder: ../Tools/audit-workbook.js (UI-70). The copy
+  // that lived here was behaviourally identical apart from a 14ch minimum text
+  // column, now 16ch to match every other export.
   function _dmaaiDbName() {
     const db = (typeof activeDb === 'function') ? activeDb() : null;
     return (db && db.n) || (document.getElementById('js-topbar-db') || {}).textContent || 'RapidReconciler';
