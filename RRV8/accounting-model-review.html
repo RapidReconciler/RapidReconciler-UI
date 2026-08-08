@@ -118,6 +118,13 @@
   .xd-stale { display: inline-block; margin-left: 6px; font-size: 11px; font-weight: 800; letter-spacing: .03em;
               text-transform: uppercase; color: #8a5a00; background: var(--orange-pale);
               border: 1px solid #f0d2a8; border-radius: 6px; padding: 1px 6px; }
+  /* Latent exclusion: zero today, costed underneath. Slate outline on purpose --
+     it is a caveat on a zero, not an error, and it must not read louder than the
+     amber "amount changed" badge, which marks a decision that has actually gone
+     out of date. */
+  .xd-latent { display: inline-block; margin-left: 7px; font-size: 11px; font-weight: 800; letter-spacing: .02em;
+               text-transform: uppercase; color: var(--text-soft); background: var(--bg-soft);
+               border: 1px solid #c7d2e4; border-radius: 6px; padding: 1px 6px; vertical-align: middle; }
   .xd-status { font-size: 13px; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 7px;
                background: var(--bg-card); color: var(--navy); max-width: 150px; }
   .xd-status.is-intended { background: var(--green-pale); border-color: #cfe6d8; }
@@ -362,7 +369,7 @@
       var stkt = String(field(r, 'StockingType') || '');
       var amt = Number(field(r, 'Amount')) || 0;   // on-hand $ (rperpetualinv), summed in the view
       var key = _sliceKey(co, gl, stkt);
-      if (!map[key]) map[key] = { key: key, co: co, gl: gl, stkt: stkt, items: 0, amount: 0, qty: 0, rows: [], _seen: Object.create(null) };
+      if (!map[key]) map[key] = { key: key, co: co, gl: gl, stkt: stkt, items: 0, amount: 0, qty: 0, costed: 0, rowsTotal: 0, rows: [], _seen: Object.create(null) };
       // The view is at item/LOCATION/LOT grain (DAC-56), so one item in three
       // locations is three rows. "Items" must stay an ITEM count or the headline
       // silently doubles and stops meaning what the column says. The modal shows
@@ -370,6 +377,10 @@
       var ik = String(field(r, 'ShortItem')) + '' + String(field(r, 'Branch'));
       if (!map[key]._seen[ik]) { map[key]._seen[ik] = 1; map[key].items++; }
       map[key].amount += amt;
+      // Rows carrying a unit cost. Drives the latent-exclusion marker below:
+      // 0.00 with a cost behind it is empty, not free.
+      if ((Number(field(r, 'UnitCost')) || 0) !== 0) map[key].costed++;
+      map[key].rowsTotal++;
       map[key].qty += Number(field(r, 'Quantity')) || 0;
       map[key].rows.push(r);
     });
@@ -406,6 +417,23 @@
       + p.reviewed + ' of ' + sliceCount + ' stocking type' + (sliceCount === 1 ? '' : 's') + ' reviewed &middot; '
       + money + ' &middot; '
       + itemCount.toLocaleString('en-US') + ' item' + (itemCount === 1 ? '' : 's') + '</div>';
+  }
+  // LATENT EXCLUSION MARKER (DAC-57). A slice at 0.00 is not automatically safe
+  // to accept: it may be empty rather than free. Where the items behind it carry
+  // a unit cost, the slice starts excluding real value the moment stock arrives,
+  // and the analyst who accepted it did so believing nothing was at stake. The
+  // "amount changed" badge would catch that eventually, but only AFTER the money
+  // is already out of reconciliation.
+  //
+  // Shown ONLY on zero-amount rows. On a row that already holds value the amount
+  // says everything the marker would, so it would be noise. Three of six
+  // zero-value slices on the demo company are genuinely costless and stay clean;
+  // three carry costs on 97 rows and are flagged.
+  function _latentChip(g) {
+    if (Math.abs(g.amount) >= 0.005 || !g.costed) return '';
+    var tip = g.costed + ' of ' + g.rowsTotal + ' rows carry a unit cost. This slice reads 0.00 because '
+            + 'nothing is on hand, not because the items are free — it will exclude value once stock arrives.';
+    return '<span class="xd-latent" title="' + esc(tip) + '">carries cost</span>';
   }
   function renderExcluded(container, rows, emptyMsg) {
     if (!rows || !rows.length) { container.innerHTML = '<div class="empty">' + esc(emptyMsg) + '</div>'; _r3Groups = []; return; }
@@ -447,7 +475,8 @@
             + '<td>' + esc(g.gl || '(blank)') + '</td>'
             + '<td>' + esc(stktLabel(g.stkt)) + '</td>'
             + '<td style="text-align:right">' + g.items.toLocaleString('en-US') + '</td>'
-            + '<td style="text-align:right"' + (Math.abs(g.amount) >= 0.005 ? ' class="xd-amt-live"' : '') + '>' + fmtMoney(g.amount) + '</td>'
+            + '<td style="text-align:right"' + (Math.abs(g.amount) >= 0.005 ? ' class="xd-amt-live"' : '') + '>'
+            +   fmtMoney(g.amount) + _latentChip(g) + '</td>'
             + '<td><select class="xd-status' + cls + '" data-xd-status="' + esc(g.key) + '">'
             +   '<option value=""' + (status === '' ? ' selected' : '') + '>&mdash;</option>'
             +   '<option value="Intended"' + (status === 'Intended' ? ' selected' : '') + '>Intended</option>'
