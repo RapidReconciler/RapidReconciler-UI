@@ -11,10 +11,11 @@
    drift would show up in a customer's inbox rather than in a test. Extracted
    2026-08-07 when a fourth page needed it.
 
-   ⚠ THE THREE EXISTING COPIES ARE STILL IN PLACE and are NOT loaded from here.
-   Consolidating them means touching three working pages, so it is deliberately
-   a follow-up rather than a drive-by. New pages load this file; when the three
-   are migrated, delete their inline copies in the same commit.
+   Consolidated 2026-08-08 (UI-70): all three pages now load this file and their
+   inline copies are gone. Two of the three were byte-equivalent to this one;
+   home.html's had drifted, missing the per-column `fmt` override, so its exports
+   silently forced every numeric column to 2dp. Any page needing an audit-quality
+   workbook loads this file — do not paste a fourth copy.
 
    Requires: vendor/xlsx-js-style.min.js (the community SheetJS build ignores
    cell styling — the -js-style fork is the one that honours it) and, for the
@@ -89,4 +90,8 @@
   }
   global.buildAuditWorkbook = buildAuditWorkbook;
   global.buildAuditSheet    = _buildStyledSheet;
+  // Exported because home.html's per-company audit report builds its own sheet
+  // with its own style map and needs the SAME money format. It was a second
+  // private copy of the same string; one export removes it.
+  global.AUDIT_NUM_FMT      = AUDIT_NUM_FMT;
 }(window));
