@@ -23,6 +23,9 @@
    Usage:
      buildAuditWorkbook({
        columns:    [{ label: 'Item', num: false }, { label: 'Amount', num: true }],
+                   // optional per-column `fmt` overrides AUDIT_NUM_FMT — a unit
+                   // cost needs 4dp, because rounding 0.0034 to 0.00 shows a
+                   // costed item as costless.
        titleLines: ['Excluded GL classes — Co 80002', 'Generated ...'],
        rows:       [['ABC', 1234.5], ...],   // numbers stay numbers
        totalRow:   ['TOTAL — 2 rows', 1234.5],
@@ -68,7 +71,7 @@
       for (var cc = range.s.c; cc <= range.e.c; cc++) {
         var cref = XLSX.utils.encode_cell({ r: rr, c: cc }); var cell = ws[cref]; if (!cell) continue;
         cell.s = cell.s || {}; cell.s.border = _auditBorder('ECECEC');
-        if (cols[cc] && cols[cc].num) { cell.z = AUDIT_NUM_FMT; cell.s.alignment = { horizontal: 'right' }; }
+        if (cols[cc] && cols[cc].num) { cell.z = cols[cc].fmt || AUDIT_NUM_FMT; cell.s.alignment = { horizontal: 'right' }; }
         if (isTotal) { cell.s.font = { bold: true, color: { rgb: '1F2D4A' } }; cell.s.fill = { patternType: 'solid', fgColor: { rgb: 'F1F4F9' } }; }
       }
     }
