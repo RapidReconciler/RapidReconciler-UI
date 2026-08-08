@@ -820,12 +820,23 @@ window.RRV8 = window.RRV8 || {};
  * PROSE OR BULLETS — settled here, once. The per-surface caps disagreed with each
  * other: one page banned lists outright while another allowed up to four bullets,
  * and the tightest cap (one sentence, 35 words) could not carry what happened AND
- * what to do, so the model dropped the action every time. The ruling is BULLETS for
- * anything with more than one finding, because a paragraph holding two findings
+ * what to do, so the model dropped the action every time. The DEFAULT is BULLETS
+ * for anything with more than one finding, because a paragraph holding two findings
  * makes the analyst re-read it to separate them. Plain "- " lines, not markdown:
  * every answer surface renders textContent, so a markdown bullet would show its
- * asterisk. Surfaces still set their own LENGTH, which is a materiality judgement;
- * they no longer set their own FORMAT.
+ * asterisk. Surfaces still set their own LENGTH, which is a materiality judgement.
+ *
+ * The default YIELDS to a surface that states its own layout, and five of them
+ * legitimately do, because their reply is PARSED and not just printed: the Home
+ * briefing returns JSON, the residual optimizer returns a "TARGET: <n>" first line,
+ * the worklist cause splits on "Recommended:", and the two accountant assistants
+ * carry an established "• " bullet plus @@DOCS@@ / @@ACTION@@ side-channels. A
+ * register that overrode those would not restyle them, it would break them.
+ *
+ * WHERE IT DOES NOT GO. The Administrator assistant (home.html, ADMIN_GROUNDING)
+ * reads to an IT administrator, not a reconciliation veteran — the first line of
+ * this register is false for them. The AI smoke test on admin-claude-assistant
+ * sends four words and reads the reply as a liveness probe. Neither takes it.
  */
 window.RRV8 = window.RRV8 || {};
 window.RRV8.AI_REGISTER = [
@@ -836,8 +847,8 @@ window.RRV8.AI_REGISTER = [
   '- Prefer the plain word where it costs nothing: "the item ledger" over F4111 in a sentence that is not about the table itself.',
   '- Say the amount and the scope in figures the reader can act on. Never a percentage of a tie-out.',
   '- If the evidence does not support a cause, say what is known and what to check next. Never invent a mechanism to fill the sentence.',
-  '- No preamble and no restating the question. Plain text only: no headings, no bold, no numbered lists.',
-  '- One point, one sentence. More than one point, one line each beginning with "- ", with no blank line between them. Never a paragraph that holds two findings.',
+  '- No preamble and no restating the question. Plain text only: no headings, no bold, no markdown.',
+  '- Unless the task below specifies its own layout, put each finding on its own line beginning with "- ", with no blank line between them. One finding, one sentence. Never a paragraph that holds two findings.',
   '- Quote the figures given, exactly as given. Never add two of them together into a total the surface does not show.'
 ].join('\n');
 
