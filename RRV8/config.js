@@ -793,6 +793,43 @@ window.RRV8 = window.RRV8 || {};
 })();
 
 /*
+ * RRV8.AI_REGISTER — the ONE voice instruction every analyst-facing AI prompt
+ * appends. Deliberately OUTSIDE the generated block above: the grounding
+ * catalogs are generated content about WHAT is true, this is authored policy
+ * about HOW to say it.
+ *
+ * WHY IT EXISTS. An audit of the analyst AI surfaces (2026-08-08) found 25
+ * ai/explain call sites across six pages, and only FIVE of them declared who
+ * was reading. The other twenty declared nothing, so the register was whatever
+ * the model defaulted to on that particular prompt -- which is exactly why the
+ * output read as inconsistently technical from one surface to the next. The
+ * five that did declare a reader said only "JDE-fluent", which is a licence to
+ * use jargon with nothing on the other side asking for the meaning or the
+ * action.
+ *
+ * The fix is not twenty-five hand-written register lines. That is the same
+ * shape as the nine card maps that drifted into three different names for one
+ * pattern -- see the RRV8.txv header below. One constant, appended everywhere.
+ *
+ * WHAT IT IS NOT. This is not a reading-level drop. The reader is a JDE and
+ * reconciliation veteran who is new to RapidReconciler, and explaining their
+ * own domain back to them costs adoption ([[UI-40]] audience note; CLAUDE.md
+ * "Assume JDE fluency"). Both rules stand. What changes is that naming a
+ * mechanism now has to earn its place by changing what the reader DOES.
+ */
+window.RRV8 = window.RRV8 || {};
+window.RRV8.AI_REGISTER = [
+  'HOW TO WRITE THE ANSWER:',
+  '- The reader knows JD Edwards and inventory reconciliation. They are new to RapidReconciler, not to the domain. Never explain what a work order, an AAI or the item ledger is.',
+  '- Lead with what it MEANS and what to DO about it. The mechanism is support for the recommendation, never the headline.',
+  '- Name a table, program, AAI number or document type only when it changes what the reader does next. If the action is the same without it, leave it out.',
+  '- Prefer the plain word where it costs nothing: "the item ledger" over F4111 in a sentence that is not about the table itself.',
+  '- Say the amount and the scope in figures the reader can act on. Never a percentage of a tie-out.',
+  '- If the evidence does not support a cause, say what is known and what to check next. Never invent a mechanism to fill the sentence.',
+  '- No preamble, no restating the question, no markdown.'
+].join('\n');
+
+/*
  * RRV8.txv — the ONE transaction-variance catalog. Taxonomy AND copy.
  *
  * WHY EVERYTHING LIVES HERE: the taxonomy was split across nine maps in three
