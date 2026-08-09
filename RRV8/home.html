@@ -9127,19 +9127,30 @@
             } else if (uc !== 0 && fz !== 0) { differ++; }
           });
           var brList = Object.keys(brs).sort();
+          // ⚠ THE READER IS THE CUSTOMER. An earlier version of this block said "the
+          // fix is the customer running R30822" and the model dutifully wrote "have
+          // the customer run R30822" to the person who IS the customer. Facts here
+          // describe the DATA; they never describe the reader in the third person, and
+          // they never name who should act. See the RR product voice rule.
           var fFact = nTxt;
           if (rolledNotFrozen) {
             fFact += ' — ' + rolledNotFrozen.toLocaleString('en-US') + ' of them carry F30026 cost components with NO F4105 frozen standard'
               + (brList.length ? (', across branch' + (brList.length === 1 ? ' ' : 'es ') + brList.join(', ')) : '')
               + (qohAtRisk ? (', holding ' + Math.round(qohAtRisk).toLocaleString('en-US') + ' units valued at zero') : '')
-              + '. That is a cost roll simulated and never frozen, so every transaction on those items posts at zero cost'
-              + ' and their on-hand is understated in the GL. The fix is the customer running R30822 for those branches,'
-              + ' paired with R30837 or the cardex revalues with no GL offset.'
-              + ' This is NOT an extract problem: the F4105 load is filtered only on COCSIN=I, which matches every row,'
-              + ' and on the items checked the F4105 record is present with a zero cost in JDE itself. Do not tell the analyst to raise it with GSI.';
+              + '. A cost roll was simulated and never frozen, so every transaction on those items posts at zero cost'
+              + ' and their on-hand is understated in the GL. R30822 for those branches is what writes the frozen'
+              + ' standard, and it has to be paired with R30837 or the cardex revalues with no GL offset.';
           }
           if (differ) {
             fFact += ' A further ' + differ.toLocaleString('en-US') + ' have both costs populated and disagreeing — a partial or stale roll.';
+          }
+          // Separated from the facts and addressed to the model, so it cannot be
+          // mistaken for a sentence to hand the reader.
+          if (rolledNotFrozen) {
+            fFact += ' [GUIDANCE, not for quoting: this is a costing gap in JD Edwards, NOT a RapidReconciler'
+              + ' data problem. The F4105 extract filters on COCSIN=I only, which matches every row, and for these'
+              + ' items the F4105 record is present with a zero cost in JDE itself. Never suggest raising it with'
+              + ' GSI or support, and never refer to the reader as "the customer" — they are the one reading this.]';
           }
           return { id: key, prio: prio, state: 'attention', title: title, factTitle: title,
             detailHtml: nTxt + ' on company ' + esc(String(co)), factDetail: fFact, actionHtml: _view, rows: rows };
@@ -9449,6 +9460,7 @@
   function _analystLandingScaffold() {
     return ''
       + '<div class="alh-model" id="analystModelBand"></div>'
+      + '<div class="alh-model" id="analystRollBand"></div>'
       + '<div class="alh-attn" id="analystAttnWrap" hidden></div>'
       + '<div class="alh-explained" id="analystExplainedWrap" hidden></div>'
       + '<div class="alh-clr" id="analystClearedWrap" hidden></div>';
@@ -9654,6 +9666,34 @@
     // one source, so the stripe and the triangle can never disagree.
     el.classList.toggle('is-warn', !!el.querySelector('.alh-item-warn'));
   }
+  // ACCOUNT ROLL FORWARD band — the same UI-66 problem the model band exists for,
+  // reported by the owner 2026-08-09 about this check: when the roll-forward is CLEAN
+  // it collapses into the "Cleared" rollup, the rollup is a text line with no link,
+  // and the page the analyst most wants when everything is healthy becomes the one
+  // page they cannot reach from here. A clean check is not a reason to hide the door.
+  //
+  // Fed by the check itself, so the band and the AI facts cannot describe the period
+  // differently. It does NOT wait on the health gather: the check reads the company
+  // rows already in hand, so the band is there even when the gather fails.
+  function _analystRenderRollBand(gen, d, co) {
+    var band = document.getElementById('analystRollBand'); if (!band) return;
+    _analystRollForwardCheck(d, co).then(function (c) {
+      if (gen !== _analystTaskGen) return;
+      var el = document.getElementById('analystRollBand'); if (!el) return;
+      var warn = c.state === 'attention';
+      el.classList.toggle('is-warn', warn);
+      el.innerHTML = '<div class="alh-model-row">'
+        + (warn ? '<span class="alh-item-warn" aria-hidden="true">▲</span>'
+                : '<span class="alh-cleared-tick" aria-hidden="true">✓</span>')
+        + '<span class="alh-model-t">Account Roll Forward</span>'
+        + '<span class="alh-model-d">' + (c.detailHtml || '') + '</span>'
+        + (c.actionHtml || '')
+        + '</div>';
+    }).catch(function (e) {
+      if (gen !== _analystTaskGen) return;
+      console.warn('[home] roll-forward band unavailable', e);
+    });
+  }
   function _analystRenderModelBand(gen, co, ccy) {
     if (!document.getElementById('analystModelBand')) return;
     _analystModelBand = { gen: gen, co: co, ccy: ccy || '', routes: undefined, excl: undefined };
@@ -9819,6 +9859,7 @@
     var _bandCcy = '';
     cos.forEach(function (c) { if (String(c.co) === String(co) && c.ccy) _bandCcy = c.ccy; });
     _analystRenderModelBand(gen, co, _bandCcy);
+    _analystRenderRollBand(gen, d, co);
     // Shared gather (same request set as the day-brief above the strip). Re-stash
     // each integrity check's rows onto THIS host so the "View" modal reads the
     // current set. The AI day-brief is painted by renderAnalystDayBriefTop now.
@@ -9831,10 +9872,16 @@
       // "Needs your attention" with a row the band already answers. It stays in `hh`
       // untouched, because the day-brief chips and the AI lead read the same gather
       // and the exclusion is still a real finding on this tab — only its PLACE moved.
-      var _noModel = function (list) {
-        return (list || []).filter(function (c) { return !c || c.id !== 'model'; });
+      // Both BANDED checks come out of the lists. Each has a band at the top of this
+      // tab stating the same result and carrying the same link, so leaving the row as
+      // well puts one check on screen twice. They stay in `hh` untouched — the chips
+      // and the AI lead read the same gather, and both are still real findings. Only
+      // their PLACE moved.
+      var BANDED = { model: 1, rollforward: 1 };
+      var _noBanded = function (list) {
+        return (list || []).filter(function (c) { return !c || !BANDED[c.id]; });
       };
-      _analystRenderChecks(host, gen, _noModel(hh.attention), _noModel(hh.cleared), []);   // explained: no classifier signal yet (SEAM)
+      _analystRenderChecks(host, gen, _noBanded(hh.attention), _noBanded(hh.cleared), []);   // explained: no classifier signal yet (SEAM)
       _analystModelBandExclusions(gen, hh);
     }).catch(function (e) {
       if (gen !== _analystTaskGen) return;   // superseded — drop this paint
