@@ -517,7 +517,13 @@
     // Third bucket: rows RapidReconciler never evaluated (see normTok). Counted
     // separately so the band and the brief can say "not evaluated" instead of
     // rolling them into either "clean" or "break".
-    var unkRows = scope.filter(function(r){ return isUnk(r.GLOK) || isUnk(r.VarOK); });
+    // Baseline rows are excluded explicitly as well as by normRow above. Belt and
+    // braces on purpose: this bucket drives an amber band, a Reload GL prompt and the
+    // AI brief, and the failure mode is telling the analyst to chase a result that was
+    // never missing.
+    var unkRows = scope.filter(function(r){
+      return r.GLOK !== 'baseline' && (isUnk(r.GLOK) || isUnk(r.VarOK));
+    });
     function acctsOf(rowsArr){
       var seen={}, out=[];
       rowsArr.forEach(function(r){ var k=r.CompanyNumber+'|'+r.LongAccount; if(!seen[k]){ seen[k]=1; out.push({co:String(r.CompanyNumber),acct:String(r.LongAccount)}); } });
@@ -813,8 +819,26 @@
     if(s.indexOf('end')===0) return 'end';   // 'end' and 'end - <timestamp>'
     return 'unk';
   }
+  // A BASELINE ROW IS BASELINE ON BOTH AXES. It is the opening snapshot, so it has no
+  // prior period BY DEFINITION -- that is what the label means -- and calling it
+  // "not evaluated" states a shortcoming that does not exist.
+  //
+  // It read as unevaluated for a data reason, not a logic one: on a baseline row GLOK
+  // is the token 'baseline' but VarOK carries a BARE TIMESTAMP (measured: GLOK
+  // 'baseline', VarOK '2026-08-07 12:14:24', period 2024-12-31, the opening period).
+  // normTok has a prefix rule for the 'end - <timestamp>' pair but a bare timestamp
+  // matches nothing, so it fell through to 'unk', and the unevaluated bucket is an OR
+  // across the two columns. Fourteen opening-snapshot rows then reported themselves as
+  // an unproven result the analyst should chase, with a Reload GL prompt attached.
+  //
+  // Keyed on GLOK because that is the column that carries the token. Owner 2026-08-09.
+  function normRow(r){
+    r.GLOK = normTok(r.GLOK);
+    r.VarOK = (r.GLOK === 'baseline') ? 'baseline' : normTok(r.VarOK);
+    return r;
+  }
   function ingest(rows){
-    DATA=(Array.isArray(rows)?rows:[]).map(function(r){ r.GLOK=normTok(r.GLOK); r.VarOK=normTok(r.VarOK); return r; });
+    DATA=(Array.isArray(rows)?rows:[]).map(normRow);
     renderCompanyContext(); renderAll();
   }
 
