@@ -30,10 +30,43 @@
       '<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>' +
     '</svg>';
 
+  // RRV8.GLOSSARY -> panel HTML. ONE string feeds the model and the reader, so the
+  // definitions cannot drift apart; this only changes the presentation.
+  //
+  // Two things are stripped because they are written FOR THE MODEL: the leading
+  // preamble (it tells the model which reference this list overrules) and any
+  // [GUIDANCE, not for quoting: ...] segment. Showing either to an analyst would be
+  // showing them the wiring.
+  function glossaryHtml() {
+    var src = (window.RRV8 && window.RRV8.GLOSSARY) || '';
+    var esc = function (t) {
+      return String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    };
+    var items = [];
+    src.split('\n').forEach(function (line) {
+      if (line.indexOf('- ') !== 0) return;              // drops the preamble
+      var body = line.slice(2).replace(/\s*\[GUIDANCE[^\]]*\]\s*/g, '').trim();
+      var cut = body.indexOf(': ');
+      if (cut < 0) return;
+      items.push('<dt>' + esc(body.slice(0, cut)) + '</dt><dd>' + esc(body.slice(cut + 2)) + '</dd>');
+    });
+    if (!items.length) return '<div class="help-gloss-empty">No terms defined for this page.</div>';
+    return '<div class="help-gloss">'
+      + '<p class="help-gloss-lede">What the words on this screen mean. These are RapidReconciler\u2019s'
+      + ' definitions \u2014 where a term is also used elsewhere in accounting, the meaning here is the one'
+      + ' the screen is using.</p>'
+      + '<dl>' + items.join('') + '</dl></div>';
+  }
+
   function init() {
     var pills = document.querySelectorAll('.help-pill[data-help-src]');
     var bodySrc = document.body.getAttribute('data-help-src');
-    if (!pills.length && !bodySrc) return;
+    // A page may declare the GLOSSARY alone, with no doc. The analyst work pages
+    // (Home, Transaction Variance, Cardex Variance) have no help doc of their own
+    // and are exactly where the vocabulary questions get asked.
+    var wantsGloss = document.body.hasAttribute('data-help-glossary')
+                  && !!(window.RRV8 && window.RRV8.GLOSSARY);
+    if (!pills.length && !bodySrc && !wantsGloss) return;
 
     var helpBtn = null;  // the header "?" trigger, if this page has one
 
@@ -48,13 +81,15 @@
           '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>' +
         '</button>' +
       '</div>' +
-      '<iframe class="help-drawer-frame" title="Help content" loading="lazy"></iframe>';
+      '<iframe class="help-drawer-frame" title="Help content" loading="lazy"></iframe>' +
+      '<div class="help-drawer-gloss" hidden></div>';
 
     document.body.appendChild(drawer);
 
     var titleEl  = drawer.querySelector('.help-drawer-title');
     var frame    = drawer.querySelector('.help-drawer-frame');
     var closeBtn = drawer.querySelector('.help-drawer-close');
+    var glossEl = drawer.querySelector('.help-drawer-gloss');
 
     // Insert embed=1 as a query param BEFORE any #hash, preserving the hash so
     // the SPA doc still deep-links to its topic.
@@ -68,11 +103,22 @@
 
     function isOpen() { return drawer.classList.contains('is-open'); }
 
+    function show(el, on) { if (el) el.hidden = !on; }
+    function openGlossary() {
+      titleEl.textContent = 'Terms on this page';
+      glossEl.innerHTML = glossaryHtml();
+      show(glossEl, true); show(frame, false);
+      document.documentElement.classList.add('help-open');
+      drawer.classList.add('is-open');
+      if (helpBtn) helpBtn.setAttribute('aria-expanded', 'true');
+    }
+
     function openSrc(src, title) {
       titleEl.textContent = title || 'How this works';
       var want = embedSrc(src);
       // Reload only when the target changes — keeps the panel snappy on reopen.
       if (frame.getAttribute('src') !== want) frame.setAttribute('src', want);
+      show(glossEl, false); show(frame, true);
       document.documentElement.classList.add('help-open');  // reflow the page beside the panel
       drawer.classList.add('is-open');
       if (helpBtn) helpBtn.setAttribute('aria-expanded', 'true');
@@ -86,8 +132,9 @@
     }
 
     // Standard trigger: inject the "?" circle into the header next to Home.
-    if (bodySrc) {
-      var btnTitle = document.body.getAttribute('data-help-title') || 'How this works';
+    if (bodySrc || wantsGloss) {
+      var btnTitle = document.body.getAttribute('data-help-title')
+                  || (bodySrc ? 'How this works' : 'Terms on this page');
       helpBtn = document.createElement('button');
       helpBtn.type = 'button';
       helpBtn.className = 'topbar-help';
@@ -97,11 +144,29 @@
       helpBtn.innerHTML = HELP_ICON;
       // The circle toggles the companion panel open/closed.
       helpBtn.addEventListener('click', function () {
-        if (isOpen()) close(); else openSrc(bodySrc, btnTitle);
+        if (isOpen()) { close(); return; }
+        // No doc on this page -> the panel IS the glossary.
+        if (!bodySrc && wantsGloss) openGlossary(); else openSrc(bodySrc, btnTitle);
       });
 
-      var home = document.querySelector('.topbar-home');
-      if (home && home.parentNode) {
+      // Anchor order: the header Home link, then the page's own header bar. The
+      // floating fallback below is a LAST resort and is refused on glossary-only
+      // pages -- home.html carries a fixed bottom action bar (.home-actions) that a
+      // fixed bottom-right circle would sit on top of, and a work page is not the
+      // place to discover that. Better no trigger than a trigger over the controls.
+      // Anchor candidates in order of preference. The scope band is the top chrome on
+      // the analyst work pages, which have neither a header Home link nor .app-header.
+      var home = document.querySelector('.topbar-home')
+             || document.querySelector('.app-header')
+             || document.querySelector('.tx-scope-band, .cxv-scope-band');
+      var isBar = home && (home.classList.contains('app-header')
+               || home.classList.contains('tx-scope-band')
+               || home.classList.contains('cxv-scope-band'));
+      if (home && home.parentNode && isBar) {
+        // Page header bar: the circle rides inside it, at the end.
+        home.appendChild(helpBtn);
+        helpBtn.style.marginLeft = 'auto';
+      } else if (home && home.parentNode) {
         home.parentNode.insertBefore(helpBtn, home);
         // When Home is the auto-pushed right-edge item (no .topbar-extras
         // wrapper), carry the auto margin on the circle so [?][Home] cluster
@@ -110,8 +175,9 @@
           helpBtn.style.marginLeft = 'auto';
           home.style.marginLeft = '10px';
         }
-      } else {
-        // No header Home (non-standard page) — fall back to a fixed circle.
+      } else if (bodySrc) {
+        // No header at all. A page with a real help DOC still gets the floating
+        // circle (the old behaviour); a glossary-only page does not -- see above.
         helpBtn.style.position = 'fixed';
         helpBtn.style.right = '22px';
         helpBtn.style.bottom = '22px';
@@ -129,6 +195,19 @@
           openSrc(p.getAttribute('data-help-src'), p.getAttribute('data-help-title'));
         });
       })(pills[i]);
+    }
+    // Both a doc AND a glossary: one head toggle rather than a second trigger in
+    // the page chrome. The panel is already the place the reader is looking.
+    if (bodySrc && wantsGloss) {
+      var tBtn = document.createElement('button');
+      tBtn.type = 'button';
+      tBtn.className = 'help-drawer-terms';
+      tBtn.textContent = 'Terms';
+      tBtn.addEventListener('click', function () {
+        if (glossEl.hidden) { openGlossary(); tBtn.textContent = 'Help'; }
+        else { openSrc(bodySrc, document.body.getAttribute('data-help-title') || 'How this works'); tBtn.textContent = 'Terms'; }
+      });
+      closeBtn.parentNode.insertBefore(tBtn, closeBtn);
     }
     closeBtn.addEventListener('click', close);
     document.addEventListener('keydown', function (e) {
