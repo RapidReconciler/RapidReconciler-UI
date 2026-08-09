@@ -853,6 +853,55 @@ window.RRV8.AI_REGISTER = [
 ].join('\n');
 
 /*
+ * RRV8.GLOSSARY — what the words on the ANALYST surfaces mean. Authored policy,
+ * deliberately beside AI_REGISTER and OUTSIDE the generated block above, on the
+ * same line that constant sits on: the catalogs above are generated content about
+ * what is TRUE, these two are authored content about what words MEAN and how to
+ * say them.
+ *
+ * WHY IT EXISTS. Three failures in one day (2026-08-09), all one root cause —
+ * on-screen vocabulary defined nowhere:
+ *
+ *   "what is a linked pair"        -> "the two offsetting AAI legs of one move"
+ *   "what is a linked transaction" -> "an item-ledger row and its matching GL row"
+ *   the owner, on the Details grid -> "why is there no related order data but I
+ *                                      have a group code?"
+ *
+ * The first two are the AI reaching for the DMAAI reference the server prepends as
+ * the system prompt, which is dense with pairing language. The third is a human
+ * hitting the same gap from the other side. A term nobody defines gets defined by
+ * whatever is nearest, and what is nearest here is the accounting layer.
+ *
+ * THE COLLISION IS THE POINT. Most of these entries exist because the same English
+ * word means something else one layer down. So the block says out loud that it
+ * overrules that reference — a definition that merely competes with the system
+ * prompt loses, proven by shipping one mid-prompt and watching it lose.
+ *
+ * WHAT EARNS A PLACE. A term appears here only if it is ON an analyst screen AND
+ * would otherwise be got wrong — because it collides with an accounting term, or
+ * because the screen shows it blank/oddly in a way that reads as missing data.
+ * This is not a dictionary of the domain; the reader knows the domain. Every entry
+ * costs tokens on every analyst call.
+ *
+ * ONE SOURCE. Any analyst-facing prompt appends this rather than hand-rolling its
+ * own list — a per-prompt copy is the drift shape the RRV8.txv header below was
+ * written about (nine maps, three names for one pattern).
+ */
+window.RRV8.GLOSSARY = [
+  'GLOSSARY — THIS PRODUCT’S OWN TERMS, as used on the screen in front of the reader. A background reference may use the same words for a DIFFERENT concept at the accounting layer; where they collide, THIS list wins and that reference does not apply.',
+  '- LINKED TRANSACTIONS / A LINKED TRANSACTION / LINKED PAIR / LINKED (a lane on Transaction Variance): two or more JDE DOCUMENTS that belong to one business event, matched to each other and judged as a whole rather than one at a time — typically a sales-side order and its purchase-side counterpart, held together by a group code. Families: Transfers, Direct Ship, Intercompany, Make to Order. [GUIDANCE, not for quoting: this is about DOCUMENTS matched to each other. NOT a cardex row and its GL row, NOT a pair of AAI legs, nothing to do with debits and credits.]',
+  '- SINGLE DOCUMENTS (a lane): one document each, claimed in the reconciliation’s precedence order.',
+  '- NOTHING CLAIMED THESE (a lane): no pattern matched them; work them by amount, largest first.',
+  '- GROUP / GROUP CODE (a Details column): the key holding one linked group together. It is built from the documents themselves, so the related order is inside the code even when it is not in its own column.',
+  '- REL TYPE / REL ORDER vs ORIG TYPE / ORIG ORDER (Details columns): two DIFFERENT linkage mechanisms, and which one carries the link depends on the family. Rel* are the F4211 related-order fields — a sales line pointing at its counterpart line — and they carry transfers and intercompany. Orig* are the ORIGINATING order, and that is where Make to Order links, because a work order is not an F4211 sales line. A blank Rel Order on a Make to Order row is by design, not missing data.',
+  '- CARDEX VARIANCE: on-hand (F41021) against the item ledger (F4111), for one item. It is ACCOUNT-BLIND — it is NOT the ledger-versus-GL gap, and no account or AAI is involved in it.',
+  '- MODEL DMAAI TABLE: DMAAI 4152 for the company, the routing every inventory account assignment resolves through. Its document type comes from the company record, so only that one type is live.',
+  '- EXCLUDED GL CLASS: a GL class an item uses that has NO 4152 entry, so there is no account to reconcile it against and its whole on-hand value sits outside reconciliation. Judge it on the amount it holds, never on what the class code is named.',
+  '- CARRIES COST / UNCOSTED STOCK (markers on a 0.00 excluded row): two different reasons a row reads zero. CARRIES COST = the items have a unit cost and nothing is on hand, so it starts excluding value on the next receipt. UNCOSTED STOCK = there IS quantity on hand and no item carries a cost, so the zero is a costing gap.',
+  '- INTEGRITY REVIEW (the Data Health list): the configuration and data-setup checks — GL Class Integrity, UOM Conversion, Frozen Cost. Findings about how the data is SET UP, not about a period’s variance.'
+].join('\n');
+
+/*
  * RRV8.txv — the ONE transaction-variance catalog. Taxonomy AND copy.
  *
  * WHY EVERYTHING LIVES HERE: the taxonomy was split across nine maps in three
