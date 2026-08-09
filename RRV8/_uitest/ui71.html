@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>UI-71 producer harness</title>
+<!--
+  UI-71 — regression harness for the SHARED FIGURE PRODUCERS in config.js
+  (RRV8.excluded, RRV8.rollForward, RRV8.integrityCount).
+
+  Those producers exist because four analyst surfaces disagreed with each other
+  in one day, each of them arithmetically correct on its own. Static parsing
+  cannot catch that class of bug — only running the real function over real rows
+  and comparing against a measured query can. So this page does exactly that.
+
+  RUN IT:  http://localhost:8765/RRV8/_uitest/ui71.html   (RR App static server)
+  It needs no token and touches no localStorage.
+
+  The expectations below are measured queries against the demo databases. If a
+  demo is reloaded or its data changes, RE-MEASURE and update the numbers — do
+  not relax an assertion to make it pass.
+
+  BUILD fixture.json (gitignored — the repo is public):
+    sqlcmd -S localhost,1433 -U rruser -P rruser -C -h -1 -W -b -s <sep> -d <db> -Q "..."
+    exc_demo1 : select GLClass, StockingType, BranchClass, UnitCost, CompanyNumber,
+                       Branch, ShortItem, Quantity, Amount
+                  from dbo.v_integrity3_exc_glc                 -- RapidReconciler_Demo1
+    rf_demo1  : select PeriodEnds, CompanyNumber, LongAccount, GLOK, VarOK
+                  from dbo.v6ui_raccountsummary                 -- RapidReconciler_Demo1
+    rf_demo3  : same select                                     -- RapidReconciler_Demo3
+  Shape: { "exc_demo1": [ {col: "value", ...}, ... ], "rf_demo1": [...], "rf_demo3": [...] }
+  Every value a string, exactly as sqlcmd prints it — that is also how the agent
+  hands them over, so the producers get tested against the real column casing.
+-->
+<script src="../config.js"></script>
+</head>
+<body>
+<pre id="out">running… (no output at all means fixture.json is missing — see the comment in this file's source)</pre>
+<script>
+var L = [], fails = 0;
+function eq(label, got, want) {
+  var ok = (typeof want === 'number' && typeof got === 'number')
+    ? Math.abs(got - want) < 0.005
+    : String(got) === String(want);
+  if (!ok) fails++;
+  L.push((ok ? 'PASS  ' : 'FAIL  ') + label + '  got=' + got + '  want=' + want);
+}
+fetch('fixture.json').then(function (r) { return r.json(); }).then(function (d) {
+  if (!(window.RRV8 && RRV8.excluded && RRV8.rollForward)) {
+    L.push('FAIL  RRV8.excluded / RRV8.rollForward missing — config.js did not define them'); fails++;
+    document.getElementById('out').textContent = L.join('\n'); return;
+  }
+
+  // ---- RRV8.excluded, Demo1 company 80002 (every figure below is a measured query)
+  var sl = RRV8.excluded.slices(d.exc_demo1, '80002');
+  var p  = RRV8.excluded.progress(sl, {});
+  eq('excluded.slices count', sl.length, 10);
+  eq('progress.classes',      p.classes, 5);
+  eq('progress.items',        p.items, 440);
+  eq('progress.rows',         p.rows, 801);
+  eq('progress.totalAmt',     Math.round(p.totalAmt * 100) / 100, 140346.16);
+  eq('progress.openClasses (no verdicts)', p.openClasses, 5);
+  eq('progress.openAmt (no verdicts)', Math.round(p.openAmt * 100) / 100, 140346.16);
+  eq('progress.reviewed (no verdicts)', p.reviewed, 0);
+  eq('progress.allReviewed', p.allReviewed, false);
+  // Slices are ordered biggest |amount| first.
+  eq('slice[0] is the biggest', Math.abs(sl[0].amount) >= Math.abs(sl[1].amount), true);
+  // Per-slice item counts sum to the distinct total (F4102 unique on item+branch).
+  var sum = 0; sl.forEach(function (g) { sum += g.items; });
+  eq('sum of slice items == distinct items', sum, 440);
+
+  // ---- byClass: the number that used to be quoted as "509 items"
+  var bc = RRV8.excluded.byClass(sl);
+  var byCode = {}; bc.forEach(function (c) { byCode[c.code] = c; });
+  eq('byClass SUPP items', byCode.SUPP.items, 185);
+  eq('byClass SUPP rows',  byCode.SUPP.rows, 509);
+  eq('byClass SUPP amount', Math.round(byCode.SUPP.amount * 100) / 100, 111904.04);
+  eq('byClass NS40 items', byCode.NS40.items, 157);
+  eq('byClass NS40 rows',  byCode.NS40.rows, 193);
+  eq('byClass PLAT items', byCode.PLAT.items, 96);
+  eq('byClass PLAT rows',  byCode.PLAT.rows, 97);
+  eq('byClass count', bc.length, 5);
+  eq('byClass leader is SUPP', bc[0].code, 'SUPP');
+
+  // ---- verdicts: judging every slice of one class closes that class, not the others
+  var rev = {};
+  sl.forEach(function (g) { if (g.gl === 'PLAT') rev[g.key] = { status: 'Intended' }; });
+  var p2 = RRV8.excluded.progress(sl, rev);
+  eq('one class judged -> classes unchanged', p2.classes, 5);
+  eq('one class judged -> openClasses', p2.openClasses, 4);
+  eq('one class judged -> openAmt loses PLAT (0.00)', Math.round(p2.openAmt * 100) / 100, 140346.16);
+  eq('one class judged -> totalAmt unchanged', Math.round(p2.totalAmt * 100) / 100, 140346.16);
+  var revAll = {}; sl.forEach(function (g) { revAll[g.key] = { status: 'Intended' }; });
+  var p3 = RRV8.excluded.progress(sl, revAll);
+  eq('all judged -> openClasses 0', p3.openClasses, 0);
+  eq('all judged -> allReviewed', p3.allReviewed, true);
+  eq('all judged -> totalAmt still outside', Math.round(p3.totalAmt * 100) / 100, 140346.16);
+  // A blank status must NOT count as a verdict.
+  var revBlank = {}; sl.forEach(function (g) { revBlank[g.key] = { status: '  ' }; });
+  eq('blank status is not a verdict', RRV8.excluded.progress(sl, revBlank).openClasses, 5);
+
+  // Scoping: a company with no exclusions yields nothing, not everything.
+  eq('unknown company -> no slices', RRV8.excluded.slices(d.exc_demo1, '99999').length, 0);
+  eq('no company -> all slices', RRV8.excluded.slices(d.exc_demo1, '').length, 10);
+
+  // ---- RRV8.rollForward
+  var r1 = RRV8.rollForward.summary(d.rf_demo1);
+  eq('demo1 scopeRows', r1.scopeRows, 135);
+  eq('demo1 breaks',    r1.breaks, 0);
+  eq('demo1 gl rows',   r1.gl.rows, 0);
+  eq('demo1 unk rows (15 baseline rows are NOT unevaluated)', r1.unk.rows, 0);
+
+  var r3 = RRV8.rollForward.summary(d.rf_demo3);
+  eq('demo3 scopeRows', r3.scopeRows, 85);
+  eq('demo3 gl rows',   r3.gl.rows, 1);
+  eq('demo3 varc rows', r3.varc.rows, 1);
+  // ONE row broken on both axes is ONE broken row, not two.
+  eq('demo3 breaks (distinct rows, not gl+varc)', r3.breaks, 1);
+  eq('demo3 gl accounts', r3.gl.accts.length, 1);
+  eq('demo3 unk rows',  r3.unk.rows, 0);
+
+  // The bucket Home had no equivalent of: a row with no prior period to compare.
+  var withUnk = d.rf_demo1.slice();
+  withUnk.push({ PeriodEnds: '2026-01-31', CompanyNumber: '80002', LongAccount: '80002.140000', GLOK: '', VarOK: '' });
+  withUnk.push({ PeriodEnds: '2026-01-31', CompanyNumber: '80002', LongAccount: '80002.140010', GLOK: 'yes', VarOK: '' });
+  var ru = RRV8.rollForward.summary(withUnk);
+  eq('injected unevaluated rows', ru.unk.rows, 2);
+  eq('injected unevaluated accounts', ru.unk.accts.length, 2);
+  eq('injected rows are not breaks', ru.breaks, 0);
+
+  // Company filter is the caller's predicate, applied before classification.
+  var only = RRV8.rollForward.summary(d.rf_demo3, function (r) { return String(r.CompanyNumber) === '30001'; });
+  eq('scoped summary <= full', only.scopeRows <= r3.scopeRows, true);
+
+  // Token rules.
+  eq('tok yes', RRV8.rollForward.tok('yes'), 'yes');
+  eq('tok blank -> unk', RRV8.rollForward.tok(''), 'unk');
+  eq('tok bare timestamp -> unk', RRV8.rollForward.tok('2026-08-07 12:14:24'), 'unk');
+  eq('tok end - stamp', RRV8.rollForward.tok('End - Aug  7 2026 12:17PM'), 'end');
+  var bl = RRV8.rollForward.classify({ GLOK: 'baseline', VarOK: '2026-08-07 12:14:24' });
+  eq('baseline pairs on both axes', bl.varok, 'baseline');
+
+  // ---- RRV8.integrityCount: rows vs items on the three data-integrity reports
+  var ic = RRV8.integrityCount([
+    { CompanyNumber: '80002', BranchPlant: 'P027', ShortItem: '1001', Location: 'A', Lot: '' },
+    { CompanyNumber: '80002', BranchPlant: 'P027', ShortItem: '1001', Location: 'B', Lot: '' },
+    { CompanyNumber: '80002', BranchPlant: 'P019', ShortItem: '1001', Location: 'A', Lot: '' }
+  ]);
+  eq('integrityCount rows', ic.rows, 3);
+  eq('integrityCount items (same item, 2 locations, 2 branches)', ic.items, 2);
+  eq('integrityCount lowercase keys', RRV8.integrityCount([{ shortitem: '9', branchplant: 'X' }, { shortitem: '9', branchplant: 'X' }]).items, 1);
+  eq('integrityCount falls back to ItemNumber', RRV8.integrityCount([{ ItemNumber: 'AB', BranchPlant: 'X' }]).items, 1);
+  // A report with no item key must not report zero items — that reads as "clean".
+  eq('integrityCount no item key -> rows', RRV8.integrityCount([{ CompanyNumber: '1' }, { CompanyNumber: '2' }]).items, 2);
+  eq('integrityCount empty', RRV8.integrityCount([]).items, 0);
+
+  L.push('');
+  L.push(fails ? ('*** ' + fails + ' FAILURES ***') : ('ALL ' + L.length + ' CHECKS PASSED'));
+  document.getElementById('out').textContent = L.join('\n');
+}).catch(function (e) {
+  document.getElementById('out').textContent = 'HARNESS ERROR: ' + (e && e.message ? e.message : e) + '\n' + L.join('\n');
+});
+</script>
+</body></html>
