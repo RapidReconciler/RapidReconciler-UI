@@ -1247,6 +1247,8 @@
   .alh-model-t { flex: 0 0 auto; font-family: 'Source Sans 3', sans-serif; font-weight: 800; color: var(--navy); font-size: 16px; }
   .alh-model-d { flex: 1 1 auto; min-width: 0; font-size: 15px; color: var(--text); font-weight: 500; }
   .alh-model-d b { color: var(--navy); font-weight: 700; font-variant-numeric: tabular-nums; }
+  .alh-model-cap { padding: 9px 12px; border-bottom: 1px solid var(--rule); background: var(--bg-soft); font-size: 12.5px; color: var(--text-muted); }
+  .alh-model-cap b { color: var(--navy); font-weight: 700; font-variant-numeric: tabular-nums; }
   .alh-model-wrap { display: none; margin-top: 12px; max-height: 340px; overflow: auto; border: 1px solid var(--rule); border-radius: 9px; }
   .alh-model-wrap[data-open="true"] { display: block; }
   .alh-model-tbl { width: 100%; border-collapse: collapse; font-size: 13.5px; }
@@ -9027,7 +9029,7 @@
         var n = Number(m.report3GlClassCount);
         if (n === 0) {
           return {
-            id: 'model', prio: 5, state: 'clean', glCount: 0, itemCount: 0,
+            id: 'model', prio: 5, state: 'clean',
             title: 'Model DMAAI — every GL class in the model', factTitle: 'Model DMAAI',
             factDetail: 'every GL class used in inventory is in the model',
             clearedSummary: 'model covers every GL class', clearedLine: 'Model DMAAI — every GL class used in inventory is in the model'
@@ -9039,11 +9041,8 @@
           + ' — review whether each exclusion is intentional.';
         var dbn = (activeDb() && activeDb().n) || '';
         var href = 'accounting-model-review.html?company=' + encodeURIComponent(co || '') + (dbn ? '&db=' + encodeURIComponent(dbn) : '');
-        // glCount / itemCount are the raw figures the model band restates. It reads
-        // them from here rather than re-fetching or parsing them back out of the
-        // prose, so the band and the day-brief can never quote different numbers.
         return {
-          id: 'model', prio: 2, state: 'attention', glCount: n, itemCount: items,
+          id: 'model', prio: 2, state: 'attention',
           title: glTxt, factTitle: 'Model DMAAI', detailHtml: esc(sub), factDetail: sub,
           actionHtml: '<a class="alh-act ghost" href="' + href + '" title="Open the model review">Review <span aria-hidden="true">→</span></a>'
         };
@@ -9142,7 +9141,10 @@
       _analystModelCheck(d, co),
       _analystIntegrityCheck(scratch, 'uom', 'UOM Conversion', co, 6),
       _analystIntegrityCheck(scratch, 'frozen', 'Frozen Cost', co, 7),
-      _analystIntegrityCheck(scratch, 'glclass', 'GL-Class', co, 3)
+      // "GL Class Integrity" — the same name the integrity report carries elsewhere
+      // in the product (see the glclass entry in the integrity map below). "GL-Class"
+      // on its own read as a field name rather than a check (owner 2026-08-09).
+      _analystIntegrityCheck(scratch, 'glclass', 'GL Class Integrity', co, 3)
     ]).then(function (checks) {
       var attention = checks.filter(function (c) { return c && c.state === 'attention'; })
         .sort(function (a, b) { return (a.prio || 0) - (b.prio || 0); });
@@ -9425,11 +9427,14 @@
           glclass: String(r.GLCLass || r.GLClass || r.glclass || '').trim(),
           doctype: String(r.DocType || r.doctype || '').trim(),
           acct: String(r.LongAccount || r.longaccount || '').replace(/\s+/g, ''),
-          descr: String(r.AccountDescription || r.acctdescription || r.AcctDescription || '').trim(),
-          // The AAI leaves the business unit to the branch plant, so the account
-          // varies by branch. Worth stating: a "different" BU is not a mismatch here.
-          buFlex: String(r.FlexBU || '').trim().toLowerCase() === 'yes'
-                  || !String(r.BusUnit || '').trim()
+          descr: String(r.AccountDescription || r.acctdescription || r.AcctDescription || '').trim()
+          // NO branch-plant-derived count here. v_integrity1_aai_base carries BusUnit
+          // and FlexBU, but the endpoint's projection does NOT return them — it
+          // selects CompanyNumber, TableNumber, DocType, GLCLass, LongAccount and the
+          // F0901 description, nothing else. Testing `!r.BusUnit` against a key that
+          // is never present is true on every row, which is how the band came to
+          // claim all 22 routings were branch-plant derived when the view says none
+          // are. A field the payload does not carry gets no clause.
         });
       });
       // GL class, then account — the order an analyst scans a model table in.
@@ -9451,59 +9456,78 @@
   // carries what the model routes AND what falls outside it. SILENCE IS THE ONE
   // OUTCOME TO AVOID: an unchecked exclusion count reads as "nothing excluded",
   // which is the dangerous direction of the error, so a failed check says so.
-  function _analystModelBandHtml(co, routes, excl) {
+  function _analystModelBandHtml(co, routes, excl, ccy) {
     var dbn = (activeDb() && activeDb().n) || '';
     var href = 'accounting-model-review.html?company=' + encodeURIComponent(co || '') + (dbn ? '&db=' + encodeURIComponent(dbn) : '');
     var open = '<a class="alh-act ghost" href="' + href + '" title="Open the model DMAAI review">Review <span aria-hidden="true">&rarr;</span></a>';
-    var title = function (dt) {
-      return '<span class="alh-model-t">Model DMAAI 4152' + (dt ? (' &middot; doc type ' + esc(dt)) : '') + '</span>';
+    // "Model DMAAI Table" (owner 2026-08-09). The 4152 number and the document type
+    // moved into the routing-list caption: they identify the table for someone
+    // opening it, and neither changes what the analyst does with the headline.
+    var title = function () { return '<span class="alh-model-t">Model DMAAI Table</span>'; };
+    // The state marker leads, matching the attention rows below: an amber triangle
+    // when GL classes are excluded, a green tick when none are. Absent while the
+    // check is still running or could not run — a marker is a claim about the state,
+    // and there is no state to claim yet.
+    var mark = function (kind) {
+      return kind === 'warn' ? '<span class="alh-item-warn" aria-hidden="true">▲</span>'
+           : kind === 'ok'   ? '<span class="alh-cleared-tick" aria-hidden="true">✓</span>'
+           : '';
     };
     if (routes === null) {
       return '<div class="alh-model-row">'
-        + title('')
+        + title()
         + '<span class="alh-model-d">Couldn’t read the model table just now &mdash; reload the page to try again.</span>'
         + open + '</div>';
     }
-    var glSet = {}, acctSet = {}, dtSet = {}, flex = 0;
+    var glSet = {}, acctSet = {}, dtSet = {};
     routes.forEach(function (r) {
       if (r.glclass) glSet[r.glclass] = 1;
       if (r.acct) acctSet[r.acct] = 1;
       if (r.doctype) dtSet[r.doctype] = 1;
-      if (r.buFlex) flex++;
     });
     var nGl = Object.keys(glSet).length, nAcct = Object.keys(acctSet).length;
     // One document type per company is the norm (it is a single column on the
     // company record). List them if a company somehow carries more than one rather
     // than picking one and printing a number that belongs to the other.
     var docTypes = Object.keys(dtSet).sort().join(', ');
-    // The exclusion clause. Reported in GL CLASSES first because a class is what
-    // maps to a 4152 fix; the item count says how much rides on it.
-    var exclTxt = '';
+    // THE HEADLINE IS THE STATE, and nothing else (owner 2026-08-09). It reads
+    // either "All GL classes accounted for" or "N GL classes excluded totaling $X".
+    // The routing counts that used to lead here answer a question nobody opens this
+    // tab to ask; they are one click away in the routing list, where they belong.
+    //
+    // N is the classes still to REVIEW, not the gross count. Three of the five on a
+    // demo company already carry a verdict, so leading on five told the analyst there
+    // was more on their desk than there is. The AMOUNT is the value on those open
+    // classes -- which is the whole exposure here precisely because every accepted
+    // slice was accepted for holding nothing.
+    //
+    // "All GL classes accounted for" is said ONLY when the check ran and found none.
+    // While it is running, and if it failed, the band says so instead: silence would
+    // read as the all-clear, which is the dangerous direction of this error.
+    var state = 'none', summary;
     if (excl === false) {
-      exclTxt = ' &middot; <b>couldn’t check</b> what is excluded';
-    } else if (excl && excl.glCount > 0) {
-      // "rows", NOT "items". report3Count counts v_integrity3_exc_glc at its own
-      // item/branch/location/LOT grain, so one item in three locations is three of
-      // them. The Model DMAAI Review page counts the DISTINCT items behind those
-      // same rows and reports a smaller number — on a demo company 801 against 440.
-      // Both are right at their own grain; calling this one "items" made the two
-      // surfaces contradict each other over the same population.
-      exclTxt = ' &middot; <b>' + excl.glCount.toLocaleString('en-US') + '</b> class'
-        + (excl.glCount === 1 ? '' : 'es') + ' excluded'
-        + (excl.itemCount ? (', ' + excl.itemCount.toLocaleString('en-US') + ' row'
-            + (excl.itemCount === 1 ? '' : 's') + ' out of reconciliation') : '');
-    } else if (excl && excl.glCount === 0) {
-      exclTxt = ' &middot; every GL class used in inventory is in the model';
+      summary = 'Couldn’t check whether any GL class is excluded — reload the page to try again.';
+    } else if (!excl) {
+      summary = 'Checking for excluded GL classes…';
+    } else if (excl.openClasses > 0) {
+      state = 'warn';
+      summary = '<b>' + excl.openClasses.toLocaleString('en-US') + '</b> GL class'
+        + (excl.openClasses === 1 ? '' : 'es') + ' excluded totaling <b>'
+        + _ccyAmt(ccy, excl.openAmt) + '</b>';
+    } else if (excl.classes > 0) {
+      // Every exclusion carries a verdict. NOT the same as "accounted for": the value
+      // is still outside reconciliation, by decision, so it does not get the tick.
+      summary = 'All ' + excl.classes.toLocaleString('en-US') + ' excluded GL class'
+        + (excl.classes === 1 ? '' : 'es') + ' reviewed and accepted &mdash; '
+        + _ccyAmt(ccy, excl.totalAmt) + ' remains outside reconciliation';
+    } else {
+      state = 'ok';
+      summary = 'All GL classes accounted for';
     }
-    var summary;
     if (!routes.length) {
       // Genuinely empty is a finding, not a quiet state: nothing resolves.
-      summary = 'No 4152 routings in scope for this company. Nothing resolves through the model until it is configured.' + exclTxt;
-    } else {
-      summary = '<b>' + nGl.toLocaleString('en-US') + '</b> GL class' + (nGl === 1 ? '' : 'es')
-        + ' routing to <b>' + nAcct.toLocaleString('en-US') + '</b> account' + (nAcct === 1 ? '' : 's')
-        + (flex ? (' &middot; ' + flex.toLocaleString('en-US') + ' branch-plant derived') : '')
-        + exclTxt;
+      state = 'warn';
+      summary = 'No 4152 routings in scope for this company. Nothing resolves through the model until it is configured.';
     }
     // The em-dash placeholder is an ENTITY, so it goes in outside esc() — esc()
     // would turn its ampersand into &amp; and print the entity as literal text.
@@ -9512,6 +9536,11 @@
     // are the company's own type, so it moved to the heading; cost type is blank on
     // every 4152 row (it is a manufacturing-AAI field) and an always-empty column is
     // a column the analyst learns to skip.
+    var caption = '<div class="alh-model-cap">Table <b>4152</b>'
+      + (docTypes ? (' &middot; document type <b>' + esc(docTypes) + '</b>') : '')
+      + ' &middot; <b>' + nGl.toLocaleString('en-US') + '</b> GL class' + (nGl === 1 ? '' : 'es')
+      + ' routing to <b>' + nAcct.toLocaleString('en-US') + '</b> account' + (nAcct === 1 ? '' : 's')
+      + '</div>';
     var rows = routes.map(function (r) {
       return '<tr>'
         + '<td class="mono">' + cell(r.glclass) + '</td>'
@@ -9520,7 +9549,8 @@
         + '</tr>';
     }).join('');
     return '<div class="alh-model-row">'
-      + title(docTypes)
+      + mark(state)
+      + title()
       + '<span class="alh-model-d">' + summary + '</span>'
       + (routes.length
           ? '<button type="button" class="alh-disc" aria-expanded="false" data-alh-target="analystModelList">Routing list <span class="alh-car" aria-hidden="true">&#9662;</span></button>'
@@ -9529,6 +9559,7 @@
       + '</div>'
       + (routes.length
           ? ('<div class="alh-model-wrap" id="analystModelList">'
+              + caption
               + '<table class="alh-model-tbl"><thead><tr>'
               + '<th>GL class</th><th>Account</th><th>Account description</th>'
               + '</tr></thead><tbody>' + rows + '</tbody></table></div>')
@@ -9540,7 +9571,7 @@
   // than waiting on both — the model table must be there whether the health checks
   // pass, fail, or never return (UI-66), and that guarantee is why the band survived
   // being the only route to the model in the first place.
-  var _analystModelBand = { gen: -1, co: '', routes: undefined, excl: undefined };
+  var _analystModelBand = { gen: -1, co: '', ccy: '', routes: undefined, excl: undefined };
   function _analystModelBandPaint(gen) {
     if (gen !== _analystTaskGen || gen !== _analystModelBand.gen) return;   // superseded paint
     var el = document.getElementById('analystModelBand'); if (!el) return;
@@ -9552,11 +9583,11 @@
     }
     // excl `undefined` = the gather is still running, so the clause is simply absent
     // for a moment. `false` = it failed and the band says so. Never silently absent.
-    el.innerHTML = _analystModelBandHtml(st.co, st.routes, st.excl === undefined ? null : st.excl);
+    el.innerHTML = _analystModelBandHtml(st.co, st.routes, st.excl === undefined ? null : st.excl, st.ccy);
   }
-  function _analystRenderModelBand(gen, co) {
+  function _analystRenderModelBand(gen, co, ccy) {
     if (!document.getElementById('analystModelBand')) return;
-    _analystModelBand = { gen: gen, co: co, routes: undefined, excl: undefined };
+    _analystModelBand = { gen: gen, co: co, ccy: ccy || '', routes: undefined, excl: undefined };
     _analystModelBandPaint(gen);
     _analystModelRoutesFetch(co).then(function (routes) {
       if (gen !== _analystModelBand.gen) return;
@@ -9569,17 +9600,85 @@
       _analystModelBandPaint(gen);
     });
   }
-  // Hand the band the model check's own numbers once the health gather resolves.
-  // `hh` null = the gather failed, and the band reports that rather than implying
-  // nothing is excluded.
+  // The excluded-class figures, counted the way the Model DMAAI Review page counts
+  // them. /model-approval cannot supply these: its report3GlClassCount is every
+  // excluded class regardless of the analyst's verdict, and its report3Count is ROWS
+  // at item/branch/location/lot grain. Both are honest fields; neither answers "what
+  // is still on my desk" or "how many items are actually outside".
+  //
+  // So this reads the two sources the Review page reads and applies its rule
+  // verbatim: a slice is (company, GL class, stocking type), and a CLASS is still
+  // open while ANY of its slices lacks a verdict — because the class is what maps to
+  // a 4152 fix, so it is not settled until every slice under it is. Duplicating the
+  // rule is the risk here; duplicating it in one place, keyed identically, is the
+  // price of the two surfaces agreeing at all.
+  function _analystExclusionCounts(co) {
+    var period = '';
+    try { period = (window.RRV8 && RRV8.readSessionScope && RRV8.readSessionScope().period) || ''; } catch (_) {}
+    return Promise.all([
+      rrFetch('inventory/integrity', {
+        method: 'POST',
+        body: {
+          take: 20000, skip: 0, page: 1, pageSize: 20000,
+          report: 'v_integrity3_exc_glc',
+          reconciliationFilter: { currencies: [], companies: [], businessUnits: [], objects: [], subsidiaries: [], period: period }
+        }
+      }),
+      // An older Services build has no verdict endpoint. Degrade to "nothing
+      // reviewed" rather than failing the whole clause: every class then reads as
+      // open, which overstates the work and never hides an exclusion.
+      rrFetch('inventory/integrity/excluded-class-reviews').catch(function () { return null; })
+    ]).then(function (res) {
+      var rows = (res[0] && res[0].data) || (Array.isArray(res[0]) ? res[0] : []);
+      var revs = (res[1] && (res[1].data || res[1].rows)) || [];
+      var judged = Object.create(null);
+      revs.forEach(function (r) {
+        if (r && r.status && String(r.status).trim()) {
+          judged[String(r.companyNumber) + '' + String(r.glClass) + '' + String(r.stockingType || '')] = 1;
+        }
+      });
+      var classes = Object.create(null), open = Object.create(null), items = Object.create(null);
+      var openAmt = 0, totalAmt = 0;
+      rows.forEach(function (r) {
+        var rco = String(r.CompanyNumber == null ? (r.companynumber == null ? '' : r.companynumber) : r.CompanyNumber).trim();
+        if (co && rco && rco !== String(co).trim()) return;
+        var gl = String(r.GLClass == null ? (r.glclass == null ? '' : r.glclass) : r.GLClass).trim();
+        var stkt = String(r.StockingType == null ? (r.stockingtype == null ? '' : r.stockingtype) : r.StockingType).trim();
+        var amt = Number(r.Amount == null ? (r.amount == null ? 0 : r.amount) : r.Amount) || 0;
+        classes[rco + '' + gl] = 1;
+        totalAmt += amt;
+        // The value on the slices still awaiting a verdict. An accepted slice is
+        // still outside reconciliation, but it is not what the analyst has left to
+        // do, and the headline is about what is left to do.
+        if (!judged[rco + '' + gl + '' + stkt]) { open[rco + '' + gl] = 1; openAmt += amt; }
+        // The ITEM, not the row: the view repeats an item per location and lot.
+        items[String(r.ShortItem == null ? (r.shortitem == null ? '' : r.shortitem) : r.ShortItem).trim()
+              + '' + String(r.Branch == null ? (r.branch == null ? '' : r.branch) : r.Branch).trim()] = 1;
+      });
+      return {
+        classes: Object.keys(classes).length,
+        openClasses: Object.keys(open).length,
+        items: Object.keys(items).length,
+        openAmt: openAmt,
+        totalAmt: totalAmt
+      };
+    });
+  }
+  // `hh` null = the health gather failed. Kept as the trigger (not a second timer)
+  // so the band's clause and the tab's rows describe the same moment.
   function _analystModelBandExclusions(gen, hh) {
     if (gen !== _analystModelBand.gen) return;
-    var m = null;
-    if (hh) {
-      ((hh.attention || []).concat(hh.cleared || [])).forEach(function (c) { if (c && c.id === 'model') m = c; });
-    }
-    _analystModelBand.excl = (m && m.glCount != null) ? { glCount: m.glCount, itemCount: m.itemCount || 0 } : false;
-    _analystModelBandPaint(gen);
+    if (!hh) { _analystModelBand.excl = false; _analystModelBandPaint(gen); return; }
+    _analystExclusionCounts(_analystModelBand.co).then(function (x) {
+      if (gen !== _analystModelBand.gen) return;
+      _analystModelBand.excl = x;
+      _analystModelBandPaint(gen);
+    }).catch(function (e) {
+      if (gen !== _analystModelBand.gen) return;
+      console.warn('[home] excluded-GL-class counts unavailable', e);
+      _analystModelBand.excl = false;   // says "couldn't check"; never implies nothing is excluded
+      _analystModelBandPaint(gen);
+    });
   }
   function _analystRenderChecks(host, gen, attention, cleared, explained) {
     if (gen !== _analystTaskGen) return;
@@ -9646,7 +9745,11 @@
     // The model-DMAAI reference band paints on its own request, independent of the
     // health gather: it must be there whether the checks pass, fail, or never
     // return (UI-66). Its own generation guard drops a superseded paint.
-    _analystRenderModelBand(gen, co);
+    // Single-company view, so one currency — the band's excluded total is only
+    // meaningful with its symbol on it.
+    var _bandCcy = '';
+    cos.forEach(function (c) { if (String(c.co) === String(co) && c.ccy) _bandCcy = c.ccy; });
+    _analystRenderModelBand(gen, co, _bandCcy);
     // Shared gather (same request set as the day-brief above the strip). Re-stash
     // each integrity check's rows onto THIS host so the "View" modal reads the
     // current set. The AI day-brief is painted by renderAnalystDayBriefTop now.
