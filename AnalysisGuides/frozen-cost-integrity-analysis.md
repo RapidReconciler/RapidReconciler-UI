@@ -308,6 +308,85 @@ Decision table:
 
 ## Section 7: Common Root Causes
 
+### First — is the cost absent in JDE, or absent from the extract?
+
+Every Issue Type 2 finding raises the same challenge from the customer, usually in the
+first reply: *"the cost is there in JDE — your extract must be dropping it."* Answer it
+with evidence before working any of the causes below, because the two situations have
+nothing in common. A genuine JDE gap is the customer's cost roll to fix; a missing
+extract row is ours.
+
+**Where RapidReconciler's unit cost comes from.** `RPerpetualInv.UnitCost` is
+`F4105.COUNCS` — the frozen standard — resolved in `v6_006_perpetual`:
+
+```sql
+left join f4105 z
+  on  a.shortitem = coitm
+  and case when a.costlevel > 1 then a.branchplant else '' end = comcu
+  and case when a.costlevel > 2 then a.location    else '' end = colocn
+  and case when a.costlevel > 2 then a.lot         else '' end = colotn
+  and cocsin = 'I'
+```
+
+The join is cost-level aware: level 2 keys on item + branch, level 3 adds location and
+lot. This is the same number the whole perpetual valuation rests on
+(`AmountOnHand = lipqoh * councs`), so a zero here does not merely raise a report line —
+it values that item's on-hand at nothing.
+
+**What the extract actually filters.** The SSIS package pulls F4105 with a single
+predicate:
+
+```sql
+Select COITM, COMCU, COLOCN, COLOTN, COLEDG, COUNCS, COCSIN From proddta.F4105 Where COCSIN = 'I'
+```
+
+There is no cost-method filter and no ledger filter. On the sources checked, **every**
+F4105 row already carries `COCSIN = 'I'`, so that predicate removes nothing at all. The
+loaded table is narrower than the source only because it is scoped to the item
+population RapidReconciler reconciles — verified exactly on one instance: source rows
+whose item exists in `RItems` numbered 220,180 and the loaded table held 220,180. Not
+one cost row for a reconciled item was dropped.
+
+Treat that as the expected shape, not as proof for a new customer. Confirm it on theirs.
+
+**The two-way lookup.** Run this against the customer's instance, substituting their
+database names. It answers the question for every flagged item at once:
+
+```sql
+with f as (
+  select ShortItem, BranchPlant = ltrim(rtrim(BranchPlant))
+  from   <RRDB>.dbo.v_integrity7_frozen_cost
+  where  CompanyNumber = '<co>' and isnull(UnitCost,0) = 0 and isnull(FrzCost,0) > 0)
+select flagged       = count(*)
+,      in_rr         = sum(case when l.coitm is null then 0 else 1 end)
+,      in_jde        = sum(case when s.coitm is null then 0 else 1 end)
+,      jde_cost_set  = sum(case when isnull(s.councs,0) <> 0 then 1 else 0 end)
+from   f
+outer apply (select top 1 z.coitm, z.councs from <RRDB>.dbo.F4105 z
+             where z.coitm = f.ShortItem and ltrim(rtrim(z.comcu)) = f.BranchPlant and z.cocsin = 'I') l
+outer apply (select top 1 z.coitm, z.councs from <JDESRC>.PRODDTA.F4105 z
+             where z.coitm = f.ShortItem and ltrim(rtrim(z.comcu)) = f.BranchPlant and z.cocsin = 'I') s;
+```
+
+Read the result:
+
+| `in_rr` | `in_jde` | `jde_cost_set` | What it means | Who owns it |
+|---|---|---|---|---|
+| = flagged | = flagged | **0** | The F4105 record exists on both sides and JDE's own frozen standard is zero. The finding is genuine — work Section 7. | Customer |
+| < flagged | = flagged | > 0 | JDE holds a cost that did not land. An extract or scope defect. | GSI — escalate, do not advise a cost roll |
+| < flagged | < flagged | — | No F4105 record at all for the item/branch. `CostMethod` reads `XX`; the item was never costed. | Customer |
+
+The middle row is the only one that is our bug, and it is the one worth ruling out
+first — advising a customer to run R30822 when the real fault is on our side costs
+their time and our credibility.
+
+**A note on what "zero" means here.** `COUNCS = 0` on a present F4105 record is not the
+same as a missing record, and the report separates them: a missing record leaves
+`CostMethod = 'XX'`, a present-but-zero record keeps the item's real cost method. Both
+value inventory at nothing, but only the second one means a cost roll was simulated and
+never frozen.
+
+
 ### Cost in F4105 Only
 
 | Cause | How to Identify | Resolution |

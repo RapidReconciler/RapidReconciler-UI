@@ -9095,6 +9095,55 @@
               detailHtml: detail, factDetail: fact, actionHtml: _view, rows: rows };
           });
         }
+        // FROZEN COST — at Full tier the AI gets the DIAGNOSIS, not the headcount.
+        // "301 items flagged" tells the analyst nothing they cannot see, and the row
+        // count is the least interesting thing about this report: the flagged rows
+        // decompose into two findings with different owners and different fixes, and
+        // the split is already in the rows on hand, so it costs no extra read.
+        //
+        //   UnitCost 0, FrzCost > 0 -> F30026 components rolled, F4105 frozen standard
+        //     never written. Simulated and never frozen. Everything this item touches
+        //     posts at zero cost and its on-hand is valued at nothing.
+        //   both populated, differ  -> a partial or stale roll.
+        //
+        // WHAT THE MODEL MUST NOT DO is send the analyst to us. The first thing a
+        // customer says about a zero cost is "your extract dropped it". Measured
+        // 2026-08-09: the F4105 extract filters on COCSIN='I' only, every source row
+        // already carries it, and the load is scoped to the reconciled item
+        // population exactly (220,180 of 220,180 on one instance). On every flagged
+        // item checked, the F4105 record was present on BOTH sides with COUNCS = 0 in
+        // JDE itself. The gap is the cost roll, not the extract — so the fact says so
+        // and names R30822, which must be paired with R30837 or the cardex revalues
+        // with no GL offset. Full method + the two-way proving query:
+        // AnalysisGuides/frozen-cost-integrity-analysis.md.
+        if (key === 'frozen' && _recsummaryLevel() === 'full') {
+          var rolledNotFrozen = 0, differ = 0, qohAtRisk = 0, brs = Object.create(null);
+          rows.forEach(function (r) {
+            var uc = Number(r.UnitCost) || 0, fz = Number(r.FrzCost) || 0;
+            if (uc === 0 && fz > 0) {
+              rolledNotFrozen++;
+              qohAtRisk += Number(r.QtyOnHand) || 0;
+              var b = String(r.BranchPlant || '').trim(); if (b) brs[b] = 1;
+            } else if (uc !== 0 && fz !== 0) { differ++; }
+          });
+          var brList = Object.keys(brs).sort();
+          var fFact = nTxt;
+          if (rolledNotFrozen) {
+            fFact += ' — ' + rolledNotFrozen.toLocaleString('en-US') + ' of them carry F30026 cost components with NO F4105 frozen standard'
+              + (brList.length ? (', across branch' + (brList.length === 1 ? ' ' : 'es ') + brList.join(', ')) : '')
+              + (qohAtRisk ? (', holding ' + Math.round(qohAtRisk).toLocaleString('en-US') + ' units valued at zero') : '')
+              + '. That is a cost roll simulated and never frozen, so every transaction on those items posts at zero cost'
+              + ' and their on-hand is understated in the GL. The fix is the customer running R30822 for those branches,'
+              + ' paired with R30837 or the cardex revalues with no GL offset.'
+              + ' This is NOT an extract problem: the F4105 load is filtered only on COCSIN=I, which matches every row,'
+              + ' and on the items checked the F4105 record is present with a zero cost in JDE itself. Do not tell the analyst to raise it with GSI.';
+          }
+          if (differ) {
+            fFact += ' A further ' + differ.toLocaleString('en-US') + ' have both costs populated and disagreeing — a partial or stale roll.';
+          }
+          return { id: key, prio: prio, state: 'attention', title: title, factTitle: title,
+            detailHtml: nTxt + ' on company ' + esc(String(co)), factDetail: fFact, actionHtml: _view, rows: rows };
+        }
         return { id: key, prio: prio, state: 'attention', title: title, factTitle: title,
           detailHtml: nTxt + ' on company ' + esc(String(co)), factDetail: nTxt, actionHtml: _view, rows: rows };
       }
@@ -9138,7 +9187,11 @@
   var _analystHealthCache = { key: null, promise: null };
   function _analystHealthKey(co) {
     var db = (activeDb() && activeDb().n) || '_';
-    return db + '|' + co + '|' + ((_invRows && _invRows.length) || 0);
+    // The TIER belongs in the key: Full builds a fuller fact for the frozen-cost
+    // check than the tiers below it, so without this a flip to Full would be served
+    // the cached plain-count fact and the deeper read would never appear until the
+    // database or company changed. A tier flip legitimately re-asks.
+    return db + '|' + co + '|' + ((_invRows && _invRows.length) || 0) + '|' + _recsummaryLevel();
   }
   function _analystGatherHealth(d, co) {
     var key = _analystHealthKey(co);
