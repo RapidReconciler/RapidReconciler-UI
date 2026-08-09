@@ -127,6 +127,40 @@ directly, then use the xref to *explain* what you found, never to scope it.
 
 ---
 
+### 0.3 "Linked pair" means two JDE DOCUMENTS, not two AAI legs
+
+A **linked pair** — the term the Transaction Variance lanes use, alongside *Linked
+transactions* — is **two or more JDE documents that belong to one business event**,
+matched to each other and judged as a whole rather than one at a time. Typically a
+sales-side order and its purchase-side counterpart, held together by the classifier's
+groupcode.
+
+| Family | What is paired | Order types seen on current data |
+|---|---|---|
+| Transfers | The shipping side and the receiving side of a branch-to-branch move | `ST` / `OT` (also `S6`) |
+| Direct Ship | The customer-facing sales order and the supplier purchase order that ships direct | Customer-defined |
+| Intercompany | The selling company's document and its counterpart in the buying company | `SI` / `SK` |
+| Make to Order | The work order and the sales order that originated it | `WO` / `W1`, keyed on the work order |
+
+Order-type codes live in UDC `00/DT` and are **customer-defined** — name the family
+first, and quote codes only as the instance in front of you actually uses them. Do not
+assume `ST` means transfer on a customer you have not checked.
+
+**Why the distinction matters enough for its own section.** "Pair" also appears in
+DMAAI territory, where AAIs work in offsetting pairs and one leg debits while the other
+credits. That is a *different concept at a different layer*, and conflating the two
+produces an answer that is fluent, accurate about AAIs, and useless — asked "what is a
+linked pair", an AI grounded only in the DMAAI reference answered with offsetting debit
+and credit legs, which is not what the lane label means and not what the analyst was
+asking (observed 2026-08-09).
+
+**And it is the wrong SUBJECT for this reader.** The reconciliation analyst works
+orders, documents, order types, programs and item movement, and fixes causes at the
+source in JD Edwards. They are not posting the entries — that is the accountant's side
+of the split. Answering an analyst in debits, credits and which account is charged is
+off-target even when every word is correct. Reserve account-level mechanics for when
+the question is explicitly about an account.
+
 ## Section 1: Using Claude for Automated Analysis
 
 Claude can perform a full Transaction Detail analysis automatically and return an updated `.xlsx` workbook with the analysis written to a card-layout sheet, the source sheet highlighted with priority colours and equipped with jump-to-row hyperlinks, and the priority level computed from the variance against the document amount. This eliminates manual annotation and ensures consistent output across analysts.
