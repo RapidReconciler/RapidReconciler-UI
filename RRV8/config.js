@@ -1824,6 +1824,327 @@ window.RRV8 = window.RRV8 || {};
 })();
 
 /*
+ * RRV8.excluded — the ONE producer of every excluded-GL-class figure (UI-71).
+ *
+ * The excluded population is quoted on three surfaces: the Model DMAAI Table
+ * band on Home, the AI day-brief fact block behind it, and the Model DMAAI
+ * Review page. Before this they were computed three ways and disagreed in the
+ * same viewport:
+ *
+ *   - Home's day-brief fact said "5 GL classes excluded (801 items out of
+ *     reconciliation)" from the agent's /model-approval, whose report3Count is
+ *     `report3.size()` — ROWS of v_integrity3_exc_glc, at item/branch/location/
+ *     lot grain — and whose report3GlClassCount is every excluded class
+ *     regardless of the verdict the analyst already recorded. Measured on a
+ *     demo company: 801 rows, 440 item/branch, 5 classes, 2 still open.
+ *   - The band beside it said "2 GL classes excluded" from its own read.
+ *   - The Review page's own AI lead said "the largest is SUPP … (509 items)"
+ *     while its table showed that class's stocking-type rows summing to 185
+ *     items, because the lead re-aggregated the raw rows per class instead of
+ *     reusing the slices it had already built.
+ *
+ * Every one of those numbers was arithmetically correct and differently
+ * grained. The fix is not a better label — it is one function. Grain names are
+ * fixed here and nowhere else:
+ *
+ *   rows    a v_integrity3_exc_glc row: one item, branch, LOCATION and LOT
+ *   items   distinct (ShortItem, Branch) — what the analyst calls an item
+ *   slices  distinct (company, GL class, stocking type) — the verdict grain
+ *   classes distinct (company, GL class) — the DMAAI 4152 fix grain
+ *
+ * A caller that wants rows says rows. Nothing here returns one grain under
+ * another grain's name.
+ */
+window.RRV8 = window.RRV8 || {};
+(function () {
+  'use strict';
+  // Field access is case-tolerant because the agent's row keys are not
+  // stable-cased across reports (CompanyNumber vs companynumber, GLCLass vs
+  // GLClass). Both consumers had their own copy of this; now there is one.
+  // Always returns a TRIMMED string. The source columns are SQL nchar, which
+  // pads — an untrimmed stocking type or branch would fan one slice into two
+  // that look identical on screen.
+  function field(r, name) {
+    if (!r) return '';
+    if (r[name] != null) return String(r[name]).trim();
+    var lower = String(name).toLowerCase();
+    for (var k in r) {
+      if (Object.prototype.hasOwnProperty.call(r, k) && String(k).toLowerCase() === lower) {
+        return r[k] == null ? '' : String(r[k]).trim();
+      }
+    }
+    return '';
+  }
+  function sliceKey(co, gl, stkt) { return co + '\x01' + gl + '\x01' + stkt; }
+  function classKey(co, gl) { return co + '\x01' + gl; }
+
+  // Rows -> slices. `company` narrows; blank/absent keeps every company.
+  //
+  // ONE ROW PER (company, GL class, stocking type), not per GL class. A class
+  // routinely spans stocking types that do not deserve the same verdict — on a
+  // demo company NS40 spans four and 138 items on one of them hold 94% of that
+  // class's excluded value while the other three hold nothing. F4102 is unique
+  // on (item, branch), verified, so the stocking type cannot fan a row out and
+  // the split totals still tie to the unsplit population exactly.
+  function slices(rows, company) {
+    var co0 = company == null ? '' : String(company).trim();
+    var map = Object.create(null), out = [];
+    (rows || []).forEach(function (r) {
+      var co = field(r, 'CompanyNumber');
+      if (co0 && co && co !== co0) return;
+      var gl = field(r, 'GLClass');
+      // '' is a REAL stocking type: the item has no F4102 record for its
+      // branch. It gets its own slice rather than being folded in with a code.
+      var stkt = field(r, 'StockingType');
+      var amt = Number(field(r, 'Amount')) || 0;      // on-hand $ (rperpetualinv), summed in the view
+      var key = sliceKey(co, gl, stkt);
+      var g = map[key];
+      if (!g) {
+        g = map[key] = { key: key, co: co, gl: gl, stkt: stkt, items: 0, amount: 0, qty: 0,
+                         costed: 0, split: 0, brClasses: [], rowsTotal: 0, rows: [],
+                         _seen: Object.create(null), _br: Object.create(null) };
+        out.push(g);
+      }
+      // The view is at item/LOCATION/LOT grain (DAC-56), so one item in three
+      // locations is three rows. `items` must stay an ITEM count or the
+      // headline silently multiplies and stops meaning what the column says.
+      var ik = field(r, 'ShortItem') + '\x01' + field(r, 'Branch');
+      if (!g._seen[ik]) { g._seen[ik] = 1; g.items++; }
+      g.amount += amt;
+      // Rows carrying a unit cost — drives the latent-exclusion marker: 0.00
+      // with a cost behind it is empty, not free.
+      if ((Number(field(r, 'UnitCost')) || 0) !== 0) g.costed++;
+      // Rows whose BRANCH class disagrees with the LOCATION class this slice is
+      // grouped by. Work-order moves take the class from the branch and every
+      // other move takes it from the location, so a split means part of these
+      // items' activity routes to an account that IS in the model and part does
+      // not.
+      var bc = field(r, 'BranchClass');
+      if (bc && bc !== gl) { g.split++; g._br[bc] = 1; }
+      g.rowsTotal++;
+      g.qty += Number(field(r, 'Quantity')) || 0;
+      g.rows.push(r);
+    });
+    out.forEach(function (g) {
+      // Order the ITEMS the way the slices are ordered — biggest first. A
+      // 183-row detail list opening on a zero-value item makes the analyst
+      // scroll to find the money, and the money is why the list is open.
+      g.rows.sort(function (x, y) {
+        return Math.abs(Number(field(y, 'Amount')) || 0) - Math.abs(Number(field(x, 'Amount')) || 0);
+      });
+      g.brClasses = Object.keys(g._br);
+    });
+    // Sorted by absolute amount, biggest first — the whole triage order.
+    return out.sort(function (a, b) { return Math.abs(b.amount) - Math.abs(a.amount); });
+  }
+
+  // Slices + recorded verdicts -> the counts every surface quotes.
+  //
+  // `reviews` is a map keyed exactly as sliceKey() builds it; a slice counts as
+  // reviewed when its entry carries a non-blank `status`. A caller with no
+  // verdict source passes nothing, and every slice reads as open — which
+  // OVERSTATES the work and never hides an exclusion. That is the safe
+  // direction: an older Services build with no verdict endpoint degrades to
+  // "nothing reviewed", never to "nothing excluded".
+  //
+  // A CLASS is open while ANY of its slices lacks a verdict, because the class
+  // is what maps to a DMAAI 4152 fix — it is not settled until every slice
+  // under it is.
+  function progress(sl, reviews) {
+    sl = sl || []; reviews = reviews || {};
+    var classes = Object.create(null), open = Object.create(null), items = Object.create(null);
+    var reviewed = 0, totalAmt = 0, openAmt = 0, rows = 0;
+    sl.forEach(function (g) {
+      var ck = classKey(g.co, g.gl);
+      classes[ck] = 1;
+      totalAmt += g.amount;
+      rows += g.rowsTotal;
+      var rev = reviews[g.key];
+      if (rev && String(rev.status || '').trim()) reviewed++;
+      else { open[ck] = 1; openAmt += g.amount; }
+      // Distinct items ACROSS slices. Summing g.items would double-count an
+      // item that appeared under two stocking types; F4102's uniqueness on
+      // (item, branch) makes that impossible today, and this does not depend
+      // on it staying true.
+      for (var ik in g._seen) { if (Object.prototype.hasOwnProperty.call(g._seen, ik)) items[ik] = 1; }
+    });
+    var nSlices = sl.length;
+    return {
+      classes: Object.keys(classes).length,
+      openClasses: Object.keys(open).length,
+      slices: nSlices,
+      reviewed: reviewed,
+      items: Object.keys(items).length,
+      rows: rows,
+      totalAmt: totalAmt,
+      openAmt: openAmt,
+      // "Every exclusion has a verdict" — NOT the same as "nothing is excluded".
+      allReviewed: nSlices > 0 && reviewed === nSlices
+    };
+  }
+
+  // Slices rolled up to the GL CLASS, for a surface that names the largest
+  // class rather than the largest slice. Derived FROM the slices, never from
+  // the rows again — re-aggregating the rows is exactly how the Review page's
+  // lead came to say 509 items for a class its own table showed as 185.
+  function byClass(sl) {
+    var map = Object.create(null), out = [];
+    (sl || []).forEach(function (g) {
+      var ck = classKey(g.co, g.gl);
+      var c = map[ck];
+      if (!c) { c = map[ck] = { co: g.co, code: g.gl, items: 0, amount: 0, slices: 0, rows: 0, _seen: Object.create(null) }; out.push(c); }
+      c.amount += g.amount;
+      c.slices++;
+      c.rows += g.rowsTotal;
+      for (var ik in g._seen) {
+        if (Object.prototype.hasOwnProperty.call(g._seen, ik) && !c._seen[ik]) { c._seen[ik] = 1; c.items++; }
+      }
+    });
+    return out.sort(function (a, b) { return Math.abs(b.amount) - Math.abs(a.amount); });
+  }
+
+  window.RRV8.excluded = { slices: slices, progress: progress, byClass: byClass, sliceKey: sliceKey, field: field };
+})();
+
+/*
+ * RRV8.rollForward — the ONE producer of account roll-forward state (UI-71).
+ *
+ * Home's Account Roll Forward band and inventory-account-rollforward.html read
+ * the SAME rows (POST /inventory/integrity {report:'v6ui_raccountsummary'}) and
+ * used to classify them independently. Home tested GLOK/VarOK for the literal
+ * 'no' and called everything else clean; the page normalised the tokens first
+ * and kept a THIRD bucket for rows it could not evaluate. So the page could
+ * show amber "N accounts could not be evaluated" while Home, in the band that
+ * links to it, showed a green tick and "Every period rolled forward cleanly".
+ * Reported by the owner 2026-08-09 on fourteen accounts.
+ *
+ * The fourteen turned out to be baseline rows — fixed by classifying them as
+ * baseline on both axes, not as unevaluated (see normRow below). The DIVERGENCE
+ * was not fixed by that: Home still had no third bucket, so the next genuinely
+ * unevaluated row would have reproduced it exactly. Both surfaces call this now.
+ */
+window.RRV8 = window.RRV8 || {};
+(function () {
+  'use strict';
+  function tok(v) {
+    var s = String(v == null ? '' : v).trim().toLowerCase();
+    if (s === 'no' || s === 'baseline' || s === 'yes') return s;
+    if (s.indexOf('end') === 0) return 'end';        // 'end' and 'end - <timestamp>'
+    return 'unk';
+  }
+  // A BASELINE ROW IS BASELINE ON BOTH AXES. It is the opening snapshot, so it
+  // has no prior period BY DEFINITION — that is what the label means — and
+  // calling it "not evaluated" states a shortcoming that does not exist.
+  //
+  // It read as unevaluated for a data reason, not a logic one: on a baseline row
+  // GLOK is the token 'baseline' but VarOK carries a BARE TIMESTAMP (measured:
+  // GLOK 'baseline', VarOK '2026-08-07 12:14:24', period 2024-12-31). tok() has
+  // a prefix rule for the 'end - <timestamp>' pair but a bare timestamp matches
+  // nothing, so it fell through to 'unk', and the unevaluated bucket is an OR
+  // across the two columns. Keyed on GLOK because that is the column that
+  // carries the token. Owner 2026-08-09.
+  //
+  // MUTATES the row, which is what the roll-forward page has always done on
+  // ingest so its grid chips render the normalised token. Home passes rows it
+  // shares with other readers, so it uses classify() instead, which does not.
+  function normRow(r) {
+    if (!r) return r;
+    r.GLOK = tok(r.GLOK);
+    r.VarOK = (r.GLOK === 'baseline') ? 'baseline' : tok(r.VarOK);
+    return r;
+  }
+  // Non-mutating: the pair of normalised tokens for one row.
+  function classify(r) {
+    var gl = tok(r && r.GLOK);
+    return { glok: gl, varok: (gl === 'baseline') ? 'baseline' : tok(r && r.VarOK) };
+  }
+  // The three buckets, over rows already narrowed to the scope the caller means.
+  //
+  //   gl    GL balance break  — F0902 does not tie to posted F0911. Actionable:
+  //         R099102 in JD Edwards first, then Reload GL.
+  //   varc  variance break    — did not carry forward. NO manual step; it
+  //         re-clears on the next refresh.
+  //   unk   never evaluated   — no prior period to roll forward from. Amber and
+  //         named, never green: "clean" would be a claim about rows nobody
+  //         compared. Baseline rows are NOT in here.
+  //
+  // `breaks` counts ROWS that are broken on either axis — DISTINCT rows, not
+  // gl.rows + varc.rows. A row broken on both axes is one broken row, and adding
+  // the buckets would report it twice. Home has always meant the row count here
+  // (its consumers test it > 0 today, which hides the difference, and a figure
+  // that is only correct while nobody prints it is the UI-71 shape).
+  function summary(rows, match) {
+    var scope = [];
+    (rows || []).forEach(function (r) {
+      if (typeof match === 'function' && !match(r)) return;
+      scope.push(r);
+    });
+    var gl = [], varc = [], unk = [], broken = 0;
+    scope.forEach(function (r) {
+      var c = classify(r);
+      if (c.glok === 'no') gl.push(r);
+      if (c.varok === 'no') varc.push(r);
+      if (c.glok === 'no' || c.varok === 'no') broken++;
+      // OR across the two columns, deliberately: either side unevaluated means
+      // the row is not proven. A row can be both a break and unevaluated (broken
+      // on one axis, never compared on the other) and belongs in both buckets —
+      // this is the roll-forward page's own rule, unchanged.
+      if (c.glok !== 'baseline' && (c.glok === 'unk' || c.varok === 'unk')) unk.push(r);
+    });
+    function acctsOf(arr) {
+      var seen = Object.create(null), out = [];
+      arr.forEach(function (r) {
+        var k = String(r.CompanyNumber) + '\x01' + String(r.LongAccount);
+        if (!seen[k]) { seen[k] = 1; out.push({ co: String(r.CompanyNumber), acct: String(r.LongAccount) }); }
+      });
+      return out;
+    }
+    return {
+      scopeRows: scope.length,
+      breaks: broken,
+      gl:   { rows: gl.length,   accts: acctsOf(gl) },
+      varc: { rows: varc.length, accts: acctsOf(varc) },
+      unk:  { rows: unk.length,  accts: acctsOf(unk) }
+    };
+  }
+  window.RRV8.rollForward = { tok: tok, normRow: normRow, classify: classify, summary: summary };
+})();
+
+/*
+ * RRV8.integrityCount — rows vs items for the three data-integrity reports
+ * (v_integrity4_uom_conv, v_integrity5_gl_class, v_integrity7_frozen_cost).
+ *
+ * Home's Data Health check called `rows.length` "N items flagged"; the Reports
+ * badge on inventory-asof.html called the same number "N rows in scope". Both
+ * words for one figure, and only one of them can be right (UI-71).
+ *
+ * Measured 2026-08-09 on all three demos: rows == distinct item x branch for all
+ * three reports, so nothing on screen is wrong today. It is not GUARANTEED —
+ * v_integrity5_gl_class carries Location and Lot, so one item on two locations
+ * with a branch/location class split is two rows for one item, and no demo has
+ * that shape. This is the DAC-58 pattern in the UI: correct in the data we have,
+ * unsound in the code. Count the items, say items, and carry the rows alongside.
+ */
+window.RRV8 = window.RRV8 || {};
+window.RRV8.integrityCount = function (rows) {
+  rows = rows || [];
+  var seen = Object.create(null), items = 0, keyed = 0;
+  rows.forEach(function (r) {
+    if (!r) return;
+    var it = r.ShortItem == null ? r.shortitem : r.ShortItem;
+    if (it == null || String(it).trim() === '') it = (r.ItemNumber == null ? r.itemnumber : r.ItemNumber);
+    var br = r.BranchPlant == null ? r.branchplant : r.BranchPlant;
+    if (it == null || String(it).trim() === '') return;    // no item key on this row — cannot claim an item count for it
+    keyed++;
+    var k = String(it).trim() + '\x01' + String(br == null ? '' : br).trim();
+    if (!seen[k]) { seen[k] = 1; items++; }
+  });
+  // A report whose rows carry no item key at all gets rows back as items rather
+  // than a zero that would read as "nothing flagged".
+  return { rows: rows.length, items: keyed ? items : rows.length };
+};
+
+/*
  * RRV8.drillReport — the permanent tie-out for count-then-drill navigation.
  *
  * Every Home card / worklist row shows a COUNT computed on one surface, then

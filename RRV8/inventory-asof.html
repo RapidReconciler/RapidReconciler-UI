@@ -3588,9 +3588,6 @@ function updateLotDetailPill() {
     // which would clobber the scope-derived label. Run last so the
     // company SCOPE (activeCompanies) wins.
     updateCompanyPill();
-    // Lazy, scope-cached: refresh the report count badges in the
-    // background (no-ops unless the company scope changed).
-    refreshReportBadges();
   }
 
   // ============================================================
@@ -4951,80 +4948,23 @@ function updateLotDetailPill() {
   }
 
   // ============================================================
-  //  Report count badges
-  //  A zero-suppressed count badge on each report button so the
-  //  analyst can see at a glance whether a report has rows to act on
-  //  in the current company scope. The /inventory/integrity views
-  //  ignore the company filter server-side, so we count CLIENT-SIDE
-  //  (scopeRowsByCompany). Fetched lazily in the background after the
-  //  grid renders and cached per company-scope — only re-fetched when
-  //  the scope changes (these checks are period-independent).
+  //  Report count badges -- REMOVED 2026-08-09 (UI-71).
+  //
+  //  Three zero-suppressed badges (badge-uom / badge-frozen-cost /
+  //  badge-gl-class) counted the data-integrity reports for this page's
+  //  Reports drawer. That drawer moved to Home's Data Health tab and the
+  //  badge elements went with it -- but the code stayed, so every company
+  //  scope change fired three POST /inventory/integrity calls whose results
+  //  were handed to setReportBadge, which returned immediately because
+  //  getElementById found nothing. Confirmed by search: `badge-uom` and its
+  //  two siblings appear in no markup anywhere in this repo.
+  //
+  //  Found while collapsing duplicate figure producers: the badge called the
+  //  integrity counts "rows in scope" where Home's row called the identical
+  //  figure "items flagged", and checking which was right is what exposed
+  //  that one of the two surfaces had not existed for some time. The live
+  //  count is Home's, and it now counts items with RRV8.integrityCount.
   // ============================================================
-  const REPORT_BADGES = [
-    { badgeId: 'badge-uom',         viewName: 'v_integrity4_uom_conv',    demoFile: 'v-integrity4-uom-conv' },
-    { badgeId: 'badge-frozen-cost', viewName: 'v_integrity7_frozen_cost', demoFile: 'v-integrity7-frozen-cost' },
-    { badgeId: 'badge-gl-class',    viewName: 'v_integrity5_gl_class',    demoFile: 'v-integrity5-gl-class' }
-  ];
-  // Keyed on the SOLO company, because that is what the counts are now scoped to
-  // (scopeRowsToSoloCompany). Keying on the session's activeCompanies meant switching
-  // the company on this page left the previous company's badge counts on screen.
-  function reportBadgeScopeKey() {
-    try { return String(_ensureSolo() || ''); } catch (_) { return ''; }
-  }
-  function compactCount(n) {
-    if (n < 1000) return String(n);
-    if (n < 1000000) return (n / 1000).toFixed(n < 10000 ? 1 : 0).replace(/\.0$/, '') + 'k';
-    return (n / 1000000).toFixed(1).replace(/\.0$/, '') + 'm';
-  }
-  // Three states, all distinguishable:
-  //   n = 0     → hidden. Genuinely nothing to act on.
-  //   n > 0     → the count.
-  //   n = null  → "?" — the count could NOT be read. Hiding the badge on a failed
-  //               fetch (the old behaviour) rendered "we don't know" as "you're
-  //               clean", which is the one reading that stops the analyst looking.
-  function setReportBadge(badgeId, n) {
-    const el = document.getElementById(badgeId);
-    if (!el) return;
-    if (n == null) {
-      el.textContent = '?';
-      el.title = 'RapidReconciler couldn’t read this report’s row count. Open the report to check — this is not a zero.';
-      el.hidden = false;
-      return;
-    }
-    if (!n) { el.hidden = true; el.textContent = ''; el.removeAttribute('title'); return; }
-    el.textContent = compactCount(n);
-    el.title = n.toLocaleString('en-US') + ' row' + (n === 1 ? '' : 's') + ' in scope';
-    el.hidden = false;
-  }
-  let _badgeScopeKey = null;
-  function refreshReportBadges() {
-    if (IS_DEMO) return;
-    const key = reportBadgeScopeKey();
-    if (key === _badgeScopeKey) return;   // scope unchanged — badges still valid
-    _badgeScopeKey = key;
-    REPORT_BADGES.forEach(b => {
-      rrFetch('inventory/integrity', {
-        method: 'POST',
-        body: {
-          report: b.viewName,
-          reconciliationFilter: reconciliationFilterFromSession(),
-          take: 20000, skip: 0, page: 1, pageSize: 20000
-        },
-        demoFile: b.demoFile
-      }).then(payload => {
-        if (reportBadgeScopeKey() !== _badgeScopeKey) return;   // scope changed mid-flight
-        const raw = (payload && Array.isArray(payload.data)) ? payload.data
-                  : (Array.isArray(payload) ? payload : null);
-        // Unreadable shape → unknown, same as a failed fetch.
-        if (raw === null) { setReportBadge(b.badgeId, null); return; }
-        setReportBadge(b.badgeId, scopeRowsToSoloCompany(raw).rows.length);
-      }).catch(err => {
-        if (reportBadgeScopeKey() !== _badgeScopeKey) return;
-        console.warn('[badge] ' + b.viewName + ' count unavailable:', err && err.message);
-        setReportBadge(b.badgeId, null);   // unknown, NOT zero
-      });
-    });
-  }
 
   // ============================================================
   //  Period bars (shared module)

@@ -4469,12 +4469,13 @@
     var v = validation || {};
     paintInventoryLight(valDotClass(v.color), v.tooltip || 'Inventory validation light');
   }
-  // Shared totals source: the account roll-forward (v6ui_raccountsummary) cached
-  // for the working pages to read, keyed per DB like the DMAAI cache.
-  function acctSummaryCacheKey() {
-    var a = activeDb();
-    return 'rrv8.scope.v1.' + MODE + '.' + ((a && a.n) || '_') + '.accountsummary';
-  }
+  // There WAS an acctSummaryCacheKey here, and a comment claiming the working
+  // pages read their headline numbers from it so they all agree. Nothing read it
+  // — in this repo or any other. inventory-account-rollforward.html has always
+  // fetched v6ui_raccountsummary for itself. A comment asserting a guarantee that
+  // no code provides is worse than no comment: it is the exact reason nobody went
+  // looking when the band and that page disagreed (UI-71). Removed 2026-08-09.
+  // The cardex cache below is the real thing — written here, read there.
   function cardexCacheKey() {
     var a = activeDb();
     return 'rrv8.scope.v1.' + MODE + '.' + ((a && a.n) || '_') + '.cardexworklist';
@@ -4682,9 +4683,6 @@
       .then(function (d) {
         var rows = Array.isArray(d) ? d : ((d && d.data) || []);
         if (!rows.length) return;   // nothing to assert -> leave the validation.color fallback
-        // Warm the cross-page totals cache (working pages read their headline
-        // numbers from this instead of recomputing — guarantees they all agree).
-        try { sessionStorage.setItem(acctSummaryCacheKey(), JSON.stringify({ ts: Date.now(), payload: rows })); } catch (_) {}
         _invRows = rows;            // cache so a company-scope change repaints without refetching
         _loadExcluded();            // restore the sticky company focus for this DB (survives reload)
         applyInventoryLight();
@@ -6084,12 +6082,20 @@
     // "rolled forward cleanly this period" while a prior period (e.g. Jun 2022) sat
     // out of balance — contradicting the arfDot, which already scans every period. A
     // break in any period needs a re-roll regardless of the period the overview lands on.
-    var brkByCo = {};
+    //
+    // Classified by RRV8.rollForward (config.js) — the SAME function
+    // inventory-account-rollforward.html calls, so the band and the page it links
+    // to cannot disagree about a row (UI-71). Home used to test the two columns
+    // for the literal 'no' and treat everything else as clean, which gave it no
+    // equivalent of the page's THIRD bucket: rows with no prior period to roll
+    // forward from, which the page reports amber and named. The band then showed
+    // a green tick beside a link to a page saying accounts could not be evaluated.
+    var rfByCo = {};
     coScoped.forEach(function (r) {
-      if (String(r.GLOK).trim().toLowerCase() === 'no' || String(r.VarOK).trim().toLowerCase() === 'no') {
-        var bc = _coOf(r) || '?'; brkByCo[bc] = (brkByCo[bc] || 0) + 1;
-      }
+      var bc = _coOf(r) || '?';
+      (rfByCo[bc] = rfByCo[bc] || []).push(r);
     });
+    Object.keys(rfByCo).forEach(function (k) { rfByCo[k] = RRV8.rollForward.summary(rfByCo[k]); });
     var byCo = {}, order = [];
     use.forEach(function (r) {
       var co = _coOf(r) || '?';
@@ -6100,8 +6106,14 @@
       _COMPONENTS.forEach(function (k) { b.comp[k.name] += Number(r[k.f]) || 0; });
     });
     // Break count is period-agnostic (all periods for the company), so the band, the
-    // accountant company dot, and the AI prompts all agree with the arfDot.
-    Object.keys(byCo).forEach(function (co) { byCo[co].breaks = brkByCo[co] || 0; });
+    // accountant company dot, and the AI prompts all agree with the arfDot. `rf`
+    // rides alongside it so a consumer that needs the unevaluated bucket has it
+    // without re-deriving anything.
+    Object.keys(byCo).forEach(function (co) {
+      var rf = rfByCo[co] || { breaks: 0, gl: { rows: 0, accts: [] }, varc: { rows: 0, accts: [] }, unk: { rows: 0, accts: [] } };
+      byCo[co].rf = rf;
+      byCo[co].breaks = rf.breaks;
+    });
     var glByCo = _glBreaksByCo(coScoped);   // GL roll discontinuity per company (period + amount off) for the band note
     var cos = order.map(function (k) { return byCo[k]; }).filter(function (c) { return !_isExcludedCo(c.co); });   // what-if company exclude
     cos.forEach(function (c) { c.glBreak = glByCo[c.co] || null; });
@@ -8991,11 +9003,18 @@
   // "Cleared" rollup. prio orders the attention rows (roll-forward first — it
   // blocks the period from tying out). factTitle/factDetail are the ONLY facts
   // handed to the AI day-brief. The same per-company data the accountant worklist
-  // uses (c.breaks / c.glBreak) drives roll-forward, so the two never disagree.
+  // uses (c.breaks / c.glBreak / c.rf) drives roll-forward, so the two never
+  // disagree — and c.rf is RRV8.rollForward's classification, the one the
+  // roll-forward page itself renders from.
   function _analystRollForwardCheck(d, co) {
     var cos = (d && d.companies) || [];
     var c = cos.filter(function (x) { return String(x.co) === String(co); })[0] || cos[0] || {};
     var attn = (c.breaks || 0) > 0;
+    // The third bucket, from the same classification the roll-forward page uses
+    // (_briefData -> RRV8.rollForward.summary). Only consulted when nothing is
+    // actually broken — a break outranks it and carries its own corrective.
+    var rf = c.rf || { unk: { rows: 0, accts: [] } };
+    var unevalAccts = attn ? 0 : ((rf.unk && rf.unk.accts) ? rf.unk.accts.length : 0);
     var monYr = function (p) { var t = String(p).split('-'); return (t.length >= 3) ? ((PW_MONTHS[parseInt(t[1], 10) - 1] || t[1]) + ' ' + t[0]) : String(p); };
     var detailHtml, factDetail;
     if (attn) {
@@ -9013,6 +9032,26 @@
         detailHtml = 'The reconciliation variance didn’t carry forward — it re-clears on the next refresh (no manual step)';
         factDetail = 'ACCOUNT ROLL-FORWARD VARIANCE BREAK: the cardex-to-GL reconciliation variance did not carry forward. There is NO manual step — RapidReconciler recomputes the full period timeline every refresh, so it clears on the next run. If it survives a refresh, escalate to the customer’s IT department; never re-roll or Reload Cardex for it.';
       }
+    } else if (unevalAccts) {
+      // NO BREAK IS NOT THE SAME AS CLEAN. Rows with no prior period to roll
+      // forward from were never compared, and the roll-forward page has always
+      // reported them amber and named. This band showed a green tick beside a
+      // link to that page while it said fourteen accounts could not be evaluated
+      // (owner 2026-08-09). Those fourteen were baseline rows and are now
+      // classified as baseline on both axes — but the band had no bucket for the
+      // condition at all, so the next genuine one would have read as clean too.
+      attn = true;
+      var uNames = (rf.unk.accts || []).map(function (a) { return a.acct; }).filter(Boolean);
+      var uHtml = uNames.length ? (' on <b>' + esc(uNames.slice(0, 3).join(', ')) + '</b>'
+        + (uNames.length > 3 ? ' <span class="alh-item-more">+' + (uNames.length - 3) + ' more</span>' : '')) : '';
+      detailHtml = 'No account is out of balance, but ' + unevalAccts + ' account'
+        + (unevalAccts === 1 ? '' : 's') + uHtml + ' had no prior period to roll forward from — unproven, not clean';
+      factDetail = 'ACCOUNT ROLL-FORWARD NOT EVALUATED: no account is out of balance in what could be compared, but '
+        + rf.unk.rows + ' row' + (rf.unk.rows === 1 ? '' : 's') + ' on '
+        + unevalAccts + ' account' + (unevalAccts === 1 ? '' : 's')
+        + (uNames.length ? (' (' + uNames.slice(0, 6).join(', ') + ')') : '')
+        + ' have no prior period to roll forward from, so they were never checked. This is unproven, not clean. '
+        + 'It normally resolves once the account has a full period of history; if it persists, the account’s history did not load and that is a question for the customer\u2019s IT department.';
     } else {
       detailHtml = 'Every period rolled forward cleanly';
       factDetail = 'every period rolled forward cleanly';
@@ -9029,42 +9068,76 @@
       clearedSummary: 'roll-forward', clearedLine: 'Account roll forward — every period rolled forward cleanly'
     });
   }
-  // Model DMAAI check — the actionable signal is report3GlClassCount: the number
-  // of distinct GL classes used by inventory items that are NOT in the 4152 model
-  // (so their value falls out of reconciliation). 0 = clean (nothing to review);
-  // >0 = review whether each exclusion is intentional. No sign-off. The counts
-  // narrow to the scoped company via ?company=.
+  // Model DMAAI check — the excluded-GL-class finding, off the SAME producer the
+  // band above it and the Model DMAAI Review page it links to both use
+  // (_analystExclusionCounts -> RRV8.excluded). UI-71.
+  //
+  // It used to read /inventory/integrity/model-approval, and the two disagreed in
+  // one viewport: the endpoint's report3GlClassCount is every excluded class
+  // regardless of the verdict already recorded, and its report3Count is ROWS at
+  // item/branch/location/lot grain — so this fact block told the AI day-brief
+  // "5 GL classes excluded (801 items out of reconciliation)" while the band an
+  // inch above it said 2 classes, and the page behind the View button said 440
+  // items. Nothing was wrong with the endpoint. Two producers were.
+  //
+  // ATTENTION iff a class still carries no verdict, which is the band's rule too.
+  // Fully-reviewed exclusions are CLEARED but explicitly not clean: the value is
+  // still outside reconciliation, by decision, and the fact says so.
   function _analystModelCheck(d, co) {
+    var cos = (d && d.companies) || [];
+    var c = cos.filter(function (x) { return String(x.co) === String(co); })[0] || cos[0] || {};
+    var ccy = c.ccy || '';
+    var dbn = (activeDb() && activeDb().n) || '';
+    var href = 'accounting-model-review.html?company=' + encodeURIComponent(co || '') + (dbn ? '&db=' + encodeURIComponent(dbn) : '');
+    var view = '<a class="alh-act ghost" href="' + href + '" title="Open the model review">View <span aria-hidden="true">→</span></a>';
     var FAILED = {};   // sentinel: a rejected fetch must NOT collapse to 0 and read as "clean" to the AI
-    return rrFetch('inventory/integrity/model-approval', co ? { query: { company: co } } : undefined)
-      .then(function (m) { return m; }).catch(function () { return FAILED; })
-      .then(function (m) {
-        if (m === FAILED || m == null || m.report3GlClassCount == null) {
-          // Unknown, not clean. prio 5 keeps an un-run check below every confirmed finding.
-          return { id: 'model', prio: 5, state: 'attention', title: 'Model DMAAI', factTitle: 'Model DMAAI',
-            detailHtml: 'Couldn’t check just now — try again in a moment', factDetail: 'could not be checked just now', actionHtml: '' };
-        }
-        var n = Number(m.report3GlClassCount);
-        if (n === 0) {
-          return {
-            id: 'model', prio: 5, state: 'clean',
-            title: 'Model DMAAI — every GL class in the model', factTitle: 'Model DMAAI',
-            factDetail: 'every GL class used in inventory is in the model',
-            clearedSummary: 'model covers every GL class', clearedLine: 'Model DMAAI — every GL class used in inventory is in the model'
-          };
-        }
-        var items = (m && m.report3Count != null) ? Number(m.report3Count) : 0;
-        var glTxt = n.toLocaleString('en-US') + ' GL class' + (n === 1 ? '' : 'es') + ' excluded from the model';
-        var sub = glTxt + (items ? ' (' + items.toLocaleString('en-US') + ' item' + (items === 1 ? '' : 's') + ' out of reconciliation)' : '')
-          + ' — review whether each exclusion is intentional.';
-        var dbn = (activeDb() && activeDb().n) || '';
-        var href = 'accounting-model-review.html?company=' + encodeURIComponent(co || '') + (dbn ? '&db=' + encodeURIComponent(dbn) : '');
+    return _analystExclusionCounts(co).catch(function (e) {
+      console.warn('[home] excluded-GL-class counts unavailable', e);
+      return FAILED;
+    }).then(function (x) {
+      if (x === FAILED || x == null) {
+        // Unknown, not clean. prio 5 keeps an un-run check below every confirmed finding.
+        return { id: 'model', prio: 5, state: 'attention', title: 'Model DMAAI', factTitle: 'Model DMAAI',
+          detailHtml: 'Couldn’t check just now — try again in a moment',
+          factDetail: 'could not be checked just now', actionHtml: '', excl: false };
+      }
+      if (x.classes === 0) {
         return {
-          id: 'model', prio: 2, state: 'attention',
-          title: glTxt, factTitle: 'Model DMAAI', detailHtml: esc(sub), factDetail: sub,
-          actionHtml: '<a class="alh-act ghost" href="' + href + '" title="Open the model review">View <span aria-hidden="true">→</span></a>'
+          id: 'model', prio: 5, state: 'clean',
+          title: 'Model DMAAI — every GL class in the model', factTitle: 'Model DMAAI',
+          factDetail: 'every GL class used in inventory is in the model',
+          clearedSummary: 'model covers every GL class',
+          clearedLine: 'Model DMAAI — every GL class used in inventory is in the model',
+          excl: x
         };
-      });
+      }
+      // GRAIN IS NAMED, EVERY TIME. "801 rows" and "440 items" are both honest;
+      // "801 items" was not.
+      var scale = x.items.toLocaleString('en-US') + ' item' + (x.items === 1 ? '' : 's')
+        + ' across ' + x.rows.toLocaleString('en-US') + ' stock row' + (x.rows === 1 ? '' : 's');
+      if (x.openClasses === 0) {
+        var accepted = 'all ' + x.classes.toLocaleString('en-US') + ' excluded GL class'
+          + (x.classes === 1 ? '' : 'es') + ' reviewed and accepted — ' + _ccyAmt(ccy, x.totalAmt)
+          + ' on ' + scale + ' remains outside reconciliation by decision, which is accepted, not clean';
+        return {
+          id: 'model', prio: 5, state: 'clean',
+          title: 'Model DMAAI — exclusions reviewed', factTitle: 'Model DMAAI',
+          factDetail: accepted,
+          clearedSummary: 'exclusions reviewed and accepted',
+          clearedLine: 'Model DMAAI — ' + accepted,
+          excl: x
+        };
+      }
+      var glTxt = x.openClasses.toLocaleString('en-US') + ' GL class' + (x.openClasses === 1 ? '' : 'es')
+        + ' excluded from the model';
+      var sub = glTxt + ' totaling ' + _ccyAmt(ccy, x.openAmt)
+        + ' — ' + scale + ' sit outside reconciliation. Review whether each exclusion is intentional.';
+      return {
+        id: 'model', prio: 2, state: 'attention',
+        title: glTxt, factTitle: 'Model DMAAI', detailHtml: esc(sub), factDetail: sub,
+        actionHtml: view, excl: x
+      };
+    });
   }
   // Data-integrity check (UOM / Frozen Cost / GL-Class), scoped to the single
   // company. Amber with a View button (opens the same modal the old task did) when
@@ -9077,11 +9150,18 @@
         return { id: key, prio: prio, state: 'attention', title: title, factTitle: title,
           detailHtml: 'Couldn’t check just now — try again in a moment', factDetail: 'could not be checked just now', actionHtml: '' };
       }
-      var n = rows.length;
+      // ITEMS, counted — not rows called items (UI-71, RRV8.integrityCount). The
+      // count drives the row here and the badge on the Reports page, which called
+      // the identical figure "rows". They agree on every demo because each report
+      // happens to be one row per item x branch there; v_integrity5_gl_class
+      // carries Location and Lot and is not obliged to stay that way.
+      var cnt = RRV8.integrityCount(rows);
+      var n = cnt.items;
       if (n > 0) {
         host._alhIntg = host._alhIntg || {};
         host._alhIntg[key] = { co: co, title: title, rows: rows };
-        var nTxt = n.toLocaleString('en-US') + ' item' + (n === 1 ? '' : 's') + ' flagged';
+        var nTxt = n.toLocaleString('en-US') + ' item' + (n === 1 ? '' : 's') + ' flagged'
+          + (cnt.rows !== n ? (' across ' + cnt.rows.toLocaleString('en-US') + ' rows') : '');
         var _view = '<button type="button" class="alh-act ghost" data-intg-view="' + esc(key) + '">View <span aria-hidden="true">→</span></button>';
         if (key === 'glclass') {
           // A GL-class F4102/F41021 split only bites through R31802A, which runs ONLY on
@@ -9719,18 +9799,23 @@
       _analystModelBandPaint(gen);
     });
   }
-  // The excluded-class figures, counted the way the Model DMAAI Review page counts
-  // them. /model-approval cannot supply these: its report3GlClassCount is every
-  // excluded class regardless of the analyst's verdict, and its report3Count is ROWS
-  // at item/branch/location/lot grain. Both are honest fields; neither answers "what
-  // is still on my desk" or "how many items are actually outside".
+  // The excluded-class figures. ONE producer, shared with the Model DMAAI Review
+  // page this band links to: RRV8.excluded in config.js (UI-71).
   //
-  // So this reads the two sources the Review page reads and applies its rule
-  // verbatim: a slice is (company, GL class, stocking type), and a CLASS is still
-  // open while ANY of its slices lacks a verdict — because the class is what maps to
-  // a 4152 fix, so it is not settled until every slice under it is. Duplicating the
-  // rule is the risk here; duplicating it in one place, keyed identically, is the
-  // price of the two surfaces agreeing at all.
+  // /model-approval cannot supply these. Its report3GlClassCount is every excluded
+  // class regardless of the verdict the analyst already recorded, and its
+  // report3Count is `report3.size()` -- ROWS of v_integrity3_exc_glc, at item/
+  // branch/location/lot grain. Both are honest fields; neither answers "what is
+  // still on my desk" or "how many items are actually outside". Measured on a
+  // demo company: 801 rows, 440 items, 5 classes, 2 of them still open.
+  //
+  // This used to re-implement the Review page's slicing rule here, keyed
+  // identically and commented as the price of the two surfaces agreeing. It is
+  // not a price worth paying twice -- the rule now lives in one place and both
+  // callers pass it the same shape.
+  //
+  // Result carries the counts AND the slices, so a caller that needs the shape
+  // (which class, how much, judged or not) does not re-read the population.
   function _analystExclusionCounts(co) {
     var period = '';
     try { period = (window.RRV8 && RRV8.readSessionScope && RRV8.readSessionScope().period) || ''; } catch (_) {}
@@ -9750,54 +9835,35 @@
     ]).then(function (res) {
       var rows = (res[0] && res[0].data) || (Array.isArray(res[0]) ? res[0] : []);
       var revs = (res[1] && (res[1].data || res[1].rows)) || [];
-      var judged = Object.create(null);
+      // Keyed exactly as RRV8.excluded.sliceKey builds it -- the verdict endpoint
+      // returns its own camelCase field names, so this is the one place the two
+      // vocabularies meet.
+      var reviews = Object.create(null);
       revs.forEach(function (r) {
-        if (r && r.status && String(r.status).trim()) {
-          judged[String(r.companyNumber) + '' + String(r.glClass) + '' + String(r.stockingType || '')] = 1;
-        }
+        if (!r) return;
+        reviews[RRV8.excluded.sliceKey(
+          String(r.companyNumber == null ? '' : r.companyNumber).trim(),
+          String(r.glClass == null ? '' : r.glClass).trim(),
+          String(r.stockingType == null ? '' : r.stockingType).trim())] = r;
       });
-      var classes = Object.create(null), open = Object.create(null), items = Object.create(null);
-      var openAmt = 0, totalAmt = 0;
-      rows.forEach(function (r) {
-        var rco = String(r.CompanyNumber == null ? (r.companynumber == null ? '' : r.companynumber) : r.CompanyNumber).trim();
-        if (co && rco && rco !== String(co).trim()) return;
-        var gl = String(r.GLClass == null ? (r.glclass == null ? '' : r.glclass) : r.GLClass).trim();
-        var stkt = String(r.StockingType == null ? (r.stockingtype == null ? '' : r.stockingtype) : r.StockingType).trim();
-        var amt = Number(r.Amount == null ? (r.amount == null ? 0 : r.amount) : r.Amount) || 0;
-        classes[rco + '' + gl] = 1;
-        totalAmt += amt;
-        // The value on the slices still awaiting a verdict. An accepted slice is
-        // still outside reconciliation, but it is not what the analyst has left to
-        // do, and the headline is about what is left to do.
-        if (!judged[rco + '' + gl + '' + stkt]) { open[rco + '' + gl] = 1; openAmt += amt; }
-        // The ITEM, not the row: the view repeats an item per location and lot.
-        items[String(r.ShortItem == null ? (r.shortitem == null ? '' : r.shortitem) : r.ShortItem).trim()
-              + '' + String(r.Branch == null ? (r.branch == null ? '' : r.branch) : r.Branch).trim()] = 1;
-      });
-      return {
-        classes: Object.keys(classes).length,
-        openClasses: Object.keys(open).length,
-        items: Object.keys(items).length,
-        openAmt: openAmt,
-        totalAmt: totalAmt
-      };
+      var slices = RRV8.excluded.slices(rows, co);
+      var x = RRV8.excluded.progress(slices, reviews);
+      x.sliceRows = slices;
+      return x;
     });
   }
   // `hh` null = the health gather failed. Kept as the trigger (not a second timer)
   // so the band's clause and the tab's rows describe the same moment.
   function _analystModelBandExclusions(gen, hh) {
     if (gen !== _analystModelBand.gen) return;
-    if (!hh) { _analystModelBand.excl = false; _analystModelBandPaint(gen); return; }
-    _analystExclusionCounts(_analystModelBand.co).then(function (x) {
-      if (gen !== _analystModelBand.gen) return;
-      _analystModelBand.excl = x;
-      _analystModelBandPaint(gen);
-    }).catch(function (e) {
-      if (gen !== _analystModelBand.gen) return;
-      console.warn('[home] excluded-GL-class counts unavailable', e);
-      _analystModelBand.excl = false;   // says "couldn't check"; never implies nothing is excluded
-      _analystModelBandPaint(gen);
-    });
+    // The band takes the counts the model CHECK already produced, rather than
+    // asking for them again (UI-71). Two reads of one population is how the band
+    // and the fact block behind it came to quote different numbers in the same
+    // viewport, and it was also a second request per paint for an answer already
+    // in hand. `false` = the check could not run; never silently absent.
+    var m = ((hh && hh.checks) || []).filter(function (c) { return c && c.id === 'model'; })[0];
+    _analystModelBand.excl = (m && m.excl) ? m.excl : false;
+    _analystModelBandPaint(gen);
   }
   function _analystRenderChecks(host, gen, attention, cleared, explained) {
     if (gen !== _analystTaskGen) return;

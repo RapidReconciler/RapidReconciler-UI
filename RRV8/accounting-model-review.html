@@ -359,51 +359,15 @@
   //
   // Sorted by absolute amount, biggest first. That is the whole triage order —
   // the amount, not the class code, is what decides a row.
+  // The slicing rule itself lives in RRV8.excluded (config.js) -- the SAME
+  // function Home's Model DMAAI Table band calls, so the two surfaces cannot
+  // report different counts for one population (UI-71). The reasoning behind the
+  // (company, GL class, stocking type) grain, and the item-vs-row distinction
+  // that keeps 440 items from being printed as 801, is written there.
   var _r3Groups = [];   // last rendered slices, for the modal + exports
-  function _sliceKey(co, gl, stkt) { return co + '' + gl + '' + stkt; }
-  function excludedSlices(rows) {
-    var map = Object.create(null);
-    (rows || []).forEach(function (r) {
-      var co = field(r, 'CompanyNumber'), gl = field(r, 'GLClass');
-      // '' is a REAL stocking type: the item has no F4102 record for its branch.
-      // It gets its own row rather than being folded in with a real code.
-      var stkt = String(field(r, 'StockingType') || '');
-      var amt = Number(field(r, 'Amount')) || 0;   // on-hand $ (rperpetualinv), summed in the view
-      var key = _sliceKey(co, gl, stkt);
-      if (!map[key]) map[key] = { key: key, co: co, gl: gl, stkt: stkt, items: 0, amount: 0, qty: 0, costed: 0, split: 0, brClasses: [], rowsTotal: 0, rows: [], _seen: Object.create(null), _br: Object.create(null) };
-      // The view is at item/LOCATION/LOT grain (DAC-56), so one item in three
-      // locations is three rows. "Items" must stay an ITEM count or the headline
-      // silently doubles and stops meaning what the column says. The modal shows
-      // every row; this counts the distinct items behind them.
-      var ik = String(field(r, 'ShortItem')) + '' + String(field(r, 'Branch'));
-      if (!map[key]._seen[ik]) { map[key]._seen[ik] = 1; map[key].items++; }
-      map[key].amount += amt;
-      // Rows carrying a unit cost. Drives the latent-exclusion marker below:
-      // 0.00 with a cost behind it is empty, not free.
-      if ((Number(field(r, 'UnitCost')) || 0) !== 0) map[key].costed++;
-      // Rows whose BRANCH class disagrees with the LOCATION class this slice is
-      // grouped by. Work-order moves take the class from the branch and every other
-      // move takes it from the location, so a split means part of these items'
-      // activity routes to an account that IS in the model and part does not. The
-      // modal shows the pair side by side; counting it here is what lets the AI read
-      // and the export say so without the analyst spotting it column by column.
-      var bc = String(field(r, 'BranchClass') || '');
-      if (bc && bc !== String(gl || '')) { map[key].split++; map[key]._br[bc] = 1; }
-      map[key].rowsTotal++;
-      map[key].qty += Number(field(r, 'Quantity')) || 0;
-      map[key].rows.push(r);
-    });
-    return Object.keys(map).map(function (k) {
-      // Order the ITEMS the same way the slices are ordered — biggest first. A
-      // 183-row detail list opening on a zero-value item makes the analyst scroll
-      // to find the money, and the money is the only reason the list is open.
-      map[k].rows.sort(function (x, y) {
-        return Math.abs(Number(field(y, 'Amount')) || 0) - Math.abs(Number(field(x, 'Amount')) || 0);
-      });
-      map[k].brClasses = Object.keys(map[k]._br);
-      return map[k];
-    }).sort(function (a, b) { return Math.abs(b.amount) - Math.abs(a.amount); });
-  }
+  function _sliceKey(co, gl, stkt) { return RRV8.excluded.sliceKey(co, gl, stkt); }
+  function excludedSlices(rows) { return RRV8.excluded.slices(rows); }
+
   // No F0005 in the RR database, so there is no stocking-type description to show
   // and the raw JDE code is all we have. 'P' and 'M' a JDE analyst reads; '0' and
   // 'X' they may not, and inventing a meaning for them would be worse than leaving
@@ -414,19 +378,24 @@
   // Footer. Leads on what is STILL OUTSTANDING, because a count that never moves
   // no matter how much the analyst reviews is noise, and because rows-reviewed on
   // its own overstates progress when the reviewed rows carry no value.
-  function _exclFooter(classCount, sliceCount, itemCount, grandAmt) {
+  // Every figure comes from the one progress model. It used to take three of
+  // them as arguments, each reduced separately at the call site -- the item
+  // count by summing the per-slice counts, which is only right while F4102
+  // stays unique on (item, branch) (UI-71).
+  function _exclFooter() {
     var p = _exclProgress();
     var head = p.openClasses === 0
-      ? '<strong>All ' + classCount + ' GL class' + (classCount === 1 ? '' : 'es') + ' reviewed</strong>'
-      : '<strong>' + p.openClasses + ' of ' + classCount + ' GL class'
-        + (classCount === 1 ? '' : 'es') + ' still to review</strong>';
+      ? '<strong>All ' + p.classes + ' GL class' + (p.classes === 1 ? '' : 'es') + ' reviewed</strong>'
+      : '<strong>' + p.openClasses + ' of ' + p.classes + ' GL class'
+        + (p.classes === 1 ? '' : 'es') + ' still to review</strong>';
     var money = p.openAmt === 0
       ? fmtMoney(p.totalAmt) + ' reviewed and accepted'
       : '<strong>' + fmtMoney(p.openAmt) + '</strong> of ' + fmtMoney(p.totalAmt) + ' outstanding';
     return '<div class="tbl-foot">' + head + ' &middot; '
-      + p.reviewed + ' of ' + sliceCount + ' stocking type' + (sliceCount === 1 ? '' : 's') + ' reviewed &middot; '
+      + p.reviewed + ' of ' + p.slices + ' stocking type' + (p.slices === 1 ? '' : 's') + ' reviewed &middot; '
       + money + ' &middot; '
-      + itemCount.toLocaleString('en-US') + ' item' + (itemCount === 1 ? '' : 's') + '</div>';
+      + p.items.toLocaleString('en-US') + ' item' + (p.items === 1 ? '' : 's')
+      + ' across ' + p.rows.toLocaleString('en-US') + ' row' + (p.rows === 1 ? '' : 's') + '</div>';
   }
   // LATENT EXCLUSION MARKER (DAC-57). A slice at 0.00 is not automatically safe
   // to accept: it may be empty rather than free. Where the items behind it carry
@@ -468,9 +437,6 @@
     if (!rows || !rows.length) { container.innerHTML = '<div class="empty">' + esc(emptyMsg) + '</div>'; _r3Groups = []; return; }
     var groups = excludedSlices(rows);
     _r3Groups = groups;
-    var grandAmt = 0, classes = Object.create(null);
-    groups.forEach(function (g) { grandAmt += g.amount; classes[g.co + ' ' + g.gl] = 1; });
-    var classCount = Object.keys(classes).length;
 
     var html = '<div class="tbl-wrap"><table><thead><tr>'
       + '<th>Company</th><th>GL class</th>'
@@ -518,8 +484,7 @@
             + '</tr>';
         }).join('')
       + '</tbody></table></div>'
-      + _exclFooter(classCount, groups.length,
-          groups.reduce(function (n, g) { return n + g.items; }, 0), grandAmt)
+      + _exclFooter()
       + '<div class="xd-actions"><button type="button" class="ai-pill" id="xdExportAll">Export all excluded items</button></div>';
     container.innerHTML = html;
   }
@@ -681,63 +646,43 @@
   // set. Once Report 3 rows are loaded this is authoritative (it honors the
   // ?company + Home scope exactly); before then we fall back to the endpoint's
   // report3GlClassCount. Returns -1 while still unknown.
+  //
+  // Counted from the SLICES, not by a fourth walk of the raw rows (UI-71).
+  // `_r3Groups` is rebuilt from the scoped rows on every render of the table, so
+  // it is scoped identically and there is nothing left to drift.
   function glClassCount() {
-    if (_r3Loaded) {
-      var seen = Object.create(null), n = 0;
-      byCompany(_r3Rows).forEach(function (r) {
-        var k = String(field(r, 'CompanyNumber')) + '|' + String(field(r, 'GLClass'));
-        if (!seen[k]) { seen[k] = 1; n++; }
-      });
-      return n;
-    }
+    if (_r3Loaded) return _exclProgress().classes;
     return (_endpointGlClass == null) ? -1 : _endpointGlClass;
   }
 
   // ---- AI: exclusion assessment (the AI's read on whether each exclusion is
-  // intentional). The excluded GL class codes, aggregated per code for the
-  // scoped company: { groups:[{code,items,amount}] biggest-$-first, total, items }.
+  // intentional). The excluded GL classes for the scoped company, rolled up
+  // from the SLICES this page already built -- never re-aggregated from the raw
+  // rows (UI-71).
+  //
+  // Re-aggregating the rows is what made the lead below say "the largest is
+  // SUPP at 111,904.04 (509 items)" on a demo company whose own table showed
+  // that class's stocking-type rows adding to 185 items. Both figures were
+  // arithmetic on the same data; 509 was the ROW count at item/branch/location/
+  // lot grain wearing the word "items". One producer removes the choice.
   function _exclSummary() {
-    var rows = byCompany(_r3Rows), map = Object.create(null), total = 0;
-    rows.forEach(function (r) {
-      var gl = field(r, 'GLClass') || '(blank)', amt = Number(field(r, 'Amount')) || 0;
-      if (!map[gl]) map[gl] = { code: gl, items: 0, amount: 0 };
-      map[gl].items++; map[gl].amount += amt; total += amt;
-    });
-    var groups = Object.keys(map).map(function (k) { return map[k]; })
-      .sort(function (a, b) { return Math.abs(b.amount) - Math.abs(a.amount); });
-    return { groups: groups, total: total, items: rows.length };
+    var groups = RRV8.excluded.byClass(_r3Groups);
+    var p = _exclProgress();
+    return { groups: groups, total: p.totalAmt, items: p.items, rows: p.rows };
   }
   // Review-aware progress over the SCOPED slices. One model, three consumers
   // (footer, verdict banner, AI lead) so they can never quote different numbers
-  // at each other.
+  // at each other -- and the same model Home's band calls, so the tab and the
+  // page cannot either (RRV8.excluded.progress, config.js).
   //
   // OUTSTANDING is the honest measure, not the gross total. Marking the six
   // zero-value slices intended on a demo company cleared six of ten rows and
-  // ZERO dollars — the money was all in the four that were left. A summary that
+  // ZERO dollars -- the money was all in the four that were left. A summary that
   // only reports the gross would have read as progress; one that only reports
   // rows reviewed would read as more progress still. Report both, and lead on
   // the dollars.
-  //
-  // A class counts as outstanding while ANY of its stocking types is unreviewed:
-  // the class is what maps to a DMAAI 4152 fix, so it is not settled until every
-  // slice under it is.
   function _exclProgress() {
-    var classes = Object.create(null), open = Object.create(null);
-    var slices = _r3Groups.length, reviewed = 0, totalAmt = 0, openAmt = 0;
-    _r3Groups.forEach(function (g) {
-      var ck = g.co + '' + g.gl;
-      classes[ck] = 1;
-      totalAmt += g.amount;
-      if (_r3Reviews[g.key] && _r3Reviews[g.key].status) reviewed++;
-      else { open[ck] = 1; openAmt += g.amount; }
-    });
-    var nClasses = Object.keys(classes).length, nOpen = Object.keys(open).length;
-    return {
-      classes: nClasses, openClasses: nOpen, slices: slices, reviewed: reviewed,
-      totalAmt: totalAmt, openAmt: openAmt,
-      // "Every exclusion has a verdict" — NOT the same as "nothing is excluded".
-      allReviewed: slices > 0 && reviewed === slices
-    };
+    return RRV8.excluded.progress(_r3Groups, _r3Reviews);
   }
   function _aiTier() { return (window.RRAI && RRAI.get) ? RRAI.get() : 'full'; }
 
@@ -891,7 +836,7 @@
                 + 'It is still not counted in reconciliation; adding the class at the source in JD Edwards brings it back in.')
           : fmtMoney(p.openAmt) + ' of on-hand value is still to review across '
             + p.openClasses + ' GL class code' + (p.openClasses === 1 ? '' : 's')
-            + ' — the largest is ' + top.code + ' at ' + fmtMoney(top.amount)
+            + ' \u2014 the largest is ' + (top.code || '(blank)') + ' at ' + fmtMoney(top.amount)
             + ' (' + top.items.toLocaleString('en-US') + ' item' + (top.items === 1 ? '' : 's') + ').'
             + ' Each row is judged on its amount: a slice holding nothing costs nothing;'
             + ' a slice holding value is real inventory outside the reconciliation.';

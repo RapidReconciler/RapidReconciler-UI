@@ -447,7 +447,7 @@
   function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(m){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m];}); }
   function fmtDate(iso){ if(!iso) return ''; var p=String(iso).split('-'); if(p.length!==3) return iso; var mo=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; return mo[(+p[1])-1]+' '+(+p[2])+', '+p[0]; }
   // Display label + chip class for a normalized GL OK / Var OK token. 'unk' is the
-  // "never evaluated" case (see normTok) — it reads as its own amber state so it can
+  // "never evaluated" case (see RRV8.rollForward.tok) — it reads as its own amber state so it can
   // never be mistaken for a pass, and it exports with the same words it shows.
   function tokLabel(v){
     var s=String(v==null?'':v).trim().toLowerCase();
@@ -510,29 +510,13 @@
   // Count GL-side (GLOK) and variance-side (VarOK) breaks in scope and summarize
   // them by account. These are the ONLY facts handed to the AI brief (grounding)
   // and the corrective-band recommendation — no per-row cause classification here.
+  // The three buckets come from RRV8.rollForward.summary in config.js — the SAME
+  // function Home's Account Roll Forward band calls (UI-71). This page and that
+  // band read the same rows from the same report and used to classify them
+  // separately, which is how the page could say "14 accounts could not be
+  // evaluated" while the band beside its own link showed a green tick.
   function breakSummary(){
-    var scope = DATA.filter(rowMatchesCo);
-    var glRows = scope.filter(function(r){ return isNo(r.GLOK); });
-    var varRows = scope.filter(function(r){ return isNo(r.VarOK); });
-    // Third bucket: rows RapidReconciler never evaluated (see normTok). Counted
-    // separately so the band and the brief can say "not evaluated" instead of
-    // rolling them into either "clean" or "break".
-    // Baseline rows are excluded explicitly as well as by normRow above. Belt and
-    // braces on purpose: this bucket drives an amber band, a Reload GL prompt and the
-    // AI brief, and the failure mode is telling the analyst to chase a result that was
-    // never missing.
-    var unkRows = scope.filter(function(r){
-      return r.GLOK !== 'baseline' && (isUnk(r.GLOK) || isUnk(r.VarOK));
-    });
-    function acctsOf(rowsArr){
-      var seen={}, out=[];
-      rowsArr.forEach(function(r){ var k=r.CompanyNumber+'|'+r.LongAccount; if(!seen[k]){ seen[k]=1; out.push({co:String(r.CompanyNumber),acct:String(r.LongAccount)}); } });
-      return out;
-    }
-    return { scopeRows:scope.length,
-             gl:{ rows:glRows.length, accts:acctsOf(glRows) },
-             varc:{ rows:varRows.length, accts:acctsOf(varRows) },
-             unk:{ rows:unkRows.length, accts:acctsOf(unkRows) } };
+    return RRV8.rollForward.summary(DATA, rowMatchesCo);
   }
   function setBandStatus(statusId, dot, text){
     var s=document.getElementById(statusId); if(!s) return;
@@ -814,29 +798,10 @@
   // counted zero breaks, painted the band green, and told the AI brief the
   // roll-forward was intact. '' now means 'unk' (not evaluated), which is neither a
   // break nor a pass.
-  function normTok(v){ var s=String(v==null?'':v).trim().toLowerCase();
-    if(s==='no'||s==='baseline'||s==='yes') return s;
-    if(s.indexOf('end')===0) return 'end';   // 'end' and 'end - <timestamp>'
-    return 'unk';
-  }
-  // A BASELINE ROW IS BASELINE ON BOTH AXES. It is the opening snapshot, so it has no
-  // prior period BY DEFINITION -- that is what the label means -- and calling it
-  // "not evaluated" states a shortcoming that does not exist.
-  //
-  // It read as unevaluated for a data reason, not a logic one: on a baseline row GLOK
-  // is the token 'baseline' but VarOK carries a BARE TIMESTAMP (measured: GLOK
-  // 'baseline', VarOK '2026-08-07 12:14:24', period 2024-12-31, the opening period).
-  // normTok has a prefix rule for the 'end - <timestamp>' pair but a bare timestamp
-  // matches nothing, so it fell through to 'unk', and the unevaluated bucket is an OR
-  // across the two columns. Fourteen opening-snapshot rows then reported themselves as
-  // an unproven result the analyst should chase, with a Reload GL prompt attached.
-  //
-  // Keyed on GLOK because that is the column that carries the token. Owner 2026-08-09.
-  function normRow(r){
-    r.GLOK = normTok(r.GLOK);
-    r.VarOK = (r.GLOK === 'baseline') ? 'baseline' : normTok(r.VarOK);
-    return r;
-  }
+  // The token rules and the baseline pairing live in RRV8.rollForward (config.js)
+  // so Home's band classifies a row exactly as this page does (UI-71). The
+  // reasoning that earned each rule is written there.
+  function normRow(r){ return RRV8.rollForward.normRow(r); }
   function ingest(rows){
     DATA=(Array.isArray(rows)?rows:[]).map(normRow);
     renderCompanyContext(); renderAll();
