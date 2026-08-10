@@ -1180,7 +1180,17 @@ window.RRV8 = window.RRV8 || {};
     'VCHR': {
       title: 'A/P Voucher on Inventory', kind: 'rebalance', tier: 'single', disposition: 'expense',
       cause: 'A/P vouchers posted to an inventory account instead of the A/P variance account. DMAAI 4330 is routing voucher variances into inventory. Correcting that route stops it; restricting account overrides on the voucher-match version keeps it corrected.',
-      desc: 'A/P voucher variance posted to an inventory account instead of the A/P variance account — DMAAI 4330 routes inventory items there. A voucher moves no inventory, so there is no item-ledger side to match against; the whole amount is the variance.',
+      // 4330 DOES write to F4111 — do not put "a voucher moves no inventory" back
+      // (UI-83). RRUniversity/inventory-distribution-aais.html lists 4330 as "Written
+      // to F4111" and deliberately flags 4332 / 4335 / 4340 as "Not written to F4111",
+      // so the exception is authored, not an oversight. Measured on
+      // RCardexLedgerCompare2 where recstatus = 1 and SubType = 'Vouchers': Demo2 has
+      // 1,033 of 3,812 voucher rows carrying a non-zero cardex amount, holding
+      // $752,088.82 of item-ledger value and $156,068.43 of variance; Demo3 has 1 of 7.
+      // The old copy told the analyst there was nothing to look at in a column holding
+      // three quarters of a million dollars. The batch-type half of this card IS
+      // correct: all 3,812 Demo2 rows carry BatchType V.
+      desc: 'A/P voucher variance posted to an inventory account instead of the A/P variance account — DMAAI 4330 routes inventory items there. Read the cardex column per row before assuming the whole amount is the variance: most voucher rows carry no item-ledger side, but DMAAI 4330 writes to F4111 when the line type has Voucher Match Variance Account checked, and those rows tie against a real cardex figure.',
       action: 'Check DMAAI 4330 for this company and GL class. Correct the route so voucher variances land on the variance account, then restrict who can override the GL account on the voucher-match version. The value already posted stays in the inventory account until the accountant reclassifies it out.',
       finding: {
         dmaai: true,
@@ -1189,7 +1199,7 @@ window.RRV8 = window.RRV8 || {};
         checked: [
           'Batch type on these documents: V, an A/P voucher. Confirmed.',
           'Account posted to: an inventory account. Confirmed.',
-          'Item-ledger side: nothing. A voucher moves no inventory, so there is nothing to match.'
+          'Item-ledger side: read per row. A voucher variance normally moves no inventory, but DMAAI 4330 writes to F4111 when the line type has Voucher Match Variance Account checked, so a row carrying a cardex amount is compared against it, not against zero.'
         ],
         found: [
           'DMAAI 4330 is sending voucher variances to inventory for this company and GL class.',
@@ -1382,7 +1392,16 @@ window.RRV8 = window.RRV8 || {};
         checked: [
           'An F0911 completion exists for this work order on this account. Confirmed.',
           'Regrained to work order, account and doc type across every batch and period, the two sides agree to the penny. Confirmed.',
-          'Batch present on the item-ledger row, so R31802A ran and wrote the journal in the same step.'
+          // A STAMPED BATCH IS NOT EVIDENCE THE JOURNAL WAS WRITTEN (UI-83).
+          // ANALYST_GROUNDING forbids this inference twice and T-MFG forbids it again;
+          // the CNJ card exists precisely because it fails. Measured on
+          // RCardexLedgerCompare2 where recstatus = 1: Completion Not Journaled carries
+          // 320 rows on Demo1 and 125 on Demo3, and NONE of them has a zero batch —
+          // every row on that card has a batch and no GL completion. Cross-Batch
+          // Completion is the same (3 on Demo1, 450 on Demo3, none zero-batch), so the
+          // batch discriminates nothing between the two cards. The first two bullets
+          // above already carry the real evidence.
+          'Batch present on the item-ledger row, so R31802A processed it. That is not evidence the journal was written; the F0911 completion found above is.'
         ],
         found: [
           'Not a variance. A work order issues material over weeks, each issue in its own batch, and the completion is not generated until the product is finished — days or weeks later, in a batch of its own.',
