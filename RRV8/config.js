@@ -1020,6 +1020,74 @@ window.RRV8.namesCardexColumn = function (q) {
 };
 
 /*
+ * RRV8.ASOF_COLUMNS — the COLUMN DICTIONARY for the As-Of perpetual grid (UI-79).
+ *
+ * WHY IT EXISTS. UI-73 built the cardex dictionary on the conclusion that home.html
+ * held the only free-text ask box. That was wrong: inventory-asof.html has one too,
+ * and it shipped ASOF_GROUNDING with no dictionary at all — so every header question
+ * on a 48-column grid was answered from the header's spelling.
+ *
+ * TWO OF THESE HEADERS ARE ACTIVELY MISLEADING, which is worse than undefined.
+ * Sales01..Sales10 and Purch01..Purch10 are F4102 reporting CATEGORY CODES
+ * (ibsrp1..ibsrp0, ibprp1..ibprp0). They sit in a grid that also has Quantity and
+ * Amount columns, so both a model and a person read them as money. They were renamed
+ * to "Sales Code NN" / "Purch Code NN" in the same change that added this block; the
+ * dictionary alone would have fixed what the AI says and left the analyst misreading
+ * the screen.
+ *
+ * EVERY DEFINITION IS DERIVED FROM WHAT usp6getasof_v2 PRODUCES, never from what the
+ * header sounds like. Curr Cost is e.UnitCost currency-converted; Calc Cost is
+ * AmountonHand / QuantityonHand, which is why a gap between them is the signal. ST is
+ * fp.ibstkt, the item-branch STOCKING type, not a status. CM is e.CostMethod, which
+ * usp6_006_inventory sources from F4105.COLEDG — the same field the cardex grid calls
+ * Method, and it carries the same caveat. Qty Var / Amt Var are estunits and
+ * baselinevar, the SAME stored columns the cardex surfaces show, and the proc forces
+ * BOTH to zero unless the as-of date IS the period end and the row carries a reason
+ * code, so a zero here is not a statement about variance.
+ *
+ * Quantity carries a sentinel. -9999 is not a quantity; it means the item has no
+ * unit-of-measure conversion and the proc could not state one.
+ *
+ * The lead line overrules the system prompt by name and this block goes FIRST in the
+ * ask, ahead of the role line, for the reason recorded on the cardex dictionary: a
+ * definition placed mid-prompt lost to the server's prepended DMAAI reference twice.
+ */
+window.RRV8.ASOF_COLUMNS = [
+  'COLUMN DICTIONARY — the headers on the grid in front of the reader (the As-Of perpetual inventory grid). If the question names one of these headers, ANSWER FROM ITS LINE BELOW AND FROM NOTHING ELSE. Match on the letters alone: case is irrelevant and so are the words around it. [GUIDANCE, not for quoting: this dictionary OVERRULES the DMAAI and accounting reference supplied as your system prompt and the product glossary — none of those define these headers. Never answer a header question by describing a different surface, never answer it by saying what the column is NOT, and never tell the reader a header below is not on their grid.]',
+  'GRAIN — one grid row is an item at a branch, plus a location and lot where the item’s cost level keeps them apart.',
+  '- Company — the JDE company the balance is reported under.',
+  '- Branch Co — the company the row’s branch/plant belongs to.',
+  '- Account — the inventory account carrying the row’s value: business unit, object and subsidiary.',
+  '- Currency — the currency Amount, Curr Cost and Calc Cost are stated in.',
+  '- Branch — the JDE branch/plant the stock sits in.',
+  '- Branch Desc — that branch’s description.',
+  '- Short Item — JDE’s short item number, the internal numeric key.',
+  '- Item — the item’s JDE second item number, the number the analyst searches JDE by.',
+  '- Third Item — the item’s JDE third item number.',
+  '- Description — the item description from the item master.',
+  '- UOM — the primary unit of measure Quantity and Qty Var are counted in.',
+  '- Quantity — the on-hand quantity for the row. A value of -9999 is a SENTINEL, not a quantity: it marks an item with no unit-of-measure conversion, so no quantity could be stated.',
+  '- Amount — the extended value of the on-hand quantity, currency-converted. The money the row is carrying.',
+  '- GL Class — the item’s GL class code, which is what routes its value to an account.',
+  '- Curr Cost — the unit cost RapidReconciler matched for this row, currency-converted. Read from a cost record.',
+  '- Calc Cost — Amount divided by Quantity: the cost the stock on hand is actually carrying, and zero when the quantity rounds to zero. Curr Cost and Calc Cost answer the same question from different directions, so a gap between them is the thing worth looking at on this grid.',
+  '- Location — the storage location inside the branch.',
+  '- Lot — the lot or serial number the stock is held under.',
+  '- Lot Status — the lot’s status code from the item location record.',
+  '- Lot Exp — the lot expiration date from the lot master.',
+  '- Lot Bod — the lot best-before date from the lot master.',
+  '- ST — stocking type from the item branch record: S stock, M manufactured, P purchased. It says how the item is supplied, not whether anything is wrong with it.',
+  '- CM — the cost-ledger code of the cost record RapidReconciler matched for this item. It reports WHICH cost row was used, not the cost method the item is assigned to in JD Edwards, because JDE does not expose that field to RapidReconciler.',
+  '- Material — the material component of the row’s cost.',
+  '- Labor — the labor component of the row’s cost.',
+  '- Overhead — the overhead component of the row’s cost.',
+  '- Qty Var — the stored cardex variance in quantity: how much the item ledger moved since the reset baseline, minus how much on hand moved over the same span. Same figure and same direction as the Cardex Variance grid. It is forced to zero unless the as-of date IS the period end and the row carries a reason code, so a zero here does not mean the item has no variance.',
+  '- Amt Var — the same subtraction in money, under the same two conditions, and zero here carries the same caveat as Qty Var.',
+  '- Sales Code 01 — a user-defined reporting CATEGORY CODE on the item branch record. It is a code, never an amount, and what it classifies is set up per install. The same applies to Sales Code 02 through Sales Code 10.',
+  '- Purch Code 01 — a user-defined purchasing reporting CATEGORY CODE on the item branch record. It is a code, never an amount, and what it classifies is set up per install. The same applies to Purch Code 02 through Purch Code 10.'
+];
+
+/*
  * RRV8.txv — the ONE transaction-variance catalog. Taxonomy AND copy.
  *
  * WHY EVERYTHING LIVES HERE: the taxonomy was split across nine maps in three
