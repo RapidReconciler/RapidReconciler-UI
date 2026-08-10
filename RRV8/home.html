@@ -9503,7 +9503,22 @@
     var scrub = _recsummaryLevel() === 'scrubbed';
     var soloCo = cos.filter(function (c) { return String(c.co) === String(co); })[0] || null;
     var ccy = (soloCo && soloCo.ccy) || ((d && d.currencies && d.currencies[0]) || '');
-    if (typeof autoWarmCardex === 'function') autoWarmCardex(function () { if (gen === _analystBriefGen) renderAnalystDayBriefTop(_acctData || d); });   // warm cardex → re-render when it lands
+    // UI-72 — a cache WARM landing is not a stale paint, so it must NOT be gated on
+    // `gen`. The generation counter exists to stop a superseded database/company from
+    // painting over a newer one, but it is bumped by EVERY invocation of this renderer
+    // (the initial paint, _setSubView, the roll-forward load path, the warm callbacks
+    // themselves) — and one analyst load invokes it twice. Measured on Demo3 co 30002:
+    // the transaction-variance probe started under gen 1, a second paint bumped the
+    // counter to gen 2, and the probe's repaint was dropped on arrival even though the
+    // rows had landed correctly under the key the reader computes. By then
+    // _analystTxWarmBusy had cleared and _txVarWarm() had turned true, so no later
+    // render re-fired the probe: the chip sat on "Checking…" for the rest of the
+    // session. Both warms below now gate on the company|database the warm was started
+    // FOR: still current → the answer is about what the analyst is looking at and the
+    // repaint is always safe; company or DB has moved on → still discarded.
+    var warmScope = String(co) + '|' + ((activeDb() && activeDb().n) || '');   // same formula as _txVarKeyNow, which is what we compare against on arrival
+    var warmStillInScope = function () { return warmScope === _txVarKeyNow(); };
+    if (typeof autoWarmCardex === 'function') autoWarmCardex(function () { if (warmStillInScope()) renderAnalystDayBriefTop(_acctData || d); });   // warm cardex → re-render when it lands
     // Same for transaction variance: its series is only written by the txvar tab, so
     // an analyst who stays on Data Health would leave that chip on "Checking…" all
     // session. _txvRows is cached + key-guarded, so this is ONE request per company
@@ -9512,12 +9527,12 @@
       _analystTxWarmBusy = true;
       _txvRows([String(co)]).then(function () {
         _analystTxWarmBusy = false;
-        if (gen === _analystBriefGen) renderAnalystDayBriefTop(_acctData || d);
+        if (warmStillInScope()) renderAnalystDayBriefTop(_acctData || d);
       }).catch(function (e) {
         _analystTxWarmBusy = false;
         _analystTxWarmFailed = true;   // terminal — the chip reports it couldn't check
         console.warn('[home] transaction-variance warm failed — the day-brief chip will report it couldn’t check', e);
-        if (gen === _analystBriefGen) renderAnalystDayBriefTop(_acctData || d);
+        if (warmStillInScope()) renderAnalystDayBriefTop(_acctData || d);
       });
     }
     _analystGatherHealth(d, co).then(function (hh) {
@@ -10060,6 +10075,21 @@
   // total per category so the model can tell live issues from resolved ones.
   function _analystTxFacts(stats, focusPeriod, ccy, co, scrub) {
     var f = [];
+    // UI-72 — a COLD surface gets ONE fact: it has not been read. The block used to
+    // open with "0 periods loaded", follow it with "CURRENT period(s): n/a" and a
+    // by-category header with nothing under it, then close with a parenthetical
+    // telling the model not to cite a figure. That is contradictory grounding — a
+    // number handed over alongside an instruction not to use it — and the model
+    // resolved it the way models do, by quoting the number ("with 0 periods loaded
+    // there's nothing actionable to rank"). A load counter is plumbing; it is not
+    // something an analyst reads. Facts state what the data is; anything addressed
+    // to the model goes in [GUIDANCE, not for quoting].
+    if (!stats.warm) {
+      f.push('Company: ' + (scrub ? 'Entity A' : ('Co ' + co)) + ' · currency ' + (ccy || 'n/a') + '.');
+      f.push('TRANSACTION VARIANCE: not read yet. Nothing is known about this surface.');
+      f.push('[GUIDANCE, not for quoting: unknown is not clean and not zero. Do not say this surface is clean, and do not cite ANY figure, amount, period, period count or category for it. Never mention loading, reading, caches, refreshing or any other plumbing — the analyst reads outcomes, not machinery.]');
+      return f;
+    }
     f.push('Company: ' + (scrub ? 'Entity A' : ('Co ' + co)) + ' · currency ' + (ccy || 'n/a') + ' · ' + stats.n + ' periods loaded.');
     f.push('CURRENT (still-actionable) period(s): ' + (stats.curPeriods.map(fmtPeriod).join(', ') || 'n/a') + '. ONLY these are actionable — prior periods are closed and already journaled.');
     f.push('By category — CURRENT-period actionable amount + how often it recurs (prior-period amounts are journaled, NOT money to chase):');
@@ -10067,8 +10097,9 @@
       var s = stats.byMod[m];
       f.push('  ' + m + ': current ' + _ccyAmt(ccy, s.current) + (s.current < 1 ? ' (CLEAN now — resolved, do not act)' : '') + '; recurs in ' + s.recur + ' of ' + stats.n + ' periods — recurrence flags an unfixed root cause (fix the source), but only the current amount is actionable.');
     });
-    // Cold/failed series must not read as "clean" — an empty series is unknown, not zero.
-    if (!stats.rankedAll.length) f.push(stats.warm ? '  (no material variance in any category)' : '  (TRANSACTION VARIANCE NOT LOADED — do not state it is clean and do not cite a figure)');
+    // Warm from here down (the cold surface returned above), so an empty ranking
+    // genuinely means "read it, found nothing material" — not "unknown".
+    if (!stats.rankedAll.length) f.push('  (no material variance in any category)');
     // (Client-side period-mismatch detection removed — 5.14 is server-side
     // authoritative, not a naive TransDate-vs-PeriodEnds month compare.)
     if (focusPeriod) {
