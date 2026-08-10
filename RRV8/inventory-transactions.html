@@ -7180,6 +7180,21 @@
            + (def ? ' title="' + escapeHtml(def) + '"' : '') + '>' + escapeHtml(c[0]) + '</th>';
     }).join('');
   }
+  // UI-91 -- carry the column dictionary INTO the workbook as header-cell comments. An
+  // export where OT, DT, Sub and Model Table mean nothing is not audit quality
+  // ([[feedback_excel_audit_quality]]): the file outlives the session and whoever opens it
+  // next has no page to hover over. `rowIdx` is the 0-based sheet row the headers landed on.
+  function _txAnnotateHeaderCells(sheet, cols, rowIdx) {
+    var D = {};
+    try { D = (window.RRV8 && RRV8.TXN_COLUMNS) || {}; } catch (_) { return; }
+    cols.forEach(function (c, i) {
+      var def = D[c.key]; if (!def) return;
+      var addr = XLSX.utils.encode_cell({ c: i, r: rowIdx });
+      var cell = sheet[addr]; if (!cell) return;
+      cell.c = [{ t: def, a: 'RapidReconciler' }];
+      cell.c.hidden = true;              // a note on hover, not a wall of open boxes
+    });
+  }
   // Pick the lead + fix copy, render the deterministic per-account table, wire
   // the Use-as-finding push, and (Full tier + a mismatch) kick off narration.
   function _txRenderAnalyzer(fp, co, per, card, combos) {
@@ -7962,6 +7977,7 @@
       const banner = ['Transaction Details Generated ' + stamp].concat(new Array(allCols.length - 1).fill(''));
       const dataRows = rows.map(r => allCols.map(c => (r[c] == null ? '' : r[c])));
       const ws = XLSX.utils.aoa_to_sheet([banner, headerRow, ...dataRows]);
+      _txAnnotateHeaderCells(ws, cols, 1);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'Transaction Details');
 
@@ -8888,6 +8904,7 @@
 
     const aoa   = [banner, headerRow, summary].concat(dataRows);
     const sheet = XLSX.utils.aoa_to_sheet(aoa);
+    _txAnnotateHeaderCells(sheet, cols, 1);
     // Merge banner across all visible columns.
     sheet['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: cols.length - 1 } }];
     // Tasteful row heights for the banner + header rows.
