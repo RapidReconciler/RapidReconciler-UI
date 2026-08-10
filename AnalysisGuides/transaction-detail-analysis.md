@@ -604,7 +604,7 @@ entry for the row.
 | 5.22 | DMAAI Net Zero -- 3110 and 3130 resolve to one account | `NZR` | not written up yet |
 | 5.23 | Sales Not Journaled -- relief stamped, no GL entry | `SNJ` | not written up yet; read the match-key warning in Section 0 before trusting an *absent* verdict on this claim |
 | 5.24 | Non-Stock Charge Lines -- every line non-stock | `NCL` | not written up yet |
-| -- | Offsetting GL entries that cancel off inventory | `OFF` | not written up yet |
+| -- | Offsetting GL entries -- 4220 and 4240 both route to a P&L account | `OFF` | 5.23 |
 | -- | Intercompany / Transfer / Direct Ship leg pairing | `ICO` / `TRF` / `DS` | 5.20 (mfg), leg pairing not written up yet |
 | -- | Unclassified residual by transaction type | `T-SALES` / `T-PURCH` / `T-MFG` / `T-INV` | -- |
 | -- | Tax Variance | -- | 5.6 |
@@ -1426,6 +1426,85 @@ The evidence, one database:
 
 ---
 
+### 5.23 Offsetting GL Entries -- Both Sales COGS AAIs Route to a P&L Account
+
+**Card:** `Offsetting GL Entries` (`OFF`). **Shape:** cardex-only at document
+grain -- `CardexAmount` non-zero, `LedgerAmount` zero -- on a stock line.
+
+**What the GL actually did.** The document posted. `F0911` holds exactly two legs
+for it, equal and opposite, both in the same posted batch as the item ledger, and
+neither on the inventory account the cardex used. A specimen: cardex relieved
+-8,651.99 on inventory account `00223976`; the GL wrote +8,651.99 to object
+`510415` and -8,651.99 to object `512498`, both in business unit `9999842`, both
+posted, batch `12862772`, both explained "Inventory transaction".
+
+**`LedgerAmount = 0` here does not mean the GL entry is missing.** It means the GL
+wrote a self-cancelling pair somewhere else and never touched inventory. "Go post
+the batch" is the wrong instruction: the batch is posted. And because both legs
+land in the same statement, the P&L nets to zero, so no income-statement review
+will ever surface it. Only the balance sheet moves, and it moves by the full
+item-ledger amount.
+
+**The cause is the AAI pair, per ORDER TYPE.** JDE's sales shipment writes the
+cost-of-sales entry through two account instructions: **4240** (the COGS debit)
+and **4220** (its counterpart, which is supposed to relieve the inventory
+account). Read both for the order type on the document:
+
+| Order type family | 4220 object | 4240 object | GL classes routed to an inventory account |
+|---|---|---|---|
+| `C2` `C3` `C5` `C6` `C7` `CO` `CR` `CW` | `510415` COGS | `512498` COGS | **0 of 28, on either table** |
+| `S2` `S3` `S5` `S6` `S7` `S8` `S9` `SE` | `524996` COGS | inventory objects per class | **22 of 28 on 4240** |
+
+Both families are on the same company, in the same table, refreshed by the same
+job. The `S` family is the working template; the `C` family routes every one of
+its 28 GL classes to a P&L account on both legs.
+
+**The published test for this is too narrow, and it passes here.** The DMAAI
+reference says 4220 "must point to a different account than 4240" and warns that
+pointing both at one account makes the debit and credit cancel. On this company
+they point at *different* accounts -- `510415` and `512498` -- so that test
+passes, and the entry still cancels off inventory. **The test is not "are they
+different", it is "does one of them reach an inventory account".** Two different
+COGS accounts fail just as completely as one shared account, and they fail
+invisibly.
+
+**How to work it**
+
+1. **Read the order type off the document, not the document type.** The whole
+   population here posts under document type `RI`, shared with correctly-behaving
+   order types on the same company. Diagnosing at `RI` grain averages them.
+2. **Pull 4220 and 4240 for that order type** and read the object account on
+   each. An object in the inventory range on neither leg is the finding.
+3. **Find a working order type on the same company** and diff its 4240 against
+   the broken one, GL class by GL class. That comparison is the whole diagnosis,
+   and it also gives the customer the exact target values.
+4. **Check the whole family before calling it isolated.** Eight order types share
+   this configuration on the specimen; only three of them had shipments in the
+   period, so the residual understates the exposure.
+
+**Corrective action (source side, customer owns it).** Point 4220 -- or 4240,
+whichever leg is meant to carry the relief on this shop's setup -- at the
+inventory account per GL class for every order type in the family, matching what
+the working order types already do. **No journal entry prevents recurrence**: every
+shipment on these order types reproduces it until the AAI changes. The accountant
+separately restores the inventory account for what has already posted.
+
+**Re-check the following period.** New documents on the same order types with the
+same two-leg cancelling signature mean the AAI was not changed.
+
+> **Negative controls, both measured.** On a second database the `C` family's 4220
+> and 4240 *do* route some GL classes to inventory, and that database has **zero**
+> cardex-only rows on those order types. On a third, the only sales order type is
+> `SO`, its 4240 routes 86 classes to inventory, and it likewise has none. The
+> association runs both ways, which is what separates this from a coincidence.
+
+> **Not to be confused with Section 5.22.** Sample despatch is also cardex-only on
+> a sales document, and it is a different finding with a different owner: there the
+> line never had a GL rule at all, here the rule exists and points at the wrong
+> kind of account. Read the order type and the AAI before choosing between them.
+
+---
+
 ## Section 6: DMAAI Analysis
 
 The DMAAs section at the bottom of the Transaction Detail report is critical for diagnosing account-level mismatches. Work through it in the following order:
@@ -1659,6 +1738,7 @@ Common document types appearing in the Transaction Detail report:
 | **SI** | Intercompany sales order |
 | **SK** | Intercompany sales (inter-branch). Under document type `JS` this leg ties on document number plus batch; confirmed to the penny on every row of a specimen population. Do not assume `JS` cannot be matched per document until you have split the population by order type |
 | **OK** | Intercompany purchase order |
+| **CO** / **CW** / **C2** | Sales order types in the `C` family. On one company they sit in a block of eight (`C2`, `C3`, `C5`, `C6`, `C7`, `CO`, `CR`, `CW`) configured identically in AAIs 4220 and 4240, and their orders carry both stock lines (line type `S`, inventory interface `Y`) and carton-charge lines (line type `CC`, inventory interface `N`). **Their UDC `00/DT` descriptions are not in the RapidReconciler database** -- there is no `F0005` extract, so read the name in JD Edwards if you need it. What matters for reconciliation is the AAI routing, not the name: see Section 5.23 |
 | **SA** | Standard sales order. Under document type `JS`, `SA` lines issued out of sample or lab locations (`SAMPDESP`, `SAMPWIP`, `SAMPRACK*`, `LABWIP`, `CLEANROOM`) relieve inventory value and post **no GL line**. High row count, low value. See Section 5.22 |
 | **SP** | Sales order type appearing under `JS` alongside `SA` and `SK`, including returns (`B4RRETURN` and similar return locations). Substantially matched on document plus batch in the observed population, with a small unmatched remainder that Section 5.22 does not explain |
 | **JS** | Sales order shipment (cost-of-sales entry). **Read the order type before diagnosing a JS document.** One JS population routinely spans several order types with different accounting behaviour -- on a specimen database, `SK` (intercompany inter-branch) ties 100% on document plus batch, while `SA` sample and lab issues relieve the cardex and post no GL line at all. Diagnosing at document-type grain averages them and is wrong for every subgroup. See Section 5.22. The standard cost change after shipment pattern seen on IC transactions can also occur on JS -- if a second F4111 row appears with zero quantity and comment "Standard Cost Change," the GL revaluation entry is missing. See Section 5.9. |
