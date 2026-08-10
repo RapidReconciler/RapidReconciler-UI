@@ -148,11 +148,28 @@ The **Model DMAAI Table** is DMAAI table **4152** with document type **PI** (Phy
 | **3110** | Raw Material WIP — Material Issues | Manufacturing |
 | **3130** | WIP Completions | Manufacturing |
 | **4122** | Inventory Debit (Adjustments, Transfers, Issues) | Inventory |
-| **4126** | Received Not Vouchered (RNV) Debit | Purchasing |
-| **4134** | In-Transit Inventory | Inventory |
-| **4172** | Physical Inventory Adjustment | Inventory |
-| **4240** | Cost of Goods Sold | Sales |
+| **4126** | Zero balance adjustment &mdash; quantity is zero but dollars remain (`:437`, `:672`). NOT received-not-vouchered; RNV is **4320**. | Inventory |
+| **4134** | Records the change to COGS when an item's cost changes (`:438`). NOT in-transit; the in-transit clearing debit on a transfer is 4220 or 4245 &mdash; see the open question below. | Inventory |
+| **4172** | Change in inventory value when unit cost is changed through Future Cost Update (R41052) (`:441`). NOT physical-inventory adjustment. | Inventory |
+| **4240** | Inventory, on a standard sales transaction journal entry (`:464`). COGS is **4220**. | Sales |
 | **4310** | Inventory — Purchase Order Receipt | Purchasing |
+
+> ⚠ **The four rows above were WRONG until 2026-08-10, and this table is the likely
+> source of the same four errors in the server-side AI grounding** (`AiService.DMAAI_GROUNDING`,
+> which is prepended to every `/api/v1/ai/explain` call). A live model call reproduced
+> "4126 = RNV pair" and "4134 = in-transit" verbatim before that block was corrected.
+> **The authority on AAI purpose is
+> [`RRUniversity/inventory-distribution-aais.html`](../RRUniversity/inventory-distribution-aais.html)**,
+> the customer-facing table; the line references above point into it. Check any AAI claim
+> against that file before repeating it here or in a grounding block. Four of the ten wrong
+> grounding facts found on 2026-08-10 were an AAI number paired with the wrong purpose, and
+> that one check would have caught every one of them.
+>
+> **Open question, NOT resolved:** the KB disagrees with itself on whether **4220** or **4245**
+> carries the In-Transit debit on an ST transfer. `transfer-order-reference.html:737` puts it on
+> 4220 at cost and `:764` on 4245 at cost-plus; `inventory-distribution-aais.html:473` puts it on
+> 4245 in all cases, while `:159` describes a "4220 vs 4320" transfer-clearing check that implies
+> 4220. Read the client's own F4095 and the transfer pricing rather than assuming either.
 
 > **Note:** DMAAI tables 4162 (Inventory Transfer), 4365 (Supplier Direct Ship / Outside Operations Settlement), 4385 (Outbound Logistics), and 4400 (Intercompany/Advanced Pricing) also appear in this report, indicating those tables are also being validated.
 
