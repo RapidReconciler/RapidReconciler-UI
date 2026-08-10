@@ -7084,12 +7084,35 @@
   // TERSE. One idea per bullet. No semicolons stacking clauses, no em-dash asides,
   // no paragraph pretending to be a bullet. Name a table only when the analyst has
   // to go look in it. `tail` carries a detail block (e.g. the routing list) LAST.
-  function _txFindingText(o) {
+  // A `checked` entry is { a: '<assertion id>', t: '<text>' } — the id names the
+  // assertion the CLASSIFIER declares in its own claim block, and
+  // Tools/check_txv_cards.py fails the build when a card cites an id no proc
+  // declares. That gate is the reason a bullet can be trusted under this heading.
+  // Anything true but NOT tested per row belongs in `context` and renders under
+  // its own heading, never under "What I checked" — that conflation is the whole
+  // reason the audit happened. Bare strings still render (a runtime-generated
+  // routing check appends some) but the catalog itself may not carry them.
+  // `suppress` names context topics this page HAS measured on the loaded rows, so
+  // the card's "not tested" line for that topic must not print. Without it the
+  // routing check ("every DMAAI resolves to the model account, ruled out") and the
+  // card's honest "nothing in the classifier reads an AAI" appear in the same
+  // drafted finding and contradict each other — caught by walking the MTO drill.
+  // Both sentences are true of different testers; only one is true of THIS report.
+  function _txFindingText(o, suppress) {
     o = o || {};
-    var arr = function (v) { return (v == null || v === '') ? [] : (Array.isArray(v) ? v : [v]); };
+    var kill = suppress || {};
+    var txt = function (b) {
+      if (b && typeof b === 'object') return (b.k && kill[b.k]) ? '' : (b.t || '');
+      return b;
+    };
+    var arr = function (v) {
+      if (v == null || v === '') return [];
+      return (Array.isArray(v) ? v : [v]).map(txt).filter(function (s) { return !!s; });
+    };
     var out = [];
     if (o.title) out.push(o.title);
     [['What I checked', arr(o.checked)],
+     ['Not tested on these rows', arr(o.context)],
      ['What I found', arr(o.found)],
      ['To stop it recurring', arr(o.fix)]].forEach(function (sec) {
       if (!sec[1].length) return;
@@ -7219,11 +7242,15 @@
       sel = {
         flag: _gap ? 'Completions missing from the GL' : txFinding('MTO').flag,
         mech: txFinding('MTO').mech,
+        // Counted on the rows loaded here, so it is a real check — but it is THIS
+        // page's measurement, not one of the classifier's declared assertions, and
+        // the wording says so rather than borrowing their authority.
         checked: _gap
           ? txFinding('MTO').checked.concat([
-              _n + ' completion' + (_one ? '' : 's') + ' with no GL entry at all. Confirmed.'
+              _n + ' completion' + (_one ? '' : 's') + ' carrying no GL amount, counted on the rows loaded here.'
             ])
           : txFinding('MTO').checked,
+        context: txFinding('MTO').context,
         found: _gap
           ? [_n + ' completion' + (_one ? ' has' : 's have') + ' no GL entry. The finished-goods cost never reached the general ledger.',
              'Manufacturing accounting stamped the batch on ' + (_one ? 'that row' : 'those rows') + ', so it processed ' + (_one ? 'it' : 'them') + ' and wrote no entry.',
@@ -7322,16 +7349,22 @@
         + (m.invAcctDesc ? ' (' + m.invAcctDesc + ')' : '');
     }).join('\n');
     var routeChecks = [], tail = [];
+    // True only when the routings were actually READ here. On the _modelUnresolved
+    // branch the check reports "not checked", which AGREES with the card's context
+    // line, so that line must still print — suppress on read, not on attempt.
+    var routesRead = false;
     if (!lensLed) {
       if (misRows.length) {
         routeChecks.push('DMAAI account assignment: ' + misRows.length + ' DMAAI'
           + (misRows.length === 1 ? '' : 's') + ' resolve to a different account than the item-ledger model. '
           + 'Confirmed, and a separate fix from this one. Listed below.');
+        routesRead = true;
       } else if (_modelUnresolved) {
         routeChecks.push('DMAAI account assignment: could not be read, so not checked. Neither confirmed nor ruled out. '
           + 'Reload the page; if it persists, ask IT to confirm the data service is reachable.');
       } else if (combos.length) {
         routeChecks.push('DMAAI account assignment: every DMAAI here resolves to the item-ledger model account. Ruled out.');
+        routesRead = true;
       }
     }
     if (misRows.length) tail.push('DMAAIs that differ from the model:\n' + misTxt);
@@ -7348,9 +7381,14 @@
       var _arr = function (v) { return (v == null || v === '') ? [] : (Array.isArray(v) ? v : [v]); };
       _txAutoDraftFinding(_txFindingText({
         title: cardTitle || 'Findings',
+        // routeChecks ARE measured here, on the rows in front of the analyst, so
+        // they belong under "What I checked" alongside the card's classifier
+        // assertions. `context` carries the card's untested-but-true material to
+        // its own heading — see _txFindingText.
         checked: _arr(sel.checked).concat(routeChecks),
+        context: sel.context,
         found: sel.found, fix: sel.fix, tail: tail
-      }), sel.triage
+      }, { dmaai: routesRead }), sel.triage
         ? 'Drafted from the analysis — the cause is not identified yet; work the next steps before Mark reviewed.'
         : 'Drafted from the analysis — review it, then Mark reviewed.');
     }
