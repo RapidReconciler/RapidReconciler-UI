@@ -6175,7 +6175,12 @@
       // draggable="true" still enables HTML5 drag-and-drop for
       // reorder. A real drag suppresses the click event (HTML5 spec)
       // so the sort handler doesn&rsquo;t fire on reorder.
-      return '<th' + clsAttr + ' draggable="true" data-col-key="' + escapeHtml(c.key) + '">' + escapeHtml(c.label) + caret + '</th>';
+      // UI-91 — the definition rides on the KEY, not the label, so renaming a header
+      // cannot orphan it. Missing key = no tooltip rather than a broken one.
+      var _def = '';
+      try { _def = (window.RRV8 && RRV8.TXN_COLUMNS && RRV8.TXN_COLUMNS[c.key]) || ''; } catch (_) {}
+      var titleAttr = _def ? ' title="' + escapeHtml(_def) + '"' : '';
+      return '<th' + clsAttr + titleAttr + ' draggable="true" data-col-key="' + escapeHtml(c.key) + '">' + escapeHtml(c.label) + caret + '</th>';
     }).join('');
     tr.innerHTML = '<th class="col-export" aria-label="Row actions"></th>' + html;
   }
@@ -6897,8 +6902,8 @@
           + 'match the cardex model account. Do not read the blanks below as "no mapping" — they mean "not checked". '
           + 'Reload the page; if it keeps happening, ask your IT department to confirm the data service is reachable.')
         + '</div>'
-        + '<table class="tx-resolve"><thead><tr><th>Co</th><th>OT</th><th>DT</th>'
-        + '<th>Cost</th><th class="tx-sec-start tx-sec-mid">GL</th><th class="tx-sec-mid">Model Table</th><th class="tx-sec-mid">Model Acct</th><th class="tx-sec-mid">Model Acct Desc</th><th class="tx-sec-start">Inv DMAAI</th><th>Inv Acct</th><th>Inv Acct Desc</th>'
+        + '<table class="tx-resolve"><thead><tr>' + _txResolveHead()
+
         + '</tr></thead><tbody>' + uTrs + '</tbody></table></div>';
     }
     // Flatten every combo's model routings into ONE distinct list (owner
@@ -6942,8 +6947,8 @@
       ? nMis + ' of ' + list.length + ' inventory DMAAI' + (list.length === 1 ? '' : 's') + ' resolve to a different account than the cardex model:'
       : list.length + ' inventory DMAAI' + (list.length === 1 ? '' : 's') + ' checked — no account mismatch. This rules out mapping only; it does not explain the variance:';
     return '<div class="tx-analyzer-combos"><div class="tx-combos-hd">' + escapeHtml(hd) + '</div>'
-      + '<table class="tx-resolve"><thead><tr><th>Co</th><th>OT</th><th>DT</th>'
-      + '<th>Cost</th><th class="tx-sec-start tx-sec-mid">GL</th><th class="tx-sec-mid">Model Table</th><th class="tx-sec-mid">Model Acct</th><th class="tx-sec-mid">Model Acct Desc</th><th class="tx-sec-start">Inv DMAAI</th><th>Inv Acct</th><th>Inv Acct Desc</th>'
+      + '<table class="tx-resolve"><thead><tr>' + _txResolveHead()
+
       + '</tr></thead><tbody>'
       + trs + '</tbody></table></div>';
   }
@@ -7152,6 +7157,28 @@
       _txAttachModel(combos, res[1]);
       _txRenderAnalyzer(res[0], co, per, card, combos);
     });
+  }
+  // The Variance Analyzer's routing table header, built ONCE from RRV8.TXN_COLUMNS
+  // (UI-91). It was hardcoded identically in two render sites, so it was two copies of
+  // eleven headers with no definitions on any of them; now it is one producer and every
+  // header carries its gloss. The dictionary keys are prefixed `_` because these are the
+  // analyzer's own columns, not row-grid fields.
+  function _txResolveHead() {
+    var D = {};
+    try { D = (window.RRV8 && RRV8.TXN_COLUMNS) || {}; } catch (_) {}
+    var cols = [
+      ['Co', 'CompanyNumber', ''], ['OT', 'OT', ''], ['DT', 'DT', ''],
+      ['Cost', '_Cost', ''], ['GL', '_GL', 'tx-sec-start tx-sec-mid'],
+      ['Model Table', '_ModelTable', 'tx-sec-mid'], ['Model Acct', '_ModelAcct', 'tx-sec-mid'],
+      ['Model Acct Desc', '_ModelAcct', 'tx-sec-mid'],
+      ['Inv DMAAI', '_InvDmaai', 'tx-sec-start'], ['Inv Acct', '_InvAcct', ''],
+      ['Inv Acct Desc', '_InvAcct', '']
+    ];
+    return cols.map(function (c) {
+      var def = D[c[1]] || '';
+      return '<th' + (c[2] ? ' class="' + c[2] + '"' : '')
+           + (def ? ' title="' + escapeHtml(def) + '"' : '') + '>' + escapeHtml(c[0]) + '</th>';
+    }).join('');
   }
   // Pick the lead + fix copy, render the deterministic per-account table, wire
   // the Use-as-finding push, and (Full tier + a mismatch) kick off narration.
