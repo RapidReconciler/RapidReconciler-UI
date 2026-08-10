@@ -115,7 +115,7 @@ source-fix-not-JE stance.
 
 ### Guide → catalog agreement
 Every rule in the current catalog traces to the guide:
-- Per-document reconciliation (cardex − ledger for the same doc) → guide §3.10
+- Per-document reconciliation (ledger − cardex for the same doc) → guide §3.10
   Rule 6.
 - Duplicate-sales-first (`dbo.RDuplicateSales`, variance = duplicated relief,
   source fix) → §5.17.

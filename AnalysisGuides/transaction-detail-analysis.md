@@ -509,7 +509,7 @@ The RR Summary is the section to read first. The F4111 and F0911 sections back u
 
 **Rule 6 -- One document reconciles on its own; screen for a duplicate relief first.**
 
-A transaction variance reconciles **one document**: the F4111 (item ledger / cardex) extended value against the F0911 (GL / ledger) for the *same* company, document, and account. The variance is `cardex − ledger` for that document and nothing else. Two habits follow from this:
+A transaction variance reconciles **one document**: the F4111 (item ledger / cardex) extended value against the F0911 (GL / ledger) for the *same* company, document, and account. The variance is `ledger − cardex` for that document and nothing else, so a POSITIVE variance means the GL carries more value than the item ledger and a NEGATIVE variance means the item ledger carries more. Two habits follow from this:
 
 - **Duplicate sales are the first-order check.** They are rare, but the test is cheap and definitive, so run it before reaching for a cost, mapping, or timing explanation. When a line is written to the cardex more than once (two F4111 relief rows for the same order + line) but the GL books it once, the cardex is overstated by exactly that line and the **variance equals the duplicated relief**. `dbo.RDuplicateSales` is the ready-made flag -- it keys on OrderNumber + OrderType + LineID + item / branch / location / lot, with `Records` as the repeat count and `Amount` as the duplicate value. When it fires, lead with it and fix the double relief at the source (an inventory adjustment); it is never a journal entry. Full procedure in Section 5.17.
 
