@@ -45,7 +45,7 @@ directly (junior-support training — the exit-strategy deliverable).
 | **R30837** | WIP revaluation | Revalues completed inventory after a standard-cost change; if not run, cardex revalues with **no GL offset**. |
 | **R42800** | Sales update | PO 5 (BU source) and PO 1 (GL date) are the top root causes of account/period mismatch on sales. |
 | **P4312 / P43214** | PO receipt / landed cost | Receipt + landed-cost accrual routing (43xx). |
-| **R09800** | GL post | Posts F0911 batches to F0902; an unposted batch shows as cardex-only. **[VERIFY — thin in repo]** |
+| **R09801** | GL post | Posts F0911 batches to F0902; an unposted batch shows as cardex-only. |
 
 ---
 
@@ -196,8 +196,13 @@ rules; the reference AI should recognize them by name:
 - **4365 / 4370** — RR docs (direct-ship / outside-ops settlement) **conflict with Oracle 9.2**,
   which documents **4375** for receipt-routing disposition and does not confirm 4365/4370.
   Confirm this client's actual F4095 routing + which programs use them (your call).
-- **R09800** (GL post) — still thin; it's a financials post program (not in the distribution-AAI
-  docs). Document how an unposted batch surfaces as cardex-only.
+- **R09801** (GL post) — the program number is settled: `R09801` is what the KB uses in six
+  AnalysisGuides files plus `RRUniversity/inventory-reconciliation.html` and
+  `po-receipts-reference.html`, and `RRV8.ANALYST_GROUNDING` agrees. This doc carried
+  **R09800** until 2026-08-10 and was the only place in the repo that did; the server-side
+  `AiService.DMAAI_GROUNDING` had copied it from here. Still worth a worked example of how an
+  unposted batch surfaces as cardex-only — it's a financials post program, so it isn't in the
+  distribution-AAI docs.
 - **Outside operations (OO)** — mechanism added (Expense-at-Voucher / line-type interface);
   still worth a worked example of correct vs incorrect OO account assignment.
 - **Flexible Accounting (F4096)** — high-level only; expand if support volume warrants.
