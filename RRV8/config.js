@@ -1183,9 +1183,9 @@ window.RRV8 = window.RRV8 || {};
     // location, never on document type.
     'OFF': {
       title: 'Offsetting GL Entries', kind: 'rebalance', tier: 'single', disposition: 'rebalance',
-      cause: 'The GL posted two entries that cancel each other and neither reached the inventory account, so the document nets to zero in the GL while inventory came off the item ledger. Nothing shows on the P&L — only the balance sheet moves, which is why it went unnoticed. Correct the DMAAIs for this order type and document type so one side lands on the inventory account.',
+      cause: 'The GL posted two entries that cancel each other and neither reached the inventory account, so the document nets to zero in the GL while inventory came off the item ledger. Nothing shows on the P&L — only the balance sheet moves, which is why it went unnoticed. The lever is the sales cost-of-sales pair 4240 and 4220, read for this ORDER type: when neither of them reaches an inventory account, nothing relieves inventory and the two legs simply cancel wherever they landed. Point one of them at the inventory account per GL class, matching an order type on the same company that already ties.',
       desc: 'Two F0911 legs for the same document, equal and opposite, both posted, in the same batch as the item ledger — and neither on the inventory account the item ledger used. LedgerAmount nets to zero, which does NOT mean the GL entry is missing: it posted and cancelled itself somewhere else. The order line type is stock, so a GL entry against inventory was due.',
-      action: 'Correct the DMAAIs for this order type and document type so one side lands on the inventory account. Check the other order types sharing those DMAAIs before assuming this one is isolated. The accountant restores the inventory account for the documents already posted. Re-run this company and period: a document that comes back was not corrected.',
+      action: 'Read 4240 and 4220 for this order type: if neither reaches an inventory account, that is the fault, and two different profit-and-loss accounts fail as completely as one shared account. Diff them against an order type on the same company that ties, GL class by GL class, to get the target values. Check every order type sharing that configuration before calling this one isolated. The accountant restores the inventory account for the documents already posted. Re-run this company and period: a document that comes back was not corrected.',
       finding: {
         flag: 'Entries that cancel',
         mech: 'The GL posted two entries that cancel each other, and neither one reached the inventory account.',
@@ -1202,12 +1202,13 @@ window.RRV8 = window.RRV8 || {};
           'That is why this went unnoticed. There is no profit-and-loss signal for anyone to review.',
           // recurrenceIdx points here.
           'Read the periods either side before treating this as a one-off.',
-          'The DMAAIs for this order type are sending both sides of the entry to a pair of accounts that offset each other, instead of to inventory and its counterpart.'
+          'The account instructions for this order type send both sides of the entry to profit-and-loss accounts, so neither one relieves inventory. Order types on this same company whose shipments tie send one side to the inventory account for each GL class — that is the target to match.'
         ],
         recurrenceIdx: 3,
         fix: [
-          'Correct the DMAAIs for this order type and document type so one side lands on the inventory account.',
-          'Check the other order types that share those DMAAIs before assuming this one is isolated.',
+          'Read 4240 and 4220 for this order type and check whether either one reaches an inventory account. Two different profit-and-loss accounts fail exactly as completely as one shared account, and they fail without showing on the P&L.',
+          'Compare against an order type on the same company whose shipments tie, GL class by GL class. That comparison is the diagnosis and it also gives the exact target accounts.',
+          'Check every order type sharing that configuration before calling this one isolated. Only the ones that shipped this period are in front of you; the rest carry the same fault and no rows yet.',
           'The accountant restores the inventory account for the documents already posted.',
           'Re-run this company and period. A document that comes back was not corrected.'
         ]
