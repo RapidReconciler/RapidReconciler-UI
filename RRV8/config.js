@@ -1247,8 +1247,9 @@ window.RRV8 = window.RRV8 || {};
           { a: 'PER.ungrouped', t: 'Single document, not a leg of a transfer, direct-ship or intercompany group.' }
         ],
         context: [
-          'Not tested: the dates themselves. No item-ledger date is compared against a G/L date anywhere in the classifier. What was measured is that the variance offsets across two months on one account and batch, which is the SHAPE of a cut-off. Confirm the two dates on one document before you take it to whoever owns the run.',
-          'Not tested: whether both sides posted. For the row in front of you the amounts do NOT agree — they agree only after both months are added together.'
+          'Not tested: the dates themselves. No item-ledger date is compared against a G/L date anywhere in the classifier. What is tested is that the variance offsets across two months on one account and batch, which is the SHAPE of a cut-off. Confirm the two dates on one document before you take it to whoever owns the run.',
+          'Not tested: whether both sides posted. For the row in front of you the amounts do NOT agree — they agree only after both months are added together. Measured across the card: 322 of 336 offsetting pairs are the clean shape, one leg carrying only a cardex amount and the other only a GL amount. 14 are mixed.',
+          'Not every row on this card is timing. 317 of 336 pairs sit one month apart, which is a period-end straddle. The rest run two, three, six, eight and nine months apart, and a nine-month gap is not a cut-off — read the two dates before you call it one.'
         ],
         found: [
           'Likely cause, not yet confirmed: a GL Date Source option is set to the invoice or promised date instead of the transaction date.',
@@ -1997,6 +1998,9 @@ window.RRV8 = window.RRV8 || {};
           { a: 'T-INV.notmismatch', t: 'The variance does not offset across accounts or across periods.' },
           { a: 'T-INV.nottransferclaim', t: 'Neither transfer claim matched — but note both only ever look at document type IT with a zero ledger amount and value on the item ledger, so a one-sided move under another document type would still land here.' },
           { a: 'POP.shapemixed', t: 'Read the two amount columns per row. This card holds both-sided, item-ledger-only and GL-only rows.' }
+        ],
+        context: [
+          'One-sided is the NORM on this card, not the exception. Measured on one demo: 168 rows, 135 with only an item-ledger amount, 33 with only a GL amount, and none carrying both. Do not open a row expecting two figures to compare.'
         ],
         found: [
           'Cause not identified. I have not pinned it to one mechanism yet.',
