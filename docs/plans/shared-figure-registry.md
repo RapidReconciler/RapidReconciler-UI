@@ -3,6 +3,11 @@
 Every number an analyst can see on two RRV8 surfaces at once, and the single
 function that produces it.
 
+Numbers only. Status colour and state tokens are governed by
+[`shared-state-registry.md`](shared-state-registry.md), which is normative about
+which colours exist and what each one claims before it is a directory of
+producers. Tolerances and thresholds stay here; they are figures.
+
 ## Why this file exists
 
 On 2026-08-09 four analyst surfaces disagreed with each other, and only the

@@ -1532,6 +1532,44 @@ window.RRV8 = window.RRV8 || {};
         ]
       }
     },
+    // The sales cost-of-sales AAI pair resolves to ONE account for the order type, so the
+    // shipment's debit and credit land together and no F0911 detail is written at all. The
+    // degenerate case of OFF: that card needs two or more GL legs to see the cancellation,
+    // so it cannot reach a document carrying none. A VALID net-zero pairing, which is what
+    // separates it from the withdrawn NZR: 4220 (cost of goods) and 4240 (inventory) are
+    // the two legs of ONE sales transaction. Claimed by usp8_txv_flags block L.
+    'SAC': {
+      title: 'Sales AAI Cancels', kind: 'rebalance', tier: 'single', disposition: 'rebalance',
+      cause: 'The two cost-of-sales account instructions for this order type resolve to one account, so the shipment writes its debit and its credit to the same place and they cancel. Nothing reaches the GL. Point 4240 at the inventory account per GL class the way the order types that ship correctly do, and 4220 at cost of goods sold.',
+      desc: 'Inventory was relieved on the item ledger and the GL holds nothing for the document under any type. The posting run did not fail. AAI 4220 and AAI 4240 resolve to the same account for this order type, so the debit and the credit land together and cancel, and no journal detail survives to post. 4220 is meant to carry cost of goods sold and 4240 to relieve inventory. Pointed at one account they cancel silently, and the balance sheet keeps the item-ledger relief with no counterpart. Every shipment on the order type does it again.',
+      action: 'Read 4220 and 4240 for the order type on the document, resolving the way JDE does: the item’s GL class first, the **** wildcard second. One account on both is the finding. Diff it against an order type on the same company that ships correctly, GL class by GL class. That comparison is the diagnosis and it hands the customer the target values. Then point 4240 at the inventory account per GL class and 4220 at cost of goods sold. No journal entry prevents recurrence, so the AAI change is the fix; the accountant separately books the relief that never reached the GL. Re-check the following period. New documents on the order type with no GL entry mean the AAI was not changed.',
+      finding: {
+        flag: 'The AAI pair cancels itself',
+        mech: 'AAI 4220 and 4240 resolve to one account for this order type, so the shipment’s debit and credit land together and no GL entry is written.',
+        checked: [
+          'The GL searched for this document under its own type and under every other type. Nothing at all.',
+          'AAI 4220 and 4240 resolved for this company, order type and GL class, exact class first and the **** wildcard second: one account on both. Confirmed.',
+          'Read on the right key. On the 42xx sales instructions the order type is carried in the document-type column, not the order-type column the manufacturing instructions use.',
+          'Two cancelling GL legs ruled out. That is the offsetting-entries shape and it needs the legs to exist; here there are none.'
+        ],
+        found: [
+          'The entry is genuinely absent, and the account instruction is why. The posting run itself did not fail, so no run report will show this.',
+          'The despatch itself is legitimate business. Routing both legs of its cost of sales onto one account is a setup error, and it is the same error the offsetting-entries card already treats as a defect.',
+          'The item ledger relieved inventory and the GL did not, so GL inventory is overstated against the ledger by the full relieved amount.',
+          // recurrenceIdx points here.
+          'Every shipment on this order type reproduces it. Read the periods either side before treating it as a one-off.',
+          'Check the other order types sharing the routing before calling this isolated. One that had no shipments in the period is still misconfigured.'
+        ],
+        recurrenceIdx: 3,
+        fix: [
+          'Pull 4220 and 4240 for this order type and read the account each resolves to, per GL class.',
+          'Diff them against an order type on the same company that ships correctly. That comparison gives the customer the exact target values.',
+          'Point 4240 at the inventory account per GL class and 4220 at cost of goods sold, so the two legs stop landing on one account.',
+          'The accountant books the relief that never reached the GL for the periods already closed.',
+          'Re-check next period. New documents on this order type with no GL entry mean the AAI was not changed.'
+        ]
+      }
+    },
     // IT cardex-integrity — cost-component setup fix at the source.
     'SNJ': {
       title: 'Sales Not Journaled', kind: 'review', tier: 'single', disposition: 'rebalance',
@@ -1791,6 +1829,8 @@ window.RRV8 = window.RRV8 || {};
     // DB beta.74 / beta.75 — the five claims that took the manufacturing residual to
     // zero on every demo database. Keys are the server SubType lower-cased and trimmed.
     'non-stock charge lines':   'NCL',
+    // 2026-08-10 — cardex-only sales where the 4220 / 4240 pair resolves to one account.
+    'sales aai cancels':        'SAC',
     'sales not journaled':      'SNJ',
     'cross-batch completion':   'XBC',
     'mfg cost mismatch':        'MCM'
