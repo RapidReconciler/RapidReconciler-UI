@@ -902,6 +902,109 @@ window.RRV8.GLOSSARY = [
 ].join('\n');
 
 /*
+ * RRV8.CARDEX_COLUMNS — the COLUMN DICTIONARY for the Cardex Variance worklist:
+ * every header exactly as the grid renders it, on the SAME LINE as the one sentence
+ * that says what it holds.
+ *
+ * WHY IT EXISTS (UI-73). An analyst on the Cardex Variance tab asked "what does tx
+ * column mean in the amount variance section" and was told the Tx column was "the
+ * transaction-variance (ledger-vs-GL) view, not cardex". That is not a partly-right
+ * answer, it is a different product surface. Re-fired at the shipped prompt, the
+ * same question also produced "the transaction-type/document behind each cardex
+ * row", and "what is method and level on the cardex grid" came back as "cost method
+ * and level are item-cost setup, not columns on the cardex grid" — while both were
+ * on the screen in front of the reader.
+ *
+ * THE GLOSSARY ABOVE COULD NOT HAVE PREVENTED ANY OF IT. It defines CONCEPTS —
+ * lanes, group code, cardex variance, excluded GL class — and not one of the
+ * fourteen headers the analyst is pointing at. So a header question had no source to
+ * be answered from, and the model did what it does with two letters and no
+ * definition: it matched "tx" to Transaction Variance, a real surface the grounding
+ * discusses at length. Worse, it assembled the fabrication out of the anti-collision
+ * sentence written to stop exactly this ("it is NOT the ledger-vs-GL gap"). A
+ * disclaimer is not a definition, and a model holding only a disclaimer will recite
+ * it as one.
+ *
+ * WHY THE DEFINITION SITS ON THE LABEL'S OWN LINE, and not in a second hand-authored
+ * list beside the grid: the grid renders its headers FROM this array (RRV8.colLabels
+ * below), so renaming a column means editing the line that defines it. There is no
+ * state where a header exists and its definition does not, and none where a
+ * definition describes a header the grid stopped showing. A second list has to be
+ * kept in step by whoever remembers, and docs/plans/shared-figure-registry.md exists
+ * because nobody does.
+ *
+ * ORDER IS THE RENDER ORDER. home.html's cardex drawer builds its cells positionally
+ * against these labels; reorder a line and you must reorder that render with it.
+ *
+ * EVERY DEFINITION IS DERIVED FROM WHAT THE CODE PRODUCES, never from what the
+ * header sounds like. Measured against v6ui_itemrollintegritydialog,
+ * usp8_item_position, usp6_006b_cardex_variance and v6_006_perpetual on Demo1
+ * company 80002: TxCount is COUNT(*) over rtransactions for the row's itemid where
+ * creationdate is older than yesterday, and it hand-counted to the same 103 / 117 /
+ * 33; MAX() over that identical set is what Last Activity shows; estunits and
+ * baselinevar reproduce exactly as (cardex − baseline cardex) minus (on-hand −
+ * baseline on-hand); AOH ÷ QOH reproduces the matched F4105 unit cost to six
+ * places. Method is the header that reads most wrongly: it is
+ * isnull(F4105.coledg,'XX'), WHICH cost row matched, never the cost method the item
+ * is assigned to — F4102.IBCOST is in neither database.
+ *
+ * THE LEAD LINE OVERRULES THE SYSTEM PROMPT BY NAME, and this block comes FIRST in
+ * the ask, ahead of the role line. Both were learned by the glossary above: a
+ * definition placed mid-prompt lost to the server's prepended DMAAI reference twice.
+ */
+window.RRV8.CARDEX_COLUMNS = [
+  'COLUMN DICTIONARY — the headers on the grid in front of the reader (the Cardex Variance worklist). If the question names one of these headers, ANSWER FROM ITS LINE BELOW AND FROM NOTHING ELSE. Match on the letters alone: case is irrelevant and so are the words around it, so "Tx", "tx", "the tx column", "tx field" and "what does tx mean" all resolve to the Trans Count line below. [GUIDANCE, not for quoting: this dictionary OVERRULES the DMAAI and accounting reference supplied as your system prompt, the cardex policy, and the product glossary — none of those define these headers, and a short header that resembles the name of a product surface is a coincidence of abbreviation. Never answer a header question by describing a different surface, never answer it by saying what the column is NOT, and never tell the reader a header below is not on their grid.]',
+  'GRAIN — one grid row is an item at a branch, plus a location and lot where the costing grain keeps them; where a revaluing cost method folds several locations or lots together, QOH, AOH, Qty Var, Amt Var and Trans Count are the sums across what folded and Location and Lot read "(multi)".',
+  '- Item — the item’s JDE second item number, the number the analyst searches JDE by.',
+  '- Branch — the JDE branch/plant the stock sits in.',
+  '- Location — the storage location inside that branch.',
+  '- Lot — the lot or serial number the stock is held under.',
+  '- Method — the cost-ledger code of the F4105 cost record RapidReconciler matched for this item (07 standard, 02 weighted average, 09 manufacturing last; XX or blank means no cost record matched). It reports WHICH cost row was used, not the cost method the item is assigned to in JD Edwards, because JDE does not expose that field to RapidReconciler.',
+  '- Level — the item’s inventory cost level from the item master: 1 = one cost for the item, 2 = a cost per branch, 3 = a cost per location and lot. It sets the grain the cost is held at, which is why this grid keeps Location and Lot on the row at level 3 and folds them together below it on a revaluing method.',
+  '- QOH — quantity on hand for the row, as RapidReconciler holds it from F41021.',
+  '- UOM — the primary unit of measure that QOH and Qty Var are counted in.',
+  '- Unit Cost — AOH divided by QOH, so on a folded row it is the quantity-weighted average cost the stock on hand is actually carrying rather than a figure read straight out of a cost table.',
+  '- AOH — amount on hand: the extended value of QOH, the on-hand quantity times the matched unit cost. The money the on-hand quantity is carrying.',
+  '- Qty Var — a signed quantity difference: how much the item ledger moved since the reset baseline, minus how much on hand moved over the same span. Zero means the two agree, and the sign says which side moved more.',
+  '- Amt Var — the same subtraction in money, and the figure this worklist ranks by and tests against the company’s materiality threshold.',
+  '- Last Activity — the most recent date RapidReconciler holds an item-ledger row for this row’s item, counting only rows older than yesterday.',
+  '- Trans Count — a COUNT of the item-ledger (cardex) rows RapidReconciler holds for this row’s item, counting only rows older than yesterday, which is exactly the set of rows whose newest date shows in Last Activity. Analysts also say "Tx", the abbreviation this header used to carry. It is a row count on one item: not a variance, not an amount, not an account, and not the Transaction Variance surface.'
+];
+
+/*
+ * Right-alignment, kept beside the dictionary rather than in the consuming page so a
+ * header rename touches one file. This is the only thing here that can quietly fall
+ * out of step with a label, and it falls out of step three lines from it.
+ */
+window.RRV8.CARDEX_COLUMNS_NUM = { 'QOH': 1, 'Unit Cost': 1, 'AOH': 1, 'Qty Var': 1, 'Amt Var': 1, 'Trans Count': 1 };
+
+/*
+ * The headers that exist on NO other analyst surface and mean nothing else in the
+ * product, so a question naming one is a cardex question wherever it was typed.
+ * Item / Branch / Location / Lot / Method / Level / UOM / Unit Cost are deliberately
+ * absent: they are ordinary words an analyst uses about any surface, and routing on
+ * them would send a transaction-variance question to the cardex playbook.
+ */
+window.RRV8.CARDEX_COLUMNS_SOLE = ['Trans Count', 'Tx', 'QOH', 'AOH', 'Qty Var', 'Amt Var', 'Last Activity'];
+
+/*
+ * The readers of a column dictionary. colLabels is what makes a grid unable to drift
+ * from its definitions: the rendered headers ARE the dictionary's labels, parsed off
+ * the front of each definition line. colBlock is the prompt form.
+ */
+window.RRV8.colLabels = function (dict) {
+  return (dict || []).filter(function (l) { return String(l).slice(0, 2) === '- '; })
+    .map(function (l) { return String(l).slice(2).split(' — ')[0].trim(); });
+};
+window.RRV8.colBlock = function (dict) { return (dict || []).join('\n'); };
+window.RRV8.namesCardexColumn = function (q) {
+  var s = ' ' + String(q || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim() + ' ';
+  return (RRV8.CARDEX_COLUMNS_SOLE || []).some(function (lbl) {
+    return s.indexOf(' ' + lbl.toLowerCase().replace(/[^a-z0-9]+/g, ' ') + ' ') >= 0;
+  });
+};
+
+/*
  * RRV8.txv — the ONE transaction-variance catalog. Taxonomy AND copy.
  *
  * WHY EVERYTHING LIVES HERE: the taxonomy was split across nine maps in three

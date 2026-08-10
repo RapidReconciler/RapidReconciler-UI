@@ -10153,12 +10153,17 @@
   // Cardex prompt — grounded in the cardex PLAYBOOK (correct definition: F41021 on-hand vs
   // F4111 cardex, account-blind), NOT the tx/GL grounding that was mis-answering cardex questions.
   function _analystCardexPrompt(q, facts) {
-    return 'You are RapidReconciler AI, a senior JDE inventory consultant advising an analyst on CARDEX variance.\n'
+    // The column dictionary LEADS — ahead of the role line, the glossary and the
+    // cardex policy. A definition placed mid-prompt lost to the reference the server
+    // prepends as the system prompt twice already (see RRV8.GLOSSARY's header).
+    return (window.RRV8 && RRV8.CARDEX_COLUMNS ? RRV8.colBlock(RRV8.CARDEX_COLUMNS) + '\n' : '')
+      + 'You are RapidReconciler AI, a senior JDE inventory consultant advising an analyst on CARDEX variance.\n'
       + (window.RRV8 && RRV8.GLOSSARY ? RRV8.GLOSSARY + '\n' : '')
       + (window.RRV8 && RRV8.CARDEX_GROUNDING ? RRV8.CARDEX_GROUNDING + '\n' : '')
       + 'Facts — the ONLY figures you may cite (never invent a number):\n' + facts.join('\n') + '\n'
       + 'Question: ' + q + '\n'
-      + 'Answer in AT MOST 2 lines, UNDER 60 words: answer per the policy above (cardex variance = F41021 on-hand vs F4111 cardex, account-blind — it is NOT the ledger-vs-GL gap). If a current cardex variance exists, name it (units / amount) and the next step: validate in JDE (P4111), then fix at source or apply the reversible sync.\n'
+      + 'IF THE QUESTION ASKS WHAT A HEADER MEANS ("what is X", "what does X mean", "define X"), the WHOLE answer is ONE line: that header\'s line from the dictionary at the top, put in your own words, with no figures, no corrective action and no mention of any other surface. Asking what to DO about a column is NOT that question — answer that one as below.\n'
+      + 'Otherwise answer in AT MOST 2 lines, UNDER 60 words: answer per the policy above (cardex variance = F41021 on-hand vs F4111 cardex, account-blind — it is NOT the ledger-vs-GL gap). If a current cardex variance exists, name it (units / amount) and the next step: validate in JDE (P4111), then fix at source or apply the reversible sync.\n'
       + (window.RRV8 && RRV8.AI_REGISTER ? RRV8.AI_REGISTER : '');
   }
   function askAnalyst(presetQ, focusPeriod) {
@@ -10177,7 +10182,13 @@
     _aiRenderDocStrip(ans && ans.parentNode, [], 'acctDocStrip');
     // Route cardex questions (or any question asked from the Cardex tab) to the cardex
     // playbook + live cardex figures; everything else uses the transaction-variance grounding.
-    var _cardexMode = (typeof _curSubView === 'function' && _curSubView() === 'reports') || /cardex/i.test(q);
+    // A question naming a cardex-only HEADER routes here too (UI-73): "what is Tx"
+    // typed from another tab is still a cardex question, and the tx grounding holds no
+    // definition for it. Only headers that mean nothing else qualify — see
+    // RRV8.CARDEX_COLUMNS_SOLE for why Item / Branch / Method are not among them.
+    var _cardexMode = (typeof _curSubView === 'function' && _curSubView() === 'reports')
+      || /cardex/i.test(q)
+      || (window.RRV8 && typeof RRV8.namesCardexColumn === 'function' && RRV8.namesCardexColumn(q));
     var _scrub = _recsummaryLevel() === 'scrubbed';
     var prompt = _cardexMode
       ? _analystCardexPrompt(q, _analystCardexFacts(solo, ccy, _scrub))
@@ -10311,8 +10322,17 @@
       if (Math.abs(g.av) < (g.thr || 0)) return;                          // immaterial: |AmtVar| < company Threshold
       B[g.container][Math.abs(g.qv) >= 1 ? 'qty' : 'amt'].push(g);        // quantity-first
     });
-    var COLS = ['Item', 'Branch', 'Location', 'Lot', 'Method', 'Level', 'QOH', 'UOM', 'Unit Cost', 'AOH', 'Qty Var', 'Amt Var', 'Last Activity', 'Tx'];
-    var NUMCOL = { 'QOH': 1, 'Unit Cost': 1, 'AOH': 1, 'Qty Var': 1, 'Amt Var': 1, 'Tx': 1 };
+    // Headers come from the ONE producer that also DEFINES them (config.js
+    // RRV8.CARDEX_COLUMNS), so a rename cannot orphan the definition the AI answers
+    // "what is this column" out of. Dictionary order IS the cell order built below.
+    //
+    // 'Tx' became 'Trans Count' here (UI-73). The two-letter form collided with the
+    // Transaction Variance surface and the assistant answered about that surface
+    // instead of the column; the standalone Cardex Variance page already read
+    // 'Trans Count', so the divergence resolves toward the header that says what it
+    // holds rather than toward the abbreviation that caused the defect.
+    var COLS = RRV8.colLabels(RRV8.CARDEX_COLUMNS);
+    var NUMCOL = RRV8.CARDEX_COLUMNS_NUM;
     // A collapsed Location/Lot cell shows the single value muted, or (multi) when the grain folded several.
     function grainTd(full, val, set) {
       if (full) return '<td>' + cellText(val) + '</td>';
