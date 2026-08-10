@@ -471,9 +471,23 @@ window.RRV8 = window.RRV8 || {};
   // hallucinating an in-transit / stranded-leg cause. SOURCE OF TRUTH =
   // AnalysisGuides/transaction-detail-analysis.md; keep this in sync with it.
   // Owner (analyst SME) curates the rules.
+  //
+  // THE SIGN IS ledger − cardex, AND IT IS DELIBERATE. Do not "correct" it back.
+  // RCardexLedgerCompare2.Variance is written as ledgeramount − cardexamount by
+  // usp6_009_account_summary (its own comment: "GL - CX (same perspective as OOB);
+  // was CX - GL"), so the transaction variance reads the same direction as the
+  // out-of-balance instead of fighting it. Nothing in the UI negates it on the way
+  // to the screen. Measured on RCardexLedgerCompare2 where recstatus = 1: against
+  // ledger − cardex the worst row deviates by float noise (~1e-11) on both Demo1
+  // (5,341 rows) and Demo3 (2,093 rows); against cardex − ledger it deviates by
+  // $198,929.62 and $685,913.64. This line said cardex − ledger until 2026-08-10,
+  // which inverted DIRECTION in every AI answer that reasoned from it — overstated
+  // read as understated. The card copy escaped it: that copy names which SIDE
+  // EXISTS (GL-only, cardex-only, relieved twice) rather than reading the signed
+  // column, so it was already right and was left alone.
   window.RRV8.ANALYST_GROUNDING = [
     'ANALYST POLICY (transaction variance) — reason from these rules:',
-    '- A transaction variance reconciles ONE document: F4111 (item ledger / cardex) extended value vs F0911 (GL / ledger) for the SAME document and account. Variance = cardex − ledger for that document. Explain each document on its own terms.',
+    '- A transaction variance reconciles ONE document: F4111 (item ledger / cardex) extended value vs F0911 (GL / ledger) for the SAME document and account. Variance = ledger − cardex for that document. So a POSITIVE variance means the GL carries more value than the item ledger, and a NEGATIVE variance means the item ledger carries more. Never state a direction without applying that subtraction — getting it backwards turns overstated into understated. Explain each document on its own terms.',
     '- TIE OR NO TIE. The test is whether the F0911 amount matches the F4111 amount within tolerance. It is BINARY. NEVER express a transaction variance as a percentage or a ratio — it is not a share of anything, and a percentage actively misleads here. State dollars.',
     '- IF F0911 DOES NOT TIE TO F4111, A CORRECTION IS REQUIRED. Always. "Explained" tells the analyst WHY the two sides disagree; it NEVER means leave it alone. The cause decides WHAT the correction is. It does not remove the need for one.',
     '- TIE AT THE RIGHT GRAIN before calling anything unexplained. Two documents against one order, or two accounts on one document, can each fail a document-level tie and still sum exactly to the order total.',
