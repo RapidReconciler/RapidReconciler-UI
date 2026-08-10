@@ -1090,7 +1090,6 @@
   .txv-statuschip.is-letride { color: var(--text-soft); background: var(--bg-soft); border: 1px solid var(--rule-strong, #cfd6e0); }
   .txv-card-title-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   /* Summary strip — scope-band sizing (label 12.5px / value 19px) per
-     project_scope_band_standard; parity with the Overview card's GL/Inventory row. */
   .txv-sum { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 26px; margin: 11px 0 2px; }
   .txv-fig { display: inline-flex; align-items: baseline; gap: 7px; white-space: nowrap; text-decoration: none; }
   .txv-fig-lbl { font-size: 12.5px; font-weight: 600; color: var(--text-muted); }
@@ -6351,7 +6350,14 @@
   // the reconciliation page SCOPED to that company + period; historical periods
   // open a summary modal of what happened and whether it was resolved next period.
   var _curSym = function (ccy) { return ccy === 'GBP' ? '£' : ccy === 'USD' ? '$' : (ccy ? ccy + ' ' : ''); };
-  var _roundAmt = function (n) { n = Math.abs(Number(n) || 0); if (n >= 1000) { var k = n / 1000; return (k >= 10 ? Math.round(k) : Math.round(k * 10) / 10) + 'K'; } return String(Math.round(n)); };
+  // Routed through RRV8.kAmount so home.html no longer carries its own copy of the
+  // rounding rule. Behaviour is unchanged here: this one already rounded half up.
+  var _roundAmt = function (n) {
+    try { if (window.RRV8 && RRV8.kAmount) return RRV8.kAmount(n); } catch (_) {}
+    n = Math.abs(Number(n) || 0);
+    if (n >= 1000) { var k = n / 1000; return (k >= 10 ? Math.round(k) : Math.round(k * 10) / 10) + 'K'; }
+    return String(Math.round(n));
+  };
   function _decorateBriefActions() {
     var brief = $('haiBrief'); if (!brief) return;
     var d = _briefData();
@@ -6749,7 +6755,8 @@
   function _moneyK(n) {
     n = Number(n) || 0; var a = Math.abs(n), s = n < 0 ? '-' : '';
     if (a < 1000) return s + Math.round(a).toLocaleString('en-US');
-    if (a < 1e6)  return s + (a / 1000).toFixed(a < 10000 ? 1 : 0) + 'K';
+    // toFixed(1) renders 4050 as "4.0K"; money rounds half up. Shared rule now.
+    if (a < 1e6)  return s + ((window.RRV8 && RRV8.kAmount) ? RRV8.kAmount(a) : (a / 1000).toFixed(a < 10000 ? 1 : 0) + 'K');
     return s + (a / 1e6).toFixed(1) + 'M';
   }
   // Currency amount with the sign BEFORE the symbol ("-£19K", not "£-19K").
@@ -6760,6 +6767,7 @@
     a = Math.abs(Number(a) || 0);
     if (unit === '1') { return Math.round(a).toLocaleString('en-US'); }   // whole pounds, thousands-separated — a sub-million set ties out exactly
     if (unit === 'M') { var m = a / 1e6; return (m < 100 ? m.toFixed(1) : Math.round(m).toLocaleString('en-US')) + 'M'; }
+    if (window.RRV8 && RRV8.kAmount) return RRV8.kAmount(a);
     var k = a / 1000; return (k < 10 ? k.toFixed(1) : Math.round(k).toLocaleString('en-US')) + 'K';
   }
   function _ccyAmtUnit(ccy, n, unit) { n = Number(n) || 0; return (n < 0 ? '-' : '') + _ccySym(ccy) + _moneyInUnit(n, unit); }
@@ -7847,7 +7855,7 @@
   function _perpCompact(v) {
     var x = Number(v) || 0, a = Math.abs(x), s = _perpSym(), t;
     if (a >= 1e6) t = (a / 1e6).toFixed(a >= 1e7 ? 0 : 1) + 'M';
-    else if (a >= 1e3) t = (a / 1e3).toFixed(a >= 1e4 ? 0 : 1) + 'K';
+    else if (a >= 1e3) t = ((window.RRV8 && RRV8.kAmount) ? RRV8.kAmount(a) : (a / 1e3).toFixed(a >= 1e4 ? 0 : 1) + 'K');
     else t = a.toFixed(0);
     return (x < 0 ? '-' : '') + s + t;
   }
@@ -10028,9 +10036,14 @@
       summary = 'Checking for excluded GL classes…';
     } else if (excl.openClasses > 0) {
       state = 'warn';
+      // The CODES, not just the count. Which classes they are is the first thing the
+      // analyst needs and the producer now carries it (RRV8.excluded openCodes).
+      var _exCodes = (excl.openCodes || []).slice(0, 4).join(', ')
+        + ((excl.openCodes || []).length > 4 ? ' +' + ((excl.openCodes || []).length - 4) + ' more' : '');
       summary = '<b>' + excl.openClasses.toLocaleString('en-US') + '</b> GL class'
         + (excl.openClasses === 1 ? '' : 'es') + ' excluded totaling <b>'
-        + _ccyAmt(ccy, excl.openAmt) + '</b>';
+        + _ccyAmt(ccy, excl.openAmt) + '</b>'
+        + (_exCodes ? ' &mdash; <b>' + esc(_exCodes) + '</b>' : '');
     } else if (excl.classes > 0) {
       // Every exclusion carries a verdict. NOT the same as "accounted for": the value
       // is still outside reconciliation, by decision, so it does not get the tick.
@@ -10057,6 +10070,10 @@
       + (docTypes ? (' &middot; document type <b>' + esc(docTypes) + '</b>') : '')
       + ' &middot; <b>' + nGl.toLocaleString('en-US') + '</b> GL class' + (nGl === 1 ? '' : 'es')
       + ' routing to <b>' + nAcct.toLocaleString('en-US') + '</b> account' + (nAcct === 1 ? '' : 's')
+      + ' that resolve through the model'
+      // Without this line the list reads as though the excluded classes should be in it.
+      // They cannot be: having no routing here is what makes a class excluded.
+      + '. An excluded class has no routing here, which is why it is excluded'
       + '</div>';
     var rows = routes.map(function (r) {
       return '<tr>'
