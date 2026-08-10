@@ -7764,6 +7764,40 @@
     return (solo ? String(solo) : '') + '|' + ((activeDb() && activeDb().n) || '');
   }
   function _txVarWarm() { return !!(_txVarCache && _txVarCache.amt && _txVarCache.key === _txVarKeyNow()); }
+  // ONE narrowing point for every row that arrives from /inventory/transactions
+  // (UI-75, the UI-71 one-producer rule). That endpoint ACCEPTS
+  // reconciliationFilter.companies and DISCARDS it: TransactionsController.bulk()
+  // reads only .getReconciliationFilter().getPeriod() and hands the repository the
+  // period alone, so what comes back is the whole JWT scope for that period.
+  //
+  // THAT IS THE ENDPOINT'S INTENDED CONTRACT, NOT A SERVER BUG — its own class
+  // comment says "V8 does client-side filter/recompute on the bulk payload", and
+  // other consumers depend on getting the full payload. So the narrowing belongs
+  // HERE, where the rows enter the client, and must not be pushed server-side or
+  // repeated per reader.
+  //
+  // Measured on Demo3: a request for ["30002"] returns all 2,093 rows, 1,950 of
+  // them company 30001. Company 30002 has 143 rows, 12 periods, USD, last period
+  // 2023-04-30; company 30001 has 1,950 rows, 16 periods, GBP, last 2023-05-31.
+  // Unnarrowed, _txVarBucket bucketed every company's rows together, so the
+  // Transaction Variance chip reported 30001's GBP figure under 30002's dollar
+  // sign for period 2023-05-31 — a period 30002 has no rows in at all — and the AI
+  // grounding said "16 periods loaded" for a 12-period company. The GL Class
+  // Integrity check has the same exposure: its IC/IM test decides whether
+  // manufacturing activity exists "in scope", and company-blind it could confirm
+  // activity belonging to a different company.
+  //
+  // An EMPTY company list still means EVERY company — that is the all-companies
+  // request, and it must stay that way.
+  //
+  // Scope by the SAME array that builds the cache key, so the key always describes
+  // what is actually in the cache.
+  function _txScope(rows, companies) {
+    if (!companies || !companies.length) return rows || [];
+    var want = {};
+    companies.forEach(function (c) { want[String(c).trim()] = 1; });
+    return (rows || []).filter(function (r) { return !!want[String(_coOf(r)).trim()]; });
+  }
   var _TXV_MODS = ['Sales', 'Purchasing', 'Manufacturing', 'Inventory'];
   var _TXV_COLORS = { Sales: '#3f74e8', Purchasing: '#2e8a55', Manufacturing: '#e0872b', Inventory: '#5a6b8c' };
   function _txVarBucket(rows) {
@@ -8029,10 +8063,44 @@
     }
     // One {period, variance, total} per period for the selected company, from the
     // Account Roll Forward summary view (v6ui_raccountsummary via _invRows). We
-    // total the VARIANCE column — the one that ties, to the penny, to the
-    // reconciling-items view the action cards are built from (the built-in
-    // dacpac-drift detector). total = |Variance| drives the bar height; variance
+    // total the VARIANCE column. total = |Variance| drives the bar height; variance
     // (signed) labels the tooltip and the focused-period total.
+    //
+    // THIS FIGURE IS NOT THE SAME MEASURE AS THE ACTION CARDS, AND IT CANNOT BE.
+    // This comment used to claim the two tie "to the penny" and called that a
+    // built-in dacpac-drift detector. Neither was true, and no code ever checked it.
+    //
+    //   THIS SERIES  v6ui_raccountsummary.Variance = raccountsummary
+    //                .transactionvariance, written by usp6_009_account_summary as
+    //                sum(ledgeramount - cardexamount) over rcardexledgercompare at
+    //                (period, company, ACCOUNT) grain, for batch > 0 and
+    //                manualentry = 0 — every posted non-manual row, at any size,
+    //                before netting, then currency-converted and rounded.
+    //   THE CARDS    the recstatus = 1 reconciling-items residual (v6_008_reconcile
+    //                → RCardexLedgerCompare2), which ADDITIONALLY requires
+    //                batchstatus = 0 and applies
+    //                `having round(abs(sum(cardexamount) - sum(ledgeramount)), 2)
+    //                > threshold` at DOCUMENT grain — so unposted-batch rows and
+    //                every immaterial document are gone before the cards see them.
+    //
+    // Two extra restrictions and a different grain: they are structurally different
+    // measures. Measured — per (company, period) slice, |summary Variance| vs
+    // |RCLC2 recstatus=1 Variance| within a cent: Demo3 ties on 4 of 34 slices,
+    // Demo1 on 8 of 18, and only where the excluded population happens to be empty
+    // on both sides. NO company total ties in either database (Demo3 30001 off by
+    // $89.70, 30002 by $356.14; Demo1 80002 by $195.51, 80008 by $3.16). Worst
+    // slice: Demo3 co 30002 / 2022-08-31, summary Variance $2,359.39 across 2 rows
+    // against ZERO reconciling-item rows and $0.00 — all 10,540 contributing
+    // rcardexledgercompare rows there carry batchstatus <> 0, so v6_008_reconcile
+    // admits none of them. The whole gap is that one exclusion. OOB is a third
+    // measure again (that slice: -$90,629.23).
+    //
+    // NOTHING RELIES ON THEM BEING EQUAL, and the tab already knows better: the
+    // UI-28 block in renderAnalystTxVar shows sourceTotal and netTotal side by side
+    // with tolDelta between them "rather than claim a tie". The false comment here
+    // is what let the Data Health band and the roll-forward page disagree for a day
+    // while both looked correct. If you need a drift detector, write one that
+    // asserts something and fails loudly — a comment is not one.
     function _txvRfSeries() {
       var rows = _invRows || [], pmap = {}, plist = [];
       rows.forEach(function (r) {
@@ -8075,8 +8143,9 @@
       }).join('');
       // Total variance = the focused period's VARIANCE from the summary view — the
       // SAME series that draws the bars, so the total and the focused bar always
-      // agree, and it's the column that ties to the reconciling-items view the tab
-      // works. Tracks the period you click.
+      // agree. Tracks the period you click. It does NOT tie to the reconciling-items
+      // view the tab works; see _txvRfSeries above for the two measures and the
+      // measurement. The tab shows both figures and their delta on purpose.
       var _focItem = series.filter(function (s) { return s.period === activeP; })[0];
       var rfTotal = _focItem ? _focItem.variance : 0;
       box.innerHTML =
@@ -8126,7 +8195,7 @@
       return rrFetch('inventory/transactions', { method: 'POST', body: body });
     }).then(function (resp) {
       if (_txVarReqKey !== key) return;   // a later scope/DB switch superseded this fetch
-      var _rows = (resp && resp.data) || [];
+      var _rows = _txScope((resp && resp.data) || [], companies);   // UI-75 — company-scoped BEFORE anything buckets or counts it
       var b = _txVarBucket(_rows);
       _txVarCache = { key: key, amt: b.amt, cnt: b.cnt, rows: _rows };   // keep raw rows for the Transaction Variance tab
       paint();
@@ -8395,7 +8464,7 @@
         groupingType: 'NONE', exclusions: { types: [], orderTypes: [], subTypes: [], docTypes: [] }, cacheKey: null
       } });
     }).then(function (resp) {
-      var rows = (resp && resp.data) || [];
+      var rows = _txScope((resp && resp.data) || [], companies);   // UI-75 — same narrowing as the other writer, so both fill the cache with the same population
       var b = _txVarBucket(rows);
       _txVarCache = { key: key, amt: b.amt, cnt: b.cnt, rows: rows };
       return rows;
@@ -8447,12 +8516,13 @@
       ? RRV8.analystReviewStore.load(solo).catch(function () { return {}; }) : Promise.resolve({});
     Promise.all([_txvRows(solo ? [String(solo)] : []), _txvLoadDmaai(), _cardLoad, _dispoLoad, _beLoad, _reviewLoad]).then(function (res) {
       if (gen !== _txvGen) return;   // scope/DB/tab switched mid-flight
-      // Scope the reconciling-items rows to the SELECTED company client-side, on
-      // CompanyNumber — the same filter the comparison used to prove the tie-out,
-      // and the same one _txvRfSeries applies to the summary view. The server's
-      // reconciliationFilter.companies isn't reliably honored, so without this the
-      // band + cards sum EVERY company while labeling it the one selected (the
-      // "£582K for Co 80008" bug). Everything on the tab derives from this.
+      // Scope to the SELECTED company on CompanyNumber. This tab was the FIRST
+      // consumer to discover the endpoint returns the whole JWT scope regardless of
+      // reconciliationFilter.companies, and it fixed it locally — which left the
+      // chip and the GL Class Integrity check unnarrowed (UI-75). The narrowing now
+      // happens once at the producer (_txScope), so by the time rows reach here they
+      // are already this company's. Kept as a guard, not as the fix: it also holds
+      // the tab to one company if a future caller warms the cache more widely.
       var rows = (res[0] || []).filter(function (r) { return String(_coOf(r)) === String(solo); });
       var findings = res[1] || [];
       // SINGLE focused period — the tab shows ONE period so its cards sum cleanly
@@ -9168,6 +9238,11 @@
           // manufacturing docs — so it can affect reconciliation only if IC/IM transactions
           // exist in scope. No IC/IM → nothing to misroute → it doesn't matter here. Which
           // items and how much is the deeper Transaction Variance analysis.
+          //
+          // "IN SCOPE" MEANS THIS COMPANY. The rows come back company-scoped because
+          // _txScope narrows them at the producer (UI-75); before that, this test read
+          // every company in the JWT and could confirm IC/IM activity belonging to a
+          // different one, putting that claim into the fact AND the AI narrative.
           return _txvRows([String(co)]).catch(function () { return null; }).then(function (txRows) {
             var mfg = txRows ? txRows.some(function (r) { var dt = String(r.DT || '').trim().toUpperCase(); return dt === 'IC' || dt === 'IM'; }) : null;
             var detail, fact;
