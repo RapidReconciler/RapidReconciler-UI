@@ -1512,8 +1512,8 @@ window.RRV8 = window.RRV8 || {};
         ],
         context: [
           'Not tested: posting status and the batch. Neither is a predicate here, and on this pattern the entries have been found posted and in the same batch as the item-ledger row — so "go post the batch" is the wrong instruction. Confirm it on your document.',
-          'Not tested: the order line type. This claim never reads F40205. On one demo, 114 of the 128 documents sit on an order carrying at least one non-stock line — so do NOT assume a stock line was due a GL entry against inventory. Check the line type before you take this to the customer as a routing fault.',
-          'Not tested: whether the two accounts are P&L accounts. That came from a specimen where a whole family of order types routed both legs to P&L for all 28 of their GL classes. It is the likeliest reason a cancellation goes unnoticed, and it is what you confirm by reading the routes.'
+          'Not tested: the order line type. This claim never reads F40205. Most documents on this card have been found sitting on an order that carries at least one non-stock line — so do NOT assume a stock line was due a GL entry against inventory. Check the line type before you take this to the customer as a routing fault.',
+          'Not tested: whether the two accounts are P&L accounts. It has been seen where a whole family of order types routed both legs to P&L for every one of their GL classes. That is the likeliest reason a cancellation goes unnoticed, and it is what you confirm by reading the routes.'
         ],
         found: [
           'Inventory came off the item ledger. The GL never touched the inventory account for it.',
