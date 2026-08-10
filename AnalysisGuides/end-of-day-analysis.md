@@ -214,8 +214,8 @@ Manufacturing Accounting (R31802A) creates GL entries for material issues (IM), 
 ```
 Raw Material Inventory (AAI 3110)
         ↓  Material Issues (IM) — credit component inventory, debit WIP
-Work In Process / WIP (AAI 3120)
-        ↑  Labor and Overhead (IH) — debit WIP, credit Payroll Accrual (3401)
+Work in Process (AAI 3120)
+        ↑  Labor and Overhead (IH) — debit WIP, credit Accruals (3401)
         ↓  Completions (IC) and Scrap (IS) — debit Finished Goods (3130), credit WIP
 Finished Goods Inventory (AAI 3130)
         ↓  Sales Update (R42800)
@@ -630,15 +630,16 @@ The following AAIs must be correctly configured for R31802A to process without e
 
 | AAI | Account | Used By | GL Class Code Source |
 |---|---|---|---|
-| **3110** | Raw Material / Sub-Assembly Inventory | IM — credit side | **Component** GL class code (one entry per component class) |
-| **3120** | Work In Process (WIP) | IM debit, IH debit, IC credit, IS credit, IV debit/credit | **Parent item** GL class code |
-| **3130** | Finished Goods / Scrap | IC debit, IS debit | **Parent item** — configure separately by doc type IC vs. IS to route scrap to a different account |
+| **3110** | Inventory / Raw Materials | IM — credit side | **Component** GL class code (one entry per component class) |
+| **3120** | Work in Process | IM debit, IH debit, IC credit, IS credit, IV debit/credit | **Parent item** GL class code |
+| **3130** | Sub-Assembly / Finished Goods (and scrap) | IC debit, IS debit | **Parent item** — configure separately by doc type IC vs. IS to route scrap to a different account |
+| **3210** | Clear Work in Process | IV, actual costing only — R31804 posts COGS the completions did not pick up | **Parent item** |
 | **3220** | Labor Variance | IV (only if Work Center Efficiency enabled) | **Parent item** |
 | **3240** | Material Variance | IV | **Parent item** |
 | **3260** | Planned Variance | IV | **Parent item** |
 | **3270** | Engineering Variance | IV | **Parent item** |
 | **3280** | Other Variance / WIP Clearance | IV | **Parent item** |
-| **3401** | Payroll Accrual | IH — credit side | **Parent item** |
+| **3401** | Accruals | IH — credit side | **Parent item** |
 
 **Common AAI misconfigurations that cause End of Day to persist:**
 

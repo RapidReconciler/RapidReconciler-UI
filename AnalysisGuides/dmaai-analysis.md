@@ -145,11 +145,11 @@ The **Model DMAAI Table** is DMAAI table **4152** with document type **PI** (Phy
 
 | Table | Description | Module |
 |---|---|---|
-| **3110** | Raw Material WIP — Material Issues | Manufacturing |
-| **3130** | WIP Completions | Manufacturing |
+| **3110** | Inventory / Raw Materials — credit side of material issues | Manufacturing |
+| **3130** | Sub-Assembly / Finished Goods — debit side of completions | Manufacturing |
 | **4122** | Inventory Debit (Adjustments, Transfers, Issues) | Inventory |
 | **4126** | Zero balance adjustment &mdash; quantity is zero but dollars remain (`:437`, `:672`). NOT received-not-vouchered; RNV is **4320**. | Inventory |
-| **4134** | Records the change to COGS when an item's cost changes (`:438`). NOT in-transit; the in-transit clearing debit on a transfer is 4220 or 4245 &mdash; see the open question below. | Inventory |
+| **4134** | Records the change to COGS when an item's cost changes (`:438`). NOT in-transit; the in-transit clearing debit on a transfer is 4220 at cost or 4245 at cost plus. | Inventory |
 | **4172** | Change in inventory value when unit cost is changed through Future Cost Update (R41052) (`:441`). NOT physical-inventory adjustment. | Inventory |
 | **4240** | Inventory, on a standard sales transaction journal entry (`:464`). COGS is **4220**. | Sales |
 | **4310** | Inventory — Purchase Order Receipt | Purchasing |
@@ -165,13 +165,15 @@ The **Model DMAAI Table** is DMAAI table **4152** with document type **PI** (Phy
 > grounding facts found on 2026-08-10 were an AAI number paired with the wrong purpose, and
 > that one check would have caught every one of them.
 >
-> **Open question, NOT resolved:** the KB disagrees with itself on whether **4220** or **4245**
-> carries the In-Transit debit on an ST transfer. `transfer-order-reference.html:737` puts it on
-> 4220 at cost and `:764` on 4245 at cost-plus; `inventory-distribution-aais.html:473` puts it on
-> 4245 in all cases, while `:159` describes a "4220 vs 4320" transfer-clearing check that implies
-> 4220. Read the client's own F4095 and the transfer pricing rather than assuming either.
+> **In-transit AAI, settled 2026-08-10 (owner ruling).** The debit that holds value while goods
+> are in motion is **4220 on a transfer at cost** and **4245 on a transfer at cost plus**. Read
+> the transfer pricing before naming the AAI. Either way the receiving OT side credits **4320**,
+> and the debit AAI that fired has to resolve to the same account as 4320 or the transfer leaves
+> a residual. `transfer-order-reference.html:737` and `:764` were already right;
+> `inventory-distribution-aais.html:473` put the debit on 4245 in all cases and has been
+> corrected.
 
-> **Note:** DMAAI tables 4162 (Inventory Transfer), 4365 (Supplier Direct Ship / Outside Operations Settlement), 4385 (Outbound Logistics), and 4400 (Intercompany/Advanced Pricing) also appear in this report, indicating those tables are also being validated.
+> **Note:** DMAAI tables 4162 (Inventory Transfer), 4365 (Supplier Direct Ship / Outside Operations Settlement), 4385 (Landed Cost) and 4400 (Zero Balance Adjustment) also appear in this report, indicating those tables are also being validated.
 
 ### Vetting the Model Table
 
@@ -213,8 +215,18 @@ Account numbers in this report use the format **BU.Object** (e.g., `2.1421` = Bu
 
 | Table | Document Type | Transaction Type | Description |
 |---|---|---|---|
-| **3110** | IM | Work Order Material Issue | Debits WIP for materials issued to a work order; credits raw material inventory (AAI 3110 = raw material account). Mismatch here causes material issues to post to wrong inventory account. |
-| **3130** | IC | Work Order Completion | Credits WIP and debits the finished goods account on work order completion. Mismatch here affects finished goods valuation. |
+| **3110** | IM | Work Order Material Issue | Inventory/Raw Materials. The IM credits raw material inventory through 3110 and debits WIP through 3120. A mismatch here sends material issues to the wrong inventory account. |
+| **3130** | IC | Work Order Completion | Sub-Assembly/Finished Goods. The IC debits finished goods through 3130 and credits WIP through 3120. A mismatch here distorts finished goods valuation. |
+
+> **3120, 3210 and 3401 are not in this report, and their absence proves nothing — but they
+> are missing for two different reasons.** Integrity Report 2 is scoped to the DMAAI tables
+> that hold inventory accounts. 3210 (Clear Work in Process) clears WIP to COGS and holds no
+> inventory account, so it is out of scope by design; it loads normally into `rdmaaistaging`.
+> 3120 (Work in Process) and 3401 (Accruals) are a genuine load gap: their `F4095` rows carry
+> a blank document type, and every load level filters on `mldct != ''`, so they never reach
+> the derived tables at all. See `manufacturing-accounting-flow.md` for the measurement.
+> Answer any question about whether one of these three is configured against the customer's
+> own `F4095` or P4095 screen, never against this report.
 
 > **Cost Type A1 note:** The comment "Mismatch - object OrTy WO CostTy A1" indicates the mismatch applies specifically to work orders with Order Type **WO** and Cost Type **A1** (Actual Cost). Standard cost work orders use a different path and may not be affected.
 
@@ -223,8 +235,8 @@ Account numbers in this report use the format **BU.Object** (e.g., `2.1421` = Bu
 | Table | Document Type(s) | Transaction Type | Description |
 |---|---|---|---|
 | **4122** | IA, II, IJ, IL, IM, IP, IR, IV | Inventory Debit | Primary inventory account for adjustments (IA), internal transfers (II), physical inventory adjustments (IJ), lot transfers (IL), material issues (IM), physical inventory (IP), receipts (IR), and voids (IV). This is the most critical inventory table. |
-| **4126** | VV | Received Not Vouchered (RNV) Debit | Debits the RNV account on voucher match. Paired with 4128 (RNV Credit). Present only for companies with purchasing activity: 2, 3, and 22 in this report. |
-| **4134** | IB | In-Transit Inventory (Branch Transfer) | Used when inventory is in transit between branch plants. 4134 debits the in-transit account; 4136 credits it on receipt. Must point to different accounts for in-transit tracking to function. |
+| **4126** | Zero-balance doc types (IA, II, IT on the specimen databases) | Zero Balance Adjustment Debit | Clears residual value when on-hand quantity reaches zero with dollars still on the row. Paired with 4128. RNV is **4320**, not 4126. |
+| **4134** | IB | Inventory Cost Change | Records the change in inventory value when an item's cost changes. 4134 is the inventory leg, 4136 the expense or COGS leg. They must resolve to different accounts, or the debit and credit cancel inside the inventory account and the cardex value never reaches the GL. Not an in-transit AAI. |
 | **4162** | IX | Inventory Transfer — Cross-Company | Used for inventory transfers between companies. Present for company 2 only in this report. |
 
 ### Sales Tables (4200 Series)
@@ -242,8 +254,8 @@ Account numbers in this report use the format **BU.Object** (e.g., `2.1421` = Bu
 |---|---|---|---|
 | **4310** | OR | Inventory — Purchase Order Receipt | Debits inventory on PO receipt. Paired with a credit to the RNV account (4320). Mismatch causes PO receipts to post to wrong inventory account. |
 | **4365** | OA, OD, OO, OP | Supplier Direct Ship / Outside Operations Settlement | Used for order settlement in supplier direct ship, service and rental, and outside operations scenarios. **Doc type OO (Outside Operations)** posts subcontracted operation costs through this table and may require a different account than doc types OA, OD, and OP — confirm independently. Mismatch here causes settlement transactions to post to the wrong account. |
-| **4385** | OB, OC, OM, OP, OR, OW | Outbound Logistics / Order Settlement | Used for outbound logistics processing. Present for companies 2 and 22. |
-| **4400** | IV, OB, OC, OP | Intercompany / Advanced Pricing Settlement | Used for intercompany billing and advanced pricing adjustments. Present for companies 2, 3, and 22. |
+| **4385** | OB, OC, OM, OP, OR, OW | Landed Cost | Records landed cost. 4385 is the inventory-or-landed-cost leg, 4390 the landed-cost temporary liability leg. Written to F4111. Fired by Receipts (P4312) and Stand Alone Landed Cost (P43214). |
+| **4400** | IV, OB, OC, OP | Zero Balance Adjustment — Receipt Side | Clears residual dollars when the receipt-side on-hand quantity reaches zero. 4400 is the inventory leg, 4405 the COGS or expense leg. Fired by Receipts (P4312). |
 
 > **Table 4365 — doc type OO note:** Outside Operations (OO) transactions represent subcontracted work order processing routed through purchasing. This is a different transaction flow from direct ship (OA/OD) and purchase order (OP) settlements. When doc type OO appears in a 4365 mismatch finding, it must be verified independently — the correct account for OO may differ from the correct account for the other doc types in the same table. Do not assume a single correction applies to all doc types in a 4365 finding.
 
@@ -518,22 +530,22 @@ Maintain a running log of:
 
 | Table | Module | Transaction Event | Typical Doc Types | Debit / Credit |
 |---|---|---|---|---|
-| **3110** | Manufacturing | Material issued to work order | IM | Debit WIP; Credit Raw Material |
-| **3130** | Manufacturing | Work order completion | IC | Debit Finished Goods; Credit WIP |
+| **3110** | Manufacturing | Material issued to work order | IM | Credit Inventory/Raw Materials (the debit is 3120) |
+| **3130** | Manufacturing | Work order completion, parent scrap | IC, IS | Debit Sub-Assembly/Finished Goods (the credit is 3120) |
 | **4122** | Inventory | Inventory adjustment, transfer, receipt | IA, II, IJ, IL, IM, IP, IR, IV | Debit Inventory |
 | **4124** | Inventory | Inventory relief (credit side of 4122) | IA, II, IJ, IL, IM, IP, IR, IV | Credit Inventory |
-| **4126** | Purchasing | RNV debit (voucher match) | VV | Debit RNV |
-| **4128** | Purchasing | RNV credit reversal | VV | Credit RNV |
-| **4134** | Inventory | In-transit debit (branch transfer) | IB | Debit In-Transit |
-| **4136** | Inventory | In-transit credit on receipt | IB | Credit In-Transit |
+| **4126** | Inventory | Zero balance adjustment, inventory leg | IA, II, IT | Debit Inventory |
+| **4128** | Inventory | Zero balance adjustment, expense or COGS leg | IA, II, IT | Credit Expense / COGS |
+| **4134** | Inventory | Inventory cost change, inventory leg | IB | Debit/Credit Inventory |
+| **4136** | Inventory | Inventory cost change, expense or COGS leg | IB | Debit/Credit Expense / COGS |
 | **4162** | Inventory | Cross-company inventory transfer | IX | Debit Inventory — Receiving |
 | **4172** | Inventory | Physical inventory adjustment | IJ | Debit/Credit Inventory |
 | **4220** | Sales | Inventory relief — COGS credit (paired with 4240) | SO, C1, C2, CO, SA, SF, SM, SR, SW, SX | Credit Inventory |
 | **4240** | Sales | Cost of Goods Sold (paired with 4220) | SO, C1, C2, CO, SA, SF, SM, SR, SW, SX | Debit COGS; Credit Inventory |
 | **4310** | Purchasing | Inventory on PO receipt | OR | Debit Inventory |
 | **4365** | Purchasing / Manufacturing | Supplier Direct Ship, Service & Rental, Outside Operations settlement | OA, OD, OO, OP | Debit settlement account — see doc type note below |
-| **4385** | Purchasing | Outbound logistics | OB, OC, OM, OP, OR, OW | Varies |
-| **4400** | Sales | Intercompany / Advanced Pricing | IV, OB, OC, OP | Varies |
+| **4385** | Purchasing | Landed cost, inventory or landed-cost leg (the liability leg is 4390) | OB, OC, OM, OP, OR, OW | Debit Inventory / Landed Cost |
+| **4400** | Purchasing | Zero balance adjustment on the receipt side, inventory leg (the COGS or expense leg is 4405) | IV, OB, OC, OP | Debit Inventory |
 
 > **Table 4365 doc type reference:**
 > - **OA** — Order Acknowledgment (direct ship)

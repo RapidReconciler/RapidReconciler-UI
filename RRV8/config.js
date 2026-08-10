@@ -498,9 +498,10 @@ window.RRV8 = window.RRV8 || {};
     '- NON-STOCK, WHAT TO CHECK AND WHAT TO SAY: read the order line type, then read WHICH ACCOUNT the G/L leg landed on. Verified case: the non-stock extended cost (F4211 / F42119 SDECST on the type-N lines) tied to the F0911 amount to the penny, and the G/L leg had posted to the INVENTORY account — the same account the cardex uses. A non-stock item holds no inventory, so that value does not belong in an inventory account. The tie-out PINPOINTS THE DEFECT; it does not exonerate the row. Never say a non-stock GL-only row is expected, needs no correction, or should not be chased. THE CAUSE IS THE G/L CLASS ON THE LINE, NOT THE DMAAI — verified: the non-stock AAI entry was CORRECT (it pointed away from inventory), while every type-N line carried a STOCK item\'s G/L class instead of the line type\'s own class, and that stock class is what resolves to the inventory account. So DO NOT tell the analyst to change the non-stock DMAAI; tell them to correct the G/L class on those items so a non-stock line stops resolving to inventory. The accountant reclassifies what is already posted.',
     '- NON-STOCK, THE TWO CORRECTIONS: at the SOURCE, the DMAAI directing that non-stock line type is sending non-stock cost to the inventory account — correct the DMAAI so non-stock cost lands on its own non-inventory account. For EXISTING BALANCES, the ACCOUNTANT reclassifies the already-posted non-stock value out of the inventory account (name the lane, never instruct or argue the entry). Until both are done, the G/L inventory balance is overstated against the item ledger by exactly the non-stock total, on every order carrying such a line.',
     '- An A/P VOUCHER (batch type V) posted to an inventory account is a variance that requires a correction, and its cause is a DMAAI error: DMAAI 4330 is sending voucher variances to the inventory account instead of the A/P variance account. Screen for batch type V on an inventory account; if present, the fix is at the SOURCE — correct DMAAI 4330 so voucher variances land on the variance account, and restrict posting-time GL-account overrides on the voucher-match version so the account cannot be keyed over again.',
-    '- TRANSFER INTEGRITY (IT) is a one-sided item-ledger relief: an inventory transfer relieved value on the cardex and the GL holds no entry for that document, because a leg priced the quantity and never extended it. THE SHAPE IS NARROW, NOT GENERAL: a zero extended cost on a transfer leg is COMMON and harmless, and zero-extended legs occur on the relief and receipt sides in equal numbers, so "the receiving leg" is NOT the discriminator. Only the small fraction of zero-extended legs that ALSO carry a unit cost produces this card. DO NOT call it a named JDE or vendor defect — no article has been cited for it. DO NOT state a cost level or costing method as a property of the pattern: it is cost-level 3 in one verified company and a MIX of cost levels 2 and 3 in another, where two thirds of the documents do not match the unit-cost-without-extension shape at all. IT IS EPISODIC, NOT A STANDING SETUP FAULT: verified across 16 loaded periods in two companies, failures cluster into bursts with long clean stretches between them, and the most recent periods ran clean at normal transfer volume. Per transfer it is rare (worst verified month about 1.7% of that month\'s transfers, whole-window about 0.2%) while the dollars concentrate heavily. So never say "it will not clear on its own" — count the failures per period first, and treat a burst that starts and stops as a cost change or a specific set of items rather than a permanent setup error. Confirm both sides for the document, compare the cost setup of the failing items against items that transferred cleanly in the same period, and note that restoring the lost value is a dollars-only inventory adjustment the ACCOUNTANT books. R41543 / R41544 are NOT the remedy and must NEVER be prescribed for this pattern (owner 2026-08-03, the same ruling that pulled them off Completion Not Journaled). No report is needed to find the rest of the population either: the Transfer Integrity card already holds every one-sided relief.',
+    '- TRANSFER INTEGRITY (IT) is a PRICING fault on a transfer whose two item-ledger legs are BOTH present: the RECEIPT leg carried a unit cost it never extended, so the item-ledger amount never calculated and a value-neutral location move destroyed inventory value. LEDGERAMOUNT = 0 DOES NOT MEAN THE GL IS MISSING, and writing that is a factual error: F0911 holds BOTH legs of these documents on the SAME account, posted, and they net to zero, which is exactly what a value-neutral move should do. Never describe this population as relieving value with no GL entry. THE FAILING LEG IS THE RECEIPT LEG on every document that causes the card. An earlier note here said "the receiving leg is NOT the discriminator" on the strength of an even relief/receipt split; that measured every zero-extended leg in the company, which is a different and mostly harmless population, so the even split does not describe this card. THE SHAPE IS NARROW, NOT GENERAL: a zero extended cost on a transfer leg is COMMON and harmless, and only the small fraction that ALSO carries a unit cost produces this card. DOCUMENTS MISSING A LEG ARE A DIFFERENT CARD (Transfer Leg Missing) and are claimed before this one, so everything here has both legs. DO NOT call it a named JDE or vendor defect — no article has been cited for it. DO NOT state a cost level or costing method as a property of the pattern: cost level 3 throughout in one verified company and a MIX of levels 2 and 3 in the other. IT IS EPISODIC, NOT A STANDING SETUP FAULT: failures cluster into bursts with clean stretches between them and the most recent verified periods ran clean at normal transfer volume, so never say "it will not clear on its own" — count the failures per period first, and treat a burst that starts and stops as a cost change or a specific set of items rather than a permanent setup error. NEVER STATE A RATE, A DOLLAR TOTAL OR A DOCUMENT COUNT YOU HAVE NOT BEEN GIVEN FOR THIS INSTALL; the specimen figures are one dataset, they live in the analysis guide labelled by company, and repeating them here would assert a number that is false on any other customer. Confirm the signature per document (receipt leg, unit cost, zero extended cost), compare the cost setup of the failing items against items that transferred cleanly in the same period, and note that restoring the lost value is a dollars-only inventory adjustment the ACCOUNTANT books. R41543 / R41544 are NOT the remedy and must NEVER be prescribed for this pattern (owner 2026-08-03, the same ruling that pulled them off Completion Not Journaled). No report is needed to find the rest of the population either: the Transfer Integrity card already holds every priced-at-zero transfer receipt.',
+    '- TRANSFER LEG MISSING (IT) is a SEPARATE card and a different fault from Transfer Integrity. JDE writes a transfer as a line-ID PAIR, .000 relief and .500 receipt. These documents hold exactly ONE F4111 row, so the counterpart never reached the item ledger and QUANTITY as well as value moved one way, leaving the receiving location short units, not just dollars. THE GL IS NOT THE PROBLEM: F0911 carries BOTH legs on the same account, posted, netting to zero, so the transfer completed and the item-ledger write is what went missing after it. THE CAUSE IS OPEN AND MUST STAY OPEN IN THE FINDING — say plainly that it is not determined. Two candidates and the RapidReconciler database cannot choose between them: JDE never wrote the row, or the load dropped it (F4111 is keyed on ILUKID alone, so a colliding key is lost on insert with no error raised). NEVER assert one of them. THE DECISIVE TEST is a query against SOURCE JDE F4111 for the document numbers on the card, looking for the missing line ID: both line IDs present in JDE and only one in RR means a load fault, hand over the document numbers; only one line ID in JDE as well means a one-sided item-ledger write, which goes to Oracle through the CUSTOMER\'S OWN IT DEPARTMENT with the F0911 legs attached as evidence that the transfer posted. Direction is not a screen — either leg can be the one missing. Have the analyst read item, location, lot and G/L date across the documents before escalating, because a cluster on one combination and one day frames the escalation differently from failures scattered across the file. Restoring the balance is a quantity-and-value inventory adjustment the ACCOUNTANT books. NEVER STATE A COUNT OR A DOLLAR TOTAL YOU HAVE NOT BEEN GIVEN FOR THIS INSTALL.',
     '- MAKE TO ORDER is a business grouping (a work order linked to its customer sales order), not a variance type. Its residual is ordinary manufacturing cardex-vs-GL and is NOT a DMAAI mapping issue (the routings match the 4152 model) and NOT a missing sales offset (the SOs shipped, status 999). Split it by shape: GL-only rows (cardex 0, ledger ≠ 0) are standard-cost variances — EXPECTED, no action; both-sides-differ rows have NO CONFIRMED CAUSE — the cost-basis explanation (completion valued at standard on the cardex vs actual in the GL) was TESTED on a verified population and does NOT fit: a standard-versus-actual gap should be a modest share of the transaction and fall either side of it, but most of the value sits on rows where the gap exceeds HALF the item-ledger amount, and the GL side is the larger one in about two thirds of the rows and the large majority of the value. Do NOT assert the cost-basis cause. The value also concentrates on very few accounts, so direct the analyst to work them by account, largest account first, with cost accounting (5.16). Where a standard cost genuinely did move after a completion posted, WIP revaluation is the mechanism that carries it to the GL, but NEVER state a report number for it — have the analyst confirm the program and version in their own JDE. Cardex-only rows (ledger 0, cardex ≠ 0) are the COMPLETION-GAP shape and belong to the Completion Not Journaled investigation, not to cost work — same physics as that card, grouped here only because usp6_008 stamped this subtype first (5.19). Never work all three shapes as one variance.',
-    '- MANUFACTURING GL-CLASS SOURCE: work-order material issues and completions (R31802A) take their GL class from the item BRANCH record (F4102); every OTHER F4111 transaction (adjustments, transfers, PO receipts) uses the item LOCATION record (F41021). RR assigns accounts off F41021, so when the F4102 and F41021 GL classes DIFFER, a manufacturing move (IM / IC / IH) posts to a different account than other movements of the same item — a structural account mismatch that recurs on every work order; fix at the source (align the F4102 / F41021 GL class). A blank F41021 GL class is not special — it resolves through the DMAAI like any class: a specific entry, or the `****` wildcard/default row that covers any class not explicitly set up (blank included). It posts normally when that coverage exists, and only fails to resolve when the DMAAI has neither a specific entry nor a `****` default — the same condition as any GL class.',
+    '- GL-CLASS SOURCE FOR JOURNAL ENTRY CREATION: the item LOCATION record (F41021), not the item BRANCH record (F4102), which is the assumption people usually arrive with. RR assigns accounts off F41021 as well, so the two agree by construction and an F4102 / F41021 divergence does NOT explain a manufacturing account mismatch. Never tell the analyst that R31802A reads the GL class from F4102. The divergence is still worth reporting for a different reason: JDE lets the two tables hold different values without a warning, RR Integrity Report 5 lists the mismatches, and an undetected difference produces unexpected results in a cost rollup. GL class also lives on the item master (F4101), and the LOCATION value is what governs when they disagree, which is why a location-level blank against a populated master reads as a whole-balance cardex variance rather than a delta. A blank F41021 GL class is not special — it resolves through the DMAAI like any class: a specific entry, or the `****` wildcard/default row that covers any class not explicitly set up (blank included). It posts normally when that coverage exists, and only fails to resolve when the DMAAI has neither a specific entry nor a `****` default — the same condition as any GL class.',
     '- MANUFACTURING ACCOUNTING SEQUENCE (authoritative): material issues (IM) and completions (IC) are written to F4111 with NO batch number and NO G/L date. R31802A stamps the batch and G/L date onto those existing F4111 rows and creates the F0911 journal entries in the same step. So a batch and G/L date ABSENT is the literal un-processed state. But a batch number PRESENT means only that R31802A processed the row — it is NOT a guarantee the journal entry was written: R31802A is OBSERVED stamping the cardex batch and writing NO completion entry for a subset of each run. Never infer "the entry therefore exists" from a batch number. R31804 (not R31802A) creates the IV variance entries, and R09801 only updates F0902 — unposted journal entries still exist in F0911.',
     '- COMPLETION NOT JOURNALED is a GENUINE POSTING GAP, not a matching artifact. A completion sits on the cardex with a batch stamped and the GL holds no completion entry for that work order, while the material issues for the SAME order did post. Confirmed by widening the search past the company and the document type and still finding no completion. The finished-goods cost never reached the general ledger: WIP overstated, finished goods understated.',
     '- A HEALTHY BATCH AND A HEALTHY ACCOUNT DO NOT CLEAR IT. The same run\'s other work orders journal their completions normally, on the same account, so "the batch posted fine" and "that account carries completions constantly" are not answers. Confirm PER WORK ORDER, never per batch. These must not LEAD the read either, though they stay the secondary list to rule out because each is real at other sites: summarization dropping the work-order reference, a different document company, an unposted batch, a document type outside completions and issues, and a missed GL data load. Never a work order awaiting the run, held in error, or a run that failed before stamping a batch — those carry no batch and cannot reach this card.',
@@ -1098,28 +1099,28 @@ window.RRV8 = window.RRV8 || {};
     //      claims first and every claim guards on an unclaimed SubType.
     'ACCT': {
       title: 'Account Mismatch', kind: 'rebalance', tier: 'single', disposition: 'rebalance',
-      cause: 'The GL posted these documents to a different account than the DMAAI routes to. The item ledger used the right one. Correct the DMAAI for this combination, turn off account entry and override on the version in use, and on sales documents check R42800 PO 5, Business Unit Source.',
-      desc: 'Cardex and GL both posted, but the GL side landed on a different account than JDE\'s DMAAI table routes to for this (Order Type, Doc Type, GL Class). Usual causes: the DMAAI itself is wrong for that combination, the item\'s GL class changed after the document posted, or the program version lets the operator key a GL account at entry — the AAI account goes to F4111 while the keyed account goes to F0911.',
-      action: 'Correct the DMAAI for this combination. On inventory documents, turn off Allow Entry of GL Account (PO 1) and Allow Override of GL Account (PO 2) on the version in use: either one left on lets the account be keyed over the AAI every time. On sales documents, check R42800 PO 5, Business Unit Source. Re-run the company and period, and corrected documents drop off.',
+      cause: 'The item ledger and the GL put this document on two different accounts, and the two offset, so the document itself balances. Compare the GL class behind each account, correct the class on the affected items, and turn off account entry and override on the version in use.',
+      desc: 'Both sides of the document posted, and the variance nets to zero across the accounts it touched, so the value is sitting on the wrong account rather than missing. One account carries the item-ledger amount, another carries the GL amount, and the row names the offset. Usual causes: the two accounts belong to different GL classes under the same AAI, so a class that changed after the document posted sends one side elsewhere, or the two legs read their class from different places (on a material issue the credit takes each component\'s GL class while the debit takes the parent\'s). The other case is a program version that lets the operator key a GL account at entry, so the AAI account reaches F4111 while the keyed account reaches F0911.',
+      action: 'Read the offset account named on the row against the account on the item-ledger side, and work out which AAI and GL class each one resolves from. Where they differ only by GL class, correct the class on the affected items so both legs resolve together. On inventory documents, turn off Allow Entry of GL Account and Allow Override of GL Account on the version in use: either one left on lets the account be keyed over the AAI every time. On sales documents the Business Unit Source option on R42800 decides the business unit segment, so check it there. Re-run the company and period, and corrected documents drop off.',
       finding: {
         dmaai: true,
-        flag: 'DMAAI account mismatch',
-        mech: 'The GL posted these documents to a different account than the DMAAI directs.',
+        flag: 'Split across two accounts',
+        mech: 'The document is in balance, but its value sits on two accounts: the item ledger on one, the GL on the other.',
         checked: [
-          'Cardex and GL both posted. Missing entry ruled out.',
-          'Period matches on both sides. Cut-off ruled out.',
-          'Posted account against the account the DMAAI directs for this order type, doc type and GL class: they differ. Confirmed.'
+          'Both sides of the document posted. Missing entry ruled out.',
+          'The offsetting rows sit in the same period. Cut-off ruled out.',
+          'The variance nets to zero across the accounts this document touched, within tolerance. Confirmed, and the offset account is named on the row.'
         ],
         found: [
-          'The GL side landed on the wrong account. The item ledger used the account the DMAAI specifies.',
-          'Likely cause, not yet confirmed: the DMAAI is set wrong for this combination, or the item’s GL class changed after these documents posted.',
-          'Second possibility: the entry program allows an account to be keyed at entry, overriding the DMAAI.'
+          'The document itself balances. What is wrong is which account holds each side.',
+          'Likely cause, not yet confirmed: the two accounts belong to different GL classes under the same AAI, and the class that applied when the entry was written is not the one the item resolves through now.',
+          'Second possibility: the account was keyed at entry and the AAI never got to route it.'
         ],
         fix: [
-          'Correct the DMAAI for this combination.',
-          'On inventory documents, turn off Allow Entry of GL Account (PO 1) and Allow Override of GL Account (PO 2) in the version in use.',
-          'On sales documents, check R42800 PO 5, Business Unit Source. It drives most systematic sales account mismatches.',
-          'Re-run this company and period. Corrected documents resolve to the right account and drop off.'
+          'Read the offset account named on the row against the account on the item-ledger side, and compare the AAI and GL class each resolves from.',
+          'Where they differ only by GL class, correct the class on the affected items so both legs resolve to one account.',
+          'On inventory documents, turn off Allow Entry of GL Account and Allow Override of GL Account in the version in use.',
+          'Re-run this company and period. Documents whose legs now resolve together drop off.'
         ]
       }
     },
@@ -1127,7 +1128,7 @@ window.RRV8 = window.RRV8 || {};
       title: 'Period Mismatch', kind: 'self', tier: 'single', disposition: 'self',
       cause: 'The item ledger and the GL recorded these documents in different months. Set GL Date Source to follow the transaction date, and schedule the batch runs to finish before the period closes.',
       desc: 'The cardex movement and its GL counterpart landed in different months — the document is reported in one period and posted in another. Usual causes: a GL Date Source processing option pointed at the invoice or promised date rather than the item-ledger date, or a batch program (Sales Update, Manufacturing Accounting, the cycle-count update) that ran after the period closed.',
-      action: 'Set the GL Date Source option so the GL date follows the item-ledger date — P4312 PO 2 on PO receipts, P4314 PO 2 on voucher match, R42800 PO 1 (Defaults tab) on Sales Update, the GL Date option in R41413 / R41610 on cycle counts. Schedule those runs to complete before the period closes so the two dates cannot straddle a period end. Re-run both periods afterwards: the document should net to zero across the two, and a gap that survives the next close is not a cut-off.',
+      action: 'Set the GL Date Source option so the GL date follows the item-ledger date. It is named that on P4312 for PO receipts and P4314 for voucher match, it sits on the Defaults tab of R42800 for Sales Update, and cycle counts carry it as the GL Date option in R41413 / R41610. Schedule those runs to complete before the period closes so the two dates cannot straddle a period end. Re-run both periods afterwards: the document should net to zero across the two, and a gap that survives the next close is not a cut-off.',
       finding: {
         flag: 'Period cut-off',
         mech: 'The item ledger and the GL recorded these documents in different months.',
@@ -1141,7 +1142,7 @@ window.RRV8 = window.RRV8 || {};
           'Second possibility: a batch program ran after the period closed.'
         ],
         fix: [
-          'Set GL Date Source to follow the transaction date. PO receipts P4312 PO 2. Voucher match P4314 PO 2. Sales Update R42800 PO 1, Defaults tab. Cycle counts R41413 and R41610.',
+          'Set GL Date Source to follow the transaction date: P4312 on PO receipts, P4314 on voucher match, the Defaults tab of R42800 on Sales Update, the GL Date option in R41413 and R41610 on cycle counts.',
           'Schedule those runs to finish before the period closes.',
           'Re-run both periods. The document should net to zero across the two.',
           'A gap still there after the next close is a posting error, not a cut-off.'
@@ -1212,23 +1213,63 @@ window.RRV8 = window.RRV8 || {};
         ]
       }
     },
+    // Split out of Transfer Integrity 2026-08-10 (AN-2). The old card's population
+    // divided absolutely on item-ledger leg count: the documents it could not explain
+    // all held exactly ONE F4111 row, the ones it could explain all held two or more.
+    // Different fault, different fix, and on the specimen company the missing-leg half
+    // carried 87% of the dollars while the card's advice (compare the cost setup of
+    // failing items against clean ones) had nothing at the end of it for an absent row.
+    // usp8_txv_flags section C1 claims it on the structural test and runs ahead of C2.
+    // THE CAUSE IS OPEN AND STAYS OPEN IN THE COPY. Whether JDE never wrote the row or
+    // the load dropped it cannot be settled from the RR database; F4111's primary key is
+    // ILUKID alone, so a collision is lost silently on insert. The decisive query is
+    // against SOURCE F4111, and the card hands the analyst that query rather than a verdict.
+    'TLM': {
+      title: 'Transfer Leg Missing', kind: 'review', tier: 'single', disposition: 'triage',
+      cause: 'A location transfer wrote one item-ledger leg. JDE writes a transfer as a pair, a relief and a receipt, and the counterpart of the row on file was never written, so the item ledger carries a one-way move of quantity and value both. The GL holds both legs on the same account and they net to zero, so the transfer itself completed. What happened to the missing row is the open question, and one query against the source F4111 settles it.',
+      desc: 'An inventory-transfer (IT) document with a single F4111 row. JDE writes a transfer as a line-ID pair, .000 for the relief and .500 for the receipt, so one row on file means its counterpart never reached the item ledger. Quantity and value both moved one way, which leaves the receiving location short units as well as dollars and separates this from the priced-at-zero shape on Transfer Integrity. The GL is not the problem: F0911 holds both legs of these documents on the same account, posted, netting to zero, which is what a value-neutral location move should do. Either JDE never wrote the row, or it was lost on the way into RapidReconciler. F4111 is keyed on ILUKID alone, so a colliding key is dropped on load without an error. Nothing in this database separates the two.',
+      action: 'Query the source JDE F4111 for the document numbers on this card and look for the missing line ID. That one lookup is what names the cause. Rows present in JDE and absent here point at the load, and the document numbers are what support needs to chase it. Rows absent in JDE as well make it a one-sided item-ledger write by the transfer program, which goes to Oracle through IT with the F0911 legs attached as evidence: both legs posted, one cardex row written. Read item, location, lot and date across the documents before you go, because a cluster on one combination and one day is a different conversation from failures scattered across the file. Restoring the inventory balance is a quantity-and-value adjustment the accountant books.',
+      finding: {
+        flag: 'Transfer leg missing from the item ledger',
+        mech: 'A location transfer wrote one item-ledger leg. Its counterpart was never written, so quantity and value moved one way.',
+        checked: [
+          'Item-ledger rows for the document: one. JDE writes a transfer as a line-ID pair, .000 relief and .500 receipt, so the counterpart is absent.',
+          'GL for the document: present. Both legs posted to the same account and net to zero, which is correct for a value-neutral location move. LedgerAmount = 0 is that net, not a missing entry.',
+          'Extended cost on the row that is present: calculated. The priced-but-never-extended fault behind Transfer Integrity is ruled out here.',
+          'Which leg goes missing: not fixed. Either direction occurs, so leg direction is not a screen.'
+        ],
+        found: [
+          'One leg of the pair never reached the item ledger, so the receiving location is short units as well as value.',
+          'The GL carries the leg the item ledger does not have. The transfer completed; the item-ledger write is what went missing.',
+          'Two candidates, and this database cannot choose between them: JDE never wrote the row, or the load dropped it. F4111 is keyed on ILUKID alone, so a colliding key goes silently.'
+        ],
+        fix: [
+          'Query the source JDE F4111 for these document numbers and look for the missing line ID. That answers which of the two it is; nothing in RapidReconciler does.',
+          'Present in JDE and absent here means a load fault. Hand over the document numbers.',
+          'Absent in JDE as well means a one-sided item-ledger write by the transfer program. Take it to Oracle through IT with the F0911 legs as evidence.',
+          'Read item, location, lot and date across the documents first. A cluster on one combination and one day points somewhere different from failures spread across the file.',
+          'Restoring the inventory balance is a quantity-and-value adjustment the accountant books.'
+        ]
+      }
+    },
     'TXI': {
       title: 'Transfer Integrity', kind: 'review', tier: 'single', disposition: 'triage',
-      cause: 'Location transfers relieved inventory value the GL never recorded: a leg carried a unit cost but never extended it, so a move that should be value-neutral destroyed inventory value. A zero extended cost on a transfer leg is common and harmless on its own; it is the unit-cost-without-extension combination that lands a document here. It arrives in bursts rather than every period, so read the periods either side before calling the setup still wrong.',
-      desc: 'An inventory-transfer (IT) document relieved value on the cardex (F4111) that the GL never recorded — a leg carried a unit cost but a zero extended cost, so a move that should be value-neutral destroyed inventory value. The shape is narrow: a zero extended cost on a transfer leg is common and harmless, and zero-extended legs appear on the relief and receipt sides in equal numbers, so it is the unit-cost-without-extension combination that lands a document here. No vendor article has been cited for it, so do not name it as a known defect.',
-      action: 'Confirm each document on both sides first: the item-ledger legs against the GL for the same document. Then compare the cost setup of the failing items against items that transferred cleanly in the same period — that difference is the lead. Count the failures per period before treating the setup as still wrong: this arrives in bursts with clean stretches between them, so a recent clean period at normal transfer volume points at a cost change or a specific set of items rather than a permanent setup fault. This card already holds every one-sided relief, so it is the population. Restoring the lost value is a dollars-only adjustment the accountant books.',
+      cause: 'Location transfers destroyed inventory value the GL never carried: the receipt leg took a unit cost and never extended it, so a move that should be value-neutral came off the item ledger one-way. The GL on these is fine. Both of its legs posted to the same account and net to zero, which is what the move should do. A zero extended cost on a transfer leg is common and harmless on its own; it is the unit cost without an extension that lands a document here. It arrives in bursts rather than every period, so read the periods either side before calling the setup still wrong.',
+      desc: 'An inventory-transfer (IT) document whose receipt leg carried a unit cost with a zero extended cost, so the item-ledger amount never calculated and a value-neutral move destroyed inventory value. LedgerAmount reads zero because the GL legs net to zero, not because the GL is missing: F0911 holds both of them on the same account, posted. The shape is narrow. A zero extended cost by itself is ordinary on transfer legs and harmless, so what matters is the unit cost sitting on a leg that never extended, and on the documents that cause this card that leg is the receipt every time. Both item-ledger legs are present here, because documents holding only one are claimed by Transfer Leg Missing before this card runs. No vendor article has been cited for it, so do not name it as a known defect.',
+      action: 'Confirm the signature per document first: pull the F4111 legs and check that the receipt leg carries a unit cost with a zero extended cost. Then compare the cost setup of the failing items against items that transferred cleanly in the same period, which is the lead. Count the failures per period before treating the setup as still wrong: this arrives in bursts with clean stretches between them, so a recent clean period at normal transfer volume points at a cost change or a specific set of items rather than a permanent setup fault. This card already holds every priced-at-zero transfer receipt, so it is the population. Restoring the lost value is a dollars-only adjustment the accountant books.',
       finding: {
         flag: 'Item-ledger integrity',
-        mech: 'Location transfers relieved inventory value that the GL never recorded.',
+        mech: 'Location transfers destroyed inventory value because the receipt leg was priced and never extended.',
         checked: [
-          'A location move should be value-neutral and post no GL. These relieved value with no GL entry. Confirmed.',
-          'Both legs of each document are present in the item ledger. A missing leg is ruled out.',
-          'Extended cost on the legs: a leg carries a unit cost and no extended value, so the value never calculated. Confirmed on the documents on this card.',
+          'GL for these documents: present. Both legs posted to the same account and net to zero, which is correct for a value-neutral location move. LedgerAmount = 0 is that net, not a missing entry.',
+          'Both legs of each document are present in the item ledger. Documents holding only one leg are claimed by Transfer Leg Missing before this card runs, so a missing leg is ruled out here.',
+          'Extended cost on the legs: the receipt leg carries a unit cost and no extended value, so the value never calculated. Confirmed on the documents on this card.',
+          'Which leg fails: the receipt leg, on every document that causes this card. Zero-extended legs across the file at large split evenly between the two directions, but those are the harmless ones and they are not this population.',
           'DMAAI routings on these documents resolve correctly. Mapping ruled out.'
         ],
         found: [
-          'A leg priced the quantity and never extended it, so the move destroyed inventory value the GL never saw.',
-          'Cause not confirmed, and the shape is narrow rather than general: a zero extended cost on a transfer leg is common and harmless, and only a small fraction of those legs also carry a unit cost. That combination is what lands a document here.',
+          'The receipt leg priced the quantity and never extended it, so the move destroyed inventory value the GL never carried.',
+          'Cause not confirmed, and the shape is narrow rather than general: a zero extended cost on a transfer leg is common and harmless, and only a small fraction of those legs also carry a unit cost. That combination on the receipt leg is what lands a document here.',
           // recurrenceIdx points here — replaced at render with the count from the
           // loaded rows (UI-59). This general form must state no figure, because
           // the burst pattern verified on two companies is not a universal rate.
@@ -1237,8 +1278,8 @@ window.RRV8 = window.RRV8 || {};
         recurrenceIdx: 2,
         fix: [
           'Compare the cost setup of the items on this card against items that transferred cleanly in the same period. That difference is the lead.',
-          'Confirm each document on both sides: the item-ledger legs against the GL for the same document.',
-          'This card already holds every one-sided relief. It is the population; there is nothing else to run to find them.',
+          'Confirm the signature per document: the receipt leg carries a unit cost with a zero extended cost.',
+          'This card already holds every priced-at-zero transfer receipt. It is the population; there is nothing else to run to find them.',
           'Check the periods either side and count the failures per period. A burst that starts and stops points at a cost change or a specific set of items rather than a permanent setup fault.',
           'Restoring the lost value is a dollars-only inventory adjustment, which the accountant books.'
         ]
@@ -1445,36 +1486,28 @@ window.RRV8 = window.RRV8 || {};
         ]
       }
     },
-    // AAI 3110 (raw-material relief) and 3130 (finished-goods receipt) resolving to the
-    // SAME account, so both legs of every work order land there and cancel; 3120 (WIP)
-    // unconfigured, so there is no holding leg to offset against. The analyzer's own
-    // 'nz' net-zero pattern. CONFIGURATION, not transaction: no journal entry fixes it
-    // and every future period reproduces it until the AAIs are split.
-    'NZR': {
-      title: 'DMAAI Net Zero', kind: 'review', tier: 'single', disposition: 'rebalance',
-      cause: 'Raw-material relief and finished-goods receipt resolve to the same account, so both legs of every work order cancel there and the movement never happens in the GL. Work in process is unconfigured, so there is no offsetting leg. Split the account instructions into three distinct accounts, judged by their instruction rather than their description. This reproduces every period until the setup changes; no journal entry ends it.',
-      desc: 'DMAAI 3110 (raw-material relief) and 3130 (finished-goods receipt) resolve to ONE account for these order types and GL classes, so both legs of every work order land there and cancel. 3120 (work in process) is not configured, so there is no holding leg to offset against. The transactions themselves are ordinary — nothing is wrong with the documents. It is silent by construction: the postings cancel, so nothing shows on the P&L and only the balance sheet is wrong. Configuration, not transaction.',
-      action: 'Split the account instructions into three distinct accounts: 3110 to raw material, 3130 to finished goods, 3120 to work in process. Judge the accounts by their instruction, not by their name — an account described as work in process may be the declared inventory account for thousands of items. The accountant restates the affected balances once the routing is correct. This reproduces every period until the setup changes, and no journal entry ends it.',
-      finding: {
-        flag: 'Account setup, not a transaction',
-        mech: 'Raw-material relief and finished-goods receipt resolve to the same account, so both legs land there and cancel.',
-        checked: [
-          'DMAAI 3110 and 3130 resolve to one account for these order types and GL classes. Confirmed against the account instructions, not the account description.',
-          'DMAAI 3120 is not configured, so there is no work-in-process leg to offset against.',
-          'The transactions themselves are ordinary. Nothing is wrong with the documents on this card.'
-        ],
-        found: [
-          'Both sides of every work order post to a single account and net there, so the movement between raw material and finished goods never happens in the GL.',
-          'It is silent by construction: the postings cancel, so nothing shows on the P&L and only the balance sheet is wrong.',
-          'This reproduces every period until the setup changes. No journal entry ends it.'
-        ],
-        fix: [
-          'Split the account instructions: 3110 to raw material, 3130 to finished goods, 3120 to work in process. Three distinct accounts.',
-          'Judge the accounts by their instruction, not by their name. An account described as work in process may be the declared inventory account for thousands of items.',
-          'The accountant restates the affected balances once the routing is correct.'
-        ]
-      }
-    },
+    // 'NZR' (DMAAI Net Zero) WITHDRAWN 2026-08-10. It claimed rows where AAI 3110 and AAI
+    // 3130 resolve to one account. THAT IS NOT A PAIR. Net zero means the DEBIT and the
+    // CREDIT AAI of ONE transaction land on one account. Per Oracle's published JDE 9.2
+    // manufacturing AAI documentation an IM books 3110 (CR, Inventory/Raw Materials)
+    // against 3120 (DR, Work in Process), and an IC books 3120 (CR) against 3130 (DR,
+    // Sub-Assembly/Finished Goods) -- so the only valid manufacturing net-zero tests are
+    // 3110 = 3120 and 3120 = 3130. Measured on raw F4095 across all three demos under
+    // every relaxation (full account, object only, symmetric '****' wildcards, ignoring
+    // order type): both return ZERO slices, and the 3120 account set is wholly disjoint
+    // from 3110 and 3130. There was nothing to rebuild, only to remove.
+    //
+    // 98% of what the card claimed was IM -- the one document type whose legs are 3110
+    // and 3120, which therefore cannot exhibit the condition the card described. It then
+    // told the analyst to configure 3120, which was already configured.
+    //
+    // Owner ruling 2026-08-10: a shared inventory account is ASSUMED INTENDED, especially
+    // where the customer runs a single inventory account. Do not re-add a card that reads
+    // two matching accounts as a defect without first establishing that the two AAIs are a
+    // debit/credit pair on ONE document.
+    //
+    // Removed from usp8_txv_flags block I and from the usp8_txv_classify whitelist in the
+    // same change. Rows fall back to unclassified Mfg; tracked for analysis as AN-13.
     'NCL': {
       title: 'Non-Stock Charge Lines', kind: 'rebalance', tier: 'single', disposition: 'triage',
       cause: 'Every line on the order is non-stock, so the GL posts and inventory never moves. GL-only is correct processing here, not a gap. Confirm the line types on one order; if these should not reach an inventory account at all, the lever is the GL class on the line, not the non-stock account instruction.',
@@ -1750,6 +1783,7 @@ window.RRV8 = window.RRV8 || {};
     'periods':                  'PER',
     'vouchers':                 'VCHR',
     'duplicate sales':          'DUP',
+    'transfer leg missing':     'TLM',
     'transfer integrity':       'TXI',
     'completion not journaled': 'CNJ',
     'offsetting entries':       'OFF',
@@ -1759,8 +1793,7 @@ window.RRV8 = window.RRV8 || {};
     'non-stock charge lines':   'NCL',
     'sales not journaled':      'SNJ',
     'cross-batch completion':   'XBC',
-    'mfg cost mismatch':        'MCM',
-    'dmaai net zero':           'NZR'
+    'mfg cost mismatch':        'MCM'
   };
   // No subtype -> terminal card by transaction Type. Anything else (including
   // 'Inventory' and an unrecognized type) falls to T-INV.
