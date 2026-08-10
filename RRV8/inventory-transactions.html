@@ -798,8 +798,21 @@
   .tx-analyzer-head:hover .tx-analyzer-title { color: var(--blue); }
   .tx-analyzer-flag { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; color: var(--text-muted); white-space: nowrap; }
   .tx-analyzer-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--rule-strong, #cfd6e0); flex-shrink: 0; }
-  .tx-analyzer-flag[data-state="agree"] .tx-analyzer-dot { background: var(--green); }
-  .tx-analyzer-flag[data-state="mismatch"] .tx-analyzer-dot { background: var(--orange); }
+  /* UI-74 — the dot answers ONE question: did the analyzer DETECT something in
+     these rows? --orange is reserved for a detection (duplicate cardex relief,
+     non-stock cost on an inventory account, IT extended-cost integrity,
+     completions missing from the GL, a confirmed DMAAI routing mismatch) so it
+     keeps the needs-attention meaning it carries in the Data Health bands, the
+     Integrity Review rows and the Account Roll Forward band. A card that merely
+     CARRIES a named mechanism is a classification, not a detection, so it takes
+     --blue: the panel's own left-border colour, informational and not alarming.
+     Grey stays for an undetermined cause, so the header still separates "known
+     mechanism" from "cause not yet identified" instead of flattening both to
+     nothing. There is deliberately no green state — an all-clear read as
+     "nothing to do here" (owner 2026-07-14), and this panel only ever renders
+     on a page opened BECAUSE there is a variance. */
+  .tx-analyzer-flag[data-state="detected"] .tx-analyzer-dot { background: var(--orange); }
+  .tx-analyzer-flag[data-state="classified"] .tx-analyzer-dot { background: var(--blue); }
   .tx-analyzer-chev { width: 18px; height: 18px; color: var(--text-muted); flex-shrink: 0; transition: transform .18s ease; }
   .tx-analyzer.is-open .tx-analyzer-chev { transform: rotate(180deg); }
   .tx-analyzer-title { font-family: 'Source Sans 3', sans-serif; font-weight: 800; font-size: 20px; color: var(--navy); display: inline-flex; align-items: center; gap: 9px; }
@@ -7156,10 +7169,24 @@
     // IT extended-cost integrity) are definitive from the rows themselves, so
     // they pre-empt the card mechanism — the "check duplicate sales first" rule.
     var mech = card ? txFinding(card) : null;
-    var sel = null, kind, lensLed = false;
-    if (dup) { sel = txFinding('DUP'); kind = 'mismatch'; }
-    else if (nonStock) { sel = txFinding('NON-STOCK'); kind = 'mismatch'; }
-    else if (itDominant) { sel = txFinding('TXI'); kind = 'mismatch'; }
+    // UI-74 — `verdict` is what the ANALYZER DETERMINED, and nothing else. It
+    // used to be called `kind` and carried 'mismatch' for two unrelated things:
+    // "a check found a condition in these rows" and "this card has a named
+    // mechanism". Both painted the alert colour, so DMAAI Net Zero showed an
+    // amber dot beside a body reading "32 inventory DMAAIs checked — no account
+    // mismatch". Four values, and the name of each says which question it
+    // answers:
+    //   'detected'   a check fired on THESE rows. The only alert-worthy state.
+    //   'classified' the card carries a named mechanism; nothing was detected
+    //                here beyond that. Informational.
+    //   'open'       cause not determined (terminal residual / unscoped view).
+    //   'muted'      nothing to report (no rows).
+    // Do NOT reuse 'detected' for a card that merely has a mechanism — that is
+    // the exact conflation this rename exists to prevent.
+    var sel = null, verdict, lensLed = false;
+    if (dup) { sel = txFinding('DUP'); verdict = 'detected'; }
+    else if (nonStock) { sel = txFinding('NON-STOCK'); verdict = 'detected'; }
+    else if (itDominant) { sel = txFinding('TXI'); verdict = 'detected'; }
     else if (_mtoOn) {
       // Make-to-order splits by cardex/GL shape. A cardex-only slice is the
       // completion-not-journaled shape: the GL holds NO completion entry for
@@ -7197,7 +7224,9 @@
              'Separately, work the cost-basis rows largest first with cost accounting.']
           : txFinding('MTO').fix
       };
-      kind = _gap ? 'mismatch' : 'open';
+      // A cardex-only slice IS a detection (those completions have no GL entry,
+      // counted from the rows). Without one, MTO is an undetermined cost shape.
+      verdict = _gap ? 'detected' : 'open';
     }
     else if (misRows.length && (!mech || mech.dmaai)) {
       var _nm = misRows.length, _nm1 = (_nm === 1);
@@ -7212,11 +7241,16 @@
         found: txFinding('DMAAI-MIS').found,
         fix: txFinding('DMAAI-MIS').fix
       };
-      kind = 'mismatch'; lensLed = true;
+      // The routing check itself found mismatched accounts — a real detection.
+      verdict = 'detected'; lensLed = true;
     }
-    else if (mech) { sel = mech; kind = mech.triage ? 'open' : 'mismatch'; }
-    else if (combos.length) { sel = txFinding('UNSCOPED'); kind = 'open'; }
-    else { kind = 'muted'; }
+    // The card's own mechanism. Nothing was DETECTED on this path: we got here
+    // because none of the row-level checks above fired, which on a mapping-lens
+    // card means the routing check came back clean. So this is a classification
+    // and takes 'classified', never 'detected' (UI-74).
+    else if (mech) { sel = mech; verdict = mech.triage ? 'open' : 'classified'; }
+    else if (combos.length) { sel = txFinding('UNSCOPED'); verdict = 'open'; }
+    else { verdict = 'muted'; }
     // UI-59 — a card that makes a recurrence claim gets it COMPUTED from the
     // loaded rows, replacing the general fallback bullet held in the catalog.
     // Hardcoding one dataset's counts here shipped a number that is false on
@@ -7251,7 +7285,10 @@
     // Subtle at-rest status in the header so the analyst can decide to expand
     // without the loud colored band. It names the MECHANISM that fired — never a
     // green "Routings match" all-clear, which read as "nothing to do here".
-    var flagState = kind === 'mismatch' ? 'mismatch' : 'muted';
+    // The dot carries the VERDICT; the mechanism name stays in the label text
+    // beside it, where it already lived. 'open' and 'muted' both read grey —
+    // an undetermined cause has no colour to claim (UI-74).
+    var flagState = (verdict === 'detected' || verdict === 'classified') ? verdict : 'muted';
     _txAnalyzerFlag(flagState, (sel && sel.flag) || (combos.length ? 'Review' : 'No rows'));
     body.innerHTML = html;   // populated but stays collapsed — the analyst opens it (owner 2026-07-14)
     _txAnalyzeStatus('', '');
@@ -7289,7 +7326,7 @@
       ].join('\n'));
     }
     var cardTitle = card ? (_TXV_CARD_TITLE[card] || card) : '';
-    if (kind !== 'muted' && sel) {
+    if (verdict !== 'muted' && sel) {
       var _arr = function (v) { return (v == null || v === '') ? [] : (Array.isArray(v) ? v : [v]); };
       _txAutoDraftFinding(_txFindingText({
         title: cardTitle || 'Findings',
