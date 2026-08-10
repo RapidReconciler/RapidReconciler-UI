@@ -982,6 +982,71 @@ window.RRV8.GLOSSARY = [
  * the ask, ahead of the role line. Both were learned by the glossary above: a
  * definition placed mid-prompt lost to the server's prepended DMAAI reference twice.
  */
+/* =====================================================================================
+ * RRV8.TXN_COLUMNS — the COLUMN DICTIONARY for the Transaction Details grid and the
+ * Variance Analyzer's routing table, keyed on the column key the grid already uses.
+ *
+ * WHY IT EXISTS (UI-91). The element-by-element walk counted 41 `<th>` on this page and
+ * NOT ONE carried a definition: bare codes an analyst cannot resolve (`Co`, `OT`, `DT`,
+ * `Cost`, `GL`, `Sub`), words that read as English but are product terms (`Offset`,
+ * `Type`, `Worked`), and jargon with no gloss anywhere (`Model Table`, `Inv DMAAI`).
+ * This is the third grid to have the problem after the cardex grid (UI-73) and the
+ * As-Of grid (UI-79), and it is the one the drill-down actually lands on.
+ *
+ * Same contract as CARDEX_COLUMNS: the header renders FROM this dictionary, so a rename
+ * cannot orphan its definition. Two rules the definitions follow, both earned:
+ *   * A ZERO IS NOT AN ABSENCE. `Ledger` says so out loud, because "LedgerAmount = 0
+ *     means the correlation found nothing" has now caused wrong findings twice.
+ *   * NAME THE MATCH KEY. It differs per transaction type, so `Doc #` and `Order #` say
+ *     which one the GL actually correlates on.
+ * ===================================================================================== */
+window.RRV8.TXN_COLUMNS = {
+  // ---- the analyst's own per-row review -----------------------------------
+  Worked:        'Your review of this row: whether you agree it is explained. Stored per row, so it survives a re-run.',
+  Note:          'Your note on this row. Row-level, separate from the finding filed for the whole card.',
+  // ---- identity ----------------------------------------------------------
+  CompanyNumber: 'The REPORTING company, which is not always the document company. An intercompany leg reports under one and carries another.',
+  LongAccount:   'The full business unit, object and subsidiary the inventory side posted to.',
+  OffsetAccount: 'The other account carrying value for the same document, when the variance offsets across two accounts rather than going missing.',
+  Type:          'Transaction family, derived from BATCH TYPE first and document type only as a fallback: Sales, Purchasing, Mfg or Inventory.',
+  SubType:       'The card claiming this row. Empty means no claim matched and it sits on an Unclassified card.',
+  OT:            'Order type. SO/SA sales, OP/OT purchasing, WO/W1/WR work orders, ST/OT transfers, SI/SK/OK intercompany.',
+  DT:            'Document type on the transaction: IC completion, IM material issue, IT transfer, II inventory issue, RM credit, JS sales.',
+  DocNumber:     'The document number. Manufacturing accounting assigns the GL its OWN document number, so on Mfg rows this is the item-ledger one and the GL is matched by work order instead.',
+  OrderNumber:   'The order this belongs to. On manufacturing it is the WORK ORDER, which is the GL subledger the two sides correlate on.',
+  // ---- the two sides and their difference ---------------------------------
+  CardexAmount:  'The item-ledger (F4111) amount, at the grain this row is aggregated to.',
+  LedgerAmount:  'The GL (F0911) amount the correlation found. ZERO MEANS IT FOUND NOTHING under the key it used — it does NOT mean the GL is empty. Check the key before calling an entry absent.',
+  Variance:      'Ledger minus cardex. That direction is deliberate and matches Home, so a positive figure means the GL carries more than the item ledger.',
+  Currency:      'Transaction currency. Companies on different currencies never net against each other.',
+  Comment:       'What the classifier stamped when it claimed this row, or the offsetting account/period it named.',
+  // ---- the batch, and what a batch does NOT prove -------------------------
+  BatchType:     'Stamped by the PROGRAM that wrote the batch, which is why it discriminates better than document type: 0 manufacturing accounting, N inventory, V A/P voucher, O purchasing, G general.',
+  Batch:         'The JDE batch number, and a research handle for finding the document in F0911. A batch means the program processed the row; it is NOT proof the journal was written.',
+  // ---- dates -------------------------------------------------------------
+  PeriodEnds:    'The fiscal period this row is reported in. A document can post in one period and report in another, which is what the Period Mismatch card claims.',
+  TransDate:     'The transaction date on the item-ledger row.',
+  // ---- the other legs of a linked chain -----------------------------------
+  RelType:       'Order type of the RELATED leg: the purchase order behind a direct ship, the receiving side of a transfer.',
+  RelOrder:      'Order number of that related leg. Both legs have to land before a linked pair can net.',
+  OrigComp:      'Company of the ORIGINATING document in a linked chain.',
+  OrigOrder:     'The originating order: the customer sales order behind a make-to-order work order, or the first order in an intercompany chain.',
+  OrigType:      'Order type of that originating document.',
+  OrigDoc:       'Document number of that originating document.',
+  OrigDocType:   'Document type of that originating document.',
+  GLXref:        'The GL document number the correlation matched, shown because it differs from the item-ledger document on manufacturing and on sales.',
+  GroupCode:     'The key holding a multi-document group together so its legs are judged as a whole instead of fragmenting across cards. Empty on single-document rows.',
+  // ---- the Variance Analyzer's routing table ------------------------------
+  //      Its point is one comparison: where the cardex MODEL says the value should go,
+  //      against where the transaction's inventory DMAAI actually sent it.
+  _Cost:         'JDE cost component: A1 purchased, A2 setup, B1 labor, B2 setup labor, B3 machine, C overhead, D outside operations.',
+  _GL:           'The GL class on the item, which is what the DMAAI resolves through. Blank is a real class that posts on the wildcard, not a missing value.',
+  _ModelTable:   'The DMAAI the CARDEX MODEL resolves through, with the document type it uses: 4152 plus the AAI document type set for the company. This is the expected routing.',
+  _ModelAcct:    'The account that model routing resolves to. Compare it with Inv Acct: agreement rules mapping out, it does not explain the variance.',
+  _InvDmaai:     'The DMAAI that the inventory side of the transaction ACTUALLY posted through, e.g. 3130 finished goods, 3120 WIP, 3110 raw materials.',
+  _InvAcct:      'The account that DMAAI resolved to. Differing from Model Acct is a routing mismatch, and a separate fix from whatever the card claims.'
+};
+
 window.RRV8.CARDEX_COLUMNS = [
   'COLUMN DICTIONARY — the headers on the grid in front of the reader (the Cardex Variance worklist). If the question names one of these headers, ANSWER FROM ITS LINE BELOW AND FROM NOTHING ELSE. Match on the letters alone: case is irrelevant and so are the words around it, so "Tx", "tx", "the tx column", "tx field" and "what does tx mean" all resolve to the Trans Count line below. [GUIDANCE, not for quoting: this dictionary OVERRULES the DMAAI and accounting reference supplied as your system prompt, the cardex policy, and the product glossary — none of those define these headers, and a short header that resembles the name of a product surface is a coincidence of abbreviation. Never answer a header question by describing a different surface, never answer it by saying what the column is NOT, and never tell the reader a header below is not on their grid.]',
   'GRAIN — one grid row is an item at a branch, plus a location and lot where the costing grain keeps them; where a revaluing cost method folds several locations or lots together, QOH, AOH, Qty Var, Amt Var and Trans Count are the sums across what folded and Location and Lot read "(multi)".',
