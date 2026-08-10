@@ -370,7 +370,7 @@ ${adminSection}
       <span class="sidebar-status-label">DMAAIs</span>
     </a>
     <div class="sidebar-status-row" id="js-validation-row">
-      <span class="sidebar-status-dot is-green" id="js-validation-dot" title="Inventory Validation"></span>
+      <span class="sidebar-status-dot" id="js-validation-dot" title="Inventory Validation &mdash; not checked yet"></span>
       <span class="sidebar-status-label">Inventory Validation</span>
     </div>
     <div class="sidebar-status-row" id="js-agent-conn-row" title="${escapeHtml(agentSeed.title)}">
@@ -537,13 +537,18 @@ ${adminSection}
             title: 'Agent unreachable — start the data-services jar' + msg
           };
         }
+        if (obj && obj.state === 'ok') {
+          return { cls: ' is-green', title: 'Agent reachable' };
+        }
       }
     } catch (_) {}
-    // Assume reachable until proven otherwise. The /poll long-poll on
-    // Reconciliation / Transactions will flip this red within seconds
-    // if the agent is actually down. Better default than muted-grey
-    // (which reads as broken even when everything is fine).
-    return { cls: ' is-green', title: 'Agent reachable' };
+    // UI-80 — nothing recorded this session, so nothing has polled the agent.
+    // This used to return is-green / "Agent reachable" on the argument that
+    // muted grey "reads as broken", which put a claim of reachability on a
+    // dot that had checked nothing; setAgentConnectivity handles the same
+    // state at the bottom of this file by adding no class, and the contract
+    // documented above maps unknown to ''. Same state, same appearance now.
+    return { cls: '', title: 'Agent connectivity (no poll yet this session)' };
   }
 
   /**
@@ -1115,13 +1120,18 @@ ${adminSection}
         valDot.title = 'Inventory Validation — roll-forward clean';
       } else if (color === 'yellow' || color === 'warning' || color === 'amber') {
         valDot.classList.add('is-amber', 'is-warn');
-        valDot.title = 'Inventory Validation — roll-forward in progress / amber';
+        valDot.title = 'Inventory Validation — roll-forward in progress';
       } else if (color === 'danger' || color === 'red') {
         valDot.classList.add('is-red');
         valDot.title = 'Inventory Validation — roll-forward failed';
       } else {
-        valDot.classList.add('is-green');  // default optimistic when no signal
-        valDot.title = 'Inventory Validation';
+        // UI-80 — 'unknown', 'none', an empty payload and any colour a newer
+        // Services jar invents all land here, and none of them is a result.
+        // This used to add is-green with the comment "default optimistic when
+        // no signal", so the dot told the analyst the roll-forward was clean
+        // on the strength of the server saying nothing. Unknown takes no
+        // class: the base .sidebar-status-dot is already muted grey.
+        valDot.title = 'Inventory Validation — not checked yet';
       }
     }
 
@@ -1143,9 +1153,19 @@ ${adminSection}
       } else if (/^Not Found$/i.test(status)) {
         sysDot.classList.add('is-amber', 'is-warn');
         sysDot.title = 'System Status — no prior job (baseline only)';
-      } else {
+      } else if (/^Success/i.test(status)) {
+        // 'Successful' is the token the pages write (inventory-transactions.html
+        // normalises to it), and home.html reads it with the same /^success/i.
         sysDot.classList.add('is-green');
         sysDot.title = 'System Status — last job completed successfully';
+      } else {
+        // UI-80 — this was the green branch, so any status value this build does
+        // not know reported success. A newer Services jar naming a state we have
+        // never seen would have read as a healthy job. Say what is true and take
+        // no colour. Same treatment as the unrecognized model-approval state in
+        // accounting-dmaais.html: make no claim.
+        console.warn('[sidebar] unrecognized jobStatus:', status);
+        sysDot.title = 'System Status — unrecognized job state: ' + status;
       }
     }
   }
