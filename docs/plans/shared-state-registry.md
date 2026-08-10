@@ -22,7 +22,8 @@ producers on its own would have caught almost none of it.
 
 ## The vocabulary
 
-Four values, from UI-74. Each names the question it answers.
+Four result values from UI-74, plus `busy` from UI-88. Each names the question it
+answers.
 
 | State | Question it answers | Colour |
 |---|---|---|
@@ -30,17 +31,44 @@ Four values, from UI-74. Each names the question it answers.
 | `classified` | The card carries a named mechanism. Nothing was detected here beyond that. | Informational. Not the alert colour. |
 | `open` | Cause not determined, or not evaluated. | None. |
 | `muted` | Nothing to report. | None. |
+| `busy` | No result yet, because the work is still running. | None. Motion, not hue. See below. |
 
 `inventory-transactions.html` is the reference implementation. Read the verdict
 switch and its CSS before adding a state anywhere else.
 
-**Activity is not a state.** Loading, refreshing, reconnecting and "job in
-progress" describe what the page is doing, not what it found. UI-74 was written
-for a panel that never spins, so the vocabulary has a real gap here. Give
-activity its own treatment (a pulse, a hollow ring, a spinner) and never the
-alert colour. `sidebar.css` currently aliases `.is-amber` to `.is-loading` so
-that "working on it" and "needs attention" share both a colour and an animation.
-That is the gap showing.
+## Activity is not a state
+
+Loading, refreshing, reconnecting, a job in progress, an AI answer in flight.
+These describe what the page is DOING, not what it found. UI-74 was written for a
+panel that never spins, so the four values had nowhere to put them, and every
+surface picked a result value at random: the briefing wrote `ok` for "Reading your
+data" and painted the green all-clear before it had read anything, while
+`sidebar.css` aliased `.is-amber` to `.is-loading` so "working on it" and "needs
+attention" shared a colour and an animation.
+
+**Fifth token: `busy`.** It is deliberately not a fifth *result*, because it
+answers a different question:
+
+| | Question |
+|---|---|
+| `detected` / `classified` / `open` / `muted` | What did the check find? |
+| `busy` | Is a check even running yet? |
+
+Rules, and they are what stop it decaying into another `open`:
+
+- **Never the alert colour and never the all-clear.** A spinner is not a finding
+  and it is not a pass.
+- **`busy` supersedes a stale result while it runs.** A surface showing last
+  period's verdict under a live refresh is lying about what it is showing.
+- **`busy` must resolve.** A state that can be entered and never left is `open`
+  wearing a spinner, and `open` already exists. If the work can fail silently,
+  give it a timeout that lands in `open`.
+- **Motion carries it, not hue.** A pulse or a hollow ring. Reach for a colour
+  and you are back to spending the alert palette on housekeeping.
+
+UI-87 mapped two activity states to `open` as an interim, because `busy` did not
+exist yet and `open` at least claims nothing. Those are the migration cases, not
+the pattern to copy.
 
 ## The rulings
 
@@ -137,8 +165,9 @@ Review reminders falling due are `classified`: known, named, nothing detected.
 ## Adding a state
 
 1. Name the question it answers. If the name describes a colour, start again.
-2. Map it to one of the four values. If it fits none of them, it is probably
-   activity, and activity is not a state.
+2. Ask first whether it is a RESULT or an ACTIVITY. If the honest answer is "we
+   have not finished looking", it is `busy`, and `busy` has its own rules. Only a
+   result maps to the four.
 3. Check that the colour is not already spent on a different question on any
    surface the same analyst sees in one session.
 4. Read the text that sits beside it. An alert colour next to reassuring text is

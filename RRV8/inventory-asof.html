@@ -561,7 +561,6 @@
     font-variant-numeric: tabular-nums;
   }
   .preview-popover-table td.is-num { text-align: right; }
-  .preview-popover-table td .neg { color: var(--red); }
   .preview-popover-table tbody tr:hover td { background: rgba(43, 95, 176, 0.04); }
   .preview-popover-table tfoot td {
     padding: 8px 10px;
@@ -720,7 +719,8 @@
     font-variant-numeric: tabular-nums;
     line-height: 1.15;
   }
-  .stat-tile-value.is-neg { color: var(--red); }
+  /* No colour for a negative figure (UI-88): sign is not severity. curMoney()
+     already wraps a negative in accounting parentheses. */
   .stat-tile-sub {
     font-size: 11.5px;
     color: var(--text-muted);
@@ -817,7 +817,6 @@
     font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12.5px;
     font-weight: 700; color: var(--navy); font-variant-numeric: tabular-nums; white-space: nowrap;
   }
-  .perp-contrib-row-amount.is-negative { color: var(--red); }
   .perp-contrib-row-bar-wrap {
     grid-column: 1 / -1; position: relative; height: 5px;
     background: var(--bg-soft); border-radius: 3px; overflow: hidden;
@@ -826,7 +825,7 @@
     position: absolute; top: 0; bottom: 0; left: 0; background: var(--blue);
     border-radius: 3px; transition: width 0.25s ease;
   }
-  .perp-contrib-row-bar.is-negative { background: var(--red); }
+  .perp-contrib-row-bar[data-sign="neg"] { background: var(--blue-pale); box-shadow: inset 0 0 0 1px var(--blue); }
   /* Scope strip — the parameters this page was opened with, as light labeled
      stat-pairs (the sibling-page pattern), NOT a heavy banner. Filled by
      renderAsOfHero(). One calm white panel; the AI card carries the only accent. */
@@ -1249,7 +1248,6 @@
     font-variant-numeric: tabular-nums;
     font-weight: 600;
   }
-  .details-table td .neg { color: var(--red); }
   /* Totals row pinned to the bottom of the grid. Sums the 4 numeric
      columns (Quantity / Amount / QtyVar / AmtVar) over the rows that
      would render under the current filter + search (NOT capped by
@@ -1279,7 +1277,6 @@
     font-weight: 800;
     color: var(--navy);
   }
-  .details-table tfoot td .neg { color: var(--red); }
   .details-empty {
     padding: 32px 22px;
     text-align: center;
@@ -2000,9 +1997,7 @@
   function moneyCell(n) {
     const x = Number(n);
     if (!isFinite(x) || x === 0) return '<span style="color:var(--text-muted)">&mdash;</span>';
-    const cls = x < 0 ? 'neg' : '';
-    const txt = fmtMoney(x);
-    return cls ? '<span class="' + cls + '">' + txt + '</span>' : txt;
+    return fmtMoney(x);
   }
   // Active-currency context for the AGGREGATES (stat strip, totals row,
   // contributors). Per-row grid cells stay bare (a number with no symbol is
@@ -2024,9 +2019,7 @@
   function qtyCell(n) {
     const x = Number(n);
     if (!isFinite(x) || x === 0) return '<span style="color:var(--text-muted)">&mdash;</span>';
-    const cls = x < 0 ? 'neg' : '';
-    const txt = fmtQty(x);
-    return cls ? '<span class="' + cls + '">' + txt + '</span>' : txt;
+    return fmtQty(x);
   }
   // "outside operations" and "gl class not in base table" are dummy
   // longAccount values in the upstream views — not real inventory
@@ -2707,20 +2700,19 @@
     // Refused / unresolved scope = no answer, not an answer of zero. A headline
     // reading "$0.00" above a scope-refusal message is still a number an analyst can
     // quote.
-    if (_scopeError || !_state.companyFilter) { setStat('stat-amt', '—', 0); return; }
+    if (_scopeError || !_state.companyFilter) { setStat('stat-amt', '—'); return; }
     const rows = _viewRows || [];
     let amt = 0;
     for (let i = 0; i < rows.length; i++) {
       amt += Number(rows[i].Amount) || 0;
     }
     // Mixed-currency scope: a summed Amount across currencies is meaningless.
-    setStat('stat-amt', _curCtx.mixed ? 'Mixed currencies' : curMoney(amt), _curCtx.mixed ? 0 : amt);
+    setStat('stat-amt', _curCtx.mixed ? 'Mixed currencies' : curMoney(amt));
   }
-  function setStat(id, txt, raw) {
+  function setStat(id, txt) {
     const el = document.getElementById(id);
     if (!el) return;
     el.textContent = txt || '0';
-    el.classList.toggle('is-neg', Number(raw) < 0);
   }
 
   // ============================================================
@@ -2800,8 +2792,8 @@
         +   '<span class="perp-contrib-row-label">' + escapeHtml(g.key)
         +     '<span class="row-count">' + g.count.toLocaleString('en-US') + ' rows</span>'
         +   '</span>'
-        +   '<span class="perp-contrib-row-amount' + (isNeg ? ' is-negative' : '') + '">' + curMoney(g.amount) + '</span>'
-        +   '<span class="perp-contrib-row-bar-wrap"><span class="perp-contrib-row-bar' + (isNeg ? ' is-negative' : '') + '" style="width:' + pct.toFixed(1) + '%"></span></span>'
+        +   '<span class="perp-contrib-row-amount">' + curMoney(g.amount) + '</span>'
+        +   '<span class="perp-contrib-row-bar-wrap"><span class="perp-contrib-row-bar" data-sign="' + (isNeg ? 'neg' : 'pos') + '" style="width:' + pct.toFixed(1) + '%"></span></span>'
         + '</button>';
     }).join('') + (overflow > 0
       ? '<div class="perp-contrib-empty" style="padding:8px 12px;text-align:left;">+ ' + overflow + ' more &mdash; top ' + PERP_CONTRIB_TOP_N + ' shown</div>'
@@ -3534,16 +3526,14 @@ function updateLotDetailPill() {
   }
   function signedQty(n) {
     const v = Number(n) || 0;
-    const txt = fmtQty(v);
-    return v < 0 ? '<span class="neg">' + txt + '</span>' : txt;
+    return fmtQty(v);
   }
   function signedMoney(n) {
     // Footer totals row. Mixed-currency scope: the blended total is
     // meaningless, so guard rather than print a number.
     if (_curCtx.mixed) return '<span style="color:var(--text-muted)">&mdash;</span>';
     const v = Number(n) || 0;
-    const txt = curMoney(v);
-    return v < 0 ? '<span class="neg">' + txt + '</span>' : txt;
+    return curMoney(v);
   }
 
   // Lot detail rendered inside an expanded item row. Shows the
@@ -3970,14 +3960,12 @@ function updateLotDetailPill() {
   function qtySpan(v) {
     const n = Number(v);
     if (!Number.isFinite(n) || n === 0) return v === null || v === undefined || v === '' ? '' : '-';
-    const txt = fmtQty(n);
-    return n < 0 ? '<span class="neg">' + txt + '</span>' : txt;
+    return fmtQty(n);
   }
   function moneySpan(v) {
     const n = Number(v);
     if (!Number.isFinite(n) || n === 0) return v === null || v === undefined || v === '' ? '' : '-';
-    const txt = fmtMoney(n);
-    return n < 0 ? '<span class="neg">' + txt + '</span>' : txt;
+    return fmtMoney(n);
   }
   function formatDateShort(iso) {
     const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ''));

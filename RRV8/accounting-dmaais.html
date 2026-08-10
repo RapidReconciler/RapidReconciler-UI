@@ -928,6 +928,11 @@
     border-radius: 50%;
     background: var(--text-muted);
   }
+  /* No claim: a status this build can't resolve. Matches .row-status-chip.is-none
+     so the same state reads the same on both surfaces. Deliberately quieter than
+     .is-open, which is a known state ("nobody has triaged this yet"). */
+  .wl-status-pill.is-none                { background: transparent;      color: var(--text-muted); border-color: transparent; }
+  .wl-status-pill.is-none::before        { display: none; }
   .wl-status-pill.is-open                { background: var(--bg-soft);   color: var(--text-soft); }
   .wl-status-pill.is-open::before        { background: var(--text-muted); }
   .wl-status-pill.is-progress            { background: rgba(241,164,67,0.12); color: #8a5a14; border-color: rgba(241,164,67,0.40); }
@@ -1053,13 +1058,16 @@
   }
   .model-verdict svg { width: 12px; height: 12px; flex: 0 0 auto; }
   .model-verdict a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+  /* Class names here answer the question, not the palette: is-changed is the
+     baseline moving after sign-off, not "the orange one". Renaming the colour
+     would otherwise mean renaming the state. */
   .model-verdict.is-approved { background: var(--green-pale); color: var(--green-deep); }
-  .model-verdict.is-amber    { background: var(--orange-pale); color: var(--orange-deep); }
+  .model-verdict.is-changed  { background: var(--orange-pale); color: var(--orange-deep); }
   .model-verdict.is-none     { background: var(--bg-soft); color: var(--text-soft); border: 1px solid var(--rule); }
   /* tiny dot on the Model tab pill so approval reads at a glance without opening the tab */
   .tab-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-left: 5px; vertical-align: middle; }
   .tab-dot.is-approved { background: var(--green); }
-  .tab-dot.is-amber    { background: var(--orange); }
+  .tab-dot.is-changed  { background: var(--orange); }
   .grid-pill {
     display: inline-flex;
     align-items: center;
@@ -2500,13 +2508,42 @@
     'Needs review':  'In Progress',
     'Fixed':         'Resolved',
   };
-  const STATUS_PILL_CLASS = {
+  // One status vocabulary, one place it maps to paint. Two renderers
+  // show a finding's status: the worklist pill (`statusPillHtml`) and
+  // the module-grid row chip (`rowStatusChipHtml`). Both read this map,
+  // so a new status is one edit and cannot land styled on one surface
+  // and mislabelled on the other.
+  //
+  // `_none` is the sentinel `rowStatus` returns for a grid row that
+  // matched no finding: there is nothing to report on it.
+  //
+  // `statusClass` is the only way to get from a status to a class.
+  // A status this build doesn't recognise (a newer Services jar, or a
+  // persisted response written by a later version) resolves to
+  // `is-none`, which makes no claim, and logs once. It must never
+  // inherit another status's treatment: rendering an unknown value as
+  // `is-open` told the analyst the finding was untriaged when the truth
+  // is that we couldn't read it. Same handling as the model sign-off
+  // badge in `renderModelVerdict`.
+  const STATUS_CLASS = {
+    '_none':             'is-none',
     'Open':              'is-open',
     'In Progress':       'is-progress',
     'Resolved':          'is-resolved',
     'Closed by intent':  'is-intended',
     'Still Flagged':     'is-still',
   };
+  const _statusClassWarned = Object.create(null);
+  function statusClass(status) {
+    const cls = STATUS_CLASS[status];
+    if (cls) return cls;
+    const key = String(status);
+    if (!_statusClassWarned[key]) {
+      _statusClassWarned[key] = true;
+      console.warn('[dmaais] unrecognized finding status:', status);
+    }
+    return 'is-none';
+  }
 
   const _dmaaiResponses = Object.create(null);
   const _dmaaiResponsesInitial = Object.create(null);
@@ -2609,8 +2646,7 @@
   }
 
   function statusPillHtml(status) {
-    const cls = STATUS_PILL_CLASS[status] || 'is-open';
-    return '<span class="wl-status-pill ' + cls + '">' + escapeHtml(status) + '</span>';
+    return '<span class="wl-status-pill ' + statusClass(status) + '">' + escapeHtml(status) + '</span>';
   }
 
   function rowsChipHtml(findingId) {
@@ -2916,15 +2952,11 @@
   function rowStatusChipHtml(row) {
     const s = rowStatus(row);
     if (s === '_none') {
-      return '<span class="row-status-chip is-none">&mdash;</span>';
+      return '<span class="row-status-chip ' + statusClass(s) +
+        '" title="No finding matched this configuration">&mdash;</span>';
     }
-    const cls =
-      s === 'In Progress'      ? 'is-progress' :
-      s === 'Resolved'         ? 'is-resolved' :
-      s === 'Closed by intent' ? 'is-intended' :
-      s === 'Still Flagged'    ? 'is-still'    : 'is-open';
     const label = s === 'Closed by intent' ? 'Intended' : s;
-    return '<span class="row-status-chip ' + cls + '" title="Finding ' +
+    return '<span class="row-status-chip ' + statusClass(s) + '" title="Finding ' +
       escapeHtml(row._findingId) + ' &middot; ' + escapeHtml(s) + '">' +
       escapeHtml(label) + '</span>';
   }
@@ -3905,14 +3937,18 @@
       el.hidden = false;
       if (dot) { dot.className = 'tab-dot is-approved'; dot.title = 'Model approved'; dot.hidden = false; }
     } else if (m.state === 'needs-review') {
-      el.className = 'model-verdict is-amber';
+      el.className = 'model-verdict is-changed';
       el.innerHTML = 'Model changed since approval &mdash; <a href="accounting-model-review.html">re-approve</a>';
       el.hidden = false;
-      if (dot) { dot.className = 'tab-dot is-amber'; dot.title = 'Model changed since approval'; dot.hidden = false; }
+      if (dot) { dot.className = 'tab-dot is-changed'; dot.title = 'Model changed since approval'; dot.hidden = false; }
     } else if (m.state === 'unapproved') {   // the endpoint's three states are approved | needs-review | unapproved
       el.className = 'model-verdict is-none';
       el.innerHTML = 'Not yet approved &mdash; <a href="accounting-model-review.html">sign off</a>';
       el.hidden = false;
+      // The tab dot carries no treatment for "not yet approved" — a dot beside the
+      // tab title claims a verdict, and there isn't one to claim yet. Cleared
+      // explicitly so a second render can't leave a stale one behind.
+      if (dot) dot.hidden = true;
     } else {
       // A payload we can't classify (empty body, or a state a newer Services jar
       // reports that this page doesn't know) used to land in the "Not yet approved"
