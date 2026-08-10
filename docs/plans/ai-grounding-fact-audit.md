@@ -40,6 +40,17 @@ analyst-facing card copy in `RRV8.txv` is sound apart from two claims,
 and the four passthrough catalogs in `config.js` are in better shape
 than the server block they sit under.
 
+**Amendment, 2026-08-10.** Three verdicts above have moved since this
+was written, so the counts in the paragraph above are stale. `NZR` was
+cleared on a query against a derived table and is now a failed clear;
+see the warning at the head of the Cleared section for the general rule
+that miss produced. The card behind it, `DMAAI Net Zero`, has since been
+withdrawn outright rather than reworded. U2 (AAI 3210) and U3 (no AAI 3140) are both resolved
+in the grounding's favour against Oracle's published JD Edwards 9.2
+manufacturing AAI documentation, which outranks this repo on AAI
+identity and should be the first source consulted on the next pass. The
+in-transit AAI conflict raised under M4 is settled by owner ruling.
+
 ## Process finding: the wrong claims cluster by kind, not by author
 
 Four categories of error repeat, and each one points at a maintenance
@@ -659,15 +670,26 @@ in-transit clearing account", which matches that doc. So the server
 block sends the analyst to check 4245 on transfers where 4220 is the
 account that matters.
 
-**KB conflict, for the owner.**
-`RRUniversity/inventory-distribution-aais.html:218` states the opposite
-of `transfer-order-reference.html`: it puts the in-transit debit on 4245
-in all cases and says 4220 and 4240 "self-cancel within the ST doc and
-are not the cross-cycle clearing pair". Two customer-facing KB docs
-disagree about the same posting. The replacement below is the union of
-both readings and tells the model to read the pricing first, which is
-safe under either. The underlying conflict is an SME question and should
-be settled in the KB, not in the grounding.
+**KB conflict, SETTLED 2026-08-10 by owner ruling.** The in-transit
+debit is **4220 on a transfer at cost** and **4245 on a transfer at cost
+plus**. `transfer-order-reference.html:737` and `:764` were already
+right. `RRUniversity/inventory-distribution-aais.html` put the debit on
+4245 in all cases and said 4220 and 4240 "self-cancel within the ST doc
+and are not the cross-cycle clearing pair"; that callout has been
+rewritten to carry both cases. `AnalysisGuides/dmaai-analysis.md` no
+longer records this as an open question. The replacement text below
+already tells the model to read the pricing first, so it matches the
+ruling and needs no further change.
+
+**Still open, in a file this pass does not own.**
+`Tools/analyzer-engine.js:126` asserts 4220 is "NOT the in-transit
+clearing account", `:130` puts that role on 4245 unconditionally, and
+`:1988` notes "in-transit uses 4245 / 4320". The analyzer's
+`transfer_clearing` check in `Tools/analysis-workbook.html` compares
+4245 against 4320 and therefore never tests a transfer-at-cost install,
+while its own finding label reads "Transfer clearing mismatch (4220 vs
+4320 resolve differently)". Owner call on whether the check should cover
+both pairings.
 
 **Replacement text.** 42xx line clause:
 
@@ -757,8 +779,8 @@ No replacement text invented for these. Recommendation per item.
 | # | Block and claim | Evidence state | Recommendation |
 |---|---|---|---|
 | U1 | `DMAAI_GROUNDING`: `4337` included in `(4332/4335/4337/4340 are GL-only - no cardex)` | `inventory-distribution-aais.html` marks 4332, 4335 and 4340 "Not written to F4111" and marks 4330 and 4385/4390 as written. It says nothing either way about 4337. No 4337 rows in any demo route table. | Weaken: drop 4337 from the parenthetical, leaving `(4332/4335/4340 are GL-only - no cardex)`. The KB supports the other three and does not support 4337. |
-| U2 | `DMAAI_GROUNDING`: `3210 clear-WIP additional COGS (actual costing only)` and 3210 listed under `R31804 posts variances` | The KB's 31xx AAI table has no 3210. Only `RRUniversity/inventory-costing.html:575` mentions it, as "AAI 3210 (COGS)" with no program attribution. The KB's R31804 list is 3220/3240/3260/3270/3280. | Escalate to owner. Either 3210 belongs in the KB AAI table or it should come out of the grounding. Do not guess which. |
-| U3 | `DMAAI_GROUNDING`: `There is NO AAI 3140.` | Untestable here. RR extracts only 4152 into `v_integrity1_aai_base`, and the instruction is not to treat raw `F4095` absence as proof. 3140 does not appear anywhere in the KB, which is consistent with the claim but is not evidence for it. | Escalate to owner as an SME confirmation. A negative existence claim in grounding needs a source, and this one has none. |
+| U2 | `DMAAI_GROUNDING`: `3210 clear-WIP additional COGS (actual costing only)` and 3210 listed under `R31804 posts variances` | **RESOLVED 2026-08-10. The grounding was right and the KB was the incomplete source.** Oracle's JD Edwards 9.2 manufacturing AAI page names 3210 Clear Work in Process, describes it as posting cost of goods sold that the completions did not pick up under actual costing, and lists it among the AAIs R31804 posts. Demo3's raw `F4095` holds 62 rows for 3210. | No change to the grounding. `inventory-distribution-aais.html` now carries 3210 in its 31xx table, its R31804 enumeration and its quick reference; `end-of-day-analysis.md` §8.1 and `transaction-detail-analysis.md` §IV carry it too. |
+| U3 | `DMAAI_GROUNDING`: `There is NO AAI 3140.` | **RESOLVED. The claim is correct and it was already sourced.** Oracle's 9.2 manufacturing AAI page lists 3110, 3120, 3130, 3210, 3220, 3240, 3260, 3270, 3280 and 3401, with no 3140. Raw `F4095` returns zero 3140 rows on Demo1, Demo2 and Demo3. `docs/plans/dmaai-reference.md:65` and `:195` recorded it as confirmed against Oracle JDE 9.2 on 2026-07-06, in the very file this grounding block is distilled from. | Leave the grounding as-is. The "sourceless" verdict in the original row was wrong: the source was one file away and this audit did not check it. Same failure mode as the `NZR` false positive, one level up: absence in the KB was read as absence of a source. |
 | U4 | `DMAAI_GROUNDING`: `4240 inventory (DR)` | `inventory-distribution-aais.html:211` gives 4240 as "Inventory, Standard sales transaction journal entry" with no direction. Line 218 of the same doc has 4240 as the CREDIT to inventory at the shipping branch on ST. | Weaken: drop the `(DR)` and leave `4240 inventory`. Direction depends on the document. |
 | U5 | `DMAAI_GROUNDING`: `3260 (planned vs current)`, `3270 (current vs frozen standard)`, `3280 (rollup/qty/rounding)` | The KB names these Planned Variance, Engineering Variance and Other Variance, with no mechanism description for any of them. The grounding's glosses are plausible and uncited. | Weaken to the KB's own names: `3260 planned variance / 3270 engineering variance / 3280 other variance`. The mechanism gloss adds nothing the analyst acts on and it is the part with no source. |
 | U6 | `RRV8.txv` `MCM.action`: `Confirm the variance AAI, 3240 or 3260, is configured for the routings in use.` | The KB links WIP revaluation to 4134/4136 (`inventory-costing.html:305`) and links 3240/3260 to R31804 variance accounting, not to R30837. No source connects either number to WIP revaluation. | Escalate to owner. This is the one corrective instruction in the card that names a specific AAI, so a wrong number sends the analyst to the wrong configuration screen. |
@@ -771,6 +793,23 @@ No replacement text invented for these. Recommendation per item.
 # Cleared
 
 Checked and confirmed correct. Do not re-run these.
+
+> ⚠ **Read this before trusting "do not re-run."** One entry below was
+> cleared by querying `v8ui_dmaai_routes`, a table RapidReconciler
+> derives from `F4095`, to settle whether an AAI was configured in the
+> customer's JDE. That measurement cannot answer the question. The
+> loader drops AAIs it was never scoped to carry, so a derived table
+> returning zero rows tells you about the loader and nothing about JDE.
+> The `NZR` entry is corrected in place below and is now a failed clear
+> rather than a clear.
+>
+> The general rule the miss produced: **an absence claim has to be
+> measured against the raw source table.** A presence claim can be
+> cleared from a derived table, because a row that survived the load
+> existed upstream. An absence claim cannot. Anything below that reads
+> "zero rows in `v8ui_dmaai_routes`", "not in `RAccountInstr`" or "does
+> not appear in the KB" is at best a weaker result than it looks, and
+> the next reader should re-measure rather than inherit the verdict.
 
 ## `AiService.DMAAI_GROUNDING`
 
@@ -808,8 +847,10 @@ Checked and confirmed correct. Do not re-run these.
 - `4332/4335/4340 are GL-only - no cardex`. KB marks each "Not written
   to F4111" at `:232`, `:233`, `:235`. (The 4337 half is U1.)
 - `R31802A posts completion (3110/3120/3130/3401)`. KB `:109` to `:117`.
-- `R31804 posts variances (3220/3240/3260/3270/3280)`. KB `:112` to
-  `:116`. (The 3210 half is U2.)
+- `R31804 posts variances (3210/3220/3240/3260/3270/3280)`. Correct in
+  full, including 3210. Confirmed against Oracle's JD Edwards 9.2
+  manufacturing AAI page; the KB's own list was short and has been
+  corrected. See U2.
 - `R30822 (frozen-cost update) must be paired with R30837 (WIP
   revaluation)`. Known-good per the brief and confirmed in
   `frozen-cost-integrity-analysis.md:88`, `:142`, `:469`.
@@ -973,17 +1014,63 @@ construction. Spot-checked the two behavioural numbers against the code:
 
 ## `RRV8.txv` card copy, cleared entries
 
-- `NZR`: `DMAAI 3110 (raw-material relief) and 3130 (finished-goods
-  receipt) resolve to ONE account for these order types and GL classes
-  ... 3120 (work in process) is not configured.` Both halves measured
-  true. 3120 has zero routes on Demo1 and Demo3, and 3110 and 3130 share
-  one object account for every GL class where both exist.
+- ❌ `NZR`: **NOT CLEARED. This entry was a false positive and the
+  original verdict is withdrawn.** The card copy reads `DMAAI 3110
+  (raw-material relief) and 3130 (finished-goods receipt) resolve to ONE
+  account for these order types and GL classes ... 3120 (work in
+  process) is not configured.` Both halves fail, for different reasons.
+
+  **The 3120 half was measured against the wrong table.** The original
+  query ran against `v8ui_dmaai_routes`, which RapidReconciler derives
+  from `F4095`, and read zero rows as "not configured." Re-measured
+  2026-08-10 against raw `F4095`:
 
 ```sql
-with r as (select distinct companynumber, glclass, tablenumber, rtrim(object) obj
-           from v8ui_dmaai_routes where tablenumber in (3110,3120,3130))
-select ... -- 3120 count = 0 for every (company, GL class); 3110/3130 object overlap = 1 for every pair
+select mlanum, count(*), sum(case when ltrim(rtrim(isnull(mldct,'')))='' then 1 else 0 end)
+from F4095 where mlanum in (3110,3120,3130,3210,3401) group by mlanum;
+-- 3120: Demo1 162 rows / 162 blank doctype, Demo2 1 / 1, Demo3 490 / 490
+-- 3401: Demo1 117 / 117, Demo3 365 / 365
+-- 3210: Demo3 62 rows / 0 blank doctype
+-- v8ui_dmaai_routes for the same three databases: 3120, 3210, 3401 all zero
+select TableNumber, count(*) from rdmaaistaging group by TableNumber;
+-- Demo3: 3210 = 621 expanded rows. 3120 and 3401 absent.
 ```
+
+  3120 is configured on all three databases. Every row carries a blank
+  document type, which is deliberate, because one AAI entry serves all
+  five manufacturing document types. That blank is the whole cause: all
+  thirteen load levels in `usp6_002b_aai_staging.sql` carry the predicate
+  `mldct != '' and f.mlobj != ''`, so a blank-doc-type entry survives no
+  level. 3120 and 3401 are the only two AAIs lost this way. That is a
+  load defect, tracked separately, and the card is telling the analyst a
+  configuration story about a loader gap.
+
+  **3210 is not part of the gap and an earlier revision of this audit
+  said it was.** Its rows carry real document types and it loads: 621
+  staging rows on Demo3. It is absent from `v8ui_dmaai_routes` only
+  because that view is scoped to the DMAAI tables holding inventory
+  accounts (`v8ui_dmaai_mismatch_active.sql`), and 3210 holds none.
+  Reading absence from a scoped view as absence from the loader is the
+  same failure this audit exists to catch.
+
+  **The 3110 = 3130 half is a real measurement of a test that should not
+  be run.** SME ruling 2026-08-10: net zero applies only to a valid
+  DMAAI pairing, and 3110 with 3130 is not one. The two AAIs sit at
+  opposite ends of two different transactions with WIP between them. The
+  valid manufacturing net-zero tests are 3110 against 3120 on the IM and
+  3120 against 3130 on the IC. Where a customer points 3110 and 3130 at
+  one inventory account, assume it was intended, particularly at a site
+  running a single inventory account. `manufacturing-accounting-flow.md`
+  carries the corrected passage.
+
+  **Resolved 2026-08-10: the `DMAAI Net Zero` card was withdrawn, not
+  reworded.** It is gone from the classifier and from the UI card
+  catalog. Two reasons. The valid pairing tests — 3110 against 3120 on
+  the IM, 3120 against 3130 on the IC — return zero slices on all three
+  demo databases under every relaxation tried. And 98% of what the card
+  did claim was IM, the one document type that cannot exhibit the
+  condition. Rewording would have left a card with nothing to fire on.
+  Full reasoning lives in the stored procedure.
 
 - `VCHR`: `Batch type on these documents: V, an A/P voucher.` True for
   every voucher row on all three databases. Only the item-ledger claim

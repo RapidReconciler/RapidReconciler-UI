@@ -97,19 +97,57 @@ Worked row — cardex IC $305,521.99 stamped batch 3263483 on 08-09; GL IC $305,
 **same account** in batch 3295108 on 08-25. Same penny, sixteen days later.
 
 **3120 carries no inventory.** In JDE the WIP account is a **dollars-only holding
-account**. Only **3110** (raw material) and **3130** (finished goods) belong in a
-cardex-to-GL inventory comparison.
+account**. Only **3110** (Inventory/Raw Materials) and **3130** (Sub-Assembly/Finished
+Goods) belong in a cardex-to-GL inventory comparison.
 
 ⚠ **Identify WIP by its AAI, never by its F0901 description.** On the specimen database the
-accounts *named* "Work in Process" were reached by **3110 and 3130** — and were the declared
-inventory account for **20,875 items** across GL classes MLDP / SECD / PRSP / SUBC / SUBA.
-AAI 3120 was not configured at all. Excluding on the description would have deleted **837
-legitimate inventory rows.** The description is a label; the AAI is the fact.
+accounts *named* "Work in Process" were reached by **3110 and 3130**, and were the declared
+inventory account for **20,875 items** (specimen figure) across GL classes MLDP / SECD /
+PRSP / SUBC / SUBA. Excluding on the description would have deleted **837 legitimate
+inventory rows** (specimen figure). The description is a label; the AAI is the fact.
 
-That same finding is itself a defect worth claiming: where **3110 and 3130 resolve to the
-same account**, both legs of every work order land there and cancel. It is the analyzer's
-`nz` net-zero pattern, it is configuration rather than transaction, and no journal entry
-fixes it — every future period reproduces it until the AAIs are split and 3120 is set.
+**3120 and 3401 are not absent from JDE. They are absent from RapidReconciler's derived
+tables.** Measured 2026-08-10 against raw `F4095` on the three demo databases, all specimen
+figures: 3120 holds 162 / 1 / 490 rows and 3401 holds 117 / 0 / 365 on Demo1 / Demo2 / Demo3.
+**Every one of those rows carries a blank document type**, which is deliberate, because one
+AAI entry has to serve all five manufacturing document types. That blank is what loses them.
+All thirteen load levels in `usp6_002b_aai_staging.sql` carry the predicate
+`mldct != '' and f.mlobj != ''`, so an entry with no document type never survives any level.
+`RAccountInstr` and `v8ui_dmaai_routes` held zero rows for either AAI. **Fixed 2026-08-10:**
+the blank-doc-type predicate came out of all thirteen levels, and both AAIs now stage and reach
+`RAccountInstrExp`, which is where `v6_003_expanded_aais_exp` always intended them — that view's
+exclusion list never named 3120 or 3401. `RAccountInstr` is unchanged and still holds neither,
+correctly, because it carries only the DMAAI tables that hold inventory accounts. The lesson
+outlives the fix: **an empty derived table says nothing about a customer's JDE setup, and any
+absence question has to be answered against raw `F4095`.**
+
+**3210 is not part of that gap — it loads.** Same measurement, Demo3: 62 raw `F4095` rows,
+**none** with a blank document type, and `rdmaaistaging` holds 621 expanded rows for table
+3210 (specimen figures). 3220 and 3240 load as well, at 8 staging rows each. 3210 is absent
+from `v8ui_dmaai_routes`, and that absence is correct — the view is scoped to a fixed list of
+DMAAI tables that hold **inventory** accounts (`3110, 3130, 4122, 4126, 4134, 4162, 4172,
+4240, 4310, 4365, 4385, 4400`, per `v8ui_dmaai_mismatch_active.sql`). 3210 clears WIP to COGS
+and holds no inventory account, so it does not belong there. **Absence from that view is not
+absence from the loader.** An earlier revision of this guide asserted 3210 was excluded
+alongside 3120 and 3401 without measuring the staging table, and it was wrong.
+
+**A shared 3110 / 3130 account is not a net-zero defect.** SME ruling, 2026-08-10: net zero
+applies only to a valid DMAAI pairing, and 3110 with 3130 is not one. Net zero means the debit
+AAI and the credit AAI **of the same transaction** resolve to a single account. In
+manufacturing that gives two tests:
+
+| Transaction | Debit | Credit | Net zero when |
+|---|---|---|---|
+| IM material issue | 3120 | 3110 | 3110 and 3120 resolve to the same account |
+| IC completion (and IS scrap) | 3130 | 3120 | 3120 and 3130 resolve to the same account |
+
+3110 and 3130 sit at opposite ends of two different transactions with WIP in between, so
+pairing them tests nothing. An IM and an IC are separate events and get analyzed that way.
+Where a customer points 3110 and 3130 at one inventory account, assume it was intended,
+particularly at a site that runs a single inventory account. Do not raise it as a finding.
+
+(IH pairs 3120 against 3401, but 3401 is a P&L accrual rather than an inventory account, so a
+shared account there is a different question and not an inventory net-zero.)
 
 ## Unit-cost history: `F4111` ordered by `ilukid`
 

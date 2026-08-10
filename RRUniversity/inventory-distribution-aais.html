@@ -156,7 +156,7 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <tr><td><strong>Report 0 — JDE DMAAs</strong></td><td>Provides a filterable, sortable view of all DMAAI entries from F4095 and F4096 (including flex accounting) within RapidReconciler. Used to diagnose specific transactions on the Transactions page without navigating through JD Edwards setup menus.</td></tr>
 <tr><td><strong>Transaction Detail — Section 6</strong></td><td>When drilling into an unreconciled transaction on the Transactions page, Section 6 of the detail report lists all DMAAI entries for each GL class code in the transaction, making it straightforward to identify which AAI caused the account mismatch.</td></tr>
 <tr><td><strong>Flexible Accounting support</strong></td><td>RapidReconciler reads flex accounting rules from F4096 alongside F4095, ensuring that transactions using Flexible Sales Accounting are correctly assigned to their flexed accounts in the reconciliation.</td></tr>
-<tr><td><strong>Export Analyzer — JDE DMAAI&rsquo;s template</strong></td><td>Reads a full <code>F4095</code> export (from JDE Database Browser P964001 or via SSMS on the customer&rsquo;s RR-mirrored schema) and surfaces seven classes of AAI misconfiguration across <em>all</em> JDE distribution modules — not just the AAIs RR reconciliation exercises. Includes net-zero clearing-pair detection, missing-complement coverage, the F4095 4-tier hierarchy, and a transfer-clearing-account mismatch pattern (4220 vs 4320) that catches Goods-in-Transit residuals other reports miss.</td></tr>
+<tr><td><strong>Export Analyzer — JDE DMAAI&rsquo;s template</strong></td><td>Reads a full <code>F4095</code> export (from JDE Database Browser P964001 or via SSMS on the customer&rsquo;s RR-mirrored schema) and surfaces seven classes of AAI misconfiguration across <em>all</em> JDE distribution modules — not just the AAIs RR reconciliation exercises. Includes net-zero clearing-pair detection, missing-complement coverage, the F4095 4-tier hierarchy, and a transfer-clearing-account mismatch pattern (the in-transit debit against 4320) that catches Goods-in-Transit residuals other reports miss.</td></tr>
 </tbody></table></div>
 
 <div class="callout note"><p><strong>Practical impact:</strong> A single incorrectly configured AAI can cause every transaction of a given type and GL class to post to the wrong account — producing a systematic variance that grows every period. RapidReconciler's integrity reports surface these mismatches proactively, before they accumulate into large reconciling items at period end.</p></div>
@@ -289,15 +289,16 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <div class="table-wrap"><table>
 <thead><tr><th>AAI</th><th>Account</th><th>Purpose</th><th>Programs</th></tr></thead>
 <tbody>
-<tr><td><span class="aai-pill">3110</span></td><td>Raw Material / Sub-Assembly Inventory</td><td>Credit side of material issues. Uses GL class codes of <strong>components</strong>, not the parent item.</td><td>Manufacturing Accounting (R31802A)</td></tr>
-<tr><td><span class="aai-pill">3120</span></td><td>Work In Process (WIP)</td><td>Debit for material issues and labor; credit for completions; debit or credit for variance clearing.</td><td>Manufacturing Accounting (R31802A)</td></tr>
-<tr><td><span class="aai-pill">3130</span></td><td>Finished Goods / Sub-Assembly Inventory</td><td>Debit for completions. Also used as the scrap account for parent scrap (IS) transactions.</td><td>Manufacturing Accounting (R31802A)</td></tr>
+<tr><td><span class="aai-pill">3110</span></td><td>Inventory / Raw Materials</td><td>Credit side of material issues. Uses GL class codes of <strong>components</strong>, not the parent item. The same AAI carries a completed sub-assembly back out of inventory into work in process.</td><td>Manufacturing Accounting (R31802A)</td></tr>
+<tr><td><span class="aai-pill">3120</span></td><td>Work in Process</td><td>Debit for material issues and labor; credit for completions; debit or credit for variance clearing.</td><td>Manufacturing Accounting (R31802A)</td></tr>
+<tr><td><span class="aai-pill">3130</span></td><td>Sub-Assembly / Finished Goods</td><td>Debit for completions. Also used as the scrap account for parent scrap (IS) transactions.</td><td>Manufacturing Accounting (R31802A)</td></tr>
+<tr><td><span class="aai-pill">3210</span></td><td>Clear Work in Process</td><td>Under actual costing, carries cost of goods sold that the completion entries did not pick up, so the residual clears out of work in process. Standard costing does not use it.</td><td>Variance Accounting (R31804)</td></tr>
 <tr><td><span class="aai-pill">3220</span></td><td>Labor Variance</td><td>Offset for labor variance at variance accounting.</td><td>Variance Accounting (R31804)</td></tr>
 <tr><td><span class="aai-pill">3240</span></td><td>Material Variance</td><td>Offset for material variance at variance accounting.</td><td>Variance Accounting (R31804)</td></tr>
 <tr><td><span class="aai-pill">3260</span></td><td>Planned Variance</td><td>Offset for planned variance at variance accounting.</td><td>Variance Accounting (R31804)</td></tr>
 <tr><td><span class="aai-pill">3270</span></td><td>Engineering Variance</td><td>Offset for engineering variance at variance accounting.</td><td>Variance Accounting (R31804)</td></tr>
 <tr><td><span class="aai-pill">3280</span></td><td>Other Variance</td><td>Offset for other variance at variance accounting.</td><td>Variance Accounting (R31804)</td></tr>
-<tr><td><span class="aai-pill">3401</span></td><td>Payroll Accrual</td><td>Credit side of labor, outside operations, and cross-charge transactions.</td><td>Manufacturing Accounting (R31802A)</td></tr>
+<tr><td><span class="aai-pill">3401</span></td><td>Accruals</td><td>Credit side of labor, outside operations, and cross-charge transactions. Offsets the work-in-process debit on IH.</td><td>Manufacturing Accounting (R31802A)</td></tr>
 </tbody></table></div>
 
 <h3 id="section-2-3"><span class="num">2.3</span>Transaction Journal Entry Reference</h3>
@@ -307,8 +308,8 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <div class="table-wrap"><table>
 <thead><tr><th></th><th>AAI</th><th>Account</th><th>Basis</th></tr></thead>
 <tbody>
-<tr><td><strong>Debit</strong></td><td>3120</td><td>Work In Process (WIP)</td><td>Actual Issues × Frozen Standard Cost (F30026)</td></tr>
-<tr><td><strong>Credit</strong></td><td>3110 *</td><td>Raw Material / Sub-Assembly Inventory</td><td>Actual Issues × Frozen Standard Cost (F30026)</td></tr>
+<tr><td><strong>Debit</strong></td><td>3120</td><td>Work in Process</td><td>Actual Issues × Frozen Standard Cost (F30026)</td></tr>
+<tr><td><strong>Credit</strong></td><td>3110 *</td><td>Inventory / Raw Materials</td><td>Actual Issues × Frozen Standard Cost (F30026)</td></tr>
 </tbody></table></div>
 <p style="font-size:13px;color:var(--text-soft)">* Credit side uses GL class codes of each <strong>component</strong>, not the parent.</p>
 
@@ -317,8 +318,8 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <div class="table-wrap"><table>
 <thead><tr><th></th><th>AAI</th><th>Account</th><th>Basis</th></tr></thead>
 <tbody>
-<tr><td><strong>Debit</strong></td><td>3120</td><td>Work In Process (WIP)</td><td>Actual Labor × Frozen Work Center Rates</td></tr>
-<tr><td><strong>Credit</strong></td><td>3401</td><td>Payroll Accrual</td><td>Actual Labor × Frozen Work Center Rates</td></tr>
+<tr><td><strong>Debit</strong></td><td>3120</td><td>Work in Process</td><td>Actual Labor × Frozen Work Center Rates</td></tr>
+<tr><td><strong>Credit</strong></td><td>3401</td><td>Accruals</td><td>Actual Labor × Frozen Work Center Rates</td></tr>
 </tbody></table></div>
 
 <h4>IC — Completions</h4>
@@ -326,8 +327,8 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <div class="table-wrap"><table>
 <thead><tr><th></th><th>AAI</th><th>Account</th><th>Basis</th></tr></thead>
 <tbody>
-<tr><td><strong>Debit</strong></td><td>3130</td><td>Finished Goods / Sub-Assembly Inventory</td><td>Units Completed × Frozen Standard (F30026)</td></tr>
-<tr><td><strong>Credit</strong></td><td>3120</td><td>Work In Process (WIP)</td><td>Units Completed × Frozen Standard (F30026)</td></tr>
+<tr><td><strong>Debit</strong></td><td>3130</td><td>Sub-Assembly / Finished Goods</td><td>Units Completed × Frozen Standard (F30026)</td></tr>
+<tr><td><strong>Credit</strong></td><td>3120</td><td>Work in Process</td><td>Units Completed × Frozen Standard (F30026)</td></tr>
 </tbody></table></div>
 
 <h4>IS — Parent Scrap</h4>
@@ -335,7 +336,7 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <thead><tr><th></th><th>AAI</th><th>Account</th><th>Basis</th></tr></thead>
 <tbody>
 <tr><td><strong>Debit</strong></td><td>3130 (Scrap)</td><td>Scrap Account</td><td>—</td></tr>
-<tr><td><strong>Credit</strong></td><td>3120</td><td>Work In Process (WIP)</td><td>—</td></tr>
+<tr><td><strong>Credit</strong></td><td>3120</td><td>Work in Process</td><td>—</td></tr>
 </tbody></table></div>
 
 <h4>IV — Variance Accounting</h4>
@@ -346,9 +347,10 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <div class="table-wrap"><table>
 <thead><tr><th></th><th>AAI</th><th>Account</th></tr></thead>
 <tbody>
-<tr><td><strong>Debit or Credit</strong> (as required)</td><td>3120</td><td>Work In Process (WIP)</td></tr>
+<tr><td><strong>Debit or Credit</strong> (as required)</td><td>3120</td><td>Work in Process</td></tr>
 </tbody></table></div>
 <p>Offsetting variance entries are directed to AAIs 3220, 3240, 3260, 3270, or 3280 depending on variance type. Each variance AAI receives either a debit or credit depending on whether the variance is favorable or unfavorable.</p>
+<p>On an actual-costing work order, Variance Accounting also posts AAI <strong>3210</strong> (Clear Work in Process), which picks up cost of goods sold that the completion entries missed and clears the residual out of work in process. A standard-costing shop will not see 3210 fire. The full set of AAIs R31804 can post is therefore <strong>3210, 3220, 3240, 3260, 3270, and 3280</strong>.</p>
 
 <h3 id="section-2-4"><span class="num">2.4</span>Variance Types</h3>
 <div class="table-wrap"><table>
@@ -470,7 +472,11 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <tr><td><span class="aai-pill">4280</span></td><td>Advanced Price Accruals</td><td>Records the offset to 4270 for accruals in Advanced Pricing.</td><td>Price Adjustment Type (P4071)</td></tr>
 </tbody></table></div>
 
-<div class="callout note"><p><strong>4245 is the in-transit clearing debit on transfer orders (despite the &ldquo;A/R Trade&rdquo; name).</strong> In a regular sales transaction 4245 posts the trade receivable. On ST (sales transfer) shipments it is repurposed: AAI 4245 with doc type ST resolves to the <strong>Inventory in Transit</strong> account, posting the debit that holds the value while goods are in motion. Per JDE convention the business unit on the 4245 ST row is hard-coded to a company-wide value (not flexed by branch) so the in-transit account stays consistent. The corresponding credit on the receiving OT side is <strong>4320</strong> (see Purchasing 4300 series). For the clearing to net to zero on a completed transfer, both AAIs must resolve to the same GL account &mdash; if they drift apart, every transfer leaves a residual on the clearing account. This is one of the hardest reconciliation residuals to track down because the F0911 entries individually look correct. The Export Analyzer&rsquo;s JDE DMAAI&rsquo;s template flags this directly from F4095. (Note: 4220 and 4240 also fire on ST shipments as a sales-side wash pair &mdash; Dr COGS-Branch-Transfers, Cr Inventory at shipping branch &mdash; but they self-cancel within the ST doc and are not the cross-cycle clearing pair.)</p></div>
+<div class="callout note"><p><strong>Which AAI holds the in-transit debit on a transfer order depends on the transfer pricing. Read the pricing first, then name the AAI.</strong></p>
+<p>On a transfer <strong>at cost</strong>, AAI <strong>4220</strong> debits <strong>Inventory in Transit</strong> at the shipping branch&rsquo;s cost. The price side is neutralized: 4245 and 4230 are pointed at the same wash account, so whatever an operator types in the price field cancels itself out.</p>
+<p>On a transfer <strong>at cost plus</strong>, AAI <strong>4245</strong> debits Inventory in Transit at the marked-up price, 4230 records interbranch revenue, and 4220 records real COGS at the shipping branch&rsquo;s cost. The &ldquo;A/R Trade&rdquo; name on 4245 describes what it does on a regular sales order; on an ST row it is repurposed. Per JDE convention the business unit on that ST row is hard-coded to a company-wide value rather than flexed by branch, which keeps the in-transit account consistent no matter which branch shipped.</p>
+<p>Either way the receiving OT side credits <strong>4320</strong> (see Purchasing 4300 series). Whichever AAI carried the debit has to resolve to the same GL account as 4320, or every transfer leaves a residual sitting on the clearing account. Those residuals are among the hardest to track down, because each F0911 entry looks correct on its own. The Export Analyzer&rsquo;s JDE DMAAI&rsquo;s template flags the mismatch straight from F4095. Worked journal entries for both cases are in <a href="transfer-order-reference.html#at-cost">Transfer Order Reference</a>.</p>
+<p>You will also see 4220 and 4240 fire on an ST shipment as a sales-side pair (Dr COGS-Branch-Transfers, Cr Inventory at the shipping branch). On a cost-plus transfer that pair is the COGS recognition and does not clear across the cycle.</p></div>
 
 <h3 id="section-4-2"><span class="num">4.2</span>Standard Sales Transaction Journal Entries</h3>
 <p>The Sales Update program (R42800) generates the following entries for the cost side of a sale:</p>
@@ -653,15 +659,16 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <div class="table-wrap"><table>
 <thead><tr><th>AAI</th><th>Account</th><th>Transaction Types</th></tr></thead>
 <tbody>
-<tr><td><span class="aai-pill">3110</span></td><td>Raw Material / Sub-Assembly Inventory</td><td>IM (credit — component GL class codes)</td></tr>
-<tr><td><span class="aai-pill">3120</span></td><td>Work In Process (WIP)</td><td>IM (debit), IH (debit), IC (credit), IV (debit or credit)</td></tr>
-<tr><td><span class="aai-pill">3130</span></td><td>Finished Goods / Sub-Assembly Inventory</td><td>IC (debit), IS scrap (debit)</td></tr>
+<tr><td><span class="aai-pill">3110</span></td><td>Inventory / Raw Materials</td><td>IM (credit — component GL class codes)</td></tr>
+<tr><td><span class="aai-pill">3120</span></td><td>Work in Process</td><td>IM (debit), IH (debit), IC (credit), IV (debit or credit)</td></tr>
+<tr><td><span class="aai-pill">3130</span></td><td>Sub-Assembly / Finished Goods</td><td>IC (debit), IS scrap (debit)</td></tr>
+<tr><td><span class="aai-pill">3210</span></td><td>Clear Work in Process</td><td>IV, actual costing only</td></tr>
 <tr><td><span class="aai-pill">3220</span></td><td>Labor Variance</td><td>IV variance offset</td></tr>
 <tr><td><span class="aai-pill">3240</span></td><td>Material Variance</td><td>IV variance offset</td></tr>
 <tr><td><span class="aai-pill">3260</span></td><td>Planned Variance</td><td>IV variance offset</td></tr>
 <tr><td><span class="aai-pill">3270</span></td><td>Engineering Variance</td><td>IV variance offset</td></tr>
 <tr><td><span class="aai-pill">3280</span></td><td>Other Variance</td><td>IV variance offset</td></tr>
-<tr><td><span class="aai-pill">3401</span></td><td>Payroll Accrual</td><td>IH (credit)</td></tr>
+<tr><td><span class="aai-pill">3401</span></td><td>Accruals</td><td>IH (credit)</td></tr>
 </tbody></table></div>
 
 <h3 id="section-6-inv" class="plain">Inventory (4100 Series)</h3>

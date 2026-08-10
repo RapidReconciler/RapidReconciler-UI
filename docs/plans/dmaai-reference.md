@@ -30,6 +30,10 @@ directly (junior-support training — the exit-strategy deliverable).
   **different** real accounts. Two failure shapes:
   - a wash pair pointed at **different** accounts (when it should wash) → **residual**;
   - a move pair pointed at the **same** account (when it shouldn't) → silent **net-zero**.
+
+  Net zero only means anything for a **valid pairing** — the debit AAI and the credit AAI
+  of the *same* transaction. Two AAIs drawn from different transactions can share an
+  account without any defect.
 - **Sign:** stored/displayed natural so recon ties to the KPI; in the compare table
   `variance = ledger − cardex`.
 - **Account key:** `BusinessUnit.Object.Subsidiary` (e.g. `MFG01.145000` or
@@ -54,15 +58,24 @@ Source: `RRUniversity/inventory-distribution-aais.html` §2; `AnalysisGuides/dma
 
 | AAI | Purpose | Triggers | Intended posting | Common failure → fix |
 |---|---|---|---|---|
-| **3110** | Raw material / sub-assembly inventory | IM (issue to WO) | **CR** raw inventory; offsets to WIP (3120) | Issue routed to wrong inventory object → reclass to configured account |
+| **3110** | Inventory / Raw Materials | IM (issue to WO) | **CR** raw inventory; offsets to WIP (3120) | Issue routed to wrong inventory object → reclass to configured account |
 | **3120** | Work in process (WIP) — the mfg hub | IM, IH, IC, IV | **DR** on issues + labor, **CR** on completions; every mfg leg offsets here | WIP left un-relieved → a completion/variance AAI is misrouted; trace which leg didn't hit 3120 |
-| **3130** | Finished-goods / sub-assembly inventory | IC (completion), IS (scrap) | **DR** FG; offsets WIP (3120) | Completion posts to a different object/subsidiary than the model → **reclass** (nets to zero, no P&L); if the model matches cardex, suspect a **post-time account override** or a **historical DMAAI change** (GL historical vs model current) |
-| **3210** | Clear WIP — additional COGS not booked at completion | completion (**actual costing only**) | **DR** COGS; clears residual WIP | not used under standard costing |
+| **3130** | Sub-Assembly / Finished Goods | IC (completion), IS (scrap) | **DR** FG; offsets WIP (3120) | Completion posts to a different object/subsidiary than the model → **reclass** (nets to zero, no P&L); if the model matches cardex, suspect a **post-time account override** or a **historical DMAAI change** (GL historical vs model current) |
+| **3210** | Clear Work in Process — COGS the completions did not pick up | **R31804** (**actual costing only**) | **DR** COGS; clears residual WIP | not used under standard costing |
 | **3220 / 3240 / 3260 / 3270 / 3280** | Labor / Material / Planned / Engineering / Other variance | IV | **DR or CR** the variance; offsets WIP (3120) | Variance AAI unconfigured → WIP never clears; post JE Dr/Cr inventory ↔ the variance AAI by variance type |
-| **3401** | Payroll / outside-ops accrual | IH | **CR** accrual; offsets WIP (3120) | Labor/outside-op accrual misrouted → reclass |
+| **3401** | Accruals (payroll / outside operations) | IH | **CR** accrual; offsets WIP (3120) | Labor/outside-op accrual misrouted → reclass |
 
 **Variance axes (R31804):** 3220 = actual vs planned hours · 3240 = actual vs planned material cost · 3260 = planned vs current cost · 3270 = current vs frozen standard · 3280 = mid-cycle rollup / quantity / rounding.
 **Program split (Oracle JDE 9.2, verified 2026-07-06):** R31802A posts completion (3110/3120/3130/3401); R31804 posts variances (3210/3220/3240/3260/3270/3280). **3140 is NOT a JDE manufacturing AAI** (confirmed against Oracle 9.2 — removed from scope).
+
+**Load gap — 3120 and 3401 never reach the derived tables.** Their `F4095` rows carry a
+**blank document type** (one AAI entry serves all five manufacturing document types), and
+all thirteen load levels in `usp6_002b_aai_staging.sql` filter on `mldct != ''`. So
+`RAccountInstr` and `v8ui_dmaai_routes` hold nothing for either AAI, and an empty derived
+table says nothing about whether the customer configured them. Answer any absence question
+against raw `F4095`. **3210 is not part of this gap** — its rows carry real document types
+and it loads into `rdmaaistaging` normally. It is absent from `v8ui_dmaai_routes` because
+that view is scoped to the DMAAI tables holding inventory accounts, and 3210 holds none.
 
 **Signature failure — standard-cost change after completion (Pattern 5.9):** cardex
 shows a zero-qty revaluation row with **no matching GL** because R30822 ran but
@@ -78,7 +91,7 @@ Source: `inventory-distribution-aais.html` §3; `dmaai-analysis.md` §2/§3/§5;
 |---|---|---|---|---|
 | **4122 / 4124** | Inventory DR / CR (adjustments, issues, transfers, reclass) | IA, II, IJ, IL, IM, IP, IR, IV, **IT** | move between two **different** accounts (IT should **wash to zero** between branches) | pair on **same** account when it should move → silent net-zero; pair on **different** accounts for IT when it should wash → residual (`itnz`) |
 | **4126 / 4128** | Received-not-vouchered DR / CR | VV, IT | wash to zero | same as above for the RNV pair |
-| **4134 / 4136** | In-transit DR / CR | IB | must route to **different** in-transit accounts to track goods in motion | pointed at same account → in-transit invisible |
+| **4134 / 4136** | Inventory cost change — inventory leg / expense-or-COGS leg | IB (P41022 quantity revisions, P41026 item branch/plant, R41802 batch cost maintenance) | 4134 moves the inventory value, 4136 takes the expense or COGS side | pointed at the **same** account → debit and credit cancel inside inventory and the cardex value never reaches the GL. **Not an in-transit AAI** |
 | **4152 / 4154** | Physical-inventory adjustment | IJ | offset each other | cycle/tag-count variance misrouted |
 | **4162** | Cross-company inventory transfer | IX | **DR** receiving company inventory | interco leg misrouted (see Intercompany card) |
 | **4172 / 4174** | Future cost update | (P41052) | offset each other | cost-change revalue misrouted |
@@ -103,7 +116,7 @@ Source: `inventory-distribution-aais.html` §4; `dmaai-analysis.md` §5; `transa
 | **4220** | Cost of goods sold | SO, C*, S* | **DR** COGS; offsets 4210 | 4240/4220 on **same** account → net-zero (`nz`) |
 | **4230** | Sales / revenue | SO, C*, S* | **CR** revenue; offsets A/R | — |
 | **4240** | Inventory (standard sales entry) | SO, C*, S* | **DR**; offsets 4220 | see 4220 |
-| **4245** | A/R trade **— on ST it becomes Inventory In-Transit (clearing)** | SO/C*/S* (AR) or **ST** (in-transit) | **DR** receivable, or **DR** in-transit on ST | on ST it must resolve to the **same account** as 43xx **4320**, or every transfer leaves a residual (see Transfers) |
+| **4245** | A/R trade **— on a cost-plus ST it is repurposed as Inventory In-Transit (clearing)** | SO/C*/S* (AR) or **ST at cost plus** (in-transit) | **DR** receivable, or **DR** in-transit at the marked-up price on a cost-plus ST | whichever AAI holds the in-transit debit must resolve to the **same account** as 43xx **4320**, or every transfer leaves a residual (see Transfers) |
 | **4250** | Sales-tax liability | SO, C*, S* | **CR** tax | — |
 | **4260** | Inter-branch revenue | SO (R42800 PO 2) | **CR** | — |
 | **4270 / 4280** | Advanced price adjustment / accrual | (Advanced Pricing) | offset each other | — |
@@ -155,12 +168,18 @@ Source: `dmaai-analysis.md` §3/§5; `inventory-distribution-aais.html` §4.1/§
 - **Internal branch-to-branch (doc type IT):** uses the **4122/4124** (or **4126/4128**)
   inventory pair, which must **wash to zero** between branches (same GL account both
   sides). Analyzer flags `itnz` when the two sides route to **different** accounts.
-- **Sales-side transfer shipment (ST) ↔ purchase-side receipt (OT):** **4245** (ST,
-  debit in-transit) must resolve to the **same GL account** as **4320** (OT receipt,
-  credit in-transit). If they drift, **every transfer leaves a permanent residual**
-  on the clearing account — the hardest residual to find, because each F0911 looks
-  correct individually. Prevention: hard-code the 4245 BU (don't flex it) so the
-  clearing account stays company-wide-consistent; validate 4320 matches.
+- **Sales-side transfer shipment (ST) ↔ purchase-side receipt (OT):** read the
+  **transfer pricing before naming the AAI** (owner ruling 2026-08-10). On a transfer
+  **at cost**, **4220** debits Inventory in Transit at the shipping branch's cost, and
+  the price side is neutralized by pointing 4245 and 4230 at the same wash account. On a
+  transfer **at cost plus**, **4245** debits Inventory in Transit at the marked-up price,
+  4230 records interbranch revenue, and 4220 records real COGS at the shipping branch's
+  cost. Either way, whichever AAI took the in-transit debit must resolve to the **same GL
+  account** as **4320** (OT receipt, credit in-transit). If they drift, **every transfer
+  leaves a permanent residual** on the clearing account — the hardest residual to find,
+  because each F0911 looks correct individually. Prevention: hard-code the BU on the ST
+  row (don't flex it by branch) so the clearing account stays company-wide-consistent;
+  validate 4320 matches.
 
 ---
 
@@ -185,11 +204,22 @@ rules; the reference AI should recognize them by name:
 | Direct Ship | 43xx 4365 (OD) · sales | SO+PO leg timing |
 | Cross-Batch Completion (5.21) | 31xx (3130) | completion journaled in a LATER batch than the one stamped on the cardex; amounts tie at work-order grain — not a variance |
 | Mfg Cost Mismatch (5.16) | 31xx (3120→3130) | GL completion exists on the account but the amount differs; cost basis moved between the cardex write and the R31802A run |
-| DMAAI Net Zero (5.22) | 31xx (3110 = 3130) | raw-material relief and finished-goods receipt resolve to ONE account so both legs cancel; 3120 unconfigured. The `nz` pattern, configuration not transaction |
-| ~~Unclassified — Mfg~~ | 31xx | **retired 2026-08-05** — the three claims above take the whole manufacturing residual (Demo1 1082→0, Demo3 562→0, Demo2 166→0). 5.9 and 5.12 remain the causes to *reason* about inside 5.16, but no longer describe an unclaimed population |
+| ~~DMAAI Net Zero (5.22)~~ | — | **withdrawn 2026-08-10** — see the note below |
+| ~~Unclassified — Mfg~~ | 31xx | **retired 2026-08-05** — 5.21 and 5.16 plus the since-withdrawn 5.22 took the whole manufacturing residual at the time (Demo1 1082→0, Demo3 562→0, Demo2 166→0). Those counts predate the 5.22 withdrawal and have not been re-measured; treat the retirement as provisional until they are. 5.9 and 5.12 remain causes to *reason* about inside 5.16 |
 | Unclassified — Purchasing | 43xx | landed cost (5.7) · voucher variance (5.15) · No Cx (5.8) · non-F4111 |
 | Unclassified — Sales | 42xx | relief/COGS routing |
 | Unclassified — Inventory | 41xx | missing model (5.1) · account mismatch (5.4) |
+
+**DMAAI Net Zero (5.22) was withdrawn, not reworded.** It claimed that 3110 and 3130
+resolving to one account made both legs of a manufacturing transaction cancel, and that
+3120 was unconfigured. Both halves were wrong. Net zero applies only to a valid DMAAI
+pairing: the debit AAI and the credit AAI **of the same transaction**. 3110 and 3130 sit at
+opposite ends of two different transactions with WIP between them, so pairing them tests
+nothing. The valid manufacturing tests are 3110 against 3120 on the IM and 3120 against
+3130 on the IC, and both return zero on all three demo databases under every relaxation
+tried. A shared 3110 / 3130 account is assumed intended, particularly at a site running a
+single inventory account. 3120 is configured — the rows are in raw `F4095`; they never
+reach the derived tables (see Family 31xx above).
 
 ## Gaps / to verify (owner)
 - **3140** — ✅ resolved via Oracle 9.2: **not a JDE manufacturing AAI**. Removed from scope.

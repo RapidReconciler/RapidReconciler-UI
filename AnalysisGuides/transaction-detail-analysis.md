@@ -25,7 +25,8 @@ Worked examples of getting this wrong, all from a single session:
 - Counting cardex-only `IT` documents in `RCardexLedgerCompare` gave **124,397**
   and read as a large inventory matching failure. Scoped to `...Compare2` the
   real figure is **3 rows on one database and 102 on another**, all already
-  claimed by Transfer Integrity. The other 124,000-odd had matched and cleared.
+  claimed by Transfer Integrity or Transfer Leg Missing. The other 124,000-odd
+  had matched and cleared.
 - A study of which match key minimises residual, run against
   `RCardexLedgerCompare`, produced figures such as "$2.68M sales residual". They
   describe the full ledger, support no conclusion about the variance
@@ -597,7 +598,8 @@ entry for the row.
 | 5.16 | Manufacturing Cost Mismatch | `MCM` | 5.16 |
 | 5.17 | Voucher Variance on Inventory (PV) | `VCHR` | 5.15 |
 | 5.18 | Duplicate shipment -- same order line | `DUP` | 5.17 |
-| 5.19 | Transfer Integrity -- IT relieved cardex value with no GL | `TXI` | 5.18 |
+| 5.19 | Transfer Integrity -- IT receipt leg priced and never extended | `TXI` | 5.18b |
+| -- (card) | Transfer Leg Missing -- IT document with one item-ledger leg | `TLM` | 5.18a |
 | 5.20 | Completion Not Journaled -- WO completion on cardex, not in GL | `CNJ` | 5.19 |
 | -- (card) | Make to Order -- manufacturing residual, decomposed by shape | `MTO` | 5.20 |
 | 5.21 | Cross-Batch Completion -- ties at work-order grain | `XBC` | not written up yet |
@@ -1136,62 +1138,134 @@ JDE never re-uses a line number for a partial shipment -- a genuine partial incr
 
 ---
 
-### 5.18 Transfer Integrity -- Inventory Transfer Relieved Cardex Value with No GL
+### 5.18 Transfer Breaks on IT Documents -- Two Faults Behind One Gate
 
-> Numbered 5.18 in this guide; the analyzer's internal pattern ID is **5.19**.
+> Numbered 5.18 in this guide. The analyzer's internal pattern ID for the priced-at-zero half is **5.19**; the missing-leg half has no analyzer pattern of its own yet.
 
-> **Screen IT documents for this before treating a cardex-only transfer as an unposted batch.** An inventory transfer (DT `IT`) that relieved value on the cardex with no GL counterpart is usually not a batch waiting to post -- it is a one-sided item-ledger entry. The classifier claims it as **Transfer Integrity** (`usp8_txv_flags`, DT=IT + cardex-only residual, after netting), so any IT that balanced is already cleared and only the genuinely-stuck relief lands here. The analyst analyzer and the Export Analyzer lead with the same diagnosis.
+> **`LedgerAmount = 0` on these documents does not mean the GL is missing.** It means the GL legs **netted to zero**, which is what a value-neutral location move should do. Every document behind both cards has an F0911 entry, verified on all 101 documents across the two companies in the specimen dataset. Read a cardex-only IT as an item-ledger break, not as a batch waiting to post, and never write it up as "relieved value with no GL entry."
+
+**The population splits on item-ledger leg count, and on the specimen the split was absolute.** `usp8_txv_flags` works the same gate (DT `IT`, `LedgerAmount = 0`, `CardexAmount <> 0`, after netting) in two passes:
+
+| F4111 rows on the document | Claim | Card | The fault |
+|---|---|---|---|
+| Exactly one | section C1, runs first | `Transfer Leg Missing` | The counterpart leg was never written. Quantity and value both moved one way |
+| Two or more | section C2 | `Transfer Integrity` | Both legs are present; the receipt leg carried a unit cost it never extended |
+
+JDE writes a transfer as a **line-ID pair**: `.000` for the relief, `.500` for the receipt. A document holding one F4111 row is missing half the pair, and that is a different problem from a pair that priced badly.
+
+**Company A and company B below** are the two companies in the specimen dataset used throughout this section, re-measured 2026-08-10. Company A loaded 16 periods and carries both faults; company B loaded 12 periods and carries only the priced-at-zero one. On company A the split ran 21 single-leg documents against 11 with two or more, no overlap, and the single-leg group held 87% of that company's transfer-break dollars. Every figure attributed to a company is that dataset's and not a property of the pattern.
+
+---
+
+#### 5.18a Transfer Leg Missing (`TLM`) -- one item-ledger leg, both legs in the GL
 
 **Symptoms:**
-- An **inventory transfer (DT `IT`)** document -- a location-to-location move
-- The cardex (F4111) relieved value; there is **no matching GL (F0911)** entry, so LedgerAmount = 0
-- A leg carries a **unit cost with a zero extended cost** -- the item-ledger amount never calculated
+- An inventory transfer (DT `IT`) with exactly **one** F4111 row
+- The GL carries **both** legs of the pair, same account, posted, summing to zero
+- The extended cost on the row that is present calculated correctly
 
 **What is happening:**
 
-A location transfer should be value-neutral: the out leg relieves the location and the in leg receives it at the same cost, so the two net to zero with no GL impact. Here a leg priced the quantity but never extended it to a dollar amount, so the move relieved inventory value the GL never recorded.
+Half the pair never reached the item ledger. Because a transfer moves quantity as well as value, the receiving location is short units and short dollars, which is what separates this from the priced-at-zero shape below. The GL knowing about the leg that the cardex does not have is the useful fact: the transfer completed in JDE, and the item-ledger write is what went missing after it.
 
-**The discriminator is narrower than it looks, and two earlier readings of it were wrong.** Both were corrected against the data on 2026-08-03; the queries are in the evidence table below.
+**The cause is open, and this guide is not going to close it from RR data.** Two candidates:
 
-- **It is not "the receiving leg."** Across the loaded window, zero-extended legs occur on the relief and receipt sides in **equal numbers** (one company: 232,427 each at cost level 2; 11,738 receipt against 11,722 relief at cost level 3). Leg direction does not separate the failures from the healthy transfers.
-- **A zero extended cost is ordinary.** It is present on roughly a third of all IT item-ledger rows in one company and is harmless there. Only the small slice that **also carries a unit cost** produces this card: 632 rows out of 488,314 zero-extended rows in that company, 139 of 1,843 in the other.
-- **Cost level is not a property of the pattern.** One company's failures are cost level 3 throughout (69 of 69 documents). The other mixes levels 2 and 3, and **only 11 of its 32 documents match the unit-cost-without-extension shape at all**, so the remaining 21 have a cause this section does not yet name.
-- **No vendor article has been cited for it.** Do not call it a named JDE or Oracle defect. The shape is real and confirmed in the data; the vendor attribution was never sourced.
+1. **JDE never wrote the row.** A one-sided item-ledger write by the transfer program.
+2. **The row was dropped on the way in.** `F4111`'s primary key is `ilukid` alone, so a colliding key is lost on a dedupe-on-insert load with no error raised.
 
-**It is episodic, not a standing setup fault.** Across 16 loaded periods in two companies the failures cluster into bursts separated by long clean stretches, while transfer volume runs steadily throughout. One company ran nine consecutive clean periods, then failed in three consecutive periods at rising severity, then ran two more clean periods at normal volume. Per transfer the rate is low, about **0.2% across the whole window and 1.7% in the worst single month**, while the dollars concentrate sharply: 69 documents carried roughly $246K. That combination, rare events and heavy value, is what makes it worth an analyst's time. It also means **"it will not clear on its own" is the wrong reading** -- count the failures per period before deciding whether the setup is still broken.
+Neither can be ruled out from the RapidReconciler database, and the specimen data cuts both ways. The GL knew about the missing line ID, which argues for the load. But the 20 failures on company A clustered on **one item, one lot, one location and one day with consecutive document numbers**, which is not the shape of a random load drop. Do not write either cause into a finding.
 
-The evidence, from two companies over 16 loaded periods:
+**The test that settles it** runs against source JDE, not against RR:
 
-| Test | Result |
-|---|---|
-| Zero-extended IT legs by direction | **Even split.** 232,427 receipt against 232,427 relief at cost level 2; 11,738 against 11,722 at cost level 3. Leg direction is not the discriminator |
-| Zero-extended legs that also carry a unit cost | **632 of 488,314** in one company, **139 of 1,843** in the other. The combination is the discriminator, and it is rare |
-| Card documents matching the unit-cost-without-extension shape | **69 of 69** in one company, **11 of 32** in the other. The remaining 21 documents are unexplained by this section |
-| Cost level of the card documents | Level 3 throughout in one company; a **mix of levels 2 and 3** in the other. Not a property of the pattern |
-| Periods affected | **5 of 16** per company. Nine consecutive clean periods, then three consecutive failing periods at rising severity, then two clean periods at normal volume |
-| Failure rate per transfer | **0.2%** across the window, **1.7%** in the worst single month (32 of 1,837 transfers) |
-| Value concentration | **69 documents carried roughly $246K**, with $153K in one period and $76K in the next |
-| Both item-ledger legs present | Yes, on every document checked. A missing leg is not the mechanism |
+```sql
+-- source JDE, not the RapidReconciler database
+select ildoc, illnid, ilitm, illocn, iltrqt, iluncs, ilpaid, ilukid
+from   f4111
+where  ildct = 'IT'
+and    ildoc between <first doc on the card> and <last doc on the card>
+order  by ildoc, illnid;
+```
 
-Repeat these on a customer database before generalizing. The shape is confirmed here; the rates are these datasets'.
+- Both `.000` and `.500` present in JDE, only one in RR: **a load fault.** Hand the document numbers over.
+- Only one line ID in JDE too: **a one-sided item-ledger write.** Take it to Oracle through the customer's IT department, with the F0911 legs attached as evidence that the transfer itself posted.
 
 **Resolution:**
 
-> ⚠ **This is a source fix, not a journal entry.** A JE balances the GL for the period but leaves the cardex short, and the break returns on the next transfer. Correct it in JDE.
+1. **Run the source query above.** Nothing in RapidReconciler answers the question and no amount of further reading of the card will.
+2. **Read item, location, lot and date across the documents on the card** before escalating. A cluster on one combination and one day frames the escalation differently from failures scattered across the file.
+3. **Correcting the inventory balance is a quantity-and-value adjustment**, booked by the accountant.
+4. **Refresh RapidReconciler and re-analyze** once the source position is settled.
 
-1. **Confirm the signature** -- pull the F4111 legs for the IT document and check that a leg carries a unit cost with a zero extended cost. Do not screen on leg direction or cost level; neither separates these documents from healthy transfers.
-2. **Confirm both sides of the document** -- read the F4111 legs against F0911 for the same document, so the one-sided relief is established from the data rather than inferred from the card. You do not need to run anything to find the rest of the population: the classifier stamps every one-sided IT relief `Transfer Integrity`, so the card already holds them all.
+**Prevention** depends on which branch the source query lands in, so there is nothing to prescribe before it is run.
+
+**Specimen evidence, company A only, measured 2026-08-10. Do not quote these as rates:**
+
+| Test | Result |
+|---|---|
+| Card documents with exactly one F4111 row | **21 of 21.** The other 11 documents on the same gate all had two or more |
+| Unpaired `.000` / `.500` line pairs across every IT document on company A | **23 of 795,558 line pairs, spread over 276,614 documents.** 21 of the 23 are these documents; the other 2 are zero-value and excluded by the classifier's `CardexAmount <> 0` gate. The population closes with nothing left over |
+| Same measurement on company B | **Zero unpaired legs across 41,824 line pairs on 37,136 documents.** The two conditions never co-occurred in one company |
+| Which leg survived | **20 relief, 1 receipt.** Either direction occurs, so leg direction is not a screen |
+| GL for these documents | **Present on all 21.** Both legs, same account, posted, netting to zero |
+| Periods affected | **2 of 16 loaded.** One document in 2022-04, then 20 in 2022-08 |
+| Concentration | The 20 documents in the burst share **one item, one lot, one location and one G/L date**, with consecutive document numbers |
+| Share of company A's transfer-break dollars | **87%** ($19,978.60 of $23,010.75) |
+
+---
+
+#### 5.18b Transfer Integrity (`TXI`) -- the receipt leg was priced and never extended
+
+**Symptoms:**
+- An inventory transfer (DT `IT`) with **both** item-ledger legs present
+- The **receipt** leg carries a unit cost with a **zero extended cost**, so the item-ledger amount never calculated
+- The GL legs net to zero, so `LedgerAmount = 0`
+
+**What is happening:**
+
+A location transfer should be value-neutral: the out leg relieves the location and the in leg receives it at the same cost, so the two net to zero with no GL impact. Here the receipt leg priced the quantity but never extended it to a dollar amount, so the move relieved inventory value that never came back.
+
+**The discriminator is narrower than it looks, and earlier readings of it were wrong.** Corrected against the data on 2026-08-03 and again on 2026-08-10; the queries are in the evidence table below.
+
+- **It is the receiving leg.** An earlier note in this section said otherwise, based on zero-extended legs splitting evenly between the relief and receipt sides. That measured every zero-extended leg in the company, and the vast majority of those are harmless. Measured on the legs that actually **cause** the card, the failing leg is the receipt leg in every case: 69 of 69 on company B, 15 of 15 on company A.
+- **A zero extended cost is ordinary.** It sits on 488,606 of company A's 1,591,177 IT item-ledger rows and is harmless on almost all of them. Only the slice that **also carries a unit cost** produces this card, and that slice is 646 rows.
+- **Cost level is not a property of the pattern.** Company B's failures are cost level 3 throughout; company A mixes levels 2 and 3.
+- **A missing leg is a different card.** Documents holding one F4111 row are claimed by `Transfer Leg Missing` before this pass runs, so everything here has both legs.
+- **No vendor article has been cited for it.** Do not call it a named JDE or Oracle defect. The shape is real and confirmed in the data; the vendor attribution was never sourced.
+
+**It is episodic, not a standing setup fault.** In the specimen data the failures cluster into bursts separated by clean stretches while transfer volume runs steadily throughout. Company B failed in its first two loaded periods, ran six consecutive clean ones, then failed in three consecutive periods at rising severity, then ran clean again at normal volume. Count the failures per period before deciding whether the setup is still broken.
+
+**Specimen evidence, measured 2026-08-10. Every figure below belongs to the company named beside it and to one loaded window. None of them is a property of the pattern:**
+
+| Test | Result | Dataset |
+|---|---|---|
+| Which leg carries the unit cost it never extended | **69 of 69** and **15 of 15**. The receipt leg, always | both companies, card documents only |
+| Zero-extended IT legs by direction, measured across the whole file | Near-even: 244,311 receipt against 244,295 relief on company A; 1,038 against 964 on company B. **This measures harmless legs and does not describe the card** | both |
+| Zero-extended legs that also carry a unit cost | 646 of 488,606 on company A; 152 of 2,002 on company B | both |
+| Cost level of the card documents | Level 3 throughout on company B; a mix of levels 2 and 3 on company A | both |
+| Periods affected | 5 of 12 loaded on company B; 3 of 16 on company A | both |
+| Failure rate per transfer | 1.7% in the worst single month: 32 documents against 1,837 IT documents posted that month | **company B, period 2023-02** |
+| Value concentration | 69 documents carried $246,785.97, with $153,348.06 in 2023-02 and $76,496.34 in 2023-03 | **company B** |
+| GL present on the card documents | Yes, on all 80 across both companies. Both legs, same account, netting to zero | both |
+| Both item-ledger legs present | Yes, by construction. Single-leg documents go to `Transfer Leg Missing` | both |
+
+Repeat these on a customer database before generalizing.
+
+**Resolution:**
+
+> **This is a source fix.** Correct the cost setup in JDE; the accountant books the entry that restores the value. A journal entry on its own leaves the cardex short and the break returns on the next transfer.
+
+1. **Confirm the signature** -- pull the F4111 legs for the IT document and check that the **receipt** leg carries a unit cost with a zero extended cost. Do not screen on cost level; it does not separate these documents from healthy transfers.
+2. **Confirm the GL** -- read F0911 for the document and expect to find both legs on the same account, netting to zero. That is the normal picture here, and finding it rules out the unposted-batch reading. You do not need to run anything to find the rest of the population: the classifier stamps every priced-at-zero transfer receipt `Transfer Integrity`, so the card already holds them all.
 3. **Count the failures per period, either side of the one you are working** -- this is the step that tells you which problem you have. A burst that starts and stops, with clean periods afterwards at normal transfer volume, is a cost change or a specific set of items. Failures in every period are a setup that is still wrong.
 4. **Compare the cost setup of the failing items against items that transferred cleanly in the same period** -- that difference is the lead, and it is a narrower question than auditing the cost setup as a whole.
-5. **Restoring the value is a dollars-only inventory adjustment (IA)**, booked by the accountant, so the cardex ties back to the GL.
+5. **Restoring the value is a dollars-only inventory adjustment (IA)** so the cardex ties back to the GL.
 6. **Refresh RapidReconciler and re-analyze** once the source correction and the IA post.
 
-**Prevention:** the target depends on step 3. Where the failures cluster into a burst, find what changed in that window (a cost roll, a new item set, a conversion) rather than treating the whole cost setup as broken. Where they run every period, the cost setup for the affected items is not extending a cost and that is the fix. Either way, re-check the next period: new IT documents carrying a unit cost with no extended cost mean the condition is still live.
+**Prevention:** the target depends on step 3. Where the failures cluster into a burst, find what changed in that window (a cost roll, a new item set, a conversion) rather than treating the whole cost setup as broken. Where they run every period, the cost setup for the affected items is not extending a cost and that is the fix. Either way, re-check the next period: new IT documents whose receipt leg carries a unit cost with no extended cost mean the condition is still live.
 
-> ⚠ **Do not prescribe R41543 / R41544 for this pattern.** The pairing was a guess and the owner refuted it 2026-08-03, the same ruling that pulled the programs off Completion Not Journaled (§5.19). The remedy is the item cost setup plus the dollars-only IA. And there is no population-finding step to replace: the classifier's `Transfer Integrity` claim already is the population of one-sided IT reliefs.
+> ⚠ **Do not prescribe R41543 / R41544 for this pattern.** The pairing was a guess and the owner refuted it 2026-08-03, the same ruling that pulled the programs off Completion Not Journaled (§5.19). The remedy is the item cost setup plus the dollars-only IA. And there is no population-finding step to replace: the classifier's `Transfer Integrity` claim already is the population of priced-at-zero transfer receipts.
 
-> **Analyzer output:** the analyzer fires this ahead of the generic Cardex-Only diagnosis (5.3) for any IT document that relieved the cardex with no GL, so the item-ledger-integrity story wins over "go post the batch." The classifier stamps the same rows **Transfer Integrity**, and they group on their own card on the Transactions page.
-
+> **Analyzer output:** the analyzer fires this ahead of the generic Cardex-Only diagnosis (5.3) for any IT document that relieved the cardex with a zero GL total, so the item-ledger story wins over "go post the batch." The analyzer does not yet distinguish the missing-leg half; the classifier does, and the two cards render separately on the Transactions page.
 ---
 
 ### 5.19 Completion Not Journaled -- Cardex Completion Whose GL Completion Cannot Be Found
@@ -1710,7 +1784,7 @@ Use the document type (from the Doc Header DT field) and Sub Type together to id
 | **IH** | Accounts | Is UDC 31/ER current for the employee who recorded the time? Does the rate match the expected work center rate? | R31422; UDC 31/ER |
 | **IH** | Periods | Did R31422 (Hours and Quantities Update) run in a different period than the time entry date? | R31422 GL Date Source |
 | **IS** | Accounts | Is AAI 3130 configured as a scrap account for the parent's GL class code? Is the scrap account separate from the finished goods account? | R31802A; AAI 3130 |
-| **IV** | Accounts | Which variance type (AAIs 3220–3280) is misconfigured or missing? Was R31804 run before all IM/IH/IC transactions were fully processed? | R31804 Process PO 2/3; AAIs 3220–3280 |
+| **IV** | Accounts | Which variance type (AAIs 3220 / 3240 / 3260 / 3270 / 3280, plus 3210 Clear Work in Process on an actual-costing order) is misconfigured or missing? Was R31804 run before all IM/IH/IC transactions were fully processed? | R31804 Process PO 2/3; AAIs 3210–3280 |
 | **IV** | Periods | Did R31804 run in a different period than the IM/IH/IC entries it is clearing? | R31804 Process PO 1 |
 | **Any mfg** | Accounts | Does F41021 (Item Location) carry a different GL class code than F4102 (Item Branch) for the parent item or any component? Manufacturing journal entries use F41021 -- verify it directly. | F41021 vs. F4102 |
 | **Any mfg** | Accounts | Is Work Center Efficiency enabled in Manufacturing Constants? Is AAI 3220 (Labor Efficiency) configured for all GL class codes in use? | Manufacturing Constants; AAI 3220 |
@@ -1836,7 +1910,7 @@ Patterns 5.6 / 5.9 / 5.15 / 5.16 reference several JDE programs in their explana
 | **R30835** | Cost Simulation | Manual / batch | F30026 (simulated cost values; preview only -- does not freeze) |
 | **R30822** | Frozen Cost Update | Manual / batch (typically scheduled) | F4105 (writes the new frozen std cost over the prior value). Does NOT directly post F4111 or F0911 by itself -- the cardex + GL revaluation is the job of **R30837**. |
 | **R30837** | WIP Revaluation | Run after R30822 (or after late labor / material on actual-cost WOs) | F4111 (Standard Cost Change rows for affected items) + F0911 (matching GL entries through AAI 3240 / 3260). Primarily an **actual-costing** tool (methods 02 / 09); under standard costing it's an optional revaluation control rather than an automatic step in the cycle. Skips work orders that have reached their Closed status. |
-| **R31802A** | Manufacturing Accounting | Run after WO completion | F4111 (cardex rows for completion, scrap, issues), F0911 (GL through AAIs 3110 / 3120 / 3130 / 3240 / 3260) |
+| **R31802A** | Manufacturing Accounting | Run after WO completion | F4111 (cardex rows for completion, scrap, issues), F0911 (GL through AAIs 3110 / 3120 / 3130 / 3401). The variance AAIs (3210 / 3220 / 3240 / 3260 / 3270 / 3280) belong to **R31804**, not to this program. |
 | **P3102** | Production Cost Inquiry | Interactive (review only) | Read-only |
 
 **Diagnosis implication for the "Standard Cost Change" F4111 row signature:**
