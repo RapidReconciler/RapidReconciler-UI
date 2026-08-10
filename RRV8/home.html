@@ -6435,7 +6435,11 @@
   function _fallbackBrief() {
     var d = _briefData(), sc = _briefScope();
     _setBriefPeriod();
-    if (!d) { _setBrief('watch', 'Reconnecting to your data…', ['The briefing refreshes once the roll-forward loads.']); return; }
+    // 'open', not 'watch'. Reconnecting is ACTIVITY, and watch paints the alert
+    // colour, which has to mean a check fired. 'open' makes no claim in either
+    // direction, which is what "we have not read anything yet" is. Activity has no
+    // slot of its own in the four-value vocabulary yet — that gap is UI-88.
+    if (!d) { _setBrief('open', 'Reconnecting to your data…', ['The briefing refreshes once the roll-forward loads.']); return; }
     var lvl = _briefLevel(d);
     var items = _briefItems(d).items;
     // Same "<Role> — Co NNNNN: …" header format the AI uses; in-balance companies
@@ -6446,7 +6450,44 @@
       return it.role + ' — Co ' + it.co + ': ' + _curSym(it.ccy) + _roundAmt(it.oob) + ' out of balance, mostly ' + it.driver.name.toLowerCase();
     };
     var material = items.filter(function (it) { return !it.reconciled && it.co; });
-    if (!material.length) { _setBrief('ok', 'Everything reconciles for ' + (sc.period || 'this period') + '.', items.slice(0, 4).map(line)); return; }
+    // UI-87 — this branch hardcoded 'ok' and "Everything reconciles", DISCARDING the
+    // lvl computed three lines up. _briefItems marks a company `reconciled` on its
+    // out-of-balance amount ALONE (|oob| < 1, or no component over 1); it never reads
+    // c.breaks or c.rf.unk. So a company carrying a roll-forward BREAK with an
+    // immaterial oob left material.length at 0, and the one headline an analyst reads
+    // before anything else said everything reconciled — while _briefLevel had already
+    // raised 'attention' on the same data. A DETECTED condition, hidden. That is a
+    // worse failure than the unevaluated case UI-80 fixed, and it is why the level
+    // must come from the producer here rather than from which list happened to be
+    // empty.
+    //
+    // ACCOUNTS, NOT ROWS: c.breaks counts distinct broken ROWS and an analyst works
+    // accounts, so the counts below are derived from the rf account lists. Break
+    // counts are also period-agnostic (see where c.breaks is set), which is why the
+    // out-of-balance clause carries the period and the roll-forward clause does not.
+    if (!material.length) {
+      var _per = sc.period || 'this period';
+      var _seen = Object.create(null), _brkAccts = 0, _unkAccts = 0, _overTol = 0;
+      d.companies.forEach(function (c) {
+        var rf = c.rf || {};
+        [(rf.gl && rf.gl.accts) || [], (rf.varc && rf.varc.accts) || []].forEach(function (list) {
+          list.forEach(function (a) {
+            var k = JSON.stringify([a.co, a.acct]);     // a row broken on both axes is one account
+            if (!_seen[k]) { _seen[k] = 1; _brkAccts++; }
+          });
+        });
+        _unkAccts += ((rf.unk && rf.unk.accts) || []).length;
+        if (c.cardex > cardexTolOf(c.co) + 0.005) _overTol++;
+      });
+      var _s = function (n) { return n === 1 ? '' : 's'; };
+      var _verdict =
+          _brkAccts ? 'No company is out of balance for ' + _per + ', but the roll-forward did not close on ' + _brkAccts + ' account' + _s(_brkAccts) + '.'
+        : _overTol  ? 'No company is out of balance for ' + _per + ', but cardex variance is over tolerance.'
+        : _unkAccts ? 'Nothing is out of balance for ' + _per + ', but ' + _unkAccts + ' account' + _s(_unkAccts) + ' had no prior period to compare against. It is not a clean result.'
+        :             'Everything reconciles for ' + _per + '.';
+      _setBrief(lvl, _verdict, items.slice(0, 4).map(line));
+      return;
+    }
     // items are company-number sorted; the first line is the verdict, rest are points (≤4 total).
     _setBrief(lvl, line(items[0]), items.slice(1, 4).map(line));
   }
@@ -6540,7 +6581,11 @@
     _setBriefPeriod();
     var gen = ++_briefGen;                       // supersede any in-flight briefing (DB/scope switch)
     var d = _briefData();
-    if (!d) { brief.classList.remove('is-loading'); _setBrief('ok', 'Reading your data…', []); return; }  // _invRows not in yet; a later trigger repaints
+    // 'open', not 'ok' (UI-87). This is the no-data path, and 'ok' painted the GREEN
+    // ALL-CLEAR dot beside the words "Reading your data…" — the headline claiming a
+    // clean period before anything had been read. Same defect as the hardcoded 'ok'
+    // in _fallbackBrief, one branch away.
+    if (!d) { brief.classList.remove('is-loading'); _setBrief('open', 'Reading your data…', []); return; }  // _invRows not in yet; a later trigger repaints
     // Honor the customer's AI exposure choice for this feature.
     var exposure = _recsummaryLevel();
     if (exposure === 'off') { brief.classList.remove('is-loading'); _fallbackBrief(); return; }   // no data leaves the page
