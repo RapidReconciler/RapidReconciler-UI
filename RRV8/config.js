@@ -1927,7 +1927,40 @@ window.RRV8 = window.RRV8 || {};
     var cardex = Number(r.CardexAmount) || 0;
     var ledger = Number(r.LedgerAmount) || 0;
     if (ot === 'OP' && dt === 'PV') return 'VCHR';
-    if (ot === 'WO' && (dt === 'IM' || dt === 'IC' || dt === 'IH')) return 'MCM';
+    // A MISMATCH NEEDS TWO SIDES (UI-77). MCM asserts a comparison — "the item
+    // ledger and the GL valued the same completion quantity at different unit
+    // costs", "the variance is quantity times the difference" — and its finding
+    // report claims checks that only make sense with both sides present: "an F0911
+    // completion exists for the work order on this account, so the completion-gap
+    // shape is ruled out", "the amounts still differ". A row with no cardex value
+    // has one side. There is no second cost basis to disagree with, so it cannot be
+    // a cost mismatch, and the attached finding asserts checks that were never made.
+    //
+    // MEASURED on Demo3: 9 rows reached this branch, totalling -$93,815.51, and ALL
+    // NINE carry CardexAmount = 0.00 exactly (sum of |CardexAmount| = 0.00). Largest
+    // is DocNumber 441322, doc type IM, ledger -$54,170.89. Zero rows reached it with
+    // a cardex value — so on that database this branch was firing ONLY on GL-only
+    // rows and never once on a genuine two-sided mismatch. Demo1 sends no rows here
+    // at all. They are now GL-ONLY, which is the shape they actually are.
+    //
+    // NOT A DOUBLE COUNT, A MISLABEL: the Home cards filter on code(), not gridCode(),
+    // so no dollar was ever counted twice. These 9 rows have no SubType and Type
+    // 'Mfg', so code() puts them in T-MFG either way. What changed is the mechanism
+    // and the corrective action the analyst reads inside that drill.
+    //
+    // FIXED AS A PRECONDITION, NOT A REORDER, on purpose: adding the two-sided test
+    // to this branch changes exactly the rows measured above and leaves the relative
+    // order of VCHR / STD-COST / CDX-ONLY untouched. Reordering GL-ONLY above this
+    // line would also have re-labelled STD-COST rows, which is unmeasured.
+    //
+    // STD-COST BELOW WAS CHECKED AND LEFT ALONE. Its `IB` clause requires
+    // |ledger| < eps and so can never overlap GL-ONLY (which requires
+    // |ledger| >= eps) — structurally impossible, not merely unobserved. Its `BV`
+    // clause could overlap in principle, but the branch matches ZERO rows in either
+    // database, so there is nothing to measure and nothing to justify moving.
+    // Cardex-only work-order rows still land on MCM: unmeasured here (zero rows), so
+    // deliberately unchanged.
+    if (ot === 'WO' && (dt === 'IM' || dt === 'IC' || dt === 'IH') && Math.abs(cardex) >= eps) return 'MCM';
     if (dt === 'BV' || (dt === 'IB' && Math.abs(ledger) < eps)) return 'STD-COST';
     if (Math.abs(cardex) < eps && Math.abs(ledger) >= eps) return 'GL-ONLY';
     if (Math.abs(ledger) < eps && Math.abs(cardex) >= eps) return 'CDX-ONLY';
