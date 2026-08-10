@@ -1041,6 +1041,17 @@
   /* Reviewed chip — the resolved counterpart to the Mark-period-reviewed button. */
   .txv-reviewed-chip { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 800; color: var(--green-deep); background: var(--green-pale); border: 1px solid var(--green); border-radius: 8px; padding: 5px 10px; white-space: nowrap; }
   .txv-review-btn { flex: 0 0 auto; }
+  /* Reviewed chip + its undo sit together so they read as one control group rather
+     than two competing affordances -- the mistake the per-card chip made. */
+  .txv-reviewed-wrap { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 8px; }
+  /* Deliberately QUIET. Reopening is a correction, not a primary action, and a
+     prominent button next to a green Reviewed chip invites the second mis-click. */
+  .txv-reopen-btn { flex: 0 0 auto; font-size: 11px; padding: 4px 9px; }
+  /* Not a control: a consequential review cannot be reversed here at all, so this
+     must not look clickable. Says what it needs instead of failing on click. */
+  .txv-reopen-locked { flex: 0 0 auto; font-size: 11px; font-weight: 700; color: var(--text-soft);
+    background: var(--bg-soft); border: 1px dashed var(--rule-strong, #cfd6e0); border-radius: 8px;
+    padding: 4px 9px; white-space: nowrap; cursor: help; }
   /* Card-level treatment: analyst-held is bumped (accent border + ring); riding is
      de-emphasized but stays readable. A completed card stays clearly dimmed. */
   .txv-card.is-elevated { border-left-width: 4px; border-left-color: var(--amber); box-shadow: 0 0 0 1px var(--amber-pale), var(--shadow-sm); }
@@ -8847,8 +8858,40 @@
       var _letRide = Math.max(0, _totalCards - resolvedThisCycle);
       var _review = (typeof RRV8 !== 'undefined' && RRV8.analystReviewStore) ? RRV8.analystReviewStore.get(solo, focusP) : null;
       var _reviewedLbl = (_review && _review.at && typeof _pwLabelFull === 'function') ? _pwLabelFull(String(_review.at).slice(0, 10)) : '';
+      // A period review used to be a ONE-WAY DOOR: this line replaced the button with a
+      // static chip, so a mis-click could not be undone anywhere in the UI (owner caught
+      // it 2026-08-10). An INERT review now gets a Reopen control beside the chip.
+      //
+      // INERT = nothing downstream acted on the close: no card handed off this cycle, no
+      // corrective adjustment recorded for the period, and no sources-fixed count on the
+      // record itself. Then the close carries no consequence and undoing it silently is
+      // correct — a mis-click ten seconds old must not mint a permanent audit artefact.
+      //
+      // NOT INERT = cards were handed off or accounting already adjusted. Someone saw the
+      // close, so reversing it needs an ATTRIBUTED Audit Center entry, and attribution is
+      // server-owned (`by`/`at`; the browser cannot attest identity). The chip then stands
+      // alone and its tooltip says why. WORKLIST UI-89 carries that half.
+      var _reviewInert = !_review ? false
+        : (resolvedThisCycle === 0 && !_acctStatus.acted && !(parseInt(_review.sourcesFixed, 10) > 0));
       var _reviewCtl = _review
-        ? '<span class="txv-reviewed-chip">✓ Reviewed' + (_reviewedLbl ? ' ' + esc(_reviewedLbl) : '') + '</span>'
+        ? '<span class="txv-reviewed-wrap">'
+          + '<span class="txv-reviewed-chip">✓ Reviewed' + (_reviewedLbl ? ' ' + esc(_reviewedLbl) : '') + '</span>'
+          + (_reviewInert
+              ? '<button type="button" class="txv-btn txv-reopen-btn" data-txv-reopen="1"'
+                + ' data-co="' + esc(solo) + '" data-cp="' + esc(focusP)
+                + '" title="Nothing was handed off and no adjustment was recorded, so this review can be undone here.">Reopen period</button>'
+              : '<span class="txv-reopen-locked" title="' + esc('This period cannot be reopened here because work already left it'
+                  + (resolvedThisCycle > 0 ? ' (' + resolvedThisCycle + ' card' + (resolvedThisCycle === 1 ? '' : 's') + ' handed off)' : '')
+                  // The third trigger is the record's OWN count, taken at review time. Without
+                  // it the tooltip said "work already left it" and named nothing — the same
+                  // unfalsifiable shape the card audit spent the day removing.
+                  + (parseInt(_review.sourcesFixed, 10) > 0
+                      ? ' (the review recorded ' + parseInt(_review.sourcesFixed, 10) + ' source fix'
+                        + (parseInt(_review.sourcesFixed, 10) === 1 ? '' : 'es') + ')' : '')
+                  + (_acctStatus.acted ? ' and accounting has recorded a corrective adjustment' : '')
+                  + '. Reversing it has to be recorded against whoever reopened it, which is not something the browser can attest.')
+                  + '">Reopen needs sign-off</span>')
+          + '</span>'
         : '<button type="button" class="txv-btn txv-review-btn" data-txv-review="1"'
             + ' data-co="' + esc(solo) + '" data-cp="' + esc(focusP)
             // Disambiguated from the per-card "Mark reviewed" that now sits ~8 lines below it in the
@@ -9051,6 +9094,23 @@
             }).then(function () {
               if (typeof renderAnalystTxVar === 'function') renderAnalystTxVar(_acctData || (typeof _briefData === 'function' ? _briefData() : null));
             });
+            return;
+          }
+          // "Reopen period" — the undo for an INERT period review. Only rendered when
+          // nothing was handed off and no adjustment was recorded, so this deletes the
+          // record outright rather than annotating a reversal: there is nothing
+          // downstream to reconcile with, and an unattributable "trail" would be worse
+          // than none. A consequential review renders no button at all (see the
+          // _reviewInert note above and WORKLIST UI-89).
+          var xbtn = e.target.closest ? e.target.closest('[data-txv-reopen]') : null;
+          if (xbtn) {
+            if (!(typeof RRV8 !== 'undefined' && RRV8.analystReviewStore
+                  && RRV8.analystReviewStore.remove)) return;
+            xbtn.disabled = true; xbtn.textContent = 'Reopening…';
+            RRV8.analystReviewStore.remove(xbtn.getAttribute('data-co'), xbtn.getAttribute('data-cp'))
+              .then(function () {
+                if (typeof renderAnalystTxVar === 'function') renderAnalystTxVar(_acctData || (typeof _briefData === 'function' ? _briefData() : null));
+              });
             return;
           }
           var btn = e.target.closest ? e.target.closest('[data-txv-act]') : null; if (!btn) return;
