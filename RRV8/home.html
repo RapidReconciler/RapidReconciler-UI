@@ -3835,6 +3835,8 @@
     // band can stay closed and still tell the user where they're working.
     setScopeStatus(coSummary, active ? fmtPeriod(active) : '');
     renderDbMeta();   // paint the install facts (environment shows immediately from the DB name)
+    // Chrome and panels must name the SAME period; every repaint of the scope bar syncs it.
+    if (typeof _syncPeriodPill === 'function') _syncPeriodPill();
   }
   // Headline for the collapsed Set Context band: database · working companies ·
   // working period. Mirrors setSectStatus' "only while collapsed" visibility so
@@ -3878,6 +3880,7 @@
     }
     window.RRV8.setActiveScope({ activeCompanies: next });
     renderScopeBar();
+    _syncPeriodPill();       // the chrome must follow the picked period, not the open one
     applyInventoryLight();   // re-flip arf/cx (+ cardex) dots for the new company scope, no refetch
     renderAiBriefing();      // regenerate the briefing for the new company scope
   }
@@ -4748,6 +4751,27 @@
       applyInventoryLight();   // cheap repaint with the tolerances applied
     }).catch(function () { /* endpoint absent -> keep defaults (strict) */ });
   }
+  // ONE LABEL, TWO PERIODS -- the defect this fixes. The chrome pill was written once from
+  // /inventory/status reconciliationFilter.period, which is the OPEN period on the data
+  // service, and then never updated. Every panel below it is scoped to the VIEWED period
+  // from the period selector. Once the analyst picks a period the two diverge and both call
+  // themselves "Period", so the page said "Period: Aug 28, 2025" while the Audit panel said
+  // "No analyst entries for Jul 31, 2025" -- and a finding handed off on Aug 28 was invisible
+  // to the accountant who went looking for it. Found walking the accountant surfaces,
+  // 2026-08-10.
+  // The pill now states the period everything else is scoped to, and names the open period
+  // only when it is a DIFFERENT one, because that difference is the thing worth knowing.
+  var _openPeriodTxt = '';
+  function _syncPeriodPill() {
+    var el = $('periodPill'); if (!el) return;
+    var sel = $('periodSelect');
+    var viewed = (sel && sel.value) ? fmtPeriod(String(sel.value).slice(0, 10)) : '';
+    var shown = viewed || _openPeriodTxt;
+    if (!shown) return;
+    el.textContent = 'Period: ' + shown
+      + ((_openPeriodTxt && viewed && _openPeriodTxt !== viewed) ? '  ·  open: ' + _openPeriodTxt : '');
+    el.hidden = false;
+  }
   function loadStatus() {
     rrFetch('inventory/status', { demoFile: 'inventory-status' }).then(function (payload) {
       setConn(false);
@@ -4756,8 +4780,8 @@
       var rf = payload.reconciliationFilter || {};
       if (rf.period) {
         _period = fmtPeriod(rf.period);
-        $('periodPill').textContent = 'Period: ' + _period;
-        $('periodPill').hidden = false;
+        _openPeriodTxt = _period;      // the OPEN period, kept distinct from the viewed one
+        _syncPeriodPill();
         // Seed the open period as the active default when the analyst hasn't
         // picked one yet, OR on a DB switch — the prior DB's sticky period isn't
         // valid against the new calendar, so reset to this DB's open period
@@ -11214,7 +11238,7 @@
       +     (co ? '<span class="audit-band-scope">' + esc(co) + '</span>' : '')
       +     (e.amount != null && Math.abs(e.amount) >= 1 ? '<span class="audit-band-amt">' + esc(_audMoney(e.amount)) + '</span>' : '')
       +   '</div>'
-      +   (e.message ? '<div class="audit-band-msg">' + esc(e.message) + '</div>' : '<div class="audit-band-msg is-empty">No finding recorded.</div>')
+      +   (e.message ? '<div class="audit-band-msg">' + _auditMsgHtml(e.message) + '</div>' : '<div class="audit-band-msg is-empty">No finding recorded.</div>')
       +   '<div class="audit-band-meta">' + meta + '</div>'
       + '</div>'
       + (e.detailsHref ? '<a class="audit-band-details" href="' + esc(e.detailsHref) + '">View details &rarr;</a>' : '')
@@ -11330,6 +11354,16 @@
     doc.save(RRV8.exportName({ surface: 'ReconciliationActivityLog', company: (co || undefined), period: per, ext: 'pdf' }));
     if (typeof toast === 'function') toast('Downloaded Period Activity (PDF) — ' + list.length + ' entr' + (list.length !== 1 ? 'ies' : 'y'));
     try { if (window.RRV8 && RRV8.logActivity) RRV8.logActivity('Period Activity exported', list.length + ' entries'); } catch (_) {}
+  }
+  // The audit band message is stored text that CAN carry markdown emphasis: a suggested
+  // journal entry composed upstream wraps its memo heading in **double asterisks**, and the
+  // band rendered it through esc() alone, so the accountant's audit record showed the
+  // asterisks literally. Found walking the accountant surfaces, 2026-08-10.
+  // ESCAPE FIRST, then promote the emphasis -- never the other way round, or stored text
+  // becomes an injection vector. Newlines are already handled by white-space: pre-wrap.
+  function _auditMsgHtml(s) {
+    var out = esc(String(s == null ? '' : s));
+    return out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   }
   function renderAuditPanel(d) {
     if (d && d.companies && !_acctData) _acctData = d;
