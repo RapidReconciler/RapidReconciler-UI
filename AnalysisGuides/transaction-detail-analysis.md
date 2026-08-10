@@ -603,10 +603,11 @@ entry for the row.
 | 5.20 | Completion Not Journaled -- WO completion on cardex, not in GL | `CNJ` | 5.19 |
 | -- (card) | Make to Order -- manufacturing residual, decomposed by shape | `MTO` | 5.20 |
 | 5.21 | Cross-Batch Completion -- ties at work-order grain | `XBC` | not written up yet |
-| 5.22 | DMAAI Net Zero -- 3110 and 3130 resolve to one account | `NZR` | not written up yet |
-| 5.23 | Sales Not Journaled -- relief stamped, no GL entry | `SNJ` | not written up yet; read the match-key warning in Section 0 before trusting an *absent* verdict on this claim |
+| 5.22 | DMAAI Net Zero -- 3110 and 3130 resolve to one account | `NZR` **withdrawn 2026-08-10** -- 3110 and 3130 are not a debit/credit pair; reasoning in `usp8_txv_flags` block I | not written up |
+| 5.23 | Sales Not Journaled -- relief stamped, no GL entry | `SNJ` **withdrawn 2026-08-05** -- the absence is real, the failed-run inference was not; the cause is now `SAC` | 5.22 |
 | 5.24 | Non-Stock Charge Lines -- every line non-stock | `NCL` | not written up yet |
 | -- | Offsetting GL entries -- 4220 and 4240 both route to a P&L account | `OFF` | 5.23 |
+| -- (card) | Sales AAI Cancels -- 4220 and 4240 resolve to ONE account, so no GL entry is written | `SAC` | 5.22 |
 | -- | Intercompany / Transfer / Direct Ship leg pairing | `ICO` / `TRF` / `DS` | 5.20 (mfg), leg pairing not written up yet |
 | -- | Unclassified residual by transaction type | `T-SALES` / `T-PURCH` / `T-MFG` / `T-INV` | -- |
 | -- | Tax Variance | -- | 5.6 |
@@ -1437,66 +1438,150 @@ Which configuration check catches it:
 
 ---
 
-### 5.22 Sample Despatch -- Cardex Relief With No GL Posting
+### 5.22 Sales AAI Cancels -- The Cost-of-Sales Pair Resolves to One Account
 
-> Numbered 5.22 in this guide. The classifier does not yet claim this pattern, so there is no analyzer pattern ID for it. Analyzer IDs 5.21 through 5.24 belong to the claims shipped 2026-08-05 (Cross-Batch Completion, DMAAI Net Zero, the withdrawn Sales Not Journaled, Non-Stock Charge Lines), none of which are written up in this guide yet.
+**Card:** `Sales AAI Cancels` (`SAC`), claimed by `usp8_txv_flags` block L.
+**Shape:** cardex-only at document grain -- `CardexAmount` non-zero,
+`LedgerAmount` zero -- on a sales document that has no `F0911` row at all.
 
-> **Read the order type before reading the document type.** A `JS` document is a sales-order shipment cost-of-sales entry, and one `JS` population can contain order types with completely different accounting behaviour. Diagnosing at document-type grain averages them together and produces a conclusion that is wrong for every subgroup.
+> **Corrected 2026-08-10.** This was written up as a sample despatch with no GL
+> posting rule, and it closed by asking the customer whether sample issues were
+> meant to post and to which expense account. The account instruction exists.
+> Both of its legs point at one account, so the entry cancels and never reaches
+> the GL. The blank-`BatchType` signal recorded here is stale as well: `BatchType`
+> reads `G` on all 1,292 rows of the specimen population.
 
 **Symptoms:**
-- Document type `JS`, order type **`SA`**, cardex-only, so LedgerAmount = 0
-- Many rows, each carrying a **trivial amount**, against a real inventory account
-- The stock location names the movement: `SAMPDESP`, `SAMPWIP`, `SAMPRACK*`, `LABWIP`, `CLEANROOM`, `S1ASAMP*`
-- The batch reads **posted** in F0011 (status `D`) yet holds no F0911 detail
-- RCardexLedgerCompare2 shows **BatchType blank** on the affected rows
+- Document type `JS`, order type `SA` on the specimen, cardex-only, so
+  `LedgerAmount = 0`
+- Many rows, each carrying a trivial amount, against a real inventory account
+- The stock location often names the movement: `SAMPDESP`, `SAMPWIP`,
+  `SAMPRACK*`, `LABWIP`, `CLEANROOM`, `S1ASAMP*`
+- The batch reads posted in `F0011` (status `D`) and still holds no `F0911`
+  detail for the document
+- `F0911` holds nothing for the document number under **any** document type
 
-**What is happening:**
+**What is happening.**
 
-Samples and lab draws are issued out of sample and lab locations against a sales order. The item ledger relieves inventory value. No GL journal line is ever written for the sample document, so the relief has no counterpart and the variance equals the full relieved amount. The batch shows posted because JD Edwards closed it, not because the sample document produced a journal entry.
+The shipment writes its cost of sales through two account instructions: **4220**,
+the cost-of-goods debit, and **4240**, the inventory credit. For this order type
+both resolve to the same account. The debit and the credit land on it together,
+cancel, and no journal detail is produced. The item ledger relieved inventory and
+the GL received nothing, so the relief has no counterpart and the variance is the
+full relieved amount. The batch shows posted because JD Edwards closed it, not
+because this document produced an entry.
 
-**Establish the order-type split first.** On a specimen database the `JS` population decomposes cleanly, and only one of the three order types leaves a residual:
+**Read the order type before the document type.** A `JS` document is a
+sales-order cost-of-sales entry, and one `JS` population can hold order types
+whose accounting behaviour has nothing in common. Diagnosing at document-type
+grain averages them and produces a conclusion that is wrong for every subgroup.
+On the specimen, re-measured 2026-08-10:
 
-| Order type | Cardex rows | Cardex value | GL leg on same document and batch | Unmatched |
+| Order type | Cardex rows (`F4111`) | Cardex documents | `F0911` legs found | GL value |
 |---|---|---|---|---|
-| `SK` intercompany inter-branch | 249 | -$6,465,601.39 | **249, all** | **$0.00** |
-| `SP` | 104 | -$1,372,370.78 | 103 | -$15,447.20 |
-| `SA` sample and lab issues | 5,563 | -$23,322.79 | **none** | -$23,322.79 |
+| `SK` intercompany inter-branch | 249 | 87 | 87 | -6,465,601.39 |
+| `SP` | 104 | 73 | 72 | -1,356,923.58 |
+| `SA` sample and lab issues | 5,563 | 3,104 | **0** | **0.00** |
 
-The two unmatched figures sum to -$38,769.99, which is the whole cardex-to-GL gap for `JS` on that database (-$7,861,294.96 against -$7,822,524.97). Nothing else is outstanding.
+`SK` ties on document number plus batch, to the penny, on every row. Before
+concluding that `JS` cannot be matched per document, split by order type and
+re-test.
 
-**The match key is not the problem, and assuming it is will cost you a claim.** `SK` ties on document number plus batch, to the penny, on every row. A specimen: cardex `JS` document 774875, batch 3039815, order 1272190, -$27,718.35, against F0911 document 774875, batch 3039815, object 1121, -$27,718.35. Before concluding that `JS` cannot be matched per document, split by order type and re-test.
+**The AAI is the evidence, and it is one query against `F4095`.**
 
-The evidence, one database:
+> **Column semantics, and getting this backwards returns an empty result you will
+> read as "the AAI does not exist".** On the **42xx sales** instructions the
+> ORDER TYPE is carried in `mldct`, and `mldcto` is blank. The **31xx
+> manufacturing** instructions are the other way round: `mldcto` holds the order
+> type and `mldct` the document type. Read `F4095` directly. A derived table that
+> returns nothing means not loaded, never not configured.
 
-| Test | Result |
-|---|---|
-| Batches containing `SA` sample rows | **271**, every one present in F0011 |
-| Of those, batch status posted (`D`) | **271 of 271.** Posted status does not imply a journal line exists |
-| Of those, holding any F0911 leg at all | **64 of 271** |
-| Those 64 against batches also containing `SK` or `SP` rows | **Exactly the same 64.** The GL belongs to the real shipments sharing the batch, never to the sample document |
-| `SA` rows with a GL leg on their own document and batch | **0 of 5,563** |
-| Cardex document numbers for unresolved rows found anywhere in F0911 | **0 of 1,291.** Genuinely absent, not keyed differently |
-| RCLC2 BatchType against F0011 for the same batches | F0011 reads `G` on **all 229**; RCLC2 records `G` on 59 and **blank on 170** |
-| `JS` rows carrying comment "Standard Cost Change" | **0 of 5,916.** Every row reads "Inventory transaction" |
-| Incidence across the three loaded databases | `JS` exists on **one only**. The other two hold zero `JS` rows and are null tests for it |
+Resolve each AAI number the way JDE does -- the item's GL class from `F4111`
+first, the `****` wildcard second -- and compare the two accounts. On the
+specimen, `SA` resolves through a single `****` row on each company and both AAIs
+land on one inventory account. An order type on the same company that ships
+correctly routes 4220 to a P&L object and 4240 to the branch inventory object.
+`F0911` holds no row on the shared account's object and none under document type
+`SA`, which is the confirmation that nothing was written rather than written
+elsewhere.
 
-**Rule out the documented cost-change pattern before using this section.** Section 5.9 describes a `JS` failure where a second item-ledger row appears with zero quantity and comment "Standard Cost Change," meaning the GL revaluation is missing. That is a different condition and it is not present here: no `JS` row carries that comment, and only one row across the whole population has zero quantity.
+**Exposure is per (company, order type, GL class), not per order type.** Specimen
+counts of slices where 4220 and 4240 resolve together:
 
-**Blank BatchType is a usable signal, and RapidReconciler is producing it.** F0011 carries a batch type on every one of these batches. RCLC2 leaves it blank on the majority, because the value is derived from the GL side and there is no GL side to derive it from. Once carried through, blank against populated separates two conditions the analyst treats differently: the GL for this transaction was never written, against the GL was written and disagrees.
+| Order type | Slices cancelling | Cardex activity in the window |
+|---|---|---|
+| `SA` | every class defined | yes -- this is the entire residual |
+| `SR`, `S3` | every class defined | none in the window, so misconfigured but quiet |
+| `C1`, `C2` | 5 of 9 classes per company | none |
+| `SO`, `SF`, `SX`, `CO`, `SD`, `SM`, `SW` | 1 or 2 of 9 classes | shipments, but not on the affected classes |
 
-**Resolution:**
+The order types with shipments and no residual are the useful negative control:
+the classes they ship on route correctly. Count the slices before telling the
+customer the exposure is one order type wide.
 
-> This is a posting-setup fix, not a journal entry. A correcting entry balances the period and the next sample issue reopens the variance.
+**Why the earlier "Sales Not Journaled" reading was wrong, and what it cost.**
+The withdrawn claim gated on "no `F0911` row exists for this document number" and
+concluded the posting run had failed. The absence is real; the conclusion drawn
+from it was wrong, and the evidence recorded for it does not survive
+re-measurement: the 159 `JS`
+legs on this database belong to `SK` and `SP`, not to `SA`; every one of them
+matches an `F4111` document number **and** its batch rather than carrying an
+internal number; and grouped by document they return exactly one leg per
+document, 159 to 159, so there is no summarization in this population to explain
+anything. The full correction is recorded in `usp8_txv_flags` block J. The
+standing rule it produced still holds: **the cardex-to-GL match key differs per
+transaction type, and `LedgerAmount = 0` means the correlation found nothing, not
+that the GL is absent.**
 
-1. **Confirm the order type and the location.** Pull the item-ledger rows for the document and read order type and stock location. Order type `SA` out of a sample or lab location is the signature. Order type `SK` on the same document type is a different transaction and it ties.
-2. **Confirm the GL is absent rather than differently keyed.** Read F0911 for the document number, then for the batch. Both empty is the finding. Do not stop at the document number alone.
-3. **Check the batch composition.** A batch holding both sample and shipment rows will show GL for the shipment rows only. That is expected and is not evidence the sample posted.
-4. **Establish whether the sample order type is configured to post.** The question for the customer is whether sample and lab issues are meant to relieve inventory value at all, and if so which expense account the relief is meant to reach. An issue that moves stock without a GL rule produces this variance every period by design.
-5. **Quantify before escalating.** The row count is high and the value is low. Confirm the value against the customer's materiality threshold before spending analyst time, and say plainly that the row count is what makes it visible, not the dollars.
+**Resolution.**
 
-**Prevention:** either give the sample order type a posting rule so the relief reaches a sample or promotional expense account, or move sample movements onto a document type that already posts. Both are source-side configuration owned by the customer. Re-check the following period: new `SA` rows out of sample locations with no GL leg mean the condition is still live.
+> This is an account-instruction fix, not a journal entry. A correcting entry
+> balances the period and the next shipment on the order type reopens the
+> variance.
 
-> **Materiality reads backwards on this pattern, and that is the point worth telling the analyst.** On the specimen database these rows are 1,292 of 1,308 unresolved documents, roughly 99% of the residual by count, and -$22,926.26 by value. It dominates the worklist and barely moves the balance sheet. Report both numbers together so nobody triages it on count alone or dismisses it on value alone.
+1. **Confirm the order type and the location.** Pull the item-ledger rows for the
+   document and read order type and stock location. A different order type on the
+   same document type is a different transaction and it may well tie.
+2. **Confirm the GL is absent rather than differently keyed.** Read `F0911` for
+   the document number with no account, period or document-type filter, then for
+   the batch. Both empty is the finding. Do not stop at the document number
+   alone.
+3. **Read 4220 and 4240 for that order type** on the document's company,
+   resolving exact GL class first and `****` second. One account on both legs is
+   the cause.
+4. **Diff against an order type on the same company that ships correctly**, GL
+   class by GL class. That comparison is the whole diagnosis and it hands the
+   customer the target values.
+5. **Check the batch composition.** A batch holding both affected and unaffected
+   rows shows GL for the unaffected ones only. That is expected and is not
+   evidence this document posted.
+6. **Quantify before escalating.** The row count is high and the value is low.
+   Confirm against the customer's materiality threshold, and say plainly that the
+   row count is what makes it visible, not the dollars.
+
+**Prevention.** Point 4240 at the inventory account per GL class, matching the
+order types that already ship correctly, and 4220 at cost of goods sold, so the
+two legs stop landing together. Sweep the rest of the family in
+the same change: an order type with no shipments this period is misconfigured all
+the same. The accountant
+separately books the relief that never reached the GL for the periods already
+closed. Re-check the following period: new cardex-only rows on the same order
+type mean the AAI was not changed.
+
+> **Materiality reads backwards on this pattern, and that is worth telling the
+> analyst.** On the specimen database these are 1,292 of 1,338 unclassified rows,
+> 96.6% of the residual by count and 1,292 of its 1,295 unclassified sales rows, worth
+> -22,926.26 across 1,291 documents and 15 consecutive periods. It dominates the
+> worklist and barely moves the balance sheet. Report both numbers together so
+> nobody triages it on count alone or dismisses it on value alone.
+
+> **Not to be confused with Section 5.23.** Offsetting GL Entries is the same root
+> cause -- the sales cost-of-sales pair -- in a different shape: there the GL
+> wrote two legs that cancel each other off inventory, here it wrote nothing at
+> all because both legs resolved onto one account. `OFF` needs two or more legs to
+> detect the cancellation, so it structurally cannot reach these documents, which
+> is why the two claims exist separately. Read the AAI pair and the `F0911` leg
+> count before choosing between them.
 
 ---
 
@@ -1520,9 +1605,13 @@ will ever surface it. Only the balance sheet moves, and it moves by the full
 item-ledger amount.
 
 **The cause is the AAI pair, per ORDER TYPE.** JDE's sales shipment writes the
-cost-of-sales entry through two account instructions: **4240** (the COGS debit)
-and **4220** (its counterpart, which is supposed to relieve the inventory
-account). Read both for the order type on the document:
+cost-of-sales entry through two account instructions: **4220** (the COGS debit)
+and **4240** (its counterpart, which is supposed to relieve the inventory
+account). The two roles were printed the wrong way round here until 2026-08-10;
+the table below only reads correctly with 4240 as the inventory leg, and raw
+`F4095` on a second database agrees -- a working sales order type routes 4220 to
+a P&L object and 4240 to the branch inventory object. Read both for the order type
+on the document:
 
 | Order type family | 4220 object | 4240 object | GL classes routed to an inventory account |
 |---|---|---|---|
