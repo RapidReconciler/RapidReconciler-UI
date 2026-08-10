@@ -543,8 +543,8 @@
     { k:'Method',      label:'Method',   render:function(r){return esc(r.Method);} },
     { k:'QtyOnHand',   label:'QOH',      num:true, render:function(r){return qty(r.QtyOnHand);} },
     { k:'AmountOnHand',label:'AOH',      num:true, render:function(r){return num(Number(r.AmountOnHand)||0);} },
-    { k:'AdjQty',      label:'Qty Var',  num:true, render:function(r){var v=-(Number(r.AdjQty)||0);    return _cxProj?'<span class="proj">'+moneyCell(v*_cxProj.fq)+'</span>':moneyCell(v);} },     // F41021 - F4111 (projected under a what-if)
-    { k:'AdjAmount',   label:'Amt Var',  num:true, render:function(r){var v=-(Number(r.AdjAmount)||0); return _cxProj?'<span class="proj">'+moneyCell(v*_cxProj.fa)+'</span>':moneyCell(v);} }, // F41021 - F4111 (projected under a what-if)
+    { k:'AdjQty',      label:'Qty Var',  num:true, render:function(r){var v=(Number(r.AdjQty)||0);    return _cxProj?'<span class="proj">'+moneyCell(v*_cxProj.fq)+'</span>':moneyCell(v);} },     // stored AdjQty as-is (projected under a what-if)
+    { k:'AdjAmount',   label:'Amt Var',  num:true, render:function(r){var v=(Number(r.AdjAmount)||0); return _cxProj?'<span class="proj">'+moneyCell(v*_cxProj.fa)+'</span>':moneyCell(v);} }, // stored AdjAmount as-is (projected under a what-if)
     { k:'LastActivity',label:'Last Activity', render:function(r){return esc(r.LastActivity)||'&mdash;';} },
     { k:'TxCount',     label:'Trans Count', num:true, render:function(r){return esc(r.TxCount);} }
   ];
@@ -603,9 +603,13 @@
     var av=rows.reduce(function(a,r){return a+(Number(r.AdjAmount)||0);},0);
     var qoh=rows.reduce(function(a,r){return a+(Number(r.QtyOnHand)||0);},0);
     var aoh=rows.reduce(function(a,r){return a+(Number(r.AmountOnHand)||0);},0);
-    // Display convention: variance = F41021 - F4111 (on-hand minus cardex) = -(stored
-    // estunits/baselinevar, which are cardex - onhand). A shortfall reads negative.
-    var dqv=-qv, dav=-av;
+    // Display convention: show the STORED value as-is -- AdjQty = estunits, AdjAmount =
+    // baselinevar, both cardex - on-hand. Home's Cardex Variance tab prints the same
+    // stored columns unnegated, so the two surfaces read identically for the same item.
+    // Owner ruled 2026-08-10 (UI-78) that this page aligns on Home's direction; the page
+    // used to negate for display, which made the same item read +500 on Home and -500
+    // here. Don't reintroduce a negation to "correct" the direction.
+    var dqv=qv, dav=av;
     kQty.textContent=qty(dqv); kQty.classList.toggle('neg',dqv<0);
     if(_curCtx.mixed){ kAmt.textContent='Mixed'; kAmt.classList.remove('neg'); }
     else { kAmt.textContent=curMoney(dav); kAmt.classList.toggle('neg',dav<0); }
@@ -673,11 +677,12 @@
     status = (status==='awaiting-it') ? 'awaiting-it' : 'corrected-at-source';
     var m=_cxDispoAll();
     m[_cxDispoKey(a)] = { status:status, by:(loginId()||'(unknown)'), at:new Date().toISOString(),
-      note:String(note||'').trim(), item:a.item, co:a.co, branch:(a.tgt&&a.tgt.Branch)||'', varQty:-a.qty, varAmt:-a.amt };
+      // Stored direction, matching the grid's Qty Var / Amt Var and Home (UI-78).
+      note:String(note||'').trim(), item:a.item, co:a.co, branch:(a.tgt&&a.tgt.Branch)||'', varQty:a.qty, varAmt:a.amt };
     _cxDispoSave(m);
     if(window.RRV8 && RRV8.logActivity){
       var lbl = status==='awaiting-it' ? 'Cardex variance — routed to IT (awaiting source fix)' : 'Cardex variance — corrected at source (JDE)';
-      RRV8.logActivity(lbl, 'Co '+a.co+' · item '+a.item+' · variance '+qty(-a.qty)+' units'+(note?' · '+String(note).trim():''));
+      RRV8.logActivity(lbl, 'Co '+a.co+' · item '+a.item+' · variance '+qty(a.qty)+' units'+(note?' · '+String(note).trim():''));
     }
   }
   function _cxDispoRemove(a){ var m=_cxDispoAll(); delete m[_cxDispoKey(a)]; _cxDispoSave(m); }
@@ -796,11 +801,13 @@
     var dA=(Number(document.getElementById('adjAmt').value)||0)-b.blA;
     renderRollAfter(rows, dQ, dA);
     col.hidden=false;
-    // Project the same delta onto the Item Position grid + scope-bar variance KPIs
-    // (displayed variance moves by −dQ/−dA; on-hand and value are unaffected). No
-    // delta → no projection. Factors distribute the projected total across the lots.
+    // Project the same delta onto the Item Position grid + scope-bar variance KPIs.
+    // Displayed variance is now the stored value (cardex - on-hand), so a baseline delta
+    // dQ moves it by +dQ; it moved by −dQ back when this page negated for display.
+    // On-hand and value are unaffected. No delta → no projection. The factors distribute
+    // the projected total across the lots; they are ratios, so they are sign-invariant.
     if(Math.abs(dQ)<0.005 && Math.abs(dA)<0.005){ _cxProj=null; }
-    else { var pq=b.varQ-dQ, pa=b.varA-dA;
+    else { var pq=b.varQ+dQ, pa=b.varA+dA;
       _cxProj={ pq:pq, pa:pa, fq:(Math.abs(b.varQ)<0.005?0:pq/b.varQ), fa:(Math.abs(b.varA)<0.005?0:pa/b.varA) }; }
     renderKpis(); renderGrid();
   }
@@ -827,15 +834,24 @@
   }
   // ---- four linked fields: beginning balance <-> variance-to-cardex, per dimension.
   //      From usp8_maint_set_beginning_balance: a beginning-balance delta dQ moves stored
-  //      estunits by +dQ, so the DISPLAYED variance (on-hand − cardex = −estunits) moves by
-  //      −dQ. Baseline and variance are one lever per dimension; qty and amt are independent.
+  //      estunits by +dQ. The variance fields carry the SAME stored direction as the grid
+  //      and the KPIs (cardex - on-hand, unnegated -- see renderKpis), so the variance
+  //      shown here moves by +dQ too, and baseline = blQ + (var - varQ0).
+  //      Baseline and variance are one lever per dimension; qty and amt are independent.
   //      Commit sends the absolute beginning balance (server preset 'manual').
+  //      UI-78 flipped varQ/varA from negated to stored, and flipped the two formulas
+  //      below from −(delta) to +(delta) in the same pass. That pair of changes is
+  //      algebraically neutral: for the clear path the typed variance is 0, so
+  //      blQ − (0 − varQ_negated) === blQ + (0 − varQ_stored). The beginning balance
+  //      committed to the server is byte-identical to what the negated build sent.
+  //      If you ever flip one side, flip the other in the same edit -- a half flip
+  //      writes a real beginning-balance correction in the wrong direction.
   function _cxTrim(x){ x=Number(x)||0; return String(Math.round(x*10000)/10000); }
   function _cxAdjCur(){
     var rows=_cxRollRows||[], a=_cxAgg, blRow=null;
     for(var i=0;i<rows.length;i++){ if(_rollBL(rows[i].BL)){ blRow=rows[i]; break; } }
     return { blQ: blRow?(Number(blRow.QuantityonHand)||0):0, blA: blRow?(Number(blRow.AmountonHand)||0):0,
-             varQ: a?(-a.qty):0, varA: a?(-a.amt):0 };
+             varQ: a?(a.qty):0, varA: a?(a.amt):0 };
   }
   function _cxAdjInit(){
     _cxAdjBase=_cxAdjCur();
@@ -846,14 +862,14 @@
   }
   function _cxAdjOnBaseline(dim){
     var b=_cxAdjBase; if(!b) return;
-    if(dim==='q'){ var bl=Number(document.getElementById('adjQty').value)||0; document.getElementById('adjVarQty').value=_cxTrim(b.varQ-(bl-b.blQ)); }
-    else { var bla=Number(document.getElementById('adjAmt').value)||0; document.getElementById('adjVarAmt').value=_cxTrim(b.varA-(bla-b.blA)); }
+    if(dim==='q'){ var bl=Number(document.getElementById('adjQty').value)||0; document.getElementById('adjVarQty').value=_cxTrim(b.varQ+(bl-b.blQ)); }
+    else { var bla=Number(document.getElementById('adjAmt').value)||0; document.getElementById('adjVarAmt').value=_cxTrim(b.varA+(bla-b.blA)); }
     _cxWhatIf();
   }
   function _cxAdjOnVariance(dim){
     var b=_cxAdjBase; if(!b) return;
-    if(dim==='q'){ var v=Number(document.getElementById('adjVarQty').value)||0; document.getElementById('adjQty').value=_cxTrim(b.blQ-(v-b.varQ)); }
-    else { var va=Number(document.getElementById('adjVarAmt').value)||0; document.getElementById('adjAmt').value=_cxTrim(b.blA-(va-b.varA)); }
+    if(dim==='q'){ var v=Number(document.getElementById('adjVarQty').value)||0; document.getElementById('adjQty').value=_cxTrim(b.blQ+(v-b.varQ)); }
+    else { var va=Number(document.getElementById('adjVarAmt').value)||0; document.getElementById('adjAmt').value=_cxTrim(b.blA+(va-b.varA)); }
     _cxWhatIf();
   }
   function renderGrid(){
@@ -1038,9 +1054,9 @@
     var s=focusRows();
     if(!s.length){ toast('Nothing to export'); return; }
     if(typeof XLSX==='undefined'){ toast('Excel library still loading &mdash; try again'); return; }
-    var labels=['Company','Long Account','Item','Branch','Location','Lot','Method','Cost Level','Qty Var (F41021-F4111)','Amt Var (F41021-F4111)','QOH','Last Activity','Tx Count'];
+    var labels=['Company','Long Account','Item','Branch','Location','Lot','Method','Cost Level','Qty Var (F4111-F41021)','Amt Var (F4111-F41021)','QOH','Last Activity','Tx Count'];
     var aoa=[labels];
-    s.forEach(function(r){ aoa.push([r.CompanyNumber,r.LongAccount,r.ItemNumber,r.Branch,r.Location,r.Lot,r.Method,r.CostLevel,-(Number(r.AdjQty)||0),-(Number(r.AdjAmount)||0),Number(r.QtyOnHand)||0,r.LastActivity,Number(r.TxCount)||0]); });
+    s.forEach(function(r){ aoa.push([r.CompanyNumber,r.LongAccount,r.ItemNumber,r.Branch,r.Location,r.Lot,r.Method,r.CostLevel,Number(r.AdjQty)||0,Number(r.AdjAmount)||0,Number(r.QtyOnHand)||0,r.LastActivity,Number(r.TxCount)||0]); });
     var ws=XLSX.utils.aoa_to_sheet(aoa), wb=XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb,ws,'Cardex Variance');
     XLSX.writeFile(wb, RRV8.exportName({ surface:'CardexVariance', drill:(state.focus&&state.focus.item)||'' }));
@@ -1220,7 +1236,7 @@
     // analyst entry in the accountant Audit Center). Fires on every clear, not just Approved.
     if(window.RRV8 && RRV8.logActivity && _cxApprovedCtx){
       RRV8.logActivity('Cardex variance — cleared (in-place RapidReconciler correction, reversible)',
-        'Co '+_cxApprovedCtx.co+' · item '+_cxApprovedCtx.item+' · cleared '+qty(-_cxApprovedCtx.qty)+' units / '+curMoney(-_cxApprovedCtx.amt));
+        'Co '+_cxApprovedCtx.co+' · item '+_cxApprovedCtx.item+' · cleared '+qty(_cxApprovedCtx.qty)+' units / '+curMoney(_cxApprovedCtx.amt));
     }
     agentFetch('/inventory/set-beginning-balance',{method:'POST',body:body})
       .catch(function(){})     // UI already cleared; server persistence is best-effort
