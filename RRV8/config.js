@@ -3070,7 +3070,42 @@ window.RRV8 = window.RRV8 || {};
       body: JSON.stringify({ company: n.company, periodEnd: n.periodEnd, sourcesFixed: n.sourcesFixed, letRide: n.letRide, note: n.note })
     }).then(function () { return n; }).catch(function () { return n; });
   }
-  window.RRV8.analystReviewStore = { load: load, get: get, forCompany: forCompany, save: save, key: _key };
+  /* remove(company, period) -> Promise — UNDO an INERT period review.
+   *
+   * Why this exists: marking a period reviewed was a ONE-WAY DOOR. `save` had no
+   * counterpart, and home.html replaces the "Mark period reviewed" button with a
+   * static chip once a record exists, so a mis-click could not be undone from the
+   * UI at all (owner, 2026-08-10).
+   *
+   * ⚠ INERT REVIEWS ONLY, and the CALLER enforces that — this function cannot see
+   * whether anything downstream acted on the close. A review is inert when no card
+   * was handed off and no corrective adjustment was recorded for the period. Once
+   * either happened, someone downstream saw the close, and reversing it needs an
+   * ATTRIBUTED entry in the Audit Center rather than a silent delete. That trail
+   * cannot be built here: `by`/`at` are server-owned and the browser cannot attest
+   * identity, so a client-side "undo" of a consequential review would look like a
+   * trail while carrying no author. WORKLIST UI-89 holds that half; do not widen
+   * this one to cover it.
+   *
+   * Same optimistic mirror-then-server shape as save(), and the same silence when
+   * the endpoint is absent: DELETE /inventory/txv/period-review is not shipped yet,
+   * so the mirror IS the store today and a failed request must not reach the console.
+   */
+  function remove(company, period) {
+    var co = String(company == null ? '' : company), per = _p10(period);
+    var k = _key(co, per), ck = _cacheKey(co);
+    // Optimistic: drop it from the in-memory cache and the localStorage mirror first,
+    // so the panel repaints even with no server behind it.
+    try { if (_cache[ck] && _cache[ck].map) delete _cache[ck].map[k]; } catch (_) {}
+    var ls = _lsRead(co); if (ls && ls[k]) { delete ls[k]; _lsWrite(co, ls); }
+    var base = _base();
+    if (!base) return Promise.resolve();
+    return fetch(base + '/inventory/txv/period-review?company=' + encodeURIComponent(co)
+                 + '&period=' + encodeURIComponent(per),
+                 { method: 'DELETE', headers: _auth({ 'Accept': 'application/json' }) })
+      .then(function () {}, function () {});   // endpoint not shipped: stay silent
+  }
+  window.RRV8.analystReviewStore = { load: load, get: get, forCompany: forCompany, save: save, remove: remove, key: _key };
 })();
 
 /*
