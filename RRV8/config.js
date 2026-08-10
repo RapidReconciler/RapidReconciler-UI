@@ -1000,6 +1000,38 @@ window.RRV8.GLOSSARY = [
  *   * NAME THE MATCH KEY. It differs per transaction type, so `Doc #` and `Order #` say
  *     which one the GL actually correlates on.
  * ===================================================================================== */
+/* =====================================================================================
+ * RRV8.kAmount — the ONE thousands abbreviation for money.
+ *
+ * WHY (found by the element walk, 2026-08-10). home.html carried FOUR shorteners with TWO
+ * different rounding rules, and they disagreed on a figure that was on screen at the time:
+ * the Cardex chip and totals panel read "$4.0K" while the framework below them read
+ * "$4,050". Both were right about the data and wrong about each other.
+ *
+ * The cause is a JavaScript trap worth knowing: `(4050/1000).toFixed(1)` is "4.0", NOT
+ * "4.1", because 4.05 has no exact binary representation and lands just below the halfway
+ * point. `Math.round(4.05 * 10) / 10` gives 4.1. Three of the four shorteners used toFixed
+ * and one used Math.round, so the same amount abbreviated two ways depending on which
+ * function the surface happened to call.
+ *
+ * Money rounds HALF UP, so Math.round is the correct rule and toFixed is the bug. One
+ * producer per figure applies to the FORMATTER as well as the number
+ * ([[feedback_one_producer_per_figure]]) -- a shared rounding rule is a shared figure.
+ *
+ *   RRV8.kAmount(4050)   -> '4.1K'     one decimal under 10K
+ *   RRV8.kAmount(45500)  -> '46K'      whole thousands at or above 10K
+ *   RRV8.kAmount(1.2e6)  -> '1.2M'
+ *   RRV8.kAmount(940)    -> '940'      below 1K, unabbreviated
+ * Returns the MAGNITUDE only. The caller owns the sign and the currency symbol, because
+ * sign convention differs per surface and money must not carry a symbol it did not earn.
+ * ===================================================================================== */
+window.RRV8.kAmount = function (v) {
+  var a = Math.abs(Number(v) || 0);
+  if (a >= 1e6) { var m = a / 1e6; return (m >= 10 ? Math.round(m) : Math.round(m * 10) / 10) + 'M'; }
+  if (a >= 1e3) { var k = a / 1e3; return (k >= 10 ? Math.round(k) : Math.round(k * 10) / 10) + 'K'; }
+  return String(Math.round(a));
+};
+
 window.RRV8.TXN_COLUMNS = {
   // ---- the analyst's own per-row review -----------------------------------
   Worked:        'Your review of this row: whether you agree it is explained. Stored per row, so it survives a re-run.',
@@ -2481,6 +2513,10 @@ window.RRV8 = window.RRV8 || {};
   function progress(sl, reviews) {
     sl = sl || []; reviews = reviews || {};
     var classes = Object.create(null), open = Object.create(null), items = Object.create(null);
+    // The CODES of the still-open classes, not just how many. The band above the routing
+    // list says "N GL classes excluded" and the list under it could not show WHICH, because
+    // this function computed the identities and returned only the count.
+    var openCodes = Object.create(null);
     var reviewed = 0, totalAmt = 0, openAmt = 0, rows = 0;
     sl.forEach(function (g) {
       var ck = classKey(g.co, g.gl);
@@ -2489,7 +2525,7 @@ window.RRV8 = window.RRV8 || {};
       rows += g.rowsTotal;
       var rev = reviews[g.key];
       if (rev && String(rev.status || '').trim()) reviewed++;
-      else { open[ck] = 1; openAmt += g.amount; }
+      else { open[ck] = 1; openAmt += g.amount; if (g.gl) openCodes[String(g.gl).trim()] = 1; }
       // Distinct items ACROSS slices. Summing g.items would double-count an
       // item that appeared under two stocking types; F4102's uniqueness on
       // (item, branch) makes that impossible today, and this does not depend
@@ -2500,6 +2536,8 @@ window.RRV8 = window.RRV8 || {};
     return {
       classes: Object.keys(classes).length,
       openClasses: Object.keys(open).length,
+      // Codes, so a consumer can point at the rows the count refers to.
+      openCodes: Object.keys(openCodes),
       slices: nSlices,
       reviewed: reviewed,
       items: Object.keys(items).length,
