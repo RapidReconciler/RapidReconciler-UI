@@ -37,6 +37,7 @@
 <script src="sidebar.js"></script>
 <script defer src="../Tools/help-sidebar.js"></script>
 <script src="vendor/xlsx-js-style.min.js" defer></script>
+<script src="export-guard.js"></script>
 <script defer src="../Tools/audit-workbook.js"></script>
 <style>
   /* Shared chrome (canonical palette, command-center wash, corner-chrome Home
@@ -2009,7 +2010,9 @@
       headers: prodHeaders(opts.body ? 'application/json' : null),
       body:    opts.body ? JSON.stringify(opts.body) : undefined,
     }).then(r => {
-      if (!r.ok) throw new Error(area + ': HTTP ' + r.status);
+      // The status has to survive as a PROPERTY: RRV8.fetchErrorMessage branches
+      // on it and must never scrape a code back out of the message string.
+      if (!r.ok) { const e = new Error(area + ': HTTP ' + r.status); e.status = r.status; throw e; }
       return r.json();
     });
   }
@@ -2020,6 +2023,16 @@
     );
   }
 
+  // ONE producer for the sentence: RRV8.fetchErrorMessage (sidebar.js) branches
+  // on the HTTP status so the remedy matches the failure — a 403 is an
+  // unauthenticated session, not a missing endpoint. See
+  // docs/plans/shared-state-registry.md. Falls back to the raw message only if
+  // sidebar.js is unavailable.
+  function fetchErrText(area, err) {
+    return (window.RRV8 && window.RRV8.fetchErrorMessage)
+      ? window.RRV8.fetchErrorMessage(area, err)
+      : ((err && err.message) || String(err));
+  }
   function showFetchError(area, err) {
     const page = document.getElementById('js-page');
     if (!page) return;
@@ -2032,7 +2045,7 @@
       '<div class="feb-icon">!</div>' +
       '<div class="feb-body">' +
         '<div class="feb-title">Couldn’t load <code>' + escapeHtml(area) + '</code></div>' +
-        '<div class="feb-detail">' + escapeHtml(err && err.message ? err.message : String(err)) + '</div>' +
+        '<div class="feb-detail">' + escapeHtml(fetchErrText(area, err)) + '</div>' +
       '</div>';
     page.insertBefore(banner, page.firstChild);
   }

@@ -1834,11 +1834,13 @@ ${adminSection}
   // and opts.today are ISO date strings (the caller reads the localStorage
   // snooze + today). Returns:
   //   known          - false when there's nothing to score on (older agent) ->
-  //                    caller shows grey / hides the card
-  //   level          - raw 'green'|'amber'|'red'
-  //   effectiveLevel - level after the snooze override (a non-red recommendation
-  //                    snoozed until a future date reads 'green'; red always
-  //                    shows); null when !known
+  //                    caller shows 'unknown' / hides the card
+  //   level          - raw state: 'ok'|'watch'|'attention' (see
+  //                    docs/plans/shared-state-registry.md — a producer returns a
+  //                    state, never a colour)
+  //   effectiveLevel - level after the snooze override (a non-'attention'
+  //                    recommendation snoozed until a future date reads 'ok';
+  //                    'attention' always shows); null when !known
   //   snoozed        - whether the snooze is currently suppressing a recommendation
   //   headline,detail - plain-language strings for the page card (detail may
   //                    carry <b> emphasis; rendered via innerHTML)
@@ -1853,43 +1855,43 @@ ${adminSection}
     var known  = (free != null) || (months != null);
 
     // No history series yet -> estimate growth from size / months retained.
-    // Flagged so a runway shortfall can only reach AMBER, never RED.
+    // Flagged so a runway shortfall can only reach 'watch', never 'attention'.
     var growthPerMonth = (months && months > 0 && size > 0) ? (size / months) : null;
-    var level = 'green', runway = null, reasons = [];
+    var level = 'ok', runway = null, reasons = [];
     if (free != null) {
       var headroom = Math.max(HEADROOM_FLOOR_MB, 0.5 * size);
       if (free < headroom) {
-        level = 'red';                        // MEASURED low disk -> RED allowed
+        level = 'attention';                  // MEASURED low disk -> 'attention' allowed
         reasons.push('Only <b>' + _prettyMb(free) + '</b> free on the data drive &mdash; a refresh needs roughly <b>' + _prettyMb(headroom) + '</b> free to run safely.');
       } else if (growthPerMonth) {
         runway = free / growthPerMonth;
-        if (runway < 12) {                    // estimate -> capped at AMBER
-          if (level !== 'red') level = 'amber';
+        if (runway < 12) {                    // estimate -> capped at 'watch'
+          if (level !== 'attention') level = 'watch';
           var m = Math.max(1, Math.round(runway));
           reasons.push('About <b>' + m + ' month' + (m === 1 ? '' : 's') + '</b> of disk space left at the recent growth rate.');
         }
       }
     }
     if (months != null && months > 2 * TARGET_RETENTION_MONTHS) {
-      if (level !== 'red') level = 'amber';
+      if (level !== 'attention') level = 'watch';
       reasons.push("You're keeping about <b>" + (months / 12).toFixed(months >= 24 ? 0 : 1) + " years</b> of history; around <b>2 years</b> is typical for reconciliation.");
     }
 
     var headline, detail;
-    if (level === 'green') {
+    if (level === 'ok') {
       headline = 'No purge needed right now';
       var bits = [];
       if (runway != null) bits.push('about ' + Math.round(runway) + ' months of disk runway');
       if (months != null) bits.push((months / 12).toFixed(months >= 24 ? 0 : 1) + ' years retained');
       detail = bits.length ? ('Looks healthy &mdash; ' + bits.join(', ') + '.') : 'Looks healthy.';
     } else {
-      headline = (level === 'red') ? 'Purge recommended' : 'Worth planning a purge';
+      headline = (level === 'attention') ? 'Purge recommended' : 'Worth planning a purge';
       detail = reasons.join(' ');
     }
 
     var until = opts.snoozeUntil || '', today = opts.today || '';
-    var snoozed = !!(until && today && today < until && level !== 'red');
-    var effectiveLevel = known ? (snoozed ? 'green' : level) : null;
+    var snoozed = !!(until && today && today < until && level !== 'attention');
+    var effectiveLevel = known ? (snoozed ? 'ok' : level) : null;
     return { known: known, level: level, effectiveLevel: effectiveLevel, snoozed: snoozed,
              headline: headline, detail: detail, reasons: reasons,
              runway: runway, retainedMonths: months };
@@ -1900,11 +1902,14 @@ ${adminSection}
   // 3 / 6 months" or "never" to acknowledge the complex-password setup. Stored
   // client-side per database (rrv8.complexPwReview.<db>). `value` is that stored
   // string: 'never', a future ISO date (reminded later), or empty/past (review
-  // due). Returns 'green' (reminded or never) or 'amber' (due / not yet set).
-  function complexPwReviewLevel(value, todayISO) {
-    if (value === 'never') return 'green';
-    if (value && todayISO && value > todayISO) return 'green';
-    return 'amber';
+  // due). Returns a STATE, never a colour (docs/plans/shared-state-registry.md):
+  //   'ok'   - reminded later, or 'never'. Nothing is waiting on the admin.
+  //   'todo' - due / not yet set. An acknowledgement is waiting on the admin.
+  //            NOT a detection: nothing was found, somebody just has to click.
+  function reviewReminderState(value, todayISO) {
+    if (value === 'never') return 'ok';
+    if (value && todayISO && value > todayISO) return 'ok';
+    return 'todo';
   }
 
   // --- Server ack -> legacy review "value" -----------------------------------
@@ -1913,7 +1918,7 @@ ${adminSection}
   // { kind, ackedDate, cadenceDays, never, ... }. This converts one ack into the
   // SAME "value" string the dot helpers above already understand — 'never', the
   // next-due ISO date (ackedDate + cadenceDays), or '' (no ack / undecidable) —
-  // so complexPwReviewLevel / purgeRecommendation stay untouched while the
+  // so reviewReminderState / purgeRecommendation stay untouched while the
   // source of truth moves from localStorage to the server. Retires the
   // rrv8.*Review / *Snooze localStorage scatter (per-browser, drift-prone).
   function ackToReviewValue(ack) {
@@ -1926,19 +1931,132 @@ ${adminSection}
     return d.toISOString().slice(0, 10);
   }
 
+  // --- The one place a status dot is painted ----------------------------------
+  // The dot's colour is derived from data-state in CSS. Nothing reads a colour
+  // class back out of the DOM — see docs/plans/shared-state-registry.md.
+  var DOT_STATES = { ok: 1, watch: 1, attention: 1, todo: 1, busy: 1, unknown: 1 };
+  function setDotState(el, state, title) {
+    if (!el) return;
+    var s = DOT_STATES[state] ? state : 'unknown';
+    el.setAttribute('data-state', s);
+    if (title != null) el.title = title;
+  }
+
+  // --- The one place a failed fetch is turned into a sentence -----------------
+  // Eleven pages each defined their own showFetchError, and every one of them
+  // rendered the SAME copy for every status code. The copy was written when the
+  // only failure anyone had seen was a missing endpoint, so it pointed at the
+  // endpoint contract in RRV8/API.md. That sends an analyst whose session simply
+  // is not authenticated off to read an API doc: on this agent a 403 has exactly
+  // one cause — no Authorization header reached it, so Spring answered the
+  // request as anonymous. The remedy has to match the status, and it has to
+  // match it in ONE place — see docs/plans/shared-state-registry.md.
+  //
+  // The status arrives as a REAL property. Every page's rrFetch / valcFetch
+  // stamps `err.status` with the HTTP code on a non-ok response. Nothing here
+  // scrapes a code back out of a message string: an Error with no `.status` is
+  // an Error whose status we do not know, and the unknown branch says exactly
+  // that rather than borrowing the remedy of the branch next to it.
+  //
+  // fetch() itself rejects with a TypeError, and only with a TypeError, when the
+  // request never reached a server (connection refused, DNS, CORS preflight).
+  // That is a real signal too, so it gets its own branch and its own remedy.
+
+  // host:port the call was aimed at, derived the same way rrFetch routes it:
+  // the VALC prefixes go to valcBase, everything else to the active DB's agent.
+  function _fetchTargetHost(area) {
+    var a = String(area == null ? '' : area).replace(/^\/+/, '');
+    try {
+      var vp = global.RR_VALC_PREFIXES || [];
+      var isValc = false;
+      for (var i = 0; i < vp.length; i++) { if (a.indexOf(vp[i]) === 0) { isValc = true; break; } }
+      var base = isValc
+        ? ((global.RR_CONFIG && global.RR_CONFIG.valcBase) || '')
+        : ((global.RRDB && global.RRDB.agentBase && global.RRDB.agentBase()) ||
+           (global.RR_CONFIG && global.RR_CONFIG.testAgentBase) || '');
+      return base ? new URL(base).host : '';
+    } catch (_) { return ''; }
+  }
+
+  // The reason the SERVICE gave, or '' when the message is just the code
+  // restated. Every rrFetch builds its fallback message around 'HTTP <status>'
+  // and overwrites it only when the response body carried a message/error — so
+  // a message that never mentions the code is a real, server-authored detail.
+  // This reads the message; it never reads a STATUS out of one.
+  function _serverDetail(raw, st) {
+    if (!raw || raw.indexOf('HTTP ' + st) !== -1) return '';
+    return raw.replace(/\s*\.\s*$/, '');
+  }
+
+  function fetchErrorMessage(area, err) {
+    var raw = (err && err.message) ? String(err.message)
+                                   : String(err == null ? '' : err);
+    var st  = (err && typeof err.status === 'number' && isFinite(err.status))
+                ? err.status : null;
+    var ep  = String(area == null ? '' : area).replace(/^\/+/, '') || 'this request';
+
+    // 401 — the token failed parse or verify. 403 — no Authorization header
+    // reached the service at all. Both are the same problem for the reader and
+    // have the same remedy, so they share one sentence. API.md is NOT the
+    // pointer here; the session is.
+    if (st === 401 || st === 403) {
+      return 'Your session is not authenticated for this database. ' +
+             'Sign out and sign in again, then retry. (HTTP ' + st + ')';
+    }
+    // 404 — the ONLY place the endpoint contract is the right pointer.
+    if (st === 404) {
+      return 'This database’s data service does not have ' + ep + '. ' +
+             'Its version is older than this page expects — ask your IT department ' +
+             'to update the RapidReconciler service on that server. ' +
+             'The endpoint contract is in RRV8/API.md. (HTTP 404)';
+    }
+    // 5xx — the service answered, from its own logic or the database, and
+    // failed. Nothing about the reader's session is at fault.
+    if (st !== null && st >= 500 && st <= 599) {
+      // When the service named its own reason in the body, that reason IS the
+      // signal (the SQL Server Agent case on the Data Refresh page). rrFetch
+      // only replaces its 'HTTP nnn' placeholder when the body carried a
+      // message, so a raw that never mentions the code is a real detail.
+      var detail = _serverDetail(raw, st);
+      return 'The RapidReconciler data service failed while handling this request' +
+             (detail ? ': ' + detail : '') + '. ' +
+             'Nothing about your session needs to change — ask your IT department ' +
+             'to check the service log on this database’s server. (HTTP ' + st + ')';
+    }
+    // No response at all.
+    if (st === 0 || (err instanceof TypeError)) {
+      var hp = _fetchTargetHost(area);
+      return 'No response from the RapidReconciler data service' +
+             (hp ? ' at ' + hp : '') + '. ' +
+             'The service may not be running — ask your IT department to start it ' +
+             'on this database’s server, then retry.';
+    }
+    // Unrecognised. Make no claim about the cause and suggest no remedy: report
+    // the status and the raw message as they came back. An unknown code must
+    // never inherit a neighbouring case's treatment.
+    if (st !== null) {
+      var d = _serverDetail(raw, st);
+      return d ? ('HTTP ' + st + ' on ' + ep + '. ' + d) : raw;
+    }
+    return raw || 'The request failed and reported no reason.';
+  }
+
   global.RRV8 = global.RRV8 || {};
+  global.RRV8.fetchErrorMessage       = fetchErrorMessage;
   global.RRV8.ackToReviewValue        = ackToReviewValue;
   global.RRV8.purgeRecommendation     = purgeRecommendation;
-  global.RRV8.complexPwReviewLevel    = complexPwReviewLevel;
-  // Review Job Schedule uses the identical green/amber rule (future ISO date or
-  // 'never' = green, else amber), keyed at rrv8.scheduleReview.<db>. Aliased to
+  global.RRV8.setDotState             = setDotState;
+  global.RRV8.DOT_STATES              = DOT_STATES;
+  global.RRV8.complexPwReviewState    = reviewReminderState;
+  // Review Job Schedule uses the identical ok/todo rule (future ISO date or
+  // 'never' = ok, else todo), keyed at rrv8.scheduleReview.<db>. Aliased to
   // the one function so the two no-attestation reminders can't drift.
-  global.RRV8.scheduleReviewLevel     = complexPwReviewLevel;
+  global.RRV8.scheduleReviewState     = reviewReminderState;
   // Claude Assistant (30/60/Never, rrv8.aiReview.<db>) and Activity Log
-  // (7/14/30-day, rrv8.activityReview.<db>) use the identical green/amber rule —
+  // (7/14/30-day, rrv8.activityReview.<db>) use the identical ok/todo rule —
   // aliased to the one function so the page bands and the Home dots can't drift.
-  global.RRV8.aiReviewLevel           = complexPwReviewLevel;
-  global.RRV8.activityReviewLevel     = complexPwReviewLevel;
+  global.RRV8.aiReviewState           = reviewReminderState;
+  global.RRV8.activityReviewState     = reviewReminderState;
   global.RRV8.mountSidebar            = mountSidebar;
   global.RRV8.mountTopbar             = mountTopbar;
   global.RRV8.mountWorkbar            = mountWorkbar;

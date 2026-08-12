@@ -25,6 +25,10 @@
      reconciliation page uses. Loaded sync so MODE / IS_DEMO are
      defined before the IIFE runs. -->
 <script src="config.js"></script>
+<!-- One place an .xlsx export is allowed to fail. Every workbook this page
+     builds goes through RRV8.saveWorkbook / RRV8.runExport so a build or write
+     that dies reports an actionable reason instead of the button doing nothing. -->
+<script src="export-guard.js"></script>
 <script src="sidebar.js"></script>
 <script src="period-bars.js"></script>
 <!-- SheetJS for client-side .xlsx export — vendored under
@@ -796,7 +800,11 @@
   .tx-analyzer { margin: 0 0 18px; padding: 16px 18px; background: var(--bg-card); border: 1px solid var(--rule); border-left: 4px solid var(--blue); border-radius: 12px; box-shadow: var(--shadow-sm); }
   .tx-analyzer-head { display: flex; align-items: center; justify-content: flex-start; gap: 12px; width: 100%; background: none; border: none; padding: 0; margin: 0; text-align: left; cursor: pointer; font: inherit; color: inherit; }
   .tx-analyzer-head:hover .tx-analyzer-title { color: var(--blue); }
-  .tx-analyzer-flag { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; color: var(--text-muted); white-space: nowrap; }
+  /* The chip is now assembled from two computed clauses (what the analyzer
+     selected + the DMAAI resolution verdict), so it can run past what fits on a
+     narrow viewport. It wraps right-aligned rather than overflowing the header
+     or ellipsing away the mismatch count, which is the part worth reading. */
+  .tx-analyzer-flag { margin-left: auto; min-width: 0; display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; color: var(--text-muted); text-align: right; line-height: 1.35; }
   .tx-analyzer-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--rule-strong, #cfd6e0); flex-shrink: 0; }
   /* UI-74 — the dot answers ONE question: did the analyzer DETECT something in
      these rows? --orange is reserved for a detection (duplicate cardex relief,
@@ -3187,7 +3195,10 @@
       headers: prodHeaders(opts.body ? 'application/json;charset=UTF-8' : null),
       body:    opts.body ? JSON.stringify(opts.body) : undefined
     }).then(r => {
-      if (!r.ok) throw new Error('HTTP ' + r.status + ' on ' + url);
+      // Carry the status on the Error. showFetchError branches on it — a 403 is
+      // an unauthenticated session, a 404 is an endpoint this agent does not
+      // have, and telling the analyst the wrong one costs them the afternoon.
+      if (!r.ok) { const e = new Error('HTTP ' + r.status + ' on ' + url); e.status = r.status; throw e; }
       // r.json() parses JSON directly from the body buffer, skipping
       // the intermediate JS-string allocation that r.text() +
       // JSON.parse(t) needs. Worth real time on the bulk
@@ -3218,13 +3229,18 @@
       if (page) page.insertBefore(banner, page.firstChild);
       else main.insertBefore(banner, main.firstChild);
     }
-    const msg = (err && err.message) ? err.message : String(err);
+    // One producer for the sentence (RRV8.fetchErrorMessage in sidebar.js); this
+    // page still owns its own banner. The API.md pointer used to render on EVERY
+    // status code, so a 403 — an unauthenticated session — sent the analyst off
+    // to read an endpoint contract. The producer emits that pointer on 404 only.
+    const msg = (window.RRV8 && window.RRV8.fetchErrorMessage)
+      ? window.RRV8.fetchErrorMessage(area, err)
+      : ((err && err.message) || String(err));
     banner.innerHTML =
       '<div class="feb-icon">!</div>' +
       '<div class="feb-body">' +
         '<div class="feb-title">Fetch failed: <code>' + escapeHtml(area) + '</code></div>' +
         '<div class="feb-detail">' + escapeHtml(msg) + '</div>' +
-        '<div class="feb-detail">See <a href="API.md" target="_blank">RRV8/API.md</a> for the endpoint contract.</div>' +
       '</div>';
   }
 
@@ -3751,13 +3767,20 @@
       if (t) h['Authorization'] = 'Bearer ' + t;
     } catch (_) {}
     return fetch(url, { headers: h }).then(r => {
-      if (!r.ok) throw new Error('HTTP ' + r.status + ' on ' + url);
+      // Carry the status on the Error. showFetchError branches on it — a 403 is
+      // an unauthenticated session, a 404 is an endpoint this agent does not
+      // have, and telling the analyst the wrong one costs them the afternoon.
+      if (!r.ok) { const e = new Error('HTTP ' + r.status + ' on ' + url); e.status = r.status; throw e; }
       return r.arrayBuffer();
     });
   }
 
   // Build the production-shape System Status workbook from the
-  // demo step-log JSON. Returns the .xlsx as an ArrayBuffer; the
+  // demo step-log JSON. THROWS on any failure &mdash; it never returns a
+  // partial or undefined buffer, because the caller posts whatever it gets
+  // straight to the analyzer. Its one caller
+  // (runSystemStatusAnalysis) runs it under RRV8.runExport and stops when the
+  // build dies. Returns the .xlsx as an ArrayBuffer; the
   // analyzer&rsquo;s SystemStatusTemplate detects it from the
   // sheet name + Capture / Step / Process / StartTime / EndTime /
   // Seconds / UpdateCount / ErrorNum columns.
@@ -3786,7 +3809,11 @@
         // Offline capture: build the production-shape workbook from the
         // cached status log and route it through the same headless bridge.
         const log = await rrFetch('system-status-log');
-        buffer = buildSystemStatusXlsxBuffer(log);
+        // The build allocates; under the shared guard a failure reports an
+        // actionable reason and yields undefined rather than throwing past the
+        // handoff. Stop here &mdash; runExport has already said why on screen.
+        buffer = RRV8.runExport('System Status', flashStatus, () => buildSystemStatusXlsxBuffer(log));
+        if (!buffer) return;
       } else {
         // Prod / staging: agent generates the diagnostic Excel
         // (where the v_diagnostic5_job_status SELECT actually runs
@@ -3795,6 +3822,13 @@
         const fileName = resp && resp.fileName;
         if (!fileName) throw new Error('Agent did not return a fileName');
         buffer = await rrFetchBinary('download-excel/' + encodeURIComponent(fileName));
+      }
+      // Both paths can hand back something the analyzer can't read: a
+      // zero-length agent file, or a fetch that resolved with no body. Say so
+      // instead of posting an empty buffer and letting the analyzer stall.
+      if (!buffer || !buffer.byteLength) {
+        flashStatus('System Status workbook came back empty &mdash; nothing to analyze.');
+        return;
       }
       handOffToAnalyzer(buffer, null);
     } catch (err) {
@@ -5001,6 +5035,18 @@
   }
   function txFinding(code) {
     return (window.RRV8 && RRV8.txv) ? RRV8.txv.finding(code) : null;
+  }
+  // The catalog's title for any code, including the SIGNAL-only ones
+  // (NON-STOCK, DMAAI-MIS, UNSCOPED) that _TXV_CARD_TITLE does not carry.
+  // One producer for a card's name: the analyzer chip reads it rather than
+  // holding a second wording of its own.
+  function _txCodeTitle(code) {
+    if (!code) return '';
+    if (_TXV_CARD_TITLE[code]) return _TXV_CARD_TITLE[code];
+    try {
+      var i = (window.RRV8 && RRV8.txv) ? RRV8.txv.info(code) : null;
+      return (i && i.title) || code;
+    } catch (_) { return code; }
   }
 
   // Visible chip text + CSS class kind. Used by both the card
@@ -6871,40 +6917,46 @@
     'gl-only':     { c: 'warn',     t: 'GL only' },
     none:          { c: 'warn',     t: '—' }
   };
-  function _txCombosHtml(combos) {
-    if (!combos.length) return '';
-    // Two non-verdict states, both of which used to print "all match the cardex model
-    // account":
-    //   modelRows undefined  → _txAttachModel hasn't run yet (the placeholder paint
-    //                          that goes up while the config loads).
-    //   modelUnresolved      → the DMAAI setup could not be READ at all.
-    // In neither case has anything been compared, so neither may claim agreement. The
-    // cardex-vs-GL columns still come from the rows themselves, so the table stays
-    // useful; only the model comparison is withheld.
-    var _pending = combos.some(function (c) { return c.modelRows === undefined && !c.modelUnresolved; });
-    if (_pending) {
-      return '<div class="tx-analyzer-combos"><div class="tx-combos-hd">'
-        + escapeHtml('Reading the DMAAI account setup for these ' + combos.length + ' combination'
-          + (combos.length === 1 ? '' : 's') + '…')
-        + '</div></div>';
+  // ---- ONE PRODUCER for the DMAAI resolution verdict ------------------------
+  // The resolution TABLE and the CHIP on the collapsed header state the same
+  // finding, so it is computed once here and rendered twice. They used to be two
+  // producers: the table counted its own mismatches while the chip printed a
+  // hand-written `flag` string held in the card catalog. On Sales DMAAI Net Zero
+  // that chip read "The DMAAI pair nets to zero" directly above a table reading
+  // "3 of 3 inventory DMAAIs resolve to a different account than the cardex
+  // model" — two claims, one disclosure. A constant sitting beside a computed
+  // figure is the defect ([[feedback_one_producer_per_figure]]), so the `flag`
+  // field is GONE from config.js. Do not reintroduce it: the chip may only say
+  // what the analyzer determined on the rows in front of the analyst.
+  //   list   the deduped routing rows the table draws, in display order
+  //   nMis   how many resolve off the model — the table's number IS the chip's
+  //   head   the sentence above the table
+  //   chip   the same verdict, short enough for the collapsed header
+  // Two of the states are NOT verdicts, and both used to print "all match the
+  // cardex model account":
+  //   'pending'     modelRows undefined — _txAttachModel hasn't run yet (the
+  //                 placeholder paint that goes up while the config loads).
+  //   'unresolved'  the DMAAI setup could not be READ at all.
+  // Nothing was compared in either, so neither may claim agreement, and the chip
+  // says which of the two it is rather than going quiet. The cardex-vs-GL columns
+  // still come from the rows themselves, so the table stays useful; only the
+  // model comparison is withheld.
+  function _txCombosSummary(combos) {
+    combos = combos || [];
+    if (!combos.length) return { state: 'none', list: [], nMis: 0, head: '', chip: '' };
+    var n = combos.length, nP = (n === 1 ? '' : 's');
+    if (combos.some(function (c) { return c.modelRows === undefined && !c.modelUnresolved; })) {
+      return { state: 'pending', list: [], nMis: 0,
+        head: 'Reading the DMAAI account setup for these ' + n + ' combination' + nP + '…',
+        chip: 'Reading the DMAAI setup…' };
     }
     if (combos.some(function (c) { return c.modelUnresolved; })) {
-      var uTrs = combos.map(function (c) {
-        return '<tr><td>' + escapeHtml(c.co || '—') + '</td><td>' + escapeHtml(c.ot || '—') + '</td>'
-          + '<td>' + escapeHtml(c.dt || '—') + '</td><td>—</td>'
-          + '<td class="tx-sec-start tx-sec-mid">' + escapeHtml(c.gc || '(none)') + '</td>'
-          + '<td class="tx-sec-mid">—</td><td class="tx-resolve-acct tx-sec-mid">—</td><td class="tx-sec-mid">—</td>'
-          + '<td class="tx-sec-start">—</td><td class="tx-resolve-acct">—</td><td>—</td></tr>';
-      }).join('');
-      return '<div class="tx-analyzer-combos"><div class="tx-combos-hd">'
-        + escapeHtml('RapidReconciler could not read the DMAAI account setup for these '
-          + combos.length + ' combination' + (combos.length === 1 ? '' : 's') + ', so it is not saying whether they '
+      return { state: 'unresolved', list: [], nMis: 0,
+        head: 'RapidReconciler could not read the DMAAI account setup for these '
+          + n + ' combination' + nP + ', so it is not saying whether they '
           + 'match the cardex model account. Do not read the blanks below as "no mapping" — they mean "not checked". '
-          + 'Reload the page; if it keeps happening, ask your IT department to confirm the data service is reachable.')
-        + '</div>'
-        + '<table class="tx-resolve"><thead><tr>' + _txResolveHead()
-
-        + '</tr></thead><tbody>' + uTrs + '</tbody></table></div>';
+          + 'Reload the page; if it keeps happening, ask your IT department to confirm the data service is reachable.',
+        chip: 'DMAAI setup could not be read' };
     }
     // Flatten every combo's model routings into ONE distinct list (owner
     // 2026-07-14) — no per-combo grouping. Each distinct
@@ -6916,7 +6968,7 @@
       rows.forEach(function (e) {
         var r = { co: c.co || '', ot: c.ot || '', dt: c.dt || '', costType: e.costType || '', glCode: e.glCode || '',
           modelTable: e.modelTable || '', modelAcct: e.modelAcct || '', modelAcctDesc: e.modelAcctDesc || '', invDmaai: e.invDmaai || '', invAcct: e.invAcct || '', invAcctDesc: e.invAcctDesc || '', acctMis: !!e.acctMis };
-        var sig = [r.co, r.ot, r.dt, r.costType, r.glCode, r.modelTable, r.modelAcct, r.invDmaai, r.invAcct].join('');
+        var sig = [r.co, r.ot, r.dt, r.costType, r.glCode, r.modelTable, r.modelAcct, r.invDmaai, r.invAcct].join('');
         if (!seen[sig]) { seen[sig] = 1; list.push(r); }
       });
     });
@@ -6924,7 +6976,40 @@
       return a.co.localeCompare(b.co) || a.ot.localeCompare(b.ot) || a.dt.localeCompare(b.dt)
         || a.glCode.localeCompare(b.glCode) || a.invDmaai.localeCompare(b.invDmaai) || a.costType.localeCompare(b.costType);
     });
-    var trs = list.map(function (r) {
+    var nMis = list.filter(function (r) { return r.acctMis; }).length;
+    var nAll = list.length, aP = (nAll === 1 ? '' : 's');
+    if (nMis) {
+      return { state: 'mismatch', list: list, nMis: nMis,
+        head: nMis + ' of ' + nAll + ' inventory DMAAI' + aP + ' resolve to a different account than the cardex model:',
+        chip: nMis + ' of ' + nAll + ' DMAAI' + aP + ' off the cardex model' };
+    }
+    return { state: 'clean', list: list, nMis: 0,
+      head: nAll + ' inventory DMAAI' + aP + ' checked — no account mismatch. This rules out mapping only; it does not explain the variance:',
+      chip: nAll + ' DMAAI' + aP + ' checked, none off the model' };
+  }
+  // Draws what _txCombosSummary determined. Callers that already hold a summary
+  // pass it in, so the table and the chip come off one computation rather than
+  // two runs that could drift.
+  function _txCombosHtml(combos, sum) {
+    sum = sum || _txCombosSummary(combos);
+    if (sum.state === 'none') return '';
+    if (sum.state === 'pending') {
+      return '<div class="tx-analyzer-combos"><div class="tx-combos-hd">'
+        + escapeHtml(sum.head) + '</div></div>';
+    }
+    if (sum.state === 'unresolved') {
+      var uTrs = combos.map(function (c) {
+        return '<tr><td>' + escapeHtml(c.co || '—') + '</td><td>' + escapeHtml(c.ot || '—') + '</td>'
+          + '<td>' + escapeHtml(c.dt || '—') + '</td><td>—</td>'
+          + '<td class="tx-sec-start tx-sec-mid">' + escapeHtml(c.gc || '(none)') + '</td>'
+          + '<td class="tx-sec-mid">—</td><td class="tx-resolve-acct tx-sec-mid">—</td><td class="tx-sec-mid">—</td>'
+          + '<td class="tx-sec-start">—</td><td class="tx-resolve-acct">—</td><td>—</td></tr>';
+      }).join('');
+      return '<div class="tx-analyzer-combos"><div class="tx-combos-hd">' + escapeHtml(sum.head) + '</div>'
+        + '<table class="tx-resolve"><thead><tr>' + _txResolveHead()
+        + '</tr></thead><tbody>' + uTrs + '</tbody></table></div>';
+    }
+    var trs = sum.list.map(function (r) {
       // Highlight where the inventory AAI resolves to a DIFFERENT account than
       // the cardex model (the source-fix signal).
       var acctMis = r.acctMis;
@@ -6942,13 +7027,8 @@
         + '<td>' + escapeHtml(r.invAcctDesc || '—') + '</td>'
         + '</tr>';
     }).join('');
-    var nMis = list.filter(function (r) { return r.acctMis; }).length;
-    var hd = nMis
-      ? nMis + ' of ' + list.length + ' inventory DMAAI' + (list.length === 1 ? '' : 's') + ' resolve to a different account than the cardex model:'
-      : list.length + ' inventory DMAAI' + (list.length === 1 ? '' : 's') + ' checked — no account mismatch. This rules out mapping only; it does not explain the variance:';
-    return '<div class="tx-analyzer-combos"><div class="tx-combos-hd">' + escapeHtml(hd) + '</div>'
+    return '<div class="tx-analyzer-combos"><div class="tx-combos-hd">' + escapeHtml(sum.head) + '</div>'
       + '<table class="tx-resolve"><thead><tr>' + _txResolveHead()
-
       + '</tr></thead><tbody>'
       + trs + '</tbody></table></div>';
   }
@@ -7219,20 +7299,12 @@
     var _mtoOn = !!(_mtoB && _mtoB.total.n);
     var dup = !!(fp && fp.dupSales && fp.dupSales.length);
     var nonStock = !!(fp && fp.sawLineType && fp.nonStock && fp.nonStock.length);
-    // Model-vs-inv account mismatch — the SAME comparison the table shows (4152
-    // cardex model vs where the transaction's inventory AAI posts), deduped the
-    // same way as the table's distinct list, so the lead can never contradict
-    // the table above it.
-    var _misSeen = {}, misRows = [];
-    combos.forEach(function (c) {
-      (c.modelRows || []).forEach(function (e) {
-        if (!e.acctMis) return;
-        var sig = [c.co, c.ot, c.dt, e.costType, e.glCode, e.modelTable, e.modelAcct, e.invDmaai, e.invAcct].join('|');
-        if (_misSeen[sig]) return; _misSeen[sig] = 1;
-        misRows.push({ co: c.co || '', ot: c.ot || '', dt: c.dt || '', glCode: e.glCode || '',
-          modelTable: e.modelTable || '', modelAcct: e.modelAcct || '', invDmaai: e.invDmaai || '', invAcct: e.invAcct || '', invAcctDesc: e.invAcctDesc || '' });
-      });
-    });
+    // Model-vs-inv account mismatch. Not a second pass over the combos: this is
+    // literally the table's own row list, filtered. It used to be a parallel
+    // dedupe held in step with the table's by a comment — the same
+    // two-producers defect as the hand-written chip this change removes.
+    var _sum = _txCombosSummary(combos);
+    var misRows = _sum.list.filter(function (r) { return r.acctMis; });
     // Inventory-transfer (IT) cardex integrity: within-branch location moves that
     // relieved value on the cardex but never re-booked it on the receipt (F4111
     // extended cost = 0 with a valid unit cost). Doc-grain signature = DT 'IT' +
@@ -7242,7 +7314,7 @@
     var itDominant = combos.length > 0 && (itCombos.length / combos.length) >= 0.5;
     // True when the DMAAI setup could not be READ (see _txAttachModel). An empty
     // misRows then means "not compared", not "they agree".
-    var _modelUnresolved = combos.some(function (c) { return c.modelUnresolved; });
+    var _modelUnresolved = (_sum.state === 'unresolved');
     // ---- Which mechanism explains THIS card? ----------------------------
     // The card's own mechanism is the authority for the finding. The DMAAI
     // routing verdict LEADS only on a card whose mechanism IS account mapping
@@ -7268,8 +7340,15 @@
     // Do NOT reuse 'detected' for a card that merely has a mechanism — that is
     // the exact conflation this rename exists to prevent.
     var sel = null, verdict, lensLed = false;
-    if (dup) { sel = txFinding('DUP'); verdict = 'detected'; }
-    else if (nonStock) { sel = txFinding('NON-STOCK'); verdict = 'detected'; }
+    // The chip's leading clause. `chipCode` names the entry the analyzer
+    // SELECTED on these rows and the wording comes from that entry's `title` —
+    // already the one producer for a card's name everywhere else on the page
+    // (breadcrumb, work panel, drafted finding). `chipLead` overrides it only
+    // where a branch computes something the title cannot say. Neither is a
+    // per-card constant written next to the table.
+    var chipCode = '', chipLead = '';
+    if (dup) { sel = txFinding('DUP'); chipCode = 'DUP'; verdict = 'detected'; }
+    else if (nonStock) { sel = txFinding('NON-STOCK'); chipCode = 'NON-STOCK'; verdict = 'detected'; }
     // IT-dominant rows are NOT one condition. The transfer family splits:
     // 'TLM' (Transfer Leg Missing — one item-ledger leg only, while the GL
     // holds both and nets to zero) against 'TXI' (Transfer Integrity — the
@@ -7279,7 +7358,8 @@
     // on the specimen that is 87% of the affected dollars. Defer to the card
     // the ROWS carry; fall back to TXI only when they name neither.
     else if (itDominant) {
-      sel = txFinding((card === 'TLM' || card === 'TXI') ? card : 'TXI');
+      chipCode = (card === 'TLM' || card === 'TXI') ? card : 'TXI';
+      sel = txFinding(chipCode);
       verdict = 'detected';
     }
     else if (_mtoOn) {
@@ -7293,8 +7373,12 @@
       // never "routings match, nothing to do".
       var _gap = _mtoB.cardexOnly.n > 0;
       var _n = _mtoB.cardexOnly.n, _one = (_n === 1);
+      // Computed from the slice in the same expression that picks the copy: with
+      // a gap the chip names the gap, without one it falls back to the card's
+      // title like every other branch.
+      chipCode = 'MTO';
+      chipLead = _gap ? 'Completions missing from the GL' : '';
       sel = {
-        flag: _gap ? 'Completions missing from the GL' : txFinding('MTO').flag,
         mech: txFinding('MTO').mech,
         // Counted on the rows loaded here, so it is a real check — but it is THIS
         // page's measurement, not one of the classifier's declared assertions, and
@@ -7329,8 +7413,9 @@
     }
     else if (misRows.length && (!mech || mech.dmaai)) {
       var _nm = misRows.length, _nm1 = (_nm === 1);
+      // No leading clause: the summary's own chip IS this finding, and a label in
+      // front of it would state the same count twice.
       sel = {
-        flag: _nm + ' DMAAI mismatch' + (_nm1 ? '' : 'es'),
         mech: _nm + ' inventory DMAAI' + (_nm1 ? '' : 's')
           + ' resolve to a different account than the item-ledger model for their GL class.',
         checked: [
@@ -7347,8 +7432,8 @@
     // because none of the row-level checks above fired, which on a mapping-lens
     // card means the routing check came back clean. So this is a classification
     // and takes 'classified', never 'detected' (UI-74).
-    else if (mech) { sel = mech; verdict = mech.triage ? 'open' : 'classified'; }
-    else if (combos.length) { sel = txFinding('UNSCOPED'); verdict = 'open'; }
+    else if (mech) { sel = mech; chipCode = card; verdict = mech.triage ? 'open' : 'classified'; }
+    else if (combos.length) { sel = txFinding('UNSCOPED'); chipCode = 'UNSCOPED'; verdict = 'open'; }
     else { verdict = 'muted'; }
     // UI-59 — a card that makes a recurrence claim gets it COMPUTED from the
     // loaded rows, replacing the general fallback bullet held in the catalog.
@@ -7374,7 +7459,7 @@
     // explanation (Full tier) + the auto-drafted finding carry the fix. Body = the
     // MTO shape breakdown (on an MTO drill) + the resolution table.
     var html = (_mtoOn ? _txMtoBucketsHtml(_mtoB) : '')
-      + _txCombosHtml(combos);
+      + _txCombosHtml(combos, _sum);
     // Narration is mapping-framed, so it only runs when the mapping mismatch is
     // actually the finding. On a card with its own mechanism the deterministic
     // text already carries the action; a mapping-framed paragraph on top of it
@@ -7388,7 +7473,18 @@
     // beside it, where it already lived. 'open' and 'muted' both read grey —
     // an undetermined cause has no colour to claim (UI-74).
     var flagState = (verdict === 'detected' || verdict === 'classified') ? verdict : 'muted';
-    _txAnalyzerFlag(flagState, (sel && sel.flag) || (combos.length ? 'Review' : 'No rows'));
+    // ASSEMBLED from what ran, never read out of the catalog. Leading clause =
+    // what the analyzer selected on these rows; trailing clause = the resolution
+    // verdict, straight off the summary the table below draws from. Where the
+    // table found no mismatch the trailing clause says exactly that ("N DMAAIs
+    // checked, none off the model") instead of reverting to a claim about the
+    // card; where there is no table at all the leading clause stands alone.
+    // Neither clause can outlive the computation that produced it.
+    var chipParts = [];
+    var chipHead = chipLead || _txCodeTitle(chipCode);
+    if (chipHead) chipParts.push(chipHead);
+    if (_sum.chip) chipParts.push(_sum.chip);
+    _txAnalyzerFlag(flagState, chipParts.join(' · ') || (combos.length ? 'Review' : 'No rows'));
     body.innerHTML = html;   // populated but stays collapsed — the analyst opens it (owner 2026-07-14)
     _txAnalyzeStatus('', '');
     // ---- Draft the finding ----------------------------------------------
@@ -7988,10 +8084,21 @@
       });
       const banner = ['Transaction Details Generated ' + stamp].concat(new Array(allCols.length - 1).fill(''));
       const dataRows = rows.map(r => allCols.map(c => (r[c] == null ? '' : r[c])));
-      const ws = XLSX.utils.aoa_to_sheet([banner, headerRow, ...dataRows]);
-      _txAnnotateHeaderCells(ws, cols, 1);
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, 'Transaction Details');
+      // Build + serialise under the shared export guard. aoa_to_sheet and the
+      // final write both allocate, and a doc with a long detail set can run the
+      // tab out of room. Without this the exception escaped into the catch below
+      // and got reported as a FETCH error &mdash; wrong cause, and the analyst
+      // chases the agent instead of narrowing the export. runExport returns
+      // undefined when the build dies, so a broken build never reaches the
+      // postMessage handoff.
+      const detailBuffer = RRV8.runExport('Transaction Details', flashStatus, () => {
+        const ws = XLSX.utils.aoa_to_sheet([banner, headerRow, ...dataRows]);
+        _txAnnotateHeaderCells(ws, cols, 1);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Transaction Details');
+        return XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+      });
+      if (!detailBuffer) return;   // runExport already reported the reason on screen
 
       // Hand the Transaction Details workbook to the analyzer
       // via postMessage. The analyzer auto-processes through
@@ -7999,7 +8106,6 @@
       // of the 2-tab analyzed workbook (Transaction Details +
       // Analysis). The preloaded DMAAIs go along as reference
       // data for accurate AAI-pattern classification.
-      const detailBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
       const dmaaiData = (_scopeMem.dmaais && _scopeMem.dmaais.data)
                      || (Array.isArray(_scopeMem.dmaais) ? _scopeMem.dmaais : null);
       handOffToAnalyzer(detailBuffer, dmaaiData);
@@ -8945,12 +9051,18 @@
     XLSX.utils.book_append_sheet(wb, sheet, 'Transactions');
 
     const fname = RRV8.exportName({ surface: 'Transactions', company: _state.activeCompany, period: (_data && _data.period) || _state.period, drill: _state.activeCard || _state.activePattern || undefined });
-    XLSX.writeFile(wb, fname);
+    if (!RRV8.saveWorkbook(wb, fname, flashStatus, 'Transactions')) return;
     flashStatus('Downloaded ' + fname);
   }
 
+  // The input guards above (library, data, scope, rows, columns) each report a
+  // reason. The BUILD had none: aoa_to_sheet, the per-cell money-format pass and
+  // the serialise all allocate, and a wide grid over a long period allocates a
+  // lot. An exception there escaped the click handler &mdash; no file, no message,
+  // the button simply stopped working. Run the whole routine under the shared
+  // guard so the analyst is told to narrow the scope instead of re-clicking.
   const exportBtn = document.getElementById('grid-export-btn');
-  if (exportBtn) exportBtn.addEventListener('click', exportGridToExcel);
+  if (exportBtn) exportBtn.addEventListener('click', () => RRV8.runExport('Transactions', flashStatus, exportGridToExcel));
 
   // ============================================================
   //  Variance-by-type Excel reports (Order Type / Doc Type)
@@ -9090,12 +9202,17 @@
       // stamping the drilled company and period made the filename claim a scope
       // narrower than the file's contents. The band above states the real scope.
       const fname = RRV8.exportName({ surface: cfg.file });
-      XLSX.writeFile(wb, fname);
+      if (!RRV8.saveWorkbook(wb, fname, flashStatus, 'Variance by ' + cfg.label)) return;
       flashStatus('Downloaded ' + fname
         + (failed.length ? (' &mdash; ' + failed.length + ' period' + (failed.length === 1 ? '' : 's') + ' couldn&rsquo;t be read and were left out (see the title row)') : ''));
     } catch (err) {
+      // This matrix spans EVERY period, so it is the biggest thing the page
+      // builds and the likeliest to run the tab out of room. The catch already
+      // existed and already covers the fetch/aggregate steps; route its wording
+      // through the shared vocabulary so an allocation failure tells the analyst
+      // to narrow the scope rather than showing raw engine text.
       console.error('Variance by ' + cfg.label + ' report failed:', err);
-      flashStatus('Variance by ' + cfg.label + ' report failed: ' + (err.message || err));
+      flashStatus(RRV8.exportFailureMessage(err, 'Variance by ' + cfg.label));
     } finally {
       if (btn) { btn.disabled = false; btn.innerHTML = origInner; }
     }

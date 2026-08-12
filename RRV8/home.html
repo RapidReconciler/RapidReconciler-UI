@@ -31,6 +31,12 @@
 -->
 <link href="fonts/fonts.css" rel="stylesheet">
 <script src="config.js"></script>
+<!-- Export guard. Every .xlsx on this page is built in the browser by SheetJS;
+     the build and the serialise both allocate, and when one throws the exception
+     escapes the click handler - no file, no message, the button just stops. This
+     wrapper gives the failure one actionable sentence. Not deferred: the export
+     handlers below call RRV8.saveWorkbook, and config.js must load first. -->
+<script src="export-guard.js"></script>
 <script src="sidebar.js"></script>
 <script src="../Tools/home-search.js"></script>
 <!-- SheetJS (xlsx-js-style) — the period-end balancing entry exports to Excel
@@ -1815,9 +1821,9 @@
   #adminGrid a.row:hover { border-color: var(--blue); box-shadow: var(--shadow-md); }
   /* Per-card status accent — white body, with the status color carried by the
      left inset stripe + a matching border tint (one dot per card). */
-  #adminGrid .row:has(.row-dot.green) { background: var(--bg-card); border-color: #c5e6d2; box-shadow: inset 4px 0 0 var(--green),  var(--shadow-sm); }
-  #adminGrid .row:has(.row-dot.amber) { background: var(--bg-card); border-color: #f0d2a8; box-shadow: inset 4px 0 0 var(--orange), var(--shadow-sm); }
-  #adminGrid .row:has(.row-dot.red)   { background: var(--bg-card); border-color: #f1c9c3; box-shadow: inset 4px 0 0 var(--red),    var(--shadow-sm); }
+  #adminGrid .row:has(.row-dot[data-state="ok"]) { background: var(--bg-card); border-color: #c5e6d2; box-shadow: inset 4px 0 0 var(--green),  var(--shadow-sm); }
+  #adminGrid .row:has(.row-dot[data-state="watch"]), #adminGrid .row:has(.row-dot[data-state="todo"]), #adminGrid .row:has(.row-dot[data-state="busy"]) { background: var(--bg-card); border-color: #f0d2a8; box-shadow: inset 4px 0 0 var(--orange), var(--shadow-sm); }
+  #adminGrid .row:has(.row-dot[data-state="attention"]) { background: var(--bg-card); border-color: #f1c9c3; box-shadow: inset 4px 0 0 var(--red),    var(--shadow-sm); }
 
   /* Licensing card — reads as an ALERT, not a calendar: the day-count leads
      (warning color), renewal date + seat usage sit under it, Manage anchors the
@@ -1859,11 +1865,13 @@
   a.data-row:hover .data-row-go { color: var(--blue); transform: translateX(2px); }
   /* Right column, variant B — relative time (Activity Log rows). */
   .data-card .data-row-meta { margin-left: auto; flex-shrink: 0; font-size: 11.5px; font-weight: 700; color: var(--text-muted); white-space: nowrap; }
-  .data-card .data-row.lvl-green .data-row-ico { background: var(--green-pale);  color: var(--green); }
-  .data-card .data-row.lvl-amber .data-row-ico { background: var(--orange-pale); color: var(--orange); }
-  .data-card .data-row.lvl-red   .data-row-ico { background: var(--red-pale);    color: var(--red); }
-  .data-card .data-row.lvl-amber .data-row-text,
-  .data-card .data-row.lvl-red   .data-row-text { color: var(--navy); font-weight: 700; }
+  .data-card .data-row[data-state="ok"] .data-row-ico { background: var(--green-pale);  color: var(--green); }
+  .data-card .data-row[data-state="watch"] .data-row-ico, .data-card .data-row[data-state="todo"] .data-row-ico, .data-card .data-row[data-state="busy"] .data-row-ico { background: var(--orange-pale); color: var(--orange); }
+  .data-card .data-row[data-state="attention"] .data-row-ico { background: var(--red-pale);    color: var(--red); }
+  .data-card .data-row[data-state="watch"] .data-row-text,
+  .data-card .data-row[data-state="todo"] .data-row-text,
+  .data-card .data-row[data-state="busy"] .data-row-text,
+  .data-card .data-row[data-state="attention"] .data-row-text { color: var(--navy); font-weight: 700; }
 
   /* Foot action link (RR Team "Manage") — a text link in place of the button. */
   #adminGrid .row .row-foot .row-foot-action { font-size: 12.5px; font-weight: 700; color: var(--blue); text-decoration: none; }
@@ -1892,11 +1900,13 @@
   a.ihs-chip:hover { border-color: var(--blue); color: var(--blue); }
   .ihs-chip .data-row-text { font-size: 14px; font-weight: 600; color: inherit; white-space: nowrap; }
   .ihs-chip .ihs-cdot, .ihs-chip .row-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: var(--rule-strong); }
-  .ihs-chip.lvl-green .ihs-cdot { background: var(--green); }
-  .ihs-chip.lvl-amber .ihs-cdot { background: var(--orange); }
-  .ihs-chip.lvl-red   .ihs-cdot { background: var(--red); }
-  .ihs-chip.lvl-amber .data-row-text,
-  .ihs-chip.lvl-red   .data-row-text { color: var(--navy); font-weight: 700; }
+  .ihs-chip[data-state="ok"] .ihs-cdot { background: var(--green); }
+  .ihs-chip[data-state="watch"] .ihs-cdot, .ihs-chip[data-state="todo"] .ihs-cdot, .ihs-chip[data-state="busy"] .ihs-cdot { background: var(--orange); }
+  .ihs-chip[data-state="attention"] .ihs-cdot { background: var(--red); }
+  .ihs-chip[data-state="watch"] .data-row-text,
+  .ihs-chip[data-state="todo"] .data-row-text,
+  .ihs-chip[data-state="busy"] .data-row-text,
+  .ihs-chip[data-state="attention"] .data-row-text { color: var(--navy); font-weight: 700; }
   .ihs-chip-text { font-size: 14px; font-weight: 600; color: var(--navy); white-space: nowrap; }
   .ihs-chip-link { font-size: 13.5px; font-weight: 700; color: var(--blue); text-decoration: none; white-space: nowrap; }
   .ihs-chip-link:hover { text-decoration: underline; }
@@ -1944,10 +1954,17 @@
   .row-sub .row-act { color: var(--blue); font-weight: 700; text-decoration: none; white-space: nowrap; }
   .row-sub .row-act:hover { text-decoration: underline; }
   .row-dot { width: 11px; height: 11px; border-radius: 50%; flex-shrink: 0; }
-  .row-dot.green { background: var(--green); }
-  .row-dot.amber { background: var(--orange); }
-  .row-dot.red { background: var(--red); }
-  .row-dot.grey { background: var(--text-muted); }
+  .row-dot[data-state="ok"] { background: var(--green); }
+  .row-dot[data-state="watch"] { background: var(--orange); }
+  /* INTERIM -- `todo` (an unclicked acknowledgement) and `busy` (work in flight)
+     are not findings, and the state registry rules they must not share the
+     alert-adjacent amber with `watch`. They do today so this refactor changes no
+     pixel. Splitting them is UI-88(c), an owner design call. When it lands these
+     two declarations change and no JavaScript does. */
+  .row-dot[data-state="todo"] { background: var(--orange); }
+  .row-dot[data-state="busy"] { background: var(--orange); }
+  .row-dot[data-state="attention"] { background: var(--red); }
+  .row-dot[data-state="unknown"] { background: var(--text-muted); }
 
   /* Panel status tint — an admin panel whose task dots report a status
      shades to match (worst dot wins: red > amber > green; grey ignored)
@@ -2368,9 +2385,9 @@
      off the dot the existing status wiring already sets (green = clean,
      amber = attention, red = break); a grey/unknown dot stays neutral.
      Pure CSS via :has() so no JS change is needed; degrades to no tint. */
-  .analyst-card:has(.row-dot.green) { background: var(--green-pale);  border-color: #c5e6d2; box-shadow: inset 4px 0 0 var(--green),  var(--shadow-sm); }
-  .analyst-card:has(.row-dot.amber) { background: var(--orange-pale); border-color: #f0d2a8; box-shadow: inset 4px 0 0 var(--orange), var(--shadow-sm); }
-  .analyst-card:has(.row-dot.red)   { background: var(--red-pale);    border-color: #f1c9c3; box-shadow: inset 4px 0 0 var(--red),    var(--shadow-sm); }
+  .analyst-card:has(.row-dot[data-state="ok"]) { background: var(--green-pale);  border-color: #c5e6d2; box-shadow: inset 4px 0 0 var(--green),  var(--shadow-sm); }
+  .analyst-card:has(.row-dot[data-state="watch"]), .analyst-card:has(.row-dot[data-state="todo"]), .analyst-card:has(.row-dot[data-state="busy"]) { background: var(--orange-pale); border-color: #f0d2a8; box-shadow: inset 4px 0 0 var(--orange), var(--shadow-sm); }
+  .analyst-card:has(.row-dot[data-state="attention"]) { background: var(--red-pale);    border-color: #f1c9c3; box-shadow: inset 4px 0 0 var(--red),    var(--shadow-sm); }
   .tile-modtag {
     font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
     color: var(--blue); background: var(--blue-pale); padding: 3px 8px; border-radius: 100px;
@@ -2744,7 +2761,7 @@
     <div class="analyst-workspace" id="analystWorkspace" hidden>
       <div class="rep-list">
         <a class="rep-lrow" href="inventory-cardex-variance.html">
-          <span class="rep-lname"><span class="rep-lico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 12l9 4 9-4"/><path d="M3 17l9 4 9-4"/></svg></span>Cardex Variance <span class="row-dot grey" id="cxDot" title="Inventory validation light"></span></span>
+          <span class="rep-lname"><span class="rep-lico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 12l9 4 9-4"/><path d="M3 17l9 4 9-4"/></svg></span>Cardex Variance <span class="row-dot" data-state="unknown" id="cxDot" title="Inventory validation light"></span></span>
           <span class="rep-ldesc">Items whose perpetual valuation didn&rsquo;t roll cleanly &mdash; the per-item cardex drift worklist.</span>
           <span class="rep-lact"><span class="btn-sm">Open</span></span>
         </a>
@@ -2893,7 +2910,7 @@
            renewal date + seat usage under it, Manage in the foot. All three lines
            are live from paintLicenseHealth() (/license-usage). -->
       <div class="row lic-card" id="licRow">
-        <span class="row-dot grey" id="licenseDot"></span>
+        <span class="row-dot" data-state="unknown" id="licenseDot"></span>
         <div class="row-main">
           <div class="row-title">Licensing</div>
           <div class="lic-alert" id="licDays">&mdash;</div>
@@ -2913,21 +2930,21 @@
            row's level + text and the worst-of #teamDot. The hidden row-sub carries
            the key status for the AI briefing. -->
       <div class="row data-card" id="teamRow">
-        <span class="row-dot grey" id="teamDot"></span>
+        <span class="row-dot" data-state="unknown" id="teamDot"></span>
         <div class="row-main">
           <div class="row-title">Team &amp; Access</div>
           <div class="data-rows">
-            <a class="data-row lvl-grey" id="teamUsersRow" href="admin-users.html" title="Users &amp; roles">
+            <a class="data-row" data-state="unknown" id="teamUsersRow" href="admin-users.html" title="Users &amp; roles">
               <span class="data-row-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>
               <span class="data-row-text">Checking&hellip;</span>
               <span class="data-row-go" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></span>
             </a>
-            <a class="data-row lvl-grey" id="teamReviewRow" href="admin-users.html" title="Access review">
+            <a class="data-row" data-state="unknown" id="teamReviewRow" href="admin-users.html" title="Access review">
               <span class="data-row-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 9"/></svg></span>
               <span class="data-row-text">Checking&hellip;</span>
               <span class="data-row-go" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></span>
             </a>
-            <a class="data-row lvl-grey" id="teamPwRow" href="admin-complex-passwords.html" title="Complex passwords — per-company policy">
+            <a class="data-row" data-state="unknown" id="teamPwRow" href="admin-complex-passwords.html" title="Complex passwords — per-company policy">
               <span class="data-row-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
               <span class="data-row-text">Complex passwords</span>
               <span class="data-row-go" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></span>
@@ -2937,7 +2954,7 @@
         </div>
       </div>
       <div class="row svc-card" id="svcRow">
-        <span class="row-dot green" id="svcDot"></span>
+        <span class="row-dot" data-state="ok" id="svcDot"></span>
         <div class="row-main">
           <div class="row-title">Report Engine</div>
           <!-- Status block — vertically centered in the card body so it isn't
@@ -2950,6 +2967,10 @@
             <div class="svc-mem" id="svcMem" hidden>
               <div class="svc-mem-bar" id="svcMemBar"><span class="svc-mem-fill" id="svcMemFill"></span></div>
               <div class="svc-mem-cap" id="svcMemCap"></div>
+              <!-- Host physical RAM, from the same snapshot. Its own element so the
+                   card can stay silent about the box when the probe reports 0 &mdash;
+                   unknown gets no figure, no percent and no colour. -->
+              <div class="svc-mem-cap" id="svcMemHost" hidden></div>
             </div>
             <div class="svc-uptime" id="svcUptime" hidden></div>
             <!-- Restart progress — time-based fill over the ~30s bounce (no progress
@@ -2967,7 +2988,7 @@
         <button class="svc-restart-link" id="restartBtn" type="button">Restart</button>
       </div>
       <div class="row data-card" id="activityRow">
-        <span class="row-dot grey" id="activityDot"></span>
+        <span class="row-dot" data-state="unknown" id="activityDot"></span>
         <div class="row-main">
           <div class="row-title">Activity Log</div>
           <!-- Mini recent-events feed, painted by loadActivityFeed() from
@@ -2993,19 +3014,19 @@
       <div class="ihs-chips">
         <!-- Data freshness (nightly refresh as-of). Own dot per chip via .ihs-cdot,
              set by renderDataCard()'s lvl-* class on the chip. -->
-        <a class="ihs-chip lvl-grey" id="dataRefreshRow" href="admin-data-refresh.html" title="Data refresh">
+        <a class="ihs-chip" data-state="unknown" id="dataRefreshRow" href="admin-data-refresh.html" title="Data refresh">
           <span class="ihs-cdot" aria-hidden="true"></span>
           <span class="data-row-text">Checking&hellip;</span>
         </a>
         <!-- Storage runway (purge). -->
-        <a class="ihs-chip lvl-grey" id="dataPurgeRow" href="admin-purge-data.html" title="Storage &amp; data retention">
+        <a class="ihs-chip" data-state="unknown" id="dataPurgeRow" href="admin-purge-data.html" title="Storage &amp; data retention">
           <span class="ihs-cdot" aria-hidden="true"></span>
           <span class="data-row-text">Checking&hellip;</span>
         </a>
         <!-- Fiscal calendar (period-end correction). Hidden by default — a calendar
              change is rare, so the chip only appears when a correction is available
              (renderDataCard unhides it); the "no changes" state is a non-event. -->
-        <a class="ihs-chip lvl-grey" id="dataFiscalRow" href="admin-fiscal-period.html" title="Fiscal calendar" hidden>
+        <a class="ihs-chip" data-state="unknown" id="dataFiscalRow" href="admin-fiscal-period.html" title="Fiscal calendar" hidden>
           <span class="ihs-cdot" aria-hidden="true"></span>
           <span class="data-row-text">Checking&hellip;</span>
         </a>
@@ -3015,7 +3036,7 @@
       </div>
       <!-- Worst-of data dot (renderDataCard guard target) + hidden brief summary
            for the AI grounding; both kept off-screen. -->
-      <span class="row-dot grey" id="dataDot" hidden></span>
+      <span class="row-dot" data-state="unknown" id="dataDot" hidden></span>
       <span class="row-sub" id="dataBriefSummary" hidden></span>
     </div>
     <!-- Reveal the quiet OK items the attention-only strip hides (data refresh,
@@ -3569,9 +3590,9 @@
   // than only flagging an outage after the fact. Copy is finance-voice
   // here; the agent owns the verdict (state), V8 owns the words.
   var SVC_COPY = {
-    healthy: { dot: 'green', sub: 'Running normally' },
-    watch:   { dot: 'amber', sub: 'Memory is climbing under load — a restart at your next quiet moment keeps reports fast.' },
-    restart: { dot: 'red',   sub: 'Low on memory — reports may start failing. A restart now will clear it.' }
+    healthy: { state: 'ok', sub: 'Running normally' },
+    watch:   { state: 'watch', sub: 'Memory is climbing under load — a restart at your next quiet moment keeps server-built reports fast.' },
+    restart: { state: 'attention', sub: 'Low on memory — server-built reports may start failing. A restart now will clear it.' }
   };
   function updateServiceCard() {
     var dot = $('svcDot'), sub = $('svcSub');
@@ -3583,13 +3604,13 @@
       if (downMs < CONN_GRACE_MS) {
         // Brief blip / planned restart — mirror the "Reconnecting…" pill instead
         // of declaring an outage.
-        dot.className = 'row-dot amber';
+        RRV8.setDotState(dot, 'busy');
         sub.textContent = 'Reconnecting…';
         setMemMeter(null);
         emphasizeRestart(false);
         return;
       }
-      dot.className = 'row-dot red';
+      RRV8.setDotState(dot, 'attention');
       sub.textContent = 'Not responding — a restart usually clears it';
       setMemMeter(null);
       emphasizeRestart(true);
@@ -3599,14 +3620,14 @@
     // back to the simple "it's up" signal. No placeholder, no meter.
     var m = _svcMem;
     if (!m || !m.state || !SVC_COPY[m.state]) {
-      dot.className = 'row-dot green';
+      RRV8.setDotState(dot, 'ok');
       sub.textContent = 'Running normally';
       setMemMeter(null);
       emphasizeRestart(false);
       return;
     }
     var c = SVC_COPY[m.state];
-    dot.className = 'row-dot ' + c.dot;
+    RRV8.setDotState(dot, c.state);
     sub.textContent = c.sub;
     setMemMeter(m);
     emphasizeRestart(m.state === 'restart');
@@ -3652,11 +3673,35 @@
 
     var cap = $('svcMemCap'); if (!cap) return;
     function mb(n) { return Number(n).toLocaleString('en-US') + ' MB'; }
+    // Name the owner of each figure. One line is a JVM heap, the next is the whole
+    // box; a reader should not have to infer which is which.
     if (alloc > 0) {
       var pct = Math.min(100, Math.round(100 * used / alloc));
-      cap.innerHTML = 'Using <b>' + mb(used) + '</b> of <b>' + mb(alloc) + '</b> allocated (' + pct + '%)';
+      cap.innerHTML = 'Report engine <b>' + mb(used) + '</b> of <b>' + mb(alloc) + '</b> allocated (' + pct + '%)';
     } else {
-      cap.innerHTML = 'Using <b>' + mb(used) + '</b>';
+      cap.innerHTML = 'Report engine <b>' + mb(used) + '</b>';
+    }
+
+    // Host physical RAM. This is the figure the verdict actually turns on - the
+    // agent escalates on free-RAM ratio, not on heap - so hiding it lets the card
+    // read "14%" while the box sits at 84%. Both true, only one of them visible.
+    // Same mb() formatter as the heap line, so the two are directly comparable and
+    // there is no second rounding rule to disagree with the first.
+    var host = $('svcMemHost');
+    if (host) {
+      var totalRam = Number(m.totalRamMb) || 0;
+      var freeRam  = Number(m.freeRamMb) || 0;
+      // The probe reports 0 when it is unavailable. 0 free is not "no memory left"
+      // and not 100% used - it is unknown, and unknown says nothing at all.
+      if (totalRam > 0 && freeRam > 0 && freeRam <= totalRam) {
+        var usedRam = totalRam - freeRam;
+        var ramPct  = Math.min(100, Math.round(100 * usedRam / totalRam));
+        host.innerHTML = 'Server memory <b>' + mb(usedRam) + '</b> of <b>' + mb(totalRam) + '</b> in use (' + ramPct + '%)';
+        host.hidden = false;
+      } else {
+        host.innerHTML = '';
+        host.hidden = true;
+      }
     }
   }
   function emphasizeRestart(urgent) {
@@ -4028,11 +4073,11 @@
   var _teamList = [], _reviewOverdue = false, _reviewCurrent = false, _reviewNextDue = null;
   // Complex-passwords row level, set by setPwPolicyDot() and folded into the
   // card's worst-of #teamDot here (the two loaders run independently).
-  var _teamPwLevel = 'grey';
+  var _teamPwLevel = 'unknown';
   var _teamInactive30 = [];   // members inactive 30 days–6 months: informational only (briefing, gated by tier)
   function _pwRowText(level, val) {
     if (level === 'green') return val === 'never' ? 'Passwords — reminders off' : 'Password policy reviewed';
-    if (level === 'amber') return 'Review password policy';
+    if (level === 'todo') return 'Review password policy';
     return 'Complex passwords';
   }
   function paintTeamHealth(list) {
@@ -4040,13 +4085,13 @@
     if (!dot) return;
     _teamList = list = list || [];
     // Row 1 — Users & roles: total members + distinct assigned roles.
-    var uLvl = 'grey', uTxt = 'Checking…';
+    var uLvl = 'unknown', uTxt = 'Checking…';
     if (list.length) {
       var roleSet = {};
       for (var r0 = 0; r0 < list.length; r0++) { var rn = list[r0] && list[r0].roleName; if (rn) roleSet[rn] = 1; }
       var roles = Object.keys(roleSet).length;
       uTxt = list.length + ' member' + (list.length !== 1 ? 's' : '') + ' · ' + roles + ' role' + (roles !== 1 ? 's' : '');
-      uLvl = 'green';
+      uLvl = 'ok';
     }
     _setDataRow('teamUsersRow', uLvl, uTxt);
     // Inactivity (amber 6+ months, red 12+ months since last sign-in / password
@@ -4073,20 +4118,20 @@
     // admin's explicit confirmation the roster is correct, so it stays green
     // despite inactivity. Otherwise inactivity / an overdue review drive it.
     var aLvl, aTxt;
-    if (_reviewCurrent)      { aLvl = 'green'; aTxt = 'Reviewed' + (_reviewNextDue ? ' · next due ' + fmtDateLong(_reviewNextDue) : ''); }
-    else if (red)            { aLvl = 'red';   aTxt = red + ' user' + (red > 1 ? 's' : '') + ' inactive 1+ year'; }
-    else if (amber)          { aLvl = 'amber'; aTxt = amber + ' user' + (amber > 1 ? 's' : '') + ' inactive 6+ months'; }
-    else if (_reviewOverdue) { aLvl = 'amber'; aTxt = 'Access review overdue'; }
-    else                     { aLvl = list.length ? 'green' : 'grey'; aTxt = list.length ? 'Access up to date' : 'Checking…'; }
+    if (_reviewCurrent)      { aLvl = 'ok'; aTxt = 'Reviewed' + (_reviewNextDue ? ' · next due ' + fmtDateLong(_reviewNextDue) : ''); }
+    else if (red)            { aLvl = 'attention'; aTxt = red + ' user' + (red > 1 ? 's' : '') + ' inactive 1+ year'; }
+    else if (amber)          { aLvl = 'watch'; aTxt = amber + ' user' + (amber > 1 ? 's' : '') + ' inactive 6+ months'; }
+    else if (_reviewOverdue) { aLvl = 'watch'; aTxt = 'Access review overdue'; }
+    else                     { aLvl = list.length ? 'ok' : 'unknown'; aTxt = list.length ? 'Access up to date' : 'Checking…'; }
     // Informational 30-day note — appended only when the row is otherwise green
     // (a calm heads-up, never an alarm; the dot stays green).
     var info30 = _teamInactive30.length;
-    _setDataRow('teamReviewRow', aLvl, aTxt + (aLvl === 'green' && info30 ? ' · ' + info30 + ' inactive 30+ days' : ''));
+    _setDataRow('teamReviewRow', aLvl, aTxt + (aLvl === 'ok' && info30 ? ' · ' + info30 + ' inactive 30+ days' : ''));
     // Card dot = worst of the three rows (row 3 = complex passwords, painted by
     // setPwPolicyDot into _teamPwLevel).
     var worst = '';
     [uLvl, aLvl, _teamPwLevel].forEach(function (l) { if (_lvlRank(l) > _lvlRank(worst)) worst = l; });
-    dot.className = 'row-dot ' + (worst || 'grey');
+    RRV8.setDotState(dot, worst || 'unknown');
     var sub = $('teamSub'); if (sub) sub.textContent = aTxt;   // hidden — feeds the AI briefing
     if (typeof tintPanels === 'function') tintPanels();
     // Team data (incl. 30-day inactivity) just landed — refresh the admin briefing
@@ -4127,15 +4172,15 @@
       .then(function (u) {
         if (!u) return;
         var sub = $('licenseSub');
-        var rank = { green: 1, amber: 2, red: 3 };
+        var rank = { ok: 1, watch: 2, attention: 3 };
 
         // Seat state (the steady-state concern).
-        var seatLevel = 'green', seatMsg;
+        var seatLevel = 'ok', seatMsg;
         if (u.unlimited) {
           seatMsg = 'Unlimited companies · ' + u.used + ' in use';
         } else {
           var cap = u.maxCompanies;
-          seatLevel = u.overLimit ? 'red' : u.atLimit ? 'amber' : 'green';
+          seatLevel = u.overLimit ? 'attention' : u.atLimit ? 'watch' : 'ok';
           seatMsg = u.overLimit ? ('Over license — using ' + u.used + ' of ' + cap)
                   : u.atLimit   ? ('All ' + cap + ' company licenses in use')
                   :               ('Using ' + u.used + ' of ' + cap + ' company licenses');
@@ -4145,15 +4190,15 @@
         // once expired. Purely a function of daysRemaining, which is server-level
         // (identical across a client's databases), so the card reads the same on
         // every DB. A license expiry is renew-or-lose-service — not dismissable.
-        var expLevel = 'green', expMsg = null;
+        var expLevel = 'ok', expMsg = null;
         var days = (u.daysRemaining != null) ? Number(u.daysRemaining) : null;
         if (days != null) {
-          if (days <= 0) { expLevel = 'red'; expMsg = 'License expired'; }
-          else if (days <= 60) { expLevel = 'amber'; expMsg = 'License expires in ' + days + (days === 1 ? ' day' : ' days'); }
+          if (days <= 0) { expLevel = 'attention'; expMsg = 'License expired'; }
+          else if (days <= 60) { expLevel = 'watch'; expMsg = 'License expires in ' + days + (days === 1 ? ' day' : ' days'); }
         }
 
         // Worst of the two drives the dot (and the card accent + band rollup).
-        dot.className = 'row-dot ' + (rank[expLevel] >= rank[seatLevel] ? expLevel : seatLevel);
+        RRV8.setDotState(dot, rank[expLevel] >= rank[seatLevel] ? expLevel : seatLevel);
 
         // Alert-led card: the day-count leads (warning color via lic-expired /
         // lic-ok / lic-soon on the card), the renewal date + seat usage sit under
@@ -4351,7 +4396,7 @@
       toast('Restart requested — reports should work again in about 30 seconds.');
       // Swap the memory readout for the progress bar and hold the link disabled
       // through the bounce window, then re-read health for the true status.
-      if (dot) dot.className = 'row-dot amber';
+      if (dot) RRV8.setDotState(dot, 'busy');
       if (sub) sub.textContent = 'Restarting — back in about 30 seconds…';
       _svcMem = null; setMemMeter(null);
       showRestartProgress();
@@ -4505,20 +4550,24 @@
   var _invLightFromData = false;   // once the data rule sets the light, it wins
   function paintInventoryLight(cls, tip) {
     ['cxDot'].forEach(function (id) {
-      var el = $(id); if (el) { el.className = 'row-dot ' + (cls || 'grey'); el.title = tip; }
+      RRV8.setDotState($(id), cls || 'unknown', tip);
     });
   }
-  function valDotClass(color) {
+  // The server sends a COLOUR word on validation.color; this maps it to a state
+  // once, here, so nothing downstream carries a colour. A value this build does
+  // not recognise returns '' -> setDotState lands it on 'unknown', which makes
+  // no claim, rather than inheriting the all-clear.
+  function valDotState(color) {
     var c = String(color || '').toLowerCase();
-    if (/green|ok|success|pass/.test(c)) return 'green';
-    if (/red|error|fail|break/.test(c))  return 'red';
-    if (/amber|yellow|warn/.test(c))     return 'amber';
+    if (/green|ok|success|pass/.test(c)) return 'ok';
+    if (/red|error|fail|break/.test(c))  return 'attention';
+    if (/amber|yellow|warn/.test(c))     return 'watch';
     return '';
   }
   function setInventoryLight(validation) {
     if (_invLightFromData) return;   // data-driven rule is authoritative
     var v = validation || {};
-    paintInventoryLight(valDotClass(v.color), v.tooltip || 'Inventory validation light');
+    paintInventoryLight(valDotState(v.color), v.tooltip || 'Inventory validation light');
   }
   // There WAS an acctSummaryCacheKey here, and a comment claiming the working
   // pages read their headline numbers from it so they all agree. Nothing read it
@@ -4708,7 +4757,7 @@
     var hasCx = over.length > 0;
     var cx = $('cxDot');
     if (cx) {
-      cx.className = 'row-dot ' + (hasCx ? 'red' : 'green');
+      RRV8.setDotState(cx, hasCx ? 'attention' : 'ok');
       cx.title = hasCx
         ? (over.length + ' compan' + (over.length === 1 ? 'y' : 'ies') + ' over cardex tolerance (total |variance| ' + cxSum.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ').')
         : 'Cardex variance within tolerance for companies in scope.';
@@ -4847,14 +4896,14 @@
       var obj = JSON.parse(sessionStorage.getItem(dmaaiCacheKey()) || 'null');
       var rows = dmaaiRows(obj && obj.payload);
       if (rows && rows.length) {
-        if (dot) dot.className = 'row-dot green';
+        if (dot) RRV8.setDotState(dot, 'ok');
         if (title) title.textContent = 'DMAAI Analysis loaded · ' + rows.length.toLocaleString('en-US') + ' rows';
         var a = activeDb();
         if (sub) sub.textContent = a ? ('Ready for ' + a.n) : 'Ready';
         return;
       }
     } catch (_) {}
-    if (dot) dot.className = 'row-dot grey';
+    if (dot) RRV8.setDotState(dot, 'unknown');
     if (title) title.textContent = 'DMAAI Analysis';
     if (sub) sub.textContent = 'Loads automatically';
   }
@@ -4873,7 +4922,7 @@
     _dmaaiLoading = true;
     setDmaaiReady('pending');
     var _dDot = $('dmaaiDot'), _dSub = $('dmaaiSub');
-    if (_dDot) _dDot.className = 'row-dot amber';
+    if (_dDot) RRV8.setDotState(_dDot, 'busy');
     if (_dSub) _dSub.textContent = 'Loading the DMAAI universe…';
 
     var fetchP;
@@ -4909,7 +4958,7 @@
       if (!auto) toast('DMAAIs loaded.');
     }).catch(function (err) {
       var eDot = $('dmaaiDot'), eSub = $('dmaaiSub');
-      if (eDot) eDot.className = 'row-dot red';
+      if (eDot) RRV8.setDotState(eDot, 'attention');
       if (eSub) eSub.textContent = 'Couldn’t load — it will still load on first export';
       setDmaaiReady('degraded');
       if (!auto) toast('DMAAI load failed: ' + String(err && err.message || err));
@@ -4961,13 +5010,20 @@
   }
   // ---- Merged Data card (refresh + purge + calendar-change) ----
   var _fiscalDetect = null;   // last fiscal-period-end detect result (calendar row)
-  function _lvlRank(l) { return l === 'red' ? 3 : l === 'amber' ? 2 : l === 'green' ? 1 : 0; }
-  function _setDataRow(rowId, level, text) {
+  // Worst-of rank over the dot states. `watch` and `todo` tie deliberately:
+  // both painted amber before UI-88, so the roll-up they feed is unchanged by
+  // the rename. `busy` and `unknown` rank 0 -- neither is a finding.
+  function _lvlRank(l) { return l === 'attention' ? 3 : (l === 'watch' || l === 'todo') ? 2 : l === 'ok' ? 1 : 0; }
+  // State lives in the attribute; CSS derives the colour. Nothing reads a class
+  // back -- see docs/plans/shared-state-registry.md.
+  function _setDataRow(rowId, state, text) {
     var row = $(rowId); if (!row) return;
-    row.classList.remove('lvl-green', 'lvl-amber', 'lvl-red', 'lvl-grey');
-    row.classList.add('lvl-' + (level || 'grey'));
+    row.setAttribute('data-state', state || 'unknown');
     var t = row.querySelector('.data-row-text'); if (t) t.textContent = text;
   }
+  // The states that mean "the admin has something to act on". Used by the
+  // attention-only instance-health strip and by the AI grounding read.
+  function _isAttnState(s) { return s === 'attention' || s === 'watch' || s === 'todo'; }
   // "Jun 23 2026 12:43PM" -> "Jun 23, 2026" (drop the time for the as-of line).
   function _fmtAsOf(s) {
     s = String(s || '').replace(/\s*\d{1,2}:\d{2}\s*[AP]M\s*$/i, '');
@@ -4977,7 +5033,7 @@
   // needs the admin to do something (amber/red), and the whole strip disappears
   // when nothing does. A healthy instance shows no strip — the reassurance that
   // "everything's fine" is the absence of anything flagged, not a row of green
-  // chips. Data freshness/storage/fiscal flag on lvl-amber/red; the AI-plan chip
+  // chips. Data freshness/storage/fiscal flag on watch/todo/attention; the AI-plan chip
   // flags on its review dot (setup/acknowledge due), never on the plan name.
   // "Show all" reveals the quiet OK chips the strip normally hides, so an admin
   // can reach an item they know exists. Off by default (attention-only stays the
@@ -4989,7 +5045,7 @@
     var anyAttn = false, anyQuiet = false;
     ['dataRefreshRow', 'dataPurgeRow', 'dataFiscalRow'].forEach(function (id) {
       var el = $(id); if (!el) return;
-      var attn = el.classList.contains('lvl-amber') || el.classList.contains('lvl-red');
+      var attn = _isAttnState(el.getAttribute('data-state'));
       el.hidden = !(attn || showAll);
       if (attn) anyAttn = true; else anyQuiet = true;
     });
@@ -5010,19 +5066,19 @@
   function renderDataCard() {
     if (!$('dataDot')) return;   // card not on the page (e.g. non-admin view)
     var s = _jobStatus || '', refLvl, refTxt;
-    if (/^success/i.test(s))                 { refLvl = 'green'; refTxt = _refreshWhen ? ('Data as of ' + _fmtAsOf(_refreshWhen)) : 'Data up to date'; }
-    else if (/^in progress/i.test(s))        { refLvl = 'amber'; refTxt = 'Refreshing now'; }
-    else if (/^(failed|cancelled)/i.test(s)) { refLvl = 'red';   refTxt = 'Last refresh failed'; }
-    else if (s)                              { refLvl = 'grey';  refTxt = 'No refresh yet'; }
-    else                                     { refLvl = 'grey';  refTxt = 'Checking…'; }
+    if (/^success/i.test(s))                 { refLvl = 'ok'; refTxt = _refreshWhen ? ('Data as of ' + _fmtAsOf(_refreshWhen)) : 'Data up to date'; }
+    else if (/^in progress/i.test(s))        { refLvl = 'busy'; refTxt = 'Refreshing now'; }
+    else if (/^(failed|cancelled)/i.test(s)) { refLvl = 'attention'; refTxt = 'Last refresh failed'; }
+    else if (s)                              { refLvl = 'unknown'; refTxt = 'No refresh yet'; }
+    else                                     { refLvl = 'busy'; refTxt = 'Checking…'; }
     _setDataRow('dataRefreshRow', refLvl, refTxt);
 
-    var pLvl = 'grey', pTxt = 'Checking…';
+    var pLvl = 'busy', pTxt = 'Checking…';
     if (_purgeInfo && window.RRV8 && window.RRV8.purgeRecommendation) {
       var until = reviewValueFor('purge-snooze', 'rrv8.purgeSnooze.');
       var rec = window.RRV8.purgeRecommendation(_purgeInfo, { snoozeUntil: until, today: new Date().toISOString().slice(0, 10) });
       if (rec.known) {
-        pLvl = rec.effectiveLevel || 'green';
+        pLvl = rec.effectiveLevel || 'ok';
         if (rec.runway != null) {
           var mo = Math.max(1, Math.round(rec.runway));
           // Runway = time until storage fills at current growth. Say what it is,
@@ -5039,18 +5095,18 @@
     // visibility (amber = correction available → show; green = no changes → hide)
     // is handled uniformly by _syncInstanceHealth() for every chip. The green text
     // is still set so the AI grounding read stays informed while the chip is hidden.
-    var fLvl = 'grey', fTxt = 'Checking…';
+    var fLvl = 'busy', fTxt = 'Checking…';
     if (_fiscalDetect) {
-      if (_fiscalDetect.mismatchFound) { fLvl = 'amber'; fTxt = 'Fiscal calendar correction available'; }
-      else { fLvl = 'green'; fTxt = 'No fiscal calendar changes'; }
+      if (_fiscalDetect.mismatchFound) { fLvl = 'watch'; fTxt = 'Fiscal calendar correction available'; }
+      else { fLvl = 'ok'; fTxt = 'No fiscal calendar changes'; }
     }
     _setDataRow('dataFiscalRow', fLvl, fTxt);
     _syncInstanceHealth();
 
     var worst = ''; [refLvl, pLvl, fLvl].forEach(function (l) { if (_lvlRank(l) > _lvlRank(worst)) worst = l; });
-    var dot = $('dataDot'); if (dot) dot.className = 'row-dot ' + (worst || 'grey');
+    RRV8.setDotState($('dataDot'), worst || 'unknown');
     var sub = $('dataBriefSummary');
-    if (sub) sub.textContent = (worst === 'amber' || worst === 'red')
+    if (sub) sub.textContent = _isAttnState(worst)
       ? (refLvl === worst ? refTxt : pLvl === worst ? pTxt : fTxt) : '';
     if (typeof tintPanels === 'function') tintPanels();
   }
@@ -5142,16 +5198,16 @@
   // (Never); amber = review due / not yet set.
   function setPwPolicyDot() {
     var row = $('teamPwRow'); if (!row) return;
-    if (IS_DEMO || !isAdmin() || !(window.RRV8 && window.RRV8.complexPwReviewLevel)) {
-      _teamPwLevel = 'grey'; _setDataRow('teamPwRow', 'grey', 'Complex passwords');
+    if (IS_DEMO || !isAdmin() || !(window.RRV8 && window.RRV8.complexPwReviewState)) {
+      _teamPwLevel = 'unknown'; _setDataRow('teamPwRow', 'unknown', 'Complex passwords');
       if (_teamList) paintTeamHealth(_teamList);   // fold into the worst-of card dot
       return;
     }
     var val = reviewValueFor('password-review', 'rrv8.complexPwReview.');
-    var level = window.RRV8.complexPwReviewLevel(val, new Date().toISOString().slice(0, 10));
+    var level = window.RRV8.complexPwReviewState(val, new Date().toISOString().slice(0, 10));
     _teamPwLevel = level;
     _setDataRow('teamPwRow', level, _pwRowText(level, val));
-    row.title = level === 'green'
+    row.title = level === 'ok'
       ? (val === 'never' ? 'Complex-password review reminders off' : 'Reviewed — reminder set')
       : 'Review which companies require complex passwords';
     if (_teamList) paintTeamHealth(_teamList);   // fold into the worst-of card dot
@@ -5171,10 +5227,10 @@
   function setReloadGlDot(p) {
     var dot = $('reloadGlDot'); if (!dot) return;
     if (p && p.cutoffDate) {
-      dot.className = 'row-dot amber';
+      RRV8.setDotState(dot, 'watch');
       dot.title = 'GL break from ' + fmtDateLong(p.cutoffDate) + ' — ' + fmtCount(p.affected) + ' rows can be reloaded.';
     } else {
-      dot.className = 'row-dot green';
+      RRV8.setDotState(dot, 'ok');
       dot.title = 'Nothing to reload — the GL roll-forward is clean.';
     }
   }
@@ -5189,29 +5245,29 @@
   // by the customer's on-site DBA (not GSI); this dot just tracks whether the admin
   // has recently confirmed it. Green = confirmed (reminder set) or reminders off
   // (Never); amber = a review is due / not yet confirmed. Shared key
-  // rrv8.scheduleReview.<db> + RRV8.scheduleReviewLevel with the page band.
+  // rrv8.scheduleReview.<db> + RRV8.scheduleReviewState with the page band.
   function loadRefreshSchedule() {
     var dot = $('schedDot'); if (!dot) return;
-    if (IS_DEMO || !isAdmin() || !(window.RRV8 && window.RRV8.scheduleReviewLevel)) { dot.className = 'row-dot grey'; return; }
+    if (IS_DEMO || !isAdmin() || !(window.RRV8 && window.RRV8.scheduleReviewState)) { RRV8.setDotState(dot, 'unknown'); return; }
     var val = reviewValueFor('schedule-review', 'rrv8.scheduleReview.');
-    var level = window.RRV8.scheduleReviewLevel(val, new Date().toISOString().slice(0, 10));
-    dot.className = 'row-dot ' + level;
-    dot.title = level === 'green'
+    var level = window.RRV8.scheduleReviewState(val, new Date().toISOString().slice(0, 10));
+    RRV8.setDotState(dot, level);
+    dot.title = level === 'ok'
       ? (val === 'never' ? 'Schedule-review reminders off' : 'Confirmed — reminder set')
       : 'Review your nightly refresh schedule';
   }
   // AI Assistant row dot — client-side review reminder (rrv8.aiReview.<db> +
-  // RRV8.aiReviewLevel), set on the AI Assistant page (30/60/Never). Green =
+  // RRV8.aiReviewState), set on the AI Assistant page (30/60/Never). Acknowledged =
   // reminder set or Never (acknowledged); amber = not enabled / not yet
   // acknowledged. (When the per-client AI flag lands, also green when the
   // assistant is enabled + connected.)
   function setAiDot() {
     var dot = $('aiDot'); if (!dot) return;
-    if (IS_DEMO || !isAdmin() || !(window.RRV8 && window.RRV8.aiReviewLevel)) { dot.className = 'row-dot grey'; _syncInstanceHealth(); return; }
+    if (IS_DEMO || !isAdmin() || !(window.RRV8 && window.RRV8.aiReviewState)) { RRV8.setDotState(dot, 'unknown'); _syncInstanceHealth(); return; }
     var val = reviewValueFor('ai-review', 'rrv8.aiReview.');
-    var level = window.RRV8.aiReviewLevel(val, new Date().toISOString().slice(0, 10));
-    dot.className = 'row-dot ' + level;
-    dot.title = level === 'green'
+    var level = window.RRV8.aiReviewState(val, new Date().toISOString().slice(0, 10));
+    RRV8.setDotState(dot, level);
+    dot.title = level === 'ok'
       ? (val === 'never' ? 'AI assistant reminders off' : 'Acknowledged — reminder set')
       : 'Set up or acknowledge the AI Assistant';
     _syncInstanceHealth();
@@ -5241,15 +5297,15 @@
       .catch(function () { mark(''); });   // unreachable — leave the em-dash rather than guess
   }
   // Activity Log row dot — client-side review reminder (rrv8.activityReview.<db> +
-  // RRV8.activityReviewLevel), set on the Activity Log page (7/14/30-day). Green =
+  // RRV8.activityReviewState), set on the Activity Log page (7/14/30-day). Reviewed =
   // reviewed recently (reminder set); amber = a review is due / not yet set.
   function setActivityDot() {
     var dot = $('activityDot'); if (!dot) return;
-    if (IS_DEMO || !isAdmin() || !(window.RRV8 && window.RRV8.activityReviewLevel)) { dot.className = 'row-dot grey'; return; }
+    if (IS_DEMO || !isAdmin() || !(window.RRV8 && window.RRV8.activityReviewState)) { RRV8.setDotState(dot, 'unknown'); return; }
     var val = reviewValueFor('activity-review', 'rrv8.activityReview.');
-    var level = window.RRV8.activityReviewLevel(val, new Date().toISOString().slice(0, 10));
-    dot.className = 'row-dot ' + level;
-    dot.title = level === 'green' ? 'Reviewed — reminder set' : 'Review recent activity';
+    var level = window.RRV8.activityReviewState(val, new Date().toISOString().slice(0, 10));
+    RRV8.setDotState(dot, level);
+    dot.title = level === 'ok' ? 'Reviewed — reminder set' : 'Review recent activity';
   }
   // Compact relative time for the Activity Log mini-feed.
   function fmtAgo(at) {
@@ -5343,20 +5399,20 @@
       ? 'admin-reload-cardex.html?from=' + encodeURIComponent(suggested)
       : 'admin-reload-cardex.html';
     if (!suggested) {
-      dot.className = 'row-dot green';
+      RRV8.setDotState(dot, 'ok');
       dot.title = 'No end-of-day values in the prior two periods — nothing to reload.';
       if (sub) sub.innerHTML = RCDX_DEFAULT_SUB;
       return;
     }
     if (cardexSnoozeActive()) {
       var until = cardexSnoozeUntil().toISOString().slice(0, 10);
-      dot.className = 'row-dot green';
+      RRV8.setDotState(dot, 'ok');
       dot.title = 'Reminder set — we’ll flag this again on ' + fmtDateLong(until) + '.';
       if (sub) sub.innerHTML = 'End-of-day values in the prior two periods &mdash; reminder set for ' +
         fmtDateLong(until) + '.';
       return;
     }
-    dot.className = 'row-dot amber';
+    RRV8.setDotState(dot, 'watch');
     dot.title = 'End-of-day values in the prior two periods — suggest reloading cardex from ' + fmtDateLong(suggested) + '.';
     if (sub) sub.innerHTML = '<strong>End-of-day values in the prior two periods.</strong> ' +
       'Suggested reload from ' + fmtDateLong(suggested) +
@@ -5652,25 +5708,32 @@
     var grid = document.querySelector('#view-admin .lower-grid'); if (!grid) return [];
     return Array.prototype.filter.call(grid.querySelectorAll('.row'), function (c) { return !c.hidden; });
   }
+  // Reads the card's STATE, not its paint. Before UI-88 this recovered meaning
+  // from the dot's CSS class, which made the stylesheet the canonical store for
+  // the whole admin surface. `todo` and `busy` fold to the values the three
+  // consumers already understand, so the roll-up is unchanged by the rename.
   function _cardLevel(card) {
     var dot = card.querySelector('.row-dot'); if (!dot) return '';
-    return dot.classList.contains('red') ? 'attention'
-         : dot.classList.contains('amber') ? 'watch'
-         : dot.classList.contains('green') ? 'ok' : '';
+    var s = dot.getAttribute('data-state');
+    if (s === 'attention') return 'attention';
+    if (s === 'watch' || s === 'todo') return 'watch';
+    if (s === 'ok') return 'ok';
+    return '';   // unknown / busy / unset -- makes no claim
   }
   // Status-first ordering: cards needing attention sort LEFT (red first, then
   // amber) so the eye lands on what needs work; clear/quiet cards (green/grey)
   // hold the right. Runs AFTER dots resolve — tintPanels() calls it, and the grid
-  // MutationObserver re-fires tintPanels on every dot class change. MOVES the
+  // MutationObserver re-fires tintPanels on every dot state change. MOVES the
   // existing card elements (appendChild), never recreates them, so the status-dot
   // wiring (which keys off the stable element IDs) is untouched. An appendChild
   // reorder is a childList mutation, which the observer (attributes-only) ignores,
   // so there's no feedback loop; the changed-guard also skips no-op reorders.
   function _cardAttnRank(card) {
     var dot = card.querySelector('.row-dot'); if (!dot) return 1;
-    if (dot.classList.contains('red'))   return 3;
-    if (dot.classList.contains('amber')) return 2;
-    return 1;   // green / grey / unset — clear, holds the right
+    var s = dot.getAttribute('data-state');
+    if (s === 'attention') return 3;
+    if (s === 'watch' || s === 'todo') return 2;
+    return 1;   // ok / unknown / busy / unset — clear, holds the right
   }
   function reorderAdminCards() {
     var grid = document.querySelector('#view-admin .lower-grid'); if (!grid) return;
@@ -5742,7 +5805,10 @@
     var grid = document.querySelector('#view-admin .lower-grid');
     if (!grid || typeof MutationObserver === 'undefined') return;
     var obs = new MutationObserver(function () { tintPanels(); });
-    obs.observe(grid, { subtree: true, attributes: true, attributeFilter: ['class'] });
+    // data-state is what the dots change now (UI-88); class is kept in the
+    // filter because the cards themselves still toggle classes for other
+    // reasons. Dropping data-state here freezes the whole roll-up silently.
+    obs.observe(grid, { subtree: true, attributes: true, attributeFilter: ['class', 'data-state'] });
     tintPanels();
   }
 
@@ -6119,8 +6185,7 @@
     // Home is the FULL authorized view — every company in the install. It ignores
     // any company narrowing done on another work page (those pages narrow; Home
     // always shows everything you're authorized to see).
-    var pSel = $('periodSelect');
-    var perKey = _briefPeriodOverride || (pSel ? String(pSel.value || '').slice(0, 10) : '');
+    var perKey = _analystViewedPeriod();
     var coScoped = rows;
     // prior + latest period — context for "Carry forward" and the too-late-to-fix rule.
     var pset = {}; coScoped.forEach(function (r) { var p = String(r.PeriodEnds || '').slice(0, 10); if (p) pset[p] = 1; });
@@ -7349,7 +7414,9 @@
     var wb = XLSX.utils.book_new();
     var tab = (e.co + (e.ccy ? ' - ' + e.ccy : '')).slice(0, 31);
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), tab);
-    XLSX.writeFile(wb, RRV8.exportName({ surface: 'AdjustingEntry', company: e.co, period: e.per }));
+    // Guarded write. A failure here reports its own reason and returns false, so
+    // _oeAttest does not record an audit event for a file that never downloaded.
+    if (!RRV8.saveWorkbook(wb, RRV8.exportName({ surface: 'AdjustingEntry', company: e.co, period: e.per }), toast, 'Adjusting Entry')) return false;
     return true;
   }
   function _oeAttest() {
@@ -7998,7 +8065,6 @@
   // Scoped to the ONE selected company (single-currency); async + cached.
   // Period-column click → focus that period (stays on the page).
   var _txVarReqKey = null;
-  var _txVarContext = null;   // { total, current:[periods], historical:[periods] } — for AI grounding
   // ---- Cardex Variance tab header (analyst 'reports' sub-view) --------------------
   // TWO standalone cards (styled like the AI assistant card and sitting beside it, so
   // the row reads AI · top movers · SOT) replacing the irrelevant-here tx-variance
@@ -8144,7 +8210,13 @@
     var txCard = '<div class="cxh-card is-nav" data-ov-nav="txvar" role="button" tabindex="0" aria-label="Open Transaction Variance detail">'
       + '<div class="cxh-head"><div class="cxh-name">Transaction Variance</div><div class="cxh-sub2">' + txSub + '</div></div>'
       + '<div class="cxh-figs">'
-      +   '<div class="cxh-fig"><div class="cxh-fig-k">Net variance &middot; current period</div><div class="cxh-fig-v' + neg(curNet) + '">' + esc(fmtAmt(curNet)) + '</div></div>'
+      // "current period" named the WRONG period: curNet is the FOCUSED period (the bar
+      // the analyst clicked, or the latest if they clicked none), and the sibling
+      // figure beside it is already labelled "Prior period · <name>". Two figures, one
+      // named by date and one named "current", is the exact pairing #449 pulled apart
+      // on the chrome pill. The subtitle above already carries the date, so the key
+      // just states the measure.
+      +   '<div class="cxh-fig"><div class="cxh-fig-k">Net variance' + (focP ? ' &middot; ' + esc(_pwLabel(focP)) : '') + '</div><div class="cxh-fig-v' + neg(curNet) + '">' + esc(fmtAmt(curNet)) + '</div></div>'
       +   '<div class="cxh-fig"><div class="cxh-fig-k">Prior period' + (priorP ? ' &middot; ' + esc(_pwLabel(priorP)) : '') + '</div><div class="cxh-fig-v' + (priorNet == null ? '' : neg(priorNet)) + '">' + (priorNet == null ? '&mdash;' : esc(fmtAmt(priorNet))) + '</div></div>'
       + '</div>'
       + '<div class="cxh-go">View Transaction Variance <span class="arr" aria-hidden="true">&rarr;</span></div>'
@@ -8215,10 +8287,7 @@
     var fmtAmt = function (v) { return _ccyAmt(ccy0, v); };
     var key = companies.join(',') + '|' + ((activeDb() && activeDb().n) || '');
     var titleHead = '<div class="pw-head"><span class="pw-title">Transaction Variance by Period</span></div>';
-    function focusedPeriod() {
-      var pSel = $('periodSelect');
-      return _briefPeriodOverride || (pSel ? String(pSel.value || '').slice(0, 10) : '');
-    }
+    var focusedPeriod = _analystViewedPeriod;   // one resolver for "the period on screen"; this was a fourth private copy of it
     // One {period, variance, total} per period for the selected company, from the
     // Account Roll Forward summary view (v6ui_raccountsummary via _invRows). We
     // total the VARIANCE column. total = |Variance| drives the bar height; variance
@@ -8253,12 +8322,18 @@
     // admits none of them. The whole gap is that one exclusion. OOB is a third
     // measure again (that slice: -$90,629.23).
     //
-    // NOTHING RELIES ON THEM BEING EQUAL, and the tab already knows better: the
-    // UI-28 block in renderAnalystTxVar shows sourceTotal and netTotal side by side
-    // with tolDelta between them "rather than claim a tie". The false comment here
-    // is what let the Data Health band and the roll-forward page disagree for a day
-    // while both looked correct. If you need a drift detector, write one that
-    // asserts something and fails loudly — a comment is not one.
+    // NOTHING RELIES ON THEM BEING EQUAL. This comment used to add that "the tab
+    // already knows better" because a UI-28 block showed sourceTotal and netTotal side
+    // by side with tolDelta between them — and that block had been removed. sourceTotal
+    // and tolDelta survived only as inputs to the tab's unit picker, and _tolMaterial
+    // was computed and read by nothing. So the two measures sat six inches apart on one
+    // screen, $3 against $2 for Apr 30 on Demo3 co 30002, with no surface reconciling
+    // them (owner 2026-08-12). The Transaction Overview footer carries that
+    // reconciliation again, above $1. Both figures now name their population in their
+    // own label, which is the part a tooltip cannot do.
+    //
+    // If you need a drift detector, write one that asserts something and fails loudly —
+    // a comment is not one, and neither is a variable nobody reads.
     function _txvRfSeries() {
       var rows = _invRows || [], pmap = {}, plist = [];
       rows.forEach(function (r) {
@@ -8309,8 +8384,15 @@
       box.innerHTML =
         '<div class="pw-head txv-head"><span class="pw-title">Transaction Variance by Period</span>'
         + (series.length > _PW_WINDOW ? '<button type="button" class="pw-wintoggle" data-pw-toggle>' + (_pwExpanded ? 'Show recent ' + _PW_WINDOW : 'Show all ' + series.length) + '</button>' : '')
-        + '<div class="txv-total" title="Account Roll Forward variance (v6ui_raccountsummary) for this company, for the focused period — the NET across all categories. The AI lead names the single biggest category driver, which is a component of this net, not the same figure.">'
-        + '<span class="txv-total-k">Net variance' + (activeP ? ' &middot; ' + esc(_pwLabel(activeP)) : '') + '</span>'
+        // The label names the POPULATION on screen, not only in the tooltip. This
+        // figure and the "Total variance" on the tab's own Transaction Overview are
+        // two different measures of the same period, and until now both were called
+        // some flavour of "variance" with nothing on either to tell them apart —
+        // Apr 30 read $3 here and $2 six inches below (owner 2026-08-12, Demo3 co
+        // 30002; measured $2.54 roll-forward against $1.89 residual, so both are
+        // right). A tooltip does not settle a disagreement the analyst can see.
+        + '<div class="txv-total" title="Account Roll Forward variance (v6ui_raccountsummary) for this company, for the focused period — the NET across all accounts, every posted non-manual row at any size. The Transaction Overview below reports the reconciling-items residual for the same period, which is a narrower population and a smaller number; the tab shows both and their delta rather than claiming they tie.">'
+        + '<span class="txv-total-k">Roll-forward net' + (activeP ? ' &middot; ' + esc(_pwLabel(activeP)) : '') + '</span>'
         + '<span class="txv-total-v">' + esc(fmtAmt(rfTotal)) + '</span>'
         + '</div></div>'
         + '<div class="pw-chart txv-fill">' + (cols || '<div class="txv-empty">No transaction variance in scope for any period.</div>') + '</div>';
@@ -8334,7 +8416,7 @@
       var _tg = box.querySelector('[data-pw-toggle]');
       if (_tg) _tg.addEventListener('click', function () { _pwExpanded = !_pwExpanded; paint(); });
     }
-    if (_txVarCache.key === key && _txVarCache.amt) { paint(); _txVarUpdateTotal(fmtAmt); return; }   // cached — no refetch
+    if (_txVarCache.key === key && _txVarCache.amt) { paint(); _txVarSeriesLoaded(); return; }   // cached — no refetch
     box.hidden = false;
     box.innerHTML = titleHead + '<div class="rr-busy" style="padding:18px 2px;"><span class="rr-busy-dot"></span>Loading variance by period…</div>';
     _txVarReqKey = key;
@@ -8357,7 +8439,7 @@
       var b = _txVarBucket(_rows);
       _txVarCache = { key: key, amt: b.amt, cnt: b.cnt, rows: _rows };   // keep raw rows for the Transaction Variance tab
       paint();
-      _txVarUpdateTotal(fmtAmt);
+      _txVarSeriesLoaded();
       if (_viewRole() === 'analyst' && typeof renderAnalystDayBriefTop === 'function') renderAnalystDayBriefTop(_acctData || _briefData());   // tx cache warmed → fill the Transaction Variance chip
     }).catch(function () {
       if (_txVarReqKey !== key) return;
@@ -8365,15 +8447,18 @@
       box.hidden = false;
     });
   }
-  // Stash the current/historical period split (the residual transaction-variance
-  // series) so the AI has that recency context when grounding an on-demand answer.
-  function _txVarUpdateTotal(fmtAmt) {
-    var series = _txVarCache.amt || [];
-    var total = series.reduce(function (a, s) { return a + (s.total || 0); }, 0);
-    var periods = series.map(function (s) { return s.period; });
-    _txVarContext = { total: total, current: periods.slice(-2), historical: periods.slice(0, Math.max(0, periods.length - 2)) };
-    // Keep the AI card present + wired once the series has loaded (its grounding
-    // now reads _txVarContext for the recency split).
+  // Keep the AI card present + wired once the residual series has loaded. It was named
+  // _txVarUpdateTotal and updated no total.
+  //
+  // It used to also stash _txVarContext — {total, current, historical} — as "the
+  // recency split for AI grounding". Only _analystTxStats ever read it, for the
+  // current window, and it did so with a one-period fallback when the object was
+  // absent. Since this function is called ONLY by renderTxVarWidget, an analyst who
+  // never opened the Transaction Variance tab got the one-period fallback and a
+  // different day-brief off identical data. _analystTxStats now takes series.slice(-2)
+  // straight off the cache — the same arithmetic, available to every caller — so the
+  // stash had no remaining reader and is gone rather than left to look load-bearing.
+  function _txVarSeriesLoaded() {
     if (typeof _viewRole === 'function' && _viewRole() === 'analyst' && typeof renderAnalystAiCard === 'function') {
       renderAnalystAiCard(_acctData || _briefData());
     }
@@ -8688,8 +8773,7 @@
       // for the same period. Focus follows the graph (its period-click / the
       // picker), default = latest. (Rows are the recstatus=1 residual; netting is
       // already done server-side.)
-      var pSel = $('periodSelect');
-      var focusP = _briefPeriodOverride || (pSel ? String(pSel.value || '').slice(0, 10) : '');
+      var focusP = _analystViewedPeriod();
       var pset = {}; rows.forEach(function (r) { var p = String(r.PeriodEnds || '').slice(0, 10); if (p) pset[p] = 1; });
       var plist = Object.keys(pset).sort();
       if (plist.indexOf(focusP) === -1 && plist.length) focusP = plist[plist.length - 1];
@@ -8956,7 +9040,16 @@
       var _ovId = '<div class="wl-id">' + _ovDot
         + (_coName ? '<span class="wl-name">' + esc(_coName) + '</span><span class="wl-co">Co ' + esc(solo) + '</span>'
                    : '<span class="wl-name">Co ' + esc(solo) + '</span>') + '</div>';
-      var _tvFig = '<span class="wl-fig"><span class="wl-fig-lbl">Total variance:</span><span class="wl-fig-val">' + money(_tvTotal) + '</span></span>';
+      // "Total variance" claimed the whole period and delivered the residual. netTotal
+      // is the reconciling-items population the cards below itemize — posted documents
+      // over the materiality threshold — and sourceTotal beside it is the roll-forward
+      // net the chart above draws. On Demo3 co 30002 / Apr 30 those are $1.89 and
+      // $2.54, so the chart said $3 and this said $2 with nothing on either naming what
+      // it counted. The label now says which population, and the tooltip carries the
+      // delta the tab already computes.
+      var _tvFig = '<span class="wl-fig" title="' + esc('The reconciling-items residual for ' + fmtPeriod(focusP) + ' — the population the cards below itemize, and what they sum to. '
+          + 'The roll-forward net the chart above draws for the same period is ' + _ccyAmt(ccy, sourceTotal) + '. Different population and different grain; they are not expected to tie.')
+        + '"><span class="wl-fig-lbl">Reconciling items:</span><span class="wl-fig-val">' + money(_tvTotal) + '</span></span>';
       // Gray message box — status (entry-authoritative _acctStatus, kept as-is) as
       // the read, the analyst's choice as the emphasized next-step line beneath it.
       var _ovMsg = '<div class="wl-ai wl-ai-plain">'
@@ -8964,9 +9057,24 @@
         + (_acctStatus.suffix ? '<span class="txv-status-suffix">' + esc(_acctStatus.suffix) + '</span>' : '') + '</div>'
         + '<div class="wl-ai-rec"><span class="wl-ai-rec-txt">You can still research root causes if you choose, or just mark the period reviewed.</span></div>'
         + '</div>';
-      // Bottom row — ONLY the handed-off-this-cycle rollup.
+      // Bottom row — the handed-off-this-cycle rollup, plus the roll-forward
+      // reconciliation WHEN IT IS MATERIAL. _tolMaterial was computed and then read by
+      // nothing: the UI-28 block that showed sourceTotal, netTotal and the delta side
+      // by side is gone, and the comment above _txvRfSeries still describes it as
+      // present. So the chart said Apr 30 was $3 and this card said $2, and no surface
+      // anywhere reconciled the two. Shown only above $1, because a sub-dollar gap is
+      // rounding and printing it every period is noise.
       var _ovFoot = '<div class="wl-foot"><span class="wl-foot-links">'
         + '<small class="txv-conv">Handed off this cycle: <strong>' + resolvedThisCycle + '</strong> of ' + _totalCards + ' cards</small>'
+        // "the difference is what fell below the threshold" would be a guess, and on
+        // Demo3 co 30002 / Mar 31 it is the wrong guess: the residual is $83,372 against
+        // a roll-forward net of $81,363, so the narrower population is the LARGER number.
+        // Account grain against document grain does that. State the gap; do not explain
+        // it with a mechanism that only fits one sign.
+        + (_tolMaterial
+            ? '<small class="txv-conv" title="' + esc('The chart above draws the roll-forward net for this period: every posted non-manual row at any size, summed at account grain. This card counts only documents whose two sides differ by more than the materiality threshold, summed at document grain. Two restrictions and a different grain, so the two do not tie in either direction and the tab does not net them.')
+              + '">Roll-forward net for ' + esc(fmtPeriod(focusP)) + ': <strong>' + esc(money(sourceTotal)) + '</strong> &mdash; ' + esc(money(Math.abs(tolDelta))) + ' apart from the reconciling items, on a different population</small>'
+            : '')
         + '</span></div>';
       var headline =
         '<section class="acct-snapshot txv-overview">'
@@ -9701,7 +9809,12 @@
     if (window.RRV8 && RRV8.ROLLFORWARD_GROUNDING) { var rf = RRV8.ROLLFORWARD_GROUNDING; parts.push(Array.isArray(rf) ? rf.join('\n') : rf); }
     parts.push('GL-CLASS: a blank GL class is just another code — it posts when the DMAAI carries a **** wildcard/default. The real finding is the F4102 (Item Branch) vs F41021 (Item Location) GL-class SPLIT, which only misroutes through R31802A on manufacturing (IC/IM) documents; no IC/IM activity in scope means nothing to misroute.');
     parts.push('CARDEX: cardex variance is F41021 on-hand vs the F4111 cardex, account-blind — NOT the ledger-vs-GL gap. Validate in JD Edwards (P4111), then fix at source or apply the reversible sync; never a journal entry.');
-    parts.push('PRIORITY: rank by what is actionable in the current period. A GL roll-forward break blocks the period from tying out and outranks a recurring transaction variance; a variance that self-clears on the next refresh is not a priority to chase.');
+    // "the current period" was the instruction AND the defect: told to rank by it, the
+    // model reached for the phrase to describe an amount, and the amount was in a
+    // period the analyst was not looking at. The facts name the open window and the
+    // viewed period separately; the ranking rule points at them by name.
+    parts.push('PRIORITY: rank by what is still actionable — the open window named in the facts, not the whole history. A GL roll-forward break blocks the period from tying out and outranks a recurring transaction variance; a variance that self-clears on the next refresh is not a priority to chase.');
+    parts.push('PERIODS: "open window", "viewed period" and "numbers current to" are three different things and the facts label each one. Quote them by their date. Do not compress any of them into "the current period".');
     return parts.join('\n');
   }
   // Deterministic chips — one per surface, always correct from the live figures
@@ -9745,9 +9858,18 @@
     } else {
       var top = txStats.top, s = top && txStats.byMod[top];
       if (s && s.current >= 1) {
-        chips.push({ key: 'txvar', label: 'Transaction Variance', text: top + ' ' + _ccyAmt(ccy, s.current) + ' this period' + (s.recur > 1 ? ' · recurs' : ''), state: 'attn', href: null });
+        // "this period" was the chip's whole claim about WHEN, and it was wrong
+        // whenever the window's older period carried the money: Demo3 co 30002 read
+        // "Inventory $76K this period" with an April screen behind it and every cent
+        // of the $76K in March. Name the period. When the amount is split across the
+        // window, say "open" and let the tab break it out — no single period owns it.
+        // Literal middot, not the entity: the chip text is esc()'d by the renderer.
+        var _when = (s.curTop && !s.curSpread) ? (' · ' + _pwLabel(s.curTop.period)) : ' open';
+        chips.push({ key: 'txvar', label: 'Transaction Variance', text: top + ' ' + _ccyAmt(ccy, s.current) + _when + (s.recur > 1 ? ' · recurs' : ''), state: 'attn', href: null });
       } else {
-        chips.push({ key: 'txvar', label: 'Transaction Variance', text: txStats.n ? 'Clean — nothing actionable this period' : 'No variance in scope', state: 'clean', href: null });
+        // "this period" again meant the open window, not the period on screen. The
+        // clean state has to survive the same test as the attention state.
+        chips.push({ key: 'txvar', label: 'Transaction Variance', text: txStats.n ? 'Clean — nothing open to act on' : 'No variance in scope', state: 'clean', href: null });
       }
     }
     var cx = _analystCardexSummary(co);
@@ -9816,7 +9938,12 @@
     (h.cleared || []).forEach(function (c) { facts.push('CLEARED - ' + c.factTitle + ': ' + (c.factDetail || 'clean')); });
     if (!nAttn && !nOpen) facts.push('All accuracy checks are clean.');   // only when every check actually returned a verdict
     facts.push('== TRANSACTION VARIANCE ==');
-    _analystTxFacts(txStats, '', ccy, co, scrub).forEach(function (f) { facts.push(f); });
+    // The viewed period was NOT passed here, so the brief was grounded with an open
+    // window and no idea which period the analyst had on screen — and it duly
+    // reported a March amount as "the current-period variance" while the panels below
+    // it showed April (owner 2026-08-12). The lead sits directly above those panels;
+    // it has to know what they are showing.
+    _analystTxFacts(txStats, _analystViewedPeriod(), ccy, co, scrub).forEach(function (f) { facts.push(f); });
     facts.push('== CARDEX (F41021 on-hand vs F4111 cardex; account-blind) ==');
     _analystCardexFacts(co, ccy, scrub).forEach(function (f) { facts.push(f); });
     // Signature guard (same idiom as the accountant worklist's _wlCurSig). The
@@ -9832,7 +9959,11 @@
     var prompt = 'You are giving a JDE inventory-reconciliation analyst the ONE thing to start with today, across their three surfaces (Data Health, Transaction Variance, Cardex).\n'
       + 'These are the ONLY facts you may use (never invent a number, an account, an item, or a step):\n' + facts.join('\n') + '\n'
       + (window.RRV8 && RRV8.dataAccessLine ? RRV8.dataAccessLine(exposure) + '\n' : '')
-      + 'The three surfaces are shown as clickable chips below your sentence, so DO NOT list all of them. Write ONE lead sentence, UNDER 32 words: name the single highest-priority thing to work FIRST and why, ranked by what is actionable NOW. If nothing is actionable, say so plainly. One sentence means one line — no greeting, no list.\n'
+      + 'The three surfaces are shown as clickable chips below your sentence, so DO NOT list all of them. Write ONE lead sentence, UNDER 38 words: name the single highest-priority thing to work FIRST and why, ranked by what is actionable NOW. If nothing is actionable, say so plainly. One sentence means one line — no greeting, no list.\n'
+      // The 32-word budget was itself part of the defect: the shortest way to place an
+      // amount in time is "current-period", and that phrase was true of the window and
+      // false of the period on screen. Six more words buys the period name.
+      + 'ATTRIBUTION IS NOT OPTIONAL: if you cite an amount, name the period it is in. Never write "current period", "this period" or "now" as a substitute for a period name, and if the amount is not in the viewed period, say which period it IS in.\n'
       + (window.RRV8 && RRV8.AI_REGISTER ? RRV8.AI_REGISTER : '');
     var _per = ''; try { _per = (window.RRV8 && RRV8.readSessionScope && RRV8.readSessionScope().period) || ''; } catch (_) {}
     var _ctxUrl = 'api/v1/ai/explain' + (window.RRV8 && RRV8.aiCtx ? ('?ctx=' + RRV8.aiCtx('daybrief', co, _per)) : '');
@@ -10435,19 +10566,49 @@
   // grounding, scoped to the single selected company + the chart's focused period.
   // Mission: eliminate the REASONS the analyst needs manual entries — root cause +
   // fix, prioritized by return on effort. [[project_analyst_view_demo_wow]]
-  // Per-module stats for the scoped company. RECENCY-FIRST: `current` = variance
-  // in the current (most-recent, still-actionable) period(s); a category with a
-  // big `total` but `current` ~0 is likely RESOLVED, not a target. `top` is the
-  // biggest CURRENT variance (what's happening now), not the biggest historically.
+  // The period the analyst is LOOKING AT — a clicked bar wins, else the period
+  // picker. Distinct from the open window (the last periods still actionable) and
+  // from the data-current period the scope band names. All three were called
+  // "period" until #449 separated them on the chrome pill; the same three meanings
+  // were still colliding inside the analyst surfaces, so every consumer that needs
+  // "what is on screen" reads this one function.
+  function _analystViewedPeriod() {
+    var pSel = $('periodSelect');
+    return _briefPeriodOverride || (pSel ? String(pSel.value || '').slice(0, 10) : '');
+  }
+  // Per-module stats for the scoped company. RECENCY-FIRST: `current` = residual in
+  // the OPEN WINDOW (the last two periods carrying any), which is a window and not a
+  // period — read `curBy` / `curTop` before writing any copy that puts it in time. A
+  // category with a big `total` but `current` ~0 is likely RESOLVED, not a target.
+  // `top` is the biggest amount open in that window, not the biggest historically.
   function _analystTxStats() {
     var series = _txVarWarm() ? (_txVarCache.amt || []) : [];   // key-checked: never the prior DB's series
-    var curPeriods = (_txVarContext && _txVarContext.current && _txVarContext.current.length)
-      ? _txVarContext.current : (series.length ? [series[series.length - 1].period] : []);
+    // The window is derived from the series here, every time. It used to be read out
+    // of _txVarContext, which only renderTxVarWidget wrote — so the day-brief's window
+    // was TWO periods if the analyst had opened the Transaction Variance tab and ONE if
+    // they had not, quoting a different amount off identical data depending on where
+    // they had clicked. Same slice(-2) either way; now it does not depend on route.
+    var curPeriods = series.slice(-2).map(function (s) { return s.period; });
     var curSet = {}; curPeriods.forEach(function (p) { curSet[p] = 1; });
-    var byMod = {}; _TXV_MODS.forEach(function (m) { byMod[m] = { total: 0, recur: 0, current: 0 }; });
+    // `current` is a WINDOW total, not one period's. curPeriods is the last TWO
+    // periods that carry reconciling items, so a category whose whole amount sits in
+    // the older of the two was being printed as "this period" on a screen showing the
+    // newer one — $76K read as April's when every cent of it was March's (owner
+    // 2026-08-12, Demo3 co 30002). `curBy` keeps the per-period split so every
+    // consumer can name the period the money is actually in, and `curTop` is the
+    // single period holding the most of it.
+    var byMod = {}; _TXV_MODS.forEach(function (m) { byMod[m] = { total: 0, recur: 0, current: 0, curBy: [] }; });
     series.forEach(function (s) {
       var isCur = !!curSet[s.period];
-      _TXV_MODS.forEach(function (m) { var v = s.seg[m] || 0; byMod[m].total += v; if (v >= 1) byMod[m].recur += 1; if (isCur) byMod[m].current += v; });
+      _TXV_MODS.forEach(function (m) {
+        var v = s.seg[m] || 0; byMod[m].total += v; if (v >= 1) byMod[m].recur += 1;
+        if (isCur) { byMod[m].current += v; if (v >= 1) byMod[m].curBy.push({ period: s.period, amt: v }); }
+      });
+    });
+    _TXV_MODS.forEach(function (m) {
+      var cb = byMod[m].curBy.slice().sort(function (a, b) { return b.amt - a.amt; });
+      byMod[m].curTop = cb[0] || null;                       // the period carrying the most of the window total
+      byMod[m].curSpread = byMod[m].curBy.length > 1;        // true = the window total is split across periods, so no single period owns it
     });
     var rankedCurrent = _TXV_MODS.slice().filter(function (m) { return byMod[m].current >= 1; }).sort(function (a, b) { return byMod[b].current - byMod[a].current; });
     var rankedAll     = _TXV_MODS.slice().filter(function (m) { return byMod[m].total   >= 1; }).sort(function (a, b) { return byMod[b].total   - byMod[a].total;   });
@@ -10472,12 +10633,29 @@
       f.push('[GUIDANCE, not for quoting: unknown is not clean and not zero. Do not say this surface is clean, and do not cite ANY figure, amount, period, period count or category for it. Never mention loading, reading, caches, refreshing or any other plumbing — the analyst reads outcomes, not machinery.]');
       return f;
     }
-    f.push('Company: ' + (scrub ? 'Entity A' : ('Co ' + co)) + ' · currency ' + (ccy || 'n/a') + ' · ' + stats.n + ' periods loaded.');
-    f.push('CURRENT (still-actionable) period(s): ' + (stats.curPeriods.map(fmtPeriod).join(', ') || 'n/a') + '. ONLY these are actionable — prior periods are closed and already journaled.');
-    f.push('By category — CURRENT-period actionable amount + how often it recurs (prior-period amounts are journaled, NOT money to chase):');
+    // POPULATION, then WINDOW, then VIEWED PERIOD — in that order, because the model
+    // collapsed all three into the phrase "the current-period Inventory variance"
+    // (owner 2026-08-12). Every figure below is the reconciling-items residual, a
+    // different measure from the roll-forward net the chart draws, carried on fewer
+    // periods. Saying "of 12 periods" without saying which 12 let the brief's
+    // denominator sit beside the chart's "Show all 17" and read as the same window.
+    f.push('Company: ' + (scrub ? 'Entity A' : ('Co ' + co)) + ' · currency ' + (ccy || 'n/a') + '.');
+    f.push('POPULATION for every transaction-variance figure below: the reconciling-items residual — posted documents whose cardex and ledger sides differ by more than the materiality threshold, summed at document grain. This is NOT the account roll-forward net the period chart draws, which takes every posted non-manual row at any size and sums it at account grain. The two are different measures and do not tie in either direction, so never present one as the other or as a check on it. ' + stats.n + ' period(s) carry any residual at all, which is fewer than the chart plots.');
+    f.push('OPEN WINDOW (the only still-actionable periods): ' + (stats.curPeriods.map(fmtPeriod).join(' and ') || 'n/a') + '. Earlier periods are closed and already journaled.');
+    f.push('VIEWED PERIOD (what is on the analyst’s screen right now): ' + (focusPeriod ? fmtPeriod(focusPeriod) : 'none selected') + '.');
+    f.push('By category — amount open in that window, BROKEN OUT BY PERIOD, plus how often it recurs:');
     (stats.rankedAll.length ? stats.rankedAll : []).forEach(function (m) {
       var s = stats.byMod[m];
-      f.push('  ' + m + ': current ' + _ccyAmt(ccy, s.current) + (s.current < 1 ? ' (CLEAN now — resolved, do not act)' : '') + '; recurs in ' + s.recur + ' of ' + stats.n + ' periods — recurrence flags an unfixed root cause (fix the source), but only the current amount is actionable.');
+      // The per-period split is what makes the amount attributable. Without it the
+      // model has one number and two candidate periods and picks whichever word is
+      // nearest, which is how a March figure got called "current-period" on an April
+      // screen. One period in the window -> name it. Two -> name both amounts.
+      var where = s.curBy.length
+        ? ' (' + s.curBy.map(function (x) { return fmtPeriod(x.period) + ' ' + _ccyAmt(ccy, x.amt); }).join('; ') + ')'
+        : '';
+      f.push('  ' + m + ': ' + _ccyAmt(ccy, s.current) + ' open across the window' + where
+        + (s.current < 1 ? ' (CLEAN now — resolved, do not act)' : '')
+        + '; recurs in ' + s.recur + ' of those ' + stats.n + ' periods — recurrence flags an unfixed root cause (fix the source), but only the open amount is actionable.');
     });
     // Warm from here down (the cold surface returned above), so an empty ranking
     // genuinely means "read it, found nothing material" — not "unknown".
@@ -10486,8 +10664,16 @@
     // authoritative, not a naive TransDate-vs-PeriodEnds month compare.)
     if (focusPeriod) {
       var fs = (_txVarWarm() ? (_txVarCache.amt || []) : []).filter(function (x) { return x.period === focusPeriod; })[0];   // key-checked — this feeds the AI prompt
-      if (fs) f.push('Analyst is focused on ' + fmtPeriod(focusPeriod) + ': ' + (_TXV_MODS.filter(function (m) { return fs.seg[m] >= 1; }).map(function (m) { return m + ' ' + _ccyAmt(ccy, fs.seg[m]); }).join(', ') || 'nothing material') + '.');
+      // A viewed period absent from the series carries NO residual, and that is an
+      // answer. The `if (fs)` guard used to drop the line entirely, leaving the model
+      // with a viewed period and nothing said about it — which is the vacuum the
+      // window total then filled.
+      f.push('In the VIEWED PERIOD ' + fmtPeriod(focusPeriod) + ' itself: '
+        + (fs ? (_TXV_MODS.filter(function (m) { return fs.seg[m] >= 1; }).map(function (m) { return m + ' ' + _ccyAmt(ccy, fs.seg[m]); }).join(', ') || 'nothing material')
+              : 'no reconciling items at all') + '.');
     }
+    // Guidance last, so it is the final instruction before the question.
+    f.push('[GUIDANCE, not for quoting: never write "current period", "this period" or "now" about an amount without naming the period it is in. If an amount sits in a period other than the VIEWED PERIOD above, say which period — an analyst who cannot attribute a number cannot act on it. Do not call these figures the period total or the net variance; they are the residual population named above, and the chart on screen shows a different one.]');
     return f;
   }
   function _analystPrompt(q, facts) {
@@ -10585,7 +10771,10 @@
     var _scrub = _recsummaryLevel() === 'scrubbed';
     var prompt = _cardexMode
       ? _analystCardexPrompt(q, _analystCardexFacts(solo, ccy, _scrub))
-      : _analystPrompt(q, _analystTxFacts(_analystTxStats(), focusPeriod || _briefPeriodOverride || '', ccy, solo, _scrub));
+      // `focusPeriod` (this card's own argument) wins; otherwise the same viewed-period
+      // resolver every other analyst surface reads, so the ask box and the day-brief
+      // above it can never be grounded on two different "what is on screen" answers.
+      : _analystPrompt(q, _analystTxFacts(_analystTxStats(), focusPeriod || _analystViewedPeriod(), ccy, solo, _scrub));
     rrFetch('api/v1/ai/explain', { method: 'POST', body: { prompt: prompt } }).then(function (r) {
       var txt = (r && r.text) ? String(r.text).trim() : '';
       if (ans) ans.textContent = txt || 'No answer came back — try rephrasing.';
@@ -10914,12 +11103,12 @@
     _intgDotsKey = key;
     Object.keys(INTG_REPORTS).forEach(function (k) {
       var rep = INTG_REPORTS[k], dot = $(rep.dot);
-      if (dot) { dot.className = 'row-dot grey'; dot.title = 'Checking…'; }
+      RRV8.setDotState(dot, 'busy', 'Checking…');
       _intgFetch(rep).then(function (rows) {
         var el = $(rep.dot); if (!el) return;
-        el.className = 'row-dot ' + (rows.length > 0 ? 'red' : 'green');
+        RRV8.setDotState(el, rows.length > 0 ? 'attention' : 'ok');
         el.title = rows.length > 0 ? (rows.length.toLocaleString('en-US') + ' item' + (rows.length !== 1 ? 's' : '') + ' flagged') : 'Clean — no issues in scope';
-      }).catch(function () { var el = $(rep.dot); if (el) { el.className = 'row-dot grey'; el.title = 'Could not check'; } });
+      }).catch(function () { RRV8.setDotState($(rep.dot), 'unknown', 'Could not check'); });
     });
   }
   // onlyCo (optional) narrows the export to one company — passed by the analyst
@@ -11371,8 +11560,9 @@
     // The selected period is the LIVE one the bar chart / picker reflects
     // (_briefPeriodOverride set by a bar click, else the period dropdown), so
     // clicking a bar re-scopes this tab to that exact period.
-    var pSel = $('periodSelect');
-    var per = _briefPeriodOverride || (pSel ? String(pSel.value || '').slice(0, 10) : '') || (d && (d.viewedPeriod || d.latestPeriod)) || '';
+    // Same resolver as every other surface, plus a data-side fallback this one caller
+    // needs when the picker has not painted yet.
+    var per = _analystViewedPeriod() || (d && (d.viewedPeriod || d.latestPeriod)) || '';
     _auditPeriod = per;
     // Single-company tab (single-select companies pill, like Accounts / On Hand):
     // scope to the one focus company and name it in the header with the period.
@@ -11764,7 +11954,9 @@
     var wb = XLSX.utils.book_new();
     var tab = (d.co + (d.ccy ? ' - ' + d.ccy : '')).slice(0, 31);
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), tab);
-    XLSX.writeFile(wb, RRV8.exportName({ surface: 'PeriodEndJE', company: d.co, period: d.per }));
+    // Guarded write. Everything below records the export as an entry awaiting
+    // posting - none of it may fire unless the file actually reached the disk.
+    if (!RRV8.saveWorkbook(wb, RRV8.exportName({ surface: 'PeriodEndJE', company: d.co, period: d.per }), toast, 'Period-End JE')) return;
     // Record the export as an UNVERIFIED audit event under the token; the next load
     // matches the token in the posted JE's Explanation and flips it to verified.
     try {
@@ -11842,10 +12034,14 @@
         totalRow: totalRow(list)
       });
     };
-    var wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, sheet(kept, 'Inventory'), 'Inventory');
-    XLSX.utils.book_append_sheet(wb, sheet(filtered, 'Residual (Filtered)', 'residual dust ≤ ' + _perpMoney(_perpResidualTarget)), 'Filtered');
-    XLSX.writeFile(wb, RRV8.exportName({ surface: 'Perpetual', period: per }));
+    // Both sheets are built from the full item-grain grid, so the BUILD allocates
+    // as much as the write does. Run the pair under one guard and report one reason.
+    RRV8.runExport('Perpetual', toast, function () {
+      var wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, sheet(kept, 'Inventory'), 'Inventory');
+      XLSX.utils.book_append_sheet(wb, sheet(filtered, 'Residual (Filtered)', 'residual dust ≤ ' + _perpMoney(_perpResidualTarget)), 'Filtered');
+      return RRV8.saveWorkbook(wb, RRV8.exportName({ surface: 'Perpetual', period: per }), toast, 'Perpetual');
+    });
   }
   // Period audit report (auditor backup) — one sheet per company: the account
   // reconciliation + full variance composition, from the loaded roll-forward
@@ -12249,12 +12445,18 @@
     _ensureAuditDetail(per).then(function (detail) {
       var descMap = _auditDescMap(detail);
       return _auditAiSummaries(cos, per).then(function (aiMap) {
-        var wb = XLSX.utils.book_new();
-        cos.forEach(function (c) {
-          var ws = _buildAuditSheet(c, per, detail, descMap, aiMap[c.co] || '');
-          XLSX.utils.book_append_sheet(wb, ws, ('Co ' + c.co + (c.ccy ? ' ' + c.ccy : '')).slice(0, 31));
+        // Build + write under one guard. The outer .catch below means "the data
+        // service did not answer"; a workbook too large to assemble is a different
+        // problem and needs its own actionable reason, not that one.
+        var ok = RRV8.runExport('Perpetual Reconciliation', toast, function () {
+          var wb = XLSX.utils.book_new();
+          cos.forEach(function (c) {
+            var ws = _buildAuditSheet(c, per, detail, descMap, aiMap[c.co] || '');
+            XLSX.utils.book_append_sheet(wb, ws, ('Co ' + c.co + (c.ccy ? ' ' + c.ccy : '')).slice(0, 31));
+          });
+          return RRV8.saveWorkbook(wb, RRV8.exportName({ surface: 'PerpetualReconciliation', company: (onlyCo != null ? onlyCo : 'all'), period: per }), toast, 'Perpetual Reconciliation');
         });
-        XLSX.writeFile(wb, RRV8.exportName({ surface: 'PerpetualReconciliation', company: (onlyCo != null ? onlyCo : 'all'), period: per }));
+        if (!ok) return;
         if (typeof toast === 'function') toast('Downloaded the audit report — ' + cos.length + ' ' + (cos.length === 1 ? 'company' : 'companies'));
       });
     }).catch(function (e) { if (window.console) console.error('audit report (excel) failed', e); if (typeof toast === 'function') toast('Could not build the audit report — the data service may be unavailable.'); });
@@ -13604,8 +13806,14 @@
       var t = el.querySelector('.data-row-text');
       var txt = t ? (t.textContent || '').replace(/\s+/g, ' ').trim() : '';
       if (!txt || /checking/i.test(txt)) return;   // not loaded yet — nothing to ground on
-      var tag = el.classList.contains('lvl-red') ? '[NEEDS ATTENTION]'
-              : el.classList.contains('lvl-amber') ? '[REVIEW]' : '[OK]';
+      // Reads the chip's state, not its colour. `busy` and `unknown` get their
+      // own tags: before UI-88 an unevaluated chip was handed to the model as
+      // '[OK]', which told it a check had passed when none had run.
+      var st = el.getAttribute('data-state');
+      var tag = st === 'attention' ? '[NEEDS ATTENTION]'
+              : (st === 'watch' || st === 'todo') ? '[REVIEW]'
+              : st === 'busy' ? '[CHECKING]'
+              : st === 'ok' ? '[OK]' : '[NOT CHECKED]';
       taskLines.push(tag + ' ' + txt);
     });
     var aiPlanEl = document.getElementById('aiPlanText');
@@ -13743,8 +13951,7 @@
     var d = _periodWidgetData(metric);
     if (!d) { box.hidden = true; return; }
     var H = 122, coIdx = {};
-    var pSel = $('periodSelect');
-    var activeP = _briefPeriodOverride || (pSel ? String(pSel.value || '').slice(0, 10) : '');
+    var activeP = _analystViewedPeriod();
     // The two most recent periods are "current" (still actionable); the rest are
     // historical. Same definition the briefing uses (see _briefData.isHistorical).
     var currentSet = d.periods.slice(-2);
@@ -13849,7 +14056,7 @@
     // Analyst caches. The DB switch repaints in place, so anything the brief / chips
     // read must go with it or the new DB inherits the old one's answers.
     _txVarCache = { key: null, amt: null, cnt: null };   // variance-by-period series
-    _txVarReqKey = null; _txVarContext = null;           // in-flight request key + the current/historical split fed to AI
+    _txVarReqKey = null;                                 // in-flight request key for the residual series
     _analystHealthCache = { key: null, promise: null };  // shared accuracy-check gather (keyed db|co|rowcount)
     _analystTxWarmFailed = false; _analystTxWarmBusy = false;   // re-arm the off-tab tx warm for the new DB
     _analystLeadSig = '';                                // the AI lead's currency check — a reply for the prior DB must not land
@@ -13863,35 +14070,35 @@
 
     // Neutralize the DOM these feed so no stale color survives the switch.
     paintInventoryLight('grey', 'Checking…');     // cxDot
-    var rgDot = $('reloadGlDot'); if (rgDot) { rgDot.className = 'row-dot grey'; rgDot.title = ''; }
+    RRV8.setDotState($('reloadGlDot'), 'unknown', '');
     // Reload Cardex end-of-day check is per-DB; neutralize the dot + restore the
     // default sub so a prior DB's suggestion never bleeds onto the new one.
-    var rcDot = $('rcdxDot'); if (rcDot) { rcDot.className = 'row-dot grey'; rcDot.title = ''; }
+    RRV8.setDotState($('rcdxDot'), 'unknown', '');
     var rcSub = $('rcdxSub'); if (rcSub) rcSub.innerHTML = RCDX_DEFAULT_SUB;
     // Review Job Schedule — neutralize the row dot for the new DB (the dot is a
     // client-side review reminder, repainted by loadRefreshSchedule).
-    var scDot = $('schedDot'); if (scDot) scDot.className = 'row-dot grey';
+    RRV8.setDotState($('schedDot'), 'unknown');
     var sysPill = $('sysPill'); if (sysPill) { sysPill.classList.remove('good', 'warn', 'bad'); sysPill.hidden = true; }
     var pPill = $('periodPill'); if (pPill) { pPill.hidden = true; pPill.textContent = 'Period: —'; }
     // People & Licensing — both rows read db-scoped data (license-usage by db,
     // access-reviews for the client); grey them so the prior DB's seats/team
     // status can't linger in the reload window.
-    var licDot = $('licenseDot'); if (licDot) { licDot.className = 'row-dot grey'; licDot.title = ''; }
+    RRV8.setDotState($('licenseDot'), 'unknown', '');
     var licSub = $('licenseSub'); if (licSub) licSub.textContent = 'Company seats & entitlements';
-    var tmDot = $('teamDot'); if (tmDot) { tmDot.className = 'row-dot grey'; tmDot.title = ''; }
+    RRV8.setDotState($('teamDot'), 'unknown', '');
     var tmSub = $('teamSub'); if (tmSub) tmSub.textContent = 'Users, roles & access';
-    _teamPwLevel = 'grey';   // new DB's password-review level loads a beat later
-    _setDataRow('teamUsersRow', 'grey', 'Checking…');
-    _setDataRow('teamReviewRow', 'grey', 'Checking…');
-    _setDataRow('teamPwRow', 'grey', 'Complex passwords');
+    _teamPwLevel = 'unknown';   // new DB's password-review state loads a beat later
+    _setDataRow('teamUsersRow', 'unknown', 'Checking…');
+    _setDataRow('teamReviewRow', 'unknown', 'Checking…');
+    _setDataRow('teamPwRow', 'unknown', 'Complex passwords');
     var aFeed = $('actFeed'); if (aFeed) aFeed.innerHTML = '<div class="act-empty">Recent system events &mdash; restarts, data reloads, and refreshes.</div>';
     // Data card — refresh/purge/calendar rows reset to "Checking…" for the new DB.
     _fiscalDetect = null; renderDataCard();
     // System Health review dots (AI / Activity / password) read the NEW db's key
     // when their loaders run a beat later; grey them now so the prior DB's
     // reviewed/amber state can't flash through the switch.
-    var aiD = $('aiDot'); if (aiD) aiD.className = 'row-dot grey';
-    var acD = $('activityDot'); if (acD) acD.className = 'row-dot grey';
+    RRV8.setDotState($('aiDot'), 'unknown');
+    RRV8.setDotState($('activityDot'), 'unknown');
     // Role-band tints + the To Do roll-up derive from all of the above. Clear the
     // cached summary, the admin server-level, and every band tint so no stale
     // band/summary survives into the new DB's load window.

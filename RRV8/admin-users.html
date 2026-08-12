@@ -1027,7 +1027,9 @@
       body:    opts.body ? JSON.stringify(opts.body) : undefined
     };
     return fetch(url, init).then(r => {
-      if (!r.ok) throw new Error('HTTP ' + r.status + ' on ' + url);
+      // The status has to survive as a PROPERTY: RRV8.fetchErrorMessage branches
+      // on it and must never scrape a code back out of the message string.
+      if (!r.ok) { const e = new Error('HTTP ' + r.status + ' on ' + url); e.status = r.status; throw e; }
       return r.json().catch(e => e instanceof SyntaxError ? null : Promise.reject(e));
     });
   }
@@ -1040,11 +1042,21 @@
     el.classList.add('is-visible');
     setTimeout(() => el.classList.remove('is-visible'), 2400);
   }
-  function showFetchError(err) {
+  // ONE producer for the sentence: RRV8.fetchErrorMessage (sidebar.js) branches
+  // on the HTTP status so the remedy matches the failure — a 403 is an
+  // unauthenticated session, not a missing endpoint. See
+  // docs/plans/shared-state-registry.md. Falls back to the raw message only if
+  // sidebar.js is unavailable.
+  function fetchErrText(area, err) {
+    return (window.RRV8 && window.RRV8.fetchErrorMessage)
+      ? window.RRV8.fetchErrorMessage(area, err)
+      : ((err && err.message) || String(err));
+  }
+  function showFetchError(area, err) {
     const banner = document.getElementById('js-fetch-error');
     const msg    = document.getElementById('js-fetch-error-msg');
     if (banner && msg) {
-      msg.textContent = (err && err.message) || 'fetch failed';
+      msg.textContent = fetchErrText(area, err);
       banner.classList.add('is-visible');
     }
     if (window.RRV8 && window.RRV8.setAgentConnectivity &&
@@ -2178,7 +2190,7 @@
       // so the RR Team roster (and the demo walk) never shows GSI-internal users.
       .then(rows => renderUsers((rows || []).filter(r => !r || r.roleName !== 'GSI Internal')))
       .catch(err => {
-        showFetchError(err);
+        showFetchError('api/v1/admin/users', err);
       const tbody = document.getElementById('js-users-tbody');
       if (tbody) {
         tbody.innerHTML =

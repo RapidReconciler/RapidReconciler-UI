@@ -69,14 +69,14 @@
   /* Advisory purge recommendation banner (green/amber/red + snooze) */
   .purge-rec { border:1px solid var(--rule); border-left:4px solid var(--rule-strong); border-radius:9px; background:var(--bg-card); padding:14px 16px; margin-bottom:18px; box-shadow:var(--shadow-sm); }
   .purge-rec[hidden] { display:none; }
-  .purge-rec.is-green { border-left-color:var(--green); background:var(--green-pale); }
-  .purge-rec.is-amber { border-left-color:var(--orange); background:var(--orange-pale); }
-  .purge-rec.is-red   { border-left-color:var(--red);   background:var(--red-pale); }
+  .purge-rec[data-state="ok"] { border-left-color:var(--green); background:var(--green-pale); }
+  .purge-rec[data-state="watch"] { border-left-color:var(--orange); background:var(--orange-pale); }
+  .purge-rec[data-state="attention"] { border-left-color:var(--red);   background:var(--red-pale); }
   .purge-rec-head { display:flex; align-items:center; gap:10px; }
   .purge-rec-ico { width:20px; height:20px; flex-shrink:0; }
-  .purge-rec.is-green .purge-rec-ico { color:var(--green); }
-  .purge-rec.is-amber .purge-rec-ico { color:var(--orange-deep); }
-  .purge-rec.is-red   .purge-rec-ico { color:var(--red); }
+  .purge-rec[data-state="ok"] .purge-rec-ico { color:var(--green); }
+  .purge-rec[data-state="watch"] .purge-rec-ico { color:var(--orange-deep); }
+  .purge-rec[data-state="attention"] .purge-rec-ico { color:var(--red); }
   .purge-rec-title { font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:14.5px; color:var(--navy); }
   .purge-rec-sub { color:var(--text-soft); font-size:13.5px; margin-top:5px; }
   .purge-rec-sub b { color:var(--navy); }
@@ -284,6 +284,16 @@
   function $(id) { return document.getElementById(id); }
   function toast(msg) { const el = $('js-toast'); if (!el) return; el.textContent = msg; el.classList.add('is-visible'); setTimeout(() => el.classList.remove('is-visible'), 3000); }
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch])); }
+  // ONE producer for the sentence: RRV8.fetchErrorMessage (sidebar.js) branches
+  // on the HTTP status so the remedy matches the failure — a 403 is an
+  // unauthenticated session, not a missing endpoint. See
+  // docs/plans/shared-state-registry.md. Falls back to the raw message only if
+  // sidebar.js is unavailable.
+  function fetchErrText(area, err) {
+    return (window.RRV8 && window.RRV8.fetchErrorMessage)
+      ? window.RRV8.fetchErrorMessage(area, err)
+      : ((err && err.message) || String(err));
+  }
   function showFetchError(msg) { const b = $('js-fetch-error'); $('js-fetch-error-msg').textContent = msg; b.classList.add('is-visible'); }
   function clearFetchError() { $('js-fetch-error').classList.remove('is-visible'); }
   function activeDb() { const s = window.RR_SESSION || {}; const d = Array.isArray(s.dbs) ? s.dbs : []; return d[s.activeDbIndex || 0] || d[0] || null; }
@@ -308,9 +318,9 @@
   // card, its 1/3/6-month snooze, and Home's purge dot share ONE source of truth.
   // This page renders the card from it; Home colors its dot from the same call.
   const REC_ICONS = {
-    green: '<circle cx="12" cy="12" r="10"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/>',
-    amber: '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4M12 17h.01"/>',
-    red:   '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4M12 17h.01"/>'
+    ok: '<circle cx="12" cy="12" r="10"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/>',
+    watch: '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4M12 17h.01"/>',
+    attention: '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4M12 17h.01"/>'
   };
   function purgeSnoozeKey() { return 'rrv8.purgeSnooze.' + (_dbName() || ''); }
   function _dbName() { const a = activeDb(); return a && a.n; }
@@ -348,20 +358,19 @@
     // Nothing to score on (older agent without the recommendation fields) -> stay hidden.
     if (!rec.known) { card.hidden = true; return; }
 
-    const level  = rec.effectiveLevel;   // snooze already applied (red shows through)
+    const state  = rec.effectiveLevel;   // snooze already applied; 'attention' shows through
     const title  = rec.snoozed ? 'Reminder set' : rec.headline;
     const detail = rec.snoozed
       ? ('Reminder set &mdash; we&rsquo;ll flag this again on <b>' + fmtDateLong(until) + '</b>.')
       : rec.detail;
 
-    card.classList.remove('is-green', 'is-amber', 'is-red');
-    card.classList.add('is-' + level);
-    $('js-rec-ico').innerHTML = REC_ICONS[level] || REC_ICONS.green;
+    card.setAttribute('data-state', state || 'unknown');
+    $('js-rec-ico').innerHTML = REC_ICONS[state] || REC_ICONS.ok;
     $('js-rec-title').textContent = title;
     $('js-rec-sub').innerHTML = detail;
-    // Offer the snooze only when there's a live (amber/red) recommendation that
-    // isn't already snoozed.
-    $('js-rec-actions').hidden = !(rec.level !== 'green' && !rec.snoozed);
+    // Offer the snooze only when there's a live recommendation ('watch' or
+    // 'attention') that isn't already snoozed.
+    $('js-rec-actions').hidden = !(rec.level !== 'ok' && !rec.snoozed);
     card.hidden = false;
 
     $('js-rec-actions').querySelectorAll('.purge-snooze-btn').forEach(function (btn) {
@@ -476,7 +485,7 @@
     rrFetch('inventory/integrity/purge-info').then(function (info) {
       applyInfo(info);
       if (!_staged) _original = info && info.currentCutoff;
-    }).catch(function (e) { showFetchError((e && e.message) || 'Could not load purge info.'); });
+    }).catch(function (e) { showFetchError('Could not load purge info. ' + fetchErrText('inventory/integrity/purge-info', e)); });
   }
   function setStaged(staged, dateIso) {
     _staged = staged;
@@ -503,7 +512,7 @@
       _busy = true; $('js-confirm').disabled = true;
       rrFetch('inventory/integrity/purge-cutoff', { method: 'POST', body: { date: _original } })
         .then(function (info) { applyInfo(info); setStaged(false, null); toast('Restored — cutoff back to ' + fmtDateLong(_original) + '.'); if (window.RRV8 && RRV8.logActivity) RRV8.logActivity('Purge cutoff restored', 'Data retention cutoff restored to ' + _original); })
-        .catch(function (e) { showFetchError('Restore failed: ' + ((e && e.message) || e)); $('js-confirm').disabled = false; })
+        .catch(function (e) { showFetchError('Restore failed. ' + fetchErrText('inventory/integrity/purge-cutoff', e)); $('js-confirm').disabled = false; })
         .then(function () { _busy = false; });
     } else {
       if (!$('js-attest').checked) return;
@@ -512,7 +521,7 @@
       _busy = true; $('js-confirm').disabled = true;
       rrFetch('inventory/integrity/purge-cutoff', { method: 'POST', body: { date: date } })
         .then(function (info) { applyInfo(info); setStaged(true, date); toast('Cutoff set to ' + fmtDateLong(date) + ' — purges on the next refresh. Restore to undo.'); if (window.RRV8 && RRV8.logActivity) RRV8.logActivity('Purge cutoff set', 'Data retention cutoff set to ' + date + ' — data before this purges on the next refresh'); })
-        .catch(function (e) { showFetchError('Couldn’t set cutoff: ' + ((e && e.message) || e)); $('js-confirm').disabled = false; })
+        .catch(function (e) { showFetchError('Couldn’t set cutoff. ' + fetchErrText('inventory/integrity/purge-cutoff', e)); $('js-confirm').disabled = false; })
         .then(function () { _busy = false; });
     }
   }

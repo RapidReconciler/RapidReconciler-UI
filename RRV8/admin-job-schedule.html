@@ -8,7 +8,7 @@
   The schedule is set by the customer's on-site DBA and changed at the user's
   request (NOT by GSI): the admin confirms it here via a 30/60/Never review
   reminder (no attestation, client-side rrv8.scheduleReview.<db>, shared with
-  the Home dot through RRV8.scheduleReviewLevel) and can send a change request
+  the Home dot through RRV8.scheduleReviewState) and can send a change request
   (a pre-filled mailto) to their DBA. Graceful fallback to a neutral
   "unavailable" state if the endpoint is absent. Admin-page standard chrome:
   floating Home button + help "?" circle.
@@ -31,8 +31,13 @@
      lives in admin-chrome.css, linked above. Only page-specific rules below. */
   .note { display:flex; gap:12px; padding:13px 16px; border-radius:9px; background:var(--bg-soft); border:1px solid var(--rule); color:var(--text-soft); margin-top:14px; font-size:13px; }
   .row { display:flex; align-items:flex-start; gap:12px; }
+  /* Colour is derived from data-state; JS sets the state and never a colour
+     class. See docs/plans/shared-state-registry.md. */
   .row-dot { width:9px; height:9px; border-radius:50%; background:var(--text-muted); flex-shrink:0; margin-top:6px; }
-  .row-dot.green { background:var(--green); } .row-dot.amber { background:var(--orange); } .row-dot.red { background:var(--red); } .row-dot.grey { background:var(--text-muted); }
+  .row-dot[data-state="ok"] { background:var(--green); }
+  .row-dot[data-state="attention"] { background:var(--red); }
+  .row-dot[data-state="unknown"] { background:var(--text-muted); }
+  .row-dot[data-state="watch"] { background:var(--orange); }
   .row-main { flex:1; min-width:0; }
   .row-title { font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:15px; color:var(--navy); display:flex; align-items:center; gap:10px; }
   .row-sub { font-size:13px; color:var(--text-soft); margin-top:3px; line-height:1.5; }
@@ -53,12 +58,12 @@
   .btn-primary:hover { filter:brightness(1.07); }
   /* Review reminder band (no attestation) — mirrors the Complex Passwords page. */
   .review-band { display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; border:1px solid var(--rule); border-left:4px solid var(--rule-strong); border-radius:10px; background:var(--bg-card); box-shadow:var(--shadow-sm); padding:12px 16px; margin-bottom:18px; }
-  .review-band.is-green { border-left-color:var(--green); background:var(--green-pale); }
-  .review-band.is-amber { border-left-color:var(--orange); background:var(--orange-pale); }
+  .review-band[data-state="ok"] { border-left-color:var(--green); background:var(--green-pale); }
+  .review-band[data-state="todo"] { border-left-color:var(--orange); background:var(--orange-pale); }
   .review-main { display:flex; align-items:center; gap:9px; min-width:240px; }
   .review-dot { width:9px; height:9px; border-radius:50%; background:var(--text-muted); flex-shrink:0; }
-  .review-band.is-green .review-dot { background:var(--green); }
-  .review-band.is-amber .review-dot { background:var(--orange); }
+  .review-band[data-state="ok"] .review-dot { background:var(--green); }
+  .review-band[data-state="todo"] .review-dot { background:var(--orange); }
   .review-text { font-size:13px; color:var(--text-soft); }
   .review-text b { color:var(--navy); }
   .review-action { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
@@ -141,7 +146,7 @@
           <div class="card-head"><span class="card-title">Data refresh schedule</span></div>
           <div class="card-body">
             <div class="sched-hero">
-              <span class="row-dot grey" id="js-daily-dot"></span>
+              <span class="row-dot" data-state="unknown" id="js-daily-dot"></span>
               <div class="sched-hero-main">
                 <div class="sched-hero-top"><span class="sched-hero-label">Nightly refresh</span> <span class="sched-pill" id="js-daily-state">&mdash;</span></div>
                 <div class="sched-hero-time" id="js-daily-time">&mdash;</div>
@@ -240,11 +245,14 @@
     if (o === 'Canceled') return ' (canceled)';
     return ' (' + esc(o) + ')';
   }
-  function outcomeDotClass(seg) {
-    if (!seg || seg.enabled === false) return 'grey';
-    if (seg.lastOutcome === 'Failed') return 'red';
-    if (seg.lastOutcome === 'Succeeded') return 'green';
-    return 'grey';
+  // Returns a STATE, never a colour. 'unknown' covers both "the job is switched
+  // off" and "the outcome is a value this build doesn't recognise" — neither
+  // claims a check ran, which is the point.
+  function outcomeDotState(seg) {
+    if (!seg || seg.enabled === false) return 'unknown';
+    if (seg.lastOutcome === 'Failed') return 'attention';
+    if (seg.lastOutcome === 'Succeeded') return 'ok';
+    return 'unknown';
   }
   function renderSchedule(s) {
     // Three cases, and they used to collapse into one wrong one. The endpoint
@@ -274,7 +282,7 @@
     const on = !!daily.enabled;
     state.textContent = known ? (on ? 'On' : 'Off') : '—';
     state.className = 'sched-pill ' + (known ? (on ? 'on' : 'off') : '');
-    dot.className = 'row-dot ' + (known ? outcomeDotClass(daily) : 'grey');
+    RRV8.setDotState(dot, known ? outcomeDotState(daily) : 'unknown');
     if (time) time.textContent = daily.runTime ? fmtTime12(daily.runTime) : '—';
     const bits = [];
     if (!known) bits.push('Couldn’t tell whether the schedule is switched on');
@@ -286,7 +294,7 @@
   }
   function setUnavailable(msg) {
     $('js-daily-state').textContent = '—'; $('js-daily-state').className = 'sched-pill';
-    $('js-daily-dot').className = 'row-dot grey';
+    RRV8.setDotState($('js-daily-dot'), 'unknown');
     const t = $('js-daily-time'); if (t) t.textContent = '—';
     $('js-daily-sub').textContent = msg || 'Couldn’t read the refresh schedule just now — this isn’t a sign the schedule is off. Reopen this page in a moment.';
   }
@@ -296,7 +304,7 @@
 
   // ---- Review reminder (no attestation — a client-side reminder) ----
   // 30 / 60 days or Never, stored per-db (rrv8.scheduleReview.<db>). Greens this
-  // band AND Home's Review Job Schedule dot via the shared RRV8.scheduleReviewLevel.
+  // band AND Home's Review Job Schedule dot via the shared RRV8.scheduleReviewState.
   // The nightly time itself is owned by the customer's on-site DBA; this only
   // records that the admin has recently confirmed it looks right.
   function reviewKey() { const a = activeDb(); return 'rrv8.scheduleReview.' + ((a && a.n) || ''); }
@@ -320,13 +328,12 @@
     const band = $('js-review-band'); if (!band) return;
     let val = schedReviewVal();
     const today = new Date().toISOString().slice(0, 10);
-    const level = (window.RRV8 && window.RRV8.scheduleReviewLevel)
-      ? window.RRV8.scheduleReviewLevel(val, today) : 'amber';
-    band.classList.remove('is-green', 'is-amber');
-    band.classList.add('is-' + level);
+    const state = (window.RRV8 && window.RRV8.scheduleReviewState)
+      ? window.RRV8.scheduleReviewState(val, today) : 'todo';
+    band.setAttribute('data-state', state);
     const txt = $('js-review-text');
-    if (val === 'never')        txt.innerHTML = 'Periodic review reminders are <b>off</b>. You can set one anytime.';
-    else if (level === 'green') txt.innerHTML = 'Confirmed &mdash; we&rsquo;ll remind you to re-check on <b>' + esc(fmtDateLong(val)) + '</b>.';
+    if (val === 'never')     txt.innerHTML = 'Periodic review reminders are <b>off</b>. You can set one anytime.';
+    else if (state === 'ok') txt.innerHTML = 'Confirmed &mdash; we&rsquo;ll remind you to re-check on <b>' + esc(fmtDateLong(val)) + '</b>.';
     else                        txt.innerHTML = 'Confirm your nightly refresh time is still right, then set a reminder.';
   }
   function wireReviewBand() {
