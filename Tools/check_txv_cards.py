@@ -25,6 +25,7 @@ Exit codes: 0 clean (warnings may print), 1 any violation.
 """
 
 import argparse
+import io
 import json
 import os
 import re
@@ -336,7 +337,149 @@ def run_check(config_path, manifest_path):
     for ident in sorted(manifest_ids - referenced):
         warnings.append("manifest id `%s` is referenced by no card." % ident)
 
+    check_copy_standard(meta, config_path, errors, warnings)
+
     return errors, warnings, stats
+
+
+# --------------------------------------------------------------------------
+# Card-copy standard
+#
+# Tools/txv-card-copy-standard.json is the SINGLE SOURCE OF TRUTH for card
+# format. The renderer and the AI prompt contract restate parts of it, so this
+# section reads the standard and FAILS when any of them has drifted. Without the
+# cross-check the standard is just a fourth opinion: the 2026-08-12 rename had to
+# be applied by hand to the renderer AND the prompt, and forgetting either would
+# have shipped findings under headings the page does not render.
+# --------------------------------------------------------------------------
+
+STANDARD_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "txv-card-copy-standard.json")
+
+
+def load_standard(errors):
+    try:
+        with io.open(STANDARD_PATH, encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception as exc:                     # noqa: BLE001 - reported, not raised
+        errors.append("card-copy standard unreadable at %s (%s). It is the source of "
+                      "truth for card format; the gate cannot check format without it."
+                      % (STANDARD_PATH, exc))
+        return None
+
+
+def _bullet_texts(node):
+    """Bullets are either bare strings or {a, t} objects. Yield their text."""
+    if node is None or node[0] != "arr":
+        return []
+    out = []
+    for item in node[1]:
+        if item[0] == "str":
+            out.append(item[1])
+        elif item[0] == "obj":
+            t = item[1].get("t")
+            if t is not None and t[0] == "str":
+                out.append(t[1])
+    return out
+
+
+def check_copy_standard(meta, config_path, errors, warnings):
+    std = load_standard(errors)
+    if not std:
+        return
+
+    limit = std.get("bulletWordLimit", 25)
+    banned = [p.lower() for p in std.get("bannedPhrases", {}).get("phrases", [])]
+    baseline = set(std.get("formatBaseline", {}).get("cards", []))
+
+    def emit(code, msg):
+        """Baselined cards warn; everything else fails.
+
+        The standard arrived after 21 cards were already written, so failing them
+        all on day one would just get the gate switched off. Warning on the
+        backlog and failing on anything outside it stops NEW drift immediately,
+        which is the whole point. Take a code out of the baseline once its card is
+        rewritten and the gate holds it there for good.
+        """
+        if code in baseline:
+            warnings.append("%s [baselined] %s" % (code, msg))
+        else:
+            errors.append("%s %s" % (code, msg))
+
+    # collect_cards() returns only the `checked` array, so walk meta directly to
+    # reach found / fix / context as well.
+    for code, node in meta.items():
+        if node[0] != "obj":
+            continue
+        finding = node[1].get("finding")
+        if finding is None or finding[0] != "obj":
+            continue
+        for sec in std.get("headings", {}).get("order", []):
+            field, heading = sec["field"], sec["heading"]
+            bullets = _bullet_texts(finding[1].get(field))
+            cap = sec.get("maxBullets")
+            if cap is not None and len(bullets) > cap:
+                emit(code, "`%s` (%s) has %d bullets, max %d. Trim it or move "
+                     "the detail into an appended block."
+                     % (field, heading, len(bullets), cap))
+            for b in bullets:
+                words = len(b.split())
+                if words > limit:
+                    emit(code, "`%s` bullet runs %d words (max %d): \"%s\". Over "
+                         "the limit a bullet is carrying two ideas or explaining method."
+                         % (field, words, limit, _snip(b)))
+                low = b.lower()
+                for phrase in banned:
+                    if phrase in low:
+                        emit(code, "`%s` bullet contains banned phrase \"%s\". "
+                             "That is method, not finding: \"%s\""
+                             % (field, phrase, _snip(b)))
+
+    # ---- the derived files, cross-checked against the standard --------------
+    derived = std.get("derivedFiles", {})
+    root = os.path.dirname(os.path.dirname(os.path.abspath(config_path)))
+    headings = [s["heading"] for s in std.get("headings", {}).get("order", [])]
+
+    rend = derived.get("renderer", {})
+    if rend.get("mustContainHeadings"):
+        path = os.path.join(root, rend["path"].replace("/", os.sep))
+        try:
+            with io.open(path, encoding="utf-8", errors="replace") as fh:
+                src = fh.read()
+            for h in headings:
+                if "'%s'" % h not in src and '"%s"' % h not in src:
+                    errors.append(
+                        "renderer %s does not render the heading \"%s\". The standard "
+                        "defines it; the page and the standard have drifted."
+                        % (rend["path"], h)
+                    )
+        except IOError:
+            warnings.append("renderer %s not readable; heading cross-check skipped."
+                            % rend["path"])
+
+    prompt = derived.get("aiPromptContract", {})
+    if prompt:
+        path = os.path.join(root, prompt["path"].replace("/", os.sep))
+        try:
+            with io.open(path, encoding="utf-8", errors="replace") as fh:
+                src = fh.read()
+            for h in prompt.get("mustNameHeadings", []):
+                if h not in src:
+                    errors.append(
+                        "AI prompt contract in %s does not name the heading \"%s\". "
+                        "Generated findings would arrive under headings the page does "
+                        "not render." % (prompt["path"], h)
+                    )
+            for stale in prompt.get("mustNotContain", []):
+                if stale in src:
+                    errors.append(
+                        "AI prompt contract in %s still says \"%s\", which the standard "
+                        "retired. Update it or the AI writes to the old format."
+                        % (prompt["path"], stale)
+                    )
+        except IOError:
+            warnings.append("%s not readable; prompt cross-check skipped."
+                            % prompt["path"])
 
 
 def _snip(s, width=70):

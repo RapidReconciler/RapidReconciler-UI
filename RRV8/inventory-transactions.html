@@ -2691,6 +2691,28 @@
   .sidebar:hover .sidebar-status-label { opacity: 1; }
 
   /* Page footer styles removed with the footer (drill-in surface). */
+
+  /* Transient status toast. THIS PAGE HAD NO VISIBLE STATUS CHANNEL AT ALL.
+     Every one of the 15 flashStatus() calls below — including all three
+     RRV8.runExport / RRV8.saveWorkbook guard sites — fell through to the
+     console-only fallback stub, because nothing on this page ever defined a
+     real flashStatus and there was no element for one to write into. So the
+     export guard did its job, produced its actionable reason, and printed it
+     where no analyst would ever see it: the button appeared to do nothing on
+     failure AND on success. Every sibling export page (home, as-of, cardex
+     variance, account roll forward) already had this element; only this one
+     was missing it. Matches the cardex-variance rule so the two read alike. */
+  .toast {
+    position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%);
+    max-width: min(560px, calc(100vw - 48px));
+    background: var(--navy); color: #fff; padding: 10px 18px; border-radius: 100px;
+    font-family: 'Source Sans 3', sans-serif; font-weight: 600; font-size: 13px;
+    line-height: 1.45; text-align: center;
+    box-shadow: var(--shadow-md);
+    opacity: 0; transition: opacity 0.18s ease; pointer-events: none; z-index: 80;
+  }
+  .toast.is-visible { opacity: 1; }
+  @media (prefers-reduced-motion: reduce) { .toast { transition: none; } }
 </style>
 <!-- Shared help panel. These pages carry no help DOC; the panel exists here to
      render RRV8.GLOSSARY, so the terms on screen are defined for the reader from
@@ -3837,10 +3859,43 @@
     }
   }
 
-  // flashStatus: lightweight transient toast. Reuses the page&rsquo;s
-  // existing flash if defined; otherwise falls back to a console log.
+  // flashStatus: the page&rsquo;s ONE transient status channel. Every export on
+  // this page reports through it, including the three RRV8.runExport /
+  // RRV8.saveWorkbook guard sites, so if it does not render, an export failure
+  // is invisible and the button just looks dead.
+  //
+  // IT DID NOT RENDER. This was a console.log stub guarded by
+  // `if (typeof flashStatus !== 'function')`, and nothing anywhere — not this
+  // page, not sidebar.js, not config.js — ever defined the real one. So
+  // export-guard.js correctly computed an actionable reason and printed it to a
+  // console no analyst reads, on both failure AND success. Every sibling export
+  // page already had a visible toast; this page was the only one without.
+  //
+  // TWO THINGS THIS IMPLEMENTATION HAS TO GET RIGHT, both of which would
+  // silently defeat it:
+  //   1. LAZY element lookup. The #js-toast div sits at the end of <body>,
+  //      which is AFTER this script runs, so caching the element here would
+  //      cache null forever (the sibling as-of page can cache it only because
+  //      its element is declared above its script).
+  //   2. innerHTML, not textContent. Both the 15 call sites on this page and
+  //      RRV8.exportFailureMessage emit `&mdash;` as an HTML entity; through
+  //      textContent the analyst would read a literal "&mdash;" — the same
+  //      defect shape as the literal `**markdown**` in the accountant record.
+  //      The strings are locally composed plus same-origin error text, matching
+  //      the cardex-variance toast&rsquo;s existing use of innerHTML.
+  // Held for 5s rather than the sibling pages&rsquo; ~2.4s: those report
+  // "Downloaded <name>", while this one has to be readable long enough to act
+  // on an export-failure reason.
   if (typeof flashStatus !== 'function') {
-    window.flashStatus = function (msg) { console.log('[status]', msg); };
+    window.flashStatus = function (msg) {
+      console.log('[status]', msg);
+      var el = document.getElementById('js-toast');
+      if (!el) return;
+      el.innerHTML = msg;
+      el.classList.add('is-visible');
+      if (el._t) clearTimeout(el._t);
+      el._t = setTimeout(function () { el.classList.remove('is-visible'); }, 5000);
+    };
   }
 
   // ============================================================
@@ -5499,7 +5554,7 @@
     // Scope line: N rows · total variance · X still unworked
     const totalVar = item.totalVariance || 0;
     const scopeBits = [
-      item.rowCount.toLocaleString('en-US') + ' rows',
+      item.rowCount.toLocaleString('en-US') + ' row' + (item.rowCount === 1 ? '' : 's'),
       fmtMoney(totalVar) + ' total',
       item.remainingCount.toLocaleString('en-US') + ' unworked'
     ];
@@ -5987,7 +6042,7 @@
     const text = parts.length ? parts.join(' &middot; ') : 'card filter';
     const g = computeGroupsAndTotal(filteredRows()).total;
     label.innerHTML = 'Filtered: ' + text + ' &middot; ' +
-      g.count.toLocaleString('en-US') + ' rows';
+      g.count.toLocaleString('en-US') + ' row' + (g.count === 1 ? '' : 's');
     pill.hidden = false;
   }
 
@@ -6376,8 +6431,13 @@
     updateColPill();
     const rows = searchFilter(sortRows(filteredRows(), _state.sortKey, _state.sortDir), _state.gridSearch);
     count.classList.remove('is-loading');
-    count.textContent = rows.length.toLocaleString('en-US') + ' rows' +
-      (_data && rows.length < _data.total ? ' of ' + _data.total.toLocaleString('en-US') : '');
+    // "1 rows of 71" was wrong twice over (owner 2026-08-12). The plural was
+    // hardcoded, and "of 71" reported the UNFILTERED grid total while the view was
+    // filtered to a single row, so the number the analyst read described a
+    // population they were not looking at. The filter chip beside this already
+    // states what the filter is, and genuine render truncation says so in its own
+    // row ("Showing first N of M rows"), so the total has no job here.
+    count.textContent = rows.length.toLocaleString('en-US') + ' row' + (rows.length === 1 ? '' : 's');
     const span = visibleColspan();
     if (_state.scopeError) {
       // Loud, plain-English stop. Naming the value is the whole point — it tells the
@@ -6573,9 +6633,16 @@
     if (_state.activeCompany) bits.push('Co ' + _state.activeCompany);
     var per = (_data && _data.period) || _state.period; if (per) bits.push(formatPeriod(per));
     var scope = bits.length ? bits.join(' · ') : 'the current view';
-    sub.innerHTML = 'Applies to <strong>' + escapeHtml(scope) + '</strong> &mdash; ' + n + ' row' + (n === 1 ? '' : 's')
-      + (workedN ? (' · <span class="tx-findings-done">' + workedN + ' already worked</span>') : '')
-      + '. The finding drafts from the analysis above &mdash; review the source fix, then <strong>Mark reviewed</strong> to record it.';
+    // The scope line is GONE (owner 2026-08-12). It restated the header strip a
+    // third time: the strip already carries card, company, period and row count,
+    // and the finding body names its own subject. Instructions telling the analyst
+    // to review and then Mark reviewed are noise once the button is on screen.
+    // The worked count is the only thing here the strip does NOT show, so it is
+    // the only thing kept, and only when there is one.
+    sub.innerHTML = workedN
+      ? '<span class="tx-findings-done">' + workedN + ' already worked</span>'
+      : '';
+    sub.hidden = !workedN;
     // On a scope change, reset the textarea. A previously-saved finding stands (marked
     // dirty) so the auto-draft won't clobber it; a blank slice invites the fresh draft.
     var key = [_state.activeCard || '', _state.activeGroupCode || '', _state.activeCompany || '', per || ''].join('|');
@@ -7196,10 +7263,17 @@
     };
     var out = [];
     if (o.title) out.push(o.title);
-    [['What I checked', arr(o.checked)],
+    // Headings renamed 2026-08-12 (owner). "What I checked" and "To stop it
+    // recurring" described the TOOL'S process; a new analyst opening this card
+    // wants the state of the world and the next move. "What happened" and "What to
+    // do" say those. The bullets underneath are unchanged in kind, so the
+    // assertion ids each one cites still mean what the claim gate checks.
+    // The AI prompt contract in config.js names these same headings and was
+    // updated with them; a generated finding must not arrive under old names.
+    [['What happened', arr(o.checked)],
      ['Not tested on these rows', arr(o.context)],
      ['What I found', arr(o.found)],
-     ['To stop it recurring', arr(o.fix)]].forEach(function (sec) {
+     ['What to do', arr(o.fix)]].forEach(function (sec) {
       if (!sec[1].length) return;
       out.push('', sec[0]);
       sec[1].forEach(function (b) { if (b) out.push('- ' + b); });
@@ -7480,9 +7554,15 @@
     // checked, none off the model") instead of reverting to a claim about the
     // card; where there is no table at all the leading clause stands alone.
     // Neither clause can outlive the computation that produced it.
+    // THE CARD NAME IS NOT IN THIS CHIP (owner 2026-08-12). It used to lead with
+    // it, so the analyzer read "Sales DMAAI Net Zero · 1 of 1 DMAAI off the cardex
+    // model" while the table underneath showed an ACCOUNT MISMATCH: model account
+    // B000107.1121 against inventory account B000100.1297.SB00222. Two different
+    // findings on one line, and the one in the label was the one nothing on screen
+    // demonstrated. The panel may only say what its own table proves. The card
+    // name is already in the header strip; repeating it here bought nothing and
+    // cost the analyst a claim they could not check.
     var chipParts = [];
-    var chipHead = chipLead || _txCodeTitle(chipCode);
-    if (chipHead) chipParts.push(chipHead);
     if (_sum.chip) chipParts.push(_sum.chip);
     _txAnalyzerFlag(flagState, chipParts.join(' · ') || (combos.length ? 'Review' : 'No rows'));
     body.innerHTML = html;   // populated but stays collapsed — the analyst opens it (owner 2026-07-14)
@@ -7505,9 +7585,17 @@
     var routesRead = false;
     if (!lensLed) {
       if (misRows.length) {
-        routeChecks.push('DMAAI account assignment: ' + misRows.length + ' DMAAI'
-          + (misRows.length === 1 ? '' : 's') + ' resolve to a different account than the item-ledger model. '
-          + 'Confirmed, and a separate fix from this one. Listed below.');
+        // NO BULLET HERE (owner 2026-08-12). This branch used to add a "What
+        // happened" line saying N DMAAIs resolve off the model and were "Listed
+        // below" — pointing at the "DMAAIs that differ from the model" block that
+        // `tail` prints a few lines down with the company, order type, doc type,
+        // GL class and both accounts. The bullet was a worse copy of the block
+        // sitting directly beneath it, and it read as part of the net-zero story
+        // when the mismatch is a separate fix. The block alone says it, in detail
+        // the analyst can act on. (It also carried a live "1 DMAAI resolve"
+        // agreement bug, which dies with it.)
+        // routesRead still flips: it gates a context line elsewhere on whether the
+        // routings were READ, which they were.
         routesRead = true;
       } else if (_modelUnresolved) {
         routeChecks.push('DMAAI account assignment: could not be read, so not checked. Neither confirmed nor ruled out. '
@@ -8093,7 +8181,32 @@
       // postMessage handoff.
       const detailBuffer = RRV8.runExport('Transaction Details', flashStatus, () => {
         const ws = XLSX.utils.aoa_to_sheet([banner, headerRow, ...dataRows]);
-        _txAnnotateHeaderCells(ws, cols, 1);
+        // THIS LINE IS WHY THE TRANSACTION DETAILS EXPORT PRODUCED NO FILE. It
+        // read `_txAnnotateHeaderCells(ws, cols, 1)`, and `cols` does not exist
+        // in this function — it is a local of exportGridToExcel, the OTHER
+        // export path. So every click threw ReferenceError: cols is not defined
+        // before the workbook was written. The throw was caught by runExport and
+        // reported correctly; it was invisible only because this page had no
+        // status channel to report INTO (see flashStatus above). Two defects
+        // stacked: a broken build, and no way to hear about it.
+        //
+        // Why it shipped: UI-91 added header-cell definitions to "the Excel
+        // export" and verified them by intercepting XLSX.writeFile — on the GRID
+        // path, which does have `cols`. This path serialises with XLSX.write to
+        // an ArrayBuffer for the analyzer handoff, so it never trips a
+        // writeFile interceptor and was never on the verified path. Verifying
+        // one of two call sites is what let a ReferenceError reach the analyst.
+        //
+        // The right argument is allCols, but it needs shaping: allCols holds
+        // COLUMN-NAME STRINGS (SPROC_COL_ORDER + any extras), while the helper
+        // reads `c.key` against RRV8.TXN_COLUMNS. Passing the raw strings would
+        // not throw — it would look up D[undefined], skip every column, and
+        // annotate nothing, which is the same silent no-op wearing a different
+        // hat. Nine of these 28 columns carry definitions (LedgerAmount, so a
+        // zero is not read as an absence; Variance; SubType; OT; DT; Batch;
+        // TransDate; CardexAmount; Comment) and the helper skips the rest on its
+        // own. Index order matches headerRow, so cell addresses stay aligned.
+        _txAnnotateHeaderCells(ws, allCols.map(function (k) { return { key: k }; }), 1);
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, 'Transaction Details');
         return XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
@@ -8132,14 +8245,44 @@
 
     let sent = false;
     let done = false;
+    // The analyzer handoff failed, so hand over the RAW Transaction Details
+    // workbook instead of the 2-tab analyzed one.
+    //
+    // THIS WAS TWO SILENT FAILURES IN ONE. First, it only console.warn'd, so
+    // the analyst received a DIFFERENT WORKBOOK THAN THE ONE THEY ASKED FOR —
+    // no Analysis tab — with nothing on screen saying so. "The export is
+    // broken" and "the export quietly gave you the un-analyzed file" looked
+    // identical from the outside. Second, every line here can throw
+    // (RRV8.exportName, the Blob allocation on a large buffer,
+    // createObjectURL), and it is called from a `message` handler and from a
+    // setTimeout — an exception there escapes to nothing, so the ONE path
+    // meant to rescue a failed export could itself disappear without trace.
+    // Both callers below are unchanged; the guarding belongs here, at the one
+    // place that knows what it was trying to do.
     function fallbackDownload(reason) {
       console.warn('Analyzer headless run failed — falling back to direct download:', reason);
-      const blob = new Blob([detailBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-      const url  = URL.createObjectURL(blob);
-      const a    = document.createElement('a');
-      a.href = url; a.download = RRV8.exportName({ surface: 'Transactions', company: _state.activeCompany, period: (_data && _data.period) || _state.period });
-      document.body.appendChild(a); a.click(); document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      let url = null;
+      try {
+        const blob = new Blob([detailBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = RRV8.exportName({ surface: 'Transactions', company: _state.activeCompany, period: (_data && _data.period) || _state.period });
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        // Say WHICH workbook arrived. The analyst asked for the analyzed one;
+        // silently substituting the raw one trains them to distrust the button.
+        flashStatus('Downloaded the Transaction Details workbook WITHOUT the Analysis tab &mdash; '
+          + 'the analyzer did not run (' + reason + '). Open it in the Export Analyzer to analyze it.');
+      } catch (err) {
+        console.error('[export] Transaction Details fallback download failed:', err);
+        flashStatus(RRV8.exportFailureMessage(err, 'Transaction Details'));
+      } finally {
+        // Revoke on a turn of the event loop, not synchronously after click().
+        // Tearing the blob URL down in the same tick can abort the download the
+        // click just started. The original revoked immediately; that is a real
+        // (if intermittent) way for this rescue path to produce no file.
+        if (url) setTimeout(function (u) { URL.revokeObjectURL(u); }, 4000, url);
+      }
     }
     function cleanup() {
       window.removeEventListener('message', onMsg);
@@ -8189,10 +8332,31 @@
     const btn = e.target.closest('.row-export');
     if (!btn) return;
     e.stopPropagation();
+    // THE LAST SILENT PATHS ON THIS SURFACE. These were three bare `return`s:
+    // no doc number on the button, no loaded payload to look it up in, or a
+    // doc number that matched nothing in _data.rows. Every one of them ate the
+    // click and left the button looking dead — indistinguishable from a broken
+    // export, and upstream of every guard in exportRow, so none of them could
+    // report. exportRow itself is now fully covered (alert if SheetJS is
+    // missing, fetch-error banner, export-guard toast, guarded fallback), which
+    // means a click that produces NOTHING can only have died here.
     const docNum = btn.dataset.doc;
-    if (!docNum || !_data) return;
+    if (!docNum) {
+      console.error('[export] row Export button carries no data-doc attribute', btn);
+      flashStatus('That row&rsquo;s Export button is missing its document number, so there is nothing to look up. Reload the page; if it persists, ask your IT department to report it.');
+      return;
+    }
+    if (!_data) {
+      flashStatus('Nothing is loaded yet &mdash; wait for the transactions to finish loading, then export.');
+      return;
+    }
     const row = _data.rows.find(r => String(r.DocNumber) === String(docNum));
-    if (row) exportRow(row);
+    if (!row) {
+      console.error('[export] doc', docNum, 'not found in the', _data.rows.length, 'loaded rows');
+      flashStatus('Document ' + docNum + ' is no longer in the loaded rows &mdash; the filter or period changed since this row was drawn. Reload and export again.');
+      return;
+    }
+    exportRow(row);
   });
 
   // ============================================================
@@ -9401,6 +9565,10 @@
   });
 })();
 </script>
+
+<!-- Status toast target. role="status" + aria-live="polite" so an export
+     failure reaches a screen reader too, not only the sighted analyst. -->
+<div class="toast" id="js-toast" role="status" aria-live="polite"></div>
 
 </body>
 </html>

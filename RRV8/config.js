@@ -526,7 +526,7 @@ window.RRV8 = window.RRV8 || {};
       + 'standard costing, needs the variance AAI configured for the routing, and skips work orders already closed.',
     '- Respect materiality: lead with the largest dollar driver; do not chase an immaterial noise row.',
     '- ROLE SPLIT, not a disagreement about the entry: the corrective accounting action for a transaction variance IS a journal entry, and the ACCOUNTANT books it. The ANALYST prevents recurrence. So never argue against the entry — no "not a journal entry", no "a JE only balances the GL this period" — and do not instruct one either. Stay in the analyst\'s lane: what was checked, what the cause is, and the change that stops it coming back.',
-    '- THE FINDING IS THE ANALYST\'S INVESTIGATION REPORT to the customer, and it travels to the Audit Center where a third party reads it months later. Write it in three parts under these headings: "What I checked" — one check per bullet, each ending ruled out or confirmed; "What I found" — the exact cause, or if it cannot be pinned down ONE or TWO likely causes said plainly to be unconfirmed; "To stop it recurring" — short bullets. Terse, one idea per bullet, no stacked clauses. Name a table only when the analyst has to go look in it.',
+    '- THE FINDING IS THE ANALYST\'S INVESTIGATION REPORT to the customer, and it travels to the Audit Center where a third party reads it months later. Write it in three parts under these headings: "What happened" — the state of the world, one fact per bullet; "What I found" — the exact cause, or if it cannot be pinned down ONE or TWO likely causes said plainly to be unconfirmed; "What to do" — short bullets. Terse, one idea per bullet, no stacked clauses. Name a table only when the analyst has to go look in it.',
     '- Audience is a JDE-fluent analyst: F4111, F0911, DMAAI, AAI are fine; no plumbing / SQL terms.'
   ].join('\n');
   // CARDEX_GROUNDING — the AI's compact copy of the cardex-variance playbook.
@@ -1275,7 +1275,7 @@ window.RRV8.ASOF_COLUMNS = [
  *              FAILS the build on a bare string, on an id no proc declares, and on
  *              an empty `t`. RRV8/txv-assertions.json is the generated manifest and
  *              the DB repo's CI fails if it drifts from the SQL. That gate is why a
- *              bullet under "What I checked" can be trusted.
+ *              bullet under "What happened" can be trusted.
  *   context[]  plain strings. True, useful, and NOT tested on these rows — a
  *              specimen measurement, a JDE behaviour, a scope limit the analyst
  *              has to widen by hand. Renders under its own heading, "Not tested on
@@ -1818,31 +1818,45 @@ window.RRV8 = window.RRV8 || {};
       action: 'Read 4220 and 4240 for the order type on the document, resolving the way JDE does: the item’s GL class first, the **** wildcard second. On the 42xx sales instructions the order type sits in the document-type column, not the order-type column the manufacturing instructions use. One account on both is the finding. Diff it against an order type on the same company that ships correctly, GL class by GL class — that comparison hands the customer the target values. Then point 4240 at the inventory account per GL class and 4220 at cost of goods sold. No journal entry prevents recurrence, so the AAI change is the fix; the accountant separately books the cost that never reached the GL. Re-check the following period. New documents on the order type with no GL entry mean the AAI was not changed.',
       finding: {
         mech: 'DMAAI 4220 and 4240 resolve to one account for this order type, so the shipment’s debit and credit land together, no GL entry is written, and the cost never reaches cost of goods.',
+        // Copy trimmed to what an analyst acts on (owner 2026-08-12). It ran ~210
+        // words of method: how the wildcard resolves, why the zero test is a
+        // tolerance and not a rounding, how a mixed-class document is claimed.
+        // All true, none of it changes the next move, and a new analyst does not
+        // yet know enough to want it. The lookup mechanics belong in the guide.
+        //
+        // Sized per rule 11, no install-specific figures. The routing WAS measured
+        // (RapidReconciler_Demo3, co 30002, order type SA, GL class P50: 4220 and
+        // 4240 both land on one inventory account, while every other sales order
+        // type at that GL class routes 4220 to a cost-of-goods object, and three
+        // more order types carry the same broken routing). Those accounts and
+        // counts live in the claim-block header and the audit doc so they can be
+        // re-measured; the card states the shape.
+        //
+        // The assertion ids are unchanged. They are the citation contract the CI
+        // gate checks, so trimming prose must not drop them.
         checked: [
-          { a: 'SAC.aaipaircancels', t: 'DMAAI 4220 and 4240 resolve to one account for this company, order type and GL class — exact class first, the **** wildcard second. The debit and the credit of one sales transaction on one account.' },
-          { a: 'SAC.everyclasscancels', t: 'Every GL class the document carries cancels. A document mixing a cancelling class with a working one is left unclaimed rather than claimed on a majority.' },
-          { a: 'SAC.cardexrelief', t: 'The item ledger relieved inventory and the ledger amount is zero within tolerance — a tolerance, not a rounding, because that column is a float.' },
-          { a: 'SAC.noglforowndoctype', t: 'The GL holds nothing for this document under its own document type, on any company.' }
+          { a: 'SAC.aaipaircancels', t: 'DMAAI 4220 (cost of goods) and 4240 (inventory) point to one account for this company, order type and GL class.' },
+          { a: 'SAC.cardexrelief', t: 'Item ledger relieved inventory. GL nets to zero. The cost never reached cost of goods.' }
         ],
-        context: [
-          'Other document types. The GL search covers this document\'s own type only. Widen it yourself before you tell the customer the entry does not exist anywhere.',
-          'Whether the lines were priced. Order type SA is sample and lab issues — pull the order and confirm no price on any line. No price on an SA order is a sample shipment, and the cost of a sample belongs in cost of goods, which is what the cancellation is preventing.'
-        ],
-        found: [
-          'The entry is absent, and the account instruction is why. The posting run itself did not fail, so no run report will show this.',
-          'The despatch itself is legitimate business. Routing both legs of its cost of sales onto one account is a setup error.',
-          'The item ledger relieved inventory and the GL did not, so GL inventory is overstated against the ledger by the full relieved amount and cost of goods sold is understated by the same.',
-          // recurrenceIdx points here.
-          'Every shipment on this order type reproduces it. Read the periods either side before treating it as a one-off.',
-          'Check the other order types sharing the routing before calling this isolated. One that had no shipments in the period is still misconfigured.'
-        ],
-        recurrenceIdx: 3,
+        // "Not tested on these rows" removed (owner 2026-08-12): it helped nothing
+        // on this card. The scope limit it carried now belongs in `action`, where
+        // the analyst is already being told what to do next.
+        context: [],
+        // `found` is empty and `recurrenceIdx` is GONE (owner 2026-08-12). Its five
+        // bullets restated the mechanism the two above already carry, or gave the
+        // analyst reading rather than doing. The recurrence point it held survives
+        // as the second action below, which is where it changes behaviour.
+        // recurrenceIdx MUST go with it: _txFindingText guards on
+        // `typeof sel.recurrenceIdx === 'number'` before indexing `found`, so
+        // leaving the index behind over an empty array is a live break.
+        found: [],
+        // Two actions, in the order the analyst takes them: fix this routing, then
+        // establish whether it is isolated. Naming the target account is deliberate
+        // (4220 belongs on cost of goods) and carries no install-specific value,
+        // per rule 11.
         fix: [
-          'Pull 4220 and 4240 for this order type and read the account each resolves to, per GL class.',
-          'Diff them against an order type on the same company that ships correctly. That comparison gives the customer the exact target values.',
-          'Point 4240 at the inventory account per GL class and 4220 at cost of goods sold, so the two legs stop landing on one account.',
-          'The accountant books the cost of goods that never reached the GL for the periods already closed.',
-          'Re-check next period. New documents on this order type with no GL entry mean the AAI was not changed.'
+          'Point DMAAI 4220 to cost of goods for this company, order type and GL class.',
+          'Check the other order types sharing this DMAAI before calling it isolated. One with no shipments this period is still misconfigured.'
         ]
       }
     },
