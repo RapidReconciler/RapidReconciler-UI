@@ -784,7 +784,7 @@ This means the **true variance is larger than what RapidReconciler is showing**.
 
 When a work order completion is processed, the cardex is written at the current standard cost. If the standard cost is subsequently updated via R30822 (Frozen Cost Update) **after** the completion has already posted, JD Edwards writes a second cardex row to revalue the completed inventory to the new standard. However, if WIP Revaluation (R30837) was not configured to run -- or was not called from R30822 -- the corresponding GL journal entry is never created, leaving the cardex revaluation with no GL counterpart.
 
-The GL document number mismatch (e.g., cardex shows doc 545031 but GL shows 566580) is **normal behavior** for IC transactions -- Manufacturing Accounting (R31802A) summarizes multiple work order transactions into a single GL document. This is not the cause of the variance but can cause confusion when tracing the transaction.
+The GL document number mismatch (e.g., cardex shows doc 900500 but GL shows 900600) is **normal behavior** for IC transactions -- Manufacturing Accounting (R31802A) summarizes multiple work order transactions into a single GL document. This is not the cause of the variance but can cause confusion when tracing the transaction.
 
 **Common causes:**
 

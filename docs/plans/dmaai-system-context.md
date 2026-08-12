@@ -29,15 +29,15 @@ is unchanged.
 
 ## Concrete benefit on the field case
 
-For doc 545031 IC at company 00002:
+For doc 900500 IC at company 00900:
 
 - Pattern 5.6 currently says "Step 3. Post a manual journal entry... debit
   inventory account, credit AAI 3260 (Planned Variance) or AAI 3240 (Material
   Variance)".
 - With the integrity report loaded the analyzer can verify 3240 IV IS
-  configured for company 00002 (4 rows in the customer's report) and can
+  configured for company 00900 (4 rows in the customer's report) and can
   name the actual GL account it points at — so Step 3 becomes "credit GL
-  account X.Y (the account configured for 3240 IV at company 00002 / GL
+  account X.Y (the account configured for 3240 IV at company 00900 / GL
   class Z00)".
 - The analyzer can also confidently state the symptom is a process-sequencing
   gap rather than a config gap (the canonical guide's diagnosis), instead of
@@ -221,7 +221,7 @@ Patterns 5.1, 5.4, 5.5 are future enrichment candidates. Defer them.
    without SystemContext loaded. Dismissible.
 
 5. **Browser-verify:** load the customer's `Integrity_2023-12-31_*.xlsx`,
-   then drop the `Transaction Detail Analysis for 545031 IC.xlsx` source
+   then drop the `Transaction Detail Analysis for 900500 IC.xlsx` source
    (re-export from the customer), and confirm Pattern 5.6 Step 3 now names
    a real GL account from the integrity report.
 
@@ -236,9 +236,9 @@ Patterns 5.1, 5.4, 5.5 are future enrichment candidates. Defer them.
 Use the two existing files from the discussion:
 
 - DMAAI integrity report: `Integrity_2023-12-31_20260512-2050.xlsx`
-- Customer Transaction Detail source: regenerate from JDE for doc 545031 IC
+- Customer Transaction Detail source: regenerate from JDE for doc 900500 IC
   (the analyzer's *output* xlsx that we looked at — `Transaction Detail
-  Analysis for 545031 IC.xlsx` — has both the analysis and the source as
+  Analysis for 900500 IC.xlsx` — has both the analysis and the source as
   sheets, but the analyzer input is a fresh Transaction Detail xlsx from
   JDE).
 
