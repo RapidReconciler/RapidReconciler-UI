@@ -343,7 +343,7 @@ Key structural rules:
 | **PeriodEnds** | The RapidReconciler period the transaction belongs to. If this differs from the current period, the row is from a prior period — treat as critical. |
 | **TransactionDate** | The date the item ledger record was created. A date of **2000-01-01** is a JD Edwards flag for an unprocessed voucher match transaction. |
 | **CompanyNumber** | JD Edwards company number. Leading zeros included. |
-| **LongAccount** | The full GL account number in Business Unit.Object format (e.g., 73010.1421). |
+| **LongAccount** | The full GL account number in Business Unit.Object format (e.g., B009904.1121). |
 | **OffsetAccount** | The offset GL account, if populated. Blank for most End of Day rows — the GL entry does not yet exist. |
 | **Type** | RapidReconciler classification of the transaction source. See Section 5.1 for all codes. |
 | **OrderType** | The JD Edwards order type (e.g., SO, SI, WO, OP). Identifies the source business process. |

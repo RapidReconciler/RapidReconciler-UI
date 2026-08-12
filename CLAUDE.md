@@ -398,9 +398,10 @@ default). For belt-and-suspenders on a chore commit, also add
   GitHub Pages site, internal-only docs under `AnalysisGuides/`,
   scripts under `Tools/queries/`, and the source HTML of the
   analyzer itself — is readable by anyone who finds the repo.
-  Don't paste real customer account numbers (`1000000.142000`,
-  `5077777.501010.51`, etc.), branch / company numbers (`00010`),
-  doc numbers (`1324740`), or real customer names into prose,
+  Don't paste real customer account numbers (a 7-digit business
+  unit joined to a 6-digit object, with or without a subsidiary),
+  branch / company numbers, doc numbers, item numbers, order
+  numbers, batch numbers, or real customer names into prose,
   tables, callouts, examples, or code comments. Use clean fictional
   generics (`5000.140000`, `100.5100.MKTG`, `MFG01.4220`) that
   demonstrate the same concept without tracing back to a real

@@ -15,7 +15,7 @@ var mat = pct < 1 ? 'immaterial' : 'modest but not trivial';
 var sit = _ccyAmt(c.ccy, c.oob) + ' out of balance — ' + pctStr + ' of the ' + _ccyAmt(c.ccy, c.glBal) + ' GL balance, ' + mat + '.';
 ```
 
-**Trigger — Sawtooth Mining LLC (NA, Co 00041):** GL ≈ $0, Inventory ≈ $0, a **$3**
+**Trigger — Northwind Aggregates LLC (NA, Co 00901):** GL ≈ $0, Inventory ≈ $0, a **$3**
 gap. `pct = 3 / ~0 * 100` → reads **"100.0% of the GL balance ... modest but not
 trivial."** A trivial $3 reads as an alarming 100%. Compounding it, `wlUnit(c)`
 (~L8661) picks `K` and every figure rounds to **$0.0K**, so the card looks empty

@@ -228,11 +228,11 @@ Key structural rules:
 
 | Column | Description |
 |---|---|
-| **CompanyNumber** | JD Edwards company number. Leading zeros are included (e.g., 00067). Used to group batches by entity and to identify which company constants govern approval requirements. |
+| **CompanyNumber** | JD Edwards company number. Leading zeros are included (e.g., 00900). Used to group batches by entity and to identify which company constants govern approval requirements. |
 | **BatchDate** | The date the batch was created in JD Edwards. Used to calculate batch age. Batches more than 2 days old at period end require escalated attention. |
 | **PeriodEnds** | The period-end date for the RapidReconciler period filter in effect when the report was generated. All rows in a given export share the same PeriodEnds value. |
 | **Username** | The JD Edwards user ID that created the batch. System schedulers appear as JDESCHED or similar. Use this field to identify the person or process responsible for the batch. |
-| **LongAccount** | The full GL account number in Business Unit.Object.Subsidiary format (e.g., 67010.1421). Use this to identify the inventory account affected and to cross-reference against the chart of accounts. |
+| **LongAccount** | The full GL account number in Business Unit.Object.Subsidiary format (e.g., B009903.1121). Use this to identify the inventory account affected and to cross-reference against the chart of accounts. |
 | **BatchNumber** | The JD Edwards batch number (F0011 key field). Multiple rows with the same batch number belong to the same batch — they must be resolved together. |
 | **Type** | Batch type code. Identifies the source of the transaction. See Section 3 for the full batch type reference. Common types: **G** (General Journal), **IB** (Inventory Balance), **N** (Inventory), **O** (PO Receipt), **V** (Voucher). |
 | **Amount** | The net GL amount for this account row. Positive = debit; negative = credit. For a given batch, amounts across all rows should net to zero for a balanced batch. |

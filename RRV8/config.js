@@ -2340,7 +2340,7 @@ window.RRV8 = window.RRV8 || {};
     //
     // MEASURED on Demo3: 9 rows reached this branch, totalling -$93,815.51, and ALL
     // NINE carry CardexAmount = 0.00 exactly (sum of |CardexAmount| = 0.00). Largest
-    // is DocNumber 441322, doc type IM, ledger -$54,170.89. Zero rows reached it with
+    // is DocNumber 900620, doc type IM, ledger -$54,170.89. Zero rows reached it with
     // a cardex value — so on that database this branch was firing ONLY on GL-only
     // rows and never once on a genuine two-sided mismatch. Demo1 sends no rows here
     // at all. They are now GL-ONLY, which is the shape they actually are.

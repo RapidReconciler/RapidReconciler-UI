@@ -331,7 +331,7 @@ definition). So 09 is an **average-type (revaluing) method, not standard.**
 **⚑ XX-METHOD STUDY — RESOLVED (owner asked 2026-07-10): NOT a load bug.** All 55 `XX` rows are
 **zero-QOH, zero-variance** (inert — can't surface on a card). 53/55 have F4105 cost rows in `jdesource`, and
 **every source cost method is `02`** (155 F4105 rows, all `coledg='02'`). The `XX` arises because at the
-**specific branch** RR carries the item there is **no F4105 cost record** (e.g., item 65509 is costed at
+**specific branch** RR carries the item there is **no F4105 cost record** (e.g., item 70060 is costed at
 branches 2 & 22, not branch 3 where RR lists it). Cost level 2 = cost per item-branch, so an item-branch with
 no F4105 row is uncosted → RR faithfully defaults to `XX`. **The item IS a 02 item; the data isn't lost — it's
 a JDE branch-level cost gap (stocked/listed at a branch it was never costed at).** **Rule:** exclude `XX`
@@ -355,7 +355,7 @@ navigation, but duplicates the detail fetch on Home); (C) both. Recommend (A).
 pre-staged source edits do NOT survive as variance.** Cardex variance is divergence SINCE the baseline
 (`estunits = (qic − baselineqic) − (qoh − baselineqoh)`); a reset re-establishes the baseline = the current
 position, so every item ties to zero at reload (my `jdesource` F41021 QOH bumps just bake into
-`baselineqoh` → zero variance — cf. item 236069: qoh 60 / qic 9 yet `estunits` 0, because that spread
+`baselineqoh` → zero variance — cf. item 700500: qoh 60 / qic 9 yet `estunits` 0, because that spread
 predates its baseline). **Therefore staging cardex variance belongs POST-LOAD, through the SYNC PAGE:**
 Adjust Beginning Balance sets a beginning balance that diverges from the rolled position, creating the
 variance in **any** db, after the fact, with no source dependency — and it dogfoods the sync flow we're

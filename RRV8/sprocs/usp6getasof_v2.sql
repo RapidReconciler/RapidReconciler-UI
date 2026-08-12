@@ -321,7 +321,7 @@ GO
 -- EXEC dbo.usp6getasof_v2
 --      @periodends            = '2016-08-27'
 --    , @asofdate              = '2016-08-27'
---    , @includecompanies      = '''00010'',''00050'''
+--    , @includecompanies      = '''00900'',''00050'''
 --    , @includebusinessunits  = NULL
 --    , @includeobjects        = NULL
 --    , @includesubs           = NULL

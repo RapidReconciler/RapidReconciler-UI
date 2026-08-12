@@ -306,7 +306,7 @@ As of the latest commit, V8 has:
     the first fetch so subsequent runs are instant.
 
   Output: **one tab per company** (improvement over the legacy
-  app's one-company-per-file pattern). Tab names like `00010 - USD`,
+  app's one-company-per-file pattern). Tab names like `00900 - USD`,
   `00050 - GBP`. Each tab follows the production layout verbatim:
   - 5-row cover (Title / Currency Code / Period Ends / Prepared /
     Prepared by &lt;email&gt; (&lt;db&gt;))

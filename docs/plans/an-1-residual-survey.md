@@ -185,7 +185,7 @@ cardex is almost exactly 100 times the GL on 465 of the 520 rows in that gate:
 | other | 53 | 86,798.20 |
 | no GL match | 2 | 2,304.91 |
 
-Example: WO 492022 shows cardex 342,956.82 against a GL IC of 3,429.57. That is
+Example: WO 900622 shows cardex 342,956.82 against a GL IC of 3,429.57. That is
 100.0000x, and the same clean 100x repeats across 465 independent work orders.
 A deterministic 100x across hundreds of unrelated WOs is not a business event. It
 is a currency decimal-places (F9210 FRCDEC) mismatch: one side of the compare was

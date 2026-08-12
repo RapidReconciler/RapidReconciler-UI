@@ -24,7 +24,7 @@
   clobber each other.
 
 .PARAMETER Company
-  JDE company number on the rcardexledgercompare2 row (e.g. '00010').
+  JDE company number on the rcardexledgercompare2 row (e.g. '00900').
   Padded automatically to 5 chars if you pass a short value.
 
 .PARAMETER Doc
@@ -58,7 +58,7 @@
   Explicit output path. Overrides OutDir/auto-name when supplied.
 
 .EXAMPLE
-  .\transaction-detail-workflow.ps1 -Company 00010 -Doc 1324740 -DocType IM
+  .\transaction-detail-workflow.ps1 -Company 00900 -Doc 900605 -DocType IM
 
 .EXAMPLE
   .\transaction-detail-workflow.ps1 -Company 50 -Doc 1019255 -DocType RI -Database rrv7-acme
@@ -170,7 +170,7 @@ try {
   $ws.Name = 'Transaction Details'
   $range = $ws.Range($ws.Cells.Item(1, 1), $ws.Cells.Item($rowCount + 2, $colCount))
   # Force every column to Text format BEFORE we write data. The sproc
-  # returns account values like "1000000.142000" (string nchar) but
+  # returns account values like "8800100.142000" (string nchar) but
   # Excel's Value2 setter happily auto-converts those to numbers,
   # which silently drops trailing zeros after the decimal. Set "@"
   # (text format) on the full range first to preserve the strings.

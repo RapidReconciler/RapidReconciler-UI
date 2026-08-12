@@ -618,7 +618,7 @@ corrupts history.
   needs. Returns an array:
 
   ```json
-  [ { "cardCode": "ACCT", "company": "00010", "periodEnd": "2026-06-30",
+  [ { "cardCode": "ACCT", "company": "00900", "periodEnd": "2026-06-30",
       "status": "complete", "note": "AAI 3120 remapped to 140050; re-rolled + reloaded cardex.",
       "sourceFix": "AAI remap", "varAmount": 1284.55,
       "by": "name@customer.com", "at": "2026-07-08T15:30:00Z" } ]
@@ -628,7 +628,7 @@ corrupts history.
   `(company, cardCode, periodEnd)` (one current row per key). Body:
 
   ```json
-  { "company": "00010", "cardCode": "ACCT", "periodEnd": "2026-06-30",
+  { "company": "00900", "cardCode": "ACCT", "periodEnd": "2026-06-30",
     "status": "complete", "note": "…", "sourceFix": "…", "varAmount": 1284.55 }
   ```
 
@@ -668,7 +668,7 @@ system of record (JDE).
   self-updating; there is no separate verify call. Returns an array:
 
   ```json
-  [ { "company": "00010", "periodEnd": "2026-06-30", "token": "RR-7K2P9Q",
+  [ { "company": "00900", "periodEnd": "2026-06-30", "token": "RR-7K2P9Q",
       "amount": -9377.00, "clearingAccount": "1.4900", "entryType": "adjusting",
       "status": "verified", "matchedBatch": "11616", "by": "name@customer.com",
       "at": "2026-07-12T15:30:00Z" } ]
@@ -684,7 +684,7 @@ system of record (JDE).
   unique `token`. Body:
 
   ```json
-  { "company": "00010", "periodEnd": "2026-06-30", "token": "RR-7K2P9Q",
+  { "company": "00900", "periodEnd": "2026-06-30", "token": "RR-7K2P9Q",
     "amount": -9377.00, "clearingAccount": "1.4900", "entryType": "adjusting" }
   ```
 
@@ -716,17 +716,17 @@ analyst's source-fix card, not suppress it). One current row per
   set). Returns an array:
 
   ```json
-  [ { "company": "00010", "periodEnd": "2026-06-30", "reason": "immaterial",
+  [ { "company": "00900", "periodEnd": "2026-06-30", "reason": "immaterial",
       "by": "name@customer.com", "at": "2026-07-12T15:30:00Z" } ]
   ```
 
 - **`POST /inventory/disposition`** — mark complete: upsert ONE record keyed on
-  `(company, periodEnd)`. Body `{ "company": "00010", "periodEnd": "2026-06-30",
+  `(company, periodEnd)`. Body `{ "company": "00900", "periodEnd": "2026-06-30",
   "reason": "corrected" }`. `reason` ∈ `immaterial | corrected | analyst | timing`.
   The actor (`by`) is from the JWT; `at` is server-stamped. Returns `{ "ok": true }`.
 
 - **`POST /inventory/disposition/reopen`** — reopen: delete the record. Body
-  `{ "company": "00010", "periodEnd": "2026-06-30" }`. Returns `{ "ok": true }`.
+  `{ "company": "00900", "periodEnd": "2026-06-30" }`. Returns `{ "ok": true }`.
   (POST, not DELETE, so the dev CORS path needs no proxy.)
 
 - **Backing table `dbo.RAcctCompanyDisposition`** — one current row per
@@ -752,13 +752,13 @@ One current row per `(company, periodEnd)`.
   Returns an array:
 
   ```json
-  [ { "company": "00010", "periodEnd": "2025-07-31", "sourcesFixed": 3,
+  [ { "company": "00900", "periodEnd": "2025-07-31", "sourcesFixed": 3,
       "letRide": 2, "note": "", "by": "name@customer.com",
       "at": "2026-07-13T15:30:00Z" } ]
   ```
 
 - **`POST /inventory/txv/period-review`** — mark reviewed: upsert ONE record keyed
-  on `(company, periodEnd)`. Body `{ "company": "00010", "periodEnd": "2025-07-31",
+  on `(company, periodEnd)`. Body `{ "company": "00900", "periodEnd": "2025-07-31",
   "sourcesFixed": 3, "letRide": 2, "note": "" }`. `sourcesFixed` / `letRide` are
   integer card counts. The actor (`by`) is from the JWT; `at` is server-stamped.
   Returns `{ "ok": true }`.
@@ -843,7 +843,7 @@ cannot approve the setup (only the customer's accounting team can).
     "report3Count": 3,               // GL classes currently excluded (Report 3)
     "report3CountAtApproval": 3,
     "changedSinceApproval": false,
-    "companiesInScope": ["00010","00050"]
+    "companiesInScope": ["00900","00050"]
   }
   ```
 
@@ -1009,8 +1009,8 @@ instance (sanitized labels; same values as the rendered page).
   },
   "filter": {
     "currencies":   [{ "id": "GBP", "checked": true, "show": true, "label": "&pound; - GBP" }, ...],
-    "companies":    [{ "id": "00010", "parentId": "USD", ... }, ...],
-    "businessUnits":[{ "id": "1000000", "parentId": "00010", ... }, ...],
+    "companies":    [{ "id": "00900", "parentId": "USD", ... }, ...],
+    "businessUnits":[{ "id": "8800100", "parentId": "00900", ... }, ...],
     "objects":      [{ "id": "141000", "label": "141000 - Raw Material" }, ...],
     "subsidiaries": [{ "id": "", "label": "None" }, { "id": "CC" }, ...],
     "selectedsObjects": [...]
@@ -1095,8 +1095,8 @@ implementation.
 GET /api/v2/inventory/reconciliation
     ?period=2016-08-27
     &currencies=GBP,USD
-    &companies=00010,00050
-    &businessUnits=1000000,5000000
+    &companies=00900,00050
+    &businessUnits=8800100,5000000
     &accounts=141000,142000,143000,143100,145000
     &subsidiaries=,CC,FM,MLD,MM,PM,PRS,RW,S/A,S/C,SEC,SM
 ```
@@ -1116,8 +1116,8 @@ GET /api/v2/inventory/reconciliation
   },
   "filters": {
     "currencies":    [{ "id": "GBP", "label": "&pound; - GBP" }, { "id": "USD", "label": "$ - USD" }],
-    "companies":     [{ "id": "00010", "currency": "USD", "label": "Acme Inc" }, ...],
-    "businessUnits": [{ "id": "1000000", "company": "00010", "label": "Balance Sheet" }, ...],
+    "companies":     [{ "id": "00900", "currency": "USD", "label": "Acme Inc" }, ...],
+    "businessUnits": [{ "id": "8800100", "company": "00900", "label": "Balance Sheet" }, ...],
     "accounts":      [{ "id": "141000", "label": "Raw Material" }, ...],
     "subsidiaries":  [{ "id": "",  "label": "None" }, { "id": "CC", "label": "CC" }, ...]
   },
