@@ -149,11 +149,32 @@ lands there too.
 
 ### Admin card dots
 
-Producer: currently the CSS class itself, which is the defect. Conditions
-reaching `row-dot amber` today include a fiscal-calendar mismatch and a GL break
-(both detections), the nightly refresh running (activity), connectivity inside
-the grace window (activity), and three separate review reminders where an admin
-has not clicked Acknowledge (none of which detected anything).
+**FIXED — UI-88 (a)/(b)/(d), 2026-08-12.** Producer is `RRV8.setDotState(el,
+state)` in `sidebar.js`; CSS derives the colour from `data-state`. `_cardLevel`
+and `_cardAttnRank` read the attribute. No JavaScript writes a colour class and
+nothing reads one back. `complexPwReviewLevel` became `reviewReminderState` and
+returns `ok`/`todo`; `purgeRecommendation` returns `ok`/`watch`/`attention`.
+
+**Two vocabularies exist on purpose, and this is the reason.** The analyzer
+answers *what did the check find* (`detected` / `classified` / `open` / `muted`).
+The admin surface grades *how bad is it* — `attention` / `watch` / `ok` /
+`unknown` — because it carries a real severity ladder the analyzer does not need.
+Collapsing them would force either painting a memory-climbing warning the alert
+colour, or throwing the grade away. `busy` is shared by both.
+
+**`todo` is the third value, and it was added because an unclicked
+acknowledgement is neither.** It is not a result and not an activity: nothing was
+detected and nothing is running, somebody just has to click. The four review
+reminders return it.
+
+Conditions that reached `row-dot amber` before the fix, and where they now sit:
+a fiscal-calendar mismatch and a GL break (`watch` — real detections), the
+nightly refresh running and connectivity inside the grace window (`busy`), and
+the four review reminders (`todo`).
+
+⚠ **`todo` and `busy` still paint the watch amber**, isolated to two CSS
+declarations in `home.html` so the refactor changed no pixel. Splitting them is
+UI-88(c) and needs the owner: it is a visible change across the product.
 
 An analyst who learns that amber on this page is mostly housekeeping carries that
 habit to the Data Health tab and the Variance Analyzer header, where amber means

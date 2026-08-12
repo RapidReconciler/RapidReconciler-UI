@@ -607,7 +607,7 @@ entry for the row.
 | 5.23 | Sales Not Journaled -- relief stamped, no GL entry | `SNJ` **withdrawn 2026-08-05** -- the absence is real, the failed-run inference was not; the cause is now `SAC` | 5.22 |
 | 5.24 | Non-Stock Charge Lines -- every line non-stock | `NCL` | not written up yet |
 | -- | Offsetting GL entries -- 4220 and 4240 both route to a P&L account | `OFF` | 5.23 |
-| -- (card) | Sales AAI Cancels -- 4220 and 4240 resolve to ONE account, so no GL entry is written | `SAC` | 5.22 |
+| -- (card) | Sales DMAAI Net Zero -- 4220 and 4240 resolve to ONE account, so no GL entry is written and the cost never reaches cost of goods | `SAC` | 5.22 |
 | -- | Intercompany / Transfer / Direct Ship leg pairing | `ICO` / `TRF` / `DS` | 5.20 (mfg), leg pairing not written up yet |
 | -- | Unclassified residual by transaction type | `T-SALES` / `T-PURCH` / `T-MFG` / `T-INV` | -- |
 | -- | Tax Variance | -- | 5.6 |
@@ -1440,7 +1440,10 @@ Which configuration check catches it:
 
 ### 5.22 Sales AAI Cancels -- The Cost-of-Sales Pair Resolves to One Account
 
-**Card:** `Sales AAI Cancels` (`SAC`), claimed by `usp8_txv_flags` block L.
+**Card:** `Sales DMAAI Net Zero` (`SAC`), claimed by `usp8_txv_flags` block L. The
+card was titled `Sales AAI Cancels` when this section was first written; both
+strings resolve to the same SubType, so an older screenshot is not a different
+card.
 **Shape:** cardex-only at document grain -- `CardexAmount` non-zero,
 `LedgerAmount` zero -- on a sales document that has no `F0911` row at all.
 
@@ -1470,6 +1473,29 @@ cancel, and no journal detail is produced. The item ledger relieved inventory an
 the GL received nothing, so the relief has no counterpart and the variance is the
 full relieved amount. The batch shows posted because JD Edwards closed it, not
 because this document produced an entry.
+
+**The order shipped at no charge, so its cost belongs in cost of goods sold.**
+
+- Order type `SA` is the first indication the shipment is a sample. The customer
+  asked for samples; the goods went out free of charge. Read the order type off
+  the item-ledger row before you read anything else.
+- **A price of zero on every line confirms it.** No charge on any line of an `SA`
+  order is a sample despatch, and one look at the order lines settles it. Order
+  type alone is an indication; order type plus no price is the conclusion.
+- The goods left the building. Their cost is a cost of doing business and belongs
+  in cost of goods sold -- not parked on the balance sheet, and not cancelled.
+
+**Rank the two defects in this order when you write the finding.**
+
+1. **Primary: the pair nets to zero.** 4220 and 4240 land on one account, so the
+   cost that belongs in cost of goods sold cancels itself across the debit and
+   the credit and never reaches the P&L at all. The item ledger relieved
+   inventory and the income statement never saw the charge. That is the finding.
+2. **Secondary: the routing does not match the 4152 cardex model.** The
+   analyzer's routing check reports that the inventory DMAAIs resolve somewhere
+   other than the model account, and it is worth correcting in the same change.
+   It is a mapping discrepancy, not the reason the cost went missing. Lead with
+   it and the customer repairs the label while the leak stays open.
 
 **Read the order type before the document type.** A `JS` document is a
 sales-order cost-of-sales entry, and one `JS` population can hold order types
@@ -1532,6 +1558,14 @@ anything. The full correction is recorded in `usp8_txv_flags` block J. The
 standing rule it produced still holds: **the cardex-to-GL match key differs per
 transaction type, and `LedgerAmount = 0` means the correlation found nothing, not
 that the GL is absent.**
+
+> **Do not re-propose it.** The population still looks exactly the way it looked
+> when the claim was first written -- relief on the item ledger, nothing in the
+> GL under the document number -- so a fresh reading arrives at the same wrong
+> answer unless the withdrawal is read first. It is recorded in two places: this
+> section, and the comment block above the `SNJ` entry in `RRV8/config.js`. The
+> `SNJ` entry itself survives only so a database still emitting the old SubType
+> renders a titled card; its presence is not evidence the claim is live.
 
 **Resolution.**
 
@@ -1902,7 +1936,7 @@ Common document types appearing in the Transaction Detail report:
 | **SK** | Intercompany sales (inter-branch). Under document type `JS` this leg ties on document number plus batch; confirmed to the penny on every row of a specimen population. Do not assume `JS` cannot be matched per document until you have split the population by order type |
 | **OK** | Intercompany purchase order |
 | **CO** / **CW** / **C2** | Sales order types in the `C` family. On one company they sit in a block of eight (`C2`, `C3`, `C5`, `C6`, `C7`, `CO`, `CR`, `CW`) configured identically in AAIs 4220 and 4240, and their orders carry both stock lines (line type `S`, inventory interface `Y`) and carton-charge lines (line type `CC`, inventory interface `N`). **Their UDC `00/DT` descriptions are not in the RapidReconciler database** -- there is no `F0005` extract, so read the name in JD Edwards if you need it. What matters for reconciliation is the AAI routing, not the name: see Section 5.23 |
-| **SA** | Standard sales order. Under document type `JS`, `SA` lines issued out of sample or lab locations (`SAMPDESP`, `SAMPWIP`, `SAMPRACK*`, `LABWIP`, `CLEANROOM`) relieve inventory value and post **no GL line**. High row count, low value. See Section 5.22 |
+| **SA** | Standard sales order. Under document type `JS`, `SA` lines issued out of sample or lab locations (`SAMPDESP`, `SAMPWIP`, `SAMPRACK*`, `LABWIP`, `CLEANROOM`) relieve inventory value and post **no GL line**. High row count, low value. The order type is the first indication these are samples shipped at no charge; **a price of zero on every line confirms it**, and the cost of the sample belongs in cost of goods sold. See Section 5.22 |
 | **SP** | Sales order type appearing under `JS` alongside `SA` and `SK`, including returns (`B4RRETURN` and similar return locations). Substantially matched on document plus batch in the observed population, with a small unmatched remainder that Section 5.22 does not explain |
 | **JS** | Sales order shipment (cost-of-sales entry). **Read the order type before diagnosing a JS document.** One JS population routinely spans several order types with different accounting behaviour -- on a specimen database, `SK` (intercompany inter-branch) ties 100% on document plus batch, while `SA` sample and lab issues relieve the cardex and post no GL line at all. Diagnosing at document-type grain averages them and is wrong for every subgroup. See Section 5.22. The standard cost change after shipment pattern seen on IC transactions can also occur on JS -- if a second F4111 row appears with zero quantity and comment "Standard Cost Change," the GL revaluation entry is missing. See Section 5.9. |
 | **RI** | Sales invoice / shipment. Covers standard SO and direct ship S6 order types. For account mismatches, R42800 PO 5 (Business Unit Source) is the most common cause — it controls where the business unit portion of the GL account is sourced from and a wrong setting affects all sales entries in that version. For period mismatches, check R42800 PO 1 (GL Date). If F0911 Comment reads "Non stock line in Inv acct," a non-stock line type (N, F, or similar) posted to the inventory account -- investigate line type definition. Lines showing GL date 2000-01-01 and document 0 were never processed through Sales Update. |

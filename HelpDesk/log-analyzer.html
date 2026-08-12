@@ -418,6 +418,114 @@
   .verdict.crit  { background: var(--red-soft); border-color: var(--red); }
   .verdict.crit  .verdict-pill { background: var(--red); color: #fff; }
 
+  /* ===== Findings (the "what's wrong and what to do" block) =====
+     Sits directly under the verdict and above the evidence. One row
+     per distinct problem — never one row per log line. This is the
+     only part of the page a junior analyst has to read. */
+  .findings {
+    margin: 0 0 22px;
+    display: none;
+  }
+  .findings.active { display: block; }
+  .findings h2 {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 16px;
+    color: var(--navy);
+    margin-bottom: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .findings-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    counter-reset: finding;
+  }
+  .finding {
+    border: 1px solid var(--rule-strong);
+    border-left-width: 5px;
+    border-radius: 6px;
+    background: #fff;
+    padding: 14px 18px;
+    margin-bottom: 10px;
+  }
+  .finding.crit { border-left-color: var(--red); }
+  .finding.flag { border-left-color: var(--orange); }
+  .finding-head {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .finding-n {
+    flex: none;
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    display: inline-grid;
+    place-items: center;
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 12px;
+    font-weight: 700;
+    color: #fff;
+    background: var(--text-muted);
+    align-self: center;
+  }
+  .finding.crit .finding-n { background: var(--red); }
+  .finding.flag .finding-n { background: var(--orange-deep); }
+  .finding-name {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 16.5px;
+    font-weight: 700;
+    color: var(--navy);
+  }
+  .finding-detail {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12.5px;
+    color: var(--text);
+    background: var(--bg-soft);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    padding: 1px 7px;
+  }
+  .finding-meta {
+    margin-left: auto;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text-soft);
+    white-space: nowrap;
+  }
+  .finding-fix {
+    margin-top: 8px;
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--text);
+  }
+  .finding-fix strong {
+    display: inline-block;
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--green-deep);
+    background: var(--green-soft);
+    border-radius: 3px;
+    padding: 1px 7px;
+    margin-right: 6px;
+    vertical-align: 1px;
+  }
+  .finding-fix code {
+    background: var(--bg-soft);
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12.5px;
+    color: var(--navy);
+  }
+  @media (max-width: 800px) {
+    .finding-meta { margin-left: 0; width: 100%; }
+  }
+
   /* ===== Line groups ===== */
   .lines-section {
     margin-top: 24px;
@@ -458,8 +566,14 @@
     color: var(--text-muted);
   }
   details.line-group[open] .line-group-arrow { transform: rotate(90deg); }
-  .line-group-count {
+  /* Span + count travel together at the right edge of the summary. */
+  .line-group-right {
     margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .line-group-count {
     font-size: 12.5px;
     font-weight: 700;
     color: var(--text-soft);
@@ -467,6 +581,28 @@
     padding: 2px 10px;
     border-radius: 100px;
   }
+  /* First-seen / last-seen for the group, next to the count. Tells the
+     operator at a glance whether a condition is a one-off or ran all
+     day. */
+  .line-group-span {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+    white-space: nowrap;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  /* Shown when the sample list is capped — states plainly that the
+     COUNT is complete even though the sample list is not. */
+  .line-group-capped {
+    padding: 8px 18px;
+    font-size: 12px;
+    font-style: italic;
+    color: var(--text-muted);
+    border-top: 1px dashed var(--rule);
+  }
+  /* The events-vs-entries note sits at the top of the list, so it has
+     no preceding row to be divided from. */
+  .line-list > .line-group-capped:first-child { border-top: none; }
   .line-group-pill {
     font-size: 11px;
     font-weight: 700;
@@ -685,8 +821,13 @@
     <div class="verdict-summary" id="verdictSummary"></div>
   </div>
 
+  <div class="findings" id="findings">
+    <h2>What to fix</h2>
+    <div id="findingsBody"></div>
+  </div>
+
   <div class="lines-section" id="signalsSection">
-    <h2>Concerning lines</h2>
+    <h2>Evidence</h2>
     <div id="signalsBody"></div>
   </div>
 
@@ -767,6 +908,48 @@ const CONSOLE_RULES = [
 ];
 
 const AGENT_RULES = [
+  // ---- Named root causes (hoisted above every other rule) ----
+  //
+  // Two reasons these sit at the very top rather than in the Critical
+  // block at the bottom:
+  //
+  // 1. Correctness. Continuation lines are stitched onto whatever
+  //    entry came before them, so when a service restarts mid-file the
+  //    new process's un-timestamped Spring banner lands on the tail of
+  //    the previous entry. On a real 17-hour log that handed exactly
+  //    one crash entry to the 'Spring Boot banner' noise rule, which
+  //    silently dropped it from the count. A hoisted, unambiguous
+  //    signature can't be stolen by a rule that matched glued-on text.
+  //
+  // 2. Cost. These signatures arrive on the largest entries in a log —
+  //    a stitched Java stack runs 2-45 KB — and matching them first
+  //    means those entries never walk the other ~50 patterns.
+  //
+  // Each names the FIX, not just the symptom. `fix` is what a junior
+  // analyst acts on; `note` is the supporting detail.
+  { name: 'Database is read-only, so every write fails',
+    match: /because the database is read-only/i,
+    severity: 'crit',
+    // The agent logs this failure TWICE per event (see note). Count the
+    // 'Script FAILED' half rather than assuming a fixed ratio — that way
+    // the number is right even if only one of the pair is present.
+    eventMatch: /Script FAILED to execute/,
+    detailFrom: /Failed to update database "([^"]+)"/,
+    fix: 'Take the database out of read-only: <code>ALTER DATABASE [name] SET READ_WRITE WITH ROLLBACK IMMEDIATE;</code> &mdash; or in SSMS, <strong>Database Properties &rarr; Options &rarr; Database Read-Only = False</strong>. RapidReconciler writes to every database it manages (refresh state, system variables, load history), so nothing it does against this database can succeed until you change this. A database usually ends up read-only after a restore, or after someone sets it that way for maintenance and doesn&rsquo;t set it back.',
+    note: 'The agent writes <strong>two</strong> log lines for each failed statement &mdash; <code>Script FAILED to execute</code> and <code>SQLException when running script</code> &mdash; so the raw line count is double the number of failures. The count above is <strong>events</strong>. Expand the sample to see the statement the agent tried to run; it names the table.' },
+
+  { name: 'Refresh job name is not set, so the agent crashes on every sync',
+    match: /Could not interpret JMS message[\s\S]{0,400}?NullPointerException[\s\S]{0,400}?synchronizeInstances/i,
+    severity: 'crit',
+    fix: 'Open the client in VALC, edit the instance for this database, and set the <strong>refresh job name</strong> to the SQL Agent job that runs its refresh. The field is empty on one of the instances. To find which one, search the log for <code>databaseJobName=null</code> &mdash; the same line names the database next to it.',
+    note: 'VALC sends the agent one record per database. When the refresh job name on that record is empty, the agent throws a <code>NullPointerException</code> comparing it against the stored value, and abandons the whole sync message &mdash; including the instructions for the databases that <em>are</em> configured correctly. Two knock-on effects worth knowing: the agent also writes the literal four-character string <code>&#39;null&#39;</code> into the refresh-job-name system variable, and because that can never equal an empty value, it retries the write on every scheduler tick forever. If this log also shows a read-only failure, that retry is what keeps triggering it.' },
+
+  { name: 'Timed out logging in to SQL Server',
+    match: /\bLogin timed out\b/i,
+    severity: 'flag',
+    fix: 'Check that the SQL Server named on the instance record is reachable from the agent host and accepting connections &mdash; the service is running, the port is open through the firewall, and the instance isn&rsquo;t saturated. A single occurrence that doesn&rsquo;t repeat is a transient blip and needs no action; a cluster of them is a real connectivity or capacity problem.',
+    note: 'The agent reached the network but the SQL Server login never completed inside the driver timeout. This is distinct from a refused connection (nothing listening) and from a rejected credential (wrong password) &mdash; the server was there and simply too slow to answer. Check the timestamp against the customer&rsquo;s backup or maintenance window.' },
+
   // ---- Healthy signals (matched first; order matters) ----
   { name: 'Heartbeat',
     match: /\bINFO\b.*Sending heartbeat/i, severity: 'good' },
@@ -796,11 +979,21 @@ const AGENT_RULES = [
   { name: 'Environment confirmed at startup',
     match: /\bThe following \d+ profile(?:s)? (?:is|are) active:\s*(\S+)/i, severity: 'good',
     note: 'The agent logged which environment it&rsquo;s connecting to. <code>default</code> or <code>ssl-staging</code> means the staging VALC; <code>ssl</code> means production VALC. Confirm this matches the environment the customer expected before going deeper into the log.' },
+  // The `.{0,120}?` bounds below (and on 'Downloaded file looks
+  // corrupted') replaced unbounded `.*?`. Two reasons, one measured and
+  // one behavioural. Measured: on a real 17-hour log these were the two
+  // most expensive patterns in the whole ruleset, because a lazy `.*?`
+  // rescans the tail of every multi-KB stitched stack from each starting
+  // position. Behavioural: unbounded, they fire whenever both tokens
+  // appear ANYWHERE in an entry — so a 40 KB stack containing the word
+  // "file" near the top and "corrupt" near the bottom read as a corrupt
+  // download. Both tokens always sit inside one log message, well under
+  // 120 characters apart, so nothing real stops matching.
   { name: 'Downloaded file checks out',
-    match: /\b(?:File integrity|SHA-?1).*?(?:OK|passed|verified|matches)\b/i, severity: 'good',
+    match: /\b(?:File integrity|SHA-?1).{0,120}?(?:OK|passed|verified|matches)\b/i, severity: 'good',
     note: 'Agent received a new program file from VALC and confirmed it wasn&rsquo;t corrupted during transfer. Normal step in a successful update.' },
   { name: 'Agent finished updating itself',
-    match: /\bSelf.?update\b.*?(?:successful|completed|finished|done)\b/i, severity: 'good',
+    match: /\bSelf.?update\b.{0,120}?(?:successful|completed|finished|done)\b/i, severity: 'good',
     note: 'The agent received and applied an update to its own program. Look for an Agent application started line nearby &mdash; that confirms the new version came back up.' },
 
   // ---- Benign noise ----
@@ -897,11 +1090,11 @@ const AGENT_RULES = [
     match: /No subject alternative names? (?:matching|present)|HostnameVerifier.*?failed/i, severity: 'crit',
     note: 'VALC&rsquo;s certificate doesn&rsquo;t list the hostname the agent connected to. Either the agent is pointed at the wrong VALC address (check the active environment line earlier in the log) or VALC&rsquo;s cert was reissued without including this hostname. Either way, escalate to engineering.' },
   { name: 'Downloaded file looks corrupted',
-    match: /(?:SHA-?1.*?mismatch|integrity.*?fail|checksum.*?fail|file.*?corrupt)/i, severity: 'crit',
+    match: /(?:SHA-?1.{0,120}?mismatch|integrity.{0,120}?fail|checksum.{0,120}?fail|file.{0,120}?corrupt)/i, severity: 'crit',
     note: 'A file VALC sent arrived at the agent but didn&rsquo;t match the expected checksum &mdash; either the transfer was interrupted or the copy on VALC is stale. The agent normally deletes the bad copy and re-requests; if you see this repeatedly for the same file, VALC has a bad copy and engineering needs to re-upload.' },
   { name: "VALC sent an update for something the agent doesn't have yet",
     match: /ValcMessageListener.*Could not interpret JMS message/i, severity: 'flag',
-    note: 'VALC sent an instruction referencing a record (a user, tab name, etc.) the agent&rsquo;s local database doesn&rsquo;t have yet. Usually a timing issue &mdash; VALC created the record but the create-sync to this agent hasn&rsquo;t happened. Most of the time the next sync resolves it. Concerning if you see the same message repeat for more than a few minutes after a deploy.' },
+    note: 'VALC sent an instruction referencing a record (a user, tab name, etc.) the agent&rsquo;s local database doesn&rsquo;t have yet. Usually a timing issue &mdash; VALC created the record but the create-sync to this agent hasn&rsquo;t happened. Most of the time the next sync resolves it. Concerning if you see the same message repeat for more than a few minutes after a deploy. <strong>Note:</strong> this heading only covers messages with no more specific cause. The same log text also appears when a required field is empty on the instance record &mdash; those are reported separately as <em>Refresh job name is not set</em>, so if you are reading this row, that is not what happened.' },
   { name: 'Database sync script returned the wrong row count',
     match: /DatabaseManagerServiceMsSqlImpl.*Script FAILED to execute.*Incorrect result size/i, severity: 'flag',
     note: 'The agent ran a sync script against the customer&rsquo;s SQL Server and got a different number of rows than expected (usually 0 rows when expecting 1). Same root cause as "VALC sent an update for something the agent doesn&rsquo;t have yet" &mdash; just visible from the database side instead of the JMS side. Self-corrects on the next successful sync. Investigate if persistent.' },
@@ -930,6 +1123,8 @@ const verdictEl      = document.getElementById('verdict');
 const verdictPill    = document.getElementById('verdictPill');
 const verdictTitle   = document.getElementById('verdictTitle');
 const verdictSummary = document.getElementById('verdictSummary');
+const findingsEl     = document.getElementById('findings');
+const findingsBody   = document.getElementById('findingsBody');
 const signalsSection = document.getElementById('signalsSection');
 const signalsBody    = document.getElementById('signalsBody');
 const noiseSection   = document.getElementById('noiseSection');
@@ -973,44 +1168,127 @@ function normalizeForGrouping(line) {
     .trim();
 }
 
+// Clock time an entry was logged, for the per-group span. Agent entries
+// open with a full timestamp; browser console output has none, so this
+// returns null there and the span is simply omitted.
+function entryTime(line) {
+  const m = /^\d{4}-\d{2}-\d{2}[ T](\d{2}:\d{2}:\d{2})/.exec(line);
+  return m ? m[1] : null;
+}
+
+// Heading for a group that had no named rule. The normalized key still
+// carries the log boilerplate — `<ts> ERROR <pid> --- [thread] logger :`
+// — and slicing the first 100 characters off THAT showed the operator
+// nothing but the boilerplate. Two unrelated errors from the same class
+// produced two rows with identical visible headings. Strip the prefix so
+// the heading is the message, and keep the logger as a trailing tag,
+// which is what you quote when you escalate.
+const LOG_PREFIX = /^<ts>\s+(?:INFO|WARN|ERROR|DEBUG|TRACE)\s+<pid>\s+---\s+\[[^\]]*\]\s+(\S+)\s*:\s*/;
+function subBucketLabel(prefix, norm) {
+  const m = LOG_PREFIX.exec(norm);
+  const body = (m ? norm.slice(m[0].length) : norm).trim() || norm;
+  const head = body.slice(0, 110) + (body.length > 110 ? '…' : '');
+  return prefix + ': ' + head + (m ? '  [' + m[1] + ']' : '');
+}
+
 function escapeHtml(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
     ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' })[c]);
 }
 
-// Cap how many sample lines each group renders by default. For
-// matched-rule buckets and normalized sub-buckets, every additional
-// sample past the first is the same content with a different
-// timestamp — so showing 1 by default keeps the page scannable and
-// lets the operator expand the rest with one click if they want
-// timing detail. The DOM cost was the original reason to cap at
-// all — a group with 500 matched lines used to emit 500 <pre>
-// nodes; this version emits 1 + a "Show N more" expander.
+// How many sample entries each group renders before the expander.
+// Every sample past the first is the same content with a different
+// timestamp, so one is enough to recognise the condition.
 const SAMPLE_CAP = 1;
 
-function renderGroup(rule, items, severity) {
+// Hard ceiling on how many MORE entries the expander renders. Without
+// it, a group holding every routine INFO line in a day-long log emits
+// one <pre> per entry — on a real 19.9 MB / 128,000-line log that was
+// ~17,900 <pre> nodes built as a single ~20 MB innerHTML string, all
+// of it inside collapsed <details> the operator never opens. Nobody
+// reads occurrence 900 of 7,697. The COUNT stays exact; only the
+// sample list is capped, and the group says so.
+const TAIL_CAP = 25;
+
+// Keep this many stack frames per exception block. A stitched Java
+// stack is 30-45 frames of framework internals; the frames that name
+// the failing code are the first few, and a Caused by: chain restarts
+// the count so each cause keeps its own head.
+const FRAMES_KEPT = 3;
+
+function trimStack(text) {
+  const rows = text.split('\n');
+  const out = [];
+  let frames = 0, dropped = 0;
+  for (const row of rows) {
+    if (/^\s*at\s/.test(row)) {
+      if (++frames <= FRAMES_KEPT) out.push(row); else dropped++;
+    } else {
+      frames = 0;
+      out.push(row);
+    }
+  }
+  if (dropped) out.push('    … ' + dropped + ' more stack frame' + (dropped === 1 ? '' : 's'));
+  return out.join('\n');
+}
+
+// Number of real-world occurrences in a group. Some conditions make the
+// agent log the same failure more than once (see the read-only rule),
+// so counting raw entries overstates them by a multiple. When a rule
+// declares which half of the pair is the canonical one, count that.
+function eventCount(rule, items) {
+  if (!rule.eventMatch) return items.length;
+  let n = 0;
+  for (const it of items) if (rule.eventMatch.test(it.line)) n++;
+  return n || items.length;
+}
+
+function countLabel(rule, items) {
+  const events = eventCount(rule, items);
+  const n = events.toLocaleString();
+  if (events === items.length) return n;
+  return `${n} events`;
+}
+
+function renderGroup(group, severity) {
+  const rule  = group.rule;
+  const items = group.items;
   const sev = severity || rule.severity;
   const note = rule.note ? `<div style="font-size:13px;color:var(--text-soft);padding:0 18px 8px;">${rule.note}</div>` : '';
   const runbook = rule.runbook
     ? `<a class="line-runbook" href="${escapeHtml(rule.runbook)}" target="_blank">Open runbook &rarr;</a>`
     : '';
 
-  const total = items.length;
-  const head  = items.slice(0, SAMPLE_CAP);
-  const tail  = items.slice(SAMPLE_CAP);
-  const headHtml = head.map(it =>
-    `<pre class="${escapeHtml(sev)}">${escapeHtml(it.line.trim())}</pre>`
-  ).join('');
+  const total  = items.length;
+  const events = eventCount(rule, items);
+  const span = group.first
+    ? `<span class="line-group-span">${escapeHtml(group.first)}&ndash;${escapeHtml(group.last)}</span>`
+    : '';
+
+  const head = items.slice(0, SAMPLE_CAP);
+  const tail = items.slice(SAMPLE_CAP);
+  const asPre = it =>
+    `<pre class="${escapeHtml(sev)}">${escapeHtml(trimStack(it.line.trim()))}</pre>`;
+  const headHtml = head.map(asPre).join('');
+
   let restBlock = '';
   if (tail.length) {
-    const tailHtml = tail.map(it =>
-      `<pre class="${escapeHtml(sev)}">${escapeHtml(it.line.trim())}</pre>`
-    ).join('');
+    const shown = tail.slice(0, TAIL_CAP);
+    const capped = tail.length > shown.length
+      ? `<div class="line-group-capped">Showing ${shown.length} of ${tail.length.toLocaleString()} further occurrences. The count above is complete &mdash; the sample list is trimmed so the page stays responsive.</div>`
+      : '';
     restBlock =
       `<details class="line-group-more"><summary>` +
-      `Show ${tail.length} more occurrence${tail.length === 1 ? '' : 's'}` +
-      `</summary>${tailHtml}</details>`;
+      `Show ${Math.min(tail.length, TAIL_CAP)} more occurrence${shown.length === 1 ? '' : 's'}` +
+      `</summary>${shown.map(asPre).join('')}${capped}</details>`;
   }
+
+  // When one event costs two log entries, say so rather than leaving
+  // the operator to wonder why the badge and the sample count disagree.
+  const pairNote = events !== total
+    ? `<div class="line-group-capped">${events.toLocaleString()} events &middot; ${total.toLocaleString()} log entries (this condition logs more than once per occurrence).</div>`
+    : '';
+
   return `
     <details class="line-group" ${sev !== 'noise' ? 'open' : ''}>
       <summary>
@@ -1018,15 +1296,47 @@ function renderGroup(rule, items, severity) {
         <span class="line-group-pill ${escapeHtml(sev)}">${escapeHtml(sev)}</span>
         <span>${escapeHtml(rule.name)}</span>
         ${runbook}
-        <span class="line-group-count">${total}</span>
+        <span class="line-group-right">
+          ${span}
+          <span class="line-group-count">${countLabel(rule, items)}</span>
+        </span>
       </summary>
       ${note}
-      <div class="line-list">${headHtml}${restBlock}</div>
+      <div class="line-list">${pairNote}${headHtml}${restBlock}</div>
     </details>`;
+}
+
+/* -------------------------------------------------------------
+   Findings — the block a junior analyst actually reads. One row
+   per distinct condition, severity-ordered, each carrying its own
+   count, its own time span, and its fix. Everything below it is
+   evidence for these rows.
+   ------------------------------------------------------------- */
+function renderFindings(groups) {
+  const rows = groups.map((g, i) => {
+    const rule = g.rule;
+    const events = eventCount(rule, g.items);
+    const times = events.toLocaleString() + (events === 1 ? ' time' : ' times');
+    const span = g.first ? ` &middot; ${escapeHtml(g.first)} to ${escapeHtml(g.last)}` : '';
+    const detail = g.detail ? ` <span class="finding-detail">${escapeHtml(g.detail)}</span>` : '';
+    const fix = rule.fix
+      ? `<div class="finding-fix"><strong>Fix</strong>${rule.fix}</div>`
+      : `<div class="finding-fix">No known fix on file for this pattern. Capture the sample below plus the surrounding 10&ndash;20 entries and email <code>rrsupport@getgsi.com</code>.</div>`;
+    return `<li class="finding ${escapeHtml(rule.severity)}">
+        <div class="finding-head">
+          <span class="finding-n">${i + 1}</span>
+          <span class="finding-name">${escapeHtml(rule.name)}</span>${detail}
+          <span class="finding-meta">${times}${span}</span>
+        </div>
+        ${fix}
+      </li>`;
+  }).join('');
+  return `<ol class="findings-list">${rows}</ol>`;
 }
 
 function resetOutput() {
   verdictEl.classList.remove('active', 'ok', 'warn', 'crit');
+  findingsEl.classList.remove('active');
   signalsSection.classList.remove('active');
   noiseSection.classList.remove('active');
   outputContext.textContent = '';
@@ -1109,9 +1419,8 @@ function analyze(mode) {
     if (SUB_BUCKET_RULES.has(rule.name)) {
       const norm = normalizeForGrouping(line);
       key = rule.name + '::' + norm;
-      const prefix = SUB_BUCKET_PREFIX[rule.name];
       useRule = {
-        name: prefix + ': ' + norm.slice(0, 100) + (norm.length > 100 ? '…' : ''),
+        name: subBucketLabel(SUB_BUCKET_PREFIX[rule.name], norm),
         severity: rule.severity,
         note: rule.note
       };
@@ -1119,8 +1428,26 @@ function analyze(mode) {
       key = rule.name;
       useRule = rule;
     }
-    if (!buckets.has(key)) buckets.set(key, { rule: useRule, items: [] });
-    buckets.get(key).items.push({ line });
+    if (!buckets.has(key)) buckets.set(key, { rule: useRule, items: [], first: null, last: null, detail: null });
+    const bucket = buckets.get(key);
+    bucket.items.push({ line });
+
+    // First-seen / last-seen. Entries arrive in file order, so the first
+    // one to land in a bucket is the earliest and the last one wins for
+    // `last`.
+    const stamp = entryTime(line);
+    if (stamp) {
+      if (!bucket.first) bucket.first = stamp;
+      bucket.last = stamp;
+    }
+
+    // Pull the one piece of runtime detail that turns a generic heading
+    // into an actionable one (which database, which object). Runtime
+    // only — it comes from the operator's own file and is never stored.
+    if (!bucket.detail && rule.detailFrom) {
+      const m = rule.detailFrom.exec(line);
+      if (m) bucket.detail = m[1];
+    }
   }
 
   // Sort: crit first, flag, good, noise
@@ -1134,54 +1461,66 @@ function analyze(mode) {
   const goodGroups  = groups.filter(g => g.rule.severity === 'good');
   const noiseGroups = groups.filter(g => g.rule.severity === 'noise');
 
-  // Verdict
+  // ---- Verdict ----
+  //
+  // The headline counts DISTINCT PROBLEMS, not lines. A day-long agent
+  // log can carry 5,516 concerning entries that collapse to two things
+  // to fix; "5,516 critical signals detected" told the operator to go
+  // read 5,516 lines, which is the opposite of what the number means.
   const totalLines = lines.length;
+  const critGroups = sigGroups.filter(g => g.rule.severity === 'crit');
   const sigLines = sigGroups.reduce((n, g) => n + g.items.length, 0);
-  const critCount = sigGroups.filter(g => g.rule.severity === 'crit').reduce((n, g) => n + g.items.length, 0);
 
   verdictEl.classList.remove('ok', 'warn', 'crit');
   let pillText, titleText, summaryHtml;
   const goodNote = goodGroups.length
-    ? `<li>Healthy signals detected: ${goodGroups.map(g => `<strong>${escapeHtml(g.rule.name)}</strong> (${g.items.length})`).join(', ')}.</li>`
+    ? `<li>Healthy signals detected: ${goodGroups.map(g => `<strong>${escapeHtml(g.rule.name)}</strong> (${g.items.length.toLocaleString()})`).join(', ')}.</li>`
     : '';
   const noiseTotal = noiseGroups.reduce((n, g) => n + g.items.length, 0);
   const noiseNote = noiseTotal
-    ? `<li>${noiseTotal} benign noise message${noiseTotal === 1 ? '' : 's'} suppressed below.</li>`
+    ? `<li>${noiseTotal.toLocaleString()} benign entr${noiseTotal === 1 ? 'y' : 'ies'} suppressed below.</li>`
+    : '';
+  const nProblems = sigGroups.length;
+  const scale = sigLines > nProblems
+    ? `<li>Those ${nProblems === 1 ? 'is' : 'are'} drawn from ${sigLines.toLocaleString()} log entries &mdash; the same handful of conditions repeating.</li>`
     : '';
 
-  if (critCount > 0) {
+  if (critGroups.length > 0) {
     verdictEl.classList.add('crit');
     pillText  = 'Critical';
-    titleText = `${critCount} critical signal${critCount === 1 ? '' : 's'} detected`;
-    summaryHtml = `Action required &mdash; review the lines below and follow the linked runbook(s) where present.<ul>${goodNote}${noiseNote}</ul>`;
-  } else if (sigLines > 0) {
+    titleText = `${nProblems} distinct problem${nProblems === 1 ? '' : 's'}, ${critGroups.length} needing action now`;
+    summaryHtml = `Work the list below in order. Each row is one condition with one fix.<ul>${scale}${goodNote}${noiseNote}</ul>`;
+  } else if (nProblems > 0) {
     verdictEl.classList.add('warn');
     pillText  = 'Review';
-    titleText = `${sigLines} concerning line${sigLines === 1 ? '' : 's'}`;
-    summaryHtml = `Lines below didn&rsquo;t match a known-benign pattern. Most are not show-stoppers but warrant a look.<ul>${goodNote}${noiseNote}</ul>`;
+    titleText = `${nProblems} distinct problem${nProblems === 1 ? '' : 's'} worth a look`;
+    summaryHtml = `Nothing here is a show-stopper, but none of it matched a known-benign pattern.<ul>${scale}${goodNote}${noiseNote}</ul>`;
   } else {
     verdictEl.classList.add('ok');
     pillText  = 'Looks OK';
-    titleText = `${totalLines} line${totalLines === 1 ? '' : 's'} &mdash; nothing concerning`;
-    summaryHtml = `Every line matched an expected pattern. No action needed from this paste.<ul>${goodNote}${noiseNote}</ul>`;
+    titleText = `Nothing concerning in ${totalLines.toLocaleString()} log entr${totalLines === 1 ? 'y' : 'ies'}`;
+    summaryHtml = `Every entry matched an expected pattern. No action needed from this log.<ul>${goodNote}${noiseNote}</ul>`;
   }
 
   verdictPill.textContent  = pillText;
   verdictTitle.innerHTML   = titleText;
   verdictSummary.innerHTML = summaryHtml;
   verdictEl.classList.add('active');
-  outputContext.innerHTML = `Analyzing <strong>${mode === 'agent' ? 'RR agent log' : 'browser console'}</strong> &middot; ${totalLines} line${totalLines === 1 ? '' : 's'}`;
+  outputContext.innerHTML = `Analyzing <strong>${mode === 'agent' ? 'RR agent log' : 'browser console'}</strong> &middot; ${totalLines.toLocaleString()} log entr${totalLines === 1 ? 'y' : 'ies'}`;
 
   if (sigGroups.length) {
-    signalsBody.innerHTML = sigGroups.map(g => renderGroup(g.rule, g.items)).join('');
+    findingsBody.innerHTML = renderFindings(sigGroups);
+    findingsEl.classList.add('active');
+    signalsBody.innerHTML = sigGroups.map(g => renderGroup(g)).join('');
     signalsSection.classList.add('active');
   } else {
+    findingsEl.classList.remove('active');
     signalsSection.classList.remove('active');
   }
 
   const allNoise = [...noiseGroups, ...goodGroups];
   if (allNoise.length) {
-    noiseBody.innerHTML = allNoise.map(g => renderGroup(g.rule, g.items)).join('');
+    noiseBody.innerHTML = allNoise.map(g => renderGroup(g)).join('');
     noiseSection.classList.add('active');
   } else {
     noiseSection.classList.remove('active');
@@ -1272,12 +1611,23 @@ function handleAgentFile(file) {
   const reader = new FileReader();
   reader.onload = ev => {
     agentFileText = String(ev.target.result || '');
-    agentFileMeta.innerHTML =
+    const stamp =
       '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
       '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>' +
       '<polyline points="14 2 14 8 20 8"></polyline></svg> ' +
       '<strong>' + escapeHtml(file.name) + '</strong> &middot; ' + formatBytes(file.size);
-    analyze('agent');
+    // A full-day agent log is tens of megabytes and classification is
+    // synchronous, so it blocks the UI thread for a few seconds. Paint
+    // "analyzing" first, then hand the work to the next task — otherwise
+    // the page looks frozen with no explanation.
+    agentFileMeta.innerHTML = stamp + ' &middot; <em>analyzing&hellip;</em>';
+    requestAnimationFrame(() => setTimeout(() => {
+      try {
+        analyze('agent');
+      } finally {
+        agentFileMeta.innerHTML = stamp;
+      }
+    }, 0));
   };
   reader.onerror = () => {
     agentFileMeta.innerHTML = '<span class="file-meta-empty">Could not read the file.</span>';
