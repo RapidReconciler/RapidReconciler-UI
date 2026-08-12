@@ -4,6 +4,42 @@
 
 ---
 
+## Section 0: Where DMAAI routing actually lives
+
+**Query `dbo.RAccountInstr` and `dbo.RAccountInstrExp`. These are the source of
+truth for DMAAI account routing inside RapidReconciler.** Do not answer a routing
+question from the `F4095` extract. References to F4095 elsewhere in this guide
+name the JD Edwards table and the P4095 setup screen, which is correct when you
+are talking about JDE. It is not where you look when you are measuring what
+RapidReconciler resolved.
+
+**The two tables split by side, so reading one and concluding is wrong.**
+
+| Table | Side | Example |
+|---|---|---|
+| `RAccountInstr` | inventory | 4240 |
+| `RAccountInstrExp` | expense | 4220 |
+
+Measured on `RapidReconciler_Demo3`, 2026-08-12: `RAccountInstr` holds **zero**
+rows for DMAAI 4220, while `RAccountInstrExp` holds 113 for company 30001 and 104
+for 30002. A net-zero pairing question such as "do 4220 and 4240 resolve to the
+same account" therefore spans both tables. Read only the inventory table and 4220
+looks unconfigured when it is simply on the other side, which is the same trap as
+Section 5's load gap: absent from the table you queried is not absent from the
+configuration.
+
+Both tables share a column shape. Match on `TableNumber` (the DMAAI number),
+`CompanyNumber`, `OrderType`, `DocType` and `GLClass`, taking the exact GL class
+first and the wildcard second. The account is in `LongAccount`, with
+`BusinessUnit`, `ObjectAccount` and `SubAccount` carrying the parts.
+`RAccountInstr` also has `CostType`, `flexbu` and `flexsub`.
+
+Note the column names differ from JDE's. F4095 uses the originals (`mlanum`,
+`mlco`, `mldcto`, `mldct`, `mlglpt`, `mlcost`, `mlmcu`, `mlobj`, `mlsub`), so a
+query written for one will not run against the other.
+
+---
+
 ## Section 1: Using Claude for Automated Analysis
 
 Claude can perform a full DMAAI Entry Integrity analysis automatically and return an updated `.xlsx` workbook with the analysis written to a card-layout sheet, the source sheet equipped with AutoFilter and freeze panes, and each finding categorized by priority. This eliminates manual annotation and ensures consistent output across analysts.

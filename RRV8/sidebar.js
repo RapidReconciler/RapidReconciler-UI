@@ -1995,13 +1995,34 @@ ${adminSection}
                 ? err.status : null;
     var ep  = String(area == null ? '' : area).replace(/^\/+/, '') || 'this request';
 
-    // 401 — the token failed parse or verify. 403 — no Authorization header
-    // reached the service at all. Both are the same problem for the reader and
-    // have the same remedy, so they share one sentence. API.md is NOT the
-    // pointer here; the session is.
-    if (st === 401 || st === 403) {
-      return 'Your session is not authenticated for this database. ' +
-             'Sign out and sign in again, then retry. (HTTP ' + st + ')';
+    // 401 and 403 ARE NOT THE SAME PROBLEM, and merging them cost real time.
+    // They used to share one sentence ending "sign out and sign in again" on the
+    // reasoning that the reader's remedy was identical. It is not, and the
+    // agent's own filter is unambiguous about why (JwtAuthFilter.doFilterInternal):
+    //   - A token that was SENT but failed parse/verify returns 401, with an
+    //     "Invalid token" body. Signing in again genuinely replaces it.
+    //   - A request with NO `Authorization: Bearer` header is passed straight
+    //     through unauthenticated, and the security chain's
+    //     `.anyRequest().authenticated()` turns it into 403. Nothing about the
+    //     stored token was even examined.
+    // So 403 means the page HAD NO TOKEN TO SEND. Telling that reader to sign in
+    // again sends them round a loop that cannot terminate — signing in stores a
+    // token for the ORIGIN they are on, so if they are on a different address
+    // than the one they signed in on (127.0.0.1 vs localhost is the usual
+    // culprit, since browser storage is per-origin), or storage is blocked, the
+    // next request carries no header either and 403s identically.
+    // Note a DB-name mismatch does NOT land here: the filter falls back to
+    // dbs[0] with a WARN and still authenticates.
+    if (st === 401) {
+      return 'Your sign-in for this database was rejected as invalid or expired. ' +
+             'Sign out and sign in again, then retry. (HTTP 401)';
+    }
+    if (st === 403) {
+      return 'This page sent no sign-in credentials with the request, so the data ' +
+             'service refused it. Check you are using the same web address you ' +
+             'signed in on, then sign out and sign in again. If it repeats, ask ' +
+             'your IT department to check whether browser storage is blocked for ' +
+             'this site. (HTTP 403)';
     }
     // 404 — the ONLY place the endpoint contract is the right pointer.
     if (st === 404) {
