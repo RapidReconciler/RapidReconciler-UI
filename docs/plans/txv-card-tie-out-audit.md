@@ -378,10 +378,10 @@ select Batch, rtrim(BatchType), convert(char(10),PeriodEnds,23), rtrim(CompanyNu
 , rtrim(DocType), rtrim(ShortAccount), DocNumber, rtrim(OrderType), BatchStatus, count(*)
 , cast(round(sum(cast(LedgerAmount as decimal(28,6)))
            - sum(cast(CardexAmount as decimal(28,6))),2) as decimal(28,2))
-from RCardexLedgerCompare where DocNumber = 501190 and rtrim(DocType) = 'IM'
+from RCardexLedgerCompare where DocNumber = 900621 and rtrim(DocType) = 'IM'
 group by Batch, rtrim(BatchType), PeriodEnds, rtrim(CompanyNumber), rtrim(DocType)
 , rtrim(ShortAccount), DocNumber, rtrim(OrderType), BatchStatus;
--- 3279924 | 0 | 2022-08-31 | 30002 | IM | 00990220 | 501190 | WO | 1 | 3 | 2359.15
+-- 3279924 | 0 | 2022-08-31 | 30002 | IM | 00990220 | 900621 | WO | 1 | 3 | 2359.15
 ```
 
 One row at the reconcile grain, `BatchStatus = 1`, net **+$2,359.15**. It
@@ -391,7 +391,7 @@ appears nowhere in `RCardexLedgerCompare2`, under any `recstatus`:
 
 ```sql
 select count(*), recstatus from RCardexLedgerCompare2
-where DocNumber = 501190 and rtrim(DocType) = 'IM' group by recstatus;   -- no rows
+where DocNumber = 900621 and rtrim(DocType) = 'IM' group by recstatus;   -- no rows
 select count(*), recstatus from RCardexLedgerCompare2
 where Batch = 3279924 group by recstatus;                                -- no rows
 ```
@@ -453,7 +453,7 @@ and rtrim(upper(DocType)) in ('IM','IC','IH') order by 8;
 ```
 
 Demo3 only. 9 rows, all company 30002, all `WO`/`IM`, all cardex 0.00,
-total -$93,815.51. Largest is DocNumber 441322, 2022-10-31,
+total -$93,815.51. Largest is DocNumber 900620, 2022-10-31,
 -$54,170.89. Demo1 and Demo2 return zero rows.
 
 **Not a double count.** The `?card=` filter uses `code()`

@@ -81,7 +81,7 @@ the set:
 - **317 of 336** groups sit one month apart, which is what a period-end straddle looks like. The
   rest run 2, 3, 6, 8 and 9 months apart. A nine-month gap is not a cut-off, so the card now says
   that rather than telling the analyst every row on it is timing.
-- Worked specimen: document 2098343, type II, account 00237437. G/L 974.55 in December, cardex
+- Worked specimen: document 9000502, type II, account 00990230. G/L 974.55 in December, cardex
   974.55 in January, netting to zero across the two.
 
 The two corrections to the card copy stand: no date is read anywhere in the claim, and the

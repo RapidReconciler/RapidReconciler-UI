@@ -32,7 +32,7 @@ every fully-reconciled period**. I fixed the four clear-cut problems tonight
 
 ## The data (Dev ground truth)
 
-Two companies every period: **00010 (USD)**, **00050 (GBP)**. Latest/open period =
+Two companies every period: **00900 (USD)**, **00050 (GBP)**. Latest/open period =
 **2016-08-27**; the other 12 are closed. `breaks = 0` everywhere (no GL OK / Var OK
 breaks), and **Cardex / Unposted GL batches / End of Day are zero in every
 period** — so the Analyst tier and the red "needs attention" state never appear in
@@ -43,17 +43,17 @@ Material net out-of-balances (abs > 1):
 | Period | Co | Net | Largest driver | Note |
 |---|---|---|---|---|
 | 2015-10-31 | 00050 GBP | -47.68 | Manual entries (-2,995 vs +2,947) | trivial |
-| 2015-11-28 | 00010 USD | -29,245.59 | Manual entries (-68,172 vs +38,926) | rolls fwd, cleared Dec |
+| 2015-11-28 | 00900 USD | -29,245.59 | Manual entries (-68,172 vs +38,926) | rolls fwd, cleared Dec |
 | 2016-02-27 | 00050 GBP | 2,310.03 | Transactions (+2,310) | rolls into Apr 2 |
 | 2016-04-02 | 00050 GBP | 9,163.95 | Transactions (+6,854; carry +2,310) | the screenshot |
-| 2016-04-02 | 00010 USD | -739.73 | Manual entries (-151,866 vs +151,127) | residual of offset |
-| 2016-04-30 | 00010 USD | -101.16 | Transactions (+75,339 vs -74,701) | trivial residual |
+| 2016-04-02 | 00900 USD | -739.73 | Manual entries (-151,866 vs +151,127) | residual of offset |
+| 2016-04-30 | 00900 USD | -101.16 | Transactions (+75,339 vs -74,701) | trivial residual |
 | 2016-07-02 | 00050 GBP | -93.87 | Manual entries (-748 vs +654) | trivial |
 | 2016-07-30 | 00050 GBP | -18,674.74 | Manual entries (-18,843) | rolls into open period |
 | 2016-08-27 | 00050 GBP | -18,521.83 | **Carry forward (-18,675)** | **open — traces to Jul 30 JE** |
-| 2016-08-27 | 00010 USD | -3,881.41 | Manual entries (-3,448) | open |
+| 2016-08-27 | 00900 USD | -3,881.41 | Manual entries (-3,448) | open |
 
-**Key structural truth the AI mostly misses:** Co 00010 reconciles to **$0.04**
+**Key structural truth the AI mostly misses:** Co 00900 reconciles to **$0.04**
 almost every period because Transactions and Manual entries are huge (±$70K–150K)
 but mirror each other to the penny. Citing those components is meaningless when the
 net is pennies. And the imbalances form a **chain**: a period's net becomes the next
@@ -161,7 +161,7 @@ All in `RRV8/home.html`; live-verified by reloading and replaying.
 
 3. **Prompt tightened for concision + no double attribution + no closed-period
    repetition.** Points went from **40–60 words → 13–23 words**; verdicts ~18.
-   Example (Apr 30 historical): *before* a 60-word point → *after* "Co 00010 carry
+   Example (Apr 30 historical): *before* a 60-word point → *after* "Co 00900 carry
    forward of ~$740 originated in the Apr 2 period from unresolved transactions —
    Accountant."
 
@@ -216,14 +216,14 @@ you do the admin card tomorrow.
 **Apr 2, 2016 (the screenshot period)**
 - *Before:* verdict adds components ("~£2K carry forward combined with ~£7K
   transactions produced ~£9K"); 2 points incl. "Service is healthy … — Admin";
-  Co 00010 point ~40 words.
+  Co 00900 point ~40 words.
 - *After:* `"Co 00050's ~£9K out-of-balance is driven by transactions; the
   Accountant should likely clear or journal it this period."` (18 words) + one
-  13-word Co 00010 point, no service line, no arithmetic.
+  13-word Co 00900 point, no service line, no arithmetic.
 
 **Apr 30, 2016 (worst verbosity)**
 - *Before:* a single 60-word point tracing the $740 carry forward + a service line.
-- *After:* `"Co 00010 carry forward of ~$740 originated in the Apr 2 period from
+- *After:* `"Co 00900 carry forward of ~$740 originated in the Apr 2 period from
   unresolved transactions — Accountant."` (17 words). *(Residual: the verdict still
   said "offset them this period" on a closed period — fixed only by P1 temperature.)*
 

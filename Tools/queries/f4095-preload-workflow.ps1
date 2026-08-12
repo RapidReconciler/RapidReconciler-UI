@@ -146,7 +146,7 @@ try {
   $ws.Name = 'JDE Data'
   $range = $ws.Range($ws.Cells.Item(1, 1), $ws.Cells.Item($rowCount + 1, $colCount))
   # Force every column to Text format before writing so account-shaped
-  # strings (e.g. "1000000.142000") don't get auto-converted to numbers
+  # strings (e.g. "8800100.142000") don't get auto-converted to numbers
   # by Excel's Value2 setter -- same trick as transaction-detail-workflow.ps1.
   $range.NumberFormat = '@'
   $range.Value2 = $data
