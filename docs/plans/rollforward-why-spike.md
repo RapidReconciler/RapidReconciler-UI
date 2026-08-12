@@ -18,19 +18,19 @@ nearby number (69,307.75) that a naive AI would grab and be wrong.
 |---|---|
 | Database | `RapidReconciler_Demo3` (Golden Harvest / former TR / Demo3 lineage) |
 | Company | 30001 |
-| Account | `B000022.1121` (short account `01013781`, object 1121, BU B000022) |
+| Account | `B009902.1121` (short account `00990210`, object 1121, BU B009902) |
 | Report table | `raccountsummary` (built by `usp6_009_account_summary`; rebuilt by `usp8_rebuild_gl_rollforward`) |
 | UI view / card | `v6ui_raccountsummary`, columns `GLOK` (roll status), `BegGL`, `PerGL`, `EndGL` |
 | Broken row | period ending 2022-06-30, `glrollok = 'no'` |
 
 Co 30001 exists only in Demo3 (85 summary rows). Demo1/Demo2 have none.
-Only one account in Co 30001 breaks in Jun 2022: `B000022.1121`. The whole
+Only one account in Co 30001 breaks in Jun 2022: `B009902.1121`. The whole
 -68,972.11 sits on that one account — no split.
 
 ## 2. The arithmetic of -68,972.11
 
 `glrollok` is a pure GL-continuity check: does *prior period ending GL* equal
-*this period beginning GL*? For `B000022.1121`:
+*this period beginning GL*? For `B009902.1121`:
 
 | Period | BegGL (F0902 cum) | PerGL (F0911 activity) | EndGL = Beg+Per-Unposted | glrollok |
 |---|---:|---:|---:|---|
@@ -146,7 +146,7 @@ per `feedback_scope_rides_in_request_for_aggregated`):**
 
 ## 7. Top cause for THIS instance
 
-**F0902 (Account Balances) for account `B000022.1121`, May 2022, understates the
+**F0902 (Account Balances) for account `B009902.1121`, May 2022, understates the
 posted F0911 (Account Ledger) detail by exactly 68,972.11.** Balances-vs-detail
 integrity gap in the JDE source. All May detail is posted; every adjacent period
 reconciles to the penny; no offsetting period exists. Not an RR roll-state

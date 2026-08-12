@@ -1624,12 +1624,16 @@ type mean the AAI was not changed.
 **Card:** `Offsetting GL Entries` (`OFF`). **Shape:** cardex-only at document
 grain -- `CardexAmount` non-zero, `LedgerAmount` zero -- on a stock line.
 
+*Accounts, objects, business units, batches and amounts below are illustrative
+and internally consistent; the shapes are JDE's, the values are not a customer's.
+The counts are one specimen database's measurements, not a rule.*
+
 **What the GL actually did.** The document posted. `F0911` holds exactly two legs
 for it, equal and opposite, both in the same posted batch as the item ledger, and
 neither on the inventory account the cardex used. A specimen: cardex relieved
--8,651.99 on inventory account `00223976`; the GL wrote +8,651.99 to object
-`510415` and -8,651.99 to object `512498`, both in business unit `9999842`, both
-posted, batch `12862772`, both explained "Inventory transaction".
+-9,400.00 on inventory account `00990070`; the GL wrote +9,400.00 to object
+`601000` and -9,400.00 to object `602000`, both in business unit `8800100`, both
+posted, batch `99000100`, both explained "Inventory transaction".
 
 **`LedgerAmount = 0` here does not mean the GL entry is missing.** It means the GL
 wrote a self-cancelling pair somewhere else and never touched inventory. "Go post
@@ -1649,8 +1653,8 @@ on the document:
 
 | Order type family | 4220 object | 4240 object | GL classes routed to an inventory account |
 |---|---|---|---|
-| `C2` `C3` `C5` `C6` `C7` `CO` `CR` `CW` | `510415` COGS | `512498` COGS | **0 of 28, on either table** |
-| `S2` `S3` `S5` `S6` `S7` `S8` `S9` `SE` | `524996` COGS | inventory objects per class | **22 of 28 on 4240** |
+| `C2` `C3` `C5` `C6` `C7` `CO` `CR` `CW` | `601000` COGS | `602000` COGS | **0 of 28, on either table** |
+| `S2` `S3` `S5` `S6` `S7` `S8` `S9` `SE` | `603000` COGS | inventory objects per class | **22 of 28 on 4240** |
 
 Both families are on the same company, in the same table, refreshed by the same
 job. The `S` family is the working template; the `C` family routes every one of
@@ -1659,7 +1663,7 @@ its 28 GL classes to a P&L account on both legs.
 **The published test for this is too narrow, and it passes here.** The DMAAI
 reference says 4220 "must point to a different account than 4240" and warns that
 pointing both at one account makes the debit and credit cancel. On this company
-they point at *different* accounts -- `510415` and `512498` -- so that test
+they point at *different* accounts -- `601000` and `602000` -- so that test
 passes, and the entry still cancels off inventory. **The test is not "are they
 different", it is "does one of them reach an inventory account".** Two different
 COGS accounts fail just as completely as one shared account, and they fail

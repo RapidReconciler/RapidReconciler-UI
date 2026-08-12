@@ -172,7 +172,7 @@ This is the important one, and the headline number is a trap.
 
 The Mfg cardex-only cluster is 523 rows and 11.18M abs, which is 97% of Demo3's
 entire residual. Almost all of it (471 rows, 11.07M) is `IC / WO / batchtype 0`,
-sitting on one account (`01013781`, object 1121). CNJ does not claim these
+sitting on one account (`00990210`, object 1121). CNJ does not claim these
 because a GL completion (`IC`) does exist for each WO. So the shape looked like
 "completion posted to a different account."
 

@@ -381,7 +381,7 @@ select Batch, rtrim(BatchType), convert(char(10),PeriodEnds,23), rtrim(CompanyNu
 from RCardexLedgerCompare where DocNumber = 501190 and rtrim(DocType) = 'IM'
 group by Batch, rtrim(BatchType), PeriodEnds, rtrim(CompanyNumber), rtrim(DocType)
 , rtrim(ShortAccount), DocNumber, rtrim(OrderType), BatchStatus;
--- 3279924 | 0 | 2022-08-31 | 30002 | IM | 02005522 | 501190 | WO | 1 | 3 | 2359.15
+-- 3279924 | 0 | 2022-08-31 | 30002 | IM | 00990220 | 501190 | WO | 1 | 3 | 2359.15
 ```
 
 One row at the reconcile grain, `BatchStatus = 1`, net **+$2,359.15**. It

@@ -157,7 +157,7 @@ comparing a transaction's `iluncs` to today's `F4105` proves nothing. **Order `F
 the cost changes.** The roll journals itself in the cardex as its own row: doc type **`IB`,
 quantity 0, and `iluncs` = the cost DELTA**, not the new cost.
 
-Worked chain, item 525541 at one branch: `0.0514` → `IB` +0.0002 → `0.0516` → `IB` +5.4629
+Worked chain, item 700100 at one branch: `0.0514` → `IB` +0.0002 → `0.0516` → `IB` +5.4629
 → `5.5145` → `IB` −1.6779 → `3.8366`, which is exactly the current `F4105` value. Every step
 reconciles.
 

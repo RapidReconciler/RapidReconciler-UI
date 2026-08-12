@@ -9,6 +9,11 @@ document measures what those rows are on each of the three demo databases.
 All figures below carry the database they came from. Nothing is stated wider
 than it was measured.
 
+Account, item, document, order and batch numbers throughout are illustrative.
+They keep JDE shape and stay internally consistent across this document, but they
+are not the source values. Amounts, unit costs, ratios, counts and period spans
+are as measured, on these three databases only.
+
 ---
 
 ## 1. The population
@@ -80,13 +85,13 @@ Accounts:
 
 | ShortAccount | Rows | abs(Variance) |
 |---|---:|---:|
-| 00223917 | 199 | 7,013.02 |
-| 00223941 | 150 | 3,418.26 |
-| 00223950 | 116 | 5,747.75 |
-| 00223933 | 39 | 1,517.21 |
-| 00223925 | 20 | 97,120.26 |
-| 00223976 | 15 | 1,816.45 |
-| 00223888 | 7 | 44.05 |
+| 00990020 | 199 | 7,013.02 |
+| 00990050 | 150 | 3,418.26 |
+| 00990060 | 116 | 5,747.75 |
+| 00990040 | 39 | 1,517.21 |
+| 00990030 | 20 | 97,120.26 |
+| 00990070 | 15 | 1,816.45 |
+| 00990010 | 7 | 44.05 |
 
 ### 2.2 Demo1 ratio distribution, 473 both-leg rows
 
@@ -110,8 +115,8 @@ Both rows, in full:
 
 | Period | Account | DocType | BatchType | OrderType | Doc = Order | Batch | Cardex | GL | Variance |
 |---|---|---|---|---|---|---|---:|---:|---:|
-| 2025-03-31 | 00141245 | IM | *(blank)* | WM | 660369 | 4504318 | -1,358.07 | 0.00 | 1,358.07 |
-| 2025-03-31 | 00141245 | IM | *(blank)* | WM | 672425 | 4594938 | -578.30 | 0.00 | 578.30 |
+| 2025-03-31 | 00990110 | IM | *(blank)* | WM | 920100 | 9200010 | -1,358.07 | 0.00 | 1,358.07 |
+| 2025-03-31 | 00990110 | IM | *(blank)* | WM | 920200 | 9200020 | -578.30 | 0.00 | 578.30 |
 
 Both are cardex-only, so no ratio exists.
 
@@ -125,7 +130,7 @@ predicate written against `BatchType = '0'` would silently skip Demo2.
 - OrderType: `WO` 28, `WD` 6, `WS` 3, `WR` 2, `WT` 2. Five order types, against
   Demo1's three, and only `WO` and `WR` are common to both.
 - Periods: 2022-02-28 through 2023-05-31.
-- Accounts: `01013781` 22 rows, `02005522` 19 rows. Two accounts, against
+- Accounts: `00990210` 22 rows, `00990220` 19 rows. Two accounts, against
   Demo1's seven.
 
 Leg shape:
@@ -144,8 +149,8 @@ Materiality bands:
 | 100 to 1K | 11 | 4,720.27 |
 | over 1K | 11 | 336,185.75 |
 
-11 rows carry 98.5% of the value. The single largest is doc 513696 on
-`02005522`, cardex -168,557.35 against GL -313,443.22, variance -144,885.87.
+11 rows carry 98.5% of the value. The single largest is doc 910100 on
+`00990220`, cardex -168,557.35 against GL -313,443.22, variance -144,885.87.
 
 No ratio cluster on Demo3. The 25 both-leg rows carry 25 distinct ratios from
 0.0320 to 1.9399. Sign agrees on all 25.
@@ -156,7 +161,7 @@ different, and the value concentration is steeper.
 
 ---
 
-## 3. Account 00223925 on Demo1: resolved
+## 3. Account 00990030 on Demo1: resolved
 
 The 20 residual rows on this account carry $97,120 of the $116,677 Demo1
 residual. Thirteen of them share a ratio of exactly 0.098531. Measured against
@@ -164,19 +169,19 @@ residual. Thirteen of them share a ratio of exactly 0.098531. Measured against
 
 ### What the compare row is made of
 
-Compare row for doc 1285207 (Demo1, `RCardexLedgerCompare2`): account 00223925,
+Compare row for doc 9000101 (Demo1, `RCardexLedgerCompare2`): account 00990030,
 cardex -119.42, GL -1,212.00.
 
-`F4111` for `ildoc = 1285207`, `ildct = 'IM'`:
+`F4111` for `ildoc = 9000101`, `ildct = 'IM'`:
 
 | ilitm | iltrqt | iluncs | ilpaid |
 |---|---:|---:|---:|
-| 525541 | -200 | 0.051600 | -10.32 |
-| 525544 | -1,000 | 0.109100 | -109.10 |
+| 700100 | -200 | 0.051600 | -10.32 |
+| 700200 | -1,000 | 0.109100 | -109.10 |
 
 Sum is -119.42, matching `CardexAmount` to the penny.
 
-`F0911` for `glsbl = '01285207'`, `gldct = 'IM'`, `glaid = '00223925'`:
+`F0911` for `glsbl = '09000101'`, `gldct = 'IM'`, `glaid = '00990030'`:
 
 | glaa |
 |---:|
@@ -184,39 +189,39 @@ Sum is -119.42, matching `CardexAmount` to the penny.
 | -109.10 |
 
 Sum is -1,212.00, matching `LedgerAmount` to the penny. Note that `gldoc` for
-these rows is 10656013, not 1285207: the GL side correlates by subledger, not by
+these rows is 95000013, not 9000101: the GL side correlates by subledger, not by
 document, exactly as the manufacturing match key requires.
 
 ### The cause
 
-The 525544 leg ties exactly: -109.10 on both sides. The 525541 leg does not.
+The 700200 leg ties exactly: -109.10 on both sides. The 700100 leg does not.
 GL -1,102.90 against cardex -10.32 on the same 200-unit issue.
 
 -1,102.90 / 200 = 5.5145 per unit. Cardex used 0.0516.
 
-`F4111` holds a unit cost of **5.514500** in item 525541's own `iluncs` history
+`F4111` holds a unit cost of **5.514500** in item 700100's own `iluncs` history
 (2 rows), alongside 0.051600 (55 rows), 0.051400 (23 rows), 5.462900 (1 row),
 0.000200 (1 row) and -1.677900 (1 row). The GL is posting a cost the item
 genuinely carried at some point.
 
 Verified across the cluster. Implied quantity at 5.5145 per unit, taken from the
-large `F0911` leg on 00223925:
+large `F0911` leg on 00990030:
 
-| glsbl | glaa | glaa / -5.5145 | F4111 525541 qty |
+| glsbl | glaa | glaa / -5.5145 | F4111 700100 qty |
 |---|---:|---:|---:|
-| 01285207 | -1,102.90 | 200.0000 | -200 |
-| 01286990 | -4,963.05 | 900.0000 | -900 |
-| 01292133 | -22,058.00 | 4,000.0000 | -4,000 |
-| 01320527 | -12,131.90 | 2,200.0000 | -2,200 |
+| 09000101 | -1,102.90 | 200.0000 | -200 |
+| 09000102 | -4,963.05 | 900.0000 | -900 |
+| 09000103 | -22,058.00 | 4,000.0000 | -4,000 |
+| 09000104 | -12,131.90 | 2,200.0000 | -2,200 |
 
 Exact on every one. The other 9 signature work orders show the same 5.5145 rate
-by arithmetic on their `F0911` legs (01288130, 01289454, 01296992, 01298967,
-01303064, 01306912, 01309774, 01310837, 01316594).
+by arithmetic on their `F0911` legs (09000105, 09000106, 09000107, 09000108,
+09000109, 09000110, 09000111, 09000112, 09000113).
 
-**Finding: one item, 525541, on Demo1.** The cardex wrote it at 0.0516 per unit
+**Finding: one item, 700100, on Demo1.** The cardex wrote it at 0.0516 per unit
 and the GL journaled it at 5.5145 per unit, a factor of 106.87. Thirteen
 independent work orders, four periods, same rate every time. The second
-component on those work orders (525544) ties exactly, so this is not a
+component on those work orders (700200) ties exactly, so this is not a
 document-level or account-level problem. It is one item's cost basis.
 
 This is the exact driver `usp8_txv_flags` block H names as the usual one behind
@@ -226,25 +231,25 @@ is present in `F4111`'s own `iluncs` history.
 
 ### Corrections to the working notes
 
-- The cluster is **13 rows on 00223925**, not 10. The 10 figure counts distinct
+- The cluster is **13 rows on 00990030**, not 10. The 10 figure counts distinct
   GL amounts; 1,212.00 occurs four times.
 - **119.42 is not a unit cost.** It is the sum of two component issues
   (200 x 0.0516 plus 1,000 x 0.1091). Its resemblance to 100 x 1.1942, the
-  parent item 536665's unit cost, is a coincidence.
+  parent item 700300's unit cost, is a coincidence.
 - **1,212.00 is not a GL unit cost** either. It is 200 x 5.5145 plus
   1,000 x 0.1091.
 - The 0.098531 ratio is a **blended artifact** of one wrong leg and one correct
   leg. The real defect is a single-item rate of 106.87x. Nothing in the source
   carries a factor of 10.149 or 0.098531.
 - The population-wide `round(ratio, 4) = 0.0985` group has **17 rows, not 13**.
-  Four rows on account 00223950 (docs 1283729, 1283730, 1283731, 1315834) round
+  Four rows on account 00990060 (docs 9000201, 9000202, 9000203, 9000204) round
   to the same 4dp value at 0.098528 and are a different mechanism. Their cardex
-  side is item 536665 alone (24 x 1.1942 = -28.66 on doc 1283729) against a GL
-  leg of -290.88, which is 12.12 per unit. **12.12 is not in item 536665's
+  side is item 700300 alone (24 x 1.1942 = -28.66 on doc 9000201) against a GL
+  leg of -290.88, which is 12.12 per unit. **12.12 is not in item 700300's
   `iluncs` history** (which holds 1.194200, 1.192800, 8.764200, 7.570000,
   0.001400). Those four rows are unresolved.
 - **A single AAI-account rate defect cannot always be attributed to an item.**
-  `F0911` has no item column. The 525541 case resolved only because the work
+  `F0911` has no item column. The 700100 case resolved only because the work
   order had exactly two components and one leg tied exactly. Where an account
   receives more than one item's issues, the GL leg cannot be decomposed. That is
   a hard limit of the source, not of the query.
@@ -252,12 +257,12 @@ is present in `F4111`'s own `iluncs` history.
 ### Not determined
 
 - **Cost method.** `F4102.IBCOST` is not extracted by RapidReconciler, so
-  whether 525541 is standard, average, or last-in cannot be established here.
+  whether 700100 is standard, average, or last-in cannot be established here.
   Not guessed.
 - **Which cost is correct.** 5.5145 and 0.0516 both appear in `F4111` history.
   Nothing in the extracted data says which one the item should have carried on
   these dates.
-- **The 00223950 12.12-per-unit rate.** Not attributable to any `F4111` cost.
+- **The 00990060 12.12-per-unit rate.** Not attributable to any `F4111` cost.
 
 ---
 
@@ -306,7 +311,7 @@ document type IC is summed on the GL side, so material issues are never netted
 against completions"), but the same restriction on the compare row is what
 leaves the issue leg with no card at all.
 
-The 525541 case in section 3 is a cost mismatch by MCM's own definition: a GL
+The 700100 case in section 3 is a cost mismatch by MCM's own definition: a GL
 leg exists for this work order on this account, and the amount differs. It is
 unclassified only because it is `IM`.
 
@@ -318,18 +323,18 @@ raw `F0911`:
 - All 10 have `LedgerAmount = 0` (cardex-only).
 - All 10 fail `MCM.glcompletionsameaccount`: no `F0911` row with `gldct = 'IC'`
   and `glsbl` = the padded order number on that company **and that account**.
-- 7 of the 10 (orders 1260791, 1260793, 1260803, 1267109, 1267110, 1267111,
-  1267112) do have an `IC` leg on the same company and work order, on a
+- 7 of the 10 (orders 9000301, 9000302, 9000303, 9000304, 9000305, 9000306,
+  9000307) do have an `IC` leg on the same company and work order, on a
   **different** account. The account equality in the `#mfgic` build
   (`c.ShortAccount = g.glaid`, line 502) is what excludes them.
-- The remaining 3 (orders 1237206, 1299339, 1331624, all on account 00223976)
+- The remaining 3 (orders 9000401, 9000402, 9000403, all on account 00990070)
   have no `F0911` `IC` leg on any account for that work order.
 
 Those 3 look like Completion Not Journaled but fail block D at line 322:
 `g.im_rows > 0`. Block D requires the GL to hold the work order's issues before
 it will claim a missing completion. Not re-measured per row.
 
-Demo3's 2 `IC` rows (orders 489411, 490398) fail the same
+Demo3's 2 `IC` rows (orders 910200, 910300) fail the same
 `MCM.glcompletionsameaccount` test.
 
 ### The Accounts card
@@ -366,7 +371,7 @@ on a classified `Mfg` row, it is not a separator. Every test below is against
 | Sign agreement | No | Same-sign on all residual both-leg rows on Demo1 (473) and Demo3 (25). Also same-sign on 332 of 332 Accounts and 241 of 241 MCM rows on Demo1. Universal, not discriminating. |
 | Tie / no tie | No | Zero ties in the residual on all three databases, and zero ties in every classified `Mfg` subtype on Demo1 and Demo3 as well. Universal. |
 | Ratio | No | Demo1: 195 distinct ratios over 473 rows, 117 singletons. Demo3: 25 distinct over 25 rows. No cluster is exclusive to the residual, and Demo3 has no clusters at all. |
-| `ShortAccount` | No | All 7 Demo1 residual accounts carry classified rows (00223917 527 classified, 00223925 84, 00223888 51, and so on). Both Demo3 residual accounts likewise. |
+| `ShortAccount` | No | All 7 Demo1 residual accounts carry classified rows (00990020 527 classified, 00990030 84, 00990010 51, and so on). Both Demo3 residual accounts likewise. |
 | `PeriodEnds` | No | Demo1 residual spans eight periods, all of which carry classified rows. |
 | `DocNumber = OrderNumber` | No | True on 546 of 546 residual **and** 4,453 of 4,453 classified `Mfg` rows on Demo1. Universal. |
 | Batch spread | No | `Batch > 0` on 546 of 546 residual and on the classified population. Universal. |
@@ -391,7 +396,7 @@ Three statements the measurement supports:
    the existing cards rather than a missing card.
 
 2. **MCM's mechanism already fits at least part of the residual, verified on
-   Demo1.** Thirteen rows worth $97,120 are one item (525541) journaled at
+   Demo1.** Thirteen rows worth $97,120 are one item (700100) journaled at
    5.5145 per unit against a cardex cost of 0.0516, with both costs present in
    `F4111`'s own `iluncs` history. That is "a GL leg exists for this work order
    on this account and the amount differs," which is MCM's claim verbatim, on
