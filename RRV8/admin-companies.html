@@ -694,7 +694,9 @@
       body:    opts.body ? JSON.stringify(opts.body) : undefined
     };
     return fetch(url, init).then(r => {
-      if (!r.ok) throw new Error('HTTP ' + r.status + ' on ' + url);
+      // The status has to survive as a PROPERTY: RRV8.fetchErrorMessage branches
+      // on it and must never scrape a code back out of the message string.
+      if (!r.ok) { const e = new Error('HTTP ' + r.status + ' on ' + url); e.status = r.status; throw e; }
       return r.json().catch(e => e instanceof SyntaxError ? null : Promise.reject(e));
     });
   }
@@ -707,11 +709,21 @@
     el.classList.add('is-visible');
     setTimeout(() => el.classList.remove('is-visible'), 2400);
   }
-  function showFetchError(err) {
+  // ONE producer for the sentence: RRV8.fetchErrorMessage (sidebar.js) branches
+  // on the HTTP status so the remedy matches the failure — a 403 is an
+  // unauthenticated session, not a missing endpoint. See
+  // docs/plans/shared-state-registry.md. Falls back to the raw message only if
+  // sidebar.js is unavailable.
+  function fetchErrText(area, err) {
+    return (window.RRV8 && window.RRV8.fetchErrorMessage)
+      ? window.RRV8.fetchErrorMessage(area, err)
+      : ((err && err.message) || String(err));
+  }
+  function showFetchError(area, err) {
     const banner = document.getElementById('js-fetch-error');
     const msg    = document.getElementById('js-fetch-error-msg');
     if (banner && msg) {
-      msg.textContent = (err && err.message) || 'fetch failed';
+      msg.textContent = fetchErrText(area, err);
       banner.classList.add('is-visible');
     }
     // Agent-connectivity dot follows the same network-failure pattern
@@ -1028,7 +1040,7 @@
         // it stands rather than blanking it into "No licensed companies in scope."
         if (!resp || !Array.isArray(resp.companies)) {
           console.error('[companies] refresh reply carried no company list:', resp);
-          showFetchError(new Error('the company list didn’t come back, so what’s shown may be out of date'));
+          showFetchError('admin/companies', new Error('the company list didn’t come back, so what’s shown may be out of date'));
           return;
         }
         renderCompanies(resp.companies);
@@ -1038,7 +1050,7 @@
       })
       .catch(err => {
         console.error('[companies] refresh failed:', err);
-        showFetchError(new Error('couldn’t re-read the company list, so what’s shown may be out of date'));
+        showFetchError('admin/companies', new Error('couldn’t re-read the company list, so what’s shown may be out of date'));
       });
   }
 
@@ -1217,7 +1229,7 @@
         _inlineUnlicensed = Array.isArray(resp.unlicensed) ? resp.unlicensed : null;
       })
       .catch(err => {
-        showFetchError(err);
+        showFetchError('admin/companies', err);
         const licTbody = document.getElementById('js-companies-tbody');
         if (licTbody) {
           licTbody.innerHTML =

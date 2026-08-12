@@ -80,13 +80,33 @@
     if (titleLines.length) { ws['!merges'] = ws['!merges'] || []; for (var m = 0; m < titleLines.length; m++) ws['!merges'].push({ s: { r: m, c: 0 }, e: { r: m, c: ncol - 1 } }); }
     return ws;
   }
+  // The build allocates (styled sheet + serialise), and a build that ran out of
+  // room used to throw straight out of the click handler: no file, no message,
+  // the button just stopped working. Everything from the sheet build to the
+  // write is inside the guard. RRV8.saveWorkbook is preferred when the page
+  // loads export-guard.js; the local fallback keeps this usable on a page that
+  // does not, so no caller can regress to a silent failure.
   function buildAuditWorkbook(opts) {
     if (!window.XLSX) { if (typeof toast === 'function') toast('Excel library still loading — try again in a moment'); return false; }
-    var ws = _buildStyledSheet(opts); if (!ws) return false;
-    var wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, (opts.sheetName || 'Report').slice(0, 31));
-    XLSX.writeFile(wb, opts.fileName || RRV8.exportName({ surface: 'Report' }));
-    return true;
+    var report = (typeof toast === 'function') ? toast : null;
+    var label  = opts.sheetName || 'Report';
+    try {
+      var ws = _buildStyledSheet(opts); if (!ws) return false;
+      var wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, label.slice(0, 31));
+      var fname = opts.fileName || RRV8.exportName({ surface: 'Report' });
+      if (window.RRV8 && RRV8.saveWorkbook) return RRV8.saveWorkbook(wb, fname, report, label);
+      XLSX.writeFile(wb, fname);
+      return true;
+    } catch (err) {
+      console.error('[export] ' + label + ' failed:', err);
+      if (report) {
+        report((window.RRV8 && RRV8.exportFailureMessage)
+          ? RRV8.exportFailureMessage(err, label)
+          : (label + ' export failed — ' + ((err && err.message) || err)));
+      }
+      return false;
+    }
   }
   global.buildAuditWorkbook = buildAuditWorkbook;
   global.buildAuditSheet    = _buildStyledSheet;

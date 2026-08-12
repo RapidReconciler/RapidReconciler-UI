@@ -138,17 +138,81 @@ signed-versus-magnitude convention: magnitude decides whether anything is off,
 the signed net is what gets displayed, and the gross is shown alongside when
 offsetting items would make the net read clean.
 
-### Transaction variance by period
+### The viewed period
 
-Producer: `_txVarBucket` over `POST /inventory/transactions` with
-`period: null`, cached in `_txVarCache` and keyed company-pipe-database.
+Producer: `_analystViewedPeriod()` in `home.html`. A clicked period bar
+(`_briefPeriodOverride`) wins; otherwise the `#periodSelect` value.
 
-Both writers (`renderTxVarWidget` and `_txvRows`) send the same body and bucket
-the same way, and every reader key-checks before trusting the cache. The period
-widget names its own source on screen ("Account roll-forward, Co 80002,
-Jul 31") because the headline total comes from the roll-forward, not from the
-chart's own sum. That label is the pattern to copy when two figures on one
-surface genuinely come from two places.
+| Consumer | Reads |
+|---|---|
+| `renderTxVarWidget` &rarr; `focusedPeriod` | which bar is active and which period the chart's headline totals |
+| `renderAnalystTxVar` &rarr; `focusP` | the Transaction Overview header, the cards, the period-review record |
+| `_briefData` &rarr; `perKey` | the per-company period slice the whole brief is built on |
+| `_analystBriefLead` | the `VIEWED PERIOD` fact handed to the AI day-brief |
+| the analyst ask box | its `focusPeriod` fallback |
+| `renderPeriodWidget` &rarr; `activeP` | the accountant chart's active column |
+
+Five private copies of the same expression existed before 2026-08-12. They all
+agreed, so nothing broke &mdash; but the word "period" did not mean one thing on
+this page, and that is what the rest of this section is about.
+
+**Three different periods are all called "period" on the analyst surface.** They
+are not interchangeable and the copy must say which one it means:
+
+| | What it is | Where it shows |
+|---|---|---|
+| viewed | the period the analyst selected | every panel header |
+| open window | the last two periods carrying residual, still actionable | the AI grounding |
+| data-current | the latest period loaded | the scope band ("numbers current to&hellip;") |
+
+UI #449 pulled these apart on the chrome pill. They were still colliding inside
+the panels: an amount that lived entirely in the open window's *older* period was
+printed as "this period" on a screen showing the newer one.
+
+### Transaction variance: two measures, one word
+
+There is no single producer here and there cannot be. Two structurally different
+measures of "the variance for this period" sit within a few inches of each other,
+and both are correct.
+
+| | Roll-forward net | Reconciling items |
+|---|---|---|
+| Producer | `_txvRfSeries` / `sourceTotal` | `_txVarBucket` &rarr; `_txVarCache`; `netTotal` |
+| Source | `v6ui_raccountsummary.Variance` via `_invRows` | `RCardexLedgerCompare2` where `recstatus = 1`, via `POST /inventory/transactions` with `period: null` |
+| Population | every posted non-manual row, any size | posted documents over the materiality threshold, `batchstatus = 0` |
+| Grain | account | document |
+| Drawn by | the period chart + its headline | the Transaction Overview figure + every card |
+| Periods carried | all of them | only those with residual |
+
+They do not tie in either direction. On Demo3 co 30002 the residual is *larger*
+than the roll-forward net at Mar 31 2023 ($83,371.62 against $81,362.57), so
+"the narrower population gives the smaller number" is not a rule you can lean on.
+
+Because one producer cannot serve both, the registry's other clause applies:
+**both grains get a name in the label.** The chart says `Roll-forward net`; the
+Overview figure says `Reconciling items`. Neither says a bare "variance" any more.
+The Overview footer states the roll-forward net alongside, but only when the gap
+clears $1 &mdash; below that it is rounding, and printing it every period is noise.
+
+Both writers of the residual cache (`renderTxVarWidget` and `_txvRows`) send the
+same body and bucket the same way, and every reader key-checks before trusting it.
+The **open window** is now `series.slice(-2)` computed from the cache, not read out
+of `_txVarContext`: that object is written only by `renderTxVarWidget`, so the
+day-brief's window was two periods if the analyst had opened the Transaction
+Variance tab and one if they had not. Same brief, same data, different amount,
+depending on where they had clicked.
+
+Measured 2026-08-12, Demo3 company 30002, viewed period Apr 30 2023:
+
+| Surface | Value | Why |
+|---|---|---|
+| AI day-brief | $76K, 5 of 12 periods | Inventory module, open window, entirely Mar 31 |
+| Chart headline | $3 | roll-forward net, Apr 30, $2.54 |
+| Transaction Overview | $2 | residual, Apr 30, $1.89 |
+
+All three were arithmetically correct and every one used `RRV8.kAmount`. The bug
+was that no label said which period, which grain, or which population &mdash; and
+the AI called a March figure "current-period" while the analyst looked at April.
 
 ### Model baseline routings
 
