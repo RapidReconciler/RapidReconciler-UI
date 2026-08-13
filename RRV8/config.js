@@ -385,6 +385,44 @@ window.RRV8 = window.RRV8 || {};
       }).then(function () {}).catch(function () {});   // one-way audit append; swallow all errors
     } catch (_) { return Promise.resolve(); }
   };
+  /* logActivityStrict(event, detail) -> Promise, REJECTS on failure.
+   *
+   * logActivity above is deliberately silent, and its contract says to call it
+   * AFTER the primary action succeeds. That is right when the log is a nicety: a
+   * failed audit append must not break an export the analyst already completed.
+   *
+   * It is wrong when the audit entry IS the action's justification. Reversing a
+   * period close that someone downstream already acted on is only defensible
+   * because a record says who reversed it and why. Writing that record
+   * best-effort would mean the reversal proceeds whether or not anybody can ever
+   * see who did it — an unattributable trail, which is worse than refusing.
+   *
+   * So this variant reports. Callers write the record FIRST and abandon the
+   * action if it fails. Same endpoint, same server-side JWT stamping; the only
+   * difference is that failure reaches the caller.
+   */
+  window.RRV8.logActivityStrict = function (event, detail) {
+    var base;
+    try {
+      base = (window.RRDB && RRDB.agentBase && RRDB.agentBase())
+        || (window.RR_CONFIG && RR_CONFIG.testAgentBase);
+    } catch (_) { base = null; }
+    if (!base) {
+      return Promise.reject(new Error('no Services connection, so nothing could record who did this'));
+    }
+    var h = { 'Content-Type': 'application/json;charset=UTF-8', 'Accept': 'application/json' };
+    try { var t = localStorage.getItem('rrv8.token'); if (t) h['Authorization'] = 'Bearer ' + t; } catch (_) {}
+    return fetch(base + '/admin/activity', {
+      method: 'POST', headers: h,
+      body: JSON.stringify({ event: String(event == null ? '' : event), detail: String(detail == null ? '' : detail) })
+    }).then(function (r) {
+      if (!r.ok) {
+        throw new Error(r.status === 401 || r.status === 403
+          ? 'your session is not authorized to write the audit record'
+          : 'the audit record could not be saved (HTTP ' + r.status + ')');
+      }
+    });
+  };
   // collapseActivity(): fold a run of CONSECUTIVE identical events (same label +
   // same actor) into one row carrying a _count (and _oldestAt) — so a burst of
   // "Report engine started" (a rebuild bounce logs one per boot) shows as a single
@@ -3109,8 +3147,16 @@ window.RRV8 = window.RRV8 || {};
  * will surface into the Audit Center.
  *
  * Same self-contained, server-first + localStorage-fallback shape as cardStore /
- * dispoStore, so the review flow works with ZERO console errors before the owner
- * ships the /inventory/txv/period-review endpoints + dbo.RTxvPeriodReview.
+ * dispoStore. GET / POST / DELETE /inventory/txv/period-review and
+ * dbo.RTxvPeriodReview now exist (TxvPeriodReviewController), so the server is the
+ * store and localStorage is the mirror it was always described as.
+ *
+ * ⚠ The fallback is silent BY DESIGN, and that cuts both ways now. Every request
+ * here swallows its failure, which was correct while nothing answered these routes
+ * and is a liability now that something does: if the table is not deployed to a
+ * database, or a path or parameter drifts, the page keeps working against the mirror
+ * and NOTHING reports it. A review that looks saved may be browser-only. When
+ * changing this store, change the controller in the same pass.
  *
  *   load(company)         -> Promise<map>  keyed "<co>|<period>"; cached per (db, company)
  *   get(company, period)  -> record | null (SYNC; caller must load() first)
@@ -3212,9 +3258,14 @@ window.RRV8 = window.RRV8 || {};
    * trail while carrying no author. WORKLIST UI-89 holds that half; do not widen
    * this one to cover it.
    *
-   * Same optimistic mirror-then-server shape as save(), and the same silence when
-   * the endpoint is absent: DELETE /inventory/txv/period-review is not shipped yet,
-   * so the mirror IS the store today and a failed request must not reach the console.
+   * Same optimistic mirror-then-server shape as save(). DELETE
+   * /inventory/txv/period-review IS shipped now and returns { ok, reopened }, where
+   * reopened:false means there was no row to remove. This function still ignores the
+   * response, which is correct for the INERT case it serves: the local delete has
+   * already happened and there is nothing for the analyst to decide. An ATTRIBUTED
+   * reopen must NOT reuse this path — it needs the response, needs to report failure,
+   * and needs to show who reversed it. UI-89 holds that half; the server side it was
+   * waiting on now exists.
    */
   function remove(company, period) {
     var co = String(company == null ? '' : company), per = _p10(period);
@@ -3228,9 +3279,58 @@ window.RRV8 = window.RRV8 || {};
     return fetch(base + '/inventory/txv/period-review?company=' + encodeURIComponent(co)
                  + '&period=' + encodeURIComponent(per),
                  { method: 'DELETE', headers: _auth({ 'Accept': 'application/json' }) })
-      .then(function () {}, function () {});   // endpoint not shipped: stay silent
+      .then(function () {}, function () {});   // inert path: outcome is not actionable
   }
-  window.RRV8.analystReviewStore = { load: load, get: get, forCompany: forCompany, save: save, remove: remove, key: _key };
+  /* reopen(company, period) -> Promise<{ok, reopened}>, REJECTS on failure.
+   *
+   * The ATTRIBUTED counterpart to remove(). Everything remove() does silently and
+   * optimistically, this does loudly and server-first, because the two serve
+   * opposite cases:
+   *
+   *   remove()  an INERT review. Nothing downstream saw the close, so the local
+   *             delete is the whole story and a failed request changes no
+   *             decision. Silence is correct.
+   *   reopen()  a CONSEQUENTIAL review. Work already left the period. The analyst
+   *             is reversing something another person acted on, so they have to
+   *             learn whether it actually reversed, and the caller has to be able
+   *             to abandon the attempt.
+   *
+   * Server FIRST, with no optimistic local delete. An optimistic drop here would
+   * repaint the period as un-reviewed while the server still holds the review —
+   * so the analyst would believe they had reopened it, the next load() would put
+   * it back, and the audit record would describe a reversal that never happened.
+   * The mirror is only updated once the server confirms.
+   *
+   * `reopened:false` is NOT an error: it means the row was already gone. The
+   * caller should say so rather than claim a reversal.
+   */
+  function reopen(company, period) {
+    var co = String(company == null ? '' : company), per = _p10(period);
+    var base = _base();
+    if (!base) {
+      return Promise.reject(new Error('no Services connection, so the review could not be reopened on the server'));
+    }
+    return fetch(base + '/inventory/txv/period-review?company=' + encodeURIComponent(co)
+                 + '&period=' + encodeURIComponent(per),
+                 { method: 'DELETE', headers: _auth({ 'Accept': 'application/json' }) })
+      .then(function (r) {
+        if (!r.ok) {
+          throw new Error(r.status === 401 || r.status === 403
+            ? 'your session is not authorized to reopen this period'
+            : 'the server refused the reopen (HTTP ' + r.status + ')');
+        }
+        return r.json().catch(function () { return { ok: true, reopened: true }; });
+      })
+      .then(function (body) {
+        // Server confirmed. NOW drop the local copies so the panel and the mirror
+        // agree with it.
+        var k = _key(co, per), ck = _cacheKey(co);
+        try { if (_cache[ck] && _cache[ck].map) delete _cache[ck].map[k]; } catch (_) {}
+        var ls = _lsRead(co); if (ls && ls[k]) { delete ls[k]; _lsWrite(co, ls); }
+        return { ok: true, reopened: !!(body && body.reopened) };
+      });
+  }
+  window.RRV8.analystReviewStore = { load: load, get: get, forCompany: forCompany, save: save, remove: remove, reopen: reopen, key: _key };
 })();
 
 /*

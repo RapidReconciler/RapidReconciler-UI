@@ -4943,7 +4943,10 @@ const TransactionDetailTemplate = {
 
     const { headers } = Helpers.readHeaders(sheet, ['source', 'cardexamount', 'doc', 'dt']);
     if (headers.includes('source') && headers.includes('cardexamount')) score += 0.45;
-    if (headers.includes('dt') && headers.includes('ordertype') || headers.includes('ot')) score += 0.1;
+    // Precedence: this read as (dt && ordertype) || ot, so a workbook with an
+    // OT column and nothing else scored the bonus. Real V8 exports carry both
+    // DT and OT so the total was unchanged at 0.85 — latent, not live.
+    if (headers.includes('dt') && (headers.includes('ordertype') || headers.includes('ot'))) score += 0.1;
     if (headers.includes('ledgeramount')) score += 0.15;
 
     // Anti-signal — Cardex has runqty/runamt
@@ -10014,6 +10017,10 @@ const App = (() => {
     detectionScores: null,
     data: null,
     findings: null,
+    // Why the pipeline stopped short of producing data, in the analyst's
+    // words. Read by rrv8AutoAnalyze so a headless run reports the reason
+    // instead of a clock. Null whenever the run is still viable.
+    blocked: null,
     costMethodOverride: null   // for Item Ledger: 'STANDARD' | 'WEIGHTED_AVG' | null (auto)
   };
 
@@ -10265,6 +10272,13 @@ const App = (() => {
 
   async function handleFile(file) {
     state.file = file;
+    // Every bail-out below used to write its reason ONLY into #fileMetaDetect.
+    // That is the right sink for a human who dropped a file on this page, and
+    // it is a sink nobody can read when V8 runs this page headlessly in an
+    // offscreen iframe — the analyst got "Analysis timed out" no matter which
+    // of five distinct things went wrong. state.blocked carries the real
+    // reason out so rrv8AutoAnalyze can say it. Reset it per file.
+    state.blocked = null;
     $('#fileMeta').style.display = 'block';
     $('#fileMetaName').textContent = file.name + ' · ' + formatBytes(file.size);
     $('#fileMetaDetect').className = 'file-meta-detect';
@@ -10291,15 +10305,18 @@ const App = (() => {
         $('#fileMetaDetect').innerHTML = `<strong class="warn">Likely:</strong> ${best.template.name} <span style="color:var(--text-muted);">(${Math.round(best.score * 100)}% match)</span> &mdash; confirm below`;
         $('#fileMetaDetect').className = 'file-meta-detect warn';
         showTemplateGrid();
+        state.blocked = `this looks like ${best.template.name} at only ${Math.round(best.score * 100)}% confidence, so the analyzer stopped for a human to confirm the template`;
       } else {
         $('#fileMetaDetect').innerHTML = `<strong class="error">No confident match.</strong> Pick a template manually below.`;
         $('#fileMetaDetect').className = 'file-meta-detect error';
         showTemplateGrid();
+        state.blocked = 'the analyzer could not tell which template this workbook matches, so it stopped for a human to pick one';
       }
     } catch (err) {
       console.error(err);
       $('#fileMetaDetect').innerHTML = `<strong class="error">Couldn't read this file:</strong> ${err.message}`;
       $('#fileMetaDetect').className = 'file-meta-detect error';
+      state.blocked = `couldn't read the workbook: ${err.message}`;
     }
   }
 
@@ -10331,7 +10348,14 @@ const App = (() => {
     if (template.status === 'ready') {
       runAnalysis();
     } else {
-      setPreviewMessage(`The ${template.name} template isn't built yet. Currently only Cardex Variance is implemented end-to-end. Other templates are coming soon.`, 'info');
+      // Unreachable today: every entry in the registry is status:'ready' (11 of
+      // 11, verified 2026-08-13). Kept as the guard for a future non-ready
+      // template. The old text here claimed "Currently only Cardex Variance is
+      // implemented end-to-end", which stopped being true as the other ten
+      // shipped — a false capability claim waiting in a branch nobody reaches,
+      // where no analyst would ever contradict it.
+      setPreviewMessage(`The ${template.name} template isn't finished, so there is nothing to analyze yet.`, 'info');
+      state.blocked = `the ${template.name} template isn't finished, so there is nothing to analyze`;
     }
   }
 
@@ -10371,6 +10395,11 @@ const App = (() => {
     } catch (err) {
       console.error(err);
       setPreviewMessage(`Analysis failed: ${err.message}`, 'error');
+      // parse() throws two specific things a headless caller must hear
+      // verbatim — "missing Source column" and "no data rows found". Both
+      // used to arrive as "Analysis timed out", which sends the analyst
+      // after the transport instead of the workbook.
+      state.blocked = `analysis failed: ${err.message}`;
     }
   }
 
@@ -10630,25 +10659,62 @@ const App = (() => {
   //  auto-click download, then signal back so V8 can close the
   //  window. Same-origin only — ev.origin must match.
   // ============================================================
+  // How long to allow each stage before giving up and SAYING WHICH STAGE.
+  //
+  // These two MUST sum to less than the host's fallback timer (30s in
+  // inventory-transactions.html handOffToAnalyzer). If the host fires first
+  // it reports its own clock — "timed out" — and throws away the reason this
+  // page worked out, which is the whole bug being fixed here. Keep the sum
+  // under that timer, or raise the timer in the same commit.
+  //
+  // Sizing (measured 2026-08-13, this box, real production handshake):
+  // 36 rows = 5.0s end to end; 8,000 rows = 7.1s; 40,000 rows = 18.7s.
+  // ExcelJS spends ~2-3s of that on fixed startup before reading a row, so a
+  // tight read budget reports startup as a hang. Real documents are far
+  // smaller than any of these — max rows for one document across all five
+  // databases is 14 — so 12s of read is a wide margin, not a tight one.
+  const RRV8_READ_BUDGET_MS = 12000;
+  const RRV8_ANALYZE_BUDGET_MS = 12000;
+
   async function rrv8AutoAnalyze(detailBuffer, dmaaiData) {
     if (dmaaiData) {
-      // Stash on the global for templates that opt-in to using
-      // the preloaded universe (TransactionDetailTemplate's
-      // future hook). Templates that don't reference it ignore
-      // it harmlessly.
+      // Stashed for a hook that does not exist yet. NOTHING READS THIS —
+      // grep RR_PRELOADED_DMAAIS before believing otherwise. In particular
+      // the preloaded universe does NOT inform AAI-pattern classification
+      // today; TransactionDetailTemplate never consults it.
       window.RR_PRELOADED_DMAAIS = dmaaiData;
     }
     const blob = new Blob([detailBuffer], {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     });
     const file = new File([blob], 'Transaction Details.xlsx');
-    await handleFile(file);
-    // handleFile triggers selectTemplate → runAnalysis (if the
-    // template auto-confirms). Wait briefly for state.data to
-    // populate, then auto-download.
+
+    // handleFile owns the ExcelJS read. It can stall there indefinitely on a
+    // workbook ExcelJS won't finish parsing — the promise neither resolves
+    // nor rejects — and an unbounded await turns that into the host's silent
+    // 30s fallback. Bound it and name the stage.
+    let readTimer;
+    const readGuard = new Promise((_, reject) => {
+      readTimer = setTimeout(
+        () => reject(new Error('stalled while reading the workbook (never finished parsing it)')),
+        RRV8_READ_BUDGET_MS);
+    });
+    try {
+      await Promise.race([handleFile(file), readGuard]);
+    } finally {
+      clearTimeout(readTimer);
+    }
+
+    // handleFile triggers selectTemplate → runAnalysis (if the template
+    // auto-confirms). Wait for state.data — but a bail-out anywhere in that
+    // chain leaves state.blocked set, and reporting THAT beats reporting the
+    // clock. Losing the reason is what sent a whole day after the transport.
     const start = Date.now();
     while (!state || !state.data) {
-      if (Date.now() - start > 8000) throw new Error('Analysis timed out');
+      if (state && state.blocked) throw new Error(state.blocked);
+      if (Date.now() - start > RRV8_ANALYZE_BUDGET_MS) {
+        throw new Error('the analysis did not finish in ' + Math.round(RRV8_ANALYZE_BUDGET_MS / 1000) + 's');
+      }
       await new Promise(r => setTimeout(r, 100));
     }
     await download();
@@ -10703,7 +10769,7 @@ const App = (() => {
   }
 
   function reset() {
-    state = { file: null, sourceWb: null, sourceSheet: null, selectedTemplate: null, detectionScores: null, data: null, findings: null };
+    state = { file: null, sourceWb: null, sourceSheet: null, selectedTemplate: null, detectionScores: null, data: null, findings: null, blocked: null };
     $('#fileMeta').style.display = 'none';
     $('#fileInput').value = '';
     $('#templateGrid').style.display = 'none';
