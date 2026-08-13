@@ -8926,7 +8926,21 @@
       var _txvMaxAbs = Math.max(Math.abs(sourceTotal || 0), Math.abs(netTotal || 0), Math.abs(grossTotal || 0));
       _TXV_TIER_ORDER.forEach(function (t) { (cardsByTier[t] || []).forEach(function (c) { _txvMaxAbs = Math.max(_txvMaxAbs, Math.abs(c.amount || 0)); }); });
       _txvU = _txvMaxAbs >= 1e6 ? 'M' : '1';
-      var _tolMaterial = Math.abs(tolDelta) >= 1;   // sub-$1 = rounding, treat as tied
+      // Show the reconciliation whenever the analyst can SEE a difference, not only
+      // when the raw gap clears a dollar. The old rule was `Math.abs(tolDelta) >= 1`
+      // on the reasoning that a sub-dollar gap is rounding and printing it every
+      // period is noise. True of the DATA and false of the SCREEN: on Demo3 co 30002
+      // Apr 30 the roll-forward is $2.54 and the residual $1.89, a 65-cent gap that
+      // renders as "$3" above and "$2" below because whole-dollar rounding sends them
+      // to opposite sides of a boundary. The line stayed hidden precisely when the
+      // apparent difference was largest relative to the numbers, and the analyst
+      // asked whether the two figures round differently (owner 2026-08-13). They do
+      // not — they are different populations at different grains, which is what the
+      // suppressed line says. Second clause fires when the rendered dollars differ,
+      // so the explanation appears exactly when there is something on screen to
+      // explain. Rule 9 again: rounding a float manufactures a difference.
+      var _tolMaterial = Math.abs(tolDelta) >= 1
+                      || Math.round(sourceTotal) !== Math.round(netTotal);
       // Card header period + the self-identifying card label. Month+year ("Jul 2025")
       // — the period-end is a month-end marker, so the day is noise on a per-card
       // header that travels on its own (Pass 2: to the Audit Center).
@@ -9814,6 +9828,16 @@
     // period the analyst was not looking at. The facts name the open window and the
     // viewed period separately; the ranking rule points at them by name.
     parts.push('PRIORITY: rank by what is still actionable — the open window named in the facts, not the whole history. A GL roll-forward break blocks the period from tying out and outranks a recurring transaction variance; a variance that self-clears on the next refresh is not a priority to chase.');
+    // LEAD WITH THE PERIOD THE ANALYST IS ON. The rules above are about ranking, and
+    // ranking alone produced a brief that opened "start with the $76K in Mar 31" to
+    // someone looking at Apr 30. Every clause was true and correctly labelled — the
+    // amount, the period, the window — and it was still the wrong first sentence: the
+    // reader is on a period that carries $2, the big number belongs to a period they
+    // are not looking at and may already have dealt with, and a brief that opens on it
+    // reads as "you have a $76K problem" (owner 2026-08-13). Same shape as the
+    // $76K/$3/$2/$2 defect: right numbers, wrong subject.
+    parts.push('OPEN ON THE VIEWED PERIOD, always, whatever ranks highest. If the viewed period is immaterial, say so plainly in the first sentence and name its amount — "Apr 30, 2023 is immaterial at $2" — before anything else. Only then, and only in a following sentence, may you raise a larger amount from another period in the open window, and you must name that period and say it is still open rather than implying it is the reader\'s problem today. Never open a brief with an amount from a period the reader is not viewing.');
+    parts.push('REVIEWED: the facts say whether the viewed period is already marked reviewed. If it is NOT, and the period is immaterial and nothing else is outstanding, suggest marking it reviewed as the next action. If it IS already reviewed, say that instead and suggest nothing — do not tell an analyst to do something they have already done.');
     parts.push('PERIODS: "open window", "viewed period" and "numbers current to" are three different things and the facts label each one. Quote them by their date. Do not compress any of them into "the current period".');
     return parts.join('\n');
   }
@@ -9944,6 +9968,21 @@
     // it showed April (owner 2026-08-12). The lead sits directly above those panels;
     // it has to know what they are showing.
     _analystTxFacts(txStats, _analystViewedPeriod(), ccy, co, scrub).forEach(function (f) { facts.push(f); });
+    // REVIEW STATE OF THE VIEWED PERIOD. The grounding tells the brief to suggest
+    // marking an immaterial period reviewed — which is only safe advice if the brief
+    // can tell whether it already IS reviewed. Without this fact the rule would have
+    // the model guessing, and the first thing it would guess wrong is telling an
+    // analyst to do something they did last month. Same store the Transaction
+    // Overview chip reads, so the sentence and the chip cannot disagree.
+    (function () {
+      var vp = _analystViewedPeriod();
+      var rv = (vp && typeof RRV8 !== 'undefined' && RRV8.analystReviewStore)
+        ? RRV8.analystReviewStore.get(co, vp) : null;
+      facts.push('REVIEW STATE of the viewed period: ' + (!vp ? 'no period selected.'
+        : rv && rv.at ? ('already marked reviewed on ' + String(rv.at).slice(0, 10)
+            + '. Do not suggest reviewing it again.')
+        : 'NOT yet marked reviewed.'));
+    })();
     facts.push('== CARDEX (F41021 on-hand vs F4111 cardex; account-blind) ==');
     _analystCardexFacts(co, ccy, scrub).forEach(function (f) { facts.push(f); });
     // Signature guard (same idiom as the accountant worklist's _wlCurSig). The
@@ -9959,7 +9998,14 @@
     var prompt = 'You are giving a JDE inventory-reconciliation analyst the ONE thing to start with today, across their three surfaces (Data Health, Transaction Variance, Cardex).\n'
       + 'These are the ONLY facts you may use (never invent a number, an account, an item, or a step):\n' + facts.join('\n') + '\n'
       + (window.RRV8 && RRV8.dataAccessLine ? RRV8.dataAccessLine(exposure) + '\n' : '')
-      + 'The three surfaces are shown as clickable chips below your sentence, so DO NOT list all of them. Write ONE lead sentence, UNDER 38 words: name the single highest-priority thing to work FIRST and why, ranked by what is actionable NOW. If nothing is actionable, say so plainly. One sentence means one line — no greeting, no list.\n'
+      // "name the single highest-priority thing to work FIRST" was the instruction AND
+      // the defect, and it beat the grounding rule that told the brief to open on the
+      // viewed period — a system-prompt rule cannot outrank the operative sentence in
+      // the request, so the first attempt at this fix changed nothing on screen. Both
+      // had to move together (owner 2026-08-13). The brief now opens on the period the
+      // analyst is looking at and ranks in the SECOND clause, which keeps the priority
+      // ladder without making a period the reader is not on sound like today's job.
+      + 'The three surfaces are shown as clickable chips below your sentence, so DO NOT list all of them. Write ONE lead sentence, UNDER 45 words, in TWO parts: (1) open on the VIEWED PERIOD named in the facts — if it is immaterial, say so and give its amount; (2) then, only if something elsewhere in the open window is genuinely more urgent, name it WITH ITS OWN PERIOD as the thing to work next. If the viewed period is immaterial and nothing else is outstanding, say so and follow the REVIEWED rule. If nothing is actionable anywhere, say that plainly. One sentence means one line — no greeting, no list.\n'
       // The 32-word budget was itself part of the defect: the shortest way to place an
       // amount in time is "current-period", and that phrase was true of the window and
       // false of the period on screen. Six more words buys the period name.
