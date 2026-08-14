@@ -566,14 +566,13 @@ accountant **transactions** behind the numbers — **not** an audit-of-record (R
 is a tool; JDE is the SoR, so no immutability / versioning / legal-hold).
 **Inputs are analyst or accountant transactions ONLY** — system events (loads /
 B→C / deploys / review acks) are **not** inputs and are dropped. Each entry is
-one **actor** + a **trigger** + (ideally) a **details link** to where the work
-was done, so the framework extends simply by adding triggers. Two are wired
-today, both from feeds that already exist:
+one **actor** + a **trigger** + the **finding text** recorded at the time, so the
+framework extends simply by adding triggers. Two are wired today, both from feeds
+that already exist:
 
 - **Analyst** — resolved transaction-variance reviews from
   `GET /inventory/txv/resolutions` per company (one per
-  `(company, cardCode, periodEnd)`; only `status: complete` appears). Details
-  link → the worklist (`inventory-transactions.html?company&card&period`).
+  `(company, cardCode, periodEnd)`; only `status: complete` appears).
   *(Cardex variance will add a second analyst trigger once designed.)*
 - **Accountant** — reconciliation completions (attest / sign-off / journal
   entry / balancing / adjusting) written to `GET /admin/activity` via
@@ -581,8 +580,11 @@ today, both from feeds that already exist:
   out.
 
 Filter chips are **All / Analyst / Accountant**. The trail renders as summary
-cards (title · trigger · company · period · message · amount · by/when · details
-link) plus an Excel "Audit report" snapshot. **No new endpoint is required** —
+cards (title · trigger · company · period · message · amount · by/when) plus an
+Excel "Audit report" snapshot. **No drill-through link on a card** (owner
+2026-08-13): an entry is a historical record and every page it could target
+renders live rows, so the link resolved to a slice that no longer matched the
+finding printed beside it. **No new endpoint is required** —
 both feeds already ship and degrade to a per-browser/localStorage fallback with
 zero console errors when the agent is absent. The optional `type` tag on
 `/admin/activity` (documented above) still helps: an entry tagged

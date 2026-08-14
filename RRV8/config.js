@@ -564,7 +564,7 @@ window.RRV8 = window.RRV8 || {};
       + 'standard costing, needs the variance AAI configured for the routing, and skips work orders already closed.',
     '- Respect materiality: lead with the largest dollar driver; do not chase an immaterial noise row.',
     '- ROLE SPLIT, not a disagreement about the entry: the corrective accounting action for a transaction variance IS a journal entry, and the ACCOUNTANT books it. The ANALYST prevents recurrence. So never argue against the entry — no "not a journal entry", no "a JE only balances the GL this period" — and do not instruct one either. Stay in the analyst\'s lane: what was checked, what the cause is, and the change that stops it coming back.',
-    '- THE FINDING IS THE ANALYST\'S INVESTIGATION REPORT to the customer, and it travels to the Audit Center where a third party reads it months later. Write it in three parts under these headings: "What happened" — the state of the world, one fact per bullet; "What I found" — the exact cause, or if it cannot be pinned down ONE or TWO likely causes said plainly to be unconfirmed; "What to do" — short bullets. Terse, one idea per bullet, no stacked clauses. Name a table only when the analyst has to go look in it.',
+    '- THE FINDING IS THE ANALYST\'S INVESTIGATION REPORT to the customer, and it travels to the reconciliation audit findings where a third party reads it months later. Write it in three parts under these headings: "What happened" — the state of the world, one fact per bullet; "What I found" — the exact cause, or if it cannot be pinned down ONE or TWO likely causes said plainly to be unconfirmed; "What to do" — short bullets. Terse, one idea per bullet, no stacked clauses. Name a table only when the analyst has to go look in it.',
     '- Audience is a JDE-fluent analyst: F4111, F0911, DMAAI, AAI are fine; no plumbing / SQL terms.'
   ].join('\n');
   // CARDEX_GROUNDING — the AI's compact copy of the cardex-variance playbook.
@@ -1855,7 +1855,7 @@ window.RRV8 = window.RRV8 || {};
       desc: 'Inventory was relieved on the item ledger and the GL holds nothing for the document under any type. The posting run did not fail. DMAAI 4220 and DMAAI 4240 resolve to the same account for this order type, so the debit and the credit land together, net to zero, and no journal detail survives to post. 4220 carries cost of goods sold and 4240 relieves inventory; on one account they cancel silently and the P&L never sees the cost. Where the order type is SA — sample and lab issues, shipped at no charge — the cost of the sample is exactly what should be reaching cost of goods, and the cancellation is what stops it. Every shipment on the order type does it again.',
       action: 'Read 4220 and 4240 for the order type on the document, resolving the way JDE does: the item’s GL class first, the **** wildcard second. On the 42xx sales instructions the order type sits in the document-type column, not the order-type column the manufacturing instructions use. One account on both is the finding. Diff it against an order type on the same company that ships correctly, GL class by GL class — that comparison hands the customer the target values. Then point 4240 at the inventory account per GL class and 4220 at cost of goods sold. No journal entry prevents recurrence, so the AAI change is the fix; the accountant separately books the cost that never reached the GL. Re-check the following period. New documents on the order type with no GL entry mean the AAI was not changed.',
       finding: {
-        mech: 'DMAAI 4220 and 4240 resolve to one account for this order type, so the shipment’s debit and credit land together, no GL entry is written, and the cost never reaches cost of goods.',
+        mech: 'DMAAI 4220 and 4240 resolve to one account for this order type, so the shipment’s debit and credit land together and the batch nets to zero. The post program writes nothing for a zero-dollar batch, so no GL entry exists at all and the cost never reaches cost of goods. The posting followed its DMAAI — nothing was mis-keyed; the configuration itself sends both sides to one account.',
         // Copy trimmed to what an analyst acts on (owner 2026-08-12). It ran ~210
         // words of method: how the wildcard resolves, why the zero test is a
         // tolerance and not a rounding, how a mixed-class document is claimed.
@@ -1874,7 +1874,7 @@ window.RRV8 = window.RRV8 || {};
         // gate checks, so trimming prose must not drop them.
         checked: [
           { a: 'SAC.aaipaircancels', t: 'DMAAI 4220 (cost of goods) and 4240 (inventory) point to one account for this company, order type and GL class.' },
-          { a: 'SAC.cardexrelief', t: 'Item ledger relieved inventory. GL nets to zero. The cost never reached cost of goods.' }
+          { a: 'SAC.cardexrelief', t: 'Item ledger relieved inventory. The batch nets to zero, so the post program writes no GL entry at all. The cost never reached cost of goods.' }
         ],
         // "Not tested on these rows" removed (owner 2026-08-12): it helped nothing
         // on this card. The scope limit it carried now belongs in `action`, where
@@ -1893,8 +1893,8 @@ window.RRV8 = window.RRV8 || {};
         // (4220 belongs on cost of goods) and carries no install-specific value,
         // per rule 11.
         fix: [
-          'Point DMAAI 4220 to cost of goods for this company, order type and GL class.',
-          'Check the other order types sharing this DMAAI before calling it isolated. One with no shipments this period is still misconfigured.'
+          'Point DMAAI 4220 to cost of goods for this order type — every GL class it routes, not just the one on this document.',
+          'The DMAAIs tab lists this pair under Fix First: Sales tab, AAIs 4240/4220. It reports other companies and GL classes the pair collapses on, including order types that shipped nothing this period and so appear nowhere here.'
         ]
       }
     },
