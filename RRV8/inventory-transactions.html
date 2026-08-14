@@ -787,8 +787,15 @@
   .tx-findings-save { font-family: inherit; font-size: 13px; font-weight: 700; border-radius: 8px; padding: 7px 14px; cursor: pointer; border: 1px solid var(--navy); background: var(--navy); color: #fff; }
   .tx-findings-save:hover { opacity: .92; }
   .tx-findings-save:disabled { opacity: .6; cursor: not-allowed; }
-  .tx-findings-note { width: 100%; box-sizing: border-box; resize: vertical; min-height: 64px; max-height: 260px; overflow-y: auto; font-family: inherit; font-size: 13.5px; line-height: 1.5; color: var(--text); border: 1px solid var(--rule); border-radius: 8px; padding: 10px 12px; background: var(--bg-soft); }
-  .tx-findings-note:focus { outline: none; border-color: var(--navy); box-shadow: 0 0 0 3px rgba(31,45,74,.12); background: var(--bg-card); }
+  /* Card background at REST, not --bg-soft. The soft grey is what read-only panels on this
+     page use, so the box advertised itself as read-only and only turned white once focused —
+     the state that says "editable" appeared after you had already discovered it was. Focus
+     keeps the navy border + ring, so the two states stay distinct without the background. */
+  .tx-findings-note { width: 100%; box-sizing: border-box; resize: vertical; min-height: 64px; max-height: 260px; overflow-y: auto; font-family: inherit; font-size: 13.5px; line-height: 1.5; color: var(--text); border: 1px solid var(--rule); border-radius: 8px; padding: 10px 12px; background: var(--bg-card); }
+  /* No background change here any more — it now matches the resting state, so the border
+     and ring carry focus on their own. A declaration that repaints the colour already
+     showing reads as if focus were doing something it is not. */
+  .tx-findings-note:focus { outline: none; border-color: var(--navy); box-shadow: 0 0 0 3px rgba(31,45,74,.12); }
   .tx-findings-status { margin-top: 8px; font-size: 13.5px; font-weight: 600; }
   .tx-findings-status.is-ok { color: var(--green-deep); }
   .tx-findings-status.is-error { color: var(--red); }
@@ -2011,6 +2018,22 @@
     color: var(--text-muted);
     font-size: 13px;
   }
+  /* Tie-out disagreement. A WARNING, not the scopeError stop: the rows are probably
+     right and one of the two COUNTS is wrong, so refusing to render would destroy
+     more than it protects. Leads the grid rather than trailing it (truncation trails
+     because it describes the end of a list; a scope disagreement changes how you read
+     every row above it). Orange is this page's established mismatch colour. */
+  .details-tieout {
+    padding: 11px 16px;
+    text-align: left;
+    font-size: 12.5px;
+    line-height: 1.5;
+    color: var(--orange-deep);
+    background: var(--orange-pale);
+    border-bottom: 1px solid var(--orange);
+  }
+  .details-tieout strong { font-weight: 800; }
+  .grid-pill-count.is-tieout { color: var(--orange-deep); background: var(--orange-pale); border-color: var(--orange); }
   .details-skeleton {
     padding: 28px 20px;
     text-align: center;
@@ -2985,7 +3008,12 @@
     <div class="tx-findings-head">
       <div>
         <div class="tx-findings-title"><svg viewBox="0 0 24 24" width="15" height="15" fill="var(--blue)" aria-hidden="true" style="vertical-align:-2px;margin-right:6px"><path d="M12 1.6l1.9 5.1a5 5 0 0 0 2.9 2.9l5.1 1.9-5.1 1.9a5 5 0 0 0-2.9 2.9L12 21.4l-1.9-5.1a5 5 0 0 0-2.9-2.9L2.1 11.5l5.1-1.9a5 5 0 0 0 2.9-2.9z"/></svg>Findings</div>
-        <div class="tx-findings-sub" id="tx-findings-scope">The finding drafts automatically from the analysis &mdash; review the source fix, then Mark reviewed.</div>
+        <!-- Empty and hidden on purpose. paintFindingsScope() rewrites this node on every
+             paint and shows it ONLY for a worked count, so any prose here is dead text that
+             flashes once before first paint. It used to carry "review the source fix, then
+             Mark reviewed" — instructions in this slot were ruled noise 2026-08-12, and the
+             editable affordance now lives in the status line below the box. -->
+        <div class="tx-findings-sub" id="tx-findings-scope" hidden></div>
       </div>
       <div class="tx-findings-actions">
         <button type="button" class="tx-findings-save" id="tx-findings-save">Mark reviewed</button>
@@ -6429,16 +6457,49 @@
     if (!tbody) return;
     renderTableHeader();
     updateColPill();
-    const rows = searchFilter(sortRows(filteredRows(), _state.sortKey, _state.sortDir), _state.gridSearch);
+    // Held separately from `rows` because the tie-out compares the card's count against
+    // the SCOPED population, never the searched subset: typing in the grid search
+    // legitimately reduces the count, and comparing against that would flash a false
+    // disagreement on every keystroke.
+    const _scoped = filteredRows();
+    const rows = searchFilter(sortRows(_scoped, _state.sortKey, _state.sortDir), _state.gridSearch);
+    // TIE-OUT SINK. The mismatch was reported to console.error ONLY (RRV8.drillReport),
+    // so a card counting 4 rows against a grid rendering 1 looked like a completely
+    // normal page. That is the same failure the scopeError stop above exists to prevent
+    // — "a wrong population that reads as a correct answer" — and it is the worse half:
+    // a bad param is a broken link, while a count disagreement means the classifier and
+    // this grid's filter genuinely diverge. The console is not a sink and a number that
+    // decides whether you are looking at the right rows belongs on screen.
+    // Suppressed under scopeError, which already refuses to render and zeroes the
+    // population — mirroring _drillReport's own `expected: scopeError ? null : …`.
+    // Stacking a count disagreement on top of a hard stop is noise, not signal.
+    const _tieout = (!_state.scopeError && _state.expectRows != null && _state.expectRows !== _scoped.length)
+      ? { card: _state.expectRows, grid: _scoped.length } : null;
     count.classList.remove('is-loading');
+    count.classList.toggle('is-tieout', !!_tieout);
     // "1 rows of 71" was wrong twice over (owner 2026-08-12). The plural was
     // hardcoded, and "of 71" reported the UNFILTERED grid total while the view was
     // filtered to a single row, so the number the analyst read described a
     // population they were not looking at. The filter chip beside this already
     // states what the filter is, and genuine render truncation says so in its own
     // row ("Showing first N of M rows"), so the total has no job here.
-    count.textContent = rows.length.toLocaleString('en-US') + ' row' + (rows.length === 1 ? '' : 's');
+    count.textContent = rows.length.toLocaleString('en-US') + ' row' + (rows.length === 1 ? '' : 's')
+      + (_tieout ? ' · card counted ' + _tieout.card.toLocaleString('en-US') : '');
     const span = visibleColspan();
+    // Leads the grid, so it is read before the rows it qualifies. Deliberately does NOT
+    // say which side is wrong, because the page cannot know: it holds the grid's count
+    // and the number the card put on the link, and either producer can be the faulty one.
+    const tieoutRow = _tieout
+      ? '<tr><td colspan="' + span + '" class="details-tieout">'
+        + '<strong>These rows do not tie to the card you opened.</strong> '
+        + 'The card counted ' + _tieout.card.toLocaleString('en-US') + ' row'
+        + (_tieout.card === 1 ? '' : 's') + '; this view has '
+        + _tieout.grid.toLocaleString('en-US') + '. One of the two is wrong, so treat the '
+        + 'totals below as unconfirmed and do not record a finding against them yet. '
+        + 'Open the card again from Home; if it still disagrees, send this web address to '
+        + 'your IT department.'
+        + '</td></tr>'
+      : '';
     if (_state.scopeError) {
       // Loud, plain-English stop. Naming the value is the whole point — it tells the
       // analyst (and whoever they forward it to) exactly what arrived on the link.
@@ -6455,7 +6516,11 @@
       return;
     }
     if (!rows.length) {
-      tbody.innerHTML = '<tr><td colspan="' + span + '" class="details-empty">No transactions match the current filter.</td></tr>';
+      // The tie-out row leads even here. "No transactions match the current filter"
+      // reads as a clean empty result, and an empty grid against a card that counted
+      // rows is the loudest disagreement there is — exactly when it must not look calm.
+      tbody.innerHTML = tieoutRow
+        + '<tr><td colspan="' + span + '" class="details-empty">No transactions match the current filter.</td></tr>';
       renderDetailsFoot([]);
       _drillReport(0);
       return;
@@ -6487,7 +6552,7 @@
     if (rows.length > MAX_RENDER) {
       tail = '<tr><td colspan="' + span + '" class="details-empty">Showing first ' + MAX_RENDER + ' of ' + rows.length.toLocaleString('en-US') + ' rows. Narrow the filter to see more.</td></tr>';
     }
-    tbody.innerHTML = html + tail;
+    tbody.innerHTML = tieoutRow + html + tail;
     // Totals row sums the FULL filtered set (not just the first 500
     // rendered rows) -- otherwise the headline misleads when the user
     // is staring at a partial slice.
@@ -6735,11 +6800,26 @@
     if (note.dataset.dirty === '1') return;
     note.value = text || '';
     _txFindingsAutosize();
-    _findingsStatus(text ? (statusMsg || 'Drafted from the analysis — review the source fix, then Mark reviewed.') : '', 'muted');
+    // "review it" reads as read-and-approve, and the ONE sentence that said the box was
+    // editable lived in the textarea's placeholder — invisible whenever a draft fills it,
+    // which is always. So the only affordance was the resize grabber. Says "edit" now, in
+    // the one slot that is always on screen (the sub line above is overwritten by
+    // paintFindingsScope, and instructions there were ruled noise 2026-08-12).
+    _findingsStatus(text ? (statusMsg || 'Drafted from the analysis. Edit it here if you’d say it differently, then Mark reviewed.') : '', 'muted');
   }
   // ---- Resolver plumbing -------------------------------------------------
   // Tolerant field read: first present, non-empty value from a list of key
   // spellings (the resolver's exact casing isn't frozen yet — read defensively).
+  // Subject-verb agreement for finding text. In "N of M inventory DMAAIs resolve…"
+  // the NOUN agrees with M and the VERB agrees with N — two different counts. Every
+  // site keyed the noun to one count and left the verb hardcoded, so a single-row
+  // finding read "1 of 1 inventory DMAAI resolve to a different account". That text
+  // is stored in RTxvCardResolution.Note and rendered on the audit findings, which a
+  // third party reads months later. A legacy stored note carries the same defect
+  // under older wording ("1 inventory routing post to"), so it survived a rewording
+  // of the sentence — decided in one place now instead of per call site.
+  function _txPlural(n, suffix) { return Number(n) === 1 ? '' : (suffix || 's'); }
+  function _txVerb(n, singular, plural) { return Number(n) === 1 ? singular : plural; }
   function _txField(o, keys) {
     for (var i = 0; i < keys.length; i++) { if (o[keys[i]] != null && o[keys[i]] !== '') return o[keys[i]]; }
     return null;
@@ -6816,20 +6896,41 @@
         var objSub = (ob + (sb ? '.' + sb : '')).replace(/\s+/g, '');
         // BUFlex = the AAI's BU field was blank -> branch plant IS the BU; the BU
         // then varies by branch and its "mismatch" is ignored (compare obj+sub).
-        var bfRaw = (r.BUFlex !== undefined) ? r.BUFlex : r.buflex;
-        var buFlex = (bfRaw === true || bfRaw === 1 || String(bfRaw).trim().toLowerCase() === '1'
-          || String(bfRaw).trim().toLowerCase() === 'true' || String(bfRaw).trim().toLowerCase() === 'yes');
+        //
+        // SubFlex is the SAME rule on the subsidiary and was NEVER READ (owner
+        // 2026-08-13; zero matches for SubFlex/subflex in any RRV8 .html/.js before
+        // this). Consequences ran both ways: a FLEXED subsidiary was compared as if
+        // it were literal, manufacturing a mismatch on a segment the item supplies —
+        // and an UNFLEXED subsidiary is genuinely part of what the AAI asserts, so it
+        // belongs in the model account on screen. Two sources spell these fields
+        // differently and carry different value types: v6_003_expanded_aais emits
+        // buflex/subflex as 1/0, v_integrity_jde_aais emits BUFlex/SubFlex as
+        // "Yes"/"No". Read both spellings, and keep the existing 5-way truthy test —
+        // now shared instead of inlined, so the two flags cannot drift apart.
+        var _flexOn = function (v) {
+          if (v === true || v === 1) return true;
+          var s = String(v == null ? '' : v).trim().toLowerCase();
+          return s === '1' || s === 'true' || s === 'yes';
+        };
+        var buFlex  = _flexOn((r.BUFlex  !== undefined) ? r.BUFlex  : r.buflex);
+        var subFlex = _flexOn((r.SubFlex !== undefined) ? r.SubFlex : r.subflex);
         var tbl = String(r.tablenumber || r.TableNumber || '').trim();
         var descr = String(r.AcctDescription || r.acctdescription || '').trim();
         var cmt = String(r.comment || r.Comment || '').trim().toLowerCase();
         var acct = (bu + (ob ? '.' + ob : '') + (sb ? '.' + sb : '')).replace(/\s+/g, '');
         if (!co || !dt || !acct) return;
         var k = co + '|' + ot + '|' + dt + '|' + gc;
-        (byCombo[k] || (byCombo[k] = [])).push({ costType: ct, acct: acct, objSub: objSub, table: tbl, descr: descr, buFlex: buFlex });
+        // `parts` carries the three segments unjoined so the comparison can rebuild the
+        // account from whichever ones are LITERAL. acct/objSub are kept for callers that
+        // still want the full account or the old obj+sub form.
+        (byCombo[k] || (byCombo[k] = [])).push({ costType: ct, acct: acct, objSub: objSub, table: tbl, descr: descr,
+          buFlex: buFlex, subFlex: subFlex, parts: { bu: bu.replace(/\s+/g, ''), ob: ob.replace(/\s+/g, ''), sb: sb.replace(/\s+/g, '') } });
         // 'base aai' flags the 4152 model row whose DocType = the company's
         // AAIDocType (computed in v6_003_expanded_aais) — the cardex model account,
         // resolved WITHOUT a separate /admin/companies lookup.
-        if (cmt === 'base aai' && gc && !model[co + '|' + gc]) model[co + '|' + gc] = { acct: acct, objSub: objSub, doctype: dt, buFlex: buFlex, descr: descr };
+        if (cmt === 'base aai' && gc && !model[co + '|' + gc]) model[co + '|' + gc] = { acct: acct, objSub: objSub, doctype: dt,
+          buFlex: buFlex, subFlex: subFlex, descr: descr,
+          parts: { bu: bu.replace(/\s+/g, ''), ob: ob.replace(/\s+/g, ''), sb: sb.replace(/\s+/g, '') } };
       });
       Object.keys(byCombo).forEach(function (k) {
         var seen = {}, out = [];
@@ -6890,10 +6991,36 @@
         // Cardex MODEL = the 'base aai' 4152 row for (company, GL class); its
         // DocType is the company's AAIDocType, so Model Table = "4152 <doctype>".
         var m = model[c.co + '|' + code];
-        var modelAcct = m ? m.acct : '';
         var modelDescr = m ? (m.descr || '') : '';
-        var modelObjSub = m ? m.objSub : '';
         var modelTable = (m && m.doctype) ? '4152 ' + m.doctype : '4152';
+        // Rebuild an account from the segments that are LITERAL. A flexed segment is
+        // supplied at posting time — the branch plant for the BU, the item for the
+        // subsidiary — so it is not part of what the AAI asserts: comparing it
+        // manufactures a mismatch, and printing it names a placeholder as the model. An
+        // UNFLEXED subsidiary is genuinely asserted and stays in (owner 2026-08-13).
+        var _acctKey = function (p, dropBu, dropSub) {
+          if (!p) return '';
+          var segs = [];
+          if (!dropBu && p.bu) segs.push(p.bu);
+          if (p.ob) segs.push(p.ob);
+          if (!dropSub && p.sb) segs.push(p.sb);
+          return segs.join('.');
+        };
+        // A segment is dropped when EITHER side flexes it: the two rows have to be
+        // compared over the same segments or the keys are not comparable at all.
+        var _mFlexBu = !!(m && m.buFlex), _mFlexSub = !!(m && m.subFlex);
+        // The model's F0901 description is only honest when the BU it was looked up on is
+        // real. On a flexed BU it names an account nobody posts to — that is how
+        // "Inventory - Spice Blend" came to sit beside a Cane Sugar posting.
+        var _descrFor = function (dropBu) { return dropBu ? 'BU from branch plant' : modelDescr; };
+        // THE DISPLAY MUST MATCH THE COMPARISON — the reason `_acctKey` feeds both. The
+        // table used to print the full account (placeholder BU included) and the F0901
+        // description OF THAT PLACEHOLDER, so on co 30002 / P50 it rendered
+        // "Model Acct B000107.1121 / Inventory - Spice Blend" beside a Cane Sugar posting:
+        // one BU's account presented as THE model, with instructions to align to it. That
+        // AAI carries TWO placeholder BUs (B000107 and B000108, measured) and neither is
+        // the posting BU. Same shape as the #38 through-line — a true comparison, displayed
+        // at a wider scope than it ran at.
         // JDE keys inventory AAIs differently by family: manufacturing on
         // (order type + doc type); SALES leaves OrderType BLANK and stores the
         // ORDER type (SA/SO/SD/SK...) in the DocType column; inventory moves put
@@ -6910,16 +7037,21 @@
           inv = (byCombo[kBase + code] || []).filter(isInv);
           if (!inv.length) inv = (byCombo[kBase + '****'] || []).filter(isInv);
         }
-        if (!inv.length) { out.push({ glCode: code, costType: '', modelTable: modelTable, modelAcct: modelAcct, modelAcctDesc: modelDescr, invDmaai: '', invAcct: '', invAcctDesc: '', acctMis: false }); return; }
+        if (!inv.length) { out.push({ glCode: code, costType: '', modelTable: modelTable,
+          modelAcct: _acctKey(m && m.parts, _mFlexBu, _mFlexSub), modelAcctDesc: _descrFor(_mFlexBu),
+          invDmaai: '', invAcct: '', invAcctDesc: '', acctMis: false }); return; }
         inv.forEach(function (e) {
           // Compare the FULL account, EXCEPT when the BU is flex on either side —
           // the AAI's BU field was blank, so the branch plant IS the BU (it varies
           // by branch, not a routing choice). Then compare object+subsidiary only.
-          var flex = (m && m.buFlex) || e.buFlex;
-          var acctMis = flex
-            ? !!(modelObjSub && e.objSub && modelObjSub !== e.objSub)
-            : !!(modelAcct && e.acct && modelAcct !== e.acct);
-          out.push({ glCode: code, costType: e.costType, modelTable: modelTable, modelAcct: modelAcct, modelAcctDesc: modelDescr, invDmaai: e.table, invAcct: e.acct, invAcctDesc: e.descr, acctMis: acctMis });
+          var dropBu  = _mFlexBu  || e.buFlex;
+          var dropSub = _mFlexSub || e.subFlex;
+          var mKey = _acctKey(m && m.parts, dropBu, dropSub);
+          var eKey = _acctKey(e.parts, dropBu, dropSub);
+          var acctMis = !!(mKey && eKey && mKey !== eKey);
+          out.push({ glCode: code, costType: e.costType, modelTable: modelTable,
+            modelAcct: mKey, modelAcctDesc: _descrFor(dropBu),
+            invDmaai: e.table, invAcct: e.acct, invAcctDesc: e.descr, acctMis: acctMis });
         });
       });
       out.sort(function (a, b) {
@@ -7047,7 +7179,7 @@
     var nAll = list.length, aP = (nAll === 1 ? '' : 's');
     if (nMis) {
       return { state: 'mismatch', list: list, nMis: nMis,
-        head: nMis + ' of ' + nAll + ' inventory DMAAI' + aP + ' resolve to a different account than the cardex model:',
+        head: nMis + ' of ' + nAll + ' inventory DMAAI' + aP + ' ' + _txVerb(nMis, 'resolves', 'resolve') + ' to a different account than the cardex model:',
         chip: nMis + ' of ' + nAll + ' DMAAI' + aP + ' off the cardex model' };
     }
     return { state: 'clean', list: list, nMis: 0,
@@ -7486,15 +7618,17 @@
       verdict = _gap ? 'detected' : 'open';
     }
     else if (misRows.length && (!mech || mech.dmaai)) {
-      var _nm = misRows.length, _nm1 = (_nm === 1);
+      var _nm = misRows.length;
       // No leading clause: the summary's own chip IS this finding, and a label in
       // front of it would state the same count twice.
       sel = {
-        mech: _nm + ' inventory DMAAI' + (_nm1 ? '' : 's')
-          + ' resolve to a different account than the item-ledger model for their GL class.',
+        mech: _nm + ' inventory DMAAI' + _txPlural(_nm)
+          + ' ' + _txVerb(_nm, 'resolves', 'resolve')
+          + ' to a different account than the item-ledger model for '
+          + _txVerb(_nm, 'its', 'their') + ' GL class.',
         checked: [
           'Inventory AAI for each DMAAI in this view against the item-ledger model account.',
-          _nm + ' of them resolve somewhere else. Confirmed. Listed below.'
+          _nm + ' of them ' + _txVerb(_nm, 'resolves', 'resolve') + ' somewhere else. Confirmed. Listed below.'
         ],
         found: txFinding('DMAAI-MIS').found,
         fix: txFinding('DMAAI-MIS').fix
@@ -7605,7 +7739,11 @@
         routesRead = true;
       }
     }
-    if (misRows.length) tail.push('DMAAIs that differ from the model:\n' + misTxt);
+    // Labelled as its OWN finding (owner 2026-08-13). This is 4240-vs-4152 — the
+    // inventory relief landing off the cardex model — and it sat unlabelled directly
+    // under the net-zero finding, where it read as evidence FOR it. They are two
+    // independent configuration facts and an auditor must not fuse them.
+    if (misRows.length) tail.push('Separate finding — inventory relief off the cardex model:\n' + misTxt);
     // MTO records the per-shape counts so the finding carries the decomposition.
     if (_mtoOn) {
       tail.push('Residual by shape:\n' + [
@@ -7627,8 +7765,8 @@
         context: sel.context,
         found: sel.found, fix: sel.fix, tail: tail
       }, { dmaai: routesRead }), sel.triage
-        ? 'Drafted from the analysis — the cause is not identified yet; work the next steps before Mark reviewed.'
-        : 'Drafted from the analysis — review it, then Mark reviewed.');
+        ? 'Drafted from the analysis — the cause is not identified yet. Edit it here as you work the next steps, then Mark reviewed.'
+        : 'Drafted from the analysis. Edit it here if you’d say it differently, then Mark reviewed.');
     }
     if (wantAi) _txAnalyzeNarrate(co, per, sel.mech, (Array.isArray(sel.fix) ? sel.fix.join(' ') : sel.fix), fp);
   }

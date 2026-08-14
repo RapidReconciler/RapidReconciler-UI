@@ -29,14 +29,41 @@ Section 5's load gap: absent from the table you queried is not absent from the
 configuration.
 
 Both tables share a column shape. Match on `TableNumber` (the DMAAI number),
-`CompanyNumber`, `OrderType`, `DocType` and `GLClass`, taking the exact GL class
-first and the wildcard second. The account is in `LongAccount`, with
-`BusinessUnit`, `ObjectAccount` and `SubAccount` carrying the parts.
-`RAccountInstr` also has `CostType`, `flexbu` and `flexsub`.
+`CompanyNumber`, `OrderType`, `DocType` and `GLClass`. The account is in
+`LongAccount`, with `BusinessUnit`, `ObjectAccount` and `SubAccount` carrying the
+parts. `RAccountInstr` also has `CostType`, `flexbu` and `flexsub`.
+
+**There is no wildcard step, and this paragraph used to say there was.** Both tables
+are already resolved and expanded: `GLClass` holds concrete classes only. Measured on
+`RapidReconciler_Demo3`, 2026-08-13 — `GLClass = '****'` appears in **zero** of
+`RAccountInstr`'s 2,032 rows and **zero** of `RAccountInstrExp`'s 2,696, across 13 and
+23 distinct GL classes. So the lookup is a plain join on the five keys with no
+precedence to apply. The exact-then-`****` rule is real, but it belongs to JDE's own
+resolution against `F4095`, which is why it appears in the `action` copy that tells an
+analyst what to do in P4095. Applying it here is harmless but it invites the opposite
+error: writing a comparison that pairs wildcard to wildcard, decides the pair
+collapses, and never notices the concrete rows.
+
+The `WildCardGL` column is a specificity **level**, not a `****` value. Do not read it
+as one.
 
 Note the column names differ from JDE's. F4095 uses the originals (`mlanum`,
 `mlco`, `mldcto`, `mldct`, `mlglpt`, `mlcost`, `mlmcu`, `mlobj`, `mlsub`), so a
 query written for one will not run against the other.
+
+**The V8 DMAAIs tab does not read these two tables.** Its Fix First worklist is built
+by `RRV8/scripts/derive-dmaai-analysis.py`, which consumes the output of
+`extract-dmaai-analysis.py` — and that extract's own source line reads
+`Source  JDE F4095`. The deriver contains no SQL at all. So the tab's net-zero check
+(`NZ_PAIRS` declares `("4240", "4220")` for Sales, and only DocType `IT` is exempt) is
+derived from the F4095 extract, which this section tells you not to answer routing
+questions from, and which is filtered besides.
+
+Consequence for an analyst: the tab is the right place to **start** a "is this pair
+collapsed anywhere else" sweep, and it is not proof of completeness. Confirm the pair
+against `RAccountInstr` / `RAccountInstrExp` before reporting a routing as isolated or
+as fixed. The card copy on Sales DMAAI Net Zero points at the tab deliberately — it is
+navigable and it groups by company — but the closing check belongs here.
 
 ---
 

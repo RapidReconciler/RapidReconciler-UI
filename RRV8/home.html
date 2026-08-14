@@ -535,8 +535,8 @@
   .aud-hdr-cn { font-size: 12.5px; font-weight: 600; color: var(--text-muted); margin-left: 7px; }
   .acct-snap-titlestack { display: inline-flex; flex-direction: column; align-items: center; gap: 2px; line-height: 1.15; }
   .aud-hdr-per { font-size: 13px; font-weight: 700; color: var(--navy); }
-  /* Full-width entry bands, grouped by actor (Analyst above Accountant). Each band
-     carries a "View details" button linking to where the work was done. */
+  /* Full-width entry bands, grouped by actor (Analyst above Accountant). No
+     drill-through button on a band — see _renderAuditBand for why it was removed. */
   .audit-group { margin-bottom: 6px; }
   .audit-group-head { font-size: 12px; font-weight: 800; letter-spacing: .03em; text-transform: uppercase; color: var(--text-muted); margin: 16px 0 8px; }
   .audit-group:first-child .audit-group-head { margin-top: 2px; }
@@ -555,9 +555,7 @@
   .audit-band-msg { font-size: 13px; color: #2b3345; line-height: 1.5; margin-top: 5px; white-space: pre-wrap; word-break: break-word; }
   .audit-band-msg.is-empty { color: var(--text-muted); font-style: italic; }
   .audit-band-meta { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
-  .audit-band-details { flex: 0 0 auto; align-self: center; font-weight: 700; font-size: 13px; color: var(--blue); text-decoration: none; white-space: nowrap; border: 1px solid var(--rule); border-radius: 8px; padding: 8px 14px; }
-  .audit-band-details:hover { background: var(--bg-soft); }
-  @media (max-width: 640px) { .audit-band { flex-direction: column; align-items: stretch; gap: 10px; } .audit-band-details { align-self: flex-start; } }
+  @media (max-width: 640px) { .audit-band { flex-direction: column; align-items: stretch; gap: 10px; } }
   /* Soft-grey tray behind the company cards so the white cards read as distinct,
      liftable objects rather than blending into the white container. */
   .acct-grid-wrap { display: block; background: #e8ecf3; border: 1px solid var(--rule); border-radius: 10px; padding: 14px; }
@@ -2731,8 +2729,9 @@
        events (loads / B->C / deploys never appear here). Today: resolved
        transaction-variance reviews (analyst, RRV8.cardStore) + reconciliation
        completions (accountant, /admin/activity); more triggers get added as the
-       processes grow. Each entry carries a "View details" link to where the work
-       was done. Graceful localStorage/RRDEMO fallback. Rendered by renderAuditPanel(). -->
+       processes grow. Each entry carries the finding text itself and NO drill-through
+       link (see _renderAuditBand for why). Graceful localStorage/RRDEMO fallback.
+       Rendered by renderAuditPanel(). -->
   <section class="acct-panels" id="acctAudit" hidden aria-label="Reconciliation Audit Findings">
     <div class="acct-snapshot">
       <div class="acct-snap-headline">
@@ -3537,6 +3536,18 @@
     if (!m) return String(iso || '');
     var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
     return months[parseInt(m[2],10)-1] + ' ' + parseInt(m[3],10) + ', ' + m[1];
+  }
+  // Short absolute date for a card stamp ("Jul 14"), year appended only when it is not
+  // the current one. Absolute and not fmtAgo: a stamp records WHEN the work happened,
+  // and a relative age reads differently on every page load, so two analysts comparing
+  // notes a week apart see two different values for one unchanging fact.
+  var _STAMP_MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  function _txvStampDate(at) {
+    if (!at) return '';
+    var d = new Date(at);
+    if (isNaN(d.getTime())) return '';
+    var s = _STAMP_MON[d.getMonth()] + ' ' + d.getDate();
+    return d.getFullYear() === (new Date()).getFullYear() ? s : (s + ', ' + d.getFullYear());
   }
   function $(id) { return document.getElementById(id); }
   // holdMs is optional and defaults to the original 2600. 2.6s is right for
@@ -9245,7 +9256,23 @@
         // finding. `_review` is still read for the period-level controls.
         // Done card — the chip states the HAND-OFF, not a fix: the analyst identified the
         // root cause and passed it on. Draft/let-ride keep their own chips.
-        var statusChip = p.done ? '<span class="txv-statuschip is-fixed" title="Reviewed by the analyst and handed to the Audit Center.">&rarr; Audit Center</span>'
+        // A STAMP, not a signpost. Two defects, both fixed 2026-08-13:
+        //  (1) It read "-> Audit Center", and its tooltip said the same. There is no
+        //      Audit Center anywhere in RRV8/ — the tab is "Reconciliation Audit
+        //      Findings" (2741). The arrow also implied navigation, and the band's
+        //      drill-through link was removed the same day, so nothing to arrow to.
+        //  (2) It carried NO DATE. A card worked six weeks ago and one worked this
+        //      morning stamped identically, and the date is the reason to look at all —
+        //      it answers "do I still owe this card work?". On the chip, not the
+        //      tooltip: a tooltip is not a sink for a value that drives a decision.
+        // Sourced from the SAME cardStore record `done` comes from (see 8926 → 8938),
+        // which is the same record the audit trail reads, so the chip and the trail
+        // cannot disagree about whether a finding was recorded.
+        var _doneAt = _txvStampDate((p.rec && p.rec.at) || '');
+        var statusChip = p.done
+            ? '<span class="txv-statuschip is-fixed" title="This finding is recorded in the reconciliation audit findings'
+              + (_doneAt ? ', ' + esc(_doneAt) : '') + '.">In audit findings'
+              + (_doneAt ? ' &middot; ' + esc(_doneAt) : '') + '</span>'
           : draft ? '<span class="txv-statuschip is-draft">Finding drafted</span>'
           : '';
         // (2) Panel header — the V8 standard (identity LEFT · pattern title + period
@@ -11446,17 +11473,16 @@
   // NOT an audit-of-record (RR is a tool; JDE is the SoR — no immutability here).
   // Inputs are analyst or accountant transactions ONLY; system events (loads / B->C /
   // deploys / reviews) are NOT inputs and are dropped. Each entry is one actor + a
-  // trigger + (ideally) a detailsHref, so the framework extends by adding triggers:
-  //   analyst    — completed variance reviews (RRV8.cardStore; details → the worklist)
-  //                + cardex variance clears (/admin/activity "Cardex variance — cleared";
-  //                details → the cardex variance page)
+  // trigger + the finding text, so the framework extends by adding triggers:
+  //   analyst    — completed variance reviews (RRV8.cardStore)
+  //                + cardex variance clears (/admin/activity "Cardex variance — cleared")
   //   accountant — reconciliation completions (attest / sign-off / journal entry,
   //                from /admin/activity)
   // Server-first with graceful localStorage/RRDEMO fallback (zero console noise).
   var _auditFilter = 'all', _auditEntries = null, _auditGen = 0, _auditWired = false, _auditKey = '', _auditPeriod = '', _auditCo = '';
   // Inputs are analyst or accountant TRANSACTIONS only — no system events (loads /
   // B->C / deploys never appear here). Extensible: a new trigger just maps to one
-  // actor and (ideally) a detailsHref. More triggers get added as the processes grow.
+  // actor and a finding text. More triggers get added as the processes grow.
   var AUDIT_ACTORS = { analyst: 'Analyst', accountant: 'Accountant' };
   // Card code → display name for an Audit Center row. Reads the SHARED taxonomy so a
   // newly added card is named here automatically — this map used to be a third
@@ -11470,6 +11496,39 @@
   // adjusting / period close). Everything else on that feed — loads, B->C, deploys,
   // reviews, restarts (system) AND the analyst's own "Reconciliation findings saved"
   // (that comes through cardStore as an analyst entry) — returns null and is dropped.
+  // Recover an ISO period from an activity row. Scope is encoded as PROSE in the
+  // detail these events write ('Co 30002 · Apr 30, 2023 · …'), because the log takes
+  // event + detail and nothing structured. `_paintAuditTrail` filters on
+  // e.per === _auditPeriod, so an entry that can't recover its ISO period is
+  // invisible the moment a period is selected. Accepts a literal ISO first, then
+  // fmtPeriod's own output shape (month abbrev, day NOT zero-padded — see 3534).
+  var _AUD_MON = { jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06', jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12' };
+  function _auditIsoPeriod(s) {
+    s = String(s == null ? '' : s);
+    var iso = /\b(\d{4})-(\d{2})-(\d{2})\b/.exec(s);
+    if (iso) return iso[1] + '-' + iso[2] + '-' + iso[3];
+    var m = /\b([A-Za-z]{3})[a-z]*\s+(\d{1,2}),\s*(\d{4})\b/.exec(s);
+    if (!m) return '';
+    var mm = _AUD_MON[m[1].toLowerCase()];
+    if (!mm) return '';
+    return m[3] + '-' + mm + '-' + (m[2].length === 1 ? '0' + m[2] : m[2]);
+  }
+  // Strip the leading scope prose off an activity detail. These events encode
+  // 'Co <n> · <period> · <what happened>' because the log takes only event + detail,
+  // but the band ALREADY prints the company as a scope pill and the panel is already
+  // filtered to the period — so two of the segments restate what is on screen either
+  // side of them. Only the trailing clause is signal. Conservative: a segment is
+  // dropped only when it actually parses as a company or a period, so an unexpected
+  // detail shape is left whole rather than truncated.
+  function _auditStripScope(detail) {
+    var parts = String(detail == null ? '' : detail).split('·');
+    while (parts.length > 1) {
+      var head = parts[0].trim();
+      if (/^Co\s*\d{3,}$/i.test(head) || (head && _auditIsoPeriod(head))) { parts.shift(); continue; }
+      break;
+    }
+    return parts.join('·').trim();
+  }
   function _auditFromActivity(e) {
     var evt = (e && e.event) || '';
     // De-dupe: a balancing-entry export is represented in Audit by its beStore record
@@ -11478,15 +11537,38 @@
     // attest-only events (no beStore twin) still surface, so nothing is lost.
     if (/^balancing entry exported$/i.test(String(evt).trim())) return null;
     var s = evt + ' ' + ((e && e.detail) || '');
+    // Analyst period review -> an ANALYST entry. Logged by the Transaction Variance
+    // period control as 'Analyst period reviewed' / 'Analyst period review reopened'
+    // (home.html 9360 / 9395 / 9460). NEITHER matches the accountant regex below —
+    // 'period reviewed' is not 'period complete' or 'period closed' — so before this
+    // branch existed both were classified as non-accountant and DROPPED. The write was
+    // verified end to end; the read into this panel never was, so the analyst's own
+    // period decision reached no audit surface at all. Classify here, ahead of the gate.
+    if (/^analyst period review/i.test(String(evt).trim())) {
+      var _pco = /\bco\s*([0-9]{3,})/i.exec(s);
+      var _reop = /reopen/i.test(evt);
+      return {
+        actor: 'analyst',
+        trigger: _reop ? 'Period review reopened' : 'Period marked reviewed',
+        title: _reop ? 'Period Review Reopened' : 'Period Reviewed',
+        at: e.at || '', by: e.by || '', co: _pco ? _pco[1] : (e.co || ''),
+        per: _auditIsoPeriod(s),
+        // Header, not a finding: there is no investigation behind a sign-off. The
+        // payload is the actor, the date, and WHAT WAS ACCEPTED — so the scope prose
+        // the band already prints is stripped and the trailing clause stands alone.
+        message: _auditStripScope(e.detail), amount: null,
+        event: e.event || 'Analyst period review', detail: e.detail || ''
+      };
+    }
     // Cardex variance clear -> an ANALYST disposition (server-durable via /admin/activity).
     // The clear is the audited act; it won't match the accountant regex below, so classify
-    // it here before the isAcct gate would drop it. Details -> the cardex variance page.
+    // it here before the isAcct gate would drop it.
     if (/^cardex variance/i.test(String(evt).trim())) {
       var _cco = /\bco\s*([0-9]{3,})/i.exec(s);
       return {
         actor: 'analyst', trigger: 'Cardex variance cleared', title: 'Cardex variance cleared',
         at: e.at || '', by: e.by || '', co: _cco ? _cco[1] : (e.co || ''), per: '',
-        message: e.detail || '', amount: null, detailsHref: 'inventory-cardex-variance.html',
+        message: e.detail || '', amount: null,
         event: e.event || 'Cardex variance cleared', detail: e.detail || ''
       };
     }
@@ -11498,7 +11580,7 @@
     return {
       actor: 'accountant', trigger: 'Reconciliation', title: e.event || 'Reconciliation activity',
       at: e.at || '', by: e.by || '', co: coM ? coM[1] : (e.co || ''), per: '',
-      message: e.detail || '', amount: null, detailsHref: '',
+      message: e.detail || '', amount: null,
       event: e.event || 'Reconciliation activity', detail: e.detail || ''
     };
   }
@@ -11514,8 +11596,7 @@
   }
   // cardStore resolution record -> an ANALYST transaction. Only a COMPLETED review
   // lands here — a 'worked' draft is still on the Home card awaiting Mark reviewed
-  // (the two-step); 'reopened'/'open' are in-progress. detailsHref → the worklist
-  // where it was worked, so the auditor can open the rows behind it.
+  // (the two-step); 'reopened'/'open' are in-progress.
   // Currency-format an audit amount. The module-level `_money` carries no symbol and
   // the per-function `money` locals aren't in scope here, so this sign-aware helper
   // keeps the two audit call sites from reaching for an undefined `money`. Audit
@@ -11528,16 +11609,10 @@
     var nm  = _txvCodeName(rec.cardCode) || rec.cardCode || 'Variance';
     var amt = (rec.varAmount != null && !isNaN(rec.varAmount)) ? Number(rec.varAmount) : null;
     var msg = rec.note || '';   // sourceFix now carries the resolution TYPE, not message text
-    // Built through the ONE href builder so this link carries the same contract as
-    // the card's own "Open in worklist" (a hand-rolled twin is how params drift).
-    // No expect= here: a stored resolution record has no live row count to tie out.
-    var href = (rec.company && rec.cardCode && rec.periodEnd)
-      ? _txvTxHref(rec.company, { card: rec.cardCode, period: String(rec.periodEnd).slice(0, 10) })
-      : '';
     return {
       actor: 'analyst', trigger: 'Transaction variance reviewed', title: nm,
       at: rec.at || '', by: rec.by || '', co: rec.company || '', per: rec.periodEnd || '',
-      message: msg, amount: amt, detailsHref: href,
+      message: msg, amount: amt,
       // event/detail keep the flat shape the Excel export consumes.
       event: nm + ' — root cause identified',
       detail: msg + (amt != null && Math.abs(amt) >= 1 ? ' · ' + _audMoney(amt) : '')
@@ -11560,7 +11635,7 @@
       actor: 'accountant', trigger: label + (verified ? ' · Verified' : ' · Awaiting posting'),
       title: label, at: (rec && rec.at) || '', by: (rec && rec.by) || '',
       co: (rec && rec.company) || '', per: (rec && rec.periodEnd) || '',
-      message: msg, amount: amt, detailsHref: '', verified: verified,
+      message: msg, amount: amt, verified: verified,
       event: label + ' ' + (verified ? 'verified' : 'exported'), detail: msg
     };
   }
@@ -11579,7 +11654,7 @@
       actor: 'accountant', trigger: 'Company marked complete', title: 'Marked Complete',
       at: (rec && rec.at) || '', by: (rec && rec.by) || '',
       co: (rec && rec.company) || '', per: (rec && rec.periodEnd) || '',
-      message: msg, amount: null, detailsHref: '',
+      message: msg, amount: null,
       event: 'Company marked complete', detail: msg
     };
   }
@@ -11616,7 +11691,7 @@
       trigger: stale ? 'Model DMAAI approval · needs re-approval' : 'Model DMAAI approved',
       title: 'Model Approved', at: st.approvedDate || '', by: st.approvedBy || '',
       co: '', per: '', standing: true,
-      message: msg, detailsHref: '',
+      message: msg,
       event: 'Model DMAAI approved', detail: msg
     };
   }
@@ -11661,8 +11736,12 @@
   }
   var AUDIT_CHIP_LABEL = { all: 'All', analyst: 'Analyst', accountant: 'Accountant' };
   // Every entry is a full-width BAND: title · company · amount on top, the finding
-  // message below, a meta line, and a "View details" link to where the work was done
-  // (the worklist, for an analyst entry). Bands are grouped by actor.
+  // message below, then a meta line. Bands are grouped by actor.
+  // NO drill-through link, deliberately (owner 2026-08-13). An entry here is a
+  // HISTORICAL record; every page it could link to renders LIVE rows, so months
+  // later the link lands on a slice that no longer matches the finding text printed
+  // beside it. The finding body IS the artifact an auditor reads. Re-adding a link
+  // means first deciding what an as-of view of the underlying rows would be.
   function _renderAuditBand(e) {
     var co = _auditCoLabel(e.co);
     var meta = [(e.by ? 'By ' + esc(e.by) : ''), esc(fmtAgo(e.at) || _auditAbs(e.at)), esc(e.trigger || '')].filter(Boolean).join(' &middot; ');
@@ -11679,7 +11758,6 @@
       +   (e.message ? '<div class="audit-band-msg">' + _auditMsgHtml(e.message) + '</div>' : '<div class="audit-band-msg is-empty">No finding recorded.</div>')
       +   '<div class="audit-band-meta">' + meta + '</div>'
       + '</div>'
-      + (e.detailsHref ? '<a class="audit-band-details" href="' + esc(e.detailsHref) + '">View details &rarr;</a>' : '')
       + '</div>';
   }
   function _paintAuditTrail() {
@@ -11707,7 +11785,7 @@
       }).join('');
     }
     if (!total) {
-      box.innerHTML = '<div class="audit-empty">No completed reviews yet. When the analyst reviews a variance card — or an accountant records a reconciliation — it appears here, with a link to the details behind it.</div>';
+      box.innerHTML = '<div class="audit-empty">No completed reviews yet. When the analyst reviews a variance card — or an accountant records a reconciliation — it appears here with the finding that was recorded.</div>';
       return;
     }
     var perLabel = _auditPeriod ? (fmtPeriod(_auditPeriod) || _auditPeriod) : 'this period';
