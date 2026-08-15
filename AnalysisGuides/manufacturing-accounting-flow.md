@@ -169,6 +169,116 @@ at its own `ilukid` position.
 alone matches nothing. Use `ltrim(rtrim(...))`. A filter returning zero rows against a table
 you just proved is populated is this.
 
+## Two cost sources on one transaction: `F4105` prices the cardex, `F30026` prices the GL
+
+**Owner SME ruling, 2026-08-14.** When an IM or IC for manufacturing is written to the
+cardex, the cost is taken from `F4105`. When R31802A builds the GL distribution, the cost
+is built from the `F30026` cost components. **If the component total does not equal the
+`F4105` cost, that gap is a variance, and testing for it is a routine check on any
+manufacturing document.**
+
+The sign follows the documented convention (`Variance = ledger − cardex`), so the
+prediction is `(sum of components − F4105 cost) × transaction quantity`.
+
+⚠ `F30026`'s payload columns read backwards from their names. **`iecost` holds the
+cost-component CODE** (`A1`, `A2`, `B1`, `B3`, `D1`); **`iecsl` holds the AMOUNT.** Read
+that out of the data, never off the name. Every row on the specimen carries ledger `07`,
+so join `F4105` on `coledg = '07'`. The left-padding warning above applies to `iemmcu`.
+
+```sql
+with comp as (
+    select ieitm, ltrim(rtrim(iemmcu)) as mcu, sum(iecsl) as comp_total
+    from dbo.f30026 where ltrim(rtrim(ieledg)) = '07'
+    group by ieitm, ltrim(rtrim(iemmcu))
+),
+cost as (
+    select coitm, ltrim(rtrim(comcu)) as mcu, councs
+    from dbo.f4105 where ltrim(rtrim(coledg)) = '07'
+)
+select l.ildoco, ltrim(rtrim(l.ildct)) as dct,
+       sum(l.iltrqt * (c.comp_total - k.councs)) as predicted_variance
+from dbo.f4111 l
+join comp c on c.ieitm = l.ilitm and c.mcu = ltrim(rtrim(l.ilmcu))
+join cost k on k.coitm = l.ilitm and k.mcu = ltrim(rtrim(l.ilmcu))
+where ltrim(rtrim(l.ildct)) in ('IM', 'IC')
+group by l.ildoco, ltrim(rtrim(l.ildct));
+```
+
+Join that to `RCardexLedgerCompare2` on `OrderNumber` + `DocType` and compare
+`predicted_variance` against `Variance`.
+
+**Measured 2026-08-15 on a specimen database, all specimen figures.** `F30026` summed to
+(item, branch, ledger 07) joins `F4105` on 122,816 keys: **119,381 tie exactly, 3,435
+carry a gap.** Against that database's manufacturing variance population (`recstatus = 1`,
+`Type = 'Mfg'`, 4,999 rows):
+
+| Doc type | Orders carrying a gap item | Of those, predicted variance ties within $0.01 | Orders with no gap item | Ties |
+|---|---|---|---|---|
+| IC | 266 | **247** | 1,944 | 0 |
+| IM | 81 | **36** | 2,707 | 0 |
+
+283 rows and **$34,303.99** are explained to the penny by that one subtraction — 5.7% of
+the rows, so it is a screen rather than the dominant cause. **The zero column is the
+control:** not one of the 4,651 rows without a gap item ties by accident.
+
+Worked row (specimen): an IC completion of 800 units. `F4105` ledger 07 for the item is
+**0.0000**, and the cardex row's `iluncs` is **0.0000** for an extended value of **$0.00**
+— the cardex leg took the `F4105` cost. `F30026` holds five components on the same item
+and branch: A1 1.8005 + A2 0.2878 + B1 1.3922 + B3 0.9014 + D1 0.0838 = **4.4657**. The
+posted `F0911` IC line is **$3,572.56**, which is 4.4657 × 800, and
+`RCardexLedgerCompare2.Variance` is **3,572.56**. Both legs, both sources, one penny.
+
+**The dominant shape is a standard that was never rolled:** 243 of the 247 explained IC
+rows sit on an item whose `F4105` cost is exactly zero while its components carry value.
+
+**What the measurement can and cannot distinguish.** `F4105` and `F30026` are
+current-state only — the same limitation this guide already records for `iluncs`.
+
+- A **hit is strong.** A historical variance reproduced to the penny out of today's two
+  tables means neither side has moved since, so the gap is standing and preventable.
+- A **miss is not evidence of absence.** Either side may have rolled after the transaction
+  posted, and neither table holds history. A zero prediction rules the component gap out
+  *today*, not on the G/L date.
+- The test **cannot** separate a component gap from a later cost roll on a row where the
+  arithmetic does not land. Read the `iluncs` chain by `ilukid` first.
+
+**Counter-example, and the precondition to check before trusting a zero.** On a second
+specimen database `F30026` holds **zero rows** against 20,497 in `F4105` — the extract
+loaded the item cost and not the components. **Confirm `F30026` is populated before
+concluding anything from a zero prediction.**
+
+The row that prompted the ruling sits on that database: an IM at company 30001, period
+2023-05-31, cardex **−57,245.60**, ledger **−57,252.64**, variance **−7.04**. Measured:
+
+- Two cardex IM rows, −55,997.116532 and −1,248.480000, sum to the cardex figure.
+- Three `F0911` IM lines on the same account, batch and G/L date: −55,997.12 and −1,248.48,
+  which match those two cardex rows after 2-decimal rounding, plus a **third line of −7.04
+  carrying no cardex counterpart.** The whole variance is that extra line.
+- Against `F4105` (ledger 02 there; no ledger 07 row exists for either item) the
+  transaction cost differs from the current cost by −$2,235.54 on one item and −$14.56 on
+  the other. **Neither is −7.04, and no combination of them is.** That route is refuted.
+- `F30026` is empty on that database, so the component route **cannot be measured at all**.
+  −7.04 stays **unexplained.** It matches the ruling only in shape — an extra GL line the
+  cardex does not carry — and shape is not a cause. Do not book it as one.
+
+The shape recurs there: of 549 manufacturing documents in that population, **13 carry more
+GL lines than cardex rows** (−$9,772.81 together) and 20 carry fewer. Re-run the check
+against a database whose `F30026` loaded before treating the ruling as tested on this row.
+
+**Where the population already lives, and one correction.** The `F4105` / `F30026`
+divergence taxonomy is authored in `frozen-cost-integrity-analysis.md` (Integrity Report 6,
+the R30543-equivalent), and its **Issue Type 2, "cost in F30026 only"**, is the same
+condition as the dominant shape measured above — so the analyst does not have to write this
+SQL to find the items. Use that report to get the population, then this check to price its
+effect per document. Two claims in that guide need reading against the measurement:
+
+- It says a "cost in F30026 only" item has "material issues and completions post at zero
+  cost." **Measured: only the cardex leg posts at zero.** The `F0911` leg posted the full
+  component value on the worked row above. Both legs at zero would net out; it is precisely
+  because they disagree that a variance exists.
+- It routes the resulting difference to R31804 / IV. **Measured: it surfaces first as an
+  IM / IC cardex-vs-ledger variance on `RCardexLedgerCompare2`,** before any IV entry.
+
 ## Consequences for a Completion Not Journaled card
 
 The card only claims cardex rows that carry a **batch number**. By the sequence

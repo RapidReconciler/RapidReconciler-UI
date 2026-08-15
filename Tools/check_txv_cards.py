@@ -223,24 +223,39 @@ def extract_meta(text):
     return meta
 
 
+# Both of these hold `{ a, t }` citations and both are id-validated. `checked` is
+# the detection; `alsoChecked` is every other check the classifier ran for this
+# card. They were one array until 2026-08-15, which is why a detected card's
+# "What happened" opened with the screens and guards and buried the detection.
+# Splitting the array without teaching the gate about the second half would have
+# silently un-gated the moved bullets -- the ids would stop being validated and
+# would resurface as "referenced by no card", which is the same evidence loss as
+# deleting them.
+CITED_FIELDS = ("checked", "alsoChecked")
+
+
 def collect_cards(meta):
-    """[(code, [checked_node, ...])] for every card, in catalog order."""
+    """[(code, field, [entry_node, ...])] for every cited array, catalog order."""
     cards = []
     for code, node in meta.items():
         if node[0] != "obj":
-            cards.append((code, None))
+            cards.append((code, "checked", None))
             continue
         finding = node[1].get("finding")
         if not finding or finding[0] != "obj":
-            cards.append((code, []))
+            cards.append((code, "checked", []))
             continue
-        checked = finding[1].get("checked")
-        if not checked:
-            cards.append((code, []))
-        elif checked[0] != "arr":
-            cards.append((code, None))
-        else:
-            cards.append((code, checked[1]))
+        for field in CITED_FIELDS:
+            arr = finding[1].get(field)
+            if not arr:
+                # `checked` absent is reported as empty so the card still appears in
+                # the walk; `alsoChecked` is optional and simply contributes nothing.
+                if field == "checked":
+                    cards.append((code, field, []))
+            elif arr[0] != "arr":
+                cards.append((code, field, None))
+            else:
+                cards.append((code, field, arr[1]))
     return cards
 
 
@@ -249,8 +264,15 @@ def collect_cards(meta):
 # --------------------------------------------------------------------------
 
 
-def run_check(config_path, manifest_path):
-    """Return (errors, warnings, stats). Empty errors == the gate passes."""
+def run_check(config_path, manifest_path, standard_path=None):
+    """Return (errors, warnings, stats). Empty errors == the gate passes.
+
+    `standard_path` exists for the self-test. It used to read the PRODUCTION
+    standard against a 3-card fixture catalog, so every real card code in the
+    format baseline looked stale the moment the baseline-existence check was
+    added -- and every future edit to the production baseline would have broken
+    the self-test for reasons that have nothing to do with the fixtures.
+    """
     errors, warnings = [], []
     stats = {"cards": 0, "checked": 0, "manifest": 0}
 
@@ -281,7 +303,11 @@ def run_check(config_path, manifest_path):
         return errors, warnings, stats
 
     cards = collect_cards(meta)
-    stats["cards"] = len(cards)
+    # DISTINCT card codes. collect_cards emits one tuple per cited ARRAY since the
+    # checked/alsoChecked split, so len(cards) counts arrays -- and this number is
+    # the gate's own "the extractor is really matching something" signal, which is
+    # worthless if it drifts with a schema change.
+    stats["cards"] = len({c for c, _f, _e in cards})
     if not cards:
         errors.append(
             "the extractor found ZERO cards in %s. The catalog shape changed and "
@@ -289,20 +315,21 @@ def run_check(config_path, manifest_path):
         )
 
     referenced = set()
-    for code, checked in cards:
-        if checked is None:
+    ids_by_card = {}
+    for code, field, entries in cards:
+        if entries is None:
             errors.append(
-                "%s: could not read `finding.checked` -- expected an array of "
-                "{a, t} objects." % code
+                "%s: could not read `finding.%s` -- expected an array of "
+                "{a, t} objects." % (code, field)
             )
             continue
-        ids_here = []
-        for idx, entry in enumerate(checked, 1):
+        ids_here = ids_by_card.setdefault(code, [])
+        for idx, entry in enumerate(entries, 1):
             stats["checked"] += 1
-            where = "%s checked[%d]" % (code, idx)
+            where = "%s %s[%d]" % (code, field, idx)
             if entry[0] == "str":
                 errors.append(
-                    "%s is a bare string, not { a, t }. Every checked line cites the "
+                    "%s is a bare string, not { a, t }. Every cited line names the "
                     "assertion that backs it; move an untested statement to `context`. "
                     "Text: %s" % (where, _snip(entry[1]))
                 )
@@ -327,6 +354,11 @@ def run_check(config_path, manifest_path):
                     )
             if text_node is None or text_node[0] != "str" or not text_node[1].strip():
                 errors.append("%s has an empty or missing `t` (analyst text)." % where)
+    # Judged per CARD, not per array: a card's detection can legitimately cite a
+    # precedence claim from the card that ran before it while its own assertions sit
+    # in `alsoChecked`. Splitting the arrays without pooling the ids here would have
+    # invented a warning on every such card.
+    for code, ids_here in ids_by_card.items():
         if ids_here and all(i.split(".")[0] != code for i in ids_here):
             warnings.append(
                 "%s cites only assertions belonging to other cards (%s). Legitimate "
@@ -334,10 +366,29 @@ def run_check(config_path, manifest_path):
                 % (code, ", ".join(sorted(set(ids_here))))
             )
 
-    for ident in sorted(manifest_ids - referenced):
+    # POPULATION assertions are true of the WHOLE residual set, not of any one
+    # card's claim, so no card can legitimately cite them and "referenced by no
+    # card" is a false positive for them. Left unexempted they warn forever, and a
+    # permanently-warning gate is exactly how the 123-warning backlog trained
+    # everyone to skim past this output. Named in the standard so the exemption is
+    # a declared list rather than a silent skip; any id NOT in that list still
+    # warns, so this cannot be used to hide a genuinely orphaned assertion.
+    # Errors go to a throwaway list: check_copy_standard() loads the same file a
+    # few lines below and already reports an unparseable standard, so collecting
+    # them here too would double-report one fault.
+    population = set(load_standard([], standard_path)
+                     .get("populationAssertions", {}).get("ids", []))
+    unknown_exempt = population - manifest_ids
+    if unknown_exempt:
+        errors.append(
+            "populationAssertions names %d id(s) absent from the manifest (%s). "
+            "A stale exemption silently exempts nothing."
+            % (len(unknown_exempt), ", ".join(sorted(unknown_exempt)))
+        )
+    for ident in sorted(manifest_ids - referenced - population):
         warnings.append("manifest id `%s` is referenced by no card." % ident)
 
-    check_copy_standard(meta, config_path, errors, warnings)
+    check_copy_standard(meta, config_path, errors, warnings, standard_path)
 
     return errors, warnings, stats
 
@@ -357,15 +408,40 @@ STANDARD_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                              "txv-card-copy-standard.json")
 
 
-def load_standard(errors):
+def load_standard(errors, path=None):
+    path = path or STANDARD_PATH
     try:
-        with io.open(STANDARD_PATH, encoding="utf-8") as fh:
+        with io.open(path, encoding="utf-8") as fh:
             return json.load(fh)
     except Exception as exc:                     # noqa: BLE001 - reported, not raised
         errors.append("card-copy standard unreadable at %s (%s). It is the source of "
                       "truth for card format; the gate cannot check format without it."
-                      % (STANDARD_PATH, exc))
+                      % (path, exc))
         return None
+
+
+def parse_baseline(std, errors):
+    """{card code -> "*" | set(field names)} from formatBaseline.cards.
+
+    Two accepted entry shapes: `{ "card": "MTO", "fields": [...] }` names the
+    sections still baselined, and a bare `"MTO"` means the whole card. The bare
+    form is the looser of the two, so it is read but never written -- a hand-added
+    string quietly re-exempts every rule on that card.
+    """
+    out = {}
+    for entry in std.get("formatBaseline", {}).get("cards", []):
+        if isinstance(entry, str):
+            out[entry] = "*"
+            continue
+        if not isinstance(entry, dict) or not entry.get("card"):
+            errors.append(
+                "format baseline entry %r is neither a card code nor "
+                "{ card, fields }." % (entry,)
+            )
+            continue
+        fields = entry.get("fields", "*")
+        out[entry["card"]] = "*" if fields == "*" else set(fields or ())
+    return out
 
 
 def _bullet_texts(node):
@@ -383,30 +459,46 @@ def _bullet_texts(node):
     return out
 
 
-def check_copy_standard(meta, config_path, errors, warnings):
-    std = load_standard(errors)
+def check_copy_standard(meta, config_path, errors, warnings, standard_path=None):
+    std = load_standard(errors, standard_path)
     if not std:
         return
 
     limit = std.get("bulletWordLimit", 25)
     banned = [p.lower() for p in std.get("bannedPhrases", {}).get("phrases", [])]
-    baseline = set(std.get("formatBaseline", {}).get("cards", []))
+    baseline = parse_baseline(std, errors)
+    # The header comment has always promised this check; until 2026-08-15 nothing
+    # performed it, so a code for a card that no longer exists would have sat there
+    # exempting nothing and reading as coverage.
+    for code in sorted(baseline):
+        if code not in meta:
+            errors.append(
+                "format baseline lists `%s`, which is not a card in %s. A stale code "
+                "exempts nothing and rots -- delete it or fix the spelling."
+                % (code, config_path)
+            )
 
-    def emit(code, msg):
+    def emit(code, field, msg):
         """Baselined cards warn; everything else fails.
 
         The standard arrived after 21 cards were already written, so failing them
         all on day one would just get the gate switched off. Warning on the
         backlog and failing on anything outside it stops NEW drift immediately,
-        which is the whole point. Take a code out of the baseline once its card is
-        rewritten and the gate holds it there for good.
+        which is the whole point.
+
+        Per FIELD since 2026-08-15. `checked` was rewritten on all 17 detected
+        cards and is enforced there now, while the same cards' found / fix /
+        context backlog still warns. Whole-card baselining could not say that, so
+        retiring one rule meant rewriting every section of every card first --
+        which is exactly how a backlog stops being one.
         """
-        if code in baseline:
+        fields = baseline.get(code)
+        if fields == "*" or (fields is not None and field in fields):
             warnings.append("%s [baselined] %s" % (code, msg))
         else:
             errors.append("%s %s" % (code, msg))
 
-    # collect_cards() returns only the `checked` array, so walk meta directly to
+    # collect_cards() returns only the cited arrays, so walk meta directly to
     # reach found / fix / context as well.
     for code, node in meta.items():
         if node[0] != "obj":
@@ -419,19 +511,19 @@ def check_copy_standard(meta, config_path, errors, warnings):
             bullets = _bullet_texts(finding[1].get(field))
             cap = sec.get("maxBullets")
             if cap is not None and len(bullets) > cap:
-                emit(code, "`%s` (%s) has %d bullets, max %d. Trim it or move "
+                emit(code, field, "`%s` (%s) has %d bullets, max %d. Trim it or move "
                      "the detail into an appended block."
                      % (field, heading, len(bullets), cap))
             for b in bullets:
                 words = len(b.split())
                 if words > limit:
-                    emit(code, "`%s` bullet runs %d words (max %d): \"%s\". Over "
+                    emit(code, field, "`%s` bullet runs %d words (max %d): \"%s\". Over "
                          "the limit a bullet is carrying two ideas or explaining method."
                          % (field, words, limit, _snip(b)))
                 low = b.lower()
                 for phrase in banned:
                     if phrase in low:
-                        emit(code, "`%s` bullet contains banned phrase \"%s\". "
+                        emit(code, field, "`%s` bullet contains banned phrase \"%s\". "
                              "That is method, not finding: \"%s\""
                              % (field, phrase, _snip(b)))
 
@@ -510,14 +602,19 @@ def report(errors, warnings, stats, label=""):
 # extractor finds the expected counts (not zero, not everything).
 # --------------------------------------------------------------------------
 
+VALID_STANDARD = "valid.standard.fixture.json"
+
 SELF_TESTS = [
-    # (label, config fixture, manifest fixture, should_pass)
-    ("valid", "valid.config.fixture.js", "valid.assertions.fixture.json", True),
-    ("bare string", "bare-string.config.fixture.js", "valid.assertions.fixture.json", False),
-    ("unknown id", "unknown-id.config.fixture.js", "valid.assertions.fixture.json", False),
-    ("empty t", "empty-t.config.fixture.js", "valid.assertions.fixture.json", False),
-    ("missing manifest", "valid.config.fixture.js", "no-such-manifest.json", False),
-    ("bad manifest", "valid.config.fixture.js", "broken.assertions.fixture.json", False),
+    # (label, config fixture, manifest fixture, standard fixture, should_pass)
+    ("valid", "valid.config.fixture.js", "valid.assertions.fixture.json", VALID_STANDARD, True),
+    ("bare string", "bare-string.config.fixture.js", "valid.assertions.fixture.json", VALID_STANDARD, False),
+    ("unknown id", "unknown-id.config.fixture.js", "valid.assertions.fixture.json", VALID_STANDARD, False),
+    ("empty t", "empty-t.config.fixture.js", "valid.assertions.fixture.json", VALID_STANDARD, False),
+    ("missing manifest", "valid.config.fixture.js", "no-such-manifest.json", VALID_STANDARD, False),
+    ("bad manifest", "valid.config.fixture.js", "broken.assertions.fixture.json", VALID_STANDARD, False),
+    # The two rules added 2026-08-15, each with its own fixture so it trips alone.
+    ("alsoChecked bare", "also-checked-bare.config.fixture.js", "valid.assertions.fixture.json", VALID_STANDARD, False),
+    ("stale baseline", "valid.config.fixture.js", "valid.assertions.fixture.json", "stale-baseline.standard.fixture.json", False),
 ]
 
 # The valid fixture's shape, asserted so a parser that matches nothing fails
@@ -530,15 +627,18 @@ EXPECT_ERROR_SUBSTR = {
     "empty t": "empty or missing `t`",
     "missing manifest": "manifest not found",
     "bad manifest": "unparseable",
+    "alsoChecked bare": "TXI alsoChecked[1] is a bare string",
+    "stale baseline": "baseline lists `NOSUCHCARD`",
 }
 
 
 def self_test(root):
     fixtures = os.path.join(root, FIXTURE_DIR)
     failures = []
-    for label, cfg, man, should_pass in SELF_TESTS:
+    for label, cfg, man, std, should_pass in SELF_TESTS:
         errors, warnings, stats = run_check(
-            os.path.join(fixtures, cfg), os.path.join(fixtures, man)
+            os.path.join(fixtures, cfg), os.path.join(fixtures, man),
+            os.path.join(fixtures, std)
         )
         passed = not errors
         status = "ok" if passed == should_pass else "FAILED"

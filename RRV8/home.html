@@ -1005,6 +1005,17 @@
   /* Standardized finding: one block per finding, line space between (owner 2026-07-13). */
   .txv-find-line { margin: 0 0 10px; }
   .txv-find-line:last-child { margin-bottom: 0; }
+  /* Section heading inside a saved finding ("What happened" / "What to do").
+     Quiet and uppercase — it is a signpost between bullet groups, not a title
+     competing with the card header. */
+  .txv-find-head { margin: 12px 0 5px; font-size: 11px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--text-muted); }
+  .txv-find-head:first-child { margin-top: 0; }
+  /* Bullets under a heading. Real list markup so the finding scans as the
+     bullets it was written as, per "bullets over prose". */
+  .txv-find-ul { margin: 0 0 10px; padding-left: 18px; }
+  .txv-find-ul:last-child { margin-bottom: 0; }
+  .txv-find-ul li { margin: 0 0 5px; line-height: 1.5; }
+  .txv-find-ul li:last-child { margin-bottom: 0; }
   .txv-card-actions { margin-top: 11px; display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
   .txv-btn { border: 1px solid var(--rule-strong); background: var(--bg-card); color: var(--text); border-radius: 8px; padding: 6px 12px; font-family: inherit; font-weight: 800; font-size: 12px; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
   .txv-btn:hover { border-color: var(--blue); color: var(--blue); }
@@ -1095,6 +1106,13 @@
   .txv-card-editor-txt { width: 100%; box-sizing: border-box; border: 1px solid var(--rule-strong); background: var(--bg-card); border-radius: 8px; padding: 9px 11px; font-family: inherit; font-size: 13px; line-height: 1.5; color: var(--text); resize: vertical; min-height: 120px; }
   .txv-card-editor-txt:focus { outline: none; border-color: var(--blue); }
   .txv-card-editor-actions { margin-top: 9px; display: flex; gap: 8px; justify-content: flex-end; }
+  /* Outcome line for the card's review action. Hidden until it has something to say,
+     then it stays on the card next to the button that produced it — a failed hand-off
+     has to be readable where the analyst is looking, not in a console they never open. */
+  .txv-card-status { margin-top: 9px; font-size: 12.5px; line-height: 1.5; }
+  .txv-card-status[hidden] { display: none; }
+  .txv-card-status.is-error { color: var(--red); font-weight: 600; }
+  .txv-card-status.is-ok { color: var(--green); font-weight: 600; }
   /* The footer button STAYS visible while editing — it's the single action that morphs
      from "Reopen to edit" / "Mark reviewed" (open) into "Mark reviewed" (save + close).
      Two actions total, no Cancel (owner 2026-07-13). */
@@ -6960,7 +6978,16 @@
       { k: 'rec',       label: 'Overview' },
       { k: 'account',   label: 'Accounts' },
       { k: 'perpetual', label: 'On Hand' },
-      { k: 'audit',     label: 'Audit' }
+      // "Audit Center" is the name the rest of the product already uses for this
+      // surface -- the card chip, the cardex-variance clear path, the analyst
+      // grounding and the transactions Findings save message all tell the user
+      // their finding travels to the Audit Center. Until 2026-08-14 the tab read
+      // "Audit", so that name appeared NOWHERE on screen and a previous pass
+      // concluded the surface did not exist and started removing the references.
+      // The surface is real, it is accountant-only, and it renders the ANALYST
+      // bands. Naming the tab what the messages call it is what closes the gap
+      // (owner 2026-08-14).
+      { k: 'audit',     label: 'Audit Center' }
     ],
     analyst: [
       { k: 'work',    label: 'Data Health' },
@@ -8772,6 +8799,38 @@
   // 'analyst' is elevated (accountant is waiting on the analyst), 'immaterial'/'timing'
   // ride (low priority). Copy is owner-signed-off, verbatim. Absent/unknown reason -> null.
   var _txvGen = 0;
+  // Row snapshot for the card-level review action. The card-editor click handler is
+  // wired ONCE (host._txvCardWired below), so anything it closes over is frozen at the
+  // first render — which is exactly why that handler reads company/card/period off the
+  // card's data attrs instead. The rows it must mark worked cannot come from a data
+  // attr, so they come from here: renderAnalystTxVar rewrites this on every paint, and
+  // the handler re-checks co + period against the card before trusting it. A mismatch
+  // (scope/period/DB switched between paint and click) means REFUSE, never post a
+  // stale population.
+  //
+  // Shape: { co, period, buckets } where buckets is the same object the cards were
+  // built from — so buckets[code].members IS the population buckets[code].rows counted,
+  // filled in the same loop iteration. There is no second filter to drift out of sync.
+  var _txvRowSnap = null;
+  // The agent's TransactionNote DTO. Field-for-field the same mapper as
+  // inventory-transactions.html:4158 (toTransactionNote), which was mined from
+  // coral.rapidreconciler.client.services.entity.TransactionNote in the agent jar
+  // 2026-05-21. Jackson DROPS unknown keys silently, so a renamed field here would
+  // POST 200 OK and persist nothing — keep the two in lockstep.
+  function _txToTransactionNote(r) {
+    return {
+      companyNumber:    String(r.CompanyNumber || '').trim(),
+      inventoryAccount: String(r.LongAccount   || '').trim(),
+      orderType:        String(r.OT            || '').trim(),
+      docType:          String(r.DT            || '').trim(),
+      docNumber:        Number(r.DocNumber)   || 0,
+      mfgBatch:         Number(r.Batch)       || 0,
+      worked:           !!r.Worked,
+      note:             r.Note || '',
+      longAccount:      String(r.LongAccount || '').trim(),
+      orderNumber:      String(r.OrderNumber == null ? '' : r.OrderNumber)
+    };
+  }
   function renderAnalystTxVar(d) {
     var host = $('analystTxVar'); if (!host) return;
     host.hidden = false;
@@ -8857,9 +8916,13 @@
       var buckets = {};
       perRows.forEach(function (r) {
         var k = _bucketKey(r);
-        var b = buckets[k] || (buckets[k] = { code: k, net: 0, gross: 0, rows: 0, worked: 0, vouchers: 0, dupsales: 0, notes: {}, cardex: 0, ledger: 0, sawAmt: false, byAcct: {} });
+        var b = buckets[k] || (buckets[k] = { code: k, net: 0, gross: 0, rows: 0, worked: 0, vouchers: 0, dupsales: 0, notes: {}, cardex: 0, ledger: 0, sawAmt: false, byAcct: {}, members: [] });
         var v = Number(r.Variance) || 0;
-        b.net += v; b.gross += Math.abs(v); b.rows++;
+        // members is the row-level twin of the `rows` count, pushed in the SAME
+        // iteration that increments it — the card's review action marks exactly the
+        // population the card counted, and members.length === rows by construction
+        // rather than by a second filter that has to be kept in step.
+        b.net += v; b.gross += Math.abs(v); b.rows++; b.members.push(r);
         // Cardex / Ledger legs for the summary strip (parity with the accountant
         // card's GL Balance · Inventory). Track whether the rows actually carry
         // them so a data source without the legs hides the two figures rather than
@@ -8879,6 +8942,9 @@
         if (cmt.indexOf('duplicate sales') >= 0) b.dupsales++;
         if (cmt.indexOf('voucher') >= 0 || String(r.BatchType || '').trim().toUpperCase() === 'V') b.vouchers++;
       });
+      // Publish the population the cards were built from, stamped with the scope it was
+      // built under. The once-wired click handler reads it and re-checks the stamp.
+      _txvRowSnap = { co: String(solo), period: String(focusP), buckets: buckets };
 
       // New kinds reuse existing CSS accents; the chip label is set per kind.
       var KIND_CSS = { rebalance: 'rebalance', self: 'self', mto: 'mto', ico: 'expense', linked: 'triage', review: 'net' };
@@ -9002,21 +9068,65 @@
       // Card cause/finding scrub: the header now carries the company, so drop any
       // leftover "Co <solo>" reference (chiefly from a saved finding) to avoid the echo.
       var _coRe = new RegExp('\\bCo\\.?\\s*' + String(solo).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b[ \\t]*[·:,\\-–—]?[ \\t]*', 'g');
-      var _stripCoRef = function (txt) { return String(txt || '').replace(_coRe, '').replace(/\s{2,}/g, ' ').trim(); };
+      // Collapses HORIZONTAL whitespace only. It used to run
+      // `.replace(/\s{2,}/g, ' ')`, and `\s` includes newlines -- so every BLANK
+      // LINE in a saved finding became a single space. The composer writes
+      // `out.push('', heading)` (inventory-transactions.html ~7419), i.e. a blank
+      // line before every section, so each of "What happened" / "What to do" /
+      // "Separate finding" was glued onto the tail of the line above it and the
+      // whole finding rendered as one run-on blob. A previous pass saw that blob,
+      // found the composer could not produce it, and concluded the run-on was a
+      // legacy stored artifact -- it was this line, downstream of the composer,
+      // and it is fully reproducible on a fresh save.
+      var _stripCoRef = function (txt) {
+        return String(txt || '')
+          .replace(_coRe, '')
+          .replace(/[ \t]{2,}/g, ' ')      // runs of spaces/tabs -> one space
+          .replace(/[ \t]+\n/g, '\n')      // trailing spaces before a newline
+          .replace(/\n{3,}/g, '\n\n')      // never more than one blank line
+          .trim();
+      };
       // Standardized finding render (owner 2026-07-13): one finding per line, the
       // identifying segment before the first " - "/" — " bolded, a line space between
       // findings. Findings authored in the "Order, type, doc, type - Finding" format land
       // cleanly; free-text falls back to a bolded lead-in where a dash is present.
-      var _fmtFinding = function (txt) {
+      // A saved finding is STRUCTURED -- a title, section headings, and "- " bullets
+      // under each. This renders that structure. The previous version treated every
+      // line the same and bolded whatever preceded the first " - "/" — ", which on a
+      // bullet like "- Point DMAAI 4220 to cost of goods for this order type — every
+      // GL class it routes" bolded the first two thirds of a sentence at an
+      // arbitrary mid-sentence dash. The identifier-bold belongs only to the legacy
+      // one-line "identifier - finding" form, never to a bullet.
+      var _fmtFinding = function (txt, cardTitle) {
         var s = String(txt || '').trim(); if (!s) return '';
-        return s.split(/\n+/).map(function (x) { return x.trim(); }).filter(Boolean).map(function (line) {
+        var lines = s.split(/\n/).map(function (x) { return x.trim(); });
+        // Drop a leading line that only repeats the card's own pattern name -- the
+        // card header already prints it. It stays in the STORED text because that
+        // text also travels to the Audit Center on its own, where nothing else
+        // names the pattern.
+        if (cardTitle && lines.length
+            && lines[0].toLowerCase() === String(cardTitle).trim().toLowerCase()) lines.shift();
+        var out = [], buf = [];
+        var flush = function () {
+          if (buf.length) { out.push('<ul class="txv-find-ul">' + buf.join('') + '</ul>'); buf = []; }
+        };
+        lines.forEach(function (line) {
+          if (!line) return;                       // blank line = section break; the markup carries it
+          if (/^[-–—]\s+/.test(line)) {            // a bullet stays a bullet, never bold-split
+            buf.push('<li>' + esc(line.replace(/^[-–—]\s+/, '')) + '</li>');
+            return;
+          }
+          flush();
           var idx = line.search(/\s[-–—]\s/);
           if (idx > 0) {
             var id = line.slice(0, idx), rest = line.slice(idx).replace(/^\s[-–—]\s/, '');
-            return '<p class="txv-find-line"><strong>' + esc(id) + '</strong> &mdash; ' + esc(rest) + '</p>';
+            out.push('<p class="txv-find-line"><strong>' + esc(id) + '</strong> &mdash; ' + esc(rest) + '</p>');
+          } else {
+            out.push('<p class="txv-find-head">' + esc(line) + '</p>');
           }
-          return '<p class="txv-find-line">' + esc(line) + '</p>';
-        }).join('');
+        });
+        flush();
+        return out.join('');
       };
       // Split a finding into its LIKELY CAUSE and its RECOMMENDATIONS (owner 2026-07-13).
       // Recommendations begin at a "Do next:" marker; the leading "Recurrence prevention:"
@@ -9189,13 +9299,24 @@
         var recurChip = p.recurPrior
           ? '<span class="txv-tag txv-tag-recur" title="This category was marked resolved in ' + esc(_pwLabelFull(p.recurPrior)) + ' but is material again this period — the source fix did not hold.">Recurred &middot; was resolved ' + esc(_pwLabel(p.recurPrior)) + '</span>'
           : '';
-        // A saved finding prefills the editor for review. BOTH the 'worked' draft
-        // (pushed from the worklist Save) and the 'complete' state carry the note,
-        // so reopen-to-edit and review-a-draft both start from the saved text; only
-        // a never-touched card starts blank. A 'worked'-but-not-'complete' card is a
-        // DRAFT — the two-step: finding captured on the worklist, confirmed here →
-        // complete → lands on the accountant Audit tab.
-        var draft = !!(p.rec && p.rec.status === 'worked');
+        // A saved finding prefills the editor for review. A card carrying a note that
+        // is not yet complete is a DRAFT — the two-step: finding captured on the
+        // worklist, reviewed here → complete → lands on the accountant Audit tab.
+        //
+        // Keyed on the NOTE, not on status === 'worked'. It was the status until
+        // 2026-08-15, and that broke the moment the worklist's disposition button was
+        // retired: the surviving Save writes status 'open' (it marks no rows, so
+        // 'worked' would be a lie), leaving every freshly-captured finding failing a
+        // 'worked' test. The card then offered "Mark reviewed" while the worklist had
+        // just told the analyst to go and click "Review & submit" — a label that was
+        // no longer on the card. The note is what actually makes a card reviewable, so
+        // that is what the label reads now. 'worked' records written by the old button
+        // still qualify: they carry the note too.
+        //
+        // 'complete' is excluded because it renders its own chip and Reopen button, and
+        // 'reopened' because it is already an open editor with its own state.
+        var draft = !!(p.rec && String(p.rec.note || '').trim()
+                       && p.rec.status !== 'complete' && p.rec.status !== 'reopened');
         // 'reopened' = a reviewed card the analyst reopened to edit. It is a PERSISTED
         // status (survives a browser refresh), so the card renders with its editor already
         // OPEN and the single "Mark reviewed" button — not a transient UI toggle.
@@ -9257,10 +9378,17 @@
         // Done card — the chip states the HAND-OFF, not a fix: the analyst identified the
         // root cause and passed it on. Draft/let-ride keep their own chips.
         // A STAMP, not a signpost. Two defects, both fixed 2026-08-13:
-        //  (1) It read "-> Audit Center", and its tooltip said the same. There is no
-        //      Audit Center anywhere in RRV8/ — the tab is "Reconciliation Audit
-        //      Findings" (2741). The arrow also implied navigation, and the band's
-        //      drill-through link was removed the same day, so nothing to arrow to.
+        //  (1) It read "-> Audit Center" and its tooltip said the same. The ARROW was
+        //      the defect: it implied navigation, and the band's drill-through link was
+        //      removed the same day, so there was nothing to arrow to.
+        //      CORRECTED 2026-08-14 (owner): the claim recorded here — that no Audit
+        //      Center exists anywhere in RRV8/ — was WRONG. It does exist: it is the
+        //      accountant view's audit sub-tab (SUBVIEWS.accountant), which renders the
+        //      analyst bands, and its tab is now labelled "Audit Center" to match every
+        //      message that names it. The name was absent from the SCREEN, not from the
+        //      product, and "absent from the surface I looked at" was written down as
+        //      "absent from the product". Do not use this comment as evidence that a
+        //      surface is missing.
         //  (2) It carried NO DATE. A card worked six weeks ago and one worked this
         //      morning stamped identically, and the date is the reason to look at all —
         //      it answers "do I still owe this card work?". On the chip, not the
@@ -9301,7 +9429,7 @@
         var aiInner = '<span class="txv-card-finding-lbl">'
           + (p.isFinding ? 'Your recorded finding' : 'Likely Cause') + '</span>'
           + (p.isFinding
-              ? '<div class="txv-card-finding-txt">' + _fmtFinding(_split.finding) + '</div>'
+              ? '<div class="txv-card-finding-txt">' + _fmtFinding(_split.finding, p.title) + '</div>'
               : '<div class="txv-dx-slot" data-dx="1"><div class="txv-dx-cause">' + esc(_split.finding) + '</div></div>');
         var ctx = '<div class="txv-ai-ctx">'
           + (p.sawAmt ? 'Cardex ' + money(p.cardex) + ' &middot; Ledger ' + money(p.ledger) + ' &middot; ' : '')
@@ -9325,7 +9453,12 @@
           + '</div>'
           // (6) Footer — just the resolution action (the Investigate link was redundant
           // with the header Variance drill, removed 2026-07-13).
-          + '<div class="txv-card-actions">' + editBtn + '</div></div>';
+          + '<div class="txv-card-actions">' + editBtn + '</div>'
+          // Outcome of the review action, rendered on the card itself. The hand-off
+          // now writes rows to the server, so it has a way to fail that the analyst
+          // must see — a card that quietly kept its old state while the POST 500'd
+          // would be read as "already done".
+          + '<div class="txv-card-status" data-txv-status="1" hidden></div></div>';
       };
       // Lane-grouped: a heading + one-line note per non-empty lane, then its cards in
       // claim order. Lanes are the classifier's phases (see _TXV_TIER_ORDER).
@@ -9542,19 +9675,88 @@
             return;
           }
           if (act === 'save') {
+            // THE review action. It used to write only the card record, which left the
+            // row-level disposition on the drill page under a second button also called
+            // "Mark reviewed" — two buttons, one name, different jobs. The drill page now
+            // only SAVES the finding text; everything that dispositions happens here:
+            // mark the rows worked, persist them through save-notes, write the card
+            // record, log the corrective.
+            //
+            // WHOLE-CARD, not the filtered subset. The drill page marked whatever rows
+            // survived the analyst's search box, so the same card could be "reviewed"
+            // against three different populations depending on what was typed. A card is
+            // one document pattern with one root cause, so the card is the analytical
+            // unit and reviewing it dispositions all of it. The analyst who genuinely
+            // worked only part of it is still visible: the meta line renders "N worked"
+            // whenever b.worked !== b.rows, which is the partial-progress case.
             if (!(typeof RRV8 !== 'undefined' && RRV8.cardStore)) return;
             var ta2 = ed && ed.querySelector('.txv-card-editor-txt');
             var whatDone = ta2 ? String(ta2.value || '').trim() : '';   // resolution -> sourceFix
             var finding  = cardEl.getAttribute('data-finding') || '';   // finding    -> note (preserved)
+            var sCo = cardEl.getAttribute('data-co');
+            var sCc = cardEl.getAttribute('data-cc');
+            var sCp = cardEl.getAttribute('data-cp');
+            var sEl = cardEl.querySelector('[data-txv-status]');
+            var say = function (msg, cls) {
+              if (!sEl) return;
+              sEl.className = 'txv-card-status' + (cls ? ' ' + cls : '');
+              sEl.textContent = msg || '';
+              sEl.hidden = !msg;
+            };
+            // The rows behind this card, from the snapshot the last paint published.
+            // Refuse if the snapshot is for a different company or period — that means
+            // scope moved between paint and click, and posting the old population would
+            // mark the wrong rows worked under a plausible-looking success.
+            var _snap = _txvRowSnap;
+            var members = (_snap && String(_snap.co) === String(sCo)
+                            && String(_snap.period) === String(sCp)
+                            && _snap.buckets && _snap.buckets[sCc])
+              ? (_snap.buckets[sCc].members || []) : [];
+            if (!members.length) {
+              say('Not submitted — the rows behind this card are no longer the ones on screen, so nothing was marked. Reload this tab and try again.', 'is-error');
+              return;
+            }
             btn.disabled = true; btn.textContent = 'Saving…';
-            RRV8.cardStore.save({
-              company:   cardEl.getAttribute('data-co'),
-              cardCode:  cardEl.getAttribute('data-cc'),
-              periodEnd: cardEl.getAttribute('data-cp'),
-              status:    'complete', note: finding, sourceFix: whatDone,
-              varAmount: (function (x) { var n = Number(x); return isFinite(n) ? n : null; })(cardEl.getAttribute('data-camt'))
+            say('', '');
+            // Optimistic, with the prior values kept so a failed POST can put them back.
+            // These row objects are the cached population the whole tab renders from, so
+            // leaving them marked after a failure would show a worked count the server
+            // never accepted.
+            var _prior = members.map(function (r) { return { r: r, w: r.Worked, n: r.Note }; });
+            members.forEach(function (r) { r.Worked = true; r.Note = finding; });
+            var _n = members.length;
+            // Rows FIRST, card record second. The card record is what renders "complete",
+            // so writing it before the rows are durable is exactly the silent-completion
+            // failure this ordering exists to prevent.
+            rrFetch('inventory/transactions/save-notes', { method: 'POST', body: {
+              period: sCp,                          // NotesRequest DTO: "YYYY-MM-DD"
+              notes:  members.map(_txToTransactionNote)
+            } }).then(function () {
+              return RRV8.cardStore.save({
+                company:   sCo,
+                cardCode:  sCc,
+                periodEnd: sCp,
+                status:    'complete', note: finding, sourceFix: whatDone,
+                varAmount: (function (x) { var n = Number(x); return isFinite(n) ? n : null; })(cardEl.getAttribute('data-camt'))
+              });
             }).then(function () {
+              // Audit trail. Best-effort and last, per logActivity's contract: the rows
+              // and the card record are already durable, so a failed log must not undo a
+              // hand-off the analyst completed.
+              try {
+                if (window.RRV8 && RRV8.logActivity) {
+                  var _ttl = (_TXV_CODE_META[sCc] && _TXV_CODE_META[sCc].title) || sCc;
+                  RRV8.logActivity('Reconciliation findings saved',
+                    _n + ' transaction' + (_n === 1 ? '' : 's') + ' marked worked — ' + _ttl
+                    + ' · Co ' + sCo + ' · ' + (fmtPeriod(sCp) || sCp));
+                }
+              } catch (_) {}
               if (typeof renderAnalystTxVar === 'function') renderAnalystTxVar(_acctData || (typeof _briefData === 'function' ? _briefData() : null));
+            }).catch(function (err) {
+              _prior.forEach(function (p) { p.r.Worked = p.w; p.r.Note = p.n; });
+              btn.disabled = false; btn.textContent = 'Mark reviewed';
+              say('Not handed off — ' + ((err && err.message) || 'the request failed')
+                  + '. The ' + _n + ' row' + (_n === 1 ? ' is' : 's are') + ' unchanged and this card is still open. Try again once the connection is back.', 'is-error');
             });
             return;
           }
@@ -9833,31 +10035,48 @@
           + (cnt.rows !== n ? (' across ' + cnt.rows.toLocaleString('en-US') + ' rows') : '');
         var _view = '<button type="button" class="alh-act ghost" data-intg-view="' + esc(key) + '">View <span aria-hidden="true">→</span></button>';
         if (key === 'glclass') {
-          // A GL-class F4102/F41021 split only bites through R31802A, which runs ONLY on
-          // manufacturing docs — so it can affect reconciliation only if IC/IM transactions
-          // exist in scope. No IC/IM → nothing to misroute → it doesn't matter here. Which
-          // items and how much is the deeper Transaction Variance analysis.
+          // NO IC/IM PROBE HERE ANY MORE, AND NO TRANSACTION VARIANCE HANDOFF. Both were
+          // built on a mechanism that does not exist. The old copy framed an F4102/F41021
+          // divergence as R31802A misrouting manufacturing documents, sent the analyst to
+          // Transaction Variance to size it, and downgraded the card to "not affecting
+          // reconciliation" whenever no IC/IM row was in scope.
+          //   * R31802A takes the GL class from the item LOCATION (F41021), and RR assigns
+          //     its own accounts off F41021 too, so the two agree by construction and a
+          //     divergence explains no account mismatch. That rule is already written into
+          //     the shared AI grounding in config.js, which this block contradicted inside
+          //     the same prompt.
+          //   * Transaction Variance has no GL-class claim to receive the handoff.
+          //     RCardexLedgerCompare2 carries no item identity at all, so any GL-class
+          //     predicate has to reach items through F4111 at DOCUMENT grain — and a
+          //     residual document touches 17 items on average. Measured 2026-08-15 on the
+          //     reference database: "some leg sits on a split item" is true of 321 of 551
+          //     unclaimed residual rows AND of 2,017 rows three other cards already explain.
+          //     It is document-level noise, not an item-level diagnosis.
+          //   * The downgrade was an all-clear on a question the check never asked.
           //
-          // "IN SCOPE" MEANS THIS COMPANY. The rows come back company-scoped because
-          // _txScope narrows them at the producer (UI-75); before that, this test read
-          // every company in the JWT and could confirm IC/IM activity belonging to a
-          // different one, putting that claim into the fact AND the AI narrative.
-          return _txvRows([String(co)]).catch(function () { return null; }).then(function (txRows) {
-            var mfg = txRows ? txRows.some(function (r) { var dt = String(r.DT || '').trim().toUpperCase(); return dt === 'IC' || dt === 'IM'; }) : null;
-            var detail, fact;
-            if (mfg === true) {
-              detail = nTxt + ' &middot; may be impacting manufacturing accounting — assess in Transaction Variance';
-              fact = nTxt + ' (IC/IM manufacturing transactions present in scope — the F4102/F41021 GL-class split may be misrouting them; assess impact in Transaction Variance)';
-            } else if (mfg === false) {
-              detail = nTxt + ' &middot; no IC/IM manufacturing activity in scope — not affecting reconciliation';
-              fact = nTxt + ' (no IC/IM manufacturing transactions in scope — the GL-class split has nothing to misroute; not affecting reconciliation)';
-            } else {
-              detail = nTxt + ' &middot; GL-class config to review';
-              fact = nTxt + ' (GL-class config flagged; could not check for IC/IM manufacturing activity)';
-            }
-            return { id: key, prio: prio, state: 'attention', title: title, factTitle: title,
-              detailHtml: detail, factDetail: fact, actionHtml: _view, rows: rows };
-          });
+          // The real mechanism is item IDENTITY and it is document-type agnostic:
+          // v6_006_items keys RItems on GLClass and usp6_006_inventory_data_prep binds
+          // F4111 on ilglpt and F41021 on liglpt, so a split resolves to TWO itemids.
+          // RPerpetualInv is keyed on itemid alone and holds on-hand beside cardex, so one
+          // item ends up with the on-hand and no cardex and the other with the cardex and
+          // no on-hand. Neither nets, and each side reads as a WHOLE-BALANCE variance
+          // rather than a delta — the signature of the 2026-08-03 support case.
+          //
+          // The card states what the check found and hands over the items. It does not
+          // size the impact, because this check cannot: it compares configuration, and the
+          // item-identity split that moves money is only partly visible to it.
+          var detail = nTxt + ' &middot; GL class disagrees across item levels — correct it at source in JD Edwards';
+          var fact = nTxt + ' (GL-CLASS SPLIT: the item master, item branch and item location'
+            + ' do not carry the same GL class. RapidReconciler keys item identity on GL class,'
+            + ' so a split resolves to two items — one holding the on-hand with no cardex, the'
+            + ' other the cardex with no on-hand — and the balance then reads as a WHOLE-BALANCE'
+            + ' cardex variance rather than a delta. It is not a manufacturing-only condition,'
+            + ' and it does not explain a transaction-variance account mismatch, so do not send'
+            + ' the analyst to Transaction Variance for it. The flagged items are named in this'
+            + ' GL-Class Integrity report. The fix is on the item record in JD Edwards; never a'
+            + ' journal entry.)';
+          return { id: key, prio: prio, state: 'attention', title: title, factTitle: title,
+            detailHtml: detail, factDetail: fact, actionHtml: _view, rows: rows };
         }
         // FROZEN COST — at Full tier the AI gets the DIAGNOSIS, not the headcount.
         // "301 items flagged" tells the analyst nothing they cannot see, and the row
@@ -10043,7 +10262,7 @@
   function _analystDayBriefGrounding() {
     var parts = ['You are RapidReconciler AI, a senior JDE inventory-reconciliation consultant. Reason from these rules:'];
     if (window.RRV8 && RRV8.ROLLFORWARD_GROUNDING) { var rf = RRV8.ROLLFORWARD_GROUNDING; parts.push(Array.isArray(rf) ? rf.join('\n') : rf); }
-    parts.push('GL-CLASS: a blank GL class is just another code — it posts when the DMAAI carries a **** wildcard/default. The real finding is the F4102 (Item Branch) vs F41021 (Item Location) GL-class SPLIT, which only misroutes through R31802A on manufacturing (IC/IM) documents; no IC/IM activity in scope means nothing to misroute.');
+    parts.push('GL-CLASS: a blank GL class is just another code — it posts when the DMAAI carries a **** wildcard/default. The real finding is a GL-class SPLIT across the item master (F4101), item branch (F4102) and item location (F41021). R31802A and RR both take the class from the LOCATION, so a split does NOT misroute a manufacturing document and does NOT explain an account mismatch. What it does is split the item identity: RR keys items on GL class, so one item ends up holding the on-hand and another the cardex, and the balance reads as a whole-balance cardex variance rather than a delta. Doc-type agnostic — never gate it on IC/IM activity, never call it not affecting reconciliation, and never route it to Transaction Variance, which has no GL-class check.');
     parts.push('CARDEX: cardex variance is F41021 on-hand vs the F4111 cardex, account-blind — NOT the ledger-vs-GL gap. Validate in JD Edwards (P4111), then fix at source or apply the reversible sync; never a journal entry.');
     // "the current period" was the instruction AND the defect: told to rank by it, the
     // model reached for the phrase to describe an amount, and the amount was in a
@@ -10107,10 +10326,24 @@
         // "this period" was the chip's whole claim about WHEN, and it was wrong
         // whenever the window's older period carried the money: Demo3 co 30002 read
         // "Inventory $76K this period" with an April screen behind it and every cent
-        // of the $76K in March. Name the period. When the amount is split across the
-        // window, say "open" and let the tab break it out — no single period owns it.
+        // of the $76K in March. Name the period.
+        //
+        // The spread branch then said the bare word "open" and stopped, which fixed
+        // the false claim and put nothing in its place: the reader saw a number
+        // larger than the chart's for the period on screen with no statement of what
+        // it covered, and read it as a scaling error. Name the window instead — same
+        // stats.curPeriods and same helpers the AI facts use, so the chip and the
+        // facts cannot drift.
+        //
+        // The !s.curTop case falls here too and belongs here: no curTop means no
+        // period carries a material share on its own, so the window IS the honest
+        // subject. An empty window (no periods at all) keeps the bare "open" — a
+        // dangling "open across " would be worse than the word alone.
         // Literal middot, not the entity: the chip text is esc()'d by the renderer.
-        var _when = (s.curTop && !s.curSpread) ? (' · ' + _pwLabel(s.curTop.period)) : ' open';
+        var _win = _pwWindowLabel(txStats.curPeriods);
+        var _when = (s.curTop && !s.curSpread)
+          ? (' · ' + _pwLabel(s.curTop.period))
+          : (_win ? (' · open across ' + _win) : ' open');
         chips.push({ key: 'txvar', label: 'Transaction Variance', text: top + ' ' + _ccyAmt(ccy, s.current) + _when + (s.recur > 1 ? ' · recurs' : ''), state: 'attn', href: null });
       } else {
         // "this period" again meant the open window, not the period on screen. The
@@ -11337,7 +11570,7 @@
                // every demo DB. Candidates for the all-empty drop below; kept when populated.
                hideEmpty: ['Prodplant', 'Prodcost'] },
     glclass: { view: 'v_integrity5_gl_class',    demoFile: 'v-integrity5-gl-class',    dot: 'intgGlcDot', file: 'GLClassIntegrity', title: 'GL-Class Integrity',
-               cols: ['CompanyNumber', 'BranchPlant', 'ItemNumber', 'ThirdItem', 'Description', 'Location', 'Lot', 'StockType', 'BranchClass', 'LocationClass'] }
+               cols: ['CompanyNumber', 'BranchPlant', 'ItemNumber', 'ThirdItem', 'Description', 'Location', 'Lot', 'StockType', 'ItemClass', 'BranchClass', 'LocationClass'] }
   };
   function _intgActiveCoSet() {
     var s = {}; ((_acctData && _acctData.companies) || []).forEach(function (c) { s[String(c.co).trim()] = 1; }); return s;
@@ -14216,6 +14449,40 @@
   function _pwLabelFull(p) {
     var parts = String(p).split('-'); if (parts.length < 3) return p;
     return (PW_MONTHS[parseInt(parts[1], 10) - 1] || parts[1]) + ' ' + parseInt(parts[2], 10) + ', ' + parts[0];
+  }
+  // Names a WINDOW of period-ends. Built for the Transaction Variance chip, whose
+  // amount is a window total: with the residual split across the window the chip
+  // printed the bare word "open" and nothing else, so -£2,529.68 sat beside a chart
+  // reading -£1,879.11 for the period on screen and looked like a formatter bug.
+  // It is not one — measured on RCardexLedgerCompare2 (recstatus = 1, company 30001,
+  // RapidReconciler_Demo3): Sales DMAAI Net Zero is -1,879.11 at 2023-04-30 and
+  // -650.57 at 2023-05-31, and -2,529.68 is their sum. The arithmetic was right and
+  // the LABEL was missing, so the grain goes on the label. _moneyK and RRV8.kAmount
+  // both scale correctly; there is no 1000x bug to chase.
+  //
+  // Same helpers _analystTxFacts uses for its OPEN WINDOW line, off the same
+  // stats.curPeriods, so the chip and the model's facts cannot name two windows.
+  //
+  // Joined with "and", never a dash. curPeriods is the last two periods that CARRY
+  // reconciling items, which need not be adjacent months — "Mar 31 – Jun 30" would
+  // claim April and May as part of the window when they hold nothing.
+  function _pwWindowLabel(periods) {
+    var ps = (periods || []).filter(Boolean).map(String).slice().sort();
+    if (!ps.length) return '';
+    if (ps.length === 1) return _pwLabelFull(ps[0]);
+    // The year is stated once at the end when the window sits inside one, and on
+    // EVERY period when it straddles two — "Dec 31 and Jan 31, 2023" would date the
+    // December period to 2023, which is the year it is not in.
+    var yrs = {}; ps.forEach(function (p) { yrs[p.slice(0, 4)] = 1; });
+    var oneYear = Object.keys(yrs).length === 1;
+    var last = ps.length - 1;
+    return ps.map(function (p, i) {
+      var lbl = (oneYear && i < last) ? _pwLabel(p) : _pwLabelFull(p);
+      // Oxford-free list: "A and B" for two, "A, B and C" beyond. slice(-2) caps it
+      // at two today; the general form is here so a widened window cannot produce
+      // "A and B and C".
+      return (i === 0) ? lbl : ((i === last ? ' and ' : ', ') + lbl);
+    }).join('');
   }
   function _periodWidgetData(metric) {
     metric = metric || 'oob';

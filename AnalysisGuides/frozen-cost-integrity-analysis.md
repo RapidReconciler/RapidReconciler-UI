@@ -141,6 +141,17 @@ The frozen cost from F30026 is the valuation basis for:
 - **Variance accounting (IV):** R31804 computes variances as the difference between actual WIP (IM + IH − IC − IS) and the expected cost. If F4105 and F30026 are out of sync, R31804 will produce unexplained variances that cannot be traced to a genuine efficiency or usage difference.
 - **WIP Revaluation (R30837):** If the frozen standard is updated via R30822 while work orders are open, R30837 revalues open WIP to the new standard. If F30026 and F4105 are out of sync, R30837 may not revalue correctly.
 
+⚠ **The two legs of an IM / IC do not take the same cost, so the rows above need one
+correction.** Owner SME ruling 2026-08-14, measured 2026-08-15: the **cardex** leg is
+priced from **F4105**, and R31802A builds the **GL** leg from the **F30026** components. On
+a "cost in F30026 only" item the cardex therefore posts at zero while the GL posts the full
+component value — not both at zero — and the difference surfaces as an **IM / IC
+cardex-vs-ledger variance on `RCardexLedgerCompare2`** before R31804 writes any IV entry.
+The arithmetic, the tie rate against a specimen variance population, and the worked row are
+in `manufacturing-accounting-flow.md` § *Two cost sources on one transaction*. That section
+is the single source for the transaction-variance consequence; this one stays the source
+for the divergence taxonomy and the report.
+
 ---
 
 ## Section 3: Report Structure and Field Reference

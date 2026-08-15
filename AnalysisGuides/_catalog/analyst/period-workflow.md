@@ -2,17 +2,24 @@
 
 **Role:** analyst (variance root-cause → SOURCE fix; posts no journal entries).
 
-**Status:** authored source for the PROCESS half of `RRV8.ANALYST_GROUNDING`.
-Not yet wired: `Tools/build-ai-grounding.py` has `SOURCES["ANALYST"] = []` and
-`GENERATE = ("ADMIN", "CARDEX")`, so `ANALYST_GROUNDING` in `RRV8/config.js` is
-still hand-authored — the one thing the 2026-07-18 directive said to stop doing.
-Wiring is two edits to that generator (add this file to `SOURCES["ANALYST"]`, add
-`"ANALYST"` to `GENERATE`), both in an owner-held file, so they are attended.
+**Status:** PROMOTED source of truth for the PROCESS half of
+`RRV8.ANALYST_GROUNDING`. Wired 2026-08-14: `Tools/build-ai-grounding.py` has
+`"ANALYST"` in `GENERATE` and reads `_catalog/analyst/transaction.md` then this
+file, composing the `_core.md` invariants in ahead of the bullets. Edit the fence
+here and re-run the generator; never hand-edit the catalog inside `config.js`.
 
-**Altitude:** PROCEDURE, not pattern. `transaction-detail-analysis.md` and the
-eventual `_catalog/analyst/transaction.md` say what a variance *means*; this file
-says which control the analyst uses, in what order, what each state means, and
-what is recorded. The two must never contradict each other on who does what.
+The wiring was NOT the two edits this file used to describe. Adding only this file
+to `SOURCES["ANALYST"]` would have replaced 27 shipped pattern bullets with process
+bullets and reported success, because the generator overwrites a GENERATE topic
+wholesale. The pattern half had to be lifted into `transaction.md` first, and the
+Markdown read path and shared-core composition — declared in the generator's
+config but never implemented — had to be written before either catalog could be
+read at all.
+
+**Altitude:** PROCEDURE, not pattern. `transaction-detail-analysis.md` and
+`_catalog/analyst/transaction.md` say what a variance *means*; this file says which
+control the analyst uses, in what order, what each state means, and what is
+recorded. The two must never contradict each other on who does what.
 
 **Why this file exists:** the assistant could not answer "guide me through the
 clicks" for the Transaction Variance period close, because the sequence was
@@ -36,7 +43,10 @@ ANALYST POLICY (period workflow) — reason from these rules:
 - STEP ONE IS A MATERIALITY DECISION, not a click. Read the card's variance, its row count and the LIKELY CAUSE, then decide whether this is worth investigating. If it is immaterial in the analyst's judgement they are done investigating and can mark the period reviewed — that is a recorded decision with zero source fixes, not a skipped step. If it is material, open the variance drill first and let the finding come from the rows.
 - A CARD IS ONE DOCUMENT, one root cause. The card header carries the company, the pattern name (for example "Sales DMAAI Net Zero"), the period, and a "Variance $X" link that drills to the transaction detail for that document. The LIKELY CAUSE block under it is the classifier's reading of the rows, not a confirmed diagnosis — it is where the analyst starts, not where they stop.
 - THE VARIANCE LINK IS THE FIRST STEP AND THE QUIETEST CONTROL ON THE CARD. It is a text link with an arrow; the only solid button is "Mark reviewed", which is the LAST step. If asked how to investigate, name the variance link explicitly — a reader who scans for the button-shaped thing finds the control that closes the card without opening anything.
-- THE CARD BUTTON HAS THREE STATES and each names the action available. Untouched card: "Mark reviewed" ("Review & submit" when a draft recommendation already exists) — clicking it OPENS the Recommendations editor and the same button becomes the save. Completed card: "Reopen to edit". Reopened card: "Mark reviewed", with the editor already open. Nothing is saved by opening the editor.
+- ON THE TRANSACTION DETAIL PAGE, "SAVE" CAPTURES THE FINDING AND NOTHING ELSE. It is the ONLY button on the Findings panel. It stores the finding text against the company, card and period, and deliberately does not mark any row worked, does not send anything to the Audit Center, and does not advance the card's status. The finding then appears on the Home card labelled "Your recorded finding". This page had a second button also called "Mark reviewed" until 2026-08-15; it is gone. If asked where a finding is handed off, the answer is always the Home card and never this page.
+- THE CARD BUTTON HAS THREE STATES and each names the action available. Untouched card: "Mark reviewed". Card already carrying a saved finding: "Review & submit". Either one OPENS the Recommendations editor and the same button becomes the save. Completed card: "Reopen to edit". Reopened card: "Mark reviewed", with the editor already open. Nothing is saved by opening the editor.
+- REVIEWING THE CARD DISPOSITIONS THE WHOLE CARD, not the rows that happened to be on screen. The review action marks every row the card counted as worked, persists them, records the card complete, and writes the corrective to the activity log. It is all-or-nothing at card grain on purpose: a card is one document pattern with one root cause, so the card is the unit of judgement. An analyst who genuinely worked only part of it is still visible — the card's meta line reads "N worked" whenever the worked count is short of the row count. Never describe the review as marking a filtered subset.
+- A FAILED HAND-OFF LEAVES THE CARD OPEN AND SAYS SO ON THE CARD. If the rows cannot be saved, nothing is recorded: the card keeps its previous state, the rows stay unmarked, and the reason prints on the card itself. So a card that still reads as open after a review attempt has genuinely not been handed off — read the message on it rather than assuming the click was missed.
 - WHAT YOU TYPE IN "RECOMMENDATIONS" IS THE RECORD. It is stored as the card's source-fix text against the company, card and period. Its placeholder ("Waiting investigation — replaced with recommendations from the transaction details page.") is a PROMPT, not a value: an untouched card saves an empty resolution, which is correct. Never treat the placeholder text as analyst content.
 - WRITE THE RECOMMENDATION AS AN INVESTIGATION RESULT: what you checked, what you found, and what stops it recurring. "Immaterial" is a disposition, not a finding. A resolution that names no source change has not prevented anything.
 - HANDED OFF THIS CYCLE: N OF M is the count of cards saved complete against the total on the period. It is the figure that decides whether the period can later be reopened silently, so read it before marking the period reviewed.
