@@ -784,9 +784,14 @@
   .tx-findings-sub strong { color: var(--text-soft); font-weight: 700; }
   .tx-findings-done { color: var(--green-deep); font-weight: 700; }
   .tx-findings-actions { display: flex; gap: 8px; flex-shrink: 0; }
-  .tx-findings-save { font-family: inherit; font-size: 13px; font-weight: 700; border-radius: 8px; padding: 7px 14px; cursor: pointer; border: 1px solid var(--navy); background: var(--navy); color: #fff; }
-  .tx-findings-save:hover { opacity: .92; }
-  .tx-findings-save:disabled { opacity: .6; cursor: not-allowed; }
+  /* Save is now the ONLY button on this panel and it is the primary action here,
+     so it is filled rather than outlined. It was secondary while it sat beside a
+     "Mark reviewed" that dispositioned the card; that button moved to the Home
+     card, where the disposition belongs, and the .tx-findings-save rule that
+     styled it went with it. */
+  .tx-findings-draft { font-family: inherit; font-size: 13px; font-weight: 700; border-radius: 8px; padding: 7px 14px; cursor: pointer; border: 1px solid var(--navy); background: var(--navy); color: #fff; }
+  .tx-findings-draft:hover { opacity: .92; }
+  .tx-findings-draft:disabled { opacity: .6; cursor: not-allowed; }
   /* Card background at REST, not --bg-soft. The soft grey is what read-only panels on this
      page use, so the box advertised itself as read-only and only turned white once focused —
      the state that says "editable" appeared after you had already discovered it was. Focus
@@ -2997,12 +3002,17 @@
   <!-- ============================================================
        FINDINGS PANEL — the finding is DRAFTED AUTOMATICALLY from the
        analysis above (no manual "use as finding" step); the analyst
-       reviews/edits, then dispositions: "Mark reviewed" records the
-       identified root cause (marks every row in the filtered view
-       Worked=true, persists via /inventory/transactions/save-notes, and
-       drafts the Home pattern card → accountant Audit). That save button
-       is the only disposition in the DOM; an earlier note here described
-       a second "Clear — not a real variance" button that does not exist.
+       reviews/edits, then Saves. SAVE IS THE ONLY BUTTON HERE, and it
+       CAPTURES the finding — it does not disposition anything: no rows
+       are marked, no save-notes POST, no activity entry, and the card's
+       status is preserved rather than advanced.
+       Dispositioning lives entirely on the Home pattern card ("Review &
+       submit"), which marks the card's whole population worked, persists
+       via /inventory/transactions/save-notes, and hands off to the
+       accountant Audit Center. This page used to carry a second button
+       ALSO called "Mark reviewed" doing that job against whatever rows
+       survived the search box — same name, two pages, two different
+       populations. One name, one place, one population now.
        ============================================================ -->
   <section class="tx-findings" id="tx-findings">
     <div class="tx-findings-head">
@@ -3016,10 +3026,10 @@
         <div class="tx-findings-sub" id="tx-findings-scope" hidden></div>
       </div>
       <div class="tx-findings-actions">
-        <button type="button" class="tx-findings-save" id="tx-findings-save">Mark reviewed</button>
+        <button type="button" class="tx-findings-draft" id="tx-findings-draft">Save</button>
       </div>
     </div>
-    <textarea class="tx-findings-note" id="tx-findings-note" rows="4" placeholder="The finding drafts here automatically from the analysis above &mdash; the mechanism, the corrective action at the source, then what to check. Review and edit, then Mark reviewed."></textarea>
+    <textarea class="tx-findings-note" id="tx-findings-note" rows="4" placeholder="The finding drafts here automatically from the analysis above &mdash; the mechanism, the corrective action at the source, then what to check. Review and edit, then Save. Reviewing and handing it off happens on the Home card."></textarea>
     <div class="tx-findings-status" id="tx-findings-status" hidden></div>
   </section>
 
@@ -6701,7 +6711,7 @@
     // The scope line is GONE (owner 2026-08-12). It restated the header strip a
     // third time: the strip already carries card, company, period and row count,
     // and the finding body names its own subject. Instructions telling the analyst
-    // to review and then Mark reviewed are noise once the button is on screen.
+    // to review and then Save are noise once the button is on screen.
     // The worked count is the only thing here the strip does NOT show, so it is
     // the only thing kept, and only when there is one.
     sub.innerHTML = workedN
@@ -6805,7 +6815,7 @@
     // which is always. So the only affordance was the resize grabber. Says "edit" now, in
     // the one slot that is always on screen (the sub line above is overwritten by
     // paintFindingsScope, and instructions there were ruled noise 2026-08-12).
-    _findingsStatus(text ? (statusMsg || 'Drafted from the analysis. Edit it here if you’d say it differently, then Mark reviewed.') : '', 'muted');
+    _findingsStatus(text ? (statusMsg || 'Drafted from the analysis. Edit it here if you’d say it differently — Save keeps it, then review it on the Home card to hand it off.') : '', 'muted');
   }
   // ---- Resolver plumbing -------------------------------------------------
   // Tolerant field read: first present, non-empty value from a list of key
@@ -7402,10 +7412,46 @@
     // assertion ids each one cites still mean what the claim gate checks.
     // The AI prompt contract in config.js names these same headings and was
     // updated with them; a generated finding must not arrive under old names.
-    [['What happened', arr(o.checked)],
+    // OWNER 2026-08-14: "Don't tell me what worked. Only show the issues."
+    // Then 2026-08-14: "fix the detected cards too."
+    //
+    // TRIAGE cards: the cause is not identified, so every check came back clean and
+    // "What happened" was six bullets of things that did NOT happen ("Not
+    // make-to-order", "does not offset", "Ruled out"). That is the check list, not
+    // the finding. Compressed to one line.
+    //
+    // DETECTED cards: the split happens in the CATALOG, not here. `checked` now
+    // holds only the detection (max 2, enforced by Tools/check_txv_cards.py), and
+    // every screen, precedence guard and search-scope caveat sits in `alsoChecked`
+    // and renders LAST. Before that, ACCT opened with six bullets of which two were
+    // the finding, and CNJ / MCM the same.
+    //
+    // Nothing is DROPPED in either case. Each bullet cites an assertion id the gate
+    // validates against RRV8/txv-assertions.json, and this text is the audit record
+    // the Audit Center keeps -- a compression that deletes cited checks from the
+    // saved finding destroys the evidence months before anyone reads it. So the
+    // triage compression moves its bullets into "Also checked" rather than losing
+    // them, and the one-line summary points at the block that holds them.
+    //
+    // That pointer used to read "Open the analyzer above for the full list." The
+    // analyzer renders _txMtoBucketsHtml + _txCombosHtml and has never rendered a
+    // check list, so the line sent the analyst to a panel that does not hold what it
+    // promised, and the checks were simply gone.
+    var checkedLines = arr(o.checked);
+    var alsoLines = arr(o.alsoChecked);
+    if (o.compressChecked && checkedLines.length > 1) {
+      var _n = checkedLines.length;
+      alsoLines = checkedLines.concat(alsoLines);
+      checkedLines = ['Ruled out: ' + _n + ' check' + (_n === 1 ? '' : 's')
+        + ' came back clean, listed under "Also checked" below.'];
+    }
+    [['What happened', checkedLines],
      ['Not tested on these rows', arr(o.context)],
      ['What I found', arr(o.found)],
-     ['What to do', arr(o.fix)]].forEach(function (sec) {
+     ['What to do', arr(o.fix)],
+     // LAST, always. It is the answer to "what else did the tool look at?", which is
+     // a question the analyst asks after the finding, not before it.
+     ['Also checked', alsoLines]].forEach(function (sec) {
       if (!sec[1].length) return;
       out.push('', sec[0]);
       sec[1].forEach(function (b) { if (b) out.push('- ' + b); });
@@ -7594,6 +7640,10 @@
               _n + ' completion' + (_one ? '' : 's') + ' carrying no GL amount, counted on the rows loaded here.'
             ])
           : txFinding('MTO').checked,
+        // Carried through explicitly. This branch hand-builds `sel` field by field,
+        // so a field it does not name is simply absent — which is how the card's
+        // screens and guards would have vanished from an MTO drill alone.
+        alsoChecked: txFinding('MTO').alsoChecked,
         context: txFinding('MTO').context,
         found: _gap
           ? [_n + ' completion' + (_one ? ' has' : 's have') + ' no GL entry. The finished-goods cost never reached the general ledger.',
@@ -7757,16 +7807,24 @@
       var _arr = function (v) { return (v == null || v === '') ? [] : (Array.isArray(v) ? v : [v]); };
       _txAutoDraftFinding(_txFindingText({
         title: cardTitle || 'Findings',
-        // routeChecks ARE measured here, on the rows in front of the analyst, so
-        // they belong under "What I checked" alongside the card's classifier
-        // assertions. `context` carries the card's untested-but-true material to
-        // its own heading — see _txFindingText.
-        checked: _arr(sel.checked).concat(routeChecks),
+        checked: _arr(sel.checked),
+        // routeChecks ARE measured here, on the rows in front of the analyst — but
+        // every one of them is a NEGATIVE: "every DMAAI here resolves to the
+        // item-ledger model account. Ruled out." or "could not be read, so not
+        // checked." Neither is a detection, so neither belongs under "What
+        // happened". They sat there until 2026-08-15, and on a triage card the
+        // compression then deleted the DMAAI result outright — the one line an
+        // analyst working an unclassified row most wants.
+        alsoChecked: _arr(sel.alsoChecked).concat(routeChecks),
+        // A triage card HAS no identified cause, so its whole checked list is
+        // negative results. Compress it there and leave detected cards alone --
+        // on those, `checked` is now the detection and nothing else.
+        compressChecked: !!sel.triage,
         context: sel.context,
         found: sel.found, fix: sel.fix, tail: tail
       }, { dmaai: routesRead }), sel.triage
-        ? 'Drafted from the analysis — the cause is not identified yet. Edit it here as you work the next steps, then Mark reviewed.'
-        : 'Drafted from the analysis. Edit it here if you’d say it differently, then Mark reviewed.');
+        ? 'Drafted from the analysis — the cause is not identified yet. Edit it here as you work the next steps and Save to keep it; the Home card is where you review it and hand it off.'
+        : 'Drafted from the analysis. Edit it here if you’d say it differently — Save keeps it, then review it on the Home card to hand it off.');
     }
     if (wantAi) _txAnalyzeNarrate(co, per, sel.mech, (Array.isArray(sel.fix) ? sel.fix.join(' ') : sel.fix), fp);
   }
@@ -7980,57 +8038,69 @@
       : fp.types.length + ' distinct transaction-type patterns — each may have a different cause.'));
     return L.join('\n');
   }
-  function _findingsSave() {
+  // Save CAPTURES the finding; it does not disposition. There used to be a second
+  // button here, "Mark reviewed", that marked every row in the FILTERED VIEW worked,
+  // wrote the card as 'worked', POSTed save-notes and logged a corrective. It was
+  // removed 2026-08-15: the Home card already carried a button of the same name doing
+  // the same job, so the flow asked the analyst to recognise two identically-named
+  // controls on two pages with different populations behind them. All of that moved to
+  // the Home card's review action, which works the card's WHOLE population instead of
+  // whatever survived the search box.
+  //
+  // So this persists the TEXT only. No row mutation, no save-notes POST (that call
+  // carries Worked), no activity entry (a captured finding is not a corrective action).
+  //
+  // Status stays inside the shipped enum { open | worked | complete | reopened }
+  // (config.js:2818) -- there is no 'draft' status and inventing one here would
+  // need dbo.RTxvCardResolution to change too. 'open' means the card exists with
+  // nothing worked, which is exactly a saved finding. And it NEVER downgrades: a
+  // card already worked/complete/reopened keeps its status and only its text
+  // updates, or Save would silently undo a review.
+  function _findingsSaveDraft() {
     if (_findingsBusy) return;
-    var note = document.getElementById('tx-findings-note'), saveBtn = document.getElementById('tx-findings-save');
-    var val = note ? note.value.trim() : '';
+    var note = document.getElementById('tx-findings-note');
+    var btn  = document.getElementById('tx-findings-draft');
+    var val  = note ? note.value.trim() : '';
+    if (!val) { _findingsStatus('Nothing to save yet — the box is empty.', 'muted'); if (note) note.focus(); return; }
+
     var rows = _findingsRows();
-    if (!rows.length) { _findingsStatus('No rows in the current view to mark.', 'muted'); return; }
-    if (!val) { _findingsStatus('Nothing to record — the analyzer drafted no finding for this slice.', 'muted'); if (note) note.focus(); return; }
-    // Optimistic in-memory update so the grid reflects worked immediately.
-    rows.forEach(function (r) {
-      r.Worked = true; r.Note = val;
-      _workNotes.set(workNoteKey(r), { Worked: true, Note: val });
-    });
-    renderAll();
-    // Two-step card resolution (UI-26/UI-27): push the finding to the card-keyed
-    // store as 'worked' — this becomes the Home txv card's "what was the source
-    // fix" text, where the analyst reviews it and clicks Mark reviewed to complete
-    // (→ the card lands on the accountant Audit tab). Best-effort + independent of
-    // the per-row save-notes POST below (cardStore has its own localStorage
-    // fallback and never throws).
-    try {
-      var _cc  = _state.activeCard || (rows[0] ? txvCardCode(rows[0]) : '');
-      var _co  = _state.activeCompany || (rows[0] && rows[0].CompanyNumber) || '';
-      var _per = (_data && _data.period) || _state.period || '';
-      if (_cc && _co && _per && window.RRV8 && RRV8.cardStore) {
-        RRV8.cardStore.save({ company: _co, cardCode: _cc, periodEnd: _per, status: 'worked', note: val, sourceFix: val, varAmount: null });
-      }
-    } catch (_) {}
+    var _cc  = _state.activeCard || (rows[0] ? txvCardCode(rows[0]) : '');
+    var _co  = _state.activeCompany || (rows[0] && rows[0].CompanyNumber) || '';
+    var _per = (_data && _data.period) || _state.period || '';
+    if (!_cc || !_co || !_per || !(window.RRV8 && RRV8.cardStore)) {
+      _findingsStatus('Can’t save yet — no company, card and period in scope to save it against.', 'muted');
+      return;
+    }
+
+    var existing = null;
+    try { existing = RRV8.cardStore.get(_co, _cc, _per); } catch (_) {}
+    var keep = existing && existing.status && existing.status !== 'open' ? existing.status : 'open';
+
     _findingsBusy = true;
-    if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving…'; }
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
     _findingsStatus('', '');
-    rrFetch('inventory/transactions/save-notes', { method: 'POST', body: {
-      period: (_data && _data.period) || _state.period || defaultPeriod(),
-      notes:  rows.map(toTransactionNote)
-    } }).then(function () {
-      _findingsStatus('Saved — ' + rows.length + ' row' + (rows.length === 1 ? '' : 's') + ' marked worked. This finding is now on the Home card — review it there and Mark reviewed to hand it to the Audit Center.', 'ok');
+    Promise.resolve(RRV8.cardStore.save({
+      company: _co, cardCode: _cc, periodEnd: _per,
+      status: keep, note: val, sourceFix: val, varAmount: null
+    })).then(function () {
       if (note) note.dataset.dirty = '';
-      // Audit trail: record the corrective on the Activity Log (best-effort, one-way).
-      if (window.RRV8 && RRV8.logActivity) {
-        var _pat = _state.activeCard ? (_TXV_CARD_TITLE[_state.activeCard] || _state.activeCard) : '';
-        RRV8.logActivity('Reconciliation findings saved',
-          rows.length + ' transaction' + (rows.length === 1 ? '' : 's') + ' marked worked'
-          + (_pat ? ' — ' + _pat : '') + ' · Co ' + (_state.activeCompany || '?')
-          + ' · ' + ((_data && _data.period) || _state.period || ''));
-      }
+      _findingsStatus(keep === 'open'
+        // Plain "&", not "&amp;" — _findingsStatus assigns textContent, so the entity
+        // would render as the five literal characters. The deleted _findingsSave had
+        // exactly that bug in its success message.
+        ? 'Saved — the finding is on the Home card now. The rows are not marked worked and nothing has gone to the Audit Center yet; open the card on Home and Review & submit to do that.'
+        : 'Saved. This card is still ' + keep + ' — saving the text did not change that.', 'ok');
     }).catch(function (err) {
       _findingsStatus('Save failed — ' + (err && err.message ? err.message : String(err)), 'error');
-    }).then(function () { _findingsBusy = false; if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Mark reviewed'; } });
+    }).then(function () {
+      _findingsBusy = false;
+      if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
+    });
   }
   (function wireFindings() {
-    var save = document.getElementById('tx-findings-save'), note = document.getElementById('tx-findings-note');
-    if (save) save.addEventListener('click', _findingsSave);
+    var note = document.getElementById('tx-findings-note');
+    var draft = document.getElementById('tx-findings-draft');
+    if (draft) draft.addEventListener('click', _findingsSaveDraft);
     if (note) note.addEventListener('input', function () { note.dataset.dirty = '1'; _txFindingsAutosize(); });
   })();
   (function wireTxAnalyzer() {

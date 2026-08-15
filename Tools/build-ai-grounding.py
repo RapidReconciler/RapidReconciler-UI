@@ -34,13 +34,15 @@ is preserved exactly; only the string CONTENT changes.
 
 TOPIC -> SOURCE MAP
 -------------------
-ADMIN is generated from the RRUniversity administrator docs. The five analyst
-catalogs (ACCT, ANALYST, CARDEX, ROLLFORWARD, ASOF) are passthrough-pending:
-their current content is a tightly distilled, SME-curated POLICY, not a doc
-excerpt, and the AnalysisGuides/*.md files are long-form references with no
-liftable concise grounding section. A mechanical extractor would only dump or
-truncate them -- a regression. They stay hand-authored until a clean, distilled
-source (or a summarization step) exists. See docs/plans/ai-grounding-from-docs.md.
+ADMIN is generated from the RRUniversity administrator docs via the HTMLParser
+extractor. The analyst / accountant catalogs generate from curated Markdown under
+AnalysisGuides/_catalog/ -- the ```grounding fence is lifted byte-for-byte and the
+prose around it is authoring context the AI never sees. That indirection exists
+because the long-form AnalysisGuides/*.md references have no liftable concise
+section: a mechanical extractor pointed at them would dump or truncate, which is a
+regression. CARDEX and ANALYST read those catalogs today; ACCT, ROLLFORWARD and
+ASOF stay passthrough until their catalog is authored. See
+docs/plans/ai-grounding-from-docs.md.
 
 USAGE
 -----
@@ -72,7 +74,30 @@ MARKER_END = "  // <<AI-GROUNDING GENERATED END>>"
 # Topics regenerated from docs on every run. Everything else in the block is
 # preserved verbatim. Flip a topic to "generated" by adding it here AND giving
 # it a SOURCES entry.
-GENERATE = ("ADMIN",)
+#
+# ADMIN generates from HTML KB docs via the HTMLParser extractor. Analyst /
+# accountant topics generate from a curated Markdown catalog under
+# AnalysisGuides/_catalog/ (the ```grounding fence is lifted verbatim), plus the
+# shared-core invariants tagged for that catalog in _catalog/_core.md. The read
+# path is chosen per topic by source extension (.md vs .html).
+GENERATE = ("ADMIN", "CARDEX", "ANALYST")
+
+# The single-source shared-core catalog: cross-role invariants authored once and
+# composed into each role catalog the generator builds (see load_core_invariants).
+CORE_CATALOG = "AnalysisGuides/_catalog/_core.md"
+
+# Which role brain each grounding topic belongs to. Drives shared-core selection:
+# an invariant tagged `role:analyst` composes into every analyst topic; a topic
+# tagged `topic:cardex` composes into cardex only. Keeps the transaction topic
+# (ANALYST) distinct from the analyst role that spans all four analyst topics.
+ROLE_OF = {
+    "ACCT": "accountant",
+    "ANALYST": "analyst",
+    "CARDEX": "analyst",
+    "ROLLFORWARD": "analyst",
+    "ASOF": "analyst",
+    "ADMIN": "admin",
+}
 
 # TOPIC -> ordered list of source doc paths (repo-relative). Only topics in
 # GENERATE are read; the rest are documentation of intent.
@@ -88,16 +113,31 @@ SOURCES = {
         "RRUniversity/administrator-complex-password.html",
         "RRUniversity/rapidreconciler-licensing.html",
     ],
-    # Passthrough-pending -- needs a clean, distilled source before it can be
-    # generated without regressing the working hand-authored grounding:
-    "ACCT": [],         # SOURCE OF TRUTH docs/plans/accounting-reference.md (prose, no liftable policy block)
-    "ANALYST": [],      # AnalysisGuides/transaction-detail-analysis.md (1381-line reference, needs distillation)
-    "CARDEX": [],       # AnalysisGuides/cardex-variance-analysis.md (749-line reference, needs distillation)
-    "ROLLFORWARD": [],  # AnalysisGuides/inv-account-roll-forward-analysis.md (709-line reference, needs distillation)
-    "ASOF": [],         # no dedicated as-of guide; perpetual/residual model lives across pages
+    # CARDEX is generated from a curated Markdown catalog (the distilled analyst
+    # brain), NOT from the 749-line reference: the ```grounding fence in this file
+    # is lifted verbatim, then _core.md invariants tagged for it are composed in.
+    "CARDEX": ["AnalysisGuides/_catalog/analyst/cardex.md"],
+    # ANALYST reads TWO catalogs and the ORDER IS THE POINT: transaction.md is the
+    # PATTERN half (what a per-document gap means), period-workflow.md is the
+    # PROCESS half (which control, in what order). Pattern before process, because
+    # the analyst decides materiality from the pattern before touching a button.
+    # transaction.md was lifted element-for-element out of the hand-authored array
+    # in config.js, so wiring this topic ADDS the process bullets rather than
+    # replacing the playbook -- listing only period-workflow.md here would delete
+    # 27 pattern bullets and still report success.
+    "ANALYST": [
+        "AnalysisGuides/_catalog/analyst/transaction.md",
+        "AnalysisGuides/_catalog/analyst/period-workflow.md",
+    ],
+    # Passthrough-pending -- author the curated _catalog/*.md, then add here + to
+    # GENERATE. Each seed distillation already lives under _grounding/*.md.
+    "ACCT": [],         # -> _catalog/accountant/acct.md (seed: _grounding/acct.md; docs/plans/accounting-reference.md)
+    "ROLLFORWARD": [],  # -> _catalog/analyst/rollforward.md (seed: _grounding/rollforward.md; MERGED, cannot be generated from the guide alone)
+    "ASOF": [],         # -> _catalog/analyst/asof.md (seed: _grounding/asof.md; no single upstream guide)
 }
 
-# A short, human-readable label per generated topic used in the block header.
+# A short, human-readable label per generated HTML topic used in the block header.
+# Markdown topics carry their own header line inside the fence and skip this.
 TOPIC_LABELS = {
     "ADMIN": "RapidReconciler University administrator docs",
 }
@@ -309,6 +349,140 @@ def extract_doc_lines(path: Path) -> tuple[str, list[str]]:
 
 
 # --------------------------------------------------------------------------
+# Markdown catalog extraction (the curated analyst / accountant brains)
+# --------------------------------------------------------------------------
+#
+# A catalog .md is prose plus exactly one ```grounding fence. Only the fence is
+# read, one line per grounding bullet, lifted BYTE-FOR-BYTE -- no reflow, no
+# stripping, no Markdown interpretation. The prose outside the fence is authoring
+# context (provenance, altitude, carried-over engineering notes) and never reaches
+# the AI. That is the whole contract, and it is why the catalog files carry the
+# line "Keep every line a single grounding bullet."
+
+FENCE_OPEN = "```grounding"
+
+
+def extract_md_fence(path: Path) -> list[str]:
+    """Return the lines inside a .md file's single ```grounding fence."""
+    raw = path.read_text(encoding="utf-8")
+    lines = raw.replace("\r\n", "\n").split("\n")
+    out: list[str] = []
+    inside = False
+    for line in lines:
+        if not inside:
+            if line.strip() == FENCE_OPEN:
+                inside = True
+            continue
+        if line.startswith("```"):
+            return out
+        if line.strip() == "":
+            # A blank line inside the fence would emit an empty grounding bullet.
+            sys.stderr.write("  WARN: blank line inside the fence in %s -- dropped\n"
+                             % path.name)
+            continue
+        out.append(line)
+    if inside:
+        raise SystemExit("ERROR: unterminated ```grounding fence in %s" % path)
+    return out
+
+
+def load_core_invariants(topic: str) -> list[str]:
+    """Shared-core bullets from _core.md that this topic inherits.
+
+    Format in _core.md: an `Applies:` line naming role / topic tokens, then a
+    ```grounding fence holding that invariant's bullets. The nearest `Applies:`
+    line above a fence governs it. A fence with no `Applies:` above it is skipped
+    with a warning rather than silently inherited everywhere.
+    """
+    path = REPO_ROOT / CORE_CATALOG
+    if not path.exists():
+        sys.stderr.write("  WARN: shared-core catalog not found: %s\n" % CORE_CATALOG)
+        return []
+    role = ROLE_OF.get(topic, "")
+    wanted = {"all", "role:%s" % role, "topic:%s" % topic.lower()}
+
+    out: list[str] = []
+    applies: set[str] | None = None
+    inside = False
+    take = False
+    for line in path.read_text(encoding="utf-8").replace("\r\n", "\n").split("\n"):
+        if not inside:
+            if line.startswith("Applies:"):
+                applies = {
+                    t.strip().lower()
+                    for t in line.split(":", 1)[1].split(",")
+                    if t.strip()
+                }
+                continue
+            if line.strip() == FENCE_OPEN:
+                inside = True
+                if applies is None:
+                    sys.stderr.write(
+                        "  WARN: %s has a grounding fence with no Applies: line "
+                        "above it -- skipped\n" % CORE_CATALOG)
+                    take = False
+                else:
+                    take = bool(applies & wanted)
+                applies = None
+            continue
+        if line.startswith("```"):
+            inside = False
+            take = False
+            continue
+        if take and line.strip():
+            out.append(line)
+    return out
+
+
+def build_md_lines(topic: str) -> list[str]:
+    """Payload for a topic generated from curated Markdown catalogs.
+
+    Emission order is deliberate: the first catalog's POLICY header line, then the
+    shared-core invariants (`_core.md` authors them once; they sit AHEAD of the
+    catalog's own bullets), then each catalog's bullets in SOURCES order. For
+    ANALYST that puts pattern before process, which is the order the analyst
+    reasons in -- what the gap means, then which control to use.
+    """
+    core = load_core_invariants(topic)
+    lines: list[str] = []
+    core_emitted = False
+    seen: set[str] = set()
+
+    def add(s: str) -> None:
+        if s in seen:
+            sys.stderr.write("  NOTE: duplicate grounding bullet dropped: %s...\n" % s[:60])
+            return
+        seen.add(s)
+        lines.append(s)
+
+    for rel in SOURCES[topic]:
+        path = REPO_ROOT / rel
+        if not path.exists():
+            sys.stderr.write("  WARN: source not found: %s\n" % rel)
+            continue
+        fence = extract_md_fence(path)
+        if not fence:
+            sys.stderr.write("  WARN: no ```grounding fence content in %s\n" % rel)
+            continue
+        body = fence
+        if not fence[0].startswith("- "):
+            add(fence[0])          # the catalog's own POLICY header line
+            body = fence[1:]
+        if not core_emitted:
+            for inv in core:
+                add(inv)
+            core_emitted = True
+        for b in body:
+            add(b)
+
+    if not lines:
+        raise SystemExit(
+            "ERROR: topic %s is in GENERATE but produced no grounding lines -- "
+            "refusing to overwrite a working catalog with nothing" % topic)
+    return lines
+
+
+# --------------------------------------------------------------------------
 # JS string emission
 # --------------------------------------------------------------------------
 
@@ -320,7 +494,20 @@ def js_escape(s: str) -> str:
 
 
 def build_generated_lines(topic: str) -> list[str]:
-    """Build the array-of-strings payload for a generated topic."""
+    """Build the array-of-strings payload for a generated topic.
+
+    The read path is chosen by source extension: curated Markdown catalogs are
+    lifted from their ```grounding fence, HTML KB docs go through the HTMLParser
+    extractor. A topic mixing the two is rejected rather than half-read -- the two
+    paths produce different shapes (fence bullets vs `=== title ===` sections).
+    """
+    exts = {Path(r).suffix.lower() for r in SOURCES[topic]}
+    if exts == {".md"}:
+        return build_md_lines(topic)
+    if ".md" in exts:
+        raise SystemExit(
+            "ERROR: topic %s mixes .md catalogs with other sources; split it into "
+            "one read path" % topic)
     label = TOPIC_LABELS.get(topic, topic)
     lines = [
         "%s GROUNDING -- generated from the %s. Reason from the documented "

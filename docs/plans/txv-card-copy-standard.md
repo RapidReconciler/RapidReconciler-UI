@@ -74,14 +74,61 @@ each, and the analyst can act after the first three lines.
 **SAC is deliberately outside the baseline.** Any regression on it fails the
 build.
 
+**And it has regressed.** The block above is what the card said when this
+document was written. `RRV8/config.js` now carries a 26-word version of the
+second bullet and a 37-word version of the second `What to do` bullet, both over
+the 25-word limit, so the gate has been exiting 1 on `SAC` alone since before
+2026-08-15. Not fixed here: trimming the `What to do` bullet costs the sentence
+about order types that shipped nothing this period and so appear nowhere on the
+card, which is the reason the DMAAIs tab is worth opening. That is a copy call
+for the owner, not a gate call.
+
+## What happened is the detection, and only the detection
+
+Added 2026-08-15, after the owner read a detected card: *"The what happened
+section on the card is too long. Don't tell me what worked. Only show the
+issues."*
+
+`checked` had been carrying two different kinds of line. One kind says what went
+wrong. The other says what was screened, guarded against or excluded on the way
+to this card — the document type, the precedence claim that ran first, how wide
+the GL search went. Both were true, both cited assertions, and they rendered in
+catalog order under one heading, so `ACCT` opened with six bullets of which two
+were the finding and `MCM` led with a sentence ending "so the completion-gap
+shape is ruled out".
+
+The second kind now lives in `alsoChecked` and renders LAST, under **Also
+checked**. Nothing was deleted: every bullet still cites its assertion and the
+gate validates `alsoChecked` ids exactly as it validates `checked` ids. Total
+cited entries across the catalog before and after: 87 either way.
+
+Which array a bullet belongs in cannot be read off the manifest — an assertion
+has a `proc` and a `statement` and no polarity — and it cannot be read off the
+wording either, because "no GL completion was found for this work order" is the
+detection on `CNJ` and a ruled-out check elsewhere. It is decided per card,
+against what the proc's `@asserts` line actually tests.
+
+**Triage cards keep a whole-card baseline.** `T-SALES`, `T-PURCH`, `T-MFG` and
+`T-INV` have no identified cause, so their `checked` list is legitimately all
+negative results — there is no detection to lead with. The renderer compresses
+those to one line instead.
+
 ## The backlog
 
 The other 21 cards predate the standard and produce 123 warnings. They are
 baselined so the gate can go green today while still failing anything new. That
-is a debt, not an exemption. Remove a code from `formatBaseline.cards` when its
-card is rewritten and the gate holds it to the standard from then on.
+is a debt, not an exemption.
 
-Work them in descending warning count. `MTO` and `CNJ` carry twelve each.
+The baseline is **per field**, not per card: an entry is `{ card, fields }` and
+`fields` names the sections still baselined. Anything not named is enforced.
+That shape exists because `checked` was retired across all 17 detected cards on
+2026-08-15 while the same cards' `found` / `fix` / `context` backlog was
+untouched. Whole-card baselining could not express that, so retiring one rule
+would have meant rewriting every section of every card first — which is how a
+backlog becomes permanent. Drop a field name when its section is rewritten;
+drop the whole entry when the card is done.
+
+Work the rest in descending warning count. `MTO` and `CNJ` carry twelve each.
 
 ## Related
 

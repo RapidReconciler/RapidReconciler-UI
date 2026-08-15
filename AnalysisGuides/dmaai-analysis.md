@@ -33,6 +33,44 @@ Both tables share a column shape. Match on `TableNumber` (the DMAAI number),
 `LongAccount`, with `BusinessUnit`, `ObjectAccount` and `SubAccount` carrying the
 parts. `RAccountInstr` also has `CostType`, `flexbu` and `flexsub`.
 
+**Comparing two accounts: drop a segment only when it FLEXES, and a BLANK
+subsidiary is not a flexed one.** This is the rule behind every account-vs-account
+question in the product, and getting it wrong breaks in both directions.
+
+A flexed segment is supplied at posting time — the branch plant fills a blank
+business unit, the item fills a blank subsidiary — so it is not part of what the AAI
+asserts. Comparing it manufactures a mismatch, and printing it names a placeholder
+as the model. So a flexed segment comes out of the comparison key, and it comes out
+of BOTH keys: two accounts have to be compared over the same segments or they are
+not comparable at all.
+
+**A blank subsidiary on an unflexed AAI means "no subsidiary asserted", not
+"unspecified"** (owner SME ruling, 2026-08-14). It therefore participates in the key
+*as a blank*, which makes a posted subsidiary a **real divergence** to report rather
+than noise to ignore. The two readings are not cosmetic:
+
+| Reading | Model key | Posted key | Result |
+|---|---|---|---|
+| **no subsidiary asserted** (correct) | `B000001.1121` | `B000001.1121.SB00222` | keys differ → divergence reported |
+| "unspecified, ignore" (wrong) | `B000001.1121` | `B000001.1121` | keys match → the divergence disappears |
+
+The second reading suppresses a real finding, which is the dangerous direction.
+
+Two consumers already implement it and both are correct as written — do not
+"simplify" either:
+
+- `_acctKey` in `RRV8/inventory-transactions.html` builds the key from the literal
+  segments only, so an empty `SubAccount` contributes nothing and the posted account
+  that carries one does not match. Verified against the source 2026-08-14.
+- `dbo.v8ui_dmaai_net_zero_pairs` builds `FlexKey` / `CogsFlexKey` the same way, and
+  because `RAccountInstrExp` carries no flex columns at all, the **inventory side's**
+  flex decision governs both keys.
+
+Caveat on coverage: `SubFlex = 0` on every company 30002 row while `f4095.mlsub` is
+blank, so on `RapidReconciler_Demo3` the flexed-subsidiary path is **unexercised**
+and the blank-subsidiary case is the only live one. Any claim about flexed-subsidiary
+behaviour on that database is reasoning, not measurement.
+
 **There is no wildcard step, and this paragraph used to say there was.** Both tables
 are already resolved and expanded: `GLClass` holds concrete classes only. Measured on
 `RapidReconciler_Demo3`, 2026-08-13 — `GLClass = '****'` appears in **zero** of

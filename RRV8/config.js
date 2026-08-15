@@ -107,6 +107,11 @@ window.RR_TEST_AGENT_AREAS = [
   // flags for the analyst Transaction-Variance analyzer + Home txv card diagnosis.
   // Read the same view at two depths (compact card line + full details analyzer).
   'inventory/integrity/dmaai-resolve',
+  // Sales 4240/4220 net-zero PAIR test, one row per routing, CROSS-COMPANY (the
+  // Model DMAAI Review page's routing-pair card). No company parameter by design —
+  // the endpoint scopes from the JWT and computes its summary over the full scope,
+  // because a per-company read is what lets a collapsed routing go unnoticed.
+  'inventory/integrity/dmaai-pairs',
   // v359 migration — endpoints absorbed by the test agent in order:
   //   inventory/status                          2026-05-24  (boot-time filter universe + validation light)
   //   inventory/reconciliation-filtered         2026-05-24  (Recon summary + barChart)
@@ -503,28 +508,16 @@ window.RRV8 = window.RRV8 || {};
     '- Closed/prior periods are already journaled — never prescribe an entry for them; a carry-forward\'s source is the prior period.',
     '- Audience is JDE-fluent finance, not IT: plain accountant English; JDE artifacts (F4111, F0911, AAI) are fine, no plumbing terms.'
   ].join('\n');
-  // ANALYST_GROUNDING — the AI's compact copy of the transaction-variance playbook.
-  // Prepended to the analyst-facing AI prompts (the Transaction-Variance recurrence /
-  // "Investigate recurrence" note) so the reads reason per-document instead of
-  // hallucinating an in-transit / stranded-leg cause. SOURCE OF TRUTH =
-  // AnalysisGuides/transaction-detail-analysis.md; keep this in sync with it.
-  // Owner (analyst SME) curates the rules.
-  //
-  // THE SIGN IS ledger − cardex, AND IT IS DELIBERATE. Do not "correct" it back.
-  // RCardexLedgerCompare2.Variance is written as ledgeramount − cardexamount by
-  // usp6_009_account_summary (its own comment: "GL - CX (same perspective as OOB);
-  // was CX - GL"), so the transaction variance reads the same direction as the
-  // out-of-balance instead of fighting it. Nothing in the UI negates it on the way
-  // to the screen. Measured on RCardexLedgerCompare2 where recstatus = 1: against
-  // ledger − cardex the worst row deviates by float noise (~1e-11) on both Demo1
-  // (5,341 rows) and Demo3 (2,093 rows); against cardex − ledger it deviates by
-  // $198,929.62 and $685,913.64. This line said cardex − ledger until 2026-08-10,
-  // which inverted DIRECTION in every AI answer that reasoned from it — overstated
-  // read as understated. The card copy escaped it: that copy names which SIDE
-  // EXISTS (GL-only, cardex-only, relieved twice) rather than reading the signed
-  // column, so it was already right and was left alone.
+  // ANALYST_GROUNDING -- GENERATED from the knowledge-base docs by
+  // Tools/build-ai-grounding.py. DO NOT edit by hand: edit the source
+  // docs and re-run the generator (or let the GHA regenerate on push).
+  // Sources: AnalysisGuides/_catalog/analyst/transaction.md, AnalysisGuides/_catalog/analyst/period-workflow.md
   window.RRV8.ANALYST_GROUNDING = [
     'ANALYST POLICY (transaction variance) — reason from these rules:',
+    '- VARIANCE IS ALWAYS A DIFFERENCE: whenever two figures that should equal each other do not, that gap IS a variance — full stop. "Expected" / "explained" describes the CAUSE of a variance you can account for; it NEVER downgrades the gap to "not a variance" (two scales that disagree still disagree — knowing why does not make them equal). Disposition every variance as EXPLAINED / no-action or UNEXPLAINED / investigate; never as "not a variance," "not a real variance," or "not a variance to chase."',
+    '- SIGN CONVENTION: reason in the NATURAL sign shown on screen — the stored and displayed figures already carry it, and the reconciliation ties to the on-screen KPI in that sign. Do not silently flip signs to "make it balance"; a sign flip belongs only in an Excel/PDF out-of-balance column, never in the reasoning.',
+    '- DMAAI ROUTING is already grounded server-side on every AI call (the model-DMAAI 4152 rules). Reason from account derivation and routing as given; do not restate or re-derive the DMAAI model in this catalog — that copy lives once, on the server.',
+    '- RR IS A UTILITY, NOT THE BOOK OF RECORD: JDE is the system of record. RR surfaces the gap, explains it, and drives the source fix or the correcting entry — it does not post to JDE, hold the ledger, gate a close, or enforce attestation. Fixes land at the source (JDE / the operation) or as a journal entry the accountant posts in JDE.',
     '- A transaction variance reconciles ONE document: F4111 (item ledger / cardex) extended value vs F0911 (GL / ledger) for the SAME document and account. Variance = ledger − cardex for that document. So a POSITIVE variance means the GL carries more value than the item ledger, and a NEGATIVE variance means the item ledger carries more. Never state a direction without applying that subtraction — getting it backwards turns overstated into understated. Explain each document on its own terms.',
     '- TIE OR NO TIE. The test is whether the F0911 amount matches the F4111 amount within tolerance. It is BINARY. NEVER express a transaction variance as a percentage or a ratio — it is not a share of anything, and a percentage actively misleads here. State dollars.',
     '- IF F0911 DOES NOT TIE TO F4111, A CORRECTION IS REQUIRED. Always. "Explained" tells the analyst WHY the two sides disagree; it NEVER means leave it alone. The cause decides WHAT the correction is. It does not remove the need for one.',
@@ -547,42 +540,52 @@ window.RRV8 = window.RRV8 || {};
     '- NO VENDOR ARTICLE MATCHES IT. Oracle Support KB 420628 is a near miss that was TESTED and RULED OUT: its symptom is the material issue\'s OWN entry missing from F0911, the inverse of this card, where IM is present in volume and only the completion is absent — that failure striking IM would SUPPRESS this card rather than create it. Never cite KB 420628 as a match, never state or invent a vendor remedy, and do NOT claim the article is login-gated (the body was retrieved). Its cause (an issue quantity under 0.0050 blanking the 2-decimal CTS1 on the F3111 part list) and its remedy (manual journal entries) belong to a different condition. UNTESTED and not to be dismissed: whether a blank CTS1 could block only PART of a run\'s output (the completion leg while the issue leg still writes) — RR does not load F3111, so settling it needs a query against the customer\'s own part list.',
     '- PREVENTING IT: have whoever runs R31802A read the error report that run produces. Then take it to Oracle through the CUSTOMER\'S OWN IT DEPARTMENT as an UNDOCUMENTED R31802A condition, explicitly NOT as KB 420628 — naming the wrong article invites a remedy built for a different cause. Do NOT delete unposted manufacturing batches — R31802A has already cleared the unaccounted units, so nothing in JDE regenerates the entry. R41543 has nothing to do with this card: never prescribe it here, and never tell the analyst to work the orders one at a time.',
     '- The BATCH NUMBER is a research handle: it is how you find the document in F0911, and it is NOT evidence the transaction reached the GL. Neither is the PC field, which is the F41112-update flag. Never present either as proof of GL posting.',
-    // The Ask box REFUSED to name the WIP revaluation program ("I won't state a WIP
-    // revaluation report number"), because this block never carried the fact and the
-    // MCM/MTO card copy told it not to assume one. The product already states it
-    // elsewhere -- home.html's frozen-cost fact block names R30837 -- so the refusal was
-    // one surface disagreeing with another, not a genuine unknown. Owner 2026-08-10.
-    // The over-generalisation to avoid: R41543 / R41544 were GUESSED for Transfer
-    // Integrity and Completion Not Journaled and the owner banned them there (2026-08-03).
-    // That ban is about those two patterns. It never meant "never name a program".
-    '- WIP REVALUATION IS R30837, and it is driven by R30822 (Frozen Cost Update). When a frozen standard '
-      + 'changes while work orders are still open, R30822 writes the new standard and R30837 revalues open WIP to '
-      + 'it. Skip R30837 and the cardex revalues with no GL offset, which is the cost-basis gap behind Mfg Cost '
-      + 'Mismatch. NAME THESE PROGRAMS when asked and state the number plainly. The VERSION in use is what varies '
-      + 'per customer, so say "check which version is in use" -- never "confirm the program", which reads as though '
-      + 'the number itself were in doubt when it is not. R30837 is optional under '
-      + 'standard costing, needs the variance AAI configured for the routing, and skips work orders already closed.',
+    '- WIP REVALUATION IS R30837, and it is driven by R30822 (Frozen Cost Update). When a frozen standard changes while work orders are still open, R30822 writes the new standard and R30837 revalues open WIP to it. Skip R30837 and the cardex revalues with no GL offset, which is the cost-basis gap behind Mfg Cost Mismatch. NAME THESE PROGRAMS when asked and state the number plainly. The VERSION in use is what varies per customer, so say "check which version is in use" -- never "confirm the program", which reads as though the number itself were in doubt when it is not. R30837 is optional under standard costing, needs the variance AAI configured for the routing, and skips work orders already closed.',
+    '- TWO COST SOURCES PRICE ONE MANUFACTURING TRANSACTION, AND CHECKING THEM IS ROUTINE. The cardex leg of an IM or IC is priced from F4105. R31802A builds the GL leg from the F30026 cost components. So when the components do not sum to the F4105 cost, that difference times the transaction quantity IS the variance, in the direction the sign convention gives — components above the F4105 cost put the GL on the larger side. Screen for it on any manufacturing document BEFORE reasoning about cost basis, timing or account mapping. THE COMMONEST SHAPE is an item whose F4105 cost is ZERO while its cost components carry value: the cardex extends to nothing and the GL carries the full component total, which is how a manufacturing row reads cardex 0 / ledger not 0 with nothing having gone missing from the posting. TWO CAUTIONS, both of which turn a confident answer into a wrong one. F4105 and F30026 are CURRENT-STATE ONLY — the check confirms a STANDING gap and can never establish what either table held on the G/L date, so a clean result rules the cause out today, not then; where it does not land, read the unit-cost history in the item ledger before naming a different cause. And the cost components can be ABSENT from the RapidReconciler copy even where the item costs loaded, in which case the check is UNAVAILABLE rather than negative — never report a clean result without confirming the components are present. The setup correction is source-side: the frozen cost update (R30822) writes the component sum to F4105, and RR Integrity Report 6 (Frozen Cost Integrity) already lists the items where the two disagree, so the analyst does not have to hunt for them. NEVER STATE A COUNT, A DOLLAR TOTAL OR A TIE RATE YOU HAVE NOT BEEN GIVEN FOR THIS INSTALL.',
     '- Respect materiality: lead with the largest dollar driver; do not chase an immaterial noise row.',
     '- ROLE SPLIT, not a disagreement about the entry: the corrective accounting action for a transaction variance IS a journal entry, and the ACCOUNTANT books it. The ANALYST prevents recurrence. So never argue against the entry — no "not a journal entry", no "a JE only balances the GL this period" — and do not instruct one either. Stay in the analyst\'s lane: what was checked, what the cause is, and the change that stops it coming back.',
     '- THE FINDING IS THE ANALYST\'S INVESTIGATION REPORT to the customer, and it travels to the reconciliation audit findings where a third party reads it months later. Write it in three parts under these headings: "What happened" — the state of the world, one fact per bullet; "What I found" — the exact cause, or if it cannot be pinned down ONE or TWO likely causes said plainly to be unconfirmed; "What to do" — short bullets. Terse, one idea per bullet, no stacked clauses. Name a table only when the analyst has to go look in it.',
-    '- Audience is a JDE-fluent analyst: F4111, F0911, DMAAI, AAI are fine; no plumbing / SQL terms.'
+    '- Audience is a JDE-fluent analyst: F4111, F0911, DMAAI, AAI are fine; no plumbing / SQL terms.',
+    'ANALYST POLICY (period workflow) — reason from these rules:',
+    '- THE ANALYST\'S JOB IS TO PREVENT RECURRENCE, not to post journal entries. Every control below records what was found and what was changed at the source; none of them post to the GL. The accountant posts. If asked to make a variance "go away" with an entry, say that is the accountant\'s step and that the analyst\'s step is finding why it happened.',
+    '- WORK THE CARDS FIRST, THEN THE PERIOD. Marking the period reviewed snapshots the card counts as they stand at that moment, so a card handed off after the period was marked is not counted in it. The order is not cosmetic.',
+    '- STEP ONE IS A MATERIALITY DECISION, not a click. Read the card\'s variance, its row count and the LIKELY CAUSE, then decide whether this is worth investigating. If it is immaterial in the analyst\'s judgement they are done investigating and can mark the period reviewed — that is a recorded decision with zero source fixes, not a skipped step. If it is material, open the variance drill first and let the finding come from the rows.',
+    '- A CARD IS ONE DOCUMENT, one root cause. The card header carries the company, the pattern name (for example "Sales DMAAI Net Zero"), the period, and a "Variance $X" link that drills to the transaction detail for that document. The LIKELY CAUSE block under it is the classifier\'s reading of the rows, not a confirmed diagnosis — it is where the analyst starts, not where they stop.',
+    '- THE VARIANCE LINK IS THE FIRST STEP AND THE QUIETEST CONTROL ON THE CARD. It is a text link with an arrow; the only solid button is "Mark reviewed", which is the LAST step. If asked how to investigate, name the variance link explicitly — a reader who scans for the button-shaped thing finds the control that closes the card without opening anything.',
+    '- ON THE TRANSACTION DETAIL PAGE, "SAVE" CAPTURES THE FINDING AND NOTHING ELSE. It is the ONLY button on the Findings panel. It stores the finding text against the company, card and period, and deliberately does not mark any row worked, does not send anything to the Audit Center, and does not advance the card\'s status. The finding then appears on the Home card labelled "Your recorded finding". This page had a second button also called "Mark reviewed" until 2026-08-15; it is gone. If asked where a finding is handed off, the answer is always the Home card and never this page.',
+    '- THE CARD BUTTON HAS THREE STATES and each names the action available. Untouched card: "Mark reviewed". Card already carrying a saved finding: "Review & submit". Either one OPENS the Recommendations editor and the same button becomes the save. Completed card: "Reopen to edit". Reopened card: "Mark reviewed", with the editor already open. Nothing is saved by opening the editor.',
+    '- REVIEWING THE CARD DISPOSITIONS THE WHOLE CARD, not the rows that happened to be on screen. The review action marks every row the card counted as worked, persists them, records the card complete, and writes the corrective to the activity log. It is all-or-nothing at card grain on purpose: a card is one document pattern with one root cause, so the card is the unit of judgement. An analyst who genuinely worked only part of it is still visible — the card\'s meta line reads "N worked" whenever the worked count is short of the row count. Never describe the review as marking a filtered subset.',
+    '- A FAILED HAND-OFF LEAVES THE CARD OPEN AND SAYS SO ON THE CARD. If the rows cannot be saved, nothing is recorded: the card keeps its previous state, the rows stay unmarked, and the reason prints on the card itself. So a card that still reads as open after a review attempt has genuinely not been handed off — read the message on it rather than assuming the click was missed.',
+    '- WHAT YOU TYPE IN "RECOMMENDATIONS" IS THE RECORD. It is stored as the card\'s source-fix text against the company, card and period. Its placeholder ("Waiting investigation — replaced with recommendations from the transaction details page.") is a PROMPT, not a value: an untouched card saves an empty resolution, which is correct. Never treat the placeholder text as analyst content.',
+    '- WRITE THE RECOMMENDATION AS AN INVESTIGATION RESULT: what you checked, what you found, and what stops it recurring. "Immaterial" is a disposition, not a finding. A resolution that names no source change has not prevented anything.',
+    '- HANDED OFF THIS CYCLE: N OF M is the count of cards saved complete against the total on the period. It is the figure that decides whether the period can later be reopened silently, so read it before marking the period reviewed.',
+    '- "MARK PERIOD REVIEWED" records how many card slices were fixed at the source and how many were left to ride, stamped with your name and the time server-side. It does not require every card to be complete — leaving cards to ride is a legitimate outcome, and the count says so.',
+    '- AFTER THE PERIOD IS REVIEWED the button becomes a "Reviewed <date>" chip. Whether it can be undone depends on whether work left the period. Nothing handed off, no source fixes recorded and no accountant adjustment means the review is inert and a plain "Reopen period" button undoes it outright. Any of those three means work left the period.',
+    '- REOPENING A CONSEQUENTIAL PERIOD REQUIRES A REASON, and the reasons it is locked are printed beside the button — cards handed off, source fixes recorded at review, accountant adjustment recorded. The reason is recorded against your name BEFORE the review is removed, and surfaces on the Audit tab under Reconciliation Audit Findings; if that record cannot be written, the period is left exactly as it was. A reversal that nobody can attribute is refused rather than performed quietly.',
+    '- REOPENING IS A CORRECTION, NOT A ROUTINE STEP. Someone downstream may have acted on the close. State in the reason what changed, not that you clicked the wrong thing.',
+    '- A ZERO OR NEAR-ZERO VARIANCE IS STILL A DECISION. An immaterial period can be marked reviewed without research, and that is a recorded choice with a count of zero source fixes. Do not describe it as "nothing to do" — describe it as a disposition the analyst owns.',
+    '- EVERY PERIOD-LEVEL ACT REACHES THE AUDIT SURFACE. Marking a period reviewed, reopening it inertly and reopening it with a reason all write an entry carrying the actor from the signed-in session. The Audit tab reads that stream, so the analyst\'s sign-off appears there under Analyst alongside their card findings and the DMAAI model approval.',
+    '- THE AUDIT TAB IS PER-COMPANY AND PER-PERIOD. A review recorded against one company does not appear while another company is in focus. Before concluding an entry is missing, check the company in the header — that is the usual explanation.',
+    '- THE PERIOD ENTRY IS A HEADER, NOT THE RECORD. It says who signed off, when, and with what counts. The substance an auditor needs months later is the card finding text. A period line reading "0 fixed at source · 1 let ride" reports a decision, not a reason.',
+    '- APPROVING THE DMAAI ACCOUNT MODEL IS ANALYST WORK, not accountant work. A wrong AAI is what produces a variance, so signing off the routing model is prevent-recurrence work and is recorded under Analyst. The `accounting-` prefix on the model-review page filename is a misnomer, not a role assignment.',
+    '- THE ROLL-FORWARD FIGURE AND THE RECONCILING ITEMS ARE NOT EXPECTED TO TIE. The chart sums every posted non-manual row at account grain; the card counts only documents over the materiality threshold at document grain. Two restrictions and a different grain, so they differ in either direction — the narrower population can be the LARGER number. Never explain the gap with filtering alone, which only fits one sign.'
   ].join('\n');
-  // CARDEX_GROUNDING — the AI's compact copy of the cardex-variance playbook.
-  // Prepended to the Cardex Variance page's Root-cause read. The model's job is to
-  // FRAME THE JDE VALIDATION, not to auto-diagnose the cause — the analyst's manual
-  // JDE check decides the remedy, and RR cannot see live JDE (a trust boundary).
-  // SOURCE OF TRUTH = the analyst's JDE validation workflow (P4111 export + sum vs
-  // F41021 header); keep this in sync as the model evolves. Owner (analyst SME)
-  // curates the rules.
+  // CARDEX_GROUNDING -- GENERATED from the knowledge-base docs by
+  // Tools/build-ai-grounding.py. DO NOT edit by hand: edit the source
+  // docs and re-run the generator (or let the GHA regenerate on push).
+  // Sources: AnalysisGuides/_catalog/analyst/cardex.md
   window.RRV8.CARDEX_GROUNDING = [
     'ANALYST POLICY (cardex variance) — reason from these rules:',
+    '- VARIANCE IS ALWAYS A DIFFERENCE: whenever two figures that should equal each other do not, that gap IS a variance — full stop. "Expected" / "explained" describes the CAUSE of a variance you can account for; it NEVER downgrades the gap to "not a variance" (two scales that disagree still disagree — knowing why does not make them equal). Disposition every variance as EXPLAINED / no-action or UNEXPLAINED / investigate; never as "not a variance," "not a real variance," or "not a variance to chase."',
     '- DEFINITION: cardex variance = the item ledger (F4111) does not sum to the on-hand balance (F41021) for one item. QUANTITY variance = the sum of F4111 primary-UoM quantity does NOT equal the F41021 Quantity On Hand. AMOUNT variance = the sum of F4111 extended cost does NOT equal the F41021 on-hand Value. Nothing else is cardex variance. It is inventory-internal, NOT the ledger-vs-GL gap (that is transaction variance).',
-    '- STEP 1 IS ALWAYS THE JDE VALIDATION. The analyst opens Work With Item Ledger (P4111) in JDE, exports the grid, and checks that the F4111 primary quantity sums to the header Quantity On Hand and the extended cost sums to the header Value. Anything wrong in JDE is corrected in JDE FIRST. RR cannot verify JDE — it TRUSTS the analyst did this. Never imply RR confirmed JDE.',
+    '- STEP 1 IS ALWAYS THE JDE VALIDATION. The analyst opens Work With Item Ledger (P4111) in JDE, exports the grid, EXCLUDES memo rows (ILIPCD = "X" — work-order scrap, lot releases, certain warehouse moves; they do not affect on-hand), and checks that the remaining F4111 primary quantity sums to the header Quantity On Hand and the extended cost sums to the header Value. Anything wrong in JDE is corrected in JDE FIRST. RR cannot verify JDE — it TRUSTS the analyst did this. Never imply RR confirmed JDE.',
+    '- USE THE RIGHT AGGREGATION SCOPE, and it is set by cost METHOD as well as cost level. An average-cost item (method 02) or actual-cost item (method 09) reconciles at ITEM when its cost level is 1 (branch not in the key), at BRANCH/ITEM when its cost level is 2, and per LOCATION AND LOT when its cost level is 3. A standard-cost item (method 07) reconciles per LOCATION AND LOT at every cost level, and so does any other cost method. Comparing at the wrong grain manufactures a false variance.',
     '- THE REMEDY FORK, decided by that validation, not by RR: (a) if JDE itself is out of balance (F4111 does not sum to F41021 in JDE), the variance is REAL — fix it at the source in JDE. The common real case is F41021 not updating for one or more cardex transactions (a system glitch that needs IT). An RR adjustment is at best a stopgap. (b) If JDE ties but RR still shows a variance, RR\'s load/roll is the artifact (e.g. F4111 and F41021 captured out of sync during a live load) — sync RR to the JDE figure with the in-place, reversible Adjust Beginning Balance.',
+    '- ADJUST BEGINNING BALANCE has three presets: Clear to JDE (sets the opening so the variance nets to zero — use when JDE is confirmed correct and the variance is an RR-only artifact), Zero opening (opening qty and amount set to 0), and Manual (type the known-correct opening qty and amount — use after a JDE correction or a UOM change). Every adjustment is logged and reversible from the Adjustment ledger.',
     '- DO NOT auto-classify a real glitch vs load-timing noise from RR data. Both can persist (especially from the initial baseline perpetual build), and RR cannot see live JDE, so a heuristic would only guess. Surface the variance and the two sums (F4111 total vs F41021 on-hand); let the analyst\'s JDE validation determine the cause. Name a LIKELY cause tentatively if asked, never as a verdict.',
     '- Quantity first: when units are off, lead with the quantity — the dollars usually follow at cost. Amount-only (units tie, value off) points at cost/valuation, not counting.',
     '- Cardex variance CANNOT be journaled — people try. It is analyst / operations work: fix the data at the source in JDE, or apply the in-place reversible sync once JDE is validated. The accountant\'s journal entry never touches it.',
-    '- Audience is a JDE-fluent analyst: F4111, F41021, P4111, UOM, cost method / level are fine; no SQL or plumbing terms.'
+    '- Audience is a JDE-fluent analyst: F4111, F41021, P4111, ILIPCD, UOM, cost method / level are fine; no SQL or plumbing terms.'
   ].join('\n');
   // ROLLFORWARD_GROUNDING — the AI's compact copy of the Account Roll-Forward
   // corrective playbook. Prepended to the roll-forward assistant's system prompt
@@ -1358,9 +1361,11 @@ window.RRV8 = window.RRV8 || {};
         mech: 'The document is in balance, and its value sits on two accounts that offset each other.',
         checked: [
           { a: 'ACCT.netswithin', t: 'The variance nets to within tolerance across the accounts this document touched, in one batch and one period.' },
+          { a: 'ACCT.offsetnamed', t: 'The offset account is named on the row.' }
+        ],
+        alsoChecked: [
           { a: 'ACCT.sameperiod', t: 'Period is part of that grain, so both offsetting rows are in the same month. A cut-off cannot explain this one.' },
           { a: 'ACCT.samebatch', t: 'Batch is part of that grain, so both rows came out of the same run.' },
-          { a: 'ACCT.offsetnamed', t: 'The offset account is named on the row.' },
           { a: 'ACCT.ungrouped', t: 'Single document, not a leg of a transfer, direct-ship or intercompany group.' },
           { a: 'POP.inventoryaccount', t: 'Both accounts are inventory accounts.' }
         ],
@@ -1390,8 +1395,10 @@ window.RRV8 = window.RRV8 || {};
         mech: 'This document\'s variance offsets against the same document in another month.',
         checked: [
           { a: 'PER.netswithin', t: 'The variance nets to within tolerance once the two months are added together, on one account and one batch.' },
+          { a: 'PER.acrossperiods', t: 'The offsetting period is named on the row.' }
+        ],
+        alsoChecked: [
           { a: 'PER.sameaccount', t: 'Account is part of that grain, so both rows sit on the same account. This is not an account mismatch.' },
-          { a: 'PER.acrossperiods', t: 'The offsetting period is named on the row.' },
           { a: 'PER.ungrouped', t: 'Single document, not a leg of a transfer, direct-ship or intercompany group.' }
         ],
         context: [
@@ -1421,7 +1428,12 @@ window.RRV8 = window.RRV8 || {};
         mech: 'An order on this document was relieved from inventory twice. The GL booked it once.',
         checked: [
           { a: 'DUP.integrityflag', t: 'The duplicate-sales integrity check flags this order for this period.' },
-          { a: 'DUP.repeatedlineid', t: 'What it flags is a repeated line ID at the same item, location and lot, with a non-zero net quantity. JDE increments the line for a genuine partial shipment, so a repeat is a double relief and not a split.' },
+          // Trimmed from 40 words to 25 on 2026-08-15 to clear the word limit once
+          // `checked` stopped being baselined. Both ideas kept: the shape of the
+          // repeat, and why a repeat is a relief rather than a split.
+          { a: 'DUP.repeatedlineid', t: 'Repeated line ID at one item, location and lot, net quantity non-zero. JDE increments the line on a partial shipment, so repeats are double relief.' }
+        ],
+        alsoChecked: [
           { a: 'DUP.ordergrain', t: 'The flag is at ORDER grain. Every row of this order in this period carries it, including rows that are not themselves the duplicate — check the item-ledger column per row before you act on one.' }
         ],
         context: [
@@ -1498,8 +1510,10 @@ window.RRV8 = window.RRV8 || {};
       finding: {
         mech: 'A location transfer wrote one item-ledger leg. Its counterpart was never written, so quantity and value moved one way.',
         checked: [
+          { a: 'TLM.oneleg', t: 'Item-ledger rows for the document: exactly one. JDE writes a transfer as a line-ID pair, .000 relief and .500 receipt, so the counterpart is absent.' }
+        ],
+        alsoChecked: [
           { a: 'TLM.doctypeit', t: 'Document type IT, an inventory transfer.' },
-          { a: 'TLM.oneleg', t: 'Item-ledger rows for the document: exactly one. JDE writes a transfer as a line-ID pair, .000 relief and .500 receipt, so the counterpart is absent.' },
           { a: 'TLM.cardexonly', t: 'The GL correlation returned nothing for the row. That is what the zero in the ledger column means — not that F0911 is empty.' }
         ],
         context: [
@@ -1529,8 +1543,10 @@ window.RRV8 = window.RRV8 || {};
       finding: {
         mech: 'A location transfer took value off the item ledger and the GL correlation found nothing to match it.',
         checked: [
+          { a: 'TXI.cardexonly', t: 'The item ledger carries value and the GL correlation returned nothing for the row.' }
+        ],
+        alsoChecked: [
           { a: 'TXI.doctypeit', t: 'Document type IT, an inventory transfer.' },
-          { a: 'TXI.cardexonly', t: 'The item ledger carries value and the GL correlation returned nothing for the row.' },
           { a: 'TXI.notoneleg', t: 'More than one item-ledger leg on the document. Documents holding exactly one are claimed by Transfer Leg Missing before this card runs, so a missing leg is ruled out.' }
         ],
         context: [
@@ -1573,12 +1589,17 @@ window.RRV8 = window.RRV8 || {};
       finding: {
         mech: 'Work-order completions received finished goods into inventory with no GL entry for them.',
         checked: [
-          { a: 'CNJ.mfgic', t: 'A work-order completion (IC) on the item ledger, in a manufacturing batch.' },
           { a: 'CNJ.nocompletion', t: 'No GL completion for this work order.' },
-          { a: 'CNJ.issuespresent', t: 'Material issues (IM) for the same work order ARE in the GL, so the order did go through manufacturing accounting.' },
+          { a: 'CNJ.issuespresent', t: 'Material issues (IM) for the same work order ARE in the GL, so the order did go through manufacturing accounting.' }
+        ],
+        alsoChecked: [
+          { a: 'CNJ.mfgic', t: 'A work-order completion (IC) on the item ledger, in a manufacturing batch.' },
           { a: 'CNJ.searchscope', t: 'How far that search went: document types IC and IM, on this document\'s own company, on rows carrying a numeric work-order subledger. Widen it yourself before you tell the customer the entry does not exist.' },
           { a: 'CNJ.batchstamped', t: 'A batch is stamped on the item-ledger row, so R31802A processed the transaction and wrote no completion detail for it.' },
-          { a: 'CNJ.unpostedwouldsuppress', t: 'Unposted is ruled out by the card firing at all: unposted GL entries are loaded, so an unposted completion would suppress this card and show up as a GL batch variance instead.' }
+          { a: 'CNJ.unpostedwouldsuppress', t: 'Unposted is ruled out by the card firing at all: unposted GL entries are loaded, so an unposted completion would suppress this card and show up as a GL batch variance instead.' },
+          // Orphaned until 2026-08-15 -- the classifier makes this assertion and no
+          // bullet cited it, so the gate reported it as referenced-by-no-card.
+          { a: 'CNJ.cardexonly', t: 'The row carries a cardex amount and no ledger amount, so the GL correlation found nothing for it.' }
         ],
         context: [
           'Not tested: the batches and the account. The card used to say both were healthy because they carry completions for other orders. That was a specimen finding, and it is the strongest evidence you can gather — go and check it on one of your own batches, because a batch full of other orders\' completions is what turns this from "a run failed" into "the run dropped this order".',
@@ -1631,10 +1652,12 @@ window.RRV8 = window.RRV8 || {};
       finding: {
         mech: 'The GL posted two entries that cancel each other, and neither one reached the inventory account.',
         checked: [
+          { a: 'OFF.cardexonly', t: 'The item ledger carries value and the GL correlation returned nothing against that account. The entry posted; it posted somewhere else.' },
+          { a: 'OFF.noneoninvaccount', t: 'None of them landed on the account the item ledger used.' }
+        ],
+        alsoChecked: [
           { a: 'OFF.twolegs', t: 'The GL holds two or more entries for this document.' },
           { a: 'OFF.legsnetzero', t: 'They sum to zero, so the document nets out in the GL.' },
-          { a: 'OFF.noneoninvaccount', t: 'None of them landed on the account the item ledger used.' },
-          { a: 'OFF.cardexonly', t: 'The item ledger carries value and the GL correlation returned nothing against that account. The entry posted; it posted somewhere else.' },
           { a: 'OFF.docscope', t: 'That GL search is by document number and document type, across every company, so it is a wide search rather than a narrow one.' }
         ],
         context: [
@@ -1671,8 +1694,13 @@ window.RRV8 = window.RRV8 || {};
       finding: {
         mech: 'A non-stock line posted its cost to an inventory account. The non-stock cost accounts for the whole variance.',
         checked: [
-          { a: 'NSL.nonstockline', t: 'One or more lines on the order are non-stock: F40205 inventory interface N, carrying an extended cost. A non-stock line posts to the GL and moves no inventory.' },
-          { a: 'NSL.costtiesvariance', t: 'The non-stock cost ties to the variance to the penny, either on this document or across the order.' },
+          // Trimmed from 28 words to 23 on 2026-08-15 for the word limit, once
+          // `checked` stopped being baselined. Nothing dropped but the count of
+          // lines, which the row itself carries.
+          { a: 'NSL.nonstockline', t: 'Order lines are non-stock: F40205 inventory interface N, carrying an extended cost. A non-stock line posts to the GL and moves no inventory.' },
+          { a: 'NSL.costtiesvariance', t: 'The non-stock cost ties to the variance to the penny, either on this document or across the order.' }
+        ],
+        alsoChecked: [
           { a: 'POP.inventoryaccount', t: 'The account the GL used is an inventory account.' },
           { a: 'NSL.sales', t: 'A sales-side document.' },
           { a: 'NSL.ordernumberonly', t: 'The order lines were matched on order number alone, with no company scope. Confirm the order belongs to this company before you act.' }
@@ -1711,7 +1739,9 @@ window.RRV8 = window.RRV8 || {};
         mech: 'The completion was journaled in a later batch than the one stamped on the item ledger.',
         checked: [
           { a: 'XBC.glcompletionsameaccount', t: 'A GL completion exists for this work order on this account, in a different batch.' },
-          { a: 'XBC.amounttiesrow', t: 'Summed across every batch and period, that GL completion equals this item-ledger row to the penny.' },
+          { a: 'XBC.amounttiesrow', t: 'Summed across every batch and period, that GL completion equals this item-ledger row to the penny.' }
+        ],
+        alsoChecked: [
           { a: 'XBC.glsideaggregated', t: 'One thing to know about that comparison: the GL side is summed across batches, the item-ledger side is this single row. Where a work order and account carry several ledger rows, check the totals rather than the row.' },
           { a: 'XBC.mfgic', t: 'A work-order completion (IC) in a manufacturing batch.' },
           // A STAMPED BATCH IS NOT EVIDENCE THE JOURNAL WAS WRITTEN (UI-83).
@@ -1750,8 +1780,13 @@ window.RRV8 = window.RRV8 || {};
       finding: {
         mech: 'A GL completion exists on this account for the work order and the amount disagrees with the item ledger.',
         checked: [
+          { a: 'MCM.amountdiffers', t: 'Summed across every batch and period, the two sides differ. The cross-batch card takes everything that ties, so what is here does not.' }
+        ],
+        // glcompletionsameaccount leads this block rather than "What happened": its own
+        // sentence ends "so the completion-gap shape is ruled out", which is an
+        // exclusion, not the detection. The detection on this card is the disagreement.
+        alsoChecked: [
           { a: 'MCM.glcompletionsameaccount', t: 'A GL completion exists for this work order on this account, so the completion-gap shape is ruled out.' },
-          { a: 'MCM.amountdiffers', t: 'Summed across every batch and period, the two sides differ. The cross-batch card takes everything that ties, so what is here does not.' },
           { a: 'MCM.iconly', t: 'Completions only on the GL side. The completion carries labor and overhead out of WIP and the issue does not, so the two are never netted against each other.' },
           { a: 'MCM.glsideaggregated', t: 'One thing to know about that comparison: the GL side is summed across batches, the item-ledger side is this single row. Where a work order and account carry several ledger rows, check the totals rather than the row.' },
           { a: 'MCM.mfgic', t: 'A work-order completion (IC) in a manufacturing batch.' },
@@ -1803,7 +1838,9 @@ window.RRV8 = window.RRV8 || {};
         mech: 'Every line on the order is non-stock, so the GL posts and inventory never moves.',
         checked: [
           { a: 'NCL.everylinenonstock', t: 'Every line on the order resolves to an inventory interface of N. Read from F40205, not inferred from the line-type letters.' },
-          { a: 'NCL.glonly', t: 'The item-ledger side is zero, which is correct for a non-stock line rather than a gap.' },
+          { a: 'NCL.glonly', t: 'The item-ledger side is zero, which is correct for a non-stock line rather than a gap.' }
+        ],
+        alsoChecked: [
           { a: 'NCL.sales', t: 'A sales-side document.' },
           { a: 'NCL.ordernumberonly', t: 'The order lines were matched on order number alone, with no company scope. Confirm the order belongs to this company before you act.' }
         ],
@@ -1874,7 +1911,7 @@ window.RRV8 = window.RRV8 || {};
         // gate checks, so trimming prose must not drop them.
         checked: [
           { a: 'SAC.aaipaircancels', t: 'DMAAI 4220 (cost of goods) and 4240 (inventory) point to one account for this company, order type and GL class.' },
-          { a: 'SAC.cardexrelief', t: 'Item ledger relieved inventory. The batch nets to zero, so the post program writes no GL entry at all. The cost never reached cost of goods.' }
+          { a: 'SAC.cardexrelief', t: 'Item ledger relieved inventory. The batch nets to zero, so the post program writes no GL entry and cost never reaches cost of goods.' }
         ],
         // "Not tested on these rows" removed (owner 2026-08-12): it helped nothing
         // on this card. The scope limit it carried now belongs in `action`, where
@@ -1894,7 +1931,28 @@ window.RRV8 = window.RRV8 || {};
         // per rule 11.
         fix: [
           'Point DMAAI 4220 to cost of goods for this order type — every GL class it routes, not just the one on this document.',
-          'The DMAAIs tab lists this pair under Fix First: Sales tab, AAIs 4240/4220. It reports other companies and GL classes the pair collapses on, including order types that shipped nothing this period and so appear nowhere here.'
+          // Trimmed 37 -> 20 words (owner 2026-08-15). `fix` caps at 2 bullets so
+          // this could not be split; every idea survives the cut. What went is the
+          // sentence FORM, not content: "It reports other companies and GL classes
+          // the pair collapses on" became the bare list. The clause the standard
+          // warned about losing -- order types that shipped nothing and therefore
+          // appear nowhere on this card -- is the reason to open the tab at all and
+          // is kept verbatim.
+          'DMAAIs tab, Fix First: Sales, AAIs 4240/4220 - other companies, other GL classes, and order types that shipped nothing this period.'
+        ],
+        // The five SAC assertions the classifier makes and no bullet cited. They
+        // were orphaned by the 2026-08-12 trim from ~210 words: the prose that
+        // carried them went, the ids stayed in the manifest, and the gate has been
+        // reporting them as referenced-by-no-card ever since. `alsoChecked` (added
+        // 2026-08-15) is where a cited-but-not-leading check belongs, so they get a
+        // home instead of being deleted from the manifest -- the classifier really
+        // does make all five, and an assertion nobody cites is evidence lost.
+        alsoChecked: [
+          { a: 'SAC.sales', t: 'A sales document, not a manufacturing or transfer one.' },
+          { a: 'SAC.everyclasscancels', t: 'Every GL class the document carries cancels. One mixing a cancelling class with a working one is left unclaimed.' },
+          { a: 'SAC.missingaainotclaimed', t: 'A missing AAI is not counted as a cancel. Where either route is absent the comparison is null.' },
+          { a: 'SAC.noglforowndoctype', t: 'No GL row exists for this document number under its own document type, on any company.' },
+          { a: 'SAC.ordertypeinmldct', t: 'The 42xx sales AAIs carry the order type in the document-type column, not the order-type column the 31xx manufacturing AAIs use.' }
         ]
       }
     },
@@ -1954,9 +2012,14 @@ window.RRV8 = window.RRV8 || {};
       finding: {
         mech: 'Make-to-order work orders. A business grouping, not one variance type — the residual splits three ways by shape.',
         checked: [
+          { a: 'MTO.notnetted', t: 'The group did not net out within tolerance, so the legs are genuinely open rather than a timing artefact.' }
+        ],
+        // All three of these describe how the card was ASSEMBLED — the sales-order
+        // link, the group key, the row typing. None of them is a thing that went
+        // wrong, and they occupied the first three lines of "What happened".
+        alsoChecked: [
           { a: 'MTO.salesorderlink', t: 'A customer sales order names this work order, with a work-order type of WO, W1 or WR. That link is what puts the two on one card.' },
           { a: 'MTO.groupkeyedonwo', t: 'The group is keyed on the work order, so the issue and completion legs stay together across accounts and periods instead of being split by them.' },
-          { a: 'MTO.notnetted', t: 'The group did not net out within tolerance, so the legs are genuinely open rather than a timing artefact.' },
           { a: 'MTO.mfg', t: 'Manufacturing rows, typed from the batch the program wrote.' }
         ],
         context: [
@@ -1993,8 +2056,10 @@ window.RRV8 = window.RRV8 || {};
       finding: {
         mech: 'Intercompany orders whose selling and buying inventory legs have not offset.',
         checked: [
+          { a: 'ICO.notnetted', t: 'The selling and buying legs did not net out within tolerance.' }
+        ],
+        alsoChecked: [
           { a: 'ICO.interco', t: 'An intercompany order: either JDE flags the transaction as one, or the order type is SI or SK on the sales side, OK on the purchasing side.' },
-          { a: 'ICO.notnetted', t: 'The selling and buying legs did not net out within tolerance.' },
           { a: 'ICO.groupmaybeempty', t: 'Check whether this row is grouped. An order with no intercompany cross-reference keeps this card with NO group, which means the counterpart leg may not be in this database at all — a different problem from a leg that has not posted.' }
         ],
         context: [
@@ -2150,7 +2215,7 @@ window.RRV8 = window.RRV8 || {};
       title: 'Unclassified — Inventory', kind: 'review', tier: 'terminal', disposition: 'triage',
       cause: 'Inventory documents no claim matched, plus anything the classifier could not type. The cause is not identified yet. Read the shape per row, compare the item-ledger detail against the GL amount, then compare the item’s branch GL class against its location GL class.',
       desc: 'Inventory documents that reached the end of the classifier with no claim matching. This card also catches any row whose transaction type the classifier could not resolve, so it is the widest of the four. Every shape lands here — both sides disagreeing, item ledger only, or GL only. The cause is undetermined, not absent.',
-      action: 'Compare the item-ledger detail against the GL amount for the same document and account. On an inventory document there is no order or subledger to correlate on, so the document and account are the key. Then compare the item’s branch GL class against its location GL class — a split only misroutes manufacturing moves, so it is only in play when work-order documents are in scope. Whatever the comparison names, fix it at the source and re-run this company and period.',
+      action: 'Compare the item-ledger detail against the GL amount for the same document and account. On an inventory document there is no order or subledger to correlate on, so the document and account are the key. Then compare the item’s branch GL class against its location GL class — JD Edwards lets the two disagree without a warning, and a split gives the item two identities in RapidReconciler on any document type. Whatever the comparison names, fix it at the source and re-run this company and period.',
       finding: {
         triage: true,
         mech: 'Inventory documents that no claim matched, plus rows the classifier could not type. The cause is undetermined.',
@@ -2166,7 +2231,7 @@ window.RRV8 = window.RRV8 || {};
         found: [
           'Cause not identified. I have not pinned it to one mechanism yet.',
           'Next: compare the item-ledger detail against the GL amount for the same document and account.',
-          'Then compare the item’s branch GL class against its location GL class. A split only misroutes manufacturing moves, so it is only in play when work-order documents are in scope.'
+          'Then compare the item’s branch GL class against its location GL class. A split gives the item two identities here, on any document type.'
         ],
         fix: ['Whatever the comparison names, fix it at the source and re-run this company and period. A document that comes back was not fixed.']
       }
