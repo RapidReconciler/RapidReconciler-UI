@@ -1098,14 +1098,10 @@
   .txv-card.is-riding { opacity: .82; }
   .txv-card.is-riding .txv-card-amt { color: var(--text-soft); }
   .txv-card.is-complete.is-riding { opacity: .6; }
-  /* Inline resolution-note editor on a card (Mark reviewed / Reopen to edit). */
-  .txv-card.is-editing { opacity: 1; }   /* un-dim a complete card while its editor is open */
-  .txv-card-editor { margin-top: 11px; border-top: 1px dashed var(--rule); padding-top: 11px; }
-  .txv-card-editor[hidden] { display: none; }
-  .txv-card-editor-lbl { display: block; font-size: 11px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px; }
-  .txv-card-editor-txt { width: 100%; box-sizing: border-box; border: 1px solid var(--rule-strong); background: var(--bg-card); border-radius: 8px; padding: 9px 11px; font-family: inherit; font-size: 13px; line-height: 1.5; color: var(--text); resize: vertical; min-height: 120px; }
-  .txv-card-editor-txt:focus { outline: none; border-color: var(--blue); }
-  .txv-card-editor-actions { margin-top: 9px; display: flex; gap: 8px; justify-content: flex-end; }
+  /* The inline resolution editor was removed 2026-08-16; its rules went with it. This
+     one stays: `is-editing` still rides on a REOPENED card, and it un-dims a card that
+     is_complete-styled but back in play. */
+  .txv-card.is-editing { opacity: 1; }
   /* Outcome line for the card's review action. Hidden until it has something to say,
      then it stays on the card next to the button that produced it — a failed hand-off
      has to be readable where the analyst is looking, not in a console they never open. */
@@ -1113,9 +1109,6 @@
   .txv-card-status[hidden] { display: none; }
   .txv-card-status.is-error { color: var(--red); font-weight: 600; }
   .txv-card-status.is-ok { color: var(--green); font-weight: 600; }
-  /* The footer button STAYS visible while editing — it's the single action that morphs
-     from "Reopen to edit" / "Mark reviewed" (open) into "Mark reviewed" (save + close).
-     Two actions total, no Cancel (owner 2026-07-13). */
   /* Card → Details link: a light text link, not a filled button. */
   .txv-cardlink { display: inline-flex; align-items: center; gap: 5px; font-family: inherit; font-weight: 800; font-size: 12.5px; color: var(--blue); text-decoration: none; cursor: pointer; }
   .txv-cardlink:hover { text-decoration: underline; }
@@ -9314,42 +9307,30 @@
         // still qualify: they carry the note too.
         //
         // 'complete' is excluded because it renders its own chip and Reopen button, and
-        // 'reopened' because it is already an open editor with its own state.
+        // 'reopened' because it is a reviewed card the analyst put back in play.
         var draft = !!(p.rec && String(p.rec.note || '').trim()
                        && p.rec.status !== 'complete' && p.rec.status !== 'reopened');
-        // 'reopened' = a reviewed card the analyst reopened to edit. It is a PERSISTED
-        // status (survives a browser refresh), so the card renders with its editor already
-        // OPEN and the single "Mark reviewed" button — not a transient UI toggle.
+        // 'reopened' = a reviewed card the analyst put back in play. It is a PERSISTED
+        // status, so it survives a browser refresh — not a transient UI toggle. The card
+        // renders undimmed with "Mark reviewed" again (p.done is 'complete' only).
         var reopened = !!(p.rec && p.rec.status === 'reopened');
         // Finding text (company echo stripped) split into the LIKELY CAUSE and, when the
         // finding carries a "Do next:" section, its RECOMMENDATIONS (owner 2026-07-13).
         var causeTxt = _stripCoRef(p.cause);
         var _split = _splitFinding(causeTxt);
-        // "Recommendations" (was "What was done") rides in sourceFix. Precedence: a genuine
-        // stored resolution > the finding's own Do-next recommendations > the "Waiting
-        // investigation" default. Legacy records duplicated the note (finding) into sourceFix
-        // and option-b briefly stored 'source'/'je' — both are treated as empty here.
-        var _resRaw = (p.rec && p.rec.sourceFix) ? String(p.rec.sourceFix) : '';
-        var _findRaw = (p.rec && p.rec.note) ? String(p.rec.note) : '';
-        // 'Waiting investigation' joins 'source'/'je' as a non-value: records written
-        // before the fix above carry it, and treating it as a real resolution would show
-        // an analyst their own placeholder back as a finding.
-        var _storedRes = (_resRaw && _resRaw !== _findRaw && _resRaw !== 'source' && _resRaw !== 'je'
-                          && _resRaw.trim() !== 'Waiting investigation') ? _resRaw : '';
-        // 'Waiting investigation' USED TO BE ASSIGNED HERE AS A VALUE, which meant the
-        // textarea's own placeholder -- which says the right thing and says it better --
-        // was never once seen, and the sentinel was PERSISTED: the save handler stores
-        // `sourceFix: <textarea value>` with status 'complete', so marking an untouched
-        // card reviewed recorded its resolution as "Waiting investigation". Reviewed and
-        // waiting at the same time, and it read back as genuine analyst content on the
-        // next render because _storedRes did not exclude it. Empty now, so the
-        // placeholder does its job and nothing is recorded that nobody wrote.
-        var whatDoneVal = _storedRes || _split.recs || '';
-        var editBtn = reopened
-          ? '<button type="button" class="txv-btn" data-txv-act="save">Mark reviewed</button>'
-          : p.done
-            ? '<button type="button" class="txv-btn" data-txv-act="reopen">Reopen to edit</button>'
-            : '<button type="button" class="txv-btn" data-txv-act="resolve">' + (draft ? 'Review &amp; submit' : 'Mark reviewed') + '</button>';
+        // ONE BUTTON, ONE CLICK (owner, 2026-08-16). "Review & submit" used to open the
+        // recommendations editor and morph itself into "Mark reviewed", so closing a card
+        // took two clicks and the first one did nothing an analyst wanted -- it opened a
+        // field they had already filled in on the drill page. With the editor gone there is
+        // nothing to open, so the button goes straight to the close. `draft` no longer
+        // changes the label; it still drives the card's is-draft styling above.
+        //
+        // "Reopen to edit" stays. It is the undo, not a close action, and review without an
+        // undo is a one-way door -- the same defect the owner caught on the period review
+        // on 2026-08-10. A reopened card shows "Mark reviewed" again.
+        var editBtn = p.done
+          ? '<button type="button" class="txv-btn" data-txv-act="reopen">Reopen to edit</button>'
+          : '<button type="button" class="txv-btn" data-txv-act="save">Mark reviewed</button>';
         // (1) Header strip — identity (left) + review status chip (right). (An earlier
         // note here claimed parity with an accountant "✓ Corrected" chip; no such chip
         // exists.)
@@ -9445,12 +9426,18 @@
           + (p.meta ? '<div class="txv-card-meta">' + esc(p.meta) + '</div>' : '')
           + msg
           + recurRow
-          // Inline resolution editor (UI-26) — open when the card is 'reopened' (persisted),
-          // else hidden until Mark reviewed / Reopen is clicked.
-          + '<div class="txv-card-editor"' + (reopened ? '' : ' hidden') + '>'
-          +   '<label class="txv-card-editor-lbl">Recommendations</label>'
-          +   '<textarea class="txv-card-editor-txt" placeholder="Waiting investigation — replaced with recommendations from the transaction details page.">' + esc(whatDoneVal) + '</textarea>'
-          + '</div>'
+          // RECOMMENDATIONS EDITOR REMOVED (owner, 2026-08-16). It asked the analyst to
+          // write, on this card, the thing they had already written on the drill page:
+          // the finding rendered directly above it carries its own "What to do" section.
+          // What actually appeared in the box was never analyst input either -- the drill
+          // page save wrote the finding into BOTH note and sourceFix, and the agent clipped
+          // sourceFix to 120 characters, so the field showed the opening of the finding cut
+          // off mid-word and read as a stale leftover. One field, one author, one place.
+          //
+          // Nothing downstream loses a reader: _auditFromCard() builds the Audit Center
+          // entry from rec.note, not from sourceFix. The column stays and existing values
+          // are passed through untouched on review -- retiring a field is not a licence to
+          // destroy what it already holds.
           // (6) Footer — just the resolution action (the Investigate link was redundant
           // with the header Variance drill, removed 2026-07-13).
           + '<div class="txv-card-actions">' + editBtn + '</div>'
@@ -9645,11 +9632,10 @@
           var btn = e.target.closest ? e.target.closest('[data-txv-act]') : null; if (!btn) return;
           var cardEl = btn.closest('[data-txv-card]'); if (!cardEl) return;
           var act = btn.getAttribute('data-txv-act');
-          var ed = cardEl.querySelector('.txv-card-editor');
           if (act === 'reopen') {
-            // PERSIST a 'reopened' status so the open editor SURVIVES a browser refresh
-            // (owner 2026-07-13 — a UI-only toggle snapped back to closed on reload).
-            // Preserve the existing note + resolution type; the re-render opens the editor.
+            // PERSIST a 'reopened' status so the reopen SURVIVES a browser refresh
+            // (owner 2026-07-13 — a UI-only toggle snapped back on reload). Preserve the
+            // existing note and sourceFix; the re-render puts the card back in play.
             var _co = cardEl.getAttribute('data-co'), _cc = cardEl.getAttribute('data-cc'), _cp = cardEl.getAttribute('data-cp');
             if (typeof RRV8 !== 'undefined' && RRV8.cardStore) {
               var cur = RRV8.cardStore.get(_co, _cc, _cp) || {};
@@ -9661,17 +9647,7 @@
               }).then(function () {
                 if (typeof renderAnalystTxVar === 'function') renderAnalystTxVar(_acctData || (typeof _briefData === 'function' ? _briefData() : null));
               });
-            } else if (ed) {   // no store — fall back to a transient open
-              ed.hidden = false; cardEl.classList.add('is-editing');
-              btn.textContent = 'Mark reviewed'; btn.setAttribute('data-txv-act', 'save');
             }
-            return;
-          }
-          if (act === 'resolve') {
-            // Fresh / draft card — open the editor and MORPH this button into "Mark reviewed".
-            if (ed) { ed.hidden = false; cardEl.classList.add('is-editing'); var ta = ed.querySelector('.txv-card-editor-txt'); if (ta) { ta.focus(); try { ta.setSelectionRange(ta.value.length, ta.value.length); } catch (_) {} } }
-            btn.textContent = 'Mark reviewed';
-            btn.setAttribute('data-txv-act', 'save');
             return;
           }
           if (act === 'save') {
@@ -9690,12 +9666,15 @@
             // worked only part of it is still visible: the meta line renders "N worked"
             // whenever b.worked !== b.rows, which is the partial-progress case.
             if (!(typeof RRV8 !== 'undefined' && RRV8.cardStore)) return;
-            var ta2 = ed && ed.querySelector('.txv-card-editor-txt');
-            var whatDone = ta2 ? String(ta2.value || '').trim() : '';   // resolution -> sourceFix
             var finding  = cardEl.getAttribute('data-finding') || '';   // finding    -> note (preserved)
             var sCo = cardEl.getAttribute('data-co');
             var sCc = cardEl.getAttribute('data-cc');
             var sCp = cardEl.getAttribute('data-cp');
+            // sourceFix is no longer authored anywhere in the UI (the Recommendations editor
+            // was removed above). Carry whatever the record already holds rather than writing
+            // '', which cardStore.save() would do for an omitted field -- reviewing a card
+            // must not silently erase a value it no longer shows.
+            var whatDone = String(((RRV8.cardStore.get(sCo, sCc, sCp) || {}).sourceFix) || '');
             var sEl = cardEl.querySelector('[data-txv-status]');
             var say = function (msg, cls) {
               if (!sEl) return;
