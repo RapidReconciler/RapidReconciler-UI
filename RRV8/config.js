@@ -1956,6 +1956,60 @@ window.RRV8 = window.RRV8 || {};
         ]
       }
     },
+    // The inventory cost-change AAI pair resolves to ONE account, so an item cost change
+    // books its inventory leg (4134) and its expense leg (4136) to the same place and the
+    // two cancel. The SECOND valid net-zero pairing to ship, and it earned the name the
+    // same way SAC did: the guide's Sections 5 and 9 name 4134 and 4136 as the debit and
+    // the credit of ONE cost-change document, and the GL confirms the shape rather than
+    // merely allowing it -- every claimed document carries exactly two equal-and-opposite
+    // F0911 legs, one batch, one account. That demonstration is what separates both cards
+    // from the withdrawn NZR (3110 vs 3130, never a pair). It is NOT a licence to add the
+    // other four pairings the product labels. Claimed by usp8_txv_flags block M.
+    //
+    // THE SHAPE IS THE MIRROR OF OFF, NOT A DUPLICATE OF IT. Offsetting Entries takes a
+    // cancelling GL pair where NEITHER leg is on the inventory account -- the money went
+    // somewhere else. Here BOTH legs are on it and the money went nowhere. OFF's own SQL
+    // excludes this population, so the two never compete for a row.
+    //
+    // AND THE ROUTING IS READ FROM THE RESOLVED TABLES, NOT THE EXTRACT. On the reference
+    // data F4095 holds this pair only at company 00000 with a wildcard GL class, so a card
+    // that sends the analyst to the extract to confirm sends them somewhere the routing is
+    // not. `action` points at P40950 and the DMAAIs tab instead.
+    //
+    // NO `flag` FIELD, for the same reason SAC has none -- the chip beside the Variance
+    // Analyzer disclosure is COMPUTED by _txCombosSummary. Do not add one.
+    'IAC': {
+      title: 'Inventory DMAAI Net Zero', kind: 'rebalance', tier: 'single', disposition: 'rebalance',
+      cause: 'The two cost-change DMAAIs resolve to one account, so an item cost change books its inventory leg and its expense leg to the same place and they cancel. The item ledger revalues, the GL nets to zero, and the change in value never reaches the P&L. Point 4136 at the expense account the cost change belongs in and leave 4134 on inventory.',
+      desc: 'The item ledger carries a cost-change revaluation and the GL holds a pair of entries that cancel each other on the same inventory account. The posting run did not fail and nothing was mis-keyed. DMAAI 4134 routes the inventory leg of a cost change and DMAAI 4136 the expense leg; where both resolve to one account the debit and the credit land together, net to zero, and the revaluation never leaves inventory. The perpetual balance moves, the GL does not, and the tie-out fails by the full value of the change. Every cost change the routing touches does it again, and because the pair cancels the P&L shows nothing, so this survives a review that reads the income statement.',
+      action: 'Read 4134 and 4136 for the company and GL class on the document in P40950. One account on both sides is the finding. Point 4136 at the expense or cost-of-goods account the cost change belongs in and leave 4134 on inventory, then diff against a company on the same install whose cost changes post correctly — that comparison hands over the target values. No journal entry prevents recurrence, so the DMAAI change is the fix; the accountant separately books the value stranded in inventory. Re-check the following period. A new cost change still cancelling means the DMAAI was not changed.',
+      finding: {
+        mech: 'DMAAI 4134 and 4136 resolve to one account, so the cost change books its inventory leg and its expense leg to the same place and they cancel. The entry exists and posts — it just nets to zero inside inventory, so the revaluation never reaches the P&L. The posting followed its DMAAI; the configuration itself sends both sides to one account.',
+        checked: [
+          { a: 'IAC.aaipaircancels', t: 'DMAAI 4134 (the inventory leg) and 4136 (the expense leg) point to one account for this company, order type and document type, on every GL class the document carries.' },
+          { a: 'IAC.glcancelsoninventory', t: 'The GL entry exists and cancels itself on the inventory account the item ledger used — two or more legs summing to zero, none of them anywhere else. Nothing failed to post.' }
+        ],
+        context: [
+          'Separate from Offsetting Entries, and the account is the difference: that card takes a cancelling pair that landed away from inventory, so the money went somewhere else. Here both legs are on the inventory account and the money went nowhere.',
+          'Confirm the routing in P40950 or on the DMAAIs tab, not in the DMAAI extract — the extract carries this pair as a company-00000 wildcard default, which is not what the transaction resolved against.'
+        ],
+        found: [],
+        fix: [
+          'Point DMAAI 4136 at the expense account for this company — every GL class it routes, not only the one on this document. 4134 stays on inventory.',
+          'DMAAIs tab, Fix First: Inventory, AAIs 4134/4136 - other companies, other GL classes, and routings that saw no cost change this period.'
+        ],
+        alsoChecked: [
+          { a: 'IAC.inventory', t: 'An inventory-side document, not a sales, purchasing or manufacturing one.' },
+          { a: 'IAC.cardexvalue', t: 'The item ledger carries value and the ledger side is zero within tolerance. A tolerance rather than a rounding, because the ledger amount is a float.' },
+          { a: 'IAC.everyclasscancels', t: 'Every GL class the document carries cancels. One mixing a cancelling class with a working one is left unclaimed.' },
+          { a: 'IAC.resolvedtables', t: 'The routing was read from the resolved account-instruction tables, which have already applied the company default and the wildcard, not from the DMAAI extract.' },
+          { a: 'IAC.flexnormalised', t: 'A segment leaves the comparison only where the AAI flexes it, and it leaves both sides. A blank subsidiary is compared as a blank, not ignored.' },
+          { a: 'IAC.singleaccounteachside', t: 'Each side of the pair resolves one way for the routing. A routing that still resolves two ways is left unclaimed rather than read as a cancel.' },
+          { a: 'IAC.missingaainotclaimed', t: 'A routing with no 4136 entry is not counted as a cancel. That is a different finding.' },
+          { a: 'IAC.docscope', t: 'The GL legs were matched on document number and document type, with no company scope. Confirm the document belongs to this company before you act.' }
+        ]
+      }
+    },
     // WITHDRAWN SERVER-SIDE (DB PR #97) and its EVIDENCE was withdrawn too, 2026-08-10.
     // The claim gated on "no F0911 row exists for this DocNumber" and concluded a failed
     // posting run. Sales document type JS posts internal GL document numbers, so that
@@ -2258,6 +2312,9 @@ window.RRV8 = window.RRV8 || {};
     'non-stock charge lines':   'NCL',
     // 2026-08-10 — cardex-only sales where the 4220 / 4240 pair resolves to one account.
     'sales dmaai net zero':     'SAC',
+    // 2026-08-17 — item cost change (IB) whose 4134 / 4136 pair resolves to one account,
+    // so the GL posts two legs that cancel on the inventory account.
+    'inventory dmaai net zero': 'IAC',
     // The pre-rename string, kept so a database not yet re-classified still lands on the
     // same card instead of falling through to a terminal one (owner renamed it 2026-08-10).
     'sales aai cancels':        'SAC',
