@@ -6980,7 +6980,20 @@
   // including 4141 produced spurious mismatches. Kept: 3110/3130 (WO issue/completion),
   // 4122 (inventory move), 4152 (cost model), 4240 (sales relief), 4310 (PO receipt),
   // 4385 (landed cost).
-  var _TX_INV_DMAAIS = { '3110': 1, '3130': 1, '4122': 1, '4152': 1, '4240': 1, '4310': 1, '4385': 1 };
+  // 4134 ADDED 2026-08-17 (owner). Doc type IB — Inventory Cost Change — routed through
+  // nothing on this list, so every IB routing rendered with an empty Inv DMAAI / Inv Acct
+  // and read as "no AAI on file". It is not missing: measured on RapidReconciler_Demo2,
+  // dbo.RAccountInstr, company 80003 carries exactly ONE table for DocType IB — 4134 —
+  // present for every GL class in the report and resolving to the same account as the
+  // 4152 model. 4134 is the inventory leg of the cost-change pair (4136 is the expense
+  // leg), so it belongs here by the same test as the rest of the list.
+  //
+  // 4126 is deliberately still OUT. It is zero-balance clearing paired with 4128 — it
+  // fires when on-hand hits zero with dollars left on the row — which is not a
+  // cardex-to-GL mapping question. Adding it would reintroduce the 4141 problem this
+  // list was narrowed to avoid. Anything added here needs the same test: does the table
+  // hold an inventory account the cardex model should agree with?
+  var _TX_INV_DMAAIS = { '3110': 1, '3130': 1, '4122': 1, '4134': 1, '4152': 1, '4240': 1, '4310': 1, '4385': 1 };
   function _txAttachModel(combos, cfg) {
     cfg = cfg || {};
     // cfg.ok === false means the DMAAI setup could not be READ. Mark every combo
@@ -7186,15 +7199,44 @@
         || a.glCode.localeCompare(b.glCode) || a.invDmaai.localeCompare(b.invDmaai) || a.costType.localeCompare(b.costType);
     });
     var nMis = list.filter(function (r) { return r.acctMis; }).length;
-    var nAll = list.length, aP = (nAll === 1 ? '' : 's');
+    // THE DENOMINATOR IS WHAT WAS COMPARED, NOT WHAT WAS RENDERED (owner 2026-08-17).
+    // This counted `list.length`, so a routing whose doc type resolved to NO inventory
+    // AAI — rendered with empty Inv DMAAI / Inv Acct cells — was still counted as
+    // "checked" in a clean verdict. Seen on Demo2 co 80003: seven rows, two of them IB
+    // with nothing resolved, and the header read "7 inventory DMAAIs checked — no account
+    // mismatch". Five were compared. A false clean is the dangerous direction: the
+    // analyst reads "mapping ruled out" and moves on, and the rows inside the count that
+    // could have carried a mapping problem are exactly the ones never examined.
+    //
+    // Adding 4134 fixed the case that surfaced it, but not the class: 4126, 4162, 4365
+    // and 4400 are all still off the list by design, so a routing on one of them lands
+    // here again. The blanks now say what the `unresolved` state above already says
+    // correctly — "not checked", not "no mapping".
+    var nChk = list.filter(function (r) { return r.invDmaai; }).length;
+    var nAll = list.length, nSkip = nAll - nChk;
+    var cP = (nChk === 1 ? '' : 's');
+    var skipNote = nSkip
+      ? ' ' + nSkip + ' routing' + (nSkip === 1 ? '' : 's') + ' carr' + (nSkip === 1 ? 'ies' : 'y')
+        + ' no inventory AAI in the reconciliation set and ' + (nSkip === 1 ? 'was' : 'were')
+        + ' not compared — read those blanks as "not checked", not "no mapping".'
+      : '';
     if (nMis) {
       return { state: 'mismatch', list: list, nMis: nMis,
-        head: nMis + ' of ' + nAll + ' inventory DMAAI' + aP + ' ' + _txVerb(nMis, 'resolves', 'resolve') + ' to a different account than the cardex model:',
-        chip: nMis + ' of ' + nAll + ' DMAAI' + aP + ' off the cardex model' };
+        head: nMis + ' of ' + nChk + ' checked inventory DMAAI' + cP + ' ' + _txVerb(nMis, 'resolves', 'resolve') + ' to a different account than the cardex model:' + skipNote,
+        chip: nMis + ' of ' + nChk + ' DMAAI' + cP + ' off the cardex model' };
+    }
+    // Nothing compared at all. Not a clean — there is no evidence either way, and saying
+    // "0 checked, none off the model" would read as a pass.
+    if (!nChk) {
+      return { state: 'clean', list: list, nMis: 0,
+        head: 'No account comparison ran: none of these ' + nAll + ' routing' + (nAll === 1 ? '' : 's')
+          + ' resolve to an inventory AAI in the reconciliation set. Mapping is NOT ruled out here:',
+        chip: '0 of ' + nAll + ' checked' };
     }
     return { state: 'clean', list: list, nMis: 0,
-      head: nAll + ' inventory DMAAI' + aP + ' checked — no account mismatch. This rules out mapping only; it does not explain the variance:',
-      chip: nAll + ' DMAAI' + aP + ' checked, none off the model' };
+      head: (nSkip ? nChk + ' of ' + nAll + ' routings checked' : nChk + ' inventory DMAAI' + cP + ' checked')
+        + ' — no account mismatch. This rules out mapping only; it does not explain the variance:' + skipNote,
+      chip: (nSkip ? nChk + ' of ' + nAll + ' checked' : nChk + ' DMAAI' + cP + ' checked') + ', none off the model' };
   }
   // Draws what _txCombosSummary determined. Callers that already hold a summary
   // pass it in, so the table and the chip come off one computation rather than
