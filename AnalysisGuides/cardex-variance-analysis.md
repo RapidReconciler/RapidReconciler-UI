@@ -722,7 +722,7 @@ Use this checklist for each Cardex variance investigation:
 | **Stranded Balance** | A GL dollar amount that remains after all physical inventory has been depleted to zero quantity |
 | **Balance Forward** | The back-calculated beginning balance RapidReconciler derives from the F41021 snapshot at go-live; serves as the reconciliation starting point |
 | **Cost Method** | The JD Edwards Sales/Inventory costing method assigned to an item in F4105 / P4105; stored in the `dt` field of the Curr bal row (`ukid = 999999999999`) in the Item Roll Forward |
-| **Cost Level** | The JD Edwards Inventory Cost Level controlling the granularity at which on-hand balance and average cost are maintained; stored in the `dt` field of the Beg bal row (`ukid = 0`); Level 1 = item/branch, Level 2 = item/branch with location/lot qty tracking, Level 3 = item/branch/location/lot (required for Actual Cost) |
+| **Cost Level** | The JD Edwards Inventory Cost Level controlling the granularity at which on-hand balance and average cost are maintained; stored in the `dt` field of the Beg bal row (`ukid = 0`); Level 1 = item/branch, Level 2 = item/branch with location/lot qty tracking, Level 3 = item/branch/location/lot. Actual Cost (method 09) requires Level 2 or Level 3; it is not supported at Level 1 (see Section 3.4) |
 | **IK** | Kit or assembly transaction type — a receipt of a finished kit or assembly into inventory at BOM cost |
 | **IM** | Manufacturing Issue — a material issue to a work order; GL is updated by Manufacturing Accounting (R31802A) nightly, not in real time |
 | **OV** | Purchase Order Receipt — increases on-hand inventory; triggers WAC recalculation if cost differs from current WAC |

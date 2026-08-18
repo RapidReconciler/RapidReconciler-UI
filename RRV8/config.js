@@ -1986,26 +1986,30 @@ window.RRV8 = window.RRV8 || {};
       finding: {
         mech: 'DMAAI 4134 and 4136 resolve to one account, so the cost change books its inventory leg and its expense leg to the same place and they cancel. The entry exists and posts — it just nets to zero inside inventory, so the revaluation never reaches the P&L. The posting followed its DMAAI; the configuration itself sends both sides to one account.',
         checked: [
-          { a: 'IAC.aaipaircancels', t: 'DMAAI 4134 (the inventory leg) and 4136 (the expense leg) point to one account for this company, order type and document type, on every GL class the document carries.' },
-          { a: 'IAC.glcancelsoninventory', t: 'The GL entry exists and cancels itself on the inventory account the item ledger used — two or more legs summing to zero, none of them anywhere else. Nothing failed to post.' }
+          { a: 'IAC.aaipaircancels', t: 'DMAAI 4134 (inventory) and 4136 (expense) resolve to one account for this company, order type and document type, on every GL class carried.' },
+          { a: 'IAC.glcancelsoninventory', t: 'The GL cancels itself on the inventory account the item ledger used: two or more legs summing to zero, none elsewhere. Nothing failed to post.' }
         ],
         context: [
-          'Separate from Offsetting Entries, and the account is the difference: that card takes a cancelling pair that landed away from inventory, so the money went somewhere else. Here both legs are on the inventory account and the money went nowhere.',
-          'Confirm the routing in P40950 or on the DMAAIs tab, not in the DMAAI extract — the extract carries this pair as a company-00000 wildcard default, which is not what the transaction resolved against.'
+          'Not Offsetting Entries: that card takes a cancelling pair that landed away from inventory. Here both legs sit on inventory and the money went nowhere.',
+          'Confirm the routing in P40950 or the DMAAIs tab, not the extract: it carries this pair as a company-00000 wildcard the transaction never resolved against.'
         ],
         found: [],
         fix: [
-          'Point DMAAI 4136 at the expense account for this company — every GL class it routes, not only the one on this document. 4134 stays on inventory.',
+          'Point DMAAI 4136 at the expense account for this company, every GL class it routes, not just the one here. 4134 stays on inventory.',
           'DMAAIs tab, Fix First: Inventory, AAIs 4134/4136 - other companies, other GL classes, and routings that saw no cost change this period.'
         ],
         alsoChecked: [
           { a: 'IAC.inventory', t: 'An inventory-side document, not a sales, purchasing or manufacturing one.' },
-          { a: 'IAC.cardexvalue', t: 'The item ledger carries value and the ledger side is zero within tolerance. A tolerance rather than a rounding, because the ledger amount is a float.' },
+          { a: 'IAC.cardexvalue', t: 'The item ledger carries value and the ledger side is zero within tolerance: a tolerance not a rounding, because the ledger amount is a float.' },
           { a: 'IAC.everyclasscancels', t: 'Every GL class the document carries cancels. One mixing a cancelling class with a working one is left unclaimed.' },
-          { a: 'IAC.resolvedtables', t: 'The routing was read from the resolved account-instruction tables, which have already applied the company default and the wildcard, not from the DMAAI extract.' },
-          { a: 'IAC.flexnormalised', t: 'A segment leaves the comparison only where the AAI flexes it, and it leaves both sides. A blank subsidiary is compared as a blank, not ignored.' },
-          { a: 'IAC.singleaccounteachside', t: 'Each side of the pair resolves one way for the routing. A routing that still resolves two ways is left unclaimed rather than read as a cancel.' },
-          { a: 'IAC.missingaainotclaimed', t: 'A routing with no 4136 entry is not counted as a cancel. That is a different finding.' },
+          // 2026-08-17: these four cited `IAC.resolvedtables`, `IAC.flexnormalised`,
+          // `IAC.singleaccounteachside` and `IAC.missingaainotclaimed`. usp8_txv_flags
+          // block M declares SEVEN ids, not ten -- where two predicates are one test in
+          // the SQL they are declared as one statement -- so those four ids exist in no
+          // manifest and the gate was failing on them (and on 8 bullets against a cap of
+          // 5). Collapsed onto the id the SQL actually declares. The single-account fold
+          // and the missing-4136 exclusion are part of `IAC.aaipaircancels` above.
+          { a: 'IAC.resolvedrouting', t: 'The routing was read from the resolved account-instruction tables, not the DMAAI extract, and a segment leaves the comparison only where the AAI flexes it.' },
           { a: 'IAC.docscope', t: 'The GL legs were matched on document number and document type, with no company scope. Confirm the document belongs to this company before you act.' }
         ]
       }
