@@ -1,0 +1,79 @@
+name: Check inline JS syntax
+
+# A typo inside an inline <script> is SILENT in a browser. The block stops
+# executing, the page still renders, and the feature quietly does nothing. There
+# is no build step on this repo to catch it, so nothing did.
+#
+# Tools/parsecheck.py compiles every inline <script> (and every .js) with V8 --
+# the browser's own parser -- via `new vm.Script`, which compiles WITHOUT
+# executing. No DOM, no network, no side effects.
+#
+# WHY THIS IS ONLY NOW WIRED UP (UI-111). The tool used to run on esprima 4,
+# which stops at ES2017 and therefore cannot parse optional chaining. It
+# returned FAIL on every run against any file containing `a?.b`, which is zero
+# coverage of exactly the files that most need checking. A tool that is always
+# red is a tool nobody runs. It now prefers V8 and only falls back to esprima
+# when no Node-compatible binary exists, announcing loudly when it does and
+# labelling those findings FAIL? instead of FAIL.
+#
+# PARSECHECK_V8=node: ubuntu-latest ships Node, and the tool accepts either a
+# path or a bare command name. Without this the job would silently drop to the
+# blind engine, so the step also asserts the engine line says v8.
+#
+# Baseline at wire-up: 322 files (282 .html + 40 .js), all OK.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**.html'
+      - '**.js'
+      - 'Tools/parsecheck.py'
+      - 'Tools/parsecheck-v8.js'
+      - '.github/workflows/check-js-syntax.yml'
+  pull_request:
+    paths:
+      - '**.html'
+      - '**.js'
+      - 'Tools/parsecheck.py'
+      - 'Tools/parsecheck-v8.js'
+      - '.github/workflows/check-js-syntax.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  parsecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Syntax-check every inline script and .js
+        env:
+          PARSECHECK_V8: node
+        run: |
+          # git ls-files, not find: it is exactly the TRACKED set, so it skips
+          # gitignored paths automatically (.claude/worktrees holds full stale
+          # copies of the repo locally, and Tools/_test_corpus holds customer
+          # fixtures) and a local run checks the same files as CI. Absolute paths
+          # because that is the tool's stated contract.
+          mapfile -t files < <(git ls-files -z '*.html' '*.js' \
+            | tr '\0' '\n' | sed "s|^|$PWD/|" | sort)
+          echo "checking ${#files[@]} tracked files"
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::no files matched; the gate would pass vacuously"
+            exit 1
+          fi
+          python Tools/parsecheck.py "${files[@]}" | tee parsecheck.out
+          # The gate is only meaningful if V8 actually ran. A fallback to esprima
+          # would report unreal failures on every file using ?. -- fail the job on
+          # the engine, not just on the verdicts.
+          if ! grep -q '^engine: v8' parsecheck.out; then
+            echo "::error::parsecheck did not run on V8; the result cannot be trusted"
+            exit 1
+          fi
