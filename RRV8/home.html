@@ -13038,6 +13038,44 @@
       else { var aoh = 0; var p2 = perp.map(function (p) { aoh += Number(p.amountOnHand) || 0; return [p.branch, p.itemNumber, p.itemDescription, p.uom, _pvNum(p.quantityOnHand), _pvNum(p.amountOnHand)]; });
         doc.autoTable({ startY: y, head: [['Branch', 'Item Number', 'Item Description', 'UM', 'QOH', 'Amount on Hand']], body: p2, foot: [['', '', '', '', 'Total', _pvNum(aoh)]], styles: _AUDIT_PDF.body, headStyles: _AUDIT_PDF.head, footStyles: _AUDIT_PDF.foot, margin: _AUDIT_PDF.margin, columnStyles: { 4: { halign: 'right' }, 5: { halign: 'right' } } }); y = doc.lastAutoTable.finalY + 22; }
     });
+    // ---- Reconciliation Findings / Work Notes (UI-14) ------------------------
+    // WORKED items only, PDF only, columns account / doc / variance / note.
+    //
+    // The notes were already IN this report, but only interleaved as an italic row
+    // under whichever account's Variances table the item sat in. An auditor asking
+    // "what did the accountant actually find and do this period?" had to read every
+    // account's table and collect the italics by hand. This is the same data
+    // gathered once per company, which is the question the section answers.
+    //
+    // No endpoint change needed: v6ui_reconcilingitems -- the view audit-detail
+    // already reads -- carries Worked and Note (verified on Demo1, both columns
+    // present on v6ui AND v8ui). So this stays single-source, which is what the row
+    // asked for; the /inventory/transactions fallback is unnecessary.
+    // The period clause deliberately mirrors _dfil above (`x.periodEnds &&`): a row
+    // with a BLANK periodEnds is KEPT, because that is what the per-account Variances
+    // tables do. Writing the more obvious `slice(0,10) === per` here instead would
+    // drop those rows and this section would silently understate the findings the
+    // tables above it already show.
+    var findings = (detail.reconcilingItems || []).filter(function (r) {
+      if (String(r.companyNumber == null ? '' : r.companyNumber).trim() !== String(cnum).trim()) return false;
+      if (per && r.periodEnds && String(r.periodEnds).slice(0, 10) !== per) return false;
+      return !!r.worked;
+    });
+    y = _pdfSecTitle(doc, 'Reconciliation Findings / Work Notes', y);
+    if (!findings.length) {
+      // Silence is not the same as "nothing to report", so say which it is.
+      y = _pdfEmpty(doc, 'No reconciling items were marked worked for this period.', y);
+    } else {
+      var fBody = findings.map(function (r) {
+        return [String(r.longAccount || ''), String(r.docNumber || ''), _pvNum(r.variance),
+                String(r.note || '').trim() || '(marked worked, no note recorded)'];
+      });
+      doc.autoTable({ startY: y, head: [['Account', 'Doc No', 'Variance', 'Finding / work note']],
+        body: fBody, styles: _AUDIT_PDF.body, headStyles: _AUDIT_PDF.head,
+        margin: _AUDIT_PDF.margin,
+        columnStyles: { 0: { cellWidth: 96 }, 1: { cellWidth: 52 }, 2: { cellWidth: 58, halign: 'right' }, 3: { cellWidth: 'auto' } } });
+      y = doc.lastAutoTable.finalY + 22;
+    }
   }
   // onlyCo (optional) → single-company report for a worklist card's Audit button;
   // omitted → every company in scope (the analyst Reports-tab behavior).
