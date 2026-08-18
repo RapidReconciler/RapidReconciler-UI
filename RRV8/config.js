@@ -2790,10 +2790,36 @@ window.RRV8 = window.RRV8 || {};
     r.VarOK = (r.GLOK === 'baseline') ? 'baseline' : tok(r.VarOK);
     return r;
   }
+  // THE 'end' TOKEN IS NOT A VERDICT (UI-57 / DAC-33). 'end' marks the company's
+  // CURRENT OPEN period, and usp6_009_account_summary's two break comparisons
+  // explicitly skip it (`and raccountsummary.glrollok != 'end'`). So the one
+  // period the analyst is actually reconciling was the one period never
+  // evaluated, and it counted as neither a break nor unevaluated — a neutral
+  // grey chip, absent from both totals. Same defect class as the '' -> 'yes'
+  // fallback above: an unevaluated state rendering as a benign one.
+  //
+  // DAC-33 added the verdict as its own columns. v8_raccountsummary_rollcheck
+  // applies the SAME two comparisons to the open period and v6ui_raccountsummary
+  // surfaces them as EndGLOK / EndVarOK. We resolve an 'end' row's break/pass
+  // from those and leave GLOK / VarOK carrying 'end' for display, because three
+  // consumers key on that literal (usp6returnvalidationstatus's own end-branch,
+  // the oobrollok timestamp overwrite in usp6_009, and this page's chip class).
+  //
+  // A MISSING VERDICT IS 'unk', NEVER 'yes'. The producer inner-joins the prior
+  // period, so an end row with no predecessor yields NULL — that is "no prior
+  // period to roll from", which is exactly the unevaluated case, not a pass.
+  // Defaulting it to 'yes' is the bug that was fixed above; do not reintroduce
+  // it here.
+  function endTok(v) {
+    var s = String(v == null ? '' : v).trim().toLowerCase();
+    return (s === 'yes' || s === 'no') ? s : 'unk';
+  }
   // Non-mutating: the pair of normalised tokens for one row.
   function classify(r) {
     var gl = tok(r && r.GLOK);
-    return { glok: gl, varok: (gl === 'baseline') ? 'baseline' : tok(r && r.VarOK) };
+    if (gl === 'baseline') return { glok: 'baseline', varok: 'baseline' };
+    if (gl === 'end') return { glok: endTok(r && r.EndGLOK), varok: endTok(r && r.EndVarOK) };
+    return { glok: gl, varok: tok(r && r.VarOK) };
   }
   // The three buckets, over rows already narrowed to the scope the caller means.
   //
@@ -2826,6 +2852,8 @@ window.RRV8 = window.RRV8 || {};
       // the row is not proven. A row can be both a break and unevaluated (broken
       // on one axis, never compared on the other) and belongs in both buckets —
       // this is the roll-forward page's own rule, unchanged.
+      // An 'end' row whose verdict is NULL lands here on purpose: no prior period
+      // to roll the open period from is the unevaluated case, not a pass.
       if (c.glok !== 'baseline' && (c.glok === 'unk' || c.varok === 'unk')) unk.push(r);
     });
     function acctsOf(arr) {
@@ -2844,7 +2872,7 @@ window.RRV8 = window.RRV8 || {};
       unk:  { rows: unk.length,  accts: acctsOf(unk) }
     };
   }
-  window.RRV8.rollForward = { tok: tok, normRow: normRow, classify: classify, summary: summary };
+  window.RRV8.rollForward = { tok: tok, endTok: endTok, normRow: normRow, classify: classify, summary: summary };
 })();
 
 /*
