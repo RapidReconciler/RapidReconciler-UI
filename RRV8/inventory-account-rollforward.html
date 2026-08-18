@@ -464,6 +464,29 @@
     var lbl=tokLabel(v);
     return '<span class="chip '+k+'"'+(s==='unk'?' title="RapidReconciler has no prior period to roll this account forward from, so this row was never compared. It is not a clean result."':'')+'>'+esc(lbl||'&mdash;')+'</span>';
   }
+  // An 'end' row is the CURRENT OPEN period. Its GLOK/VarOK token is not a verdict —
+  // usp6_009_account_summary skips the break comparisons for it — so before DAC-33 a
+  // break in the period the analyst is actually reconciling drew as a neutral grey chip
+  // and appeared in neither total. The verdict now arrives as EndGLOK / EndVarOK
+  // (v8_raccountsummary_rollcheck), and RRV8.rollForward.classify resolves it.
+  //
+  // The chip keeps the 'end' word, because that is what the row IS, but takes its colour
+  // and a suffix from the verdict. A count that says "1 break" while the only break on
+  // screen looks neutral is the same defect wearing a different hat.
+  function chipFor(r, axis){
+    var raw = (axis==='gl') ? r.GLOK : r.VarOK;
+    var s = String(raw==null?'':raw).trim().toLowerCase();
+    if (s.indexOf('end') !== 0) return chip(raw);
+    var v = (axis==='gl') ? RRV8.rollForward.classify(r).glok : RRV8.rollForward.classify(r).varok;
+    var k = (v==='no') ? 'break' : (v==='unk' ? 'unk' : 'yes');
+    var lbl = 'end · ' + (v==='unk' ? 'not evaluated' : v);
+    var tip = (v==='no')
+      ? 'This is the current open period, and it did NOT roll forward from the period before it. Counted as a break.'
+      : (v==='unk'
+        ? 'This is the current open period and there is no prior period to roll it forward from, so it was never compared. It is not a clean result.'
+        : 'This is the current open period, and it rolled forward cleanly from the period before it.');
+    return '<span class="chip '+k+'" title="'+esc(tip)+'">'+esc(lbl)+'</span>';
+  }
   function isNo(v){ return String(v==null?'':v).trim().toLowerCase()==='no'; }
   function isUnk(v){ return String(v==null?'':v).trim().toLowerCase()==='unk'; }
   function toast(m){ var t=document.getElementById('toast'); if(!t) return; t.textContent=m; t.classList.add('show'); clearTimeout(t._t); t._t=setTimeout(function(){t.classList.remove('show');},2200); }
@@ -477,7 +500,7 @@
     { k:'perGL',  label:'Per GL',   num:true, render:function(r){return moneyCell(r.PerGL);} },
     { k:'endGL',  label:'End GL',   num:true, render:function(r){return moneyCell(r.EndGL);} },
     { k:'unpostBatch', label:'Unp Btch', num:true, render:function(r){return moneyCell(r.UnpostBatch);} },
-    { k:'glok',   label:'GL OK',    render:function(r){return chip(r.GLOK);} },
+    { k:'glok',   label:'GL OK',    render:function(r){return chipFor(r,'gl');} },
     { k:'perpetual', label:'Perp',  num:true, render:function(r){return moneyCell(r.Perpetual);} },
     { k:'perCX',  label:'Per CX',   num:true, render:function(r){return moneyCell(r.PerCX);} },
     { k:'begVar',  label:'Beg Var', num:true, render:function(r){return moneyCell(r.BegVar);} },
@@ -486,7 +509,7 @@
     { k:'jes',    label:'JEs',      num:true, render:function(r){return moneyCell(r.JEs);} },
     { k:'oob',    label:'OOB',      num:true, render:function(r){return moneyCell(r.OOB);} },
     { k:'cardexVar', label:'CX Var', num:true, render:function(r){return moneyCell(r.CardexVar);} },
-    { k:'varok',  label:'Var OK',   render:function(r){return chip(r.VarOK);} }
+    { k:'varok',  label:'Var OK',   render:function(r){return chipFor(r,'var');} }
   ];
   var SORTABLE = { companyNumber:'CompanyNumber', longAccount:'LongAccount', periodEnds:'PeriodEnds', begGL:'BegGL', perGL:'PerGL', endGL:'EndGL', unpostBatch:'UnpostBatch', glok:'GLOK', perpetual:'Perpetual', perCX:'PerCX', begVar:'BegVar', endOfDay:'EndofDay', variance:'Variance', jes:'JEs', oob:'OOB', cardexVar:'CardexVar', varok:'VarOK' };
   var NUMCOL = { begGL:1, perGL:1, endGL:1, unpostBatch:1, perpetual:1, perCX:1, begVar:1, endOfDay:1, variance:1, jes:1, oob:1, cardexVar:1 };
@@ -752,18 +775,22 @@
     // body rows
     var breaks=0, unevaluated=0;
     data.forEach(function(r,i){
-      var rr=firstDataIdx+i, isBreak=(r.GLOK==='no'||r.VarOK==='no'); if(isBreak) breaks++;
+      // classify(), not the raw token: an 'end' row's verdict lives in EndGLOK /
+      // EndVarOK, so testing GLOK==='no' here counted a broken open period as clean
+      // in the workbook exactly as the screen once did (UI-57).
+      var rr=firstDataIdx+i, cls=RRV8.rollForward.classify(r);
+      var isBreak=(cls.glok==='no'||cls.varok==='no'); if(isBreak) breaks++;
       // Unevaluated rows get their own amber band so the workbook can't be read as
       // "everything not red is fine".
-      var isUnev=(!isBreak && (isUnk(r.GLOK)||isUnk(r.VarOK))); if(isUnev) unevaluated++;
+      var isUnev=(!isBreak && (cls.glok==='unk'||cls.varok==='unk')); if(isUnev) unevaluated++;
       for(var c=range.s.c;c<=range.e.c;c++){
         var ref=XLSX.utils.encode_cell({r:rr,c:c}), cell=ws[ref]; if(!cell) continue;
         var key=COLS[c].k; cell.s=cell.s||{}; cell.s.border=thinBorder('ECECEC');
         if(NUMCOL[key]){ cell.z=NUM_FMT; cell.s.alignment={horizontal:'right'}; }
         if(isBreak){ cell.s.fill={patternType:'solid',fgColor:{rgb:'FCE5E1'}}; }
         else if(isUnev){ cell.s.fill={patternType:'solid',fgColor:{rgb:'FDF1DE'}}; }
-        if((key==='glok'&&r.GLOK==='no')||(key==='varok'&&r.VarOK==='no')){ cell.s.font={bold:true,color:{rgb:'C0392B'}}; }
-        if((key==='glok'&&isUnk(r.GLOK))||(key==='varok'&&isUnk(r.VarOK))){ cell.s.font={bold:true,color:{rgb:'B5651D'}}; }
+        if((key==='glok'&&cls.glok==='no')||(key==='varok'&&cls.varok==='no')){ cell.s.font={bold:true,color:{rgb:'C0392B'}}; }
+        if((key==='glok'&&cls.glok==='unk')||(key==='varok'&&cls.varok==='unk')){ cell.s.font={bold:true,color:{rgb:'B5651D'}}; }
       }
     });
     // total row styling (bold, light-navy fill)
