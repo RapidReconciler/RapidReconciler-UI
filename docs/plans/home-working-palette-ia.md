@@ -4,6 +4,40 @@
 for the July 15 demo is low priority — get the structure in, then pivot hard to
 standing up the 3 demo DBs.
 
+> **pt.2 shipped-state reconciliation (2026-07-02, UI #308) — read this first.**
+> The plan below is the original IA; several pieces evolved when they shipped.
+> Where this note and the plan disagree, this note is current:
+>
+> - **Perpetual "At-a-Glance"** shipped as an **item-grain rollup** (lot detail
+>   off), tightened columns, on-hand rounded, an **Amount total** row, a **25-bar
+>   contributor strip**, plus **row search + column sort** (sort persists). A
+>   **Full-details → Reports** link replaces an in-place expand.
+> - **Residual Optimizer** shipped on **both** the Home Perpetual palette and the
+>   Full Perpetual page: ✨ **AI cutoff** (natural break + refine), an
+>   **Inventory / Filtered** view switch, a **± dial**, and **Excel export**
+>   (Inventory + Filtered). The residual model is **unified to cumulative-smallest**
+>   across both surfaces so the optimizer + dial behave identically.
+> - **`inventory-asof.html` was NOT retired** (the plan's "Ports & retirements"
+>   says to retire it). It was **reshaped into the "Full Perpetual Details" page**:
+>   topbar / footer / report-buttons / amount-card / period-chart / contributors /
+>   beige-residual-bar all removed → now just **AI band + Residual Optimizer + the
+>   full grid**. Reached from **Reports → Accounting → Full Perpetual**.
+> - **Reports hub** (new): two white-card columns **Analyst | Accounting**. Three
+>   **Data Integrity** reports (UOM / Frozen Cost / GL-Class) list with **red/green
+>   dots** (any flagged rows = red) + **direct Excel download** (`buildAuditWorkbook`).
+>   Full Perpetual moved to the **Accounting** column.
+> - **Analyst view** now matches the accountant shell: left rail retired, **top AI
+>   band + OOB graph**, sub-nav **Workspace | Reports** (2 tabs, not the planned
+>   3× Set Up / Data Integrity / Troubleshooting), and a **white-card grouped list**
+>   (Set Up / Troubleshooting groups).
+> - **Company what-if-exclude pill** (new): session-only, Home-wide, banner-backed
+>   (e.g. excluding Co 00073 drops the book from −$32.3M to −$185K). The bottom
+>   cluster is now **4 uniform pills: Database / View / Companies / Account**.
+> - **Perpetual contributor bar-click drill** remains **deferred** (see the
+>   "Deferred" section at the end — still tabled).
+> - Fix: an Excel-export `_buildAuditSheet` name collision was resolved by renaming
+>   the new one to `_buildStyledSheet`.
+
 ## Concept
 
 `home.html` becomes the single working surface for both the **Accountant** and

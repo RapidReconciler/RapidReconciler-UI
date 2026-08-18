@@ -1,0 +1,92 @@
+/* ============================================================
+   Demo3 (TR->Demo3) — COMPLETE SSIS-environment + reload-job repoint.
+   Run AFTER the TR->Demo3 DB rename. Renames the RapidReconciler_TR SSIS
+   environment in place to RapidReconciler_Demo3, repoints its two catalog
+   vars at the renamed DBs, fixes the by-NAME project reference, and
+   repoints + renames the reload job (step-1 @env, step-2 database).
+
+   *** RUN AS A WINDOWS PRINCIPAL ***  catalog write procs reject SQL auth
+   (Msg 27123). Two proven ways:
+     (a) sqlcmd -E -d SSISDB -i env_ops.sql   (Windows login = sysadmin +
+         ssis_admin), or
+     (b) a one-shot sa-owned SQL Agent CmdExec job calling the above
+         (runs as NT SERVICE\SQLSERVERAGENT, accepted by the catalog).
+   The msdb job edits (section 4) run fine under that same principal.
+
+   Idempotent + guarded; safe to re-run. Verified TR-specific values from
+   SSISDB: env RapidReconciler_TR, job RapidReconciler_TR, aaStartDateGr
+   2025-01-01 (kept). Catalog vars were jdesource_tr / RapidReconciler_TR.
+   ============================================================ */
+:setvar FOLDER   "RapidReconciler"
+:setvar PROJECT  "RapidReconciler-SSIS"
+:setvar OLDENV   "RapidReconciler_TR"
+:setvar NEWENV   "RapidReconciler_Demo3"
+:setvar JDECAT   "jdesource_demo3"
+:setvar RRCAT    "RapidReconciler_Demo3"
+:setvar AASTART  "2025-01-01"
+:setvar OLDJOB   "RapidReconciler_TR"
+:setvar NEWJOB   "RapidReconciler_Demo3"
+
+SET NOCOUNT ON;
+USE SSISDB;
+
+/* --- 1. rename the environment in place (preserves all vars; no orphan) --- */
+IF EXISTS (SELECT 1 FROM catalog.environments e JOIN catalog.folders f ON f.folder_id=e.folder_id
+           WHERE f.name=N'$(FOLDER)' AND e.name=N'$(OLDENV)')
+   AND NOT EXISTS (SELECT 1 FROM catalog.environments e JOIN catalog.folders f ON f.folder_id=e.folder_id
+                   WHERE f.name=N'$(FOLDER)' AND e.name=N'$(NEWENV)')
+BEGIN
+  EXEC catalog.rename_environment @folder_name=N'$(FOLDER)',
+       @environment_name=N'$(OLDENV)', @new_environment_name=N'$(NEWENV)';
+  PRINT '1. renamed env $(OLDENV) -> $(NEWENV)';
+END
+ELSE PRINT '1. env rename skipped (old absent or new already present)';
+
+/* --- 2. repoint the two catalog names + aaStartDateGr (all others DB-agnostic) --- */
+EXEC catalog.set_environment_variable_value @folder_name=N'$(FOLDER)', @environment_name=N'$(NEWENV)',
+     @variable_name=N'JdeInitialCatalog', @value=N'$(JDECAT)';
+EXEC catalog.set_environment_variable_value @folder_name=N'$(FOLDER)', @environment_name=N'$(NEWENV)',
+     @variable_name=N'RrInitialCatalog',  @value=N'$(RRCAT)';
+EXEC catalog.set_environment_variable_value @folder_name=N'$(FOLDER)', @environment_name=N'$(NEWENV)',
+     @variable_name=N'aaStartDateGr',      @value=N'$(AASTART)';
+PRINT '2. catalog vars set (Jde=$(JDECAT), Rr=$(RRCAT), aaStartDateGr=$(AASTART))';
+
+/* --- 3. references are BY NAME; the rename orphaned the old one. Delete stale, create fresh. --- */
+DECLARE @oldref bigint = (
+  SELECT r.reference_id FROM catalog.environment_references r
+  JOIN catalog.projects p ON p.project_id=r.project_id
+  JOIN catalog.folders f ON f.folder_id=p.folder_id
+  WHERE f.name=N'$(FOLDER)' AND p.name=N'$(PROJECT)' AND r.environment_name=N'$(OLDENV)');
+IF @oldref IS NOT NULL BEGIN
+  EXEC catalog.delete_environment_reference @reference_id=@oldref;
+  PRINT '3a. deleted stale reference -> $(OLDENV)';
+END
+IF NOT EXISTS (SELECT 1 FROM catalog.environment_references r
+               JOIN catalog.projects p ON p.project_id=r.project_id
+               JOIN catalog.folders f ON f.folder_id=p.folder_id
+               WHERE f.name=N'$(FOLDER)' AND p.name=N'$(PROJECT)' AND r.environment_name=N'$(NEWENV)')
+BEGIN
+  DECLARE @newref bigint;
+  EXEC catalog.create_environment_reference @folder_name=N'$(FOLDER)', @project_name=N'$(PROJECT)',
+       @environment_name=N'$(NEWENV)', @reference_type='R', @environment_folder_name=NULL,
+       @reference_id=@newref OUTPUT;
+  PRINT '3b. created reference -> $(NEWENV) (ref_id=' + CAST(@newref AS varchar(12)) + ')';
+END
+ELSE PRINT '3b. reference -> $(NEWENV) already present';
+
+/* --- 4. reload job: repoint step-1 @env (embeds the env name), step-2 db, then rename the job --- */
+IF EXISTS (SELECT 1 FROM msdb.dbo.sysjobs WHERE name=N'$(OLDJOB)')
+BEGIN
+  DECLARE @cmd nvarchar(max) = (SELECT s.command FROM msdb.dbo.sysjobs j
+      JOIN msdb.dbo.sysjobsteps s ON s.job_id=j.job_id WHERE j.name=N'$(OLDJOB)' AND s.step_id=1);
+  SET @cmd = REPLACE(@cmd, N'$(OLDENV)', N'$(NEWENV)');
+  EXEC msdb.dbo.sp_update_jobstep @job_name=N'$(OLDJOB)', @step_id=1, @command=@cmd;
+  PRINT '4a. step-1 @env repointed -> $(NEWENV)';
+  EXEC msdb.dbo.sp_update_jobstep @job_name=N'$(OLDJOB)', @step_id=2, @database_name=N'$(RRCAT)';
+  PRINT '4b. step-2 database_name -> $(RRCAT)';
+  EXEC msdb.dbo.sp_update_job @job_name=N'$(OLDJOB)', @new_name=N'$(NEWJOB)';
+  PRINT '4c. job renamed $(OLDJOB) -> $(NEWJOB)';
+END
+ELSE PRINT '4. reload job $(OLDJOB) not found (skip)';
+
+PRINT 'ENV_OPS_COMPLETE';
