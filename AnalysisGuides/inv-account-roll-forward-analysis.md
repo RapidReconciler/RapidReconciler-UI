@@ -200,6 +200,97 @@ The report is sorted by **CompanyNumber → PeriodEnds → LongAccount**. Each u
 
 ---
 
+### 3.3 The component identity — what the six sources sum to
+
+**Measured 2026-08-19 on `v6ui_raccountsummary`, every row with `|OOB| >= 1`
+(Demo1 36, Demo2 107, Demo3 68):**
+
+    BegVar + Variance + JEs + CardexVar - UnpostBatch - EndofDay = OOB
+
+Demo1 and Demo3 miss on zero rows. Demo2 misses on four, by exactly $0.01 each,
+all on one account across four consecutive periods — float dust. The same holds
+at company grain (summing the accounts), worst difference also one cent, so the
+error does not accumulate with the number of accounts.
+
+**The two timing components subtract, and getting that wrong doubles the error
+rather than shifting it.** Straight addition of all six was measured failing on
+32 Demo2 rows and 12 Demo3 rows, and on those rows the miss is *exactly twice*
+the four-term miss, because the timing amount moves from one side of the
+equation to the other and is therefore counted twice. Unposted GL is already
+inside EndGL (`EndGL = BegGL + PerGL + UnpostBatch`, above), so it has to come
+back out to reconcile against perpetual.
+
+> ⚠ **Demo1 cannot discriminate the signs.** It has no account carrying material
+> timing, so every sign arrangement ties there — including the wrong ones. Verify
+> any change to this identity against Demo2 or Demo3.
+
+**These are the VIEW's column names, which are not the export's.** The export
+column `Variance` (column P above) and the view column `Variance` are different
+quantities — the view's `Variance` is the *transactions* component, which the UI
+labels "Transactions". Don't carry a formula between the two without checking
+which `Variance` it means.
+
+The identity is implemented once, in `RRV8.varianceTieOut` (`RRV8/config.js`),
+and asserted by `Tools/test-variance-tieout.js` against these measured rows. Both
+accountant variance drawers render from it, so neither can drift from the other.
+
+### 3.4 Where PerCX comes from, and how to prove it is right
+
+`PerCX` is not computed in the roll-forward. It is `SUM(CardexAmount)` from
+`RCardexLedgerCompare`, grouped by `PeriodEnds / CompanyNumber / ShortAccount`,
+written by `usp6_009_account_summary`. RCLC's cardex leg in turn comes from
+`RTransactions` (the F4111 load) joined to `RItems`, pre-aggregated by
+`v6_007_cx_gl`.
+
+    RTransactions.Amount -> v6_007_cx_gl -> RCardexLedgerCompare.CardexAmount -> RAccountSummary.CardexAmount
+
+**Both hops should tie to the cent.** Validated 2026-08-19 across all three demo
+databases: 600 non-baseline rows, zero mismatches, worst absolute difference
+0.0000. If you are chasing an unexplained cardex figure, this chain is not where
+to look first — but check it rather than assume it:
+
+```sql
+-- hop 2: RAccountSummary vs RCLC
+with cx as (select PeriodEnds, CompanyNumber, ShortAccount, sum(CardexAmount) cx
+            from dbo.RCardexLedgerCompare
+            group by PeriodEnds, CompanyNumber, ShortAccount)
+select count(*)
+from dbo.RAccountSummary a
+left join cx c on c.PeriodEnds = a.PeriodEnds
+             and c.CompanyNumber = a.CompanyNumber
+             and c.ShortAccount = a.ShortAccount
+where a.GLRollOK <> 'baseline'
+  and abs(isnull(a.CardexAmount,0) - isnull(c.cx,0)) > 0.005;   -- expect 0
+```
+
+Three things that look like breaks and are not:
+
+- **RAccountSummary has one more period than RCLC.** That is the opening
+  baseline snapshot. `usp6_009` deliberately excludes `GLRollOK = 'baseline'`
+  from the cardex update, because no period activity accrues to it.
+- **RCLC does not hold full history.** `usp6_007_merge_cx_gl` purges it below
+  `min(PeriodCutoff)`. `usp6_009` rebuilds RAccountSummary from zero on the same
+  window, so the two stay aligned rather than stranding a stale figure.
+- **`RCardexLedgerCompare2` will not tie to either.** It is the netted variance
+  worklist, not the ledger. Comparing it to PerCX is the mistake Section 0 of
+  `transaction-detail-analysis.md` exists to prevent.
+
+The one real leak is an `RTransactions` row whose `ItemID` has no `RItems` match.
+The cardex leg inner-joins RItems — the account comes from the item, since the
+cardex row is account-blind — so such a row is dropped with no error. Measured
+2026-08-19: two of the three demo databases had none; the third had three rows
+(`ItemID = 0`, DocType `IM`, OrderType `WM`) worth $1,218.49. It creates no
+variance, because the perpetual side inner-joins RItems the same way and drops
+them too. Treat it as a source data-quality signal, not a reconciliation break:
+
+```sql
+select count(*), sum(abs(Amount))
+from dbo.RTransactions a
+where not exists (select 1 from dbo.RItems b where b.itemid = a.ItemID);
+```
+
+---
+
 ## Section 4: GLOK — GL Roll Forward Logic
 
 ### 4.1 How GLOK Is Calculated

@@ -2532,7 +2532,7 @@
     // target ⇒ more rows) AND exact per-row, which the +/- dial needs.
     const candidates = [];
     for (let i = 0; i < rows.length; i++) {
-      if ((Number(rows[i].Quantity) || 0) === 0) candidates.push(rows[i]);
+      if (RRV8.residual.isZeroQty(rows[i].Quantity)) candidates.push(rows[i]);
     }
     const asc = candidates.slice().sort((a, b) =>
       Math.abs(Number(a.Amount) || 0) - Math.abs(Number(b.Amount) || 0));
@@ -3192,7 +3192,10 @@ function updateLotDetailPill() {
     _residualByCcy = {};
     rows.forEach(r => { const c = String(r.Currency || '').toUpperCase() || '?'; _residualByCcy[c] = (_residualByCcy[c] || 0) + Math.abs(Number(r.Amount) || 0); });
     const ro = document.getElementById('fp-opt-readout'); if (ro) ro.hidden = false;
-    const roLbl  = document.getElementById('fp-opt-readout-label'); if (roLbl)  roLbl.textContent  = 'Dust hidden';
+    // "Dust hidden" is only true if hiding is already on. Dragging up from the off state
+    // is a preview of what WOULD be hidden on release, and labelling that as hidden
+    // claims rows have left a grid they are still sitting in.
+    const roLbl  = document.getElementById('fp-opt-readout-label'); if (roLbl)  roLbl.textContent  = _state.hideResiduals ? 'Dust hidden' : 'Dust to hide';
     const roRows = document.getElementById('fp-opt-readout-rows'); if (roRows) roRows.textContent = rows.length.toLocaleString('en-US') + ' row' + (rows.length === 1 ? '' : 's');
     const roAmt  = document.getElementById('fp-opt-readout-amt');  if (roAmt)  roAmt.textContent  = _residualMoneyText();
   }
@@ -3222,12 +3225,21 @@ function updateLotDetailPill() {
         b.textContent = (v === 'filtered') ? 'Filtered' : 'Inventory';   // count lives in the readout now
       });
     }
+    // The dial shows whenever there IS dust, not only once hiding is already on. It used
+    // to be gated on `active`, which made the manual path unreachable: the only way to a
+    // cutoff was to run the AI, and "Show all" was a one-way door — it turned hiding off
+    // and took away the control that would have turned it back on by hand. The view
+    // switch stays gated, because a "Filtered" view with nothing hidden is an empty grid.
     const sliderWrap = document.getElementById('fp-slider-wrap');
     const slider = document.getElementById('fp-slider');
-    if (sliderWrap) sliderWrap.hidden = !active;
-    if (active && slider) {
-      slider.max = String((_residualCandAbs || []).length);
-      if (document.activeElement !== slider) slider.value = String(_residualStats.count || 0);   // don't fight an active drag
+    const candN = (_residualCandAbs || []).length;
+    if (sliderWrap) sliderWrap.hidden = candN === 0;
+    if (slider) {
+      slider.max = String(candN);
+      // Position is how many rows are HIDDEN, so it reads 0 while hiding is off — the
+      // readout beside it separately reports how many are in scope. Showing the in-scope
+      // count on the dial would claim rows were hidden that are still in the grid.
+      if (document.activeElement !== slider) slider.value = String(active ? (_residualStats.count || 0) : 0);   // don't fight an active drag
     }
     const lbl = document.getElementById('fp-opt-label'); if (lbl) lbl.textContent = active ? 'Re-optimize' : 'Residual Optimizer';
     if (!active) { const note = document.getElementById('fp-opt-note'); if (note) note.hidden = true; }
@@ -3317,6 +3329,10 @@ function updateLotDetailPill() {
         const n = Number(slider.value) || 0;
         if (n <= 0) { _fpShowAll(); return; }
         _state.residualTarget = _fpCumTarget(n); saveResidualTarget();
+        // Dragging is now a way to START hiding, not only to adjust hiding already on.
+        // applyResidualFilter gates on hideResiduals, so without this the dial would
+        // move, commit a target, re-render — and change nothing on screen.
+        _state.hideResiduals = true; _state.residualView = 'kept'; saveHideResiduals();
         renderAll();
       });
     }
@@ -4527,7 +4543,7 @@ function updateLotDetailPill() {
       ' row' + (resCount === 1 ? '' : 's') +
       ' · Residual amount ' + fmtMoney(resAmt) +
       ' (within ±' + fmtMoney(resTarget) + ' target)' +
-      ' · Quantity = 0; cumulative |Amount| ' + fmtMoney(resAbs) +
+      ' · quantity rounds to zero; cumulative |Amount| ' + fmtMoney(resAbs) +
       ' · Split onto the Residuals sheet';
     const residualRow = [residualText].concat(new Array(Math.max(0, cols.length - 1)).fill(''));
 
