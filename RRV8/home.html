@@ -560,11 +560,30 @@
      liftable objects rather than blending into the white container. */
   .acct-grid-wrap { display: block; background: #e8ecf3; border: 1px solid var(--rule); border-radius: 10px; padding: 14px; }
   /* Sub-view tab strip — the second nav axis under the fixed top row. */
-  .subnav { display: flex; gap: 2px; margin: 2px 0 16px; border-bottom: 1px solid var(--rule); }
+  /* The sub-view tabs. ONE strip serves BOTH roles — SUBVIEWS.accountant and
+     SUBVIEWS.analyst render into this same #subNav — so this block is the whole
+     change for the analyst AND the accountant home.
+
+     They used to be bare text on a 1px rule. Sitting between two large white cards
+     they read as a caption rather than a control, and the analyst opened the page
+     without registering there were four views (owner 2026-08-19). Now the strip is a
+     real segmented rail: a tinted, bordered surface, with the ACTIVE tab lifted out
+     of it as a white pill. Contrast does the work, not colour — the accountant cards
+     next to it are deliberately crisp and white (UI-23), so a bright bar here would
+     read as the loudest thing on a page where it is only the signpost. */
+  .subnav { display: flex; gap: 4px; margin: 2px 0 16px; padding: 4px;
+            background: var(--bg-soft); border: 1px solid var(--rule); border-radius: 11px; }
   .subnav[hidden] { display: none; }
-  .subnav-tab { appearance: none; background: none; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; padding: 9px 18px; font-family: inherit; font-size: 14px; font-weight: 700; color: var(--text-muted); cursor: pointer; border-radius: 8px 8px 0 0; }
-  .subnav-tab:hover { color: var(--navy); background: var(--bg-soft); }
-  .subnav-tab.is-active { color: var(--navy); border-bottom-color: var(--blue); }
+  .subnav-tab { appearance: none; background: none; border: 0; padding: 9px 18px; font-family: inherit;
+                font-size: 14.5px; font-weight: 700; color: var(--text-muted); cursor: pointer;
+                border-radius: 8px; white-space: nowrap; transition: background .12s ease, color .12s ease; }
+  .subnav-tab:hover { color: var(--navy); background: rgba(255,255,255,.72); }
+  /* The active tab is a raised white pill so it reads as the sheet below it, plus the
+     blue keyline the product already used to mean "this is the one you are on". */
+  .subnav-tab.is-active { color: var(--navy); background: var(--bg-card);
+                          box-shadow: var(--shadow-sm), inset 0 -2px 0 0 var(--blue); }
+  /* These are buttons and had no visible keyboard focus at all. */
+  .subnav-tab:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
   /* Accountant-ONLY palettes hide outside the accountant view (JS also gates).
      #acctAudit came OUT of this list 2026-08-16: the Audit Center is now a shared tab in
      the analyst lane too, and this rule is `display: none !important`, so it beat the
@@ -1292,6 +1311,11 @@
   /* Amber accent while the model has exclusions to review, so the band carries the
      same visual weight as the rows it sits above; navy reference accent otherwise. */
   .alh-model.is-warn { border-left-color: var(--orange); }
+  /* A cleared band is tinted, matching the "Nothing needs your attention" strip and
+     the Cleared rollup below it, so green means the same thing everywhere on the tab.
+     Only `is-clear` tints: a warn band and an unproven ('open') band both keep the
+     white card, because neither passed. Set off the SAME marker the glyph uses. */
+  .alh-model.is-clear { background: var(--green-pale); border-color: rgba(46,138,85,.24); border-left-color: var(--green); }
   .alh-item-line { flex: 1 1 auto; min-width: 0; font-size: 15px; line-height: 1.4; }
   .alh-item-t { font-family: 'Source Sans 3', sans-serif; font-weight: 800; color: var(--navy); font-size: 16px; }
   .alh-item-sep { margin: 0 9px; color: var(--rule-strong); font-weight: 700; }
@@ -1330,7 +1354,7 @@
   .alh-model-tbl td.mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; color: var(--navy); font-weight: 600; white-space: nowrap; }
 
   /* Cleared rollup — quiet, collapsible. */
-  .alh-cleared { display: flex; align-items: center; gap: 12px; background: var(--bg-soft); border: 1px solid var(--rule); border-radius: 12px; padding: 12px 18px; }
+  .alh-cleared { display: flex; align-items: center; gap: 12px; background: var(--green-pale); border: 1px solid rgba(46,138,85,.24); border-radius: 12px; padding: 12px 18px; }
   .alh-cleared-tick { flex: 0 0 auto; color: var(--green); font-weight: 800; font-size: 15px; line-height: 1; }
   .alh-cleared-txt { flex: 1 1 auto; min-width: 0; font-size: 15px; color: var(--text-muted); }
   .alh-cleared-txt b { color: var(--navy); font-weight: 800; }
@@ -2475,7 +2499,7 @@
 <script defer src="../Tools/help-sidebar.js"></script>
 </head>
 <body
-  data-help-glossary="1">
+  data-help-glossary="home">
 
 <header class="app-header">
   <div class="brand">
@@ -8953,7 +8977,27 @@
       var focusP = _analystViewedPeriod();
       var pset = {}; rows.forEach(function (r) { var p = String(r.PeriodEnds || '').slice(0, 10); if (p) pset[p] = 1; });
       var plist = Object.keys(pset).sort();
-      if (plist.indexOf(focusP) === -1 && plist.length) focusP = plist[plist.length - 1];
+      // `plist` is built from ROWS, so it only holds periods that carry residual. A
+      // CLEAN period is therefore never in it, and this fallback used to swap the tab
+      // back to the newest period WITH residual — click May 31 on the graph, read
+      // Apr 30 in the details, with nothing on screen saying the period had been
+      // changed for you (owner 2026-08-19). It also made the "is clean for Co N —
+      // nothing to chase" branch below unreachable for exactly the case it was
+      // written for: focusP could only be in plist if perRows was non-empty.
+      //
+      // A period the analyst can SELECT is a valid period whether or not it carries
+      // residual, so #periodSelect is the authority on "does this period exist". The
+      // fallback stays for the case it was actually protecting: a remembered period
+      // from another DB or company that this page does not offer at all.
+      var _knownP = (function () {
+        var sel = $('periodSelect'), i;
+        if (!sel || !sel.options || !sel.options.length) return false;
+        for (i = 0; i < sel.options.length; i++) {
+          if (String(sel.options[i].value || '').slice(0, 10) === focusP) return true;
+        }
+        return false;
+      })();
+      if (!_knownP && plist.indexOf(focusP) === -1 && plist.length) focusP = plist[plist.length - 1];
       var perRows = rows.filter(function (r) { return String(r.PeriodEnds || '').slice(0, 10) === focusP; });
       // netTotal = the DETAILS total: sum of the reconciling-items residual (_txvRows)
       // for the focused period — the population the cards itemize.
@@ -10757,14 +10801,23 @@
     if (st.routes === undefined) {
       el.innerHTML = '<div class="alh-model-row"><span class="alh-model-t">Model DMAAI 4152</span>'
         + '<span class="alh-model-d">Reading the model table…</span></div>';
+      // This paint replaces the body but not the accent, so on a company switch the
+      // previous company's stripe survived onto "Reading the model table…". Harmless
+      // while the only accent was a warn stripe; with a green tint it would assert
+      // CLEARED over a band that has read nothing yet. Neither marker is present in
+      // this markup, so clear both off the same query the settled paint uses.
+      el.classList.toggle('is-warn', !!el.querySelector('.alh-item-warn'));
+      el.classList.toggle('is-clear', !!el.querySelector('.alh-cleared-tick'));
       return;
     }
     // excl `undefined` = the gather is still running, so the clause is simply absent
     // for a moment. `false` = it failed and the band says so. Never silently absent.
     el.innerHTML = _analystModelBandHtml(st.co, st.routes, st.excl === undefined ? null : st.excl, st.ccy);
     // The accent follows the marker rather than a second copy of the state test —
-    // one source, so the stripe and the triangle can never disagree.
+    // one source, so the stripe and the triangle can never disagree. The green
+    // tint reads off the tick for the same reason.
     el.classList.toggle('is-warn', !!el.querySelector('.alh-item-warn'));
+    el.classList.toggle('is-clear', !!el.querySelector('.alh-cleared-tick'));
   }
   // ACCOUNT ROLL FORWARD band — the same UI-66 problem the model band exists for,
   // reported by the owner 2026-08-09 about this check: when the roll-forward is CLEAN
@@ -10787,7 +10840,6 @@
       // the border alone: no alert, and no ✓ either, because nothing passed.
       var warn = c.state === 'attention' || c.state === 'detected';
       var open = c.state === 'open';
-      el.classList.toggle('is-warn', warn);
       el.innerHTML = '<div class="alh-model-row">'
         + (warn ? '<span class="alh-item-warn" aria-hidden="true">▲</span>'
           : open ? '<span class="alh-item-open" aria-hidden="true">•</span>'
@@ -10796,6 +10848,12 @@
         + '<span class="alh-model-d">' + (c.detailHtml || '') + '</span>'
         + (c.actionHtml || '')
         + '</div>';
+      // Both accents now read off the rendered marker, the way the model band
+      // above already did — the state test lived in two places here, and a third
+      // copy for the tint would have been the one that eventually disagreed.
+      // 'open' takes neither: unproven is not cleared, so it keeps the white card.
+      el.classList.toggle('is-warn', !!el.querySelector('.alh-item-warn'));
+      el.classList.toggle('is-clear', !!el.querySelector('.alh-cleared-tick'));
     }).catch(function (e) {
       if (gen !== _analystTaskGen) return;
       console.warn('[home] roll-forward band unavailable', e);
