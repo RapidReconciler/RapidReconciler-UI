@@ -2876,6 +2876,186 @@ window.RRV8 = window.RRV8 || {};
 })();
 
 /*
+ * RRV8.residual — the ONE definition of "zero-quantity" for the residual-dust model.
+ *
+ * THE BUG THIS FIXES. Every surface tested `Number(Quantity) === 0` — an EXACT zero —
+ * while the grids render quantity at two decimals. A row holding 0.004 KG shows "0" and
+ * was not a candidate. Measured 2026-08-19 on Demo3 Co 30001 / 2023-05-31, 20,473 rows:
+ *
+ *     Quantity exactly 0 ................   1 row
+ *     |Quantity| < 0.005 (displays as 0) . 177 rows, |Amount| 0.00 .. 33.20
+ *
+ * So the Residual Optimizer correctly hid the single exactly-zero row and looked broken,
+ * because 176 rows that read as zero on screen were invisible to it. The optimizer was
+ * right; the definition was wrong.
+ *
+ * QTY_EPS is not a tolerance anyone picked — it is the display precision. The grids use
+ * maximumFractionDigits: 2, so |q| < 0.005 is exactly the set that renders as "0". The
+ * rule is "if the screen says zero, the model treats it as zero", which is the only
+ * version an analyst can check by looking.
+ *
+ * Widening the CANDIDATE set does not widen what gets HIDDEN: the cumulative walk still
+ * only hides rows while the running |Amount| stays inside the target, so a near-zero
+ * quantity carrying real value becomes a candidate and is then judged on its amount.
+ *
+ * Used by the Full Perpetual page, Home's Perpetual At-a-Glance and the audit report's
+ * Residuals Audit line — the three had four copies of the old test between them, and
+ * their own comments already insisted they stay in lockstep.
+ */
+window.RRV8 = window.RRV8 || {};
+(function () {
+  var QTY_EPS = 0.005;
+  window.RRV8.residual = {
+    QTY_EPS: QTY_EPS,
+    isZeroQty: function (q) { return Math.abs(Number(q) || 0) < QTY_EPS; }
+  };
+})();
+
+/*
+ * RRV8.varianceTieOut — the ONE producer of the six-component variance decomposition
+ * and the identity that ties it to the account's out-of-balance.
+ *
+ * THE IDENTITY (measured 2026-08-19 on v6ui_raccountsummary across Demo1/2/3, every
+ * row with |OOB| >= 1 — Demo1 36 rows, Demo2 107, Demo3 68):
+ *
+ *     BegVar + Variance + JEs + CardexVar − UnpostBatch − EndofDay = OOB
+ *
+ * Demo1 and Demo3 miss on ZERO rows. Demo2 misses on 4, by exactly $0.01 each, all on
+ * the same account across four periods — float dust, which is why `closes` runs on a
+ * one-cent tolerance rather than an exact compare.
+ *
+ * ⚠ THE TWO TIMING COMPONENTS SUBTRACT, and getting that wrong is not a rounding
+ * problem — it doubles the error. Straight addition of all six was measured failing on
+ * 32 Demo2 rows and 12 Demo3 rows, and on those rows the miss is EXACTLY twice the miss
+ * of the four-term version, because the timing amount lands on the wrong side of the
+ * equation and is therefore counted twice. Unposted GL is already inside EndGL (the
+ * roll-forward's own `EndGL = BegGL + PerGL + UnpostBatch`), so it has to come back out
+ * to reconcile against perpetual; End of Day behaves the same way.
+ *
+ * ⚠ DEMO1 CANNOT TELL THE VARIANTS APART. It has no account carrying material timing,
+ * so every sign arrangement ties there — including the wrong ones. Verify sign changes
+ * against Demo2 or Demo3, never Demo1 alone.
+ *
+ *   COMPONENTS                     the six, in roll-forward order, each with its sign
+ *   decompose(row)                 from a v6ui_raccountsummary-shaped row
+ *   decomposeByName(comp, oob)     from a name-keyed aggregate (the company grain)
+ *   TOLERANCE                      0.01
+ *
+ * Both return { parts, total, oob, diff, closes }. `parts[].raw` is the component as
+ * stored; `parts[].signed` is it with the identity's sign applied — render `raw` next
+ * to a leading −, never `signed`, or a negative deduction reads as a double negative.
+ */
+window.RRV8 = window.RRV8 || {};
+(function () {
+  var TOLERANCE = 0.01;
+  // Order is the reading order of the tie-out, NOT a magnitude sort: this is an
+  // equation, and an equation whose terms move around cannot be checked at a glance.
+  // `role` is what the triage/AI surfaces already split on — keep it here so the six
+  // components are declared once for every consumer.
+  // `name` is CANONICAL and load-bearing beyond display: the AI grounding text defines
+  // the components by these exact strings, and _COMP_SUB / _COMP_KEY are keyed on them.
+  // Do not shorten it. `short` is display-only, for the chip row in the per-account
+  // drawer where six labels have to fit one line — it matches the grid's own column
+  // headers wherever one exists (Unposted, End of Day) so a chip and the column above
+  // it never carry two different names for the same figure.
+  var COMPONENTS = [
+    { f: 'BegVar',      name: 'Carry forward',       short: 'Carry fwd',    role: 'Accountant', sign:  1 },
+    { f: 'Variance',    name: 'Transactions',        short: 'Transactions', role: 'Accountant', sign:  1 },
+    { f: 'JEs',         name: 'Manual entries',      short: 'Manual JEs',   role: 'Accountant', sign:  1 },
+    { f: 'CardexVar',   name: 'Cardex',              short: 'Cardex',       role: 'Analyst',    sign:  1 },
+    { f: 'UnpostBatch', name: 'Unposted GL batches', short: 'Unposted',     role: 'Analyst',    sign: -1 },
+    { f: 'EndofDay',    name: 'End of Day',          short: 'EOD',          role: 'Analyst',    sign: -1 }
+  ];
+  function _core(get, oob) {
+    var parts = COMPONENTS.map(function (k) {
+      var raw = Number(get(k)) || 0;
+      return { f: k.f, name: k.name, short: k.short, role: k.role, sign: k.sign, raw: raw, signed: k.sign * raw };
+    });
+    var total = parts.reduce(function (s, p) { return s + p.signed; }, 0);
+    var o = Number(oob) || 0, diff = total - o;
+    // The epsilon is not slack in the tolerance, it is float representation. The
+    // measured dust is exactly one cent, and summing six doubles lands it at
+    // 0.010000000002 — a bare `<= 0.01` rejected the very rows the tolerance exists
+    // to admit. Caught by Tools/test-variance-tieout.js, which is the only reason
+    // anyone would ever have known: the drawer would just have flagged four healthy
+    // accounts as not closing, forever.
+    return { parts: parts, total: total, oob: o, diff: diff, closes: Math.abs(diff) <= TOLERANCE + 1e-9 };
+  }
+  function decompose(row) { row = row || {}; return _core(function (k) { return row[k.f]; }, row.OOB); }
+  function decomposeByName(comp, oob) { comp = comp || {}; return _core(function (k) { return comp[k.name]; }, oob); }
+  window.RRV8.varianceTieOut = { COMPONENTS: COMPONENTS, decompose: decompose,
+                                 decomposeByName: decomposeByName, TOLERANCE: TOLERANCE };
+})();
+
+/*
+ * RRV8.oeEntry — the ONE producer of the adjusting-entry composition arithmetic
+ * (UI-21). Given the account rows the Accounts grid is already showing for one
+ * company + period, it decides which accounts are journal-able, how much each one
+ * takes, and what a deferred carry-forward comes to.
+ *
+ * WHY IT LIVES HERE AND NOT IN home.html. home.html has no module boundary, so
+ * anything inline is unreachable from a test harness — and this arithmetic has the
+ * failure mode that never shows up as an error: an entry that still LOOKS balanced
+ * while carrying the wrong amount, or a deferred carry-forward figure that drifts
+ * from what actually got left out. Both render perfectly. Tools/test-oe-compose.js
+ * asserts this against measured RapidReconciler_Demo1 rows.
+ *
+ *   compose(rows, opts) -> { lines, drTot, crTot, timingTotal, net, cfTotal, cfExcluded }
+ *
+ * rows  = v6ui_raccountsummary-shaped objects, ALREADY filtered to one company +
+ *         period and to |OOB| >= the materiality floor (that filtering is the
+ *         caller's, because the floor is a UI setting).
+ * opts  = { exclCF: bool }  — exclude the carry-forward component.
+ * lines = [{ acct, je, amt }] one per journal-able account, in row order. The caller
+ *         turns each into the account/offset PAIR the modal and the workbook render;
+ *         each pair is self-balancing, which is why drTot always equals crTot.
+ *
+ * THE COMPONENTS. The accountant-owned gap is carry-forward (BegVar) + transactions
+ * (Variance) + manual entries (JEs). It deliberately EXCLUDES unposted / end-of-day
+ * timing, which self-clears when operations posts, and CardexVar, which is an analyst
+ * re-roll. Journaling the full out-of-balance while timing is present would
+ * over-correct and open a new gap next period.
+ *
+ * WHY cfTotal IS SUMMED BEFORE THE DROP. A row whose only accountant-owned content is
+ * the carry-forward has je == 0 once it's excluded, so it drops out of the entry
+ * entirely. Its carry-forward is precisely what got deferred, so it has to be counted
+ * before the row disappears. Measured on Demo1: Co 80002 / 2025-07-31 is three such
+ * rows, and excluding the carry-forward empties the entry completely.
+ */
+window.RRV8 = window.RRV8 || {};
+(function () {
+  var DROP_UNDER = 1;   // under a dollar there is nothing worth journaling on that account
+  function _n(v) { return Number(v) || 0; }
+  function compose(rows, opts) {
+    var exclCF = !!(opts && opts.exclCF);
+    var lines = [], drTot = 0, crTot = 0, timingTotal = 0, net = 0, cfTotal = 0;
+    // What the entry is MADE OF, over the rows that survived the drop. Distinct from
+    // cfTotal, which counts every row: cfTotal answers "how much was deferred",
+    // comp.cf answers "how much of this entry is carry-forward" and is 0 when it's
+    // excluded. The AI read is grounded on comp, so it can never describe a component
+    // the entry does not contain.
+    var comp = { cf: 0, tx: 0, je: 0 };
+    (rows || []).forEach(function (r) {
+      var cf = _n(r.BegVar);
+      cfTotal += cf;
+      timingTotal += Math.abs(_n(r.UnpostBatch)) + Math.abs(_n(r.EndofDay));
+      var je = (exclCF ? 0 : cf) + _n(r.Variance) + _n(r.JEs);
+      if (Math.abs(je) < DROP_UNDER) return;
+      var amt = Math.abs(je);
+      // Per-line components ride along so the exported Explanation can say what drove
+      // THAT account ("mostly carry forward") instead of a generic label on every row.
+      lines.push({ acct: r.LongAccount == null ? '' : String(r.LongAccount), je: je, amt: amt,
+                   comp: { cf: exclCF ? 0 : cf, tx: _n(r.Variance), je: _n(r.JEs) } });
+      drTot += amt; crTot += amt; net += je;
+      comp.cf += exclCF ? 0 : cf; comp.tx += _n(r.Variance); comp.je += _n(r.JEs);
+    });
+    return { lines: lines, drTot: drTot, crTot: crTot, timingTotal: timingTotal, net: net,
+             cfTotal: cfTotal, cfExcluded: exclCF ? cfTotal : 0, comp: comp };
+  }
+  window.RRV8.oeEntry = { compose: compose, DROP_UNDER: DROP_UNDER };
+})();
+
+/*
  * RRV8.integrityCount — rows vs items for the three data-integrity reports
  * (v_integrity4_uom_conv, v_integrity5_gl_class, v_integrity7_frozen_cost).
  *
