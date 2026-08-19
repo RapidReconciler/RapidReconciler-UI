@@ -843,6 +843,11 @@
      the face, set apart from this-period drivers so it reads as the starting point. */
   .wl-recpill-cf { color: var(--orange); border-color: rgba(214,120,42,0.35); background: var(--bg-card); }
   .wl-recpill-cf:hover { border-color: var(--orange); color: var(--orange); }
+  /* UI-28: the unexplained remainder between the out-of-balance and its six components.
+     A <span>, not a button — there is nothing to drill to, and dashed borders + default
+     cursor say "this is a caveat on the row, not another source you can open". Amber
+     rather than red: it is a precision warning, not a break. */
+  .wl-recpill-resid { color: var(--orange); border-style: dashed; border-color: rgba(214,120,42,0.55); cursor: help; font-weight: 700; }
   /* Audit-tab per-company report control — same menu as the card version, opens downward. */
   .wl-audit--down .wl-audit-menu { top: calc(100% + 4px); bottom: auto; right: 0; }
   /* Keep the header net total over the Out-of-balance column now that the Rec grid
@@ -6844,7 +6849,7 @@
       + 'Use the app’s own terms. "Carry forward" is an unresolved balance rolled in from the prior period (a period\'s carry forward equals the previous period\'s net out-of-balance).\n\n'
       + 'Period: ' + (sc.period || '?') + (d.periodScoped ? '' : ' (figures span all loaded periods)') + '. Items in scope — the ONLY facts you may cite:\n'
       + (dataLines.length ? dataLines.join('\n') : '(everything reconciles — nothing open)') + '\n'
-      + 'CRITICAL: a company\'s out-of-balance is the NET figure shown. The components compose that net and OFTEN PARTLY OFFSET each other — NEVER add component amounts together (do NOT write "X plus Y produced Z", and never combine two components into one larger number), and never state a number larger than the net. Cite ONLY the net out-of-balance and name the single largest component as the driver.\n'
+      + 'CRITICAL: a company\'s out-of-balance is the NET figure shown. The components are the KNOWN contributors to that net, they OFTEN PARTLY OFFSET each other, and they do NOT always add up to it (when a facts block reports an unexplained remainder, say so and do not present the breakdown as complete) — NEVER add component amounts together (do NOT write "X plus Y produced Z", and never combine two components into one larger number), and never state a number larger than the net. Cite ONLY the net out-of-balance and name the single largest component as the driver.\n'
       + (trailBlocks.length ? '\nHistory — use it to TRACE each material carry forward back to the period and entry that created it (often a manual journal entry that was never offset):\n' + trailBlocks.join('\n') + '\n' : '')
       + (d.currencies.length > 1 ? '\nDifferent currencies are present — never combine them; keep each company separate.\n' : '')
       + '\nTONE: calm and factual, never urgent or alarmist. A carry forward does NOT need immediate action — it can be cleared now OR folded into the coming period-end journal entry; say so plainly.\n'
@@ -13632,6 +13637,16 @@
     }
     var lines = [matLine, 'By source: '
       + comps.map(function (k) { return k.name.toLowerCase() + ' ' + amt(c.comp[k.name]); }).join(', ') + '.'];
+    // UI-28: the components do not always reconstruct the net. Hand the model the gap as
+    // a FACT so it cannot narrate the breakdown as complete — on Demo3 the gap is 64%+ of
+    // the figure, so a read that lists the parts without it is confidently wrong.
+    var rz = _wlResidual(c);
+    if (Math.abs(rz) >= 1) {
+      lines.push('IMPORTANT: those components do NOT add up to the out-of-balance — ' + amt(rz)
+        + ' is unexplained by them. Treat the breakdown as indicative, not complete. Name the largest'
+        + ' component as the driver if you cite one, but do NOT claim the parts sum to the net and do'
+        + ' NOT present the breakdown as a full explanation of the gap.');
+    }
     var pn = _wlOffsetNote(c); if (pn) lines.push(pn);   // top-tier process-quality observation
     var af = _wlAmortFact(c); if (af) lines.push(af);    // UI-20: large-carry-forward amortization advice (advise only)
     if (exposure === 'full') {
@@ -13642,12 +13657,24 @@
     return lines.join('\n');
   }
   // Every non-zero reconciliation component becomes a drill pill with its TOTAL on the
-  // face, so the pills are a COMPLETE decomposition that sums exactly to the company's
-  // out-of-balance — the same six-part variance calculation the account roll-forward and
-  // audit report show. Deterministic (not AI-gated): the breakdown is a fact, not a
+  // face — the same six-part variance calculation the account roll-forward and audit
+  // report show. Deterministic (not AI-gated): the breakdown is a fact, not a
   // recommendation. Carry-forward is set apart (the prior-period roll-in) and drills to
   // the prior period; each other component drills to its own source detail. Label maps
   // to the app name; face shows the exact signed amount.
+  //
+  // THE PILLS ARE NOT GUARANTEED TO SUM TO THE OUT-OF-BALANCE, and this comment used to
+  // claim they were "a COMPLETE decomposition that sums exactly to it" (UI-28). Measured
+  // 2026-08-18 on v6ui_raccountsummary at the latest period, one currency per company:
+  //   Demo1  Co 80002 and Co 80008 tie to 0.00 exactly
+  //   Demo3  Co 30001 out-of-balance 740,171.83 vs six parts -584,803.03 -> off 1,324,974.86
+  //          Co 30002 out-of-balance 774,323.53 vs six parts -711,982.29 -> off 1,486,305.82
+  // On both divergent rows EndofDay carries a large negative the out-of-balance does not
+  // absorb, and no sign flip reconciles it either, so this is NOT rounding or tolerance —
+  // it is 64%+ of the figure on screen. WHY EndofDay diverges is a reconciliation-model
+  // question and is NOT answered here; what is fixed is the claim. _wlResidual exposes
+  // the gap, the pill row prints it when it is material, and the AI facts state it, so
+  // the surface can no longer imply a precision it does not have.
   var _PILL_ORDER = [
     { name: 'Carry forward',       label: 'Carry-forward',   key: 'carryForward',        cf: true },
     { name: 'Transactions',        label: 'Transactions',    key: 'transactions' },
@@ -13656,13 +13683,33 @@
     { name: 'Unposted GL batches', label: 'Unposted GL batches', key: 'glBatches' },
     { name: 'End of Day',          label: 'End of Day',      key: 'endOfDay' }
   ];
+  // ONE producer for the gap between the out-of-balance and its six parts (UI-28). Both
+  // numbers come off the same v6ui_raccountsummary rows, so this is arithmetic, not a
+  // second dataset — which is exactly why a non-zero result is a finding rather than a
+  // tolerance. Returns a signed amount; callers decide what is material.
+  function _wlResidual(c) {
+    if (!c || !c.comp) return 0;
+    var parts = _COMPONENTS.reduce(function (s, k) { return s + (Number(c.comp[k.name]) || 0); }, 0);
+    return (Number(c.oob) || 0) - parts;
+  }
   function _wlRecPills(c) {
-    return _PILL_ORDER.filter(function (p) { return Math.abs((c.comp && c.comp[p.name]) || 0) >= 0.5; })
+    var pills = _PILL_ORDER.filter(function (p) { return Math.abs((c.comp && c.comp[p.name]) || 0) >= 0.5; })
       .map(function (p) {
         return '<button type="button" class="wl-recpill' + (p.cf ? ' wl-recpill-cf' : '') + '" data-acct-nav="preview" data-comp="' + p.key + '" data-co="' + esc(c.co)
           + '" title="' + (p.cf ? 'Carry-forward from the prior period — open it' : 'Open the ' + esc(p.name.toLowerCase()) + ' detail') + '">'
           + esc(p.label) + ' ' + esc(_wlExact(c.ccy, c.comp[p.name])) + ' <span aria-hidden="true">&rarr;</span></button>';
       }).join('');
+    // A gap goes ON SCREEN next to the parts it contradicts. Not a drill target — there is
+    // nothing to open, because the gap is unexplained by design until the model question
+    // behind it is answered. 1.00 floor keeps rounding dust off the card (Demo1 ties at
+    // 0.00; the deltas this exists for are six figures).
+    var resid = _wlResidual(c);
+    if (Math.abs(resid) >= 1) {
+      pills += '<span class="wl-recpill wl-recpill-resid" title="The six components above do not add up to this company&#39;s out-of-balance. '
+        + 'This is the unexplained remainder, not a rounding tolerance — treat the components as indicative, not a complete decomposition.">'
+        + 'Unexplained ' + esc(_wlExact(c.ccy, resid)) + '</span>';
+    }
+    return pills;
   }
   function _wlFillCauses(cases, exposure, sig, gen, canPost) {
     if (exposure === 'off') return;   // AI-tier gate: Off = no AI cause narration (cards keep their deterministic content)
