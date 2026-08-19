@@ -37,19 +37,46 @@
   // preamble (it tells the model which reference this list overrules) and any
   // [GUIDANCE, not for quoting: ...] segment. Showing either to an analyst would be
   // showing them the wiring.
-  function glossaryHtml() {
+  // The panel is titled "Terms on this page", and until 2026-08-19 it rendered the
+  // WHOLE glossary on every page that opted in — so Cardex Variance showed nine
+  // Transaction-Variance / Model-DMAAI terms and one that applied. Each entry now
+  // carries [ON=surface,...] and the page names its surface in data-help-glossary.
+  // ONE catalog, one page-scoped projection — never a second copy of the vocabulary.
+  //
+  // The tag is stripped before display. It is deliberately NOT stripped from the
+  // string handed to the AI (owner call 2026-08-19): a model reading "[ON=cardex]"
+  // is told which surface a term belongs to instead of having to infer it.
+  function glossaryHtml(surface) {
     var src = (window.RRV8 && window.RRV8.GLOSSARY) || '';
     var esc = function (t) {
       return String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     };
-    var items = [];
+    var items = [], untagged = [];
     src.split('\n').forEach(function (line) {
       if (line.indexOf('- ') !== 0) return;              // drops the preamble
-      var body = line.slice(2).replace(/\s*\[GUIDANCE[^\]]*\]\s*/g, '').trim();
+      var on = line.match(/\[ON=([^\]]*)\]/);
+      var body = line.slice(2)
+        .replace(/\s*\[GUIDANCE[^\]]*\]\s*/g, '')
+        .replace(/\s*\[ON=[^\]]*\]\s*/g, '')
+        .trim();
       var cut = body.indexOf(': ');
       if (cut < 0) return;
+      if (surface) {
+        if (!on) {
+          // Fail OPEN, but not silently. Hiding an authored term because someone
+          // forgot a tag is worse than showing one extra; showing every term on
+          // every page WITHOUT saying so is how this bug lived this long.
+          untagged.push(body.slice(0, cut));
+        } else if (on[1].split(',').map(function (s) { return s.trim().toLowerCase(); })
+                        .indexOf(surface) < 0) {
+          return;                                        // not a term on THIS page
+        }
+      }
       items.push('<dt>' + esc(body.slice(0, cut)) + '</dt><dd>' + esc(body.slice(cut + 2)) + '</dd>');
     });
+    if (untagged.length) {
+      try { console.warn('[help-sidebar] glossary entries with no [ON=] tag, so shown on every page: ' + untagged.join(' | ')); } catch (_) {}
+    }
     if (!items.length) return '<div class="help-gloss-empty">No terms defined for this page.</div>';
     return '<div class="help-gloss">'
       + '<p class="help-gloss-lede">What the words on this screen mean. These are RapidReconciler\u2019s'
@@ -106,7 +133,10 @@
     function show(el, on) { if (el) el.hidden = !on; }
     function openGlossary() {
       titleEl.textContent = 'Terms on this page';
-      glossEl.innerHTML = glossaryHtml();
+      // '1' (or an empty value) keeps the old show-everything behaviour for any page
+      // that has not declared a surface yet.
+      var gs = String(document.body.getAttribute('data-help-glossary') || '').trim().toLowerCase();
+      glossEl.innerHTML = glossaryHtml((gs && gs !== '1') ? gs : '');
       show(glossEl, true); show(frame, false);
       document.documentElement.classList.add('help-open');
       drawer.classList.add('is-open');
