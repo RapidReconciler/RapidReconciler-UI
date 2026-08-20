@@ -83,7 +83,7 @@ Full JWT payload shape:
 | `POST /inventory/reconciliation/history` | Item-wrapped filter arrays | Reconciliation header bar chart | **Live on test agent.** Spec: [reconciliation-history.md](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/specs/reconciliation-history.md). |
 | `POST /inventory/audit-detail` | Item-wrapped filter arrays | Audit Report Excel + PDF | **Live on test agent.** Spec: [audit-detail.md](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/specs/audit-detail.md). |
 | `POST /inventory/variance-component` | `{component, ...recon-filter}` | Preview modals for GL Batches / End of Day / Manual JEs / Cardex | **Live on test agent.** Spec: [variance-component-drilldown.md](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/specs/variance-component-drilldown.md). |
-| `POST /inventory/transactions` | bare-string filter arrays + paging | Transactions | Single bulk fetch (`pageSize: 10000`), client-side filter/recompute on chip clicks. Each row carries **`GLClass`** (doc-level, distinct `F4111.ilglpt` via `v8ui_reconcilingitems` OUTER APPLY &mdash; no fan-out, ~97% filled) as of **Services v8.0.2** &mdash; the analyzer resolves the DMAAI model per (Co&middot;OT&middot;DT&middot;GLClass). **Planned enrichment:** an `SDLNTY` (order line type) field per row &mdash; see [Order line type (SDLNTY)](#order-line-type-sdlnty--planned-row-enrichment) below. |
+| `POST /inventory/transactions` | bare-string filter arrays + paging | Transactions | Single bulk fetch (`pageSize: 10000`), client-side filter/recompute on chip clicks. Each row carries **`GLClass`** (doc-level, distinct `F4111.ilglpt` via `v8ui_reconcilingitems` OUTER APPLY &mdash; no fan-out, ~97% filled) as of **Services v8.0.2** &mdash; the analyzer resolves the DMAAI model per (Co&middot;OT&middot;DT&middot;GLClass). Rows also carry **`NonStockGLClass`** and **`NonStockLineTypes`** (dev jar rebuilt 2026-08-20; **not yet in a tagged Services release** &mdash; the running agent still reports `8.0.13`, which is the version that shipped *before* this change) &mdash; the same two attributes read off the ORDER LINE (`F4211` &cup; `F42119`) and narrowed to lines whose `F40205` inventory interface is `N`. A non-stock line writes no `F4111` row, so `GLClass` is blank on exactly those documents and the analyzer's DMAAI resolution collapses to a table of dashes; the order line is the fallback. The two are kept apart on purpose &mdash; a class that came off the order line AND resolves in the 4152 model table is a stock class shipped on a non-stock line, which the analyzer states in its verdict. |
 | `POST /inventory/transactions/details` | `{company, doc, type}` | Transactions per-row Export | **`type`, not `docType`** (Jackson gotcha). |
 | `POST /inventory/transactions/save-notes` | `{period, notes: [...]}` | Transactions batch-edit modal | Field names camelCase first-letter-lowercase. |
 | `POST /inventory/integrity` | `{report, take/skip/page/pageSize, reconciliationFilter}` | DMAAIs (preload), planned for Cardex Variance | Integrity report `0` is `v_integrity_jde_aais`. Whitelisted views only (`ALLOWED_VIEWS`, Services). **`report: 'v6ui_raccountsummary'`** serves the account roll-forward (GL+variance roll by account/period, all periods, JWT-scoped) for the Account Roll Forward page + Home inventory validation light. **`report: 'v8ui_dmaai_routes'`** (whitelisted in **Services v8.0.3**) serves the analyst DMAAI analyzer's model-vs-inventory **routing table** &mdash; wraps `v6_003_expanded_aais` with the F0901 account description (`GMDL01`), the flex-BU flag (blank AAI BU = branch-plant-derived), and the `base aai` 4152 model flag; one distinct per-company routing per row (single GL-class code, cost type broken out). Backed by DB `v8ui_dmaai_routes` (beta.60+). **Two consumers**: the Transaction Variance DMAAI analyzer (full routing set), and Home's analyst Data Health tab, which narrows the same payload to `tablenumber = 4152` for the always-visible model-table band &mdash; do not add a 4152-only endpoint, the filter is client-side. |
@@ -152,11 +152,29 @@ hit there is a routing variance to correct at the source, not an
 expected off-inventory posting. The check drives a grounding fact
 for the analyst AI note.
 
-**Status: specced, not wired live.** The check reads an `SDLNTY`
-field off each row and **degrades safe** &mdash; when no row carries
-`SDLNTY`, the fact never fires and makes no claim either way. The
-day the agent adds the field, the fact lights up with **no client
-change**.
+**Status: LIVE on the dev jar (rebuilt 2026-08-20; not yet tagged into a Services release).** `SDLNTY` is the distinct SET of
+order line types (F4211 &cup; F42119, collapsed by `OUTER APPLY` +
+`STRING_AGG` in `v8ui_reconcilingitems`) and now rides on every
+Transactions row. **The paragraphs below describe a blocker that was
+solved by exposing a SET rather than a single value; they are kept
+as the reasoning for that shape.**
+
+**The set is at ORDER grain, and most N-bearing orders are mixed.**
+Measured on Demo1 2026-08-20: 9 documents carry a pure `N`, 8 carry
+`N` alongside `S` or `W`, and all three rows of the co 80002
+"Non-Stock Sales Lines" card read `N, S` or `N, S, W`. So the
+client's non-stock fact fires its strong claim only on a pure `N`
+&mdash; a mixed order cannot support "GL-only is expected off
+inventory", because one of those lines did move inventory. Mixed
+orders get their own **inconclusive** fact naming the line types,
+and the "no type-N line in this slice" sentence is emitted only when
+no order in the slice carries one at all. Asserted by
+`Tools/test-nonstock-glclass.js`.
+
+The non-stock GL class problem was solved separately and IS live:
+see `NonStockGLClass` / `NonStockLineTypes` on the Transactions row
+above. That path narrows to interface `N` inside the view, so it
+does not depend on the client resolving a mixed set.
 
 **Why it isn't a live join yet.** `SDLNTY` lives in
 `F4211` / `F42119` at the **line** grain (PK includes `sdlnid`).

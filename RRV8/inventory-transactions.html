@@ -7060,9 +7060,16 @@
           inv = (byCombo[kBase + code] || []).filter(isInv);
           if (!inv.length) inv = (byCombo[kBase + '****'] || []).filter(isInv);
         }
+        // A combo whose class came off the ORDER LINE (non-stock) and STILL resolves in
+        // the 4152 model table is carrying a class that normally moves inventory. The
+        // model hit IS the test — a class with a cardex model account is by definition a
+        // stock class — so no second lookup and no hardcoded class list. Owner
+        // 2026-08-20: the analyst's question is why inventory is being shipped on a
+        // non-stock line, and the analyzer's job is to put it in front of them.
+        var stockOnNs = !!(c.ns && m);
         if (!inv.length) { out.push({ glCode: code, costType: '', modelTable: modelTable,
           modelAcct: _acctKey(m && m.parts, _mFlexBu, _mFlexSub), modelAcctDesc: _descrFor(_mFlexBu),
-          invDmaai: '', invAcct: '', invAcctDesc: '', acctMis: false }); return; }
+          invDmaai: '', invAcct: '', invAcctDesc: '', acctMis: false, stockOnNs: stockOnNs }); return; }
         inv.forEach(function (e) {
           // Compare the FULL account, EXCEPT when the BU is flex on either side —
           // the AAI's BU field was blank, so the branch plant IS the BU (it varies
@@ -7074,7 +7081,8 @@
           var acctMis = !!(mKey && eKey && mKey !== eKey);
           out.push({ glCode: code, costType: e.costType, modelTable: modelTable,
             modelAcct: mKey, modelAcctDesc: _descrFor(dropBu),
-            invDmaai: e.table, invAcct: e.acct, invAcctDesc: e.descr, acctMis: acctMis });
+            invDmaai: e.table, invAcct: e.acct, invAcctDesc: e.descr, acctMis: acctMis,
+            stockOnNs: stockOnNs });
         });
       });
       out.sort(function (a, b) {
@@ -7098,9 +7106,28 @@
       var co = String(r.CompanyNumber || '').trim();
       var ot = String(r.OrderType || r.OT || '').trim();
       var dt = String(r.DocType || r.DT || '').trim();
+      // GLClass is the DOCUMENT's distinct F4111.ilglpt — the cardex. A non-stock
+      // sales line writes no F4111 row at all, so it arrives blank, and a blank class
+      // takes the whole DMAAI resolution down with it: the 4152 model lookup misses,
+      // the inventory AAI lookup misses, and the analyzer paints a table of dashes
+      // under "no account comparison ran" (seen on Demo1 co 80002, Non-Stock Sales
+      // Lines). The ORDER LINE carries a class regardless, so it is the fallback
+      // (owner ruling 2026-08-20) — narrowed agent-side to the lines whose F40205
+      // inventory interface is 'N', which is what stops a mixed order's stock lines
+      // from being read as the non-stock finding.
+      //
+      // The two are NOT coalesced at the source. `ns` records that this combo's class
+      // came off the order line, because that is what makes the next question askable:
+      // a class that ALSO resolves in the 4152 model table is a normally-stock class
+      // shipped on a non-stock line.
       var gc = String(r.GLClass || '').trim();
+      var ns = false, nsTypes = '';
+      if (!gc) {
+        var og = String(r.NonStockGLClass || '').trim();
+        if (og) { gc = og; ns = true; nsTypes = String(r.NonStockLineTypes || '').trim(); }
+      }
       var k = co + '|' + ot + '|' + dt + '|' + gc;
-      var e = m[k] || (m[k] = { co: co, ot: ot, dt: dt, gc: gc, rows: 0, variance: 0, cx: {}, gl: {} });
+      var e = m[k] || (m[k] = { co: co, ot: ot, dt: dt, gc: gc, ns: ns, nsTypes: nsTypes, rows: 0, variance: 0, cx: {}, gl: {} });
       e.rows++; e.variance += Number(r.Variance) || 0;
       // Resolution signal straight from the rows: which account the CARDEX relieved
       // vs where the GL posted, for this combo.
@@ -7189,7 +7216,8 @@
       var rows = (c.modelRows && c.modelRows.length) ? c.modelRows : [{ glCode: (c.gc || ''), costType: '', modelTable: '', modelAcct: '', modelAcctDesc: '', invDmaai: '', invAcct: '', invAcctDesc: '', acctMis: false }];
       rows.forEach(function (e) {
         var r = { co: c.co || '', ot: c.ot || '', dt: c.dt || '', costType: e.costType || '', glCode: e.glCode || '',
-          modelTable: e.modelTable || '', modelAcct: e.modelAcct || '', modelAcctDesc: e.modelAcctDesc || '', invDmaai: e.invDmaai || '', invAcct: e.invAcct || '', invAcctDesc: e.invAcctDesc || '', acctMis: !!e.acctMis };
+          modelTable: e.modelTable || '', modelAcct: e.modelAcct || '', modelAcctDesc: e.modelAcctDesc || '', invDmaai: e.invDmaai || '', invAcct: e.invAcct || '', invAcctDesc: e.invAcctDesc || '', acctMis: !!e.acctMis,
+          stockOnNs: !!e.stockOnNs, nsTypes: c.nsTypes || '' };
         var sig = [r.co, r.ot, r.dt, r.costType, r.glCode, r.modelTable, r.modelAcct, r.invDmaai, r.invAcct].join('');
         if (!seen[sig]) { seen[sig] = 1; list.push(r); }
       });
@@ -7220,9 +7248,25 @@
         + ' no inventory AAI in the reconciliation set and ' + (nSkip === 1 ? 'was' : 'were')
         + ' not compared — read those blanks as "not checked", not "no mapping".'
       : '';
+    // The non-stock question, stated only when it is TRUE of the rows in front of the
+    // analyst (owner 2026-08-20). A class that resolves in the 4152 model table has a
+    // cardex model account, which is what makes it a stock class — so this fires on the
+    // model hit itself, never on a class name. Silent when the order-line classes have no
+    // model, because then there is nothing anomalous to ask about.
+    var nsRows = list.filter(function (r) { return r.stockOnNs; });
+    var nsCls = {}, nsLty = {};
+    nsRows.forEach(function (r) { if (r.glCode) nsCls[r.glCode] = 1; if (r.nsTypes) String(r.nsTypes).split(',').forEach(function (t) { t = t.trim(); if (t) nsLty[t] = 1; }); });
+    var nsClsL = Object.keys(nsCls).sort(), nsLtyL = Object.keys(nsLty).sort();
+    var nsNote = nsClsL.length
+      ? ' GL class ' + nsClsL.join(', ') + ' ' + (nsClsL.length === 1 ? 'carries' : 'carry')
+        + ' a cardex model account, so ' + (nsClsL.length === 1 ? 'it is' : 'they are')
+        + ' a stock class shipped on a non-stock sales line'
+        + (nsLtyL.length ? ' (line type ' + nsLtyL.join(', ') + ')' : '')
+        + ' — worth asking why inventory is moving on a line that posts no cardex.'
+      : '';
     if (nMis) {
       return { state: 'mismatch', list: list, nMis: nMis,
-        head: nMis + ' of ' + nChk + ' checked inventory DMAAI' + cP + ' ' + _txVerb(nMis, 'resolves', 'resolve') + ' to a different account than the cardex model:' + skipNote,
+        head: nMis + ' of ' + nChk + ' checked inventory DMAAI' + cP + ' ' + _txVerb(nMis, 'resolves', 'resolve') + ' to a different account than the cardex model:' + skipNote + nsNote,
         chip: nMis + ' of ' + nChk + ' DMAAI' + cP + ' off the cardex model' };
     }
     // Nothing compared at all. Not a clean — there is no evidence either way, and saying
@@ -7230,12 +7274,12 @@
     if (!nChk) {
       return { state: 'clean', list: list, nMis: 0,
         head: 'No account comparison ran: none of these ' + nAll + ' routing' + (nAll === 1 ? '' : 's')
-          + ' resolve to an inventory AAI in the reconciliation set. Mapping is NOT ruled out here:',
+          + ' resolve to an inventory AAI in the reconciliation set. Mapping is NOT ruled out here:' + nsNote,
         chip: '0 of ' + nAll + ' checked' };
     }
     return { state: 'clean', list: list, nMis: 0,
       head: (nSkip ? nChk + ' of ' + nAll + ' routings checked' : nChk + ' inventory DMAAI' + cP + ' checked')
-        + ' — no account mismatch. This rules out mapping only; it does not explain the variance:' + skipNote,
+        + ' — no account mismatch. This rules out mapping only; it does not explain the variance:' + skipNote + nsNote,
       chip: (nSkip ? nChk + ' of ' + nAll + ' checked' : nChk + ' DMAAI' + cP + ' checked') + ', none off the model' };
   }
   // Draws what _txCombosSummary determined. Callers that already hold a summary
@@ -7980,7 +8024,7 @@
     // UI-35: non-stock line-type screen. SDLNTY (order line type) rides IN on the row
     // when the agent has joined F4211/F42119 (spec: RRV8/API.md). Absent -> sawLineType
     // stays false and the fact never fires (degrade safe; no negative claim either).
-    var nonStockByKey = {}, sawLineType = false;
+    var nonStockByKey = {}, nonStockMixedByKey = {}, sawLineType = false;
     rows.forEach(function (r) {
       var v = Number(r.Variance) || 0; net += v; gross += Math.abs(v);
       var p = String(r.PeriodEnds || '').slice(0, 10); if (p) perSet[p] = 1;
@@ -8004,11 +8048,27 @@
       // type is N (non-stock / surcharge). These reconciling-items rows are all on an
       // inventory account (LongAccount from the inv account list), so a type-N GL-only
       // hit here is a routing variance to correct at the source. Group per document.
+      //
+      // SDLNTY IS A SET AT ORDER GRAIN, AND MOST N-BEARING ORDERS ARE MIXED. Measured on
+      // Demo1 2026-08-20: 9 documents carry a pure 'N', and 8 carry N alongside S or W.
+      // All three rows on co 80002 / Jul 2025 / "Non-Stock Sales Lines" — the card this
+      // check was written for — are 'N, S' or 'N, S, W'. So an equality test on 'N' is
+      // right (a mixed order cannot support "GL-only is expected off inventory": one of
+      // those lines DID move inventory) but it is not the whole answer, and the else
+      // branch below used to turn its silence into "no non-stock line in this slice" —
+      // a negative finding, on the card that is entirely about non-stock lines, fed
+      // straight into an AI prompt. Mixed orders are counted separately and reported as
+      // what they are: the order carries a non-stock line, and the document-grain row
+      // cannot say whether THIS relief came off it.
       var lnty = String(r.SDLNTY == null ? '' : r.SDLNTY).trim().toUpperCase();
       if (lnty) sawLineType = true;
-      if (lnty === 'N' && cardex === 0 && ledger !== 0) {
+      var toks = lnty ? lnty.split(',').map(function (t) { return t.trim(); }).filter(function (t) { return t; }) : [];
+      var pureN = toks.length > 0 && toks.every(function (t) { return t === 'N'; });
+      var anyN  = toks.indexOf('N') >= 0;
+      if (anyN && cardex === 0 && ledger !== 0) {
         var nk = String(r.CompanyNumber || '').trim() + '|' + ot + '|' + String(r.OrderNumber || '').trim() + '|' + String(r.DocNumber || '').trim();
-        var ns = nonStockByKey[nk] || (nonStockByKey[nk] = { co: String(r.CompanyNumber || '').trim(), ot: ot, dt: dt, order: String(r.OrderNumber || '').trim(), doc: String(r.DocNumber || '').trim(), acct: a, variance: 0, count: 0 });
+        var bucket = pureN ? nonStockByKey : nonStockMixedByKey;
+        var ns = bucket[nk] || (bucket[nk] = { co: String(r.CompanyNumber || '').trim(), ot: ot, dt: dt, order: String(r.OrderNumber || '').trim(), doc: String(r.DocNumber || '').trim(), acct: a, lineTypes: lnty, variance: 0, count: 0 });
         ns.variance += v; ns.count++;
       }
     });
@@ -8017,6 +8077,9 @@
     }).sort(function (a, b) { return Math.abs(b.variance) - Math.abs(a.variance); });
     var nonStock = Object.keys(nonStockByKey).map(function (nk) {
       var n = nonStockByKey[nk]; n.variance = Math.round(n.variance * 100) / 100; return n;
+    }).sort(function (a, b) { return Math.abs(b.variance) - Math.abs(a.variance); });
+    var nonStockMixed = Object.keys(nonStockMixedByKey).map(function (nk) {
+      var n = nonStockMixedByKey[nk]; n.variance = Math.round(n.variance * 100) / 100; return n;
     }).sort(function (a, b) { return Math.abs(b.variance) - Math.abs(a.variance); });
     var types = Object.keys(byType).map(function (k) {
       var g = byType[k], cx = Object.keys(g.cx), gl = Object.keys(g.gl);
@@ -8031,7 +8094,7 @@
     // manufactured from a lookup that never happened, fed straight into an AI prompt
     // whose grounding treats these facts as truth.
     var sawDupIndex = (typeof _duplicateSalesIndex !== 'undefined' && _duplicateSalesIndex !== null);
-    return { rows: rows.length, net: Math.round(net * 100) / 100, gross: Math.round(gross * 100) / 100, types: types, periods: Object.keys(perSet).sort(), homogeneous: types.length === 1, dupSales: dupSales, nonStock: nonStock, sawLineType: sawLineType, sawDupIndex: sawDupIndex };
+    return { rows: rows.length, net: Math.round(net * 100) / 100, gross: Math.round(gross * 100) / 100, types: types, periods: Object.keys(perSet).sort(), homogeneous: types.length === 1, dupSales: dupSales, nonStock: nonStock, nonStockMixed: nonStockMixed, sawLineType: sawLineType, sawDupIndex: sawDupIndex };
   }
   function _txvFingerprintText(fp) {
     var L = [];
@@ -8060,8 +8123,15 @@
         fp.nonStock.forEach(function (n) {
           L.push('  - Company ' + (n.co || '?') + ', order ' + (n.order || '?') + ' (' + (n.ot || '—') + '/' + (n.dt || '—') + '), doc ' + (n.doc || '?') + (n.acct ? ', account ' + n.acct : '') + ': variance ' + _txMoney(n.variance) + ' on a type-N line.');
         });
-      } else {
-        L.push('Non-stock line check: no non-stock (type N) GL-only line in this slice.');
+      }
+      if (fp.nonStockMixed && fp.nonStockMixed.length) {
+        L.push('NON-STOCK LINE CHECK, INCONCLUSIVE on ' + fp.nonStockMixed.length + ' document(s): the ORDER carries a type-N line alongside stock lines, and SDLNTY is an order-grain set, so it cannot say whether THIS document relieved the non-stock line. Do not state that these are non-stock relief, and do not state that they are not:');
+        fp.nonStockMixed.forEach(function (n) {
+          L.push('  - Company ' + (n.co || '?') + ', order ' + (n.order || '?') + ' (' + (n.ot || '—') + '/' + (n.dt || '—') + '), doc ' + (n.doc || '?') + (n.acct ? ', account ' + n.acct : '') + ': variance ' + _txMoney(n.variance) + ', order line types ' + (n.lineTypes || '?') + '.');
+        });
+      }
+      if (!(fp.nonStock && fp.nonStock.length) && !(fp.nonStockMixed && fp.nonStockMixed.length)) {
+        L.push('Non-stock line check: no order in this slice carries a type-N line.');
       }
     }
     L.push('By transaction type (Type · OrderType · DocType):');
