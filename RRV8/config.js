@@ -107,11 +107,6 @@ window.RR_TEST_AGENT_AREAS = [
   // flags for the analyst Transaction-Variance analyzer + Home txv card diagnosis.
   // Read the same view at two depths (compact card line + full details analyzer).
   'inventory/integrity/dmaai-resolve',
-  // Sales 4240/4220 net-zero PAIR test, one row per routing, CROSS-COMPANY (the
-  // Model DMAAI Review page's routing-pair card). No company parameter by design —
-  // the endpoint scopes from the JWT and computes its summary over the full scope,
-  // because a per-company read is what lets a collapsed routing go unnoticed.
-  'inventory/integrity/dmaai-pairs',
   // v359 migration — endpoints absorbed by the test agent in order:
   //   inventory/status                          2026-05-24  (boot-time filter universe + validation light)
   //   inventory/reconciliation-filtered         2026-05-24  (Recon summary + barChart)
