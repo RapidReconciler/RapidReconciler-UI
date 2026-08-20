@@ -1754,6 +1754,45 @@ Entries labeled "flex" in the Account column indicate Flexible Accounting is act
 
 ---
 
+### 6.9 Non-stock sales lines: where the GL class comes from when there is no cardex
+
+**A non-stock sales line writes no F4111 row, so it has no GL class from the cardex.**
+That single blank propagates: the 4152 model lookup is keyed on (company, GL class) and
+misses, the inventory AAI lookup misses, and the analyzer has nothing to compare. On the
+screen this reads as a routing table of dashes under "No account comparison ran". The
+header is honest -- nothing WAS compared -- but the reason has nothing to do with the AAIs.
+
+**Read the GL class off the order line instead.** `sdglc` on the sales order line
+(`F4211` open, `F42119` history) carries a class whether or not inventory moved. Narrow
+to the non-stock lines before you use it, or a mixed order's stock lines contaminate the
+answer.
+
+**"Non-stock" is F40205 inventory interface `N`, NOT line type `N`.** These are two
+different fields and confusing them is the easy mistake here:
+
+| Field | Where | What it means |
+|---|---|---|
+| `sdlnty` | F4211 / F42119 | the order LINE TYPE code -- `N`, `S`, `W`, `IC`, `CC`, ... |
+| `lfivi` | F40205, keyed on `lflnty` | that line type's INVENTORY INTERFACE -- `Y`/`A`/`B`/`D`/`N` |
+
+Measured on Demo1 2026-08-20: line types `IC` and `CC` both carry interface `N`. So a
+genuinely non-stock line frequently is not line type `N`, and filtering on the line-type
+code alone silently drops most of the population. Join F40205 and filter on `lfivi = 'N'`.
+
+**The finding is usually not a mapping error.** Once the class resolves, the inventory
+AAI (4240 for sales) and the 4152 model normally agree -- so the account comparison comes
+back clean. The real question is upstream: **a GL class that HAS a 4152 model account is a
+stock class, and a stock class on a non-stock line means inventory value moved on a line
+that posts no cardex.** Ask why. On Demo1 co 80002 the classes are `BUYP` and `SWIT`,
+both of which carry a 4152 model.
+
+**`SDLNTY` on a reconciling row is a SET, at ORDER grain.** `rcardexledgercompare2` is
+doc-grain and carries no line id, so the line types come up as a comma-joined distinct set
+(`N, S`). Measured on Demo1: 9 documents carry a pure `N` and 8 carry `N` alongside stock
+lines. **A mixed order cannot support "GL-only is expected off inventory"** -- one of those
+lines did move inventory -- and it equally cannot support the opposite claim. Treat mixed
+as inconclusive and say so; do not let silence become a finding of absence.
+
 ## Section 7: Step-by-Step Analysis Procedure
 
 Use this procedure for every Transaction Detail report:
