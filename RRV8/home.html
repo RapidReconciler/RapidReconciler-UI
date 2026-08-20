@@ -6266,7 +6266,26 @@
   function _exclKey() { var a = (typeof activeDb === 'function') ? activeDb() : null; return 'rrv8.excl.v1.' + MODE + '.' + ((a && a.n) || '_'); }
   function _loadExcluded() { try { var raw = localStorage.getItem(_exclKey()); _excludedCos = raw ? (JSON.parse(raw) || {}) : {}; } catch (_) { _excludedCos = {}; } }
   function _saveExcluded() { try { if (Object.keys(_excludedCos).length) localStorage.setItem(_exclKey(), JSON.stringify(_excludedCos)); else localStorage.removeItem(_exclKey()); } catch (_) {} }
-  function _isExcludedCo(co) { return !!_excludedCos[String(co == null ? '' : co).trim()]; }
+  // THE EXCLUSION SET IS THE ACCOUNTANT'S, AND IT USED TO REACH THE ANALYST INVISIBLY.
+  // It is a multi-company what-if: exclude a company, see what the rest look like. The
+  // analyst view is single-select by design -- the picked company IS the scope -- and it
+  // hides both the "Show all" control and the what-if banner (renderWhatifBanner returns
+  // early for analyst, "the multi-company Show all isn't a real path here"). So an
+  // exclusion set on the accountant view stayed active on the analyst view with NOTHING
+  // on screen to say so and NO control to clear it. The key is per database
+  // (rrv8.excl.v1.<mode>.<db>), which is why the symptom looked database-specific.
+  //
+  // The damage was not just a hidden filter. _briefData drops excluded companies from
+  // d.companies, and thirteen call sites hand that narrowed list to _ensureAnalystSolo,
+  // which re-resolves and RE-PERSISTS when it cannot find the current pick in the list.
+  // So picking an excluded company was actively erased: the pill offered it (it reads the
+  // unfiltered _fullCosFromRows), the click stored it and reloaded, and the reload wrote
+  // the fallback company back over it. Reported on Demo1 as "switching 80002 to 80008 just
+  // shows 80002 again", with nothing logged.
+  function _isExcludedCo(co) {
+    if ((typeof _viewRole === 'function') && _viewRole() === 'analyst') return false;
+    return !!_excludedCos[String(co == null ? '' : co).trim()];
+  }
   function _anyExcluded() { return Object.keys(_excludedCos).length > 0; }
   // The full authorized company set (distinct, numeric-sorted) from _invRows —
   // the pill lists ALL of them; _briefData shows only the non-excluded ones.
@@ -11600,7 +11619,17 @@
   // SINGLE-SELECT: always resolve to exactly one company (default the first in
   // scope), so the whole analyst view is single-currency — no mixed-currency noise.
   function _ensureAnalystSolo(cos) {
-    var list = (cos || []).map(function (c) { return String(c.co); }).filter(Boolean);
+    // THE AUTHORITY IS THE FULL COMPANY SET, NOT THE CALLER'S LIST. Thirteen of the
+    // fourteen call sites pass `d.companies`, which _briefData has already narrowed --
+    // by the what-if exclusion, and by whatever else a caller scoped before it got here.
+    // Resolving against a narrowed list meant "the analyst's pick is not in this list"
+    // was read as "the pick is stale", so it was replaced by the fallback AND written to
+    // localStorage over the real one. One narrowed render was enough to erase a pick that
+    // was still perfectly valid. The full set from _invRows is the only list that can
+    // answer "is this company still available to this analyst".
+    var full = (typeof _fullCosFromRows === 'function') ? _fullCosFromRows() : [];
+    var list = full.length ? full.slice()
+                           : (cos || []).map(function (c) { return String(c.co); }).filter(Boolean);
     var _db = (activeDb() && activeDb().n) || '_';
     if (!_analystSoloCo || list.indexOf(String(_analystSoloCo)) < 0) {
       // Restore the analyst's picked company ONLY within the same sign-in session:
@@ -11616,7 +11645,23 @@
         savedSess = localStorage.getItem('rrv8.analystCompany.' + _db + '.s') || '';
         curSess   = localStorage.getItem('rrv8.sessionStart') || '';
       } catch (_) {}
-      _analystSoloCo = (saved && savedSess && savedSess === curSess && list.indexOf(saved) >= 0)
+      // THE STAMP IS COMPARED, NOT REQUIRED TO EXIST. `savedSess &&` used to sit in
+      // this condition, and it made the company switcher a no-op for the whole dev
+      // stack: rrv8.sessionStart is written ONLY by login.html and sso-landing.html,
+      // and the long-lived dev token never goes through either — sidebar.js says so
+      // out loud ("the dev token has no sessionStart and stays exempt from the idle
+      // timeout"). So the switch stamped an EMPTY string, the truthiness test failed
+      // on reload, and the pick fell through to the smallest company number every
+      // time. On Demo1 that is 80002, which is why switching to 80008 landed back on
+      // 80002 with nothing in the console to say why.
+      //
+      // Comparing the two values directly keeps all three intended behaviours and
+      // adds the missing one: same session -> restore; a FRESH sign-in writes a new
+      // sessionStart -> mismatch -> land on the smallest company; sign-out removes it
+      // -> mismatch -> same reset. No session concept at all (dev token) -> '' === ''
+      // -> the analyst's pick is honoured, which is the only sane reading of "same
+      // session" when there are no sessions.
+      _analystSoloCo = (saved && savedSess === curSess && list.indexOf(saved) >= 0)
         ? saved
         : (list.slice().sort(function (a, b) { return a.localeCompare(b, undefined, { numeric: true }); })[0] || null);
     }
