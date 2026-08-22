@@ -179,7 +179,7 @@ container drilling.
 > the `.ispac` (via `OPENROWSET(BULK …)` on the box) + provision an SSISDB
 > **environment** (the per-customer config, secrets encrypted in the catalog,
 > the connection-string/password split) + run via `catalog.create_execution`.
-> Catalog mutations reject SQL auth (Msg 27123) and SQL 2017 has no Entra, so
+> Catalog mutations reject SQL auth (Msg 27123) and a SQL 2019 engine has no Entra, so
 > VALC routes them through a SQL Agent T-SQL job that runs under the Agent's
 > Windows account (member of SSISDB `ssis_admin`) — durable named steps on the
 > per-DB standard job for the secret-free ops (audit trail), a transient job for

@@ -247,7 +247,7 @@ Built + **verified end-to-end on the dev catalog** (db 21 / `RapidReconciler_Ins
 - **Deploy model changed** from the planned "JDBC `setBytes` with resolved SQL
   creds" to a **SQL Agent T-SQL job** — because SSISDB catalog *mutations*
   (`deploy_project`, `create_environment`, `create_execution`, …) **reject SQL
-  Server Authentication** (Msg 27123), and SQL 2017 (the floor) has no Entra
+  Server Authentication** (Msg 27123), and SQL 2019 (the engine floor) has no Entra
   auth. The job step runs under the Agent's Windows account; `rruser` only
   creates+starts the job. Full design + the service-account question:
   [`ssis-deploy-service-account.md`](ssis-deploy-service-account.md). Owner

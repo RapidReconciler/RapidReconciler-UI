@@ -37,7 +37,7 @@ Windows-principal job). They were **orchestration** failures.
    `DeployExecutionController` + `phase3-agent-executor.md`.
 2. **Catalog mutations reject SQL auth (Msg 27123).** `rruser` is even an
    `ssis_admin` and still can't call `create_execution` / `stop_operation` — it's
-   the auth *scheme*. SQL 2017 floor ⇒ no Entra ⇒ a **classic Windows principal**
+   the auth *scheme*. SQL 2019 engine floor ⇒ no Entra ⇒ a **classic Windows principal**
    must run every catalog mutation.
 3. **The agent is also `rruser` (SQL auth).** So it can't call the catalog
    directly either. The **SQL Agent job is the unavoidable Windows-principal

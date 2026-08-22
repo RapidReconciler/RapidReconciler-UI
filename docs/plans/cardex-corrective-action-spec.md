@@ -8,7 +8,7 @@ This spec turns the mockup into three buildable pieces:
 2. **`radjustledger`** &mdash; a before-image audit table that makes beginning-balance edits reversible.
 3. **`usp6_maint_set_beginning_balance`** (apply) and **`usp6_maint_undo_beginning_balance`** (undo) &mdash; one reversible primitive that replaces all three legacy Re-Roll options.
 
-All SQL targets **compat level 140 (SQL 2017)** per `feedback_sql_compat_floor` (floor raised 2026-06-06; required for V8). The shipped `usp8_*` build happens to be compat-100-clean already, so no rework — but new SQL may now use `CONCAT_WS`, `STRING_SPLIT`/`STRING_AGG`, `TRIM`, `IIF`, `TRY_CAST`, `OFFSET/FETCH`, JSON, `CREATE OR ALTER`, etc. (avoid only compat-150+/SQL-2019+ features). Canonical rules in `project_cardex_netting_rules`.
+All SQL targets **compat level 140** (engine floor SQL 2019; the level is pinned at 140 on purpose) per `feedback_sql_compat_floor` (floor raised 2026-06-06; required for V8). The shipped `usp8_*` build happens to be compat-100-clean already, so no rework — but new SQL may now use `CONCAT_WS`, `STRING_SPLIT`/`STRING_AGG`, `TRIM`, `IIF`, `TRY_CAST`, `OFFSET/FETCH`, JSON, `CREATE OR ALTER`, etc. (avoid only the SQL 2022 constructs listed in the workspace `CLAUDE.md` floor section). Canonical rules in `project_cardex_netting_rules`.
 
 ---
 

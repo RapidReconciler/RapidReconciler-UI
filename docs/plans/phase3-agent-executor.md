@@ -157,7 +157,7 @@ catalog `deploy_project` step is **unchanged** — it BULK-reads a local path. T
 The env-build writes the **JDE source password + `rruser` password** into the
 catalog environment's sensitive variables. Two hard constraints (verified s27,
 `ssis-deploy-service-account.md` §1): catalog mutations **reject SQL auth**
-(Msg 27123) → a **Windows principal** must run them; and SQL 2017 (the floor)
+(Msg 27123) → a **Windows principal** must run them; and SQL 2019 (the engine floor)
 has **no Entra** → that principal authenticates by the *process's* Windows token.
 So the env-build needs a Windows-principal executor **and** secret hygiene.
 Today (dev) it's the deliberate-transient `runCatalogJob` (create-run-**delete**
@@ -178,7 +178,7 @@ channel; the agent embeds them in the transient job; the job is deleted after.
 
 - **Pros:** **no new Windows account** — reuses the SQL-Agent-account
   membership the install already requires; identical T-SQL to what's proven;
-  smallest customer-provisioning ask; works on SQL 2017+.
+  smallest customer-provisioning ask; works on SQL 2019+.
 - **Cons:** the passwords briefly exist in `msdb.sysjobsteps.command` (mitigated
   by immediate delete — the change is still in `catalog.operations`); the
   transient-job **flicker** the owner disliked for shared-enterprise DBAs
