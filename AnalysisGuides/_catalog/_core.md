@@ -75,3 +75,24 @@ Applies: topic:analyst, role:accountant
 ```grounding
 - RR IS A UTILITY, NOT THE BOOK OF RECORD: JDE is the system of record. RR surfaces the gap, explains it, and drives the source fix or the correcting entry — it does not post to JDE, hold the ledger, gate a close, or enforce attestation. Fixes land at the source (JDE / the operation) or as a journal entry the accountant posts in JDE.
 ```
+
+## INV-5 — "Current" means the most recent two loaded periods
+
+Owner ruling 2026-08-20, raised to a KB standard definition on his instruction:
+**"current" is the most recent TWO periods in the loaded window, not one.** It was
+previously written down only as an AI-reasoning window (memory
+`project_current_two_periods_principle`); it is now the platform's definition of the
+word, so every surface, guide, and generated catalog uses the same one.
+
+Two periods, not one, because a single period cannot show recurrence. An analyst
+looking at one month sees an amount; looking at the two most recent sees whether the
+amount is a one-off or a pattern, which is what decides between a correcting entry and
+a source fix. Note the periods are whatever the DB actually loaded, in its own fiscal
+calendar — they are not necessarily month-ends and not necessarily adjacent on a
+calendar (Demo1's two most recent are `2025-08-28` and `2025-07-31`).
+
+Applies: all
+
+```grounding
+- "CURRENT" MEANS THE MOST RECENT TWO LOADED PERIODS, not one. Read and compare both when judging materiality or recurrence: one period gives an amount, two give a trend, and the trend is what separates a one-off correcting entry from a source fix worth preventing. Use the periods the database actually loaded (they are fiscal, not necessarily month-ends), and say which two you used.
+```
