@@ -28,7 +28,7 @@ resolved `rruser` SQL creds" approach:
 - **It is the auth *scheme*, not permissions.** `rruser` is **already a member
   of the SSISDB `ssis_admin` role** — it has every needed permission and still
   can't run a catalog mutation, because it authenticates with SQL auth.
-- **SQL 2017 is the product floor → no Entra/Microsoft-Entra SQL auth** (that
+- **SQL 2019 is the product engine floor → no Entra/Microsoft-Entra SQL auth** (that
   arrived in SQL 2022). So the deploy principal must be a **classic Windows
   account** (domain or local), authenticated by the *process running as it*
   (Kerberos/NTLM). You cannot pass a Windows username+password in a SQL
@@ -88,7 +88,7 @@ Msg 27123 satisfied.
   `OPENROWSET(BULK '<path>', SINGLE_BLOB)` — the file must sit on a path the
   **SQL Server / Agent service account** can read (in prod the on-box agent
   drops it there; in dev it's the same box). Needs `bulkadmin` (§2).
-- **Pros:** works on **SQL 2017+**, **no Entra**, **no new login to
+- **Pros:** works on **SQL 2019+**, **no Entra**, **no new login to
   authenticate as** from VALC; reuses the existing "SSIS runs under SQL Agent"
   model a junior already knows; least customer friction (one `ALTER ROLE`
   scripted into the install — grant the Agent account `ssis_admin`).
@@ -121,7 +121,7 @@ agent-executor**.
 
 ### Why not "just store a Windows cred in topology and pass it"
 
-Classic Windows auth (SQL 2017's only non-SQL option) has **no connection-string
+Classic Windows auth (a SQL 2019 engine's only non-SQL option) has **no connection-string
 username/password** — authentication is by the process's Windows token. So a
 stored Windows credential can only be *used* by launching the process as that
 account (service logon / `runas`), which is Option B's agent-logon model, or by
@@ -133,7 +133,7 @@ does not enable VALC to connect as it over JDBC/sqlcmd.
 
 ## 5. Recommendation
 
-**Option A (SQL Agent T-SQL job step).** It's proven, portable to the SQL 2017
+**Option A (SQL Agent T-SQL job step).** It's proven, portable to the SQL 2019
 floor, needs no Entra and no new account (one scripted `ALTER ROLE ssis_admin
 ADD MEMBER [<Agent service account>]`), and reuses the SQL-Agent model the
 fleet already runs the load under — the lowest-friction, most junior-legible

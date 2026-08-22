@@ -677,17 +677,20 @@ complete** &mdash; until then it&rsquo;s frozen, not the dev workflow.
   accreted dev-time hacks. Saved as
   [`feedback_v8_agent_first`](../../../.claude/projects/C--source-repos-RapidReconciler-UI/memory/feedback_v8_agent_first.md).
 
-### SQL compat floor: SQL 2017 (compat 140) for V8
+### Engine floor SQL 2019; compat level pinned at 140 for V8
 
 Every `.sql` file under `RRV8/sprocs/`, `RRV8/views/`, and
 `RRV8/scripts/` &mdash; plus inline SQL in capture scripts and any
-sproc the agent calls &mdash; must run at **compat level 140
-(SQL Server 2017)**. Raised from compat 100 on 2026-06-06: this is a
-**hard requirement for V8**. The V8 install + every upgrade runs
+sproc the agent calls &mdash; must run at **compat level 140**. Two different
+numbers live here and conflating them is the mistake: the supported
+**engine** floor is **SQL Server 2019** (owner ruling 2026-08-21), while
+the **compatibility level** every database is pinned to is **140**, on
+purpose, so the optimizer behaves identically whatever engine the
+customer bought. The V8 install + every upgrade runs
 `ALTER DATABASE ... SET COMPATIBILITY_LEVEL = 140`, so the
 migrated-from-2008 case (which used to keep a stale low compat) no
-longer applies &mdash; every V8 customer instance is SQL 2017+ and at
-compat 140. Bump the dev DB `RapidReconciler_Dev` to compat 140 so it
+longer applies. A 2022 engine pinned to 140 is the normal, tested
+configuration. Bump the dev DB `RapidReconciler_Dev` to compat 140 so it
 keeps catching violations against the new floor.
 
 **Now allowed** (use freely; the old compat-100 workarounds are no
@@ -698,9 +701,19 @@ longer needed): `STRING_SPLIT`, `STRING_AGG`, `TRIM`,
 `FOR JSON`), `CREATE OR ALTER`, `DROP ... IF EXISTS`,
 `SESSION_CONTEXT()`.
 
-**Still avoid** (compat 150+ / SQL 2019+, above the floor):
+**Still avoid** (all of these are **SQL 2022** features, above the
+pinned level of 140 &mdash; not above the SQL 2019 engine floor):
 `GREATEST`/`LEAST`, `GENERATE_SERIES`, `STRING_SPLIT(..., enable_ordinal)`,
 `DATE_BUCKET`, native `json` data type, `APPROX_PERCENTILE_*`.
+
+Measured 2026-08-22 on a real 2019 engine: `GREATEST`, `LEAST` and
+`DATE_BUCKET` are rejected **at CREATE time** (Msg 195) and 3-argument
+`STRING_SPLIT` with Msg 8144, so a dacpac publish at the floor catches
+them on its own. **`GENERATE_SERIES` does not behave that way** &mdash;
+it is table-valued, deferred name resolution lets it CREATE cleanly, and
+it fails only when the procedure runs (Msg 208). The source grep in
+`RapidReconciler-DB/Tools/check_compat_floor.py` is the only gate that
+catches that class.
 
 Full table + reasoning in
 [`feedback_sql_compat_floor`](../../../.claude/projects/C--source-repos-RapidReconciler-UI/memory/feedback_sql_compat_floor.md).

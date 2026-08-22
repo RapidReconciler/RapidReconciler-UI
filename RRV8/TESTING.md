@@ -111,18 +111,20 @@ Catches plumbing language leaking into user-visible strings.
 ### 5. SQL compat-140 floor
 
 Catches modern T-SQL syntax that doesn&rsquo;t belong in the
-`RRV8/sprocs/` and `RRV8/views/` captures. The floor is **SQL 2017
-(compat 140)** &mdash; raised from compat 100 on 2026-06-06; the V8
-install/upgrade runs `ALTER DATABASE … SET COMPATIBILITY_LEVEL = 140`,
-so only 2019+/compat-150 syntax (and above) is off-limits.
+`RRV8/sprocs/` and `RRV8/views/` captures. The **engine** floor is **SQL Server 2019** and the
+**compatibility level** is pinned at **140** &mdash; two different
+numbers, on purpose. The V8 install/upgrade runs
+`ALTER DATABASE … SET COMPATIBILITY_LEVEL = 140`. Every token below is a
+**SQL 2022** feature, forbidden because it sits above the pinned level,
+not because of the engine floor.
 
 | Forbidden token | Why |
 |---|---|
-| `\bGREATEST\s*\(`, `\bLEAST\s*\(` | 150+ (SQL 2019). Use `CASE WHEN`. |
-| `\bGENERATE_SERIES\s*\(` | 150+. Use a numbers table or recursive CTE. |
-| `\bSTRING_SPLIT\s*\([^)]*,\s*[^)]*\)` with the 3rd `enable_ordinal` arg | 150+ &mdash; the ordinal overload only. Plain 2-arg `STRING_SPLIT` is fine. |
-| `\bDATE_BUCKET\s*\(` | 150+. Compute manually. |
-| native `json` type (column/param `\bjson\b` type, not the functions) | 150+. Use `nvarchar(max)` + the JSON functions. |
+| `\bGREATEST\s*\(`, `\bLEAST\s*\(` | SQL 2022. Msg 195 at the floor, **at CREATE time**. Use `CASE WHEN`. |
+| `\bGENERATE_SERIES\s*\(` | SQL 2022, and the dangerous one: it is table-valued, so it CREATEs cleanly at the floor and fails only when executed (Msg 208). This grep is the only gate that catches it. Use a numbers table or recursive CTE. |
+| `\bSTRING_SPLIT\s*\([^)]*,\s*[^)]*\)` with the 3rd `enable_ordinal` arg | SQL 2022 &mdash; the ordinal overload only. Msg 8144 at CREATE time. Plain 2-arg `STRING_SPLIT` is fine. |
+| `\bDATE_BUCKET\s*\(` | SQL 2022. Msg 195 at CREATE time. Compute manually. |
+| native `json` type (column/param `\bjson\b` type, not the functions) | SQL 2022. Use `nvarchar(max)` + the JSON functions. |
 
 **Now allowed at the 140 floor** (do NOT flag these &mdash; they were
 forbidden under the old compat-100 floor): `TRIM`, `STRING_AGG`,
