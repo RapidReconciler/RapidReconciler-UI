@@ -861,7 +861,18 @@
   function aiTok(){ try{ return localStorage.getItem('rrv8.token'); }catch(_){ return null; } }
   function aiHealth(){
     var t=aiTok(); if(!t) return Promise.resolve('off');
-    return fetch(aiBase()+'/api/v1/ai/health',{headers:{'Authorization':'Bearer '+t,'Accept':'application/json'}})
+    // `db` is required for the answer to mean anything: with no db,
+    // AiController.health resolves the tier from the caller rather than from the
+    // database's owning client and answers maxLevel:"off", which reads as "AI is
+    // not in your plan" for a client whose plan is full. Same defect measured on
+    // admin-claude-assistant.html 2026-08-25; home.html:5523 has always passed it.
+    // RRDB.name() returns the '_' sentinel when no database is active; sending
+    // that is the same as sending nothing, so drop it rather than ask about a
+    // database that does not exist.
+    var dbq=(window.RRDB&&RRDB.name&&RRDB.name())||'';
+    if (dbq === '_') dbq = '';
+    return fetch(aiBase()+'/api/v1/ai/health'+(dbq?('?db='+encodeURIComponent(dbq)):''),
+                 {headers:{'Authorization':'Bearer '+t,'Accept':'application/json'}})
       .then(function(r){ return r.ok?r.json():null; })
       .then(function(j){ return (j&&j.maxLevel)||'off'; })
       .catch(function(){ return 'off'; });

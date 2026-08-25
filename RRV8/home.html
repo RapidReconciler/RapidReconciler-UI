@@ -3194,10 +3194,18 @@
     </div>
     <!-- Instance-health strip — the QUIET background tier. The old Data
          Management card (data freshness · storage runway · fiscal calendar) and
-         the AI-plan ladder collapse here as small muted chips. Element IDs are
-         unchanged so renderDataCard() (dataRefreshRow/dataPurgeRow/dataFiscalRow
-         + hidden #dataDot / #dataBriefSummary) and loadAiPlan()/setAiDot()
-         (#aiPlanText / #aiDot) fill them exactly as before — nothing hardcoded. -->
+         the AI-plan ladder collapse here as small muted chips. renderDataCard()
+         still fills dataRefreshRow/dataPurgeRow/dataFiscalRow (+ the hidden
+         #dataDot / #dataBriefSummary).
+         CORRECTED 2026-08-25: this used to claim the ids were "unchanged" for
+         loadAiPlan() and setAiDot() as well. They were not. #aiPlanText and
+         #aiDot did NOT survive the rebuild, and because both functions guard on
+         their own element, both returned on their first line for every user —
+         silently, since a missing chip looks like a quiet one. loadAiPlan() now
+         writes #aiPlanTierLabel (the span inside #aiPlanManage, line ~3064).
+         setAiDot() has no target at all: there is no AI chip in this strip, so
+         it is still inert and that is a design question, not a rename. Don't
+         re-assert that an id exists here without grepping the markup for it. -->
     <div class="ihs" id="instanceHealth" hidden>
       <span class="ihs-label">Instance health</span>
       <div class="ihs-chips">
@@ -4298,7 +4306,16 @@
   // header. Inactive members don't count; never-signed-in members age from
   // account creation (createdAt).
   var TEAM_AMBER_DAYS = 182, TEAM_RED_DAYS = 365;
-  var _teamList = [], _reviewOverdue = false, _reviewCurrent = false, _reviewNextDue = null;
+  // _reviewKnown is the THIRD state, and it exists because false/false is not the
+  // same as "no review on file" — it is also what you get when the server never
+  // answered. Without it, paintTeamHealth's final else read `list.length ?
+  // 'Access up to date'`, and the member list arrives from a DIFFERENT endpoint
+  // (api/v1/admin/users, no bearer check), so a failed access-reviews call still
+  // left three members on screen and the row went green claiming the access
+  // review was current. A compliance row asserting an attestation the server
+  // never confirmed (UI-151, measured 2026-08-25).
+  var _teamList = [], _reviewOverdue = false, _reviewCurrent = false, _reviewNextDue = null,
+      _reviewKnown = false;
   // Complex-passwords row level, set by setPwPolicyDot() and folded into the
   // card's worst-of #teamDot here (the two loaders run independently).
   var _teamPwLevel = 'unknown';
@@ -4350,11 +4367,22 @@
     else if (red)            { aLvl = 'attention'; aTxt = red + ' user' + (red > 1 ? 's' : '') + ' inactive 1+ year'; }
     else if (amber)          { aLvl = 'watch'; aTxt = amber + ' user' + (amber > 1 ? 's' : '') + ' inactive 6+ months'; }
     else if (_reviewOverdue) { aLvl = 'watch'; aTxt = 'Access review overdue'; }
+    // Never answered — say so rather than clearing the roster. Deliberately BELOW
+    // the red/amber inactivity branches: those are computed here from the member
+    // list and stay true whatever the review endpoint did, so a real finding
+    // still outranks an unknown. Above the green branch, because "up to date" is
+    // a verdict and we do not have one.
+    else if (!_reviewKnown)  { aLvl = 'unknown'; aTxt = 'Review state unavailable'; }
     else                     { aLvl = list.length ? 'ok' : 'unknown'; aTxt = list.length ? 'Access up to date' : 'Checking…'; }
-    // Informational 30-day note — appended only when the row is otherwise green
-    // (a calm heads-up, never an alarm; the dot stays green).
+    // Informational 30-day note — a calm heads-up, never an alarm. Shown on the
+    // green row and on the unknown one, suppressed on red/amber/overdue where a
+    // real finding is already stated and this would only dilute it. It survives
+    // the unknown case on purpose: the count is computed HERE from the member
+    // list, so it stays true whatever the review endpoint did, and dropping a
+    // true local fact because the server went quiet loses the admin real signal.
     var info30 = _teamInactive30.length;
-    _setDataRow('teamReviewRow', aLvl, aTxt + (aLvl === 'ok' && info30 ? ' · ' + info30 + ' inactive 30+ days' : ''));
+    var showInfo30 = info30 && (aLvl === 'ok' || aLvl === 'unknown');
+    _setDataRow('teamReviewRow', aLvl, aTxt + (showInfo30 ? ' · ' + info30 + ' inactive 30+ days' : ''));
     // Card dot = worst of the three rows (row 3 = complex passwords, painted by
     // setPwPolicyDot into _teamPwLevel).
     var worst = '';
@@ -4373,12 +4401,20 @@
     if (IS_DEMO || !isAdmin()) return;
     rrFetch('api/v1/admin/clients/current/access-reviews')
       .then(function (d) {
+        _reviewKnown   = true;
         _reviewOverdue = !!(d && d.overdue);
         _reviewCurrent = !!(d && d.latest && !d.overdue);
         _reviewNextDue = (d && d.latest && d.latest.nextDue) || null;
         paintTeamHealth(_teamList);
       })
-      .catch(function () { /* endpoint not live -> leave the activity-only dot */ });
+      .catch(function (e) {
+        // Repaint on failure instead of returning silently. The old no-op left
+        // the row on whatever the member-list paint had produced, which was the
+        // green "Access up to date" — the server's silence rendered as a pass.
+        _reviewKnown = false;
+        console.error('[team] access-review state unavailable:', e);
+        paintTeamHealth(_teamList);
+      });
   }
 
   // Licensing health: roll up company-seat usage so the Licensing row in the
@@ -4403,15 +4439,30 @@
         var rank = { ok: 1, watch: 2, attention: 3 };
 
         // Seat state (the steady-state concern).
+        //
+        // `used` is THIS DATABASE's licensed companies; `clientUsed` is the
+        // client-wide total that the cap is actually judged against. Both get
+        // named, because they are different numbers and the card used to print
+        // the client-wide one with no grain on it: on Demo1 it read "All 12
+        // company licenses in use" while the Licensing page one click later read
+        // "Using 2 of 12", and a presenter walked straight between the two
+        // (UI-148). The cap figure stays on screen whenever it is the thing
+        // stopping you adding a company — a warning that cites a number the
+        // reader cannot see is not a warning.
         var seatLevel = 'ok', seatMsg;
+        var dbUsed = (u.used != null) ? u.used : 0;
+        // clientUsed is absent on an older VALC build; fall back to `used` so the
+        // card degrades to the previous single-figure reading rather than "of 0".
+        var cliUsed = (u.clientUsed != null) ? u.clientUsed : dbUsed;
         if (u.unlimited) {
-          seatMsg = 'Unlimited companies · ' + u.used + ' in use';
+          seatMsg = 'Unlimited companies · ' + dbUsed + ' licensed on this database';
         } else {
           var cap = u.maxCompanies;
           seatLevel = u.overLimit ? 'attention' : u.atLimit ? 'watch' : 'ok';
-          seatMsg = u.overLimit ? ('Over license — using ' + u.used + ' of ' + cap)
-                  : u.atLimit   ? ('All ' + cap + ' company licenses in use')
-                  :               ('Using ' + u.used + ' of ' + cap + ' company licenses');
+          var here = dbUsed + ' of ' + cap + ' company licenses used on this database';
+          seatMsg = u.overLimit ? (here + ' · over your limit of ' + cap + ' across all databases (' + cliUsed + ' used)')
+                  : u.atLimit   ? (here + ' · all ' + cap + ' in use across your databases')
+                  :               here;
         }
 
         // Expiry state — mirrors the Licensing page: amber within 60 days, red
@@ -4436,14 +4487,29 @@
         if (card) card.classList.remove('lic-expired', 'lic-ok', 'lic-soon');
         if (seatEl) seatEl.textContent = seatMsg;
         if (days != null) {
-          if (card) card.classList.add(expLevel === 'red' ? 'lic-expired' : expLevel === 'green' ? 'lic-ok' : 'lic-soon');
+          // expLevel is 'ok' | 'watch' | 'attention' (assigned ~30 lines up). It
+          // was compared against 'red' / 'green' here, so BOTH arms were dead and
+          // every card fell through to lic-soon — an EXPIRED licence was tinted
+          // exactly like a healthy one, and a healthy one was tinted like a
+          // warning. lic-soon carries no CSS rule of its own, so it renders the
+          // base .lic-alert orange; that is correct for 'watch' and wrong for the
+          // other two. The dot was always right (it takes expLevel through
+          // rank[]), which is why the two signals on one card disagreed — and the
+          // colour is the one a presenter points at (UI-143, measured 2026-08-25:
+          // Demo2 sat on lic-soon with the dot already green).
+          if (card) card.classList.add(expLevel === 'attention' ? 'lic-expired'
+                                     : expLevel === 'watch'     ? 'lic-soon'
+                                     :                            'lic-ok');
           // Hero is ALWAYS a status word, never a raw day-count. A count made the
           // card format swing between "Active" and a countdown as you switched DBs
           // (each client has its own renewal date), which read as
           // inconsistent. Urgency now shows through the card color (lic-soon/-expired)
           // and the "Renewal due <date>" subline — both consistent on every DB.
+          // Same stale vocabulary as the card class above: 'amber' is never a
+          // value expLevel holds, so this branch was dead and a licence expiring
+          // in three days still read "Active". 'watch' is the within-60-days state.
           if (daysEl) daysEl.textContent = (days <= 0) ? 'Expired'
-            : (expLevel === 'amber') ? 'Renewal due soon'
+            : (expLevel === 'watch') ? 'Renewal due soon'
             : 'Active';
           var renewTxt = u.licenseEndDate
             ? ('Renewal due ' + new Date(u.licenseEndDate + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }))
@@ -5510,11 +5576,21 @@
   // shows the active plan name. The customer-facing labels mirror the old card.
   var AI_PLAN_LABEL = { off: 'Off', docs: 'Basic', scrubbed: 'Enhanced', full: 'Full' };
   function loadAiPlan() {
-    var el = $('aiPlanText'); if (!el) return;
+    // Guarded on #aiPlanTierLabel, the span this actually writes. It used to
+    // guard on #aiPlanText, which NO LONGER EXISTS IN THE MARKUP — the
+    // instance-health strip was rebuilt with .ihs-chip elements and that id went
+    // with the old AI-plan ladder. So this function returned on its first line
+    // for every user, the ai/health call never fired, and the chip kept the
+    // hardcoded &mdash; from line 3064 permanently. MEASURED 2026-08-25 walking
+    // the Administrator lane on Demo1: the chip read "AI plan · — · Manage →"
+    // and no api/v1/ai/health request appeared in the page's network at all,
+    // which is the same defect read two ways.
+    var el = $('aiPlanTierLabel'); if (!el) return;
     function mark(lvl) {
-      var label = AI_PLAN_LABEL[lvl] || '—';
-      el.textContent = 'AI plan · ' + label;
-      var b = $('aiPlanTierLabel'); if (b) b.textContent = label;   // persistent band affordance
+      // Write ONLY the span. The enclosing anchor (#aiPlanManage) also carries
+      // "· Manage →", so setting textContent on it would delete the affordance
+      // this chip exists to offer.
+      el.textContent = AI_PLAN_LABEL[lvl] || '—';
     }
     if (IS_DEMO || !isAdmin()) { mark('full'); return; }   // demo: show the top tier as assigned
     // Resolve the plan by the ACTIVE DATABASE's client (a platform admin isn't a
@@ -15337,9 +15413,16 @@
               : st === 'ok' ? '[OK]' : '[NOT CHECKED]';
       taskLines.push(tag + ' ' + txt);
     });
-    var aiPlanEl = document.getElementById('aiPlanText');
-    if (aiPlanEl && aiPlanEl.textContent && !/·\s*—\s*$/.test(aiPlanEl.textContent)) {
-      taskLines.push('[OK] ' + aiPlanEl.textContent.replace(/\s+/g, ' ').trim());
+    // The purchased AI plan, from the chip's own span. Same stale-id defect as
+    // loadAiPlan() above: this read #aiPlanText, which is not in the markup, so
+    // the plan was silently ABSENT from every admin question's grounding — the
+    // model was never told which tier the customer is on. An em-dash still means
+    // "not resolved yet", and an unresolved plan is not an [OK] fact, so it is
+    // withheld rather than reported.
+    var aiPlanEl = document.getElementById('aiPlanTierLabel');
+    var aiPlanLbl = aiPlanEl ? aiPlanEl.textContent.replace(/\s+/g, ' ').trim() : '';
+    if (aiPlanLbl && aiPlanLbl !== '—') {
+      taskLines.push('[OK] AI plan · ' + aiPlanLbl);
     }
     // Prepend the documented admin procedures (renewal, team, companies,
     // passwords, login) so how-to questions answer from the docs; the live
