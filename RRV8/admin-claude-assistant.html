@@ -460,7 +460,19 @@
     return 'You’re on ' + (TIER_LABEL[_maxLevel] || _maxLevel) + '.';
   }
   function applyEntitlement() {
-    return rrFetch('api/v1/ai/health').then(function (r) {
+    // Resolve the plan by the ACTIVE DATABASE's client. Without `db`,
+    // AiController.health falls back to the caller's own tier and answers
+    // maxLevel:"off" — and a customer admin is not a client-scoped user, so the
+    // fallback is 'off' for everyone who opens this page. MEASURED 2026-08-25 on
+    // Demo1 as an admin: GET api/v1/ai/health (no query) -> {"maxLevel":"off"},
+    // so the page read "Your Plan: Not included", "AI Assistant isn't part of
+    // your plan yet" and held all three features at Off, while the same instance
+    // answers maxLevel:"full" for ?db=RapidReconciler_Demo1. This page is where
+    // an admin decides what the AI may see, so reading the wrong answer tells
+    // them there is nothing to decide. home.html:5523 already passes `db` and
+    // says why in its own comment; this was the second of two callers.
+    var dbn = (activeDb() && activeDb().n) || '';
+    return rrFetch('api/v1/ai/health', dbn ? { query: { db: dbn } } : undefined).then(function (r) {
       // A reply carrying no maxLevel tells us nothing about the plan — don't read it
       // as 'off'. Only a maxLevel we actually received makes the tier KNOWN.
       var lvl = (r && r.maxLevel != null) ? String(r.maxLevel) : null;
