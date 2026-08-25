@@ -12221,31 +12221,30 @@
                // Prodplant/Prodcost come from a single-customer customization — empty on
                // every demo DB. Candidates for the all-empty drop below; kept when populated.
                hideEmpty: ['Prodplant', 'Prodcost'] },
-    // COLUMN ORDER IS THE FINDING (owner hit this 2026-08-16). The view fires on
-    // `a.ibglpt != liglpt` — BranchClass against LocationClass — plus the DAC-35
-    // clause where both are blank and the item master carries a class. The old order
-    // put ItemClass, BranchClass, LocationClass last, after five descriptive columns,
-    // so on Demo3 co 30001 the two visible class columns matched (P50/P50, P20/P20)
-    // and the rows read as wrongly flagged until you scrolled right to LocationClass.
-    // Identify the row, then say why it is here: the trigger pair is adjacent and on
-    // screen, and `Mismatch` names the level that differs so nobody has to compare two
-    // strings by eye across 3,569 rows. The DAC-35 case is invisible without it —
-    // two blank cells and a populated one, with nothing marking that as the trigger.
+    // BRANCH CLASS AND LOCATION CLASS ARE THE REPORT. Two columns were removed
+    // 2026-08-25 on the owner's ruling: `ItemClass` and the computed `Mismatch`.
+    // They were added 2026-08-15/16 and the argument for them is recorded here so
+    // nobody re-adds them from a half-memory of it — but the ruling stands over
+    // the argument: **that is not the purpose of the report.** The analyst opens
+    // this to see which items carry one GL class on the branch and another on the
+    // location; the trigger pair is adjacent and on screen, and comparing 6101 to
+    // 6102 across two neighbouring cells does not need a third column to narrate
+    // it. Do not restore either column without the owner saying so.
+    //
+    // The order still matters and is unchanged (owner hit this 2026-08-16): the two
+    // class columns lead, ahead of the five descriptive ones. Trailing them meant
+    // that on Demo3 co 30001 the first visible class column matched the item class
+    // (P50/P50) and rows read as wrongly flagged until you scrolled right.
+    //
+    // KNOWN CONSEQUENCE, accepted with the ruling. The view keeps its DAC-35 arm
+    // (`both lower levels blank AND the item master populated`), so a row can still
+    // arrive whose two visible class cells are both blank. It now carries nothing
+    // explaining why it was flagged. Measured 2026-08-25 across Demo1/2/3: that arm
+    // returns zero rows on all three, so nothing on this fleet renders that way
+    // today. If a customer report ever shows a row with two blank class cells, that
+    // is the arm firing — not a rendering bug.
     glclass: { view: 'v_integrity5_gl_class',    demoFile: 'v-integrity5-gl-class',    dot: 'intgGlcDot', file: 'GLClassIntegrity', title: 'GL Class Integrity',
-               cols: ['CompanyNumber', 'BranchPlant', 'ItemNumber', 'Mismatch', 'BranchClass', 'LocationClass', 'ItemClass', 'Location', 'Lot', 'StockType', 'ThirdItem', 'Description'],
-               // Mirrors v_integrity5_gl_class's WHERE clause exactly, including the
-               // rtrim() — these are nchar and a blank is spaces. The two arms are
-               // mutually exclusive: equal values cannot also differ. A row matching
-               // neither is not a row the view returns, so it gets no label rather
-               // than a guessed one.
-               derived: { Mismatch: function (r) {
-                 var b  = String(r.BranchClass   == null ? '' : r.BranchClass).trim();
-                 var l  = String(r.LocationClass == null ? '' : r.LocationClass).trim();
-                 var im = String(r.ItemClass     == null ? '' : r.ItemClass).trim();
-                 if (b !== l) return 'Branch ≠ Location';
-                 if (b === '' && l === '' && im !== '') return 'Master only';
-                 return '';
-               } } }
+               cols: ['CompanyNumber', 'BranchPlant', 'ItemNumber', 'BranchClass', 'LocationClass', 'Location', 'Lot', 'StockType', 'ThirdItem', 'Description'] }
   };
   function _intgActiveCoSet() {
     var s = {}; ((_acctData && _acctData.companies) || []).forEach(function (c) { s[String(c.co).trim()] = 1; }); return s;
@@ -12326,14 +12325,17 @@
     CostLevel: 'Cost Lvl',      CostMethod: 'Cost Method', QtyOnHand: 'Qty On Hand',
     UnitCost: 'Unit Cost',      FrzCost: 'Frz Cost',      Variance: 'Variance',
     Prodplant: 'Prod Plant',    Prodcost: 'Prod Cost',
-    // The three GL-class levels now lead the GL Class Integrity table rather than
-    // trailing it, so they get readable labels instead of the old squeezed 'Br Class'.
-    // `Mismatch` is computed, not a view column — its <th title> says so, because the
-    // hover on every other header names a field an analyst can go find in JDE.
-    BranchClass: 'Branch Class', LocationClass: 'Location Class', ItemClass: 'Item Class',
-    Mismatch: 'Mismatch'
+    // The two GL-class levels lead the GL Class Integrity table rather than trailing
+    // it, so they get readable labels instead of the old squeezed 'Br Class'.
+    // ItemClass and the computed Mismatch were removed 2026-08-25 (owner's ruling);
+    // their labels go with them, or the map advertises columns no report renders.
+    BranchClass: 'Branch Class', LocationClass: 'Location Class'
   };
-  var INTG_COL_TITLE = { Mismatch: 'Computed on this report — the GL-class level that differs (F4102 branch vs F41021 location), or "Master only" when both are blank and the F4101 item master carries a class' };
+  // Per-column <th title> overrides. Empty since the computed `Mismatch` column was
+  // removed 2026-08-25 — it was the only entry, and it was here because a hover on
+  // every OTHER header names a real field an analyst can go find in JDE. Keep the map:
+  // the renderer falls back to the column name, so adding an override stays a one-liner.
+  var INTG_COL_TITLE = {};
   function _intgColLabel(c) { return INTG_COL_ABBR[c] || c; }
   // Drop candidate columns that carry no data across the whole row set. Keyed on
   // the data being empty — NOT a blanket "always hide". A column named in the
@@ -12341,10 +12343,13 @@
   // and the Excel export only when EVERY row is null/blank for it, so a real
   // customer dataset that populates Prodplant/Prodcost still shows those columns.
   function _intgIsBlank(v) { return v == null || String(v).trim() === ''; }
-  // One cell reader for BOTH the modal table and the Excel export, so a column the
-  // report computes rather than reads (glclass's `Mismatch`) can never appear in one
-  // and be blank in the other. A derive function that throws yields '' rather than
-  // taking the whole table down.
+  // One cell reader for BOTH the modal table and the Excel export, so a column a
+  // report computes rather than reads can never appear in one and be blank in the
+  // other. A derive function that throws yields '' rather than taking the whole table
+  // down. NO report defines `derived` since glclass's `Mismatch` was removed
+  // 2026-08-25 — the mechanism is kept because it is what makes a computed column
+  // safe to add, and because the export sharing this reader is the property that
+  // stopped the two surfaces disagreeing.
   function _intgCell(rep, r, c) {
     var d = rep && rep.derived && rep.derived[c];
     if (typeof d === 'function') { try { return d(r); } catch (e) { return ''; } }
