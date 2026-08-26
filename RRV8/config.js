@@ -3208,7 +3208,16 @@ window.RRV8 = window.RRV8 || {};
     return fetch(base + '/inventory/txv/resolutions?company=' + encodeURIComponent(company), { headers: h })
       .then(function (r) { if (!r.ok) throw 0; return r.json(); })
       .then(function (arr) {
-        if (!Array.isArray(arr) || !arr.length) return _fallback(company, ck);
+        // AN EMPTY LIST IS AN ANSWER, NOT A FAILURE. This used to treat `[]` the same as
+        // an unreachable agent and fall back to localStorage, which was harmless only
+        // while findings could never be removed: a row that existed locally also existed
+        // on the server, so resurrecting it changed nothing. UI-122 makes a row able to
+        // legitimately disappear, and with the old branch the LAST discarded finding on a
+        // company came back on the next machine that opened it — the server says none, the
+        // mirror says one, and the mirror won. Unreachable still falls back, via the
+        // .catch below; a non-array still falls back, because that is a broken response
+        // rather than an empty one.
+        if (!Array.isArray(arr)) return _fallback(company, ck);
         var map = {};
         arr.forEach(function (rec) {
           var n = _norm(rec);
@@ -3251,7 +3260,51 @@ window.RRV8 = window.RRV8 || {};
       })
     }).then(function () { return n; }).catch(function () { return n; });   // localStorage already holds it
   }
-  window.RRV8.cardStore = { load: load, save: save, get: get, forCompany: forCompany, key: _key };
+  // Discard one recorded finding (UI-122). Mirrors save()'s shape: optimistic local
+  // removal first, then the server, and localStorage stays the fallback truth.
+  //
+  // Resolves with the record it removed, or null when there was nothing to remove.
+  // THAT RETURN IS THE UNDO: the caller holds a complete record and re-saves it
+  // through save(), which is the same write path that created it — so undo cannot
+  // drift from create the way a second, dedicated restore path would. A discard is
+  // the only destructive act on this store, and a review action without an undo is a
+  // one-way door (owner ruling 2026-08-13, on the period review).
+  //
+  // A server refusal is NOT swallowed the way save() swallows one. save() can afford
+  // to: localStorage already holds the record, so the finding survives and a later
+  // load re-syncs it. A discard is the opposite — swallowing the failure would leave
+  // the card gone from this screen and still present for everyone else, which is the
+  // silent divergence this store exists to prevent. The local record is restored and
+  // the rejection is re-thrown so the caller can say so.
+  function discard(company, cardCode, periodEnd) {
+    var ck = _cacheKey(company), c = _cache[ck] || (_cache[ck] = { map: {} });
+    var k = _key(company, cardCode, _p10(periodEnd));
+    var had = c.map[k] || null;
+    if (!had) return Promise.resolve(null);
+    delete c.map[k];
+    var mirror = {};
+    for (var mk in c.map) if (Object.prototype.hasOwnProperty.call(c.map, mk)) mirror[mk] = c.map[mk];
+    _lsWrite(company, mirror);
+    var base = _base();
+    if (!base) return Promise.resolve(had);
+    var q = '?company=' + encodeURIComponent(company)
+          + '&cardCode=' + encodeURIComponent(cardCode)
+          + '&periodEnd=' + encodeURIComponent(_p10(periodEnd));
+    return fetch(base + '/inventory/txv/resolution' + q,
+                 { method: 'DELETE', headers: _auth({ 'Accept': 'application/json' }) })
+      .then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return had;
+      })
+      .catch(function (e) {
+        c.map[k] = had;                                   // put it back — the server still has it
+        var back = {};
+        for (var bk in c.map) if (Object.prototype.hasOwnProperty.call(c.map, bk)) back[bk] = c.map[bk];
+        _lsWrite(company, back);
+        throw e;
+      });
+  }
+  window.RRV8.cardStore = { load: load, save: save, discard: discard, get: get, forCompany: forCompany, key: _key };
 })();
 
 /*

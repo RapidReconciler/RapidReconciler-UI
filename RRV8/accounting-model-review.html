@@ -107,6 +107,17 @@
 
   /* Verdict banner (inside the AI card). */
   .verdict { display: flex; align-items: center; gap: 14px; border-radius: 12px; padding: 16px 18px; border: 1px solid var(--rule); background: var(--bg-soft); }
+  /* Without this the banner NEVER hides. `display: flex` above is an author rule and
+     beats the UA's `[hidden] { display: none }`, so renderVerdict()'s ISSUE branch —
+     which sets banner.hidden = true and returns — left a 60px band on screen still
+     reading "Reviewing the model…", the loading string from the branch above it.
+     MEASURED 2026-08-26 on the Demo1 bundle via analyst-summit's model beat: hidden
+     attribute present, computed display flex, height 60.25px, one client rect.
+     Deterministic on any company with unreviewed exclusions; invisible on a clean
+     model, which is why the 2026-08-24 check against Demo3 came back false. Every
+     other hideable element here already carries this guard (.card, .ai-lead,
+     .ai-actions, .ai-answer, .xd-scrim) — the banner was the one that was missed. */
+  .verdict[hidden] { display: none; }
   .verdict.is-clean { background: var(--green-pale); border-color: #cfe6d8; }
   /* ACCEPTED — every exclusion reviewed, value still outside reconciliation.
      Deliberately NOT green: clean and accepted are different states and the
@@ -746,8 +757,13 @@
       return line;
     }).join('\n');
   }
-  function _aiExplain(prompt) {
-    return rrFetch('api/v1/ai/explain', { method: 'POST', body: { prompt: prompt } })
+  // `ctx` is a server-IGNORED replay disambiguator (config.js RRV8.aiCtx). This page
+  // carries no "Question:" line anywhere, so without it every call here keys as
+  // 'tier=na|q=(briefing)' — the same signature home.html's per-company reads land
+  // on, which means one recording position answers for all of them.
+  function _aiExplain(prompt, ctx) {
+    var url = 'api/v1/ai/explain' + (ctx ? ('?ctx=' + ctx) : '');
+    return rrFetch(url, { method: 'POST', body: { prompt: prompt } })
       .then(function (r) { return (r && r.text) ? String(r.text).trim() : ''; });
   }
 
@@ -924,7 +940,11 @@
       (basic
         ? 'TASK: in ONE sentence under 45 words, say whether the amount still without a verdict is worth working now and what the first move is. Quote the figures above exactly as given; never add two of them together into a new total.'
         : 'TASK: at most four lines, each beginning "- " and under about 30 words, worst by value first. Per line: the slice, which reading fits it, the action. Drop any line that does not change what the analyst does next. Where a slice already carries a verdict that its own figures now contradict, that line earns one of the four whatever its value — a decision made when nothing was at stake is the one thing the table cannot show.') + reg;
-    _aiExplain(prompt).then(function (txt) {
+    // No period on this surface — the model review is not period-scoped — so the key
+    // is (surface, tier, company). The tier matters: `basic` and `scrub` each select a
+    // different TASK block above, so one company yields three different answers.
+    _aiExplain(prompt, (window.RRV8 && RRV8.aiCtx)
+      ? RRV8.aiCtx('modelexcl-' + _aiTier(), _company, '') : '').then(function (txt) {
       if (ans) ans.textContent = txt || 'No assessment came back — try again.';
     }).catch(function () {
       if (ans) ans.textContent = 'Could not reach AI just now. Try again in a moment.';

@@ -359,7 +359,29 @@
         var blocking = (s.running && !_running) || !!s.blockedBy;
         applyBusy(blocking, s.blockedBy || s.activity);
       })
-      .catch(function () { /* leave guard as-is on a transient failure */ });
+      .catch(function (e) {
+        // The guard used to swallow this entirely. That left Run ENABLED with
+        // nothing on screen, because "guard as-is" on a page load means "not busy" —
+        // so a failed check reads exactly like a free database and an analyst can
+        // fire a re-roll into one a deploy or another recalc is holding. The number
+        // that gates this control has to be next to it.
+        //
+        // Deliberately does NOT disable Run: a transient blip must not block real
+        // work, and the endpoint enforces the lock server-side regardless. It says
+        // what it does and does not know, and lets the analyst decide.
+        console.warn('[reroll] busy check failed:', e);
+        applyBusyUnknown();
+      });
+  }
+  function applyBusyUnknown() {
+    var g = $('js-busy-guard'), t = $('js-busy-text');
+    if (!g || !t) return;
+    _busy = false;   // not "busy" — unknown. Run stays available.
+    t.innerHTML = '<b>Couldn&rsquo;t check whether the database is busy.</b> Re-roll is still available, '
+      + 'but this page can&rsquo;t confirm another job isn&rsquo;t already running. Reopen the page to re-check; '
+      + 'if a re-roll is refused when you start it, that is the other job still holding the database.';
+    g.classList.add('is-visible');
+    syncRun();
   }
   function applyBusy(busy, who) {
     _busy = busy;
