@@ -83,5 +83,34 @@ jobs:
       # JavaScript that parsecheck cannot see. That has happened twice now (the '' -> 'yes'
       # fallback, and the 'end' token in UI-57), on the one producer both Home's band and
       # the roll-forward page read. So the classifier gets asserted, not just parsed.
-      - name: RRV8.rollForward classifier behaviour test
-        run: node Tools/test-rollforward-classify.js
+      # EVERY Tools/test-*.js, by glob, not by name. This step used to name
+      # test-rollforward-classify.js alone, and measured 2026-08-26 that meant SEVEN of
+      # the eight behaviour tests in the repo had never run in CI: analyst-company-switch,
+      # audit-pdf-links, audit-strip-scope, nonstock-glclass, oe-compose, residual-dust
+      # and variance-tieout. All eight pass, so nothing was hiding behind that -- but a
+      # suite nobody executes is a suite that rots quietly, and the next author to add one
+      # would have had to know to edit this file or their test would never run either.
+      # The glob means a new test is wired by existing.
+      #
+      # Fails on the FIRST failing file and reports which, rather than masking later
+      # failures behind an early exit or, worse, letting a non-zero exit vanish in a pipe.
+      - name: Behaviour tests (Tools/test-*.js)
+        run: |
+          set -u
+          found=0
+          failed=""
+          for f in Tools/test-*.js; do
+            [ -e "$f" ] || continue
+            found=$((found + 1))
+            echo "--- $f"
+            if ! node "$f"; then failed="$failed $f"; fi
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "No Tools/test-*.js found -- the suite has vanished, which is itself a failure."
+            exit 1
+          fi
+          echo "ran $found behaviour test file(s)"
+          if [ -n "$failed" ]; then
+            echo "FAILED:$failed"
+            exit 1
+          fi
