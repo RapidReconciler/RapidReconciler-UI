@@ -1386,6 +1386,13 @@
   .feb-detail { font-size: 12.5px; color: var(--text-soft); line-height: 1.5; }
   .feb-detail + .feb-detail { margin-top: 3px; }
   .feb-detail code { background: var(--bg-soft); padding: 1px 5px; border-radius: 3px; font-size: 12px; }
+  /* Informational variant of the same band. Red says "something broke and you need to
+     act"; a state that is simply EMPTY (no run recorded yet, so no decisions to load)
+     is not that, and painting it red trains the reader to skim the red band. Same
+     geometry and slot, blue palette, "i" glyph. */
+  .fetch-error-banner.is-info { background: var(--blue-pale); border-color: rgba(47, 111, 176, 0.35); }
+  .fetch-error-banner.is-info .feb-icon { background: var(--blue); }
+  .fetch-error-banner.is-info .feb-title { color: var(--navy); }
 
   /* ============================================================
      POPOVER FRAME (shared by user menu + sidebar filter popovers
@@ -2053,16 +2060,19 @@
   // Plain-English banner for a failure whose CONSEQUENCE the reader needs to
   // understand, not its endpoint. Same slot + styling as showFetchError; used where
   // an unexplained empty state would read as a real answer.
-  function showNotice(id, title, detail) {
+  // `tone` is 'error' (default, red) or 'info' (blue) — an empty state that nobody
+  // needs to fix reads as a false alarm in red, and a reader who learns to skim the
+  // red band also skims the failures.
+  function showNotice(id, title, detail, tone) {
     const page = document.getElementById('js-page');
     if (!page) return;
     let banner = document.getElementById('js-notice-' + id);
     if (banner) banner.remove();
     banner = document.createElement('div');
     banner.id = 'js-notice-' + id;
-    banner.className = 'fetch-error-banner';
+    banner.className = 'fetch-error-banner' + (tone === 'info' ? ' is-info' : '');
     banner.innerHTML =
-      '<div class="feb-icon">!</div>' +
+      '<div class="feb-icon">' + (tone === 'info' ? 'i' : '!') + '</div>' +
       '<div class="feb-body">' +
         '<div class="feb-title">' + escapeHtml(title) + '</div>' +
         '<div class="feb-detail">' + escapeHtml(detail) + '</div>' +
@@ -3735,14 +3745,25 @@
   // triaged yet" — so every finding the analyst had already closed reappeared as
   // Open and the worklist read as untouched work. Resolve to a marked failure so
   // the boot can say the decisions are missing instead of implying there are none.
+  //
+  // Decisions are keyed on the analysis run, both directions: applySave POSTs under
+  // _meta.runId, and DmaaiController.getResponses declares runId REQUIRED and answers
+  // findByRun(runId). So the runId is not optional decoration — without it the read
+  // key can't match the write key. This used to build the query string conditionally
+  // and then call the endpoint regardless, which on the no-runId path is a guaranteed
+  // 400 (measured on Demo3: GET /inventory/integrity/aai-responses -> 400 Bad
+  // Request), routed to _loadFailed. That reported a load FAILURE for a run that was
+  // never identified — two different situations, one message. Return a marked no-run
+  // instead and make no call.
   function loadResponses(runId) {
     if (IS_DEMO) {
       return fetch('data/dmaai-responses.json', { cache: 'no-cache' })
         .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
         .catch(err => ({ _loadFailed: err }));
     }
-    const q = runId ? '?runId=' + encodeURIComponent(runId) : '';
-    return rrFetch('inventory/integrity/aai-responses' + q).catch(err => ({ _loadFailed: err }));
+    if (!runId) return Promise.resolve({ _noRun: true });
+    return rrFetch('inventory/integrity/aai-responses?runId=' + encodeURIComponent(runId))
+      .catch(err => ({ _loadFailed: err }));
   }
 
   // ============================================================
@@ -4167,7 +4188,16 @@
     if (btn) btn.addEventListener('click', exportExcGlc);
   })();
 
-  Promise.all([loadAnalysis(), loadResponses()]).then(([data, savedResponses]) => {
+  // The decisions read is keyed on the run the analysis just returned, so it is
+  // SEQUENTIAL, not parallel — a Promise.all here has no runId to pass and the read
+  // can only 400. DmaaiController's own carry-forward note spells the order out: V8
+  // calls aai-responses?runId= after aai-analysis-latest returns, to pick up the
+  // responses for THIS run. Costs one round trip; buys a read key that matches the
+  // key applySave writes under.
+  loadAnalysis().then(data => {
+    const runId = (data && data._meta && data._meta.runId) || '';
+    return loadResponses(runId).then(savedResponses => [data, savedResponses]);
+  }).then(([data, savedResponses]) => {
     window._dmaaiAnalysis = data;
 
     // Index all findings by id so save can look up semantic identity.
@@ -4176,13 +4206,23 @@
     (data.askCustomer || []).forEach(r => { idx[r.id] = r; });
     data._findingIndex = idx;
 
-    // Prior decisions couldn't be read: every finding below will show as untriaged.
-    // Say so, or the worklist reads as "nobody has looked at any of this".
+    // Two different reasons the findings below can all read as untriaged, and they get
+    // two different messages. Both used to arrive as _loadFailed, so a run that was
+    // never identified was reported to the analyst as a failed read.
     if (savedResponses && savedResponses._loadFailed) {
+      // The read ran and failed: decisions may exist and are not on screen.
       console.error('[dmaais] prior decisions failed to load:', savedResponses._loadFailed);
       showNotice('responses',
         'Your earlier decisions on these findings didn’t load',
         'Every finding below is showing as untriaged, which may not reflect the work already done. Reopen the page in a moment before recording anything new — saving now would only add to what’s already stored, but the list you see is incomplete.');
+    } else if (savedResponses && savedResponses._noRun) {
+      // No read ran: the analysis named no run, so there is no key to look decisions
+      // up under — and none to save them under either.
+      console.warn('[dmaais] analysis carried no _meta.runId — skipped the prior-decisions read');
+      showNotice('responses',
+        'No earlier decisions to load for this analysis',
+        'The analysis returned no run identifier, so there is nothing to look up — every finding below is untriaged because none has been recorded, not because a read failed. Refresh for a fresh analysis run before you record anything: a decision saved against a run this page can’t name won’t be read back.',
+        'info');
     }
     // Seed responses from any persisted set (demo round-trip JSON).
     if (savedResponses && Array.isArray(savedResponses.responses)) {
