@@ -1163,6 +1163,12 @@
   .txv-btn { border: 1px solid var(--rule-strong); background: var(--bg-card); color: var(--text); border-radius: 8px; padding: 6px 12px; font-family: inherit; font-weight: 800; font-size: 12px; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
   .txv-btn:hover { border-color: var(--blue); color: var(--blue); }
   .txv-btn-primary { background: var(--navy); border-color: var(--navy); color: #fff; }
+  /* The one destructive control on a variance card. Quiet until hover so it never
+     competes with the review action beside it; red only on hover, because a
+     permanently-red button in a row of neutral ones reads as an alarm about the card
+     rather than as an action available on it. */
+  .txv-btn-quiet { border-color: var(--rule); color: var(--text-muted); font-weight: 700; }
+  .txv-btn-quiet:hover { border-color: #c0392b; color: #c0392b; }
   .txv-btn-primary:hover { background: #172238; color: #fff; }
   /* UI-26 — recurrence / auto-reopen chip: a category resolved in a prior period
      that is material again this period (the fix didn't hold). Amber, plain-case
@@ -1761,6 +1767,12 @@
   .intg-table .intg-num { text-align: right; font-variant-numeric: tabular-nums; }
   /* Verification code shown in the modal — the value the accountant types into GLEXA. */
   .je-vcode { display: inline-flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+  /* Same trap as accounting-model-review's .verdict (UI-116): an author `display` rule
+     beats the UA's `[hidden] { display: none }`, so `vc.hidden = true` (:7846, :13169)
+     never hid #jeVcode or #oeVcode. Both are emptied on the same line today, so an empty
+     inline-flex collapses and nothing shows — the guard is what keeps that true if the
+     order ever changes or a variant gains padding. */
+  .je-vcode[hidden] { display: none; }
   .je-vcode-lbl { font-size: 10.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: var(--text-muted); }
   .je-vcode-code { font-family: 'Consolas','Menlo',monospace; font-size: 13.5px; font-weight: 700; color: var(--navy); background: var(--bg-soft); border: 1px solid var(--rule); border-radius: 7px; padding: 5px 10px; }
   .je-vcode-hint { font-size: 12px; color: var(--text-soft); }
@@ -2321,6 +2333,16 @@
     font-size: 13px; box-shadow: var(--shadow-md); opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; z-index: 90;
   }
   .toast.is-visible { opacity: 1; transform: translateX(-50%) translateY(0); }
+  /* An actionable toast has to take pointer events back — the base rule turns them
+     off, which would leave the button drawn and dead. Only while an action is on it,
+     so a plain toast still never blocks a click on whatever sits under it. */
+  .toast.has-action { pointer-events: auto; display: inline-flex; align-items: center; gap: 14px; }
+  .toast-act {
+    background: transparent; border: 1px solid rgba(255,255,255,.55); color: #fff;
+    border-radius: 7px; padding: 4px 11px; font-family: inherit; font-weight: 800;
+    font-size: 12px; cursor: pointer; flex-shrink: 0;
+  }
+  .toast-act:hover { background: rgba(255,255,255,.14); border-color: #fff; }
 
   /* ---- Context bar (the scope hub) ----
      Database + active company + period. Sits BELOW the admin actions
@@ -3740,12 +3762,42 @@
   // characters (—, ·) and never HTML entities; an entity here renders as the
   // literal string "&mdash;", which is how a sibling page shipped visible markup
   // to an accountant.
-  function toast(msg, holdMs) {
+  // toast(msg, holdMs [, opts]) — opts = { actionLabel, action }.
+  //
+  // Without opts this is byte-for-byte the old behaviour: one textContent write, no
+  // markup, nothing clickable. WITH an action it renders a text span plus a button —
+  // the message still goes in via textContent, never innerHTML, so a message built
+  // from a server `reason` or a card code cannot inject anything.
+  //
+  // `.toast` is `pointer-events: none`, so the class has to be flipped on for an
+  // actionable toast or the button is visible and dead. It is flipped back off on
+  // every plain toast, and the action node is always torn down first — otherwise the
+  // NEXT toast inherits the last one's Undo and offers to reverse something the
+  // analyst was not looking at.
+  function toast(msg, holdMs, opts) {
     var el = $('toast'); if (!el) return;
-    el.textContent = msg; el.classList.add('is-visible');
     if (el._toastTimer) clearTimeout(el._toastTimer);
-    el._toastTimer = setTimeout(function () { el.classList.remove('is-visible'); },
-      Math.max(1200, parseInt(holdMs, 10) || 2600));
+    var act = opts && opts.action && opts.actionLabel;
+    el.textContent = '';
+    el.classList.toggle('has-action', !!act);
+    if (!act) {
+      el.textContent = msg;
+    } else {
+      var span = document.createElement('span');
+      span.textContent = msg;
+      var b = document.createElement('button');
+      b.type = 'button'; b.className = 'toast-act'; b.textContent = String(opts.actionLabel);
+      b.addEventListener('click', function () {
+        el.classList.remove('is-visible', 'has-action');
+        if (el._toastTimer) clearTimeout(el._toastTimer);
+        try { opts.action(); } catch (e) { }
+      });
+      el.appendChild(span); el.appendChild(b);
+    }
+    el.classList.add('is-visible');
+    el._toastTimer = setTimeout(function () {
+      el.classList.remove('is-visible', 'has-action');
+    }, Math.max(1200, parseInt(holdMs, 10) || 2600));
   }
 
   // ---- module catalog: the only modules with REAL V8 pages today are
@@ -10096,6 +10148,24 @@
         var editBtn = p.done
           ? '<button type="button" class="txv-btn" data-txv-act="reopen">Reopen to edit</button>'
           : '<button type="button" class="txv-btn" data-txv-act="save">Mark reviewed</button>';
+        // DISCARD (UI-122, owner ruling 2026-08-26). Until now a finding could be written
+        // and re-worded but never removed: the controller had GET and an upsert POST, the
+        // repository had no delete, and the only way to clear one was a direct
+        // DELETE against dbo.RTxvCardResolution.
+        //
+        // Only rendered when a record actually EXISTS. A discard button on a card holding
+        // nothing is a control whose only outcome is a 404 — and the point of that 404 on
+        // the server is to catch a mis-keyed request, not to be the normal path.
+        //
+        // Quiet by design and last in the row: this is the one destructive act on the
+        // card, so it must not compete with the review action beside it. There is no
+        // confirm dialog — the undo lives in the toast the discard raises, which is the
+        // same trade the reopen makes, and a modal that has to be dismissed every time
+        // gets clicked through without being read.
+        var discardBtn = (p.rec && (String(p.rec.note || '').trim() || String(p.rec.sourceFix || '').trim()))
+          ? '<button type="button" class="txv-btn txv-btn-quiet" data-txv-act="discard"'
+            + ' title="Remove this recorded finding. You can undo it straight afterwards.">Discard finding</button>'
+          : '';
         // (1) Header strip — identity (left) + review status chip (right). (An earlier
         // note here claimed parity with an accountant "✓ Corrected" chip; no such chip
         // exists.)
@@ -10205,7 +10275,7 @@
           // destroy what it already holds.
           // (6) Footer — just the resolution action (the Investigate link was redundant
           // with the header Variance drill, removed 2026-07-13).
-          + '<div class="txv-card-actions">' + editBtn + '</div>'
+          + '<div class="txv-card-actions">' + editBtn + discardBtn + '</div>'
           // Outcome of the review action, rendered on the card itself. The hand-off
           // now writes rows to the server, so it has a way to fail that the analyst
           // must see — a card that quietly kept its old state while the POST 500'd
@@ -10282,6 +10352,63 @@
           var btn = e.target.closest ? e.target.closest('[data-txv-act]') : null; if (!btn) return;
           var cardEl = btn.closest('[data-txv-card]'); if (!cardEl) return;
           var act = btn.getAttribute('data-txv-act');
+          if (act === 'discard') {
+            // UI-122. Remove a recorded finding, with the undo in the toast rather than
+            // behind a confirm dialog.
+            var _dco = cardEl.getAttribute('data-co'), _dcc = cardEl.getAttribute('data-cc'),
+                _dcp = cardEl.getAttribute('data-cp');
+            if (!(typeof RRV8 !== 'undefined' && RRV8.cardStore && RRV8.cardStore.discard)) return;
+            btn.disabled = true; btn.textContent = 'Discarding…';
+            RRV8.cardStore.discard(_dco, _dcc, _dcp).then(function (removed) {
+              if (!removed) {
+                // Nothing was there. Say so rather than reporting a discard — the card is
+                // already in the state the click was asking for, and claiming to have
+                // removed something would be the same lie the server's 404 exists to stop.
+                btn.disabled = false; btn.textContent = 'Discard finding';
+                if (typeof toast === 'function') toast('There was no recorded finding on this card.', 5000);
+                return;
+              }
+              // Log it. The Audit Center is fed from the activity log, so a finding that
+              // can vanish without a trace would make the audit trail a record of what
+              // still happens to exist rather than of what was done. Best-effort: the row
+              // is already gone server-side and a failed log must not imply otherwise.
+              try {
+                if (RRV8.logActivity) {
+                  RRV8.logActivity('Analyst finding discarded',
+                    'Co ' + _dco + ' · ' + (fmtPeriod(_dcp) || _dcp) + ' · ' + _dcc
+                    + ' · the recorded finding was removed');
+                }
+              } catch (_) {}
+              if (typeof renderAnalystTxVar === 'function') renderAnalystTxVar(_acctData || (typeof _briefData === 'function' ? _briefData() : null));
+              // THE UNDO. `removed` is the whole record, so the restore goes back through
+              // save() — the same write path that created it — rather than a second
+              // restore path that could drift from it.
+              if (typeof toast === 'function') {
+                toast('Finding discarded.', 12000, {
+                  actionLabel: 'Undo',
+                  action: function () {
+                    RRV8.cardStore.save({
+                      company: removed.company, cardCode: removed.cardCode, periodEnd: removed.periodEnd,
+                      status: removed.status, note: removed.note, sourceFix: removed.sourceFix,
+                      varAmount: removed.varAmount
+                    }).then(function () {
+                      if (typeof renderAnalystTxVar === 'function') renderAnalystTxVar(_acctData || (typeof _briefData === 'function' ? _briefData() : null));
+                      if (typeof toast === 'function') toast('Finding restored.', 5000);
+                    });
+                  }
+                });
+              }
+            }).catch(function (err) {
+              // cardStore.discard put the local record back, so the card is unchanged on
+              // this screen and on the server. Give the button back and say which it is.
+              btn.disabled = false; btn.textContent = 'Discard finding';
+              if (typeof toast === 'function') {
+                toast('Not discarded — ' + ((err && err.message) || 'the request failed')
+                      + '. The finding is unchanged.', 8000);
+              }
+            });
+            return;
+          }
           if (act === 'reopen') {
             // PERSIST a 'reopened' status so the reopen SURVIVES a browser refresh
             // (owner 2026-07-13 — a UI-only toggle snapped back on reload). Preserve the
@@ -12526,14 +12653,40 @@
   // side of them. Only the trailing clause is signal. Conservative: a segment is
   // dropped only when it actually parses as a company or a period, so an unexpected
   // detail shape is left whole rather than truncated.
+  // A segment is scope ONLY if it is nothing but a company or nothing but a date.
+  // Note what this deliberately does NOT do: test `_auditIsoPeriod(t)` for truthiness.
+  // That helper finds a date ANYWHERE in a string, so 'reclassified 42,258.57 on
+  // 2026-02-28' would read as scope and the whole clause would be deleted. Harmless
+  // while only leading segments were stripped; not harmless now that trailing ones are.
+  // The two patterns below are the two shapes _auditIsoPeriod itself accepts (:12512) —
+  // if a third is ever added there, add it here too or it stops being recognised as scope.
+  function _auditIsScopeSeg(t) {
+    t = String(t == null ? '' : t).trim();
+    if (!t) return false;
+    return /^Co\s*\d{3,}$/i.test(t)
+        || /^\d{4}-\d{2}-\d{2}$/.test(t)
+        || /^[A-Za-z]{3}[a-z]*\s+\d{1,2},\s*\d{4}$/.test(t);
+  }
   function _auditStripScope(detail) {
-    var parts = String(detail == null ? '' : detail).split('·');
-    while (parts.length > 1) {
-      var head = parts[0].trim();
-      if (/^Co\s*\d{3,}$/i.test(head) || (head && _auditIsoPeriod(head))) { parts.shift(); continue; }
-      break;
-    }
-    return parts.join('·').trim();
+    // Separators are CAPTURED so whatever survives is rejoined exactly as it was
+    // written. Both ' · ' and ' - ' occur in real details; ' - ' needs the spaces so it
+    // cannot split '2026-02-28' or a negative amount. Em dashes are left alone on
+    // purpose: in '… marked worked — Period Mismatch · Co 80013 · Feb 28, 2026' the
+    // em dash separates signal from signal, and splitting there buys nothing.
+    var toks = String(detail == null ? '' : detail).split(/(\s*·\s*|\s+-\s+)/);
+    var segs = [], seps = [], i;
+    for (i = 0; i < toks.length; i++) { if (i % 2 === 0) segs.push(toks[i]); else seps.push(toks[i]); }
+    // Strip from BOTH ends. Real details put scope at either one:
+    //   'Co 80003 - 2026-02-28 - reclassified 42,258.57 …'        (leading)
+    //   '8 transactions marked worked - Inventory DMAAI Net Zero - Co 80003 - 2026-02-28'
+    // Always keeps at least one segment, so a detail that is ONLY scope still renders
+    // something rather than an empty line.
+    var lo = 0, hi = segs.length - 1;
+    while (hi > lo && _auditIsScopeSeg(segs[lo])) lo++;
+    while (hi > lo && _auditIsScopeSeg(segs[hi])) hi--;
+    var out = segs[lo];
+    for (i = lo + 1; i <= hi; i++) out += seps[i - 1] + segs[i];
+    return out.trim();
   }
   function _auditFromActivity(e) {
     var evt = (e && e.event) || '';
@@ -12574,7 +12727,7 @@
       return {
         actor: 'analyst', trigger: 'Cardex variance cleared', title: 'Cardex variance cleared',
         at: e.at || '', by: e.by || '', co: _cco ? _cco[1] : (e.co || ''), per: '',
-        message: e.detail || '', amount: null,
+        message: _auditStripScope(e.detail), amount: null,
         event: e.event || 'Cardex variance cleared', detail: e.detail || ''
       };
     }
@@ -12597,7 +12750,12 @@
       // and February's entry gets posted in March — deriving the period from the
       // timestamp would file it under the wrong period, which is worse than omitting it.
       per: _auditIsoPeriod(s),
-      message: e.detail || '', amount: null,
+      // Scope stripped for the same reason the analyst branch strips it: the card
+      // already prints the company as a pill and the panel is already filtered to the
+      // period, so 'Co 80003 - 2026-02-28 - reclassified 42,258.57 …' restated both on
+      // an audit surface. `detail` below keeps the original, untouched — the export and
+      // anything else reading the raw row still see what was logged.
+      message: _auditStripScope(e.detail), amount: null,
       event: e.event || 'Reconciliation activity', detail: e.detail || ''
     };
   }
@@ -13585,7 +13743,9 @@
     var byLA = _auditAccts(c.co, per), las = Object.keys(byLA);
     var gl = 0, perp = 0, cf = 0, glb = 0, eod = 0, tx = 0, cdx = 0, je = 0;
     las.forEach(function (la) { var m = byLA[la]; gl += m.gl; perp += m.pp; cf += m.cf; glb += m.glb; eod += m.eod; tx += m.tx; cdx += m.cdx; je += m.je; });
-    return { co: c.co, ccy: c.ccy || 'USD', gl: gl, perp: perp, oob: gl - perp, n: las.length,
+    // `per` rides along so _auditCoSummary can key its replay ctx on the period it
+    // was actually built for; it is not used in the prompt.
+    return { co: c.co, ccy: c.ccy || 'USD', per: per || '', gl: gl, perp: perp, oob: gl - perp, n: las.length,
       comps: { 'carry forward': cf, 'transactions': tx, 'manual entries': je, 'cardex': cdx, 'GL batches': glb, 'end of day': eod } };
   }
   function _auditCoSummary(f, scrub, idx) {
@@ -13603,7 +13763,20 @@
       + 'Facts — the ONLY facts you may use. Do NOT introduce any number not listed here; use them verbatim and rounded:\n' + facts.join('\n') + '\n'
       + 'Describe what the figures show and name the single largest driver. Do NOT give a verdict (never "safe to post"), do NOT recommend actions or next steps, do NOT say "this period" — this OVERRIDES the instruction below to lead with what to do, because an audit cover records the position and does not advise. Continuous prose, no bullets.\n'
       + (window.RRV8 && RRV8.AI_REGISTER ? RRV8.AI_REGISTER : '');
-    return rrFetch('api/v1/ai/explain', { method: 'POST', body: { prompt: prompt } })
+    // ?ctx= — _auditAiSummaries fans this out one call per company, and without a
+    // disambiguator every one of them keys as 'tier=na|q=(briefing)', the same key
+    // the worklist cause reads land on. Scrubbed relabels the company as
+    // 'Entity A/B/…' by index, so the tier belongs in the key too: the same company
+    // at two tiers is two different answers. Keyed on the ACTUAL tier rather than on
+    // `scrub`, which is only a two-way split — grounded and full happen to build an
+    // identical prompt today, and keying on the boolean would silently collide them
+    // the day that stops being true. One extra capture position is the cheaper error.
+    var _acTier = (typeof _recsummaryLevel === 'function') ? _recsummaryLevel() : 'full';
+    var _acUrl = 'api/v1/ai/explain'
+      + ((window.RRV8 && RRV8.aiCtx)
+          ? ('?ctx=' + RRV8.aiCtx('auditcover-' + _acTier, f.co, f.per))
+          : '');
+    return rrFetch(_acUrl, { method: 'POST', body: { prompt: prompt } })
       .then(function (r) { return (r && r.text) ? String(r.text).trim() : ''; }).catch(function () { return ''; });
   }
   function _auditAiSummaries(cos, per) {
@@ -14594,7 +14767,21 @@
         : 'You are RapidReconciler AI. This reconciliation period is CLOSED, so this is a record of what happened — NOT a to-do. In ONE or TWO short sentences, summarize how the company ended the period: the ending out-of-balance and whether it was material relative to the total GL balance (cite the rough %). Do NOT give a recommendation, next step, or the word "Recommended" — there is nothing to act on, and that OVERRIDES the instruction below to lead with what to do. Past tense, one or two sentences on one line, not bulleted. Do not restate the company name. Use ONLY these facts, verbatim and rounded:\n';
       prompt = (window.RRV8 && RRV8.ACCT_GROUNDING ? RRV8.ACCT_GROUNDING + '\n\n' : '') + prompt + _wlCauseFacts(c, exposure)
         + (window.RRV8 && RRV8.AI_REGISTER ? '\n' + RRV8.AI_REGISTER : '');
-      rrFetch('api/v1/ai/explain', { method: 'POST', body: { prompt: prompt } }).then(function (r) {
+      // ?ctx= — one call fires PER COMPANY here, and none of them carried a
+      // disambiguator. These prompts have no "Question:" line and no "DATA ACCESS"
+      // line, so request-signature.js keys every one of them as the same
+      // 'tier=na|q=(briefing)'. MEASURED 2026-08-26: seven of these answers sit on
+      // ONE signature in recording-demo2.json — a dormant $3 company, a $6.6M one,
+      // one called material at 27%, and four called immaterial. pick() serves them
+      // in capture order, so the company on screen and the verdict under it are
+      // unrelated, and misses() stays clean while the AI says the wrong thing.
+      // `sig` is already 'exposure|period', which is exactly the two things the key
+      // was missing besides the company — split it rather than thread a new arg.
+      var _wlPer = String(sig || ''), _wlBar = _wlPer.indexOf('|');
+      _wlPer = _wlBar >= 0 ? _wlPer.slice(_wlBar + 1) : '';
+      var _wlUrl = 'api/v1/ai/explain'
+        + ((window.RRV8 && RRV8.aiCtx) ? ('?ctx=' + RRV8.aiCtx('wlcause-' + exposure, c.co, _wlPer)) : '');
+      rrFetch(_wlUrl, { method: 'POST', body: { prompt: prompt } }).then(function (r) {
         var txt = (r && r.text) ? String(r.text).trim() : '';
         if (!txt) return;
         _wlCauseCache[c.co] = { sig: sig, txt: txt };   // cached → survives repaints (the card rebuilds from this)

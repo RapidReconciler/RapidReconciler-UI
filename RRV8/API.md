@@ -657,6 +657,34 @@ corrupts history.
   overwrites the SAME period's record (no note-versioning — RR is a tool, not a
   system of record; JDE is the SoR). Returns `{ "ok": true }`.
 
+- **`DELETE /inventory/txv/resolution?company=NN&cardCode=X&periodEnd=YYYY-MM-DD`**
+  — discard ONE recorded finding (UI-122). Same grant as the upsert (`perms.dm`,
+  admin or superuser): removing a finding is at least as consequential as writing
+  one. Returns the record it removed, which **is the undo** — the client re-POSTs
+  it through the upsert above, so restore and create share one write path:
+
+  ```json
+  { "ok": true,
+    "removed": { "cardCode": "ACCT", "company": "00900", "periodEnd": "2026-06-30",
+                 "status": "complete", "note": "…", "sourceFix": "…",
+                 "varAmount": 1284.55, "by": "name@customer.com",
+                 "at": "2026-07-08T15:30:00Z" } }
+  ```
+
+  **`404` when no record existed for that key**, deliberately. A discard that
+  reported success on a card holding nothing is indistinguishable, from the
+  analyst's side, from one that worked — so a mis-keyed request would read as
+  done while the real row sat on someone else's screen. Hard delete, not a
+  tombstone status: all four `status` values mean the finding exists and is in
+  some state of being worked, and a fifth meaning "this should never have
+  existed" would have to be excluded from every query that reads the scoreboard.
+
+  `RRV8.cardStore.discard(company, cardCode, periodEnd)` is the client half. It
+  removes locally first and then calls the server, like `save()` — but unlike
+  `save()` it does **not** swallow a refusal: it restores the local record and
+  re-throws, because a swallowed failure would leave the card gone here and
+  present for everyone else.
+
 - **Backing table `dbo.RTxvCardResolution`** — one current row per
   `(CompanyNumber, CardCode, PeriodEnd)`, unique-indexed on that key (the upsert
   target). DDL ships with the SSDT project **and** the agent setup
