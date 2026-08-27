@@ -41,8 +41,19 @@ with different URLs.
 V8 is **centrally deployed, not per-customer**. The RR Agent on the
 customer's box bridges their DB to GSI's central VALC. SPA assets are
 served once from GSI's central host. Customers reach the SPA at
-`rapidreconciler.getgsi.com`; VALC routes their session to their agent
+`rapidreconciler-prod.getgsi.com`; VALC routes their session to their agent
 via the JWT they get on login.
+
+> **Corrected 2026-08-27 (UI-160).** This read `rapidreconciler.getgsi.com`
+> until today. Both hosts still answer 200 and serve the same AngularJS
+> build, with no redirect between them &mdash; measured from this
+> workstation: `rapidreconciler.getgsi.com` &rarr; `40.76.210.54`,
+> `Last-Modified: 2026-03-24`; `rapidreconciler-prod.getgsi.com` &rarr;
+> `20.119.8.37`, `Last-Modified: 2026-08-26`. The old host is a stale
+> mirror, not a dead one, which is why nothing anywhere failed loudly.
+> The `prod` row in the table below still reads `rr-spa.cloudapp.net`
+> and is deliberately left alone &mdash; nothing measured today says what
+> that row should be.
 
 This means `config.js` is **per-environment, not per-customer**:
 
