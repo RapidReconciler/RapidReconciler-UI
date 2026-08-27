@@ -396,27 +396,64 @@ red" makes the Cardex Variance status permanently red (and contradicts the
 `|CardexVar|` is at/under its tolerance, red when over**. Per-company (chosen
 over a single total so it's robust to company-scope changes).
 
-- **Storage:** `dbo.RCardexTolerance` (one row per company; `Tolerance`
-  `decimal(18,2)`, default/absent = **0 = strict**, so no false greens until a
-  threshold is deliberately set). DDL ships in
-  `RapidReconciler-Agent/setup/sql/create-cardex-tolerance-table.sql`, applied
-  per-DB like the DMAAI overlay tables.
+- **Storage:** `dbo.RCardexTolerance`, one row per **(company, item)** since
+  UI-161. `ItemNumber = ''` is the **company-level default**; anything else is an
+  override for that one item. `Tolerance` `decimal(18,2)`, default/absent =
+  **0 = strict**, so no false greens until a threshold is deliberately set. DDL
+  ships in `RapidReconciler-Agent/setup/sql/create-cardex-tolerance-table.sql`
+  (which also migrates an existing company-only table in place) **and in the
+  SSDT project** — it was missing from the latter until UI-161, so a customer
+  installed from the dacpac had no table and both routes failed against them.
+- **Precedence, decided once:** **an item-level tolerance BEATS the
+  company-level one for that item.** No row at either grain = 0 = strict. That
+  sentence is repeated verbatim in the table DDL,
+  `CardexToleranceRepository#resolve`, `CardexToleranceController` and the V8
+  resolver `cxTolOf`, and each side has exactly one implementation of it. A
+  silent disagreement between two tolerances is worse than either being wrong:
+  the company reads green while the item reads red, both on screen, and nobody
+  can tell which is the product's actual opinion.
 - **Endpoints** (agent-direct; in `RR_TEST_AGENT_AREAS` &rarr;
   `inventory/cardex-tolerance`):
-    - `GET /inventory/cardex-tolerance` &rarr; `{ "data": [ { "company",
+    - `GET /inventory/cardex-tolerance` &rarr; `{ "data": [ { "company", "item",
       "tolerance", "updatedBy", "updatedDate" } ] }`. **Any authenticated
       role**; JWT-scoped to the caller's allowed companies. Only *set* rows are
-      returned — the UI defaults an unset company to 0.
-    - `PUT /inventory/cardex-tolerance` body `{ "company", "tolerance" }`
-      &rarr; the upserted row. **Analyst-gated** (`perms.dm`, or admin/
-      superuser); can only set a company in the caller's own scope. (Added
-      `dmaais` to the agent's `UserRequest` from `dbs[i].perms.dm`, fail-open
-      when the token has no `perms` block — matches the UI's `canAnalyst`.)
+      returned — the UI defaults an unset company or item to 0. **Both grains
+      arrive in this one array**, so a consumer that judges at company grain must
+      filter to `item === ''`; Home does, and without it one item's override
+      would silently become the company's threshold.
+    - `PUT /inventory/cardex-tolerance` body `{ "company", "tolerance"[, "item"]
+      }` &rarr; the upserted row. `item` absent or blank = the company default.
+      **Analyst-gated** (`perms.dm`, or admin/superuser); can only set a company
+      in the caller's own scope. Materiality is the analyst's call at *both*
+      grains — a per-item threshold is not a smaller decision than a per-company
+      one, it is a narrower one.
+    - `DELETE /inventory/cardex-tolerance?company=NNNNN[&item=ABC]` &rarr;
+      `{ "deleted": 0|1 }`. Removing an item override returns that item to the
+      company default; removing the company row returns every unoverridden item
+      to strict. Analyst-gated. An override that cannot be removed in the product
+      is one that gets removed in SQL, or never.
+- **The per-item override must never act invisibly.** A customer with thousands
+  of items will not tune them individually, and a stale override suppresses a
+  real variance forever. So `inventory-cardex-variance.html` prints the effective
+  tolerance **in the scope band, beside the Amt var it judges**, names the grain
+  it came from, carries the audit stamp (`updatedBy` / `updatedDate`), says
+  plainly when the focused item is being suppressed, and lists every item-level
+  override for the company. A suppression nobody can see is the same defect class
+  as a status nobody can reach.
 - **Status rule** (UI): the Cardex Variance card/lane is green only when
-  **every** in-scope company's total `|CardexVar|` is within its own tolerance.
-  Home reads the tolerances and the per-company variance (from the roll-forward
-  rows); the Cardex Variance page (`inventory-cardex-variance.html`) hosts the
-  editable per-company threshold next to its "Total variance" KPI.
+  **every** in-scope company's total `|CardexVar|` is within its own
+  **company-level** tolerance. Home judges at company+account grain
+  (`CardexVar` from the roll-forward rows), which carries no item, so the item
+  grain deliberately does **not** reach the Home dot — it is applied where items
+  are, on `inventory-cardex-variance.html`. Two conclusions about one company on
+  one screen is the defect this split avoids, not one it creates: the dot's
+  number and the item's number are different numbers, and each is judged against
+  the threshold that has the same grain.
+- **Where the editor lives:** `inventory-cardex-variance.html`, in the scope
+  band. Until UI-161 this doc claimed the page hosted an editable per-company
+  threshold and **it did not** — the page carried CSS for a `.cx-tol-*` editor
+  and a `_cxTol` variable that nothing ever read or wrote, and no surface in the
+  product called `PUT`. The tolerance could only be set in SQL.
 - **Graceful fallback:** if the endpoint is absent, the UI treats every
   tolerance as 0 (today's strict behavior) — nothing breaks.
 
