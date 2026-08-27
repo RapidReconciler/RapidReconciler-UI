@@ -66,7 +66,17 @@ window.RR_CONFIG = {
   // install-prep doc this is the documented host customer IT uses to
   // verify outbound 443. Override per deploy if the public landing
   // host changes.
-  statusAnchor:  'https://rapidreconciler.getgsi.com'
+  //
+  // UI-160, 2026-08-27: was `rapidreconciler.getgsi.com`. Both hosts
+  // still answer 200 with the same AngularJS app, from different edges
+  // (measured: .getgsi.com -> 40.76.210.54, Last-Modified 2026-03-24;
+  // -prod.getgsi.com -> 20.119.8.37, Last-Modified 2026-08-26). There
+  // is NO redirect between them, so the old host is not dead -- it is a
+  // five-month-stale mirror that a reachability probe cannot tell apart
+  // from the live one. That is exactly why this anchor had to move: a
+  // green Connection Check against a host nobody deploys to any more is
+  // a false pass.
+  statusAnchor:  'https://rapidreconciler-prod.getgsi.com'
 };
 
 // Endpoint prefixes that route to mini-VALC (the dev-side stand-in
