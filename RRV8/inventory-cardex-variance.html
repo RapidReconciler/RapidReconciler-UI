@@ -90,6 +90,33 @@
   .cx-tol-save { padding:4px 9px; font-size:11.5px; }
   .cx-tol-save:disabled { opacity:.5; cursor:not-allowed; }
   .cx-tol-hint { font-size:10.5px; color:var(--text-muted); font-style:italic; }
+  /* UI-161 — the tolerance reads inside the scope band, beside the number it judges.
+     The verdict colour is on the VERDICT, never on the amount: sign is not severity
+     (UI-88) and neither is being inside a threshold somebody chose. */
+  .cxv-tol-item .cx-tol-sub { font-size:11px; font-weight:700; color:var(--text-muted); line-height:1.3; margin-top:2px; }
+  .cxv-tol-item .cx-tol-sub .g-item { color:#b0670c; }
+  .cxv-tol-item .cx-tol-sub .g-co { color:#3c6ba8; }
+  .cxv-tol-item .cx-tol-sub .g-strict { color:var(--text-muted); }
+  .cxv-tol-item .cx-tol-sub .v-under { color:#1a7f5a; }
+  .cxv-tol-item .cx-tol-sub .v-over { color:var(--red); }
+  .cx-tol-editor { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:0 0 14px; padding:11px 16px;
+    background:var(--bg-soft); border:1px solid var(--rule); border-radius:10px; }
+  .cx-tol-editor[hidden] { display:none; }
+  .cx-tol-lbl { font-size:11px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; color:var(--text-muted); }
+  .cx-tol-scope { display:inline-flex; align-items:center; gap:5px; font-size:12.5px; font-weight:700; color:var(--navy); cursor:pointer; }
+  .cx-tol-clear { padding:4px 9px; font-size:11.5px; }
+  .cx-tol-listbtn { appearance:none; -webkit-appearance:none; border:0; background:none; padding:0;
+    font-family:inherit; font-size:12px; font-weight:800; color:var(--blue); cursor:pointer; text-decoration:underline; }
+  .cx-tol-panel { margin:0 0 16px; padding:14px 18px; background:var(--bg-card); border:1px solid var(--rule); border-radius:12px; box-shadow:var(--shadow-sm); }
+  .cx-tol-panel[hidden] { display:none; }
+  .cx-tol-panel-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:8px; }
+  .cx-tol-row { display:grid; grid-template-columns:1fr auto 1fr auto; gap:12px; align-items:center;
+    padding:8px 2px; border-bottom:1px solid var(--rule); font-size:13px; }
+  .cx-tol-row:last-child { border-bottom:0; }
+  .cx-tol-row .it { font-family:'JetBrains Mono',ui-monospace,monospace; font-weight:700; color:var(--navy); }
+  .cx-tol-row .tv { font-family:'JetBrains Mono',ui-monospace,monospace; font-weight:700; font-variant-numeric:tabular-nums; }
+  .cx-tol-row .mt { font-size:11.5px; color:var(--text-muted); font-weight:600; }
+  .cx-tol-empty { font-size:13px; color:var(--text-soft); }
 
   /* focus header card */
   .analysis { background:var(--bg-card); border:1px solid var(--rule); border-radius:14px; box-shadow:var(--shadow-sm); padding:18px 20px; margin-bottom:18px; }
@@ -334,6 +361,43 @@
     <span class="cxv-scope-item"><span class="cxv-scope-k">Amt var</span><span class="cxv-scope-v" id="kpiAmt">&mdash;</span></span>
     <span class="cxv-scope-item"><span class="cxv-scope-k">On hand</span><span class="cxv-scope-v" id="kpiQoh">&mdash;</span></span>
     <span class="cxv-scope-item"><span class="cxv-scope-k">Value</span><span class="cxv-scope-v" id="kpiVal">&mdash;</span></span>
+    <!-- UI-161. The materiality tolerance sits IN the band, beside the Amt var it
+         judges, because a threshold that decides whether a number matters has to be
+         readable in the same glance as the number. A stale item override otherwise
+         suppresses a real variance forever and nothing on screen says why. The
+         sub-line names the GRAIN (item override vs company default) and carries the
+         audit stamp, so an override can never act anonymously. -->
+    <span class="cxv-scope-item cxv-tol-item" id="cxTolBox">
+      <span class="cxv-scope-k">Tolerance</span>
+      <span class="cxv-scope-v" id="cxTolVal">&mdash;</span>
+      <span class="cx-tol-sub" id="cxTolSub"></span>
+    </span>
+  </div>
+
+  <!-- Tolerance editor. Analyst-gated on the server (PUT/DELETE require perms.dm);
+       hidden here for anyone the token does not grant it, so the control is not
+       offered and then refused. -->
+  <div class="cx-tol-editor" id="cxTolEditor" hidden>
+    <span class="cx-tol-lbl">Materiality tolerance</span>
+    <label class="cx-tol-scope"><input type="radio" name="cxTolGrain" value="item" checked> This item</label>
+    <label class="cx-tol-scope"><input type="radio" name="cxTolGrain" value="company"> Company default</label>
+    <input type="text" class="cx-tol-input" id="cxTolInput" inputmode="decimal" autocomplete="off" aria-label="Tolerance amount">
+    <button type="button" class="btn cx-tol-save" id="cxTolSave">Save</button>
+    <button type="button" class="btn cx-tol-clear" id="cxTolClear">Clear</button>
+    <button type="button" class="cx-tol-listbtn" id="cxTolList">Overrides for this company</button>
+    <span class="cx-tol-hint" id="cxTolHint"></span>
+  </div>
+
+  <!-- Every item-level override for the focused company, so they can be reviewed
+       rather than accumulate. A per-item tolerance is a maintenance surface: a
+       customer with thousands of items will not tune them individually, and an
+       override nobody can enumerate is one nobody removes. -->
+  <div class="cx-tol-panel" id="cxTolPanel" hidden>
+    <div class="cx-tol-panel-head">
+      <b id="cxTolPanelTitle">Item tolerance overrides</b>
+      <button type="button" class="cx-tol-listbtn" id="cxTolPanelClose">Close</button>
+    </div>
+    <div id="cxTolPanelBody"></div>
   </div>
 
   <!-- ============================================================
@@ -510,7 +574,79 @@
   // state.focus = { item, branch, company, dim, method } | null. The page shows
   // ONE item (arrived via ?item=... or typed in the entry box). Browse lives on Home.
   var state = { focus:null };
-  var _cxTol = {};   // company -> materiality tolerance (GET /inventory/cardex-tolerance; absent = 0 = strict)
+  // Cardex materiality tolerances, BOTH grains (UI-161). Keyed "<company>|<item>",
+  // where an empty item is the company-level default. Absent at both grains = 0 =
+  // strict, which is the behaviour before any threshold is deliberately set.
+  //
+  // PRECEDENCE, and this is the only implementation of it on the client: AN
+  // ITEM-LEVEL TOLERANCE BEATS THE COMPANY-LEVEL ONE FOR THAT ITEM. The same
+  // sentence is in the table DDL, CardexToleranceRepository#resolve, the controller
+  // and RRV8/API.md. A silent disagreement between two tolerances is worse than
+  // either being wrong: the company reads green while the item reads red, both on
+  // screen, and nobody can tell which is the product's actual opinion.
+  var _cxTol = {};        // "<co>|<item>" -> { tol, by, at }
+  var _cxTolLoaded = false, _cxTolWhy = '';
+  function _cxTolKey(co, item){ return String(co==null?'':co).trim()+'|'+String(item==null?'':item).trim(); }
+  /** The threshold that applies to one item, and WHICH grain it came from. The
+   *  grain is returned because the UI has to name it: "500 because someone set it
+   *  for this item" and "500 because that is the company default" are different
+   *  facts, and only the first one is an override anybody needs to review. */
+  function cxTolOf(co, item){
+    var it = _cxTol[_cxTolKey(co, item)];
+    if (String(item==null?'':item).trim() && it) return { tol:Number(it.tol)||0, grain:'item', by:it.by||'', at:it.at||'' };
+    var c = _cxTol[_cxTolKey(co, '')];
+    if (c) return { tol:Number(c.tol)||0, grain:'company', by:c.by||'', at:c.at||'' };
+    return { tol:0, grain:'strict', by:'', at:'' };
+  }
+  /** Every ITEM-level override for one company, tightest-looking review order:
+   *  most recently set first, because the ones nobody has touched in a year are
+   *  exactly the ones that need reading, and a date column makes them findable. */
+  function cxTolOverrides(co){
+    var out = [], pre = String(co==null?'':co).trim()+'|';
+    for (var k in _cxTol) {
+      if (!Object.prototype.hasOwnProperty.call(_cxTol, k)) continue;
+      if (k.indexOf(pre) !== 0) continue;
+      var item = k.slice(pre.length); if (!item) continue;    // '' is the company default, not an override
+      out.push({ item:item, tol:Number(_cxTol[k].tol)||0, by:_cxTol[k].by||'', at:_cxTol[k].at||'' });
+    }
+    return out.sort(function(a,b){ return String(b.at).localeCompare(String(a.at)); });
+  }
+  function _cxTolWhen(iso){
+    if(!iso) return '';
+    var d=new Date(iso); if(isNaN(d.getTime())) return String(iso).slice(0,10);
+    try { return d.toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'}); }
+    catch(_){ return String(iso).slice(0,10); }
+  }
+  function loadCxTolerances(){
+    return agentFetch('/inventory/cardex-tolerance').then(function(resp){
+      var rows=(resp&&resp.data)||[], m={};
+      rows.forEach(function(t){
+        if(!t||t.company==null) return;
+        m[_cxTolKey(t.company, t.item)] = { tol:Number(t.tolerance)||0, by:t.updatedBy||'', at:t.updatedDate||'' };
+      });
+      _cxTol=m; _cxTolLoaded=true; _cxTolWhy='';
+    }).catch(function(e){
+      // No silent default. If the thresholds could not be read, the band says so
+      // rather than showing "0.00 (strict)", which is a claim about configuration
+      // and not the absence of one.
+      _cxTol={}; _cxTolLoaded=false;
+      _cxTolWhy=(e&&e.message)?e.message:'the service did not answer';
+    });
+  }
+  /** Analyst grant (perms.dm), same rule as home.html canAnalyst: fail-open when
+   *  the token carries no perms block, because the long-lived dev token predates
+   *  it. The server enforces this for real; hiding the control just avoids
+   *  offering an action that would then be refused. */
+  function _cxCanSetTol(){
+    try{
+      var t=token(); if(!t) return false;
+      var p=JSON.parse(atob(t.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));
+      var dbs=p&&p.dbs; if(!Array.isArray(dbs)) return true;
+      var d=dbs[_activeDbIdx(dbs)]||dbs[0]||{};
+      if(d.adm===true) return true;
+      return d.perms ? (d.perms.dm!==false) : true;
+    }catch(_){ return true; }
+  }
   // ---- company scope: the page honors the shared working-company scope (set on
   //      Home) — it only focuses items in the in-scope companies. ----
   // Active DB index — delegate to the ONE canonical resolver (config.js RRDB),
@@ -1065,8 +1201,160 @@
     openAdjust(a.tgt.ItemID);   // opens the panel, fields prefilled to current; the analyst types the correction
   }
   function renderAll(){
-    renderKpis(); renderGrid(); renderCxvCards(); renderRollBand(); renderSourceFixLog(); renderLedger();
+    renderKpis(); renderCxTolerance(); renderGrid(); renderCxvCards(); renderRollBand(); renderSourceFixLog(); renderLedger();
   }
+
+  // ---- materiality tolerance (UI-161) ------------------------------------
+  /** The focused item's company. The worklist rows carry it; the focus may too. */
+  function _cxFocusCo(){
+    var f=state.focus; if(!f) return '';
+    if(f.company) return String(f.company).trim();
+    var r=focusRows()[0];
+    return r ? String(r.CompanyNumber||'').trim() : '';
+  }
+  /**
+   * Paint the tolerance into the scope band, beside the Amt var it judges.
+   *
+   * This is the whole reason the row insisted the threshold be visible where it
+   * acts. A per-item override is a maintenance surface: a customer with thousands
+   * of items will not tune them individually, and a stale override suppresses a
+   * real variance forever. A suppression nobody can see is the same defect class
+   * as a status nobody can reach. So the band names the number, the GRAIN it came
+   * from, who set it and when, and whether this item's variance is inside it.
+   */
+  function renderCxTolerance(){
+    var box=document.getElementById('cxTolBox'), val=document.getElementById('cxTolVal'), sub=document.getElementById('cxTolSub');
+    var ed=document.getElementById('cxTolEditor');
+    if(!box||!val||!sub) return;
+    var f=state.focus;
+    if(!f||!f.item){ val.textContent='—'; sub.innerHTML=''; if(ed) ed.hidden=true; return; }
+    if(!_cxTolLoaded){
+      // Not "0.00 (strict)". That would be a claim about how this company is
+      // configured, made on the strength of a request that failed.
+      val.textContent='—';
+      sub.innerHTML='<span class="g-strict">not read &mdash; '+esc(_cxTolWhy||'unavailable')+'</span>';
+      if(ed) ed.hidden=true;
+      return;
+    }
+    var co=_cxFocusCo(), t=cxTolOf(co, f.item);
+    val.textContent=_curCtx.mixed?'Mixed':curMoney(t.tol);
+    var rows=focusRows();
+    var mag=rows.reduce(function(a,r){ return a+Math.abs(Number(r.AdjAmount)||0); },0);
+    var over=mag > t.tol + 0.005;
+    var grainH = t.grain==='item'
+      ? '<span class="g-item">item override</span>'
+      : (t.grain==='company' ? '<span class="g-co">company default</span>' : '<span class="g-strict">no threshold set &mdash; strict</span>');
+    var stampH = (t.by||t.at)
+      ? ' &middot; set '+esc(_cxTolWhen(t.at)||'—')+(t.by?' by '+esc(t.by):'')
+      : '';
+    var verdictH = rows.length
+      ? '<br>' + (over
+          ? '<span class="v-over">over tolerance</span>'
+          : '<span class="v-under">within tolerance &mdash; this item is being suppressed</span>')
+      : '';
+    sub.innerHTML=grainH+stampH+verdictH;
+    if(ed){
+      ed.hidden=!_cxCanSetTol();
+      if(!ed.hidden) _cxTolSyncEditor();
+    }
+  }
+  /** Reflect the CURRENT stored value for whichever grain the radio selects, so
+   *  Save never silently rewrites the other grain with a number the analyst was
+   *  reading off the first one. */
+  function _cxTolSyncEditor(){
+    var f=state.focus; if(!f) return;
+    var co=_cxFocusCo();
+    var grain=(document.querySelector('input[name="cxTolGrain"]:checked')||{}).value||'item';
+    var key=_cxTolKey(co, grain==='item'?f.item:'');
+    var cur=_cxTol[key];
+    var inp=document.getElementById('cxTolInput'), hint=document.getElementById('cxTolHint');
+    var clr=document.getElementById('cxTolClear');
+    if(inp) inp.value = cur ? String(Number(cur.tol)||0) : '';
+    if(clr) clr.disabled = !cur;
+    if(hint){
+      hint.textContent = cur
+        ? ('currently ' + (Number(cur.tol)||0) + (cur.at ? ', set ' + (_cxTolWhen(cur.at)||'') : '') + (cur.by ? ' by ' + cur.by : ''))
+        : (grain==='item'
+            ? 'no override for this item — it follows the company default'
+            : 'no company default — every unoverridden item is strict');
+    }
+    var lbl=document.getElementById('cxTolPanelTitle');
+    if(lbl) lbl.textContent='Item tolerance overrides — company '+(co||'—');
+  }
+  function _cxTolWrite(clear){
+    var f=state.focus; if(!f||!f.item) return;
+    var co=_cxFocusCo();
+    if(!co){ toast('No company on this focus &mdash; open the item from a company card first.'); return; }
+    var grain=(document.querySelector('input[name="cxTolGrain"]:checked')||{}).value||'item';
+    var item=grain==='item'?f.item:'';
+    var save=document.getElementById('cxTolSave'), clr=document.getElementById('cxTolClear');
+    if(save) save.disabled=true; if(clr) clr.disabled=true;
+    var done=function(){
+      if(save) save.disabled=false;
+      loadCxTolerances().then(function(){ renderCxTolerance(); _cxTolRenderPanel(); });
+    };
+    if(clear){
+      var q='?company='+encodeURIComponent(co)+(item?'&item='+encodeURIComponent(item):'');
+      agentFetch('/inventory/cardex-tolerance'+q,{method:'DELETE'}).then(function(){
+        toast(item?('Tolerance override removed for '+esc(item)+' &mdash; it follows the company default again.')
+                  :'Company tolerance cleared &mdash; every unoverridden item is strict again.');
+        done();
+      }).catch(function(e){ toast('Not cleared &mdash; '+esc(e.message)); done(); });
+      return;
+    }
+    var raw=(document.getElementById('cxTolInput')||{}).value;
+    var n=Number(String(raw==null?'':raw).replace(/,/g,'').trim());
+    if(!isFinite(n)||n<0){ toast('Enter a tolerance of 0 or more.'); if(save) save.disabled=false; if(clr) clr.disabled=false; return; }
+    agentFetch('/inventory/cardex-tolerance',{method:'PUT',body:{company:co,item:item,tolerance:n}}).then(function(){
+      toast(item?('Tolerance for '+esc(item)+' set to '+esc(String(n))+'.')
+                :('Company tolerance set to '+esc(String(n))+'.'));
+      done();
+    }).catch(function(e){ toast('Not saved &mdash; '+esc(e.message)); done(); });
+  }
+  function _cxTolRenderPanel(){
+    var body=document.getElementById('cxTolPanelBody'); if(!body) return;
+    var co=_cxFocusCo();
+    var list=cxTolOverrides(co);
+    if(!list.length){
+      body.innerHTML='<p class="cx-tol-empty">No item-level overrides for this company. Every item follows the company default'
+        + (_cxTol[_cxTolKey(co,'')] ? ' of '+esc(String(_cxTol[_cxTolKey(co,'')].tol)) : ' (none set — strict)') + '.</p>';
+      return;
+    }
+    var can=_cxCanSetTol();
+    body.innerHTML=list.map(function(o){
+      return '<div class="cx-tol-row"><span class="it">'+esc(o.item)+'</span>'
+        + '<span class="tv">'+esc(String(o.tol))+'</span>'
+        + '<span class="mt">set '+esc(_cxTolWhen(o.at)||'—')+(o.by?' by '+esc(o.by):'')+'</span>'
+        + (can?'<button type="button" class="cx-tol-listbtn" data-tol-rm="'+esc(o.item)+'">Remove</button>':'<span></span>')
+        + '</div>';
+    }).join('');
+  }
+  (function _wireCxTol(){
+    var save=document.getElementById('cxTolSave'), clr=document.getElementById('cxTolClear');
+    var list=document.getElementById('cxTolList'), panel=document.getElementById('cxTolPanel');
+    var close=document.getElementById('cxTolPanelClose');
+    if(save) save.addEventListener('click',function(){ _cxTolWrite(false); });
+    if(clr)  clr.addEventListener('click',function(){ _cxTolWrite(true); });
+    Array.prototype.forEach.call(document.querySelectorAll('input[name="cxTolGrain"]'),function(r){
+      r.addEventListener('change',_cxTolSyncEditor);
+    });
+    if(list&&panel) list.addEventListener('click',function(){
+      panel.hidden=!panel.hidden;
+      if(!panel.hidden) _cxTolRenderPanel();
+    });
+    if(close&&panel) close.addEventListener('click',function(){ panel.hidden=true; });
+    var body=document.getElementById('cxTolPanelBody');
+    if(body) body.addEventListener('click',function(e){
+      var b=e.target.closest?e.target.closest('[data-tol-rm]'):null; if(!b) return;
+      var item=b.getAttribute('data-tol-rm'), co=_cxFocusCo();
+      b.disabled=true;
+      agentFetch('/inventory/cardex-tolerance?company='+encodeURIComponent(co)+'&item='+encodeURIComponent(item),{method:'DELETE'})
+        .then(function(){
+          toast('Tolerance override removed for '+esc(item)+'.');
+          loadCxTolerances().then(function(){ renderCxTolerance(); _cxTolRenderPanel(); });
+        }).catch(function(e2){ b.disabled=false; toast('Not removed &mdash; '+esc(e2.message)); });
+    });
+  })();
 
   // ---- focus control ----
   function setFocus(f){
@@ -1472,6 +1760,9 @@
       document.getElementById('rfBody').innerHTML='<tr><td class="empty" colspan="'+COLS.length+'">No data &mdash; '+esc(err.message)+'</td></tr>';
       document.getElementById('gridCount').textContent='—';
     });
+    // Materiality tolerances (UI-161) ride their own fetch; repaint the band once
+    // they land so the threshold appears beside the variance it judges.
+    loadCxTolerances().then(function(){ renderCxTolerance(); });
     // The per-item roll-forward (rinvasof) rides its own fetch; render once it lands.
     loadItemRoll().then(function(){ renderRollBand(); });
     // "Data as of" chip rides its own fetch; reveal it once a real load date lands.

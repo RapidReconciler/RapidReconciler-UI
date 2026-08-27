@@ -5252,15 +5252,30 @@
         /* agent unavailable -> keep the validation.color fallback */
       });
   }
-  // Per-company cardex materiality tolerances. GET /inventory/cardex-tolerance
-  // -> { data:[{company,tolerance}] }. Repaints the cardex light once loaded so
-  // a company within its tolerance reads green. Endpoint absent -> empty map ->
-  // every tolerance defaults 0 (strict), i.e. today's behavior. No-ops on fail.
+  // Cardex materiality tolerances. GET /inventory/cardex-tolerance
+  // -> { data:[{company,item,tolerance,updatedBy,updatedDate}] }. Repaints the
+  // cardex light once loaded so a company within its tolerance reads green.
+  // Endpoint absent -> empty map -> every tolerance defaults 0 (strict), i.e.
+  // today's behavior. No-ops on fail.
+  //
+  // ⚠ COMPANY-LEVEL ROWS ONLY, and the filter is load-bearing. UI-161 widened the
+  // endpoint to per-item overrides, which arrive in this SAME array with a
+  // non-empty `item`. Without the filter, whichever item override happened to come
+  // last would overwrite the company's own threshold in this map — so one item's
+  // generous override would quietly relax the company dot for EVERY account, and
+  // a tighter one would make the dot red for reasons no company-level number on
+  // screen could explain. Home judges at company+account grain (CardexVar), which
+  // has no item to match an override against; the item grain is judged where items
+  // are listed, on inventory-cardex-variance.html.
   function loadCardexTolerance() {
     rrFetch('inventory/cardex-tolerance').then(function (resp) {
       var rows = (resp && resp.data) || [];
       var m = {};
-      rows.forEach(function (t) { if (t && t.company != null) m[String(t.company)] = Number(t.tolerance) || 0; });
+      rows.forEach(function (t) {
+        if (!t || t.company == null) return;
+        if (String(t.item == null ? '' : t.item).trim() !== '') return;   // item override — not this map's grain
+        m[String(t.company)] = Number(t.tolerance) || 0;
+      });
       _cardexTol = m;
       applyInventoryLight();   // cheap repaint with the tolerances applied
     }).catch(function () { /* endpoint absent -> keep defaults (strict) */ });
