@@ -324,11 +324,15 @@
   .home-actions > * { pointer-events: auto; }
   /* Workbar pill sequence (owner 2026-07-11): Welcome, Database, Company, View.
      Welcome stays pinned left; margin-left:auto on the DB pill (now 2nd) groups
-     Database / Company / View together to the right, in that order. */
+     Database / Company / View together to the right, in that order.
+     UI-13 slots the freshness pill directly AFTER Database: it is a fact ABOUT
+     the active database (when its data was last pulled from JD Edwards), so it
+     reads as an annotation on the database pill rather than a fourth control. */
   .home-actions .ha-user  { order: 1; }
   .home-actions .ha-db    { order: 2; margin-left: auto; }
-  .home-actions .ha-cos   { order: 3; }
-  .home-actions .ha-roles { order: 4; }
+  .home-actions .ha-fresh { order: 3; }
+  .home-actions .ha-cos   { order: 4; }
+  .home-actions .ha-roles { order: 5; }
   /* Uniform pills — every cluster control is the same size; label left, chevron
      pinned right (space-between) so the row reads as a tidy set. */
   .home-actions .ha-rolebtn { min-width: 196px; justify-content: space-between; }
@@ -347,6 +351,22 @@
      for everyone. Reuse the .ha-rolebtn / .ha-rolemenu / .umr-* styles. */
   .ha-roles, .ha-db, .ha-audit, .ha-cos, .ha-user { position: relative; }
   .ha-roles[hidden], .ha-db[hidden], .ha-audit[hidden], .ha-cos[hidden], .ha-user[hidden] { display: none; }
+  /* Data-freshness pill (UI-13). Same chrome as the pills either side of it so the
+     cluster reads as one row, but flat — no shadow, no hover, no chevron — because
+     it is a fact, not a control. The attention state is the only one that raises
+     its voice: a refresh that did not finish means every figure on the screen may
+     be stale, which is the one thing here worth interrupting for. */
+  .ha-fresh { display: inline-flex; align-items: center; gap: 8px; background: var(--bg-soft); border: 1px solid var(--rule); border-radius: 100px; padding: 8px 14px; font-family: inherit; font-size: 13px; font-weight: 700; color: var(--text-soft); white-space: nowrap; }
+  .ha-fresh[hidden] { display: none; }
+  .ha-fresh .ha-fresh-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--rule-strong); }
+  /* Dot colour is derived from data-state, never set as a class — RRV8.setDotState
+     is the one painter (sidebar.js). These rules are scoped to this pill because
+     the existing row-dot colours live under .ihs-chip and would not reach here. */
+  .ha-fresh .ha-fresh-dot[data-state="ok"] { background: var(--green); }
+  .ha-fresh .ha-fresh-dot[data-state="busy"] { background: var(--blue); }
+  .ha-fresh .ha-fresh-dot[data-state="watch"], .ha-fresh .ha-fresh-dot[data-state="todo"] { background: var(--orange); }
+  .ha-fresh .ha-fresh-dot[data-state="attention"] { background: var(--red); }
+  .ha-fresh[data-state="attention"] { background: var(--red-pale, #fdecea); border-color: rgba(192,57,43,.35); color: var(--red, #c0392b); }
   /* Account pill menu — right-aligned (the pill sits at the right edge) with a
      name/email head above the Sign out action. */
   .ha-user-menu { left: auto; right: 0; }
@@ -3369,6 +3389,17 @@
       <svg class="ha-role-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
     </button>
   </div>
+  <!-- Data freshness — the age of what you are reconciling AGAINST (UI-13). Every
+       role sees it, because every role is tying out to JD Edwards and a variance
+       produced by a refresh that failed three days ago looks exactly like a real
+       one. Deliberately NOT a button: there is nothing to open, and a chevron on a
+       read-only fact reads as a broken control. It sits here rather than in the
+       admin instance-health strip so it is reachable without the admin grant;
+       Tools/test-data-freshness.js fails the build if it moves back inside one. -->
+  <div class="ha-fresh" id="haFresh" data-state="unknown" hidden>
+    <span class="ha-fresh-dot row-dot" data-state="unknown" aria-hidden="true"></span>
+    <span id="haFreshLabel">Checking&hellip;</span>
+  </div>
   <!-- Audit report is PER-COMPANY only — the buttons live on each company card, never
        in the workbar. The bottom-row audit pill was removed (owner 2026-07-10). -->
   <!-- Database picker — last / right; .home-actions .ha-db { margin-left:auto } floats it right. -->
@@ -4863,18 +4894,28 @@
       var job = payload.currentJob || payload; // demo log wraps it; prod returns it flat
       var status = String(job.jobStatus || '').trim();
       var when = String(job.jobDate || '').trim();
-      var pill = $('sysPill'), txt = $('sysText');
-      pill.classList.remove('good', 'warn', 'bad');
-      if (/^success/i.test(status))          { pill.classList.add('good'); txt.textContent = when ? 'Data current · ' + when : 'Data current'; }
-      else if (/^in progress/i.test(status)) { pill.classList.add('warn'); txt.textContent = 'Data refreshing…'; }
-      else if (/^(failed|cancelled)/i.test(status)) { pill.classList.add('bad'); txt.textContent = 'Refresh failed — data may be stale'; }
-      else if (/^not found/i.test(status))   { pill.classList.add('warn'); txt.textContent = 'No refresh on record'; }
-      else                                   { txt.textContent = 'Data status: ' + (status || 'unknown'); }
-      pill.hidden = false;
-
-      // Feed the Data card's refresh row (admin) + the readiness check.
+      // Feed every freshness sink + the readiness check. Assigned BEFORE the
+      // paints below, which all read these two through _dataFreshness().
       _jobStatus = status;
       _refreshWhen = when;
+
+      // Retired header pill. `.app-header { display: none }` has hidden this for
+      // every role since the topbar was retired, so nothing here is on screen —
+      // it is kept painting only so the markup and the JS do not drift apart
+      // before the cleanup sweep excises both. It reads the SHARED producer now
+      // rather than carrying its own fourth vocabulary for the same two
+      // variables ("No refresh on record" vs "No refresh yet", raw timestamp
+      // with the time vs _fmtAsOf without it).
+      var pill = $('sysPill'), txt = $('sysText');
+      if (pill && txt) {
+        var f = _dataFreshness();
+        pill.classList.remove('good', 'warn', 'bad');
+        pill.classList.add(f.level === 'ok' ? 'good' : f.level === 'attention' ? 'bad' : 'warn');
+        txt.textContent = f.text;
+        pill.hidden = false;
+      }
+      // The sink an accountant or analyst can actually see.
+      _paintFreshPill();
       // Data-currency fact in the Database meta strip (shown to every role).
       _dbRefresh = /^success/i.test(status)            ? { dot: 'green', v: when || 'Current' }
                  : /^in progress/i.test(status)        ? { dot: 'amber', v: 'Refreshing…' }
@@ -5382,6 +5423,51 @@
     s = String(s || '').replace(/\s*\d{1,2}:\d{2}\s*[AP]M\s*$/i, '');
     return s.replace(/^(\w+\s+\d{1,2})\s+(\d{4})$/, '$1, $2');
   }
+  // ---- DATA FRESHNESS: how old is what you are reconciling against? (UI-13) ----
+  // THE ONE PRODUCER of that answer. It reads _jobStatus + _refreshWhen (both set
+  // by loadSystemStatus from GET /poll) and returns the level + the sentence.
+  //
+  // Three surfaces used to map the same two variables to text INDEPENDENTLY, and
+  // they disagreed: the (retired) header pill printed the raw timestamp WITH the
+  // time and called an unknown state "No refresh on record", while the admin card
+  // printed _fmtAsOf without the time and called it "No refresh yet"; a third copy
+  // in _dbRefresh had a fourth vocabulary. One figure, three mappings — the shape
+  // the shared-figure registry exists to stop.
+  //
+  // WHY THIS MATTERS ENOUGH TO HAVE A PRODUCER AT ALL. The whole product is a
+  // tie-out against JD Edwards. Reconciling against a refresh that failed three
+  // days ago produces a variance that is an artifact of the data being stale, and
+  // the analyst chasing it has no way to know. Until 2026-08-27 every sink for
+  // this figure was unreachable for an accountant or an analyst: the header pill
+  // sits inside `.app-header { display: none }`, the admin chip inside the
+  // admin-only attention-only instance-health strip, and _dbRefresh renders into
+  // #dbMeta, which is not in the DOM at all. Three producers, zero readers.
+  function _dataFreshness() {
+    var s = _jobStatus || '';
+    if (/^success/i.test(s))            return { level: 'ok',        text: _refreshWhen ? ('Data as of ' + _fmtAsOf(_refreshWhen)) : 'Data up to date' };
+    if (/^in progress/i.test(s))        return { level: 'busy',      text: 'Refreshing now' };
+    if (/^(failed|cancelled)/i.test(s)) return { level: 'attention', text: 'Last refresh failed' };
+    if (s)                              return { level: 'unknown',   text: 'No refresh yet' };
+    return                                     { level: 'busy',      text: 'Checking…' };
+  }
+  // The all-role sink. #haFresh sits in the fixed bottom-right action cluster
+  // beside the database and companies pills — where every role already reads its
+  // scope, on screen without scrolling, and not inside #adminGrid or
+  // #instanceHealth. Tools/test-data-freshness.js asserts that placement, because
+  // moving it back under an admin container is exactly the regression that would
+  // put the figure out of reach again without anything failing.
+  function _paintFreshPill() {
+    var pill = $('haFresh'); if (!pill) return;
+    var f = _dataFreshness();
+    var txt = $('haFreshLabel'); if (txt) txt.textContent = f.text;
+    var dot = pill.querySelector('.ha-fresh-dot');
+    if (dot && window.RRV8 && RRV8.setDotState) RRV8.setDotState(dot, f.level);
+    pill.setAttribute('data-state', f.level);
+    pill.title = f.level === 'attention'
+      ? 'The last JD Edwards data refresh did not finish. Figures on this screen may be stale — check with your RapidReconciler administrator before acting on them.'
+      : 'When RapidReconciler last pulled data from JD Edwards.';
+    pill.hidden = false;
+  }
   // Instance-health strip is ATTENTION-ONLY: a chip shows only when its state
   // needs the admin to do something (amber/red), and the whole strip disappears
   // when nothing does. A healthy instance shows no strip — the reassurance that
@@ -5396,7 +5482,16 @@
     var strip = $('instanceHealth'); if (!strip) return;
     var showAll = _showAllHealth;
     var anyAttn = false, anyQuiet = false;
-    ['dataRefreshRow', 'dataPurgeRow', 'dataFiscalRow'].forEach(function (id) {
+    // UI-13: dataRefreshRow is NO LONGER a chip in this strip. Data freshness now
+    // has one sink every role reads (#haFresh, in the fixed action cluster), and
+    // leaving the chip here would print the same fact twice on an administrator's
+    // screen. The element stays in the DOM, permanently hidden, because
+    // renderDataCard still sets its text and the AI grounding read scrapes the
+    // three chips' .data-row-text — the same "text set while the chip is hidden"
+    // arrangement dataFiscalRow already uses. Deleting it would silently drop the
+    // refresh fact out of what the model is told.
+    var _refreshChip = $('dataRefreshRow'); if (_refreshChip) _refreshChip.hidden = true;
+    ['dataPurgeRow', 'dataFiscalRow'].forEach(function (id) {
       var el = $(id); if (!el) return;
       var attn = _isAttnState(el.getAttribute('data-state'));
       el.hidden = !(attn || showAll);
@@ -5418,12 +5513,7 @@
   // source's loader calls this as it resolves; rows read "Checking…" until in.
   function renderDataCard() {
     if (!$('dataDot')) return;   // card not on the page (e.g. non-admin view)
-    var s = _jobStatus || '', refLvl, refTxt;
-    if (/^success/i.test(s))                 { refLvl = 'ok'; refTxt = _refreshWhen ? ('Data as of ' + _fmtAsOf(_refreshWhen)) : 'Data up to date'; }
-    else if (/^in progress/i.test(s))        { refLvl = 'busy'; refTxt = 'Refreshing now'; }
-    else if (/^(failed|cancelled)/i.test(s)) { refLvl = 'attention'; refTxt = 'Last refresh failed'; }
-    else if (s)                              { refLvl = 'unknown'; refTxt = 'No refresh yet'; }
-    else                                     { refLvl = 'busy'; refTxt = 'Checking…'; }
+    var ref = _dataFreshness(), refLvl = ref.level, refTxt = ref.text;
     _setDataRow('dataRefreshRow', refLvl, refTxt);
 
     var pLvl = 'busy', pTxt = 'Checking…';
@@ -15859,6 +15949,11 @@
     _jobStatus = ''; _refreshWhen = ''; _period = ''; _periods = [];
 
     // Neutralize the DOM these feed so no stale color survives the switch.
+    // The freshness pill included: _jobStatus is now '' so it repaints to
+    // "Checking…", which is the honest state until the new database's /poll
+    // answers. Leaving the previous database's timestamp up would be a figure
+    // from the wrong instance sitting next to the new instance's numbers.
+    _paintFreshPill();
     paintInventoryLight('grey', 'Checking…');     // cxDot
     RRV8.setDotState($('reloadGlDot'), 'unknown', '');
     // Reload Cardex end-of-day check is per-DB; neutralize the dot + restore the
