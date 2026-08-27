@@ -747,6 +747,37 @@
     color: var(--navy); background: var(--bg-card); border: 1px solid var(--rule); border-radius: 7px; padding: 4px 8px; }
   .acct-g-offset:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 2px rgba(43,108,214,0.15); }
   .acct-g-offset::placeholder { color: var(--text-muted); font-family: inherit; }
+  /* UI-162 — a pre-filled offset must NEVER look like one the accountant just typed.
+     The tinted field is the glanceable half; the line underneath is the load-bearing
+     half, because a wrong offset still balances and no tie-out downstream catches it.
+     Deliberately NOT a title attribute: provenance the accountant has to hover for is
+     provenance they will not see. */
+  .acct-g-col-offset { width: 168px; }
+  .acct-g-offset.is-fromsaved { background: #f2f7fd; border-color: #c3d9f2; }
+  .acct-g-offmeta { display: block; margin-top: 4px; font-size: 10.5px; line-height: 1.35; font-weight: 600;
+    color: var(--text-muted); text-align: left; }
+  .acct-g-offmeta.is-saved { color: #3c6ba8; }
+  .acct-g-offmeta.is-stale { color: var(--red, #c0392b); font-weight: 700; }
+  .acct-g-offmeta.is-stale b { font-family: ui-monospace, Consolas, monospace; }
+  .acct-g-offname { color: var(--text-muted); font-weight: 600; }
+  .acct-g-offlink { appearance: none; -webkit-appearance: none; border: 0; background: none; padding: 0;
+    font-family: inherit; font-size: 10.5px; font-weight: 800; color: var(--blue); cursor: pointer; text-decoration: underline; }
+  .acct-g-offlink:disabled { opacity: .5; cursor: default; }
+  .acct-g-offlink.is-remember { text-decoration: none; border: 1px solid var(--rule); border-radius: 999px; padding: 2px 8px; }
+  .acct-g-offlink.is-remember:hover { border-color: var(--blue); background: rgba(43,108,214,0.06); }
+  /* Saved-offset manager (UI-162). A mapping nobody can list is a mapping nobody
+     reviews, and an unreviewed mapping is how a stale offset survives a year. */
+  .offmgr-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; align-items: center;
+    padding: 9px 2px; border-bottom: 1px solid var(--rule); font-size: 13px; }
+  .offmgr-row:last-child { border-bottom: 0; }
+  .offmgr-acct { font-family: ui-monospace, Consolas, monospace; color: var(--navy); font-weight: 700; }
+  .offmgr-off { font-family: ui-monospace, Consolas, monospace; }
+  .offmgr-off .nm { display: block; font-family: inherit; font-size: 11.5px; color: var(--text-muted); font-weight: 600; }
+  .offmgr-meta { font-size: 11.5px; color: var(--text-muted); font-weight: 600; }
+  .offmgr-row.is-stale .offmgr-off { color: var(--red, #c0392b); font-weight: 800; }
+  .offmgr-flag { display: block; font-size: 11.5px; font-weight: 700; color: var(--red, #c0392b); }
+  .offmgr-co { margin: 16px 0 2px; font-size: 11px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; color: var(--text-muted); }
+  .offmgr-empty { color: var(--text-soft); font-size: 13px; margin: 8px 0 0; }
   /* Balancing-entry preview (reuses the .pv-modal shell + .pv-table). */
   .oe-note { font-size: 13px; color: var(--text-soft); margin: 0 0 12px; line-height: 1.5; }
   .oe-bal { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 800; border-radius: 999px; padding: 3px 11px; }
@@ -3450,6 +3481,22 @@
     <p class="hist-modal-eyebrow">Historical period &middot; what happened</p>
     <h3 class="hist-modal-title" id="histModalTitle">&mdash;</h3>
     <div class="hist-modal-body" id="histModalBody"></div>
+  </div>
+</div>
+
+<!-- Saved offset accounts (UI-162). The management surface: every standing mapping
+     for this database in one place, so it can be REVIEWED rather than discovered a
+     row at a time inside a period. Reuses the hist-modal shell. Stale mappings (an
+     offset that no longer resolves in the account master) are flagged here and in
+     the grid, because a mapping nobody lists is a mapping nobody reviews, and an
+     unreviewed mapping is how a stale offset survives a year of closes. -->
+<div class="hist-modal" id="offMgrModal" hidden role="dialog" aria-modal="true" aria-labelledby="offMgrTitle">
+  <div class="hist-modal-backdrop" data-offmgr-close></div>
+  <div class="hist-modal-card">
+    <button type="button" class="hist-modal-x" data-offmgr-close aria-label="Close">&times;</button>
+    <p class="hist-modal-eyebrow">Balancing entry &middot; standing configuration</p>
+    <h3 class="hist-modal-title" id="offMgrTitle">Saved offset accounts</h3>
+    <div class="hist-modal-body" id="offMgrBody"></div>
   </div>
 </div>
 
@@ -7329,6 +7376,228 @@
     var db = (typeof activeDb === 'function' && activeDb() && activeDb().n) || '';
     return db + '|' + String(co == null ? '' : co) + '|' + String(acct == null ? '' : acct);
   }
+  // ---- Standing offset accounts (UI-162) -----------------------------------
+  // _jeOffsets above is THIS PERIOD's working value for each row. RRV8.offsetStore
+  // is the SAVED mapping — server-side, shared, per (company, account). The two are
+  // deliberately separate, and conflating them would reintroduce the exact defect
+  // this row exists to prevent:
+  //
+  //   * Typing in a row changes the working value ONLY. A one-off override for one
+  //     period must not silently become the standing configuration.
+  //   * Saving is an explicit act ("Remember"), so a stored mapping always
+  //     corresponds to somebody deciding to store it.
+  //   * A pre-filled row therefore always has provenance, and the grid SHOWS it —
+  //     who saved it and when, on screen, not in a title attribute. A pre-filled
+  //     value that reads like one the accountant just chose is the whole risk here:
+  //     a stale offset still produces a BALANCED entry posted to the wrong account,
+  //     and no tie-out in this product catches that.
+  var _jeOffLoaded = false;   // a load has been attempted for the active DB
+  function _ensureJeOffsets() {
+    if (_jeOffLoaded || !(window.RRV8 && RRV8.offsetStore)) return;
+    _jeOffLoaded = true;
+    RRV8.offsetStore.load().then(function () {
+      if (_viewRole() === 'accountant') renderAccountantPanels();   // repaint so pre-fills land
+    });
+  }
+  /** The saved mapping for a row, or null. Never returns one that failed the
+   *  server's account-master check — an offset that no longer resolves must not
+   *  pre-fill anything; the grid flags it instead. */
+  function _jeStored(co, acct) {
+    if (!(window.RRV8 && RRV8.offsetStore)) return null;
+    return RRV8.offsetStore.get(co, acct);
+  }
+  /** What the row should show: the typed value if there is one, else a saved value
+   *  that passed the check. Returns { val, from } where from is 'typed'|'saved'|''. */
+  function _jeOffValue(co, acct) {
+    var typed = (_jeOffsets[_jeOffKey(co, acct)] || '').trim();
+    if (typed) return { val: typed, from: 'typed' };
+    var s = _jeStored(co, acct);
+    if (s && s.offsetAccount && s.exists) return { val: s.offsetAccount, from: 'saved' };
+    return { val: '', from: '' };
+  }
+  function _jeWhen(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    try { return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }); }
+    catch (_) { return String(iso).slice(0, 10); }
+  }
+  /**
+   * One row's Offset-account cell: the input, plus the line underneath that says
+   * where its value came from.
+   *
+   * That second line is not decoration and it is not a tooltip. The risk the owner
+   * accepted when he asked for these to persist is that a stale mapping quietly
+   * routes this period's variance to last year's account — and because the entry
+   * still balances, nothing downstream ever objects. The only defence is that the
+   * accountant can see, without hovering anything, that a filled field was filled
+   * by storage rather than by them, and when.
+   *
+   * Four states, and each one has to look different:
+   *   saved + resolves   -> value shown, "Saved <date> - <user>"
+   *   saved + GONE       -> value NOT pre-filled; a red line naming the dead account
+   *   typed, differs     -> "Remember" offers to make it the standing mapping
+   *   typed, matches     -> "Saved ..." plus a quiet way to forget it
+   */
+  function _jeOffCell(co, acct) {
+    var v = _jeOffValue(co, acct);
+    var s = _jeStored(co, acct);
+    var stale = !!(s && s.offsetAccount && s.checked && !s.exists);
+    var meta = '';
+    if (stale) {
+      // Loud, and it names the account. "This mapping is invalid" sends the
+      // accountant to a settings page to find out which one; naming it here means
+      // they can fix it in the field they are already looking at.
+      meta = '<span class="acct-g-offmeta is-stale">&#9888; Saved offset <b>' + esc(s.offsetAccount)
+           + '</b> is no longer in company ' + esc(co) + '&rsquo;s chart of accounts &mdash; enter a current one.</span>';
+    } else if (v.from === 'saved') {
+      meta = '<span class="acct-g-offmeta is-saved">Saved' + (s.updatedDate ? ' ' + esc(_jeWhen(s.updatedDate)) : '')
+           + (s.updatedBy ? ' &middot; ' + esc(s.updatedBy) : '')
+           + (s.offsetName ? '<br><span class="acct-g-offname">' + esc(s.offsetName) + '</span>' : '')
+           + '</span>';
+    } else if (v.from === 'typed') {
+      var same = !!(s && s.offsetAccount && s.offsetAccount.trim() === v.val);
+      meta = same
+        ? '<span class="acct-g-offmeta is-saved">Saved' + (s.updatedDate ? ' ' + esc(_jeWhen(s.updatedDate)) : '')
+            + (s.updatedBy ? ' &middot; ' + esc(s.updatedBy) : '')
+            + ' <button type="button" class="acct-g-offlink" data-off-forget="1" data-co="' + esc(co) + '" data-acct="' + esc(acct) + '">Forget</button></span>'
+        : '<span class="acct-g-offmeta"><button type="button" class="acct-g-offlink is-remember" data-off-save="1" data-co="' + esc(co) + '" data-acct="' + esc(acct) + '">Remember this offset</button></span>';
+    } else if (window.RRV8 && RRV8.offsetStore && !RRV8.offsetStore.ready() && RRV8.offsetStore.problem()) {
+      // Saved offsets could not be loaded. Say so once per row rather than pre-filling
+      // from anywhere else -- there is nowhere else that could attest to the value.
+      meta = '<span class="acct-g-offmeta is-stale">Saved offsets unavailable &mdash; ' + esc(RRV8.offsetStore.problem()) + '</span>';
+    }
+    return '<td class="acct-g-offcell">'
+      + '<input type="text" class="acct-g-offset' + (v.from === 'saved' ? ' is-fromsaved' : '') + '"'
+      + ' data-co="' + esc(co) + '" data-acct="' + esc(acct) + '"'
+      + ' value="' + esc(v.val) + '" placeholder="Offset acct" autocomplete="off" spellcheck="false"'
+      + ' aria-label="Offset account for ' + esc(acct) + (v.from === 'saved' ? ' (filled from the saved mapping)' : '') + '">'
+      + meta + '</td>';
+  }
+  /** Repaint ONE cell's provenance line in place. A full grid repaint while the
+   *  accountant is typing would take the focus and the caret with it. */
+  function _jeSyncCellMeta(inp) {
+    var td = inp && inp.closest ? inp.closest('.acct-g-offcell') : null; if (!td) return;
+    var co = inp.getAttribute('data-co'), acct = inp.getAttribute('data-acct');
+    var tmp = document.createElement('tbody');
+    tmp.innerHTML = '<tr>' + _jeOffCell(co, acct) + '</tr>';
+    var fresh = tmp.querySelector('.acct-g-offmeta');
+    var cur = td.querySelector('.acct-g-offmeta');
+    if (cur) cur.remove();
+    if (fresh) td.appendChild(fresh);
+  }
+  /**
+   * The saved-offset manager: every standing mapping for this database, grouped by
+   * company, each with the offset's account-master name, who set it, when, and a
+   * way to remove it.
+   *
+   * This is the "review rather than accumulate" half of UI-162. A stored mapping is
+   * silent by nature — it fills a field and the entry balances — so the only way a
+   * stale one ever gets found is if somebody can list them all. Stale rows sort to
+   * the top for exactly that reason.
+   */
+  function _openOffsetManager() {
+    var modal = $('offMgrModal'), body = $('offMgrBody'); if (!modal || !body) return;
+    var render = function () {
+      if (!(window.RRV8 && RRV8.offsetStore)) { body.innerHTML = ''; return; }
+      if (!RRV8.offsetStore.ready() && RRV8.offsetStore.problem()) {
+        body.innerHTML = '<p class="offmgr-empty">The saved offset accounts could not be loaded &mdash; '
+          + esc(RRV8.offsetStore.problem()) + '. Nothing is pre-filled while this is true, so every row in the '
+          + 'grid has to be typed by hand.</p>';
+        return;
+      }
+      var rows = RRV8.offsetStore.all();
+      if (!rows.length) {
+        body.innerHTML = '<p class="offmgr-empty">No offset accounts are saved for this database yet. '
+          + 'Type one in the grid&rsquo;s Offset column and choose <em>Remember this offset</em> to save it '
+          + 'for every future period.</p>';
+        return;
+      }
+      var stale = rows.filter(function (r) { return r.checked && !r.exists; }).length;
+      var byCo = {};
+      rows.forEach(function (r) { (byCo[r.company] || (byCo[r.company] = [])).push(r); });
+      var cos = Object.keys(byCo).sort();
+      var h = '<p class="oe-note">' + rows.length + ' saved mapping' + (rows.length === 1 ? '' : 's')
+        + '. A saved offset pre-fills its row every period until it is changed here or in the grid.'
+        + (stale ? ' <b class="offmgr-flag" style="display:inline">' + stale + ' no longer resolve'
+             + (stale === 1 ? 's' : '') + ' in the chart of accounts and are not being pre-filled.</b>' : '')
+        + '</p>';
+      cos.forEach(function (co) {
+        var list = byCo[co].slice().sort(function (a, b) {
+          var as = (a.checked && !a.exists) ? 0 : 1, bs = (b.checked && !b.exists) ? 0 : 1;
+          return as !== bs ? as - bs : String(a.account).localeCompare(String(b.account));
+        });
+        h += '<p class="offmgr-co">Company ' + esc(co) + (_coNames && _coNames[String(co).trim()] ? ' &middot; ' + esc(_coNames[String(co).trim()]) : '') + '</p>';
+        list.forEach(function (r) {
+          var bad = r.checked && !r.exists;
+          h += '<div class="offmgr-row' + (bad ? ' is-stale' : '') + '">'
+            + '<span class="offmgr-acct">' + esc(r.account) + '</span>'
+            + '<span class="offmgr-off">' + esc(r.offsetAccount)
+            + (r.offsetName ? '<span class="nm">' + esc(r.offsetName) + '</span>' : '')
+            + (bad ? '<span class="offmgr-flag">&#9888; not in company ' + esc(co) + '&rsquo;s chart of accounts</span>' : '')
+            + '</span>'
+            + '<span class="offmgr-meta">' + esc(_jeWhen(r.updatedDate) || '&mdash;')
+            + (r.updatedBy ? '<br>' + esc(r.updatedBy) : '')
+            + '<br><button type="button" class="acct-g-offlink" data-off-forget="1" data-co="' + esc(r.company)
+            + '" data-acct="' + esc(r.account) + '">Remove</button></span>'
+            + '</div>';
+        });
+      });
+      body.innerHTML = h;
+    };
+    if (!modal._wired) {
+      modal._wired = true;
+      modal.addEventListener('click', function (e) {
+        if (e.target.closest('[data-offmgr-close]')) { modal.hidden = true; return; }
+        var f = e.target.closest('[data-off-forget]');
+        if (!f) return;
+        f.disabled = true;
+        RRV8.offsetStore.clear(f.getAttribute('data-co'), f.getAttribute('data-acct')).then(function () {
+          render();
+          if (_viewRole() === 'accountant') renderAccountantPanels();
+        }).catch(function (e2) {
+          f.disabled = false;
+          toast('Could not remove that offset &mdash; ' + (e2 && e2.message ? e2.message : 'the service did not answer.'), 6000);
+        });
+      });
+    }
+    render();
+    modal.hidden = false;
+  }
+  /** Remember or Forget the standing mapping for one row. */
+  function _jeOffAct(btn) {
+    if (!(window.RRV8 && RRV8.offsetStore)) return;
+    var co = btn.getAttribute('data-co'), acct = btn.getAttribute('data-acct');
+    var td = btn.closest('.acct-g-offcell');
+    var inp = td ? td.querySelector('.acct-g-offset') : null;
+    var forget = btn.hasAttribute('data-off-forget');
+    btn.disabled = true;
+    var done = function () { if (_viewRole() === 'accountant') renderAccountantPanels(); };
+    if (forget) {
+      RRV8.offsetStore.clear(co, acct).then(function () {
+        toast('Offset account for ' + acct + ' is no longer saved.');
+        done();
+      }).catch(function (e) {
+        btn.disabled = false;
+        toast('Could not forget that offset &mdash; ' + (e && e.message ? e.message : 'the service did not answer.'), 6000);
+      });
+      return;
+    }
+    var val = inp ? inp.value.trim() : '';
+    if (!val) { btn.disabled = false; return; }
+    RRV8.offsetStore.save(co, acct, val).then(function (rec) {
+      // The value the accountant typed for this period stays where it is; what
+      // changed is that the same value is now the standing mapping. Dropping the
+      // working value here would make the row look emptied by its own Save.
+      toast('Saved ' + rec.offsetAccount + ' as the offset for ' + acct + '.');
+      done();
+    }).catch(function (e) {
+      btn.disabled = false;
+      // The server names the account it refused, and that sentence is the useful
+      // one -- a typo and an unreachable agent must not read the same.
+      toast('Not saved &mdash; ' + (e && e.message ? e.message : 'the service did not answer.'), 7000);
+    });
+  }
   // Accountant per-company period dispositions persist via RRV8.dispoStore (server +
   // localStorage fallback), not a local object — so a mark survives reload and is
   // readable by the analyst view. See _acctSetDone / _ensureDispos below.
@@ -7523,6 +7792,7 @@
     if (vr !== 'accountant') { hideAll(); if (vr === 'analyst') renderAnalystPalette(); return; }
     var _atA = $('acctTop'); if (_atA) _atA.hidden = false;   // the analyst 'work' tab may have hidden it — restore for the accountant view
     _ensureCompanyNames();   // F0010 names for the grid; async, repaints when they land
+    _ensureJeOffsets();      // saved per-line offset accounts (UI-162); same pattern
     var d = _briefData();
     if (!d || !d.companies.length) { hideAll(); return; }
     _acctData = d;
@@ -7680,9 +7950,7 @@
         + (nm ? '<span class="acct-g-acctname">' + esc(nm) + '</span>' : '') + '</td>'
         + cellFn(r.BegGL, ccy, u) + cellFn(r.PerGL, ccy, u) + cellFn(r.EndGL, ccy, u) + cellFn(r.Perpetual, ccy, u) + cellFn(r.UnpostBatch, ccy, u) + cellFn(r.EndofDay, ccy, u)
         + '<td class="acct-g-out' + (aout ? '' : ' is-clear') + '">' + (aout ? esc(_ccyAmtUnit(ccy, Number(r.OOB) || 0, u)) : '&mdash;') + '</td>'
-        + (aout
-            ? '<td class="acct-g-offcell"><input type="text" class="acct-g-offset" data-co="' + esc(co) + '" data-acct="' + esc(r.LongAccount || '') + '" value="' + esc(_jeOffsets[_jeOffKey(co, r.LongAccount || '')] || '') + '" placeholder="Offset acct" autocomplete="off" spellcheck="false" aria-label="Offset account for ' + esc(r.LongAccount || '') + '"></td>'
-            : '<td class="acct-g-offcell"></td>')
+        + (aout ? _jeOffCell(co, r.LongAccount || '') : '<td class="acct-g-offcell"></td>')
         + '</tr>';
     };
     // Per-account variance breakdown (collapsed sub-row under an out-of-balance
@@ -7843,7 +8111,8 @@
     if (grid) {
       grid.innerHTML = scopeBar
         + '<table class="acct-grid"><colgroup><col class="acct-g-col-name"><col><col><col><col><col><col><col><col class="acct-g-col-offset"></colgroup>'
-        + '<thead><tr><th class="acct-g-h-name">Account</th><th>Beginning</th><th>Activity</th><th>Ending&nbsp;GL</th><th>Perpetual</th><th>Unposted</th><th>End&nbsp;of&nbsp;Day</th><th>Out&nbsp;of&nbsp;balance</th><th>Offset&nbsp;account</th></tr></thead>'
+        + '<thead><tr><th class="acct-g-h-name">Account</th><th>Beginning</th><th>Activity</th><th>Ending&nbsp;GL</th><th>Perpetual</th><th>Unposted</th><th>End&nbsp;of&nbsp;Day</th><th>Out&nbsp;of&nbsp;balance</th>'
+        + '<th>Offset&nbsp;account<br><button type="button" class="acct-g-offlink" data-off-manage="1">Saved offsets</button></th></tr></thead>'
         + body + '</table>';
       if (!grid._moreWired) {
         grid._moreWired = true;
@@ -7853,10 +8122,21 @@
           var inp = e.target && e.target.closest ? e.target.closest('.acct-g-offset') : null; if (!inp) return;
           var k = _jeOffKey(inp.getAttribute('data-co'), inp.getAttribute('data-acct')), v = inp.value.trim();
           if (v) _jeOffsets[k] = v; else delete _jeOffsets[k];
+          // Typing over a pre-filled value drops the "came from storage" styling
+          // immediately. Leaving it on would make an edited field keep claiming a
+          // provenance it no longer has, which is the one thing this cell must
+          // never do. The Remember / Forget line follows on the next repaint.
+          inp.classList.remove('is-fromsaved');
+          _jeSyncCellMeta(inp);
         });
         grid.addEventListener('click', function (e) {
           if (!e.target || !e.target.closest) return;
           if (e.target.closest('.acct-g-offset')) return;   // typing/clicking the offset input must not toggle the row
+          // Remember / Forget a standing offset (UI-162). Explicit, never implicit:
+          // typing an override for one period must not rewrite the stored mapping.
+          var offBtn = e.target.closest('[data-off-save],[data-off-forget]');
+          if (offBtn) { e.stopPropagation(); _jeOffAct(offBtn); return; }
+          if (e.target.closest('[data-off-manage]')) { e.stopPropagation(); _openOffsetManager(); return; }
           // Preview the adjusting entry assembled from the entered offsets.
           var oeBtn = e.target.closest('[data-oe-open]');
           if (oeBtn) { openOffsetEntry(oeBtn.getAttribute('data-oe-open')); return; }
@@ -7949,7 +8229,11 @@
       // EVERY journal-able account appears — a row the accountant hasn't filled gets an
       // "Offset account" placeholder so the preview always shows the full entry; a
       // typed value overrides it. Defaults are flagged (the entry can't be completed as-is).
-      var typed = (_jeOffsets[_jeOffKey(co, l.acct)] || '').trim();
+      // The saved mapping counts as a filled row, exactly like a typed one — that is
+      // the whole point of persisting them. Reading _jeOffsets directly here would
+      // have left every pre-filled row looking empty to the gate below, so Journal
+      // Entry Complete would stay disabled while the grid showed a full column.
+      var typed = _jeOffValue(co, l.acct).val;
       var nm = (_acctNames && _acctNames[String(co).trim() + '|' + String(l.acct).trim()]) || '';
       // One direction: DEBIT the inventory account (bring GL up to perpetual), CREDIT
       // the offset the accountant named. Each pair is self-balancing.
@@ -15950,6 +16234,11 @@
     _jeOffsets = {};            // typed offset accounts in the GL grid — keyed per DB, and cleared
                                 // here too so a mid-session switch can't carry one install's offset
                                 // account into another install's adjusting entry.
+    _jeOffLoaded = false;       // and the SAVED mapping reloads for the new DB (UI-162). Two installs
+    if (window.RRV8 && RRV8.offsetStore) RRV8.offsetStore.reset();
+                                // routinely share a company number, so a surviving cache would
+                                // pre-fill DB A's offset account into DB B's journal entry — the
+                                // same reason the typed values above are wiped.
     var _ap = $('acctPanels'); if (_ap) _ap.hidden = true;   // accountant panels repaint when the new DB's roll-forward loads
     _cardexTol = {};            // per-company cardex materiality tolerances (DB A's must never judge DB B)
     _invLightFromData = false;  // re-arm the /inventory/status validation fallback for the new DB
