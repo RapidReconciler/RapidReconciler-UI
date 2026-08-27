@@ -422,6 +422,72 @@ over a single total so it's robust to company-scope changes).
 
 ---
 
+## Standing per-line offset accounts (balancing entry)
+
+Home's balancing entry debits each out-of-balance inventory account and credits
+an **offset account** the accountant names, and `Journal Entry Complete` stays
+disabled until **every** row carries a real one. Those values used to live in a
+page-local object keyed `db|company|account`, wiped on every database switch and
+lost on every reload — so the same mapping was retyped every period, and a second
+accountant on another machine saw none of it. UI-162 makes them a stored,
+shared mapping.
+
+- **Storage:** `dbo.RGlOffsetAccount`, one row per **(company, GL account)**.
+  DDL ships in
+  `RapidReconciler-Agent/setup/sql/create-gl-offset-account-table.sql` and in the
+  SSDT project (`RapidReconciler-DB/RapidReconciler/dbo/Tables/`), so a fresh
+  install gets it from the dacpac. **No row = no mapping**; there is no default
+  offset account and there must never be one, because a guessed offset that
+  balances is worse than an empty field that blocks.
+- **Endpoints** (agent-direct; in `RR_TEST_AGENT_AREAS` &rarr;
+  `inventory/gl-offset-account`):
+    - `GET /inventory/gl-offset-account[?company=NNNNN]` &rarr; `{ "data": [ {
+      "company", "account", "offsetAccount", "offsetName", "exists",
+      "updatedBy", "updatedDate" } ] }`, JWT-scoped to the caller's allowed
+      companies.
+    - `PUT /inventory/gl-offset-account` body `{ "company", "account",
+      "offsetAccount" }` &rarr; the upserted row. **400** when the offset
+      account does not resolve in that company's chart of accounts, naming the
+      account. An empty `offsetAccount` is a 400, not an upsert of blank — use
+      `DELETE`.
+    - `DELETE /inventory/gl-offset-account?company=NNNNN&account=BU.OBJ[.SUB]`
+      &rarr; `{ "deleted": 0|1 }`.
+- **Who can write, and why it is not "the accountant grant".** There **is no
+  accountant grant**. Read out of the source rather than assumed: `JwtAuthFilter`
+  parses exactly one key from the per-DB `perms` block, `perms.dm`, and
+  `UserRequest` exposes only `admin` / `adminSettings` / `adminImport` /
+  `adminPoReceipts` / `restartService` / `superUser` / `dmaais`. On the V8 side
+  `_entitledRole()` makes **accountant the FLOOR** — admin if the token says so,
+  else analyst if `perms.dm`, else accountant — so every authenticated user is
+  already at least an accountant. Gating this on `dmaais` the way the cardex
+  tolerance does would lock out the one role that owns the mapping. The gate is
+  therefore **authentication + company scope**, which is the strongest the token
+  actually supports. A narrower grant needs VALC to mint a claim first;
+  inventing `perms.ac` in the agent would fail open on every existing token.
+- **`exists` is computed on READ, every time.** A stored offset that has since
+  been retired still produces a **balanced** entry — it just posts to the wrong
+  account, and nothing downstream can tell. So the agent re-resolves each stored
+  `offsetAccount` against `dbo.F0901` for that company (composed
+  `BusinessUnit.Object[.Subsidiary]`, whitespace stripped from both sides
+  because F0901 stores fixed-width right-aligned `NCHAR`) and returns
+  `exists:false` for the ones that no longer land. **The UI does not pre-fill
+  those** — it flags them by name in the grid and in the Saved-offsets manager.
+  The write-side check catches a typo while the accountant is still looking at
+  the field; the read-side check catches a chart-of-accounts change months
+  later. Neither substitutes for the other.
+- **Client:** `RRV8.offsetStore` in `config.js`. **Server-only — no
+  localStorage mirror, deliberately.** Every other store in that file falls back
+  to localStorage in silence; here that would make a browser-local value
+  indistinguishable on screen from the shared mapping, and a pre-filled value
+  the browser cannot attribute is exactly the one that reads as "one I just
+  chose". When the agent is unreachable the store stays empty and reports why,
+  and the grid pre-fills nothing.
+- **Saving is explicit.** Typing sets the working value for this period only; a
+  `Remember this offset` action writes the standing mapping. A one-off override
+  must never silently become configuration.
+
+---
+
 ## Restart Services instance (self-serve, VALC-orchestrated)
 
 **Status: SHIPPED (B1a, local path) — VALC endpoint live.** The VALC

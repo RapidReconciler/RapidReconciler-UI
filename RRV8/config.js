@@ -199,7 +199,13 @@ window.RR_TEST_AGENT_AREAS = [
   // (readable by any authenticated role; actions stay gated). See API.md.
   'home/status-summary',
   // Per-company cardex materiality tolerance (GET any role; PUT analyst-gated).
-  'inventory/cardex-tolerance'
+  'inventory/cardex-tolerance',
+  // Standing per-line offset accounts for the balancing entry (UI-162). GET/PUT/
+  // DELETE, all scoped to the caller's companies. RRV8.offsetStore reaches this
+  // through RRDB.agentBase() rather than rrFetch, but the area is listed here so
+  // anything that DOES route by area lands on the agent rather than v359, which
+  // has no such endpoint.
+  'inventory/gl-offset-account'
 ];
 
 // Endpoints with a variable path segment that rrFetch needs to route
@@ -3527,6 +3533,147 @@ window.RRV8 = window.RRV8 || {};
     }).then(function () {}).catch(function () {});
   }
   window.RRV8.dispoStore = { load: load, get: get, forCompany: forCompany, save: save, clear: clear, key: _key };
+})();
+
+/*
+ * RRV8.offsetStore — the accountant's standing per-line OFFSET accounts (UI-162).
+ * ONE record per (database, company, inventory GL account). Home's balancing entry
+ * debits the inventory account and credits the offset; Journal Entry Complete stays
+ * disabled until every row in the entry carries a real account.
+ *
+ * ⚠ THIS STORE HAS NO localStorage FALLBACK, AND THAT IS THE DESIGN, not an
+ * omission. Every other store in this file mirrors to localStorage and falls back
+ * to it silently when the agent is unreachable. That shape is wrong here for two
+ * reasons, and both of them are the point of the row that asked for this:
+ *
+ *   1. The mapping is shared accounting configuration. A second accountant on
+ *      another machine must see the same offsets. A browser-local mirror looks
+ *      identical on screen to the shared mapping and is not it.
+ *   2. A pre-filled offset that came from THIS browser is exactly the value that
+ *      reads as "one the accountant just chose". A wrong offset still balances, so
+ *      no tie-out anywhere catches it — the only defence is that a pre-filled value
+ *      always carries provenance, and a browser cannot attest to any.
+ *
+ * So when the agent cannot be reached, this store stays EMPTY and says why. The
+ * grid then pre-fills nothing and shows the reason, which is the honest failure:
+ * the accountant types the offsets, exactly as they did before this existed.
+ *
+ *   load()                     -> Promise<map>  keyed "<co>|<acct>"; cached per db
+ *   get(co, acct)              -> record | null (SYNC; caller must load() first)
+ *   all()                      -> [record, ...] every mapping for the active db
+ *   save(co, acct, offset)     -> Promise<record>  PUT; rejects on a bad account
+ *   clear(co, acct)            -> Promise        DELETE
+ *   ready()                    -> true once a load has SUCCEEDED for this db
+ *   problem()                  -> '' or why the last load failed
+ *
+ * record = { company, account, offsetAccount, offsetName, exists, updatedBy,
+ * updatedDate }. Everything but company/account/offsetAccount is server-owned.
+ * `exists:false` means the stored offset no longer resolves in the account master
+ * for that company — the server re-checks on every read precisely because the chart
+ * of accounts moves underneath a stored mapping and nothing else would ever notice.
+ */
+window.RRV8 = window.RRV8 || {};
+(function () {
+  var _cache = {};   // dbName -> { map: {...}, ok: bool, why: '' }
+  function _db() { try { return (window.RRDB && RRDB.name && RRDB.name()) || '_'; } catch (_) { return '_'; } }
+  function _base() {
+    try { return (window.RRDB && RRDB.agentBase && RRDB.agentBase()) || (window.RR_CONFIG && RR_CONFIG.testAgentBase) || ''; }
+    catch (_) { return ''; }
+  }
+  function _auth(h) { try { var t = localStorage.getItem('rrv8.token'); if (t) h['Authorization'] = 'Bearer ' + t; } catch (_) {} return h; }
+  function _key(co, acct) { return String(co == null ? '' : co).trim() + '|' + String(acct == null ? '' : acct).trim(); }
+  function _slot() { var d = _db(); return _cache[d] || (_cache[d] = { map: {}, ok: false, why: '' }); }
+  function _norm(rec) {
+    rec = rec || {};
+    return {
+      company:       String(rec.company == null ? '' : rec.company).trim(),
+      account:       String(rec.account == null ? '' : rec.account).trim(),
+      offsetAccount: String(rec.offsetAccount == null ? '' : rec.offsetAccount).trim(),
+      offsetName:    rec.offsetName == null ? '' : String(rec.offsetName),
+      // Absent `exists` means an older agent that does not run the check. Treat it
+      // as UNKNOWN-but-not-verified rather than true: claiming an account was
+      // validated when nothing validated it is the failure this field exists to
+      // prevent. The UI shows an unverified value differently from a checked one.
+      exists:        rec.exists === true,
+      checked:       typeof rec.exists === 'boolean',
+      updatedBy:     rec.updatedBy == null ? '' : String(rec.updatedBy),
+      updatedDate:   rec.updatedDate == null ? '' : String(rec.updatedDate)
+    };
+  }
+  function load() {
+    var slot = _slot(), base = _base();
+    if (!base) { slot.map = {}; slot.ok = false; slot.why = 'no agent configured for this database'; return Promise.resolve({}); }
+    return fetch(base + '/inventory/gl-offset-account', { headers: _auth({ 'Accept': 'application/json' }) })
+      .then(function (r) {
+        if (!r.ok) throw new Error('the service answered ' + r.status);
+        return r.json();
+      })
+      .then(function (j) {
+        var arr = j && Array.isArray(j.data) ? j.data : null;
+        if (!arr) throw new Error('the service returned an unexpected shape');
+        var map = {};
+        arr.forEach(function (rec) { var n = _norm(rec); if (n.company && n.account) map[_key(n.company, n.account)] = n; });
+        slot.map = map; slot.ok = true; slot.why = '';
+        return map;
+      })
+      .catch(function (e) {
+        // No fallback, and no pretending. An empty map with a reason is the only
+        // honest answer: the caller must not pre-fill anything it cannot attribute.
+        slot.map = {}; slot.ok = false;
+        slot.why = (e && e.message) ? e.message : 'the saved offset accounts could not be loaded';
+        return {};
+      });
+  }
+  function get(co, acct) { var s = _cache[_db()]; return s ? (s.map[_key(co, acct)] || null) : null; }
+  function all() {
+    var s = _cache[_db()]; if (!s) return [];
+    var out = []; for (var k in s.map) if (Object.prototype.hasOwnProperty.call(s.map, k)) out.push(s.map[k]);
+    return out;
+  }
+  function ready() { var s = _cache[_db()]; return !!(s && s.ok); }
+  function problem() { var s = _cache[_db()]; return s ? (s.why || '') : ''; }
+  function save(co, acct, offset) {
+    var base = _base();
+    if (!base) return Promise.reject(new Error('no agent configured for this database'));
+    var h = _auth({ 'Content-Type': 'application/json;charset=UTF-8', 'Accept': 'application/json' });
+    return fetch(base + '/inventory/gl-offset-account', {
+      method: 'PUT', headers: h,
+      body: JSON.stringify({ company: String(co).trim(), account: String(acct).trim(), offsetAccount: String(offset).trim() })
+    }).then(function (r) {
+      // The 400 body carries WHICH account did not resolve. Surfacing the server's
+      // sentence beats a generic "could not save" — the accountant needs to know it
+      // was rejected as a non-existent account, not as a network problem.
+      if (!r.ok) return r.text().then(function (t) { throw new Error(_reason(t, r.status)); });
+      return r.json();
+    }).then(function (rec) {
+      var n = _norm(rec); var s = _slot();
+      if (n.company && n.account) s.map[_key(n.company, n.account)] = n;
+      return n;
+    });
+  }
+  function clear(co, acct) {
+    var base = _base();
+    if (!base) return Promise.reject(new Error('no agent configured for this database'));
+    var q = '?company=' + encodeURIComponent(String(co).trim()) + '&account=' + encodeURIComponent(String(acct).trim());
+    return fetch(base + '/inventory/gl-offset-account' + q, { method: 'DELETE', headers: _auth({ 'Accept': 'application/json' }) })
+      .then(function (r) {
+        if (!r.ok) return r.text().then(function (t) { throw new Error(_reason(t, r.status)); });
+        var s = _slot(); delete s.map[_key(co, acct)];
+      });
+  }
+  function _reason(body, status) {
+    try {
+      var j = JSON.parse(body);
+      if (j && j.message) return String(j.message);
+      if (j && j.error) return String(j.error);
+    } catch (_) {}
+    return 'the service answered ' + status;
+  }
+  // A database switch must drop the prior install's mapping outright. Two installs
+  // routinely carry the same company number, so a surviving cache would pre-fill
+  // database A's offset account into database B's journal entry.
+  function reset() { _cache = {}; }
+  window.RRV8.offsetStore = { load: load, get: get, all: all, save: save, clear: clear, ready: ready, problem: problem, reset: reset, key: _key };
 })();
 
 /*
