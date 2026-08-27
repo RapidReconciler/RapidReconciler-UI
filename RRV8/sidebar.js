@@ -749,10 +749,57 @@ ${adminSection}
     });
     document.body.appendChild(dock);
     syncAiTierDock();
+    syncDockClearance();
   }
+
+  // UI-163 — keep bottom-fixed page furniture clear of the dock WITHOUT a magic
+  // number. Any element carrying [data-dock-clear] gets a --dock-clear custom
+  // property set to the left inset it needs so its first child starts to the RIGHT
+  // of the dock; the element's own CSS decides what to do with it (Home's workbar
+  // uses it as padding-left).
+  //
+  // Why measured and not a constant: home.html carried `padding-left: 404px`, hand-
+  // tuned to the dock's rendered width. That constant was wrong in three ways at
+  // once. (a) The dock's width is the sum of four localized tier labels in a
+  // proportional font — it is not fixed and nobody re-measures it when a label
+  // changes. (b) Under 980px a media query dropped the pad to 24px, which put the
+  // pills straight THROUGH the dock rather than clear of it. (c) In `mode=prod` the
+  // dock never mounts at all (see the guard in mountAiTierDock), so production
+  // indented the workbar 404px to clear a control that is not on the page.
+  // Measuring both rects answers all three, including the no-dock case, which
+  // resolves to the element's own MIN inset.
+  var DOCK_CLEAR_GAP = 16;   // breathing room between the dock and the next pill
+  function syncDockClearance() {
+    var targets = document.querySelectorAll('[data-dock-clear]');
+    if (!targets.length) return;
+    var dock = document.getElementById('rrai-dock');
+    var dockRight = 0;
+    if (dock && dock.offsetParent !== null) {
+      var dr = dock.getBoundingClientRect();
+      if (dr.width) dockRight = dr.right + DOCK_CLEAR_GAP;
+    }
+    Array.prototype.forEach.call(targets, function (el) {
+      // The bar is centered in a max-width box, so the inset it needs is measured
+      // from ITS OWN left edge, not the viewport's. getBoundingClientRect gives the
+      // border box, so this is unaffected by whatever padding is already applied.
+      var min = parseFloat(el.getAttribute('data-dock-clear')) || 0;
+      var left = el.getBoundingClientRect().left;
+      var need = Math.max(min, Math.round(dockRight - left));
+      el.style.setProperty('--dock-clear', need + 'px');
+    });
+  }
+  var _dockClearTimer = null;
+  function _queueDockClearance() {
+    if (_dockClearTimer) global.clearTimeout(_dockClearTimer);
+    _dockClearTimer = global.setTimeout(function () { _dockClearTimer = null; syncDockClearance(); }, 80);
+  }
+  global.addEventListener('resize', _queueDockClearance);
+  // (exported on RRV8 in the canonical export block at the foot of this file)
+
   global.addEventListener('rrv8:aitierchange', syncAiTierDock);
-  if (document.readyState === 'loading') global.addEventListener('DOMContentLoaded', mountAiTierDock);
-  else mountAiTierDock();
+  if (document.readyState === 'loading') {
+    global.addEventListener('DOMContentLoaded', function () { mountAiTierDock(); syncDockClearance(); });
+  } else { mountAiTierDock(); syncDockClearance(); }
 
   function mountWorkbar(opts) {
     opts = opts || {};
@@ -2081,6 +2128,7 @@ ${adminSection}
   global.RRV8.mountSidebar            = mountSidebar;
   global.RRV8.mountTopbar             = mountTopbar;
   global.RRV8.mountWorkbar            = mountWorkbar;
+  global.RRV8.syncDockClearance       = syncDockClearance;
   global.RRV8.applyClientModuleCaps   = applyClientModuleCaps;
   global.RRV8.setDmaaiStatus          = setDmaaiStatus;
   global.RRV8.setAgentConnectivity    = setAgentConnectivity;
