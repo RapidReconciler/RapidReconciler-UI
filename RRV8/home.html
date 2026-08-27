@@ -31,6 +31,8 @@
 -->
 <link href="fonts/fonts.css" rel="stylesheet">
 <script src="config.js"></script>
+<link href="ai-docs.css" rel="stylesheet">
+<script src="ai-docs.js"></script>
 <!-- Export guard. Every .xlsx on this page is built in the browser by SheetJS;
      the build and the serialise both allocate, and when one throws the exception
      escapes the click handler - no file, no message, the button just stops. This
@@ -1676,13 +1678,9 @@
   .acct-ask-note { margin-top: 8px; font-size: 12px; color: var(--text-muted); }
   .acct-ask-note[hidden] { display: none; }
 
-  /* "Learn more" doc-link strip appended beneath an AI answer/briefing. Links
-     are built ONLY from the client-side allowlist (_AI_DOCS); the model just
-     names slugs. Calm + secondary so it never competes with the answer. */
-  .ai-doc-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 7px; padding-top: 6px; border-top: 1px solid var(--rule); }
-  .ai-doc-strip-label { font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--text-muted); }
-  .ai-doc-link { font-size: 12.5px; color: var(--navy); text-decoration: none; border: 1px solid var(--rule); border-radius: 999px; padding: 2px 10px; background: var(--bg-card); }
-  .ai-doc-link:hover { border-color: var(--navy); text-decoration: underline; }
+  /* The "Learn more" doc-link strip lives in ai-docs.css now, beside the
+     allowlist it renders from (UI-8). Three pages draw this strip; one of them
+     owning the rules meant the other two could not have it. */
 
   /* NOTE: the AI rail (.home-ai / .hai-id / .hai-spark / .hai-tier*) was retired.
      The .hai-brief / .hai-eyebrow / .hai-verdict / .hai-points styles below are
@@ -15237,73 +15235,25 @@
     if (_viewRole() === 'accountant' && _curSubView() === 'perpetual' && _perpRows) _renderPerpGrid();
     return String(txt).replace(m[0], '').trim();
   }
-  // ---- AI → RR University doc links (shared by Ask + briefings) -----------
-  // The AI never emits a URL. It names a slug from this allowlist; the client
-  // resolves it to a known-safe href and drops anything not listed. Hrefs are
-  // relative from RRV8/ (../RRUniversity/…) so they resolve on :8765 and Pages.
-  var _AI_DOCS = {
-    // Recon-facing docs (accountant / analyst)
-    'reconciliation':  { title: 'Inventory Reconciliation',     href: '../RRUniversity/inventory-reconciliation.html',     roles: ['accountant', 'analyst'] },
-    'period-close':    { title: 'Period-Close Troubleshooting', href: '../RRUniversity/period-close-troubleshooting.html', roles: ['accountant', 'analyst'] },
-    'cardex-variance': { title: 'Cardex Variance',              href: '../RRUniversity/inventory-cardex-variance.html',    roles: ['accountant', 'analyst'] },
-    'zero-balance':    { title: 'Zero-Balance Rows',            href: '../RRUniversity/inventory-zero-balance.html',       roles: ['accountant', 'analyst'] },
-    'reports-exports': { title: 'Reports & Exports',            href: '../RRUniversity/reports-and-exports.html',          roles: ['accountant', 'analyst'] },
-    'compare-jde':     { title: 'Comparing RR to JDE Reports',  href: '../RRUniversity/comparing-rr-to-jde-reports.html',  roles: ['accountant', 'analyst'] },
-    'add-account':     { title: 'Adding an Inventory Account',  href: '../RRUniversity/inventory-add-account-rr.html',     roles: ['accountant', 'analyst'] },
-    'costing':         { title: 'Inventory Costing',            href: '../RRUniversity/inventory-costing.html',            roles: ['accountant', 'analyst'] },
-    // Admin-facing docs
-    'managing-users':     { title: 'Team Management',      href: '../RRUniversity/administrator-managing-users.html',     roles: ['admin'] },
-    'managing-companies': { title: 'Managing Companies',   href: '../RRUniversity/administrator-managing-companies.html', roles: ['admin'] },
-    'password-policy':    { title: 'Password Policy',      href: '../RRUniversity/administrator-complex-password.html',   roles: ['admin'] },
-    'licensing':          { title: 'Licensing',           href: '../RRUniversity/rapidreconciler-licensing.html',        roles: ['admin'] },
-    'login-access':       { title: 'Login & Access',       href: '../RRUniversity/login-and-access.html',                 roles: ['admin'] }
-  };
-  // Prompt fragment: lists the allowlist (scoped to `role`) + the emit contract.
-  // mode 'token' (default, for free-text answers) asks for a trailing
-  // "@@DOCS slug, slug@@" line; mode 'json' (for the JSON-returning briefings)
-  // asks for an optional "docs" array in the object. role scopes WHICH docs are
-  // offered (accountant | analyst | admin); default 'accountant'.
+  // ---- AI → RR University doc links -------------------------------------
+  // The allowlist and its four helpers moved to ai-docs.js (UI-8) so the cardex
+  // and transactions pages can draw the same strip from the same list. These are
+  // bindings, not copies: rename a doc in ai-docs.js and all three pages follow.
+  // A missing ai-docs.js is a loud console error rather than links that silently
+  // stop appearing — the strip failing quietly is how it would rot unnoticed.
+  if (!(window.RRV8 && RRV8.aiDocs)) console.error('[ai-docs] RRV8.aiDocs missing \u2014 ai-docs.js did not load; AI answers will carry no doc links.');
+  var _AI_DOCS = (window.RRV8 && RRV8.aiDocs && RRV8.aiDocs.DOCS) || {};
   function _aiDocCatalogPrompt(mode, role) {
-    role = role || 'accountant';
-    var lines = Object.keys(_AI_DOCS).filter(function (k) {
-      var r = _AI_DOCS[k].roles; return !r || r.indexOf(role) >= 0;
-    }).map(function (k) { return '  ' + k + ' = ' + _AI_DOCS[k].title; });
-    var emit = mode === 'json'
-      ? 'If — and ONLY if — one or two of these docs directly match what the briefing is about, add an OPTIONAL "docs" array to the JSON object with those slugs (from the list above, max TWO, most relevant first). Omit "docs" entirely when nothing fits. Never invent a slug, and do NOT mention doc titles or links in the verdict or points text.\n'
-      : 'If — and ONLY if — one or two of these docs directly match what the answer is about, END your reply with a single line exactly like "@@DOCS slug, slug@@" (slugs from the list above, max TWO, most relevant first). Omit the line entirely when nothing fits. Never invent a slug, and do NOT mention doc titles or links anywhere in the prose — the @@DOCS@@ line is the only place a doc reference may appear.\n';
-    return 'RELATED HELP DOCS you may cite (slug = topic):\n' + lines.join('\n') + '\n' + emit;
+    return (window.RRV8 && RRV8.aiDocs) ? RRV8.aiDocs.catalogPrompt(mode, role) : '';
   }
-  // Filter a raw slug list to the allowlist: lowercased, deduped, capped at 2.
-  // The single gate both the @@DOCS@@ token and the briefing JSON "docs" array
-  // pass through, so an unknown/hallucinated slug can never become a link.
   function _aiFilterDocSlugs(arr) {
-    var slugs = [], seen = {};
-    (Array.isArray(arr) ? arr : []).forEach(function (s) {
-      s = String(s || '').trim().toLowerCase();
-      if (_AI_DOCS[s] && !seen[s] && slugs.length < 2) { seen[s] = 1; slugs.push(s); }
-    });
-    return slugs;
+    return (window.RRV8 && RRV8.aiDocs) ? RRV8.aiDocs.filterSlugs(arr) : [];
   }
-  // Pull the @@DOCS …@@ token out of raw AI text. Returns { text, slugs[] } with
-  // the token stripped and slugs filtered to the allowlist, deduped, capped at 2.
   function _aiExtractDocs(raw) {
-    var txt = String(raw || ''), slugs = [], m = txt.match(/@@DOCS\s+([^@]+)@@/i);
-    if (m) { txt = txt.replace(m[0], '').trim(); slugs = _aiFilterDocSlugs(m[1].split(',')); }
-    return { text: txt, slugs: slugs };
+    return (window.RRV8 && RRV8.aiDocs) ? RRV8.aiDocs.extractDocs(raw) : { text: String(raw || ''), slugs: [] };
   }
-  // Build (or clear) a "Learn more" strip inside hostEl. Anchors come ONLY from
-  // the allowlist — slugs are already validated. stripId keeps one strip per
-  // surface so a re-render replaces rather than stacks.
   function _aiRenderDocStrip(hostEl, slugs, stripId) {
-    var strip = document.getElementById(stripId);
-    if (!slugs || !slugs.length) { if (strip) strip.parentNode.removeChild(strip); return; }   // clear works even without a host
-    if (!hostEl) return;
-    if (!strip) { strip = document.createElement('div'); strip.id = stripId; strip.className = 'ai-doc-strip'; hostEl.appendChild(strip); }
-    strip.innerHTML = '<span class="ai-doc-strip-label">Learn more</span>'
-      + slugs.map(function (s) {
-          var d = _AI_DOCS[s];
-          return '<a class="ai-doc-link" href="' + d.href + '" target="_blank" rel="noopener">' + esc(d.title) + '</a>';
-        }).join('');
+    if (window.RRV8 && RRV8.aiDocs) RRV8.aiDocs.renderStrip(hostEl, slugs, stripId);
   }
 
   // presetQ: a suggested-question pill's text (else the typed input). wantTrend:

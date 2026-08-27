@@ -25,6 +25,8 @@
      reconciliation page uses. Loaded sync so MODE / IS_DEMO are
      defined before the IIFE runs. -->
 <script src="config.js"></script>
+<link href="ai-docs.css" rel="stylesheet">
+<script src="ai-docs.js"></script>
 <!-- One place an .xlsx export is allowed to fail. Every workbook this page
      builds goes through RRV8.saveWorkbook / RRV8.runExport so a build or write
      that dies reports an actionable reason instead of the button doing nothing. -->
@@ -7937,6 +7939,11 @@
       + 'Source fix: ' + fixTxt + '\n\n'
       + (fpTxt ? ('Supporting facts:\n' + fpTxt + '\n') : '')
       + (window.RRV8 && RRV8.dataAccessLine ? RRV8.dataAccessLine(_txAiTier()) + '\n' : '')
+      // UI-8: the same allowlist Home offers, scoped to the analyst. The model
+      // names a slug and nothing else; ai-docs.js resolves it, so an invented
+      // slug can never become a link. Placed before AI_REGISTER to match the
+      // ordering on Home's Ask surfaces.
+      + (window.RRV8 && RRV8.aiDocs ? RRV8.aiDocs.catalogPrompt('token', 'analyst') : '')
       + (window.RRV8 && RRV8.AI_REGISTER ? RRV8.AI_REGISTER : '');
     // ?ctx= is a server-ignored replay-key discriminator (surface/company/period stay
     // distinct in the demo capture); the tier rides in the DATA ACCESS marker above,
@@ -7944,15 +7951,23 @@
     var _ctxUrl = 'api/v1/ai/explain' + (window.RRV8 && RRV8.aiCtx ? ('?ctx=' + RRV8.aiCtx('txv', co, per)) : '');
     rrFetch(_ctxUrl, { method: 'POST', body: { prompt: prompt } }).then(function (r) {
       if (gen !== _txAnalyzeGen) return;
-      var txt = (r && r.text) ? String(r.text).trim() : '';
+      var raw = (r && r.text) ? String(r.text).trim() : '';
+      // Strip the @@DOCS@@ line BEFORE rendering — leaving it in would print the
+      // token to the analyst, which is what happens when the extract runs after.
+      var doc = (window.RRV8 && RRV8.aiDocs) ? RRV8.aiDocs.extractDocs(raw) : { text: raw, slugs: [] };
+      var txt = doc.text;
       var aiEl = document.getElementById('tx-analyzer-ai');
       if (aiEl && txt) {
         aiEl.hidden = false;
         aiEl.innerHTML = '<div class="tx-analyzer-ai-lbl"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 1.6l1.9 5.1a5 5 0 0 0 2.9 2.9l5.1 1.9-5.1 1.9a5 5 0 0 0-2.9 2.9L12 21.4l-1.9-5.1a5 5 0 0 0-2.9-2.9L2.1 11.5l5.1-1.9a5 5 0 0 0 2.9-2.9z"/></svg>AI explanation</div>' + _txMd(txt);
       }
+      // Strip lives INSIDE the answer block so it clears with it; a re-analyze
+      // replaces the strip rather than stacking a second one (stripId is fixed).
+      if (window.RRV8 && RRV8.aiDocs) RRV8.aiDocs.renderStrip(aiEl, txt ? doc.slugs : [], 'tx-analyzer-docs');
       _txAnalyzeStatus('', '');
     }).catch(function () {
       if (gen !== _txAnalyzeGen) return;
+      if (window.RRV8 && RRV8.aiDocs) RRV8.aiDocs.renderStrip(null, [], 'tx-analyzer-docs');
       _txAnalyzeStatus('', '');
     }).then(function () { _txAnalyzeBusy = false; });
   }
