@@ -1,5 +1,11 @@
 #!/usr/bin/env python
-"""PostToolUse hook: catch broken markdown table rows in WORKLIST.md / HANDOFF.md.
+"""PostToolUse hook: catch broken markdown table rows in the WORKLIST files / HANDOFF.md.
+
+WORKLIST.md was split three ways on 2026-08-28 and its LIVE items are now prose
+sections rather than table rows, so most of what this hook used to guard has moved
+to WORKLIST-DONE.md and WORKLIST-LOG.md -- which are append-only and archival. It
+still watches all three: an archive nobody edits can still be broken by a bad
+append, and the live file keeps a small index table that can still lose a cell.
 
 WHY THIS EXISTS. Twelve rows in WORKLIST.md were found rendering wrong on
 2026-08-28, from three causes that all look identical to a reader:
@@ -65,7 +71,7 @@ PIPE = "|"
 # Only these files. Every other markdown file in the tree is prose or a doc
 # with its own conventions, and flagging those would train people to ignore
 # the hook.
-WATCHED = ("WORKLIST.md", "HANDOFF.md")
+WATCHED = ("WORKLIST.md", "WORKLIST-DONE.md", "WORKLIST-LOG.md", "HANDOFF.md")
 
 # Absolute paths for the Stop-event sweep.
 #
@@ -78,6 +84,8 @@ WATCHED = ("WORKLIST.md", "HANDOFF.md")
 # catches every edit path because it does not care how the file changed.
 SWEEP = (
     r"C:\source\repos\WORKLIST.md",
+    r"C:\source\repos\WORKLIST-DONE.md",
+    r"C:\source\repos\WORKLIST-LOG.md",
     r"C:\source\repos\HANDOFF.md",
 )
 
