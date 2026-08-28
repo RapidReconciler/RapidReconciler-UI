@@ -36,6 +36,48 @@ a pile of variances into a prioritized, root-cause-attributed plan ("fix these 3
 (worked + a resolution recorded) → next period: `confirmed` (category → 0, archive) or
 **auto-`reopen`** (recurred → the fix didn't hold / was wrong).
 
+## A card is not always the whole population — disclosures on the grid
+
+Shipped 2026-08-27 (UI-165). `usp8_txv_build` stamps whichever `SubType` matched
+first, so **one underlying defect can fragment across several cards**. Measured on
+Demo1: a single constant per-unit cost disagreement split four ways — 61 rows and
+255,019.08 gross, 34.1% of the whole both-differ population — and an analyst who
+worked the Make to Order card to completion left three quarters of it untouched.
+Two of the four buckets carried **no `SubType` at all**, so they surfaced on no card.
+
+Classification is sticky ([[reference_txv_classification_is_sticky]]): B→C never
+re-classifies, so a precedence change is inert on existing data. The answer is
+therefore a **disclosure**, not a re-classification — a derived table rebuilt on
+every run, which claims nothing and cannot latch.
+
+**Where the analyst sees it.** On the transaction-variance grid, not on the card.
+That is forced by the defect itself: blank-`SubType` rows surface on no card, so a
+card-side surface can never reach the half that matters most. Every row carries
+`SignalCodes` / `SignalCount` / `SignalHeadline` / `SignalGross`, and the page shows
+a `Signal` column plus a panel above the grid stating how many rows in the current
+view carry a disclosure and what they are worth.
+
+**Two codes today.**
+
+- `ACCT-OFFSET` — the document nets across more than one account, and the card
+  holding it does not test account routing. Note this one had been computed since
+  it shipped and read by nothing; it reached a screen for the first time in the
+  same change.
+- `SPLIT-ORDER` — this order's rows landed on more than one card. Names the order,
+  the other cards, and the gross sitting on them.
+
+**What it does NOT do, and the surface must not imply otherwise.** It links rows of
+the SAME order. It does not link different orders that share the same economics —
+that needs the ITEM, which lives a grain below the document and outside
+`RCardexLedgerCompare2`, and widening that scope is forbidden
+([[feedback_rclc2_is_the_document_scope]]). On Demo1 it links two of the four
+buckets and not the other two. Two of four is the honest answer, not a shortfall
+to tune away.
+
+**When working a card, read the disclosure panel before recording a finding.**
+Closing a card whose orders carry rows elsewhere records a fix against part of a
+population — which is how a defect comes back next period as a `reopen`.
+
 ## Closed-card face — a *resolution record*, not the problem
 
 **Voice / audience (owner 2026-07-07): the card-face TEXT is an AUDITOR-facing problem → recommendation

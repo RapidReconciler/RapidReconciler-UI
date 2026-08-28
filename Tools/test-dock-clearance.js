@@ -95,16 +95,19 @@ const GAP = gapMatch ? Number(gapMatch[1]) : 0;
 
 /* ---- assertion 1: the arithmetic --------------------------------------- */
 // A stub element records what gets written to --dock-clear.
-function makeBar(left, min) {
+function makeBar(left, min, hostsDock) {
     return {
         _set: null,
         getAttribute: () => String(min),
         getBoundingClientRect: () => ({ left, right: left + 900, width: 900 }),
+        // The bar is asked whether the dock is one of its own children. A hosted
+        // dock is a flex child, not an overlapping layer, so it needs no clearance.
+        contains: () => !!hostsDock,
         style: { setProperty(k, v) { if (k === '--dock-clear') this._owner._set = v; } }
     };
 }
-function run(dockRect, barLeft, min) {
-    const bar = makeBar(barLeft, min);
+function run(dockRect, barLeft, min, hostsDock) {
+    const bar = makeBar(barLeft, min, hostsDock);
     bar.style._owner = bar;
     const sandbox = {
         DOCK_CLEAR_GAP: GAP,
@@ -141,6 +144,13 @@ check('wide viewport, bar centered clear of the dock -> the declared minimum',
 // still there, so the inset must still clear it.
 check('narrow viewport -> still clears the dock (the old breakpoint did not)',
     run({ left: 10, right: 300, width: 290 }, 0, 24), (300 + GAP) + 'px');
+// HOSTED (2026-08-27): the dock is mounted INSIDE the bar as its last flex child,
+// so the bar must not reserve a gutter for it. Same geometry as the overlapping
+// case above and the opposite answer -- which is the whole point of the guard.
+// Without it the inset is self-referential: padding pushes the bar right, which
+// pushes the dock right, which asks for more padding.
+check('dock hosted inside the bar -> the declared minimum, not a gutter',
+    run({ left: 16, right: 332, width: 316 }, 0, 24, true), '24px');
 
 /* ---- assertion 2: the property has a sink, and the constant is gone ----- */
 console.log('assertion 2 -- the contract as it ships');
@@ -151,6 +161,38 @@ check('sidebar.js writes the --dock-clear property',
     /setProperty\(\s*'--dock-clear'/.test(sidebarSrc), true);
 check('home.html declares data-dock-clear on the workbar',
     /class="home-actions"[^>]*data-dock-clear=/.test(homeSrc), true);
+
+// The hosted mount, end to end. Owner ruling 2026-08-27: the AI pill belongs to
+// the RIGHT of the View pill, which only holds if the dock is a child of the bar
+// AND its flex order sorts after .ha-roles. Both halves are checked, because
+// either one alone renders the pill in the wrong place with no error.
+check('sidebar.js looks for a host container',
+    /querySelector\(\s*'\[data-ai-dock-host\]'\s*\)/.test(sidebarSrc), true);
+check('sidebar.js marks a hosted dock inline (drops position:fixed)',
+    /rrai-dock--inline\{position:static/.test(sidebarSrc)
+    && /classList\.add\('rrai-dock--inline'\)/.test(sidebarSrc), true);
+check('home.html offers the workbar as the dock host',
+    /class="home-actions"[^>]*data-ai-dock-host/.test(homeSrc), true);
+
+// Read the flex order off a .home-actions rule. Deliberately NOT a regex built
+// from the selector string: escaping a selector into a RegExp is the kind of
+// double-escaped construction that silently mis-parses, and there are exactly
+// two rules to read. Plain string scan, then one literal regex for the value.
+function orderOf(selector) {
+    const at = homeSrc.indexOf(selector + ' {');
+    if (at < 0) return null;
+    const open = homeSrc.indexOf('{', at);
+    const close = homeSrc.indexOf('}', open);
+    if (open < 0 || close < 0) return null;
+    const o = homeSrc.slice(open + 1, close).match(/(?:^|;)\s*order\s*:\s*(-?\d+)/);
+    return o ? Number(o[1]) : null;
+}
+const viewOrder = orderOf('.home-actions .ha-roles');
+const aiOrder = orderOf('.home-actions #rrai-dock');
+check('the View pill declares a flex order', viewOrder !== null, true);
+check('the AI dock declares a flex order', aiOrder !== null, true);
+check('the AI pill sorts to the RIGHT of the View pill',
+    (viewOrder !== null && aiOrder !== null) ? aiOrder > viewOrder : false, true);
 
 // Every declaration of .home-actions in the file, base rule and media queries
 // alike. A left padding on any of them that is not var(--dock-clear) is the

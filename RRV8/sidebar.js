@@ -690,9 +690,14 @@ ${adminSection}
     if (nav) nav.style.display = inv ? '' : 'none';
   }
 
-  // Global AI governance selector — a fixed bottom-left dock present on EVERY V8
-  // page (non-prod only), so it's never hunted for and one control drives the whole
-  // app. Builds a segmented Off/Grounded/Scrubbed/Full pill from RRAI, flips the
+  // Global AI governance selector — present on EVERY V8 page (non-prod only), so
+  // it's never hunted for and one control drives the whole app. It mounts one of two
+  // ways. DEFAULT: a fixed bottom-left dock appended to <body>, which needs no host
+  // markup and is what every page without its own bottom bar gets. HOSTED: if the
+  // page carries an element with [data-ai-dock-host], the dock is appended THERE and
+  // rendered inline (`.rrai-dock--inline` drops position:fixed), so the host's own
+  // layout places it — Home puts it last in the workbar, to the right of the View
+  // pill, which is where it reads as one control row rather than two layers. Builds a segmented Off/Grounded/Scrubbed/Full pill from RRAI, flips the
   // GLOBAL tier via RRAI.set() (fires rrv8:aitierchange → every AI surface re-runs
   // at the new exposure), and reflects the active tier. Pages with no AI just don't
   // react — the control still shows.
@@ -714,6 +719,9 @@ ${adminSection}
       '.rrai-dock{position:fixed;left:16px;bottom:16px;z-index:60;display:inline-flex;align-items:center;gap:8px;' +
       'padding:5px 8px 5px 12px;border-radius:100px;background:rgba(31,45,74,.92);border:1px solid rgba(255,255,255,.14);' +
       'box-shadow:0 8px 24px -8px rgba(8,18,38,.5);font-family:"Source Sans 3",sans-serif;}' +
+      // Hosted mount: the host lays it out. position:static makes the left/bottom
+      // above inert, including the ones in the 900px query, so they need no undoing.
+      '.rrai-dock--inline{position:static;z-index:auto;}' +
       '.rrai-dock-lbl{font-size:10px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:rgba(255,255,255,.62);}' +
       '.rrai-dock-seg{display:inline-flex;gap:2px;padding:2px;border-radius:100px;background:rgba(255,255,255,.08);}' +
       '.rrai-dock-opt{-webkit-appearance:none;appearance:none;border:0;background:transparent;font-family:inherit;font-size:11.5px;' +
@@ -747,7 +755,9 @@ ${adminSection}
       b.addEventListener('click', function (e) { e.stopPropagation(); if (global.RRAI.get() !== t) global.RRAI.set(t); });
       seg.appendChild(b);
     });
-    document.body.appendChild(dock);
+    var host = document.querySelector('[data-ai-dock-host]');
+    if (host) { dock.classList.add('rrai-dock--inline'); host.appendChild(dock); }
+    else      { document.body.appendChild(dock); }
     syncAiTierDock();
     syncDockClearance();
   }
@@ -773,12 +783,16 @@ ${adminSection}
     var targets = document.querySelectorAll('[data-dock-clear]');
     if (!targets.length) return;
     var dock = document.getElementById('rrai-dock');
-    var dockRight = 0;
-    if (dock && dock.offsetParent !== null) {
-      var dr = dock.getBoundingClientRect();
-      if (dr.width) dockRight = dr.right + DOCK_CLEAR_GAP;
-    }
     Array.prototype.forEach.call(targets, function (el) {
+      // A dock mounted INSIDE this element is one of its own flex children, not an
+      // overlapping layer, so it needs no clearance — and measuring it here would
+      // be self-referential: the padding would push the bar right, which pushes the
+      // dock right, which asks for more padding. el.contains() is the whole guard.
+      var dockRight = 0;
+      if (dock && dock.offsetParent !== null && !el.contains(dock)) {
+        var dr = dock.getBoundingClientRect();
+        if (dr.width) dockRight = dr.right + DOCK_CLEAR_GAP;
+      }
       // The bar is centered in a max-width box, so the inset it needs is measured
       // from ITS OWN left edge, not the viewport's. getBoundingClientRect gives the
       // border box, so this is unaffected by whatever padding is already applied.

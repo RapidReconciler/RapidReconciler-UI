@@ -1614,9 +1614,9 @@ window.RRV8 = window.RRV8 || {};
         ],
         context: [
           'Not tested: the batches and the account. The card used to say both were healthy because they carry completions for other orders. That was a specimen finding, and it is the strongest evidence you can gather — go and check it on one of your own batches, because a batch full of other orders\' completions is what turns this from "a run failed" into "the run dropped this order".',
-          'Not tested: summarization, and the test is BLIND to it rather than ruling it out. The GL search only counts rows with a numeric work-order subledger, so a summarized completion carrying no subledger is invisible and would CREATE this card. On both demos every completion in these batches carries a subledger, so summarization is not what is happening there — check yours.',
+          'Not tested: summarization, and the test is BLIND to it rather than ruling it out. The GL search only counts rows with a numeric work-order subledger, so a summarized completion carrying no subledger is invisible and would CREATE this card. Confirm your completions carry a work-order subledger at all before you treat the entry as never written.',
           'Not tested: other document types. A work order can carry GL rows under a document type this search does not count, journal entries among them, and whether any of those is the completion is unknown. Read the subledger before concluding the entry was never written.',
-          'Not tested: whether the GL rows are posted, or whether the batches all reached our copy of the GL. Both were true on the demos.'
+          'Not tested: whether the GL rows are posted, or whether every batch reached the GL copy loaded here. Confirm the load covered the period.'
         ],
         found: [
           'No GL completion was found for these work orders under a work-order subledger. The material issues for the same orders were.',
