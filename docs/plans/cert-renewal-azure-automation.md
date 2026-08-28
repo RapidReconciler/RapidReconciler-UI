@@ -95,10 +95,21 @@ untouched.
 
 1. **Services jar:** change `server.ssl.key-store` from `classpath:...pfx` to
    `file:${rr.cert-store}/wildcard-getgsi.pfx` (default e.g.
-   `C:\Program Files\Rapid Reconciler\certs\`). The green-field
-   `application.yml` currently has **no `server.ssl` block at all** — the HTTPS
-   config still lives in v359's `application-production-https.properties`, so
-   this migration also means porting that block into the new jar's config.
+   `C:\Program Files\Rapid Reconciler\certs\`).
+
+   > **Corrected 2026-08-28.** This step used to read "the green-field
+   > `application.yml` currently has **no `server.ssl` block at all**". That is
+   > no longer true. Services **v8.0.20** added one, and it bundles the renewed
+   > wildcard as a `classpath:` resource — the owner ruled "Option A" on
+   > 2026-08-27 to get the expired cert replaced without waiting for this
+   > decouple.
+   >
+   > So the porting this step describes has happened, in the shape this
+   > document argues against. The work left is not "port the block" but
+   > "change `classpath:` to `file:` in the V8 agent, and get the keystore back
+   > out of git". **The private key now sits in two repositories rather than
+   > one**, which makes Lever 1 more urgent, not less. Next renewal is
+   > **2027-02-18**; this should land before it, not after.
 2. **Keystore password:** today it's in the properties file inside the jar.
    With a `file:` cert it needs a home that isn't the jar — options: an env var
    set by the installer/WinSW, a VALC-pushed config alongside the cert, or
