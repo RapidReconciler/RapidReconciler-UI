@@ -174,6 +174,16 @@ rows", which will be false once the detection ships. And it ships the phrase
 test data on a surface a customer reads. That is a second, independent finding
 worth fixing whatever happens to UI-167.
 
+**UI-168 closed the second half on 2026-08-27. The quote above is the PRE-FIX
+wording, kept so this section still reads as an argument.** The specimen sentence
+is gone from `config.js`; the bullet now ends "Confirm your completions carry a
+work-order subledger at all before you treat the entry as never written." A
+FOURTH context bullet on the same card also said "Both were true on the demos" —
+UI-168 named only the second bullet, and the sweep found two. Both are fixed.
+**The first defect is untouched and is still UI-167's:** the bullet renders under
+"Not tested on these rows", and that heading goes false the moment detection
+ships. Build the table below against the current wording, not the quote.
+
 **Where it renders.** `RRV8/inventory-transactions.html`, in the finding
 renderer around lines 7533 to 7551. The function assembles the block from
 `checked` under "What happened", `context` under "Not tested on these rows",
