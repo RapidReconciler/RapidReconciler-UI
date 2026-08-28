@@ -37,10 +37,27 @@ defect, not a correctness one; a hook that refused the write would be worse
 than the thing it guards. It reports and gets out of the way.
 """
 
+import hashlib
 import json
 import os
 import re
 import sys
+import tempfile
+
+# Report only when the finding set CHANGES.
+#
+# WHY. The first version reported unconditionally and fired three turns running
+# with byte-identical output, because the backlog it found was not being fixed
+# between turns. A check that says the same thing every turn regardless of
+# whether anything happened is exactly what trains a reader to skim past it --
+# the failure this hook exists to prevent, reproduced by the hook itself.
+#
+# So: fingerprint the findings, stay silent while they are unchanged, and speak
+# up the moment the set differs. A NEW break still shouts on the turn it
+# appears. Clearing the last one reports once, then goes quiet.
+#
+# State lives in the temp dir, so losing it only costs one extra report.
+STATE = os.path.join(tempfile.gettempdir(), "rr-worklist-table-check.state")
 
 BS = chr(92)
 PIPE = "|"
@@ -184,10 +201,51 @@ def main():
             mismatches += m
             orphans += o
 
+    # Fingerprint the finding SET, not the prose around it, so a report is
+    # emitted when something actually changes and not when it merely recurs.
+    sig = hashlib.sha256(
+        json.dumps(
+            {
+                "m": sorted((n, exp, got) for n, exp, got, _ in mismatches),
+                "o": sorted(orphans),
+            }
+        ).encode("utf-8")
+    ).hexdigest()
+
+    try:
+        with open(STATE, encoding="utf-8") as fh:
+            previous = fh.read().strip()
+    except OSError:
+        previous = ""
+
+    if sig == previous:
+        return 0                      # unchanged since last turn: stay quiet
+
+    try:
+        with open(STATE, "w", encoding="utf-8") as fh:
+            fh.write(sig)
+    except OSError:
+        pass                          # unwritable state only costs a repeat
+
     if not mismatches and not orphans:
+        # Everything cleared. Worth saying once -- but only if something was
+        # actually reported before. On a first run against a clean file there
+        # is nothing to announce, and "all clear" out of nowhere is noise of
+        # the same kind this change is removing.
+        if previous:
+            json.dump(
+                {
+                    "hookSpecificOutput": {
+                        "hookEventName": event or "PostToolUse",
+                        "additionalContext": "WORKLIST tables: all previously "
+                        "reported problems are now clear.",
+                    }
+                },
+                sys.stdout,
+            )
         return 0
 
-    lines = ["TABLE PROBLEMS in %s." % base, ""]
+    lines = ["TABLE PROBLEMS in %s (changed since last report)." % base, ""]
 
     if mismatches:
         lines.append(
