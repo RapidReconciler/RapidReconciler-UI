@@ -1259,6 +1259,61 @@ openssl req -new -key getgsi-2026H2.key -out getgsi-2026H2.csr \
           <strong>Prerequisite:</strong> the cert bundle this flow installs comes out of <strong>Certificate Procurement (CSR)</strong> &mdash; private key + CSR generation, CA submission, DNS-01 validation. Start there if you don&rsquo;t already have a renewed <code>.p12</code> / fullchain in hand.
         </a>
 
+        <div class="callout warning">
+          <div class="callout-label">Read first &mdash; there are now two Services jars</div>
+          <p>The three steps below describe the <strong>v359 / V7</strong> jar
+          (<code>rr-client-services</code>, Bitbucket, config in
+          <code>application-production-https.properties</code>). That path is still
+          correct for that jar, and that jar still ships the certificate that
+          <strong>expired on 2026-08-08</strong>.</p>
+          <p>The renewed wildcard went into the <strong>V8</strong> jar instead
+          (<code>client-services</code>, GitHub, config in
+          <code>application.yml</code>), released as <strong>v8.0.20</strong> on
+          2026-08-27. Four things differ and every one of them will trip you up if
+          you follow the V7 steps by muscle memory:</p>
+          <ul>
+            <li>The config file is <code>application.yml</code>, not a
+            <code>.properties</code> file, and the keys are nested under
+            <code>server: ssl:</code> rather than flat.</li>
+            <li><strong>No release tag.</strong> A push to <code>main</code> that
+            touches <code>src/**</code> or <code>pom.xml</code> auto-cuts the
+            release. Tagging is the V7 habit.</li>
+            <li><code>pom.xml</code> must carry
+            <code>maven-resources-plugin</code> /
+            <code>nonFilteredFileExtensions</code> for <code>pfx</code>.
+            <code>src/main/resources</code> is filtered for
+            <code>@project.version@</code>, and filtering reads every resource as
+            text &mdash; on a keystore it does not corrupt quietly, it fails the
+            build with <code>MalformedInputException</code>.</li>
+            <li>TLS is <strong>conditional per agent</strong> &mdash; see the next
+            callout. Installing the certificate is not the same as serving it.</li>
+          </ul>
+          <p>Until the V7 jar is retired, a renewal has to be applied to
+          <strong>both</strong>, or half the fleet keeps serving an expired
+          certificate.</p>
+        </div>
+
+        <div class="callout important">
+          <div class="callout-label">The certificate cannot serve every address, and this decides whether it does anything</div>
+          <p>Read from the certificate itself, not from the filename: its Subject
+          Alternative Names are <code>DNS:*.getgsi.com</code> and
+          <code>DNS:getgsi.com</code> &mdash; nothing else. <strong>No IP
+          SANs. No <code>localhost</code>.</strong> A wildcard never matches an IP
+          literal, so a bare address cannot be secured with it no matter how
+          correctly the keystore is installed.</p>
+          <p>The V8 agent therefore serves TLS <strong>only</strong> when the host
+          the browser dials is a name the certificate covers, which in practice
+          means the client has an <strong>App Server Domain URL</strong> set. That
+          value is what gets minted into the session token and what V8 routes on;
+          without it the agent is spawned with
+          <code>--server.ssl.enabled=false</code> and serves plain HTTP, which is
+          the correct outcome rather than a fault.</p>
+          <p>Practical consequence: <strong>if a customer has no App Server Domain
+          URL, renewing the certificate changes nothing for them.</strong> Set the
+          Domain URL first, then verify the browser reaches the agent over
+          <code>https://</code>, and only then call the renewal done.</p>
+        </div>
+
         <p>Once procured, the renewal flows through three handoffs:</p>
 
         <div class="step-card">
