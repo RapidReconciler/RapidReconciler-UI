@@ -529,6 +529,7 @@ window.RRV8 = window.RRV8 || {};
     '- SIGN CONVENTION: reason in the NATURAL sign shown on screen — the stored and displayed figures already carry it, and the reconciliation ties to the on-screen KPI in that sign. Do not silently flip signs to "make it balance"; a sign flip belongs only in an Excel/PDF out-of-balance column, never in the reasoning.',
     '- DMAAI ROUTING is already grounded server-side on every AI call (the model-DMAAI 4152 rules). Reason from account derivation and routing as given; do not restate or re-derive the DMAAI model in this catalog — that copy lives once, on the server.',
     '- RR IS A UTILITY, NOT THE BOOK OF RECORD: JDE is the system of record. RR surfaces the gap, explains it, and drives the source fix or the correcting entry — it does not post to JDE, hold the ledger, gate a close, or enforce attestation. Fixes land at the source (JDE / the operation) or as a journal entry the accountant posts in JDE.',
+    '- "CURRENT" MEANS THE MOST RECENT TWO LOADED PERIODS, not one. Read and compare both when judging materiality or recurrence: one period gives an amount, two give a trend, and the trend is what separates a one-off correcting entry from a source fix worth preventing. Use the periods the database actually loaded (they are fiscal, not necessarily month-ends), and say which two you used.',
     '- A transaction variance reconciles ONE document: F4111 (item ledger / cardex) extended value vs F0911 (GL / ledger) for the SAME document and account. Variance = ledger − cardex for that document. So a POSITIVE variance means the GL carries more value than the item ledger, and a NEGATIVE variance means the item ledger carries more. Never state a direction without applying that subtraction — getting it backwards turns overstated into understated. Explain each document on its own terms.',
     '- TIE OR NO TIE. The test is whether the F0911 amount matches the F4111 amount within tolerance. It is BINARY. NEVER express a transaction variance as a percentage or a ratio — it is not a share of anything, and a percentage actively misleads here. State dollars.',
     '- IF F0911 DOES NOT TIE TO F4111, A CORRECTION IS REQUIRED. Always. "Explained" tells the analyst WHY the two sides disagree; it NEVER means leave it alone. The cause decides WHAT the correction is. It does not remove the need for one.',
@@ -588,6 +589,7 @@ window.RRV8 = window.RRV8 || {};
   window.RRV8.CARDEX_GROUNDING = [
     'ANALYST POLICY (cardex variance) — reason from these rules:',
     '- VARIANCE IS ALWAYS A DIFFERENCE: whenever two figures that should equal each other do not, that gap IS a variance — full stop. "Expected" / "explained" describes the CAUSE of a variance you can account for; it NEVER downgrades the gap to "not a variance" (two scales that disagree still disagree — knowing why does not make them equal). Disposition every variance as EXPLAINED / no-action or UNEXPLAINED / investigate; never as "not a variance," "not a real variance," or "not a variance to chase."',
+    '- "CURRENT" MEANS THE MOST RECENT TWO LOADED PERIODS, not one. Read and compare both when judging materiality or recurrence: one period gives an amount, two give a trend, and the trend is what separates a one-off correcting entry from a source fix worth preventing. Use the periods the database actually loaded (they are fiscal, not necessarily month-ends), and say which two you used.',
     '- DEFINITION: cardex variance = the item ledger (F4111) does not sum to the on-hand balance (F41021) for one item. QUANTITY variance = the sum of F4111 primary-UoM quantity does NOT equal the F41021 Quantity On Hand. AMOUNT variance = the sum of F4111 extended cost does NOT equal the F41021 on-hand Value. Nothing else is cardex variance. It is inventory-internal, NOT the ledger-vs-GL gap (that is transaction variance).',
     '- STEP 1 IS ALWAYS THE JDE VALIDATION. The analyst opens Work With Item Ledger (P4111) in JDE, exports the grid, EXCLUDES memo rows (ILIPCD = "X" — work-order scrap, lot releases, certain warehouse moves; they do not affect on-hand), and checks that the remaining F4111 primary quantity sums to the header Quantity On Hand and the extended cost sums to the header Value. Anything wrong in JDE is corrected in JDE FIRST. RR cannot verify JDE — it TRUSTS the analyst did this. Never imply RR confirmed JDE.',
     '- USE THE RIGHT AGGREGATION SCOPE, and it is set by cost METHOD as well as cost level. An average-cost item (method 02) or actual-cost item (method 09) reconciles at ITEM when its cost level is 1 (branch not in the key), at BRANCH/ITEM when its cost level is 2, and per LOCATION AND LOT when its cost level is 3. A standard-cost item (method 07) reconciles per LOCATION AND LOT at every cost level, and so does any other cost method. Comparing at the wrong grain manufactures a false variance.',
@@ -1614,6 +1616,13 @@ window.RRV8 = window.RRV8 || {};
         ],
         context: [
           'Not tested: the batches and the account. The card used to say both were healthy because they carry completions for other orders. That was a specimen finding, and it is the strongest evidence you can gather — go and check it on one of your own batches, because a batch full of other orders\' completions is what turns this from "a run failed" into "the run dropped this order".',
+          // summarizationIdx points HERE (index 1). This is the UNANSWERED wording
+          // and it stands only while the posting-policy detection has no verdict
+          // for the drilled company. Once it does, _withPostingPolicy in
+          // inventory-transactions.html rewrites the bullet and moves it out of
+          // "Not tested on these rows" — a Detail verdict to "Also checked", a
+          // Summarized verdict to the lead of "What happened". Keep this text as
+          // the not-tested form; do NOT edit it into a claim.
           'Not tested: summarization, and the test is BLIND to it rather than ruling it out. The GL search only counts rows with a numeric work-order subledger, so a summarized completion carrying no subledger is invisible and would CREATE this card. Confirm your completions carry a work-order subledger at all before you treat the entry as never written.',
           'Not tested: other document types. A work order can carry GL rows under a document type this search does not count, journal entries among them, and whether any of those is the completion is unknown. Read the subledger before concluding the entry was never written.',
           'Not tested: whether the GL rows are posted, or whether every batch reached the GL copy loaded here. Confirm the load covered the period.'
@@ -1630,6 +1639,10 @@ window.RRV8 = window.RRV8 || {};
           'No Oracle Support article matches this. KB 420628 is the near miss, ruled out on shape: its failure drops the material issue entry, which would suppress this card rather than create it.'
         ],
         recurrenceIdx: 2,
+        // UI-167 — index into `context` of the summarization bullet, so the
+        // renderer can replace it with the measured verdict instead of leaving a
+        // "not tested" line on screen once the tool tests it. See _withPostingPolicy.
+        summarizationIdx: 1,
         fix: [
           'Have whoever runs R31802A read the error report that run produces.',
           'Take it to Oracle through IT as an undocumented R31802A condition, not as KB 420628. That article has a different cause, and its manual-journal-entry remedy does not fit this.',

@@ -326,6 +326,28 @@ assuming them:
   no work-order subledger at all because the run summarized the journal entries.
   Summarization combines entries by account across work orders and drops the order
   number; summarizing material issues *within* the work order keeps it.
+
+  **You no longer have to guess which policy is in force. Read it off the screen.**
+  The Transaction Details scope band carries a `GL posting` field beside Database and
+  Company, from `dbo.RPostingPolicy` via `v8ui_txv_posting_policy`. `Detail` means
+  every manufacturing GL document on that company covers exactly one work order, so
+  the one-to-one pairing this card assumes holds and summarization is not what
+  produced it. `Summarized` means at least one document covers more than one order,
+  the card counts only completions carrying a work-order subledger, and you should
+  read the finding as a pairing gap before a posting gap. `Not tested` means that
+  company has no manufacturing GL documents in the loaded window, so nothing has been
+  ruled out either way. The detection is `usp8_txv_posting_policy`, which counts
+  distinct work orders per F3106 GL-document key restricted to F0911 batch type `0`.
+  It tests the thing itself rather than inferring it from a missing subledger.
+
+  **If you write the subledger probe by hand, get the predicate right.** "Blank or
+  non-numeric subledger" translates to `isnull(try_cast(ltrim(rtrim(glsbl)) as
+  bigint), 0) <= 0`, the exact negation of the correlation's own
+  `try_cast(glsbl as bigint) > 0`. The obvious form, `try_cast(...) is null`, misses
+  every blank one: measured 2026-08-28, `try_cast('')`, `try_cast('   ')` and
+  `try_cast('00000000')` all return `0` rather than `NULL`, and only genuinely
+  non-numeric text returns `NULL`. Written that way the probe reads zero on a
+  database holding 260,401 empty subledgers, and a zero reads as good news.
 - **The GL detail exists in JDE but not in RapidReconciler's copy.** The F0911 pull
   is windowed on G/L date, 35 days back by default, so a backdated manufacturing run
   drops the population while the cardex rows are present.
