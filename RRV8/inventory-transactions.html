@@ -455,6 +455,28 @@
   .tx-scope-total { align-items: flex-end; text-align: right; }   /* right-most anchor — the figure that matters */
   .tx-scope-k { font-size: 12.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted); }
   .tx-scope-v { font-family: 'Source Sans 3', sans-serif; font-size: 19px; font-weight: 800; color: var(--navy); }
+  /* UI-167 — the per-customer GL posting policy. Deliberately NOT hidden in any
+     state: 'Detail' is the statement that the 1:1 cardex-to-GL pairing every
+     figure beside it assumes actually holds, and 'Not tested' is the honest word
+     for a company with no manufacturing GL loaded. Only the COLOUR varies, so a
+     summarizing install reads as attention without the field moving or
+     disappearing. There is no [hidden] rule on #tx-scope-glpost on purpose. */
+  #tx-scope-glpost[data-policy="Summarized"] { color: var(--red, #c0392b); }
+  #tx-scope-glpost[data-policy="NoMfg"] { color: var(--text-muted); }
+  /* The consequence sentence, as the band's own second row. flex-basis 100% on
+     the wrapping band, so it never squeezes the fields above it. Shown for
+     Summarized only — a line that printed on every visit would be skimmed. */
+  .tx-scope-note {
+    flex: 0 0 100%;
+    margin-top: 4px;
+    padding-left: 12px;
+    border-left: 3px solid var(--red, #c0392b);
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.45;
+    color: var(--text-soft);
+  }
+  .tx-scope-note[hidden] { display: none; }
 
   .breakdown-card {
     background: var(--bg-card);
@@ -3346,7 +3368,7 @@
   //    - Inventory status (the user's GL filter scope —
   //      currencies / companies / BUs / objects / subsidiaries)
   // ============================================================
-  const _scopeMem = { periods: null, status: null, dmaais: null, crossPeriods: null, duplicateSales: null };
+  const _scopeMem = { periods: null, status: null, dmaais: null, crossPeriods: null, duplicateSales: null, postingPolicy: null };
   function _scopeKey(name) {
     const dbName = (window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex] || {}).n || '_';
     return 'rrv8.scope.v1.' + MODE + '.' + dbName + '.' + name;
@@ -3526,6 +3548,43 @@
     }
     _scopeMem.duplicateSales = payload;
     _scopeToStorage('duplicateSales', payload);
+    return payload;
+  }
+  // Per-customer POSTING POLICY (UI-167) — v8ui_txv_posting_policy, one row per
+  // company. Whether R31802A posts manufacturing GL in detail or summarizes by
+  // account ACROSS work orders. At a summarizing site one F0911 line covers many
+  // item-ledger rows, so the 1:1 document pairing every cardex-versus-GL
+  // manufacturing figure on this page rests on does not exist.
+  //
+  // NO reconciliationFilter, and that is not an omission. This fact has no period
+  // axis at all — it is a property of the customer's R31802A version, not of a
+  // period — and InventoryIntegrityController passes no filter to the repository
+  // for this endpoint anyway (findRows takes the JWT and the view name, nothing
+  // else). Sending a period would state a scope the answer does not have.
+  // Company scoping is the Agent's JWT post-filter on the view's CompanyNumber.
+  async function getPostingPolicy() {
+    if (_scopeMem.postingPolicy) return _scopeMem.postingPolicy;
+    const cached = _scopeFromStorage('postingPolicy');
+    if (cached) { _scopeMem.postingPolicy = cached; return cached; }
+    // NO FIXTURE SHIPS FOR THIS, DELIBERATELY. V8 is production-only and the live
+    // agent is the whole answer, so nothing here is designed around a second data
+    // shape. The demoFile is named anyway because rrFetch diverts EVERY call under
+    // IS_DEMO and derives the filename from the AREA when none is given -- which for
+    // 'inventory/integrity' would collide with another report's fixture and hand this
+    // field a plausible wrong policy. Naming a file that does not exist makes the
+    // fetch throw, the caller warn, and the field stay on its em-dash. Failing closed
+    // is correct; answering with someone else's data is not.
+    let payload;
+    if (IS_DEMO) {
+      payload = await rrFetch('inventory/integrity', { demoFile: 'v8ui-txv-posting-policy' });
+    } else {
+      payload = await rrFetch('inventory/integrity', {
+        method: 'POST',
+        body: { take: 500, skip: 0, page: 1, pageSize: 500, report: 'v8ui_txv_posting_policy' }
+      });
+    }
+    _scopeMem.postingPolicy = payload;
+    _scopeToStorage('postingPolicy', payload);
     return payload;
   }
   function invalidateScopeCache() {
@@ -4585,6 +4644,43 @@
     var out = found.slice();
     out[idx] = s;
     return out;
+  }
+  // UI-167 — rewrite the summarization bullet from what the detection actually
+  // found. The catalog holds the UNANSWERED wording under "Not tested on these
+  // rows", which was the only honest heading for it until the detection existed
+  // and is still the honest heading where the detection has no verdict.
+  //
+  // WHAT MOVES WHERE, and the heading is the whole point:
+  //   Detail      the question WAS tested and answered, so the bullet must not
+  //               render under "Not tested". It moves to `alsoChecked` and cites
+  //               the same searchscope assertion the sibling bullet already does,
+  //               because that is the claim it qualifies — no new assertion is
+  //               published for it, so the manifest is unchanged.
+  //   Summarized  it leads. The card may be reporting a matching failure rather
+  //               than a posting gap, and an analyst who reads the rest of the
+  //               finding first will have escalated to Oracle before getting
+  //               here. Prepended to `checked`, and the issues-present bullet
+  //               moves down to `alsoChecked` so the two-bullet standard
+  //               Tools/check_txv_cards.py enforces on the catalog still holds on
+  //               screen.
+  //   no verdict  the catalog text stands, unchanged, in `context`.
+  function _withPostingPolicy(sel) {
+    var p = (typeof _txPolicyState === 'function') ? _txPolicyState() : null;
+    var st = p && String(p.state || '').trim();
+    if (st !== 'Detail' && st !== 'Summarized') return sel;
+    var ctx = sel.context.slice();
+    var idx = sel.summarizationIdx;
+    if (idx < 0 || idx >= ctx.length) return sel;
+    ctx.splice(idx, 1);
+    var checked = Array.isArray(sel.checked) ? sel.checked.slice() : [];
+    var also    = Array.isArray(sel.alsoChecked) ? sel.alsoChecked.slice() : [];
+    if (st === 'Detail') {
+      also.unshift({ a: 'CNJ.searchscope', t: 'Summarization: every manufacturing GL document on this company covers exactly one work order, so a summarized completion is not what this card is reporting.' });
+    } else {
+      checked.unshift({ a: 'CNJ.searchscope', t: 'Summarization is in force here: manufacturing GL documents cover more than one work order, and this card counts only completions carrying a work-order subledger. Read it as a pairing gap before a posting gap.' });
+      if (checked.length > 2) also.unshift(checked.pop());
+    }
+    return Object.assign({}, sel, { context: ctx, checked: checked, alsoChecked: also });
   }
   function computeGroupsAndTotal(rows) {
     const groups = {};
@@ -6759,13 +6855,127 @@
   // same card. One name per code now — the divergence is gone, not documented.
   // Scope bar — reflects the FULL active scope so a drill-in from the plan shows
   // exactly what's filtering the grid: Database · Company · Period · drill.
+  // ============================================================
+  //  PER-CUSTOMER POSTING POLICY (UI-167) — the sink, and why it is HERE.
+  //
+  //  This is a standing fact about the CUSTOMER: whether R31802A posts
+  //  manufacturing GL in detail or summarizes by account ACROSS work orders. It
+  //  is not about a period and not about a card, and it changes what every
+  //  cardex-versus-GL manufacturing number on this page MEANS. At a summarizing
+  //  site one F0911 line covers many item-ledger rows, so the 1:1 document
+  //  pairing this whole comparison assumes does not exist, and Completion Not
+  //  Journaled fires because its GL search counts only rows with a numeric
+  //  work-order subledger and therefore cannot SEE a summarized completion.
+  //
+  //  IT GOES IN THE SCOPE BAND, not on a card and not in a tooltip.
+  //    * A card-side-only sink is unreachable: summarization breaks the pairing
+  //      for Mfg Cost Mismatch, Make to Order and the unclassified pool too, and
+  //      unclassified rows surface on no card at all. Same reasoning that put
+  //      UI-165's split-order disclosure on the grid rather than on a card.
+  //    * #tx-scope-band is the ONE ungated always-visible surface on this page.
+  //      It carries no role gate, no attention gate and no [hidden] rule, and it
+  //      already holds the other standing facts the analyst reads scope from
+  //      (Database, Company). #tx-disclose is hidden when its slice is empty and
+  //      #tx-analyzer-body opens collapsed, so neither can carry a fact that must
+  //      be true on arrival.
+  //    * UI-13 is the precedent and the warning: the data-freshness figure had
+  //      THREE sinks and all three were dead — one inside `.app-header { display:
+  //      none }`, one admin-only AND attention-only, one rendering into an element
+  //      that is not in the DOM. Do not move this field into any of those.
+  //
+  //  ALL THREE STATES RENDER, ALWAYS. 'Detail' is not noise: it is the statement
+  //  that the pairing holds, which is the assumption every figure beside it
+  //  depends on. 'Not tested' is the honest word for a company with no
+  //  manufacturing GL loaded, and it must never read as 'Detail' — asserting
+  //  detail posting for a company we have no evidence about is the exact defect
+  //  UI-167 exists to close.
+  //
+  //  THE SENTENCE ONLY RENDERS WHEN IT CHANGES SOMETHING. A consequence line that
+  //  printed on every visit would be skimmed past within a week, so the note is
+  //  emitted for 'Summarized' only, where it tells the analyst to read a
+  //  manufacturing variance as a pairing question first. The state field itself
+  //  is always there.
+  // ============================================================
+  var _txPolicyRows = null;    // null = not loaded yet; [] = loaded and empty
+  function _txPolicyState() {
+    if (!_txPolicyRows || !_txPolicyRows.length) return null;
+    // _coKey on BOTH sides, not a bare ===. CompanyNumber is nchar(5) server-side,
+    // so a shorter company code arrives space-padded while activeCompany is a
+    // trimmed URL string. The grid filter carries the same warning at _coKey's
+    // definition: a strict comparison never matches and looks like a clean answer.
+    var co = _coKey(_state.activeCompany);
+    var rows = _txPolicyRows;
+    if (co) {
+      rows = rows.filter(function (r) { return _coKey(r.CompanyNumber) === co; });
+      if (!rows.length) return null;
+      // TRIMMED, and this is not defensive noise. SummarizationState is nchar(12)
+      // server-side. The view rtrims it, but every consumer here compares it to a
+      // bare literal and stamps it into a data-policy attribute the CSS selects on,
+      // so one un-rtrimmed column anywhere in the chain would silently render every
+      // install as "Not tested" with no error. Trim once, at the only exit.
+      return { state: _coKey(rows[0].SummarizationState), note: rows[0].PolicyNote, co: co, others: 0 };
+    }
+    // ALL COMPANIES: report the WORST state, never a majority and never the first
+    // row. One summarizing company makes every manufacturing figure in a combined
+    // view a pairing question, and a 'Detail' reading that hid it would be the
+    // number-without-meaning this row is about. Name the company so the analyst
+    // knows where to look.
+    var worst = null, summarizedCos = [];
+    var rank = { 'Summarized': 3, 'NoMfg': 2, 'Detail': 1 };
+    rows.forEach(function (r) {
+      var s = String(r.SummarizationState || '').trim();
+      if (s === 'Summarized') summarizedCos.push(_coKey(r.CompanyNumber));
+      if (!worst || (rank[s] || 0) > (rank[String(worst.SummarizationState || '').trim()] || 0)) worst = r;
+    });
+    if (!worst) return null;
+    var st = String(worst.SummarizationState || '').trim();
+    var note = worst.PolicyNote || '';
+    if (st === 'Summarized' && summarizedCos.length) {
+      note = 'Compan' + (summarizedCos.length === 1 ? 'y ' : 'ies ') + summarizedCos.join(', ')
+           + ': ' + note;
+    }
+    return { state: st, note: note, co: '', others: rows.length - 1 };
+  }
+  // Fills the two elements paintScopeBand() emits. Called from there so a repaint
+  // (company switch, drill, period change) re-states the fact, and called again
+  // when the fetch lands so a slow agent does not leave the field on its dash.
+  function _paintPolicyField() {
+    var v = document.getElementById('tx-scope-glpost');
+    var n = document.getElementById('tx-scope-policy-note');
+    if (!v) return;
+    var p = _txPolicyState();
+    if (!p) {
+      // No row for this scope. Say nothing rather than guessing — an em-dash is
+      // "not answered", which is true, and is not the same as 'Detail'.
+      v.textContent = '—';
+      v.removeAttribute('data-policy');
+      if (n) { n.hidden = true; n.textContent = ''; }
+      return;
+    }
+    var label = (p.state === 'Summarized') ? 'Summarized'
+              : (p.state === 'Detail')     ? 'Detail'
+              : 'Not tested';
+    v.textContent = label;
+    v.setAttribute('data-policy', p.state);
+    if (n) {
+      var show = (p.state === 'Summarized') && !!p.note;
+      n.hidden = !show;
+      n.textContent = show ? p.note : '';
+    }
+  }
+
   function paintScopeBand() {
     var band = document.getElementById('tx-scope-band'); if (!band) return;
     var db = (window.RR_SESSION && window.RR_SESSION.dbs && window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex]) || {};
     var period = (_data && _data.period) || _state.period || '';
     var item = function (k, v) { return '<span class="tx-scope-item"><span class="tx-scope-k">' + k + '</span><span class="tx-scope-v">' + v + '</span></span>'; };
     var html = item('Database', escapeHtml((db.n || '').replace(/^RapidReconciler_/, '') || '—'))   // short DB name (drop the platform prefix)
-             + item('Company', _state.activeCompany ? ('Co ' + escapeHtml(_state.activeCompany)) : 'All companies');
+             + item('Company', _state.activeCompany ? ('Co ' + escapeHtml(_state.activeCompany)) : 'All companies')
+             // UI-167. Sits next to Company because it is a fact ABOUT that company,
+             // and it is emitted UNCONDITIONALLY so a company switch or a slow fetch
+             // can never leave the page silent about which posting policy is in force.
+             // Filled by _paintPolicyField() at the end of this function.
+             + item('GL posting', '<span id="tx-scope-glpost">&mdash;</span>');
     if (period) html += item('Period', escapeHtml((typeof formatPeriod === 'function') ? formatPeriod(period) : period));
     if (_state.activeCard) html += item('Card', escapeHtml(_TXV_CARD_TITLE[_state.activeCard] || _state.activeCard));
     if (_state.activePattern && _state.activePattern !== _state.activeCard) html += item('Pattern', escapeHtml(patTitle(_state.activePattern)));
@@ -6778,7 +6988,12 @@
     // the band uses space-between so the fields spread across the full width.
     html += '<span class="tx-scope-item"><span class="tx-scope-k">Rows</span><span class="tx-scope-v" id="tx-scope-rows">&mdash;</span></span>';
     html += '<span class="tx-scope-item tx-scope-total"><span class="tx-scope-k">Total variance</span><span class="tx-scope-v" id="tx-scope-var">&mdash;</span></span>';
+    // UI-167. Second row of the band (flex-basis 100% on a wrapping flex parent),
+    // so the consequence sentence sits under the fields rather than squeezing
+    // them. Shown for the Summarized state only — see _paintPolicyField.
+    html += '<span class="tx-scope-note" id="tx-scope-policy-note" hidden></span>';
     band.innerHTML = html;
+    _paintPolicyField();
   }
 
   // ============================================================
@@ -7900,6 +8115,15 @@
     if (sel && sel === mech && typeof sel.recurrenceIdx === 'number' && Array.isArray(sel.found)) {
       var _rcFound = _withRecurrence(sel.found, sel.recurrenceIdx, _cardRecurrence(card));
       if (_rcFound !== sel.found) sel = Object.assign({}, sel, { found: _rcFound });
+    }
+    // UI-167 — the summarization bullet stops claiming "not tested" once the
+    // detection has an answer for this company. The catalog copy is the NoMfg /
+    // unanswered wording, so a failed or absent policy read leaves the card
+    // exactly as it reads today; only a real verdict rewrites the bullet, and a
+    // Detail verdict moves it out of "Not tested on these rows" entirely.
+    // Clone rather than mutate: the catalog entry is shared across renders.
+    if (sel && typeof sel.summarizationIdx === 'number' && Array.isArray(sel.context)) {
+      sel = _withPostingPolicy(sel);
     }
     // The lead band was redundant clutter (owner 2026-07-14): the collapsed-header
     // flag already states the status, the table states the routings, and the AI
@@ -9961,6 +10185,27 @@
       console.warn('DuplicateSales preload failed:', err);
     }
   }
+  // v8ui_txv_posting_policy preload (UI-167) — the per-customer posting policy.
+  // Not a detector index: it stamps no rows and re-stamps nothing, so it does NOT
+  // call noteIndexLanded(). It repaints the scope band instead, which is the only
+  // thing that has to happen when it lands late.
+  //
+  // ON FAILURE _txPolicyRows STAYS null AND THE FIELD STAYS ON ITS EM-DASH. It
+  // must never fall back to an empty array or to 'Detail': the sibling DMAAI
+  // loader shipped exactly that bug — a failed load returned {byCombo:{}} which
+  // the panel read as a SUCCESSFUL load with no mismatches and printed "all match
+  // the cardex model" off a lookup that never happened. An unanswered question has
+  // to look unanswered.
+  async function preloadPostingPolicy() {
+    try {
+      const payload = await getPostingPolicy();
+      const rows = (payload && (payload.data || payload.rows)) || [];
+      _txPolicyRows = Array.isArray(rows) ? rows : [];
+      paintScopeBand();
+    } catch (err) {
+      console.warn('PostingPolicy preload failed:', err);
+    }
+  }
 
   // ============================================================
   //  Boot
@@ -9974,6 +10219,7 @@
       preloadDmaais();          // 5.4  Account Mismatch
       preloadCrossPeriods();    // 5.14 Period Mismatch
       preloadDuplicateSales();  // 5.18 Duplicate Sales
+      preloadPostingPolicy();   // UI-167 per-customer GL posting policy (scope band)
       // System Status light reads the shared sessionStorage cache
       // (instant paint), then refreshes from v_diagnostic5_job_status
       // and starts polling. Same data Reconciliation drives &mdash;
