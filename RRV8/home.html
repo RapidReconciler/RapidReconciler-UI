@@ -420,6 +420,14 @@
   .whatif-banner[hidden] { display: none; }
   .whatif-banner svg { width: 16px; height: 16px; flex-shrink: 0; }
   .whatif-banner button { margin-left: auto; background: none; border: 0; color: var(--blue); font-family: inherit; font-size: 13px; font-weight: 800; cursor: pointer; }
+  /* UI-169 notice. Red rather than the whatif banner's blue: this is a failure the
+     reader has to act on, not a scope note. Its own [hidden] rule because these are
+     flex containers and `hidden` alone loses to `display: flex` -- the exact defect
+     UI-159 fixed for .ihs-chip, and the reason UI-13's figure was invisible for weeks. */
+  .home-notice { display: flex; align-items: center; gap: 10px; margin: 0 0 14px; padding: 9px 14px; border-radius: 10px; background: var(--red-pale, #fdecea); border: 1px solid rgba(192,57,43,.35); color: var(--red, #c0392b); font-size: 13px; font-weight: 700; }
+  .home-notice[hidden] { display: none; }
+  .home-notice svg { width: 17px; height: 17px; flex-shrink: 0; }
+  .home-notice button { margin-left: auto; flex-shrink: 0; background: none; border: 0; color: inherit; font-family: inherit; font-size: 13px; font-weight: 800; cursor: pointer; text-decoration: underline; }
   .whatif-banner button:hover { text-decoration: underline; }
 
   /* Role-view lens: show only the active role's section(s). Layered over the caps
@@ -2889,6 +2897,24 @@
     <button type="button" id="whatifShowAll">Show all</button>
   </div>
 
+  <!-- UI-169: THE ONE ON-SCREEN SINK for a failed data call. Every rrFetch failure on
+       this page used to end at console.warn -- three of them name the consequence
+       precisely ("_invRows stays null, so the analyst brief and worklist will not
+       render") and a reader saw a blank page with no explanation. RRV8.fetchErrorMessage
+       in sidebar.js already writes the right sentence per status, including the 401 /
+       403 split that cost real time to get right; home.html never called it and never
+       stamped a numeric .status on the error it threw, so the status branches could not
+       fire even if it had. Both halves are fixed: rrFetch stamps err.status and reports
+       here. Sits ABOVE the view containers and outside every role gate on purpose -- an
+       Accountant and an Analyst hit exactly the same expired session an Administrator
+       does. Never a toast: the condition persists until it is fixed, and a message that
+       fades is a message nobody read. -->
+  <div class="home-notice" id="homeNotice" role="status" hidden>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16.5v.01"/></svg>
+    <span id="homeNoticeText"></span>
+    <button type="button" id="homeNoticeRetry">Reload</button>
+  </div>
+
   <!-- Sub-view tab strip: the second nav axis under the fixed top row. Rendered
        by renderSubNav() for the current view (accountant: Rec / Account /
        Perpetual — company → account → item). A tab click swaps the palette below;
@@ -3700,7 +3726,15 @@
         return r.text().then(function (t) {
           var detail = '';
           try { var j = JSON.parse(t); if (j && j.reason) detail = j.reason; } catch (e) {}
-          throw new Error('HTTP ' + r.status + (detail ? ' — ' + detail : '') + ' on ' + url);
+          var err = new Error('HTTP ' + r.status + (detail ? ' — ' + detail : '') + ' on ' + url);
+          // UI-169: the NUMERIC status, not just the status baked into the message text.
+          // RRV8.fetchErrorMessage keys every one of its branches on `err.status` being a
+          // finite number; without this line it computed null and fell past 401, 403 and
+          // 404 to the generic tail, so the sentence that tells a reader their session
+          // expired could never fire from this page.
+          err.status = r.status;
+          _noteFetchFailure(area, err);
+          throw err;
         });
       }
       return r.json().catch(function (e) { return e instanceof SyntaxError ? null : Promise.reject(e); });
@@ -5536,6 +5570,52 @@
   // sits inside `.app-header { display: none }`, the admin chip inside the
   // admin-only attention-only instance-health strip, and _dbRefresh renders into
   // #dbMeta, which is not in the DOM at all. Three producers, zero readers.
+  // ---- UI-169: FAILED DATA CALLS GET A SENTENCE ON SCREEN ----------------------
+  // Every rrFetch failure lands here. sidebar.js owns the wording (RRV8.fetchErrorMessage)
+  // so the 401/403/404/5xx distinctions are authored ONCE for the whole app; this file
+  // owns only which failure to show and where.
+  //
+  // WHICH ONE: an auth failure outranks everything else and is never displaced, because a
+  // rejected session is the CAUSE of the other twelve failures on the page, not a peer of
+  // them. Otherwise the first failure wins -- later ones are usually consequences, and a
+  // banner that keeps rewriting itself as loads settle is unreadable. The count of
+  // affected requests is printed so the reader can tell one dead endpoint from a dead
+  // session.
+  var _notice = null, _noticeCount = 0;
+  function _noteFetchFailure(area, err) {
+    var st     = (err && typeof err.status === 'number' && isFinite(err.status)) ? err.status : 0;
+    var isAuth = (st === 401 || st === 403);
+    _noticeCount++;
+    if (_notice) {
+      var haveAuth = (_notice.status === 401 || _notice.status === 403);
+      if (haveAuth || !isAuth) { _paintHomeNotice(); return; }   // keep the standing one
+    }
+    _notice = { area: area, err: err, status: st };
+    _paintHomeNotice();
+  }
+  function _paintHomeNotice() {
+    var box = $('homeNotice'), txt = $('homeNoticeText');
+    if (!box || !txt || !_notice) return;
+    var msg = (window.RRV8 && RRV8.fetchErrorMessage)
+                ? RRV8.fetchErrorMessage(_notice.area, _notice.err)
+                : ('This page could not load ' + _notice.area + ' and did not say why.');
+    txt.textContent = msg + (_noticeCount > 1
+        ? '  ' + _noticeCount + ' requests on this page failed the same way.'
+        : '');
+    box.hidden = false;
+  }
+  // Cleared on a database switch: the previous instance's failure must not sit beside the
+  // new instance's numbers, the same rule the freshness pill follows.
+  function _clearHomeNotice() {
+    _notice = null; _noticeCount = 0;
+    var box = $('homeNotice'); if (box) box.hidden = true;
+  }
+  // The only action a reader can usefully take: nothing on this page can re-mint a
+  // session, so this reloads rather than pretending to retry a single call.
+  (function () {
+    var b = $('homeNoticeRetry');
+    if (b) b.addEventListener('click', function () { location.reload(); });
+  })();
   function _dataFreshness() {
     var s = _jobStatus || '';
     if (/^success/i.test(s))            return { level: 'ok',        text: _refreshWhen ? ('Data as of ' + _fmtAsOf(_refreshWhen)) : 'Data up to date' };
@@ -16290,6 +16370,7 @@
     // answers. Leaving the previous database's timestamp up would be a figure
     // from the wrong instance sitting next to the new instance's numbers.
     _paintFreshPill();
+    _clearHomeNotice();   // UI-169: same rule -- the old instance's failure is not this one's
     paintInventoryLight('grey', 'Checking…');     // cxDot
     RRV8.setDotState($('reloadGlDot'), 'unknown', '');
     // Reload Cardex end-of-day check is per-DB; neutralize the dot + restore the
