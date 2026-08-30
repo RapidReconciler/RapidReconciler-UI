@@ -1812,9 +1812,10 @@ window.RRV8 = window.RRV8 || {};
         // exclusion, not the detection. The detection on this card is the disagreement.
         alsoChecked: [
           { a: 'MCM.glcompletionsameaccount', t: 'A GL completion exists for this work order on this account, so the completion-gap shape is ruled out.' },
-          { a: 'MCM.iconly', t: 'Completions only on the GL side. The completion carries labor and overhead out of WIP and the issue does not, so the two are never netted against each other.' },
+          { a: 'MCM.icandim', t: 'Completions AND material issues on the GL side, each matched to its own document type. A work order\u2019s cost problem is one finding, not two cards for you to reassemble.' },
+          { a: 'MCM.imamountdiffers', t: 'On a material issue the amount test is applied directly. The cross-batch card takes the tying completions first and has no material-issue equivalent, so the issues are tested here rather than by precedence.' },
           { a: 'MCM.glsideaggregated', t: 'One thing to know about that comparison: the GL side is summed across batches, the item-ledger side is this single row. Where a work order and account carry several ledger rows, check the totals rather than the row.' },
-          { a: 'MCM.mfgic', t: 'A work-order completion (IC) in a manufacturing batch.' },
+          { a: 'MCM.mfgicim', t: 'A work-order completion (IC) or material issue (IM) in a manufacturing batch.' },
           { a: 'MCM.batchstamped', t: 'A batch is stamped on the item-ledger row, so a manufacturing accounting run processed it.' }
         ],
         context: [
