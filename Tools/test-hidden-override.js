@@ -205,6 +205,15 @@ function parseHtml(html) {
  * viewport or on some engine, so a display set inside one is every bit as capable of
  * beating [hidden] as a top-level one). @keyframes / @font-face carry no selectors.
  */
+// stripper-safety: css-only (UI-170). This is the naive block strip that removed 48% of
+// sidebar.js when applied to JAVASCRIPT -- a delimiter inside a string or regex literal
+// pairs with the wrong one and swallows everything between. CSS is the one place it is
+// defensible: block comments are the ONLY comment form there, so narrowing to line
+// comments is not available. Measured 2026-08-30 across every stylesheet in RRV8 -- 25
+// blocks, 612,791 bytes -- no stylesheet that was brace-balanced before became unbalanced
+// after, so the strip is not eating declarations on today's inputs. Do NOT copy this line
+// into a test that reads .js or .html source; Tools/test-comment-stripper-safety.js
+// enforces that, and this marker is what exempts this one use.
 function stripCssComments(css) { return css.replace(/\/\*[\s\S]*?\*\//g, ''); }
 
 function parseCss(css, srcName, out) {
