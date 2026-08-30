@@ -922,6 +922,13 @@
   /* Inv account resolves to a different account than the cardex model — the routing
      source-fix signal. */
   .tx-resolve .tx-resolve-acct.tx-acct-mis { color: var(--orange-deep, #b0641f); font-weight: 800; }
+  /* DAC-77: the GL class was emptied or shortened by the retention purge. Muted rather
+     than alarming -- it is a fact about the data's age, not a defect the analyst caused,
+     and it sits beside the value it qualifies so a blank class is never read as "this
+     document has no GL class". */
+  .tx-resolve .tx-gl-aged { font-size: 11px; font-weight: 700; color: var(--text-muted, #6b7280);
+    background: var(--bg-soft, #f3f4f6); border-radius: 4px; padding: 1px 5px; margin-left: 5px;
+    white-space: nowrap; }
   /* Read the routing table as three logical bands (4/4/3): the source key
      (Co/OT/DT/Cost), the cardex MODEL routing (tinted middle band), and the
      inventory routing it's compared against. A divider opens each band; the
@@ -7444,8 +7451,18 @@
         var og = String(r.NonStockGLClass || '').trim();
         if (og) { gc = og; ns = true; nsTypes = String(r.NonStockLineTypes || '').trim(); }
       }
+      // DAC-77: WHY the class reads the way it does, carried alongside the class itself.
+      // The inventory purge deletes F4111 rows older than the retention cutoff, and
+      // GLClass is derived from F4111 — so on a purged document the class arrives blank
+      // and this analyzer would report "no account comparison ran", blaming the routing
+      // for something that is really an aged-out item ledger. Measured on Demo2, that is
+      // 147 documents blanked outright and 10 more silently SHORTENED. Worst-of across
+      // the combo's rows, because one purged document is enough to make the routing list
+      // incomplete and a combo that is partly trustworthy is not trustworthy.
+      var st = String(r.GLClassState || '').trim();
       var k = co + '|' + ot + '|' + dt + '|' + gc;
-      var e = m[k] || (m[k] = { co: co, ot: ot, dt: dt, gc: gc, ns: ns, nsTypes: nsTypes, rows: 0, variance: 0, cx: {}, gl: {} });
+      var e = m[k] || (m[k] = { co: co, ot: ot, dt: dt, gc: gc, ns: ns, nsTypes: nsTypes, glState: '', rows: 0, variance: 0, cx: {}, gl: {} });
+      if (st === 'outside-window' || (st === 'partial' && e.glState !== 'outside-window')) e.glState = st;
       e.rows++; e.variance += Number(r.Variance) || 0;
       // Resolution signal straight from the rows: which account the CARDEX relieved
       // vs where the GL posted, for this combo.
@@ -7535,7 +7552,7 @@
       rows.forEach(function (e) {
         var r = { co: c.co || '', ot: c.ot || '', dt: c.dt || '', costType: e.costType || '', glCode: e.glCode || '',
           modelTable: e.modelTable || '', modelAcct: e.modelAcct || '', modelAcctDesc: e.modelAcctDesc || '', invDmaai: e.invDmaai || '', invAcct: e.invAcct || '', invAcctDesc: e.invAcctDesc || '', acctMis: !!e.acctMis,
-          stockOnNs: !!e.stockOnNs, nsTypes: c.nsTypes || '' };
+          stockOnNs: !!e.stockOnNs, nsTypes: c.nsTypes || '', glState: c.glState || '' };
         var sig = [r.co, r.ot, r.dt, r.costType, r.glCode, r.modelTable, r.modelAcct, r.invDmaai, r.invAcct].join('');
         if (!seen[sig]) { seen[sig] = 1; list.push(r); }
       });
@@ -7626,12 +7643,27 @@
       // Highlight where the inventory AAI resolves to a DIFFERENT account than
       // the cardex model (the source-fix signal).
       var acctMis = r.acctMis;
+      // DAC-77: a GL class the retention purge emptied or shortened must SAY SO in the
+      // cell, next to the value being judged. Without this the analyst reads "(none)" as
+      // "this document has no GL class" and a short routing list as the complete set —
+      // and on this table a missing class is what makes every account column render a
+      // dash under "no account comparison ran", so the wrong cause gets blamed. The
+      // sentence is in the cell rather than a tooltip: the value drives the decision.
+      var glTitle = r.glState === 'outside-window'
+            ? 'The item ledger for this document is outside the retention window, so no GL class survives to compare against. This is not "no GL class" — the cardex rows were aged out by the purge.'
+          : r.glState === 'partial'
+            ? 'Some item-ledger rows for this document are outside the retention window, so this list of GL classes may be incomplete. Do not read it as the full set.'
+            : '';
+      var glNote = r.glState === 'outside-window' ? ' <span class="tx-gl-aged">aged out</span>'
+                 : r.glState === 'partial'        ? ' <span class="tx-gl-aged">partial</span>'
+                 : '';
       return '<tr>'
         + '<td>' + escapeHtml(r.co || '—') + '</td>'
         + '<td>' + escapeHtml(r.ot || '—') + '</td>'
         + '<td>' + escapeHtml(r.dt || '—') + '</td>'
         + '<td>' + escapeHtml(r.costType || '—') + '</td>'
-        + '<td class="tx-sec-start tx-sec-mid">' + escapeHtml(r.glCode || '(none)') + '</td>'
+        + '<td class="tx-sec-start tx-sec-mid"' + (glTitle ? ' title="' + escapeHtml(glTitle) + '"' : '') + '>'
+        + escapeHtml(r.glCode || '(none)') + glNote + '</td>'
         + '<td class="tx-sec-mid">' + escapeHtml(r.modelTable || '—') + '</td>'
         + '<td class="tx-resolve-acct tx-sec-mid">' + escapeHtml(r.modelAcct || '—') + '</td>'
         + '<td class="tx-sec-mid">' + escapeHtml(r.modelAcctDesc || '—') + '</td>'
