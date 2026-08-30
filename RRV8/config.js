@@ -1122,6 +1122,7 @@ window.RRV8.TXN_COLUMNS = {
   OrigDocType:   'Document type of that originating document.',
   GLXref:        'The GL document number the correlation matched, shown because it differs from the item-ledger document on manufacturing and on sales.',
   GroupCode:     'The key holding a multi-document group together so its legs are judged as a whole instead of fragmenting across cards. Empty on single-document rows.',
+  Signal:        'A disclosure on this row, with the gross it is worth. The classifier claims one row at a time and never looks across an order, so a row can be claimed correctly while the rest of its order sits on a different card. Empty on most rows. Sort by this column to bring the disclosed rows to the top — they are a small share of any view.',
   // ---- the Variance Analyzer's routing table ------------------------------
   //      Its point is one comparison: where the cardex MODEL says the value should go,
   //      against where the transaction's inventory DMAAI actually sent it.
