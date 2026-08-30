@@ -12462,6 +12462,81 @@
   }
   // Facts for AI grounding — the ONLY facts the model may use. Marks current vs
   // total per category so the model can tell live issues from resolved ones.
+  // ---- UI-25: THE CUSTOMER'S OWN AAI ROUTING, NOT A GENERIC ONE -----------------
+  // UI-24's grounding tells the model what an AAI MEANS ("3120 is Work in Process").
+  // This tells it where THIS customer's 3120 actually points, which is the difference
+  // between "the MTO leg should be in WIP" and "this customer's 3120 resolves to
+  // 9999998.146363 -- that is why the leg landed there".
+  //
+  // WARM ON TAB ENTRY, NEVER A SECOND CACHE. loadDmaaisNow already fills a per-DB
+  // sessionStorage entry under dmaaiCacheKey() for the export and accountant preloads,
+  // so this reads that entry and only fetches when it is cold. A parallel cache would
+  // double the fetch and drift.
+  //
+  // A DB SWITCH INVALIDATES BY CONSTRUCTION -- the key carries the active database. What
+  // it does NOT catch is a data reload: AAIs change, and a cache warmed before a B->C
+  // would keep answering with the old routing. Hence the age check.
+  var _DMAAI_MAX_AGE_MS = 12 * 60 * 60 * 1000;   // half a day; sessionStorage dies with the tab anyway
+  function _dmaaiCacheEntry() {
+    try { return JSON.parse(sessionStorage.getItem(dmaaiCacheKey()) || 'null'); }
+    catch (_) { return null; }
+  }
+  function _ensureDmaaiWarm() {
+    var e = _dmaaiCacheEntry();
+    var fresh = e && e.payload && (Date.now() - (Number(e.ts) || 0) < _DMAAI_MAX_AGE_MS);
+    if (fresh && dmaaiRows(e.payload).length) return;
+    try { loadDmaaisNow({ auto: true }); } catch (_) {}   // quiet warm; never blocks the render
+  }
+
+  // THE PROJECTION. 15,808 AAI rows on Demo1, and the row's own instruction is not to
+  // dump the universe -- tokens and dilution. Three narrowings, in order:
+  //   1. the ACTIVE COMPANY only;
+  //   2. only the MODULES actually carrying residual (System on the AAI view is exactly
+  //      _TXV_MODS -- Sales / Purchasing / Manufacturing / Inventory -- so the join is
+  //      one-to-one and needs no mapping table);
+  //   3. grain is the AAI NUMBER, not the row. Company 80002 has 42 AAI numbers across
+  //      four modules where it has 367 distinct AAI-to-account pairs, and the number is
+  //      the thing an analyst reasons with.
+  // Where one AAI resolves to many accounts the routing is class-dependent, which is
+  // itself the finding on several cards -- so that is STATED rather than listed out.
+  function _dmaaiFactsFor(co, mods, scrub) {
+    var e = _dmaaiCacheEntry();
+    var rows = dmaaiRows(e && e.payload);
+    if (!rows.length) return null;
+    var want = {}; (mods || []).forEach(function (m) { want[m] = 1; });
+    var byMod = {};
+    var kept = 0;
+    rows.forEach(function (r) {
+      var rco = String(r.CompanyNumber == null ? '' : r.CompanyNumber).trim();
+      var sys = String(r.System == null ? '' : r.System).trim();
+      if (rco !== String(co).trim()) return;
+      if (!want[sys]) return;
+      var aai = String(r.TableNumber == null ? '' : r.TableNumber).trim();
+      if (!aai) return;
+      var acct = [r.BusUnit, r.Object, r.Sub].map(function (x) {
+        return String(x == null ? '' : x).trim();
+      }).filter(Boolean).join('.');
+      if (!acct) return;
+      var m = byMod[sys] || (byMod[sys] = {});
+      var a = m[aai] || (m[aai] = {});
+      if (!a[acct]) { a[acct] = 1; kept++; }
+    });
+    var lines = [];
+    (mods || []).forEach(function (sys) {
+      var m = byMod[sys]; if (!m) return;
+      var parts = Object.keys(m).sort().map(function (aai) {
+        var accts = Object.keys(m[aai]).sort();
+        // Three or fewer: name them, because that is the answer. More than three: the
+        // routing varies and saying WHICH way it varies is more use than 17 accounts.
+        return accts.length <= 3
+          ? aai + ' -> ' + (scrub ? accts.map(function (_, i) { return 'account ' + (i + 1); }).join(' / ') : accts.join(' / '))
+          : aai + ' -> ' + accts.length + ' accounts (varies by GL class or cost type)';
+      });
+      if (parts.length) lines.push(sys + ': ' + parts.join('; '));
+    });
+    return lines.length ? { lines: lines, pairs: kept } : null;
+  }
+
   function _analystTxFacts(stats, focusPeriod, ccy, co, scrub) {
     var f = [];
     // UI-72 — a COLD surface gets ONE fact: it has not been read. The block used to
@@ -12489,6 +12564,20 @@
     f.push('POPULATION for every transaction-variance figure below: the reconciling-items residual — posted documents whose cardex and ledger sides differ by more than the materiality threshold, summed at document grain. This is NOT the account roll-forward net the period chart draws, which takes every posted non-manual row at any size and sums it at account grain. The two are different measures and do not tie in either direction, so never present one as the other or as a check on it. ' + stats.n + ' period(s) carry any residual at all, which is fewer than the chart plots.');
     f.push('OPEN WINDOW (the only still-actionable periods): ' + (stats.curPeriods.map(fmtPeriod).join(' and ') || 'n/a') + '. Earlier periods are closed and already journaled.');
     f.push('VIEWED PERIOD (what is on the analyst’s screen right now): ' + (focusPeriod ? fmtPeriod(focusPeriod) : 'none selected') + '.');
+    // UI-25 — THIS customer's live AAI routing, scoped to the company on screen and to
+    // the categories that actually carry residual. Placed BEFORE the by-category block so
+    // the model reads where value is routed before it reads what is stranded, which is
+    // the order a root-cause read runs in. Omitted entirely when the cache is cold or the
+    // company has no configured AAI in these categories: an absent fact is honest, an
+    // invented mapping is not, and the model must never be handed a routing to guess with.
+    var _dm = _dmaaiFactsFor(co, stats.rankedAll || [], scrub);
+    if (_dm) {
+      f.push('THIS COMPANY’S OWN AAI ROUTING, read live from its JD Edwards configuration — '
+           + 'use it instead of a generic meaning when naming where value went. An AAI '
+           + 'resolving to several accounts is routed by GL class or cost type, which is '
+           + 'itself worth saying when a leg lands somewhere unexpected: '
+           + _dm.lines.join(' | ') + '.');
+    }
     f.push('By category — amount open in that window, BROKEN OUT BY PERIOD, plus how often it recurs:');
     (stats.rankedAll.length ? stats.rankedAll : []).forEach(function (m) {
       var s = stats.byMod[m];
@@ -12682,7 +12771,7 @@
       _analystTaskGen++;                        // cancel any pending reveal from a prior visit
       if (wl) wl.hidden = true;
     }
-    if (sv === 'txvar') { renderAnalystTxVar(_analystScopedData(d)); }
+    if (sv === 'txvar') { _ensureDmaaiWarm(); renderAnalystTxVar(_analystScopedData(d)); }
     else { _txvGen++; if (tv) tv.hidden = true; }   // leaving the plan — supersede any in-flight render
     if (sv === 'reports') { renderCardexCards(d); renderReportsPalette(d); }
     // Shared Audit Center. renderAuditPanel is role-agnostic already — it resolves the
