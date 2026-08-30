@@ -806,7 +806,8 @@
      Orange rather than navy so the two never read as the same kind of statement.
 
      WHY IT LIVES ON THE GRID AND NOT ON A CARD. Two of the four buckets in UI-165
-     carry no SubType at all, so those rows surface on no card and a card-side-only
+     carry no SubType at all, so those rows land on Unclassified - <Type> rather than
+     on the card the analyst is working, and a card-side-only
      surface cannot reach them. The grid holds every row regardless of classification,
      which makes it the only place a disclosure is guaranteed to be seen. */
   .tx-disclose { margin: 0 0 18px; padding: 14px 18px; background: var(--bg-card); border: 1px solid var(--rule); border-left: 3px solid var(--orange, #d97706); border-radius: 12px; box-shadow: var(--shadow-sm); }
@@ -879,6 +880,13 @@
      on a page opened BECAUSE there is a variance. */
   .tx-analyzer-flag[data-state="detected"] .tx-analyzer-dot { background: var(--orange); }
   .tx-analyzer-flag[data-state="classified"] .tx-analyzer-dot { background: var(--blue); }
+  /* CLEAN = routings were compared and none was off the cardex model. Green on the dot AND
+     on the band's left accent, because the analyst reads the band before deciding whether
+     to open it. Set ONLY when something was actually checked -- "no comparison ran" stays
+     grey, since a green band there would claim a pass nothing demonstrated. */
+  .tx-analyzer-flag[data-state="clean"] .tx-analyzer-dot { background: var(--green, #15803d); }
+  .tx-analyzer[data-state="clean"] { border-left-color: var(--green, #15803d); background: var(--green-pale, #f2fbf5); }
+  .tx-analyzer[data-state="clean"] .tx-analyzer-flag { color: var(--green-deep, #15803d); }
   .tx-analyzer-chev { width: 18px; height: 18px; color: var(--text-muted); flex-shrink: 0; transition: transform .18s ease; }
   .tx-analyzer.is-open .tx-analyzer-chev { transform: rotate(180deg); }
   .tx-analyzer-title { font-family: 'Source Sans 3', sans-serif; font-weight: 800; font-size: 20px; color: var(--navy); display: inline-flex; align-items: center; gap: 9px; }
@@ -2806,7 +2814,9 @@
 <script defer src="../Tools/help-sidebar.js"></script>
 </head>
 <body
-  data-help-glossary="txn">
+  data-help-glossary="txn"
+  data-help-src="../RRUniversity/inventory-transaction-variance.html"
+  data-help-title="Transaction Variance">
 
 <div class="app">
 
@@ -6300,7 +6310,14 @@
     { key:'GroupCode',     label:'Group',        defaultOn:true, render: r => escapeHtml(r.GroupCode || '') },
     // Disclosure mark. Last so it never displaces a legacy export column, and default
     // ON because a row nobody knows carries an unasked question is the whole defect.
-    { key:'Signal',        label:'Signal',       defaultOn:true, render: renderSignalCell }
+    // sortVal + sortNumeric because the KEY is synthetic -- no `Signal` field exists on
+    // the row. Ranked by gross so the biggest unasked question sorts to the top, which is
+    // the order an analyst triages in. sortFirst 'desc' because ascending puts the ~98%
+    // of rows carrying NO signal first, and a first click that shows nothing reads as a
+    // broken column.
+    { key:'Signal',        label:'Signal',       defaultOn:true, render: renderSignalCell,
+      sortNumeric: true, sortFirst: 'desc',
+      sortVal: r => Math.abs(Number(r.SignalGross) || 0) }
   ];
 
   const COL_LS_KEY       = 'rrv8-tx-columns-v1';
@@ -6400,10 +6417,18 @@
     if (!key) return rows;
     const col = COLUMNS_BY_KEY[key];
     if (!col) return rows;
-    const numeric = col.tdClass === 'is-money' || col.tdClass === 'is-num';
+    // A column whose KEY is not a row field has to say how to sort itself. `Signal` is
+    // the first of those: the row carries SignalCount / SignalCodes / SignalGross and
+    // never a `Signal` property, so `a[key]` was undefined on every row and sorting the
+    // column compared '' to '' and reordered nothing. With 8 signalled rows in 454 that
+    // made the column unfindable by scrolling -- it rendered correctly and could not be
+    // reached, which is the same defect class as a message with no sink.
+    const acc = (typeof col.sortVal === 'function') ? col.sortVal : (r => r[key]);
+    const numeric = col.sortNumeric === true
+                 || col.tdClass === 'is-money' || col.tdClass === 'is-num';
     const mult = (dir === 'desc') ? -1 : 1;
     return rows.slice().sort((a, b) => {
-      const av = a[key], bv = b[key];
+      const av = acc(a), bv = acc(b);
       if (numeric) {
         const an = Number(av);
         const bn = Number(bv);
@@ -6572,7 +6597,11 @@
         _state.sortDir = _state.sortDir === 'asc' ? 'desc' : 'asc';
       } else {
         _state.sortKey = key;
-        _state.sortDir = 'asc';
+        // A column may declare which direction its FIRST click should take. Signal does:
+        // ascending puts the rows carrying no signal first, and on a 454-row view where
+        // 8 are signalled, a first click that surfaces nothing reads as a broken column.
+        const _c = COLUMNS_BY_KEY[key];
+        _state.sortDir = (_c && _c.sortFirst === 'desc') ? 'desc' : 'asc';
       }
       saveSort();
       renderDetails();
@@ -6642,8 +6671,16 @@
       '<div class="tx-disclose-title">Not answered by this card</div>'
       + '<div class="tx-disclose-sub"><strong>' + rows.length.toLocaleString('en-US')
       + '</strong> of <strong>' + (scoped || []).length.toLocaleString('en-US')
-      + '</strong> rows in this view carry a question the classifier was not allowed to ask, '
-      + 'worth <strong>' + money(totalGross) + '</strong> gross. '
+      // The old wording read "a question the classifier was not allowed to ask", which
+      // says nothing an analyst can act on and reads as though something was forbidden.
+      // Nothing is forbidden: the classifier claims ONE row at a time and stops at the
+      // first matching claim, so it never looks across an order to see whether its rows
+      // ended up on different cards. That is a scope limit, and naming it is the point of
+      // the panel -- an analyst who finishes this card can still be leaving the rest of
+      // the order open.
+      + '</strong> rows in this view sit on an order whose other rows landed on a '
+      + 'different card, worth <strong>' + money(totalGross) + '</strong> gross. '
+      + 'The classifier claims one row at a time and never looks across an order. '
       + 'These are disclosures, not verdicts &mdash; nothing here re-classifies a row.</div>'
       + '<ul class="tx-disclose-list">'
       + groups.map(g =>
@@ -6877,7 +6914,8 @@
   //  IT GOES IN THE SCOPE BAND, not on a card and not in a tooltip.
   //    * A card-side-only sink is unreachable: summarization breaks the pairing
   //      for Mfg Cost Mismatch, Make to Order and the unclassified pool too, and
-  //      unclassified rows surface on no card at all. Same reasoning that put
+  //      unclassified rows land on Unclassified - <Type>, not on the card being
+  //      worked. Same reasoning that put
   //      UI-165's split-order disclosure on the grid rather than on a card.
   //    * #tx-scope-band is the ONE ungated always-visible surface on this page.
   //      It carries no role gate, no attention gate and no [hidden] rule, and it
@@ -7103,6 +7141,11 @@
     var el = document.getElementById('tx-analyzer-flag'); if (!el) return;
     el.setAttribute('data-state', state || 'muted');
     var t = el.querySelector('.tx-analyzer-flag-txt'); if (t) t.textContent = txt || '';
+    // The state also goes on the SECTION so the band itself can carry it (owner
+    // 2026-08-30: tint the band green when the analyzer finds nothing). The dot alone is
+    // 8px of colour on a panel the analyst is deciding whether to open at all.
+    var sec = document.getElementById('tx-analyzer');
+    if (sec) sec.setAttribute('data-state', state || 'muted');
   }
   function _txAnalyzerSetOpen(open) {
     var sec = document.getElementById('tx-analyzer'), body = document.getElementById('tx-analyzer-body'),
@@ -7600,19 +7643,19 @@
         + ' — worth asking why inventory is moving on a line that posts no cardex.'
       : '';
     if (nMis) {
-      return { state: 'mismatch', list: list, nMis: nMis,
+      return { state: 'mismatch', list: list, nMis: nMis, nChk: nChk,
         head: nMis + ' of ' + nChk + ' checked inventory DMAAI' + cP + ' ' + _txVerb(nMis, 'resolves', 'resolve') + ' to a different account than the cardex model:' + skipNote + nsNote,
         chip: nMis + ' of ' + nChk + ' DMAAI' + cP + ' off the cardex model' };
     }
     // Nothing compared at all. Not a clean — there is no evidence either way, and saying
     // "0 checked, none off the model" would read as a pass.
     if (!nChk) {
-      return { state: 'clean', list: list, nMis: 0,
+      return { state: 'clean', list: list, nMis: 0, nChk: nChk,
         head: 'No account comparison ran: none of these ' + nAll + ' routing' + (nAll === 1 ? '' : 's')
           + ' resolve to an inventory AAI in the reconciliation set. Mapping is NOT ruled out here:' + nsNote,
         chip: '0 of ' + nAll + ' checked' };
     }
-    return { state: 'clean', list: list, nMis: 0,
+    return { state: 'clean', list: list, nMis: 0, nChk: nChk,
       head: (nSkip ? nChk + ' of ' + nAll + ' routings checked' : nChk + ' inventory DMAAI' + cP + ' checked')
         + ' — no account mismatch. This rules out mapping only; it does not explain the variance:' + skipNote + nsNote,
       chip: (nSkip ? nChk + ' of ' + nAll + ' checked' : nChk + ' DMAAI' + cP + ' checked') + ', none off the model' };
@@ -8175,7 +8218,15 @@
     // The dot carries the VERDICT; the mechanism name stays in the label text
     // beside it, where it already lived. 'open' and 'muted' both read grey —
     // an undetermined cause has no colour to claim (UI-74).
-    var flagState = (verdict === 'detected' || verdict === 'classified') ? verdict : 'muted';
+    // GREEN ONLY WHEN SOMETHING WAS ACTUALLY CHECKED (owner 2026-08-30). _txCombosSummary
+    // returns state 'clean' for TWO different situations and only one of them is a pass:
+    // routings were compared and none was off the model (nChk > 0), versus nothing was
+    // comparable at all (nChk === 0), which its own comment calls out as "not a clean --
+    // there is no evidence either way". Tinting the second green would assert a result
+    // nothing on the page demonstrates, which is the one thing this panel may never do.
+    var flagState = (verdict === 'detected' || verdict === 'classified') ? verdict
+                  : (_sum && _sum.state === 'clean' && _sum.nChk > 0) ? 'clean'
+                  : 'muted';
     // ASSEMBLED from what ran, never read out of the catalog. Leading clause =
     // what the analyzer selected on these rows; trailing clause = the resolution
     // verdict, straight off the summary the table below draws from. Where the
