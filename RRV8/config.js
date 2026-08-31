@@ -220,7 +220,98 @@ window.RR_TEST_AGENT_PREFIXES = [
 // authBase in their customer-specific config.js at deploy time.
 window.RR_AUTH_BASES = {
   staging: 'https://staging-valcspa.cloudapp.net',
-  prod:    'https://rr-valc-spa.cloudapp.net'
+  prod:    'https://rr-valc-spa.cloudapp.net',
+  // UI-171 / VLC-39 gap 3. QA IS DELIBERATELY NULL, NOT GUESSED.
+  // `rrvalc-qa.getgsi.com`, `rrvalcadmin-qa` and `rrjms-qa` were all measured
+  // 2026-08-31 and NONE resolves. Inventing a plausible hostname here would
+  // produce a config that looks configured and fails at the first QA login,
+  // which is strictly worse than an obvious hole. Null makes the gap loud:
+  // RR_ENVIRONMENTS below reports it rather than silently falling through.
+  qa: null
+};
+
+/*
+ * UI-171 — WHAT MUST CHANGE PER ENVIRONMENT, in one place.
+ *
+ * RR_CONFIG above is a single flat object carrying ONE environment's values,
+ * and everything downstream inherits whichever environment it was cut for.
+ * The Connection Check is the sharp edge: connection-check.html:380-389 reads
+ * `rc.statusAnchor` for probe A, `rc.authBase || rc.valcBase` for probe C and
+ * `rc.testAgentBase` for probe B, so all three legs of a customer-facing fault
+ * isolator point wherever config.js happens to point. The owner's own screenshot
+ * showed leg 5 reporting a GREEN pass against `localhost -> 127.0.0.1`.
+ *
+ * A fault isolator aimed at the wrong environment returns a confident green for
+ * a hop it never tested, which is worse than no check. Same class of false pass
+ * that moved `statusAnchor` off `rapidreconciler.getgsi.com` in UI-160.
+ *
+ * This table is the per-environment truth. RR_CONFIG's own values still WIN when
+ * set — the dev box keeps working exactly as it does today, and a customer
+ * deploy can still hand-write config.js — but an unset value now resolves from
+ * here by `mode` instead of inheriting dev's.
+ *
+ * Populate `qa` when the QA hostnames exist (VLC-39 gap 3). Until then a QA
+ * deploy must set the values explicitly in its own config.js; RRENV.missing()
+ * names what is absent rather than letting a page silently call localhost.
+ */
+window.RR_ENVIRONMENTS = {
+  // Keyed on the SAME vocabulary as RR_AUTH_BASES and RR_CONFIG.mode. This box
+  // reports mode="staging", so a table keyed "dev" would have resolved nothing
+  // and shipped as a silent no-op — caught by RUNNING the resolver, not by
+  // reading it back.
+  staging: {
+    authBase:      'http://localhost:8080',
+    valcBase:      'http://localhost:8080',
+    testAgentBase: 'http://localhost:34537',
+    statusAnchor:  'https://rapidreconciler-prod.getgsi.com'
+  },
+  qa: {
+    // Unknown by measurement, not by omission — see RR_AUTH_BASES.qa above.
+    authBase:      null,
+    valcBase:      null,
+    testAgentBase: null,
+    statusAnchor:  'https://rapidreconciler-prod.getgsi.com'
+  },
+  prod: {
+    authBase:      null,   // falls back to RR_AUTH_BASES.prod
+    valcBase:      null,
+    // No test agent in production: the agent serves the V8 app, so
+    // connection-check falls back to the page's own origin, which is correct.
+    testAgentBase: null,
+    statusAnchor:  'https://rapidreconciler-prod.getgsi.com'
+  }
+};
+
+/*
+ * RRENV — resolve one config value for the running environment.
+ *
+ * Order: an explicit RR_CONFIG value wins; then RR_ENVIRONMENTS[mode]; then
+ * null. Explicit-wins is deliberate — every existing deploy and this dev box
+ * set RR_CONFIG directly, so adding the table must not change a single
+ * resolved value today. Verified against the current dev config: every key
+ * below is set in RR_CONFIG, so RRENV returns exactly what it returned before.
+ */
+window.RRENV = {
+  mode: function () {
+    return (window.RR_CONFIG && RR_CONFIG.mode) || 'staging';
+  },
+  get: function (key) {
+    var cfg = window.RR_CONFIG || {};
+    if (cfg[key] !== undefined && cfg[key] !== null && cfg[key] !== '') return cfg[key];
+    var env = (window.RR_ENVIRONMENTS || {})[this.mode()] || {};
+    var v = env[key];
+    return (v === undefined || v === '') ? null : v;
+  },
+  /** Keys this environment cannot resolve — for a deploy check, so a missing
+   *  QA value is reported once rather than discovered as a localhost call. */
+  missing: function () {
+    var out = [];
+    var keys = ['authBase', 'valcBase', 'statusAnchor'];
+    for (var i = 0; i < keys.length; i++) {
+      if (this.get(keys[i]) === null) out.push(keys[i]);
+    }
+    return out;
+  }
 };
 
 /*
