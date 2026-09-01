@@ -852,11 +852,37 @@
   'use strict';
 
   // Where to POST credentials. Precedence: ?auth= param, then
-  // RR_CONFIG.authBase (local VALC on this dev box), then the legacy
-  // staging host. Production deploys override via RR_CONFIG.
+  // RRENV.get('authBase') — which is RR_CONFIG.authBase when set (local VALC
+  // on this dev box, the customer's host on a real deploy), else
+  // RR_ENVIRONMENTS[mode].authBase. There is deliberately NO third fallback.
+  //
+  // VLC-39 gap 2. This line used to end `|| 'https://staging-valcspa.cloudapp.net'`.
+  // That host is not on the customer outbound allowlist (four getgsi.com FQDNs,
+  // "Required outbound access" in GSIRRSales/rr-installation-prep.html; no
+  // cloudapp host appears on it at all), and worse, it is the STAGING
+  // host — so a prod deploy that forgot to set authBase posted real customer
+  // credentials at staging, and a customer who applied the published allowlist
+  // exactly still failed to sign in, with nothing on screen naming why.
+  //
+  // Empty string is now a REPORTED state, not a silent one. It must stay
+  // empty-string rather than null: every use below is `AUTH_BASE + '/api/...'`,
+  // and `null + '/api/v1/auth/ping'` is the string "null/api/v1/auth/ping",
+  // which is a live same-origin request.
   const AUTH_BASE = (new URLSearchParams(window.location.search).get('auth'))
-    || (window.RR_CONFIG && window.RR_CONFIG.authBase)
-    || 'https://staging-valcspa.cloudapp.net';
+    || (window.RRENV ? window.RRENV.get('authBase')
+                     : (window.RR_CONFIG && window.RR_CONFIG.authBase))
+    || '';
+
+  // Keys this environment could not resolve, for the diagnostics block. Empty
+  // when RRENV is absent (an old cached config.js) — the AUTH_BASE check above
+  // is what gates behaviour; this only enriches the message.
+  const ENV_MISSING = (window.RRENV && window.RRENV.missing) ? window.RRENV.missing() : [];
+  const ENV_MODE    = (window.RRENV && window.RRENV.mode) ? window.RRENV.mode() : '(unknown)';
+
+  // Shown wherever a user action would otherwise fire a credential-bearing
+  // request at this page's own origin.
+  const AUTH_UNSET_MSG = 'Sign-in isn’t configured for this installation. '
+    + 'Contact your RapidReconciler administrator — no sign-in service address is set.';
 
   // The data/application server (the Services agent). Used to verify the app
   // server is reachable BEFORE the banner claims "Ready to sign in" — sign-in
@@ -980,7 +1006,9 @@
       'RapidReconciler sign-in diagnostics',
       'Generated:      ' + new Date().toISOString(),
       'Page:           ' + window.location.href,
-      'Auth target:    ' + AUTH_BASE,
+      'Auth target:    ' + (AUTH_BASE || '(NOT CONFIGURED)'),
+      'Config mode:    ' + ENV_MODE,
+      'Unresolved:     ' + (ENV_MISSING.length ? ENV_MISSING.join(', ') : '(none)'),
       'Browser online: ' + (navigator.onLine ? 'yes' : 'no'),
       'App build:      ' + (rc.release || '?') + ' / ' + (rc.buildStamp || '?'),
       'User agent:     ' + navigator.userAgent,
@@ -998,6 +1026,19 @@
   function applyResult(result) {
     let state, text, verdict;
     switch (result.kind) {
+      case 'misconfigured':
+        // No auth base resolved. Deliberately NOT the generic "can't reach the
+        // server" text: nothing was contacted, and telling the customer to
+        // check their VPN sends them chasing a network fault that isn't there.
+        // This is the sink for RRENV.missing() — see config.js.
+        state = 'down';
+        text = 'Sign-in isn’t configured for this installation';
+        verdict = '<b>This copy of RapidReconciler has no sign-in service address, '
+          + 'so there is nowhere to send your credentials.</b> Nothing was contacted &mdash; '
+          + 'this is a setup gap on the installation, not a problem with your network, '
+          + 'VPN, or firewall. Send the details below to your RapidReconciler '
+          + 'administrator; the unresolved settings are named in them.';
+        break;
       case 'ok':
       case 'reachable':
         // Reached only after BOTH the sign-in service AND the app server were
@@ -1105,8 +1146,36 @@
       });
   }
 
+  // True when there is no auth base, in which case every `AUTH_BASE + path`
+  // below is a bare relative path that resolves against THIS PAGE's origin.
+  // That is not a harmless no-op: on GitHub Pages (and behind most static
+  // hosts) the 404 page answers with a real HTTP response, pingHealth reads
+  // "the server answered" and paints the banner GREEN — a confident pass for
+  // a hop that was never tested. Same false-green class as UI-160. Worse, the
+  // sign-in POST would put a customer's password in a request to the static
+  // host. Every call site is gated instead.
+  function authUnset(errTarget) {
+    if (AUTH_BASE) return false;
+    if (errTarget) setErr(errTarget, AUTH_UNSET_MSG);
+    return true;
+  }
+
   // Probe on load.
   (function pingHealth() {
+    if (authUnset(null)) {
+      window.__rrDiag && window.__rrDiag.log(
+        'no auth base configured (mode=' + ENV_MODE + ', unresolved: '
+        + (ENV_MISSING.length ? ENV_MISSING.join(', ') : 'authBase') + ') — not probing');
+      applyResult({ kind: 'misconfigured' });
+      // Auto-open the details panel: the unresolved keys are the whole message,
+      // and they live in there.
+      connPanel.classList.remove('is-hidden');
+      connToggle.setAttribute('aria-expanded', 'true');
+      // Nothing on this page can succeed, so stop offering the attempt.
+      [submitEl, resetSubmitEl, changeSubmitEl].forEach(function (b) { if (b) b.disabled = true; });
+      setErr(errEl, AUTH_UNSET_MSG);
+      return;
+    }
     if (!navigator.onLine) {
       window.__rrDiag && window.__rrDiag.log('ping skipped: navigator reports offline');
       applyResult({ kind: 'offline' });
@@ -1287,9 +1356,14 @@
     headSub.textContent = on ? 'Single sign-on' : 'Sign in';
   }
   function startSso() {
+    if (authUnset(errEl)) return;
     if (_sso && _sso.startPath) window.location.href = AUTH_BASE + _sso.startPath;
   }
   async function discoverSso() {
+    // Fires on every keystroke. Unguarded with no auth base it would GET
+    // /api/v1/auth/sso-discovery?email=... against this page's own origin,
+    // putting the typed address in the static host's access log.
+    if (authUnset(null)) { _sso = null; applySsoMode(); return; }
     const email = emailEl.value.trim();
     const at = email.indexOf('@');
     if (at < 1 || at === email.length - 1) { _sso = null; applySsoMode(); return; }
@@ -1316,6 +1390,7 @@
   // ---- Sign in ----
   loginForm.addEventListener('submit', async (e) => {
     e.preventDefault();
+    if (authUnset(errEl)) return;
     if (_sso && _sso.sso && !_forcePw) { startSso(); return; }   // SSO domain: go to IdP, not the password POST
     clearErr(errEl);
     const username = emailEl.value.trim();
@@ -1387,6 +1462,7 @@
   });
   resetForm.addEventListener('submit', async (e) => {
     e.preventDefault();
+    if (authUnset(resetErrEl)) return;
     clearErr(resetErrEl);
     resetNoteEl.classList.remove('is-visible');
     const email = resetEmailEl.value.trim();
@@ -1417,6 +1493,7 @@
   // ---- Forced password change ----
   changeForm.addEventListener('submit', async (e) => {
     e.preventDefault();
+    if (authUnset(changeErrEl)) return;
     clearErr(changeErrEl);
     const np = newPwEl.value, cp = confirmPwEl.value;
     if (!np || !cp) { setErr(changeErrEl, 'Enter and confirm your new password.'); return; }

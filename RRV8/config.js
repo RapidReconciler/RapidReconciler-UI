@@ -19,12 +19,14 @@
  * Field reference:
  *   mode          — 'demo' | 'staging' | 'prod'. Drives every IS_DEMO
  *                   branch in the page.
- *   authBase      — VALC login endpoint root. Null = use the per-mode
- *                   default from RR_AUTH_BASES at boot:
- *                     staging → https://staging-valcspa.cloudapp.net
- *                     prod    → https://rr-valc-spa.cloudapp.net
- *                   Set explicitly here to override (e.g. a local
- *                   mock VALC for offline testing).
+ *   authBase      — VALC login endpoint root. Resolved through
+ *                   RRENV.get('authBase'): this value wins when set,
+ *                   else RR_ENVIRONMENTS[mode].authBase, else NOTHING.
+ *                   There is no host-shaped last resort any more — an
+ *                   unresolved authBase is reported on the sign-in page
+ *                   rather than substituted (see the RR_AUTH_BASES
+ *                   tombstone below). Set explicitly here to override
+ *                   (e.g. a local mock VALC for offline testing).
  *   dataPath      — only used in demo mode. Where to fetch the static
  *                   JSON snapshots from. Relative to the HTML.
  *   statusPollMs  — interval for re-checking the SQL Agent job status
@@ -51,8 +53,9 @@ window.RR_CONFIG = {
   // local VALC 2.0 so JWTs come from our Postgres, not the legacy
   // staging-valcspa.cloudapp.net (which mints tokens scoped to real
   // customer tenants with external host IPs in dbs[i].ip). When null,
-  // RR_AUTH_BASES[mode] is the fallback -- that's how the page used
-  // to behave on this dev box.
+  // RR_ENVIRONMENTS[mode].authBase is the fallback, via RRENV.get --
+  // and when THAT is null too, login.html reports the gap instead of
+  // guessing a host.
   authBase:      'http://localhost:8080',
   dataPath:      'data/',
   statusPollMs:  60000,
@@ -140,12 +143,13 @@ window.RR_TEST_AGENT_AREAS = [
   'inventory/as-of',
   'inventory/as-of/details',
   'inventory/rollIItem',
-  // V8 cardex corrective action (CardexCorrectionController) — supersedes rollIItem
-  'inventory/cardex-worklist',
+  // V8 cardex corrective action (CardexCorrectionController) — supersedes rollIItem.
+  // VLC-33 (2026-09-01) deleted the WORKLIST half: 'inventory/cardex-worklist'
+  // and 'inventory/cardex-work-status' were a complete back end that no page
+  // ever called, and their only mention anywhere in the UI repo was this list.
   'inventory/adjustment-ledger',
   'inventory/set-beginning-balance',
   'inventory/undo-adjustment',
-  'inventory/cardex-work-status',
   // Reload GL — self-service GL maintenance (ReloadGlController, admin-gated)
   'inventory/reload-gl',
   'inventory/reload-gl/preview',
@@ -215,20 +219,45 @@ window.RR_TEST_AGENT_PREFIXES = [
   'admin/companies/'    // per-company edit (PUT /admin/companies/{n})
 ];
 
-// Per-mode VALC defaults. Used when RR_CONFIG.authBase is null and
-// the resolved MODE is staging or prod. Engineering overrides
-// authBase in their customer-specific config.js at deploy time.
-window.RR_AUTH_BASES = {
-  staging: 'https://staging-valcspa.cloudapp.net',
-  prod:    'https://rr-valc-spa.cloudapp.net',
-  // UI-171 / VLC-39 gap 3. QA IS DELIBERATELY NULL, NOT GUESSED.
-  // `rrvalc-qa.getgsi.com`, `rrvalcadmin-qa` and `rrjms-qa` were all measured
-  // 2026-08-31 and NONE resolves. Inventing a plausible hostname here would
-  // produce a config that looks configured and fails at the first QA login,
-  // which is strictly worse than an obvious hole. Null makes the gap loud:
-  // RR_ENVIRONMENTS below reports it rather than silently falling through.
-  qa: null
-};
+/*
+ * RR_AUTH_BASES — RETIRED 2026-09-01 (VLC-39 gap 2). Do not reintroduce.
+ *
+ * It was documented as "the fallback when RR_CONFIG.authBase is null", and
+ * three comments in this file still described it that way, but IT HAD NO
+ * READER. Measured 2026-09-01: `rg -n "RR_AUTH_BASES"` over this repo returned
+ * six hits, all in config.js, five of them comments and the sixth the literal
+ * assignment; the same grep over RapidReconciler-Agent, -Valc, -DB and -SSIS
+ * returned nothing. Nothing ever read the table, so nothing ever fell back to
+ * it.
+ *
+ * What DID happen on an unset authBase was worse than the documented
+ * behaviour. login.html hardcoded its own last resort:
+ *
+ *     || 'https://staging-valcspa.cloudapp.net';        // login.html:859
+ *
+ * so a PROD deploy that left authBase null did not reach `prod` — it posted
+ * customer credentials at the STAGING host. Both hosts are `*.cloudapp.net`,
+ * and the authoritative customer outbound allowlist names four getgsi.com
+ * FQDNs and no cloudapp host at all — `rrvalc-prod`, `rrvalcadmin-prod`,
+ * `rrjms-prod` (TCP 8002) and `rrsso-prod` (SSO customers only), in the
+ * "Required outbound access" table of the Firewall & DNS view in
+ * GSIRRSales/rr-installation-prep.html. So a customer could apply the
+ * allowlist exactly as published and still fail login on that path — with no
+ * message naming the reason.
+ *
+ * A per-environment table that nothing reads, whose values are not on the
+ * allowlist, is the "looks configured" trap the qa entry below was written to
+ * avoid. Deleting it leaves ONE per-environment table, which is what
+ * RR_ENVIRONMENTS was introduced to be. Auth-base resolution now goes through
+ * RRENV.get('authBase'), and an unresolved value is REPORTED (see the sink
+ * note on RRENV.missing below) instead of silently substituted.
+ *
+ * The two hostnames are preserved here as reference, NOT as config: the legacy
+ * Azure VALC SPA answered at `staging-valcspa.cloudapp.net` (staging) and
+ * `rr-valc-spa.cloudapp.net` (prod). To aim a browser at either one for a
+ * one-off, pass `?auth=https://…` on login.html rather than restoring a
+ * default nobody allowlisted.
+ */
 
 /*
  * UI-171 — WHAT MUST CHANGE PER ENVIRONMENT, in one place.
@@ -255,7 +284,7 @@ window.RR_AUTH_BASES = {
  * names what is absent rather than letting a page silently call localhost.
  */
 window.RR_ENVIRONMENTS = {
-  // Keyed on the SAME vocabulary as RR_AUTH_BASES and RR_CONFIG.mode. This box
+  // Keyed on the SAME vocabulary as RR_CONFIG.mode. This box
   // reports mode="staging", so a table keyed "dev" would have resolved nothing
   // and shipped as a silent no-op — caught by RUNNING the resolver, not by
   // reading it back.
@@ -266,14 +295,37 @@ window.RR_ENVIRONMENTS = {
     statusAnchor:  'https://rapidreconciler-prod.getgsi.com'
   },
   qa: {
-    // Unknown by measurement, not by omission — see RR_AUTH_BASES.qa above.
+    // UNKNOWN BY MEASUREMENT, NOT BY OMISSION. VLC-39 gap 3.
+    // `rrvalc-qa.getgsi.com`, `rrvalcadmin-qa` and `rrjms-qa` were all measured
+    // 2026-08-31 and NONE resolves. Inventing a plausible hostname here would
+    // produce a config that looks configured and fails at the first QA login,
+    // which is strictly worse than an obvious hole. Null makes the gap loud:
+    // RRENV.missing() names it and login.html renders it.
     authBase:      null,
     valcBase:      null,
     testAgentBase: null,
     statusAnchor:  'https://rapidreconciler-prod.getgsi.com'
   },
   prod: {
-    authBase:      null,   // falls back to RR_AUTH_BASES.prod
+    // NOT SET, AND THAT IS THE POINT. Every production install is a different
+    // customer with a different VALC host, so there is no single correct value
+    // to put here; the deploy's own config.js sets RR_CONFIG.authBase and that
+    // wins. Leaving this null means a deploy that FORGOT to set it gets a named
+    // "sign-in isn't configured" report on login.html, not a silent POST to
+    // whatever host the committed file happened to carry. That silent POST is
+    // exactly what VLC-39 gap 2 measured.
+    //
+    // OPEN, NOT DECIDED: there IS a plausible shared default. The allowlist in
+    // GSIRRSales/rr-installation-prep.html names `rrvalc-prod.getgsi.com:443`
+    // as "All customers", which is the shape of a single GSI-hosted sign-in
+    // service rather than a per-customer one. If that is in fact the V8 login
+    // root, putting `https://rrvalc-prod.getgsi.com` here CLOSES gap 2 instead
+    // of merely reporting it. NOT set on this pass because it has not been
+    // measured end to end — nobody has confirmed that host answers
+    // POST /api/v1/auth/login for a V8 client, and a plausible-but-wrong
+    // default is the exact failure mode this whole tombstone is about. Owner
+    // ruling + one live probe closes it.
+    authBase:      null,
     valcBase:      null,
     // No test agent in production: the agent serves the V8 app, so
     // connection-check falls back to the page's own origin, which is correct.
@@ -303,7 +355,19 @@ window.RRENV = {
     return (v === undefined || v === '') ? null : v;
   },
   /** Keys this environment cannot resolve — for a deploy check, so a missing
-   *  QA value is reported once rather than discovered as a localhost call. */
+   *  QA value is reported once rather than discovered as a localhost call.
+   *
+   *  WHERE THIS ACTUALLY LANDS (a gate whose message has no sink is not a
+   *  report). As of 2026-09-01 missing() has two readers, both of which put
+   *  the key names in front of a human:
+   *    - login.html — when authBase does not resolve, the sign-in page paints
+   *      the `misconfigured` state in its connectivity band (#js-conn, always
+   *      rendered, not behind a toggle), names the unresolved keys and the
+   *      mode in the copyable diagnostics block (#js-conn-diag), disables all
+   *      three submit buttons, and logs a line to window.__rrDiag.
+   *    - HelpDesk/connection-check.html — probe C reports "No sign-in service
+   *      configured" instead of skipping quietly.
+   *  If you add a key to the list below, check both sinks still name it. */
   missing: function () {
     var out = [];
     var keys = ['authBase', 'valcBase', 'statusAnchor'];
@@ -3454,6 +3518,30 @@ window.RRV8 = window.RRV8 || {};
  * is server-owned — the localStorage mirror can only ever hold 'unverified'.
  */
 window.RRV8 = window.RRV8 || {};
+/* VLC-41 sink — shared by the two accountant-lane stores below.
+ *
+ * Those writes are now gated on the accountant grant, and before this a 403 was
+ * INVISIBLE: neither call checked `r.ok`, so a refusal RESOLVED AS SUCCESS, the
+ * optimistic cache entry stayed, and _lsWrite mirrored it to localStorage
+ * permanently. The user saw "done" forever and the server never had it. Putting
+ * a server gate on top of a swallowed failure would have shipped exactly that.
+ *
+ * So: detect it, ROLL BACK the optimistic write, and reject with the server's
+ * own reason — the guard sends "... requires the accountant grant" — so the
+ * caller has something true to show.
+ */
+window.RRV8 = window.RRV8 || {};
+window.RRV8._failGatedWrite = function (r, revert) {
+  return r.text().then(function (body) {
+    try { revert(); } catch (_) {}
+    var why = '';
+    try { var j = JSON.parse(body); why = j.message || j.error || ''; } catch (_) { why = String(body || '').slice(0, 200); }
+    var e = new Error(why || ('HTTP ' + r.status));
+    e.status = r.status;
+    throw e;
+  });
+};
+
 (function () {
   var _cache = {};   // "<dbName>|<company>" -> { map: { "<token>": record } }
   function _db() { try { return (window.RRDB && RRDB.name && RRDB.name()) || '_'; } catch (_) { return '_'; } }
@@ -3531,7 +3619,14 @@ window.RRV8 = window.RRV8 || {};
     return fetch(base + '/inventory/balancing-entry/export', {
       method: 'POST', headers: h,
       body: JSON.stringify({ company: n.company, periodEnd: n.periodEnd, token: n.token, amount: n.amount, clearingAccount: n.clearingAccount, entryType: n.entryType })
-    }).then(function () { return n; }).catch(function () { return n; });
+    }).then(function (r) {
+      if (!r.ok) return RRV8._failGatedWrite(r, function () {
+        if (n.token) delete c.map[n.token];
+        var back = {}; for (var q in c.map) if (Object.prototype.hasOwnProperty.call(c.map, q)) back[q] = c.map[q];
+        _lsWrite(n.company, back);
+      });
+      return n;
+    });
   }
   window.RRV8.beStore = { load: load, save: save, forCompany: forCompany };
 })();
@@ -3623,10 +3718,18 @@ window.RRV8 = window.RRV8 || {};
     return fetch(base + '/inventory/disposition', {
       method: 'POST', headers: h,
       body: JSON.stringify({ company: n.company, periodEnd: n.periodEnd, reason: n.reason })
-    }).then(function () { return n; }).catch(function () { return n; });
+    }).then(function (r) {
+      if (!r.ok) return RRV8._failGatedWrite(r, function () {
+        delete c.map[_key(n.company, n.periodEnd)];
+        var back = {}; for (var q in c.map) if (Object.prototype.hasOwnProperty.call(c.map, q)) back[q] = c.map[q];
+        _lsWrite(n.company, back);
+      });
+      return n;
+    });
   }
   function clear(company, period) {
     var ck = _cacheKey(company), c = _cache[ck] || (_cache[ck] = { map: {} });
+    var prior = c.map[_key(company, period)];   // kept so a REFUSED reopen can roll back
     delete c.map[_key(company, period)];   // optimistic remove
     var mirror = {}; for (var k in c.map) if (Object.prototype.hasOwnProperty.call(c.map, k)) mirror[k] = c.map[k];
     _lsWrite(company, mirror);
@@ -3636,7 +3739,13 @@ window.RRV8 = window.RRV8 || {};
     return fetch(base + '/inventory/disposition/reopen', {
       method: 'POST', headers: h,
       body: JSON.stringify({ company: String(company), periodEnd: _p10(period) })
-    }).then(function () {}).catch(function () {});
+    }).then(function (r) {
+      if (!r.ok) return RRV8._failGatedWrite(r, function () {
+        if (prior !== undefined) c.map[_key(company, period)] = prior;
+        var back = {}; for (var q in c.map) if (Object.prototype.hasOwnProperty.call(c.map, q)) back[q] = c.map[q];
+        _lsWrite(company, back);
+      });
+    });
   }
   window.RRV8.dispoStore = { load: load, get: get, forCompany: forCompany, save: save, clear: clear, key: _key };
 })();

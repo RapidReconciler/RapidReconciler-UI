@@ -10,9 +10,15 @@
     AI brief   — one grounded narrative of THIS company's roll-forward (what's
                  off, which accounts, the next step in order). Replaces the old
                  deterministic To Do card.
-    1) RELOAD GL   — the one corrective lever, ungated. A single "Reload GL"
-                     band (no attestation, no email). The R099102 repost is
-                     guidance in the AI brief + the reload modal, not a gate.
+    1) GL CORRECTIVES — two levers, ungated, and they are SEQUENTIAL rather
+                     than alternatives. "Reload GL" (usp8_reload_gl) deletes
+                     RR's F0911 copy from a cutoff so the NEXT scheduled
+                     refresh re-pulls it from JDE. "Rebuild roll-forward"
+                     (usp8_rebuild_gl_rollforward, wired 2026-09-01 by VLC-33)
+                     re-merges usp6_007 and recomputes usp6_009 NOW from what
+                     is already loaded. Reload fetches; rebuild recomputes.
+                     No attestation, no email. The R099102 repost is guidance
+                     in the AI brief + the reload modal, not a gate.
                      The variance side has no lever: the as-of recompute
                      (usp6_006a) clears it on every refresh; a break that
                      survives a refresh goes to the customer's IT department.
@@ -161,6 +167,21 @@
   .rlg-btn { flex-shrink:0; align-self:center; display:inline-flex; align-items:center; gap:8px; font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:13.5px; border-radius:9px; padding:11px 20px; background:var(--orange-deep); color:#fff; text-decoration:none; border:1px solid var(--orange-deep); transition:filter .12s,transform .12s; }
   .rlg-btn:hover { filter:brightness(1.06); transform:translateY(-1px); }
   .rlg-btn svg { width:15px; height:15px; }
+  /* VLC-33 (2026-09-01): a SECOND corrective lives in this band now. The two are
+     sequential, not alternatives, and the measured difference is why both exist:
+     usp8_reload_gl DELETEs F0911 from a cutoff so the NEXT refresh re-pulls it
+     from JDE (its own header: "We never EXEC usp6startrefresh here"), while
+     usp8_rebuild_gl_rollforward re-merges usp6_007 and recomputes usp6_009 NOW
+     from what is already loaded. Reload fetches; rebuild recomputes. */
+  .rlg + .rlg { margin-top:16px; padding-top:16px; border-top:1px dashed var(--rule); }
+  .rlg-btn.rlg-btn-2 { background:var(--bg-card); color:var(--navy); border-color:var(--rule-strong); }
+  .rlg-btn.rlg-btn-2:hover { border-color:var(--blue); color:var(--blue); filter:none; }
+  .rlg-btn[disabled] { opacity:.55; cursor:not-allowed; transform:none; filter:none; }
+  .rgb-status { margin-top:10px; font-size:12.5px; font-weight:600; line-height:1.5; display:none; }
+  .rgb-status.is-visible { display:block; }
+  .rgb-status.ok  { color:var(--green); }
+  .rgb-status.err { color:var(--red); }
+  .rgb-status a { color:inherit; }
   /* Clean state: GL rolled forward fine — calm the accent, mute the button. */
   .rlg.is-clear .rlg-ico { background:var(--green-pale); color:var(--green); }
   .rlg.is-clear .rlg-btn { background:var(--bg-card); color:var(--text-soft); border-color:var(--rule-strong); }
@@ -280,6 +301,30 @@
           <div class="rlg-accts" id="rlgAccts" hidden></div>
         </div>
         <button class="rlg-btn" id="rlgBtn" type="button">Reload GL <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
+      </div>
+
+      <!-- VLC-33 (2026-09-01) — the GLOK corrective that shipped with no caller.
+           POST /inventory/rebuild-gl has existed and been documented as this
+           card's GLOK path since it was written, and nothing in RRV8 ever called
+           it: this page reported GL breaks and offered no way to recompute. It is
+           NOT a duplicate of Reload GL above — measured in the procs themselves,
+           usp8_reload_gl deletes F0911 from a cutoff so the next refresh re-pulls
+           from JDE, while usp8_rebuild_gl_rollforward re-merges and recomputes the
+           report immediately from data already loaded. -->
+      <div class="rlg" id="rgbPanel">
+        <span class="rlg-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><polyline points="7 14 11 10 15 13 21 6"/></svg></span>
+        <div class="rlg-main">
+          <div class="rlg-lede">
+            <b>Rebuild the roll-forward</b> from the ledger RapidReconciler already holds &mdash;
+            it re-merges the GL and recomputes this report straight away, instead of waiting for
+            the next scheduled refresh. Use it once JD Edwards has been corrected and the
+            corrected figures have loaded, or when this report looks stale against the ledger.
+            It pulls nothing new from JD Edwards, so on an uncorrected ledger it will rebuild to
+            the same result.
+          </div>
+          <div class="rgb-status" id="rgbStatus" role="status" aria-live="polite"></div>
+        </div>
+        <button class="rlg-btn rlg-btn-2" id="rgbBtn" type="button">Rebuild roll-forward <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
       </div>
     </div>
   </div>
@@ -1063,6 +1108,87 @@
       _rlgBusy=false; m.go.textContent='Go';
     });
   }
+  // ============ VLC-33 — Rebuild roll-forward (the GLOK corrective) ============
+  // POST /inventory/rebuild-gl -> poll GET /inventory/recalc-status.
+  //
+  // This endpoint shipped, was documented in BOTH API.md files as this card's
+  // GLOK path, and had no caller anywhere in RRV8 (measured 2026-09-01). So the
+  // page reported GL breaks and offered no way to act on one. Owner ruled GLOK
+  // actionable, so it is wired rather than deleted.
+  //
+  // The poll shape is lifted from inventory-reroll.html's re-roll driver rather
+  // than re-invented: same activity lock, same /inventory/recalc-status reader,
+  // same three failure modes. Notably, a non-2xx body is NOT a status -- reading
+  // {} out of a 401 and reporting "finished" declares an outcome for a job that
+  // may still be running.
+  var _rgbRunning=false, _rgbSawRunning=false, _rgbStartPolls=0, _rgbPollFails=0;
+  var RGB_POLL_FAIL_LIMIT=5;
+  function rgbStatus(html, kind){
+    var el=document.getElementById('rgbStatus'); if(!el) return;
+    el.className='rgb-status is-visible'+(kind?(' '+kind):'');
+    el.innerHTML=html;
+  }
+  function rgbReset(){
+    _rgbRunning=false;
+    var b=document.getElementById('rgbBtn');
+    if(b){ b.disabled=false; b.firstChild.nodeValue='Rebuild roll-forward '; }
+  }
+  function rgbEsc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+  function runRebuildGl(){
+    if(_rgbRunning) return;
+    var b=document.getElementById('rgbBtn');
+    _rgbRunning=true; _rgbSawRunning=false; _rgbStartPolls=0; _rgbPollFails=0;
+    if(b){ b.disabled=true; b.firstChild.nodeValue='Rebuilding\u2026 '; }
+    rgbStatus('Starting\u2026');
+    rlgFetch('inventory/rebuild-gl',{method:'POST'}).then(function(d){
+      if(!d||!d.started){
+        // busyWith => the activity lock is held by a B-to-C, a deploy, a recalc
+        // or another rebuild. Name it: "could not start" alone sends the analyst
+        // to support for something that clears itself in minutes.
+        var why=(d&&d.busyWith)?(' \u2014 '+rgbEsc(d.busyWith)+' is holding the database'):'';
+        throw new Error(((d&&d.message)||'Could not start the rebuild')+why);
+      }
+      rgbStatus('Running\u2026 '+rgbEsc(d.message||'re-merging the ledger'));
+      if(window.RRV8&&RRV8.logActivity) RRV8.logActivity('GL roll-forward rebuild started','usp8_rebuild_gl_rollforward started from the Account Roll Forward card');
+      setTimeout(pollRebuildGl,2500);
+    }).catch(function(e){
+      rgbReset(); rgbStatus(rgbEsc((e&&e.message)||'Could not start the rebuild.'),'err');
+    });
+  }
+  function pollRebuildGl(){
+    rlgFetch('inventory/recalc-status').then(function(s){
+      _rgbPollFails=0;
+      if(s.running){ _rgbSawRunning=true; rgbStatus('Running\u2026 '+rgbEsc(s.currentStep||s.activity||'working')); setTimeout(pollRebuildGl,3000); return; }
+      // Not running yet. Until we have SEEN it running, treat this as spin-up --
+      // otherwise the previous run's last log line gets reported as this run's result.
+      if(!_rgbSawRunning && _rgbStartPolls<8){ _rgbStartPolls++; setTimeout(pollRebuildGl,2000); return; }
+      rgbReset();
+      if(s.ok){
+        rgbStatus('Done \u2014 the ledger was re-merged and this report rebuilt. Reloading\u2026','ok');
+        loadFromAgent();
+      } else {
+        var blocked=s.blockedBy?(' \u2014 '+rgbEsc(s.blockedBy)+' is holding the database'):'';
+        rgbStatus('Finished, but the last step was \u201c'+rgbEsc(s.lastStep||'unknown')+'\u201d'
+          +(s.lastError?(' (error '+rgbEsc(s.lastError)+')'):'')+blocked
+          +'. If GL accounts are still out of balance, check with support.','err');
+      }
+    }).catch(function(){
+      // Retry a transient blip, then STOP claiming to know what the rebuild is
+      // doing. An endless "Running..." is a status we can no longer read dressed
+      // up as a status we can.
+      if(++_rgbPollFails<RGB_POLL_FAIL_LIMIT){ setTimeout(pollRebuildGl,3000); return; }
+      rgbReset();
+      rgbStatus('RapidReconciler lost contact with the data service, so it can no longer tell you '
+        +'whether the rebuild is still running. It was started, and it does not stop when this page '
+        +'does. Reopen this page in a few minutes to see whether it finished. If the connection stays '
+        +'down, ask your IT department to check it.','err');
+    });
+  }
+  (function wireRebuildGl(){
+    var b=document.getElementById('rgbBtn'); if(b) b.addEventListener('click',runRebuildGl);
+  })();
+
   (function wireReloadModal(){
     var btn=document.getElementById('rlgBtn'); if(btn) btn.addEventListener('click',rlgOpen);
     var m=rlgEls();
