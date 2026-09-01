@@ -41,5 +41,12 @@ Keep this file SHORT. Every line is paid for on every turn.
 7. **HOLD COMMITS.** Batch into logical chunks and wait for the owner to say
    "commit". Then run the full flow end to end without pausing to ask.
 
+7b. **NEVER `mvn package` WHILE THE SERVICE IS RUNNING.** The live JVM holds the
+   fat jar open, `jar:jar` overwrites it anyway, `repackage` then fails on the
+   lock, and what is left on disk is a ~2.5MB non-bootable jar the service
+   cannot start from. `compile` is safe; `package` is not. Rebuild only through
+   the product's own path, which stops the service first. Cost it once already,
+   2026-09-01, on VALC.
+
 8. **EVERY RESPONSE:** confidence (0-100) at the top, token and cost estimate at
    the bottom, Humanizer applied to deliverables, and no sugar-coating.
