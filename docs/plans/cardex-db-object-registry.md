@@ -1,5 +1,28 @@
 # Cardex Corrective Action &mdash; DB Object Registry
 
+> ## ⚠ SUPERSEDED IN PART — VLC-33, 2026-09-01
+>
+> **The cardex WORKLIST half described below was deleted.** `v8ui_cardexworklist`
+> (view), `RCardexWorkStatus` (table), `GET /inventory/cardex-worklist` and
+> `POST /inventory/cardex-work-status` are all gone, along with
+> `CardexWorklistRepository.findWorklist` / `.setWorkStatus`.
+>
+> **Why:** the back end was complete and no page ever called it. Its only mention
+> anywhere in the UI repo was a routing-list entry in `RRV8/config.js`, and a
+> routing entry is not a caller. The owner ruled it out rather than building the
+> page it was waiting for.
+>
+> **What survives and is LIVE:** `RCardexVariance`, `RAdjustLedger`,
+> `usp8_maint_set_beginning_balance`, `usp8_maint_undo_beginning_balance`,
+> `CardexWorklistRepository.findLedger`, and the endpoints
+> `POST /inventory/set-beginning-balance`, `POST /inventory/undo-adjustment`,
+> `GET /inventory/adjustment-ledger` — all wired to
+> `inventory-cardex-variance.html`.
+>
+> Rows below that name the deleted objects are kept as the record of what was
+> built and why; read them as history, not as current state.
+
+
 Every object created / modified / superseded by the cardex corrective-action build, with each object's **references** so a later rename pass (or the legacy cleanup) can update all call sites mechanically. Final names are **TBD** &mdash; the `Rename &rarr;` column is the placeholder to fill when we settle them.
 
 Convention in force: net-new procs/views use the **v8** prefix (`feedback_v8_prefix_new_db_objects`). Data tables stay `R`-prefixed.

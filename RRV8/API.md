@@ -99,8 +99,8 @@ Full JWT payload shape:
 | `POST /inventory/as-of/details` | `{branchPlant, lot, company, itemNumber, location, glClass, uom, companyNumber}` | As Of Details popover | Returns the item ledger via `usp6ItemRollForward`. |
 | `POST /inventory/as-of/item-position` | `{itemNumber, companyNumber (or company), branchPlant?}` (reuses the `AsOfDetailsRequest` bean) | Full Perpetual Details &rarr; "Adjust balances" &rarr; Cardex Variance | The cardex-variance worklist row(s) for ONE item via `usp8_item_position`, **regardless of whether it currently carries a variance** (the worklist view filters `WHERE reason <> ''`, so a tied-out item is absent). Lets the Cardex Variance page focus an item the analyst opened from the perpetual grid to align against a JDE finding. Same `{total, data, aggregates}` envelope + column shape as the `v6ui_itemrollintegritydialog` worklist fetch, so the client reads `data` identically. JWT company-scoped (out-of-scope company &rarr; empty). |
 | `POST /inventory/rollIItem` | (same as as-of body) | (legacy) Cardex Variance Re-roll | Note **double-I** in the path. **Superseded by `/inventory/recalc`** &mdash; synchronous, inventory-only, no summary rebuild. Left for back-compat; the Companies-page button that called it was retired. |
-| `POST /inventory/recalc` | `{reconciliationFilter:{companies:[...]}}` (empty = all in JWT scope) | Account Roll Forward card &mdash; VarOK corrective | **Async.** Runs `usp8_recalc_inventory_rollforward`: re-roll the scoped companies **then** `usp6_009` so the report refreshes immediately. Holds the DB activity lock for the whole run (mutually exclusive with B-to-C, a deploy, a GL rebuild, another recalc). Returns `{started, message, busyWith?}`; poll `/inventory/recalc-status`. |
-| `POST /inventory/rebuild-gl` | (none) | Account Roll Forward card &mdash; GLOK path | **Async.** Runs `usp8_rebuild_gl_rollforward`: re-merge the GL ledger (`usp6_007`) + rebuild the summary (`usp6_009`). Run **after** the source ledger is corrected &mdash; on an uncorrected source it reproduces the same GLOK. Same lock + `{started,...}` shape; poll `/inventory/recalc-status`. |
+| `POST /inventory/recalc` | `{reconciliationFilter:{companies:[...]}}` (empty = all in JWT scope) | **`inventory-reroll.html`** &mdash; VarOK corrective *(this column said "Account Roll Forward card"; measured 2026-09-01, the caller is the reroll page)* | **Async.** Runs `usp8_recalc_inventory_rollforward`: re-roll the scoped companies **then** `usp6_009` so the report refreshes immediately. Holds the DB activity lock for the whole run (mutually exclusive with B-to-C, a deploy, a GL rebuild, another recalc). Returns `{started, message, busyWith?}`; poll `/inventory/recalc-status`. |
+| `POST /inventory/rebuild-gl` | (none) | **Account Roll Forward card &mdash; GLOK corrective** *(VLC-33: this column claimed the card called it since the endpoint shipped; measured 2026-09-01, nothing in RRV8 did. Wired for real on 2026-09-01.)* | **Async.** Runs `usp8_rebuild_gl_rollforward`: re-merge the GL ledger (`usp6_007`) + rebuild the summary (`usp6_009`). Run **after** the source ledger is corrected &mdash; on an uncorrected source it reproduces the same GLOK. Same lock + `{started,...}` shape; poll `/inventory/recalc-status`. |
 | `GET /inventory/recalc-status` | (none) | Account Roll Forward card progress | DB-authoritative: reads `usp8_activity_status` + the latest `RServer_Log` step. Returns `{running, activity, currentStep, since, done, ok, lastStep, lastError, blockedBy?}`. |
 | `POST /system-status` | (empty) | Topbar status, Reconciliation drawer | Returns `{fileName}`. Pair with `GET /download-excel/{fileName}` to get the diagnostic Excel; hand to the analyzer for parsing. |
 | `GET /download-excel/{id}` | (none) | follow-up to `/system-status` | The diagnostic Excel binary. |
@@ -230,10 +230,27 @@ backend contract rather than synthesized client-side (per the
    - `dbs[i].t` &mdash; per-user authorized tabs `{inv,it,adm,por}`
      (the role's tab grants, AND-gated at mint against the client
      license `m`).
-   - `dbs[i].perms` &mdash; function grants `{ij,rs,dm,ite,prs}` where
+   - `dbs[i].perms` &mdash; function grants `{ij,rs,dm,ac,ite,prs}` where
      `dm` = `dmaais` (the role's grant to the **analyst surfaces**:
      Cardex Variance, Account Roll Forward, Model DMAAI Review, DMAAI
-     Analysis).
+     Analysis) and `ac` = `accountant` (**VLC-41, added 2026-09-01**: the
+     **accountant lane** &mdash; period disposition + reopen, period-review
+     sign-off + reopen, balancing-entry export).
+
+     &#9888; **`ac` is NOT the absence of `dm`.** Until 2026-09-01 the
+     platform had no accountant claim at all and V8 derived the role from
+     the absence of the other two (`home.html _entitledRole()`'s else
+     branch), so no endpoint could be gated to it. The two are distinct
+     lanes &mdash; the analyst's is making JDE produce correct postings
+     going forward, the accountant's is the GL's current state being wrong
+     &mdash; and a user can hold **both, one, or neither**.
+
+     &#9888; **Both grants are FAIL-CLOSED as of the same change.** `perms.dm`
+     used to fail open: a token minted with no `perms` block silently
+     received the analyst grant, in `JwtAuthFilter` and in `canAnalyst()`
+     alike. Absence of a claim is not a grant. **Any token predating the
+     `perms` block &mdash; including the long-lived V8 dev token (exp 2036)
+     &mdash; now carries neither lane and must be re-minted.**
 
    **Home role-lane gating contract** (the role-based home layout):
 
@@ -241,6 +258,7 @@ backend contract rather than synthesized client-side (per the
    |---|---|---|
    | **Administration** | People & Licensing, Data Mgmt, Service Health, Utilities | `t.adm === true` |
    | **Analyst** (daily) | Cardex Variance, Account Roll Forward, Model DMAAI Review, DMAAI Analysis | `perms.dm === true` |
+   | **Accountant** (period close) | Period disposition, period-review sign-off, balancing-entry export | `perms.ac === true` |
    | **Finance** (period-end) | Reconciliation, In Transit, PO Receipts | per-module caps `m`/`t` (`inv`/`it`/`por`) |
 
    Fail-open per the existing `caps()` convention (a missing layer
@@ -949,14 +967,6 @@ cannot approve the setup (only the customer's accounting team can).
       for the baseline grid (`{ total, data }`; Company / GL class / Account
       (`LongAccount`) / Account name (`F0901.gmdl01`), plus `TableNumber` +
       `DocType` the page folds into a caption). JWT-scoped by company.
-    - `GET /inventory/integrity/model-row-reviews` — the per-row review
-      worksheet (`{ total, data:[RowReview] }`), JWT-scoped.
-    - `POST /inventory/integrity/model-row-review` — upsert one mapping's
-      verdict (body `{ company, glClass, status: "ok"|"change",
-      requestedChange }`; reviewer from JWT, account snapshot taken
-      server-side from the live baseline).
-    - `GET /inventory/integrity/model-change-report` — the flagged rows as a
-      change-request `.xlsx` (POI, `Content-Disposition: attachment`).
     - `GET /inventory/integrity/excluded-class-reviews` — analyst verdicts on
       excluded GL classes (`{ total, data:[ExcludedClassReview] }`), JWT-scoped.
     - `POST /inventory/integrity/excluded-class-review` — upsert one slice's
@@ -1009,26 +1019,26 @@ cannot approve the setup (only the customer's accounting team can).
   `dbo.RDmaaiModelApproval` (latest row = current sign-off; older rows are
   an audit trail). Counts come from Integrity Report 1
   (`v_integrity1_aai_base`) + Report 3 (`v_integrity3_exc_glc`), JWT-scoped.
-  Agent spec: `RapidReconciler-Agent/specs/model-dmaai-review.md`;
+  Agent spec: none — `RapidReconciler-Agent/specs/model-dmaai-review.md` was
+  deleted with the per-row review it specified (VLC-33, 2026-09-01); the
+  model-level attestation described here is the part that shipped.
   table DDL: `RapidReconciler-Agent/setup/sql/create-dmaai-model-approval-table.sql`.
-- **Per-row review + change request** (layers UNDER the model-level sign-off;
-  the single attestation stays the gate). Each baseline-grid row carries an
-  **OK / Change** verdict, persisted one-current-row-per-`(Company, GLClass)`
-  in `dbo.RDmaaiRowReview` (table DDL:
-  `RapidReconciler-Agent/setup/sql/create-dmaai-row-review-table.sql`). A
-  `change` row captures a free-text requested correction and an
-  account snapshot (`LongAccount` + description at review time → drift cue +
-  plain-English report). Flagged rows export via `model-change-report` as a
-  punch list the customer hands to whoever administers their JDE DMAAIs
-  (GSI can't edit it; email is stubbed, so it's download-then-send).
-  **Sign-off is gated** in V8 while any row is flagged `change` — you can't
-  attest a model you've flagged wrong; the flag clears when JDE is corrected
-  and the next refresh moves the account (snapshot mismatch → re-review).
+- **Per-row review + change request — DELETED 2026-09-01 (VLC-33).** This
+  section described an OK / Change verdict per baseline-grid row, persisted in
+  `dbo.RDmaaiRowReview`, with a `.xlsx` change-request export and a gate that
+  blocked model sign-off while any row was flagged. **The back end was complete
+  and no page ever called it** — a UI-repo grep for `model-row-review`,
+  `model-row-reviews` and `model-change-report` returned zero callers. The owner
+  ruled it out rather than building the page, so the three endpoints, the
+  service, the repository, the POI export, the table and its DDL are gone.
+  The model-level attestation below is unaffected and remains the gate.
 - **Surfaces:** Home's **Model DMAAI Review** card (`home.html`
   `loadModelApproval`) reads the verdict; the leaner
   **`accounting-model-review.html`** shows Report 3 (excluded GL classes,
-  the materiality) + Report 1 (the model baseline, with the per-row review
-  controls + company filter) and ends in the single Approve action.
+  the materiality) + Report 1 (the model baseline, with a company filter) and
+  ends in the single Approve action. *(This sentence used to claim the page
+  carried "the per-row review controls". It never did — see the deleted
+  per-row review above; the claim was written from the spec, not the page.)*
   **Graceful fallback:** both degrade to a neutral "review the model" state
   when the endpoint isn't live.
 

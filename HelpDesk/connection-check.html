@@ -376,16 +376,34 @@
   var params = new URLSearchParams(window.location.search);
   var here = window.location;
 
+  // RRENV resolves a key for the running mode: RR_CONFIG wins when set, else
+  // RR_ENVIRONMENTS[mode], else null. Falls back to reading RR_CONFIG directly
+  // if an older cached config.js has no RRENV.
+  function envGet(key) {
+    if (window.RRENV && window.RRENV.get) return window.RRENV.get(key);
+    return rc[key] || null;
+  }
+
   // A — GSI's always-up public edge (internet + GSI baseline).
-  var ANCHOR = rc.statusAnchor || 'https://rapidreconciler-prod.getgsi.com';
-  // C — the auth/login service (VALC). ?auth= wins, then config.
-  var AUTH_BASE = params.get('auth') || rc.authBase || rc.valcBase || '';
+  var ANCHOR = envGet('statusAnchor') || 'https://rapidreconciler-prod.getgsi.com';
+  // C — the auth/login service (VALC). ?auth= wins, then the resolved config.
+  //
+  // VLC-39 gap 2: this read `rc.authBase` directly, so on a deploy that left
+  // authBase unset it fell through to valcBase and then to '' — probe C going
+  // idle with "No sign-in service configured." That message is right, but it
+  // was reached by accident rather than reported, and it never named WHICH
+  // setting was missing. Going through RRENV means a value supplied only by
+  // RR_ENVIRONMENTS[mode] is now found, and a genuinely unset one is named
+  // below by RRENV.missing() rather than just blanked.
+  var AUTH_BASE = params.get('auth') || envGet('authBase') || envGet('valcBase') || '';
+  var ENV_MISSING = (window.RRENV && window.RRENV.missing) ? window.RRENV.missing() : [];
+  var ENV_MODE    = (window.RRENV && window.RRENV.mode) ? window.RRENV.mode() : '(unknown)';
   // B — the agent on the app server. ?agent= wins; then the dev
   // test-agent base; then this page's own origin (in prod the agent
   // serves the V8 app, so /comms-check is same-origin). No user input:
   // reaching the agent IS the "PC -> your server" test, and its
   // response carries the server's own identity + the server-side hops.
-  var COMMS_BASE = params.get('agent') || rc.testAgentBase
+  var COMMS_BASE = params.get('agent') || envGet('testAgentBase')
                 || (here.protocol.indexOf('http') === 0 ? (here.protocol + '//' + here.host) : '');
 
   function $(id) { return document.getElementById(id); }
@@ -753,8 +771,14 @@
 
     setProbe('A', 'run', 'Checking…', hostLabel(ANCHOR));
     setProbe('B', 'run', 'Checking your server…', COMMS_BASE ? hostLabel(COMMS_BASE) : 'detecting…');
-    setProbe('C', AUTH_BASE ? 'run' : 'idle', AUTH_BASE ? 'Checking…' : 'No sign-in service configured.',
-      AUTH_BASE ? (hostLabel(AUTH_BASE) + '  (/api/v1/auth/ping)') : '—');
+    // The idle branch is a REPORT, not a skip: name the mode and the settings
+    // that did not resolve, so a tech reading this page knows it is an
+    // installation gap and knows which key to go and set.
+    setProbe('C', AUTH_BASE ? 'run' : 'idle',
+      AUTH_BASE ? 'Checking…'
+                : ('No sign-in service configured for this installation (mode: ' + ENV_MODE + ').'),
+      AUTH_BASE ? (hostLabel(AUTH_BASE) + '  (/api/v1/auth/ping)')
+                : ('unset: ' + (ENV_MISSING.length ? ENV_MISSING.join(', ') : 'authBase')));
 
     var pA = probe(ANCHOR);
     var pB = commsCheck();

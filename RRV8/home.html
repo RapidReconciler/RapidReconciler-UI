@@ -3784,7 +3784,19 @@
   // surfaces are inventory-recon features and should show for any role
   // granted dmaais (Administrator + Reconciliation Analyst per VALC V38).
   // Fail-open when the token carries no perms block (demo / dev). See API.md §2.
-  function canAnalyst() { var a = activeDb() || {}; var p = a.perms; return p ? (p.dm !== false) : true; }
+  // VLC-41, 2026-09-01 — BOTH LANE CHECKS ARE FAIL-CLOSED NOW, and they mirror
+  // the agent's guards exactly (requireAnalyst = isDmaais||isAdmin||isSuperUser,
+  // requireAccountant = isAccountant||isAdmin||isSuperUser). Keeping the UI and
+  // the server on different rules is how you get a button that 403s.
+  //
+  // canAnalyst used to be `p ? (p.dm !== false) : true` — fail-OPEN, so a token
+  // with no perms block was treated as an analyst. The agent defaulted the same
+  // way and both have flipped. ⚠ The long-lived dev token (exp 2036) predates
+  // perms and therefore loses both lanes here. Re-mint it.
+  function canAnalyst() { var p = (activeDb() || {}).perms; return isAdmin() || !!(p && p.dm === true); }
+  // NOT the absence of dm. The two lanes are distinct and a user can hold both,
+  // one, or neither — which is the whole point of VLC-41.
+  function canAccountant() { var p = (activeDb() || {}).perms; return isAdmin() || !!(p && p.ac === true); }
 
   // ---- Role-view lens (an admin can preview the lower-rank dashboards) -------
   // viewRole is a VIEW filter only, clamped to what the ACTIVE DB's token grants
@@ -3792,7 +3804,18 @@
   // against the real JWT, so a tampered rrv8.viewRole only changes which lanes
   // render, never data access. v1 exposes the switcher to admins only.
   function _roleRank(r) { return r === 'admin' ? 2 : r === 'analyst' ? 1 : 0; }
+  // VLC-41: 'accountant' is now a GRANT, not the else branch. This used to read
+  //   isAdmin() ? 'admin' : canAnalyst() ? 'analyst' : 'accountant'
+  // so a user with no grants at all was silently called an accountant, which is
+  // how the platform ended up with a role nothing could be gated to.
+  //
+  // The ladder (admin >= analyst >= accountant) is kept because it is a VIEW lens
+  // and the server enforces every data call, but the bottom rung now requires
+  // perms.ac. A user granted NEITHER lane still lands on the accountant view —
+  // it is the read-only floor — and its write controls surface the server's own
+  // refusal rather than failing silently (see _acctWriteFailed).
   function _entitledRole() { return isAdmin() ? 'admin' : canAnalyst() ? 'analyst' : 'accountant'; }   // highest the active DB grants
+  function _hasAccountantGrant() { return canAccountant(); }   // named for readers of the write paths
   function _viewRole() {
     var max = _roleRank(_entitledRole());
     try { var v = localStorage.getItem('rrv8.viewRole'); if (/^(admin|analyst|accountant)$/.test(v || '') && _roleRank(v) <= max) return v; } catch (_) {}
@@ -8625,7 +8648,11 @@
     // verified in Audit.
     try {
       if (window.RRV8 && RRV8.beStore) {
-        RRV8.beStore.save({ company: co, periodEnd: e.per, token: token, amount: e.net, clearingAccount: clearing, status: 'unverified', entryType: 'adjusting' });
+        // VLC-41: gated on the accountant grant. A refusal rolls the store's
+        // optimistic entry back and rejects; without this catch the export
+        // would read as recorded while the server holds nothing.
+        var _bp1 = RRV8.beStore.save({ company: co, periodEnd: e.per, token: token, amount: e.net, clearingAccount: clearing, status: 'unverified', entryType: 'adjusting' });
+        if (_bp1 && _bp1.catch) _bp1.catch(function (err) { toast('The balancing entry was NOT recorded — ' + ((err && err.message) || 'the data service refused it') + '.', 7000); });
       }
       if (window.RRV8 && RRV8.logActivity) {
         // A deferred carry-forward is recorded ON the event, so the entry reads as a
@@ -14085,7 +14112,11 @@
     // matches the token in the posted JE's Explanation and flips it to verified.
     try {
       if (window.RRV8 && RRV8.beStore) {
-        RRV8.beStore.save({ company: d.co, periodEnd: d.per, token: token, amount: d.nettot, clearingAccount: d.clearing, status: 'unverified', entryType: 'balancing' });
+        // VLC-41: gated on the accountant grant. A refusal rolls the store's
+        // optimistic entry back and rejects; without this catch the export
+        // would read as recorded while the server holds nothing.
+        var _bp2 = RRV8.beStore.save({ company: d.co, periodEnd: d.per, token: token, amount: d.nettot, clearingAccount: d.clearing, status: 'unverified', entryType: 'balancing' });
+        if (_bp2 && _bp2.catch) _bp2.catch(function (err) { toast('The balancing entry was NOT recorded — ' + ((err && err.message) || 'the data service refused it') + '.', 7000); });
       }
       if (window.RRV8 && RRV8.logActivity) {
         RRV8.logActivity('Balancing entry exported', 'Co ' + d.co + ' · ' + (fmtPeriod(d.per) || d.per) + ' · ' + _jeMoney(d.nettot) + ' · code ' + token + ' · awaiting posting');
@@ -15183,12 +15214,32 @@
   // the analyst view (UI-34) can read a company's disposition too. get() is SYNC off
   // the warm cache _ensureDispos() primes before the cards render.
   function _dispoPeriod() { var d = _acctData || {}; return d.viewedPeriod || d.latestPeriod || ''; }
+  // VLC-41: these two writes are gated on the accountant grant now, so a refusal
+  // is a real outcome and has to reach the user. dispoStore rolls its optimistic
+  // cache + localStorage entry back and rejects with the server's own reason
+  // ("... requires the accountant grant"); without this catch that reject is an
+  // unhandled promise and the card silently reverts on the next render, which
+  // reads as the app losing the click.
+  function _acctWriteFailed(e) {
+    var why = (e && e.message) || 'the data service refused it';
+    toast('Could not save that — ' + why + '.', 6000);
+    // Re-render from the rolled-back cache so the card stops showing a state
+    // the server rejected. renderAcctSnapshot is what the click handler itself
+    // calls after a successful write.
+    if (_acctData && typeof renderAcctSnapshot === 'function') renderAcctSnapshot(_acctData);
+  }
   function _acctSetDone(co, reason) {
-    if (window.RRV8 && RRV8.dispoStore) RRV8.dispoStore.save({ company: co, periodEnd: _dispoPeriod(), reason: reason || 'immaterial' });
+    if (window.RRV8 && RRV8.dispoStore) {
+      var pr = RRV8.dispoStore.save({ company: co, periodEnd: _dispoPeriod(), reason: reason || 'immaterial' });
+      if (pr && pr.catch) pr.catch(_acctWriteFailed);
+    }
     _auditEntries = null; _auditKey = '';   // force the Audit tab to re-fetch with the new disposition
   }
   function _acctClearDone(co) {
-    if (window.RRV8 && RRV8.dispoStore) RRV8.dispoStore.clear(co, _dispoPeriod());
+    if (window.RRV8 && RRV8.dispoStore) {
+      var pr = RRV8.dispoStore.clear(co, _dispoPeriod());
+      if (pr && pr.catch) pr.catch(_acctWriteFailed);
+    }
     _auditEntries = null; _auditKey = '';
   }
   function _acctDoneRec(co) {
