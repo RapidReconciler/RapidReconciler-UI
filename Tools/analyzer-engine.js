@@ -539,6 +539,10 @@ const TXD = {
     let _accountMismatchExpectedAcct = null;
     let _accountMismatchPostedAcct   = null;
     let _accountMismatchRatio        = null;
+    // Populated in the 5.3 branch when the PARTIAL cardex-only variant fires
+    // (one unmirrored account inside an otherwise-posted batch). Stays null
+    // for the full variant and every other pattern.
+    let _partialCardexOnly           = null;
     // Sign of the F4111 cardex amount on the "expected" row. Drives Dr/Cr
     // direction in the corrective JE: negative = inventory side should be
     // a credit in the original transaction (IM, IA, II, SO/ST shipment),
@@ -773,19 +777,137 @@ const TXD = {
     // diagnosis is, say, 5.16 (Mfg Cost Mismatch) but also spans two
     // periods gets a "Period mismatch also detected" callout below the
     // HOW card so the analyst factors that into the corrective JE's date.
+    // Account strings arrive PADDED out of the export -- the subsidiary is
+    // space-filled, e.g. '10.1310  .110' with two spaces before '.110'
+    // (measured on a production export 2026-09-02). Every account comparison
+    // in this file must go through this, because comparing raw treats padding
+    // variants as distinct accounts.
+    const normAcct = a => String(a || '').replace(/\s+/g, ' ').trim();
+
+    // Per-account exposure across the RR Summary.
+    //
+    // WHY THIS GROUPING EXISTS, and it is the whole correction. The RR Summary
+    // is the PRE-NETTING representation (Section 0 of the analysis guide:
+    // RCardexLedgerCompare holds both sides of every transaction;
+    // RCardexLedgerCompare2 is what survives netting). A MATCHED account
+    // therefore appears as a pair of MIRROR ROWS at the same (account, batch)
+    // grain -- one row carrying the cardex amount with a zero ledger, one
+    // carrying the equal ledger amount with a zero cardex. Measured on a
+    // production manufacturing document: 7 of its 8 accounts were mirror pairs
+    // netting to zero, which is normal, not a defect.
+    //
+    // Reading rows one at a time cannot tell a mirror half from a misposting.
+    // Reading the ACCOUNT can: a matched account shows both sides and nets, a
+    // misposted account is one-sided.
+    const acctExposure = (() => {
+      const m = new Map();
+      for (const r of data.rrSummary) {
+        const k = normAcct(r.account);
+        if (!k) continue;
+        if (!m.has(k)) m.set(k, { acct: k, raw: r.account, cardex: 0, ledger: 0, rows: [] });
+        const e = m.get(k);
+        e.cardex += (r.cardexAmt || 0);
+        e.ledger += (r.ledgerAmt || 0);
+        e.rows.push(r);
+      }
+      for (const e of m.values()) {
+        e.cardexOnly = Math.abs(e.cardex) >= 0.01 && Math.abs(e.ledger) < 0.01;
+        e.ledgerOnly = Math.abs(e.ledger) >= 0.01 && Math.abs(e.cardex) < 0.01;
+        // Both sides present and equal in absolute value: the mirror-pair
+        // shape. These rows are MATCHED and cannot be either half of a
+        // misposting.
+        e.mirrored = Math.abs(e.cardex) >= 0.01 && Math.abs(e.ledger) >= 0.01
+                     && Math.abs(Math.abs(e.cardex) - Math.abs(e.ledger)) < 0.01;
+      }
+      return Array.from(m.values());
+    })();
+
+    // Pattern 5.4 -- Account Mismatch.
+    //
+    // SELECTION RULE, stated explicitly because the previous one read as
+    // deliberate and was not. It took "the first row of each shape" and never
+    // checked that the two rows were on DIFFERENT accounts, so on a document
+    // whose summary is mostly mirror pairs it reported the first account
+    // against ITSELF -- a corrective JE between an account and itself, with
+    // prose asserting "only the account differs".
+    //
+    // The pattern requires, per guide section 5.4 and cross-section rule 2:
+    // the cardex landed on one account, the GL landed on a DIFFERENT one, and
+    // the amounts agree in absolute value so the document nets to zero. So:
+    //   * candidates are ACCOUNTS that are one-sided (mirrored accounts are
+    //     matched and are excluded by construction),
+    //   * pair a cardex-only account with a ledger-only account,
+    //   * require the magnitudes to agree,
+    //   * require the normalized accounts to DIFFER.
+    // No pair means no account mismatch. There is no fallback to row 0 -- a
+    // fallback is what manufactured the false positive.
     const accountMismatchCheck = (() => {
       if (data.rrSummary.length <= 1) return null;
-      const accounts = new Set(data.rrSummary.map(r => String(r.account || '').trim()).filter(Boolean));
-      if (accounts.size < 2) return null;
-      const ghostRow   = data.rrSummary.find(r => Math.abs(r.cardexAmt || 0) < 0.01 && Math.abs(r.ledgerAmt || 0) >= 0.01) || data.rrSummary[0];
-      const expectedRow = data.rrSummary.find(r => Math.abs(r.ledgerAmt || 0) < 0.01 && Math.abs(r.cardexAmt || 0) >= 0.01) || data.rrSummary[1] || data.rrSummary[0];
-      const mispostedAmt = ghostRow ? Math.abs(ghostRow.ledgerAmt || 0) : Math.abs(data.f0911InvTot);
-      const expectedAcct = expectedRow && expectedRow.account;
-      const postedAcct   = ghostRow    && ghostRow.account;
-      const cardexSign   = Math.sign(expectedRow && expectedRow.cardexAmt || 0);
+      const cardexOnly = acctExposure.filter(e => e.cardexOnly);
+      const ledgerOnly = acctExposure.filter(e => e.ledgerOnly);
+      if (!cardexOnly.length || !ledgerOnly.length) return null;
+
+      let best = null;
+      for (const cx of cardexOnly) {
+        for (const lg of ledgerOnly) {
+          if (cx.acct === lg.acct) continue;               // the missing guard
+          const delta = Math.abs(Math.abs(cx.cardex) - Math.abs(lg.ledger));
+          if (delta >= 0.01) continue;                     // magnitudes must agree
+          if (!best || delta < best.delta) best = { cx, lg, delta };
+        }
+      }
+      if (!best) return null;
+
+      const expectedRow = best.cx.rows.find(r => Math.abs(r.cardexAmt || 0) >= 0.01) || best.cx.rows[0];
+      const ghostRow    = best.lg.rows.find(r => Math.abs(r.ledgerAmt || 0) >= 0.01) || best.lg.rows[0];
       return {
-        mispostedAmt, expectedAcct, postedAcct, cardexSign,
-        accounts: Array.from(accounts)
+        mispostedAmt: Math.abs(best.lg.ledger),
+        expectedAcct: best.cx.raw,      // where the cardex landed
+        postedAcct:   best.lg.raw,      // where the GL went instead
+        cardexSign:   Math.sign(best.cx.cardex || 0),
+        expectedRow, ghostRow,          // the rows the evidence list must cite
+        accounts: acctExposure.map(e => e.raw)
+      };
+    })();
+
+    // Pattern 5.3 -- PARTIAL cardex-only.
+    //
+    // Guide section 5.3 documents two variants. The full one is
+    // "F4111 total non-zero AND F0911 total = 0", which the chain below
+    // already tests on the DOCUMENT totals. The partial one is
+    // "F0911 total non-zero but smaller than F4111 for the same GL class and
+    // batch, and one or more RR Summary rows show cardex non-zero with ledger
+    // zero", and the section's own callout says to "compare totals at the GL
+    // class and batch level, not just at the document level".
+    //
+    // Nothing implemented that. So a document with several matched mirror-pair
+    // accounts PLUS one genuinely unmirrored cardex-only account has a
+    // non-zero document ledger total, fails the full test, falls past 5.3
+    // entirely, and used to be claimed by the unguarded 5.4 above.
+    //
+    // Gated on the mismatch check being null so guide line 718's precedence
+    // holds -- account mismatch outranks cardex-only "when both differ on the
+    // same doc". That keeps the chain order untouched: the defect was this
+    // predicate's grain, never the ordering.
+    const partialCardexOnlyCheck = (() => {
+      if (accountMismatchCheck) return null;
+      if (!data.rrSummary.length) return null;
+      // Unmirrored, one-sided, cardex-carrying accounts, largest first.
+      const orphans = acctExposure
+        .filter(e => e.cardexOnly && !e.mirrored)
+        .sort((a, b) => Math.abs(b.cardex) - Math.abs(a.cardex));
+      if (!orphans.length) return null;
+      const total = orphans.reduce((a, e) => a + e.cardex, 0);
+      if (Math.abs(total) < 0.01) return null;
+      return {
+        accounts: orphans.map(e => ({
+          acct: e.raw,
+          cardex: e.cardex,
+          batches: Array.from(new Set(e.rows.map(r => r.batch).filter(Boolean))),
+          rows: e.rows
+        })),
+        total,
+        primary: orphans[0]
       };
     })();
     const periodMismatchCheck = (() => {
@@ -978,9 +1100,28 @@ const TXD = {
       // classifier's usp8_txv_flags claim (mfg IC + cardex-only) so all consumers agree.
       pattern = '5.20'; patternLabel = 'Completion Not Journaled — work-order completion on the cardex, no GL completion found';
       patternExplanation = this._completionNotJournaledExplanation(data);
-    } else if (inModule('5.3') && Math.abs(ledger) < 0.01 && Math.abs(cardex) >= 0.01) {
-      pattern = '5.3'; patternLabel = 'Cardex-Only Entry (No GL)';
-      patternExplanation = this._cardexOnlyExplanation(data);
+    } else if (inModule('5.3')
+               && ((Math.abs(ledger) < 0.01 && Math.abs(cardex) >= 0.01)   // full variant: whole doc is cardex-only
+                   || partialCardexOnlyCheck)) {                            // partial variant: one unmirrored account
+      // Both variants report as 5.3 because the guide treats partial as a
+      // variant of this pattern, not a separate one. The label distinguishes
+      // them so the analyst is not told the whole document is unposted when
+      // only one account is.
+      const isPartial = !(Math.abs(ledger) < 0.01 && Math.abs(cardex) >= 0.01);
+      pattern = '5.3';
+      patternLabel = isPartial
+        ? 'Cardex-Only Entry (No GL) — partial, one account within a posted batch'
+        : 'Cardex-Only Entry (No GL)';
+      patternExplanation = this._cardexOnlyExplanation(data, isPartial ? partialCardexOnlyCheck : null);
+      if (isPartial) {
+        // The headline must be the orphaned dollars, not the document net.
+        // On a partial doc the matched mirror accounts contribute to both
+        // totals and cancel, so the document variance already equals the
+        // orphan total when the mirrors tie -- but it does NOT when they
+        // don't, and then the document net is the wrong number to act on.
+        // Numbers that drive a decision get produced once, here.
+        _partialCardexOnly = partialCardexOnlyCheck;
+      }
     } else if (inModule('5.6') && isICStandardCostChange) {
       pattern = '5.6'; patternLabel = 'Standard Cost Change after work order completion (R30837 / closed-WO)';
       // Pick up the GL completion doc number (if different from the cardex
@@ -1107,8 +1248,12 @@ const TXD = {
       // Surface the two RR Summary rows that disagree on account so the
       // analyst sees exactly which account got the cardex and which got
       // the GL post.
-      const expected = data.rrSummary.find(r => Math.abs(r.ledgerAmt || 0) < 0.01 && Math.abs(r.cardexAmt || 0) >= 0.01);
-      const posted   = data.rrSummary.find(r => Math.abs(r.cardexAmt || 0) < 0.01 && Math.abs(r.ledgerAmt || 0) >= 0.01);
+      // Cite the rows the DETECTOR chose, rather than re-deriving them here.
+      // This block used to run its own copy of the same first-row-of-each-shape
+      // search, so the evidence could name a different pair than the headline
+      // -- and it carried the identical same-account defect.
+      const expected = accountMismatchCheck && accountMismatchCheck.expectedRow;
+      const posted   = accountMismatchCheck && accountMismatchCheck.ghostRow;
       if (expected) {
         evidence.push({
           severity: 'Root cause',
@@ -1181,6 +1326,21 @@ const TXD = {
       }
     } else if (pattern === '5.2' && data.f0911Inv[0]) {
       evidence.push({ severity: 'Root cause', label: `${data.f0911Inv[0].bt} doc ${data.f0911Inv[0].doc}  →  Row ${data.f0911Inv[0].rowNumber}`, description: `GL entry on account ${data.f0911Inv[0].account} · ${Helpers.money(data.f0911Inv[0].ledgerAmt)}\n${data.f0911Inv[0].comment || 'No cardex counterpart — the variance is entirely on this row'}`, sourceRow: data.f0911Inv[0].rowNumber });
+    } else if (pattern === '5.3' && _partialCardexOnly) {
+      // Partial variant: the useful anchor is the ORPHANED ACCOUNT, not the
+      // first F4111 row. On a document whose other accounts posted normally,
+      // "here is a cardex row" sends the analyst back to the source sheet to
+      // work out which account is actually short.
+      for (const a of _partialCardexOnly.accounts) {
+        const acct = String(a.acct || '').replace(/\s+/g, ' ').trim();
+        const batchStr = a.batches.length ? ` · batch ${a.batches.join(', ')}` : '';
+        evidence.push({
+          severity: 'Root cause',
+          label: `${acct} — cardex with no GL  →  Row ${a.rows[0].rowNumber}`,
+          description: `Cardex ${Helpers.money(a.cardex, true)} · ledger $0.00${batchStr}\nNo offsetting ledger row for this account anywhere on the document. The other accounts here show both sides and net to zero, so the batch posted — this account's GL counterpart is missing.`,
+          sourceRow: a.rows[0].rowNumber
+        });
+      }
     } else if (pattern === '5.3' && data.f4111Rows[0]) {
       const fr = data.f4111Rows[0];
       evidence.push({ severity: 'Root cause', label: `${fr.dt} doc ${fr.doc}  →  Row ${fr.rowNumber}`, description: `Cardex entry · ${Helpers.money(fr.cardexAmt)} · PC=${fr.pc || 'blank (unposted)'}`, sourceRow: fr.rowNumber });
@@ -1453,7 +1613,24 @@ const TXD = {
       `• Variance: ${Helpers.money(findings.variance, true)} — entirely on the cardex side`
     ].join('\n');
   },
-  _cardexOnlyExplanation(data) {
+  _cardexOnlyExplanation(data, partial) {
+    // The partial variant is a different story and needs a different WHY.
+    // An unposted batch is ruled out by the document itself: the other
+    // accounts on this doc DID post, so the batch ran. Naming the account
+    // and its dollars here keeps the analyst off the source sheet.
+    if (partial && partial.primary) {
+      const p = partial.primary;
+      const acct = String(p.raw || '').replace(/\s+/g, ' ').trim();
+      const amt  = Helpers.money(p.cardex, true);
+      const batches = Array.from(new Set(p.rows.map(r => r.batch).filter(Boolean)));
+      const more = partial.accounts.length - 1;
+      return [
+        `• ${acct} carries ${amt} of cardex with a ledger of exactly zero — and no offsetting row anywhere on this document`,
+        `• The rest of this document's accounts show both sides and net to zero, so the batch DID post — this is one account missing its GL counterpart, not an unposted batch`,
+        batches.length ? `• Cardex batch${batches.length > 1 ? 'es' : ''} ${batches.join(', ')} on that account produced no F0911 inventory entry` : null,
+        more > 0 ? `• ${more} further account${more > 1 ? 's' : ''} on this document show the same one-sided shape` : null
+      ].filter(Boolean).join('\n');
+    }
     return [
       `• Unposted batch — cardex was written at the transaction but the batch never posted to GL (PC field on F4111 isn't "P")`,
       `• Partial-batch GL failure — single line missing from an otherwise-posted batch (typically outlier unit cost or a rejected line)`
