@@ -688,7 +688,34 @@ This means the **true variance is larger than what RapidReconciler is showing**.
 **Symptoms:**
 - Multiple rows in RR Summary
 - CardexAmount and LedgerAmount are on separate rows
+- **The two rows are on DIFFERENT accounts** (normalize before comparing — the
+  subsidiary is space-filled, so `10.1310  .110` and `10.1310 .110` are the
+  same account)
+- The two amounts agree in absolute value, so the document nets to $0
 - Variance equals the amount on each row
+
+> ⚠ **"Separate rows" alone is not this pattern, and reading it that way ships a
+> false positive.** The requirement that the accounts differ was, until
+> 2026-09-02, stated only in this section's title and in cross-section rules 2
+> and 3 — not in the symptom list above. A detector built from the bullets alone
+> claimed a document where the same account appeared on both sides.
+>
+> The reason the shape is so easy to hit: the **RR Summary is the pre-netting
+> representation** (see Section 0 on `RCardexLedgerCompare` vs
+> `RCardexLedgerCompare2`). A **matched** account/batch therefore appears as a
+> *pair of mirror rows* — one carrying the cardex amount with a zero ledger, one
+> carrying the equal ledger amount with a zero cardex. On a manufacturing
+> document that legitimately issues material across many GL classes, most of the
+> summary is mirror pairs; measured on a production work order, 7 of its 8
+> accounts were pairs netting to zero. Those rows are matched and cannot be
+> either half of a misposting.
+>
+> So judge the **account**, not the row: a matched account shows both sides and
+> nets, a misposted account is one-sided. Pair a cardex-only account with a
+> *different* ledger-only account at agreeing magnitude, and if no such pair
+> exists, this is not an account mismatch. A document with one unmirrored
+> cardex-only account and no ledger-only counterpart is the **partial variant of
+> 5.3**, not this pattern.
 
 > **Analyzer output:** for account-mismatch docs the analyzer's headline is the **misposted amount** (the dollars that need to move via JE), not the document's net variance — the net is $0 because the cardex and GL amounts agree in absolute value. Priority bucketing (P1/P2/P3) is retired for this template; the dollar amount + pattern label carry the headline. The HOW card is built from "what should have posted" rather than from the F4111 model. It contains:
 >
