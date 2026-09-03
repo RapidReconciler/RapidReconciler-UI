@@ -260,10 +260,15 @@ multi-agent path is working end-to-end.
   the new agent's `parseSignedClaims()`) still applies; see
   `RapidReconciler-Agent/docs/gotchas.md` &sect; *Signature
   verification difference*.
-- VALC 2.0&rsquo;s real `/resource/client/login` endpoint isn't wired
+- ~~VALC 2.0&rsquo;s real `/resource/client/login` endpoint isn't wired
   yet, so the JWT-mint side that would automatically include
-  user-scoped `dbs[]` is incomplete. Until that ships, the DevTools-
-  paste workflow remains for swapping tokens on the dev box.
+  user-scoped `dbs[]` is incomplete.~~ **CLEARED &mdash; and this line was
+  stale for long enough that HK-7 found it by sampling.** Re-measured
+  2026-09-03: `AuthController.java:248` carries
+  `@PostMapping("/resource/client/login")`, and the mint builds
+  user-scoped `dbs[]` (see VLC-30 for the `ip` claim it stamps into each
+  entry). The DevTools-paste workflow is still convenient on the dev box,
+  but it is a convenience now rather than the only route.
 
 These are queued items, not regressions &mdash; cleared by the
 broader auth chunk when capacity frees up.
