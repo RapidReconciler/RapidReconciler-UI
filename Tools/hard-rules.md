@@ -48,5 +48,11 @@ Keep this file SHORT. Every line is paid for on every turn.
    the product's own path, which stops the service first. Cost it once already,
    2026-09-01, on VALC.
 
-8. **EVERY RESPONSE:** confidence (0-100) at the top, token and cost estimate at
+8. **NEVER WRITE FILE CONTENT THROUGH A BASH HEREDOC.** Not for scripts, not for
+   HTML, not for SQL, not "just this once because it is short". Use the Write or
+   Edit tool. The shell eats backslash escapes and mis-parses quotes, and the
+   failure is either a syntax error costing a retry or, worse, silent corruption
+   of a real file. Four sessions have paid for this now.
+
+9. **EVERY RESPONSE:** confidence (0-100) at the top, token and cost estimate at
    the bottom, Humanizer applied to deliverables, and no sugar-coating.
