@@ -228,7 +228,24 @@
   .role-hero-item { display: none; }
   body[data-view-role="admin"]      .role-hero-item[data-role="admin"],
   body[data-view-role="analyst"]    .role-hero-item[data-role="analyst"],
-  body[data-view-role="accountant"] .role-hero-item[data-role="accountant"] { display: block; }
+  body[data-view-role="accountant"] .role-hero-item[data-role="accountant"],
+  body[data-view-role="none"]       .role-hero-item[data-role="none"] { display: block; }
+  /* UI-174 — the no-grant state. Every lane the two grants own is hidden, and
+     the notice below is the only thing on the page, because a half-rendered
+     console reads as a broken product rather than as an access answer. */
+  .no-grant-notice { display: none; margin: 0 0 16px; padding: 16px 18px; border: 1px solid var(--line, #d9dee7); border-left: 4px solid var(--navy, #1f2d4a); border-radius: 6px; background: #fff; }
+  body[data-view-role="none"] .no-grant-notice { display: block; }
+  .no-grant-notice .ngn-lead { margin: 0 0 8px; font-size: 15px; line-height: 1.5; color: var(--navy, #1f2d4a); }
+  .no-grant-notice .ngn-body { margin: 0; font-size: 14px; line-height: 1.6; color: var(--text-muted, #5a6478); }
+  body[data-view-role="none"] #view-admin,
+  body[data-view-role="none"] #adminSummary,
+  body[data-view-role="none"] #analystSectionHead,
+  body[data-view-role="none"] #analystBody,
+  body[data-view-role="none"] #acctTop,
+  body[data-view-role="none"] #acctTriage,
+  body[data-view-role="none"] #analystReady,
+  body[data-view-role="none"] #periodWidget,
+  body[data-view-role="none"] #reportsPalette { display: none !important; }
   .role-hero-title { font-family: 'Source Sans 3', 'Segoe UI', sans-serif; font-weight: 800; font-size: 22px; letter-spacing: -.01em; color: var(--navy); line-height: 1.15; }
   .role-hero-sub { display: flex; align-items: center; gap: 8px; margin: 3px 0 0; font-size: 14px; line-height: 1.45; color: var(--text-muted); }
   .role-hero-item.sub-dismissed .role-hero-sub { display: none; }
@@ -2816,6 +2833,35 @@
         <button type="button" class="role-hero-dismiss" data-role="accountant" aria-label="Hide this description" title="Hide">&times;</button>
       </p>
     </div>
+    <!-- UI-174. A token carrying NEITHER perms.dm nor perms.ac used to land on
+         the Accountant view, because _entitledRole()'s else-branch called it
+         one. There was no no-grant state at all, so the user saw a console
+         they had not been granted and every write on it came back 403 from the
+         agent. This is that state. -->
+    <div class="role-hero-item" data-role="none">
+      <h1 class="role-hero-title">No access on this database</h1>
+      <p class="role-hero-sub">
+        <span class="role-hero-sub-text" id="noGrantDbName">You have no lane on the selected database.</span>
+      </p>
+    </div>
+  </section>
+
+  <!-- UI-174. Shown only under data-view-role="none". Names the database and
+       the two grants by the words an administrator sees on the VALC Users page,
+       so the request the user has to make is spelled out rather than implied. -->
+  <section class="no-grant-notice" id="noGrantNotice" aria-label="No access">
+    <p class="ngn-lead">
+      Your account can sign in and can see this database in the list, but it
+      holds neither the <strong>Reconciliation Analyst</strong> nor the
+      <strong>Accountant</strong> grant on
+      <strong id="noGrantDb">this database</strong>.
+    </p>
+    <p class="ngn-body">
+      Nothing here is broken and nothing is hidden from you by mistake &mdash;
+      the dashboards below belong to those two lanes, so there is nothing to
+      show. Ask your RapidReconciler administrator to add the grant you need on
+      this database, or switch to a database where you already hold one.
+    </p>
   </section>
 
   <!-- Analyst "Data health" readiness strip — quiet PLUMBING only (connectivity,
@@ -3803,19 +3849,41 @@
   // (Admin >= Analyst >= Accountant). The agent/VALC still enforce every data call
   // against the real JWT, so a tampered rrv8.viewRole only changes which lanes
   // render, never data access. v1 exposes the switcher to admins only.
-  function _roleRank(r) { return r === 'admin' ? 2 : r === 'analyst' ? 1 : 0; }
-  // VLC-41: 'accountant' is now a GRANT, not the else branch. This used to read
+  // 'none' outranks nothing, so _canSwitchRole() (> 0) is false for it and the
+  // localStorage clamp in _viewRole() (<= max) admits no stored role.
+  function _roleRank(r) { return r === 'admin' ? 2 : r === 'analyst' ? 1 : r === 'accountant' ? 0 : -1; }
+  // UI-174, 2026-09-03 — 'accountant' IS a grant now. The comment that stood
+  // here claimed exactly that and the line under it still read
   //   isAdmin() ? 'admin' : canAnalyst() ? 'analyst' : 'accountant'
-  // so a user with no grants at all was silently called an accountant, which is
-  // how the platform ended up with a role nothing could be gated to.
+  // which is the else-branch it said had been removed. A doc asserting a
+  // positive wiring that never landed is invisible to every grep for "not
+  // wired" or "stub" — see HK-7 — so the correction is recorded rather than
+  // quietly applied.
   //
-  // The ladder (admin >= analyst >= accountant) is kept because it is a VIEW lens
-  // and the server enforces every data call, but the bottom rung now requires
-  // perms.ac. A user granted NEITHER lane still lands on the accountant view —
-  // it is the read-only floor — and its write controls surface the server's own
-  // refusal rather than failing silently (see _acctWriteFailed).
-  function _entitledRole() { return isAdmin() ? 'admin' : canAnalyst() ? 'analyst' : 'accountant'; }   // highest the active DB grants
-  function _hasAccountantGrant() { return canAccountant(); }   // named for readers of the write paths
+  // What was actually wrong. canAccountant() had ZERO call sites (its only
+  // reference was _hasAccountantGrant, which had none of its own), so
+  // perms.ac was produced by AuthController and consumed by nothing in V8.
+  // A token with ac=true resolved to the Accountant view by accident, through
+  // the else-branch; a token with NEITHER lane resolved there too, could not
+  // switch away, and was shown a console it had never been granted. The server
+  // refused its writes correctly — that was never a privilege escalation — but
+  // V8 could not say "you have no lane on this database" because no such state
+  // existed.
+  //
+  // The ladder stays as an ORDERING for the view lens (admin >= analyst >=
+  // accountant); it has stopped being the source of entitlement. Every rung is
+  // now a grant it reads for itself, and the absence of all three is a state.
+  function _entitledRole() {
+    return isAdmin()        ? 'admin'
+         : canAnalyst()     ? 'analyst'
+         : canAccountant()  ? 'accountant'
+         : 'none';
+  }
+  // _hasAccountantGrant() was deleted here, not wired. It was a pure alias of
+  // canAccountant() with zero references anywhere in the repo, and its own
+  // comment ("named for readers of the write paths") described an intent that
+  // never acquired a caller. Two names for one predicate is how the two answers
+  // drift; the write paths read canAccountant() directly.
   function _viewRole() {
     var max = _roleRank(_entitledRole());
     try { var v = localStorage.getItem('rrv8.viewRole'); if (/^(admin|analyst|accountant)$/.test(v || '') && _roleRank(v) <= max) return v; } catch (_) {}
@@ -3825,7 +3893,7 @@
   function syncRoleMenu() {
     var cur = _viewRole();
     var roles = $('haRoles'); if (roles) roles.hidden = !_canSwitchRole();   // bottom-right cluster control
-    var lbl = $('haRoleLabel'); if (lbl) lbl.textContent = cur === 'admin' ? 'Administrator' : cur === 'analyst' ? 'Analyst' : 'Accountant';
+    var lbl = $('haRoleLabel'); if (lbl) lbl.textContent = cur === 'admin' ? 'Administrator' : cur === 'analyst' ? 'Analyst' : cur === 'accountant' ? 'Accountant' : 'No access';
     var hdr = $('userMenuRoles'); if (hdr) hdr.hidden = !_canSwitchRole();    // legacy copy in the (hidden) header
     // Scope to the role menus only — the DB picker menu also uses .umr-opt but
     // marks its own active option (see renderHaDb), so don't clobber it here.
@@ -3838,7 +3906,21 @@
       b.classList.toggle('is-active', r === cur);
     });
   }
-  function applyViewRole() { document.body.setAttribute('data-view-role', _viewRole()); syncRoleMenu(); renderSubNav(); }
+  function applyViewRole() { document.body.setAttribute('data-view-role', _viewRole()); syncRoleMenu(); renderSubNav(); paintNoGrantNotice(); }
+  // UI-174. Name the database the refusal is about. "You have no lane" without
+  // naming which database is unactionable on an account that holds a grant on
+  // one database and not another — which is the ordinary shape, since grants
+  // are per-database. Re-runs on every DB switch because applyViewRole does.
+  function paintNoGrantNotice() {
+    var d = activeDb() || {};
+    var name = d.n || '';
+    var el = $('noGrantDb');
+    if (el) el.textContent = name || 'this database';
+    var sub = $('noGrantDbName');
+    if (sub) sub.textContent = name
+      ? 'You have no lane on ' + name + '.'
+      : 'You have no lane on the selected database.';
+  }
   // Expand a collapsible section if it's currently collapsed (runs the real
   // collapse toggle so persisted state stays in sync).
   function _expandSection(headId, bodyId) {
