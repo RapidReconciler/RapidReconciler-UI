@@ -364,6 +364,33 @@ const DMAAIKnowledge = {
 
 /* ---- moved verbatim: Helpers (was 4285-4355) ---- */
 const Helpers = {
+  /* Last row INDEX of a worksheet, for use as a `for` loop bound.
+   *
+   * UI-175. Every template used to bound its parse loop with
+   * `ws.actualRowCount || ws.rowCount`. `actualRowCount` is a COUNT of
+   * non-empty rows, not the index of the last row, so on a sheet with N blank
+   * rows anywhere the loop stopped N rows short -- and what fell off was the
+   * END of the sheet, not the blanks. Measured 2026-09-02: a 25-row fixture
+   * with 3 blank separators parsed 17 of its 20 data rows, and the identical
+   * fixture with the blanks removed parsed all 20. Nothing reported a skip.
+   *
+   * Real exports carry blank rows between sections, so this was live. The
+   * production Transaction Detail export that exposed the Pattern 5.4 defect
+   * is 112 rows with roughly ten blanks, and its trailing DMAAI block sits
+   * exactly where the truncation bites.
+   *
+   * `Math.max` of the two rather than `rowCount` alone, deliberately: the
+   * result can only ever be >= what the old expression returned, so no
+   * currently-passing parse can start seeing fewer rows. Every caller's loop
+   * body already skips empty rows on its own guard (`if (!source) continue`
+   * and its equivalents, verified at all 12 sites), so the extra iterations
+   * are no-ops.
+   */
+  lastRow(ws) {
+    if (!ws) return 0;
+    return Math.max(ws.rowCount || 0, ws.actualRowCount || 0);
+  },
+
   num(v) {
     if (v == null || v === '') return 0;
     if (typeof v === 'number') return v;
