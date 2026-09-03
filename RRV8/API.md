@@ -245,6 +245,22 @@ backend contract rather than synthesized client-side (per the
      going forward, the accountant's is the GL's current state being wrong
      &mdash; and a user can hold **both, one, or neither**.
 
+     &#9888; **The V8 half landed two days after the server half, on
+     2026-09-03 (UI-174), and in between this paragraph was true of the
+     server and false of the browser.** `canAccountant()` existed with
+     **zero reachable call sites** &mdash; its only reference sat inside
+     `_hasAccountantGrant()`, which nothing invoked &mdash; so `perms.ac`
+     was minted, transported, and enforced by the agent while V8 still
+     chose the view by the else-branch this note warns about. A token
+     holding `ac` reached the Accountant view **by accident**; a token
+     holding **neither** lane reached it too and could not leave.
+     `_entitledRole()` now returns `'none'` for that case and the page
+     says so, naming the database. Regression-asserted by
+     `Tools/test-role-entitlement.js`, whose own first draft passed
+     against the defect &mdash; a call-site count cannot tell a live caller
+     from a dead one, so the check counts callers that are themselves
+     called.
+
      &#9888; **Both grants are FAIL-CLOSED as of the same change.** `perms.dm`
      used to fail open: a token minted with no `perms` block silently
      received the analyst grant, in `JwtAuthFilter` and in `canAnalyst()`
@@ -507,18 +523,28 @@ shared mapping.
       `DELETE`.
     - `DELETE /inventory/gl-offset-account?company=NNNNN&account=BU.OBJ[.SUB]`
       &rarr; `{ "deleted": 0|1 }`.
-- **Who can write, and why it is not "the accountant grant".** There **is no
-  accountant grant**. Read out of the source rather than assumed: `JwtAuthFilter`
-  parses exactly one key from the per-DB `perms` block, `perms.dm`, and
-  `UserRequest` exposes only `admin` / `adminSettings` / `adminImport` /
-  `adminPoReceipts` / `restartService` / `superUser` / `dmaais`. On the V8 side
-  `_entitledRole()` makes **accountant the FLOOR** — admin if the token says so,
-  else analyst if `perms.dm`, else accountant — so every authenticated user is
-  already at least an accountant. Gating this on `dmaais` the way the cardex
-  tolerance does would lock out the one role that owns the mapping. The gate is
-  therefore **authentication + company scope**, which is the strongest the token
-  actually supports. A narrower grant needs VALC to mint a claim first;
-  inventing `perms.ac` in the agent would fail open on every existing token.
+- **Who can write.** ⚠ **THIS BULLET SAID "there is no accountant grant" UNTIL
+  2026-09-03, AND THAT STOPPED BEING TRUE ON 2026-09-01** — while §2 of this same
+  file already documented `perms.ac` as shipped. A file that contradicts itself is
+  read one section at a time, so the older half kept winning. Corrected against
+  source, not memory: `JwtAuthFilter.java:252` parses `pm.get("ac")`,
+  `UserRequest.java:67` exposes `accountant`, and
+  `AcctDispositionController.java:132` gates on
+  `isAccountant() || isAdmin() || isSuperUser()` — one of five measured write
+  guards (VLC-41). The old text also predicted that "inventing `perms.ac` in the
+  agent would fail open on every existing token"; the claim is minted by VALC and
+  the guards are fail-closed, which is why that prediction did not come true.
+- **The gate here is still authentication + company scope**, and that is a
+  deliberate choice rather than a leftover: the GL offset account is the mapping
+  the accountant lane *owns*, so gating it on `dmaais` would lock out the role it
+  belongs to. Narrowing it to `perms.ac` is now possible and is a scope decision,
+  not a blocked one.
+- **V8 no longer makes accountant the floor** (UI-174, 2026-09-03).
+  `_entitledRole()` used to read `admin : analyst : accountant` with accountant as
+  the else-branch, so every authenticated user was at least an accountant. It now
+  reads each grant for itself and returns `'none'` when a token holds neither
+  lane, and that state renders a no-access notice naming the database instead of
+  someone else's console. Asserted by `Tools/test-role-entitlement.js`.
 - **`exists` is computed on READ, every time.** A stored offset that has since
   been retired still produces a **balanced** entry — it just posts to the wrong
   account, and nothing downstream can tell. So the agent re-resolves each stored
