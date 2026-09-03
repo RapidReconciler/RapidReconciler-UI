@@ -588,13 +588,26 @@ versed analyst, not a layperson. Keep that voice:
   end-to-end — don't pause to ask whether to push.** "Commit" means:
   git commit → `git push -u origin <branch>` → open PR via
   `gh pr create` (with the `Release-Note:` trailer in the body) →
-  `gh pr merge --squash` → poll for bot commits to settle → fast-
-  forward the owner's main clone (the next bullet). Only stop to ask
+  **`gh pr checks <num> --watch --fail-fast`** → `gh pr merge --squash`
+  → poll for bot commits to settle → fast-forward the owner's main
+  clone (the next bullet). Only stop to ask
   if you hit a genuine obstacle (merge conflict, CI failure,
   destructive-action prompt). "Should I push next?" is not a question
   to ask — the owner considers the full sequence one action. Use the
   full path `/c/Program Files/GitHub CLI/gh.exe` since `gh` isn't on
   the PATH the Bash tool sees.
+
+- **The CI gate is a STOP, and it has to be gated on the exit code,
+  not chained after it (HK-8, 2026-09-03).** Valc PR #224 merged while
+  its `scan` check was failing because the wait-loop and the merge were
+  joined with `;`. Measured the same day: `gh pr checks` returns **1**
+  on a failing PR (#224), **0** on a passing one (#223), and `8` while
+  checks are pending. Use `&&` or an explicit `if`, and **never pipe
+  the command** — `gh pr checks 224 … | head` reports `exit=0` on the
+  red PR because `$?` carries `head`'s status. A red check is one of
+  the genuine obstacles this flow already exempts: surface it, name
+  the failing check, and let the owner decide. Merging past it is
+  never Claude's call.
 
 - **Before running the commit flow, sweep the docs.** When the
   owner says "commit," check the working-tree diff and ask:
