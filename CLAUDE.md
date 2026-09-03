@@ -609,6 +609,14 @@ versed analyst, not a layperson. Keep that voice:
   the failing check, and let the owner decide. Merging past it is
   never Claude's call.
 
+- **⚠ Exit 1 means two different things and you have to read the
+  output.** A PR that triggers no workflow at all also returns 1, with
+  the one line `no checks reported on the '<branch>' branch` — measured
+  on UI PR #514, a CLAUDE.md-only change that matches no workflow's
+  paths. That case is fine to merge; say so in the report. Exit 1 with
+  a check table containing `fail` is the stop. Treating every 1 as a
+  stop would block every docs-only PR in this repo forever.
+
 - **Before running the commit flow, sweep the docs.** When the
   owner says "commit," check the working-tree diff and ask:
     1. Do any existing how-to or reference docs need updating to
