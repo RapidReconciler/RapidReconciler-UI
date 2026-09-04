@@ -69,13 +69,39 @@ jobs:
             echo "::error::no files matched; the gate would pass vacuously"
             exit 1
           fi
-          python Tools/parsecheck.py "${files[@]}" | tee parsecheck.out
+          # ⚠ THIS USED TO BE `python Tools/parsecheck.py ... | tee parsecheck.out`,
+          # AND THAT GATE COULD NOT FAIL ON A SYNTAX ERROR. (HK-11 sweep 5, 2026-09-04.)
+          #
+          # A pipeline's exit status is the LAST command's, and `tee` returns 0 almost
+          # always. GitHub's default shell is `bash -e {0}` with NO `-o pipefail`, so
+          # parsecheck's exit 1 was discarded, the engine check below still passed
+          # (V8 had run - it just reported failures), and the job went green.
+          #
+          # Measured on this box, with a control:
+          #     parsecheck badsyntax.js            -> EXIT 1, prints FAIL
+          #     parsecheck badsyntax.js | tee out  -> EXIT 0   <-- what the job saw
+          #     parsecheck a-good-file.js          -> EXIT 0   (control)
+          #
+          # This is the same lost-exit-code family as HK-8, whose rule in the workspace
+          # CLAUDE.md already says it plainly: never pipe the command whose status you
+          # are gating on - redirect to a file and read it back. Doing exactly that.
+          rc=0
+          python Tools/parsecheck.py "${files[@]}" > parsecheck.out 2>&1 || rc=$?
+          cat parsecheck.out
+
           # The gate is only meaningful if V8 actually ran. A fallback to esprima
           # would report unreal failures on every file using ?. -- fail the job on
-          # the engine, not just on the verdicts.
+          # the engine, not just on the verdicts. Checked FIRST, because a crashed
+          # parsecheck produces neither an engine line nor trustworthy verdicts.
           if ! grep -q '^engine: v8' parsecheck.out; then
             echo "::error::parsecheck did not run on V8; the result cannot be trusted"
             exit 1
+          fi
+
+          # And now the verdicts, which is the thing this job is named after.
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::parsecheck reported at least one file that does not parse (exit $rc). The FAIL lines are above."
+            exit "$rc"
           fi
 
       # Syntax is not behaviour. RRV8.rollForward's failure mode is a row counted as
