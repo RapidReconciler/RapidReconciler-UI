@@ -2220,6 +2220,27 @@
   }
   .ts-no-results-hint { margin-top: 6px; font-size: 12.5px; color: var(--text-muted, #8a93a6); }
 
+  /* The search could not run, which is NOT "no matches" (HK-11 sweep 3). Deliberately
+     styled apart from .ts-no-results -- a solid warm border rather than the neutral
+     dashed one -- because the whole point is that a customer can tell the two apart at
+     a glance. Left-aligned: it is an explanation to read, not a shrug. */
+  .ts-search-broken {
+    margin-top: 16px;
+    padding: 18px 20px;
+    background: #fff8f0;
+    border: 1px solid #f0c9a0;
+    border-left: 4px solid #d98324;
+    border-radius: 8px;
+    text-align: left;
+    color: var(--text-soft, #5a6479);
+    font-size: 14px;
+  }
+  .ts-search-broken p { margin: 0; }
+  .ts-search-broken .ts-no-results-hint { margin-top: 8px; }
+  .ts-search-broken code {
+    background: rgba(0,0,0,.05); padding: 1px 5px; border-radius: 4px; font-size: 12.5px;
+  }
+
   .ts-result-loading {
     padding: 16px 18px;
     background: var(--bg-soft, #f6f8fb);
@@ -3101,6 +3122,10 @@
   // The 6 common cards remain in the DOM only for the default panel display.
   let scenariosIndex = null;
   let scenariosLoading = null;
+  // True when the scenario index could not be loaded, as opposed to loading fine and
+  // matching nothing. Those are different answers to a customer and the page used to
+  // give the same one for both (HK-11 sweep 3).
+  let scenariosFailed = false;
   function categoryToClass(category) {
     const c = String(category || '').toLowerCase()
                 .replace(/&middot;|&amp;|&|·/g, ' ');
@@ -3115,10 +3140,22 @@
   function ensureScenariosIndex() {
     if (scenariosIndex !== null) return Promise.resolve(scenariosIndex);
     if (scenariosLoading)         return scenariosLoading;
+    // ⚠ BOTH FAILURE PATHS BELOW USED TO PRODUCE AN EMPTY LIST, AND AN EMPTY LIST IS
+    // INDISTINGUISHABLE FROM "NO MATCHES". (HK-11 sweep 3, 2026-09-04.)
+    // A 404 on the index, or any network fault, left every search a customer typed
+    // answering "No matches. Try simpler terms" — telling them their problem is not
+    // covered when in fact the search never ran. The only trace was a console.warn,
+    // and a customer does not open the console. scenariosFailed carries the real state
+    // to the renderer so the page can say which of the two happened.
+    scenariosFailed = false;
     scenariosLoading = fetch('../Scenarios/scenarios-index.json')
-      .then(r => r.ok ? r.json() : { scenarios: [] })
+      .then(r => {
+        if (!r.ok) { scenariosFailed = true; return { scenarios: [] }; }
+        return r.json();
+      })
       .then(data => {
         const list = (data && Array.isArray(data.scenarios)) ? data.scenarios : [];
+        if (!scenariosFailed && list.length === 0) scenariosFailed = true;
         scenariosIndex = list.map(s => ({
           title:    s.title || '',
           category: s.category || '',
@@ -3130,6 +3167,7 @@
       })
       .catch(e => {
         console.warn('Could not load scenarios index', e);
+        scenariosFailed = true;      // the console is not a sink a customer can read
         scenariosIndex = [];
         return scenariosIndex;
       });
@@ -3176,7 +3214,20 @@
 
     // Summary line
     const total = scenarioMatches.length;
-    if (total === 0 && scLoaded) {
+    if (total === 0 && scLoaded && scenariosFailed) {
+      // The search could not run. Saying "no matches" here would tell a customer their
+      // problem is not covered, which is a different and wrong answer (HK-11 sweep 3).
+      noResults.hidden = true;
+      resultsTree.innerHTML =
+        '<div class="ts-search-broken" role="alert">' +
+          '<p><strong>The scenario list could not be loaded, so this search did not run.</strong> ' +
+          'This is a problem on our side, not with what you typed.</p>' +
+          '<p class="ts-no-results-hint">Reload the page to try again. If it keeps happening, ' +
+          'browse the categories below, or email <code>rrsupport@getgsi.com</code> and describe ' +
+          'the symptom &mdash; nothing you searched for was recorded.</p>' +
+        '</div>';
+      resultsSummary.innerHTML = 'Search unavailable.';
+    } else if (total === 0 && scLoaded) {
       noResults.hidden = false;
       resultsSummary.innerHTML = 'No matches for &ldquo;' + escapeHtml(truncateTerm(term)) + '&rdquo;.';
     } else {
