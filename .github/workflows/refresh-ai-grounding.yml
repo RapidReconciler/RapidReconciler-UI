@@ -5,11 +5,34 @@ name: Refresh AI grounding
 # then commits the regenerated config.js back.
 #
 # Mirrors refresh-indices.yml (Python generator -> commit regenerated artifact
-# back with a pull-rebase-retry push loop). Two differences, both deliberate:
-#   * Runs on the self-hosted Windows dev-box runner, which has NO bash, so every
-#     step uses `shell: powershell` (see memory reference_dev_box_runner_no_bash).
-#   * The generator has no third-party dependencies (stdlib html.parser only), so
-#     there is no `pip install` step -- it just needs `python` on PATH.
+# back with a pull-rebase-retry push loop).
+#
+# ⚠ THIS WORKFLOW HAD NEVER RUN. NOT ONCE. (HK-11 sweep 5, 2026-09-04.)
+#
+# It asked for `runs-on: [self-hosted, windows]`, and this repository has ZERO
+# registered runners -- measured against the API, not assumed:
+#
+#     gh run list --workflow=refresh-ai-grounding.yml --limit 100
+#         -> 35 runs, conclusion "cancelled" on all 35, zero successes
+#     gh api repos/.../actions/runners -q .total_count
+#         -> 0
+#
+# So every push that touched a grounding source since this file was written
+# queued a job that could never be picked up. A scheduled job with a 100%
+# cancelled history is worse than no job: it is a permanently amber row that
+# teaches everyone to stop reading the Actions tab.
+#
+# IT NEVER NEEDED WINDOWS. The header used to say the runner had no bash, which
+# is why every step was `shell: powershell` -- that was a property of the runner
+# somebody expected to exist, not a requirement of the work. The generator is
+# stdlib-only Python (html, re, sys, html.parser, pathlib -- no pip install) and
+# it only reads and writes files in this repo. Verified 2026-09-04 by running
+# `python Tools/build-ai-grounding.py` on a stock interpreter: exit 0,
+# "AI grounding block already up to date -- no change".
+#
+# Now on ubuntu-latest with bash. If a future step genuinely needs the dev box
+# (a database, SqlPackage, a licensed tool), register a runner first and confirm
+# `gh api .../actions/runners` is non-zero BEFORE pointing a workflow at it.
 #
 # RRV8/config.js is deliberately NOT in the trigger paths: the bot's own commit
 # to it must not retrigger this workflow (same guard refresh-indices uses for its
@@ -44,46 +67,49 @@ concurrency:
 
 jobs:
   regen:
-    runs-on: [self-hosted, windows]
+    runs-on: ubuntu-latest
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
       - name: Regenerate AI grounding block
-        shell: powershell
         run: |
           python --version
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "python not found on the runner -- cannot regenerate grounding."
-            exit 1
-          }
           python Tools/build-ai-grounding.py
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Commit and push regenerated grounding
         # Pull-rebase-retry loop because a sibling bot workflow can land its own
         # commit on main between this workflow's checkout and push.
-        shell: powershell
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add RRV8/config.js
-          git diff --staged --quiet
-          if ($LASTEXITCODE -eq 0) {
-            Write-Host "No grounding changes -- nothing to commit."
+          # `git diff --staged --quiet` exits 1 when there ARE changes, which is the
+          # success case here. Under GitHub's `bash -e` that would abort the step, so
+          # the status is captured rather than allowed to propagate - the same
+          # lost-exit-code trap that HK-8 and the parsecheck `| tee` both came from,
+          # in its inverted form.
+          changed=0
+          git diff --staged --quiet || changed=1
+          if [ "$changed" -eq 0 ]; then
+            echo "No grounding changes -- nothing to commit."
             exit 0
-          }
+          fi
           git commit -m "chore: refresh AI grounding [skip ci]"
-          for ($attempt = 1; $attempt -le 5; $attempt++) {
-            git push
-            if ($LASTEXITCODE -eq 0) {
-              Write-Host "Push succeeded on attempt $attempt."
+          for attempt in 1 2 3 4 5; do
+            if git push; then
+              echo "Push succeeded on attempt $attempt."
               exit 0
-            }
-            Write-Host "Push rejected on attempt $attempt -- rebasing on origin/main and retrying."
+            fi
+            echo "Push rejected on attempt $attempt -- rebasing on origin/main and retrying."
             git pull --rebase origin main
-            Start-Sleep -Seconds 2
-          }
-          Write-Error "Push still failing after 5 attempts; giving up."
+            sleep 2
+          done
+          echo "::error::Push still failing after 5 attempts; giving up."
           exit 1
