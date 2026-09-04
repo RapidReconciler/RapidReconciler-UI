@@ -78,6 +78,59 @@
     document.getElementById('retry').classList.remove('hide');
   }
 
+  // ---------------------------------------------------------------------
+  //  Reason codes (VLC-53). VALC's SSO handlers redirect here with
+  //  ?reason=<code> when a sign-in is refused. Before this, every cause
+  //  rendered one sentence -- "Start again from your identity provider" --
+  //  and for most of them that advice is actively wrong: the IdP will
+  //  authenticate the person again, successfully, and drop them back here.
+  //  A locked-out employee and a correctly-refused stranger saw the same
+  //  screen, so neither learned anything and support got both calls.
+  //
+  //  ⚠ THE CODES ARE A CONTRACT with SsoRefusal.java in the Valc repo.
+  //  Renaming one here silently downgrades a specific message to the
+  //  generic fallback. Adding a code there without adding copy here does
+  //  the same. Change them together.
+  //
+  //  ⚠ SAY LESS THAN THE LOG DOES. The operator log carries the email, the
+  //  parsed domain, the client, the registration and the allowlist
+  //  contents. This page is public. Telling an unauthenticated visitor
+  //  WHICH domains are permitted hands them the allowlist, so the copy
+  //  names what to do and never what is configured.
+  //
+  //  Register: this is a customer-facing surface. "Contact your IT
+  //  administrator", never "contact support" -- their own IT owns the
+  //  domain list and the account state, and we are GSI.
+  // ---------------------------------------------------------------------
+  var REASONS = {
+    domain_not_permitted:
+      'Your email domain is not approved for single sign-on with RapidReconciler. '
+      + 'Ask your IT administrator to have it added, then try again.',
+    account_disabled:
+      'Your RapidReconciler account is disabled. Ask your IT administrator to re-enable it.',
+    sso_disabled:
+      'Single sign-on is not switched on for your organization yet. '
+      + 'Contact your IT administrator.',
+    no_email:
+      'Your identity provider did not send an email address, so there is nothing to sign '
+      + 'in as. Your IT administrator needs to check how RapidReconciler is configured '
+      + 'at their end.',
+    unknown_registration:
+      'This sign-in link does not match a configured organization. '
+      + 'Contact your IT administrator.',
+    bad_auth_type:
+      'Single sign-on returned something RapidReconciler could not read. This is a fault '
+      + 'on our side, not a problem with your account — report it to your IT '
+      + 'administrator so they can raise it with us.',
+    idp_error:
+      'Your identity provider did not complete the sign-in. Start again from your '
+      + 'identity provider, or use the sign-in page.',
+    server_error:
+      'RapidReconciler could not complete the sign-in. This is not a problem with your '
+      + 'account — wait a moment and try again, and tell your IT administrator if '
+      + 'it keeps happening.'
+  };
+
   // Parse the fragment (#token=…&email=…). Fragment, not query: keeps the
   // token out of server logs + the Referer header.
   var frag = (window.location.hash || '').replace(/^#/, '');
@@ -86,7 +139,16 @@
   var email = params.get('email') || '';
 
   if (!token) {
-    fail('No sign-in token was returned. Start again from your identity provider, or use the sign-in page.');
+    // The reason rides in the QUERY string, not the fragment: it is not
+    // secret, and the fragment is reserved for the token so nothing
+    // identifying ever reaches history, access logs or Referer. An arrival
+    // with no reason at all keeps the original sentence -- that is what a
+    // person who opened this URL by hand or from a stale bookmark sees, and
+    // it is the right answer for them.
+    var reason = new URLSearchParams(window.location.search || '').get('reason');
+    fail(REASONS[reason]
+      || 'No sign-in token was returned. Start again from your identity provider, '
+         + 'or use the sign-in page.');
     return;
   }
 
