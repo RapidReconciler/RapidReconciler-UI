@@ -2008,10 +2008,17 @@ ${adminSection}
   // rendered the SAME copy for every status code. The copy was written when the
   // only failure anyone had seen was a missing endpoint, so it pointed at the
   // endpoint contract in RRV8/API.md. That sends an analyst whose session simply
-  // is not authenticated off to read an API doc: on this agent a 403 has exactly
-  // one cause — no Authorization header reached it, so Spring answered the
-  // request as anonymous. The remedy has to match the status, and it has to
-  // match it in ONE place — see docs/plans/shared-state-registry.md.
+  // is not authenticated off to read an API doc. The remedy has to match the
+  // status, and it has to match it in ONE place — see
+  // docs/plans/shared-state-registry.md.
+  //
+  // ⚠ CORRECTION 2026-09-04 (HK-11 sweep 3). This comment used to assert that "on
+  // this agent a 403 has exactly one cause — no Authorization header reached it".
+  // That is FALSE and it is what justified the single-cause 403 copy below.
+  // Measured: 35 `HttpStatus.FORBIDDEN` sites across the agent's controllers, most
+  // of them permission denials rather than missing credentials. The claim was
+  // true of the ONE path whoever wrote it had exercised. Do not restore the
+  // single-cause wording without re-counting those sites first.
   //
   // The status arrives as a REAL property. Every page's rrFetch / valcFetch
   // stamps `err.status` with the HTTP code on a non-ok response. Nothing here
@@ -2078,12 +2085,34 @@ ${adminSection}
       return 'Your sign-in for this database was rejected as invalid or expired. ' +
              'Sign out and sign in again, then retry. (HTTP 401)';
     }
+    // ⚠ THIS USED TO NAME ONE CAUSE, AND IT IS THE WRONG ONE FOR ALMOST EVERY 403.
+    // (HK-11 sweep 3, 2026-09-04.) It said "This page sent no sign-in credentials",
+    // which is true for exactly one of the ways the data service returns 403 -
+    // measured, there are 35 `HttpStatus.FORBIDDEN` sites across the agent's
+    // controllers, and most are PERMISSION denials, not missing credentials. A
+    // customer refused because their account lacks a feature flag was being told to
+    // check their web address and clear browser storage.
+    //
+    // ⚠ AND THIS PAGE CANNOT TELL THEM APART, BY CONFIGURATION. The agent pins
+    // server.error.include-message: never (application.yml:198), so the author-written
+    // reason on every ResponseStatusException is stripped before it leaves. Measured
+    // against the live agent: a 403 body is
+    //     {"timestamp":"...","status":403,"error":"Forbidden","path":"/..."}
+    // with no message field at all. So the honest message names BOTH branches and
+    // gives an action for each, rather than asserting the one it happens to know.
+    //
+    // The real fix is agent-side and larger: carry a machine-readable refusal CODE in
+    // the body the way VLC-53's SsoRefusal does, so this function can map it to copy.
+    // That is a change across 35 sites and a response-shape decision; recorded in
+    // HK-11 rather than half-done here.
     if (st === 403) {
-      return 'This page sent no sign-in credentials with the request, so the data ' +
-             'service refused it. Check you are using the same web address you ' +
-             'signed in on, then sign out and sign in again. If it repeats, ask ' +
-             'your IT department to check whether browser storage is blocked for ' +
-             'this site. (HTTP 403)';
+      return 'The data service refused this request, and this page cannot tell you ' +
+             'which of two reasons applies. Either no sign-in credentials reached it, ' +
+             'or your account is not permitted to use this feature on this database. ' +
+             'First, check you are using the same web address you signed in on, then ' +
+             'sign out and sign in again. If it still fails, it is most likely a ' +
+             'permission — ask your RapidReconciler administrator to check your ' +
+             'access for this database. (HTTP 403)';
     }
     // 404 — the ONLY place the endpoint contract is the right pointer.
     if (st === 404) {
