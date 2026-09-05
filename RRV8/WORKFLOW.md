@@ -58,11 +58,16 @@ RRV8/
 ├── WORKFLOW.md                            you are here
 ├── API.md                                 current vs. proposed API shape
 │
-├── inventory-reconciliation.html          page (page-per-page pattern)
-├── data/
-│   └── reconciliation.json                ONE file covers all 13 periods
-│                                          (per-account rows; period switch
-│                                           is in-memory, no re-fetch)
+├── home.html                              accountant/analyst working palette
+│                                          (GL / Perpetual / Reconciliation /
+│                                           Reports sub-view tabs)
+├── inventory-transactions.html            page (page-per-page pattern)
+│                                          [was: inventory-reconciliation.html,
+│                                           retired 2026-07-02, PR #307]
+├── data/                                  GITIGNORED (.gitignore:35
+│   └── reconciliation.json                RRV8/data/*.json). Present on the
+│                                          dev box only; read solely behind
+│                                          IS_DEMO. Not part of a clone.
 │
 ├── sprocs/                                14 .sql files (sp_helptext dumps)
 │   ├── usp6getrinvaccountsummary.sql      master entry for the rec page
@@ -86,8 +91,8 @@ RRV8/
 
 | Thing | Convention | Example |
 |---|---|---|
-| Page file | `<area>-<page>.html` | `inventory-reconciliation.html` |
-| Data snapshot | `<area>.json` (one file per page; every period inside) | `reconciliation.json` |
+| Page file | `<area>-<page>.html` | `inventory-transactions.html` (the old example here, `inventory-reconciliation.html`, was retired 2026-07-02) |
+| Data snapshot | `<area>.json` (one file per page; every period inside) | `reconciliation.json` &mdash; &#9888; gitignored, dev-box only; not a pattern to copy for new work |
 | Sproc DDL | `<sproc-name>.sql` (verbatim from DB) | `usp6getrinvaccountsummary.sql` |
 | View DDL | `<view-name>.sql` | `v6ui_raccountsummary.sql` |
 | Script | `<verb>-<noun>.ps1` | `capture-periods.ps1` |
@@ -96,11 +101,32 @@ RRV8/
 
 ## Current state checkpoint
 
+&#9888; **CORRECTED 2026-09-05 (HK-7). THIS SECTION HAD BEEN STALE SINCE
+2026-07-02 AND DESCRIBED A PAGE THAT NO LONGER EXISTS.** `RRV8/inventory-
+reconciliation.html` was **retired in PR #307 (`aaa0af9`)**, whose own message
+says *"Retired inventory-reconciliation.html; nav repointed to home / account
+roll-forward"*. Reconciliation is now a **sub-view tab inside `home.html`**,
+alongside General Ledger, Perpetual and Reports. Everything below that
+described that page as current has been corrected in place, with the false
+claim kept struck through rather than deleted so the next reader can see it was
+checked. Three symbols this section presented as the mechanism &mdash;
+`computeFilteredView()`, `computeFilteredHistory()` and `VARIANCE_SIGN`
+&mdash; occur in **no `.html` or `.js` in this repo**, only in this file and
+`API.md`.
+
+&#9888; **The rest of this section past the filter bullets is UNVERIFIED as of
+2026-09-05.** Only the claims naming a page, a data file or a symbol were
+re-measured. Do not read the remainder as checked.
+
 As of the latest commit, V8 has:
 
-- **Five pages**: `inventory-reconciliation.html`,
+- **22 tracked pages under `RRV8/`** (`git ls-files 'RRV8/*.html' | wc -l`,
+  measured 2026-09-05). The inventory/accounting surfaces among them are
   `inventory-transactions.html`, `accounting-dmaais.html`,
-  `inventory-asof.html`, and `inventory-cardex-variance.html`.
+  `inventory-asof.html` and `inventory-cardex-variance.html`, with the
+  accountant/analyst working palette in `home.html`.
+  ~~**Five pages**: `inventory-reconciliation.html`, …~~ &mdash; that page
+  was deleted 2026-07-02; the other four still ship.
   The DMAAI page is the analyzer worklist surface (FIX FIRST +
   ASK CUSTOMER + module grids) wired to a Python pattern detector
   (`RRV8/scripts/derive-dmaai-analysis.py`) that reads integrity
@@ -115,16 +141,23 @@ As of the latest commit, V8 has:
   (783 rows, both companies). References: `HANDOFF.md` &sect; *As Of
   page &mdash; design notes* and *Cardex Variance page &mdash;
   design notes*.
-- **Reconciliation page**: the modernized
-  Inventory > Reconciliation. Fully styled. Loads
-  `data/reconciliation.json` once on page load; every period
-  / filter combination is computed in-memory from that.
-- **Single all-periods snapshot**: `data/reconciliation.json` &mdash;
-  195 row-level records covering 13 periods, 2 companies, 5 inventory
-  accounts, 12 subsidiaries, 2 business units. Fetched once on page
-  load; period switching is in-memory (no re-fetch). Captured via
-  `usp6getrinvaccountsummary` reading the `v6ui_raccountsummary`
-  view against `RapidReconciler_Dev`.
+- **Reconciliation** is a sub-view tab in `home.html`, not a page of its own.
+  ~~the modernized Inventory > Reconciliation … Loads
+  `data/reconciliation.json` once on page load~~ &mdash; the page it described
+  was retired 2026-07-02.
+- &#9888; **`data/reconciliation.json` IS NOT A COMMITTED SNAPSHOT AND HAS NOT
+  BEEN ONE.** `.gitignore:35` carries `RRV8/data/*.json`, `git ls-files`
+  returns nothing for it, and the copy on this box is 438,924 bytes dated
+  **2026-07-05**. Its only two readers are `inventory-asof.html:5007` and
+  `inventory-transactions.html:8697`, and **both sit behind `if (IS_DEMO)`**
+  &mdash; a mode the V8 tenet below (*Production-only until Inventory is
+  complete*) says does not exist. Both call sites' comments call the file
+  *"the committed reconciliation.json snapshot"*. It is not committed, so on
+  a fresh clone or the deployed site that fetch 404s. Whether those branches
+  should be deleted outright is a code decision and is **not** settled here.
+  ~~**Single all-periods snapshot** … Captured via `usp6getrinvaccountsummary`
+  reading the `v6ui_raccountsummary` view~~ &mdash; `usp6getrinvaccountsummary`
+  appears in no RRV8 source.
 - **Period dropdown wired**: clicking shows all 13 known close dates,
   every one selectable (since the snapshot covers them all). The
   pill lives in the **page header** (next to the action buttons),
@@ -148,13 +181,17 @@ As of the latest commit, V8 has:
   - Each row carries its dimension tags plus the full variance
     breakdown (carryForward, glBatches, endOfDay, transactions,
     cardex, manualJournalEntries, unreconciledVariance).
-  - `computeFilteredView()` is the single seam: filter rows by
-    every active selection, then sum. Hero, GL/Perpetual side
-    stats, variance steps, total, and page subtitle all read from
-    its return value.
-  - The bar-chart history is filtered TOO &mdash; `computeFilteredHistory()`
-    groups the same row-set by period and emits OOB per period.
-    Narrow to one company and the 13-period trend recomputes.
+  - &#9888; ~~`computeFilteredView()` is the single seam …~~ and
+    ~~`computeFilteredHistory()` groups the same row-set by period …~~
+    **Neither symbol exists.** `git grep` over `RRV8/*.html` and `RRV8/*.js`
+    returns zero occurrences of either; they appear only in this file and in
+    `API.md`. They belonged to the retired reconciliation page. The nearest
+    live equivalents are `filteredRows()` in both `inventory-asof.html:2485`
+    and `inventory-transactions.html:4536`, and `renderActiveFilterBar()` at
+    `inventory-transactions.html:6186` &mdash; but **no live function plays
+    the "single seam" role this bullet described**, so this is a gap in the
+    documentation, not a rename to patch. Rewrite it against the real pages
+    before relying on it.
 - **Active-filter banner**: an orange callout under the page header
   appears whenever any group is narrowed below "all", showing which
   groups are reduced (e.g. *"Filtered: 1 of 2 currencies"*) plus a
@@ -258,13 +295,18 @@ As of the latest commit, V8 has:
 - **Transactions sign convention**: Transactions is stored in
   `accountRows[].variance.transactions` with the magnitude of the
   F0911-to-F4111 effect, but in the variance math it SUBTRACTS
-  from out-of-balance. `computeFilteredView` applies a sign
-  multiplier via `VARIANCE_SIGN = { transactions: -1 }` at the
-  aggregation step so every downstream consumer (variance table,
-  Carry Forward preview, audit report, JE export) gets the
-  properly-signed value and the sum of components equals the
-  total. The per-row data is unchanged; the convention is declared
-  in one place.
+  from out-of-balance.
+  &#9888; **CORRECTED 2026-09-05: the mechanism named here is gone.**
+  ~~`computeFilteredView` applies a sign multiplier via
+  `VARIANCE_SIGN = { transactions: -1 }` at the aggregation step~~ &mdash;
+  **`VARIANCE_SIGN` occurs in no `.html` or `.js` in this repo**, only in this
+  file and `API.md`. It went with the retired reconciliation page on
+  2026-07-02. The *convention* is still real product behaviour (see memory
+  `reference_transactions_sign_convention`: natural sign in storage, flipped
+  in exports) &mdash; what is unknown is **where the flip is applied now, and
+  whether it is applied in one place at all.** That was deliberately not
+  guessed: naming a plausible-wrong location is the exact failure this
+  correction exists to undo. Measure it before the next reader depends on it.
 - **Carry Forward preview**: clicking the Preview icon on Carry
   Forward opens the modal in a special mode &mdash; instead of a
   table it shows a compact "VARIANCE CALCULATION" card
@@ -470,11 +512,16 @@ Leave that window open (closing it stops the server; Ctrl-C stops
 it cleanly). Then in a browser:
 
 ```
-http://localhost:8765/RRV8/inventory-reconciliation.html
+http://localhost:8765/RRV8/home.html
 ```
 
-The page reads `data/reconciliation.json` via `fetch` on load and
-keeps the whole dataset in memory. Hard-refresh after editing the
+&#9888; **CORRECTED 2026-09-05: this line pointed at
+`/RRV8/inventory-reconciliation.html`, which has 404'd since 2026-07-02.**
+`home.html` is the working palette and is tracked.
+
+~~The page reads `data/reconciliation.json` via `fetch` on load and keeps the
+whole dataset in memory.~~ &mdash; that file is gitignored and its only
+readers sit behind `IS_DEMO`. Hard-refresh after editing the
 page or the JSON. Period switching is in-memory (no re-fetch);
 the top-bar Refresh button re-fetches the snapshot.
 
@@ -482,8 +529,14 @@ the top-bar Refresh button re-fetches the snapshot.
 
 ## How to add a new page
 
-The page-per-page pattern is &mdash; copy `inventory-reconciliation.html`
+The page-per-page pattern is &mdash; copy `inventory-transactions.html`
 to a new filename, then:
+
+&#9888; **CORRECTED 2026-09-05: this instruction said to copy
+`inventory-reconciliation.html`, which was deleted 2026-07-02 (PR #307,
+`aaa0af9`).** Anyone following it since then had nothing to copy. Pick the
+live page closest to what you are building rather than treating
+`inventory-transactions.html` as canonical.
 
 0. **Page header — V8 standard (don't deviate).** The header layout
    is fixed across all main pages:

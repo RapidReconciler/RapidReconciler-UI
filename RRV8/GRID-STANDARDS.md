@@ -326,7 +326,7 @@ per-visit &ldquo;find,&rdquo; not a saved preference.
 | `inventory-asof.html` (Details grid) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Adds row-expand for lot detail (item rollup is the default view) |
 | `inventory-cardex-variance.html` (Details grid) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Default sort: adjAmount desc (biggest hits first). Reason chip on Amount/Quantity. Hero pairs Recon-authoritative cardex impact with the per-item grid sum. |
 | `inventory-account-rollforward.html` (Roll forward grid) | ✓ | ✓ | &mdash; | ✓ | ✓ | &mdash; | Read-only analyst grid. Header cluster (search + Excel + count), click-to-sort, sticky header, search. Drag-reorder / column chooser / per-column filter intentionally omitted — every roll-forward column is signal, so hide/reorder add little here. |
-| `inventory-reconciliation.html` (variance Preview tables) | &mdash; | &mdash; | &mdash; | &mdash; | &mdash; | &mdash; | Different surface (modal); revisit when modal grids get standardized |
+| ~~`inventory-reconciliation.html`~~ (variance Preview tables) | &mdash; | &mdash; | &mdash; | &mdash; | &mdash; | &mdash; | **RETIRED 2026-07-02, PR #307 (`aaa0af9`).** The file no longer exists; Reconciliation is a `home.html` sub-view. Row kept so the modal-grid exemption is not silently lost &mdash; re-point it at the live surface when modal grids get standardized (HK-7, 2026-09-05) |
 
 ## Conventions we&rsquo;ve NOT yet decided
 
