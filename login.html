@@ -280,6 +280,15 @@
   .is-hidden { display: none !important; }
   .form-link-row { margin-top: 14px; text-align: center; font-size: 12.5px; }
   .form-link-row a { color: var(--blue); font-weight: 600; }
+  /* The password alternative under the SSO button. It used to be a
+     .form-link-row like "Forgot your password?" -- 12.5px, centered, the
+     styling this page uses for afterthoughts. It is not an afterthought: when
+     a customer's IdP is unreachable it is the only way into the product, and a
+     user who cannot find it has no way in at all. Given its own rule + weight
+     so it reads as the second of two choices rather than fine print. */
+  .sso-alt { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--rule);
+             text-align: center; font-size: 13px; }
+  .sso-alt a { color: var(--blue); font-weight: 600; }
   /* Forgot-password sits on its own right-aligned row directly under the
      password field (mirrors the sectioned-template placement). */
   .form-options { display: flex; justify-content: flex-end; margin: -2px 0 18px; }
@@ -743,9 +752,15 @@
       </div>
       <button type="button" class="submit-btn" id="js-sso-btn" style="display:flex;align-items:center;justify-content:center;gap:8px">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22c-4.5-1.5-8-5.5-8-11V5l8-3 8 3v6c0 5.5-3.5 9.5-8 11z"/></svg>
-        Continue with single sign-on
+        <!-- Replaced at runtime with the method this domain actually uses
+             ("Continue with Microsoft Entra ID"). This literal is the pre-
+             discovery placeholder and the fallback for a VALC too old to send
+             protocolLabel. -->
+        <span id="js-sso-btn-label">Continue with single sign-on</span>
       </button>
-      <p class="form-link-row"><a href="#" id="js-sso-use-pw">Use a password instead</a></p>
+      <p class="sso-alt">
+        <a href="#" id="js-sso-use-pw">Use a RapidReconciler password instead</a>
+      </p>
     </div>
 
     <button type="submit" class="submit-btn" id="js-submit">Sign in</button>
@@ -1344,8 +1359,20 @@
   const ssoPanel  = document.getElementById('js-sso-panel');
   const ssoText   = document.getElementById('js-sso-text');
   const ssoBtn    = document.getElementById('js-sso-btn');
-  let _sso = null;        // last discovery result { sso, startPath }
+  const ssoBtnLbl = document.getElementById('js-sso-btn-label');
+  // { sso, registrationId, protocol, protocolLabel, startPath }
+  let _sso = null;        // last discovery result
   let _forcePw = false;   // user chose "use a password instead"
+  let _forcePwDomain = null;  // the domain that choice was made for
+
+  // What this domain's method is CALLED. The server sends it (SsoProtocol.label)
+  // so the operator console and this page cannot drift; the fallback covers a
+  // VALC older than UI-177, which sends protocol without protocolLabel.
+  function ssoMethodName() {
+    if (_sso && _sso.protocolLabel) return _sso.protocolLabel;
+    if (_sso && _sso.protocol === 'ENTRA') return 'Microsoft Entra ID';
+    return 'single sign-on';
+  }
 
   function applySsoMode() {
     const on = !!(_sso && _sso.sso && !_forcePw);
@@ -1353,6 +1380,15 @@
     submitEl.classList.toggle('is-hidden', on);
     forgotRow.classList.toggle('is-hidden', on);
     ssoPanel.classList.toggle('is-hidden', !on);
+    // ⚠ NAME THE METHOD (UI-177). This button said "Continue with single
+    // sign-on" for every configured customer, whatever they federate with.
+    // The owner's requirement is a CHOICE between Entra, SSO and a
+    // RapidReconciler password, and a choice the user cannot read is not one:
+    // an Entra customer's staff recognise "Microsoft", not "single sign-on",
+    // and the generic wording is what makes a corporate login page look like
+    // a phishing page to the person being asked to trust it.
+    const method = ssoMethodName();
+    if (ssoBtnLbl) ssoBtnLbl.textContent = 'Continue with ' + method;
     headSub.textContent = on ? 'Single sign-on' : 'Sign in';
   }
   function startSso() {
@@ -1365,25 +1401,53 @@
     // putting the typed address in the static host's access log.
     if (authUnset(null)) { _sso = null; applySsoMode(); return; }
     const email = emailEl.value.trim();
-    const at = email.indexOf('@');
-    if (at < 1 || at === email.length - 1) { _sso = null; applySsoMode(); return; }
+    // ⚠ typedDomain() SPLITS ON THE LAST '@', AND THIS USED TO SPLIT ON THE
+    // FIRST. That is the exact divergence VLC-52 fixed on the server, where
+    // two copies of "what is this email's domain" disagreed on a quoted local
+    // part ("odd@name"@acme.com is a legal address) and a customer's SSO
+    // silently stopped being offered. The server's answer -- lastIndexOf, in
+    // EmailDomainAllowlist.domainPart -- is the one that decides routing, so
+    // this page agrees with it rather than keeping a third opinion.
+    const domain = typedDomain();
+    if (domain === null) { _sso = null; applySsoMode(); return; }
     try {
       const res = await fetch(AUTH_BASE + '/api/v1/auth/sso-discovery?email=' + encodeURIComponent(email),
         { method: 'GET', headers: { 'Accept': 'application/json' } });
       _sso = res.ok ? await res.json().catch(() => null) : null;
     } catch (_) { _sso = null; }   // older VALC / unreachable -> password path
-    if (_sso && _sso.sso) ssoText.textContent = email.slice(at + 1).toLowerCase() + ' uses single sign-on.';
+    if (_sso && _sso.sso) {
+      ssoText.textContent = domain + ' signs in with ' + ssoMethodName() + '.';
+    }
     applySsoMode();
+  }
+  /** Domain half of whatever is currently typed, lowercased, or null. */
+  function typedDomain() {
+    const email = emailEl.value.trim();
+    const at = email.lastIndexOf('@');
+    return (at < 1 || at === email.length - 1) ? null : email.slice(at + 1).toLowerCase();
   }
   let _discoverTimer = null;
   emailEl.addEventListener('input', function () {
-    _forcePw = false;
+    // ⚠ THIS USED TO BE A BARE `_forcePw = false` ON EVERY KEYSTROKE, and that
+    // silently revoked a choice the user had just made. Click "Use a
+    // RapidReconciler password instead", start typing the password, notice a
+    // typo in the email, fix one character -- and the password field you were
+    // filling in vanishes mid-correction, because an `input` event fired. The
+    // override is scoped to the DOMAIN it was chosen for instead: editing the
+    // local part keeps it, moving to a different company drops it, which is
+    // the only case where re-discovery is actually warranted.
+    const d = typedDomain();
+    if (d !== _forcePwDomain) { _forcePw = false; _forcePwDomain = null; }
     clearTimeout(_discoverTimer);
     _discoverTimer = setTimeout(discoverSso, 350);
   });
   ssoBtn.addEventListener('click', startSso);
   document.getElementById('js-sso-use-pw').addEventListener('click', function (e) {
-    e.preventDefault(); _forcePw = true; applySsoMode(); setTimeout(function () { pwEl.focus(); }, 0);
+    e.preventDefault();
+    _forcePw = true;
+    _forcePwDomain = typedDomain();   // the choice belongs to THIS domain
+    applySsoMode();
+    setTimeout(function () { pwEl.focus(); }, 0);
   });
   if (emailEl.value.trim().indexOf('@') > 0) discoverSso();   // returning user (prefilled)
 
