@@ -4799,11 +4799,15 @@
     // ---------- Hero KPI strip ----------
     // Sum r.Variance from /inventory/transactions rows directly &mdash;
     // the agent's per-doc variance already carries the sign the
-    // analyst expects (negative July = negative headline). The bar
-    // chart aggregates a different source (v6ui_raccountsummary,
-    // which stores the Transactions component pre-flipped for OOB
-    // contribution) and applies its own -1 in mountPeriodBarsForTx;
-    // do NOT flip a second time here.
+    // analyst expects (negative July = negative headline).
+    //
+    // The bar chart aggregates a DIFFERENT source (v6ui_raccountsummary
+    // via mountPeriodBarsForTx) but the SAME convention: both resolve to
+    // GL - CX. Neither flips. This comment used to say the bar source was
+    // "pre-flipped for OOB contribution" and that the bars applied their
+    // own -1 — both were false and made the bars the negation of this
+    // KPI. Corrected under UI-178, 2026-09-05; the evidence is in the
+    // comment above the aggregation in mountPeriodBarsForTx.
     const kpiEl     = document.getElementById('kpi-total-variance');
     const kpiHintEl = document.getElementById('kpi-total-variance-hint');
     if (kpiEl) {
@@ -8737,15 +8741,36 @@
     try {
       const rows = await loadCrossPeriodReconRows();
       // Aggregate per-period TRANSACTIONS-COMPONENT variance from
-      // v6ui_raccountsummary. That view stores the Transactions
-      // component PRE-FLIPPED for OOB contribution (transactionvariance
-      // * -1), so we apply -1 here to recover the analyst-facing sign
-      // that matches Reconciliation's Transactions row + the KPI /
-      // breakdown stat below (which read /inventory/transactions
-      // r.Variance directly, no flip — different source, opposite
-      // stored sign convention). Summing outOfBalance would include
-      // As Of / Receipts / Cardex components and the headline would
-      // not match the bar.
+      // v6ui_raccountsummary. Summing outOfBalance instead would include
+      // As Of / Receipts / Cardex components and the headline would not
+      // match the bar.
+      //
+      // ⚠ NO FLIP HERE. UI-178, fixed 2026-09-05. This block used to
+      // apply `-1 * t` on the claim that v6ui_raccountsummary stores the
+      // component "PRE-FLIPPED for OOB contribution (transactionvariance
+      // * -1) ... different source, opposite stored sign convention."
+      // Every part of that was false, and it made the bars the exact
+      // negation of the KPI directly above them.
+      //
+      // Measured end to end 2026-09-05, against the DB repo (the shipped
+      // schema project) rather than RRV8/views, whose mirrors drift:
+      //   * usp6_009_account_summary.sql:314 stores transactionvariance
+      //     as `LedgerAmount - CardexAmount` — GL-CX. Its own comment:
+      //     "same perspective as OOB; was CX - GL".
+      //   * v6ui_raccountsummary passes it through unnegated.
+      //   * The KPI at ~:4800 reads v8ui_reconcilingitems.Variance, which
+      //     wraps v6ui_reconcilingitems -> RCardexLedgerCompare2.Variance.
+      // So the two are NOT opposite conventions. Proven rather than
+      // argued: on 12 company/period pairs across RapidReconciler_Demo1
+      // and _Demo3, sum(v6ui_raccountsummary.Variance) and
+      // sum(v8ui_reconcilingitems.Variance) agree in SIGN and magnitude
+      // to within rounding (+151,126.61 vs +151,117.09; -68,772.22 vs
+      // -68,706.37; -4,456,137.71 vs -4,456,201.79). Both signs are
+      // represented, so this is not an artifact of one direction.
+      //
+      // Display-raw is the rule for this field. If a future reader
+      // believes a flip is needed, re-run that two-column comparison
+      // first — the previous comment was confident and wrong for months.
       const byPeriod = new Map();
       rows.forEach(r => {
         // Prod rows are already company-scoped server-side (above); this
@@ -8764,7 +8789,7 @@
           r.Variance ||
           0
         );
-        byPeriod.set(p, (byPeriod.get(p) || 0) + (-1 * t));
+        byPeriod.set(p, (byPeriod.get(p) || 0) + t);
       });
       history = Array.from(byPeriod.entries())
         .sort((a, b) => a[0].localeCompare(b[0]))
