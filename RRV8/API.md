@@ -314,7 +314,11 @@ Both are additive: the Home page is fully functional without them.
    attention" and routes the user to Reconciliation (`reconUrl()`,
    navigate only) &mdash; no auto-download, no heavy run on Home. (The
    `?report=validation` auto-download hook in `inventory-reconciliation.html`
-   still exists but is no longer triggered from Home.)
+   ~~still exists but is no longer triggered from Home~~ &mdash; **CORRECTED
+   2026-09-05: it does not still exist.** That page was retired 2026-07-02
+   (PR #307, `aaa0af9`) and `report=validation` now occurs in **no `.html` or
+   `.js` in this repo**. Whether the hook was reimplemented under another name
+   was not measured.)
 
    **To make the analysis match the live data**, it needs the agent's
    **native Roll Forward export**. Today `generateValidationReport()`
@@ -584,8 +588,16 @@ self-serve restart for the recurring production symptom where the
 Services jar hangs building an Excel export under memory pressure /
 heavy concurrency (restarting the Services jar clears it):
 
-- An **export hang advisory** (`inventory-reconciliation.html`,
-  `withExportWatchdog` around the audit-report export) surfaces a
+- &#9888; **CORRECTED 2026-09-05: THIS PROTECTION IS NOT IN THE CODE.** Both
+  `inventory-reconciliation.html` (retired 2026-07-02, PR #307 `aaa0af9`) and
+  the symbol `withExportWatchdog` return **zero hits** across every `.html`
+  and `.js` in this repo. This is a user-facing safeguard against a known
+  Services-jar hang, so its absence is worth someone confirming deliberately
+  rather than inheriting: either it was reimplemented under a name this pass
+  did not look for, or it went out with the page. **Not measured either way.**
+  The description below is kept as the specification of what it did.
+  ~~An **export hang advisory** (`inventory-reconciliation.html`,
+  `withExportWatchdog` around the audit-report export)~~ surfaces a
   finance-friendly banner if an export hasn't returned within ~40s, with
   a **Restart the data service** button gated on the `rs` (Restart
   Service) JWT permission &mdash; the same perm the admin user-menu uses.
@@ -1149,11 +1161,24 @@ to make the components sum cleanly to the unreconciled total:
 const VARIANCE_SIGN = { transactions: -1 };  // others default to +1
 ```
 
-This is declared in [inventory-reconciliation.html](inventory-reconciliation.html)
-inside `computeFilteredView`. The per-row data in `accountRows[]` is
-unchanged; the convention is declared in one place so downstream
-consumers (variance table, Carry Forward preview, audit report, JE
-export) all get properly-signed values.
+&#9888; **CORRECTED 2026-09-05 (HK-7). Both the file and the symbol below are
+gone, and the link was dead.** ~~This is declared in
+`inventory-reconciliation.html` inside `computeFilteredView`.~~ *(The original
+wrote that filename as a markdown link to itself. It is rendered as plain code
+here on purpose: a struck-through link is still a clickable link, so leaving it
+intact would have preserved the 404 this correction exists to remove.)* That
+page was **retired 2026-07-02 in PR #307
+(`aaa0af9`)** &mdash; Reconciliation is now a sub-view tab in `home.html`
+&mdash; and neither `computeFilteredView` nor `VARIANCE_SIGN` occurs in any
+`.html` or `.js` in this repo; both survive only in this file and
+`RRV8/WORKFLOW.md`. The `const VARIANCE_SIGN = …` block above is therefore
+**not live code**; read it as a statement of the convention, not as a citation.
+
+The convention itself still holds: the per-row data in `accountRows[]` carries
+the natural sign and downstream consumers (variance table, Carry Forward
+preview, audit report, JE export) need the flipped value. **Where that flip is
+applied today, and whether it is applied in one place, is unmeasured** and was
+deliberately not guessed. Establish it before treating this section as a spec.
 
 When the row-level reconciliation endpoint ships
 ([spec](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/specs/reconciliation-rows.md)),

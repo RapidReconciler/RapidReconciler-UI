@@ -33,6 +33,30 @@ of `Tools/test-role-entitlement.js` made exactly that mistake and passed against
 the defect it was written for. A call site only counts here when the function
 CONTAINING it is itself called somewhere.
 
+⚠ THE BLIND SPOT THIS TOOL SHIPPED WITH, FOUND 2026-09-05 AND NOW REPORTED.
+For its first two days `if not owners: continue` sat BEFORE `checked += 1`, so
+a claim naming a symbol that could not be resolved AT ALL was dropped without
+appearing in any number printed. The run said "41 claims checked, 0 findings"
+while 11 more had been seen and discarded in silence.
+
+That is the wrong way round, because the dropped class contains the WORSE
+defect. "Declared but unreachable" is what this tool was built for; "named in a
+doc and declared nowhere" is strictly worse and was invisible. It found one the
+day the counter was added: `RRV8/WORKFLOW.md:151,155` present
+`computeFilteredView()` as "the single seam" that the hero, side stats, variance
+steps and page subtitle all read from, and `computeFilteredHistory()` as what
+regroups the 13-period trend. **Neither string occurs in any .html or .js in
+this repo.** The behaviour around them is real -- `accountRows` and
+`rrv8-filter-selections-v1` are both live in inventory-transactions.html,
+inventory-asof.html and sidebar.js -- so the section documents shipped work
+under two names the code does not carry.
+
+Unresolved claims are COUNTED and reported but do NOT set the exit code. Most
+are legitimately unresolvable here: SQL builtins (`ROUND()`), template
+placeholders from plan docs (`loadXAck()`), and Java symbols in the other repos
+(`buildUpgradeClients()`). Failing on those would make the gate unusable. Run
+with --unresolved to read the list; treat it as a shortlist, like the findings.
+
 ⚠ WHAT THIS DOES NOT COVER, stated plainly because HK-7 says an overstated
 checker is worse than none:
 
@@ -51,6 +75,24 @@ checker is worse than none:
     (API.md naming a caller that did not exist) is the same disease in a
     language this does not read.
 
+    ⚠ EXTENDING INTO JAVA WAS MEASURED AND REFUSED, 2026-09-05, on two counts.
+    YIELD: across every tracked .md in five repos, exactly 2 positive claims
+    resolve to a Java method (`buildUpgradeClients()`, `readBoardExec()`) and
+    BOTH are true -- real callers at DeploymentController:201,444 and
+    SsisDeployService:2223,2311. Zero defects for the whole extension.
+    VIABILITY: Java reachability here is not a caller count. A probe over 1,618
+    method declarations at git HEAD put 26% at "zero in-source callers", then
+    3 of the first 3 samples checked by hand turned out to HAVE callers --
+    `SecurityConfig::writeUnauthorizedJson` and `::isBearerRequest` are invoked
+    as method references (no parens for a regex to find) and
+    `parseCompaniesIds` was mis-scored because `return name(` matched the
+    declaration pattern. A model that got its first three spot-checks wrong
+    would produce a checker that is mostly noise, which HK-7 says is the same
+    outcome as no checker. Reopen only with a real parser, not a regex.
+  * Extending to SQL buys 0 claims and to arrow / const-function / object- and
+    class-method JS declarations buys 1, both measured the same day over the
+    same corpus. Neither is worth the coverage-bound text it would cost.
+
 So: a clean run means "none of the JS wiring claims this can see are false". It
 does not mean the docs are accurate.
 """
@@ -58,11 +100,13 @@ import argparse
 import io
 import os
 import re
+import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# Docs that make wiring claims about the V8 surface.
+# Docs that make wiring claims about the V8 surface. Kept as the FALLBACK set;
+# doc_paths() prefers every tracked .md in the repo. See that function.
 DOC_GLOBS = [
     ("RRV8", ".md"),
     (os.path.join("docs", "plans"), ".md"),
@@ -85,6 +129,55 @@ SYMBOL = re.compile(r"`(_?[a-zA-Z][A-Za-z0-9_$]*)\(\)`")
 
 def read(path):
     return io.open(path, encoding="utf-8", errors="replace").read()
+
+
+def doc_paths():
+    """Every tracked .md in the repo, repo-relative.
+
+    Widened 2026-09-05 from RRV8/*.md + docs/plans/*.md. Measured before
+    changing it: the two original directories held 52 of the repo's 59 positive
+    wiring claims, and the 7 outside them sit in AnalysisGuides/, docs/ and
+    specs/. 5 of those 7 name symbols this resolver already handles, so the
+    widening is a glob change that buys 5 more checked claims and no new
+    machinery.
+
+    ⚠ CONSEQUENCE, STATED BECAUSE IT IS A REAL BEHAVIOUR CHANGE: only TRACKED
+    docs are seen now. A brand-new .md that has not been `git add`ed is
+    invisible to this tool, where the old os.listdir walk would have read it.
+    That is the right trade -- the gate should check what ships -- but a claim
+    written this morning is not covered until it is staged.
+
+    ⚠ AND THE HONEST YIELD OF THIS WIDENING IS ZERO, measured 2026-09-05. It
+    took the doc corpus from 113 files to 149 and the claim count did not move:
+    52 seen before, 52 after. The 7 extra claims the sizing pass found live in
+    `RapidReconciler-Agent/specs/`, a sibling repo this tool does not read and
+    should not, because it resolves against RRV8 JS only. Kept anyway, since it
+    removes a silent scope limit at no cost -- but it bought nothing today and
+    saying otherwise would overstate the coverage.
+
+    ⚠ `git ls-files` RATHER THAN A FILESYSTEM WALK, DELIBERATELY. A background
+    agent's git worktree can live under the gitignored `.claude/worktrees/`,
+    carrying a full second copy of RRV8/*.md. A walk scans it and reports every
+    claim twice; the index does not see it. Measured on 2026-09-05 with such a
+    worktree present: `git ls-files '*.md'` returned 0 paths under `.claude/`,
+    while a recursive grep returned the duplicates.
+    """
+    try:
+        out = subprocess.run(["git", "ls-files", "*.md"], cwd=ROOT,
+                             capture_output=True, text=True,
+                             encoding="utf-8", errors="replace").stdout
+        paths = [p.strip() for p in out.split("\n") if p.strip()]
+        if paths:
+            return sorted(paths)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    out = []
+    for rel, ext in DOC_GLOBS:
+        base = os.path.join(ROOT, rel)
+        if os.path.isdir(base):
+            out += [os.path.join(rel, n) for n in sorted(os.listdir(base))
+                    if n.endswith(ext)]
+    return out
 
 
 def load_sources():
@@ -202,51 +295,69 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--negatives", action="store_true",
                     help="also list the easy third (negative-phrasing claims)")
+    ap.add_argument("--unresolved", action="store_true",
+                    help="list the claims naming a symbol this tool cannot "
+                         "resolve at all (counted by default, listed only here)")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
 
     sources = load_sources()
     findings = []
+    unresolved = []
     checked = 0
 
-    for rel, ext in DOC_GLOBS:
-        base = os.path.join(ROOT, rel)
-        if not os.path.isdir(base):
+    for doc in doc_paths():
+        path = os.path.join(ROOT, doc)
+        if not os.path.isfile(path):
             continue
-        for name in sorted(os.listdir(base)):
-            if not name.endswith(ext):
+        text = read(path)
+        for m in SYMBOL.finditer(text):
+            sym = m.group(1)
+            around = text[max(0, m.start() - WINDOW): m.end() + WINDOW]
+            if NEGATIVE.search(around) or not POSITIVE.search(around):
                 continue
-            doc = os.path.join(rel, name)
-            text = read(os.path.join(base, name))
-            for m in SYMBOL.finditer(text):
-                sym = m.group(1)
-                around = text[max(0, m.start() - WINDOW): m.end() + WINDOW]
-                if NEGATIVE.search(around) or not POSITIVE.search(around):
-                    continue
-                owners = [p for p, code in sources.items() if declared_in(code, sym)]
-                if not owners:
-                    continue        # not a symbol this tool can resolve
-                checked += 1
-                members = called_as_member(sources, sym)
-                if members:
-                    continue        # exported and called cross-file
-                if all(reachable_calls(sources[p], sym) == 0 for p in owners):
-                    line = text[:m.start()].count("\n") + 1
-                    findings.append((doc, line, sym, owners,
-                                     " ".join(around.split())[:150]))
+            line = text[:m.start()].count("\n") + 1
+            ctx = " ".join(around.split())[:150]
+            owners = [p for p, code in sources.items() if declared_in(code, sym)]
+            if not owners:
+                # ⚠ NOT a `continue` any more. This bucket held the worse half
+                # of HK-7's defect class in silence for two days -- a doc
+                # naming a symbol declared NOWHERE. See the header.
+                unresolved.append((doc, line, sym, ctx))
+                continue
+            checked += 1
+            members = called_as_member(sources, sym)
+            if members:
+                continue            # exported and called cross-file
+            if all(reachable_calls(sources[p], sym) == 0 for p in owners):
+                findings.append((doc, line, sym, owners, ctx))
 
     if args.quiet:
         return 1 if findings else 0
 
     print("doc-claim-check")
-    print("  resolvable wiring claims checked   %d" % checked)
-    print("  claims naming an UNREACHABLE symbol %d\n" % len(findings))
+    print("  positive wiring claims seen         %d" % (checked + len(unresolved)))
+    print("  ...resolvable, and checked          %d" % checked)
+    print("  ...naming an UNREACHABLE symbol     %d   <- findings, sets exit code"
+          % len(findings))
+    print("  ...UNRESOLVABLE by this tool        %d   <- informational; --unresolved"
+          % len(unresolved))
+    print()
 
     for doc, line, sym, owners, ctx in findings:
         print("  %s:%d  `%s()`" % (doc, line, sym))
         print("        declared in: %s" % ", ".join(owners))
         print("        reachable call sites: 0")
         print("        claim: ...%s...\n" % ctx)
+
+    if args.unresolved:
+        print("  --- claims naming a symbol this tool cannot resolve ---")
+        print("  Expect SQL builtins, plan-doc placeholders and Java symbols in\n"
+              "  the sibling repos. What matters here is a JS symbol that ought\n"
+              "  to exist and does not: that is HK-7's worse half.\n")
+        for doc, line, sym, ctx in unresolved:
+            print("  %s:%d  `%s()`" % (doc, line, sym))
+            print("        ...%s...\n" % ctx)
 
     if args.negatives:
         print("  --- the easy third: negative-phrasing claims, for manual re-check ---")
@@ -262,11 +373,14 @@ def main():
                         print("  %s:%d  %s" % (os.path.join(rel, name), n,
                                                " ".join(ln.split())[:120]))
 
-    print("  Coverage bound: backticked `name()` symbols declared as `function name(`\n"
-          "  in RRV8/. Reachable = a same-file caller that is itself called, OR any\n"
-          "  cross-file `.name(` member call. A finding is a SHORTLIST entry to\n"
-          "  confirm by hand, and a clean run does NOT mean the docs are accurate.\n"
-          "  See this file's header for what it cannot see.")
+    print("  Coverage bound: backticked `name()` symbols in every TRACKED .md in\n"
+          "  this repo, resolved only against `function name(` in RRV8/*.{html,js}.\n"
+          "  Reachable = a same-file caller that is itself called, OR any cross-file\n"
+          "  `.name(` member call. A finding is a SHORTLIST entry to confirm by hand,\n"
+          "  and a clean run does NOT mean the docs are accurate -- it means none of\n"
+          "  the JS wiring claims this can SEE are false. The unresolvable count above\n"
+          "  is the size of what it cannot see; Java and SQL are measured and\n"
+          "  deliberately out of scope. See this file's header for why.")
     return 1 if findings else 0
 
 
