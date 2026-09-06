@@ -110,8 +110,11 @@ Catches plumbing language leaking into user-visible strings.
 
 ### 5. SQL compat-140 floor
 
-Catches modern T-SQL syntax that doesn&rsquo;t belong in the
-`RRV8/sprocs/` and `RRV8/views/` captures. The **engine** floor is **SQL Server 2019** and the
+Catches modern T-SQL syntax that doesn&rsquo;t belong in `RRV8/scripts/`.
+(It used to name the `RRV8/sprocs/` and `RRV8/views/` captures; those were
+deleted 2026-09-06, HK-12 &mdash; the authoritative check for schema objects
+is `RapidReconciler-DB/Tools/check_compat_floor.py` plus the `Sql140` DSP.)
+The **engine** floor is **SQL Server 2019** and the
 **compatibility level** is pinned at **140** &mdash; two different
 numbers, on purpose. The V8 install/upgrade runs
 `ALTER DATABASE … SET COMPATIBILITY_LEVEL = 140`. Every token below is a
