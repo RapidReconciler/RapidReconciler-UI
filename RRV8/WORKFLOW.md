@@ -69,17 +69,10 @@ RRV8/
 │                                          dev box only; read solely behind
 │                                          IS_DEMO. Not part of a clone.
 │
-├── sprocs/                                14 .sql files (sp_helptext dumps)
-│   ├── usp6getrinvaccountsummary.sql      master entry for the rec page
-│   │                                      (wraps v6ui_raccountsummary)
-│   ├── usp6getfilteredview.sql            38 KB workhorse
-│   └── &hellip;
-│
-├── views/                                 17 .sql files (sp_helptext dumps)
-│   ├── v6ui_raccountsummary.sql           the real master reconciliation view
-│   ├── v6ui_reconfiledata.sql             DEAD &mdash; intended for a process
-│   │                                      that never shipped
-│   └── &hellip;
+│   sprocs/ and views/                     DELETED 2026-09-06 (HK-12). The
+│                                          DDL lives in RapidReconciler-DB,
+│                                          which is what actually deploys.
+│                                          See *Where the SQL lives* below.
 │
 └── scripts/                               capture / regen tooling (TBD)
     └── capture-periods.ps1                planned: re-pull the snapshot
@@ -278,8 +271,11 @@ As of the latest commit, V8 has:
 - **Out-of-balance history chart** redraws from JSON with min/max/zero
   axis labels and a current-period emphasis on the last point. Stats
   (Current / 12-mo high / 12-mo low / Avg) computed in JS.
-- **SQL reference library**: 21 sproc DDL files in `sprocs/`, 23 view DDL
-  files in `views/`. Captured via `sp_helptext` against `RapidReconciler_Dev`.
+- **SQL reference library**: removed 2026-09-06. It was 21 sproc and 20 view
+  `sp_helptext` copies (this line claimed 21 and 23, and the folder tree above
+  claimed 14 and 17 &mdash; three different counts in one file, none of them
+  right, which is its own argument). Read the DDL from `RapidReconciler-DB`;
+  see *Where the SQL lives*.
 - **Variance breakdown is a vertical reconciliation statement**
   (not a horizontal row of cards). Each component (Carry Forward,
   GL Batches, End of Day, Transactions, Cardex, Manual JEs) is a
@@ -490,10 +486,9 @@ As of the latest commit, V8 has:
   page (Transactions, etc.) that needs the same flow.
 - No other pages yet (Transactions, As Of, Roll Forward, Integrity, In
   Transit, PO Receipts).
-- No optimization pass on the captured sprocs / views.
-- `RRV8/views/v6ui_reconfiledata.sql` is captured but the view itself
-  is dead in production (intended for a process that never shipped).
-  Leave it in the library for archaeology; the actual data source
+- No optimization pass on the sprocs / views.
+- `v6ui_reconfiledata` exists but the view is dead in production
+  (intended for a process that never shipped). The actual data source
   is `v6ui_raccountsummary` (wrapped by `usp6getrinvaccountsummary`).
 
 ---
@@ -504,7 +499,7 @@ The repo&rsquo;s static server (`.claude/serve.ps1`) is the only
 prerequisite. From a PowerShell window:
 
 ```powershell
-cd C:\source\repos\RapidReconciler-UI
+cd C:\source\repos\RapidReconciler-AI
 .\.claude\serve.ps1
 ```
 
@@ -637,24 +632,56 @@ gives row-level data.
 
 ---
 
-## How to refresh sproc / view DDL
+## Where the SQL lives
 
-When a sproc or view changes upstream, re-pull its DDL into the V8
-library so optimization work has a current target.
+**In `RapidReconciler-DB`, and nowhere else.** It is one `git -C` away on
+the same disk:
 
 ```bash
-SQLCMD='/c/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/sqlcmd'
-PW=$(cat "$USERPROFILE/.rr-sql-pwd")
-NAME='usp6getrinvaccountsummary'   # or v6ui_raccountsummary, etc.
-KIND='sprocs'                      # or 'views'
-
-"$SQLCMD" -S localhost -U rruser -P "$PW" -d 'RapidReconciler_Dev' -h -1 -W -k 1 \
-  -Q "SET NOCOUNT ON; EXEC sp_helptext 'dbo.$NAME'" \
-  > "RRV8/$KIND/$NAME.sql"
+ls "C:/source/repos/RapidReconciler-DB/RapidReconciler/dbo/Stored Procedures"
+ls "C:/source/repos/RapidReconciler-DB/RapidReconciler/dbo/Views"
 ```
 
-To pull a batch, loop over a list (see prior commit history for the
-candidates we&rsquo;ve pulled).
+That is the schema project the dacpac is built from, so it is what actually
+deploys. Read it directly. Do not copy DDL back into this repo.
+
+### Why there used to be copies here, and why they are gone (HK-12, 2026-09-06)
+
+`RRV8/sprocs/` (21 files) and `RRV8/views/` (20 files) held `sp_helptext`
+dumps, refreshed by hand, so optimization work had a local target. The
+section this replaces was the refresh recipe. Three things had broken it:
+
+1. **The recipe pulled from `RapidReconciler_Dev`, a database renamed away
+   on 2026-07-10.** It could not be followed.
+2. **The extraction damaged its own output.** `sp_helptext` through
+   `sqlcmd -W -k 1` wraps at ~256 characters;
+   `usp6returnvalidationstatus` came out as 13 unreadable lines against 56
+   readable ones in the DB repo. A copy you cannot read fails its one job.
+3. **The DB repo now holds all 157 procedures and matches live exactly.**
+   It did not when the convention started.
+
+**And a stale copy does not just go unread &mdash; it manufactures defects.**
+`RRV8/views/v6ui_accountsummaryreport.sql` negated `transactionvariance`;
+the shipped view does not. Reading the mirror produced a "possible DOUBLE
+negation" claim that was carried forward as fact and became the
+top-priority item of a session before it was re-measured and retracted.
+
+**Drift at deletion, measured with BOM, case, bracket-quoting, comments and
+the `dbo.` schema qualifier all folded out** &mdash; and a harness control
+proving the comparison could still report DRIFT on a mutated file:
+
+| | Drifted | Of |
+|---|---|---|
+| Views | **6** | 20 |
+| Procedures | **2** | 4 present in the DB repo |
+
+The other 17 procedure copies had no counterpart at all: they are the
+`usp6getfilteredview` cluster retired 2026-06-08, dropped by
+`PostDeployment.sql` and absent from every live database. Stale copies of
+things deleted three months ago, sitting next to stale copies of things
+fixed three months ago.
+
+Everything deleted is in this repo's git history if it is ever wanted.
 
 ---
 
@@ -670,7 +697,7 @@ V8 work follows the same flow as the rest of the repo:
 4. After merge, wait for the bot commits (refresh-indices,
    update-doc-dates) to settle.
 5. Fast-forward the main clone:
-   `git -C "C:/source/repos/RapidReconciler-UI" pull --ff-only origin main`.
+   `git -C "C:/source/repos/RapidReconciler-AI" pull --ff-only origin main`.
 
 V8 commits typically have no `Release-Note:` trailer &mdash; it&rsquo;s
 internal staff-facing design work, not customer-facing changes. Once V8
@@ -704,7 +731,7 @@ complete** &mdash; until then it&rsquo;s frozen, not the dev workflow.
   `rrFetch` to call the planned path, and let it 404 visibly until
   the controller ships. **Do not add a snapshot to make the page
   paint** &mdash; the visible 404 is the signal that an endpoint is
-  missing. See [`feedback_always_spec_new_endpoints`](../../../.claude/projects/C--source-repos-RapidReconciler-UI/memory/feedback_always_spec_new_endpoints.md).
+  missing. See [`feedback_always_spec_new_endpoints`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/feedback_always_spec_new_endpoints.md).
 - Existing snapshot files in `RRV8/data/` and existing demo-mode
   fallbacks stay in place (they keep the deployed GitHub Pages
   preview rendering). Don&rsquo;t extend them; don&rsquo;t add new
@@ -719,7 +746,7 @@ complete** &mdash; until then it&rsquo;s frozen, not the dev workflow.
   silently drops unknown JSON fields, so field names must come from the
   bytecode, not guesswork. Recipe in
   [`RapidReconciler-Agent/docs/jar-mining.md`](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/docs/jar-mining.md). See also the
-  [`reference_rr_agent_jar`](../../../.claude/projects/C--source-repos-RapidReconciler-UI/memory/reference_rr_agent_jar.md)
+  [`reference_rr_agent_jar`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/reference_rr_agent_jar.md)
   memory.
 - **Why this is a tenet:** snapshots hide bugs (stale data, Jackson
   field-name mismatches, permission gating, filter-scope errors).
@@ -728,12 +755,12 @@ complete** &mdash; until then it&rsquo;s frozen, not the dev workflow.
   down to one (the agent) makes every wiring bug surface immediately.
   The deferred demo rebuild gets a clean foundation instead of
   accreted dev-time hacks. Saved as
-  [`feedback_v8_agent_first`](../../../.claude/projects/C--source-repos-RapidReconciler-UI/memory/feedback_v8_agent_first.md).
+  [`feedback_v8_agent_first`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/feedback_v8_agent_first.md).
 
 ### Engine floor SQL 2019; compat level pinned at 140 for V8
 
-Every `.sql` file under `RRV8/sprocs/`, `RRV8/views/`, and
-`RRV8/scripts/` &mdash; plus inline SQL in capture scripts and any
+Every `.sql` file under `RRV8/scripts/` and in `RapidReconciler-DB`
+&mdash; plus inline SQL in capture scripts and any
 sproc the agent calls &mdash; must run at **compat level 140**. Two different
 numbers live here and conflating them is the mistake: the supported
 **engine** floor is **SQL Server 2019** (owner ruling 2026-08-21), while
@@ -769,7 +796,7 @@ it fails only when the procedure runs (Msg 208). The source grep in
 catches that class.
 
 Full table + reasoning in
-[`feedback_sql_compat_floor`](../../../.claude/projects/C--source-repos-RapidReconciler-UI/memory/feedback_sql_compat_floor.md).
+[`feedback_sql_compat_floor`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/feedback_sql_compat_floor.md).
 
 ### Finance, not IT
 
@@ -781,7 +808,8 @@ speaks (F4111, F0911, F4101, F41021, DMAAI, AAI, R31802A, GL,
 perpetual, cardex, period close) stay &mdash; they&rsquo;re domain
 language, not jargon. Code comments are exempt; the rule is about
 user-visible text. Saved as
-[`feedback_v8_audience_finance_not_it`](../../../.claude/projects/C--source-repos-RapidReconciler-UI/memory/feedback_v8_audience_finance_not_it.md).
+[`feedback_rr_product_voice`](../../../.claude/projects/C--source-repos-RapidReconciler-AI/memory/feedback_rr_product_voice.md)
+(it was `feedback_v8_audience_finance_not_it`, consolidated into the product-voice entry).
 
 ---
 
@@ -796,8 +824,8 @@ user-visible text. Saved as
   repo. Scripts in `RRV8/scripts/` read it at run time, never embed it.
 - **Customer-named schema objects.** The live DB has a few `v6_008a_*`
   view names that bake in a real customer name (one known instance &mdash;
-  a producing-plant customization). Don&rsquo;t pull their DDL into
-  `RRV8/views/` without sanitizing the filename + contents.
+  a producing-plant customization). Don&rsquo;t pull their DDL into this
+  repo, which is public, without sanitizing the filename + contents.
 
 ---
 

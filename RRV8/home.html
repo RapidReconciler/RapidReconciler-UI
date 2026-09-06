@@ -2447,6 +2447,37 @@
   }
   .toast-act:hover { background: rgba(255,255,255,.14); border-color: #fff; }
 
+  /* ---- Export stall advisory (UI-179) ----
+     NOT a toast. A toast dismisses itself, and this has to stay on screen for
+     as long as the export is still hanging -- the whole point is that the
+     analyst is sitting there watching nothing happen. Sits above the toast so
+     the two never overlap. */
+  .exp-stall {
+    position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%) translateY(20px);
+    max-width: min(560px, calc(100vw - 32px));
+    background: #fff; color: var(--navy); border: 1px solid var(--rule-strong);
+    border-left: 4px solid var(--orange);
+    padding: 14px 18px; border-radius: 10px; box-shadow: var(--shadow-md);
+    opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; z-index: 95;
+  }
+  .exp-stall[hidden] { display: none; }
+  .exp-stall.is-visible { opacity: 1; transform: translateX(-50%) translateY(0); pointer-events: auto; }
+  .exp-stall-title { font-weight: 800; font-size: 13.5px; margin: 0 0 5px; }
+  .exp-stall-body { font-size: 13px; line-height: 1.45; margin: 0; color: var(--ink); }
+  .exp-stall-acts { display: flex; gap: 10px; align-items: center; margin-top: 12px; }
+  .exp-stall-go {
+    background: var(--navy); color: #fff; border: 1px solid var(--navy);
+    border-radius: 7px; padding: 6px 13px; font-family: inherit; font-weight: 800;
+    font-size: 12.5px; cursor: pointer;
+  }
+  .exp-stall-go:hover { background: #16223a; }
+  .exp-stall-wait {
+    background: transparent; border: 1px solid var(--rule-strong); color: var(--ink-soft);
+    border-radius: 7px; padding: 6px 13px; font-family: inherit; font-weight: 700;
+    font-size: 12.5px; cursor: pointer;
+  }
+  .exp-stall-wait:hover { border-color: var(--navy); color: var(--navy); }
+
   /* ---- Context bar (the scope hub) ----
      Database + active company + period. Sits BELOW the admin actions
      (which scope does not govern) and ABOVE the work it does govern. */
@@ -3551,6 +3582,18 @@
 </div>
 
 <div class="toast" id="toast"></div>
+
+<!-- Export stall advisory (UI-179, reinstated 2026-09-06). The Services jar has a
+     known hang building an Excel export under memory pressure; restarting it clears
+     it. A protection for this shipped with inventory-reconciliation.html and was lost
+     when that page was retired on 2026-07-02 -- API.md still described it for two
+     months after the code was gone. Text is written in, and the restart affordance is
+     built by, _showExportStall(). -->
+<div class="exp-stall" id="expStall" role="status" aria-live="polite" hidden>
+  <p class="exp-stall-title" id="expStallTitle"></p>
+  <p class="exp-stall-body" id="expStallBody"></p>
+  <div class="exp-stall-acts" id="expStallActs"></div>
+</div>
 
 <!-- Historical-period summary modal — opened from a briefing bullet's
      "What happened →" on a historical period. Built by _openHistModal(). -->
@@ -5025,6 +5068,102 @@
   // "Not now" / the backdrop just closes.
   function _openSvcRestartModal() { var m = $('svcRestartModal'); if (m) m.hidden = false; }
   function _closeSvcRestartModal() { var m = $('svcRestartModal'); if (m) m.hidden = true; }
+
+  // ---- Export stall advisory (UI-179) --------------------------------------
+  //
+  // The Services jar has a recurring production hang building an Excel export
+  // under memory pressure or heavy concurrency; restarting it clears it. A
+  // guard for exactly this shipped on inventory-reconciliation.html and went
+  // out with that page on 2026-07-02 (PR #307). Nothing replaced it -- measured
+  // 2026-09-06, `withExportWatchdog` returned zero hits across every .html and
+  // .js in the repo, and no export-adjacent timeout existed under any other
+  // name. API.md went on describing the protection for two months after the
+  // code was gone.
+  //
+  // ⚠ WHO CAN ACT ON IT IS NOT WHO SEES IT, AND THAT IS THE REASON THIS MATTERS.
+  // The audit-report menu is NOT inside #view-admin, so any role can start the
+  // export that hangs. The Report Engine card's Restart button IS inside
+  // #view-admin, which renderRoleView() removes from a non-admin's DOM
+  // entirely. So the person most likely to hit the hang is the person with no
+  // way to clear it and, until now, no explanation either.
+  var EXPORT_STALL_MS = 40000;
+  var _expStallDepth = 0;
+
+  // ⚠ perms.rs IS MINTED AND WAS READ BY NOTHING. AuthController:935 puts `rs`
+  // (restartService) in every token's perms block and API.md documents it, but
+  // a grep for it across RRV8 returned zero readers on 2026-09-06 -- the
+  // Restart button gates on t.adm instead. That is coarser than the token
+  // models in the safe direction (an admin always has it; a non-admin granted
+  // `rs` cannot use it), so it is a dead grant rather than an open door. This
+  // is the first consumer, and it honours the grant rather than the role.
+  function canRestartService() {
+    var a = activeDb() || {};
+    return isAdmin() || !!(a.perms && a.perms.rs === true);
+  }
+
+  function _hideExportStall() {
+    var el = $('expStall'); if (!el) return;
+    el.classList.remove('is-visible');
+    el.hidden = true;
+  }
+
+  function _showExportStall(label) {
+    var el = $('expStall'); if (el) { /* fall through */ } else { return; }
+    var t = $('expStallTitle'), b = $('expStallBody'), acts = $('expStallActs');
+    if (!t || !b || !acts) return;
+    // textContent throughout: `label` is ours today, but a report name is
+    // exactly the kind of value that later comes off a server response.
+    t.textContent = 'The ' + (label || 'report') + ' is taking longer than usual';
+    b.textContent = 'The report engine has not answered in about 40 seconds. '
+      + 'Nothing you have entered is lost, and the download will still appear if it '
+      + 'finishes. This usually clears by restarting the report engine.';
+    acts.textContent = '';
+    if (canRestartService()) {
+      var go = document.createElement('button');
+      go.type = 'button'; go.className = 'exp-stall-go';
+      go.textContent = 'Restart the report engine';
+      // Routes through the same explain-first confirm the Report Engine card
+      // uses. A one-click restart of a customer's data service from a banner
+      // is not a thing to build twice, and never without the confirm.
+      go.addEventListener('click', function () { _hideExportStall(); _openSvcRestartModal(); });
+      acts.appendChild(go);
+    } else {
+      // ⚠ Do NOT dead-end here. A refusal with no next step is the VLC-49 §9
+      // shape: the remedy sat behind the thing it remedied.
+      var who = document.createElement('span');
+      who.className = 'exp-stall-body';
+      who.textContent = 'Ask your RapidReconciler administrator to restart the report engine.';
+      acts.appendChild(who);
+    }
+    var wait = document.createElement('button');
+    wait.type = 'button'; wait.className = 'exp-stall-wait';
+    wait.textContent = 'Keep waiting';
+    wait.addEventListener('click', _hideExportStall);
+    acts.appendChild(wait);
+    el.hidden = false;
+    // Next frame, so the transition runs from the hidden state rather than
+    // snapping -- `hidden` and the opacity change in one tick paint as a jump.
+    requestAnimationFrame(function () { el.classList.add('is-visible'); });
+  }
+
+  // Wrap an export promise. Shows the advisory if it has not settled within
+  // EXPORT_STALL_MS; always tears the timer down, on success AND on failure,
+  // and rethrows so the caller's own .catch still runs.
+  //
+  // Depth-counted because two exports can overlap (Excel and PDF from the same
+  // menu): the second to finish is what clears the banner, not the first.
+  function withExportWatchdog(label, p) {
+    _expStallDepth++;
+    var timer = setTimeout(function () { _showExportStall(label); }, EXPORT_STALL_MS);
+    var done = function () {
+      clearTimeout(timer);
+      if (--_expStallDepth <= 0) { _expStallDepth = 0; _hideExportStall(); }
+    };
+    return p.then(
+      function (v) { done(); return v; },
+      function (e) { done(); throw e; }
+    );
+  }
 
   // ---- Database meta strip --------------------------------------------------
   // The at-a-glance install facts beside the Database picker. Each fact renders
@@ -14807,7 +14946,9 @@
     if (onlyCo != null) cos = cos.filter(function (c) { return String(c.co) === String(onlyCo); });
     if (!cos.length) { if (typeof toast === 'function') toast('No matching company in scope'); return; }
     if (typeof toast === 'function') toast('Building the audit report…');
-    _ensureAuditDetail(per).then(function (detail) {
+    // withExportWatchdog wraps the chain BEFORE the .catch, so the timer is
+    // cleared on the rejection path too and the caller's own catch still runs.
+    withExportWatchdog('Perpetual Reconciliation report', _ensureAuditDetail(per).then(function (detail) {
       var descMap = _auditDescMap(detail);
       return _auditAiSummaries(cos, per).then(function (aiMap) {
         // Build + write under one guard. The outer .catch below means "the data
@@ -14824,7 +14965,7 @@
         if (!ok) return;
         if (typeof toast === 'function') toast('Downloaded the audit report — ' + cos.length + ' ' + (cos.length === 1 ? 'company' : 'companies'));
       });
-    }).catch(function (e) { if (window.console) console.error('audit report (excel) failed', e); if (typeof toast === 'function') toast('Could not build the audit report — the data service may be unavailable.'); });
+    })).catch(function (e) { if (window.console) console.error('audit report (excel) failed', e); if (typeof toast === 'function') toast('Could not build the audit report — the data service may be unavailable.'); });
   }
   // PDF twin — same data + sections as the Excel, one company per page-break,
   // rendered via jsPDF + autoTable (navy header band; portrait like the V7 report).
@@ -14836,7 +14977,7 @@
     if (onlyCo != null) cos = cos.filter(function (c) { return String(c.co) === String(onlyCo); });
     if (!cos.length) { if (typeof toast === 'function') toast('No matching company in scope'); return; }
     if (typeof toast === 'function') toast('Building the audit report…');
-    _ensureAuditDetail(per).then(function (detail) {
+    withExportWatchdog('Perpetual Reconciliation report', _ensureAuditDetail(per).then(function (detail) {
       var descMap = _auditDescMap(detail);
       return _auditAiSummaries(cos, per).then(function (aiMap) {
         var jsPDF = window.jspdf.jsPDF;
@@ -14848,7 +14989,7 @@
         doc.save(RRV8.exportName({ surface: 'PerpetualReconciliation', company: (onlyCo != null ? onlyCo : 'all'), period: per, ext: 'pdf' }));
         if (typeof toast === 'function') toast('Downloaded the audit report (PDF) — ' + cos.length + ' ' + (cos.length === 1 ? 'company' : 'companies'));
       });
-    }).catch(function (e) { if (window.console) console.error('audit report (pdf) failed', e); if (typeof toast === 'function') toast('Could not build the audit report — the data service may be unavailable.'); });
+    })).catch(function (e) { if (window.console) console.error('audit report (pdf) failed', e); if (typeof toast === 'function') toast('Could not build the audit report — the data service may be unavailable.'); });
   }
 
   function _closeJeModal() { var m = $('jeModal'); if (m) m.hidden = true; }
