@@ -2105,6 +2105,26 @@ ${adminSection}
     // the body the way VLC-53's SsoRefusal does, so this function can map it to copy.
     // That is a change across 35 sites and a response-shape decision; recorded in
     // HK-11 rather than half-done here.
+    // ⚠ VLC-59. A THIRD CAUSE, AND IT IS NEITHER OF THE TWO BELOW. A 403 on
+    // `api/v1/admin/` does not come from the data service at all — it comes from
+    // VALC's chain rule, which gates that prefix on the GSI control-plane
+    // operator grant. No customer administrator holds it, and none should: it is
+    // access to every client, not to this one. So neither "sign in again" nor
+    // "ask your administrator for access" is true, and both send the reader
+    // somewhere that cannot help. This case is distinguishable with certainty
+    // because the prefix is in the endpoint, so it is worth naming exactly.
+    //
+    // The owner hit this on Home as a customer admin on 2026-09-06 and the
+    // generic message below told him to check his web address. Most of V8's
+    // calls moved to `api/v1/tenant/` in the same change; what still lands here
+    // is the users API, which needs a tenant-scoped version building.
+    if (st === 403 && typeof ep === 'string' && ep.indexOf('api/v1/admin/') !== -1) {
+      return 'This feature is reserved for GSI support staff and is not available ' +
+             'to customer accounts, including administrators. Nothing is wrong with ' +
+             'your sign-in and there is no permission to grant — signing out will ' +
+             'not change it. If you need what this panel shows, contact GSI support. ' +
+             '(HTTP 403)';
+    }
     if (st === 403) {
       return 'The data service refused this request, and this page cannot tell you ' +
              'which of two reasons applies. Either no sign-in credentials reached it, ' +
