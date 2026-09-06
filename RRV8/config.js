@@ -90,7 +90,20 @@ window.RR_CONFIG = {
 // Areas starting with any of these prefixes go to RR_CONFIG.valcBase
 // instead of the test agent or the active DB IP.
 window.RR_VALC_PREFIXES = [
-  'api/v1/admin/',   // /api/v1/admin/users, /api/v1/admin/clients, ...
+  // ⚠ VLC-59. `api/v1/admin/` is the GSI OPERATOR half and requires the
+  // control-plane operator grant, which no customer administrator holds or
+  // should. V8 is a customer surface: anything it calls belongs under
+  // `api/v1/tenant/`, whose handlers derive the client from the bearer token
+  // and take no client id.
+  //
+  // Both prefixes are listed because ONE call site still legitimately points at
+  // the operator half and cannot move yet: `api/v1/admin/users` returns every
+  // user of every client, so V8's Team pages need a tenant users API built
+  // rather than re-routed. Until then those calls 403 for a customer admin,
+  // which is the correct answer to a request that would otherwise read across
+  // tenants.
+  'api/v1/tenant/',  // customer-scoped: own client, licensing, report engine
+  'api/v1/admin/',   // GSI operator only — see above before adding a call site
   'api/v1/ai/'       // AI Assistant gateway — key stays server-side in VALC
 ];
 
