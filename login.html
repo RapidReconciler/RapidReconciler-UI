@@ -1471,6 +1471,30 @@
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
+        // ⚠ A 403 HERE MEANS THE SERVER HAS OVERRULED THE "use a password
+        // instead" CHOICE, AND THE PAGE MUST TAKE THAT CHOICE BACK.
+        //
+        // Found by the owner's look, 2026-09-11. The server answers an
+        // SSO-managed account with "use the sign-in button on this page
+        // instead of a password" -- and at that exact moment the button it
+        // names was HIDDEN, because clicking "Use a RapidReconciler password
+        // instead" sets _forcePw, and applySsoMode() hides the whole SSO panel
+        // while showing the password submit button.
+        //
+        // So the only button on screen WAS the sign-in button, and it was the
+        // password one -- the message pointed at the control the user must not
+        // use, and offered no way back to the one they must. _forcePw only
+        // resets when the typed DOMAIN changes, which nobody would guess.
+        //
+        // Clearing it is not a UI trick, it is the correct model: _forcePw is a
+        // user preference, and the server has just said this account cannot
+        // have one. Re-running applySsoMode() brings back the
+        // "Continue with <method>" button the message names.
+        if (res.status === 403 && _sso && _sso.sso && _forcePw) {
+          _forcePw = false;
+          _forcePwDomain = null;
+          applySsoMode();
+        }
         setErr(errEl, body.message || (res.status === 401
           ? 'Email or password did not match.'
           : 'Sign-in failed (HTTP ' + res.status + ').'));
