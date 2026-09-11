@@ -240,9 +240,29 @@
   function clearFetchError() { $('js-fetch-error').classList.remove('is-visible'); }
   function activeDb() { const s = window.RR_SESSION || {}; const d = Array.isArray(s.dbs) ? s.dbs : []; return d[s.activeDbIndex || 0] || d[0] || null; }
   // Analyst-authorized when the role's data-management grant isn't explicitly
-  // off (perms.dm !== false, fail-open) — mirrors home.html canAnalyst() and the
-  // server's requireAnalyst(). No superuser (su) flag exists in the client token,
-  // so we gate solely on perms.dm, matching every other analyst surface.
+  // off (perms.dm !== false, fail-open) — mirrors home.html canAnalyst().
+  //
+  // ⚠ THIS COMMENT USED TO SAY "No superuser (su) flag exists in the client
+  // token". THAT IS FALSE, and it was measured false on 2026-09-11. AuthController
+  // does `entry.put("su", user.isSuperuser())` — `su` sits on the per-database
+  // entry as a SIBLING of `perms`, so it is `activeDb().su`, not
+  // `activeDb().perms.su`. It is absent from the perms block (which carries only
+  // ij / rs / dm / ac / ite / prs), and reading only that block is how the flag
+  // came to be described as not existing at all.
+  //
+  // The wrong reason was found by a case-sensitive grep: VALC spells it
+  // `isSuperuser()` and the agent spells it `isSuperUser()`, so a search for one
+  // silently misses the other.
+  //
+  // ⚠ AND THE SERVER IS MORE PERMISSIVE THAN THIS PAGE. ReloadGlController:69
+  // gates on `isDmaais() || isSuperUser()`; this page gates on `perms.dm` alone.
+  // A superuser WITHOUT the data-management grant is refused here and would be
+  // allowed there. That direction is fail-SAFE — the page hides a control the
+  // server would have permitted, rather than offering one it would refuse — so
+  // the behaviour is deliberately left as it is. It is recorded because the
+  // asymmetry is real and someone will eventually hit it as "superuser cannot
+  // open Reload GL". See UI-189; changing it is an entitlement decision, not a
+  // comment fix.
   function canReload() { const a = activeDb(); if (!a) return false; const perms = a.perms || {}; return perms.dm !== false; }
   // Close the page loudly. `id` names one of the halt notices in the markup.
   // Used when we can't read the session at all -- distinct from canReload()
