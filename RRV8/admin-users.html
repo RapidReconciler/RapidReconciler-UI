@@ -272,6 +272,12 @@
     display: flex; align-items: flex-start; gap: 8px; margin-top: 4px;
     font-size: 13.5px; font-weight: 600; color: var(--navy); cursor: pointer;
   }
+  /* Same cascade trap as `.form-field[hidden]` below: this rule sets `display`,
+     so an author rule beats the UA's `[hidden] { display: none }` and the
+     attribute would do nothing. The toggle is now hidden outright on a domain
+     with no SSO to bypass, so it needs the guard. `.signin-bypass-note` needs
+     none -- it sets no `display`. */
+  .signin-bypass-toggle[hidden] { display: none; }
   .signin-bypass-toggle input { margin: 3px 0 0; flex: 0 0 auto; width: auto; }
   .signin-bypass-toggle.is-inert { cursor: default; font-weight: 500; color: var(--text-muted, #7c8798); }
   .signin-bypass-note {
@@ -391,6 +397,23 @@
   }
   .modal-grid .full { grid-column: 1 / -1; }
   .form-field { display: flex; flex-direction: column; gap: 4px; }
+  /* ⚠ THE LINE ABOVE SILENTLY DEFEATED `hidden`. Owner caught the VALC twin of
+     this on 2026-09-11: an Entra-managed address still showed a Password field.
+     `:1347` does `pw.hidden = ssoManaged`, which is correct and does run -- the
+     bypass note beside it toggles on the same flag in the same function.
+     `.form-field` sets `display`, and an AUTHOR rule beats the user agent's
+     `[hidden] { display: none }` at equal specificity, so the attribute became
+     decorative. Not cosmetic: the API refuses a password for an SSO-managed
+     address, so the form asked for something the server rejects and would have
+     said so only at submit.
+     ⚠ THIS FILE HAD ALREADY BEEN PATCHED FOR THE SAME CASCADE TWICE, LOCALLY
+     AND NEVER GENERALLY -- see `.review-band[hidden]` and `.fab-pop[hidden]`.
+     With the VALC file's two, that is four local patches for one mechanism. The
+     fix stays scoped because those are the only classes measured to set
+     `display` on a hidden-toggled element; if a fifth appears, generalise.
+     The New User modal is NOT affected and needs no guard: it has no password
+     input at all, which is why its config passes `pwField: null` at `:1298`. */
+  .form-field[hidden] { display: none; }
   .form-field-label {
     font-family: 'Source Sans 3', sans-serif;
     font-size: 11px;
@@ -1310,25 +1333,58 @@
     // The effective method, and the domain's own beside it when they differ.
     // "Password" has two causes; a screen that prints only the result cannot
     // tell a revocable bypass from a domain nobody ever federated.
+    // ⚠ PROSE, NOT THE GRID WORD, INSIDE THE MODAL (owner, 2026-09-11). The
+    // server produces two registers on purpose -- `domainSignIn` is "Entra"
+    // because "Microsoft Entra ID" wraps to two lines in a table column, and
+    // `domainSignInProse` is "Microsoft Entra ID" because "Entra" reads as a
+    // typo mid-sentence. Both reasons are sound ACROSS surfaces and neither
+    // survives inside ONE modal, where this row said "Entra" directly above a
+    // checkbox saying "instead of Microsoft Entra ID". The column keeps the
+    // short word; a modal is prose throughout.
+    //
+    // An unmapped domain still shows the short word: its prose form is "an RR
+    // password", and a value row reading "an RR password" is broken grammar
+    // rather than the name of a method.
     const cur = el(ui.current);
     if (cur) {
       cur.textContent = !st.label ? '—'
-        : (st.mapped && st.bypass) ? ('Password (bypasses ' + st.label + ')')
-        : st.label;
+        : !st.mapped ? st.label
+        : st.bypass ? ('Password (bypasses ' + st.prose + ')')
+        : st.prose;
     }
 
     const box = el(ui.box);
     if (box) { box.checked = st.bypass; box.disabled = !st.mapped; }
+    // ⚠ HIDDEN, NOT MERELY DISABLED, when there is no single sign-on to bypass
+    // (owner, 2026-09-11). It used to sit visible-and-greyed so an operator
+    // would know the setting existed. On a customer with no SSO configured --
+    // most of them today -- that meant EVERY user showed a dead control plus
+    // two lines explaining why it could never do anything.
+    //
+    // It also rendered literal nonsense. The label composes "...instead of " +
+    // prose, and on an unmapped domain prose IS "an RR password", so the
+    // shipped string read "Sign in with an RR password instead of an RR
+    // password". Nothing is lost by hiding it: the App sign-in row above
+    // already says "Password", and the control reappears the moment the domain
+    // is mapped, which is the moment it means anything.
     const wrap = el(ui.wrap);
-    if (wrap) wrap.classList.toggle('is-inert', !st.mapped);
+    if (wrap) {
+      wrap.hidden = !st.mapped;
+      wrap.classList.toggle('is-inert', !st.mapped);
+    }
     const lbl = el(ui.label);
-    if (lbl) lbl.textContent = 'Sign in with an RR password instead of ' + st.prose;
+    // Guarded at COMPOSITION, not only at visibility, so the nonsense string
+    // cannot return if anyone ever un-hides the row.
+    if (lbl) {
+      lbl.textContent = st.mapped
+        ? ('Sign in with an RR password instead of ' + st.prose)
+        : 'Sign in with an RR password';
+    }
 
     const note = el(ui.note);
     if (note) {
       note.textContent = !st.mapped
-        ? 'This domain is not on single sign-on, so there is nothing to bypass — '
-          + 'this person already signs in with an RR password.'
+        ? ''
         : st.bypass
           ? 'Single sign-on is OFF for this one person. They sign in with an RR '
             + 'password, outside your identity provider and its policies. Use it '
