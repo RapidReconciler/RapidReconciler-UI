@@ -2293,6 +2293,47 @@
   .panel-collapse:hover { color: var(--blue); border-color: var(--blue); background: var(--blue-pale); }
   .panel-collapse-chev { transition: transform .15s; }
   .panel-collapse[aria-expanded="false"] .panel-collapse-chev { transform: rotate(-90deg); }
+  /* ── Card collapse, ONE producer for two surfaces (owner 2026-09-11) ──────
+     Used by the analyst's Transaction Variance cards (.txv-card) and the
+     accountant Overview's per-company cards (.wl-card). Both default COLLAPSED.
+
+     ⚠ Deliberately NOT a whole-header click target, unlike .acct-g-co above.
+     Those rows carry nothing else clickable. These heads do -- the txv card head
+     holds the Variance drill <a>, and the wl-card head holds figure links -- so
+     a header-wide handler would either swallow those clicks or fire alongside
+     them. The chevron is the only toggle.
+
+     The body wrapper is a real element rather than a ":not(head)" rule because
+     these cards have several sibling sections (meta, message, recurrence,
+     actions, status) and an exclusion selector would silently start hiding any
+     NEW sibling somebody adds later. */
+  .cardcol-btn {
+    margin-left: 8px; flex: 0 0 auto; width: 26px; height: 26px; padding: 0;
+    border: 1px solid var(--rule); border-radius: 7px; background: var(--bg-card);
+    color: var(--text-muted); display: inline-flex; align-items: center;
+    justify-content: center; cursor: pointer;
+    transition: color .12s, border-color .12s, background .12s;
+  }
+  .cardcol-btn:hover { color: var(--blue); border-color: var(--blue); background: var(--blue-pale); }
+  .cardcol-chev { transition: transform .15s; }
+  .cardcol-btn[aria-expanded="false"] .cardcol-chev { transform: rotate(-90deg); }
+  .cardcol-body { display: block; }
+  .is-cardcol.is-collapsed > .cardcol-body { display: none; }
+  /* The txv card head is the shared 3-column headline grid (1fr auto 1fr). The
+     chevron is a FOURTH child -- it cannot live inside .acct-snap-right, which is
+     a COLUMN flex that deliberately stacks the variance figure above the status
+     chip, so a chevron in there would sit under the figure. Widen the grid here
+     only, and centre the chevron against a row whose items align on the baseline. */
+  .txv-card-head { grid-template-columns: 1fr auto 1fr auto; }
+  .txv-card-head > .cardcol-btn { align-self: center; }
+  /* .wl-top is space-between with two children. The chevron shares the RIGHT
+     child with the figures rather than becoming a third, which would have pushed
+     the figures off the right edge into the middle of the row. */
+  .wl-top-right { display: inline-flex; align-items: center; gap: 8px; }
+  /* A collapsed card is a one-line summary, so drop the head's bottom gap. */
+  .is-cardcol.is-collapsed > .txv-card-head,
+  .is-cardcol.is-collapsed > .wl-top { margin-bottom: 0; }
+
   /* Collapsed: keep only the header; hide every other child (rows, mem bar). */
   .panel.is-collapsed > :not(.panel-head) { display: none; }
   .panel.is-collapsed .panel-head { margin-bottom: 0; }
@@ -8145,6 +8186,75 @@
     }
   }
 
+  // ── Card collapse: ONE producer for two surfaces (owner 2026-09-11) ────────
+  //
+  // Analyst > Transaction Variance: every pattern card collapsed, the Transaction
+  // Overview summary left alone. Accountant > Overview: every per-company card
+  // collapsed. Both default CLOSED.
+  //
+  // ⚠ WHY THE OPEN SET IS IN MEMORY RATHER THAN THE DOM. Both surfaces repaint
+  // with a wholesale `host.innerHTML = ...`, and both repaint often -- on a data
+  // refresh, a company or period change, and CRUCIALLY right after the analyst
+  // saves a finding. State living only in the DOM would mean the card you just
+  // expanded to work in snaps shut underneath you. Keyed state re-applied at
+  // render is what makes "default collapsed" survivable rather than hostile.
+  //
+  // ⚠ AND IT IS DELIBERATELY NOT PERSISTED to localStorage. "Default collapsed"
+  // is the instruction; a remembered open card would violate it on the next page
+  // load. Per-session only: closed when you arrive, and it stays as you left it
+  // while you work.
+  //
+  // The key must identify the card across a repaint -- the company number for a
+  // wl-card, the pattern code for a txv-card. An index would silently re-open a
+  // DIFFERENT card whenever the list reorders, which these lists do (claim order
+  // for txv, out-of-balance for wl).
+  var _cardOpen = { txv: {}, wl: {} };
+  function _cardColOpen(ns, key) { return !!(_cardOpen[ns] && _cardOpen[ns][String(key)]); }
+  // Root-element attributes + class. Spread onto the card's own outer div so the
+  // body wrapper is a direct child and the CSS child-combinator holds.
+  function _cardColRoot(ns, key) {
+    return ' data-ccns="' + esc(ns) + '" data-cckey="' + esc(String(key)) + '"';
+  }
+  function _cardColClass(ns, key) {
+    return ' is-cardcol' + (_cardColOpen(ns, key) ? '' : ' is-collapsed');
+  }
+  // The chevron. Lives INSIDE the card head, after its existing content.
+  function _cardColBtn(ns, key) {
+    var open = _cardColOpen(ns, key);
+    return '<button type="button" class="cardcol-btn" data-cardcol="1" aria-expanded="' + (open ? 'true' : 'false')
+      + '" title="' + (open ? 'Collapse this card' : 'Expand this card') + '"'
+      + ' aria-label="' + (open ? 'Collapse' : 'Expand') + '">'
+      + '<svg class="cardcol-chev" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>'
+      + '</button>';
+  }
+  // Delegated toggle. Wired ONCE per host element (hosts survive the innerHTML
+  // swaps; the cards inside them do not), guarded by a flag on the element so a
+  // re-render cannot stack duplicate listeners -- the same `_wired` idiom the
+  // sub-nav and the accountant grid already use here.
+  function _wireCardCollapse(host) {
+    if (!host || host._ccWired) return;
+    host._ccWired = true;
+    host.addEventListener('click', function (e) {
+      if (!e.target || !e.target.closest) return;
+      var btn = e.target.closest('[data-cardcol]'); if (!btn || !host.contains(btn)) return;
+      var card = btn.closest('[data-ccns][data-cckey]'); if (!card) return;
+      // ⚠ stopIMMEDIATEPropagation, not stopPropagation. The analyst tab registers
+      // a SECOND delegated click handler on this same host element
+      // (`host._txvCardWired`, the UI-26 resolution editor), and stopPropagation
+      // does not stop a listener on the SAME element -- only on ancestors. The
+      // chevron is ours alone, and this is the only call that guarantees it.
+      e.preventDefault(); e.stopImmediatePropagation();
+      var ns = card.getAttribute('data-ccns'), key = String(card.getAttribute('data-cckey') || '');
+      if (!_cardOpen[ns]) _cardOpen[ns] = {};
+      var nowOpen = !_cardColOpen(ns, key);
+      if (nowOpen) _cardOpen[ns][key] = true; else delete _cardOpen[ns][key];
+      card.classList.toggle('is-collapsed', !nowOpen);
+      btn.setAttribute('aria-expanded', nowOpen ? 'true' : 'false');
+      btn.setAttribute('title', nowOpen ? 'Collapse this card' : 'Expand this card');
+      btn.setAttribute('aria-label', nowOpen ? 'Collapse' : 'Expand');
+    });
+  }
+
   // Accountant orchestrator: renders the sub-nav + the fixed chrome (AI band +
   // audit menu, constant across sub-views), then shows only the active palette.
   // Rides every briefing trigger (data / DB / company / period / role switch).
@@ -11012,7 +11122,13 @@
           + '<a class="wl-fig wl-fig-outbtn" href="' + p.href + '" title="Investigate this variance">'
           +   '<span class="wl-fig-lbl">Variance</span><span class="wl-fig-val wl-fig-out">' + money(p.amount) + '</span></a>'
           + statusChip + '</span>';
-        var head = '<div class="acct-snap-headline txv-card-head">' + headL + headC + headR + '</div>';
+        // ⚠ The chevron is a FOURTH child of the headline, not a child of headR.
+        // `.acct-snap-right` is `flex-direction: column` -- it stacks the variance
+        // figure above the status chip on purpose -- so a chevron placed inside it
+        // lands UNDER the figure rather than beside it. `.txv-card-head` widens the
+        // headline grid to a fourth `auto` track for exactly this (see the CSS).
+        var head = '<div class="acct-snap-headline txv-card-head">'
+          + headL + headC + headR + _cardColBtn('txv', p.code) + '</div>';
         // (3) AI message area — a single calm gray box (no amber diagnosis strip). Holds
         // the analyst finding OR the DMAAI cause (the dx slot _txvRunDiagnoses upgrades in
         // place, now as plain navy text), plus a quiet Cardex · Ledger · Rows context line.
@@ -11036,9 +11152,18 @@
         // decomposition pills removed 2026-07-13 — analysts work the pattern, not the
         // account split; the variance drill covers the account view when needed.)
         var recurRow = recurChip ? '<div class="txv-recur-row">' + recurChip + '</div>' : '';
-        return '<div class="txv-card is-' + acc + (p.done ? ' is-complete' : (draft ? ' is-draft' : '')) + (reopened ? ' is-editing' : '') + '"'
-          + ' data-txv-card="1" data-cc="' + esc(p.code) + '" data-cp="' + esc(focusP) + '" data-co="' + esc(solo) + '" data-camt="' + esc(String(p.amount)) + '" data-finding="' + esc(_split.finding) + '">'
+        // COLLAPSED BY DEFAULT (owner 2026-09-11). The head is the summary line --
+        // company, pattern, period, variance, status -- and everything below it is
+        // detail, so the split needs no new markup beyond the body wrapper.
+        // Keyed on p.code (the pattern code), never on position: these cards are
+        // emitted in claim order, which reorders as findings are recorded, and an
+        // index key would re-open a different card after every save.
+        return '<div class="txv-card is-' + acc + (p.done ? ' is-complete' : (draft ? ' is-draft' : '')) + (reopened ? ' is-editing' : '')
+          + _cardColClass('txv', p.code) + '"'
+          + ' data-txv-card="1" data-cc="' + esc(p.code) + '" data-cp="' + esc(focusP) + '" data-co="' + esc(solo) + '" data-camt="' + esc(String(p.amount)) + '" data-finding="' + esc(_split.finding) + '"'
+          + _cardColRoot('txv', p.code) + '>'
           + head
+          + '<div class="cardcol-body">'
           + (p.meta ? '<div class="txv-card-meta">' + esc(p.meta) + '</div>' : '')
           + msg
           + recurRow
@@ -11061,7 +11186,8 @@
           // now writes rows to the server, so it has a way to fail that the analyst
           // must see — a card that quietly kept its old state while the POST 500'd
           // would be read as "already done".
-          + '<div class="txv-card-status" data-txv-status="1" hidden></div></div>';
+          + '<div class="txv-card-status" data-txv-status="1" hidden></div>'
+          + '</div></div>';   // close .cardcol-body, then .txv-card
       };
       // Lane-grouped: a heading + one-line note per non-empty lane, then its cards in
       // claim order. Lanes are the classifier's phases (see _TXV_TIER_ORDER).
@@ -11071,6 +11197,11 @@
              + (_TXV_TIER_NOTE[t] ? '<p class="txv-tier-note">' + esc(_TXV_TIER_NOTE[t]) + '</p>' : '')
              + cs.map(card).join('') + '</div>';
       }).join('');
+      // Collapse toggles. Wired on the persistent HOST, not on the cards, so it
+      // survives every innerHTML swap above; _wireCardCollapse self-guards against
+      // stacking a second listener. The `headline` summary carries no chevron and
+      // is untouched by this (owner: "all cards but the summary").
+      _wireCardCollapse(host);
       // Render-time diagnosis DISABLED (owner 2026-07-13): the opening card text is the
       // catalog's `cause` for the code — what this pattern IS, not a diagnosis of these
       // rows. _txvRunDiagnoses is kept for the post-drill update — once the analyst
@@ -15923,7 +16054,20 @@
       if (!broke && je.length) {   // accountant can act → balancing entry
         var cch = _wlCauseCache[c.co];   // reuse the live AI overview across benign repaints
         var ov = (cch && cch.sig === wlSig && cch.txt) ? _wlSplitRec(cch.txt) : wlOverview(c);
-        return '<div class="wl-card' + (_acctIsDone(c.co) ? ' is-done' : '') + '"><div class="wl-top">' + idH + wlFigs(c) + '</div>'
+        // COLLAPSED BY DEFAULT (owner 2026-09-11). `.wl-top` is the summary line --
+        // integrity dot, company, and the figures including the Out drill -- and
+        // everything below it is detail. Keyed on the COMPANY number, which is
+        // stable across repaints; these cards are ranked by actionability and
+        // reorder as work is completed, so an index key would re-open the wrong one.
+        return '<div class="wl-card' + (_acctIsDone(c.co) ? ' is-done' : '') + _cardColClass('wl', c.co) + '"'
+          + _cardColRoot('wl', c.co) + '>'
+          // ⚠ The chevron is wrapped WITH the figures, not added as a third child.
+          // `.wl-top` is `justify-content: space-between`, so a third child would
+          // push the figures out of the right edge and into the middle -- moving a
+          // thing nobody asked to move. Two children keeps the existing layout.
+          + '<div class="wl-top">' + idH
+          + '<span class="wl-top-right">' + wlFigs(c) + _cardColBtn('wl', c.co) + '</span></div>'
+          + '<div class="cardcol-body">'
           + wlAiBox(c.co, ov.sit, (wlExp === 'off' ? '' : ov.rec), wlExp === 'off')
           // Two rows: the tie-out gets the full width to itself, then the actions sit
           // below it (Balancing Entry left, completion right). The pills row grew from
@@ -15936,7 +16080,8 @@
               ? '<button type="button" class="wl-link" data-acct-nav="je" data-co="' + esc(c.co) + '">Balancing Entry <span aria-hidden="true">&rarr;</span></button>'
               : '<span class="wl-closed">Period closed</span>')
           + '</span>'
-          + wlDoneCtl(c) + '</div></div>';
+          + wlDoneCtl(c) + '</div>'
+          + '</div></div>';   // close .cardcol-body, then .wl-card
       }
       var ops = wlMat(c, 'Analyst');   // not the accountant's to fix (re-roll / operations)
       var cause = broke
@@ -15944,9 +16089,16 @@
         : (((ops[0] && WL_CAUSE[ops[0].name]) || 'Out of balance from operations activity, not a journal entry.') + ' This is an analyst fix, not the accountant’s to post.');
       // Break card keeps its framing pill; both break and operations cards show
       // just the headline row + cause + actions (no variance-pill breakdown).
-      return '<div class="wl-card wl-break"><div class="wl-top">'
+      // The break / operations card collapses on the same rule. Doing only the
+      // first return path would leave these two kinds of card behaving differently
+      // in one list, which reads as a bug rather than a distinction.
+      return '<div class="wl-card wl-break' + _cardColClass('wl', c.co) + '"' + _cardColRoot('wl', c.co) + '>'
+        + '<div class="wl-top">'
         + (broke ? '<div>' + idH + '<div class="wl-driver">roll-forward break · waiting on an analyst re-roll</div></div>' : idH)
-        + (broke ? '<span class="wl-amt">with the analyst</span>' : wlFigs(c)) + '</div>'
+        + '<span class="wl-top-right">'
+        + (broke ? '<span class="wl-amt">with the analyst</span>' : wlFigs(c))
+        + _cardColBtn('wl', c.co) + '</span></div>'
+        + '<div class="cardcol-body">'
         + wlAiBox(c.co, cause, '', wlExp === 'off')
         // Break cards show "can't reconcile yet" (no clickable Out figure), so they
         // keep an explicit Details button; ops cards show the figures, whose Out
@@ -15954,7 +16106,7 @@
         // analyst's to fix, so no per-company completion control here. ("Hand to
         // analyst" removed per UI-7 — the analyst already sees the same data.)
         + (broke ? '<div class="wl-actions"><button type="button" class="wl-btn" data-acct-nav="accounts" data-co="' + esc(c.co) + '">Details</button></div>' : '')
-        + '</div>';
+        + '</div></div>';   // close .cardcol-body, then .wl-card
     };
     // Lead with the accountant's actionable work; sink the blocked companies.
     // Rank: 0 = accountant-clearable (a balancing entry to post), 1 = other
@@ -15983,6 +16135,9 @@
       : '<div class="wl-reconciled">' + svgCheck + ' Every company is reconciled — nothing to post this period.</div>';
     var gridEl = $('acctSnapGrid');
     if (gridEl) gridEl.innerHTML = wlHtml;
+    // Collapse toggles, wired on the persistent grid host rather than the cards it
+    // rebuilds. Self-guarded, so the repaint above cannot stack listeners.
+    _wireCardCollapse(gridEl);
     // Fire the tier-governed AI cause for accountant-fixable cases not already
     // cached at this tier; the deterministic line shows until the AI types in.
     _wlGen++;
