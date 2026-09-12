@@ -91,6 +91,7 @@
         <div><div class="fact-k">This source</div><div class="fact-v amount" id="js-amount">&mdash;</div></div>
         <div><div class="fact-k">Working period</div><div class="fact-v" id="js-period">&mdash;</div></div>
         <div><div class="fact-k">Companies</div><div class="fact-v" id="js-companies">&mdash;</div></div>
+        <div><div class="fact-k">Database</div><div class="fact-v" id="js-database">&mdash;</div></div>
         <div><div class="fact-k">Owner</div><div class="fact-v" id="js-owner" style="font-size:13px;font-weight:700">&mdash;</div><span class="fact-who" id="js-action" hidden></span></div>
       </div>
 
@@ -183,6 +184,14 @@
 
   // ---- scope (reuse the shared session scope; honor working companies) ----
   function workingCompanies(){ try{ if(window.RRV8&&window.RRV8.readSessionScope){ var a=window.RRV8.readSessionScope().activeCompanies||[]; return a.slice(); } }catch(_){} return []; }
+  // THE ONE PRODUCER FOR "WHICH DATABASE AM I LOOKING AT" ON THIS PAGE.
+  // Read by the scope band (setScopeFacts) and by the export title, because
+  // two call sites resolving the same figure independently is how they end up
+  // disagreeing -- which is exactly what UI-186 found here, where the band
+  // computed the right name and the workbook header printed a placeholder.
+  // Returns '' rather than a plausible default when it cannot resolve; every
+  // caller decides how to say "unknown" in its own context.
+  function dbName(){ try{ return (window.RRDB && window.RRDB.name && window.RRDB.name()) || ''; }catch(_){ return ''; } }
   function fmtMoney(v){ if(v==null||isNaN(v))return '—'; var n=Math.abs(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); return (v<0?'(':'')+n+(v<0?')':''); }
   function fmtNum(v,dp){ if(v==null||v==='')return ''; var n=Number(v); if(isNaN(n))return String(v); return (n<0?'(':'')+Math.abs(n).toLocaleString('en-US',{minimumFractionDigits:dp,maximumFractionDigits:dp})+(n<0?')':''); }
   function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(m){return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[m];}); }
@@ -230,6 +239,13 @@
     // real database name was computed here, discarded, and every Variance
     // Source Detail workbook went out titled "Database RapidReconciler".
     // Guarding a dead node hides the fact that its readers are now wrong.
+    //
+    // ✅ 2026-09-12, owner ruling on UI-186: the scope band carries a Database
+    // item again, and BOTH it and the export title read dbName() below --
+    // one producer, so the screen and the workbook cannot disagree about
+    // which database the figures came from.
+    var dbEl = document.getElementById('js-database');
+    if (dbEl) dbEl.textContent = dbName() || '—';
     //
     // ⚠ THIS PAGE'S SCOPE BAND SHOWS PERIOD AND COMPANIES BUT NOT DATABASE,
     // while home.html (:3204), inventory-transactions.html (:2711) and
@@ -562,7 +578,13 @@
     // js-companies and js-period are NOT the same case: both are real markup
     // in this page, written by setScopeFacts() at :226 and :229, so they were
     // resolving correctly and are left reading the DOM.
-    var db  = (window.RRDB && window.RRDB.name && window.RRDB.name()) || 'RapidReconciler';
+    // ⚠ THE FALLBACK USED TO BE THE STRING 'RapidReconciler', AND THAT IS THE
+    // DEFECT ITSELF RATHER THAN A SAFETY NET. It reads like a database name, so
+    // a workbook whose source could not be resolved was indistinguishable from
+    // one extracted from a database actually called that. An audit header that
+    // is confidently wrong costs more than one that admits it does not know.
+    // dbName() returns '' when it cannot resolve, and the title says so.
+    var db  = dbName() || '(database not resolved)';
     var cos = (document.getElementById('js-companies')||{}).textContent || 'All';
     var per = (document.getElementById('js-period')||{}).textContent || '—';
     buildAuditWorkbook({
