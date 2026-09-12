@@ -1509,59 +1509,168 @@ ${adminSection}
   }
 
   // ---- Session expiry / auto-logout (real-token modes only) ----
-  // Idle timeout: 30 minutes of no user activity ends the session and
-  // bounces to login (which re-checks password expiry). Replaces the old
-  // absolute 1-hour cap, so an actively-working user is no longer kicked
-  // out mid-task — the clock resets on any interaction. Activity is tracked
-  // in localStorage (rrv8.lastActivity) so it's shared across tabs/pages.
-  // The token's own exp still applies as a hard backstop. The manually-set
-  // dev token (no sessionStart, far-future exp) is exempt.
-  // Auto-signout master switch. DISABLED for dev/demo per owner 2026-07-02 —
-  // the 30-min idle timeout was kicking working sessions to login mid-task.
-  // Re-enable before production by setting this to true (nothing else changes;
-  // markActivity/watchSession still run so the clock is warm when it's flipped).
-  const AUTO_SIGNOUT_ENABLED = false;
-  const IDLE_MAX_MS = 30 * 60 * 1000;
+  //
+  // TWO INDEPENDENT CLOCKS, AND THEY ARE CHECKED SEPARATELY ON PURPOSE (UI-191).
+  //
+  //   IDLE   30 minutes without user interaction. Resets on any interaction,
+  //          shared across tabs via localStorage (rrv8.lastActivity).
+  //   TOKEN  the JWT's own `exp`. A hard wall; see below.
+  //
+  // ⚠ THIS WHOLE MECHANISM WAS INERT FOR TEN WEEKS AND ITS OWN COMMENT SAID
+  // OTHERWISE. `AUTO_SIGNOUT_ENABLED` was set to false on 2026-07-02 because the
+  // idle timeout was kicking working sessions to login mid-task -- a real defect.
+  // But `sessionExpired()` opened with `if (!AUTO_SIGNOUT_ENABLED) return false`,
+  // and BOTH checks sat after that early return. So turning off the idle clock
+  // turned off the token backstop with it, while the comment three lines above
+  // still promised "the token's own exp still applies as a hard backstop". It did
+  // not. V8 signed nobody out for any reason: a user ran until some data call
+  // came back 401 from the agent, which is the shape support has been seeing.
+  //
+  // Owner ruling 2026-09-12: 30 minutes, WITH a warning. The warning is the part
+  // that was missing in July -- the length was never the whole problem, being
+  // thrown out with no notice was. The flag is gone rather than flipped, because
+  // a master switch that silently disables a security control is the thing that
+  // caused this.
+  //
+  // ⚠ THE TWO CLOCKS GET DIFFERENT WARNINGS, AND THAT IS NOT A STYLE CHOICE.
+  // There is NO token-refresh endpoint -- measured 2026-09-12, zero files match
+  // auth/refresh|refreshToken|renewToken across RRV8, Tools and login.html, with
+  // `auth/login` returning 2 files as a control. So a "Stay signed in" button can
+  // honestly extend the IDLE clock and cannot do anything at all about `exp`.
+  // Offering one for the token case would be a button that lies.
+  //
+  // The manually-set dev token stays exempt by construction: it has no
+  // sessionStart (so the idle branch never arms) and a far-future exp.
+  const IDLE_MAX_MS  = 30 * 60 * 1000;
+  const IDLE_WARN_MS = 2 * 60 * 1000;   // warn this long before either bounce
   let _lastActivityWrite = 0;
-  function markActivity() {
+  function markActivity(force) {
     try {
       // Only track once a real session exists; the dev token has no
       // sessionStart and stays exempt from the idle timeout.
       if (!localStorage.getItem('rrv8.sessionStart')) return;
       const now = Date.now();
       // Throttle writes — activity events (mousemove, scroll) fire constantly.
-      if (now - _lastActivityWrite < 15000) return;
+      if (!force && now - _lastActivityWrite < 15000) return;
       _lastActivityWrite = now;
       localStorage.setItem('rrv8.lastActivity', String(now));
     } catch (_) {}
   }
-  function sessionExpired() {
-    if (!AUTO_SIGNOUT_ENABLED) return false;   // dev/demo: never auto-expire (see flag above)
+
+  /** ms until the idle bounce, or Infinity when the idle clock is not armed. */
+  function idleRemaining() {
     try {
       const start = localStorage.getItem('rrv8.sessionStart');
-      if (start) {
-        // Idle = time since last interaction (falls back to sign-in time
-        // until the first activity is recorded).
-        const last = parseInt(localStorage.getItem('rrv8.lastActivity') || start, 10);
-        if (!isNaN(last) && (Date.now() - last) > IDLE_MAX_MS) return true;
-      }
-      const token = localStorage.getItem('rrv8.token');
-      if (token) {
-        const p = parseJwt(token);
-        if (p && p.exp && Date.now() >= (p.exp * 1000)) return true;
-      }
-    } catch (_) {}
-    return false;
+      if (!start) return Infinity;                 // dev token / no real session
+      const last = parseInt(localStorage.getItem('rrv8.lastActivity') || start, 10);
+      if (isNaN(last)) return Infinity;
+      return (last + IDLE_MAX_MS) - Date.now();
+    } catch (_) { return Infinity; }
   }
-  function endSession() {
+
+  /** ms until the token's own exp, or Infinity when there is no exp to read.
+   *  Computed independently of idleRemaining() so neither can mask the other —
+   *  that masking is exactly what the old single early-return did. */
+  function tokenRemaining() {
+    try {
+      const token = localStorage.getItem('rrv8.token');
+      if (!token) return Infinity;
+      const p = parseJwt(token);
+      if (!p || !p.exp) return Infinity;
+      return (p.exp * 1000) - Date.now();
+    } catch (_) { return Infinity; }
+  }
+
+  /** 'idle' | 'token' | null. Token wins a tie: it is the one nothing can undo. */
+  function sessionExpired() {
+    if (tokenRemaining() <= 0) return 'token';
+    if (idleRemaining()  <= 0) return 'idle';
+    return null;
+  }
+
+  function endSession(reason) {
     try { localStorage.removeItem('rrv8.token'); } catch (_) {}
     try { localStorage.removeItem('rrv8.viewMode'); } catch (_) {}
     try { localStorage.removeItem('rrv8.sessionStart'); } catch (_) {}
     try { localStorage.removeItem('rrv8.lastActivity'); } catch (_) {}
     // Keep rrv8.lastEmail (pre-fill) AND rrv8.activeDb (next sign-in resumes the
     // last-used database, resolved by name; falls back to the first DB otherwise).
-    global.location.href = '../login.html?reason=timeout';
+    // `reason` reaches login.html so it can say which of the two ended the
+    // session — "you were idle" and "your sign-in ran out" are different things
+    // to the person reading it.
+    global.location.href = '../login.html?reason=' + (reason === 'token' ? 'expired' : 'timeout');
   }
+
+  // ---- the warning, which is the half that was missing ----------------------
+  function _ensureSessionWarnStyle() {
+    if (document.getElementById('rrv8-session-warn-style')) return;
+    var css =
+      '.rrv8-sesswarn{position:fixed;right:16px;bottom:16px;z-index:2147483000;max-width:340px;' +
+      'background:#1f2d4a;color:#eef2f9;border:1px solid rgba(255,255,255,.18);border-radius:10px;' +
+      'box-shadow:0 8px 28px rgba(0,0,0,.38);padding:14px 16px;font:14px/1.5 "Open Sans",system-ui,sans-serif;}' +
+      '.rrv8-sesswarn[hidden]{display:none!important;}' +
+      '.rrv8-sesswarn-t{font-weight:700;margin:0 0 4px;font-size:14px;}' +
+      '.rrv8-sesswarn-m{margin:0 0 10px;color:#c8d4e8;}' +
+      '.rrv8-sesswarn-c{font-variant-numeric:tabular-nums;font-weight:700;color:#fff;}' +
+      '.rrv8-sesswarn-b{appearance:none;border:0;border-radius:6px;padding:7px 14px;font:600 13px/1 inherit;' +
+      'background:#2f7d5a;color:#fff;cursor:pointer;}' +
+      '.rrv8-sesswarn-b:hover{background:#276a4c;}' +
+      '@media (prefers-reduced-motion:reduce){.rrv8-sesswarn{transition:none;}}';
+    var st = document.createElement('style');
+    st.id = 'rrv8-session-warn-style';
+    st.textContent = css;
+    (document.head || document.documentElement).appendChild(st);
+  }
+
+  let _warnEl = null;
+  function _warnPanel() {
+    if (_warnEl && document.body.contains(_warnEl)) return _warnEl;
+    _ensureSessionWarnStyle();
+    var el = document.createElement('div');
+    el.className = 'rrv8-sesswarn';
+    el.id = 'rrv8-session-warn';
+    el.setAttribute('role', 'alertdialog');
+    el.setAttribute('aria-live', 'assertive');
+    el.hidden = true;
+    el.innerHTML =
+      '<p class="rrv8-sesswarn-t" id="rrv8-session-warn-title"></p>' +
+      '<p class="rrv8-sesswarn-m" id="rrv8-session-warn-msg"></p>' +
+      '<button type="button" class="rrv8-sesswarn-b" id="rrv8-session-warn-stay">Stay signed in</button>';
+    document.body.appendChild(el);
+    el.querySelector('#rrv8-session-warn-stay').addEventListener('click', function () {
+      markActivity(true);          // force past the 15s throttle — this IS the interaction
+      _hideWarn();
+    });
+    _warnEl = el;
+    return el;
+  }
+  function _hideWarn() { if (_warnEl) _warnEl.hidden = true; }
+  function _mmss(ms) {
+    var s = Math.max(0, Math.ceil(ms / 1000));
+    return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+  }
+  /** Show or update the warning for whichever clock is closest to firing. */
+  function _renderWarn(kind, msLeft) {
+    if (!document.body) return;
+    var el = _warnPanel();
+    var title = el.querySelector('#rrv8-session-warn-title');
+    var msg   = el.querySelector('#rrv8-session-warn-msg');
+    var stay  = el.querySelector('#rrv8-session-warn-stay');
+    if (kind === 'token') {
+      title.textContent = 'Your sign-in is about to expire';
+      // No button: there is no refresh endpoint, so nothing here can extend it.
+      msg.innerHTML = 'Finish what you are doing and save it. You will be returned '
+        + 'to the sign-in page in <span class="rrv8-sesswarn-c">' + _mmss(msLeft) + '</span>.';
+      stay.hidden = true;
+    } else {
+      title.textContent = 'Still there?';
+      msg.innerHTML = 'You will be signed out for inactivity in '
+        + '<span class="rrv8-sesswarn-c">' + _mmss(msLeft) + '</span>.';
+      stay.hidden = false;
+    }
+    el.hidden = false;
+  }
+
   let _sessionWatchStarted = false;
   function watchSession() {
     if (_sessionWatchStarted) return;
@@ -1570,7 +1679,18 @@ ${adminSection}
     ['mousedown', 'keydown', 'scroll', 'touchstart', 'click', 'mousemove'].forEach(function (ev) {
       global.addEventListener(ev, markActivity, { passive: true });
     });
-    global.setInterval(function () { if (sessionExpired()) endSession(); }, 60000);
+    // One-second tick. The old 60s interval cannot drive a countdown, and a
+    // counter that jumps a minute at a time reads as broken.
+    global.setInterval(function () {
+      var why = sessionExpired();
+      if (why) { endSession(why); return; }
+      var tok = tokenRemaining(), idle = idleRemaining();
+      // Warn on whichever fires first. Token first on a tie — it is the one the
+      // button cannot help with, so the user needs the longer notice.
+      if (tok <= IDLE_WARN_MS && tok <= idle)       _renderWarn('token', tok);
+      else if (idle <= IDLE_WARN_MS)                _renderWarn('idle', idle);
+      else                                          _hideWarn();
+    }, 1000);
   }
 
   // The active database is sticky like the rest of the session scope: a
@@ -1897,7 +2017,8 @@ ${adminSection}
     try {
       const mode = _rrMode();
       if (mode === 'demo') return;
-      if (sessionExpired()) { endSession(); return; }
+      const why = sessionExpired();
+      if (why) { endSession(why); return; }
       watchSession();
     } catch (_) {}
   })();
