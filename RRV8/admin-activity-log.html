@@ -252,39 +252,46 @@
     }).join('');
   }
   // Fetch recent events (newest first) from the agent and render them.
-  // Staged fallback (non-prod only) — the SAME RRDEMO feed the Home card falls back
-  // to, so the full log and the card agree when the live feed is empty/unreachable.
-  // DEMO ONLY. This is a staged, fabricated feed — it must never stand in for the
-  // real log anywhere it could be mistaken for one. The gate was `mode !== 'prod'`,
-  // which includes staging, so a staging box with a live-but-empty (or unreachable)
-  // feed would have shown invented rows in an audit log. `mode === 'demo'` is the
-  // only place a made-up event belongs.
-  function _demoEvents() {
-    return (RR_CONFIG.mode === 'demo' && window.RRDEMO && window.RRDEMO.activityLog) ? window.RRDEMO.activityLog() : [];
-  }
+  //
+  // ⛔ THE STAGED RRDEMO FALLBACK IS GONE (UI-194, 2026-09-12), and it was the
+  // last way into demo mode in V8. It read `RR_CONFIG.mode === 'demo'` DIRECTLY
+  // instead of asking RRENV.mode(), which is the one function that coerces
+  // 'demo' to 'staging' — so a deploy whose config.js shipped mode:'demo' would
+  // have switched fabricated rows back into an AUDIT LOG, and UI-187's proof
+  // that demo mode is unreachable did not reach this line.
+  //
+  // Deleted rather than re-routed: with the coercion in front of it the
+  // condition is provably false, and the false arm it was shadowing — an empty
+  // list — is already the correct behaviour here. An empty live feed renders
+  // "No events recorded yet"; an unreachable one renders the "couldn't load"
+  // note below. Both are honest, which is what an audit log owes its reader,
+  // and neither needed a fabricated row to stand in.
+  //
+  // window.RRDEMO itself is untouched: home.html still calls
+  // RRDEMO.activityLog() under `mode !== 'prod'`, so nothing is orphaned here.
+  // Whether that shim should exist at all is a separate, unruled question.
+  //
   // Newest-first (ISO timestamps sort lexicographically = chronologically) — the
   // SAME ordering the Home card applies, so the card's top-3 are this log's top rows.
   function _byNewest(list) {
     return (list || []).slice().sort(function (a, b) { return String(b.at || '').localeCompare(String(a.at || '')); });
   }
   function loadEvents() {
-    // LIVE-first: read the agent's GET /admin/activity (the same source the Home
+    // LIVE-ONLY: read the agent's GET /admin/activity (the same source the Home
     // card reads) so the two never diverge — real events (refreshes, reloads,
-    // reconciliation attestations / sign-offs) show here AND on the card. The
-    // staged RRDEMO feed is only a fallback for an empty / unreachable feed in a
-    // non-prod demo; prod with no events shows the honest "couldn't load" note.
+    // reconciliation attestations / sign-offs) show here AND on the card. There
+    // is no fallback feed: no events means "No events recorded yet", and a feed
+    // that cannot be reached says so.
     var headers = { 'Accept': 'application/json' };
     try { var t = localStorage.getItem('rrv8.token'); if (t) headers['Authorization'] = 'Bearer ' + t; } catch (_) {}
     fetch(agentBase() + '/admin/activity?limit=50', { headers: headers })
       .then(function (r) { return r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)); })
       .then(function (list) {
-        _allEvents = _byNewest((Array.isArray(list) && list.length) ? list : _demoEvents());
+        _allEvents = _byNewest(Array.isArray(list) ? list : []);
         populateTypeFilter(); applyLogFilter();
       })
       .catch(function () {
-        var demo = _demoEvents();
-        if (demo.length) { _allEvents = _byNewest(demo); populateTypeFilter(); applyLogFilter(); return; }
-        // Unreachable in prod (e.g. the engine is mid-restart) — say so honestly; a
+        // Unreachable (e.g. the engine is mid-restart) — say so honestly; a
         // manual Refresh or reopening retries.
         var p = $('js-pending'); if (!p) return;
         p.style.display = 'flex';
