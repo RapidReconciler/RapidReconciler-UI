@@ -239,7 +239,6 @@
   .no-grant-notice .ngn-body { margin: 0; font-size: 14px; line-height: 1.6; color: var(--text-muted, #5a6478); }
   body[data-view-role="none"] #view-admin,
   body[data-view-role="none"] #adminSummary,
-  body[data-view-role="none"] #analystSectionHead,
   body[data-view-role="none"] #analystBody,
   body[data-view-role="none"] #acctTop,
   body[data-view-role="none"] #acctTriage,
@@ -462,11 +461,9 @@
      would gain a "no access to Administration" card they never showed before. */
   body[data-view-role="accountant"] #view-admin,
   body[data-view-role="accountant"] #adminSummary,
-  body[data-view-role="accountant"] #analystSectionHead,
   body[data-view-role="accountant"] #analystBody { display: none !important; }
   body[data-view-role="analyst"] #view-admin,
   body[data-view-role="analyst"] #adminSummary { display: none !important; }
-  body[data-view-role="admin"] #analystSectionHead,
   body[data-view-role="admin"] #analystBody { display: none !important; }
   /* Admin doesn't need the out-of-balance-by-period chart — that's the
      reconciliation (accountant/analyst) view. Admin gets the task grid + the
@@ -2035,7 +2032,9 @@
   /* Collapsed-bar status headline — fills the middle of a closed drawer with
      the lane's one-line roll-up (from /home/status-summary). Shown only when
      the lane is collapsed AND a headline exists; the cards carry detail when
-     open. Driven by setSectStatus(); the collapse manager toggles visibility. */
+     open. UI-188, 2026-09-12: setSectStatus() is retired -- the role bands it
+     wrote into no longer exist. The ONE live producer of this element is now
+     setScopeStatus(), which fills the Set Context band's collapsed headline. */
   .sect-status {
     flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: 8px;
     font-size: 13px; font-weight: 600; color: var(--text-soft);
@@ -2266,9 +2265,11 @@
   .panel.status-red   { background: var(--red-pale); border-color: #f1c9c3; box-shadow: inset 4px 0 0 var(--red), var(--shadow-sm); }
   /* Role-band STATUS tint (bg wash + inset bar). The three role bands
      (Administrator / Analyst / Accountant) shade green / amber / red by their
-     lane's live status — set by setSectStatus() off the /home/status-summary
-     level (ok | watch | attention). The solid role chip stays the lane's fixed
-     identity color, so band = status and chip = identity (no conflation).
+     lane's live status. UI-188, 2026-09-12: ALL THREE OF THOSE BANDS ARE GONE
+     (their section heads exist in no markup) and setSectStatus() with them, so
+     these rules are kept only for the Set Context band, which carries no
+     status tint today. The chip-is-identity / band-is-status split below is
+     still the rule if a status band ever comes back.
      Support is a help section, not a status lane — it carries no band tint. */
   .section-head.is-collapsible.band-green { background: var(--green-pale);  border-color: #c5e6d2; box-shadow: inset 4px 0 0 var(--green); }
   .section-head.is-collapsible.band-amber { background: var(--orange-pale); border-color: #f0d2a8; box-shadow: inset 4px 0 0 var(--orange); }
@@ -2766,9 +2767,7 @@
      the whole page until the admin's team is set up. */
   body.is-firstrun #scopeSectionHead,
   body.is-firstrun #scopeBody,
-  body.is-firstrun #analystSectionHead,
   body.is-firstrun #analystBody,
-  body.is-firstrun #analystLane,
   body.is-firstrun #emptyState { display: none !important; }
   .wz-sub { color: var(--text-muted); font-size: 14px; margin-top: 4px; }
   .stepstrip { display: flex; gap: 8px; flex-wrap: wrap; margin: 20px 0; }
@@ -3519,8 +3518,11 @@
   <!-- shared: working entry point (Finance lane — period-end reconciliation) -->
   <!-- Accountant band removed (2026-06-30) — the AI briefing now surfaces the
        accountant's reconciliation items directly. Module selection moves into
-       sign-in (deferred, with the DB picker). renderTiles()/setSectStatus()
-       self-guard on the missing nodes. -->
+       sign-in (deferred, with the DB picker).
+       UI-188, 2026-09-12: this used to end "renderTiles()/setSectStatus()
+       self-guard on the missing nodes". setSectStatus() is deleted rather
+       than guarded -- self-guarding is what kept four sections' machinery
+       reading as live for ten weeks. -->
 
   <!-- Support band removed (2026-06-29) — KB / Help Desk search isn't needed on
        this working page. The collapse config + .support-card wiring both guard
@@ -3995,10 +3997,6 @@
   }
   // Expand a collapsible section if it's currently collapsed (runs the real
   // collapse toggle so persisted state stays in sync).
-  function _expandSection(headId, bodyId) {
-    var head = $(headId), body = $(bodyId);
-    if (head && body && body.classList.contains('is-collapsed')) (head.querySelector('.sect-collapse') || head).click();
-  }
   function _setViewRole(r) {
     if (_roleRank(r) <= _roleRank(_entitledRole())) { try { localStorage.setItem('rrv8.viewRole', r); } catch (_) {} }
     // A stale Ask answer belongs to the view you're LEAVING — clear the shared
@@ -4013,7 +4011,6 @@
     applyViewRole();
     // Land the switch on content, not a collapsed header — open the role's lane.
     var vr = _viewRole();
-    if (vr === 'analyst') _expandSection('analystSectionHead', 'analystBody');
     renderAiBriefing();   // re-tier the briefing prose for the newly-selected role
   }
   // Land each role on its primary surface at a FRESH sign-in — the same lane the
@@ -4035,7 +4032,6 @@
     } catch (_) {}
     if (!fresh) return;
     var vr = _viewRole();
-    if (vr === 'analyst') _expandSection('analystSectionHead', 'analystBody');
   }
 
   // The RR University module filters the signed-in user can access, mapped from
@@ -4488,8 +4484,11 @@
     if (typeof _syncPeriodPill === 'function') _syncPeriodPill();
   }
   // Headline for the collapsed Set Context band: database · working companies ·
-  // working period. Mirrors setSectStatus' "only while collapsed" visibility so
-  // the line shows when the band is closed and clears when it's open.
+  // working period. It used to be described as mirroring setSectStatus'
+  // "only while collapsed" visibility; that function is retired (UI-188), so
+  // this is now the ONLY producer of a .sect-status headline anywhere on the
+  // page. The behaviour is unchanged: show when the band is closed, clear when
+  // it is open.
   function setScopeStatus(companiesSummary, periodText) {
     var head = $('scopeSectionHead'); if (!head) return;
     var el = head.querySelector('.sect-status'); if (!el) return;
@@ -6688,7 +6687,8 @@
   // GET /home/status-summary returns a role-agnostic roll-up for each gated
   // lane: { admin|analyst|finance: { level, headline, items[] } }. The section
   // pill keeps its stable lane-identity color; status shows as the dot in the
-  // collapsed-bar headline (setSectStatus) and, for a lane the viewer can't
+  // collapsed-bar headline (retired with setSectStatus, UI-188) and, for a
+  // lane the viewer can't
   // act on, the read-only summary list (fillLaneSummary). Endpoint absent
   // (older jar) → headlines/summaries just stay empty. Nothing faked. See
   // RRV8/API.md.
@@ -6706,35 +6706,6 @@
     ul.innerHTML = items.map(function (t) {
       return '<li class="' + rank + '"><span class="ls-dot"></span>' + esc(t) + '</li>';
     }).join('');
-  }
-  // Headline shown in the collapsed drawer bar (every role — it's awareness,
-  // not an action). Visible only while the lane is closed; the collapse
-  // manager re-checks visibility on toggle.
-  function setSectStatus(headSel, bodyId, sec) {
-    var head = document.querySelector(headSel); if (!head) return;
-    // UI-188: the '#adminSectionHead' delegation branch is gone with
-    // syncAdminBand() -- there is no Administrator section head in the markup,
-    // so this branch captured two module variables and painted nothing.
-    // Band STATUS tint follows the lane level (green/amber/red), independent of
-    // the collapsed/expanded headline below. Cleared first so a recovery
-    // (red->green) repaints; an unknown level leaves the band neutral.
-    head.classList.remove('band-green', 'band-amber', 'band-red');
-    var lvl = sec && sec.level;
-    if (lvl === 'attention') head.classList.add('band-red');
-    else if (lvl === 'watch') head.classList.add('band-amber');
-    else if (lvl === 'ok')    head.classList.add('band-green');
-    var el = head.querySelector('.sect-status'); if (!el) return;
-    // A healthy band reads uniformly as "All clear" (owner's call) — the server's
-    // per-role ok headline varies ("Service healthy", "In balance for the open
-    // period"), but green only needs to say it's green. Amber/red keep the
-    // server's specific, informative headline.
-    var headline = (sec && sec.level === 'ok') ? 'All clear' : (sec && sec.headline);
-    if (headline) {
-      var dot = sec.level === 'attention' ? 'red' : sec.level === 'watch' ? 'amber' : sec.level === 'ok' ? 'green' : '';
-      el.innerHTML = '<span class="ss-dot ' + dot + '"></span><span class="ss-text">' + esc(headline) + '</span>';
-    } else { el.innerHTML = ''; }
-    var body = $(bodyId);
-    el.hidden = !(headline && body && body.classList.contains('is-collapsed'));
   }
   // Today's To Do — the per-role roll-up. Maps each role to its source, the cap
   // that decides whether the viewer can act on it, and the role pill color
@@ -16758,7 +16729,8 @@
       if (!s || typeof s !== 'object') throw new Error('empty');
       _lastStatusSummary = s;   // cached so tintPanels() can re-run renderTodo as admin panels resolve
       // Pills keep their stable lane-identity color; status is conveyed by the
-      // headline dot below (setSectStatus), never by tinting the pill.
+      // headline dot below -- retired with setSectStatus (UI-188); the pill was
+      // never the status carrier and still is not.
       if (lockedAdmin) fillLaneSummary('adminSummaryList', s.admin);
       if (lockedAnalyst) fillLaneSummary('analystSummaryList', s.analyst);
       // Collapsed-bar headlines — shown to every role, regardless of lock.
@@ -16766,7 +16738,6 @@
       // payload still carries s.admin and s.finance and both are still read
       // above (fillLaneSummary) and by renderTodo below -- only the headline
       // write into a head that does not exist was removed.
-      setSectStatus('#analystSectionHead', 'analystBody', s.analyst);
       renderTodo(s);   // Today's To Do roll-up off the same payload
       if (s.db) { _dbFacts = s.db; renderDbMeta(); }
       renderAiBriefing();   // re-run so Admin tasks (this rollup) join the triage
@@ -16868,11 +16839,11 @@
     // cached summary, the admin server-level, and every band tint so no stale
     // band/summary survives into the new DB's load window.
     _lastStatusSummary = null;
-    // UI-188: admin/mod/todo dropped -- those sections do not exist. Analyst
-    // stays because its BODY does; see the defs table below.
-    ['analystSectionHead'].forEach(function (id) {
-      var h = $(id); if (h) h.classList.remove('band-green', 'band-amber', 'band-red');
-    });
+    // UI-188: the band-tint clearing loop is gone. It ran over five section
+    // heads, then one, and now zero -- the only collapsible section left is
+    // Set Context, which carries no status band. Kept as a comment rather than
+    // an empty forEach so the next reader knows the loop was retired on
+    // measurement, not lost in an edit.
     updateServiceCard();   // repaint the Service Health card from the now-cleared _svcMem
   }
 
@@ -17124,13 +17095,23 @@
       // all return 0 `id=` producers, against `scopeBody` and `analystBody`
       // returning 1 each as the control). Whole sections, gone.
       //
-      // ⚠ `analystSectionHead` IS STILL HERE AND IS STILL ABSENT FROM THE
-      // MARKUP. It is deliberately not cut: `analystBody` DOES exist, so that
-      // one is a section body with no header -- either a header that was
-      // dropped by accident or one dropped on purpose, and only looking at the
-      // rendered page separates those. Held for the owner rather than guessed.
-      { head: 'scopeSectionHead',   grid: 'scopeBody',   label: 'Set Context' },
-      { head: 'analystSectionHead', grid: 'analystBody', label: 'Analyst' }
+      // ✅ AND THE ANALYST ONE IS NOW CUT TOO, 2026-09-12, ON EVIDENCE RATHER
+      // THAN ON THE SHAPE OF THE CODE. It was held back because `analystBody`
+      // exists while its head does not, which reads either as a header lost by
+      // accident or one dropped on purpose -- and the markup cannot tell you
+      // which. Git history can: `aaa0af9` (2026-07-02, #307, "home
+      // working-palette IA -- sub-view tabs, Reports hub, Perpetual grid")
+      // DELETED `<div class="section-head is-collapsible" id="analystSectionHead">`
+      // together with `#analystLane`, replacing the collapsible section with
+      // the sub-view tabs the analyst lane uses today. Deliberate, and part of
+      // a redesign rather than a slip.
+      //
+      // It also makes sense on its own terms: "Set Context" is a band EVERY
+      // role sees above their own lane, so it needs a label and a collapse.
+      // The analyst lane IS the analyst's whole view -- a header labelled
+      // "Analyst" inside it is noise, and collapsing it would leave a blank
+      // page.
+      { head: 'scopeSectionHead', grid: 'scopeBody', label: 'Set Context' }
     ];
 
     var stored = read();
