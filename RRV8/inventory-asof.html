@@ -235,6 +235,19 @@
     border-color: var(--rule-strong);
     color: var(--text);
   }
+  /* Sink for the report-button gate. A disabled control has to SAY why on the
+     page — a title attribute is not a sink, because the analyst has to guess
+     that hovering is worth doing. Hidden while the controls are live. */
+  .page-actions-note {
+    font-family: 'Source Sans 3', sans-serif;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.35;
+    color: var(--text-muted);
+    max-width: 340px;
+    text-align: right;
+  }
+  .page-actions-note[hidden] { display: none; }
   .action-toggle .toggle-pip {
     width: 28px;
     height: 16px;
@@ -1227,10 +1240,52 @@
     <div class="page-header-left">
       <h1 class="page-title">Full Perpetual Details</h1>
     </div>
-    <!-- Report buttons retired — UOM / Frozen Cost / GL-Class integrity now live
-         on Home → Reports (Data Integrity), and the on-hand total / contributors /
-         period trend live on Home → Perpetual At-a-Glance. This page is now just
-         the AI band + Residual Optimizer + the full grid. -->
+    <!-- Report buttons — REBUILT 2026-09-12 (UI-185), owner ruling.
+         This slot used to say the three report buttons were retired because
+         "UOM / Frozen Cost / GL-Class integrity now live on Home → Reports
+         (Data Integrity)". The markup went; `analyzeFrozenCost`,
+         `analyzeGlClass` and `downloadUomReport` did not, and neither did the
+         `.page-actions` / `.action-control` CSS. Every lookup for these three
+         ids returned null from then on, and because each listener is wrapped
+         in `if (btn)` nothing ever threw — the functions read as live to
+         anyone grepping. dead-lookups.py listed all three.
+
+         What the retirement note got RIGHT: Home's Reports tab does run these
+         same three /inventory/integrity views (INTG_REPORTS in home.html).
+         What it MISSED: Home downloads an audit workbook (buildAuditWorkbook).
+         Frozen Cost and GL Class here hand the rows to the headless ANALYZER
+         (handOffToAnalyzer → FrozenCostTemplate / GLClassTemplate), which
+         returns the WHAT / WHY / HOW diagnostic, not a row dump.
+         `handOffToAnalyzer` appears nowhere in home.html — so the diagnostic
+         has had no control anywhere in the product since the markup was cut.
+         UOM Conversions is the narrower case: Home exports the same view, and
+         what this button adds is the single-company scope this page is already
+         showing (scopeRowsToSoloCompany), not a different report.
+
+         Gate: all three need ONE resolved company (`_ensureSolo()`, and no
+         latched `_scopeError`) — the integrity endpoint ignores the request
+         company filter, so the scoping is entirely client-side and a workbook
+         built with no company resolved would leave the building holding every
+         company's rows. syncIntegrityReportControls() drives disabled state
+         and writes the reason into #asof-report-note. -->
+    <div class="page-actions" id="asof-report-actions">
+      <span class="page-actions-note" id="asof-report-note">Waiting for company scope&hellip;</span>
+      <button type="button" class="action-control" id="js-uom-conv-btn" disabled
+              title="Items missing a UOM conversion for this company — straight to Excel">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10v3h10v-3"/><path d="M8 2v9"/><polyline points="5 8 8 11 11 8"/></svg>
+        <span>UOM Conversions</span>
+      </button>
+      <button type="button" class="action-control" id="js-analyze-frozen-cost-btn" disabled
+              title="Run the Frozen Cost integrity rows through the analyzer — returns the analyzed workbook, not a row dump">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="7" r="4.2"/><line x1="10.2" y1="10.2" x2="14" y2="14"/></svg>
+        <span>Frozen Cost</span>
+      </button>
+      <button type="button" class="action-control" id="js-analyze-gl-class-btn" disabled
+              title="Run the GL Class integrity rows through the analyzer — returns the analyzed workbook, not a row dump">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="7" r="4.2"/><line x1="10.2" y1="10.2" x2="14" y2="14"/></svg>
+        <span>GL Class</span>
+      </button>
+    </div>
   </header>
 
   <!-- Scope strip — the parameters this page was opened with (database · companies ·
@@ -2877,6 +2932,11 @@ function updateLotDetailPill() {
     renderTableHeader();
     updateColPill();
     _state.companyFilter = _ensureSolo() || '';   // single-of view — narrow client-side too, in case the fetch returned more
+    // Same precondition the report buttons gate on, re-evaluated on every render
+    // so switching company (or resolving one late in boot) turns them on.
+    // Unguarded on purpose: it is a hoisted declaration in this same IIFE
+    // (1412..4702). An `if (typeof … )` here is how a call goes quietly dead.
+    syncIntegrityReportControls();
     _viewRows = filteredRows();
     _curCtx = (window.RRV8 && RRV8.currencyOf)
       ? RRV8.currencyOf(_viewRows, function(r){ return r.Currency; })
@@ -4341,14 +4401,72 @@ function updateLotDetailPill() {
     }, btn);
   }
 
-  const analyzeFrozenCostBtn = document.getElementById('js-analyze-frozen-cost-btn');
-  if (analyzeFrozenCostBtn) {
-    analyzeFrozenCostBtn.addEventListener('click', () => analyzeFrozenCost(analyzeFrozenCostBtn));
+  // ============================================================
+  //  Report-button gate (UI-185)
+  //
+  //  All three report controls need the SAME precondition, and it is
+  //  read off the implementations rather than guessed: both
+  //  analyzeIntegrityReport() and downloadUomReport() open with
+  //  `if (_scopeError || !_ensureSolo())` and refuse. The reason is
+  //  scoping — /inventory/integrity ignores the request company
+  //  filter, so scopeRowsToSoloCompany() is the only thing keeping a
+  //  single-company page from exporting every company's rows.
+  //
+  //  So: disabled until one company resolves, with the reason written
+  //  to #asof-report-note where the analyst can read it.
+  //  `dataset.reportRunning` marks a run in flight so a re-render
+  //  landing mid-run cannot re-enable a button the implementation
+  //  deliberately disabled and let a second click double-fire it.
+  //
+  //  Both helpers are function DECLARATIONS holding no module-level
+  //  state, so renderDetails() can call the sync from anywhere in this
+  //  IIFE without a temporal-dead-zone hazard on a `const` declared
+  //  further down.
+  // ============================================================
+  function integrityReportButtons() {
+    return ['js-uom-conv-btn', 'js-analyze-frozen-cost-btn', 'js-analyze-gl-class-btn']
+      .map(id => document.getElementById(id))
+      .filter(Boolean);
   }
-  const analyzeGlClassBtn = document.getElementById('js-analyze-gl-class-btn');
-  if (analyzeGlClassBtn) {
-    analyzeGlClassBtn.addEventListener('click', () => analyzeGlClass(analyzeGlClassBtn));
+
+  function syncIntegrityReportControls() {
+    const note = document.getElementById('asof-report-note');
+    let solo = null;
+    try { solo = _ensureSolo(); } catch (_) { solo = null; }
+    const reason = _scopeError
+      ? ('These reports are off: this session has no access to company ' + _scopeError.value +
+         ', and they are scoped to one company.')
+      : (!solo
+          ? 'These reports run one company at a time, and no company is resolved yet.'
+          : '');
+    integrityReportButtons().forEach(b => {
+      if (b.dataset.reportRunning === '1') return;
+      b.disabled = !!reason;
+    });
+    if (note) {
+      note.textContent = reason;
+      note.hidden = !reason;
+    }
   }
+
+  function wireIntegrityButton(id, run) {
+    const btn = document.getElementById(id);
+    if (!btn) return;
+    btn.addEventListener('click', () => {
+      if (btn.disabled || btn.dataset.reportRunning === '1') return;
+      btn.dataset.reportRunning = '1';
+      // Both implementations return a promise and restore the button in their
+      // own `finally`; this only tracks that a run is open so the gate keeps
+      // its hands off until it closes.
+      Promise.resolve().then(() => run(btn)).catch(() => {}).then(() => {
+        delete btn.dataset.reportRunning;
+        syncIntegrityReportControls();
+      });
+    });
+  }
+
+  wireIntegrityButton('js-analyze-frozen-cost-btn', analyzeFrozenCost);
+  wireIntegrityButton('js-analyze-gl-class-btn', analyzeGlClass);
 
   // ============================================================
   //  UOM Conversions report button
@@ -4453,10 +4571,10 @@ function updateLotDetailPill() {
     }
   }
 
-  const uomConvBtn = document.getElementById('js-uom-conv-btn');
-  if (uomConvBtn) {
-    uomConvBtn.addEventListener('click', () => downloadUomReport(uomConvBtn));
-  }
+  wireIntegrityButton('js-uom-conv-btn', downloadUomReport);
+  // First pass — the markup ships disabled with "Waiting for company scope…"
+  // showing, so the controls are never dark with nothing said about why.
+  syncIntegrityReportControls();
 
   // ============================================================
   //  Report count badges -- REMOVED 2026-08-09 (UI-71).
