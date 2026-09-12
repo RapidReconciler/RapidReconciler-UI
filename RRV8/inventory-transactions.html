@@ -1921,6 +1921,11 @@
   /* ============================================================
      WORKED BUTTON (batch-edit selected rows)
      ============================================================ */
+  /* Same trap UI-159 hit on .grid-pill: updateWorkedButton() hides this with the
+     `hidden` property, and the inline-flex below outranks the UA's [hidden] rule.
+     Without this line the Update pill sits in the grid header reading "Update"
+     with nothing selected. Added with the rebuild, UI-185. */
+  .worked-btn[hidden] { display: none; }
   .worked-btn {
     display: inline-flex;
     align-items: center;
@@ -2806,15 +2811,40 @@
            filteredRows was UNREACHABLE and worked-only filtering did not exist
            on this page. Restoring one element makes all of it live again.
 
-           Deliberately NOT restored alongside it: the `worked-btn` Update
-           button that sat beside this pill in #88. Its own comment records
-           that it went when "the work moved into the side panel", which is
-           #tx-work-panel, so rebuilding it would duplicate a shipped
-           capability. Its leftovers are UI-184's to retire, not to revive. -->
+           CORRECTED 2026-09-12 (UI-185), owner ruling: REBUILD. This block
+           used to say the `worked-btn` Update button was deliberately NOT
+           restored, because its own comment claimed it went when "the work
+           moved into the side panel" — #tx-work-panel — so rebuilding it
+           "would duplicate a shipped capability".
+
+           THAT PREMISE WAS MEASURED FALSE. #tx-work-panel is CARD-driven:
+           openTxWorkPanel(item) is only ever called with a Pattern / Module
+           card and stores it in `_txWorkPanel`; it never reads
+           `_state.selectedKeys`. It replaced a different capability. The
+           GRID's multi-select is fully live and always has been —
+           #details-tbody is real markup, its delegated click handler does
+           Windows-style single / Ctrl-toggle / Shift-range selection,
+           `.is-selected` paints the rows, and `updateWorkedButton()` is
+           called from both the selection handler and renderAll(). The only
+           thing missing was this button, so an analyst could Ctrl-click
+           twelve rows, watch every one of them highlight, and have nothing
+           to press. Restoring one element makes the batch-edit modal
+           (#edit-overlay, its Worked / Note radios, and the
+           POST inventory/transactions/save-notes apply path) reachable.
+
+           No separate enable gate: updateWorkedButton() already hides it at
+           zero selected rows and labels it "Update (N)" otherwise, so the
+           control only ever appears when it can do something. -->
       <button type="button" class="worked-filter-pill" id="worked-filter-pill" title="Filter rows by worked status">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 8 7 12 13 4"/></svg>
         <span id="worked-filter-label">Worked: All</span>
         <svg class="worked-filter-caret" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 6 8 10 12 6"/></svg>
+      </button>
+      <!-- Batch edit for the selected grid rows. Ships hidden; updateWorkedButton()
+           unhides it the moment a row is selected and keeps the count current. -->
+      <button type="button" class="worked-btn" id="worked-btn" hidden title="Open the batch-edit popup for the selected rows">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.5 2.5l3 3L6 13H3v-3z"/></svg>
+        <span id="worked-btn-label">Update</span>
       </button>
       <div class="details-head-right">
         <!-- Grid-state cluster (V8 grid standard) — Filter pill +
@@ -8936,10 +8966,14 @@
   editCancelBtn.addEventListener('click', closeEditModal);
   editOverlay.addEventListener('click', (e) => { if (e.target === editOverlay) closeEditModal(); });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !editOverlay.hidden) closeEditModal(); });
-  // worked-btn was the Update pill in the grid head — removed when
-  // the work moved into the side panel. The HTML / CSS / JS for the
-  // batch-edit modal stays in place but has no opener; the guard
-  // below prevents a null-reference at boot.
+  // worked-btn — the Update pill in the grid head, REBUILT 2026-09-12 (UI-185).
+  // This used to read "removed when the work moved into the side panel", which
+  // was wrong: the side panel (#tx-work-panel) is card-driven and never touches
+  // `_state.selectedKeys`. The grid's own multi-select stayed live the whole
+  // time and this was its only opener, so the batch-edit modal below had been
+  // unreachable from the grid. The `if` stays because the markup is in the same
+  // file and a null here would take the rest of the boot chain down — it is not
+  // standing in for an element that does not exist.
   const workedBtnEl = document.getElementById('worked-btn');
   if (workedBtnEl) workedBtnEl.addEventListener('click', openEditModal);
 
