@@ -2277,7 +2277,6 @@
   /* Section break before Support: the three role bands (Administrator, Analyst,
      Accountant) read as one group; Support is a separate help section, so give
      its band extra air above it. */
-  #supportSectionHead { margin-top: 32px; }
 
   /* ---- Per-panel collapse (each admin section opens/closes on its own) ----
      Default closed: panels render as a scannable row of titled, status-tinted
@@ -2549,11 +2548,6 @@
     background: var(--bg-card); border: 1px solid var(--rule); border-radius: 14px;
     box-shadow: var(--shadow-sm); padding: 4px 20px;
   }
-  /* Expanded: flatten the band's bottom so it merges into the drawer body. */
-  #todoSectionHead:has(+ #todoBody:not(.is-collapsed)) {
-    margin-bottom: 0; border-bottom: 0;
-    border-bottom-left-radius: 0; border-bottom-right-radius: 0;
-  }
   #todoBody:not(.is-collapsed) {
     margin-top: 0;
     border: 1px solid var(--rule); border-top: 0; border-radius: 0 0 14px 14px;
@@ -2566,9 +2560,6 @@
   /* Tint-match the drawer to the band so the seam and the left accent bar read
      continuous (tinted bands carry only the inset bar, no drop shadow — mirror
      that on the body). */
-  #todoSectionHead.band-green + #todoBody:not(.is-collapsed) { border-color: #c5e6d2; box-shadow: inset 4px 0 0 var(--green); }
-  #todoSectionHead.band-amber + #todoBody:not(.is-collapsed) { border-color: #f0d2a8; box-shadow: inset 4px 0 0 var(--orange); }
-  #todoSectionHead.band-red   + #todoBody:not(.is-collapsed) { border-color: #f1c9c3; box-shadow: inset 4px 0 0 var(--red); }
   .todo-group { padding: 15px 0; border-bottom: 1px solid var(--rule); }
   .todo-group:last-child { border-bottom: 0; }
   .todo-group-head {
@@ -2773,17 +2764,12 @@
   /* ---- Admin first-run wizard (onboarding) ---- */
   /* In onboarding mode the steady-state surface is hidden — the wizard is
      the whole page until the admin's team is set up. */
-  body.is-firstrun #todoSectionHead,
-  body.is-firstrun #todoBody,
   body.is-firstrun #scopeSectionHead,
   body.is-firstrun #scopeBody,
   body.is-firstrun #analystSectionHead,
   body.is-firstrun #analystBody,
   body.is-firstrun #analystLane,
-  body.is-firstrun #modSectionHead,
-  body.is-firstrun #moduleGrid,
-  body.is-firstrun #emptyState,
-  body.is-firstrun #supportRow { display: none !important; }
+  body.is-firstrun #emptyState { display: none !important; }
   .wz-sub { color: var(--text-muted); font-size: 14px; margin-top: 4px; }
   .stepstrip { display: flex; gap: 8px; flex-wrap: wrap; margin: 20px 0; }
   .step { flex: 1; min-width: 150px; display: flex; align-items: center; gap: 9px; padding: 10px 12px; border: 1px solid var(--rule); border-radius: 10px; background: var(--bg-card); box-shadow: var(--shadow-sm); }
@@ -3271,8 +3257,14 @@
        — the SAME counts the role bands show, so the To Do total always matches
        the bands. Default expanded. Hidden during admin first-run (see CSS). -->
   <!-- Today's To Do band removed (2026-06-29) — the AI briefing now carries the
-       "what needs doing" read; renderTodo()/setTodoStatus() self-guard on the
-       missing nodes, so the loaders are unaffected. -->
+       "what needs doing" read.
+       UI-188, 2026-09-12: this note used to add that "renderTodo()/
+       setTodoStatus() self-guard on the missing nodes, so the loaders are
+       unaffected". Self-guarding is what let four whole sections' worth of
+       machinery sit here for ten weeks reading as live to anyone grepping.
+       setTodoStatus() is now deleted rather than guarded; renderTodo() stays
+       because the To Do LIST is real and live — only its collapsed-band
+       headline was painting into markup that does not exist. -->
 
 
   <!-- What's New — newest customer release notes, pulled live from
@@ -4022,7 +4014,6 @@
     // Land the switch on content, not a collapsed header — open the role's lane.
     var vr = _viewRole();
     if (vr === 'analyst') _expandSection('analystSectionHead', 'analystBody');
-    else if (vr === 'admin') _expandSection('adminSectionHead', 'adminBody');
     renderAiBriefing();   // re-tier the briefing prose for the newly-selected role
   }
   // Land each role on its primary surface at a FRESH sign-in — the same lane the
@@ -4045,7 +4036,6 @@
     if (!fresh) return;
     var vr = _viewRole();
     if (vr === 'analyst') _expandSection('analystSectionHead', 'analystBody');
-    else if (vr === 'admin') _expandSection('adminSectionHead', 'adminBody');
   }
 
   // The RR University module filters the signed-in user can access, mapped from
@@ -6676,56 +6666,12 @@
   function tintPanels() {
     if (!caps().adm) return;   // non-admins don't see the cards; pills come from the summary read
     reorderAdminCards();       // status-first: attention left, clear right (post-resolve)
-    // Per-card tint is CSS now; JS only rolls the cards up into the band + To Do
+    // Per-card tint is CSS now; JS only rolls the cards up into the To Do list
     // and refreshes the admin AI briefing as dots resolve.
-    syncAdminBand();
+    // UI-188: the syncAdminBand() call went with the band itself -- there is no
+    // Administrator section head in the markup for it to paint.
     if (typeof renderTodo === 'function') renderTodo(_lastStatusSummary);
     if (_viewRole() === 'admin' && typeof _scheduleAdminBrief === 'function') _scheduleAdminBrief();
-  }
-  // --- Administrator band roll-up ------------------------------------------
-  // The band's tint + collapsed headline reflect max(server s.admin level, worst
-  // admin task card). The server level is captured on each /home/status-summary
-  // read (setSectStatus delegates here for the admin head); tintPanels() re-runs
-  // this whenever a card dot changes, so the bar tracks the cards live.
-  var BAND_RANK = { '': 0, ok: 1, watch: 2, attention: 3 };
-  var _adminServerLvl = '';        // raw level the server reported for s.admin
-  var _adminServerHeadline = '';   // server's admin headline (used when server-driven)
-  function worstAdminPanelLvl() {
-    var worst = '';
-    _adminCards().forEach(function (c) { var l = _cardLevel(c); if (BAND_RANK[l] > BAND_RANK[worst]) worst = l; });
-    return worst;
-  }
-  function countNonOkAdminPanels() {
-    var n = 0;
-    _adminCards().forEach(function (c) { var l = _cardLevel(c); if (l === 'watch' || l === 'attention') n++; });
-    return n;
-  }
-  function syncAdminBand() {
-    var head = document.querySelector('#adminSectionHead'); if (!head) return;
-    var server = _adminServerLvl, panel = worstAdminPanelLvl();
-    var flooredByPanel = BAND_RANK[panel] > BAND_RANK[server];
-    var lvl = flooredByPanel ? panel : server;
-    head.classList.remove('band-green', 'band-amber', 'band-red');
-    if (lvl === 'attention') head.classList.add('band-red');
-    else if (lvl === 'watch') head.classList.add('band-amber');
-    else if (lvl === 'ok')    head.classList.add('band-green');
-    var el = head.querySelector('.sect-status'); if (!el) return;
-    var dot = lvl === 'attention' ? 'red' : lvl === 'watch' ? 'amber' : lvl === 'ok' ? 'green' : '';
-    var headline;
-    if (lvl === 'ok')      headline = 'All clear';
-    else if (lvl === '')   headline = '';
-    else if (flooredByPanel) {
-      var n = countNonOkAdminPanels();
-      var noun = n === 1 ? '1 area' : n + ' areas';
-      headline = lvl === 'attention'
-        ? noun + (n === 1 ? ' needs attention' : ' need attention')
-        : noun + ' to review';
-    } else headline = _adminServerHeadline;
-    el.innerHTML = headline
-      ? '<span class="ss-dot ' + dot + '"></span><span class="ss-text">' + esc(headline) + '</span>'
-      : '';
-    var body = $('adminBody');
-    el.hidden = !(headline && body && body.classList.contains('is-collapsed'));
   }
   function watchPanelTints() {
     var grid = document.querySelector('#view-admin .lower-grid');
@@ -6766,14 +6712,9 @@
   // manager re-checks visibility on toggle.
   function setSectStatus(headSel, bodyId, sec) {
     var head = document.querySelector(headSel); if (!head) return;
-    // The Administrator band is owned by syncAdminBand(), which floors the
-    // server level to the worst sub-panel. Capture the server inputs + delegate.
-    if (headSel === '#adminSectionHead') {
-      _adminServerLvl = (sec && sec.level) || '';
-      _adminServerHeadline = (sec && sec.headline) || '';
-      syncAdminBand();
-      return;
-    }
+    // UI-188: the '#adminSectionHead' delegation branch is gone with
+    // syncAdminBand() -- there is no Administrator section head in the markup,
+    // so this branch captured two module variables and painted nothing.
     // Band STATUS tint follows the lane level (green/amber/red), independent of
     // the collapsed/expanded headline below. Cleared first so a recovery
     // (red->green) repaints; an unknown level leaves the band neutral.
@@ -6805,9 +6746,13 @@
     { key: 'finance', label: 'Accountant',    color: 'var(--blue)',   can: function () { return caps().inv; } }
   ];
   var _lastStatusSummary = null;   // last /home/status-summary, so tintPanels() can re-run renderTodo
-  // Admin to-do items come from the live admin PANELS (the same source the
-  // Administrator band rolls up via syncAdminBand), NOT s.admin — so the To Do
-  // count always matches the band. Each non-OK task card becomes one item:
+  // Admin to-do items come from the live admin PANELS, NOT s.admin. This used
+  // to say "the same source the Administrator band rolls up via
+  // syncAdminBand() — so the To Do count always matches the band"; UI-188
+  // removed that band (its section head exists in no markup), so there is no
+  // band left to match. The panels are still the right source on their own
+  // merits: they are what the admin is actually looking at.
+  // Each non-OK task card becomes one item:
   // "<title> — <sub>" carrying its own level.
   function adminTodoItems() {
     var out = [];
@@ -6868,24 +6813,8 @@
       wrap.innerHTML = '<div class="todo-card"><div class="todo-allclear">' +
         'Your daily to-do list will appear here once the data service reports open items.</div></div>';
     }
-    setTodoStatus((hasData || groups.length) ? total : -1);
-  }
-  // Collapsed-band headline for Today's To Do (shown only while collapsed).
-  // total<0 = no data yet.
-  function setTodoStatus(total) {
-    var head = $('todoSectionHead'); if (!head) return;
-    var el = head.querySelector('.sect-status'); if (!el) return;
-    // Tint the band like the role bands: green when caught up, amber when there
-    // are open items, neutral until data loads. The tint shows whether the lane
-    // is open or collapsed (the dot/text below only show while collapsed).
-    head.classList.remove('band-green', 'band-amber', 'band-red');
-    var dot, txt;
-    if (total < 0)       { dot = '';      txt = 'Your to-do list'; }
-    else if (total > 0)  { dot = 'amber'; txt = total + (total === 1 ? ' item needs attention' : ' items need attention'); head.classList.add('band-amber'); }
-    else                 { dot = 'green'; txt = 'All caught up'; head.classList.add('band-green'); }
-    el.innerHTML = '<span class="ss-dot ' + dot + '"></span><span class="ss-text">' + txt + '</span>';
-    var body = $('todoBody');
-    el.hidden = !(body && body.classList.contains('is-collapsed'));
+    // UI-188: setTodoStatus() removed -- it painted #todoSectionHead, which no
+    // markup produces. The To Do list itself (renderTodo) is untouched and live.
   }
 
   // ---- AI briefing (left rail) -------------------------------------------
@@ -16833,9 +16762,11 @@
       if (lockedAdmin) fillLaneSummary('adminSummaryList', s.admin);
       if (lockedAnalyst) fillLaneSummary('analystSummaryList', s.analyst);
       // Collapsed-bar headlines — shown to every role, regardless of lock.
-      setSectStatus('#adminSectionHead', 'adminBody', s.admin);
+      // UI-188: the admin and finance calls are gone with their sections. The
+      // payload still carries s.admin and s.finance and both are still read
+      // above (fillLaneSummary) and by renderTodo below -- only the headline
+      // write into a head that does not exist was removed.
       setSectStatus('#analystSectionHead', 'analystBody', s.analyst);
-      setSectStatus('#modSectionHead', 'moduleGrid', s.finance);
       renderTodo(s);   // Today's To Do roll-up off the same payload
       if (s.db) { _dbFacts = s.db; renderDbMeta(); }
       renderAiBriefing();   // re-run so Admin tasks (this rollup) join the triage
@@ -16937,8 +16868,9 @@
     // cached summary, the admin server-level, and every band tint so no stale
     // band/summary survives into the new DB's load window.
     _lastStatusSummary = null;
-    _adminServerLvl = ''; _adminServerHeadline = '';
-    ['adminSectionHead', 'analystSectionHead', 'modSectionHead', 'todoSectionHead'].forEach(function (id) {
+    // UI-188: admin/mod/todo dropped -- those sections do not exist. Analyst
+    // stays because its BODY does; see the defs table below.
+    ['analystSectionHead'].forEach(function (id) {
       var h = $(id); if (h) h.classList.remove('band-green', 'band-amber', 'band-red');
     });
     updateServiceCard();   // repaint the Service Health card from the now-cleared _svcMem
@@ -17185,12 +17117,20 @@
     function save() { try { localStorage.setItem(KEY, JSON.stringify({ s: sess(), c: state })); } catch (_) {} }
 
     var defs = [
+      // UI-188, 2026-09-12: four entries removed -- todo, admin, mod and
+      // support. Measured with the REAL grid ids off this very table rather
+      // than names built by analogy: NEITHER the head NOR the body exists for
+      // any of the four (`adminBody`, `todoBody`, `moduleGrid`, `supportRow`
+      // all return 0 `id=` producers, against `scopeBody` and `analystBody`
+      // returning 1 each as the control). Whole sections, gone.
+      //
+      // ⚠ `analystSectionHead` IS STILL HERE AND IS STILL ABSENT FROM THE
+      // MARKUP. It is deliberately not cut: `analystBody` DOES exist, so that
+      // one is a section body with no header -- either a header that was
+      // dropped by accident or one dropped on purpose, and only looking at the
+      // rendered page separates those. Held for the owner rather than guessed.
       { head: 'scopeSectionHead',   grid: 'scopeBody',   label: 'Set Context' },
-      { head: 'todoSectionHead',    grid: 'todoBody',    label: 'Today’s To Do', open: true },
-      { head: 'adminSectionHead',   grid: 'adminBody',   label: 'Administrator' },
-      { head: 'analystSectionHead', grid: 'analystBody', label: 'Analyst' },
-      { head: 'modSectionHead',     grid: 'moduleGrid',  label: 'Accountant' },
-      { head: 'supportSectionHead', grid: 'supportRow',  label: 'Support' }
+      { head: 'analystSectionHead', grid: 'analystBody', label: 'Analyst' }
     ];
 
     var stored = read();
