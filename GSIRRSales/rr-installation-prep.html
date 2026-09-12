@@ -2169,8 +2169,51 @@
 
       <h2>DNS only &mdash; your RapidReconciler URL</h2>
       <p>Each customer is assigned a hostname in the form <code>rrprod-[companyname].getgsi.com</code> &mdash; for example <code>rrprod-acme.getgsi.com</code>. GSI creates and maintains that DNS record.</p>
-      <p>This one needs <strong>DNS resolution only</strong>. It does not need an outbound firewall rule, because the record points at the internal IP address of your own application server &mdash; the traffic never leaves your network. What has to work is that your DNS infrastructure can resolve <code>getgsi.com</code> names, which is already true anywhere internal resolvers forward external lookups.</p>
+      <p>This one needs <strong>DNS resolution only</strong>. It does not need an outbound firewall rule, because the record points at the internal IP address of your own application server. What has to work is that your DNS infrastructure can resolve <code>getgsi.com</code> names, which is already true anywhere internal resolvers forward external lookups.</p>
       <p>Confirm it resolves before the install meeting. This is the address your users&rsquo; browsers use to reach RapidReconciler.</p>
+      <p><strong>One exception, and it is the subject of the next section.</strong> On an ordinary LAN this traffic stays inside your network. If you run a zero-trust access product such as Zscaler Private Access, or your users work from virtual desktops, it does not &mdash; it is brokered by that product even though both machines look internal. Read on if either applies to you.</p>
+
+      <div class="diamond-divider"><span class="diamond"></span></div>
+
+      <h2 id="gateway">If you run Zscaler or another zero-trust access product</h2>
+      <p>Tell GSI now if a secure web gateway or zero-trust access product sits between your users and your servers &mdash; Zscaler, Netskope, Palo Alto Prisma Access, Cisco Umbrella or Forcepoint. <strong>This has blocked RapidReconciler at two customer sites</strong>, and in both cases every firewall rule on this page was already correct. The fix is a change your gateway administrator makes, and it is far cheaper to make before go-live than to diagnose after it.</p>
+
+      <div class="callout important">
+        <div class="callout-label">A firewall rule is not the same permission</div>
+        <p>Zscaler Private Access denies access by default until a policy rule explicitly allows it. Opening the port range on your firewall does not grant it, and the application segment merely existing does not grant it either &mdash; your users or their group have to be named in a rule. This is why the problem survives a network review: everything a reviewer checks is genuinely correct.</p>
+      </div>
+
+      <h3>Why RapidReconciler needs a high port at all</h3>
+      <p>The page in a user&rsquo;s browser reads its data directly from your RapidReconciler application server, and each RapidReconciler <strong>database</strong> is served by its own process on its own high-numbered port &mdash; which is what the <code>32145 &ndash; 49152</code> range on the <a href="javascript:void(0)" onclick="showView('topic-servers')">Server Requirements</a> page is for. Those ports are assigned per database and are sticky, so once access is right it stays right.</p>
+
+      <h3>What your gateway administrator needs to set up</h3>
+      <ol>
+        <li><strong>An application segment covering RapidReconciler.</strong> It needs your RapidReconciler hostname, <code>rrprod-[companyname].getgsi.com</code>, and the service port for <em>each</em> RapidReconciler database. GSI confirms the exact ports for your install; in practice they sit in the mid-30000s to mid-40000s.</li>
+        <li><strong>An access policy rule naming your users.</strong> The segment on its own grants nothing. The users or the group have to be referenced in a rule.</li>
+        <li><strong>Confirmation that the group actually synced.</strong> If your team cannot find the right group when writing the rule, it may not have reached the gateway&rsquo;s own directory yet. Rule that out before assuming the group is wrong.</li>
+      </ol>
+
+      <div class="callout warning">
+        <div class="callout-label">&#9888; Adding a RapidReconciler database later means adding a port</div>
+        <p>Each database gets its own service port. If GSI adds a database for you after go-live, its port will not be in the application segment, and your users will find that one database will not load while the others are fine. Nothing will have changed on your network that day, which makes it slow to spot. Tell your gateway administrator whenever a database is added, and tell GSI that a gateway is in the path so we can flag it for you in advance.</p>
+      </div>
+
+      <h3>Virtual desktops are where this usually appears</h3>
+      <p>Where users reach RapidReconciler from a virtual desktop, that traffic is brokered by the gateway even though the desktop and the server are both inside your network. At one site a packet capture confirmed the two were not communicating on any other port, so there is no fallback path &mdash; the high port either works or nothing loads.</p>
+
+      <h3>What it looks like if it is missed</h3>
+      <p>The application loads, or partly loads, and no data appears. Two things make it recognisable: it affects <strong>one user at a time</strong> rather than everybody, because it follows who has been granted access; and the browser&rsquo;s developer console (<strong>F12</strong>, then <strong>Console</strong>) shows a timeout against your own hostname on a high port, not a certificate or refused-connection error.</p>
+
+      <div class="callout tip">
+        <div class="callout-label">Nothing here weakens your security posture</div>
+        <p>Granting named users access to one internal application is narrower than loosening anything broadly, and the traffic stays encrypted end to end.</p>
+      </div>
+
+      <h3>Two more things the same product can do</h3>
+      <ul class="spec-list">
+        <li class="spec-row"><span class="spec-key">Block the download</span><span class="spec-val">Gateways commonly block or quarantine unsigned <code>.exe</code> downloads, sometimes delivering a truncated file rather than an error. If a RapidReconciler installer misbehaves during the install meeting, check the gateway log before assuming the download is broken. Ask GSI for the file&rsquo;s SHA-256 hash to confirm what you received.</span></li>
+        <li class="spec-row"><span class="spec-key">Drop port 8002</span><span class="spec-val">The JMS connection on TCP 8002 is not web traffic, and a gateway that proxies web traffic may drop a non-standard port outright. <strong>A firewall rule permitting 8002 does not change that, and the test below will still report <code>True</code>.</strong> This needs the port allowed at the gateway as well as at the firewall.</span></li>
+      </ul>
 
       <div class="diamond-divider"><span class="diamond"></span></div>
 
@@ -2236,6 +2279,7 @@
         <li class="spec-row"><span class="spec-key">Your RR hostname</span><span class="spec-val">Confirmation that <code>rrprod-[companyname].getgsi.com</code> resolves, and the address it returned.</span></li>
         <li class="spec-row"><span class="spec-key">Proxy</span><span class="spec-val">Whether outbound traffic from the application server passes through a proxy, and whether that proxy inspects TLS.</span></li>
         <li class="spec-row"><span class="spec-key">SSO</span><span class="spec-val">Whether you use the GSI SSO endpoint, which decides whether <code>rrsso-prod.getgsi.com</code> applies to you.</span></li>
+        <li class="spec-row"><span class="spec-key">Gateway</span><span class="spec-val">Which secure web gateway or zero-trust access product is in the path, if any, and whether your users reach RapidReconciler from virtual desktops. Say so even if you believe it is already configured &mdash; it lets us rule the whole area in or out in one message instead of three.</span></li>
       </ul>
 
       <div class="callout tip">
@@ -2567,7 +2611,7 @@
         </div>
         <div class="checklist-row">
           <input type="checkbox" id="c-net-2" class="checklist-item">
-          <label for="c-net-2">Internal port range 32145–49152 open between application server and the user network</label>
+          <label for="c-net-2">Internal port range 32145–49152 open between application server and the user network. <strong>If a zero-trust access product (Zscaler Private Access or similar) is in the path, a firewall rule is not sufficient</strong> &mdash; the range must also be covered by an application segment with a policy rule naming your users <span class="ref">&mdash; see <a href="javascript:void(0)" onclick="showView('topic-firewall')">Firewall &amp; DNS</a></span></label>
         </div>
         <div class="checklist-row">
           <input type="checkbox" id="c-net-3" class="checklist-item">
@@ -2611,6 +2655,14 @@
         <div class="checklist-row">
           <input type="checkbox" id="c-fw-6" class="checklist-item">
           <label for="c-fw-6">Proxy in the outbound path identified (or confirmed absent), including whether it inspects TLS</label>
+        </div>
+        <div class="checklist-row">
+          <input type="checkbox" id="c-fw-7" class="checklist-item">
+          <label for="c-fw-7">Gateway decided: secure web gateway or zero-trust access product identified (or confirmed absent) &mdash; Zscaler, Netskope, Prisma Access, Umbrella, Forcepoint. If present, GSI told whether users reach RapidReconciler from virtual desktops <span class="ref">&mdash; see <a href="javascript:void(0)" onclick="showView('topic-firewall')">Firewall &amp; DNS</a></span></label>
+        </div>
+        <div class="checklist-row">
+          <input type="checkbox" id="c-fw-8" class="checklist-item">
+          <label for="c-fw-8">Access segment decided: if a zero-trust access product is present, an application segment covers <code>rrprod-[companyname].getgsi.com</code> and every RapidReconciler service port, <strong>and</strong> an access policy rule names your users. Tick this if no such product is in the path</label>
         </div>
       </div>
 
