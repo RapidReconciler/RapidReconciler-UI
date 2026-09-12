@@ -1375,11 +1375,25 @@ server.ssl.keyStoreType=PKCS12</code></pre>
         <h2 id="decouple-cert">Future-state: decoupling the cert from the Services jar</h2>
         <p>The current legacy mechanism (cert baked into the Services jar&rsquo;s classpath) was a reasonable choice when the Services jar was the only deployable artifact and VALC&rsquo;s deploy flow only knew how to ship jars. With mini-VALC&rsquo;s <a href="services-version-control.html#post-release-internal">HTTP-push Manage Deploy modal</a> now in place, that constraint is gone &mdash; the deploy machinery can ship arbitrary files to a known path on the customer&rsquo;s agent. Cert renewals don&rsquo;t need to ride along with code releases anymore.</p>
 
-        <h3 id="decouple-shift">The proposed shift</h3>
+        <h3 id="decouple-shift">The shift</h3>
         <ul>
-          <li><strong>Agent side</strong>: change <code>server.ssl.key-store</code> in <code>application-production-https.properties</code> from <code>classpath:</code> to <code>file:</code>, pointing at an external path like <code>${rr.cert-store}/wildcard-getgsi.pfx</code>. The Services jar would no longer carry any cert bytes &mdash; the runtime keystore is read from the customer&rsquo;s filesystem at startup.</li>
-          <li><strong>mini-VALC side</strong>: add a <code>component=&apos;tls-cert&apos;</code> slot to the <code>file_versions</code> catalog. The existing Sync + Manage Deploy flow extends naturally &mdash; certs get uploaded once (manually, since renewals don&rsquo;t have a public GitHub release home) then deployed per-customer through the same orchestrator that handles Services jar deploys today, with the deploy target swapped from the running jar path to the cert path.</li>
+          <li><strong>Agent side &mdash; shipped, and first observed working on the dev box 2026-09-11.</strong> It took three commits rather than one, because two of the three defects behind it were only ever going to be found by starting the process (see <a href="#rollout-why">Why this section exists</a>). The V8 Services jar reads its keystore from a file instead of the classpath. <code>server.ssl</code> in <code>application.yml</code> now names an SSL <em>bundle</em> rather than a keystore directly, and the bundle points at <code>agent.certificate.key-store-path</code>. The jar still ships one keystore copy as a transitional seed for boxes upgrading in place (see the warning below), and stops carrying any once the fleet is confirmed serving from a file.</li>
+          <li><strong>VALC side &mdash; not built.</strong> Adds a <code>component=&apos;tls-cert&apos;</code> slot to the <code>file_versions</code> catalog. The existing Sync + Manage Deploy flow extends naturally &mdash; the deploy target swaps from the running jar path to the cert path. Two authenticated endpoints the agent polls also belong here; until they exist the agent logs that they returned 404 and leaves its keystore alone.</li>
         </ul>
+
+        <h3 id="decouple-agent-behaviour">What the agent does now</h3>
+        <ul>
+          <li><strong>Checks daily</strong> (03:15 by default) and asks its source for a thumbprint <em>before</em> downloading anything, so the private key does not cross the network on the ~364 days a year nothing has changed.</li>
+          <li><strong>Reloads without a restart.</strong> See the reload-semantics note below &mdash; this is the part that changed.</li>
+          <li><strong>Refuses a bad certificate rather than installing it.</strong> Four independent refusals, each logged with its reason: already expired, not yet valid, not valid for the box&rsquo;s configured hostname, or carrying an expiry <em>earlier</em> than the certificate already installed. That last one is what a stale source version looks like, and it is the case a human reviewer would wave through.</li>
+          <li><strong>Reports expiry every day whether or not fetching is switched on.</strong> A box that has quietly stopped reaching its source is the failure that matters, and it is invisible unless something says so daily in the log support opens first. Inside 30 days of expiry the line is a WARN; past expiry it is an ERROR.</li>
+          <li><strong>Re-writes the keystore under the box&rsquo;s own password</strong> before it touches disk, so a renewal never has to redistribute a password and the on-disk password can be rotated independently of the certificate.</li>
+        </ul>
+
+        <div class="callout warning">
+          <div class="callout-label">This release cannot be pushed blind</div>
+          <p>The keystore password is read from an environment variable with <strong>no fallback</strong>. A box that receives the jar without that variable set <strong>fails to start</strong>, and says why. That is deliberate: the two alternatives are a default password on the file holding the wildcard private key, or silently starting on plain HTTP &mdash; which V8 cannot use anyway, since it builds <code>https://</code> URLs from the token, so it would surface as a certificate error on the customer&rsquo;s screen instead of a line in our log. <strong>The rollout has to set the variable on each box first.</strong></p>
+        </div>
 
         <h3 id="decouple-payoff">Two consequences</h3>
         <ul>
@@ -1389,23 +1403,109 @@ server.ssl.keyStoreType=PKCS12</code></pre>
 
         <div class="callout">
           <div class="callout-label">Scope</div>
-          <p>Not built yet on either side. Listed here as a queued architecture improvement; the work is well-defined whenever the cadence pressure (or the next renewal headache) makes it worth doing. See <a href="services-version-control.html#post-release-internal">Services version control &sect; 4b</a> for the existing deploy pattern this would extend.</p>
+          <p>Agent side is shipped and has been observed serving from a seeded file on the dev box; VALC side is not built. So today this buys the daily expiry alarm and the refusal checks, and it does not yet buy automated distribution &mdash; a renewal still reaches boxes by whatever route the team uses now. See <a href="services-version-control.html#post-release-internal">Services version control &sect; 4b</a> for the existing deploy pattern the VALC half extends.</p>
+          <p>⚠ <strong>&ldquo;Written and unit-tested&rdquo; is what this line used to say, and it was true and meaningless twice in two days.</strong> Both times the code was correct, the tests were green, and the subsystem could not run at all. <a href="#rollout">Rolling it out</a> below carries what actually has to be true on a box, and <a href="#rollout-why">why that section exists</a>.</p>
+        </div>
+
+        <h2 id="rollout">Rolling out the file-based keystore</h2>
+        <p>This is the only part of the certificate work that is <em>not</em> future-state. The jar above is built and running, and everything below describes what has to be true on a box before it receives that jar. Get it wrong and the box does not start &mdash; which is the designed behaviour, not a bug, but it is not a discovery to make during a customer upgrade window.</p>
+
+        <h3 id="rollout-vars">The two environment variables, by name</h3>
+        <p>Both are read from the environment and neither has a fallback. <code>application.yml</code> binds them with an empty default (<code>${VAR:}</code>), which means a blank value is a refusal, not a default.</p>
+        <table>
+          <thead>
+            <tr><th>Variable</th><th>Binds to</th><th>Needed on</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>RR_CERT_STORE_PASSWORD</code></td>
+              <td><code>agent.certificate.key-store-password</code>, which the <code>rr-tls</code> SSL bundle reads directly</td>
+              <td><strong>Every box.</strong> Without it the jar cannot open its own keystore and fails to start.</td>
+            </tr>
+            <tr>
+              <td><code>RR_CERT_BOOTSTRAP_PASSWORD</code></td>
+              <td><code>agent.certificate.bootstrap-password</code></td>
+              <td>Any box running the <strong>one-time in-place seed</strong> &mdash; that is, any box that does not already have a keystore file. It protects the copy still bundled in the jar.</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>This is a per-box password by design. The agent re-writes any certificate it receives under this value before writing it to disk, so renewing the certificate never redistributes a password, and the on-disk password can be rotated without touching the certificate.</p>
+
+        <div class="callout warning">
+          <div class="callout-label">&#9888; On Windows, setting the variable is not enough. The box has to restart.</div>
+          <p><code>setx /M</code> writes the value to the registry immediately, and a new interactive process sees it straight away &mdash; so a quick check in a fresh PowerShell window says the variable is set. <strong>The Service Control Manager keeps its own cached copy of the machine environment block</strong>, and hands that cached copy to every service it starts. Restarting the service is not enough; stopping and starting it is not enough. The SCM re-reads the environment at boot.</p>
+          <p>Measured on the dev box 2026-09-11: both variables set at machine scope and present in the registry, a freshly spawned process reporting them correctly, and the agents still failing with the variables absent. After a reboot the seed ran and all three agents came up.</p>
+          <p><strong>So the rollout order is: set both variables, reboot, then deploy the jar.</strong></p>
+        </div>
+
+        <h3 id="rollout-seed">What the seed does, and where the file lands</h3>
+        <p>On startup, before Spring builds anything, the jar checks whether the keystore file exists. If it does not, it writes one from the copy bundled inside the jar, re-encrypted under this box&rsquo;s <code>RR_CERT_STORE_PASSWORD</code>. If it does, nothing happens and nothing is logged &mdash; that is the normal steady state.</p>
+        <pre><code style="display:block;padding:12px 14px;background:var(--navy-deep);color:#e8eef9;line-height:1.55;overflow-x:auto;">C:\Program Files\Rapid Reconciler\certs\rr-wildcard.p12</code></pre>
+        <p>That path is <code>agent.certificate.key-store-path</code>, and the <code>rr-tls</code> bundle reads the same property rather than carrying a second copy of the path &mdash; two copies of a path is how they drift, and the drift presents as TLS quietly serving yesterday&rsquo;s certificate. The private key is stored under the alias <code>rr-wildcard</code>. The bundle sets <code>reload-on-update: true</code>, so replacing that file reloads TLS without restarting the jar.</p>
+
+        <h3 id="rollout-verify">Verifying it worked</h3>
+        <p>Three checks, in the order that isolates a failure fastest:</p>
+        <ol>
+          <li><strong>The file exists.</strong> <code>Test-Path</code> on the path above. If it is absent, the seed did not run &mdash; go to the log, not to the firewall.</li>
+          <li><strong>The agent is listening.</strong> Each database&rsquo;s agent binds its own service port. If the keystore is missing or unreadable, the process starts and dies rather than serving plain HTTP.</li>
+          <li><strong>The log says nothing about the certificate.</strong> A successful steady-state start logs no <code>Certificate bootstrap</code> line at all. A seeded start logs one WARN saying it seeded from the bundled copy.</li>
+        </ol>
+
+        <h3 id="rollout-failure">What a failure looks like</h3>
+        <p>The keystore is missing or the password is wrong, and the visible failure is several layers away from the cause:</p>
+        <pre><code style="display:block;padding:12px 14px;background:var(--navy-deep);color:#e8eef9;line-height:1.55;overflow-x:auto;">IOException: 'C:\Program Files\Rapid Reconciler\certs\rr-wildcard.p12'
+             is neither a file nor a directory
+  -&gt; Failed to register paths for watching
+  -&gt; Unable to watch for reload on update
+  -&gt; Unable to register SSL bundle 'rr-tls'
+  -&gt; Unable to start web server</code></pre>
+        <p>Above that stack, on <code>stderr</code> and therefore in the same per-agent log file, the jar states the actual cause and names the variable to set. <strong>If you see the stack trace and no <code>Certificate bootstrap</code> line anywhere in the file, that is itself the finding</strong> &mdash; it means the seeder did not run, rather than running and failing.</p>
+
+        <div class="callout important">
+          <div class="callout-label">Fetching is OFF by default, and that is not the same as broken</div>
+          <p><code>agent.certificate.enabled</code> ships <code>false</code>, so no box fetches a replacement certificate until someone turns it on. The source is configured as <code>valc</code>, and <strong>the VALC half is not built</strong>, so there is nothing to fetch from yet either. What runs regardless is the daily expiry report &mdash; WARN inside 30 days, ERROR past expiry &mdash; and that half needs no source. A box that has quietly stopped syncing is the failure that matters, and it complains in its own log whether or not fetching is enabled.</p>
+          <p>The daily check runs at <strong>03:15</strong>. <code>agent.certificate.expected-host</code> ships blank, which skips the subject half of the preflight; expiry is always checked. Set it per box to the hostname V8 reaches that agent on, so a certificate issued for the wrong subject is refused before it replaces a working one.</p>
+        </div>
+
+        <h3 id="rollout-why">Why this section exists</h3>
+        <p>Three defects in this subsystem were found only by running it, and each one had passed its tests. They are recorded because they describe what to distrust, not to apportion blame.</p>
+        <ul>
+          <li><strong>The seed could never have run.</strong> It lived in a <code>@PostConstruct</code>. Spring registers the SSL bundle as an infrastructure bean during context refresh, long before any application service reaches <code>@PostConstruct</code> &mdash; so the context died on the missing file first. &ldquo;A box upgrading in place gets a keystore from the jar&rdquo; was never true, and would have bricked every box it reached. Moved to an <code>EnvironmentPostProcessor</code>, which runs while the environment is being prepared.</li>
+          <li><strong>The fix was then registered in a file Spring does not read.</strong> The registration went into <code>META-INF/spring/…EnvironmentPostProcessor.imports</code>, a filename invented by analogy with <code>AutoConfiguration.imports</code>. Boot moved <em>only</em> auto-configuration to that mechanism; every other type is still loaded from <code>META-INF/spring.factories</code>. The file was present, correctly named the class, and did nothing. The test now asks <code>SpringFactoriesLoader</code> &mdash; the loader Spring itself uses &mdash; instead of checking that a file exists.</li>
+          <li><strong>The message explaining the failure could not reach the log.</strong> It was written to a deferred logger, which replays only once the logging system initialises during context refresh &mdash; the very refresh that was dying. The explanation was swallowed by the failure it explained, and the log carried zero occurrences of it. It now also writes to <code>stderr</code>, which the spawner redirects into the same per-agent file.</li>
+        </ul>
+        <div class="callout">
+          <div class="callout-label">The pattern worth carrying out of this</div>
+          <p>All three were invisible to unit tests and visible within seconds of starting the process. A green suite on this subsystem means the code is correct, not that it runs. Before calling a certificate change done on any box, confirm the file exists and the agent is listening.</p>
         </div>
 
         <h2 id="azure-auto">Future-state: automated renewal via Azure</h2>
         <p>Decoupling the cert from the jar (above) is the prerequisite &mdash; it turns a renewal into an independent cert-only deploy. The step after that removes the manual procurement and manual upload entirely: <strong>Azure issues and auto-renews the wildcard, and VALC mines the renewed cert and pushes it to the fleet</strong> over the same Manage Deploy machinery. The frozen broker (<code>rr-valc-agent.jar</code>) is untouched throughout &mdash; everything here lives in the changeable Services jar config and the VALC control plane.</p>
 
         <h3 id="azure-issuance">Issuance side (Azure)</h3>
+        <p><strong>Decided 2026-09-10:</strong> issuance is <strong>ACME Bot</strong>, keeping the renewed <code>*.getgsi.com</code> wildcard in <strong>Azure Key Vault</strong>, validated by <strong>DNS-01</strong> as a wildcard requires. That settles what this section previously left open between a Key Vault-integrated CA and a hand-rolled ACME function.</p>
         <ul>
-          <li><strong>Azure Key Vault certificate</strong> for <code>*.getgsi.com</code> with <strong>auto-rotation</strong> enabled, validated by <strong>DNS-01 against Azure DNS</strong> (required for a wildcard). The issuer is either a Key Vault-integrated CA (DigiCert / GlobalSign partner integration) or an ACME / Let&rsquo;s Encrypt flow driven by an Azure Function &mdash; either way Key Vault ends up holding the renewed cert plus its private key.</li>
-          <li>The cert policy must be <strong>exportable as PKCS12 with the private key</strong> &mdash; the Services jar needs the full <code>.pfx</code>, not just the public cert.</li>
-          <li><strong>Notification:</strong> Key Vault &rarr; Event Grid <code>CertificateNewVersionCreated</code> (push, preferred), or VALC polls Key Vault for a new version on a daily schedule (simpler &mdash; no inbound endpoint to secure).</li>
+          <li>The certificate policy must be <strong>exportable</strong>. The Services jar needs the private key, not just the public certificate, and a non-exportable policy returns an empty value rather than an error &mdash; the agent logs exactly that, but it is a vault setting nobody can fix from our side.</li>
+          <li><strong>The PKCS12 comes from the vault&rsquo;s secrets endpoint, not its certificates endpoint.</strong> This is the detail that costs an afternoon: a read grant covering certificates alone returns metadata and no private key, and looks like a working configuration. The reader needs <strong>both</strong> <code>certificates/get</code> and <code>secrets/get</code>.</li>
+          <li><strong>Scope the vault, not just the grant.</strong> Put the wildcard in a vault that holds nothing else, so a credential that can read it cannot reach any other secret GSI stores.</li>
+          <li>A certificate exported this way carries an <strong>empty</strong> keystore password. Passing the vault or certificate name instead fails to load with an error that reads like file corruption rather than a wrong password.</li>
+          <li><strong>Notification:</strong> a daily poll is the assumption, and it needs no inbound endpoint to secure. Event Grid <code>CertificateNewVersionCreated</code> is available if a push is preferred later; the agent-side daily check means a missed notification delays a renewal by hours, not months.</li>
+          <li><strong>Open:</strong> whether ACME Bot writes a new <em>version</em> of the same certificate object on renewal, or a new object. The ingest assumes a new version of one named object.</li>
         </ul>
 
+        <h3 id="azure-credential-custody">Who holds the vault credential</h3>
+        <p>This is the load-bearing decision in the whole design, and it is <strong>open</strong>. Two shapes were considered:</p>
+        <ul>
+          <li><strong>VALC-mediated (recommended).</strong> VALC reads the vault; each agent gets the certificate from VALC over the authenticated channel it already polls on a schedule. <strong>No Azure credential exists on any customer box.</strong> One credential, in one place GSI controls.</li>
+          <li><strong>Agent-direct.</strong> Every customer box holds a credential that can read the vault. This was the original ask, on the correct grounds that managed identity is unavailable from a customer machine &mdash; but managed identity is unavailable <em>to the agent</em> and available <em>to VALC</em>, which runs on GSI infrastructure. So the constraint does not force this shape.</li>
+        </ul>
+        <p><strong>Why it matters is revocation, not exposure.</strong> Either way the credential is effectively the wildcard private key. The wildcard is <em>already</em> on every customer box today, baked into the jar, so neither option changes that. What agent-direct adds is a standing credential that also reads every <strong>future</strong> certificate: a single service-principal secret copied fleet-wide cannot be revoked for one box, and vault diagnostics cannot say which customer a caller was. A per-agent credential can be rotated for one box, and VALC can log and rate-limit who fetched what.</p>
+        <p>Both are implemented behind one interface, so this is a configuration value rather than a rewrite. If agent-direct is chosen, a <strong>per-box client certificate</strong> is materially better than a shared secret, for exactly the revocation reason above.</p>
+
         <h3 id="azure-connector">Ingest &amp; deploy side (VALC)</h3>
-        <p>A new <code>CertSyncService</code> closes the loop, reusing the <code>tls-cert</code> <code>file_versions</code> slot and the Manage Deploy orchestrator from the decoupling work above:</p>
+        <p>A new <code>CertSyncService</code> closes the loop, reusing the <code>tls-cert</code> <code>file_versions</code> slot and the Manage Deploy orchestrator from the decoupling work above. <strong>None of this is built.</strong></p>
         <ol>
-          <li>On notification (or poll), authenticate to Key Vault &mdash; managed identity if VALC runs in Azure, otherwise a service principal &mdash; and pull the new <code>.pfx</code> plus its password.</li>
+          <li>On notification (or poll), authenticate to Key Vault &mdash; managed identity, since VALC runs on GSI infrastructure &mdash; and pull the new <code>.pfx</code>. Note the empty export password and the two-permission grant covered above.</li>
           <li>Publish to <code>file_versions</code> as <code>component=&apos;tls-cert&apos;</code>, deduped by SHA-256 so a re-poll doesn&rsquo;t double-publish.</li>
           <li><strong>Preflight</strong> &mdash; verify the new cert&rsquo;s validity window and SANs <em>before</em> rollout; refuse to deploy an already-expired or wrong-subject cert. This is the standing guard against repeating the expiry-during-rollout outage described above.</li>
           <li>Trigger the per-customer rollout for the <code>tls-cert</code> component. Per-box verification = the existing health check <strong>plus</strong> an HTTPS handshake confirming the new expiry is live, and ideally an SSO round-trip &mdash; the two things that broke last time.</li>
@@ -1413,8 +1513,10 @@ server.ssl.keyStoreType=PKCS12</code></pre>
         </ol>
 
         <div class="callout">
-          <div class="callout-label">Reload semantics</div>
-          <p>Spring Boot&rsquo;s <code>server.ssl</code> does not hot-reload a cert file by default, so a cert deploy still <strong>restarts the Services instance(s)</strong> on the box &mdash; far lighter than a jar release (no version bump, seconds of downtime per instance, sequenced across databases). A later phase can adopt Spring Boot 3.2+ SSL-bundle reload-on-change to drop the restart, but for a six-month renewal cadence the restart is acceptable.</p>
+          <div class="callout-label">Reload semantics &mdash; corrected 2026-09-10</div>
+          <p>This section used to say a cert deploy still <strong>restarts the Services instance(s)</strong>, because <code>server.ssl</code> does not hot-reload a keystore file, with SSL-bundle reload listed as a later phase. <strong>That later phase is now the implementation.</strong> The keystore is served through an SSL bundle with reload-on-update switched on, so replacing the file reloads TLS in place: <strong>no restart, no downtime, no sequencing across databases.</strong></p>
+          <p>Confirmed by inspecting the framework rather than the documentation &mdash; the reload property is present on Spring Boot 3.5.16&rsquo;s own <code>SslBundleProperties</code> class, which is the version the V8 Services jar builds against.</p>
+          <p><strong>Still unproven:</strong> that the bundle serves and reloads on a running box. Verifying that means starting the jar with the new configuration, which has not been done. Treat zero-downtime renewal as designed and not yet demonstrated.</p>
         </div>
 
         <div class="callout warning">
@@ -1424,7 +1526,9 @@ server.ssl.keyStoreType=PKCS12</code></pre>
 
         <div class="callout">
           <div class="callout-label">Hand-off contract (for the Azure side)</div>
-          <p>Once the cert is decoupled from the jar (our side, no broker work), the clean division is: <strong>Azure puts the renewed <code>*.getgsi.com</code> cert in Key Vault as an exportable PFX with auto-rotation + DNS-01, and notifies on new-version</strong> (Event Grid, or we poll). VALC mines it, validates it, and pushes it to every box &mdash; no more cert-driven Services releases, with a preflight so the expiry-during-rollout outage can&rsquo;t recur. The prerequisite decouple is the larger piece and is on our side; the Azure&rarr;fleet connector is thin once that lands. Full design + phasing is in the repo at <code>docs/plans/cert-renewal-azure-automation.md</code>.</p>
+          <p>The division of labour: <strong>ACME Bot keeps the renewed <code>*.getgsi.com</code> certificate in Key Vault, exportable, DNS-01 validated.</strong> VALC mines it, validates it, and pushes it to every box &mdash; no more cert-driven Services releases, with a preflight so the expiry-during-rollout outage cannot recur.</p>
+          <p><strong>Status:</strong> the agent half of the prerequisite decouple is written and unit-tested. The vault does not exist yet, and neither does the VALC connector.</p>
+          <p><strong>Needed from the Azure side before the connector can be built:</strong> the vault URI and certificate name; the tenant id; confirmation the certificate policy is exportable; a read grant covering <code>certificates/get</code> <em>and</em> <code>secrets/get</code> and nothing else; and a ruling on credential custody (see above). Full design and phasing is in the repo at <code>docs/plans/cert-renewal-azure-automation.md</code>.</p>
         </div>
 
         <div class="topic-footer-nav">
