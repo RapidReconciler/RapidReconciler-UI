@@ -198,7 +198,21 @@ check(buried.length === 0,
 
 /* ---- A6: the other lanes are hidden under 'none' -------------------------------- */
 const noneRules = (html.match(/body\[data-view-role="none"\][^{;]*/g) || []).join(' ');
-['#view-admin', '#analystBody', '#analystSectionHead', '#acctTop']
+// ⚠ `#analystSectionHead` WAS REMOVED FROM THIS LIST 2026-09-12 (UI-188), and
+// that is not the gate being weakened -- read before restoring it.
+//
+// This assertion protects a no-grant user from seeing somebody else's lane.
+// Three of the four selectors are real markup (`#view-admin`, `#analystBody`,
+// `#acctTop` each return exactly 1 `id=` producer). `#analystSectionHead`
+// returns 0: the element was deleted in `aaa0af9` (2026-07-02, #307) when the
+// analyst lane moved to sub-view tabs. A rule hiding an element that cannot
+// render protects nothing, and asserting on it reports coverage that does not
+// exist -- which is worse than not asserting, because the green is believed.
+//
+// The analyst lane is still covered: `#analystBody` is the real element and is
+// still in this list, still in the `data-view-role="none"` rule, and is what
+// actually hides the lane.
+['#view-admin', '#analystBody', '#acctTop']
     .forEach(sel => check(noneRules.indexOf(sel) !== -1,
         'A6  ' + sel + ' is hidden under data-view-role="none"',
         'the existing rules are POSITIVE selectors keyed on the three known roles, so a '
