@@ -3783,7 +3783,6 @@
   // MODE resolves through RRENV (config.js:376) — see the note on
   // admin-claude-assistant.html. Never 'demo'; `?mode=` is not honoured.
   var MODE = (window.RRENV && RRENV.mode()) || 'staging';
-  var IS_DEMO = MODE === 'demo';
 
   // ---- rrFetch + routing (copied verbatim from the V8 pages; inline,
   //      no shared lib — see config.js for the routing tables) ----
@@ -3811,11 +3810,6 @@
   var _dbGen = 0;
   function rrFetch(area, opts) {
     opts = opts || {};
-    if (IS_DEMO) {
-      var file = (opts.demoFile || area) + '.json';
-      return fetch((RR_CONFIG.dataPath || 'data/') + file, { cache: 'no-store' })
-        .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status + ' on ' + file); return r.json(); });
-    }
     var gen = _dbGen;                     // DB generation at call time
     // A response is dropped if the active DB changed while it was in flight, so
     // a prior DB's data can never paint the new DB's surfaces. This covers
@@ -4341,7 +4335,7 @@
   // doesn't expose the endpoint yet, the card stays on the connectivity
   // signal. Polls on a cadence so a building problem surfaces on its own.
   function loadServiceMemory() {
-    if (IS_DEMO || !isAdmin()) return;
+    if (!isAdmin()) return;
     rrFetch('admin/service-health').then(function (m) {
       if (!m || !m.state) return;
       _svcMem = m;
@@ -4792,7 +4786,7 @@
   // from the same endpoint the RR Team page uses). Re-paints with the cached
   // user list so dot + sub reflect it whichever loads first.
   function loadTeamReview() {
-    if (IS_DEMO || !isAdmin()) return;
+    if (!isAdmin()) return;
     rrFetch('api/v1/tenant/client/access-reviews')
       .then(function (d) {
         _reviewKnown   = true;
@@ -5076,7 +5070,6 @@
   var _restarting = false;
   function restartService() {
     if (_restarting) return;
-    if (IS_DEMO) { toast('Restart the data service — demo mode, no agent call'); return; }
     _restarting = true;
     var btn = $('restartBtn'); if (btn) { btn.disabled = true; btn.textContent = 'Restarting…'; }
     var dot = $('svcDot'), sub = $('svcSub'), db = activeDb() || {};
@@ -5433,7 +5426,7 @@
   }
   function autoWarmCardex(cb) {
     var key = cardexCacheKey();
-    if (IS_DEMO || !activeDb() || !caps().inv) { _cardexWarmState[key] = 'na'; return; }   // inventory module only
+    if (!activeDb() || !caps().inv) { _cardexWarmState[key] = 'na'; return; }   // inventory module only
     try { var o = JSON.parse(sessionStorage.getItem(key) || 'null'); if (o && Array.isArray(o.payload) && o.payload.length) { _cardexWarmState[key] = 'done'; return; } } catch (_) {}
     // A failed warm must not re-fire from a render: firing the callbacks on failure
     // repaints, and the repaint calls back in here. Render-driven callers (cb) go
@@ -5734,29 +5727,24 @@
     if (_dDot) RRV8.setDotState(_dDot, 'busy');
     if (_dSub) _dSub.textContent = 'Loading the DMAAI universe…';
 
-    var fetchP;
-    if (IS_DEMO) {
-      fetchP = rrFetch('inventory/integrity', { demoFile: 'v-integrity-jde-aais' });
-    } else {
-      fetchP = rrFetch('inventory/status').catch(function () { return {}; }).then(function (status) {
-        var rf = (status && status.reconciliationFilter) || {};
-        return rrFetch('inventory/integrity', {
-          method: 'POST',
-          body: {
-            take: 20000, skip: 0, page: 1, pageSize: 20000,
-            report: 'v_integrity_jde_aais',
-            reconciliationFilter: {
-              currencies:    rf.currencies    || [],
-              companies:     rf.companies     || [],
-              businessUnits: rf.businessUnits || [],
-              objects:       rf.objects       || [],
-              subsidiaries:  rf.subsidiaries  || [],
-              period:        rf.period || (window.RRV8 && window.RRV8.defaultPeriod()) || ''
-            }
+    var fetchP = rrFetch('inventory/status').catch(function () { return {}; }).then(function (status) {
+      var rf = (status && status.reconciliationFilter) || {};
+      return rrFetch('inventory/integrity', {
+        method: 'POST',
+        body: {
+          take: 20000, skip: 0, page: 1, pageSize: 20000,
+          report: 'v_integrity_jde_aais',
+          reconciliationFilter: {
+            currencies:    rf.currencies    || [],
+            companies:     rf.companies     || [],
+            businessUnits: rf.businessUnits || [],
+            objects:       rf.objects       || [],
+            subsidiaries:  rf.subsidiaries  || [],
+            period:        rf.period || (window.RRV8 && window.RRV8.defaultPeriod()) || ''
           }
-        });
+        }
       });
-    }
+    });
 
     return fetchP.then(function (payload) {
       try { sessionStorage.setItem(dmaaiCacheKey(), JSON.stringify({ ts: Date.now(), payload: payload })); } catch (_) {}
@@ -5785,7 +5773,6 @@
   // Forward already auto-loads via loadInventoryLight; this matches it for DMAAIs.
   var _dmaaiAutoTried = {};
   function autoWarmDmaais() {
-    if (IS_DEMO) { setDmaaiReady('na'); return; }                    // demo uses the static reflected state
     if (!(caps().dm && activeDb())) { setDmaaiReady('na'); return; } // needs DMAAI access + a chosen DB
     var key = dmaaiCacheKey();
     try {
@@ -6024,7 +6011,7 @@
   // via RRV8.purgeRecommendation, same algorithm the Purge page uses.)
   function setPurgeDot(info) { if (info) _purgeInfo = info; renderDataCard(); }
   function loadPurgeInfo() {
-    if (IS_DEMO || !isAdmin()) return;
+    if (!isAdmin()) return;
     rrFetch('inventory/integrity/purge-info').then(function (info) {
       applyPurgeInfo(info);
       if (!_purgeStaged) _purgeOriginal = info && info.currentCutoff;
@@ -6036,7 +6023,7 @@
   // the result and repaint the Data card.
   function setFiscalDot(d) { _fiscalDetect = d || _fiscalDetect; renderDataCard(); }
   function loadFiscalStatus() {
-    if (IS_DEMO || !isAdmin()) return;
+    if (!isAdmin()) return;
     rrFetch('inventory/fiscal-period-end-detect')
       .then(function (d) { setFiscalDot(d); })
       .catch(function () { /* endpoint not reachable -> leave the neutral grey dot */ });
@@ -6084,7 +6071,7 @@
   // Graceful: on failure (older agent / table absent) leaves _acksByKind null so
   // the dots use their localStorage fallback. Rides the per-DB rrFetch gen-guard.
   function loadAcks() {
-    if (IS_DEMO || !isAdmin()) { _acksByKind = null; return Promise.resolve(); }
+    if (!isAdmin()) { _acksByKind = null; return Promise.resolve(); }
     return rrFetch('admin/acks').then(function (rows) {
       var m = {}; (rows || []).forEach(function (r) { if (r && r.kind) m[r.kind] = r; });
       _acksByKind = m;
@@ -6102,7 +6089,7 @@
   // (Never); amber = review due / not yet set.
   function setPwPolicyDot() {
     var row = $('teamPwRow'); if (!row) return;
-    if (IS_DEMO || !isAdmin() || !(window.RRV8 && window.RRV8.complexPwReviewState)) {
+    if (!isAdmin() || !(window.RRV8 && window.RRV8.complexPwReviewState)) {
       _teamPwLevel = 'unknown'; _setDataRow('teamPwRow', 'unknown', 'Complex passwords');
       if (_teamList) paintTeamHealth(_teamList);   // fold into the worst-of card dot
       return;
@@ -6139,7 +6126,7 @@
     }
   }
   function loadReloadGlStatus() {
-    if (IS_DEMO || !isAdmin()) return;
+    if (!isAdmin()) return;
     rrFetch('inventory/reload-gl/preview')
       .then(function (p) { setReloadGlDot(p); })
       .catch(function () { /* endpoint not reachable -> leave the neutral grey dot */ });
@@ -6152,7 +6139,7 @@
   // rrv8.scheduleReview.<db> + RRV8.scheduleReviewState with the page band.
   function loadRefreshSchedule() {
     var dot = $('schedDot'); if (!dot) return;
-    if (IS_DEMO || !isAdmin() || !(window.RRV8 && window.RRV8.scheduleReviewState)) { RRV8.setDotState(dot, 'unknown'); return; }
+    if (!isAdmin() || !(window.RRV8 && window.RRV8.scheduleReviewState)) { RRV8.setDotState(dot, 'unknown'); return; }
     var val = reviewValueFor('schedule-review', 'rrv8.scheduleReview.');
     var level = window.RRV8.scheduleReviewState(val, new Date().toISOString().slice(0, 10));
     RRV8.setDotState(dot, level);
@@ -6240,7 +6227,7 @@
   // reviewed recently (reminder set); amber = a review is due / not yet set.
   function setActivityDot() {
     var dot = $('activityDot'); if (!dot) return;
-    if (IS_DEMO || !isAdmin() || !(window.RRV8 && window.RRV8.activityReviewState)) { RRV8.setDotState(dot, 'unknown'); return; }
+    if (!isAdmin() || !(window.RRV8 && window.RRV8.activityReviewState)) { RRV8.setDotState(dot, 'unknown'); return; }
     var val = reviewValueFor('activity-review', 'rrv8.activityReview.');
     var level = window.RRV8.activityReviewState(val, new Date().toISOString().slice(0, 10));
     RRV8.setDotState(dot, level);
@@ -6358,7 +6345,7 @@
       '. <a href="#" class="row-act" data-act="rcdx-snooze">Remind me in 30 days</a>';
   }
   function loadReloadCardexStatus() {
-    if (IS_DEMO || !isAdmin()) return;
+    if (!isAdmin()) return;
     rrFetch('inventory/reload-cardex/eod-check')
       .then(function (p) { setReloadCardexDot(p); })
       .catch(function () { /* endpoint not reachable -> leave the neutral grey dot */ });
@@ -14678,21 +14665,16 @@
   function _ensureAuditDetail(per) {
     var key = per || '';
     if (_auditDetail && _auditDetailKey === key) return Promise.resolve(_auditDetail);
-    var p;
-    if (IS_DEMO) {
-      p = rrFetch('audit-report-detail', { demoFile: 'audit-report-detail' });
-    } else {
-      p = rrFetch('inventory/status').then(function (status) {
-        var rf = (status && status.reconciliationFilter) || {};
-        var wrap = function (a) { return (a || []).map(function (id) { return { id: id, checked: true, show: true }; }); };
-        // Company + period ONLY. objects/BU/subsidiaries left empty so the
-        // perpetual (usp6getasof_v2) rowset isn't zeroed — see block note above.
-        return rrFetch('inventory/audit-detail', { method: 'POST', body: {
-          period: per, currencies: wrap(rf.currencies), companies: wrap(rf.companies),
-          objects: [], businessUnits: [], subsidiaries: []
-        } });
-      });
-    }
+    var p = rrFetch('inventory/status').then(function (status) {
+      var rf = (status && status.reconciliationFilter) || {};
+      var wrap = function (a) { return (a || []).map(function (id) { return { id: id, checked: true, show: true }; }); };
+      // Company + period ONLY. objects/BU/subsidiaries left empty so the
+      // perpetual (usp6getasof_v2) rowset isn't zeroed — see block note above.
+      return rrFetch('inventory/audit-detail', { method: 'POST', body: {
+        period: per, currencies: wrap(rf.currencies), companies: wrap(rf.companies),
+        objects: [], businessUnits: [], subsidiaries: []
+      } });
+    });
     return p.then(_normAuditDetail).then(function (j) { _auditDetail = j; _auditDetailKey = key; return j; });
   }
   function _auditDescMap(detail) {
@@ -14793,7 +14775,6 @@
       .then(function (r) { return (r && r.text) ? String(r.text).trim() : ''; }).catch(function () { return ''; });
   }
   function _auditAiSummaries(cos, per) {
-    if (IS_DEMO) return Promise.resolve({});
     if (typeof _recsummaryLevel === 'function' && _recsummaryLevel() === 'off') return Promise.resolve({});
     var scrub = (typeof _recsummaryLevel === 'function' && _recsummaryLevel() === 'scrubbed');
     var jobs = cos.map(function (c, i) { return _auditCoSummary(_auditCoFacts(c, per), scrub, i).then(function (txt) { return { co: c.co, txt: txt }; }); });
@@ -16149,7 +16130,7 @@
     // Fire the tier-governed AI cause for accountant-fixable cases not already
     // cached at this tier; the deterministic line shows until the AI types in.
     _wlGen++;
-    if (!IS_DEMO && wlExp !== 'off') {
+    if (wlExp !== 'off') {
       var wlAi = wlCases.filter(function (c) { return !((c.breaks || 0) > 0) && wlMat(c, 'Accountant').length; })
         .filter(function (c) { var cc = _wlCauseCache[c.co]; return !(cc && cc.sig === wlSig && (cc.txt || cc.pending)); });
       if (wlAi.length) {
@@ -16965,14 +16946,14 @@
 
   // ---- Message Center: operator messages posted from VALC, targeted at this
   //      user, shown above everything. Dismiss is server-side (sticks across
-  //      devices). Demo mode has no VALC, so it no-ops. Body is rendered
+  //      devices). Body is rendered
   //      ESCAPED (operator-authored), and links are http(s)-only. A message
   //      fetch must never block Home — failures leave the region hidden. ----
   function mcEscape(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
     return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]; }); }
   function loadMessages() {
     var host = document.getElementById('msgCenter');
-    if (!host || IS_DEMO) return;
+    if (!host) return;
     var base = (window.RR_CONFIG && RR_CONFIG.valcBase) || 'http://localhost:8080';
     fetch(base + '/api/v1/messages', { headers: prodHeaders(), cache: 'no-store' })
       .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
@@ -17055,12 +17036,10 @@
   }
 
   function boot() {
-    // Auth gate: in real modes, no token → back to login.
-    if (!IS_DEMO) {
-      var hasToken = false;
-      try { hasToken = !!localStorage.getItem('rrv8.token'); } catch (_) {}
-      if (!hasToken) { window.location.href = '../login.html'; return; }
-    }
+    // Auth gate: no token → back to login.
+    var hasToken = false;
+    try { hasToken = !!localStorage.getItem('rrv8.token'); } catch (_) {}
+    if (!hasToken) { window.location.href = '../login.html'; return; }
     wire();
     watchPanelTints();
     var hydrate = (window.RRV8 && window.RRV8.hydrateSession)
@@ -17085,7 +17064,7 @@
   // own cadence (e.g. service health polls every 60s).
   function refreshReminderDots() {
     var a = activeDb();
-    if (!IS_DEMO && !(a && a.n)) return;   // session not hydrated yet — boot() paints
+    if (!(a && a.n)) return;   // session not hydrated yet — boot() paints
     setActivityDot();
     setPwPolicyDot();
     loadRefreshSchedule();

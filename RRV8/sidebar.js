@@ -1721,31 +1721,12 @@ ${adminSection}
     }
   }
 
-  // Populate window.RR_SESSION.{user,dbs,activeDbIndex,token}. In
-  // demo mode reads data/demo-jwt-payload.json; in staging/prod
-  // reads localStorage.rrv8.token. Always resolves — failures leave
+  // Populate window.RR_SESSION.{user,dbs,activeDbIndex,token} from
+  // localStorage.rrv8.token. Always resolves — failures leave
   // RR_SESSION empty so renderUserChip falls back to a placeholder.
   // activeDbIndex honors the sticky rrv8.activeDb selection (falls to 0).
   function hydrateSession() {
-    const cfg = global.RR_CONFIG || {};
-    const mode = _rrMode();
     global.RR_SESSION = global.RR_SESSION || {};
-
-    if (mode === 'demo') {
-      const url = (cfg.dataPath || 'data/') + 'demo-jwt-payload.json';
-      return fetch(url, { cache: 'no-store' })
-        .then(r => r.ok ? r.json() : null)
-        .then(payload => {
-          if (payload) {
-            global.RR_SESSION.user = payload.user || null;
-            global.RR_SESSION.dbs  = Array.isArray(payload.dbs) ? payload.dbs : [];
-            global.RR_SESSION.activeDbIndex = _resolveActiveDbIndex(global.RR_SESSION.dbs);
-            global.RR_SESSION.token = null;
-          }
-          return global.RR_SESSION;
-        })
-        .catch(() => global.RR_SESSION);
-    }
 
     try {
       const token = localStorage.getItem('rrv8.token');
@@ -1814,8 +1795,6 @@ ${adminSection}
     const u = getCurrentUser();
     const dbs = getCurrentDatabases();
     const cfg = global.RR_CONFIG || {};
-    const isDemo = _rrMode() === 'demo';
-    const showSignOut = !isDemo;
 
     // Per-Prompt #4: hide admin actions the user lacks the permission
     // for. Reads the JWT's new `perms` block on the active db. Fail-
@@ -1875,13 +1854,12 @@ ${adminSection}
         dbRows +
       '</div>' +
       adminHtml +
-      (showSignOut ?
-        '<div class="user-menu-section">' +
-          '<button class="user-menu-action" type="button" data-action="sign-out">' +
-            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>' +
-            '<span>Sign out</span>' +
-          '</button>' +
-        '</div>' : '');
+      '<div class="user-menu-section">' +
+        '<button class="user-menu-action" type="button" data-action="sign-out">' +
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>' +
+          '<span>Sign out</span>' +
+        '</button>' +
+      '</div>';
 
     menu.querySelectorAll('.user-menu-db[data-db-index]').forEach(btn => {
       btn.addEventListener('click', (e) => {
@@ -2011,12 +1989,10 @@ ${adminSection}
   // Auto-enforce the session cap on every V8 page. sidebar.js is
   // included on all of them and config.js (RR_CONFIG) loads just before
   // it, so this runs synchronously on load — independent of whichever
-  // bootSession the page itself uses. Demo mode (no real session) opts
-  // out; the dev token (no sessionStart, far-future exp) is never caught.
+  // bootSession the page itself uses. The dev token (no sessionStart,
+  // far-future exp) is never caught.
   (function enforceSessionGuard() {
     try {
-      const mode = _rrMode();
-      if (mode === 'demo') return;
       const why = sessionExpired();
       if (why) { endSession(why); return; }
       watchSession();
@@ -2390,17 +2366,14 @@ ${adminSection}
 
   // --- Eager session hydration (durable fix for the recurring race) --------
   // sidebar.js is loaded as a NON-defer <script> in <head>, so it runs before
-  // any page's inline boot script. For the token (staging/prod) path,
-  // hydrateSession() is fully synchronous (JWT decode), so calling it once here
-  // populates window.RR_SESSION.dbs BEFORE every page boots — pages no longer
-  // have to remember to await it for activeDb()/RR_SESSION to resolve. (Several
-  // minimal-topbar admin pages had forgotten, sending empty requests.) Pages
-  // that DO call hydrateSession() still work: it's idempotent (re-reads the same
-  // token). Demo mode stays lazy — it fetches a payload async, and the demo
-  // pages call hydrateSession() explicitly — so we don't kick a fetch here.
+  // any page's inline boot script. hydrateSession() is fully synchronous (JWT
+  // decode), so calling it once here populates window.RR_SESSION.dbs BEFORE
+  // every page boots — pages no longer have to remember to await it for
+  // activeDb()/RR_SESSION to resolve. (Several minimal-topbar admin pages had
+  // forgotten, sending empty requests.) Pages that DO call hydrateSession()
+  // still work: it's idempotent (re-reads the same token).
   try {
-    var _eagerMode = _rrMode();
-    if (_eagerMode !== 'demo') { hydrateSession(); }
+    hydrateSession();
   } catch (_) { /* leave RR_SESSION empty; pages still call hydrateSession() */ }
 
   // --- Currency helpers (multi-currency display) -----------------------

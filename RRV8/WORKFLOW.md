@@ -66,8 +66,8 @@ RRV8/
 │                                           retired 2026-07-02, PR #307]
 ├── data/                                  GITIGNORED (.gitignore:35
 │   └── reconciliation.json                RRV8/data/*.json). Present on the
-│                                          dev box only; read solely behind
-│                                          IS_DEMO. Not part of a clone.
+│                                          dev box only; no code reads it
+│                                          since 2026-09-12. Not in a clone.
 │
 │   sprocs/ and views/                     DELETED 2026-09-06 (HK-12). The
 │                                          DDL lives in RapidReconciler-DB,
@@ -141,13 +141,12 @@ As of the latest commit, V8 has:
 - &#9888; **`data/reconciliation.json` IS NOT A COMMITTED SNAPSHOT AND HAS NOT
   BEEN ONE.** `.gitignore:35` carries `RRV8/data/*.json`, `git ls-files`
   returns nothing for it, and the copy on this box is 438,924 bytes dated
-  **2026-07-05**. Its only two readers are `inventory-asof.html:5007` and
-  `inventory-transactions.html:8697`, and **both sit behind `if (IS_DEMO)`**
-  &mdash; a mode the V8 tenet below (*Production-only until Inventory is
-  complete*) says does not exist. Both call sites' comments call the file
-  *"the committed reconciliation.json snapshot"*. It is not committed, so on
-  a fresh clone or the deployed site that fetch 404s. Whether those branches
-  should be deleted outright is a code decision and is **not** settled here.
+  **2026-07-05**. **Nothing reads it any more** &mdash; its readers sat behind
+  `if (IS_DEMO)`, and every `IS_DEMO` branch in `RRV8/` was deleted 2026-09-12
+  (UI-187 increment 2) once `RRENV.mode()` made the constant provably false.
+  Those call sites' comments used to call the file *"the committed
+  reconciliation.json snapshot"*; it was never committed, so on a fresh clone
+  or the deployed site the fetch 404'd. The file is dev-box residue.
   ~~**Single all-periods snapshot** … Captured via `usp6getrinvaccountsummary`
   reading the `v6ui_raccountsummary` view~~ &mdash; `usp6getrinvaccountsummary`
   appears in no RRV8 source.
@@ -515,10 +514,10 @@ http://localhost:8765/RRV8/home.html
 `home.html` is the working palette and is tracked.
 
 ~~The page reads `data/reconciliation.json` via `fetch` on load and keeps the
-whole dataset in memory.~~ &mdash; that file is gitignored and its only
-readers sit behind `IS_DEMO`. Hard-refresh after editing the
-page or the JSON. Period switching is in-memory (no re-fetch);
-the top-bar Refresh button re-fetches the snapshot.
+whole dataset in memory.~~ &mdash; that file is gitignored and nothing reads
+it any more; its readers went with the `IS_DEMO` sweep on 2026-09-12.
+Hard-refresh after editing the page. Period switching is in-memory
+(no re-fetch); the top-bar Refresh button re-reads from the agent.
 
 ---
 

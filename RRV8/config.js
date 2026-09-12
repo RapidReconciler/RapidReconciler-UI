@@ -4,17 +4,18 @@
  * The COMMITTED version of this file is the DEV config: mode = 'staging'
  * so the dev workflow exercises the live RR data-services agent. This is
  * the V8 agent-first tenet (see feedback_v8_agent_first.md in memory):
- * snapshots exist as a deployment artifact, not as the dev mode. To
- * intentionally read from snapshots (e.g. when the agent is offline or
- * for an external reader on GitHub Pages), append `?mode=demo` to the
- * URL. Customer-facing prod deploys overwrite this file at publish time
- * with their own `window.RR_CONFIG` block — the HTML stays byte-identical
- * between environments.
+ * the agent is the only data source, in every environment. Customer-facing
+ * prod deploys overwrite this file at publish time with their own
+ * `window.RR_CONFIG` block — the HTML stays byte-identical between
+ * environments.
+ *
+ * ⚠ THERE IS NO SNAPSHOT PATH ANY MORE. `?mode=demo` is not read, and every
+ * branch that would have served a static JSON snapshot was deleted on
+ * 2026-09-12 (UI-187 increment 2). Don't reintroduce one.
  *
  * Precedence at boot:
- *   1. ?mode= URL parameter wins (engineer / QA override)
- *   2. window.RR_CONFIG.mode below
- *   3. 'demo' fallback
+ *   1. window.RR_CONFIG.mode below
+ *   2. 'staging' (RRENV.mode()'s floor; 'demo' is coerced to it)
  *
  * Field reference:
  *   mode          — 'staging' | 'prod'. ⚠ 'demo' IS NOT VALID and is
@@ -30,9 +31,7 @@
  *                   rather than substituted (see the RR_AUTH_BASES
  *                   tombstone below). Set explicitly here to override
  *                   (e.g. a local mock VALC for offline testing).
- *   dataPath      — only used in demo mode. Where to fetch the static
- *                   JSON snapshots from. Relative to the HTML.
- *   statusPollMs  — interval for re-checking the SQL Agent job status
+ *   statusPollMs— interval for re-checking the SQL Agent job status
  *                   (System Status light). null = don't poll. Prod
  *                   default: 60000 (1 minute).
  *   testAgentBase — base URL of the green-field per-DB data-services
@@ -60,7 +59,6 @@ window.RR_CONFIG = {
   // and when THAT is null too, login.html reports the gap instead of
   // guessing a host.
   authBase:      'http://localhost:8080',
-  dataPath:      'data/',
   statusPollMs:  60000,
   testAgentBase: 'http://localhost:34537',
   valcBase:      'http://localhost:8080',
@@ -212,7 +210,6 @@ window.RR_TEST_AGENT_AREAS = [
   // localhost:34537 (HTTP-only). Until those endpoints land or V8's
   // fall-through gets scheme-aware, parking them in the test-agent
   // table is the cleanest way to keep diagnostic noise localised.
-  'system-status-log',
   'system/agent-log',
   // Administrator
   'admin/companies',
@@ -385,11 +382,13 @@ window.RRENV = {
    * in production, a config.js omitting `mode` fell into demo silently, and
    * this field reference still advertised 'demo' as a legal value.
    *
-   * Coercing here rather than only removing the fallbacks is what makes the
-   * ~94 `IS_DEMO` branches across the pages provably unreachable instead of
-   * merely unreached. Without this line, a config.js that literally set
-   * mode:'demo' would switch every one of them back on -- including
-   * sidebar.js hiding sign-out and skipping enforceSessionGuard().
+   * Coercing here rather than only removing the fallbacks is what made the
+   * 97 `IS_DEMO` references across 20 files provably dead instead of merely
+   * unreached -- and on that proof they were DELETED on 2026-09-12 (UI-187
+   * increment 2). This coercion is still load-bearing: it is what keeps a
+   * deploy that sets mode:'demo' from resolving to an environment no code
+   * path is written for, and it is asserted by
+   * Tools/test-demo-mode-unreachable.js.
    *
    * The coercion is deliberately SILENT, and that is a known gap rather than
    * an oversight: reporting a bad deploy value needs a visible surface on a
