@@ -582,6 +582,16 @@ codes were renamed to names. The analyst sees a *label* on every surface, never
 an ID. Use this table to cross-walk. **--** in a column means that scheme has no
 entry for the row.
 
+**The Home pattern card composes its headline as `Type - Label`** (owner ruling
+2026-09-12), where Type is the row's `RCardexLedgerCompare2.Type` measured over
+that card's own rows -- `Purchasing`, `Mfg`, `Sales`, `Inventory`, or `Mixed`
+when the card spans more than one. The label never repeats the type, so a card
+whose name already carried it reads shorter on Home than in this table: `MCM`
+shows as *Mfg - Cost Mismatch*, `NSL` as *Sales - Non-Stock Cost on Inventory*,
+and the four `T-*` terminals as *Sales - Unclassified* and so on. **The app code
+is the identity**, as the paragraph above says -- cross-walk on that column, not
+on the displayed text, which is a rendering of the name rather than the name.
+
 | Analyzer pattern ID | Pattern label | App code | Guide section |
 |---|---|---|---|
 | 5.1 | Unassigned Account -- Missing Model Table Entry | -- | 5.1 |
