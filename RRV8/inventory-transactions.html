@@ -20,9 +20,9 @@
 <title>Inventory Transactions &mdash; RapidReconciler</title>
 <link href="fonts/fonts.css" rel="stylesheet">
 <link href="sidebar.css" rel="stylesheet">
-<!-- Runtime config (mode = demo | staging | prod). Same file the
-     reconciliation page uses. Loaded sync so MODE / IS_DEMO are
-     defined before the IIFE runs. -->
+<!-- Runtime config (mode = staging | prod). Same file the
+     reconciliation page uses. Loaded sync so MODE is defined
+     before the IIFE runs. -->
 <script src="config.js"></script>
 <link href="ai-docs.css" rel="stylesheet">
 <script src="ai-docs.js"></script>
@@ -2926,11 +2926,10 @@
   //  are duplicated here for now — a future RRV8/lib.js extraction
   //  will dedupe across pages.
   // ============================================================
-  const RR_CONFIG = window.RR_CONFIG || { mode: 'staging', dataPath: 'data/' };
+  const RR_CONFIG = window.RR_CONFIG || { mode: 'staging' };
   // MODE resolves through RRENV (config.js:376) — see the note on
   // admin-claude-assistant.html. Never 'demo'; `?mode=` is not honoured.
   const MODE = (window.RRENV && RRENV.mode()) || 'staging';
-  const IS_DEMO = MODE === 'demo';
 
   // RR_SESSION mirrors what bootSession on reconciliation sets up.
   // We don't run our own login modal here — if the user arrives in
@@ -2964,19 +2963,7 @@
     window.RR_SESSION.token = token;
     return true;
   }
-  async function rrHydrateDemo() {
-    try {
-      const res = await fetch((RR_CONFIG.dataPath || 'data/') + 'demo-jwt-payload.json', { cache: 'no-store' });
-      const payload = await res.json();
-      window.RR_SESSION.user = payload.user || null;
-      window.RR_SESSION.dbs = payload.dbs || [];
-      window.RR_SESSION.activeDbIndex = (window.RRV8 && window.RRV8.resolveActiveDbIndex)
-        ? window.RRV8.resolveActiveDbIndex(window.RR_SESSION.dbs) : 0;
-      window.RR_SESSION.token = null;
-    } catch (_) { /* demo session is cosmetic; ignore failures */ }
-  }
   async function bootSession() {
-    if (IS_DEMO) { await rrHydrateDemo(); return; }
     let token = null;
     try { token = localStorage.getItem('rrv8.token'); } catch (_) {}
     if (token && rrHydrateFromToken(token)) return;
@@ -3024,11 +3011,6 @@
   }
   function rrFetch(area, opts) {
     opts = opts || {};
-    if (IS_DEMO) {
-      const file = (opts.demoFile || area) + '.json';
-      return fetch((RR_CONFIG.dataPath || 'data/') + file, { cache: 'no-store' })
-        .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status + ' on ' + file); return r.json(); });
-    }
     let base;
     if (_routesToValc(area)) {
       // VALC broker (admin + AI gateway). Not per-DB.
@@ -3188,25 +3170,20 @@
     if (_scopeMem.dmaais) return _scopeMem.dmaais;
     const cached = _scopeFromStorage('dmaais');
     if (cached) { _scopeMem.dmaais = cached; return cached; }
-    let payload;
-    if (IS_DEMO) {
-      payload = await rrFetch('inventory/integrity', { demoFile: 'v-integrity-jde-aais' });
-    } else {
-      // Live agent — needs the user's reconciliationFilter scope
-      // so the agent can narrow appropriately. Fetched via the
-      // session-cached getInventoryStatus to avoid an extra
-      // network call.
-      const status = await getInventoryStatus();
-      const rf = (status && status.reconciliationFilter) || {};
-      payload = await rrFetch('inventory/integrity', {
-        method: 'POST',
-        body: {
-          take: 20000, skip: 0, page: 1, pageSize: 20000,
-          report: 'v_integrity_jde_aais',
-          reconciliationFilter: scopedIntegrityFilter(rf)
-        }
-      });
-    }
+    // Live agent — needs the user's reconciliationFilter scope
+    // so the agent can narrow appropriately. Fetched via the
+    // session-cached getInventoryStatus to avoid an extra
+    // network call.
+    const status = await getInventoryStatus();
+    const rf = (status && status.reconciliationFilter) || {};
+    const payload = await rrFetch('inventory/integrity', {
+      method: 'POST',
+      body: {
+        take: 20000, skip: 0, page: 1, pageSize: 20000,
+        report: 'v_integrity_jde_aais',
+        reconciliationFilter: scopedIntegrityFilter(rf)
+      }
+    });
     _scopeMem.dmaais = payload;
     _scopeToStorage('dmaais', payload);
     return payload;
@@ -3220,21 +3197,16 @@
     if (_scopeMem.dmaaiRoutes) return _scopeMem.dmaaiRoutes;
     const cached = _scopeFromStorage('dmaaiRoutes');
     if (cached) { _scopeMem.dmaaiRoutes = cached; return cached; }
-    let payload;
-    if (IS_DEMO) {
-      payload = await rrFetch('inventory/integrity', { demoFile: 'v8ui-dmaai-routes' });
-    } else {
-      const status = await getInventoryStatus();
-      const rf = (status && status.reconciliationFilter) || {};
-      payload = await rrFetch('inventory/integrity', {
-        method: 'POST',
-        body: {
-          take: 50000, skip: 0, page: 1, pageSize: 50000,
-          report: 'v8ui_dmaai_routes',
-          reconciliationFilter: scopedIntegrityFilter(rf)
-        }
-      });
-    }
+    const status = await getInventoryStatus();
+    const rf = (status && status.reconciliationFilter) || {};
+    const payload = await rrFetch('inventory/integrity', {
+      method: 'POST',
+      body: {
+        take: 50000, skip: 0, page: 1, pageSize: 50000,
+        report: 'v8ui_dmaai_routes',
+        reconciliationFilter: scopedIntegrityFilter(rf)
+      }
+    });
     _scopeMem.dmaaiRoutes = payload;
     _scopeToStorage('dmaaiRoutes', payload);
     return payload;
@@ -3247,21 +3219,16 @@
     if (_scopeMem.crossPeriods) return _scopeMem.crossPeriods;
     const cached = _scopeFromStorage('crossPeriods');
     if (cached) { _scopeMem.crossPeriods = cached; return cached; }
-    let payload;
-    if (IS_DEMO) {
-      payload = await rrFetch('inventory/integrity', { demoFile: 'v-integrity11-crossperiods' });
-    } else {
-      const status = await getInventoryStatus();
-      const rf = (status && status.reconciliationFilter) || {};
-      payload = await rrFetch('inventory/integrity', {
-        method: 'POST',
-        body: {
-          take: 20000, skip: 0, page: 1, pageSize: 20000,
-          report: 'v_integrity11_crossperiods',
-          reconciliationFilter: scopedIntegrityFilter(rf)
-        }
-      });
-    }
+    const status = await getInventoryStatus();
+    const rf = (status && status.reconciliationFilter) || {};
+    const payload = await rrFetch('inventory/integrity', {
+      method: 'POST',
+      body: {
+        take: 20000, skip: 0, page: 1, pageSize: 20000,
+        report: 'v_integrity11_crossperiods',
+        reconciliationFilter: scopedIntegrityFilter(rf)
+      }
+    });
     _scopeMem.crossPeriods = payload;
     _scopeToStorage('crossPeriods', payload);
     return payload;
@@ -3275,21 +3242,16 @@
     if (_scopeMem.duplicateSales) return _scopeMem.duplicateSales;
     const cached = _scopeFromStorage('duplicateSales');
     if (cached) { _scopeMem.duplicateSales = cached; return cached; }
-    let payload;
-    if (IS_DEMO) {
-      payload = await rrFetch('inventory/integrity', { demoFile: 'v-integrity10-duplicate-sales' });
-    } else {
-      const status = await getInventoryStatus();
-      const rf = (status && status.reconciliationFilter) || {};
-      payload = await rrFetch('inventory/integrity', {
-        method: 'POST',
-        body: {
-          take: 5000, skip: 0, page: 1, pageSize: 5000,
-          report: 'v_integrity10_duplicate_sales',
-          reconciliationFilter: scopedIntegrityFilter(rf)
-        }
-      });
-    }
+    const status = await getInventoryStatus();
+    const rf = (status && status.reconciliationFilter) || {};
+    const payload = await rrFetch('inventory/integrity', {
+      method: 'POST',
+      body: {
+        take: 5000, skip: 0, page: 1, pageSize: 5000,
+        report: 'v_integrity10_duplicate_sales',
+        reconciliationFilter: scopedIntegrityFilter(rf)
+      }
+    });
     _scopeMem.duplicateSales = payload;
     _scopeToStorage('duplicateSales', payload);
     return payload;
@@ -3310,23 +3272,10 @@
     if (_scopeMem.postingPolicy) return _scopeMem.postingPolicy;
     const cached = _scopeFromStorage('postingPolicy');
     if (cached) { _scopeMem.postingPolicy = cached; return cached; }
-    // NO FIXTURE SHIPS FOR THIS, DELIBERATELY. V8 is production-only and the live
-    // agent is the whole answer, so nothing here is designed around a second data
-    // shape. The demoFile is named anyway because rrFetch diverts EVERY call under
-    // IS_DEMO and derives the filename from the AREA when none is given -- which for
-    // 'inventory/integrity' would collide with another report's fixture and hand this
-    // field a plausible wrong policy. Naming a file that does not exist makes the
-    // fetch throw, the caller warn, and the field stay on its em-dash. Failing closed
-    // is correct; answering with someone else's data is not.
-    let payload;
-    if (IS_DEMO) {
-      payload = await rrFetch('inventory/integrity', { demoFile: 'v8ui-txv-posting-policy' });
-    } else {
-      payload = await rrFetch('inventory/integrity', {
-        method: 'POST',
-        body: { take: 500, skip: 0, page: 1, pageSize: 500, report: 'v8ui_txv_posting_policy' }
-      });
-    }
+    const payload = await rrFetch('inventory/integrity', {
+      method: 'POST',
+      body: { take: 500, skip: 0, page: 1, pageSize: 500, report: 'v8ui_txv_posting_policy' }
+    });
     _scopeMem.postingPolicy = payload;
     _scopeToStorage('postingPolicy', payload);
     return payload;
@@ -3417,14 +3366,6 @@
     };
   }
   async function refreshJobStatus() {
-    if (IS_DEMO) {
-      try {
-        const log = await rrFetch('system-status-log');
-        const job = log && log.currentJob;
-        if (job) writeCachedJobStatus(job);
-        return job || readCachedJobStatus();
-      } catch (_) { return readCachedJobStatus(); }
-    }
     try {
       // Read job status from /poll (v_diagnostic5_job_status). The
       // validation block on /inventory/status is the roll-forward
@@ -3473,7 +3414,6 @@
   function startTxStatusPolling() { /* /poll long-poll is the live channel */ }
   let _txPollLoopRunning = false;
   function startTxSystemPollLoop() {
-    if (IS_DEMO) return;
     if (_txPollLoopRunning) return;
     _txPollLoopRunning = true;
     // Long-poll: pass last-observed state as query params; the agent
@@ -3634,12 +3574,8 @@
   }
 
   // ArrayBuffer-returning sibling of rrFetch &mdash; for
-  // GET /download-excel/{id}. Demo mode reads data/<area>.bin.
+  // GET /download-excel/{id}.
   function rrFetchBinary(area) {
-    if (IS_DEMO) {
-      return fetch((RR_CONFIG.dataPath || 'data/') + area + '.bin', { cache: 'no-store' })
-        .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status + ' on ' + area); return r.arrayBuffer(); });
-    }
     let base;
     if (_routesToTestAgent(area)) {
       {
@@ -3670,56 +3606,18 @@
     });
   }
 
-  // Build the production-shape System Status workbook from the
-  // demo step-log JSON. THROWS on any failure &mdash; it never returns a
-  // partial or undefined buffer, because the caller posts whatever it gets
-  // straight to the analyzer. Its one caller
-  // (runSystemStatusAnalysis) runs it under RRV8.runExport and stops when the
-  // build dies. Returns the .xlsx as an ArrayBuffer; the
-  // analyzer&rsquo;s SystemStatusTemplate detects it from the
-  // sheet name + Capture / Step / Process / StartTime / EndTime /
-  // Seconds / UpdateCount / ErrorNum columns.
-  function buildSystemStatusXlsxBuffer(log) {
-    if (!window.XLSX) throw new Error('SheetJS not loaded');
-    if (!log) throw new Error('System Status log not loaded');
-    const banner = log.banner ||
-      ('System Status Generated ' + new Date().toISOString().slice(0, 19).replace('T', ' '));
-    const headers = ['Capture', 'Step', 'Process', 'StartTime', 'EndTime', 'Seconds', 'UpdateCount', 'ErrorNum'];
-    const aoa = [[banner], headers].concat((log.rows || []).map(r => [
-      r.capture, r.step, r.process, r.starttime, r.endtime,
-      r.seconds, r.updateCount || 0, r.errorNum || 0
-    ]));
-    const sheet = XLSX.utils.aoa_to_sheet(aoa);
-    sheet['!cols'] = [{wch:26},{wch:18},{wch:38},{wch:20},{wch:20},{wch:10},{wch:12},{wch:10}];
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, sheet, 'System Status');
-    return XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
-  }
-
   async function runSystemStatusAnalysis() {
     flashStatus('Generating diagnostic Excel&hellip;');
     try {
-      let buffer;
-      if (IS_DEMO) {
-        // Offline capture: build the production-shape workbook from the
-        // cached status log and route it through the same headless bridge.
-        const log = await rrFetch('system-status-log');
-        // The build allocates; under the shared guard a failure reports an
-        // actionable reason and yields undefined rather than throwing past the
-        // handoff. Stop here &mdash; runExport has already said why on screen.
-        buffer = RRV8.runExport('System Status', flashStatus, () => buildSystemStatusXlsxBuffer(log));
-        if (!buffer) return;
-      } else {
-        // Prod / staging: agent generates the diagnostic Excel
-        // (where the v_diagnostic5_job_status SELECT actually runs
-        // server-side), then we GET it back via download-excel.
-        const resp = await rrFetch('system-status', { method: 'POST', body: {} });
-        const fileName = resp && resp.fileName;
-        if (!fileName) throw new Error('Agent did not return a fileName');
-        buffer = await rrFetchBinary('download-excel/' + encodeURIComponent(fileName));
-      }
-      // Both paths can hand back something the analyzer can't read: a
-      // zero-length agent file, or a fetch that resolved with no body. Say so
+      // The agent generates the diagnostic Excel (where the
+      // v_diagnostic5_job_status SELECT actually runs server-side), then we GET
+      // it back via download-excel.
+      const resp = await rrFetch('system-status', { method: 'POST', body: {} });
+      const fileName = resp && resp.fileName;
+      if (!fileName) throw new Error('Agent did not return a fileName');
+      const buffer = await rrFetchBinary('download-excel/' + encodeURIComponent(fileName));
+      // The agent can hand back something the analyzer can't read: a
+      // zero-length file, or a fetch that resolved with no body. Say so
       // instead of posting an empty buffer and letting the analyzer stall.
       if (!buffer || !buffer.byteLength) {
         flashStatus('System Status workbook came back empty &mdash; nothing to analyze.');
@@ -4005,24 +3903,6 @@
     };
   }
 
-  async function getWorkNotes() {
-    if (IS_DEMO) {
-      try {
-        return await rrFetch('inventory/work-notes', { demoFile: 'work-notes' });
-      } catch (err) {
-        console.warn('[worknotes] demo fetch failed, falling back to inline:', err);
-        return null;
-      }
-    }
-    // Production reads work notes from the INLINE JOIN on the bulk
-    // transactions response — the server left-joins the worknote table, so
-    // Worked/Note arrive on every row and no second round trip is needed.
-    // Returning null is what selects that path in buildWorkNotesMap; it is
-    // the production contract, not a gap. A dedicated GET would only be
-    // worth adding if work notes had to refresh without re-fetching rows.
-    return null;
-  }
-
   function defaultPeriod()       { return (window.RRV8 && window.RRV8.defaultPeriod && window.RRV8.defaultPeriod()) || ''; } // calendar open period; real value from /available-periods
   function defaultPageSize()     { return 10000; }        // bulk fetch, see HANDOFF
   function defaultAggregateReq() {
@@ -4067,56 +3947,40 @@
       _state.period = period;
 
       let payload;
-      let workNotesPayload = null;
-      if (IS_DEMO) {
-        // Demo snapshot is for a single period. Parallel-fetch the
-        // worknotes overlay so the architecture mirrors the prod
-        // contract (transactions + worknotes are separate datasets
-        // joined client-side by composite PK).
-        [payload, workNotesPayload] = await Promise.all([
-          rrFetch('transactions'),
-          getWorkNotes()
-        ]);
+      const db = window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex] || {};
+      const narrowedRf = {
+        currencies:    applyGlNarrow(rf.currencies,    _glSelected.currencies),
+        companies:     applyGlNarrow(rf.companies,     _glSelected.companies),
+        businessUnits: applyGlNarrow(rf.businessUnits, _glSelected.businessUnits),
+        objects:       applyGlNarrow(rf.objects,       _glSelected.objects),
+        subsidiaries:  applyGlNarrow(rf.subsidiaries,  _glSelected.subsidiaries)
+      };
+      const key = cacheKey(period, narrowedRf, db.n);
+      const cached = cacheGet(key);
+      if (cached) {
+        payload = cached;
+        // Background revalidation.
+        fireBulkFetch(rf, period).then(fresh => {
+          if (fresh) {
+            cacheSet(key, fresh);
+            _data = adaptResponse(fresh);
+            _workNotes = buildWorkNotesMap(null, _data.rows);
+            applyWorkNotesOverlay(_data.rows);
+            stampPatterns(_data.rows);
+            renderAll();
+          }
+        }).catch(() => {});
       } else {
-        const db = window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex] || {};
-        const narrowedRf = {
-          currencies:    applyGlNarrow(rf.currencies,    _glSelected.currencies),
-          companies:     applyGlNarrow(rf.companies,     _glSelected.companies),
-          businessUnits: applyGlNarrow(rf.businessUnits, _glSelected.businessUnits),
-          objects:       applyGlNarrow(rf.objects,       _glSelected.objects),
-          subsidiaries:  applyGlNarrow(rf.subsidiaries,  _glSelected.subsidiaries)
-        };
-        const key = cacheKey(period, narrowedRf, db.n);
-        const cached = cacheGet(key);
-        if (cached) {
-          payload = cached;
-          // Background revalidation.
-          fireBulkFetch(rf, period).then(fresh => {
-            if (fresh) {
-              cacheSet(key, fresh);
-              _data = adaptResponse(fresh);
-              _workNotes = buildWorkNotesMap(null, _data.rows);
-              applyWorkNotesOverlay(_data.rows);
-              stampPatterns(_data.rows);
-              renderAll();
-            }
-          }).catch(() => {});
-        } else {
-          payload = await fireBulkFetch(rf, period);
-          cacheSet(key, payload);
-        }
-        // workNotesPayload stays null here on purpose: the bulk response
-        // already carries Worked/Note per row from the server's worknote
-        // left-join, and buildWorkNotesMap reads them from there.
+        payload = await fireBulkFetch(rf, period);
+        cacheSet(key, payload);
       }
       _data = adaptResponse(payload);
-      // Always anchor _data.period to the user's currently-selected
-      // period (the demo snapshot might carry a different one).
+      // Always anchor _data.period to the user's currently-selected period.
       _data.period = period;
-      // Build the worknotes overlay (from the parallel fetch in demo,
-      // from inline values in prod) and apply it to every row before
-      // anything reads r.Worked / r.Note.
-      _workNotes = buildWorkNotesMap(workNotesPayload, _data.rows);
+      // Build the worknotes overlay from the inline Worked/Note values the
+      // bulk response already carries (the server's worknote left-join), and
+      // apply it to every row before anything reads r.Worked / r.Note.
+      _workNotes = buildWorkNotesMap(null, _data.rows);
       applyWorkNotesOverlay(_data.rows);
       // Classify every row by the analyzer's 5.x pattern codes so
       // the Start Here strip can group by likely root cause. Re-runs via
@@ -8604,13 +8468,12 @@
         '<div class="popover-section-label">Connected database</div>' +
         dbRows +
       '</div>' +
-      (IS_DEMO ? '' :
       '<div class="popover-section">' +
         '<div class="popover-row is-danger" data-action="sign-out">' +
           '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>' +
           '<span>Sign out</span>' +
         '</div>' +
-      '</div>');
+      '</div>';
     popUser.querySelectorAll('[data-db-index]').forEach(r => {
       r.addEventListener('click', () => {
         const idx = parseInt(r.dataset.dbIndex, 10);

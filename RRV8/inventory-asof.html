@@ -1430,16 +1430,11 @@
   // ============================================================
   //  MODE + SESSION (same conventions as the other V8 pages)
   // ============================================================
-  const RR_CONFIG = window.RR_CONFIG || { mode: 'staging', dataPath: 'data/' };
-  // MODE resolves through RRENV (config.js:376) — see the note on
-  // admin-claude-assistant.html. Never 'demo'; `?mode=` is not honoured.
-  const MODE = (window.RRENV && RRENV.mode()) || 'staging';
-  const IS_DEMO = MODE === 'demo';
+  const RR_CONFIG = window.RR_CONFIG || { mode: 'staging' };
 
   // ============================================================
-  //  SESSION + rrFetch — agent-first per the V8 tenet.
-  //  Demo mode reads the static JSON snapshots under data/.
-  //  Staging/prod mode hits the live RR data-services agent.
+  //  SESSION + rrFetch — agent-first per the V8 tenet: every read
+  //  hits the live RR data-services agent.
   // ============================================================
   window.RR_SESSION = window.RR_SESSION || { user: null, dbs: [], activeDbIndex: 0, token: null };
   function rrParseJwt(token) {
@@ -1472,7 +1467,7 @@
       return window.RR_SESSION.dbs.length > 0;
     } catch (_) { return false; }
   }
-  if (!IS_DEMO) hydrateSessionFromToken();
+  hydrateSessionFromToken();
   function prodHeaders(contentType) {
     const h = { 'Accept': 'application/json' };
     if (window.RR_SESSION.token) h['Authorization'] = 'Bearer ' + window.RR_SESSION.token;
@@ -1499,11 +1494,6 @@
   }
   function rrFetch(area, opts) {
     opts = opts || {};
-    if (IS_DEMO) {
-      const file = (opts.demoFile || area) + '.json';
-      return fetch((RR_CONFIG.dataPath || 'data/') + file, { cache: 'no-store' })
-        .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status + ' on ' + file); return r.json(); });
-    }
     let base;
     if (_routesToTestAgent(area)) {
       {
@@ -3371,17 +3361,6 @@ function updateLotDetailPill() {
     inflightCtl:  null
   };
 
-  // Demo fixture mirrors the legacy Item Roll Forward export columns
-  // (companynumber, longaccount, ukid, branch, itemnumber, location,
-  // lot, glclass, transdate, periodends, comm, runqty, runamt, dt,
-  // doc, qty, uom, cost, val, qtyvar, amtvar). Returned by the demo
-  // branch of fetchItemRollForward so every Preview hover has data.
-  const PREVIEW_DEMO_ROWS = [
-    { companynumber:'90001', longaccount:'5000000.140000.CC', ukid:999999999999, branch:'WHS', itemnumber:'9001', location:'A1', lot:'', glclass:'INVN', transdate:'2016-07-22', periodends:'2016-08-27', comm:'Curr bal',  runqty:51,  runamt:998.07, dt:'07', doc:'',        qty:51, uom:'LB', cost:19.57, val:998.07, qtyvar:0, amtvar:0 },
-    { companynumber:'90001', longaccount:'5000000.140000.CC', ukid:39564494,    branch:'WHS', itemnumber:'9001', location:'A1', lot:'', glclass:'INVN', transdate:'2016-07-22', periodends:'2016-07-30', comm:'Inventory', runqty:51,  runamt:998.07, dt:'IT', doc:'9000001', qty:51, uom:'LB', cost:19.57, val:998.07, qtyvar:null, amtvar:null },
-    { companynumber:'90001', longaccount:'5000000.140000.CC', ukid:0,           branch:'WHS', itemnumber:'9001', location:'A1', lot:'', glclass:'INVN', transdate:'2015-08-30', periodends:'2015-08-30', comm:'Beg bal',   runqty:0,   runamt:0,      dt:'2',  doc:'',        qty:0,  uom:'LB', cost:0,     val:0,      qtyvar:null, amtvar:null }
-  ];
-
   function rowToPreviewBody(row) {
     // Trim leading/trailing whitespace — the agent expects clean
     // values per the profiler sample (e.g. N'WHS' not N'         WHS').
@@ -3415,7 +3394,6 @@ function updateLotDetailPill() {
   }
 
   async function fetchItemRollForward(row) {
-    if (IS_DEMO) return { rows: PREVIEW_DEMO_ROWS.slice() };
     const body = rowToPreviewBody(row);
     const payload = await rrFetch(PREVIEW_ENDPOINT, {
       method: 'POST', body: body, demoFile: 'as-of-item-roll-forward'

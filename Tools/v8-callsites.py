@@ -624,10 +624,18 @@ def route_of(path, tables):
     and `inventory/work-notes` are all v359-only and all 404 -- expected, not
     findings.
 
-    `system-status-log` is the one that matters: it IS in RR_TEST_AGENT_AREAS,
-    so V8 routes it to the new agent, and the new agent has no such mapping
-    (it has POST /system-status and GET /admin/system-status). That one is a
-    real mismatch and a 404 there should be reported.
+    `system-status-log` USED TO BE the one that mattered, and this paragraph is
+    kept because the reasoning is the thing to reuse, not because the case is
+    still live. It was in RR_TEST_AGENT_AREAS, so V8 routed it to the new agent,
+    which has no such mapping (it has POST /system-status and GET
+    /admin/system-status) -- measured 404. v359 did not serve it either, so the
+    name was dead on BOTH agents rather than mis-routed between them.
+    ✅ Retired 2026-09-12 (UI-181): both call sites sat inside `if (IS_DEMO)`
+    blocks and went with the demo sweep, and the RR_TEST_AGENT_AREAS entry went
+    with them. The area no longer appears in config.js.
+    ⚠ Do not read the surviving `demoFile: 'system-status-log'` string in
+    home.html as this entry returning: that call site's AREA is `poll`, and
+    `demoFile` is an inert option key nothing reads.
 
     `api/v1/` first, because that is true of the whole VALC API and of no agent
     path. The prefix TABLE is only what rrFetch knows: the first pass of this
