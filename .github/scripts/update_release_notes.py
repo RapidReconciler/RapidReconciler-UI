@@ -57,7 +57,18 @@ EMPTY_STATE_RE = re.compile(
 MAX_ENTRIES = 10
 
 SKIP_MARKERS  = ("[skip release notes]", "[skip-release-notes]", "[skip ci]")
-SKIP_PREFIXES = ("chore: refresh search indices", "chore: append release notes")
+# ⚠ "chore: refresh AI grounding" JOINED THIS LIST 2026-09-13 BECAUSE ITS OTHER
+# GUARD WAS REMOVED. The grounding bot used to push straight to main with
+# "[skip ci]" in the message, so SKIP_MARKERS above caught it. Moving that bot to
+# the PR pattern meant dropping the marker -- a skipped run reports no checks, and
+# a required check that never reports blocks the PR permanently -- so its squash
+# commit now reaches this script carrying nothing to skip on.
+# It would be skipped anyway for want of a `Release-Note:` trailer, which is why
+# nothing broke. Naming it is belt-and-braces and, more to the point, it puts the
+# bot in the same list as its three siblings instead of relying on a second rule
+# to cover it.
+SKIP_PREFIXES = ("chore: refresh search indices", "chore: append release notes",
+                 "chore: refresh AI grounding")
 
 # git log format: SHA \x1f ISODATE \x1f SUBJECT \x1f BODY \x1e (one record per commit)
 GIT_FMT = "%H%x1f%aI%x1f%s%x1f%b%x1e"
