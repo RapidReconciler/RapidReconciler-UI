@@ -3094,7 +3094,7 @@
   //    - Inventory status (the user's GL filter scope —
   //      currencies / companies / BUs / objects / subsidiaries)
   // ============================================================
-  const _scopeMem = { periods: null, status: null, dmaais: null, crossPeriods: null, duplicateSales: null, postingPolicy: null };
+  const _scopeMem = { periods: null, status: null, dmaais: null, crossPeriods: null, duplicateSales: null, postingPolicy: null, costMethod: null };
   function _scopeKey(name) {
     const dbName = (window.RR_SESSION.dbs[window.RR_SESSION.activeDbIndex] || {}).n || '_';
     return 'rrv8.scope.v1.' + MODE + '.' + dbName + '.' + name;
@@ -3278,6 +3278,31 @@
     });
     _scopeMem.postingPolicy = payload;
     _scopeToStorage('postingPolicy', payload);
+    return payload;
+  }
+  // The customer's inventory COST METHOD, one row per company, from
+  // v8ui_txv_cost_method. Same shape as the posting policy above and for the same
+  // reason: a standing fact about the CUSTOMER, so no period is sent and the cache
+  // is not cleared by invalidateScopeCache() (which clears the period-scoped four).
+  //
+  // WHY THE PAGE FETCHES THIS AT ALL. The A/P Voucher on Inventory card's advice
+  // INVERTS on it. Under standard cost a voucher variance on an inventory account
+  // means AAI 4330 is mis-routed; under weighted average 4330 routes there BY
+  // DESIGN and the missing F4111 revaluation is the fault, so "correct 4330" would
+  // move correctly-routed cost OFF inventory. The card used to tell the analyst
+  // this was "not established here" — true of the classifier, which claims on batch
+  // type alone, and indefensible as product behaviour when the answer is one read
+  // of F4105 (owner 2026-09-13).
+  async function getCostMethod() {
+    if (_scopeMem.costMethod) return _scopeMem.costMethod;
+    const cached = _scopeFromStorage('costMethod');
+    if (cached) { _scopeMem.costMethod = cached; return cached; }
+    const payload = await rrFetch('inventory/integrity', {
+      method: 'POST',
+      body: { take: 500, skip: 0, page: 1, pageSize: 500, report: 'v8ui_txv_cost_method' }
+    });
+    _scopeMem.costMethod = payload;
+    _scopeToStorage('costMethod', payload);
     return payload;
   }
   function invalidateScopeCache() {
@@ -6260,6 +6285,57 @@
       n.textContent = show ? p.note : '';
     }
   }
+  // ============================================================
+  //  COST METHOD (one row per company, v8ui_txv_cost_method)
+  //  Scoped and resolved exactly like the posting policy above, including the
+  //  _coKey() comparison on BOTH sides — CompanyNumber is nchar server-side, so a
+  //  bare === never matches a trimmed URL company and looks like a clean "no row".
+  // ============================================================
+  var _txCostRows = null;      // null = not loaded yet; [] = loaded and empty
+  function _txCostState() {
+    if (!_txCostRows || !_txCostRows.length) return null;
+    var co = _coKey(_state.activeCompany);
+    var rows = _txCostRows;
+    if (co) {
+      rows = rows.filter(function (r) { return _coKey(r.CompanyNumber) === co; });
+      if (!rows.length) return null;
+      return { state: _coKey(rows[0].CostMethodState), note: rows[0].MethodNote, co: co };
+    }
+    // ALL COMPANIES: report the WORST case, which here is the LEAST decisive answer,
+    // never a majority. 'Mixed' beats a clean 'Average' because a combined view can
+    // hold items of both methods and the two point at OPPOSITE faults — asserting
+    // 'Average' across companies would hand the analyst the wrong branch for half
+    // the rows. Same principle as the posting policy's worst-state rule beside it.
+    var rank = { 'Mixed': 4, 'Unknown': 3, 'Standard': 2, 'Average': 1 };
+    var worst = null;
+    rows.forEach(function (r) {
+      var s = String(r.CostMethodState || '').trim();
+      if (!worst || (rank[s] || 0) > (rank[String(worst.CostMethodState || '').trim()] || 0)) worst = r;
+    });
+    if (!worst) return null;
+    return { state: String(worst.CostMethodState || '').trim(), note: worst.MethodNote, co: '' };
+  }
+  // True only when the method is DECISIVE for this scope. 'Mixed' and 'Unknown' are
+  // real answers but they do not settle the card's branch, so they must NOT suppress
+  // the card's "not established here" line — on those the analyst still has to read
+  // the ledger per item, and the card is right to say so.
+  function _txCostDecided() {
+    var c = _txCostState();
+    return !!(c && (c.state === 'Average' || c.state === 'Standard'));
+  }
+  function _paintCostField() {
+    var v = document.getElementById('tx-scope-cost');
+    if (!v) return;
+    var c = _txCostState();
+    if (!c || !c.state) { v.textContent = '—'; v.removeAttribute('data-cost'); v.removeAttribute('title'); return; }
+    v.textContent = c.state;
+    v.setAttribute('data-cost', c.state);
+    // The note is the sentence the VIEW authors once. It rides as a tooltip HERE
+    // only because the field is a two-word chip in a dense band; the same sentence
+    // is rendered as real text in the drafted finding, which is where it gates a
+    // decision. A tooltip is not a sink, so it is not the only place it appears.
+    if (c.note) v.setAttribute('title', c.note);
+  }
 
   function paintScopeBand() {
     var band = document.getElementById('tx-scope-band'); if (!band) return;
@@ -6268,11 +6344,35 @@
     var item = function (k, v) { return '<span class="tx-scope-item"><span class="tx-scope-k">' + k + '</span><span class="tx-scope-v">' + v + '</span></span>'; };
     var html = item('Database', escapeHtml((db.n || '').replace(/^RapidReconciler_/, '') || '—'))   // short DB name (drop the platform prefix)
              + item('Company', _state.activeCompany ? ('Co ' + escapeHtml(_state.activeCompany)) : 'All companies')
-             // UI-167. Sits next to Company because it is a fact ABOUT that company,
-             // and it is emitted UNCONDITIONALLY so a company switch or a slow fetch
-             // can never leave the page silent about which posting policy is in force.
-             // Filled by _paintPolicyField() at the end of this function.
-             + item('GL posting', '<span id="tx-scope-glpost">&mdash;</span>');
+             // The customer's cost method. Sits beside Company for the same reason the
+             // posting policy does — a standing fact ABOUT that company — and it is the
+             // field the A/P Voucher card's branch turns on. Filled by _paintCostField().
+             + item('Cost method', '<span id="tx-scope-cost">&mdash;</span>');
+    // ⚠ GL POSTING IS NOT UNCONDITIONAL ANY MORE (owner 2026-09-13). UI-167 emitted
+    // it always, and the reasoning above that decision was sound for the surface it
+    // was written on: 'Detail' is the statement that the 1:1 document pairing holds,
+    // and every MANUFACTURING cardex-versus-GL figure beside it depends on that.
+    //
+    // The flaw is that the dependency is manufacturing-only. Drill an A/P Voucher on
+    // Inventory card and there is no manufacturing figure in the band for the field
+    // to qualify, so it spends a slot to say "Not tested" about a test that was never
+    // relevant — noise the analyst learns to skim, on the one surface where the
+    // scope band is supposed to be all signal. Observed on Demo2 Co 80010, where the
+    // whole database is NoMfg and every purchasing drill printed it.
+    //
+    // ⚠ THE GATE IS MEASURED ON THE ROWS, NOT INFERRED FROM THE CARD CODE. A card is
+    // a SubType bucket and a SubType can span transaction types, so a code-to-family
+    // table would be wrong on exactly the mixed cards where the answer matters. This
+    // asks the population in front of the analyst.
+    //
+    // ⚠ ABSENCE IS PROVEN, NOT ASSUMED. The field is hidden only when rows ARE loaded
+    // and none of them is manufacturing. Before the rows land, `filteredRows()` is
+    // empty and that is NOT evidence of anything — hiding then would flicker the field
+    // off a manufacturing drill on every repaint that beat the fetch.
+    var _mfgRows = (typeof filteredRows === 'function') ? filteredRows() : [];
+    var _showGlPost = !_mfgRows.length
+                   || _mfgRows.some(function (r) { return String(r.Type || '').trim() === 'Mfg'; });
+    if (_showGlPost) html += item('GL posting', '<span id="tx-scope-glpost">&mdash;</span>');
     if (period) html += item('Period', escapeHtml((typeof formatPeriod === 'function') ? formatPeriod(period) : period));
     if (_state.activeCard) html += item('Card', escapeHtml(_TXV_CARD_TITLE[_state.activeCard] || _state.activeCard));
     if (_state.activePattern && _state.activePattern !== _state.activeCard) html += item('Pattern', escapeHtml(patTitle(_state.activePattern)));
@@ -6290,7 +6390,10 @@
     // them. Shown for the Summarized state only — see _paintPolicyField.
     html += '<span class="tx-scope-note" id="tx-scope-policy-note" hidden></span>';
     band.innerHTML = html;
+    // Both painters null-guard on their own element, which is what lets the GL
+    // posting field be conditional above without this call site knowing.
     _paintPolicyField();
+    _paintCostField();
   }
 
   // ============================================================
@@ -7569,8 +7672,26 @@
         // on those, `checked` is now the detection and nothing else.
         compressChecked: !!sel.triage,
         context: sel.context,
-        found: sel.found, fix: sel.fix, tail: tail
-      }, { dmaai: routesRead }), sel.triage
+        // The measured cost method is APPENDED to `found`, and the card's own
+        // "not established here" bullet is suppressed below by its `costmethod`
+        // key. Two halves of one swap: the page states what it measured, and the
+        // card stops asking the analyst to go and look it up.
+        //
+        // ⚠ ONLY WHEN THE ANSWER IS DECISIVE. _txCostDecided() is false for 'Mixed'
+        // and 'Unknown', and on those the card's line must STAND — a customer
+        // holding both ledgers genuinely has to be read per item, and the two
+        // branches point at opposite faults. Suppressing the caveat there would
+        // replace an honest "not established" with a confident half-answer.
+        //
+        // The sentence itself comes from the VIEW (MethodNote), authored once, so
+        // the band's tooltip and this bullet cannot drift apart.
+        found: (function () {
+          var f = _arr(sel.found);
+          var c = _txCostDecided() ? _txCostState() : null;
+          return (c && c.note) ? f.concat([c.note]) : f;
+        })(),
+        fix: sel.fix, tail: tail
+      }, { dmaai: routesRead, costmethod: _txCostDecided() }), sel.triage
         ? 'Drafted from the analysis — the cause is not identified yet. Edit it here as you work the next steps and Save to keep it; the Home card is where you review it and hand it off.'
         : 'Drafted from the analysis. Edit it here if you’d say it differently — Save keeps it, then review it on the Home card to hand it off.');
     }
@@ -9423,6 +9544,23 @@
       console.warn('PostingPolicy preload failed:', err);
     }
   }
+  async function preloadCostMethod() {
+    try {
+      const payload = await getCostMethod();
+      const rows = (payload && (payload.data || payload.rows)) || [];
+      _txCostRows = Array.isArray(rows) ? rows : [];
+      paintScopeBand();
+      // ⚠ RE-DRAFT THE FINDING, not just the band. The drafted finding is built
+      // once when the analysis runs, and on a fast drill that happens BEFORE this
+      // fetch lands — leaving the card's "not established here" line standing on a
+      // report where the method is now known, which is the exact defect this whole
+      // change exists to remove. _txAnalyze() is idempotent and cheap here (the
+      // rows are already in memory), so re-run it rather than patching text.
+      if (typeof _txAnalyze === 'function') _txAnalyze();
+    } catch (err) {
+      console.warn('CostMethod preload failed:', err);
+    }
+  }
 
   // ============================================================
   //  Boot
@@ -9437,6 +9575,7 @@
       preloadCrossPeriods();    // 5.14 Period Mismatch
       preloadDuplicateSales();  // 5.18 Duplicate Sales
       preloadPostingPolicy();   // UI-167 per-customer GL posting policy (scope band)
+      preloadCostMethod();      // per-customer cost method — the A/P Voucher card's branch
       // System Status light reads the shared sessionStorage cache
       // (instant paint), then refreshes from v_diagnostic5_job_status
       // and starts polling. Same data Reconciliation drives &mdash;

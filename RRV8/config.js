@@ -749,7 +749,7 @@ window.RRV8 = window.RRV8 || {};
     '- A GL-ONLY row (cardex 0, ledger ≠ 0) is most often a NON-STOCK line: the order line type (F4211 / F42119 SDLNTY) is "N", Non-Stock, whose F40205 Inventory Interface is "N". It posts to the G/L and moves no inventory, so no F4111 row exists. THAT IS THE CAUSE, NOT A CLEARANCE — the row still requires a correction.',
     '- NON-STOCK, WHAT TO CHECK AND WHAT TO SAY: read the order line type, then read WHICH ACCOUNT the G/L leg landed on. Verified case: the non-stock extended cost (F4211 / F42119 SDECST on the type-N lines) tied to the F0911 amount to the penny, and the G/L leg had posted to the INVENTORY account — the same account the cardex uses. A non-stock item holds no inventory, so that value does not belong in an inventory account. The tie-out PINPOINTS THE DEFECT; it does not exonerate the row. Never say a non-stock GL-only row is expected, needs no correction, or should not be chased. THE CAUSE IS THE G/L CLASS ON THE LINE, NOT THE DMAAI — verified: the non-stock AAI entry was CORRECT (it pointed away from inventory), while every type-N line carried a STOCK item\'s G/L class instead of the line type\'s own class, and that stock class is what resolves to the inventory account. So DO NOT tell the analyst to change the non-stock DMAAI; tell them to correct the G/L class on those items so a non-stock line stops resolving to inventory. The accountant reclassifies what is already posted.',
     '- NON-STOCK, THE TWO CORRECTIONS: at the SOURCE, the DMAAI directing that non-stock line type is sending non-stock cost to the inventory account — correct the DMAAI so non-stock cost lands on its own non-inventory account. For EXISTING BALANCES, the ACCOUNTANT reclassifies the already-posted non-stock value out of the inventory account (name the lane, never instruct or argue the entry). Until both are done, the G/L inventory balance is overstated against the item ledger by exactly the non-stock total, on every order carrying such a line.',
-    '- An A/P VOUCHER (batch type V) posted to an inventory account is a variance that requires a correction, and its cause is a DMAAI error: DMAAI 4330 is sending voucher variances to the inventory account instead of the A/P variance account. Screen for batch type V on an inventory account; if present, the fix is at the SOURCE — correct DMAAI 4330 so voucher variances land on the variance account, and restrict posting-time GL-account overrides on the voucher-match version so the account cannot be keyed over again.',
+    '- An A/P VOUCHER (batch type V) on an inventory account requires a correction, but ITS CAUSE DEPENDS ON THE COSTING METHOD AND THE CARD CANNOT READ IT: the claim is batch type alone and nothing in it reads a cost ledger or an AAI. NEVER assert DMAAI 4330 as the cause without establishing the method first — this bullet asserted it unconditionally until 2026-09-12 and that made every weighted-average customer\'s finding backwards. READ F4105 COST LEDGER FIRST: 02 is weighted average, 07 is standard. Under STANDARD cost, 4330 should route the variance to a variance account, so value sitting on inventory means the route is wrong or the account was keyed over at posting time — correct 4330 at the SOURCE and restrict posting-time GL-account overrides on the voucher-match version so the account cannot be keyed over again. Under WEIGHTED AVERAGE, 4330 routes to inventory BY DESIGN: the variance is absorbed into the unit cost and THE ACCOUNT IS CORRECT, so the fault is the F4111 revaluation that was never written. Prescribing a 4330 correction on an average-cost customer moves correctly-routed cost OFF inventory and CREATES the variance it was meant to fix — never do it. A MISSING 4330 ROW IN THE LOADED DMAAI EXTRACT IS NOT EVIDENCE OF MISROUTING: the extract is filtered, so absent means unreadable, not guilty, and a finding must not assert a routing it could not read. 4330 DOES write to F4111 when the line type has Voucher Match Variance Account checked, so read the item-ledger column per row instead of assuming the whole amount is the variance.',
     '- TRANSFER INTEGRITY (IT) is a PRICING fault on a transfer whose two item-ledger legs are BOTH present: the RECEIPT leg carried a unit cost it never extended, so the item-ledger amount never calculated and a value-neutral location move destroyed inventory value. LEDGERAMOUNT = 0 DOES NOT MEAN THE GL IS MISSING, and writing that is a factual error: F0911 holds BOTH legs of these documents on the SAME account, posted, and they net to zero, which is exactly what a value-neutral move should do. Never describe this population as relieving value with no GL entry. THE FAILING LEG IS THE RECEIPT LEG on every document that causes the card. An earlier note here said "the receiving leg is NOT the discriminator" on the strength of an even relief/receipt split; that measured every zero-extended leg in the company, which is a different and mostly harmless population, so the even split does not describe this card. THE SHAPE IS NARROW, NOT GENERAL: a zero extended cost on a transfer leg is COMMON and harmless, and only the small fraction that ALSO carries a unit cost produces this card. DOCUMENTS MISSING A LEG ARE A DIFFERENT CARD (Transfer Leg Missing) and are claimed before this one, so everything here has both legs. DO NOT call it a named JDE or vendor defect — no article has been cited for it. DO NOT state a cost level or costing method as a property of the pattern: cost level 3 throughout in one verified company and a MIX of levels 2 and 3 in the other. IT IS EPISODIC, NOT A STANDING SETUP FAULT: failures cluster into bursts with clean stretches between them and the most recent verified periods ran clean at normal transfer volume, so never say "it will not clear on its own" — count the failures per period first, and treat a burst that starts and stops as a cost change or a specific set of items rather than a permanent setup error. NEVER STATE A RATE, A DOLLAR TOTAL OR A DOCUMENT COUNT YOU HAVE NOT BEEN GIVEN FOR THIS INSTALL; the specimen figures are one dataset, they live in the analysis guide labelled by company, and repeating them here would assert a number that is false on any other customer. Confirm the signature per document (receipt leg, unit cost, zero extended cost), compare the cost setup of the failing items against items that transferred cleanly in the same period, and note that restoring the lost value is a dollars-only inventory adjustment the ACCOUNTANT books. R41543 / R41544 are NOT the remedy and must NEVER be prescribed for this pattern (owner 2026-08-03, the same ruling that pulled them off Completion Not Journaled). No report is needed to find the rest of the population either: the Transfer Integrity card already holds every priced-at-zero transfer receipt.',
     '- TRANSFER LEG MISSING (IT) is a SEPARATE card and a different fault from Transfer Integrity. JDE writes a transfer as a line-ID PAIR, .000 relief and .500 receipt. These documents hold exactly ONE F4111 row, so the counterpart never reached the item ledger and QUANTITY as well as value moved one way, leaving the receiving location short units, not just dollars. THE GL IS NOT THE PROBLEM: F0911 carries BOTH legs on the same account, posted, netting to zero, so the transfer completed and the item-ledger write is what went missing after it. THE CAUSE IS OPEN AND MUST STAY OPEN IN THE FINDING — say plainly that it is not determined. Two candidates and the RapidReconciler database cannot choose between them: JDE never wrote the row, or the load dropped it (F4111 is keyed on ILUKID alone, so a colliding key is lost on insert with no error raised). NEVER assert one of them. THE DECISIVE TEST is a query against SOURCE JDE F4111 for the document numbers on the card, looking for the missing line ID: both line IDs present in JDE and only one in RR means a load fault, hand over the document numbers; only one line ID in JDE as well means a one-sided item-ledger write, which goes to Oracle through the CUSTOMER\'S OWN IT DEPARTMENT with the F0911 legs attached as evidence that the transfer posted. Direction is not a screen — either leg can be the one missing. Have the analyst read item, location, lot and G/L date across the documents before escalating, because a cluster on one combination and one day frames the escalation differently from failures scattered across the file. Restoring the balance is a quantity-and-value inventory adjustment the ACCOUNTANT books. NEVER STATE A COUNT OR A DOLLAR TOTAL YOU HAVE NOT BEEN GIVEN FOR THIS INSTALL.',
     '- MAKE TO ORDER is a business grouping (a work order linked to its customer sales order), not a variance type. Its residual is ordinary manufacturing cardex-vs-GL and is NOT a DMAAI mapping issue (the routings match the 4152 model) and NOT a missing sales offset (the SOs shipped, status 999). Split it by shape: GL-only rows (cardex 0, ledger ≠ 0) are standard-cost variances — EXPECTED, no action; both-sides-differ rows have NO CONFIRMED CAUSE — the cost-basis explanation (completion valued at standard on the cardex vs actual in the GL) was TESTED on a verified population and does NOT fit: a standard-versus-actual gap should be a modest share of the transaction and fall either side of it, but most of the value sits on rows where the gap exceeds HALF the item-ledger amount, and the GL side is the larger one in about two thirds of the rows and the large majority of the value. Do NOT assert the cost-basis cause. The value also concentrates on very few accounts, so direct the analyst to work them by account, largest account first, with cost accounting (5.16). Where a standard cost genuinely did move after a completion posted, WIP revaluation is the mechanism that carries it to the GL, but NEVER state a report number for it — have the analyst confirm the program and version in their own JDE. Cardex-only rows (ledger 0, cardex ≠ 0) are the COMPLETION-GAP shape and belong to the Completion Not Journaled investigation, not to cost work — same physics as that card, grouped here only because usp6_008 stamped this subtype first (5.19). Never work all three shapes as one variance.',
@@ -890,7 +890,7 @@ window.RRV8 = window.RRV8 || {};
     'From the Options column on the RR Team page:',
     'Icon | Action',
     'Lock | Change the team member\'s role and their database & company access .',
-    'Pencil | Edit the team member\'s name, email, and Active state. Turning Active off blocks sign-in without deleting the account — use this when someone is on leave or has changed jobs.',
+    'Pencil | Edit the team member\'s name, email, App sign-in , and Active state. Turning Active off blocks sign-in without deleting the account — use this when someone is on leave or has changed jobs.',
     'Trash | Remove the team member entirely. Confirm the prompt to complete.',
     'Automatic inactivity management',
     'RapidReconciler watches sign-in activity and helps keep your team list current on its own:',
@@ -904,6 +904,16 @@ window.RRV8 = window.RRV8 || {};
     'If someone whose account was deactivated for inactivity tries to sign in, RapidReconciler tells them the account is inactive and to contact their administrator. Re-enabling them ( pencil icon → Active on) lets them straight back in.',
     'Passwords',
     'Administrators never set, see, or distribute passwords. Each team member sets their own from the secure link RapidReconciler emails them. If a team member can\'t sign in or their link has expired, edit the team member and re-send the set-password link to issue a fresh one — there is no admin-assigned temporary password. Password length and complexity rules are covered in Complex Passwords .',
+    'App sign-in, and switching single sign-on off for one person',
+    'The Sign-in column on the RR Team page says how each person gets in: Password , or the name of your identity provider (for example Entra ) when your company uses single sign-on. It is decided by the person\'s email domain , so everyone on a domain your company has federated signs in through the provider — a password from those accounts is refused.',
+    'Sometimes one identity needs a password anyway:',
+    '- a service account that no person signs in as;',
+    '- an employee not yet in your identity provider , so they can start work before IT adds them;',
+    '- break-glass access while your provider is unavailable.',
+    'Open the team member with the pencil icon and tick Sign in with an RR password instead of … under App sign-in . The same choice is on the New team member form. Their row then reads Password with a bypasses marker beside it, so you can see at a glance who is outside your provider.',
+    'This turns single sign-on off for that person',
+    'It is not a preference. That account no longer passes through your identity provider, so it is outside whatever your provider enforces — MFA, conditional access, device rules, and central deactivation when someone leaves. It is governed by RapidReconciler\'s own password rules instead, including the 90-day expiry. Grant it deliberately, and untick it when the reason has passed.',
+    'The tick box is greyed out for a member whose domain is not federated: there is no single sign-on there to bypass, and that account already signs in with a password.',
     'Common pitfalls',
     'A team member can\'t see a company they should have access to',
     'The role grants the module; company access controls the data. Open the lock icon and confirm the right database is checked and the company is included (or that All licensed companies is on).',
@@ -993,6 +1003,7 @@ window.RRV8 = window.RRV8 || {};
     'Can’t match any of your last 10 passwords.',
     'Why per company? A password belongs to a person, but a company is an access scope. Because one person can work in more than one company, the strongest rule wins: if someone can reach any company that requires a complex password, they’ll be asked for one. Turning it on for a single company effectively covers everyone who can reach that company.',
     'People who sign in with single sign-on (SSO) are never affected by these rules — their identity provider handles password strength.',
+    'One exception. An administrator can switch single sign-on off for one person — a service account, someone not yet in your identity provider, or break-glass access during an outage. That person signs in with a RapidReconciler password instead, so these rules do apply to them, including the 90-day expiry. You can see who is in that state on the Users page: their sign-in reads Password with a bypasses marker beside it.',
     'Password Requirements',
     'When the complex password policy is enabled, all user passwords must meet the following criteria:',
     'Requirement | Detail',
@@ -1679,7 +1690,31 @@ window.RRV8 = window.RRV8 || {};
     // here does NOT mean "no G/L entry" — the entry posted and self-cancelled elsewhere.
     'VCHR': {
       title: 'A/P Voucher on Inventory', kind: 'rebalance', tier: 'single', disposition: 'expense',
-      cause: 'A/P vouchers posted to an inventory account instead of the A/P variance account. DMAAI 4330 is routing voucher variances into inventory. Correcting that route stops it; restricting account overrides on the voucher-match version keeps it corrected.',
+      // ⚠ THIS CARD USED TO NAME DMAAI 4330 AS THE CAUSE AND PRESCRIBE CORRECTING IT.
+      // That is the STANDARD-COST branch of a two-branch decision, and shipping it as
+      // the only branch made the card wrong on every weighted-average customer —
+      // measured on Demo2, 2026-09-12 (batch 5975756, Co 80004, Feb 2026), where the
+      // drafted finding told the analyst to route voucher variances off inventory on a
+      // customer whose F4105 holds cost ledger 02 ONLY: 23,702 items in the branch,
+      // 124,898 rows fleet-wide, no other ledger present. On average cost the value
+      // belongs on inventory — it is absorbed into unit cost — so that action would
+      // have moved correctly-routed cost OFF inventory and created the variance it was
+      // meant to fix. Owner caught it by domain knowledge; no gate saw it.
+      //
+      // `AnalysisGuides/transaction-detail-analysis.md` §5.15 has carried BOTH branches
+      // correctly for a long time. The failure was this copy asserting one of them.
+      //
+      // ⚠ AND THE CLASSIFIER CANNOT TELL THEM APART. usp8_txv_flags claims this card on
+      // batch type V alone. It reads no cost ledger and no AAI, so the card must ASK
+      // rather than answer — which is why the cost method now leads every field here
+      // and sits in `context` as explicitly not tested.
+      //
+      // ⚠ A MISSING 4330 ROW IS NOT EVIDENCE OF MISROUTING. The F4095 extract is
+      // filtered (see dmaai-analysis.md Section 0). On Demo2 there is no 4330 row at
+      // all for GL classes 6101/6102/6174 on Co 80004, against a control of 195 rows
+      // for 4330 on that same company — every one on a different class, every one
+      // pointing at an expense account. Absent is unreadable, not guilty.
+      cause: 'A/P voucher value sits on an inventory account. What is wrong depends on the costing method, and this card cannot read it — the claim is batch type V and nothing else. Under standard cost the route is the fault and DMAAI 4330 should be sending the variance to a variance account. Under weighted average the account is correct: the variance is absorbed into unit cost by design, so the fault is the item-ledger row that never got written. Establish which before changing anything.',
       // 4330 DOES write to F4111 — do not put "a voucher moves no inventory" back
       // (UI-83). RRUniversity/inventory-distribution-aais.html lists 4330 as "Written
       // to F4111" and deliberately flags 4332 / 4335 / 4340 as "Not written to F4111",
@@ -1690,8 +1725,8 @@ window.RRV8 = window.RRV8 || {};
       // The old copy told the analyst there was nothing to look at in a column holding
       // three quarters of a million dollars. The batch-type half of this card IS
       // correct: all 3,812 Demo2 rows carry BatchType V.
-      desc: 'A/P voucher variance posted to an inventory account instead of the A/P variance account — DMAAI 4330 routes inventory items there. Read the cardex column per row before assuming the whole amount is the variance: most voucher rows carry no item-ledger side, but DMAAI 4330 writes to F4111 when the line type has Voucher Match Variance Account checked, and those rows tie against a real cardex figure.',
-      action: 'Check DMAAI 4330 for this company and GL class. Correct the route so voucher variances land on the variance account, then restrict who can override the GL account on the voucher-match version. The value already posted stays in the inventory account until the accountant reclassifies it out.',
+      desc: 'A/P voucher documents whose value landed on an inventory account. Batch type V is the whole test, so the card names the shape and not the cause. Read the cardex column per row before assuming the whole amount is the variance: many voucher rows carry no item-ledger side, but DMAAI 4330 writes to F4111 when the line type has Voucher Match Variance Account checked, and those rows tie against a real cardex figure rather than against zero.',
+      action: 'Establish the costing method first: F4105 cost ledger 02 is weighted average, 07 is standard. On standard cost, check DMAAI 4330 for this company and GL class, correct the route so the variance lands on the variance account, then restrict who can override the GL account on the voucher-match version. On weighted average the account is already right — the value is absorbed into unit cost — so the question is why the F4111 revaluation was never written, and correcting 4330 would make it worse. If the DMAAI extract holds no 4330 row for this routing, that is a gap in what was loaded, not proof the route is wrong. Value already posted stays put until the accountant reclassifies it.',
       finding: {
         dmaai: true,
         mech: 'A/P vouchers posted to an inventory account instead of the A/P variance account.',
@@ -1700,17 +1735,26 @@ window.RRV8 = window.RRV8 || {};
           { a: 'POP.inventoryaccount', t: 'The account they landed on is an inventory account.' }
         ],
         context: [
-          { k: 'dmaai', t: 'Not tested: the DMAAI. Batch type is the whole test — nothing in the classifier reads AAI 4330 or any other route. 4330 is the likeliest way a voucher variance reaches an inventory account, which is why the card names it, but you have to look it up.' },
-          'Read the item-ledger column per row. A voucher variance usually moves no inventory, but 4330 does write to F4111 when the line type has Voucher Match Variance Account checked, and those rows tie against a real cardex figure rather than against zero.'
+          { k: 'dmaai', t: 'Not tested: the costing method. Batch type is the whole test, and the method decides which half of this card applies.' },
+          'Read the item-ledger column per row. 4330 does write to F4111 when the line type has Voucher Match Variance Account checked.'
         ],
         found: [
-          'Likely cause, not yet confirmed: DMAAI 4330 is sending voucher variances to inventory for this company and GL class.',
-          'Alternative, if 4330 reads correctly in JDE: the account was overridden at posting time.'
+          'Under standard cost the route is the fault: DMAAI 4330 should be sending this variance off the inventory account.',
+          'Under weighted average the account is correct. The variance is absorbed into unit cost, so the absent item-ledger row is the fault.',
+          // ⚠ KEYED SO THE DETAILS PAGE CAN SUPPRESS IT. `_txFindingText`'s `suppress`
+          // map in inventory-transactions.html exists for exactly this case: a "not
+          // tested" line the card is right to carry in general, but which must not print
+          // on a report where the page HAS measured the thing. The page reads
+          // v8ui_txv_cost_method and, when the method is known, kills this bullet and
+          // states the branch instead.
+          // Owner 2026-09-13, on seeing this sentence on a drilled card: telling the
+          // analyst something is "not established here" when the product already holds
+          // the answer in F4105 is the defect, not the honesty.
+          { k: 'costmethod', t: 'Which one applies is not established here. Nothing in the claim reads a cost ledger or an AAI.' }
         ],
         fix: [
-          'Correct DMAAI 4330 so voucher variances land on the variance account.',
-          'Restrict who can override the GL account on the voucher-match version, or route those overrides through approval.',
-          'Put the next voucher through and confirm its variance lands off inventory.'
+          'Read the cost ledger first. F4105 ledger 02 is weighted average, 07 is standard.',
+          'Then act on that branch only: correct 4330 and lock the override, or chase the missing F4111 write.'
         ]
       }
     },
