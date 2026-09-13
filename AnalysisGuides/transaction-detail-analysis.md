@@ -1103,6 +1103,59 @@ When a PV doc shows up with **`F4111 empty + F0911 on inventory`**, that's wrong
 
 **Diagnostic key:** what AAI 4330 resolves to for this customer's company / GL class settles it.
 
+**⚠ ESTABLISH THE COST METHOD FIRST, AND DO NOT INFER IT FROM 4330.** Measured
+2026-09-12 on Demo2, batch 5975756 (Co 80004, Feb 28 2026): the card's drafted
+finding asserted *"DMAAI 4330 is sending voucher variances to inventory ... correct
+4330 so voucher variances land on the variance account"* — the **standard-cost**
+branch of the table above, on a customer that is **weighted average**. On average
+cost that prescription is backwards: the value belongs on inventory, and the
+defect is the missing F4111 row, not the GL account. Acting on it would move
+correctly-routed cost off inventory.
+
+Two cheap tests, in this order:
+
+1. **`F4105.coledg` — the populated cost ledgers.** Ledger `02` is weighted
+   average, `07` standard. If only `02` exists, the standard-cost branch is off
+   the table before 4330 is even read. On Demo2 that is the whole story:
+   **ledger 02 only, 23,702 items in the branch and 124,898 rows fleet-wide, no
+   other ledger present.** ⚠ This shows which ledgers are POPULATED, not which
+   is active — `F4102.IBCOST` is not in the extract (see
+   `reference_cost_method_not_extracted`) — but a single populated ledger makes
+   the other method implausible, and it is available on every customer.
+
+2. **Then 4330 — and treat a missing row as missing, not as misrouted.** The
+   F4095 extract is filtered (see `dmaai-analysis.md` Section 0). On Demo2,
+   AAI 4330 has **no row at all for GL classes 6101 / 6102 / 6174 on Co 80004**,
+   against a control of 195 rows for 4330 on that same company — every one of
+   them on a different GL class and pointing at an expense account, never at
+   inventory. So for these rows the diagnostic key is simply **unanswerable from
+   loaded data**. "No 4330 row for this routing" is not evidence that 4330 sends
+   value to inventory, and a finding must not assert the routing it could not
+   read.
+
+**What the Demo2 rows actually show, stated as the shape rather than the cause:**
+the GL took the value on the inventory account and F4111 has no row for it — six
+of the eight documents have no cardex row at all, and two have a single row of
+exactly **$0.01** at zero quantity. Every PO line involved is line type `S` with
+F40205 Inventory Interface `Y`, so inventory was genuinely due. Every one of the
+40 cardex rows in that batch is a zero-quantity cost-only adjustment, so zero
+quantity is the normal shape here and is **not** the discriminator between the
+rows that reconciled and the rows that did not. GL class is not the discriminator
+either — `6101`, `6102` and `6174` all appear on both sides. Under weighted
+average this is the second row of the table above: P4314 did not write the F4111
+revaluation. The cause of *that* is not yet identified.
+
+**`F43121.prland`, measured because it looked like the discriminator and is not.**
+Three values on Demo2: blank (46,557 rows), `1` (307,499), `2` (177,852). Within
+batch 5975756 every residual amount sits on a `2` row, which reads as a landed-cost
+component — but that does not survive the whole-database test. Joined at
+document + line across every PV document, `2` reaches the cardex **more** often
+than `1` (23.2% of 19,982 rows vs 17.4% of 153,043), and within the batch both
+flags are mostly absent from the cardex at line grain. **Blank is the real
+outlier: 1 cardex line out of 29,579 match rows.** The JDE meaning of these
+values is not confirmed from this extract — do not write a finding on `prland`
+until it is.
+
 > **Analyzer output:** Pattern 5.17 in the analyzer pulls AAI 4330's resolved account from the loaded F4095 (DMAAIs preload) and chooses the right hypothesis directly. The WHY card names the cost method ("Customer is on standard cost -- AAI 4330 resolves to {acct} (an expense account)") and the HOW card pre-fills the corrective JE with the actual variance amount and accounts. When F4095 isn't loaded, the analyzer presents both hypotheses and tells the analyst to confirm 4330 in JDE before posting anything.
 
 **Common causes and resolution:**

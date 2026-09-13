@@ -152,7 +152,25 @@
 '      <div class="sidebar-nav-children">\n' +
 '        <a href="admin-companies.html" class="sidebar-nav-child' + childCls('admin-companies') + '" data-nav-page="admin-companies">Licensing</a>\n' +
 '        <a href="admin-users.html" class="sidebar-nav-child' + childCls('admin-users') + '" data-nav-page="admin-users">RR Team</a>\n' +
-'        <a href="#" class="sidebar-nav-child" data-nav-page="admin-cardex-deletions">Utilities</a>\n' +
+// ⚠ THE "Utilities" CHILD WAS REMOVED 2026-09-13 (owner), with Reload Cardex
+// moving from the administrator surface to the analyst Tools tab. Do not add it
+// back as a route to that tool: it never was one. It was an anchor labelled
+// Utilities whose href was a bare hash and whose nav-page key was the
+// admin-cardex-deletions one named below. (The exact attribute is NOT repeated
+// here on purpose: a comment that reproduces live markup verbatim makes the next
+// person's grep for it hit a tombstone and read it as still wired.) It was
+// inert by construction on three counts, all measured before removal —
+//   1. `href="#"`, the ONLY nav child in this file that had no page;
+//   2. the cross-tab query propagation in inventory-asof.html and
+//      inventory-transactions.html reads `a[data-nav-page]` but skips
+//      `base !== '#'`, so it was excluded there too;
+//   3. the sibling click handler on `.sidebar-nav-child` calls preventDefault()
+//      when href is '#', so clicking it did nothing at all.
+// `admin-cardex-deletions` appeared exactly ONCE in the whole RRV8 tree (this
+// line), against a control of 9 `data-nav-page` occurrences in this file, so
+// nothing else referenced the key and no handler was left dangling by the cut.
+// The live entry point to that tool is the analyst Tools tab -> Reload Cardex,
+// which opens RRV8/admin-reload-cardex.html.
 '      </div>\n' +
 '    </div>\n' +
 '  </div>';

@@ -242,19 +242,59 @@ if (paint.indexOf(FIELD_ID) < 0) {
          'The band is rebuilt wholesale by this function, so a field it does not emit\n'
        + 'does not exist. UI-167 is back to a detection with nowhere to land.');
 } else {
-    // Every OPTIONAL field in this function is emitted inside an `if (...)`. The
-    // policy field must not be: the state where there is nothing to say ("Not
-    // tested") is exactly the state that must not read as "Detail" by omission.
+    // ⚠ THIS ASSERTION WAS INVERTED ON 2026-09-13 BY OWNER RULING, and the reasoning
+    // it replaces is kept because it is still right about its own half.
+    //
+    // It used to require the field be emitted UNCONDITIONALLY, on the grounds that
+    // the state with nothing to say ("Not tested") is exactly the state that must not
+    // read as "Detail" by omission. That holds — but only where a manufacturing
+    // figure sits beside it depending on the 1:1 pairing. GL posting measures whether
+    // R31802A posts manufacturing GL in detail or summarizes; drill an A/P Voucher on
+    // Inventory card and there is no manufacturing figure for it to qualify, so an
+    // unconditional field spends a scope-band slot saying "Not tested" about a test
+    // that was never relevant. Observed on Demo2, where all six companies are NoMfg
+    // and every purchasing drill printed it.
+    //
+    // SO THE RULE IS NOW: conditional, but ONLY on manufacturing being absent from the
+    // rows in scope, and it must still be unconditional with respect to the POLICY
+    // STATE. A gate on `_txPolicyState()`, on the card code, or on anything that could
+    // hide a NoMfg company while showing a Detail one is the original defect returning.
     const lines = paint.split('\n');
     const at = lines.findIndex(l => l.indexOf(FIELD_ID) >= 0);
     const line = lines[at] || '';
-    if (/^\s*if\s*\(/.test(line) || /\bif\s*\([^)]*\)\s*html\s*\+=[^;]*tx-scope-glpost/.test(line)) {
-        fail('#' + FIELD_ID + ' is emitted conditionally',
-             'line: ' + line.trim() + '\n'
-           + 'A conditional field cannot report the NoMfg state, and a company whose\n'
-           + 'policy is untested would render identically to one confirmed as Detail.');
+    const guard = /\bif\s*\(([^)]*)\)\s*html\s*\+=[^;]*tx-scope-glpost/.exec(line)
+               || /^\s*if\s*\(([^)]*)\)/.exec(line);
+    if (!guard) {
+        // Unconditional still satisfies the policy-state half of the rule, so this is
+        // not a failure — it is the pre-2026-09-13 shape.
+        ok('#' + FIELD_ID + ' is emitted unconditionally (still valid, pre-ruling shape)');
     } else {
-        ok('#' + FIELD_ID + ' is emitted unconditionally');
+        const cond = guard[1] || '';
+        // The condition must be derived from the ROW POPULATION, never from the policy
+        // state and never from a card code. A card is a SubType bucket and a SubType
+        // can span transaction types, so a code-to-family table would be wrong on
+        // exactly the mixed cards where the answer matters.
+        const readsPolicy = /_txPolicyState|SummarizationState|NoMfg|Summarized|Detail/.test(cond);
+        const readsCard   = /activeCard|VCHR|_TXV_CARD/.test(cond);
+        const readsRows   = /Mfg|filteredRows|_mfgRows|_showGlPost/.test(cond);
+        if (readsPolicy) {
+            fail('#' + FIELD_ID + ' is gated on the POLICY STATE',
+                 'condition: ' + cond.trim() + '\n'
+               + 'A company whose policy is untested would then render identically to one\n'
+               + 'confirmed as Detail. That is the original UI-167 defect.');
+        } else if (readsCard) {
+            fail('#' + FIELD_ID + ' is gated on the CARD CODE',
+                 'condition: ' + cond.trim() + '\n'
+               + 'A card is a SubType bucket and a SubType can span transaction types, so a\n'
+               + 'code-to-family gate is wrong on exactly the mixed cards that matter.\n'
+               + 'Gate on the measured Type of the rows in scope instead.');
+        } else if (!readsRows) {
+            fail('#' + FIELD_ID + ' is gated on something unrecognised',
+                 'condition: ' + cond.trim() + '\n'
+               + 'The only sanctioned gate is absence of manufacturing rows in scope.');
+        } else {
+            ok('#' + FIELD_ID + ' is gated on the measured rows, not on the policy or the card');
+        }
     }
     if (paint.indexOf('_paintPolicyField()') >= 0) {
         ok('paintScopeBand calls _paintPolicyField(), so a repaint re-states the fact');
