@@ -6323,6 +6323,38 @@
     var c = _txCostState();
     return !!(c && (c.state === 'Average' || c.state === 'Standard'));
   }
+  // ONE PRODUCER FOR THE SUPPRESS MAP, read by the drafted finding AND by the AI
+  // narration. They used to disagree by construction: the finding was filtered and the
+  // narration was handed `sel.fix` raw, so on an average-cost customer the card could
+  // print "leave 4330 alone" while the paragraph under it explained the 4330 correction.
+  // That is the same wrong-branch defect the cost-method view was built to end.
+  //
+  // ⚠ A BRANCH DIES UNLESS THE METHOD IS MEASURED AS ITS OWN. Not "unless it is ruled
+  // out" — before the fetch lands `_txCostState()` is null and BOTH branches die, which
+  // leaves the two "read the ledger first" bullets standing. 'Mixed' and 'Unknown' fall
+  // the same way on purpose: the branches point at opposite faults, so a customer
+  // holding both ledgers gets the instruction to read it per item, never a guess.
+  function _txCostKill(routesRead) {
+    var c = _txCostState();
+    var s = (c && c.state) || '';
+    return {
+      dmaai:      !!routesRead,
+      costmethod: _txCostDecided(),
+      stdbranch:  s !== 'Standard',
+      avgbranch:  s !== 'Average'
+    };
+  }
+  // Resolve a bullet array against a suppress map, by the identical rule `_txFindingText`
+  // applies internally. Exists so the narration can be handed the branch the analyst is
+  // actually reading rather than the whole catalog entry.
+  function _txKeepBullets(v, kill) {
+    kill = kill || {};
+    if (v == null || v === '') return [];
+    return (Array.isArray(v) ? v : [v]).map(function (b) {
+      if (b && typeof b === 'object') return (b.k && kill[b.k]) ? '' : (b.t || '');
+      return b;
+    }).filter(function (s) { return !!s; });
+  }
   function _paintCostField() {
     var v = document.getElementById('tx-scope-cost');
     if (!v) return;
@@ -6394,6 +6426,22 @@
     // posting field be conditional above without this call site knowing.
     _paintPolicyField();
     _paintCostField();
+    // ⛔ THE TOTALS ARE DESTROYED BY THE LINE ABOVE AND HAVE TO BE REPAINTED HERE.
+    // `band.innerHTML = html` re-emits #tx-scope-rows and #tx-scope-var on their em-dash
+    // placeholders, and their ONLY writer is renderStartHere(). renderAll() paints the
+    // band and then calls renderSubtotals(), so the first render was always right — but
+    // preloadPostingPolicy() and preloadCostMethod() each call this function on their own
+    // when their fetch resolves, and neither repainted the totals. Whichever landed last
+    // left Rows and Total variance reading "—" for the rest of the drill while the grid
+    // below it showed the rows. Observed by the owner on Demo2 Co 80010, an A/P Voucher
+    // drill showing 94 rows against two em-dashes, 2026-09-13.
+    //
+    // ⚠ GUARDED ON `_data` FOR THE REASON THE GL-POSTING FIELD IS GUARDED ON ROWS. Before
+    // the payload lands filteredRows() is empty, and painting "0" and "$0.00" would turn a
+    // pending question into a confident wrong answer — the failure mode the sibling DMAAI
+    // loader shipped. No data means the em-dash STAYS, which is what an unanswered field
+    // should look like.
+    if (_data) renderSubtotals();
   }
 
   // ============================================================
@@ -7654,6 +7702,8 @@
       ].join('\n'));
     }
     var cardTitle = card ? (_TXV_CARD_TITLE[card] || card) : '';
+    // Built ONCE, above the draft, because the AI narration below the `if` reads it too.
+    var _txKill = _txCostKill(routesRead);
     if (verdict !== 'muted' && sel) {
       var _arr = function (v) { return (v == null || v === '') ? [] : (Array.isArray(v) ? v : [v]); };
       _txAutoDraftFinding(_txFindingText({
@@ -7691,11 +7741,15 @@
           return (c && c.note) ? f.concat([c.note]) : f;
         })(),
         fix: sel.fix, tail: tail
-      }, { dmaai: routesRead, costmethod: _txCostDecided() }), sel.triage
+      }, _txKill), sel.triage
         ? 'Drafted from the analysis — the cause is not identified yet. Edit it here as you work the next steps and Save to keep it; the Home card is where you review it and hand it off.'
         : 'Drafted from the analysis. Edit it here if you’d say it differently — Save keeps it, then review it on the Home card to hand it off.');
     }
-    if (wantAi) _txAnalyzeNarrate(co, per, sel.mech, (Array.isArray(sel.fix) ? sel.fix.join(' ') : sel.fix), fp);
+    // ⚠ THE RESOLVED FIX, NOT `sel.fix`. Two reasons, and the second one would have shipped
+    // silently: the narration must explain the branch the analyst is reading, and a keyed
+    // bullet is an object, so the old `sel.fix.join(' ')` would have put "[object Object]"
+    // into the prompt the moment any card keyed a fix bullet.
+    if (wantAi) _txAnalyzeNarrate(co, per, sel.mech, _txKeepBullets(sel.fix, _txKill).join(' '), fp);
   }
   // Full-tier narration: plain-analyst-English over the RESOLVED facts. Grounded
   // (it can't disagree with the deterministic answer); a bonus, so a failure is

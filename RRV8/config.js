@@ -1735,12 +1735,25 @@ window.RRV8 = window.RRV8 || {};
           { a: 'POP.inventoryaccount', t: 'The account they landed on is an inventory account.' }
         ],
         context: [
-          { k: 'dmaai', t: 'Not tested: the costing method. Batch type is the whole test, and the method decides which half of this card applies.' },
+          // ⚠ RE-KEYED FROM `dmaai` TO `costmethod` 2026-09-13. The bullet's subject is the
+          // COSTING METHOD and it was suppressed by `routesRead` — the flag that says the
+          // page read the DMAAI routes. Reading an AAI says nothing about which cost ledger
+          // the customer is on, so on any drill where the routes resolved, a caveat about an
+          // UNREAD cost method vanished. It now dies to the thing that actually answers it.
+          { k: 'costmethod', t: 'Not tested: the costing method. Batch type is the whole test, and the method decides which half of this card applies.' },
           'Read the item-ledger column per row. 4330 does write to F4111 when the line type has Voucher Match Variance Account checked.'
         ],
+        // ⚠ BOTH BRANCH BULLETS ARE KEYED `costmethod` AND DIE WHEN THE METHOD IS KNOWN.
+        // They are the card's answer for a customer whose method nobody has read. Once
+        // v8ui_txv_cost_method lands, the page appends the view's MethodNote — which states
+        // the same branch AND carries the item counts behind it — so printing these as well
+        // says one thing three times. Owner 2026-09-13, looking at a drilled Average card
+        // whose "What I found" ran the standard branch, the average branch, and the note.
+        // On 'Mixed' and 'Unknown' the method is NOT decided, both still print, and that is
+        // correct: a customer holding both ledgers has to be read per item.
         found: [
-          'Under standard cost the route is the fault: DMAAI 4330 should be sending this variance off the inventory account.',
-          'Under weighted average the account is correct. The variance is absorbed into unit cost, so the absent item-ledger row is the fault.',
+          { k: 'costmethod', t: 'Under standard cost the route is the fault: DMAAI 4330 should be sending this variance off the inventory account.' },
+          { k: 'costmethod', t: 'Under weighted average the account is correct. The variance is absorbed into unit cost, so the absent item-ledger row is the fault.' },
           // ⚠ KEYED SO THE DETAILS PAGE CAN SUPPRESS IT. `_txFindingText`'s `suppress`
           // map in inventory-transactions.html exists for exactly this case: a "not
           // tested" line the card is right to carry in general, but which must not print
@@ -1752,9 +1765,27 @@ window.RRV8 = window.RRV8 || {};
           // the answer in F4105 is the defect, not the honesty.
           { k: 'costmethod', t: 'Which one applies is not established here. Nothing in the claim reads a cost ledger or an AAI.' }
         ],
+        // ⚠ THREE-WAY, AND THE PAGE PICKS THE BRANCH. Keys `stdbranch` / `avgbranch` are
+        // killed by `_txFindingText`'s suppress map when the measured method rules that
+        // branch out, so a decided card prints ONE branch and an undecided card prints the
+        // two-line "read it first" pair that was here before.
+        //
+        // ⚠ "CHASE THE MISSING F4111 WRITE" WAS NOT AN INSTRUCTION. Owner 2026-09-13: the
+        // product told the analyst to chase something and named no query, on the one branch
+        // where RapidReconciler's own copy is exhausted. Five hypotheses are dead by
+        // measurement on Demo2 batch 5975756 — zero quantity, GL class, non-stock lines, no
+        // cost record to revalue, and F43121.prland — so the remaining question is whether
+        // the row was ever written upstream, and only SOURCE JDE answers it. Modelled on
+        // TLM, which hands over the decisive query and both outcomes rather than a verdict.
         fix: [
-          'Read the cost ledger first. F4105 ledger 02 is weighted average, 07 is standard.',
-          'Then act on that branch only: correct 4330 and lock the override, or chase the missing F4111 write.'
+          { k: 'costmethod', t: 'Read the cost ledger first. F4105 ledger 02 is weighted average, 07 is standard.' },
+          { k: 'costmethod', t: 'Then act on that branch only: correct 4330 and lock the override, or query source JDE F4111 for the missing revaluation row.' },
+          { k: 'stdbranch',  t: 'Correct DMAAI 4330 at the source, then restrict GL-account overrides on the voucher-match version so it cannot be keyed over again.' },
+          { k: 'stdbranch',  t: 'Value already posted stays put until the accountant reclassifies it off inventory to the variance account.' },
+          { k: 'avgbranch',  t: 'The account is right, so leave 4330 alone. Query source JDE F4111 for these document numbers and look for the revaluation row.' },
+          { k: 'avgbranch',  t: 'Present in JDE and absent here is a load fault: hand over the document numbers. Absent in both means P4314 never wrote it.' },
+          { k: 'avgbranch',  t: 'Then read the voucher-match version and that batch\'s job log: a suppressed F4111 update and a partial run are the two candidates.' },
+          { k: 'avgbranch',  t: 'Restoring the cardex is a revaluation the accountant books with cost-accounting, so it updates the item average cost and not only the cardex.' }
         ]
       }
     },

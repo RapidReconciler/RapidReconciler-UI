@@ -459,6 +459,40 @@ def _bullet_texts(node):
     return out
 
 
+def _rendered_bullet_count(node):
+    """How many bullets a reader can actually SEE, not how many the array holds.
+
+    A `{k: ..., t: ...}` bullet is SUPPRESSIBLE: `_txFindingText`'s kill map drops it
+    when the page has measured the thing it is keyed to. VCHR's `fix` carries three
+    mutually exclusive groups -- the read-the-ledger pair, the standard branch and the
+    average branch -- so the array holds 8 and a customer is shown at most 4. Counting
+    the array reported 8 against a max of 2, which is a number nobody can act on: it
+    does not describe any report the product renders.
+
+    The worst case a static gate can compute without knowing the runtime map is
+    `unkeyed + the largest single keyed group`. Two different keys CAN both survive
+    (nothing here forbids it), so this is a lower bound on the true worst case rather
+    than a proof -- but it is the honest reading of the array, where the raw length is
+    not. Cards with no keyed bullets are unaffected: every bullet is unkeyed and the
+    count is the length, exactly as before.
+    """
+    if node is None or node[0] != "arr":
+        return 0
+    unkeyed = 0
+    groups = {}
+    for item in node[1]:
+        key = None
+        if item[0] == "obj":
+            k = item[1].get("k")
+            if k is not None and k[0] == "str":
+                key = k[1]
+        if key is None:
+            unkeyed += 1
+        else:
+            groups[key] = groups.get(key, 0) + 1
+    return unkeyed + (max(groups.values()) if groups else 0)
+
+
 def check_copy_standard(meta, config_path, errors, warnings, standard_path=None):
     std = load_standard(errors, standard_path)
     if not std:
@@ -510,10 +544,16 @@ def check_copy_standard(meta, config_path, errors, warnings, standard_path=None)
             field, heading = sec["field"], sec["heading"]
             bullets = _bullet_texts(finding[1].get(field))
             cap = sec.get("maxBullets")
-            if cap is not None and len(bullets) > cap:
-                emit(code, field, "`%s` (%s) has %d bullets, max %d. Trim it or move "
+            # The CAP is checked against what a reader sees; the WORD LIMIT below is
+            # checked on every bullet, suppressible or not, because a bullet that is
+            # over-long is over-long on whichever report prints it.
+            shown = _rendered_bullet_count(finding[1].get(field))
+            if cap is not None and shown > cap:
+                extra = ("" if shown == len(bullets)
+                         else " (%d in the array; the rest are branch-suppressed)" % len(bullets))
+                emit(code, field, "`%s` (%s) renders %d bullets, max %d%s. Trim it or move "
                      "the detail into an appended block."
-                     % (field, heading, len(bullets), cap))
+                     % (field, heading, shown, cap, extra))
             for b in bullets:
                 words = len(b.split())
                 if words > limit:
