@@ -2,52 +2,41 @@ name: Refresh AI grounding
 
 # Regenerates the marker-delimited AI-grounding block in RRV8/config.js from the
 # knowledge-base docs whenever a source doc (or the generator) changes on main,
-# then lands the regenerated config.js through a PULL REQUEST rather than a
-# direct push.
+# then commits the regenerated config.js back.
 #
-# WHY A PR AND NOT A PUSH (changed 2026-09-13)
-# --------------------------------------------
-# `main` carries ruleset 22760277, which requires the `callsites` check. Required
-# checks are evaluated on any ref update INCLUDING a direct push, and a fresh bot
-# commit has no checks on it. The repo is owned by a USER account, so the
-# Integration bypass that would exempt github-actions[bot] is refused, and
-# `enforcement: evaluate` is Enterprise-only on this plan.
+# Mirrors refresh-indices.yml (Python generator -> commit regenerated artifact
+# back with a pull-rebase-retry push loop).
 #
-# ⚠ THIS WORKFLOW WAS THE LAST DIRECT-PUSHER AND IT HAD BEEN DEAD FOR THREE DAYS.
-# refresh-indices.yml, update-release-notes.yml and update-doc-dates.yml were all
-# moved to the PR pattern on 2026-09-10 under HK-14. This one was missed, so it
-# kept pushing straight at main and kept being refused:
+# ⚠ THIS WORKFLOW HAD NEVER RUN. NOT ONCE. (HK-11 sweep 5, 2026-09-04.)
 #
-#     remote: - Required status check "callsites" is expected.
-#     ! [remote rejected] main -> main (push declined due to repository rule violations)
+# It asked for `runs-on: [self-hosted, windows]`, and this repository has ZERO
+# registered runners -- measured against the API, not assumed:
 #
-# Five consecutive failures, 2026-09-10 through 2026-09-13, one per merge that
-# touched a grounding source. The retry loop made it worse rather than better --
-# it rebased and re-pushed five times, and every attempt was refused for the same
-# structural reason, so the loop could never have succeeded. A retry is for a
-# race; this was not a race.
+#     gh run list --workflow=refresh-ai-grounding.yml --limit 100
+#         -> 35 runs, conclusion "cancelled" on all 35, zero successes
+#     gh api repos/.../actions/runners -q .total_count
+#         -> 0
 #
-# ⚠ THE CONTENT WAS NEVER ACTUALLY STALE, which is the only reason this was
-# cheap. Measured 2026-09-13 on a clean checkout of live main: the generator
-# reported "AI grounding block already up to date -- no change" with an empty
-# `git diff`. Control: perturbing the block in the same checkout flipped the
-# generator to its "Regenerated" path, so the instrument can tell the two apart.
-# Do not read that as "the bot was harmless" -- it means the fleet got lucky on
-# which merges landed, not that a stale block would have been noticed.
+# So every push that touched a grounding source since this file was written
+# queued a job that could never be picked up. A scheduled job with a 100%
+# cancelled history is worse than no job: it is a permanently amber row that
+# teaches everyone to stop reading the Actions tab.
 #
-# ⚠ NEEDS BOT_PR_TOKEN, NOT GITHUB_TOKEN. GitHub's documented contract is that
-# "events triggered by the GITHUB_TOKEN will not create a new workflow run", so a
-# PR opened with it never triggers the required check and would sit at "Expected"
-# forever. The preflight step refuses loudly rather than opening a PR that cannot
-# merge. This is the same trade HK-16 records: BOT_PR_TOKEN is broader than
-# anyone wanted, and it is the only credential that can land this at all.
+# IT NEVER NEEDED WINDOWS. The header used to say the runner had no bash, which
+# is why every step was `shell: powershell` -- that was a property of the runner
+# somebody expected to exist, not a requirement of the work. The generator is
+# stdlib-only Python (html, re, sys, html.parser, pathlib -- no pip install) and
+# it only reads and writes files in this repo. Verified 2026-09-04 by running
+# `python Tools/build-ai-grounding.py` on a stock interpreter: exit 0,
+# "AI grounding block already up to date -- no change".
 #
-# LOOP PREVENTION IS PATH-BASED AND SURVIVES DROPPING `[skip ci]`, which had to go
-# so the bot's own PR gets checked -- a skipped run reports no checks, and a
-# required check that never reports blocks the PR permanently. RRV8/config.js is
-# deliberately NOT in the trigger paths below, so landing it cannot retrigger
-# this workflow. That guard was already here and is what makes the marker safe to
-# remove; it is not a new assumption.
+# Now on ubuntu-latest with bash. If a future step genuinely needs the dev box
+# (a database, SqlPackage, a licensed tool), register a runner first and confirm
+# `gh api .../actions/runners` is non-zero BEFORE pointing a workflow at it.
+#
+# RRV8/config.js is deliberately NOT in the trigger paths: the bot's own commit
+# to it must not retrigger this workflow (same guard refresh-indices uses for its
+# output JSONs). The commit also carries [skip ci] for belt-and-suspenders.
 
 on:
   push:
@@ -66,15 +55,12 @@ on:
   # Also runnable on demand from the Actions tab
   workflow_dispatch:
 
-# GITHUB_TOKEN needs nothing: the branch push, the PR and the merge all
-# authenticate as BOT_PR_TOKEN. Left read-only so a reintroduced direct push
-# fails outright rather than half-working -- which is exactly how this workflow
-# spent three days looking amber instead of broken.
+# The default GITHUB_TOKEN needs write access to commit the regenerated config.js
 permissions:
-  contents: read
+  contents: write
 
-# Queue a second run rather than racing it against the first -- both would open a
-# PR against the same file.
+# Queue a second run rather than racing it against the first -- both would push
+# a commit to the same file on main.
 concurrency:
   group: refresh-ai-grounding-${{ github.ref }}
   cancel-in-progress: false
@@ -82,56 +68,24 @@ concurrency:
 jobs:
   regen:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
 
     steps:
-      # BEFORE checkout, so a missing secret fails with a cause rather than as an
-      # opaque auth error inside actions/checkout.
-      - name: Require BOT_PR_TOKEN
-        env:
-          BOT_PR_TOKEN: ${{ secrets.BOT_PR_TOKEN }}
-        run: |
-          if [ -z "$BOT_PR_TOKEN" ]; then
-            echo "::error::BOT_PR_TOKEN is not set, so this workflow cannot land its change."
-            echo "::error::It cannot fall back to a direct push: main's ruleset 22760277 requires"
-            echo "::error::the 'callsites' check and a bot commit pushed straight to main has none."
-            echo "::error::It cannot use GITHUB_TOKEN for the PR either, because a PR opened with"
-            echo "::error::GITHUB_TOKEN never triggers the required check."
-            echo "::error::Create a fine-grained token scoped to this repository with Contents"
-            echo "::error::read/write and Pull requests read/write, save it as the Actions secret"
-            echo "::error::BOT_PR_TOKEN, and re-run. Failing loudly on purpose: a silent skip would"
-            echo "::error::let the AI grounding block drift out of step with the knowledge base,"
-            echo "::error::and the only symptom would be the assistant answering off stale facts."
-            exit 1
-          fi
-          echo "BOT_PR_TOKEN present."
-
       - name: Check out repository
         uses: actions/checkout@v4
-        with:
-          # Configures origin with the PAT, so the branch push is authenticated as
-          # a real user and DOES trigger the PR's checks.
-          token: ${{ secrets.BOT_PR_TOKEN }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          # PINNED, matching refresh-indices.yml. It used to float on '3.x', which
-          # put a moving interpreter under a generator that parses HTML with the
-          # stdlib -- and on 2026-09-13 the runner (3.14.7) reported a regeneration
-          # for a commit that a local 3.14.5 called unchanged. That discrepancy is
-          # NOT explained, and pinning does not explain it either; it removes one
-          # free variable so the next person is diagnosing one thing, not two.
-          python-version: '3.12'
+          python-version: '3.x'
 
       - name: Regenerate AI grounding block
         run: |
           python --version
           python Tools/build-ai-grounding.py
 
-      - name: Open a PR and merge it once the checks pass
-        env:
-          GH_TOKEN: ${{ secrets.BOT_PR_TOKEN }}
+      - name: Commit and push regenerated grounding
+        # Pull-rebase-retry loop because a sibling bot workflow can land its own
+        # commit on main between this workflow's checkout and push.
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -144,79 +98,18 @@ jobs:
           changed=0
           git diff --staged --quiet || changed=1
           if [ "$changed" -eq 0 ]; then
-            echo "No grounding changes -- nothing to do."
+            echo "No grounding changes -- nothing to commit."
             exit 0
           fi
-
-          branch="bot/ai-grounding-${GITHUB_RUN_ID}"
-          git checkout -b "$branch"
-          # NO [skip ci], deliberately: a skipped run reports no checks, and a
-          # required check that never reports blocks this PR permanently.
-          git commit -m "chore: refresh AI grounding"
-          git push -u origin "$branch"
-
-          pr_url="$(gh pr create \
-            --base main --head "$branch" \
-            --title "chore: refresh AI grounding" \
-            --body "Opened by the AI-grounding workflow. Lands the regenerated grounding block in \`RRV8/config.js\`, rebuilt from the knowledge-base docs. Goes through a PR rather than a direct push because main's ruleset requires the \`callsites\` check and a direct bot push carries none. Merged automatically once the checks pass.")"
-          echo "Opened $pr_url"
-          pr_num="${pr_url##*/}"
-
-          # ⚠ WAIT FOR A CHECK TO REGISTER BEFORE WATCHING ONE.
-          # `gh pr checks --watch` returns IMMEDIATELY when zero checks exist: it
-          # waits for EXISTING checks to finish, not for checks to appear. Measured
-          # on refresh-indices.yml's first real run -- it opened a PR, read "no
-          # checks reported", and refused, while `callsites` was created 19 seconds
-          # later and passed. If a workflow's triggers match, a missing check means
-          # WAIT, not a verdict.
-          head_sha="$(gh pr view "$pr_num" --json headRefOid --jq '.headRefOid')"
-          echo "head sha: $head_sha"
-          registered=0
-          for _ in $(seq 1 30); do
-            n="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${head_sha}/check-runs" \
-                  --jq '.total_count' 2>/dev/null || echo 0)"
-            if [ "${n:-0}" -gt 0 ]; then registered=1; echo "$n check(s) registered."; break; fi
-            sleep 10
+          git commit -m "chore: refresh AI grounding [skip ci]"
+          for attempt in 1 2 3 4 5; do
+            if git push; then
+              echo "Push succeeded on attempt $attempt."
+              exit 0
+            fi
+            echo "Push rejected on attempt $attempt -- rebasing on origin/main and retrying."
+            git pull --rebase origin main
+            sleep 2
           done
-          if [ "$registered" -ne 1 ]; then
-            echo "::error::no check run registered for ${head_sha} within 5 minutes."
-            echo "::error::With a required check that is indistinguishable from a permanent"
-            echo "::error::block, so the PR is left open. Most likely cause: BOT_PR_TOKEN is a"
-            echo "::error::GITHUB_TOKEN-equivalent and did not trigger the checks."
-            exit 1
-          fi
-
-          # ⚠ GATED ON THE EXIT CODE, AND NEVER PIPED. `gh pr checks | tee` returns
-          # tee's status and the default shell is `bash -e` with no pipefail, so a
-          # red gate would be discarded. That is HK-8.
-          out="${RUNNER_TEMP:-/tmp}/checks.txt"
-          rc=0
-          gh pr checks "$pr_num" --watch --fail-fast > "$out" 2>&1 || rc=$?
-          cat "$out"
-
-          # ⚠ AND EXIT 0 CAN BE A STALE READ -- measured on UI #539, where --watch
-          # returned 0 quoting the previous head's run. Re-read the verdict against
-          # the sha actually being merged.
-          state="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${head_sha}/check-runs" \
-                    --jq '[.check_runs[] | .conclusion] | join(",")')"
-          echo "check-run conclusions for ${head_sha}: ${state:-<none>}"
-
-          if [ "$rc" -ne 0 ] || echo ",$state," | grep -q ',failure,\|,cancelled,\|,timed_out,'; then
-            echo "::error::checks did not pass on $pr_url (gh exit $rc, conclusions: ${state:-none})."
-            echo "::error::Leaving the PR OPEN rather than merging or deleting it, so the grounding"
-            echo "::error::block is recoverable and the failure is visible. Merging past a red check"
-            echo "::error::is not this workflow's call."
-            exit 1
-          fi
-          if [ -z "$state" ]; then
-            echo "::error::no check runs reported for ${head_sha}. With a required check that is"
-            echo "::error::indistinguishable from a permanent block, so the PR is left open."
-            echo "::error::Most likely cause: BOT_PR_TOKEN did not trigger the checks."
-            exit 1
-          fi
-
-          # --delete-branch is safe HERE and is not on the dev box: it does a local
-          # checkout after merging, which on a throwaway runner has no working tree
-          # to disturb. The three sibling bots all pass it for the same reason.
-          gh pr merge "$pr_num" --squash --delete-branch
-          echo "Merged $pr_url"
+          echo "::error::Push still failing after 5 attempts; giving up."
+          exit 1
