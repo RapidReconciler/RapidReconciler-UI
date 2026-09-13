@@ -61,6 +61,35 @@ import sys
 from html.parser import HTMLParser
 from pathlib import Path
 
+# ⛔ THIS SCRIPT REQUIRES PYTHON 3.13, AND UNTIL 2026-09-13 IT NEVER SAID SO.
+#
+# `Path.read_text(newline=...)` and `Path.write_text(newline=...)` were added in
+# 3.13. Both are used at the bottom of main(), and they are not decoration: the
+# grounding block is compared and rewritten WITHOUT universal-newline translation
+# on purpose, so a CRLF working copy is not silently normalised into a whole-file
+# diff.
+#
+# The requirement was invisible because the workflow asked for '3.x' and the
+# hosted runner happened to give it 3.14. Pinning that to '3.12' on 2026-09-13 --
+# to remove a floating variable, which was a reasonable thing to want -- broke the
+# generator outright with
+#
+#     TypeError: Path.read_text() got an unexpected keyword argument 'newline'
+#
+# An undeclared minimum is a trap for exactly the person trying to make the build
+# deterministic. Declared here rather than only in the workflow, because the
+# script is also run by hand and a bare TypeError three hundred lines down names
+# nothing.
+if sys.version_info < (3, 13):
+    sys.stderr.write(
+        "build-ai-grounding.py needs Python 3.13 or newer; this is %d.%d.\n"
+        "Reason: Path.read_text(newline=) / Path.write_text(newline=) are 3.13+,\n"
+        "and the newline argument is load-bearing -- without it a CRLF checkout is\n"
+        "normalised on read and every run reports a whole-file change.\n"
+        % (sys.version_info[0], sys.version_info[1])
+    )
+    raise SystemExit(2)
+
 # --------------------------------------------------------------------------
 # Configuration
 # --------------------------------------------------------------------------
