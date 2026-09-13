@@ -1145,6 +1145,38 @@ either — `6101`, `6102` and `6174` all appear on both sides. Under weighted
 average this is the second row of the table above: P4314 did not write the F4111
 revaluation. The cause of *that* is not yet identified.
 
+**THE DECISIVE TEST IS AGAINST SOURCE JDE, BECAUSE EVERY DISCRIMINATOR INSIDE OUR
+COPY IS EXHAUSTED.** Five hypotheses are dead by measurement on Demo2 batch 5975756
+— zero quantity, GL class, non-stock lines, no cost record to revalue, and
+`F43121.prland` (claimed, then retracted; see below). Do not re-chase them. What is
+left is whether the revaluation row was ever written upstream, which is the same
+shape as Transfer Leg Missing (5.18a) and takes the same method:
+
+1. **Query the source JDE F4111 for these PV document numbers** and look for the
+   revaluation row. Nothing in RapidReconciler answers this.
+2. **Present in JDE, absent here** — a load fault. F4111's primary key is `ILUKID`
+   alone, so a colliding key is dropped on insert with no error. Hand the document
+   numbers to support.
+3. **Absent in JDE as well** — P4314 never wrote it. Two candidates, both readable
+   in JDE: the voucher-match version's processing options suppressing the F4111
+   update, and a partial run or job-step failure on that batch.
+4. **Query the full batch, not RR's view.** The F0911 mirror is filtered to
+   inventory-relevant accounts, so the RNV (4320) and A/P legs of the same posting
+   are absent from what the analyzer shows. See the Caveat at the end of this
+   section.
+
+The correction is a cardex revaluation the accountant books with cost-accounting,
+so it updates the item's average cost rather than only sitting on the cardex.
+⚠ **Do not correct AAI 4330 on this branch.** The account is right, and changing
+the route moves correctly-routed cost off inventory — it creates the variance
+instead of clearing it.
+
+> The VCHR card carries these four steps as its `fix` bullets, keyed `avgbranch`
+> so they print only when `v8ui_txv_cost_method` measures the company as Average.
+> A standard-cost company gets the 4330 correction instead, and a Mixed or Unknown
+> one gets neither — it is told to read the ledger first. The card used to say
+> "chase the missing F4111 write", which named no query at all (owner, 2026-09-13).
+
 **`F43121.prland`, measured because it looked like the discriminator and is not.**
 Three values on Demo2: blank (46,557 rows), `1` (307,499), `2` (177,852). Within
 batch 5975756 every residual amount sits on a `2` row, which reads as a landed-cost
