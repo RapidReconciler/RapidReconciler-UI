@@ -5229,7 +5229,33 @@
   // is currently harmless. Its collapse wiring and #view-ready are guarded separately;
   // both carry their own note.
   function renderReadiness() {
-    var list = $('readyList'); if (!list) return;
+    // ⚠ ALL SIX OR NONE — added 2026-09-14 at the owner's request.
+    // #readyList used to be the entire guard, and everything from `top.className`
+    // down was written with NO null check. So a restore that put the list back but
+    // not the headline threw a TypeError on the first of those writes instead of
+    // degrading, and the only reason that never bit anyone is that the card is
+    // currently retired whole, so the old guard caught every call.
+    //
+    // ⚠ AND A PARTIAL RESTORE MUST NOT FAIL SILENTLY EITHER. It is a mistake someone
+    // is half-way through making, so the console names exactly which ids are absent.
+    // That is a DEVELOPER-facing diagnostic and the console is where the person
+    // re-adding markup is already looking — it is not a user-facing sink and is not
+    // pretending to be one. No user can reach this state: either the markup ships or
+    // it does not.
+    var list  = $('readyList'), top = $('readyTop'), badge = $('readyBadge'),
+        title = $('readyTitle'), sub = $('readySub'), foot = $('readyFoot');
+    var need = { readyList: list, readyTop: top, readyBadge: badge,
+                 readyTitle: title, readySub: sub, readyFoot: foot };
+    var missing = Object.keys(need).filter(function (k) { return !need[k]; });
+    if (missing.length === 6) return;   // the retired card — the normal state today
+    if (missing.length) {
+      try {
+        console.warn('renderReadiness: the readiness card is only partly restored — ' +
+          'missing #' + missing.join(', #') + '. Add those ids too, or remove the rest; ' +
+          'the card stays off until all six are present.');
+      } catch (_) {}
+      return;
+    }
     var c = caps();
     var jobOk   = /^success/i.test(_jobStatus);
     var jobBusy = /^in progress/i.test(_jobStatus);
@@ -5263,8 +5289,9 @@
         '<div class="ri-sub">' + esc(it.sub) + '</div></div></div>';
     }).join('');
 
-    // Headline reflects the worst signal.
-    var top = $('readyTop'), badge = $('readyBadge'), title = $('readyTitle'), sub = $('readySub');
+    // Headline reflects the worst signal. (top / badge / title / sub were re-looked-up
+    // here; they are resolved once in the all-six guard at the top now, so these
+    // writes are reached only when every one of them exists.)
     var allGood = !_connDown && jobOk && c.inv;
     var anyBad  = _connDown || (_jobStatus && !jobOk && !jobBusy && !jobUnk) || !c.inv;
     top.className = 'ready-top' + (anyBad ? ' bad' : (allGood ? '' : ' warn'));
@@ -5272,7 +5299,7 @@
     if (allGood)      { title.textContent = 'You’re good to go';        sub.textContent = 'Everything you need to work is ready.'; }
     else if (anyBad)  { title.textContent = 'Not ready yet';            sub.textContent = 'Check the item(s) below before you start.'; }
     else              { title.textContent = 'Almost ready…';            sub.textContent = 'Finishing the readiness check.'; }
-    $('readyFoot').textContent = allGood ? 'Ready when you are.' : '';
+    foot.textContent = allGood ? 'Ready when you are.' : '';
 
     // Collapse when there's nothing to act on (all green) so the analyst
     // sees just "You're good to go"; expand automatically when an item needs
