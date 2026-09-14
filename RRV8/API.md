@@ -230,12 +230,32 @@ backend contract rather than synthesized client-side (per the
    - `dbs[i].t` &mdash; per-user authorized tabs `{inv,it,adm,por}`
      (the role's tab grants, AND-gated at mint against the client
      license `m`).
-   - `dbs[i].perms` &mdash; function grants `{ij,rs,dm,ac,ite,prs}` where
+   - `dbs[i].perms` &mdash; function grants `{ij,rs,dm,ac,ite,prs,tl}` where
      `dm` = `dmaais` (the role's grant to the **analyst surfaces**:
      Cardex Variance, Account Roll Forward, Model DMAAI Review, DMAAI
      Analysis) and `ac` = `accountant` (**VLC-41, added 2026-09-01**: the
      **accountant lane** &mdash; period disposition + reopen, period-review
-     sign-off + reopen, balancing-entry export).
+     sign-off + reopen, balancing-entry export), and `tl` = `tools`
+     (**UI-189, added 2026-09-14**: the Home **Tools** shelf &mdash; the
+     report-engine restart and Reload Cardex).
+
+     &#9888; **`tl` IS NOT `su`, AND THE DIFFERENCE IS THE WHOLE POINT.**
+     The original request named `superuser` as the gate. `su` comes from
+     `is_superuser`, a **VALC console** permission (console login, the
+     inactivity exemption, the console token) that `TenantUsersController`
+     calls one of "the two real escalation vectors" no customer-facing
+     method may write. Gating an application capability on it would mean
+     granting control-plane escalation to hand someone a cardex re-sync.
+     `tl` is an ordinary per-role column (`roles.tools`, V68) like every
+     other grant in this block. Seeded TRUE for Administrator, Analyst and
+     GSI Internal; FALSE everywhere else, including custom roles.
+
+     &#9888; **Fail-closed, like `dm` and `ac`.** `UserRequest.tools`
+     defaults false and `JwtAuthFilter` is the only writer, so a token with
+     no `perms` block &mdash; including the long-lived V8 dev token
+     (exp 2036) &mdash; carries no Tools grant. Re-mint it. That matters
+     more here than for the read-only lanes: what this gates ends in a
+     DELETE against `F4111` and `RTransactions`.
 
      &#9888; **`ac` is NOT the absence of `dm`.** Until 2026-09-01 the
      platform had no accountant claim at all and V8 derived the role from
@@ -276,6 +296,7 @@ backend contract rather than synthesized client-side (per the
    | **Analyst** (daily) | Cardex Variance, Account Roll Forward, Model DMAAI Review, DMAAI Analysis | `perms.dm === true` |
    | **Accountant** (period close) | Period disposition, period-review sign-off, balancing-entry export | `perms.ac === true` |
    | **Finance** (period-end) | Reconciliation, In Transit, PO Receipts | per-module caps `m`/`t` (`inv`/`it`/`por`) |
+   | **Tools** (maintenance) | Report Engine restart, Fiscal calendar, Reload Cardex | `perms.tl === true` |
 
    Fail-open per the existing `caps()` convention (a missing layer
    doesn't lock a user out). **Gate the Analyst lane on `perms.dm`
