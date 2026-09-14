@@ -4573,11 +4573,18 @@
     // per user), so we label any role accurately — Reconciliation Analyst,
     // A/P Clerk, etc. Fall back to the strict Administrator signal for older
     // tokens minted before `rn`; hide it only when neither is available.
+    // ⚠ #roleTag exists in no file — kept guarded on purpose (owner 2026-09-14), the
+    // same standing as renderReadiness(). Unlike the rest of this function, which
+    // writes seven elements that DO exist, the four guarded writes in here
+    // (#greet, #footName, #roleTag, #footVersion) are all retired chrome. The role
+    // name itself is still resolved below and is worth keeping resolved: it is the
+    // only place `a.rn` is turned into a label.
     var rt = $('roleTag');
     var a = activeDb() || {};
     var roleName = a.rn || (isAdmin() ? 'Administrator' : '');
     if (rt && roleName) { rt.textContent = roleName; rt.hidden = false; }
 
+    // #footVersion: retired footer chrome, kept guarded — see the #roleTag note above.
     var _fv = $('footVersion'); if (RR_CONFIG.release && _fv) _fv.textContent = 'RapidReconciler ' + RR_CONFIG.release;
   }
 
@@ -4880,6 +4887,10 @@
     // Guarded because #view-ready was removed with the "Am I ready to go?" card.
     // Unguarded this threw on every role switch, which would have taken the whole
     // role-change path down rather than merely losing a card.
+    // ⚠ #view-ready is the readiness card's container and exists in no file — guarded
+    // and kept on purpose with renderReadiness() (owner 2026-09-14). Note that
+    // renderReadiness's own collapse code still queries '#view-ready .ready', so this
+    // id is load-bearing for a restore even though nothing reads it today.
     var vr = $('view-ready'); if (vr) vr.hidden = admin;
     if (firstRun) renderWizard();
     else if (!admin) renderReadiness();
@@ -5204,6 +5215,19 @@
 
   // Build the readiness checklist from real signals already in hand:
   // connectivity, the refresh job status, module caps, and the open period.
+  // ⚠ A DELIBERATE NO-OP, AND THE ONE THE OTHERS CITE. The readiness card's markup was
+  // removed; the reasoning is written out in full above the analyst lane in the body,
+  // and it ends: "renderReadiness() is left intact and simply no-ops (it early-returns
+  // on a missing #readyList), so restoring this is putting the markup back — not
+  // rebuilding the checks." Pointer repeated here 2026-09-14 because that note is
+  // ~1,500 lines away and a reader landing on this function could not see it.
+  //
+  // ⛔ IF YOU RESTORE THE MARKUP, RESTORE ALL SIX IDS. Everything from `top.className`
+  // down is UNGUARDED — #readyTop, #readyBadge, #readyTitle, #readySub and #readyFoot
+  // are written without null checks, so a partial restore throws a TypeError on the
+  // first of them instead of degrading. The early return below is the only reason that
+  // is currently harmless. Its collapse wiring and #view-ready are guarded separately;
+  // both carry their own note.
   function renderReadiness() {
     var list = $('readyList'); if (!list) return;
     var c = caps();
@@ -5441,6 +5465,16 @@
            (x.sub ? '<span class="db-fact-sub">' + esc(x.sub) + '</span>' : '') +
            '</div>';
   }
+  // ⚠ A DELIBERATE NO-OP, KEPT ON PURPOSE — owner ruling 2026-09-14. #dbMeta exists
+  // in no file, so the guard below takes every call and the 50-odd lines after it
+  // never run. It is NOT an oversight and must not be swept: restoring the database
+  // facts drawer is putting the markup back, not rebuilding this. Same standing as
+  // renderReadiness() — see the long note above the analyst lane, which is where this
+  // convention is written down.
+  // ⚠ Its click wiring is elsewhere and is guarded the same way (search `dbMetaEl`);
+  // that listener sits on the #dbMeta container rather than the #dbMetaToggle button
+  // because the button's innerHTML is rewritten on every paint. Restore both or
+  // neither: markup without the listener is a drawer that will not open.
   function renderDbMeta() {
     var box = $('dbMeta'); if (!box) return;
     var f = _dbFacts || {};
@@ -6370,38 +6404,28 @@
   // round, which is its own open question.
   // Review Job Schedule row dot — a client-side review reminder (NO fetch), the
   // same no-attestation pattern as Complex Passwords. The nightly schedule is set
-  // by the customer's on-site DBA (not GSI); this dot just tracks whether the admin
-  // has recently confirmed it. Green = confirmed (reminder set) or reminders off
-  // (Never); amber = a review is due / not yet confirmed. Shared key
-  // rrv8.scheduleReview.<db> + RRV8.scheduleReviewState with the page band.
-  // loadRefreshSchedule() RETIRED 2026-09-14 — it painted #schedDot, and there has
-  // been no such element since PR #301 deleted the "Review Job Schedule" card in the
-  // 6-card Home rework. Measured with a control: `id="schedDot"` returns nothing
-  // anywhere in RRV8/ or Tools/, while `id="activityDot"` on the same grep resolves
-  // to :3636. Two live callers ran it on every load and after every ack fetch, and
-  // it returned on its first line each time.
+  // ⛔ REVIEW JOB SCHEDULE IS GONE — WHOLE FEATURE, 2026-09-14 (owner: "Remove
+  // Review job schedule"). Do not rebuild it from the fragments below.
   //
-  // ⛔ THE FEATURE IS NOT DEAD — ITS DOOR IS. `admin-job-schedule.html` exists, is
-  // titled "Review Job Schedule", and its own code at :304 says it greens "this band
-  // AND Home's Review Job Schedule dot via the shared RRV8.scheduleReviewState". So
-  // the page still expects the Home half this function used to paint. And the page is
-  // reachable from NOWHERE: referenced only by two files under docs/plans/, against a
-  // control (`admin-purge-data`) that shows two real pages plus docs on the same grep.
+  // What went: loadRefreshSchedule() and its two callers here; the page
+  // RRV8/admin-job-schedule.html; and the RRV8.scheduleReviewState alias in
+  // sidebar.js. The Home card had already been deleted by PR #301's 6-card rework,
+  // leaving a painter that returned on its first line every load — measured with a
+  // control, `id="schedDot"` matched nothing while `id="activityDot"` resolved on the
+  // same grep. The page outlived it with no link from anywhere, also measured against
+  // a control (`admin-purge-data` showed two real pages; this showed none).
   //
-  // ⚠ RESTORING THE HOME HALF IS A PLACEMENT DECISION, WHICH IS WHY IT IS NOT DONE
-  // HERE. The natural host is the #instanceHealth chip strip beside #dataRefreshRow,
-  // and that strip is not a neutral container: _syncInstanceHealth() hides chips it
-  // considers quiet, and _adminBriefTasks() SCRAPES the chips' .data-row-text into
-  // the AI grounding, so a new chip changes what the model is told about this
-  // instance. The strip's own comment also records the house precedent for exactly
-  // this situation — setAiDot() "had no target at all and was DELETED rather than
-  // repointed" — and warns not to re-assert that an id exists here without grepping
-  // for it. The #adminGrid beside it was deliberately narrowed to three cards when
-  // Report Engine moved out, so a fourth card is a layout change too.
-  //
-  // The state itself is untouched: rrv8.scheduleReview.<db>, the `schedule-review`
-  // ack kind and RRV8.scheduleReviewState all still work, and the page's own band
-  // reads them. Only the Home painter is gone.
+  // ⚠ TWO THINGS DELIBERATELY LEFT BEHIND, both because deleting them would break
+  // something that still works:
+  //   · The agent's ReminderAckService LABELS map keeps "schedule-review" ->
+  //     "Refresh schedule confirmed". Customer databases hold ack rows of that kind
+  //     already, and the Activity Log renders their label from this map. Dropping the
+  //     entry would turn existing history unreadable to buy nothing.
+  //   · reviewReminderState in sidebar.js, which the removed alias pointed at. Three
+  //     sibling aliases still use it (complexPwReviewState, aiReviewState,
+  //     activityReviewState).
+  // The per-browser key rrv8.scheduleReview.<db> is simply abandoned; nothing reads
+  // it now and clearing other people's localStorage is not this commit's business.
   // setAiDot() was here. Deleted 2026-08-25 (UI-146): it guarded on #aiDot,
   // which the instance-health rebuild removed, so it returned on its first line
   // for every user and had done ever since. Repointing it needed a chip to
@@ -6651,6 +6675,13 @@
   // does kick one off, block a second launch while one is already running — the
   // button disables and the click is refused if the job state says "in progress".
   var _importing = false;
+  // ⚠ A DELIBERATE NO-OP, KEPT ON PURPOSE — owner ruling 2026-09-14. #importBtn exists
+  // in no file, so this returns on its third line every call. Kept like
+  // renderReadiness(): restoring the Import JDE control is putting the button back,
+  // and this is the piece that keeps it honest — it refuses a second launch while a
+  // refresh is already running, which is the whole reason the control is restricted.
+  // Sweeping it would delete the guard and leave whoever restores the button free to
+  // start a second refresh against the customer's JDE.
   function reflectImportButton() {
     var btn = $('importBtn');
     if (!btn) return;
@@ -6846,6 +6877,9 @@
 
     // "Am I ready to go?" is collapsible — collapse the detail when there's
     // nothing to do; a manual toggle sticks across re-renders.
+    // ⚠ #readyTop exists in no file, so this wiring is inert — kept on purpose with
+    // the rest of the readiness card (owner 2026-09-14). Restore it together with
+    // renderReadiness()'s markup or the card comes back unable to collapse.
     var readyTop = $('readyTop');
     if (readyTop) {
       var toggleReady = function () {
@@ -6874,6 +6908,8 @@
     // Database card "Details" drawer — delegated (renderDbMeta rebuilds the
     // button's innerHTML on every paint, so the listener lives on the stable
     // #dbMeta container, not the button).
+    // ⚠ #dbMeta exists in no file, so this listener is never attached — kept on
+    // purpose with renderDbMeta() (owner 2026-09-14). Restore both together.
     var dbMetaEl = $('dbMeta');
     if (dbMetaEl) dbMetaEl.addEventListener('click', function (e) {
       var btn = e.target.closest ? e.target.closest('#dbMetaToggle') : null;
@@ -7031,6 +7067,11 @@
   // rollup); analyst/accountant from the status-summary (which also drives
   // their bands). Pass null for a neutral placeholder; an all-good state shows
   // the all-clear message.
+  // ⚠ A DELIBERATE NO-OP, KEPT ON PURPOSE — owner ruling 2026-09-14. #todoWrap exists
+  // in no file, so the guard below takes every call and the 40-odd lines after it
+  // never run. Kept for the same reason as renderReadiness(): the per-role to-do card
+  // is restored by putting the markup back, not by rebuilding the roll-up logic, and
+  // that logic is the expensive half. Do not sweep it as a dead lookup.
   function renderTodo(s) {
     var wrap = $('todoWrap'); if (!wrap) return;
     var hasData = s && typeof s === 'object';
@@ -7555,6 +7596,15 @@
   // up), so the first three are the priority items. Called after every _setBrief
   // points repaint; the button lives outside .hai-points so repaints keep it.
   // The reveal is an instant display toggle (no animation to gate on motion pref).
+  // ⚠ A DELIBERATE NO-OP, KEPT ON PURPOSE — owner ruling 2026-09-14. #adminBriefMore
+  // is the "Show all (N)" button and it exists in no file, so the `!btn` guard three
+  // lines down takes every call. Kept like renderReadiness(): restoring the expander
+  // is putting the button back next to the admin band's .hai-points, not rebuilding
+  // the count-and-toggle logic here.
+  // ⚠ Note what this being dead means TODAY, since it is not obvious: the admin
+  // briefing band shows every to-do rather than the top three. That is a longer card,
+  // not a broken one — nothing is hidden, which is the outcome the original comment
+  // below says it was protecting.
   function _syncBriefExpander(brief) {
     if (!brief || brief.id !== 'adminBrief') return;
     var btn = document.getElementById('adminBriefMore');
@@ -14379,6 +14429,9 @@
     if (d && d.companies && !_acctData) _acctData = d;
     var pal = $('reportsPalette'); if (!pal) return;
     var per = (d && (d.viewedPeriod || d.latestPeriod)) || (_acctData && (_acctData.viewedPeriod || _acctData.latestPeriod)) || '';
+    // ⚠ #repAuditPeriod exists in no file — guarded and kept on purpose (owner
+    // 2026-09-14). `per` above is resolved for the rest of this function, so this
+    // is one dead write inside live code, not a dead function.
     var ap = $('repAuditPeriod'); if (ap) ap.textContent = per ? ('As of ' + per) : '';
     if (!pal._wired) {
       pal._wired = true;
