@@ -6342,34 +6342,36 @@
       : 'Review which companies require complex passwords';
     if (_teamList) paintTeamHealth(_teamList);   // fold into the worst-of card dot
   }
-  // ---- Reload GL data (Utilities) ----
-  // Self-service fix for a persistent GL roll-forward break. GET preview derives
-  // the cutoff (earliest broken period's begin date) + counts the F0911 rows;
-  // POST execute clears RapidReconciler's GL copy from that date and starts the
-  // refresh, which re-pulls clean from JDE — JDE is never touched. The cutoff is
-  // DERIVED server-side, shown read-only, and posted back verbatim (execute never
-  // re-derives, so no drift between preview and confirm).
-  var _rgCutoff = null, _rgBusy = false;
-  function fmtCount(n) { var x = parseInt(n, 10); return isNaN(x) ? '—' : x.toLocaleString('en-US'); }
-  // The Reload GL Data row dot mirrors the preview: nothing to reload (the GL
-  // roll-forward is clean) -> GREEN; a break exists (a reload is available) ->
-  // AMBER. Same source of truth as the modal, so the dot + the modal always agree.
-  function setReloadGlDot(p) {
-    var dot = $('reloadGlDot'); if (!dot) return;
-    if (p && p.cutoffDate) {
-      RRV8.setDotState(dot, 'watch');
-      dot.title = 'GL break from ' + fmtDateLong(p.cutoffDate) + ' — ' + fmtCount(p.affected) + ' rows can be reloaded.';
-    } else {
-      RRV8.setDotState(dot, 'ok');
-      dot.title = 'Nothing to reload — the GL roll-forward is clean.';
-    }
-  }
-  function loadReloadGlStatus() {
-    if (!isAdmin()) return;
-    rrFetch('inventory/reload-gl/preview')
-      .then(function (p) { setReloadGlDot(p); })
-      .catch(function () { /* endpoint not reachable -> leave the neutral grey dot */ });
-  }
+  // ---- Reload GL data — RETIRED FROM HOME 2026-09-13. READ THIS BEFORE REBUILDING IT.
+  //
+  // ⛔ RELOAD GL IS NOT MISSING. Its analyst entry point is Band 1 of
+  // `inventory-account-rollforward.html`, an IN-PAGE MODAL, and it is live — the owner
+  // confirmed it in the browser showing "GL rolled forward cleanly — nothing to reload".
+  // That page's own comments record the move: "replaces the nav to admin-reload-gl.html",
+  // "a dead end", and "Reload GL is analyst-authorized (owner 2026-07-21): this IS the
+  // analyst's". The lever was MOVED on purpose; this Home card was its predecessor.
+  //
+  // What stood here was the leftover: `setReloadGlDot` (its markup `id="reloadGlDot"`
+  // matched ZERO lines, against 1 for `id="rcdxDot"` on the same grep, and it survived on
+  // `if (!dot) return`), `loadReloadGlStatus` (ZERO callers, against 2 real ones for
+  // `loadReloadCardexStatus`), plus `_rgCutoff`, `_rgBusy` and a local `fmtCount` used by
+  // nothing else (2 occurrences in this file, 0 in any other, not exported).
+  //
+  // ⚠ THE ABSENCE OF THIS BLOCK IS THE POINT, AND A TOMBSTONE IS CHEAPER THAN THE
+  // MISTAKE IT PREVENTS. On 2026-09-13 a Home "Reload GL" card was half-built from a
+  // handoff note reading "Reload GL has no Home entry point either — same shape as the
+  // Reload Cardex gap". It is NOT the same shape: Cardex lost its only entry point by
+  // accident (markup deleted in PR #301, painter left behind), GL's was relocated
+  // deliberately. Rebuilding here duplicates a live lever and points "Open →" at
+  // admin-reload-gl.html, which nothing navigates to — all 8 references to that page
+  // across 5 files are COMMENTS, and inventory-reroll.html:18 calls it "(superseded)".
+  //
+  // ⚠ AND IF YOU DO REBUILD IT, THE OLD GUARD WAS WRONG. `loadReloadGlStatus` gated on
+  // `isAdmin()` while the agent's `ReloadGlController.requireAnalyst()` admits
+  // `isDmaais() || isSuperUser()` — the client was STRICTER than the server. The
+  // matching client helper is `canAnalyst()` (perms.dm). Do not copy the guard off the
+  // Reload Cardex card beside it: that endpoint is `requireAdmin()`, the opposite way
+  // round, which is its own open question.
   // Review Job Schedule row dot — a client-side review reminder (NO fetch), the
   // same no-attestation pattern as Complex Passwords. The nightly schedule is set
   // by the customer's on-site DBA (not GSI); this dot just tracks whether the admin
@@ -6590,6 +6592,14 @@
   // it would never surface the suggestion eod-check exists to derive.
   function loadReloadCardexStatus() {
     // canAnalyst(), not isAdmin() — same move, same reasoning as loadFiscalStatus().
+    // ✅ AND THE SERVER AGREES AS OF 2026-09-14. This guard was right about what the
+    // card should show and WRONG about what the endpoint would answer: until the owner
+    // widened it, ReloadCardexController gated all three routes on `isAdmin()`, so a
+    // data-management analyst got this card, a 403 from eod-check, a grey dot behind
+    // the swallowed .catch below, and a destination page that gated them out. Nothing
+    // errored anywhere — every symptom was silent, which is why it shipped.
+    // The controller now asks `isDmaais() || isSuperUser()`, the same question
+    // canAnalyst() asks, so the two sides agree by construction rather than by luck.
     // The snooze still degrades cleanly for a non-admin: loadAcks() stays admin-only,
     // so _acksByKind is null, ackFor() returns null, and cardexSnoozeUntil() falls
     // through to the legacy per-browser localStorage key, which is exactly the
@@ -6783,7 +6793,9 @@
     // Utilities / Data-Management actions are now standalone pages (the Home
     // rows link to them with "Open"); their former in-page modals + handlers
     // are retired. The at-a-glance row dots/text still come from the status
-    // loaders (loadReloadGlStatus / loadPurgeInfo / loadRefreshSchedule) below.
+    // loaders (loadPurgeInfo / loadRefreshSchedule) below. (`loadReloadGlStatus`
+    // was named here too until 2026-09-13; it had no callers and no markup, and
+    // went with the rest of the Reload GL leftovers — see the tombstone above it.)
     // Report Engine restarts in place from its card (POSTs through VALC) — the
     // card is self-sufficient, so there's no separate admin-data-service page. The
     // card now lives on the analyst Tools tab; the listener is bound unconditionally
@@ -17219,7 +17231,9 @@
     _paintFreshPill();
     _clearHomeNotice();   // UI-169: same rule -- the old instance's failure is not this one's
     paintInventoryLight('grey', 'Checking…');     // cxDot
-    RRV8.setDotState($('reloadGlDot'), 'unknown', '');
+    // (A `$('reloadGlDot')` reset stood here until 2026-09-13. There has been no such
+    // element since the Reload GL card moved to inventory-account-rollforward.html's
+    // in-page modal, so it neutralised nothing on every database switch.)
     // Reload Cardex end-of-day check is per-DB; neutralize the dot + restore the
     // default sub so a prior DB's suggestion never bleeds onto the new one.
     RRV8.setDotState($('rcdxDot'), 'unknown', '');

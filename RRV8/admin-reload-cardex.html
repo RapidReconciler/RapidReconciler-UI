@@ -228,6 +228,18 @@
   // lock out a legitimate admin whose token carries a different shape; guessing
   // "true" is the fail-open this replaces.
   function admClaim() { const a = activeDb(); return (a && a.t && typeof a.t.adm === 'boolean') ? a.t.adm : null; }
+  // The data-management (analyst) claim, read the SAME three-state way as admClaim
+  // above and for the same reason: `true` opens, `false` is a real no, anything else
+  // means we were never told and the page must halt rather than guess. Added
+  // 2026-09-14 when the owner widened the endpoint — ReloadCardexController now asks
+  // `isDmaais() || isSuperUser()`, so gating this page on `adm` alone would keep
+  // locking out exactly the users the server just admitted.
+  // `perms` comes off the same RR_SESSION db object `activeDb()` already returns, and
+  // is the same field home.html's canAnalyst() reads (perms.dm).
+  function dmClaim() {
+    const p = (activeDb() || {}).perms;
+    return (p && typeof p.dm === 'boolean') ? p.dm : null;
+  }
   // Close the page loudly. `id` names one of the halt notices in the markup.
   function haltPage(id) { document.body.classList.add('is-gated'); const el = $(id); if (el) el.classList.add('is-visible'); }
 
@@ -242,7 +254,13 @@
   // databases whose ack table predates this build.
   var _cdxAck = null;
   function loadCdxAck() {
-    if (!isAdmin()) return Promise.resolve();
+    // ⚠ NOT `isAdmin()` ANY MORE. Measured 2026-09-14: `GET /admin/acks` carries NO
+    // authorization at all in ActivityController — only the POST beside it checks
+    // isAdmin(). So this client guard was stricter than the endpoint, and its cost was
+    // real rather than theoretical: an analyst fell through to the per-browser
+    // localStorage fallback and never saw the SHARED server ack, which is the whole
+    // point of the ack — a snooze one person sets is supposed to be visible to the next.
+    if (!(isAdmin() || dmClaim() === true)) return Promise.resolve();
     return rrFetch('admin/acks').then(function (rows) {
       _cdxAck = null; (rows || []).forEach(function (r) { if (r && r.kind === 'cardex-snooze') _cdxAck = r; });
     }).catch(function () { _cdxAck = null; });
@@ -395,9 +413,16 @@
     if (dbEl && a && a.n) dbEl.textContent = a.n;
     const ver = $('js-app-ver');
     if (ver) ver.textContent = (RR_CONFIG.release || 'v8') + (RR_CONFIG.buildStamp ? ' · ' + RR_CONFIG.buildStamp : '');
-    const _adm = admClaim();
-    if (_adm === false) { document.body.classList.add('is-gated'); $('js-gate').classList.add('is-visible'); return; }
-    if (_adm !== true) { haltPage('js-halt-claim'); return; }
+    // ⚠ TWO CLAIMS NOW, AND THE THREE-STATE DISCIPLINE IS PRESERVED ON BOTH.
+    // Either grant opens the page, because the endpoint behind it admits either
+    // (ReloadCardexController.requireAnalyst: isDmaais || isSuperUser, widened by the
+    // owner 2026-09-14). A definite NO on both shows the gate notice. Anything less
+    // than definite on the one that would have admitted them halts the page visibly,
+    // exactly as before — an unknown claim is still never guessed in either direction.
+    const _adm = admClaim(), _dm = dmClaim();
+    if (_adm === true || _dm === true) { /* admitted */ }
+    else if (_adm === false && _dm === false) { document.body.classList.add('is-gated'); $('js-gate').classList.add('is-visible'); return; }
+    else { haltPage('js-halt-claim'); return; }
     $('js-from').addEventListener('change', loadPreview);
     $('js-attest').addEventListener('change', refreshConfirm);
     $('js-confirm').addEventListener('click', confirmReload);
