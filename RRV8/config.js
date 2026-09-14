@@ -308,9 +308,12 @@ window.RR_TEST_AGENT_PREFIXES = [
  * deploy can still hand-write config.js — but an unset value now resolves from
  * here by `mode` instead of inheriting dev's.
  *
- * Populate `qa` when the QA hostnames exist (VLC-39 gap 3). Until then a QA
- * deploy must set the values explicitly in its own config.js; RRENV.missing()
- * names what is absent rather than letting a page silently call localhost.
+ * Populate `qa` when a QA VALC is PUBLISHED -- not when the QA hostnames appear
+ * in DNS (VLC-39 gap 3 / UI-171). Measured 2026-09-14: those are two different
+ * events, and the first has happened without the second. See the note on the
+ * `qa` entry itself for the probe and its control. Until then a QA deploy must
+ * set the values explicitly in its own config.js; RRENV.missing() names what is
+ * absent rather than letting a page silently call localhost.
  */
 window.RR_ENVIRONMENTS = {
   // Keyed on the SAME vocabulary as RR_CONFIG.mode. This box
@@ -324,12 +327,32 @@ window.RR_ENVIRONMENTS = {
     statusAnchor:  'https://rapidreconciler-prod.getgsi.com'
   },
   qa: {
-    // UNKNOWN BY MEASUREMENT, NOT BY OMISSION. VLC-39 gap 3.
-    // `rrvalc-qa.getgsi.com`, `rrvalcadmin-qa` and `rrjms-qa` were all measured
-    // 2026-08-31 and NONE resolves. Inventing a plausible hostname here would
-    // produce a config that looks configured and fails at the first QA login,
-    // which is strictly worse than an obvious hole. Null makes the gap loud:
-    // RRENV.missing() names it and login.html renders it.
+    // UNKNOWN BY MEASUREMENT, NOT BY OMISSION. VLC-39 gap 3 / UI-171.
+    //
+    // ⚠ RE-MEASURED 2026-09-14 AND THE REASON CHANGED. This used to say the QA
+    // names do not resolve (true on 2026-08-31). THEY RESOLVE NOW: rrvalc-qa,
+    // rrvalcadmin-qa, rrjms-qa and rrsso-qa all return 20.81.98.127 -- the same
+    // address as every -prod name -- and answer TCP 443, with rrjms-qa answering
+    // 8002. So "inventing a hostname" is no longer the objection.
+    //
+    // THE HOLE IS REAL ANYWAY, AND THE PROBE THAT SHOWS IT NEEDED A CONTROL.
+    // That shared address is an Azure Application Gateway VIP doing host-based
+    // routing, so resolving proves the gateway answers, not that anything is
+    // published behind the name. Measured on the response, not on the IP:
+    //
+    //     rrvalcadmin-prod  ->  200, no gateway Server header   (a real app)
+    //     rrvalcadmin-qa    ->  404, Server: Microsoft-Azure-Application-Gateway/v2
+    //
+    // The gateway answering with its OWN 404 is what it does for a hostname it
+    // has no backend rule for. (The rrvalc-qa / rrvalc-prod pair does not
+    // discriminate -- both 404 -- so the admin pair is the one that carries the
+    // finding.) Filling these in today would point a reader at a host that
+    // resolves, connects, and then 404s: the "looks configured" trap this entry
+    // was written to avoid, in a new shape.
+    //
+    // Populate when a QA VALC is actually published, not when DNS appears --
+    // those turned out to be different events. See project_valc_qa_publish_readiness.
+    // Null keeps the gap loud: RRENV.missing() names it and login.html renders it.
     authBase:      null,
     valcBase:      null,
     testAgentBase: null,

@@ -67,3 +67,22 @@ Keep this file SHORT. Every line is paid for on every turn.
 
 9. **EVERY RESPONSE:** confidence (0-100) at the top, token and cost estimate at
    the bottom, Humanizer applied to deliverables, and no sugar-coating.
+
+10. **FIX IT, DO NOT ASK.** When a row, a comment, or a measurement in front of
+   you records a defect, fix it and report after. Stop and ask on exactly four
+   things: it changes customer-visible behaviour or wording; it widens a
+   security or permission boundary; it is destructive or hard to reverse; it
+   spends money. Everything else is work, not a decision. "Which of three
+   approaches" is a decision only if the three differ in one of those four ways.
+   **Rule 7 holds commits, not work** — conflating the two is what turned a
+   backlog into a list of things nobody was allowed to start. Added 2026-09-14
+   after the owner said he was tired of being asked.
+
+11. **A ROW IS NOT DONE WHEN THE CODE SHIPS.** It is done when its section is in
+   `WORKLIST-DONE.md` and its index line is gone from `WORKLIST.md`. Close it in
+   the same turn the work lands, never in a batch. Measured 2026-09-14: three of
+   sixteen live rows were wrong toward *more open than reality* — UI-184's ruling
+   had been taken and built two days earlier, UI-194 was fully shipped and gated,
+   and UI-171 was `blocked` on a DNS fact that had stopped being true eight days
+   before. Twenty percent of the backlog was phantom, and every one of them was
+   reported to the owner that morning as a live decision waiting on him.

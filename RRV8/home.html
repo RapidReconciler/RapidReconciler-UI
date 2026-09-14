@@ -4135,6 +4135,21 @@
   // NOT the absence of dm. The two lanes are distinct and a user can hold both,
   // one, or neither — which is the whole point of VLC-41.
   function canAccountant() { var p = (activeDb() || {}).perms; return isAdmin() || !!(p && p.ac === true); }
+  // UI-189 — the Tools grant (perms.tl), minted by AuthController from
+  // RoleEntity.tools (V68) and read by the agent into UserRequest.tools.
+  //
+  // ⛔ THIS IS DELIBERATELY NOT `su`. The original request named `superuser` as
+  // the gate. `is_superuser` is a VALC CONSOLE flag — console login, the
+  // inactivity exemption, the console token — and TenantUsersController calls it
+  // one of "the two real escalation vectors" that no customer-facing method may
+  // write. Gating a cardex re-sync on it would have meant handing out
+  // control-plane escalation to deliver an application capability.
+  //
+  // Same shape as its siblings above: an admin always holds it, and a
+  // non-admin holds it only on an explicit grant. Absent claim = no grant, which
+  // matters more here than for the read-only lanes because the shelf this gates
+  // reaches an operation that deletes rows.
+  function canTools() { var p = (activeDb() || {}).perms; return isAdmin() || !!(p && p.tl === true); }
 
   // ---- Role-view lens (an admin can preview the lower-rank dashboards) -------
   // viewRole is a VIEW filter only, clamped to what the ACTIVE DB's token grants
@@ -8307,7 +8322,10 @@
       // Placed BEFORE Audit Center for the same reason Audit Center is last: the
       // tabs read as a process (check -> work -> fix at the source -> hand off),
       // and a utility shelf is not the terminus of anything.
-      { k: 'tools',   label: 'Tools' },
+      // UI-189 — gated on the `tools` grant (perms.tl), not on reaching the
+      // analyst view. `gate` is read by _visibleSubviews(); a tab without one is
+      // always offered, so this is additive and every other tab is unchanged.
+      { k: 'tools',   label: 'Tools', gate: function () { return canTools(); } },
       // SHARED WITH THE ACCOUNTANT, and last because it is the terminus of the analyst's
       // process, not a fourth thing to work (owner 2026-08-16). The workflow is: check
       // what prevents recurrence -> fix at the source -> pass the finding to accounting
@@ -8325,8 +8343,25 @@
     ]
   };
   var _subDefault = { accountant: 'rec', analyst: 'work' };
+  // UI-189 — the tabs this user may actually reach. ONE producer, read by both
+  // renderSubNav() (which draws the strip) and _curSubView() (which decides
+  // which one is showing).
+  //
+  // ⚠ BOTH READERS MATTER AND FILTERING ONLY THE STRIP WOULD HAVE BEEN A BUG.
+  // The current sub-view is persisted in localStorage per role. A user who had
+  // Tools selected and then lost the grant would, with the strip filtered alone,
+  // keep resolving to 'tools' — landing on a shelf that is now hidden, with the
+  // tab strip showing nothing selected and the page apparently empty. Filtering
+  // here as well makes it fall through to the role's default instead.
+  function _visibleSubviews(role) {
+    var tabs = SUBVIEWS[role]; if (!tabs) return null;
+    return tabs.filter(function (t) {
+      if (typeof t.gate !== 'function') return true;
+      try { return t.gate() === true; } catch (_) { return false; }   // a throwing gate denies
+    });
+  }
   function _curSubView() {
-    var tabs = SUBVIEWS[_viewRole()]; if (!tabs) return null;
+    var tabs = _visibleSubviews(_viewRole()); if (!tabs) return null;
     var sv; try { sv = (JSON.parse(localStorage.getItem('rrv8.subview') || '{}') || {})[_viewRole()]; } catch (_) {}
     return tabs.some(function (t) { return t.k === sv; }) ? sv : _subDefault[_viewRole()];
   }
@@ -8339,7 +8374,9 @@
   }
   function renderSubNav() {
     var nav = $('subNav'); if (!nav) return;
-    var tabs = SUBVIEWS[_viewRole()];
+    // UI-189 — the GATED list, so a tab is never drawn for a shelf the user
+    // cannot open. Same source as _curSubView().
+    var tabs = _visibleSubviews(_viewRole());
     if (!tabs) { nav.hidden = true; nav.innerHTML = ''; return; }
     var cur = _curSubView();
     nav.hidden = false;
@@ -13487,7 +13524,20 @@
     // here too so the card is current the instant it becomes visible rather than up
     // to a minute stale. All three loaders are idempotent and swallow their own
     // failures; a shelf that cannot reach the agent keeps its last honest state.
-    if (tools) tools.hidden = (sv !== 'tools');
+    // UI-189 — the Tools shelf now needs the `tools` grant as well as the tab
+    // being selected. Two gates, not one, and the AND is the point: reaching the
+    // analyst view (canAnalyst, above) no longer implies the maintenance shelf.
+    //
+    // ⚠ THIS TIGHTENS ACCESS AND THAT IS INTENDED. V68 seeds `tools` TRUE for
+    // Administrator, Analyst and GSI Internal, so every seeded analyst keeps the
+    // shelf. A CUSTOM role with the dmaais grant loses it until an admin grants
+    // `tools` — which is the whole reason for having a separate grant rather
+    // than riding on the analyst lane. Seeding it TRUE everywhere would have
+    // preserved behaviour and made the grant meaningless on day one.
+    //
+    // The tab BUTTON is handled with the strip below; a shelf that renders empty
+    // is worse than a tab that is not offered.
+    if (tools) tools.hidden = (sv !== 'tools') || !canTools();
     if (sv === 'tools') { loadServiceMemory(); loadFiscalStatus(); loadReloadCardexStatus(); }
     // Shared Audit Center. renderAuditPanel is role-agnostic already — it resolves the
     // period through _analystViewedPeriod() first and scopes to the focus company — so it
