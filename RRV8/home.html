@@ -6684,7 +6684,23 @@
     // so _acksByKind is null, ackFor() returns null, and cardexSnoozeUntil() falls
     // through to the legacy per-browser localStorage key, which is exactly the
     // fallback path it already uses for a database whose ack table predates it.
-    if (!canAnalyst()) return;
+    // ⛔ UI-189, 2026-09-14: canTools() TOO, and the catch below is NOT what makes
+    // this safe. `_noteFetchFailure` is called INSIDE rrFetch (:4074), before any
+    // caller's `.catch` runs, so this swallowing catch never suppressed anything
+    // the user could see -- it only stopped the dot painting. A 403 here still
+    // raised the red Home banner telling the reader their account may not be
+    // permitted, for a card they were not asking for.
+    //
+    // So ask only for what this user can actually open. Same OR as the tab and
+    // the shelf -- three sites, one expression, because a request fired for a
+    // surface the reader cannot reach can only ever produce a banner about a
+    // permission they did not ask for.
+    //
+    // Observed 2026-09-14 exactly this way: an analyst on Demo2 got "(HTTP 403) 2
+    // requests on this page failed the same way" against an agent still running
+    // the pre-widening jar (its ReloadCardexController asks isAdmin(), confirmed
+    // by disassembling the running jar rather than reading source).
+    if (!(canAnalyst() || canTools())) return;
     rrFetch('inventory/reload-cardex/eod-check')
       .then(function (p) { setReloadCardexDot(p); })
       .catch(function () { /* endpoint not reachable -> leave the neutral grey dot */ });
@@ -8322,10 +8338,25 @@
       // Placed BEFORE Audit Center for the same reason Audit Center is last: the
       // tabs read as a process (check -> work -> fix at the source -> hand off),
       // and a utility shelf is not the terminus of anything.
-      // UI-189 — gated on the `tools` grant (perms.tl), not on reaching the
-      // analyst view. `gate` is read by _visibleSubviews(); a tab without one is
-      // always offered, so this is additive and every other tab is unchanged.
-      { k: 'tools',   label: 'Tools', gate: function () { return canTools(); } },
+      // UI-189 — offered to anyone who can reach the shelf: the analyst lane it
+      // has always lived in, OR the new `tools` grant.
+      //
+      // ⛔ THIS IS AN `OR` AND THE FIRST CUT WROTE IT AS `canTools()` ALONE,
+      // WHICH WAS A REGRESSION DRESSED AS A PERMISSION. The owner's request was
+      // additive in its own words -- "any user with it, Analyst or Accountant,
+      // SEES a new Tools tab" -- i.e. the grant EXTENDS reach to accountants. It
+      // never said to withdraw the shelf from analysts, who have had it since the
+      // tab was built.
+      //
+      // ⚠ AND THE RESTRICTIVE FORM COULD NOT HAVE SURVIVED AN UPGRADE. `tl` is
+      // minted from `roles.tools`, which arrives with V68. Every token issued
+      // before that migration lacks the claim, so on upgrade day EVERY analyst
+      // would lose the tab until they happened to sign out and back in -- and
+      // "ask the customer to re-authenticate" is a workaround, not a design. As
+      // an OR, an upgrading analyst keeps the shelf through the grant they
+      // already hold and the new claim only ever adds.
+      { k: 'tools',   label: 'Tools',
+        gate: function () { return canAnalyst() || canTools(); } },
       // SHARED WITH THE ACCOUNTANT, and last because it is the terminus of the analyst's
       // process, not a fourth thing to work (owner 2026-08-16). The workflow is: check
       // what prevents recurrence -> fix at the source -> pass the finding to accounting
@@ -13524,20 +13555,15 @@
     // here too so the card is current the instant it becomes visible rather than up
     // to a minute stale. All three loaders are idempotent and swallow their own
     // failures; a shelf that cannot reach the agent keeps its last honest state.
-    // UI-189 — the Tools shelf now needs the `tools` grant as well as the tab
-    // being selected. Two gates, not one, and the AND is the point: reaching the
-    // analyst view (canAnalyst, above) no longer implies the maintenance shelf.
+    // UI-189 — the shelf shows on its own tab, for anyone who can reach it.
+    // Same OR as the tab button in SUBVIEWS, and it must stay the same
+    // expression: a tab you can select that opens nothing is the dead-control
+    // defect UI-184 existed to remove.
     //
-    // ⚠ THIS TIGHTENS ACCESS AND THAT IS INTENDED. V68 seeds `tools` TRUE for
-    // Administrator, Analyst and GSI Internal, so every seeded analyst keeps the
-    // shelf. A CUSTOM role with the dmaais grant loses it until an admin grants
-    // `tools` — which is the whole reason for having a separate grant rather
-    // than riding on the analyst lane. Seeding it TRUE everywhere would have
-    // preserved behaviour and made the grant meaningless on day one.
-    //
-    // The tab BUTTON is handled with the strip below; a shelf that renders empty
-    // is worse than a tab that is not offered.
-    if (tools) tools.hidden = (sv !== 'tools') || !canTools();
+    // ⛔ THIS WAS BRIEFLY `&& canTools()` ALONE AND THAT WAS WRONG -- it
+    // withdrew the shelf from every analyst whose token predates V68, which on
+    // an upgrade is all of them. See the note in SUBVIEWS.
+    if (tools) tools.hidden = (sv !== 'tools') || !(canAnalyst() || canTools());
     if (sv === 'tools') { loadServiceMemory(); loadFiscalStatus(); loadReloadCardexStatus(); }
     // Shared Audit Center. renderAuditPanel is role-agnostic already — it resolves the
     // period through _analystViewedPeriod() first and scopes to the focus company — so it

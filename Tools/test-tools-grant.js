@@ -88,6 +88,7 @@ function build(src, extra) {
     `;
     return new Function(preamble + src + (extra || '') +
         '; return { canTools: typeof canTools === "function" ? canTools : null,'
+        + ' canAnalyst: typeof canAnalyst === "function" ? canAnalyst : null,'
         + ' _visibleSubviews: typeof _visibleSubviews === "function" ? _visibleSubviews : null,'
         + ' setDb: setDb, setSubviews: setSubviews };')();
 }
@@ -173,6 +174,53 @@ if (mutated === canToolsSrc) {
         'A7b the admin path is unaffected by the mutant',
         'the defect never touched the admin rung; if this moves, the control is too broad');
 }
+
+/* ---- A8: THE GRANT IS ADDITIVE, NOT RESTRICTIVE -------------------------------- */
+/* ⛔ THE FIRST CUT GATED ALL THREE SITES ON canTools() ALONE, AND THAT WAS A
+   REGRESSION DRESSED AS A PERMISSION. The owner's request was additive in its own
+   words -- "any user with it, Analyst or Accountant, SEES a new Tools tab" -- so
+   the grant EXTENDS reach; it never withdrew the shelf from analysts.
+
+   It also could not have survived an upgrade. `tl` is minted from `roles.tools`,
+   which arrives with migration V68, so EVERY token issued before that migration
+   lacks the claim. Under the restrictive form, upgrade day removes the Tools tab
+   from every analyst in the fleet until each one happens to sign out and back in.
+   "Ask the customer to re-authenticate" is a workaround, not a design.
+
+   These assertions are behavioural where they can be, and textual for the three
+   call sites -- because the defect was an operator, and an operator is exactly
+   what a behavioural test on ONE site would miss in the other two. */
+const canAnalystSrc = extract('canAnalyst');
+const G = build(canAnalystSrc + '\n' + canToolsSrc);
+const REACH = function () { return G.canAnalyst() || G.canTools(); };
+
+const matrix = [
+    ['analyst, no tl  (the upgrade case)', { t: { adm: false }, perms: { dm: true } },            true],
+    ['accountant with tl (the new reach)', { t: { adm: false }, perms: { ac: true, tl: true } },  true],
+    ['accountant, no tl',                  { t: { adm: false }, perms: { ac: true } },            false],
+    ['no lane at all',                     { t: { adm: false }, perms: {} },                      false],
+    ['admin',                              { t: { adm: true },  perms: {} },                      true],
+];
+for (const [label, db, want] of matrix) {
+    G.setDb(db);
+    check(REACH() === want, 'A8  reach: ' + label,
+        'expected ' + want + ', got ' + REACH());
+}
+
+/* The three sites must all use the OR. A behavioural test on one would not see
+   an AND reintroduced in another. */
+const SITES = [
+    ["SUBVIEWS tools gate",        /gate:\s*function\s*\(\)\s*\{\s*return canAnalyst\(\)\s*\|\|\s*canTools\(\);/],
+    ["the shelf's hidden flag",    /tools\.hidden\s*=\s*\(sv !== 'tools'\)\s*\|\|\s*!\(canAnalyst\(\)\s*\|\|\s*canTools\(\)\)/],
+    ["loadReloadCardexStatus gate",/if\s*\(!\(canAnalyst\(\)\s*\|\|\s*canTools\(\)\)\)\s*return;/],
+];
+for (const [label, re] of SITES) {
+    check(re.test(html), 'A8b ' + label + ' uses the OR form',
+        'an AND here silently removes the shelf from analysts on upgrade');
+}
+check(!/!canAnalyst\(\)\s*\|\|\s*!canTools\(\)/.test(html),
+    'A8c no site uses the restrictive !canAnalyst() || !canTools() form',
+    'that is the exact expression that caused the regression');
 
 console.log('\n' + (failures === 0 ? 'ALL CHECKS PASSED' : failures + ' CHECK(S) FAILED'));
 process.exit(failures === 0 ? 0 : 1);
