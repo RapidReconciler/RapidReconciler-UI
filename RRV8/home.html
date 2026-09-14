@@ -5909,26 +5909,26 @@
     if (Array.isArray(payload.rows)) return payload.rows;
     return Array.isArray(payload) ? payload : [];
   }
-  // The DMAAI status row was removed from the analyst Cardex Variance tab (owner:
-  // that tab shows only Cardex Variance). The DMAAI universe still preloads for
-  // exports; these UI writers are null-guarded so the load never assumes the row.
-  function reflectDmaai() {
-    var dot = $('dmaaiDot'), title = $('dmaaiTitle'), sub = $('dmaaiSub');
-    try {
-      var obj = JSON.parse(sessionStorage.getItem(dmaaiCacheKey()) || 'null');
-      var rows = dmaaiRows(obj && obj.payload);
-      if (rows && rows.length) {
-        if (dot) RRV8.setDotState(dot, 'ok');
-        if (title) title.textContent = 'DMAAI Analysis loaded · ' + rows.length.toLocaleString('en-US') + ' rows';
-        var a = activeDb();
-        if (sub) sub.textContent = a ? ('Ready for ' + a.n) : 'Ready';
-        return;
-      }
-    } catch (_) {}
-    if (dot) RRV8.setDotState(dot, 'unknown');
-    if (title) title.textContent = 'DMAAI Analysis';
-    if (sub) sub.textContent = 'Loads automatically';
-  }
+  // reflectDmaai() RETIRED 2026-09-14 — it had become a pure no-op.
+  //
+  // The DMAAI status row was removed from the analyst Cardex Variance tab by owner
+  // ruling in PR #320 ("that tab shows only Cardex Variance"), and the writers were
+  // null-guarded at the time so the preload would not assume the row. That was the
+  // right move then; what it left behind was a function whose ENTIRE body painted
+  // #dmaaiDot / #dmaaiTitle / #dmaaiSub — ids that have produced no markup since,
+  // measured with a control (`id="rcdxDot"` resolves, these return nothing anywhere
+  // in RRV8/ or Tools/). Everything it did was guarded into nothing, so both of its
+  // call sites ran a function that could not have an effect.
+  //
+  // ⚠ THE LIVE STATE PATH IS setDmaaiReady(), NOT THIS. That one writes `_dmaaiReady`
+  // and calls refreshAnalystReady(), which paints a surface that exists. Deleting the
+  // no-op removes nothing an analyst could see; deleting setDmaaiReady would.
+  //
+  // ⚠ NOT the same case as the Review Job Schedule row restored in this same commit.
+  // That row's page still documents the Home dot it feeds and nothing links the page;
+  // this row was removed on purpose and accounting-dmaais.html is reachable from both
+  // home.html and sidebar.js. Measured, not assumed — the two look identical from the
+  // dead-lookup report alone, and only the history separates them.
 
   // Warm the classifier's DMAAI universe — mirrors Reconciliation's
   // preloadDmaaisInBackground (POST /inventory/integrity[v_integrity_jde_aais])
@@ -5943,9 +5943,6 @@
     if (_dmaaiLoading) return;
     _dmaaiLoading = true;
     setDmaaiReady('pending');
-    var _dDot = $('dmaaiDot'), _dSub = $('dmaaiSub');
-    if (_dDot) RRV8.setDotState(_dDot, 'busy');
-    if (_dSub) _dSub.textContent = 'Loading the DMAAI universe…';
 
     var fetchP = rrFetch('inventory/status').catch(function () { return {}; }).then(function (status) {
       var rf = (status && status.reconciliationFilter) || {};
@@ -5974,14 +5971,13 @@
       setDmaaiReady(dmaaiRows(payload).length ? 'ready' : 'degraded');
       if (!auto) toast('DMAAIs loaded.');
     }).catch(function (err) {
-      var eDot = $('dmaaiDot'), eSub = $('dmaaiSub');
-      if (eDot) RRV8.setDotState(eDot, 'attention');
-      if (eSub) eSub.textContent = 'Couldn’t load — it will still load on first export';
+      // The failure's sink is setDmaaiReady('degraded') below plus the toast — the
+      // #dmaaiDot/#dmaaiSub writes that used to sit here painted a row removed in
+      // PR #320 and reported the failure to nobody.
       setDmaaiReady('degraded');
       if (!auto) toast('DMAAI load failed: ' + String(err && err.message || err));
     }).then(function () {
       _dmaaiLoading = false;
-      reflectDmaai();
     });
   }
 
@@ -6315,7 +6311,7 @@
       var m = {}; (rows || []).forEach(function (r) { if (r && r.kind) m[r.kind] = r; });
       _acksByKind = m;
     }).catch(function () { _acksByKind = null; }).then(function () {
-      setPwPolicyDot(); loadRefreshSchedule(); setActivityDot();
+      setPwPolicyDot(); setActivityDot();   // loadRefreshSchedule() retired — see its tombstone
       if (_rcdxPreview) setReloadCardexDot(_rcdxPreview);
       if (_purgeInfo)   setPurgeDot(_purgeInfo);
       paintLicenseHealth();
@@ -6378,16 +6374,34 @@
   // has recently confirmed it. Green = confirmed (reminder set) or reminders off
   // (Never); amber = a review is due / not yet confirmed. Shared key
   // rrv8.scheduleReview.<db> + RRV8.scheduleReviewState with the page band.
-  function loadRefreshSchedule() {
-    var dot = $('schedDot'); if (!dot) return;
-    if (!isAdmin() || !(window.RRV8 && window.RRV8.scheduleReviewState)) { RRV8.setDotState(dot, 'unknown'); return; }
-    var val = reviewValueFor('schedule-review', 'rrv8.scheduleReview.');
-    var level = window.RRV8.scheduleReviewState(val, new Date().toISOString().slice(0, 10));
-    RRV8.setDotState(dot, level);
-    dot.title = level === 'ok'
-      ? (val === 'never' ? 'Schedule-review reminders off' : 'Confirmed — reminder set')
-      : 'Review your nightly refresh schedule';
-  }
+  // loadRefreshSchedule() RETIRED 2026-09-14 — it painted #schedDot, and there has
+  // been no such element since PR #301 deleted the "Review Job Schedule" card in the
+  // 6-card Home rework. Measured with a control: `id="schedDot"` returns nothing
+  // anywhere in RRV8/ or Tools/, while `id="activityDot"` on the same grep resolves
+  // to :3636. Two live callers ran it on every load and after every ack fetch, and
+  // it returned on its first line each time.
+  //
+  // ⛔ THE FEATURE IS NOT DEAD — ITS DOOR IS. `admin-job-schedule.html` exists, is
+  // titled "Review Job Schedule", and its own code at :304 says it greens "this band
+  // AND Home's Review Job Schedule dot via the shared RRV8.scheduleReviewState". So
+  // the page still expects the Home half this function used to paint. And the page is
+  // reachable from NOWHERE: referenced only by two files under docs/plans/, against a
+  // control (`admin-purge-data`) that shows two real pages plus docs on the same grep.
+  //
+  // ⚠ RESTORING THE HOME HALF IS A PLACEMENT DECISION, WHICH IS WHY IT IS NOT DONE
+  // HERE. The natural host is the #instanceHealth chip strip beside #dataRefreshRow,
+  // and that strip is not a neutral container: _syncInstanceHealth() hides chips it
+  // considers quiet, and _adminBriefTasks() SCRAPES the chips' .data-row-text into
+  // the AI grounding, so a new chip changes what the model is told about this
+  // instance. The strip's own comment also records the house precedent for exactly
+  // this situation — setAiDot() "had no target at all and was DELETED rather than
+  // repointed" — and warns not to re-assert that an id exists here without grepping
+  // for it. The #adminGrid beside it was deliberately narrowed to three cards when
+  // Report Engine moved out, so a fourth card is a layout change too.
+  //
+  // The state itself is untouched: rrv8.scheduleReview.<db>, the `schedule-review`
+  // ack kind and RRV8.scheduleReviewState all still work, and the page's own band
+  // reads them. Only the Home painter is gone.
   // setAiDot() was here. Deleted 2026-08-25 (UI-146): it guarded on #aiDot,
   // which the instance-health rebuild removed, so it returned on its first line
   // for every user and had done ever since. Repointing it needed a chip to
@@ -7503,7 +7517,17 @@
   // The active briefing element: the horizontal band in the admin view, the
   // left rail otherwise. Lets _setBrief / renderAdminBriefing write to whichever
   // is on screen (admin drops the rail for a top band; analyst keeps the rail).
-  function _activeBriefEl() { return (_viewRole() === 'admin') ? ($('adminBrief') || $('haiBrief')) : $('haiBrief'); }
+  // ⚠ ADMIN-ONLY BY CONSTRUCTION, AND THAT IS THE DESIGN, NOT A GAP. This used to read
+  // `admin ? (#adminBrief or #haiBrief) : #haiBrief`.
+  // #haiBrief was the AI RAIL, retired in PR #310 — see the markup comment at the top
+  // of .home-main: "the admin band (#adminBrief), the accountant triage strip, and the
+  // global bottom-left governance dock replaced it". So the #haiBrief fallback
+  // could never fire and the non-admin branch always returned null.
+  // Returning null for a non-admin is CORRECT: _setBrief's caller bails on it, and the
+  // accountant and analyst carry their AI elsewhere. The old shape merely expressed
+  // that by looking up a retired element, which reads like an oversight and audits as
+  // a dead lookup. It now says what it means.
+  function _activeBriefEl() { return (_viewRole() === 'admin') ? $('adminBrief') : null; }
   function _setBrief(level, verdict, points, animate) {
     var brief = _activeBriefEl(); if (!brief) return;
     brief.classList.remove('lvl-ok', 'lvl-open', 'lvl-watch', 'lvl-attention');
@@ -7512,7 +7536,12 @@
     var body = function (t) { return '<span class="hai-li-body"><span class="hai-li-text">' + esc(t) + '</span></span>'; };
     if (vEl) vEl.innerHTML = verdict ? body(verdict) : '';   // empty → CSS :empty hides it (no welcome)
     if (pEl) pEl.innerHTML = (points || []).map(function (p) { return '<li>' + body(p) + '</li>'; }).join('');
-    _decorateBriefActions();
+    // _decorateBriefActions() was called here and RETIRED 2026-09-14 (32 lines). It
+    // opened `a #haiBrief lookup guarded with an early return` — the retired AI rail —
+    // so it no-opped on every call. The comment four lines below already recorded
+    // that ("its bullets are plain text — _decorateBriefActions targets haiBrief"),
+    // which means the admin band never wanted it and the analyst rail no longer
+    // exists to want it. Per-bullet actions live on the analyst day-brief surface.
     _syncBriefExpander(brief);   // admin band only: cap the to-do list at 3 + sync the "Show all" affordance
     // Typewriter fill-in for the Administrator AI band so the response reads as the
     // assistant generating it live. Admin band only (its bullets are plain text —
@@ -7583,7 +7612,9 @@
   }
   // The period the briefing is analyzing, shown under the eyebrow. Reflects a
   // clicked period bar (_briefPeriodOverride) via _briefScope().
-  function _setBriefPeriod() { var pe = $('haiPeriod'); if (pe) pe.textContent = _briefScope().period || ''; }
+  // _setBriefPeriod() RETIRED 2026-09-14. It wrote the analysed period into
+  // #haiPeriod, a child of the retired AI rail, so it had no target and no effect.
+  // The admin band states its own scope; the analyst day-brief has its own period line.
 
   // ---- Per-bullet actions ------------------------------------------------
   // Every bullet (verdict + points) now leads with its company number, so we
@@ -7600,38 +7631,6 @@
     if (n >= 1000) { var k = n / 1000; return (k >= 10 ? Math.round(k) : Math.round(k * 10) / 10) + 'K'; }
     return String(Math.round(n));
   };
-  function _decorateBriefActions() {
-    var brief = $('haiBrief'); if (!brief) return;
-    var d = _briefData();
-    var per = d ? d.viewedPeriod : ((($('periodSelect') || {}).value || '').slice(0, 10));
-    var hist = !!(d && d.isHistorical);
-    var nodes = [brief.querySelector('.hai-verdict')];
-    Array.prototype.push.apply(nodes, brief.querySelectorAll('.hai-points li'));
-    nodes.forEach(function (el) {
-      if (!el) return;
-      el.classList.remove('is-actionable', 'hai-ok'); el.onclick = null; el.onkeydown = null;
-      el.removeAttribute('role'); el.removeAttribute('tabindex');
-      var bodyEl = el.querySelector('.hai-li-body'); if (!bodyEl) return;
-      var old = bodyEl.querySelector('.hai-go'); if (old) old.remove();
-      if (/\bin balance\b/i.test(el.textContent || '')) el.classList.add('hai-ok');   // green dot for an in-balance company, regardless of the panel's overall level
-      var m = (el.textContent || '').match(/\bCo\s+([0-9]{3,})\b/);
-      if (!m || !per) return;            // no company (e.g. "Everything reconciles") → nothing to drill into
-      var co = m[1];
-      var go = document.createElement('span');
-      go.className = 'hai-go';
-      go.textContent = (hist ? 'What happened' : 'See details') + ' →';
-      bodyEl.appendChild(go);
-      el.classList.add('is-actionable');
-      el.setAttribute('role', 'button'); el.setAttribute('tabindex', '0');
-      var act = function () {
-        if (hist) { _openHistModal(co, per); return; }
-        try { if (window.RRV8 && window.RRV8.setActiveScope) window.RRV8.setActiveScope({ activeCompanies: [co], period: per }); } catch (_) {}
-        window.location.href = 'inventory-account-rollforward.html';
-      };
-      el.onclick = act;
-      el.onkeydown = function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); act(); } };
-    });
-  }
   // Aggregate one company across all loaded periods, then read the viewed period
   // and the one that followed it (to judge whether the imbalance was resolved).
   function _historicalSummary(co, periodKey) {
@@ -7699,7 +7698,8 @@
   // the card is never stuck — same priority order, just not AI-worded.
   function _fallbackBrief() {
     var d = _briefData(), sc = _briefScope();
-    _setBriefPeriod();
+    // _setBriefPeriod() was called here; retired 2026-09-14 (wrote to #haiPeriod,
+    // a child of the retired AI rail, so it had no target).
     // 'open', not 'watch'. Reconnecting is ACTIVITY, and watch paints the alert
     // colour, which has to mean a check fired. 'open' makes no claim in either
     // direction, which is what "we have not read anything yet" is. Activity has no
@@ -7833,102 +7833,16 @@
     // The Administrator view gets its own briefing — an overview of the admin
     // job + the task cards that need a look, not a per-period reconciliation read.
     if (_viewRole() === 'admin') { renderAdminBriefing(true); return; }
-    // Analyst: the AI rail was retired, so there's no rail briefing to paint.
-    var brief = $('haiBrief'); if (!brief) return;
-    _setBriefPeriod();
-    var gen = ++_briefGen;                       // supersede any in-flight briefing (DB/scope switch)
-    var d = _briefData();
-    // 'open', not 'ok' (UI-87). This is the no-data path, and 'ok' painted the GREEN
-    // ALL-CLEAR dot beside the words "Reading your data…" — the headline claiming a
-    // clean period before anything had been read. Same defect as the hardcoded 'ok'
-    // in _fallbackBrief, one branch away.
-    if (!d) { brief.classList.remove('is-loading'); _setBrief('open', 'Reading your data…', []); return; }  // _invRows not in yet; a later trigger repaints
-    // Honor the customer's AI exposure choice for this feature.
-    var exposure = _recsummaryLevel();
-    if (exposure === 'off') { brief.classList.remove('is-loading'); _fallbackBrief(); return; }   // no data leaves the page
-    var scrub = exposure === 'scrubbed';
-    // 'grounded' = the model sees ONLY the on-screen deterministic figures: no
-    // per-company history tracing below, real identifiers (it's the user's own screen).
-    var grounded = exposure === 'grounded';
-    brief.classList.add('is-loading');
-    _setBrief(_briefLevel(d), 'Reading your data…', []);
-    var sc = _briefScope();
-    var role = _briefItems(d);
-    var vrole = _viewRole();
-    var roleLabel = vrole === 'admin' ? 'an Administrator' : vrole === 'analyst' ? 'an Analyst' : 'an Accountant';
-    var coLabel = function (it) { return scrub ? ('Entity ' + String.fromCharCode(65 + (it.idx % 26))) : ('Co ' + it.co); };
-    var dataLines = role.items.map(function (it) {
-      if (!it.co) return '[Admin] ' + it.text;
-      if (it.reconciled) return '[OK] ' + coLabel(it) + ' (' + (it.ccy || '?') + '): reconciled — net ~0, in balance';
-      var comp = it.comps.map(function (x) { return x.name + ' ' + _money(x.v); }).join(', ');
-      var resolvedNext = d.isHistorical && it.nextOob != null && Math.abs(it.nextOob) < 1;
-      return '[' + it.role + '] ' + coLabel(it) + ' (' + (it.ccy || '?') + '): NET out-of-balance ' + _money(it.oob) + ', composed of ' + comp
-        + (resolvedNext ? ' [RESOLVED next period — the following period reconciled to ~0]' : '');
-    });
-    // For any material carry forward, hand the AI that company's recent history
-    // so it can trace the origin (carry forward into a period = prior period's net).
-    var trailBlocks = [];
-    if (!grounded) d.companies.forEach(function (c, i) {
-      if (Math.abs(c.oob) >= 1 && Math.abs(c.comp['Carry forward']) >= 1) {   // only trace material companies
-        trailBlocks.push((scrub ? ('Entity ' + String.fromCharCode(65 + (i % 26))) : ('Co ' + c.co))
-          + ' recent history:\n  ' + _companyTrail(c.co, 3).join('\n  '));
-      }
-    });
-    var historical = d.isHistorical;   // older than the two most recent periods → too late to act
-    // Tier-aware company REFERENCE, because the facts above are tier-aware: under the
-    // scrubbed tier coLabel masks every company to "Entity A" / "Entity B", so the
-    // model is handed no real company numbers. The output-format instructions used to
-    // demand "Co <number>" regardless — asking for an identifier that was deliberately
-    // withheld, which invites the model to invent one and state it authoritatively.
-    // The masking of the facts themselves is unchanged; only how the model is told to
-    // REFER to a company moves with the tier.
-    var idRule = scrub
-      ? 'Refer to each company ONLY by the exact entity label it was given above (e.g. "Entity A"). The real company numbers were deliberately withheld — NEVER print a company number, and never guess or invent one.'
-      : 'Refer to each company by its number ONLY (e.g. "Co 90001").';
-    var idSlot  = scrub ? '<entity label>' : 'Co <number>';                  // the header/line slot
-    var idEg1   = scrub ? 'Entity A' : 'Co 90001';
-    var idEg2   = scrub ? 'Entity B' : 'Co 90002';
-    var idTerm  = scrub ? 'entity label only' : 'company number only';
-    var idOrder = scrub
-      ? 'ORDER: keep the lines in the SAME order the entities are listed above (Entity A before Entity B …)'
-      : 'ORDER: sort ALL lines by COMPANY NUMBER ASCENDING (Co 90001 before Co 90002 …)';
-    var prompt = (window.RRV8 && RRV8.ACCT_GROUNDING ? RRV8.ACCT_GROUNDING + '\n\n' : '')
-      + 'You are RapidReconciler AI. Brief ' + roleLabel + ' who just wants to know WHERE TO LOOK FIRST.\n'
-      + 'Each item below is tagged [Admin]/[Analyst]/[Accountant] (the role that OWNS its fix) or [OK] (in balance), and is already in this user’s scope.\n'
-      + 'Use the app’s own terms. "Carry forward" is an unresolved balance rolled in from the prior period (a period\'s carry forward equals the previous period\'s net out-of-balance).\n\n'
-      + 'Period: ' + (sc.period || '?') + (d.periodScoped ? '' : ' (figures span all loaded periods)') + '. Items in scope — the ONLY facts you may cite:\n'
-      + (dataLines.length ? dataLines.join('\n') : '(everything reconciles — nothing open)') + '\n'
-      + 'CRITICAL: a company\'s out-of-balance is the NET figure shown. The components are the KNOWN contributors to that net, they OFTEN PARTLY OFFSET each other, and they do NOT always add up to it (when a facts block reports an unexplained remainder, say so and do not present the breakdown as complete) — NEVER add component amounts together (do NOT write "X plus Y produced Z", and never combine two components into one larger number), and never state a number larger than the net. Cite ONLY the net out-of-balance and name the single largest component as the driver.\n'
-      + (trailBlocks.length ? '\nHistory — use it to TRACE each material carry forward back to the period and entry that created it (often a manual journal entry that was never offset):\n' + trailBlocks.join('\n') + '\n' : '')
-      + (d.currencies.length > 1 ? '\nDifferent currencies are present — never combine them; keep each company separate.\n' : '')
-      + '\nTONE: calm and factual, never urgent or alarmist. A carry forward does NOT need immediate action — it can be cleared now OR folded into the coming period-end journal entry; say so plainly.\n'
-      + (historical ? 'HISTORICAL PERIOD: this period is older than the two most recent periods — it is TOO LATE to act. DESCRIBE what happened (the cause, in past tense) and who owned it; do NOT recommend reversing, posting, offsetting, or any action, and never say "this period" about a fix. If a line is tagged [RESOLVED next period], add that the out-of-balance was CLEARED the following period (e.g. "…mostly manual entries, cleared the next period") — this reassures the reader it did not persist.\n' : '')
-      + 'ROUND every amount to a readable figure — e.g. "£18K", "$3.4K" — never cents or exact change.\n'
-      + idRule + ' Do NOT print the currency code (USD/GBP) — the £/$ symbol on the amount already conveys the currency.\n'
-      + 'FORMAT every line as a header + colon + detail. For a company with an owner: "<Role> — ' + idSlot + ': <detail>" (e.g. "Accountant — ' + idEg1 + ': …") — the role-first header makes WHO IS RESPONSIBLE obvious, so do NOT repeat the role at the end of the line. For an in-balance company (marked [OK]): "' + idSlot + ': in balance" (no role, no action).\n'
-      + idOrder + ' and keep each company\'s lines together — do NOT reorder by amount or by in-balance status. Cover every company in scope (AT LEAST one line each). A company earns a SECOND line ONLY for a second SUBSTANTIAL, same-direction component of similar magnitude to its driver (e.g. a material carry forward AND material transactions) — never for a small, offsetting, or trivial amount. AIM for about FOUR lines total to fill the space, but show fewer rather than pad with clutter or invent items.\n'
-      + 'Each line: rounded amounts (e.g. "£18K"), 20 words MAX, ONE clause, ' + idTerm + '. A MATERIAL line states the net out-of-balance and its single largest driver' + (historical ? ', in PAST TENSE, with NO fix, NO "should", NO recommendation, and never "this period" — it is too late to act.' : ', plus the LIKELY FIX as a likelihood (never a command); do not add the words "this period".') + ' An in-balance company is just "' + idSlot + ': in balance". NEVER add components or state a number larger than the net; only call something an unoffset/missing journal entry when Manual entries is the largest driver.\n'
-      + 'Required line format, e.g.: ' + (historical ? '"Accountant — ' + idEg1 + ': was ~$29K out of balance, mostly manual entries."  and  "' + idEg2 + ': in balance".' : '"Accountant — ' + idEg1 + ': ~$29K out of balance, mostly manual entries; should likely reverse them."  and  "' + idEg2 + ': in balance".') + '\n'
-      + 'The FIRST line goes in "verdict"; every remaining line, in the same order, goes in "points". They obey the SAME rules — "verdict" is simply the first line, NOT necessarily the biggest. If EVERY company is in balance, verdict = "Everything reconciles for ' + (sc.period || 'this period') + '." and put one "' + idSlot + ': in balance" line per company in "points".\n'
-      + 'Plain accountant English, no JDE table names, no step lists, no preamble. Use ONLY the facts above.\n'
-      + _aiDocCatalogPrompt('json')
-      + 'Respond with ONLY a JSON object, nothing else:\n'
-      + (scrub
-          ? '{"verdict":"first line (first entity listed)","points":["each remaining line, in the listed entity order"],"docs":["optional slug"]}'
-          : '{"verdict":"first line (lowest company number)","points":["each remaining line, company-number order"],"docs":["optional slug"]}');
-    var timed = setTimeout(function () { if (gen === _briefGen) { brief.classList.remove('is-loading'); _fallbackBrief(); } }, 14000);
-    rrFetch('api/v1/ai/explain', { method: 'POST', body: { prompt: prompt } }).then(function (r) {
-      if (gen !== _briefGen) return;
-      clearTimeout(timed);
-      brief.classList.remove('is-loading');
-      var o = _parseBrief(r && r.text);
-      if (o) _setBrief(_briefLevel(d), o.verdict, o.points); else _fallbackBrief();   // dot from data, prose from AI
-    }).catch(function () {
-      if (gen !== _briefGen) return;
-      clearTimeout(timed);
-      brief.classList.remove('is-loading');
-      _fallbackBrief();
-    });
+    // Analyst: the AI rail was retired in PR #310, so there is no rail briefing to
+    // paint and this function is done. That used to be expressed as
+    // `a #haiBrief lookup guarded with an early return` followed by 94 lines that
+    // built and rendered a rail briefing — prompt assembly, company scrubbing, the
+    // rrFetch to api/v1/ai/explain, the whole path — all of it unreachable, because
+    // #haiBrief has produced no markup since the rail was retired and the guard
+    // therefore returned on every analyst load. Deleted 2026-09-14.
+    // ⚠ The analyst has NOT lost a briefing: #analystDayBriefTop / Body / Chips are
+    // its surface and are painted elsewhere. What is gone is a second, older
+    // implementation that could not run.
   }
 
   // ===== Accountant working panels (snapshot + variance + AI ask) =========
@@ -17344,7 +17258,6 @@
     _openPrimaryLaneOnFresh();   // fresh sign-in: land the role on its primary lane, once
     checkFirstRun();
     paintLicenseHealth();
-    reflectDmaai();
     autoWarmDmaais();
     autoWarmCardex();
     loadPurgeInfo();
@@ -17397,7 +17310,7 @@
     if (!(a && a.n)) return;   // session not hydrated yet — boot() paints
     setActivityDot();
     setPwPolicyDot();
-    loadRefreshSchedule();
+    // loadRefreshSchedule() was called here; retired 2026-09-14 — see its tombstone.
     // Reload Cardex "Remind me" greens via the snooze ack; repaint it from the
     // cached eod-check (preserved across a bfcache back-nav) so a reminder set on
     // its page shows green the moment you return, without a refetch.
