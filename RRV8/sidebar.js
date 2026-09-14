@@ -2351,10 +2351,12 @@ ${adminSection}
   global.RRV8.setDotState             = setDotState;
   global.RRV8.DOT_STATES              = DOT_STATES;
   global.RRV8.complexPwReviewState    = reviewReminderState;
-  // Review Job Schedule uses the identical ok/todo rule (future ISO date or
-  // 'never' = ok, else todo), keyed at rrv8.scheduleReview.<db>. Aliased to
-  // the one function so the two no-attestation reminders can't drift.
-  global.RRV8.scheduleReviewState     = reviewReminderState;
+  // RRV8.scheduleReviewState REMOVED 2026-09-14 (owner: "Remove Review job
+  // schedule"). It aliased reviewReminderState for the Review Job Schedule band,
+  // whose page RRV8/admin-job-schedule.html was deleted in the same commit — the
+  // page had no link from anywhere, measured against a control, and its Home dot
+  // had been gone since PR #301. The three sibling aliases below are untouched;
+  // reviewReminderState itself is unchanged.
   // Claude Assistant (30/60/Never, rrv8.aiReview.<db>) and Activity Log
   // (7/14/30-day, rrv8.activityReview.<db>) use the identical ok/todo rule —
   // aliased to the one function so the page bands and the Home dots can't drift.
