@@ -5409,6 +5409,23 @@
   // entirely. So the person most likely to hit the hang is the person with no
   // way to clear it and, until now, no explanation either.
   var EXPORT_STALL_MS = 40000;
+  // ⛔ THERE WAS A DEAD INTERVAL BETWEEN 2.6s AND 40s AND THE OWNER FOUND IT BY
+  // RUNNING THE EXPORT. Reported 2026-09-15: "I do see a 'Building Audit Report'
+  // toast for a few seconds but then it disappears, nothing happens for several
+  // seconds, then the complete message shows."
+  //
+  // He is right, and the watchdog's own design made it worse rather than better.
+  // toast() holds for 2,600ms by default (`Math.max(1200, holdMs || 2600)`), the
+  // advisory starts at 40,000ms, and between those two numbers the page said
+  // NOTHING while an export ran. A user who has been told "Building…" and then
+  // watches the message vanish reasonably concludes it failed silently -- and
+  // the honest reading of a blank screen is that nothing is happening.
+  //
+  // 3,000ms, just past the toast, so the two never overlap and nothing is ever
+  // duplicated on screen. The advisory then ESCALATES the same banner at 40s
+  // from "still working" to "taking longer than usual" with the restart
+  // affordance, rather than appearing out of nowhere.
+  var EXPORT_WORKING_MS = 3000;
   var _expStallDepth = 0;
 
   // ⚠ perms.rs IS MINTED AND WAS READ BY NOTHING. AuthController:935 puts `rs`
@@ -5427,6 +5444,40 @@
     var el = $('expStall'); if (!el) return;
     el.classList.remove('is-visible');
     el.hidden = true;
+  }
+
+  /* The WORKING state of the same banner, shown while an export is still
+     running normally. Nothing is wrong yet, so it carries no restart button and
+     no "keep waiting" -- offering a remedy for a healthy operation is how a user
+     learns to distrust the remedy.
+
+     Reuses #expStall rather than adding a second element: one region, one
+     aria-live announcement, and the 40s advisory then rewrites it in place
+     instead of stacking a second banner underneath the first. */
+  function _showExportWorking(label) {
+    var el = $('expStall'); if (!el) return;
+    var t = $('expStallTitle'), b = $('expStallBody'), acts = $('expStallActs');
+    if (!t || !b || !acts) return;
+    // textContent, same reasoning as _showExportStall: `label` is ours today,
+    // but a report name is exactly the kind of value that later comes off a
+    // server response.
+    //
+    // ⚠ WITH TWO EXPORTS RUNNING, NAME NEITHER. Both working timers fire and the
+    // later one overwrites the banner, so a single label would name whichever
+    // export happened to start second while both were building -- a small lie,
+    // and the kind that makes someone cancel the wrong thing. The depth counter
+    // this function already relies on is the honest answer. (Found by the test:
+    // the first draft asserted the earlier label and the code produced the
+    // later one. The assertion was wrong AND the behaviour was worth changing.)
+    var n = _expStallDepth;
+    t.textContent = n > 1
+        ? 'Building ' + n + ' reports…'
+        : 'Building the ' + (label || 'report') + '…';
+    b.textContent = 'This can take a minute on a large period. You can keep '
+      + 'working; the download appears when it finishes.';
+    acts.textContent = '';
+    el.hidden = false;
+    requestAnimationFrame(function () { el.classList.add('is-visible'); });
   }
 
   function _showExportStall(label) {
@@ -5476,9 +5527,16 @@
   // menu): the second to finish is what clears the banner, not the first.
   function withExportWatchdog(label, p) {
     _expStallDepth++;
-    var timer = setTimeout(function () { _showExportStall(label); }, EXPORT_STALL_MS);
+    // Two timers, one banner. The working state takes over from the toast at
+    // 3s; the advisory rewrites it at 40s. BOTH are cleared on settle, and the
+    // working timer has to be cleared even when the advisory has already
+    // replaced it -- a leaked timer would repaint "Building…" over a banner
+    // that had escalated, which reads as the report having restarted itself.
+    var workTimer  = setTimeout(function () { _showExportWorking(label); }, EXPORT_WORKING_MS);
+    var stallTimer = setTimeout(function () { _showExportStall(label); },   EXPORT_STALL_MS);
     var done = function () {
-      clearTimeout(timer);
+      clearTimeout(workTimer);
+      clearTimeout(stallTimer);
       if (--_expStallDepth <= 0) { _expStallDepth = 0; _hideExportStall(); }
     };
     return p.then(
