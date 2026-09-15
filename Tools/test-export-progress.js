@@ -106,8 +106,18 @@ function makeEnv() {
     };
 }
 
-console.log('=== the banner sequence over one slow export ===');
-{
+/* ⚠ A FUNCTION, NOT A BARE BLOCK, AND THAT IS NOT STYLE. The first draft ran the
+   opening case in a top-level `{ … }` and ended it with `return wrapped.then(…)`.
+   Node ACCEPTS that -- CommonJS wraps every module in a function, so a top-level
+   return is legal at runtime and the suite passed locally. parsecheck.py compiles
+   with `new vm.Script`, which has no wrapper, and CI failed with
+   `Line 127: SyntaxError: Illegal return statement`.
+
+   Worth keeping: a file that RUNS is not a file that PARSES as a script, and I
+   had parse-checked the two HTML pages I edited without checking the .js I had
+   just written. */
+function slowExportCase() {
+    console.log('=== the banner sequence over one slow export ===');
     const E = makeEnv();
     let settle;
     const p = new Promise(r => { settle = r; });
@@ -224,3 +234,12 @@ function permissionCase() {
     console.log('ALL CHECKS PASSED');
     process.exit(0);
 }
+
+/* The cases chain through each other's promises, so this one call runs them all.
+   A rejection anywhere must not vanish into an unhandled promise -- that would
+   exit 0 with a warning, and a test suite that passes by losing its own error is
+   the exact failure this file exists to prevent elsewhere. */
+slowExportCase().catch(err => {
+    console.log('\nHARNESS ERROR: ' + (err && err.stack ? err.stack : err));
+    process.exit(1);
+});
