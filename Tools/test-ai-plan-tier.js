@@ -167,11 +167,27 @@ function run(opts, source) {
   // merely somewhere.
   // -------------------------------------------------------------------------
   console.log('\nmutation control -- pre-fix early return re-injected:');
+  // ⚠ RE-ANCHORED 2026-09-15 (VLC-63 increment 2). This used to inject before
+  // `var dbn = (activeDb() && activeDb().n) || '';`, which was then unique to
+  // loadAiPlan. Hoisting the health fetch into the shared aiHealth() producer
+  // moved that line OUT of loadAiPlan, so `.replace()` took the first occurrence
+  // -- inside aiHealth, where `mark` does not exist -- and the whole suite died
+  // with "mark is not defined" instead of reporting a control failure.
+  //
+  // The anchor is now a line that only exists inside the function under test,
+  // and its uniqueness is ASSERTED rather than assumed. A mutation control that
+  // silently relocates is worse than none: it reports on code it never touched.
+  const ANCHOR = "var el = $('aiPlanTierLabel'); if (!el) return;";
+  const anchorCount = SOURCE.split(ANCHOR).length - 1;
+  if (anchorCount !== 1) {
+    console.log('  FAIL  mutation anchor appears ' + anchorCount + ' times, expected 1');
+    failures++;
+  }
   const MUTANT = SOURCE.replace(
-    'var dbn = (activeDb() && activeDb().n) || \'\';',
-    'if (!isAdmin()) { mark(\'full\'); return; }\n    var dbn = (activeDb() && activeDb().n) || \'\';'
+    ANCHOR,
+    ANCHOR + "\n    if (!isAdmin()) { mark('full'); return; }"
   );
-  if (MUTANT === SOURCE) {
+  if (MUTANT === SOURCE || anchorCount !== 1) {
     console.log('  FAIL  mutation did not apply -- the control is vacuous');
     failures++;
   } else {

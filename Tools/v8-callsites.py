@@ -466,6 +466,19 @@ def is_fetch_name(name):
     return name == "fetch" or name.endswith(("Fetch", "fetch"))
 
 
+# Objects whose `.someFetch(...)` members are REAL call sites, not the method
+# calls the enumerator otherwise skips.
+#
+# ⚠ UI-171, 2026-09-15, AND THE GATE FOUND THIS ITSELF. The valcBase migration
+# moved 12 call sites onto `window.RRDB.valcFetch(...)`, and because that is a
+# member call the enumerator skipped every one of them -- so A3 reported eight
+# api/v1 literals as "reached by a call shape this file does not know" and the
+# run went red. That is the assertion working exactly as its docstring says it
+# will: a new call shape is caught by the literal census, not by the name rule.
+# The fix is to name the shape here, not to loosen A3.
+FETCH_MEMBER_OWNERS = ("RRDB",)
+
+
 def enumerate_file(path, tables, errors=None):
     """Every call site in one file.
 
@@ -504,7 +517,12 @@ def enumerate_file(path, tables, errors=None):
             if i > 0 and toks[i - 1].type == "Keyword" and toks[i - 1].value == "function":
                 continue                              # a definition, not a call
             if i > 0 and toks[i - 1].type == "Punctuator" and toks[i - 1].value == ".":
-                continue                              # a method on some object
+                # a method on some object -- unless the object is one whose
+                # fetch members ARE call sites (see FETCH_MEMBER_OWNERS).
+                owner = toks[i - 2] if i >= 2 else None
+                if not (owner is not None and owner.type == "Identifier"
+                        and str(owner.value) in FETCH_MEMBER_OWNERS):
+                    continue
             lo, hi = _call_region(toks, i + 1)
             # FIRST ARGUMENT ONLY. Collecting every string in the whole call
             # region swept in the init object's header values, and the report

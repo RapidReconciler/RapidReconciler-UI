@@ -4057,7 +4057,8 @@
     var dbScoped = !/^api\/v1\/(messages|ai)\b/.test(area);
     var base;
     if (_routesToValc(area)) {
-      base = RR_CONFIG.valcBase || 'http://localhost:8080';
+      base = window.RRDB.valcBase();   // canonical VALC resolver (config.js RRDB)
+      if (!base) return Promise.reject(window.RRDB.valcGap(area));
     } else if (_routesToTestAgent(area)) {
       base = window.RRDB.agentBase();   // canonical active-DB agent resolver (config.js RRDB)
     } else {
@@ -6588,6 +6589,96 @@
   // full). The full four-tier ladder lives on the Manage sub-page now; Home just
   // shows the active plan name. The customer-facing labels mirror the old card.
   var AI_PLAN_LABEL = { off: 'Off', docs: 'Basic', scrubbed: 'Enhanced', full: 'Full' };
+  // ── AI availability, resolved ONCE for the whole page ──────────────────────
+  //
+  // VLC-63 increment 2. `api/v1/ai/health` returns three fields -- configured,
+  // model, maxLevel -- and until now the ONLY reader was loadAiPlan(), which
+  // writes the admin chip and returns on its first line when #aiPlanTierLabel is
+  // absent. That element lives inside the admin view, which is DETACHED from the
+  // DOM for every other role (see _adminViewAnchor). So on an analyst's or an
+  // accountant's Home the health call never fired and `configured` was unknown.
+  //
+  // That is why the owner's ruling -- "stay visible and say why it is
+  // unavailable" -- could not be honoured before this: the page had no way to
+  // know a server had the assistant switched off.
+  //
+  // ONE fetch, cached as a promise so N call sites share it rather than each
+  // asking. Calling it for every role is safe and was established by reading the
+  // chain rather than hoping: /api/v1/ai/** is matched by neither the tenant nor
+  // the admin rule in SecurityConfig, so it falls to .anyRequest().authenticated()
+  // which a V8 token's ROLE_USER satisfies, and AiController.maxLevelForDb is a
+  // pure lookup by database name with no caller identity in it.
+  //
+  // ⚠ Keyed by ACTIVE DATABASE. Switching databases can switch plans, so the
+  // cache is per-db and resetScopedState clears it.
+  var _aiHealthCache = {};
+  function aiHealth() {
+    var dbn = (activeDb() && activeDb().n) || '';
+    if (_aiHealthCache[dbn]) return _aiHealthCache[dbn];
+    // A failed health call resolves to UNKNOWN rather than rejecting. An
+    // unreachable health endpoint must not be reported to the customer as "your
+    // AI is switched off" -- those are different facts and only one of them is
+    // actionable by GSI.
+    _aiHealthCache[dbn] = rrFetch('api/v1/ai/health', dbn ? { query: { db: dbn } } : undefined)
+      .then(function (r) {
+        return { configured: !(r && r.configured === false),
+                 maxLevel: (r && r.maxLevel) || 'off', known: true };
+      })
+      .catch(function () { return { configured: true, maxLevel: '', known: false }; });
+    return _aiHealthCache[dbn];
+  }
+  function _aiHealthReset() { _aiHealthCache = {}; }
+
+  // ── THE ONE PRODUCER FOR AN AI EXPLAIN CALL ────────────────────────────────
+  //
+  // Ten call sites POSTed to api/v1/ai/explain directly, and each had to
+  // remember the tier check for itself. Measured 2026-09-15: three did it
+  // in-function, one was guarded by its caller, and six had no guard on at least
+  // one reachable path -- so with AI switched Off, six surfaces still called out.
+  //
+  // Resolves to a RESULT OBJECT, never rejects for an unavailable reason:
+  //
+  //   { ok: true,  text: '...' }
+  //   { ok: false, reason: 'tier-off'       , why: <sentence> }
+  //   { ok: false, reason: 'not-configured' , why: <sentence> }
+  //   { ok: false, reason: 'error'          , why: <sentence> }
+  //
+  // ⛔ OWNER RULING 2026-09-15: DO NOT SELF-SUPPRESS. The affordance stays
+  // visible and says why. The two off-states are different facts and the UI must
+  // not merge them -- `tier-off` is the user's own choice at the sidebar AI dock
+  // and reads as reversible; `not-configured` is GSI-side and the customer
+  // cannot act on it, so it has to name the reason. Hiding a feature the
+  // customer is paying for reads as a missing feature and tells nobody who to
+  // ask. `why` is the sink for that reason: it is a sentence meant to be
+  // RENDERED, not logged.
+  function aiExplain(prompt, opts) {
+    opts = opts || {};
+    var lvl = (typeof _recsummaryLevel === 'function') ? _recsummaryLevel() : 'full';
+    if (lvl === 'off') {
+      return Promise.resolve({ ok: false, reason: 'tier-off',
+        why: 'AI is switched off for this session. Turn it on in the AI panel to get a read on this.' });
+    }
+    return aiHealth().then(function (h) {
+      if (!h.configured) {
+        return { ok: false, reason: 'not-configured',
+          why: 'The AI assistant is not switched on for this installation. Contact GSI support to enable it.' };
+      }
+      // Named `_aiExUrl`, not `url`. v8-callsites.py keys its hand resolutions on
+      // "<file>::<identifier>" precisely so the entry survives edits and fails
+      // loudly on a rename -- a generic `url` would be a key that means nothing
+      // and could collide with the next dynamic site added to this file.
+      var _aiExUrl = 'api/v1/ai/explain' + (opts.ctx ? ('?ctx=' + opts.ctx) : '');
+      var body = { prompt: prompt };
+      if (opts.system) body.system = opts.system;
+      return rrFetch(_aiExUrl, { method: 'POST', body: body }).then(function (r) {
+        var txt = (r && r.text) ? String(r.text).trim() : '';
+        return txt ? { ok: true, text: txt }
+                   : { ok: false, reason: 'error', why: 'The AI did not return a reading for this.' };
+      }).catch(function () {
+        return { ok: false, reason: 'error', why: 'The AI could not be reached just now.' };
+      });
+    });
+  }
   // ONE producer for every control that opens a destination with an AI reading
   // behind it. The Transaction Variance card heads established the shape
   // (.txv-aibtn, :2463) and it is worth being exact about what that shape IS: it
@@ -6643,6 +6734,12 @@
     var desc = off ? ('Open ' + subj) : ('Open ' + subj + ' in the AI analysis view');
     var cls  = o.pill ? ('txv-aibtn' + (off ? ' is-plain' : ''))
                       : ('alh-act ' + (off ? 'ghost' : 'ai'));
+    // ⚠ `alh-act-lbl` has NO CSS RULE, and that is deliberate rather than an
+    // oversight — stated here because an unbacked class name otherwise reads as
+    // one. `.alh-act` is flex with its own gap, so the label needs no rule of its
+    // own; the class exists as a styling hook and to mirror `txv-aibtn-lbl`,
+    // which is pre-existing and equally unstyled. Verified 2026-09-15: neither
+    // name matches a rule in this file.
     var inner = off
       ? 'View <span aria-hidden="true">&rarr;</span>'
       : AI_SPARK_SVG + '<span class="' + (o.pill ? 'txv-aibtn-lbl' : 'alh-act-lbl') + '">AI</span>';
@@ -6688,8 +6785,16 @@
     //
     // Resolve the plan by the ACTIVE DATABASE's client (a platform admin isn't a
     // client-scoped user, so a user-based lookup would wrongly read 'off').
-    var dbn = (activeDb() && activeDb().n) || '';
-    rrFetch('api/v1/ai/health', dbn ? { query: { db: dbn } } : undefined)
+    // VLC-63 increment 2: this owned its own health fetch. It now consumes the
+    // shared aiHealth() producer, so the chip and every AI affordance on the page
+    // read ONE answer. Two readers of one setting, free to disagree, is the shape
+    // this file has been burned by repeatedly.
+    //
+    // aiHealth() normalises: `configured` is already a boolean here, and an
+    // unreachable endpoint arrives as { known: false } rather than as a false
+    // `configured`, so the chip can still tell "switched off" from "could not
+    // ask" -- which the old code could not.
+    aiHealth()
       .then(function (r) {
         // `configured` is the THIRD field AiController.health(:164) returns
         // beside model and maxLevel, and until now nothing in this file read
@@ -6702,10 +6807,11 @@
         // cannot use is not the useful half. `configured:false` is a GSI-side
         // setting, not something the customer can act on, so the label says
         // what is true and the Manage link still goes where it explains.
-        if (r && r.configured === false) { el.textContent = 'Not enabled'; return; }
-        mark((r && r.maxLevel) || 'off');
+        if (!r.known) { mark(''); return; }   // could not ask — leave the em-dash rather than guess
+        if (!r.configured) { el.textContent = 'Not enabled'; return; }
+        mark(r.maxLevel || 'off');
       })
-      .catch(function () { mark(''); });   // unreachable — leave the em-dash rather than guess
+      .catch(function () { mark(''); });   // aiHealth already swallows; belt-and-braces
   }
   // Activity Log row dot — client-side review reminder (rrv8.activityReview.<db> +
   // RRV8.activityReviewState), set on the Activity Log page (7/14/30-day). Reviewed =
@@ -9296,7 +9402,12 @@
     var hide = function () { el.hidden = true; el.classList.remove('is-shown'); };
     if (!e || !e.pairs.length || typeof rrFetch !== 'function') { hide(); return; }
     var tier = (typeof _recsummaryLevel === 'function') ? _recsummaryLevel() : 'full';
-    if (tier === 'off') { hide(); return; }   // AI-tier gate: Off = no AI narrative
+    // ⚠ THIS USED TO BE `if (tier === 'off') { hide(); return; }`, and that is the
+    // behaviour the owner overruled on 2026-09-15: stay visible and say why.
+    // Hiding made "AI is switched off" indistinguishable from "there is nothing to
+    // summarise", which is what hide() means everywhere else in this function. The
+    // tier decision now belongs to aiExplain() alone -- one place decides, one
+    // place renders. `tier` is still read below: it shapes the scrubbed label.
     var tag = '<span class="ws-ai-summary-tag"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 1.6l1.9 5.1a5 5 0 0 0 2.9 2.9l5.1 1.9-5.1 1.9a5 5 0 0 0-2.9 2.9L12 21.4l-1.9-5.1a5 5 0 0 0-2.9-2.9L2.1 11.5l5.1-1.9a5 5 0 0 0 2.9-2.9z"/></svg>RapidReconciler AI</span>';
     // Scrubbed ("Enhanced") means no real identifier reaches the model — the same
     // Entity-letter transform the other grounded surfaces apply.
@@ -9324,12 +9435,22 @@
     // Stale-response guard: the carry-forward toggle can fire a second read before the
     // first returns, and the loser must not overwrite the winner.
     var seq = (_oeAiSeq = (_oeAiSeq || 0) + 1);
-    rrFetch('api/v1/ai/explain', { method: 'POST', body: { prompt: prompt } }).then(function (r) {
+    // VLC-63 increment 2. Through aiExplain(), which owns the tier and
+    // configured-state checks. This site had NO off-guard: with AI switched off
+    // the strip still called out and then hid itself on the empty answer, so the
+    // operator saw a flicker and no reason.
+    aiExplain(prompt).then(function (r) {
       if (seq !== _oeAiSeq) return;
-      var txt = (r && r.text) ? String(r.text).trim() : '';
-      if (!txt) { hide(); return; }
-      el.innerHTML = tag + '<span class="ws-ai-summary-text">' + esc(txt) + '</span>';
-    }).catch(function () { if (seq === _oeAiSeq) hide(); });
+      if (!r.ok) { _oeAiUnavailable(el, tag, r); return; }
+      el.innerHTML = tag + '<span class="ws-ai-summary-text">' + esc(r.text) + '</span>';
+    });
+  }
+  // The unavailable sink for the offset-entry strip. Owner ruling 2026-09-15:
+  // stay visible and say why. hide() is reserved for "there is nothing to
+  // summarise", which is a different fact from "the AI is switched off".
+  function _oeAiUnavailable(el, tag, r) {
+    el.hidden = false; el.classList.add('is-shown');
+    el.innerHTML = tag + '<span class="ws-ai-summary-text is-unavailable">' + esc(r.why) + '</span>';
   }
   var _oeAiSeq = 0;
   // PDF of the same entry — the read-alongside format. Same facts as the workbook and
@@ -9697,13 +9818,21 @@
       + sample + '.\n'
       + 'A deterministic pass suggests a cutoff of ' + _perpMoney(opt.target) + ', hiding the ' + opt.count + ' smallest rows (' + _perpMoney(opt.amount) + ' total); the next row up is ' + _perpMoney(opt.nextUp) + '.\n'
       + 'Confirm or adjust the dollar cutoff that best separates rounding dust from a balance worth reviewing. Reply with the FIRST line exactly "TARGET: <dollars>" (a number), then ONE sentence in plain accountant English on why that cutoff. No markdown, no preamble.';
-    // AI-tier gate: when Off, send nothing to the model — apply the deterministic
-    // cutoff via the same handler (empty text → target unchanged). Off = figures only.
-    var _optAi = (_recsummaryLevel && _recsummaryLevel() === 'off')
-      ? Promise.resolve({ text: '' })
-      : rrFetch('api/v1/ai/explain', { method: 'POST', body: { prompt: prompt } });
-    _optAi.then(function (r) {
-      var txt = (r && r.text) ? String(r.text).trim() : '';
+    // VLC-63 increment 2. The ternary here DID gate on the tier, and it gated
+    // silently: Off produced an empty answer, the deterministic plain note
+    // appeared, and nothing said why the AI rationale was missing. Owner ruling
+    // 2026-09-15 -- stay visible and say why.
+    //
+    // The plain note still LEADS. It is a real answer computed from the figures,
+    // not a fallback, so the reason rides after it rather than replacing it.
+    aiExplain(prompt).then(function (r) {
+      if (!r.ok) {
+        var app0 = _perpResidualSet(rows, _perpResidualTarget);
+        _perpShowOptNote(_perpOptPlainNote(app0, opt) + ' ' + r.why, true);
+        _renderPerpGrid();
+        return;
+      }
+      var txt = r.text;
       var m = txt.match(/TARGET:\s*\$?\s*([\d.]+)/i);
       if (m) { var t = Number(m[1]); if (isFinite(t) && t >= 0) { _perpResidualTarget = t; try { localStorage.setItem('rrv8.perpresidtgt', String(t)); } catch (_) {} } }
       var applied2 = _perpResidualSet(rows, _perpResidualTarget);
@@ -12789,24 +12918,29 @@
       + 'ATTRIBUTION IS NOT OPTIONAL: if you cite an amount, name the period it is in. Never write "current period", "this period" or "now" as a substitute for a period name, and if the amount is not in the viewed period, say which period it IS in.\n'
       + (window.RRV8 && RRV8.AI_REGISTER ? RRV8.AI_REGISTER : '');
     var _per = ''; try { _per = (window.RRV8 && RRV8.readSessionScope && RRV8.readSessionScope().period) || ''; } catch (_) {}
-    var _ctxUrl = 'api/v1/ai/explain' + (window.RRV8 && RRV8.aiCtx ? ('?ctx=' + RRV8.aiCtx('daybrief', co, _per)) : '');
+    // Just the ctx VALUE now; aiExplain assembles the URL. That removes this
+    // site's dynamic-area override from v8-callsite-overrides.json, which the
+    // gate's A2b would otherwise report as stale — a suppression outliving its
+    // defect is how a gate goes quiet without anyone deciding it should.
+    var _ctxCtx = (window.RRV8 && RRV8.aiCtx) ? RRV8.aiCtx('daybrief', co, _per) : '';
     // Currency check is the SIGNATURE, not `gen`: a benign repaint bumps the
     // generation but re-enters with the same facts and returns above, so a gen-guarded
     // reply would be dropped with nothing left to re-ask and the pulse stuck on. The
     // sig carries tier + DB + company + facts, and resetScopedState clears it, so a
     // reply that no longer matches what the analyst is looking at still can't paint.
     var timed = setTimeout(function () { if (sig === _analystLeadSig) { bodyEl.classList.remove('is-thinking'); bodyEl.innerHTML = fallback; } }, 12000);
-    rrFetch(_ctxUrl, { method: 'POST', body: { system: sys, prompt: prompt } }).then(function (r) {
+    // VLC-63 increment 2. The day-brief lead had no tier guard at all: with AI
+    // switched off it still called out, and on any failure it fell back to the
+    // deterministic `fallback` sentence with nothing saying the AI read was
+    // missing. The deterministic lead is a real answer, so it STAYS -- the reason
+    // rides with it rather than replacing it.
+    aiExplain(prompt, { ctx: _ctxCtx, system: sys }).then(function (r) {
       if (sig !== _analystLeadSig) return;
       clearTimeout(timed);
-      var txt = (r && r.text) ? String(r.text).trim() : '';
       bodyEl.classList.remove('is-thinking');
-      if (txt) bodyEl.textContent = txt; else bodyEl.innerHTML = fallback;
-    }).catch(function () {
-      if (sig !== _analystLeadSig) return;
-      clearTimeout(timed);
-      bodyEl.classList.remove('is-thinking');
-      bodyEl.innerHTML = fallback;
+      if (r.ok) { bodyEl.textContent = r.text; return; }
+      bodyEl.innerHTML = fallback
+        + ' <span class="hai-unavailable">' + esc(r.why) + '</span>';
     });
   }
   // Paint the constant-chrome day-brief (called on every analyst sub-view). Warms
@@ -13701,7 +13835,12 @@
     if (_acctAsking) return;
     var input = $('acctAskInput'), ans = $('acctAskAnswer');
     var q = (presetQ != null ? String(presetQ) : (input && input.value || '')).trim(); if (!q) return;
-    if (_recsummaryLevel() === 'off') return;
+    // ⚠ THIS USED TO BE `if (_recsummaryLevel() === 'off') return;` — a silent
+    // refusal. The analyst typed a question, pressed Ask, and NOTHING happened:
+    // no answer, no band, no reason. Owner ruling 2026-09-15 is stay visible and
+    // say why, so the question now goes through and aiExplain answers with the
+    // reason instead of the page swallowing the click. Removed rather than moved:
+    // the tier decision belongs in one place.
     var d = _acctData || _briefData();
     var solo = _ensureAnalystSolo((d && d.companies) || []);
     var soloCo = ((d && d.companies) || []).filter(function (c) { return String(c.co) === String(solo); })[0] || null;
@@ -13727,12 +13866,15 @@
       // resolver every other analyst surface reads, so the ask box and the day-brief
       // above it can never be grounded on two different "what is on screen" answers.
       : _analystPrompt(q, _analystTxFacts(_analystTxStats(), focusPeriod || _analystViewedPeriod(), ccy, solo, _scrub));
-    rrFetch('api/v1/ai/explain', { method: 'POST', body: { prompt: prompt } }).then(function (r) {
-      var txt = (r && r.text) ? String(r.text).trim() : '';
-      if (ans) ans.textContent = txt || 'No answer came back — try rephrasing.';
-    }).catch(function () {
-      if (ans) ans.textContent = 'Could not reach the AI just now. Try again in a moment.';
-    }).then(function () { _acctAsking = false; });
+    // VLC-63 increment 2. aiExplain owns the tier and configured checks, and its
+    // `why` replaces the hand-written catch message -- one sentence per reason,
+    // written once. The earlier `if (_recsummaryLevel() === 'off') return;` above
+    // left the panel showing whatever it last held, which is the silent-refusal
+    // shape the owner overruled.
+    aiExplain(prompt).then(function (r) {
+      if (ans) ans.textContent = r.ok ? (r.text || 'No answer came back — try rephrasing.') : r.why;
+      _acctAsking = false;
+    });
   }
   // Recommendation-led render. Deterministic lead shows instantly; the AI why/how
   // enriches a beat later (signature-guarded so it doesn't refire on benign
@@ -15054,15 +15196,18 @@
       + 'Facts (the ONLY facts you may use, verbatim and rounded):\n' + lines.join('\n')
       + '\nRound amounts (e.g. "$18.5K"). One or two sentences means one line — do not break it into bullets.\n'
       + (window.RRV8 && RRV8.AI_REGISTER ? RRV8.AI_REGISTER : '');
-    // AI-tier gate: Off = no AI narrative; hide the summary strip entirely.
-    if (_recsummaryLevel && _recsummaryLevel() === 'off') { el.hidden = true; el.classList.remove('is-shown'); return; }
+    // ⚠ THIS USED TO HIDE THE STRIP when the tier was Off, and that is the
+    // behaviour the owner overruled 2026-09-15: stay visible and say why. The
+    // tier decision now belongs to aiExplain() alone — one decider, one renderer.
     el.hidden = false; el.classList.add('is-shown');
     el.innerHTML = tag + '<span class="ws-ai-summary-text">Reading the entry…</span>';
-    rrFetch('api/v1/ai/explain', { method: 'POST', body: { prompt: prompt } }).then(function (r) {
-      var txt = (r && r.text) ? String(r.text).trim() : '';
-      if (!txt) { el.hidden = true; el.classList.remove('is-shown'); return; }
-      el.innerHTML = tag + '<span class="ws-ai-summary-text">' + esc(txt) + '</span>';
-    }).catch(function () { el.hidden = true; el.classList.remove('is-shown'); });
+    // VLC-63 increment 2. This site WAS tier-guarded a few lines up, and that
+    // guard hid the strip — same defect as the offset-entry summary: hiding makes
+    // "switched off" read identically to "nothing to summarise".
+    aiExplain(prompt).then(function (r) {
+      if (!r.ok) { _oeAiUnavailable(el, tag, r); return; }
+      el.innerHTML = tag + '<span class="ws-ai-summary-text">' + esc(r.text) + '</span>';
+    });
   }
   // Money and Explanation for the P0911 Account-Distribution columns. Sign direction
   // is the accountant's to confirm against their P0911 setup (flagged on the sheet) —
@@ -15409,15 +15554,27 @@
     // identical prompt today, and keying on the boolean would silently collide them
     // the day that stops being true. One extra capture position is the cheaper error.
     var _acTier = (typeof _recsummaryLevel === 'function') ? _recsummaryLevel() : 'full';
-    var _acUrl = 'api/v1/ai/explain'
-      + ((window.RRV8 && RRV8.aiCtx)
-          ? ('?ctx=' + RRV8.aiCtx('auditcover-' + _acTier, f.co, f.per))
-          : '');
-    return rrFetch(_acUrl, { method: 'POST', body: { prompt: prompt } })
-      .then(function (r) { return (r && r.text) ? String(r.text).trim() : ''; }).catch(function () { return ''; });
+    var _acCtx = (window.RRV8 && RRV8.aiCtx)
+      ? RRV8.aiCtx('auditcover-' + _acTier, f.co, f.per) : '';
+    // VLC-63 increment 2. Returns '' on any unavailable reason, exactly as before
+    // — this one feeds an Excel/PDF audit cover, not a screen element, and a
+    // reason sentence printed into an exported workbook would be noise in a
+    // document the reader cannot act on. The REASON is surfaced once, by the
+    // caller, rather than once per company. See _auditAiSummaries below.
+    return aiExplain(prompt, { ctx: _acCtx }).then(function (r) { return r.ok ? r.text : ''; });
   }
   function _auditAiSummaries(cos, per) {
-    if (typeof _recsummaryLevel === 'function' && _recsummaryLevel() === 'off') return Promise.resolve({});
+    // ⚠ THE TIER GATE THAT WAS HERE IS GONE, and this is the one place in the
+    // migration where the change is NOT "say why on screen". This fans out one
+    // call per company to build an exported audit cover. Returning {} early was
+    // correct and stays correct — aiExplain now refuses each call individually
+    // and each returns '', so the cover prints without AI prose exactly as
+    // before. What changed is that the refusal is decided in ONE place.
+    //
+    // Deliberately NOT surfacing a reason sentence per company into an exported
+    // workbook: it would repeat once per row in a document the reader cannot act
+    // on, which is the noise the all-signal rule exists to keep out. The operator
+    // sees the reason on the SCREEN affordances instead.
     var scrub = (typeof _recsummaryLevel === 'function' && _recsummaryLevel() === 'scrubbed');
     var jobs = cos.map(function (c, i) { return _auditCoSummary(_auditCoFacts(c, per), scrub, i).then(function (txt) { return { co: c.co, txt: txt }; }); });
     var all = Promise.all(jobs).then(function (arr) { var m = {}; arr.forEach(function (x) { m[x.co] = x.txt; }); return m; });
@@ -16437,11 +16594,20 @@
       // was missing besides the company — split it rather than thread a new arg.
       var _wlPer = String(sig || ''), _wlBar = _wlPer.indexOf('|');
       _wlPer = _wlBar >= 0 ? _wlPer.slice(_wlBar + 1) : '';
-      var _wlUrl = 'api/v1/ai/explain'
-        + ((window.RRV8 && RRV8.aiCtx) ? ('?ctx=' + RRV8.aiCtx('wlcause-' + exposure, c.co, _wlPer)) : '');
-      rrFetch(_wlUrl, { method: 'POST', body: { prompt: prompt } }).then(function (r) {
-        var txt = (r && r.text) ? String(r.text).trim() : '';
-        if (!txt) return;
+      var _wlCtx = (window.RRV8 && RRV8.aiCtx) ? RRV8.aiCtx('wlcause-' + exposure, c.co, _wlPer) : '';
+      // VLC-63 increment 2. The `exposure === 'off'` return at the top of this
+      // function still stands — it is the ONE case where refusing before the loop
+      // is right, because this fans out one call per company and the cards carry
+      // deterministic content without it. aiExplain refuses again per call, which
+      // is belt-and-braces rather than duplication: it also covers configured:false,
+      // which `exposure` knows nothing about.
+      aiExplain(prompt, { ctx: _wlCtx }).then(function (r) {
+        if (!r.ok) {
+          var eu = document.querySelector('[data-wl-cause="' + c.co + '"]');
+          if (eu && sig === _wlCurSig) { eu.textContent = r.why; eu.classList.add('is-unavailable'); }
+          return;
+        }
+        var txt = r.text;
         _wlCauseCache[c.co] = { sig: sig, txt: txt };   // cached → survives repaints (the card rebuilds from this)
         if (sig !== _wlCurSig) return;   // a newer render (different tier/period) owns the cards now
         var parts = _wlSplitRec(txt);
@@ -16995,15 +17161,21 @@
       + '• For a how-to or "what does this mean" question, answer in 2-4 plain sentences from the definitions and guidance above — no bullets.\n'
       + 'Round amounts (e.g. "$29K"). Ground any figures ONLY in the facts above (if a specific number is not there, say so). This surface uses "• " for its bullets, which OVERRIDES the "- " default below.\n'
       + (window.RRV8 && RRV8.AI_REGISTER ? RRV8.AI_REGISTER : '');
-    rrFetch('api/v1/ai/explain', { method: 'POST', body: { prompt: prompt } }).then(function (r) {
-      var raw = (r && r.text) ? String(r.text).trim() : '';
-      var doc = _aiExtractDocs(raw);   // pull + strip the @@DOCS@@ line first
+    // VLC-63 increment 2. `why` replaces the hand-written catch message, so the
+    // three unavailable reasons read as three different facts instead of one
+    // generic "could not reach" that was wrong for two of them.
+    aiExplain(prompt).then(function (r) {
+      if (!r.ok) {
+        if (ans) ans.textContent = r.why;
+        _aiRenderDocStrip(ans && ans.parentNode, [], 'acctDocStrip');
+        _acctAsking = false;
+        return;
+      }
+      var doc = _aiExtractDocs(r.text);   // pull + strip the @@DOCS@@ line first
       var txt = _acctRunAiAction(doc.text);   // execute + strip any @@ACTION ...@@ directive
       if (ans) ans.textContent = txt || 'No answer came back — try rephrasing.';
       if (txt) _acctConvo = { sig: _sig, q: q, a: txt };   // remember this turn so the next question can be a follow-up
       _aiRenderDocStrip(ans && ans.parentNode, txt ? doc.slugs : [], 'acctDocStrip');
-    }).catch(function () {
-      if (ans) ans.textContent = 'Could not reach the AI just now. Try again in a moment.';
     }).then(function () {
       _acctAsking = false;
       if (btn) { btn.disabled = false; btn.textContent = 'Ask'; }
@@ -17090,10 +17262,23 @@
       + 'Speak to the accountant in 2-4 plain sentences: name the account(s) driving the out-of-balance, say plainly whether it is material or immaterial timing/dust (cite the % of the GL balance), and give the ONE thing to do — or say clearly that no action is needed this period. Round amounts (e.g. "$8.4K"). Continuous prose here, not bullets.\n'
       + (window.RRV8 && RRV8.AI_REGISTER ? RRV8.AI_REGISTER : '');
     _acctAnalyzeReq = key;
-    rrFetch('api/v1/ai/explain', { method: 'POST', body: { prompt: prompt } }).then(function (r) {
+    // VLC-63 increment 2. This fires automatically rather than on a click, and a
+    // deterministic lead is ALREADY on screen before it runs — so an unavailable
+    // reason is APPENDED to that lead rather than replacing it. Overwriting a real
+    // answer the analyst can use, with an explanation of why a second one is
+    // missing, would be the wrong trade.
+    //
+    // `error` is the exception: it keeps the lead untouched, exactly as the old
+    // .catch did. A transient reach failure on a call nobody asked for is not news.
+    aiExplain(prompt).then(function (r) {
       if (_acctAnalyzeReq !== key) return;             // user drilled elsewhere — drop this stale answer
-      var raw = (r && r.text) ? String(r.text).trim() : '';
-      var doc = _aiExtractDocs(raw);
+      if (!r.ok) {
+        if (ans && r.reason !== 'error') {
+          ans.textContent = String(ans.textContent || '').trim() + ' ' + r.why;
+        }
+        return;
+      }
+      var doc = _aiExtractDocs(r.text);
       var txt = _acctRunAiAction(doc.text);
       if (txt) {
         if (ans) ans.textContent = txt;
@@ -17101,7 +17286,7 @@
         _acctConvo = { sig: _sig, q: 'Analyze Co ' + co + '\'s out-of-balance (account roll-forward)', a: txt };   // seed follow-up continuity
         _aiRenderDocStrip(ans && ans.parentNode, doc.slugs, 'acctDocStrip');
       }
-    }).catch(function () { /* keep the deterministic lead already shown */ });
+    });
   }
   // ---- Admin briefing (left rail, Administrator view) --------------------
   // A welcome overview of the administrator's job + either the task cards that
@@ -17263,18 +17448,24 @@
       + 'Question: ' + q + '\n'
       + 'Answer in 2-4 short, plain-English sentences — or up to 4 brief bullets, each starting with "• ", if the question asks for a list. Calm and factual, never alarmist. Answer how-to and procedure questions from the admin policy above, and any statement about current state ONLY from the status above; if the answer is in neither, say what you can see and where to look. No JDE table names, no SQL, no endpoint or file names, no preamble, no headings, no markdown, no asterisks, no bold.\n'
       + _aiDocCatalogPrompt('token', 'admin');
-    rrFetch('api/v1/ai/explain', { method: 'POST', body: { prompt: prompt } }).then(function (r) {
+    // VLC-63 increment 2. The tenth and last. `why` replaces the hand-written
+    // catch message; it goes through the same type-reveal as a real answer, so an
+    // unavailable reason reads as a reply to the pill the administrator clicked
+    // rather than as an error that appeared beside it.
+    aiExplain(prompt).then(function (r) {
       if (gen !== _adminAskGen) return;   // a newer pill won — drop this answer
-      var raw = (r && r.text) ? String(r.text).trim() : '';
-      var doc = _aiExtractDocs(raw);      // pull + strip the @@DOCS@@ line
+      if (!r.ok) {
+        _aiTypeReveal(ans, r.why, function () { return gen === _adminAskGen; }, function () {
+          _aiRenderDocStrip(ans && ans.parentNode, [], 'adminAnsDocStrip');
+        });
+        return;
+      }
+      var doc = _aiExtractDocs(r.text);   // pull + strip the @@DOCS@@ line
       var txt = doc.text;
       var finalTxt = txt || 'No answer came back — try rephrasing.';
       _aiTypeReveal(ans, finalTxt, function () { return gen === _adminAskGen; }, function () {
         _aiRenderDocStrip(ans && ans.parentNode, txt ? doc.slugs : [], 'adminAnsDocStrip');
       });
-    }).catch(function () {
-      if (gen !== _adminAskGen) return;
-      if (ans) ans.textContent = 'Could not reach the AI just now. Try again in a moment.';
     });
   }
   // Wire the pill bar once (delegated) — click a pill → ask; the × dismisses.
@@ -17503,6 +17694,11 @@
   // then fires the reloads, which repaint each surface for the new DB.
   function resetScopedState() {
     // JS caches that drive the analyst dots, the install strip, and readiness.
+    _aiHealthReset();           // AI availability is per-CLIENT, and a DB switch can switch clients.
+                                // Without this, aiExplain would answer "not configured" (or the reverse)
+                                // for the database the operator just left. The cache is keyed by db name
+                                // so a stale entry cannot be served, but clearing it here keeps the first
+                                // read after a switch honest rather than relying on that key alone.
     _invRows = null;            // roll-forward rows → Account Roll Forward + Cardex Variance dots
     _acctData = null;           // shared brief/recon cache (analyst + accountant). MUST clear on DB switch:
                                 // the bands read `_acctData || _briefData()`, so a stale _acctData paints the
@@ -17601,13 +17797,19 @@
   function loadMessages() {
     var host = document.getElementById('msgCenter');
     if (!host) return;
-    var base = (window.RR_CONFIG && RR_CONFIG.valcBase) || 'http://localhost:8080';
-    fetch(base + '/api/v1/messages', { headers: prodHeaders(), cache: 'no-store' })
+    // RRDB.valcFetch rejects with the named gap when this installation has no
+    // VALC address, and the existing catch keeps Home unblocked either way.
+    // ⚠ THIS SITE DELIBERATELY DOES NOT SHOW THE GAP, unlike every other VALC
+    // call site in UI-171. The Message Center is documented above as never
+    // blocking Home, and Home reports the same gap anyway on its rrFetch calls
+    // (the banner), so painting it twice here would be noise. `base` is gone
+    // from renderMessages because the dismiss call resolves it the same way.
+    window.RRDB.valcFetch('/api/v1/messages', { headers: prodHeaders(), cache: 'no-store' })
       .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-      .then(function (msgs) { renderMessages(host, base, msgs || []); })
+      .then(function (msgs) { renderMessages(host, msgs || []); })
       .catch(function () { /* never block Home on a message fetch */ });
   }
-  function renderMessages(host, base, msgs) {
+  function renderMessages(host, msgs) {
     if (!msgs.length) { host.hidden = true; host.innerHTML = ''; return; }
     host.innerHTML = msgs.map(function (m) {
       var sev = (m.severity === 'warning' || m.severity === 'critical') ? m.severity : 'info';
@@ -17626,7 +17828,7 @@
       b.addEventListener('click', function () {
         var id = b.getAttribute('data-id');
         b.disabled = true;
-        fetch(base + '/api/v1/messages/' + encodeURIComponent(id) + '/dismiss', { method: 'POST', headers: prodHeaders() })
+        window.RRDB.valcFetch('/api/v1/messages/' + encodeURIComponent(id) + '/dismiss', { method: 'POST', headers: prodHeaders() })
           .then(function (r) {
             // Only retire the card when the server confirmed the dismissal —
             // otherwise leave it (it'll still be there on reload) + re-enable.

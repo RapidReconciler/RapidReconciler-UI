@@ -88,8 +88,10 @@ window.RR_CONFIG = {
 // per-DB data-services agent owns customer-specific data
 // (rcompanies, rtransactions, ritems, ...); mini-VALC owns the
 // cross-DB stuff (users, licensed-companies registry, deploys).
-// Areas starting with any of these prefixes go to RR_CONFIG.valcBase
-// instead of the test agent or the active DB IP.
+// Areas starting with any of these prefixes go to RRDB.valcBase()
+// instead of the test agent or the active DB IP. (It was
+// `RR_CONFIG.valcBase` read directly at every call site until UI-171,
+// 2026-09-15 — see the block comment on RRDB.valcBase below.)
 window.RR_VALC_PREFIXES = [
   // ⚠ VLC-59. `api/v1/admin/` is the GSI OPERATOR half and requires the
   // control-plane operator grant, which no customer administrator holds or
@@ -113,14 +115,16 @@ window.RR_VALC_PREFIXES = [
   // endpoint IS `api/v1/messages` (the Message Center list) and dismiss is
   // `api/v1/messages/{id}/dismiss`. One slash-less prefix covers both.
   //
-  // WHY IT IS HERE AT ALL. home.html:16788 and :16812 reach these by
-  // hand-building the URL off RR_CONFIG.valcBase, so they worked while this
-  // entry was missing. Move either call to rrFetch — the shape 22 of 23 files
-  // already use, and the obvious tidy-up — and without this line it routes to
-  // the data-services agent instead and answers 404, with nothing failing at
-  // build time and nothing saying why at runtime. Found by assertion A5 of
-  // Tools/v8-callsites.py, which reports every VALC path this table cannot
-  // route.
+  // WHY IT IS HERE AT ALL, AND THE REASON SURVIVED UI-171 UNCHANGED. The two
+  // Message Center calls (home.html:17612 and :17636) address VALC DIRECTLY —
+  // they used to hand-build the URL off RR_CONFIG.valcBase and now call
+  // RRDB.valcFetch, and NEITHER shape consults this table. So they worked while
+  // this entry was missing, and they still would. Move either call to rrFetch —
+  // the shape 22 of 23 files already use, and the obvious tidy-up — and without
+  // this line it routes to the data-services agent instead and answers 404,
+  // with nothing failing at build time and nothing saying why at runtime. Found
+  // by assertion A5 of Tools/v8-callsites.py, which reports every VALC path
+  // this table cannot route.
   'api/v1/messages'
 ];
 
@@ -594,13 +598,95 @@ window.RRDB = (function () {
       ? (loc.protocol + '//' + loc.host)
       : '';
   }
+
+  /* ---------------------------------------------------------------------
+   * valcBase / valcGap / valcFetch -- UI-171, 2026-09-15. The VALC half of
+   * the same migration agentBase() went through above.
+   *
+   * THE DEFECT, MEASURED. Before this block there was NO resolver at all:
+   * `RR_CONFIG.valcBase || 'http://localhost:8080'` was hand-rolled at 24
+   * call sites across 17 files under RRV8/ (grep the repo history for the
+   * literal). Two consequences, and the second is the one that ships:
+   *
+   *   1. A DIRECT RR_CONFIG READ, 24 times. RR_ENVIRONMENTS[mode] was
+   *      invisible to every one of them, which is the whole point of that
+   *      table.
+   *   2. A HOST-SHAPED LAST RESORT, 24 times. RR_ENVIRONMENTS.qa.valcBase
+   *      and .prod.valcBase are both null ON PURPOSE (see their entries),
+   *      so on a customer deployment every one of those 24 sites resolved
+   *      to the CUSTOMER's own loopback, where nothing is listening. A
+   *      missing setting became a plausible-wrong call instead of a
+   *      reported gap -- the defect VLC-39 gap 2 removed from login.html.
+   *
+   * ⚠ THIS DOES NOT FALL BACK TO THE PAGE ORIGIN, AND agentBase() ABOVE
+   * DOES. That asymmetry is deliberate and it is the whole design point.
+   * The agent SERVES the V8 app, so in production the page's own origin is
+   * the right answer for it. VALC is a DIFFERENT HOST in production -- it
+   * is the sign-in service login.html posts to, not the per-database data
+   * service -- so a page-origin fallback here would be a confident wrong
+   * answer, the exact failure this row exists to remove. When nothing is
+   * configured, valcBase() returns '' and the caller stops. That matches
+   * how authBase already behaves: login.html disables its submit buttons
+   * rather than posting a password at a host it cannot name.
+   *
+   * ONE PRODUCER OF THE SENTENCE, not twenty-four. valcGap() builds the
+   * only "there is no VALC address" message in the application, and it
+   * names the sign-in service -- the SAME words login.html:1075 and
+   * HelpDesk/connection-check.html:779 already use for this host, because
+   * three surfaces inventing three names for one setting is how a support
+   * call goes sideways.
+   *
+   * WHERE THE READER ACTUALLY SEES IT (a gate whose message has no sink is
+   * not a report -- RRENV.missing() shipped with zero call sites once):
+   *   - Every page's rrFetch returns Promise.reject(RRDB.valcGap(area)).
+   *     The Error carries NO `.status` and is not a TypeError, so
+   *     RRV8.fetchErrorMessage (sidebar.js) falls through every status
+   *     branch to `return raw` and hands the sentence back UNCHANGED to
+   *     the page's own error banner / toast. Asserted end-to-end by
+   *     Tools/test-valc-base-resolution.js section 3, which runs the real
+   *     fetchErrorMessage sliced out of sidebar.js.
+   *   - RRENV.missing() already lists 'valcBase', so login.html's
+   *     diagnostics block and connection-check probe C name it too.
+   * If you change the message, re-run that test: it asserts the sink
+   * passes it through, not merely that a producer exists.
+   * ------------------------------------------------------------------ */
+  function valcBase() {
+    return RRENV.get('valcBase') || '';
+  }
+  /** The ONE "this installation has no VALC address" message. */
+  function valcGap(area) {
+    var ep = String(area == null ? '' : area).replace(/^\/+/, '');
+    var e = new Error(
+      'This copy of RapidReconciler has no address for the sign-in service, so ' +
+      (ep ? 'the request for ' + ep + ' was not sent' : 'this request was not sent') +
+      '. Nothing was contacted — this is a setup gap on the installation, not ' +
+      'a problem with your network, your sign-in, or this database. Nothing on ' +
+      'this page can set it: contact GSI support.');
+    /* Machine-readable, for a caller that wants to branch rather than print.
+     * Deliberately NOT `status`: fetchErrorMessage keys off `.status` being a
+     * real HTTP code, and stamping one here would borrow another branch's
+     * remedy. */
+    e.rrUnconfigured = 'valcBase';
+    return e;
+  }
+  /** fetch() against a VALC path, or a rejected promise naming the gap.
+   *  Returns the Response promise fetch() would, so a call site keeps its
+   *  own .then/.catch handling unchanged. */
+  function valcFetch(path, init) {
+    var p = String(path == null ? '' : path).replace(/^\/+/, '');
+    var b = valcBase();
+    if (!b) return Promise.reject(valcGap(p.split('?')[0]));
+    return fetch(b + '/' + p, init);
+  }
+
   function setActive(n) {
     if (!n) return;
     try { localStorage.setItem('rrv8.activeDb', n); } catch (_) {}
     var s = _session();
     if (s) for (var i = 0; i < s.dbs.length; i++) if (s.dbs[i] && s.dbs[i].n === n) { s.activeDbIndex = i; break; }
   }
-  return { dbs: dbs, index: index, active: active, name: name, agentBase: agentBase, setActive: setActive };
+  return { dbs: dbs, index: index, active: active, name: name, agentBase: agentBase,
+           valcBase: valcBase, valcGap: valcGap, valcFetch: valcFetch, setActive: setActive };
 })();
 
 /*
