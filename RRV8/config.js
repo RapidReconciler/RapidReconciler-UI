@@ -350,6 +350,36 @@ window.RR_ENVIRONMENTS = {
     // resolves, connects, and then 404s: the "looks configured" trap this entry
     // was written to avoid, in a new shape.
     //
+    // ⚠ RE-PROBED 2026-09-15 ON A PATH READ OUT OF SOURCE, AND IT IS STRONGER.
+    // Status alone was a weak discriminator, because a 404 can come from a
+    // gateway with no rule OR from an app that simply has no handler for `/`.
+    // The path that separates them is the login mapping itself --
+    // `@PostMapping("/resource/client/login")`, AuthController.java:346 in
+    // RapidReconciler-Valc, documented as the legacy contract in
+    // GSIRRTech/v359-vs-new-agent.html:327. A GET on it asks "does this mapping
+    // exist here", and the two answers are different KINDS of answer:
+    //
+    //     GET rrvalcadmin-prod/resource/client/login
+    //         -> 405 Method Not Allowed, `Allow: POST`, Spring JSON body
+    //            (the handler is there and is POST-only -- an app replied)
+    //     GET rrvalcadmin-qa/resource/client/login
+    //         -> 404, Server: Microsoft-Azure-Application-Gateway/v2, EMPTY body
+    //            (no backend rule -- the gateway replied for itself)
+    //
+    // The control is capable of a different answer and gave one, twice over:
+    // the same prod host 404s (Spring JSON, no gateway header) on
+    // /api/v1/auth/ping, so the 405 is specific to a mapping that exists, not a
+    // blanket response. THE CONCLUSION IS UNCHANGED AND NOW MEASURED RATHER
+    // THAN INFERRED: no VALC is published behind the QA admin name.
+    //
+    // One correction to the parenthesis above, found the same way. rrvalc-qa
+    // and rrsso-qa are NOT gateway 404s -- they return a Spring whitelabel JSON
+    // 404 and an html 404 respectively, with no gateway Server header, so
+    // SOMETHING is routed behind those two names. It proves nothing about a QA
+    // VALC either way, because their prod counterparts answer byte-alike, which
+    // is precisely why those pairs cannot carry the finding. Only the admin
+    // pair discriminates.
+    //
     // Populate when a QA VALC is actually published, not when DNS appears --
     // those turned out to be different events. See project_valc_qa_publish_readiness.
     // Null keeps the gap loud: RRENV.missing() names it and login.html renders it.
@@ -367,16 +397,38 @@ window.RR_ENVIRONMENTS = {
     // whatever host the committed file happened to carry. That silent POST is
     // exactly what VLC-39 gap 2 measured.
     //
-    // OPEN, NOT DECIDED: there IS a plausible shared default. The allowlist in
+    // ⚠ THE "PLAUSIBLE SHARED DEFAULT" THAT USED TO BE PROPOSED HERE NAMED THE
+    // WRONG HOST. MEASURED 2026-09-15. This comment read: the allowlist in
     // GSIRRSales/rr-installation-prep.html names `rrvalc-prod.getgsi.com:443`
-    // as "All customers", which is the shape of a single GSI-hosted sign-in
-    // service rather than a per-customer one. If that is in fact the V8 login
-    // root, putting `https://rrvalc-prod.getgsi.com` here CLOSES gap 2 instead
-    // of merely reporting it. NOT set on this pass because it has not been
-    // measured end to end — nobody has confirmed that host answers
-    // POST /api/v1/auth/login for a V8 client, and a plausible-but-wrong
-    // default is the exact failure mode this whole tombstone is about. Owner
-    // ruling + one live probe closes it.
+    // as "All customers", so if that is the V8 login root, putting
+    // `https://rrvalc-prod.getgsi.com` here closes VLC-39 gap 2. It invited the
+    // next person to set a value, and the value it named does not serve login.
+    //
+    // Probed on the login mapping itself rather than on reachability --
+    // `@PostMapping("/resource/client/login")`, AuthController.java:346 in
+    // RapidReconciler-Valc, documented as the legacy contract in
+    // GSIRRTech/v359-vs-new-agent.html:327. GET it and an app that has the
+    // handler must answer 405, an app that does not must answer 404:
+    //
+    //     rrvalc-prod.getgsi.com       -> 404 (Spring JSON, path echoed)
+    //     rrvalcadmin-prod.getgsi.com  -> 405 Method Not Allowed, `Allow: POST`
+    //
+    // So the host that actually mints tokens in production today is
+    // rrvalcadmin-prod, which is also the one RRUniversity/agent-upgrade.html:297
+    // documents to customers as the administration console URL, moved there off
+    // `rr-valc-spa.cloudapp.net`. rrvalc-prod is on the allowlist for a
+    // different reason -- rr-installation-prep.html:2177 has it carrying the AI
+    // Assistant traffic, which leaves the BROWSER rather than the app server.
+    // Allowlisted-for-all-customers and serves-sign-in are two different
+    // properties, and reading the first as the second is how the wrong host got
+    // proposed here.
+    //
+    // STILL NOT SET, AND THE REASON IS NOW NARROWER. rrvalcadmin-prod is the
+    // legacy VALC, not VALC 2.0: it 404s on `/api/v1/auth/ping`
+    // (AuthController.java:652), which VALC 2.0 serves and the legacy stack
+    // never had. Hardcoding a legacy host as the V8 default would outlive the
+    // cutover it is aimed at. Owner ruling decides whether a shared default
+    // belongs here at all; what is settled is that it would not be rrvalc-prod.
     authBase:      null,
     valcBase:      null,
     // No test agent in production: the agent serves the V8 app, so
@@ -504,7 +556,43 @@ window.RRDB = (function () {
   function agentBase() {
     var d = active();
     if (d && d.ip) return (/^(?:localhost|127\.0\.0\.1)\b/i.test(d.ip) ? 'http://' : 'https://') + d.ip;
-    return (window.RR_CONFIG && window.RR_CONFIG.testAgentBase) || 'http://localhost:34537';
+    /* UI-171, 2026-09-15. This line used to end `|| 'http://localhost:34537'`,
+     * and that literal is the same defect VLC-39 gap 2 removed from login.html,
+     * one layer down: a host-shaped last resort that turns a MISSING setting
+     * into a plausible-wrong call instead of a reported gap. It matters here
+     * more than anywhere else in the file, because this function is the
+     * canonical agent resolver -- 20+ V8 pages call `window.RRDB.agentBase()`
+     * unguarded and concatenate a path onto it -- so one unset value reaches
+     * every page at once.
+     *
+     * It also contradicted this file's OWN stated prod design. The comment on
+     * RR_ENVIRONMENTS.prod.testAgentBase says "No test agent in production: the
+     * agent serves the V8 app, so ... the page's own origin ... is correct",
+     * and HelpDesk/connection-check.html:406 implements exactly that for
+     * COMMS_BASE. This function did something else: it called the CUSTOMER's
+     * own loopback, where nothing is listening. Two readers of one setting,
+     * disagreeing, with only one of them documented.
+     *
+     * Resolution now goes through RRENV (so a value supplied only by
+     * RR_ENVIRONMENTS[mode] is found), and the last resort is the page origin,
+     * matching connection-check. On this dev box nothing changes: RR_CONFIG
+     * sets testAgentBase, and explicit-wins means RRENV returns that same value.
+     *
+     * No `window.RRENV ? ... : RR_CONFIG.testAgentBase` guard here, unlike
+     * login.html and connection-check.html. Those two load config.js as a
+     * SEPARATE file and can be served an old cached copy that predates RRENV,
+     * so their guard is real. RRDB is defined in THIS file, below RRENV, and
+     * cannot run before it -- a guard would be a dead branch, and a dead
+     * branch reading RR_CONFIG directly is exactly the second reader this
+     * change exists to remove. Tools/test-agent-base-resolution.js section 2
+     * asserts no such read comes back.
+     */
+    var t = RRENV.get('testAgentBase');
+    if (t) return t;
+    var loc = window.location;
+    return (loc && typeof loc.protocol === 'string' && loc.protocol.indexOf('http') === 0)
+      ? (loc.protocol + '//' + loc.host)
+      : '';
   }
   function setActive(n) {
     if (!n) return;
@@ -623,7 +711,7 @@ window.RRV8 = window.RRV8 || {};
   window.RRV8.logActivity = function (event, detail) {
     try {
       var base = (window.RRDB && RRDB.agentBase && RRDB.agentBase())
-        || (window.RR_CONFIG && RR_CONFIG.testAgentBase);
+        || (window.RRENV && RRENV.get('testAgentBase'));
       if (!base) return Promise.resolve();
       var h = { 'Content-Type': 'application/json;charset=UTF-8', 'Accept': 'application/json' };
       try { var t = localStorage.getItem('rrv8.token'); if (t) h['Authorization'] = 'Bearer ' + t; } catch (_) {}
@@ -653,7 +741,7 @@ window.RRV8 = window.RRV8 || {};
     var base;
     try {
       base = (window.RRDB && RRDB.agentBase && RRDB.agentBase())
-        || (window.RR_CONFIG && RR_CONFIG.testAgentBase);
+        || (window.RRENV && RRENV.get('testAgentBase'));
     } catch (_) { base = null; }
     if (!base) {
       return Promise.reject(new Error('no Services connection, so nothing could record who did this'));
@@ -1658,10 +1746,21 @@ window.RRV8 = window.RRV8 || {};
           { a: 'PER.sameaccount', t: 'Account is part of that grain, so both rows sit on the same account. This is not an account mismatch.' },
           { a: 'PER.ungrouped', t: 'Single document, not a leg of a transfer, direct-ship or intercompany group.' }
         ],
+        // TRIMMED 2026-09-15 (owner: "much too much information on this card. It is too
+        // complex for offsetting transactions"). What was here was three long paragraphs
+        // that read IDENTICALLY on every Period Mismatch card in the fleet, and the third
+        // of them carried the only line that changes what the analyst should do -- that a
+        // pair several months apart is not a cut-off. A caution nobody finishes reading is
+        // not a caution.
+        //
+        // That line is now COMPUTED PER CARD and rendered above the fix list, from the
+        // offset periods the classifier already writes into Comment (home.html's
+        // _offsetSummary). It states the actual gap for the actual rows, and links to the
+        // partner card. Generic prose became a per-card fact, which is the trade the
+        // all-signal-no-noise rule asks for.
         context: [
-          'Not tested: the dates themselves. No item-ledger date is compared against a G/L date anywhere in the classifier. What is tested is that the variance offsets across two months on one account and batch, which is the SHAPE of a cut-off. Confirm the two dates on one document before you take it to whoever owns the run.',
-          'Not tested: whether both sides posted. For the row in front of you the amounts do NOT agree — they agree only after both months are added together. The usual shape is one leg carrying only a cardex amount and the other only a GL amount, but mixed pairs occur, so read both rows.',
-          'Not every row on this card is timing. Most pairs sit one month apart, which is a period-end straddle, but some are several months apart and one that far apart is not a cut-off. Read the two periods on the row before you call it one.'
+          'No date is compared anywhere in this claim. What is tested is that the variance offsets across two months on one account and batch — the shape of a cut-off, not a cut-off. Confirm the two dates on one document before you take it to whoever owns the run.',
+          'Both sides posting is not tested. These amounts agree only once the two months are added together; usually one leg carries the cardex amount and the other the GL amount.'
         ],
         found: [
           'Likely cause, not yet confirmed: a GL Date Source option is set to the invoice or promised date instead of the transaction date.',
@@ -1670,8 +1769,7 @@ window.RRV8 = window.RRV8 || {};
         fix: [
           'Set GL Date Source to follow the transaction date: P4312 on PO receipts, P4314 on voucher match, the Defaults tab of R42800 on Sales Update, the GL Date option in R41413 and R41610 on cycle counts.',
           'Schedule those runs to finish before the period closes.',
-          'Re-run both periods. The document should net to zero across the two.',
-          'A gap still there after the next close is a posting error, not a cut-off.'
+          'Re-run both periods. The document should net to zero across the two.'
         ]
       }
     },
@@ -3510,7 +3608,7 @@ window.RRV8 = window.RRV8 || {};
   function _base() {
     try {
       return (window.RRDB && RRDB.agentBase && RRDB.agentBase())
-        || (window.RR_CONFIG && RR_CONFIG.testAgentBase) || '';
+        || (window.RRENV && RRENV.get('testAgentBase')) || '';
     } catch (_) { return ''; }
   }
   function _auth(h) {
@@ -3707,7 +3805,7 @@ window.RRV8._failGatedWrite = function (r, revert) {
   var _cache = {};   // "<dbName>|<company>" -> { map: { "<token>": record } }
   function _db() { try { return (window.RRDB && RRDB.name && RRDB.name()) || '_'; } catch (_) { return '_'; } }
   function _base() {
-    try { return (window.RRDB && RRDB.agentBase && RRDB.agentBase()) || (window.RR_CONFIG && RR_CONFIG.testAgentBase) || ''; }
+    try { return (window.RRDB && RRDB.agentBase && RRDB.agentBase()) || (window.RRENV && RRENV.get('testAgentBase')) || ''; }
     catch (_) { return ''; }
   }
   function _auth(h) { try { var t = localStorage.getItem('rrv8.token'); if (t) h['Authorization'] = 'Bearer ' + t; } catch (_) {} return h; }
@@ -3815,7 +3913,7 @@ window.RRV8 = window.RRV8 || {};
   var _cache = {};   // "<dbName>|<company>" -> { map: { "<co>|<period>": record } }
   function _db() { try { return (window.RRDB && RRDB.name && RRDB.name()) || '_'; } catch (_) { return '_'; } }
   function _base() {
-    try { return (window.RRDB && RRDB.agentBase && RRDB.agentBase()) || (window.RR_CONFIG && RR_CONFIG.testAgentBase) || ''; }
+    try { return (window.RRDB && RRDB.agentBase && RRDB.agentBase()) || (window.RRENV && RRENV.get('testAgentBase')) || ''; }
     catch (_) { return ''; }
   }
   function _auth(h) { try { var t = localStorage.getItem('rrv8.token'); if (t) h['Authorization'] = 'Bearer ' + t; } catch (_) {} return h; }
@@ -3953,7 +4051,7 @@ window.RRV8 = window.RRV8 || {};
   var _cache = {};   // dbName -> { map: {...}, ok: bool, why: '' }
   function _db() { try { return (window.RRDB && RRDB.name && RRDB.name()) || '_'; } catch (_) { return '_'; } }
   function _base() {
-    try { return (window.RRDB && RRDB.agentBase && RRDB.agentBase()) || (window.RR_CONFIG && RR_CONFIG.testAgentBase) || ''; }
+    try { return (window.RRDB && RRDB.agentBase && RRDB.agentBase()) || (window.RRENV && RRENV.get('testAgentBase')) || ''; }
     catch (_) { return ''; }
   }
   function _auth(h) { try { var t = localStorage.getItem('rrv8.token'); if (t) h['Authorization'] = 'Bearer ' + t; } catch (_) {} return h; }
@@ -4087,7 +4185,7 @@ window.RRV8 = window.RRV8 || {};
   var _cache = {};   // "<dbName>|<company>" -> { map: { "<co>|<period>": record } }
   function _db() { try { return (window.RRDB && RRDB.name && RRDB.name()) || '_'; } catch (_) { return '_'; } }
   function _base() {
-    try { return (window.RRDB && RRDB.agentBase && RRDB.agentBase()) || (window.RR_CONFIG && RR_CONFIG.testAgentBase) || ''; }
+    try { return (window.RRDB && RRDB.agentBase && RRDB.agentBase()) || (window.RRENV && RRENV.get('testAgentBase')) || ''; }
     catch (_) { return ''; }
   }
   function _auth(h) { try { var t = localStorage.getItem('rrv8.token'); if (t) h['Authorization'] = 'Bearer ' + t; } catch (_) {} return h; }

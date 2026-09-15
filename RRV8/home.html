@@ -1566,6 +1566,16 @@
   .alh-act.primary:hover { filter: brightness(1.12); }
   .alh-act.ghost { background: var(--bg-card); color: var(--navy); border-color: var(--rule-strong); }
   .alh-act.ghost:hover { border-color: var(--blue); color: var(--blue); }
+  /* AI-on variant of the band control. Deliberately the SAME box metrics as
+     .ghost -- padding, radius and font come from .alh-act above and are not
+     touched here -- so flipping the AI tier recolours the button in place
+     instead of reflowing the row it sits in. The blue and the sparkle are
+     lifted from .txv-aibtn (:2463) rather than invented: the Transaction
+     Variance cards got there first and two tabs should not have two different
+     ideas of what "this opens an AI reading" looks like. */
+  .alh-act.ai { background: #e6effb; color: #2b5c9e; border-color: #bcd4f2; }
+  .alh-act.ai:hover { background: #d7e6f9; border-color: #9dbfe8; }
+  .alh-act.ai svg { width: 15px; height: 15px; flex-shrink: 0; }
 
   .alh-allclear { display: flex; align-items: center; gap: 12px; background: var(--green-pale); border: 1px solid rgba(46,138,85,.24); border-radius: 12px; padding: 13px 18px; font-size: 15px; font-weight: 600; color: #2b4c39; }
   .alh-allclear .alh-cleared-tick { color: var(--green); font-weight: 800; font-size: 15px; }
@@ -2466,9 +2476,25 @@
     background: #e6effb; color: #2b5c9e; font-size: 12px; font-weight: 800;
     line-height: 1; white-space: nowrap; transition: background .12s, border-color .12s;
   }
+  /* Where the other half of a Period Mismatch pair sits. Quiet by default, because a
+     one-month straddle is the expected shape and needs no alarm; amber when the gap is
+     wider, because at that point the fix list below it is probably the wrong advice. */
+  .txv-offset { margin: 10px 0 0; padding: 9px 12px; border-radius: 8px; font-size: 13px; line-height: 1.5;
+    background: var(--bg-soft, #f4f6f9); border: 1px solid var(--rule, #dde3ec); color: var(--text); }
+  .txv-offset.is-wide { background: #fdf4e8; border-color: #e6c48f; }
+  .txv-offset-lead { margin-right: 4px; }
+  .txv-offset-lnk { display: inline-block; margin-right: 8px; font-weight: 700; color: var(--navy);
+    text-decoration: underline; text-underline-offset: 3px; }
+  .txv-offset-lnk:hover { color: var(--blue); }
+  .txv-offset-n { font-weight: 500; color: var(--text-muted); }
   .txv-aibtn svg { width: 13px; height: 13px; flex-shrink: 0; }
   .txv-aibtn:hover { background: #d7e6f9; border-color: #9dbfe8; }
   .txv-aibtn:focus-visible { outline: 2px solid var(--navy); outline-offset: 1px; }
+  /* AI-off variant. Same box, plain wording -- keeping the box is what stops the
+     card head's grid (:2433, four fixed tracks) from re-measuring when the tier
+     flips. Matches .alh-act.ghost so the off state reads the same on both tabs. */
+  .txv-aibtn.is-plain { background: var(--bg-card); color: var(--navy); border-color: var(--rule-strong); }
+  .txv-aibtn.is-plain:hover { background: var(--bg-card); border-color: var(--blue); color: var(--blue); }
   @media (prefers-reduced-motion: reduce) { .txv-aibtn { transition: none; } }
   /* .wl-top is space-between with two children. The chevron shares the RIGHT
      child with the figures rather than becoming a third, which would have pushed
@@ -6562,6 +6588,68 @@
   // full). The full four-tier ladder lives on the Manage sub-page now; Home just
   // shows the active plan name. The customer-facing labels mirror the old card.
   var AI_PLAN_LABEL = { off: 'Off', docs: 'Basic', scrubbed: 'Enhanced', full: 'Full' };
+  // ONE producer for every control that opens a destination with an AI reading
+  // behind it. The Transaction Variance card heads established the shape
+  // (.txv-aibtn, :2463) and it is worth being exact about what that shape IS: it
+  // is an <a> to the same href the plain control used. An "AI button" here NAMES
+  // what is waiting at the destination; it does not change where the click goes,
+  // and it is not an in-place explain. Wiring it as anything else would have
+  // removed the band rows' only route to their pages.
+  //
+  // Before this, the two Data Health bands said "View" to that same kind of
+  // destination while the Transaction Variance cards said "AI" -- two tabs
+  // disagreeing about what one journey is called.
+  //
+  // AI off is the one off switch an operator actually holds: RRAI.get() === 'off'
+  // (config.js:540, persisted to localStorage.rrv8.aiTier, global rather than
+  // per-DB). With AI off the sparkle is a promise the page cannot keep, so the
+  // control falls back to the wording these buttons already had.
+  //
+  // ⚠ RRAI.get() returns 'full' on ANY failure and aiIsOff() swallows a thrown
+  // RRAI the same way. The fallback direction is AI-ON, deliberately: a missing
+  // or broken RRAI must not silently strip an affordance off every card. The
+  // failure mode is a sparkle on a page whose AI is unreachable, which the
+  // destination then reports; the reverse would be a control that quietly
+  // stopped advertising a feature the customer is paying for.
+  //
+  // ⚠ This reads the TIER, not the server's `configured` flag. loadAiPlan() below
+  // knows whether the assistant is switched on server-side and throws that answer
+  // away into a label -- and it is guarded on #aiPlanTierLabel, which lives in the
+  // admin chrome, so on an analyst's Home it never even runs. Publishing server
+  // availability is VLC-63's second increment, not this change; until it exists a
+  // server with no key shows the sparkle. Recorded rather than left implicit.
+  //
+  // Repaint on tier flip is ALREADY WIRED, verified rather than assumed: the
+  // rrv8:aitierchange listener (:7975) calls renderAnalystPalette(), which calls
+  // renderAnalystWorkspace() (the Data Health bands) and renderAnalystTxVar()
+  // (the cards). No second listener, which is one fewer thing to keep in step.
+  var AI_SPARK_SVG = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 1.6l1.9 5.1a5 5 0 0 0 2.9 2.9l5.1 1.9-5.1 1.9a5 5 0 0 0-2.9 2.9L12 21.4l-1.9-5.1a5 5 0 0 0-2.9-2.9L2.1 11.5l5.1-1.9a5 5 0 0 0 2.9-2.9z"/></svg>';
+  function aiIsOff() {
+    try { return !!(window.RRAI && RRAI.get() === 'off'); } catch (_) { return false; }
+  }
+  // href    — where the control goes. Identical at every tier; callers own their
+  //           own encoding, the way they did before this producer existed.
+  // o.pill  — true for the .txv-aibtn card-head shape, false/absent for the
+  //           larger .alh-act band-row shape.
+  // o.subject — what sits at the destination, e.g. 'the model DMAAI review'. It
+  //           goes in the title and the aria-label, never in the visible label:
+  //           the visible label is two characters wide on purpose.
+  function aiOrViewBtn(href, o) {
+    o = o || {};
+    var off  = aiIsOff();
+    var subj = o.subject || 'this view';
+    // One string for both title and aria-label. A sighted user hovering and a
+    // screen-reader user tabbing should not be told two different things.
+    var desc = off ? ('Open ' + subj) : ('Open ' + subj + ' in the AI analysis view');
+    var cls  = o.pill ? ('txv-aibtn' + (off ? ' is-plain' : ''))
+                      : ('alh-act ' + (off ? 'ghost' : 'ai'));
+    var inner = off
+      ? 'View <span aria-hidden="true">&rarr;</span>'
+      : AI_SPARK_SVG + '<span class="' + (o.pill ? 'txv-aibtn-lbl' : 'alh-act-lbl') + '">AI</span>';
+    return '<a class="' + cls + '" href="' + href + '"'
+      + ' title="' + esc(desc) + '" aria-label="' + esc(desc) + '">'
+      + inner + '</a>';
+  }
   function loadAiPlan() {
     // Guarded on #aiPlanTierLabel, the span this actually writes. It used to
     // guard on #aiPlanText, which NO LONGER EXISTS IN THE MARKUP — the
@@ -10841,6 +10929,54 @@
     });
   }
 
+  // Period Mismatch: turn the per-row `offset in <date>` Comments into ONE line the
+  // analyst can act on, plus the route to the other side of the pair.
+  //
+  // WHY THIS EXISTS. The classifier grains on (DocNumber, DocType, Company, Batch,
+  // ShortAccount) with NO PERIOD IN IT, so it stamps SubType='Periods' on the rows in
+  // BOTH periods and writes each one the other's date. The partner card therefore
+  // already exists — measured on a demo company: the four rows on 2026-02-28 have four
+  // partners carrying 'Periods' in 2025-05-31 and 2025-08-31, each pointing back at
+  // 2026-02-28. Nothing was missing. There was simply no way to get there from here
+  // without already knowing the answer, so the analyst had to leave the tab to find out
+  // what the card was about.
+  //
+  // ⚠ AND THE GAP IS THE FINDING, NOT DECORATION. The card's fix list is written for a
+  // period-end straddle: set GL Date Source, reschedule the batch runs. Those four rows
+  // are SIX AND NINE MONTHS apart, where that advice is wrong. usp8_txv_period_mismatch's
+  // own header says so — "a nine-month gap is not a cut-off, so the card must not tell
+  // the analyst that every row on it is timing" — and until now the only place that
+  // warning appeared was the third bullet of a three-paragraph generic block that reads
+  // identically on every Period Mismatch card in the fleet. A caution nobody finishes
+  // reading is not a caution. Computing the gap per card puts it where the decision is.
+  //
+  // Returns null when no row carried an offset, so a card with nothing to say renders
+  // nothing rather than an empty strip.
+  function _offsetSummary(offsets, focusP, co) {
+    var keys = Object.keys(offsets || {}); if (!keys.length) return null;
+    keys.sort();
+    // Whole months between two period-end dates. Both are period ENDS off the same
+    // calendar, so month arithmetic is exact here and no day component is involved --
+    // see reference_fiscal_period_end_stale_stamp before reusing this on anything else.
+    function monthsApart(a, b) {
+      var x = a.split('-'), y = b.split('-');
+      return Math.abs((Number(x[0]) - Number(y[0])) * 12 + (Number(x[1]) - Number(y[1])));
+    }
+    var gaps = keys.map(function (k) { return monthsApart(k, String(focusP).slice(0, 10)); });
+    var maxGap = Math.max.apply(null, gaps);
+    return {
+      periods: keys.map(function (k) {
+        return { period: k, rows: offsets[k], months: monthsApart(k, String(focusP).slice(0, 10)),
+                 href: _txvTxHref(co, { period: k, card: 'PER' }) };
+      }),
+      maxGap: maxGap,
+      // The discriminator the fix list depends on. One month apart is the straddle the
+      // advice is written for; anything wider is not, and the card must say which it is
+      // BEFORE the analyst reads a fix that assumes the former.
+      straddle: maxGap <= 1
+    };
+  }
+
   // Raw residual rows for the scoped company — reuse the shared tx-var cache the
   // top chart fills; fetch once if the tab is opened before the chart populates.
   function _txvRows(companies) {
@@ -11010,7 +11146,7 @@
       var buckets = {};
       perRows.forEach(function (r) {
         var k = _bucketKey(r);
-        var b = buckets[k] || (buckets[k] = { code: k, net: 0, gross: 0, rows: 0, worked: 0, vouchers: 0, dupsales: 0, notes: {}, cardex: 0, ledger: 0, sawAmt: false, byAcct: {}, types: {}, members: [] });
+        var b = buckets[k] || (buckets[k] = { code: k, net: 0, gross: 0, rows: 0, worked: 0, vouchers: 0, dupsales: 0, notes: {}, cardex: 0, ledger: 0, sawAmt: false, byAcct: {}, types: {}, members: [], offsets: {} });
         var v = Number(r.Variance) || 0;
         // members is the row-level twin of the `rows` count, pushed in the SAME
         // iteration that increments it — the card's review action marks exactly the
@@ -11038,6 +11174,17 @@
         var cmt = String(r.Comment || '').trim().toLowerCase();   // server annotations — surfaced as a badge
         if (cmt.indexOf('duplicate sales') >= 0) b.dupsales++;
         if (cmt.indexOf('voucher') >= 0 || String(r.BatchType || '').trim().toUpperCase() === 'V') b.vouchers++;
+        // Period Mismatch names its partner period in the SAME Comment field:
+        // `offset in 2025-05-31`, written by usp8_txv_period_mismatch's last UPDATE.
+        // Parsed here rather than on the card because this is the only loop that sees
+        // the individual rows — the card gets the bucket.
+        //
+        // ⚠ ONE CARD CAN NAME MORE THAN ONE PERIOD, which is why this is a SET and not
+        // a field. Measured on one demo company, 2026-02-28: four rows, two of them
+        // offsetting to 2025-05-31 and two to 2025-08-31. A single `offsetPeriod` would
+        // have printed whichever row happened to be last.
+        var _off = /offset in (\d{4}-\d{2}-\d{2})/.exec(cmt);
+        if (_off) b.offsets[_off[1]] = (b.offsets[_off[1]] || 0) + 1;
       });
       // Publish the population the cards were built from, stamped with the scope it was
       // built under. The once-wired click handler reads it and re-checks the stamp.
@@ -11148,6 +11295,7 @@
           code: code, kind: m.kind, title: m.title, amount: b.net, rec: rec,
           type: _ty, headline: _txvHeadline(_ty, m),
           rowCount: b.rows, cardex: b.cardex, ledger: b.ledger, sawAmt: b.sawAmt, accts: _accts,
+          offsets: _offsetSummary(b.offsets, focusP, solo),
           meta: _metaBits.join(' · '),
           cause: savedFinding || _txvCause(code) || 'Drill in to see what is driving this variance.',
           isFinding: !!savedFinding,
@@ -11562,11 +11710,10 @@
         // was the only thing navigating, and routing the new control through the
         // same href means the two cannot drift to different destinations. It also
         // needs no JS wiring, so there is no handler to forget on a re-render.
-        var headAi = '<a class="txv-aibtn" href="' + p.href + '"'
-          + ' title="Open this pattern in the AI analysis view"'
-          + ' aria-label="Open ' + esc(p.title) + ' in the AI analysis view">'
-          + '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 1.6l1.9 5.1a5 5 0 0 0 2.9 2.9l5.1 1.9-5.1 1.9a5 5 0 0 0-2.9 2.9L12 21.4l-1.9-5.1a5 5 0 0 0-2.9-2.9L2.1 11.5l5.1-1.9a5 5 0 0 0 2.9-2.9z"/></svg>'
-          + '<span class="txv-aibtn-lbl">AI</span></a>';
+        // Through the shared producer (:6565) so this pill and the two Data Health
+        // bands cannot drift, and so it falls back to "View →" when the tier is Off
+        // instead of offering an AI reading nothing will produce.
+        var headAi = aiOrViewBtn(p.href, { pill: true, subject: p.title });
         var head = '<div class="acct-snap-headline txv-card-head">'
           + headL + headC + headR + headAi + '</div>';
         // (3) AI message area — a single calm gray box (no amber diagnosis strip). Holds
@@ -11592,6 +11739,25 @@
         // decomposition pills removed 2026-07-13 — analysts work the pattern, not the
         // account split; the variance drill covers the account view when needed.)
         var recurRow = recurChip ? '<div class="txv-recur-row">' + recurChip + '</div>' : '';
+        // (5b) Where the other half of this pair is. See _offsetSummary for why the gap
+        // leads: the fix list below is written for a one-month straddle and is wrong at
+        // six or nine months, and this is the only place on the card that can tell them
+        // apart. Each period is a LINK to its own card, because the partner card already
+        // exists -- the analyst just had no route to it.
+        var offRow = '';
+        if (p.offsets) {
+          var _o = p.offsets;
+          var _lead = _o.straddle
+            ? 'Offsets one month out &mdash; the period-end straddle the fix below is written for.'
+            : 'Offsets ' + _o.maxGap + ' months out. <strong>That is too far apart to be a cut-off</strong>, so treat the fix below as unproven here and read the two dates on a document first.';
+          offRow = '<div class="txv-offset' + (_o.straddle ? '' : ' is-wide') + '">'
+            + '<span class="txv-offset-lead">' + _lead + '</span> '
+            + _o.periods.map(function (x) {
+                return '<a class="txv-offset-lnk" href="' + x.href + '">'
+                  + esc(x.period) + ' <span class="txv-offset-n">(' + x.rows + ' row' + (x.rows === 1 ? '' : 's') + ')</span></a>';
+              }).join(' ')
+            + '</div>';
+        }
         // COLLAPSED BY DEFAULT (owner 2026-09-11). The head is the summary line --
         // company, pattern, period, variance, status -- and everything below it is
         // detail, so the split needs no new markup beyond the body wrapper.
@@ -11606,6 +11772,7 @@
           + '<div class="cardcol-body">'
           + (p.meta ? '<div class="txv-card-meta">' + esc(p.meta) + '</div>' : '')
           + msg
+          + offRow
           + recurRow
           // RECOMMENDATIONS EDITOR REMOVED (owner, 2026-08-16). It asked the analyst to
           // write, on this card, the thing they had already written on the drill page:
@@ -12085,7 +12252,8 @@
       // `primary` from when this check rendered as a row, where the filled button was
       // the one emphatic action on the tab; sitting next to the model band, two
       // different button weights on two bands of equal standing read as an accident.
-      actionHtml: '<a class="alh-act ghost" href="inventory-account-rollforward.html' + (co ? ('?company=' + encodeURIComponent(co)) : '') + '" title="Open the account roll-forward">View <span aria-hidden="true">→</span></a>',
+      actionHtml: aiOrViewBtn('inventory-account-rollforward.html' + (co ? ('?company=' + encodeURIComponent(co)) : ''),
+        { subject: 'the account roll-forward' }),
       clearedSummary: 'roll-forward', clearedLine: 'Account roll forward — every period rolled forward cleanly'
     });
   }
@@ -12110,7 +12278,11 @@
     var ccy = c.ccy || '';
     var dbn = (activeDb() && activeDb().n) || '';
     var href = 'accounting-model-review.html?company=' + encodeURIComponent(co || '') + (dbn ? '&db=' + encodeURIComponent(dbn) : '');
-    var view = '<a class="alh-act ghost" href="' + href + '" title="Open the model review">View <span aria-hidden="true">→</span></a>';
+    // Same destination as the model band's own control below (:12793), so it goes
+    // through the same producer. The owner boxed the two BAND buttons; this one is
+    // the check-row form of the identical journey and was about to be the odd one
+    // out saying "View" to the page the band beside it now calls "AI".
+    var view = aiOrViewBtn(href, { subject: 'the model review' });
     var FAILED = {};   // sentinel: a rejected fetch must NOT collapse to 0 and read as "clean" to the AI
     return _analystExclusionCounts(co).catch(function (e) {
       console.warn('[home] excluded-GL-class counts unavailable', e);
@@ -12790,7 +12962,7 @@
   function _analystModelBandHtml(co, routes, excl, ccy) {
     var dbn = (activeDb() && activeDb().n) || '';
     var href = 'accounting-model-review.html?company=' + encodeURIComponent(co || '') + (dbn ? '&db=' + encodeURIComponent(dbn) : '');
-    var open = '<a class="alh-act ghost" href="' + href + '" title="Open the model DMAAI review">View <span aria-hidden="true">&rarr;</span></a>';
+    var open = aiOrViewBtn(href, { subject: 'the model DMAAI review' });
     // "Model DMAAI Table" (owner 2026-08-09). The 4152 number and the document type
     // moved into the routing-list caption: they identify the table for someone
     // opening it, and neither changes what the analyst does with the headline.
