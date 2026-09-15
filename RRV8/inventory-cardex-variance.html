@@ -644,7 +644,23 @@
       var dbs=p&&p.dbs; if(!Array.isArray(dbs)) return true;
       var d=dbs[_activeDbIdx(dbs)]||dbs[0]||{};
       if(d.adm===true) return true;
-      return d.perms ? (d.perms.dm!==false) : true;
+      // UI-199. ⚠ THIS USED TO READ `d.perms.dm !== false`, AND THAT IS NOT A GATE.
+      // A perms block that simply omits `dm` passed it, so the guard-parity gate
+      // reported every call behind it as ungated -- correctly, and it says why:
+      // "a fail-open gate is not a gate" (check_guard_parity.py:1414).
+      //
+      // Now `=== true` when a perms block exists. Safe for the fleet, measured
+      // rather than assumed: AuthController:1109-1117 puts `perms` on EVERY db
+      // entry unconditionally, and auth.jwt.ttl-hours defaults to 8, so no
+      // customer token old enough to lack it is still alive.
+      //
+      // The no-perms-block fallback below stays open ON PURPOSE. This box's dev
+      // token predates the perms claim and runs to 2036 (the service sets
+      // --auth.jwt.ttl-hours=720). Closing that path would break local work
+      // without closing anything a customer can reach, and the sibling
+      // predicates (home.html canAnalyst) read the same way -- narrowing one of
+      // them alone would be an inconsistency, not a fix.
+      return d.perms ? (d.perms.dm===true) : true;
     }catch(_){ return true; }
   }
   // ---- company scope: the page honors the shared working-company scope (set on
@@ -1282,6 +1298,13 @@
     if(lbl) lbl.textContent='Item tolerance overrides — company '+(co||'—');
   }
   function _cxTolWrite(clear){
+    // UI-199. _cxCanSetTol() used to only HIDE the editor (`ed.hidden=!...`), which
+    // is not a gate: the server refuses `{adm, dm, su}` here, so anyone reaching this
+    // function without the grant got a 403 and a toast reading like a server fault.
+    // Both writes below -- the DELETE and the PUT -- sit behind this one return.
+    if(!_cxCanSetTol()){
+      toast('You do not have permission to change tolerances.'); return;
+    }
     var f=state.focus; if(!f||!f.item) return;
     var co=_cxFocusCo();
     if(!co){ toast('No company on this focus &mdash; open the item from a company card first.'); return; }
@@ -1346,6 +1369,15 @@
     var body=document.getElementById('cxTolPanelBody');
     if(body) body.addEventListener('click',function(e){
       var b=e.target.closest?e.target.closest('[data-tol-rm]'):null; if(!b) return;
+      // UI-199. The Remove buttons are only RENDERED when _cxCanSetTol() (see the
+      // `can?` ternary above), but a render-time condition is not a gate -- the
+      // handler is wired to the panel body, not to the buttons, and the panel
+      // repaints. Gated here rather than on _cxTolRenderPanel() itself, because
+      // gating the render would hide the whole panel from someone entitled to READ
+      // the overrides. Viewing is not changing.
+      if(!_cxCanSetTol()){
+        toast('You do not have permission to change tolerances.'); return;
+      }
       var item=b.getAttribute('data-tol-rm'), co=_cxFocusCo();
       b.disabled=true;
       agentFetch('/inventory/cardex-tolerance?company='+encodeURIComponent(co)+'&item='+encodeURIComponent(item),{method:'DELETE'})
@@ -1539,6 +1571,15 @@
   // panel fields AND the projected roll show the cleared state), zero the worklist so the
   // KPIs + Item Position read 0, then persist the cleared baseline best-effort.
   function confirmAdjust(){
+    // UI-199. ⚠ GATED AT THE TOP, NOT AT THE POST. Everything between here and the
+    // agentFetch mutates local state first -- it zeroes the item's variance in the
+    // worklist, repaints the KPIs, writes the cross-page cleared record and logs an
+    // activity entry. Gating next to the write would leave a refused correction
+    // looking done on screen and recorded in the Audit Center. The server requires
+    // one of {adm, dm, su}; the click has to stop before any of that runs.
+    if(!_cxCanSetTol()){
+      toast('You do not have permission to correct cardex balances.'); return;
+    }
     if(adj.itemId==null) return;
     // Off-worklist ALIGN: the analyst opened a tied-out item from Full Perpetual
     // Details and typed the JDE-correct beginning balance. Commit it AS TYPED --
@@ -1585,6 +1626,12 @@
   // (no forced zero), logs it as an adjustment (not a clear), then reloads so the
   // freshly-created variance appears through the normal worklist path.
   function _cxAlignBalances(){
+    // UI-199. Same shape as confirmAdjust: the activity-log entry below is written
+    // before the POST, so the gate belongs above both or a refused adjustment leaves
+    // an audit entry claiming it happened.
+    if(!_cxCanSetTol()){
+      toast('You do not have permission to correct cardex balances.'); return;
+    }
     var a=_cxAgg;
     var bq=Number(document.getElementById('adjQty').value)||0, ba=Number(document.getElementById('adjAmt').value)||0;
     var btn=document.getElementById('adjConfirm'); if(btn) btn.disabled=true;
@@ -1665,6 +1712,11 @@
     }catch(_){}
   }
   function undoAdjust(adjustId, itemId){
+    // UI-199. Undo is a correction, not a read, and the server guards it the same
+    // way as the adjustment it reverses.
+    if(!_cxCanSetTol()){
+      toast('You do not have permission to undo adjustments.'); return;
+    }
     agentFetch('/inventory/undo-adjustment',{method:'POST',body:{adjustId:Number(adjustId)}})
       .then(function(){ if(itemId!=null && itemId!=='') _cxClearedRemoveByItemId(itemId); toast('Adjustment undone &mdash; variance reopened.'); reload(); })
       .catch(function(e){ toast('Undo failed: '+esc(e.message)); });
