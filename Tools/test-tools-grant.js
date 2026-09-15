@@ -213,6 +213,17 @@ const SITES = [
     ["SUBVIEWS tools gate",        /gate:\s*function\s*\(\)\s*\{\s*return canAnalyst\(\)\s*\|\|\s*canTools\(\);/],
     ["the shelf's hidden flag",    /tools\.hidden\s*=\s*\(sv !== 'tools'\)\s*\|\|\s*!\(canAnalyst\(\)\s*\|\|\s*canTools\(\)\)/],
     ["loadReloadCardexStatus gate",/if\s*\(!\(canAnalyst\(\)\s*\|\|\s*canTools\(\)\)\)\s*return;/],
+    // UI-197, added 2026-09-15. A FOURTH site, and it was UNGATED against an
+    // endpoint that required isAdmin(). The failure was invisible: the POST
+    // 403'd, the .catch returned null, the caller read that as "no ack table"
+    // and wrote the localStorage fallback, and the dot repainted green. The
+    // snooze looked recorded and was per-browser only.
+    //
+    // ⚠ Note the `return Promise.resolve(null)` rather than a bare `return;` --
+    // this one has to resolve a promise because every caller chains .then off
+    // it. The guard-parity gate's own parser only recognised `return;` and
+    // reported this as ungated after it was fixed; both were corrected.
+    ["ackReminder gate",           /if\s*\(!\(canAnalyst\(\)\s*\|\|\s*canTools\(\)\)\)\s*return Promise\.resolve\(null\);/],
 ];
 for (const [label, re] of SITES) {
     check(re.test(html), 'A8b ' + label + ' uses the OR form',

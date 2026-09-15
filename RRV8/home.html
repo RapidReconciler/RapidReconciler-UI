@@ -6372,6 +6372,24 @@
   // control still works on databases without the ack table.
   function ackReminder(kind, opts) {
     opts = opts || {};
+    // UI-197. This call was UNGATED against an endpoint that required isAdmin(),
+    // and the whole failure was invisible: an analyst clicked Snooze, the POST
+    // 403'd, the .catch below returned null, the caller read that as "no ack
+    // table" and wrote the localStorage fallback, and the dot repainted green.
+    // The snooze LOOKED recorded and was per-browser only. The fallback exists
+    // for "no table / server down" and cannot tell a permission refusal from a
+    // missing table, so nothing anywhere reported it.
+    //
+    // The server now accepts the analyst lane for `cardex-snooze` (the only kind
+    // reached from this page) and stays administrator-only for the four written
+    // from the admin-* pages. This is the same union expressed on the client, so
+    // the two sides ask the same question rather than agreeing by luck.
+    //
+    // ⚠ NOT A SUBSTITUTE FOR THE SERVER'S PER-KIND RULE, and deliberately not a
+    // copy of it. This gate's job is only "do not fire a request nobody in this
+    // role could ever make"; which kinds a grant covers is the server's to
+    // decide, and duplicating that here would give it two producers.
+    if (!(canAnalyst() || canTools())) return Promise.resolve(null);
     var body = { kind: kind, cadenceDays: (opts.cadenceDays != null ? opts.cadenceDays : null), never: !!opts.never };
     return rrFetch('admin/activity/ack', { method: 'POST', body: body }).then(function (ack) {
       if (ack) { _acksByKind = _acksByKind || {}; _acksByKind[kind] = ack; }
