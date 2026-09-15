@@ -2166,10 +2166,16 @@ ${adminSection}
       var vp = global.RR_VALC_PREFIXES || [];
       var isValc = false;
       for (var i = 0; i < vp.length; i++) { if (a.indexOf(vp[i]) === 0) { isValc = true; break; } }
+      // Both halves resolve through the SAME functions rrFetch uses, or this
+      // label names a host the call was never aimed at. The valcBase half read
+      // RR_CONFIG directly until UI-171; the testAgentBase tail was left behind
+      // by the agentBase half of the same row and is retired here for the same
+      // reason -- agentBase() already falls back to the page origin, so it was
+      // an unreachable second reader of a setting with one resolver.
       var base = isValc
-        ? ((global.RR_CONFIG && global.RR_CONFIG.valcBase) || '')
+        ? ((global.RRDB && global.RRDB.valcBase && global.RRDB.valcBase()) || '')
         : ((global.RRDB && global.RRDB.agentBase && global.RRDB.agentBase()) ||
-           (global.RR_CONFIG && global.RR_CONFIG.testAgentBase) || '');
+           (global.RRENV && global.RRENV.get && global.RRENV.get('testAgentBase')) || '');
       return base ? new URL(base).host : '';
     } catch (_) { return ''; }
   }

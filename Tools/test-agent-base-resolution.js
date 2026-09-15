@@ -50,7 +50,12 @@
  *   - It says nothing about `valcBase`. Measured 2026-09-15: 24 direct
  *     `RR_CONFIG.valcBase || 'http://localhost:8080'` reads across 17 files
  *     under RRV8/, with no choke point equivalent to RRDB.agentBase() to
- *     migrate. That is a separate, larger change and is NOT covered here.
+ *     migrate. ⚠ THAT BLIND SPOT WAS CLOSED THE SAME DAY: the choke point now
+ *     exists (RRDB.valcBase / valcGap / valcFetch in the same file) and is
+ *     guarded by Tools/test-valc-base-resolution.js. This file is still the
+ *     agentBase half and still asserts nothing about valcBase -- the two
+ *     resolvers deliberately differ on their last resort (page origin here,
+ *     nothing there), so do not copy an assertion between them.
  *   - It does not prove any QA or prod host serves anything. That is the DNS /
  *     HTTP probe recorded on the RR_ENVIRONMENTS.qa entry, not a unit test.
  */
@@ -84,8 +89,15 @@ function record(name, pass, why) {
  * assertion below unreachable and the run would still look clean.
  * ------------------------------------------------------------------------- */
 const SLICE_START = 'window.RR_CONFIG = {';
+/* ⚠ THIS ANCHOR MOVED ON 2026-09-15 AND THE MOVE WAS CAUGHT BY THIS GUARD,
+ * which is the only reason it is worth writing down. UI-171's valcBase half
+ * added three members to the RRDB return, wrapping it onto a second line, and
+ * this file threw `cannot slice config.js (tail=-1)` on the next run --
+ * exit 1, loudly, instead of silently testing a shorter slice. The anchor is
+ * now the FIRST LINE of that return only, so adding a member to the second
+ * line does not move it again. Do not widen the slice to dodge a throw. */
 const SLICE_TAIL  = 'return { dbs: dbs, index: index, active: active, name: name, '
-                  + 'agentBase: agentBase, setActive: setActive };';
+                  + 'agentBase: agentBase,';
 
 function sliceConfig(src) {
   const start = src.indexOf(SLICE_START);
