@@ -2333,6 +2333,44 @@ window.RRV8 = window.RRV8 || {};
         ]
       }
     },
+    // MAINTENANCE WORK ORDERS ARE A SEPARATE ACCOUNTING PATH (owner ruling 2026-09-16).
+    // 'WM' is JDE's default order type for a maintenance work order. It consumes material
+    // like a manufacturing order, but the issue is written by an inventory program (P4112),
+    // so there is no R31802A run, no manufacturing subledger, and the 31xx AAIs are not
+    // involved — the entry is Dr 4124 expense / Cr 4122 inventory. The claim runs AHEAD of
+    // every manufacturing claim in usp8_txv_flags so none of them names a mechanism that
+    // never ran. The card states what the population IS; it does not diagnose the residual,
+    // because the cause of the residual is not established.
+    'MWO': {
+      title: 'Maintenance Work Order', short: 'Maintenance WO', kind: 'review', tier: 'single', disposition: 'triage',
+      cause: 'Material issued to a maintenance work order. This is not manufacturing accounting: an inventory program wrote the journal, so there is no work-order subledger to match on and none of the 31xx manufacturing AAIs are involved. The accounting is a single pair — inventory relieved through DMAAI 4122, the charge taken through 4124. The residual on these rows has no established cause yet, so read the two AAIs before assuming anything about it.',
+      desc: 'Maintenance work order material issues, identified by order type WM. The material was consumed by a work order, which is why these sit with manufacturing rather than with inventory adjustments, but the accounting path is the inventory one: DMAAI 4122 for the inventory leg and 4124 for the expense leg, batch type N, and a blank subledger on every row. The blank subledger follows from there being no manufacturing accounting run and is not itself a fault.',
+      action: 'Resolve 4122 and 4124 for the document\'s GL classes and read which accounts they name, then compare those against the accounts the journal actually used. Do not look for the work order in the GL subledger and do not send anyone to a manufacturing posting report — neither exists for this population. Where the item ledger moved and the GL did not, establish whether the journal landed on a different account before concluding it is absent.',
+      finding: {
+        mech: 'Material issued to a maintenance work order. Inventory relieved through DMAAI 4122, charge taken through 4124, with no manufacturing accounting behind it.',
+        checked: [
+          { a: 'MWO.ordertypewm', t: 'The order type on this row is WM, JDE\'s default for a maintenance work order.' },
+          { a: 'MWO.aheadofmfg', t: 'This claim ran before every manufacturing claim, so no R31802A mechanism has been applied here.' }
+        ],
+        alsoChecked: [
+          { a: 'MWO.noamounttest', t: 'No amount was compared and no shape was read. The order type alone put this row here.' },
+          { a: 'MWO.nosubledger', t: 'The manufacturing subledger is blank across this population, which follows from no accounting run.' }
+        ],
+        context: [
+          'Not tested: whether 4122 and 4124 resolve to the accounts the journal used. Nothing here reads an AAI.',
+          { k: 'dmaai', t: 'The pair to read is 4122 for inventory and 4124 for the charge. The 31xx family is not involved.' }
+        ],
+        found: [
+          'The population is identified. The cause of the variance is not.',
+          'A blank subledger and no manufacturing posting are expected here and explain nothing on their own.',
+          'Next: resolve 4122 and 4124 for this document\'s GL classes and compare them against the accounts used.'
+        ],
+        fix: [
+          'Read the two AAIs first. An expense leg routed back to an inventory account is the failure to rule out.',
+          'Where the item ledger moved and the GL did not, search the GL across all accounts before calling it missing.'
+        ]
+      }
+    },
     // 'NZR' (DMAAI Net Zero) WITHDRAWN 2026-08-10. It claimed rows where AAI 3110 and AAI
     // 3130 resolve to one account. THAT IS NOT A PAIR. Net zero means the DEBIT and the
     // CREDIT AAI of ONE transaction land on one account. Per Oracle's published JDE 9.2
@@ -2850,7 +2888,10 @@ window.RRV8 = window.RRV8 || {};
     'sales aai cancels':        'SAC',
     'sales not journaled':      'SNJ',
     'cross-batch completion':   'XBC',
-    'mfg cost mismatch':        'MCM'
+    'mfg cost mismatch':        'MCM',
+    // 2026-09-16 — maintenance work orders (order type WM), typed Mfg by owner ruling
+    // although an inventory program wrote the journal. DAC-80.
+    'maintenance work order':   'MWO'
   };
   // No subtype -> terminal card by transaction Type. Anything else (including
   // 'Inventory' and an unrecognized type) falls to T-INV.

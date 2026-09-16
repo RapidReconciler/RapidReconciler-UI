@@ -335,7 +335,8 @@ Account numbers in this report use the format **BU.Object** (e.g., `2.1421` = Bu
 
 | Table | Document Type(s) | Transaction Type | Description |
 |---|---|---|---|
-| **4122** | IA, II, IJ, IL, IM, IP, IR, IV | Inventory Debit | Primary inventory account for adjustments (IA), internal transfers (II), physical inventory adjustments (IJ), lot transfers (IL), material issues (IM), physical inventory (IP), receipts (IR), and voids (IV). This is the most critical inventory table. |
+| **4122** | IA, II, IJ, IL, IM, IP, IR, IV | Inventory leg | Primary inventory account for adjustments (IA), internal transfers (II), physical inventory adjustments (IJ), lot transfers (IL), material issues (IM), physical inventory (IP), receipts (IR), and voids (IV). This is the most critical inventory table. Also the inventory relief on a **maintenance work order** issue (order type `WM`), paired with 4124 — see the note below. |
+| **4124** | Same as 4122 | Expense / COGS / charge leg | The offsetting leg of 4122. Measured on a specimen company: 4122 resolves to one inventory-range object for every GL class on the specimen document, while 4124 resolves to six distinct expense-range objects. ⚠ This guide's Section 11 previously described 4124 as "inventory relief, credit side of 4122". That was wrong and inconsistent with its own sibling pairs (4126/4128, 4134/4136 both name an expense leg); corrected 2026-09-16. |
 | **4126** | Zero-balance doc types (IA, II, IT on the specimen databases) | Zero Balance Adjustment Debit | Clears residual value when on-hand quantity reaches zero with dollars still on the row. Paired with 4128. RNV is **4320**, not 4126. |
 | **4134** | IB | Inventory Cost Change | Records the change in inventory value when an item's cost changes. 4134 is the inventory leg, 4136 the expense or COGS leg. They must resolve to different accounts, or the debit and credit cancel inside the inventory account and the cardex value never reaches the GL. Not an in-transit AAI. |
 | **4162** | IX | Inventory Transfer — Cross-Company | Used for inventory transfers between companies. Present for company 2 only in this report. |
@@ -348,6 +349,29 @@ Account numbers in this report use the format **BU.Object** (e.g., `2.1421` = Bu
 | **4240** | SO, C1, C2, CO, SA, SF, SM, SR, SW, SX | Cost of Goods Sold | Debits COGS and credits inventory on sales shipment. Paired with 4220 (Inventory Relief). Mismatch here causes COGS to post to wrong account. |
 
 > **Net zero note:** The comment `Net zero review - 4240,4220` indicates that the 4240 and 4220 entries for a given company, doc type, and GL class code may point to the same account. See Section 6 and Section 9.
+
+> **Maintenance work orders (order type `WM`) use the 4122/4124 pair, not the
+> 31xx family.** A maintenance work order consumes stock, but the issue is written
+> by an inventory program (P4112), so the journal carries batch type `N` and no
+> manufacturing subledger. The entry is `Dr maintenance expense (4124) /
+> Cr inventory (4122)`. Owner ruling 2026-09-16: **classify this population as
+> manufacturing anyway**, despite the batch type.
+>
+> ✅ **Two plumbing defects used to hide this pattern and BOTH SHIPPED 2026-09-16.**
+> `usp6compare2` now falls back to the bare document type when the compound
+> `DocType + OrderType` key resolves nothing, so the specimen document returns 8 Inv
+> Account rows (4122 to the inventory account, plus 4126) and 12 Exp Account rows
+> (4124 to six expense-range objects) instead of two empty blocks. And
+> `v6_008_reconcile` no
+> longer blanks `OrderType` for `WM`, so a rule keyed on it can fire. What follows is
+> the original statement of both, kept because the F4095 fact is still true and still
+> the reason the fallback is needed.
+>
+> Two traps came with it — no
+> F4095 row in the client carries order type `WM` (0 of 7,068 measured), and
+> `v6_008_reconcile.sql:156` blanks `OrderType` whenever batch type is `N`, so a
+> `WM` test written downstream cannot fire. Full treatment in
+> `transaction-detail-analysis.md` §0.1a and §5.24.
 
 ### Purchasing / Order Settlement Tables (4300 Series)
 
@@ -633,8 +657,8 @@ Maintain a running log of:
 |---|---|---|---|---|
 | **3110** | Manufacturing | Material issued to work order | IM | Credit Inventory/Raw Materials (the debit is 3120) |
 | **3130** | Manufacturing | Work order completion, parent scrap | IC, IS | Debit Sub-Assembly/Finished Goods (the credit is 3120) |
-| **4122** | Inventory | Inventory adjustment, transfer, receipt | IA, II, IJ, IL, IM, IP, IR, IV | Debit Inventory |
-| **4124** | Inventory | Inventory relief (credit side of 4122) | IA, II, IJ, IL, IM, IP, IR, IV | Credit Inventory |
+| **4122** | Inventory | Inventory adjustment, transfer, receipt, **maintenance work order issue** | IA, II, IJ, IL, IM, IP, IR, IV | Debit/Credit Inventory |
+| **4124** | Inventory | Inventory adjustment, **maintenance work order issue** — expense or COGS leg | IA, II, IJ, IL, IM, IP, IR, IV | Debit/Credit Expense / COGS / charge account |
 | **4126** | Inventory | Zero balance adjustment, inventory leg | IA, II, IT | Debit Inventory |
 | **4128** | Inventory | Zero balance adjustment, expense or COGS leg | IA, II, IT | Credit Expense / COGS |
 | **4134** | Inventory | Inventory cost change, inventory leg | IB | Debit/Credit Inventory |

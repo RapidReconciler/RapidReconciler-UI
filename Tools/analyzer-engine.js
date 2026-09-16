@@ -505,8 +505,25 @@ const TXD_PATTERN_MODULES = {
 };
 
 /* Resolve a doc type to its module name. Returns 'general' for unknown
-   DTs so the classifier still runs the universal patterns. */
-function txdModuleForDt(dt) {
+   DTs so the classifier still runs the universal patterns.
+
+   ORDER TYPE 'WM' OUTRANKS THE DOC TYPE (DAC-80, owner ruling 2026-09-16).
+   A maintenance work order issues material under doc type IM, which maps to
+   'mfg' above — and that switched on all four manufacturing-only patterns:
+   5.6 standard cost change after WO completion, 5.15 R31802A orphan cardex,
+   5.16 mfg cost mismatch, 5.20 completion not journaled. Every one of them
+   describes an R31802A mechanism, and R31802A NEVER RUNS for a maintenance
+   work order — the issue is written by an inventory program (P4112), which is
+   why the journal carries batch type N and the subledger is blank. So the
+   analyzer would have named a cause that cannot exist, on the same document
+   where the Maintenance Work Order card says no manufacturing accounting is
+   involved. Two surfaces, one document, opposite stories.
+   'maintenance' appears in no TXD_PATTERN_MODULES entry, so it enables the
+   universal patterns only. That is deliberate: there is no maintenance-specific
+   analyzer pattern yet, and silence is the correct output until there is.
+   `ot` is optional so existing callers keep their behaviour unchanged. */
+function txdModuleForDt(dt, ot) {
+  if (ot && String(ot).toUpperCase().trim() === 'WM') return 'maintenance';
   if (!dt) return 'general';
   return TXD_MODULE_BY_DT[String(dt).toUpperCase().trim()] || 'general';
 }
@@ -556,7 +573,12 @@ const TXD = {
     // Module for this doc (inventory / mfg / sales / purchasing / transfers /
     // general). Used by the if/else chain below to early-exit branches whose
     // pattern doesn't apply — e.g., a sales doc skips the mfg-only detectors.
-    const module = txdModuleForDt(data.dt);
+    // The order type is read alongside the doc type: on a maintenance work
+    // order (OT = WM) it outranks the doc type and suppresses the four
+    // manufacturing-only detectors, whose mechanism never ran. See
+    // txdModuleForDt. `data.ot` is the same field the WHAT card reads at the
+    // order-type line below, so no new plumbing is involved.
+    const module = txdModuleForDt(data.dt, data.ot || (data.docHeader && data.docHeader.ot));
     const inModule = p => txdAppliesToModule(p, module);
 
     // Account-mismatch context — populated in the 5.4 branch and read

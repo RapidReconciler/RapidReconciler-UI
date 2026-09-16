@@ -95,6 +95,62 @@ type only as a last resort when no batch type is resolvable. What it corrected:
 no manufacturing is a typing error, not a finding. Check the company's batch
 types before believing a manufacturing diagnosis.
 
+### 0.1a The one exception: order type `WM` is manufacturing despite batch type `N`
+
+**Owner ruling, 2026-09-16, and it reverses what this guide and the memory
+[[reference_batch_type_discriminates_manufacturing]] previously concluded.** `WM`
+is the default order type for JDE **maintenance** work orders. A maintenance work
+order consumes material, and the issue is written by an inventory program (P4112),
+so F0911 gets batch type **`N`** rather than the `0` that R31802A writes. Section
+0.1 above then types the row `Inventory`.
+
+**Treat this population as manufacturing anyway.** The material really was
+consumed by a work order. The earlier reading — that `Inventory` was correct and
+no change was needed — was defensible from the batch type alone and is now
+superseded. What survives from it is the underlying JDE fact: `WM` is a
+maintenance work order, not a manufacturing one, and manufacturing work orders
+carry `WO`. Both statements are true at once, which is what made this confusing
+for three sessions.
+
+**The accounting is a two-AAI pair, not the 31xx family:**
+
+| AAI | Role | Measured on a specimen company, Demo2 |
+|---|---|---|
+| **4122** | Inventory account (credit) | key `IM`, 84 rows, all four of the specimen document's GL classes resolve to one inventory account (shown here as `BR100.1200`) |
+| **4124** | Expense / COGS / charge account (debit) | key `IM` in `RAccountInstrExp`, 277 rows, resolving to expense-range objects |
+
+That inventory account is the one actually on the document's F0911 legs, so the
+posting went through 4122 exactly as expected. The product already treats
+4122/4124 as a pair: `usp6compare2` carries a `'Net zero review - 4122, 4124'`
+branch.
+
+**⚠ The order type USED TO BE erased before any classifier could see it. Fixed
+2026-09-16 — read this before writing a rule against older notes.**
+`v6_008_reconcile.sql:156` read:
+
+    , case when batchtype = 'N' then '' else a.OrderType end as OrderType
+
+On exactly the rows this section is about, `OrderType` was blanked. Measured on the
+specimen document before the fix: `RCardexLedgerCompare.OrderType` = `WM`,
+`RCardexLedgerCompare2.OrderType` = blank, so a rule keyed on `OrderType = 'WM'`
+downstream could never fire. Both that line and the `OrderNumber` zeroing below it
+now carry a `<> 'WM'` exception; 48 of 48 source WM+N rows on Demo2 keep their order
+type and a real order number, and no other order type leaks through. **Every other
+batch-type-`N` row is still blanked, deliberately.** Gated by
+`tests/dac80-wm-ordertype-survives.sql` in the DB repo.
+
+**Scale:** `WM` is the second most common order type on Demo2 — 121,751 rows in
+`RCardexLedgerCompare` against 477,324 total, and 183,608 `RTransactions` rows.
+Demo3 has 5,578; Demo1 has none. This is not a fringe population.
+
+**Sourcing note.** The Oracle page supplied with the ruling
+(`docs.oracle.com/en/applications/jd-edwards/asset-lifecycle/9.2/eoaca/understanding-the-work-order-life-cycle.html`)
+was retrieved and **does not mention 4122, 4124, batch type, or WM**. It covers
+the work-order life cycle conceptually. The 4122/4124 claim traces to an Oracle
+**support note** on Equipment Work Order Inventory Issues, which is behind
+authentication and has not been read here. The claim is carried on the owner's
+SME judgement plus the measurements above, not on that URL.
+
 ### 0.2 Intercompany is an ORDER-type property, and `SI` is always intercompany
 
 Owner ruling 2026-08-06: **an `SI` order is an intercompany order, always.** The
@@ -1825,6 +1881,88 @@ same two-leg cancelling signature mean the AAI was not changed.
 > a sales document, and it is a different finding with a different owner: there the
 > line never had a GL rule at all, here the rule exists and points at the wrong
 > kind of account. Read the order type and the AAI before choosing between them.
+
+### 5.24 Maintenance Work Order Material Issue (order type `WM`)
+
+**Status: SHIPPED 2026-09-16 as the `Maintenance Work Order` card (`MWO`).** The
+classification and the card landed in one pass, per owner ruling. What is in
+place:
+
+| Surface | What it does |
+|---|---|
+| `v6_008_reconcile` | types order type `WM` as `Mfg`, above the batch-type-`N` branch |
+| `usp8_txv_flags` | claims it as SubType `Maintenance Work Order`, **ahead of every manufacturing claim** |
+| `usp8_txv_classify` | the SubType is on the whitelist |
+| `usp6compare2` | the expense-DMAAI skip for work orders now excepts `WM`, so 4124 still reaches the export |
+| `config.js` | the `MWO` card and its four cited assertions |
+| `analyzer-engine.js` | order type `WM` resolves to a `maintenance` module, which suppresses the four manufacturing-only patterns |
+
+Gated by `tests/dac80-maintenance-wo-card.sql` on all three demos.
+
+**Signature**
+
+| Field | Value |
+|---|---|
+| Order type | `WM` on both compare tables since 2026-09-16 (it was blank on `RCardexLedgerCompare2` before that — see §0.1a) |
+| Document type | `IM` typically, occasionally `IC` |
+| Batch type | `N` |
+| Subledger | blank |
+| `gldcto` / `glpo` | blank |
+| AAI pair | **4122** inventory credit, **4124** expense/COGS/charge debit |
+| RR `Type` today | `Inventory` — **should be `Mfg`** |
+
+**What it is.** A maintenance work order consumed stock. JDE relieves inventory
+through 4122 and charges the maintenance expense account through 4124. The entry
+is `Dr maintenance expense (4124) / Cr inventory (4122)`. Because P4112 writes the
+journal rather than R31802A, the batch type is `N` and there is no manufacturing
+subledger to carry the work order forward into the GL.
+
+**Why it read as a break before 2026-09-16.** Two separate effects, and they
+compounded:
+
+1. ~~RR types it `Inventory`~~ **FIXED.** It typed `Inventory`, so every
+   manufacturing card skipped it and the inventory cards did not know it belonged
+   to a work order.
+
+   ⚠ **The claim ordering that came with the fix is load-bearing, and the data
+   proved it.** With the `Maintenance Work Order` claim moved below the
+   manufacturing grain section, Demo3 hands **2 IC/WM rows to `Mfg Cost
+   Mismatch`** — a card that sends the analyst to the Frozen Cost Update (R30822)
+   and WIP Revaluation (R30837), neither of which touches a maintenance work
+   order. Demo2 still passes in that state, so the collision is only visible on
+   Demo3.
+2. ~~`usp6compare2` built its DMAAI lookup key as `DocType + OrderType`~~ **FIXED
+   2026-09-16 (`DAC-79`).** The compound key `IMWM` matched nothing, because no
+   F4095 row in the client carries order type `WM` (0 of 7,068 measured), and both
+   the `Inv Account` and `Exp Account` blocks came back as headers over nothing. The
+   proc now falls back to the bare document type when the compound key resolves
+   nothing in either AAI table. The specimen document now returns 8 Inv Account rows
+   (4122 to the inventory account, plus 4126) and 12 Exp Account rows (4124 to six
+   distinct expense-range objects) where it previously returned two empty blocks.
+
+**What it is NOT.** Do not diagnose it as a cardex work order that never reached
+the journal. Maintenance work orders do not post through manufacturing
+accounting, so the missing work-order reference in the GL is expected rather than
+a posting gap. That mis-framing was live in this guide's history and is the
+reason §0.1a exists.
+
+**How to work it**
+
+1. Either table now carries the order type. Notes written before 2026-09-16 say to
+   read it off `RCardexLedgerCompare` because `RCardexLedgerCompare2` had it
+   blanked; that is no longer true for `WM`, though it is still true for every
+   other batch-type-`N` order type.
+2. Resolve 4122 and 4124 for the document's GL classes with the **document type
+   alone** as the key. The blank order type in F4095 means the row applies to
+   every order type, which is why `IM` finds them and `IMWM` does not. The export
+   does this for you now.
+3. Compare the F0911 inventory leg against the 4122 account and the expense leg
+   against 4124. Agreement on both means the document posted as configured and
+   any residual is elsewhere.
+
+**Corrective action.** None at the customer when the two legs agree. This is a
+correctly configured maintenance issue that RR has been classifying and reporting
+badly. The fix is ours.
 
 ---
 
