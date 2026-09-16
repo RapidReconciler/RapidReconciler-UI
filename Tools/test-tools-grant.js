@@ -175,63 +175,126 @@ if (mutated === canToolsSrc) {
         'the defect never touched the admin rung; if this moves, the control is too broad');
 }
 
-/* ---- A8: THE GRANT IS ADDITIVE, NOT RESTRICTIVE -------------------------------- */
+/* ---- A8: WHO REACHES THE SHELF -- AND THE RULING CHANGED 2026-09-15 ------------- */
 /* ⛔ THE FIRST CUT GATED ALL THREE SITES ON canTools() ALONE, AND THAT WAS A
-   REGRESSION DRESSED AS A PERMISSION. The owner's request was additive in its own
-   words -- "any user with it, Analyst or Accountant, SEES a new Tools tab" -- so
-   the grant EXTENDS reach; it never withdrew the shelf from analysts.
+   REGRESSION DRESSED AS A PERMISSION. It withdrew the shelf from every analyst
+   whose token predates migration V68, which on upgrade day is all of them, and
+   "ask the customer to re-authenticate" is a workaround rather than a design.
+   Still forbidden, and still asserted below.
 
-   It also could not have survived an upgrade. `tl` is minted from `roles.tools`,
-   which arrives with migration V68, so EVERY token issued before that migration
-   lacks the claim. Under the restrictive form, upgrade day removes the Tools tab
-   from every analyst in the fleet until each one happens to sign out and back in.
-   "Ask the customer to re-authenticate" is a workaround, not a design.
+   ⛔ BUT THE OR IS GONE TOO. UI-201, owner ruling 2026-09-15: NARROW THE CLIENT.
+   The shelf was already dead for a tools-only user, which was measured rather
+   than argued -- two of its three cards 403 for `tl` without `dm`
+   (inventory/fiscal-period-end-detect and inventory/reload-cardex/eod-check both
+   ask {adm, dm, su}) and the third only escaped because ServiceHealthController
+   has no guard at all. The alternative was widening the SERVER to isTools(),
+   refused because Reload Cardex deletes rows.
 
-   These assertions are behavioural where they can be, and textual for the three
-   call sites -- because the defect was an operator, and an operator is exactly
-   what a behavioural test on ONE site would miss in the other two. */
+   ⚠⚠ AND THIS BLOCK USED TO REBUILD THE GATE BY HAND:
+       const REACH = () => G.canAnalyst() || G.canTools();
+   That is an assertion about the AUTHOR'S COPY of the expression, not about the
+   shipped one, and it proved it: when the three call sites changed, all five
+   reach rows went on passing green while the textual assertions below went red.
+   A test that survives the behaviour it exists to pin is not a test. The gate is
+   now EXTRACTED FROM THE FILE and executed. */
 const canAnalystSrc = extract('canAnalyst');
-const G = build(canAnalystSrc + '\n' + canToolsSrc);
-const REACH = function () { return G.canAnalyst() || G.canTools(); };
+
+/* The shipped `tools` entry in SUBVIEWS, taken verbatim.
+   ⚠ THE ANCHOR IS ASSERTED UNIQUE BEFORE IT IS USED. A control in
+   test-ai-plan-tier.js keyed on a line that hoisting had moved into another
+   function; `.replace()` silently took the first occurrence and the suite died
+   with a ReferenceError while every assertion had been passing throughout. The
+   lesson generalises: a slice is only evidence if there was one candidate. */
+const SHELF_GATE_RE = /\{\s*k:\s*'tools',\s*label:\s*'Tools',\s*gate:\s*function\s*\(\)\s*\{\s*return\s+([^;]+);\s*\}\s*\}/g;
+const shelfHits = html.match(SHELF_GATE_RE) || [];
+check(shelfHits.length === 1,
+    'A8p the SUBVIEWS tools gate anchor matches EXACTLY once',
+    'matched ' + shelfHits.length + ' time(s) -- a slice with 0 or 2 candidates '
+  + 'is not evidence about the shipped gate');
+
+const shelfExpr = shelfHits.length === 1
+    ? new RegExp(SHELF_GATE_RE.source).exec(shelfHits[0])[1].trim()
+    : null;
+/* The same collaborator stubs build() uses, plus the EXTRACTED gate expression
+   compiled in that scope -- so the matrix below runs the shipped predicate, not
+   a restatement of it. */
+const REACHES = new Function(`
+    var _db = null;
+    function activeDb() { return _db; }
+    function isAdmin() { return !!(_db && _db.t && _db.t.adm === true); }
+    ` + canAnalystSrc + '\n' + canToolsSrc + `
+    return function (db) { _db = db; return !!(` + (shelfExpr || 'false') + `); };
+`)();
 
 const matrix = [
     ['analyst, no tl  (the upgrade case)', { t: { adm: false }, perms: { dm: true } },            true],
-    ['accountant with tl (the new reach)', { t: { adm: false }, perms: { ac: true, tl: true } },  true],
+    // ⛔ THE UI-201 ROW. This read `true` until 2026-09-15 and the ruling
+    // inverted it: the grant no longer reaches this shelf.
+    ['accountant with tl -- NO LONGER reaches', { t: { adm: false }, perms: { ac: true, tl: true } }, false],
+    // The row the finding was actually about: `tools` with no `dmaais`. No role
+    // in the live fleet is shaped this way today, which is why nobody hit it.
+    ['tools-only (tl, no dm) -- the dead-control case', { t: { adm: false }, perms: { tl: true } }, false],
     ['accountant, no tl',                  { t: { adm: false }, perms: { ac: true } },            false],
     ['no lane at all',                     { t: { adm: false }, perms: {} },                      false],
     ['admin',                              { t: { adm: true },  perms: {} },                      true],
 ];
 for (const [label, db, want] of matrix) {
-    G.setDb(db);
-    check(REACH() === want, 'A8  reach: ' + label,
-        'expected ' + want + ', got ' + REACH());
+    const got = REACHES(db);
+    check(got === want, 'A8  reach: ' + label, 'expected ' + want + ', got ' + got);
+}
+/* CONTROL on the extraction itself: an expression that never ran would make
+   every row above pass or fail for the wrong reason. */
+check(shelfExpr === 'canAnalyst()',
+    'A8q the extracted shelf gate is the narrowed form',
+    'extracted `' + shelfExpr + '` -- if this changed deliberately, change the '
+  + 'matrix above with it rather than relaxing this line');
+
+/* The three shelf sites must agree. A behavioural test on one would not see a
+   different operator reintroduced in another, which is the whole reason these
+   are textual -- the defect class here is an OPERATOR, not a value.
+   ⚠ EACH PATTERN IS ASSERTED UNIQUE. `if (!canAnalyst()) return;` alone is NOT
+   unique in home.html -- loadFiscalStatus() carries the identical line -- so the
+   reload-cardex site is anchored on its own function body, not on the file. */
+const reloadSrc = extract('loadReloadCardexStatus');
+const ackSrc    = extract('ackReminder');
+const SITES = [
+    ["SUBVIEWS tools gate",
+     /gate:\s*function\s*\(\)\s*\{\s*return canAnalyst\(\);\s*\}/g, html],
+    ["the shelf's hidden flag",
+     /tools\.hidden\s*=\s*\(sv !== 'tools'\)\s*\|\|\s*!canAnalyst\(\)/g, html],
+    ["loadReloadCardexStatus gate",
+     /if\s*\(!canAnalyst\(\)\)\s*return;/g, reloadSrc],
+];
+for (const [label, re, hay] of SITES) {
+    const hits = (hay.match(re) || []).length;
+    check(hits === 1, 'A8b ' + label + ' uses the narrowed canAnalyst() form, once',
+        'matched ' + hits + ' time(s) -- the three shelf gates must stay in step, '
+      + 'and a pattern matching 0 or 2 places is not evidence about any of them');
 }
 
-/* The three sites must all use the OR. A behavioural test on one would not see
-   an AND reintroduced in another. */
-const SITES = [
-    ["SUBVIEWS tools gate",        /gate:\s*function\s*\(\)\s*\{\s*return canAnalyst\(\)\s*\|\|\s*canTools\(\);/],
-    ["the shelf's hidden flag",    /tools\.hidden\s*=\s*\(sv !== 'tools'\)\s*\|\|\s*!\(canAnalyst\(\)\s*\|\|\s*canTools\(\)\)/],
-    ["loadReloadCardexStatus gate",/if\s*\(!\(canAnalyst\(\)\s*\|\|\s*canTools\(\)\)\)\s*return;/],
-    // UI-197, added 2026-09-15. A FOURTH site, and it was UNGATED against an
-    // endpoint that required isAdmin(). The failure was invisible: the POST
-    // 403'd, the .catch returned null, the caller read that as "no ack table"
-    // and wrote the localStorage fallback, and the dot repainted green. The
-    // snooze looked recorded and was per-browser only.
-    //
-    // ⚠ Note the `return Promise.resolve(null)` rather than a bare `return;` --
-    // this one has to resolve a promise because every caller chains .then off
-    // it. The guard-parity gate's own parser only recognised `return;` and
-    // reported this as ungated after it was fixed; both were corrected.
-    ["ackReminder gate",           /if\s*\(!\(canAnalyst\(\)\s*\|\|\s*canTools\(\)\)\)\s*return Promise\.resolve\(null\);/],
-];
-for (const [label, re] of SITES) {
-    check(re.test(html), 'A8b ' + label + ' uses the OR form',
-        'an AND here silently removes the shelf from analysts on upgrade');
-}
+/* ⛔ THE FOURTH SITE KEEPS THE OR, DELIBERATELY. ackReminder posts
+   admin/activity/ack, and ActivityController.requireAckGrant("cardex-snooze")
+   admits isTools() BY NAME. Narrowing it would make the client refuse a request
+   the server would honour -- harmless, but a figure disagreeing with its
+   producer. UI-197 is why it is gated at all: it was ungated against an endpoint
+   requiring isAdmin(), the POST 403'd, the .catch returned null, the caller read
+   that as "no ack table" and wrote the localStorage fallback, and the dot
+   repainted green. The snooze looked recorded and was per-browser only.
+   ⚠ Note `return Promise.resolve(null)`, not a bare `return;` -- every caller
+   chains .then off it. */
+const ackHits = (ackSrc.match(/if\s*\(!\(canAnalyst\(\)\s*\|\|\s*canTools\(\)\)\)\s*return Promise\.resolve\(null\);/g) || []).length;
+check(ackHits === 1,
+    'A8b ackReminder KEEPS the OR (its server admits isTools by name), once',
+    'matched ' + ackHits + ' time(s)');
+
 check(!/!canAnalyst\(\)\s*\|\|\s*!canTools\(\)/.test(html),
     'A8c no site uses the restrictive !canAnalyst() || !canTools() form',
-    'that is the exact expression that caused the regression');
+    'that is the exact expression that caused the original regression');
+/* And the other forbidden shape: canTools() ALONE gating the shelf. The ruling
+   narrowed TOWARDS canAnalyst(), never towards the grant on its own. */
+check(!/gate:\s*function\s*\(\)\s*\{\s*return canTools\(\);/.test(html),
+    'A8d the shelf is never gated on canTools() alone',
+    'that withdraws the shelf from every analyst whose token predates V68');
 
 console.log('\n' + (failures === 0 ? 'ALL CHECKS PASSED' : failures + ' CHECK(S) FAILED'));
 process.exit(failures === 0 ? 0 : 1);

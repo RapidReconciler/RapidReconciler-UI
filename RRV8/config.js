@@ -3839,6 +3839,347 @@ window.RRV8 = window.RRV8 || {};
 })();
 
 /*
+ * RRV8.priorFindings — the RETRIEVAL layer over RRV8.cardStore (UI-203).
+ *
+ * THE PROBLEM THIS EXISTS FOR. An analyst records a finding on a variance card
+ * and it changes that card, becomes an Audit Center entry, and is never read
+ * again. Measured 2026-09-15: of eleven ai/explain prompt builders in home.html
+ * exactly one touched the finding store, and what it passed was a review-state
+ * DATE, not a finding. "What did an analyst conclude last time this pattern
+ * appeared" had no producer.
+ *
+ * WHY IT IS A LAYER AND NOT A PROMPT CHANGE. cardStore is keyed
+ * (database, company, cardCode, periodEnd) and exposes get() on the full key or
+ * forCompany() on everything. There is NO index by pattern code, so "last time
+ * this pattern appeared" is a selection over an unshaped list. That selection is
+ * this module. It holds no data of its own: cardStore stays the one store.
+ *
+ * ---- DECISIONS TAKEN BY THE OWNER, 2026-09-15. Do not re-open them here. ----
+ *
+ *   SCOPE       per COMPANY, never tenant-wide. Enforced structurally rather
+ *               than by a filter: forCompany() is already scoped to (database,
+ *               company), so there is no code path here that could widen it.
+ *   LOOK-BACK   12 months (LOOKBACK_MONTHS). Strictly EARLIER periods — the
+ *               viewed period's own finding is already on the card in front of
+ *               the analyst, and feeding a card its own note back is not
+ *               retrieval.
+ *   SUPERSEDE   an edited finding REPLACES the prior version; the old one leaves
+ *               the retrieval set. cardStore is a keyed map so a same-key rewrite
+ *               already supersedes — but select() is given arrays, so it collapses
+ *               duplicates on (company|cardCode|periodEnd) keeping the greatest
+ *               `at` rather than relying on the caller having handed it a map.
+ *               Equal `at` → the later entry in the input wins (write order).
+ *   TIER        ENHANCED and FULL only (ENHANCED_AND_UP). Basic ('grounded') and
+ *               Off behave exactly as they did before this module existed: facts()
+ *               returns an EMPTY ARRAY, so no caller has to remember the check.
+ *
+ * ---- ⚠ THE CONSTRAINT THAT SHAPES EVERY LINE THIS EMITS ----
+ *
+ * The classifier is held to a hard rule — every `checked` line cites an assertion
+ * the SQL actually makes, and check_txv_cards.py fails the build otherwise. A
+ * free-text analyst note has NO such gate. Feed one forward unmarked and a single
+ * mistaken conclusion becomes grounding for every similar case after it, wearing
+ * the voice of a verified fact.
+ *
+ * So a retrieved finding is NEVER emitted as a fact. It is emitted inside its own
+ * fenced block, under a guidance line that says what it is and what the model may
+ * not do with it, and every line carries PRIOR_FINDING_LABEL. That mirrors the
+ * distinction the cards already draw on screen between "Your recorded finding"
+ * and "Likely Cause" (home.html, the `isFinding` branch).
+ *
+ * ---- ⚠ NOTE TEXT DOES NOT RIDE AT ENHANCED, AND THAT IS A DEFAULT, NOT A RULING ----
+ *
+ * "Enhanced" is `scrubbed` internally and its whole promise is that
+ * customer-identifying fields are masked before the call. Masking a structured
+ * field is a lookup. A finding is free prose and names real items, accounts and
+ * document numbers inline — masking that is not a lookup, and imperfect scrubbing
+ * at the tier whose promise IS masking is worse than not offering it.
+ *
+ * So at `scrubbed` this emits the EXISTENCE of a prior finding (its pattern, its
+ * period, its amount) and withholds the prose; at `full` the prose rides. That is
+ * the conservative half of the two options the worklist named, chosen because it
+ * cannot leak. TEXT_TIERS is the single switch if the owner rules the other way.
+ */
+window.RRV8 = window.RRV8 || {};
+(function () {
+  'use strict';
+
+  // ⛔ PLACEHOLDER — THE OWNER OWNS THIS WORDING AND HAS RESERVED IT.
+  // This is the label a retrieved finding is carried under, both in the prompt
+  // block and anywhere a surface chooses to render one. It is deliberately one
+  // constant in one place so the owner's wording lands by editing this line and
+  // nothing else. Do not invent customer-facing phrasing for it.
+  // ✅ OWNER RULING 2026-09-16: "Recorded finding." It replaced the placeholder
+  // 'PRIOR ANALYST FINDING'.
+  //
+  // WHY THIS ONE. The cards already teach the reader the distinction this label
+  // has to carry — "Your recorded finding" against "Likely Cause" — so "recorded"
+  // already means *a person wrote this* on the surface the analyst works. Reusing
+  // that split costs nothing to learn.
+  //
+  // ⚠ AND THE PLACEHOLDER HAD A DEFECT BEYOND WORDING: it was ALL CAPS. The
+  // guidance line below instructs the model to attribute using this exact string,
+  // so it can land verbatim in an answer a customer reads — and shouting at them
+  // was never the intent. Sentence case now, lowercased where it appears
+  // mid-sentence.
+  var PRIOR_FINDING_LABEL = 'Recorded finding';
+
+  var LOOKBACK_MONTHS = 12;          // owner ruling 2026-09-15
+  var ENHANCED_AND_UP = ['scrubbed', 'full'];   // RRAI keys: Enhanced, Full
+  // ✅ OWNER RULING 2026-09-16: "keep prose at full only." Confirmed as a ruling,
+  // not left as a build-time default — the distinction matters because this is the
+  // one line that decides whether free text a person typed leaves the browser.
+  //
+  // ⚠ IT IS DELIBERATELY STRICTER THAN THE TIER'S OWN PROMISE, and that was put to
+  // the owner in those terms. admin-claude-assistant.html describes `scrubbed` as
+  // "the finding's pattern and amount — with the account masked to a role, not the
+  // number": masked identifiers, real content. Withholding the prose entirely is
+  // more than that. The reason is that a note is whatever the analyst typed — an
+  // account number written INTO the sentence survives every masking pass that
+  // operates on structured fields, so Enhanced would be promising masking through
+  // the one field that cannot be masked. Existence still earns its place: "a
+  // finding exists on this pattern, go read it" is actionable and leaks nothing.
+  //
+  // To reverse: ['full', 'scrubbed']. Do not reverse it without re-taking the
+  // ruling — the comment above is the whole argument against.
+  var TEXT_TIERS      = ['full'];    // tiers whose prompt may carry the note PROSE
+  // The prompt block is bounded. An unbounded one would grow with the company's
+  // history and crowd out the deterministic facts it is meant to sit beside — and
+  // the facts are the half that is verified. When the window holds more than this,
+  // the block SAYS how many it is showing out of how many, so a truncation is never
+  // silent (a number that gates a decision is printed next to the control it gates).
+  // ✅ OWNER RULING 2026-09-16: keep 8. Confirmed rather than left as a default.
+  var MAX_LINES = 8;
+
+  function _norm(t) {
+    try { return (window.RRAI && RRAI.norm(t)) || String(t == null ? '' : t).toLowerCase(); }
+    catch (_) { return String(t == null ? '' : t).toLowerCase(); }
+  }
+  function allowedAt(tier)     { return ENHANCED_AND_UP.indexOf(_norm(tier)) >= 0; }
+  function textAllowedAt(tier) { return TEXT_TIERS.indexOf(_norm(tier)) >= 0; }
+
+  function _p10(p) { return String(p == null ? '' : p).slice(0, 10); }
+  // Month index off the YYYY-MM prefix. Deliberately NOT Date arithmetic: these are
+  // period-end strings, and a Date round-trip puts them on the wrong side of a month
+  // boundary in half the world's time zones.
+  function _mIdx(p) {
+    var m = /^(\d{4})-(\d{2})$/.exec(_p10(p).slice(0, 7));
+    if (!m) return null;
+    var mo = parseInt(m[2], 10);
+    if (!(mo >= 1 && mo <= 12)) return null;
+    return parseInt(m[1], 10) * 12 + (mo - 1);
+  }
+
+  /* select(records, asOfPeriod, opts) -> [record, ...]
+   *
+   * The whole retrieval rule, as ONE pure function over a list, so it can be
+   * exercised without a store, a network or a browser.
+   *
+   *   - status must be 'complete'. That is the same gate _auditFromCard() uses to
+   *     build an Audit Center entry: a 'worked' record is a DRAFT still sitting on
+   *     the analyst's card awaiting "Mark reviewed", and a draft has not been
+   *     handed off to anyone. Propagating drafts would feed the model conclusions
+   *     their own author has not finished making.
+   *   - the note must be non-empty. A complete card with no note carries no finding.
+   *   - the period must be EARLIER than asOf and within LOOKBACK_MONTHS of it.
+   *   - duplicates on (company|cardCode|periodEnd) collapse to the greatest `at`.
+   *
+   * Newest first, tie-broken deterministically so two calls never disagree.
+   */
+  function select(records, asOfPeriod, opts) {
+    opts = opts || {};
+    var months = (typeof opts.months === 'number' && opts.months > 0) ? opts.months : LOOKBACK_MONTHS;
+    var asOf = _p10(asOfPeriod), asOfIdx = _mIdx(asOf);
+    if (!asOf || asOfIdx === null) return [];
+    var byKey = {}, order = [];
+    (records || []).forEach(function (r) {
+      if (!r) return;
+      if (String(r.status || '').toLowerCase() !== 'complete') return;
+      if (!String(r.note == null ? '' : r.note).trim()) return;
+      var per = _p10(r.periodEnd), idx = _mIdx(per);
+      if (!per || idx === null) return;
+      if (!(per < asOf)) return;                       // strictly earlier; excludes the viewed period itself
+      if (asOfIdx - idx > months) return;              // outside the look-back window
+      var k = String(r.company == null ? '' : r.company) + '|' + String(r.cardCode == null ? '' : r.cardCode) + '|' + per;
+      var prev = byKey[k];
+      // SUPERSEDE: the later write wins. `>=` rather than `>` so an edit that
+      // carries the same stamp (the mirror writes second-resolution ISO strings)
+      // still replaces the version it was editing rather than being dropped.
+      if (!prev || String(r.at || '') >= String(prev.at || '')) {
+        if (!prev) order.push(k);
+        byKey[k] = r;
+      }
+    });
+    var out = order.map(function (k) { return byKey[k]; });
+    out.sort(function (a, b) {
+      var pa = _p10(a.periodEnd), pb = _p10(b.periodEnd);
+      if (pa !== pb) return pa < pb ? 1 : -1;                       // newest period first
+      var aa = String(a.at || ''), ab = String(b.at || '');
+      if (aa !== ab) return aa < ab ? 1 : -1;                       // then most recently recorded
+      return String(a.cardCode || '') < String(b.cardCode || '') ? -1 : 1;   // then stable by code
+    });
+    return out;
+  }
+
+  // ---- warm state -----------------------------------------------------------
+  // cardStore.forCompany() reads a cache that only load() fills, and it returns []
+  // for a company that has never been read. That empty list is INDISTINGUISHABLE
+  // from "this company has no prior findings" — which is exactly the shape of
+  // reporting a zero that was never measured. So this module tracks whether the
+  // read has actually completed, and facts() says "not read yet" rather than
+  // implying none exist.
+  // ⚠ ONLY THE IN-FLIGHT PROMISE IS SHARED, and that is deliberate. warm() is
+  // called from two places that can fire on the same tick (the day-brief and the
+  // Transaction Variance render), and caching the in-flight promise collapses
+  // those into ONE request. Caching it after it SETTLES would be a different and
+  // worse thing: cardStore.load() re-reads the server on every render today, which
+  // is how a finding recorded by a second analyst on another machine ever reaches
+  // this screen. A permanent cache here would have silently stopped that refresh.
+  var _inflight = {};   // "<db>|<company>" -> Promise, deleted when it settles
+  var _read = {};       // "<db>|<company>" -> true once a load resolved
+  function _db() { try { return (window.RRDB && RRDB.name && RRDB.name()) || '_'; } catch (_) { return '_'; } }
+  function _wk(co) { return _db() + '|' + String(co); }
+  function warm(company) {
+    var k = _wk(company);
+    if (_inflight[k]) return _inflight[k];
+    if (!(window.RRV8 && RRV8.cardStore && RRV8.cardStore.load)) return Promise.resolve({});
+    // A resolved load counts as read even when it fell back to the localStorage
+    // mirror — the mirror IS the store's defined answer when the agent is
+    // unreachable (see cardStore's header). A REJECTED load does not: cardStore
+    // never rejects today, and if that ever changes, "could not read" must not
+    // start reading as "nothing recorded".
+    var p = RRV8.cardStore.load(company).then(
+      function (m) { _read[k] = true; if (_inflight[k] === p) delete _inflight[k]; return m; },
+      function ()  { if (_inflight[k] === p) delete _inflight[k]; return {}; });
+    _inflight[k] = p;
+    return p;
+  }
+  function isWarm(company) { return !!_read[_wk(company)]; }
+  // A database switch can switch clients, and a warm flag from the prior install
+  // would let the fact block speak for a company it never read. Called from
+  // home.html's resetScopedState, beside _aiHealthReset().
+  function reset() { _inflight = {}; _read = {}; }
+
+  // ---- the index the store does not have ------------------------------------
+  function all(company, asOfPeriod, opts) {
+    var recs = (window.RRV8 && RRV8.cardStore && RRV8.cardStore.forCompany)
+      ? (RRV8.cardStore.forCompany(company) || []) : [];
+    return select(recs, asOfPeriod, opts);
+  }
+  // index(company, asOf) -> { '<cardCode>': [record, ...] } — newest first within
+  // each code. THIS is the "by pattern code" index UI-203 found missing.
+  function index(company, asOfPeriod, opts) {
+    var out = {};
+    all(company, asOfPeriod, opts).forEach(function (r) {
+      var c = String(r.cardCode == null ? '' : r.cardCode);
+      (out[c] || (out[c] = [])).push(r);
+    });
+    return out;
+  }
+  function forCode(company, cardCode, asOfPeriod, opts) {
+    var c = String(cardCode == null ? '' : cardCode);
+    return all(company, asOfPeriod, opts).filter(function (r) { return String(r.cardCode || '') === c; });
+  }
+
+  function _title(code) {
+    try { return (window.RRV8 && RRV8.txv && RRV8.txv.title) ? (RRV8.txv.title(code) || String(code)) : String(code); }
+    catch (_) { return String(code); }
+  }
+  function _amt(v) {
+    if (v == null || v === '' || isNaN(Number(v))) return '';
+    var n = Number(v);
+    return (n < 0 ? '-' : '') + Math.abs(Math.round(n)).toLocaleString('en-US');
+  }
+  // Collapse a note to one prompt line. Newlines in a fact block let a note's own
+  // second line read as a separate, unlabelled fact — which is the exact failure
+  // this module exists to prevent, arriving through formatting instead of logic.
+  function _oneLine(s, cap) {
+    var t = String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+    if (t.length > cap) t = t.slice(0, cap - 1).replace(/\s+\S*$/, '') + '…';
+    return t;
+  }
+
+  /* facts(company, asOfPeriod, tier, opts) -> [line, ...]
+   *
+   * The prompt-ready block. EMPTY ARRAY at Off and Basic, so a caller that simply
+   * concatenates it behaves exactly as it did before this module existed — the
+   * tier gate is here, once, rather than at every builder.
+   *
+   * opts.codes  — optional array of card codes to prefer (the patterns on screen
+   *               now). Matching findings lead; the rest still follow, because
+   *               "this pattern last time" and "this company recently" are both
+   *               things the analyst is about to need.
+   */
+  function facts(company, asOfPeriod, tier, opts) {
+    opts = opts || {};
+    if (!allowedAt(tier)) return [];
+    var withText = textAllowedAt(tier);
+    var out = [];
+    if (!isWarm(company)) {
+      out.push('== ' + PRIOR_FINDING_LABEL + ' — prior periods ==');
+      out.push('[GUIDANCE, not for quoting: the analyst findings recorded for this company have NOT been read. '
+        + 'That is unknown, not none. Do not say there are no prior findings, and do not say there are any.]');
+      return out;
+    }
+    var recs = all(company, asOfPeriod, opts);
+    if (!recs.length) return [];
+    if (opts.codes && opts.codes.length) {
+      var want = {}; opts.codes.forEach(function (c) { want[String(c)] = 1; });
+      var lead = [], rest = [];
+      recs.forEach(function (r) { (want[String(r.cardCode || '')] ? lead : rest).push(r); });
+      recs = lead.concat(rest);
+    }
+    var total = recs.length, shown = recs.slice(0, MAX_LINES);
+    out.push('== ' + PRIOR_FINDING_LABEL + ' — prior periods (last ' + LOOKBACK_MONTHS + ' months, this company) =='
+      + (total > shown.length ? ' — showing the ' + shown.length + ' most recent of ' + total + '.' : ''));
+    // ⚠ THE GUARD RAIL. This line is the reason the block is safe to send at all.
+    out.push('[GUIDANCE, not for quoting: every line below is a conclusion a PERSON typed on a variance card. '
+      + 'RapidReconciler did not verify any of it and it carries none of the evidence the checks above carry. '
+      + 'Treat it as a lead to test, never as an established fact. Do not merge it with the figures above, do not '
+      // Lowercased HERE and nowhere else: this is the one mid-sentence use, and
+      // "attribute it as a Recorded finding" reads as a proper noun the model may
+      // then capitalise back at the customer. The label stays sentence case as a
+      // block header and as a line prefix, which is what it is in both.
+      + 'restate it as something the system found, and if you use one, attribute it as a '
+      + PRIOR_FINDING_LABEL.toLowerCase()
+      + '. Where it conflicts with a figure above, the figure wins — say so rather than reconciling them silently.]');
+    shown.forEach(function (r) {
+      // ⚠ `_title()` FALLS BACK TO THE CODE ITSELF when RRV8.txv has no title for
+      // it, so the naive `title (code)` printed "GLC (GLC)" — measured 2026-09-16
+      // rendering the real block. A code repeated in its own parentheses is noise
+      // in a block whose whole job is to be scanned quickly, and it makes the
+      // fallback look like a lookup that succeeded. Print the pair only when the
+      // title is genuinely a different string.
+      var _t = _title(r.cardCode), _c = String(r.cardCode || '');
+      var bits = [PRIOR_FINDING_LABEL, _p10(r.periodEnd), (_t && _t !== _c) ? (_t + ' (' + _c + ')') : _c];
+      var a = _amt(r.varAmount); if (a) bits.push('variance ' + a);
+      if (withText) {
+        // `by` is server-owned and names a real person, so it rides only where real
+        // identifiers ride at all. The localStorage mirror stores by:'' anyway.
+        if (r.by) bits.push('recorded by ' + String(r.by));
+        out.push(bits.join(' · ') + ': "' + _oneLine(r.note, 400) + '"');
+      } else {
+        // Enhanced: the EXISTENCE, with no prose. See the header for why.
+        out.push(bits.join(' · ') + ': an analyst recorded a finding on this pattern in that period. '
+          + 'Its text is withheld at this data-access tier — say that one exists and that it is worth reading; never guess what it says.');
+      }
+    });
+    return out;
+  }
+
+  window.RRV8.priorFindings = {
+    PRIOR_FINDING_LABEL: PRIOR_FINDING_LABEL,
+    LOOKBACK_MONTHS: LOOKBACK_MONTHS,
+    ENHANCED_AND_UP: ENHANCED_AND_UP,
+    TEXT_TIERS: TEXT_TIERS,
+    MAX_LINES: MAX_LINES,
+    allowedAt: allowedAt, textAllowedAt: textAllowedAt,
+    select: select, all: all, index: index, forCode: forCode,
+    facts: facts, warm: warm, isWarm: isWarm, reset: reset
+  };
+})();
+
+/*
  * RRV8.beStore — the balancing-entry EXPORT + VERIFICATION store (accountant side
  * of the Audit spine). When the accountant exports a period-end balancing entry,
  * RR mints a short token, hands them a ready-to-paste JDE Explanation carrying it,

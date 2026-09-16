@@ -32,8 +32,11 @@
  *   D6  the year boundary is counted in months, not subtracted as years
  *   D7  every period carries a link to its own card, at the right period
  *   D8  periods come back in a stable sorted order regardless of insertion order
+ *   D9  minGap is the NEAREST gap, so the lead states a RANGE -- "6 to 9 months
+ *       out" -- instead of the widest figure alone. Owner ruling 2026-09-16, taken
+ *       at the screen. Collapses to one figure when there is only one partner.
  *
- * FIVE MUTATION CONTROLS at the end, each declaring what must go RED and what must
+ * SIX MUTATION CONTROLS at the end, each declaring what must go RED and what must
  * STAY GREEN. A suite that has only run against fixed code is untested.
  */
 'use strict';
@@ -105,10 +108,24 @@ function suite(source, label) {
   check('D3 maxGap is 9', real.maxGap, 9);
   check('D3 nine months apart is NOT a straddle', real.straddle, false);
 
+  // D9 -- THE RANGE. Owner ruling 2026-09-16, taken after reading this exact card on
+  // screen: the lead says "6 to 9 months out", not "9 months out". A lead reporting
+  // only the widest gap above links reading 2025-05-31 and 2025-08-31 made the reader
+  // work out for themselves that one partner is six months away -- an analyst
+  // reconciling two figures on one strip, which is the noise this row exists to remove.
+  check('D9 minGap is the NEAREST gap, so the lead can state a range', real.minGap, 6);
+  check('D9 minGap and maxGap bracket every per-period gap',
+        real.periods.every((x) => x.months >= real.minGap && x.months <= real.maxGap), true);
+
   // D4 -- the shape the fix list is actually written for
   const one = run({ '2026-01-31': 3 }, '2026-02-28', source);
   check('D4 one month apart IS a straddle', one.straddle, true);
   check('D4 and its gap is 1', one.maxGap, 1);
+  // A single partner is not a range. The renderer collapses to one figure on this
+  // equality, so if the two ever disagreed for one period the card would print
+  // "1 to 1 months out" -- a range wearing a costume.
+  check('D9 one partner -> minGap === maxGap, so the lead collapses to one figure',
+        one.minGap === one.maxGap, true);
 
   // D5 -- THE ONE THAT MATTERS. A card mixing a near pair with a far pair must be
   // judged on the far one. Taking the first or the smallest would let a straddle
@@ -145,7 +162,13 @@ function suite(source, label) {
       name: 'M1 judge the card on the NEAREST gap instead of the widest',
       from: 'var maxGap = Math.max.apply(null, gaps);',
       to:   'var maxGap = Math.min.apply(null, gaps);',
-      mustRedden: ['D3', 'D5'],
+      // ⚠ D9 IS IN HERE AND I FIRST DECLARED IT GREEN, WHICH THE CONTROL CAUGHT.
+      // D9's second assertion brackets every per-period gap between minGap and maxGap,
+      // so it is sensitive to BOTH ends -- collapsing maxGap to 6 leaves a period
+      // reporting 9 months outside its own stated range. The declaration was wrong,
+      // not the code. Recorded because a mutation whose green set is guessed rather
+      // than reasoned is how a control gets relaxed until it proves nothing.
+      mustRedden: ['D3', 'D5', 'D9'],
       mustStayGreen: ['D1', 'D2', 'D4', 'D6', 'D7', 'D8']
     },
     {
@@ -153,13 +176,13 @@ function suite(source, label) {
       from: 'straddle: maxGap <= 1',
       to:   'straddle: maxGap <= 12',
       mustRedden: ['D3', 'D5'],
-      mustStayGreen: ['D1', 'D2', 'D4', 'D6', 'D7', 'D8']
+      mustStayGreen: ['D1', 'D2', 'D4', 'D6', 'D7', 'D8', 'D9']
     },
     {
       name: 'M3 subtract years instead of counting months',
       from: '(Number(x[0]) - Number(y[0])) * 12 + (Number(x[1]) - Number(y[1]))',
       to:   '(Number(x[0]) - Number(y[0])) * 12',
-      mustRedden: ['D3', 'D4', 'D5', 'D6'],
+      mustRedden: ['D3', 'D4', 'D5', 'D6', 'D9'],
       mustStayGreen: ['D1', 'D2', 'D7', 'D8']
     },
     {
@@ -167,7 +190,7 @@ function suite(source, label) {
       from: "href: _txvTxHref(co, { period: k, card: 'PER' })",
       to:   "href: _txvTxHref(co, { period: focusP, card: 'PER' })",
       mustRedden: ['D7'],
-      mustStayGreen: ['D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D8']
+      mustStayGreen: ['D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D8', 'D9']
     },
     {
       name: 'M5 drop the sort, so order follows however the rows arrived',
@@ -177,6 +200,16 @@ function suite(source, label) {
       to:   '',
       mustRedden: ['D8'],
       mustStayGreen: ['D1', 'D4', 'D6', 'D7']
+    },
+    {
+      // UI-202, 2026-09-16. Without this, D9 would be a green assertion against an
+      // expression that could be wrong in the one direction that matters -- reporting
+      // the range as "9 to 9" and quietly losing the near partner again.
+      name: 'M6 take the WIDEST gap for the near end too, collapsing the range',
+      from: 'var minGap = Math.min.apply(null, gaps);',
+      to:   'var minGap = Math.max.apply(null, gaps);',
+      mustRedden: ['D9'],
+      mustStayGreen: ['D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7', 'D8']
     }
   ];
 
@@ -207,6 +240,6 @@ function suite(source, label) {
 
   const bad = real.failures + controlFailures;
   console.log(bad ? '\nRESULT: ' + bad + ' problem(s)\n'
-                  : '\nRESULT: all assertions and all 5 mutation controls pass\n');
+                  : '\nRESULT: all assertions and all 6 mutation controls pass\n');
   process.exit(bad ? 1 : 0);
 })();
