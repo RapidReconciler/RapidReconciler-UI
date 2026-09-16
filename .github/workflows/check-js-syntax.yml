@@ -159,6 +159,58 @@ jobs:
       #
       # Fails on the FIRST failing file and reports which, rather than masking later
       # failures behind an early exit or, worse, letting a non-zero exit vanish in a pipe.
+      # HK-18. Neither syntax nor bytes: a class NAME in markup that nothing
+      # styles. I wrote `class="callout is-wide"` into a document going to a
+      # third party on 2026-09-15 -- `is-wide` does not exist, I built it by
+      # analogy from `is-warn`/`is-shown`, and the real class `.callout.warning`
+      # was in the same stylesheet the whole time. Nothing would have stopped
+      # it; a grep I happened to run did.
+      #
+      # ⛔ THE BASELINE IS THE OWNER'S RULING (2026-09-15) AND NOT A DODGE.
+      # `orphan-selectors.py` reports 209 orphans on home.html alone in the
+      # OTHER direction, so this codebase already tolerates loose class
+      # hygiene, and a gate that arrives red on a large backlog gets baselined
+      # into silence within a week. Baseline what exists; fail on what is new.
+      #
+      # ⚠ THE BACKLOG IS MUCH SMALLER THAN THAT 209 SUGGESTED: 108 across 141
+      # pages, home.html 17. Measured, not estimated -- the first run said 119
+      # because the extractor was reading `'<div class="msg-card sev-' + sev`
+      # as a class called `sev-`. Clearing 108 is a real option; see the
+      # worklist row.
+      #
+      # The self-test runs FIRST and separately. Its verdicts are not worth
+      # believing until its own parsers are asserted, and both directions of
+      # the baseline are mutation-controlled inside it (all-baselined must go
+      # green, empty-baselined must go red).
+      - name: Unbacked markup classes (self-test first)
+        run: python Tools/orphan-selectors.py --self-test
+
+      - name: Unbacked markup classes vs the baseline
+        run: |
+          set -u
+          mapfile -t pages < <(git ls-files -z '*.html' | tr '\0' '\n' | sort)
+          echo "checking ${#pages[@]} tracked page(s)"
+          if [ "${#pages[@]}" -eq 0 ]; then
+            echo "::error::no HTML matched; the gate would pass vacuously"
+            exit 1
+          fi
+          # Not piped. `gh pr checks | head` reporting exit 0 on a red PR is
+          # the same lost-exit-code family this file already carries a note
+          # about at the parsecheck step.
+          rc=0
+          python Tools/orphan-selectors.py --unbacked \
+            --baseline Tools/unbacked-classes-baseline.txt "${pages[@]}" \
+            > unbacked.out 2>&1 || rc=$?
+          cat unbacked.out
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::a markup class has no CSS rule and is not in"
+            echo "::error::Tools/unbacked-classes-baseline.txt. The UNBACKED lines above"
+            echo "::error::name the class and the line. Look it up before deciding it is"
+            echo "::error::fine -- regenerating the baseline to clear this is how the"
+            echo "::error::file stops meaning anything."
+            exit "$rc"
+          fi
+
       - name: Behaviour tests (Tools/test-*.js)
         run: |
           set -u
