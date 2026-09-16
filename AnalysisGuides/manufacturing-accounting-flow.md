@@ -57,6 +57,48 @@ selection, so once it has run there is nothing left for it to pick up. Telling a
 analyst to repost is not merely mislabelled, it is inert. Any surface that prescribes
 it is prescribing a remedy that does not exist.
 
+## Maintenance work orders (`WM`) never enter this flow at all
+
+**Everything above describes R31802A and the 31xx AAI family. Maintenance work
+orders bypass all of it**, and that is the single most useful thing to know before
+diagnosing one.
+
+JDE's default order type for a maintenance work order is **`WM`**. Manufacturing
+work orders carry `WO`. A maintenance work order still consumes material, but the
+issue is written by an inventory program (P4112) rather than by manufacturing
+accounting, so:
+
+| What you would expect from this guide | What a `WM` issue actually shows |
+|---|---|
+| batch type `0` | batch type **`N`** |
+| 3110 credit, 3120 WIP debit | **4122** inventory credit, **4124** expense/COGS debit |
+| work order in the GL subledger | subledger **blank** |
+| `gldcto` / `glpo` populated | both **blank** |
+| Unaccounted Units as the backlog signal | not applicable |
+
+So a `WM` document with no work-order reference in the GL is **not** an
+un-journaled completion and must not be worked as one. There is no R31802A run to
+chase and no repost to prescribe.
+
+**Owner ruling, 2026-09-16: classify this population as manufacturing regardless
+of the batch type.** The material was consumed by a work order, and the analyst
+needs it grouped with work-order activity rather than scattered into inventory
+adjustments. This reverses the earlier reading that `Inventory` was the correct
+type.
+
+✅ **The two plumbing defects that hid this population both shipped 2026-09-16.**
+`usp6compare2` now falls back to the bare document type when the compound
+`DocType + OrderType` key resolves nothing, so the DMAAI blocks populate instead of
+exporting empty. And `v6_008_reconcile` no longer blanks `OrderType` (or zeroes
+`OrderNumber`) for `WM`. What remains of the ruling is the `Type` reclassification
+itself and the card. The original statement of both traps follows, because the F4095
+fact is still true and is still why the fallback is needed:
+
+Two implementation traps came with the ruling and both are measured:
+no F4095 row carries order type `WM` (0 of 7,068), and `v6_008_reconcile.sql:156`
+blanks `OrderType` whenever batch type is `N`. See
+`transaction-detail-analysis.md` §0.1a and §5.24, and worklist `DAC-80`.
+
 ## The population is `RCardexLedgerCompare2`, always
 
 **`RCardexLedgerCompare2` is the document source of truth for transaction
