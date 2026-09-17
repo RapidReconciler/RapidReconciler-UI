@@ -1,0 +1,47 @@
+name: Identifier namespace gate
+
+# This repo is PUBLIC. Every identifier-shaped value in it must sit inside a
+# reserved fictional range, so that a reviewer can tell a synthetic company
+# number from a real one WITHOUT having to trace its provenance. HK-19 is the
+# cost of not being able to: 53 occurrences were counted, reported as real
+# customer identifiers, and escalated -- and they were post-scrub synthetic the
+# whole time. Nothing in the value said so.
+#
+# ⚠ NO `paths:` FILTER, AND THAT IS DELIBERATE, TWICE OVER.
+#   1. A filtered workflow does not REPORT on a PR it skips, so it can never be
+#      a required check -- the lesson `check-v8-callsites.yml` (UI #536) and
+#      `check-js-syntax.yml` paid for.
+#   2. A path filter is incoherent for this gate anyway. An identifier can
+#      arrive in any file in the repo, including one that does not exist yet.
+#      Listing the files it may appear in is the same mistake as listing the
+#      identifiers it may be.
+
+on:
+  push:
+    branches: [main, Dev]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  namespace:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # Runs first. The suite is mostly FAILING cases -- values built to be
+      # caught -- plus a fixture the scanner must read off disk and reject. A
+      # gate only ever run on clean input has not been shown to fire at all.
+      - name: Self-test the gate
+        run: python Tools/check_identifier_namespace.py --self-test
+
+      # Prints the in-reserve count NEXT TO the violation count and fails if
+      # that control collapses. A scanner whose regexes stop matching otherwise
+      # reports a clean repo and a broken instrument identically.
+      - name: Check the identifier namespace
+        run: python Tools/check_identifier_namespace.py

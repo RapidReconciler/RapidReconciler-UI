@@ -143,18 +143,18 @@ function resolve(rows, co) {
 
 // Fixtures use fictional company codes. Notes are stand-ins for the sentence the
 // view authors -- this test asserts which row's note is CHOSEN, never its wording.
-const DETAIL  = { CompanyNumber: '00100', SummarizationState: 'Detail',     PolicyNote: 'note-detail' };
-const SUMM    = { CompanyNumber: '00200', SummarizationState: 'Summarized', PolicyNote: 'note-summarized' };
-const NOMFG   = { CompanyNumber: '00300', SummarizationState: 'NoMfg',      PolicyNote: 'note-nomfg' };
+const DETAIL  = { CompanyNumber: '90100', SummarizationState: 'Detail',     PolicyNote: 'note-detail' };
+const SUMM    = { CompanyNumber: '90200', SummarizationState: 'Summarized', PolicyNote: 'note-summarized' };
+const NOMFG   = { CompanyNumber: '90300', SummarizationState: 'NoMfg',      PolicyNote: 'note-nomfg' };
 
 console.log('=== the state resolver ===');
 
 check('a drilled company reads its own row',
-      resolve([DETAIL, SUMM, NOMFG], '00100'), { state: 'Detail', note: 'note-detail' });
+      resolve([DETAIL, SUMM, NOMFG], '90100'), { state: 'Detail', note: 'note-detail' });
 check('a drilled summarizing company reads Summarized',
-      resolve([DETAIL, SUMM, NOMFG], '00200'), { state: 'Summarized', note: 'note-summarized' });
+      resolve([DETAIL, SUMM, NOMFG], '90200'), { state: 'Summarized', note: 'note-summarized' });
 check('a drilled company with no manufacturing reads NoMfg, never Detail',
-      resolve([DETAIL, SUMM, NOMFG], '00300'), { state: 'NoMfg', note: 'note-nomfg' });
+      resolve([DETAIL, SUMM, NOMFG], '90300'), { state: 'NoMfg', note: 'note-nomfg' });
 
 // nchar(5) PADDING. A shorter company code arrives space-padded from the view while
 // activeCompany is a trimmed URL string, so a strict === matches nothing and the field
@@ -171,10 +171,10 @@ check('a space-padded CompanyNumber still matches the drilled company',
 // -- the worst possible direction for this field to be wrong in, and it raises
 // nothing. The resolver must hand back the trimmed state on BOTH branches.
 check('a space-padded state is trimmed on the per-company branch',
-      resolve([{ CompanyNumber: '00100', SummarizationState: 'Summarized  ', PolicyNote: 'note-pad2' }], '00100'),
+      resolve([{ CompanyNumber: '90100', SummarizationState: 'Summarized  ', PolicyNote: 'note-pad2' }], '90100'),
       { state: 'Summarized', note: 'note-pad2' });
 check('a space-padded state is trimmed on the all-companies branch',
-      (resolve([{ CompanyNumber: '00100', SummarizationState: 'Detail      ', PolicyNote: 'note-pad3' }], '') || {}).state,
+      (resolve([{ CompanyNumber: '90100', SummarizationState: 'Detail      ', PolicyNote: 'note-pad3' }], '') || {}).state,
       'Detail');
 
 // THE ONE THAT MATTERS MOST. A "first row wins" or "majority wins" resolver would
@@ -183,7 +183,7 @@ check('a space-padded state is trimmed on the all-companies branch',
 const allCo = resolve([DETAIL, DETAIL, SUMM, NOMFG], '');
 check('all companies reports the WORST state, not the first row and not the majority',
       allCo && allCo.state, 'Summarized');
-if (allCo && allCo.note && allCo.note.indexOf('00200') >= 0) {
+if (allCo && allCo.note && allCo.note.indexOf('90200') >= 0) {
     ok('all companies names the summarizing company so the analyst knows where to look');
 } else {
     fail('all companies does not name the summarizing company',

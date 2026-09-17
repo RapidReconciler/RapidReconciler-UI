@@ -64,7 +64,7 @@ Findings have two kinds of ID:
 The analyzer&rsquo;s carry-forward step uses **semantic identity**
 to match prior-run responses to current-run findings. F# / Q#
 numbers can shift between runs as new findings appear or old ones
-disappear, but a `(nz, 00001, 4240-4220, null)` finding in run N+1
+disappear, but a `(nz, 90001, 4240-4220, null)` finding in run N+1
 matches the same semantic identity in run N.
 
 ---
@@ -77,7 +77,7 @@ counts), and one row per (run, finding) response.
 ```sql
 CREATE TABLE dbo.RIntegrityDMAAIAnalysis (
   AnalysisRunId    datetime2     NOT NULL PRIMARY KEY,
-  ScopedCompanies  nvarchar(200) NOT NULL,           -- comma-separated, e.g. "00010,00050"
+  ScopedCompanies  nvarchar(200) NOT NULL,           -- comma-separated, e.g. "90010,00050"
   TotalRows        int           NOT NULL,
   FlaggedCount     int           NOT NULL,
   PatternsCount    int           NOT NULL,
@@ -165,7 +165,7 @@ agent serves the same shape from
     {
       "id":         "F1",
       "issueType":  "nz",
-      "company":    "00001",
+      "company":    "90001",
       "scope":      "4240-4220",
       "glClass":    null,
       "module":     "Sales",
@@ -180,14 +180,14 @@ agent serves the same shape from
     {
       "id":         "Q1",
       "issueType":  "glsub",
-      "company":    "00001",
+      "company":    "90001",
       "scope":      "4230",
       "glClass":    "P10",
       "module":     "Sales",
       "task":       "AAI 4230 · GL class P10: subsidiary '(blank)' is used on 8 of 9 F4095 rows...",
       "docTypes":   "C1, C2, CO  (+ 6 more)",
       "glClasses":  "P10",
-      "reference":  "JDE Data tab → filter Co=00001, AAI=4230, GL=P10"
+      "reference":  "JDE Data tab → filter Co=90001, AAI=4230, GL=P10"
     }
     /* ... */
   ],
@@ -247,7 +247,7 @@ run for the JWT's allowed companies. Logic the agent runs:
     "flaggedCount": 125,
     "patternsCount": 3,
     "runId": "2026-05-22T17:16:00",
-    "scopedCompanies": ["00010", "00050"],
+    "scopedCompanies": ["90010", "00050"],
     "caveat": "..."
   },
   "fixFirst":     [ /* finding objects */ ],
@@ -272,7 +272,7 @@ returns responses for the latest run.
       "findingId":        "F1",
       "analysisRunId":    "2026-05-22T17:16:00",
       "issueType":        "nz",
-      "company":          "00010",
+      "company":          "90010",
       "scope":            "4122-4124",
       "glClass":          null,
       "answer":           "Intended",

@@ -217,8 +217,8 @@ VALUES (
   TRUE, TRUE, TRUE, TRUE,
   TRUE, TRUE, TRUE,
   TRUE, TRUE,
-  '[{"companyNumber":"00010","inventory":true,"inTransit":true,"poReceipts":true},
-    {"companyNumber":"00050","inventory":true,"inTransit":true,"poReceipts":true}]'
+  '[{"companyNumber":"90010","inventory":true,"inTransit":true,"poReceipts":true},
+    {"companyNumber":"90050","inventory":true,"inTransit":true,"poReceipts":true}]'
 );
 ```
 

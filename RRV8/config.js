@@ -1276,7 +1276,7 @@ window.RRV8 = window.RRV8 || {};
     'What to include in your email',
     'A short email with the four items below lets Sales reply with a confirmation and any billing follow-up. The clearer the request, the faster the turnaround.',
     '- Customer / instance name — so Sales can match the request to your account.',
-    '- JDE company number(s) to add — for example, “license for JDE company 00050 ” or “companies 00050 and 00060 .”',
+    '- JDE company number(s) to add — for example, “license for JDE company 90050 ” or “companies 90050 and 90060 .”',
     '- When you need it by — especially if there’s a go-live, audit, or period-close deadline.',
     '- Who to copy on the response — procurement, project lead, or IT.',
     'Quick start — email Sales',

@@ -31,7 +31,7 @@ standing up the 3 demo DBs.
 >   3× Set Up / Data Integrity / Troubleshooting), and a **white-card grouped list**
 >   (Set Up / Troubleshooting groups).
 > - **Company what-if-exclude pill** (new): session-only, Home-wide, banner-backed
->   (e.g. excluding Co 00073 drops the book from −$32.3M to −$185K). The bottom
+>   (e.g. excluding Co 90073 drops the book from −$32.3M to −$185K). The bottom
 >   cluster is now **4 uniform pills: Database / View / Companies / Account**.
 > - **Perpetual contributor bar-click drill** remains **deferred** (see the
 >   "Deferred" section at the end — still tabled).

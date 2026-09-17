@@ -131,7 +131,10 @@ In the setup wizard's database/bootstrap step ([[manage-client-setup-wizard]]):
 
 - Replaces the "X-periods demo window" stub in
   `demo-data-sanitization-na-tr.md` (the demo path becomes the same
-  mechanism as the real install).
+  mechanism as the real install). ⚠ That runbook is **untracked** as of
+  2026-09-17 (HK-19) &mdash; it is on the dev box under `docs/plans/`, but a
+  fresh clone will not have it. It followed `docs/plans/_scrub/` out because
+  its licensing section names the customer's real pre-scrub company numbers.
 - Lands in [[manage-client-setup-wizard]] (UX) +
   `mini-valc-database-provisioning-production-ready.md` (bootstrap run).
 - Practice/exit-strategy relevance: this removes a step only the owner knew

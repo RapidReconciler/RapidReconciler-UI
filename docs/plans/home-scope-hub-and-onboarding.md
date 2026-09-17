@@ -50,7 +50,7 @@ the open period is August — exposes **three** distinct layers:
 | Layer | What | Set by | Where | Persists? |
 |---|---|---|---|---|
 | **Allowed scope** | The companies a user *may* view (Karen's 3 of 12); the periods available | Admin (per-user company-row permissions) | Fixed per login | n/a (permission) |
-| **Active selection** | The company + period the user is *working now* (Company 00100, July) | **The user** | **Home** (and on any work page) | **Yes — session-sticky, consistent everywhere** |
+| **Active selection** | The company + period the user is *working now* (Company 90100, July) | **The user** | **Home** (and on any work page) | **Yes — session-sticky, consistent everywhere** |
 | **Narrowing** | Within a page: an account, a business unit, a contributor | User, in the moment | Per-page | No — transient, local to the page |
 
 This **amends** the prior locked rule (*"no scope/period/contributors
