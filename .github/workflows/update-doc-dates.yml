@@ -98,6 +98,15 @@ jobs:
         with:
           # Full history so the script can resolve last-commit-date per file
           fetch-depth: 0
+          # ⚠ THE BRANCH TIP, NOT THE TRIGGER SHA. Default checkout pins the run
+          # to `github.sha`, so a run that waited in the concurrency queue still
+          # commits onto the commit that fired it and opens a PR that conflicts
+          # with a main that has since moved. Measured on refresh-indices run
+          # 35210880574 (HK-20, 2026-09-17) -- full reasoning in the matching
+          # comment in refresh-indices.yml. This workflow has the same shape and
+          # is fixed here before it bites: reading the tip also gives each file a
+          # more current last-commit date, which is this script's whole job.
+          ref: ${{ github.ref_name }}
           # Configures origin with the PAT, so the branch push is authenticated
           # as a real user and DOES trigger the PR's checks.
           token: ${{ secrets.BOT_PR_TOKEN }}
@@ -159,15 +168,33 @@ jobs:
           # workflow's triggers match, a missing check means WAIT, not a verdict.
           head_sha="$(gh pr view "$pr_num" --json headRefOid --jq '.headRefOid')"
           echo "head sha: $head_sha"
+          # ⚠ A CONFLICTED PR NEVER GETS A CHECK. `pull_request` workflows run
+          # against `refs/pull/N/merge`, which GitHub cannot build for a PR that
+          # conflicts, so zero checks register and this loop burns its full five
+          # minutes blaming the token. Measured on refresh-indices #626 (HK-20,
+          # 2026-09-17): mergeable_state `dirty`, check-runs total_count 0.
+          # Read inside the loop because `mergeable` is computed asynchronously
+          # and reads `null` for the first second or two after the PR opens.
           registered=0
           for _ in $(seq 1 30); do
             n="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${head_sha}/check-runs" \
                   --jq '.total_count' 2>/dev/null || echo 0)"
             if [ "${n:-0}" -gt 0 ]; then registered=1; echo "$n check(s) registered."; break; fi
+            mergeable="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" \
+                          --jq '.mergeable_state' 2>/dev/null || echo unknown)"
+            if [ "$mergeable" = "dirty" ]; then
+              echo "::error::$pr_url conflicts with ${GITHUB_REF_NAME} (mergeable_state: dirty)."
+              echo "::error::Failing now rather than waiting out the check loop: a conflicted PR"
+              echo "::error::has no refs/pull/N/merge ref, so checks can never register on it."
+              echo "::error::This is NOT a token problem. Most likely main moved between this"
+              echo "::error::run's checkout and its push. The PR is left open so the diff shows."
+              exit 1
+            fi
             sleep 10
           done
           if [ "$registered" -ne 1 ]; then
-            echo "::error::no check run registered for ${head_sha} within 5 minutes."
+            echo "::error::no check run registered for ${head_sha} within 5 minutes,"
+            echo "::error::and the PR is not conflicted (mergeable_state: ${mergeable:-unknown})."
             echo "::error::With a required check that is indistinguishable from a permanent"
             echo "::error::block, so the PR is left open. Most likely cause: BOT_PR_TOKEN is a"
             echo "::error::GITHUB_TOKEN-equivalent and did not trigger the checks."
