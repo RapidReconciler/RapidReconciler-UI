@@ -126,7 +126,7 @@ function attr(h, name) {
   return m ? m[1] : null;
 }
 const hasSpark = (h) => /<svg /.test(h);
-const HREF = 'inventory-account-rollforward.html?company=00001%20%26%20co';
+const HREF = 'inventory-account-rollforward.html?company=90001%20%26%20co';
 
 function suite(source, label) {
   failures = 0; reds = [];

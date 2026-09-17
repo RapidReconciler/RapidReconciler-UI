@@ -144,13 +144,13 @@ function pick(c, state, src) {
 
 console.log('test-scope-error-latch.js -- UI-193');
 
-const ALLOWED = ['00010', '00050'];
+const ALLOWED = ['00010', '90050'];
 
 // ---- A1/A2: the refusal, and a control proving A1 is not vacuous ----------
 check('A1  a ?company= outside the session list LATCHES the refusal',
       !!resolve(ALLOWED, '99999').\u005fscopeError, true);
 check('A2  a ?company= INSIDE the list does not latch (control)',
-      resolve(ALLOWED, '00050')._scopeError, null);
+      resolve(ALLOWED, '90050')._scopeError, null);
 
 // ---- A3: the guard -- re-deriving must NOT clear --------------------------
 (function () {
@@ -164,9 +164,9 @@ check('A2  a ?company= INSIDE the list does not latch (control)',
 // ---- A4: the fix ----------------------------------------------------------
 (function () {
   const latched = { param: 'company', value: '99999', label: 'company' };
-  const s = pick('00050', { solo: '00010', scopeError: latched });
+  const s = pick('90050', { solo: '00010', scopeError: latched });
   check('A4a an explicit pick CLEARS the latched refusal', s._scopeError, null);
-  check('A4b ... and selects the picked company',           s._soloCompany, '00050');
+  check('A4b ... and selects the picked company',           s._soloCompany, '90050');
   check('A4c ... and refetches',                            s.__reloaded, true);
 })();
 
@@ -188,9 +188,9 @@ if (MUTATED === PICKER) {
               'the harness is not exercising what it thinks it is');
 } else {
   const latched = { param: 'company', value: '99999', label: 'company' };
-  const s = pick('00050', { solo: '00010', scopeError: latched }, MUTATED);
+  const s = pick('90050', { solo: '00010', scopeError: latched }, MUTATED);
   const reddened = s._scopeError !== null;
-  const stillWorks = s._soloCompany === '00050' && s.__reloaded === true;
+  const stillWorks = s._soloCompany === '90050' && s.__reloaded === true;
   console.log('    ' + (reddened ? 'reddened' : 'STILL GREEN') +
               '  A4a   _scopeError after pick: ' + JSON.stringify(s._scopeError));
   console.log('    ' + (stillWorks ? 'ok      ' : 'FAIL    ') +

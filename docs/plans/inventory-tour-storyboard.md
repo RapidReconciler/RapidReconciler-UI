@@ -340,7 +340,7 @@ reading:
 - [ ] **DB-name header label** scrubbed — `RapidReconciler_Dev` (hardcoded on
       every page header) → a neutral fictional name, not a real env.
 - [ ] **No `data/*.json` real files** used as source — `as-of.json` (real,
-      company 00050), `account-rollforward.json` ("real raccountsummary
+      company 90050), `account-rollforward.json` ("real raccountsummary
       snapshot"), `transactions.json` are all off-limits. Build synthetic rows
       from the fictional dataset.
 - [ ] **Company / branch** → `4200` / `M30` only.

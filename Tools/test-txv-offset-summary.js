@@ -88,7 +88,7 @@ function run(offsets, focusP, source) {
   if (typeof sandbox.__sum !== 'function') {
     throw new Error('HARNESS BROKEN: extracted source did not define _offsetSummary');
   }
-  return sandbox.__sum(offsets, focusP, '00001');
+  return sandbox.__sum(offsets, focusP, '90001');
 }
 
 function suite(source, label) {
@@ -143,7 +143,7 @@ function suite(source, label) {
   // D7 -- the route to the partner card, which is the whole point
   check('D7 each period links to ITS OWN period, not the focused one',
         real.periods.map((x) => x.href),
-        ['tx?co=00001&period=2025-05-31&card=PER', 'tx?co=00001&period=2025-08-31&card=PER']);
+        ['tx?co=90001&period=2025-05-31&card=PER', 'tx?co=90001&period=2025-08-31&card=PER']);
 
   // D8 -- stable order regardless of how the rows happened to arrive
   check('D8 order is sorted, not insertion order',

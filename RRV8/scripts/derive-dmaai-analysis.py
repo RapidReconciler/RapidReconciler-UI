@@ -8,9 +8,9 @@ The analyzer's pattern detection (nz, glsub, mc, unrec) is ported here
 so the demo JSON aligns with whatever F4095 data is in RapidReconciler_Dev.
 
 Why this exists: the original workbook in the owner's Downloads was
-generated against an unrelated F4095 dump (companies 00001-00011). The
+generated against an unrelated F4095 dump (companies 90001-90011). The
 V8 demo elsewhere (Reconciliation, Transactions) is scoped to the JWT's
-companies (00010 + 00050 in `data/demo-jwt-payload.json`), so the
+companies (90010 + 90050 in `data/demo-jwt-payload.json`), so the
 analysis worklist needs to reflect *that* data set. This script reads
 the same snapshot V8's Transactions page preloads
 (`POST /inventory/integrity` with `report: v_integrity_jde_aais`) and
@@ -20,7 +20,7 @@ Usage:
     python3 derive-dmaai-analysis.py \
         --src  RRV8/data/v-integrity-jde-aais.json \
         --out  RRV8/data/dmaai-analysis-latest.json \
-        --cos  00010,00050           # restrict to these JDE companies
+        --cos  90010,90050           # restrict to these JDE companies
 
 Idempotent — re-running produces the same JSON for the same input.
 """
@@ -417,7 +417,7 @@ def main() -> None:
     )
     ap.add_argument(
         "--cos",
-        default="00010,00050",
+        default="90010,90050",
         help="Comma-separated list of company numbers to include "
              "(defaults to the demo JWT's allowed set).",
     )

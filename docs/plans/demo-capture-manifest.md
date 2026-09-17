@@ -281,7 +281,7 @@ a trustworthy chunk/full walk, four prerequisites:
 
 The driver build could not validate chunk-1 because the owner's browser token
 (minted 2026-07-02) predates the 2026-07-10 demo rename: it scopes the Demo3
-agent to companies `00001/00002` and the now-inactive db name `RapidReconciler_TR`,
+agent to companies `90001/90002` and the now-inactive db name `RapidReconciler_TR`,
 while Golden Harvest's data was renumbered to `30001/30002` in `RapidReconciler_Demo3`
 (agent :37384). The Services agent filters every row against the token's company
 list, so Demo3 queries returned `total:0` — a walk would have recorded empty
@@ -293,8 +293,11 @@ for Demo3 (`client_database_id 23`, client 1 "RR Test Server", tier `full`)
 already lists **`30001` and `30002`** (licensed 2026-07-11). So the fix is simply
 a **fresh login** at `localhost:8765/login.html` — the new token picks up Demo3 +
 `30001/30002` and the runbook executes as written. NO DB change required.
-- Harmless cruft: the pre-rename `00001/00002` still linger on Demo3's license
-  (`client_database_id 23`, licensed 2026-06-20) — optional cleanup, not a blocker.
+- Harmless cruft: the two **pre-rename** company numbers (the source system's
+  own, before the scrub map sent them to `30001/30002`) still linger on Demo3's
+  license (`client_database_id 23`, licensed 2026-06-20) — optional cleanup, not
+  a blocker. Read them off `client_databases` rather than from here: they are
+  real source values and this repo is public (HK-19).
 - Correcting the local dev token directly was intentionally NOT done (auth edit;
   belongs to the owner). Fresh login is the clean path.
 

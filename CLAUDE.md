@@ -411,6 +411,38 @@ default). For belt-and-suspenders on a chore commit, also add
   listed here as a real name to avoid, which contradicted that
   reminder and made the `RR F4095 Acme.xlsx` / `jde-dmaais-analyzed-acme.xlsx`
   fixture names look like a leak. They are fine as-is.
+- **This rule covers REAL identifiers only &mdash; and a fictional one
+  must come from the reserve below, or nobody can tell the difference**
+  (owner ruling 2026-09-17, HK-19). The rule above says "real" three
+  times, so a scrubbed value has never been a breach. The problem is
+  that **`80003`-synthetic and `80003`-real are the same five digits**:
+  HK-19 counted 53 occurrences, called them real customer identifiers,
+  and escalated &mdash; they were post-scrub synthetic the whole time.
+  Nothing in the value said so. So fictional values are drawn from
+  declared ranges, and `Tools/check_identifier_namespace.py` asserts
+  that every identifier-shaped value in the repo sits inside one:
+
+  | Class | Reserved | Where it comes from |
+  |---|---|---|
+  | Company | `00000`, `99999` | JDE structural, kept by every scrub map |
+  | | `3XXXX` | the demo3 curated map |
+  | | `8XXXX` | the demo1/demo2 generated map |
+  | | `9XXXX` | **hand-written docs and tests &mdash; use this one** |
+  | Business unit | `9......` (high range) | the base scrub generator |
+  | | `BXXXXXX` &middot; `PXXX` | the demo2/demo3 &middot; demo1 generators |
+  | | `MFG01`, `5000`, `100` | the short generics named above |
+
+  ⚠ **Prefer `9XXXX` when inventing a company for a doc or a fixture.**
+  `3XXXX` and `8XXXX` are scrub OUTPUT &mdash; they name rows that exist
+  in a demo database, so borrowing one implies a system state.
+
+  ⚠ **The gate does NOT cover document numbers or amounts.** The scrub
+  excluded those on purpose (`05a_bu_co_maps.sql` says so), and a real
+  amount has no fictional shape to check against. Item, order, branch
+  and batch numbers have no reserve yet either. Those stay author
+  discipline &mdash; the same caveat `check_compat_floor.py` carries.
+  It also reads a company number only where a label sits beside it; a
+  bare five digits is also a port and a row count.
 - **Test fixtures with real customer data are gitignored, not
   committed.** `Tools/_test_corpus/fixtures/` is in `.gitignore`.
   Customer F4095 extracts, Transaction Detail / Item Ledger

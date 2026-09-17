@@ -29,15 +29,15 @@ is unchanged.
 
 ## Concrete benefit on the field case
 
-For doc 900500 IC at company 00900:
+For doc 900500 IC at company 90900:
 
 - Pattern 5.6 currently says "Step 3. Post a manual journal entry... debit
   inventory account, credit AAI 3260 (Planned Variance) or AAI 3240 (Material
   Variance)".
 - With the integrity report loaded the analyzer can verify 3240 IV IS
-  configured for company 00900 (4 rows in the customer's report) and can
+  configured for company 90900 (4 rows in the customer's report) and can
   name the actual GL account it points at — so Step 3 becomes "credit GL
-  account X.Y (the account configured for 3240 IV at company 00900 / GL
+  account X.Y (the account configured for 3240 IV at company 90900 / GL
   class Z00)".
 - The analyzer can also confidently state the symptom is a process-sequencing
   gap rather than a config gap (the canonical guide's diagnosis), instead of
@@ -206,7 +206,7 @@ Patterns 5.1, 5.4, 5.5 are future enrichment candidates. Defer them.
 1. **Add the `SystemContext` module** with `importFromWorkbook` / `clear` /
    `isLoaded` / `metadata` / `lookupAAI`. Hook the existing ExcelJS reader
    and reuse `DMAAITemplate.parse()`. Verify by uploading the customer's
-   integrity report and confirming `lookupAAI({ company: '00002', table:
+   integrity report and confirming `lookupAAI({ company: '90002', table:
    '3240', docType: 'IV' })` returns a non-null row.
 
 2. **Add the UI control** — small button in the welcome banner. Two states
@@ -244,7 +244,7 @@ Use the two existing files from the discussion:
 
 Expected after wiring:
 
-- `SystemContext.lookupAAI({ company: '00002', table: '3240', docType: 'IV' })`
+- `SystemContext.lookupAAI({ company: '90002', table: '3240', docType: 'IV' })`
   returns a row with non-null `aaiaccount` (or `object` field).
 - Pattern 5.6 Step 3 in the rendered Analysis tab names the actual account
   instead of the generic AAI name.
