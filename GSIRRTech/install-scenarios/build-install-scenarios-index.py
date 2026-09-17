@@ -25,7 +25,6 @@ Schema
 ------
     {
       "version":   1,
-      "generated": "<iso 8601 utc timestamp>",
       "scenarios": [
         {
           "slug":      "scenario-foo",
@@ -40,7 +39,6 @@ Schema
 """
 from __future__ import annotations
 
-import datetime
 import json
 import re
 import sys
@@ -146,11 +144,17 @@ def main(argv: list[str]) -> int:
             print(f"  ! {path.name}: {e}", file=sys.stderr)
 
     out_path = here / "install-scenarios-index.json"
+    # ⚠ NO `generated` TIMESTAMP, DELIBERATELY (HK-20, 2026-09-17). It had no
+    # reader -- measured across every .py, .js and .html in the repo, with a
+    # non-zero control on the word itself -- and it guaranteed that two runs over
+    # unchanged content produced different bytes. This file is single-line JSON,
+    # so git sees a whole-file change, and the refresh-indices workflow's
+    # `git diff --staged --quiet` early exit could never fire. That turned every
+    # content-free regeneration into a pull request whose entire diff was a
+    # timestamp. RRUniversity/build-search-index.py has never stamped one; these
+    # two were the outliers. Provenance lives in the bot commit, which is dated.
     payload = {
         "version":   1,
-        "generated": datetime.datetime.now(datetime.timezone.utc)
-                              .isoformat(timespec="seconds")
-                              .replace("+00:00", "Z"),
         "scenarios": scenarios,
     }
     with out_path.open("w", encoding="utf-8") as f:

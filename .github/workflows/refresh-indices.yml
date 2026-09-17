@@ -83,6 +83,32 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
         with:
+          # ⚠ CHECK OUT THE BRANCH TIP, NOT THE TRIGGER SHA. Without this,
+          # actions/checkout uses `github.sha` -- the commit that fired the run --
+          # and the run stays anchored to it however long it waited in the queue.
+          # The `concurrency:` block below cannot help, because the anchor is set
+          # when the push happens, not when the job starts.
+          #
+          # MEASURED on run 35210880574 (HK-20, 2026-09-17). Its job started at
+          # 10:31:28, two seconds AFTER the previous run finished, and checked out
+          # at 10:31:31 -- nine seconds AFTER that run's PR #625 merged as 8b56c85.
+          # It still committed b30ac90e on top of b3d81c04, the pre-#625 main,
+          # because b3d81c04 was its trigger sha. It then regenerated the same
+          # single-line JSON files #625 had just rewritten, so PR #626 opened
+          # `dirty` and could never merge.
+          #
+          # ⚠ AND A CONFLICTED PR GETS NO CHECKS AT ALL. GitHub builds the
+          # `refs/pull/N/merge` ref that `pull_request` workflows run against; it
+          # cannot build one for a conflicted PR, so zero checks register. Measured:
+          # check-runs total_count on b30ac90e is 0. The wait loop below then spent
+          # its full five minutes on a PR that was never going to get a check, and
+          # blamed the token.
+          #
+          # The previous run, #625, was stale-parented too (head 13995ffe, parent
+          # bc2b6dfc, while main was already b3d81c04). It merged only because the
+          # two intervening commits touched release-notes.html and doc `<time>`
+          # elements rather than the index files. Luck, not design.
+          ref: ${{ github.ref_name }}
           # Configures origin with the PAT, so the branch push is authenticated
           # as a real user and DOES trigger the PR's checks.
           token: ${{ secrets.BOT_PR_TOKEN }}
@@ -148,15 +174,37 @@ jobs:
           # workflow's triggers match, a missing check means WAIT, not a verdict.
           head_sha="$(gh pr view "$pr_num" --json headRefOid --jq '.headRefOid')"
           echo "head sha: $head_sha"
+          # ⚠ A CONFLICTED PR NEVER GETS A CHECK, SO WAITING FIVE MINUTES FOR ONE
+          # IS WAITING FOR SOMETHING THAT CANNOT ARRIVE. `pull_request` workflows
+          # run against `refs/pull/N/merge`, which GitHub cannot build when the PR
+          # conflicts. Measured on #626 (HK-20): mergeable_state `dirty`,
+          # check-runs total_count 0, loop timed out at the full five minutes and
+          # reported the token as the likely cause. The token was fine. Checked
+          # inside the loop rather than once up front because `mergeable` is
+          # computed asynchronously and reads `null` for the first second or two.
           registered=0
           for _ in $(seq 1 30); do
             n="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${head_sha}/check-runs" \
                   --jq '.total_count' 2>/dev/null || echo 0)"
             if [ "${n:-0}" -gt 0 ]; then registered=1; echo "$n check(s) registered."; break; fi
+            mergeable="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" \
+                          --jq '.mergeable_state' 2>/dev/null || echo unknown)"
+            if [ "$mergeable" = "dirty" ]; then
+              echo "::error::$pr_url conflicts with ${GITHUB_REF_NAME} (mergeable_state: dirty)."
+              echo "::error::Failing now rather than waiting out the five-minute check loop: a"
+              echo "::error::conflicted PR has no refs/pull/N/merge ref, so pull_request checks"
+              echo "::error::can never register on it. This is NOT a token problem."
+              echo "::error::Cause to look at first: this run regenerated the indices on top of a"
+              echo "::error::stale commit. The checkout step pins to the branch tip for exactly"
+              echo "::error::this reason -- if that is still set and this fired anyway, main moved"
+              echo "::error::between checkout and push. The PR is left open so the diff is visible."
+              exit 1
+            fi
             sleep 10
           done
           if [ "$registered" -ne 1 ]; then
-            echo "::error::no check run registered for ${head_sha} within 5 minutes."
+            echo "::error::no check run registered for ${head_sha} within 5 minutes,"
+            echo "::error::and the PR is not conflicted (mergeable_state: ${mergeable:-unknown})."
             echo "::error::With a required check that is indistinguishable from a permanent"
             echo "::error::block, so the PR is left open. Most likely cause: BOT_PR_TOKEN is a"
             echo "::error::GITHUB_TOKEN-equivalent and did not trigger the checks."
