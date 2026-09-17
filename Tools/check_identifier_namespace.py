@@ -25,7 +25,7 @@ generators in `docs/plans/_scrub/` (now untracked, kept on disk), which are what
 produced the values already in the repo:
 
     company   '8' + RIGHT('0000' + rn, 4)        -> 8XXXX   (demo1/demo2)
-    company   curated map 00001->30001 ...       -> 3XXXX   (demo3)
+    company   curated map, source co -> 30001 .. -> 3XXXX   (demo3)
     company   00000 / 99999 kept deliberately    -> JDE structural
     bu numeric POWER(10,w) - 1 - rn              -> 9...... (high range, same width)
     bu alpha   'B' + RIGHT('000000' + rn, 6)     -> BXXXXXX (demo2/demo3)
@@ -72,7 +72,7 @@ import sys
 COMPANY_RESERVE = [
     (re.compile(r"^00000$"), "JDE default company, kept by every scrub map"),
     (re.compile(r"^99999$"), "JDE chart-of-accounts/subledger pseudo-company, kept"),
-    (re.compile(r"^3\d{4}$"), "demo3 curated map (00001->30001 ...)"),
+    (re.compile(r"^3\d{4}$"), "demo3 curated map (source co -> 30001 ...)"),
     (re.compile(r"^8\d{4}$"), "demo1/demo2 generated map ('8' + 4-digit sequence)"),
     (re.compile(r"^9\d{4}$"), "hand-written doc and test fixtures"),
 ]
@@ -103,7 +103,8 @@ BU_RESERVE = [
 
 # A company number in company position: preceded by a company label within a
 # short window. The window then yields a RUN of values, so
-# "companies `00043`, `00067`, `00073`" reports three, not one.
+# "companies 90043, 90067, 90073" reports three, not one. (Reserved values in
+# this comment on purpose -- see the note above SELF_TESTS.)
 # `(?!-)` after the bare `Co` form keeps "co-authored", "co-located" and
 # "co-ordinate" from anchoring a read -- caught by the self-test, not in review.
 COMPANY_ANCHOR = re.compile(
@@ -195,7 +196,7 @@ def scan_line(path, line_no, line, ok, bad):
         after = line[m.end():m.end() + 1]
         after2 = line[m.end() + 1:m.end() + 2]
         # ⚠ `after == "."` alone was WRONG and the failing fixture caught it: an
-        # account ending a sentence ("... unprovenanced: 8800100.142000.") was
+        # account ending a sentence ("... landed on 9999998.146363.") was
         # silently skipped. Only a dot that CONTINUES the chain into another
         # digit means this is a version string rather than an account.
         if before == "." or before.isdigit() or (after == "." and after2.isdigit()):
@@ -314,10 +315,15 @@ def list_reserve():
 # that must be caught, taken from the shapes HK-19 actually turned up.
 # --------------------------------------------------------------------------
 
+# ⚠ EVERY CASE INLINE HERE IS IN-RESERVE OR MATCHES NOTHING, AND THAT IS FORCED.
+# The cases whose point is a value the gate must CATCH live in
+# `_test_identifier_gate/failing-cases.tsv`, loaded below. The gate found this
+# itself: the moment this script was committed it became tracked, the scanner
+# read it like any other file, and it failed on its own test data -- ten hits,
+# all examples. Putting the failing literals back here means either a gate that
+# fails on itself or a gate that exempts a file it should be reading.
 SELF_TESTS = [
     # (label, line, expected in-reserve, expected out-of-reserve)
-    ("real pre-scrub company, labelled",
-     "do NOT license companies `00043`, `00067`, `00073`", 0, 3),
     ("scrubbed company, demo1/2 range",
      "Co 80003 reclassified in February", 1, 0),
     ("scrubbed company, demo3 range",
@@ -328,12 +334,10 @@ SELF_TESTS = [
      "const COMPANIES = [{ co: '90001' }, { co: '90002' }]", 2, 0),
     ("company run reads every value, not just the first",
      "companies 80001, 80002, 80003", 3, 0),
-    ("out-of-reserve company in a run is caught beside in-reserve ones",
-     "companies 80001, 00050, 80003", 2, 1),
     ("scrubbed 7-digit BU account passes",
      "3120 resolves to 9999998.146363, which is why", 1, 0),
-    ("unprovenanced 7-digit BU account is caught",
-     "<td>8800100.142000</td>", 0, 1),
+    ("an in-reserve account ending a sentence is still read",
+     "the leg landed on 9999998.146363.", 1, 0),
     ("CLAUDE.md's own generic passes",
      "Use clean fictional generics (5000.140000, MFG01.4220)", 2, 0),
     ("subsidiary form passes",
@@ -351,9 +355,35 @@ SELF_TESTS = [
 ]
 
 
+def failing_cases(root):
+    """The cases that must be CAUGHT, read from the excluded fixture directory.
+
+    They cannot be inlined above -- this file is tracked, so the scanner reads
+    it, and an out-of-reserve literal here fails the gate on its own source."""
+    path = os.path.join(root, FIXTURE_DIR, "failing-cases.tsv")
+    cases = []
+    with open(path, "r", encoding="utf-8") as fh:
+        for raw in fh:
+            raw = raw.rstrip("\n")
+            if not raw.strip() or raw.lstrip().startswith("#"):
+                continue
+            parts = raw.split("\t")
+            if len(parts) != 4:
+                raise ValueError("malformed case (want 4 tab-separated fields): %r" % raw)
+            want_ok, want_bad, label, line = parts
+            cases.append((label, line, int(want_ok), int(want_bad)))
+    if not cases:
+        # A zero here would silently delete every catching case from the suite
+        # and still print "self-test passed".
+        raise ValueError("no failing cases loaded from %s" % path)
+    return cases
+
+
 def self_test():
     failures = []
-    for label, line, want_ok, want_bad in SELF_TESTS:
+    root = repo_root()
+    cases = list(SELF_TESTS) + failing_cases(root)
+    for label, line, want_ok, want_bad in cases:
         ok, bad = [], []
         scan_line("<self-test>", 1, line, ok, bad)
         if len(ok) != want_ok or len(bad) != want_bad:
@@ -375,7 +405,6 @@ def self_test():
     # not show that the gate opens a file, walks it, and returns non-zero --
     # which is the only thing CI actually calls.
     fixture = os.path.join(FIXTURE_DIR, "unprovenanced.fixture.md")
-    root = repo_root()
     if not os.path.exists(os.path.join(root, fixture)):
         failures.append("the failing fixture is missing: %s" % fixture)
     else:
@@ -398,12 +427,12 @@ def self_test():
 
     if failures:
         print("")
-        print("self-test FAILED: %d of %d cases" % (len(failures), len(SELF_TESTS) + 1))
+        print("self-test FAILED: %d of %d cases" % (len(failures), len(cases) + 1))
         for f in failures:
             print("  - %s" % f)
         return 1
     print("self-test passed: %d cases (%d of them expect a catch)"
-          % (len(SELF_TESTS) + 1, sum(1 for t in SELF_TESTS if t[3])))
+          % (len(cases) + 1, sum(1 for t in cases if t[3])))
     return 0
 
 
