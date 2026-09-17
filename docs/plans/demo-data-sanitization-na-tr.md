@@ -15,6 +15,13 @@ dev-only, to make old data read as recent).
 > Owner loads via VALC. NA date shift stays SKIPPED (Demo2 reads ~2020-2021 dates).
 
 ## Scripts (reusable tooling)
+⚠ **`docs/plans/_scrub/` is UNTRACKED as of 2026-09-16 (HK-19).** The scripts stay on
+the dev box and are gitignored; a fresh clone of this public repo will not have them,
+so every path this runbook names is local-only until they move to the private demo
+repo. Two of the repo's own documents already asserted they were untracked or must
+never be committed, and neither was true. This runbook is still tracked because it is
+the procedure, not the customer-derived tooling.
+
 Live in `docs/plans/_scrub/` — the same set proven on `jdesource_dev`:
 
 | Script | What it does | Per-DB adjustment |
