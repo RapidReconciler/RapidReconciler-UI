@@ -685,8 +685,111 @@ window.RRDB = (function () {
     var s = _session();
     if (s) for (var i = 0; i < s.dbs.length; i++) if (s.dbs[i] && s.dbs[i].n === n) { s.activeDbIndex = i; break; }
   }
+  /*
+   * VLC-87. The customer-facing service notice, or '' when there is none.
+   *
+   * ⚠ IT RIDES THE TOKEN, and that means it is as stale as the token — up to
+   * eight hours (auth.jwt.ttl-hours). Acceptable for a banner, which is a nudge
+   * rather than a deadline, and the reason the HARD block is a login-time
+   * refusal instead of something the client is trusted to honour. A page cannot
+   * enforce its own lockout; it can only be asked to show a message.
+   */
+  function notice() {
+    var t = _decodeToken();
+    return (t && typeof t.notice === 'string') ? t.notice : '';
+  }
+
   return { dbs: dbs, index: index, active: active, name: name, agentBase: agentBase,
-           valcBase: valcBase, valcGap: valcGap, valcFetch: valcFetch, setActive: setActive };
+           valcBase: valcBase, valcGap: valcGap, valcFetch: valcFetch, setActive: setActive,
+           notice: notice };
+})();
+
+/*
+ * RRNOTICE — renders the service notice on every V8 page (VLC-87).
+ *
+ * ⚠ IT LIVES HERE BECAUSE V8 HAS NO SHARED CHROME. Measured 2026-09-19: there
+ * is no global banner mechanism and config.js injects nothing today; the
+ * "scope band" is per-page CSS in four files. The alternative was editing every
+ * page and then remembering to edit the next one somebody adds. config.js is
+ * already loaded by all of them, so this is the one place that covers the set
+ * by construction.
+ *
+ * ⚠ NOT DISMISSIBLE, ON PURPOSE. A dismiss button turns an unpaid-invoice
+ * notice into one click of silence, which is the opposite of what it is for.
+ * It is also NOT modal and does NOT block anything — access continues under
+ * NOTICE by design, because most late payers are late by accident and a banner
+ * collects most of the money without the risk of locking out a finance team
+ * mid-close.
+ *
+ * ⚠ PREPENDED TO <body>, not fixed-position. A fixed bar overlays whatever the
+ * page already puts at the top, and four pages have their own top chrome. In
+ * normal flow it pushes content down instead of hiding it.
+ */
+window.RRNOTICE = (function () {
+  var ID = 'rr-service-notice';
+
+  function render() {
+    try {
+      var text = (window.RRDB && RRDB.notice && RRDB.notice()) || '';
+      var existing = document.getElementById(ID);
+      if (!text) { if (existing) existing.remove(); return false; }
+      if (existing) { existing.querySelector('.rr-service-notice-text').textContent = text; return true; }
+
+      var bar = document.createElement('div');
+      bar.id = ID;
+      bar.setAttribute('role', 'status');
+      bar.style.cssText = [
+        'background:#fdf3e6', 'color:#7a4a12', 'border-bottom:1px solid #e8c9a0',
+        'font:600 13.5px/1.45 "Open Sans",system-ui,sans-serif',
+        'padding:10px 16px', 'display:flex', 'gap:10px', 'align-items:center'
+      ].join(';');
+
+      // The icon is decorative; the text carries the whole message. A meaning
+      // that lives only in a glyph is a meaning a screen reader drops.
+      var icon = document.createElement('span');
+      icon.setAttribute('aria-hidden', 'true');
+      icon.textContent = '⚠';
+
+      var span = document.createElement('span');
+      span.className = 'rr-service-notice-text';
+      // textContent, never innerHTML: this string is typed by an operator into
+      // a form and rendered in the customer's browser. innerHTML would make it
+      // an injection point on every page at once.
+      span.textContent = text;
+
+      bar.appendChild(icon);
+      bar.appendChild(span);
+      document.body.insertBefore(bar, document.body.firstChild);
+      return true;
+    } catch (_) {
+      // A broken banner must never take a page down with it. The notice is an
+      // enrichment; the reconciliation screens behind it are the product.
+      return false;
+    }
+  }
+
+  /*
+   * ⚠ GUARDED FOR "NO DOM AT ALL", not just "DOM not ready yet".
+   *
+   * config.js is not only loaded by browsers. Tools/test-agent-base-resolution.js
+   * and two other behaviour tests slice the RRENV/RRDB block out of this file and
+   * run it in a Node `vm` context with no `document` in scope. The first version
+   * of this bootstrap read `document.readyState` directly, outside the try/catch
+   * below, and threw `ReferenceError: document is not defined` before any test
+   * could assert anything -- taking THREE unrelated suites red, none of which
+   * have anything to do with a banner.
+   *
+   * Caught by the UI repo's own parsecheck gate on the pull request, which is
+   * the second time in one change that a gate found what review did not.
+   */
+  if (typeof document !== 'undefined' && document) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', render);
+    } else {
+      render();
+    }
+  }
+  return { render: render };
 })();
 
 /*
