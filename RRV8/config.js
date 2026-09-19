@@ -768,10 +768,26 @@ window.RRNOTICE = (function () {
     }
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', render);
-  } else {
-    render();
+  /*
+   * ⚠ GUARDED FOR "NO DOM AT ALL", not just "DOM not ready yet".
+   *
+   * config.js is not only loaded by browsers. Tools/test-agent-base-resolution.js
+   * and two other behaviour tests slice the RRENV/RRDB block out of this file and
+   * run it in a Node `vm` context with no `document` in scope. The first version
+   * of this bootstrap read `document.readyState` directly, outside the try/catch
+   * below, and threw `ReferenceError: document is not defined` before any test
+   * could assert anything -- taking THREE unrelated suites red, none of which
+   * have anything to do with a banner.
+   *
+   * Caught by the UI repo's own parsecheck gate on the pull request, which is
+   * the second time in one change that a gate found what review did not.
+   */
+  if (typeof document !== 'undefined' && document) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', render);
+    } else {
+      render();
+    }
   }
   return { render: render };
 })();
