@@ -1392,7 +1392,7 @@ server.ssl.keyStoreType=PKCS12</code></pre>
 
         <div class="callout warning">
           <div class="callout-label">This release cannot be pushed blind</div>
-          <p>The keystore password is read from an environment variable with <strong>no fallback</strong>. A box that receives the jar without that variable set <strong>fails to start</strong>, and says why. That is deliberate: the two alternatives are a default password on the file holding the wildcard private key, or silently starting on plain HTTP &mdash; which V8 cannot use anyway, since it builds <code>https://</code> URLs from the token, so it would surface as a certificate error on the customer&rsquo;s screen instead of a line in our log. <strong>The rollout has to set the variable on each box first.</strong></p>
+          <p>The keystore password is read from a protected secrets file (or, on a box not yet moved over, the old environment variable) with <strong>no default</strong>. A box that receives the jar with neither set <strong>fails to start</strong>, and says why. That is deliberate: the two alternatives are a default password on the file holding the wildcard private key, or silently starting on plain HTTP &mdash; which V8 cannot use anyway, since it builds <code>https://</code> URLs from the token, so it would surface as a certificate error on the customer&rsquo;s screen instead of a line in our log. <strong>The rollout has to write the secrets file on each box first.</strong></p>
         </div>
 
         <h3 id="decouple-payoff">Two consequences</h3>
@@ -1410,36 +1410,64 @@ server.ssl.keyStoreType=PKCS12</code></pre>
         <h2 id="rollout">Rolling out the file-based keystore</h2>
         <p>This is the only part of the certificate work that is <em>not</em> future-state. The jar above is built and running, and everything below describes what has to be true on a box before it receives that jar. Get it wrong and the box does not start &mdash; which is the designed behaviour, not a bug, but it is not a discovery to make during a customer upgrade window.</p>
 
-        <h3 id="rollout-vars">The two environment variables, by name</h3>
-        <p>Both are read from the environment and neither has a fallback. <code>application.yml</code> binds them with an empty default (<code>${VAR:}</code>), which means a blank value is a refusal, not a default.</p>
+        <h3 id="rollout-vars">The secrets file</h3>
+        <p>The two certificate passwords live in a properties file that only the Services and administrators can read. They used to be machine-wide environment variables, and every process on the box can read the environment: a crash dialog that lists it, or a log that echoes it, publishes both passwords.</p>
+        <pre><code style="display:block;padding:12px 14px;background:var(--navy-deep);color:#e8eef9;line-height:1.55;overflow-x:auto;">C:\ProgramData\RapidReconciler\secrets\secrets.properties</code></pre>
+        <p>The Services jar reads the file itself, through <code>spring.config.import</code> in <code>application.yml</code>, so it works whoever launches the jar: the broker on a customer box, or VALC on the dev box. The path is the property <code>agent.secrets-file</code>. To move the file, set <code>-Dagent.secrets-file=...</code> or <code>AGENT_SECRETS_FILE</code> on the process that starts the jar. The file has its own <code>secrets</code> folder because <code>C:\ProgramData\RapidReconciler</code> also holds VALC&rsquo;s <code>packages</code> folder, and locking the parent down would change who can reach that too.</p>
+        <p>Each line uses the property name as its key, not the old variable name:</p>
         <table>
           <thead>
-            <tr><th>Variable</th><th>Binds to</th><th>Needed on</th></tr>
+            <tr><th>Key in the file</th><th>Old variable (fallback)</th><th>Needed on</th></tr>
           </thead>
           <tbody>
             <tr>
-              <td><code>RR_CERT_STORE_PASSWORD</code></td>
               <td><code>agent.certificate.key-store-password</code>, which the <code>rr-tls</code> SSL bundle reads directly</td>
+              <td><code>RR_CERT_STORE_PASSWORD</code></td>
               <td><strong>Every box.</strong> Without it the jar cannot open its own keystore and fails to start.</td>
             </tr>
             <tr>
-              <td><code>RR_CERT_BOOTSTRAP_PASSWORD</code></td>
               <td><code>agent.certificate.bootstrap-password</code></td>
+              <td><code>RR_CERT_BOOTSTRAP_PASSWORD</code></td>
               <td>Any box running the <strong>one-time in-place seed</strong> &mdash; that is, any box that does not already have a keystore file. It protects the copy still bundled in the jar.</td>
             </tr>
           </tbody>
         </table>
-        <p>This is a per-box password by design. The agent re-writes any certificate it receives under this value before writing it to disk, so renewing the certificate never redistributes a password, and the on-disk password can be rotated without touching the certificate.</p>
+        <p>Neither has a default, so a blank value is a refusal. A line with an empty value counts as blank, and it also hides the old variable. The keystore password is per box by design. The agent re-writes any certificate it receives under this value before writing it to disk, so renewing the certificate never redistributes a password, and the on-disk password can be rotated without touching the certificate.</p>
+
+        <h3 id="rollout-acl">Who can read it</h3>
+        <p>Exactly <strong>SYSTEM</strong>, <strong>Administrators</strong> and the account the Services run as, with inherited permissions removed, on the file and on its <code>secrets</code> folder. The broker service runs as LocalSystem (its WinSW definition names no service account), and every Services jar it starts runs as the same account, so on a standard install the service account is SYSTEM. Administrators is the owner, because an owner can always rewrite the permissions.</p>
+        <p>The installer writes the file and sets these permissions with <code>icacls</code> in an order that never leaves a password readable more widely. It creates the folder and an empty file and locks both down first, then writes the passwords into the locked file, then checks the result. If the check finds anything broader, it deletes the file instead of leaving it. On a reinstall it keeps an existing file and checks it again.</p>
+        <p>To check a box yourself, from an elevated PowerShell in the install folder:</p>
+        <pre><code style="display:block;padding:12px 14px;background:var(--navy-deep);color:#e8eef9;line-height:1.55;overflow-x:auto;">powershell -ExecutionPolicy Bypass -File secrets-file.ps1 -Action Verify</code></pre>
+        <p>It prints <code>OK</code> and exits 0, or lists each problem and exits 1. The script ships next to the broker in <code>C:\Program Files\Rapid Reconciler</code> and in the Agent repo at <code>setup/installer/secrets-file.ps1</code>.</p>
+
+        <h3 id="rollout-precedence">When the file and an old variable both exist</h3>
+        <ul>
+          <li><strong>The file wins.</strong> It outranks <code>application.yml</code>, which is where the old variables are read. At startup the log carries a WARN saying the variable is still set, is no longer used, and should be removed. It is a warning, not a failure.</li>
+          <li><strong>Variable only, no file:</strong> the jar still starts, so no box breaks on upgrade. The log carries a WARN telling you to move the value into the file.</li>
+          <li><strong>Neither:</strong> the jar refuses to start, and the error names the secrets file it expected.</li>
+        </ul>
+        <p>The log never prints a password value.</p>
+
+        <h3 id="rollout-migrate">Moving a box off the environment variables</h3>
+        <p>Do these in order, so no agent loses its password while it runs:</p>
+        <ol>
+          <li><strong>Write the file.</strong> From an elevated PowerShell in the install folder, run <code>secrets-file.ps1 -Action Migrate</code>. It copies the current machine-level values into the file, sets its permissions and checks them. It prints no values and does not touch the variables.</li>
+          <li><strong>Restart the Services</strong> through VALC so each one starts on the new jar and reads the file.</li>
+          <li><strong>Check each agent came up</strong> and that its log carries the &ldquo;still set&rdquo; WARN from above. That WARN shows the file is supplying the value.</li>
+          <li><strong>Remove both machine variables</strong>, then reboot when you can. A reboot matters here: the Service Control Manager holds its own copy of the machine environment, so services keep receiving a removed variable until the box restarts.</li>
+          <li><strong>Rotate the passwords</strong>, on the assumption they were exposed while they lived in the environment.</li>
+        </ol>
+        <p>A file needs no reboot to take effect, which is one reason it replaced the variables. The old callout below still applies to any box that uses a variable.</p>
 
         <div class="callout warning">
-          <div class="callout-label">&#9888; On Windows, setting the variable is not enough. The box has to restart.</div>
+          <div class="callout-label">&#9888; Old variables only: on Windows, setting one is not enough. The box has to restart.</div>
           <p><code>setx /M</code> writes the value to the registry immediately, and a new interactive process sees it straight away &mdash; so a quick check in a fresh PowerShell window says the variable is set. <strong>The Service Control Manager keeps its own cached copy of the machine environment block</strong>, and hands that cached copy to every service it starts. Restarting the service is not enough; stopping and starting it is not enough. The SCM re-reads the environment at boot.</p>
           <p>Measured on the dev box 2026-09-11: both variables set at machine scope and present in the registry, a freshly spawned process reporting them correctly, and the agents still failing with the variables absent. After a reboot the seed ran and all three agents came up.</p>
-          <p><strong>So the rollout order is: set both variables, reboot, then deploy the jar.</strong></p>
         </div>
 
         <h3 id="rollout-seed">What the seed does, and where the file lands</h3>
-        <p>On startup, before Spring builds anything, the jar checks whether the keystore file exists. If it does not, it writes one from the copy bundled inside the jar, re-encrypted under this box&rsquo;s <code>RR_CERT_STORE_PASSWORD</code>. If it does, nothing happens and nothing is logged &mdash; that is the normal steady state.</p>
+        <p>On startup, before Spring builds anything, the jar checks whether the keystore file exists. If it does not, it writes one from the copy bundled inside the jar, re-encrypted under this box&rsquo;s keystore password (<code>agent.certificate.key-store-password</code> from the secrets file). If it does, nothing happens and nothing is logged &mdash; that is the normal steady state.</p>
         <pre><code style="display:block;padding:12px 14px;background:var(--navy-deep);color:#e8eef9;line-height:1.55;overflow-x:auto;">C:\Program Files\Rapid Reconciler\certs\rr-wildcard.p12</code></pre>
         <p>That path is <code>agent.certificate.key-store-path</code>, and the <code>rr-tls</code> bundle reads the same property rather than carrying a second copy of the path &mdash; two copies of a path is how they drift, and the drift presents as TLS quietly serving yesterday&rsquo;s certificate. The private key is stored under the alias <code>rr-wildcard</code>. The bundle sets <code>reload-on-update: true</code>, so replacing that file reloads TLS without restarting the jar.</p>
 

@@ -299,7 +299,14 @@ backend contract rather than synthesized client-side (per the
    | **Tools** (maintenance) | Report Engine restart, Fiscal calendar, Reload Cardex | `perms.tl === true` |
 
    Fail-open per the existing `caps()` convention (a missing layer
-   doesn't lock a user out). **Gate the Analyst lane on `perms.dm`
+   doesn't lock a user out) **for `inv` only**. `it` and `por` fail
+   CLOSED (owner 2026-09-25): In Transit and PO Receipts have no V8 pages
+   yet, so their sidebar entry and Home coming-soon tile show only when
+   `m.it` / `m.por === true`, i.e. ticked on VALC Client Details
+   (`clients.tab_in_transit` / `tab_po_receipts`). VALC's orphan-perm
+   branch (`AuthController`, no client row) emits both as `false`.
+   `sidebar.js` `applyClientModuleCaps` and `home.html` `caps()` must stay
+   in step. **Gate the Analyst lane on `perms.dm`
    directly, NOT on the existing `caps().dm`** &mdash; `caps().dm`
    AND-gates against `m.adm` (the *admin-module* client license),
    which was right for the admin-coupled DMAAI page guard but wrong
