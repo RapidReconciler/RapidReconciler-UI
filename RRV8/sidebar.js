@@ -336,17 +336,26 @@ ${adminSection}
         <a href="inventory-asof.html"           class="sidebar-nav-child${cls('asof')}"           data-nav-page="asof">Perpetual</a>
       </div>
     </div>
-    <div class="sidebar-module${expCls('in-transit')}" data-module="in-transit">
-      <button type="button" class="sidebar-nav-item" data-module-toggle="in-transit" aria-expanded="${expAria('in-transit')}">
+    <!-- In Transit / PO Receipts have no V8 pages yet (owner 2026-09-25).
+         They were clickable accordion sections that opened onto nothing
+         while Home showed the same modules as muted "coming soon" tiles.
+         Now they match Home: visible, muted, NOT interactive (a div with
+         no data-module-toggle, so wireSectionToggle skips it and no
+         expanded state is ever restored). The data-module wrapper stays,
+         so applyClientModuleCaps still shows each one only to a customer
+         licensed for it and a user granted it. When a module ships, it
+         goes back to a button with children like Inventory. -->
+    <div class="sidebar-module" data-module="in-transit" style="display:none">
+      <div class="sidebar-nav-item is-soon" aria-disabled="true" title="In Transit is coming soon to RapidReconciler V8.">
         <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
-        <span class="sidebar-nav-text">In Transit</span>
-      </button>
+        <span class="sidebar-nav-text">In Transit <span class="sidebar-soon-tag">Coming soon</span></span>
+      </div>
     </div>
-    <div class="sidebar-module${expCls('po-receipts')}" data-module="po-receipts">
-      <button type="button" class="sidebar-nav-item" data-module-toggle="po-receipts" aria-expanded="${expAria('po-receipts')}">
+    <div class="sidebar-module" data-module="po-receipts" style="display:none">
+      <div class="sidebar-nav-item is-soon" aria-disabled="true" title="PO Receipts is coming soon to RapidReconciler V8.">
         <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg>
-        <span class="sidebar-nav-text">PO Receipts</span>
-      </button>
+        <span class="sidebar-nav-text">PO Receipts <span class="sidebar-soon-tag">Coming soon</span></span>
+      </div>
     </div>
   </div>
 
@@ -1097,8 +1106,14 @@ ${adminSection}
     const perms = active.perms || {};
     const cap = {
       inv: (m.inv !== false) && (t.inv !== false),
-      it:  (m.it  !== false) && (t.it  !== false),
-      por: (m.por !== false) && (t.por !== false),
+      // In Transit / PO Receipts FAIL CLOSED (owner 2026-09-25: "show in the
+      // sidebar only if checked on the VALC client details"). They have no
+      // V8 pages yet, so an absent or old claim must not advertise a module
+      // the customer may not have bought. Only m.it / m.por === true (VALC's
+      // clients.tab_in_transit / tab_po_receipts) shows them. Inventory keeps
+      // failing open: it is the live module and the lock-out case matters.
+      it:  (m.it  === true) && (t.it  !== false),
+      por: (m.por === true) && (t.por !== false),
       // adm does NOT fail open. The three modules above are licensing
       // questions (an absent claim means "old token, show it"); the admin
       // tab is an authorization question, where an absent claim means
