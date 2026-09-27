@@ -178,6 +178,13 @@ Daren owns issuance; VALC owns ingest + fleet push. The clean contract:
 
 ## Constraints & risks
 
+- **Update 2026-09-26 (VLC-113):** "frozen" now holds for **V7 installs
+  only**. V8 installs run the V8 broker, built from the same source in
+  `RapidReconciler-Broker` (2.1.0), which we own and can change. The rest of
+  this bullet still describes the V7 broker. On a V8 install the Services
+  keystore is `C:\Program Files\Rapid Reconciler V8\certs\rr-wildcard.p12`
+  (the installer sets `AGENT_CERTIFICATE_KEYSTOREPATH` to it), not the V7
+  folder.
 - **Broker is frozen.** `rr-valc-agent.jar` (JMS connect, file streaming, SHA1,
   instance lifecycle, `SynchronizeMessage2`) has no source in these repos and
   must not change. **Good news:** nothing above requires it to — we reuse the

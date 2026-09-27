@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""open-prs.py -- list every OPEN pull request across the five RR repos.
+"""open-prs.py -- list every OPEN pull request across the six RR repos.
 
     python Tools/open-prs.py
 
@@ -40,6 +40,7 @@ REPOS = [
     ("RapidReconciler-Valc",  "RapidReconciler-Valc"),
     ("RapidReconciler-DB",    "RapidReconciler-DB"),
     ("RapidReconciler-SSIS",  "RapidReconciler-SSIS"),
+    ("RapidReconciler-Broker", "RapidReconciler-Broker"),
 ]
 
 OWNER = "RapidReconciler"
@@ -166,7 +167,7 @@ def main():
         return self_test()
     total = 0
     broken = []
-    print("OPEN PULL REQUESTS -- all five RR repos")
+    print("OPEN PULL REQUESTS -- all six RR repos")
     print("=" * 78)
 
     for repo, _dirname in REPOS:
