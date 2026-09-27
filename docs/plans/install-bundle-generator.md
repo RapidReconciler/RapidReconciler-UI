@@ -177,8 +177,24 @@ aware of when building/validating the new Services jar against the broker).
 The **Java-runtime decision is settled** (one JRE 21, above). Get the
 **signing cert**, then author the `.iss` + WinSW config
 modeled on the layout above, compile with `ISCC.exe`, sign, and drop the result
-into `valc.install-bundle.base-installer-path`. Track A already consumes it with
-zero code change.
+into `valc.install-bundle.base-installer-path`. Track A consumes it with no
+further VALC change.
+
+⚠ **That last sentence was false until 2026-09-27.** The installer compiled its
+config in (`build-installer.ps1 -ConfigDir`) and read nothing from beside
+itself, so the generic `setup.exe` VALC would zip up installed a broker with no
+identity. Found during the VLC-113 rehearsal prep. Now the installer reads
+`application.properties`, `valc-truststore.jks`, `valc-jwt-public.pem` and
+`RR-FIRST-LOGIN.txt` from its own folder (Inno `external` files), refuses at
+start when a new install is run away from the bundle, and `-ConfigDir` is gone.
+
+**The bundle also carries `services-bootstrap.properties`** (owner ruling
+2026-09-27: no password prompts). It holds the password of the certificate
+bundled in every Services jar, from VALC's
+`valc.install-bundle.services-bootstrap-password`; generation refuses (409)
+without it. The installer reads it in place into the V8 secrets file and
+generates the keystore password itself, so the customer types nothing, the same
+as V7, and the password is still never in the jar or the machine environment.
 
 Until then, **Track A is fully functional** with the placeholder base — the
 mint/stamp/deliver/email/manifest flow doesn't depend on the real installer bytes.
