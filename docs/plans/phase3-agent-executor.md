@@ -50,6 +50,12 @@ agent.
 
 ## 2. What "the agent" is here (and what's frozen)
 
+> **Update 2026-09-26 (VLC-113):** the broker is frozen on **V7 installs
+> only**. V8 installs run the V8 broker from `RapidReconciler-Broker` (2.1.0,
+> built from the same source), which we own: a new message type is possible
+> there, landing in `rr-common` and VALC 2.0 together with a pinned
+> `serialVersionUID`. That weakens Channel A's main con below for V8 boxes.
+
 Two on-box JVMs, per `feedback_data_services_changeable_broker_frozen` +
 `reference_v7_services_jar_store_versioned`:
 

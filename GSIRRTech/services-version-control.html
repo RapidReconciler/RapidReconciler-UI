@@ -106,6 +106,7 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <li data-target="post-release"><a href="#post-release" onclick="goAnchor('post-release'); return false;">4. After the release</a></li>
 <li data-target="post-release-prod" style="padding-left: 14px;"><a href="#post-release-prod" onclick="goAnchor('post-release-prod'); return false;">4a. Production deploy (JMS)</a></li>
 <li data-target="post-release-internal" style="padding-left: 14px;"><a href="#post-release-internal" onclick="goAnchor('post-release-internal'); return false;">4b. Internal deploy (HTTP push)</a></li>
+<li data-target="post-release-broker" style="padding-left: 14px;"><a href="#post-release-broker" onclick="goAnchor('post-release-broker'); return false;">4c. V8 broker deploy (JMS)</a></li>
 <li data-target="prereleases"><a href="#prereleases" onclick="goAnchor('prereleases'); return false;">5. Pre-releases &amp; rollbacks</a></li>
 <li data-target="valc-mirror"><a href="#valc-mirror" onclick="goAnchor('valc-mirror'); return false;">6. VALC 2.0 parallel</a></li>
 <li data-target="troubleshooting"><a href="#troubleshooting" onclick="goAnchor('troubleshooting'); return false;">7. Troubleshooting</a></li>
@@ -125,7 +126,12 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 </ul>
 <p>Once a customer&rsquo;s Services instance receives the new jar (via VALC&rsquo;s deploy panel and <code>SelfUpdateMessage</code>), the dashboard&rsquo;s <strong>Services Version</strong> column updates &mdash; the value lives in <code>client_deploys.target_version_string</code>, not in any Services self-report.</p>
 <div class="callout important">
-  <p><strong>Scope:</strong> this doc covers the <strong>Services</strong> release flow. The literal Agent jar (<code>rr-valc-agent.jar</code>, deploy slot <code>component='agent'</code>) is the legacy v359 JMS broker client &mdash; its source lives outside our repos and it has no release flow on our side. The pinned reference for that artifact is <code>RapidReconciler-Agent/artifacts/v359/rr-valc-agent.jar</code>. See <a href="v359-vs-new-agent.html#section-1">v359 vs new agent &sect; 1</a> for the three-component breakdown.</p>
+  <p><strong>Scope:</strong> this doc covers the <strong>Services</strong> release flow. The broker jar (<code>rr-valc-agent.jar</code>, deploy slot <code>component='agent'</code>) is released elsewhere, and which one a box runs depends on the install:</p>
+  <ul>
+    <li><strong>V7 installs</strong> run the existing broker. Its source lives outside our repos and it has no release flow on our side; the pinned reference is <code>RapidReconciler-Agent/artifacts/v359/rr-valc-agent.jar</code>.</li>
+    <li><strong>V8 installs</strong> run the V8 broker, built from the existing broker source in <code>RapidReconciler-Broker</code>. That repo has its own tag-triggered <code>release.yml</code>: a pushed <code>v2.x.y</code> tag that matches <code>broker/pom.xml</code> builds and tests on Temurin 8 and attaches <code>rr-valc-agent-&lt;version&gt;.jar</code>, <code>rr-common-&lt;version&gt;.jar</code> and <code>SHA256SUMS</code> to a GitHub Release. The V8 installer&rsquo;s <code>build-installer.ps1 -BrokerJar</code> takes that jar, so the broker reaches a customer inside the installer, not through VALC&rsquo;s <code>component='agent'</code> slot.</li>
+  </ul>
+  <p>See <a href="v359-vs-new-agent.html#section-1">v359 vs new agent &sect; 1</a> for the three-component breakdown and <a href="v359-vs-new-agent.html#section-1a">&sect; 1a</a> for the V8 broker.</p>
 </div>
 <div class="callout note">
   <p>If you haven&rsquo;t yet, read <a href="v359-vs-new-agent.html#section-6">v359 vs new agent &sect; 6</a> for the self-update plumbing. This doc covers the <em>release</em> side; that one covers the <em>deploy</em> side.</p>
@@ -224,7 +230,7 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <thead><tr><th>Step</th><th>What it does</th></tr></thead>
 <tbody>
 <tr><td><strong>Checkout</strong></td><td>Pulls the tagged commit (not <code>main</code> / <code>Dev</code> HEAD).</td></tr>
-<tr><td><strong>Setup JDK 25</strong></td><td>Temurin distribution. The build runs on 25, but the Services jar is compiled for Java 21, which stays its runtime floor: on a customer box the broker launches it with the Services JRE the install bundle ships. Maven cache is restored from the previous run.</td></tr>
+<tr><td><strong>Setup JDK 25</strong></td><td>Temurin distribution. The build runs on 25, but the Services jar is compiled for Java 21, which stays its runtime floor: on a V8 customer box the V8 broker launches it on the one Java 21 JRE the V8 installer bundles, the same runtime the broker itself runs on. Maven cache is restored from the previous run.</td></tr>
 <tr><td><strong>Derive version</strong></td><td>Strips the leading <code>v</code> from <code>refs/tags/v0.2.0</code> &rarr; <code>0.2.0</code>. Stored as a step output.</td></tr>
 <tr><td><strong>Set Maven version</strong></td><td><code>mvn versions:set -DnewVersion=0.2.0 -DgenerateBackupPoms=false</code> &mdash; rewrites the <code>&lt;version&gt;</code> in <code>pom.xml</code> in place. Not committed; only used for this build.</td></tr>
 <tr><td><strong>Build</strong></td><td><code>mvn -B -DskipTests package</code>. Tests already ran before tagging (Step 1 above); skipping here keeps the release fast.</td></tr>
@@ -238,11 +244,13 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <section id="post-release">
 <h2>4. After the release</h2>
 <p>The jar on the GitHub Release page isn&rsquo;t the Services install path on its own &mdash; it has to land in VALC&rsquo;s artifact catalog (the <code>file_versions</code> table) before any of the deploy paths can reach a Services instance.</p>
-<p>Two deploy paths exist, both feeding off the same <code>file_versions</code> row:</p>
+<p>Three deploy paths exist, all feeding off the same <code>file_versions</code> row:</p>
 <ul>
-  <li><strong>Production deploy</strong> &mdash; JMS-based. Goes through the central VALC SPA and the customer&rsquo;s legacy <code>rr-valc-agent.jar</code>. The path real customers use today. See &sect; 4a.</li>
-  <li><strong>Internal deploy</strong> &mdash; HTTP-push. Goes through VALC 2.0&rsquo;s <strong>Manage Deploy</strong> modal directly to the Services jar&rsquo;s own <code>/admin/self-update</code> endpoint. Used on the dev box and in any environment where VALC 2.0 has line-of-sight to the agent&rsquo;s internal IP. See &sect; 4b.</li>
+  <li><strong>Production deploy (V7 installs)</strong> &mdash; JMS-based. Goes through the central VALC SPA and the customer&rsquo;s existing <code>rr-valc-agent.jar</code>. The path V7 customers use today. See &sect; 4a.</li>
+  <li><strong>Internal deploy</strong> &mdash; HTTP-push. Goes through VALC 2.0&rsquo;s <strong>Manage Deploy</strong> modal directly to the Services jar&rsquo;s own <code>/admin/self-update</code> endpoint. Used on the dev box and wherever VALC 2.0 itself runs the Services. See &sect; 4b.</li>
+  <li><strong>V8 broker deploy</strong> &mdash; JMS-based, from VALC 2.0 to the V8 broker on a V8 install. See &sect; 4c.</li>
 </ul>
+<p>Which of the last two applies is set per application server on its Topology card: <strong>RR Services run by</strong> <strong>VALC</strong> or <strong>Customer&rsquo;s broker</strong>.</p>
 <div class="callout important">
   <p>Customer deploys are <em>not</em> automatic on every release. Releasing publishes the jar; deploying pushes it. This split is intentional &mdash; gives you a chance to pilot a release on one or two clients before fanout, regardless of which path you use.</p>
 </div>
@@ -261,7 +269,7 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
   <p><strong>Watch the component slot.</strong> The artifact upload form asks for a component value. Services jars (this doc&rsquo;s artifact) go into <code>component='services'</code>. The other slot, <code>component='agent'</code>, is reserved for <code>rr-valc-agent.jar</code> &mdash; the legacy v359 JMS broker client. Uploading a Services jar into the agent slot will fail SHA1 verification on the customer side because the Agent&rsquo;s <code>HealthService</code> expects a different Actuator contract than the Services jar exposes.</p>
 </div>
 <div class="callout important">
-  <p><strong>The broker is no longer frozen.</strong> The JMS broker &mdash; the central VALC SPA plus the customer&rsquo;s <code>rr-valc-agent.jar</code> &mdash; used to be fixed. It is now changeable, delivered by a clean install per customer or at upgrade, which lets VALC 2.0 take over the broker role over time. That swap happens <em>outside</em> this Services release flow: the broker is replaced by reinstall, not by a tag-triggered release, so <code>component='agent'</code> still has no release pipeline on our side. Until a given customer&rsquo;s broker is migrated, their Services updates keep arriving over the legacy JMS path described above.</p>
+  <p><strong>V7 and V8 installs each keep their own broker.</strong> A V7 install keeps its existing broker, and its Services updates keep arriving over the JMS path described above. A V8 install runs the V8 broker from the start, installed by the V8 installer into its own folder (<code>C:\Program Files\Rapid Reconciler V8</code>, service <code>rr-v8-agent</code>). A V7 customer testing V8 runs both side by side. Neither broker is delivered through this Services release flow: the V8 broker has its own release in <code>RapidReconciler-Broker</code> (see the Overview), and it ships inside the installer.</p>
 </div>
 </section>
 
@@ -291,6 +299,24 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 </div>
 <div class="callout important">
   <p><strong>The deployed jar must itself contain <code>/admin/self-update</code></strong> for the next HTTP-push deploy to work. If you deploy a release that predates this endpoint, the agent loses its self-update path &mdash; restore it via a local <code>mvn package</code> + manual jar swap, or cut a new release tag from a Dev commit that includes the controller.</p>
+</div>
+<div class="callout note">
+  <p><strong>Refused on a broker-run server.</strong> When the server&rsquo;s <strong>RR Services run by</strong> is <strong>Customer&rsquo;s broker</strong>, VALC 2.0 refuses this path (and its Start / Restart buttons) with a message, before it stops anything. Use &sect; 4c instead.</p>
+</div>
+</section>
+
+<section id="post-release-broker">
+<h3>4c. V8 broker deploy (JMS via VALC 2.0)</h3>
+<p>The path for a V8 install whose Services the customer&rsquo;s broker runs. VALC 2.0 never starts, stops or probes those Services itself; it publishes what should run, and the broker does the rest.</p>
+<ol>
+  <li><strong>Import the jar</strong> into VALC 2.0&rsquo;s <code>file_versions</code> with <code>component='services'</code> (the Sync-from-GitHub button in &sect; 4b does this).</li>
+  <li><strong>Trigger the deploy.</strong> VALC 2.0 records a <code>client_deploys</code> row and publishes the desired state: every active database for the client, each pinned to the <strong>latest imported</strong> Services version (the highest version string in <code>file_versions</code>). It publishes only to a live connection (a heartbeat in the last 90 seconds) and refuses a list shorter than the client&rsquo;s active databases, because an empty list tells the broker to stop everything.</li>
+  <li><strong>The broker fetches and starts.</strong> It requests the jar over JMS, checks the SHA-1, and starts one Services process per database on its bundled JRE 21, with the database password in the process environment and VALC 2.0&rsquo;s JWT public key from the install bundle.</li>
+  <li><strong>VALC 2.0 closes the deploy from heartbeats:</strong> <code>SUCCEEDED</code> when the broker reports the instance up, <code>FAILED</code> when it reports it down, <code>TIMED_OUT</code> after 15 minutes. Up means up after delivery; the heartbeat does not yet prove which version is running.</li>
+</ol>
+<p>VALC 2.0 also republishes the desired state on the first heartbeat after the broker (re)connects, so a broker that restarts picks up the current pins without a new deploy.</p>
+<div class="callout important">
+  <p><strong>Importing a jar is what moves a broker-run box.</strong> Because every publish pins the latest imported version, a newer jar imported into <code>file_versions</code> reaches each broker-run box at its next publish, including the automatic one on reconnect. Import a release only when it is meant for those boxes. The rollback in &sect; 5 (pick the prior version in <strong>Manage Deploy</strong>) does not apply to them: rolling one back means the older version has to be the latest imported one.</p>
 </div>
 </section>
 

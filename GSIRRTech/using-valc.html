@@ -1423,6 +1423,7 @@
             <tr><td><code>rapidreconciler-prod.getgsi.com</code></td><td>80 and 443 outbound &mdash; application sign-in and services</td></tr>
             <tr><td><code>rapidreconciler.getgsi.com</code></td><td>80 and 443 outbound &mdash; application sign-in and services. Both hosts are required; which one serves a given site depends on its GSI configuration.</td></tr>
             <tr><td>Additional GSI-hosted endpoints</td><td>443 outbound &mdash; specific hostnames provided by GSI in the pre-install handoff</td></tr>
+            <tr><td>VALC 2.0 (V8 agent)</td><td>Outbound to the JMS host and port written into the install bundle (<code>valc.jms.ip</code> / <code>valc.jms.port</code>), plus HTTPS to VALC 2.0&rsquo;s <code>/check-ip</code> URL (<code>valc.checkip</code>). The production values are not fixed yet, so read them from the bundle you generate at <a href="javascript:void(0)" onclick="showView('topic-step-4')">Step 4</a>.</td></tr>
           </tbody>
         </table>
         <p>To verify connectivity ahead of <a href="javascript:void(0)" onclick="showView('topic-step-5')">Step 5</a>, have the customer's I/T contact open a browser on the application server and navigate to <a href="https://rapidreconciler-prod.getgsi.com" target="_blank" rel="noopener">https://rapidreconciler-prod.getgsi.com</a>. The login page should appear. If it does not, the firewall or proxy rules need to be addressed before the agent install.</p>
@@ -1679,6 +1680,13 @@ SUBMITTED BY
           <p>Once the customer installs the agent (<a href="javascript:void(0)" onclick="showView('topic-step-5')">Step 5</a>) and it reports in, the agent's own view of the machine arrives without anyone clicking a button. To read it, click the <strong>Connected</strong> pill at the top of the Application Server card &mdash; that opens <strong>Reported by agent</strong>, listing hostname, OS, Java and agent versions, free disk, and the last heartbeat. Where a value you entered differs from what the agent reports, VALC surfaces the detected value inline beside that specific field, so you can adopt it without leaving the card.</p>
         </div>
 
+        <h3 id="services-run-by">RR Services run by</h3>
+        <p>The RR Services on a customer&rsquo;s server are always run by the V8 broker installed on that server. It starts them from what VALC publishes. Under the Application Server card, <strong>RR Services run by</strong> shows <strong>Customer&rsquo;s broker</strong>. It is read-only, and there is nothing to set.</p>
+        <ul>
+          <li>VALC&rsquo;s own Start, Restart and HTTP-push deploy refuse with a message instead of acting. To restart a database&rsquo;s Services, restart the broker&rsquo;s Windows service on that server.</li>
+          <li>Services deploys go to the broker (see <a href="services-version-control.html#post-release-broker">Services Documentation &sect; 4c</a>).</li>
+        </ul>
+
         <h3 id="jde-source-card">JDE Source Card</h3>
         <p>The <strong>JDE Source</strong> card records how RapidReconciler reaches the customer's JD Edwards source database &mdash; the system the data load extracts from. It captures the <strong>JDE server name or IP</strong>, the <strong>JDE database</strong> (SQL Server source only), and the <strong>JDE login and password</strong> (the read account). It appears for <em>every</em> topology, since every install has a JDE source to pull from. The source <strong>platform</strong> (Oracle / AS&rsquo;400 / SQL Server), the table qualifier, and the data-dictionary decimals are not on this card &mdash; they live on Client Details under JDE Configuration.</p>
 
@@ -1709,6 +1717,7 @@ SUBMITTED BY
         <h3 id="what-generate-does">What the button does</h3>
         <ul>
           <li><strong>Mints a per-install identity.</strong> A unique client id and secret are generated and baked into the agent's <code>application.properties</code>. This is how VALC 2.0 recognizes which customer an agent belongs to &mdash; it replaces the old reliance on the customer's external IP. The secret is stored only as a hash.</li>
+          <li><strong>Writes the connection settings the agent needs</strong> into the same <code>application.properties</code>: VALC 2.0&rsquo;s JMS host and port, the <code>/check-ip</code> URL, a truststore for VALC&rsquo;s JMS certificate (under its own random password per bundle), and VALC&rsquo;s JWT <em>public</em> key, which the Services use to verify sign-ins. VALC refuses to generate, with a message, when its customer-facing addresses are not configured, when its JMS listener serves TLS but no truststore is set up for customers, or when it has no JWT public key.</li>
           <li><strong>Packages the download(s) by topology</strong> (see below) and emails the customer the matching one-time download link(s).</li>
           <li><strong>Carries no sign-in.</strong> The bundle installs the agent only &mdash; it does <em>not</em> create the customer's administrator account or any password. The RapidReconciler administrator is seeded later, at <a href="javascript:void(0)" onclick="showView('topic-step-10')">Customer Handoff (Step 10)</a>, and receives a set-password link by email. (In the legacy flow the bundle minted an <code>RRAdmin@&lt;domain&gt;</code> temp password in <code>RR-FIRST-LOGIN.txt</code>; that step is gone.)</li>
         </ul>
@@ -1725,7 +1734,7 @@ SUBMITTED BY
             </tr>
             <tr>
               <td><strong>Configuration 2 / 3</strong> (separate servers)</td>
-              <td><strong>Two separate bundles:</strong> an <strong>agent bundle</strong> for the application server (WinSW + bundled JRE + agent + Services jar + cert), and a <strong>database bundle</strong> for the database team (the four SQL install scripts + the SSIS <code>.dtsx</code> package + a README), run on the SQL Server.</td>
+              <td><strong>Two separate bundles:</strong> an <strong>agent bundle</strong> for the application server (the V8 agent installer: WinSW + bundled Java 21 runtime + the V8 broker + cert; the Services jar is not in it, VALC sends it once the agent connects), and a <strong>database bundle</strong> for the database team (the four SQL install scripts + the SSIS <code>.dtsx</code> package + a README), run on the SQL Server.</td>
             </tr>
           </tbody>
         </table>
@@ -1761,7 +1770,7 @@ SUBMITTED BY
         </div>
 
         <h3 id="agent-install">Agent install (application server)</h3>
-        <p>The customer runs the <strong>agent installer</strong> from the agent bundle on the application server. It lays down WinSW, a bundled JRE, the agent and Services jar, and the customer certificate. On first start the agent <strong>phones home to VALC</strong> using its baked-in client id and secret, then heartbeats roughly every 30&nbsp;seconds. Within a heartbeat or two, the client's <strong>Agent</strong> pill on the dashboard turns green and the Topology tab's Application Server card auto-fills from the reported facts (<a href="javascript:void(0)" onclick="showView('topic-step-3')">Step 3</a>).</p>
+        <p>The customer runs the <strong>agent installer</strong> from the agent bundle on the application server. It installs into <code>C:\Program Files\Rapid Reconciler V8</code> as the Windows service <strong>Rapid Reconciler 8 Agent</strong> (<code>rr-v8-agent</code>), with WinSW, a bundled Java 21 runtime, the V8 broker and the customer certificate. On a server that already runs a V7 agent it installs beside it and leaves V7 running; it refuses to install into a folder or service another product owns. On first start the agent <strong>phones home to VALC</strong> over JMS using its baked-in client id and secret, then heartbeats roughly every 30&nbsp;seconds. VALC publishes the client&rsquo;s databases to it, and the agent fetches the Services jar from VALC and starts one Services process per database. Within a heartbeat or two, the client's <strong>Agent</strong> pill on the dashboard turns green and the Topology tab's Application Server card auto-fills from the reported facts (<a href="javascript:void(0)" onclick="showView('topic-step-3')">Step 3</a>).</p>
         <p>The bundle carries no sign-in. The administrator account is seeded and emailed a set-password link later, at <a href="javascript:void(0)" onclick="showView('topic-step-10')">Customer Handoff (Step 10)</a>, once the customer's company data is showing.</p>
 
         <h3 id="database-install">Database install (SQL Server)</h3>
@@ -2235,7 +2244,7 @@ SUBMITTED BY
         <h3 id="agent-log-files">Agent Log Files</h3>
         <p>The RapidReconciler Agent writes detailed log files on the customer's application server. These are the primary source of truth for diagnosing connectivity issues — when a scenario below says "check the agent logs," this is where to look.</p>
 
-        <p><strong>Location:</strong> <code>C:\Program Files\Rapid Reconciler\logs\</code></p>
+        <p><strong>Location:</strong> <code>C:\Program Files\Rapid Reconciler V8\logs\</code> for a V8 agent, <code>C:\Program Files\Rapid Reconciler\logs\</code> for a V7 agent. A V7 customer testing V8 has both folders.</p>
 
         <p><strong>What's there:</strong></p>
         <ul>
@@ -2311,7 +2320,7 @@ SUBMITTED BY
         <p><strong>Likely causes:</strong></p>
         <ul>
           <li>DNS for the customer's <code>.getgsi.com</code> subdomain has not yet propagated after Cloudflare update</li>
-          <li>The <code>rr-valc-agent</code> service (display name: <strong>Rapid Reconciler 7 Agent</strong>) is installed but not running</li>
+          <li>The agent service is installed but not running: <code>rr-v8-agent</code> (<strong>Rapid Reconciler 8 Agent</strong>) for V8, <code>rr-valc-agent</code> (<strong>Rapid Reconciler 7 Agent</strong>) for V7</li>
           <li>VALC has not refreshed — the underlying agent <em>has</em> connected but the grid row hasn't updated yet</li>
           <li>Agent External IP on the Client Details tab does not match the customer's actual external IP</li>
         </ul>
@@ -2320,7 +2329,7 @@ SUBMITTED BY
         <ol>
           <li>Refresh the Clients grid in your browser (the page does not auto-refresh). Wait a few minutes if the install just completed.</li>
           <li>From the customer's application server, try resolving the customer's <code>.getgsi.com</code> URL — if DNS still returns the old IP, the Cloudflare update hasn't propagated yet. See <a href="javascript:void(0)" onclick="showView('topic-server-migration')">Server Migration</a> for the Cloudflare contact and process.</li>
-          <li>On the application server, open the Windows Services console and confirm <strong>Rapid Reconciler 7 Agent</strong> (service name <code>rr-valc-agent</code>) is <strong>Running</strong>. There is only one service to look for &mdash; the agent supervises one <code>java.exe</code> per RR database, which appear in Task Manager but not in the Services console.</li>
+          <li>On the application server, open the Windows Services console and confirm <strong>Rapid Reconciler 8 Agent</strong> (service name <code>rr-v8-agent</code>; on a V7 client, <strong>Rapid Reconciler 7 Agent</strong>, <code>rr-valc-agent</code>) is <strong>Running</strong>. There is one service per agent to look for &mdash; the agent supervises one <code>java.exe</code> per RR database, which appear in Task Manager but not in the Services console.</li>
           <li>Verify the <strong>Agent External IP Address</strong> on the Client Details tab matches the customer's actual external IP.</li>
           <li>If the row still hasn't updated, check today's agent <code>.out</code> log file (see <a href="javascript:void(0)" onclick="showView('topic-troubleshooting')">Diagnostic Tools</a> above) for connection errors back to VALC.</li>
         </ol>

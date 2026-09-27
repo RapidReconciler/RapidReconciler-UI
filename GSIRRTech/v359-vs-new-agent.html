@@ -106,6 +106,7 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <li data-target="overview" class="active"><a href="#overview" onclick="goAnchor('overview'); return false;">Overview</a></li>
 <li data-target="section-tldr"><a href="#section-tldr" onclick="goAnchor('section-tldr'); return false;">TL;DR</a></li>
 <li data-target="section-1"><a href="#section-1" onclick="goAnchor('section-1'); return false;">1. Agent vs Data Services</a></li>
+<li class="sub" data-target="section-1a"><a href="#section-1a" onclick="goAnchor('section-1a'); return false;">1a. The V8 broker</a></li>
 <li data-target="section-2"><a href="#section-2" onclick="goAnchor('section-2'); return false;">2. Endpoint changes &mdash; additive only</a></li>
 <li data-target="section-3"><a href="#section-3" onclick="goAnchor('section-3'); return false;">3. Endpoint coverage map</a></li>
 <li class="sub" data-target="section-3a"><a href="#section-3a" onclick="goAnchor('section-3a'); return false;">3a. Absorbed from v359</a></li>
@@ -144,7 +145,7 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <div class="tldr">
   <div class="tldr-title">TL;DR</div>
   <ul>
-    <li><strong>Agent layer is unchanged.</strong> The new code is a from-scratch rebuild of the <strong>Services jar only</strong> &mdash; the per-DB HTTP process that V8 talks to. The <code>rr-valc-agent.jar</code> JMS broker client and the central VALC SPA stay where they are.</li>
+    <li><strong>V7&rsquo;s agent layer is unchanged; V8 ships its own broker.</strong> The new Services jar is a from-scratch rebuild of the per-DB HTTP process that V8 talks to. V7 installs keep their <code>rr-valc-agent.jar</code> broker and the central VALC SPA as they are. A V8 install runs the <strong>V8 broker</strong>, built from the existing broker source in <code>RapidReconciler-Broker</code> (version 2.1.0) and fitted to the V8 Services jar&rsquo;s launch contract. See <a href="#section-1a" onclick="goAnchor('section-1a'); return false;">&sect; 1a</a>.</li>
     <li><strong>No existing endpoint has been changed in a breaking way.</strong> Three endpoints have shipped additive changes (<code>/inventory/as-of</code>, <code>/inventory/audit-detail</code>, <code>/poll</code>); each is backwards compatible with v359 callers.</li>
     <li><strong>V8&rsquo;s entire boot path is absorbed.</strong> The dev box can shut v359 entirely. The legacy AngularJS SPA still hits v359 on its own host because it exercises endpoints (In Transit, PO Receipts, Roll Forward, Admin) that the new agent doesn&rsquo;t expose yet.</li>
     <li><strong>Customer compatibility is gated on closing that gap.</strong> Today the new agent is V8-shaped, not v359-feature-complete. Production-blessed release + legacy-SPA smoke test are both still ahead.</li>
@@ -162,13 +163,13 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
   <td><strong>Valc</strong></td>
   <td>Central SPA + server.</td>
   <td><code>staging-valcspa.cloudapp.net</code> / <code>rr-valc-spa.cloudapp.net</code></td>
-  <td>No. <code>RapidReconciler-Valc</code> is a <em>parallel</em> dev-side mini-broker + dashboard, not a replacement.</td>
+  <td>No. <code>RapidReconciler-Valc</code> is VALC 2.0, the control plane + JMS server V8 installs connect to.</td>
 </tr>
 <tr>
   <td><strong>Agent</strong></td>
   <td><code>rr-valc-agent.jar</code> &mdash; the JMS message broker client. Owns file streaming, SHA1 verification, Services instance start/stop, self-update, Derby DB at <code>db\</code>.</td>
-  <td>Each customer host, under the WinSW wrapper.</td>
-  <td><strong>No.</strong> Source isn&rsquo;t in this repo; deploy machinery is preserved.</td>
+  <td>Each customer host, under the WinSW wrapper. V7: <code>C:\Program Files\Rapid Reconciler</code>, service <code>rr-valc-agent</code>. V8: <code>C:\Program Files\Rapid Reconciler V8</code>, service <code>rr-v8-agent</code>.</td>
+  <td><strong>V7: no.</strong> <strong>V8: yes</strong> &mdash; the V8 broker, built in <code>RapidReconciler-Broker</code> from the existing broker source (&sect; 1a).</td>
 </tr>
 <tr>
   <td><strong>Services</strong></td>
@@ -178,9 +179,38 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 </tr>
 </tbody></table></div>
 
-<p>The new Services jar slots into the existing Agent the same way v359&rsquo;s did: expose the three Actuator endpoints (<code>/health</code>, <code>/info</code>, <code>/shutdown</code>) per <code>specs/actuator-deploy-integration.md</code>; the Agent&rsquo;s <code>HealthService</code> polls them after a JMS DEPLOY message lands and reports success/failure back through the queue.</p>
+<p>The Actuator contract in <code>specs/actuator-deploy-integration.md</code> (<code>/health</code> and <code>/info</code> on a management port, <code>POST /shutdown</code>) is what the existing broker expects. The V8 Services jar serves none of that: <code>GET /health</code> on its <strong>service</strong> port answers <code>{"status":"ok","agent":"client-services","version":"8.0.x"}</code>, and it has no management port. The V8 broker probes that endpoint instead and stops a Services process by its PID (&sect; 1a).</p>
 
-<p>The deploy flow at the Agent level (per <code>deploy-architecture.md</code> &sect; <em>Deploy flow</em>) runs unchanged. A customer flipping <code>Services</code> version from <code>1.6.22</code> to the new build in VALC&rsquo;s <em>Manage Deploy</em> panel produces the same JMS DEPLOY &rarr; file stream &rarr; start instance &rarr; verify <code>/health</code> + <code>/info</code> sequence; the Agent doesn&rsquo;t care that the new jar comes from a different source repo.</p>
+<p>On a V8 install the deploy flow is: VALC 2.0 publishes the desired state (every active database, each pinned to the latest imported Services version), the broker requests the file, verifies its SHA-1, starts one Services process per database, and reports health in its heartbeat. VALC 2.0 closes the deploy from those heartbeats: <strong>SUCCEEDED</strong> when the instance reports up, <strong>FAILED</strong> when it reports down, <strong>TIMED_OUT</strong> after 15 minutes. &ldquo;Up&rdquo; means up after delivery; the heartbeat does not yet prove which version is running.</p>
+</section>
+
+<section id="section-1a">
+<h3>1a. The V8 broker</h3>
+<p>V8 ships its own broker, built from the existing broker source. The source was copied without history into <code>RapidReconciler-Broker</code> (a GSI GitHub repo) on 2026-09-26, and it is used only by the V8 installer. V7 installs keep the broker they have. A V7 customer testing V8 runs both on one server: each has its own folder, Windows service and runtime.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Area</th><th>V8 broker (2.1.0)</th></tr></thead>
+<tbody>
+<tr><td><strong>Install</strong></td><td>The V8 installer puts it in <code>C:\Program Files\Rapid Reconciler V8</code> as service <code>rr-v8-agent</code> (&ldquo;Rapid Reconciler 8 Agent&rdquo;), on a bundled <strong>JRE 21</strong>. The file names stay <code>rr-valc-agent.*</code> because the broker&rsquo;s self-update and log upload use them. The installer refuses to write into a folder or service another product owns.</td></tr>
+<tr><td><strong>Runtime</strong></td><td>Java 8 bytecode, built and tested on JDK 8 and 21. It runs on the bundled JRE 21 and starts every Services jar on that same runtime.</td></tr>
+<tr><td><strong>Identity</strong></td><td>Connects with the install bundle&rsquo;s <code>valc.client-id</code> and <code>valc.secret</code> (<code>rr-common</code> 1.7.0 <code>AgentConnection</code>). VALC 2.0 verifies the secret; the external IP is telemetry only.</td></tr>
+<tr><td><strong>TLS to VALC</strong></td><td>Trusts VALC 2.0&rsquo;s JMS acceptor with the truststore shipped in the install bundle. No client certificate: VALC 2.0&rsquo;s acceptor does not ask for one. <code>valc.jms.http</code> really turns TLS off.</td></tr>
+<tr><td><strong>Database passwords</strong></td><td>Handed to each Services process in its environment (<code>SPRING_DATASOURCE_PASSWORD</code>, <code>SPRING_DS_JOB_PASSWORD</code>), never on the command line, and never logged.</td></tr>
+<tr><td><strong>Launch contract</strong></td><td>The same arguments VALC 2.0&rsquo;s own spawn uses: <code>--server.port</code>, <code>--agent.database-name</code>, <code>--agent.jwt.public-key-path</code> (VALC 2.0&rsquo;s JWT public key, shipped in the install bundle as <code>valc-jwt-public.pem</code>), an <code>mssql-jdbc</code> datasource URL, and TLS off unless VALC marks the instance https. It refuses to start a Services jar when the key file is missing.</td></tr>
+<tr><td><strong>Heap</strong></td><td><code>-Xmx&lt;N&gt;m</code> from <code>client_databases.max_memory_mb</code> (megabytes end to end).</td></tr>
+<tr><td><strong>Health + stop</strong></td><td><code>GET /health</code> on the service port, up on <code>ok</code> or <code>UP</code>, version read from the same body. It never starts a second copy over a live one, and stops a child by PID (destroy, wait 10 s, force).</td></tr>
+<tr><td><strong>Self-update</strong></td><td>Stops only its own Services children, then exits so WinSW restarts it. It never kills other Java processes on the box.</td></tr>
+<tr><td><strong>check-ip</strong></td><td>Calls VALC 2.0&rsquo;s <code>GET /check-ip</code>, with 5-second timeouts. A blank setting skips the lookup, and with a client id the broker connects without it.</td></tr>
+<tr><td><strong>Release</strong></td><td>A pushed <code>v2.x.y</code> tag builds <code>rr-valc-agent-&lt;version&gt;.jar</code> onto a GitHub Release; the V8 installer&rsquo;s <code>-BrokerJar</code> takes that file.</td></tr>
+</tbody></table></div>
+<p><strong>VALC 2.0 side</strong>, built alongside it:</p>
+<ul>
+  <li><strong>&ldquo;RR Services run by&rdquo;</strong> on each application server&rsquo;s Topology card: <strong>VALC</strong> or <strong>Customer&rsquo;s broker</strong>. Changing it is a confirmed operator action. When the broker runs them, VALC 2.0 does not start, stop or probe those Services itself.</li>
+  <li><strong>Publish on (re)connect</strong>, to live connections only (a heartbeat in the last 90 seconds). VALC 2.0 refuses to publish a list shorter than the client&rsquo;s active databases, because an empty list tells the broker to stop everything.</li>
+  <li><strong>Deploy completion</strong> from heartbeats (SUCCEEDED / FAILED / TIMED_OUT), above.</li>
+  <li><strong><code>GET /check-ip</code></strong>, which returns only the caller&rsquo;s own address.</li>
+  <li><strong>The install bundle</strong> carries the identity, VALC 2.0&rsquo;s JMS host and port, the check-ip URL, a per-bundle truststore, and the JWT public key.</li>
+</ul>
+<p>The end-to-end rehearsal (<code>scripts/rehearse-local.ps1</code> in <code>RapidReconciler-Broker</code>) is prepared and has not been run yet.</p>
 </section>
 
 <section id="section-2">
@@ -361,7 +391,7 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 
 <section id="section-5">
 <h2>5. Will the new agent support existing v359 customers?</h2>
-<p><strong>Mechanically, yes.</strong> The deploy story is unchanged: a customer can flip the <em>Services</em> version in VALC&rsquo;s <em>Manage Deploy</em> panel, the existing Agent jar pulls the new jar via JMS, starts it, and verifies it via the Actuator endpoints. No customer-side configuration change required.</p>
+<p><strong>Mechanically, through a V8 install, not through the V7 broker.</strong> A V7 broker starts Services on its bundled Java 8 runtime, and the V8 Services jar is Java 21 bytecode (its launcher alone is Java 17), so a V8 Services jar pushed to a V7 box cannot start (measured 2026-09-26). An existing customer moves to V8 with the V8 installer: it lays down the V8 broker, a JRE 21 and the VALC 2.0 install bundle in their own folder beside V7, and V7 keeps running until the customer is done with it.</p>
 <p><strong>Functionally, not yet.</strong> Four caveats block a real customer cutover today:</p>
 <ol>
   <li><strong>Endpoint coverage is V8-shaped.</strong> The table above lists ~15 endpoint groups the new agent doesn&rsquo;t expose. A customer whose deployed AngularJS SPA exercises In Transit, PO Receipts, Roll Forward, the daily-probe GET, PDF downloads, or any Admin module screen would see those screens break. The legacy SPA hasn&rsquo;t been smoke-tested against the new agent &mdash; it currently runs against v359 on its own host (<code>staging-rr-spa.azurewebsites.net</code> / <code>rapidreconciler.getgsi.com</code>).</li>
@@ -378,7 +408,7 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
   <li>Close the legacy-SPA coverage gap above (or sunset the legacy SPA in favor of V8 for the affected modules).</li>
   <li>Fix the JWT claim-shape divergence (caveat 2 above). Cheap, and unblocks correct behavior on every existing customer login.</li>
   <li>Tag a release on <code>main</code> and pin the corresponding <code>artifacts/v360/</code> directory.</li>
-  <li>Validate the actuator + JMS plumbing against a real Agent install (the <code>actuator-deploy-integration.md</code> spec, exercised end-to-end).</li>
+  <li>Validate the V8 broker + JMS plumbing end-to-end against VALC 2.0 (<code>scripts/rehearse-local.ps1</code> in <code>RapidReconciler-Broker</code> is prepared, not yet run), then on a real V8 install.</li>
   <li>Pilot on one internal install / one consenting customer with a rollback plan to v359.</li>
 </ol>
 <div class="callout note">
@@ -411,6 +441,8 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 
 <p>This is the same flow Services jars use for redeploy &mdash; the only difference is <code>component = 'agent'</code> on the <code>file_versions</code> row vs <code>component = 'services'</code>.</p>
 
+<p><strong>On a V8 install:</strong> VALC 2.0 does not send <code>SelfUpdateMessage</code> today, so a V8 broker upgrade is a reinstall with the V8 installer until it does. When it does, the V8 broker stops only the Services processes it started (by process handle, or by recorded PID with a matching start time) and then exits, and WinSW&rsquo;s restart applies the new jar. It never kills other Java processes, so VALC and a V7 agent on the same box are unaffected.</p>
+
 <div class="callout note">
   <p>The dashboard&rsquo;s &ldquo;Agent Version&rdquo; column doesn&rsquo;t ask the agent its version. Agents don&rsquo;t self-report. VALC remembers what it pushed via <code>client_deploys.target_version_string</code>, and that&rsquo;s what surfaces.</p>
 </div>
@@ -435,7 +467,7 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <tr>
   <td><strong>JDK floor change</strong></td>
   <td>If the new agent jar requires a newer JDK than what&rsquo;s on the customer host, the JVM rejects the bytecode before the new jar gets a chance to run.</td>
-  <td>Install the new JDK on the customer host first, then push the jar.</td>
+  <td>Install the new JDK on the customer host first, then push the jar. On a V8 install that runtime is the installer&rsquo;s bundled JRE (Java 21 today), and the broker also spawns every Services jar on it, so a Services floor above 21 needs a new agent install first. <code>build-installer.ps1</code> refuses a JRE that cannot load the Services jar.</td>
 </tr>
 <tr>
   <td><strong>First-time install on a new host</strong></td>
@@ -454,8 +486,8 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 </div>
 
 <div class="callout note">
-  <p><strong>Worked example &mdash; <code>rr-common</code> 1.7.0.</strong> <code>AgentConnection</code> (the bootstrap message every agent sends on connect) gained two fields, <code>clientId</code> and <code>secret</code>, appended after the original three. The <code>serialVersionUID</code> was deliberately left unchanged, so a pre-1.7.0 agent still deserializes VALC&rsquo;s messages &mdash; the new fields simply arrive as <code>null</code> and VALC falls back to external-IP identification. This is the &ldquo;add fields, don&rsquo;t remove them&rdquo; policy in practice: it gives each install a stable identity (verified by a hashed secret) that survives WAN-IP changes, with zero forced agent reinstalls. The matching change ships in the broker client (<code>rr-valc-agent.jar</code>); only VALC 2.0 reads the new fields today.</p>
-  <p><strong>Coral <code>version2</code> (2026-06).</strong> Coral pushed a <code>version2</code> branch across the legacy repos that repoints the <strong>central</strong> stack off Azure onto getgsi.com <strong>Linux/Docker</strong> hosts: the agent targets <code>rrjms-dev.getgsi.com:8001</code> (was 443) and a single <strong>getgsi wildcard cert</strong> (PKCS12), server-side IP detection moved to <code>X-Forwarded-For</code> (behind a Linux LB), and a <strong>new getgsi JWT signing keypair</strong> ships in <code>rr-valc</code>. Crucially, <strong><code>rr-common</code> is not in version2</strong> &mdash; the JMS DTOs + JWT claim shape are unchanged, so everything in this doc still holds on the wire. The <code>rr-valc-agent</code> change is config/cert only; the customer-box install stays Windows/WinSW.</p>
+  <p><strong>Worked example &mdash; <code>rr-common</code> 1.7.0.</strong> <code>AgentConnection</code> (the bootstrap message every agent sends on connect) gained two fields, <code>clientId</code> and <code>secret</code>, appended after the original three. The <code>serialVersionUID</code> was deliberately left unchanged, so a pre-1.7.0 agent still deserializes VALC&rsquo;s messages &mdash; the new fields simply arrive as <code>null</code> and VALC falls back to external-IP identification. This is the &ldquo;add fields, don&rsquo;t remove them&rdquo; policy in practice: it gives each install a stable identity (verified by a hashed secret) that survives WAN-IP changes, with zero forced agent reinstalls. The V8 broker (2.1.0) sends both fields from the install bundle; a V7 broker sends neither, so VALC 2.0 identifies it by IP. In <code>RapidReconciler-Broker</code> every <code>rr-common</code> message class now declares its <code>serialVersionUID</code>, pinned to the value the 1.7.0 jar already had, and <code>SerialShapeTest</code> fails the build if a class&rsquo;s UID or serialized field list changes.</p>
+  <p><strong>Coral <code>version2</code> (2026-06).</strong> Coral pushed a <code>version2</code> branch across the legacy repos that repoints the <strong>central</strong> stack off Azure onto getgsi.com <strong>Linux/Docker</strong> hosts: the agent targets <code>rrjms-dev.getgsi.com:8001</code> (was 443) and a single <strong>getgsi wildcard cert</strong> (PKCS12), server-side IP detection moved to <code>X-Forwarded-For</code> (behind a Linux LB), and a <strong>new getgsi JWT signing keypair</strong> ships in <code>rr-valc</code>. Crucially, <strong><code>rr-common</code> is not in version2</strong> &mdash; the JMS DTOs + JWT claim shape are unchanged, so everything in this doc still holds on the wire. The <code>rr-valc-agent</code> change is config/cert only; the customer-box install stays Windows/WinSW. The V8 broker packages none of those hosts or certificates as defaults: the VALC 2.0 install bundle supplies the JMS host, port and truststore.</p>
 </div>
 </section>
 

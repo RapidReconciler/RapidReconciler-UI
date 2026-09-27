@@ -39,7 +39,8 @@ screen must reflect what the process is actually doing.
 |---|---|---|
 | Local / co-hosted (dev box, on-prem co-hosted, internal pilots) | VALC `AgentLifecycleService.start()` — builds `jvmArgs` + `ProcessBuilder` | **Yes** (Valc repo, GitHub) |
 | Dev standalone | `RapidReconciler-Agent/setup/run-test-agent.ps1` — `Start-Process java` | **Yes** (Agent repo) |
-| **Remote production** (customer's own host) | legacy `rr-valc-agent.jar` `ServicesInstanceManagerService` over JMS | **No** — Bitbucket, never-push |
+| **Remote production, V7** (customer's own host) | legacy `rr-valc-agent.jar` `ServicesInstanceManagerService` over JMS | **No** — Bitbucket, never-push |
+| **Remote production, V8** (customer's own host) | the V8 broker (`RapidReconciler-Broker` 2.1.0) over JMS | **Yes** (GSI GitHub). Since 2026-09-26 it passes `-Xmx<N>m` from `max_memory_mb`, the same as local spawn |
 
 `AgentLifecycleService.start()` already loads the `ClientDatabaseEntity` row
 (for SQL creds, ~line 163), so `maxMemoryMb` is in hand at the launch site — the
@@ -105,6 +106,11 @@ it will show the **true** allocation automatically, no further UI change.
   path; remote path is legacy-agent territory.
 
 ## The boundary to respect
+
+> **Update 2026-09-26 (VLC-113):** this boundary now applies to **V7
+> installs only**. On V8 installs the remote path is the V8 broker, which we
+> own: `-Xmx` enforcement shipped in 2.1.0 (MB end to end); restart B1b and
+> named-service visibility are not built there yet but are no longer blocked.
 
 `-Xmx` enforcement, restart **B1b**, and named-service visibility **on the
 remote production path** all require changing the legacy `rr-valc-agent.jar`

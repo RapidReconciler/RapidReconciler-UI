@@ -109,31 +109,55 @@ name "Rapid Reconciler 7 Agent", `executable=%BASE%\jre\bin\java.exe`,
 `onfailure restart 10s / 30s / reboot`, `logpath=%BASE%\logs`,
 `env RRAGENT_HOME=%BASE%`.
 
+**That is the V7 layout. The V8 installer does NOT reproduce it
+(VLC-112, 2026-09-26):** a V7 customer testing V8 runs both agents on one
+box, so V8 installs into its own folder `C:\Program Files\Rapid Reconciler V8`
+with its own service `rr-v8-agent` / "Rapid Reconciler 8 Agent", a bundled
+**JRE 21**, `<workingdirectory>%BASE%`, no `reboot` on failure, and
+size-rolled logs. The file names stay `rr-valc-agent.*` (the broker's
+self-update and log upload use them). An `InitializeSetup` guard refuses a
+folder or service another product owns. Source:
+`RapidReconciler-Agent/setup/installer/`.
+
 ### Where the stamped identity goes
 The live install carries **no external `application.properties`** — the
 broker runs on its jar-baked config. Spring loads an external
 `application.properties` from the process working dir (`%BASE%`) and it
 **overrides** the packaged one. So the bundle's stamped properties must
-land at **`%BASE%\application.properties`**; the patched broker
-(`Properties.java` reads `${valc.client-id:}` / `${valc.secret:}`) picks
-them up there. The Services jar is **not** bundled — the broker fetches
-it from VALC via the existing file-transfer deploy.
+land at **`%BASE%\application.properties`**; the V8 broker
+(`RapidReconciler-Broker` 2.1.0, whose `Properties` reads
+`${valc.client-id:}` / `${valc.secret:}`) picks them up there. The Services
+jar is **not** bundled — the broker fetches it from VALC via the existing
+file-transfer deploy.
 
-### Java-runtime bridge — DECIDED: Option A (dual-JRE)
-- V7 broker (`rr-valc-agent`) targets **Java 1.8**; the new Services jar
-  (`RapidReconciler-Agent`) targets **Java 21 / Spring Boot 3.3.5**. The broker
-  spawns Services with its own `java.home`, so a Java 8 broker launching a Java
-  21 jar → `UnsupportedClassVersionError`.
-- **Chosen — (A) dual-JRE bundle.** Ship **both** JRE 8 (broker) and JRE 21
-  (Services). The broker's `AgentInitializer` now reads
-  **`valc.services-java-home`** and spawns Services with that path, falling back
-  to its own `java.home` when unset (backward-compatible — existing installs
-  unaffected). **Broker patch landed** in `RapidReconciler-V7-Broker`
-  (local-only). The installer sets `valc.services-java-home` to the bundled
-  JRE 21 path in `%BASE%\application.properties`.
-- (B) Migrate the broker to Java 21 — deferred (a real Spring Boot upgrade);
-  the eventual single-runtime end state.
-- (C) Services jar on Java 8 — impossible (Spring Boot 3 needs 17+).
+**What the stamped properties carry now (VLC-113, built 2026-09-26,
+uncommitted in VALC):** `valc.client-id`, `valc.secret`, `valc.jms.ip`,
+`valc.jms.port`, `valc.checkip` (VALC 2.0's own `GET /check-ip`),
+`valc.jms.http` (the inverse of VALC's acceptor TLS flag),
+`valc.jms.truststore.path` + `.password` (a per-bundle JKS holding VALC's
+broker certificate, under a random per-bundle password, never VALC's own), and
+`valc.services.jwt-public-key-path` (VALC's JWT **public** key, shipped as
+`valc-jwt-public.pem`, handed to every Services jar). Generation refuses when
+VALC's customer-facing addresses are unset, when TLS is on and no truststore
+source is configured, or when there is no public key.
+
+### Java-runtime bridge — DECIDED: one JRE 21 (VLC-107, 2026-09-26)
+- The broker (`rr-valc-agent`) is **Java 8** bytecode; the Services jar
+  (`RapidReconciler-Agent`) is **Java 21** bytecode (class major 65). The broker
+  spawns Services with its own `java.home`, unconditionally, so whatever JRE
+  the broker runs on must load Java 21.
+- **Chosen: bundle one JRE 21** and run the broker on it. Measured
+  2026-09-26: an isolated copy of broker 2.0.1 ran on Temurin 21.0.11 and 25.0.2
+  exactly as on its Java 8 control (context refresh, Derby through Hibernate,
+  an Artemis/Netty/TLS connect attempt). The V8 broker (2.1.0) builds and tests
+  on JDK 8 and 21 and its CI starts it on 21. `build-installer.ps1` refuses a
+  JRE that cannot load the Services jar or the broker.
+- ~~(A) dual-JRE bundle with `valc.services-java-home`~~ **dead.** It needed a
+  broker built from local commit `444b56e`, which never leaves this box (owner
+  2026-09-26: "We never publish to bitbucket"). The shipped broker reads no such
+  setting.
+- (B) Services jar on Java 8 — impossible (Spring Boot 3+ needs 17+).
+- The earlier JRE 17 bundle was a defect: 17 loads up to class major 61.
 
 **Flagged for Coral** in the cutover plan, Phase 0 (the runtime split to be
 aware of when building/validating the new Services jar against the broker).
@@ -141,14 +165,17 @@ aware of when building/validating the new Services jar against the broker).
 ### Other gating deps
 - **Code-signing cert** — the single biggest customer-IT friction reducer
   (SmartScreen/AV). Confirm + reuse V7's signing setup. External.
-- **Build the patched broker jar** (V7-Broker, local-only — clientId/secret
-  `Properties` already added) and wire its build.
-- **`.iss` home** — likely `RapidReconciler-Agent` (the agent-shipping repo) or
-  a dedicated `installer/` track; decide.
+- ~~Build the patched broker jar (V7-Broker, local-only)~~ **Superseded
+  2026-09-26 (VLC-113, "V8 owns its broker"):** the broker is built and released
+  from `RapidReconciler-Broker` (a pushed `v2.x.y` tag attaches
+  `rr-valc-agent-<version>.jar`), and `build-installer.ps1 -BrokerJar` takes
+  that jar. Nothing is built from `RapidReconciler-V7-Broker`, and nothing goes
+  to BitBucket.
+- **`.iss` home** — decided: `RapidReconciler-Agent/setup/installer/`.
 
 ### Recommended sequence
-Resolve the **A/B Java-runtime decision first** (it's the long pole and shapes
-the payload), get the **signing cert**, then author the `.iss` + WinSW config
+The **Java-runtime decision is settled** (one JRE 21, above). Get the
+**signing cert**, then author the `.iss` + WinSW config
 modeled on the layout above, compile with `ISCC.exe`, sign, and drop the result
 into `valc.install-bundle.base-installer-path`. Track A already consumes it with
 zero code change.

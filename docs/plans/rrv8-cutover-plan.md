@@ -67,6 +67,18 @@ GSI's in-house operators.
 
 **The customer takes no action. They don't even know it happened.**
 
+> **Update 2026-09-26 &mdash; the V8 agent install.** V8 ships its own
+> broker, built from the existing broker source (repo
+> `RapidReconciler-Broker`, version 2.1.0). The V8 installer puts it on
+> the customer's application server in its own folder
+> (`C:\Program Files\Rapid Reconciler V8`), as its own Windows service
+> (`rr-v8-agent`, &ldquo;Rapid Reconciler 8 Agent&rdquo;), on a bundled
+> Java 21 runtime. V7 installs keep their broker unchanged, and a V7
+> customer testing V8 runs both side by side. Because a V8 install is a
+> new install on the customer's server, the no-action constraint below
+> holds for the server-side steps (VALC 2.0, Services pushes, the
+> V7&harr;V8 flag), not for putting the V8 agent on a box.
+
 The cutover is a **server-side push** through VALC's deploy panel
 &mdash; the same mechanism that's rolled out Services version
 updates on customer boxes for years. From the customer IT admin's
@@ -75,17 +87,19 @@ browser keeps working, they go on with their day.
 
 **Implications that ripple through every other choice below:**
 
-- The legacy `rr-valc-agent.jar` (broker) **stays on customer boxes**.
-  It keeps connecting to the central server over JMS at the
-  existing hostname. We don't replace it during cutover; that's a
-  separate later effort.
+- On a V7 install the existing `rr-valc-agent.jar` (broker) **stays
+  as it is**. It keeps connecting to the central server over JMS at
+  the existing hostname. A V8 install runs the V8 broker from the
+  start (update above).
 - VALC 2.0 is hosted at the existing URLs (Azure VMs, in-house
   Azure subscription). The customer's broker reaches it via the
   same hostname after a DNS / LB flip &mdash; the broker doesn't
   notice.
-- The new Services jar must speak the **same JMS protocol** the
-  legacy broker expects. The new agent already does (uses the same
-  `rr-common` message DTOs).
+- The broker and VALC 2.0 must speak the **same JMS protocol**. Both
+  use the same `rr-common` message DTOs (1.7.0). In
+  `RapidReconciler-Broker` every message class declares its
+  `serialVersionUID`, pinned to the value it already had, and a shape
+  test fails the build on any wire change.
 - The new Services jar must **trust the same JWT signing keys**
   v359 trusts. Simplest path: VALC 2.0 inherits Azure VALC's
   existing keypair at cutover; same `public.key` resource shipped
@@ -109,8 +123,8 @@ equivalent:
 | Legacy (today) | Green-field (target) |
 |---|---|
 | Azure VALC SPA at `staging-valcspa.cloudapp.net` / `rr-valc-spa.cloudapp.net` | VALC 2.0 on Azure VMs at the same URLs (DNS / LB flip) |
-| `rr-valc-agent.jar` on every customer's box (legacy broker, JMS to central VALC) | **No change** &mdash; legacy broker stays. Talks to VALC 2.0 at the same hostname post-DNS flip. |
-| v359 Services jar (one per DB) spawned by the legacy broker | New Services jar from `RapidReconciler-Agent` repo, deployed via the existing VALC deploy panel |
+| `rr-valc-agent.jar` on every customer's box (broker, JMS to central VALC) | V7 installs: **no change**. V8 installs: the V8 broker (`rr-valc-agent.jar` 2.1.0 from `RapidReconciler-Broker`), installed by the V8 installer in its own folder and service, beside any V7 agent. |
+| v359 Services jar (one per DB) spawned by the broker | New Services jar from `RapidReconciler-Agent` repo, started by the V8 broker from what VALC 2.0 publishes |
 | AngularJS SPA at `staging-rr-spa.azurewebsites.net` / `rapidreconciler.getgsi.com` | V8 (RRV8/) from `RapidReconciler-UI` (separate effort; can run in parallel with v359 Services until coverage closes) |
 
 Done = every customer is on the new stack and the legacy pieces
@@ -145,6 +159,15 @@ server side; nothing reaches a customer until it's all done.
    the parity target is concrete: our broker listens on that host/port and
    presents the getgsi cert. The wire protocol is unchanged (`rr-common`
    is not in version2), so the CORE-protocol DTOs still match.
+
+   **V8 update (2026-09-26):** a V8 install's broker connects to VALC
+   2.0's JMS acceptor over TLS, trusting it with a truststore from the
+   install bundle (no client certificate), and identifies itself by the
+   bundle's client id and secret. VALC 2.0 republishes the desired state
+   when a broker (re)connects, to live connections only, and closes each
+   deploy from the broker's heartbeats (SUCCEEDED / FAILED / TIMED_OUT).
+   An end-to-end rehearsal against a local VALC 2.0 is prepared and not
+   yet run.
 
    **version2 branch breakdown (confirmed by Mauro/Coral 2026-06-16):**
    | Repo | version2 vs develop | Nature |
@@ -210,22 +233,20 @@ server side; nothing reaches a customer until it's all done.
    and the engagement hours available. Some processes naturally
    stay where they are today; others may shift.
 
-9. **Agent Java-runtime bridge** &mdash; the broker process runs on
-   Java 8 and launches each Services jar; the modernized Services jar
-   targets Java 21 (Spring Boot 3), so the broker can't spawn it on its
-   own Java 8 runtime. The install bundle ships **both** runtimes and
-   points the broker at the Java 21 path (`valc.services-java-home`)
-   for spawning Services, falling back to its own runtime when unset so
-   existing installs are unaffected. The broker change is a small,
-   backward-compatible launcher tweak; moving the broker itself to
-   Java 21 is a later, separate modernization.
-   **Coral:** this is the runtime split to account for when building
-   and validating the new Services jar against the existing broker.
+9. **Agent Java-runtime bridge** &mdash; the broker launches each
+   Services jar on its own Java runtime, and the modernized Services jar
+   targets Java 21. The V8 installer therefore bundles **one** Java 21
+   runtime that the V8 broker and every Services jar share. The V8
+   broker is Java 8 bytecode, built and tested on JDK 8 and 21, and its
+   CI starts it on Java 21.
+   **Coral:** build and validate the new Services jar against Java 21,
+   the runtime it shares with the broker on a V8 install.
 
 **Exit criteria for Phase 0**: dev box runs V8 end-to-end against
 VALC-2.0-issued JWTs across every customer-facing module, with
 zero behavioral diff from the same flows on Azure VALC. JMS
-protocol parity smoke against the legacy broker passes.
+protocol parity smoke passes against the V8 broker, and against the
+existing broker for V7 installs.
 
 ---
 
@@ -285,9 +306,9 @@ decision not to migrate.
   rollback needs. After 90 days clean: shut down.
 - Legacy AngularJS SPA: separate decommission decision &mdash;
   depends on whether V8 covers everything the customer needs.
-- The legacy `rr-valc-agent.jar` (broker) stays on customer boxes
-  for now. Replacing it is a separate later effort with its own
-  customer-impact analysis &mdash; out of scope for this cutover.
+- V7 installs keep their existing `rr-valc-agent.jar` (broker)
+  unchanged; no broker change on a V7 box is part of this cutover.
+  V8 installs run the V8 broker from the start.
 - Update SOC 2 audit materials, security questionnaires,
   customer onboarding docs to reflect VALC 2.0.
 
@@ -436,9 +457,13 @@ Services build predates the new endpoints + heartbeat-facts). So:
 - *Off external-IP **and** live in VALC 2.0* = the above **plus** the new
   Services version &mdash; i.e. the full per-customer cutover.
 
-Either way it is **not a fresh installer bundle from scratch**: the broker
-binary is frozen and `rr-common` (the wire contract) is unchanged, so the
-delta is config/cert (+ the Services artifact the agent downloads on command).
+For a V7-stack customer either way it is **not a fresh installer bundle
+from scratch**: the V7 broker binary is unchanged and `rr-common` (the
+wire contract) is unchanged, so the delta is config/cert (+ the Services
+artifact the agent downloads on command). A V8 install is different: it
+is a fresh install of the V8 installer plus a VALC 2.0 install bundle,
+which carries the identity, VALC 2.0's JMS host and port, the check-ip
+URL, a truststore and VALC 2.0's JWT public key.
 
 ---
 
@@ -482,8 +507,8 @@ Two cautions against over-compressing:
 
 ## Repo perspective
 
-Cutover touches all four of our repos plus several outside our
-control. The four we own:
+Cutover touches all five of our repos plus several outside our
+control. The five we own:
 
 ### `RapidReconciler-UI` (this repo)
 
@@ -550,6 +575,17 @@ stays. **Migration-script versioning** for the cutover needs
 explicit attention &mdash; what version does a customer have to
 be at to migrate? Document it in a `Releases/` directory.
 
+### `RapidReconciler-Broker`
+
+**During cutover** &mdash; the V8 broker (`rr-valc-agent.jar`) plus
+`rr-common`, the message classes it shares with VALC 2.0. Built from a
+fresh copy of the existing broker source, used only by the V8
+installer. Tagged releases (`v2.x.y`) attach the broker jar the V8
+installer packages. A change to a message class lands here and in
+VALC 2.0 together.
+
+**After cutover** &mdash; ongoing development repo for the V8 broker.
+
 ### New repos that might appear
 
 - **A release-coordinator repo** &mdash; tracking "shippable
@@ -568,8 +604,9 @@ be at to migrate? Document it in a `Releases/` directory.
 - **Legacy AngularJS SPA repo** &mdash; lifecycle depends on
   whether any customer still needs it after V8 covers their
   modules.
-- **Legacy `rr-valc-agent.jar` source** &mdash; stays for now.
-  Eventual replacement is a separate later effort.
+- **`rr-valc-agent.jar` source** &mdash; the V7 broker's source stays
+  where it is, unchanged. The V8 broker is built in
+  `RapidReconciler-Broker` from a fresh copy of it.
 
 **Note on legacy-stack sources**: this repo doesn't currently
 mirror them. Phase 0 includes mining what's needed via `javap`
@@ -602,9 +639,8 @@ no direct edits to the legacy sources are required.
 - **The actual technical implementation** of each phase. Each
   one is its own chunk; the provisioning plan is the model for
   what a detailed sub-plan looks like.
-- **Replacement of the legacy `rr-valc-agent.jar` broker.** It
-  stays on customer boxes during this cutover; replacing it is a
-  separate later effort with its own customer-impact analysis.
+- **Broker changes on V7 installs.** V7 installs keep their broker
+  unchanged. V8 installs run the V8 broker (see *Hard constraint*).
 - **Per-process operational-ownership assignments** &mdash; which
   side handles what on the new infrastructure is decided at
   cutover time, not pre-committed here.
@@ -714,9 +750,10 @@ breadth, then the cutover-infrastructure long poles.
 ### Tier 5 &mdash; Cutover infrastructure long poles
 
 10. **JMS protocol parity** (Phase 0 #2) &mdash; VALC 2.0 Artemis
-    broker accepts legacy `rr-valc-agent.jar` connections (CORE
-    protocol, existing truststore, post-DNS-flip hostname). Validate
-    end-to-end against a real legacy broker.
+    broker accepts `rr-valc-agent.jar` connections (CORE protocol,
+    truststore, post-DNS-flip hostname). Validate end-to-end against
+    the V8 broker (rehearsal prepared, not yet run) and against a real
+    existing broker for V7 installs.
 11. **Signing-key inheritance** (Phase 0 #3) &mdash; VALC 2.0 adopts
     Azure VALC's RSA private key so both stacks verify the same
     tokens at cutover. **Caveat surfaced 2026-05-30**: V7's Services
@@ -751,9 +788,9 @@ breadth, then the cutover-infrastructure long poles.
 
 ### Not in this queue (tracked elsewhere)
 
-- The `rr-valc-agent.jar` broker replacement (explicitly out of
-  cutover scope &mdash; see *What this plan deliberately does NOT
-  cover*).
+- Broker changes on V7 installs (out of cutover scope &mdash; see
+  *What this plan deliberately does NOT cover*). V8 broker work is
+  tracked in `RapidReconciler-Broker`.
 - Demo-mode rebuild (frozen until the Inventory module is complete,
   per the production-only tenet in `RRV8/WORKFLOW.md`).
 - Operational-ownership assignment (Phase 0 #8) &mdash; a decision,
