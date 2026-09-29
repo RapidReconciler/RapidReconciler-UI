@@ -3013,6 +3013,9 @@
   .wz-ai { display: flex; align-items: center; gap: 11px; padding: 11px 14px; border-bottom: 1px solid var(--rule); }
   .wz-ai:last-child { border-bottom: 0; }
   .wz-ai .ck { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; flex-shrink: 0; background: var(--green-pale); color: var(--green); }
+  .wz-ai.warn .ck { background: var(--amber-pale); color: var(--amber); }
+  .wz-ai.pend .ck { background: var(--bg-soft); color: var(--text-muted); }
+  .wz-already + .wz-already { margin-top: 10px; }
   .wz-ai .l { font-weight: 700; font-size: 13px; color: var(--navy); }
   .wz-ai .s { font-size: 12px; color: var(--text-muted); }
   .wz-action { margin-top: 18px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 14px 16px; border: 1px solid var(--rule); border-radius: 11px; background: var(--bg-soft); }
@@ -3625,7 +3628,7 @@
        RR Administrator exists). Replaces the steady-state surface until the
        team exists. Preview it on any account with ?firstrun=1. -->
   <div class="view" id="view-firstrun" hidden>
-    <div class="wz-sub">Most of your setup happened during provisioning. The one thing left is adding the people who&rsquo;ll use RapidReconciler.</div>
+    <div class="wz-sub" id="wzSub">Most of your setup happened during provisioning. The one thing left is adding the people who&rsquo;ll use RapidReconciler.</div>
     <div class="stepstrip" id="wzStrip"></div>
     <div class="wz-panel">
       <div class="wz-body" id="wzBody"></div>
@@ -5231,6 +5234,11 @@
     if (!dbName) return;
     rrFetch('api/v1/tenant/license-usage', { query: { database: dbName } })
       .then(function (u) {
+        // UI-206: the Welcome step's licence check reads THIS answer, so it can
+        // never disagree with the Licensing card. `used` is this database's own.
+        _wzLic = !u ? { state: 'error' }
+               : { state: (u.used > 0 ? 'ok' : 'none'), used: Number(u.used) || 0 };
+        wzChecksChanged();
         if (!u) return;
         var sub = $('licenseSub');
         var rank = { ok: 1, watch: 2, attention: 3 };
@@ -5322,20 +5330,23 @@
 
         if (typeof tintPanels === 'function') tintPanels();
       })
-      .catch(function () { /* leave grey + neutral on error */ });
+      .catch(function () {
+        // The card stays grey + neutral; the Welcome step says it could not check,
+        // rather than keep a "Checking…" row up forever or fall back to a tick.
+        _wzLic = { state: 'error' };
+        wzChecksChanged();
+      });
   }
 
   // ---- Onboarding wizard: Welcome -> Add your team -> Done ----
   var _wzStep = 0;
   var WZ_STEPS = [
-    { key: 'welcome', name: 'Welcome', short: 'What’s ready',
-      eyebrow: 'You’re mostly set up', h: 'Here’s what’s already done for you',
-      lede: 'Provisioning handled the heavy lifting. When you’re ready, add your team — that’s the last piece.',
-      already: [
-        { l: 'Data refreshes automatically each night', s: 'You can also pull an intraday refresh during period close.' },
-        { l: 'Your companies are licensed', s: 'Set during provisioning — ready to reconcile.' },
-        { l: 'Accounting (DMAAIs) loads on first export', s: 'No action needed; confirm any time from Home.' }
-      ] },
+    // UI-206: the ticks are read from the database, not written in. This list used
+    // to be three static green ticks, and on the rehearsal database (2026-09-29) two
+    // were false: no company licensed, no refresh ever run, with "No refresh yet"
+    // showing top-right on the same screen. An empty licence table (the VLC-91
+    // failure) would have been ticked the same way. wzChecks() builds them.
+    { key: 'welcome', name: 'Welcome', short: 'What’s ready', checks: true },
     { key: 'team', name: 'Add your team', short: 'RR Team',
       eyebrow: 'The one thing to do', h: 'Add your team',
       lede: 'Add the people who’ll use RapidReconciler and give each a role. They get an email to set their own password and land on a Home scoped to this database.',
@@ -5361,15 +5372,65 @@
       '"><span class="step-no">✓</span><span class="step-name">Done<small>Ready</small></span></div>';
     el.innerHTML = html;
   }
+  // The Welcome step's checks. Each reads a figure some other sink already shows,
+  // so the wizard can never disagree with the rest of the page:
+  //   refresh  -> _dataFreshness(), the one producer the top-right pill reads;
+  //   licences -> _wzLic, set by paintLicenseHealth() from the same /license-usage
+  //               the Licensing card reads (`used` = THIS database's companies).
+  // A green tick only when the fact is true. Anything else goes under "Not ready
+  // yet" with the next step, and a check still waiting on its call says so.
+  var _wzLic = null;   // null = not answered yet | { state: 'ok'|'none'|'error', used }
+  function wzChecks() {
+    var out = [];
+    var f = _dataFreshness();
+    if (!_jobStatus)               out.push({ lv: 'pend', l: 'Checking the data refresh…', s: '' });
+    else if (f.level === 'ok')     out.push({ lv: 'ok',   l: 'Data refreshes automatically each night', s: f.text + '. You can also pull an intraday refresh during period close.' });
+    else if (f.level === 'busy')   out.push({ lv: 'pend', l: 'A data refresh is running now', s: 'This database fills in when it finishes.' });
+    else if (f.level === 'attention') out.push({ lv: 'warn', l: 'The last data refresh failed', s: 'Reconciliation may show figures from an older refresh. Contact RapidReconciler support.' });
+    else                           out.push({ lv: 'warn', l: 'No data refresh has run on this database yet', s: 'Reconciliation has nothing to show until one does. If none has run by tomorrow morning, contact RapidReconciler support.' });
+    if (!_wzLic)                   out.push({ lv: 'pend', l: 'Checking your company licenses…', s: '' });
+    else if (_wzLic.state === 'ok') out.push({ lv: 'ok',  l: 'Your companies are licensed', s: _wzLic.used + (_wzLic.used === 1 ? ' company' : ' companies') + ' licensed on this database, ready to reconcile.' });
+    else if (_wzLic.state === 'none') out.push({ lv: 'warn', l: 'No companies are licensed on this database yet', s: 'Reconciliation shows nothing until at least one is. Contact RapidReconciler support to license your companies.' });
+    else                           out.push({ lv: 'warn', l: 'Your company licenses could not be checked', s: 'The licensing service did not answer. Reload the page; if it keeps happening, contact RapidReconciler support.' });
+    // True by construction: DMAAIs load on the first export whatever else is set up.
+    out.push({ lv: 'ok', l: 'Accounting (DMAAIs) loads on first export', s: 'No action needed; confirm any time from Home.' });
+    return out;
+  }
+  function wzCheckRows(items) {
+    return items.map(function (a) {
+      var icon = a.lv === 'ok' ? CK_OK : a.lv === 'warn' ? CK_WARN : CK_PEND;
+      return '<div class="wz-ai ' + a.lv + '"><span class="ck">' + icon + '</span><div><div class="l">' + esc(a.l) + '</div>' +
+        (a.s ? '<div class="s">' + esc(a.s) + '</div>' : '') + '</div></div>';
+    }).join('');
+  }
+  // Repaint the Welcome step when a check's figure arrives (or changes on a DB switch).
+  function wzChecksChanged() {
+    if (isAdmin() && _wzStep === 0 && WZ_STEPS[0].checks) renderWzBody();
+  }
   function renderWzBody() {
     var el = $('wzBody'); if (!el) return;
     var s = (_wzStep >= WZ_STEPS.length) ? WZ_DONE : WZ_STEPS[_wzStep];
-    var html = '<div class="wz-eyebrow">' + s.eyebrow + '</div><div class="wz-h">' + s.h + '</div><div class="wz-lede">' + s.lede + '</div>';
-    if (s.already) {
-      html += '<div class="wz-already"><div class="wz-already-h">Already handled for you</div>' +
-        s.already.map(function (a) {
-          return '<div class="wz-ai"><span class="ck">' + CK_OK + '</span><div><div class="l">' + a.l + '</div><div class="s">' + a.s + '</div></div></div>';
-        }).join('') + '</div>';
+    var html;
+    if (s.checks) {
+      var items = wzChecks();
+      var done = items.filter(function (a) { return a.lv === 'ok'; });
+      var open = items.filter(function (a) { return a.lv !== 'ok'; });
+      var needsYou = items.some(function (a) { return a.lv === 'warn'; });
+      // The sentence above the step strip says the same thing, so it follows the
+      // same checks (it read "the one thing left" beside two unmet items).
+      var sub = $('wzSub');
+      if (sub) sub.textContent = needsYou
+        ? 'Most of your setup happened during provisioning. A few items below still need attention before you add the people who’ll use RapidReconciler.'
+        : 'Most of your setup happened during provisioning. The one thing left is adding the people who’ll use RapidReconciler.';
+      html = '<div class="wz-eyebrow">' + (needsYou ? 'Almost set up' : 'You’re mostly set up') + '</div>' +
+        '<div class="wz-h">' + (needsYou ? 'Here’s where setup stands' : 'Here’s what’s already done for you') + '</div>' +
+        '<div class="wz-lede">' + (needsYou
+          ? 'Most of this is already done. Sort out the items under Not ready yet, then add your team.'
+          : 'Provisioning handled the heavy lifting. When you’re ready, add your team — that’s the last piece.') + '</div>';
+      if (open.length) html += '<div class="wz-already"><div class="wz-already-h">Not ready yet</div>' + wzCheckRows(open) + '</div>';
+      if (done.length) html += '<div class="wz-already"><div class="wz-already-h">Already handled for you</div>' + wzCheckRows(done) + '</div>';
+    } else {
+      html = '<div class="wz-eyebrow">' + s.eyebrow + '</div><div class="wz-h">' + s.h + '</div><div class="wz-lede">' + s.lede + '</div>';
     }
     if (s.action) {
       html += '<div class="wz-action"><div class="a-main"><div class="a-title">' + s.action.title + '</div><div class="a-sub">' + s.action.sub + '</div></div>' +
@@ -5390,6 +5451,8 @@
 
   var CK_OK  = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
   var CK_BAD = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+  var CK_WARN = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="6" x2="12" y2="13"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>';
+  var CK_PEND = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="12" x2="6.01" y2="12"/><line x1="12" y1="12" x2="12.01" y2="12"/><line x1="18" y1="12" x2="18.01" y2="12"/></svg>';
 
   // Build the readiness checklist from real signals already in hand:
   // connectivity, the refresh job status, module caps, and the open period.
@@ -5826,6 +5889,7 @@
       }
       // The sink an accountant or analyst can actually see.
       _paintFreshPill();
+      wzChecksChanged();   // UI-206: the Welcome step's refresh check reads the same producer
       // Data-currency fact in the Database meta strip (shown to every role).
       _dbRefresh = /^success/i.test(status)            ? { dot: 'green', v: when || 'Current' }
                  : /^in progress/i.test(status)        ? { dot: 'amber', v: 'Refreshing…' }
@@ -18192,6 +18256,7 @@
     _acksByKind = null;         // server reminder acks — re-fetched per DB by loadAcks() (DB-scoped agent)
     _dbFacts = null; _dbRefresh = null;   // install-facts strip (size / SQL build / data currency)
     _jobStatus = ''; _refreshWhen = ''; _period = ''; _periods = [];
+    _wzLic = null;   // UI-206: the previous database's licence answer is not this one's
 
     // Neutralize the DOM these feed so no stale color survives the switch.
     // The freshness pill included: _jobStatus is now '' so it repaints to
@@ -18200,6 +18265,7 @@
     // from the wrong instance sitting next to the new instance's numbers.
     _paintFreshPill();
     _clearHomeNotice();   // UI-169: same rule -- the old instance's failure is not this one's
+    wzChecksChanged();    // UI-206: same rule for the Welcome step's two checks
     paintInventoryLight('grey', 'Checking…');     // cxDot
     // (A `$('reloadGlDot')` reset stood here until 2026-09-13. There has been no such
     // element since the Reload GL card moved to inventory-account-rollforward.html's
