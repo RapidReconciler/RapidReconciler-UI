@@ -384,6 +384,15 @@ window.RR_ENVIRONMENTS = {
     // is precisely why those pairs cannot carry the finding. Only the admin
     // pair discriminates.
     //
+    // RE-PROBED 2026-09-29, after GSI announced the -qa names as the live QA
+    // central stack. rrvalcadmin-qa now answers / with 200 and the same legacy
+    // AngularJS console index as rrvalcadmin-prod, where on 2026-09-15 it gave
+    // the gateway's own 404. /valc/ returns 404 on both hosts, so this is still
+    // not a VALC 2.0, and these stay null. VALC 2.0's QA is planned on separate
+    // -qav8 names, which were still NXDOMAIN on 2026-09-29. The "rrjms-qa
+    // answering 8002" reading above does not identify QA's JMS port; the
+    // measured port map is kept in the private Valc repo, not here.
+    //
     // Populate when a QA VALC is actually published, not when DNS appears --
     // those turned out to be different events. See project_valc_qa_publish_readiness.
     // Null keeps the gap loud: RRENV.missing() names it and login.html renders it.
