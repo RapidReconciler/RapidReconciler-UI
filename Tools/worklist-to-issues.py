@@ -9,6 +9,10 @@ Safety, all enforced before anything is sent:
   * A secret-shaped string (password/secret/token/key followed by a value) stops that row.
   * Idempotent: an issue whose title starts "[ID]" already open or closed is updated, not
     duplicated. The ID -> issue map is written beside WORKLIST.md (worklist-issues.json).
+  * Chunks: WORKLIST.md's "## Chunks" table puts every live row in exactly one chunk, in work
+    order. Each issue gets a `chunk:<slug>` label and a "**Chunk:**" body line that VALC's
+    Development page and Tools/claude-issue-runner.py read back. Nothing is posted if a live row
+    is in no chunk or in two, or a chunk names a row that is not live.
 
 Usage:  python Tools/worklist-to-issues.py [--dry-run]
         python Tools/worklist-to-issues.py --self-test
@@ -69,6 +73,53 @@ def parse(text):
     return rows, sections
 
 
+CHUNK_ROW = re.compile(r"^\|\s*(?P<slug>[a-z0-9]+(?:-[a-z0-9]+)*)\s*\|\s*(?P<title>[^|]+?)\s*\|\s*(?P<rows>[^|]+?)\s*\|\s*(?P<why>[^|]*?)\s*\|\s*$")
+# Read back by VALC (DevelopmentService.CHUNK_LINE) and the runner: keep the three in step.
+CHUNK_LINE = "**Chunk:** {title} · `{slug}` · step {k} of {n}: {order}"
+
+
+def parse_chunks(text):
+    """[{slug, title, rows: [ID, ...], why}] from the '## Chunks' table, in file order."""
+    m = re.search(r"(?ms)^## Chunks\b.*?(?=^## )", text)
+    if not m:
+        return []
+    out = []
+    for line in m.group(0).splitlines():
+        c = CHUNK_ROW.match(line)
+        if c and c.group("slug") != "chunk":
+            out.append({"slug": c.group("slug"), "title": c.group("title").strip(),
+                        "rows": re.findall(r"\b[A-Z]+-\d+\b", c.group("rows")), "why": c.group("why").strip()})
+    return out
+
+
+def chunk_errors(live_ids, chunks):
+    """Every reason the grouping cannot be posted. An empty list is the only green."""
+    errs, seen, slugs = [], {}, set()
+    if not chunks:
+        return ["WORKLIST.md has no '## Chunks' table (or it did not parse); every live row needs a chunk"]
+    for c in chunks:
+        if c["slug"] in slugs:
+            errs.append(f"chunk {c['slug']} is listed twice")
+        slugs.add(c["slug"])
+        if not c["rows"]:
+            errs.append(f"chunk {c['slug']} names no rows")
+        for r in c["rows"]:
+            if r in seen:
+                errs.append(f"{r} is in two chunks ({seen[r]} and {c['slug']})")
+            seen[r] = c["slug"]
+            if r not in live_ids:
+                errs.append(f"chunk {c['slug']} names {r}, which is not a live row")
+    for r in live_ids:
+        if r not in seen:
+            errs.append(f"{r} is live but in no chunk")
+    return errs
+
+
+def chunk_line(chunk, wid):
+    return CHUNK_LINE.format(title=chunk["title"], slug=chunk["slug"], k=chunk["rows"].index(wid) + 1,
+                             n=len(chunk["rows"]), order=", ".join(chunk["rows"]))
+
+
 def gh(args, input_text=None):
     r = subprocess.run([GH] + args, capture_output=True, text=True, encoding="utf-8", input=input_text)
     if r.returncode != 0:
@@ -76,9 +127,14 @@ def gh(args, input_text=None):
     return r.stdout
 
 
-def ensure_labels(repo, dry):
+def chunk_labels(chunks):
+    # GitHub caps a label description at 100 characters.
+    return {f"chunk:{c['slug']}": ("bfd4f2", ("Chunk: " + c["title"])[:100]) for c in chunks}
+
+
+def ensure_labels(repo, dry, extra=None):
     have = {l["name"] for l in json.loads(gh(["api", f"repos/{OWNER}/{repo}/labels?per_page=100"]))}
-    for name, (color, desc) in LABELS.items():
+    for name, (color, desc) in {**LABELS, **(extra or {})}.items():
         if name in have:
             continue
         print(f"  label {repo}: create {name}")
@@ -98,16 +154,17 @@ def existing(repo, wid):
 
 def stale_labels(current, wanted):
     """Copier-owned labels the issue carries but the row no longer earns (an old status, a resolved
-    needs-owner). claude:* and any label a person added are never touched."""
+    needs-owner, a chunk it moved out of). claude:* and any label a person added are never touched."""
     owned = set(STATUS_LABEL.values()) | {"needs-owner"}
-    return [l for l in current if l in owned and l not in wanted]
+    return [l for l in current if (l in owned or l.startswith("chunk:")) and l not in wanted]
 
 
-def build(row, section):
+def build(row, section, chunk):
     wid = row["id"]
     title_text = section[0] if section else re.sub(r"\*\*|`", "", row["what"])[:120]
     title = f"[{wid}] {title_text}"[:250]
-    body = [f"**Status:** {row['status'].strip()} &middot; **Need from you:** {row['need'].strip() or '—'}", "",
+    body = [chunk_line(chunk, wid), "",
+            f"**Status:** {row['status'].strip()} &middot; **Need from you:** {row['need'].strip() or '—'}", "",
             f"**Index line:** {row['what'].strip()}", ""]
     if section:
         body += ["---", "", section[1]]
@@ -118,7 +175,7 @@ def build(row, section):
     text = "\n".join(body)
     if len(text) > BODY_CAP:
         text = text[:BODY_CAP] + "\n\n_[Cut at 60,000 characters; the full section is in WORKLIST.md.]_"
-    labels = ["worklist", TARGET_LABEL[wid.split("-")[0]], STATUS_LABEL[row["status"].strip()[:1]]]
+    labels = ["worklist", TARGET_LABEL[wid.split("-")[0]], STATUS_LABEL[row["status"].strip()[:1]], f"chunk:{chunk['slug']}"]
     need = row["need"].strip()
     if need and need not in ("—", "-", "&mdash;"):
         labels.append("needs-owner")
@@ -126,20 +183,29 @@ def build(row, section):
 
 
 def main(dry):
-    rows, sections = parse(open(WORKLIST, encoding="utf-8").read())
-    print(f"live rows: {len(rows)}; sections: {len(sections)}")
+    text = open(WORKLIST, encoding="utf-8").read()
+    rows, sections = parse(text)
+    chunks = parse_chunks(text)
+    print(f"live rows: {len(rows)}; sections: {len(sections)}; chunks: {len(chunks)}")
     if not rows:
         raise SystemExit("no live rows parsed: the index format changed, refusing to report zero")
+    errs = chunk_errors([r["id"] for r in rows], chunks)
+    if errs:
+        raise SystemExit("the Chunks table in WORKLIST.md does not cover the live rows; nothing was posted:\n  "
+                         + "\n  ".join(errs))
+    chunk_of = {r: c for c in chunks for r in c["rows"]}
     mapping = json.load(open(MAP_FILE, encoding="utf-8")) if os.path.exists(MAP_FILE) else {}
     for repo in sorted({REPO_FOR[r["id"].split("-")[0]] for r in rows if r["id"].split("-")[0] in REPO_FOR}):
-        ensure_labels(repo, dry)
+        # Only the chunks that have a row in this repo; a chunk spanning repos gets its label in each.
+        here = [c for c in chunks if any(REPO_FOR.get(r.split("-")[0]) == repo for r in c["rows"])]
+        ensure_labels(repo, dry, chunk_labels(here))
     for row in rows:
         prefix = row["id"].split("-")[0]
         if prefix not in REPO_FOR:
             print(f"  REFUSED {row['id']}: no PRIVATE repo for prefix {prefix} (the UI repo is public)")
             continue
         repo = REPO_FOR[prefix]
-        title, body, labels = build(row, sections.get(row["id"]))
+        title, body, labels = build(row, sections.get(row["id"]), chunk_of[row["id"]])
         if SECRET.search(body):
             print(f"  REFUSED {row['id']}: a secret-shaped string is in its section; not posted")
             continue
@@ -177,8 +243,22 @@ def self_test():
     rows, secs = parse(sample)
     assert [r["id"] for r in rows] == ["DAC-1", "VLC-2", "VLC-4"], rows   # closed is not copied; blocked is
     assert secs["DAC-1"] == ("the thing", "body one"), secs["DAC-1"]
-    t, b, l = build(rows[1], secs["VLC-2"])
-    assert "needs-owner" in l and "status:in-progress" in l, l
+    chunk_md = ("## Chunks\n\n| Chunk | Title | Rows, in the order to work them | Why |\n|---|---|---|---|\n"
+                "| pair | The pair | VLC-4, VLC-2 | VLC-2 needs VLC-4 |\n| solo | Alone | DAC-1 | Stands alone |\n\n## Index\n")
+    chunks = parse_chunks(chunk_md)
+    assert [(c["slug"], c["rows"]) for c in chunks] == [("pair", ["VLC-4", "VLC-2"]), ("solo", ["DAC-1"])], chunks
+    live = [r["id"] for r in rows]
+    assert chunk_errors(live, chunks) == [], chunk_errors(live, chunks)
+    assert chunk_errors(live, chunks[:1]) == ["DAC-1 is live but in no chunk"], "an ungrouped live row must stop the copy"
+    two = chunks + [{"slug": "again", "title": "t", "rows": ["DAC-1"], "why": ""}]
+    assert "DAC-1 is in two chunks (solo and again)" in chunk_errors(live, two)
+    stale = [{"slug": "old", "title": "t", "rows": ["VLC-3"], "why": ""}] + chunks
+    assert "chunk old names VLC-3, which is not a live row" in chunk_errors(live, stale)
+    assert chunk_errors(live, []) != [], "no table at all is an error, never a silent pass"
+    t, b, l = build(rows[1], secs["VLC-2"], chunks[0])
+    assert "needs-owner" in l and "status:in-progress" in l and "chunk:pair" in l, l
+    assert b.splitlines()[0] == "**Chunk:** The pair · `pair` · step 2 of 2: VLC-4, VLC-2", b.splitlines()[0]
+    assert stale_labels(["chunk:old", "chunk:pair", "claude:queued"], ["chunk:pair"]) == ["chunk:old"]
     assert SECRET.search(b), "the secret pattern must catch a password with a value"
     assert not SECRET.search("the rehearsal user's password; RR_ARTIFACT_READ_TOKEN onto a machine account"), \
         "prose that only NAMES a secret must not be refused"
