@@ -88,11 +88,19 @@ def ensure_labels(repo, dry):
 
 
 def existing(repo, wid):
+    """(number, current label names) of the issue titled "[ID] ...", or (None, [])."""
     q = json.loads(gh(["api", f"repos/{OWNER}/{repo}/issues?state=all&labels=worklist&per_page=100"]))
     for i in q:
         if "pull_request" not in i and i["title"].startswith(f"[{wid}]"):
-            return i["number"]
-    return None
+            return i["number"], [l["name"] for l in i.get("labels", [])]
+    return None, []
+
+
+def stale_labels(current, wanted):
+    """Copier-owned labels the issue carries but the row no longer earns (an old status, a resolved
+    needs-owner). claude:* and any label a person added are never touched."""
+    owned = set(STATUS_LABEL.values()) | {"needs-owner"}
+    return [l for l in current if l in owned and l not in wanted]
 
 
 def build(row, section):
@@ -135,14 +143,18 @@ def main(dry):
         if SECRET.search(body):
             print(f"  REFUSED {row['id']}: a secret-shaped string is in its section; not posted")
             continue
-        num = existing(repo, row["id"])
+        num, current = existing(repo, row["id"])
+        stale = stale_labels(current, labels)
         action = f"update #{num}" if num else "create"
-        print(f"  {row['id']:8} -> {repo:24} {action:12} {labels}")
+        print(f"  {row['id']:8} -> {repo:24} {action:12} {labels}" + (f"  (remove {stale})" if stale else ""))
         if dry:
             continue
         if num:
-            gh(["issue", "edit", str(num), "-R", f"{OWNER}/{repo}", "--title", title, "--body-file", "-",
-                "--add-label", ",".join(labels)], input_text=body)
+            args = ["issue", "edit", str(num), "-R", f"{OWNER}/{repo}", "--title", title, "--body-file", "-",
+                    "--add-label", ",".join(labels)]
+            if stale:
+                args += ["--remove-label", ",".join(stale)]
+            gh(args, input_text=body)
         else:
             out = gh(["issue", "create", "-R", f"{OWNER}/{repo}", "--title", title, "--body-file", "-",
                       "--label", ",".join(labels)], input_text=body)
@@ -170,6 +182,9 @@ def self_test():
     assert SECRET.search(b), "the secret pattern must catch a password with a value"
     assert not SECRET.search("the rehearsal user's password; RR_ARTIFACT_READ_TOKEN onto a machine account"), \
         "prose that only NAMES a secret must not be refused"
+    assert stale_labels(["worklist", "status:open", "claude:done", "needs-owner", "bug"],
+                        ["worklist", "status:in-progress"]) == ["status:open", "needs-owner"], \
+        "an old status and a resolved needs-owner go; claude:* and a person's own label stay"
     print("self-test OK")
 
 
