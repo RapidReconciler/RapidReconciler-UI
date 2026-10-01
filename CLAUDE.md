@@ -48,9 +48,9 @@ RapidReconciler-UI/                  ← repo root
 │   └── analysis-workbook.html       ← Drop-an-xlsx → formatted analysis workbook generator (8 templates)
 │
 ├── Scenarios/                       ← One HTML file per troubleshooting scenario
-│   ├── scenarios-index.json         ← search index (22 scenarios)
+│   ├── scenarios-index.json         ← search index (built by CI from the pages)
 │   ├── scenario-template.html       ← template for new scenarios
-│   └── scenario-*.html              ← 22 scenario pages
+│   └── scenario-*.html              ← one page per scenario (11 on 2026-10-01)
 │
 ├── RRUniversity/                    ← PUBLIC: customer-facing KB + Help
 │   ├── rapidreconciler-university.html  ← KB landing + per-module search
