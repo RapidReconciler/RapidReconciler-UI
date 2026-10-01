@@ -13,10 +13,16 @@ Safety, all enforced before anything is sent:
     order. Each issue gets a `chunk:<slug>` label and a "**Chunk:**" body line that VALC's
     Development page and Tools/claude-issue-runner.py read back. Nothing is posted if a live row
     is in no chunk or in two, or a chunk names a row that is not live.
+  * Closing (owner request, 2026-10-01): an open `worklist` issue whose row is no longer live is
+    closed ONLY when WORKLIST-DONE.md records that ID as closed. One that is neither live nor done
+    is printed as a WARN and left open (a row deleted or renamed without being finished). An
+    `investigation` issue is never closed. --dry-run prints what would close and closes nothing.
 
 Usage:  python Tools/worklist-to-issues.py [--dry-run]
         python Tools/worklist-to-issues.py --self-test
 """
+import contextlib
+import io
 import json
 import os
 import re
@@ -25,6 +31,7 @@ import sys
 
 WORKSPACE = r"C:\source\repos"
 WORKLIST = os.path.join(WORKSPACE, "WORKLIST.md")
+DONE = os.path.join(WORKSPACE, "WORKLIST-DONE.md")
 MAP_FILE = os.path.join(WORKSPACE, "worklist-issues.json")
 GH = r"C:\Program Files\GitHub CLI\gh.exe"
 OWNER = "RapidReconciler"
@@ -159,6 +166,63 @@ def stale_labels(current, wanted):
     return [l for l in current if (l in owned or l.startswith("chunk:")) and l not in wanted]
 
 
+ISSUE_ID = re.compile(r"^\[(?P<id>[A-Z]+-\d+)\]")
+CLOSE_NOTE = ("Closed by `Tools/worklist-to-issues.py`: {wid} is no longer a live row in `WORKLIST.md`; its section "
+              "moved to `WORKLIST-DONE.md`.")
+
+
+def done_ids(text):
+    """IDs WORKLIST-DONE.md records as closed. Two schemas live there: a '### ID ...' section (since the
+    2026-08-28 split) and a '| **ID** |' table row (before it). Both count: the file's header says every
+    row in it is closed, and WORKLIST.md says IDs are never reused, so an old row cannot name a newer item."""
+    return (set(re.findall(r"(?m)^###\s+([A-Z]+-\d+)\b", text))
+            | set(re.findall(r"(?m)^\|\s*\*\*([A-Z]+-\d+)\*\*\s*\|", text)))
+
+
+def open_worklist_issues(repo):
+    """Every open issue labelled worklist in repo, all pages (a short first page is not the whole list)."""
+    out, page = [], 1
+    while True:
+        q = json.loads(gh(["api", f"repos/{OWNER}/{repo}/issues?state=open&labels=worklist&per_page=100&page={page}"]))
+        out += [i for i in q if "pull_request" not in i]
+        if len(q) < 100:
+            return out
+        page += 1
+
+
+def to_close(issues, live_ids, done):
+    """(close, warn): open copier issues whose "[ID]" row left WORKLIST.md, split by whether DONE records
+    the ID. A live row, an investigation, and a title with no "[ID]" are in neither list."""
+    close, warn = [], []
+    for i in issues:
+        labels = [l["name"] for l in i.get("labels", [])]
+        m = ISSUE_ID.match(i["title"])
+        if "investigation" in labels or "worklist" not in labels or not m or m.group("id") in live_ids:
+            continue
+        (close if m.group("id") in done else warn).append((i, m.group("id")))
+    return close, warn
+
+
+def close_finished(live_ids, indexed, done, dry, fetch=open_worklist_issues, run=gh):
+    """Close each open copier issue whose row moved to WORKLIST-DONE.md; WARN on one that is neither live
+    nor done. Sweeps every repo the copier posts to, including one with no live row left."""
+    closed, warned = [], []
+    for repo in sorted(set(REPO_FOR.values())):
+        close, warn = to_close(fetch(repo), live_ids, done)
+        for i, wid in warn:
+            where = "its index line is still in WORKLIST.md but not live" if wid in indexed else "deleted or renamed?"
+            print(f"  WARN {wid:8} {repo} #{i['number']} is open, not live, and not in WORKLIST-DONE.md "
+                  f"({where}); NOT closed")
+            warned.append(wid)
+        for i, wid in close:
+            print(f"  {wid:8} -> {repo:24} close #{i['number']}  (moved to WORKLIST-DONE.md)")
+            if not dry:
+                run(["issue", "close", str(i["number"]), "-R", f"{OWNER}/{repo}", "--reason", "completed",
+                     "--comment", CLOSE_NOTE.format(wid=wid)])
+            closed.append(wid)
+    return closed, warned
+
+
 def build(row, section, chunk):
     wid = row["id"]
     title_text = section[0] if section else re.sub(r"\*\*|`", "", row["what"])[:120]
@@ -193,6 +257,11 @@ def main(dry):
     if errs:
         raise SystemExit("the Chunks table in WORKLIST.md does not cover the live rows; nothing was posted:\n  "
                          + "\n  ".join(errs))
+    # Read DONE before anything is posted, so a format change stops the run instead of half of it.
+    done = done_ids(open(DONE, encoding="utf-8").read())
+    if not done:
+        raise SystemExit("no closed IDs parsed from WORKLIST-DONE.md: the format changed, refusing to judge what finished")
+    indexed = {m.group("id") for m in map(ROW.match, text.splitlines()) if m}
     chunk_of = {r: c for c in chunks for r in c["rows"]}
     mapping = json.load(open(MAP_FILE, encoding="utf-8")) if os.path.exists(MAP_FILE) else {}
     for repo in sorted({REPO_FOR[r["id"].split("-")[0]] for r in rows if r["id"].split("-")[0] in REPO_FOR}):
@@ -226,6 +295,9 @@ def main(dry):
                       "--label", ",".join(labels)], input_text=body)
             num = int(out.strip().rstrip("/").split("/")[-1])
         mapping[row["id"]] = {"repo": repo, "number": num, "url": f"https://github.com/{OWNER}/{repo}/issues/{num}"}
+    print(f"close pass: {len(done)} IDs closed in WORKLIST-DONE.md")
+    closed, warned = close_finished({r["id"] for r in rows}, indexed, done, dry)
+    print(f"close pass: {len(closed)} {'to close' if dry else 'closed'}, {len(warned)} warned (left open)")
     if not dry:
         with open(MAP_FILE + ".tmp", "w", encoding="utf-8") as f:
             json.dump(mapping, f, indent=2)
@@ -265,6 +337,33 @@ def self_test():
     assert stale_labels(["worklist", "status:open", "claude:done", "needs-owner", "bug"],
                         ["worklist", "status:in-progress"]) == ["status:open", "needs-owner"], \
         "an old status and a resolved needs-owner go; claude:* and a person's own label stay"
+    # Closing. DAC-1 is live AND already has a DONE section (a move half made): it must stay open.
+    done = done_ids("| ID | Task |\n|---|---|\n| **VLC-1** | old schema |\n\n### DAC-9 — finished\n\nbody\n\n"
+                    "### DAC-80 (part 1 of 2) — x\n\n### DAC-1 — being moved\n")
+    assert done == {"VLC-1", "DAC-9", "DAC-80", "DAC-1"}, done   # and DAC-80 does not read as DAC-8
+    iss = lambda n, title, *labels: {"number": n, "title": title, "labels": [{"name": x} for x in labels]}
+    by_repo = {"RapidReconciler-DB": [iss(11, "[DAC-9] finished", "worklist"), iss(14, "[DAC-1] live", "worklist"),
+                                      iss(15, "[Investigation 7] y", "investigation"),
+                                      iss(16, "[DAC-9] a person labelled it", "investigation", "worklist")],
+               "RapidReconciler-Valc": [iss(12, "[VLC-1] old row", "worklist"), iss(13, "[VLC-5] renamed", "worklist")],
+               "RapidReconciler-SSIS": []}
+    close, warn = to_close([i for v in by_repo.values() for i in v], set(live), done)
+    shut, warned = {i["number"] for i, _ in close}, {i["number"] for i, _ in warn}
+    assert {11, 12} <= shut, f"a finished row closes, in either DONE schema: {shut}"
+    assert 13 in warned and 13 not in shut, f"neither live nor done is warned about, never closed: {shut} {warned}"
+    assert 14 not in shut | warned, "a live row is never closed, even with a DONE section already written"
+    assert not {15, 16} & (shut | warned), "an investigation issue is never closed"
+    sent, out = [], io.StringIO()
+    with contextlib.redirect_stdout(out):
+        r = close_finished(set(live), {"VLC-5"}, done, True, fetch=by_repo.get, run=sent.append)
+    assert r == (["DAC-9", "VLC-1"], ["VLC-5"]) and sent == [], f"--dry-run closes nothing: {r} {sent}"
+    assert "WARN VLC-5" in out.getvalue() and "NOT closed" in out.getvalue(), out.getvalue()
+    with contextlib.redirect_stdout(io.StringIO()):
+        close_finished(set(live), set(), done, False, fetch=by_repo.get, run=sent.append)
+    assert sent == [["issue", "close", "11", "-R", "RapidReconciler/RapidReconciler-DB", "--reason", "completed",
+                     "--comment", CLOSE_NOTE.format(wid="DAC-9")],
+                    ["issue", "close", "12", "-R", "RapidReconciler/RapidReconciler-Valc", "--reason", "completed",
+                     "--comment", CLOSE_NOTE.format(wid="VLC-1")]], sent
     print("self-test OK")
 
 
