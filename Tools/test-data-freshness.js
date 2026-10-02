@@ -132,7 +132,7 @@ function freshness(status, when) {
 /* ---- 1. the mapping ------------------------------------------------------ */
 console.log('=== every /poll job status maps to the right level and sentence ===');
 
-// The status strings are v_diagnostic5_job_status values, matched case-insensitively
+// The status strings are usp8_job_status values, matched case-insensitively
 // and by prefix in the producer -- so the real-world "Success" and a padded
 // "success (14232 rows)" both land on the same branch.
 check('success WITH a timestamp names the date, not the time',
