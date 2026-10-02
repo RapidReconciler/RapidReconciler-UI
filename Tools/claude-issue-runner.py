@@ -388,6 +388,45 @@ def run_session(cmd, cwd, log_path, minutes, env=None):
     return ok, report
 
 
+# HK-30: the runner holds a chunk's worklist rows in WORKLIST.md the way a pasted session does, so neither
+# starts a row the other has. One constant name, so a re-run of the same chunk moves its own hold instead
+# of being refused by it; the stamped branch and worktree in the hold say which run it was.
+RUNNER_HOLDER = "dev-box runner"
+ROW_ID = re.compile(r"^\[([A-Z]+-\d+)\]")
+
+
+def claims():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "worklist_claim", os.path.join(os.path.dirname(os.path.abspath(__file__)), "worklist-claim.py"))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def row_ids(members):
+    """The worklist row IDs in a chunk; an investigation issue has none and is never held."""
+    return [m.group(1) for m in (ROW_ID.match(i.get("title") or "") for i in members) if m]
+
+
+def own_trees(c):
+    """Worktrees this runner made on earlier runs: a re-run is not a second session on the row."""
+    root = os.path.normcase(os.path.normpath(WORKTREES)) + os.sep
+    return [p for _, p, _ in c.git_worktrees() if os.path.normcase(os.path.normpath(p)).startswith(root)]
+
+
+def hold_rows(ids, paths, c=None):
+    """(ok, text). Writes the runner's hold on every row, or on none and says who has them."""
+    if not ids:
+        return True, ""
+    c = c or claims()
+    try:
+        lines = c.take(ids, RUNNER_HOLDER, list(paths.values()), skip_labels=True, ignore=own_trees(c), announce=False)
+        return True, "\n".join(lines)
+    except c.Refused as e:
+        return False, str(e)
+
+
 def take_lock():
     try:
         fd = os.open(LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
@@ -423,9 +462,26 @@ def run_chunk(slug, members, exe, per_issue_usd, max_chunk_usd, timeout_min, dry
     for r in repos:
         print(f"    worktree {paths[r]}  branch {branch}")
     print(f"    command  {cmd[0]} -p <prompt, {len(cmd[2])} chars> " + " ".join(cmd[3:9]) + " ...")
+    ids = row_ids(members)
     if dry:
+        if ids:
+            c = claims()
+            found = c.check(ids, by=RUNNER_HOLDER, skip_labels=True, ignore=own_trees(c))
+            print("    holds    " + ("; ".join(found) if found else "free: nobody holds " + ", ".join(ids)))
         return
     who = ", ".join(f"{m['repo']}#{m['number']}" for m in members)
+    held, why = hold_rows(ids, paths)
+    print("    holds    " + why.replace("\n", "; "))
+    if not held:
+        for m in members:
+            gh(["issue", "comment", str(m["number"]), "-R", f"{OWNER}/{m['repo']}", "--body-file", "-"],
+               input_text="**Not started by the dev-box runner:** another session holds a row in this chunk, or a worktree "
+                          "already names one (HK-30), so a second build was not begun. Nothing was created.\n\n```\n"
+                          + why + "\n```\n\nAsk that session, or release its hold with `python Tools/worklist-claim.py "
+                          "release <ID> --by \"<holder>\"`, then submit again.")
+            gh(["issue", "edit", str(m["number"]), "-R", f"{OWNER}/{m['repo']}", "--remove-label", "claude:queued",
+                "--add-label", "claude:failed"])
+        return
     for m in members:
         gh(["issue", "edit", str(m["number"]), "-R", f"{OWNER}/{m['repo']}", "--remove-label", "claude:queued",
             "--add-label", "claude:running"])
@@ -434,7 +490,7 @@ def run_chunk(slug, members, exe, per_issue_usd, max_chunk_usd, timeout_min, dry
                       + (f" as part of chunk `{slug}` ({who}), one session in step order" if slug else "")
                       + f". Branch `{branch}`. Budget cap ${budget}. Nothing will be committed or pushed. "
                       + f"Live progress, one line per step: `{log_path}` on the dev box.")
-    ok, report = False, ""
+    ok, report, still_held = False, "", bool(ids)
     try:
         os.makedirs(WORKTREES, exist_ok=True)
         for r in repos:
@@ -445,6 +501,9 @@ def run_chunk(slug, members, exe, per_issue_usd, max_chunk_usd, timeout_min, dry
         ok, report = run_session(cmd, paths[repos[0]], log_path, minutes, env)
     except subprocess.CalledProcessError as e:
         report = f"Setup failed: {' '.join(e.cmd[:5])}: {(e.stderr or '').strip()}"
+        if ids:   # nothing was built, so nothing is held: let the next session have the rows
+            report += "\n\n" + "\n".join(claims().release(ids, RUNNER_HOLDER))
+            still_held = False
     trees = []
     for r in repos:
         p = paths[r]
@@ -453,7 +512,10 @@ def run_chunk(slug, members, exe, per_issue_usd, max_chunk_usd, timeout_min, dry
         trees.append(f"**{r}** worktree `{p}`\n\n```\n{status.strip() or '(no changes)'}\n{stat.strip()}\n```")
     body = (f"**Claude Code session {'finished' if ok else 'did not finish'}**"
             + (f" for chunk `{slug}` ({who})" if slug else "") + f".\n\n{report[:50000]}\n\n"
-            f"Branch `{branch}`, not committed.\n\n" + "\n\n".join(trees))
+            f"Branch `{branch}`, not committed.\n\n" + "\n\n".join(trees)
+            + (f"\n\nThe runner still holds {', '.join(ids)} in WORKLIST.md while this diff waits for review. Release with "
+               f"`python Tools/worklist-claim.py release {' '.join(ids)} --by \"{RUNNER_HOLDER}\"` before anyone else takes it."
+               if still_held else ""))
     for m in members:
         gh(["issue", "comment", str(m["number"]), "-R", f"{OWNER}/{m['repo']}", "--body-file", "-"], input_text=body)
         gh(["issue", "edit", str(m["number"]), "-R", f"{OWNER}/{m['repo']}", "--remove-label", "claude:running",
@@ -589,6 +651,43 @@ def self_test():
     allowed = cmd[cmd.index("--allowedTools") + 1:cmd.index("--disallowedTools")]
     assert not any(x.startswith("Bash(git commit") or x.startswith("Bash(gh") for x in allowed)
     assert "RapidReconciler-AI" not in REPOS, "the public UI repo must never be read for queued work"
+
+    # HK-30: the runner holds a chunk's rows, refuses one another session holds, and moves its own on a re-run.
+    import tempfile
+    assert row_ids([mem("RapidReconciler-Valc", 5, 1, 2), solo]) == ["X-5"], "an investigation has no row to hold"
+    tmp = tempfile.mkdtemp(prefix="runner-claim-")
+    wl = os.path.join(tmp, "WORKLIST.md")
+    with open(wl, "w", encoding="utf-8", newline="") as f:
+        f.write("# W\n\n### X-5 — free\n\nbody\n\n---\n\n### X-6 — held\n\n**Held by:** Session Q · C:/q · "
+                "2026-10-02T13:00Z\n\nbody\n")
+    old = os.environ.get("RR_CLAIM_TEST_FILE")
+    os.environ["RR_CLAIM_TEST_FILE"] = wl   # the claim module points at the scratch file and skips git and GitHub
+    try:
+        c = claims()
+        assert c.WORKLIST == wl
+        ok, why = hold_rows(["X-5", "X-6"], {"R": "C:/w1"}, c)
+        assert not ok and "held by Session Q" in why and c.holds(c.read(), "X-5") == [], (ok, why)
+        ok, why = hold_rows(["X-5"], {"R": "C:/w1"}, c)
+        assert ok and c.holds(c.read(), "X-5")[0][1].group("who") == RUNNER_HOLDER, why
+        ok, why = hold_rows(["X-5"], {"R": "C:/w2"}, c)
+        h = c.holds(c.read(), "X-5")
+        assert ok and len(h) == 1 and h[0][1].group("where") == "C:/w2", (why, h)
+        assert hold_rows([], {"R": "C:/w"}, c) == (True, "")
+        # an earlier run's worktree names the row; it is the runner's own, so a re-run is not refused by it
+        prior = [("RapidReconciler-Valc", os.path.join(WORKTREES, "x-5-202610011200-RapidReconciler-Valc"), "claude/issue-x-5-1")]
+        c.git_worktrees = lambda: list(prior)
+        c.default_world = lambda: c.World(trees=lambda: list(prior), labels=lambda wid: None, comment=lambda wid, b: "")
+        assert own_trees(c) == [prior[0][1]]
+        ok, why = hold_rows(["X-5"], {"R": "C:/w3"}, c)
+        assert ok, why
+        prior.append(("RapidReconciler-Valc", r"C:\source\repos\_wt-x5", "claude/x-5-abc"))
+        ok, why = hold_rows(["X-5"], {"R": "C:/w4"}, c)
+        assert not ok and "_wt-x5" in why, "a session's own worktree on the row still stops the runner"
+    finally:
+        if old is None:
+            os.environ.pop("RR_CLAIM_TEST_FILE", None)
+        else:
+            os.environ["RR_CLAIM_TEST_FILE"] = old
     print("self-test OK")
 
 
