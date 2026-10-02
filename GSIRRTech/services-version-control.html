@@ -105,7 +105,7 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <li data-target="action"><a href="#action" onclick="goAnchor('action'); return false;">3. What the Action does</a></li>
 <li data-target="post-release"><a href="#post-release" onclick="goAnchor('post-release'); return false;">4. After the release</a></li>
 <li data-target="post-release-prod" style="padding-left: 14px;"><a href="#post-release-prod" onclick="goAnchor('post-release-prod'); return false;">4a. Production deploy (JMS)</a></li>
-<li data-target="post-release-internal" style="padding-left: 14px;"><a href="#post-release-internal" onclick="goAnchor('post-release-internal'); return false;">4b. Internal deploy (HTTP push)</a></li>
+<li data-target="post-release-internal" style="padding-left: 14px;"><a href="#post-release-internal" onclick="goAnchor('post-release-internal'); return false;">4b. Internal deploy (retired)</a></li>
 <li data-target="post-release-broker" style="padding-left: 14px;"><a href="#post-release-broker" onclick="goAnchor('post-release-broker'); return false;">4c. V8 broker deploy (JMS)</a></li>
 <li data-target="prereleases"><a href="#prereleases" onclick="goAnchor('prereleases'); return false;">5. Pre-releases &amp; rollbacks</a></li>
 <li data-target="valc-mirror"><a href="#valc-mirror" onclick="goAnchor('valc-mirror'); return false;">6. VALC 2.0 parallel</a></li>
@@ -246,13 +246,12 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <section id="post-release">
 <h2>4. After the release</h2>
 <p>The jar on the GitHub Release page isn&rsquo;t the Services install path on its own &mdash; it has to land in VALC&rsquo;s artifact catalog (the <code>file_versions</code> table) before any of the deploy paths can reach a Services instance.</p>
-<p>Three deploy paths exist, all feeding off the same <code>file_versions</code> row:</p>
+<p>Two deploy paths exist, both feeding off the same <code>file_versions</code> row:</p>
 <ul>
   <li><strong>Production deploy (V7 installs)</strong> &mdash; JMS-based. Goes through the central VALC SPA and the customer&rsquo;s existing <code>rr-valc-agent.jar</code>. The path V7 customers use today. See &sect; 4a.</li>
-  <li><strong>Internal deploy</strong> &mdash; HTTP-push. Goes through VALC 2.0&rsquo;s <strong>Manage Deploy</strong> modal directly to the Services jar&rsquo;s own <code>/admin/self-update</code> endpoint. Only for a Services jar VALC 2.0 itself runs, and since 2026-09-30 no V8 server is run that way, the GSI dev server included. See &sect; 4b.</li>
   <li><strong>V8 broker deploy</strong> &mdash; JMS-based, from VALC 2.0 to the V8 broker on a V8 install. This is the path for every V8 server. See &sect; 4c.</li>
 </ul>
-<p>There is nothing to choose between the last two. Every application server&rsquo;s <strong>RR Services run by</strong> reads <strong>Customer&rsquo;s broker</strong>, read-only (owner ruling 2026-09-27; the dev server moved on 2026-09-30).</p>
+<p>Every application server&rsquo;s <strong>RR Services run by</strong> reads <strong>Customer&rsquo;s broker</strong>, read-only (owner ruling 2026-09-27; the dev server moved on 2026-09-30). The third path, an internal HTTP-push deploy to a Services process VALC 2.0 ran itself, was removed on October 2, 2026 (&sect; 4b).</p>
 <div class="callout important">
   <p>Customer deploys are <em>not</em> automatic on every release. Releasing publishes the jar; deploying pushes it. This split is intentional &mdash; gives you a chance to pilot a release on one or two clients before fanout, regardless of which path you use.</p>
 </div>
@@ -276,43 +275,17 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 </section>
 
 <section id="post-release-internal">
-<h3>4b. Internal deploy (HTTP push via VALC 2.0)</h3>
-<p>The path VALC 2.0&rsquo;s <strong>Manage Deploy</strong> modal exercises on the dev box. Bypasses JMS entirely &mdash; VALC 2.0 POSTs the jar bytes straight to the agent&rsquo;s own <code>/admin/self-update</code> endpoint and orchestrates the restart. Used for internal testing, dogfooding new builds, and any deploy where VALC 2.0 and the Services agent share a network (typically the same host).</p>
-
-<ol>
-  <li><strong>Sync from GitHub.</strong> Click the circular-arrows icon next to the <strong>New Version</strong> dropdown on the Manage Deploy modal. VALC 2.0 hits the GitHub Releases API for <code>RapidReconciler-Agent</code>, filters to <code>client-services-*.jar</code> assets, dedups against <code>file_versions</code> by <code>(component, version_string)</code> + <code>sha1_hex</code>, downloads new jars to the artifact store under <code>file_versions.id</code>, and inserts rows with <code>component='services'</code>. Idempotent &mdash; re-runs skip already-imported tags.</li>
-  <li><strong>Pick a version.</strong> The dropdown lists synced rows newest-first (e.g. <code>0.2.0-rc1</code>).</li>
-  <li><strong>Click Deploy.</strong> VALC 2.0 runs <code>ServicesDeployService.deploy(agentId, fileVersionId)</code>:
-    <ul>
-      <li>Loads the jar bytes from the artifact store.</li>
-      <li>POSTs them to <code>http://{agent_internal_ip}:{port}/admin/self-update</code> with <code>X-Expected-Sha1</code>.</li>
-      <li>The agent stages the jar at <code>&lt;runningJar&gt;.new</code>, verifies SHA1, returns the staged path.</li>
-      <li>VALC 2.0 stops the agent JVM (graceful destroy, or port-based force-stop if the JVM was launched by an earlier VALC 2.0 instance and isn&rsquo;t in the lifecycle map).</li>
-      <li><code>Files.move</code> with REPLACE_EXISTING, retry loop (60&times;500ms) to absorb the Windows mmap-release delay.</li>
-      <li>Restart the agent JVM from the swapped path. Poll <code>/health</code> until green or 30s timeout.</li>
-      <li>Insert a <code>client_deploys</code> row with the final status.</li>
-    </ul>
-  </li>
-  <li><strong>Result.</strong> The Deploy button&rsquo;s toast shows <code>SUCCEEDED</code> with target IP / port + the new <code>client_deploys</code> row id. The Services field on the Versions tab updates immediately.</li>
-</ol>
-
-<div class="callout note">
-  <p><strong>Loopback-only.</strong> The agent&rsquo;s <code>/admin/self-update</code> refuses non-loopback callers with 403. VALC 2.0 must therefore reach the agent over loopback &mdash; either co-hosted (the dev-box pattern) or via an SSH tunnel for remote pilots. Production VALC always uses the JMS path because real customer agents aren&rsquo;t reachable on their internal IP from the central server.</p>
-</div>
-<div class="callout important">
-  <p><strong>The deployed jar must itself contain <code>/admin/self-update</code></strong> for the next HTTP-push deploy to work. If you deploy a release that predates this endpoint, the agent loses its self-update path &mdash; restore it via a local <code>mvn package</code> + manual jar swap, or cut a new release tag from a Dev commit that includes the controller.</p>
-</div>
-<div class="callout note">
-  <p><strong>Refused on a broker-run server, which is every V8 server.</strong> VALC 2.0 refuses this path (and its Start / Restart buttons) with a message, before it stops anything. Use &sect; 4c instead.</p>
-</div>
+<h3>4b. Internal deploy (retired)</h3>
+<p>VALC 2.0 used to deploy a Services release to a Services process it had started itself, on its own server: it stopped that process, swapped the jar and started it again. That path was removed on October 2, 2026, together with the per-database Start, Stop and Restart controls it served.</p>
+<p>VALC 2.0 no longer starts, stops or restarts any Services process. On every V8 server, the GSI dev server included, the customer&rsquo;s broker runs them, so every Services deploy goes through &sect; 4c. Testing an agent change on a dev database is a release plus a deploy, the same as for a customer.</p>
 </section>
 
 <section id="post-release-broker">
 <h3>4c. V8 broker deploy (JMS via VALC 2.0)</h3>
 <p>The path for a V8 install whose Services the customer&rsquo;s broker runs. VALC 2.0 never starts, stops or probes those Services itself; it publishes what should run, and the broker does the rest.</p>
 <ol>
-  <li><strong>Import the jar</strong> into VALC 2.0&rsquo;s <code>file_versions</code> with <code>component='services'</code> (the Sync-from-GitHub button in &sect; 4b does this).</li>
-  <li><strong>Trigger the deploy</strong> one of two ways. For many databases, use the Deployment Center&rsquo;s <strong>Upgrades</strong> tab, <strong>Services</strong> band, which skips a database already on the release. For one database, pick it in Step 1 and use its <strong>S</strong> (<strong>Services</strong>) step, which also re-deploys the version it already runs. Both follow the same rules. A customer with no heartbeat, or whose broker is older than the release&rsquo;s <code>RR-Min-Broker-Version</code>, is refused with the reason (the Upgrades band lists it and it cannot be selected); upgrade its agent first, in the <strong>Agent</strong> band, from an installer whose broker is new enough (the Services dropdown lists only releases the picked installer&rsquo;s broker can run; <a href="v359-vs-new-agent.html#section-6b">Agent Documentation &sect; 6b</a>). The same applies to a database older than the release&rsquo;s <code>RR-Min-Database-Version</code>: deploy the database release first (the Upgrades tab&rsquo;s Database dropdown lists only releases at or above that floor). The one-database step answers <code>sent</code> with the <code>client_deploys</code> row id, then updates that row in place when the heartbeat decides it. The deploy sets <strong>that database&rsquo;s</strong> pinned Services release (<code>client_databases.services_file_version_id</code>) to the version you picked, which may be older than the newest import. VALC 2.0 records a <code>client_deploys</code> row and publishes the desired state: every active database for the client, each on its own pin, so the client&rsquo;s other databases do not move. It publishes only to a live connection (a heartbeat in the last 90 seconds) and refuses a list shorter than the client&rsquo;s active databases, because an empty list tells the broker to stop everything.</li>
+  <li><strong>Import the jar</strong> into VALC 2.0&rsquo;s <code>file_versions</code> with <code>component='services'</code>. The Deployment Center does this on its own each time it loads: it reads the GitHub releases for <code>RapidReconciler-Agent</code>, skips any already imported, and stores the new jars in the artifact store.</li>
+  <li><strong>Trigger the deploy</strong> one of two ways. For many databases, use the Deployment Center&rsquo;s <strong>Fleet Upgrades</strong> tab, <strong>Services</strong> band, which skips a database already on the release. For one database, pick it in Step 1 and use its <strong>S</strong> (<strong>Services</strong>) step, which also re-deploys the version it already runs. Both follow the same rules. A customer with no heartbeat, or whose broker is older than the release&rsquo;s <code>RR-Min-Broker-Version</code>, is refused with the reason (the Upgrades band lists it and it cannot be selected); upgrade its agent first, in the <strong>Agent</strong> band, from an installer whose broker is new enough (the Services dropdown lists only releases the picked installer&rsquo;s broker can run; <a href="v359-vs-new-agent.html#section-6b">Agent Documentation &sect; 6b</a>). The same applies to a database older than the release&rsquo;s <code>RR-Min-Database-Version</code>: deploy the database release first (the Fleet Upgrades tab&rsquo;s Database dropdown lists only releases at or above that floor). The one-database step answers <code>sent</code> with the <code>client_deploys</code> row id, then updates that row in place when the heartbeat decides it. The deploy sets <strong>that database&rsquo;s</strong> pinned Services release (<code>client_databases.services_file_version_id</code>) to the version you picked, which may be older than the newest import. VALC 2.0 records a <code>client_deploys</code> row and publishes the desired state: every active database for the client, each on its own pin, so the client&rsquo;s other databases do not move. It publishes only to a live connection (a heartbeat in the last 90 seconds) and refuses a list shorter than the client&rsquo;s active databases, because an empty list tells the broker to stop everything.</li>
   <li><strong>The broker fetches and starts.</strong> It requests the jar over JMS, checks the SHA-1, and starts one Services process per database on its bundled JRE 21, with the database password in the process environment and VALC 2.0&rsquo;s JWT public key from the install bundle.</li>
   <li><strong>VALC 2.0 closes the deploy from heartbeats:</strong> <code>SUCCEEDED</code> when the instance is up <strong>and reports the target version</strong> (the broker relays each Services 8.0.41+ jar&rsquo;s own version every 5 minutes), <code>FAILED</code> when it reports the instance down with an error, except the broker&rsquo;s &ldquo;file does not exist&rdquo; while it is still fetching the new jar, which keeps the deploy waiting (it retries the start once a minute), <code>TIMED_OUT</code> after 15 minutes, naming the version still running when it is the wrong one. A box or release that cannot report a version is judged on &ldquo;up after delivery&rdquo; alone.</li>
 </ol>
