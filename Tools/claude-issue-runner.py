@@ -213,12 +213,22 @@ def auth_method(exe, env):
     return s.get("authMethod") if s.get("loggedIn") is True else None
 
 
-def claude_exe():
-    found = sorted(glob.glob(os.path.join(os.environ.get("APPDATA", ""), "Claude", "claude-code", "*", "claude.exe")),
-                   key=lambda p: [int(x) if x.isdigit() else x for x in os.path.basename(os.path.dirname(p)).split(".")])
+def claude_exe(root=None):
+    """The newest Claude Code CLI the desktop app installed. Two layouts, both measured on this box:
+    `claude-code\\<version>\\claude.exe` until 2026-10-01 20:02, then `claude-code\\<version>\\<hash>\\claude.exe`
+    with a `.verified` file beside it (HK-32: the runner looked only at the first and found nothing).
+    Newest version wins; within one version a verified payload, then the newest file."""
+    root = root or os.path.join(os.environ.get("APPDATA", ""), "Claude", "claude-code")
+    found = []
+    for exe in glob.glob(os.path.join(root, "*", "claude.exe")) + glob.glob(os.path.join(root, "*", "*", "claude.exe")):
+        rel = os.path.relpath(exe, root).split(os.sep)
+        version = [(0, int(x), "") if x.isdigit() else (1, 0, x) for x in re.split(r"[.\-+]", rel[0])]
+        verified = len(rel) == 2 or os.path.exists(os.path.join(os.path.dirname(exe), ".verified"))
+        found.append((version, verified, os.path.getmtime(exe), exe))
     if not found:
-        raise SystemExit("claude.exe not found under %APPDATA%\\Claude\\claude-code\\<version>\\ (is the desktop app installed?)")
-    return found[-1]
+        raise SystemExit(f"claude.exe not found under {root}\\<version>\\ or {root}\\<version>\\<hash>\\ "
+                         "(is the desktop app installed?)")
+    return max(found)[3]
 
 
 FIELDS = "number,title,body,comments,labels"
@@ -688,6 +698,38 @@ def self_test():
             os.environ.pop("RR_CLAIM_TEST_FILE", None)
         else:
             os.environ["RR_CLAIM_TEST_FILE"] = old
+
+    # HK-32: find claude.exe in the flat layout, the nested one the app moved to on 2026-10-01, and a mix.
+    made = []
+
+    def tree(*files, verified=(), mtimes=None):
+        r = tempfile.mkdtemp(prefix="claude-code-")
+        made.append(r)
+        for k, rel in enumerate(files):
+            p = os.path.join(r, *rel.split("/"))
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            open(p, "w").close()
+            os.utime(p, (1_700_000_000 + (mtimes or {}).get(rel, k),) * 2)
+        for rel in verified:
+            open(os.path.join(r, *rel.split("/"), ".verified"), "w").close()
+        return r
+    pick = lambda r: os.path.relpath(claude_exe(r), r).replace(os.sep, "/")
+    assert pick(tree("2.1.9/claude.exe", "2.1.10/claude.exe")) == "2.1.10/claude.exe", "flat, numeric not text order"
+    assert pick(tree("2.1.284/3f4b/claude.exe", "2.1.286/635c/claude.exe", verified=["2.1.284/3f4b", "2.1.286/635c"])) \
+        == "2.1.286/635c/claude.exe", "the layout on this box since 2026-10-01"
+    assert pick(tree("2.1.290/claude.exe", "2.1.286/635c/claude.exe", verified=["2.1.286/635c"])) == "2.1.290/claude.exe"
+    assert pick(tree("2.1.286/aaaa/claude.exe", "2.1.286/bbbb/claude.exe", verified=["2.1.286/aaaa"],
+                     mtimes={"2.1.286/aaaa/claude.exe": 0, "2.1.286/bbbb/claude.exe": 9})) == "2.1.286/aaaa/claude.exe", \
+        "within one version a verified payload beats a newer unverified one"
+    assert pick(tree("2.1.286/claude.exe", "2.2.0-beta/x/claude.exe", verified=["2.2.0-beta/x"])) == "2.2.0-beta/x/claude.exe"
+    try:
+        claude_exe(tree("2.1.286/635c/.payload"))
+        raise AssertionError("an empty tree must not return a path")
+    except SystemExit as e:
+        assert "<version>\\<hash>" in str(e), e
+    import shutil
+    for r in made + [tmp]:
+        shutil.rmtree(r, ignore_errors=True)
     print("self-test OK")
 
 
