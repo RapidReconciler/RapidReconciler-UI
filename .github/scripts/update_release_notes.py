@@ -26,6 +26,13 @@ Trailer format examples:
   Multi-paragraph notes are also fine — everything from the colon
   through the end of the body (minus trailing Co-Authored-By etc.)
   becomes the entry. Blank lines separate paragraphs in the rendered output.
+
+  Release-Note:
+  - One bullet per change renders as a list item.
+  - A bullet may wrap onto the next line; the wrapped
+    line continues the same item.
+
+Tests: .github/scripts/test_update_release_notes.py (run by check-release-notes.yml).
 """
 
 import html
@@ -187,15 +194,41 @@ def extract_release_note(body: str) -> str | None:
     return content or None
 
 
+BULLET_RE = re.compile(r"^-(?:\s+(.*))?$")   # "- text", or a bare "-" (an empty item)
+
+
 def render_paragraphs(text: str) -> str:
+    """Render a Release-Note trailer as HTML.
+
+    Blank lines separate blocks. Within a block, a line starting with "- " opens a
+    list item and the lines after it that do not start with "- " continue it (a bullet
+    wrapped at 72 columns in the commit body). Lines before the first bullet render as
+    a paragraph. UI-208: this used to join every line of a block with spaces, so the
+    house style's one-bullet-per-change note published as "<p>- a - b</p>".
+    """
     text = text.strip()
     if not text:
         return ""
     out = []
-    for paragraph in re.split(r"\n\s*\n", text):
-        joined = " ".join(line.strip() for line in paragraph.split("\n") if line.strip())
-        if joined:
-            out.append(f"      <p>{html.escape(joined)}</p>")
+    for block in re.split(r"\n\s*\n", text):
+        lead, items = [], []
+        for line in (l.strip() for l in block.split("\n")):
+            if not line:
+                continue
+            m = BULLET_RE.match(line)
+            if m:
+                items.append([(m.group(1) or "").strip()])
+            elif items:
+                items[-1].append(line)
+            else:
+                lead.append(line)
+        if lead:
+            out.append(f"      <p>{html.escape(' '.join(lead))}</p>")
+        texts = [" ".join(p for p in item if p) for item in items]
+        texts = [t for t in texts if t]          # a bare "- " is not an item
+        if texts:
+            lis = "\n".join(f"        <li>{html.escape(t)}</li>" for t in texts)
+            out.append(f"      <ul>\n{lis}\n      </ul>")
     return "\n".join(out)
 
 

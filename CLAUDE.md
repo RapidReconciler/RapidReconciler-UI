@@ -330,10 +330,17 @@ trailer.
 
 A commit with no `Release-Note:` trailer is silently skipped.
 
-Trailer formats both supported:
+Trailer formats supported:
 
 ```
 Release-Note: One-line customer-safe summary of what shipped.
+```
+
+```
+Release-Note:
+- One bullet per change; this renders as a list item.
+- A bullet may wrap onto the next line, and the wrapped
+  line continues the same item.
 ```
 
 ```
@@ -343,6 +350,11 @@ the end of the body becomes the entry. Blank lines separate paragraphs.
 
 Co-Authored-By: ...
 ```
+
+Bullets are the house style. Until UI-208 (2026-10-02) the renderer joined every
+line of a block with spaces, so a bulleted note published as one run-on `<p>`.
+`.github/scripts/test_update_release_notes.py` covers it, and
+`check-release-notes.yml` runs that on every PR.
 
 The script:
 
