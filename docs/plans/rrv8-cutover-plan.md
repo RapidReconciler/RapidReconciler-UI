@@ -740,7 +740,7 @@ breadth, then the cutover-infrastructure long poles.
    tabs. **Installations**: readiness check, create-database + schema
    + `rruser`, SSIS catalog deploy, bootstrap + company licensing,
    bulk load with live progress, and the nightly refresh schedule.
-   **Upgrades**: DB / Services / SSIS release deploys per database,
+   **Fleet Upgrades**: DB / Services / SSIS release deploys per database,
    with Build/Test pre-flight, data-loss blocking, and Services
    rollback. **Troubleshooting**: live agent-log triage, SSIS last
    execution, B&rarr;C reconcile, all-company roll-forward, and ad-hoc
