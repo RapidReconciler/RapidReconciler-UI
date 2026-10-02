@@ -486,14 +486,25 @@ console.log('        migrated files outside config.js in scope: ' + outsideConfi
 /* Census of the guard at the rrFetch sites, so "the call sites stop cleanly"
  * is a count rather than a claim. */
 /* RRV8/ only: this file quotes the guard in its own M7 mutation literal, and a
- * census that counted the test as a call site would read 15 where 14 shipped. */
+ * census that counted the test as a call site would count a call site that ships nowhere. */
 const GUARD = 'if (!base) return Promise.reject(window.RRDB.valcGap(area));';
-const guarded = scanFiles
-  .filter(f => path.relative(ROOT, f).replace(/\\/g, '/').indexOf('RRV8/') === 0)
+/* UI-209 (2026-10-02): this was a pinned count, `guarded.length === 14`, so adding
+ * a 15th page with a correctly guarded rrFetch turned it red while proving nothing
+ * new about the guard. It now asserts what its label says: every rrFetch copy that
+ * ROUTES TO VALC (`_routesToValc(area)`) carries the guard, and the guarded set is
+ * exactly that set. The floor keeps a scan that found nothing from passing. */
+const GUARD_FLOOR = 15;
+const rrv8Files = scanFiles.filter(f => path.relative(ROOT, f).replace(/\\/g, '/').indexOf('RRV8/') === 0);
+const valcRouted = rrv8Files
+  .filter(f => { const t = fs.readFileSync(f, 'utf8'); return t.indexOf('function rrFetch(') !== -1 && t.indexOf('_routesToValc(area)') !== -1; })
+  .map(f => path.basename(f)).sort();
+const guarded = rrv8Files
   .filter(f => fs.readFileSync(f, 'utf8').indexOf(GUARD) !== -1)
-  .map(f => path.basename(f));
-record('S2 every rrFetch-shaped call site carries the reject guard (14 expected)',
-  guarded.length === 14, 'found ' + guarded.length + ': ' + JSON.stringify(guarded));
+  .map(f => path.basename(f)).sort();
+const unguarded = valcRouted.filter(f => guarded.indexOf(f) === -1);
+record('S2 every rrFetch-shaped call site carries the reject guard (at least ' + GUARD_FLOOR + ')',
+  unguarded.length === 0 && JSON.stringify(guarded) === JSON.stringify(valcRouted) && guarded.length >= GUARD_FLOOR,
+  'VALC-routed ' + valcRouted.length + ', guarded ' + guarded.length + ', unguarded ' + JSON.stringify(unguarded));
 console.log('        guarded: ' + guarded.join(', '));
 
 /* ---------------------------------------------------------------------------

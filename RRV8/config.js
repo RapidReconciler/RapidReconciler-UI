@@ -225,6 +225,9 @@ window.RR_TEST_AGENT_AREAS = [
   // area (initial load + nightly refresh times). GSI manages the schedule;
   // the customer admin reviews it only.
   'admin/refresh-schedule',
+  // Troubleshooting (UI-209) — server checks, data loads and the reconcile log
+  // behind admin-troubleshooting.html. Admin-gated agent-side.
+  'admin/troubleshooting',
   // Model DMAAI Review — sign-off read + the enriched model baseline
   'inventory/integrity/model-approval',
   'inventory/integrity/model-baseline',

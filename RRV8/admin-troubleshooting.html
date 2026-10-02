@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<!--
+  =============================================================================
+  Administrator > Troubleshooting (UI-209)
+  =============================================================================
+  One read (GET admin/troubleshooting on the active database's Services jar)
+  answers "is RapidReconciler working, and if not, what do I tell IT?":
+    - Connections: this computer to the server (measured by the read itself),
+      the server to its database, the server to GSI.
+    - Data loads: the nightly refresh job, the last JD Edwards import (SSIS),
+      the last reconciliation run (B to C) and its open errors.
+    - Database server: SQL Server Agent, data-drive space, the refresh job.
+  Plus "Download diagnostics": an audit-quality workbook with the technical
+  detail, for the customer's IT department.
+
+  VALC's Troubleshooting page shows GSI support the same database facts. The
+  RULES are shared (the agent ports VALC's); the WORDS here are V8's: finance
+  readers, no SQL object names, and every escalation goes to the customer's own
+  IT department (owner rule 2026-07-21, feedback_rr_product_voice).
+
+  Left out on purpose: ad-hoc SQL, AI investigation, the roll forward (scoped,
+  per company, already on Account Roll Forward), and version-update pills (the
+  customer cannot act on them).
+
+  Read-only. Admin-gated server-side; the client gate below only decides what
+  to render. Admin-page standard chrome: floating Home button + help "?" circle.
+  =============================================================================
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Troubleshooting &mdash; RapidReconciler Admin</title>
+<link href="fonts/fonts.css" rel="stylesheet">
+<link href="admin-chrome.css" rel="stylesheet">
+<link href="sidebar.css" rel="stylesheet">
+<link href="../Tools/help-sidebar.css" rel="stylesheet">
+<script src="config.js"></script>
+<script src="sidebar.js"></script>
+<script src="export-guard.js"></script>
+<script src="troubleshooting-rules.js"></script>
+<script src="vendor/xlsx-js-style.min.js" defer></script>
+<script src="../Tools/audit-workbook.js"></script>
+<script defer src="../Tools/help-sidebar.js"></script>
+<style>
+  /* Shared admin-page chrome lives in admin-chrome.css. Page-specific rules only. */
+  .note { display:flex; gap:12px; padding:13px 16px; border-radius:9px; background:var(--orange-pale); border:1px solid #f0d2a8; color:var(--text); margin-bottom:18px; }
+  .note svg { width:18px; height:18px; flex-shrink:0; color:var(--orange-deep); margin-top:2px; }
+  .note b { color:var(--navy); }
+  .gate-notice { display:none; gap:12px; padding:13px 16px; border-radius:9px; background:var(--blue-pale); border:1px solid #c2d8ef; color:var(--text); }
+  .gate-notice svg { width:18px; height:18px; flex-shrink:0; color:var(--blue); margin-top:2px; }
+  .gate-notice.is-visible { display:flex; }
+  .gate-notice.halt-notice { background:var(--red-pale); border-color:var(--red); }
+  .gate-notice.halt-notice svg { color:var(--red); }
+  body.is-gated #js-tool { display:none; }
+
+  .btn { font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:13.5px; border-radius:6px; padding:9px 18px; cursor:pointer; border:1px solid transparent; }
+  .btn-primary { color:#fff; background:var(--blue); border-color:var(--blue); }
+  .btn-primary:hover:not(:disabled) { filter:brightness(1.07); }
+  .btn-ghost { color:var(--text-soft); background:var(--bg-card); border-color:var(--rule-strong); }
+  .btn-ghost:hover:not(:disabled) { color:var(--navy); border-color:var(--text-muted); }
+  .btn:disabled { opacity:.5; cursor:not-allowed; filter:none; }
+
+  .fetch-error { display:none; background:var(--red-pale); border:1px solid var(--red); color:var(--red); padding:10px 14px; border-radius:6px; margin-bottom:16px; font-size:13.5px; font-weight:600; }
+  .fetch-error.is-visible { display:block; }
+
+  /* Summary band: the worst state across every row, and the two actions. */
+  .summary { display:flex; align-items:center; gap:16px; padding:18px 22px; border-radius:12px; background:var(--bg-card); border:1px solid var(--rule); border-left:4px solid var(--text-muted); box-shadow:var(--shadow-sm); margin-bottom:18px; }
+  .summary[data-state="ok"]   { border-left-color:var(--green); }
+  .summary[data-state="warn"] { border-left-color:var(--amber); }
+  .summary[data-state="fail"] { border-left-color:var(--red); }
+  .summary-text { flex:1; min-width:0; }
+  .summary-head { font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:19px; color:var(--navy); }
+  .summary-sub { color:var(--text-soft); font-size:13.5px; margin-top:2px; }
+  .summary-actions { display:flex; gap:10px; flex-shrink:0; }
+  @media (max-width:640px) { .summary { flex-direction:column; align-items:stretch; } .summary-actions { justify-content:flex-end; } }
+
+  /* One check per row: dot, label, what we found, and what to do. */
+  .checks { list-style:none; }
+  .check { display:grid; grid-template-columns:14px minmax(150px, 210px) 1fr; gap:4px 14px; padding:13px 18px; border-top:1px solid var(--rule); align-items:baseline; }
+  .check:first-child { border-top:none; }
+  .check-dot { width:10px; height:10px; border-radius:50%; background:var(--text-muted); align-self:center; }
+  .check[data-state="ok"]   .check-dot { background:var(--green); }
+  .check[data-state="warn"] .check-dot { background:var(--amber); }
+  .check[data-state="fail"] .check-dot { background:var(--red); }
+  .check-label { font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:14.5px; color:var(--navy); }
+  .check-fact { color:var(--text); font-size:14px; }
+  .check-do { grid-column:3; font-size:13.5px; color:var(--text); background:var(--bg-soft); border-left:3px solid var(--amber); padding:7px 11px; border-radius:0 6px 6px 0; margin-top:4px; }
+  .check[data-state="fail"] .check-do { border-left-color:var(--red); }
+  .check-do b { color:var(--navy); }
+  @media (max-width:640px) { .check { grid-template-columns:14px 1fr; } .check-fact, .check-do { grid-column:2; } }
+
+  .card-empty { padding:16px 18px; color:var(--text-muted); font-size:13.5px; }
+  .page-foot { color:var(--text-muted); font-size:12.5px; margin-top:4px; display:flex; flex-wrap:wrap; gap:6px 18px; }
+  .page-foot a { color:var(--blue); font-weight:600; }
+  .page-foot a:hover { text-decoration:underline; }
+  .export-status { color:var(--red); font-size:13px; font-weight:600; margin:-8px 0 14px; display:none; }
+  .export-status.is-visible { display:block; }
+</style>
+</head>
+<body data-help-src="../RRUniversity/administrator-start-here.html#system-health" data-help-title="Troubleshooting">
+
+<div class="app">
+
+  <div class="corner-chrome">
+    <a class="home-fab topbar-home" href="home.html" title="Back to Home">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></svg>
+      Home
+    </a>
+  </div>
+
+  <main class="main">
+    <div class="page">
+
+      <header class="page-header">
+        <h1 class="page-title">Troubleshooting</h1>
+        <p class="page-lede">Checks the RapidReconciler server, its database and its data loads, and tells you what to do about anything it finds. Running the checks changes nothing.</p>
+      </header>
+
+      <div class="note gate-notice" id="js-gate" role="alert">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
+        <div>This is an administrator function. <b>Contact your administrator</b> if RapidReconciler isn&rsquo;t working.</div>
+      </div>
+
+      <div class="note gate-notice halt-notice" id="js-halt-asset" role="alert">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
+        <div>Part of this page didn&rsquo;t load, so RapidReconciler can&rsquo;t tell what you&rsquo;re allowed to see here &mdash; nothing was loaded. Reload the page. If it happens again, <b>contact your IT department</b>.</div>
+      </div>
+
+      <div class="note gate-notice halt-notice" id="js-halt-claim" role="alert">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
+        <div>Your sign-in didn&rsquo;t say what you&rsquo;re allowed to do here, so nothing was loaded. Reload the page. If it happens again, ask your <b>IT department</b> to check your RapidReconciler account.</div>
+      </div>
+
+      <div id="js-tool">
+
+        <div class="fetch-error" id="js-fetch-error" role="alert"></div>
+
+        <section class="summary" id="js-summary" data-state="unknown" aria-live="polite">
+          <div class="summary-text">
+            <div class="summary-head" id="js-summary-head">Running the checks&hellip;</div>
+            <div class="summary-sub" id="js-summary-sub">This takes a few seconds.</div>
+          </div>
+          <div class="summary-actions">
+            <button class="btn btn-ghost" id="js-rerun" type="button" disabled>Run checks again</button>
+            <button class="btn btn-primary" id="js-download" type="button" disabled>Download diagnostics</button>
+          </div>
+        </section>
+        <div class="export-status" id="js-export-status" role="alert"></div>
+
+        <div class="card">
+          <div class="card-head"><span class="card-title">Connections</span></div>
+          <ul class="checks" id="js-connections"><li class="card-empty">Checking&hellip;</li></ul>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><span class="card-title">Data loads</span></div>
+          <ul class="checks" id="js-loads"><li class="card-empty">Checking&hellip;</li></ul>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><span class="card-title">Database server</span></div>
+          <ul class="checks" id="js-server"><li class="card-empty">Checking&hellip;</li></ul>
+        </div>
+
+        <div class="page-foot">
+          <span id="js-foot-versions"></span>
+          <span id="js-foot-checked"></span>
+          <span>Problem on someone else&rsquo;s computer? <a id="js-conn-check" href="../HelpDesk/connection-check.html" target="_blank" rel="noopener">Run the Connection Check from that computer</a></span>
+        </div>
+
+      </div>
+    </div>
+  </main>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+  const _testAgentAreas    = new Set(window.RR_TEST_AGENT_AREAS || []);
+  const _testAgentPrefixes = window.RR_TEST_AGENT_PREFIXES || [];
+  const _valcPrefixes      = window.RR_VALC_PREFIXES || [];
+  function _routesToTestAgent(area) {
+    if (_testAgentAreas.has(area)) return true;
+    for (let i = 0; i < _testAgentPrefixes.length; i++) if (area.startsWith(_testAgentPrefixes[i])) return true;
+    return false;
+  }
+  function _routesToValc(area) { for (let i = 0; i < _valcPrefixes.length; i++) if (area.startsWith(_valcPrefixes[i])) return true; return false; }
+  function prodHeaders(contentType) {
+    const h = { 'Accept': 'application/json' };
+    try { const t = localStorage.getItem('rrv8.token'); if (t) h['Authorization'] = 'Bearer ' + t; } catch (_) {}
+    if (contentType) h['Content-Type'] = contentType;
+    return h;
+  }
+  function rrFetch(area, opts) {
+    opts = opts || {};
+    let base;
+    if (_routesToValc(area)) {
+      base = window.RRDB.valcBase();
+      if (!base) return Promise.reject(window.RRDB.valcGap(area));
+    }
+    else if (_routesToTestAgent(area)) {
+      base = window.RRDB.agentBase();
+    } else {
+      const sess = window.RR_SESSION; const db = sess && sess.dbs && sess.dbs[sess.activeDbIndex || 0];
+      if (!db || !db.ip) return Promise.reject(new Error('No active database. Sign in first.'));
+      base = (/^(?:localhost|127\.0\.0\.1)\b/i.test(db.ip) ? 'http://' : 'https://') + db.ip;
+    }
+    const url = base + '/' + area + (opts.query ? '?' + new URLSearchParams(opts.query) : '');
+    const init = { method: opts.method || 'GET', headers: prodHeaders(opts.body ? 'application/json;charset=UTF-8' : null), body: opts.body ? JSON.stringify(opts.body) : undefined };
+    return fetch(url, init).then(async r => {
+      if (!r.ok) { let detail = 'HTTP ' + r.status; try { const j = await r.json(); if (j && (j.message || j.error)) detail = j.message || j.error; } catch (_) {} const e = new Error(detail); e.status = r.status; throw e; }
+      return r.json().catch(err => err instanceof SyntaxError ? null : Promise.reject(err));
+    });
+  }
+  function $(id) { return document.getElementById(id); }
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch])); }
+  function fetchErrText(area, err) {
+    return (window.RRV8 && window.RRV8.fetchErrorMessage)
+      ? window.RRV8.fetchErrorMessage(area, err)
+      : ((err && err.message) || String(err));
+  }
+  function activeDb() { const s = window.RR_SESSION || {}; const d = Array.isArray(s.dbs) ? s.dbs : []; return d[s.activeDbIndex || 0] || d[0] || null; }
+  // Three-state access claim, as every admin page reads it: true opens, false is
+  // a real "no", anything else halts visibly rather than guessing.
+  function admClaim() { const a = activeDb(); return (a && a.t && typeof a.t.adm === 'boolean') ? a.t.adm : null; }
+  function haltPage(id) { document.body.classList.add('is-gated'); const el = $(id); if (el) el.classList.add('is-visible'); }
+
+  // The verdict for every row comes from troubleshooting-rules.js, the one
+  // producer Home's Troubleshooting card also reads.
+  // If it did not load, the page halts on the "part of this page didn't load"
+  // notice at boot rather than throwing here, where nothing would say so.
+  const TS = (window.RRV8 && window.RRV8.troubleshooting) || null;
+  const IT = TS ? TS.IT : 'your IT department';
+  const RANK = TS ? TS.RANK : { fail: 0, warn: 1, unknown: 2, ok: 3 };
+
+  // ---------------------------------------------------------------- render
+  function renderList(id, rows) {
+    $(id).innerHTML = rows.map(r =>
+      '<li class="check" data-state="' + r.state + '" data-key="' + esc(r.key) + '">'
+      + '<span class="check-dot" aria-hidden="true"></span>'
+      + '<span class="check-label">' + esc(r.label) + '</span>'
+      + '<span class="check-fact">' + esc(r.fact) + '</span>'
+      // `todo` is this page's own copy (it may carry <b>); every agent-supplied
+      // string goes through esc() above, in `fact`.
+      + (r.todo ? '<span class="check-do"><b>What to do:</b> ' + r.todo + '</span>' : '')
+      + '</li>').join('');
+  }
+  function renderSummary(rows) {
+    const bad = rows.filter(r => r.state !== 'ok');
+    $('js-summary').dataset.state = TS.worst(rows);
+    if (!bad.length) {
+      $('js-summary-head').textContent = 'Everything checked is working.';
+      $('js-summary-sub').textContent = rows.length + ' checks passed.';
+    } else {
+      $('js-summary-head').textContent = bad.length === 1 ? '1 thing needs attention.' : bad.length + ' things need attention.';
+      $('js-summary-sub').textContent = 'Each one says what to do. Download diagnostics gives ' + IT + ' the technical detail.';
+    }
+  }
+
+  let _data = null, _rows = [], _running = false;
+  function run() {
+    if (_running) return;
+    _running = true;
+    $('js-rerun').disabled = true; $('js-download').disabled = true;
+    $('js-fetch-error').classList.remove('is-visible');
+    $('js-summary').dataset.state = 'unknown';
+    $('js-summary-head').textContent = 'Running the checks…';
+    $('js-summary-sub').textContent = 'This takes a few seconds.';
+    const t0 = performance.now();
+    rrFetch('admin/troubleshooting').then(function (data) {
+      const ms = Math.round(performance.now() - t0);
+      _data = data || {};
+      _rows = TS.rows(_data, ms);
+      renderList('js-connections', _rows.filter(r => r.area === 'Connections'));
+      renderList('js-loads', _rows.filter(r => r.area === 'Data loads'));
+      renderList('js-server', _rows.filter(r => r.area === 'Database server'));
+      renderSummary(_rows);
+      const v = _data.versions || {};
+      $('js-foot-versions').textContent = 'Services ' + (v.services || '—') + ' · Database ' + (v.database || '—');
+      $('js-foot-checked').textContent = 'Checked ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      $('js-download').disabled = false;
+    }).catch(function (err) {
+      // Two different failures, and they need different advice. With no HTTP status
+      // the request never got an answer: this computer cannot reach the server, the
+      // first leg of the chain, so send the reader to the tool that tests that leg
+      // from outside. WITH a status the server did answer (a refused sign-in, a
+      // server that predates this page, an error), and telling them to chase the
+      // network would be a false finding.
+      _data = null; _rows = [];
+      $('js-summary').dataset.state = 'fail';
+      if (err && err.status) {
+        $('js-summary-head').textContent = 'The checks couldn’t run.';
+        // The remedy is status-specific (RRV8.fetchErrorMessage, shown below), so
+        // this line does not offer one of its own.
+        $('js-summary-sub').textContent = 'The RapidReconciler server answered with an error instead of the checks. The reason, and what to do about it, are below.';
+      } else {
+        $('js-summary-head').textContent = 'The RapidReconciler server didn’t answer the checks.';
+        $('js-summary-sub').textContent = 'Use the Connection Check below to see where the connection stops, then give its result to ' + IT + '.';
+      }
+      const box = $('js-fetch-error');
+      box.textContent = fetchErrText('admin/troubleshooting', err);
+      box.classList.add('is-visible');
+      ['js-connections', 'js-loads', 'js-server'].forEach(id => { $(id).innerHTML = '<li class="card-empty">Not checked.</li>'; });
+    }).finally(function () {
+      _running = false;
+      $('js-rerun').disabled = false;
+    });
+  }
+
+  // ---------------------------------------------------------------- download
+  function exportStatus(msg) {
+    const el = $('js-export-status');
+    // export-guard's reasons are written with HTML entities; this sink is text.
+    el.textContent = String(msg || '').replace(/&mdash;/g, '—');
+    el.classList.toggle('is-visible', !!msg);
+  }
+  function download() {
+    exportStatus('');
+    if (!_data) { exportStatus('Run the checks first.'); return; }
+    if (!window.XLSX || typeof window.buildAuditSheet !== 'function') { exportStatus('The Excel library is still loading. Try again in a moment.'); return; }
+    window.RRV8.runExport('Diagnostics', exportStatus, function () {
+      const d = _data, v = d.versions || {};
+      const db = d.database || (activeDb() && activeDb().n) || '';
+      const head = [
+        'RapidReconciler diagnostics' + (db ? ' — ' + db : ''),
+        'Checked ' + (d.checkedAt || new Date().toISOString()) + ' · Services ' + (v.services || '—') + ' · Database ' + (v.database || '—'),
+        'For your IT department: one row per check, worst first, with the technical detail.'
+      ];
+      const order = _rows.map((r, i) => ({ r, i })).sort((a, b) => (RANK[a.r.state] - RANK[b.r.state]) || (a.i - b.i));
+      const RESULT = { ok: 'OK', warn: 'Needs attention', fail: 'Failing', unknown: 'Not checked' };
+      const strip = s => String(s || '').replace(/<[^>]+>/g, '');
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, window.buildAuditSheet({
+        titleLines: head,
+        columns: [{ label: 'Area' }, { label: 'Check' }, { label: 'Result' }, { label: 'Finding' }, { label: 'What to do' }, { label: 'Technical detail' }],
+        rows: order.map(o => [o.r.area, o.r.label, RESULT[o.r.state], o.r.fact, strip(o.r.todo), o.r.tech]),
+        totalRow: [order.filter(o => o.r.state !== 'ok').length + ' of ' + order.length + ' checks need attention', '', '', '', '', '']
+      }), 'Checks');
+
+      // Server checks verbatim, including the one the page does not show (databases present).
+      XLSX.utils.book_append_sheet(wb, window.buildAuditSheet({
+        titleLines: ['Server checks as reported', 'Raw results from the RapidReconciler server, in the order it ran them.'],
+        columns: [{ label: 'Check id' }, { label: 'Status' }, { label: 'Result' }, { label: 'Detail' }],
+        rows: (d.checks || []).map(c => [c.name, c.status, c.text || '', c.detail || ''])
+      }), 'Server checks');
+
+      const r = d.reconcile || {}, sch = r.scheduled || {};
+      const errs = (r.currentErrors || []).slice().sort((a, b) => String(b.startTime).localeCompare(String(a.startTime)));
+      XLSX.utils.book_append_sheet(wb, window.buildAuditSheet({
+        titleLines: [
+          'Reconciliation errors not cleared by a later run',
+          'Last completed run: ' + (r.lastCompleted || 'none') + ' · Earlier errors cleared since: ' + (r.resolvedErrors || 0) + ' · Log rows read: ' + (r.steps || 0),
+          'Last scheduled run: ' + (sch.error ? 'could not be read (' + sch.error + ')'
+            : sch.kind === 'RUN' ? (sch.runAt || '') + ', SQL Agent status ' + sch.runStatus + (sch.firstError ? ' — ' + sch.firstError : '')
+            : (sch.kind || 'unknown') + (sch.job ? ' (' + sch.job + ')' : ''))
+        ],
+        columns: [{ label: 'Started' }, { label: 'Step' }, { label: 'Process' }, { label: 'Error number', num: true, fmt: '0' }, { label: 'Capture' }],
+        rows: errs.map(e => [e.startTime, e.step, e.process, Number(e.errorNum), e.capture]),
+        totalRow: [errs.length + ' open error' + (errs.length === 1 ? '' : 's'), '', '', null, '']
+      }), 'Reconciliation errors');
+
+      const s = d.ssis || {};
+      XLSX.utils.book_append_sheet(wb, window.buildAuditSheet({
+        titleLines: [
+          'Last JD Edwards import',
+          s.readable ? ('Execution ' + (s.executionId != null ? s.executionId : 'none') + ' · ' + (s.status || '') + ' · started ' + (s.startTime || '') + ' · ended ' + (s.endTime || ''))
+                     : 'Could not be read: ' + (s.reason || '')
+        ],
+        columns: [{ label: 'Error recorded by the import' }],
+        rows: (s.errors || []).map(m => [m]),
+        totalRow: [(s.errors || []).length + ' error message' + ((s.errors || []).length === 1 ? '' : 's')]
+      }), 'Import errors');
+
+      return window.RRV8.saveWorkbook(wb, window.RRV8.exportName({ surface: 'Diagnostics' }), exportStatus, 'Diagnostics');
+    });
+  }
+
+  function startBoot() {
+    const _adm = admClaim();
+    if (_adm === false) { document.body.classList.add('is-gated'); $('js-gate').classList.add('is-visible'); return; }
+    if (_adm !== true) { haltPage('js-halt-claim'); return; }
+    // Point the Connection Check at THIS database's server, so a run from another
+    // computer tests the same machine this page just checked.
+    try {
+      const base = window.RRDB && window.RRDB.agentBase && window.RRDB.agentBase();
+      if (base) $('js-conn-check').href = '../HelpDesk/connection-check.html?agent=' + encodeURIComponent(base);
+    } catch (_) {}
+    $('js-rerun').addEventListener('click', run);
+    $('js-download').addEventListener('click', download);
+    run();
+  }
+
+  document.addEventListener('DOMContentLoaded', function () {
+    if (!TS) { haltPage('js-halt-asset'); return; }
+    if (window.RRV8 && typeof window.RRV8.hydrateSession === 'function') {
+      window.RRV8.hydrateSession().then(startBoot).catch(startBoot);
+    } else {
+      haltPage('js-halt-asset');
+    }
+  });
+})();
+</script>
+</body>
+</html>

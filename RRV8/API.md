@@ -705,6 +705,57 @@ restart *before* reports fail, instead of only flagging an outage after.
 
 ---
 
+## Troubleshooting (UI-209)
+
+**Status: V8 wired; agent endpoint written, ships with the next Services jar
+release.** `admin-troubleshooting.html` and Home's **Troubleshooting** card
+(admin view) answer "is RapidReconciler working, and if not, what do I tell
+IT?" from one read.
+
+- **Endpoint:** `GET /admin/troubleshooting` on the active database's Services
+  jar (agent-direct; routed by `RR_TEST_AGENT_AREAS`). **Authenticated** and
+  admin-gated agent-side (`isAdmin || isAdminSettings || isSuperUser`, as
+  `/admin/refresh-schedule`). Read-only.
+- **Response** (facts only; V8 owns the wording):
+
+  ```json
+  {
+    "checkedAt": "2026-10-02T16:40:00Z", "database": "RapidReconciler_Demo1",
+    "versions": { "services": "0.2.0", "database": "8.0-beta.133" },
+    "checks": [ { "name": "sql.reachable", "status": "ok|warning|fail|pending", "text": "...", "detail": "..." },
+                "... sql.rr_dbs_present, sql.jde_job_present, sql.agent_service, sql.last_job_status, sql.disk_free_mb, valc.reachable" ],
+    "reconcile": { "readable": true, "reason": null, "steps": 8895, "currentErrors": [ { "capture": "", "step": "", "process": "", "startTime": "", "errorNum": 8152 } ],
+                   "resolvedErrors": 1, "lastCompleted": "2026-09-30 15:00:27.396",
+                   "scheduled": { "kind": "RUN|NOJOB|NOSTEP|NORUN", "job": "", "step": "", "runStatus": 1, "runAt": "", "firstError": null, "error": null } },
+    "ssis": { "readable": true, "reason": null, "executionId": 10441, "status": "Succeeded", "startTime": "", "endTime": "", "durationSeconds": 1507, "errors": [] }
+  }
+  ```
+
+  Times are SQL Server's own local clock, as text; V8 shows them as written.
+- **One producer for the verdict:** `RRV8/troubleshooting-rules.js`
+  (`RRV8.troubleshooting.rows(data, ms)`) turns the read into rows
+  `{area, key, label, state, fact, todo, tech}`. The page renders them; the
+  Home card rolls them up per area (`byArea`). Tested by
+  `Tools/test-troubleshooting-rules.js`, which also asserts the voice: every
+  non-OK row tells the reader what to do, the escalation is always their IT
+  department (never GSI), and no SQL object name reaches the screen.
+- **Rules shared with VALC's Troubleshooting page** (ported agent-side): an
+  error a later clean run of the same step cleared is history (VLC-136); a
+  failed scheduled B to C outranks a clean log (DAC-82).
+- **Download diagnostics** builds a four-sheet audit workbook in the browser
+  (`buildAuditSheet`): Checks (worst first, with the technical line), Server
+  checks as reported, Reconciliation errors, Import errors. For the customer's
+  IT department.
+- **Graceful fallback:** on Home, a failed read (an older jar has no such
+  endpoint) leaves the card grey, "not checked", never red. The page itself
+  says whether the server did not answer (no status: use the Connection
+  Check) or answered with an error (`RRV8.fetchErrorMessage`).
+- **Left out on purpose:** ad-hoc SQL, AI investigation, the roll forward
+  (per company; Account Roll Forward already shows it, scoped), version-update
+  pills.
+
+---
+
 ## Activity Log + reminder acknowledgements
 
 **Status: agent shipped (Phase 1, 2026-06-28); UI wiring is Phases 2–4 of
