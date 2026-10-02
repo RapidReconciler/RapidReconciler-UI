@@ -169,6 +169,17 @@ server side; nothing reaches a customer until it's all done.
    An end-to-end rehearsal against a local VALC 2.0 is prepared and not
    yet run.
 
+   **Update 2026-10-02 (VLC-144): remote agent upgrades.** From broker
+   2.5.0, VALC 2.0 can upgrade the whole V8 agent on a box (bundled
+   Java 21 runtime, Windows service wrapper and its configuration, and
+   the broker) from an agent installer release, not just the broker
+   jar. The broker checks the installer's SHA-256 and runs it from a
+   one-shot SYSTEM task. VALC 2.0 sends it to five boxes at a time and
+   pauses at the first box that does not come back on the new installer
+   with its databases online. Measured on the dev server first: a full
+   upgrade took 40 s with the same identity, and a forced failure
+   restarted the agent on its own.
+
    **version2 branch breakdown (confirmed by Mauro/Coral 2026-06-16):**
    | Repo | version2 vs develop | Nature |
    |---|---|---|
