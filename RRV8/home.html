@@ -7146,24 +7146,31 @@
   // is dropped (the read can take a few seconds while the line to GSI is probed).
   var TS_DOT = { ok: 'ok', warn: 'watch', fail: 'attention', unknown: 'unknown' };
   var _tsGen = 0;
+  // The card's three rows and its dot, from per-area states ({} = nothing checked).
+  // A top-level helper on purpose (UI-209, 2026-10-03): it used to be a function
+  // declared INSIDE loadTroubleshootingCard, above the rrFetch, and the Agent repo's
+  // guard-parity check credits a call to the nearest preceding `function`, so it read
+  // the read as ungated inside paint() and failed Agent #176. The gate is the
+  // `if (!isAdmin()) return;` in loadTroubleshootingCard, where the check now sees it.
+  function _paintTsCard(states, sub) {
+    var card = $('tsRow'); if (!card) return;
+    var TS = window.RRV8 && RRV8.troubleshooting;
+    var setDot = (window.RRV8 && RRV8.setDotState) || function (el, s) { if (el) el.setAttribute('data-state', s); };
+    Array.prototype.forEach.call(card.querySelectorAll('.data-row[data-ts-area]'), function (el) {
+      var a = el.getAttribute('data-ts-area'), s = states[a] || { state: 'unknown', text: a + ': not checked' };
+      setDot(el, TS_DOT[s.state] || 'unknown');
+      var t = el.querySelector('.data-row-text'); if (t) t.textContent = s.text;
+    });
+    var worst = 'ok';
+    Object.keys(states).forEach(function (a) { if (TS && TS.RANK[states[a].state] < TS.RANK[worst]) worst = states[a].state; });
+    setDot($('tsDot'), Object.keys(states).length ? (TS_DOT[worst] || 'unknown') : 'unknown');
+    var subEl = $('tsSub'); if (subEl) subEl.textContent = sub;
+  }
   function loadTroubleshootingCard() {
     var card = $('tsRow'); if (!card) return;
     if (!isAdmin()) return;
     var TS = window.RRV8 && RRV8.troubleshooting;
-    var setDot = (window.RRV8 && RRV8.setDotState) || function (el, s) { if (el) el.setAttribute('data-state', s); };
-    var rowsEls = card.querySelectorAll('.data-row[data-ts-area]');
-    function paint(states, sub) {
-      Array.prototype.forEach.call(rowsEls, function (el) {
-        var a = el.getAttribute('data-ts-area'), s = states[a] || { state: 'unknown', text: a + ': not checked' };
-        setDot(el, TS_DOT[s.state] || 'unknown');
-        var t = el.querySelector('.data-row-text'); if (t) t.textContent = s.text;
-      });
-      var worst = 'ok';
-      Object.keys(states).forEach(function (a) { if (TS && TS.RANK[states[a].state] < TS.RANK[worst]) worst = states[a].state; });
-      setDot($('tsDot'), Object.keys(states).length ? (TS_DOT[worst] || 'unknown') : 'unknown');
-      var subEl = $('tsSub'); if (subEl) subEl.textContent = sub;
-    }
-    if (!TS) { paint({}, 'Troubleshooting checks did not run: part of the page did not load.'); return; }
+    if (!TS) { _paintTsCard({}, 'Troubleshooting checks did not run: part of the page did not load.'); return; }
     var gen = ++_tsGen, dbAtStart = (activeDb() && activeDb().n) || '';
     var t0 = (window.performance && performance.now) ? performance.now() : Date.now();
     rrFetch('admin/troubleshooting').then(function (data) {
@@ -7181,7 +7188,7 @@
       // Facts only for the AI grounding (feedback_ai_facts_never_name_the_reader):
       // what was found, never who should act.
       var bad = rows.filter(function (r) { return r.state !== 'ok'; });
-      paint(states, bad.length
+      _paintTsCard(states, bad.length
         ? bad.map(function (r) { return r.label + ': ' + r.fact; }).join(' ')
         : 'All ' + rows.length + ' troubleshooting checks passed.');
     }).catch(function () {
@@ -7189,7 +7196,7 @@
       // No verdict either way: an older Services jar has no such endpoint, and a
       // card that went red on every admin's Home for that would be a false alarm.
       // The page itself says why when opened.
-      paint({}, 'Troubleshooting checks did not run from Home; open the Troubleshooting page to run them.');
+      _paintTsCard({}, 'Troubleshooting checks did not run from Home; open the Troubleshooting page to run them.');
     });
   }
 
