@@ -52,6 +52,16 @@ not allocations. HANDOFF.md is excluded from the scan entirely: it narrates, it
 never allocates. Only the FIRST `Next free:` in HANDOFF.md is checked, since the
 superseded session blocks below it are history and are meant to disagree.
 
+FOURTH CHECK, added 2026-10-03 (HK-33): WORKLIST.md's BOOKKEEPING. A chunk
+row naming a closed ID made worklist-to-issues.py refuse to run, and the
+'### <n>. <group> ... N live' headers drifted from the rows under them; this
+hook exited 0 through both, because it had no notion of either. The rules
+live in worklist_bookkeeping.py (the chunk rule is worklist-to-issues.py's own
+chunk_errors, imported), and worklist-close.py now applies the same fixes on
+every close. This catches a hand edit too.
+
+    python Tools/worklist-table-check.py --self-test
+
 RUNS ON TWO EVENTS. PostToolUse/Edit|Write checks the file just written, and
 Stop sweeps the known paths at end of turn. The Stop leg is the one that
 matters in practice -- rows in this file are long enough that they get edited
@@ -285,6 +295,18 @@ def scan(path):
     return mismatches, orphans
 
 
+def bookkeeping_errors(path):
+    """worklist_bookkeeping.errors() for one WORKLIST.md. A check that cannot run SAYS so:
+    an empty list here must mean "clean", never "the import failed"."""
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import worklist_bookkeeping
+        with open(path, encoding="utf-8") as fh:
+            return worklist_bookkeeping.errors(fh.read().replace("\r\n", "\n"))
+    except Exception as e:  # report, never block: the hook fails open
+        return ["the bookkeeping check could not run (%s: %s)" % (type(e).__name__, e)]
+
+
 def main():
     try:
         payload = json.load(sys.stdin)
@@ -309,6 +331,7 @@ def main():
         return 0
 
     mismatches, orphans, base = [], [], ""
+    bookkeeping = []
     for path in targets:
         try:
             m, o = scan(path)
@@ -318,6 +341,8 @@ def main():
             base = os.path.basename(path) if not base else base + " + " + os.path.basename(path)
             mismatches += m
             orphans += o
+        if os.path.basename(path) == "WORKLIST.md":
+            bookkeeping += bookkeeping_errors(path)
 
     # The ID audit is corpus-wide rather than per-file, so it runs once no
     # matter which watched file triggered this. It reads its own paths and
@@ -335,6 +360,7 @@ def main():
                 "m": sorted((n, exp, got) for n, exp, got, _ in mismatches),
                 "o": sorted(orphans),
                 "i": sorted(id_drift),
+                "b": sorted(bookkeeping),
             }
         ).encode("utf-8")
     ).hexdigest()
@@ -354,7 +380,7 @@ def main():
     except OSError:
         pass                          # unwritable state only costs a repeat
 
-    if not mismatches and not orphans and not id_drift:
+    if not mismatches and not orphans and not id_drift and not bookkeeping:
         # Everything cleared. Worth saying once -- but only if something was
         # actually reported before. On a first run against a clean file there
         # is nothing to announce, and "all clear" out of nowhere is noise of
@@ -413,6 +439,22 @@ def main():
             "separator to count against.",
         ]
 
+    if bookkeeping:
+        lines += [
+            "WORKLIST.md BOOKKEEPING is wrong (%d problem(s)):" % len(bookkeeping),
+        ]
+        lines += ["  " + b for b in bookkeeping[:MAX_REPORT]]
+        if len(bookkeeping) > MAX_REPORT:
+            lines.append("  ... and %d more" % (len(bookkeeping) - MAX_REPORT))
+        lines += [
+            "",
+            "A chunk naming a row that is not live, or a live row in no chunk, makes",
+            "worklist-to-issues.py refuse to run at all. A '### <n>. ... N live' header",
+            "must count the index rows under it. worklist-close.py fixes both on a close;",
+            "after a hand edit, fix the Chunks row or the header by hand.",
+            "",
+        ]
+
     if id_drift:
         where = "HANDOFF.md line %d" % nf_line if nf_line else "HANDOFF.md"
         lines += [
@@ -455,7 +497,92 @@ def main():
     return 0
 
 
+SELF_TEST_FIXTURE = """# Worklist
+
+## Chunks
+
+| Chunk | Title | Rows, in the order to work them | Why these travel together |
+|---|---|---|---|
+| pair | A pair | HK-30, HK-31 | HK-31 builds on HK-30 |
+
+## Index — 2 live items
+
+### 1. Housekeeping &nbsp;&middot;&nbsp; 2 live
+
+| ID | Status | Summary | Ref |
+|---|---|---|---|
+| [HK-30](#hk-30--go) | ☐ | goes | — |
+| [HK-31](#hk-31--next) | ☐ | stays | — |
+
+---
+
+### HK-30 — go
+
+body
+
+---
+
+### HK-31 — next
+
+body
+
+---
+"""
+
+
+def self_test():
+    """Drive main() the way the harness does: a PostToolUse payload on stdin naming a WORKLIST.md.
+
+    A hook given no stdin exits 0 having scanned nothing, so calling it bare proves nothing
+    (memory reference_worklist_table_check_is_a_hook). Each case gets a fresh STATE file,
+    because the hook reports only when its finding set changes.
+    """
+    global STATE, bookkeeping_errors
+    import contextlib
+    import io
+    import shutil
+    tmp = tempfile.mkdtemp(prefix="table-check-test-")
+    saved_state, saved_check, saved_stdin = STATE, bookkeeping_errors, sys.stdin
+
+    def run(text, case):
+        global STATE
+        path = os.path.join(tmp, case, "WORKLIST.md")
+        os.makedirs(os.path.dirname(path))
+        with open(path, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(text)
+        STATE = os.path.join(tmp, case, "state")
+        sys.stdin = io.StringIO(json.dumps({"hook_event_name": "PostToolUse", "tool_input": {"file_path": path}}))
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            main()
+        return out.getvalue()
+
+    stale_chunk = SELF_TEST_FIXTURE.replace("| [HK-30](#hk-30--go) | ☐ | goes | — |\n", "") \
+                                   .replace("2 live items", "1 live items").replace("2 live\n", "1 live\n")
+    stale_group = SELF_TEST_FIXTURE.replace("| [HK-31](#hk-31--next) | ☐ | stays | — |\n", "") \
+                                   .replace("HK-30, HK-31", "HK-30").replace("2 live items", "1 live items")
+    try:
+        out = run(SELF_TEST_FIXTURE, "clean")
+        assert "BOOKKEEPING" not in out, "CONTROL: a clean worklist reported bookkeeping problems:\n" + out
+        out = run(stale_chunk, "chunk")
+        assert "BOOKKEEPING" in out and "names HK-30, which is not a live row" in out, out
+        out = run(stale_group, "group")
+        assert "BOOKKEEPING" in out and "says 2 live, its table holds 1" in out, out
+        # mutation arm: with the check switched off the same broken file goes unreported,
+        # so the reports above came from this check and from nothing else in the hook
+        bookkeeping_errors = lambda path: []
+        out = run(stale_chunk, "mutated")
+        assert "BOOKKEEPING" not in out, "mutation arm: the check is off and it still reported:\n" + out
+    finally:
+        STATE, bookkeeping_errors, sys.stdin = saved_state, saved_check, saved_stdin
+        shutil.rmtree(tmp, ignore_errors=True)
+    print("self-test OK (clean control quiet; stale chunk and stale group count reported through main(); "
+          "mutation arm: silent with the check off)")
+
+
 if __name__ == "__main__":
+    if sys.argv[1:] == ["--self-test"]:
+        self_test()
+        sys.exit(0)
     try:
         sys.exit(main())
     except Exception:
