@@ -13,6 +13,11 @@ reverse. This does both, plus:
   * appends a "#### CLOSED <date>: <reason>" block to the moved section;
   * recomputes the "## Index -- N live items" header from the rows that remain,
     because that number had drifted (it said 11 with 15 rows live);
+  * takes the ID out of its "## Chunks" row, dropping the row if it named only
+    that ID, and recounts every "### <n>. <group> ... N live" header (HK-33).
+    Before that, every close left a chunk naming a closed row, which made
+    worklist-to-issues.py refuse to run, and a stale group count. Both rules
+    live in worklist_bookkeeping.py, which the per-write hook reports from too;
   * refuses, changing nothing, if the ID has no section or no index line, or
     more than one of either.
 
@@ -33,6 +38,9 @@ import sys
 import tempfile
 from datetime import date, datetime
 from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import worklist_bookkeeping  # noqa: E402  (beside this file; shared with worklist-table-check.py)
 
 ROOT = Path("C:/source/repos")
 LIVE = ROOT / "WORKLIST.md"
@@ -84,23 +92,37 @@ def close(row_id, reason):
     remaining = [l for i, l in enumerate(live) if not (start <= i < end) and i != index[0]]
     n = sum(1 for l in remaining if re.match(r"^\| \[[A-Z]+-\d+\]\(", l))
     remaining = [re.sub(r"^## Index — \d+ live items", "## Index — %d live items" % n, l) for l in remaining]
+    remaining, notes = worklist_bookkeeping.fix(remaining, row_id)
 
     _write(DONE, done_text, done_eol)
     _write(LIVE, "\n".join(remaining), live_eol)
     print("closed %s: section of %d lines moved to WORKLIST-DONE.md, index line removed, "
-          "%d live items remain. Backups stamped %s." % (row_id, len(section), n, stamp))
+          "%d live items remain; %s. Backups stamped %s." % (row_id, len(section), n, "; ".join(notes), stamp))
+    left = worklist_bookkeeping.errors("\n".join(remaining))
+    if left:
+        print("WARNING, still wrong after the close (not caused by it; fix by hand):\n  " + "\n  ".join(left))
 
 
 # ---------------------------------------------------------------- self-test
 
 FIXTURE_LIVE = """# Worklist
 
-## Index — 2 live items
+## Chunks
+
+| Chunk | Title | Rows, in the order to work them | Why these travel together |
+|---|---|---|---|
+| keep-it | Keep | HK-3 | stands alone |
+| pair | A pair | HK-30, HK-31 | HK-31 builds on HK-30 |
+
+## Index — 3 live items
+
+### 1. Housekeeping &nbsp;&middot;&nbsp; 3 live
 
 | ID | Status | Summary | Ref |
 |---|---|---|---|
 | [HK-3](#hk-3--keep) | ☐ | stays | — |
 | [HK-30](#hk-30--go) | ☐ | goes | — |
+| [HK-31](#hk-31--next) | ☐ | stays too | — |
 
 ---
 
@@ -114,6 +136,12 @@ body of HK-3
 
 body of HK-30
 line two
+
+---
+
+### HK-31 — next
+
+body of HK-31
 
 ---
 """
@@ -164,10 +192,42 @@ def self_test():
             done = DONE.read_bytes().decode("utf-8").replace("\r\n", "\n")
             assert "### HK-30 " not in live and "| [HK-30](" not in live, live
             assert "### HK-3 — keep" in live and "| [HK-3](" in live, live
-            assert "## Index — 1 live items" in live, live
+            assert "## Index — 2 live items" in live, live
+            # HK-33: out of its shared chunk, the group count follows, and nothing is left to report
+            assert "| pair | A pair | HK-31 | HK-31 builds on HK-30 |" in live, live
+            assert "Housekeeping &nbsp;&middot;&nbsp; 2 live" in live, live
+            assert worklist_bookkeeping.errors(live) == [], worklist_bookkeeping.errors(live)
             assert done.startswith(FIXTURE_DONE.rstrip("\n")) and "### HK-30 — go\n\nbody of HK-30\nline two\n" in done, done
             assert "#### ✅ CLOSED %s: shipped" % date.today().isoformat() in done, done
             assert len(list(BACKUPS.iterdir())) >= 2
+
+        # HK-33: a chunk that named only the closed row goes, and the fixture starts clean (the control)
+        seed("\n")
+        assert worklist_bookkeeping.errors(FIXTURE_LIVE) == [], worklist_bookkeeping.errors(FIXTURE_LIVE)
+        quiet(close, "HK-3", "shipped")
+        live = LIVE.read_text(encoding="utf-8")
+        assert "| keep-it |" not in live and "| pair | A pair | HK-30, HK-31 |" in live, live
+        assert "Housekeeping &nbsp;&middot;&nbsp; 2 live" in live, live
+        assert worklist_bookkeeping.errors(live) == [], worklist_bookkeeping.errors(live)
+
+        # HK-33 mutation arms, one at a time: each bookkeeping half switched off must leave
+        # exactly the problem the hook reports, or the check above proves nothing.
+        real_fix = worklist_bookkeeping.fix
+        arms = {
+            "chunk left naming the closed row": lambda ls, rid: (worklist_bookkeeping.recount_groups(ls)[0], []),
+            "group count left stale": lambda ls, rid: (worklist_bookkeeping.drop_from_chunks(ls, rid)[0], []),
+        }
+        expect = {"chunk left naming the closed row": "names HK-30, which is not a live row",
+                  "group count left stale": "says 3 live, its table holds 2"}
+        try:
+            for name, arm in arms.items():
+                worklist_bookkeeping.fix = arm
+                seed("\n")
+                quiet(close, "HK-30", "shipped")
+                errs = worklist_bookkeeping.errors(LIVE.read_text(encoding="utf-8"))
+                assert any(expect[name] in e for e in errs), "mutation arm '%s' went undetected: %r" % (name, errs)
+        finally:
+            worklist_bookkeeping.fix = real_fix
 
         # a refusal changes nothing, byte for byte
         seed("\r\n")
@@ -198,7 +258,8 @@ def self_test():
         LIVE, DONE, BACKUPS, w = saved
         globals()["_write"] = w
         shutil.rmtree(tmp, ignore_errors=True)
-    print("self-test OK (LF kept, CRLF kept, refusal untouched, mixed reported; mutation arm %s)" % mutation)
+    print("self-test OK (LF kept, CRLF kept, chunks and group counts follow a close, refusal untouched, "
+          "mixed reported; HK-33 mutation arms caught; line-ending mutation arm %s)" % mutation)
 
 
 if __name__ == "__main__":
