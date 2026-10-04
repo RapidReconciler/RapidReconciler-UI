@@ -5586,10 +5586,10 @@
     }
   }
 
-  // Time-based restart progress. The service bounce emits no progress events,
-  // so the bar fills over the expected ~30s window — it tells the admin it's
-  // working and roughly how long is left; the real health read repaints the
-  // true status (and restores the memory bar) when the window elapses.
+  // Restart progress. VALC answers the POST only once the broker has restarted
+  // the JVM and it is healthy, or has failed (VLC-155), so the bar runs WHILE the
+  // request is open: it fills over the usual ~30s and the answer completes it.
+  // Measured on the dev box: 10 to 13 s from launch to healthy.
   var RESTART_MS = 30000;
   function showRestartProgress() {
     var wrap = $('svcRestartProg'), fill = $('svcRestartFill');
@@ -5610,37 +5610,36 @@
     setTimeout(function () { wrap.hidden = true; fill.style.transition = 'none'; fill.style.width = '0'; }, 900);
   }
 
-  // Self-serve restart (admin Service-health card). Routes through VALC —
-  // never POST /shutdown direct (re-spawn is the Agent's JMS job). Graceful
-  // when the endpoint isn't wired yet (see API.md → Restart Services instance).
+  // Self-serve restart (Service-health card + export-stall advisory). VALC asks
+  // the customer's broker to restart this one database's Services JVM and answers
+  // with the outcome (VLC-155); never POST /shutdown direct. VALC's answer carries
+  // its own sentence in `message` either way, and that is what the toast shows.
   var _restarting = false;
   function restartService() {
     if (_restarting) return;
     _restarting = true;
     var btn = $('restartBtn'); if (btn) { btn.disabled = true; btn.textContent = 'Restarting…'; }
     var dot = $('svcDot'), sub = $('svcSub'), db = activeDb() || {};
-    rrFetch('api/v1/tenant/services/restart', { method: 'POST', body: { database: db.n } }).then(function () {
-      toast('Restart requested — reports should work again in about 30 seconds.');
-      // Swap the memory readout for the progress bar and hold the link disabled
-      // through the bounce window, then re-read health for the true status.
-      if (dot) RRV8.setDotState(dot, 'busy');
-      if (sub) sub.textContent = 'Restarting — back in about 30 seconds…';
-      _svcMem = null; setMemMeter(null);
-      showRestartProgress();
-      setTimeout(function () {
-        finishRestartProgress();
-        _restarting = false;
-        if (btn) { btn.disabled = false; btn.textContent = 'Restart'; }
-        loadServiceMemory();
-        loadActivityFeed();   // the restart logs a fresh "Report engine started" — show it
-      }, RESTART_MS + 2000);
-    }).catch(function (err) {
-      var msg = String(err && err.message || err);
-      toast(/404|405|501/.test(msg)
-        ? 'Restart control isn’t wired in VALC yet (see API.md).'
-        : 'Restart request failed: ' + msg);
+    // Swap the memory readout for the progress bar while the restart runs.
+    if (dot) RRV8.setDotState(dot, 'busy');
+    if (sub) sub.textContent = 'Restarting — back in about 30 seconds…';
+    _svcMem = null; setMemMeter(null);
+    showRestartProgress();
+    function done() {
+      finishRestartProgress();
       _restarting = false;
       if (btn) { btn.disabled = false; btn.textContent = 'Restart'; }
+      loadServiceMemory();    // the true status, success or not
+    }
+    rrFetch('api/v1/tenant/services/restart', { method: 'POST', body: { database: db.n } }).then(function (r) {
+      toast((r && r.message) || 'Restarted.');
+      done();
+      loadActivityFeed();   // the restart logs a fresh "Report engine started" — show it
+    }).catch(function (err) {
+      // rrFetch puts VALC's sentence in err.message, or "HTTP <status>" when there was none.
+      var msg = String(err && err.message || err);
+      toast(/^HTTP \d+$/.test(msg) ? 'Restart request failed (' + msg + ').' : msg);
+      done();
       updateServiceCard();
     });
   }
