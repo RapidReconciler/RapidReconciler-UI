@@ -4,6 +4,19 @@ customer, which is the one thing nobody on this project can do by hand.
 
     python Tools/v8-callsites.py --json Tools/_out/v8-callsites.json
     python Tools/persona-probe.py
+    python Tools/persona-probe.py --self-test     # creates nothing; run it first
+
+THE SELF-TEST (HK-38)
+=====================
+
+From VALC's move to Spring 7 until 2026-10-04 this file could not create a
+persona at all, and nothing said so until someone tried to run it: the bcrypt
+classpath asked for spring-jcl, which Spring 7 no longer ships, and the right
+was inserted by database NAME, which V85 replaced with `client_database_id`.
+`--self-test` checks both against the live jar and schema, running the real
+inserts inside a rolled-back transaction, with one mutation arm per defect.
+It needs a live VALC jar and Postgres, so it is not in CI (the static half,
+v8-callsites.py, is).
 
 WHY THIS EXISTS
 ===============
@@ -91,6 +104,7 @@ import base64
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -128,6 +142,7 @@ PROBE_PW = "Persona-Probe-Pw-9!"
 # TenantScopeService and AuthController.buildDbsScoped use the same rule, which
 # is why they cannot disagree about who is in a tenant.
 PROBE_DB = os.environ.get("RR_PROBE_DB", "RapidReconciler_Demo1")
+PROBE_DB_ID = os.environ.get("RR_PROBE_DB_ID")    # wins over the name when set
 
 # Roles, read out of the roles table 2026-09-07 rather than assumed:
 #   1 Administrator  tab_admin TRUE   -- the customer administrator
@@ -181,39 +196,88 @@ def http(method, url, token=None, body=None, timeout=30):
         return 0, "%s: %s" % (type(e).__name__, e)
 
 
+def sql_rows(stmt):
+    """Every row of a SELECT, each split on psql's unaligned '|' separator."""
+    env = dict(os.environ, PGPASSWORD=PG["pw"])
+    p = subprocess.run([PSQL, "-h", PG["host"], "-p", PG["port"], "-U", PG["user"],
+                        "-d", PG["db"], "-t", "-A", "-v", "ON_ERROR_STOP=1", "-c", stmt],
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+    if p.returncode != 0:
+        raise RuntimeError("psql: %s" % p.stderr.decode("utf-8", "replace").strip())
+    return [ln.split("|") for ln in p.stdout.decode("utf-8", "replace").splitlines() if ln]
+
+
+# The three jars the encoder needs, matched on the jar's own file name. HK-38:
+# this was "spring-security-crypto + spring-jcl", which is Spring 6's shape.
+# VALC moved to Spring Framework 7, which ships no spring-jcl (commons-logging
+# instead), and Spring Security 7's encoder also calls into spring-core
+# (`org.springframework.util.StringUtils`). Measured 2026-10-04 against the VALC
+# jar: dropping any one of the three is a NoClassDefFoundError, which is what
+# the self-test's mutation arms assert. A logging bridge of either name is
+# accepted so the rule holds on both generations.
+CRYPTO_JARS = (
+    ("crypto", re.compile(r"^spring-security-crypto-\d.*\.jar$")),
+    ("core", re.compile(r"^spring-core-\d.*\.jar$")),
+    ("logging", re.compile(r"^(spring-jcl|commons-logging)-\d.*\.jar$")),
+)
+
+
+def select_crypto_jars(names):
+    """(entries, missing) for a fat jar's listing. Pure, so the self-test can
+    run it on a listing with a jar taken out."""
+    picked, missing = [], []
+    for role, rx in CRYPTO_JARS:
+        hit = [n for n in names
+               if n.startswith("BOOT-INF/lib/") and rx.match(n.rsplit("/", 1)[-1])]
+        if hit:
+            picked.append(sorted(hit)[-1])
+        else:
+            missing.append(role)
+    return picked, missing
+
+
+def valc_jar_listing():
+    if not os.path.exists(VALC_JAR):
+        raise RuntimeError("VALC jar not found at %s (set RR_VALC_JAR)" % VALC_JAR)
+    jar_exe = os.path.join(os.path.dirname(JAVA), "jar.exe")
+    p = subprocess.run([jar_exe, "tf", VALC_JAR], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if p.returncode != 0:
+        raise RuntimeError("jar tf %s: %s" % (VALC_JAR, p.stderr.decode("utf-8", "replace").strip()))
+    return [n.strip() for n in p.stdout.decode("utf-8", "replace").splitlines() if n.strip()]
+
+
 _CRYPTO_CP = None
 
 
-def crypto_classpath():
+def crypto_classpath(entries=None):
     """The crypto jars, unpacked from the SHIPPED fat jar.
 
     The local Maven cache holds the same versions today, but "today" is the
     problem: a hash has to be one the RUNNING jar accepts, so the classpath
-    comes out of that jar.
+    comes out of that jar. `entries` overrides the selection (self-test only).
     """
     global _CRYPTO_CP
-    if _CRYPTO_CP:
+    if entries is None and _CRYPTO_CP:
         return _CRYPTO_CP
-    if not os.path.exists(VALC_JAR):
-        raise RuntimeError("VALC jar not found at %s (set RR_VALC_JAR)" % VALC_JAR)
+    wanted = entries
+    if wanted is None:
+        wanted, missing = select_crypto_jars(valc_jar_listing())
+        if missing:
+            raise RuntimeError("VALC jar %s has no %s jar for the bcrypt helper (see "
+                               "CRYPTO_JARS)" % (VALC_JAR, " / ".join(missing)))
     out = os.path.join(tempfile.gettempdir(), "rr-persona-crypto")
-    jar_exe = os.path.join(os.path.dirname(JAVA), "jar.exe")
-    names = subprocess.run([jar_exe, "tf", VALC_JAR],
-                           stdout=subprocess.PIPE).stdout.decode("utf-8", "replace")
-    wanted = [n.strip() for n in names.splitlines()
-              if "spring-security-crypto-" in n or "spring-jcl-" in n]
-    if len(wanted) < 2:
-        raise RuntimeError("could not find spring-security-crypto + spring-jcl in %s"
-                           % VALC_JAR)
     if not os.path.isdir(out):
         os.makedirs(out)
+    jar_exe = os.path.join(os.path.dirname(JAVA), "jar.exe")
     subprocess.run([jar_exe, "xf", VALC_JAR] + wanted, cwd=out, check=True)
-    _CRYPTO_CP = os.pathsep.join(os.path.join(out, w) for w in wanted)
-    return _CRYPTO_CP
+    cp = os.pathsep.join(os.path.join(out, w) for w in wanted)
+    if entries is None:
+        _CRYPTO_CP = cp
+    return cp
 
 
-def bcrypt(pw):
-    p = subprocess.run([JAVA, "-cp", crypto_classpath(),
+def bcrypt(pw, classpath=None):
+    p = subprocess.run([JAVA, "-cp", classpath or crypto_classpath(),
                         os.path.join(HERE, "_persona", "BcryptHash.java"), pw],
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if p.returncode != 0:
@@ -231,19 +295,59 @@ def jwt_payload(tok):
 #  personas
 # ---------------------------------------------------------------------------
 
-def create_persona(p, pw_hash):
-    email = "probe-%s@%s" % (p["key"], PROBE_DOMAIN)
-    uid = sql(
-        "INSERT INTO users (email, display_name, password_hash, is_superuser, "
-        "is_active, role_id, valc_operator, password_changed_at) VALUES "
-        "('%s','Persona Probe %s','%s', false, true, %d, false, now()) RETURNING id;"
-        % (email, p["key"], pw_hash, p["role_id"]))
+def resolve_probe_db():
+    """(client_database_id, client_id, db_name) of the database the personas join.
+
+    HK-38: rights are keyed by `client_database_id` since V85 (VLC-115), and a
+    database NAME is not a tenant key -- every customer has
+    RapidReconciler_Prod_V8. So the name is resolved to exactly one ACTIVE row
+    here and the run refuses if it is ambiguous, rather than picking one.
+    RR_PROBE_DB_ID names the row directly.
+    """
+    if PROBE_DB_ID:
+        where = "d.id = %d" % int(PROBE_DB_ID)
+    else:
+        where = "d.db_name = '%s'" % PROBE_DB.replace("'", "''")
+    rows = sql_rows("SELECT d.id, d.client_id, d.db_name FROM client_databases d "
+                    "WHERE %s AND d.deleted_at IS NULL AND d.active ORDER BY d.id;" % where)
+    if len(rows) != 1:
+        raise RuntimeError("%d active client_databases rows match %s; set RR_PROBE_DB_ID "
+                           "to one id" % (len(rows), where))
+    return int(rows[0][0]), int(rows[0][1]), rows[0][2]
+
+
+def persona_statements(email, key, pw_hash, role_id, db):
+    """The two inserts that make a persona, in order. One producer: the run and
+    the self-test execute exactly these strings.
+
+    The user carries a home client (`users.client_id`), as V85 gave every
+    customer user. TenantScopeService.isMemberOf answers from that column first,
+    so a persona without it would be a shape no real customer user has.
+    The right names only `client_database_id`: the V85 trigger
+    `user_database_permissions_name_from_id` writes `database_name` from it, and
+    `user_database_permissions_same_client` refuses a database of another client.
+    """
+    db_id, client_id = db[0], db[1]
     # password_changed_at MUST be set. PasswordPolicyService.isExpired treats a
     # null as expired, which mints a ROLE_MUST_CHANGE token that reaches nothing
     # but /api/v1/auth/change-password -- so every probe would 403 for a reason
     # that has nothing to do with the code under test.
-    sql("INSERT INTO user_database_permissions (user_id, database_name, companies, "
-        "company_scope) VALUES (%s,'%s','[]'::jsonb,'ALL');" % (uid, PROBE_DB))
+    return [
+        "INSERT INTO users (email, display_name, password_hash, is_superuser, "
+        "is_active, role_id, valc_operator, password_changed_at, client_id) VALUES "
+        "('%s','Persona Probe %s','%s', false, true, %d, false, now(), %d);"
+        % (email, key, pw_hash, role_id, client_id),
+        "INSERT INTO user_database_permissions (user_id, client_database_id, companies, "
+        "company_scope) SELECT u.id, %d, '[]'::jsonb, 'ALL' FROM users u "
+        "WHERE u.email = '%s';" % (db_id, email),
+    ]
+
+
+def create_persona(p, pw_hash, db):
+    email = "probe-%s@%s" % (p["key"], PROBE_DOMAIN)
+    for stmt in persona_statements(email, p["key"], pw_hash, p["role_id"], db):
+        sql(stmt)
+    uid = sql("SELECT id FROM users WHERE email = '%s';" % email)
     return email, int(uid)
 
 
@@ -401,13 +505,147 @@ def verdict(guard, persona, status, complete):
     return "EXP" if status in REFUSED else "SRV"
 
 
+# ---------------------------------------------------------------------------
+#  self-test (HK-38)
+# ---------------------------------------------------------------------------
+
+SELF_TEST_EMAIL = "probe-selftest@" + PROBE_DOMAIN
+
+
+def _rolled_back(stmts, email):
+    """Run `stmts`, then read back what the triggers wrote, in ONE transaction
+    that is always rolled back (explicitly, or by psql aborting on the first
+    error). Returns (row or None, error or None)."""
+    probe = ("SELECT 'HK38', u.client_id, p.client_database_id, p.database_name "
+             "FROM users u JOIN user_database_permissions p ON p.user_id = u.id "
+             "WHERE u.email = '%s';" % email)
+    try:
+        rows = sql_rows("BEGIN; " + " ".join(stmts) + " " + probe + " ROLLBACK;")
+    except RuntimeError as exc:
+        return None, str(exc).splitlines()[0]
+    hits = [r for r in rows if r and r[0] == "HK38"]
+    return (hits[0] if len(hits) == 1 else None), (None if len(hits) == 1
+                                                   else "%d rows read back" % len(hits))
+
+
+def self_test():
+    """What broke in HK-38, checked against the live jar and schema, with an arm
+    per defect that must be caught. Creates nothing: the inserts run inside a
+    rolled-back transaction, and the residue check after it is the proof."""
+    ok = True
+
+    def report(passed, label):
+        nonlocal ok
+        ok = ok and passed
+        print("  %s  %s" % ("PASS" if passed else "FAIL", label))
+
+    def arm(caught, label):
+        nonlocal ok
+        ok = ok and caught
+        print("  %s  %s" % ("CAUGHT" if caught else "MISSED", label))
+
+    print("persona-probe self-test  (VALC jar %s)" % VALC_JAR)
+
+    # The selection rule, on both generations' shapes, then on the real jar.
+    s6 = ["BOOT-INF/lib/spring-security-crypto-6.3.4.jar", "BOOT-INF/lib/spring-core-6.1.14.jar",
+          "BOOT-INF/lib/spring-jcl-6.1.14.jar"]
+    s7 = ["BOOT-INF/lib/spring-security-crypto-7.1.1.jar", "BOOT-INF/lib/spring-core-7.0.9.jar",
+          "BOOT-INF/lib/commons-logging-1.3.6.jar", "BOOT-INF/lib/spring-core-test-7.0.9.jar"]
+    report(select_crypto_jars(s6)[1] == [], "selection: a Spring 6 listing (spring-jcl) resolves")
+    picked7, miss7 = select_crypto_jars(s7)
+    report(miss7 == [] and not any("core-test" in p for p in picked7),
+           "selection: a Spring 7 listing (commons-logging) resolves, spring-core-test ignored")
+    report(select_crypto_jars(s7[:2])[1] == ["logging"],
+           "selection: a listing with no logging bridge names what is missing")
+
+    listing = valc_jar_listing()
+    entries, missing = select_crypto_jars(listing)
+    report(not missing, "the VALC jar holds all three: %s"
+           % ", ".join(e.rsplit("/", 1)[-1] for e in entries) if not missing
+           else "the VALC jar is missing: %s" % ", ".join(missing))
+    if missing:
+        return 1
+    try:
+        pw_hash = bcrypt(PROBE_PW)
+        report(pw_hash.startswith("$2"), "bcrypt helper hashes and verifies on that classpath")
+    except RuntimeError as exc:
+        report(False, "bcrypt helper: %s" % str(exc).splitlines()[0])
+        return 1
+
+    # Arms: each jar is required. Measured 2026-10-04: dropping any one is a
+    # NoClassDefFoundError (StringUtils, LogFactory).
+    for role in ("core", "logging"):
+        cp = crypto_classpath([e for e, (r, _) in zip(entries, CRYPTO_JARS) if r != role])
+        try:
+            bcrypt(PROBE_PW, classpath=cp)
+            arm(False, "arm: classpath without %s still hashed (the check cannot see "
+                       "this defect)" % role)
+        except RuntimeError as exc:
+            lines = [ln.strip() for ln in str(exc).splitlines()]
+            why = next((ln for ln in lines if "Error" in ln or "Exception" in ln), lines[0])
+            # "...NoClassDefFoundError: org/x/Y" -> "NoClassDefFoundError: org/x/Y"
+            m = re.search(r"(\w+(?:Error|Exception): \S+)", why)
+            arm(True, "arm: classpath without %s refused -- %s"
+                % (role, m.group(1) if m else why[:120]))
+
+    # The inserts, against the live schema.
+    try:
+        db = resolve_probe_db()
+    except RuntimeError as exc:
+        report(False, "resolve %s: %s" % (PROBE_DB_ID or PROBE_DB, exc))
+        return 1
+    report(True, "resolved %s to client_databases.id %d (client %d)" % (db[2], db[0], db[1]))
+    row, err = _rolled_back(persona_statements(SELF_TEST_EMAIL, "selftest", pw_hash,
+                                               PERSONAS[0]["role_id"], db), SELF_TEST_EMAIL)
+    report(row is not None and row[1] == str(db[1]) and row[2] == str(db[0]) and row[3] == db[2],
+           "persona inserts: home client %s, right on id %s, trigger wrote name %s"
+           % (row[1], row[2], row[3]) if row else "persona inserts failed: %s" % err)
+
+    # Arm: the pre-HK-38 insert, a right naming only database_name.
+    old = ["INSERT INTO users (email, display_name, password_hash, is_superuser, is_active, "
+           "role_id, valc_operator, password_changed_at) VALUES ('%s','Persona Probe old',"
+           "'%s', false, true, %d, false, now());"
+           % (SELF_TEST_EMAIL, pw_hash, PERSONAS[0]["role_id"]),
+           "INSERT INTO user_database_permissions (user_id, database_name, companies, "
+           "company_scope) SELECT u.id, '%s', '[]'::jsonb, 'ALL' FROM users u WHERE "
+           "u.email = '%s';" % (db[2], SELF_TEST_EMAIL)]
+    row, err = _rolled_back(old, SELF_TEST_EMAIL)
+    arm(row is None, "arm: the pre-HK-38 name-only right refused -- %s" % err if row is None
+        else "arm: the pre-HK-38 name-only right was ACCEPTED")
+
+    # Arm: a home client that does not own the database. Proves the persona's
+    # client_id is checked by the live trigger, not merely written.
+    other = sql("SELECT min(id) FROM clients WHERE id <> %d;" % db[1])
+    if not other:
+        report(False, "arm not built: no second client to point the persona at")
+    else:
+        row, err = _rolled_back(persona_statements(SELF_TEST_EMAIL, "selftest", pw_hash,
+                                                   PERSONAS[0]["role_id"],
+                                                   (db[0], int(other), db[2])), SELF_TEST_EMAIL)
+        arm(row is None, "arm: a persona of client %s on client %d's database refused -- %s"
+            % (other, db[1], err) if row is None
+            else "arm: a cross-client right was ACCEPTED")
+
+    left = sql("SELECT count(*) FROM users WHERE email = '%s';" % SELF_TEST_EMAIL)
+    report(left == "0", "nothing left behind: %s rows for %s" % (left, SELF_TEST_EMAIL))
+
+    print("self-test: %s" % ("PASS" if ok else "FAIL"))
+    return 0 if ok else 1
+
+
 def main(argv):
     ap = argparse.ArgumentParser(add_help=True)
     ap.add_argument("--manifest", default=MANIFEST)
     ap.add_argument("--agent", action="store_true",
                     help="also probe agent-routed GET sites (slower; the agent "
                          "does not gate on role, so the assertion is weaker)")
+    ap.add_argument("--self-test", action="store_true",
+                    help="check the bcrypt classpath and the persona inserts against "
+                         "the live VALC jar and schema, inside a rolled-back "
+                         "transaction, plus mutation arms; creates nothing")
     args = ap.parse_args(argv)
+    if args.self_test:
+        return self_test()
 
     if not os.path.exists(args.manifest):
         print("no manifest at %s\n  run: python Tools/v8-callsites.py --json %s"
@@ -417,8 +655,12 @@ def main(argv):
 
     base_users = sql("SELECT count(*) FROM users WHERE deleted_at IS NULL;")
     base_ops = sql("SELECT count(*) FROM users WHERE valc_operator;")
+    global PROBE_DB
+    db = resolve_probe_db()
+    PROBE_DB = db[2]     # the `?database=` query value is the resolved row's name
     print("baseline: %s live users, %s operators" % (base_users, base_ops))
-    print("target:   VALC %s   db %s" % (VALC_BASE, PROBE_DB))
+    print("target:   VALC %s   db %s (client_databases.id %d, client %d)"
+          % (VALC_BASE, PROBE_DB, db[0], db[1]))
 
     failures, dead, inconclusive = [], [], []
     targets = probe_targets(manifest)
@@ -436,7 +678,7 @@ def main(argv):
         pw_hash = bcrypt(PROBE_PW)
         sessions = []
         for p in PERSONAS:
-            email, uid = create_persona(p, pw_hash)
+            email, uid = create_persona(p, pw_hash, db)
             tok, err = sign_in(email)
             if err:
                 inconclusive.append("%s: %s" % (p["key"], err))
