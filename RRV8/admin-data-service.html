@@ -237,12 +237,10 @@
     restart: { dot: 'red',   sub: 'Low on memory — reports may start failing. A restart now will clear it.' }
   };
   let _restarting = false;
-  let _restartPending = false;
 
-  // Time-based restart progress. The service bounce has no progress events, so
-  // this fills a bar over the expected ~30s window — it tells the admin it's
-  // working and roughly how long is left, then the real health read repaints
-  // the true status (and restores the memory bar) when the window elapses.
+  // Restart progress. The restart has no progress events, so this fills a bar
+  // over the usual ~30s while VALC's request is open; VALC's answer (healthy, or
+  // why not) completes it and the real health read repaints the true status.
   const RESTART_MS = 30000;
   function showRestartProgress() {
     const wrap = $('js-svc-restart'), fill = $('js-restart-fill'), lbl = $('js-restart-label');
@@ -336,29 +334,22 @@
     _restarting = true;
     const btn = $('js-restart'); if (btn) { btn.disabled = true; btn.textContent = 'Restarting…'; }
     const db = activeDb() || {};
-    rrFetch('api/v1/tenant/services/restart', { method: 'POST', body: { database: db.n } }).then(function () {
-      toast('Restart requested — reports should work again in about 30 seconds.');
-      $('js-svc-dot').className = 'svc-dot amber';
-      $('js-svc-sub').textContent = 'Restarting — back in about 30 seconds…';
-      showRestartProgress();
-      _restartPending = true;                  // hold the button disabled for the window
-      setTimeout(function () {
-        finishRestartProgress();
-        _restartPending = false;
-        if (btn) { btn.disabled = false; btn.textContent = 'Restart'; }
-        loadHealth();                          // repaint true status + restore the memory bar
-      }, RESTART_MS + 2000);
+    // VALC answers only once the broker has restarted the JVM and it is healthy,
+    // or has failed (VLC-155), so the progress runs while the request is open.
+    $('js-svc-dot').className = 'svc-dot amber';
+    $('js-svc-sub').textContent = 'Restarting — back in about 30 seconds…';
+    showRestartProgress();
+    rrFetch('api/v1/tenant/services/restart', { method: 'POST', body: { database: db.n } }).then(function (r) {
+      toast((r && r.message) || 'Restarted.');
     }).catch(function (err) {
+      // rrFetch puts VALC's sentence in err.message, or "HTTP <status>" when there was none.
       const msg = String(err && err.message || err);
-      toast(/404|405|501/.test(msg)
-        ? 'Restart control isn’t wired in VALC yet (see API.md).'
-        : 'Restart request failed: ' + msg);
+      toast(/^HTTP \d+$/.test(msg) ? 'Restart request failed (' + msg + ').' : msg);
     }).then(function () {
+      finishRestartProgress();
       _restarting = false;
-      // On success the button stays disabled until the restart window elapses
-      // (the success branch's timeout re-enables it); re-enable here only when
-      // no restart is pending — i.e. the POST itself failed.
-      if (!_restartPending && btn) { btn.disabled = false; btn.textContent = 'Restart'; }
+      if (btn) { btn.disabled = false; btn.textContent = 'Restart'; }
+      loadHealth();                            // repaint true status + restore the memory bar
     });
   }
 

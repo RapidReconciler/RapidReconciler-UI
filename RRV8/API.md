@@ -603,52 +603,49 @@ shared mapping.
 
 ## Restart Services instance (self-serve, VALC-orchestrated)
 
-**Status: SHIPPED (B1a, local path) — VALC endpoint live.** The VALC
-`AdminServicesController` (`POST /api/v1/admin/services/restart {database}`)
-resolves the DB to its `client_databases` row and does a local
-`AgentLifecycleService` stop &rarr; start (sticky `service_port` reused, so
-JWT/bookmarks don't churn) for the dev / same-box topology where VALC owns
-the Services process. Returns `200 {status:"RESTARTING", database, port}`.
-The **remote-customer JMS `RestartInstance`** path (when the customer's Agent
-owns the process) is **B1b — pending** (see
-`docs/plans/services-restart-endpoint.md`). V8 ships a
-self-serve restart for the recurring production symptom where the
-Services jar hangs building an Excel export under memory pressure /
-heavy concurrency (restarting the Services jar clears it):
+**Status: SHIPPED through the customer's broker (VLC-155, needs broker 2.6.0).**
+A self-serve restart for the recurring production symptom where the Services
+jar hangs building an Excel export under memory pressure or heavy concurrency
+(restarting it clears it).
 
-- &#9888; **CORRECTED 2026-09-05: THIS PROTECTION IS NOT IN THE CODE.** Both
-  `inventory-reconciliation.html` (retired 2026-07-02, PR #307 `aaa0af9`) and
-  the symbol `withExportWatchdog` return **zero hits** across every `.html`
-  and `.js` in this repo. This is a user-facing safeguard against a known
-  Services-jar hang, so its absence is worth someone confirming deliberately
-  rather than inheriting: either it was reimplemented under a name this pass
-  did not look for, or it went out with the page. **Not measured either way.**
-  The description below is kept as the specification of what it did.
-  ~~An **export hang advisory** (`inventory-reconciliation.html`,
-  `withExportWatchdog` around the audit-report export)~~ surfaces a
-  finance-friendly banner if an export hasn't returned within ~40s, with
-  a **Restart the data service** button gated on the `rs` (Restart
-  Service) JWT permission &mdash; the same perm the admin user-menu uses.
-- The button + the user-menu **Restart Service** action both call
-  `restartService()` &rarr; `POST api/v1/admin/services/restart`
-  (routes to VALC via the `api/v1/admin/` prefix) with body
-  `{ "database": "<active db name>" }`.
+**Callers** (all `restartService()`, all `POST api/v1/tenant/services/restart`
+with `{ "database": "<active db name>" }`):
 
-**Why VALC and not the Services jar directly:** restart is the Agent's
-job. Per `RapidReconciler-Agent/docs/deploy-architecture.md`, the
-Services jar exposes only Actuator `/health`, `/info`, `/shutdown`;
-`POST /shutdown` *stops* an instance, and **only the Agent re-spawns it**
-(`ServicesInstanceManagerService`, over JMS). V8 must therefore never
-`POST /shutdown` to a Services jar directly &mdash; it would stop the
-instance with nothing to bring it back. VALC's job for this endpoint:
-resolve the client/DB &rarr; tell the Agent (JMS) to **stop + re-spawn**
-that DB's Services instance (mirrors the deploy flow's stop-old/start-new
-step) &rarr; return 200 when the restart is dispatched.
+- Home's Report Engine card (`home.html`, behind an explain-first confirm).
+- Home's export-stall advisory (UI-179), offered to anyone who can restart
+  (`canRestartService()`: admin, or `perms.rs === true`).
+- The Report Engine admin page (`admin-data-service.html`).
 
-B1a ships the local path; against a customer's remote Agent the endpoint
-returns 503 ("remote-agent restart not wired yet") until B1b, and
-`restartService()` surfaces that honestly rather than faking success. No
-client change was needed — V8 already calls the endpoint.
+**What VALC does** (`TenantController.restart` &rarr; `AdminServicesController.restartRow`):
+
+1. Ownership: the name resolves to the caller's OWN `client_databases` row
+   (every customer has a `RapidReconciler_Prod_V8`).
+2. The per-database `rs` right: the token's `dbs` entry for that row's uuid
+   must carry `rs: true`. A missing claim is refused, not assumed.
+3. `BrokerCommandService.restart`: the `RESTART` Services command to the
+   customer's broker, keyed by the database uuid. The broker stops that one
+   JVM, starts it, and answers once it is healthy (or has failed); VALC waits
+   up to 180 s. A broker below 2.6.0 is refused before anything is sent.
+
+**The answer is the outcome, not "requested".** Every status carries a
+`message` in the body, and that is what V8 toasts:
+
+| Status | `message` (customer route) |
+|---|---|
+| 200 | `Restarted. Reports are working again.` |
+| 403 | `You don't have permission to restart the data service.` |
+| 409 / 502 / 503 / 504 | `The report engine didn't restart. Contact RR support.` |
+
+The operator route (`POST /api/v1/admin/services/restart`, VALC operators only)
+answers the same statuses with the technical sentence instead: the broker
+version and the Fleet Upgrades tab, the broker's own start error, and the new
+PID on success. Until VLC-155 the reason was thrown, Spring stripped it
+(`server.error.include-message` is `never`), and V8 showed
+`Restart request failed: Conflict`.
+
+**Never `POST /shutdown` to a Services jar directly.** It stops the instance
+and nothing brings it back; the broker owns the JVM. Never a blanket
+`SynchronizeMessage2` either: it can terminate every instance on the box.
 
 ---
 
@@ -667,7 +664,7 @@ restart *before* reports fail, instead of only flagging an outage after.
   agent's permitAll list; the card is admin-only and carries the JWT.
 - **Why agent-direct, not VALC:** this only *reports*. Lifecycle stays
   VALC's job — the card's Restart button still routes to
-  `POST /api/v1/admin/services/restart`. V8 never acts on this read by
+  `POST /api/v1/tenant/services/restart` (see above). V8 never acts on this read by
   hitting the Services jar's own `/shutdown`.
 - **Response (`ServiceHealthSnapshot`):**
 
