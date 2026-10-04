@@ -1,6 +1,11 @@
 // BcryptHash -- print a password hash the running service will accept.
 //
-//   java -cp <spring-security-crypto.jar>;<spring-jcl.jar> BcryptHash.java <pw>
+//   java -cp <spring-security-crypto.jar>;<spring-core.jar>;<logging.jar> BcryptHash.java <pw>
+//
+// <logging.jar> is spring-jcl on Spring 6 and commons-logging on Spring 7, and
+// Spring Security 7 also needs spring-core (HK-38). persona-probe.py picks all
+// three out of the VALC jar by name (CRYPTO_JARS) and its --self-test proves
+// each one is required.
 //
 // Run as a single-file source program (JEP 330), so there is no compile step
 // and no build artifact to go stale.
