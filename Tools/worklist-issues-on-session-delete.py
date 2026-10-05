@@ -9,7 +9,13 @@ Development page and the dev-box runner could not see them.
 
 Wired in ~/.claude/settings.json (user scope, so it fires from any session's working folder):
 
-    PreToolUse  matcher mcp__ccd_session_mgmt__delete_session
+    PreToolUse  matcher mcp__ccd_session_mgmt__delete_session   (Claude deletes ANOTHER session)
+    UserPromptSubmit                                             (the owner ASKS to delete one)
+
+The prompt trigger exists because delete_session refuses the session it runs in, so "delete
+this session", the usual ask, never reaches the tool hook (found 2026-10-05, the first live
+ask). A prompt that does not ask to delete a session returns at once with no output. When both
+fire for one request, the second skips: a sync within 5 minutes is not repeated.
 
 It runs the sync LIVE (the owner authorised it for this event), never blocks the delete, and
 reports through BOTH sinks: `systemMessage` (shown to the owner) and `additionalContext` (read
@@ -49,11 +55,37 @@ def summarise(output, code):
                   % (live.group(1), created, updated, closed.group(1) if closed else "?", refused, LOG))
 
 
+# "delete this session", "delete the session", "can you delete these sessions" ...
+ASKS_TO_DELETE = re.compile(r"\b(delete|remove)\b[^.\n?!]{0,40}\bsessions?\b", re.I)
+RECENT_S = 300
+
+
+def recently_synced():
+    """True when a sync finished within RECENT_S: the prompt hook and the tool hook both fire
+    when the owner asks Claude to delete ANOTHER session, and one sync is enough."""
+    try:
+        return (datetime.now().timestamp() - os.path.getmtime(LOG)) < RECENT_S
+    except OSError:
+        return False
+
+
 def run():
     try:
-        sys.stdin.read()          # the hook payload; nothing in it changes what is synced
+        payload = json.loads(sys.stdin.read() or "{}")
     except Exception:
-        pass
+        payload = {}
+    event = payload.get("hook_event_name") or "PreToolUse"
+    if event == "UserPromptSubmit":
+        # 2026-10-05: "delete this session" can never reach the tool (delete_session refuses the
+        # session it runs in), so the owner's ASK is the trigger. Any other prompt: no output.
+        if not ASKS_TO_DELETE.search(payload.get("prompt") or ""):
+            return 0
+    if recently_synced():
+        line = ("Worklist -> GitHub issues: synced less than %d minutes ago, not run again. Last output: %s"
+                % (RECENT_S // 60, LOG))
+        print(json.dumps({"systemMessage": line,
+                          "hookSpecificOutput": {"hookEventName": event, "additionalContext": line}}))
+        return 0
     try:
         p = subprocess.run([sys.executable, SYNC], capture_output=True, text=True, encoding="utf-8",
                            errors="replace", timeout=TIMEOUT_S, cwd=os.path.dirname(HERE))
@@ -70,7 +102,7 @@ def run():
     ok, line = summarise(output, code)
     print(json.dumps({
         "systemMessage": line,
-        "hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": line},
+        "hookSpecificOutput": {"hookEventName": event, "additionalContext": line},
     }))
     return 0
 
@@ -88,7 +120,13 @@ def self_test():
     assert not ok and "FAILED" in line and "REFUSING" in line, line
     ok, line = summarise("", "timeout after 240s")
     assert not ok and "timeout" in line, line
-    print("self-test: 3/3 ok")
+    for p in ["delete this session", "Delete the session please", "can you delete these sessions?",
+              "remove that old session"]:
+        assert ASKS_TO_DELETE.search(p), p
+    for p in ["commit", "run the live checks", "delete the stale branch", "the session cookie expired",
+              "deleted rows. This session went well"]:
+        assert not ASKS_TO_DELETE.search(p), p
+    print("self-test: 5/5 ok")
     return 0
 
 
