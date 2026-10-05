@@ -760,7 +760,7 @@ IT?" from one read.
 - **Rules shared with VALC's Troubleshooting page** (ported agent-side): an
   error a later clean run of the same step cleared is history (VLC-136); a
   failed scheduled B to C outranks a clean log (DAC-82).
-- **Download diagnostics** builds a four-sheet audit workbook in the browser
+- **Download diagnostics** builds a four-sheet (five since UI-210, below) audit workbook in the browser
   (`buildAuditSheet`): Checks (worst first, with the technical line), Server
   checks as reported, Reconciliation errors, Import errors. For the customer's
   IT department.
@@ -771,6 +771,32 @@ IT?" from one read.
 - **Left out on purpose:** ad-hoc SQL, AI investigation, the roll forward
   (per company; Account Roll Forward already shows it, scoped), version-update
   pills.
+
+### Chunk 2 (UI-210)
+
+**Status: V8 wired; agent side in the Services release after 8.0.47.** Until a
+database runs it, the three new rows are left out (not shown as "did not run"),
+the workbook's Service log sheet says why it is empty, and no reference shows.
+
+- **Three more checks** in `checks[]`, before `valc.reachable`, each
+  `ok|warning|fail`: `jde.source_connection` (the database server's line to JD
+  Edwards, from the load's own connection test), `broker.valc_link` (the agent
+  service's line to GSI), `tls.certificate` (days left on the served
+  certificate; amber under 30 days, red under 7). They render in the
+  Connections area as "Database server to JD Edwards", "Agent service to GSI"
+  and "Security certificate".
+- **`GET /admin/troubleshooting/log`**, same gate: `{available, reason?, file?,
+  sizeBytes?, modifiedAt?, truncated?, lines?[]}`, at most 500 lines. Fetched
+  when Download diagnostics is clicked and written to a fifth sheet, Service
+  log. A failed read becomes the sheet's reason line, never a failed download.
+- **Request id.** Every Services response carries `X-Request-Id`, and the
+  service log carries the same id on that request's lines. Every page's rrFetch
+  copies it onto its Error as `requestId`; `RRV8.fetchErrorMessage` ends the
+  message with "Reference: &lt;id&gt;". The Troubleshooting page shows the read's
+  own reference in its foot and the workbook header. V8 does not SEND the
+  header: Services up to 8.0.47 refuse any request header beyond
+  Authorization, Content-Type and Accept in the CORS preflight. Tested by
+  `Tools/test-request-id.js`.
 
 ---
 

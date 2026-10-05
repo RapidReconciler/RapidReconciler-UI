@@ -91,9 +91,25 @@ OPEN_ERRORS.reconcile.currentErrors = [
   { capture: '2026-09-30 02:00', step: 'v6 010 clean up', process: 'begin procedure', startTime: '2026-09-30 02:05:00.000', errorNum: 535 }
 ];
 
+// UI-210: the three new legs, in the words the agent returned on 2026-10-05 when the
+// UI-210 jar ran against Demo1 (jde.source_connection from the SSIS catalog, the broker
+// line after a loopback /admin/facts read, the certificate from the served SSL bundle).
+const DEMO1_UI210 = clone(DEMO1);
+DEMO1_UI210.checks.splice(DEMO1_UI210.checks.length - 1, 0,
+  { name: 'jde.source_connection', status: 'warning', text: 'The connection to JD Edwards was last tested 2026-07-12 22:43:59, 84 days ago, and worked then.', detail: "JDE source 10.4.3.132 / jdesource_demo1. Execution 10441, 'Test JDE Source Connection' at 2026-07-12 22:43:59" },
+  { name: 'broker.valc_link', status: 'ok', text: 'The RapidReconciler agent service on this server is connected to GSI. It last reported this database less than a minute ago.', detail: 'Broker read /admin/facts at 2026-10-05T13:58:05Z.' },
+  { name: 'tls.certificate', status: 'ok', text: 'The server’s security certificate is valid until Nov 19, 2026 (44 days).', detail: 'CN=*.getgsi.com; SAN *.getgsi.com' });
+const NEW_KEYS = ['jde.source_connection', 'broker.valc_link', 'tls.certificate'];
+
 // Every failure the agent can report, in its own words (InstallDiagnosticsCollector,
 // ValcLineProbe), so the voice and plumbing assertions see real text.
 const FAILURES = [
+  withCheck(DEMO1_UI210, 'jde.source_connection', 'fail', 'The last import could not connect to the JD Edwards database (2026-07-14 16:36:11).', 'Failed to acquire connection "JDESource".'),
+  withCheck(DEMO1_UI210, 'jde.source_connection', 'warning', 'None of the last five imports recorded a test of the connection to JD Edwards.'),
+  withCheck(DEMO1_UI210, 'broker.valc_link', 'fail', 'The RapidReconciler agent service on this server has not reported to GSI for 47 minutes.'),
+  withCheck(DEMO1_UI210, 'broker.valc_link', 'warning', 'Could not be confirmed. The RapidReconciler agent service has not asked this database for its status in the 90 minutes since it started.'),
+  withCheck(DEMO1_UI210, 'tls.certificate', 'fail', 'The server’s security certificate expires on Oct 9, 2026, in 4 days.'),
+  withCheck(DEMO1_UI210, 'tls.certificate', 'warning', 'The server’s security certificate expires on Oct 25, 2026, in 20 days.'),
   withCheck(DEMO1, 'sql.reachable', 'fail', "Login failed -- login failed for user 'rruser'. Wrong password, or SQL Authentication is disabled on the server."),
   withCheck(DEMO1, 'sql.jde_job_present', 'fail', "Refresh job 'RapidReconciler_Demo1' is not present in msdb."),
   withCheck(DEMO1, 'sql.jde_job_present', 'warning', 'No refresh job configured (rsystemvariables.refreshjobname is blank).'),
@@ -170,6 +186,22 @@ const ASSERTIONS = {
     }
     return null;
   },
+  newLegsAreJudged: TS => {
+    const rows = TS.rows(DEMO1_UI210, 40);
+    const got = NEW_KEYS.map(k => { const r = rowOf(rows, k); return k + ':' + (r ? r.area + ':' + r.state : 'absent'); }).join(',');
+    if (got !== 'jde.source_connection:Connections:warn,broker.valc_link:Connections:ok,tls.certificate:Connections:ok') return 'new legs ' + got;
+    const jde = rowOf(rows, 'jde.source_connection');
+    if (!/Jul 12, 2026, 10:43 PM/.test(jde.fact) || /2026-07-12/.test(jde.fact)) return 'JDE fact shows a raw SQL time: ' + jde.fact;
+    if (!/10\.4\.3\.132/.test(jde.tech) || /10\.4\.3\.132/.test(jde.fact + jde.todo)) return 'the JDE server belongs in the technical line only';
+    return null;
+  },
+  anOlderServerLeavesTheNewRowsOut: TS => {
+    // A Services release before UI-210 does not send these checks. "Did not run" on every
+    // such database would turn Home's card grey for checks it was never asked to run.
+    const rows = TS.rows(DEMO1, 40);
+    const present = NEW_KEYS.filter(k => rowOf(rows, k));
+    return present.length ? 'rows shown for checks an older server never sends: ' + present.join(', ') : null;
+  },
   aMissingCheckIsUnknownNotOk: TS => {
     const older = FAILURES[FAILURES.length - 1];
     const r = rowOf(TS.rows(older, 40), 'sql.agent_service');
@@ -209,6 +241,17 @@ const MUTATIONS = [
     find: "{ fact: 'The nightly refresh job isn\u2019t set up on the database server.', todo:",
     replace: '{ todo:',
     red: ['noSqlPlumbingInWhatTheReaderSees'] },
+  { name: 'show the UI-210 rows even when an older server did not send them',
+    find: 'return checkByName(data, name) ? rowFromCheck(data, area, name, label, words) : null;',
+    replace: 'return rowFromCheck(data, area, name, label, words);',
+    red: ['demo1', 'anOlderServerLeavesTheNewRowsOut'] },
+  { name: 'a failed JD Edwards connection says nothing to do',
+    find: "if (state === 'fail') return { fact: fact, todo: 'Ask ' + IT + ' to check the connection the RapidReconciler import uses",
+    replace: "if (state === 'fail') return { fact: fact, todo: '', x: 'Ask ' + IT + ' to check the connection the RapidReconciler import uses",
+    red: ['everyProblemEscalatesToItNeverGsi'] },
+  { name: 'the JD Edwards row shows the agent’s raw SQL time',
+    find: 'var fact = humanTimes(c.text);', replace: 'var fact = c.text;',
+    red: ['newLegsAreJudged'] },
   { name: 'treat a missing check as passing',
     find: "state: 'unknown', fact: 'This check did not run.'", replace: "state: 'ok', fact: 'This check did not run.'",
     red: ['aMissingCheckIsUnknownNotOk'] }

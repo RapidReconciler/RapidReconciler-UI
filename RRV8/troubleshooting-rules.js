@@ -74,6 +74,39 @@
       tech: [c.text, c.detail].filter(Boolean).join(' — ') };
   }
 
+  // The agent writes SQL Server's local times as "2026-07-12 22:43:59"; shown here the
+  // way every other row shows a time.
+  function humanTimes(s) {
+    return String(s || '').replace(/\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?/g, function (t) { return fmtWhen(t); });
+  }
+
+  // UI-210. Checks a Services release before UI-210 does not send. Such a row is LEFT
+  // OUT rather than shown as "did not run": every database still on the older release
+  // would otherwise turn Home's card grey for a check it was never asked to run.
+  // A check the server does send is judged like any other.
+  function optionalRow(data, area, name, label, words) {
+    return checkByName(data, name) ? rowFromCheck(data, area, name, label, words) : null;
+  }
+
+  function newLegRows(data) {
+    return [
+      optionalRow(data, 'Connections', 'jde.source_connection', 'Database server to JD Edwards', function (state, c) {
+        var fact = humanTimes(c.text);
+        if (state === 'ok') return { fact: fact };
+        if (state === 'fail') return { fact: fact, todo: 'Ask ' + IT + ' to check the connection the RapidReconciler import uses to reach JD Edwards: the JD Edwards database must be running and must accept the import’s sign-in from the database server. The downloaded diagnostics name the server and the error.' };
+        return { fact: fact, todo: 'Check <b>JD Edwards import</b> below first. If imports are running and this stays amber, give the downloaded diagnostics to ' + IT + '.' };
+      }),
+      optionalRow(data, 'Connections', 'broker.valc_link', 'Agent service to GSI', function (state) {
+        if (state === 'fail') return { todo: 'Ask ' + IT + ' to check that the RapidReconciler agent service is running on the RapidReconciler server and that the server can reach GSI. Sign-in and updates depend on it.' };
+        return { todo: 'Run the checks again in a few minutes. If this stays amber, give the downloaded diagnostics to ' + IT + '.' };
+      }),
+      optionalRow(data, 'Connections', 'tls.certificate', 'Security certificate', function (state) {
+        if (state === 'fail') return { todo: 'Ask ' + IT + ' to renew the RapidReconciler server’s security certificate now. Once it expires, browsers refuse to open RapidReconciler.' };
+        return { todo: 'Ask ' + IT + ' to arrange the renewal of the RapidReconciler server’s security certificate before it expires. The downloaded diagnostics name the certificate.' };
+      })
+    ].filter(Boolean);
+  }
+
   function connectionRows(data, ms) {
     return [
       { area: 'Connections', key: 'browser', label: 'This computer to the server', state: 'ok',
@@ -87,7 +120,7 @@
         if (state === 'fail') return { todo: 'Ask ' + IT + ' to allow outbound HTTPS (port 443) from the RapidReconciler server to GSI. The downloaded diagnostics have the address and the error.' };
         return { todo: 'Run the checks again in a few minutes. If this stays amber, give the downloaded diagnostics to ' + IT + '.' };
       })
-    ];
+    ].concat(newLegRows(data));
   }
 
   function refreshRow(data) {

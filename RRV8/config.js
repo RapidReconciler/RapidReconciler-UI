@@ -4380,6 +4380,7 @@ window.RRV8._failGatedWrite = function (r, revert) {
     try { var j = JSON.parse(body); why = j.message || j.error || ''; } catch (_) { why = String(body || '').slice(0, 200); }
     var e = new Error(why || ('HTTP ' + r.status));
     e.status = r.status;
+    e.requestId = r.headers && r.headers.get('X-Request-Id');   // UI-210
     throw e;
   });
 };

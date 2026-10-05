@@ -2205,7 +2205,21 @@ ${adminSection}
     return raw.replace(/\s*\.\s*$/, '');
   }
 
+  // UI-210. The data service stamps every response with an X-Request-Id and writes
+  // the same id on every log line of that request. Each page's rrFetch copies it onto
+  // the Error as `requestId`, and this is the ONE place it reaches the reader: the
+  // message ends "Reference: <id>", which the customer's IT department can find in
+  // the service log. An older service sends no id and the message is unchanged.
+  // The id is re-checked against the agent's own token rule (RequestIdFilter.SAFE),
+  // because this text can land in innerHTML on some pages.
+  var _REQUEST_ID_RX = /^[A-Za-z0-9._:-]{1,64}$/;
   function fetchErrorMessage(area, err) {
+    var msg = _fetchErrorText(area, err);
+    var rid = err && typeof err.requestId === 'string' ? err.requestId : '';
+    return (rid && _REQUEST_ID_RX.test(rid)) ? msg + ' Reference: ' + rid + '.' : msg;
+  }
+
+  function _fetchErrorText(area, err) {
     var raw = (err && err.message) ? String(err.message)
                                    : String(err == null ? '' : err);
     var st  = (err && typeof err.status === 'number' && isFinite(err.status))
