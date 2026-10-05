@@ -114,7 +114,7 @@ def chunk_errors(live_ids, chunks):
             if r in seen:
                 errs.append(f"{r} is in two chunks ({seen[r]} and {c['slug']})")
             seen[r] = c["slug"]
-            if r not in live_ids and False:   # THROWAWAY (HK-35 red proof): reverted before merge
+            if r not in live_ids:
                 errs.append(f"chunk {c['slug']} names {r}, which is not a live row")
     for r in live_ids:
         if r not in seen:
