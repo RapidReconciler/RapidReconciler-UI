@@ -73,8 +73,13 @@ const code = stripComments(html);
 console.log('test-home-notice.js (UI-169)');
 
 /* ---- A1: rrFetch stamps a numeric status and reports it -------------------------- */
+// UI-212: Home's rrFetch builds its Error with config.js's RRDB.responseError, which
+// stamps the status (asserted by behaviour in test-refusal-sentence.js R1 and R3).
+const config = stripComments(fs.readFileSync(path.join(ROOT, 'RRV8', 'config.js'), 'utf8'));
 check('A1 rrFetch assigns a numeric err.status',
-      /err\.status\s*=\s*r\.status/.test(code), true);
+      /err\.status\s*=\s*r\.status/.test(code) ||
+      (/RRDB\.responseError\(r, url\)/.test(code) &&
+       /var st = r && r\.status;/.test(config) && /e\.status = st;/.test(config)), true);
 check('A1 rrFetch calls the failure reporter',
       /_noteFetchFailure\s*\(\s*area\s*,\s*err\s*\)/.test(code), true);
 check('A1 the reporter is defined in this file',

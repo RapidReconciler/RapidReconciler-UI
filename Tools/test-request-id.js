@@ -103,14 +103,19 @@ function s2(srcs) {
     while ((m = rx.exec(src))) {
       copies++;
       const body = functionBody(src, m.index, f + ' rrFetch');
-      if (!/r\.headers\s*&&\s*r\.headers\.get\('X-Request-Id'\)/.test(body)) missing.push(f + ':' + src.slice(0, m.index).split('\n').length);
+      // UI-212: a copy may read the header itself or hand the response to the shared
+      // reader, RRDB.responseError, which reads it (asserted on the reader below).
+      if (!/r\.headers\s*&&\s*r\.headers\.get\('X-Request-Id'\)/.test(body) &&
+          !/RRDB\.responseError\(r, /.test(body)) missing.push(f + ':' + src.slice(0, m.index).split('\n').length);
     }
   }
   // 18 pages, 19 functions on 2026-10-05. A floor, so a page added later still counts.
   if (copies < 19) return 'found ' + copies + ' rrFetch copies, expected at least 19 (did the scan break?)';
   if (missing.length) return 'rrFetch copies that never read X-Request-Id: ' + missing.join(', ');
+  const reader = functionBody(srcs.config, srcs.config.indexOf('  function responseError(r, url) {'), 'config.js responseError');
+  if (!/r\.headers\.get\('X-Request-Id'\)/.test(reader) || !/e\.requestId = rid/.test(reader)) return 'config.js RRDB.responseError does not carry the request id';
   const gated = functionBody(srcs.config, srcs.config.indexOf('window.RRV8._failGatedWrite = function'), 'config.js _failGatedWrite');
-  if (!/X-Request-Id/.test(gated)) return 'config.js _failGatedWrite does not carry the request id';
+  if (!/X-Request-Id|RRDB\.responseError\(r, /.test(gated)) return 'config.js _failGatedWrite does not carry the request id';
   return null;
 }
 
@@ -123,9 +128,18 @@ function s3(srcs) {
     window: { RR_TEST_AGENT_AREAS: [], RR_TEST_AGENT_PREFIXES: [], RR_VALC_PREFIXES: [],
               RR_SESSION: { dbs: [{ ip: 'localhost:39911' }], activeDbIndex: 0 },
               RRDB: { agentBase: () => 'http://localhost:39911', valcBase: () => '' } },
+    console: { warn() {} },
     fetch: () => Promise.resolve({ ok: false, status: 500, headers: { get: h => (h === 'X-Request-Id' ? 'rid-s3' : null) },
-                                   json: () => Promise.resolve({ status: 500 }) })
+                                   json: () => Promise.resolve({ status: 500 }),
+                                   text: () => Promise.resolve('{"status":500}') })
   });
+  // UI-212: the page reads its error through config.js's RRDB.responseError, so the
+  // real reader is loaded into the stub RRDB rather than retyped.
+  const at = srcs.config.indexOf('  function responseError(r, url) {');
+  if (at >= 0) {
+    new vm.Script('window.RRDB.responseError = (function () {\n' + functionBody(srcs.config, at, 'config.js responseError') +
+      '\n  return responseError;\n})();', { filename: 'config.js-slice' }).runInContext(ctx);
+  }
   new vm.Script(slice + '\nglobalThis.__rr = rrFetch;', { filename: 'admin-troubleshooting-slice' }).runInContext(ctx);
   return ctx.__rr('admin/troubleshooting').then(
     () => 'a 500 resolved',
@@ -151,12 +165,20 @@ const MUTATIONS = [
     apply: s => { s.sidebar = swap(s.sidebar, "? msg + ' Reference: ' + rid + '.' : msg", '? msg : msg'); } },
   { name: 'the sink skips the token check', red: ['s1'],
     apply: s => { s.sidebar = swap(s.sidebar, '(rid && _REQUEST_ID_RX.test(rid))', '(rid)'); } },
+  // UI-212: the pages hand a failed response to config.js's RRDB.responseError, which
+  // stamps the id, so "a page forgets the stamp" is now a page that builds its own Error.
   { name: 'one page forgets the stamp', red: ['s2'],
-    apply: s => { s.pages['admin-reload-gl.html'] = swap(s.pages['admin-reload-gl.html'], " e.requestId = r.headers && r.headers.get('X-Request-Id');", ''); } },
+    apply: s => { s.pages['admin-reload-gl.html'] = swap(s.pages['admin-reload-gl.html'],
+      'if (!r.ok) throw await window.RRDB.responseError(r, url);',
+      "if (!r.ok) { const e = new Error('HTTP ' + r.status); e.status = r.status; throw e; }"); } },
+  { name: 'the shared reader forgets the stamp', red: ['s2', 's3'],
+    apply: s => { s.config = swap(s.config, '      e.requestId = rid;\n', ''); } },
   // Only S3 sees this one: the page also reads the header for its foot, which satisfies
   // S2's textual match. That is exactly the gap S3 exists to close.
   { name: 'the troubleshooting page forgets the stamp', red: ['s3'],
-    apply: s => { s.pages['admin-troubleshooting.html'] = swap(s.pages['admin-troubleshooting.html'], " e.requestId = r.headers && r.headers.get('X-Request-Id');", ''); } }
+    apply: s => { s.pages['admin-troubleshooting.html'] = swap(s.pages['admin-troubleshooting.html'],
+      'if (!r.ok) throw await window.RRDB.responseError(r, url);',
+      "if (!r.ok) { const e = new Error('HTTP ' + r.status); e.status = r.status; throw e; }"); } }
 ];
 
 function swap(src, find, repl) {

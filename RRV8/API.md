@@ -630,8 +630,8 @@ with `{ "database": "<active db name>" }`):
 **The answer is the outcome, not "requested".** Every status carries a
 `message` in the body. A refusal has the shape every tenant refusal has
 (see [Tenant refusals](#tenant-refusals-vlc-169) below), `{ "status", "error", "message" }`;
-a 200 is `{ "message" }`. ⚠ Home's `rrFetch` reads only `reason` from an error body,
-so today it toasts `HTTP <status> on <url>` instead of the sentence (UI-212):
+a 200 is `{ "message" }`. Home's Restart toast shows the sentence through
+`RRV8.fetchErrorMessage`, ending with the status and the request reference (UI-212):
 
 | Status | `message` (customer route) |
 |---|---|
@@ -656,13 +656,22 @@ status with the reason in the body:
 ```
 
 `message` is a sentence written for the customer; it is absent only when VALC gave no
-reason, and then `error` is the status phrase. Read `j.message || j.error`. Before
+reason, and then `error` is the status phrase. Before
 VLC-169 the body was Spring's `{timestamp, status, error, path}` with no `message`. An
 unexpected server error (500) still carries no `message`, by design: its text is internal.
-Operator and agent routes are unchanged. Pages that read the body today:
-`admin-complex-passwords.html`, `admin-data-service.html`. The rest (Home,
-`admin-users.html`, `admin-companies.html`, `inventory-transactions.html`) throw
-`HTTP <status> on <url>` without reading it (UI-212).
+Operator and agent routes are unchanged.
+
+**How V8 reads it (UI-212).** Every page's `rrFetch` (and `valcFetch`, and config.js's
+`_failGatedWrite`) hands a failed response to `RRDB.responseError(r, url)` in config.js.
+It reads the data service's `reason` first, then VALC's `message`, and never `error`
+(on both servers that is the status phrase). The Error's `message` is the sentence, or
+`HTTP <status>` when there is none, and never the URL, which goes to the console. It
+also carries `status`, `requestId` (UI-210), and `serverMessage` / `serverField`.
+`RRV8.fetchErrorMessage` (sidebar.js) shows `serverMessage` as written, then
+`(HTTP <status>)` and `Reference: <id>`. Two exceptions keep their own copy: the AI
+gateway's 5xx, and a data-service 5xx `reason`, which the 5xx sentence quotes. With no
+sentence, each status has a plain fallback that names no endpoint. Tests:
+`Tools/test-refusal-sentence.js`.
 
 **Never `POST /shutdown` to a Services jar directly.** It stops the instance
 and nothing brings it back; the broker owns the JVM. Never a blanket

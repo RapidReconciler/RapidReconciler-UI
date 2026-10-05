@@ -4207,21 +4207,13 @@
           .then(function () { return new Promise(function () {}); });
       }
       if (!r.ok) {
-        // Surface the agent's JSON {reason} (e.g. "SQLServerAgent is not
-        // currently running") instead of a bare status code — admins get a
-        // fixable message, not "HTTP 502".
-        return r.text().then(function (t) {
-          var detail = '';
-          try { var j = JSON.parse(t); if (j && j.reason) detail = j.reason; } catch (e) {}
-          var err = new Error('HTTP ' + r.status + (detail ? ' — ' + detail : '') + ' on ' + url);
-          // UI-169: the NUMERIC status, not just the status baked into the message text.
-          // RRV8.fetchErrorMessage keys every one of its branches on `err.status` being a
-          // finite number; without this line it computed null and fell past 401, 403 and
-          // 404 to the generic tail, so the sentence that tells a reader their session
-          // expired could never fire from this page.
-          err.status = r.status;
-          // UI-210: the service's request id, quoted by RRV8.fetchErrorMessage.
-          err.requestId = r.headers && r.headers.get('X-Request-Id');
+        // UI-212: the shared reader (config.js RRDB.responseError) puts the agent's
+        // `reason` ("SQLServerAgent is not currently running") or VALC's `message`
+        // ("That database is not on your account.") in err.message, keeps the
+        // numeric status (UI-169: RRV8.fetchErrorMessage keys on it) and the request
+        // id (UI-210), and sends the URL to the console rather than the reader. This
+        // used to read only `reason` and build "HTTP <status> on <url>".
+        return window.RRDB.responseError(r, url).then(function (err) {
           _noteFetchFailure(area, err);
           throw err;
         });
@@ -5638,12 +5630,20 @@
       done();
       loadActivityFeed();   // the restart logs a fresh "Report engine started" — show it
     }).catch(function (err) {
-      // rrFetch puts VALC's sentence in err.message, or "HTTP <status>" when there was none.
-      var msg = String(err && err.message || err);
-      toast(/^HTTP \d+$/.test(msg) ? 'Restart request failed (' + msg + ').' : msg);
+      var msg = _restartErrText(err);
+      toast(msg);
       done();
       updateServiceCard();
     });
+  }
+  // UI-212. VALC's sentence ("The report engine didn't restart. Contact RR support.")
+  // through the one sink, which keeps the "Reference: <id>" ending. This used to test
+  // the message against /^HTTP \d+$/, which rrFetch's " on <url>" suffix defeated, so
+  // the toast showed the raw string with the URL in it.
+  function _restartErrText(err) {
+    return (window.RRV8 && RRV8.fetchErrorMessage)
+      ? RRV8.fetchErrorMessage('api/v1/tenant/services/restart', err)
+      : String((err && err.message) || err);
   }
 
   // Report Engine card: Restart opens an explain-first confirm (self-documents
