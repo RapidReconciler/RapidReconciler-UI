@@ -628,7 +628,10 @@ with `{ "database": "<active db name>" }`):
    up to 180 s. A broker below 2.6.0 is refused before anything is sent.
 
 **The answer is the outcome, not "requested".** Every status carries a
-`message` in the body, and that is what V8 toasts:
+`message` in the body. A refusal has the shape every tenant refusal has
+(see [Tenant refusals](#tenant-refusals-vlc-169) below), `{ "status", "error", "message" }`;
+a 200 is `{ "message" }`. ⚠ Home's `rrFetch` reads only `reason` from an error body,
+so today it toasts `HTTP <status> on <url>` instead of the sentence (UI-212):
 
 | Status | `message` (customer route) |
 |---|---|
@@ -639,9 +642,27 @@ with `{ "database": "<active db name>" }`):
 The operator route (`POST /api/v1/admin/services/restart`, VALC operators only)
 answers the same statuses with the technical sentence instead: the broker
 version and the Fleet Upgrades tab, the broker's own start error, and the new
-PID on success. Until VLC-155 the reason was thrown, Spring stripped it
-(`server.error.include-message` is `never`), and V8 showed
+PID on success, as `{ "message" }` alone. Until VLC-155 the reason was thrown,
+Spring stripped it (`server.error.include-message` is `never`), and V8 showed
 `Restart request failed: Conflict`.
+
+### Tenant refusals (VLC-169)
+
+Every refusal on `/api/v1/tenant/**` (a `ResponseStatusException` in VALC) answers its
+status with the reason in the body:
+
+```json
+{ "status": 400, "error": "Bad Request", "message": "cadenceDays must be 30, 60, or 90" }
+```
+
+`message` is a sentence written for the customer; it is absent only when VALC gave no
+reason, and then `error` is the status phrase. Read `j.message || j.error`. Before
+VLC-169 the body was Spring's `{timestamp, status, error, path}` with no `message`. An
+unexpected server error (500) still carries no `message`, by design: its text is internal.
+Operator and agent routes are unchanged. Pages that read the body today:
+`admin-complex-passwords.html`, `admin-data-service.html`. The rest (Home,
+`admin-users.html`, `admin-companies.html`, `inventory-transactions.html`) throw
+`HTTP <status> on <url>` without reading it (UI-212).
 
 **Never `POST /shutdown` to a Services jar directly.** It stops the instance
 and nothing brings it back; the broker owns the JVM. Never a blanket
