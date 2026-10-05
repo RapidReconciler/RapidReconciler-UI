@@ -107,6 +107,7 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <li data-target="post-release-prod" style="padding-left: 14px;"><a href="#post-release-prod" onclick="goAnchor('post-release-prod'); return false;">4a. Production deploy (JMS)</a></li>
 <li data-target="post-release-internal" style="padding-left: 14px;"><a href="#post-release-internal" onclick="goAnchor('post-release-internal'); return false;">4b. Internal deploy (retired)</a></li>
 <li data-target="post-release-broker" style="padding-left: 14px;"><a href="#post-release-broker" onclick="goAnchor('post-release-broker'); return false;">4c. V8 broker deploy (JMS)</a></li>
+<li data-target="post-release-ui" style="padding-left: 14px;"><a href="#post-release-ui" onclick="goAnchor('post-release-ui'); return false;">4d. The V8 UI release</a></li>
 <li data-target="prereleases"><a href="#prereleases" onclick="goAnchor('prereleases'); return false;">5. Pre-releases &amp; rollbacks</a></li>
 <li data-target="valc-mirror"><a href="#valc-mirror" onclick="goAnchor('valc-mirror'); return false;">6. VALC 2.0 parallel</a></li>
 <li data-target="troubleshooting"><a href="#troubleshooting" onclick="goAnchor('troubleshooting'); return false;">7. Troubleshooting</a></li>
@@ -293,6 +294,21 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <div class="callout important">
   <p><strong>Only a deploy moves a broker-run box.</strong> Importing a newer jar changes nothing on a database that already has a pin. A database that has never been pinned (every one when VALC 2.0 first applies V89, and any database added later) is pinned on its next publish to the newest import, which is what it would have been sent anyway. To roll one back, deploy the prior version to it; the rollback in &sect; 5 applies to broker-run boxes too.</p>
   <p>Until V89 (2026-09-30) every publish pinned the newest import for every database, and a keep-alive publish goes out every 60 seconds, so a release tagged on GitHub reached every broker-run box within minutes of the catalog sync.</p>
+</div>
+</section>
+
+<section id="post-release-ui">
+<h3>4d. The V8 UI release</h3>
+<p>The V8 app pages call Services, so the UI is a versioned component too. The knowledge base keeps publishing from <code>main</code> on GitHub Pages; the V8 surface is cut by tag in <code>RapidReconciler-UI</code>.</p>
+<ol>
+  <li><strong>Declare the floor.</strong> <code>v8-release.properties</code> at the repo root holds <code>min-services-version</code>: the oldest Services release every V8 page runs against. Raise it in the same PR as a UI change that needs an endpoint or field a newer Services release added. <code>none</code> is not accepted.</li>
+  <li><strong>Push a tag</strong> <code>ui-vX.Y.Z</code>. <code>release-v8-ui.yml</code> runs <code>.github/scripts/package_v8_release.py</code>, which starts from <code>login.html</code>, <code>sso-landing.html</code> and every <code>RRV8/*.html</code> and follows everything they load (scripts, stylesheets, fonts, images, and files a script fetches, such as the knowledge-base search index). It refuses to publish when the floor is missing or when a page loads a file that does not exist. <code>check-v8-release.yml</code> runs the same checks on every PR.</li>
+  <li><strong>The release carries three assets</strong>: <code>rapidreconciler-v8-ui-X.Y.Z.zip</code>, its <code>.sha256</code>, and <code>rapidreconciler-v8-ui-X.Y.Z.manifest.json</code> (version, commit, floor, every file with its SHA-256, and the links that stay on GitHub Pages). The body carries <code>RR-Min-Services-Version: &lt;v&gt;</code>, the same line shape the SSIS and database releases use.</li>
+  <li><strong>VALC 2.0 imports it</strong> as <code>component='ui'</code> on its five-minute catalog sweep. It refuses a release whose zip does not match its <code>.sha256</code>, or whose body and the manifest inside the zip disagree about the floor or do not state one. A manual upload of the zip reads the floor from that manifest.</li>
+  <li><strong>The floor is checked fleet-wide.</strong> One UI deployment serves every customer in an environment, each on its own Services. So a UI release is blocked while any active database there runs Services below its floor, or a Services version VALC cannot read. The Fleet Upgrades tab&rsquo;s <strong>V8 UI</strong> dropdown shows the result and names each database that blocks it; the same check is <code>GET /valc/deployment/ui-release-check?fileVersionId=&lt;id&gt;</code>.</li>
+</ol>
+<div class="callout note">
+  <p><strong>Nothing deploys the UI yet.</strong> The per-environment Web App that will serve a specific UI release instead of <code>main</code> is part of the QA environment build-out. Until then the release is cut, verified and checked, and GitHub Pages keeps serving <code>main</code>. When that deploy exists, a Services rollback below the deployed UI&rsquo;s floor will be refused the same way.</p>
 </div>
 </section>
 
