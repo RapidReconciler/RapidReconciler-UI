@@ -691,6 +691,56 @@ window.RRDB = (function () {
     return fetch(b + '/' + p, init);
   }
 
+  /* ------------------------------------------------------------------
+   * UI-212. The ONE reader of a failed response, for every page's rrFetch.
+   * Resolves to the Error the caller throws.
+   *
+   * Two servers put a sentence in the body, under different names:
+   *   - the data service: `reason` (JobsController, AdminResetController,
+   *     e.g. "SQLServerAgent is not currently running");
+   *   - VALC: `message`, on every refusal on /api/v1/tenant/** (VLC-169's
+   *     TenantRefusalAdvice answers {status, error, message}).
+   * `reason` is read first, then `message`. `error` is NOT read: on both
+   * servers it is the HTTP status word ("Forbidden"), which says nothing
+   * the status does not.
+   *
+   * The Error carries:
+   *   message        the sentence, or 'HTTP <status>' when there is none.
+   *                  NEVER the URL: several pages show err.message as it is,
+   *                  and before this a customer read
+   *                  "HTTP 403 on https://.../api/v1/tenant/...". The URL goes
+   *                  to the console, where support can still see it.
+   *   status         the numeric status; RRV8.fetchErrorMessage keys on it.
+   *   requestId      the service's X-Request-Id (UI-210).
+   *   serverMessage  the sentence, only when the body had one, and
+   *   serverField    which field it came from ('reason' or 'message'), so
+   *                  the sink can tell a data-service reason from VALC's.
+   * ------------------------------------------------------------------ */
+  function responseError(r, url) {
+    var st = r && r.status;
+    var rid = (r && r.headers && r.headers.get('X-Request-Id')) || null;
+    var body = (r && typeof r.text === 'function') ? r.text().catch(function () { return ''; }) : Promise.resolve('');
+    return body.then(function (t) {
+      var said = '', field = '';
+      try {
+        var j = JSON.parse(t);
+        if (j && typeof j === 'object') {
+          if (typeof j.reason === 'string' && j.reason.trim()) { said = j.reason.trim(); field = 'reason'; }
+          else if (typeof j.message === 'string' && j.message.trim()) { said = j.message.trim(); field = 'message'; }
+        }
+      } catch (_) { /* not JSON: an HTML error page or an empty body */ }
+      var e = new Error(said || ('HTTP ' + st));
+      e.status = st;
+      e.requestId = rid;
+      if (said) { e.serverMessage = said; e.serverField = field; }
+      try {
+        console.warn('[rrFetch] HTTP ' + st + ' on ' + url + (said ? ': ' + said : '') +
+                     (rid ? ' (request ' + rid + ')' : ''));
+      } catch (_) {}
+      return e;
+    });
+  }
+
   function setActive(n) {
     if (!n) return;
     try { localStorage.setItem('rrv8.activeDb', n); } catch (_) {}
@@ -713,7 +763,7 @@ window.RRDB = (function () {
 
   return { dbs: dbs, index: index, active: active, name: name, agentBase: agentBase,
            valcBase: valcBase, valcGap: valcGap, valcFetch: valcFetch, setActive: setActive,
-           notice: notice };
+           notice: notice, responseError: responseError };
 })();
 
 /*
@@ -4371,16 +4421,16 @@ window.RRV8 = window.RRV8 || {};
  * So: detect it, ROLL BACK the optimistic write, and reject with the server's
  * own reason — the guard sends "... requires the accountant grant" — so the
  * caller has something true to show.
+ *
+ * UI-212: the body is read by RRDB.responseError, the same reader every rrFetch
+ * uses, so the Error has the same shape (status, requestId, serverMessage). It
+ * used to read `j.message || j.error`, and `error` is the status word
+ * ("Forbidden"); a non-JSON body put up to 200 characters of it in the message.
  */
 window.RRV8 = window.RRV8 || {};
 window.RRV8._failGatedWrite = function (r, revert) {
-  return r.text().then(function (body) {
+  return window.RRDB.responseError(r, (r && r.url) || '(gated write)').then(function (e) {
     try { revert(); } catch (_) {}
-    var why = '';
-    try { var j = JSON.parse(body); why = j.message || j.error || ''; } catch (_) { why = String(body || '').slice(0, 200); }
-    var e = new Error(why || ('HTTP ' + r.status));
-    e.status = r.status;
-    e.requestId = r.headers && r.headers.get('X-Request-Id');   // UI-210
     throw e;
   });
 };

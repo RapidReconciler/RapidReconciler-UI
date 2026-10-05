@@ -2178,9 +2178,7 @@ ${adminSection}
   function _fetchTargetHost(area) {
     var a = String(area == null ? '' : area).replace(/^\/+/, '');
     try {
-      var vp = global.RR_VALC_PREFIXES || [];
-      var isValc = false;
-      for (var i = 0; i < vp.length; i++) { if (a.indexOf(vp[i]) === 0) { isValc = true; break; } }
+      var isValc = _isValcArea(a);
       // Both halves resolve through the SAME functions rrFetch uses, or this
       // label names a host the call was never aimed at. The valcBase half read
       // RR_CONFIG directly until UI-171; the testAgentBase tail was left behind
@@ -2193,6 +2191,13 @@ ${adminSection}
            (global.RRENV && global.RRENV.get && global.RRENV.get('testAgentBase')) || '');
       return base ? new URL(base).host : '';
     } catch (_) { return ''; }
+  }
+  // True when rrFetch sends this area to VALC (the same RR_VALC_PREFIXES table).
+  function _isValcArea(area) {
+    var a = String(area == null ? '' : area).replace(/^\/+/, '');
+    var vp = global.RR_VALC_PREFIXES || [];
+    for (var i = 0; i < vp.length; i++) { if (a.indexOf(vp[i]) === 0) return true; }
+    return false;
   }
 
   // The reason the SERVICE gave, or '' when the message is just the code
@@ -2288,6 +2293,20 @@ ${adminSection}
              'not change it. If you need what this panel shows, contact GSI support. ' +
              '(HTTP 403)';
     }
+    // UI-212. THE SERVER'S OWN SENTENCE, when the body carried one. Every page's
+    // rrFetch reads the body through RRDB.responseError (config.js), which puts the
+    // data service's `reason` or VALC's `message` in err.serverMessage. VALC writes
+    // every /api/v1/tenant/** refusal for the customer ("That database is not on
+    // your account.", "The report engine didn't restart. Contact RR support."), so it
+    // is shown as written, ahead of the generic 403/404 copy below, which has to
+    // guess. Two exceptions keep their own branches: the AI gateway's 5xx (its
+    // message is engineer-facing, see that branch) and the data service's 5xx
+    // reason, which the 5xx branch already quotes inside its remedy.
+    var said = (err && typeof err.serverMessage === 'string') ? err.serverMessage.trim() : '';
+    var aiGateway = ep.indexOf('api/v1/ai/') !== -1;
+    if (said && st !== null && !(st >= 500 && (aiGateway || err.serverField === 'reason'))) {
+      return said + (/[.!?]$/.test(said) ? '' : '.') + ' (HTTP ' + st + ')';
+    }
     if (st === 403) {
       return 'The data service refused this request, and this page cannot tell you ' +
              'which of two reasons applies. Either no sign-in credentials reached it, ' +
@@ -2348,6 +2367,15 @@ ${adminSection}
           'your session or your data is at fault, and the rest of the page is ' +
           'unaffected — contact GSI support if it keeps happening. (HTTP ' + st + ')';
     }
+    // UI-212. A 5xx from VALC with no sentence. The branch below names the data
+    // service and its log on the database's server, and neither is true here: the
+    // call went to GSI's sign-in service (valcGap's name for it), whose log the
+    // customer's IT department cannot read.
+    if (st !== null && st >= 500 && st <= 599 && _isValcArea(ep)) {
+      return 'The RapidReconciler sign-in service failed while handling this request. ' +
+             'Nothing about your session or your data is at fault — try again in a ' +
+             'few minutes, and contact GSI support if it keeps happening. (HTTP ' + st + ')';
+    }
     // 5xx — the service answered, from its own logic or the database, and
     // failed. Nothing about the reader's session is at fault.
     if (st !== null && st >= 500 && st <= 599) {
@@ -2369,12 +2397,24 @@ ${adminSection}
              'The service may not be running — ask your IT department to start it ' +
              'on this database’s server, then retry.';
     }
-    // Unrecognised. Make no claim about the cause and suggest no remedy: report
-    // the status and the raw message as they came back. An unknown code must
-    // never inherit a neighbouring case's treatment.
+    // Any other status. Make no claim about the cause beyond what the status
+    // itself says. An unknown code must never inherit a neighbouring case's
+    // treatment. UI-212: this used to return `raw`, which was
+    // "HTTP <status> on <full URL>" on most pages, so a customer read the request
+    // URL. The endpoint stays out of the sentence; RRDB.responseError logs it.
     if (st !== null) {
       var d = _serverDetail(raw, st);
-      return d ? ('HTTP ' + st + ' on ' + ep + '. ' + d) : raw;
+      if (d) return d + (/[.!?]$/.test(d) ? '' : '.') + ' (HTTP ' + st + ')';
+      if (st === 400) {
+        return 'The server could not accept this request. Check what you entered, ' +
+               'then try again. (HTTP 400)';
+      }
+      if (st === 409) {
+        return 'This conflicts with a change made somewhere else. Reload the page, ' +
+               'then try again. (HTTP 409)';
+      }
+      return 'The request did not complete. Try again, and if it keeps failing, ' +
+             'ask your RapidReconciler administrator. (HTTP ' + st + ')';
     }
     return raw || 'The request failed and reported no reason.';
   }
