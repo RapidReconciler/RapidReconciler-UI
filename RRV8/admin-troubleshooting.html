@@ -6,12 +6,17 @@
   One read (GET admin/troubleshooting on the active database's Services jar)
   answers "is RapidReconciler working, and if not, what do I tell IT?":
     - Connections: this computer to the server (measured by the read itself),
-      the server to its database, the server to GSI.
+      the server to its database, the server to GSI; and from UI-210, the
+      database server to JD Edwards, the agent service to GSI, and the days left
+      on the server's security certificate (left out when an older server does
+      not send them).
     - Data loads: the nightly refresh job, the last JD Edwards import (SSIS),
       the last reconciliation run (B to C) and its open errors.
     - Database server: SQL Server Agent, data-drive space, the refresh job.
   Plus "Download diagnostics": an audit-quality workbook with the technical
-  detail, for the customer's IT department.
+  detail, for the customer's IT department, including the end of the server's
+  own log (GET admin/troubleshooting/log). The foot shows the read's reference
+  (the X-Request-Id the server logged it under).
 
   VALC's Troubleshooting page shows GSI support the same database facts. The
   RULES are shared (the agent ports VALC's); the WORDS here are V8's: finance
@@ -166,6 +171,7 @@
         <div class="page-foot">
           <span id="js-foot-versions"></span>
           <span id="js-foot-checked"></span>
+          <span id="js-foot-ref" title="Quote this to your IT department: the server's log records this check under the same reference."></span>
           <span>Problem on someone else&rsquo;s computer? <a id="js-conn-check" href="../HelpDesk/connection-check.html" target="_blank" rel="noopener">Run the Connection Check from that computer</a></span>
         </div>
 
@@ -193,6 +199,7 @@
     if (contentType) h['Content-Type'] = contentType;
     return h;
   }
+  const _lastRequestId = {};
   function rrFetch(area, opts) {
     opts = opts || {};
     let base;
@@ -210,7 +217,10 @@
     const url = base + '/' + area + (opts.query ? '?' + new URLSearchParams(opts.query) : '');
     const init = { method: opts.method || 'GET', headers: prodHeaders(opts.body ? 'application/json;charset=UTF-8' : null), body: opts.body ? JSON.stringify(opts.body) : undefined };
     return fetch(url, init).then(async r => {
-      if (!r.ok) { let detail = 'HTTP ' + r.status; try { const j = await r.json(); if (j && (j.message || j.error)) detail = j.message || j.error; } catch (_) {} const e = new Error(detail); e.status = r.status; throw e; }
+      // UI-210: the id the service gave this request, kept for the page foot and the
+      // workbook. An older service sends none; then there is nothing to quote.
+      _lastRequestId[area] = (r.headers && r.headers.get('X-Request-Id')) || '';
+      if (!r.ok) { let detail = 'HTTP ' + r.status; try { const j = await r.json(); if (j && (j.message || j.error)) detail = j.message || j.error; } catch (_) {} const e = new Error(detail); e.status = r.status; e.requestId = r.headers && r.headers.get('X-Request-Id'); throw e; }
       return r.json().catch(err => err instanceof SyntaxError ? null : Promise.reject(err));
     });
   }
@@ -280,6 +290,8 @@
       const v = _data.versions || {};
       $('js-foot-versions').textContent = 'Services ' + (v.services || '—') + ' · Database ' + (v.database || '—');
       $('js-foot-checked').textContent = 'Checked ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      const rid = _lastRequestId['admin/troubleshooting'];
+      $('js-foot-ref').textContent = rid ? 'Reference ' + rid : '';
       $('js-download').disabled = false;
     }).catch(function (err) {
       // Two different failures, and they need different advice. With no HTTP status
@@ -316,16 +328,29 @@
     el.textContent = String(msg || '').replace(/&mdash;/g, '—');
     el.classList.toggle('is-visible', !!msg);
   }
+  // UI-210: the end of the service's own log, fetched when the workbook is made (not
+  // with the checks: it is for IT, and it is the largest read on the page). A failure
+  // or an older service becomes a line in the sheet, never a failed download.
   function download() {
     exportStatus('');
     if (!_data) { exportStatus('Run the checks first.'); return; }
     if (!window.XLSX || typeof window.buildAuditSheet !== 'function') { exportStatus('The Excel library is still loading. Try again in a moment.'); return; }
+    $('js-download').disabled = true;
+    rrFetch('admin/troubleshooting/log')
+      .then(function (t) { return t || { available: false, reason: 'The server returned nothing.' }; },
+            function (err) { return { available: false, reason: fetchErrText('admin/troubleshooting/log', err) }; })
+      .then(buildWorkbook)
+      .finally(function () { $('js-download').disabled = false; });
+  }
+  function buildWorkbook(logTail) {
     window.RRV8.runExport('Diagnostics', exportStatus, function () {
       const d = _data, v = d.versions || {};
       const db = d.database || (activeDb() && activeDb().n) || '';
+      const rid = _lastRequestId['admin/troubleshooting'];
       const head = [
         'RapidReconciler diagnostics' + (db ? ' — ' + db : ''),
-        'Checked ' + (d.checkedAt || new Date().toISOString()) + ' · Services ' + (v.services || '—') + ' · Database ' + (v.database || '—'),
+        'Checked ' + (d.checkedAt || new Date().toISOString()) + ' · Services ' + (v.services || '—') + ' · Database ' + (v.database || '—')
+          + (rid ? ' · Reference ' + rid : ''),
         'For your IT department: one row per check, worst first, with the technical detail.'
       ];
       const order = _rows.map((r, i) => ({ r, i })).sort((a, b) => (RANK[a.r.state] - RANK[b.r.state]) || (a.i - b.i));
@@ -372,6 +397,22 @@
         rows: (s.errors || []).map(m => [m]),
         totalRow: [(s.errors || []).length + ' error message' + ((s.errors || []).length === 1 ? '' : 's')]
       }), 'Import errors');
+
+      const lt = logTail || {}, lines = Array.isArray(lt.lines) ? lt.lines : [];
+      XLSX.utils.book_append_sheet(wb, window.buildAuditSheet({
+        titleLines: [
+          'Service log, newest last',
+          lt.available
+            ? (lt.file || '') + ' · ' + lines.length + ' line' + (lines.length === 1 ? '' : 's') + (lt.truncated ? ' (the end of the file only)' : '')
+              + (lt.modifiedAt ? ' · last written ' + lt.modifiedAt : '')
+            : 'Not included: ' + (lt.reason || 'the server did not return it.'),
+          'Each line inside a request carries that request’s reference in square brackets.'
+        ],
+        columns: [{ label: 'Line' }],
+        // Excel holds at most 32,767 characters in a cell.
+        rows: lines.map(s => [String(s).slice(0, 32000)]),
+        totalRow: [lines.length + ' line' + (lines.length === 1 ? '' : 's')]
+      }), 'Service log');
 
       return window.RRV8.saveWorkbook(wb, window.RRV8.exportName({ surface: 'Diagnostics' }), exportStatus, 'Diagnostics');
     });
