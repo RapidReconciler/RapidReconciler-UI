@@ -1,0 +1,65 @@
+name: Worklist tools self-tests
+
+# The five worklist tools under Tools/ each carry a --self-test with mutation
+# arms, and until HK-35 no workflow ran any of them. worklist-close.py and the
+# table-check hook both import worklist_bookkeeping.py, which imports
+# parse_chunks/chunk_errors from worklist-to-issues.py, so a change to one could
+# break the closer or the hook with nothing going red. This runs all five on
+# every PR.
+#
+# Every self-test works on scratch files or injected fakes, never on
+# C:/source/repos/WORKLIST.md and never on live GitHub. Measured 2026-10-05: the
+# real WORKLIST, WORKLIST-DONE, WORKLIST-LOG, HANDOFF, worklist-issues.json, the
+# backup folder and the sync log hashed the same before and after all five ran.
+#
+# WINDOWS, on purpose. The tools run on the Windows dev box. worklist-claim.py's
+# self-test expects C:\x and C:/x to name the same worktree, which
+# os.path.normpath/normcase only make true on Windows, and worklist-close.py's
+# line-ending mutation arm runs only where os.linesep is CRLF (it prints
+# "skipped" anywhere else). On ubuntu one test would fail for a reason the box
+# never sees and one arm would not run.
+#
+# ⚠ NO `paths:` FILTER, on purpose: a filtered workflow does not REPORT on a PR it
+# skips, so it can never be a required check (the lesson check-v8-callsites.yml,
+# UI #536, and check-js-syntax.yml paid for).
+
+on:
+  push:
+    branches: [main, Dev]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  selftests:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      # Each step runs even when an earlier one failed, so one run names every
+      # tool that is broken rather than only the first.
+      - name: worklist-close.py --self-test
+        if: ${{ !cancelled() }}
+        run: python Tools/worklist-close.py --self-test
+
+      - name: worklist-table-check.py --self-test
+        if: ${{ !cancelled() }}
+        run: python Tools/worklist-table-check.py --self-test
+
+      - name: worklist-to-issues.py --self-test
+        if: ${{ !cancelled() }}
+        run: python Tools/worklist-to-issues.py --self-test
+
+      - name: worklist-claim.py --self-test
+        if: ${{ !cancelled() }}
+        run: python Tools/worklist-claim.py --self-test
+
+      - name: worklist-issues-on-session-delete.py --self-test
+        if: ${{ !cancelled() }}
+        run: python Tools/worklist-issues-on-session-delete.py --self-test
