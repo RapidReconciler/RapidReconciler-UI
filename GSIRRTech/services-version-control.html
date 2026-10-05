@@ -181,7 +181,7 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
   <span class="step-num">2</span>
   <h3>Confirm the working tree is clean</h3>
   <p>Open <strong>View &rarr; Git Changes</strong> (<kbd>Ctrl+0,G</kbd>). The Changes list should be empty &mdash; no pending stages, no unsaved files. Outgoing commits should be zero (Dev synced with origin).</p>
-  <p>Run tests in <strong>Test &rarr; Test Explorer</strong> or via the integrated terminal (<strong>View &rarr; Terminal</strong>, then <code>mvn -B test</code>). Don&rsquo;t cut the tag if tests are red.</p>
+  <p>Run tests in <strong>Test &rarr; Test Explorer</strong> or via the integrated terminal (<strong>View &rarr; Terminal</strong>, then <code>mvn -B test</code>). Don&rsquo;t cut the tag if tests are red. The release workflow runs the suite again and refuses to publish on a red result (&sect; 3).</p>
 </div>
 
 <div class="step">
@@ -226,15 +226,16 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 
 <section id="action">
 <h2>3. What the Action does</h2>
-<p>The release workflow at <code>.github/workflows/release.yml</code> runs on every <code>v*</code> tag push. Step by step:</p>
+<p>The release workflow at <code>.github/workflows/release.yml</code> runs on every <code>v*</code> tag push, and on every merge to <code>main</code> that touches the Services source (through <code>auto-release.yml</code>). Step by step:</p>
 <div class="table-wrap"><table>
 <thead><tr><th>Step</th><th>What it does</th></tr></thead>
 <tbody>
+<tr><td><strong>Gates</strong></td><td>Two jobs run first, on the same commit the jar is built from. If either fails, nothing is built or published. <code>tests</code> (<code>test.yml</code>) runs <code>mvn -B verify</code>, the full test suite. Its job summary lists the tests CI cannot run: the keystore tests need <code>RR_CERT_BOOTSTRAP_PASSWORD</code> and the SQL batch tests need <code>RR_TEST_SQL_URL</code>. <code>verify-config</code> refuses a jar that would skip JWT signature verification. The same <code>tests</code> check also runs on every pull request, but GitHub cannot be set to block a merge on it for this private repository on its current plan. A red PR can still merge. Its jar just never publishes.</td></tr>
 <tr><td><strong>Checkout</strong></td><td>Pulls the tagged commit (not <code>main</code> / <code>Dev</code> HEAD).</td></tr>
 <tr><td><strong>Setup JDK 25</strong></td><td>Temurin distribution. The build runs on 25, but the Services jar is compiled for Java 21, which stays its runtime floor: on a V8 customer box the V8 broker launches it on the one Java 21 JRE the V8 installer bundles, the same runtime the broker itself runs on. Maven cache is restored from the previous run.</td></tr>
 <tr><td><strong>Derive version</strong></td><td>Strips the leading <code>v</code> from <code>refs/tags/v0.2.0</code> &rarr; <code>0.2.0</code>. Stored as a step output.</td></tr>
 <tr><td><strong>Set Maven version</strong></td><td><code>mvn versions:set -DnewVersion=0.2.0 -DgenerateBackupPoms=false</code> &mdash; rewrites the <code>&lt;version&gt;</code> in <code>pom.xml</code> in place. Not committed; only used for this build.</td></tr>
-<tr><td><strong>Build</strong></td><td><code>mvn -B -DskipTests package</code>. Tests already ran before tagging (Step 1 above); skipping here keeps the release fast.</td></tr>
+<tr><td><strong>Build</strong></td><td><code>mvn -B -DskipTests package</code>. The tests already ran on this commit in the <code>tests</code> gate above, so they are not run a second time here.</td></tr>
 <tr><td><strong>Check the broker requirement</strong></td><td>Refuses to publish a jar whose <code>MANIFEST.MF</code> has no valid <code>RR-Min-Broker-Version</code>: the oldest V8 broker the jar runs under, set by the pom property <code>rr.min-broker-version</code> (2.1.1 today, the first broker that passes the database uuid). VALC reads it at import and lists the release only for customers whose broker meets it. Raise the property in the same change that makes the jar depend on a newer broker.</td></tr>
 <tr><td><strong>Check the database requirement</strong></td><td>Refuses to publish a jar whose <code>MANIFEST.MF</code> has no valid <code>RR-Min-Database-Version</code>: the oldest RR database release the jar runs against, set by the pom property <code>rr.min-database-version</code> (<code>8.0-beta.132</code> today, the release that created <code>usp8_job_status</code> and <code>usp8_job_history</code>). VALC reads it at import, lists only database releases at or above it beside this release on the Fleet Upgrades tab, and refuses to deploy the jar to an older database. Raise the property in the same change that makes the jar call a newer database object.</td></tr>
 <tr><td><strong>Publish</strong></td><td><code>softprops/action-gh-release@v2</code> opens a GitHub Release named after the tag, attaches <code>target/client-services-0.2.0.jar</code>, and auto-generates release notes from PRs merged since the last tag.</td></tr>
