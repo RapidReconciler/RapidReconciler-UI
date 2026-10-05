@@ -1,0 +1,76 @@
+name: Release V8 UI
+
+# UI-211. The knowledge base stays continuous on GitHub Pages (main), but the V8 app
+# surface is a versioned component like the Services jar, the dacpac and the ispac.
+# Push a tag ui-vX.Y.Z and this attaches three assets to a GitHub Release:
+#
+#   rapidreconciler-v8-ui-X.Y.Z.zip            the V8 surface, measured from its pages
+#   rapidreconciler-v8-ui-X.Y.Z.zip.sha256     what VALC checks the zip against
+#   rapidreconciler-v8-ui-X.Y.Z.manifest.json  version, commit, floor, every file + SHA-256
+#
+# The body carries "RR-Min-Services-Version: <v>" from v8-release.properties, the
+# same shape release-ssis.yml and release-dacpac.yml publish their floors in. VALC's
+# GitHubReleaseService.syncUiReleases() imports the zip as component 'ui' and checks
+# the floor against EVERY active database's Services, because one UI deployment
+# serves the whole environment. The packager REFUSES without a floor ("none" too).
+#
+# What is in the zip is decided by .github/scripts/package_v8_release.py, which follows
+# every load from login.html, sso-landing.html and RRV8/*.html; a page that loads a
+# missing file refuses the release. check-v8-release.yml runs its tests on every PR.
+#
+# Deploying a release to the per-environment Web App waits on QAv8 (UI-211 row).
+
+on:
+  push:
+    tags:
+      - 'ui-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Packager tests
+        run: python .github/scripts/test_package_v8_release.py
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#ui-v}"   # ui-v8.0.0 -> 8.0.0 (matches syncUiReleases)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Resolved V8 UI version: $version"
+
+      - name: Package the V8 surface (refuses without a Services floor)
+        id: pkg
+        shell: bash
+        run: |
+          set -euo pipefail
+          python .github/scripts/package_v8_release.py \
+            --version "${{ steps.ver.outputs.version }}" \
+            --out dist \
+            --commit "$GITHUB_SHA" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Create release with the zip, its SHA-256 and the manifest
+        uses: softprops/action-gh-release@v2
+        with:
+          name: V8 UI ${{ steps.ver.outputs.version }}
+          body: |
+            RapidReconciler V8 UI **${{ steps.ver.outputs.version }}** (tag `${{ github.ref_name }}`, commit `${{ github.sha }}`).
+
+            Artifact: `rapidreconciler-v8-ui-${{ steps.ver.outputs.version }}.zip`, ${{ steps.pkg.outputs.file_count }} files measured from `login.html`, `sso-landing.html` and `RRV8/*.html` (SHA-256 `${{ steps.pkg.outputs.zip_sha256 }}`). The manifest lists every file with its SHA-256, and ${{ steps.pkg.outputs.outside_count }} links to pages that stay on GitHub Pages. VALC catalogs it into `file_versions` (`component='ui'`).
+
+            RR-Min-Services-Version: ${{ steps.pkg.outputs.floor }}
+          files: |
+            ${{ steps.pkg.outputs.zip }}
+            ${{ steps.pkg.outputs.sha256 }}
+            ${{ steps.pkg.outputs.manifest }}
