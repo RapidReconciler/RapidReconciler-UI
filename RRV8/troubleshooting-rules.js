@@ -112,8 +112,10 @@
       { area: 'Connections', key: 'browser', label: 'This computer to the server', state: 'ok',
         fact: 'Reached the RapidReconciler server in ' + ms + ' ms.', todo: '', tech: 'Browser round trip for this read: ' + ms + ' ms.' },
       rowFromCheck(data, 'Connections', 'sql.reachable', 'Server to its database', function (state) {
-        return state === 'ok' ? { fact: 'Connected.' }
-          : { todo: 'Ask ' + IT + ' to check that SQL Server is running on the database server and accepts connections from the RapidReconciler server.' };
+        if (state === 'ok') return { fact: 'Connected.' };
+        // UI-213: amber is a busy database (every connection in use), not a stopped one.
+        if (state === 'warn') return { todo: 'Run the checks again in a few minutes. If this stays amber, give the downloaded diagnostics to ' + IT + '.' };
+        return { todo: 'Ask ' + IT + ' to check that SQL Server is running on the database server and accepts connections from the RapidReconciler server.' };
       }),
       rowFromCheck(data, 'Connections', 'valc.reachable', 'Server to GSI', function (state) {
         if (state === 'ok') return { fact: 'Connected to GSI’s sign-in and licensing service.' };
