@@ -121,6 +121,9 @@ const FAILURES = [
   withCheck(DEMO1, 'sql.disk_free_mb', 'fail', '1,900 MB free of 523,246 MB on F:\\. A data refresh can stop part-way at this level.'),
   withCheck(DEMO1, 'valc.reachable', 'fail', 'Resolved rrvalc.getgsi.com -> 10.0.0.4 but couldn\u2019t connect on port 443 (gave up after 6001 ms).'),
   withCheck(DEMO1, 'valc.reachable', 'warning', 'Reached GSI at rrvalc.getgsi.com -> 10.0.0.4, but it returned a server error (HTTP 502, 80 ms).'),
+  // UI-213: the agent's slow-answer verdicts are amber.
+  withCheck(DEMO1, 'valc.reachable', 'warning', 'This server connected to GSI at rrvalc.getgsi.com -> 10.0.0.4, but GSI did not answer within 6 s (6012 ms).'),
+  withCheck(DEMO1, 'sql.reachable', 'warning', 'The database is busy: every connection this server holds to it was in use, and none came free in time.'),
   SCHEDULED_FAILED,
   OPEN_ERRORS,
   Object.assign(clone(DEMO1), { ssis: { readable: true, executionId: 10500, status: 'Failed', startTime: '2026-10-02 01:00:00', endTime: '2026-10-02 01:04:00', durationSeconds: 240, errors: ['Login timeout expired'] } }),
@@ -202,6 +205,18 @@ const ASSERTIONS = {
     const present = NEW_KEYS.filter(k => rowOf(rows, k));
     return present.length ? 'rows shown for checks an older server never sends: ' + present.join(', ') : null;
   },
+  aSlowAnswerIsAmberAndSaysTryAgain: TS => {
+    // UI-213: one slow answer turned Home's card red with firewall / SQL-is-down advice.
+    for (const key of ['valc.reachable', 'sql.reachable']) {
+      const d = FAILURES.find(f => (f.checks.find(c => c.name === key) || {}).status === 'warning'
+        && /did not answer|is busy/.test(f.checks.find(c => c.name === key).text));
+      const r = rowOf(TS.rows(d, 40), key);
+      if (r.state !== 'warn') return key + ' slow answer read ' + r.state;
+      if (!/run the checks again/i.test(r.todo)) return key + ' slow answer advice: ' + r.todo;
+      if (/allow outbound|SQL Server is running/i.test(r.todo)) return key + ' slow answer gets outage advice: ' + r.todo;
+    }
+    return null;
+  },
   aMissingCheckIsUnknownNotOk: TS => {
     const older = FAILURES[FAILURES.length - 1];
     const r = rowOf(TS.rows(older, 40), 'sql.agent_service');
@@ -254,7 +269,10 @@ const MUTATIONS = [
     red: ['newLegsAreJudged'] },
   { name: 'treat a missing check as passing',
     find: "state: 'unknown', fact: 'This check did not run.'", replace: "state: 'ok', fact: 'This check did not run.'",
-    red: ['aMissingCheckIsUnknownNotOk'] }
+    red: ['aMissingCheckIsUnknownNotOk'] },
+  { name: 'a busy database gets the SQL-is-down advice again (UI-213)',
+    find: "if (state === 'warn') return { todo: 'Run the checks again", replace: "if (false) return { todo: 'Run the checks again",
+    red: ['aSlowAnswerIsAmberAndSaysTryAgain'] }
 ];
 
 for (const m of MUTATIONS) {
