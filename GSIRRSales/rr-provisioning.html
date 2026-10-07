@@ -1214,6 +1214,13 @@
         <li>A sysadmin-level SQL install account &mdash; either a SQL login that is a member of the <code>sysadmin</code> server role, or a Windows account with sysadmin rights on the instance. The SQL Server <em>service</em> account itself does not serve as a connection credential; a separate login or Windows account is needed to connect and run the install.</li>
       </ul>
 
+      <h3>Checks That Run on Your Own Server</h3>
+      <p>Two kinds of check that GSI runs from its control plane do not use the install-window access. GSI sends them through the RapidReconciler agent service on your application server, and they run inside your network:</p>
+      <ul>
+        <li><strong>The JD Edwards connection test</strong> and the reads of your JD Edwards decimal and line-type settings run on the SQL Server that hosts the RapidReconciler database (for a JD Edwards source on SQL Server). Each one is a short-lived SQL Server Agent job that runs under the <code>RapidReconciler SSIS</code> proxy and is removed when it finishes. It connects to JD Edwards from the database server, under the same Windows account the data refresh uses.</li>
+        <li><strong>The list of RapidReconciler databases on a server</strong>, and the version of each, are read as <code>rruser</code> through a RapidReconciler database already installed on that server.</li>
+      </ul>
+
       <div class="callout info">
         <div class="callout-label">Other ways to run the install</div>
         <p>If your DBA prefers to review or run the deployment themselves rather than have GSI connect during the window, that is fully supported &mdash; see <strong>Security Posture &rarr; Installing on a Shared Production Server</strong> for the three available options.</p>
@@ -1279,16 +1286,17 @@
       <h4>Availability Group (AG)</h4>
       <p>An AG target has several real differences from a standalone install:</p>
       <ul>
-        <li><strong>Connect to the listener.</strong> The install connects to the AG listener, not a replica directly. For a multi-subnet AG, use <code>MultiSubnetFailover=True</code> on the connection.</li>
-        <li><strong>FULL recovery, not SIMPLE.</strong> A database must be in <code>FULL</code> recovery to join an AG, so an AG-targeted RapidReconciler database is created in <code>FULL</code> recovery.</li>
+        <li><strong>Connect to the listener.</strong> The install connects to the AG listener, not a replica directly. If the AG spans more than one subnet, say so during installation prep: RapidReconciler's database connections do not set <code>MultiSubnetFailover</code>, so GSI and your DBA agree how the connection reaches the listener before the install window.</li>
+        <li><strong>Switch to FULL recovery before the database joins.</strong> The install creates every RapidReconciler database in <code>SIMPLE</code> recovery, whatever the target. A database must be in <code>FULL</code> recovery to join an AG, so your DBA changes the recovery model after the install and before adding the database to the AG.</li>
         <li><strong>The database starts on the primary only.</strong> <code>CREATE DATABASE</code> lands on the primary replica and is not HA-protected until it is added to the AG &mdash; back up, restore <code>WITH NORECOVERY</code>, and join on each secondary. This is a DBA task.</li>
         <li><strong>The login must exist on every replica with the same SID.</strong> Logins live in <code>master</code> and are not replicated by the AG (only the database user is). The <code>rruser</code> login must be created on every replica with the <em>same SID</em>; otherwise the database user is orphaned after a failover.</li>
         <li><strong>msdb roles and the Agent job are not replicated either.</strong> The <code>msdb</code> role memberships and the SQL Agent refresh job must be created on every replica, ideally with failover-aware logic (for example, gating execution on <code>sys.fn_hadr_is_primary_replica</code>).</li>
+        <li><strong>The SSIS proxy is per instance too.</strong> Install Script 4 creates the <code>RapidReconciler SSIS</code> credential and SQL Agent proxy, which live in <code>master</code> and <code>msdb</code>. Run Script 4 on every replica with the same Windows account.</li>
       </ul>
 
       <div class="callout info">
         <div class="callout-label">Recommended division of labor for an AG</div>
-        <p>GSI creates and deploys the RapidReconciler database and schema on the primary replica (in <code>FULL</code> recovery). Your DBA then adds the database to the AG and replicates the <code>rruser</code> login (same SID) and the SQL Agent job to the secondaries. This keeps the HA-sensitive steps in the hands of the team that owns the cluster.</p>
+        <p>GSI creates and deploys the RapidReconciler database and schema on the primary replica. Your DBA then switches it to <code>FULL</code> recovery, adds it to the AG, and replicates the <code>rruser</code> login (same SID), Script 4 and the SQL Agent job to the secondaries. The steps that affect high availability stay with the team that owns the cluster.</p>
       </div>
 
       <h2>Application Server</h2>
@@ -1613,7 +1621,7 @@
 
       <div class="callout">
         <div class="callout-label">Outbound only</div>
-        <p>The external connection from the application server to GSI hosts is outbound HTTPS on port 443 only. No inbound access from GSI is required, and no exception needs to be made on your perimeter firewall for inbound traffic.</p>
+        <p>The application server's connections to GSI hosts are outbound only: HTTPS on port 443, plus the JMS port listed above. The running application needs no inbound access from GSI and no inbound exception on your perimeter firewall. The one exception is the temporary access to your SQL Server for the scheduled database install window, described under <strong>Architecture &rarr; How the Database Install Runs</strong>.</p>
       </div>
 
       <h2>Cross-Server Connectivity</h2>
@@ -1732,7 +1740,7 @@
       <ul>
         <li>Database server inbound 1433 should be scoped to the application server's static IP (and the SSIS server's static IP in Configuration 3). Block all other sources.</li>
         <li>Application server inbound HTTPS should be scoped to the user network range that will access RapidReconciler.</li>
-        <li>The outbound connection from the application server to GSI hosts uses port 443 and is outbound-only — no inbound exception is required.</li>
+        <li>The connections from the application server to GSI hosts use port 443 and the JMS port, outbound only. No inbound exception is required, apart from the temporary database install window.</li>
       </ul>
 
       <h2>Authentication Between Servers</h2>
