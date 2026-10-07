@@ -1457,7 +1457,7 @@
         <tbody>
           <tr><td>Customer IT</td><td>Server provisioning, OS install, SQL Server install, source platform driver installation on the SSIS server, network and firewall configuration, antivirus exclusions, gathering JDE connection details. <strong>For the database install window:</strong> provide temporary network access to the SQL Server from GSI, and a sysadmin-level SQL install account &mdash; either a SQL login in the <code>sysadmin</code> server role or a Windows account with <code>sysadmin</code> rights. (The SQL Server service account itself does not count.) <strong>Integration Services Catalog:</strong> enable CLR integration, create the <strong>SSISDB catalog</strong> (and <strong>back up its master key</strong>), and create a Windows account for RapidReconciler's SSIS steps, then have a sysadmin run GSI's install Script 4 with it &mdash; see the callout below.</td></tr>
           <tr><td>JDE Owner</td><td>Provide the database server name <strong>and</strong> IP address, credentials, server type, and table qualifier.</td></tr>
-          <tr><td>GSI</td><td><strong>Database install:</strong> GSI installs the RapidReconciler database <em>remotely</em>, connecting to your SQL Server during a scheduled maintenance window. The sequence is: create the database, publish the RapidReconciler V8 schema, create the <code>rruser</code> SQL login the application uses, and register the database with GSI. GSI also handles SSIS package deployment, application install and configuration, an end-to-end smoke test, and the post-install handoff.</td></tr>
+          <tr><td>GSI</td><td><strong>Database install:</strong> GSI installs the RapidReconciler database <em>remotely</em>, connecting to your SQL Server during a scheduled maintenance window. The sequence is: create the database, publish the RapidReconciler V8 schema, create the <code>rruser</code> SQL login the application uses, and register the database with GSI. Every later upgrade of the RapidReconciler V8 database schema connects the same way and needs the same temporary access. GSI&rsquo;s JD Edwards connection test does not use that access: it is sent through the RapidReconciler agent service on your application server and runs on your SQL Server, under the Windows account you set up for Script 4. GSI also handles SSIS package deployment, application install and configuration, an end-to-end smoke test, and the post-install handoff.</td></tr>
         </tbody>
       </table>
 
@@ -1697,6 +1697,7 @@
       <h1>JD Edwards Source Platform</h1>
       <p>Identify the database platform your JD Edwards system runs on. Integration Services connects directly to that platform, so the right driver software must be installed on the server that will run SSIS — the database server in Configurations 1 and 2, or the dedicated SSIS server in Configuration 3.</p>
       <p>Your selection drives which driver guidance is shown below, which item appears in the pre-install checklist, and which value is pre-filled in the JDE submission form.</p>
+      <p>The platform changes only two things: the driver installed on the server that runs SSIS, and the connection string GSI sets up from the JDE connection details you send. The install, the nightly load and RapidReconciler itself are the same for all three.</p>
 
       <div class="diamond-divider"><span class="diamond"></span></div>
 
@@ -1871,7 +1872,7 @@
           <tr><td>RAM</td><td>16 GB minimum</td></tr>
           <tr><td>Edition</td><td>Standard or higher</td></tr>
           <tr><td>Authentication</td><td>Mixed mode</td></tr>
-          <tr><td>Initial data file size</td><td>20 GB</td></tr>
+          <tr><td>Initial data file size</td><td>The install creates a 5 GB data file that grows automatically; have 20 GB free for it</td></tr>
           <tr><td>Initial log file size</td><td>10 GB</td></tr>
         </tbody>
       </table>
@@ -1915,7 +1916,7 @@
       </ul>
       <div class="callout info">
         <div class="callout-label">Why this matters for an Availability Group</div>
-        <p>An AG target is set up a little differently. GSI creates the database in <strong>FULL recovery</strong>, then your DBA adds it to the Availability Group so it replicates to the secondaries. The <code>rruser</code> login and the data-refresh job also need to exist on each replica, so they continue to work after a failover. Knowing it&rsquo;s an AG up front lets GSI plan these steps with your DBA during the install window.</p>
+        <p>An AG target is set up a little differently. GSI creates the database on the primary replica in <strong>SIMPLE recovery</strong>, as every RapidReconciler install does. Your DBA then switches it to <strong>FULL recovery</strong> and adds it to the Availability Group so it replicates to the secondaries. The <code>rruser</code> login (with the same SID), install Script 4 and the data-refresh job also need to exist on each replica, so they keep working after a failover. If the AG spans more than one subnet, tell GSI: RapidReconciler&rsquo;s database connections do not set <code>MultiSubnetFailover</code>. Knowing it&rsquo;s an AG up front lets GSI plan these steps with your DBA before the install window.</p>
       </div>
 
       <h3>Network Information to Note</h3>
@@ -2063,7 +2064,7 @@
         <li class="spec-row"><span class="spec-key">UAC / Elevation</span><span class="spec-val">User Account Control is supported. The install meeting expects the SQL Server and SSIS sessions to be launched with elevation (Run as administrator).</span></li>
         <li class="spec-row"><span class="spec-key">SQL Server Service Account</span><span class="spec-val">A dedicated AD or local service account is recommended for the SQL Server service. Set the password not to expire, or document the rotation procedure with GSI.</span></li>
         <li class="spec-row"><span class="spec-key">Antivirus Exclusions</span><span class="spec-val">Per Microsoft guidance, exclude SQL Server data and log files (<code>.mdf</code>, <code>.ldf</code>, <code>.ndf</code>) and the SQL Server backup folder from real-time antivirus scanning. Without exclusions, performance degrades and SQL Server can fail under load.</span></li>
-        <li class="spec-row"><span class="spec-key">Outbound to GSI</span><span class="spec-val">The endpoint list, the JMS port change, and the connectivity tests live on the <a href="javascript:void(0)" onclick="showView('topic-firewall')">Firewall &amp; DNS</a> page. The connection is outbound only; no inbound access from GSI is required.</span></li>
+        <li class="spec-row"><span class="spec-key">Outbound to GSI</span><span class="spec-val">The endpoint list, the JMS port change, and the connectivity tests live on the <a href="javascript:void(0)" onclick="showView('topic-firewall')">Firewall &amp; DNS</a> page. The connection is outbound only; the running application needs no inbound access from GSI. The one exception is the temporary access to your SQL Server for the database install window and each schema upgrade (see <a href="javascript:void(0)" onclick="showView('topic-overview')">Who Does What</a>).</span></li>
       </ul>
 
       <div class="topo-conditional" data-topology="1">
@@ -2121,7 +2122,7 @@
     <!-- ============ TOPIC: FIREWALL & DNS ============ -->
     <section id="topic-firewall" class="view">
       <h1>Outbound Firewall &amp; DNS Requirements</h1>
-      <p>RapidReconciler&rsquo;s application server talks to a small set of GSI-hosted endpoints. If your organization restricts outbound network traffic, the rules on this page have to be in place before the install meeting. Every connection listed here is <strong>outbound only</strong> &mdash; GSI does not initiate a connection into your network.</p>
+      <p>RapidReconciler&rsquo;s application server talks to a small set of GSI-hosted endpoints. If your organization restricts outbound network traffic, the rules on this page have to be in place before the install meeting. Every connection listed here is <strong>outbound only</strong>. GSI does not initiate a connection into your network, apart from the temporary access to your SQL Server for the database install window and for each schema upgrade.</p>
       <p>Apply the rules on whichever server hosts the RapidReconciler application services: the dedicated RR server in Configuration 1, or the application server in Configurations 2 and 3.</p>
 
       <div class="diamond-divider"><span class="diamond"></span></div>
@@ -2161,8 +2162,15 @@
             <td>HTTPS / TCP</td>
             <td>Single sign-on customers only. Skip it if you do not use GSI SSO.</td>
           </tr>
+          <tr>
+            <td>RapidReconciler V8 messaging host (GSI sends you the name)</td>
+            <td>GSI sends you the port</td>
+            <td>TCP</td>
+            <td>RapidReconciler V8 installs. A rule for port 8002 does not cover it, even one written by IP address.</td>
+          </tr>
         </tbody>
       </table>
+      <p>If RapidReconciler V7 already runs on the application server and you are adding V8 beside it, keep the existing rules and add the V8 messaging rule. Both versions can use the same RapidReconciler URL; only the ports differ.</p>
 
       <!-- ⚠ NO id ON THIS HEADING, DELIBERATELY. This page maps a URL hash to a
            VIEW, not to an element: the DOMContentLoaded / popstate handlers run
