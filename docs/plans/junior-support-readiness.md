@@ -55,10 +55,15 @@ Troubleshooting verdict with what it means and what to do, plus the V8-to-VALC m
 (agent services, clients grid, database unknown/stopped, post-migration login) name the V8 service and read
 the log through Step 2.
 
-Customer-facing (open for the owner's review): two new scenarios
-(`scenario-error-reference-number`, `scenario-admin-troubleshooting-amber-red`), updates to the login,
-stale-data and database-offline scenarios, `how-to-analyze-logs.html`, the Log Analyzer's mismatched runbook
-link, and both browse drawers.
+Customer-facing (UI #778, owner ruling 2026-10-07): two new scenarios
+(`scenario-error-reference-number`, `scenario-admin-troubleshooting-amber-red`) that end with the IT hand-off
+card only, updates to the login, stale-data and database-offline scenarios, `how-to-analyze-logs.html`, and the
+Log Analyzer's mismatched runbook link. Scenario pages stay out of the "Browse all documents" drawers; readers
+find them through Help Desk search and the scenarios list (CLAUDE.md now says so).
+
+Install docs (UI #779, owner rulings 2026-10-07): the AG recovery model as built, every schema upgrade needing
+the same temporary SQL access as the install, the on-box JDE checks, the JDE platform changing only the driver
+and connection string, and the V8 messaging outbound rule.
 
 ## Still owed
 
