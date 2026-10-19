@@ -41,7 +41,7 @@ Gap: **none** (a current runbook covers it), **stale** (a page exists but descri
 | 9 | Agent log unreadable, stale or short (6: VLC-157, VLC-176, VLC-152, VLC-166, VLC-180, UI-214) | Step 2 now reads the log through the broker; "Log not read: <why>" when it cannot. | Using VALC is current. Install scenarios, `how-to-analyze-logs.html` and `log-analyzer.html` still ask for a hand-copied V7 `out.log`. | stale | Updated four install scenarios and `how-to-analyze-logs.html`. Step 2 reason table in the reference. |
 | 10 | Broker handshake refused (5: VLC-130, VLC-122, VLC-89, VLC-127, VLC-128) | Support Center "Brokers with no heartbeat"; Step 2 "not connected to VALC". | `scenario-clients-grid-not-updating` called V7 the "Current Agent". | stale (internal) | Updated the scenario (V8 and V7 paths). |
 | 11 | SQL login or install account (5: VLC-114, ISP-9, VLC-27, DAC-84, VLC-137) | "Reached … SQL Server answered and refused it". | `scenario-post-deploy-rruser-login-error`, `scenario-database-sql-script-fails`. | none | None. |
-| 12 | Slow reply misread as a firewall (5: UI-213, UI-171, VLC-39, UI-192, VLC-112) | V8 "Server to GSI" / "Server to its database" amber with elapsed time. | Nothing on the KB side. `connection-check.html` still calls an aborted probe a firewall drop. | missing + tool | New `scenario-admin-troubleshooting-amber-red`. Connection Check filed as a defect (below). |
+| 12 | Slow reply misread as a firewall (5: UI-213, UI-171, VLC-39, UI-192, VLC-112) | V8 "Server to GSI" / "Server to its database" amber with elapsed time. | Nothing on the KB side. `connection-check.html` still calls an aborted probe a firewall drop (UI-216 fixes it). | missing + tool | New `scenario-admin-troubleshooting-amber-red`. Connection Check filed as a defect (below). |
 | 13 | V7 and V8 on one box (5: VLC-112, VLC-179, DAC-86, VLC-93, VLC-177) | Port moved to a free one; V7 job takeover risk. | Using VALC Step 8; Installation Prep "ports are sticky". | none (internal) | None in this pass. |
 | 14 | AI plan shows "Not included" (5: UI-145, UI-125, VLC-63, VLC-65, VLC-76) | V8 "Your Plan: Not included". | Fixed in code; no runbook needed unless it recurs. | none | None. |
 | 15 | Licensed companies cleared or missing (4: VLC-91, VLC-94, VLC-168, UI-143) | Companies tab empty. | `scenario-companies-tab-empty`, `scenario-user-no-companies-session-refresh`. | none | None. |
@@ -73,9 +73,11 @@ and connection string, and the V8 messaging outbound rule.
   reconciliation row reads the last run, so the customer sees green until the data is visibly old.
 - **VALC and V8 colour the same SSIS state differently** (running: amber vs green; cancelled: red vs amber).
 - **`connection-check.html` still reads an aborted probe as a firewall drop** and has no slow-answer state
-  (UI-213 parity).
+  (UI-213 parity). *UI-216: slow answers amber with the elapsed time, no answer in 30 s red, database ports
+  over https; `Tools/test-connection-check-verdicts.js`.*
 - **Install-scenario dates never update.** `.github/scripts/update_doc_dates.py` globs `*.html` in each
   folder, not subfolders, so `GSIRRTech/install-scenarios/` keeps May dates whatever changes.
+  *Fixed by HK-45 (UI #783); the bot's next run stamped four of them (UI #784).*
 - **Escalation targets conflict.** Install scenarios say "GSI DBA", "network tech", "senior tech"; the
   Helpdesk Tech page routes to "RR DBA" / "RR Network Tech". Pick one set once the post-transition roles
   are named.

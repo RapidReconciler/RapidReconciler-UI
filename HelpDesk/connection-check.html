@@ -233,6 +233,7 @@
   .dbt-sub { color: var(--text-muted); font-family: 'JetBrains Mono', monospace; font-size: 11px; }
   .dbt-reach { font-weight: 600; color: var(--text-muted); }
   .dbt-reach.ok { color: var(--green-deep); }
+  .dbt-reach.warn { color: var(--orange-deep); }
   .dbt-reach.fail { color: var(--red); }
 
   /* Live network diagram */
@@ -425,54 +426,86 @@
   }
   function codeify(s) { return '<code>' + escapeHtml(s) + '</code>'; }
 
+  // ---- Two marks per probe: slow, then give up (UI-216) ---------------
+  // Until UI-216 each probe had ONE deadline (8 s; 12 s for /comms-check)
+  // and anything past it read "often a firewall silently dropping the
+  // connection", in red, so a server that answered in 9 s was reported as
+  // blocked. UI-213 fixed the same reading in V8 (Agent ValcLineProbe): a
+  // slow answer is amber with the elapsed time, a failed connect is red
+  // with the firewall advice. Here:
+  //   answered after the slow mark  -> amber, elapsed time, "not a firewall"
+  //   no answer by the give-up mark -> red, firewall advice
+  // SLOW_MS matches ValcLineProbe's 6 s request timeout. /comms-check runs
+  // its own server-side checks before it answers, so it gets the 12 s this
+  // page always allowed it. Tests: Tools/test-connection-check-verdicts.js.
+  var SLOW_MS = 6000;
+  var SERVER_SLOW_MS = 12000;
+  var GIVE_UP_MS = 30000;
+
+  function secs(ms) { return (ms % 1000 === 0) ? (ms / 1000) + ' s' : ms + ' ms'; }
+  function waitingText(slowMs) {
+    return 'No answer yet after ' + secs(slowMs) + '. Still waiting (up to ' + secs(GIVE_UP_MS) + ')…';
+  }
+
   // ---- A reachability probe (A and C) --------------------------------
   // no-cors fetch resolves (opaque) if ANY HTTP response came back —
   // even an error status — and rejects only on a true network failure
   // (DNS, refused, dropped, TLS). Exactly the "reachable?" signal, with
-  // no CORS dependency. Timing is a soft hint: fast reject ~ DNS /
-  // refused; reject at the timeout ~ a firewall silently dropping.
+  // no CORS dependency. Timing is a hint: fast reject ~ DNS / refused;
+  // an answer after the slow mark ~ a slow server or network, route open;
+  // no answer by the give-up mark ~ a firewall silently dropping.
   function probe(url, opts) {
     opts = opts || {};
+    var slowMs = opts.slowAfter || SLOW_MS;
     var now = function () { return (window.performance && performance.now) ? performance.now() : Date.now(); };
     var t0 = now();
     var ctrl = new AbortController();
-    var timer = setTimeout(function () { ctrl.abort(); }, opts.timeout || 8000);
+    var timer = setTimeout(function () { ctrl.abort(); }, GIVE_UP_MS);
+    var slowTimer = setTimeout(function () { if (opts.onSlow) opts.onSlow(slowMs); }, slowMs);
     var fetchOpts = { signal: ctrl.signal, cache: 'no-store' };
     if (opts.cors) { fetchOpts.headers = { 'Accept': 'application/json' }; }
     else { fetchOpts.mode = 'no-cors'; }
     var bust = url + (url.indexOf('?') >= 0 ? '&' : '?') + 'rrcc=' + Date.now();
     return fetch(bust, fetchOpts).then(function (res) {
-      clearTimeout(timer);
-      return { ok: true, ms: Math.round(now() - t0), status: (opts.cors ? res.status : 0),
+      clearTimeout(timer); clearTimeout(slowTimer);
+      var ms = Math.round(now() - t0);
+      return { ok: true, ms: ms, slow: ms >= slowMs, slowAfter: slowMs,
+               status: (opts.cors ? res.status : 0),
                serverError: opts.cors && res.status >= 500 };
     }).catch(function (err) {
-      clearTimeout(timer);
-      return { ok: false, ms: Math.round(now() - t0), aborted: (err && err.name === 'AbortError'),
+      clearTimeout(timer); clearTimeout(slowTimer);
+      return { ok: false, ms: Math.round(now() - t0), slowAfter: slowMs,
+               aborted: (err && err.name === 'AbortError'),
                err: (err && err.message) || String(err) };
     });
   }
 
   // ---- Probe B: the agent comms-check (JSON) -------------------------
-  function commsCheck() {
+  function commsCheck(onSlow) {
     if (!COMMS_BASE) return Promise.resolve({ ok: false, noBase: true });
     var now = function () { return (window.performance && performance.now) ? performance.now() : Date.now(); };
     var t0 = now();
     var ctrl = new AbortController();
-    var timer = setTimeout(function () { ctrl.abort(); }, 12000);
+    var timer = setTimeout(function () { ctrl.abort(); }, GIVE_UP_MS);
+    var slowTimer = setTimeout(function () { if (onSlow) onSlow(SERVER_SLOW_MS); }, SERVER_SLOW_MS);
     // Ask the agent to resolve the PC-side hosts too (GSI edge + sign-in),
     // so the network-path list can show their IPs from the server's view.
     var resolveCsv = [hostOnly(ANCHOR), AUTH_BASE ? hostOnly(AUTH_BASE) : ''].filter(Boolean).join(',');
     return fetch(trimSlash(COMMS_BASE) + '/comms-check?resolve=' + encodeURIComponent(resolveCsv) + '&rrcc=' + Date.now(),
         { signal: ctrl.signal, cache: 'no-store', headers: { 'Accept': 'application/json' } })
       .then(function (res) {
-        clearTimeout(timer);
+        clearTimeout(timer); clearTimeout(slowTimer);
         if (!res.ok) throw new Error('HTTP ' + res.status);
         return res.json();
       })
-      .then(function (data) { return { ok: true, ms: Math.round(now() - t0), data: data }; })
+      .then(function (data) {
+        var ms = Math.round(now() - t0);
+        return { ok: true, ms: ms, slow: ms >= SERVER_SLOW_MS, slowAfter: SERVER_SLOW_MS, data: data };
+      })
       .catch(function (err) {
-        clearTimeout(timer);
-        return { ok: false, ms: Math.round(now() - t0), aborted: (err && err.name === 'AbortError'),
+        clearTimeout(timer); clearTimeout(slowTimer);
+        return { ok: false, ms: Math.round(now() - t0), slowAfter: SERVER_SLOW_MS,
+                 aborted: (err && err.name === 'AbortError'),
                  err: (err && err.message) || String(err) };
       });
   }
@@ -485,9 +518,15 @@
 
   function timingNote(r) {
     if (r.ok) return '';
-    if (r.aborted) return ' (no response in time — often a firewall silently dropping the connection)';
+    if (r.aborted) return ' (no answer within ' + secs(GIVE_UP_MS) + ' — typically a firewall or proxy dropping the connection on the way; a server that has stopped answering looks the same from here)';
     if (r.ms < 1500) return ' (failed immediately — often DNS not resolving, or the connection refused)';
+    if (r.slowAfter && r.ms >= r.slowAfter) return ' (no answer for ' + r.ms + ' ms, then the connection failed — typically a firewall or proxy dropping it on the way)';
     return '';
+  }
+
+  // The row text for an answer: the elapsed time always, and "slow" past the mark.
+  function reachedText(r) {
+    return (r.slow ? 'Reachable, but slow to answer (' : 'Reachable (') + r.ms + ' ms)';
   }
 
   // ---- State for the report -----------------------------------------
@@ -496,8 +535,8 @@
   function statusWord(r) {
     if (!r) return 'not checked';
     if (r.noBase) return 'not checked (no address available)';
-    if (r.ok) return 'REACHABLE (' + r.ms + ' ms)' + (r.serverError ? ' but HTTP ' + r.status : '');
-    if (r.aborted) return 'NO RESPONSE (' + r.ms + ' ms)';
+    if (r.ok) return (r.slow ? 'REACHABLE, SLOW (' : 'REACHABLE (') + r.ms + ' ms)' + (r.serverError ? ' but HTTP ' + r.status : '');
+    if (r.aborted) return 'NO ANSWER WITHIN ' + secs(GIVE_UP_MS) + ' (' + r.ms + ' ms)';
     return 'COULD NOT CONNECT (' + r.ms + ' ms)';
   }
 
@@ -531,7 +570,11 @@
     if (!databases || !databases.length) { el.innerHTML = ''; return; }
     // Probe each instance at this server's host on its service port.
     var host = COMMS_BASE ? hostOnly(COMMS_BASE) : here.hostname;
-    var scheme = (COMMS_BASE && COMMS_BASE.indexOf('https') === 0) ? 'https:' : (here.protocol || 'http:');
+    // Always https (UI-216). The data-services agents serve TLS (VLC-147); an
+    // http probe to a TLS port is answered 400 "requires TLS", and from an https
+    // page it is blocked as mixed content. This used to fall back to
+    // `here.protocol || 'http:'` whenever the agent base was not https.
+    var scheme = 'https:';
     var rows = databases.map(function (d, i) {
       var name = d.displayName || d.databaseName || '(database)';
       var sub = (d.databaseName && d.displayName) ? ' <span class="dbt-sub">' + escapeHtml(d.databaseName) + '</span>' : '';
@@ -547,8 +590,8 @@
       var port = d.servicePort, cell = $('dbt-reach-' + i);
       if (port == null || !host || !cell) return;
       probe(scheme + '//' + host + ':' + port + '/health').then(function (r) {
-        cell.textContent = r.ok ? ('Reachable (' + r.ms + ' ms)') : 'Not reachable';
-        cell.className = 'dbt-reach ' + (r.ok ? 'ok' : 'fail');
+        cell.textContent = r.ok ? (r.slow ? 'Reachable, but slow (' + r.ms + ' ms)' : 'Reachable (' + r.ms + ' ms)') : 'Not reachable';
+        cell.className = 'dbt-reach ' + (r.ok ? (r.slow ? 'warn' : 'ok') : 'fail');
       });
     });
   }
@@ -688,6 +731,19 @@
       headline = 'RapidReconciler is reachable but reporting an error';
       cause = 'Everything on your side looks reachable, but the sign-in service returned a server error (HTTP ' + c.status + '). This is on GSI&rsquo;s side.';
       actions = ['Send the report below to GSI support — no action needed on your end.'];
+    } else if (a.slow || b.slow || c.slow) {
+      // UI-216: every leg answered, at least one past its slow mark. An answer
+      // means the route is open, so this is amber advice, not a firewall verdict.
+      var slowLegs = [];
+      if (a.slow) slowLegs.push('GSI took ' + a.ms + ' ms');
+      if (b.slow) slowLegs.push(escapeHtml(srvName) + ' took ' + b.ms + ' ms');
+      if (c.slow) slowLegs.push('the sign-in service took ' + c.ms + ' ms');
+      route = 'Heads up'; cls = 'maybe';
+      headline = 'Everything answered, but slowly';
+      cause = 'Every check got an answer, but ' + slowLegs.join(', and ') + '. Each one answered, so the route is open: ' +
+        'this is not a firewall block. A slow answer usually passes; if it keeps happening, send the report below to GSI support.';
+      actions = ['Run the check again in a few minutes.',
+                 'If it is still slow, send the report below to GSI support.'];
     } else {
       route = 'All clear'; cls = 'ok';
       headline = 'Connectivity looks good';
@@ -780,17 +836,21 @@
       AUTH_BASE ? (hostLabel(AUTH_BASE) + '  (/api/v1/auth/ping)')
                 : ('unset: ' + (ENV_MISSING.length ? ENV_MISSING.join(', ') : 'authBase')));
 
-    var pA = probe(ANCHOR);
-    var pB = commsCheck();
-    var pC = AUTH_BASE ? probe(AUTH_BASE + '/api/v1/auth/ping', { cors: true }) : Promise.resolve({ skipped: true });
+    // Past the slow mark the row says it is still waiting, so a long wait is
+    // never mistaken for a hang of the page itself.
+    var pA = probe(ANCHOR, { onSlow: function (s) { setProbe('A', 'run', waitingText(s)); } });
+    var pB = commsCheck(function (s) { setProbe('B', 'run', waitingText(s)); });
+    var pC = AUTH_BASE ? probe(AUTH_BASE + '/api/v1/auth/ping',
+                               { cors: true, onSlow: function (s) { setProbe('C', 'run', waitingText(s)); } })
+                       : Promise.resolve({ skipped: true });
 
     Promise.all([pA, pB, pC]).then(function (arr) {
       var a = arr[0], b = arr[1], c = arr[2];
       c.target = AUTH_BASE || '';
 
       // A
-      setProbe('A', a.ok ? 'pass' : 'fail',
-        a.ok ? 'Reachable (' + a.ms + ' ms)' : 'Could not reach' + timingNote(a));
+      setProbe('A', a.ok ? (a.slow ? 'warn' : 'pass') : 'fail',
+        a.ok ? reachedText(a) : 'Could not reach' + timingNote(a));
 
       // B (the agent comms-check). Box B reflects REACHABILITY of the
       // app server (leg 2): green when reached + all clear, amber when
@@ -804,8 +864,8 @@
         worst = checks.length ? worstStatus(checks) : 'ok';
         var srv = b.data.host || {};
         var idLabel = srv.hostname || (b.data.agent || 'reachable');
-        setProbe('B', worst === 'ok' ? 'pass' : 'warn',
-          'Reachable (' + b.ms + ' ms) — ' + checks.length + ' server-side check' + (checks.length === 1 ? '' : 's') +
+        setProbe('B', (worst === 'ok' && !b.slow) ? 'pass' : 'warn',
+          reachedText(b) + ' — ' + checks.length + ' server-side check' + (checks.length === 1 ? '' : 's') +
             (worst === 'ok' ? ', all clear.' : ', see below.'),
           idLabel + (srv.internalIp ? '  (' + srv.internalIp + ')' : '') + (srv.port ? '  : ' + srv.port : ''));
         $('serverList').innerHTML = renderServerChecks(checks);
@@ -820,16 +880,17 @@
       if (!AUTH_BASE) {
         setProbe('C', 'idle', 'Not configured.');
       } else {
-        setProbe('C', (c.ok && !c.serverError) ? 'pass' : 'fail',
+        setProbe('C', (c.ok && !c.serverError) ? (c.slow ? 'warn' : 'pass') : 'fail',
           c.serverError ? ('Answered with an error (HTTP ' + c.status + ')')
-            : c.ok ? ('Reachable (' + c.ms + ' ms)') : ('Could not reach' + timingNote(c)));
+            : c.ok ? reachedText(c) : ('Could not reach' + timingNote(c)));
       }
 
-      // Live diagram: color each numbered leg from the results.
+      // Live diagram: color each numbered leg from the results. A slow
+      // answer is amber (UI-216), the same as a server-side warning.
       var legs = {
-        1: a.ok ? 'ok' : 'fail',
-        2: (b.ok && b.data) ? (worst === 'ok' ? 'ok' : 'warning') : 'fail',
-        3: !AUTH_BASE ? 'idle' : ((c.ok && !c.serverError) ? 'ok' : 'fail'),
+        1: a.ok ? (a.slow ? 'warning' : 'ok') : 'fail',
+        2: (b.ok && b.data) ? ((worst === 'ok' && !b.slow) ? 'ok' : 'warning') : 'fail',
+        3: !AUTH_BASE ? 'idle' : ((c.ok && !c.serverError) ? (c.slow ? 'warning' : 'ok') : 'fail'),
         4: 'idle', 5: 'idle'
       };
       if (b.ok && b.data) {
