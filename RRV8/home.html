@@ -15014,10 +15014,18 @@
   var _auditFilter = 'all', _auditFilterRole = '';
   var _auditEntries = null, _auditGen = 0, _auditWired = false, _auditKey = '', _auditPeriod = '', _auditCo = '';
   // The _auditKey the entries in _auditEntries were FETCHED under. _auditKey moves the
-  // moment a refetch starts, and nothing clears _auditEntries on a database switch, so
-  // until the new fetch lands the array still holds the previous database's trail. The
-  // evidence package (UI-220) refuses unless the two keys agree.
+  // moment a refetch starts. Since UI-224 that same moment also drops _auditEntries, but
+  // the downloads still check the two keys agree rather than rely on every path that
+  // moves the key remembering to drop the array too.
   var _auditEntriesKey = '';
+  // '' when _auditEntries is THIS database's trail (loaded, and fetched under the key the
+  // panel is on now); otherwise the reason an export must refuse. Every download that reads
+  // the trail asks this first: the evidence package (UI-220) and Period Activity (UI-224).
+  // Covers "still fetching" and "the fetch failed" (which resets _auditKey to '') alike.
+  function _auditTrailStale() {
+    return (_auditEntries && _auditKey && _auditEntriesKey === _auditKey) ? ''
+      : 'The audit trail for this database has not loaded yet — wait for it to show below, then try again';
+  }
   // Inputs are analyst or accountant TRANSACTIONS only — no system events (loads /
   // B->C / deploys never appear here). Extensible: a new trigger just maps to one
   // actor and a finding text. More triggers get added as the processes grow.
@@ -15393,6 +15401,7 @@
   // SAME block onto its own document instead of keeping a second copy of it.
   function _auditExportPdf() {
     if (!(window.jspdf && window.jspdf.jsPDF)) { if (typeof toast === 'function') toast('PDF library still loading — try again in a moment'); return; }
+    var stale = _auditTrailStale(); if (stale) { if (typeof toast === 'function') toast(stale); return; }
     var per = _auditPeriod || '', co = _auditCo || '';
     var list = _auditActivityRows(co, per, _auditPass);
     if (!list.length) { if (typeof toast === 'function') toast('No activity to export'); return; }
@@ -15580,8 +15589,13 @@
     var key = dbName + '|' + ((d.companies || []).length);
     if (_auditEntries && key === _auditKey) { _paintAuditTrail(); return; }
     _auditKey = key;
+    // A new key is another database (or roster), so the trail still in hand is not its trail.
+    // Drop it now, with its chip counts, instead of leaving the previous database's entries on
+    // screen until the fetch lands (UI-224). The downloads refuse meanwhile (_auditTrailStale).
+    _auditEntries = null;
     var gen = ++_auditGen;
-    if (!_auditEntries) { var b0 = $('auditTrail'); if (b0) b0.innerHTML = '<div class="audit-empty">Loading the audit trail&hellip;</div>'; }
+    var b0 = $('auditTrail'); if (b0) b0.innerHTML = '<div class="audit-empty">Loading the audit trail&hellip;</div>';
+    var c0 = $('auditFilters'); if (c0) c0.innerHTML = '';
     _auditFetch(d).then(function (entries) {
       if (gen !== _auditGen) return;   // a newer render (DB/tab switch) superseded this one
       _auditEntries = entries;
@@ -16587,7 +16601,8 @@
     if (typeof toast === 'function') toast('Building the audit report…');
     // withExportWatchdog wraps the chain BEFORE the .catch, so the timer is
     // cleared on the rejection path too and the caller's own catch still runs.
-    withExportWatchdog('Perpetual Reconciliation report', _ensureAuditDetail(per).then(function (detail) {
+    // Returned so Tools/test-evidence-package.js can wait for the file; the click handler ignores it.
+    return withExportWatchdog('Perpetual Reconciliation report', _ensureAuditDetail(per).then(function (detail) {
       var descMap = _auditDescMap(detail);
       return _auditAiSummaries(cos, per).then(function (aiMap) {
         // Build + write under one guard. The outer .catch below means "the data
@@ -16603,6 +16618,7 @@
         });
         if (!ok) return;
         if (typeof toast === 'function') toast('Downloaded the audit report — ' + cos.length + ' ' + (cos.length === 1 ? 'company' : 'companies'));
+        _auditReportLogged('Excel', onlyCo, cos, per);
       });
     })).catch(function (e) { if (window.console) console.error('audit report (excel) failed', e); if (typeof toast === 'function') toast('Could not build the audit report — the data service may be unavailable.'); });
   }
@@ -16616,14 +16632,23 @@
     if (onlyCo != null) cos = cos.filter(function (c) { return String(c.co) === String(onlyCo); });
     if (!cos.length) { if (typeof toast === 'function') toast('No matching company in scope'); return; }
     if (typeof toast === 'function') toast('Building the audit report…');
-    withExportWatchdog('Perpetual Reconciliation report', _auditReportInputs(cos, per).then(function (inputs) {
+    // Returned so Tools/test-evidence-package.js can wait for the file; the click handler ignores it.
+    return withExportWatchdog('Perpetual Reconciliation report', _auditReportInputs(cos, per).then(function (inputs) {
       var jsPDF = window.jspdf.jsPDF;
       var doc = new jsPDF({ orientation: 'p', unit: 'pt', format: 'letter' });
       _auditReportPdfSections(doc, cos, per, inputs, false);
       _pdfStampFooter(doc, 36);
       doc.save(RRV8.exportName({ surface: 'PerpetualReconciliation', company: (onlyCo != null ? onlyCo : 'all'), period: per, ext: 'pdf' }));
       if (typeof toast === 'function') toast('Downloaded the audit report (PDF) — ' + cos.length + ' ' + (cos.length === 1 ? 'company' : 'companies'));
+      _auditReportLogged('PDF', onlyCo, cos, per);
     })).catch(function (e) { if (window.console) console.error('audit report (pdf) failed', e); if (typeof toast === 'function') toast('Could not build the audit report — the data service may be unavailable.'); });
+  }
+  // The Audit report's activity-log line, written only once the file is saved. It wrote none
+  // until UI-224, though Period Activity and the evidence package both do, so the log could
+  // not show that the report an auditor holds was ever produced, or by whom.
+  function _auditReportLogged(format, onlyCo, cos, per) {
+    var scope = onlyCo != null ? 'Co ' + onlyCo : cos.length + ' companies';
+    try { if (window.RRV8 && RRV8.logActivity) RRV8.logActivity('Audit report exported', scope + ' · ' + (per || 'all periods') + ' · ' + format); } catch (_) {}
   }
   // What the Audit report PDF is drawn from: the period's audit-detail rowsets, the account
   // descriptions, and the per-company AI cover summary (15s cap, '' when refused). Shared by
@@ -16661,10 +16686,9 @@
     var say = function (m) { if (typeof toast === 'function') toast(m); };
     if (!(window.jspdf && window.jspdf.jsPDF)) { say('PDF library still loading — try again in a moment'); return; }
     var d = _acctData; if (!d || !d.companies || !d.companies.length) { say('No reconciliation loaded yet'); return; }
-    // Covers both "still fetching" and "the fetch failed" (which resets _auditKey to ''):
-    // either way the activity list below the menu is not this database's yet, and the
-    // panel itself already says which.
-    if (!_auditEntries || !_auditKey || _auditEntriesKey !== _auditKey) { say('The audit trail for this database has not loaded yet — wait for it to show below, then try again'); return; }
+    // The activity list below the menu is not this database's yet (still fetching, or the
+    // fetch failed); the panel itself already says which.
+    var stale = _auditTrailStale(); if (stale) { say(stale); return; }
     var co = String(onlyCo == null ? '' : onlyCo).trim();
     var c = d.companies.filter(function (x) { return String(x.co).trim() === co; })[0];
     if (!c) { say('No matching company in scope'); return; }
