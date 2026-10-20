@@ -95,9 +95,13 @@ const PIECES = [
   '_auditActivityRows', '_auditPdfSafe', '_pdfStampFooter', '_auditActivityPdfSection',
   '_auditCoLabel', '_auditAbs', '_audMoney', '_auditPass',
   // the package
-  'genEvidencePackage', '_evidenceCoverPdf', '_evidenceContentsPdf'
+  'genEvidencePackage', '_evidenceCoverPdf', '_evidenceContentsPdf',
+  // the standalone downloads beside it, and the trail check they share (UI-224)
+  '_auditTrailStale', '_auditExportPdf', 'genAuditPdf', 'genAuditExcel', '_auditReportLogged',
+  // the panel render that swaps the trail on a database switch (UI-224)
+  'renderAuditPanel'
 ];
-const VARS = ['_AUDIT_PDF', 'AUDIT_ACTORS'];
+const VARS = ['_AUDIT_PDF', 'AUDIT_ACTORS', '_AUDIT_FILTER_DEFAULT'];
 const baseSrc = VARS.map(function (v) { return extractVar(homeSrc, v); }).join('\n') + '\n'
               + PIECES.map(function (n) { return extractFn(homeSrc, n); }).join('\n');
 
@@ -153,8 +157,16 @@ function fixture() {
 
 /* ------------------------------------------------------------------ the harness --- */
 
-// opts: mutate(src) -> src; state overrides; throwInBuild
+// opts: mutate(src) -> src; state overrides; throwInBuild; call(sb) -> the entry point
+// (default: the evidence package for opts.co, else CO)
 function run(opts) {
+  opts = opts || {};
+  const h = makeSandbox(opts);
+  const call = opts.call || function (sb) { return sb.genEvidencePackage(opts.co === undefined ? CO : opts.co); };
+  return Promise.resolve(call(h.sb)).then(function () { return h.out; });
+}
+
+function makeSandbox(opts) {
   opts = opts || {};
   const sb = { console: { log: function () {}, warn: function () {}, error: function () {} } };
   sb.window = sb; sb.self = sb; sb.globalThis = sb;
@@ -175,7 +187,12 @@ function run(opts) {
   const fx = fixture();
   const out = { toasts: [], logs: [], saved: null };
   // The edges, stubbed. Everything between them is home.html's own code.
-  sb.XLSX = {};   // home.html loads SheetJS; export-guard's "library did not load" branch is not under test
+  // home.html loads SheetJS. Only the Audit report Excel uses it here, and only its log line is
+  // under test, so the workbook calls are recorders and the sheet builder is an edge.
+  sb.XLSX = { utils: { book_new: function () { return { sheets: [] }; },
+                       book_append_sheet: function (wb, ws, n) { wb.sheets.push(n); } },
+              writeFile: function (wb, f) { out.saved = { name: f, raw: '', sheets: wb.sheets }; } };
+  sb._buildAuditSheet = function () { return {}; };
   sb._invRows = fx.invRows;
   sb._coOf = function (r) { return r.CompanyNumber; };
   sb._money = function (n) { return (Number(n) || 0).toFixed(2); };
@@ -205,10 +222,12 @@ function run(opts) {
     jsPDF.API.autoTable = function () { throw new Error('simulated assembly failure'); };
   }
 
+  if (opts.edges) opts.edges(sb, out);
+
   let src = baseSrc;
   if (opts.mutate) src = opts.mutate(src);
   vm.runInContext(src, sb, { filename: 'home.html:evidence' });
-  return Promise.resolve(sb.genEvidencePackage(opts.co === undefined ? CO : opts.co)).then(function () { return out; });
+  return { sb: sb, out: out };
 }
 
 /* ---------------------------------------------------------------------- pdf parse --- */
@@ -341,6 +360,56 @@ function mutateOnce(find, repl) {
     return src.replace(find, repl);
   };
 }
+function mutateRe(re, repl) {
+  return function (src) {
+    if (!re.test(src)) throw new Error('control target not found -- home.html changed shape: ' + re);
+    return src.replace(re, repl);
+  };
+}
+
+// Audit Center is open on the fixture database with its trail painted, then the user switches
+// to database B. Drives the real renderAuditPanel; the trail fetch is held open so the screen
+// and the downloads can be read mid-switch, then released with B's one entry.
+async function panelSwitch(opts) {
+  opts = opts || {};
+  const els = {};
+  ['auditTrail', 'auditFilters', 'acctAuditPeriod', 'acctAuditPer'].forEach(function (id) { els[id] = { innerHTML: '', textContent: '' }; });
+  els.auditTrail.innerHTML = 'PAINTED IN-ANALYST-REVIEW';           // the previous database's trail, as left on screen
+  els.auditFilters.innerHTML = 'All 3 · Analyst 2 · Accountant 1';   // and its chip counts
+  const B_ENTRIES = [Object.assign({}, ENTRIES[1], { message: 'Finding B-ONLY', _mark: 'B-ONLY' })];
+  let release = null;
+  const h = makeSandbox({
+    mutate: opts.mutate,
+    state: { _auditFilterRole: '', _auditGen: 0, _auditWired: true },
+    edges: function (sb) {
+      sb.$ = function (id) { return els[id] || null; };
+      sb.esc = function (s) { return String(s); };
+      sb._viewRole = function () { return 'accountant'; };
+      sb._analystViewedPeriod = function () { return PER; };
+      sb._acctFocusCo = function () { return CO; };
+      sb.activeDb = function () { return { n: 'RapidReconciler_B_V8' }; };
+      sb._auditFetch = function () { return new Promise(function (res) { release = res; }); };
+      // The painter is an edge here: what is under test is whether the panel swaps the trail.
+      sb._paintAuditTrail = function () {
+        els.auditTrail.innerHTML = 'PAINTED ' + (sb._auditEntries || []).map(function (e) { return e._mark; }).join(',');
+      };
+    }
+  });
+  const sb = h.sb, out = h.out;
+  sb.renderAuditPanel(sb._acctData);
+  const r = { midTrail: els.auditTrail.innerHTML, midChips: els.auditFilters.innerHTML };
+  sb._auditExportPdf();
+  r.midPa = { saved: out.saved, toasts: out.toasts.slice() };
+  out.toasts.length = 0;
+  if (!release) throw new Error('renderAuditPanel did not start a fetch on the database switch');
+  release(B_ENTRIES);
+  await new Promise(function (res) { setTimeout(res, 0); });
+  r.endTrail = els.auditTrail.innerHTML;
+  sb._auditExportPdf();
+  r.endPa = { saved: out.saved, toasts: out.toasts.slice() };
+  r.endPaText = out.saved ? parsePdf(out.saved.raw).all : '';
+  return r;
+}
 
 /* --------------------------------------------------------------------------- run --- */
 
@@ -384,6 +453,38 @@ function mutateOnce(find, repl) {
   ok(!o.toasts.some(function (t) { return /data service may be unavailable/.test(t); }),
      'not misreported as a data-service failure');
 
+  // The standalone downloads beside the package (UI-224).
+  console.log('\nSTANDALONE DOWNLOADS');
+  const pa = function (sb) { return sb._auditExportPdf(); };
+  o = await run({ call: pa });
+  ok(!!o.saved, 'Period Activity downloads when the trail on screen is this database\'s');
+  ok(o.logs.length === 1 && o.logs[0].event === 'Period Activity exported', 'and is logged once', JSON.stringify(o.logs));
+  o = await run({ call: pa, state: { _auditEntriesKey: 'RapidReconciler_Other_V8|2' } });
+  ok(!o.saved, 'Period Activity refuses while the trail on screen came from an earlier fetch (DB switch)');
+  ok(o.toasts.some(function (t) { return /has not loaded yet/.test(t); }), 'and says the trail has not loaded', o.toasts.join(' | '));
+  o = await run({ call: pa, state: { _auditKey: '' } });
+  ok(!o.saved && o.toasts.some(function (t) { return /has not loaded yet/.test(t); }), 'Period Activity refuses after a failed fetch (key reset)', o.toasts.join(' | '));
+  for (const pair of [['PDF', function (sb) { return sb.genAuditPdf(CO); }], ['Excel', function (sb) { return sb.genAuditExcel(CO); }]]) {
+    o = await run({ call: pair[1] });
+    ok(!!o.saved, 'the Audit report ' + pair[0] + ' downloads');
+    ok(o.logs.length === 1 && o.logs[0].event === 'Audit report exported', 'and is logged once as "Audit report exported"', JSON.stringify(o.logs));
+    // The standalone report reads _acctData's period (OTHER_PER in this fixture): the log names that one.
+    ok(o.logs.length && o.logs[0].detail === 'Co ' + CO + ' · ' + OTHER_PER + ' · ' + pair[0], 'the log names the company, period and format',
+       o.logs.length ? o.logs[0].detail : '');
+  }
+  o = await run({ call: function (sb) { return sb.genAuditPdf(CO); }, throwInBuild: true });
+  ok(!o.saved && o.logs.length === 0, 'no Audit report log line when the PDF could not be built', JSON.stringify(o.logs));
+
+  // A database switch while Audit Center is open (UI-224).
+  console.log('\nDATABASE SWITCH');
+  let p = await panelSwitch();
+  ok(p.midTrail.indexOf('Loading the audit trail') >= 0, 'during the fetch the trail panel says it is loading, not the previous database\'s list', p.midTrail);
+  ok(p.midChips === '', 'during the fetch the previous database\'s chip counts are gone', JSON.stringify(p.midChips));
+  ok(!p.midPa.saved && p.midPa.toasts.some(function (t) { return /has not loaded yet/.test(t); }), 'during the fetch Period Activity refuses', p.midPa.toasts.join(' | '));
+  ok(p.endTrail === 'PAINTED B-ONLY', 'once the fetch lands, the new database\'s trail is painted', p.endTrail);
+  ok(!!p.endPa.saved && p.endPaText.indexOf('Finding B-ONLY') >= 0 && p.endPaText.indexOf('Finding IN-') < 0,
+     'and Period Activity then carries the new database\'s entries only');
+
   // Controls, last.
   report('CONTROL (chip filter leaks into the package)',
     packageAssertions(await run({ mutate: mutateOnce('var acts = _auditActivityRows(co, per, null);', 'var acts = _auditActivityRows(co, per, _auditPass);') })),
@@ -397,9 +498,20 @@ function mutateOnce(find, repl) {
   report('CONTROL (contents page off by one)',
     packageAssertions(await run({ mutate: mutateOnce('var pAudit = doc.internal.getNumberOfPages() + 1;', 'var pAudit = doc.internal.getNumberOfPages();') })),
     false, 'linking the cover to itself');
-  o = await run({ mutate: mutateOnce('if (!_auditEntries || !_auditKey || _auditEntriesKey !== _auditKey)', 'if (!_auditEntries)'),
-                  state: { _auditEntriesKey: 'RapidReconciler_Other_V8|2' } });
-  ok(!!o.saved, 'CONTROL: without the fetch-key check, a stale trail DOES ship (so the refusal above is the check, not an accident)');
+  const noKeyCheck = mutateOnce('(_auditEntries && _auditKey && _auditEntriesKey === _auditKey)', '(_auditEntries)');
+  o = await run({ mutate: noKeyCheck, state: { _auditEntriesKey: 'RapidReconciler_Other_V8|2' } });
+  ok(!!o.saved, 'CONTROL: without the fetch-key check, a stale trail DOES ship in the package (so the refusal above is the check, not an accident)');
+  o = await run({ mutate: noKeyCheck, state: { _auditEntriesKey: 'RapidReconciler_Other_V8|2' }, call: function (sb) { return sb._auditExportPdf(); } });
+  ok(!!o.saved, 'CONTROL: without the fetch-key check, a stale trail DOES ship as Period Activity');
+  o = await run({ mutate: mutateOnce("_auditReportLogged('PDF', onlyCo, cos, per);", ''), call: function (sb) { return sb.genAuditPdf(CO); } });
+  ok(!!o.saved && o.logs.length === 0, 'CONTROL: without the call, the Audit report PDF logs nothing (so the log assertion is measuring it)');
+  o = await run({ mutate: mutateOnce("_auditReportLogged('Excel', onlyCo, cos, per);", ''), call: function (sb) { return sb.genAuditExcel(CO); } });
+  ok(!!o.saved && o.logs.length === 0, 'CONTROL: without the call, the Audit report Excel logs nothing');
+  p = await panelSwitch({ mutate: mutateOnce("var c0 = $('auditFilters'); if (c0) c0.innerHTML = '';", '') });
+  ok(p.midChips !== '', 'CONTROL: without clearing the chips, the previous database\'s counts stay up during the fetch', JSON.stringify(p.midChips));
+  p = await panelSwitch({ mutate: mutateRe(/ {4}_auditEntries = null;\r?\n( {4}var gen = \+\+_auditGen;)\r?\n {4}var b0 = (\$\('auditTrail'\);.*)\r?\n/,
+                                           "$1\n    if (!_auditEntries) { var b0 = $2 }\n") });
+  ok(p.midTrail.indexOf('Loading the audit trail') < 0, 'CONTROL: with the pre-UI-224 lines, the previous database\'s trail stays on screen during the fetch', p.midTrail);
 
   console.log('\n' + (failures ? failures + ' FAILURE(S)' : 'all assertions held'));
   process.exit(failures ? 1 : 0);
