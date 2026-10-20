@@ -1847,16 +1847,22 @@
       const r1 = await window.RRDB.valcFetch(userPath + '/role', {
         method: 'PUT', headers: prodHeaders('application/json;charset=UTF-8'),
         body: JSON.stringify({ roleId: roleId }) });
-      if (!r1.ok) throw new Error('role HTTP ' + r1.status);
+      // VLC-169: a refusal carries VALC's sentence ("You cannot remove your own
+      // administrator role..."); RRDB.responseError keeps it, its status and request id.
+      // This used to throw 'role HTTP 409', so the page showed a code, not the reason.
+      if (!r1.ok) throw await window.RRDB.responseError(r1, userPath + '/role');
       const r2 = await window.RRDB.valcFetch(userPath + '/assignments', {
         method: 'PUT', headers: prodHeaders('application/json;charset=UTF-8'),
         body: JSON.stringify({ assignments: assignments }) });
-      if (!r2.ok) throw new Error('assignments HTTP ' + r2.status);
+      if (!r2.ok) throw await window.RRDB.responseError(r2, userPath + '/assignments');
       toast('Saved team member rights');
+      // The roster shows each member's role, and it was only re-read on page load, so a
+      // saved change looked like it had not happened (owner, 2026-10-20).
+      reloadUsers();
       return true;
     } catch (err) {
       const el = document.getElementById('js-perms-error');
-      if (el) { el.textContent = 'Save failed — ' + err.message; el.classList.add('is-visible'); }
+      if (el) { el.textContent = 'Save failed — ' + fetchErrText('api/v1/tenant/users', err); el.classList.add('is-visible'); }
       return false;
     }
   }
