@@ -40,17 +40,22 @@
    * `label` names the export ("Transactions", "Cardex Variance") so a page
    * with several export buttons says which one failed.
    */
+  /* The dash is the CHARACTER, not `&mdash;`. These reasons reach both kinds of sink: Home,
+     As Of and Account Roll Forward write them with textContent, Cardex Variance with
+     innerHTML. The entity only rendered in the second; the others showed a literal
+     "&mdash;" in the toast (admin-troubleshooting.html decodes it in its own sink for the
+     same reason). The character renders correctly in both. */
   function exportFailureMessage(err, label) {
     var what = label ? (label + ' export') : 'Export';
     if (typeof XLSX === 'undefined') {
-      return what + ' unavailable &mdash; the Excel library did not load. Reload the page.';
+      return what + ' unavailable — the Excel library did not load. Reload the page.';
     }
     var msg = String((err && (err.message || err)) || '');
     if (TOO_BIG.test(msg)) {
       return what + ' was too large for this browser session to build. Narrow the ' +
              'period, company or filter and export again, or close other tabs and retry.';
     }
-    return what + ' failed &mdash; ' + (msg || 'unknown error') + '.';
+    return what + ' failed — ' + (msg || 'unknown error') + '.';
   }
 
   /**
