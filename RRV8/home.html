@@ -1072,6 +1072,11 @@
   .wl-recpill-cf:hover { border-color: var(--orange); color: var(--orange); }
   /* Audit-tab per-company report control — same menu as the card version, opens downward. */
   .wl-audit--down .wl-audit-menu { top: calc(100% + 4px); bottom: auto; right: 0; }
+  /* The evidence package (UI-220) is the one long label in the Audit report menu. The menu is
+     absolutely positioned inside a pill ~130px wide, so without nowrap the label breaks onto two
+     lines. The rule above it separates the one-file package from the two single reports. */
+  #auditReportMenu .wl-audit-opt { white-space: nowrap; }
+  #auditReportMenu .wl-audit-opt--sep { border-top: 1px solid var(--rule); }
   /* Keep the header net total over the Out-of-balance column now that the Rec grid
      has a trailing 46px action column (Account/Perpetual palettes have none). */
   #acctSnapshot .acct-snap-total { margin-right: 46px; }
@@ -3396,6 +3401,9 @@
             <div class="wl-audit-menu" role="menu">
               <button type="button" class="wl-audit-opt" role="menuitem" data-audit-report="excel">Excel</button>
               <button type="button" class="wl-audit-opt" role="menuitem" data-audit-report="pdf">PDF</button>
+              <!-- One PDF: cover, this Audit report, then Period Activity, for the focused
+                   company and period (UI-220). genEvidencePackage(). -->
+              <button type="button" class="wl-audit-opt wl-audit-opt--sep" role="menuitem" data-audit-report="package" title="One PDF for this company and period: a cover page, the Audit report, then the Period Activity">Evidence package (PDF)</button>
             </div>
           </details>
           </span>
@@ -14983,6 +14991,11 @@
   var _AUDIT_FILTER_DEFAULT = { analyst: 'analyst', accountant: 'all' };
   var _auditFilter = 'all', _auditFilterRole = '';
   var _auditEntries = null, _auditGen = 0, _auditWired = false, _auditKey = '', _auditPeriod = '', _auditCo = '';
+  // The _auditKey the entries in _auditEntries were FETCHED under. _auditKey moves the
+  // moment a refetch starts, and nothing clears _auditEntries on a database switch, so
+  // until the new fetch lands the array still holds the previous database's trail. The
+  // evidence package (UI-220) refuses unless the two keys agree.
+  var _auditEntriesKey = '';
   // Inputs are analyst or accountant TRANSACTIONS only — no system events (loads /
   // B->C / deploys never appear here). Extensible: a new trigger just maps to one
   // actor and a finding text. More triggers get added as the processes grow.
@@ -15352,28 +15365,69 @@
   // period + the active actor filter — the same set the screen shows. Absolute
   // timestamps (a saved audit artifact, not a live "11h ago" view). Replaces the
   // Excel trail export (owner 2026-07-14).
+  //
+  // Split into a filter (_auditActivityRows), a section writer (_auditActivityPdfSection)
+  // and the shared footer (_pdfStampFooter) for UI-220, so the evidence package draws the
+  // SAME block onto its own document instead of keeping a second copy of it.
   function _auditExportPdf() {
     if (!(window.jspdf && window.jspdf.jsPDF)) { if (typeof toast === 'function') toast('PDF library still loading — try again in a moment'); return; }
     var per = _auditPeriod || '', co = _auditCo || '';
-    var list = (_auditEntries || []).filter(function (e) {
-      return (e.standing === true || ((!co || String(e.co).trim() === co.trim()) && (!per || e.per === per))) && _auditPass(e);
-    });
+    var list = _auditActivityRows(co, per, _auditPass);
     if (!list.length) { if (typeof toast === 'function') toast('No activity to export'); return; }
-    var coName = (_coNames && _coNames[co.trim()]) || '';
     var doc = new window.jspdf.jsPDF({ orientation: 'p', unit: 'pt', format: 'letter' });
+    _auditActivityPdfSection(doc, list, co, per, _auditFilter === 'all' ? ['analyst', 'accountant'] : [_auditFilter], { ml: 40, y: 54 });
+    _pdfStampFooter(doc, 40);
+    doc.save(RRV8.exportName({ surface: 'ReconciliationActivityLog', company: (co || undefined), period: per, ext: 'pdf' }));
+    if (typeof toast === 'function') toast('Downloaded Period Activity (PDF) — ' + list.length + ' entr' + (list.length !== 1 ? 'ies' : 'y'));
+    try { if (window.RRV8 && RRV8.logActivity) RRV8.logActivity('Period Activity exported', list.length + ' entries'); } catch (_) {}
+  }
+  // The Period Activity set: the focus company + the one selected period, with standing
+  // entries (the client-level model approval) always in. `pass` is the actor test: the
+  // screen's chip filter for the standalone download, null (every actor) for the evidence
+  // package, which must not inherit whatever chip was left on.
+  function _auditActivityRows(co, per, pass) {
+    co = String(co == null ? '' : co); per = per || '';
+    return (_auditEntries || []).filter(function (e) {
+      return (e.standing === true || ((!co || String(e.co).trim() === co.trim()) && (!per || e.per === per)))
+          && (!pass || pass(e));
+    });
+  }
+  // jsPDF's standard helvetica is WinAnsi (Latin-1): a character outside it (the
+  // arrow →, em dash —, curly quotes) corrupts the entire wrapped line it lands in,
+  // and the auto-drafted finding text carries "→" in its routing lines. Fold the
+  // known offenders to ASCII (and drop anything else non-Latin-1) before rendering.
+  function _auditPdfSafe(s) {
+    return String(s == null ? '' : s)
+      .replace(/→/g, '->').replace(/[–—]/g, '-')
+      .replace(/[‘’]/g, "'").replace(/[“”]/g, '"')
+      .replace(/…/g, '...').replace(/[^\x00-\xFF]/g, '?');
+  }
+  // "Generated <when>" bottom-left and "Page i of n" bottom-right on every page. Run it
+  // LAST, once every section is drawn, or the page count is wrong. `label` (optional)
+  // leads the left text; the evidence package uses it to put the company and period on
+  // every page, because printed pages get separated.
+  function _pdfStampFooter(doc, margin, label) {
+    var pc = doc.internal.getNumberOfPages(), w = doc.internal.pageSize.getWidth(), h = doc.internal.pageSize.getHeight(), ts = '';
+    try { ts = new Date().toLocaleString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); } catch (_) {}
+    for (var i = 1; i <= pc; i++) {
+      doc.setPage(i); doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(120, 120, 120);
+      doc.text((label ? _auditPdfSafe(label) + '   ·   ' : '') + 'Generated ' + ts, margin, h - 18);
+      doc.text('Page ' + i + ' of ' + pc, w - margin, h - 18, { align: 'right' });
+    }
+  }
+  // Section writer: the Period Activity block, drawn onto `doc` from opts.y on the CURRENT
+  // page (the caller decides whether that is a fresh document or a page it just added).
+  // Returns the y where it stopped. An empty `list` still gets the header and an explicit
+  // empty line, because in the evidence package silence would read as an omission; the
+  // standalone download refuses an empty set before it gets here.
+  function _auditActivityPdfSection(doc, list, co, per, actors, opts) {
+    opts = opts || {};
+    co = String(co == null ? '' : co); per = per || '';
+    var coName = (_coNames && _coNames[co.trim()]) || '';
     var W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight();
-    var ML = 40, MR = 40, wrapW = W - ML - MR, y = 54;
+    var ML = opts.ml || 40, MR = ML, wrapW = W - ML - MR, y = opts.y || 54;
     var ensure = function (need) { if (y + (need || 0) > H - 46) { doc.addPage(); y = 54; } };
-    // jsPDF's standard helvetica is WinAnsi (Latin-1): a character outside it (the
-    // arrow →, em dash —, curly quotes) corrupts the entire wrapped line it lands in,
-    // and the auto-drafted finding text carries "→" in its routing lines. Fold the
-    // known offenders to ASCII (and drop anything else non-Latin-1) before rendering.
-    var _pdfSafe = function (s) {
-      return String(s == null ? '' : s)
-        .replace(/→/g, '->').replace(/[–—]/g, '-')
-        .replace(/[‘’]/g, "'").replace(/[“”]/g, '"')
-        .replace(/…/g, '...').replace(/[^\x00-\xFF]/g, '?');
-    };
+    var _pdfSafe = _auditPdfSafe;
     // Header — company name, then the log title + scope/period/count.
     doc.setFont('helvetica', 'bold'); doc.setFontSize(16); doc.setTextColor(31, 45, 74);
     doc.text(_pdfSafe(coName || (co ? 'Company ' + co : 'Reconciliation Audit Findings')), ML, y); y += 20;
@@ -15382,8 +15436,12 @@
     doc.setFontSize(10); doc.setTextColor(95, 95, 95);
     doc.text('Period: ' + (per ? (fmtPeriod(per) || per) : 'all periods') + '   ·   ' + list.length + ' entr' + (list.length !== 1 ? 'ies' : 'y'), ML, y); y += 10;
     doc.setDrawColor(210, 216, 226); doc.setLineWidth(0.8); doc.line(ML, y, W - MR, y); y += 20;
+    if (!list.length) {
+      doc.setFont('helvetica', 'italic'); doc.setFontSize(9.5); doc.setTextColor(110, 110, 110);
+      doc.text('No analyst or accountant activity was recorded for this company and period.', ML, y); y += 20;
+      return y;
+    }
     // Cards as paragraphs, grouped by actor (Analyst above Accountant).
-    var actors = _auditFilter === 'all' ? ['analyst', 'accountant'] : [_auditFilter];
     actors.forEach(function (actor) {
       var group = list.filter(function (e) { return e.actor === actor; });
       if (!group.length) return;
@@ -15421,12 +15479,7 @@
       });
       y += 6;
     });
-    var pc = doc.internal.getNumberOfPages(), ts = '';
-    try { ts = new Date().toLocaleString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); } catch (_) {}
-    for (var i = 1; i <= pc; i++) { doc.setPage(i); doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(120, 120, 120); doc.text('Generated ' + ts, ML, H - 18); doc.text('Page ' + i + ' of ' + pc, W - MR, H - 18, { align: 'right' }); }
-    doc.save(RRV8.exportName({ surface: 'ReconciliationActivityLog', company: (co || undefined), period: per, ext: 'pdf' }));
-    if (typeof toast === 'function') toast('Downloaded Period Activity (PDF) — ' + list.length + ' entr' + (list.length !== 1 ? 'ies' : 'y'));
-    try { if (window.RRV8 && RRV8.logActivity) RRV8.logActivity('Period Activity exported', list.length + ' entries'); } catch (_) {}
+    return y;
   }
   // The audit band message is stored text that CAN carry markdown emphasis: a suggested
   // journal entry composed upstream wraps its memo heading in **double asterisks**, and the
@@ -15485,7 +15538,9 @@
         ev.stopPropagation();
         var rco = _auditCo || '';
         if (!rco) { if (typeof toast === 'function') toast('No company in focus.'); arm.open = false; return; }
-        if (b.getAttribute('data-audit-report') === 'pdf') { if (typeof genAuditPdf === 'function') genAuditPdf(rco); }
+        var kind = b.getAttribute('data-audit-report');
+        if (kind === 'pdf') { if (typeof genAuditPdf === 'function') genAuditPdf(rco); }
+        else if (kind === 'package') { if (typeof genEvidencePackage === 'function') genEvidencePackage(rco); }
         else { if (typeof genAuditExcel === 'function') genAuditExcel(rco); }
         arm.open = false;
       });
@@ -15501,6 +15556,7 @@
     _auditFetch(d).then(function (entries) {
       if (gen !== _auditGen) return;   // a newer render (DB/tab switch) superseded this one
       _auditEntries = entries;
+      _auditEntriesKey = key;
       _paintAuditTrail();
     }).catch(function (err) {
       if (gen !== _auditGen) return;
@@ -16531,19 +16587,151 @@
     if (onlyCo != null) cos = cos.filter(function (c) { return String(c.co) === String(onlyCo); });
     if (!cos.length) { if (typeof toast === 'function') toast('No matching company in scope'); return; }
     if (typeof toast === 'function') toast('Building the audit report…');
-    withExportWatchdog('Perpetual Reconciliation report', _ensureAuditDetail(per).then(function (detail) {
-      var descMap = _auditDescMap(detail);
-      return _auditAiSummaries(cos, per).then(function (aiMap) {
-        var jsPDF = window.jspdf.jsPDF;
-        var doc = new jsPDF({ orientation: 'p', unit: 'pt', format: 'letter' });
-        cos.forEach(function (c, i) { _buildAuditPdfSection(doc, c, per, detail, descMap, i === 0, aiMap[c.co] || ''); });
-        var pc = doc.internal.getNumberOfPages(), w = doc.internal.pageSize.getWidth(), h = doc.internal.pageSize.getHeight(), ts = '';
-        try { ts = new Date().toLocaleString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); } catch (_) {}
-        for (var i = 1; i <= pc; i++) { doc.setPage(i); doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(120, 120, 120); doc.text('Generated ' + ts, 36, h - 18); doc.text('Page ' + i + ' of ' + pc, w - 36, h - 18, { align: 'right' }); }
-        doc.save(RRV8.exportName({ surface: 'PerpetualReconciliation', company: (onlyCo != null ? onlyCo : 'all'), period: per, ext: 'pdf' }));
-        if (typeof toast === 'function') toast('Downloaded the audit report (PDF) — ' + cos.length + ' ' + (cos.length === 1 ? 'company' : 'companies'));
-      });
+    withExportWatchdog('Perpetual Reconciliation report', _auditReportInputs(cos, per).then(function (inputs) {
+      var jsPDF = window.jspdf.jsPDF;
+      var doc = new jsPDF({ orientation: 'p', unit: 'pt', format: 'letter' });
+      _auditReportPdfSections(doc, cos, per, inputs, false);
+      _pdfStampFooter(doc, 36);
+      doc.save(RRV8.exportName({ surface: 'PerpetualReconciliation', company: (onlyCo != null ? onlyCo : 'all'), period: per, ext: 'pdf' }));
+      if (typeof toast === 'function') toast('Downloaded the audit report (PDF) — ' + cos.length + ' ' + (cos.length === 1 ? 'company' : 'companies'));
     })).catch(function (e) { if (window.console) console.error('audit report (pdf) failed', e); if (typeof toast === 'function') toast('Could not build the audit report — the data service may be unavailable.'); });
+  }
+  // What the Audit report PDF is drawn from: the period's audit-detail rowsets, the account
+  // descriptions, and the per-company AI cover summary (15s cap, '' when refused). Shared by
+  // genAuditPdf and the evidence package so both read the same inputs the same way.
+  function _auditReportInputs(cos, per) {
+    return _ensureAuditDetail(per).then(function (detail) {
+      return _auditAiSummaries(cos, per).then(function (aiMap) {
+        return { detail: detail, descMap: _auditDescMap(detail), aiMap: aiMap || {} };
+      });
+    });
+  }
+  // Section writer: the Audit report for every company in `cos`, one company per page-break.
+  // `afterCover` = the doc already has a page in use (the evidence package's cover), so the
+  // first company opens a new page instead of drawing over it.
+  function _auditReportPdfSections(doc, cos, per, inputs, afterCover) {
+    cos.forEach(function (c, i) {
+      _buildAuditPdfSection(doc, c, per, inputs.detail, inputs.descMap, i === 0 && !afterCover, inputs.aiMap[c.co] || '');
+    });
+  }
+
+  // ---- Evidence package (UI-220) --------------------------------------------
+  // ONE PDF for the focused company and period: a cover, the Audit report for that company,
+  // then Period Activity. Built from the same section writers as the two standalone
+  // downloads, so the package cannot say something different from them.
+  //
+  // Two deliberate differences from the standalone Period Activity:
+  //   * EVERY actor, not the screen's chip filter. A chip left on "Accountant" would
+  //     otherwise ship an evidence file silently missing the analyst's work.
+  //   * ONE period for both halves. The Audit report normally reads _acctData's period and
+  //     Period Activity reads _auditPeriod; they agree in the accountant view because
+  //     renderAccountantPanels rebuilds _acctData before the tab repaints, but a package
+  //     that could carry two periods is not evidence of either, so it resolves the period
+  //     once (the one the Audit Center header names) and hands it to both writers.
+  function genEvidencePackage(onlyCo) {
+    var say = function (m) { if (typeof toast === 'function') toast(m); };
+    if (!(window.jspdf && window.jspdf.jsPDF)) { say('PDF library still loading — try again in a moment'); return; }
+    var d = _acctData; if (!d || !d.companies || !d.companies.length) { say('No reconciliation loaded yet'); return; }
+    // Covers both "still fetching" and "the fetch failed" (which resets _auditKey to ''):
+    // either way the activity list below the menu is not this database's yet, and the
+    // panel itself already says which.
+    if (!_auditEntries || !_auditKey || _auditEntriesKey !== _auditKey) { say('The audit trail for this database has not loaded yet — wait for it to show below, then try again'); return; }
+    var co = String(onlyCo == null ? '' : onlyCo).trim();
+    var c = d.companies.filter(function (x) { return String(x.co).trim() === co; })[0];
+    if (!c) { say('No matching company in scope'); return; }
+    var per = _auditPeriod || d.viewedPeriod || d.latestPeriod || '';
+    // No period = the Audit report would sum every period and Period Activity would take
+    // every entry: a document about no particular close. Refuse rather than ship that.
+    if (!per) { say('Pick a period first — an evidence package covers one period'); return; }
+    var acts = _auditActivityRows(co, per, null);
+    say('Building the evidence package…');
+    // Returned so Tools/test-evidence-package.js can wait for the file; the click handler ignores it.
+    return withExportWatchdog('Evidence package', _auditReportInputs([c], per).then(function (inputs) {
+      // runExport: a throw while ASSEMBLING the PDF gets its own reason, instead of the
+      // "data service may be unavailable" the .catch below means.
+      var pages = RRV8.runExport('Evidence package', toast, function () {
+        var doc = new window.jspdf.jsPDF({ orientation: 'p', unit: 'pt', format: 'letter' });
+        var u = (window.RR_SESSION && window.RR_SESSION.user) || {};
+        var counts = { analyst: 0, accountant: 0 };
+        acts.forEach(function (e) { if (counts[e.actor] != null) counts[e.actor]++; });
+        var perLbl = fmtPeriod(per) || per;
+        var contentsY = _evidenceCoverPdf(doc, {
+          co: co, coName: (_coNames && _coNames[co]) || '', ccy: c.ccy || '',
+          per: per, perLabel: perLbl,
+          db: ((typeof activeDb === 'function' && activeDb()) || {}).n || '',
+          byName: u.fn || '', byEmail: u.u || ''
+        });
+        var pAudit = doc.internal.getNumberOfPages() + 1;
+        _auditReportPdfSections(doc, [c], per, inputs, true);
+        doc.addPage();
+        var pAct = doc.internal.getNumberOfPages();
+        _auditActivityPdfSection(doc, acts, co, per, ['analyst', 'accountant'], { ml: 36, y: 54 });
+        _evidenceContentsPdf(doc, contentsY, [
+          { label: 'Perpetual Inventory Reconciliation', sub: 'Account summary, per-account detail and variances, reconciliation findings and work notes', page: pAudit },
+          { label: 'Period Activity — Reconciliation Audit Findings',
+            sub: acts.length + ' entr' + (acts.length === 1 ? 'y' : 'ies') + ' (Analyst ' + counts.analyst + ' · Accountant ' + counts.accountant + '), every actor', page: pAct }
+        ]);
+        _pdfStampFooter(doc, 36, 'Evidence package  ·  Co ' + co + '  ·  Period ending ' + perLbl);
+        var n = doc.internal.getNumberOfPages();
+        doc.save(RRV8.exportName({ surface: 'EvidencePackage', company: co, period: per, ext: 'pdf' }));
+        return n;
+      });
+      if (!pages) return;
+      say('Downloaded the evidence package (PDF) — ' + pages + ' page' + (pages === 1 ? '' : 's'));
+      try { if (window.RRV8 && RRV8.logActivity) RRV8.logActivity('Evidence package exported', 'Co ' + co + ' · ' + per + ' · ' + acts.length + ' activity entries · ' + pages + ' pages'); } catch (_) {}
+    })).catch(function (e) { if (window.console) console.error('evidence package failed', e); say('Could not build the evidence package — the data service may be unavailable.'); });
+  }
+  // Cover page (page 1). Draws the identity block and returns the y where the contents list
+  // goes; the list itself is drawn by _evidenceContentsPdf once the sections exist and their
+  // page numbers are known.
+  function _evidenceCoverPdf(doc, info) {
+    var W = doc.internal.pageSize.getWidth(), ML = 36, y = 84;
+    var safe = _auditPdfSafe;
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.setTextColor(95, 110, 135);
+    doc.text('PERIOD-CLOSE EVIDENCE PACKAGE', ML, y); y += 30;
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(22); doc.setTextColor(31, 45, 74);
+    var nm = doc.splitTextToSize(safe(info.coName || ('Company ' + info.co)), W - 2 * ML);
+    doc.text(nm, ML, y); y += nm.length * 26;
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(12); doc.setTextColor(60, 70, 90);
+    doc.text(safe('Co ' + info.co + (info.ccy ? '  ·  ' + info.ccy : '')), ML, y); y += 16;
+    doc.setDrawColor(210, 216, 226); doc.setLineWidth(0.8); doc.line(ML, y, W - ML, y); y += 14;
+    var when = '';
+    try { when = new Date().toLocaleString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }); } catch (_) { when = new Date().toISOString(); }
+    var by = info.byName ? (info.byName + (info.byEmail ? ' (' + info.byEmail + ')' : '')) : (info.byEmail || 'Not available in this session');
+    doc.autoTable({ startY: y, theme: 'plain', margin: { left: ML, right: ML }, tableWidth: W - 2 * ML,
+      styles: { fontSize: 10, cellPadding: { top: 4, bottom: 4, left: 0, right: 8 }, textColor: [40, 40, 40], overflow: 'linebreak' },
+      columnStyles: { 0: { cellWidth: 120, fontStyle: 'bold', textColor: [31, 45, 74] }, 1: { cellWidth: 'auto' } },
+      body: [
+        ['Period ending', safe(info.perLabel + (info.perLabel !== info.per ? '  (' + info.per + ')' : ''))],
+        ['Database', safe(info.db || 'Not available in this session')],
+        ['Generated', safe(when)],
+        ['Generated by', safe(by)]
+      ] });
+    return doc.lastAutoTable.finalY + 30;
+  }
+  // The cover's contents list, drawn on page 1 AFTER the sections, with each line linked to
+  // its section's first page. Same discipline as the Account Summary links: doc.text and
+  // doc.link write to the CURRENT page, so park on page 1 and put the pointer back on the
+  // last page afterwards, or the footer pass and anything after it land in the wrong place.
+  function _evidenceContentsPdf(doc, y, entries) {
+    var W = doc.internal.pageSize.getWidth(), ML = 36, last = doc.internal.getNumberOfPages();
+    doc.setPage(1);
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(12); doc.setTextColor(31, 45, 74);
+    doc.text('Contents', ML, y); y += 20;
+    entries.forEach(function (en, i) {
+      var top = y - 11;
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(10.5); doc.setTextColor(37, 99, 235);
+      doc.text(_auditPdfSafe((i + 1) + '.  ' + en.label), ML, y);
+      doc.setFont('helvetica', 'normal'); doc.setTextColor(60, 70, 90);
+      doc.text('Page ' + en.page, W - ML, y, { align: 'right' }); y += 14;
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(110, 110, 110);
+      var sub = doc.splitTextToSize(_auditPdfSafe(en.sub || ''), W - 2 * ML - 60);
+      doc.text(sub, ML + 16, y); y += sub.length * 11 + 10;
+      doc.link(ML, top, W - 2 * ML, y - top - 6, { pageNumber: en.page });
+    });
+    doc.setTextColor(0, 0, 0);
+    doc.setPage(last);
+    return y;
   }
 
   function _closeJeModal() { var m = $('jeModal'); if (m) m.hidden = true; }
