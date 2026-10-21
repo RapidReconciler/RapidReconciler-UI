@@ -1073,6 +1073,18 @@ window.RRV8 = window.RRV8 || {};
     if (period != null && String(period).trim() !== '') parts.push(String(period).trim());
     return encodeURIComponent(parts.join('-').replace(/\s+/g, ''));
   };
+  // VLC-183. The sentence to show when an AI call timed out, or '' for any other failure.
+  // VALC answers a slow call with a 504 whose message names its own time limit, and that
+  // sentence is shown as written, so V8 can never state a different number from the one
+  // VALC enforces. Until VLC-183 every page read a timeout as "Could not reach the AI
+  // service", so the commonest failure, a slow answer, looked like an outage. Pages keep
+  // their own wording for every other failure: this only answers "was it a timeout?".
+  // A 504 without a body (a proxy in front of VALC) gets the generic sentence.
+  window.RRV8.aiTimeout = function (err) {
+    if (!err || err.status !== 504) return '';
+    var said = (typeof err.serverMessage === 'string') ? err.serverMessage.trim() : '';
+    return said || 'The AI took too long to answer, so the request was stopped. Try again; a second try usually answers.';
+  };
   // <<AI-GROUNDING GENERATED START -- do not edit by hand>>
   // ACCT_GROUNDING — the AI's compact copy of the accountant playbook. Prepended to
   // every accountant-facing AI prompt so the reads reason from firm policy, not
