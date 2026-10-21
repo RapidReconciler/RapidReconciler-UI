@@ -5,7 +5,9 @@ build target, carrying the row's status, its "Need from you", and the row's whol
 WORKLIST.md stays the source of truth until the owner rules otherwise; this is a copy.
 
 Safety, all enforced before anything is sent:
-  * PRIVATE repos only. The UI repo is public, so a UI- row is refused, never posted there.
+  * PRIVATE repos only. The UI repo is public, so a UI- row's issue lives in RapidReconciler-Valc,
+    beside housekeeping (owner, 2026-10-21: "the ui issues should be filed with the others"), and
+    PUBLIC_REPOS refuses any mapping that would post a section to a public repo.
   * A secret-shaped string (password/secret/token/key followed by a value) stops that row.
   * Idempotent: an issue whose title starts "[ID]" already open or closed is updated, not
     duplicated. The ID -> issue map is written beside WORKLIST.md (worklist-issues.json).
@@ -37,15 +39,22 @@ GH = r"C:\Program Files\GitHub CLI\gh.exe"
 OWNER = "RapidReconciler"
 
 # Build target (ID prefix) -> private repo. Housekeeping lives with VALC, where most of it lands.
+# UI rows live there too: the UI repo is public, and VALC's Development page reads Valc's issues,
+# so until 2026-10-21 every UI- row was refused and a third of the live work never showed there.
 REPO_FOR = {"DAC": "RapidReconciler-DB", "ISP": "RapidReconciler-SSIS", "VLC": "RapidReconciler-Valc",
-            "HK": "RapidReconciler-Valc"}
-TARGET_LABEL = {"DAC": "target:dacpac", "ISP": "target:ispac", "VLC": "target:valc", "HK": "housekeeping"}
+            "HK": "RapidReconciler-Valc", "UI": "RapidReconciler-Valc"}
+TARGET_LABEL = {"DAC": "target:dacpac", "ISP": "target:ispac", "VLC": "target:valc", "HK": "housekeeping",
+                "UI": "target:ui"}
+# A worklist section is internal (customer measurements, owner rulings). Never post one to a public
+# repo, whatever REPO_FOR says: checked per row before anything is sent, and by --self-test.
+PUBLIC_REPOS = {"RapidReconciler-UI"}
 STATUS_LABEL = {"\u2610": "status:open", "\u25d0": "status:in-progress", "\u23f8": "status:blocked"}   # ☐ ◐
 LABELS = {
     "worklist": ("1f2d4a", "Copied from WORKLIST.md"),
     "target:dacpac": ("0e8a7d", "RapidReconciler-DB build target"),
     "target:ispac": ("0e8a7d", "RapidReconciler-SSIS build target"),
     "target:valc": ("0e8a7d", "RapidReconciler-Valc build target"),
+    "target:ui": ("0e8a7d", "RapidReconciler-UI build target (filed here: the UI repo is public)"),
     "housekeeping": ("c5def5", "Housekeeping"),
     "status:open": ("ededed", "Not started"),
     "status:in-progress": ("fbca04", "Built or partly built, not closed"),
@@ -271,9 +280,12 @@ def main(dry):
     for row in rows:
         prefix = row["id"].split("-")[0]
         if prefix not in REPO_FOR:
-            print(f"  REFUSED {row['id']}: no PRIVATE repo for prefix {prefix} (the UI repo is public)")
+            print(f"  REFUSED {row['id']}: no PRIVATE repo for prefix {prefix}")
             continue
         repo = REPO_FOR[prefix]
+        if repo in PUBLIC_REPOS:
+            print(f"  REFUSED {row['id']}: {repo} is public; a worklist section is never posted there")
+            continue
         title, body, labels = build(row, sections.get(row["id"]), chunk_of[row["id"]])
         if SECRET.search(body):
             print(f"  REFUSED {row['id']}: a secret-shaped string is in its section; not posted")
@@ -312,6 +324,9 @@ def self_test():
               "| [VLC-3](#vlc-3--z) | \u2611 | closed | — |\n"
               "| [VLC-4](#vlc-4--w) | \u23f8 | blocked | Get X |\n\n"
               "### DAC-1 \u2014 the thing\n\nbody one\n\n---\n\n### VLC-2 \u2014 other\n\npassword = hunter2hunter2\n")
+    assert not set(REPO_FOR.values()) & PUBLIC_REPOS, f"a prefix maps to a public repo: {REPO_FOR}"
+    assert REPO_FOR.get("UI") and TARGET_LABEL.get("UI") in LABELS, "UI rows have a private home and a label"
+    assert set(TARGET_LABEL) == set(REPO_FOR), "every prefix with a repo has a target label, and no other"
     rows, secs = parse(sample)
     assert [r["id"] for r in rows] == ["DAC-1", "VLC-2", "VLC-4"], rows   # closed is not copied; blocked is
     assert secs["DAC-1"] == ("the thing", "body one"), secs["DAC-1"]
