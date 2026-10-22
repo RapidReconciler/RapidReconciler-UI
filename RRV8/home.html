@@ -673,6 +673,26 @@
   .subnav { display: flex; gap: 4px; margin: 2px 0 16px; padding: 5px;
             background: var(--rule-strong); border-radius: 11px; }
   .subnav[hidden] { display: none; }
+  /* UI-228: the Walkthrough tab sits right, apart from the workflow tabs. */
+  .subnav-tab.is-aside { margin-left: auto; }
+  .walk-list { list-style: none; margin: 0; padding: 0; counter-reset: walk; }
+  .walk-step { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 14px; align-items: start;
+               padding: 16px 18px; border-top: 1px solid var(--rule); }
+  .walk-step:first-child { border-top: none; }
+  .walk-num { width: 30px; height: 30px; border-radius: 50%; background: var(--navy); color: #fff; font-weight: 700;
+              display: flex; align-items: center; justify-content: center; font-size: 14px; }
+  .walk-title { font-weight: 700; font-size: 15px; color: var(--text); margin: 2px 0 4px; }
+  .walk-look, .walk-todo { margin: 2px 0; font-size: 13.5px; line-height: 1.5; color: var(--text-muted); }
+  .walk-todo b, .walk-look b { color: var(--text); }
+  .walk-live { margin-top: 6px; font-size: 13px; font-weight: 600; color: var(--navy); }
+  .walk-go { white-space: nowrap; }
+  .walk-banner { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: -6px 0 14px; padding: 10px 14px;
+                 border-radius: 10px; background: #eef3fb; border: 1px solid #c9d8f0; font-size: 13.5px; color: var(--text); }
+  .walk-banner[hidden] { display: none; }
+  .walk-banner-text { flex: 1 1 320px; line-height: 1.45; }
+  .walk-banner-step { font-weight: 700; color: var(--navy); }
+  .walk-banner-btns { display: flex; gap: 6px; }
+  .walk-focus { outline: 3px solid #5b8def; outline-offset: 3px; border-radius: 12px; transition: outline-color .4s ease; }
   .subnav-tab { appearance: none; background: none; border: 0; padding: 9px 18px; font-family: inherit;
                 font-size: 14.5px; font-weight: 600; color: var(--text); cursor: pointer;
                 border-radius: 8px; white-space: nowrap; transition: background .12s ease, color .12s ease; }
@@ -3299,6 +3319,9 @@
        Perpetual — company → account → item). A tab click swaps the palette below;
        one scope, lazy render per palette. -->
   <div class="subnav" id="subNav" hidden role="tablist" aria-label="Sub-view"></div>
+  <!-- UI-228: the Walkthrough's step banner. Shown only while a walkthrough step is
+       open and the user is on that step's tab; painted by renderWalkBanner(). -->
+  <div class="walk-banner" id="acctWalkBanner" hidden role="status" aria-live="polite"></div>
 
   <!-- Accountant · Reconciliation palette — per-COMPANY net (the "Where you
        stand" grid). Painted by renderAcctSnapshot() from the live roll-forward
@@ -3431,6 +3454,16 @@
       </div>
       <!-- The newest-first summary cards. -->
       <div class="audit-trail" id="auditTrail"><div class="audit-empty">Loading the audit trail&hellip;</div></div>
+    </div>
+  </section>
+
+  <!-- UI-228 Walkthrough tab: the accountant's process as numbered steps. Each says what
+       the user is looking at and what to do, carries a line from their own data, and
+       goes to the tab it is about. Painted by renderWalkthrough(). -->
+  <section class="acct-panels" id="acctWalk" hidden aria-label="Walkthrough">
+    <div class="acct-snapshot">
+      <div class="acct-snap-headline"><div class="acct-snap-title">Walkthrough: reconcile a period</div></div>
+      <ol class="walk-list" id="acctWalkList"></ol>
     </div>
   </section>
 
@@ -7935,6 +7968,17 @@
   // it carries in the tie-out identity. Declared ONCE, in config.js, so the tie-out and
   // the triage surfaces cannot come to hold different ideas of what the six are.
   var _COMPONENTS = RRV8.varianceTieOut.COMPONENTS;
+  // UI-228: ONE producer for "what is the accountant's to clear", read by the Overview
+  // cards (renderAcctSnapshot) and the Walkthrough, so the two can never pick different
+  // companies. Moved out of renderAcctSnapshot unchanged (it was wlMat / _wlActionRank).
+  function _acctMaterial(c, role) {
+    return _COMPONENTS.filter(function (k) { return k.role === role && k.name !== 'Cardex' && Math.abs(c.comp[k.name]) >= 1; })
+      .sort(function (a, b) { return Math.abs(c.comp[b.name]) - Math.abs(c.comp[a.name]); });
+  }
+  function _acctActionRank(c) {
+    if ((c.breaks || 0) > 0) return 2;                            // roll-forward break -> waiting on the analyst
+    return (_acctMaterial(c, 'Accountant').length > 0) ? 0 : 1;   // 0 = clearable, 1 = other out
+  }
   // ---- Company "what-if" exclude — a non-destructive scope overlay -------------
   // Session-only (NEVER persisted): excluded companies drop out of EVERY Home
   // aggregate (_briefData → Rec grid / totals / net / AI; _periodWidgetData →
@@ -9014,7 +9058,11 @@
       // The surface is real, it is accountant-only, and it renders the ANALYST
       // bands. Naming the tab what the messages call it is what closes the gap
       // (owner 2026-08-14).
-      { k: 'audit',     label: 'Audit Center' }
+      { k: 'audit',     label: 'Audit Center' },
+      // UI-228 (owner 2026-10-22): the accountant's process as steps, each going to the tab
+      // it is about, from this user's own data. Right-aligned (`aside`) so it reads as
+      // separate from the four workflow tabs; permanent for now.
+      { k: 'walk',      label: 'Walkthrough', aside: true }
     ],
     analyst: [
       { k: 'work',    label: 'Data Health' },
@@ -9148,7 +9196,7 @@
     nav.hidden = false;
     nav.innerHTML = tabs.map(function (t) {
       var on = t.k === cur;
-      return '<button type="button" class="subnav-tab' + (on ? ' is-active' : '') + '" role="tab" aria-selected="' + on + '" data-sv="' + t.k + '">' + t.label + '</button>';
+      return '<button type="button" class="subnav-tab' + (on ? ' is-active' : '') + (t.aside ? ' is-aside' : '') + '" role="tab" aria-selected="' + on + '" data-sv="' + t.k + '">' + t.label + '</button>';
     }).join('');
     if (!nav._wired) {
       nav._wired = true;
@@ -9235,10 +9283,12 @@
     var vr = _viewRole();
     var trg = $('acctTriage');
     var rec = $('acctPanels'), acct = $('acctAccount'), perp = $('acctPerpetual'), audit = $('acctAudit');
+    var walk = $('acctWalk'), walkBanner = $('acctWalkBanner');   // UI-228
     var hideAll = function () {
       if (trg) trg.hidden = true;
       if (rec) rec.hidden = true; if (acct) acct.hidden = true; if (perp) perp.hidden = true;
       if (audit) audit.hidden = true;
+      if (walk) walk.hidden = true; if (walkBanner) walkBanner.hidden = true;
       var rp0 = $('reportsPalette'); if (rp0) rp0.hidden = true;
       var bt = $('analystDayBriefTop'); if (bt) bt.hidden = true;   // analyst-only chrome
     };
@@ -9267,17 +9317,143 @@
     if (acct) acct.hidden = (sv !== 'account');
     if (perp) perp.hidden = (sv !== 'perpetual');
     if (audit) audit.hidden = (sv !== 'audit');
+    if (walk) walk.hidden = (sv !== 'walk');
     if (reports) reports.hidden = (sv !== 'reports');
     if (sv === 'account')        renderAccountPalette(d);
     else if (sv === 'perpetual') renderPerpetualPalette(d);
     else if (sv === 'reports')   renderReportsPalette(d);
     else if (sv === 'audit')     renderAuditPanel(d);
+    else if (sv === 'walk')      renderWalkthrough(d);
     else                         renderAcctSnapshot(d);
+    renderWalkBanner(sv, d);   // UI-228: the step banner, only on the open step's own tab
     // Prewarm the Perpetual as-of in the background (the ~2.4s query is the
     // bottleneck) so switching to that tab is instant. Skip when already there
     // (the palette owns the fetch); _perpFetch no-ops once the period is cached.
     if (sv !== 'perpetual') _perpFetch(d, true);
   }
+
+  // ── UI-228 Walkthrough (owner 2026-10-22) ───────────────────────────────────
+  // The accountant's process as seven steps, written from the code, not the spec: the
+  // posting-entry spec alone had neither Audit Center nor the analyst's inputs. Each step
+  // says what the user is looking at and what to do, adds one line from THEIR data,
+  // picked by fixed rules with no AI so it works on every plan, and goes to the tab it is
+  // about. Arriving from a step shows the banner there; the process itself is untouched.
+  // Owner ruling 2026-10-22: overrules UI-40's "not a Training tab" for the accountant,
+  // because AI-borne training reaches no plan-Off client (VLC-186). Wording: owner draft.
+  var _walkStep = null;   // the open step's index, or null when no walkthrough is running
+  function _walkName(co) {
+    var n = (_coNames && _coNames[String(co)]) || '';
+    return n ? n + ' (Co ' + co + ')' : 'Co ' + co;
+  }
+  function _walkSum(c, names) { return names.reduce(function (s, k) { return s + (Number(c.comp[k]) || 0); }, 0); }
+  // The company the steps use is the first card on Overview the accountant can clear:
+  // the cards' own order and predicate (_acctActionRank), so "open it" is always a card
+  // they can see. `waiting` are the break cards, the analyst's to fix first.
+  function _walkFacts(d) {
+    var cos = (d && d.companies) || [];
+    var out = cos.filter(function (c) { return Math.abs(c.oob) > 1; }).sort(function (a, b) {
+      var ra = _acctActionRank(a), rb = _acctActionRank(b);
+      return (ra !== rb) ? (ra - rb) : ((Number(a.co) || 0) - (Number(b.co) || 0));
+    });
+    return {
+      total: cos.length, out: out.length,
+      waiting: out.filter(function (c) { return _acctActionRank(c) === 2; }),
+      pick: out.filter(function (c) { return _acctActionRank(c) === 0; })[0] || null
+    };
+  }
+  // look / todo are fixed HTML (no data in them); live() returns plain text, escaped at paint.
+  var WALK_STEPS = [
+    { tab: 'rec', title: 'Read the period',
+      look: 'Overview shows one card per company: its GL balance, its inventory, and the out-of-balance between them. Cards you can clear come first.',
+      todo: 'Find the companies with an amount in <b>Out</b>. A company with nothing out is already reconciled.',
+      live: function (f) { return 'This period: ' + f.out + ' of ' + f.total + ' compan' + (f.total === 1 ? 'y' : 'ies') + ' out of balance.'; } },
+    { tab: 'rec', title: 'Check the analyst’s side first', focus: 'waiting',
+      look: 'A red dot, or a card that says it is waiting on an analyst re-roll, has a roll-forward break.',
+      todo: 'Leave those for now. The analyst fixes the source and re-rolls; until then there is nothing for you to post.',
+      live: function (f) {
+        return f.waiting.length
+          ? f.waiting.length + ' compan' + (f.waiting.length === 1 ? 'y is' : 'ies are') + ' waiting on the analyst: '
+            + f.waiting.map(function (c) { return _walkName(c.co); }).join(', ') + '.'
+          : 'No company is waiting on the analyst this period.';
+      } },
+    { tab: 'rec', title: 'Open a company’s out-of-balance', focus: 'pick',
+      look: 'The out-of-balance splits into parts. <b>Carry forward</b>, <b>transactions</b> and <b>manual entries</b> are yours. <b>Cardex</b> is the analyst’s. <b>Unposted batches</b> and <b>end of day</b> are timing that clears by itself.',
+      todo: 'Only journal your part. Never journal the timing.',
+      live: function (f) {
+        var c = f.pick;
+        if (!c) return 'No company needs an entry from you this period. The steps still apply next period.';
+        return _walkName(c.co) + ': yours ' + _ccyAmt(c.ccy, _walkSum(c, ['Carry forward', 'Transactions', 'Manual entries']))
+          + ', timing ' + _ccyAmt(c.ccy, _walkSum(c, ['Unposted GL batches', 'End of Day']))
+          + ', cardex ' + _ccyAmt(c.ccy, _walkSum(c, ['Cardex'])) + '.';
+      } },
+    { tab: 'rec', title: 'Decide what it needs', focus: 'pick',
+      look: '<b>Mark Complete</b> on the company’s card lists the outcomes.',
+      todo: 'Accept it as immaterial, mark it as timing, hand it to the analyst, or correct it with an entry.' },
+    { tab: 'account', title: 'Build the entry', scope: true,
+      look: 'Accounts shows the company’s accounts and where each part of the gap sits.',
+      todo: 'Use <b>Balancing Entry</b> on the Overview card for one clearing line, or <b>Adjusting Entry</b> here for an offset per account. Export it, then key it into JDE with the token in the P0911 Explanation.' },
+    { tab: 'rec', title: 'Mark it complete', focus: 'pick',
+      look: 'The company’s card on Overview.',
+      todo: 'After keying the entry, mark the company complete. Its card gets a ✓ and the reason; <b>Reopen</b> undoes it.' },
+    { tab: 'audit', title: 'Prove it', scope: true,
+      look: 'Audit Center is the record of the period: your entries and dispositions, beside the analyst’s reviews and the model approval.',
+      todo: 'Check your entry: it reads <b>Awaiting posting</b> until JDE posts it with the token, then <b>✓ Verified</b>. Export the audit report or evidence package for the close file.' }
+  ];
+  function _walkLive(s, f) {
+    if (s.live) return s.live(f);
+    return (f.pick && (s.focus === 'pick' || s.scope)) ? 'Using ' + _walkName(f.pick.co) + '.' : '';
+  }
+  function renderWalkthrough(d) {
+    var list = $('acctWalkList'); if (!list) return;
+    var f = _walkFacts(d);
+    list.innerHTML = WALK_STEPS.map(function (s, i) {
+      var live = _walkLive(s, f);
+      return '<li class="walk-step"><span class="walk-num">' + (i + 1) + '</span><div>'
+        + '<div class="walk-title">' + esc(s.title) + '</div>'
+        + '<p class="walk-look">' + s.look + '</p><p class="walk-todo">' + s.todo + '</p>'
+        + (live ? '<div class="walk-live">' + esc(live) + '</div>' : '') + '</div>'
+        + '<button type="button" class="wl-btn walk-go" data-walk-go="' + i + '">Go there &rarr;</button></li>';
+    }).join('');
+  }
+  // Goes to the step's tab, scoped to the picked company, and lights the card it is about.
+  function _walkGo(i) {
+    var s = WALK_STEPS[i]; if (!s) return;
+    var f = _walkFacts(_acctData);
+    _walkStep = i;
+    var co = s.focus === 'waiting' ? (f.waiting[0] ? f.waiting[0].co : null) : (f.pick ? f.pick.co : null);
+    if (s.scope && f.pick) _acctGlScopeCo = f.pick.co;
+    if (s.focus && co != null) _cardOpen.wl[String(co)] = true;
+    _setSubView(s.tab);
+    if (s.focus && co != null) setTimeout(function () {
+      var el = document.querySelector('[data-ccns="wl"][data-cckey="' + String(co).replace(/["\\]/g, '') + '"]');
+      if (!el) return;
+      try { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (_) { el.scrollIntoView(); }
+      el.classList.add('walk-focus');
+      setTimeout(function () { el.classList.remove('walk-focus'); }, 2500);
+    }, 0);
+  }
+  // The banner: only while a step is open AND the user is on that step's tab.
+  function renderWalkBanner(sv) {
+    var b = $('acctWalkBanner'); if (!b) return;
+    var s = _walkStep == null ? null : WALK_STEPS[_walkStep];
+    if (!s || sv !== s.tab) { b.hidden = true; b.innerHTML = ''; return; }
+    var last = _walkStep === WALK_STEPS.length - 1;
+    b.hidden = false;
+    b.innerHTML = '<div class="walk-banner-text"><span class="walk-banner-step">Walkthrough &middot; Step ' + (_walkStep + 1)
+        + ' of ' + WALK_STEPS.length + ': ' + esc(s.title) + '.</span> ' + s.todo + '</div>'
+      + '<div class="walk-banner-btns"><button type="button" class="wl-btn" data-walk-steps>All steps</button>'
+      + (last ? '<button type="button" class="wl-btn wl-btn-primary" data-walk-end>Finish</button>'
+              : '<button type="button" class="wl-btn wl-btn-primary" data-walk-next>Next step &rarr;</button>'
+                + '<button type="button" class="wl-btn" data-walk-end>End</button>')
+      + '</div>';
+  }
+  document.addEventListener('click', function (e) {
+    var g = e.target.closest('[data-walk-go]');
+    if (g) { _walkGo(Number(g.getAttribute('data-walk-go'))); return; }
+    if (e.target.closest('[data-walk-next]')) { _walkGo((_walkStep || 0) + 1); return; }
+    if (e.target.closest('[data-walk-steps]')) { _setSubView('walk'); return; }   // the step stays open
+    if (e.target.closest('[data-walk-end]')) { _walkStep = null; renderWalkBanner(_curSubView()); }
+  });
 
   // Recurrence lens — ONE source of truth for both the Accounts-grid sparkline and
   // the AI fact block, so the narration can never disagree with the bars the
@@ -17671,10 +17847,7 @@
       'Unposted GL batches': 'Mostly GL batches that haven’t been posted yet.',
       'End of Day': 'Mostly end-of-day sales activity that isn’t finalized yet.'
     };
-    var wlMat = function (c, role) {
-      return _COMPONENTS.filter(function (k) { return k.role === role && k.name !== 'Cardex' && Math.abs(c.comp[k.name]) >= 1; })
-        .sort(function (a, b) { return Math.abs(c.comp[b.name]) - Math.abs(c.comp[a.name]); });
-    };
+    var wlMat = _acctMaterial;   // UI-228: shared with the Walkthrough
     // GL and Perpetual totals for the card face — the two sides whose gap IS the
     // out-of-balance, shown inline so the reconciliation reads as one equation.
     // One unit (M or K) for all of a company's figures — no M/K mix in a row.
@@ -17791,10 +17964,7 @@
     // break (blocked until an analyst re-rolls). Within a rank, ascending by
     // company number. Prevents the view opening on a "not yours to fix" dead end
     // just because it has the lowest company number (UI-46).
-    function _wlActionRank(c) {
-      if ((c.breaks || 0) > 0) return 2;                       // roll-forward break -> waiting on the analyst
-      return (wlMat(c, 'Accountant').length > 0) ? 0 : 1;      // 0 = clearable, 1 = other out
-    }
+    var _wlActionRank = _acctActionRank;   // UI-228: shared with the Walkthrough
     var wlCases = outCos.slice().sort(function (a, b) {
       var ra = _wlActionRank(a), rb = _wlActionRank(b);
       return (ra !== rb) ? (ra - rb) : ((Number(a.co) || 0) - (Number(b.co) || 0));
