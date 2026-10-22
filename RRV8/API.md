@@ -806,6 +806,13 @@ the workbook's Service log sheet says why it is empty, and no reference shows.
   header: Services up to 8.0.47 refuse any request header beyond
   Authorization, Content-Type and Accept in the CORS preflight. Tested by
   `Tools/test-request-id.js`.
+  **VALC carries it too (VLC-182).** Every VALC response, tenant and sign-in
+  routes included, has `X-Request-Id` (same shape: the caller's plain token, or
+  12 hex), exposed to V8's origin by VALC's CORS config, and `valc.out.log`
+  prints it on that request's lines. A refusal on `/api/v1/tenant/**` writes one
+  line, `Tenant refusal <status> on <method> <path>: <reason>` (path without its
+  query string), so the Reference a customer reads from Team, licence usage or
+  restart finds it there.
 
 ---
 
