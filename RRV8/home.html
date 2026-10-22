@@ -691,6 +691,10 @@
   .walk-banner[hidden] { display: none; }
   .walk-banner-text { flex: 1 1 320px; line-height: 1.45; }
   .walk-banner-step { font-weight: 700; color: var(--navy); }
+  .walk-banner-live { margin-top: 4px; font-weight: 600; color: var(--navy); }
+  .walk-status { margin: 4px 0 12px; padding: 10px 14px; border-radius: 10px; background: var(--green-pale);
+    border: 1px solid rgba(46,160,90,0.4); font-size: 13.5px; font-weight: 600; color: var(--text); }
+  .walk-status[hidden] { display: none; }
   .walk-banner-btns { display: flex; gap: 6px; }
   .walk-focus { outline: 3px solid #5b8def; outline-offset: 3px; border-radius: 12px; transition: outline-color .4s ease; }
   .subnav-tab { appearance: none; background: none; border: 0; padding: 9px 18px; font-family: inherit;
@@ -3463,6 +3467,7 @@
   <section class="acct-panels" id="acctWalk" hidden aria-label="Walkthrough">
     <div class="acct-snapshot">
       <div class="acct-snap-headline"><div class="acct-snap-title">Walkthrough: reconcile a period</div></div>
+      <p class="walk-status" id="acctWalkStatus" hidden role="status"></p>
       <ol class="walk-list" id="acctWalkList"></ol>
     </div>
   </section>
@@ -9333,7 +9338,7 @@
   }
 
   // ── UI-228 Walkthrough (owner 2026-10-22) ───────────────────────────────────
-  // The accountant's process as seven steps, written from the code, not the spec: the
+  // The accountant's process as six steps, written from the code, not the spec: the
   // posting-entry spec alone had neither Audit Center nor the analyst's inputs. Each step
   // says what the user is looking at and what to do, adds one line from THEIR data,
   // picked by fixed rules with no AI so it works on every plan, and goes to the tab it is
@@ -9348,37 +9353,70 @@
   function _walkSum(c, names) { return names.reduce(function (s, k) { return s + (Number(c.comp[k]) || 0); }, 0); }
   // The company the steps use is the first card on Overview the accountant can clear:
   // the cards' own order and predicate (_acctActionRank), so "open it" is always a card
-  // they can see. `waiting` are the break cards, the analyst's to fix first.
+  // they can see. `waiting` are the break cards, the analyst's to fix first. A company
+  // already marked complete is skipped for `pick`: its card has Reopen, not Mark Complete,
+  // so steps 2-5 would point at a menu that is not there. `done` is the first such company,
+  // the one Audit Center can show an entry for.
   function _walkFacts(d) {
     var cos = (d && d.companies) || [];
     var out = cos.filter(function (c) { return Math.abs(c.oob) > 1; }).sort(function (a, b) {
       var ra = _acctActionRank(a), rb = _acctActionRank(b);
       return (ra !== rb) ? (ra - rb) : ((Number(a.co) || 0) - (Number(b.co) || 0));
     });
+    var mine = out.filter(function (c) { return _acctActionRank(c) === 0; });
+    var open = mine.filter(function (c) { return !_acctIsDone(c.co); });
+    var doneList = mine.filter(function (c) { return _acctIsDone(c.co); });
     return {
       total: cos.length, out: out.length,
       waiting: out.filter(function (c) { return _acctActionRank(c) === 2; }),
-      pick: out.filter(function (c) { return _acctActionRank(c) === 0; })[0] || null
+      other: out.filter(function (c) { return _acctActionRank(c) === 1; }),   // timing / operations: no Mark Complete
+      open: open, doneList: doneList,
+      pick: open[0] || null,
+      done: doneList[0] || null
     };
+  }
+  // withBy: a completed company also names who marked it, since it may not be the reader.
+  function _walkNames(cs, withBy) {
+    var n = cs.slice(0, 3).map(function (c) {
+      var r = withBy ? _acctDoneRec(c.co) : null;
+      return _walkName(c.co) + (r && r.by ? ' by ' + r.by : '');
+    }).join(', ');
+    return cs.length > 3 ? n + ' and ' + (cs.length - 3) + ' more' : n;
+  }
+  function _walkCount(n, what) { return n + ' compan' + (n === 1 ? 'y' : 'ies') + ' ' + what; }
+  // Nothing left for the accountant this period: said on the Walkthrough tab and in step 1,
+  // rather than hiding the tab, because the steps are next period's work either way.
+  function _walkDoneLine(f) {
+    if (!f.out) return 'No company is out of balance this period, so there is nothing to do now. The steps show what to do next period.';
+    var parts = [];
+    if (f.doneList.length) parts.push(_walkCount(f.doneList.length, 'marked complete'));
+    if (f.waiting.length) parts.push(_walkCount(f.waiting.length, 'waiting on the analyst'));
+    if (f.other.length) parts.push(_walkCount(f.other.length, 'not yours to journal'));
+    return 'Nothing is left to work this period: ' + parts.join(', ') + '. The steps show what to do next period.';
+  }
+  // The company a step is about: Audit Center proves a finished one, every other step works an open one.
+  function _walkCo(s, f) {
+    return s.scope === 'proof' ? (f.done || f.pick) : f.pick;
   }
   // look / todo are fixed HTML (no data in them); live() returns plain text, escaped at paint.
   var WALK_STEPS = [
-    { tab: 'rec', title: 'Read the period',
-      look: 'Overview shows one card per company: its GL balance, its inventory, and the out-of-balance between them. Cards you can clear come first.',
-      todo: 'Find the companies with an amount in <b>Out</b>. A company with nothing out is already reconciled.',
-      live: function (f) { return 'This period: ' + f.out + ' of ' + f.total + ' compan' + (f.total === 1 ? 'y' : 'ies') + ' out of balance.'; } },
-    { tab: 'rec', title: 'Check the analyst’s side first', focus: 'waiting',
-      look: 'A red dot, or a card that says it is waiting on an analyst re-roll, has a roll-forward break.',
-      todo: 'Leave those for now. The analyst fixes the source and re-rolls; until then there is nothing for you to post.',
+    { tab: 'rec', title: 'Read the period', focus: 'pick', peek: true,
+      look: 'Overview lists only the companies that are out of balance, each with its GL balance, its inventory and the amount in <b>Out</b>. A company that ties out is not on it; the line under the cards counts those as reconciled.',
+      // Owner 2026-10-22: the analyst's-side step folded in here (the red dot), so the
+      // second step is the highlighted card itself and its options come one step sooner.
+      todo: 'Find the highlighted company: it is the next one to work. A green card is one already marked complete this period, even though it still shows an amount in <b>Out</b>. A red dot is a roll-forward break: leave it for the analyst, who fixes the source and re-rolls. <b>Next step</b> opens the highlighted card and shows what to click.',
       live: function (f) {
-        return f.waiting.length
-          ? f.waiting.length + ' compan' + (f.waiting.length === 1 ? 'y is' : 'ies are') + ' waiting on the analyst: '
-            + f.waiting.map(function (c) { return _walkName(c.co); }).join(', ') + '.'
-          : 'No company is waiting on the analyst this period.';
+        if (!f.open.length) return _walkDoneLine(f);
+        var t = 'This period: ' + f.out + ' of ' + f.total + ' compan' + (f.total === 1 ? 'y' : 'ies') + ' out of balance. '
+          + f.open.length + ' still to work: ' + _walkNames(f.open) + '.';
+        if (f.doneList.length) t += ' ' + f.doneList.length + ' marked complete: ' + _walkNames(f.doneList, true) + '.';
+        if (f.waiting.length) t += ' ' + _walkCount(f.waiting.length, 'waiting on the analyst') + ': ' + _walkNames(f.waiting) + '.';
+        if (f.other.length) t += ' ' + _walkCount(f.other.length, 'not yours to journal') + '.';
+        return t;
       } },
     { tab: 'rec', title: 'Open a company’s out-of-balance', focus: 'pick',
       look: 'The out-of-balance splits into parts. <b>Carry forward</b>, <b>transactions</b> and <b>manual entries</b> are yours. <b>Cardex</b> is the analyst’s. <b>Unposted batches</b> and <b>end of day</b> are timing that clears by itself.',
-      todo: 'Only journal your part. Never journal the timing.',
+      todo: 'The company’s card is open. Each part is a pill along the bottom of the card; click one to see the lines behind it. Only journal your part. Never journal the timing.',
       live: function (f) {
         var c = f.pick;
         if (!c) return 'No company needs an entry from you this period. The steps still apply next period.';
@@ -9387,25 +9425,28 @@
           + ', cardex ' + _ccyAmt(c.ccy, _walkSum(c, ['Cardex'])) + '.';
       } },
     { tab: 'rec', title: 'Decide what it needs', focus: 'pick',
-      look: '<b>Mark Complete</b> on the company’s card lists the outcomes.',
-      todo: 'Accept it as immaterial, mark it as timing, hand it to the analyst, or correct it with an entry.' },
+      look: 'Every outcome is in <b>Mark Complete</b>, at the bottom right of the company’s card.',
+      todo: 'Click <b>Mark Complete</b> and pick one: <b>Accepted &mdash; immaterial</b>, <b>Timing &mdash; will self-clear</b> or <b>Handed to analyst &mdash; source fix</b>. If it needs an entry, pick nothing yet: build the entry in step 4, then pick <b>Corrected &mdash; journal entry posted</b> in step 5.' },
     { tab: 'account', title: 'Build the entry', scope: true,
       look: 'Accounts shows the company’s accounts and where each part of the gap sits.',
-      todo: 'Use <b>Balancing Entry</b> on the Overview card for one clearing line, or <b>Adjusting Entry</b> here for an offset per account. Export it, then key it into JDE with the token in the P0911 Explanation.' },
+      todo: 'For one clearing line, click <b>Balancing Entry</b> at the bottom left of the company’s card on Overview. For an offset per account, enter the offset accounts on the out-of-balance rows here, then click <b>Adjusting Entry</b> above the table. Export the entry and key it into JDE with the token in the P0911 Explanation.' },
     { tab: 'rec', title: 'Mark it complete', focus: 'pick',
       look: 'The company’s card on Overview.',
-      todo: 'After keying the entry, mark the company complete. Its card gets a ✓ and the reason; <b>Reopen</b> undoes it.' },
-    { tab: 'audit', title: 'Prove it', scope: true,
+      todo: 'After keying the entry, click <b>Mark Complete</b> on the card and pick <b>Corrected &mdash; journal entry posted</b>. The card gets a ✓ and the reason; <b>Reopen</b> undoes it.' },
+    { tab: 'audit', title: 'Prove it', scope: 'proof',
       look: 'Audit Center is the record of the period: your entries and dispositions, beside the analyst’s reviews and the model approval.',
-      todo: 'Check your entry: it reads <b>Awaiting posting</b> until JDE posts it with the token, then <b>✓ Verified</b>. Export the audit report or evidence package for the close file.' }
+      todo: 'Find your entry in the list: it reads <b>Awaiting posting</b> until JDE posts it with the token, then <b>✓ Verified</b>. For the close file, click <b>Evidence package</b> (one PDF) or <b>Audit report</b> at the top right.' }
   ];
   function _walkLive(s, f) {
     if (s.live) return s.live(f);
-    return (f.pick && (s.focus === 'pick' || s.scope)) ? 'Using ' + _walkName(f.pick.co) + '.' : '';
+    var c = (s.focus === 'pick' || s.scope) ? _walkCo(s, f) : null;
+    return c ? 'Using ' + _walkName(c.co) + '.' : '';
   }
   function renderWalkthrough(d) {
     var list = $('acctWalkList'); if (!list) return;
     var f = _walkFacts(d);
+    var st = $('acctWalkStatus');
+    if (st) { st.hidden = f.open.length > 0; st.textContent = f.open.length ? '' : _walkDoneLine(f); }
     list.innerHTML = WALK_STEPS.map(function (s, i) {
       var live = _walkLive(s, f);
       return '<li class="walk-step"><span class="walk-num">' + (i + 1) + '</span><div>'
@@ -9420,37 +9461,54 @@
     var s = WALK_STEPS[i]; if (!s) return;
     var f = _walkFacts(_acctData);
     _walkStep = i;
-    var co = s.focus === 'waiting' ? (f.waiting[0] ? f.waiting[0].co : null) : (f.pick ? f.pick.co : null);
-    if (s.scope && f.pick) _acctGlScopeCo = f.pick.co;
-    if (s.focus && co != null) _cardOpen.wl[String(co)] = true;
+    var c = _walkCo(s, f), co = c ? c.co : null;
+    if (s.scope && co != null) _acctGlScopeCo = co;
+    if (s.focus && co != null && !s.peek) _cardOpen.wl[String(co)] = true;   // peek: light it, leave it shut
     _setSubView(s.tab);
     if (s.focus && co != null) setTimeout(function () {
-      var el = document.querySelector('[data-ccns="wl"][data-cckey="' + String(co).replace(/["\\]/g, '') + '"]');
+      var el = _walkCard(co);
       if (!el) return;
       try { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (_) { el.scrollIntoView(); }
-      el.classList.add('walk-focus');
-      setTimeout(function () { el.classList.remove('walk-focus'); }, 2500);
+      _walkLight(s, f);
     }, 0);
   }
-  // The banner: only while a step is open AND the user is on that step's tab.
-  function renderWalkBanner(sv) {
+  function _walkCard(co) {
+    return document.querySelector('[data-ccns="wl"][data-cckey="' + String(co).replace(/["\\]/g, '') + '"]');
+  }
+  // The step's card stays lit for as long as its banner shows, not for a moment: the user
+  // is reading the banner when a short flash would happen. Cleared when the banner goes.
+  function _walkLight(s, f) {
+    var lit = document.querySelectorAll('.walk-focus');
+    for (var i = 0; i < lit.length; i++) lit[i].classList.remove('walk-focus');
+    var c = (s && s.focus) ? _walkCo(s, f) : null;
+    var el = c ? _walkCard(c.co) : null;
+    if (el) el.classList.add('walk-focus');
+  }
+  // The banner: only while a step is open AND the user is on that step's tab. It carries
+  // the step's line from the user's own data, which is what says what to do on THIS page.
+  function renderWalkBanner(sv, d) {
     var b = $('acctWalkBanner'); if (!b) return;
     var s = _walkStep == null ? null : WALK_STEPS[_walkStep];
-    if (!s || sv !== s.tab) { b.hidden = true; b.innerHTML = ''; return; }
+    if (!s || sv !== s.tab) { b.hidden = true; b.innerHTML = ''; _walkLight(null); return; }
+    var f = _walkFacts(d || _acctData), live = _walkLive(s, f);
     var last = _walkStep === WALK_STEPS.length - 1;
     b.hidden = false;
     b.innerHTML = '<div class="walk-banner-text"><span class="walk-banner-step">Walkthrough &middot; Step ' + (_walkStep + 1)
-        + ' of ' + WALK_STEPS.length + ': ' + esc(s.title) + '.</span> ' + s.todo + '</div>'
+        + ' of ' + WALK_STEPS.length + ': ' + esc(s.title) + '.</span> ' + s.todo
+        + (live ? '<div class="walk-banner-live">' + esc(live) + '</div>' : '') + '</div>'
       + '<div class="walk-banner-btns"><button type="button" class="wl-btn" data-walk-steps>All steps</button>'
+      + (_walkStep > 0 ? '<button type="button" class="wl-btn" data-walk-prev>&larr; Previous step</button>' : '')
       + (last ? '<button type="button" class="wl-btn wl-btn-primary" data-walk-end>Finish</button>'
               : '<button type="button" class="wl-btn wl-btn-primary" data-walk-next>Next step &rarr;</button>'
                 + '<button type="button" class="wl-btn" data-walk-end>End</button>')
       + '</div>';
+    _walkLight(s, f);   // this runs after the panel repaints, so the light survives a repaint
   }
   document.addEventListener('click', function (e) {
     var g = e.target.closest('[data-walk-go]');
     if (g) { _walkGo(Number(g.getAttribute('data-walk-go'))); return; }
     if (e.target.closest('[data-walk-next]')) { _walkGo((_walkStep || 0) + 1); return; }
+    if (e.target.closest('[data-walk-prev]')) { _walkGo(Math.max(0, (_walkStep || 0) - 1)); return; }
     if (e.target.closest('[data-walk-steps]')) { _setSubView('walk'); return; }   // the step stays open
     if (e.target.closest('[data-walk-end]')) { _walkStep = null; renderWalkBanner(_curSubView()); }
   });
@@ -17982,6 +18040,9 @@
       : '<div class="wl-reconciled">' + svgCheck + ' Every company is reconciled — nothing to post this period.</div>';
     var gridEl = $('acctSnapGrid');
     if (gridEl) gridEl.innerHTML = wlHtml;
+    // UI-228: a Mark Complete save repaints the cards directly, not through the panel
+    // renderer, so the Walkthrough banner's line and its lit card are redone here too.
+    if (_walkStep != null) renderWalkBanner(_curSubView(), d);
     // Collapse toggles, wired on the persistent grid host rather than the cards it
     // rebuilds. Self-guarded, so the repaint above cannot stack listeners.
     _wireCardCollapse(gridEl);
