@@ -156,9 +156,35 @@ async function homeSuite() {
   check('A5 the plan read feeds the cap', h.plansSet, [['RapidReconciler_Prod_V8', 'scrubbed']]);
 }
 
+// K1/K2: the Accountant/Analyst assistant card's own off-state painter. Measured live
+// 2026-10-22: on an Off plan it said "Switched off. Turn AI on for reconciliation help."
+const K_START = '  function _setAiAsstTier() {';
+const K_END = '\n  function renderAcctTriage(d) {';
+once(html, K_START, 'card start'); once(html, K_END, 'card end');
+const CARD_SRC = html.slice(html.indexOf(K_START), html.indexOf(K_END));
+const NOT_IN_PLAN = (html.match(/var AI_NOT_IN_PLAN = ('[^']*');/) || [])[1];
+if (!NOT_IN_PLAN) { console.log('HARNESS BROKEN: AI_NOT_IN_PLAN not found in home.html'); process.exit(1); }
+function card(tier, plan) {
+  const els = {};
+  const el = (id) => (els[id] = els[id] || { textContent: '', setAttribute() {}, id });
+  const sb = { window: { RRAI: { plan: () => plan } }, $: el, _recsummaryLevel: () => tier, _viewRole: () => 'accountant',
+               _acctHasClearable: () => true };
+  sb.RRAI = sb.window.RRAI;
+  vm.createContext(sb);
+  vm.runInContext('var AI_NOT_IN_PLAN = ' + NOT_IN_PLAN + ';\n' + CARD_SRC + '\n_setAiAsstTier();', sb);
+  return el('acctAiGreeting').textContent;
+}
+function cardSuite() {
+  console.log('\nassistant card (home.html)');
+  check('K1 an Off plan: the card names the plan and who to ask, not a switch',
+        [/not part of this RapidReconciler plan/.test(card('off', 'off')), /Turn AI on/.test(card('off', 'off'))], [true, false]);
+  check('K2 the user\'s own Off choice keeps its own sentence', card('off', 'full'), 'Switched off. Turn AI on for reconciliation help.');
+}
+
 (async () => {
   await rraiSuite(RRAI_SRC, 'RRAI (config.js)');
   await homeSuite();
+  cardSuite();
   const real = failures;
 
   // MUTATION CONTROLS: each must redden what it names, or the checks above prove nothing.
