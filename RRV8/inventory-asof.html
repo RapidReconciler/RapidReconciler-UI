@@ -2473,9 +2473,13 @@
   // Effective AI tier (gateway vocab: off|docs|scrubbed|full). In demo/non-prod the
   // global RRAI plan pill is authoritative and drives this page's AI exposure live;
   // in prod this page carries no plan gate, so it stays 'full' as before.
+  // ⚠ VLC-186: IN PRODUCTION THIS RETURNED 'full', WHATEVER THE PLAN. It read RRAI only off
+  // prod, when RRAI was the demo switcher, so a real customer's As Of prompts were never
+  // masked. RRAI.get() is now capped at the purchased plan (config.js), so it is the answer
+  // in every mode, and the same value is declared to VALC as the call's level.
   function asofEffTier() {
     try {
-      if (window.RR_CONFIG && RR_CONFIG.mode !== 'prod' && window.RRAI) {
+      if (window.RRAI && window.RRAI.get) {
         const g = window.RRAI.get();
         if (g) return g === 'grounded' ? 'docs' : g;
       }
@@ -2611,7 +2615,7 @@
     try { _co = _ensureSolo() || ''; } catch (_) {}
     _per = (_data && _data._meta && _data._meta.period) || '';
     const _u = 'api/v1/ai/explain' + (window.RRV8 && RRV8.aiCtx ? ('?ctx=' + RRV8.aiCtx('asof', _co, _per)) : '');
-    return rrFetch(_u, { method: 'POST', body: { prompt } })
+    return rrFetch(_u, { method: 'POST', body: { prompt, level: asofEffTier() } })   // VLC-186: the tier it was masked with
       .then(r => (r && r.text) ? String(r.text).trim() : '');
   }
   function asofAsk(kind, freeText) {
@@ -2672,7 +2676,8 @@
       asofAnswer(txt || 'No response — the AI service may be unavailable.', false);
     }).catch(err => {
       // VLC-183: a slow answer says so; anything else keeps the old wording.
-      asofAnswer((window.RRV8 && RRV8.aiTimeout && RRV8.aiTimeout(err)) || 'Could not reach the AI service. Try again in a moment.', false);
+      asofAnswer((window.RRV8 && RRV8.aiTimeout && RRV8.aiTimeout(err)) || (window.RRV8 && RRV8.aiRefusal && RRV8.aiRefusal(err))
+        || 'Could not reach the AI service. Try again in a moment.', false);
     }).then(() => { _asofAiBusy = false; });
   }
   document.addEventListener('click', (e) => {
@@ -2890,7 +2895,7 @@ function updateLotDetailPill() {
     const _optUrl = 'api/v1/ai/explain' + (window.RRV8 && RRV8.aiCtx ? ('?ctx=' + RRV8.aiCtx('asof', _optCo, _optPer)) : '');
     const _asofOptAi = (window.RRAI && RRAI.get && RRAI.get() === 'off')
       ? Promise.resolve({ text: '' })
-      : rrFetch(_optUrl, { method: 'POST', body: { prompt } });
+      : rrFetch(_optUrl, { method: 'POST', body: { prompt, level: asofEffTier() } });   // VLC-186
     _asofOptAi.then(r => {
       const txt = (r && r.text) ? String(r.text).trim() : '';
       const m = txt.match(/TARGET:\s*\$?\s*([\d.]+)/i);

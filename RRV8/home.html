@@ -6904,6 +6904,8 @@
     // actionable by GSI.
     _aiHealthCache[dbn] = rrFetch('api/v1/ai/health', dbn ? { query: { db: dbn } } : undefined)
       .then(function (r) {
+        // VLC-186: the same read feeds the tier cap, so the plan chip and the cap cannot disagree.
+        if (r && r.maxLevel && window.RRAI && RRAI.setPlan) RRAI.setPlan(dbn, r.maxLevel);
         return { configured: !(r && r.configured === false),
                  maxLevel: (r && r.maxLevel) || 'off', known: true };
       })
@@ -6940,11 +6942,18 @@
   // not exist: ":6675 said "the AI panel", `:17172` said "AI settings", and
   // admin-claude-assistant.html's own <h1> and <title> both say "AI Assistant".
   var AI_OFF_WHERE = 'AI Assistant';
+  // VLC-186: the sentence for a database whose PLAN has no AI (VALC's AI_NOT_IN_PLAN says the same).
+  var AI_NOT_IN_PLAN = 'The AI assistant is not part of this RapidReconciler plan. To add it, contact rrsupport@getgsi.com.';
   var AI_OFF_LEAD_NOTE = 'AI is off for this database — this line is computed from '
                        + 'your data, not written by the AI.';
   function aiExplain(prompt, opts) {
     opts = opts || {};
     var lvl = (typeof _recsummaryLevel === 'function') ? _recsummaryLevel() : 'full';
+    // VLC-186: an Off PLAN is a different fact from the user's own Off choice: turning AI
+    // on in this browser cannot help, and the sentence must say who can.
+    if (lvl === 'off' && window.RRAI && RRAI.plan && RRAI.plan() === 'off') {
+      return Promise.resolve({ ok: false, reason: 'not-in-plan', why: AI_NOT_IN_PLAN });
+    }
     if (lvl === 'off') {
       return Promise.resolve({ ok: false, reason: 'tier-off',
         // ⚠ "the AI panel" NAMED NOWHERE. VLC-63, 2026-09-16: the page's own <h1> and
@@ -6963,17 +6972,20 @@
       // loudly on a rename -- a generic `url` would be a key that means nothing
       // and could collide with the next dynamic site added to this file.
       var _aiExUrl = 'api/v1/ai/explain' + (opts.ctx ? ('?ctx=' + opts.ctx) : '');
-      var body = { prompt: prompt };
+      // VLC-186: declare the tier the prompt was built (and masked) with; VALC refuses one above the plan.
+      var body = { prompt: prompt, level: lvl };
       if (opts.system) body.system = opts.system;
       return rrFetch(_aiExUrl, { method: 'POST', body: body }).then(function (r) {
         var txt = (r && r.text) ? String(r.text).trim() : '';
         return txt ? { ok: true, text: txt }
                    : { ok: false, reason: 'error', why: 'The AI did not return a reading for this.' };
       }).catch(function (err) {
-        // VLC-183: a slow answer says so. `reason` stays 'error' because callers branch on it;
-        // only the sentence they show changes.
+        // VLC-183: a slow answer says so. VLC-186: a plan refusal says why, in VALC's words.
+        // `reason` stays 'error' because callers branch on it; only the sentence they show changes.
         return { ok: false, reason: 'error',
-                 why: (window.RRV8 && RRV8.aiTimeout && RRV8.aiTimeout(err)) || 'The AI could not be reached just now.' };
+                 why: (window.RRV8 && RRV8.aiTimeout && RRV8.aiTimeout(err))
+                   || (window.RRV8 && RRV8.aiRefusal && RRV8.aiRefusal(err))
+                   || 'The AI could not be reached just now.' };
       });
     });
   }
@@ -18221,7 +18233,8 @@
     _aiRenderDocStrip(null, [], 'adminAnsDocStrip');   // clear any prior answer's links
     var tier = (typeof _recsummaryLevel === 'function') ? _recsummaryLevel() : 'full';
     if (tier === 'off') {
-      if (ans) ans.textContent = 'The AI assistant is off for this database. Turn it on from the AI Assistant card to ask questions.';
+      if (ans) ans.textContent = (window.RRAI && RRAI.plan && RRAI.plan() === 'off') ? AI_NOT_IN_PLAN
+        : 'The AI assistant is off for this database. Turn it on from the AI Assistant card to ask questions.';
       return;
     }
     if (ans) ans.textContent = 'Thinking…';

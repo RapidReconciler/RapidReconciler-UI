@@ -894,20 +894,72 @@ window.RRAI = (function () {
     if (t === 'docs') t = 'grounded';   // ai/health maxLevel vocabulary → our key
     return TIERS.indexOf(t) >= 0 ? t : null;
   }
-  function get() {
+  // ⚠ VLC-186 (owner ruling B1, 2026-10-21): THE TIER IS CAPPED AT THE PURCHASED PLAN.
+  // It used to be this browser's choice alone (localStorage.rrv8.aiTier, default
+  // 'full'), so a plan-Off client still got answers, and a plan-Enhanced client's
+  // figures went out unmasked: every page masks from get(), before VALC sees the
+  // prompt. get() now returns the LOWER of the choice and the plan of the active
+  // database, so every page's masking follows the plan without each page knowing.
+  //
+  // The plan comes from api/v1/ai/health (maxLevel) and is kept per database in
+  // sessionStorage, so it is re-read in every new tab rather than trusted from an
+  // earlier sign-in. Until it is known, get() returns the choice: VALC is the
+  // backstop, because every explain call now declares get() as its `level` and VALC
+  // refuses a level above the plan (AiController.planRefusal). When the plan arrives,
+  // the same 'rrv8:aitierchange' event the tier switch fires makes open surfaces re-run.
+  var PLAN_KEY = 'rrv8.aiPlan';
+  function dbName() {
+    try { return (window.RRDB && window.RRDB.name && window.RRDB.name()) || ''; } catch (_) { return ''; }
+  }
+  function plans() {
+    try { return JSON.parse(sessionStorage.getItem(PLAN_KEY) || '{}') || {}; } catch (_) { return {}; }
+  }
+  function plan(db) { return norm(plans()[db == null ? dbName() : db]); }   // null = not known yet
+  function choice() {
     try { return norm(localStorage.getItem('rrv8.aiTier')) || 'full'; } catch (_) { return 'full'; }
   }
+  function cap(t, p) { return p && TIERS.indexOf(p) < TIERS.indexOf(t) ? p : t; }
+  function get() { return cap(choice(), plan()); }
   function setTier(t) {
     t = norm(t); if (!t) return;
     try { localStorage.setItem('rrv8.aiTier', t); } catch (_) {}
-    try { window.dispatchEvent(new CustomEvent('rrv8:aitierchange', { detail: { tier: t } })); } catch (_) {}
+    try { window.dispatchEvent(new CustomEvent('rrv8:aitierchange', { detail: { tier: get() } })); } catch (_) {}
     return t;
+  }
+  /** Records the active database's purchased plan, and re-runs open surfaces if it changed the tier. */
+  function setPlan(db, level) {
+    var p = norm(level); if (!p || db == null) return;
+    var all = plans(), before = get();
+    if (all[db] === p) return;
+    all[db] = p;
+    try { sessionStorage.setItem(PLAN_KEY, JSON.stringify(all)); } catch (_) {}
+    if (get() !== before) {
+      try { window.dispatchEvent(new CustomEvent('rrv8:aitierchange', { detail: { tier: get(), plan: p } })); } catch (_) {}
+    }
+  }
+  /** Reads the active database's plan from VALC once per page. Fails quietly: VALC is the backstop. */
+  var _primed = null;
+  function primePlan() {
+    if (_primed) return _primed;
+    var db = dbName();
+    var h = { 'Accept': 'application/json' };
+    try { var t = localStorage.getItem('rrv8.token'); if (t) h['Authorization'] = 'Bearer ' + t; else return (_primed = Promise.resolve(null)); } catch (_) { return (_primed = Promise.resolve(null)); }
+    if (!window.RRDB || !window.RRDB.valcFetch) return (_primed = Promise.resolve(null));
+    _primed = window.RRDB.valcFetch('api/v1/ai/health' + (db ? '?db=' + encodeURIComponent(db) : ''), { headers: h })
+      .then(function (r) { return r && r.ok ? r.json() : null; })
+      .then(function (j) { if (j && j.maxLevel) setPlan(db, j.maxLevel); return plan(db); })
+      .catch(function () { return null; });
+    return _primed;
   }
   return {
     TIERS: TIERS, LABELS: LABELS, BLURB: BLURB,
-    norm: norm, get: get, set: setTier, label: function (t) { return LABELS[norm(t) || 'full']; }
+    norm: norm, get: get, set: setTier, choice: choice, plan: plan, setPlan: setPlan, primePlan: primePlan,
+    label: function (t) { return LABELS[norm(t) || 'full']; }
   };
 })();
+// VLC-186: learn the plan as soon as a page loads, so the first question is already capped.
+try { if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { window.RRAI.primePlan(); });
+      else window.RRAI.primePlan(); } catch (_) {}
 
 /*
  * RRV8 shared helpers (config-level, so every page that loads config.js gets them
@@ -1084,6 +1136,13 @@ window.RRV8 = window.RRV8 || {};
     if (!err || err.status !== 504) return '';
     var said = (typeof err.serverMessage === 'string') ? err.serverMessage.trim() : '';
     return said || 'The AI took too long to answer, so the request was stopped. Try again; a second try usually answers.';
+  };
+  // VLC-186. VALC's sentence for a call it refused against the purchased plan (a 403 from
+  // ai/explain: not in the plan, a level above it, or no level on a plan that needs one),
+  // shown as written so V8 never words a plan differently from VALC. '' for anything else.
+  window.RRV8.aiRefusal = function (err) {
+    if (!err || err.status !== 403) return '';
+    return (typeof err.serverMessage === 'string') ? err.serverMessage.trim() : '';
   };
   // <<AI-GROUNDING GENERATED START -- do not edit by hand>>
   // ACCT_GROUNDING — the AI's compact copy of the accountant playbook. Prepended to
