@@ -148,15 +148,34 @@ def chunk_labels(chunks):
     return {f"chunk:{c['slug']}": ("bfd4f2", ("Chunk: " + c["title"])[:100]) for c in chunks}
 
 
-def ensure_labels(repo, dry, extra=None):
-    have = {l["name"] for l in json.loads(gh(["api", f"repos/{OWNER}/{repo}/labels?per_page=100"]))}
+def repo_labels(repo):
+    """Every label name in repo, all pages. Valc passed 100 labels on 2026-10-22; reading page 1 only made a
+    label on page 2 look missing, and its create failed the whole sync with HTTP 422."""
+    out, page = set(), 1
+    while True:
+        q = json.loads(gh(["api", f"repos/{OWNER}/{repo}/labels?per_page=100&page={page}"]))
+        out |= {l["name"] for l in q}
+        if len(q) < 100:
+            return out
+        page += 1
+
+
+def ensure_labels(repo, dry, extra=None, have=None, post=None):
+    have = repo_labels(repo) if have is None else have
+    post = post or (lambda args: gh(args))
     for name, (color, desc) in {**LABELS, **(extra or {})}.items():
         if name in have:
             continue
         print(f"  label {repo}: create {name}")
         if not dry:
-            gh(["api", "-X", "POST", f"repos/{OWNER}/{repo}/labels", "-f", f"name={name}", "-f", f"color={color}",
-                "-f", f"description={desc}"])
+            try:
+                post(["api", "-X", "POST", f"repos/{OWNER}/{repo}/labels", "-f", f"name={name}", "-f", f"color={color}",
+                      "-f", f"description={desc}"])
+            except RuntimeError as e:
+                # 422 = it exists after all (a short label list): the goal is met, so it is not a failure.
+                if "422" not in str(e):
+                    raise
+                print(f"  label {repo}: {name} already exists")
 
 
 def worklist_issues(repo):
@@ -456,6 +475,22 @@ def self_test():
     assert short_listing(whole, mp, "RapidReconciler-Valc", get) == [], \
         "control: a whole listing passes; #400 lost its worklist label and #999 is deleted, so neither blocks"
     assert short_listing([], mp, "RapidReconciler-DB", get) == [], "another repo's map entries are not this listing's business"
+    # Labels (2026-10-22): a label the list missed must not fail the run; any other refusal still does.
+    posted = []
+    def post_422(args):
+        posted.append(next(a for a in args if a.startswith("name=")))
+        raise RuntimeError("api -X POST: gh: Validation Failed (HTTP 422)")
+    with contextlib.redirect_stdout(io.StringIO()):
+        ensure_labels("RapidReconciler-Valc", False, {"chunk:x": ("bfd4f2", "d")}, have=set(LABELS), post=post_422)
+    assert posted == ["name=chunk:x"], f"only the missing label is created: {posted}"
+    def post_500(args):
+        raise RuntimeError("api -X POST: gh: Server Error (HTTP 500)")
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            ensure_labels("RapidReconciler-Valc", False, {"chunk:x": ("bfd4f2", "d")}, have=set(LABELS), post=post_500)
+        raise AssertionError("a refusal other than 422 must still stop the run")
+    except RuntimeError:
+        pass
     print("self-test OK")
 
 
