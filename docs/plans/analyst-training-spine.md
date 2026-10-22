@@ -11,6 +11,13 @@ In-app training for the end customer's analyst, delivered through the AI
 assistants they already use. It replaces the old V7 Trainual module. It is not a
 Training tab, not a course list, not a guided tour, and not a documentation dump.
 
+> **⚠ OVERRULED FOR THE ACCOUNTANT, owner 2026-10-22 (UI-228).** The accountant gets a
+> permanent **Walkthrough** tab on the Accountant view instead. Reason: this spec delivers
+> training through the AI assistants, and since VLC-186 a client whose plan has no AI (the
+> default for a new client) gets no AI at all, so AI-borne training would reach none of
+> them. This spec's other rule still holds for the Walkthrough: teach the tool, not the
+> domain. The analyst half of this spec is unchanged.
+
 The analyst is a JDE and reconciliation veteran who is new to *this tool*. So the
 whole thing teaches how RapidReconciler expresses reconciliation they already
 know how to do. It never explains the domain. A tutorial that tells a JDE veteran
