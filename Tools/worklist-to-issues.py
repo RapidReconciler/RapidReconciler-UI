@@ -159,11 +159,58 @@ def ensure_labels(repo, dry, extra=None):
                 "-f", f"description={desc}"])
 
 
-def existing(repo, wid):
-    """(number, current label names) of the issue titled "[ID] ...", or (None, [])."""
-    q = json.loads(gh(["api", f"repos/{OWNER}/{repo}/issues?state=all&labels=worklist&per_page=100"]))
-    for i in q:
-        if "pull_request" not in i and i["title"].startswith(f"[{wid}]"):
+def worklist_issues(repo):
+    """Every issue labelled worklist in repo, open AND closed, all pages."""
+    out, page = [], 1
+    while True:
+        q = json.loads(gh(["api", f"repos/{OWNER}/{repo}/issues?state=all&labels=worklist&per_page=100&page={page}"]))
+        out += [i for i in q if "pull_request" not in i]
+        if len(q) < 100:
+            return out
+        page += 1
+
+
+def get_issue(repo, num):
+    """One issue by number, or None when GitHub answers 404. Any other failure is raised."""
+    try:
+        return json.loads(gh(["api", f"repos/{OWNER}/{repo}/issues/{num}"]))
+    except RuntimeError as e:
+        if "404" in str(e) or "Not Found" in str(e):
+            return None
+        raise
+
+
+def short_listing(listing, mapping, repo, get=get_issue):
+    """Mapped worklist issues in repo that exist (read directly) but the listing left out.
+
+    Measured 2026-10-22: GitHub's issue list answered the same query with 0, then 84, then 0 within a
+    minute, while each issue read directly by number every time. existing() used to read one page of
+    that list per row and created an issue for every [ID] it did not see, so a short answer would have
+    opened duplicates of ~37 live rows. The map is the control: an issue it names that GitHub confirms
+    exists, still labelled worklist, must be in the listing. One deleted or unlabelled since is not."""
+    have = {i["number"] for i in listing}
+    out = []
+    for e in mapping.values():
+        if e.get("repo") != repo or e["number"] in have:
+            continue
+        i = get(repo, e["number"])
+        if i and "pull_request" not in i and any(l["name"] == "worklist" for l in i.get("labels", [])):
+            out.append(e["number"])
+    return sorted(out)
+
+
+def existing(repo, wid, mapping, listing, get=get_issue):
+    """(number, current label names) of the issue titled "[ID] ...", or (None, []).
+
+    The map first, read by number (the direct read is the reliable one); the full listing only for a row
+    the map does not name. A mapped number whose issue is gone or renamed falls through to the listing."""
+    e = mapping.get(wid)
+    if e and e.get("repo") == repo:
+        i = get(repo, e["number"])
+        if i and "pull_request" not in i and i["title"].startswith(f"[{wid}]"):
+            return i["number"], [l["name"] for l in i.get("labels", [])]
+    for i in listing:
+        if i["title"].startswith(f"[{wid}]"):
             return i["number"], [l["name"] for l in i.get("labels", [])]
     return None, []
 
@@ -273,7 +320,19 @@ def main(dry):
     indexed = {m.group("id") for m in map(ROW.match, text.splitlines()) if m}
     chunk_of = {r: c for c in chunks for r in c["rows"]}
     mapping = json.load(open(MAP_FILE, encoding="utf-8")) if os.path.exists(MAP_FILE) else {}
-    for repo in sorted({REPO_FOR[r["id"].split("-")[0]] for r in rows if r["id"].split("-")[0] in REPO_FOR}):
+    repos = sorted({REPO_FOR[r["id"].split("-")[0]] for r in rows if r["id"].split("-")[0] in REPO_FOR})
+    # Read every repo's issue list ONCE, and prove it whole against the map, before anything is posted:
+    # a short list would turn rows that have an issue into new duplicates.
+    listings = {}
+    for repo in repos:
+        listings[repo] = worklist_issues(repo)
+        missing = short_listing(listings[repo], mapping, repo)
+        if missing:
+            raise SystemExit(f"GitHub's issue list for {repo} came back short: it left out {len(missing)} worklist "
+                             f"issue(s) that exist ({', '.join('#' + str(n) for n in missing[:10])}). Nothing was "
+                             "posted; run it again in a few minutes.")
+        print(f"  listed {repo}: {len(listings[repo])} worklist issues, every mapped one present")
+    for repo in repos:
         # Only the chunks that have a row in this repo; a chunk spanning repos gets its label in each.
         here = [c for c in chunks if any(REPO_FOR.get(r.split("-")[0]) == repo for r in c["rows"])]
         ensure_labels(repo, dry, chunk_labels(here))
@@ -290,7 +349,7 @@ def main(dry):
         if SECRET.search(body):
             print(f"  REFUSED {row['id']}: a secret-shaped string is in its section; not posted")
             continue
-        num, current = existing(repo, row["id"])
+        num, current = existing(repo, row["id"], mapping, listings[repo])
         stale = stale_labels(current, labels)
         action = f"update #{num}" if num else "create"
         print(f"  {row['id']:8} -> {repo:24} {action:12} {labels}" + (f"  (remove {stale})" if stale else ""))
@@ -379,6 +438,24 @@ def self_test():
                      "--comment", CLOSE_NOTE.format(wid="DAC-9")],
                     ["issue", "close", "12", "-R", "RapidReconciler/RapidReconciler-Valc", "--reason", "completed",
                      "--comment", CLOSE_NOTE.format(wid="VLC-1")]], sent
+    # Finding the existing issue (2026-10-22). The map is read first, by number; the listing is the fallback,
+    # and a listing that leaves out an issue the map names (and GitHub confirms) must stop the run.
+    lab = lambda *n: [{"name": x} for x in n]
+    world = {("RapidReconciler-Valc", 326): {"number": 326, "title": "[VLC-124] installer", "labels": lab("worklist")},
+             ("RapidReconciler-Valc", 400): {"number": 400, "title": "[VLC-9] gone from the list", "labels": lab("bug")}}
+    get = lambda repo, n: world.get((repo, n))
+    mp = {"VLC-124": {"repo": "RapidReconciler-Valc", "number": 326}, "VLC-9": {"repo": "RapidReconciler-Valc", "number": 400},
+          "VLC-7": {"repo": "RapidReconciler-Valc", "number": 999}}
+    whole = [world[("RapidReconciler-Valc", 326)], {"number": 410, "title": "[VLC-50] unmapped", "labels": lab("worklist")}]
+    assert existing("RapidReconciler-Valc", "VLC-124", mp, [], get) == (326, ["worklist"]), \
+        "a mapped row is found by number even when the listing came back EMPTY"
+    assert existing("RapidReconciler-Valc", "VLC-50", mp, whole, get) == (410, ["worklist"]), "an unmapped row is found in the listing"
+    assert existing("RapidReconciler-Valc", "VLC-51", mp, whole, get) == (None, []), "a row with no issue anywhere is a create"
+    assert short_listing([], mp, "RapidReconciler-Valc", get) == [326], \
+        "THE 2026-10-22 CASE: an empty listing while #326 exists is short, so nothing may be created"
+    assert short_listing(whole, mp, "RapidReconciler-Valc", get) == [], \
+        "control: a whole listing passes; #400 lost its worklist label and #999 is deleted, so neither blocks"
+    assert short_listing([], mp, "RapidReconciler-DB", get) == [], "another repo's map entries are not this listing's business"
     print("self-test OK")
 
 
