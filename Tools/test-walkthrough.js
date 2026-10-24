@@ -112,7 +112,7 @@ function sandbox(walkSrc, data, done, by) {
   };
   vm.createContext(sb);
   vm.runInContext(COMP_SRC + '\nvar _COMPONENTS = COMPONENTS;\n' + RANK_SRC + '\n' + walkSrc
-    + '\nglobalThis.__w = { facts: _walkFacts, steps: WALK_STEPS, live: _walkLive, render: renderWalkthrough, go: _walkGo, banner: renderWalkBanner,'
+    + '\nglobalThis.__w = { facts: _walkFacts, steps: WALK_STEPS, live: function (s, f) { return _walkLive(s, f).join(" "); }, liveList: _walkLive, render: renderWalkthrough, go: _walkGo, banner: renderWalkBanner,'
     + ' step: function () { return _walkStep; }, setStep: function (i) { _walkStep = i; }, scope: function () { return _acctGlScopeCo; } };', sb);
   return { w: sb.__w, els: els, calls: calls, sb: sb, lit: () => Object.values(cards).filter((c) => c.cls.has('walk-focus')).map((c) => c.co) };
 }
@@ -128,7 +128,7 @@ function suite(walkSrc, label) {
   let s = sandbox(walkSrc, DATA);
   check('T2 every step goes to a real Accountant tab', s.w.steps.every((st) => keys.indexOf(st.tab) >= 0 && st.tab !== 'walk'), true);
   const named = [];
-  s.w.steps.forEach((st) => (st.look + ' ' + st.todo).replace(/<b>([^<]+)<\/b>/g, (m, t) => { named.push(t.replace(/^✓ /, '')); return m; }));
+  s.w.steps.forEach((st) => (st.look + ' ' + [].concat(st.todo).join(' ')).replace(/<b>([^<]+)<\/b>/g, (m, t) => { named.push(t.replace(/^✓ /, '')); return m; }));
   const ON_SCREEN = ['Out', 'Mark Complete', 'Reopen', 'Balancing Entry', 'Adjusting Entry', 'Awaiting posting', 'Verified',
     'Evidence package', 'Audit report', 'Accepted &mdash; immaterial', 'Timing &mdash; will self-clear',
     'Handed to analyst &mdash; source fix', 'Corrected &mdash; journal entry posted'];
@@ -170,15 +170,15 @@ function suite(walkSrc, label) {
   // Owner 2026-10-22: steps 1 and 2 merged. Step 1 covers the red dot and points at the card
   // step; the card step is now second, and no step is the old analyst's-side step.
   check('M1 step 1 covers the red dot and ends pointing at the next step',
-        [/red dot is a roll-forward break/.test(s.w.steps[0].todo), /<b>Next step<\/b> opens the highlighted card and shows what to click\.$/.test(s.w.steps[0].todo)], [true, true]);
+        [/red dot is a roll-forward break/.test(s.w.steps[0].todo.join(' ')), /<b>Next step<\/b> opens the highlighted card and shows what to click\.$/.test(s.w.steps[0].todo.join(' '))], [true, true]);
   check('M1 the second step is the highlighted card itself', [s.w.steps[1].title, s.w.steps[1].focus, !!s.w.steps[1].peek], ['Open a company’s out-of-balance', 'pick', false]);
   check('M1 six steps, none of them the old analyst\'s-side step', [s.w.steps.length, s.w.steps.some((st) => /analyst’s side/.test(st.title))], [6, false]);
-  check('M1 step numbers quoted in the text match the list', /build the entry in step 4, then pick .* in step 5/.test(s.w.steps[2].todo)
+  check('M1 step numbers quoted in the text match the list', /build the entry in step 4, then pick .* in step 5/.test(s.w.steps[2].todo.join(' '))
         && s.w.steps[3].title === 'Build the entry' && s.w.steps[4].title === 'Mark it complete', true);
   // Someone else may have marked it: the line names who, from the record's server-owned `by`.
   const byd = sandbox(walkSrc, DATA, ['300'], { '300': 'j.smith' });
   check('S1 and names who marked it complete', /1 marked complete: Summit Industrial, Inc\. \(Co 300\) by j\.smith\./.test(byd.w.live(byd.w.steps[0], byd.w.facts(DATA))), true);
-  check('S1 the step-1 text does not say who marked it', /you already marked/.test(s.w.steps[0].todo), false);
+  check('S1 the step-1 text does not say who marked it', /you already marked/.test(s.w.steps[0].todo.join(' ')), false);
   const DONE_LINE = 'Nothing is left to work this period: 2 companies marked complete, 1 company waiting on the analyst,'
         + ' 1 company not yours to journal. The steps show what to do next period.';
   check('S2 nothing left for you: step 1 says so', alld.w.live(alld.w.steps[0], alld.w.facts(DATA)), DONE_LINE);
@@ -195,7 +195,15 @@ function suite(walkSrc, label) {
   lt.w.go(0);
   lt.w.banner('rec');
   check('L1 step 1 lights the next card you can work, and leaves it shut', [lt.lit(), lt.sb._cardOpen.wl['300']], [['300'], undefined]);
-  check('L1 the banner carries the line from the user\'s data', /walk-banner-live">This period: 4 of 5/.test(lt.els.acctWalkBanner.innerHTML), true);
+  check('L1 the banner carries the line from the user\'s data', /walk-banner-live"><li>This period: 4 of 5/.test(lt.els.acctWalkBanner.innerHTML), true);
+  // B1 (owner 2026-10-24: "Can the walkthrough text be changed to bullet point format?").
+  const bh = lt.els.acctWalkBanner.innerHTML;
+  const lis = (cls) => { const m = new RegExp('<ul class="' + cls + '">([\\s\\S]*?)</ul>').exec(bh); return m ? (m[1].match(/<li>/g) || []).length : -1; };
+  check('B1 the banner\'s instructions are bullets, one per item', lis('walk-banner-list'), lt.w.steps[0].todo.length);
+  check('B1 and its data line is one bullet per fact (this period / to work / waiting / not yours)', lis('walk-banner-live'),
+        lt.w.liveList(lt.w.steps[0], lt.w.facts(DATA)).length);
+  check('B1 CONTROL: step 1 has more than one instruction and more than one fact to bullet', [lt.w.steps[0].todo.length > 1, lis('walk-banner-live') > 1], [true, true]);
+  check('B1 every step\'s instructions are a list', lt.w.steps.every((st) => Array.isArray(st.todo) && st.todo.length > 0), true);
   lt.w.go(1);
   lt.w.banner('rec');
   check('L1 Next step opens the card step 1 lit, and keeps it lit', [lt.lit(), lt.sb._cardOpen.wl['300']], [['300'], true]);
@@ -211,6 +219,7 @@ function suite(walkSrc, label) {
   const listHtml = s.els.acctWalkList.innerHTML;
   check('R1 six steps, each with a Go there button', (listHtml.match(/data-walk-go="/g) || []).length, 6);
   check('R1 the company name is escaped in the live line', listHtml.indexOf('Summit Industrial, Inc. (Co 300)') >= 0, true);
+  check('B1 the Walkthrough tab lists each step\'s instructions as bullets too', (listHtml.match(/<ul class="walk-todo">/g) || []).length, 6);
 
   // G1
   s.w.go(1);
