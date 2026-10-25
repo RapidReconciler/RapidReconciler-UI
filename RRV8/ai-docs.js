@@ -38,6 +38,9 @@
     'compare-jde':     { title: 'Comparing RR to JDE Reports',  href: '../RRUniversity/comparing-rr-to-jde-reports.html',  roles: ['accountant', 'analyst'] },
     'add-account':     { title: 'Adding an Inventory Account',  href: '../RRUniversity/inventory-add-account-rr.html',     roles: ['accountant', 'analyst'] },
     'costing':         { title: 'Inventory Costing',            href: '../RRUniversity/inventory-costing.html',            roles: ['accountant', 'analyst'] },
+    // UI-230: the analyst Walkthrough's Data Health and Transaction Variance steps had no guide on this list.
+    'roll-forward':    { title: 'Account Roll Forward',         href: '../RRUniversity/inventory-account-roll-forward.html', roles: ['accountant', 'analyst'] },
+    'transaction-variance': { title: 'Transaction Variance',    href: '../RRUniversity/inventory-transaction-variance.html', roles: ['accountant', 'analyst'] },
     // Admin-facing docs
     'managing-users':     { title: 'Team Management',      href: '../RRUniversity/administrator-managing-users.html',     roles: ['admin'] },
     'managing-companies': { title: 'Managing Companies',   href: '../RRUniversity/administrator-managing-companies.html', roles: ['admin'] },

@@ -17,6 +17,13 @@ Training tab, not a course list, not a guided tour, and not a documentation dump
 > default for a new client) gets no AI at all, so AI-borne training would reach none of
 > them. This spec's other rule still holds for the Walkthrough: teach the tool, not the
 > domain. The analyst half of this spec is unchanged.
+>
+> **⚠ AND FOR THE ANALYST, owner 2026-10-25 (UI-230):** "Build the analyst walkthrough in
+> the same format as the accountant walkthrough. The walkthroughs are taking the place of
+> the demo tour." The Analyst view gets the same **Walkthrough** tab, on the same ground. So
+> the "no Training tab" and "no guided tour" non-goals below no longer hold for either
+> role. What still holds: teach the tool, not the domain, and the AI ribs remain a later
+> layer for clients whose plan has AI.
 
 The analyst is a JDE and reconciliation veteran who is new to *this tool*. So the
 whole thing teaches how RapidReconciler expresses reconciliation they already

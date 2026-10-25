@@ -100,6 +100,8 @@ function sandbox(walkSrc, data, done, by) {
     _acctDoneRec: (co) => ((done || []).indexOf(String(co)) >= 0 ? { reason: 'immaterial', by: (by || {})[co] || '' } : null),
     _setSubView: (sv) => calls.sub.push(sv),
     setTimeout: () => 0, _curSubView: () => calls.sub.slice(-1)[0],
+    _viewRole: () => 'accountant',   // UI-230: one engine for both roles; this suite is the accountant's
+
     document: {
       // One fake card per company, so the highlight can be read back off the "page".
       querySelector: (sel) => {
@@ -117,7 +119,7 @@ function sandbox(walkSrc, data, done, by) {
   vm.runInContext(AI_DOCS_SRC, sb);
   vm.runInContext(COMP_SRC + '\nvar _COMPONENTS = COMPONENTS;\n' + RANK_SRC + '\n' + walkSrc
     + '\nglobalThis.__w = { facts: _walkFacts, steps: WALK_STEPS, live: function (s, f) { return _walkLive(s, f).join(" "); }, liveList: _walkLive, render: renderWalkthrough, go: _walkGo, banner: renderWalkBanner,'
-    + ' step: function () { return _walkStep; }, setStep: function (i) { _walkStep = i; }, scope: function () { return _acctGlScopeCo; } };', sb);
+    + ' step: function () { return _walkStep; }, setStep: function (i) { _walkStep = i; _walkRole = _viewRole(); }, scope: function () { return _acctGlScopeCo; } };', sb);
   return { w: sb.__w, els: els, calls: calls, sb: sb, lit: () => Object.values(cards).filter((c) => c.cls.has('walk-focus')).map((c) => c.co) };
 }
 
