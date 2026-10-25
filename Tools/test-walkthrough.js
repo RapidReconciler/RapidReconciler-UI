@@ -42,6 +42,8 @@ const ROOT = path.join(__dirname, '..');
 // CRLF on a Windows checkout (autocrlf), LF in the repo and on CI: anchors are written in LF.
 const html = fs.readFileSync(path.join(ROOT, 'RRV8', 'home.html'), 'utf8').replace(/\r\n/g, '\n');
 const config = fs.readFileSync(path.join(ROOT, 'RRV8', 'config.js'), 'utf8').replace(/\r\n/g, '\n');
+// UI-229: the real allowlist the Walkthrough's "Read more" links resolve against.
+const AI_DOCS_SRC = fs.readFileSync(path.join(ROOT, 'RRV8', 'ai-docs.js'), 'utf8');
 
 let failures = 0, reds = [];
 function check(name, got, want) {
@@ -110,7 +112,9 @@ function sandbox(walkSrc, data, done, by) {
     },
     console
   };
+  sb.window = sb;   // ai-docs.js and _walkDoc read window.RRV8
   vm.createContext(sb);
+  vm.runInContext(AI_DOCS_SRC, sb);
   vm.runInContext(COMP_SRC + '\nvar _COMPONENTS = COMPONENTS;\n' + RANK_SRC + '\n' + walkSrc
     + '\nglobalThis.__w = { facts: _walkFacts, steps: WALK_STEPS, live: function (s, f) { return _walkLive(s, f).join(" "); }, liveList: _walkLive, render: renderWalkthrough, go: _walkGo, banner: renderWalkBanner,'
     + ' step: function () { return _walkStep; }, setStep: function (i) { _walkStep = i; }, scope: function () { return _acctGlScopeCo; } };', sb);
@@ -220,6 +224,20 @@ function suite(walkSrc, label) {
   check('R1 six steps, each with a Go there button', (listHtml.match(/data-walk-go="/g) || []).length, 6);
   check('R1 the company name is escaped in the live line', listHtml.indexOf('Summit Industrial, Inc. (Co 300)') >= 0, true);
   check('B1 the Walkthrough tab lists each step\'s instructions as bullets too', (listHtml.match(/<ul class="walk-todo">/g) || []).length, 6);
+
+  // D2 (UI-229, owner 2026-10-24): each step's "Read more" guide comes from the ai-docs.js allowlist.
+  const DOCS = s.sb.RRV8.aiDocs.DOCS;
+  check('D2 every step names a guide that is on the ai-docs.js list', s.w.steps.map((st) => !!DOCS[st.doc]), [true, true, true, true, true, true]);
+  check('D2 every guide named is a file that exists', s.w.steps.every((st) => fs.existsSync(path.join(ROOT, 'RRV8', DOCS[st.doc].href))), true);
+  check('D2 the Walkthrough tab shows a Read more link per step', (listHtml.match(/class="walk-doc" href="\.\.\/RRUniversity\/[a-z-]+\.html" target="_blank"/g) || []).length, 6);
+  const rd = sandbox(walkSrc, DATA);
+  rd.w.go(0); rd.w.banner('rec');
+  check('D2 the banner carries its step\'s link (step 1: Inventory Reconciliation)',
+        /class="walk-doc" href="\.\.\/RRUniversity\/inventory-reconciliation\.html"[^>]*>Read more: Inventory Reconciliation/.test(rd.els.acctWalkBanner.innerHTML), true);
+  const bad = sandbox(walkSrc, DATA);
+  bad.w.steps[0].doc = 'no-such-guide';
+  bad.w.go(0); bad.w.banner('rec');
+  check('D2 CONTROL: a slug the list does not carry renders no link', /walk-doc/.test(bad.els.acctWalkBanner.innerHTML), false);
 
   // G1
   s.w.go(1);
