@@ -1,6 +1,11 @@
 # Plan: Self-guided tour — band-walkthrough on the live V8 home page
 
-**Status:** active direction as of 2026-06-28. **Supersedes** the earlier
+**Status: SUPERSEDED 2026-10-25 (owner, UI-230).** The tour is abandoned. New users learn
+from the **Walkthrough** tab on the Accountant view (UI-228) and the Analyst view (UI-230),
+which walk the user's own data on every plan. The demo tour (UI-222) closed with it. What
+follows is kept for the record.
+
+**Former status:** active direction as of 2026-06-28. **Supersedes** the earlier
 "RapidReconciler Assist" help-portal tour, which is **dead** — the analyzer, KB,
 and Help Desk surfaces have been integrated into V8, so there is no separate
 Assist product to tour. The tour is now of the live V8 app itself, entered from

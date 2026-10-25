@@ -3479,12 +3479,13 @@
     </div>
   </section>
 
-  <!-- UI-228 Walkthrough tab: the accountant's process as numbered steps. Each says what
-       the user is looking at and what to do, carries a line from their own data, and
-       goes to the tab it is about. Painted by renderWalkthrough(). -->
+  <!-- UI-228 / UI-230 Walkthrough tab: the accountant's or the analyst's process as
+       numbered steps, for whichever view is showing. Each says what the user is looking
+       at and what to do, carries a line from their own data, and goes to the tab it is
+       about. Painted by renderWalkthrough(), which sets the title per role. -->
   <section class="acct-panels" id="acctWalk" hidden aria-label="Walkthrough">
     <div class="acct-snapshot">
-      <div class="acct-snap-headline"><div class="acct-snap-title">Walkthrough: reconcile a period</div></div>
+      <div class="acct-snap-headline"><div class="acct-snap-title" id="acctWalkTitle">Walkthrough: reconcile a period</div></div>
       <p class="walk-status" id="acctWalkStatus" hidden role="status"></p>
       <ol class="walk-list" id="acctWalkList"></ol>
     </div>
@@ -9259,7 +9260,11 @@
       // filter chips and the Excel/PDF export; the disposition write lives on the
       // accountant worklist card (data-wl-done), which the analyst never sees. So this
       // does not put journal-entry mechanics in the analyst lane.
-      { k: 'audit',   label: 'Audit Center' }
+      { k: 'audit',   label: 'Audit Center' },
+      // UI-230 (owner 2026-10-25): the analyst's process as steps, in the accountant's
+      // format. Right-aligned like the accountant's, so Audit Center stays the last
+      // workflow tab. Replaces the demo tour.
+      { k: 'walk',    label: 'Walkthrough', aside: true }
     ]
   };
   var _subDefault = { accountant: 'rec', analyst: 'work' };
@@ -9447,6 +9452,9 @@
   // Owner ruling 2026-10-22: overrules UI-40's "not a Training tab" for the accountant,
   // because AI-borne training reaches no plan-Off client (VLC-186). Wording: owner draft.
   var _walkStep = null;   // the open step's index, or null when no walkthrough is running
+  // UI-230: the role whose steps _walkStep indexes. A step opened in one view never shows its
+  // banner in the other, where the same index is a different step.
+  var _walkRole = null;
   function _walkName(co) {
     var n = (_coNames && _coNames[String(co)]) || '';
     return n ? n + ' (Co ' + co + ')' : 'Co ' + co;
@@ -9550,6 +9558,121 @@
       todo: ['Find your entry in the list: it reads <b>Awaiting posting</b> until JDE posts it with the token, then <b>✓ Verified</b>.',
              'For the close file, click <b>Evidence package</b> (one PDF) or <b>Audit report</b> at the top right.'] }
   ];
+
+  // ── UI-230 the analyst's Walkthrough (owner 2026-10-25) ─────────────────────
+  // Same format and engine as the accountant's, and it replaces the demo tour. The analyst
+  // works ONE company (the Company pill), so there is no worked-example pick across
+  // companies: every step is about the company in scope. The live lines quote the
+  // day-brief chips above the tab strip (_analystBriefChips), stashed here as they paint,
+  // so the step and the chip can never give two answers about one tab. Fixed rules, no AI.
+  var _walkChips = null;     // { co, byKey: { work|txvar|reports: chip } } for the company they were built for
+  var _walkTxvKey = null;    // the pattern code of the card the Transaction Variance steps are about
+  var _walkTxvPending = null; // 'open' | 'light': what the next paint of that tab still owes the step
+  function _walkChipsSet(co, chips) {
+    var m = {};
+    (chips || []).forEach(function (c) { if (c && c.key) m[c.key] = c; });
+    _walkChips = { co: String(co), byKey: m };
+    if (_viewRole() !== 'analyst') return;
+    var sv = _curSubView();
+    if (sv === 'walk') renderWalkthrough(_acctData);
+    renderWalkBanner(sv, _acctData);
+  }
+  function _walkFactsAnalyst(d) {
+    var co = _analystSoloCo || _ensureAnalystSolo((d && d.companies) || []);
+    var chips = (_walkChips && co != null && _walkChips.co === String(co)) ? _walkChips.byKey : {};
+    var vp = _analystViewedPeriod();
+    var rv = (vp && window.RRV8 && RRV8.analystReviewStore) ? RRV8.analystReviewStore.get(co, vp) : null;
+    return { co: co, chips: chips, period: vp, reviewed: (rv && rv.at) ? String(rv.at).slice(0, 10) : '' };
+  }
+  // A tab's chip, as the chip says it. Not painted yet reads as checking, never as clean.
+  function _walkChipLine(f, key, label) {
+    var c = f.chips[key];
+    return (c ? c.label : label) + ': ' + (c ? c.text : 'Checking…') + '.';
+  }
+  // Every tab clean for this company: said on the Walkthrough tab and in step 1.
+  function _walkAnalystDoneLine(f) {
+    var clean = ['work', 'txvar', 'reports'].every(function (k) { return f.chips[k] && f.chips[k].state === 'clean'; });
+    return clean ? 'Nothing needs you for ' + _walkName(f.co) + ' right now: Data Health, Transaction Variance and Cardex are all clean. The steps show what to do when something comes up.' : '';
+  }
+  // look / todo are fixed HTML (no data in them); live() returns plain text, escaped at paint.
+  var WALK_STEPS_ANALYST = [
+    { tab: 'work', title: 'Check the company’s data', doc: 'roll-forward',
+      look: 'You work one company at a time: the one on the <b>Company</b> pill at the bottom of the page. Data Health checks that company’s data before you work its variances.',
+      todo: ['To work another company, pick it on the <b>Company</b> pill. The page reloads on it.',
+             '<b>Account Roll Forward</b> says whether every period rolled forward. Fix a break here first: the period cannot tie out until it is fixed.',
+             '<b>Model DMAAI Table</b> names any GL class the model leaves out. <b>Routing list</b> shows the routes it uses.',
+             'Each row under <b>Integrity Review</b> is a data problem to fix in JDE. <b>View</b> lists the items behind it.'],
+      live: function (f) {
+        var done = _walkAnalystDoneLine(f);
+        if (done) return [done];
+        return ['Company: ' + _walkName(f.co) + '.', _walkChipLine(f, 'work', 'Data Health')];
+      } },
+    { tab: 'txvar', title: 'Work a transaction variance', focus: 'txv', pick: true, doc: 'transaction-variance',
+      look: 'Transaction Variance splits the period’s reconciling items into pattern cards. <b>Transaction Overview</b> at the top totals them and counts the cards you have handed off.',
+      todo: ['The highlighted card is the next one to work, and it is open. <b>Likely Cause</b> says what RapidReconciler sees in its rows.',
+             '<b>Variance</b> on the card opens its rows. Check them in JDE, then write what you found in <b>Findings</b> and click <b>Save</b>.',
+             'Fix the cause where it starts (the setup, the routing or the process) so it does not come back. The accountant journals this period’s amount.'],
+      live: function (f) { return [_walkChipLine(f, 'txvar', 'Transaction Variance')]; } },
+    { tab: 'txvar', title: 'Hand it off', focus: 'txv', doc: 'transaction-variance',
+      look: 'The same card, back on Transaction Variance.',
+      todo: ['Click <b>Mark reviewed</b>. The card shows <b>In Audit Findings</b> with the date, and your finding goes to the Audit Center.',
+             '<b>Reopen to edit</b> puts the card back in play. <b>Discard finding</b> removes the finding, with an undo.',
+             'When every card is handed off, click <b>Mark period reviewed</b> on <b>Transaction Overview</b>.'],
+      live: function (f) {
+        if (!f.period) return ['No period is selected.'];
+        var p = fmtPeriod(f.period);
+        return [f.reviewed ? p + ' was marked reviewed on ' + f.reviewed + '.' : p + ' is not marked reviewed yet.'];
+      } },
+    { tab: 'reports', title: 'Work the cardex variance', doc: 'cardex-variance',
+      look: 'Cardex Variance compares each item’s on-hand to its cardex, with no GL account involved. Items split by cost method (<b>Standard Cost</b>, <b>Average / Revaluing Cost</b>) into <b>Quantity Variance</b> and <b>Amount Variance</b>.',
+      todo: ['Click <b>Show items</b> on a card, then an item number to open it.',
+             'Check the item ledger in JDE (P4111) first.',
+             'If JDE was off, fix it in JDE or route it to IT, then click <b>Record</b>. If JDE ties and RapidReconciler is off, click <b>Adjust</b>. <b>Undo</b> reverses an adjustment.'],
+      live: function (f) { return [_walkChipLine(f, 'reports', 'Cardex')]; } },
+    { tab: 'tools', title: 'Fix what is stuck', doc: 'reports-exports',
+      look: 'Tools holds three maintenance cards. Use them when something blocks your work, not as a routine step.',
+      todo: ['<b>Report Engine</b>: when it reads <b>Not responding</b> and a report or export will not build, click <b>Restart</b>. The button shows only if your role can restart it.',
+             '<b>Fiscal calendar</b>: when it offers a correction, click <b>Review period ends</b>.',
+             '<b>Reload Cardex</b>: <b>Open</b> clears the cardex from a date you pick, and it rebuilds on the next refresh. A roll-forward break never needs it.'] },
+    { tab: 'audit', title: 'Check the hand-off', doc: 'reconciliation',
+      look: 'Audit Center is the record of the period, and the accountant reads the same one. <b>Analyst</b> filters it to your entries: cards marked reviewed, period reviews and cardex clears.',
+      todo: ['Find each finding you handed off. Nothing on this tab changes data.',
+             '<b>Period Activity</b>, <b>Audit report</b> and <b>Evidence package</b> export the record.'] }
+  ];
+  function _walkSteps(role) { return (role || _viewRole()) === 'analyst' ? WALK_STEPS_ANALYST : WALK_STEPS; }
+  // The open step, only in the view it was opened in.
+  function _walkOpenStep() {
+    return (_walkStep == null || _walkRole !== _viewRole()) ? null : _walkSteps()[_walkStep];
+  }
+  // The card the Transaction Variance steps are about: the one already picked while it is
+  // still on the page, else the first card not yet handed off, in the tab's own order.
+  // While the tab is still building (no cards at all) the pick is kept, not dropped: the
+  // hand-off step has to land on the card the previous step opened.
+  function _walkTxvCard() {
+    var el = _walkTxvKey ? document.querySelector('.txv-card[data-ccns="txv"][data-cckey="' + String(_walkTxvKey).replace(/["\\]/g, '') + '"]') : null;
+    if (!el && !document.querySelector('.txv-card[data-ccns="txv"]')) return null;
+    if (!el) {
+      el = document.querySelector('.txv-card[data-ccns="txv"]:not(.is-complete)');
+      _walkTxvKey = el ? el.getAttribute('data-cckey') : null;
+    }
+    return el;
+  }
+  // Called after the Transaction Variance tab paints its cards (it paints late, after its
+  // rows load) and straight after Go there. Opens the card through its own chevron, once,
+  // so the tab's collapse state stays the one producer; then keeps it lit.
+  function _walkAfterTxvPaint() {
+    var s = _walkOpenStep();
+    if (!s || s.focus !== 'txv' || _curSubView() !== s.tab) return;
+    var el = _walkTxvCard(); if (!el) return;
+    if (_walkTxvPending) {
+      if (_walkTxvPending === 'open' && el.classList.contains('is-collapsed')) {
+        var btn = el.querySelector('[data-cardcol]'); if (btn) btn.click();
+      }
+      _walkTxvPending = null;
+      try { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (_) { el.scrollIntoView(); }
+    }
+    _walkLight(s);
+  }
   // The step's lines from the user's data, as a list (one bullet each). Empty when there is nothing to say.
   function _walkLive(s, f) {
     if (s.live) { var l = s.live(f); return Array.isArray(l) ? l : (l ? [l] : []); }
@@ -9572,10 +9695,14 @@
   }
   function renderWalkthrough(d) {
     var list = $('acctWalkList'); if (!list) return;
-    var f = _walkFacts(d);
+    var role = _viewRole(), an = role === 'analyst';
+    var f = an ? _walkFactsAnalyst(d) : _walkFacts(d);
+    var ttl = $('acctWalkTitle');
+    if (ttl) ttl.textContent = an ? 'Walkthrough: work a company’s period' : 'Walkthrough: reconcile a period';
     var st = $('acctWalkStatus');
-    if (st) { st.hidden = f.open.length > 0; st.textContent = f.open.length ? '' : _walkDoneLine(f); }
-    list.innerHTML = WALK_STEPS.map(function (s, i) {
+    var done = an ? _walkAnalystDoneLine(f) : (f.open.length ? '' : _walkDoneLine(f));
+    if (st) { st.hidden = !done; st.textContent = done; }
+    list.innerHTML = _walkSteps(role).map(function (s, i) {
       var live = _walkLive(s, f);
       return '<li class="walk-step"><span class="walk-num">' + (i + 1) + '</span><div>'
         + '<div class="walk-title">' + esc(s.title) + '</div>'
@@ -9586,9 +9713,16 @@
   }
   // Goes to the step's tab, scoped to the picked company, and lights the card it is about.
   function _walkGo(i) {
-    var s = WALK_STEPS[i]; if (!s) return;
+    var role = _viewRole(), s = _walkSteps(role)[i]; if (!s) return;
+    _walkStep = i; _walkRole = role;
+    if (role === 'analyst') {
+      // A fresh pick on the step that starts a card; the hand-off step keeps the same card.
+      if (s.focus === 'txv') { if (s.pick) _walkTxvKey = null; _walkTxvPending = s.peek ? 'light' : 'open'; }
+      _setSubView(s.tab);
+      _walkAfterTxvPaint();   // the cards may already be on the page; if not, their paint calls it
+      return;
+    }
     var f = _walkFacts(_acctData);
-    _walkStep = i;
     var c = _walkCo(s, f), co = c ? c.co : null;
     if (s.scope && co != null) _acctGlScopeCo = co;
     if (s.focus && co != null && !s.peek) _cardOpen.wl[String(co)] = true;   // peek: light it, leave it shut
@@ -9608,21 +9742,22 @@
   function _walkLight(s, f) {
     var lit = document.querySelectorAll('.walk-focus');
     for (var i = 0; i < lit.length; i++) lit[i].classList.remove('walk-focus');
-    var c = (s && s.focus) ? _walkCo(s, f) : null;
-    var el = c ? _walkCard(c.co) : null;
+    var el = null;
+    if (s && s.focus === 'txv') el = _walkTxvCard();   // UI-230: the analyst's card is keyed by pattern code
+    else if (s && s.focus) { var c = _walkCo(s, f); el = c ? _walkCard(c.co) : null; }
     if (el) el.classList.add('walk-focus');
   }
   // The banner: only while a step is open AND the user is on that step's tab. It carries
   // the step's line from the user's own data, which is what says what to do on THIS page.
   function renderWalkBanner(sv, d) {
     var b = $('acctWalkBanner'); if (!b) return;
-    var s = _walkStep == null ? null : WALK_STEPS[_walkStep];
+    var s = _walkOpenStep(), steps = _walkSteps();
     if (!s || sv !== s.tab) { b.hidden = true; b.innerHTML = ''; _walkLight(null); return; }
-    var f = _walkFacts(d || _acctData), live = _walkLive(s, f);
-    var last = _walkStep === WALK_STEPS.length - 1;
+    var f = _viewRole() === 'analyst' ? _walkFactsAnalyst(d || _acctData) : _walkFacts(d || _acctData), live = _walkLive(s, f);
+    var last = _walkStep === steps.length - 1;
     b.hidden = false;
     b.innerHTML = '<div class="walk-banner-text"><div class="walk-banner-step">Walkthrough &middot; Step ' + (_walkStep + 1)
-        + ' of ' + WALK_STEPS.length + ': ' + esc(s.title) + '</div>' + _walkList('walk-banner-list', s.todo, true)
+        + ' of ' + steps.length + ': ' + esc(s.title) + '</div>' + _walkList('walk-banner-list', s.todo, true)
         + _walkList('walk-banner-live', live, false) + _walkDoc(s) + '</div>'
       + '<div class="walk-banner-btns"><button type="button" class="wl-btn" data-walk-steps>All steps</button>'
       + (_walkStep > 0 ? '<button type="button" class="wl-btn" data-walk-prev>&larr; Previous step</button>' : '')
@@ -12851,6 +12986,7 @@
       // stacking a second listener. The `headline` summary carries no chevron and
       // is untouched by this (owner: "all cards but the summary").
       _wireCardCollapse(host);
+      _walkAfterTxvPaint();   // UI-230: an open Walkthrough step opens and lights its card after every paint
       // Render-time diagnosis DISABLED (owner 2026-07-13): the opening card text is the
       // catalog's `cause` for the code — what this pattern IS, not a diagnosis of these
       // rows. _txvRunDiagnoses is kept for the post-drill update — once the analyst
@@ -13957,7 +14093,9 @@
     _analystGatherHealth(d, co).then(function (hh) {
       if (gen !== _analystBriefGen) return;
       var txStats = _analystTxStats();
-      _analystRenderBriefChips(_analystBriefChips(co, ccy, hh, txStats));
+      var _chips = _analystBriefChips(co, ccy, hh, txStats);
+      _analystRenderBriefChips(_chips);
+      _walkChipsSet(co, _chips);   // UI-230: the Walkthrough quotes these, never a second count
       _analystBriefLead(gen, co, ccy, scrub, hh, txStats);
     }).catch(function (e) {
       if (gen !== _analystBriefGen) return;
@@ -13967,7 +14105,9 @@
       _analystLeadSig = '';   // nothing was said; let the next good pass speak
       // ONE explicit failure chip. NEVER fall through to the chip builder with an
       // empty attention list — that paints "Clean — every accuracy check passes".
-      _analystRenderBriefChips([{ key: 'work', label: 'Data Health', text: 'Couldn’t check just now', state: 'wait', href: null }]);
+      var _failChips = [{ key: 'work', label: 'Data Health', text: 'Couldn’t check just now', state: 'wait', href: null }];
+      _analystRenderBriefChips(_failChips);
+      _walkChipsSet(co, _failChips);   // UI-230
     });
   }
   // The Data Health tab body: the amber "Needs your attention" rows + the green
@@ -14900,7 +15040,8 @@
     // analyst path owns un-hiding it — and owns hiding it behind the canAnalyst() gate
     // below, or an unauthorized user keeps whatever the accountant last painted.
     var aud = $('acctAudit');
-    if (!canAnalyst()) { if (ws) ws.hidden = true; if (reports) reports.hidden = true; if (wl) wl.hidden = true; if (tv) tv.hidden = true; if (tools) tools.hidden = true; if (aud) aud.hidden = true; _analystTaskGen++; _txvGen++; return; }
+    var walk = $('acctWalk');   // UI-230: the Walkthrough panel is shared too, under the same ownership rule
+    if (!canAnalyst()) { if (ws) ws.hidden = true; if (reports) reports.hidden = true; if (wl) wl.hidden = true; if (tv) tv.hidden = true; if (tools) tools.hidden = true; if (aud) aud.hidden = true; if (walk) walk.hidden = true; _analystTaskGen++; _txvGen++; return; }
     var sv = _curSubView();
     // Company scope is the bottom workbar "Companies" pill (single-select). This
     // establishes the default solo company; renderPeriodWidget then paints the
@@ -14916,7 +15057,7 @@
     // maintenance, not analysis, and an out-of-balance-by-period chart above a
     // "restart the report engine" button is grounding for a question nobody on this
     // tab is asking.
-    var _at = $('acctTop'); if (_at) _at.hidden = (sv === 'work' || sv === 'tools');
+    var _at = $('acctTop'); if (_at) _at.hidden = (sv === 'work' || sv === 'tools' || sv === 'walk');   // UI-230: nor is the Walkthrough
     // Tools card moved to the Reports tab "for now" — relocate it into the reports
     // palette once (renderReportsPalette never rewrites the palette's innerHTML),
     // then just toggle its visibility with the reports sub-view.
@@ -14961,6 +15102,10 @@
     // variant. Its own _auditFilter default flips to 'analyst' for this role.
     if (aud) aud.hidden = (sv !== 'audit');
     if (sv === 'audit') renderAuditPanel(_analystScopedData(d));
+    // UI-230: the Walkthrough tab, and the open step's banner on that step's own tab.
+    if (walk) walk.hidden = (sv !== 'walk');
+    if (sv === 'walk') renderWalkthrough(d);
+    renderWalkBanner(sv, d);
   }
   // Cardex "Cost Variance Framework" (UI-29). Two cost-method containers — Standard (07)
   // and Average / Revaluing (02 / 09 / 01 / …) — each with a Quantity and an Amount card,
