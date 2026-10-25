@@ -296,6 +296,11 @@
   .acct-top > #periodWidget { flex: 1 1 auto; min-width: 0; margin: 0; }
   body[data-view-role="admin"] #acctTriage { display: none !important; }   /* AI band shows for accountant + analyst; admin hides the whole top row */
   body[data-view-role="admin"] #acctTop { display: none; }
+  /* UI-231: the Administrator view's Walkthrough tab replaces the Overview grid (and the
+     first-run wizard, which shows in its place) while it is open. Set by renderAdminPanels(). */
+  body[data-view-role="admin"][data-admin-sub="walk"] #view-admin,
+  body[data-view-role="admin"][data-admin-sub="walk"] #view-firstrun,
+  body[data-view-role="admin"][data-admin-sub="walk"] #adminSummary { display: none !important; }
   @media (max-width: 860px) { .acct-top { flex-direction: column; } .acct-top > #acctTriage { flex: none; } }
   .pw-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
   .pw-title { font-family: 'Source Sans 3', sans-serif; font-weight: 800; font-size: 15px; color: var(--navy); letter-spacing: .01em; }
@@ -4460,7 +4465,10 @@
       b.classList.toggle('is-active', r === cur);
     });
   }
-  function applyViewRole() { document.body.setAttribute('data-view-role', _viewRole()); syncRoleMenu(); renderSubNav(); paintNoGrantNotice(); }
+  function applyViewRole() {
+    document.body.setAttribute('data-view-role', _viewRole()); syncRoleMenu(); renderSubNav(); paintNoGrantNotice();
+    if (_viewRole() === 'admin') renderAdminPanels();   // UI-231: the tab strip and the panel it selects, together
+  }
   // UI-174. Name the database the refusal is about. "You have no lane" without
   // naming which database is unactionable on an account that holds a grant on
   // one database and not another — which is the ordinary shape, since grants
@@ -9265,9 +9273,17 @@
       // format. Right-aligned like the accountant's, so Audit Center stays the last
       // workflow tab. Replaces the demo tour.
       { k: 'walk',    label: 'Walkthrough', aside: true }
+    ],
+    // UI-231 (owner 2026-10-25): the Administrator view had no tab strip, only its card
+    // grid. It gains one so the Walkthrough can sit where it does for the other two roles.
+    // Overview IS the existing grid, unchanged. Both tabs are admin-only: #view-admin is
+    // detached from the DOM for anyone else, so a step would point at cards that are not there.
+    admin: [
+      { k: 'home', label: 'Overview',    gate: function () { return isAdmin(); } },
+      { k: 'walk', label: 'Walkthrough', aside: true, gate: function () { return isAdmin(); } }
     ]
   };
-  var _subDefault = { accountant: 'rec', analyst: 'work' };
+  var _subDefault = { accountant: 'rec', analyst: 'work', admin: 'home' };
   // UI-189 — the tabs this user may actually reach. ONE producer, read by both
   // renderSubNav() (which draws the strip) and _curSubView() (which decides
   // which one is showing).
@@ -9302,7 +9318,8 @@
     // UI-189 — the GATED list, so a tab is never drawn for a shelf the user
     // cannot open. Same source as _curSubView().
     var tabs = _visibleSubviews(_viewRole());
-    if (!tabs) { nav.hidden = true; nav.innerHTML = ''; return; }
+    // An empty list hides the strip too (UI-231: a non-admin in the Administrator view).
+    if (!tabs || !tabs.length) { nav.hidden = true; nav.innerHTML = ''; return; }
     var cur = _curSubView();
     nav.hidden = false;
     nav.innerHTML = tabs.map(function (t) {
@@ -9403,7 +9420,7 @@
       var rp0 = $('reportsPalette'); if (rp0) rp0.hidden = true;
       var bt = $('analystDayBriefTop'); if (bt) bt.hidden = true;   // analyst-only chrome
     };
-    if (vr !== 'accountant') { hideAll(); if (vr === 'analyst') renderAnalystPalette(); return; }
+    if (vr !== 'accountant') { hideAll(); if (vr === 'analyst') renderAnalystPalette(); else if (vr === 'admin') renderAdminPanels(); return; }
     var _atA = $('acctTop'); if (_atA) _atA.hidden = false;   // the analyst 'work' tab may have hidden it — restore for the accountant view
     _ensureCompanyNames();   // F0010 names for the grid; async, repaints when they land
     _ensureJeOffsets();      // saved per-line offset accounts (UI-162); same pattern
@@ -9639,7 +9656,14 @@
       todo: ['Find each finding you handed off. Nothing on this tab changes data.',
              '<b>Period Activity</b>, <b>Audit report</b> and <b>Evidence package</b> export the record.'] }
   ];
-  function _walkSteps(role) { return (role || _viewRole()) === 'analyst' ? WALK_STEPS_ANALYST : WALK_STEPS; }
+  function _walkSteps(role) {
+    var r = role || _viewRole();
+    return r === 'analyst' ? WALK_STEPS_ANALYST : r === 'admin' ? WALK_STEPS_ADMIN : WALK_STEPS;
+  }
+  // The facts a role's steps read (UI-231: one place, so the tab and the banner read the same ones).
+  function _walkFactsFor(role, d) {
+    return role === 'analyst' ? _walkFactsAnalyst(d) : role === 'admin' ? _walkFactsAdmin() : _walkFacts(d);
+  }
   // The open step, only in the view it was opened in.
   function _walkOpenStep() {
     return (_walkStep == null || _walkRole !== _viewRole()) ? null : _walkSteps()[_walkStep];
@@ -9673,6 +9697,85 @@
     }
     _walkLight(s);
   }
+
+  // ── UI-231 the administrator's Walkthrough (owner 2026-10-25) ───────────────
+  // Same format and engine again. The admin's work is on the pages behind the four
+  // Overview cards, so every card step goes to Overview and lights its card (`card`, an
+  // element id); the card's own link is the click target, and the banner says what to do
+  // on the page it opens. The live lines quote what each card shows, read from the card
+  // itself, so a step can never give a second answer. "Needs you" is the page's own
+  // _isAttnState test on the card's dot.
+  var WALK_ADMIN_CARDS = [['licenseDot', 'Licensing'], ['teamDot', 'Team & Access'], ['activityDot', 'Activity Log'], ['tsDot', 'Troubleshooting']];
+  // An element's text as shown: its .data-row-text when it has one, nothing when hidden or still a dash.
+  function _walkShown(id) {
+    var el = $(id); if (!el || el.hidden) return '';
+    var t = (el.querySelector && el.querySelector('.data-row-text')) || el;
+    var s = String(t.textContent || '').replace(/\s+/g, ' ').trim();
+    return (s === '—' || s === '-') ? '' : s;
+  }
+  function _walkFactsAdmin() {
+    var cards = WALK_ADMIN_CARDS.map(function (c) {
+      var dot = $(c[0]);
+      return { name: c[1], state: (dot && dot.getAttribute('data-state')) || 'unknown' };
+    });
+    return { cards: cards };
+  }
+  function _walkAdminDoneLine(f) {
+    var clear = f.cards.every(function (c) { return c.state === 'ok'; });
+    return clear ? 'Nothing needs you right now: every card on Overview is clear. The steps show what to look after.' : '';
+  }
+  function _walkShownList(ids) { return ids.map(_walkShown).filter(Boolean); }
+  // look / todo are fixed HTML (no data in them); live() returns plain text, escaped at paint.
+  var WALK_STEPS_ADMIN = [
+    { tab: 'home', title: 'Read the instance', doc: 'admin-start',
+      look: 'Overview is your RapidReconciler instance at a glance: <b>Licensing</b>, <b>Team &amp; Access</b>, <b>Activity Log</b> and <b>Troubleshooting</b>.',
+      todo: ['A card’s dot turns amber or red when something on it needs you. Start there.',
+             '<b>Instance health</b> under the cards shows storage only when it needs you. <b>Show all</b> shows it anyway.',
+             'The line at the top right of the page says how current your data is.'],
+      live: function (f) {
+        var done = _walkAdminDoneLine(f);
+        if (done) return [done];
+        var need = f.cards.filter(function (c) { return _isAttnState(c.state); }).map(function (c) { return c.name; });
+        if (need.length) return ['Needs you: ' + need.join(', ') + '.'];
+        return ['Checking the cards…'];
+      } },
+    { tab: 'home', card: 'licRow', title: 'Keep the license current', doc: 'licensing',
+      look: 'The <b>Licensing</b> card leads with the days left on your license, then its renewal date and the company licenses in use.',
+      todo: ['<b>Manage</b> opens Licensing, which lists your companies and the licenses they use.',
+             '<b>Request more licenses</b> emails GSI Sales. Within 60 days of the end date, <b>Request an invoice</b> asks for the renewal.'],
+      live: function () { return _walkShownList(['licDays', 'licRenewal', 'licSeats']); } },
+    { tab: 'home', card: 'teamRow', title: 'Manage your team', doc: 'managing-users',
+      look: 'The <b>Team &amp; Access</b> card has three rows: members and roles, the access review, and complex passwords.',
+      todo: ['The first row opens <b>RR Team</b>. <b>New Team Member</b> adds a person, and <b>Send invite</b> emails them a link to set their password.',
+             'The second row says when the access review is due. Check the team list, then click <b>Record review</b>.',
+             'The third row opens <b>Complex Passwords</b>, the password policy for each company.'],
+      live: function () { return _walkShownList(['teamUsersRow', 'teamReviewRow', 'teamPwRow']); } },
+    { tab: 'home', card: 'tsRow', title: 'Check the connections and data loads', doc: 'login-access',
+      look: 'The <b>Troubleshooting</b> card has one row per area: connections, data loads and the database server.',
+      todo: ['A row opens <b>Troubleshooting</b>, where each check says what it found.',
+             '<b>Run checks again</b> re-tests. <b>Download diagnostics</b> gives your IT department one file to work from.'],
+      live: function () { return _walkShownList(['tsConnRow', 'tsLoadsRow', 'tsServerRow']); } },
+    { tab: 'home', card: 'activityRow', title: 'Review the activity log', doc: 'admin-start',
+      look: 'The <b>Activity Log</b> card shows the latest events: restarts, data reloads and refreshes. Its dot turns amber when a review is due.',
+      todo: ['<b>See full log</b> opens the log. Read it, then pick when to be reminded next under <b>Remind me in</b>.',
+             'Setting the reminder turns the card’s dot green until the date comes round.'] },
+    { tab: 'home', card: 'adminBrief', title: 'Set the AI plan', doc: 'admin-start',
+      look: 'The band at the top of Overview is the AI assistant. <b>AI plan</b> at its top right opens the AI Assistant page.',
+      todo: ['<b>Your Plan</b> shows the tier you bought. To change it, contact GSI.',
+             'Under <b>Set Features</b>, choose what each feature may use, then click <b>Save</b>.'],
+      live: function () { var t = _walkShown('aiPlanTierLabel'); return t ? ['AI plan: ' + t + '.'] : []; } }
+  ];
+  // The Administrator view's tabs: Overview is the existing grid, hidden while the
+  // Walkthrough tab shows (a body attribute, so CSS hides it and nothing here has to
+  // win an ordering race with renderRoleView, which owns #view-admin's own `hidden`).
+  function renderAdminPanels() {
+    var sv = _curSubView();
+    document.body.setAttribute('data-admin-sub', sv || 'home');
+    var walk = $('acctWalk');
+    if (walk) walk.hidden = !(sv === 'walk' && isAdmin());
+    if (sv === 'walk' && isAdmin()) renderWalkthrough(null);
+    renderWalkBanner(sv, null);
+  }
   // The step's lines from the user's data, as a list (one bullet each). Empty when there is nothing to say.
   function _walkLive(s, f) {
     if (s.live) { var l = s.live(f); return Array.isArray(l) ? l : (l ? [l] : []); }
@@ -9695,12 +9798,14 @@
   }
   function renderWalkthrough(d) {
     var list = $('acctWalkList'); if (!list) return;
-    var role = _viewRole(), an = role === 'analyst';
-    var f = an ? _walkFactsAnalyst(d) : _walkFacts(d);
+    var role = _viewRole();
+    var f = _walkFactsFor(role, d);
     var ttl = $('acctWalkTitle');
-    if (ttl) ttl.textContent = an ? 'Walkthrough: work a company’s period' : 'Walkthrough: reconcile a period';
+    if (ttl) ttl.textContent = role === 'analyst' ? 'Walkthrough: work a company’s period'
+      : role === 'admin' ? 'Walkthrough: look after your instance' : 'Walkthrough: reconcile a period';
     var st = $('acctWalkStatus');
-    var done = an ? _walkAnalystDoneLine(f) : (f.open.length ? '' : _walkDoneLine(f));
+    var done = role === 'analyst' ? _walkAnalystDoneLine(f) : role === 'admin' ? _walkAdminDoneLine(f)
+      : (f.open.length ? '' : _walkDoneLine(f));
     if (st) { st.hidden = !done; st.textContent = done; }
     list.innerHTML = _walkSteps(role).map(function (s, i) {
       var live = _walkLive(s, f);
@@ -9715,6 +9820,14 @@
   function _walkGo(i) {
     var role = _viewRole(), s = _walkSteps(role)[i]; if (!s) return;
     _walkStep = i; _walkRole = role;
+    if (role === 'admin') {
+      // UI-231: every step is on Overview; light the step's card and bring it into view.
+      _setSubView(s.tab);
+      var card = s.card ? $(s.card) : null;
+      if (card) { try { card.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (_) { card.scrollIntoView(); } }
+      _walkLight(s);
+      return;
+    }
     if (role === 'analyst') {
       // A fresh pick on the step that starts a card; the hand-off step keeps the same card.
       if (s.focus === 'txv') { if (s.pick) _walkTxvKey = null; _walkTxvPending = s.peek ? 'light' : 'open'; }
@@ -9743,7 +9856,8 @@
     var lit = document.querySelectorAll('.walk-focus');
     for (var i = 0; i < lit.length; i++) lit[i].classList.remove('walk-focus');
     var el = null;
-    if (s && s.focus === 'txv') el = _walkTxvCard();   // UI-230: the analyst's card is keyed by pattern code
+    if (s && s.card) el = $(s.card);                    // UI-231: an administrator step names its card by id
+    else if (s && s.focus === 'txv') el = _walkTxvCard();   // UI-230: the analyst's card is keyed by pattern code
     else if (s && s.focus) { var c = _walkCo(s, f); el = c ? _walkCard(c.co) : null; }
     if (el) el.classList.add('walk-focus');
   }
@@ -9753,7 +9867,7 @@
     var b = $('acctWalkBanner'); if (!b) return;
     var s = _walkOpenStep(), steps = _walkSteps();
     if (!s || sv !== s.tab) { b.hidden = true; b.innerHTML = ''; _walkLight(null); return; }
-    var f = _viewRole() === 'analyst' ? _walkFactsAnalyst(d || _acctData) : _walkFacts(d || _acctData), live = _walkLive(s, f);
+    var f = _walkFactsFor(_viewRole(), d || _acctData), live = _walkLive(s, f);
     var last = _walkStep === steps.length - 1;
     b.hidden = false;
     b.innerHTML = '<div class="walk-banner-text"><div class="walk-banner-step">Walkthrough &middot; Step ' + (_walkStep + 1)
