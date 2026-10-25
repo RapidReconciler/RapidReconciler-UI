@@ -1,7 +1,8 @@
 # Plan: Self-guided tour — band-walkthrough on the live V8 home page
 
 **Status: SUPERSEDED 2026-10-25 (owner, UI-230).** The tour is abandoned. New users learn
-from the **Walkthrough** tab on the Accountant view (UI-228) and the Analyst view (UI-230),
+from the **Walkthrough** tab on the Accountant view (UI-228), the Analyst view (UI-230) and
+the Administrator view (UI-231),
 which walk the user's own data on every plan. The demo tour (UI-222) closed with it. What
 follows is kept for the record.
 

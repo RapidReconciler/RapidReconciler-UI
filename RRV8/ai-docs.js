@@ -46,7 +46,9 @@
     'managing-companies': { title: 'Managing Companies',   href: '../RRUniversity/administrator-managing-companies.html', roles: ['admin'] },
     'password-policy':    { title: 'Password Policy',      href: '../RRUniversity/administrator-complex-password.html',   roles: ['admin'] },
     'licensing':          { title: 'Licensing',           href: '../RRUniversity/rapidreconciler-licensing.html',        roles: ['admin'] },
-    'login-access':       { title: 'Login & Access',       href: '../RRUniversity/login-and-access.html',                 roles: ['admin'] }
+    'login-access':       { title: 'Login & Access',       href: '../RRUniversity/login-and-access.html',                 roles: ['admin'] },
+    // UI-231: the administrator Walkthrough's overview steps had no guide on this list.
+    'admin-start':        { title: 'Start Here: RR Administrators', href: '../RRUniversity/administrator-start-here.html', roles: ['admin'] }
   };
 
   // Prompt fragment: lists the allowlist (scoped to `role`) + the emit contract.
