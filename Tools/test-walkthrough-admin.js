@@ -13,6 +13,8 @@
  *       #view-admin                                                 (rot guard)
  *   T3  every on-screen label a step names still exists on the page it is on, outside
  *       the Walkthrough's own text                                  (rot guard)
+ *   R1  each Troubleshooting row opens the page step 4 says it does (UI-232: Data loads
+ *       opens Data Refresh, the page's only visible route)
  *   L1  the card steps quote what the card shows, skipping hidden lines and dashes
  *   S1  step 1 names the cards whose dot needs the admin (the page's _isAttnState);
  *       every card clear: the tab and step 1 say so; still loading: says checking
@@ -147,6 +149,8 @@ function suite(walkSrc, label) {
     'Record review': ['admin-users.html', '>Record review</button>'],
     'Complex Passwords': ['admin-complex-passwords.html', '<title>Complex Passwords'],
     'Run checks again': ['admin-troubleshooting.html', 'Run checks again'],
+    'Data Refresh': ['admin-data-refresh.html', '<title>Data Refresh'],
+    'Refresh now': ['admin-data-refresh.html', '>Refresh now</button>'],
     'Download diagnostics': ['admin-troubleshooting.html', 'Download diagnostics'],
     'Remind me in': ['admin-activity-log.html', '>Remind me in</span>'],
     'Your Plan': ['admin-claude-assistant.html', '>Your Plan<'],
@@ -161,6 +165,12 @@ function suite(walkSrc, label) {
   const all = ON_HOME.concat(Object.keys(ON_PAGE));
   check('T3 every label the steps name is on the guard\'s list', named.filter((n) => all.indexOf(n) < 0), []);
   check('T3 CONTROL: each listed label is named by a step', all.filter((l) => named.indexOf(l) < 0), []);
+  // R1 (UI-232, owner 2026-10-26): step 4 says which page each Troubleshooting row opens, so
+  // the rows' own links are read out of the #view-admin markup the browser gets.
+  const rowHref = (id) => { const m = new RegExp('<a [^>]*id="' + id + '"[^>]*href="([^"]+)"').exec(VIEW_ADMIN); return m ? m[1] : null; };
+  check('R1 the Data loads row opens Data Refresh, its only visible route; the other two keep Troubleshooting',
+        ['tsConnRow', 'tsLoadsRow', 'tsServerRow'].map(rowHref), ['admin-troubleshooting.html', 'admin-data-refresh.html', 'admin-troubleshooting.html']);
+  check('R1 and step 4 names both destinations', ['Troubleshooting', 'Data Refresh'].every((p) => s.w.steps[3].todo.join(' ').indexOf('<b>' + p + '</b>') >= 0), true);
 
   // L1: the card steps quote the card.
   const f = s.w.facts();
