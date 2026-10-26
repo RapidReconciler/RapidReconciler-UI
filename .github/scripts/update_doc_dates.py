@@ -4,8 +4,8 @@
 Invoked by .github/workflows/update-doc-dates.yml on every push to main that
 touches a customer-facing doc.
 
-For each HTML file under one of DIRS below that carries a
-`data-doc-type="..."` attribute on <body>, the script:
+For each HTML file anywhere under one of DIRS below, subfolders included, that
+carries a `data-doc-type="..."` attribute on <body>, the script:
 
   1. Runs `git log -1 --format=%aI -- <file>` to get the ISO date of the most
      recent commit that touched that specific file.
@@ -71,14 +71,16 @@ def assert_workflow_agrees(dirs: list[str]) -> None:
 
     # A control FIRST: if neither marker appears at all, the guard is matching
     # nothing and would pass whatever DIRS said.
-    if "RRUniversity/**.html" not in text or "RRUniversity/*.html" not in text:
+    if "RRUniversity/**.html" not in text or ":(glob)RRUniversity/**/*.html" not in text:
         print("FAIL  the workflow contains no recognisable path/stage entry -- this")
         print("      guard cannot have checked anything. Has the yml been rewritten?")
         sys.exit(1)
 
+    # The stage entry is a git `:(glob)` pathspec with `**/`, which matches the
+    # directory itself and every subfolder. A shell glob such as `GSIRRTech/*.html`
+    # stops at one level, which is the HK-45 gap; it no longer satisfies this check.
     untriggered = [d for d in dirs if f"{d}/**.html" not in text]
-    unstaged = [d for d in dirs
-                if f"{d}/*.html" not in text and f"{d}/scenario-*.html" not in text]
+    unstaged = [d for d in dirs if f":(glob){d}/**/*.html" not in text]
 
     if untriggered or unstaged:
         print("FAIL  update-doc-dates.yml disagrees with DIRS:")
@@ -158,7 +160,11 @@ def main() -> int:
         if not Path(d).is_dir():
             print(f"FAIL  DIRS names '{d}' but no such directory exists here")
             return 1
-        for f in sorted(Path(d).glob("*.html")):
+        # ⛔ rglob, NOT glob. `glob("*.html")` does not descend, so the sixteen
+        # pages in GSIRRTech/install-scenarios/ were never stamped and showed
+        # their May dates through every edit (HK-45, 2026-10-07; UI #775 stamped
+        # four by hand). Tests: test_update_doc_dates.py, run by check-bot-merge.yml.
+        for f in sorted(Path(d).rglob("*.html")):
             scanned += 1
             if process(f):
                 updated.append(str(f))

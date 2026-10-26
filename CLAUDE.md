@@ -239,7 +239,7 @@ runbooks gradually.
 `RRUniversity/rapidreconciler-university.html` is the public KB landing page
 with module-aware search:
 
-- **4 role cards** (Inventory / AP / Transfers / Administrators), each with
+- **4 role cards** (Inventory / RNV / Transfers / Administrators), each with
   an "Include in search" toggle. Default: only Inventory ON; persisted to
   localStorage as `rru-search-filters-v1`.
 - **Module → filename prefix mapping** for filtering:
@@ -247,7 +247,7 @@ with module-aware search:
   | Role card       | Filename prefix    | Docs |
   |-----------------|--------------------|------|
   | Inventory       | `inventory-`       | 10   |
-  | AP              | `po-receipts-`     | 3    |
+  | RNV (key `ap`)  | `po-receipts-`     | 3    |
   | Transfers       | `transfer-order-`  | 3    |
   | Administrators  | `administrator-`   | 2    |
 
@@ -710,6 +710,12 @@ versed analyst, not a layperson. Keep that voice:
            overall `ts-browse-all-count` ("N in scope") AND the
            section's own `ts-browse-section-count` are hand-
            maintained — bump both when adding an entry.
+       **Scenario pages (`Scenarios/scenario-*.html`) are the
+       exception: they do NOT go in either drawer** (owner ruling
+       2026-10-07). Readers find them through the Help Desk search
+       and its auto-built "Browse all scenarios" list, both fed by
+       `Scenarios/scenarios-index.json`, which CI regenerates from the
+       pages. A new scenario needs no drawer entry and no count bump.
   The docs and the code should land in the same commit; if a doc
   update is missing, the owner has to re-grep the next day to
   figure out what changed and where to update.
