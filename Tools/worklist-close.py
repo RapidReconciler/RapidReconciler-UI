@@ -19,7 +19,12 @@ reverse. This does both, plus:
     worklist-to-issues.py refuse to run, and a stale group count. Both rules
     live in worklist_bookkeeping.py, which the per-write hook reports from too;
   * refuses, changing nothing, if the ID has no section or no index line, or
-    more than one of either.
+    more than one of either;
+  * then closes the row's own GitHub issue straight away (HK-47, 2026-10-26).
+    VALC's Development page reads the issue, and before this a closed row stayed
+    open there until somebody ran the full sync. An issue already closed, or one
+    titled for another row, is left alone. A GitHub failure is printed as a WARN
+    and never undoes the close; the next sync's close pass retries it.
 
 Each file is read whole, closed, and then written: never read and written in
 one open (memory feedback_never_read_and_write_same_open).
@@ -101,6 +106,42 @@ def close(row_id, reason):
     left = worklist_bookkeeping.errors("\n".join(remaining))
     if left:
         print("WARNING, still wrong after the close (not caused by it; fix by hand):\n  " + "\n  ".join(left))
+    print("GitHub: " + ISSUE_CLOSER(row_id, reason))
+
+
+def close_issue(row_id, reason, mod=None):
+    """HK-47: close the row's own issue now, instead of whenever the next full sync happens to run (VALC's
+    Development page reads the issue, so until then it still showed the row open). Reads the issue first:
+    one already closed (VALC's Close button, or a sync) or naming another row is left alone. NEVER raises:
+    the row has already moved, a GitHub failure must not look like a failed close, and the next sync's
+    close pass retries it. Returns one line for the output."""
+    try:
+        import json
+        mod = mod or worklist_bookkeeping.issues_module()
+        try:
+            mapping = json.load(open(mod.MAP_FILE, encoding="utf-8"))
+        except FileNotFoundError:
+            return "no issue map yet; the next sync closes the issue"
+        e = mapping.get(row_id)
+        if not e:
+            return "%s has no issue in the map; nothing to close" % row_id
+        repo, num = e["repo"], e["number"]
+        i = mod.get_issue(repo, num)
+        if not i:
+            return "%s #%d not found; nothing closed" % (repo, num)
+        if not i.get("title", "").startswith("[%s]" % row_id):
+            return "%s #%d is titled for another row; NOT touched" % (repo, num)
+        if i.get("state") == "closed":
+            return "%s #%d was already closed" % (repo, num)
+        mod.gh(["issue", "close", str(num), "-R", "%s/%s" % (mod.OWNER, repo), "--reason", "completed",
+                "--comment", mod.CLOSE_NOTE.format(wid=row_id) + "\n\n" + reason.strip()])
+        return "closed %s #%d" % (repo, num)
+    except Exception as ex:  # report, never fail the close that already happened
+        return "WARN: the issue was NOT closed (%s: %s); the next sync's close pass will close it" % (
+            type(ex).__name__, str(ex)[:200])
+
+
+ISSUE_CLOSER = close_issue   # the self-test swaps this, so it never reaches the real issues
 
 
 # ---------------------------------------------------------------- self-test
@@ -156,13 +197,45 @@ closed long ago
 """
 
 
+def close_issue_self_test(tmp):
+    """HK-47: close_issue against a fake GitHub. Every refusal path, the close, and a GitHub failure."""
+    import json
+    from types import SimpleNamespace
+    sent = []
+    issues = {1: {"title": "[HK-30] go", "state": "open"}, 2: {"title": "[HK-31] next", "state": "closed"},
+              3: {"title": "[HK-99] someone else", "state": "open"}}
+    mp = tmp / "map.json"
+    mp.write_text(json.dumps({"HK-30": {"repo": "R", "number": 1}, "HK-31": {"repo": "R", "number": 2},
+                              "HK-3": {"repo": "R", "number": 3}, "HK-4": {"repo": "R", "number": 404}}))
+    mod = SimpleNamespace(MAP_FILE=str(mp), OWNER="O", CLOSE_NOTE="Closed: {wid} moved.",
+                          get_issue=lambda repo, n: issues.get(n), gh=sent.append)
+    assert close_issue("HK-30", "shipped", mod) == "closed R #1", "an open issue for the row is closed"
+    assert sent == [["issue", "close", "1", "-R", "O/R", "--reason", "completed", "--comment",
+                     "Closed: HK-30 moved.\n\nshipped"]], sent
+    assert close_issue("HK-31", "x", mod) == "R #2 was already closed" and len(sent) == 1, "a closed issue is left alone"
+    assert "NOT touched" in close_issue("HK-3", "x", mod) and len(sent) == 1, "another row's issue is never closed"
+    assert "not found" in close_issue("HK-4", "x", mod) and len(sent) == 1
+    assert "no issue in the map" in close_issue("HK-5", "x", mod) and len(sent) == 1
+    mod.MAP_FILE = str(tmp / "absent.json")
+    assert "no issue map yet" in close_issue("HK-30", "x", mod)
+    mod.MAP_FILE = str(mp)
+
+    def boom(args):
+        raise RuntimeError("issue close: HTTP 502")
+    mod.gh = boom
+    out = close_issue("HK-30", "x", mod)
+    assert out.startswith("WARN") and "502" in out, "a GitHub failure is reported, never raised: " + out
+
+
 def self_test():
-    global LIVE, DONE, BACKUPS
+    global LIVE, DONE, BACKUPS, ISSUE_CLOSER
     import contextlib
     import io
-    saved = LIVE, DONE, BACKUPS, _write
+    saved = LIVE, DONE, BACKUPS, _write, ISSUE_CLOSER
     tmp = Path(tempfile.mkdtemp(prefix="close-test-"))
     LIVE, DONE, BACKUPS = tmp / "WORKLIST.md", tmp / "WORKLIST-DONE.md", tmp / "bk"
+    asked = []
+    ISSUE_CLOSER = lambda rid, reason: asked.append(rid) or "stubbed"
 
     def seed(eol):
         LIVE.write_bytes(FIXTURE_LIVE.replace("\n", eol).encode("utf-8"))
@@ -200,6 +273,7 @@ def self_test():
             assert done.startswith(FIXTURE_DONE.rstrip("\n")) and "### HK-30 — go\n\nbody of HK-30\nline two\n" in done, done
             assert "#### ✅ CLOSED %s: shipped" % date.today().isoformat() in done, done
             assert len(list(BACKUPS.iterdir())) >= 2
+            assert asked and asked[-1] == "HK-30", "HK-47: a close asks GitHub to close the row's issue: %r" % asked
 
         # HK-33: a chunk that named only the closed row goes, and the fixture starts clean (the control)
         seed("\n")
@@ -229,15 +303,17 @@ def self_test():
         finally:
             worklist_bookkeeping.fix = real_fix
 
-        # a refusal changes nothing, byte for byte
+        # a refusal changes nothing, byte for byte, and asks GitHub for nothing
         seed("\r\n")
-        before = LIVE.read_bytes(), DONE.read_bytes()
+        before, n_asked = (LIVE.read_bytes(), DONE.read_bytes()), len(asked)
         try:
             quiet(close, "HK-99", "no such row")
             raise AssertionError("expected a refusal")
         except SystemExit as e:
             assert "REFUSED" in str(e), e
         assert (LIVE.read_bytes(), DONE.read_bytes()) == before
+        assert len(asked) == n_asked, "a refused close must not touch any issue"
+        close_issue_self_test(tmp)
 
         # a mixed file comes back in its majority ending, and the output says so
         LIVE.write_bytes(FIXTURE_LIVE.replace("\n", "\r\n").replace("body of HK-3\r\n", "body of HK-3\n").encode())
@@ -255,11 +331,12 @@ def self_test():
         else:
             mutation = "skipped (write_text only translates endings where os.linesep is CRLF)"
     finally:
-        LIVE, DONE, BACKUPS, w = saved
+        LIVE, DONE, BACKUPS, w, ISSUE_CLOSER = saved
         globals()["_write"] = w
         shutil.rmtree(tmp, ignore_errors=True)
     print("self-test OK (LF kept, CRLF kept, chunks and group counts follow a close, refusal untouched, "
-          "mixed reported; HK-33 mutation arms caught; line-ending mutation arm %s)" % mutation)
+          "mixed reported; HK-33 mutation arms caught; line-ending mutation arm %s; HK-47: a close closes "
+          "its issue, every refusal path and a GitHub failure handled)" % mutation)
 
 
 if __name__ == "__main__":

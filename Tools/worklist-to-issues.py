@@ -26,22 +26,40 @@ Safety, all enforced before anything is sent:
     reason, and the run then works from the updated file. A live row whose issue was closed WITHOUT that
     label (closed on GitHub directly) is a WARN: the row stays live and the issue is never reopened.
     --dry-run reports both and moves nothing.
+  * Run by the Stop hook (HK-47, owner 2026-10-26: "We also need to do a better job of keeping the worklist
+    synced with github"). Tools/worklist-sync-hook.py runs this at the end of any turn that changed the
+    worklist, so a live run is now routine and has to be quick and safe to overlap:
+      - LOCK: one live run at a time across every session (worklist-sync.lock beside the map). A run that
+        finds a live holder exits 3 and changes nothing; a dead or 20-minute-old holder is taken over.
+      - Each issue is read once per run (the VALC-close pass and the update pass used to read every one twice),
+        and an issue whose title, body and labels already match is left alone instead of re-edited.
+      - STATE: a successful live run writes worklist-sync-state.json (when, the two files' fingerprint, counts).
+        The hook compares that fingerprint to decide whether a turn changed anything.
+      - VERIFY: the run ends by listing the open worklist issues and comparing their IDs with the rows it
+        posted. A difference exits 4 and names the IDs, so "synced" is a measurement, not the script's say-so.
 
 Usage:  python Tools/worklist-to-issues.py [--dry-run]
         python Tools/worklist-to-issues.py --self-test
+Exit:   0 synced (or dry run); 3 another live run holds the lock; 4 GitHub disagrees after the run; 1 anything else
 """
 import contextlib
+import hashlib
 import io
 import json
 import os
 import re
 import subprocess
 import sys
+import time
+from datetime import datetime, timezone
 
 WORKSPACE = r"C:\source\repos"
 WORKLIST = os.path.join(WORKSPACE, "WORKLIST.md")
 DONE = os.path.join(WORKSPACE, "WORKLIST-DONE.md")
 MAP_FILE = os.path.join(WORKSPACE, "worklist-issues.json")
+LOCK_FILE = os.path.join(WORKSPACE, "worklist-sync.lock")
+STATE_FILE = os.path.join(WORKSPACE, "worklist-sync-state.json")
+LOCK_STALE_S = 20 * 60
 GH = r"C:\Program Files\GitHub CLI\gh.exe"
 OWNER = "RapidReconciler"
 
@@ -226,7 +244,7 @@ def short_listing(listing, mapping, repo, get=get_issue):
 
 
 def existing(repo, wid, mapping, listing, get=get_issue):
-    """(number, current label names) of the issue titled "[ID] ...", or (None, []).
+    """(number, current label names, the issue) of the issue titled "[ID] ...", or (None, [], None).
 
     The map first, read by number (the direct read is the reliable one); the full listing only for a row
     the map does not name. A mapped number whose issue is gone or renamed falls through to the listing."""
@@ -234,11 +252,134 @@ def existing(repo, wid, mapping, listing, get=get_issue):
     if e and e.get("repo") == repo:
         i = get(repo, e["number"])
         if i and "pull_request" not in i and i["title"].startswith(f"[{wid}]"):
-            return i["number"], [l["name"] for l in i.get("labels", [])]
+            return i["number"], [l["name"] for l in i.get("labels", [])], i
     for i in listing:
         if i["title"].startswith(f"[{wid}]"):
-            return i["number"], [l["name"] for l in i.get("labels", [])]
-    return None, []
+            return i["number"], [l["name"] for l in i.get("labels", [])], i
+    return None, [], None
+
+
+def cached(get):
+    """get_issue, read at most once per (repo, number) for this run (HK-47). Before it, every mapped issue
+    was read twice: once by the VALC-close pass and once by existing()."""
+    seen = {}
+
+    def read(repo, num):
+        if (repo, num) not in seen:
+            seen[(repo, num)] = get(repo, num)
+        return seen[(repo, num)]
+    return read
+
+
+def _norm(s):
+    return (s or "").replace("\r\n", "\n").strip()
+
+
+def unchanged(issue, title, body, labels, stale):
+    """True when the issue already says exactly what this run would write (HK-47): same title, same body,
+    every wanted label present and none to remove. Then it is left alone instead of re-edited."""
+    if not issue or stale:
+        return False
+    have = {l["name"] for l in issue.get("labels", [])}
+    return issue.get("title") == title and _norm(issue.get("body")) == _norm(body) and set(labels) <= have
+
+
+def fingerprint(paths=None):
+    """sha256 over the worklist files' bytes: what the Stop hook compares to decide a turn changed them."""
+    h = hashlib.sha256()
+    for p in paths or (WORKLIST, DONE):
+        with open(p, "rb") as f:
+            h.update(f.read())
+        h.update(b"\0")
+    return h.hexdigest()
+
+
+def pid_alive(pid):
+    """Whether a process with this id is running. Never os.kill(pid, 0) on Windows: there it TERMINATES
+    the process (signal 0 is passed to TerminateProcess as the exit code)."""
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+        k = ctypes.windll.kernel32
+        h = k.OpenProcess(0x1000, False, pid)          # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            return bool(k.GetExitCodeProcess(h, ctypes.byref(code))) and code.value == 259   # STILL_ACTIVE
+        finally:
+            k.CloseHandle(h)
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+class Locked(Exception):
+    pass
+
+
+def take_lock(path=None, now=None, alive=None):
+    """Create the lock file atomically. A holder that is alive and under LOCK_STALE_S old raises Locked;
+    a dead or stale one is replaced (and said)."""
+    path, now, alive = path or LOCK_FILE, now or time.time(), alive or pid_alive
+    for _ in range(2):
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump({"pid": os.getpid(), "started": now}, f)
+            return
+        except FileExistsError:
+            try:
+                held = json.load(open(path, encoding="utf-8"))
+            except (OSError, ValueError):
+                held = {}
+            pid, started = int(held.get("pid") or 0), float(held.get("started") or 0)
+            if alive(pid) and now - started < LOCK_STALE_S:
+                raise Locked(f"another live sync holds {path} (pid {pid}, {int(now - started)} s ago); nothing was done")
+            print(f"  lock: taking over a {'stale' if alive(pid) else 'dead'} lock (pid {pid})")
+            with contextlib.suppress(OSError):
+                os.remove(path)
+    raise Locked(f"could not take {path}")
+
+
+def drop_lock(path=None):
+    path = path or LOCK_FILE
+    with contextlib.suppress(OSError, ValueError):
+        if int(json.load(open(path, encoding="utf-8")).get("pid") or 0) == os.getpid():
+            os.remove(path)
+
+
+def open_ids(fetch=None):
+    """{ID: (repo, number)} of every OPEN worklist issue (not investigations) in every repo the copier posts to."""
+    fetch = fetch or open_worklist_issues
+    out = {}
+    for repo in sorted(set(REPO_FOR.values())):
+        for i in fetch(repo):
+            m = ISSUE_ID.match(i["title"])
+            if m and "investigation" not in [l["name"] for l in i.get("labels", [])]:
+                out[m.group("id")] = (repo, i["number"])
+    return out
+
+
+def verify(posted, fetch=None, wait=5):
+    """HK-47: GitHub's open worklist issues must be exactly the rows this run posted. The listing has come
+    back short before (2026-10-22), so a disagreement is re-read once before it counts. Returns problems."""
+    for attempt in range(2):
+        have = open_ids(fetch)
+        extra, missing = sorted(set(have) - set(posted)), sorted(set(posted) - set(have))
+        if not extra and not missing:
+            return []
+        if attempt == 0 and wait:
+            time.sleep(wait)
+    out = []
+    if missing:
+        out.append("live rows with NO open issue: " + ", ".join(missing))
+    if extra:
+        out.append("open issues with NO live row: " + ", ".join(f"{w} ({have[w][0]} #{have[w][1]})" for w in extra))
+    return out
 
 
 def stale_labels(current, wanted):
@@ -376,13 +517,37 @@ def build(row, section, chunk):
 
 
 def main(dry):
+    """A live run holds the lock for its whole length (HK-47); a dry run reads only and takes none."""
+    if dry:
+        return sync(True)
+    try:
+        take_lock()
+    except Locked as e:
+        print(f"LOCKED: {e}")
+        return 3
+    try:
+        return sync(False)
+    finally:
+        drop_lock()
+
+
+def write_state(state, path=None):
+    path = path or STATE_FILE
+    with open(path + ".tmp", "w", encoding="utf-8") as f:
+        json.dump(state, f, indent=2)
+    os.replace(path + ".tmp", path)
+
+
+def sync(dry):
+    start_fp = None if dry else fingerprint()
+    get = cached(get_issue)
     text = open(WORKLIST, encoding="utf-8").read()
     rows, sections = parse(text)
     if not rows:
         raise SystemExit("no live rows parsed: the index format changed, refusing to report zero")
     # VLC-207: the owner's VALC closes come first, so everything below works from the file they leave.
     mapping0 = json.load(open(MAP_FILE, encoding="utf-8")) if os.path.exists(MAP_FILE) else {}
-    moved = apply_valc_closes(rows, mapping0, dry)
+    moved = apply_valc_closes(rows, mapping0, dry, get=get)
     print(f"VALC close pass: {len(moved)} row(s) {'would move' if dry else 'moved'} to WORKLIST-DONE.md")
     if moved and not dry:
         text = open(WORKLIST, encoding="utf-8").read()
@@ -411,7 +576,7 @@ def main(dry):
     listings = {}
     for repo in repos:
         listings[repo] = worklist_issues(repo)
-        missing = short_listing(listings[repo], mapping, repo)
+        missing = short_listing(listings[repo], mapping, repo, get)
         if missing:
             raise SystemExit(f"GitHub's issue list for {repo} came back short: it left out {len(missing)} worklist "
                              f"issue(s) that exist ({', '.join('#' + str(n) for n in missing[:10])}). Nothing was "
@@ -421,6 +586,7 @@ def main(dry):
         # Only the chunks that have a row in this repo; a chunk spanning repos gets its label in each.
         here = [c for c in chunks if any(REPO_FOR.get(r.split("-")[0]) == repo for r in c["rows"])]
         ensure_labels(repo, dry, chunk_labels(here))
+    posted, counts = [], {"created": 0, "updated": 0, "unchanged": 0}
     for row in rows:
         prefix = row["id"].split("-")[0]
         if prefix not in REPO_FOR:
@@ -434,9 +600,15 @@ def main(dry):
         if SECRET.search(body):
             print(f"  REFUSED {row['id']}: a secret-shaped string is in its section; not posted")
             continue
-        num, current = existing(repo, row["id"], mapping, listings[repo])
+        num, current, issue = existing(repo, row["id"], mapping, listings[repo], get)
         stale = stale_labels(current, labels)
+        posted.append(row["id"])
+        if num and unchanged(issue, title, body, labels, stale):
+            counts["unchanged"] += 1
+            mapping[row["id"]] = {"repo": repo, "number": num, "url": f"https://github.com/{OWNER}/{repo}/issues/{num}"}
+            continue
         action = f"update #{num}" if num else "create"
+        counts["updated" if num else "created"] += 1
         print(f"  {row['id']:8} -> {repo:24} {action:12} {labels}" + (f"  (remove {stale})" if stale else ""))
         if dry:
             continue
@@ -454,11 +626,27 @@ def main(dry):
     print(f"close pass: {len(done)} IDs closed in WORKLIST-DONE.md")
     closed, warned = close_finished({r["id"] for r in rows}, indexed, done, dry)
     print(f"close pass: {len(closed)} {'to close' if dry else 'closed'}, {len(warned)} warned (left open)")
-    if not dry:
-        with open(MAP_FILE + ".tmp", "w", encoding="utf-8") as f:
-            json.dump(mapping, f, indent=2)
-        os.replace(MAP_FILE + ".tmp", MAP_FILE)
-        print(f"map written: {MAP_FILE} ({len(mapping)} entries)")
+    print(f"issues: {counts['created']} {'to create' if dry else 'created'}, {counts['updated']} "
+          f"{'to update' if dry else 'updated'}, {counts['unchanged']} unchanged")
+    if dry:
+        return 0
+    with open(MAP_FILE + ".tmp", "w", encoding="utf-8") as f:
+        json.dump(mapping, f, indent=2)
+    os.replace(MAP_FILE + ".tmp", MAP_FILE)
+    print(f"map written: {MAP_FILE} ({len(mapping)} entries)")
+    problems = verify(posted)
+    if problems:
+        print("VERIFY FAILED: GitHub disagrees with the worklist after this run:\n  " + "\n  ".join(problems))
+        return 4
+    print(f"verify: {len(posted)} open worklist issues on GitHub = the {len(posted)} live rows posted")
+    end_fp = fingerprint()
+    # Another session edited the files while this ran (and this run moved nothing itself): keep the
+    # fingerprint this run READ, so the next hook sees a change and syncs again rather than skipping it.
+    write_state({"synced_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                 "fingerprint": start_fp if end_fp != start_fp and not moved else end_fp,
+                 "live_rows": len(rows), "open_issues": len(posted), "moved_from_valc": len(moved),
+                 "closed": len(closed), "warned": len(warned), **counts})
+    return 0
 
 
 def self_test():
@@ -532,10 +720,10 @@ def self_test():
     mp = {"VLC-124": {"repo": "RapidReconciler-Valc", "number": 326}, "VLC-9": {"repo": "RapidReconciler-Valc", "number": 400},
           "VLC-7": {"repo": "RapidReconciler-Valc", "number": 999}}
     whole = [world[("RapidReconciler-Valc", 326)], {"number": 410, "title": "[VLC-50] unmapped", "labels": lab("worklist")}]
-    assert existing("RapidReconciler-Valc", "VLC-124", mp, [], get) == (326, ["worklist"]), \
+    assert existing("RapidReconciler-Valc", "VLC-124", mp, [], get)[:2] == (326, ["worklist"]), \
         "a mapped row is found by number even when the listing came back EMPTY"
-    assert existing("RapidReconciler-Valc", "VLC-50", mp, whole, get) == (410, ["worklist"]), "an unmapped row is found in the listing"
-    assert existing("RapidReconciler-Valc", "VLC-51", mp, whole, get) == (None, []), "a row with no issue anywhere is a create"
+    assert existing("RapidReconciler-Valc", "VLC-50", mp, whole, get)[:2] == (410, ["worklist"]), "an unmapped row is found in the listing"
+    assert existing("RapidReconciler-Valc", "VLC-51", mp, whole, get) == (None, [], None), "a row with no issue anywhere is a create"
     assert short_listing([], mp, "RapidReconciler-Valc", get) == [326], \
         "THE 2026-10-22 CASE: an empty listing while #326 exists is short, so nothing may be created"
     assert short_listing(whole, mp, "RapidReconciler-Valc", get) == [], \
@@ -581,11 +769,94 @@ def self_test():
     assert len(ran) == 1 and ran[0][1:3] == [CLOSE_TOOL, "VLC-801"] and "saw it live" in ran[0][3] \
         and "VLC-207" in ran[0][3], f"a live run closes the row with worklist-close.py, quoting VALC's comment: {ran}"
     assert os.path.exists(CLOSE_TOOL), f"the close tool the reverse leg runs must exist: {CLOSE_TOOL}"
-    print("self-test OK")
+    hk47_self_test(rows, secs, chunks, lab)
+    print("self-test OK (HK-47: read cache, unchanged skip, lock, verify, state fingerprint)")
+
+
+def hk47_self_test(rows, secs, chunks, lab):
+    import tempfile
+    # Read once per run: two reads of the same issue reach GitHub once; a different issue is its own read.
+    calls = []
+    read = cached(lambda repo, n: calls.append((repo, n)) or {"number": n})
+    read("R", 1), read("R", 1), read("R", 2)
+    assert calls == [("R", 1), ("R", 2)], f"the cache must read each issue once: {calls}"
+    # Unchanged: an issue that already says what the run would write is left alone; any difference edits it.
+    t, b, l = build(rows[0], secs["DAC-1"], chunks[1])
+    same = {"title": t, "body": b.replace("\n", "\r\n") + "\n", "labels": lab(*l, "claude:done")}
+    assert unchanged(same, t, b, l, []), "same title/body/labels (CRLF and a trailing newline aside) is unchanged"
+    assert not unchanged(dict(same, body=b + " edited"), t, b, l, []), "a changed body is an edit"
+    assert not unchanged(dict(same, title=t + "x"), t, b, l, []), "a changed title is an edit"
+    assert not unchanged(dict(same, labels=lab("worklist")), t, b, l, []), "a missing wanted label is an edit"
+    assert not unchanged(same, t, b, l, ["needs-owner"]), "a label to remove is an edit"
+    assert not unchanged(None, t, b, l, []), "no issue is a create, never 'unchanged'"
+    tmp = tempfile.mkdtemp(prefix="sync-test-")
+    try:
+        # Lock: a live, fresh holder refuses; a dead or stale one is taken over; drop_lock removes only its own.
+        lock = os.path.join(tmp, "worklist-sync.lock")
+        take_lock(lock, now=1000.0, alive=lambda p: True)
+        assert json.load(open(lock))["pid"] == os.getpid()
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                take_lock(lock, now=1000.0 + 60, alive=lambda p: True)
+            raise AssertionError("a second live run must not get the lock")
+        except Locked:
+            pass
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            take_lock(lock, now=1000.0 + 60, alive=lambda p: False)
+        assert "dead lock" in out.getvalue(), "a dead holder is taken over, and said"
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            take_lock(lock, now=1000.0 + 60 + LOCK_STALE_S + 1, alive=lambda p: True)
+        assert "stale lock" in out.getvalue(), "a holder past LOCK_STALE_S is taken over, and said"
+        with open(lock, "w") as f:
+            json.dump({"pid": os.getpid() + 1, "started": 0}, f)
+        drop_lock(lock)
+        assert os.path.exists(lock), "drop_lock must never remove another run's lock"
+        os.remove(lock)
+        take_lock(lock, now=5.0, alive=lambda p: True)
+        drop_lock(lock)
+        assert not os.path.exists(lock), "drop_lock removes its own lock"
+        assert pid_alive(os.getpid()) and not pid_alive(0), "pid_alive: this process yes, pid 0 no"
+        # main() on a held lock: exit 3, nothing read or posted.
+        global LOCK_FILE
+        saved_lock, LOCK_FILE = LOCK_FILE, lock
+        try:
+            with open(lock, "w") as f:
+                json.dump({"pid": os.getpid(), "started": time.time()}, f)
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                assert main(False) == 3, "a held lock is exit 3"
+            assert "LOCKED" in out.getvalue() and os.path.exists(lock), "and the other run's lock is left alone"
+        finally:
+            LOCK_FILE = saved_lock
+            with contextlib.suppress(OSError):
+                os.remove(lock)
+        # Fingerprint: any byte in either file changes it.
+        a, d = os.path.join(tmp, "a.md"), os.path.join(tmp, "d.md")
+        open(a, "w").write("x"), open(d, "w").write("y")
+        f1 = fingerprint((a, d))
+        open(d, "w").write("y ")
+        assert fingerprint((a, d)) != f1, "a change in the DONE file changes the fingerprint"
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+    # Verify: the open worklist issues must be exactly the posted rows; investigations do not count.
+    world = {"RapidReconciler-Valc": [{"number": 1, "title": "[VLC-1] a", "labels": lab("worklist")},
+                                      {"number": 9, "title": "[Investigation 3] b", "labels": lab("investigation")}],
+             "RapidReconciler-DB": [{"number": 2, "title": "[DAC-2] c", "labels": lab("worklist")}],
+             "RapidReconciler-SSIS": []}
+    assert verify(["VLC-1", "DAC-2"], fetch=world.get, wait=0) == [], "control: a matching set verifies"
+    p = verify(["VLC-1", "DAC-2", "UI-3"], fetch=world.get, wait=0)
+    assert p == ["live rows with NO open issue: UI-3"], p
+    p = verify(["VLC-1"], fetch=world.get, wait=0)
+    assert p == ["open issues with NO live row: DAC-2 (RapidReconciler-DB #2)"], p
+    # A short first listing (2026-10-22) that recovers on the re-read is not a failure.
+    seq = [[], world["RapidReconciler-Valc"]]
+    short_then_whole = lambda repo: (seq.pop(0) if repo == "RapidReconciler-Valc" and seq else world[repo])
+    assert verify(["VLC-1", "DAC-2"], fetch=short_then_whole, wait=0) == [], \
+        "a listing that comes back short once and whole on the re-read verifies"
 
 
 if __name__ == "__main__":
     if "--self-test" in sys.argv:
         self_test()
     else:
-        main("--dry-run" in sys.argv)
+        sys.exit(main("--dry-run" in sys.argv))

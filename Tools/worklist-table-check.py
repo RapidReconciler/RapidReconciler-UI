@@ -567,6 +567,14 @@ def self_test():
         assert "BOOKKEEPING" in out and "names HK-30, which is not a live row" in out, out
         out = run(stale_group, "group")
         assert "BOOKKEEPING" in out and "says 2 live, its table holds 1" in out, out
+        # HK-47: the 2026-10-26 wording that labelled four rows needs-owner, and the "Yours:" form that should not
+        nothing = SELF_TEST_FIXTURE.replace("| [HK-31](#hk-31--next) | ☐ | stays | — |",
+                                            "| [HK-31](#hk-31--next) | ☐ | stays | Nothing; the fix is in the section |")
+        assert nothing != SELF_TEST_FIXTURE, "the HK-31 row moved; the need case would test the clean file"
+        out = run(nothing, "need")
+        assert "BOOKKEEPING" in out and "HK-31's 'Need from you' cell" in out, out
+        out = run(nothing.replace("Nothing; the fix is in the section", "Yours: send the request"), "need-yours")
+        assert "BOOKKEEPING" not in out, "a 'Yours:' cell is a real owner action, not a problem:\n" + out
         # mutation arm: with the check switched off the same broken file goes unreported,
         # so the reports above came from this check and from nothing else in the hook
         bookkeeping_errors = lambda path: []
@@ -575,8 +583,8 @@ def self_test():
     finally:
         STATE, bookkeeping_errors, sys.stdin = saved_state, saved_check, saved_stdin
         shutil.rmtree(tmp, ignore_errors=True)
-    print("self-test OK (clean control quiet; stale chunk and stale group count reported through main(); "
-          "mutation arm: silent with the check off)")
+    print("self-test OK (clean control quiet; stale chunk, stale group count and a non-dash Need cell reported "
+          "through main(), a 'Yours:' cell not; mutation arm: silent with the check off)")
 
 
 if __name__ == "__main__":
