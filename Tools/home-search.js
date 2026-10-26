@@ -121,8 +121,10 @@
       .then(function (records) {
         var byId = {};
         records.forEach(function (rec) { byId[rec.id] = rec; });
+        // The University page's boosts (UI-234): a section about the subject outranks a body
+        // that only mentions it. Without them the two searches ranked the same index differently.
         var index = global.lunr(function () {
-          this.ref('id'); this.field('page_title'); this.field('section_title'); this.field('body');
+          this.ref('id'); this.field('section_title', { boost: 10 }); this.field('page_title', { boost: 6 }); this.field('body');
           this.metadataWhitelist = ['position'];
           records.forEach(function (rec) { this.add(rec); }, this);
         });
@@ -153,17 +155,43 @@
     return ensureScenarios._p;
   }
 
-  // ---- University 3-tier matcher (mirrors lunrSearchFlexible's core) ----------
+  // ---- University 3-tier matcher (kept identical to lunrSearchFlexible) -------
+  // UI-234 (2026-10-26). "What can you tell me about dmaai's" returned six sections about
+  // nothing, while "dmaai" alone returned the DMAAI guides. Two causes, measured on the real
+  // index with the real lunr 2.3.9:
+  //   * a REQUIRED word Lunr never indexed can never match. "about" is a Lunr stopword, so
+  //     `+about` made the strict tier fail on every question that used it;
+  //   * the last tier sent `dmaais*`, and Lunr does not stem a wildcard term, so the subject
+  //     matched nothing while `tell*` matched "Tell University you have a problem".
+  // So the words that cannot name a subject go before any tier runs, and the last tier sends
+  // each word plain (stemmed) AND as a prefix. RRUniversity/rapidreconciler-university.html
+  // runs the same rules; Tools/test-uni-search-questions.js asserts the two return the same
+  // sections on the real index.
+  //
+  // Words people type around a question. They describe the asking, not the subject.
+  var QUESTION_WORDS = new Set([
+    'about','tell','explain','describe','show','know','please','mean','means','meaning',
+    'info','information','understand','learn'
+  ]);
   function uniRun(q) { try { return _uni.index.search(q); } catch (e) { return []; } }
+  function lunrDrops(t) {
+    try { return global.lunr.stopWordFilter(new global.lunr.Token(t)) === undefined; } catch (e) { return false; }
+  }
+  function uniTokens(query) {
+    var all = tokenize(query);
+    var toks = all.filter(function (t) { return !STOPWORDS.has(t) && !QUESTION_WORDS.has(t) && !lunrDrops(t); });
+    // A query made only of those words still searches with what Lunr can match at all.
+    return toks.length ? toks : all.filter(function (t) { return !lunrDrops(t); });
+  }
   function uniFlexible(query) {
-    var toks = tokenize(query).filter(function (t) { return !STOPWORDS.has(t); });
-    if (!toks.length) toks = tokenize(query);
+    var toks = uniTokens(query);
     if (!toks.length) return [];
     var t1 = uniRun(toks.map(function (t) { return '+' + t; }).join(' '));            // strict AND
     if (t1.length) return t1;
     var t2 = uniRun(toks.map(function (t) { return '+' + t + (t.length >= 4 ? '*' : ''); }).join(' ')); // AND + prefix wildcard
     if (t2.length) return t2;
-    return uniRun(toks.map(function (t) { return t + '*'; }).join(' '));               // OR + wildcards
+    // OR: each word plain (Lunr stems it) and, from four letters, as a prefix too.
+    return uniRun(toks.map(function (t) { return t + (t.length >= 4 ? ' ' + t + '*' : ''); }).join(' '));
   }
   function recordInModules(rec, modSet) {
     var url = (rec.url || '').split('#')[0];

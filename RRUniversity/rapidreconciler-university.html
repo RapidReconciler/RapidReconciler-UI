@@ -2269,28 +2269,43 @@
      fallback tiers if strict AND returns nothing. Stop words are stripped
      from required clauses because lunr's pipeline filters them anyway and
      a leftover `+stopword` term will fail the whole query. */
-  function lunrSearchFlexible(rawQuery) {
-    const tokens = rawQuery.trim().split(/\s+/).filter(Boolean);
-    if (!tokens.length) return [];
+  // UI-234 (2026-10-26): the same rules as Tools/home-search.js's uniFlexible, which V8's RR
+  // University pill runs and which opens this page on Enter. Tools/test-uni-search-questions.js
+  // asserts the two return the same sections on the real index, so change both or neither.
+  // "What can you tell me about dmaai's" returned nothing about DMAAIs: the apostrophe stayed
+  // in "dmaai's", "tell" was required, and the last tier sent only `dmaais*`, which Lunr does
+  // not stem.
+  const UNI_STOPWORDS = new Set([   // = home-search.js STOPWORDS (the scenario matcher's list)
+    'a','an','and','any','are','as','at','be','been','but','by','can','cant','could',
+    'did','do','does','doesnt','doing','dont','for','from','had','has','have','he',
+    'her','him','his','how','i','im','if','in','into','is','isnt','it','its','just',
+    'me','my','no','not','of','on','or','our','out','over','she','should','so','some',
+    'than','that','the','their','them','then','there','these','they','this','those',
+    'to','too','up','us','was','wasnt','we','well','were','what','when','where',
+    'which','who','why','will','with','would','you','your','yours'
+  ]);
+  const QUESTION_WORDS = new Set([  // = home-search.js QUESTION_WORDS: words about the asking
+    'about','tell','explain','describe','show','know','please','mean','means','meaning',
+    'info','information','understand','learn'
+  ]);
+  function lunrDrops(t) {
+    try { return lunr.stopWordFilter(new lunr.Token(t)) === undefined; } catch (e) { return false; }
+  }
 
-    // Strip lunr query operators (*, +, ~, ^, :, -) and trailing punctuation
-    // (?, !, ., ,, ;) from user-typed tokens so a natural sentence like
-    // "how is weighted average calculated?" doesn't smuggle ? through to lunr
-    // (which treats it as query syntax and silently busts the strict-AND tier,
-    // falling all the way through to a wide-open OR fallback). Lowercased
-    // here too to match the index pipeline.
-    const clean = tokens
-      .map(t => t.replace(/[*+~^:\-?!,.;]/g, '').toLowerCase())
-      .filter(Boolean);
+  function lunrSearchFlexible(rawQuery) {
+    // Lowercase, drop apostrophes ("dmaai's" -> "dmaais", which Lunr stems to "dmaai"), and
+    // split on anything that is not a letter or digit. That also keeps Lunr's query operators
+    // (*, +, ~, ^, :, -) and a trailing "?" out of the query, which used to bust the strict
+    // tier and fall through to a wide-open OR.
+    const clean = rawQuery.toLowerCase().replace(/['‘’]/g, '').split(/[^a-z0-9]+/).filter(t => t.length > 1);
     if (!clean.length) return [];
 
-    // Stop words like "in", "of", "the" get dropped from required clauses —
-    // lunr filters them in its pipeline, but `+stopword` still fails the query.
-    const required = clean.filter(t => {
-      try {
-        return lunr.stopWordFilter(new lunr.Token(t)) !== undefined;
-      } catch (e) { return true; }
-    });
+    // A required word Lunr never indexed (its own stopwords: "in", "of", "about") can never
+    // match, so `+about` failed every question that used it. Those go, and so do the
+    // scenario stopwords and the words about the asking. A query made only of them still
+    // searches with what Lunr can match at all.
+    const kept = clean.filter(t => !UNI_STOPWORDS.has(t) && !QUESTION_WORDS.has(t) && !lunrDrops(t));
+    const required = kept.length ? kept : clean.filter(t => !lunrDrops(t));
 
     // Tier 1: strict AND on non-stop-word tokens (uses stemming)
     if (required.length) {
@@ -2317,7 +2332,9 @@
     // gives us something for unusual queries without dragging in records
     // that only happen to contain "what", "is", "the", etc.
     if (!required.length) return [];
-    const q = required.map(t => t + (t.length >= 4 ? '*' : '')).join(' ');
+    // Each word plain (Lunr stems it) and, from four letters, as a prefix too. A wildcard
+    // term is not stemmed, so `dmaais*` alone matched nothing.
+    const q = required.map(t => t + (t.length >= 4 ? ' ' + t + '*' : '')).join(' ');
     try {
       return lunrIdx.search(q);
     } catch (e) {}
