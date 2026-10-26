@@ -2358,6 +2358,10 @@ ${adminSection}
     // different sentence rather than being lumped in.
     if (st !== null && st >= 500 && st <= 599
         && typeof ep === 'string' && ep.indexOf('api/v1/ai/') !== -1) {
+      // VLC-183. A 504 is a slow answer, not a failure to escalate: VALC's message names
+      // its time limit, and RRV8.aiTimeout is the one place that reads it.
+      var slow = (st === 504 && global.RRV8 && global.RRV8.aiTimeout) ? global.RRV8.aiTimeout(err) : '';
+      if (slow) return slow + ' (HTTP 504)';
       return st === 503
         ? 'The AI assistant is not switched on for this server, so this panel ' +
           'has nothing to show. Everything else on the page is unaffected and ' +

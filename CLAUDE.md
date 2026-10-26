@@ -239,7 +239,7 @@ runbooks gradually.
 `RRUniversity/rapidreconciler-university.html` is the public KB landing page
 with module-aware search:
 
-- **4 role cards** (Inventory / AP / Transfers / Administrators), each with
+- **4 role cards** (Inventory / RNV / Transfers / Administrators), each with
   an "Include in search" toggle. Default: only Inventory ON; persisted to
   localStorage as `rru-search-filters-v1`.
 - **Module → filename prefix mapping** for filtering:
@@ -247,7 +247,7 @@ with module-aware search:
   | Role card       | Filename prefix    | Docs |
   |-----------------|--------------------|------|
   | Inventory       | `inventory-`       | 10   |
-  | AP              | `po-receipts-`     | 3    |
+  | RNV (key `ap`)  | `po-receipts-`     | 3    |
   | Transfers       | `transfer-order-`  | 3    |
   | Administrators  | `administrator-`   | 2    |
 
