@@ -575,6 +575,13 @@ def self_test():
         assert "BOOKKEEPING" in out and "HK-31's 'Need from you' cell" in out, out
         out = run(nothing.replace("Nothing; the fix is in the section", "Yours: send the request"), "need-yours")
         assert "BOOKKEEPING" not in out, "a 'Yours:' cell is a real owner action, not a problem:\n" + out
+        # VLC-211: an in-progress row must say what it waits on; with the line, it is clean.
+        busy = SELF_TEST_FIXTURE.replace("| [HK-31](#hk-31--next) | ☐ | stays | — |", "| [HK-31](#hk-31--next) | ◐ | stays | — |")
+        assert busy != SELF_TEST_FIXTURE, "the HK-31 row moved; the waiting case would test the clean file"
+        out = run(busy, "waiting")
+        assert "BOOKKEEPING" in out and "HK-31 is in progress but its section has no '**Waiting on:**' line" in out, out
+        out = run(busy.replace("### HK-31 — next\n", "### HK-31 — next\n\n**Waiting on:** the owner's live check\n"), "waiting-ok")
+        assert "BOOKKEEPING" not in out, "an in-progress row with a Waiting-on line is clean:\n" + out
         # mutation arm: with the check switched off the same broken file goes unreported,
         # so the reports above came from this check and from nothing else in the hook
         bookkeeping_errors = lambda path: []
