@@ -13,6 +13,9 @@ Measured 2026-10-02 (HK-33): closing HK-31 left its chunk row naming a closed ID
 blocked every issue copy, and left '### 5. Housekeeping · 1 live' over an empty table. It
 happened again closing VLC-86 and VLC-119 on 2026-10-03.
 
+3. (HK-47, 2026-10-26) Each live row's "Need from you" cell is a dash or starts "Yours", because
+   anything else is what labels its GitHub issue needs-owner. See `need_errors`.
+
 `fix(text, row_id)` is what worklist-close.py applies; `errors(text)` is what the hook reports.
 """
 
@@ -71,9 +74,27 @@ def group_count_errors(text):
             for i, said, counted in _groups(lines) if said != counted]
 
 
+NO_NEED = ("—", "-", "&mdash;")
+
+
+def need_errors(text):
+    """HK-47. worklist-to-issues.py labels an issue needs-owner when its row's last cell ("Need from you")
+    is anything but a dash, so "Nothing; the recommended fix is in the section" asked the owner for
+    nothing and still flagged four rows in VALC on 2026-10-26. The cell is a dash, or it starts "Yours"
+    and says what the owner has to do."""
+    out = []
+    for r in issues_module().parse(text)[0]:
+        need = r["need"].strip()
+        if need and need not in NO_NEED and not need.startswith("Yours"):
+            out.append("%s's 'Need from you' cell reads '%s': anything but — labels its issue needs-owner in "
+                       "VALC. Write — when nothing waits on the owner, or start it 'Yours:' when something does"
+                       % (r["id"], need[:60]))
+    return out
+
+
 def errors(text):
     """Every bookkeeping problem in WORKLIST.md's text. An empty list is the only green."""
-    return chunk_errors(text) + group_count_errors(text)
+    return chunk_errors(text) + group_count_errors(text) + need_errors(text)
 
 
 def drop_from_chunks(lines, row_id):
