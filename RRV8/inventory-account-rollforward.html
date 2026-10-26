@@ -939,11 +939,16 @@
     // Client-side timeout so a hung gateway/model call rejects rather than spinning.
     var ctrl=('AbortController' in window)?new AbortController():null;
     var timer=ctrl?setTimeout(function(){ ctrl.abort(); }, 45000):null;
-    return window.RRDB.valcFetch('/api/v1/ai/explain'+(ctx?('?ctx='+ctx):''),{method:'POST',
+    // VLC-186: declare the tier the prompt was masked with; VALC refuses one above the plan, and its
+    // sentence reaches the page through RRDB.responseError (UI-212) instead of a bare "HTTP 403".
+    var _rfUrl='/api/v1/ai/explain'+(ctx?('?ctx='+ctx):'');
+    return window.RRDB.valcFetch(_rfUrl,{method:'POST',
         headers:{'Authorization':'Bearer '+t,'Content-Type':'application/json','Accept':'application/json'},
-        body:JSON.stringify({system:system, prompt:prompt}),
+        body:JSON.stringify({system:system, prompt:prompt, level:effTier()}),
         signal:ctrl?ctrl.signal:undefined})
-      .then(function(r){ if(timer) clearTimeout(timer); if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+      .then(function(r){ if(timer) clearTimeout(timer);
+        if(!r.ok) return window.RRDB.responseError(r,_rfUrl).then(function(err){ throw err; });
+        return r.json(); })
       .then(function(j){ return (j&&j.text)?String(j.text).trim():''; })
       .catch(function(e){ if(timer) clearTimeout(timer); throw (e&&e.name==='AbortError')?new Error('the assistant timed out'):e; });
   }

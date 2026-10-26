@@ -894,20 +894,72 @@ window.RRAI = (function () {
     if (t === 'docs') t = 'grounded';   // ai/health maxLevel vocabulary → our key
     return TIERS.indexOf(t) >= 0 ? t : null;
   }
-  function get() {
+  // ⚠ VLC-186 (owner ruling B1, 2026-10-21): THE TIER IS CAPPED AT THE PURCHASED PLAN.
+  // It used to be this browser's choice alone (localStorage.rrv8.aiTier, default
+  // 'full'), so a plan-Off client still got answers, and a plan-Enhanced client's
+  // figures went out unmasked: every page masks from get(), before VALC sees the
+  // prompt. get() now returns the LOWER of the choice and the plan of the active
+  // database, so every page's masking follows the plan without each page knowing.
+  //
+  // The plan comes from api/v1/ai/health (maxLevel) and is kept per database in
+  // sessionStorage, so it is re-read in every new tab rather than trusted from an
+  // earlier sign-in. Until it is known, get() returns the choice: VALC is the
+  // backstop, because every explain call now declares get() as its `level` and VALC
+  // refuses a level above the plan (AiController.planRefusal). When the plan arrives,
+  // the same 'rrv8:aitierchange' event the tier switch fires makes open surfaces re-run.
+  var PLAN_KEY = 'rrv8.aiPlan';
+  function dbName() {
+    try { return (window.RRDB && window.RRDB.name && window.RRDB.name()) || ''; } catch (_) { return ''; }
+  }
+  function plans() {
+    try { return JSON.parse(sessionStorage.getItem(PLAN_KEY) || '{}') || {}; } catch (_) { return {}; }
+  }
+  function plan(db) { return norm(plans()[db == null ? dbName() : db]); }   // null = not known yet
+  function choice() {
     try { return norm(localStorage.getItem('rrv8.aiTier')) || 'full'; } catch (_) { return 'full'; }
   }
+  function cap(t, p) { return p && TIERS.indexOf(p) < TIERS.indexOf(t) ? p : t; }
+  function get() { return cap(choice(), plan()); }
   function setTier(t) {
     t = norm(t); if (!t) return;
     try { localStorage.setItem('rrv8.aiTier', t); } catch (_) {}
-    try { window.dispatchEvent(new CustomEvent('rrv8:aitierchange', { detail: { tier: t } })); } catch (_) {}
+    try { window.dispatchEvent(new CustomEvent('rrv8:aitierchange', { detail: { tier: get() } })); } catch (_) {}
     return t;
+  }
+  /** Records the active database's purchased plan, and re-runs open surfaces if it changed the tier. */
+  function setPlan(db, level) {
+    var p = norm(level); if (!p || db == null) return;
+    var all = plans(), before = get();
+    if (all[db] === p) return;
+    all[db] = p;
+    try { sessionStorage.setItem(PLAN_KEY, JSON.stringify(all)); } catch (_) {}
+    if (get() !== before) {
+      try { window.dispatchEvent(new CustomEvent('rrv8:aitierchange', { detail: { tier: get(), plan: p } })); } catch (_) {}
+    }
+  }
+  /** Reads the active database's plan from VALC once per page. Fails quietly: VALC is the backstop. */
+  var _primed = null;
+  function primePlan() {
+    if (_primed) return _primed;
+    var db = dbName();
+    var h = { 'Accept': 'application/json' };
+    try { var t = localStorage.getItem('rrv8.token'); if (t) h['Authorization'] = 'Bearer ' + t; else return (_primed = Promise.resolve(null)); } catch (_) { return (_primed = Promise.resolve(null)); }
+    if (!window.RRDB || !window.RRDB.valcFetch) return (_primed = Promise.resolve(null));
+    _primed = window.RRDB.valcFetch('api/v1/ai/health' + (db ? '?db=' + encodeURIComponent(db) : ''), { headers: h })
+      .then(function (r) { return r && r.ok ? r.json() : null; })
+      .then(function (j) { if (j && j.maxLevel) setPlan(db, j.maxLevel); return plan(db); })
+      .catch(function () { return null; });
+    return _primed;
   }
   return {
     TIERS: TIERS, LABELS: LABELS, BLURB: BLURB,
-    norm: norm, get: get, set: setTier, label: function (t) { return LABELS[norm(t) || 'full']; }
+    norm: norm, get: get, set: setTier, choice: choice, plan: plan, setPlan: setPlan, primePlan: primePlan,
+    label: function (t) { return LABELS[norm(t) || 'full']; }
   };
 })();
+// VLC-186: learn the plan as soon as a page loads, so the first question is already capped.
+try { if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { window.RRAI.primePlan(); });
+      else window.RRAI.primePlan(); } catch (_) {}
 
 /*
  * RRV8 shared helpers (config-level, so every page that loads config.js gets them
@@ -1072,6 +1124,25 @@ window.RRV8 = window.RRV8 || {};
     if (co != null && String(co).trim() !== '') parts.push('co' + String(co).trim());
     if (period != null && String(period).trim() !== '') parts.push(String(period).trim());
     return encodeURIComponent(parts.join('-').replace(/\s+/g, ''));
+  };
+  // VLC-183. The sentence to show when an AI call timed out, or '' for any other failure.
+  // VALC answers a slow call with a 504 whose message names its own time limit, and that
+  // sentence is shown as written, so V8 can never state a different number from the one
+  // VALC enforces. Until VLC-183 every page read a timeout as "Could not reach the AI
+  // service", so the commonest failure, a slow answer, looked like an outage. Pages keep
+  // their own wording for every other failure: this only answers "was it a timeout?".
+  // A 504 without a body (a proxy in front of VALC) gets the generic sentence.
+  window.RRV8.aiTimeout = function (err) {
+    if (!err || err.status !== 504) return '';
+    var said = (typeof err.serverMessage === 'string') ? err.serverMessage.trim() : '';
+    return said || 'The AI took too long to answer, so the request was stopped. Try again; a second try usually answers.';
+  };
+  // VLC-186. VALC's sentence for a call it refused against the purchased plan (a 403 from
+  // ai/explain: not in the plan, a level above it, or no level on a plan that needs one),
+  // shown as written so V8 never words a plan differently from VALC. '' for anything else.
+  window.RRV8.aiRefusal = function (err) {
+    if (!err || err.status !== 403) return '';
+    return (typeof err.serverMessage === 'string') ? err.serverMessage.trim() : '';
   };
   // <<AI-GROUNDING GENERATED START -- do not edit by hand>>
   // ACCT_GROUNDING — the AI's compact copy of the accountant playbook. Prepended to
@@ -1294,7 +1365,7 @@ window.RRV8 = window.RRV8 || {};
     'The Licensing page lists all of your licensed companies. To modify a company\'s settings, click the Options icon in the far-right column of the applicable row. The page also shows your seat usage (how many of your licensed company seats are in use) and a Check JDE for more companies scan that surfaces companies with activity that aren’t licensed yet — see Licensing .',
     'Licensed Companies',
     'The Companies page displays all companies currently licensed for use in RapidReconciler. The following fields are shown for each company:',
-    'The Licensing page — Licensed Companies Each row is one licensed company; the icons on the right open the Options popup or trigger a Re-roll.',
+    'The Licensing page — Licensed Companies Each row is one licensed company; the icon on the right opens the Options popup.',
     'Field | Description',
     'Number | The company number as defined in JD Edwards.',
     'Name | The company name.',
@@ -1303,16 +1374,11 @@ window.RRV8 = window.RRV8 || {};
     'AAI Doc | The AAI document type used for the model DMAAI table.',
     'Threshold | The reconciliation threshold value, expressed in the company\'s base currency. Variances at or below this absolute value are treated as within tolerance and flagged accordingly on the Reconciliation page.',
     'Options | Click to open the Company Options pop-up for editing.',
-    'Reroll | Click to reroll the company, which recalculates the perpetual balance from the baseline date forward. Typically used if transactions have been backdated more than 1 period.',
     'Important',
-    'Only GSI can add or remove companies, as they are managed per license agreement. If additional company licenses are required, please contact GSI at gsisales@getgsi.com .',
-    'Reroll by Company',
-    'The Reroll icon on each company row recalculates the perpetual inventory balance from the baseline forward. Run it when an end user reports an inventory carry-forward issue — for example, the Inventory Validation light is red and the report shows VarOK = No while GLOK = Yes .',
-    'What happens when you click it:',
-    '- A confirmation pop-up asks “Are you sure?”',
-    '- Click OK and let the process run to completion.',
-    '- For each inventory account on the company, RapidReconciler starts at the beginning perpetual balance and rolls forward by adding the cardex transaction amounts period by period.',
-    'It is a clean recalculation, so it resolves carry-forward problems caused by backdated transactions or transient system glitches that left a stale value in place. See the Inventory validation light is red scenario for the end-user perspective on when to request a reroll.',
+    'Only GSI can add or remove companies, as they are managed per license agreement. To request more, click Request more licenses at the top of the Licensing page, or email GSI at gsisales@getgsi.com .',
+    'Carry-forward corrections',
+    'You don’t need to reroll a company. RapidReconciler recalculates every company’s perpetual balance from the baseline forward on each scheduled refresh , so a carry-forward break corrects itself at the next refresh. A typical cause is transactions backdated into an earlier period. On the Inventory Validation report, a break shows as VarOK = No while GLOK = Yes .',
+    'If the break is still there after a scheduled refresh has run, email rrsupport@getgsi.com . See the Inventory validation light is red scenario for the end-user steps.',
     'Company Options',
     'Clicking the Options icon opens the Edit company pop-up window:',
     'Edit company popup The Company Number and Base Currency fields appear with a grey background to indicate they are read-only; they are pulled directly from JD Edwards.',
@@ -1340,6 +1406,7 @@ window.RRV8 = window.RRV8 || {};
     'A Not Licensed company with steady activity across the last twelve months is usually a good candidate; one with little or no activity may not be worth a seat.',
     'Requesting Additional Companies',
     'If you have additional companies you would like to reconcile that are not currently available in the application, please contact GSI Sales to begin the licensing process.',
+    'The quickest way is Request more licenses at the top of the Licensing page. It opens a draft to GSI Sales with your company, database, current license count and contact details already filled in. If you have run Check JDE for more companies , the companies on the Not Licensed list are filled in too, so you only delete the ones you don’t want. You can also use the button below.',
     'Email GSI Sales gsisales@getgsi.com Compose Pre-Filled Email',
     'Clicking the button above opens your default email client with a draft addressed to GSI Sales, including a subject line and a request template ready to fill in. The pre-filled email looks like this:',
     'Preview — opens in your default mail client To gsisales@getgsi.com Subject RapidReconciler — Additional Company License Request Hello GSI Sales Team, We would like to add one or more additional companies to our RapidReconciler license. Please find the details below. == Customer Information == Company Name: RapidReconciler Account / Customer ID: Primary Contact Name: Primary Contact Email: Phone: == Companies to Add == Please add the following JD Edwards companies to our license: 1. JDE Company Number: Company Name: 2. JDE Company Number: Company Name: (add additional rows as needed) == Additional Notes == Thank you,',

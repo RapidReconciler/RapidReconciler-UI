@@ -14,9 +14,10 @@
   Columns: Number / Name / Start Date / Base Currency / AAI Doc /
   Threshold / Options.
   Options (edit company config: start date, AAI doc, threshold) opens an
-  edit modal (PUT). The per-company Re-roll was retired from this page;
-  the corrective now lives on the account roll-forward card, which runs
-  re-roll + the summary rebuild together (async, under the activity lock).
+  edit modal (PUT). The per-company Re-roll was retired from this page, and
+  later from the account roll-forward card too (UI #372): every scheduled
+  refresh recomputes the timeline, so there is no manual corrective. Request
+  more licenses (UI-226) drafts the license request to GSI Sales.
   =============================================================================
 -->
 <html lang="en">
@@ -367,6 +368,9 @@
   .lic-btn-primary { background: var(--blue, #2b5fb0); border-color: var(--blue, #2b5fb0); color: #fff; }
   .lic-btn-primary:hover { filter: brightness(1.07); }
   .lic-btn svg { width: 15px; height: 15px; }
+  /* The usage bar holds its sentence and the Request more licenses button (UI-226).
+     Layout only once shown: an inline display would override [hidden]. */
+  #js-license-usage:not([hidden]) { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
   /* Non-admin gate + halt states. Mirrors the standard on the other admin tool
      pages (admin-purge-data.html et al): the page header stays, the tool region
      is hidden, and one notice says why. */
@@ -443,9 +447,11 @@
     </div>
   </div>
 
-  <!-- The per-company Re-roll was retired here: the corrective now lives on the
-       account roll-forward card (where the VarOK break is diagnosed), which runs
-       re-roll + the summary rebuild together, async, under the activity lock. -->
+  <!-- The per-company Re-roll was retired here. It moved to the account roll-forward
+       card for a while, and UI #372 (2026-07-21) cut it from there too: every scheduled
+       refresh recomputes the whole timeline (usp6_006a), so a VarOK break self-heals,
+       and one that persists goes to GSI. inventory-reroll.html still exists but nothing
+       links to it (measured 2026-10-20, UI-226). -->
 
   <main class="main">
 
@@ -479,10 +485,18 @@
 
         <!-- Read-only company-seat usage. Customer admins see their entitlement
              ("Using X of N company licenses") but can't change it — the seat
-             count is a contract term set by GSI. Populated from /license-usage. -->
+             count is a contract term set by GSI. Populated from /license-usage.
+             UI-226: it carries the one way to ask for more, a prefilled email to
+             GSI Sales; before that the page said "contact GSI" with no address. -->
         <div id="js-license-usage" role="status" hidden
              style="margin:0 0 14px; padding:10px 14px; border-radius:8px; font-size:13.5px; font-weight:600;
-                    background:#eef3f9; border:1px solid #cfe0f5; color:var(--navy);"></div>
+                    background:#eef3f9; border:1px solid #cfe0f5; color:var(--navy);">
+          <span id="js-license-usage-text"></span>
+          <a class="lic-btn" id="js-lic-request" href="mailto:gsisales@getgsi.com">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16v12H4z"/><path d="m4 7 8 6 8-6"/></svg>
+            Request more licenses
+          </a>
+        </div>
 
         <!-- License term: days remaining + expire-soon (within 60 days) state.
              Amber inside the window, with a request-invoice mailto and a snooze
@@ -1056,6 +1070,58 @@
     // view-only for licensing.
   });
 
+  // ---------- Request more licenses (UI-226) ----------
+  // The page used to say "contact GSI" at the limit with no address, and nothing
+  // below it, so the only way to ask was the help doc's Compose Pre-Filled Email.
+  // Same To, subject and template as that doc
+  // (RRUniversity/administrator-managing-companies.html, "Requesting Additional
+  // Companies"), with what this page already knows filled in: the customer, the
+  // database, the current usage, and the Not Licensed companies once the JDE scan
+  // has run. Rebuilt when either the usage or the scan arrives.
+  let _licReq = { clientName: '', dbName: '', usage: '' };
+  let _licReqUnlicensed = null;
+  function licenseRequestBody(req, unlicensed) {
+    const user = ((window.RR_SESSION || {}).user) || {};
+    const rows = (unlicensed || [])
+      .filter(r => r && String(r.companyNumber || '').trim() && String(r.companyNumber).trim() !== COMPANY_30);
+    const lines = [
+      'Hello GSI Sales Team,', '',
+      'We would like to add one or more additional companies to our RapidReconciler license. Please find the details below.', '',
+      '== Customer Information ==',
+      'Company Name: ' + (req.clientName || ''),
+      'RapidReconciler Account / Customer ID:',
+      'Primary Contact Name: ' + (user.fn || ''),
+      'Primary Contact Email: ' + (user.u || ''),
+      'Phone:',
+      'Database: ' + (req.dbName || ''),
+      'Current licenses: ' + (req.usage || ''), '',
+      '== Companies to Add =='
+    ];
+    if (rows.length) {
+      // Capped: some mail clients truncate a long mailto: link, which would cut the
+      // template's closing sections off. The page itself still lists every company.
+      const CAP = 25;
+      lines.push('These JD Edwards companies have activity but are not licensed yet. Delete any you do not want to add:', '');
+      rows.slice(0, CAP).forEach((r, i) => {
+        lines.push('  ' + (i + 1) + '. JDE Company Number: ' + String(r.companyNumber).trim());
+        lines.push('     Company Name: ' + String(r.name || '').trim(), '');
+      });
+      if (rows.length > CAP) lines.push('  (' + (rows.length - CAP) + ' more on the Licensing page\'s Not Licensed list)', '');
+    } else {
+      lines.push('Please add the following JD Edwards companies to our license:', '',
+        '  1. JDE Company Number:', '     Company Name:', '',
+        '  2. JDE Company Number:', '     Company Name:', '');
+    }
+    lines.push('  (add additional rows as needed)', '', '== Additional Notes ==', '', '', 'Thank you,', '');
+    return lines.join('\n');
+  }
+  function _refreshLicRequest() {
+    const a = document.getElementById('js-lic-request');
+    if (!a) return;
+    a.href = 'mailto:gsisales@getgsi.com?subject=' + encodeURIComponent('RapidReconciler — Additional Company License Request')
+      + '&body=' + encodeURIComponent(licenseRequestBody(_licReq, _licReqUnlicensed));
+  }
+
   // Read-only company-seat usage banner. The customer admin sees their
   // entitlement; the seat count is a contract term set by GSI, so it's
   // display-only here. "Used" = the companies actually licensed on this
@@ -1086,9 +1152,12 @@
       let msg = unlimited
         ? ('Using ' + used + ' of unlimited company licenses.')
         : ('Using ' + used + ' of ' + cap + ' company licenses.');
-      if (overLimit)    msg += ' You are over your licensed amount — contact GSI to add licenses.';
-      else if (atLimit) msg += ' You have used all your licenses — contact GSI to add more.';
-      el.textContent = msg;
+      if (overLimit)    msg += ' You are over your licensed amount — request more licenses from GSI.';
+      else if (atLimit) msg += ' You have used all your licenses — request more from GSI.';
+      const textEl = document.getElementById('js-license-usage-text');
+      if (textEl) textEl.textContent = msg; else el.textContent = msg;
+      _licReq = { clientName: u.clientName || '', dbName: dbName, usage: msg.split('.')[0] + '.' };
+      _refreshLicRequest();
       el.style.background = '#eef3f9'; el.style.borderColor = '#cfe0f5'; el.style.color = 'var(--navy)';
       if (overLimit) { el.style.background = '#fbe6e3'; el.style.borderColor = '#f1c3bc'; el.style.color = 'var(--red, #c0392b)'; }
       else if (atLimit) { el.style.background = '#fff5e8'; el.style.borderColor = '#ffd9a6'; el.style.color = 'var(--orange-deep, #b45309)'; }
@@ -1152,6 +1221,8 @@
   // ---------- Not-licensed: deferred JDE scan ----------
   function showUnlicensedTable(rows) {
     _unlicensedLoaded = true;
+    _licReqUnlicensed = Array.isArray(rows) ? rows : null;   // the license request names them (UI-226)
+    _refreshLicRequest();
     const cta   = document.getElementById('js-unlicensed-cta');
     const table = document.getElementById('js-unlicensed-table');
     const count = document.getElementById('js-unlicensed-count');
