@@ -746,6 +746,41 @@ window.RRDB = (function () {
     try { localStorage.setItem('rrv8.activeDb', n); } catch (_) {}
     var s = _session();
     if (s) for (var i = 0; i < s.dbs.length; i++) if (s.dbs[i] && s.dbs[i].n === n) { s.activeDbIndex = i; break; }
+    rememberServer();
+  }
+
+  /*
+   * UI-235 (owner ruling 2026-10-26, Q7 "Build both"). The Help Desk Connection Check is opened
+   * when someone CANNOT sign in, so it usually has no session to read. These let it test the
+   * PC's own server anyway, and say where the address came from.
+   *
+   * sessionBase() is the signed-in session's agent for the active database, and '' when there
+   * is none. Unlike agentBase() it never falls back, so a caller can tell "the session said so"
+   * from "a default said so".
+   *
+   * rememberServer() keeps that address (the address and the database's name only, never the
+   * token) under rrv8.lastServer. Sign-out removes named keys and leaves this one, on purpose:
+   * the next person at this PC may be unable to sign in, and the check still knows the server.
+   * It runs whenever this file loads with a session (every V8 page, so a sign-in is covered when
+   * Home loads) and on a database switch.
+   */
+  var LAST_SERVER_KEY = 'rrv8.lastServer';
+  function sessionBase() {
+    var d = active();
+    return (d && d.ip) ? ((/^(?:localhost|127\.0\.0\.1)\b/i.test(d.ip) ? 'http://' : 'https://') + d.ip) : '';
+  }
+  function rememberServer() {
+    var b = sessionBase();
+    if (!b) return;
+    try {
+      localStorage.setItem(LAST_SERVER_KEY, JSON.stringify({ base: b, db: name(), at: new Date().toISOString() }));
+    } catch (_) {}
+  }
+  function lastServer() {
+    try {
+      var v = JSON.parse(localStorage.getItem(LAST_SERVER_KEY) || 'null');
+      return (v && typeof v.base === 'string' && /^https?:\/\/[^\s\/]+$/i.test(v.base)) ? v : null;
+    } catch (_) { return null; }
   }
   /*
    * VLC-87. The customer-facing service notice, or '' when there is none.
@@ -761,9 +796,11 @@ window.RRDB = (function () {
     return (t && typeof t.notice === 'string') ? t.notice : '';
   }
 
+  rememberServer();   // UI-235: any page load with a session keeps this PC's server address
   return { dbs: dbs, index: index, active: active, name: name, agentBase: agentBase,
            valcBase: valcBase, valcGap: valcGap, valcFetch: valcFetch, setActive: setActive,
-           notice: notice, responseError: responseError };
+           notice: notice, responseError: responseError,
+           sessionBase: sessionBase, lastServer: lastServer, rememberServer: rememberServer };
 })();
 
 /*
