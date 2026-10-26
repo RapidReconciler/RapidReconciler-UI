@@ -331,13 +331,18 @@ record('S3 login.html resolves APP_BASE through RRENV',
   /RRENV/.test(appBaseDecl),
   'APP_BASE declaration does not mention RRENV:\n' + appBaseDecl);
 
-const commsDecl = (connSrc.match(/var COMMS_BASE =[\s\S]{0,400}?;/) || [''])[0];
+// UI-235 moved the resolution into a `var COMMS = (function () { ... })();` block that also records
+// WHERE the address came from; `var COMMS_BASE = COMMS.base;` follows it. The rule is unchanged: the
+// dev test agent is read through the RRENV wrapper, never RR_CONFIG directly. So the block is the
+// declaration this reads, and the old one-line form is still accepted.
+const commsDecl = (connSrc.match(/var COMMS = \(function \(\) \{[\s\S]{0,1200}?\}\)\(\);\s*\n\s*var COMMS_BASE = COMMS\.base;/)
+  || connSrc.match(/var COMMS_BASE =[\s\S]{0,400}?;/) || [''])[0];
 record('S3 connection-check.html COMMS_BASE is declared where this test can see it',
   commsDecl.length > 0,
-  'no `var COMMS_BASE = ...;` found in connection-check.html');
+  'no `var COMMS_BASE = ...;` (or its COMMS resolver block) found in connection-check.html');
 record('S3 connection-check.html resolves COMMS_BASE through the RRENV wrapper',
-  /envGet\(\s*['"]testAgentBase['"]\s*\)/.test(commsDecl),
-  'COMMS_BASE declaration does not call envGet("testAgentBase"):\n' + commsDecl);
+  /envGet\(\s*['"]testAgentBase['"]\s*\)/.test(commsDecl) && !/RR_CONFIG\s*\.\s*testAgentBase/.test(commsDecl),
+  'COMMS_BASE resolution does not call envGet("testAgentBase"), or reads RR_CONFIG directly:\n' + commsDecl);
 
 /* ---------------------------------------------------------------------------
  * SECTION 4 -- MUTATIONS. Break the thing, watch the right lights go red.

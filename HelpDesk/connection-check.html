@@ -123,6 +123,9 @@
   .probe-title { font-weight: 700; color: var(--navy); font-size: 14.5px; }
   .probe-target { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-soft); word-break: break-all; }
   .probe-result { font-size: 12.5px; color: var(--text-muted); margin-top: 3px; }
+  /* UI-235: where leg 2's address came from. Neutral on purpose: it explains the result, it is not one. */
+  .probe-src { font-size: 12px; color: var(--text-soft); margin-top: 3px; }
+  .probe-src:empty { display: none; }
   .probe[data-state="pass"] .probe-result { color: var(--green-deep); }
   .probe[data-state="warn"] .probe-result { color: var(--orange-deep); }
   .probe[data-state="fail"] .probe-result { color: var(--red); }
@@ -309,6 +312,7 @@
         <div class="probe-title"><span class="leg-num">2</span>Your RapidReconciler Application Server</div>
         <div class="probe-target" id="targetB"></div>
         <div class="probe-result" id="resultB">Waiting&hellip;</div>
+        <div class="probe-src" id="sourceB"></div>
         <div class="scheck-list" id="serverList"></div>
         <div class="dbtable" id="dbTable"></div>
       </div>
@@ -415,10 +419,55 @@
   // HTTP 400 "requires TLS" with no CORS header, so leg 2 went red (and legs 4 and 5 grey)
   // while the admin Troubleshooting page, which reads the session, reported every leg ok.
   // The two later fallbacks stay for an old cached config.js that has no RRDB.
-  var COMMS_BASE = params.get('agent')
-                || (window.RRDB && window.RRDB.agentBase && window.RRDB.agentBase())
-                || envGet('testAgentBase')
-                || (here.protocol.indexOf('http') === 0 ? (here.protocol + '//' + here.host) : '');
+  //
+  // UI-235 (2026-10-26). In the owner's own signed-in browser this still read "localhost" and
+  // failed at once, while a headless run with a token went green. The page could not say WHICH
+  // source it had taken the address from, so neither could anyone reading it. Now it resolves
+  // in a fixed order and names the source under leg 2 (sourceB):
+  //   link        ?agent= on the URL
+  //   session     this browser's V8 sign-in, for its active database
+  //   remembered  the last server this browser signed in to (rrv8.lastServer, owner ruling
+  //               2026-10-26 Q7): the case the page is opened for, someone who cannot sign in
+  //   dev         this box's configured test agent
+  //   page        this page's own address
+  // A session whose active database carries no address is said too: that is a VALC setting,
+  // not this PC's network.
+  var RRDBX = window.RRDB || {};
+  var SESSION_DBS = (typeof RRDBX.dbs === 'function') ? (RRDBX.dbs() || []) : [];
+  var SESSION_DB = SESSION_DBS.length && typeof RRDBX.name === 'function' ? RRDBX.name() : '';
+  var REMEMBERED = (typeof RRDBX.lastServer === 'function') ? RRDBX.lastServer() : null;
+  var COMMS = (function () {
+    if (params.get('agent')) return { base: params.get('agent'), src: 'link' };
+    var s = (typeof RRDBX.sessionBase === 'function') ? RRDBX.sessionBase()
+          : (typeof RRDBX.agentBase === 'function' ? RRDBX.agentBase() : '');   // an old cached config.js
+    if (s) return { base: s, src: 'session' };
+    if (REMEMBERED) return { base: REMEMBERED.base, src: 'remembered' };
+    var t = envGet('testAgentBase');
+    if (t) return { base: t, src: 'dev' };
+    return { base: here.protocol.indexOf('http') === 0 ? (here.protocol + '//' + here.host) : '', src: 'page' };
+  })();
+  var COMMS_BASE = COMMS.base;
+  function sourceText() {
+    var noAddr = SESSION_DBS.length && COMMS.src !== 'session' && COMMS.src !== 'link';
+    var lead = {
+      link: 'Address from this page’s link (?agent=).',
+      session: 'Address from your sign-in on this browser' + (SESSION_DB ? ' (' + SESSION_DB + ').' : '.'),
+      remembered: 'Address remembered from the last sign-in on this browser'
+        + (REMEMBERED && REMEMBERED.db ? ' (' + REMEMBERED.db + ')' : '') + '.',
+      dev: 'Address from this server’s test configuration; no sign-in was found on this browser at '
+        + here.host + '.',
+      page: 'Address taken from this page’s own address; no sign-in was found on this browser at '
+        + here.host + '.'
+    }[COMMS.src];
+    if (noAddr) {
+      lead += ' You are signed in, but the database ' + (SESSION_DB || 'you picked')
+        + ' has no server address set; ask your administrator to check its App Server in VALC.';
+    } else if (COMMS.src === 'dev' || COMMS.src === 'page') {
+      lead += ' If you signed in to RapidReconciler at a different address (for example 127.0.0.1 instead of '
+        + 'localhost), open this check from that same address.';
+    }
+    return lead;
+  }
 
   function $(id) { return document.getElementById(id); }
   function hostLabel(u) { try { return new URL(u).host; } catch (_) { return u; } }
@@ -632,6 +681,19 @@
     var srv = rows.serverId || {};
     a.app = { name: COMMS_BASE ? hostOnly(COMMS_BASE) : '', ip: srv.internalIp || '' };
     a.db = asBox(pick(rows.server, 'Database'));
+    // UI-235 (owner ruling 2026-10-26, Q7): "localhost" names no machine anyone can find. A box
+    // whose host is this-machine shorthand is the application server itself, so it shows the
+    // server's own name and IP from its reply, marked "same server". Without a reply there is
+    // nothing better to say, and the box keeps what it had.
+    var isLocal = function (h) { return /^(?:localhost|127(?:\.\d{1,3}){3}|::1|\[::1\])$/i.test(String(h || '')); };
+    var same = function (box) {
+      if (!box || !isLocal(box.name) || !(srv.hostname || srv.internalIp)) return box;
+      return { name: srv.hostname || box.name, ip: (srv.internalIp ? srv.internalIp + ' · ' : '') + 'same server' };
+    };
+    // The application server box IS that server: it takes the name, without the marker.
+    if (isLocal(a.app.name) && srv.hostname) a.app = { name: srv.hostname, ip: srv.internalIp || '' };
+    a.signin = same(a.signin);
+    a.db = same(a.db);
     return a;
   }
   function renderDiagram(legs, rows) {
@@ -873,6 +935,7 @@
 
     setProbe('A', 'run', 'Checking…', hostLabel(ANCHOR));
     setProbe('B', 'run', 'Checking your server…', COMMS_BASE ? hostLabel(COMMS_BASE) : 'detecting…');
+    if ($('sourceB')) $('sourceB').textContent = sourceText();
     // The idle branch is a REPORT, not a skip: name the mode and the settings
     // that did not resolve, so a tech reading this page knows it is an
     // installation gap and knows which key to go and set.
