@@ -19,6 +19,13 @@ Safety, all enforced before anything is sent:
     closed ONLY when WORKLIST-DONE.md records that ID as closed. One that is neither live nor done
     is printed as a WARN and left open (a row deleted or renamed without being finished). An
     `investigation` issue is never closed. --dry-run prints what would close and closes nothing.
+  * Closed in VALC (VLC-207, owner ruling 2026-10-26: "All issue management needs to be done in valc and
+    synced to github. I would rather have a close button in valc."). FIRST, before anything else is read
+    or posted: a live row whose issue is CLOSED and carries `closed-in-valc` (VALC's Close button) has its
+    section moved to WORKLIST-DONE.md by Tools/worklist-close.py, quoting VALC's close comment as the
+    reason, and the run then works from the updated file. A live row whose issue was closed WITHOUT that
+    label (closed on GitHub directly) is a WARN: the row stays live and the issue is never reopened.
+    --dry-run reports both and moves nothing.
 
 Usage:  python Tools/worklist-to-issues.py [--dry-run]
         python Tools/worklist-to-issues.py --self-test
@@ -298,6 +305,53 @@ def close_finished(live_ids, indexed, done, dry, fetch=open_worklist_issues, run
     return closed, warned
 
 
+CLOSED_IN_VALC = "closed-in-valc"          # DevelopmentService.CLOSED_IN_VALC (Valc repo); keep the two in step
+CLOSED_IN_VALC_LEAD = "**Closed in VALC**"  # DevelopmentService.CLOSED_IN_VALC_LEAD
+CLOSE_TOOL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "worklist-close.py")
+
+
+def close_comment(repo, num):
+    """The newest VALC close comment on an issue, as one line, or None."""
+    q = json.loads(gh(["api", f"repos/{OWNER}/{repo}/issues/{num}/comments?per_page=100"]))
+    hits = [c.get("body", "") for c in q if c.get("body", "").startswith(CLOSED_IN_VALC_LEAD)]
+    return hits[-1].splitlines()[0].replace("**", "").strip() if hits else None
+
+
+def valc_closes(rows, mapping, get=get_issue):
+    """(close, warn) for live rows whose MAPPED issue is closed: close = it carries closed-in-valc (VALC's
+    Close button), warn = closed some other way. Read by number, the reliable read; a row with no mapped
+    issue, or a map entry now pointing at another row's issue, is neither."""
+    close, warn = [], []
+    for row in rows:
+        e = mapping.get(row["id"])
+        if not e:
+            continue
+        i = get(e["repo"], e["number"])
+        if not i or "pull_request" in i or not i.get("title", "").startswith(f"[{row['id']}]") or i.get("state") != "closed":
+            continue
+        labels = [l["name"] for l in i.get("labels", [])]
+        (close if CLOSED_IN_VALC in labels else warn).append((row["id"], e["repo"], e["number"]))
+    return close, warn
+
+
+def apply_valc_closes(rows, mapping, dry, get=get_issue, comment=close_comment, run=None):
+    """Move each VALC-closed live row to WORKLIST-DONE.md (worklist-close.py), WARN on the others. Returns
+    the IDs moved (or that would be, on --dry-run)."""
+    close, warn = valc_closes(rows, mapping, get)
+    for wid, repo, num in warn:
+        print(f"  WARN {wid:8} {repo} #{num} is CLOSED on GitHub but not from VALC (no {CLOSED_IN_VALC} label): the row "
+              "stays live and the issue is NOT reopened. Close it from VALC's Development page, or reopen it.")
+    moved = []
+    for wid, repo, num in close:
+        why = comment(repo, num) or f"Closed in VALC ({repo} #{num}; no close comment found)"
+        reason = f"DONE: {why} (VLC-207: closed from VALC's Development page, {repo} #{num})"
+        print(f"  {wid:8} <- {repo:24} #{num} closed in VALC: row {'would move' if dry else 'moves'} to WORKLIST-DONE.md ({why})")
+        if not dry:
+            (run or (lambda args: subprocess.run(args, check=True)))([sys.executable, CLOSE_TOOL, wid, reason])
+        moved.append(wid)
+    return moved
+
+
 def build(row, section, chunk):
     wid = row["id"]
     title_text = section[0] if section else re.sub(r"\*\*|`", "", row["what"])[:120]
@@ -324,10 +378,22 @@ def build(row, section, chunk):
 def main(dry):
     text = open(WORKLIST, encoding="utf-8").read()
     rows, sections = parse(text)
-    chunks = parse_chunks(text)
-    print(f"live rows: {len(rows)}; sections: {len(sections)}; chunks: {len(chunks)}")
     if not rows:
         raise SystemExit("no live rows parsed: the index format changed, refusing to report zero")
+    # VLC-207: the owner's VALC closes come first, so everything below works from the file they leave.
+    mapping0 = json.load(open(MAP_FILE, encoding="utf-8")) if os.path.exists(MAP_FILE) else {}
+    moved = apply_valc_closes(rows, mapping0, dry)
+    print(f"VALC close pass: {len(moved)} row(s) {'would move' if dry else 'moved'} to WORKLIST-DONE.md")
+    if moved and not dry:
+        text = open(WORKLIST, encoding="utf-8").read()
+        rows, sections = parse(text)
+    elif moved:
+        rows = [r for r in rows if r["id"] not in moved]   # dry run: post as if they had moved
+    chunks = parse_chunks(text)
+    if moved and dry:
+        chunks = [dict(c, rows=[r for r in c["rows"] if r not in moved]) for c in chunks]
+        chunks = [c for c in chunks if c["rows"]]
+    print(f"live rows: {len(rows)}; sections: {len(sections)}; chunks: {len(chunks)}")
     errs = chunk_errors([r["id"] for r in rows], chunks)
     if errs:
         raise SystemExit("the Chunks table in WORKLIST.md does not cover the live rows; nothing was posted:\n  "
@@ -491,6 +557,30 @@ def self_test():
         raise AssertionError("a refusal other than 422 must still stop the run")
     except RuntimeError:
         pass
+    # VLC-207: VALC closes. 801 closed from VALC -> its row moves; 802 closed on GitHub directly -> WARN, stays;
+    # 803 open (even labelled, a half-done close) -> nothing; 804 closed but the map now points at another
+    # row's issue -> nothing; a row with no mapped issue -> nothing.
+    vrows = [{"id": i} for i in ("VLC-801", "VLC-802", "VLC-803", "VLC-804", "VLC-805")]
+    vmap = {f"VLC-80{n}": {"repo": "RapidReconciler-Valc", "number": 800 + n} for n in (1, 2, 3, 4)}
+    vworld = {801: {"title": "[VLC-801] a", "state": "closed", "labels": lab("worklist", CLOSED_IN_VALC)},
+              802: {"title": "[VLC-802] b", "state": "closed", "labels": lab("worklist")},
+              803: {"title": "[VLC-803] c", "state": "open", "labels": lab("worklist", CLOSED_IN_VALC)},
+              804: {"title": "[VLC-999] renamed", "state": "closed", "labels": lab("worklist", CLOSED_IN_VALC)}}
+    vget = lambda repo, n: vworld.get(n)
+    vc, vw = valc_closes(vrows, vmap, vget)
+    assert vc == [("VLC-801", "RapidReconciler-Valc", 801)], f"only a closed issue with the VALC label moves its row: {vc}"
+    assert vw == [("VLC-802", "RapidReconciler-Valc", 802)], f"a close made on GitHub directly is warned about: {vw}"
+    ran, out = [], io.StringIO()
+    note = lambda repo, n: "Closed in VALC by ops@getgsi.com, 2026-10-26 08:40 EDT. saw it live"
+    with contextlib.redirect_stdout(out):
+        moved = apply_valc_closes(vrows, vmap, True, get=vget, comment=note, run=ran.append)
+    assert moved == ["VLC-801"] and ran == [], f"--dry-run moves nothing: {moved} {ran}"
+    assert "WARN VLC-802" in out.getvalue() and "NOT reopened" in out.getvalue(), out.getvalue()
+    with contextlib.redirect_stdout(io.StringIO()):
+        apply_valc_closes(vrows, vmap, False, get=vget, comment=note, run=ran.append)
+    assert len(ran) == 1 and ran[0][1:3] == [CLOSE_TOOL, "VLC-801"] and "saw it live" in ran[0][3] \
+        and "VLC-207" in ran[0][3], f"a live run closes the row with worklist-close.py, quoting VALC's comment: {ran}"
+    assert os.path.exists(CLOSE_TOOL), f"the close tool the reverse leg runs must exist: {CLOSE_TOOL}"
     print("self-test OK")
 
 
