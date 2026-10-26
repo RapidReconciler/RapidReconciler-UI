@@ -117,6 +117,18 @@ def parse(text):
 CHUNK_ROW = re.compile(r"^\|\s*(?P<slug>[a-z0-9]+(?:-[a-z0-9]+)*)\s*\|\s*(?P<title>[^|]+?)\s*\|\s*(?P<rows>[^|]+?)\s*\|\s*(?P<why>[^|]*?)\s*\|\s*$")
 # Read back by VALC (DevelopmentService.CHUNK_LINE) and the runner: keep the three in step.
 CHUNK_LINE = "**Chunk:** {title} · `{slug}` · step {k} of {n}: {order}"
+# VLC-211 (owner 2026-10-26: "If the status is blocked then there should be a hover message saying what the
+# block is. If in progress, the message should say what it's waiting for"). A row's section carries one
+# "**Waiting on:** ..." line; the issue body carries it in this fixed form, which VALC's Development page
+# reads back (DevelopmentService.WAITING_LINE) for the status pill's hover. Keep the two in step.
+WAITING_LINE = "**Waiting on:** {text}"
+WAITING_IN_SECTION = re.compile(r"(?m)^\*\*Waiting on:\*\*[ \t]*(\S.*?)[ \t]*$")
+
+
+def waiting_on(section):
+    """The text of the section's first "**Waiting on:**" line, or None."""
+    m = WAITING_IN_SECTION.search(section[1]) if section else None
+    return m.group(1) if m else None
 
 
 def parse_chunks(text):
@@ -451,11 +463,28 @@ CLOSED_IN_VALC_LEAD = "**Closed in VALC**"  # DevelopmentService.CLOSED_IN_VALC_
 CLOSE_TOOL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "worklist-close.py")
 
 
+WHY_LEAD = "**Why:**"   # DevelopmentService.WHY_LEAD (VLC-211); keep the two in step
+SYNC_TAIL = "The worklist sync moves this row to WORKLIST-DONE.md on its next run."   # DevelopmentService.SYNC_TAIL
+
+
+def close_reason(body):
+    """One line for the done record from a VALC close comment: who and when, then the WHOLE reason (VLC-211).
+    VALC writes 'lead line', blank, '**Why:** reason (paragraphs allowed)', blank, the sync sentence. The reason
+    used to be cut to the comment's first line; a VLC-207-era comment (reason on the lead line) still reads."""
+    if not body or not body.startswith(CLOSED_IN_VALC_LEAD):
+        return None
+    lead = body.splitlines()[0].replace("**", "").strip()
+    if WHY_LEAD not in body:
+        return lead
+    why = body.split(WHY_LEAD, 1)[1].split(SYNC_TAIL, 1)[0]
+    return lead + " Why: " + re.sub(r"\s+", " ", why).strip()
+
+
 def close_comment(repo, num):
-    """The newest VALC close comment on an issue, as one line, or None."""
+    """The newest VALC close comment on an issue, as one line (close_reason), or None."""
     q = json.loads(gh(["api", f"repos/{OWNER}/{repo}/issues/{num}/comments?per_page=100"]))
     hits = [c.get("body", "") for c in q if c.get("body", "").startswith(CLOSED_IN_VALC_LEAD)]
-    return hits[-1].splitlines()[0].replace("**", "").strip() if hits else None
+    return close_reason(hits[-1]) if hits else None
 
 
 def valc_closes(rows, mapping, get=get_issue):
@@ -497,9 +526,12 @@ def build(row, section, chunk):
     wid = row["id"]
     title_text = section[0] if section else re.sub(r"\*\*|`", "", row["what"])[:120]
     title = f"[{wid}] {title_text}"[:250]
+    waiting = waiting_on(section)
     body = [chunk_line(chunk, wid), "",
-            f"**Status:** {row['status'].strip()} &middot; **Need from you:** {row['need'].strip() or '—'}", "",
-            f"**Index line:** {row['what'].strip()}", ""]
+            f"**Status:** {row['status'].strip()} &middot; **Need from you:** {row['need'].strip() or '—'}", ""]
+    if waiting:
+        body += [WAITING_LINE.format(text=waiting), ""]
+    body += [f"**Index line:** {row['what'].strip()}", ""]
     if section:
         body += ["---", "", section[1]]
     else:
@@ -775,6 +807,26 @@ def self_test():
 
 def hk47_self_test(rows, secs, chunks, lab):
     import tempfile
+    # VLC-211: a section's "**Waiting on:**" line reaches the issue body in the fixed form VALC reads; none, none.
+    sec = ("the thing", "intro\n\n**Waiting on:** GSI IT's Mail.ReadWrite grant  \n\nmore\n**Waiting on:** a second line")
+    t, b, l = build(rows[0], sec, chunks[1])
+    assert "\n**Waiting on:** GSI IT's Mail.ReadWrite grant\n" in b, "the first Waiting-on line, trimmed, is in the body: " + b
+    # The fixed line once, plus the section's own two, which the body copies below "---". VALC must read the
+    # fixed one only, the first above "**Index line:**" (DevelopmentService.waitingOn does).
+    assert b.count("**Waiting on:**") == 3, "the fixed line once, plus the section's two copied below: " + str(b.count("**Waiting on:**"))
+    assert b.split("**Index line:**")[0].count("**Waiting on:**") == 1, "exactly one Waiting-on line above the index line"
+    assert b.index("**Waiting on:**") < b.index("**Index line:**"), "the fixed line sits above the index line, where VALC reads it"
+    t2, b2, l2 = build(rows[0], ("the thing", "no waiting line here"), chunks[1])
+    assert "**Waiting on:**" not in b2, "a row with no Waiting-on line gets none in its body"
+    assert waiting_on(None) is None and waiting_on(("t", "**Waiting on:**   ")) is None, "an empty line is not a waiting-on text"
+    # VLC-211: the done record keeps the WHOLE close reason, in the exact shape VALC writes (its test pins the same).
+    valc = ("**Closed in VALC** by ops@getgsi.com, 2026-10-26 18:04 EDT.\n\n**Why:** Verified live.\n\nThe card shows it.\n\n"
+            + SYNC_TAIL)
+    assert close_reason(valc) == ("Closed in VALC by ops@getgsi.com, 2026-10-26 18:04 EDT. Why: Verified live. The card shows it."), \
+        close_reason(valc)
+    old = "**Closed in VALC** by ops@getgsi.com, 2026-10-26 08:40 EDT. saw it live\n\nThe worklist sync moves this row ..."
+    assert close_reason(old) == "Closed in VALC by ops@getgsi.com, 2026-10-26 08:40 EDT. saw it live", close_reason(old)
+    assert close_reason("someone else's comment") is None and close_reason("") is None
     # Read once per run: two reads of the same issue reach GitHub once; a different issue is its own read.
     calls = []
     read = cached(lambda repo, n: calls.append((repo, n)) or {"number": n})
