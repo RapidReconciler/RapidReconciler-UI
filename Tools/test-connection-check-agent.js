@@ -199,7 +199,7 @@ async function suite(script, label) {
   console.log = log;
   const ok = reds.indexOf('S1') >= 0;
   console.log('  ' + (ok ? 'ok  ' : 'FAIL') + '  control: without the RRDB line the page calls testAgentBase and S1 reddens' + (ok ? '' : ' (reddened: ' + reds.join(',') + ')'));
-  const MUT2 = SCRIPT.replace('renderDiagram(legs, buildPathRows(b));', 'renderDiagram(legs);');
+  const MUT2 = SCRIPT.replace('renderDiagram(legs, buildPathRows(b, topo));', 'renderDiagram(legs);');
   if (MUT2 === SCRIPT) { console.log('  HARNESS BROKEN: the second mutation changed nothing'); process.exit(1); }
   failures = 0; reds = [];
   console.log = () => {};

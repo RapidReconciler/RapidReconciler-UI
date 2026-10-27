@@ -816,6 +816,51 @@ the workbook's Service log sheet says why it is empty, and no reference shows.
 
 ---
 
+## Servers on file for a database (VLC-210)
+
+**Status: BUILT, not yet merged.** The servers VALC has on file for the caller's own client (the Topology card),
+for the Help Desk Connection Check's diagram. Owner ruling 2026-10-26 (Q8).
+
+**Caller:** `HelpDesk/connection-check.html` (`loadTopology()`), `GET api/v1/tenant/databases/{uuid}/servers`
+through `RRDB.valcFetch` with the sign-in's bearer token, only when there is a sign-in and the active database's
+`dbs` entry carries a `uuid`. The page has no `rrFetch` copy; `valcFetch` is the shared VALC path it uses.
+
+**What VALC does** (`TenantServersController.servers`):
+
+1. Who: the caller from the bearer token.
+2. Whose database: the uuid must name an ACTIVE database of the caller's own client (never a name; every customer
+   has a `RapidReconciler_Prod_V8`). A foreign or malformed uuid is the same 403.
+3. **Any signed-in user of the client**, not only its administrators. Owner ruling 2026-10-27: every signed-in
+   user of the client sees their own servers' names and IPs in the Connection Check. The client is the narrowing:
+   never another client's servers.
+4. Returns the client's active, undeleted `client_servers` rows, in id order.
+
+**Response** (200), one object per server, and exactly these four keys (asserted on the serialized JSON by
+`TenantServersControllerTest`; the row's login, password, port, JDE catalog and mismatch flags are never sent):
+
+```json
+[
+  { "role": "SQL_SERVER", "name": "ACME-SQL01", "address": "10.20.0.5",  "hostsThisDatabase": true  },
+  { "role": "JDE_SOURCE", "name": "ACME-JDE",   "address": "10.20.0.9",  "hostsThisDatabase": false },
+  { "role": "APP_SERVER", "name": "ACME-APP",   "address": "10.20.0.20", "hostsThisDatabase": false }
+]
+```
+
+- `role`: `SQL_SERVER` | `JDE_SOURCE` | `TEST_SQL_SERVER` | `APP_SERVER`.
+- `name`: the host name the customer gave, else the name the server reported, else its label.
+- `address`: what VALC dials; an App Server's internal IP.
+- `hostsThisDatabase`: this row is the one `client_databases.server_id` names for the asked-for database.
+
+| Status | `message` |
+|---|---|
+| 401 | `Sign in first.` / `Unknown or removed user.` |
+| 403 | `That database is not on your account.` (the page prints it under its address list) |
+
+The page marks every value from here **on file**, never as measured: the agent's own reply wins wherever it
+answered (`Tools/test-connection-check-topology.js`).
+
+---
+
 ## Activity Log + reminder acknowledgements
 
 **Status: agent shipped (Phase 1, 2026-06-28); UI wiring is Phases 2–4 of
