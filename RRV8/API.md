@@ -221,9 +221,9 @@ backend contract rather than synthesized client-side (per the
 2. **Role claim + role-lane gating** *(updated 2026-06-09 &mdash;
    supersedes the earlier "role label not in the JWT" note, which is
    now stale).* The token **already carries the role**, per-db:
-   - `dbs[i].rn` &mdash; role display-name (`Administrator`,
-     `Reconciliation Analyst`, `Read-Only`, `Cost Accounting`,
-     `A/P Clerk`). Minted by `AuthController` (`entry.put("rn", ...)`)
+   - `dbs[i].rn` &mdash; role display-name. Since V102 (VLC-214,
+     2026-10-27) exactly `Administrator`, `Analyst`, `Accountant` or
+     `Power User`; null only on a legacy account with no role. Minted by `AuthController` (`entry.put("rn", ...)`)
      from `RoleEntity.getName()`; documented in `JwtService` token
      shape. Home labels the role badge off `rn` directly &mdash; no
      longer "admin-only badge."
@@ -247,8 +247,8 @@ backend contract rather than synthesized client-side (per the
      method may write. Gating an application capability on it would mean
      granting control-plane escalation to hand someone a cardex re-sync.
      `tl` is an ordinary per-role column (`roles.tools`, V68) like every
-     other grant in this block. Seeded TRUE for Administrator, Analyst and
-     GSI Internal; FALSE everywhere else, including custom roles.
+     other grant in this block. TRUE for Analyst and Power User since V102
+     (VLC-214); FALSE for Administrator and Accountant.
 
      &#9888; **Fail-closed, like `dm` and `ac`.** `UserRequest.tools`
      defaults false and `JwtAuthFilter` is the only writer, so a token with
@@ -288,7 +288,12 @@ backend contract rather than synthesized client-side (per the
      `perms` block &mdash; including the long-lived V8 dev token (exp 2036)
      &mdash; now carries neither lane and must be re-minted.**
 
-   **Home role-lane gating contract** (the role-based home layout):
+   **Home role-lane gating contract** (the role-based home layout).
+   **⚠ Flat since VLC-214 (2026-10-27):** each gate below is the ONLY way into
+   its lane. `t.adm` no longer implies the analyst, accountant or Tools lanes,
+   in V8 (`canAnalyst/canAccountant/canTools`) or in the Agent's guards. A
+   Power User holds every flag, so it passes every lane and is the only role
+   with the view switcher (`_canSwitchRole` = more than one entitled view).
 
    | Lane | Cards | Gate |
    |---|---|---|
@@ -314,7 +319,7 @@ backend contract rather than synthesized client-side (per the
    features, not admin-module features. The Analyst lane should show
    for any role granted `dmaais`, regardless of the admin license.
 
-   **The one gap is policy, not plumbing.** Per V32/V35 seed, only
+   **(History; closed by V38 and V102.)** **The one gap is policy, not plumbing.** Per V32/V35 seed, only
    **Administrator** has `dmaais = TRUE`; `Reconciliation Analyst`
    (and the rest) are `FALSE`. So today `perms.dm` lights up for
    admins only &mdash; which is why the analyst surfaces still sit
@@ -561,9 +566,12 @@ shared mapping.
   read one section at a time, so the older half kept winning. Corrected against
   source, not memory: `JwtAuthFilter.java:252` parses `pm.get("ac")`,
   `UserRequest.java:67` exposes `accountant`, and
-  `AcctDispositionController.java:132` gates on
+  `AcctDispositionController.java:132` gated on
   `isAccountant() || isAdmin() || isSuperUser()` — one of five measured write
-  guards (VLC-41). The old text also predicted that "inventing `perms.ac` in the
+  guards (VLC-41). **Since VLC-214 (2026-10-27) roles are flat** and the admin pass
+  is gone from every analyst and accountant guard: `requireAccountant` is
+  `isAccountant() || isSuperUser()`, `requireAnalyst` is `isDmaais() || isSuperUser()`.
+  Power User passes both because VALC mints every flag true for it. The old text also predicted that "inventing `perms.ac` in the
   agent would fail open on every existing token"; the claim is minted by VALC and
   the guards are fail-closed, which is why that prediction did not come true.
 - **The gate here is still authentication + company scope**, and that is a
