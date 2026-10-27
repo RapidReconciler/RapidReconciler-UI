@@ -75,7 +75,7 @@ const EXEMPT = {
       + 'boilerplate the all-signal-no-noise rule exists to stop -- the reader would '
       + 'learn to skim past it by the third answer.',
     'accounting-model-review.html':
-        'A narrow drill: approve or re-approve the F4095 baseline. The reader is '
+        'A narrow drill on the F4095 baseline: which GL classes fall out of it. The reader is '
       + 'already inside the one doc-shaped decision the page is about, so a link '
       + 'would point back at where they are.',
     'inventory-account-rollforward.html':
