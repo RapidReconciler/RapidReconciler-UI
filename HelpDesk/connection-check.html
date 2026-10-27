@@ -447,6 +447,29 @@
     return { base: here.protocol.indexOf('http') === 0 ? (here.protocol + '//' + here.host) : '', src: 'page' };
   })();
   var COMMS_BASE = COMMS.base;
+
+  // VLC-210 (owner ruling 2026-10-26, Q8): the servers VALC has on file for this database (its Topology card),
+  // from GET api/v1/tenant/databases/{uuid}/servers: role, name, address, and which one hosts the database.
+  // Only with a sign-in, whose active database names its uuid. VALC answers any signed-in user of the client
+  // (owner ruling 2026-10-27), and a refusal (a database not on the account) is said under the address list
+  // rather than read as "no servers". Any other failure says nothing:
+  // the agent's own reply, or UI-235's remembered address, is still the page's answer.
+  function loadTopology() {
+    var db = (typeof RRDBX.active === 'function') ? (RRDBX.active() || {}) : {};
+    var tok = null;
+    try { tok = localStorage.getItem('rrv8.token'); } catch (_) {}
+    if (!db.uuid || !tok || typeof RRDBX.valcFetch !== 'function') return Promise.resolve(null);
+    return RRDBX.valcFetch('api/v1/tenant/databases/' + encodeURIComponent(db.uuid) + '/servers',
+        { headers: { 'Authorization': 'Bearer ' + tok }, cache: 'no-store' })
+      .then(function (r) {
+        if (r.status === 403) {
+          return r.json().catch(function () { return {}; })
+            .then(function (j) { return { refused: (j && j.message) || 'VALC did not share the addresses on file.' }; });
+        }
+        return r.ok ? r.json().then(function (list) { return { servers: Array.isArray(list) ? list : [] }; }) : null;
+      })
+      .catch(function () { return null; });
+  }
   function sourceText() {
     var noAddr = SESSION_DBS.length && COMMS.src !== 'session' && COMMS.src !== 'link';
     var lead = {
@@ -694,6 +717,16 @@
     if (isLocal(a.app.name) && srv.hostname) a.app = { name: srv.hostname, ip: srv.internalIp || '' };
     a.signin = same(a.signin);
     a.db = same(a.db);
+    // VLC-210: where the server's own reply said nothing (it was not reached, or named no database), the box takes
+    // what VALC has on file, marked "on file" so a configured address never reads as one this check measured.
+    var file = rows.onFile || [];
+    var role = function (r) { return file.filter(function (s) { return s.role === r; })[0] || null; };
+    var onFile = function (s) { return s ? { name: s.host, ip: (s.ip ? s.ip + ' · ' : '') + 'on file' } : null; };
+    var dbServer = file.filter(function (s) { return s.hosts; })[0] || role('SQL_SERVER');
+    if (!a.db && dbServer) a.db = onFile(dbServer);
+    var appServer = role('APP_SERVER');
+    if (!a.app.ip && appServer) a.app = { name: a.app.name || appServer.host, ip: (appServer.ip || appServer.host) + ' · on file' };
+    a.jde = onFile(role('JDE_SOURCE'));
     return a;
   }
   function renderDiagram(legs, rows) {
@@ -742,12 +775,18 @@
     s += node(300, 32, 130, 50, 'This PC', null);
     s += node(352, 179, 210, 66, 'Application Server', addr.app);
     s += node(596, 179, 152, 66, 'Database', addr.db);
+    // VLC-210: the JDE source, when VALC has one on file. No check here tests it (its leg runs from the SQL Server,
+    // inside the customer's network), so it hangs off the database with a plain line and no leg number.
+    if (addr.jde) {
+      s += '<line x1="672" y1="245" x2="672" y2="272" stroke="#c9d3e0" stroke-width="2" stroke-dasharray="4 4"/>';
+      s += node(596, 272, 152, 66, 'JDE Source', addr.jde);
+    }
     s += '</svg>';
     $('netdiagram').innerHTML = s;
   }
 
   // ---- Network path (the trace-spec list) ----------------------------
-  function buildPathRows(b) {
+  function buildPathRows(b, topo) {
     var resolved = (b.ok && b.data && b.data.resolved) ? b.data.resolved : {};
     var srv = (b.ok && b.data && b.data.host) ? b.data.host : {};
     var serverEps = (b.ok && b.data && b.data.endpoints) ? b.data.endpoints : [];
@@ -762,7 +801,14 @@
       var authH = hostOnly(AUTH_BASE);
       pc.push({ label: 'Sign-in service', host: authH, ip: resolved[authH] || null, port: portOf(AUTH_BASE, '443') });
     }
-    return { pc: pc, server: serverEps, serverId: srv, agentReachable: !!(b.ok && b.data) };
+    // VLC-210: VALC's Topology for this database, one row per server, so the diagram and the list read the same.
+    var ROLE = { SQL_SERVER: 'SQL Server', JDE_SOURCE: 'JDE source', TEST_SQL_SERVER: 'Test/Dev SQL Server', APP_SERVER: 'Application server' };
+    var onFile = ((topo && topo.servers) || []).filter(function (s) { return s && (s.name || s.address); }).map(function (s) {
+      return { role: s.role, label: (ROLE[s.role] || s.role || 'Server') + (s.hostsThisDatabase ? ' (this database)' : ''),
+               host: s.name || s.address, ip: s.address && s.address !== s.name ? s.address : null, hosts: !!s.hostsThisDatabase };
+    });
+    return { pc: pc, server: serverEps, serverId: srv, agentReachable: !!(b.ok && b.data),
+             onFile: onFile, onFileRefused: topo && topo.refused ? topo.refused : null };
   }
 
   function renderPath(rows) {
@@ -782,12 +828,22 @@
     } else {
       html += '<div class="np-note">Your server couldn’t be reached, so its outbound legs (database, GSI) and exact IPs can’t be shown. The addresses above use names your IT can still test or trace.</div>';
     }
+    // VLC-210: what VALC has on file for this database's servers. Configured, not measured: this check did not test them.
+    if (rows.onFile && rows.onFile.length) {
+      html += '<div class="np-group"><div class="np-group-head">On file in VALC (your Topology; not tested by this check)</div>' +
+              rows.onFile.map(function (r) {
+                return '<div class="np-row"><span class="np-leg">&rarr; ' + escapeHtml(r.label) + '</span>' +
+                       '<span class="np-addr">' + escapeHtml(r.host) + (r.ip ? ' (' + escapeHtml(r.ip) + ')' : '') + '</span></div>';
+              }).join('') + '</div>';
+    } else if (rows.onFileRefused) {
+      html += '<div class="np-note">The server addresses VALC has on file are not shown: ' + escapeHtml(rows.onFileRefused) + '</div>';
+    }
     $('netpathList').innerHTML = html;
     $('netpath').classList.add('show');
   }
 
   // ---- Attribution ---------------------------------------------------
-  function render(a, b, c) {
+  function render(a, b, c, topo) {
     var online = navigator.onLine;
     var route, cls, headline, cause, actions = [];
 
@@ -867,7 +923,7 @@
     ul.innerHTML = actions.map(function (x) { return '<li>' + x + '</li>'; }).join('');
     $('verdictActionsLabel').style.display = actions.length ? 'block' : 'none';
 
-    var pathRows = buildPathRows(b);
+    var pathRows = buildPathRows(b, topo);   // VLC-210: the same rows the diagram draws
     renderPath(pathRows);
 
     lastRoute = route;
@@ -952,9 +1008,10 @@
     var pC = AUTH_BASE ? probe(AUTH_BASE + '/api/v1/auth/ping',
                                { cors: true, onSlow: function (s) { setProbe('C', 'run', waitingText(s)); } })
                        : Promise.resolve({ skipped: true });
+    var pT = loadTopology();   // VLC-210
 
-    Promise.all([pA, pB, pC]).then(function (arr) {
-      var a = arr[0], b = arr[1], c = arr[2];
+    Promise.all([pA, pB, pC, pT]).then(function (arr) {
+      var a = arr[0], b = arr[1], c = arr[2], topo = arr[3];
       c.target = AUTH_BASE || '';
 
       // A
@@ -1008,9 +1065,9 @@
           if (x.name === 'valc.reachable') legs[5] = x.status;
         });
       }
-      renderDiagram(legs, buildPathRows(b));   // UI-233: the boxes carry the same addresses as the list
+      renderDiagram(legs, buildPathRows(b, topo));   // UI-233: the boxes carry the same addresses as the list
 
-      render(a, b, c);
+      render(a, b, c, topo);
       running = false;
       $('runBtn').disabled = false;
     });
