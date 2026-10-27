@@ -126,15 +126,20 @@
   }
 
   function refreshRow(data) {
-    return rowFromCheck(data, 'Data loads', 'sql.last_job_status', 'Nightly data refresh', function (state, c) {
+    // UI-217: not "Nightly". The agent judges the last run against the job's own
+    // schedule and names it in the fact ("It is scheduled weekly on Sundays at 2:00 AM").
+    return rowFromCheck(data, 'Data loads', 'sql.last_job_status', 'Data refresh', function (state, c) {
       if (state === 'ok') return {};
       if (state === 'fail') return { todo: 'Ask ' + IT + ' to open the refresh job’s history in SQL Server Agent on the database server. The step that failed names the cause.' };
-      // The two amber cases are told apart by the agent's own sentence
-      // (InstallDiagnosticsCollector.lastRefreshRule: "...has not run since." for a
-      // missed night, "...it usually takes about N." for an overlong run). Change
-      // those words there and the advice here falls through to the generic line.
+      // The amber cases are told apart by the agent's own sentence
+      // (InstallDiagnosticsCollector.lastRefreshRule: "...does not refresh on its own."
+      // for a job or schedule that is off or missing, "...has not run since." for a run
+      // later than twice the schedule's period, "...it usually takes about N." for an
+      // overlong run). Change those words there and the advice here falls through to
+      // the generic line.
       var text = String(c.text || '');
-      if (/has not run since/i.test(text)) return { todo: 'Check <b>SQL Server Agent</b> below first. If it is running, ask ' + IT + ' to check that the RapidReconciler refresh job is enabled and scheduled.' };
+      if (/does not refresh on its own/i.test(text)) return { todo: 'Ask ' + IT + ' to turn the RapidReconciler refresh job and its schedule back on in SQL Server Agent on the database server.' };
+      if (/has not run since/i.test(text)) return { todo: 'Check <b>SQL Server Agent</b> below first. If it is running, ask ' + IT + ' to check the RapidReconciler refresh job’s history for missed runs.' };
       if (/usually takes/i.test(text)) return { todo: 'If it is still running in an hour, ask ' + IT + ' to check the database server for a blocked job.' };
       return { todo: 'Ask ' + IT + ' to confirm the RapidReconciler refresh job has run on the database server.' };
     });
@@ -149,7 +154,7 @@
     if (s.executionId == null) return assign(base, { state: 'warn', fact: 'No JD Edwards import has run for this database yet.', todo: 'Ask ' + IT + ' to check that the RapidReconciler import is deployed and scheduled on the database server.', tech: tech || 'No catalog execution for this database.' });
     var st = String(s.status || '');
     if (/^(failed|ended unexpectedly)$/i.test(st)) return assign(base, { state: 'fail', fact: 'The last import, started ' + fmtWhen(s.startTime) + ', failed.', todo: 'Give the downloaded diagnostics to ' + IT + '. They list the errors the import recorded.', tech: tech });
-    if (/^cancel/i.test(st)) return assign(base, { state: 'warn', fact: 'The last import, started ' + fmtWhen(s.startTime) + ', was cancelled before it finished.', todo: 'The next nightly refresh runs it again. If imports keep stopping, give the downloaded diagnostics to ' + IT + '.', tech: tech });
+    if (/^cancel/i.test(st)) return assign(base, { state: 'warn', fact: 'The last import, started ' + fmtWhen(s.startTime) + ', was cancelled before it finished.', todo: 'The next scheduled refresh runs it again. If imports keep stopping, give the downloaded diagnostics to ' + IT + '.', tech: tech });
     if (/^(running|created|pending|stopping)$/i.test(st)) return assign(base, { state: 'ok', fact: 'An import is running now (started ' + fmtWhen(s.startTime) + ').', todo: '', tech: tech });
     if (/^(succeeded|completed)$/i.test(st)) {
       var took = fmtMinutes(s.durationSeconds);
@@ -190,15 +195,15 @@
     return [
       rowFromCheck(data, 'Database server', 'sql.agent_service', 'SQL Server Agent', function (state) {
         return state === 'fail'
-          ? { todo: 'Ask ' + IT + ' to start the SQL Server Agent service on the database server and set it to start automatically. The nightly refresh needs it.' }
-          : { todo: 'Ask ' + IT + ' to set the SQL Server Agent service to start automatically, so a server restart doesn’t stop the nightly refresh.' };
+          ? { todo: 'Ask ' + IT + ' to start the SQL Server Agent service on the database server and set it to start automatically. The scheduled refresh needs it.' }
+          : { todo: 'Ask ' + IT + ' to set the SQL Server Agent service to start automatically, so a server restart doesn’t stop the scheduled refresh.' };
       }),
       rowFromCheck(data, 'Database server', 'sql.disk_free_mb', 'Data drive space', function () {
         return { todo: 'Ask ' + IT + ' to free up space on the database server’s data drive, or extend it.' };
       }),
       rowFromCheck(data, 'Database server', 'sql.jde_job_present', 'Refresh job', function (state) {
-        return state === 'ok' ? { fact: 'The nightly refresh job is set up.' }
-          : { fact: 'The nightly refresh job isn’t set up on the database server.', todo: 'Ask ' + IT + ' to check the RapidReconciler refresh job in SQL Server Agent on the database server.' };
+        return state === 'ok' ? { fact: 'The refresh job is set up.' }
+          : { fact: 'The refresh job isn’t set up on the database server.', todo: 'Ask ' + IT + ' to check the RapidReconciler refresh job in SQL Server Agent on the database server.' };
       })
     ];
   }
