@@ -96,12 +96,29 @@ SECRET = re.compile(r"(?i)\b(password|passwd|secret|token|api[_-]?key|pwd)\b\s*[
 BODY_CAP = 60000
 
 
+# HK-49 (owner 2026-10-26: "Can In Transit issues have a separate worklist section that can be filtered?"). An
+# index group headed "### <n>. <Name> module ..." is a product module, not a build target: every row under it
+# also gets `module:<slug>`, which VALC's Development page groups and filters on ahead of the target labels.
+MODULE_HEAD = re.compile(r"^###\s+\d+\.\s+(?P<name>[^&|]+?)\s+module\b", re.I)
+
+
+def module_slug(name):
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+
+
 def parse(text):
     rows = []
+    module = None
     for line in text.splitlines():
+        if line.startswith("### "):
+            h = MODULE_HEAD.match(line)
+            module = (module_slug(h.group("name")), h.group("name").strip()) if h else None
+            continue
         m = ROW.match(line)
         if m and m.group("status").strip()[:1] in STATUS_LABEL:
-            rows.append(m.groupdict())
+            row = m.groupdict()
+            row["module"], row["module_name"] = module if module else (None, None)
+            rows.append(row)
     sections = {}
     parts = re.split(r"(?m)^### ", text)
     for p in parts[1:]:
@@ -183,6 +200,10 @@ def gh(args, input_text=None):
 def chunk_labels(chunks):
     # GitHub caps a label description at 100 characters.
     return {f"chunk:{c['slug']}": ("bfd4f2", ("Chunk: " + c["title"])[:100]) for c in chunks}
+
+
+def module_labels(rows):
+    return {f"module:{r['module']}": ("5319e7", ("Module: " + r["module_name"])[:100]) for r in rows if r.get("module")}
 
 
 def repo_labels(repo):
@@ -396,9 +417,9 @@ def verify(posted, fetch=None, wait=5):
 
 def stale_labels(current, wanted):
     """Copier-owned labels the issue carries but the row no longer earns (an old status, a resolved
-    needs-owner, a chunk it moved out of). claude:* and any label a person added are never touched."""
+    needs-owner, a chunk or module section it moved out of). claude:* and any label a person added are never touched."""
     owned = set(STATUS_LABEL.values()) | {"needs-owner"}
-    return [l for l in current if (l in owned or l.startswith("chunk:")) and l not in wanted]
+    return [l for l in current if (l in owned or l.startswith(("chunk:", "module:"))) and l not in wanted]
 
 
 ISSUE_ID = re.compile(r"^\[(?P<id>[A-Z]+-\d+)\]")
@@ -542,6 +563,8 @@ def build(row, section, chunk):
     if len(text) > BODY_CAP:
         text = text[:BODY_CAP] + "\n\n_[Cut at 60,000 characters; the full section is in WORKLIST.md.]_"
     labels = ["worklist", TARGET_LABEL[wid.split("-")[0]], STATUS_LABEL[row["status"].strip()[:1]], f"chunk:{chunk['slug']}"]
+    if row.get("module"):
+        labels.append(f"module:{row['module']}")
     need = row["need"].strip()
     if need and need not in ("—", "-", "&mdash;"):
         labels.append("needs-owner")
@@ -617,7 +640,8 @@ def sync(dry):
     for repo in repos:
         # Only the chunks that have a row in this repo; a chunk spanning repos gets its label in each.
         here = [c for c in chunks if any(REPO_FOR.get(r.split("-")[0]) == repo for r in c["rows"])]
-        ensure_labels(repo, dry, chunk_labels(here))
+        ensure_labels(repo, dry, {**chunk_labels(here),
+                                  **module_labels([r for r in rows if REPO_FOR.get(r["id"].split("-")[0]) == repo])})
     posted, counts = [], {"created": 0, "updated": 0, "unchanged": 0}
     for row in rows:
         prefix = row["id"].split("-")[0]
@@ -710,6 +734,23 @@ def self_test():
     assert "needs-owner" in l and "status:in-progress" in l and "chunk:pair" in l, l
     assert b.splitlines()[0] == "**Chunk:** The pair · `pair` · step 2 of 2: VLC-4, VLC-2", b.splitlines()[0]
     assert stale_labels(["chunk:old", "chunk:pair", "claude:queued"], ["chunk:pair"]) == ["chunk:old"]
+    # HK-49: a row under a "### <n>. <Name> module" index group carries module:<slug>; a row under a build-target
+    # group carries none; the group ends at the next ### heading; and a row that moves out loses the label.
+    mod_md = ("### 5. Housekeeping &nbsp;&middot;&nbsp; 1 live\n\n| ID | Status | What it is | Need from you |\n|---|---|---|---|\n"
+              "| [HK-1](#hk-1--a) | ☐ | tooling | — |\n\n"
+              "### 6. In Transit module &nbsp;&middot;&nbsp; 2 live\n\n| ID | Status | What it is | Need from you |\n|---|---|---|---|\n"
+              "| [DAC-5](#dac-5--b) | ◐ | load | — |\n| [UI-6](#ui-6--c) | ☐ | pages | — |\n\n"
+              "### UI-7 — a section, not a group\n\n| [UI-7](#ui-7--d) | ☐ | stray | — |\n")
+    mrows = {r["id"]: r for r in parse(mod_md)[0]}
+    assert mrows["HK-1"]["module"] is None, "a build-target group is not a module"
+    assert mrows["DAC-5"]["module"] == mrows["UI-6"]["module"] == "in-transit", mrows
+    assert mrows["UI-7"]["module"] is None, "the module group ends at the next ### heading"
+    mchunk = {"slug": "mods", "title": "Mods", "rows": ["HK-1", "UI-6"], "why": ""}
+    assert "module:in-transit" in build(mrows["UI-6"], None, mchunk)[2]
+    assert not any(l.startswith("module:") for l in build(mrows["HK-1"], None, mchunk)[2])
+    assert module_labels(list(mrows.values())) == {"module:in-transit": ("5319e7", "Module: In Transit")}
+    assert stale_labels(["module:in-transit", "chunk:solo"], ["chunk:solo"]) == ["module:in-transit"], \
+        "a row that left the module group loses its module label"
     assert SECRET.search(b), "the secret pattern must catch a password with a value"
     assert not SECRET.search("the rehearsal user's password; RR_ARTIFACT_READ_TOKEN onto a machine account"), \
         "prose that only NAMES a secret must not be refused"
