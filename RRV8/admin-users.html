@@ -1684,6 +1684,9 @@
       return m;
     }
     const n = (r.name || '').toLowerCase();
+    // VLC-214: Power User (the renamed GSI Internal) carries every tab. Without this
+    // line the guesses below map it to NO module, which only shows it by fail-open.
+    if (/power\s*user/.test(n)) return ['inv', 'it', 'por', 'adm'];
     const m = [];
     if (/analyst|reconcil/.test(n))            m.push('inv');
     if (/transit/.test(n))                     m.push('it');
@@ -1692,7 +1695,8 @@
     return m;
   }
   // A role is offerable only if at least one module it grants is licensed
-  // for the client — e.g. A/P Clerk disappears when PO Receipts is off.
+  // for the client — e.g. a role granting only PO Receipts disappears when PO
+  // Receipts is off.
   // Roles that map to no known module show (fail-open).
   function offerableRoles(roles) {
     const caps = clientModuleCaps();
@@ -1732,9 +1736,21 @@
         const cur = roleByIdV8(row.roleId);
         if (cur) roles = roles.concat([cur]);
       }
-      roleSel.innerHTML = '<option value="">(no role &mdash; no access)</option>' +
+      // VLC-214 (owner 2026-10-27): a role is REQUIRED. VALC refuses a null roleId
+      // with 400, so "(no role -- no access)" is no longer offered. A member saved
+      // before the change may still carry no role; for them the select opens on a
+      // disabled "Choose a role" placeholder rather than on the first role in the
+      // list, which would read as their current role when it is not.
+      const noRole = row.roleId == null;
+      const placeholder = noRole
+        ? '<option value="" disabled selected>Choose a role</option>' : '';
+      roleSel.innerHTML = placeholder +
         roles.map(r => '<option value="' + r.id + '">' + fmt(r.name) + '</option>').join('');
-      roleSel.value = (row.roleId != null) ? String(row.roleId) : '';
+      roleSel.value = noRole ? '' : String(row.roleId);
+      if (noRole) {
+        errEl.textContent = 'This team member has no role. Choose one before saving.';
+        errEl.classList.add('is-visible');
+      }
       updatePermsRoleDesc();
 
       // The admin's own assigned databases are the assignable universe.
@@ -1837,6 +1853,13 @@
     if (!_permsUserId) return false;
     const roleSel = document.getElementById('js-perms-role');
     const roleId  = roleSel.value ? Number(roleSel.value) : null;
+    // VLC-214: no request without a role. VALC would refuse it with 400; saying so
+    // here keeps the placeholder from ever being sent as "no role".
+    if (roleId == null) {
+      const el = document.getElementById('js-perms-error');
+      if (el) { el.textContent = 'Choose a role for this team member before saving.'; el.classList.add('is-visible'); }
+      return false;
+    }
     const assignments = [];
     document.querySelectorAll('#js-perms-dbs .perm-db').forEach(wrap => {
       const a = extractAssignment(wrap);
@@ -1895,9 +1918,10 @@
 
     (async function () {
       const roles = offerableRoles(await loadRolesV8());
-      roleSel.innerHTML = '<option value="">(no role &mdash; no access)</option>' +
+      // VLC-214: a role is required, so there is no blank "(no role)" option.
+      roleSel.innerHTML =
         roles.map(r => '<option value="' + r.id + '">' + fmt(r.name) + '</option>').join('');
-      // Default to Reconciliation Analyst if present (the common teammate role).
+      // Default to the Analyst role if present (the common teammate role).
       const analyst = roles.find(r => /analyst/i.test(r.name || ''));
       if (analyst) { roleSel.value = String(analyst.id); }
       updateNuRoleDesc();
@@ -1927,6 +1951,9 @@
     const roleId   = document.getElementById('js-nu-role').value;
     if (!fullName) { showErr('Full Name is required.'); return; }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { showErr('Enter a valid email.'); return; }
+    // VLC-214: VALC refuses an invite with no role. Only reachable when the role
+    // list failed to load, since the select has no blank option.
+    if (!roleId) { showErr('Choose a role for this team member.'); return; }
 
     const assignments = [];
     document.querySelectorAll('#js-nu-dbs .perm-db').forEach(wrap => {
@@ -1998,7 +2025,14 @@
 
     const permsBd = document.getElementById('js-perms-modal');
     document.getElementById('js-perms-close').addEventListener('click', closePermsModal);
-    document.getElementById('js-perms-role').addEventListener('change', updatePermsRoleDesc);
+    document.getElementById('js-perms-role').addEventListener('change', (e) => {
+      updatePermsRoleDesc();
+      // VLC-214: a role is now chosen, so the "no role" prompt has done its job.
+      if (e.target.value) {
+        const el = document.getElementById('js-perms-error');
+        el.classList.remove('is-visible'); el.textContent = '';
+      }
+    });
     document.getElementById('js-perms-done').addEventListener('click', async () => {
       const ok = await saveUserRights();
       if (ok) closePermsModal();
@@ -2565,9 +2599,11 @@
   // Main fetch (also called after adding a user).
   function reloadUsers() {
     return rrFetch('api/v1/tenant/users')
-      // GSI Internal is a GSI-staff role, not a customer team member — drop it
-      // so the RR Team roster (and the demo walk) never shows GSI-internal users.
-      .then(rows => renderUsers((rows || []).filter(r => !r || r.roleName !== 'GSI Internal')))
+      // VLC-214: no client-side staff filter. This dropped roleName 'GSI Internal';
+      // that role is now "Power User" and customers may assign it, so a role-name
+      // filter would hide real team members. VALC removes GSI staff from this list
+      // itself, by email domain.
+      .then(rows => renderUsers(rows || []))
       .catch(err => {
         showFetchError('api/v1/tenant/users', err);
       const tbody = document.getElementById('js-users-tbody');

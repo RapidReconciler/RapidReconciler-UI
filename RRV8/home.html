@@ -3214,20 +3214,23 @@
   </section>
 
   <!-- UI-174. Shown only under data-view-role="none". Names the database and
-       the two grants by the words an administrator sees on the VALC Users page,
-       so the request the user has to make is spelled out rather than implied. -->
+       the roles by the words an administrator sees on the Team page, so the
+       request the user has to make is spelled out rather than implied.
+       VLC-214: four flat roles (Administrator, Analyst, Accountant, Power User).
+       This used to name the retired "Reconciliation Analyst" grant. -->
   <section class="no-grant-notice" id="noGrantNotice" aria-label="No access">
     <p class="ngn-lead">
       Your account can sign in and can see this database in the list, but it
-      holds neither the <strong>Reconciliation Analyst</strong> nor the
-      <strong>Accountant</strong> grant on
+      holds no role that opens a dashboard on
       <strong id="noGrantDb">this database</strong>.
     </p>
     <p class="ngn-body">
       Nothing here is broken and nothing is hidden from you by mistake &mdash;
-      the dashboards below belong to those two lanes, so there is nothing to
-      show. Ask your RapidReconciler administrator to add the grant you need on
-      this database, or switch to a database where you already hold one.
+      each dashboard belongs to a role (<strong>Administrator</strong>,
+      <strong>Analyst</strong>, <strong>Accountant</strong> or
+      <strong>Power User</strong>), so there is nothing to show. Ask your
+      RapidReconciler administrator to give you a role on this database, or
+      switch to a database where you already have one.
     </p>
   </section>
 
@@ -3960,7 +3963,7 @@
 
   <!-- ANALYST LANE — daily analyst surfaces (cardex drift, the roll-forward,
        the accounting model). Gated on perms.dm (the role's dmaais grant); lives
-       OUTSIDE #view-admin so a non-admin Reconciliation Analyst reaches it.
+       OUTSIDE #view-admin so a non-admin Analyst reaches it.
        Cards keep their original element IDs so the status-dot wiring (the
        cxDot inventory light, dmaai* analysis status)
        keeps working unchanged. See RRV8/API.md §2. -->
@@ -4376,21 +4379,29 @@
   // the admin-module client license on purpose — unlike caps().dm (which
   // AND-gates m.adm for the admin-coupled DMAAI page guard), the analyst
   // surfaces are inventory-recon features and should show for any role
-  // granted dmaais (Administrator + Reconciliation Analyst per VALC V38).
-  // Fail-open when the token carries no perms block (demo / dev). See API.md §2.
-  // VLC-41, 2026-09-01 — BOTH LANE CHECKS ARE FAIL-CLOSED NOW, and they mirror
-  // the agent's guards exactly (requireAnalyst = isDmaais||isAdmin||isSuperUser,
-  // requireAccountant = isAccountant||isAdmin||isSuperUser). Keeping the UI and
-  // the server on different rules is how you get a button that 403s.
+  // granted dmaais (Analyst + Power User since VLC-214).
+  // VLC-41, 2026-09-01 — BOTH LANE CHECKS ARE FAIL-CLOSED, and they mirror the
+  // agent's guards (requireAnalyst = isDmaais||isSuperUser, requireAccountant =
+  // isAccountant||isSuperUser since VLC-214). Keeping the UI and the server on
+  // different rules is how you get a button that 403s.
+  //
+  // ⛔ VLC-214, owner ruling 2026-10-27: ROLES ARE FLAT. These three used to read
+  // `isAdmin() || <grant>`, which made an Administrator an analyst, an accountant
+  // and a Tools holder by rank. There are four roles now and each is exactly its
+  // flags: Administrator (adm, ij, rs), Analyst (dm, tl), Accountant (ac), and
+  // Power User (every flag). An Administrator is minted dm/ac/tl = false and holds
+  // no lane but its own. Do not put the OR back: a Power User already reaches every
+  // lane through its own flags, so the OR only ever granted a pure Administrator
+  // lanes the agent now refuses.
   //
   // canAnalyst used to be `p ? (p.dm !== false) : true` — fail-OPEN, so a token
   // with no perms block was treated as an analyst. The agent defaulted the same
   // way and both have flipped. ⚠ The long-lived dev token (exp 2036) predates
   // perms and therefore loses both lanes here. Re-mint it.
-  function canAnalyst() { var p = (activeDb() || {}).perms; return isAdmin() || !!(p && p.dm === true); }
+  function canAnalyst() { var p = (activeDb() || {}).perms; return !!(p && p.dm === true); }
   // NOT the absence of dm. The two lanes are distinct and a user can hold both,
   // one, or neither — which is the whole point of VLC-41.
-  function canAccountant() { var p = (activeDb() || {}).perms; return isAdmin() || !!(p && p.ac === true); }
+  function canAccountant() { var p = (activeDb() || {}).perms; return !!(p && p.ac === true); }
   // UI-189 — the Tools grant (perms.tl), minted by AuthController from
   // RoleEntity.tools (V68) and read by the agent into UserRequest.tools.
   //
@@ -4401,20 +4412,35 @@
   // write. Gating a cardex re-sync on it would have meant handing out
   // control-plane escalation to deliver an application capability.
   //
-  // Same shape as its siblings above: an admin always holds it, and a
-  // non-admin holds it only on an explicit grant. Absent claim = no grant, which
-  // matters more here than for the read-only lanes because the shelf this gates
-  // reaches an operation that deletes rows.
-  function canTools() { var p = (activeDb() || {}).perms; return isAdmin() || !!(p && p.tl === true); }
+  // Same shape as its siblings above: held only on an explicit grant, an
+  // Administrator included (VLC-214 — Administrator is minted tl=false). Absent
+  // claim = no grant, which matters more here than for the read-only lanes
+  // because the shelf this gates reaches an operation that deletes rows.
+  function canTools() { var p = (activeDb() || {}).perms; return !!(p && p.tl === true); }
 
-  // ---- Role-view lens (an admin can preview the lower-rank dashboards) -------
-  // viewRole is a VIEW filter only, clamped to what the ACTIVE DB's token grants
-  // (Admin >= Analyst >= Accountant). The agent/VALC still enforce every data call
-  // against the real JWT, so a tampered rrv8.viewRole only changes which lanes
-  // render, never data access. v1 exposes the switcher to admins only.
-  // 'none' outranks nothing, so _canSwitchRole() (> 0) is false for it and the
-  // localStorage clamp in _viewRole() (<= max) admits no stored role.
-  function _roleRank(r) { return r === 'admin' ? 2 : r === 'analyst' ? 1 : r === 'accountant' ? 0 : -1; }
+  // ---- Role-view lens (a Power User switches between the three dashboards) ----
+  // viewRole is a VIEW filter only, clamped to what the ACTIVE DB's token grants.
+  // The agent/VALC still enforce every data call against the real JWT, so a
+  // tampered rrv8.viewRole only changes which lanes render, never data access.
+  //
+  // ⛔ VLC-214, 2026-10-27: NO LADDER. This used to rank the views (admin 2 >
+  // analyst 1 > accountant 0) and admit any stored view at or below the user's
+  // rank, so an Administrator could open all three and an Analyst could open the
+  // Accountant view. Entitlement is now a SET: each view is entitled by its own
+  // grant (admin by t.adm, analyst by perms.dm, accountant by perms.ac) and by
+  // nothing else. Administrator, Analyst and Accountant each hold one view; a
+  // Power User holds all three, and only a user holding more than one gets the
+  // switcher. The push order below (admin, analyst, accountant) is a LANDING
+  // order, not a rank. Functions only, no `var` table: _viewRole() can run before
+  // this line has executed, and a hoisted-but-unassigned var would throw there.
+  function _entitledViews() {
+    var out = [];
+    if (isAdmin())       out.push('admin');
+    if (canAnalyst())    out.push('analyst');
+    if (canAccountant()) out.push('accountant');
+    return out;
+  }
+  function _isEntitledView(r) { return _entitledViews().indexOf(r) !== -1; }
   // UI-174, 2026-09-03 — 'accountant' IS a grant now. The comment that stood
   // here claimed exactly that and the line under it still read
   //   isAdmin() ? 'admin' : canAnalyst() ? 'analyst' : 'accountant'
@@ -4433,14 +4459,11 @@
   // V8 could not say "you have no lane on this database" because no such state
   // existed.
   //
-  // The ladder stays as an ORDERING for the view lens (admin >= analyst >=
-  // accountant); it has stopped being the source of entitlement. Every rung is
-  // now a grant it reads for itself, and the absence of all three is a state.
+  // Every view is a grant read for itself (_entitledViews), and the absence of
+  // all three is a state. _entitledRole() is the LANDING view: the first entitled
+  // one in _entitledViews() order, or 'none'.
   function _entitledRole() {
-    return isAdmin()        ? 'admin'
-         : canAnalyst()     ? 'analyst'
-         : canAccountant()  ? 'accountant'
-         : 'none';
+    return _entitledViews()[0] || 'none';
   }
   // _hasAccountantGrant() was deleted here, not wired. It was a pure alias of
   // canAccountant() with zero references anywhere in the repo, and its own
@@ -4448,11 +4471,11 @@
   // never acquired a caller. Two names for one predicate is how the two answers
   // drift; the write paths read canAccountant() directly.
   function _viewRole() {
-    var max = _roleRank(_entitledRole());
-    try { var v = localStorage.getItem('rrv8.viewRole'); if (/^(admin|analyst|accountant)$/.test(v || '') && _roleRank(v) <= max) return v; } catch (_) {}
-    return _entitledRole();   // default = highest entitled (admins land on Admin)
+    // A stored view is honoured only when this database's token entitles it.
+    try { var v = localStorage.getItem('rrv8.viewRole'); if (_isEntitledView(v)) return v; } catch (_) {}
+    return _entitledRole();   // default = first entitled view (a Power User lands on Admin)
   }
-  function _canSwitchRole() { return _roleRank(_entitledRole()) > 0; }   // more than one occupiable view: analyst = analyst+accountant, admin = all three; accountant has only its own
+  function _canSwitchRole() { return _entitledViews().length > 1; }   // only a user holding more than one view (a Power User) gets the switcher
   function syncRoleMenu() {
     var cur = _viewRole();
     var roles = $('haRoles'); if (roles) roles.hidden = !_canSwitchRole();   // bottom-right cluster control
@@ -4460,12 +4483,10 @@
     var hdr = $('userMenuRoles'); if (hdr) hdr.hidden = !_canSwitchRole();    // legacy copy in the (hidden) header
     // Scope to the role menus only — the DB picker menu also uses .umr-opt but
     // marks its own active option (see renderHaDb), so don't clobber it here.
-    // Hide options above the user's entitlement so an analyst sees Analyst + Accountant
-    // (not Administrator) — every visible option is one they can actually switch to.
-    var maxRank = _roleRank(_entitledRole());
+    // Offer only entitled views — every visible option is one they can actually switch to.
     Array.prototype.forEach.call(document.querySelectorAll('#haRoleMenu .umr-opt, #userMenuRoles .umr-opt'), function (b) {
       var r = b.getAttribute('data-role');
-      b.hidden = _roleRank(r) > maxRank;
+      b.hidden = !_isEntitledView(r);
       b.classList.toggle('is-active', r === cur);
     });
   }
@@ -4490,7 +4511,7 @@
   // Expand a collapsible section if it's currently collapsed (runs the real
   // collapse toggle so persisted state stays in sync).
   function _setViewRole(r) {
-    if (_roleRank(r) <= _roleRank(_entitledRole())) { try { localStorage.setItem('rrv8.viewRole', r); } catch (_) {} }
+    if (_isEntitledView(r)) { try { localStorage.setItem('rrv8.viewRole', r); } catch (_) {} }
     // A stale Ask answer belongs to the view you're LEAVING — clear the shared
     // answer band so a prior role's analysis can't ride into the new view. The band
     // lives OUTSIDE #acctTop, so the Data-health tab's top-row hide doesn't cover it.
@@ -4844,8 +4865,8 @@
     if (_un) _un.textContent = name; if (_ue) _ue.textContent = email;
 
     // Role badge: VALC now mints the role name per-db as `rn` (one role
-    // per user), so we label any role accurately — Reconciliation Analyst,
-    // A/P Clerk, etc. Fall back to the strict Administrator signal for older
+    // per user), so we label any role accurately — Administrator, Analyst,
+    // Accountant, Power User (VLC-214). Fall back to the strict Administrator signal for older
     // tokens minted before `rn`; hide it only when neither is available.
     // ⚠ #roleTag exists in no file — kept guarded on purpose (owner 2026-09-14), the
     // same standing as renderReadiness(). Unlike the rest of this function, which
@@ -5201,7 +5222,7 @@
     if (va) va.hidden = firstRun;
     // #adminBrief carries the admin-claude-assistant.html link and was gated by
     // CSS alone. Belt-and-suspenders for the case where #view-admin is present
-    // (an admin previewing a lower-rank view): the CSS rule at
+    // (a Power User switched to the Analyst or Accountant view): the CSS rule at
     // body:not([data-view-role="admin"]) #adminBrief stays as the backup.
     var ab = $('adminBrief');
     if (ab) ab.hidden = !admin;
@@ -5229,10 +5250,10 @@
     if (FORCE_FIRSTRUN) { _firstRun = true; renderRoleView(); return; }
     rrFetch('api/v1/tenant/users').then(function (rows) {
       var list = Array.isArray(rows) ? rows : (rows && rows.users) || [];
-      // GSI Internal is a GSI-staff role — never a customer team member. Drop it
-      // here so it counts nowhere downstream: team/role counts, the inactivity
-      // list, and (via _teamInactive30) the admin AI briefing's Full-tier name.
-      list = list.filter(function (u) { return !u || u.roleName !== 'GSI Internal'; });
+      // VLC-214: no client-side staff filter. This used to drop roleName 'GSI
+      // Internal' here; that role is now "Power User" and a customer may assign it,
+      // so filtering by role name would hide real team members. VALC removes GSI
+      // staff from this list itself, by email domain, before it answers.
       _firstRun = list.length <= 1;
       paintTeamHealth(list);
       renderRoleView();
@@ -7513,7 +7534,8 @@
     var haSignOut = $('haSignOut'); if (haSignOut) haSignOut.addEventListener('click', doSignOut);
     // (Workbar audit pill retired — audit report is now per-company card buttons
     //  only; its old #haAuditRep/#haAuditMenu handler block was removed as dead.)
-    // "View as" role switcher (admins only; gated by syncRoleMenu) — reshapes the
+    // "View as" role switcher (only a user entitled to more than one view, i.e. a
+    // Power User since VLC-214; gated by syncRoleMenu) — reshapes the
     // dashboard in place and re-tiers the AI briefing, no reload.
     var roleBox = $('userMenuRoles');
     if (roleBox) roleBox.addEventListener('click', function (e) {
@@ -7946,7 +7968,11 @@
   var TODO_ROLES = [
     { key: 'admin',   label: 'Administrator', color: '#3b4d72',      can: function () { return caps().adm; } },
     { key: 'analyst', label: 'Analyst',       color: 'var(--violet)', can: function () { return canAnalyst(); } },
-    { key: 'finance', label: 'Accountant',    color: 'var(--blue)',   can: function () { return caps().inv; } }
+    // VLC-214: the Accountant group is the accountant LANE's (perms.ac), not anyone
+    // licensed for inventory -- under flat roles caps().inv handed it to an
+    // Administrator and an Analyst too. (#todoWrap has no markup today, so this
+    // renders nowhere; it is corrected so a restore does not bring the leak back.)
+    { key: 'finance', label: 'Accountant',    color: 'var(--blue)',   can: function () { return canAccountant(); } }
   ];
   var _lastStatusSummary = null;   // last /home/status-summary, so tintPanels() can re-run renderTodo
   // Admin to-do items come from the live admin PANELS, NOT s.admin. This used
@@ -8386,7 +8412,7 @@
   }
   // Material items in this user's scope, role-tagged — shared by the AI prompt
   // and the no-AI fallback. Admin tasks (when admin) rank above reconciliation
-  // components; analyst components are gated to admin/analyst.
+  // components; analyst components are gated to the Analyst view (VLC-214).
   function _briefItems(d) {
     var isAdmin = (typeof caps === 'function') && caps().adm;
     var isAnalyst = (typeof canAnalyst === 'function') && canAnalyst();
@@ -8404,7 +8430,9 @@
     var recon = [];   // in-balance companies — still listed so EVERY company gets a bullet
     d.companies.forEach(function (c, i) {
       var comps = _COMPONENTS
-        .filter(function (k) { var vr = _viewRole(); return !(k.role === 'Analyst' && !(vr === 'analyst' || vr === 'admin')); })   // gate analyst tier to the active view-role
+        // Analyst-tier components only in the Analyst view. VLC-214: this also admitted
+        // the admin view, which under flat roles is the admin Overview only.
+        .filter(function (k) { var vr = _viewRole(); return !(k.role === 'Analyst' && vr !== 'analyst'); })   // gate analyst tier to the active view-role
         .map(function (k) { return { name: k.name, role: k.role, v: c.comp[k.name] }; })
         .filter(function (x) { return Math.abs(x.v) >= 1; })
         .sort(function (a, b) { return Math.abs(b.v) - Math.abs(a.v); });
@@ -9252,8 +9280,11 @@
       //
       // ⚠ NOBODY LOSES ANYTHING TODAY, AND THAT IS MEASURED, NOT ASSUMED:
       // against the live `valc` database no role is tools-only. Administrator,
-      // Analyst and GSI Internal all carry `dmaais` alongside `tools`;
-      // Accountant carries neither. This is pre-emptive, not remedial.
+      // Analyst and GSI Internal all carried `dmaais` alongside `tools`;
+      // Accountant carried neither. This is pre-emptive, not remedial.
+      // VLC-214 (2026-10-27) changed the four roles: Analyst and Power User (the
+      // renamed GSI Internal) carry `dmaais` + `tools`; Administrator and
+      // Accountant carry neither, so the Administrator no longer reaches this shelf.
       //
       // ⚠ `canTools()` IS NOT DEAD and must not be deleted as unused. It still
       // gates ackReminder() at the cardex-snooze call site, where the server

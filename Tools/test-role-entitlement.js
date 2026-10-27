@@ -37,10 +37,9 @@
  *       bottom rung is a grant it reads, and the absence of all three is a state.
  *   A3  _entitledRole() no longer falls through to a bare 'accountant' literal as
  *       its final else. This is A2's defect stated as the shape that caused it.
- *   A4  _roleRank() scores an unknown role BELOW accountant, so _canSwitchRole()
- *       (rank > 0) stays false for 'none' and _viewRole()'s localStorage clamp
- *       (rank <= max) admits no stored role. Without this a tampered
- *       rrv8.viewRole would let a lane-less user pick a view.
+ *   A4  (rewritten for VLC-214) there is NO rank: _roleRank() is gone and
+ *       _canSwitchRole() is "more than one entitled view". The UI-174 version pinned
+ *       the rank's ordering; under flat roles the rank itself is the defect.
  *   A5  The no-grant notice exists, is gated on data-view-role="none", and is NOT
  *       nested inside an admin-only or analyst-only container. That nesting is the
  *       UI-13 regression in a new place: tidying it under #view-admin would hide
@@ -59,6 +58,13 @@
  *   A9  CONTROL: canAnalyst() still has its call sites and the analyst rung still
  *       works. A suite that only proves the new branch says nothing about whether
  *       the ladder that was already working still does.
+ *   F1-F6 (VLC-214, owner ruling 2026-10-27) FOUR FLAT ROLES, executed against the
+ *       shipped code: an Administrator token (adm, dm/ac/tl false) holds only the
+ *       admin view and gets no switcher; an Analyst holds only analyst; an Accountant
+ *       only accountant; a Power User (every flag) holds all three and is offered the
+ *       switcher; a token with no grant is 'none'. A stored rrv8.viewRole the token
+ *       does not entitle is ignored, and _setViewRole() does not store one. Rows F1a-c,
+ *       F1e-g, F2c and F2d were measured RED against the pre-change home.html.
  */
 'use strict';
 const fs   = require('fs');
@@ -137,42 +143,43 @@ check(reachable.length >= 1,
     + ' -- every reference sits inside dead code, which is exactly the defect '
     + '(canAccountant -> _hasAccountantGrant -> nobody) that a raw count could not see');
 
-/* ---- A2/A3: the ladder reads the grant and has a no-grant terminal --------------- */
-const ladder = (function () {
-    const at = code.indexOf('function _entitledRole()');
+/* ---- A2/A3: each view reads its grant, and there is a no-grant terminal ----------
+ * VLC-214: the ladder became a SET. _entitledViews() lists the views the token grants,
+ * each read from its own grant; _entitledRole() is the landing view (first of them) or
+ * 'none'. A2/A3 now read those two bodies; the F block below executes them. */
+function topFn(name) {
+    const at = code.indexOf('function ' + name + '()');
     if (at === -1) return '';
     // The body runs to the next top-level `function ` at the same indent.
     const rest = code.slice(at);
     const end = rest.indexOf('\n  function ', 1);
     return end === -1 ? rest.slice(0, 600) : rest.slice(0, end);
-})();
+}
+const ladder = topFn('_entitledViews');
+const landing = topFn('_entitledRole');
 
-check(ladder !== '', 'A2a _entitledRole() is present', 'could not locate it in home.html');
+check(ladder !== '' && landing !== '', 'A2a _entitledViews() and _entitledRole() are present', 'could not locate them in home.html');
 check(/canAccountant\s*\(\s*\)/.test(ladder),
-    'A2b _entitledRole() consults canAccountant()',
-    'the bottom rung is not reading its own grant:\n         ' + ladder.replace(/\s+/g, ' ').slice(0, 200));
-check(/['"]none['"]/.test(ladder),
+    'A2b _entitledViews() consults canAccountant()',
+    'the accountant view is not reading its own grant:\n         ' + ladder.replace(/\s+/g, ' ').slice(0, 200));
+check(/['"]none['"]/.test(landing),
     "A2c _entitledRole() can return 'none'",
     'there is no no-grant state, so a token with neither lane still resolves to a view it was not granted');
 // The defect shape: `: 'accountant'` as the final else, with nothing after it.
-check(!/\?\s*['"]analyst['"]\s*:\s*['"]accountant['"]\s*;?\s*\}?\s*$/m.test(ladder.trim()),
-    "A3  the ladder no longer falls through to a bare 'accountant' else-branch",
-    'the else-branch is back: ' + ladder.replace(/\s+/g, ' ').slice(0, 200));
+check(!/\?\s*['"]analyst['"]\s*:\s*['"]accountant['"]\s*;?\s*\}?\s*$/m.test(landing.trim()),
+    "A3  the landing view no longer falls through to a bare 'accountant' else-branch",
+    'the else-branch is back: ' + landing.replace(/\s+/g, ' ').slice(0, 200));
 
-/* ---- A4: an unknown role outranks nothing --------------------------------------- */
-const rankLine = (code.match(/function\s+_roleRank\s*\([^)]*\)\s*\{[^}]*\}/) || [''])[0];
-check(/-1|-\s*1/.test(rankLine),
-    'A4a _roleRank() scores an unknown role below accountant (negative)',
-    'got: ' + rankLine.replace(/\s+/g, ' '));
-// Exercise it rather than reading it: build the function and run it.
-let rank = null;
-try { rank = eval('(' + rankLine.replace(/^function\s+_roleRank/, 'function') + ')'); } catch (_) {}
-check(rank && rank('none') < 0 && rank('accountant') === 0 && rank('analyst') === 1 && rank('admin') === 2,
-    'A4b _roleRank() evaluated: none < accountant < analyst < admin',
-    rank ? JSON.stringify(['none', 'accountant', 'analyst', 'admin'].map(rank)) : 'could not evaluate _roleRank');
-check(rank && !(rank('none') > 0),
-    "A4c _canSwitchRole()'s test (rank > 0) is false for 'none'",
-    'a lane-less user would be offered a role switcher');
+/* ---- A4: no rank (VLC-214) ------------------------------------------------------ */
+// The UI-174 version of A4 pinned _roleRank()'s ordering. Roles are flat now and a
+// rank is exactly the defect: it let a higher view imply the lower ones. So A4 asserts
+// the rank is GONE and that the switcher counts entitled views instead.
+check(!/function\s+_roleRank\s*\(/.test(code) && !/_roleRank\s*\(/.test(code),
+    'A4a there is no _roleRank() any more (no ladder to climb)',
+    'a rank is back -- a rank lets one view imply another, which VLC-214 removed');
+check(/function\s+_canSwitchRole\s*\(\s*\)\s*\{\s*return\s+_entitledViews\(\)\.length\s*>\s*1\s*;/.test(code),
+    'A4b _canSwitchRole() is "more than one entitled view"',
+    (code.match(/function\s+_canSwitchRole[^\n]*/) || [''])[0]);
 
 /* ---- A5: the notice exists, is gated, and is not buried ------------------------- */
 const noticeAt = html.indexOf('id="noGrantNotice"');
@@ -242,12 +249,144 @@ const analystCalls = callSites('canAnalyst');
 check(analystCalls >= 7,
     'A9a CONTROL: canAnalyst() still has its call sites',
     'found ' + analystCalls + ' (7 before this change) -- the analyst lane regressed');
-check(/canAnalyst\s*\(\s*\)\s*\?\s*['"]analyst['"]/.test(ladder),
-    'A9b CONTROL: the analyst rung still resolves through canAnalyst()',
-    'the ladder stopped reading the lane that was already wired');
-check(/isAdmin\s*\(\s*\)\s*\?\s*['"]admin['"]/.test(ladder),
-    'A9c CONTROL: admin is still the top rung',
-    'the ladder lost its admin branch');
+check(/if\s*\(\s*canAnalyst\s*\(\s*\)\s*\)\s*out\.push\(\s*['"]analyst['"]\s*\)/.test(ladder),
+    'A9b CONTROL: the analyst view still resolves through canAnalyst()',
+    'the view set stopped reading the lane that was already wired');
+check(/if\s*\(\s*isAdmin\s*\(\s*\)\s*\)\s*out\.push\(\s*['"]admin['"]\s*\)/.test(ladder),
+    'A9c CONTROL: the admin view still resolves through isAdmin()',
+    'the view set lost its admin branch');
+
+/* ---- F: VLC-214, FOUR FLAT ROLES -- executed, not grepped -------------------------
+ * Owner ruling 2026-10-27: Administrator, Analyst and Accountant each see ONLY their
+ * own view. Power User holds every flag, sees all three, and is the only role with a
+ * switcher. VALC mints the four as:
+ *   Administrator  t.adm, perms.ij, perms.rs   (dm, ac, tl false)
+ *   Analyst        perms.dm, perms.tl          (ac false)
+ *   Accountant     perms.ac                    (dm false)
+ *   Power User     every flag
+ * Before this, admin sat on top of a ladder (admin >= analyst >= accountant): canAnalyst,
+ * canAccountant and canTools all OR'd isAdmin() in, so an Administrator was entitled to
+ * every view and got the switcher, and an Analyst could switch to Accountant.
+ *
+ * The block from isAdmin() up to applyViewRole() and the _setViewRole() function are
+ * sliced out of home.html and run against stubbed DOM and storage, so these rows test
+ * the shipped code and not a restatement of it. */
+const SLICE_START = '  function isAdmin() {', SLICE_END = '  function applyViewRole() {';
+function uniqueAt(anchor) {
+    const i = html.indexOf(anchor);
+    if (i < 0 || html.indexOf(anchor, i + 1) >= 0) throw new Error('anchor not found exactly once: ' + anchor);
+    return i;
+}
+function braceBody(at) {
+    let i = html.indexOf('{', at), depth = 0;
+    for (; i < html.length; i++) {
+        if (html[i] === '{') depth++;
+        else if (html[i] === '}' && --depth === 0) return html.slice(at, i + 1);
+    }
+    throw new Error('unbalanced braces');
+}
+const LENS_SRC = html.slice(uniqueAt(SLICE_START), uniqueAt(SLICE_END));
+const SETVIEW_SRC = braceBody(uniqueAt('  function _setViewRole(r) {'));
+
+function lens(db, stored) {
+    const store = { 'rrv8.viewRole': stored == null ? null : stored };
+    const els = {};
+    const mk = id => (els[id] = els[id] || { id: id, hidden: true, textContent: '' });
+    const opts = [];
+    ['haRoleMenu', 'userMenuRoles'].forEach(menu => ['admin', 'analyst', 'accountant'].forEach(r => {
+        const cls = new Set();
+        opts.push({ menu: menu, role: r, hidden: false,
+            getAttribute: a => (a === 'data-role' ? r : null),
+            classList: { toggle: (c, on) => { if (on) cls.add(c); else cls.delete(c); } } });
+    }));
+    const ctx = {
+        __db: db,
+        activeDb: function () { return ctx.__db; },
+        $: mk,
+        localStorage: {
+            getItem: k => (k in store ? store[k] : null),
+            setItem: (k, v) => { store[k] = String(v); }
+        },
+        document: { querySelectorAll: () => opts },
+        applyViewRole: function () {}, renderAiBriefing: function () {}, _acctAsking: false
+    };
+    new Function('ctx', 'with (ctx) {\n' + LENS_SRC + '\n' + SETVIEW_SRC + '\n'
+        + 'ctx.api = { canAnalyst: canAnalyst, canAccountant: canAccountant, canTools: canTools,'
+        + ' viewRole: _viewRole, canSwitch: _canSwitchRole, sync: syncRoleMenu, setView: _setViewRole };\n}')(ctx);
+    const api = ctx.api;
+    return {
+        api: api, store: store,
+        // What a person sees: the switcher's visibility and the options it offers.
+        switcher: () => { api.sync(); return !mk('haRoles').hidden; },
+        legacySwitcher: () => { api.sync(); return !mk('userMenuRoles').hidden; },
+        offered: () => { api.sync(); return opts.filter(o => o.menu === 'haRoleMenu' && !o.hidden).map(o => o.role); }
+    };
+}
+const TOK = {
+    administrator: { n: 'DB', t: { adm: true },  perms: { ij: true, rs: true, dm: false, ac: false, tl: false, ite: false, prs: false } },
+    analyst:       { n: 'DB', t: { adm: false }, perms: { dm: true, tl: true, ac: false } },
+    accountant:    { n: 'DB', t: { adm: false }, perms: { ac: true, dm: false, tl: false } },
+    powerUser:     { n: 'DB', t: { adm: true },  perms: { ij: true, rs: true, dm: true, ac: true, tl: true, ite: true, prs: true }, rn: 'Power User' },
+    noRole:        { n: 'DB', t: { adm: false }, perms: { dm: false, ac: false, tl: false } }
+};
+const VIEWS = ['admin', 'analyst', 'accountant'];
+const viewsFor = (db) => VIEWS.filter(v => lens(db, v).api.viewRole() === v);
+console.log('\nVLC-214 flat roles (executed)');
+
+// Administrator
+let L = lens(TOK.administrator);
+check(L.api.canAnalyst() === false, 'F1a Administrator: canAnalyst() is false (admin no longer implies the analyst lane)');
+check(L.api.canAccountant() === false, 'F1b Administrator: canAccountant() is false');
+check(L.api.canTools() === false, 'F1c Administrator: canTools() is false');
+check(L.api.viewRole() === 'admin', "F1d Administrator lands on the admin view", 'got ' + L.api.viewRole());
+check(JSON.stringify(viewsFor(TOK.administrator)) === '["admin"]',
+    'F1e Administrator: a stored analyst/accountant view is refused, only admin is reachable',
+    'reachable: ' + JSON.stringify(viewsFor(TOK.administrator)));
+check(L.switcher() === false && L.legacySwitcher() === false, 'F1f Administrator gets no switcher (either copy)');
+L = lens(TOK.administrator);
+L.api.setView('analyst');
+check(L.store['rrv8.viewRole'] == null, 'F1g Administrator: choosing the analyst view is not written to storage',
+    'stored ' + L.store['rrv8.viewRole']);
+
+// Analyst
+L = lens(TOK.analyst);
+check(L.api.canAccountant() === false, 'F2a Analyst: canAccountant() is false');
+check(L.api.viewRole() === 'analyst', 'F2b Analyst lands on the analyst view', 'got ' + L.api.viewRole());
+check(JSON.stringify(viewsFor(TOK.analyst)) === '["analyst"]',
+    'F2c Analyst: a stored accountant (or admin) view is refused',
+    'reachable: ' + JSON.stringify(viewsFor(TOK.analyst)));
+check(L.switcher() === false, 'F2d Analyst gets no switcher');
+check(L.api.canTools() === true, 'F2e CONTROL: Analyst still holds Tools');
+
+// Accountant
+L = lens(TOK.accountant);
+check(L.api.viewRole() === 'accountant', 'F3a Accountant lands on the accountant view', 'got ' + L.api.viewRole());
+check(JSON.stringify(viewsFor(TOK.accountant)) === '["accountant"]', 'F3b Accountant: no other view is reachable',
+    'reachable: ' + JSON.stringify(viewsFor(TOK.accountant)));
+check(L.switcher() === false, 'F3c Accountant gets no switcher');
+
+// Power User
+L = lens(TOK.powerUser);
+check(L.api.viewRole() === 'admin', 'F4a Power User lands on the first entitled view (admin)', 'got ' + L.api.viewRole());
+check(JSON.stringify(viewsFor(TOK.powerUser)) === JSON.stringify(VIEWS), 'F4b Power User can reach all three views',
+    'reachable: ' + JSON.stringify(viewsFor(TOK.powerUser)));
+check(L.switcher() === true && L.legacySwitcher() === true, 'F4c Power User gets the switcher');
+check(JSON.stringify(L.offered()) === JSON.stringify(VIEWS), 'F4d and it offers all three views',
+    'offered: ' + JSON.stringify(L.offered()));
+L.api.setView('accountant');
+check(L.store['rrv8.viewRole'] === 'accountant' && L.api.viewRole() === 'accountant',
+    'F4e Power User: choosing a view is stored and honoured');
+
+// Two lanes, no admin: the switcher follows the count of entitled views, not a rank.
+L = lens({ n: 'DB', t: { adm: false }, perms: { dm: true, ac: true } });
+check(L.switcher() === true && JSON.stringify(L.offered()) === '["analyst","accountant"]',
+    'F5  analyst + accountant grants (no admin): switcher offers exactly those two',
+    'switcher ' + L.switcher() + ', offered ' + JSON.stringify(L.offered()));
+
+// No role: the no-grant state, no switcher, and a tampered store admits nothing.
+L = lens(TOK.noRole, 'admin');
+check(L.api.viewRole() === 'none' && L.switcher() === false,
+    "F6  no grant: 'none', no switcher, a stored 'admin' is ignored", 'got ' + L.api.viewRole());
 
 console.log('\n' + (failures === 0
     ? 'ALL CHECKS PASSED'

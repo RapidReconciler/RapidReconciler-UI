@@ -22,7 +22,10 @@
  * Both functions under test are extracted from home.html verbatim and called.
  *
  * WHAT THIS ASSERTS.
- *   A1  canTools() honours the grant: admin always, perms.tl true, nothing else.
+ *   A1  canTools() honours the grant: perms.tl true and nothing else. VLC-214
+ *       (2026-10-27) made roles flat, so an Administrator (tl=false) no longer holds
+ *       it by being an admin; a Power User holds it on its own flag. A1a and the
+ *       Administrator row of A8 were measured RED against the pre-change home.html.
  *   A2  canTools() FAILS CLOSED on every shape of missing claim -- no perms
  *       block, no active db, tl absent, tl not a boolean true.
  *   A3  canTools() reads `tl` and NOT `su`. Asserted by giving a db entry su=true
@@ -96,8 +99,12 @@ function build(src, extra) {
 const S = build(canToolsSrc + '\n' + visibleSrc);
 
 /* ---- A1: the grant is honoured ------------------------------------------------- */
-S.setDb({ t: { adm: true }, perms: {} });
-check(S.canTools() === true, 'A1a an admin always holds it');
+// VLC-214 (owner 2026-10-27): roles are FLAT. An Administrator is minted tl=false
+// and no longer holds Tools by being an admin; Power User holds it on its own flag.
+S.setDb({ t: { adm: true }, perms: { ij: true, rs: true, dm: false, ac: false, tl: false } });
+check(S.canTools() === false, 'A1a an Administrator (tl=false) does NOT hold it -- admin implies no other lane');
+S.setDb({ t: { adm: true }, perms: { dm: true, ac: true, tl: true } });
+check(S.canTools() === true, 'A1e a Power User (every flag) holds it');
 S.setDb({ t: { adm: false }, perms: { tl: true } });
 check(S.canTools() === true, 'A1b a non-admin with perms.tl holds it');
 S.setDb({ t: { adm: false }, perms: { tl: false } });
@@ -169,10 +176,10 @@ if (mutated === canToolsSrc) {
     check(mutantGrants,
         'A7a the mutant DOES grant on perms.su (so A3 is a real assertion)',
         'the mutation changed nothing measurable -- A3 would pass either way');
-    M.setDb({ t: { adm: true }, perms: {} });
-    check(M.canTools() === true,
-        'A7b the admin path is unaffected by the mutant',
-        'the defect never touched the admin rung; if this moves, the control is too broad');
+    M.setDb({ t: { adm: false }, perms: { tl: false } });
+    check(M.canTools() === false,
+        'A7b the mutant still refuses a token with neither su nor tl',
+        'the mutant should differ from the shipped gate only on su; if this moves, the control is too broad');
 }
 
 /* ---- A8: WHO REACHES THE SHELF -- AND THE RULING CHANGED 2026-09-15 ------------- */
@@ -236,7 +243,10 @@ const matrix = [
     ['tools-only (tl, no dm) -- the dead-control case', { t: { adm: false }, perms: { tl: true } }, false],
     ['accountant, no tl',                  { t: { adm: false }, perms: { ac: true } },            false],
     ['no lane at all',                     { t: { adm: false }, perms: {} },                      false],
-    ['admin',                              { t: { adm: true },  perms: {} },                      true],
+    // VLC-214: an Administrator holds the admin lane only (dm=false), so the analyst
+    // shelf is not theirs. Power User carries dm and reaches it.
+    ['Administrator (dm=false) -- flat roles', { t: { adm: true }, perms: { dm: false, tl: false } }, false],
+    ['Power User (every flag)',            { t: { adm: true },  perms: { dm: true, ac: true, tl: true } }, true],
 ];
 for (const [label, db, want] of matrix) {
     const got = REACHES(db);
