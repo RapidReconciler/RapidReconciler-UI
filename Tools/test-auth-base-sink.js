@@ -361,6 +361,7 @@ function bootLogin(mutateConfig) {
   ctx.AbortController = function () { this.signal = {}; this.abort = function () {}; };
   ctx.setTimeout = setTimeout; ctx.clearTimeout = clearTimeout;
   ctx.setInterval = () => 0; ctx.clearInterval = () => {};
+  ctx.addEventListener = () => {};   // UI-236: the page listens for window 'pageshow' (a Back restore)
   ctx.fetch = (u) => { fetched.push(String(u)); return Promise.reject(new TypeError('stub: no network')); };
   vm.createContext(ctx);
 
