@@ -154,8 +154,10 @@
     if (s.executionId == null) return assign(base, { state: 'warn', fact: 'No JD Edwards import has run for this database yet.', todo: 'Ask ' + IT + ' to check that the RapidReconciler import is deployed and scheduled on the database server.', tech: tech || 'No catalog execution for this database.' });
     var st = String(s.status || '');
     if (/^(failed|ended unexpectedly)$/i.test(st)) return assign(base, { state: 'fail', fact: 'The last import, started ' + fmtWhen(s.startTime) + ', failed.', todo: 'Give the downloaded diagnostics to ' + IT + '. They list the errors the import recorded.', tech: tech });
-    if (/^cancel/i.test(st)) return assign(base, { state: 'warn', fact: 'The last import, started ' + fmtWhen(s.startTime) + ', was cancelled before it finished.', todo: 'The next scheduled refresh runs it again. If imports keep stopping, give the downloaded diagnostics to ' + IT + '.', tech: tech });
-    if (/^(running|created|pending|stopping)$/i.test(st)) return assign(base, { state: 'ok', fact: 'An import is running now (started ' + fmtWhen(s.startTime) + ').', todo: '', tech: tech });
+    // UI-217, owner ruling 2026-10-27: VALC's colours on both sides (DatabaseHealthService.ssisRule).
+    // A cancelled import is red, like a failed one; a running import is amber until it finishes.
+    if (/^cancel/i.test(st)) return assign(base, { state: 'fail', fact: 'The last import, started ' + fmtWhen(s.startTime) + ', was cancelled before it finished.', todo: 'The next scheduled refresh runs it again. If imports keep stopping, give the downloaded diagnostics to ' + IT + '.', tech: tech });
+    if (/^(running|created|pending|stopping)$/i.test(st)) return assign(base, { state: 'warn', fact: 'An import is running now (started ' + fmtWhen(s.startTime) + ').', todo: 'Run the checks again once it finishes. If it is still running hours later, give the downloaded diagnostics to ' + IT + '.', tech: tech });
     if (/^(succeeded|completed)$/i.test(st)) {
       var took = fmtMinutes(s.durationSeconds);
       return assign(base, { state: 'ok', fact: 'The last import finished ' + fmtWhen(s.endTime) + (took ? ' and took ' + took : '') + '.', todo: '', tech: tech });
