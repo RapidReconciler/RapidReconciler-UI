@@ -18,13 +18,15 @@
   The model-approval endpoint is read for its three counts only (report1Count,
   report3Count, report3GlClassCount); the retired sign-off fields are ignored.
 
-  OPEN CONTRADICTION, NOT A BUG IN THIS FILE (logged as UI-109). accounting-
-  dmaais.html renders "Not yet approved - sign off" and "Model changed since
-  approval - re-approve" as links to THIS page, and the agent still serves
-  POST /inventory/integrity/model-approval - but no page in RRV8 posts it. So the
-  product asks the analyst to sign the model off here and offers no control to do
-  it. Restoring sign-off is the owner's call, not a drip fix; do not add a button
-  without that ruling.
+  RESOLVED 2026-10-26 (UI-109, built as UI-237). accounting-dmaais.html used to
+  render "Not yet approved - sign off" and "Model changed since approval -
+  re-approve" as links to THIS page, which has no control to do either; the agent
+  still serves POST /inventory/integrity/model-approval and no page in RRV8 posts
+  it. Owner ruling: "Reword, no action". The badge now states the three states as
+  information ("Model approved", "Model changed since it was last approved",
+  "Model not approved yet") and links nowhere. Restoring sign-off is a new
+  feature and the owner's call; do not add a button without that ruling.
+  Tools/test-dmaais-verdict.js holds the line.
 
   Layout: the AI verdict leads, the excluded GL classes surface only when there
   are any (quiet when clean), and the model baseline mapping table sits last as
@@ -763,7 +765,8 @@
   // on, which means one recording position answers for all of them.
   function _aiExplain(prompt, ctx) {
     var url = 'api/v1/ai/explain' + (ctx ? ('?ctx=' + ctx) : '');
-    return rrFetch(url, { method: 'POST', body: { prompt: prompt } })
+    // VLC-186: declare the tier the prompt was masked with; VALC refuses one above the plan.
+    return rrFetch(url, { method: 'POST', body: { prompt: prompt, level: _aiTier() } })
       .then(function (r) { return (r && r.text) ? String(r.text).trim() : ''; });
   }
 
@@ -946,8 +949,10 @@
     _aiExplain(prompt, (window.RRV8 && RRV8.aiCtx)
       ? RRV8.aiCtx('modelexcl-' + _aiTier(), _company, '') : '').then(function (txt) {
       if (ans) ans.textContent = txt || 'No assessment came back — try again.';
-    }).catch(function () {
-      if (ans) ans.textContent = 'Could not reach AI just now. Try again in a moment.';
+    }).catch(function (err) {
+      // VLC-183: a slow answer says so; anything else keeps the old wording.
+      if (ans) ans.textContent = (window.RRV8 && RRV8.aiTimeout && RRV8.aiTimeout(err)) || (window.RRV8 && RRV8.aiRefusal && RRV8.aiRefusal(err))
+        || 'Could not reach AI just now. Try again in a moment.';
     });
   }
 

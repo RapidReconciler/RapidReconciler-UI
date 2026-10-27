@@ -111,7 +111,8 @@ function sliceFn(src, header, what) {
 const RRAI_SRC = sliceBetween(
   config,
   'window.RRAI = (function () {',
-  '    norm: norm, get: get, set: setTier, label: function (t) { return LABELS[norm(t) || \'full\']; }\n  };\n})();',
+  // VLC-186 added plan(), setPlan(), primePlan() and choice() to the returned object.
+  '    label: function (t) { return LABELS[norm(t) || \'full\']; }\n  };\n})();',
   'RRAI');
 
 const PF_START = "(function () {\n  'use strict';\n\n  // \u26D4 PLACEHOLDER \u2014 THE OWNER OWNS THIS WORDING";

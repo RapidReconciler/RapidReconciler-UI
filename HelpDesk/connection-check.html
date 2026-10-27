@@ -24,7 +24,8 @@
                         the browser can't see (server -> SQL DB, server -> GSI).
     C  Sign-in service  RR_CONFIG.authBase /api/v1/auth/ping (CORS-permitted).
 
-  Agent base (B) resolves with no user input: ?agent= -> dev test-agent base
+  Agent base (B) resolves with no user input: ?agent= -> RRDB.agentBase() (the
+  signed-in session's agent, UI-233) -> dev test-agent base
   -> the page's own origin (in prod the agent serves the V8 app, so
   /comms-check is same-origin). When the app server is fully down the page is
   reached from GSI's public edge and the agent can't be hit — that's the
@@ -122,6 +123,9 @@
   .probe-title { font-weight: 700; color: var(--navy); font-size: 14.5px; }
   .probe-target { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-soft); word-break: break-all; }
   .probe-result { font-size: 12.5px; color: var(--text-muted); margin-top: 3px; }
+  /* UI-235: where leg 2's address came from. Neutral on purpose: it explains the result, it is not one. */
+  .probe-src { font-size: 12px; color: var(--text-soft); margin-top: 3px; }
+  .probe-src:empty { display: none; }
   .probe[data-state="pass"] .probe-result { color: var(--green-deep); }
   .probe[data-state="warn"] .probe-result { color: var(--orange-deep); }
   .probe[data-state="fail"] .probe-result { color: var(--red); }
@@ -233,6 +237,7 @@
   .dbt-sub { color: var(--text-muted); font-family: 'JetBrains Mono', monospace; font-size: 11px; }
   .dbt-reach { font-weight: 600; color: var(--text-muted); }
   .dbt-reach.ok { color: var(--green-deep); }
+  .dbt-reach.warn { color: var(--orange-deep); }
   .dbt-reach.fail { color: var(--red); }
 
   /* Live network diagram */
@@ -307,6 +312,7 @@
         <div class="probe-title"><span class="leg-num">2</span>Your RapidReconciler Application Server</div>
         <div class="probe-target" id="targetB"></div>
         <div class="probe-result" id="resultB">Waiting&hellip;</div>
+        <div class="probe-src" id="sourceB"></div>
         <div class="scheck-list" id="serverList"></div>
         <div class="dbtable" id="dbTable"></div>
       </div>
@@ -334,7 +340,8 @@
   <section class="netpath" id="netpath">
     <h2 class="netpath-title">Network path</h2>
     <p class="netpath-intro">Where the connection breaks, at a glance. Each numbered leg matches the
-      numbered check above &mdash; green is good, amber needs a look, red is the break, grey wasn&rsquo;t reached.</p>
+      numbered check above &mdash; green is good, amber needs a look, red is the break, grey wasn&rsquo;t reached.
+      Legs 4 and 5 are checked by your RapidReconciler server, so they stay grey until leg 2 reaches it.</p>
     <div class="netdiagram" id="netdiagram" role="img" aria-label="Network path diagram"></div>
     <div class="netdiagram-legend">
       <span><i class="dot ok"></i>Reachable</span>
@@ -403,8 +410,87 @@
   // serves the V8 app, so /comms-check is same-origin). No user input:
   // reaching the agent IS the "PC -> your server" test, and its
   // response carries the server's own identity + the server-side hops.
-  var COMMS_BASE = params.get('agent') || envGet('testAgentBase')
-                || (here.protocol.indexOf('http') === 0 ? (here.protocol + '//' + here.host) : '');
+  //
+  // UI-233 (owner 2026-10-26): through RRDB.agentBase() FIRST, the resolver every V8 page
+  // uses. It answers with the signed-in session's agent for the active database (the
+  // token's `ip`, https), else the same testAgentBase -> page-origin chain as below. Before
+  // this the page read testAgentBase directly, and on the dev box that is
+  // http://localhost:34537, which the agents have refused since they went TLS (VLC-147):
+  // HTTP 400 "requires TLS" with no CORS header, so leg 2 went red (and legs 4 and 5 grey)
+  // while the admin Troubleshooting page, which reads the session, reported every leg ok.
+  // The two later fallbacks stay for an old cached config.js that has no RRDB.
+  //
+  // UI-235 (2026-10-26). In the owner's own signed-in browser this still read "localhost" and
+  // failed at once, while a headless run with a token went green. The page could not say WHICH
+  // source it had taken the address from, so neither could anyone reading it. Now it resolves
+  // in a fixed order and names the source under leg 2 (sourceB):
+  //   link        ?agent= on the URL
+  //   session     this browser's V8 sign-in, for its active database
+  //   remembered  the last server this browser signed in to (rrv8.lastServer, owner ruling
+  //               2026-10-26 Q7): the case the page is opened for, someone who cannot sign in
+  //   dev         this box's configured test agent
+  //   page        this page's own address
+  // A session whose active database carries no address is said too: that is a VALC setting,
+  // not this PC's network.
+  var RRDBX = window.RRDB || {};
+  var SESSION_DBS = (typeof RRDBX.dbs === 'function') ? (RRDBX.dbs() || []) : [];
+  var SESSION_DB = SESSION_DBS.length && typeof RRDBX.name === 'function' ? RRDBX.name() : '';
+  var REMEMBERED = (typeof RRDBX.lastServer === 'function') ? RRDBX.lastServer() : null;
+  var COMMS = (function () {
+    if (params.get('agent')) return { base: params.get('agent'), src: 'link' };
+    var s = (typeof RRDBX.sessionBase === 'function') ? RRDBX.sessionBase()
+          : (typeof RRDBX.agentBase === 'function' ? RRDBX.agentBase() : '');   // an old cached config.js
+    if (s) return { base: s, src: 'session' };
+    if (REMEMBERED) return { base: REMEMBERED.base, src: 'remembered' };
+    var t = envGet('testAgentBase');
+    if (t) return { base: t, src: 'dev' };
+    return { base: here.protocol.indexOf('http') === 0 ? (here.protocol + '//' + here.host) : '', src: 'page' };
+  })();
+  var COMMS_BASE = COMMS.base;
+
+  // VLC-210 (owner ruling 2026-10-26, Q8): the servers VALC has on file for this database (its Topology card),
+  // from GET api/v1/tenant/databases/{uuid}/servers: role, name, address, and which one hosts the database.
+  // Only with a sign-in, whose active database names its uuid. VALC answers any signed-in user of the client
+  // (owner ruling 2026-10-27), and a refusal (a database not on the account) is said under the address list
+  // rather than read as "no servers". Any other failure says nothing:
+  // the agent's own reply, or UI-235's remembered address, is still the page's answer.
+  function loadTopology() {
+    var db = (typeof RRDBX.active === 'function') ? (RRDBX.active() || {}) : {};
+    var tok = null;
+    try { tok = localStorage.getItem('rrv8.token'); } catch (_) {}
+    if (!db.uuid || !tok || typeof RRDBX.valcFetch !== 'function') return Promise.resolve(null);
+    return RRDBX.valcFetch('api/v1/tenant/databases/' + encodeURIComponent(db.uuid) + '/servers',
+        { headers: { 'Authorization': 'Bearer ' + tok }, cache: 'no-store' })
+      .then(function (r) {
+        if (r.status === 403) {
+          return r.json().catch(function () { return {}; })
+            .then(function (j) { return { refused: (j && j.message) || 'VALC did not share the addresses on file.' }; });
+        }
+        return r.ok ? r.json().then(function (list) { return { servers: Array.isArray(list) ? list : [] }; }) : null;
+      })
+      .catch(function () { return null; });
+  }
+  function sourceText() {
+    var noAddr = SESSION_DBS.length && COMMS.src !== 'session' && COMMS.src !== 'link';
+    var lead = {
+      link: 'Address from this page’s link (?agent=).',
+      session: 'Address from your sign-in on this browser' + (SESSION_DB ? ' (' + SESSION_DB + ').' : '.'),
+      remembered: 'Address remembered from the last sign-in on this browser'
+        + (REMEMBERED && REMEMBERED.db ? ' (' + REMEMBERED.db + ')' : '') + '.',
+      dev: 'Address from this server’s test configuration; no sign-in was found on this browser at '
+        + here.host + '.',
+      page: 'Address taken from this page’s own address; no sign-in was found on this browser at '
+        + here.host + '.'
+    }[COMMS.src];
+    if (noAddr) {
+      lead += ' You are signed in, but the database ' + (SESSION_DB || 'you picked')
+        + ' has no server address set; ask your administrator to check its App Server in VALC.';
+    } else if (COMMS.src === 'dev' || COMMS.src === 'page') {
+      lead += ' If you signed in to RapidReconciler at a different address (for example 127.0.0.1 instead of '
+        + 'localhost), open this check from that same address.';
+    }
+    return lead;
+  }
 
   function $(id) { return document.getElementById(id); }
   function hostLabel(u) { try { return new URL(u).host; } catch (_) { return u; } }
@@ -425,54 +511,86 @@
   }
   function codeify(s) { return '<code>' + escapeHtml(s) + '</code>'; }
 
+  // ---- Two marks per probe: slow, then give up (UI-216) ---------------
+  // Until UI-216 each probe had ONE deadline (8 s; 12 s for /comms-check)
+  // and anything past it read "often a firewall silently dropping the
+  // connection", in red, so a server that answered in 9 s was reported as
+  // blocked. UI-213 fixed the same reading in V8 (Agent ValcLineProbe): a
+  // slow answer is amber with the elapsed time, a failed connect is red
+  // with the firewall advice. Here:
+  //   answered after the slow mark  -> amber, elapsed time, "not a firewall"
+  //   no answer by the give-up mark -> red, firewall advice
+  // SLOW_MS matches ValcLineProbe's 6 s request timeout. /comms-check runs
+  // its own server-side checks before it answers, so it gets the 12 s this
+  // page always allowed it. Tests: Tools/test-connection-check-verdicts.js.
+  var SLOW_MS = 6000;
+  var SERVER_SLOW_MS = 12000;
+  var GIVE_UP_MS = 30000;
+
+  function secs(ms) { return (ms % 1000 === 0) ? (ms / 1000) + ' s' : ms + ' ms'; }
+  function waitingText(slowMs) {
+    return 'No answer yet after ' + secs(slowMs) + '. Still waiting (up to ' + secs(GIVE_UP_MS) + ')…';
+  }
+
   // ---- A reachability probe (A and C) --------------------------------
   // no-cors fetch resolves (opaque) if ANY HTTP response came back —
   // even an error status — and rejects only on a true network failure
   // (DNS, refused, dropped, TLS). Exactly the "reachable?" signal, with
-  // no CORS dependency. Timing is a soft hint: fast reject ~ DNS /
-  // refused; reject at the timeout ~ a firewall silently dropping.
+  // no CORS dependency. Timing is a hint: fast reject ~ DNS / refused;
+  // an answer after the slow mark ~ a slow server or network, route open;
+  // no answer by the give-up mark ~ a firewall silently dropping.
   function probe(url, opts) {
     opts = opts || {};
+    var slowMs = opts.slowAfter || SLOW_MS;
     var now = function () { return (window.performance && performance.now) ? performance.now() : Date.now(); };
     var t0 = now();
     var ctrl = new AbortController();
-    var timer = setTimeout(function () { ctrl.abort(); }, opts.timeout || 8000);
+    var timer = setTimeout(function () { ctrl.abort(); }, GIVE_UP_MS);
+    var slowTimer = setTimeout(function () { if (opts.onSlow) opts.onSlow(slowMs); }, slowMs);
     var fetchOpts = { signal: ctrl.signal, cache: 'no-store' };
     if (opts.cors) { fetchOpts.headers = { 'Accept': 'application/json' }; }
     else { fetchOpts.mode = 'no-cors'; }
     var bust = url + (url.indexOf('?') >= 0 ? '&' : '?') + 'rrcc=' + Date.now();
     return fetch(bust, fetchOpts).then(function (res) {
-      clearTimeout(timer);
-      return { ok: true, ms: Math.round(now() - t0), status: (opts.cors ? res.status : 0),
+      clearTimeout(timer); clearTimeout(slowTimer);
+      var ms = Math.round(now() - t0);
+      return { ok: true, ms: ms, slow: ms >= slowMs, slowAfter: slowMs,
+               status: (opts.cors ? res.status : 0),
                serverError: opts.cors && res.status >= 500 };
     }).catch(function (err) {
-      clearTimeout(timer);
-      return { ok: false, ms: Math.round(now() - t0), aborted: (err && err.name === 'AbortError'),
+      clearTimeout(timer); clearTimeout(slowTimer);
+      return { ok: false, ms: Math.round(now() - t0), slowAfter: slowMs,
+               aborted: (err && err.name === 'AbortError'),
                err: (err && err.message) || String(err) };
     });
   }
 
   // ---- Probe B: the agent comms-check (JSON) -------------------------
-  function commsCheck() {
+  function commsCheck(onSlow) {
     if (!COMMS_BASE) return Promise.resolve({ ok: false, noBase: true });
     var now = function () { return (window.performance && performance.now) ? performance.now() : Date.now(); };
     var t0 = now();
     var ctrl = new AbortController();
-    var timer = setTimeout(function () { ctrl.abort(); }, 12000);
+    var timer = setTimeout(function () { ctrl.abort(); }, GIVE_UP_MS);
+    var slowTimer = setTimeout(function () { if (onSlow) onSlow(SERVER_SLOW_MS); }, SERVER_SLOW_MS);
     // Ask the agent to resolve the PC-side hosts too (GSI edge + sign-in),
     // so the network-path list can show their IPs from the server's view.
     var resolveCsv = [hostOnly(ANCHOR), AUTH_BASE ? hostOnly(AUTH_BASE) : ''].filter(Boolean).join(',');
     return fetch(trimSlash(COMMS_BASE) + '/comms-check?resolve=' + encodeURIComponent(resolveCsv) + '&rrcc=' + Date.now(),
         { signal: ctrl.signal, cache: 'no-store', headers: { 'Accept': 'application/json' } })
       .then(function (res) {
-        clearTimeout(timer);
+        clearTimeout(timer); clearTimeout(slowTimer);
         if (!res.ok) throw new Error('HTTP ' + res.status);
         return res.json();
       })
-      .then(function (data) { return { ok: true, ms: Math.round(now() - t0), data: data }; })
+      .then(function (data) {
+        var ms = Math.round(now() - t0);
+        return { ok: true, ms: ms, slow: ms >= SERVER_SLOW_MS, slowAfter: SERVER_SLOW_MS, data: data };
+      })
       .catch(function (err) {
-        clearTimeout(timer);
-        return { ok: false, ms: Math.round(now() - t0), aborted: (err && err.name === 'AbortError'),
+        clearTimeout(timer); clearTimeout(slowTimer);
+        return { ok: false, ms: Math.round(now() - t0), slowAfter: SERVER_SLOW_MS,
+                 aborted: (err && err.name === 'AbortError'),
                  err: (err && err.message) || String(err) };
       });
   }
@@ -485,9 +603,15 @@
 
   function timingNote(r) {
     if (r.ok) return '';
-    if (r.aborted) return ' (no response in time — often a firewall silently dropping the connection)';
+    if (r.aborted) return ' (no answer within ' + secs(GIVE_UP_MS) + ' — typically a firewall or proxy dropping the connection on the way; a server that has stopped answering looks the same from here)';
     if (r.ms < 1500) return ' (failed immediately — often DNS not resolving, or the connection refused)';
+    if (r.slowAfter && r.ms >= r.slowAfter) return ' (no answer for ' + r.ms + ' ms, then the connection failed — typically a firewall or proxy dropping it on the way)';
     return '';
+  }
+
+  // The row text for an answer: the elapsed time always, and "slow" past the mark.
+  function reachedText(r) {
+    return (r.slow ? 'Reachable, but slow to answer (' : 'Reachable (') + r.ms + ' ms)';
   }
 
   // ---- State for the report -----------------------------------------
@@ -496,8 +620,8 @@
   function statusWord(r) {
     if (!r) return 'not checked';
     if (r.noBase) return 'not checked (no address available)';
-    if (r.ok) return 'REACHABLE (' + r.ms + ' ms)' + (r.serverError ? ' but HTTP ' + r.status : '');
-    if (r.aborted) return 'NO RESPONSE (' + r.ms + ' ms)';
+    if (r.ok) return (r.slow ? 'REACHABLE, SLOW (' : 'REACHABLE (') + r.ms + ' ms)' + (r.serverError ? ' but HTTP ' + r.status : '');
+    if (r.aborted) return 'NO ANSWER WITHIN ' + secs(GIVE_UP_MS) + ' (' + r.ms + ' ms)';
     return 'COULD NOT CONNECT (' + r.ms + ' ms)';
   }
 
@@ -531,7 +655,11 @@
     if (!databases || !databases.length) { el.innerHTML = ''; return; }
     // Probe each instance at this server's host on its service port.
     var host = COMMS_BASE ? hostOnly(COMMS_BASE) : here.hostname;
-    var scheme = (COMMS_BASE && COMMS_BASE.indexOf('https') === 0) ? 'https:' : (here.protocol || 'http:');
+    // Always https (UI-216). The data-services agents serve TLS (VLC-147); an
+    // http probe to a TLS port is answered 400 "requires TLS", and from an https
+    // page it is blocked as mixed content. This used to fall back to
+    // `here.protocol || 'http:'` whenever the agent base was not https.
+    var scheme = 'https:';
     var rows = databases.map(function (d, i) {
       var name = d.displayName || d.databaseName || '(database)';
       var sub = (d.databaseName && d.displayName) ? ' <span class="dbt-sub">' + escapeHtml(d.databaseName) + '</span>' : '';
@@ -547,8 +675,8 @@
       var port = d.servicePort, cell = $('dbt-reach-' + i);
       if (port == null || !host || !cell) return;
       probe(scheme + '//' + host + ':' + port + '/health').then(function (r) {
-        cell.textContent = r.ok ? ('Reachable (' + r.ms + ' ms)') : 'Not reachable';
-        cell.className = 'dbt-reach ' + (r.ok ? 'ok' : 'fail');
+        cell.textContent = r.ok ? (r.slow ? 'Reachable, but slow (' + r.ms + ' ms)' : 'Reachable (' + r.ms + ' ms)') : 'Not reachable';
+        cell.className = 'dbt-reach ' + (r.ok ? (r.slow ? 'warn' : 'ok') : 'fail');
       });
     });
   }
@@ -559,7 +687,50 @@
          : (s === 'warning' || s === 'warn') ? '#f08a24'
          : (s === 'fail') ? '#b8463a' : '#c9d3e0';
   }
-  function renderDiagram(legs) {
+  // UI-233 (owner 2026-10-26): "Can the diagram show the dns name and ip in each box as
+  // applicable?" Each box's address comes from the SAME rows the "Addresses for your IT"
+  // list renders (buildPathRows), so the picture and the list cannot disagree. What a box
+  // cannot know it leaves out: a browser has no way to learn this PC's own name or IP, and
+  // an unreached server reports no IP and no database. A name too long for its box is cut
+  // with an ellipsis; the list underneath carries it in full.
+  function diagramAddrs(rows) {
+    var a = {};
+    var pick = function (list, label) { return (list || []).filter(function (r) { return r && r.label === label; })[0] || null; };
+    var asBox = function (r) { return r ? { name: r.host || '', ip: r.ip || '' } : null; };
+    a.edge = asBox(pick(rows.pc, 'GSI edge'));
+    a.signin = asBox(pick(rows.pc, 'Sign-in service'));
+    // The application server by the name this PC called it (the agent base), with the
+    // server's own internal IP from its reply.
+    var srv = rows.serverId || {};
+    a.app = { name: COMMS_BASE ? hostOnly(COMMS_BASE) : '', ip: srv.internalIp || '' };
+    a.db = asBox(pick(rows.server, 'Database'));
+    // UI-235 (owner ruling 2026-10-26, Q7): "localhost" names no machine anyone can find. A box
+    // whose host is this-machine shorthand is the application server itself, so it shows the
+    // server's own name and IP from its reply, marked "same server". Without a reply there is
+    // nothing better to say, and the box keeps what it had.
+    var isLocal = function (h) { return /^(?:localhost|127(?:\.\d{1,3}){3}|::1|\[::1\])$/i.test(String(h || '')); };
+    var same = function (box) {
+      if (!box || !isLocal(box.name) || !(srv.hostname || srv.internalIp)) return box;
+      return { name: srv.hostname || box.name, ip: (srv.internalIp ? srv.internalIp + ' · ' : '') + 'same server' };
+    };
+    // The application server box IS that server: it takes the name, without the marker.
+    if (isLocal(a.app.name) && srv.hostname) a.app = { name: srv.hostname, ip: srv.internalIp || '' };
+    a.signin = same(a.signin);
+    a.db = same(a.db);
+    // VLC-210: where the server's own reply said nothing (it was not reached, or named no database), the box takes
+    // what VALC has on file, marked "on file" so a configured address never reads as one this check measured.
+    var file = rows.onFile || [];
+    var role = function (r) { return file.filter(function (s) { return s.role === r; })[0] || null; };
+    var onFile = function (s) { return s ? { name: s.host, ip: (s.ip ? s.ip + ' · ' : '') + 'on file' } : null; };
+    var dbServer = file.filter(function (s) { return s.hosts; })[0] || role('SQL_SERVER');
+    if (!a.db && dbServer) a.db = onFile(dbServer);
+    var appServer = role('APP_SERVER');
+    if (!a.app.ip && appServer) a.app = { name: a.app.name || appServer.host, ip: (appServer.ip || appServer.host) + ' · on file' };
+    a.jde = onFile(role('JDE_SOURCE'));
+    return a;
+  }
+  function renderDiagram(legs, rows) {
+    var addr = rows ? diagramAddrs(rows) : {};
     function edge(x1, y1, x2, y2, n) {
       var col = legColor(legs[n]);
       var mx = Math.round((x1 + x2) / 2), my = Math.round((y1 + y2) / 2);
@@ -567,36 +738,55 @@
         '<circle cx="' + mx + '" cy="' + my + '" r="12" fill="' + col + '"/>' +
         '<text x="' + mx + '" y="' + (my + 4) + '" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">' + n + '</text>';
     }
-    function node(x, y, w, h, label, sub) {
+    // The most of a name that fits a box of width w. Measured in a headless render: 35
+    // characters of a host name drew about 157px at 10.5px (~4.5px each); 5.0 keeps a margin
+    // for wide letters while a 36-character Domain URL still fits the application server box.
+    function fit(v, w) {
+      v = String(v || ''); var max = Math.floor((w - 14) / 5.0);
+      return v.length > max ? v.slice(0, max - 1) + '…' : v;
+    }
+    function node(x, y, w, h, label, a) {
+      var lines = a ? [a.name, a.ip].filter(Boolean) : [];
       var t = '<rect x="' + x + '" y="' + y + '" width="' + w + '" height="' + h + '" rx="8" fill="#fff" stroke="#c9d3e0" stroke-width="1.5"/>' +
-        '<text x="' + (x + w / 2) + '" y="' + (y + (sub ? 23 : h / 2 + 5)) + '" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2d4a">' + label + '</text>';
-      if (sub) t += '<text x="' + (x + w / 2) + '" y="' + (y + 40) + '" text-anchor="middle" font-size="11" fill="#5a6479">' + sub + '</text>';
+        '<text x="' + (x + w / 2) + '" y="' + (y + (lines.length ? 21 : h / 2 + 5)) + '" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2d4a">' + label + '</text>';
+      lines.forEach(function (v, i) {
+        t += '<text data-addr="1" x="' + (x + w / 2) + '" y="' + (y + 37 + i * 14) + '" text-anchor="middle" font-size="10.5" fill="#5a6479">'
+          + '<title>' + escapeHtml(v) + '</title>' + escapeHtml(fit(v, w)) + '</text>';
+      });
       return t;
     }
     var s = '<svg viewBox="0 0 760 360" xmlns="http://www.w3.org/2000/svg">';
     // Zone labels + firewall
-    s += '<text x="95" y="18" text-anchor="middle" font-size="11" font-weight="700" fill="#8a93a6">GSI (Azure)</text>';
+    s += '<text x="105" y="18" text-anchor="middle" font-size="11" font-weight="700" fill="#8a93a6">GSI (Azure)</text>';
     s += '<text x="520" y="18" text-anchor="middle" font-size="11" font-weight="700" fill="#8a93a6">Your network</text>';
-    s += '<line x1="205" y1="26" x2="205" y2="345" stroke="#b8463a" stroke-width="2" stroke-dasharray="5 5"/>';
-    s += '<text x="205" y="358" text-anchor="middle" font-size="10" fill="#b8463a">firewall</text>';
-    // Edges first (nodes drawn over them)
-    s += edge(300, 58, 170, 70, 1);   // (1) PC -> GSI Edge
-    s += edge(300, 70, 170, 277, 3);  // (3) PC -> GSI Sign-In
-    s += edge(380, 207, 170, 285, 5); // (5) App Server -> GSI Sign-In
-    s += edge(360, 82, 450, 180, 2);  // (2) PC -> App Server
-    s += edge(550, 207, 600, 207, 4); // (4) App Server -> Database
+    s += '<line x1="212" y1="26" x2="212" y2="345" stroke="#b8463a" stroke-width="2" stroke-dasharray="5 5"/>';
+    s += '<text x="212" y="358" text-anchor="middle" font-size="10" fill="#b8463a">firewall</text>';
+    // Edges first (nodes drawn over them). The address boxes are taller (66) than the old
+    // label-only ones, and the GSI boxes wider (190) so the production edge name,
+    // rapidreconciler-prod.getgsi.com, fits whole; the endpoints moved with them.
+    s += edge(300, 56, 200, 73, 1);   // (1) PC -> GSI Edge
+    s += edge(300, 70, 200, 268, 3);  // (3) PC -> GSI Sign-In
+    s += edge(352, 212, 200, 290, 5); // (5) App Server -> GSI Sign-In
+    s += edge(372, 82, 440, 179, 2);  // (2) PC -> App Server
+    s += edge(562, 212, 596, 212, 4); // (4) App Server -> Database
     // Nodes
-    s += node(20, 44, 150, 52, 'GSI Edge / UI');
-    s += node(20, 251, 150, 52, 'GSI Sign-In');
-    s += node(300, 32, 130, 50, 'This PC');
-    s += node(380, 181, 170, 52, 'Application Server');
-    s += node(600, 181, 140, 52, 'Database');
+    s += node(10, 40, 190, 66, 'GSI Edge / UI', addr.edge);
+    s += node(10, 247, 190, 66, 'GSI Sign-In', addr.signin);
+    s += node(300, 32, 130, 50, 'This PC', null);
+    s += node(352, 179, 210, 66, 'Application Server', addr.app);
+    s += node(596, 179, 152, 66, 'Database', addr.db);
+    // VLC-210: the JDE source, when VALC has one on file. No check here tests it (its leg runs from the SQL Server,
+    // inside the customer's network), so it hangs off the database with a plain line and no leg number.
+    if (addr.jde) {
+      s += '<line x1="672" y1="245" x2="672" y2="272" stroke="#c9d3e0" stroke-width="2" stroke-dasharray="4 4"/>';
+      s += node(596, 272, 152, 66, 'JDE Source', addr.jde);
+    }
     s += '</svg>';
     $('netdiagram').innerHTML = s;
   }
 
   // ---- Network path (the trace-spec list) ----------------------------
-  function buildPathRows(b) {
+  function buildPathRows(b, topo) {
     var resolved = (b.ok && b.data && b.data.resolved) ? b.data.resolved : {};
     var srv = (b.ok && b.data && b.data.host) ? b.data.host : {};
     var serverEps = (b.ok && b.data && b.data.endpoints) ? b.data.endpoints : [];
@@ -611,7 +801,14 @@
       var authH = hostOnly(AUTH_BASE);
       pc.push({ label: 'Sign-in service', host: authH, ip: resolved[authH] || null, port: portOf(AUTH_BASE, '443') });
     }
-    return { pc: pc, server: serverEps, serverId: srv, agentReachable: !!(b.ok && b.data) };
+    // VLC-210: VALC's Topology for this database, one row per server, so the diagram and the list read the same.
+    var ROLE = { SQL_SERVER: 'SQL Server', JDE_SOURCE: 'JDE source', TEST_SQL_SERVER: 'Test/Dev SQL Server', APP_SERVER: 'Application server' };
+    var onFile = ((topo && topo.servers) || []).filter(function (s) { return s && (s.name || s.address); }).map(function (s) {
+      return { role: s.role, label: (ROLE[s.role] || s.role || 'Server') + (s.hostsThisDatabase ? ' (this database)' : ''),
+               host: s.name || s.address, ip: s.address && s.address !== s.name ? s.address : null, hosts: !!s.hostsThisDatabase };
+    });
+    return { pc: pc, server: serverEps, serverId: srv, agentReachable: !!(b.ok && b.data),
+             onFile: onFile, onFileRefused: topo && topo.refused ? topo.refused : null };
   }
 
   function renderPath(rows) {
@@ -631,12 +828,22 @@
     } else {
       html += '<div class="np-note">Your server couldn’t be reached, so its outbound legs (database, GSI) and exact IPs can’t be shown. The addresses above use names your IT can still test or trace.</div>';
     }
+    // VLC-210: what VALC has on file for this database's servers. Configured, not measured: this check did not test them.
+    if (rows.onFile && rows.onFile.length) {
+      html += '<div class="np-group"><div class="np-group-head">On file in VALC (your Topology; not tested by this check)</div>' +
+              rows.onFile.map(function (r) {
+                return '<div class="np-row"><span class="np-leg">&rarr; ' + escapeHtml(r.label) + '</span>' +
+                       '<span class="np-addr">' + escapeHtml(r.host) + (r.ip ? ' (' + escapeHtml(r.ip) + ')' : '') + '</span></div>';
+              }).join('') + '</div>';
+    } else if (rows.onFileRefused) {
+      html += '<div class="np-note">The server addresses VALC has on file are not shown: ' + escapeHtml(rows.onFileRefused) + '</div>';
+    }
     $('netpathList').innerHTML = html;
     $('netpath').classList.add('show');
   }
 
   // ---- Attribution ---------------------------------------------------
-  function render(a, b, c) {
+  function render(a, b, c, topo) {
     var online = navigator.onLine;
     var route, cls, headline, cause, actions = [];
 
@@ -688,6 +895,19 @@
       headline = 'RapidReconciler is reachable but reporting an error';
       cause = 'Everything on your side looks reachable, but the sign-in service returned a server error (HTTP ' + c.status + '). This is on GSI&rsquo;s side.';
       actions = ['Send the report below to GSI support — no action needed on your end.'];
+    } else if (a.slow || b.slow || c.slow) {
+      // UI-216: every leg answered, at least one past its slow mark. An answer
+      // means the route is open, so this is amber advice, not a firewall verdict.
+      var slowLegs = [];
+      if (a.slow) slowLegs.push('GSI took ' + a.ms + ' ms');
+      if (b.slow) slowLegs.push(escapeHtml(srvName) + ' took ' + b.ms + ' ms');
+      if (c.slow) slowLegs.push('the sign-in service took ' + c.ms + ' ms');
+      route = 'Heads up'; cls = 'maybe';
+      headline = 'Everything answered, but slowly';
+      cause = 'Every check got an answer, but ' + slowLegs.join(', and ') + '. Each one answered, so the route is open: ' +
+        'this is not a firewall block. A slow answer usually passes; if it keeps happening, send the report below to GSI support.';
+      actions = ['Run the check again in a few minutes.',
+                 'If it is still slow, send the report below to GSI support.'];
     } else {
       route = 'All clear'; cls = 'ok';
       headline = 'Connectivity looks good';
@@ -703,7 +923,7 @@
     ul.innerHTML = actions.map(function (x) { return '<li>' + x + '</li>'; }).join('');
     $('verdictActionsLabel').style.display = actions.length ? 'block' : 'none';
 
-    var pathRows = buildPathRows(b);
+    var pathRows = buildPathRows(b, topo);   // VLC-210: the same rows the diagram draws
     renderPath(pathRows);
 
     lastRoute = route;
@@ -771,6 +991,7 @@
 
     setProbe('A', 'run', 'Checking…', hostLabel(ANCHOR));
     setProbe('B', 'run', 'Checking your server…', COMMS_BASE ? hostLabel(COMMS_BASE) : 'detecting…');
+    if ($('sourceB')) $('sourceB').textContent = sourceText();
     // The idle branch is a REPORT, not a skip: name the mode and the settings
     // that did not resolve, so a tech reading this page knows it is an
     // installation gap and knows which key to go and set.
@@ -780,17 +1001,22 @@
       AUTH_BASE ? (hostLabel(AUTH_BASE) + '  (/api/v1/auth/ping)')
                 : ('unset: ' + (ENV_MISSING.length ? ENV_MISSING.join(', ') : 'authBase')));
 
-    var pA = probe(ANCHOR);
-    var pB = commsCheck();
-    var pC = AUTH_BASE ? probe(AUTH_BASE + '/api/v1/auth/ping', { cors: true }) : Promise.resolve({ skipped: true });
+    // Past the slow mark the row says it is still waiting, so a long wait is
+    // never mistaken for a hang of the page itself.
+    var pA = probe(ANCHOR, { onSlow: function (s) { setProbe('A', 'run', waitingText(s)); } });
+    var pB = commsCheck(function (s) { setProbe('B', 'run', waitingText(s)); });
+    var pC = AUTH_BASE ? probe(AUTH_BASE + '/api/v1/auth/ping',
+                               { cors: true, onSlow: function (s) { setProbe('C', 'run', waitingText(s)); } })
+                       : Promise.resolve({ skipped: true });
+    var pT = loadTopology();   // VLC-210
 
-    Promise.all([pA, pB, pC]).then(function (arr) {
-      var a = arr[0], b = arr[1], c = arr[2];
+    Promise.all([pA, pB, pC, pT]).then(function (arr) {
+      var a = arr[0], b = arr[1], c = arr[2], topo = arr[3];
       c.target = AUTH_BASE || '';
 
       // A
-      setProbe('A', a.ok ? 'pass' : 'fail',
-        a.ok ? 'Reachable (' + a.ms + ' ms)' : 'Could not reach' + timingNote(a));
+      setProbe('A', a.ok ? (a.slow ? 'warn' : 'pass') : 'fail',
+        a.ok ? reachedText(a) : 'Could not reach' + timingNote(a));
 
       // B (the agent comms-check). Box B reflects REACHABILITY of the
       // app server (leg 2): green when reached + all clear, amber when
@@ -804,8 +1030,8 @@
         worst = checks.length ? worstStatus(checks) : 'ok';
         var srv = b.data.host || {};
         var idLabel = srv.hostname || (b.data.agent || 'reachable');
-        setProbe('B', worst === 'ok' ? 'pass' : 'warn',
-          'Reachable (' + b.ms + ' ms) — ' + checks.length + ' server-side check' + (checks.length === 1 ? '' : 's') +
+        setProbe('B', (worst === 'ok' && !b.slow) ? 'pass' : 'warn',
+          reachedText(b) + ' — ' + checks.length + ' server-side check' + (checks.length === 1 ? '' : 's') +
             (worst === 'ok' ? ', all clear.' : ', see below.'),
           idLabel + (srv.internalIp ? '  (' + srv.internalIp + ')' : '') + (srv.port ? '  : ' + srv.port : ''));
         $('serverList').innerHTML = renderServerChecks(checks);
@@ -820,16 +1046,17 @@
       if (!AUTH_BASE) {
         setProbe('C', 'idle', 'Not configured.');
       } else {
-        setProbe('C', (c.ok && !c.serverError) ? 'pass' : 'fail',
+        setProbe('C', (c.ok && !c.serverError) ? (c.slow ? 'warn' : 'pass') : 'fail',
           c.serverError ? ('Answered with an error (HTTP ' + c.status + ')')
-            : c.ok ? ('Reachable (' + c.ms + ' ms)') : ('Could not reach' + timingNote(c)));
+            : c.ok ? reachedText(c) : ('Could not reach' + timingNote(c)));
       }
 
-      // Live diagram: color each numbered leg from the results.
+      // Live diagram: color each numbered leg from the results. A slow
+      // answer is amber (UI-216), the same as a server-side warning.
       var legs = {
-        1: a.ok ? 'ok' : 'fail',
-        2: (b.ok && b.data) ? (worst === 'ok' ? 'ok' : 'warning') : 'fail',
-        3: !AUTH_BASE ? 'idle' : ((c.ok && !c.serverError) ? 'ok' : 'fail'),
+        1: a.ok ? (a.slow ? 'warning' : 'ok') : 'fail',
+        2: (b.ok && b.data) ? ((worst === 'ok' && !b.slow) ? 'ok' : 'warning') : 'fail',
+        3: !AUTH_BASE ? 'idle' : ((c.ok && !c.serverError) ? (c.slow ? 'warning' : 'ok') : 'fail'),
         4: 'idle', 5: 'idle'
       };
       if (b.ok && b.data) {
@@ -838,9 +1065,9 @@
           if (x.name === 'valc.reachable') legs[5] = x.status;
         });
       }
-      renderDiagram(legs);
+      renderDiagram(legs, buildPathRows(b, topo));   // UI-233: the boxes carry the same addresses as the list
 
-      render(a, b, c);
+      render(a, b, c, topo);
       running = false;
       $('runBtn').disabled = false;
     });
