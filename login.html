@@ -1386,6 +1386,7 @@
   const ssoBtnLbl = document.getElementById('js-sso-btn-label');
   // { sso, registrationId, protocol, protocolLabel, startPath }
   let _sso = null;        // last discovery result
+  let _ssoDomain = null;  // UI-236: the domain _sso answers for (null = never looked up)
   let _forcePw = false;   // user chose "use a password instead"
   let _forcePwDomain = null;  // the domain that choice was made for
 
@@ -1433,12 +1434,13 @@
     // EmailDomainAllowlist.domainPart -- is the one that decides routing, so
     // this page agrees with it rather than keeping a third opinion.
     const domain = typedDomain();
-    if (domain === null) { _sso = null; applySsoMode(); return; }
+    if (domain === null) { _sso = null; _ssoDomain = null; applySsoMode(); return; }
     try {
       const res = await fetch(AUTH_BASE + '/api/v1/auth/sso-discovery?email=' + encodeURIComponent(email),
         { method: 'GET', headers: { 'Accept': 'application/json' } });
       _sso = res.ok ? await res.json().catch(() => null) : null;
-    } catch (_) { _sso = null; }   // older VALC / unreachable -> password path
+      _ssoDomain = domain;
+    } catch (_) { _sso = null; _ssoDomain = null; }   // older VALC / unreachable -> password path; retried on submit
     if (_sso && _sso.sso) {
       ssoText.textContent = domain + ' signs in with ' + ssoMethodName() + '.';
     }
@@ -1474,11 +1476,21 @@
     setTimeout(function () { pwEl.focus(); }, 0);
   });
   if (emailEl.value.trim().indexOf('@') > 0) discoverSso();   // returning user (prefilled)
+  // UI-236 (owner, 2026-10-26: back from the connection check, Sign in kept failing until a refresh). Discovery used
+  // to run only on `input` or a pre-filled field, and sign-out clears rrv8.lastEmail. So after one the browser's
+  // AUTOFILL fills the field (no reliable `input`) or Back restores the page with its old state, discovery never ran,
+  // and an Entra user got the password form and a refusal naming a button that wasn't there. Discover on `change`
+  // (autofill commits fire it), on a Back restore, and before any password is posted (in the submit handler below).
+  function domainUnknown() { const d = typedDomain(); return d !== null && d !== _ssoDomain; }
+  emailEl.addEventListener('change', function () { if (domainUnknown()) discoverSso(); });
+  window.addEventListener('pageshow', function () { if (domainUnknown()) discoverSso(); });
 
   // ---- Sign in ----
   loginForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (authUnset(errEl)) return;
+    // UI-236: never post a password for a domain nobody has looked up yet (autofill, a Back restore). Ask first.
+    if (!_forcePw && domainUnknown()) await discoverSso();
     if (_sso && _sso.sso && !_forcePw) { startSso(); return; }   // SSO domain: go to IdP, not the password POST
     clearErr(errEl);
     const username = emailEl.value.trim();
@@ -1518,6 +1530,10 @@
           _forcePw = false;
           _forcePwDomain = null;
           applySsoMode();
+        } else if (res.status === 403 && (!_sso || !_sso.sso)) {
+          // UI-236: the server says this account signs in with SSO, but this page never learned it (discovery was
+          // unreachable a moment ago, say). Ask again, so the button the message names is actually on screen.
+          await discoverSso();
         }
         setErr(errEl, body.message || (res.status === 401
           ? 'Email or password did not match.'

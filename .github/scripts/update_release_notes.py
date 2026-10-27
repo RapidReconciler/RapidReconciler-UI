@@ -36,6 +36,7 @@ Tests: .github/scripts/test_update_release_notes.py (run by check-release-notes.
 """
 
 import html
+import os
 import re
 import subprocess
 import sys
@@ -44,6 +45,17 @@ from pathlib import Path
 
 NOTES_FILE  = Path("release-notes.html")
 MARKER      = "<!-- RELEASE_NOTES_INSERTION_POINT -->"
+# HK-48 (2026-10-26). The last commit a run PUBLISHED through, kept on the page itself. The workflow's concurrency
+# group keeps one pending run, so a merge seconds after another cancels the earlier pending run, and each run used
+# to walk only github.event.before..github.sha (its own push): UI #875's note was lost that way. A run now walks
+# from this marker, so a cancelled run's commits are the next run's. data-sha guards against publishing one twice
+# (a rerun, a wide range). An explicit workflow_dispatch "since" (RELEASE_NOTES_SINCE_EXPLICIT=1) is honoured as
+# given, and a marker that is not an ancestor of the commit being published is ignored, not trusted.
+THROUGH_RE  = re.compile(r"<!-- RELEASE_NOTES_THROUGH: ([0-9a-f]{40}) -->")
+
+
+def through_comment(sha):
+    return f"<!-- RELEASE_NOTES_THROUGH: {sha} -->"
 # Empty-state placeholder pattern. Removed from the page (along with its
 # explanatory comment) the first time a real entry is inserted.
 EMPTY_STATE_RE = re.compile(
@@ -240,7 +252,8 @@ def build_entry(commit) -> str:
     short_sha   = commit["sha"][:7]
     dt          = datetime.fromisoformat(commit["date"])
     iso_date    = dt.strftime("%Y-%m-%d")
-    pretty_date = dt.strftime("%B %-d, %Y")
+    # "%-d" (no leading zero) is glibc-only and raises on Windows; this is the same text on both.
+    pretty_date = f"{dt:%B} {dt.day}, {dt.year}"
     paras       = render_paragraphs(commit["release_note"])
     return (
         f'  <article class="rn-entry" data-sha="{short_sha}">\n'
@@ -276,10 +289,38 @@ def trim_to_cap(text: str, max_entries: int = MAX_ENTRIES) -> tuple[str, int]:
     return new_text, removed
 
 
+def is_ancestor(a: str, b: str) -> bool:
+    return subprocess.run(["git", "merge-base", "--is-ancestor", a, b], capture_output=True).returncode == 0
+
+
+def start_of_range(text: str, before: str, after: str) -> str:
+    """Where this run starts: the page's THROUGH marker when it is on this history, else the event's before."""
+    if os.environ.get("RELEASE_NOTES_SINCE_EXPLICIT") == "1":
+        return before
+    m = THROUGH_RE.search(text)
+    if m and is_ancestor(m.group(1), after):
+        if before and before != "0" * 40 and m.group(1) != before:
+            print(f"Starting from the last published commit {m.group(1)[:7]}, not this push's {before[:7]}: "
+                  "an earlier run's commits are picked up here.")
+        return m.group(1)
+    return before
+
+
 def main(before: str, after: str):
-    commits = get_commits(before, after)
+    text0 = NOTES_FILE.read_text(encoding="utf-8")
+    after_full = run(["git", "rev-parse", after]).strip()
+    commits = get_commits(start_of_range(text0, before, after_full), after_full)
     if not commits:
         print("No commits in range.")
+        return
+    # HK-48: a commit already on the page (a rerun, or a range that overlaps an earlier run) is not published again.
+    published = set(re.findall(r'data-sha="([0-9a-f]{7})"', text0))
+    already = [c for c in commits if c["sha"][:7] in published]
+    commits = [c for c in commits if c["sha"][:7] not in published]
+    if already:
+        print(f"Skipped {len(already)} commit(s) already on the page.")
+    if not commits:
+        print("Nothing new to publish.")
         return
 
     # Filter in two passes: first drop chore / skip-marker commits, then drop
@@ -316,7 +357,12 @@ def main(before: str, after: str):
     # page has zero entries, which is no longer the case after this insert.
     text = EMPTY_STATE_RE.sub("", text)
 
+    # HK-48: record how far this run published, just above the insertion point (one marker, replaced in place).
+    text = THROUGH_RE.sub("", text)
+    text = re.sub(r"[ \t]*\n(?=[ \t]*" + re.escape(MARKER) + ")", "\n", text, count=1)
     pre, post = text.split(MARKER, 1)
+    indent = re.search(r"([ \t]*)$", pre).group(1)
+    pre = pre[:len(pre) - len(indent)] + indent + through_comment(after_full) + "\n" + indent
     # Normalize the gap between marker and the existing first entry to exactly one blank line.
     post = re.sub(r"^\n+", "\n\n", post, count=1)
     updated = pre + MARKER + "\n\n" + new_block + post

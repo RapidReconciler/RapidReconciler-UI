@@ -46,8 +46,13 @@
   // The tag is stripped before display. It is deliberately NOT stripped from the
   // string handed to the AI (owner call 2026-08-19): a model reading "[ON=cardex]"
   // is told which surface a term belongs to instead of having to infer it.
-  function glossaryHtml(surface) {
+  //
+  // `role` is the page's <body data-view-role>. The accountant view also gets
+  // RRV8.ACCT_TERMS, first: the accountant's own controls (UI-238). They are not in
+  // GLOSSARY because GLOSSARY goes into every analyst prompt.
+  function glossaryHtml(surface, role) {
     var src = (window.RRV8 && window.RRV8.GLOSSARY) || '';
+    if (role === 'accountant' && window.RRV8 && window.RRV8.ACCT_TERMS) src = window.RRV8.ACCT_TERMS + '\n' + src;
     var esc = function (t) {
       return String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     };
@@ -136,7 +141,8 @@
       // '1' (or an empty value) keeps the old show-everything behaviour for any page
       // that has not declared a surface yet.
       var gs = String(document.body.getAttribute('data-help-glossary') || '').trim().toLowerCase();
-      glossEl.innerHTML = glossaryHtml((gs && gs !== '1') ? gs : '');
+      var role = String(document.body.getAttribute('data-view-role') || '').trim().toLowerCase();
+      glossEl.innerHTML = glossaryHtml((gs && gs !== '1') ? gs : '', role);
       show(glossEl, true); show(frame, false);
       document.documentElement.classList.add('help-open');
       drawer.classList.add('is-open');
