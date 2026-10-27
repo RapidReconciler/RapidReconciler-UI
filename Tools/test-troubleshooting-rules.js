@@ -143,10 +143,21 @@ const FAILURES = [
   OPEN_ERRORS,
   Object.assign(clone(DEMO1), { ssis: { readable: true, executionId: 10500, status: 'Failed', startTime: '2026-10-02 01:00:00', endTime: '2026-10-02 01:04:00', durationSeconds: 240, errors: ['Login timeout expired'] } }),
   Object.assign(clone(DEMO1), { ssis: { readable: false, reason: 'There is no SSIS catalog (SSISDB) on this SQL Server instance.', errors: [] } }),
+  withSsis('Running'),
+  withSsis('Canceled'),
   Object.assign(clone(DEMO1), { ssis: { readable: true, executionId: null, errors: [] } }),
   Object.assign(clone(DEMO1), { reconcile: { readable: false, reason: 'The reconcile log could not be read: Invalid object name.', currentErrors: [], scheduled: {} } }),
   Object.assign(clone(DEMO1), { checks: DEMO1.checks.filter(c => c.name !== 'sql.agent_service') })   // an older agent
 ];
+
+// UI-217 SSIS half, owner ruling 2026-10-27: V8 colours an import the way VALC's step 3 does.
+// VALC's DatabaseHealthService patterns, verbatim, checked in this order (RUNNING, OK, FAILED):
+const VALC_SSIS = [[/(run|progress|pending|created|stopping)/i, 'warn'], [/succeed|complete/i, 'ok'], [/fail|unexpected|cancel/i, 'fail']];
+// Every name the Agent's TroubleshootingService.ssisStatus can send (catalog.executions.status 1-9, else Unknown).
+const SSIS_NAMES = ['Created', 'Running', 'Canceled', 'Failed', 'Pending', 'Ended unexpectedly', 'Succeeded', 'Stopping', 'Completed', 'Unknown'];
+function withSsis(status) {
+  return Object.assign(clone(DEMO1), { ssis: { readable: true, executionId: 10500, status, startTime: '2026-10-27 02:00:00', endTime: status === 'Running' ? null : '2026-10-27 02:20:00', durationSeconds: 1200, errors: [] } });
+}
 
 // ------------------------------------------------------------------ assertions
 function rowOf(rows, key) { return rows.find(r => r.key === key); }
@@ -257,6 +268,17 @@ const ASSERTIONS = {
     }
     return null;
   },
+  ssisColoursMatchValc: TS => {
+    // VALC's "none" (an unrecognised status) is V8's "unknown".
+    for (const name of SSIS_NAMES) {
+      const hit = VALC_SSIS.find(([rx]) => rx.test(name));
+      const want = hit ? hit[1] : 'unknown';
+      const got = rowOf(TS.rows(withSsis(name), 40), 'ssis').state;
+      if (got !== want) return name + ': V8 ' + got + ', VALC ' + want;
+    }
+    const running = rowOf(TS.rows(withSsis('Running'), 40), 'ssis');
+    return /run the checks again once it finishes/i.test(running.todo) ? null : 'running import advice: ' + running.todo;
+  },
   aMissingCheckIsUnknownNotOk: TS => {
     const older = FAILURES[FAILURES.length - 1];
     const r = rowOf(TS.rows(older, 40), 'sql.agent_service');
@@ -299,6 +321,13 @@ const MUTATIONS = [
   { name: 'the refresh row is labelled Nightly again (UI-217)',
     find: "'sql.last_job_status', 'Data refresh',", replace: "'sql.last_job_status', 'Nightly data refresh',",
     red: ['theRefreshRowFollowsTheSchedule', 'noNightlyInV8sOwnWords'] },
+  { name: 'a running import is green again (UI-217 SSIS ruling)',
+    find: "assign(base, { state: 'warn', fact: 'An import is running now", replace: "assign(base, { state: 'ok', fact: 'An import is running now",
+    red: ['ssisColoursMatchValc'] },
+  { name: 'a cancelled import is amber again (UI-217 SSIS ruling)',
+    find: "assign(base, { state: 'fail', fact: 'The last import, started ' + fmtWhen(s.startTime) + ', was cancelled",
+    replace: "assign(base, { state: 'warn', fact: 'The last import, started ' + fmtWhen(s.startTime) + ', was cancelled",
+    red: ['ssisColoursMatchValc'] },
   { name: 'a turned-off schedule gets the generic advice (UI-217)',
     find: 'if (/does not refresh on its own/i.test(text))', replace: 'if (false)',
     red: ['aTurnedOffScheduleSaysTurnItBackOn'] },
