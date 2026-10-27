@@ -101,6 +101,18 @@ DEMO1_UI210.checks.splice(DEMO1_UI210.checks.length - 1, 0,
   { name: 'tls.certificate', status: 'ok', text: 'The server’s security certificate is valid until Nov 19, 2026 (44 days).', detail: 'CN=*.getgsi.com; SAN *.getgsi.com' });
 const NEW_KEYS = ['jde.source_connection', 'broker.valc_link', 'tls.certificate'];
 
+// UI-217: the refresh row in the words InstallDiagnosticsCollector.lastRefreshRule now
+// writes, judged against the job's own schedule. WEEKLY_OK is Demo1 as measured on
+// 2026-10-27 (weekly, Sundays 02:00; last success Oct 25 02:00; SQL clock Oct 27 12:59),
+// which the old fixed 36 hours called amber.
+const WEEKLY_OK = withCheck(DEMO1, 'sql.last_job_status', 'ok', 'The last data refresh, started Oct 25, 2026, 2:00 AM, succeeded. It is scheduled weekly on Sundays at 2:00 AM.');
+const WEEKLY_LATE = withCheck(DEMO1, 'sql.last_job_status', 'warning',
+  'The last successful data refresh started Oct 11, 2026, 2:00 AM, 16 days ago. It is scheduled weekly on Sundays at 2:00 AM, and has not run since.',
+  "Late after 14 days, twice the schedule's period. Check that SQL Server Agent is running and the refresh job's history for missed runs.");
+const SCHEDULE_OFF = withCheck(DEMO1, 'sql.last_job_status', 'warning',
+  'The last data refresh, started Oct 25, 2026, 2:00 AM, succeeded. The refresh job’s schedule (weekly on Sundays at 2:00 AM) is turned off, so the data does not refresh on its own.',
+  'Turn the refresh job and its schedule back on in SQL Server Agent on the database server.');
+
 // Every failure the agent can report, in its own words (InstallDiagnosticsCollector,
 // ValcLineProbe), so the voice and plumbing assertions see real text.
 const FAILURES = [
@@ -118,6 +130,9 @@ const FAILURES = [
   withCheck(DEMO1, 'sql.last_job_status', 'fail', 'The last data refresh, started Oct 2, 2026 1:00 AM, failed.'),
   withCheck(DEMO1, 'sql.last_job_status', 'warning', 'A data refresh has been running 45 minutes; it usually takes about 10.'),
   withCheck(DEMO1, 'sql.last_job_status', 'warning', 'The refresh job has no runs in SQL Server Agent\u2019s history.'),
+  WEEKLY_LATE,
+  SCHEDULE_OFF,
+  withCheck(DEMO1, 'sql.last_job_status', 'warning', 'The last data refresh, started Oct 25, 2026, 2:00 AM, succeeded. The refresh job is turned off in SQL Server Agent, so the data does not refresh on its own.'),
   withCheck(DEMO1, 'sql.disk_free_mb', 'fail', '1,900 MB free of 523,246 MB on F:\\. A data refresh can stop part-way at this level.'),
   withCheck(DEMO1, 'valc.reachable', 'fail', 'Resolved rrvalc.getgsi.com -> 10.0.0.4 but couldn\u2019t connect on port 443 (gave up after 6001 ms).'),
   withCheck(DEMO1, 'valc.reachable', 'warning', 'Reached GSI at rrvalc.getgsi.com -> 10.0.0.4, but it returned a server error (HTTP 502, 80 ms).'),
@@ -145,7 +160,7 @@ const ASSERTIONS = {
     if (TS.worst(rows) !== 'warn') return 'Demo1 worst ' + TS.worst(rows);
     const areas = TS.byArea(rows).map(a => a.area + ':' + a.state + ':' + a.needs).join(',');
     if (areas !== 'Connections:ok:0,Data loads:warn:1,Database server:ok:0') return 'Demo1 byArea ' + areas;
-    if (rowOf(rows, 'sql.jde_job_present').fact !== 'The nightly refresh job is set up.') return 'refresh-job fact uses agent text';
+    if (rowOf(rows, 'sql.jde_job_present').fact !== 'The refresh job is set up.') return 'refresh-job fact uses agent text';
     if (!/Sep 30, 2026, 3:00 PM/.test(rowOf(rows, 'reconcile').fact)) return 'reconcile fact ' + rowOf(rows, 'reconcile').fact;
     if (!/took 25 minutes/.test(rowOf(rows, 'ssis').fact)) return 'ssis fact ' + rowOf(rows, 'ssis').fact;
     return null;
@@ -217,6 +232,31 @@ const ASSERTIONS = {
     }
     return null;
   },
+  // UI-217: the row names the job's real schedule, and V8's own words never say "nightly".
+  theRefreshRowFollowsTheSchedule: TS => {
+    const ok = rowOf(TS.rows(WEEKLY_OK, 40), 'sql.last_job_status');
+    if (ok.label !== 'Data refresh') return 'refresh label ' + ok.label;
+    if (ok.state !== 'ok' || ok.todo) return 'weekly run two days old read ' + ok.state;
+    if (!/scheduled weekly on Sundays at 2:00 AM/.test(ok.fact)) return 'weekly fact ' + ok.fact;
+    const late = rowOf(TS.rows(WEEKLY_LATE, 40), 'sql.last_job_status');
+    if (late.state !== 'warn' || !/history for missed runs/.test(late.todo)) return 'late weekly ' + late.state + ': ' + late.todo;
+    return null;
+  },
+  aTurnedOffScheduleSaysTurnItBackOn: TS => {
+    const r = rowOf(TS.rows(SCHEDULE_OFF, 40), 'sql.last_job_status');
+    if (r.state !== 'warn') return 'schedule off read ' + r.state;
+    return /turn the RapidReconciler refresh job and its schedule back on/.test(r.todo) ? null : 'schedule off advice: ' + r.todo;
+  },
+  noNightlyInV8sOwnWords: TS => {
+    // The agent's fact is its own; the label and the advice are this file's.
+    for (const d of [DEMO1, WEEKLY_OK].concat(FAILURES)) {
+      for (const r of TS.rows(d, 40)) {
+        if (/nightly/i.test(r.label + ' ' + r.todo)) return r.key + ' says nightly: ' + r.label + ' / ' + r.todo;
+        if (r.key === 'sql.jde_job_present' && /nightly/i.test(r.fact)) return 'refresh-job fact says nightly';
+      }
+    }
+    return null;
+  },
   aMissingCheckIsUnknownNotOk: TS => {
     const older = FAILURES[FAILURES.length - 1];
     const r = rowOf(TS.rows(older, 40), 'sql.agent_service');
@@ -253,9 +293,15 @@ const MUTATIONS = [
     replace: "todo: 'Contact GSI support with the downloaded diagnostics.'",
     red: ['everyProblemEscalatesToItNeverGsi'] },
   { name: 'show the agent\u2019s refresh-job text (names msdb) instead of V8\u2019s',
-    find: "{ fact: 'The nightly refresh job isn\u2019t set up on the database server.', todo:",
+    find: "{ fact: 'The refresh job isn\u2019t set up on the database server.', todo:",
     replace: '{ todo:',
     red: ['noSqlPlumbingInWhatTheReaderSees'] },
+  { name: 'the refresh row is labelled Nightly again (UI-217)',
+    find: "'sql.last_job_status', 'Data refresh',", replace: "'sql.last_job_status', 'Nightly data refresh',",
+    red: ['theRefreshRowFollowsTheSchedule', 'noNightlyInV8sOwnWords'] },
+  { name: 'a turned-off schedule gets the generic advice (UI-217)',
+    find: 'if (/does not refresh on its own/i.test(text))', replace: 'if (false)',
+    red: ['aTurnedOffScheduleSaysTurnItBackOn'] },
   { name: 'show the UI-210 rows even when an older server did not send them',
     find: 'return checkByName(data, name) ? rowFromCheck(data, area, name, label, words) : null;',
     replace: 'return rowFromCheck(data, area, name, label, words);',
