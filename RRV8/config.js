@@ -1672,6 +1672,29 @@ window.RRV8.GLOSSARY = [
 ].join('\n');
 
 /*
+ * RRV8.ACCT_TERMS — the ACCOUNTANT's controls, in the same line format as GLOSSARY
+ * ("- TERM: meaning [ON=surface]"), so help-sidebar.js renders both the same way.
+ *
+ * WHY IT IS NOT IN GLOSSARY (UI-238). GLOSSARY goes into every analyst prompt, and
+ * the analyst never marks a company complete; an entry there would cost tokens on
+ * every analyst call and hand the analyst's AI an action that isn't theirs. So the
+ * accountant's terms sit here: the help panel shows them in the accountant view
+ * only (help-sidebar.js reads <body data-view-role>), and the accountant's question
+ * prompt in home.html is handed this same string. One string, two readers, as with
+ * GLOSSARY.
+ *
+ * WHY IT EXISTS. Mark Complete is step 5 of the accountant's Walkthrough and no V8
+ * help explained it: the University guides are V7's, and the accountant AI's list
+ * of on-screen features left it out. Owner ruling 2026-10-26: document V8-only
+ * actions in V8's own help. Tools/test-mark-complete-help.js checks the outcomes
+ * named here against the menu's own labels (DISPO_REASONS in home.html).
+ */
+window.RRV8.ACCT_TERMS = [
+  'ACCOUNTANT TERMS — what the accountant’s own controls on this screen do:',
+  '- MARK COMPLETE (bottom right of each company’s card on Overview): records what you decided about that company’s out-of-balance for the period you are viewing. Pick one: Accepted — immaterial; Corrected — journal entry posted; Handed to analyst — source fix (cardex, or a red roll-forward dot); Timing — will self-clear (unposted GL batches or end of day). The card then shows ✓ and the reason, and Reopen undoes it. Clicking Journal Entry Complete on an Adjusting Entry marks the company Corrected for you. A Balancing Entry only exports, so mark it Corrected yourself once the entry is posted. The choice is saved for everyone on this database, the analyst’s view included, and Audit Center lists it with who and when. It does not close the period in JDE. [ON=home]'
+].join('\n');
+
+/*
  * RRV8.CARDEX_COLUMNS — the COLUMN DICTIONARY for the Cardex Variance worklist:
  * every header exactly as the grid renders it, on the SAME LINE as the one sentence
  * that says what it holds.
