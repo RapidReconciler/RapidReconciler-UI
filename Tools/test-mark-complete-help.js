@@ -121,7 +121,8 @@ function arm(label, want, fnSrc, termsSrc) {
   console.log('  ' + (ok ? 'ok  ' : 'FAIL') + '  arm reddened ' + (got.join(',') || 'nothing') + '; needed ' + want + ' only');
 }
 if (shippedFailures === 0) {
-  arm('the panel never reads ACCT_TERMS', 'H2', GLOSS_FN.replace(/window\.RRV8\.ACCT_TERMS/g, 'window.RRV8.NOT_THERE'), TERMS_SRC);
+  // UI-243 reads the lists through `R = window.RRV8 || {}`, so the arm names that spelling.
+  arm('the panel never reads ACCT_TERMS', 'H2', GLOSS_FN.replace(/\bR\.ACCT_TERMS\b/g, 'R.NOT_THERE'), TERMS_SRC);
   arm('one outcome dropped from the entry', 'H1', GLOSS_FN, TERMS_SRC.replace('Timing \u2014 will self-clear', 'Timing'));
 }
 

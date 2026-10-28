@@ -47,22 +47,47 @@
   // string handed to the AI (owner call 2026-08-19): a model reading "[ON=cardex]"
   // is told which surface a term belongs to instead of having to infer it.
   //
-  // `role` is the page's <body data-view-role>. The accountant view also gets
-  // RRV8.ACCT_TERMS, first: the accountant's own controls (UI-238). They are not in
-  // GLOSSARY because GLOSSARY goes into every analyst prompt.
+  // `role` is the page's <body data-view-role>. Only Home sets it; every other page
+  // passes '' and gets GLOSSARY as before. On Home each view lists the words on its
+  // own screen (UI-238, UI-243):
+  //   analyst     GLOSSARY entries with no [VIEWS=] tag, or one naming the analyst
+  //   accountant  RRV8.ACCT_TERMS first, then only the GLOSSARY entries tagged
+  //               [VIEWS=...accountant...]
+  //   admin       RRV8.ADMIN_TERMS alone
+  //   none        nothing: that view is a no-access notice
+  // ACCT_TERMS and ADMIN_TERMS are not in GLOSSARY because GLOSSARY goes into every
+  // analyst prompt. Tools/test-admin-home-help.js runs this per view.
   function glossaryHtml(surface, role) {
-    var src = (window.RRV8 && window.RRV8.GLOSSARY) || '';
-    if (role === 'accountant' && window.RRV8 && window.RRV8.ACCT_TERMS) src = window.RRV8.ACCT_TERMS + '\n' + src;
+    var R = window.RRV8 || {};
+    // [source, view its lines must be tagged for ('' = no view filter)]
+    var parts = role === 'admin'      ? [[R.ADMIN_TERMS, '']]
+              : role === 'none'       ? []
+              : role === 'accountant' ? [[R.ACCT_TERMS, ''], [R.GLOSSARY, 'accountant']]
+              : role === 'analyst'    ? [[R.GLOSSARY, 'analyst']]
+              :                         [[R.GLOSSARY, '']];
     var esc = function (t) {
       return String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     };
-    var items = [], untagged = [];
-    src.split('\n').forEach(function (line) {
+    var tagList = function (m) {
+      return m ? m[1].split(',').map(function (s) { return s.trim().toLowerCase(); }) : null;
+    };
+    var items = [], untagged = [], lines = [];
+    parts.forEach(function (p) {
+      String(p[0] || '').split('\n').forEach(function (l) { lines.push([l, p[1]]); });
+    });
+    lines.forEach(function (pair) {
+      var line = pair[0], need = pair[1];
       if (line.indexOf('- ') !== 0) return;              // drops the preamble
       var on = line.match(/\[ON=([^\]]*)\]/);
+      if (need) {
+        // A GLOSSARY entry with no VIEWS tag is the analyst's alone.
+        var views = tagList(line.match(/\[VIEWS=([^\]]*)\]/)) || ['analyst'];
+        if (views.indexOf(need) < 0) return;             // not on THIS view's screen
+      }
       var body = line.slice(2)
         .replace(/\s*\[GUIDANCE[^\]]*\]\s*/g, '')
         .replace(/\s*\[ON=[^\]]*\]\s*/g, '')
+        .replace(/\s*\[VIEWS=[^\]]*\]\s*/g, '')
         .trim();
       var cut = body.indexOf(': ');
       if (cut < 0) return;
