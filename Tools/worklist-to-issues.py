@@ -26,6 +26,17 @@ Safety, all enforced before anything is sent:
     reason, and the run then works from the updated file. A live row whose issue was closed WITHOUT that
     label (closed on GitHub directly) is a WARN: the row stays live and the issue is never reopened.
     --dry-run reports both and moves nothing.
+  * Reopened (VLC-216, owner 2026-10-28, after a test close of UI-217 had to be undone by hand: "Do we need a
+    recently closed section where a mistakenly closed issue can be reopened?"). Right after the close pass:
+    an OPEN worklist issue whose row is in WORKLIST-DONE.md and not live, and which was reopened (VALC's
+    Reopen labels it `reopened-in-valc`; a reopen on GitHub directly sets state_reason "reopened", measured
+    on Valc #470), has its row put back by Tools/worklist-reopen.py: section, index line and chunk, rebuilt
+    from the issue body this script wrote while the row was live. The close pass never closes a reopened
+    issue (it used to: the row was in DONE, so the issue read as finished). The update pass then drops
+    `reopened-in-valc`, and drops `closed-in-valc` from a reopened issue, so a later close on GitHub can
+    never read as a VALC close. One case cannot be told apart: a once-reopened row closed again by
+    worklist-close.py whose GitHub close FAILED still reads "reopened", so it comes back. That is a visible
+    move in the run's output, never a silent loss.
   * Run by the Stop hook (HK-47, owner 2026-10-26: "We also need to do a better job of keeping the worklist
     synced with github"). Tools/worklist-sync-hook.py runs this at the end of any turn that changed the
     worklist, so a live run is now routine and has to be quick and safe to overlap:
@@ -415,11 +426,17 @@ def verify(posted, fetch=None, wait=5):
     return out
 
 
-def stale_labels(current, wanted):
+def stale_labels(current, wanted, issue=None):
     """Copier-owned labels the issue carries but the row no longer earns (an old status, a resolved
-    needs-owner, a chunk or module section it moved out of). claude:* and any label a person added are never touched."""
-    owned = set(STATUS_LABEL.values()) | {"needs-owner"}
-    return [l for l in current if (l in owned or l.startswith(("chunk:", "module:"))) and l not in wanted]
+    needs-owner, a chunk or module section it moved out of). claude:* and any label a person added are never touched.
+    VLC-216: reopened-in-valc has done its job once the row is live, and closed-in-valc goes from an issue that was
+    reopened (else a later close on GitHub would read as a VALC close). Not from an open issue that was never
+    reopened: that is a VALC close in flight (label first, then close), and removing it would turn it into a WARN."""
+    owned = set(STATUS_LABEL.values()) | {"needs-owner", REOPENED_IN_VALC}
+    out = [l for l in current if (l in owned or l.startswith(("chunk:", "module:"))) and l not in wanted]
+    if CLOSED_IN_VALC in current and issue and issue.get("state") == "open" and was_reopened(issue):
+        out.append(CLOSED_IN_VALC)
+    return out
 
 
 ISSUE_ID = re.compile(r"^\[(?P<id>[A-Z]+-\d+)\]")
@@ -446,26 +463,33 @@ def open_worklist_issues(repo):
         page += 1
 
 
-def to_close(issues, live_ids, done):
+def to_close(issues, live_ids, done, skip=()):
     """(close, warn): open copier issues whose "[ID]" row left WORKLIST.md, split by whether DONE records
-    the ID. A live row, an investigation, and a title with no "[ID]" are in neither list."""
+    the ID. A live row, an investigation, a title with no "[ID]", and an ID in skip (moved back by this dry
+    run) are in neither list. VLC-216: a REOPENED issue is never closed, even with its row in DONE: the
+    reopen pass moves that row back, and one it could not move is warned about, never quietly re-closed."""
     close, warn = [], []
     for i in issues:
         labels = [l["name"] for l in i.get("labels", [])]
         m = ISSUE_ID.match(i["title"])
-        if "investigation" in labels or "worklist" not in labels or not m or m.group("id") in live_ids:
+        if "investigation" in labels or "worklist" not in labels or not m or m.group("id") in live_ids or m.group("id") in skip:
             continue
-        (close if m.group("id") in done else warn).append((i, m.group("id")))
+        (close if m.group("id") in done and not was_reopened(i) else warn).append((i, m.group("id")))
     return close, warn
 
 
-def close_finished(live_ids, indexed, done, dry, fetch=open_worklist_issues, run=gh):
+def close_finished(live_ids, indexed, done, dry, fetch=open_worklist_issues, run=gh, skip=()):
     """Close each open copier issue whose row moved to WORKLIST-DONE.md; WARN on one that is neither live
     nor done. Sweeps every repo the copier posts to, including one with no live row left."""
     closed, warned = [], []
     for repo in sorted(set(REPO_FOR.values())):
-        close, warn = to_close(fetch(repo), live_ids, done)
+        close, warn = to_close(fetch(repo), live_ids, done, skip)
         for i, wid in warn:
+            if wid in done:
+                print(f"  WARN {wid:8} {repo} #{i['number']} was REOPENED but its row is still in WORKLIST-DONE.md (the "
+                      "reopen pass could not move it back; see above); NOT closed")
+                warned.append(wid)
+                continue
             where = "its index line is still in WORKLIST.md but not live" if wid in indexed else "deleted or renamed?"
             print(f"  WARN {wid:8} {repo} #{i['number']} is open, not live, and not in WORKLIST-DONE.md "
                   f"({where}); NOT closed")
@@ -543,6 +567,87 @@ def apply_valc_closes(rows, mapping, dry, get=get_issue, comment=close_comment, 
     return moved
 
 
+REOPENED_IN_VALC = "reopened-in-valc"          # DevelopmentService.REOPENED_IN_VALC (Valc repo); keep the two in step
+REOPENED_IN_VALC_LEAD = "**Reopened in VALC**"  # DevelopmentService.REOPENED_IN_VALC_LEAD
+REOPEN_TAIL = "The worklist sync moves this row back"   # DevelopmentService.REOPEN_TAIL; the note ends before it
+REOPEN_TOOL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "worklist-reopen.py")
+
+
+def was_reopened(issue):
+    """VLC-216: reopened from VALC (its label) or on GitHub directly (state_reason "reopened", measured on #470)."""
+    return (REOPENED_IN_VALC in [l["name"] for l in issue.get("labels", [])]
+            or issue.get("state_reason") == "reopened")
+
+
+STATUS_IN_BODY = re.compile(r"(?m)^\*\*Status:\*\* (?P<status>.*?) &middot; \*\*Need from you:\*\* (?P<need>.*?)\s*$")
+INDEX_IN_BODY = re.compile(r"(?m)^\*\*Index line:\*\* (?P<what>.*?)\s*$")
+ANCHOR_IN_BODY = re.compile(r"_Copied from `WORKLIST\.md` \(`#(?P<anchor>[^`]+)`\)")
+CHUNK_IN_BODY = re.compile(r"(?m)^\*\*Chunk:\*\* (?P<title>.+?) · `(?P<slug>[a-z0-9-]+)` · step (?P<k>\d+) of \d+: .*$")
+
+
+def reopen_spec(wid, issue):
+    """What worklist-reopen.py needs to put a closed row back, read from the body build() wrote while it was live.
+    Raises ValueError naming the missing piece: a guessed index line would put a wrong row in the worklist."""
+    body = (issue.get("body") or "").replace("\r\n", "\n")
+    st, ix, an = STATUS_IN_BODY.search(body), INDEX_IN_BODY.search(body), ANCHOR_IN_BODY.search(body)
+    missing = [n for n, m in (("Status line", st), ("Index line", ix), ("anchor", an)) if not m]
+    if missing:
+        raise ValueError("the issue body has no " + ", ".join(missing) + "; it was not written by this script")
+    status = st.group("status").strip()
+    if status[:1] not in STATUS_LABEL:
+        raise ValueError(f"the body's status {status!r} is not an open status")
+    ch = CHUNK_IN_BODY.search(body)
+    labels = [l["name"] for l in issue.get("labels", [])]
+    module = next((l.split(":", 1)[1] for l in labels if l.startswith("module:")), None)
+    return {"index": f"| [{wid}](#{an.group('anchor')}) | {status} | {ix.group('what')} | {st.group('need').strip()} |",
+            "group": {"module": module, "prefix": wid.split("-")[0]},
+            "chunk": {"slug": ch.group("slug"), "title": ch.group("title"), "step": int(ch.group("k"))} if ch else None}
+
+
+def reopen_note(repo, num):
+    """The newest VALC reopen comment, as one line, or None (a reopen made on GitHub directly has none)."""
+    return reopen_note_from(json.loads(gh(["api", f"repos/{OWNER}/{repo}/issues/{num}/comments?per_page=100"])))
+
+
+def reopen_note_from(comments):
+    """The newest comment VALC's reopen wrote, up to its closing sentence, on one line; None when there is none."""
+    hits = [c.get("body", "") for c in comments if c.get("body", "").startswith(REOPENED_IN_VALC_LEAD)]
+    return re.sub(r"\s+", " ", hits[-1].split(REOPEN_TAIL)[0].replace("**", "")).strip() if hits else None
+
+
+def valc_reopens(issues, live_ids, done):
+    """Open copier issues to move back: reopened, row in DONE, not live. An investigation never is."""
+    out = []
+    for i in issues:
+        labels = [l["name"] for l in i.get("labels", [])]
+        m = ISSUE_ID.match(i.get("title", ""))
+        if (m and "worklist" in labels and "investigation" not in labels and i.get("state", "open") == "open"
+                and m.group("id") not in live_ids and m.group("id") in done and was_reopened(i)):
+            out.append((i, m.group("id")))
+    return out
+
+
+def apply_reopens(live_ids, done, dry, fetch=open_worklist_issues, note=reopen_note, run=None):
+    """Move each reopened row back to WORKLIST.md (worklist-reopen.py). Returns the IDs moved (or that would be)."""
+    moved = []
+    for repo in sorted(set(REPO_FOR.values())):
+        for i, wid in valc_reopens(fetch(repo), live_ids, done):
+            try:
+                spec = reopen_spec(wid, i)
+            except ValueError as e:
+                print(f"  WARN {wid:8} {repo} #{i['number']} was reopened but its row cannot be rebuilt ({e}); it stays in "
+                      "WORKLIST-DONE.md. Move it back by hand, or close the issue again.")
+                continue
+            how = "from VALC" if REOPENED_IN_VALC in [l["name"] for l in i.get("labels", [])] else "on GitHub"
+            spec["note"] = (note(repo, i["number"]) if not dry else None) or f"Reopened {how}"
+            spec["note"] += f" (VLC-216: {repo} #{i['number']})"
+            print(f"  {wid:8} <- {repo:24} #{i['number']} reopened {how}: row {'would move' if dry else 'moves'} back to WORKLIST.md")
+            if not dry:
+                (run or (lambda args: subprocess.run(args, check=True)))([sys.executable, REOPEN_TOOL, wid, json.dumps(spec)])
+            moved.append(wid)
+    return moved
+
+
 def build(row, section, chunk):
     wid = row["id"]
     title_text = section[0] if section else re.sub(r"\*\*|`", "", row["what"])[:120]
@@ -609,6 +714,16 @@ def sync(dry):
         rows, sections = parse(text)
     elif moved:
         rows = [r for r in rows if r["id"] not in moved]   # dry run: post as if they had moved
+    # VLC-216: then the reverse. A reopened issue whose row is in DONE gets its row back before anything is posted,
+    # so the update pass below re-posts it as live (and drops reopened-in-valc). The open listings are read once
+    # here and reused by the close pass at the end.
+    open_listing = {}
+    fetch_open = lambda repo: open_listing.setdefault(repo, open_worklist_issues(repo))   # noqa: E731
+    back = apply_reopens({r["id"] for r in rows}, done_ids(open(DONE, encoding="utf-8").read()), dry, fetch=fetch_open)
+    print(f"VALC reopen pass: {len(back)} row(s) {'would move' if dry else 'moved'} back to WORKLIST.md")
+    if back and not dry:
+        text = open(WORKLIST, encoding="utf-8").read()
+        rows, sections = parse(text)
     chunks = parse_chunks(text)
     if moved and dry:
         chunks = [dict(c, rows=[r for r in c["rows"] if r not in moved]) for c in chunks]
@@ -657,7 +772,7 @@ def sync(dry):
             print(f"  REFUSED {row['id']}: a secret-shaped string is in its section; not posted")
             continue
         num, current, issue = existing(repo, row["id"], mapping, listings[repo], get)
-        stale = stale_labels(current, labels)
+        stale = stale_labels(current, labels, issue)
         posted.append(row["id"])
         if num and unchanged(issue, title, body, labels, stale):
             counts["unchanged"] += 1
@@ -680,7 +795,7 @@ def sync(dry):
             num = int(out.strip().rstrip("/").split("/")[-1])
         mapping[row["id"]] = {"repo": repo, "number": num, "url": f"https://github.com/{OWNER}/{repo}/issues/{num}"}
     print(f"close pass: {len(done)} IDs closed in WORKLIST-DONE.md")
-    closed, warned = close_finished({r["id"] for r in rows}, indexed, done, dry)
+    closed, warned = close_finished({r["id"] for r in rows}, indexed, done, dry, fetch=fetch_open, skip=back if dry else ())
     print(f"close pass: {len(closed)} {'to close' if dry else 'closed'}, {len(warned)} warned (left open)")
     print(f"issues: {counts['created']} {'to create' if dry else 'created'}, {counts['updated']} "
           f"{'to update' if dry else 'updated'}, {counts['unchanged']} unchanged")
@@ -699,8 +814,8 @@ def sync(dry):
     # Another session edited the files while this ran (and this run moved nothing itself): keep the
     # fingerprint this run READ, so the next hook sees a change and syncs again rather than skipping it.
     write_state({"synced_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                 "fingerprint": start_fp if end_fp != start_fp and not moved else end_fp,
-                 "live_rows": len(rows), "open_issues": len(posted), "moved_from_valc": len(moved),
+                 "fingerprint": start_fp if end_fp != start_fp and not (moved or back) else end_fp,
+                 "live_rows": len(rows), "open_issues": len(posted), "moved_from_valc": len(moved), "moved_back": len(back),
                  "closed": len(closed), "warned": len(warned), **counts})
     return 0
 
@@ -843,7 +958,119 @@ def self_test():
         and "VLC-207" in ran[0][3], f"a live run closes the row with worklist-close.py, quoting VALC's comment: {ran}"
     assert os.path.exists(CLOSE_TOOL), f"the close tool the reverse leg runs must exist: {CLOSE_TOOL}"
     hk47_self_test(rows, secs, chunks, lab)
-    print("self-test OK (HK-47: read cache, unchanged skip, lock, verify, state fingerprint)")
+    vlc216_self_test(lab)
+    print("self-test OK (HK-47: read cache, unchanged skip, lock, verify, state fingerprint; VLC-216: reopen pass)")
+
+
+def vlc216_self_test(lab):
+    """The reopen pass: which issues move back, the spec read from the body build() wrote, the close pass leaving a
+    reopened issue alone, the label clean-up, and one real round trip through worklist-close.py and worklist-reopen.py."""
+    import importlib.util
+    import shutil
+    import tempfile
+    from pathlib import Path
+    assert os.path.exists(REOPEN_TOOL), f"the reopen tool the reverse pass runs must exist: {REOPEN_TOOL}"
+    # The spec is the row's own index line, rebuilt from the body this script writes: status, need, anchor, chunk, module.
+    line = "| [UI-6](#ui-6--c) | ◐ | pages, with **bold** and `code` | Yours: look at it |"
+    md = ("### 6. In Transit module &nbsp;&middot;&nbsp; 1 live\n\n| ID | Status | What it is | Need from you |\n|---|---|---|---|\n"
+          + line + "\n\n### UI-6 — the pages\n\n**Waiting on:** a look\n\nbody\n")
+    (row,), secs = parse(md)
+    ch = {"slug": "mods", "title": "Module pages", "rows": ["HK-1", "UI-6"], "why": ""}
+    t, b, l = build(row, secs["UI-6"], ch)
+    sp = reopen_spec("UI-6", {"body": b.replace("\n", "\r\n"), "labels": lab(*l)})
+    assert sp["index"] == line, f"the rebuilt index line is the row's own: {sp['index']!r}"
+    assert sp["group"] == {"module": "in-transit", "prefix": "UI"} and sp["chunk"] == {"slug": "mods", "title": "Module pages", "step": 2}, sp
+    for bad in ("an investigation body", b.replace("**Index line:**", "**Index:**"), b.replace("◐", "☑")):
+        try:
+            reopen_spec("UI-6", {"body": bad, "labels": []})
+            raise AssertionError("a body this script did not write must not be guessed into a row: " + bad[:40])
+        except ValueError:
+            pass
+    # Which open issues move back. The control (#5) is the same shape with no reopen marker: that one is a failed close.
+    iss = lambda n, wid, *labels, **kw: dict({"number": n, "title": f"[{wid}] x", "state": "open", "labels": lab("worklist", *labels),
+                                              "body": b.replace("UI-6", wid)}, **kw)
+    world = [iss(1, "VLC-1", REOPENED_IN_VALC), iss(2, "VLC-2", state_reason="reopened"), iss(3, "VLC-3", REOPENED_IN_VALC),
+             iss(4, "VLC-4", REOPENED_IN_VALC, "investigation"), iss(5, "VLC-5"), iss(6, "VLC-6", REOPENED_IN_VALC)]
+    done = {"VLC-1", "VLC-2", "VLC-4", "VLC-5", "VLC-6"}
+    live = {"VLC-3", "VLC-6"}
+    assert [w for _, w in valc_reopens(world, live, done)] == ["VLC-1", "VLC-2"], \
+        "reopened from VALC or on GitHub, row in DONE, not live, not an investigation; a live row is not moved"
+    # The close pass. Before VLC-216 a reopened issue whose row was in DONE read as finished and was closed again.
+    close, warn = to_close(world, set(), done)
+    shut = {i["number"] for i, _ in close}
+    assert 5 in shut, "CONTROL: an open issue with its row in DONE and no reopen marker is still closed (a failed close)"
+    assert not {1, 2, 6} & shut and {1, 2, 6} <= {i["number"] for i, _ in warn}, \
+        f"a reopened issue is never closed by the close pass, only warned about: {shut}"
+    sc, sw = to_close(world, set(), done, skip={"VLC-1", "VLC-2", "VLC-6"})
+    assert not {1, 2, 6} & {i["number"] for i, _ in sc + sw} and 5 in {i["number"] for i, _ in sc}, \
+        "skip (rows a dry run moved back) leaves them out of both lists, and only them"
+    # apply_reopens: --dry-run runs nothing; a live run hands the tool the ID and the spec; an unreadable body is a WARN.
+    ran, out = [], io.StringIO()
+    fetch = lambda repo: world if repo == "RapidReconciler-Valc" else []
+    with contextlib.redirect_stdout(out):
+        assert apply_reopens(live, done, True, fetch=fetch, note=lambda r, n: 1 / 0, run=ran.append) == ["VLC-1", "VLC-2"]
+    assert ran == [] and "would move back" in out.getvalue(), "--dry-run moves nothing and reads no comments"
+    with contextlib.redirect_stdout(io.StringIO()):
+        apply_reopens(live, done, False, fetch=fetch, note=lambda r, n: "Reopened in VALC by ops@getgsi.com. Why: mistake" if n == 1 else None,
+                      run=ran.append)
+    assert [r[1:3] for r in ran] == [[REOPEN_TOOL, "VLC-1"], [REOPEN_TOOL, "VLC-2"]], ran
+    s1, s2 = json.loads(ran[0][3]), json.loads(ran[1][3])
+    assert "by ops@getgsi.com" in s1["note"] and "#1" in s1["note"] and s2["note"].startswith("Reopened on GitHub"), (s1, s2)
+    broken = [iss(7, "VLC-7", REOPENED_IN_VALC, body="not ours")]
+    with contextlib.redirect_stdout(io.StringIO()) as out:
+        assert apply_reopens(set(), {"VLC-7"}, False, fetch=lambda r: broken, note=lambda r, n: None, run=ran.append) == []
+    assert "cannot be rebuilt" in out.getvalue() and len(ran) == 2, "an unreadable body is warned about, never guessed"
+    # The note, from the exact comment DevelopmentService.reopen writes (its test pins the same shape): newest wins.
+    valc = ("**Reopened in VALC** by ops@getgsi.com, 2026-10-28 09:12 EDT.\n\n**Why:** Closed by mistake\nwhile testing.\n\n"
+            "The worklist sync moves this row back to WORKLIST.md on its next run.")
+    assert reopen_note_from([{"body": "**Reopened in VALC** by old"}, {"body": "a person's comment"}, {"body": valc}]) == \
+        "Reopened in VALC by ops@getgsi.com, 2026-10-28 09:12 EDT. Why: Closed by mistake while testing.", reopen_note_from([{"body": valc}])
+    assert reopen_note_from([{"body": "**Closed in VALC** by x"}]) is None
+    # Labels. reopened-in-valc goes once the row is live; closed-in-valc goes from a reopened issue only.
+    assert stale_labels(["worklist", REOPENED_IN_VALC], ["worklist"]) == [REOPENED_IN_VALC]
+    reo = {"state": "open", "state_reason": "reopened", "labels": lab("worklist", CLOSED_IN_VALC)}
+    assert stale_labels(["worklist", CLOSED_IN_VALC], ["worklist"], reo) == [CLOSED_IN_VALC], "a reopened issue loses closed-in-valc"
+    inflight = {"state": "open", "state_reason": None, "labels": lab("worklist", CLOSED_IN_VALC)}
+    assert stale_labels(["worklist", CLOSED_IN_VALC], ["worklist"], inflight) == [], \
+        "an open issue that was never reopened is a VALC close in flight: its label stays"
+    # One real round trip: the body build() writes, the real close, then this pass and the real reopen tool.
+    here = os.path.dirname(os.path.abspath(__file__))
+    mods = {}
+    for name in ("worklist-close", "worklist-reopen"):
+        s = importlib.util.spec_from_file_location(name.replace("-", "_"), os.path.join(here, name + ".py"))
+        mods[name] = importlib.util.module_from_spec(s)
+        s.loader.exec_module(mods[name])
+    closer, opener = mods["worklist-close"], mods["worklist-reopen"]
+    tmp = Path(tempfile.mkdtemp(prefix="sync-reopen-"))
+    try:
+        for m in (closer, opener):
+            m.LIVE, m.DONE, m.BACKUPS = tmp / "WORKLIST.md", tmp / "WORKLIST-DONE.md", tmp / "bk"
+        closer.ISSUE_CLOSER = lambda rid, reason: "stubbed"
+        (tmp / "WORKLIST.md").write_text(closer.FIXTURE_LIVE, encoding="utf-8")
+        (tmp / "WORKLIST-DONE.md").write_text(closer.FIXTURE_DONE, encoding="utf-8")
+        frows, fsecs = parse(closer.FIXTURE_LIVE)
+        fch = {r: c for c in parse_chunks(closer.FIXTURE_LIVE) for r in c["rows"]}
+        t, body, labels = build(next(r for r in frows if r["id"] == "HK-30"), fsecs["HK-30"], fch["HK-30"])
+        with contextlib.redirect_stdout(io.StringIO()):
+            closer.close("HK-30", "shipped")
+        after_close = (tmp / "WORKLIST.md").read_text(encoding="utf-8")
+        issue = {"number": 30, "title": t, "state": "open", "labels": lab(*labels, REOPENED_IN_VALC), "body": body}
+        with contextlib.redirect_stdout(io.StringIO()):
+            got = apply_reopens({r["id"] for r in parse(after_close)[0]}, done_ids((tmp / "WORKLIST-DONE.md").read_text(encoding="utf-8")),
+                                False, fetch=lambda r: [issue] if r == "RapidReconciler-Valc" else [], note=lambda r, n: None,
+                                run=lambda args: opener.reopen(args[2], json.loads(args[3])))
+        back = (tmp / "WORKLIST.md").read_text(encoding="utf-8")
+        strip = lambda s: re.sub(r"\n\n#### (✅ CLOSED|↩ REOPENED)[^\n]*", "", s)
+        # Every line comes back, none is added but the CLOSED and REOPENED ones. Not in the same ORDER: nothing records
+        # where a closed row sat, so it goes where new rows go, the top of its group's table and of the sections.
+        assert got == ["HK-30"] and sorted(strip(back).split("\n")) == sorted(closer.FIXTURE_LIVE.split("\n")), \
+            "the round trip gives back the worklist the close took it from, but for the CLOSED and REOPENED lines:\n" + back
+        assert after_close != back and "| [HK-30](" not in after_close, "CONTROL: the close did take the row out"
+        assert (tmp / "WORKLIST-DONE.md").read_text(encoding="utf-8").rstrip() == closer.FIXTURE_DONE.rstrip()
+        assert sorted(r["id"] for r in parse(back)[0]) == ["HK-3", "HK-30", "HK-31"] and \
+            chunk_errors(["HK-3", "HK-30", "HK-31"], parse_chunks(back)) == [], "and the sync can post it again"
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def hk47_self_test(rows, secs, chunks, lab):
