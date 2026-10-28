@@ -911,7 +911,23 @@ const CONSOLE_RULES = [
     note: 'Application JS error. Capture the full stack trace and email rrsupport.' },
 ];
 
+// VLC-223: VALC's Troubleshooting Step 2 (private Valc repo) judges an agent
+// log by this same table: name, severity, pattern, flags and order. The
+// contract is HelpDesk/agent-log-rules.json; Tools/test-agent-log-rules-shared.js
+// fails here when this table leaves it, and Valc's own test fails when VALC's
+// does. A rule changes in four places: this page, the contract, VALC's
+// troubleshooting.html and its AgentLogRules.java. Notes and fixes stay per page.
 const AGENT_RULES = [
+  // ---- A V8 Troubleshooting verdict: first of all ----
+  // V8 logs one WARN per non-ok check each time its Administrator >
+  // Troubleshooting page is opened. The line records what a check read when
+  // someone looked, not a fault in the agent (owner ruling 2026-10-27, VLC-180).
+  // First, because its sentence can carry words ("Login timed out", "Connection
+  // refused") that a rule below would take.
+  { name: 'V8 Troubleshooting verdict (a page visit, not a fault)',
+    match: /\.TroubleshootingController\s*:\s*troubleshooting verdict: \S+ is \S+ after \S+ ms:/, severity: 'noise',
+    note: 'V8 logs this each time someone opens its <strong>Administrator &rarr; Troubleshooting</strong> page, once per check that was not OK. It records what the check read at that moment, not a failure in the agent. To see whether the check is still failing, open that page again: it runs the checks live.' },
+
   // ---- Named root causes (hoisted above every other rule) ----
   //
   // Two reasons these sit at the very top rather than in the Critical
@@ -957,6 +973,9 @@ const AGENT_RULES = [
   // ---- Healthy signals (matched first; order matters) ----
   { name: 'Heartbeat',
     match: /\bINFO\b.*Sending heartbeat/i, severity: 'good' },
+  { name: 'Reported its heartbeat facts',
+    match: /\bHeartbeat-facts\b.*\bOK:\s*2\d\d/i, severity: 'good',
+    note: 'The V8 data services reported their server facts to VALC and VALC accepted them. Written at DEBUG level, so it shows only when DEBUG logging is on.' },
   { name: 'Successful instance state',
     match: /\bdbSystemStatus=success\b/, severity: 'good' },
   { name: 'Connected to VALC',
@@ -1061,6 +1080,10 @@ const AGENT_RULES = [
     note: 'Hibernate&rsquo;s dialect resolver doesn&rsquo;t recognize the SQL Server major version on the customer&rsquo;s box (e.g. SQL Server 2019 / 2022) and falls back to the SQL Server 2000 dialect. The fallback dialect is compatible with all SQL Server versions for the RR query surface, so this is informational, not an outage signal.' },
 
   // ---- Flags ----
+  { name: 'Agent cannot reach a monitored database',
+    match: /(?:DatabaseManagerServiceMsSqlImpl|CompanySyncService)\b.*(?:Login timed out|Socket closed|Error connecting to database|Error when quering|Error loading companies|Error removing licensed companies)/i, severity: 'flag',
+    fix: 'If this just followed a reboot, give it a minute or two &mdash; the agent retries and recovers once SQL Server is up. If it hasn&rsquo;t cleared, restart that database&rsquo;s RapidReconciler service so it reconnects, then confirm SQL Server is running, the database name is correct, and the <code>rruser</code> login works against that database.',
+    note: 'The agent couldn&rsquo;t log into, or sync, one of the databases it monitors. Most common right after a reboot, when the agent starts before SQL Server is ready. <code>Socket closed</code> means the connection dropped mid-query. (A <code>Login timed out</code> is reported under its own heading above.)' },
   { name: 'Briefly lost contact with VALC',
     match: /\b(?:Reconnect(?:ing)?|Try connect|connection (?:lost|dropped)).*?(?:broker|VALC|JMS)/i, severity: 'flag',
     note: 'The agent&rsquo;s connection to VALC was interrupted and it&rsquo;s trying to reconnect. A single occurrence is usually a transient network blip and recovers on its own. Repeated reconnect attempts mean a real network problem between the agent host and VALC &mdash; check the corporate firewall and the agent host&rsquo;s outbound TLS access to <code>staging-valc.cloudapp.net:443</code> (staging) or <code>rr-spa.cloudapp.net:443</code> (production).' },
