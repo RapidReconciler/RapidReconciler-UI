@@ -122,6 +122,7 @@ function sandbox(srcs, opt) {
     'function fmt(v) { return (v === null || v === undefined || v === "") ? "&mdash;" : String(v).replace(/[&<>]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]; }); }\n' +
     'function renderSigninBlock() {}\n' +
     'function permDbRowHtml() { return ""; }\n' +
+    'function roleModuleDefaults() { return {}; }\n' +   // VLC-212; covered by test-module-access.js
     'function updatePermsRoleDesc() {}\n' +
     'function updateNuRoleDesc() {}\n' +
     'function closeNewUserModal() {}\n' +
