@@ -1661,6 +1661,12 @@ window.RRV8.AI_REGISTER = [
  * ONE SOURCE. Any analyst-facing prompt appends this rather than hand-rolling its
  * own list — a per-prompt copy is the drift shape the RRV8.txv header below was
  * written about (nine maps, three names for one pattern).
+ *
+ * WHICH HOME VIEW SHOWS AN ENTRY (UI-243). On Home, [ON=home] alone means the
+ * analyst view. Add [VIEWS=analyst,accountant] when the term is also on the
+ * accountant's screen; the accountant's panel shows ACCT_TERMS plus only those.
+ * The administrator's panel never reads this list (RRV8.ADMIN_TERMS). Like [ON=],
+ * the tag is stripped from the panel and left in the string the AI is handed.
  */
 window.RRV8.GLOSSARY = [
   'GLOSSARY — THIS PRODUCT’S OWN TERMS, as used on the screen in front of the reader. A background reference may use the same words for a DIFFERENT concept at the accounting layer; where they collide, THIS list wins and that reference does not apply.',
@@ -1669,7 +1675,7 @@ window.RRV8.GLOSSARY = [
   '- NOTHING CLAIMED THESE (a lane): no pattern matched them; work them by amount, largest first. [ON=home]',
   '- GROUP / GROUP CODE (a Details column): the key holding one linked group together. It is built from the documents themselves, so the related order is inside the code even when it is not in its own column. [ON=txn]',
   '- REL TYPE / REL ORDER vs ORIG TYPE / ORIG ORDER (Details columns): two DIFFERENT linkage mechanisms, and which one carries the link depends on the family. Rel* are the F4211 related-order fields — a sales line pointing at its counterpart line — and they carry transfers and intercompany. Orig* are the ORIGINATING order, and that is where Make to Order links, because a work order is not an F4211 sales line. A blank Rel Order on a Make to Order row is by design, not missing data. [ON=txn]',
-  '- CARDEX VARIANCE: on-hand (F41021) against the item ledger (F4111), for one item. It is ACCOUNT-BLIND — it is NOT the ledger-versus-GL gap, and no account or AAI is involved in it. [ON=cardex,home]',
+  '- CARDEX VARIANCE: on-hand (F41021) against the item ledger (F4111), for one item. It is ACCOUNT-BLIND — it is NOT the ledger-versus-GL gap, and no account or AAI is involved in it. [ON=cardex,home] [VIEWS=analyst,accountant]',
   '- MODEL DMAAI TABLE: DMAAI 4152 for the company, the routing every inventory account assignment resolves through. Its document type comes from the company record, so only that one type is live. [ON=model,home]',
   '- EXCLUDED GL CLASS: a GL class an item uses that has NO 4152 entry, so there is no account to reconcile it against and its whole on-hand value sits outside reconciliation. Judge it on the amount it holds, never on what the class code is named. [ON=model,home]',
   '- CARRIES COST / UNCOSTED STOCK (markers on a 0.00 excluded row): two different reasons a row reads zero. CARRIES COST = the items have a unit cost and nothing is on hand, so it starts excluding value on the next receipt. UNCOSTED STOCK = there IS quantity on hand and no item carries a cost, so the zero is a costing gap. [ON=model,home]',
@@ -1693,10 +1699,51 @@ window.RRV8.GLOSSARY = [
  * of on-screen features left it out. Owner ruling 2026-10-26: document V8-only
  * actions in V8's own help. Tools/test-mark-complete-help.js checks the outcomes
  * named here against the menu's own labels (DISPO_REASONS in home.html).
+ *
+ * UI-243: the accountant view no longer shows every GLOSSARY entry under these.
+ * A GLOSSARY entry reaches the accountant's panel only when it carries
+ * [VIEWS=...accountant...], because it names something on the accountant's screen
+ * too (the Cardex part of the out-of-balance). An entry with no VIEWS tag is the
+ * analyst's alone.
  */
 window.RRV8.ACCT_TERMS = [
   'ACCOUNTANT TERMS — what the accountant’s own controls on this screen do:',
   '- MARK COMPLETE (bottom right of each company’s card on Overview): records what you decided about that company’s out-of-balance for the period you are viewing. Pick one: Accepted — immaterial; Corrected — journal entry posted; Handed to analyst — source fix (cardex, or a red roll-forward dot); Timing — will self-clear (unposted GL batches or end of day). The card then shows ✓ and the reason, and Reopen undoes it. Clicking Journal Entry Complete on an Adjusting Entry marks the company Corrected for you. A Balancing Entry only exports, so mark it Corrected yourself once the entry is posted. The choice is saved for everyone on this database, the analyst’s view included, and Audit Center lists it with who and when. It does not close the period in JDE. [ON=home]'
+].join('\n');
+
+/*
+ * RRV8.ADMIN_TERMS — the words on the ADMINISTRATOR view of Home, in the same line
+ * format as GLOSSARY and ACCT_TERMS, so help-sidebar.js renders all three the same
+ * way. The admin view's panel shows these and nothing else (UI-243).
+ *
+ * WHY IT EXISTS. UI #911 put the help "?" in Home's bottom bar for every role. The
+ * owner opened it as an administrator (2026-10-28) and read the analyst's terms:
+ * linked transactions, cardex variance, the model DMAAI table. None of them is on
+ * the admin Overview, which is licensing, team, activity and troubleshooting. "The
+ * help text makes no sense on this page."
+ *
+ * WHY IT IS NOT IN GLOSSARY. GLOSSARY goes into every analyst prompt, and nothing
+ * here is the analyst's. The admin question prompt in home.html (askAdmin) is
+ * handed this same string, beside ADMIN_GROUNDING. ADMIN_GROUNDING answers "how do
+ * I"; this says what a word on the screen means. One string, two readers.
+ *
+ * WHAT EARNS A PLACE: the same rule as GLOSSARY. A label on the admin Overview that
+ * a reader could misread, or whose states the card does not explain. The Walkthrough
+ * tab names itself and is left out. Each definition was read from the code that
+ * paints it (paintLicenseHealth, paintTeamHealth, _dataFreshness, loadAiPlan with
+ * RRAI's tiers, loadTroubleshootingCard, _renderActFeed, _syncInstanceHealth), so
+ * re-read those before changing a threshold or a state named here.
+ */
+window.RRV8.ADMIN_TERMS = [
+  'ADMINISTRATOR TERMS — what the words on the Administrator view of Home mean:',
+  '- STATUS DOTS (on each card and each row): green means nothing needs you, orange means it needs you soon, red means it needs you now. Grey means not checked yet, so the state is unknown, not clear. A card’s dot is the worst of its rows. [ON=home]',
+  '- DATA AS OF (top right of the page): when RapidReconciler last finished pulling data from JD Edwards for this database. Refreshing now means a pull is running. Last refresh failed means the last pull did not finish, so the figures your analysts and accountants see may be out of date. [ON=home]',
+  '- AI PLAN (in the RapidReconciler AI band): how much data the AI may use for this database. Off: no AI, and no data leaves the page. Basic: only the figures already on the screen. Enhanced: fuller data, with customer-identifying fields such as company numbers masked. Full: full data, identities included. Manage opens the AI Assistant page. [ON=home]',
+  '- LICENSING (card): Active, Renewal due soon (60 days or less before the end date) or Expired. Renewal due is the date the license ends. "N of M company licenses used on this database" counts this database’s licensed companies; the limit M covers all your databases together. [ON=home]',
+  '- TEAM & ACCESS (card): the first row counts your team members and the roles they hold. The second row is the access review. It reads Reviewed, with the next due date, while your last recorded review is current. Otherwise it counts active users with no sign-in and no password change for 6 months (orange) or a year (red), or says the review is overdue. The third row opens Complex Passwords, the password policy for each company. [ON=home]',
+  '- TROUBLESHOOTING (card): one row each for Connections, Data loads and Database server, showing the worst result among that area’s checks. "N issues" is how many of the area’s checks are not OK. Data loads opens Data Refresh. The other two rows open the Troubleshooting page, which says what each check found. [ON=home]',
+  '- ACTIVITY LOG (card): the three most recent system events on this database, such as restarts, data reloads and refreshes, with how long ago each happened. The same event repeated in a row shows once, with ×N. See full log opens the whole list. [ON=home]',
+  '- INSTANCE HEALTH (under the cards): appears only when storage needs you, as the months or years of space left at the current growth rate. Show all shows it anyway. [ON=home]'
 ].join('\n');
 
 /*
