@@ -192,9 +192,15 @@
       // place to discover that. Better no trigger than a trigger over the controls.
       // Anchor candidates in order of preference. The scope band is the top chrome on
       // the analyst work pages, which have neither a header Home link nor .app-header.
-      var home = document.querySelector('.topbar-home')
+      // UI-238 (2026-10-28): a page whose controls live somewhere else names that place
+      // with [data-help-host], and the circle joins it there. Home needs this: it hides
+      // its .app-header (retired in #299), so a circle mounted there was invisible on
+      // Home for every role. The owner found it looking for the "?" step 5 points at.
+      var host = document.querySelector('[data-help-host]');
+      if (host) host.appendChild(helpBtn);
+      var home = host ? null : (document.querySelector('.topbar-home')
              || document.querySelector('.app-header')
-             || document.querySelector('.tx-scope-band, .cxv-scope-band');
+             || document.querySelector('.tx-scope-band, .cxv-scope-band'));
       var isBar = home && (home.classList.contains('app-header')
                || home.classList.contains('tx-scope-band')
                || home.classList.contains('cxv-scope-band'));
@@ -211,7 +217,7 @@
           helpBtn.style.marginLeft = 'auto';
           home.style.marginLeft = '10px';
         }
-      } else if (bodySrc) {
+      } else if (bodySrc && !host) {
         // No header at all. A page with a real help DOC still gets the floating
         // circle (the old behaviour); a glossary-only page does not -- see above.
         helpBtn.style.position = 'fixed';
