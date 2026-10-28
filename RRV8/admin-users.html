@@ -631,6 +631,11 @@
   .nu-co { display: flex; align-items: center; gap: 6px; font-size: 13.5px; color: var(--text, #2b3442); }
   .nu-co input { margin: 0; }
   .nu-co-all { font-weight: 700; }
+  /* VLC-212: the modules this team member may open on this database. */
+  .perm-mods { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; margin: 0 0 6px 26px; }
+  .perm-mods.is-hidden { display: none; }
+  .perm-mods .nu-co.is-off { color: var(--text-soft, #5b6677); }
+  .perm-mod-note { font-size: 12.5px; color: var(--text-soft, #5b6677); }
 
   /* Help FAB — floating "how do I add a user?" button, bottom-right.
      Replaces the inline welcome banner; the create-user steps live in
@@ -1771,11 +1776,12 @@
         box.innerHTML = '<div class="perms-companies-empty">No databases in your session.</div>';
         return;
       }
-      box.innerHTML = dbs.map(d => permDbRowHtml(d, byName[d.n])).join('');
+      const defs = roleModuleDefaults(roleSel.value);
+      box.innerHTML = dbs.map(d => permDbRowHtml(d, byName[d.n], defs)).join('');
     })();
   }
 
-  function permDbRowHtml(d, assign) {
+  function permDbRowHtml(d, assign, defaults) {
     const name     = fmt(d.n);
     const assigned = !!assign;
     const cos      = Array.isArray(d.i) ? d.i : [];
@@ -1798,32 +1804,86 @@
       : '<div class="perm-cos' + (assigned ? '' : ' is-hidden') + '" data-cos>' +
           '<div class="perm-cos-empty">All licensed companies for this database.</div>' +
         '</div>';
-    return '<div class="perm-db" data-db-name="' + name + '">' +
+    // A database this member does not hold yet starts from the chosen role's
+    // modules, and follows the role picker until an admin ticks one (data-mods-default).
+    const mods = assigned ? assign : (defaults || {});
+    return '<div class="perm-db" data-db-name="' + name + '"' + (assigned ? '' : ' data-mods-default="1"') + '>' +
         '<label class="perms-check" style="display:flex; align-items:center; gap:8px; padding:6px 0;">' +
           '<input type="checkbox" data-db-assign' + (assigned ? ' checked' : '') + '> ' + name +
         '</label>' +
+        permModsHtml(d, mods, assigned) +
         coBlock +
       '</div>';
   }
 
-  // Read one .perm-db block into a {databaseName, companyScope, companies}
-  // assignment, or null when the database isn't checked. "All companies"
-  // (or every box checked) collapses to ALL; a strict subset is LIST.
+  // VLC-212: Inventory, In Transit and RNV on this database for this member.
+  // A module the customer is not licensed for (the token's `m` cap) cannot be
+  // ticked; it is shown off and left out of the save, so the stored flag stays.
+  // RNV is not built yet, so it is shown and never sent.
+  const PERM_MODULES = [
+    { key: 'inventory',  cap: 'inv', label: 'Inventory' },
+    { key: 'inTransit',  cap: 'it',  label: 'In Transit' },
+    { key: 'poReceipts', cap: 'por', label: 'RNV', soon: true }
+  ];
+  function permModsHtml(d, mods, assigned) {
+    const m = (d && d.m) || {};
+    return '<div class="perm-mods' + (assigned ? '' : ' is-hidden') + '" data-mods>' +
+      PERM_MODULES.map(x => {
+        const unlicensed = m[x.cap] === false;
+        const locked     = x.soon || unlicensed;
+        const note = x.soon ? 'Coming soon' : unlicensed ? 'Not licensed' : '';
+        return '<label class="nu-co' + (locked ? ' is-off' : '') + '">' +
+          '<input type="checkbox" data-mod="' + x.key + '"' +
+            (mods[x.key] === true && !unlicensed ? ' checked' : '') + (locked ? ' disabled' : '') + '> ' +
+          x.label + (note ? ' <span class="perm-mod-note">' + note + '</span>' : '') +
+        '</label>';
+      }).join('') +
+    '</div>';
+  }
+
+  // The modules the chosen role grants, as the defaults for a database the member
+  // does not hold yet. Reads the role DTO's own tab flags; VALC sends all three.
+  function roleModuleDefaults(roleId) {
+    const r = roleByIdV8(roleId) || {};
+    return { inventory: r.tabInventory === true, inTransit: r.tabInTransit === true,
+             poReceipts: r.tabPoReceipts === true };
+  }
+
+  // A role change re-defaults only the rows the member does not hold yet and whose
+  // modules nobody has touched. An existing database keeps its own modules.
+  function refreshModuleDefaults(boxId, roleId) {
+    const box = document.getElementById(boxId);
+    if (!box) return;
+    const defs = roleModuleDefaults(roleId);
+    box.querySelectorAll('.perm-db[data-mods-default="1"]').forEach(wrap => {
+      wrap.querySelectorAll('[data-mod]').forEach(cb => {
+        if (!cb.disabled) cb.checked = defs[cb.getAttribute('data-mod')] === true;
+      });
+    });
+  }
+
+  // Read one .perm-db block into a {databaseName, companyScope, companies,
+  // inventory, inTransit} assignment, or null when the database isn't checked.
+  // "All companies" (or every box checked) collapses to ALL; a strict subset is
+  // LIST. A disabled module (RNV, or not licensed) is left out: VALC then keeps
+  // the stored flag rather than reading the absence as "off".
   function extractAssignment(wrap) {
     const dbCb = wrap.querySelector('[data-db-assign]');
     if (!dbCb || !dbCb.checked) return null;
     const name  = wrap.getAttribute('data-db-name');
+    const a = { databaseName: name, companyScope: 'ALL', companies: [] };
+    wrap.querySelectorAll('[data-mod]').forEach(cb => {
+      if (!cb.disabled) a[cb.getAttribute('data-mod')] = !!cb.checked;
+    });
     const allCb = wrap.querySelector('[data-co-all]');
     const coCbs = wrap.querySelectorAll('[data-co]');
-    if (!coCbs.length || (allCb && allCb.checked)) {
-      return { databaseName: name, companyScope: 'ALL', companies: [] };
-    }
+    if (!coCbs.length || (allCb && allCb.checked)) return a;
     const companies = [];
     coCbs.forEach(cb => { if (cb.checked) companies.push(cb.getAttribute('data-co')); });
-    if (companies.length === coCbs.length) {
-      return { databaseName: name, companyScope: 'ALL', companies: [] };
-    }
-    return { databaseName: name, companyScope: 'LIST', companies: companies };
+    if (companies.length === coCbs.length) return a;
+    a.companyScope = 'LIST';
+    a.companies = companies;
+    return a;
   }
 
   // Show/hide a DB's company sublist when its checkbox toggles; disable the
@@ -1836,6 +1896,12 @@
       const wrap = t.closest('.perm-db');
       const cos  = wrap && wrap.querySelector('[data-cos]');
       if (cos) cos.classList.toggle('is-hidden', !t.checked);
+      const mods = wrap && wrap.querySelector('[data-mods]');
+      if (mods) mods.classList.toggle('is-hidden', !t.checked);
+    } else if (t.matches('[data-mod]')) {
+      // An admin's own tick wins over the role default from here on.
+      const wrap = t.closest('.perm-db');
+      if (wrap) wrap.removeAttribute('data-mods-default');
     } else if (t.matches('[data-co-all]')) {
       const wrap = t.closest('.perm-db');
       const list = wrap && wrap.querySelector('.perm-cos-list');
@@ -1929,8 +1995,9 @@
       const sess = window.RR_SESSION || {};
       const dbs  = Array.isArray(sess.dbs) ? sess.dbs : [];
       const box  = document.getElementById('js-nu-dbs');
+      const defs = roleModuleDefaults(roleSel.value);
       box.innerHTML = dbs.length
-        ? dbs.map(d => permDbRowHtml(d, null)).join('')
+        ? dbs.map(d => permDbRowHtml(d, null, defs)).join('')
         : '<div class="perms-companies-empty">No databases in your session.</div>';
     })();
   }
@@ -2027,6 +2094,7 @@
     document.getElementById('js-perms-close').addEventListener('click', closePermsModal);
     document.getElementById('js-perms-role').addEventListener('change', (e) => {
       updatePermsRoleDesc();
+      refreshModuleDefaults('js-perms-dbs', e.target.value);
       // VLC-214: a role is now chosen, so the "no role" prompt has done its job.
       if (e.target.value) {
         const el = document.getElementById('js-perms-error');
@@ -2042,7 +2110,10 @@
     const nuBd = document.getElementById('js-nu-modal');
     document.getElementById('js-nu-close').addEventListener('click', closeNewUserModal);
     document.getElementById('js-nu-cancel').addEventListener('click', closeNewUserModal);
-    document.getElementById('js-nu-role').addEventListener('change', updateNuRoleDesc);
+    document.getElementById('js-nu-role').addEventListener('change', (e) => {
+      updateNuRoleDesc();
+      refreshModuleDefaults('js-nu-dbs', e.target.value);
+    });
     document.getElementById('js-nu-save').addEventListener('click', saveNewUser);
     nuBd.addEventListener('click', (e) => { if (e.target === nuBd) closeNewUserModal(); });
 
