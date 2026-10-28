@@ -36,9 +36,17 @@
  *   U7  a box that would say "localhost" shows the server's own name and IP ("same server"
  *       on the boxes that are not the application server itself, checked in D1)
  *
+ *   VLC-220 (owner ruling 2026-10-28), on GSI's help site, the host a customer opens it from:
+ *   F1  never signed in: the line under leg 2 says so and asks GSI support for the Connection
+ *       Check link (and its control: the help site's config.js sends this case to 'dev')
+ *   F2  signed in, or a server remembered: no such line
+ *   L1  VALC's ?agent= link (URL-encoded, as built) tests the link's server, and says so
+ *   L2  the link wins over a remembered server
+ *
  * MUTATION CONTROLS: removing the session and remembered branches must redden S1; drawing
  * the diagram without its rows must redden D1; the same-server rule off must redden only D1;
- * the remembered branch off must redden U3 and leave U1 and S1 green.
+ * the remembered branch off must redden U3 and leave U1 and S1 green; the never-signed-in
+ * sentence off must redden F1 and leave L1 green.
  */
 'use strict';
 const fs = require('fs');
@@ -84,7 +92,11 @@ async function load(script, opt) {
   const sb = {
     console, URL, URLSearchParams, AbortController, setTimeout, clearTimeout, atob, Promise,
     performance: { now: () => Date.now() },
-    location: { protocol: 'http:', host: 'localhost:8765', hostname: 'localhost', search: opt.search || '', href: 'http://localhost:8765/HelpDesk/connection-check.html' + (opt.search || '') },
+    location: opt.help
+      // VLC-220: GSI's public help site, where github.io sends the check (followed 2026-10-28).
+      ? { protocol: 'https:', host: 'docs-dev.rapidreconciler.getgsi.com', hostname: 'docs-dev.rapidreconciler.getgsi.com', search: opt.search || '',
+          href: 'https://docs-dev.rapidreconciler.getgsi.com/HelpDesk/connection-check.html' + (opt.search || '') }
+      : { protocol: 'http:', host: 'localhost:8765', hostname: 'localhost', search: opt.search || '', href: 'http://localhost:8765/HelpDesk/connection-check.html' + (opt.search || '') },
     localStorage: { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); }, removeItem: (k) => { delete store[k]; } },
     navigator: {},
     document: { getElementById: el, querySelector: () => null, querySelectorAll: () => [], createElement: () => el('_tmp'), body: el('body'), addEventListener() {}, readyState: 'complete' },
@@ -184,8 +196,8 @@ async function suite(script, label) {
   check('U3 and the source line says it was remembered', src(r), 'Address remembered from the last sign-in on this browser (RapidReconciler_Demo1).');
   const bad = await load(script, { store: { 'rrv8.lastServer': JSON.stringify({ base: 'javascript:alert(1)', db: 'x' }) } });
   check('U4 a remembered value that is not an http(s) origin is ignored', comms(bad), ['http://localhost:34537']);
-  check('U5 no sign-in, nothing remembered: the source line says so, and names the address to open it from',
-        /no sign-in was found on this browser at localhost:8765\. If you signed in to RapidReconciler at a different address/.test(src(n)), true);
+  check('U5 no sign-in, nothing remembered: the source line says this browser never signed in here',
+        /This browser has never signed in to RapidReconciler at localhost:8765,/.test(src(n)), true);
   const noIp = await load(script, { token: tokenNoIp() });
   check('U6 signed in, but the database has no server address: said, and pointed at VALC',
         /You are signed in, but the database RapidReconciler_Prod_V8 has no server address set; ask your administrator/.test(src(noIp)), true);
@@ -193,6 +205,28 @@ async function suite(script, label) {
   check('U7 the application server reached as "localhost": the box shows the server\'s own name and IP',
         L(loc, 'Application Server'), ['APP01', '10.0.0.5']);
   check('U7 CONTROL: a server not reached keeps "localhost" (nothing better is known)', L(n, 'Application Server'), ['localhost']);
+
+  // VLC-220 (owner ruling 2026-10-28). A customer PC that never signed in, on GSI's help site.
+  const NEVER = 'This browser has never signed in to RapidReconciler at docs-dev.rapidreconciler.getgsi.com, so this check '
+    + 'does not know your server’s address. Ask GSI support for the Connection Check link for your server.';
+  const nv = await load(script, { help: true });
+  check('F1 never signed in, on the help site: the line under leg 2 says so and asks for the Connection Check link',
+        src(nv).indexOf(NEVER) >= 0, true);
+  check('F1 and the old "open this check from that same address" hint is gone', /from that same address/.test(src(nv)), false);
+  check('F1 CONTROL: the help site\'s config.js still names the dev box\'s agent, which is why F1 reads "dev", not "page"',
+        comms(nv), ['http://localhost:34537']);
+  const signed = await load(script, { help: true, token: token('rr.example.test:34537') });
+  const kept2 = await load(script, { help: true, store: { 'rrv8.lastServer': JSON.stringify({ base: 'https://rr.example.test:34537', db: 'RapidReconciler_Demo1' }) } });
+  check('F2 signed in, or a server remembered: no "never signed in" line', [src(signed), src(kept2)].some((t) => /never signed in/.test(t)), false);
+  // The link exactly as VALC's Troubleshooting page builds it: the agent base URL-encoded into ?agent=.
+  const vl = await load(script, { help: true, search: '?agent=' + encodeURIComponent('https://rr.example.test:34537') });
+  check('L1 a never-signed-in PC opened from VALC\'s link: leg 2 tests the link\'s server', comms(vl), ['https://rr.example.test:34537']);
+  check('L1 and goes green on its reply', vl.legs[2], GREEN);
+  check('L1 and the line under leg 2 names the link, with no "never signed in" line',
+        [src(vl), /never signed in/.test(src(vl))], ['Address from this page’s link (?agent=).', false]);
+  const vr = await load(script, { help: true, search: '?agent=' + encodeURIComponent('https://other.example.test:40000'),
+    store: { 'rrv8.lastServer': JSON.stringify({ base: 'https://rr.example.test:34537', db: 'RapidReconciler_Demo1' }) } });
+  check('L2 the link wins over a remembered server', comms(vr), ['https://other.example.test:40000']);
 }
 
 (async function () {
@@ -238,7 +272,18 @@ async function suite(script, label) {
   const ok4 = reds.indexOf('U3') >= 0 && reds.indexOf('U1') < 0 && reds.indexOf('S1') < 0;
   console.log('  ' + (ok4 ? 'ok  ' : 'FAIL') + '  control: without the remembered branch a signed-out PC loses its server (U3), a signed-in one does not' + (ok4 ? '' : ' (reddened: ' + reds.join(',') + ')'));
 
-  const pass = real === 0 && ok && ok2 && ok3 && ok4;
-  console.log('\nRESULT: ' + (pass ? 'all assertions and all four mutation controls pass' : real + ' assertion(s) failed'));
+  // VLC-220: the never-signed-in sentence taken out must redden F1, and leave the link (L1) alone.
+  const NOTE_LINE = "      lead += ' This browser has never signed in to RapidReconciler at ' + here.host\n";
+  const MUT5 = SCRIPT.replace(NOTE_LINE, "      lead += '' + (here.host && '')\n");
+  if (MUT5 === SCRIPT) { console.log('  HARNESS BROKEN: the fifth mutation changed nothing'); process.exit(1); }
+  failures = 0; reds = [];
+  console.log = () => {};
+  await suite(MUT5, '');
+  console.log = log;
+  const ok5 = reds.indexOf('F1') >= 0 && reds.indexOf('L1') < 0;
+  console.log('  ' + (ok5 ? 'ok  ' : 'FAIL') + '  control: without the never-signed-in sentence F1 reddens, and the link (L1) does not' + (ok5 ? '' : ' (reddened: ' + reds.join(',') + ')'));
+
+  const pass = real === 0 && ok && ok2 && ok3 && ok4 && ok5;
+  console.log('\nRESULT: ' + (pass ? 'all assertions and all five mutation controls pass' : real + ' assertion(s) failed'));
   process.exit(pass ? 0 : 1);
 })();
