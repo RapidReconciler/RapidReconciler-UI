@@ -146,7 +146,8 @@ Each row lists **Name** &middot; **Expected**. The trigger is folded into the ex
 
 | # | Name | Expected |
 |---|---|---|
-| 3.2.1 | File picker filter | Click "Choose log file" &rarr; OS dialog filtered to `.log .out .txt`. |
+| 3.2.1 | File picker filter | Click "Choose log file" &rarr; OS dialog filtered to `.log .gz .out .txt`. |
+| 3.2.1a | Rotated V8 log (`.gz`) | Pick `services-<port>.log.<date>.0.gz` from `C:\Program Files\Rapid Reconciler V8\logs` &rarr; it opens with no unzipping, and the entry count matches the same day's plain log. A file named `.gz` that is not gzip shows a red "is not a valid .gz file" line on the card and clears the result. Automated: `Tools/test-log-analyzer-gz.js`. |
 | 3.2.2 | Pick a file | Pick any `.out.log` file &rarr; file-meta shows document icon + filename (monospace) + size. Textarea fills with file contents. Auto-analysis fires. Output context "Analyzing RR agent log &middot; N lines". |
 | 3.2.3 | Pick the same file twice | Re-pick the same file &rarr; file-meta refreshes and analysis re-runs (input value reset on click ensures change event fires). |
 | 3.2.4 | Cancel the picker | Esc or close the dialog &rarr; no stale file appears. Output area unchanged. |
