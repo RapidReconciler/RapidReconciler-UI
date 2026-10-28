@@ -91,7 +91,7 @@ async function load(script, opt) {
     fetch: (url) => {
       fetched.push(url);
       if (/^http:\/\/localhost:34537\//.test(url)) return Promise.reject(new TypeError('Failed to fetch'));   // 400 "requires TLS", no CORS header
-      if (/\/comms-check\?/.test(url)) return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(CHECKS) });
+      if (/\/comms-check\?/.test(url)) return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(opt.reply || CHECKS) });
       return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) });
     }
   };
@@ -147,7 +147,18 @@ async function suite(script, label) {
   check('D1 the sign-in box on this same server: the server\'s own name and IP, marked "same server"', L(s, 'GSI Sign-In'), ['APP01', '10.0.0.5 · same server']);
   // The production edge name every customer sees must fit whole, not be cut.
   check('D1 the production GSI edge name fits its box uncut', (L(s, 'GSI Edge / UI') || [])[0], 'rapidreconciler-prod.getgsi.com');
-  check('D2 this PC shows no address (a browser cannot learn its own name or IP)', L(s, 'This PC'), []);
+  check('D2 an agent from before UI-241 (no caller in its reply): this PC shows no address, never a guess', L(s, 'This PC'), []);
+  // UI-241 (owner 2026-10-28): "Can the This PC block in the diagram list the IP address as well?" The agent's reply
+  // carries the address it saw the PC come from; the box shows it, and a PC that is the server says so.
+  const withCaller = (c) => Object.assign({}, CHECKS, { caller: c });
+  const p1 = await load(script, { token: token('rr.example.test:34537'), reply: withCaller({ ip: '192.0.2.47', local: false }) });
+  check('P1 this PC shows the address the server saw it come from, and says who saw it', L(p1, 'This PC'), ['192.0.2.47', 'seen by your server']);
+  check('P1 and the addresses list names it in its From this PC heading',
+        /From this PC \(192\.0\.2\.47\)/.test(String(p1.els.netpathList ? p1.els.netpathList.innerHTML : '')), true);
+  check('P1 and leg 2 still leaves from the PC box\'s bottom edge, which grew to the address boxes\' height',
+        /<rect x="300" y="32" width="130" height="66"/.test(String(p1.els.netdiagram.innerHTML)) && /<line x1="372" y1="98"/.test(String(p1.els.netdiagram.innerHTML)), true);
+  const p2 = await load(script, { token: token('rr.example.test:34537'), reply: withCaller({ ip: '127.0.0.1', local: true }) });
+  check('P2 a PC that is the server itself shows the server\'s own IP, marked same server', L(p2, 'This PC'), ['10.0.0.5', 'same server']);
   check('D2 CONTROL: every box was found on the drawing', ['GSI Edge / UI', 'GSI Sign-In', 'This PC', 'Application Server', 'Database'].every((b) => !!s.boxes[b]), true);
   // Server not reached: only what the page itself knows.
   check('D3 server not reached: the app server box keeps the name it tried, with no IP', L(n, 'Application Server'), ['localhost']);

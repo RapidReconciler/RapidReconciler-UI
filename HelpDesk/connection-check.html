@@ -690,7 +690,8 @@
   // UI-233 (owner 2026-10-26): "Can the diagram show the dns name and ip in each box as
   // applicable?" Each box's address comes from the SAME rows the "Addresses for your IT"
   // list renders (buildPathRows), so the picture and the list cannot disagree. What a box
-  // cannot know it leaves out: a browser has no way to learn this PC's own name or IP, and
+  // cannot know it leaves out: a browser has no way to learn this PC's own name or IP (since
+  // UI-241 the server reports the address it saw the PC come from, and This PC shows that), and
   // an unreached server reports no IP and no database. A name too long for its box is cut
   // with an ellipsis; the list underneath carries it in full.
   function diagramAddrs(rows) {
@@ -727,10 +728,18 @@
     var appServer = role('APP_SERVER');
     if (!a.app.ip && appServer) a.app = { name: a.app.name || appServer.host, ip: (appServer.ip || appServer.host) + ' · on file' };
     a.jde = onFile(role('JDE_SOURCE'));
+    // UI-241 (owner 2026-10-28, "Can the This PC block in the diagram list the IP address as well?"): the browser
+    // cannot read it, so the box shows the address your server saw this PC come from. A PC that IS the server says
+    // so, as the other boxes do. No reply, or an agent from before UI-241, leaves the box as it was: no guess.
+    var who = rows.caller;
+    a.pc = !who ? null
+      : who.local ? { name: srv.internalIp || who.ip, ip: 'same server' }
+      : { name: who.ip, ip: 'seen by your server' };
     return a;
   }
   function renderDiagram(legs, rows) {
     var addr = rows ? diagramAddrs(rows) : {};
+    var pcH = addr.pc ? 66 : 50;   // UI-241: This PC grows to the address boxes' height when it has an address
     function edge(x1, y1, x2, y2, n) {
       var col = legColor(legs[n]);
       var mx = Math.round((x1 + x2) / 2), my = Math.round((y1 + y2) / 2);
@@ -767,12 +776,12 @@
     s += edge(300, 56, 200, 73, 1);   // (1) PC -> GSI Edge
     s += edge(300, 70, 200, 268, 3);  // (3) PC -> GSI Sign-In
     s += edge(352, 212, 200, 290, 5); // (5) App Server -> GSI Sign-In
-    s += edge(372, 82, 440, 179, 2);  // (2) PC -> App Server
+    s += edge(372, pcH === 66 ? 98 : 82, 440, 179, 2);  // (2) PC -> App Server, from the PC box's bottom edge
     s += edge(562, 212, 596, 212, 4); // (4) App Server -> Database
     // Nodes
     s += node(10, 40, 190, 66, 'GSI Edge / UI', addr.edge);
     s += node(10, 247, 190, 66, 'GSI Sign-In', addr.signin);
-    s += node(300, 32, 130, 50, 'This PC', null);
+    s += node(300, 32, 130, pcH, 'This PC', addr.pc);
     s += node(352, 179, 210, 66, 'Application Server', addr.app);
     s += node(596, 179, 152, 66, 'Database', addr.db);
     // VLC-210: the JDE source, when VALC has one on file. No check here tests it (its leg runs from the SQL Server,
@@ -807,7 +816,9 @@
       return { role: s.role, label: (ROLE[s.role] || s.role || 'Server') + (s.hostsThisDatabase ? ' (this database)' : ''),
                host: s.name || s.address, ip: s.address && s.address !== s.name ? s.address : null, hosts: !!s.hostsThisDatabase };
     });
-    return { pc: pc, server: serverEps, serverId: srv, agentReachable: !!(b.ok && b.data),
+    // UI-241: the address this PC came from, as the server saw it. An agent before UI-241 sends none.
+    var caller = (b.ok && b.data && b.data.caller && b.data.caller.ip) ? b.data.caller : null;
+    return { pc: pc, server: serverEps, serverId: srv, caller: caller, agentReachable: !!(b.ok && b.data),
              onFile: onFile, onFileRefused: topo && topo.refused ? topo.refused : null };
   }
 
@@ -817,7 +828,8 @@
       return '<div class="np-row"><span class="np-leg">&rarr; ' + escapeHtml(r.label) + '</span>' +
              '<span class="np-addr">' + escapeHtml(r.host) + ' (' + ip + ') : ' + escapeHtml(String(r.port)) + '</span></div>';
     }
-    var html = '<div class="np-group"><div class="np-group-head">From this PC</div>' +
+    var pcIp = rows.caller ? (rows.caller.local ? 'the server itself' : rows.caller.ip) : '';
+    var html = '<div class="np-group"><div class="np-group-head">From this PC' + (pcIp ? ' (' + escapeHtml(pcIp) + ')' : '') + '</div>' +
                rows.pc.map(rowHtml).join('') + '</div>';
     if (rows.agentReachable) {
       var sid = [rows.serverId.hostname, rows.serverId.internalIp].filter(Boolean).join(' / ') || 'your server';
