@@ -18,8 +18,13 @@
  *   A4  askAcct on Full and Enhanced sends those facts and the "which type" answer shape; on Basic it
  *       never fetches the rows; a failed fetch still sends the prompt with "could not be loaded"
  *
- * TWO MUTATION CONTROLS: askAcct no longer loads the rows on Full / Enhanced (must redden A4 only),
- * and the Enhanced label ignoring the mask (must redden A2 only).
+ *   A5  (UI-247) the categories are the analyst cards' names (RRV8.txv.code / title), and every listed card
+ *       carries its fix in the catalog's own words (META[code].action), once, on Enhanced too; the prompt
+ *       asks for a "The fix:" line built only from those facts
+ *
+ * THREE MUTATION CONTROLS: askAcct no longer loads the rows on Full / Enhanced (must redden A4 and A5,
+ * since no rows means no fixes), the catalog fixes not added (A5 only), and the Enhanced label ignoring the
+ * mask (A2 only).
  */
 'use strict';
 const fs = require('fs');
@@ -28,6 +33,7 @@ const vm = require('vm');
 
 const ROOT = path.join(__dirname, '..');
 const HOME = fs.readFileSync(path.join(ROOT, 'RRV8/home.html'), 'utf8').replace(/\r\n/g, '\n');
+const CONFIG = fs.readFileSync(path.join(ROOT, 'RRV8/config.js'), 'utf8');
 
 // Brace-matched, so a nested object literal does not end the block early (same slicer as test-data-freshness.js).
 function sliceBlock(src, startIdx) {
@@ -75,12 +81,23 @@ const ROWS = [
 const COMPANIES = [{ co: '90002', ccy: 'USD' }];
 const INV_ROWS = ['2025-06-30', '2025-07-31', '2025-08-28'].map((p) => ({ CompanyNumber: '90002', PeriodEnds: p }));
 
-function load(html) {
+// The real card catalog (UI-247): RRV8.txv from config.js, so a fix is checked against the
+// catalog's own words, never a copy of them typed into this test.
+function loadTxv(config) {
+  const w = {};
+  vm.runInNewContext(config, { window: w, document: { addEventListener() {}, querySelector() { return null; } },
+    console: { warn() {}, log() {}, error() {} }, localStorage: { getItem() { return null; } }, navigator: {} });
+  if (!w.RRV8 || !w.RRV8.txv) throw new Error('config.js no longer defines RRV8.txv');
+  return w.RRV8;
+}
+
+function load(html, config) {
   const st = { tier: 'full', fetches: 0, prompt: null, fail: false };
+  const RRV8 = loadTxv(config || CONFIG);
   const sb = {
     console: { warn() {}, log() {}, error() {} },
-    window: { RRV8: {} },
-    RRV8: {},
+    window: { RRV8 },
+    RRV8,
     _invRows: INV_ROWS,
     _coNames: null,
     activeDb: () => ({ n: 'RapidReconciler_Demo1' }),
@@ -99,7 +116,6 @@ function load(html) {
     _acctAsking: false,
     _acctLastAsk: null,
   };
-  sb.window.RRV8 = sb.RRV8;
   vm.createContext(sb);
   const src = [
     extractVarFn(html, '_money'),
@@ -133,12 +149,25 @@ async function runCases(html) {
     has(full, 'Co 90002, Jul 31, 2025: open 5 documents; by module: Manufacturing $1,100.00 (3 documents), Sales $-20.00 (2 documents).'), true);
   check('A1 the largest group names module, category, order/doc type, documents, net and recurrence',
     has(full, 'Manufacturing — Mfg Cost Mismatch, WO/IC: 3 documents, net $1,750.00, in 2 of 3 periods'), true);
-  check('A1 an unclassified row is labelled, not dropped (and one document is singular)', has(full, 'Inventory — unclassified, -/IT: 1 document, net $75.00, in 1 of 3 periods'), true);
+  check('A1 a row with no category lands on its card\'s terminal, not dropped (and one document is singular)',
+    has(full, 'Inventory — Unclassified — Inventory, -/IT: 1 document, net $75.00, in 1 of 3 periods'), true);
+
+  // A5 (UI-247) -- the category is the analyst card's name, and each listed card carries its catalog fix.
+  const T = sb.RRV8.txv;
+  check('A5 categories are the analyst cards\' names (RRV8.txv), not the raw SubType',
+    [has(full, 'Sales — Intercompany Sales, SK/RI'), full.some((l) => /Sales — Intercompany, /.test(l))], [true, false]);
+  const fixLine = (code) => 'Fix — ' + T.info(code).title + ': ' + T.info(code).action;
+  check('A5 each listed card gets its fix, in the catalog\'s own words',
+    [fixLine('MCM'), fixLine('MTO'), fixLine('ICO'), fixLine('T-INV')].map((f) => full.includes(f)), [true, true, true, true]);
+  check('A5 the Mfg Cost Mismatch fix names the programs (read from the catalog, so the catalog is what is tested)',
+    /R30837/.test(T.info('MCM').action) && /R30822/.test(T.info('MCM').action) && has(full, 'R30837'), true);
+  check('A5 one fix line per card, however many groups share it', full.filter((l) => l.startsWith('Fix — Mfg Cost Mismatch:')).length, 1);
   check('A1 another company\'s rows stay out', has(full, 'Non-Stock Charge Lines') || has(full, '5,000'), false);
 
   const masked = sb._acctTxvFactLines(ROWS, COMPANIES, '2025-07-31', true, periodsOf);
   check('A2 Enhanced masks the company and sends no company number',
     [has(masked, 'Entity A, Jul 31, 2025'), masked.some((l) => l.includes('90002'))], [true, false]);
+  check('A5 Enhanced sends the fixes too', has(masked, 'Fix — Mfg Cost Mismatch:'), true);
 
   const failed = sb._acctTxvFactLines(null, COMPANIES, '2025-07-31', false, periodsOf);
   check('A3 a failed load says so and forbids guessing', [has(failed, 'could not be loaded'), has(failed, 'do NOT guess')], [true, true]);
@@ -154,6 +183,9 @@ async function runCases(html) {
       [st.fetches, st.area, !!st.prompt && st.prompt.includes('Transaction variance by type'),
        !!st.prompt && st.prompt.includes('Mfg Cost Mismatch, WO/IC'), !!st.prompt && st.prompt.includes('which transaction, document or order type')],
       [1, 'inventory/transactions', true, true, true]);
+    check('A5 ' + tier + ': the prompt carries the fix facts and asks for "The fix:" with no invented steps',
+      [!!st.prompt && st.prompt.includes('Fix — Mfg Cost Mismatch:'), !!st.prompt && st.prompt.includes('a line starting with "The fix: "'),
+       !!st.prompt && st.prompt.includes('never invent a program, AAI or step')], [true, true, true]);
   }
   st.tier = 'grounded'; st.prompt = null; st.fetches = 0;
   vm.runInContext('_acctTxvCache = null; _acctAsking = false;', sb);
@@ -187,8 +219,11 @@ async function runCases(html) {
     console.log('  ' + (ok ? 'ok  ' : 'FAIL') + '  arm reddened ' + (got.join(',') || 'nothing') + '; needed ' + want);
   }
   if (shippedFailures === 0) {
-    await arm('askAcct no longer loads the rows on Full / Enhanced', 'A4',
+    // No rows means no fix facts either, so A5's prompt case reddens with A4 -- correctly.
+    await arm('askAcct no longer loads the rows on Full / Enhanced', 'A4,A5',
       HOME.replace("var _txvP = (tier === 'full' || tier === 'scrubbed')", "var _txvP = (false)"));
+    await arm('the catalog fixes are not added', 'A5',
+      HOME.replace('    if (fixes.length) {\n      lines.push(', '    if (false) {\n      lines.push('));
     await arm('the Enhanced label ignores the mask', 'A2',
       HOME.replace("var label = scrub ? ('Entity ' + String.fromCharCode(65 + (i % 26))) : ('Co ' + c.co);\n      var sym = _ccySym(c.ccy)",
         "var label = ('Co ' + c.co);\n      var sym = _ccySym(c.ccy)"));

@@ -18651,6 +18651,13 @@
       'This is a DIFFERENT measure from the "Transactions" component in the company facts above (that one is the account summary before netting), so the two need not match: never add them together, subtract one from the other, or call either one wrong.'
     ];
     var view = String(viewed || '').slice(0, 10);
+    // UI-247: group by the CARD a row lands on, through RRV8.txv.code, the one SubType ->
+    // card mapping every txv surface uses. Grouping by the raw SubType (UI-246) named
+    // categories the analyst cards do not use ("Intercompany", "Transfers"), and it gave
+    // no key to look a fix up by. Every card a listed group lands on gets its catalog fix
+    // below, in the same words the analyst's card shows.
+    var txv = (window.RRV8 && RRV8.txv) || null;
+    var usedCodes = [];
     (companies || []).forEach(function (c, i) {
       var label = scrub ? ('Entity ' + String.fromCharCode(65 + (i % 26))) : ('Co ' + c.co);
       var sym = _ccySym(c.ccy), mine = _txScope(rows, [String(c.co)]);
@@ -18661,11 +18668,12 @@
         var mods = {}, groups = {};
         set.forEach(function (r) {
           var mod = _txModuleOf(r), v = Number(r.Variance) || 0, p = String(r.PeriodEnds || '').slice(0, 10);
-          var cat = String(r.SubType || '').trim() || 'unclassified';
+          var code = txv ? txv.code(r) : '';
+          var cat = (code && txv.title(code)) || String(r.SubType || '').trim() || 'unclassified';
           var ot = String(r.OT || '').trim(), dt = String(r.DT || '').trim();
-          var gk = mod + '|' + cat + '|' + ot + '|' + dt;
+          var gk = mod + '|' + (code || cat) + '|' + ot + '|' + dt;
           var m = mods[mod] || (mods[mod] = { net: 0, n: 0 }); m.net += v; m.n += 1;
-          var g = groups[gk] || (groups[gk] = { mod: mod, cat: cat, ot: ot, dt: dt, net: 0, n: 0, per: {} });
+          var g = groups[gk] || (groups[gk] = { mod: mod, code: code, cat: cat, ot: ot, dt: dt, net: 0, n: 0, per: {} });
           g.net += v; g.n += 1; if (p) g.per[p] = 1;
         });
         var modTxt = Object.keys(mods).sort(function (a, b) { return Math.abs(mods[b].net) - Math.abs(mods[a].net); })
@@ -18673,6 +18681,7 @@
         var top = Object.keys(groups).map(function (k) { return groups[k]; })
           .sort(function (a, b) { return Math.abs(b.net) - Math.abs(a.net); }).slice(0, 6)
           .map(function (g) {
+            if (g.code && usedCodes.indexOf(g.code) < 0) usedCodes.push(g.code);
             var np = Object.keys(g.per).length;
             return g.mod + ' — ' + g.cat + ', ' + (g.ot || '-') + '/' + (g.dt || '-') + ': ' + docs(g.n) + ', net ' + sym + _money(g.net)
               + (withRecurrence ? ', in ' + np + ' of ' + Math.max(M, np) + ' periods' : '');
@@ -18688,6 +18697,18 @@
       var allP = {}; mine.forEach(function (r) { var p = String(r.PeriodEnds || '').slice(0, 10); if (p) allP[p] = 1; });
       lines.push(label + ', all ' + Math.max(M, Object.keys(allP).length) + ' loaded periods: open ' + docs(mine.length) + '; ' + summarize(mine, true));
     });
+    // The fix for every card a listed group lands on: the catalog's `action` (what the
+    // analyst's card says to do), else its `cause`. One line per card, however many
+    // companies or doc types share it. No identifiers in it, so Enhanced sends it as-is.
+    var fixes = usedCodes.map(function (code) {
+      var inf = txv.info(code) || {};
+      var how = String(inf.action || txv.cause(code) || '').trim();
+      return how ? 'Fix — ' + (inf.title || code) + ': ' + how : '';
+    }).filter(Boolean);
+    if (fixes.length) {
+      lines.push('The fix for each category above, from RapidReconciler\'s own catalog (the same words the analyst\'s card shows). Use these steps, and name the programs, AAIs and tables exactly as written; never add a program, AAI or step that is not here:');
+      lines = lines.concat(fixes);
+    }
     return lines;
   }
   // The periods loaded for one company, from the reconciliation rows (_invRows): the "M" in
@@ -18851,7 +18872,7 @@
       + '• If it asks WHAT a company\'s out-of-balance (or "variance") IS, answer as a scannable breakdown and NOTHING else, each part on its OWN line: (1) a single lead line naming it, e.g. "It\'s Company 80002\'s net out-of-balance of -$8.4K, made up of:"; (2) ONE line per NON-ZERO component, each starting with "• " as "• <component> — <rounded amount>" (skip zero components; never add components together or state a figure larger than the net); (3) a final line starting with "I\'d focus on " that names the single largest actionable driver and the one next step — or, if it is immaterial / nothing to act on, say that plainly.\n'
       // UI-246: the question the owner asked, and the answer shape it deserves. Only when the
       // type facts were sent (Full / Enhanced); on Basic it would point at facts that are absent.
-      + (txvRows === undefined ? '' : '• If it asks which transaction, document or order type (or category) causes the most variance or problems, answer from the "Transaction variance by type" facts and NOTHING else: (1) a lead line naming the module and category that drive it; (2) ONE line per top group starting with "• ", as "• <module> — <category> (<order type>/<doc type>) — <documents> documents, net <rounded amount>, in N of M periods"; point out groups that largely offset each other (similar size, opposite sign) instead of counting both; (3) a final line starting with "I\'d focus on " naming the group that recurs in the most periods with the largest net, and that the lasting fix is an analyst source-data or account-configuration fix, not a monthly entry. If those facts say they could not be loaded, say so.\n')
+      + (txvRows === undefined ? '' : '• If it asks which transaction, document or order type (or category) causes the most variance or problems, answer from the "Transaction variance by type" facts and NOTHING else: (1) a lead line naming the module and category that drive it; (2) ONE line per top group starting with "• ", as "• <module> — <category> (<order type>/<doc type>) — <documents> documents, net <rounded amount>, in N of M periods"; point out groups that largely offset each other (similar size, opposite sign) instead of counting both; (3) a line starting with "I\'d focus on " naming the group that recurs in the most periods with the largest net, and why; (4) a line starting with "The fix: " giving THAT category\'s fix from its "Fix — <category>" fact as concrete steps, naming every program, AAI and report exactly as written there and saying who does it (the analyst or administrator, not the accountant), then one sentence that a journal entry each period only clears the symptom. Use only the catalog\'s steps: never invent a program, AAI or step, and if no "Fix —" fact covers that category, say the fix is not catalogued yet. The lead line, the "I\'d focus on" line and the "The fix:" line carry NO bullet or dash. If those facts say they could not be loaded, say so.\n')
       + '• For a how-to or "what does this mean" question, answer in 2-4 plain sentences from the definitions and guidance above — no bullets.\n'
       + 'Round amounts (e.g. "$29K"). Ground any figures ONLY in the facts above (if a specific number is not there, say so). This surface uses "• " for its bullets, which OVERRIDES the "- " default below.\n'
       + (window.RRV8 && RRV8.AI_REGISTER ? RRV8.AI_REGISTER : '');
