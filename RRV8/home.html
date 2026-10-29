@@ -256,15 +256,12 @@
   body[data-view-role="none"] #reportsPalette { display: none !important; }
   .role-hero-title { font-family: 'Source Sans 3', 'Segoe UI', sans-serif; font-weight: 800; font-size: 22px; letter-spacing: -.01em; color: var(--navy); line-height: 1.15; }
   .role-hero-sub { display: flex; align-items: center; gap: 8px; margin: 3px 0 0; font-size: 14px; line-height: 1.45; color: var(--text-muted); }
-  .role-hero-item.sub-dismissed .role-hero-sub { display: none; }
-  /* Analyst header: page-title kicker + greeting + a scope context row (full
-     company name & number, short DB tag). Replaces the old muted subline. */
+  /* Role header (UI-245, every role): page-title kicker + greeting + one context
+     row. The analyst's since #371; Admin and Accountant since 2026-10-29. */
   .role-hero-kicker { font-size: 12.5px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: var(--navy); margin: 0 0 4px; }
   .role-hero-context { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; margin: 8px 0 0; }
   .role-hero-context .rh-co { font-size: 15px; font-weight: 700; color: var(--navy); }
   .role-hero-context .rh-co .rh-co-num { font-weight: 500; color: var(--text-muted); }
-  .role-hero-dismiss { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--text-muted); font-size: 17px; line-height: 1; cursor: pointer; opacity: .55; }
-  .role-hero-dismiss:hover { opacity: 1; color: var(--navy); background: var(--bg-soft); }
   /* Topbar retired on Home — it duplicated the AI rail (brand), Set Context
      (data-currency + period) and the footer (name + sign-out). Hidden now;
      markup + its boot JS get fully excised in the cleanup sweep. */
@@ -3162,33 +3159,26 @@
        undismissed message loads, so it doesn't affect the normal layout. -->
   <section class="msgcenter" id="msgCenter" hidden aria-label="Messages"></section>
 
-  <!-- Role-context title — renders per ACTIVE view-role (body[data-view-role]).
-       Sits above the AI briefing band, below the Message Center. The title
-       always shows; the subtitle is dismissible per SESSION (sessionStorage,
-       keyed by role — role logins share a device, so a session-scoped dismiss is
-       the honest scope; a new session shows it again). Subtitle copy is a FIRST
-       PASS for the owner to refine. -->
+  <!-- Role header — renders per ACTIVE view-role (body[data-view-role]). Sits
+       above the AI briefing band, below the Message Center. UI-245 (owner ruling
+       2026-10-29, "greeting for all"): every role opens the same way, a
+       "<Role> Home" kicker, "<First>, here's where you stand today", and one
+       context line. renderRoleHero() fills the name and the context line; this
+       markup is only the first paint. Until then Admin and Accountant showed a
+       role title plus a dismissible subtitle while the Analyst showed the
+       greeting, so the three views opened three different ways. -->
   <section class="role-hero" id="roleHero" aria-label="Dashboard role">
     <div class="role-hero-item" data-role="admin">
-      <h1 class="role-hero-title">Administrator</h1>
-      <p class="role-hero-sub">
-        <span class="role-hero-sub-text">Users, licensing, and keeping this RapidReconciler instance healthy.</span>
-        <button type="button" class="role-hero-dismiss" data-role="admin" aria-label="Hide this description" title="Hide">&times;</button>
-      </p>
+      <div class="role-hero-kicker">Administrator Home</div>
+      <h1 class="role-hero-title">Here&rsquo;s where you stand today</h1>
     </div>
     <div class="role-hero-item" data-role="analyst">
-      <h1 class="role-hero-title">Analyst</h1>
-      <p class="role-hero-sub">
-        <span class="role-hero-sub-text">Find why inventory is out of balance and fix it at the source.</span>
-        <button type="button" class="role-hero-dismiss" data-role="analyst" aria-label="Hide this description" title="Hide">&times;</button>
-      </p>
+      <div class="role-hero-kicker">Analyst Home</div>
+      <h1 class="role-hero-title">Here&rsquo;s where you stand today</h1>
     </div>
     <div class="role-hero-item" data-role="accountant">
-      <h1 class="role-hero-title">Accountant</h1>
-      <p class="role-hero-sub">
-        <span class="role-hero-sub-text">Clear this period&rsquo;s variances and close the books.</span>
-        <button type="button" class="role-hero-dismiss" data-role="accountant" aria-label="Hide this description" title="Hide">&times;</button>
-      </p>
+      <div class="role-hero-kicker">Accountant Home</div>
+      <h1 class="role-hero-title">Here&rsquo;s where you stand today</h1>
     </div>
     <!-- UI-174. A token carrying NEITHER perms.dm nor perms.ac used to land on
          the Accountant view, because _entitledRole()'s else-branch called it
@@ -4500,6 +4490,7 @@
   }
   function applyViewRole() {
     document.body.setAttribute('data-view-role', _viewRole()); syncRoleMenu(); renderSubNav(); paintNoGrantNotice();
+    renderRoleHero();   // UI-245: same header for every role; its context line names this DB
     if (_viewRole() === 'admin') renderAdminPanels();   // UI-231: the tab strip and the panel it selects, together
   }
   // UI-174. Name the database the refusal is about. "You have no lane" without
@@ -4916,13 +4907,15 @@
     renderHaDb();   // keep the bottom-right cluster picker in sync (boot + every switch)
   }
 
-  // The cluster shows only the segment after the underscore (RapidReconciler_Dev
-  // -> Dev, _NA -> NA, _TR -> TR); falls back to the full name if there's no
-  // underscore.
+  // Display-only short name: drop the platform prefix and keep everything after it
+  // (RapidReconciler_Demo1 -> Demo1, RapidReconciler_Prod_V8 -> Prod_V8). Same rule
+  // as the scope bands on every other V8 page. It used to keep only the segment after
+  // the LAST underscore, so every customer's production database, which is named
+  // RapidReconciler_Prod_V8, read "V8" on Home (owner ruling 2026-10-29: Prod_V8).
+  // A name without the prefix is shown whole. The raw name still drives routing.
   function dbShortName(n) {
     n = String(n || '');
-    var i = n.lastIndexOf('_');
-    return i >= 0 && i < n.length - 1 ? n.slice(i + 1) : n;
+    return n.replace(/^RapidReconciler_/, '') || n;
   }
 
   // Bottom-right database picker: a button + upward menu mirroring the view
@@ -8177,6 +8170,7 @@
     return list.sort(function (a, b) { return (Number(a) || 0) - (Number(b) || 0); });
   }
   function renderCompaniesPill() {
+    renderRoleHero();   // UI-245: the header's context line follows the same company / tab state
     var wrap = $('haCos'); if (!wrap) return;
     var vr = _viewRole();
     var hasRows = !!(_invRows && _invRows.length);
@@ -9179,7 +9173,7 @@
       // this too — it was previously missing, so analyst cards showed numbers only.
       if (_viewRole() === 'accountant') { renderAccountantPanels(); }
       else if (_viewRole() === 'analyst') {
-        if (typeof renderAnalystHeader === 'function') renderAnalystHeader(_lastAnalystHeroData);
+        renderRoleHero();
         // Repaint the ACTIVE analyst sub-view (Transaction Variance OR Cardex) so the
         // company-name stamp lands on both — the Cardex tab was previously missed.
         if (typeof renderAnalystPalette === 'function') renderAnalystPalette();
@@ -9618,7 +9612,7 @@
       todo: ['After keying the entry, click <b>Mark Complete</b> on the card and pick <b>Corrected &mdash; journal entry posted</b>.',
              'If you clicked <b>Journal Entry Complete</b> on an <b>Adjusting Entry</b>, the card is already marked <b>Corrected</b>.',
              'The card gets a ✓ and the reason; <b>Reopen</b> undoes it.',
-             'What each outcome means: the <b>?</b> at the bottom right, under <b>Terms on this page</b>.'] },
+             'What each outcome means: the <b>?</b> at the bottom left, under <b>Terms on this page</b>.'] },
     { tab: 'audit', title: 'Prove it', scope: 'proof', doc: 'reconciliation',
       look: 'Audit Center is the record of the period: your entries and dispositions, beside the analyst’s reviews and the model approval.',
       todo: ['Find your entry in the list: it reads <b>Awaiting posting</b> until JDE posts it with the token, then <b>✓ Verified</b>.',
@@ -11328,7 +11322,7 @@
   // read-only #analystSummary shows in its place (set by the caps function).
   // Analyst "Data health" landing (the 'work' sub-view) is a SETTLED dashboard,
   // not a thinking-beat sequence. A quiet readiness strip (plumbing) + the header
-  // render ABOVE the tabs (renderAnalystReady / renderAnalystHeader); the tab body
+  // render ABOVE the tabs (renderAnalystReady / renderRoleHero); the tab body
   // (#analystWorklist) holds the leading AI day-brief, the amber "Needs your
   // attention" rows, and the green "Cleared" rollup. Accuracy checks (roll-forward,
   // model DMAAI, UOM / Frozen / GL-Class) are computed deterministically and
@@ -13427,34 +13421,61 @@
     });
   }
 
-  // ===== Analyst "Data health" landing — header + readiness strip (page-level) ==
-  function _analystFirstName() {
+  // ===== Home role header (UI-245) ============================================
+  // One header for all three views (owner ruling 2026-10-29, "greeting for all"):
+  // a "<Role> Home" kicker, "<First>, here's where you stand today", and ONE
+  // context line naming what the view is working on:
+  //   Analyst     company name · number (the single-select pick)
+  //   Accountant  companies in view · database. A single-company detail tab
+  //               (Accounts / On Hand / Audit) names that company instead, so the
+  //               line never contradicts the Company pill below it.
+  //   Admin       database
+  // Until UI-245 only the analyst had this (#371). Its renderer replaced the item's
+  // innerHTML, which also deleted the analyst's subtitle and dismiss button that its
+  // comment said it left alone. Re-runs from applyViewRole (role + DB switch),
+  // renderCompaniesPill (company, exclusion and tab changes), renderAnalystScope,
+  // and the company-name fetch, so the line follows every scope change.
+  var _ROLE_HERO_KICKER = { admin: 'Administrator Home', analyst: 'Analyst Home', accountant: 'Accountant Home' };
+  function _firstName() {
     var u = (window.RR_SESSION && window.RR_SESSION.user) || {};
     return String(u.fn || '').trim().split(/\s+/)[0] || '';
   }
-  // Header: "<First>, here's where you stand today" + a scope-only subline
-  // (analyst · DB · Company NN). The name lives in the H1 ONLY — it was removed
-  // from the subline so it isn't said twice. Rewrites the analyst role-hero item
-  // in place; leaves the session-dismiss button + its wiring untouched.
-  var _lastAnalystHeroData = null;   // last data into renderAnalystHeader — replayed when async company names land
-  function renderAnalystHeader(d) {
-    if (_viewRole() !== 'analyst') return;
-    var item = document.querySelector('#roleHero .role-hero-item[data-role="analyst"]');
-    if (!item) return;
-    _lastAnalystHeroData = d;
-    _ensureCompanyNames();   // full company names load async; the fetch callback re-runs this header
-    var first = _analystFirstName();
-    var greet = first ? (first + ', here’s where you stand today') : 'Here’s where you stand today';
-    var cos = (d && d.companies) || [];
-    var co = _ensureAnalystSolo(cos);
-    var name = (_coNames && _coNames[String(co)]) || '';
-    var coHtml = name
+  // "<b>Name</b> · number", or "Company N" until the names land (numbers-only on a failed fetch).
+  function _roleHeroCompany(co) {
+    var name = (_coNames && _coNames[String(co).trim()]) || '';
+    return name
       ? (esc(name) + ' <span class="rh-co-num">&middot; ' + esc(String(co)) + '</span>')
       : ('Company ' + esc(String(co)));
+  }
+  function _roleHeroContext(vr) {
+    var db = dbShortName((activeDb() || {}).n || '');
+    var dbTail = db ? ' <span class="rh-co-num">&middot; ' + esc(db) + '</span>' : '';
+    if (vr === 'admin') return db ? esc(db) : '';
+    var cos = _fullCosFromRows();
+    if (vr === 'analyst') return cos.length ? _roleHeroCompany(_ensureAnalystSolo([])) : '';
+    // accountant
+    if (!cos.length) return db ? esc(db) : '';
+    var sv = (typeof _curSubView === 'function') ? _curSubView() : '';
+    if (sv === 'account' || sv === 'perpetual' || sv === 'audit') return _roleHeroCompany(_acctFocusCo(cos)) + dbTail;
+    var inc = cos.filter(function (c) { return !_isExcludedCo(c); }).length;
+    var label = _anyExcluded() ? (inc + ' of ' + cos.length + ' companies')
+                               : (cos.length + (cos.length === 1 ? ' company' : ' companies'));
+    return esc(label) + dbTail;
+  }
+  function renderRoleHero() {
+    var vr = _viewRole();
+    var kicker = _ROLE_HERO_KICKER[vr];
+    if (!kicker) return;   // the no-grant item keeps its own static header
+    var item = document.querySelector('#roleHero .role-hero-item[data-role="' + vr + '"]');
+    if (!item) return;
+    if (vr !== 'admin') _ensureCompanyNames();   // names load async; the fetch callback re-renders
+    var first = _firstName();
+    var greet = first ? (first + ', here’s where you stand today') : 'Here’s where you stand today';
+    var ctx = _roleHeroContext(vr);
     item.innerHTML =
-      '<div class="role-hero-kicker">Analyst Home</div>'
+      '<div class="role-hero-kicker">' + esc(kicker) + '</div>'
       + '<h1 class="role-hero-title">' + esc(greet) + '</h1>'
-      + (co ? ('<div class="role-hero-context"><span class="rh-co">' + coHtml + '</span></div>') : '');
+      + (ctx ? ('<div class="role-hero-context"><span class="rh-co">' + ctx + '</span></div>') : '');
   }
   // Quiet readiness strip — PLUMBING only (connectivity, data currency, inventory
   // loaded). Deliberately calm: the loud connection banner already handles a real
@@ -13473,7 +13494,7 @@
     return 'DMAAI model loading';
   }
   // Last data into renderAnalystReady — replayed when the DMAAI warm settles
-  // after the strip has already painted (same pattern as _lastAnalystHeroData).
+  // after the strip has already painted.
   var _lastAnalystReadyData = null;
   function refreshAnalystReady() {
     if (_lastAnalystReadyData) renderAnalystReady(_lastAnalystReadyData);
@@ -14835,7 +14856,7 @@
   // pill + chart render.
   function renderAnalystScope(d) {
     _ensureAnalystSolo((d && d.companies) || []);
-    renderAnalystHeader(d);   // dynamic H1 (name) + scope-only subline
+    renderRoleHero();         // greeting header + the picked company (UI-245)
     renderAnalystReady(d);    // quiet plumbing strip above the tabs
   }
   // ===== Analyst AI card — the demo "wow" surface ==============================
@@ -19753,40 +19774,8 @@
   // (Per-panel collapse retired — the Administrator surface is now a flat 3×3
   // grid of task cards, no panel grouping to expand/collapse.)
 
-  // Role-title subtitle dismiss — SESSION-scoped, keyed by role. Role logins
-  // share a device, so a localStorage "forever" would hide the subtitle for the
-  // next person on the same login; sessionStorage is the honest scope (matches
-  // the training-spine pattern) — a new session shows it again, a dismiss within
-  // a session sticks. Only the subtitle hides; the role title always shows.
-  (function () {
-    var hero = document.getElementById('roleHero');
-    if (!hero) return;
-    var KEY = 'rrv8.home.roletitle.dismissed.';
-    function ssGet(k) { try { return sessionStorage.getItem(k); } catch (_) { return null; } }
-    function ssSet(k, v) { try { sessionStorage.setItem(k, v); } catch (_) {} }
-    function itemOf(el) {
-      while (el && el !== hero) {
-        if (el.classList && el.classList.contains('role-hero-item')) return el;
-        el = el.parentNode;
-      }
-      return null;
-    }
-    // Re-apply any dismissals recorded earlier this session.
-    var items = hero.querySelectorAll('.role-hero-item');
-    for (var i = 0; i < items.length; i++) {
-      var r = items[i].getAttribute('data-role');
-      if (r && ssGet(KEY + r) === '1') items[i].classList.add('sub-dismissed');
-    }
-    var btns = hero.querySelectorAll('.role-hero-dismiss');
-    for (var j = 0; j < btns.length; j++) {
-      btns[j].addEventListener('click', function () {
-        var role = this.getAttribute('data-role');
-        var item = itemOf(this);
-        if (item) item.classList.add('sub-dismissed');
-        if (role) ssSet(KEY + role, '1');
-      });
-    }
-  })();
+  // (The role subtitle and its session-scoped dismiss were retired with UI-245:
+  // every role now opens with the greeting header, which has no subtitle.)
 </script>
 </body>
 </html>
