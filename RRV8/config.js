@@ -1855,6 +1855,7 @@ window.RRV8.TXN_COLUMNS = {
   // ---- the analyst's own per-row review -----------------------------------
   Worked:        'Your review of this row: whether you agree it is explained. Stored per row, so it survives a re-run.',
   Note:          'Your note on this row. Row-level, separate from the finding filed for the whole card.',
+  AssignedTo:    'Who owns this row. Assign it from Update; hover for the date it was handed over. A worked row keeps its owner, shown dimmed.',
   // ---- identity ----------------------------------------------------------
   CompanyNumber: 'The REPORTING company, which is not always the document company. An intercompany leg reports under one and carries another.',
   LongAccount:   'The full business unit, object and subsidiary the inventory side posted to.',
