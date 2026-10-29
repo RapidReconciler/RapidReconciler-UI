@@ -106,6 +106,43 @@ Full JWT payload shape:
 | `POST /system-status` | (empty) | Topbar status, Reconciliation drawer | Returns `{fileName}`. Pair with `GET /download-excel/{fileName}` to get the diagnostic Excel; hand to the analyzer for parsing. |
 | `GET /download-excel/{id}` | (none) | follow-up to `/system-status` | The diagnostic Excel binary. |
 
+### In Transit (Services: UI-239; pages: UI-240)
+
+No V8 page calls these yet. The Services side is built; the pages are UI-240. Each is an `rrFetch` area under
+`in-transit/`, and **`in-transit/` is in neither `RR_TEST_AGENT_AREAS` nor `RR_TEST_AGENT_PREFIXES`
+(`config.js`) yet**, so UI-240 adds the prefix to `RR_TEST_AGENT_PREFIXES` before its first call. Until then
+`rrFetch` routes these to `db.ip`, not to the agent. Contract, per endpoint:
+[agent docs &sect; In Transit (UI-239)](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/docs/API.md#in-transit-ui-239).
+
+What a page needs to know:
+
+- **Module.** Every `in-transit/*` call needs In Transit on the token (`dbs[i].t.it` and `dbs[i].m.it`). Without it
+  the agent answers 403 `{reason}`, which `RRDB.responseError` puts in `err.message`. Hide the pages on the same
+  test so the 403 is a backstop, not the normal path.
+- **Exclude and recalc** (`in-transit/orders/exclusions`, `in-transit/orders/recalc`) need `perms.ite`, not
+  `aite`: VALC mints `aite` from Import JDE. Show the buttons on `perms.ite`.
+- **Filters** are `reconciliationFilter` with bare string arrays on every In Transit call, including
+  `reconciliation/rows` and `variance-component`, where Inventory uses the Item-wrapped shape.
+- **Signs** are the views' stored signs. Do not apply Inventory's `transactions` flip: on every row
+  `OOB = BegVar - EndofDay + Exclusions + Variance + JEs`.
+- **Exclusions** send keys only (`companyNumber, longAccount, orderDate, orderNumber, orderType, shortItem, lot`)
+  plus one `excluded` and one `note` (100 characters at most). The agent reads quantity and amount itself.
+- **Recalc** is async: `{started, message, busyWith?}`, then poll `GET in-transit/orders/recalc-status` for
+  `{running, since, blockedBy, last:{ok, error, ...}}`. Report `last.error` when `ok` is false.
+- **Until DB beta.134 is deployed** to a database, `in-transit/transactions` and three of the five integrity
+  reports return 500 there (their views do not exist yet).
+
+| Area | Method | Page (UI-240) |
+|---|---|---|
+| `in-transit/status` | GET | every In Transit page (sidebar universe, validation light) |
+| `in-transit/reconciliation/rows`, `/history`, `/journal-entry` | POST | Overview, Accounts, Data Health, Journal Entry export |
+| `in-transit/variance-component` | POST | variance preview modals and exports |
+| `in-transit/transactions`, `/details`, `/save-notes` | POST | Transaction Variance, `transit-transactions.html` |
+| `in-transit/as-of`, `/as-of/details` | POST | On Hand, `transit-asof.html` |
+| `in-transit/orders`, `/orders/exclusions`, `/orders/recalc` | POST | Orders, Tools, `transit-orders.html` |
+| `in-transit/orders/recalc-status` | GET | Tools |
+| `in-transit/integrity` | POST | Data Health (five reports) |
+
 Full agent-side controller catalog (including endpoints V8 doesn't
 exercise yet):
 [agent docs &sect; Controller catalog](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/docs/API.md#controller-catalog).
