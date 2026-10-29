@@ -1481,6 +1481,7 @@
   const _testAgentAreas = new Set(window.RR_TEST_AGENT_AREAS || [
     'inventory/reconciliation/rows',
     'inventory/reconciliation/history',
+    'inventory/reconciliation/value-bridge',
     'inventory/audit-detail',
     'inventory/variance-component'
   ]);
@@ -2618,6 +2619,42 @@
     return rrFetch(_u, { method: 'POST', body: { prompt, level: asofEffTier() } })   // VLC-186: the tier it was masked with
       .then(r => (r && r.text) ? String(r.text).trim() : '');
   }
+  // The "How are we trending?" prompt. Pure (reads only its arguments and the page's
+  // formatters) so Tools/test-asof-trend-bridge.js can build it from fixed inputs.
+  //   hist    loadAsOfPeriodHistory():  [{period, value}]
+  //   bridge  loadAsOfValueBridge():    [{period, change, volume, cost, other, topVolume[], topCost[]}]
+  // UI-225: the value series alone carries no quantity, so the model could only say
+  // "confirm it is receipt volume, not a cost change" (owner's screenshot, 2026-10-20).
+  // With the split it can name the driver and the item behind it. When the split did
+  // not load, the prompt says so, and the answer says it cannot tell, rather than the
+  // gap showing only in the console.
+  function asofTrendPrompt(hist, bridge) {
+    const series = hist.map(p => formatPeriod(p.period) + ' ' + curMoney(p.value)).join('; ');
+    const top = (list) => (list || []).slice(0, 2)
+      .map(t => t.itemNumber + (t.branch ? ' at branch ' + t.branch : '') + ' ' + curMoney(t.amount)).join(', ');
+    const lines = (bridge || []).filter(b => b && b.period).map(b => {
+      let s = formatPeriod(b.period) + ': change ' + curMoney(b.change)
+        + ' = volume ' + curMoney(b.volume) + ' + cost ' + curMoney(b.cost);
+      if (Math.abs(Number(b.other) || 0) >= 1) s += ' + other ' + curMoney(b.other);
+      const tv = top(b.topVolume), tc = top(b.topCost);
+      if (tv) s += '; volume led by ' + tv;
+      if (tc) s += '; cost led by ' + tc;
+      return s;
+    });
+    const split = lines.length
+      ? 'What moved the balance, per period (versus the period before): ' + lines.join(' | ') + '.\n'
+        + 'Volume = more or fewer units, valued at each item’s unit cost. Cost = the same units carried at a different unit cost. Other = the open period’s cardex adjustment.\n'
+        + 'For any period you call out, say whether volume or cost drove it and name the item behind it.\n'
+      : 'The volume/cost split of each change is not available right now, so do not guess whether a change was volume or cost; say it cannot be told from these figures.\n';
+    return 'You are RapidReconciler AI. An analyst asked how perpetual inventory is trending across periods.\n'
+      + 'Scope: ' + asofScopeText() + '.\n'
+      + 'Perpetual on-hand balance by period (oldest first): ' + series + '.\n'
+      + split
+      + 'Using ONLY these figures, say whether the balance is growing or shrinking overall and call out any period that stands out. Do NOT invent numbers.\n'
+      + (window.RRV8 && RRV8.dataAccessLine ? RRV8.dataAccessLine(asofEffTier()) + '\n' : '')
+      + 'At most 3 lines, under 70 words.\n'
+      + (window.RRV8 && RRV8.AI_REGISTER ? RRV8.AI_REGISTER : '');
+  }
   function asofAsk(kind, freeText) {
     if (_asofAiBusy) return;
     _asofLastAsk = { kind: kind, freeText: freeText };   // remember for re-run on tier flip
@@ -2641,18 +2678,12 @@
         + (window.RRV8 && RRV8.AI_REGISTER ? RRV8.AI_REGISTER : '');
       run = asofAiExplain(prompt);
     } else if (kind === 'trend') {
-      // Needs the cross-period series this page already loads for the trend read.
-      run = loadAsOfPeriodHistory().then(hist => {
+      // Needs the cross-period series this page already loads for the trend read, and
+      // (UI-225) the volume/cost split of each change, so the answer can say WHY a
+      // period moved instead of asking the analyst to check.
+      run = Promise.all([loadAsOfPeriodHistory(), loadAsOfValueBridge()]).then(([hist, bridge]) => {
         if (!hist || !hist.length) return 'Period-over-period history isn’t available for this scope right now, so the trend can’t be summarized here.';
-        const series = hist.map(p => formatPeriod(p.period) + ' ' + curMoney(p.value)).join('; ');
-        const prompt = 'You are RapidReconciler AI. An analyst asked how perpetual inventory is trending across periods.\n'
-          + 'Scope: ' + asofScopeText() + '.\n'
-          + 'Perpetual on-hand balance by period (oldest first): ' + series + '.\n'
-          + 'Using ONLY these figures, say whether the balance is growing or shrinking overall and call out any period that stands out. Do NOT invent numbers.\n'
-          + (window.RRV8 && RRV8.dataAccessLine ? RRV8.dataAccessLine(asofEffTier()) + '\n' : '')
-          + 'At most 3 lines, under 70 words.\n'
-          + (window.RRV8 && RRV8.AI_REGISTER ? RRV8.AI_REGISTER : '');
-        return asofAiExplain(prompt);
+        return asofAiExplain(asofTrendPrompt(hist, bridge));
       });
     } else {
       // Free-text — grounded in the loaded scope's aggregates.
@@ -4673,6 +4704,31 @@ function updateLotDetailPill() {
       return usable;
     } catch (err) {
       console.warn('[period-history] history endpoint failed:', err && err.message);
+      return [];
+    }
+  }
+
+  // ============================================================
+  //  UI-225. Why the perpetual value moved between period ends.
+  //
+  //  The agent's /inventory/reconciliation/value-bridge splits each change in
+  //  the history endpoint's perpetualBalance into volume, cost and other, with
+  //  the top items behind volume and cost (usp8_inventory_value_bridge). Same
+  //  company as loadAsOfPeriodHistory (the page's single selected company).
+  //  Its only consumer is the trend read. On failure it returns [], and
+  //  asofTrendPrompt tells the model the split is missing, so the analyst reads
+  //  "can't tell" in the answer instead of a guess. An agent older than the
+  //  release that carries the route answers 404 and lands here too.
+  // ============================================================
+  async function loadAsOfValueBridge() {
+    const solo = _ensureSolo();
+    if (!solo) return [];
+    try {
+      const resp = await rrFetch('inventory/reconciliation/value-bridge',
+                                 { method: 'POST', body: { companyNumber: String(solo), topItems: 2 } });
+      return (resp && Array.isArray(resp.periods)) ? resp.periods : [];
+    } catch (err) {
+      console.warn('[value-bridge] endpoint failed:', err && err.message);
       return [];
     }
   }

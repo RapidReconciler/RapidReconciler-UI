@@ -141,6 +141,7 @@ window.RR_TEST_AGENT_AREAS = [
   // Inventory module — net-new endpoints first wave
   'inventory/reconciliation/rows',
   'inventory/reconciliation/history',
+  'inventory/reconciliation/value-bridge',   // UI-225: volume vs cost behind each trend change
   'inventory/reconciliation/by-company',
   // Period-end journal-entry source: account-level reconciling lines
   'inventory/suggested-je',
