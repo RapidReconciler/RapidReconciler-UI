@@ -16,10 +16,11 @@
  *   T1  on Home the "?" lands in an element home.html does not hide
  *   T2  ...and that element is Home's bottom controls bar, #homeActions
  *   T3  a page with no [data-help-host] still gets it in .app-header, as before (the other pages are unchanged)
- *   T4  walkthrough step 5 points at the bottom right, where the "?" now is
+ *   T4  walkthrough step 5 names the bottom corner the "?" renders in, derived from home.html's stylesheet. It used
+ *       to assert the words "bottom right", which passed while the "?" sat bottom LEFT (owner, 2026-10-29).
  *
- * TWO MUTATION CONTROLS: data-help-host removed from home.html (must redden T1 and T2), and help-sidebar.js
- * ignoring [data-help-host] (must redden T1 and T2).
+ * THREE MUTATION CONTROLS: data-help-host removed from home.html (must redden T1 and T2), help-sidebar.js
+ * ignoring [data-help-host] (must redden T1 and T2), and the controls row packed to the right (must redden T4).
  */
 'use strict';
 const fs = require('fs');
@@ -117,6 +118,21 @@ function check(name, got, want) {
   console.log('  ' + (ok ? 'ok  ' : 'FAIL') + '  ' + name + (ok ? '' : '   got ' + JSON.stringify(got) + ' want ' + JSON.stringify(want)));
 }
 
+// Which bottom corner the "?" sits in, read from home.html's stylesheet: the .home-actions row's main-axis packing,
+// and whether the "?" is ordered after its siblings. A row packed to the end, or a "?" with the highest order, puts
+// it on the right; otherwise it is the first item of a left-packed row.
+function helpSide(html) {
+  const style = (html.match(/<style\b[\s\S]*?<\/style>/gi) || []).join('\n');
+  const rule = (sel) => { const m = style.match(new RegExp('(^|[\\n}])\\s*' + sel.replace(/[.#-]/g, '\\$&') + '\\s*\\{([^}]*)\\}', 'm')); return m ? m[2] : ''; };
+  const row = rule('.home-actions');
+  if (!/display:\s*flex/.test(row)) { console.log('HARNESS BROKEN: .home-actions is no longer a flex row'); process.exit(1); }
+  const justify = (row.match(/justify-content:\s*([a-z-]+)/) || [, 'flex-start'])[1];
+  const helpOrder = Number((rule('.home-actions .topbar-help').match(/order:\s*(-?\d+)/) || [, '0'])[1]);
+  const orders = [...style.matchAll(/\.home-actions [^{]*\{[^}]*order:\s*(-?\d+)/g)].map((m) => Number(m[1]));
+  const lastByOrder = orders.length > 0 && helpOrder > Math.max(...orders.filter((o) => o !== helpOrder), -Infinity);
+  return (/^(flex-end|end|right)$/.test(justify) || lastByOrder) ? 'right' : 'left';
+}
+
 function runCases(sidebarSrc, homeHtml) {
   reds = [];
   const home = mount(sidebarSrc, homeHtml);
@@ -124,8 +140,13 @@ function runCases(sidebarSrc, homeHtml) {
   check('T2 Home: that element is the bottom controls bar #homeActions', home.parent ? home.parent.getAttribute('id') : null, 'homeActions');
   const other = mount(sidebarSrc, '<style>.app-header { display: flex; }</style><header class="app-header"></header>');
   check('T3 a page with no data-help-host keeps the ? in .app-header', other.parent ? other.parent.className : null, 'app-header');
+  // T4 used to assert the literal words "bottom right". That checked the author's guess, not the page: the bar is a
+  // full-width row packed from the left and the "?" carries no `order`, so it renders bottom LEFT (owner's
+  // screenshots, 2026-10-29). Now the side is derived from home.html's own stylesheet and step 5 must name it.
   const step5 = (homeHtml.match(/\{ tab: 'rec', title: 'Mark it complete'[\s\S]*?\] \},/) || [''])[0];
-  check('T4 walkthrough step 5 points at the bottom right', /the <b>\?<\/b> at the bottom right/.test(step5) && !/top right/.test(step5), true);
+  const side = helpSide(homeHtml);
+  check('T4 walkthrough step 5 names the side the ? renders on (' + side + ')',
+    new RegExp('the <b>\\?</b> at the bottom ' + side).test(step5) && !/top (right|left)/.test(step5), true);
   return reds.slice();
 }
 
@@ -147,6 +168,7 @@ function arm(label, want, sidebarSrc, homeHtml) {
 if (shippedFailures === 0) {
   arm('data-help-host removed from home.html', 'T1,T2', SIDEBAR, HOME.replace(' data-help-host>', '>'));
   arm('help-sidebar.js ignores data-help-host', 'T1,T2', SIDEBAR.replace("document.querySelector('[data-help-host]')", 'null'), HOME);
+  arm('the controls row is packed to the right', 'T4', SIDEBAR, HOME.replace('.home-actions { position: fixed;', '.home-actions { justify-content: flex-end; position: fixed;'));
 }
 
 const total = shippedFailures + armFailures;
