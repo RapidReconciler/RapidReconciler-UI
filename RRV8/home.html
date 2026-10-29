@@ -18611,6 +18611,92 @@
       return label + ' (' + (c.ccy || '?') + '): net out-of-balance ' + _ccySym(c.ccy) + _money(c.oob) + ', components: ' + comps + '; ' + rf + priorNote + recNote;
     });
   }
+  // ---- UI-246: the transaction-variance worklist, by type, for the accountant's Ask --
+  // Owner 2026-10-29, on "which transaction type is causing the most problems" getting
+  // "I can't name a type from these figures" on Full: "not acceptable on the full or
+  // enhanced plans. You do have access to variance totals by period in table RCLC2."
+  //
+  // The rows are /inventory/transactions with period null: v6ui_reconcilingitems, i.e.
+  // RCardexLedgerCompare2 at recstatus = 1, the ONLY document population for transaction
+  // variance (feedback_rclc2_is_the_document_scope). Each carries Type, SubType (the
+  // classifier's category), OT, DT, Variance and PeriodEnds. The endpoint returns the whole
+  // JWT scope, so _txScope narrows it to the companies in view, as every reader does.
+  //
+  // ⚠ THIS IS NOT THE CARD'S "Transactions" COMPONENT. That one is the account summary
+  // before netting; this is the document worklist after netting (see renderTxVarWidget).
+  // The facts say so in words, so the model never adds the two or calls one wrong.
+  var _acctTxvCache = null;   // { key: <db>, rows } -- reset on a DB switch with the rest of the scoped state
+  function _acctTxvRows() {
+    var key = (activeDb() && activeDb().n) || '';
+    if (_acctTxvCache && _acctTxvCache.key === key) return Promise.resolve(_acctTxvCache.rows);
+    var body = {
+      take: 100000, skip: 0, page: 1, pageSize: 100000,
+      reconciliationFilter: { currencies: [], companies: [], businessUnits: [], objects: [], subsidiaries: [], period: null },
+      groupingType: 'NONE', exclusions: { types: [], orderTypes: [], subTypes: [], docTypes: [] }, cacheKey: null
+    };
+    return rrFetch('inventory/transactions', { method: 'POST', body: body }).then(function (resp) {
+      var rows = (resp && resp.data) || [];
+      if ((activeDb() && activeDb().n || '') === key) _acctTxvCache = { key: key, rows: rows };
+      return rows;
+    });
+  }
+  // rows: the RCLC2 feed (null = it did not load). companies: d.companies, in the SAME order
+  // _acctFactLines labels them, so "Entity A" means the same company in both blocks.
+  // viewed: the period on screen. periodsOf(co): the periods loaded for that company (the
+  // denominator of "in N of M periods"). Pure, so Tools/test-acct-ask-txv.js can run it.
+  function _acctTxvFactLines(rows, companies, viewed, scrub, periodsOf) {
+    if (rows == null) return ['Transaction variance by type: could not be loaded just now. If asked which transaction or document type drives the variance, say it could not be loaded and suggest asking again; do NOT guess a type.'];
+    var lines = [
+      'Transaction variance by type. Source: the transaction-variance worklist, i.e. the individual documents whose inventory (cardex) and GL amounts still differ after automatic netting. Each group is "<module> — <category>, <order type>/<doc type>: <documents> documents, net <amount>", and "in N of M periods" counts the loaded periods in which that group has open documents.',
+      'This is a DIFFERENT measure from the "Transactions" component in the company facts above (that one is the account summary before netting), so the two need not match: never add them together, subtract one from the other, or call either one wrong.'
+    ];
+    var view = String(viewed || '').slice(0, 10);
+    (companies || []).forEach(function (c, i) {
+      var label = scrub ? ('Entity ' + String.fromCharCode(65 + (i % 26))) : ('Co ' + c.co);
+      var sym = _ccySym(c.ccy), mine = _txScope(rows, [String(c.co)]);
+      if (!mine.length) { lines.push(label + ': no open transaction-variance documents in any loaded period.'); return; }
+      var M = (periodsOf && periodsOf(c.co)) || 0;
+      var docs = function (n) { return n + (n === 1 ? ' document' : ' documents'); };
+      var summarize = function (set, withRecurrence) {
+        var mods = {}, groups = {};
+        set.forEach(function (r) {
+          var mod = _txModuleOf(r), v = Number(r.Variance) || 0, p = String(r.PeriodEnds || '').slice(0, 10);
+          var cat = String(r.SubType || '').trim() || 'unclassified';
+          var ot = String(r.OT || '').trim(), dt = String(r.DT || '').trim();
+          var gk = mod + '|' + cat + '|' + ot + '|' + dt;
+          var m = mods[mod] || (mods[mod] = { net: 0, n: 0 }); m.net += v; m.n += 1;
+          var g = groups[gk] || (groups[gk] = { mod: mod, cat: cat, ot: ot, dt: dt, net: 0, n: 0, per: {} });
+          g.net += v; g.n += 1; if (p) g.per[p] = 1;
+        });
+        var modTxt = Object.keys(mods).sort(function (a, b) { return Math.abs(mods[b].net) - Math.abs(mods[a].net); })
+          .map(function (k) { return k + ' ' + sym + _money(mods[k].net) + ' (' + docs(mods[k].n) + ')'; }).join(', ');
+        var top = Object.keys(groups).map(function (k) { return groups[k]; })
+          .sort(function (a, b) { return Math.abs(b.net) - Math.abs(a.net); }).slice(0, 6)
+          .map(function (g) {
+            var np = Object.keys(g.per).length;
+            return g.mod + ' — ' + g.cat + ', ' + (g.ot || '-') + '/' + (g.dt || '-') + ': ' + docs(g.n) + ', net ' + sym + _money(g.net)
+              + (withRecurrence ? ', in ' + np + ' of ' + Math.max(M, np) + ' periods' : '');
+          }).join('; ');
+        return 'by module: ' + modTxt + '. Largest groups: ' + top + '.';
+      };
+      var inView = view ? mine.filter(function (r) { return String(r.PeriodEnds || '').slice(0, 10) === view; }) : [];
+      if (view) {
+        lines.push(label + ', ' + fmtPeriod(view) + ': ' + (inView.length
+          ? 'open ' + docs(inView.length) + '; ' + summarize(inView, false)
+          : 'no open transaction-variance documents in this period.'));
+      }
+      var allP = {}; mine.forEach(function (r) { var p = String(r.PeriodEnds || '').slice(0, 10); if (p) allP[p] = 1; });
+      lines.push(label + ', all ' + Math.max(M, Object.keys(allP).length) + ' loaded periods: open ' + docs(mine.length) + '; ' + summarize(mine, true));
+    });
+    return lines;
+  }
+  // The periods loaded for one company, from the reconciliation rows (_invRows): the "M" in
+  // "in N of M periods", so a period with no open documents still counts as a period.
+  function _acctPeriodsOf(co) {
+    var s = {};
+    (_invRows || []).forEach(function (r) { if (String(_coOf(r)).trim() === String(co).trim()) { var p = String(r.PeriodEnds || '').slice(0, 10); if (p) s[p] = 1; } });
+    return Object.keys(s).length;
+  }
   function setupAcctAsk() {
     var form = $('acctAskForm'), input = $('acctAskInput'), btn = $('acctAskBtn');
     if (!form) return;
@@ -18717,6 +18803,21 @@
       var tf = _acctTrendFacts(tmetric);
       if (tf.length) facts = facts.concat(['', tmetric === 'perp' ? 'Recent-period trend (total perpetual on-hand balance by period, most recent last):' : 'Recent-period trend (total out of balance by period, most recent last):'], tf);
     }
+    // UI-246: Full and Enhanced also get the transaction-variance worklist by type (RCLC2).
+    // Basic sees only on-screen figures, so it is left out there. A failed load resolves to
+    // null, which the fact builder turns into "could not be loaded", so the answer says so
+    // instead of guessing and the rest of the Ask still runs.
+    var _txvP = (tier === 'full' || tier === 'scrubbed')
+      ? _acctTxvRows().then(null, function () { return null; })
+      : Promise.resolve(undefined);
+    _txvP.then(function (txvRows) {
+    if (txvRows !== undefined) {
+      var _tl;
+      try { _tl = _acctTxvFactLines(txvRows, d.companies, d.viewedPeriod || sc.period, scrub, _acctPeriodsOf); }
+      catch (e) { console.error('[acct-ask] transaction variance by type failed to build:', e); _tl = _acctTxvFactLines(null); }
+      facts = facts.concat([''], _tl);
+    }
+    // (The prompt below is built inside this .then, at its original indentation.)
     var prompt = (window.RRV8 && RRV8.ACCT_GROUNDING ? RRV8.ACCT_GROUNDING + '\n\n' : '')
       + 'You are RapidReconciler AI, helping an accountant with inventory-to-GL reconciliation.\n'
       + 'Period: ' + (sc.period || '?') + (d.periodScoped ? '' : ' (figures span all loaded periods)') + '.\n'
@@ -18748,13 +18849,17 @@
       + 'Question: ' + q + '\n'
       + 'FORMAT — pick by the question:\n'
       + '• If it asks WHAT a company\'s out-of-balance (or "variance") IS, answer as a scannable breakdown and NOTHING else, each part on its OWN line: (1) a single lead line naming it, e.g. "It\'s Company 80002\'s net out-of-balance of -$8.4K, made up of:"; (2) ONE line per NON-ZERO component, each starting with "• " as "• <component> — <rounded amount>" (skip zero components; never add components together or state a figure larger than the net); (3) a final line starting with "I\'d focus on " that names the single largest actionable driver and the one next step — or, if it is immaterial / nothing to act on, say that plainly.\n'
+      // UI-246: the question the owner asked, and the answer shape it deserves. Only when the
+      // type facts were sent (Full / Enhanced); on Basic it would point at facts that are absent.
+      + (txvRows === undefined ? '' : '• If it asks which transaction, document or order type (or category) causes the most variance or problems, answer from the "Transaction variance by type" facts and NOTHING else: (1) a lead line naming the module and category that drive it; (2) ONE line per top group starting with "• ", as "• <module> — <category> (<order type>/<doc type>) — <documents> documents, net <rounded amount>, in N of M periods"; point out groups that largely offset each other (similar size, opposite sign) instead of counting both; (3) a final line starting with "I\'d focus on " naming the group that recurs in the most periods with the largest net, and that the lasting fix is an analyst source-data or account-configuration fix, not a monthly entry. If those facts say they could not be loaded, say so.\n')
       + '• For a how-to or "what does this mean" question, answer in 2-4 plain sentences from the definitions and guidance above — no bullets.\n'
       + 'Round amounts (e.g. "$29K"). Ground any figures ONLY in the facts above (if a specific number is not there, say so). This surface uses "• " for its bullets, which OVERRIDES the "- " default below.\n'
       + (window.RRV8 && RRV8.AI_REGISTER ? RRV8.AI_REGISTER : '');
     // VLC-63 increment 2. `why` replaces the hand-written catch message, so the
     // three unavailable reasons read as three different facts instead of one
     // generic "could not reach" that was wrong for two of them.
-    aiExplain(prompt).then(function (r) {
+    return aiExplain(prompt);
+    }).then(function (r) {
       if (!r.ok) {
         if (ans) ans.textContent = r.why;
         _aiRenderDocStrip(ans && ans.parentNode, [], 'acctDocStrip');
@@ -19299,6 +19404,7 @@
     // the block back on "not read yet" until the new database's load lands.
     try { if (window.RRV8 && RRV8.priorFindings) RRV8.priorFindings.reset(); } catch (_) {}
     _invRows = null;            // roll-forward rows → Account Roll Forward + Cardex Variance dots
+    _acctTxvCache = null;       // UI-246: the accountant Ask's RCLC2 rows belong to the prior database
     _acctData = null;           // shared brief/recon cache (analyst + accountant). MUST clear on DB switch:
                                 // the bands read `_acctData || _briefData()`, so a stale _acctData paints the
                                 // PRIOR DB's companies on the first render before the reload lands (the
