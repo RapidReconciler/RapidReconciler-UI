@@ -2063,6 +2063,26 @@
     box-shadow: 0 0 0 3px rgba(43, 95, 176, 0.16);
   }
   .edit-textarea:disabled { background: var(--bg-soft); color: var(--text-muted); cursor: not-allowed; }
+  /* UI-218 — "Assign to" in the batch-edit popup, and the Owner grid cell. */
+  .edit-select {
+    display: block;
+    width: 100%;
+    margin-top: 6px;
+    padding: 8px 10px;
+    border: 1px solid var(--rule-strong);
+    border-radius: 8px;
+    font-family: 'Open Sans', sans-serif;
+    font-size: 13.5px;
+    color: var(--text);
+    background: #fff;
+    outline: none;
+  }
+  .edit-select:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(43, 95, 176, 0.16); }
+  .edit-owner-note { margin-top: 6px; font-size: 12.5px; color: var(--text-muted); }
+  .edit-owner-note.is-error { color: var(--red); }
+  .details-table td .owner-cell { white-space: nowrap; }
+  .details-table td .owner-cell.is-me { font-weight: 600; }
+  .details-table td .owner-cell.is-resolved { color: var(--text-muted); }
   .edit-actions {
     display: flex;
     justify-content: flex-end;
@@ -2541,7 +2561,7 @@
   </div>
 
   <!-- Worked + Note batch-edit modal -->
-  <div class="edit-overlay" id="edit-overlay" hidden role="dialog" aria-modal="true" aria-label="Edit worked status and note">
+  <div class="edit-overlay" id="edit-overlay" hidden role="dialog" aria-modal="true" aria-label="Edit worked status, note and owner">
     <div class="edit-card">
       <div class="edit-head">
         <div class="edit-title">Update selected rows</div>
@@ -2564,6 +2584,14 @@
           <label><input type="radio" name="edit-note" value="replace"> Replace with:</label>
         </div>
         <textarea class="edit-textarea" id="edit-note-text" rows="3" placeholder="Note text" disabled></textarea>
+      </div>
+
+      <div class="edit-section">
+        <label class="edit-section-label" for="edit-owner">Assign to</label>
+        <select class="edit-select" id="edit-owner">
+          <option value="__leave">Leave unchanged</option>
+        </select>
+        <div class="edit-owner-note" id="edit-owner-note" hidden></div>
       </div>
 
       <div class="edit-status" id="edit-status"></div>
@@ -2835,7 +2863,7 @@
            No separate enable gate: updateWorkedButton() already hides it at
            zero selected rows and labels it "Update (N)" otherwise, so the
            control only ever appears when it can do something. -->
-      <button type="button" class="worked-filter-pill" id="worked-filter-pill" title="Filter rows by worked status">
+      <button type="button" class="worked-filter-pill" id="worked-filter-pill" title="Filter rows by worked status and owner">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 8 7 12 13 4"/></svg>
         <span id="worked-filter-label">Worked: All</span>
         <svg class="worked-filter-caret" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 6 8 10 12 6"/></svg>
@@ -3758,6 +3786,7 @@
     activeSubType:    null,                 // (legacy, unused by deep-links now) card subtype scope
     activeGroupCode:  null,                 // isolate ONE transaction group (holds a multi-doc transaction's legs together), or null
     workedFilter:     'all',                // 'all' | 'yes' | 'no'
+    ownerFilter:      'all',                // 'all' | 'mine' | 'none' (UI-218)
     selectedKeys:     new Set(),            // row-keys selected for batch edit
     lastSelectedKey:  null,                 // anchor for shift-click range
     exclusions: {                           // values toggled OFF
@@ -3883,21 +3912,25 @@
     if (workNotesPayload && Array.isArray(workNotesPayload.data) && workNotesPayload.data.length) {
       workNotesPayload.data.forEach(wn => {
         m.set(workNoteKey(wn), {
-          Worked: wn.Worked === 1 || wn.Worked === true,
-          Note:   wn.Note || ''
+          Worked:       wn.Worked === 1 || wn.Worked === true,
+          Note:         wn.Note || '',
+          AssignedTo:   strTrim(wn.AssignedTo),
+          AssignedDate: wn.AssignedDate || null
         });
       });
       return m;
     }
     // Fallback: agent currently left-joins worknotes server-side
-    // and returns Worked/Note inline on each row. Extract those
-    // into the overlay so the rest of V8 reads from one source.
+    // and returns Worked/Note/AssignedTo inline on each row. Extract
+    // those into the overlay so the rest of V8 reads from one source.
     if (fallbackRows) {
       fallbackRows.forEach(r => {
-        if (r.Worked || (r.Note && r.Note !== '')) {
+        if (r.Worked || (r.Note && r.Note !== '') || strTrim(r.AssignedTo)) {
           m.set(workNoteKey(r), {
-            Worked: !!r.Worked,
-            Note:   r.Note || ''
+            Worked:       !!r.Worked,
+            Note:         r.Note || '',
+            AssignedTo:   strTrim(r.AssignedTo),
+            AssignedDate: r.AssignedDate || null
           });
         }
       });
@@ -3908,8 +3941,73 @@
   function applyWorkNotesOverlay(rows) {
     rows.forEach(r => {
       const wn = _workNotes.get(workNoteKey(r));
-      r.Worked = wn ? wn.Worked : false;
-      r.Note   = wn ? wn.Note   : '';
+      r.Worked       = wn ? wn.Worked : false;
+      r.Note         = wn ? wn.Note   : '';
+      r.AssignedTo   = wn ? (wn.AssignedTo || '') : '';
+      r.AssignedDate = wn ? (wn.AssignedDate || null) : null;
+    });
+  }
+
+  // ============================================================
+  //  UI-218 — who owns an exception.
+  //
+  //  A row's owner is a VALC user id (r.AssignedTo, '' = nobody). Never an
+  //  email: owner ruling 2026-10-20 lets colleagues on a database see each
+  //  other's display names and nothing else. The id becomes a name through the
+  //  database's people list, GET api/v1/tenant/databases/{uuid}/people, keyed by
+  //  the active database's uuid from the token (the token carries no db id).
+  //
+  //  Status is derived and never stored, so it cannot disagree with Worked:
+  //    Resolved = Worked · Assigned = an owner and not Worked · Open = neither.
+  //
+  //  A failed people load is SHOWN, in the Update popup beside the control it
+  //  disables. The grid still renders ids it cannot name as "Team member #id"
+  //  rather than blank, so an assignment is never invisible.
+  // ============================================================
+  const _people = { status: 'idle', byId: new Map(), list: [], error: '' };
+
+  function myOwnerId() {
+    const u = (window.RR_SESSION && window.RR_SESSION.user) || {};
+    return u.id == null ? '' : String(u.id);
+  }
+  function ownerName(id) {
+    id = strTrim(id);
+    if (!id) return '';
+    if (_people.byId.has(id)) return _people.byId.get(id);
+    // Loaded, and not on the list: they no longer have rights on this database.
+    if (_people.status === 'ok') return 'Former team member';
+    return 'Team member #' + id;
+  }
+  function activeDatabaseUuid() {
+    const s = window.RR_SESSION || {};
+    const db = Array.isArray(s.dbs) ? s.dbs[s.activeDbIndex || 0] : null;
+    return db && db.uuid ? String(db.uuid) : '';
+  }
+  function loadPeople() {
+    const uuid = activeDatabaseUuid();
+    if (!uuid) {
+      _people.status = 'error';
+      _people.error  = 'Your sign-in does not name this database, so the team list cannot load. Sign out and back in.';
+      return Promise.resolve(_people);
+    }
+    _people.status = 'loading';
+    // The path is written inline so Tools/v8-callsites.py can read it from the call.
+    return rrFetch('api/v1/tenant/databases/' + encodeURIComponent(uuid) + '/people').then(rows => {
+      _people.list = (Array.isArray(rows) ? rows : [])
+        .filter(p => p && p.id != null)
+        .map(p => ({ id: String(p.id), name: String(p.displayName || ('Team member #' + p.id)) }));
+      _people.byId = new Map(_people.list.map(p => [p.id, p.name]));
+      _people.status = 'ok';
+      _people.error  = '';
+      renderAll();
+      return _people;
+    }).catch(err => {
+      _people.status = 'error';
+      _people.error  = (window.RRV8 && window.RRV8.fetchErrorMessage)
+        // No path in the reader's sentence: they are finance, not IT.
+        ? window.RRV8.fetchErrorMessage('', err) : (err && err.message ? err.message : String(err));
+      console.error('people load failed:', err);
+      return _people;
     });
   }
 
@@ -3928,6 +4026,9 @@
       mfgBatch:         Number(r.Batch)       || 0,
       worked:           !!r.Worked,
       note:             r.Note || '',
+      // UI-218: always the row's current owner. Re-sending an unchanged owner keeps
+      // its hand-off date server-side; '' unassigns.
+      assignedTo:       strTrim(r.AssignedTo),
       longAccount:      String(r.LongAccount || '').trim(),
       orderNumber:      String(r.OrderNumber == null ? '' : r.OrderNumber)
     };
@@ -4182,6 +4283,10 @@
       if (_state.activeGroupCode && String(r.GroupCode || '').trim() !== _state.activeGroupCode.trim()) return false;
       if (_state.workedFilter === 'yes' && !r.Worked) return false;
       if (_state.workedFilter === 'no'  &&  r.Worked) return false;
+      // UI-218. "Mine" is everything assigned to me, resolved or not: the Worked
+      // filter above narrows it further, so "Mine" + "Not worked yet" is my queue.
+      if (_state.ownerFilter === 'mine' && strTrim(r.AssignedTo) !== myOwnerId()) return false;
+      if (_state.ownerFilter === 'none' && strTrim(r.AssignedTo) !== '')         return false;
       return passesExclusions(r, _state.exclusions);
     });
   }
@@ -4950,6 +5055,7 @@
     _state.activeSubType = null;
     _state.activeGroupCode = null;
     _state.workedFilter  = 'all';
+    _state.ownerFilter   = 'all';
     _state.exclusions.types      = new Set();
     _state.exclusions.subTypes   = new Set();
     _state.exclusions.orderTypes = new Set();
@@ -4968,6 +5074,7 @@
         || !!_state.activeSubType
         || !!_state.activeGroupCode
         || _state.workedFilter !== 'all'
+        || _state.ownerFilter  !== 'all'
         || _state.exclusions.types.size      > 0
         || _state.exclusions.subTypes.size   > 0
         || _state.exclusions.orderTypes.size > 0
@@ -5116,7 +5223,10 @@
         +   '<span class="col-co">'  + escapeHtml(String(r.CompanyNumber || '').trim()) + '</span>'
         +   '<span class="col-otdt">' + escapeHtml(otdt) + '</span>'
         +   '<span class="col-amount' + (isNeg ? ' is-negative' : '') + '">' + fmtMoney(variance) + '</span>'
-        +   '<span class="col-status">' + (worked ? 'Worked' : 'Open') + '</span>'
+        // UI-218: the derived status. An owner on an unworked row is "Assigned", and
+        // the name is what the analyst needs, so the name is what shows.
+        +   '<span class="col-status">' + (worked ? 'Worked'
+              : strTrim(r.AssignedTo) ? escapeHtml(ownerName(r.AssignedTo)) : 'Open') + '</span>'
         + '</label>';
     }).join('');
 
@@ -5504,6 +5614,8 @@
     only('subTypes',   'subTypes');
     if (_state.workedFilter === 'no')  parts.push('unworked');
     if (_state.workedFilter === 'yes') parts.push('worked');
+    if (_state.ownerFilter  === 'mine') parts.push('assigned to me');
+    if (_state.ownerFilter  === 'none') parts.push('unassigned');
     const text = parts.length ? parts.join(' &middot; ') : 'card filter';
     const g = computeGroupsAndTotal(filteredRows()).total;
     label.innerHTML = 'Filtered: ' + text + ' &middot; ' +
@@ -5542,6 +5654,15 @@
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="15" y2="17"/></svg>' +
     '</span>';
   }
+  // UI-218. The owner's name, with the hand-off date on hover. A resolved row keeps
+  // its owner (who resolved it is worth keeping), just muted.
+  function renderOwnerCell(r) {
+    const id = strTrim(r.AssignedTo);
+    if (!id) return '';
+    const since = r.AssignedDate ? 'Assigned ' + String(r.AssignedDate).slice(0, 10) : 'Assigned';
+    return '<span class="owner-cell' + (r.Worked ? ' is-resolved' : '') + (id === myOwnerId() ? ' is-me' : '')
+      + '" title="' + escapeHtml(since) + '">' + escapeHtml(ownerName(id)) + '</span>';
+  }
   function renderTypeCell(r) {
     const dotCls = TYPE_DOTS[r.Type] || '';
     const dotColor = dotCls === 'is-inventory' ? 'var(--blue)'
@@ -5562,6 +5683,8 @@
     // the th; `tdClass` applies to every td in the column.
     { key:'Worked',        label:'Worked',       defaultOn:true, render: renderWorkedCell },
     { key:'Note',          label:'Note',         defaultOn:true, render: renderNoteCell },
+    { key:'AssignedTo',    label:'Owner',        defaultOn:true, render: renderOwnerCell,
+      sortVal: r => ownerName(r.AssignedTo).toLowerCase() },
     { key:'CompanyNumber', label:'Company',      defaultOn:true, render: r => escapeHtml(r.CompanyNumber || '') },
     { key:'LongAccount',   label:'Long Account', defaultOn:true, render: r => escapeHtml(r.LongAccount || '') },
     { key:'OffsetAccount', label:'Offset',       defaultOn:true, render: r => escapeHtml(r.OffsetAccount || '') },
@@ -5637,8 +5760,15 @@
         if (Array.isArray(saved)) {
           const filtered = saved.filter(k => knownSet.has(k));
           const present  = new Set(filtered);
-          const missing  = allKeys.filter(k => !present.has(k));
-          return filtered.concat(missing);
+          // A column added since the save goes in after the column declared
+          // before it, not at the far end: Owner (UI-218) belongs beside Note.
+          allKeys.forEach((k, i) => {
+            if (present.has(k)) return;
+            const prev = i > 0 ? filtered.indexOf(allKeys[i - 1]) : -1;
+            filtered.splice(prev + 1, 0, k);
+            present.add(k);
+          });
+          return filtered;
         }
       }
     } catch (_) {}
@@ -6128,6 +6258,8 @@
         groupcode: _state.activeGroupCode,
         sidebarCompanies: _glSelected.companies.size ? [..._glSelected.companies].join('+') : '',
         worked:    _state.workedFilter === 'all' ? '' : _state.workedFilter,
+        // UI-218: an owner filter hides rows, so a tie-out read with it on must say so.
+        owner:     _state.ownerFilter === 'all' ? '' : _state.ownerFilter,
         search:    _state.gridSearch || '',
         // Sidebar exclusion toggles persist in localStorage across sessions, so they
         // are the most likely non-bug explanation for a tie-out mismatch. Name them.
@@ -8901,11 +9033,13 @@
     const label = document.getElementById('worked-filter-label');
     if (!pill) return;
     const v = _state.workedFilter;
-    pill.classList.toggle('is-narrowed', v !== 'all');
+    const o = _state.ownerFilter;
+    pill.classList.toggle('is-narrowed', v !== 'all' || o !== 'all');
     if (label) {
-      label.textContent = v === 'yes' ? 'Worked: Yes'
-                        : v === 'no'  ? 'Worked: No'
-                        :               'Worked: All';
+      label.textContent = (v === 'yes' ? 'Worked: Yes'
+                         : v === 'no'  ? 'Worked: No'
+                         :               'Worked: All')
+                        + (o === 'mine' ? ' · Mine' : o === 'none' ? ' · Unassigned' : '');
     }
   }
 
@@ -8993,7 +9127,43 @@
     editNoteText.value = noteAgreed || '';
     editNoteText.disabled = true;
 
+    fillOwnerSelect(selected);
     editOverlay.hidden = false;
+  }
+
+  // UI-218. "Leave unchanged" is the default, as for Note, so opening the popup
+  // to tick Worked can never move an owner. The current owner (when every
+  // selected row shares one) is named in the note line rather than preselected.
+  const editOwnerSel  = document.getElementById('edit-owner');
+  const editOwnerNote = document.getElementById('edit-owner-note');
+  function fillOwnerSelect(selected) {
+    const owners = new Set(selected.map(r => strTrim(r.AssignedTo)));
+    const agreed = owners.size === 1 ? Array.from(owners)[0] : null;
+    let html = '<option value="__leave">Leave unchanged</option>'
+             + '<option value="">Unassigned</option>';
+    if (_people.status === 'ok') {
+      html += _people.list.map(p =>
+        '<option value="' + escapeHtml(p.id) + '">' + escapeHtml(p.name)
+        + (p.id === myOwnerId() ? ' (me)' : '') + '</option>').join('');
+    }
+    editOwnerSel.innerHTML = html;
+    editOwnerSel.value = '__leave';
+
+    // The control's state, said next to the control (a hint nobody can see is not
+    // a reason given). A failed list disables picking a person, not unassigning.
+    let note = '';
+    if (_people.status === 'error') {
+      note = 'The team list did not load, so you can unassign but not pick a person. ' + _people.error;
+    } else if (_people.status !== 'ok') {
+      note = 'The team list is still loading.';
+    } else if (agreed) {
+      note = 'Currently: ' + ownerName(agreed) + '.';
+    } else if (agreed === null) {
+      note = 'The selected rows have different owners.';
+    }
+    editOwnerNote.textContent = note;
+    editOwnerNote.hidden = !note;
+    editOwnerNote.classList.toggle('is-error', _people.status === 'error');
   }
   function closeEditModal() { editOverlay.hidden = true; }
 
@@ -9043,10 +9213,31 @@
             label +
             (v === cur ? '<span class="popover-check">&#10003;</span>' : '') +
           '</div>';
+        }).join('') +
+        // UI-218. Owner narrows independently of Worked: "Assigned to me" plus
+        // "Not worked yet" is the analyst's own open queue.
+        '<div class="popover-section-label">Owner</div>' +
+        ['all', 'mine', 'none'].map(v => {
+          const curO = _state.ownerFilter;
+          const label = v === 'all'  ? 'Anyone or no one'
+                      : v === 'mine' ? 'Assigned to me'
+                      :                'Unassigned';
+          return '<div class="popover-row ' + (v === curO ? 'is-active' : '') + '" data-owner="' + v + '">' +
+            label +
+            (v === curO ? '<span class="popover-check">&#10003;</span>' : '') +
+          '</div>';
         }).join('');
       pop.querySelectorAll('[data-worked]').forEach(row => {
         row.addEventListener('click', () => {
           _state.workedFilter = row.dataset.worked;
+          hideAllPopovers();
+          updateWorkedFilterPill();
+          renderAll();
+        });
+      });
+      pop.querySelectorAll('[data-owner]').forEach(row => {
+        row.addEventListener('click', () => {
+          _state.ownerFilter = row.dataset.owner;
           hideAllPopovers();
           updateWorkedFilterPill();
           renderAll();
@@ -9205,6 +9396,8 @@
     if (_state.activeAccount) _bParts.push('Account ' + _state.activeAccount);
     if (_state.activeGroupCode) _bParts.push('Group ' + _state.activeGroupCode);
     if (_state.workedFilter !== 'all') _bParts.push('Worked: ' + _state.workedFilter);
+    if (_state.ownerFilter === 'mine') _bParts.push('Owner: assigned to me');
+    if (_state.ownerFilter === 'none') _bParts.push('Owner: unassigned');
     if (_state.gridSearch) _bParts.push('search "' + _state.gridSearch + '"');
     ['types', 'subTypes', 'orderTypes', 'docTypes'].forEach(g => {
       const s = _state.exclusions[g];
@@ -9246,6 +9439,7 @@
       const v = r[c.key];
       if (v === null || v === undefined) return '';
       if (c.key === 'Worked') return r.Worked ? 'Yes' : 'No';
+      if (c.key === 'AssignedTo') return ownerName(v);   // a name, never the bare id (UI-218)
       if (moneyKeys.has(c.key)) return Math.round((+v || 0) * 100) / 100;
       if (intIdKeys.has(c.key)) {
         const n = +v;
@@ -9465,7 +9659,9 @@
     const noteChoice   = (document.querySelector('input[name="edit-note"]:checked')   || {}).value;
     const workedVal = workedChoice === 'true' ? true : (workedChoice === 'false' ? false : null);
     const noteVal   = noteChoice === 'replace' ? editNoteText.value : null;
-    if (workedVal === null && noteVal === null) { closeEditModal(); return; } // nothing to do
+    const ownerVal  = editOwnerSel.value === '__leave' ? null : editOwnerSel.value;   // '' = unassign
+    if (workedVal === null && noteVal === null && ownerVal === null) { closeEditModal(); return; } // nothing to do
+    const today = new Date().toISOString().slice(0, 10);
 
     // Apply in-memory + collect rows to persist. The worknotes
     // overlay is the source of truth for Worked / Note; mutate it
@@ -9477,10 +9673,17 @@
       if (!_state.selectedKeys.has(rowKey(r))) return;
       if (workedVal !== null) r.Worked = workedVal;
       if (noteVal   !== null) r.Note   = noteVal;
+      // Mirrors the server: the hand-off date moves only when the owner changes.
+      if (ownerVal !== null && strTrim(r.AssignedTo) !== ownerVal) {
+        r.AssignedTo   = ownerVal;
+        r.AssignedDate = ownerVal ? today : null;
+      }
       const k = workNoteKey(r);
-      const wn = _workNotes.get(k) || { Worked: false, Note: '' };
+      const wn = _workNotes.get(k) || { Worked: false, Note: '', AssignedTo: '', AssignedDate: null };
       if (workedVal !== null) wn.Worked = workedVal;
       if (noteVal   !== null) wn.Note   = noteVal;
+      wn.AssignedTo   = r.AssignedTo || '';
+      wn.AssignedDate = r.AssignedDate || null;
       _workNotes.set(k, wn);
       toPersist.push(r);
     });
@@ -9633,6 +9836,7 @@
       preloadDuplicateSales();  // 5.18 Duplicate Sales
       preloadPostingPolicy();   // UI-167 per-customer GL posting policy (scope band)
       preloadCostMethod();      // per-customer cost method — the A/P Voucher card's branch
+      loadPeople();             // UI-218 owner names; re-renders the grid when it lands
       // System Status light reads the shared sessionStorage cache
       // (instant paint), then refreshes from usp8_job_status
       // and starts polling. Same data Reconciliation drives &mdash;
