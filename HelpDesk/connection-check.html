@@ -405,7 +405,21 @@
   // setting was missing. Going through RRENV means a value supplied only by
   // RR_ENVIRONMENTS[mode] is now found, and a genuinely unset one is named
   // below by RRENV.missing() rather than just blanked.
-  var AUTH_BASE = params.get('auth') || envGet('authBase') || envGet('valcBase') || '';
+  //
+  // UI-251 (2026-10-30): a CONFIGURED loopback address is not used unless this page is
+  // itself open on loopback. The published help site ships the dev box's config.js, so its
+  // authBase is http://localhost:8080, and a customer's PC tested its own port 8080 and read
+  // the miss as a break, with advice to open "TCP 443 to localhost:8080". Loopback names the
+  // machine the browser runs on, so it is only ever the sign-in service when the page is on
+  // that machine too (the dev box, at localhost:8765). Dropped, leg 3 takes the existing
+  // not-configured report. A ?auth= on the link is always used: VALC's copied link names its
+  // own public base there.
+  var isLoopHost = function (h) { return /^(?:localhost|127(?:\.\d{1,3}){3}|::1|\[::1\])$/i.test(String(h || '')); };
+  var hostOfUrl = function (u) { try { return new URL(u).hostname; } catch (_) { return ''; } };
+  var AUTH_CONFIGURED = envGet('authBase') || envGet('valcBase') || '';
+  var AUTH_DROPPED = !params.get('auth') && !!AUTH_CONFIGURED
+                     && isLoopHost(hostOfUrl(AUTH_CONFIGURED)) && !isLoopHost(here.hostname);
+  var AUTH_BASE = params.get('auth') || (AUTH_DROPPED ? '' : AUTH_CONFIGURED);
   var ENV_MISSING = (window.RRENV && window.RRENV.missing) ? window.RRENV.missing() : [];
   var ENV_MODE    = (window.RRENV && window.RRENV.mode) ? window.RRENV.mode() : '(unknown)';
   // B — the agent on the app server. ?agent= wins; then the dev
@@ -1017,7 +1031,7 @@
       AUTH_BASE ? 'Checking…'
                 : ('No sign-in service configured for this installation (mode: ' + ENV_MODE + ').'),
       AUTH_BASE ? (hostLabel(AUTH_BASE) + '  (/api/v1/auth/ping)')
-                : ('unset: ' + (ENV_MISSING.length ? ENV_MISSING.join(', ') : 'authBase')));
+                : ('unset: ' + (!AUTH_DROPPED && ENV_MISSING.length ? ENV_MISSING.join(', ') : 'authBase')));
 
     // Past the slow mark the row says it is still waiting, so a long wait is
     // never mistaken for a hang of the page itself.
