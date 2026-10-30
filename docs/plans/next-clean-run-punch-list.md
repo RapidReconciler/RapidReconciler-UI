@@ -80,7 +80,7 @@ ispac perioddate Execute SQL Task = owner-deployed (B1). Nothing below is starte
 | # | Item | Status | Notes |
 |---|---|---|---|
 | C0 | **LOAD button launches the normal production SQL Agent job; STOP stops that job** | 🆕 owner requirement | Replace the transient one-shot catalog-SQL job with `sp_start_job` on the existing production load job (per-run mode/params via the config table it already reads), and `sp_stop_job` to cancel. Makes the run visible + stoppable in SSMS Job Activity Monitor and sidesteps the SQL-auth 27123 wall entirely. **This is the root-cause fix for D5** (STOP currently no-ops + the UI falsely resets). Verify the job/catalog state before resetting the UI; surface failures. |
-| C1 | Reload buttons = **truncate + load** (call A4's proc; watermarks self-reset on truncate — no explicit reset) | 🆕 needs design | Owner requirement 2026-07-05. Applies to every group Reload button on the Step-6 board. |
+| C1 | Reload buttons = **truncate + load** (call A4's proc; watermarks self-reset on truncate — no explicit reset) | ◐ Orders + Receipts built 2026-10-30 (VLC-229, VALC-side, no proc); Inventory/GL not | Owner requirement 2026-07-05. Applies to every group Reload button on the Step-6 board. |
 | C2 | Held fix #9 (No-source-data → "No new rows" label) | ✅ coded/held | Needs a VALC rebuild/redeploy to activate. |
 | C3 | Held fix #11 (activity same-second ordering) | ✅ coded/held | Needs a VALC rebuild/redeploy to activate. |
 | C4 | Finer group picker (6 groups) for `PRELOAD_GROUPS` | 📋 spec'd | `docs/plans/valc-partial-group-reload.md`. Optional for the clean run; confirm if wanted now. |
