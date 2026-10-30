@@ -43,6 +43,11 @@
  *   L1  VALC's ?agent= link (URL-encoded, as built) tests the link's server, and says so
  *   L2  the link wins over a remembered server
  *
+ *   UI-251 (2026-10-30), leg 3 on the help site, whose config.js names the dev box's localhost:8080:
+ *   H1  a link without auth: no ping to loopback, leg 3 grey (not configured), leg 2 still green
+ *   H2  a link with &auth= (VALC's public base) pings that base and goes green
+ *   H3  control: on the dev box itself localhost:8080 is still pinged
+ *
  * MUTATION CONTROLS: removing the session and remembered branches must redden S1; drawing
  * the diagram without its rows must redden D1; the same-server rule off must redden only D1;
  * the remembered branch off must redden U3 and leave U1 and S1 green; the never-signed-in
@@ -227,6 +232,20 @@ async function suite(script, label) {
   const vr = await load(script, { help: true, search: '?agent=' + encodeURIComponent('https://other.example.test:40000'),
     store: { 'rrv8.lastServer': JSON.stringify({ base: 'https://rr.example.test:34537', db: 'RapidReconciler_Demo1' }) } });
   check('L2 the link wins over a remembered server', comms(vr), ['https://other.example.test:40000']);
+
+  // UI-251: leg 3 on the help site. Its config.js names the dev box's http://localhost:8080, which on a
+  // customer's PC is that PC's own port, so a configured loopback address is not used off loopback.
+  const pings = (r) => r.fetched.filter((u) => /\/api\/v1\/auth\/ping/.test(u)).map((u) => u.split('/api/v1/auth/ping')[0]);
+  const h1 = await load(script, { help: true, search: '?agent=' + encodeURIComponent('https://rr.example.test:34537') });
+  check('H1 help site, link without auth: no ping to the loopback sign-in address', pings(h1), []);
+  check('H1 and leg 3 is grey (not configured), not red', h1.legs[3], GREY);
+  check('H1 CONTROL: leg 2 from the same link is still green', h1.legs[2], GREEN);
+  const h2 = await load(script, { help: true, search: '?agent=' + encodeURIComponent('https://rr.example.test:34537')
+    + '&auth=' + encodeURIComponent('https://valc.example.test') });
+  check('H2 a link with &auth= pings that base', pings(h2), ['https://valc.example.test']);
+  check('H2 and leg 3 goes green on its answer', h2.legs[3], GREEN);
+  const h3 = await load(script, { token: token('rr.example.test:34537') });
+  check('H3 CONTROL: on the dev box (page on localhost) the configured localhost:8080 is still pinged', pings(h3), ['http://localhost:8080']);
 }
 
 (async function () {
@@ -283,7 +302,19 @@ async function suite(script, label) {
   const ok5 = reds.indexOf('F1') >= 0 && reds.indexOf('L1') < 0;
   console.log('  ' + (ok5 ? 'ok  ' : 'FAIL') + '  control: without the never-signed-in sentence F1 reddens, and the link (L1) does not' + (ok5 ? '' : ' (reddened: ' + reds.join(',') + ')'));
 
-  const pass = real === 0 && ok && ok2 && ok3 && ok4 && ok5;
-  console.log('\nRESULT: ' + (pass ? 'all assertions and all five mutation controls pass' : real + ' assertion(s) failed'));
+  // UI-251: the loopback rule off must redden H1 (the help site pings localhost:8080 again), and leave
+  // H2 (an explicit auth) and H3 (the dev box) green.
+  const MUT6 = SCRIPT.replace("var AUTH_BASE = params.get('auth') || (AUTH_DROPPED ? '' : AUTH_CONFIGURED);",
+                              "var AUTH_BASE = params.get('auth') || AUTH_CONFIGURED;");
+  if (MUT6 === SCRIPT) { console.log('  HARNESS BROKEN: the sixth mutation changed nothing'); process.exit(1); }
+  failures = 0; reds = [];
+  console.log = () => {};
+  await suite(MUT6, '');
+  console.log = log;
+  const ok6 = reds.indexOf('H1') >= 0 && reds.indexOf('H2') < 0 && reds.indexOf('H3') < 0;
+  console.log('  ' + (ok6 ? 'ok  ' : 'FAIL') + '  control: without the loopback rule the help site pings localhost:8080 (H1); H2 and H3 hold' + (ok6 ? '' : ' (reddened: ' + reds.join(',') + ')'));
+
+  const pass = real === 0 && ok && ok2 && ok3 && ok4 && ok5 && ok6;
+  console.log('\nRESULT: ' + (pass ? 'all assertions and all six mutation controls pass' : real + ' assertion(s) failed'));
   process.exit(pass ? 0 : 1);
 })();
