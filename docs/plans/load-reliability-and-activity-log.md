@@ -161,6 +161,12 @@ verify.
   execution goes to status 9→3 (Canceled) and the row stops growing. UI must **not** reset to "no load
   has run" while the catalog still says RUNNING. *Acceptance:* start a load, STOP mid-run, confirm the
   execution cancels and the UI reflects Canceled (not "never ran").
+- [x] **1.3, built 2026-10-30 as VLC-229, for Orders and Receipts only, VALC-side (no proc).**
+  `SsisDeployService.reloadEmptySql` empties `F3106`/`F4211`/`F42119`/`F4311` (Orders) and `F43121`
+  (Receipts) plus their `Staging_*` tables in one transaction under `usp8_activity_begin`, then starts the
+  load; the package's own watermarks fall back to the start date for an empty table. Inventory (`F4111`)
+  and GL (`F0911`, `F0011`) are left out: emptying them makes a Reload a multi-hour full load, and the
+  `RTransactions` question below is still open. Original item:
 - [ ] **1.3 Group Reload = truncate + load (A4 + C1).** Write `usp8_reload_truncate_group @group`:
   truncate the group's live + `Staging_*` tables (DELETE where a FK blocks TRUNCATE); **leave**
   `RTransactions`/`RPerpetualInv`/`RInvAsOf`; watermarks self-reset on truncate. Add to `.sqlproj` +
