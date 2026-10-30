@@ -182,6 +182,24 @@ under-reports the GL and manufactures phantom variance. Two wrong root-cause
 hypotheses were published off exactly that mistake on 2026-08-06. Measure F0911
 directly, then use the xref to *explain* what you found, never to scope it.
 
+**A pair that nets to zero can still be open.** The `SI` leg (item ledger) and the
+`SK` leg (GL) are different documents, so only their group code pairs them, and a
+group clears only when it nets within one **period**, company and account. When the
+sales update posts the `SK` GL in the period after the `SI` relief, each period holds
+half the pair: the order nets to zero, and both periods still show it. Measured on
+one database (2026-10-30): $241,847.64 against −$241,952.01 across 25 rows, a net of
+−$104.37, almost all of it this straddle. The group keeps its Intercompany card on
+purpose. Read it as cut-off, check which period the `SK` leg posted to, and fix the
+posting timing rather than the amount.
+
+**An `SI` line shipped more than once makes one `SK` order per shipment.** Sales
+detail (`F4211` / `F42119`) keeps the line once, with its **last** invoice, so pair
+each `SK` order with its `SI` shipment from `F4111` instead. The `SK` line's GL date
+matches the shipment it offsets (the sales update posts both legs in one run).
+Quantity and cost do not work: decimal drift in the extract can read 15 units as 0.15.
+Key `F4111` on the order company `ilkcoo`, not `ilkco`, which is the reporting
+company and differs on intercompany orders. Fixed in the xref under DAC-89.
+
 ---
 
 ### 0.3 "Linked pair" means two JDE DOCUMENTS, not two AAI legs
