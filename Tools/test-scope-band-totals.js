@@ -121,7 +121,12 @@ function makeDom() {
     },
     get innerHTML() { return this._html; }
   };
-  byId['tx-scope-band'] = band;
+  // Registered under whichever id the shipped painter writes: since UI-250 that is the items
+  // wrapper inside #tx-scope-band (the band itself also holds the help "?"). Read from the
+  // painter, not assumed, so a rename cannot leave this stub answering a lookup nobody makes.
+  const target = (BAND_SRC.match(/getElementById\('([^']+)'\)/) || [])[1];
+  if (!target) { console.log('HARNESS BROKEN: paintScopeBand() no longer looks its band up by id'); process.exit(1); }
+  byId[target] = band;
   return {
     byId: byId,
     document: { getElementById: function (id) { return byId[id] || null; } }
