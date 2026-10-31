@@ -81,7 +81,8 @@ function load(page) {
   };
   vm.createContext(sb);
   // asofHistoryBlock holds the series and the split since UI-249; asofTrendPrompt wraps it.
-  const src = ['formatPeriod', 'curMoney', 'asofHistoryBlock', 'asofTrendPrompt'].map((n) => extractFn(page, n)).join('\n')
+  // asofScrub/asofMasker: asofHistoryBlock masks items on Enhanced since VLC-188 (asofEffTier is 'full' here).
+  const src = ['formatPeriod', 'curMoney', 'asofScrub', 'asofMasker', 'asofHistoryBlock', 'asofTrendPrompt'].map((n) => extractFn(page, n)).join('\n')
     + '\n' + extractFn(page, 'loadAsOfValueBridge', 'async function ');
   vm.runInContext(src, sb, { filename: 'inventory-asof.html:trend' });
   return { sb, calls };
