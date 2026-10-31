@@ -302,6 +302,31 @@ function reportLine(page, prefix) {
       db.length === 1 && db[0].indexOf('https://rr.example.test:34537/health') === 0, 'database probe URL(s): ' + JSON.stringify(db));
   }
 
+  // ---- 11. UI-251: no sign-in address -> All clear must not claim leg 3 ----
+  // The published check opened from a link with no &auth= (owner's look, 2026-10-31):
+  // leg 3 never ran, yet the banner said the PC "can reach ... the sign-in service".
+  // Fail-first: run this file against the page before the fix and 11 goes red.
+  {
+    const p = load({ routes: routes({}), env: { authBase: '' } });
+    await p.runUntil(120000);
+    const cause = p.el('verdictCause').innerHTML;
+    check('11 no sign-in address: leg 3 is idle and the verdict stays All clear',
+      p.el('probeC').attrs['data-state'] === 'idle' && /\bok\b/.test(p.el('verdict').className),
+      'probe C state "' + p.el('probeC').attrs['data-state'] + '", verdict class "' + p.el('verdict').className + '"');
+    check('11 the All-clear text does not claim the sign-in service was reached',
+      !/and the sign-in service/.test(cause) && /sign-in service wasn&rsquo;t checked from this PC/.test(cause)
+        && /reach the internet, GSI, and APPSRV01/.test(cause),
+      'cause "' + cause + '"');
+  }
+  {
+    const p = load({ routes: routes({}) });
+    await p.runUntil(120000);
+    const cause = p.el('verdictCause').innerHTML;
+    check('11 control: with a sign-in address that answered, the text still names it as reached',
+      /APPSRV01, and the sign-in service, and the server/.test(cause) && !/wasn&rsquo;t checked/.test(cause),
+      'cause "' + cause + '"');
+  }
+
   console.log(failures ? ('\n' + failures + ' FAILED') : '\nall passed');
   process.exit(failures ? 1 : 0);
 })().catch(function (e) { console.log('FAIL  harness error: ' + (e && e.stack || e)); process.exit(1); });
