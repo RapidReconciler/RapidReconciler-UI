@@ -630,8 +630,9 @@ versed analyst, not a layperson. Keep that voice:
 
 - **When the owner says "commit," run the full commit-to-sync flow
   end-to-end — don't pause to ask whether to push.** "Commit" means:
-  git commit → `git push -u origin <branch>` → open PR via
-  `gh pr create` (with the `Release-Note:` trailer in the body) →
+  git commit (with the `Release-Note:` trailer in the **commit
+  message**) → `git push -u origin <branch>` → open PR via
+  `gh pr create` →
   **`gh pr checks <num> --watch --fail-fast`** → `gh pr merge --squash`
   → poll for bot commits to settle → fast-forward the owner's main
   clone (the next bullet). Only stop to ask
@@ -640,6 +641,17 @@ versed analyst, not a layperson. Keep that voice:
   to ask — the owner considers the full sequence one action. Use the
   full path `/c/Program Files/GitHub CLI/gh.exe` since `gh` isn't on
   the PATH the Bash tool sees.
+
+- **⚠ A trailer in the PR body never publishes.** This repo squashes
+  with `squash_merge_commit_message = COMMIT_MESSAGES` (measured
+  2026-10-31 with `gh api repos/RapidReconciler/RapidReconciler-UI`):
+  the squash commit's body is the branch's commit messages, and the
+  PR description is dropped. UI #966 put its trailer only in the PR
+  body; `update-release-notes.yml` ran green and said "Nothing to
+  publish". The bullet above used to say "trailer in the body" of the
+  PR, which is how that happened. Put the trailer in the commit
+  message. Copying it into the PR body as well is harmless. Before
+  merging, `git log -1 --format=%B` on the head commit should show it.
 
 - **The CI gate is a STOP, and it has to be gated on the exit code,
   not chained after it (HK-8, 2026-09-03).** Valc PR #224 merged while
