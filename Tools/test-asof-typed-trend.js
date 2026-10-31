@@ -99,7 +99,7 @@ function load(page) {
   };
   vm.createContext(sb);
   const src = 'let _asofAiBusy = false;\nlet _asofLastAsk = null;' + cacheDecl(page) + '\n'
-    + ['formatPeriod', 'curMoney', 'asofHistoryBlock', 'asofTrendPrompt', 'asofFreeTextPrompt', 'asofTrendData',
+    + ['formatPeriod', 'curMoney', 'asofScrub', 'asofMasker', 'asofHistoryBlock', 'asofTrendPrompt', 'asofFreeTextPrompt', 'asofTrendData',
        'asofAiExplain', 'asofAsk'].map((n) => extractFn(page, n)).join('\n')
     + '\n' + extractFn(page, 'loadAsOfPeriodHistory', 'async function ')
     + '\n' + extractFn(page, 'loadAsOfValueBridge', 'async function ');

@@ -956,7 +956,13 @@
   // Grounded prompt for the brief — the ONLY facts the model may use are the real
   // break counts + the affected accounts for THIS one company.
   function briefPrompt(sum){
-    var co=state.company||'this company';
+    // VLC-188 (owner ruling 2026-10-31): on Enhanced (`scrubbed`) the company and every account reach the model as
+    // generic labels, before the call, the way Home and cardex do. The dataAccessLine below only TELLS the model
+    // to; until now the real numbers went out with it. One account keeps one label across the brief.
+    var scrub=effTier()==='scrubbed';
+    var co=scrub ? 'Entity A' : (state.company||'this company');
+    var acctLabels={}, acctN=0;
+    function acctL(a){ if(!scrub) return a; if(!acctLabels[a]) acctLabels[a]='Account '+(++acctN); return acctLabels[a]; }
     var glN=sum.gl.rows, varN=sum.varc.rows, unkN=sum.unk.rows, unkA=sum.unk.accts.length;
     // "Intact" is only true when every row in scope was actually evaluated. Rows with
     // no prior period to roll forward from were never compared — the model must not be
@@ -965,7 +971,7 @@
       return 'You are briefing a JDE inventory-reconciliation analyst on company '+co+'. '
         + 'These are the ONLY facts you may use (never invent a number, an account, or a step):\n'
         + 'Nothing RapidReconciler could compare is out of balance. However '+unkN+' row(s) across '+unkA+' account(s) ('
-        + sum.unk.accts.slice(0,12).map(function(x){return x.acct;}).join(', ')
+        + sum.unk.accts.slice(0,12).map(function(x){return acctL(x.acct);}).join(', ')
         + ') have no prior period to roll forward from, so their roll-forward status was never evaluated — this is UNPROVEN, not clean. Do not call the roll-forward intact.\n'
         + (window.RRV8 && RRV8.dataAccessLine ? RRV8.dataAccessLine(effTier()) + '\n' : '')
         + 'In 2 short sentences on one line: say nothing is out of balance among the accounts that could be checked, name that the accounts above were not evaluated for lack of prior history, and say it usually resolves once a full period of history exists.\n'
@@ -978,8 +984,8 @@
         + 'In ONE short sentence, confirm there is nothing to correct and what to watch at the next refresh.\n'
         + (window.RRV8 && RRV8.AI_REGISTER ? RRV8.AI_REGISTER : '');
     }
-    var glA=sum.gl.accts.slice(0,12).map(function(x){return x.acct;}).join(', ');
-    var vrA=sum.varc.accts.slice(0,12).map(function(x){return x.acct;}).join(', ');
+    var glA=sum.gl.accts.slice(0,12).map(function(x){return acctL(x.acct);}).join(', ');
+    var vrA=sum.varc.accts.slice(0,12).map(function(x){return acctL(x.acct);}).join(', ');
     var facts=[];
     if(glN) facts.push('On the account'+(sum.gl.accts.length!==1?'s':'')+' below'+(glA?(' ('+glA+')'):'')+', Account Balances (F0902) don\'t tie to the posted Account Ledger (F0911) — '+glN+' row'+(glN!==1?'s':'')+' across '+sum.gl.accts.length+' account'+(sum.gl.accts.length!==1?'s':'')+' don\'t roll forward. Clear the balance in order: FIRST run Repost Account Balances (R099102) in JD Edwards to rebuild the balances from the posted detail; once those tie, THEN reload the GL on this page so the corrected balances flow into RapidReconciler. State the order plainly as the next step — RapidReconciler does not verify the repost and must not ask the analyst to prove or attest it ran clean.');
     if(varN) facts.push('On the account'+(sum.varc.accts.length!==1?'s':'')+(vrA?(' ('+vrA+')'):'')+', the reconciliation variance is off — '+varN+' row'+(varN!==1?'s':'')+' across '+sum.varc.accts.length+' account'+(sum.varc.accts.length!==1?'s':'')+'. There is nothing to reload for it: RapidReconciler recomputes the full period timeline on every refresh, so it clears on the next run. If it survives a refresh, escalate to your IT department to investigate — never invent a re-roll or a cardex reload for it.');

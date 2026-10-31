@@ -2514,11 +2514,25 @@
     return { total, n: rows.length, byBranch: topN(byBranch, 8), byGl: topN(byGl, 8), byBu: topN(byBu, 6),
       branchCount: Object.keys(byBranch).length, glCount: Object.keys(byGl).length };
   }
+  // VLC-188 (owner ruling 2026-10-31: mask on Enhanced). Enhanced is `scrubbed`, and its promise is that every
+  // company, account, branch, business unit and item reaches the model as a generic label, never its real number
+  // (RRV8.dataAccessLine). Until now these prompts only TOLD the model so and sent the real values. Masked here,
+  // before the call, the way Home and cardex already do ("Entity A"). Amounts and GL classes still ride.
+  function asofScrub() { return asofEffTier() === 'scrubbed'; }
+  // Stable generic labels for one prompt: the first key seen is "<noun> 1", and the same key keeps its label.
+  function asofMasker(noun) {
+    const seen = new Map();
+    return (key) => {
+      if (!seen.has(key)) seen.set(key, noun + ' ' + (seen.size + 1));
+      return seen.get(key);
+    };
+  }
   function asofScopeText() {
     const scope = (window.RRV8 && window.RRV8.readSessionScope) ? window.RRV8.readSessionScope() : null;
     const cos = (scope && scope.activeCompanies) || [];
     const per = (_data && _data._meta && _data._meta.period) || '';
-    const coTxt = cos.length === 1 ? ('Co ' + cos[0]) : (cos.length ? (cos.length + ' companies') : 'all companies');
+    const coTxt = cos.length === 1 ? (asofScrub() ? 'Entity A' : ('Co ' + cos[0]))
+      : (cos.length ? (cos.length + ' companies') : 'all companies');
     return coTxt + (per ? ' · ' + formatPeriod(per) : '');
   }
   function asofAiSync() {
@@ -2594,15 +2608,16 @@
     el.innerHTML = html;
     wireCompanyPicker();   // re-attach the click handler to the freshly-rendered button
   }
-  const _fmtAgg = list => list.map(x => x.key + ' ' + curMoney(x.amt)).join(', ');
+  const _fmtAgg = (list, label) => list.map(x => (label ? label(x.key) : x.key) + ' ' + curMoney(x.amt)).join(', ');
   function asofFacts() {
     const a = asofAggregates();
+    const scrub = asofScrub();
     return 'Scope: ' + asofScopeText() + ' (' + (_curCtx.code || 'USD') + ').\n'
       + 'Total on-hand value ' + curMoney(a.total) + ' across ' + a.n.toLocaleString('en-US') + ' item rows, '
       + a.branchCount + ' branches, ' + a.glCount + ' GL classes.\n'
-      + 'Value by branch (top): ' + _fmtAgg(a.byBranch) + '.\n'
+      + 'Value by branch (top): ' + _fmtAgg(a.byBranch, scrub ? asofMasker('Branch') : null) + '.\n'
       + 'Value by GL class (top): ' + _fmtAgg(a.byGl) + '.\n'
-      + 'Value by business unit (top): ' + _fmtAgg(a.byBu) + '.';
+      + 'Value by business unit (top): ' + _fmtAgg(a.byBu, scrub ? asofMasker('Business unit') : null) + '.';
   }
   function asofAnswer(txt, loading) {
     const el = document.getElementById('asof-ai-answer'); if (!el) return;
@@ -2648,11 +2663,13 @@
   }
   // The period series and the volume/cost split, as prompt lines. ONE builder for the
   // chip's trend read and the typed box (UI-249), so the two cannot describe the same
-  // history differently. Pure, like asofTrendPrompt.
+  // history differently. Pure but for the tier: on Enhanced an item is "Item 1" and its branch is dropped (VLC-188).
   function asofHistoryBlock(hist, bridge) {
     const series = hist.map(p => formatPeriod(p.period) + ' ' + curMoney(p.value)).join('; ');
+    const itemLabel = asofScrub() ? asofMasker('Item') : null;
     const top = (list) => (list || []).slice(0, 2)
-      .map(t => t.itemNumber + (t.branch ? ' at branch ' + t.branch : '') + ' ' + curMoney(t.amount)).join(', ');
+      .map(t => (itemLabel ? itemLabel(t.itemNumber)
+                           : t.itemNumber + (t.branch ? ' at branch ' + t.branch : '')) + ' ' + curMoney(t.amount)).join(', ');
     const lines = (bridge || []).filter(b => b && b.period).map(b => {
       let s = formatPeriod(b.period) + ': change ' + curMoney(b.change)
         + ' = volume ' + curMoney(b.volume) + ' + cost ' + curMoney(b.cost);
