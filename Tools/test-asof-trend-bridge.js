@@ -80,7 +80,8 @@ function load(page) {
     _next: () => Promise.resolve({ companyNumber: '90002', periods: BRIDGE }),
   };
   vm.createContext(sb);
-  const src = ['formatPeriod', 'curMoney', 'asofTrendPrompt'].map((n) => extractFn(page, n)).join('\n')
+  // asofHistoryBlock holds the series and the split since UI-249; asofTrendPrompt wraps it.
+  const src = ['formatPeriod', 'curMoney', 'asofHistoryBlock', 'asofTrendPrompt'].map((n) => extractFn(page, n)).join('\n')
     + '\n' + extractFn(page, 'loadAsOfValueBridge', 'async function ');
   vm.runInContext(src, sb, { filename: 'inventory-asof.html:trend' });
   return { sb, calls };

@@ -665,6 +665,8 @@
   .fp-scope-label { font-family: 'Source Sans 3', sans-serif; font-size: 12.5px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); }
   .fp-scope-value { font-family: 'Source Sans 3', sans-serif; font-size: 19px; font-weight: 800; color: var(--navy); }
   .fp-scope-empty { font-size: 13px; color: var(--text-muted); }
+  /* UI-248: the help "?" rides at the band's right end, as on Transactions. */
+  .fp-scope > .topbar-help { margin-left: auto; flex-shrink: 0; }
   /* Single-of company picker in the scope strip. */
   .fp-scope-picker { display: inline-flex; align-items: center; gap: 7px; font-family: 'Source Sans 3', sans-serif; font-size: 19px; font-weight: 800; color: var(--navy); background: var(--bg-card); border: 1px solid var(--rule-strong); border-radius: 8px; padding: 4px 9px 4px 12px; cursor: pointer; transition: border-color .12s, background .12s; }
   .fp-scope-picker:hover { border-color: var(--blue); background: var(--bg-soft); }
@@ -1189,8 +1191,15 @@
   }
   .btn-navy .btn-badge[hidden] { display: none; }
 </style>
+<!-- UI-248. Shared help panel. The "?" mounts in the scope band ([data-help-host] on
+     #fp-scope), which renderAsOfHero() never rewrites: it paints #fp-scope-items
+     inside it, so the button outlives every repaint (the UI-250 lesson). -->
+<link rel="stylesheet" href="../Tools/help-sidebar.css">
+<script defer src="../Tools/help-sidebar.js"></script>
 </head>
-<body>
+<body
+  data-help-src="../RRUniversity/inventory-reconciliation.html#reference"
+  data-help-title="Full Perpetual Details">
 
 <div class="app">
 
@@ -1290,7 +1299,7 @@
 
   <!-- Scope strip — the parameters this page was opened with (database · companies ·
        period · currency), as light labeled pairs. Filled by renderAsOfHero(). -->
-  <section class="fp-scope" id="fp-scope" aria-label="Report parameters">
+  <section class="fp-scope" id="fp-scope" aria-label="Report parameters" data-help-host>
     <span class="fp-scope-emblem" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M6 12h12M10 18h4"/></svg></span>
     <div class="fp-scope-items" id="fp-scope-items"></div>
   </section>
@@ -2629,6 +2638,18 @@
   // not load, the prompt says so, and the answer says it cannot tell, rather than the
   // gap showing only in the console.
   function asofTrendPrompt(hist, bridge) {
+    return 'You are RapidReconciler AI. An analyst asked how perpetual inventory is trending across periods.\n'
+      + 'Scope: ' + asofScopeText() + '.\n'
+      + asofHistoryBlock(hist, bridge)
+      + 'Using ONLY these figures, say whether the balance is growing or shrinking overall and call out any period that stands out. Do NOT invent numbers.\n'
+      + (window.RRV8 && RRV8.dataAccessLine ? RRV8.dataAccessLine(asofEffTier()) + '\n' : '')
+      + 'At most 3 lines, under 70 words.\n'
+      + (window.RRV8 && RRV8.AI_REGISTER ? RRV8.AI_REGISTER : '');
+  }
+  // The period series and the volume/cost split, as prompt lines. ONE builder for the
+  // chip's trend read and the typed box (UI-249), so the two cannot describe the same
+  // history differently. Pure, like asofTrendPrompt.
+  function asofHistoryBlock(hist, bridge) {
     const series = hist.map(p => formatPeriod(p.period) + ' ' + curMoney(p.value)).join('; ');
     const top = (list) => (list || []).slice(0, 2)
       .map(t => t.itemNumber + (t.branch ? ' at branch ' + t.branch : '') + ' ' + curMoney(t.amount)).join(', ');
@@ -2646,14 +2667,50 @@
         + 'Volume = more or fewer units, valued at each item’s unit cost. Cost = the same units carried at a different unit cost. Other = the open period’s cardex adjustment.\n'
         + 'For any period you call out, say whether volume or cost drove it and name the item behind it.\n'
       : 'The volume/cost split of each change is not available right now, so do not guess whether a change was volume or cost; say it cannot be told from these figures.\n';
-    return 'You are RapidReconciler AI. An analyst asked how perpetual inventory is trending across periods.\n'
-      + 'Scope: ' + asofScopeText() + '.\n'
-      + 'Perpetual on-hand balance by period (oldest first): ' + series + '.\n'
-      + split
-      + 'Using ONLY these figures, say whether the balance is growing or shrinking overall and call out any period that stands out. Do NOT invent numbers.\n'
+    return 'Perpetual on-hand balance by period (oldest first): ' + series + '.\n' + split;
+  }
+  // UI-249. The typed box. Until 2026-10-30 its facts were the loaded grid alone, so a
+  // typed "How are we trending?" was answered "there is no prior period here to trend
+  // against" on a page with 9 periods of history, while the chip with the same words
+  // answered from the series. Every typed question now carries the series and the
+  // split, because which questions need history cannot be told from the wording
+  // ("are we growing?", "what changed since July?"). When the history did not load the
+  // prompt says so, so a missing series is never read as a single period.
+  function asofFreeTextPrompt(freeText, hist, bridge) {
+    const history = (hist && hist.length)
+      ? asofHistoryBlock(hist, bridge)
+      : 'The period-by-period history could not be loaded right now. Do not conclude that there is only one period; if the question needs history, say it is unavailable at the moment.\n';
+    // UI-79 — the COLUMN DICTIONARY goes FIRST, ahead of the grounding and ahead of
+    // the role line. This box shipped with ASOF_GROUNDING and no dictionary, so every
+    // header question on a 48-column grid was answered from the header's spelling.
+    // Position is not cosmetic: the cardex dictionary records a definition placed
+    // mid-prompt losing to the server's prepended DMAAI reference twice.
+    return (window.RRV8 && RRV8.ASOF_COLUMNS ? RRV8.colBlock(RRV8.ASOF_COLUMNS) + '\n\n' : '')
+      + (window.RRV8 && RRV8.ASOF_GROUNDING ? RRV8.ASOF_GROUNDING + '\n\n' : '')
+      + 'You are RapidReconciler AI. An analyst asked about perpetual inventory: "' + (freeText || '') + '"\n'
+      + 'If the question is about the Residual Optimizer or "Re-optimize", explain it from the policy above in plain terms. A slider fine-tunes how many dust rows are hidden, and the Inventory / Filtered view switch shows either the kept inventory or exactly the dust set aside.\n'
+      + 'Other features on this page you can explain if asked: the Company selector at the top switches which single company you are viewing (one at a time); "Perpetual" is the on-hand valuation total; Excel export downloads two sheets — the full inventory list, and the residual dust split onto its own sheet.\n'
+      + 'Answer using ONLY these figures — do NOT invent any number not listed:\n' + asofFacts() + '\n'
+      + history
       + (window.RRV8 && RRV8.dataAccessLine ? RRV8.dataAccessLine(asofEffTier()) + '\n' : '')
       + 'At most 3 lines, under 70 words.\n'
       + (window.RRV8 && RRV8.AI_REGISTER ? RRV8.AI_REGISTER : '');
+  }
+  // UI-249. The history and the split, loaded once per scope and shared by the chip and
+  // the typed box, so putting them in every typed prompt costs no extra agent calls
+  // after the first question. A load that came back empty is not kept, so the next
+  // question tries again instead of answering from a remembered failure.
+  let _asofTrendData = null;   // { key, promise }
+  function asofTrendData() {
+    let key = '';
+    try { key = String(_ensureSolo() || '') + '|' + JSON.stringify(reconciliationFilterFromSession()); } catch (_) {}
+    if (_asofTrendData && _asofTrendData.key === key) return _asofTrendData.promise;
+    const promise = Promise.all([loadAsOfPeriodHistory(), loadAsOfValueBridge()]).then(([hist, bridge]) => {
+      if ((!hist.length || !bridge.length) && _asofTrendData && _asofTrendData.promise === promise) _asofTrendData = null;
+      return { hist, bridge };
+    });
+    _asofTrendData = { key, promise };
+    return promise;
   }
   function asofAsk(kind, freeText) {
     if (_asofAiBusy) return;
@@ -2681,27 +2738,13 @@
       // Needs the cross-period series this page already loads for the trend read, and
       // (UI-225) the volume/cost split of each change, so the answer can say WHY a
       // period moved instead of asking the analyst to check.
-      run = Promise.all([loadAsOfPeriodHistory(), loadAsOfValueBridge()]).then(([hist, bridge]) => {
+      run = asofTrendData().then(({ hist, bridge }) => {
         if (!hist || !hist.length) return 'Period-over-period history isn’t available for this scope right now, so the trend can’t be summarized here.';
         return asofAiExplain(asofTrendPrompt(hist, bridge));
       });
     } else {
-      // Free-text — grounded in the loaded scope's aggregates.
-      // UI-79 — the COLUMN DICTIONARY goes FIRST, ahead of the grounding and ahead of
-      // the role line. This box shipped with ASOF_GROUNDING and no dictionary, so every
-      // header question on a 48-column grid was answered from the header's spelling.
-      // Position is not cosmetic: the cardex dictionary records a definition placed
-      // mid-prompt losing to the server's prepended DMAAI reference twice.
-      const prompt = (window.RRV8 && RRV8.ASOF_COLUMNS ? RRV8.colBlock(RRV8.ASOF_COLUMNS) + '\n\n' : '')
-        + (window.RRV8 && RRV8.ASOF_GROUNDING ? RRV8.ASOF_GROUNDING + '\n\n' : '')
-        + 'You are RapidReconciler AI. An analyst asked about perpetual inventory: "' + (freeText || '') + '"\n'
-        + 'If the question is about the Residual Optimizer or "Re-optimize", explain it from the policy above in plain terms. A slider fine-tunes how many dust rows are hidden, and the Inventory / Filtered view switch shows either the kept inventory or exactly the dust set aside.\n'
-        + 'Other features on this page you can explain if asked: the Company selector at the top switches which single company you are viewing (one at a time); "Perpetual" is the on-hand valuation total; Excel export downloads two sheets — the full inventory list, and the residual dust split onto its own sheet.\n'
-        + 'Answer using ONLY these figures — do NOT invent any number not listed:\n' + asofFacts() + '\n'
-        + (window.RRV8 && RRV8.dataAccessLine ? RRV8.dataAccessLine(asofEffTier()) + '\n' : '')
-        + 'At most 3 lines, under 70 words.\n'
-        + (window.RRV8 && RRV8.AI_REGISTER ? RRV8.AI_REGISTER : '');
-      run = asofAiExplain(prompt);
+      // Free-text — the loaded scope's aggregates plus (UI-249) the period history.
+      run = asofTrendData().then(({ hist, bridge }) => asofAiExplain(asofFreeTextPrompt(freeText, hist, bridge)));
     }
     run.then(txt => {
       asofAnswer(txt || 'No response — the AI service may be unavailable.', false);
@@ -2783,9 +2826,11 @@ function updateLotDetailPill() {
   }
   function updateCompanyPill() {
     // Single-of picker lives in the scope strip. Keep its label in sync with the
-    // one company currently shown.
+    // one company currently shown. Same words as renderAsOfHero(): this page shows one
+    // company or none, so the unresolved case is "Not resolved", never "All companies"
+    // (that overwrote the hero's label after every load; the UI-248 live probe saw it).
     const label = document.getElementById('company-picker-label');
-    if (label) label.textContent = _soloCompany ? ('Co ' + _soloCompany) : 'All companies';
+    if (label) label.textContent = _soloCompany ? ('Co ' + _soloCompany) : 'Not resolved';
   }
   // ============================================================
   //  Residual Optimizer — AI picks the dust cutoff; deterministic
@@ -4644,9 +4689,9 @@ function updateLotDetailPill() {
   //  Cross-period Perpetual valuation history.
   //
   //  Hits the agent's /inventory/reconciliation/history endpoint and reads
-  //  `perpetualBalance` per period. ITS ONLY CONSUMER IS THE AI TREND READ
-  //  (asofAiExplain, kind === 'trend'), which is why this loader survived
-  //  the retirement below.
+  //  `perpetualBalance` per period. ITS ONLY CONSUMER IS THE AI, through
+  //  asofTrendData(): the trend chip and (UI-249) every typed question. That
+  //  is why this loader survived the retirement below.
   //
   //  ⚠ THE PERIOD BAR CHART THIS WAS WRITTEN FOR IS GONE -- REMOVED
   //  2026-09-09 (UI-183). Its host element `#js-period-bars` was deleted
@@ -4715,8 +4760,9 @@ function updateLotDetailPill() {
   //  the history endpoint's perpetualBalance into volume, cost and other, with
   //  the top items behind volume and cost (usp8_inventory_value_bridge). Same
   //  company as loadAsOfPeriodHistory (the page's single selected company).
-  //  Its only consumer is the trend read. On failure it returns [], and
-  //  asofTrendPrompt tells the model the split is missing, so the analyst reads
+  //  Its only consumer is the AI, through asofTrendData() (the trend chip and,
+  //  since UI-249, the typed box). On failure it returns [], and
+  //  asofHistoryBlock tells the model the split is missing, so the analyst reads
   //  "can't tell" in the answer instead of a guess. An agent older than the
   //  release that carries the route answers 404 and lands here too.
   // ============================================================
