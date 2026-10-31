@@ -209,6 +209,10 @@
   .np-leg { flex: 0 0 auto; font-weight: 700; color: var(--navy); font-size: 13px; min-width: 200px; }
   .np-addr { flex: 1; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text); word-break: break-all; }
   .np-addr .np-noip { color: var(--red); }
+  /* UI-253: the step number, drawn like the diagram's leg badge. */
+  .np-num { display: inline-block; width: 20px; height: 20px; line-height: 20px; border-radius: 50%; margin-right: 7px;
+            background: var(--navy); color: #fff; font-size: 11.5px; font-weight: 700; text-align: center; }
+  .np-addr.np-skip { color: var(--text-soft); font-family: inherit; font-style: italic; }
   .np-note { font-size: 12.5px; color: var(--text-soft); padding: 4px 2px; }
 
   /* Leg-number badges (cross-reference to the diagram) */
@@ -640,6 +644,9 @@
   function statusWord(r) {
     if (!r) return 'not checked';
     if (r.noBase) return 'not checked (no address available)';
+    // UI-253: no sign-in address means probe C never ran ({ skipped: true }); it used to fall
+    // through to "COULD NOT CONNECT (undefined ms)" for a connection nobody attempted.
+    if (r.skipped) return 'not checked (this link doesn’t name it)';
     if (r.ok) return (r.slow ? 'REACHABLE, SLOW (' : 'REACHABLE (') + r.ms + ' ms)' + (r.serverError ? ' but HTTP ' + r.status : '');
     if (r.aborted) return 'NO ANSWER WITHIN ' + secs(GIVE_UP_MS) + ' (' + r.ms + ' ms)';
     return 'COULD NOT CONNECT (' + r.ms + ' ms)';
@@ -820,16 +827,21 @@
     var srv = (b.ok && b.data && b.data.host) ? b.data.host : {};
     var serverEps = (b.ok && b.data && b.data.endpoints) ? b.data.endpoints : [];
     var anchorH = hostOnly(ANCHOR);
+    // UI-253 (owner 2026-10-31): every row carries the diagram leg it tests, so the list and the
+    // report number IT's steps the way the picture does. A row no leg tests carries none.
     var pc = [
-      { label: 'GSI edge', host: anchorH, ip: resolved[anchorH] || null, port: '443' },
-      { label: 'Your RapidReconciler server',
+      { leg: 1, label: 'GSI edge', host: anchorH, ip: resolved[anchorH] || null, port: '443' },
+      { leg: 2, label: 'Your RapidReconciler server',
         host: srv.hostname || (COMMS_BASE ? hostOnly(COMMS_BASE) : 'your server'),
         ip: srv.internalIp || null, port: '443, 32145–49152' }
     ];
     if (AUTH_BASE) {
       var authH = hostOnly(AUTH_BASE);
-      pc.push({ label: 'Sign-in service', host: authH, ip: resolved[authH] || null, port: portOf(AUTH_BASE, '443') });
+      pc.push({ leg: 3, label: 'Sign-in service', host: authH, ip: resolved[authH] || null, port: portOf(AUTH_BASE, '443') });
     }
+    // The agent's endpoint labels (CommsCheckController: "Database", "GSI / VALC") are legs 4 and 5.
+    var SERVER_LEG = { 'Database': 4, 'GSI / VALC': 5 };
+    serverEps = serverEps.map(function (e) { return Object.assign({ leg: SERVER_LEG[e && e.label] || null }, e); });
     // VLC-210: VALC's Topology for this database, one row per server, so the diagram and the list read the same.
     var ROLE = { SQL_SERVER: 'SQL Server', JDE_SOURCE: 'JDE source', TEST_SQL_SERVER: 'Test/Dev SQL Server', APP_SERVER: 'Application server' };
     var onFile = ((topo && topo.servers) || []).filter(function (s) { return s && (s.name || s.address); }).map(function (s) {
@@ -842,15 +854,29 @@
              onFile: onFile, onFileRefused: topo && topo.refused ? topo.refused : null };
   }
 
+  // UI-253: the PC's rows as IT reads them. Leg 3 is drawn even when it was never run, so with no
+  // sign-in address its step is listed as not checked rather than silently missing from 1, 2, 4, 5.
+  function pcSteps(rows) {
+    var out = rows.pc.slice();
+    if (!out.some(function (r) { return r.leg === 3; })) out.push({ leg: 3, label: 'Sign-in service', skipped: true });
+    return out.sort(function (x, y) { return x.leg - y.leg; });
+  }
+  var SKIPPED_STEP = 'not checked (this link doesn’t name it)';
+
   function renderPath(rows) {
     function rowHtml(r) {
+      var mark = r.leg ? '<span class="np-num">' + r.leg + '</span>' : '&rarr; ';
+      if (r.skipped) {
+        return '<div class="np-row"><span class="np-leg">' + mark + escapeHtml(r.label) + '</span>' +
+               '<span class="np-addr np-skip">' + escapeHtml(SKIPPED_STEP) + '</span></div>';
+      }
       var ip = r.ip ? escapeHtml(r.ip) : '<span class="np-noip">no IP — didn’t resolve</span>';
-      return '<div class="np-row"><span class="np-leg">&rarr; ' + escapeHtml(r.label) + '</span>' +
+      return '<div class="np-row"><span class="np-leg">' + mark + escapeHtml(r.label) + '</span>' +
              '<span class="np-addr">' + escapeHtml(r.host) + ' (' + ip + ') : ' + escapeHtml(String(r.port)) + '</span></div>';
     }
     var pcIp = rows.caller ? (rows.caller.local ? 'the server itself' : rows.caller.ip) : '';
     var html = '<div class="np-group"><div class="np-group-head">From this PC' + (pcIp ? ' (' + escapeHtml(pcIp) + ')' : '') + '</div>' +
-               rows.pc.map(rowHtml).join('') + '</div>';
+               pcSteps(rows).map(rowHtml).join('') + '</div>';
     if (rows.agentReachable) {
       var sid = [rows.serverId.hostname, rows.serverId.internalIp].filter(Boolean).join(' / ') || 'your server';
       html += '<div class="np-group"><div class="np-group-head">From your RapidReconciler server (' + escapeHtml(sid) + ')</div>' +
@@ -999,14 +1025,17 @@
       });
     }
     if (pathRows) {
-      lines.push('', 'Network path (addresses for your IT to test / trace):');
-      pathRows.pc.forEach(function (r) {
-        lines.push('  this PC -> ' + r.label + ': ' + r.host + ' (' + (r.ip || 'did not resolve') + ') : ' + r.port);
+      // UI-253: numbered by diagram leg, so "step 3" in IT's reply is the same leg 3 on the picture.
+      var step = function (r) { return r.leg ? '  ' + r.leg + '. ' : '     '; };
+      lines.push('', 'Network path (addresses for your IT to test / trace; numbers match the diagram):');
+      pcSteps(pathRows).forEach(function (r) {
+        lines.push(step(r) + 'this PC -> ' + r.label + ': ' +
+          (r.skipped ? SKIPPED_STEP : r.host + ' (' + (r.ip || 'did not resolve') + ') : ' + r.port));
       });
       if (pathRows.agentReachable) {
         var from = pathRows.serverId.hostname || 'your server';
         pathRows.server.forEach(function (r) {
-          lines.push('  ' + from + ' -> ' + r.label + ': ' + r.host + ' (' + (r.ip || 'did not resolve') + ') : ' + r.port);
+          lines.push(step(r) + from + ' -> ' + r.label + ': ' + r.host + ' (' + (r.ip || 'did not resolve') + ') : ' + r.port);
         });
       }
     }
