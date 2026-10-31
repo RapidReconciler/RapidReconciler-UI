@@ -327,6 +327,61 @@ function reportLine(page, prefix) {
       'cause "' + cause + '"');
   }
 
+  // ---- 12. UI-253: IT's addresses are numbered by diagram leg --------------
+  // Owner 2026-10-31: "Can the message to IT for testing have numbered steps corresponding to
+  // the diagram?" The server's reply here names legs 4 and 5 plus one endpoint no leg tests.
+  // Fail-first: against the page before UI-253 every check in 12 goes red.
+  function withEndpoints() {
+    const r = routes({});
+    r[0] = server(200);
+    r[0].json = Object.assign({}, r[0].json, { endpoints: [
+      { scope: 'server', label: 'Database', host: 'sqlhost.example.test', ip: '10.0.0.9', port: '1433' },
+      { scope: 'server', label: 'GSI / VALC', host: 'valc.example.test', ip: '10.0.0.7', port: '443' },
+      { scope: 'server', label: 'Mail relay', host: 'smtp.example.test', ip: '10.0.0.5', port: '25' }] });
+    return r;
+  }
+  function pathBlock(page) {
+    const lines = page.el('reportText').textContent.split('\n');
+    const at = lines.findIndex(function (l) { return /^Network path/.test(l); });
+    if (at < 0) return [];
+    const out = [];
+    for (let i = at + 1; i < lines.length && lines[i] !== ''; i++) out.push(lines[i]);
+    return out;
+  }
+  {
+    const p = load({ routes: withEndpoints(), env: { authBase: '' } });
+    await p.runUntil(120000);
+    const blk = pathBlock(p);
+    const want = [
+      /^  1\. this PC -> GSI edge: edge\.example\.test /,
+      /^  2\. this PC -> Your RapidReconciler server: APPSRV01 /,
+      /^  3\. this PC -> Sign-in service: not checked \(this link doesn’t name it\)$/,
+      /^  4\. APPSRV01 -> Database: sqlhost\.example\.test \(10\.0\.0\.9\) : 1433$/,
+      /^  5\. APPSRV01 -> GSI \/ VALC: valc\.example\.test \(10\.0\.0\.7\) : 443$/,
+      /^ {5}APPSRV01 -> Mail relay: smtp\.example\.test/
+    ];
+    check('12 the report numbers each address by its leg, 1 to 5 in order, and leaves the rest unnumbered',
+      blk.length === want.length && want.every(function (re, i) { return re.test(blk[i]); }),
+      'network path block:\n        ' + blk.join('\n        '));
+    const badges = (p.el('netpathList').innerHTML.match(/<span class="np-num">(\d)<\/span>/g) || [])
+      .map(function (s) { return s.replace(/\D/g, ''); }).join(',');
+    check('12 the on-page IT list carries the same numbers, in order', badges === '1,2,3,4,5', 'badges "' + badges + '"');
+    check('12 the IT list shows leg 3 as not checked, not missing',
+      /<span class="np-num">3<\/span>Sign-in service<\/span><span class="np-addr np-skip">not checked/.test(p.el('netpathList').innerHTML),
+      'netpathList "' + p.el('netpathList').innerHTML.slice(0, 600) + '"');
+    const line = reportLine(p, 'Sign-in service');
+    check('12 the report\'s sign-in line says not checked, not "COULD NOT CONNECT (undefined ms)"',
+      /not checked \(this link doesn’t name it\)$/.test(line) && !/COULD NOT CONNECT|undefined/.test(line), 'line "' + line + '"');
+  }
+  {
+    const p = load({ routes: withEndpoints() });
+    await p.runUntil(120000);
+    const blk = pathBlock(p);
+    check('12 control: with a sign-in address, step 3 is that address and nothing says not checked',
+      /^  3\. this PC -> Sign-in service: signin\.example\.test /.test(blk[2] || '') && !/not checked/.test(blk.join('\n')),
+      'network path block:\n        ' + blk.join('\n        '));
+  }
+
   console.log(failures ? ('\n' + failures + ' FAILED') : '\nall passed');
   process.exit(failures ? 1 : 0);
 })().catch(function (e) { console.log('FAIL  harness error: ' + (e && e.stack || e)); process.exit(1); });
