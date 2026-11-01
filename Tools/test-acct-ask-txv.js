@@ -98,6 +98,8 @@ function load(html, config) {
     console: { warn() {}, log() {}, error() {} },
     window: { RRV8 },
     RRV8,
+    // config.js's RRAI.masks rule (UI-254); test-ai-scrubbed-masking.js runs the real one.
+    RRAI: { masks: (t) => t !== 'full' },
     _invRows: INV_ROWS,
     _coNames: null,
     activeDb: () => ({ n: 'RapidReconciler_Demo1' }),
