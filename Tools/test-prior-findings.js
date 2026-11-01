@@ -120,7 +120,7 @@ const PF_END   = '    facts: facts, warm: warm, isWarm: isWarm, reset: reset\n  
 const PF_SRC   = sliceBetween(config, PF_START, PF_END, 'priorFindings');
 
 const TXFACTS_SRC = sliceFn(home,
-  'function _analystTxFacts(stats, focusPeriod, ccy, co, scrub) {', '_analystTxFacts');
+  'function _analystTxFacts(stats, focusPeriod, ccy, co, scrub, feature) {', '_analystTxFacts');   // VLC-234 added `feature`
 
 /* ------------------------------------------------------- run the real code */
 
@@ -584,7 +584,8 @@ function mutationControls() {
     // M1 and M2 both mutate config.js. Neither would notice if the call site in
     // home.html were deleted, and a retrieval layer nothing calls is the exact
     // state UI-203 was opened about. This mutates the SHIPPED _analystTxFacts.
-    const M3_ANCHOR = "      RRV8.priorFindings.facts(co, focusPeriod, _recsummaryLevel(), _codes ? { codes: _codes } : undefined)";
+    // VLC-234: the level is now the caller's feature's.
+    const M3_ANCHOR = "      RRV8.priorFindings.facts(co, focusPeriod, _recsummaryLevel(feature), _codes ? { codes: _codes } : undefined)";
     anchorOnce(TXFACTS_SRC, M3_ANCHOR, 'M3 mutation');
     const M3 = TXFACTS_SRC.replace(M3_ANCHOR, '      [] ');
     if (M3 === TXFACTS_SRC) { console.log('  FAIL  M3 did not apply -- the control is vacuous'); failures++; return; }

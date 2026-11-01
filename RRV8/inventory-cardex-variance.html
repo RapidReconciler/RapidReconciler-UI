@@ -1095,8 +1095,10 @@
     // when this installation has no VALC address, instead of calling loopback.
     // VLC-186: declare the tier the callers masked with (they read RRAI.get() just before this);
     // VALC refuses one above the plan, and its sentence comes back through RRDB.responseError.
-    var level=(window.RRAI && RRAI.get())||'full';
-    return window.RRDB.valcFetch('/api/v1/ai/explain',{ method:'POST', headers:h, body:JSON.stringify({ prompt:prompt, level:level }) })
+    // VLC-234: Investigate is Explain a finding; the feature and database come from RRAI.declare().
+    var level=(window.RRAI && RRAI.get('explain'))||'full';
+    var payload=Object.assign(window.RRAI && RRAI.declare ? RRAI.declare('explain') : {}, { prompt:prompt, level:level });
+    return window.RRDB.valcFetch('/api/v1/ai/explain',{ method:'POST', headers:h, body:JSON.stringify(payload) })
       .then(function(r){ if(!r.ok) return window.RRDB.responseError(r,'/api/v1/ai/explain').then(function(err){ throw err; }); return r.json(); });
   }
   var _cxAgg=null, _cxCauseGen=0;
@@ -1165,13 +1167,15 @@
   function _cxInvestigate(){
     var a=_cxAgg; if(!a){ return; }
     var body=document.getElementById('cxvCauseBody'), btn=document.getElementById('cxvCauseLaunch');
-    var tier=(window.RRAI && RRAI.get())||'full';
+    var tier=(window.RRAI && RRAI.get('explain'))||'full';   // VLC-234: Explain a finding's level
     if(tier==='off'){
       body.hidden=false;
-      // VLC-186: an Off PLAN cannot be turned on from here, so it says who can.
+      // VLC-186: an Off PLAN cannot be turned on from here, so it says who can. VLC-234: nor can an administrator's Off.
       body.innerHTML='<div class="cxv-aicard-note">'+((window.RRAI && RRAI.plan && RRAI.plan()==='off')
         ? 'The AI assistant is not part of this RapidReconciler plan (to add it, contact rrsupport@getgsi.com). The tie-out check and the JDE validation step still stand.'
-        : 'AI is off — the tie-out check and the JDE validation step still stand. Turn AI on for the likely-cause read.')+'</div>';
+        : (window.RRAI && RRAI.featureOff && RRAI.featureOff('explain'))
+          ? RRAI.FEATURE_NAMES.explain + ' is turned off for this database (a RapidReconciler administrator can turn it on in AI Assistant). The tie-out check and the JDE validation step still stand.'
+          : 'AI is off — the tie-out check and the JDE validation step still stand. Turn AI on for the likely-cause read.')+'</div>';
       return;
     }
     var scrub = tier==='scrubbed';

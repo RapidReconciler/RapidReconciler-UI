@@ -179,8 +179,9 @@ async function runCases(page) {
     await arm('the typed prompt leaves the history out', 'T1,T4,T5',
       PAGE.replace("      + history\n", ''));
     await arm('the typed box back on its old path (no history load)', 'T1,T4,T6,T7',
-      PAGE.replace('run = asofTrendData().then(({ hist, bridge }) => asofAiExplain(asofFreeTextPrompt(freeText, hist, bridge)));',
-                   'run = asofAiExplain(asofFreeTextPrompt(freeText, [], []));'));
+      // VLC-234: the call now names its feature (Ask a question).
+      PAGE.replace("run = asofTrendData().then(({ hist, bridge }) => asofAiExplain(asofFreeTextPrompt(freeText, hist, bridge), 'ask'));",
+                   "run = asofAiExplain(asofFreeTextPrompt(freeText, [], []), 'ask');"));
     await arm('no cache: every question loads again', 'T3',
       PAGE.replace('    if (_asofTrendData && _asofTrendData.key === key) return _asofTrendData.promise;\n', ''));
     await arm('a failed load is cached', 'T6',

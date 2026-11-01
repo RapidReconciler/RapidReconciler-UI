@@ -7010,10 +7010,16 @@
     // unreachable health endpoint must not be reported to the customer as "your
     // AI is switched off" -- those are different facts and only one of them is
     // actionable by GSI.
-    _aiHealthCache[dbn] = rrFetch('api/v1/ai/health', dbn ? { query: { db: dbn } } : undefined)
+    // VLC-234: the uuid too, so VALC answers with this database's feature levels (a name is not a key).
+    var _hq = {};
+    if (dbn) _hq.db = dbn;
+    var _hu = (activeDb() && activeDb().uuid) ? String(activeDb().uuid) : '';
+    if (_hu) _hq.database = _hu;
+    _aiHealthCache[dbn] = rrFetch('api/v1/ai/health', (dbn || _hu) ? { query: _hq } : undefined)
       .then(function (r) {
         // VLC-186: the same read feeds the tier cap, so the plan chip and the cap cannot disagree.
         if (r && r.maxLevel && window.RRAI && RRAI.setPlan) RRAI.setPlan(dbn, r.maxLevel);
+        if (r && r.features && window.RRAI && RRAI.setFeatures) RRAI.setFeatures(dbn, r.features);
         return { configured: !(r && r.configured === false),
                  maxLevel: (r && r.maxLevel) || 'off', known: true };
       })
@@ -7054,21 +7060,40 @@
   var AI_NOT_IN_PLAN = 'The AI assistant is not part of this RapidReconciler plan. To add it, contact rrsupport@getgsi.com.';
   var AI_OFF_LEAD_NOTE = 'AI is off for this database — this line is computed from '
                        + 'your data, not written by the AI.';
+  // VLC-234: the sentence for a feature the customer's administrator turned off. VALC's
+  // AiController.featureSentence says the same for a call it refuses.
+  function aiFeatureOffSentence(feature) {
+    var name = (window.RRAI && RRAI.FEATURE_NAMES && RRAI.FEATURE_NAMES[feature]) || 'This AI feature';
+    return name + ' is turned off for this database. A RapidReconciler administrator can turn it on in ' + AI_OFF_WHERE + '.';
+  }
+  // Why a feature's level is Off, as { reason, why }. ONE producer for the three Off facts, because they are
+  // different facts and each names a different person who can change it:
+  //   not-in-plan -- the purchased plan has no AI (VLC-186); GSI changes it.
+  //   feature-off -- the customer's administrator set this feature Off (VLC-234); they change it in AI Assistant.
+  //   tier-off    -- this browser's own choice, on the non-production AI dock; the reader changes it.
+  function aiOffWhy(feature) {
+    if (window.RRAI && RRAI.plan && RRAI.plan() === 'off') return { reason: 'not-in-plan', why: AI_NOT_IN_PLAN };
+    if (window.RRAI && RRAI.featureOff && RRAI.featureOff(feature)) {
+      return { reason: 'feature-off', why: aiFeatureOffSentence(feature) };
+    }
+    // ⚠ "the AI panel" NAMED NOWHERE. VLC-63, 2026-09-16: the page's own <h1> and <title> are "AI Assistant", and
+    // the other off-state sentence on Home said "AI settings", so BOTH wordings sent the reader somewhere that does
+    // not exist under that name. Destination comes from AI_OFF_WHERE, one producer.
+    return { reason: 'tier-off', why: 'AI is switched off for this session. Turn it on in ' + AI_OFF_WHERE + ' to get a read on this.' };
+  }
   function aiExplain(prompt, opts) {
     opts = opts || {};
-    var lvl = (typeof _recsummaryLevel === 'function') ? _recsummaryLevel() : 'full';
-    // VLC-186: an Off PLAN is a different fact from the user's own Off choice: turning AI
-    // on in this browser cannot help, and the sentence must say who can.
-    if (lvl === 'off' && window.RRAI && RRAI.plan && RRAI.plan() === 'off') {
-      return Promise.resolve({ ok: false, reason: 'not-in-plan', why: AI_NOT_IN_PLAN });
+    // VLC-234: every call names its feature, and the level comes from that feature. A caller that names none is a
+    // defect in this page, so it is reported where the answer would have gone instead of silently using the plan.
+    var feature = opts.feature;
+    if (!feature || !(window.RRAI && RRAI.FEATURES && RRAI.FEATURES.indexOf(feature) >= 0)) {
+      return Promise.resolve({ ok: false, reason: 'error',
+        why: 'This part of the page did not say which AI feature it belongs to, so nothing was sent.' });
     }
+    var lvl = (typeof _recsummaryLevel === 'function') ? _recsummaryLevel(feature) : 'full';
     if (lvl === 'off') {
-      return Promise.resolve({ ok: false, reason: 'tier-off',
-        // ⚠ "the AI panel" NAMED NOWHERE. VLC-63, 2026-09-16: the page's own <h1> and
-        // <title> are "AI Assistant", and the other off-state sentence on Home said
-        // "AI settings" -- so BOTH wordings sent the reader somewhere that does not
-        // exist under that name. Destination now comes from AI_OFF_WHERE, one producer.
-        why: 'AI is switched off for this session. Turn it on in ' + AI_OFF_WHERE + ' to get a read on this.' });
+      var off = aiOffWhy(feature);
+      return Promise.resolve({ ok: false, reason: off.reason, why: off.why });
     }
     return aiHealth().then(function (h) {
       if (!h.configured) {
@@ -7081,7 +7106,10 @@
       // and could collide with the next dynamic site added to this file.
       var _aiExUrl = 'api/v1/ai/explain' + (opts.ctx ? ('?ctx=' + opts.ctx) : '');
       // VLC-186: declare the tier the prompt was built (and masked) with; VALC refuses one above the plan.
-      var body = { prompt: prompt, level: lvl };
+      // VLC-234: and the feature and database, from RRAI.declare(), the one producer of those fields.
+      var body = RRAI.declare(feature);
+      body.prompt = prompt;
+      body.level = lvl;
       if (opts.system) body.system = opts.system;
       return rrFetch(_aiExUrl, { method: 'POST', body: body }).then(function (r) {
         var txt = (r && r.text) ? String(r.text).trim() : '';
@@ -7134,7 +7162,7 @@
   // (the cards). No second listener, which is one fewer thing to keep in step.
   var AI_SPARK_SVG = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 1.6l1.9 5.1a5 5 0 0 0 2.9 2.9l5.1 1.9-5.1 1.9a5 5 0 0 0-2.9 2.9L12 21.4l-1.9-5.1a5 5 0 0 0-2.9-2.9L2.1 11.5l5.1-1.9a5 5 0 0 0 2.9-2.9z"/></svg>';
   function aiIsOff() {
-    try { return !!(window.RRAI && RRAI.get() === 'off'); } catch (_) { return false; }
+    try { return !!(window.RRAI && RRAI.get('explain') === 'off'); } catch (_) { return false; }
   }
   // href    — where the control goes. Identical at every tier; callers own their
   //           own encoding, the way they did before this producer existed.
@@ -8759,17 +8787,15 @@
   // The customer's per-DB AI data-exposure for "Summarize a reconciliation"
   // (rrv8.ai.prefs.<db>.recsummary): off | scrubbed | full. Defaults to full
   // until the admin narrows it on the AI Assistant page.
-  function _recsummaryLevel() {
+  // ⚠ VLC-234: THIS USED TO FALL BACK TO localStorage['rrv8.ai.prefs.<db>'], the AI Assistant page's per-feature
+  // choices, and the fallback was unreachable: RRAI.get() never returns empty, so the administrator's choice was
+  // never read by anything. The choice now lives in VALC per database, and RRAI.get(feature) applies it. Every
+  // reader passes the feature whose call it is building, so one feature's level never masks another's prompt.
+  function _recsummaryLevel(feature) {
     try {
-      // The global AI-plan tier (the demo switcher, RRAI) is authoritative when
-      // set — it drives EVERY AI affordance on the page from one control. Adds
-      // 'grounded' (on-screen figures only) to the legacy off|scrubbed|full set.
-      if (window.RRAI) { var g = window.RRAI.get(); if (g) return g; }
-      var a = (typeof activeDb === 'function' && activeDb()) || {};
-      var prefs = JSON.parse(localStorage.getItem('rrv8.ai.prefs.' + (a.n || 'default')) || '{}') || {};
-      var l = prefs.recsummary;
-      return (l === 'off' || l === 'grounded' || l === 'scrubbed' || l === 'full') ? l : 'full';
-    } catch (_) { return 'full'; }
+      if (window.RRAI) { var g = window.RRAI.get(feature); if (g) return g; }
+    } catch (_) {}
+    return 'full';   // no RRAI at all: VALC still refuses anything above the feature's level
   }
   // ⚠ `_renderAiTierSwitch()` WAS RETIRED HERE 2026-09-10 (UI-186). It built an
   // Off/Basic/Enhanced/Full segmented control into #haiTierSeg and painted
@@ -8806,7 +8832,7 @@
     // visibly reflects the exposure change (matches the working pages).
     try {
       var band = $('acctAnsBand');
-      if (band && !band.hidden && _acctLastAsk && !_acctAsking && _recsummaryLevel() !== 'off'
+      if (band && !band.hidden && _acctLastAsk && !_acctAsking && _recsummaryLevel('ask') !== 'off'
           && (_viewRole() === 'accountant' || _viewRole() === 'analyst')) {
         askAcct(_acctLastAsk.q, _acctLastAsk.trend);
       }
@@ -10521,7 +10547,7 @@
     var el = $('oeAiSummary'); if (!el) return;
     var hide = function () { el.hidden = true; el.classList.remove('is-shown'); };
     if (!e || !e.pairs.length || typeof rrFetch !== 'function') { hide(); return; }
-    var tier = (typeof _recsummaryLevel === 'function') ? _recsummaryLevel() : 'full';
+    var tier = (typeof _recsummaryLevel === 'function') ? _recsummaryLevel('drafting') : 'full';
     // ⚠ THIS USED TO BE `if (tier === 'off') { hide(); return; }`, and that is the
     // behaviour the owner overruled on 2026-09-15: stay visible and say why.
     // Hiding made "AI is switched off" indistinguishable from "there is nothing to
@@ -10559,7 +10585,7 @@
     // configured-state checks. This site had NO off-guard: with AI switched off
     // the strip still called out and then hid itself on the empty answer, so the
     // operator saw a flicker and no reason.
-    aiExplain(prompt).then(function (r) {
+    aiExplain(prompt, { feature: 'drafting' }).then(function (r) {
       if (seq !== _oeAiSeq) return;
       if (!r.ok) { _oeAiUnavailable(el, tag, r); return; }
       el.innerHTML = tag + '<span class="ws-ai-summary-text">' + esc(r.text) + '</span>';
@@ -10863,7 +10889,7 @@
   }
   function _perpSyncOptBtn() {
     var b = $('perpOptBtn'); if (!b) return;
-    var off = (typeof _recsummaryLevel === 'function') && _recsummaryLevel() === 'off';   // AI input → disabled + upsell when Off
+    var off = (typeof _recsummaryLevel === 'function') && _recsummaryLevel('drafting') === 'off';   // AI input → disabled + upsell when Off
     b.classList.toggle('is-running', _perpOptRunning);
     b.disabled = _perpOptRunning || off;
     b.title = off ? 'Turn on AI in AI settings to optimize the residual-noise cutoff' : 'Let AI find the optimal residual-noise cutoff';
@@ -10914,7 +10940,7 @@
     try { localStorage.setItem('rrv8.perpresid', '1'); localStorage.setItem('rrv8.perpresidtgt', String(_perpResidualTarget)); } catch (_) {}
     var applied = _perpResidualSet(rows, _perpResidualTarget);
     _renderPerpGrid();
-    if (_recsummaryLevel() === 'off') { _perpShowOptNote(_perpOptPlainNote(applied, opt), true); return; }
+    if (_recsummaryLevel('drafting') === 'off') { _perpShowOptNote(_perpOptPlainNote(applied, opt), true); return; }
     _perpShowOptNote(_perpOptPlainNote(applied, opt) + '  Refining…', true);
     _perpOptRunning = true; _perpSyncOptBtn();
     var z = _perpZeroQtyAbs(rows);
@@ -10945,7 +10971,7 @@
     //
     // The plain note still LEADS. It is a real answer computed from the figures,
     // not a fallback, so the reason rides after it rather than replacing it.
-    aiExplain(prompt).then(function (r) {
+    aiExplain(prompt, { feature: 'drafting' }).then(function (r) {
       if (!r.ok) {
         var app0 = _perpResidualSet(rows, _perpResidualTarget);
         _perpShowOptNote(_perpOptPlainNote(app0, opt) + ' ' + r.why, true);
@@ -13784,7 +13810,7 @@
         // and names R30822, which must be paired with R30837 or the cardex revalues
         // with no GL offset. Full method + the two-way proving query:
         // AnalysisGuides/frozen-cost-integrity-analysis.md.
-        if (key === 'frozen' && _recsummaryLevel() === 'full') {
+        if (key === 'frozen' && _recsummaryLevel('summaries') === 'full') {
           var rolledNotFrozen = 0, differ = 0, qohAtRisk = 0, brs = Object.create(null);
           rows.forEach(function (r) {
             var uc = Number(r.UnitCost) || 0, fz = Number(r.FrzCost) || 0;
@@ -13870,7 +13896,7 @@
     // check than the tiers below it, so without this a flip to Full would be served
     // the cached plain-count fact and the deeper read would never appear until the
     // database or company changed. A tier flip legitimately re-asks.
-    return db + '|' + co + '|' + ((_invRows && _invRows.length) || 0) + '|' + _recsummaryLevel();
+    return db + '|' + co + '|' + ((_invRows && _invRows.length) || 0) + '|' + _recsummaryLevel('summaries');
   }
   function _analystGatherHealth(d, co) {
     var key = _analystHealthKey(co);
@@ -14118,14 +14144,18 @@
       : nOpen
         ? ('Nothing turned up for ' + esc(coLabel) + ', but ' + _word(nOpen).toLowerCase() + ' check' + (nOpen === 1 ? '' : 's') + ' could not be run — start with <b>' + esc((h.open[0] && h.open[0].factTitle) || 'the top item') + '</b>.')
         : ('Everything checks out for ' + esc(coLabel) + ' — nothing needs you today.');
-    var exposure = _recsummaryLevel();
+    var exposure = _recsummaryLevel('summaries');
     if (exposure === 'off') {
       bodyEl.classList.remove('is-thinking');
       // The deterministic lead STAYS -- it is a real answer, and hiding it would be
       // the self-suppression the ruling at aiExplain() forbids. What was missing is
       // the second half of that ruling: it has to SAY WHY.
       _alhSetEyebrow(false);
-      bodyEl.innerHTML = fallback + ' <span class="hai-unavailable">' + esc(AI_OFF_LEAD_NOTE) + '</span>';
+      // VLC-234: when the administrator turned Automatic summaries off, say that rather than the generic note.
+      var _offNote = (window.RRAI && RRAI.featureOff && RRAI.featureOff('summaries'))
+        ? aiFeatureOffSentence('summaries') + ' This line is computed from your data, not written by the AI.'
+        : AI_OFF_LEAD_NOTE;
+      bodyEl.innerHTML = fallback + ' <span class="hai-unavailable">' + esc(_offNote) + '</span>';
       _analystLeadSig = '';   // clear the sig so flipping the tier back on re-runs
       return;
     }
@@ -14146,7 +14176,7 @@
     // reported a March amount as "the current-period variance" while the panels below
     // it showed April (owner 2026-08-12). The lead sits directly above those panels;
     // it has to know what they are showing.
-    _analystTxFacts(txStats, _analystViewedPeriod(), ccy, co, scrub).forEach(function (f) { facts.push(f); });
+    _analystTxFacts(txStats, _analystViewedPeriod(), ccy, co, scrub, 'summaries').forEach(function (f) { facts.push(f); });
     // REVIEW STATE OF THE VIEWED PERIOD. The grounding tells the brief to suggest
     // marking an immaterial period reviewed — which is only safe advice if the brief
     // can tell whether it already IS reviewed. Without this fact the rule would have
@@ -14207,7 +14237,7 @@
     // deterministic `fallback` sentence with nothing saying the AI read was
     // missing. The deterministic lead is a real answer, so it STAYS -- the reason
     // rides with it rather than replacing it.
-    aiExplain(prompt, { ctx: _ctxCtx, system: sys }).then(function (r) {
+    aiExplain(prompt, { feature: 'summaries', ctx: _ctxCtx, system: sys }).then(function (r) {
       if (sig !== _analystLeadSig) return;
       clearTimeout(timed);
       bodyEl.classList.remove('is-thinking');
@@ -14227,7 +14257,7 @@
     if (!co) { wrap.hidden = true; return; }
     wrap.hidden = false;
     var gen = ++_analystBriefGen;
-    var scrub = _recsummaryLevel() === 'scrubbed';
+    var scrub = _recsummaryLevel('summaries') === 'scrubbed';
     var soloCo = cos.filter(function (c) { return String(c.co) === String(co); })[0] || null;
     var ccy = (soloCo && soloCo.ccy) || ((d && d.currencies && d.currencies[0]) || '');
     // UI-72 — a cache WARM landing is not a stale paint, so it must NOT be gated on
@@ -14990,7 +15020,8 @@
     return lines.length ? { lines: lines, pairs: kept } : null;
   }
 
-  function _analystTxFacts(stats, focusPeriod, ccy, co, scrub) {
+  // VLC-234: `feature` is the caller's (the brief's or the Ask box's), so the prior findings follow that feature's level.
+  function _analystTxFacts(stats, focusPeriod, ccy, co, scrub, feature) {
     var f = [];
     // UI-72 — a COLD surface gets ONE fact: it has not been read. The block used to
     // open with "0 periods loaded", follow it with "CURRENT period(s): n/a" and a
@@ -15087,7 +15118,7 @@
           && String(_txvRowSnap.period) === String(focusPeriod || '')) {
         _codes = Object.keys(_txvRowSnap.buckets || {});
       }
-      RRV8.priorFindings.facts(co, focusPeriod, _recsummaryLevel(), _codes ? { codes: _codes } : undefined)
+      RRV8.priorFindings.facts(co, focusPeriod, _recsummaryLevel(feature), _codes ? { codes: _codes } : undefined)
         .forEach(function (line) { f.push(line); });
     })();
     // Guidance last, so it is the final instruction before the question.
@@ -15191,19 +15222,19 @@
     var _cardexMode = (typeof _curSubView === 'function' && _curSubView() === 'reports')
       || /cardex/i.test(q)
       || (window.RRV8 && typeof RRV8.namesCardexColumn === 'function' && RRV8.namesCardexColumn(q));
-    var _scrub = _recsummaryLevel() === 'scrubbed';
+    var _scrub = _recsummaryLevel('ask') === 'scrubbed';
     var prompt = _cardexMode
       ? _analystCardexPrompt(q, _analystCardexFacts(solo, ccy, _scrub))
       // `focusPeriod` (this card's own argument) wins; otherwise the same viewed-period
       // resolver every other analyst surface reads, so the ask box and the day-brief
       // above it can never be grounded on two different "what is on screen" answers.
-      : _analystPrompt(q, _analystTxFacts(_analystTxStats(), focusPeriod || _analystViewedPeriod(), ccy, solo, _scrub));
+      : _analystPrompt(q, _analystTxFacts(_analystTxStats(), focusPeriod || _analystViewedPeriod(), ccy, solo, _scrub, 'ask'));
     // VLC-63 increment 2. aiExplain owns the tier and configured checks, and its
     // `why` replaces the hand-written catch message -- one sentence per reason,
     // written once. The earlier `if (_recsummaryLevel() === 'off') return;` above
     // left the panel showing whatever it last held, which is the silent-refusal
     // shape the owner overruled.
-    aiExplain(prompt).then(function (r) {
+    aiExplain(prompt, { feature: 'ask' }).then(function (r) {
       if (ans) ans.textContent = r.ok ? (r.text || 'No answer came back — try rephrasing.') : r.why;
       _acctAsking = false;
     });
@@ -15220,7 +15251,7 @@
     // trouble than they saved). The greeting + Ask box carry the assistant; the
     // period chart + on-demand asks do the proactive work.
     if (headEl) headEl.innerHTML = '';
-    var off = _recsummaryLevel() === 'off';
+    var off = _recsummaryLevel('ask') === 'off';
     setupAcctAsk();   // wire/enable the shared Ask box (submit dispatches by role)
     var input = $('acctAskInput'); if (input && !off) input.placeholder = 'Ask a question…';
   }
@@ -16401,7 +16432,7 @@
   // label, and a conversational greeting that scales with what the tier can see.
   function _setAiAsstTier() {
     var card = $('acctTriage'); if (!card) return;
-    var tier = (typeof _recsummaryLevel === 'function') ? _recsummaryLevel() : 'full';
+    var tier = (typeof _recsummaryLevel === 'function') ? _recsummaryLevel('ask') : 'full';
     card.setAttribute('data-ai-tier', tier);
     var status = { off: 'Off', grounded: 'Basic', scrubbed: 'Enhanced', full: 'Full Plan' }[tier] || 'Assistant';
     // Role-specific: analyst prevents variances AT THE SOURCE; accountant clears the
@@ -16417,7 +16448,10 @@
     // (measured live 2026-10-22: the card told a plan-Off user to "Turn AI on").
     var _planOff = tier === 'off' && window.RRAI && RRAI.plan && RRAI.plan() === 'off';
     var greet = {
-      off:      _planOff ? AI_NOT_IN_PLAN : 'Switched off. Turn AI on for reconciliation help.',
+      // VLC-234: an administrator's Off for Ask a question names that, not "Turn AI on", which the reader cannot do.
+      off:      _planOff ? AI_NOT_IN_PLAN
+              : (window.RRAI && RRAI.featureOff && RRAI.featureOff('ask')) ? aiFeatureOffSentence('ask')
+              : 'Switched off. Turn AI on for reconciliation help.',
       grounded: 'Ask me about the figures on screen.',
       scrubbed: 'I read across your sources — ask about a pattern.',
       full:     _isAnalyst
@@ -16612,7 +16646,7 @@
     // Entity-letter transform _acctFactLines / _auditCoSummary / renderAiBriefing
     // apply. This surface only gated 'off', so the real company number went out at
     // Scrubbed too: a masked tier that silently didn't mask.
-    var _jeScrub = (typeof _recsummaryLevel === 'function') && _recsummaryLevel() === 'scrubbed';
+    var _jeScrub = (typeof _recsummaryLevel === 'function') && _recsummaryLevel('drafting') === 'scrubbed';
     var lines = _jeSummary.map(function (c, i) {
       var parts = (c.comps || []).filter(function (p) { return Math.abs(p[1]) >= 1; })
         .map(function (p) { return p[0] + ' ' + _jeAmt(p[1]); }).join(', ');
@@ -16635,7 +16669,7 @@
     // VLC-63 increment 2. This site WAS tier-guarded a few lines up, and that
     // guard hid the strip — same defect as the offset-entry summary: hiding makes
     // "switched off" read identically to "nothing to summarise".
-    aiExplain(prompt).then(function (r) {
+    aiExplain(prompt, { feature: 'drafting' }).then(function (r) {
       if (!r.ok) { _oeAiUnavailable(el, tag, r); return; }
       el.innerHTML = tag + '<span class="ws-ai-summary-text">' + esc(r.text) + '</span>';
     });
@@ -16984,7 +17018,7 @@
     // `scrub`, which is only a two-way split — grounded and full happen to build an
     // identical prompt today, and keying on the boolean would silently collide them
     // the day that stops being true. One extra capture position is the cheaper error.
-    var _acTier = (typeof _recsummaryLevel === 'function') ? _recsummaryLevel() : 'full';
+    var _acTier = (typeof _recsummaryLevel === 'function') ? _recsummaryLevel('drafting') : 'full';
     var _acCtx = (window.RRV8 && RRV8.aiCtx)
       ? RRV8.aiCtx('auditcover-' + _acTier, f.co, f.per) : '';
     // VLC-63 increment 2. Returns '' on any unavailable reason, exactly as before
@@ -16992,7 +17026,7 @@
     // reason sentence printed into an exported workbook would be noise in a
     // document the reader cannot act on. The REASON is surfaced once, by the
     // caller, rather than once per company. See _auditAiSummaries below.
-    return aiExplain(prompt, { ctx: _acCtx }).then(function (r) { return r.ok ? r.text : ''; });
+    return aiExplain(prompt, { feature: 'drafting', ctx: _acCtx }).then(function (r) { return r.ok ? r.text : ''; });
   }
   function _auditAiSummaries(cos, per) {
     // ⚠ THE TIER GATE THAT WAS HERE IS GONE, and this is the one place in the
@@ -17006,7 +17040,7 @@
     // workbook: it would repeat once per row in a document the reader cannot act
     // on, which is the noise the all-signal rule exists to keep out. The operator
     // sees the reason on the SCREEN affordances instead.
-    var scrub = (typeof _recsummaryLevel === 'function' && _recsummaryLevel() === 'scrubbed');
+    var scrub = (typeof _recsummaryLevel === 'function' && _recsummaryLevel('drafting') === 'scrubbed');
     var jobs = cos.map(function (c, i) { return _auditCoSummary(_auditCoFacts(c, per), scrub, i).then(function (txt) { return { co: c.co, txt: txt }; }); });
     var all = Promise.all(jobs).then(function (arr) { var m = {}; arr.forEach(function (x) { m[x.co] = x.txt; }); return m; });
     var guard = new Promise(function (res) { setTimeout(function () { res(null); }, 15000); });   // never let a slow AI block the download
@@ -18186,7 +18220,7 @@
       // deterministic content without it. aiExplain refuses again per call, which
       // is belt-and-braces rather than duplication: it also covers configured:false,
       // which `exposure` knows nothing about.
-      aiExplain(prompt, { ctx: _wlCtx }).then(function (r) {
+      aiExplain(prompt, { feature: 'summaries', ctx: _wlCtx }).then(function (r) {
         if (!r.ok) {
           var eu = document.querySelector('[data-wl-cause="' + c.co + '"]');
           if (eu && sig === _wlCurSig) { eu.textContent = r.why; eu.classList.add('is-unavailable'); }
@@ -18416,7 +18450,7 @@
           }).join('')
         + '</div></details>';
     };
-    var wlExp = (typeof _recsummaryLevel === 'function') ? _recsummaryLevel() : 'full';
+    var wlExp = (typeof _recsummaryLevel === 'function') ? _recsummaryLevel('summaries') : 'full';
     var wlSig = wlExp + '|' + (d.viewedPeriod || '');
     _wlCurSig = wlSig;   // the tier/period the cards currently reflect
     var wlCard = function (c) {
@@ -18721,7 +18755,7 @@
   function setupAcctAsk() {
     var form = $('acctAskForm'), input = $('acctAskInput'), btn = $('acctAskBtn');
     if (!form) return;
-    if (_recsummaryLevel() === 'off') {
+    if (_recsummaryLevel('ask') === 'off') {
       if (input) {
         input.disabled = true;
         // VLC-186: on an Off plan, "AI is off." reads as a switch this user could flip.
@@ -18800,7 +18834,16 @@
     var input = $('acctAskInput'), btn = $('acctAskBtn'), ans = $('acctAskAnswer');
     var q = (presetQ != null ? String(presetQ) : (input && input.value || '')).trim(); if (!q) return;
     var d = _acctData; if (!d) return;
-    var tier = _recsummaryLevel(); if (tier === 'off') return;
+    var tier = _recsummaryLevel('ask');
+    // ⚠ VLC-234: THIS WAS `if (tier === 'off') return;`, A SILENT REFUSAL. The reader pressed Ask and nothing
+    // happened, which the 2026-09-15 ruling at aiExplain() forbids, and with the administrator's per-feature Off it
+    // became a common state. The question and the reason now show in the answer band.
+    if (tier === 'off') {
+      var offBand = $('acctAnsBand'); if (offBand) offBand.hidden = false;
+      var offQ = $('acctAnsQ'); if (offQ) { offQ.textContent = q; offQ.hidden = false; }
+      if (ans) ans.textContent = aiOffWhy('ask').why;
+      return;
+    }
     _acctLastAsk = { q: q, trend: wantTrend || false };   // remember (with metric) for re-run on a tier flip
     var scrub = tier === 'scrubbed';
     _acctAsking = true;
@@ -18879,7 +18922,7 @@
     // VLC-63 increment 2. `why` replaces the hand-written catch message, so the
     // three unavailable reasons read as three different facts instead of one
     // generic "could not reach" that was wrong for two of them.
-    return aiExplain(prompt);
+    return aiExplain(prompt, { feature: 'ask' });
     }).then(function (r) {
       if (!r.ok) {
         if (ans) ans.textContent = r.why;
@@ -18907,7 +18950,7 @@
   // band is never blank while the model thinks. Only fires from an explicit drill
   // (not the Accounts tab click, which clears the company scope).
   function _acctAutoAnalyze(co) {
-    var tier = (typeof _recsummaryLevel === 'function') ? _recsummaryLevel() : 'full';
+    var tier = (typeof _recsummaryLevel === 'function') ? _recsummaryLevel('explain') : 'full';
     if (tier === 'off') return;                       // AI off → just the table, no auto-fire
     var d = _acctData; if (!d) return;
     var c = (d.companies || []).filter(function (x) { return String(x.co) === String(co); })[0];
@@ -18986,7 +19029,7 @@
     //
     // `error` is the exception: it keeps the lead untouched, exactly as the old
     // .catch did. A transient reach failure on a call nobody asked for is not news.
-    aiExplain(prompt).then(function (r) {
+    aiExplain(prompt, { feature: 'explain' }).then(function (r) {
       if (_acctAnalyzeReq !== key) return;             // user drilled elsewhere — drop this stale answer
       if (!r.ok) {
         if (ans && r.reason !== 'error') {
@@ -19068,7 +19111,7 @@
     if (panel) panel.hidden = false;
     if (qEl) qEl.textContent = q;
     _aiRenderDocStrip(null, [], 'adminAnsDocStrip');   // clear any prior answer's links
-    var tier = (typeof _recsummaryLevel === 'function') ? _recsummaryLevel() : 'full';
+    var tier = (typeof _recsummaryLevel === 'function') ? _recsummaryLevel('admin') : 'full';
     if (tier === 'off') {
       if (ans) ans.textContent = (window.RRAI && RRAI.plan && RRAI.plan() === 'off') ? AI_NOT_IN_PLAN
         : 'The AI assistant is off for this database. Turn it on from the AI Assistant card to ask questions.';
@@ -19171,7 +19214,7 @@
     // catch message; it goes through the same type-reveal as a real answer, so an
     // unavailable reason reads as a reply to the pill the administrator clicked
     // rather than as an error that appeared beside it.
-    aiExplain(prompt).then(function (r) {
+    aiExplain(prompt, { feature: 'admin' }).then(function (r) {
       if (gen !== _adminAskGen) return;   // a newer pill won — drop this answer
       if (!r.ok) {
         _aiTypeReveal(ans, r.why, function () { return gen === _adminAskGen; }, function () {

@@ -2487,10 +2487,12 @@
   // prod, when RRAI was the demo switcher, so a real customer's As Of prompts were never
   // masked. RRAI.get() is now capped at the purchased plan (config.js), so it is the answer
   // in every mode, and the same value is declared to VALC as the call's level.
-  function asofEffTier() {
+  // VLC-234: `feature` is the call's (Ask a question for the ask box, Entry and report drafting for the optimizer),
+  // so the administrator's level for that feature caps what this page sends and how it masks.
+  function asofEffTier(feature) {
     try {
       if (window.RRAI && window.RRAI.get) {
-        const g = window.RRAI.get();
+        const g = window.RRAI.get(feature);
         if (g) return g === 'grounded' ? 'docs' : g;
       }
     } catch (_) {}
@@ -2518,7 +2520,10 @@
   // company, account, branch, business unit and item reaches the model as a generic label, never its real number
   // (RRV8.dataAccessLine). Until now these prompts only TOLD the model so and sent the real values. Masked here,
   // before the call, the way Home and cardex already do ("Entity A"). Amounts and GL classes still ride.
-  function asofScrub() { return asofEffTier() === 'scrubbed'; }
+  // VLC-234: masks at the ASK feature's level, because every prompt these builders feed goes out as 'ask' (the
+  // optimizer's 'drafting' prompt carries amounts only). With no feature, RRAI.get() is the plan, so a plan of Full
+  // with Ask set to Enhanced sent the call as Enhanced and the real numbers with it.
+  function asofScrub() { return asofEffTier('ask') === 'scrubbed'; }
   // Stable generic labels for one prompt: the first key seen is "<noun> 1", and the same key keeps its label.
   function asofMasker(noun) {
     const seen = new Map();
@@ -2623,7 +2628,7 @@
     const el = document.getElementById('asof-ai-answer'); if (!el) return;
     el.hidden = false; el.textContent = txt; el.classList.toggle('is-loading', !!loading);
   }
-  function asofAiExplain(prompt) {
+  function asofAiExplain(prompt, feature) {
     // Tier rides in the prompt's DATA ACCESS marker (dataAccessLine), NOT a `level`
     // body field. The entitled tier is enforced server-side from the JWT either way.
     //
@@ -2640,7 +2645,9 @@
     try { _co = _ensureSolo() || ''; } catch (_) {}
     _per = (_data && _data._meta && _data._meta.period) || '';
     const _u = 'api/v1/ai/explain' + (window.RRV8 && RRV8.aiCtx ? ('?ctx=' + RRV8.aiCtx('asof', _co, _per)) : '');
-    return rrFetch(_u, { method: 'POST', body: { prompt, level: asofEffTier() } })   // VLC-186: the tier it was masked with
+    // VLC-186: the tier it was masked with. VLC-234: plus the feature and database, from RRAI.declare().
+    const body = Object.assign(window.RRAI && RRAI.declare ? RRAI.declare(feature) : {}, { prompt, level: asofEffTier(feature) });
+    return rrFetch(_u, { method: 'POST', body: body })
       .then(r => (r && r.text) ? String(r.text).trim() : '');
   }
   // The "How are we trending?" prompt. Pure (reads only its arguments and the page's
@@ -2657,7 +2664,7 @@
       + 'Scope: ' + asofScopeText() + '.\n'
       + asofHistoryBlock(hist, bridge)
       + 'Using ONLY these figures, say whether the balance is growing or shrinking overall and call out any period that stands out. Do NOT invent numbers.\n'
-      + (window.RRV8 && RRV8.dataAccessLine ? RRV8.dataAccessLine(asofEffTier()) + '\n' : '')
+      + (window.RRV8 && RRV8.dataAccessLine ? RRV8.dataAccessLine(asofEffTier('ask')) + '\n' : '')
       + 'At most 3 lines, under 70 words.\n'
       + (window.RRV8 && RRV8.AI_REGISTER ? RRV8.AI_REGISTER : '');
   }
@@ -2709,7 +2716,7 @@
       + 'Other features on this page you can explain if asked: the Company selector at the top switches which single company you are viewing (one at a time); "Perpetual" is the on-hand valuation total; Excel export downloads two sheets — the full inventory list, and the residual dust split onto its own sheet.\n'
       + 'Answer using ONLY these figures — do NOT invent any number not listed:\n' + asofFacts() + '\n'
       + history
-      + (window.RRV8 && RRV8.dataAccessLine ? RRV8.dataAccessLine(asofEffTier()) + '\n' : '')
+      + (window.RRV8 && RRV8.dataAccessLine ? RRV8.dataAccessLine(asofEffTier('ask')) + '\n' : '')
       + 'At most 3 lines, under 70 words.\n'
       + (window.RRV8 && RRV8.AI_REGISTER ? RRV8.AI_REGISTER : '');
   }
@@ -2733,10 +2740,13 @@
     if (_asofAiBusy) return;
     _asofLastAsk = { kind: kind, freeText: freeText };   // remember for re-run on tier flip
     // AI off (demo pill): a plain, static read for the definitional pill; nothing leaves the page.
-    if (asofEffTier() === 'off') {
+    if (asofEffTier('ask') === 'off') {
       asofAnswer(kind === 'calc'
         ? 'Perpetual inventory is first seeded at go-live from each item’s on-hand quantity and unit cost, then maintained as a running total transaction by transaction — every receipt, issue, adjustment, and transfer updates the on-hand value immediately.'
-        : 'AI is turned off in this plan.', false);
+        // VLC-234: an administrator's Off says so and where it is changed; the plan's Off keeps its sentence.
+        : (window.RRAI && RRAI.featureOff && RRAI.featureOff('ask'))
+          ? RRAI.FEATURE_NAMES.ask + ' is turned off for this database. A RapidReconciler administrator can turn it on in AI Assistant.'
+          : 'AI is turned off in this plan.', false);
       return;
     }
     _asofAiBusy = true;
@@ -2747,21 +2757,21 @@
       const prompt = (window.RRV8 && RRV8.ASOF_GROUNDING ? RRV8.ASOF_GROUNDING + '\n\n' : '')
         + 'You are RapidReconciler AI helping an analyst understand perpetual inventory.\n'
         + 'Explain how the perpetual inventory balance is established and maintained. Cover BOTH parts — the go-live opening baseline FIRST, then the ongoing transaction-by-transaction maintenance.\n'
-        + (window.RRV8 && RRV8.dataAccessLine ? RRV8.dataAccessLine(asofEffTier()) + '\n' : '')
+        + (window.RRV8 && RRV8.dataAccessLine ? RRV8.dataAccessLine(asofEffTier('ask')) + '\n' : '')
         + 'Explain it as continuous prose, 3-5 sentences, not a list.\n'
         + (window.RRV8 && RRV8.AI_REGISTER ? RRV8.AI_REGISTER : '');
-      run = asofAiExplain(prompt);
+      run = asofAiExplain(prompt, 'ask');
     } else if (kind === 'trend') {
       // Needs the cross-period series this page already loads for the trend read, and
       // (UI-225) the volume/cost split of each change, so the answer can say WHY a
       // period moved instead of asking the analyst to check.
       run = asofTrendData().then(({ hist, bridge }) => {
         if (!hist || !hist.length) return 'Period-over-period history isn’t available for this scope right now, so the trend can’t be summarized here.';
-        return asofAiExplain(asofTrendPrompt(hist, bridge));
+        return asofAiExplain(asofTrendPrompt(hist, bridge), 'ask');
       });
     } else {
       // Free-text — the loaded scope's aggregates plus (UI-249) the period history.
-      run = asofTrendData().then(({ hist, bridge }) => asofAiExplain(asofFreeTextPrompt(freeText, hist, bridge)));
+      run = asofTrendData().then(({ hist, bridge }) => asofAiExplain(asofFreeTextPrompt(freeText, hist, bridge), 'ask'));
     }
     run.then(txt => {
       asofAnswer(txt || 'No response — the AI service may be unavailable.', false);
@@ -2965,7 +2975,7 @@ function updateLotDetailPill() {
     saveResidualTarget(); saveHideResiduals();
     renderAll();   // recomputes _residualStats at the new target
     // AI off (demo pill): the deterministic cutoff stands on its own — no AI refine.
-    if (asofEffTier() === 'off') { _fpShowNote(_fpPlainNote(opt), true); return; }
+    if (asofEffTier('drafting') === 'off') { _fpShowNote(_fpPlainNote(opt), true); return; }
     _fpShowNote(_fpPlainNote(opt) + '  Refining…', true);
     _fpOptRunning = true; _fpSyncOptBtn();
     const z = _residualCandAbs || [];
@@ -2974,7 +2984,7 @@ function updateLotDetailPill() {
       + '"Residual noise" = items with ZERO on-hand quantity that still carry a small valuation — rounding dust left in the perpetual. Hiding it declutters the grid without touching material balances.\n'
       + 'There are ' + z.length + ' such zero-quantity rows. Their absolute valuations, smallest first: ' + sample + (z.length > 40 ? ', …' : '') + '.\n'
       + 'A deterministic pass suggests a cutoff of ' + fmtMoney(opt.target) + ', hiding the ' + opt.count + ' smallest rows; the next row up is ' + fmtMoney(opt.nextUp) + '.\n'
-      + (window.RRV8 && RRV8.dataAccessLine ? RRV8.dataAccessLine(asofEffTier()) + '\n' : '')
+      + (window.RRV8 && RRV8.dataAccessLine ? RRV8.dataAccessLine(asofEffTier('drafting')) + '\n' : '')
       + 'Confirm or adjust the dollar cutoff that best separates rounding dust from a balance worth reviewing. Reply with the FIRST line exactly "TARGET: <dollars>" (a number), then ONE sentence in plain accountant English on why that cutoff. No markdown, no preamble.';
     // AI-tier gate: Off sends nothing to the model — the deterministic cutoff still
     // applies via the same handler (empty text → target unchanged, renderAll). Tier
@@ -2986,9 +2996,10 @@ function updateLotDetailPill() {
     try { _optCo = _ensureSolo() || ''; } catch (_) {}
     _optPer = (_data && _data._meta && _data._meta.period) || '';
     const _optUrl = 'api/v1/ai/explain' + (window.RRV8 && RRV8.aiCtx ? ('?ctx=' + RRV8.aiCtx('asof', _optCo, _optPer)) : '');
-    const _asofOptAi = (window.RRAI && RRAI.get && RRAI.get() === 'off')
+    const _asofOptAi = (window.RRAI && RRAI.get && RRAI.get('drafting') === 'off')
       ? Promise.resolve({ text: '' })
-      : rrFetch(_optUrl, { method: 'POST', body: { prompt, level: asofEffTier() } });   // VLC-186
+      : rrFetch(_optUrl, { method: 'POST',   // VLC-186 level; VLC-234 feature + database
+          body: Object.assign(window.RRAI && RRAI.declare ? RRAI.declare('drafting') : {}, { prompt, level: asofEffTier('drafting') }) });
     _asofOptAi.then(r => {
       const txt = (r && r.text) ? String(r.text).trim() : '';
       const m = txt.match(/TARGET:\s*\$?\s*([\d.]+)/i);

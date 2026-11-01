@@ -73,9 +73,18 @@ function mk(opts, source) {
     },
     Promise: Promise, console: console, window: {}
   };
+  // VLC-234: aiExplain needs a declared feature and RRAI's feature helpers. These checks are about the gate, so
+  // no feature is Off here; Tools/test-ai-feature-levels.js covers the features.
+  sandbox.window.RRAI = sandbox.RRAI = {
+    FEATURES: ['summaries', 'explain', 'ask', 'drafting', 'admin'],
+    plan: function () { return null; },
+    featureOff: function () { return false; },
+    declare: function (f) { return { feature: f, database: '11111111-1111-1111-1111-111111111111', level: opts.tier || 'full' }; }
+  };
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
-  vm.runInContext(source + '\nglobalThis.__x = aiExplain; globalThis.__h = aiHealth; globalThis.__r = _aiHealthReset;', sandbox);
+  vm.runInContext(source + "\nglobalThis.__x = function (p, o) { return aiExplain(p, Object.assign({ feature: 'ask' }, o || {})); };"
+    + ' globalThis.__h = aiHealth; globalThis.__r = _aiHealthReset;', sandbox);
   if (typeof sandbox.__x !== 'function') throw new Error('HARNESS BROKEN: aiExplain not defined');
   return { sb: sandbox, calls: calls };
 }

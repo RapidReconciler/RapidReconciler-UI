@@ -212,16 +212,17 @@ function suite(source, label) {
   // catch clause would have had no control over it at all.
   const mutations = [
     {
+      // VLC-234: aiIsOff() reads the Explain a finding level, the feature these buttons lead to.
       name: 'M1 invert the off test (=== becomes !==)',
-      from: "RRAI.get() === 'off'",
-      to:   "RRAI.get() !== 'off'",
+      from: "RRAI.get('explain') === 'off'",
+      to:   "RRAI.get('explain') !== 'off'",
       mustRedden: ['C1', 'C2', 'C3', 'C4', 'C6'],
       mustStayGreen: ['C5', 'C7', 'C8', 'C9']
     },
     {
       name: 'M2 fail CLOSED when RRAI is missing (the tempting simplification)',
-      from: "return !!(window.RRAI && RRAI.get() === 'off');",
-      to:   "return !(window.RRAI && RRAI.get() !== 'off');",
+      from: "return !!(window.RRAI && RRAI.get('explain') === 'off');",
+      to:   "return !(window.RRAI && RRAI.get('explain') !== 'off');",
       mustRedden: ['C7'],
       mustStayGreen: ['C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C8', 'C9']
     },
