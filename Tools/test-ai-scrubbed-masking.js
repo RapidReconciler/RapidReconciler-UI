@@ -77,7 +77,8 @@ function loadAsof(page, tier) {
       { Amount: 1500000, Branch: BRANCH, GLClass: GL, LongAccount: BU + '.141818' },
       { Amount: 250000, Branch: 'B200', GLClass: GL, LongAccount: '9123457.141818' },
     ],
-    asofEffTier: () => tier,
+    // `tier` is one level for every feature, or {_: <no feature, i.e. the plan>, ask: ..., drafting: ...} (VLC-234).
+    asofEffTier: (f) => (tier && typeof tier === 'object') ? (f && tier[f] != null ? tier[f] : tier._) : tier,
     asofAnswer: () => {},
     _ensureSolo: () => CO,
     reconciliationFilterFromSession: () => ({ companies: [CO] }),
@@ -157,6 +158,15 @@ async function runCases(asof, rf) {
       p.length > 0 && leaks(p, IDS).length === 0, 'leaked ' + JSON.stringify(leaks(p, IDS)) + ' (prompt ' + p.length + ' chars)');
   }
   {
+    // VLC-234: the plan is Full and the administrator set Ask to Enhanced. The call goes out as Enhanced, so the
+    // masking must read the Ask level, not the plan. Merged as `asofEffTier()` it read the plan and sent real numbers.
+    const { st, ask } = loadAsof(asof, { _: 'full', ask: 'scrubbed', drafting: 'full' });
+    await ask('How are we trending?');
+    const p = st.prompts[0] || '';
+    check('A4', 'plan Full + Ask set to Enhanced: the typed As Of prompt holds no identifier',
+      p.length > 0 && leaks(p, IDS).length === 0, 'leaked ' + JSON.stringify(leaks(p, IDS)) + ' (prompt ' + p.length + ' chars)');
+  }
+  {
     const brief = loadRf(rf, 'scrubbed');
     check('R1', 'the roll-forward brief on Enhanced names "Entity A" and "Account 1", no company or account number',
       leaks(brief, [CO, ACCT, '9123457']).length === 0 && /Entity A/.test(brief) && /Account 1, Account 2/.test(brief),
@@ -180,18 +190,27 @@ async function runCases(asof, rf) {
   const realFailures = failures;
 
   console.log('\nMutation: masking switched off on both pages (every Enhanced case must go red)');
-  const asofOff = ASOF.replace("function asofScrub() { return asofEffTier() === 'scrubbed'; }",
-                               'function asofScrub() { return false; }');
+  const SCRUB = "function asofScrub() { return asofEffTier('ask') === 'scrubbed'; }";
+  const asofOff = ASOF.replace(SCRUB, 'function asofScrub() { return false; }');
   const rfOff = RF.replace("var scrub=effTier()==='scrubbed';", 'var scrub=false;');
   if (asofOff === ASOF || rfOff === RF) { console.log('HARNESS BROKEN: mutation did not apply'); process.exit(1); }
   failures = 0;
   const mutated = await runCases(asofOff, rfOff);
-  const want = ['A1', 'A2', 'A3', 'R1'];
+  const want = ['A1', 'A2', 'A3', 'A4', 'R1'];
   const caught = want.every((id) => mutated.indexOf(id) >= 0) && mutated.indexOf('C1') < 0;
   console.log('  ' + (caught ? 'ok  ' : 'FAIL') + '  mutation caught by ' + JSON.stringify(mutated) + ' (want ' + JSON.stringify(want) + ', control C1 still green)');
 
-  const total = realFailures + (caught ? 0 : 1);
+  // The VLC-188/VLC-234 merge bug: masking read the plan (no feature) while the call went out at the Ask level.
+  console.log('\nMutation: As Of masks at the plan instead of the Ask feature (A4 must go red, A1-A3 stay green)');
+  const asofPlan = ASOF.replace(SCRUB, "function asofScrub() { return asofEffTier() === 'scrubbed'; }");
+  if (asofPlan === ASOF) { console.log('HARNESS BROKEN: plan mutation did not apply'); process.exit(1); }
+  failures = 0;
+  const planRed = await runCases(asofPlan, RF);
+  const caught2 = planRed.indexOf('A4') >= 0 && ['A1', 'A2', 'A3', 'C1'].every((id) => planRed.indexOf(id) < 0);
+  console.log('  ' + (caught2 ? 'ok  ' : 'FAIL') + '  plan mutation caught by ' + JSON.stringify(planRed) + ' (want ["A4"])');
+
+  const total = realFailures + (caught ? 0 : 1) + (caught2 ? 0 : 1);
   console.log('\n' + (total === 0 ? 'PASS' : 'FAIL') + ': ' + (real.length ? real.length + ' real case(s) red: ' + real.join(',') : 'all real cases green')
-    + (caught ? ', mutation caught' : ', mutation NOT caught'));
+    + (caught ? ', mutation caught' : ', mutation NOT caught') + (caught2 ? ', plan mutation caught' : ', plan mutation NOT caught'));
   process.exit(total === 0 ? 0 : 1);
 })();

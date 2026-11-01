@@ -907,6 +907,37 @@ answered (`Tools/test-connection-check-topology.js`).
 
 ---
 
+## AI feature levels (VLC-234)
+
+The AI gateway is VALC (`RR_VALC_PREFIXES` carries `api/v1/ai/`); the Anthropic key never reaches the browser.
+Inside the client's purchased plan (`clients.ai_max_level`, set by GSI on Client Details), the customer's
+administrator sets a level per **feature** per **database** on the AI Assistant page. A call may use the lower of the
+two. A feature nobody has set is Off. Owner ruling 2026-10-31: five features.
+
+| Key | Name on the AI Assistant page | Calls |
+|---|---|---|
+| `summaries` | Automatic summaries | Home analyst brief, accountant worklist reads, roll-forward brief |
+| `explain` | Explain a finding | accountant company analysis, Transactions analyzer, cardex Investigate, Model DMAAI review |
+| `ask` | Ask a question | Home ask box (analyst + accountant), As Of ask box and pills |
+| `drafting` | Entry and report drafting | offset + balancing entry AI lines, audit report cover, both residual optimizers |
+| `admin` | Administrator assistant | admin Home Ask-AI pills |
+
+Levels use VALC's vocabulary `off | docs | scrubbed | full`; V8 sends `grounded` for `docs` and VALC accepts both.
+
+| Call | Request | Answer |
+|---|---|---|
+| `GET api/v1/ai/health?db=<name>&database=<uuid>` | `database` is the token's `dbs[].uuid` | With a `database` the caller may use: `{configured, model, maxLevel, canManage, features:{<key>:{name, level, effective[, changedBy, changedAt]}}}`. `changedBy`/`changedAt` only when `canManage`. Without one: the pre-234 `{configured, model, maxLevel}` by name. |
+| `PUT api/v1/ai/features` | `{database, feature, level}` | The same body as `health`, after the write. 403 `FOREIGN_DATABASE` / `NOT_ADMINISTRATOR`, 400 `UNKNOWN_AI_FEATURE` / `UNKNOWN_AI_LEVEL`, 409 `AI_LEVEL_EXCEEDS_PLAN` (sentence names the plan). Append-only (`ai_feature_level_changes`, V108): the newest row per database and feature is in force. |
+| `POST api/v1/ai/explain` | `{prompt, system?, feature, database, level}` from `RRAI.declare(feature)` | `{model, text}`. A V8 caller without `feature` or `database` gets 400 `AI_FEATURE_REQUIRED`; a feature the administrator has Off gets 403 `AI_FEATURE_OFF`; a level above it 403 `AI_LEVEL_EXCEEDS_FEATURE`. Plan refusals (VLC-186) run first. Every refusal carries a sentence V8 shows as written. |
+
+Who: a database the caller holds a right on, or one of the client they administer; GSI staff any active database.
+Writing needs `roles.tab_admin` too. The AI Assistant page's Test connection sends `feature: 'connection-test'` with
+the fixed prompt `AI, are you here?` and needs only an AI plan; any other prompt under that name is refused.
+
+V8 side: `RRAI.get(feature)` is the lower of the choice, the plan and the feature's level; `RRAI.declare(feature)` is
+the one producer of `{feature, database, level}`; `RRAI.featureOff(feature)` tells an administrator's Off from the
+plan's. Tests: `Tools/test-ai-feature-levels.js` (V8), `AiFeatureLevelTest` (VALC).
+
 ## Activity Log + reminder acknowledgements
 
 **Status: agent shipped (Phase 1, 2026-06-28); UI wiring is Phases 2–4 of

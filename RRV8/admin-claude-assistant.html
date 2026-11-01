@@ -10,10 +10,10 @@
   browser: V8 calls a VALC endpoint, VALC calls Anthropic (see
   docs/plans/claude-sonnet-integration.md).
 
-  STATUS: UI scaffold. Live calls + the server-side per-(client,feature) flag are
-  pending the Sonnet API key + the VALC AiController. Preferences chosen here are
-  held locally for now and clearly marked "pending"; they bind to the server flag
-  when the backend lands. Nothing on this page sends customer data yet.
+  STATUS (VLC-234, 2026-10-31): live. The levels are read from and saved to VALC
+  per database (GET api/v1/ai/health?database=<uuid>, PUT api/v1/ai/features), and
+  VALC refuses any AI call above its feature's level. Until VLC-234 they were held
+  in this browser's localStorage and nothing read them.
   =============================================================================
 -->
 <html lang="en">
@@ -130,6 +130,10 @@
   .btn-ghost:hover { color:var(--navy); border-color:var(--text-muted); }
   .btn:disabled { opacity:.5; cursor:not-allowed; filter:none; }
   .actions { margin-top:18px; display:flex; gap:10px; align-items:center; justify-content:flex-end; }
+  /* VLC-234: a save's outcome stays on the page; a refusal is red, a save is green. */
+  .save-msg { margin:10px 0 0; text-align:right; font-size:13px; font-weight:600; }
+  .save-msg[data-kind="error"] { color:#b42318; }
+  .save-msg[data-kind="ok"] { color:#1f7a4d; }
 
   /* "What's sent" preview drawer */
   .preview-box { display:none; margin-top:12px; padding:13px 15px; border-radius:8px; background:var(--bg-soft); border:1px solid var(--rule); font-size:13px; color:var(--text-soft); }
@@ -263,6 +267,7 @@
         <div class="actions">
           <button class="btn btn-primary" id="js-save" type="button">Save</button>
         </div>
+        <p class="save-msg" id="js-save-msg" role="status" hidden></p>
 
       </div>
     </div>
@@ -339,25 +344,49 @@
   function haltPage(id) { document.body.classList.add('is-gated'); const el = $(id); if (el) el.classList.add('is-visible'); }
 
   // ---------- features + the levels each one offers ----------
-  // levels are a subset of the exposure ladder appropriate to the feature:
-  //   off | docs | scrubbed | full
+  // ⚠ VLC-234 (owner ruling 2026-10-31, "Build the control"): THESE CHOICES USED TO BE SAVED ONLY IN THIS BROWSER
+  // (localStorage 'rrv8.ai.prefs.<db>') AND NO AI CALL READ THEM, so every feature ran at the plan while the help
+  // guide promised nothing is sent until an administrator turns a feature on. They are now stored in VALC per
+  // database (PUT api/v1/ai/features), every AI call in V8 declares its feature, and VALC refuses a call above the
+  // feature's level. Five features by owner ruling; the keys and names match VALC's AiFeatureLevelService.
+  // Levels use VALC's vocabulary here (docs = Basic); the samples say what leaves at each one.
   const LEVEL_LABEL = { off:'Off', docs:'Basic', scrubbed:'Enhanced', full:'Full' };
+  const ALL_LEVELS = ['off', 'docs', 'scrubbed', 'full'];
   const FEATURES = [
-    { key:'variance', name:'Explain a variance',
-      sub:'On a reconciliation finding, get a plain-English read: what it is, the likely cause, and the fix.',
-      levels:['off','scrubbed','full'],
-      sample:{ scrubbed:'the finding\'s pattern and amount — a GL-class change offset of -$1,240.50 in May 2026 — with the account masked to a role, not the number.',
-               full:'the whole finding: the pattern, the account 5000.140000, the amount -$1,240.50, and the period (May 2026).' } },
-    { key:'recsummary', name:'Summarize a reconciliation',
-      sub:'A few bullets: what&rsquo;s clean, what needs attention, what&rsquo;s material.',
-      levels:['off','scrubbed','full'],
-      sample:{ scrubbed:'the tallies only — 412 clean, 7 need attention, 2 material — with no account numbers or names attached.',
-               full:'those tallies plus the specific accounts involved, so the summary can name them.' } },
-    { key:'help', name:'Help &amp; how-to',
-      sub:'Ask &ldquo;where do I start&rdquo; questions, answered from the public RapidReconciler help library only.',
-      levels:['off','docs'],
-      sample:{ docs:'Your question text only. No data of yours is sent — answers are grounded in public help docs.' } }
+    { key:'summaries', name:'Automatic summaries',
+      sub:'Home&rsquo;s daily brief, the per-company worklist reads and the roll-forward brief. These run on their own when a page opens.',
+      levels:ALL_LEVELS,
+      sample:{ docs:'only the figures already on the screen, such as a company&rsquo;s out-of-balance and its largest source.',
+               scrubbed:'each source&rsquo;s amount and the patterns across them, with the company shown as a generic label.',
+               full:'the figures with company and account numbers, and where a carry-forward came from.' } },
+    { key:'explain', name:'Explain a finding',
+      sub:'The company analysis when you click an out-of-balance, the Transactions analyzer, cardex Investigate and the model DMAAI review.',
+      levels:ALL_LEVELS,
+      sample:{ docs:'only the figures already on the screen for that finding.',
+               scrubbed:'the finding&rsquo;s pattern and amounts, with the company and item shown as generic labels.',
+               full:'the whole finding: the company, account, item and document numbers with their amounts.' } },
+    { key:'ask', name:'Ask a question',
+      sub:'The ask boxes on Home and the As Of page. Your question goes with the figures behind the screen.',
+      levels:ALL_LEVELS,
+      sample:{ docs:'your question and the figures already on the screen.',
+               scrubbed:'your question and fuller figures, with the company shown as a generic label.',
+               full:'your question and the figures with company and account numbers.' } },
+    { key:'drafting', name:'Entry and report drafting',
+      sub:'The AI line on offset and balancing entries, the audit report cover, and the residual optimizers.',
+      levels:ALL_LEVELS,
+      sample:{ docs:'only the entry&rsquo;s or report&rsquo;s figures as shown on the screen.',
+               scrubbed:'the entry&rsquo;s amounts, with the company and accounts shown as generic labels.',
+               full:'the entry&rsquo;s amounts with its company and account numbers.' } },
+    { key:'admin', name:'Administrator assistant',
+      sub:'The Ask-AI questions on the administrator Home: system status, recent activity and team health.',
+      levels:ALL_LEVELS,
+      sample:{ docs:'only the status figures already on the screen.',
+               scrubbed:'the status and activity, with people shown by role instead of by name.',
+               full:'the status and activity with people&rsquo;s names, such as inactive users.' } }
   ];
+  // What VALC holds for this database: { feature: { level, changedBy, changedAt } }. Null until read.
+  var _settings = null;
+  var _canManage = false;
 
   // Purchased tier (entitlement) from VALC — caps the per-feature pickers.
   // _tierKnown separates "we read your plan and AI isn't in it" from "we couldn't
@@ -368,41 +397,64 @@
   function rankLvl(l) { return ({ off: 0, docs: 1, scrubbed: 2, full: 3 })[l] || 0; }
   const TIER_LABEL = { off: 'Not included', docs: 'Basic', scrubbed: 'Enhanced', full: 'Full' };
 
-  function prefsKey() { const a = activeDb() || {}; return 'rrv8.ai.prefs.' + (a.n || 'default'); }
-  function loadPrefs() { try { return JSON.parse(localStorage.getItem(prefsKey()) || '{}') || {}; } catch (_) { return {}; } }
-  function savePrefs(p) { try { localStorage.setItem(prefsKey(), JSON.stringify(p)); } catch (_) {} }
+  // The level saved in VALC for a feature, in VALC's vocabulary ('grounded' is V8's spelling of 'docs').
+  function savedLevel(key) {
+    const s = _settings && _settings[key];
+    const l = s && s.level ? String(s.level) : 'off';
+    return l === 'grounded' ? 'docs' : l;
+  }
+  function changedLine(key) {
+    const s = _settings && _settings[key];
+    if (!s || !s.changedBy) return 'Never set, so it is Off.';
+    let when = '';
+    try { when = new Date(s.changedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }); } catch (_) {}
+    return 'Set by ' + esc(s.changedBy) + (when ? ' on ' + esc(when) : '') + '.';
+  }
 
   function renderFeatures() {
-    const prefs = loadPrefs();
     const wrap = $('js-feats');
+    const locked = !_settings || !_canManage;   // not read yet, or not this caller's to change
     wrap.innerHTML = FEATURES.map(function (f) {
-      let cur = prefs[f.key] || 'off';
-      if (rankLvl(cur) > rankLvl(_maxLevel)) cur = 'off';   // clamp a saved pref above the purchased tier
+      let cur = savedLevel(f.key);
       const opts = f.levels.map(function (l) {
-        const locked = rankLvl(l) > rankLvl(_maxLevel);     // above the purchased tier → disabled
-        return '<option value="' + l + '"' + (l === cur ? ' selected' : '') + (locked ? ' disabled' : '')
+        const abovePlan = rankLvl(l) > rankLvl(_maxLevel);   // above the purchased tier → disabled
+        return '<option value="' + l + '"' + (l === cur ? ' selected' : '') + (abovePlan ? ' disabled' : '')
           + '>' + LEVEL_LABEL[l] + '</option>';
       }).join('');
+      // A level saved under a higher plan still shows, and says the plan caps it: VALC applies the lower of the two.
+      const capped = rankLvl(cur) > rankLvl(_maxLevel)
+        ? ' Your plan caps it at ' + LEVEL_LABEL[_maxLevel === 'off' ? 'off' : _maxLevel] + '.' : '';
       return '<div class="feat" data-feat="' + f.key + '">'
         + '<div class="feat-name">' + f.name + '</div>'
         + '<div class="feat-sub">' + f.sub + '</div>'
         + '<div class="feat-ctl">'
-        +   '<select class="lvl-select js-lvl">' + opts + '</select>'
+        +   '<select class="lvl-select js-lvl"' + (locked ? ' disabled' : '') + '>' + opts + '</select>'
         +   '<button type="button" class="feat-preview js-preview">What&rsquo;s sent?</button>'
         + '</div>'
+        + '<div class="feat-sub">' + (_settings ? changedLine(f.key) + capped : '') + '</div>'
         + '<div class="preview-box" data-preview="' + f.key + '"></div>'
         + '</div>';
     }).join('');
+    const save = $('js-save'); if (save) save.disabled = locked;
   }
 
+  // The samples are this page's own constants (no user text), so they are inserted as written.
   function previewText(f, level) {
-    if (level === 'off') return '<b>Off.</b> This feature is hidden and sends nothing.';
+    if (level === 'off') return '<b>Off.</b> Nothing is sent. The screens show their own figures, with no AI text.';
     const s = (f.sample && f.sample[level]) || '';
-    if (level === 'docs') return '<b>Basic.</b> ' + esc(s);
-    const lead = level === 'scrubbed'
-      ? '<b>Enhanced.</b> Names and account numbers are masked first — what goes is '
-      : '<b>Full.</b> Your real figures go, so the answer can be specific — what goes is ';
-    return lead + esc(s);
+    const lead = level === 'docs' ? '<b>Basic.</b> What goes is '
+      : level === 'scrubbed' ? '<b>Enhanced.</b> What goes is '
+      : '<b>Full.</b> What goes is ';
+    return lead + s;
+  }
+
+  // Where a save's outcome is shown and stays shown. A toast alone disappears, and a refusal (a level above the plan,
+  // a non-administrator) has to stay readable until the next save.
+  function saveMsg(kind, text) {
+    const el = $('js-save-msg'); if (!el) return;
+    el.textContent = text || '';
+    el.setAttribute('data-kind', kind || '');
+    el.hidden = !text;
   }
 
   // ---------- connection + entitlement ----------
@@ -471,13 +523,29 @@
     // them there is nothing to decide. home.html:5523 already passes `db` and
     // says why in its own comment; this was the second of two callers.
     var dbn = (activeDb() && activeDb().n) || '';
-    return rrFetch('api/v1/ai/health', dbn ? { query: { db: dbn } } : undefined).then(function (r) {
+    // VLC-234: the uuid as well, so VALC answers with this database's saved feature levels and whether this
+    // caller may change them. A name is not a key: every customer has a RapidReconciler_Prod_V8.
+    var uuid = (activeDb() && activeDb().uuid) ? String(activeDb().uuid) : '';
+    var q = {};
+    if (dbn) q.db = dbn;
+    if (uuid) q.database = uuid;
+    return rrFetch('api/v1/ai/health', (dbn || uuid) ? { query: q } : undefined).then(function (r) {
       // A reply carrying no maxLevel tells us nothing about the plan — don't read it
       // as 'off'. Only a maxLevel we actually received makes the tier KNOWN.
       var lvl = (r && r.maxLevel != null) ? String(r.maxLevel) : null;
       _tierKnown = (lvl !== null);
       _maxLevel = _tierKnown ? lvl : 'off';
       if (!_tierKnown) console.error('[AI assistant] plan reply carried no maxLevel:', r);
+      _settings = (r && r.features) ? r.features : null;
+      _canManage = !!(r && r.canManage);
+      if (window.RRAI && RRAI.setFeatures && r && r.features) RRAI.setFeatures(dbn, r.features);
+      if (_tierKnown && !_settings) {
+        // Not transient: VALC answered with a plan but no settings, so either VALC predates VLC-234 or it could not
+        // place this database inside the caller's rights. Reopening the page changes neither.
+        saveMsg('error', 'VALC didn’t return this database’s AI settings, so they can’t be changed here. If this persists, contact GSI support.');
+      } else if (_settings && !_canManage) {
+        saveMsg('error', 'Only a RapidReconciler administrator of this database can change these settings.');
+      }
       renderFeatures();
       paintPlanTier();
       if (!_tierKnown) {
@@ -506,7 +574,8 @@
     setConn('amber', 'Asking the assistant…', '“AI, are you here?”');
     // VLC-186: every V8 call declares its level. This ping carries no customer data, so it is the
     // lowest live rung; on a plan with no AI, VALC refuses it and its sentence is shown below.
-    rrFetch('api/v1/ai/explain', { method: 'POST', body: { prompt: 'AI, are you here?', level: 'grounded' } })
+    // VLC-234: named as the connection test, which VALC runs without a feature level only for this exact sentence.
+    rrFetch('api/v1/ai/explain', { method: 'POST', body: { prompt: 'AI, are you here?', level: 'grounded', feature: 'connection-test' } })
       .then(function (r) {
         const reply = (r && r.text) ? String(r.text).trim() : '';
         if (reply) {
@@ -626,15 +695,41 @@
 
     $('js-conn-test').addEventListener('click', testConnection);
 
+    // VLC-234: Save writes each CHANGED feature to VALC, one at a time, and stops at the first refusal so the page
+    // never reports a partial save as a whole one. VALC's reply carries every feature's level after the write, and it
+    // is what the page shows next, so the screen is what VALC holds, not what was picked.
     $('js-save').addEventListener('click', function () {
-      const prefs = {};
+      if (!_settings || !_canManage) return;
+      const uuid = (activeDb() && activeDb().uuid) ? String(activeDb().uuid) : '';
+      const changes = [];
       Array.prototype.forEach.call(document.querySelectorAll('.feat'), function (row) {
-        prefs[row.getAttribute('data-feat')] = row.querySelector('.js-lvl').value;
+        const key = row.getAttribute('data-feat'), val = row.querySelector('.js-lvl').value;
+        if (val !== savedLevel(key)) changes.push({ feature: key, level: val });
       });
-      savePrefs(prefs);
-      // When the backend lands, this also POSTs to the per-(client,feature) flag:
-      //   rrFetch('ai/preferences', { method:'POST', body: prefs })  // VALC, server-side
-      toast('Preferences saved. They apply once the assistant is enabled.');
+      if (!changes.length) { saveMsg('ok', 'Nothing changed.'); return; }
+      const btn = $('js-save'); btn.disabled = true;
+      saveMsg('', '');
+      let done = 0;
+      changes.reduce(function (p, c) {
+        return p.then(function () {
+          return rrFetch('api/v1/ai/features', { method: 'PUT', body: { database: uuid, feature: c.feature, level: c.level } })
+            .then(function (r) {
+              done++;
+              if (r && r.features) {
+                _settings = r.features;
+                if (window.RRAI && RRAI.setFeatures) RRAI.setFeatures((activeDb() && activeDb().n) || '', r.features);
+              }
+            });
+        });
+      }, Promise.resolve()).then(function () {
+        renderFeatures();
+        saveMsg('ok', 'Saved. Every AI feature in RapidReconciler now uses these levels on this database.');
+        toast('AI settings saved.');
+      }).catch(function (e) {
+        renderFeatures();   // shows what VALC holds, including any change saved before the refusal
+        const why = (e && (e.serverMessage || e.message)) ? (e.serverMessage || e.message) : 'The settings could not be saved.';
+        saveMsg('error', (done ? done + ' of ' + changes.length + ' changes saved. ' : 'Nothing was saved. ') + why);
+      }).then(function () { btn.disabled = !(_settings && _canManage); });
     });
   }
 

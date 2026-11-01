@@ -901,10 +901,14 @@
   // live switcher) is authoritative and drives this page's AI exposure; in prod it
   // falls back to the purchased plan from ai/health (no behavior change there).
   // RRAI's 'grounded' maps to this page's 'docs' vocabulary.
+  // ⚠ VLC-234: IN PRODUCTION THIS RETURNED THE PLAN, whatever the customer's administrator chose, because it read
+  // RRAI only off prod. The brief is Automatic summaries, so it now reads that feature's level from RRAI in every
+  // mode (RRAI caps it at the plan). Without RRAI it falls back to the plan, and VALC refuses anything above the
+  // feature's level.
   function effTier(){
     try {
-      if (window.RR_CONFIG && RR_CONFIG.mode !== 'prod' && window.RRAI) {
-        var g = window.RRAI.get();
+      if (window.RRAI && window.RRAI.get) {
+        var g = window.RRAI.get('summaries');
         if (g) return g === 'grounded' ? 'docs' : g;
       }
     } catch(_){}
@@ -944,7 +948,9 @@
     var _rfUrl='/api/v1/ai/explain'+(ctx?('?ctx='+ctx):'');
     return window.RRDB.valcFetch(_rfUrl,{method:'POST',
         headers:{'Authorization':'Bearer '+t,'Content-Type':'application/json','Accept':'application/json'},
-        body:JSON.stringify({system:system, prompt:prompt, level:effTier()}),
+        // VLC-234: the feature and database come from RRAI.declare(), the one producer of those fields.
+        body:JSON.stringify(Object.assign(window.RRAI && RRAI.declare ? RRAI.declare('summaries') : {},
+                                          {system:system, prompt:prompt, level:effTier()})),
         signal:ctrl?ctrl.signal:undefined})
       .then(function(r){ if(timer) clearTimeout(timer);
         if(!r.ok) return window.RRDB.responseError(r,_rfUrl).then(function(err){ throw err; });
@@ -1004,6 +1010,18 @@
     if(!force && _briefKey===key) return;
     _briefKey=key;
     var sum=breakSummary();
+    // VLC-234: Off sends nothing and says why (ruling 2026-09-15: stay visible, say why). Before this the brief had
+    // no Off guard at all and called out at every level.
+    if(effTier()==='off'){
+      body.classList.remove('is-thinking');
+      body.textContent = (window.RRAI && RRAI.plan && RRAI.plan()==='off')
+        ? 'The AI assistant is not part of this RapidReconciler plan. To add it, contact rrsupport@getgsi.com.'
+        : (window.RRAI && RRAI.featureOff && RRAI.featureOff('summaries'))
+          ? RRAI.FEATURE_NAMES.summaries + ' is turned off for this database. A RapidReconciler administrator can turn it on in AI Assistant.'
+          : 'AI is switched off for this session.';
+      _briefKey=null;
+      return;
+    }
     body.classList.add('is-thinking'); body.textContent='Reading this company’s roll-forward…';
     // Grounding = the shared ROLL-FORWARD catalog (config.js); fall back to the
     // inline copy if config.js didn't load, so the assistant never loses its policy.
@@ -1241,7 +1259,10 @@
   // repository, so the guard took every call and the IIFE was inert.
   // AI plan tier from the client's purchased level — then (re)render the brief
   // now the real tier is known.
-  aiHealth().then(function(lvl){ _aiMaxLevel=lvl||'off'; renderBrief(); });
+  // VLC-234: wait for RRAI too (the plan AND this database's feature levels) before the brief reads its level, so
+  // the first call is built at the administrator's level instead of being refused by VALC and re-run.
+  Promise.all([aiHealth(), (window.RRAI && RRAI.ready) ? RRAI.ready() : null])
+    .then(function(r){ _aiMaxLevel=r[0]||'off'; renderBrief(); });
 
   // Agent-first, no static fallback (V8 is production-only): a failed load shows
   // a clean "sign in / unavailable" rather than foreign snapshot data, which

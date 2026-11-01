@@ -115,7 +115,12 @@ async function rraiSuite(src, label) {
 // The aiExplain sandbox. opts: { tier, plan, health, reject }
 function home(opts) {
   const calls = [], plansSet = [];
-  const win = { RRV8: {}, RRAI: { plan: () => opts.plan || null, setPlan: (db, l) => plansSet.push([db, l]) } };
+  // VLC-234: aiExplain needs a feature now, so RRAI carries the feature list, declare() and featureOff(). These
+  // tests are about the PLAN, so no feature is Off; test-ai-feature-levels.js covers the features themselves.
+  const win = { RRV8: {}, RRAI: { plan: () => opts.plan || null, setPlan: (db, l) => plansSet.push([db, l]),
+    FEATURES: ['summaries', 'explain', 'ask', 'drafting', 'admin'],
+    declare: (f) => ({ feature: f, database: '11111111-1111-1111-1111-111111111111', level: opts.tier || 'full' }),
+    featureOff: () => false } };
   const sb = {
     window: win, console, Promise,
     activeDb: () => ({ n: 'RapidReconciler_Prod_V8' }),
@@ -131,7 +136,7 @@ function home(opts) {
   vm.runInContext(F_SRC, sb);
   sb.RRV8 = win.RRV8;
   vm.runInContext(HOME_SRC + '\nglobalThis.__x = aiExplain;', sb);
-  return { x: sb.__x, calls, plansSet };
+  return { x: (p, o) => sb.__x(p, Object.assign({ feature: 'ask' }, o || {})), calls, plansSet };
 }
 
 async function homeSuite() {
@@ -190,7 +195,7 @@ function cardSuite() {
   // MUTATION CONTROLS: each must redden what it names, or the checks above prove nothing.
   console.log('\nmutation controls');
   const controls = [
-    ['C2', 'the cap ignored (get() is the choice again)', RRAI_SRC.replace('function get() { return cap(choice(), plan()); }', 'function get() { return choice(); }')],
+    ['C2', 'the cap ignored (get() is the choice again)', RRAI_SRC.replace('    var t = cap(choice(), plan());', '    var t = choice();')],
     ['C4', 'the plan kept in localStorage', RRAI_SRC.split('sessionStorage').join('localStorage')]
   ];
   let controlsOk = true;

@@ -570,6 +570,9 @@ window.RRDB = (function () {
   }
   function active() { var list = dbs(); return list[index()] || list[0] || {}; }
   function name() { return active().n || '_'; }
+  // VLC-234: the active database's uuid, as the token carries it (AuthController mints dbs[].uuid). VALC keys the AI
+  // feature levels by database, and a name is not a key: every customer has a RapidReconciler_Prod_V8.
+  function uuid() { var u = active().uuid; return u ? String(u) : ''; }
   function agentBase() {
     var d = active();
     if (d && d.ip) return (/^(?:localhost|127\.0\.0\.1)\b/i.test(d.ip) ? 'http://' : 'https://') + d.ip;
@@ -800,7 +803,7 @@ window.RRDB = (function () {
   rememberServer();   // UI-235: any page load with a session keeps this PC's server address
   return { dbs: dbs, index: index, active: active, name: name, agentBase: agentBase,
            valcBase: valcBase, valcGap: valcGap, valcFetch: valcFetch, setActive: setActive,
-           notice: notice, responseError: responseError,
+           notice: notice, responseError: responseError, uuid: uuid,
            sessionBase: sessionBase, lastServer: lastServer, rememberServer: rememberServer };
 })();
 
@@ -957,7 +960,64 @@ window.RRAI = (function () {
     try { return norm(localStorage.getItem('rrv8.aiTier')) || 'full'; } catch (_) { return 'full'; }
   }
   function cap(t, p) { return p && TIERS.indexOf(p) < TIERS.indexOf(t) ? p : t; }
-  function get() { return cap(choice(), plan()); }
+
+  // ⚠ VLC-234 (owner ruling 2026-10-31, "Build the control"): INSIDE THE PLAN, EACH FEATURE HAS ITS OWN LEVEL, SET
+  // BY THE CUSTOMER'S ADMINISTRATOR on the AI Assistant page and stored in VALC per database. Until then the page
+  // saved its choices in the administrator's browser and nothing read them, so every feature ran at the plan.
+  //
+  // get(feature) is the lower of the choice, the plan and that feature's level. Every AI call declares its feature
+  // through declare() below, and VALC refuses a call above the feature's level (AiController.featureRefusal), so a
+  // page that has not loaded the levels yet is stopped there rather than sending more than the administrator allows.
+  // Five features, by owner ruling; FEATURE_NAMES is VALC's AiFeatureLevelService.FEATURE_NAMES, word for word.
+  var FEATURES = ['summaries', 'explain', 'ask', 'drafting', 'admin'];
+  var FEATURE_NAMES = {
+    summaries: 'Automatic summaries',
+    explain:   'Explain a finding',
+    ask:       'Ask a question',
+    drafting:  'Entry and report drafting',
+    admin:     'Administrator assistant'
+  };
+  var FEAT_KEY = 'rrv8.aiFeatures';
+  function featureMap() {
+    try { return JSON.parse(sessionStorage.getItem(FEAT_KEY) || '{}') || {}; } catch (_) { return {}; }
+  }
+  /** The administrator's level for this feature on the active database, or null when not known yet. */
+  function featureLevel(f, db) {
+    var m = featureMap()[db == null ? dbName() : db];
+    return (m && m[f] != null) ? norm(m[f]) : null;
+  }
+  function get(feature) {
+    var t = cap(choice(), plan());
+    if (feature) t = cap(t, featureLevel(feature));
+    return t;
+  }
+  /** True when the administrator has this feature Off on the active database (and the plan itself is not Off). */
+  function featureOff(feature) {
+    return featureLevel(feature) === 'off' && plan() !== 'off';
+  }
+  /** Records the active database's feature levels from ai/health; re-runs open surfaces when any changed. */
+  function setFeatures(db, rows) {
+    if (db == null || !rows) return;
+    var before = {}, after = {}, changed = false, all = featureMap();
+    FEATURES.forEach(function (f) { before[f] = get(f); });
+    var m = {};
+    FEATURES.forEach(function (f) { var r = rows[f]; if (r && r.level != null) m[f] = norm(r.level) || 'off'; });
+    all[db] = m;
+    try { sessionStorage.setItem(FEAT_KEY, JSON.stringify(all)); } catch (_) {}
+    FEATURES.forEach(function (f) { after[f] = get(f); if (after[f] !== before[f]) changed = true; });
+    if (changed) {
+      try { window.dispatchEvent(new CustomEvent('rrv8:aitierchange', { detail: { tier: get(), features: after } })); } catch (_) {}
+    }
+  }
+  /**
+   * The fields every ai/explain body carries (VLC-234): which feature, which database, and the level the prompt was
+   * built and masked with. ONE producer, so no call site can name its database by name or forget its feature.
+   */
+  function declare(feature) {
+    var db = '';
+    try { db = (window.RRDB && window.RRDB.uuid) ? window.RRDB.uuid() : ''; } catch (_) {}
+    return { feature: feature, database: db, level: get(feature) };
+  }
   function setTier(t) {
     t = norm(t); if (!t) return;
     try { localStorage.setItem('rrv8.aiTier', t); } catch (_) {}
@@ -983,14 +1043,24 @@ window.RRAI = (function () {
     var h = { 'Accept': 'application/json' };
     try { var t = localStorage.getItem('rrv8.token'); if (t) h['Authorization'] = 'Bearer ' + t; else return (_primed = Promise.resolve(null)); } catch (_) { return (_primed = Promise.resolve(null)); }
     if (!window.RRDB || !window.RRDB.valcFetch) return (_primed = Promise.resolve(null));
-    _primed = window.RRDB.valcFetch('api/v1/ai/health' + (db ? '?db=' + encodeURIComponent(db) : ''), { headers: h })
+    // VLC-234: name the database by its uuid too, so VALC answers with that database's feature levels.
+    var q = [];
+    if (db) q.push('db=' + encodeURIComponent(db));
+    try { var u = window.RRDB.uuid ? window.RRDB.uuid() : ''; if (u) q.push('database=' + encodeURIComponent(u)); } catch (_) {}
+    _primed = window.RRDB.valcFetch('api/v1/ai/health' + (q.length ? '?' + q.join('&') : ''), { headers: h })
       .then(function (r) { return r && r.ok ? r.json() : null; })
-      .then(function (j) { if (j && j.maxLevel) setPlan(db, j.maxLevel); return plan(db); })
+      .then(function (j) {
+        if (j && j.maxLevel) setPlan(db, j.maxLevel);
+        if (j && j.features) setFeatures(db, j.features);
+        return plan(db);
+      })
       .catch(function () { return null; });
     return _primed;
   }
   return {
     TIERS: TIERS, LABELS: LABELS, BLURB: BLURB,
+    FEATURES: FEATURES, FEATURE_NAMES: FEATURE_NAMES, featureLevel: featureLevel, featureOff: featureOff,
+    setFeatures: setFeatures, declare: declare, ready: primePlan,
     norm: norm, get: get, set: setTier, choice: choice, plan: plan, setPlan: setPlan, primePlan: primePlan,
     label: function (t) { return LABELS[norm(t) || 'full']; }
   };

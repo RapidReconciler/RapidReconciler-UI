@@ -62,7 +62,8 @@ function between(hay, start, end, label) {
 const TERMS_SRC = ['GLOSSARY', 'ACCT_TERMS', 'ADMIN_TERMS']
   .map((k) => between(config, 'window.RRV8.' + k + ' = [', "].join('\\n');", k)).join('\n');
 const GLOSS_FN = between(sidebar, '  function glossaryHtml(', '\n  function init() {', 'glossaryHtml').replace(/\n  function init\(\) \{$/, '');
-const ADMIN_Q = between(home, "    var grounding = (window.RRV8 && window.RRV8.ADMIN_GROUNDING)", '    aiExplain(prompt)', 'askAdmin prompt');
+// VLC-234: askAdmin's call now names its feature (Administrator assistant).
+const ADMIN_Q = between(home, "    var grounding = (window.RRV8 && window.RRV8.ADMIN_GROUNDING)", "    aiExplain(prompt, { feature: 'admin' })", 'askAdmin prompt');
 const VIEW_ADMIN = between(home, '<div class="view" id="view-admin" hidden>', '<div class="lane-summary" id="adminSummary" hidden>', 'view-admin');
 const FRESH_FN = between(home, '  function _dataFreshness() {', '\n  }', '_dataFreshness');
 const PLAN_LABELS = between(home, '  var AI_PLAN_LABEL = {', '};', 'AI_PLAN_LABEL');
