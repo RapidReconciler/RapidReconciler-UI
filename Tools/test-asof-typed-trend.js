@@ -78,6 +78,8 @@ function load(page) {
     console: { warn() {}, log() {} },
     window: { RRV8: {} },
     RRV8: {},
+    // config.js's RRAI.masks rule (UI-254); test-ai-scrubbed-masking.js runs the real one.
+    RRAI: { masks: (t) => t !== 'full' },
     _data: { _meta: { period: '2025-08-28' } },
     _curCtx: { code: 'USD' },
     _sym: () => '$',

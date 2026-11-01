@@ -925,7 +925,7 @@ window.RRAI = (function () {
   var LABELS = { off: 'Off', grounded: 'Basic', scrubbed: 'Enhanced', full: 'Full' };
   var BLURB  = {
     off:      'AI turned off — deterministic figures only, no data leaves the page',
-    grounded: 'AI sees only the on-screen figures',
+    grounded: 'AI sees only the on-screen figures, with identities masked',
     scrubbed: 'AI sees fuller data with identities masked',
     full:     'AI sees full data with identities'
   };
@@ -1062,6 +1062,11 @@ window.RRAI = (function () {
     FEATURES: FEATURES, FEATURE_NAMES: FEATURE_NAMES, featureLevel: featureLevel, featureOff: featureOff,
     setFeatures: setFeatures, declare: declare, ready: primePlan,
     norm: norm, get: get, set: setTier, choice: choice, plan: plan, setPlan: setPlan, primePlan: primePlan,
+    // UI-254 (owner ruling 2026-11-01, "Basic masks too"): every level below Full sends company, account, item and
+    // person identifiers as generic labels. Each prompt builder asks this instead of testing for 'scrubbed', which
+    // left Basic sending the real numbers. An unknown tier masks: the safe direction. (`label` stays last: three
+    // test harnesses slice RRAI out of this file at its closing line.)
+    masks: function (t) { return norm(t) !== 'full'; },
     label: function (t) { return LABELS[norm(t) || 'full']; }
   };
 })();

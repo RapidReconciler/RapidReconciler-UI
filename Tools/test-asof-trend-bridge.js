@@ -71,6 +71,8 @@ function load(page) {
   const sb = {
     console: { warn() {}, log() {} },
     window: {},
+    // config.js's RRAI.masks rule (UI-254); test-ai-scrubbed-masking.js runs the real one.
+    RRAI: { masks: (t) => t !== 'full' },
     _curCtx: { code: 'USD' },
     _sym: () => '$',
     asofScopeText: () => 'Co 90002',

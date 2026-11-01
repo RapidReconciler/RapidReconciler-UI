@@ -14,7 +14,13 @@
  *   A2  As Of trend block on Enhanced: no item or branch; "Item 1"; amount kept
  *   A3  As Of typed question, the whole prompt sent, on Enhanced: no identifier anywhere
  *   R1  Roll-forward brief on Enhanced: no company or account number; "Entity A", "Account 1"
+ *   B1  As Of grid facts on Basic (UI-254, owner ruling 2026-11-01 "Basic masks too"): no identifier; Entity A
+ *   B3  As Of typed question on Basic, the whole prompt sent: no identifier anywhere
+ *   BR  Roll-forward brief on Basic: no company or account number
+ *   M1  RRAI.masks itself: docs/grounded and scrubbed mask, full does not, an unknown tier masks
  *   C1  CONTROL, Full: every identifier above IS in the prompt, so the harness can see them
+ *
+ * The pages call config.js's RRAI.masks; the harness runs the real TIERS, norm() and masks out of config.js.
  *
  * MUTATION CONTROLS: the cases are re-run on copies of the pages with masking switched off (As Of's asofScrub
  * returns false; the roll-forward's `scrub` is false). Every Enhanced case must go red on them, or the test
@@ -28,6 +34,7 @@ const vm = require('vm');
 const ROOT = path.join(__dirname, '..');
 const ASOF = fs.readFileSync(path.join(ROOT, 'RRV8/inventory-asof.html'), 'utf8').replace(/\r\n/g, '\n');
 const RF = fs.readFileSync(path.join(ROOT, 'RRV8/inventory-account-rollforward.html'), 'utf8').replace(/\r\n/g, '\n');
+const CONFIG = fs.readFileSync(path.join(ROOT, 'RRV8/config.js'), 'utf8').replace(/\r\n/g, '\n');
 
 // Brace-matched, comment- and string-aware (same slicer as test-asof-typed-trend.js).
 function sliceBlock(src, startIdx) {
@@ -60,11 +67,20 @@ function extractLine(html, re, what) {
   return m[0];
 }
 
+// UI-254: the pages decide masking through config.js's RRAI.masks. The harness runs the REAL TIERS, norm() and
+// masks from config.js (not a copy), so a change to which tiers mask is what the cases below see.
+function rraiSource(config) {
+  const tiers = extractLine(config, /\n  var TIERS *= [^\n]*/, 'RRAI TIERS');
+  const norm = extractFn(config, 'norm', 'config.js');
+  const masks = extractLine(config, /\n    masks: function \(t\) \{[^\n]*\}/, 'RRAI.masks').trim();
+  return tiers + '\n' + norm + '\nvar RRAI = { norm: norm, ' + masks + ' };\n';
+}
+
 // Fictional reserve values (CLAUDE.md): company 9XXXX, business unit 9......
 const CO = '90002', BU = '9123456', BRANCH = 'B100', ITEM = 'ITEM-A', ACCT = '9123456.141818', GL = 'IN30';
 const IDS = [CO, BU, BRANCH, ITEM];
 
-function loadAsof(page, tier) {
+function loadAsof(page, tier, cfg) {
   const st = { prompts: [] };
   const sb = {
     console: { warn() {}, log() {} },
@@ -96,6 +112,7 @@ function loadAsof(page, tier) {
     },
   };
   vm.createContext(sb);
+  vm.runInContext(rraiSource(cfg || CONFIG), sb, { filename: 'config.js:RRAI' });
   const F = (n, p) => extractFn(page, n, 'inventory-asof.html', p);
   const src = 'let _asofAiBusy = false;\nlet _asofLastAsk = null;\n'
     + extractLine(page, /\n  let _asofTrendData = null;[^\n]*/, '_asofTrendData declaration') + '\n'
@@ -110,7 +127,7 @@ function loadAsof(page, tier) {
   return { sb, st, ask };
 }
 
-function loadRf(page, tier) {
+function loadRf(page, tier, cfg) {
   const sb = {
     window: { RRV8: { dataAccessLine: () => '' } },
     RRV8: {},
@@ -118,6 +135,7 @@ function loadRf(page, tier) {
     effTier: () => tier,
   };
   vm.createContext(sb);
+  vm.runInContext(rraiSource(cfg || CONFIG), sb, { filename: 'config.js:RRAI' });
   vm.runInContext(extractFn(page, 'briefPrompt', 'inventory-account-rollforward.html'), sb,
     { filename: 'inventory-account-rollforward.html:brief' });
   const sum = {
@@ -135,10 +153,11 @@ function check(id, name, ok, detail) {
 }
 const leaks = (text, ids) => ids.filter((x) => text.indexOf(x) >= 0);
 
-async function runCases(asof, rf) {
+async function runCases(asof, rf, cfg) {
   reds = [];
+  cfg = cfg || CONFIG;
   {
-    const { sb } = loadAsof(asof, 'scrubbed');
+    const { sb } = loadAsof(asof, 'scrubbed', cfg);
     const facts = sb.asofFacts();
     check('A1', 'As Of grid facts on Enhanced carry no company, branch or business-unit number',
       leaks(facts, [CO, BU, BRANCH, 'B200', '9123457']).length === 0 && /Entity A/.test(facts)
@@ -151,7 +170,7 @@ async function runCases(asof, rf) {
       leaks(block, [ITEM, BRANCH]).length === 0 && /Item 1 \$374,540\.49/.test(block), JSON.stringify(block));
   }
   {
-    const { st, ask } = loadAsof(asof, 'scrubbed');
+    const { st, ask } = loadAsof(asof, 'scrubbed', cfg);
     await ask('How are we trending?');
     const p = st.prompts[0] || '';
     check('A3', 'the whole typed As Of prompt sent on Enhanced holds no identifier',
@@ -160,23 +179,51 @@ async function runCases(asof, rf) {
   {
     // VLC-234: the plan is Full and the administrator set Ask to Enhanced. The call goes out as Enhanced, so the
     // masking must read the Ask level, not the plan. Merged as `asofEffTier()` it read the plan and sent real numbers.
-    const { st, ask } = loadAsof(asof, { _: 'full', ask: 'scrubbed', drafting: 'full' });
+    const { st, ask } = loadAsof(asof, { _: 'full', ask: 'scrubbed', drafting: 'full' }, cfg);
     await ask('How are we trending?');
     const p = st.prompts[0] || '';
     check('A4', 'plan Full + Ask set to Enhanced: the typed As Of prompt holds no identifier',
       p.length > 0 && leaks(p, IDS).length === 0, 'leaked ' + JSON.stringify(leaks(p, IDS)) + ' (prompt ' + p.length + ' chars)');
   }
   {
-    const brief = loadRf(rf, 'scrubbed');
+    const brief = loadRf(rf, 'scrubbed', cfg);
     check('R1', 'the roll-forward brief on Enhanced names "Entity A" and "Account 1", no company or account number',
       leaks(brief, [CO, ACCT, '9123457']).length === 0 && /Entity A/.test(brief) && /Account 1, Account 2/.test(brief),
       JSON.stringify(brief.slice(0, 300)));
   }
+  // UI-254 (owner ruling 2026-11-01, "Basic masks too"): the same prompts on Basic ('grounded').
   {
-    const { st, ask } = loadAsof(asof, 'full');
+    const { sb } = loadAsof(asof, 'grounded', cfg);
+    const facts = sb.asofFacts();
+    check('B1', 'As Of grid facts on Basic carry no company, branch or business-unit number',
+      leaks(facts, [CO, BU, BRANCH, 'B200', '9123457']).length === 0 && /Entity A/.test(facts)
+        && facts.indexOf('$1,500,000.00') >= 0, JSON.stringify(facts));
+  }
+  {
+    const { st, ask } = loadAsof(asof, 'grounded', cfg);
     await ask('How are we trending?');
     const p = st.prompts[0] || '';
-    const brief = loadRf(rf, 'full');
+    check('B3', 'the whole typed As Of prompt sent on Basic holds no identifier',
+      p.length > 0 && leaks(p, IDS).length === 0, 'leaked ' + JSON.stringify(leaks(p, IDS)) + ' (prompt ' + p.length + ' chars)');
+  }
+  {
+    const brief = loadRf(rf, 'grounded', cfg);
+    check('BR', 'the roll-forward brief on Basic names "Entity A" and "Account 1", no company or account number',
+      leaks(brief, [CO, ACCT, '9123457']).length === 0 && /Entity A/.test(brief) && /Account 1, Account 2/.test(brief),
+      JSON.stringify(brief.slice(0, 300)));
+  }
+  {
+    // VALC's own name for Basic is 'docs' (ai/health maxLevel, the feature levels); norm() maps it.
+    const sb = {}; vm.createContext(sb); vm.runInContext(rraiSource(cfg), sb);
+    const got = ['docs', 'grounded', 'scrubbed', 'full', 'bogus'].map((t) => t + '=' + sb.RRAI.masks(t)).join(' ');
+    check('M1', 'RRAI.masks: Basic (docs or grounded) and Enhanced mask, Full does not, an unknown tier masks',
+      got === 'docs=true grounded=true scrubbed=true full=false bogus=true', got);
+  }
+  {
+    const { st, ask } = loadAsof(asof, 'full', cfg);
+    await ask('How are we trending?');
+    const p = st.prompts[0] || '';
+    const brief = loadRf(rf, 'full', cfg);
     check('C1', 'CONTROL, Full: the identifiers ARE in both prompts, so the harness can see them',
       leaks(p, IDS).length === IDS.length && leaks(brief, [CO, ACCT]).length === 2,
       'asof has ' + JSON.stringify(leaks(p, IDS)) + ', brief has ' + JSON.stringify(leaks(brief, [CO, ACCT])));
@@ -185,32 +232,45 @@ async function runCases(asof, rf) {
 }
 
 (async () => {
-  console.log('VLC-188: Enhanced masks identifiers before the AI call');
+  console.log('VLC-188 / UI-254: Enhanced and Basic mask identifiers before the AI call');
   const real = await runCases(ASOF, RF);
   const realFailures = failures;
 
-  console.log('\nMutation: masking switched off on both pages (every Enhanced case must go red)');
-  const SCRUB = "function asofScrub() { return asofEffTier('ask') === 'scrubbed'; }";
+  console.log('\nMutation: masking switched off on both pages (every Enhanced and Basic case must go red)');
+  const SCRUB = "function asofScrub() { return RRAI.masks(asofEffTier('ask')); }";
   const asofOff = ASOF.replace(SCRUB, 'function asofScrub() { return false; }');
-  const rfOff = RF.replace("var scrub=effTier()==='scrubbed';", 'var scrub=false;');
+  const rfOff = RF.replace('var scrub=RRAI.masks(effTier());', 'var scrub=false;');
   if (asofOff === ASOF || rfOff === RF) { console.log('HARNESS BROKEN: mutation did not apply'); process.exit(1); }
   failures = 0;
   const mutated = await runCases(asofOff, rfOff);
-  const want = ['A1', 'A2', 'A3', 'A4', 'R1'];
-  const caught = want.every((id) => mutated.indexOf(id) >= 0) && mutated.indexOf('C1') < 0;
-  console.log('  ' + (caught ? 'ok  ' : 'FAIL') + '  mutation caught by ' + JSON.stringify(mutated) + ' (want ' + JSON.stringify(want) + ', control C1 still green)');
+  const want = ['A1', 'A2', 'A3', 'A4', 'R1', 'B1', 'B3', 'BR'];
+  const caught = want.every((id) => mutated.indexOf(id) >= 0) && ['C1', 'M1'].every((id) => mutated.indexOf(id) < 0);
+  console.log('  ' + (caught ? 'ok  ' : 'FAIL') + '  mutation caught by ' + JSON.stringify(mutated) + ' (want ' + JSON.stringify(want) + ', C1 and M1 still green)');
 
   // The VLC-188/VLC-234 merge bug: masking read the plan (no feature) while the call went out at the Ask level.
   console.log('\nMutation: As Of masks at the plan instead of the Ask feature (A4 must go red, A1-A3 stay green)');
-  const asofPlan = ASOF.replace(SCRUB, "function asofScrub() { return asofEffTier() === 'scrubbed'; }");
+  const asofPlan = ASOF.replace(SCRUB, 'function asofScrub() { return RRAI.masks(asofEffTier()); }');
   if (asofPlan === ASOF) { console.log('HARNESS BROKEN: plan mutation did not apply'); process.exit(1); }
   failures = 0;
   const planRed = await runCases(asofPlan, RF);
   const caught2 = planRed.indexOf('A4') >= 0 && ['A1', 'A2', 'A3', 'C1'].every((id) => planRed.indexOf(id) < 0);
   console.log('  ' + (caught2 ? 'ok  ' : 'FAIL') + '  plan mutation caught by ' + JSON.stringify(planRed) + ' (want ["A4"])');
 
-  const total = realFailures + (caught ? 0 : 1) + (caught2 ? 0 : 1);
+  // UI-254's defect: only Enhanced masked. Revert config.js's helper to that and every Basic case must go red,
+  // while Enhanced and the Full control stay green.
+  console.log('\nMutation: RRAI.masks back to Enhanced-only (B1, B3, BR, M1 must go red; A1-A4, R1, C1 stay green)');
+  const MASKS = "masks: function (t) { return norm(t) !== 'full'; }";
+  const cfgOld = CONFIG.replace(MASKS, "masks: function (t) { return norm(t) === 'scrubbed'; }");
+  if (cfgOld === CONFIG) { console.log('HARNESS BROKEN: helper mutation did not apply'); process.exit(1); }
+  failures = 0;
+  const oldRed = await runCases(ASOF, RF, cfgOld);
+  const caught3 = ['B1', 'B3', 'BR', 'M1'].every((id) => oldRed.indexOf(id) >= 0)
+    && ['A1', 'A2', 'A3', 'A4', 'R1', 'C1'].every((id) => oldRed.indexOf(id) < 0);
+  console.log('  ' + (caught3 ? 'ok  ' : 'FAIL') + '  helper mutation caught by ' + JSON.stringify(oldRed) + ' (want ["B1","B3","BR","M1"])');
+
+  const total = realFailures + (caught ? 0 : 1) + (caught2 ? 0 : 1) + (caught3 ? 0 : 1);
   console.log('\n' + (total === 0 ? 'PASS' : 'FAIL') + ': ' + (real.length ? real.length + ' real case(s) red: ' + real.join(',') : 'all real cases green')
-    + (caught ? ', mutation caught' : ', mutation NOT caught') + (caught2 ? ', plan mutation caught' : ', plan mutation NOT caught'));
+    + (caught ? ', mutation caught' : ', mutation NOT caught') + (caught2 ? ', plan mutation caught' : ', plan mutation NOT caught')
+    + (caught3 ? ', helper mutation caught' : ', helper mutation NOT caught'));
   process.exit(total === 0 ? 0 : 1);
 })();
