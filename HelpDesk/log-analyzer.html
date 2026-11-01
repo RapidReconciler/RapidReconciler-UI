@@ -1063,10 +1063,20 @@ const AGENT_RULES = [
   { name: 'VALC asked the agent to update itself',
     match: /\bReceived\s+SelfUpdateMessage\b/i, severity: 'flag',
     note: 'VALC pushed an update for the agent program itself (not for a customer&rsquo;s database services). The agent will restart shortly. Track the next few minutes &mdash; if you don&rsquo;t see an Agent application started line for the new version, the self-update got stuck.' },
+  // VLC-236: ahead of "Routine INFO", or a slow reply reads as one of the suppressed routine lines.
+  { name: 'A request took 20 seconds or more',
+    match: /RequestLogFilter\s*:\s*\S+ \S+ -> \d{3} in (?:[2-9]\d{4}|\d{6,}) ms\b/, severity: 'flag',
+    note: 'The agent answered, but slowly: the line ends with how long the request took. Most requests on a healthy box finish in a few seconds. One slow request during a refresh job or a backup is expected. Several, or one at a quiet time, mean the SQL Server was busy or a query has grown.',
+    fix: 'Note the request path and the time. Check whether a refresh job, a backup or another heavy query was running then. If the same request is slow again at a quiet time, capture the surrounding lines and escalate it as a performance problem.' },
   { name: 'Routine INFO',
     match: /\bINFO\b/, severity: 'noise' },
 
   // ---- Benign WARNs (matched BEFORE the catch-all "WARN level" flag) ----
+  // VLC-236: Spring logs this WARN when the browser closes the connection while the agent is still writing the
+  // reply. The request itself is logged as finished on the next line, with how long it took.
+  { name: 'The browser stopped waiting for a reply (benign)',
+    match: /response committed already\b.*(?:connection was aborted|Broken pipe|ClientAbortException|Connection reset by peer)/i, severity: 'noise',
+    note: 'The browser closed the connection before the agent finished sending its reply: the user left the page, closed the tab, or the page replaced the request with a newer one. Nothing failed in the agent. Look at the request line just after it: if the reply took tens of seconds, that slow request is the thing to look at, and it is flagged on its own.' },
   { name: 'Hibernate SqlExceptionHelper warning (benign)',
     match: /\bo\.h\.engine\.jdbc\.spi\.SqlExceptionHelper\b/i, severity: 'noise',
     note: 'Hibernate WARN-level messages from SqlExceptionHelper are routine — typically "Database not created, connection made to existing database instead" (the schema generator is correctly skipping creation because the DB already exists) or "SQL Warning Code: 10000, SQLState: 01J01" (an informational JDBC SQLWarning). Neither is an operator-actionable problem.' },
