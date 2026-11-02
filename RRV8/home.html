@@ -10000,6 +10000,22 @@
     return { outN: outN, of: series.length, series: series, chronic: chronic, oneOff: outN <= 1, read: read };
   }
 
+  // Per-account roll-forward integrity, in THREE states: 'break', 'open' (never
+  // compared) or 'clean'. Read by the Accounts tab's dots and by the accountant's
+  // Ask (UI-257), so the two can never disagree.
+  function _acctRfState(r) {
+    var rf = window.RRV8 && RRV8.rollForward;
+    if (!rf) return 'open';                       // no producer loaded -> nothing was classified
+    var c = rf.classify(r);
+    if (c.glok === 'no' || c.varok === 'no') return 'break';
+    // Same OR across the two columns the producer's own unk bucket uses: either
+    // side unevaluated leaves the row unproven. Baseline rows are not in here —
+    // an opening snapshot has no prior period BY DEFINITION, so calling it
+    // "never compared" states a shortcoming that does not exist.
+    if (c.glok !== 'baseline' && (c.glok === 'unk' || c.varok === 'unk')) return 'open';
+    return 'clean';
+  }
+
   // Account palette — per-account rows grouped under a company subtotal that ties
   // to the Rec company line. Same live rows (_invRows / v6ui_raccountsummary) the
   // Rec grid sums; here shown un-rolled. No new endpoint.
@@ -10061,18 +10077,7 @@
     // dot and the title "Roll-forward closed clean" — a claim about rows nobody
     // put side by side. The company row one line below already classified through
     // RRV8.rollForward, so one table ran two rules. Both read the producer now.
-    var _rfState = function (r) {
-      var rf = window.RRV8 && RRV8.rollForward;
-      if (!rf) return 'open';                       // no producer loaded -> nothing was classified
-      var c = rf.classify(r);
-      if (c.glok === 'no' || c.varok === 'no') return 'break';
-      // Same OR across the two columns the producer's own unk bucket uses: either
-      // side unevaluated leaves the row unproven. Baseline rows are not in here —
-      // an opening snapshot has no prior period BY DEFINITION, so calling it
-      // "never compared" states a shortcoming that does not exist.
-      if (c.glok !== 'baseline' && (c.glok === 'unk' || c.varok === 'unk')) return 'open';
-      return 'clean';
-    };
+    var _rfState = _acctRfState;   // UI-257: shared with the accountant's Ask, so the dot and the fact agree
     var _RF_DOT = { 'break': ' rf-break', 'open': '', 'clean': ' rf-ok' };
     var _RF_ACCT_TITLE = {
       'break': 'Roll-forward break on this account — analyst re-roll',
@@ -18700,6 +18705,54 @@
       return label + ' (' + (c.ccy || '?') + '): net out-of-balance ' + _ccySym(c.ccy) + _money(c.oob) + ', components: ' + comps + '; ' + rf + priorNote + recNote;
     });
   }
+  // ---- UI-257: the accounts behind each company, for the accountant's Ask ----------
+  // Owner 2026-11-02, on "which account should I do first" answered "I don't have
+  // account-level figures in the facts here" at Full: "One would think there are account
+  // level figures here." The prompt DEFINED the roll-up columns but sent no account rows.
+  // These are the Accounts tab's own rows (_invRows for the viewed period, grouped by
+  // _coOf), its materiality floor and its dot (_acctRfState), so the answer and the tab
+  // cannot disagree. Companies in d.companies order, labelled as _acctFactLines labels
+  // them. Pure over its inputs so Tools/test-acct-ask-accounts.js can run it.
+  var ACCT_ASK_TOP = 8;   // per company; the rest are summarised, so a big chart stays a bounded prompt
+  function _acctAccountFactLines(d, scrub, rows, names) {
+    var pe = d.viewedPeriod || d.latestPeriod || '';
+    var byCo = {};
+    (rows || []).forEach(function (r) {
+      if (pe && String(r.PeriodEnds || '').slice(0, 10) !== pe) return;
+      var co = _coOf(r) || '?'; (byCo[co] || (byCo[co] = [])).push(r);
+    });
+    var lines = ['Accounts by company for ' + (pe ? fmtPeriod(pe) : 'the loaded periods') + ' (the Accounts tab). Each out-of-balance account reads "<account>: out of balance <amount> = Ending GL <amount> (Beginning <amount> + Activity <amount>) vs Perpetual <amount>[, Unposted <amount>][, End of Day <amount>]; roll-forward <clean | BREAK | never compared>[; out of balance in N of the last M periods]", biggest gap first. An account whose gap is under ' + MAT_OOB_FLOOR + ' in its currency is in balance.'];
+    var RF_WORD = { 'break': 'BREAK (analyst re-roll, not a journal entry)', 'open': 'never compared (no prior period)', 'clean': 'clean' };
+    d.companies.forEach(function (c, i) {
+      var coLbl = scrub ? ('Entity ' + String.fromCharCode(65 + (i % 26))) : ('Co ' + c.co);
+      var accts = (byCo[String(c.co)] || []);
+      if (!accts.length) { lines.push(coLbl + ': no accounts loaded for this period.'); return; }
+      var sym = _ccySym(c.ccy), amt = function (v) { return sym + _money(Number(v) || 0); };
+      var out = accts.filter(function (r) { return Math.abs(Number(r.OOB) || 0) >= MAT_OOB_FLOOR; })
+        .sort(function (a, b) { return Math.abs(Number(b.OOB) || 0) - Math.abs(Number(a.OOB) || 0); });
+      var inN = accts.length - out.length;
+      if (!out.length) { lines.push(coLbl + ': all ' + accts.length + ' accounts in balance.'); return; }
+      lines.push(coLbl + ': ' + out.length + ' of ' + accts.length + ' accounts out of balance' + (inN ? ', ' + inN + ' in balance' : '') + ':');
+      out.slice(0, ACCT_ASK_TOP).forEach(function (r, k) {
+        var la = String(r.LongAccount || '').trim();
+        var nm = scrub ? '' : ((names && names[String(c.co).trim() + '|' + la]) || '');
+        var aLbl = scrub ? ('Account ' + (k + 1)) : (la + (nm ? ' (' + nm + ')' : ''));
+        var extra = (Math.abs(Number(r.UnpostBatch) || 0) >= 0.005 ? ', Unposted ' + amt(r.UnpostBatch) : '')
+          + (Math.abs(Number(r.EndofDay) || 0) >= 0.005 ? ', End of Day ' + amt(r.EndofDay) : '');
+        var rec = _oobRecurrence(c.co, la);
+        lines.push('• ' + aLbl + ': out of balance ' + amt(r.OOB) + ' = Ending GL ' + amt(r.EndGL)
+          + ' (Beginning ' + amt(r.BegGL) + ' + Activity ' + amt(r.PerGL) + ') vs Perpetual ' + amt(r.Perpetual) + extra
+          + '; roll-forward ' + RF_WORD[_acctRfState(r)]
+          + (rec ? '; out of balance in ' + rec.outN + ' of the last ' + rec.of + ' periods' : ''));
+      });
+      if (out.length > ACCT_ASK_TOP) {
+        var rest = out.slice(ACCT_ASK_TOP).reduce(function (s, r) { return s + (Number(r.OOB) || 0); }, 0);
+        lines.push('• ' + (out.length - ACCT_ASK_TOP) + ' more out-of-balance accounts, net ' + amt(rest) + ' together.');
+      }
+    });
+    return lines;
+  }
+
   // ---- UI-246: the transaction-variance worklist, by type, for the accountant's Ask --
   // Owner 2026-10-29, on "which transaction type is causing the most problems" getting
   // "I can't name a type from these figures" on Full: "not acceptable on the full or
@@ -18916,6 +18969,10 @@
       + ((d.companies || []).map(function (c) { return c.co; }).join(','));
     var _prev = (!scrub && _acctConvo && _acctConvo.sig === _sig && _acctConvo.q && _acctConvo.q !== q) ? _acctConvo : null;
     var facts = _acctFactLines(d, scrub);
+    // UI-257: Full and Enhanced also get the accounts behind each company (the Accounts
+    // tab's rows), masked on Enhanced. Basic stays at the company figures, as UI-246 does.
+    var _wantAccts = (tier === 'full' || tier === 'scrubbed');
+    if (_wantAccts) facts = facts.concat([''], _acctAccountFactLines(d, scrub, _invRows, _acctNames));
     if (d.priorPeriod) facts = facts.concat(['', 'The PRIOR period is ' + fmtPeriod(d.priorPeriod) + '. "Carry forward" for a company IS that company\'s net out-of-balance from the prior period rolled into this one — its source is simply the prior period (normal roll-forward, NOT necessarily a roll-forward break). To see what composes a carry forward, open the prior period.']);
     if (wantTrend) {   // trend pill — hand the model the per-period trend it needs
       var tmetric = wantTrend === 'perp' ? 'perp' : 'oob';
@@ -18971,6 +19028,8 @@
       // UI-246: the question the owner asked, and the answer shape it deserves. Only when the
       // type facts were sent (Full / Enhanced); on Basic it would point at facts that are absent.
       + (txvRows === undefined ? '' : '• If it asks which transaction, document or order type (or category) causes the most variance or problems, answer from the "Transaction variance by type" facts and NOTHING else: (1) a lead line naming the module and category that drive it; (2) ONE line per top group starting with "• ", as "• <module> — <category> (<order type>/<doc type>) — <documents> documents, net <rounded amount>, in N of M periods"; point out groups that largely offset each other (similar size, opposite sign) instead of counting both; (3) a line starting with "I\'d focus on " naming the group that recurs in the most periods with the largest net, and why; (4) a line starting with "The fix: " giving THAT category\'s fix from its "Fix — <category>" fact as concrete steps, naming every program, AAI and report exactly as written there and saying who does it (the analyst or administrator, not the accountant), then one sentence that a journal entry each period only clears the symptom. Use only the catalog\'s steps: never invent a program, AAI or step, and if no "Fix —" fact covers that category, say the fix is not catalogued yet. The lead line, the "I\'d focus on" line and the "The fix:" line carry NO bullet or dash. If those facts say they could not be loaded, say so.\n')
+      // UI-257: only when the account facts were sent (Full / Enhanced).
+      + (_wantAccts ? '• If it asks which ACCOUNT to work first, or which accounts are out of balance, answer from the "Accounts by company" facts and NOTHING else: (1) a lead line naming the account to start with and its company; (2) ONE line per account worth working, starting with "• ", as "• <account> (<company>) — out of balance <rounded amount>; <what drives it: Ending GL vs Perpetual, or Unposted / End of Day still pending>"; (3) a line starting with "I\'d focus on " that says why that account first: the largest gap the accountant can act on, a roll-forward BREAK (hand to the analyst, not a journal entry), or a gap that recurs in most periods (a source fix). The lead line and the "I\'d focus on" line carry NO bullet.\n' : '')
       + '• For a how-to or "what does this mean" question, answer in 2-4 plain sentences from the definitions and guidance above — no bullets.\n'
       + 'Round amounts (e.g. "$29K"). Ground any figures ONLY in the facts above (if a specific number is not there, say so). This surface uses "• " for its bullets, which OVERRIDES the "- " default below.\n'
       + (window.RRV8 && RRV8.AI_REGISTER ? RRV8.AI_REGISTER : '');
