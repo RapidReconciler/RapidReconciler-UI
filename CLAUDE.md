@@ -159,15 +159,23 @@ card to spotlight.
 
 - **Topnav** with brand + 3 links: RR University, Help Desk, (Documents
   scrolls down)
-- **Hero** with title/lede + 2 compliance shortcut buttons (SOC 2 Bridge
-  Letter, SOC 2 Type 2 Report — both compose-email mailtos) + a "What's
-  inside" glass card with 5 destination links: See the product, Sales
-  Roles, Tech Team, RR University, Help Desk
+- **Hero** with title/lede + a "What's inside" glass card with 5
+  destination links: See the product, Sales Roles, Tech Team, RR
+  University, Help Desk
 - **Stats band** (24 / 6 / 2 / 12+)
 - **Footer**
 
 The hub does NOT embed roles, scenarios, or compliance documents. Each lives
 on its own per-team page.
+
+The two SOC 2 PDFs are linked from the launchpad's customer-only
+**Documents** section (`rapidreconciler-launchpad.html`) as direct
+`Compliance/*.pdf` links. That launchpad gate is client-side only, so
+**both PDFs are publicly downloadable** from the Pages site. That is
+deliberate (owner ruling 2026-11-02, when the April 2025 &ndash; March
+2026 report and the June 23, 2026 bridge letter replaced the previous
+pair). Replace the files in place under the same names when a new report
+lands, so the links keep working.
 
 ---
 
