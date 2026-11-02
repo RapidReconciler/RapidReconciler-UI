@@ -18714,7 +18714,9 @@
   // cannot disagree. Companies in d.companies order, labelled as _acctFactLines labels
   // them. Pure over its inputs so Tools/test-acct-ask-accounts.js can run it.
   var ACCT_ASK_TOP = 8;   // per company; the rest are summarised, so a big chart stays a bounded prompt
-  function _acctAccountFactLines(d, scrub, rows, names) {
+  // focusCo (UI-258): the company the page header shows on the Accounts / Perpetual / Audit
+  // sub-views, or null on Overview, where the header names every company.
+  function _acctAccountFactLines(d, scrub, rows, names, focusCo) {
     var pe = d.viewedPeriod || d.latestPeriod || '';
     var byCo = {};
     (rows || []).forEach(function (r) {
@@ -18722,6 +18724,20 @@
       var co = _coOf(r) || '?'; (byCo[co] || (byCo[co] = [])).push(r);
     });
     var lines = ['Accounts by company for ' + (pe ? fmtPeriod(pe) : 'the loaded periods') + ' (the Accounts tab). Each out-of-balance account reads "<account>: out of balance <amount> = Ending GL <amount> (Beginning <amount> + Activity <amount>) vs Perpetual <amount>[, Unposted <amount>][, End of Day <amount>]; roll-forward <clean | BREAK | never compared>[; out of balance in N of the last M periods]", biggest gap first. An account whose gap is under ' + MAT_OOB_FLOOR + ' in its currency is in balance.'];
+    // UI-258 (owner 2026-11-02, "Fix the wording"): the answer ranked Co 80008's account first
+    // while the header showed Co 80002, and compared a GBP gap with a USD one without saying so.
+    var coLblOf = function (co) {
+      var i = d.companies.map(function (c) { return String(c.co); }).indexOf(String(co));
+      return i < 0 ? null : (scrub ? ('Entity ' + String.fromCharCode(65 + (i % 26))) : ('Co ' + d.companies[i].co));
+    };
+    if (d.companies.length > 1) {
+      var fl = focusCo != null ? coLblOf(focusCo) : null;
+      lines.push('Scope: these are the accounts of all ' + d.companies.length + ' companies in view'
+        + (fl ? '. The page header is showing ' + fl + ' only, so when you name an account of another company, say that it is outside ' + fl + '.' : '.'));
+    }
+    var ccys = [];
+    d.companies.forEach(function (c) { var k = String(c.ccy || '?'); if (ccys.indexOf(k) < 0) ccys.push(k); });
+    if (ccys.length > 1) lines.push('Currencies: these companies report in ' + ccys.join(', ') + '. Keep each amount\'s own currency symbol, and never rank or compare amounts in different currencies without naming both currencies.');
     var RF_WORD = { 'break': 'BREAK (analyst re-roll, not a journal entry)', 'open': 'never compared (no prior period)', 'clean': 'clean' };
     d.companies.forEach(function (c, i) {
       var coLbl = scrub ? ('Entity ' + String.fromCharCode(65 + (i % 26))) : ('Co ' + c.co);
@@ -18972,7 +18988,12 @@
     // UI-257: Full and Enhanced also get the accounts behind each company (the Accounts
     // tab's rows), masked on Enhanced. Basic stays at the company figures, as UI-246 does.
     var _wantAccts = (tier === 'full' || tier === 'scrubbed');
-    if (_wantAccts) facts = facts.concat([''], _acctAccountFactLines(d, scrub, _invRows, _acctNames));
+    // UI-258: on the sub-views whose header names one company (as _roleHeroContext decides),
+    // tell the model which one, so a recommendation outside it says so.
+    var _sv = (typeof _curSubView === 'function') ? _curSubView() : '';
+    var _focusCo = (_sv === 'account' || _sv === 'perpetual' || _sv === 'audit')
+      ? _acctFocusCo((d.companies || []).map(function (c) { return String(c.co); })) : null;
+    if (_wantAccts) facts = facts.concat([''], _acctAccountFactLines(d, scrub, _invRows, _acctNames, _focusCo));
     if (d.priorPeriod) facts = facts.concat(['', 'The PRIOR period is ' + fmtPeriod(d.priorPeriod) + '. "Carry forward" for a company IS that company\'s net out-of-balance from the prior period rolled into this one — its source is simply the prior period (normal roll-forward, NOT necessarily a roll-forward break). To see what composes a carry forward, open the prior period.']);
     if (wantTrend) {   // trend pill — hand the model the per-period trend it needs
       var tmetric = wantTrend === 'perp' ? 'perp' : 'oob';
@@ -19029,7 +19050,7 @@
       // type facts were sent (Full / Enhanced); on Basic it would point at facts that are absent.
       + (txvRows === undefined ? '' : '• If it asks which transaction, document or order type (or category) causes the most variance or problems, answer from the "Transaction variance by type" facts and NOTHING else: (1) a lead line naming the module and category that drive it; (2) ONE line per top group starting with "• ", as "• <module> — <category> (<order type>/<doc type>) — <documents> documents, net <rounded amount>, in N of M periods"; point out groups that largely offset each other (similar size, opposite sign) instead of counting both; (3) a line starting with "I\'d focus on " naming the group that recurs in the most periods with the largest net, and why; (4) a line starting with "The fix: " giving THAT category\'s fix from its "Fix — <category>" fact as concrete steps, naming every program, AAI and report exactly as written there and saying who does it (the analyst or administrator, not the accountant), then one sentence that a journal entry each period only clears the symptom. Use only the catalog\'s steps: never invent a program, AAI or step, and if no "Fix —" fact covers that category, say the fix is not catalogued yet. The lead line, the "I\'d focus on" line and the "The fix:" line carry NO bullet or dash. If those facts say they could not be loaded, say so.\n')
       // UI-257: only when the account facts were sent (Full / Enhanced).
-      + (_wantAccts ? '• If it asks which ACCOUNT to work first, or which accounts are out of balance, answer from the "Accounts by company" facts and NOTHING else: (1) a lead line naming the account to start with and its company; (2) ONE line per account worth working, starting with "• ", as "• <account> (<company>) — out of balance <rounded amount>; <what drives it: Ending GL vs Perpetual, or Unposted / End of Day still pending>"; (3) a line starting with "I\'d focus on " that says why that account first: the largest gap the accountant can act on, a roll-forward BREAK (hand to the analyst, not a journal entry), or a gap that recurs in most periods (a source fix). The lead line and the "I\'d focus on" line carry NO bullet.\n' : '')
+      + (_wantAccts ? '• If it asks which ACCOUNT to work first, or which accounts are out of balance, answer from the "Accounts by company" facts and NOTHING else: (1) a lead line naming the account to start with and its company, and, when the facts carry a "Scope:" line naming the company the header shows and you lead with another company\'s account, saying in that same line that it is outside that company; (2) ONE line per account worth working, starting with "• ", as "• <account> (<company>) — out of balance <rounded amount, with its currency symbol>; <what drives it: Ending GL vs Perpetual, or Unposted / End of Day still pending>"; (3) a line starting with "I\'d focus on " that says why that account first: the largest gap the accountant can act on, a roll-forward BREAK (hand to the analyst, not a journal entry), or a gap that recurs in most periods (a source fix). When the facts carry a "Currencies:" line, never call one gap larger than another in a different currency without naming both currencies. The lead line and the "I\'d focus on" line carry NO bullet.\n' : '')
       + '• For a how-to or "what does this mean" question, answer in 2-4 plain sentences from the definitions and guidance above — no bullets.\n'
       + 'Round amounts (e.g. "$29K"). Ground any figures ONLY in the facts above (if a specific number is not there, say so). This surface uses "• " for its bullets, which OVERRIDES the "- " default below.\n'
       + (window.RRV8 && RRV8.AI_REGISTER ? RRV8.AI_REGISTER : '');
