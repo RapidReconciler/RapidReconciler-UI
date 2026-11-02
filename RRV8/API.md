@@ -928,7 +928,22 @@ Levels use VALC's vocabulary `off | docs | scrubbed | full`; V8 sends `grounded`
 |---|---|---|
 | `GET api/v1/ai/health?db=<name>&database=<uuid>` | `database` is the token's `dbs[].uuid` | With a `database` the caller may use: `{configured, model, maxLevel, canManage, gsiStaff, features:{<key>:{name, level, effective[, changedBy, changedAt]}}}`. `changedBy`/`changedAt` when `canManage` or `gsiStaff`. `canManage` is never true for GSI staff (VLC-235). Without one: the pre-234 `{configured, model, maxLevel}` by name. |
 | `PUT api/v1/ai/features` | `{database, feature, level}` | The same body as `health`, after the write. 403 `FOREIGN_DATABASE` / `GSI_STAFF_READ_ONLY` (VLC-235: GSI staff never set a customer's level) / `NOT_ADMINISTRATOR`, 400 `UNKNOWN_AI_FEATURE` / `UNKNOWN_AI_LEVEL`, 409 `AI_LEVEL_EXCEEDS_PLAN` (sentence names the plan). Append-only (`ai_feature_level_changes`, V108): the newest row per database and feature is in force. |
-| `POST api/v1/ai/explain` | `{prompt, system?, feature, database, level}` from `RRAI.declare(feature)` | `{model, text}`. A V8 caller without `feature` or `database` gets 400 `AI_FEATURE_REQUIRED`; a feature the administrator has Off gets 403 `AI_FEATURE_OFF`; a level above it 403 `AI_LEVEL_EXCEEDS_FEATURE`. Plan refusals (VLC-186) run first. Every refusal carries a sentence V8 shows as written. |
+| `POST api/v1/ai/explain` | `{prompt, system?, feature, database, level}` from `RRAI.declare(feature)` | `{model, text}`. A V8 caller without `feature` or `database` gets 400 `AI_FEATURE_REQUIRED`; a feature the administrator has Off gets 403 `AI_FEATURE_OFF`; a level above it 403 `AI_LEVEL_EXCEEDS_FEATURE`. Plan refusals (VLC-186) run first. Every refusal carries a sentence V8 shows as written. UI-255: every call, answered or refused, writes one `ai_calls` row (V109): user, time, database (only one the caller may use), feature, level as declared, prompt and system sizes in characters, outcome (`ok` or the code returned). Never the text. |
+| `GET api/v1/ai/calls?database=<uuid>&days=<n>` | `days` 1 to the retention, default 30 | UI-255. `{days, retentionDays, total, calls:[{at, user, feature, featureName, level, promptChars, systemChars, outcome}]}`, newest first, at most 200 rows (`total` counts them all). The database's administrator or GSI staff (VLC-235's rule for who sees who set a level); anyone else 403 `NOT_ADMINISTRATOR`, a database not on the account 403 `FOREIGN_DATABASE`. Rows older than `valc.ai.call-record.retention-days` (default 400) are deleted nightly. Read by the AI Assistant page's AI Call Record card. |
+
+**What was sent (UI-255).** Every V8 page loads `config.js`, which observes `fetch()` for `POST …/api/v1/ai/explain`
+and keeps the exact body string of each call in page memory (`RRAI.noteSent`, last 60). An answer's renderer calls
+`RRAI.showSent(host, prompt)`, which looks the record up by the prompt it posted and puts a collapsed "What was sent"
+line in the answer (feature, level, size; opened, the instructions and prompt as sent). Nothing rebuilds a prompt, the
+text is never stored, and VALC's own JDE reference text (`AiService.DMAAI_GROUNDING`) is named but not shown. The
+audit report cover is the one call with no on-screen answer, so it has no disclosure.
+
+**AI Assistant examples (UI-255 piece 2, owner ruling 2026-11-01 "Samples from use").** One builder per feature, when it
+runs for real, also runs at `grounded`, `scrubbed` and `full` through `RRAI.keepSample(feature, page, build)`, which keeps
+the texts in `sessionStorage['rrv8.aiSamples'][<database uuid>][feature]`. Nothing kept is sent. The builders: `summaries`
+`_wlCausePrompt` (Home worklist), `explain` `_cxPrompt` (cardex Investigate), `ask` the As Of builders through
+`asofKeepSample`, `drafting` `_oeAiPrompt` (offset entry), `admin` `_adminAskPrompt`. The AI Assistant page reads
+`RRAI.samples(uuid)`; with none it names `RRAI.SAMPLE_PAGES[feature]`.
 
 Who: a database the caller holds a right on, or one of the client they administer; GSI staff any active database.
 Writing needs `roles.tab_admin` too. The AI Assistant page's Test connection sends `feature: 'connection-test'` with

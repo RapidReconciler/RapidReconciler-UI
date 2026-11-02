@@ -139,6 +139,11 @@
   .preview-box { display:none; margin-top:12px; padding:13px 15px; border-radius:8px; background:var(--bg-soft); border:1px solid var(--rule); font-size:13px; color:var(--text-soft); }
   .preview-box.is-open { display:block; }
   .preview-box b { color:var(--navy); }
+  .sample-tabs { display:flex; gap:6px; margin-bottom:10px; }
+  .sample-tab { font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:12px; border:1px solid var(--rule-strong); background:var(--bg-card); color:var(--text-soft); border-radius:100px; padding:3px 10px; cursor:pointer; }
+  .sample-tab.is-on { border-color:var(--blue); color:var(--blue); }
+  .preview-box .sample-note { margin:6px 0 0; font-size:12.5px; color:var(--text-muted); }
+  .preview-box pre { max-height:320px; overflow:auto; }
   .preview-box pre { margin-top:8px; padding:10px 12px; background:var(--bg-card); border:1px solid var(--rule); border-radius:6px; font-family:'JetBrains Mono',monospace; font-size:12px; white-space:pre-wrap; color:var(--text); }
 
   .gate-notice { display:none; gap:12px; padding:13px 16px; border-radius:9px; background:var(--blue-pale); border:1px solid #c2d8ef; color:var(--text); }
@@ -147,6 +152,22 @@
   .gate-notice.halt-notice { background:var(--red-pale); border-color:var(--red); }
   .gate-notice.halt-notice svg { color:var(--red); }
   body.is-gated #js-tool { display:none; }
+
+  /* UI-255: the AI call record */
+  #js-calls-card { margin-top:18px; }
+  .calls-count { margin-left:auto; font-size:12.5px; font-weight:600; color:var(--text-muted); }
+  .calls-count + .card-chev { margin-left:0; }
+  .calls-bar { display:flex; gap:16px; align-items:flex-start; justify-content:space-between; flex-wrap:wrap; }
+  .calls-bar .plan-help { margin:0; flex:1 1 280px; }
+  .calls-days { width:auto; min-width:150px; }
+  .calls-msg { font-size:13px; color:var(--text-soft); margin:10px 0 0; }
+  .calls-msg:empty { display:none; }
+  .calls-wrap { overflow-x:auto; margin-top:10px; }
+  .calls-table { width:100%; border-collapse:collapse; font-size:13px; }
+  .calls-table th { text-align:left; font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:12px; color:var(--text-muted); padding:6px 8px; border-bottom:1px solid var(--rule-strong); white-space:nowrap; }
+  .calls-table td { padding:6px 8px; border-bottom:1px solid var(--rule); color:var(--text); vertical-align:top; }
+  .calls-table .num { text-align:right; font-variant-numeric:tabular-nums; }
+  .calls-table .is-refused { color:#b42318; }
 
   .toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%) translateY(20px); background:var(--navy); color:#fff; padding:10px 18px; border-radius:6px; font-family:'Source Sans 3',sans-serif; font-weight:600; font-size:13px; opacity:0; pointer-events:none; transition:opacity .2s ease,transform .2s ease; z-index:100; }
   .toast.is-visible { opacity:1; transform:translateX(-50%) translateY(0); }
@@ -269,6 +290,31 @@
         </div>
         <p class="save-msg" id="js-save-msg" role="status" hidden></p>
 
+        <!-- UI-255: VALC's record of every AI call on this database, answered or refused. Collapsed, and read only
+             when opened. Shown to this database's administrators and GSI staff (VALC decides; VLC-235's rule). -->
+        <details class="card" id="js-calls-card" hidden>
+          <summary class="card-head"><span class="card-title">AI Call Record</span>
+            <span class="calls-count" id="js-calls-count"></span>
+            <svg class="card-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+          </summary>
+          <div class="card-body">
+            <div class="calls-bar">
+              <p class="plan-help" id="js-calls-help">Every AI call on this database: who, when, which feature, at which level, and how large. RapidReconciler never keeps the text that was sent.</p>
+              <select class="lvl-select calls-days" id="js-calls-days" aria-label="Period">
+                <option value="7">Last 7 days</option>
+                <option value="30" selected>Last 30 days</option>
+                <option value="90">Last 90 days</option>
+                <option value="400">Everything kept</option>
+              </select>
+            </div>
+            <p class="calls-msg" id="js-calls-msg" role="status"></p>
+            <div class="calls-wrap"><table class="calls-table" id="js-calls-table" hidden>
+              <thead><tr><th>When</th><th>Who</th><th>Feature</th><th>Level</th><th class="num">Characters</th><th>Outcome</th></tr></thead>
+              <tbody id="js-calls-rows"></tbody>
+            </table></div>
+          </div>
+        </details>
+
       </div>
     </div>
   </main>
@@ -349,40 +395,29 @@
   // guide promised nothing is sent until an administrator turns a feature on. They are now stored in VALC per
   // database (PUT api/v1/ai/features), every AI call in V8 declares its feature, and VALC refuses a call above the
   // feature's level. Five features by owner ruling; the keys and names match VALC's AiFeatureLevelService.
-  // Levels use VALC's vocabulary here (docs = Basic); the samples say what leaves at each one.
+  // Levels use VALC's vocabulary here (docs = Basic).
+  // ⚠ UI-255 piece 2 (owner ruling 2026-11-01, "Samples from use"): "What's sent?" USED TO SHOW HAND-WRITTEN PROSE
+  // from a `sample:` map here, so an administrator was told what masking does instead of seeing it. It now shows the
+  // prompt the feature's real builder produced from this database at that level (RRAI.samples, kept in this tab by the
+  // page where the builder ran), or names that page when it has not run yet.
   const LEVEL_LABEL = { off:'Off', docs:'Basic', scrubbed:'Enhanced', full:'Full' };
   const ALL_LEVELS = ['off', 'docs', 'scrubbed', 'full'];
   const FEATURES = [
     { key:'summaries', name:'Automatic summaries',
       sub:'Home&rsquo;s daily brief, the per-company worklist reads and the roll-forward brief. These run on their own when a page opens.',
-      levels:ALL_LEVELS,
-      sample:{ docs:'only the figures already on the screen, such as a company&rsquo;s out-of-balance and its largest source, with the company shown as a generic label.',
-               scrubbed:'each source&rsquo;s amount and the patterns across them, with the company shown as a generic label.',
-               full:'the figures with company and account numbers, and where a carry-forward came from.' } },
+      levels:ALL_LEVELS },
     { key:'explain', name:'Explain a finding',
       sub:'The company analysis when you click an out-of-balance, the Transactions analyzer, cardex Investigate and the model DMAAI review.',
-      levels:ALL_LEVELS,
-      sample:{ docs:'only the figures already on the screen for that finding, with the company and item shown as generic labels.',
-               scrubbed:'the finding&rsquo;s pattern and amounts, with the company and item shown as generic labels.',
-               full:'the whole finding: the company, account, item and document numbers with their amounts.' } },
+      levels:ALL_LEVELS },
     { key:'ask', name:'Ask a question',
       sub:'The ask boxes on Home and the As Of page. Your question goes with the figures behind the screen.',
-      levels:ALL_LEVELS,
-      sample:{ docs:'your question and the figures already on the screen, with the company shown as a generic label.',
-               scrubbed:'your question and fuller figures, with the company shown as a generic label.',
-               full:'your question and the figures with company and account numbers.' } },
+      levels:ALL_LEVELS },
     { key:'drafting', name:'Entry and report drafting',
       sub:'The AI line on offset and balancing entries, the audit report cover, and the residual optimizers.',
-      levels:ALL_LEVELS,
-      sample:{ docs:'only the entry&rsquo;s or report&rsquo;s figures as shown on the screen, with the company and accounts shown as generic labels.',
-               scrubbed:'the entry&rsquo;s amounts, with the company and accounts shown as generic labels.',
-               full:'the entry&rsquo;s amounts with its company and account numbers.' } },
+      levels:ALL_LEVELS },
     { key:'admin', name:'Administrator assistant',
       sub:'The Ask-AI questions on the administrator Home: system status, recent activity and team health.',
-      levels:ALL_LEVELS,
-      sample:{ docs:'only the status figures already on the screen.',
-               scrubbed:'the status and activity, with people shown by role instead of by name.',
-               full:'the status and activity with people&rsquo;s names, such as inactive users.' } }
+      levels:ALL_LEVELS }
   ];
   // What VALC holds for this database: { feature: { level, changedBy, changedAt } }. Null until read.
   var _settings = null;
@@ -438,14 +473,36 @@
     const save = $('js-save'); if (save) save.disabled = locked;
   }
 
-  // The samples are this page's own constants (no user text), so they are inserted as written.
+  // UI-255 piece 2. A sample is this database's figures, so every part of it is escaped.
+  // The level buttons compare the samples; they change only what this box shows, never the feature's setting.
   function previewText(f, level) {
+    const tabs = '<div class="sample-tabs" role="group" aria-label="Show the example at">'
+      + ['docs', 'scrubbed', 'full'].map(function (l) {
+        return '<button type="button" class="sample-tab js-sample-lvl' + (l === level ? ' is-on' : '') + '" data-l="' + l
+          + '" aria-pressed="' + (l === level) + '">' + LEVEL_LABEL[l] + '</button>';
+      }).join('') + '</div>';
+    return tabs + previewBody(f, level);
+  }
+  function previewBody(f, level) {
     if (level === 'off') return '<b>Off.</b> Nothing is sent. The screens show their own figures, with no AI text.';
-    const s = (f.sample && f.sample[level]) || '';
-    const lead = level === 'docs' ? '<b>Basic.</b> What goes is '
-      : level === 'scrubbed' ? '<b>Enhanced.</b> What goes is '
-      : '<b>Full.</b> What goes is ';
-    return lead + s;
+    const key = level === 'docs' ? 'grounded' : level;   // RRAI's spelling of Basic
+    const masks = (window.RRAI && RRAI.masks) ? RRAI.masks(key) : key !== 'full';
+    let out = '<b>' + LEVEL_LABEL[level] + '.</b> ' + (masks
+      ? 'Company, account, item and person identifiers go as generic labels.'
+      : 'Identifiers go as they are, so an answer can name the company, account and person.');
+    const uuid = (activeDb() && activeDb().uuid) ? String(activeDb().uuid) : '';
+    const s = (window.RRAI && RRAI.samples && uuid) ? RRAI.samples(uuid)[f.key] : null;
+    const text = s && s.levels ? s.levels[key] : '';
+    const page = (s && s.page) || (window.RRAI && RRAI.SAMPLE_PAGES && RRAI.SAMPLE_PAGES[f.key]) || 'the page that uses it';
+    if (!text) return out + '<p class="sample-note">Open ' + esc(page) + ' on this database to see a real example.</p>';
+    let when = '';
+    try { when = new Date(s.at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }); } catch (_) {}
+    let note = 'A real example from this database, built by ' + esc(page) + (when ? ' at ' + esc(when) : '')
+      + '. RapidReconciler built it at every level so you can compare them. It is kept in this browser tab only and was not sent.';
+    if (key === 'full' && rankLvl(_maxLevel) < rankLvl('full')) {
+      note += ' <b>Your plan does not include Full, so nothing is ever sent at this level.</b> This only shows what Full would send.';
+    }
+    return out + '<p class="sample-note">' + note + '</p><pre>' + esc(text) + '</pre>';
   }
 
   // Where a save's outcome is shown and stays shown. A toast alone disappears, and a refusal (a level above the plan,
@@ -539,6 +596,10 @@
       _settings = (r && r.features) ? r.features : null;
       _canManage = !!(r && r.canManage);
       if (window.RRAI && RRAI.setFeatures && r && r.features) RRAI.setFeatures(dbn, r.features);
+      // UI-255: the call record is for whoever may see who set a level (VLC-235): this database's administrator and
+      // GSI staff. VALC checks again on the read; this only decides whether to offer the card.
+      const callsCard = $('js-calls-card');
+      if (callsCard) callsCard.hidden = !(r && r.features && (r.canManage || r.gsiStaff));
       if (_tierKnown && !_settings) {
         // Not transient: VALC answered with a plan but no settings, so either VALC predates VLC-234 or it could not
         // place this database inside the caller's rights. Reopening the page changes neither.
@@ -593,6 +654,72 @@
         setConn('red', 'Not connected', (e && e.message) ? e.message : 'The assistant didn’t respond.');
       })
       .then(function () { btn.disabled = false; btn.textContent = orig; });
+  }
+
+  // ---------- AI call record (UI-255) ----------
+  // VALC records every AI call on this database, answered or refused: who, when, which feature, at which level, how
+  // many characters, and what happened. Never the text: GSI does not store prompts. Read when the card is opened, so a
+  // page visit that never looks costs no query.
+  const OUTCOME = {
+    ok: 'Answered',
+    AI_FEATURE_OFF: 'Refused: feature turned off',
+    AI_LEVEL_EXCEEDS_FEATURE: 'Refused: above the feature’s level',
+    AI_LEVEL_EXCEEDS_PLAN: 'Refused: above the plan',
+    AI_NOT_IN_PLAN: 'Refused: AI is not in the plan',
+    AI_LEVEL_OFF: 'Refused: AI switched off',
+    AI_LEVEL_REQUIRED: 'Refused: page out of date',
+    AI_FEATURE_REQUIRED: 'Refused: page out of date',
+    UNKNOWN_AI_LEVEL: 'Refused: level not recognised',
+    UNKNOWN_AI_FEATURE: 'Refused: feature not recognised',
+    PROMPT_REQUIRED: 'Refused: nothing to send',
+    AI_TIMEOUT: 'Failed: the AI timed out',
+    AI_REQUEST_FAILED: 'Failed: the AI could not be reached',
+    AI_NOT_CONFIGURED: 'Failed: AI not switched on for this server'
+  };
+  function callLevel(l) {
+    const k = String(l || '').toLowerCase();
+    return LEVEL_LABEL[k === 'grounded' ? 'docs' : k] || (l ? String(l) : '—');
+  }
+  function callRow(c) {
+    let when = '';
+    try { when = new Date(c.at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); } catch (_) { when = c.at || ''; }
+    const feat = c.feature === 'connection-test' ? 'Connection test' : (c.featureName || c.feature || '—');
+    const chars = (Number(c.promptChars) || 0) + (Number(c.systemChars) || 0);
+    const out = OUTCOME[c.outcome] || String(c.outcome || '');
+    return '<tr><td>' + esc(when) + '</td><td>' + esc(c.user || 'VALC (no V8 sign-in)') + '</td><td>' + esc(feat)
+      + '</td><td>' + esc(callLevel(c.level)) + '</td><td class="num">' + esc(chars.toLocaleString('en-US'))
+      + '</td><td' + (c.outcome === 'ok' ? '' : ' class="is-refused"') + '>' + esc(out) + '</td></tr>';
+  }
+  let _callsSeq = 0;
+  function loadCalls() {
+    const uuid = (activeDb() && activeDb().uuid) ? String(activeDb().uuid) : '';
+    const days = ($('js-calls-days') && $('js-calls-days').value) || '30';
+    const msg = $('js-calls-msg'), table = $('js-calls-table'), rows = $('js-calls-rows'), count = $('js-calls-count');
+    const seq = ++_callsSeq;
+    msg.textContent = 'Loading…';
+    return rrFetch('api/v1/ai/calls', { query: { database: uuid, days: days } }).then(function (r) {
+      if (seq !== _callsSeq) return;
+      const list = (r && Array.isArray(r.calls)) ? r.calls : [];
+      const total = (r && r.total != null) ? Number(r.total) : list.length;
+      const window_ = (r && r.days) || Number(days);
+      count.textContent = total.toLocaleString('en-US') + ' call' + (total === 1 ? '' : 's') + ' · ' + window_ + ' days';
+      rows.innerHTML = list.map(callRow).join('');
+      table.hidden = !list.length;
+      msg.textContent = !list.length ? 'No AI calls on this database in this period.'
+        : (total > list.length ? 'Showing the newest ' + list.length.toLocaleString('en-US') + ' of ' + total.toLocaleString('en-US') + '.' : '')
+          + (r && r.retentionDays ? (total > list.length ? ' ' : '') + 'VALC keeps this record for ' + r.retentionDays + ' days.' : '');
+    }).catch(function (e) {
+      if (seq !== _callsSeq) return;
+      table.hidden = true; count.textContent = '';
+      msg.textContent = (e && e.status === 404)
+        ? 'This VALC does not keep an AI call record yet. It arrives with the next VALC update.'
+        : ((e && (e.serverMessage || e.message)) || 'The AI call record could not be read just now.');
+    });
+  }
+  function wireCalls() {
+    const card = $('js-calls-card'); if (!card) return;
+    card.addEventListener('toggle', function () { if (card.open) loadCalls(); });
+    const sel = $('js-calls-days'); if (sel) sel.addEventListener('change', loadCalls);
   }
 
   // ---------- review reminder (30/60/Never) ----------
@@ -678,6 +805,13 @@
 
     // Preview toggles + level changes
     $('js-feats').addEventListener('click', function (e) {
+      const tab = e.target.closest && e.target.closest('.js-sample-lvl');
+      if (tab) {   // UI-255: compare levels in the box; the select (the setting) is untouched
+        const trow = tab.closest('.feat');
+        const tf = FEATURES.find(x => x.key === trow.getAttribute('data-feat'));
+        trow.querySelector('.preview-box').innerHTML = previewText(tf, tab.getAttribute('data-l'));
+        return;
+      }
       const btn = e.target.closest && e.target.closest('.js-preview');
       if (!btn) return;
       const row = btn.closest('.feat'); const key = row.getAttribute('data-feat');
@@ -698,6 +832,7 @@
     });
 
     $('js-conn-test').addEventListener('click', testConnection);
+    wireCalls();
 
     // VLC-234: Save writes each CHANGED feature to VALC, one at a time, and stops at the first refusal so the page
     // never reports a partial save as a whole one. VALC's reply carries every feature's level after the write, and it

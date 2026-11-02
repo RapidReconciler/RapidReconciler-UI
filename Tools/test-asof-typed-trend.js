@@ -100,9 +100,10 @@ function load(page) {
     },
   };
   vm.createContext(sb);
-  const src = 'let _asofAiBusy = false;\nlet _asofLastAsk = null;' + cacheDecl(page) + '\n'
+  // UI-255: asofAsk also keeps the AI Assistant page's samples through asofKeepSample.
+  const src = 'let _asofAiBusy = false;\nlet _asofLastAsk = null;\nlet _asofSampleTier = null;' + cacheDecl(page) + '\n'
     + ['formatPeriod', 'curMoney', 'asofScrub', 'asofMasker', 'asofHistoryBlock', 'asofTrendPrompt', 'asofFreeTextPrompt', 'asofTrendData',
-       'asofAiExplain', 'asofAsk'].map((n) => extractFn(page, n)).join('\n')
+       'asofAiExplain', 'asofKeepSample', 'asofAsk'].map((n) => extractFn(page, n)).join('\n')
     + '\n' + extractFn(page, 'loadAsOfPeriodHistory', 'async function ')
     + '\n' + extractFn(page, 'loadAsOfValueBridge', 'async function ');
   vm.runInContext(src, sb, { filename: 'inventory-asof.html:ask' });
@@ -181,9 +182,9 @@ async function runCases(page) {
     await arm('the typed prompt leaves the history out', 'T1,T4,T5',
       PAGE.replace("      + history\n", ''));
     await arm('the typed box back on its old path (no history load)', 'T1,T4,T6,T7',
-      // VLC-234: the call now names its feature (Ask a question).
-      PAGE.replace("run = asofTrendData().then(({ hist, bridge }) => asofAiExplain(asofFreeTextPrompt(freeText, hist, bridge), 'ask'));",
-                   "run = asofAiExplain(asofFreeTextPrompt(freeText, [], []), 'ask');"));
+      // VLC-234: the call now names its feature (Ask a question). UI-255: the branch also keeps a sample.
+      PAGE.replace("run = asofTrendData().then(({ hist, bridge }) => {\n        const prompt = asofFreeTextPrompt(freeText, hist, bridge);",
+                   "run = Promise.resolve({ hist: [], bridge: [] }).then(({ hist, bridge }) => {\n        const prompt = asofFreeTextPrompt(freeText, hist, bridge);"));
     await arm('no cache: every question loads again', 'T3',
       PAGE.replace('    if (_asofTrendData && _asofTrendData.key === key) return _asofTrendData.promise;\n', ''));
     await arm('a failed load is cached', 'T6',

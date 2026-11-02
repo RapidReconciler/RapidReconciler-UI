@@ -93,6 +93,7 @@ function asofShows(e, mutate) {
   sb.asofEffTier = function () { return 'full'; };
   sb.asofAnswer = function (t, busy) { shown.push({ t: t, busy: busy }); };
   sb.asofAiExplain = function () { return Promise.reject(e); };
+  sb.asofKeepSample = function () {};   // UI-255: the AI Assistant page's samples; not what this test is about
   vm.runInContext(ASOF_SRC, sb);
   sb.asofAsk('calc');
   return new Promise(function (res) { setTimeout(function () { res(shown[shown.length - 1] || { t: '' }); }, 20); });

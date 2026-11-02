@@ -1216,6 +1216,10 @@
   .perp-amt-total .perp-amt-val { font-size: 14px; font-weight: 800; color: var(--navy); font-variant-numeric: tabular-nums; }
   .perp-opt-note { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 10px; padding: 9px 12px; background: var(--bg-soft); border: 1px solid var(--rule); border-left: 3px solid var(--blue); border-radius: 8px; font-size: 12.5px; line-height: 1.45; color: var(--text-soft); }
   .perp-opt-note[hidden] { display: none; }
+  /* UI-255: the note wraps so "What was sent" takes its own full-width line inside it. */
+  .perp-opt-note { flex-wrap: wrap; }
+  .perp-opt-note > span { flex: 1 1 0; min-width: 0; }
+  .perp-opt-note > .rrai-sent { flex: 1 0 100%; margin-top: 0; }
   .perp-opt-note .perp-opt-showall { margin-left: auto; flex-shrink: 0; background: none; border: 0; color: var(--blue); font: inherit; font-weight: 700; cursor: pointer; white-space: nowrap; }
   .perp-opt-note .perp-opt-showall:hover { text-decoration: underline; }
   .perp-grid-wrap { max-height: 460px; overflow: auto; border-top: 1px solid var(--rule); border-radius: 0 0 8px 8px; }
@@ -7113,7 +7117,9 @@
       if (opts.system) body.system = opts.system;
       return rrFetch(_aiExUrl, { method: 'POST', body: body }).then(function (r) {
         var txt = (r && r.text) ? String(r.text).trim() : '';
-        return txt ? { ok: true, text: txt }
+        // UI-255: `prompt` rides with the answer so its renderer can show what was sent for it
+        // (RRAI.showSent looks the posted body up by this exact string; nothing rebuilds it).
+        return txt ? { ok: true, text: txt, prompt: prompt }
                    : { ok: false, reason: 'error', why: 'The AI did not return a reading for this.' };
       }).catch(function (err) {
         // VLC-183: a slow answer says so. VLC-186: a plan refusal says why, in VALC's words.
@@ -8881,6 +8887,7 @@
   var _acctLastAsk = null;   // { q, trend } of the last pill/typed question — re-run on tier flip while its answer is showing
   var _acctConvo = null;     // { sig, q, a } — one prior Q&A turn for follow-up continuity; invalidated when the scope (DB · period · company set) changes so "it" never binds to a different company
   var _acctAnalyzeCache = {}; // key(co|period|db|tier) -> auto-analysis text, so re-drilling the same company doesn't re-hit the AI
+  var _acctAnalyzeSent = {};  // UI-255: same key -> the prompt posted for that text, so a re-drill still shows what was sent
   var _acctAnalyzeReq = null; // in-flight drill key — drop a stale response if the user drills elsewhere before it lands
   var _jeOffsets = {};        // key(db|co|account) -> offset account the accountant typed in the GL grid; assembles the self-clearing balancing entry
   // The DB segment is load-bearing: two installs routinely carry the SAME company
@@ -10543,6 +10550,31 @@
   // instruction is false — part of the balance IS rolling forward — so the clearing
   // claim is stated only when the entry actually clears, and the deferral is given to
   // the model as a fact when it doesn't.
+  // The offset entry's AI prompt at one level. Pure: the entry and the level in, the prompt out. UI-255 piece 2 runs it
+  // at every level for the AI Assistant page's examples, so it must stay free of side effects.
+  function _oeAiPrompt(e, tier) {
+    // Scrubbed ("Enhanced") means no real identifier reaches the model — the same
+    // Entity-letter transform the other grounded surfaces apply.
+    var label = RRAI.masks(tier) ? 'Entity A' : ('Co ' + e.co);
+    var comps = [['carry forward', e.comp.cf], ['transactions', e.comp.tx], ['manual entries', e.comp.je]]
+      .sort(function (x, y) { return Math.abs(y[1]) - Math.abs(x[1]); });
+    var parts = comps.filter(function (p) { return Math.abs(p[1]) >= 1; })
+      .map(function (p) { return p[0] + ' ' + _jeAmt(p[1]); }).join(', ');
+    var facts = label + ' (' + (e.ccy || '?') + '): net to clear ' + _jeAmt(e.net)
+      + '. Components: ' + (parts || 'none material') + '. Largest component: ' + comps[0][0] + '.'
+      + ' Accounts adjusted: ' + e.pairs.length + '.'
+      + (e.cfExcluded ? ' Carry-forward ' + _jeAmt(e.cfExcluded) + ' is EXCLUDED from this entry and rolls into the next period.' : '');
+    return (window.RRV8 && RRV8.ACCT_GROUNDING ? RRV8.ACCT_GROUNDING + '\n\n' : '')
+      + 'You are RapidReconciler AI. In ONE or TWO short sentences, summarize this period-end INVENTORY-to-GL adjusting entry for an accountant.\n'
+      + (e.cfExcluded
+          ? 'This entry does NOT clear the whole period: the carry-forward is deliberately excluded and rolls forward. Say what the entry covers, and that the carry-forward is being handled separately. Do NOT call this unfinished.\n'
+          : 'This entry CLEARS the period now by posting to the GL — do NOT describe carrying the balance forward to a future period.\n')
+      + 'Do NOT call it "intercompany" (these are inventory accounts).\n'
+      + 'If you state what the entry is mostly made of, use ONLY the "Largest component" value given — NEVER name a smaller component as the primary driver.\n'
+      + 'Facts (the ONLY facts you may use, verbatim and rounded):\n' + facts
+      + '\nRound amounts (e.g. "$18.5K"). One or two sentences means one line — do not break it into bullets.\n'
+      + (window.RRV8 && RRV8.AI_REGISTER ? RRV8.AI_REGISTER : '');
+  }
   function _oeAiSummary(e) {
     var el = $('oeAiSummary'); if (!el) return;
     var hide = function () { el.hidden = true; el.classList.remove('is-shown'); };
@@ -10555,27 +10587,9 @@
     // tier decision now belongs to aiExplain() alone -- one place decides, one
     // place renders. `tier` is still read below: it shapes the scrubbed label.
     var tag = '<span class="ws-ai-summary-tag"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 1.6l1.9 5.1a5 5 0 0 0 2.9 2.9l5.1 1.9-5.1 1.9a5 5 0 0 0-2.9 2.9L12 21.4l-1.9-5.1a5 5 0 0 0-2.9-2.9L2.1 11.5l5.1-1.9a5 5 0 0 0 2.9-2.9z"/></svg>RapidReconciler AI</span>';
-    // Scrubbed ("Enhanced") means no real identifier reaches the model — the same
-    // Entity-letter transform the other grounded surfaces apply.
-    var label = RRAI.masks(tier) ? 'Entity A' : ('Co ' + e.co);
-    var comps = [['carry forward', e.comp.cf], ['transactions', e.comp.tx], ['manual entries', e.comp.je]]
-      .sort(function (x, y) { return Math.abs(y[1]) - Math.abs(x[1]); });
-    var parts = comps.filter(function (p) { return Math.abs(p[1]) >= 1; })
-      .map(function (p) { return p[0] + ' ' + _jeAmt(p[1]); }).join(', ');
-    var facts = label + ' (' + (e.ccy || '?') + '): net to clear ' + _jeAmt(e.net)
-      + '. Components: ' + (parts || 'none material') + '. Largest component: ' + comps[0][0] + '.'
-      + ' Accounts adjusted: ' + e.pairs.length + '.'
-      + (e.cfExcluded ? ' Carry-forward ' + _jeAmt(e.cfExcluded) + ' is EXCLUDED from this entry and rolls into the next period.' : '');
-    var prompt = (window.RRV8 && RRV8.ACCT_GROUNDING ? RRV8.ACCT_GROUNDING + '\n\n' : '')
-      + 'You are RapidReconciler AI. In ONE or TWO short sentences, summarize this period-end INVENTORY-to-GL adjusting entry for an accountant.\n'
-      + (e.cfExcluded
-          ? 'This entry does NOT clear the whole period: the carry-forward is deliberately excluded and rolls forward. Say what the entry covers, and that the carry-forward is being handled separately. Do NOT call this unfinished.\n'
-          : 'This entry CLEARS the period now by posting to the GL — do NOT describe carrying the balance forward to a future period.\n')
-      + 'Do NOT call it "intercompany" (these are inventory accounts).\n'
-      + 'If you state what the entry is mostly made of, use ONLY the "Largest component" value given — NEVER name a smaller component as the primary driver.\n'
-      + 'Facts (the ONLY facts you may use, verbatim and rounded):\n' + facts
-      + '\nRound amounts (e.g. "$18.5K"). One or two sentences means one line — do not break it into bullets.\n'
-      + (window.RRV8 && RRV8.AI_REGISTER ? RRV8.AI_REGISTER : '');
+    var prompt = _oeAiPrompt(e, tier);
+    // UI-255 piece 2: the same builder at every level, kept for the AI Assistant page's examples. Built, never sent.
+    if (window.RRAI && RRAI.keepSample) RRAI.keepSample('drafting', RRAI.SAMPLE_PAGES.drafting, function (l) { return _oeAiPrompt(e, l); });
     el.hidden = false; el.classList.add('is-shown');
     el.innerHTML = tag + '<span class="ws-ai-summary-text">Reading the entry&hellip;</span>';
     // Stale-response guard: the carry-forward toggle can fire a second read before the
@@ -10589,6 +10603,7 @@
       if (seq !== _oeAiSeq) return;
       if (!r.ok) { _oeAiUnavailable(el, tag, r); return; }
       el.innerHTML = tag + '<span class="ws-ai-summary-text">' + esc(r.text) + '</span>';
+      RRAI.showSent(el, r.prompt);   // UI-255
     });
   }
   // The unavailable sink for the offset-entry strip. Owner ruling 2026-09-15:
@@ -10985,6 +11000,7 @@
       var rationale = txt.replace(/^\s*TARGET:.*$/im, '').trim();
       var lead = 'Hid ' + applied2.count.toLocaleString('en-US') + ' residual row' + (applied2.count !== 1 ? 's' : '') + ' · ' + _perpMoney(applied2.amount) + '. ';
       _perpShowOptNote(lead + (rationale || _perpOptPlainNote(applied2, opt)), true);
+      if (rationale) RRAI.showSent($('perpOptNote'), r.prompt);   // UI-255: only when the AI's words are on screen
       _renderPerpGrid();
     }).catch(function () {
       _perpShowOptNote(_perpOptPlainNote(_perpResidualSet(rows, _perpResidualTarget), opt), true);
@@ -14260,7 +14276,7 @@
       if (sig !== _analystLeadSig) return;
       clearTimeout(timed);
       bodyEl.classList.remove('is-thinking');
-      if (r.ok) { bodyEl.textContent = r.text; return; }
+      if (r.ok) { bodyEl.textContent = r.text; RRAI.showSent(bodyEl, r.prompt); return; }   // UI-255
       bodyEl.innerHTML = fallback
         + ' <span class="hai-unavailable">' + esc(r.why) + '</span>';
     });
@@ -15255,6 +15271,7 @@
     // shape the owner overruled.
     aiExplain(prompt, { feature: 'ask' }).then(function (r) {
       if (ans) ans.textContent = r.ok ? (r.text || 'No answer came back — try rephrasing.') : r.why;
+      if (ans && r.ok) RRAI.showSent(ans, r.prompt);   // UI-255
       _acctAsking = false;
     });
   }
@@ -16691,6 +16708,7 @@
     aiExplain(prompt, { feature: 'drafting' }).then(function (r) {
       if (!r.ok) { _oeAiUnavailable(el, tag, r); return; }
       el.innerHTML = tag + '<span class="ws-ai-summary-text">' + esc(r.text) + '</span>';
+      RRAI.showSent(el, r.prompt);   // UI-255
     });
   }
   // Money and Explanation for the P0911 Account-Distribution columns. Sign direction
@@ -18209,17 +18227,26 @@
       + '</span>';
     return pills;
   }
-  function _wlFillCauses(cases, exposure, sig, gen, canPost) {
-    if (exposure === 'off') return;   // AI-tier gate: Off = no AI cause narration (cards keep their deterministic content)
-    cases.forEach(function (c) {
+  // One company's worklist read at one level. Pure, so UI-255 piece 2 can run it at every level for the AI Assistant
+  // page's examples.
+  function _wlCausePrompt(c, exposure, canPost) {
       // Time-aware: a CLOSED (historical) period gets a "what happened" summary and
       // NO recommendation — there's nothing to act on. A CURRENT period gets the
       // situation read plus a clear "Recommended:" next step.
       var prompt = canPost
-        ? 'You are RapidReconciler AI giving an accountant a quick read on ONE company\'s inventory-to-GL reconciliation — a glance at the situation and the logical next step, before anyone tries to fix anything. Reply as TWO short sentences. Sentence 1: state whether the out-of-balance is material relative to the total GL balance, citing the rough %. Sentence 2 MUST begin with the literal word "Recommended:" and give the single logical next step — or exactly "Recommended: No action needed this period." when it is immaterial. If a "Process note" is present, you may fold its reassurance into the recommendation. Two sentences on two lines, neither bulleted. Do not restate the company name, do not tell them which button to click. Use ONLY these facts, verbatim and rounded:\n'
+        ?'You are RapidReconciler AI giving an accountant a quick read on ONE company\'s inventory-to-GL reconciliation — a glance at the situation and the logical next step, before anyone tries to fix anything. Reply as TWO short sentences. Sentence 1: state whether the out-of-balance is material relative to the total GL balance, citing the rough %. Sentence 2 MUST begin with the literal word "Recommended:" and give the single logical next step — or exactly "Recommended: No action needed this period." when it is immaterial. If a "Process note" is present, you may fold its reassurance into the recommendation. Two sentences on two lines, neither bulleted. Do not restate the company name, do not tell them which button to click. Use ONLY these facts, verbatim and rounded:\n'
         : 'You are RapidReconciler AI. This reconciliation period is CLOSED, so this is a record of what happened — NOT a to-do. In ONE or TWO short sentences, summarize how the company ended the period: the ending out-of-balance and whether it was material relative to the total GL balance (cite the rough %). Do NOT give a recommendation, next step, or the word "Recommended" — there is nothing to act on, and that OVERRIDES the instruction below to lead with what to do. Past tense, one or two sentences on one line, not bulleted. Do not restate the company name. Use ONLY these facts, verbatim and rounded:\n';
-      prompt = (window.RRV8 && RRV8.ACCT_GROUNDING ? RRV8.ACCT_GROUNDING + '\n\n' : '') + prompt + _wlCauseFacts(c, exposure)
+      return (window.RRV8 && RRV8.ACCT_GROUNDING ? RRV8.ACCT_GROUNDING + '\n\n' : '') + prompt + _wlCauseFacts(c, exposure)
         + (window.RRV8 && RRV8.AI_REGISTER ? '\n' + RRV8.AI_REGISTER : '');
+  }
+  function _wlFillCauses(cases, exposure, sig, gen, canPost) {
+    if (exposure === 'off') return;   // AI-tier gate: Off = no AI cause narration (cards keep their deterministic content)
+    // UI-255 piece 2: the first company's read at every level, kept for the AI Assistant page. Built, never sent.
+    if (cases.length && window.RRAI && RRAI.keepSample) {
+      RRAI.keepSample('summaries', RRAI.SAMPLE_PAGES.summaries, function (l) { return _wlCausePrompt(cases[0], l, canPost); });
+    }
+    cases.forEach(function (c) {
+      var prompt = _wlCausePrompt(c, exposure, canPost);
       // ?ctx= — one call fires PER COMPANY here, and none of them carried a
       // disambiguator. These prompts have no "Question:" line and no "DATA ACCESS"
       // line, so request-signature.js keys every one of them as the same
@@ -18246,10 +18273,12 @@
           return;
         }
         var txt = r.text;
-        _wlCauseCache[c.co] = { sig: sig, txt: txt };   // cached → survives repaints (the card rebuilds from this)
+        _wlCauseCache[c.co] = { sig: sig, txt: txt, prompt: r.prompt };   // cached → survives repaints (the card rebuilds from this)
         if (sig !== _wlCurSig) return;   // a newer render (different tier/period) owns the cards now
         var parts = _wlSplitRec(txt);
         var el = document.querySelector('[data-wl-cause="' + c.co + '"]');
+        // UI-255: in the box, beside the text the typing rewrites, so the reveal never wipes it.
+        if (el && el.closest) RRAI.showSent(el.closest('.wl-ai'), r.prompt);
         if (el) { if (gen === _wlGen) _wlType(el, parts.sit, gen); else el.textContent = parts.sit; }   // animate if current, else drop it in
         var rel = document.querySelector('[data-wl-rec="' + c.co + '"]');   // the clear recommendation line
         if (rel) { var rt = rel.querySelector('.wl-ai-rec-txt'); if (rt) rt.textContent = parts.rec; rel.hidden = !parts.rec; }
@@ -18570,6 +18599,13 @@
     // Collapse toggles, wired on the persistent grid host rather than the cards it
     // rebuilds. Self-guarded, so the repaint above cannot stack listeners.
     _wireCardCollapse(gridEl);
+    // UI-255: a card rebuilt from the cached AI read keeps what was sent for it.
+    Object.keys(_wlCauseCache).forEach(function (co) {
+      var cc = _wlCauseCache[co];
+      if (!cc || cc.sig !== wlSig || !cc.txt || !cc.prompt) return;
+      var t = gridEl.querySelector('[data-wl-cause="' + co + '"]');
+      if (t && t.closest) RRAI.showSent(t.closest('.wl-ai'), cc.prompt);
+    });
     // Fire the tier-governed AI cause for accountant-fixable cases not already
     // cached at this tier; the deterministic line shows until the AI types in.
     _wlGen++;
@@ -18952,6 +18988,7 @@
       var doc = _aiExtractDocs(r.text);   // pull + strip the @@DOCS@@ line first
       var txt = _acctRunAiAction(doc.text);   // execute + strip any @@ACTION ...@@ directive
       if (ans) ans.textContent = txt || 'No answer came back — try rephrasing.';
+      if (ans && txt) RRAI.showSent(ans, r.prompt);   // UI-255
       if (txt) _acctConvo = { sig: _sig, q: q, a: txt };   // remember this turn so the next question can be a follow-up
       _aiRenderDocStrip(ans && ans.parentNode, txt ? doc.slugs : [], 'acctDocStrip');
     }).then(function () {
@@ -18983,6 +19020,7 @@
     if (qEl) { qEl.textContent = 'Analysis — Co ' + co + (coName ? ' · ' + coName : ''); qEl.hidden = false; }
     if (_acctAnalyzeCache[key]) {                      // seen this drill → instant, no refetch
       if (ans) ans.textContent = _acctAnalyzeCache[key];
+      if (ans && _acctAnalyzeSent[key]) RRAI.showSent(ans, _acctAnalyzeSent[key]);   // UI-255
       _aiRenderDocStrip(ans && ans.parentNode, [], 'acctDocStrip');
       return;
     }
@@ -19061,6 +19099,8 @@
       if (txt) {
         if (ans) ans.textContent = txt;
         _acctAnalyzeCache[key] = txt;
+        _acctAnalyzeSent[key] = r.prompt;
+        if (ans) RRAI.showSent(ans, r.prompt);   // UI-255
         _acctConvo = { sig: _sig, q: 'Analyze Co ' + co + '\'s out-of-balance (account roll-forward)', a: txt };   // seed follow-up continuity
         _aiRenderDocStrip(ans && ans.parentNode, doc.slugs, 'acctDocStrip');
       }
@@ -19138,6 +19178,14 @@
     }
     if (ans) ans.textContent = 'Thinking…';
     var gen = ++_adminAskGen;
+    var prompt = _adminAskPrompt(q, tier);
+    // UI-255 piece 2: the same question at every level, kept for the AI Assistant page. Built, never sent.
+    if (window.RRAI && RRAI.keepSample) RRAI.keepSample('admin', RRAI.SAMPLE_PAGES.admin, function (l) { return _adminAskPrompt(q, l); });
+    _adminAskSend(prompt, gen, ans);
+  }
+  // The administrator's Ask-AI prompt for one question at one level. It reads the admin cards on screen and changes
+  // nothing, so UI-255 piece 2 can run it at every level.
+  function _adminAskPrompt(q, tier) {
     // Ground on the live admin cards (the SAME source the briefing rolls up) so
     // "what needs my attention", "is the instance healthy", etc. answer from real
     // status rather than guesses.
@@ -19229,6 +19277,9 @@
       + 'Question: ' + q + '\n'
       + 'Answer in 2-4 short, plain-English sentences — or up to 4 brief bullets, each starting with "• ", if the question asks for a list. Calm and factual, never alarmist. Answer how-to and procedure questions from the admin policy above, and any statement about current state ONLY from the status above; if the answer is in neither, say what you can see and where to look. No JDE table names, no SQL, no endpoint or file names, no preamble, no headings, no markdown, no asterisks, no bold.\n'
       + _aiDocCatalogPrompt('token', 'admin');
+    return prompt;
+  }
+  function _adminAskSend(prompt, gen, ans) {
     // VLC-63 increment 2. The tenth and last. `why` replaces the hand-written
     // catch message; it goes through the same type-reveal as a real answer, so an
     // unavailable reason reads as a reply to the pill the administrator clicked
@@ -19246,6 +19297,7 @@
       var finalTxt = txt || 'No answer came back — try rephrasing.';
       _aiTypeReveal(ans, finalTxt, function () { return gen === _adminAskGen; }, function () {
         _aiRenderDocStrip(ans && ans.parentNode, txt ? doc.slugs : [], 'adminAnsDocStrip');
+        if (txt) RRAI.showSent(ans, r.prompt);   // UI-255: after the reveal, which rewrites ans as it types
       });
     });
   }

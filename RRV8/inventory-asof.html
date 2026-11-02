@@ -732,6 +732,10 @@
   .fp-slider:focus-visible { box-shadow: 0 0 0 3px rgba(43,95,176,0.25); }
   .fp-opt-note { display: flex; align-items: flex-start; gap: 8px; margin-top: 12px; padding: 10px 12px; background: var(--bg-soft); border: 1px solid var(--rule); border-left: 3px solid var(--blue); border-radius: 8px; font-size: 12.5px; line-height: 1.45; color: var(--text-soft); }
   .fp-opt-note[hidden] { display: none; }
+  /* UI-255: the note wraps so "What was sent" takes its own full-width line inside it. */
+  .fp-opt-note { flex-wrap: wrap; }
+  .fp-opt-note > span { flex: 1 1 0; min-width: 0; }
+  .fp-opt-note > .rrai-sent { flex: 1 0 100%; margin-top: 0; }
   .fp-opt-note .fp-opt-showall { margin-left: auto; flex-shrink: 0; background: none; border: 0; color: var(--blue); font: inherit; font-weight: 700; cursor: pointer; white-space: nowrap; }
   .fp-opt-note .fp-opt-showall:hover { text-decoration: underline; }
   @media (max-width: 900px) { .fp-row { grid-template-columns: 1fr; } }
@@ -2489,7 +2493,18 @@
   // in every mode, and the same value is declared to VALC as the call's level.
   // VLC-234: `feature` is the call's (Ask a question for the ask box, Entry and report drafting for the optimizer),
   // so the administrator's level for that feature caps what this page sends and how it masks.
+  // UI-255 piece 2: while set, every builder on this page reads this level instead of the live one. Set only inside
+  // asofKeepSample, synchronously, around a build that sends nothing.
+  let _asofSampleTier = null;
+  function asofKeepSample(build) {
+    if (!(window.RRAI && RRAI.keepSample)) return;
+    RRAI.keepSample('ask', RRAI.SAMPLE_PAGES.ask, (l) => {
+      _asofSampleTier = l;
+      try { return build(); } finally { _asofSampleTier = null; }
+    });
+  }
   function asofEffTier(feature) {
+    if (_asofSampleTier) return _asofSampleTier === 'grounded' ? 'docs' : _asofSampleTier;
     try {
       if (window.RRAI && window.RRAI.get) {
         const g = window.RRAI.get(feature);
@@ -2628,7 +2643,11 @@
     const el = document.getElementById('asof-ai-answer'); if (!el) return;
     el.hidden = false; el.textContent = txt; el.classList.toggle('is-loading', !!loading);
   }
+  // UI-255: the prompt the current Ask posted, so its answer can show what was sent. Cleared at each Ask (one at a time:
+  // _asofAiBusy), so an answer that called no AI (no history) shows none.
+  let _asofSentPrompt = null;
   function asofAiExplain(prompt, feature) {
+    _asofSentPrompt = prompt;
     // Tier rides in the prompt's DATA ACCESS marker (dataAccessLine), NOT a `level`
     // body field. The entitled tier is enforced server-side from the JWT either way.
     //
@@ -2750,16 +2769,19 @@
       return;
     }
     _asofAiBusy = true;
+    _asofSentPrompt = null;
     asofAnswer('Thinking…', true);
     let run;
     if (kind === 'calc') {
       // Definitional — no page data needed; the model explains both parts.
-      const prompt = (window.RRV8 && RRV8.ASOF_GROUNDING ? RRV8.ASOF_GROUNDING + '\n\n' : '')
+      const buildCalc = () => (window.RRV8 && RRV8.ASOF_GROUNDING ? RRV8.ASOF_GROUNDING + '\n\n' : '')
         + 'You are RapidReconciler AI helping an analyst understand perpetual inventory.\n'
         + 'Explain how the perpetual inventory balance is established and maintained. Cover BOTH parts — the go-live opening baseline FIRST, then the ongoing transaction-by-transaction maintenance.\n'
         + (window.RRV8 && RRV8.dataAccessLine ? RRV8.dataAccessLine(asofEffTier('ask')) + '\n' : '')
         + 'Explain it as continuous prose, 3-5 sentences, not a list.\n'
         + (window.RRV8 && RRV8.AI_REGISTER ? RRV8.AI_REGISTER : '');
+      const prompt = buildCalc();
+      asofKeepSample(buildCalc);
       run = asofAiExplain(prompt, 'ask');
     } else if (kind === 'trend') {
       // Needs the cross-period series this page already loads for the trend read, and
@@ -2767,14 +2789,21 @@
       // period moved instead of asking the analyst to check.
       run = asofTrendData().then(({ hist, bridge }) => {
         if (!hist || !hist.length) return 'Period-over-period history isn’t available for this scope right now, so the trend can’t be summarized here.';
-        return asofAiExplain(asofTrendPrompt(hist, bridge), 'ask');
+        const prompt = asofTrendPrompt(hist, bridge);
+        asofKeepSample(() => asofTrendPrompt(hist, bridge));
+        return asofAiExplain(prompt, 'ask');
       });
     } else {
       // Free-text — the loaded scope's aggregates plus (UI-249) the period history.
-      run = asofTrendData().then(({ hist, bridge }) => asofAiExplain(asofFreeTextPrompt(freeText, hist, bridge), 'ask'));
+      run = asofTrendData().then(({ hist, bridge }) => {
+        const prompt = asofFreeTextPrompt(freeText, hist, bridge);
+        asofKeepSample(() => asofFreeTextPrompt(freeText, hist, bridge));
+        return asofAiExplain(prompt, 'ask');
+      });
     }
     run.then(txt => {
       asofAnswer(txt || 'No response — the AI service may be unavailable.', false);
+      if (txt && _asofSentPrompt && window.RRAI && RRAI.showSent) RRAI.showSent(document.getElementById('asof-ai-answer'), _asofSentPrompt);
     }).catch(err => {
       // VLC-183: a slow answer says so; anything else keeps the old wording.
       asofAnswer((window.RRV8 && RRV8.aiTimeout && RRV8.aiTimeout(err)) || (window.RRV8 && RRV8.aiRefusal && RRV8.aiRefusal(err))
@@ -3008,6 +3037,8 @@ function updateLotDetailPill() {
       const rationale = txt.replace(/^\s*TARGET:.*$/im, '').trim();
       const lead = 'Hid ' + (_residualStats.count || 0).toLocaleString('en-US') + ' residual row' + ((_residualStats.count || 0) !== 1 ? 's' : '') + '. ';
       _fpShowNote(lead + (rationale || _fpPlainNote(opt)), true);
+      // UI-255: only when the AI's words are on screen.
+      if (rationale && window.RRAI && RRAI.showSent) RRAI.showSent(document.getElementById('fp-opt-note'), prompt);
     }).catch(() => { _fpShowNote(_fpPlainNote(opt), true); })
       .then(() => { _fpOptRunning = false; _fpSyncOptBtn(); });
   }
