@@ -122,7 +122,8 @@ function load(html, config) {
   const src = [
     extractVarFn(html, '_money'),
     'var _acctTxvCache = null;',
-    ...['fmtPeriod', '_ccySym', '_coOf', '_txScope', '_txModuleOf', '_acctTxvRows', '_acctTxvFactLines', '_acctPeriodsOf', 'askAcct']
+    'var _txAllInflight = {};',   // UI-256: _acctTxvRows reads through _txFetchAll
+    ...['fmtPeriod', '_ccySym', '_coOf', '_txScope', '_txModuleOf', '_txFetchAll', '_acctTxvRows', '_acctTxvFactLines', '_acctPeriodsOf', 'askAcct']
       .map((n) => extractFn(html, n)),
   ].join('\n');
   vm.runInContext(src, sb, { filename: 'home.html:acct-ask' });
