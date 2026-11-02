@@ -84,6 +84,10 @@ to *remember state across periods, post, or run a schedule* is JDE's job, not RR
   (Owner ruling 2026-08-20, raised to a platform-wide definition of "current";
   authored once as `_core.md` INV-5 and composed into every generated catalog.)
 - (Wired: `MAT_OOB_FLOOR=100`, `DORMANT_GL_FLOOR=1000` in `home.html`; UI-17.)
+- **Every amount in this section is in the company's own currency.** The code compares the raw amount, whatever
+  the currency, so a GBP company's floor is £100 and its dormant line £1,000. This section and the grounding wrote
+  them as `$`, which told the AI to judge a GBP company in dollars. [Clarified 2026-11-02, UI-260. The values
+  are unchanged.]
 
 ## 2. The variance components — what the accountant owns vs. doesn't
 The out-of-balance decomposes into components. **Only some are the accountant's to
@@ -168,7 +172,8 @@ correction 2026-06-09).
 A large carry-forward is the prior period's unresolved balance rolling in. Options:
 - **Book it now** — one adjusting entry this period.
 - **Absorb over N periods** — when the carry-forward is **> 25% of the company's GL
-  balance OR > $50,000** (whichever hits first) [OWNER — set 2026-07-07,
+  balance OR > 50,000 in its own currency** (whichever hits first; the code compares the raw amount,
+  `_wlAmortFact`, so a GBP company triggers at £50,000) [OWNER — set 2026-07-07,
   **re-confirmed current 2026-08-27**], the accountant may spread it over
   **about 6 periods** (default N) rather than take it all at once, to avoid a lumpy P&L
   hit. [OWNER — N=6 set 2026-07-07, **re-confirmed current 2026-08-27**.] Both figures
@@ -182,6 +187,18 @@ remaining balance, or auto-generate future entries — the **schedule lives in J
 no split-builder, no deferral account, no schedule — UI-20.)*
 
 ## 5. The adjusting entry — mechanics
+- ⚠ **THERE ARE TWO ENTRY BUILDERS, AND THIS SECTION DESCRIBES ONLY ONE.** Measured 2026-11-02 (UI-260). The
+  **Adjusting Entry** (Accounts tab, `openOffsetEntry`) is what the bullets below describe: a real offset per
+  account, no clearing account. The **Balancing Entry** (the company's card on Overview, `openJeModal`) is the
+  other: one line per account plus ONE `Clearing Account` line for the net residual, needing no offsets entered.
+  The owner restored it on 2026-08-19 after UI-21 had folded it into the Accounts tab ("clicking an action on a
+  card and being navigated somewhere else reads as losing your place"); the comment at the `data-acct-nav`
+  handler in `home.html` records the two assemblers and that reconciling them is deferred. The 2026-08-27 note
+  below that "there is no single-clearing-account path in the product" was written after that restoration and is
+  wrong for the Balancing Entry. Both builders use only the accountant-owned components (carry forward,
+  transactions, manual entries), never the timing. The Balancing Entry also does NOT use the $100 floor this
+  section calls the only one: `openJeModal` admits any account whose net is at least `0.005`. Which floor it
+  should use is an owner decision, not made here.
 - One offset account **per inventory account**, entered on the grid — no generic
   clearing account (self-clearing, correctly classified).
 - **Per-line offsets are already MANDATORY in the shipped product, and they gate the
