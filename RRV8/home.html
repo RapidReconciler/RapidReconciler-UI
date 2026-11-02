@@ -11857,7 +11857,7 @@
         },
         groupingType: 'NONE', exclusions: { types: [], orderTypes: [], subTypes: [], docTypes: [] }, cacheKey: null
       };
-      return rrFetch('inventory/transactions', { method: 'POST', body: body });
+      return _txFetchAll(body);   // UI-256: shares a read already in flight
     }).then(function (resp) {
       if (_txVarReqKey !== key) return;   // a later scope/DB switch superseded this fetch
       var _rows = _txScope((resp && resp.data) || [], companies);   // UI-75 — company-scoped BEFORE anything buckets or counts it
@@ -12260,6 +12260,25 @@
     };
   }
 
+  // UI-256: ONE in-flight /inventory/transactions read per database and identical body. The
+  // every-period read costs SQL ~5 s of CPU, and its three Home readers (the variance chart,
+  // the Transaction Variance tab, the account Ask) each kept a cache filled only when THEIR
+  // response landed, so every reader that asked while a read was still out sent its own copy.
+  // Measured on Demo1's agent log: 2026-10-30 had 6 identical reads in 4 s (5,190 rows each),
+  // and on 2026-11-01 two together took 26 s and 33 s of SQL elapsed for ~5 s of CPU each.
+  // The entry clears when the read settles, so this never serves a stale answer: the readers'
+  // own caches still decide when to read again.
+  var _txAllInflight = {};
+  function _txFetchAll(body) {
+    var k = ((activeDb() && activeDb().n) || '') + '|' + JSON.stringify(body);
+    if (_txAllInflight[k]) return _txAllInflight[k];
+    var p = rrFetch('inventory/transactions', { method: 'POST', body: body });
+    _txAllInflight[k] = p;
+    var clear = function () { if (_txAllInflight[k] === p) delete _txAllInflight[k]; };
+    p.then(clear, clear);
+    return p;
+  }
+
   // Raw residual rows for the scoped company — reuse the shared tx-var cache the
   // top chart fills; fetch once if the tab is opened before the chart populates.
   function _txvRows(companies) {
@@ -12268,11 +12287,11 @@
     return rrFetch('inventory/status').then(function (status) {
       var rf = (status && status.reconciliationFilter) || {};
       var arr = function (x) { return Array.isArray(x) ? x : []; };
-      return rrFetch('inventory/transactions', { method: 'POST', body: {
+      return _txFetchAll({   // UI-256: shares a read already in flight
         take: 100000, skip: 0, page: 1, pageSize: 100000,
         reconciliationFilter: { currencies: arr(rf.currencies), companies: companies.length ? companies : arr(rf.companies), businessUnits: arr(rf.businessUnits), objects: arr(rf.objects), subsidiaries: arr(rf.subsidiaries), period: null },
         groupingType: 'NONE', exclusions: { types: [], orderTypes: [], subTypes: [], docTypes: [] }, cacheKey: null
-      } });
+      });
     }).then(function (resp) {
       var rows = _txScope((resp && resp.data) || [], companies);   // UI-75 — same narrowing as the other writer, so both fill the cache with the same population
       var b = _txVarBucket(rows);
@@ -18668,7 +18687,7 @@
       reconciliationFilter: { currencies: [], companies: [], businessUnits: [], objects: [], subsidiaries: [], period: null },
       groupingType: 'NONE', exclusions: { types: [], orderTypes: [], subTypes: [], docTypes: [] }, cacheKey: null
     };
-    return rrFetch('inventory/transactions', { method: 'POST', body: body }).then(function (resp) {
+    return _txFetchAll(body).then(function (resp) {   // UI-256: shares a read already in flight
       var rows = (resp && resp.data) || [];
       if ((activeDb() && activeDb().n || '') === key) _acctTxvCache = { key: key, rows: rows };
       return rows;
