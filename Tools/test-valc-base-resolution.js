@@ -493,7 +493,9 @@ const GUARD = 'if (!base) return Promise.reject(window.RRDB.valcGap(area));';
  * new about the guard. It now asserts what its label says: every rrFetch copy that
  * ROUTES TO VALC (`_routesToValc(area)`) carries the guard, and the guarded set is
  * exactly that set. The floor keeps a scan that found nothing from passing. */
-const GUARD_FLOOR = 15;
+// 14 since 2026-11-02: there were 16, and UI-261 deleted admin-data-service.html and
+// inventory-variance-source.html, one guarded copy each.
+const GUARD_FLOOR = 14;
 const rrv8Files = scanFiles.filter(f => path.relative(ROOT, f).replace(/\\/g, '/').indexOf('RRV8/') === 0);
 const valcRouted = rrv8Files
   .filter(f => { const t = fs.readFileSync(f, 'utf8'); return t.indexOf('function rrFetch(') !== -1 && t.indexOf('_routesToValc(area)') !== -1; })

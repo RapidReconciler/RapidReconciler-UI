@@ -252,7 +252,7 @@ def page_admin_gate(toks):
       adminGateOpen()  defined and called   -- admin-users.html:956 / :980,
                                                 admin-companies.html:619 / :980
       admClaim() inline in the boot path    -- admin-complex-passwords.html:522,
-        + haltPage('js-halt-claim')            admin-data-service.html:380
+        + haltPage('js-halt-claim')            admin-activity-log.html:368
 
     Either way the page "issues no calls at all" for a non-admin
     (admin-users.html:955). So the test is: the page reads the admin claim

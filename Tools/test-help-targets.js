@@ -30,7 +30,8 @@ const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8').replace(/\r\n/g,
 
 const pages = fs.readdirSync(path.join(ROOT, 'RRV8')).filter((f) => f.endsWith('.html'))
   .filter((f) => /\sdata-help-src="/.test(read('RRV8/' + f))).map((f) => 'RRV8/' + f);
-if (pages.length < 19) { console.log('HARNESS BROKEN: found ' + pages.length + ' pages with data-help-src, expected at least 19'); process.exit(1); }
+// 19 when UI-259 shipped; 17 since UI-261 deleted the Report Engine and Variance Source pages.
+if (pages.length < 17) { console.log('HARNESS BROKEN: found ' + pages.length + ' pages with data-help-src, expected at least 17'); process.exit(1); }
 
 let failures = 0;
 function check(name, ok, detail) {
@@ -70,17 +71,11 @@ const CONTENT = [
       ...all(h, /class="tab-pill[^"]*"[^>]*data-tab="[^"]+"[^>]*>\s*([A-Za-z][A-Za-z ]+?)\s*</g),
     ],
     forbid: [] },
-  { page: 'RRV8/inventory-variance-source.html', was: '../RRUniversity/getting-started-with-rapidreconciler.html',
-    labels: (h) => [...all(h, /class="fact-k"[^>]*>([^<]+)</g), one(h, /id="js-export"[^>]*>[\s\S]*?([A-Z][a-z]+)\s*<\/button>/, 'Export'),
-      one(h, /id="js-search"[^>]*placeholder="([^"]+)"/, 'Filter rows placeholder')],
-    forbid: ['Module Status Bar', 'Main Navigation Bar', 'status light'] },
   { page: 'RRV8/admin-activity-log.html', was: '../RRUniversity/administrator-start-here.html#system-health',
     heading: /Activity Log/,
     labels: (h) => [one(h, /class="card-title"[^>]*>(Recent events)</, 'Recent events'),
       ...all(one(h, /(<table class="log"[\s\S]*?<\/thead>)/, 'log table head'), /<th[^>]*>([^<]+)</g)],
     forbid: [] },
-  { page: 'RRV8/admin-data-service.html', was: '../RRUniversity/administrator-start-here.html#system-health',
-    heading: /Report Engine/, labels: (h) => [h1(h), one(h, /(about 30 seconds)/, 'restart time')], forbid: ['a few seconds'] },
   { page: 'RRV8/admin-troubleshooting.html', was: '../RRUniversity/administrator-start-here.html#system-health',
     heading: /Troubleshooting/, labels: (h) => [one(h, /id="js-download"[^>]*>([^<]+)</, 'Download diagnostics')], forbid: [] },
   { page: 'RRV8/admin-purge-data.html', was: '../RRUniversity/administrator-start-here.html#data',

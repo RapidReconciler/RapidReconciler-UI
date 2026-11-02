@@ -109,8 +109,9 @@ function s2(srcs) {
           !/RRDB\.responseError\(r, /.test(body)) missing.push(f + ':' + src.slice(0, m.index).split('\n').length);
     }
   }
-  // 18 pages, 19 functions on 2026-10-05. A floor, so a page added later still counts.
-  if (copies < 19) return 'found ' + copies + ' rrFetch copies, expected at least 19 (did the scan break?)';
+  // 18 pages, 19 functions on 2026-10-05. A floor, so a page added later still counts. 17 since 2026-11-02:
+  // UI-261 deleted admin-data-service.html and inventory-variance-source.html, one copy each.
+  if (copies < 17) return 'found ' + copies + ' rrFetch copies, expected at least 17 (did the scan break?)';
   if (missing.length) return 'rrFetch copies that never read X-Request-Id: ' + missing.join(', ');
   const reader = functionBody(srcs.config, srcs.config.indexOf('  function responseError(r, url) {'), 'config.js responseError');
   if (!/r\.headers\.get\('X-Request-Id'\)/.test(reader) || !/e\.requestId = rid/.test(reader)) return 'config.js RRDB.responseError does not carry the request id';

@@ -79,8 +79,8 @@ re-litigated because nobody finds them. They are normative.
 never the all-clear. If the server returned nothing, returned `unknown`, or
 returned a value this build does not recognise, the indicator makes no claim and
 the tooltip says it was not checked. `accounting-dmaais.html` does this correctly
-by hiding the badge and logging. `inventory-variance-source.html` does it
-correctly with neutral grey and body text that separates "could not read" from
+by hiding the badge and logging. `inventory-variance-source.html` (deleted
+2026-11-02, UI-261) did it correctly with neutral grey and body text that separated "could not read" from
 "nothing to reconcile".
 
 Silence reading as the all-clear is the dangerous direction of this error. A
