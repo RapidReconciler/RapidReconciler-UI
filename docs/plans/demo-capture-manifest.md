@@ -126,7 +126,7 @@ period chart, click through to a work page, ask the AI.
 | `inventory-account-rollforward.html` | `inventory/integrity` (`v6ui_raccountsummary`); `admin/activity` | R |
 | `accounting-model-review.html` | `inventory/status`; `inventory/integrity`; `inventory/integrity/model-baseline`; `inventory/integrity/model-approval` (W on approve); `api/v1/ai/explain` | R + W |
 | `accounting-dmaais.html` | `inventory/integrity` (`v_integrity1_aai_base`, `v_integrity3_exc_glc`); `inventory/integrity/aai-analysis-latest`; `inventory/integrity/aai-responses`; `inventory/integrity/aai-save-responses` (W); `inventory/integrity/model-approval` | R + W |
-| `inventory-variance-source.html` | `inventory/status`; `inventory/integrity`; `inventory/variance-component`; `inventory/reconciliation/history`; `reconciliation` | R |
+| `inventory-variance-source.html` (deleted 2026-11-02, UI-261) | `inventory/status`; `inventory/integrity`; `inventory/variance-component`; `inventory/reconciliation/history`; `reconciliation` | R |
 
 ### Key presenter drills (the interactions coverage must include)
 
@@ -229,7 +229,7 @@ the recording with zero MISS in the overlay.
 | 1 Golden Harvest core | inventory-account-rollforward | roll-forward drill | pending |
 | 1 Golden Harvest core | accounting-model-review | GL-Class View, approve, AI | pending |
 | 1 Golden Harvest core | accounting-dmaais | aai-responses, save-responses | pending |
-| 1 Golden Harvest core | inventory-variance-source | variance-component, history | pending |
+| 1 Golden Harvest core | inventory-variance-source | variance-component, history | dropped: page deleted 2026-11-02 (UI-261) |
 | 2 Golden Harvest depth | all read surfaces, periods 3-16 | period switch, AI briefings | pending |
 | 3 Accountant company | home + accountant/reconciliation screens | accountant hand-off | pending |
 | 4 Demo1 breadth | all screens | all drills | pending |

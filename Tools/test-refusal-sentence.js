@@ -247,7 +247,8 @@ function r5(srcs) {
       if (/new Error\(\s*'HTTP '/.test(body) || /' on ' \+ (url|area)/.test(body)) bad.push(f + ':' + line + ' still builds its own HTTP message');
     }
   }
-  if (copies < 20) return 'found ' + copies + ' copies, expected at least 20 (did the scan break?)';
+  // 18 since 2026-11-02: UI-261 deleted admin-data-service.html and inventory-variance-source.html, one copy each.
+  if (copies < 18) return 'found ' + copies + ' copies, expected at least 18 (did the scan break?)';
   return bad.length ? bad.join('; ') : null;
 }
 

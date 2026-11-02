@@ -95,7 +95,7 @@
  * `.msgcenter` and `.ihs-chip` on home.html (an empty message band, and all three
  * instance-health chips unable to hide -- the strip around them had a guard and the chips
  * did not), `.grid-pill` on inventory-transactions.html, and `.fact-who` on
- * inventory-variance-source.html.
+ * inventory-variance-source.html (deleted 2026-11-02, UI-261).
  *
  * CONTROL, run last, because a test that passes on everything proves nothing: deleting
  * the `.je-vcode[hidden]` guard from home.html makes this file exit 1 and name BOTH

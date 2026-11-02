@@ -660,7 +660,9 @@ with `{ "database": "<active db name>" }`):
 - Home's Report Engine card (`home.html`, behind an explain-first confirm).
 - Home's export-stall advisory (UI-179), offered to anyone who can restart
   (`canRestartService()`: admin, or `perms.rs === true`).
-- The Report Engine admin page (`admin-data-service.html`).
+
+The Report Engine admin page (`admin-data-service.html`) was a third caller. Nothing
+had linked to it since #302, and it was deleted on 2026-11-02 (UI-261).
 
 **What VALC does** (`TenantController.restart` &rarr; `AdminServicesController.restartRow`):
 

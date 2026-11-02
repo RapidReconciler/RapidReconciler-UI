@@ -12,7 +12,8 @@
    2026-08-07 when a fourth page needed it.
 
    Consolidated 2026-08-08 (UI-70): all three pages now load this file and their
-   inline copies are gone. Two of the three were byte-equivalent to this one;
+   inline copies are gone. (inventory-variance-source.html was deleted
+   2026-11-02, UI-261.) Two of the three were byte-equivalent to this one;
    home.html's had drifted, missing the per-column `fmt` override, so its exports
    silently forced every numeric column to 2dp. Any page needing an audit-quality
    workbook loads this file — do not paste a fourth copy.
