@@ -108,6 +108,9 @@ function load(html, config) {
     $: () => null,
     _briefScope: () => ({ period: '2025-07-31' }),
     _acctFactLines: () => ['Co 90002 (USD): net out-of-balance $1,000.00, components: Transactions $1,000.00'],
+    // UI-257: askAcct also sends the accounts on Full / Enhanced; test-acct-ask-accounts.js runs the real builder.
+    _acctAccountFactLines: () => ['Accounts by company for Jul 31, 2025 (the Accounts tab).'],
+    _acctNames: null,
     _acctTrendFacts: () => [],
     _aiDocCatalogPrompt: () => '',
     _aiRenderDocStrip() {},
