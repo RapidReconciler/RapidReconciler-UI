@@ -15,6 +15,9 @@
  *   A5  more than ACCT_ASK_TOP out-of-balance accounts: the rest are summarised with their net
  *   M1  Enhanced (scrub): no company or account number and no account name; "Entity A", "Account 1"
  *   C1  CONTROL: a company with every account in balance says so, and one with no rows says that
+ *   S1-S3  UI-258: with the header focused on one company the Scope line names it (masked on Enhanced); on
+ *          Overview it names none
+ *   K1  UI-258: two currencies get a Currencies line; K2 CONTROL: one currency gets none
  *
  * MUTATION: the builder's materiality filter removed (every account listed). A2 must go red; A3-A5, which do not
  * rest on the floor, must stay green.
@@ -116,6 +119,17 @@ function run(home) {
     !/9000[28]|9123456|9123457|Raw Materials/.test(masked) && /Entity A: 3 of 4/.test(masked) && /• Account 1: out of balance/.test(masked), masked);
   check('C1', 'CONTROL: all in balance says so; no rows says that',
     /Co 90008: all 1 accounts in balance\./.test(full) && /Co 90009: no accounts loaded for this period\./.test(full), full);
+  // UI-258: scope and currency (owner 2026-11-02, "Fix the wording").
+  const focus = sb._acctAccountFactLines(D, false, ROWS, NAMES, '90008').join('\n');
+  check('S1', 'a focused header: the Scope line names it and asks the answer to flag accounts outside it',
+    /Scope: these are the accounts of all 3 companies in view\. The page header is showing Co 90008 only, so when you name an account of another company, say that it is outside Co 90008\./.test(focus), focus);
+  const focusM = sb._acctAccountFactLines(D, true, ROWS, NAMES, '90008').join('\n');
+  check('S2', 'masked: the Scope line uses the entity label, not the number', /header is showing Entity B only/.test(focusM) && !/9000[289]/.test(focusM), focusM);
+  check('S3', 'no focus (Overview): Scope says all companies, names none', /Scope: these are the accounts of all 3 companies in view\.\n/.test(full + '\n') && !/header is showing/.test(full), full);
+  const mixed = sb._acctAccountFactLines({ viewedPeriod: PE, companies: [{ co: '90002', ccy: 'USD' }, { co: '90008', ccy: 'GBP' }] }, false, ROWS, NAMES).join('\n');
+  check('K1', 'two currencies: the Currencies line names both and forbids an unlabelled ranking',
+    /Currencies: these companies report in USD, GBP\. Keep each amount's own currency symbol, and never rank or compare amounts in different currencies without naming both currencies\./.test(mixed), mixed);
+  check('K2', 'CONTROL: one currency, no Currencies line', !/Currencies:/.test(full), full);
   return reds.slice();
 }
 
@@ -130,6 +144,14 @@ const m = run(off);
 // staying green is what shows the harness is not simply failing everything.
 const caught = m.includes('A2') && ['A3', 'A4', 'A5'].every((id) => !m.includes(id));
 console.log('  ' + (caught ? 'ok  ' : 'FAIL') + '  mutation caught by ' + JSON.stringify(m));
-const pass = real.length === 0 && caught;
+// UI-258's lines: the Currencies line removed must turn K1 red and leave S1-S3 green.
+const CCY = "    if (ccys.length > 1) lines.push(";
+const noCcy = HOME.replace(CCY, '    if (false) lines.push(');
+if (noCcy === HOME) broken('currency mutation did not apply');
+console.log('\nMutation: the Currencies line removed (K1 must go red; S1-S3 stay green)');
+const m2 = run(noCcy);
+const caught2 = m2.includes('K1') && ['S1', 'S2', 'S3', 'K2'].every((id) => !m2.includes(id));
+console.log('  ' + (caught2 ? 'ok  ' : 'FAIL') + '  currency mutation caught by ' + JSON.stringify(m2));
+const pass = real.length === 0 && caught && caught2;
 console.log('\n' + (pass ? 'PASS' : 'FAIL') + (real.length ? ': real case(s) red ' + real.join(',') : ''));
 process.exit(pass ? 0 : 1);
