@@ -20,10 +20,17 @@
  *   T5  clicking the "?" opens the panel on the As-Of section of the inventory guide
  *   T6  with no company resolved, the band's two label writers agree on "Not resolved" (the live probe for this
  *       row found updateCompanyPill() overwriting it with "All companies"; its own arm reddens T6)
+ *   T7  the guide the click opens describes THIS page: it names every control label read out of the page's own
+ *       markup, and none of V7's As-Of screen
  *
- * TWO MUTATION CONTROLS: renderAsOfHero writing #fp-scope itself (the UI-250 shape; must redden T2, T3 and T5,
- * since the deleted "?" can no longer be clicked), and
- * the band without [data-help-host] (the "?" falls back to floating; must redden T1, T2 and T3).
+ * T7 EXISTS BECAUSE T5 PASSED ON THE WRONG GUIDE. Until 2026-11-02 T5 compared the panel's src to a constant this
+ * file declared, and the constant was the V7 inventory guide. The owner's look found the panel open on V7's
+ * Reconciliation page and V7's As-Of screen. A src check only proves the panel opened where the author expected,
+ * so T7 reads the file the click actually points at.
+ *
+ * THREE MUTATION CONTROLS: renderAsOfHero writing #fp-scope itself (the UI-250 shape; must redden T2, T3, T5 and
+ * T7, since the deleted "?" can no longer be clicked), the band without [data-help-host] (the "?" falls back to
+ * floating; must redden T1, T2 and T3), and the page pointing back at the V7 guide (must redden T5 and T7).
  */
 'use strict';
 const fs = require('fs');
@@ -34,7 +41,34 @@ const ROOT = path.join(__dirname, '..');
 const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8').replace(/\r\n/g, '\n');
 const SIDEBAR = read('Tools/help-sidebar.js');
 const PAGE = read('RRV8/inventory-asof.html');
-const DOC_SRC = '../RRUniversity/inventory-reconciliation.html?embed=1#reference';
+const DOC_SRC = '../RRUniversity/inventory-full-perpetual-details.html?embed=1';
+
+// T7's yardstick, read from the page so a renamed control fails here instead of leaving the guide stale: the
+// three report buttons, the AI card's title and chips, the residual card's title, and the grid's own controls.
+const pageLabels = (html) => {
+  const out = [];
+  const grab = (re) => { const m = html.match(re); if (!m) { console.log('HARNESS BROKEN: label not found: ' + re); process.exit(1); } out.push(m[1].trim()); };
+  grab(/id="js-uom-conv-btn"[\s\S]*?<span>([^<]+)<\/span>/);
+  grab(/id="js-analyze-frozen-cost-btn"[\s\S]*?<span>([^<]+)<\/span>/);
+  grab(/id="js-analyze-gl-class-btn"[\s\S]*?<span>([^<]+)<\/span>/);
+  grab(/class="asof-ai-hero-title">([^<]+)</);
+  for (const m of html.matchAll(/class="asof-ai-chip" data-asof-ask="[a-z]+">([^<]+)</g)) out.push(m[1].trim());
+  grab(/class="fp-opt-title">([^<]+)</);
+  grab(/id="lot-detail-pill"[\s\S]*?<span>([^<]+)<\/span>\s*<\/button>/);
+  grab(/id="grid-export-btn"[\s\S]*?<span>([^<]+)<\/span>/);
+  grab(/id="col-pill-label">([^<]+)</);
+  return out;
+};
+// V7's As-Of and Reconciliation screens, as the V7 guide names them. None of these is on the V8 page.
+const V7_ONLY = ['Daily As-Of', 'Filtered Totals', 'Common UOM', 'Summarize by Item', 'status light', 'Drill Down'];
+// What the panel shows: the file its frame points at, resolved from RRV8/ the way the browser resolves it.
+function guideText(src) {
+  if (!src) return '';
+  const rel = src.replace(/[?#].*$/, '');
+  const file = path.join(ROOT, 'RRV8', rel);
+  if (!fs.existsSync(file)) return '';
+  return fs.readFileSync(file, 'utf8').replace(/&rsquo;/g, '’').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+}
 
 if (SIDEBAR.indexOf("document.querySelector('[data-help-host]')") < 0) {
   console.log('HARNESS BROKEN: help-sidebar.js no longer looks for [data-help-host]'); process.exit(1);
@@ -165,7 +199,12 @@ function runCases(sidebarSrc, pageHtml) {
   check('T2 the band repaint keeps the ?', r.afterOne, 1);
   check('T3 a second repaint keeps the ?', r.afterTwo, 1);
   check('T4 the repaint still writes the band fields', /Database/.test(r.painted) && /Co 80002/.test(r.painted), true);
-  check('T5 the ? opens the panel on the As-Of guide', r.opened, { panel: true, src: DOC_SRC });
+  check('T5 the ? opens the panel on the Full Perpetual Details guide', r.opened, { panel: true, src: DOC_SRC });
+  const text = guideText(r.opened && r.opened.src);
+  const missing = pageLabels(pageHtml).filter((l) => text.indexOf(l) < 0);
+  const v7 = V7_ONLY.filter((t) => text.toLowerCase().indexOf(t.toLowerCase()) >= 0);
+  check('T7 the opened guide names this page\'s controls and none of V7\'s', { opened: text.length > 0, missing, v7 },
+    { opened: true, missing: [], v7: [] });
   return reds.slice();
 }
 
@@ -185,10 +224,13 @@ function arm(label, want, pageHtml) {
   console.log('  ' + (ok ? 'ok  ' : 'FAIL') + '  arm reddened ' + (got.join(',') || 'nothing') + '; needed ' + want);
 }
 if (shippedFailures === 0) {
-  arm('renderAsOfHero writes #fp-scope itself (the UI-250 shape)', 'T2,T3,T5',
+  arm('renderAsOfHero writes #fp-scope itself (the UI-250 shape)', 'T2,T3,T5,T7',
     PAGE.replace("const el = document.getElementById('fp-scope-items');", "const el = document.getElementById('fp-scope');"));
   arm('the band has no [data-help-host]', 'T1,T2,T3',
     PAGE.replace('aria-label="Report parameters" data-help-host>', 'aria-label="Report parameters">'));
+  arm('the page points back at the V7 inventory guide (what shipped in UI #966)', 'T5,T7',
+    PAGE.replace('data-help-src="../RRUniversity/inventory-full-perpetual-details.html"',
+                 'data-help-src="../RRUniversity/inventory-reconciliation.html#reference"'));
 }
 
 // T6, found by the live probe for this row: with no company resolved, updateCompanyPill() overwrote the band's
