@@ -197,8 +197,11 @@ no split-builder, no deferral account, no schedule — UI-20.)*
   below that "there is no single-clearing-account path in the product" was written after that restoration and is
   wrong for the Balancing Entry. Both builders use only the accountant-owned components (carry forward,
   transactions, manual entries), never the timing. The Balancing Entry also does NOT use the $100 floor this
-  section calls the only one: `openJeModal` admits any account whose net is at least `0.005`. Which floor it
-  should use is an owner decision, not made here.
+  section calls the only one: `openJeModal` admits any account whose net is at least `0.005`.
+  **[OWNER ruled 2026-11-02, UI-262: "Keep every cent".]** The difference is intended. The Balancing Entry
+  exists to bring the company to zero, so it journals every account with a cent or more and posts the residual
+  to its clearing line. A 100 floor there would leave the sub-floor accounts uncleared. The floor bullet below
+  is about the Adjusting Entry only. `Tools/test-entry-builder-floors.js` runs both builders and pins each floor.
 - One offset account **per inventory account**, entered on the grid — no generic
   clearing account (self-clearing, correctly classified).
 - **Per-line offsets are already MANDATORY in the shipped product, and they gate the
@@ -236,8 +239,11 @@ no split-builder, no deferral account, no schedule — UI-20.)*
   is AI-generated.** The AI writes the summary line and animates the reveal; it never
   produces an amount, because a wrong amount is a wrong journal entry. Agreed guardrail,
   2026-06-30 — do not relax it.
-- **There is ONE floor, it is the $100 materiality floor from §1, and it is applied in
-  one place.** Corrected 2026-08-27: the earlier draft described a separate sub-dollar
+- **The Adjusting Entry has ONE account floor, it is the $100 materiality floor from §1, and
+  it is applied in one place.** (Scoped 2026-11-02, UI-262: this bullet was written as if the
+  Adjusting Entry were the only builder. The Balancing Entry clears every cent; see the first
+  bullet of this section. `RRV8.oeEntry.compose` also drops any line whose journal-able part is
+  under 1, which is a line rule, not a second account floor.) Corrected 2026-08-27: the earlier draft described a separate sub-dollar
   line-level floor applied only on export. **Neither exists.** The shared builder
   filters accounts on `abs(OOB) >= 100` before any line is composed
   (`RRV8/home.html:7915`, against `MAT_OOB_FLOOR = 100` at `:6822`, read 2026-08-27),
@@ -418,7 +424,7 @@ settled question, and so the four **corrections** are not mistaken for confirmat
 | 1 | §1 | **Keep the band SOFT** — well under about 1% is immaterial. A hard `>= 1%` is a regression, not a tightening. |
 | 2 | §3 | **A reclass is the ACCOUNTANT's**, and every misposting also needs an analyst source fix. Two lanes, always both. |
 | 3 | §5 | **CORRECTION.** Per-line offsets are already mandatory and gate the Complete button. There is no single-clearing-account path. The gap is persistence — **UI-162**. |
-| 4 | §5 | **CORRECTION.** One floor, `$100`, applied per account in the shared builder. No `$1` line floor, no export-only filter; worksheet and export agree by construction. |
+| 4 | §5 | **CORRECTION.** One floor, `$100`, applied per account in the shared builder. No `$1` line floor, no export-only filter; worksheet and export agree by construction. **Scoped 2026-11-02 (UI-262):** this is the Adjusting Entry. The Balancing Entry clears every cent, by owner ruling ("Keep every cent"). And "no `$1` line floor" is out of date: `RRV8.oeEntry.compose` (`DROP_UNDER = 1`) drops a line under 1 in the shared builder, so worksheet and export still agree. |
 | 5 | §5 | **Confirmed as shipped** — three columns, Account Number / Amount / Explanation, into the P0911 grid. The 30-character Explanation cap is load-bearing. |
 | 6 | §6 | **CORRECTION.** No period close and no attestation. Per-company Journal Entry Complete, unverified until the ledger verifies the code. |
 | 7 | §6 | **Moot** — there is no close to reopen. A variance that moves after the entry is **flagged, never rewritten**. |
