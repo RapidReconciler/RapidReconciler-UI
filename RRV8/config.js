@@ -1057,11 +1057,152 @@ window.RRAI = (function () {
       .catch(function () { return null; });
     return _primed;
   }
+
+  // ⚠ UI-255 (owner ruling 2026-11-01, "What was sent"): EVERY AI ANSWER SAYS WHAT WAS SENT FOR IT, under it, collapsed
+  // to one line. Owner question: "Should there be a way for a customer to see the prompt text before submitting to
+  // Claude?" Ruled: after the fact, never a gate. The text is the very string handed to fetch() for POST
+  // api/v1/ai/explain, recorded as it leaves (noteSent, called by the fetch observer below), so it cannot drift from
+  // what was sent: nothing here rebuilds a prompt. A page looks its record up by the prompt it posted (sentFor) and
+  // puts the disclosure after its answer (showSent). Kept in this page's memory only, never stored, never sent on.
+  var SENT = [], SENT_MAX = 60;
+  var EXPLAIN_PATH = /\/api\/v1\/ai\/explain(?:[?#]|$)/;
+  /** Record one POST to api/v1/ai/explain from the exact body string. Returns the record, or null when it is not one. */
+  function noteSent(url, init) {
+    if (!init || String(init.method || 'GET').toUpperCase() !== 'POST') return null;
+    if (!EXPLAIN_PATH.test(String(url || '')) || typeof init.body !== 'string') return null;
+    var j; try { j = JSON.parse(init.body); } catch (_) { return null; }
+    if (!j || typeof j.prompt !== 'string') return null;
+    var rec = { body: init.body, prompt: j.prompt, system: typeof j.system === 'string' ? j.system : '',
+                feature: j.feature || '', level: j.level || '', at: Date.now() };
+    SENT.push(rec);
+    if (SENT.length > SENT_MAX) SENT.splice(0, SENT.length - SENT_MAX);
+    return rec;
+  }
+  /** The newest record whose posted prompt is exactly this one, or null (never a rebuild). */
+  function sentFor(prompt) {
+    if (prompt == null) return null;
+    var p = String(prompt);
+    for (var i = SENT.length - 1; i >= 0; i--) if (SENT[i].prompt === p) return SENT[i];
+    return null;
+  }
+  function sentEsc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function sentCss() {
+    if (typeof document === 'undefined' || document.getElementById('rrai-sent-css')) return;
+    var st = document.createElement('style');
+    st.id = 'rrai-sent-css';
+    st.textContent =
+        'details.rrai-sent{margin:6px 0 0;font-size:12px;color:var(--text-muted,#6b7385);text-align:left}'
+      + 'details.rrai-sent>summary{cursor:pointer;list-style:none;display:inline-flex;gap:6px;align-items:baseline;user-select:none}'
+      + 'details.rrai-sent>summary::-webkit-details-marker{display:none}'
+      + 'details.rrai-sent>summary::before{content:"\\25B8";font-size:10px}'
+      + 'details.rrai-sent[open]>summary::before{content:"\\25BE"}'
+      + 'details.rrai-sent>summary b{font-weight:600;color:var(--text-soft,#4a5468)}'
+      + '.rrai-sent-body{margin-top:6px;padding:8px 10px;border:1px solid var(--rule,#e2e5ea);border-radius:6px;background:var(--bg-soft,#f6f7f9)}'
+      + '.rrai-sent-body pre{margin:4px 0 8px;max-height:280px;overflow:auto;white-space:pre-wrap;word-break:break-word;'
+      +   'font-family:"JetBrains Mono",Consolas,monospace;font-size:11.5px;line-height:1.45;color:var(--text,#1f2d4a)}'
+      + '.rrai-sent-body p{margin:0 0 4px}';
+    (document.head || document.documentElement).appendChild(st);
+  }
+  /** The disclosure for one record: a <details> whose summary is one line (feature, level, size). */
+  function sentDetails(rec) {
+    if (!rec || typeof document === 'undefined') return null;
+    sentCss();
+    var d = document.createElement('details');
+    d.className = 'rrai-sent';
+    d.setAttribute('translate', 'no');
+    var name = FEATURE_NAMES[rec.feature] || rec.feature || 'AI';
+    var lvl = norm(rec.level);
+    var size = (rec.prompt.length + rec.system.length).toLocaleString('en-US') + ' characters';
+    d.innerHTML = '<summary><b>What was sent</b><span>' + sentEsc(name) + (lvl ? ' &middot; ' + sentEsc(LABELS[lvl]) : '')
+      + ' &middot; ' + sentEsc(size) + '</span></summary>'
+      + '<div class="rrai-sent-body">'
+      + '<p>The text below is exactly what this page sent to the AI'
+      + (lvl && lvl !== 'full' ? ', after replacing company, account, item and person identifiers with generic labels' : '')
+      + '. RapidReconciler adds its own JDE reference text to every call; that text holds none of your data.</p>'
+      + (rec.system ? '<p><b>Instructions</b></p><pre>' + sentEsc(rec.system) + '</pre><p><b>Prompt</b></p>' : '')
+      + '<pre>' + sentEsc(rec.prompt) + '</pre></div>';
+    return d;
+  }
+  /**
+   * Put the disclosure for `prompt` as the last child of `host`, the element holding the answer, replacing one already
+   * there; or remove it when this prompt was never sent from this page. Inside rather than beside, so the next render
+   * of the answer (innerHTML or textContent) clears it along with the old answer and it never outlives its answer.
+   * `where === 'after'` puts it after `host` instead, for an answer held in an inline element. Returns it, or null.
+   */
+  function showSent(host, prompt, where) {
+    if (!host) return null;
+    var after = where === 'after';
+    if (after && !host.parentNode) return null;
+    var old = after ? host.nextElementSibling : host.lastElementChild;
+    if (old && old.classList && old.classList.contains('rrai-sent')) old.parentNode.removeChild(old);
+    var el = sentDetails(sentFor(prompt));
+    if (el) {
+      if (after) host.parentNode.insertBefore(el, host.nextSibling);
+      else host.appendChild(el);
+    }
+    return el;
+  }
+
+  // ⚠ UI-255 piece 2 (owner ruling 2026-11-01, option (a) "Samples from use"): THE AI ASSISTANT PAGE'S "What's sent?"
+  // SHOWED HAND-WRITTEN PROSE, not a prompt. Now, when one feature's real prompt builder runs on its page, the page
+  // also runs that same builder at Basic, Enhanced and Full and keeps the three texts here, so an administrator sees
+  // "Entity A" where masking applies instead of being told it does. Whether a level masks is masks(tier); how is each
+  // builder's own. Kept in sessionStorage (this tab, gone when it closes), keyed by the database's uuid, never its
+  // name (every customer has a RapidReconciler_Prod_V8), and NEVER SENT: building a level is not sending it.
+  var SAMPLE_KEY = 'rrv8.aiSamples', SAMPLE_LEVELS = ['grounded', 'scrubbed', 'full'], SAMPLE_MAX = 60000;
+  function dbUuid() {
+    try { return (window.RRDB && window.RRDB.uuid && window.RRDB.uuid()) || ''; } catch (_) { return ''; }
+  }
+  function samplesAll() {
+    try { return JSON.parse(sessionStorage.getItem(SAMPLE_KEY) || '{}') || {}; } catch (_) { return {}; }
+  }
+  /**
+   * Keep one feature's sample: `build(level)` is the page's real builder at that level, and must only build (never
+   * send). `page` names where it ran, for "Open <page> on this database". A level whose build throws is left out.
+   */
+  function keepSample(feature, page, build) {
+    var db = dbUuid();
+    if (!db || FEATURES.indexOf(feature) < 0 || typeof build !== 'function') return null;
+    var levels = {}, any = false;
+    SAMPLE_LEVELS.forEach(function (l) {
+      try {
+        var t = build(l);
+        if (typeof t === 'string' && t) {
+          levels[l] = t.length > SAMPLE_MAX ? t.slice(0, SAMPLE_MAX) + '\n[cut at ' + SAMPLE_MAX + ' characters]' : t;
+          any = true;
+        }
+      } catch (_) {}
+    });
+    if (!any) return null;
+    var all = samplesAll();
+    (all[db] = all[db] || {})[feature] = { at: Date.now(), page: String(page || ''), levels: levels };
+    try { sessionStorage.setItem(SAMPLE_KEY, JSON.stringify(all)); } catch (_) {}
+    return all[db][feature];
+  }
+  /** This database's samples, { feature: { at, page, levels: { grounded, scrubbed, full } } }; {} when none. */
+  function samples(uuid) {
+    var db = uuid == null ? dbUuid() : String(uuid);
+    return (db && samplesAll()[db]) || {};
+  }
   return {
     TIERS: TIERS, LABELS: LABELS, BLURB: BLURB,
+    // UI-255 piece 2: real per-level samples of each feature's prompt (see keepSample above).
+    keepSample: keepSample, samples: samples, SAMPLE_PAGES: {
+      summaries: 'Home (the accountant’s worklist)',
+      explain:   'Cardex Variance (Investigate)',
+      ask:       'As Of (the Ask box)',
+      drafting:  'Home (an offset entry’s AI line)',
+      admin:     'the administrator Home (an Ask-AI question)'
+    },
     FEATURES: FEATURES, FEATURE_NAMES: FEATURE_NAMES, featureLevel: featureLevel, featureOff: featureOff,
     setFeatures: setFeatures, declare: declare, ready: primePlan,
     norm: norm, get: get, set: setTier, choice: choice, plan: plan, setPlan: setPlan, primePlan: primePlan,
+    // UI-255: what was sent for each AI answer (see noteSent above).
+    noteSent: noteSent, sentFor: sentFor, sentDetails: sentDetails, showSent: showSent,
     // UI-254 (owner ruling 2026-11-01, "Basic masks too"): every level below Full sends company, account, item and
     // person identifiers as generic labels. Each prompt builder asks this instead of testing for 'scrubbed', which
     // left Basic sending the real numbers. An unknown tier masks: the safe direction. (`label` stays last: three
@@ -1073,6 +1214,20 @@ window.RRAI = (function () {
 // VLC-186: learn the plan as soon as a page loads, so the first question is already capped.
 try { if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { window.RRAI.primePlan(); });
       else window.RRAI.primePlan(); } catch (_) {}
+// UI-255: the ONE place every AI call passes. Six pages post to api/v1/ai/explain through four different fetch
+// wrappers, and every one ends in fetch(); observing it here records the exact body string each sends, so "What was
+// sent" needs no copy per page and covers a call site added later. It only reads: the request goes on unchanged, and
+// a failure to record never touches it.
+(function () {
+  if (typeof window === 'undefined' || typeof window.fetch !== 'function' || window.fetch.__rraiSent) return;
+  var orig = window.fetch;
+  var observed = function (input, init) {
+    try { window.RRAI.noteSent(typeof input === 'string' ? input : (input && input.url) || '', init); } catch (_) {}
+    return orig.apply(this, arguments);
+  };
+  observed.__rraiSent = true;
+  window.fetch = observed;
+})();
 
 /*
  * RRV8 shared helpers (config-level, so every page that loads config.js gets them

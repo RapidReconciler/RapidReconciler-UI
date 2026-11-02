@@ -114,11 +114,12 @@ function loadAsof(page, tier, cfg) {
   vm.createContext(sb);
   vm.runInContext(rraiSource(cfg || CONFIG), sb, { filename: 'config.js:RRAI' });
   const F = (n, p) => extractFn(page, n, 'inventory-asof.html', p);
-  const src = 'let _asofAiBusy = false;\nlet _asofLastAsk = null;\n'
+  // UI-255: asofAsk also keeps the AI Assistant page's samples through asofKeepSample.
+  const src = 'let _asofAiBusy = false;\nlet _asofLastAsk = null;\nlet _asofSampleTier = null;\n'
     + extractLine(page, /\n  let _asofTrendData = null;[^\n]*/, '_asofTrendData declaration') + '\n'
     + extractLine(page, /\n  const _fmtAgg = [^\n]*/, '_fmtAgg') + '\n'
     + ['formatPeriod', 'curMoney', 'asofScrub', 'asofMasker', 'asofScopeText', 'asofAggregates', 'asofFacts',
-       'asofHistoryBlock', 'asofTrendPrompt', 'asofFreeTextPrompt', 'asofTrendData', 'asofAiExplain', 'asofAsk']
+       'asofHistoryBlock', 'asofTrendPrompt', 'asofFreeTextPrompt', 'asofTrendData', 'asofAiExplain', 'asofKeepSample', 'asofAsk']
       .map((n) => F(n)).join('\n')
     + '\n' + F('loadAsOfPeriodHistory', 'async function ')
     + '\n' + F('loadAsOfValueBridge', 'async function ');
