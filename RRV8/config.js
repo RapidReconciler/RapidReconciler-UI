@@ -1421,11 +1421,11 @@ window.RRV8 = window.RRV8 || {};
   window.RRV8.ACCT_GROUNDING = [
     'ACCOUNTING POLICY (reconciliation) — reason from these rules:',
     '- RR reconciles inventory to GL; JDE is the book of record. You surface the gap, explain it, and produce the correcting entry the accountant posts in JDE. RR does not post, hold the ledger, or run schedules.',
-    '- Materiality: an out-of-balance under $100 is immaterial regardless of %; a GL balance under $1,000 is dormant/near-zero — frame by absolute amount and suppress the %. Otherwise judge by the gap as a share of the GL balance (well under ~1% is immaterial).',
+    '- Materiality, in each company\'s own currency: an out-of-balance under 100 (e.g. $100, £100) is immaterial regardless of %; a GL balance under 1,000 is dormant/near-zero — frame by absolute amount and suppress the %. Otherwise judge by the gap as a share of the GL balance (well under ~1% is immaterial).',
     '- The out-of-balance decomposes into components. ACCOUNTANT-OWNED (journal these): carry forward, transactions, manual entries. NOT the accountant\'s: unposted GL batches + end-of-day (operations timing — self-clears when operations posts, never journal it) and cardex (self-heals on the analyst\'s roll-forward refresh, not a JE). The adjusting entry uses ONLY the accountant-owned amount; never journal the timing.',
     '- Reclass vs JE: a transaction in the wrong period/account is a reclass, not a new balancing JE. A roll-forward break (red dot) resolves on the analyst side at the next refresh, not the accountant\'s and not a JE.',
-    '- Large carry-forward: when a company\'s carry-forward exceeds 25% of its GL balance OR $50,000 (whichever first), advise absorbing it over ~6 periods (per-period = carry-forward / 6) rather than booking it all at once, to avoid a lumpy P&L hit. Advise ONLY — do not build the fractional entry; the amortization schedule lives in JDE, not RR.',
-    '- Adjusting entry: one real offset account per inventory account (no generic clearing account); excludes timing; two lines per gap (original account + its offset).',
+    '- Large carry-forward: when a company\'s carry-forward exceeds 25% of its GL balance OR 50,000 in its own currency (whichever first), advise absorbing it over ~6 periods (per-period = carry-forward / 6) rather than booking it all at once, to avoid a lumpy P&L hit. Advise ONLY — do not build the fractional entry; the amortization schedule lives in JDE, not RR.',
+    '- Two ways to build the correcting entry, both exported and posted in JDE and both using ONLY the accountant-owned amount (never the timing). The Adjusting Entry (Accounts tab) posts each inventory account against its own real offset account, two lines per gap (original account + its offset), with no generic clearing account. The Balancing Entry (the company\'s card on Overview) posts each inventory account against ONE clearing line for the company and needs no offset accounts entered. Describe whichever one the question is about; never call either one wrong.',
     '- Closed/prior periods are already journaled — never prescribe an entry for them; a carry-forward\'s source is the prior period.',
     '- Audience is JDE-fluent finance, not IT: plain accountant English; JDE artifacts (F4111, F0911, AAI) are fine, no plumbing terms.'
   ].join('\n');
@@ -1857,9 +1857,13 @@ window.RRV8.AI_REGISTER = [
   '- Say the amount and the scope in figures the reader can act on. Never a percentage of a tie-out.',
   '- If the evidence does not support a cause, say what is known and what to check next. Never invent a mechanism to fill the sentence.',
   '- No preamble and no restating the question. Plain text only: no headings, no bold, no markdown.',
-  '- Unless the task below specifies its own layout, put each finding on its own line beginning with "- ", with no blank line between them. One finding, one sentence. Never a paragraph that holds two findings.',
-  '- Quote the figures given, exactly as given. Never add two of them together into a total the surface does not show.'
+  '- Unless the task above specifies its own layout, put each finding on its own line beginning with "- ", with no blank line between them. One finding, one sentence. Never a paragraph that holds two findings.',
+  '- Quote the figures given, exactly as given, unless the task above asks for rounded amounts; then rounding is the only change allowed. Never add two of them together into a total the surface does not show.'
 ].join('\n');
+// UI-260 (2026-11-02). Both lines above said "below" and the second said only "exactly as given". This block is
+// appended LAST on every surface that uses it, so there is never a task below it, and three surfaces (the two
+// one-sentence JE summaries and the Accounts tab's 2-4 sentence read) ask for rounded amounts. The model was
+// reading two opposite instructions and picking either. A surface that wants exact figures now says so itself.
 
 /*
  * RRV8.GLOSSARY — what the words on the ANALYST surfaces mean. Authored policy,
