@@ -43,6 +43,8 @@
     'transaction-variance': { title: 'Transaction Variance',    href: '../RRUniversity/inventory-transaction-variance.html', roles: ['accountant', 'analyst'] },
     // UI-248: the V8 Full Perpetual Details page's own guide (the old target described V7's As-Of screen).
     'full-perpetual':  { title: 'Full Perpetual Details',       href: '../RRUniversity/inventory-full-perpetual-details.html', roles: ['accountant', 'analyst'] },
+    // UI-259: the DMAAIs page had no guide (its help opened a blank panel). Analyst-only, as the page's gate is.
+    'dmaais':          { title: 'DMAAIs',                       href: '../RRUniversity/inventory-dmaais.html',             roles: ['analyst'] },
     // Admin-facing docs
     'managing-users':     { title: 'Team Management',      href: '../RRUniversity/administrator-managing-users.html',     roles: ['admin'] },
     'managing-companies': { title: 'Managing Companies',   href: '../RRUniversity/administrator-managing-companies.html', roles: ['admin'] },
