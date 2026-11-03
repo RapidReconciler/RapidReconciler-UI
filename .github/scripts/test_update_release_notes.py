@@ -154,5 +154,44 @@ class RenderParagraphsTest(unittest.TestCase):
         self.assertIn("<li>Item. -Xmx stays text</li>", out)
 
 
+class ExtractReleaseNoteTest(unittest.TestCase):
+    """HK-50 (2026-11-03). This repo squashes with COMMIT_MESSAGES, so a squash body is every branch commit's
+    message in turn. extract_release_note collected from Release-Note: to end-of-body, and on 2026-10-20 (#807,
+    bot #808) the page published a fix commit's subject, two Co-Authored-By lines and GitHub's "---------" rule
+    under the real note. The bodies below have #807's shape; main() hands the function the body .strip()ped."""
+
+    NOTE = "A guide is now published, with a Save as PDF button."
+    CO = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+
+    def squash(self, *messages):
+        # GitHub's COMMIT_MESSAGES squash: the PR title, then "* " + each commit message, the rule, the co-author.
+        return ("Publish the guide (#807)\n\n" + "\n\n".join("* " + m for m in messages)
+                + "\n\n---------\n\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>").strip()
+
+    def test_the_defect_a_later_commit_in_the_squash_is_not_published(self):
+        body = self.squash("Publish the guide\n\nWhy it changed.\n\nRelease-Note: " + self.NOTE + "\n\n" + self.CO,
+                           "Guide: a CSS rule for the doc-dates span\n\n" + self.CO)
+        self.assertEqual(update_release_notes.extract_release_note(body), self.NOTE)
+
+    def test_a_trailer_in_the_last_commit_does_not_publish_the_rule(self):
+        body = self.squash("Fix a typo\n\n" + self.CO, "Publish the guide\n\nRelease-Note: " + self.NOTE + "\n\n" + self.CO)
+        self.assertEqual(update_release_notes.extract_release_note(body), self.NOTE)
+
+    def test_bullets_end_at_the_next_commit(self):
+        body = self.squash("Ship it\n\nRelease-Note:\n- First change.\n- Second change.",
+                           "Follow-up fix\n\nBody of the fix.")
+        self.assertEqual(update_release_notes.extract_release_note(body), "- First change.\n- Second change.")
+
+    def test_control_a_single_commit_is_unchanged(self):
+        # The pre-HK-50 behaviour on the common case: one commit, note, trailing Co-Authored-By.
+        body = ("Subject\n\nBody.\n\nRelease-Note:\n- One.\n- Two, which wraps\n  onto a second line.\n\n"
+                "A second paragraph.\n\n" + self.CO)
+        self.assertEqual(update_release_notes.extract_release_note(body),
+                         "- One.\n- Two, which wraps\n  onto a second line.\n\nA second paragraph.")
+
+    def test_control_no_trailer_is_none(self):
+        self.assertIsNone(update_release_notes.extract_release_note(self.squash("Chore\n\n" + self.CO)))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
