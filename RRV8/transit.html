@@ -1,0 +1,1007 @@
+<!DOCTYPE html>
+<!--
+  =============================================================================
+  In Transit  (UI-240)  --  the In Transit module's landing page
+  =============================================================================
+  Home is the Inventory module; this page is In Transit's, reached from Home's
+  module pill once every In Transit page has shipped. It carries Home's role
+  lens (rrv8.viewRole): an accountant and an analyst see different tabs over the
+  same data.
+
+    Accountant  Overview      out of balance by company and period
+                Accounts      the roll forward by account for one period
+                On Hand       what has shipped and not yet been received
+                Audit Center  the Excel audit report (roll forward, journal
+                              entry and the four variance components)
+    Analyst     Data Health   roll-forward checks and the five transit reports
+                Transaction Variance   transit vs. ledger by document
+                Orders        V7's three quick filters, exclude / include
+                Tools         recalculate after exclusions
+
+  Data: the active database's data services, /in-transit/* (UI-239), through
+  this page's rrFetch. `in-transit/` is in RR_TEST_AGENT_PREFIXES (config.js).
+  Agent-first, no snapshot fallback (V8 is production-only).
+
+  Gates, mirrored from the server so its refusals are a backstop:
+    * module   t.it AND m.it on the active database (UserRequest.hasModule).
+               Without it no call is made and the page says why, in the
+               Agent's own words.
+    * lane     perms.ac (accountant) / perms.dm (analyst), as Home.
+    * exclude and recalc   perms.ite (NOT aite: VALC mints aite from Import
+               JDE).
+
+  One company at a time. Companies can carry different currencies (Demo1:
+  80002 USD, 80008 GBP), and a total across them is not a number. Overview
+  shows each company in its own currency; every other tab is one company.
+  The pick is shared with Home's analyst picker (rrv8.analystCompany.<db>).
+
+  Signs are the views' stored signs: OOB = BegVar - EndofDay + Exclusions +
+  Variance + JEs on every row. Do not apply Inventory's transactions flip.
+  =============================================================================
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>In Transit &mdash; RapidReconciler</title>
+<link href="fonts/fonts.css" rel="stylesheet">
+<link href="admin-chrome.css" rel="stylesheet">
+<link href="../Tools/help-sidebar.css" rel="stylesheet">
+<script src="config.js"></script>
+<script src="export-guard.js"></script>
+<script defer src="../Tools/help-sidebar.js"></script>
+<script src="vendor/xlsx-js-style.min.js" defer></script>
+<style>
+  :root { --grey-pale:#eceef3; }
+  .page { max-width:1320px; margin:0 auto; padding:64px 26px 64px; }
+  .page-title { font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:28px; color:var(--navy); letter-spacing:-.02em; margin:0; }
+  .page-title a { color:inherit; text-decoration:none; }
+  .page-title a:hover { color:var(--blue); }
+  .page-title-ext-icon { width:16px; height:16px; vertical-align:middle; margin-left:4px; color:var(--text-muted); }
+  .role-hero-context { display:flex; align-items:center; flex-wrap:wrap; gap:8px 14px; margin:8px 0 0; }
+  .role-hero-context .rh-co { font-size:15px; font-weight:700; color:var(--navy); }
+  .role-hero-context .rh-sub { font-size:13px; color:var(--text-muted); }
+
+  /* Controls row: lens, company, period, validation light */
+  .it-controls { display:flex; align-items:center; gap:10px 18px; flex-wrap:wrap; margin:18px 0 6px; }
+  .picker-lbl { font-size:10px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); margin-right:6px; }
+  .it-ctl { display:inline-flex; align-items:center; }
+  .it-ctl[hidden] { display:none; }   /* the lens switch shows only to someone with both lanes */
+  .it-ctl select { border:1px solid var(--rule-strong); border-radius:100px; padding:5px 12px; font-family:'Source Sans 3',sans-serif; font-size:12.5px; font-weight:700; color:var(--text); background:var(--bg-card); max-width:260px; cursor:pointer; }
+  .it-ctl select:focus { outline:none; border-color:var(--blue); }
+  .seg { display:inline-flex; border:1px solid var(--rule-strong); border-radius:8px; overflow:hidden; flex-wrap:wrap; }
+  .seg-btn { border:0; background:var(--bg-card); padding:6px 13px; font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:12.5px; color:var(--text-soft); cursor:pointer; border-right:1px solid var(--rule); }
+  .seg-btn:last-child { border-right:0; }
+  .seg-btn:hover { background:var(--bg-soft); color:var(--text); }
+  .seg-btn.is-on { background:var(--navy); color:#fff; }
+  .it-light { display:inline-flex; align-items:center; gap:7px; font-size:12.5px; font-weight:700; color:var(--text-soft); margin-left:auto; }
+  .it-light .dot { width:11px; height:11px; border-radius:50%; background:var(--text-muted); }
+  .it-light.ok .dot { background:var(--green); } .it-light.bad .dot { background:var(--red); }
+
+  /* Tabs */
+  .it-tabs { display:flex; gap:4px; border-bottom:1px solid var(--rule); margin:18px 0 18px; flex-wrap:wrap; }
+  .it-tab { border:0; background:none; padding:10px 14px; font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:14px; color:var(--text-muted); cursor:pointer; border-bottom:3px solid transparent; margin-bottom:-1px; }
+  .it-tab:hover { color:var(--navy); }
+  .it-tab.is-on { color:var(--navy); border-bottom-color:var(--blue); }
+  .it-panel[hidden] { display:none; }
+
+  /* Notices (gate, errors) */
+  .it-notice { margin:22px 0; padding:16px 18px; border-radius:12px; background:var(--orange-pale); border:1px solid #f0d2a8; color:var(--text); font-size:14px; line-height:1.55; }
+  .it-notice b { color:var(--navy); }
+  .it-notice[hidden] { display:none; }
+  .it-lede { font-size:13px; color:var(--text-soft); line-height:1.55; margin:0 0 14px; max-width:900px; }
+  .it-lede b { color:var(--navy); }
+
+  /* KPI cards */
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:12px; margin-bottom:18px; }
+  .kpi { background:var(--bg-card); border:1px solid var(--rule); border-radius:12px; padding:13px 16px; box-shadow:var(--shadow-sm); }
+  .kpi-lbl { font-size:10.5px; font-weight:800; letter-spacing:.07em; text-transform:uppercase; color:var(--text-muted); }
+  .kpi-val { font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:22px; color:var(--navy); margin-top:4px; font-variant-numeric:tabular-nums; }
+  .kpi-val.neg { color:var(--red); }
+  .kpi-sub { font-size:12px; color:var(--text-muted); margin-top:2px; }
+  .kpi.is-bad { box-shadow:inset 4px 0 0 var(--red), var(--shadow-sm); }
+  .kpi.is-ok  { box-shadow:inset 4px 0 0 var(--green), var(--shadow-sm); }
+
+  /* Grids (the Account Roll Forward page's read-only grid standard: search,
+     Excel, count, click-to-sort, sticky header) */
+  .grid-card { background:var(--bg-card); border:1px solid var(--rule); border-radius:14px; box-shadow:var(--shadow-sm); overflow:hidden; margin-bottom:18px; }
+  .grid-head { display:flex; align-items:center; gap:14px; padding:13px 20px; border-bottom:1px solid var(--rule); flex-wrap:wrap; }
+  .grid-title { font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:14px; letter-spacing:.04em; text-transform:uppercase; color:var(--navy); }
+  .grid-sub { font-size:12px; color:var(--text-muted); }
+  .grid-tools { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .grid-state-cluster { display:flex; align-items:center; gap:8px; margin-left:auto; flex-wrap:wrap; }
+  .grid-search { border:1px solid var(--rule-strong); border-radius:100px; padding:5px 12px; font-size:12.5px; width:190px; background:var(--bg-card); color:var(--text); }
+  .grid-search:focus { outline:none; border-color:var(--blue); }
+  .grid-pill { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--rule-strong); border-radius:100px; padding:5px 10px; font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:12.5px; color:var(--text-soft); background:var(--bg-card); }
+  button.grid-pill { cursor:pointer; }
+  button.grid-pill:hover:not(:disabled) { border-color:var(--blue); color:var(--blue); }
+  button.grid-pill.is-on { background:var(--navy); border-color:var(--navy); color:#fff; }
+  button.grid-pill:disabled { opacity:.5; cursor:not-allowed; }
+  .grid-pill svg { width:13px; height:13px; }
+  .grid-pill-export { cursor:pointer; }
+  .pick, .pick-all { width:14px; height:14px; accent-color:var(--blue); cursor:pointer; }
+  .grid-pill-count { color:var(--text-muted); }
+  .grid-scroll { max-height:620px; overflow:auto; }
+  table.rf { width:100%; border-collapse:separate; border-spacing:0; font-size:12.5px; }
+  table.rf thead th { position:sticky; top:0; z-index:2; background:var(--bg-soft); color:var(--text-muted); font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:10px; letter-spacing:.07em; text-transform:uppercase; text-align:left; padding:9px 11px; border-bottom:1px solid var(--rule); white-space:nowrap; cursor:pointer; user-select:none; }
+  table.rf thead th.num { text-align:right; }
+  table.rf thead th:hover { color:var(--blue); }
+  table.rf thead th.sel, table.rf tbody td.sel { width:28px; cursor:default; }
+  table.rf thead th .sort { color:var(--blue); margin-left:3px; }
+  table.rf tbody td { padding:8px 11px; border-bottom:1px solid var(--rule); white-space:nowrap; }
+  table.rf tbody td.num { text-align:right; font-variant-numeric:tabular-nums; font-family:'JetBrains Mono',ui-monospace,monospace; }
+  table.rf tbody tr:hover td { background:rgba(43,95,176,.04); }
+  table.rf tbody tr.is-picked td { background:var(--blue-pale); }
+  table.rf .mono { font-family:'JetBrains Mono',ui-monospace,monospace; }
+  table.rf .neg { color:var(--red); }
+  table.rf .muted { color:var(--text-muted); }
+  table.rf td .acct { font-weight:700; color:var(--navy); }
+  table.rf td.note { white-space:normal; min-width:180px; max-width:340px; }
+  .chip { display:inline-flex; align-items:center; gap:5px; font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:10.5px; padding:2px 8px; border-radius:100px; }
+  .chip.baseline { background:var(--grey-pale); color:var(--text-soft); }
+  .chip.yes { background:var(--green-pale); color:var(--green); }
+  .chip.end { background:var(--blue-pale); color:var(--blue); border:1px solid rgba(43,95,176,.3); }
+  .chip.break { background:var(--red-pale); color:var(--red); }
+  .chip.excl { background:var(--orange-pale); color:var(--orange-deep); }
+  .empty { padding:40px 20px; text-align:center; color:var(--text-muted); font-style:italic; }
+  .empty.err { color:var(--red); font-style:normal; }
+
+  /* Data Health report list */
+  .rpt { border:1px solid var(--rule); border-radius:12px; margin-bottom:10px; background:var(--bg-card); }
+  .rpt-head { display:flex; align-items:center; gap:12px; padding:12px 16px; cursor:pointer; }
+  .rpt-head:hover .rpt-title { color:var(--blue); }
+  .rpt-title { font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:14px; color:var(--navy); }
+  .rpt-desc { font-size:12.5px; color:var(--text-muted); flex:1; min-width:0; }
+  .rpt-count { font-family:'JetBrains Mono',ui-monospace,monospace; font-weight:700; font-size:12.5px; padding:2px 9px; border-radius:100px; background:var(--grey-pale); color:var(--text-soft); }
+  .rpt-count.has { background:var(--orange-pale); color:var(--orange-deep); }
+  .rpt-count.err { background:var(--red-pale); color:var(--red); }
+  .rpt-body { padding:0 16px 14px; }
+  .rpt-body[hidden] { display:none; }
+  .rpt-body .grid-card { margin-bottom:0; box-shadow:none; }
+
+  /* Buttons + action rows */
+  .act { display:flex; gap:16px; align-items:flex-start; flex-wrap:wrap; background:var(--bg-card); border:1px solid var(--rule); border-radius:14px; padding:18px; margin-bottom:18px; }
+  .act-main { flex:1; min-width:260px; font-size:13px; color:var(--text-soft); line-height:1.55; }
+  .act-main b { color:var(--navy); }
+  .act-btn { flex-shrink:0; align-self:center; display:inline-flex; align-items:center; gap:8px; font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:13.5px; border-radius:9px; padding:11px 20px; background:var(--navy); color:#fff; border:1px solid var(--navy); cursor:pointer; }
+  .act-btn:hover:not(:disabled) { filter:brightness(1.12); }
+  .act-btn:disabled { opacity:.5; cursor:not-allowed; }
+  .act-status { margin-top:10px; font-size:12.5px; font-weight:600; line-height:1.5; }
+  .act-status:empty { display:none; }
+  .act-status.ok { color:var(--green); } .act-status.err { color:var(--red); } .act-status.busy { color:var(--text-soft); }
+
+  .toast { position:fixed; bottom:28px; left:50%; transform:translateX(-50%); background:var(--navy); color:#fff; padding:10px 18px; border-radius:100px; font-family:'Source Sans 3',sans-serif; font-weight:600; font-size:13px; box-shadow:var(--shadow-md); opacity:0; transition:opacity .18s; pointer-events:none; max-width:80vw; }
+  .toast.show { opacity:1; }
+
+  /* Exclude / include modal */
+  .modal-backdrop { position:fixed; inset:0; background:rgba(20,32,55,.42); display:none; align-items:center; justify-content:center; padding:24px; z-index:120; }
+  .modal-backdrop.is-open { display:flex; }
+  .modal { background:var(--bg-card); border:1px solid var(--rule); border-radius:14px; box-shadow:var(--shadow-md); width:100%; max-width:520px; overflow:hidden; }
+  .modal-head { display:flex; align-items:center; gap:12px; padding:16px 20px; border-bottom:1px solid var(--rule); }
+  .modal-title { font-family:'Source Sans 3',sans-serif; font-weight:800; font-size:16px; color:var(--navy); flex:1; }
+  .modal-body { padding:18px 20px; font-size:13.5px; color:var(--text); line-height:1.6; }
+  .modal-body textarea { width:100%; box-sizing:border-box; margin-top:8px; border:1px solid var(--rule-strong); border-radius:8px; padding:8px 10px; font-family:inherit; font-size:13px; resize:vertical; min-height:70px; }
+  .modal-body .cnt { font-size:11.5px; color:var(--text-muted); text-align:right; }
+  .modal-err { color:var(--red); font-size:12.5px; font-weight:600; margin-top:8px; }
+  .modal-err:empty { display:none; }
+  .modal-foot { display:flex; justify-content:flex-end; gap:10px; padding:14px 20px; border-top:1px solid var(--rule); background:var(--bg-soft); }
+  .modal-btn { font-family:'Source Sans 3',sans-serif; font-weight:700; font-size:13.5px; border-radius:8px; padding:9px 18px; cursor:pointer; border:1px solid transparent; }
+  .modal-btn-primary { color:#fff; background:var(--navy); border-color:var(--navy); }
+  .modal-btn-primary:disabled { opacity:.5; cursor:not-allowed; }
+  .modal-btn-ghost { color:var(--text-soft); background:var(--bg-card); border-color:var(--rule-strong); }
+</style>
+</head>
+<body data-help-src="../RRUniversity/transfer-order-reconcile.html" data-help-title="In Transit">
+
+<div class="corner-chrome">
+  <a class="home-fab topbar-home" href="home.html" title="Back to Home">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></svg>
+    Home
+  </a>
+</div>
+
+<div class="page">
+  <h1 class="page-title">
+    <a href="../RRUniversity/transfer-order-reconcile.html" target="_blank" rel="noopener">In Transit<svg class="page-title-ext-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><path d="M10 14L20 4"/><path d="M19 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h6"/></svg></a>
+  </h1>
+  <div class="role-hero-context"><span class="rh-co" id="itContext">Loading&hellip;</span><span class="rh-sub" id="itContextSub"></span></div>
+
+  <div class="it-notice" id="itGate" role="status" hidden></div>
+
+  <div id="itWork" hidden>
+    <div class="it-controls">
+      <span class="it-ctl" id="itLensWrap" hidden><span class="picker-lbl">View</span>
+        <span class="seg" id="itLens" role="group" aria-label="View as">
+          <button class="seg-btn" type="button" data-lens="accountant">Accountant</button>
+          <button class="seg-btn" type="button" data-lens="analyst">Analyst</button>
+        </span>
+      </span>
+      <label class="it-ctl"><span class="picker-lbl">Company</span><select id="itCompany" aria-label="Company"></select></label>
+      <label class="it-ctl" id="itPeriodWrap"><span class="picker-lbl">Period</span><select id="itPeriod" aria-label="Period ending"></select></label>
+      <span class="it-light" id="itLight" title=""><span class="dot"></span><span id="itLightText">Checking the roll forward&hellip;</span></span>
+    </div>
+
+    <nav class="it-tabs" id="itTabs" role="tablist" aria-label="In Transit"></nav>
+
+    <!-- ===================== ACCOUNTANT ===================== -->
+    <section class="it-panel" id="tab-overview" role="tabpanel" hidden>
+      <div class="kpis" id="ovKpis"></div>
+      <div id="ovByCompany"></div>
+      <div id="ovHistory"></div>
+    </section>
+
+    <section class="it-panel" id="tab-accounts" role="tabpanel" hidden>
+      <p class="it-lede">The roll forward for each in-transit account in the period. <b>Out of balance</b> is the beginning variance less end of day, plus exclusions, transaction variance and journal entries.</p>
+      <div id="acGrid"></div>
+    </section>
+
+    <section class="it-panel" id="tab-onhand" role="tabpanel" hidden>
+      <p class="it-lede">Stock that has shipped and not yet been received at the end of the period, by item, net of excluded orders. This is the figure the roll forward compares with the GL.</p>
+      <div id="ohGrid"></div>
+    </section>
+
+    <section class="it-panel" id="tab-audit" role="tabpanel" hidden>
+      <div class="act">
+        <div class="act-main">
+          <b>In Transit audit report</b> for the company and period above, in one Excel workbook: the roll forward by period, the account detail for the period, the journal entry that would clear the out of balance, and each reconciling component behind it (unposted GL batches, end of day, excluded orders, manual journal entries).
+          <div class="act-status" id="auStatus" role="status" aria-live="polite"></div>
+        </div>
+        <button class="act-btn" id="auBtn" type="button">Download audit report</button>
+      </div>
+    </section>
+
+    <!-- ===================== ANALYST ===================== -->
+    <section class="it-panel" id="tab-health" role="tabpanel" hidden>
+      <div class="kpis" id="dhKpis"></div>
+      <div id="dhRoll"></div>
+      <p class="it-lede">The set-up behind In Transit. Open a report to see its rows.</p>
+      <div id="dhReports"></div>
+    </section>
+
+    <section class="it-panel" id="tab-txv" role="tabpanel" hidden>
+      <p class="it-lede">Each transfer document in the period, with what it moved through in transit against what it posted to the ledger. A difference is transaction variance and counts in the out of balance.</p>
+      <div id="txGrid"></div>
+    </section>
+
+    <section class="it-panel" id="tab-orders" role="tabpanel" hidden>
+      <p class="it-lede">Every transfer order still in transit or excluded, now. The three quick filters find the orders that will not clear on their own. <span id="orPermNote"></span></p>
+      <div id="orGrid"></div>
+    </section>
+
+    <section class="it-panel" id="tab-tools" role="tabpanel" hidden>
+      <div class="act">
+        <div class="act-main">
+          <b>Recalculate In Transit</b> after you exclude or include orders, so the out of balance and on hand reflect them now instead of after the next scheduled refresh. It takes about a minute and reads nothing new from JD Edwards.
+          <div class="act-status" id="rcStatus" role="status" aria-live="polite"></div>
+        </div>
+        <button class="act-btn" id="rcBtn" type="button">Recalculate</button>
+      </div>
+    </section>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="exModal" role="dialog" aria-modal="true" aria-labelledby="exTitle">
+  <div class="modal">
+    <div class="modal-head"><span class="modal-title" id="exTitle">Exclude orders</span></div>
+    <div class="modal-body">
+      <div id="exDesc"></div>
+      <label for="exNote" style="display:block;margin-top:12px;font-weight:700;color:var(--navy);">Note</label>
+      <textarea id="exNote" maxlength="100" placeholder="Why these orders are excluded"></textarea>
+      <div class="cnt"><span id="exCnt">0</span> / 100</div>
+      <div class="modal-err" id="exErr" role="alert"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="modal-btn modal-btn-ghost" id="exCancel" type="button">Cancel</button>
+      <button class="modal-btn modal-btn-primary" id="exGo" type="button">Save</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ---------------------------------------------------------------------------
+  //  Routing. Every call is under in-transit/, which config.js routes to the
+  //  active database's data services (RR_TEST_AGENT_PREFIXES). The local
+  //  fallback lists cover a config.js that failed to load.
+  // ---------------------------------------------------------------------------
+  function prodHeaders(contentType) {
+    var h = { 'Accept': 'application/json' };
+    var tok = (window.RR_SESSION && window.RR_SESSION.token) || null;
+    if (!tok) { try { tok = localStorage.getItem('rrv8.token'); } catch (_) {} }
+    if (tok) h['Authorization'] = 'Bearer ' + tok;
+    if (contentType) h['Content-Type'] = contentType;
+    return h;
+  }
+  var _testAgentAreas = new Set(window.RR_TEST_AGENT_AREAS || []);
+  var _testAgentPrefixes = window.RR_TEST_AGENT_PREFIXES || ['download-excel/', 'in-transit/'];
+  function _routesToTestAgent(area) {
+    if (_testAgentAreas.has(area)) return true;
+    for (var i = 0; i < _testAgentPrefixes.length; i++) if (area.indexOf(_testAgentPrefixes[i]) === 0) return true;
+    return false;
+  }
+  function rrFetch(area, opts) {
+    opts = opts || {};
+    if (!_routesToTestAgent(area)) return Promise.reject(new Error('This page has no route for ' + area + '.'));
+    var base = window.RRDB && window.RRDB.agentBase();
+    if (!base) return Promise.reject(new Error('No active database. Sign in again from the hub.'));
+    var url = base + '/' + area;
+    return fetch(url, {
+      method: opts.method || 'GET',
+      headers: prodHeaders(opts.body ? 'application/json;charset=UTF-8' : null),
+      body: opts.body ? JSON.stringify(opts.body) : undefined
+    }).then(function (r) {
+      if (!r.ok) return window.RRDB.responseError(r, url).then(function (e) { throw e; });
+      return r.json().catch(function (e) { if (e instanceof SyntaxError) return null; throw e; });
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  //  Small helpers
+  // ---------------------------------------------------------------------------
+  function $(id) { return document.getElementById(id); }
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (m) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]; }); }
+  function trim(s) { return String(s == null ? '' : s).trim(); }
+  function num(v) { var x = Number(v); return isFinite(x) ? x : 0; }
+  function money(n) { var x = num(n); var a = Math.abs(x).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); return x < 0 ? '(' + a + ')' : a; }
+  function qty(n) { var x = num(n); var a = Math.abs(x).toLocaleString('en-US', { maximumFractionDigits: 4 }); return x < 0 ? '(' + a + ')' : a; }
+  var _symCache = {};
+  function sym(code) {
+    var c = trim(code).toUpperCase(); if (!c) return '';
+    if (_symCache[c] !== undefined) return _symCache[c];
+    var s = c + ' ';
+    try { var parts = new Intl.NumberFormat('en-US', { style: 'currency', currency: c }).formatToParts(0); for (var i = 0; i < parts.length; i++) if (parts[i].type === 'currency') { s = parts[i].value; break; } } catch (_) {}
+    return (_symCache[c] = s);
+  }
+  function curMoney(n, code) { var x = num(n); var a = sym(code) + Math.abs(x).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); return x < 0 ? '(' + a + ')' : a; }
+  function moneyCell(n) { var x = num(n); if (Math.abs(x) < 0.005) return '<span class="muted">&mdash;</span>'; return '<span class="' + (x < 0 ? 'neg' : '') + '">' + money(x) + '</span>'; }
+  function qtyCell(n) { var x = num(n); if (Math.abs(x) < 0.00005) return '<span class="muted">&mdash;</span>'; return '<span class="' + (x < 0 ? 'neg' : '') + '">' + qty(x) + '</span>'; }
+  function isoDay(v) { var s = trim(v); return s.length >= 10 ? s.slice(0, 10) : s; }
+  function fmtDate(v) { var s = isoDay(v); var p = s.split('-'); if (p.length !== 3) return s; var mo = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; return mo[(+p[1]) - 1] + ' ' + (+p[2]) + ', ' + p[0]; }
+  function toast(m) { var t = $('toast'); if (!t) return; t.textContent = m; t.classList.add('show'); clearTimeout(t._t); t._t = setTimeout(function () { t.classList.remove('show'); }, 3200); }
+  function errText(e) { return (e && (e.serverMessage || e.message)) || String(e); }
+  function rollChip(v) {
+    var s = trim(v).toLowerCase();
+    if (s === 'baseline') return '<span class="chip baseline">Baseline</span>';
+    if (s === 'end') return '<span class="chip end">Open period</span>';
+    if (s === 'yes') return '<span class="chip yes">Yes</span>';
+    if (s === 'no') return '<span class="chip break">No</span>';
+    return '<span class="chip baseline">' + esc(v || '') + '</span>';
+  }
+  function isNo(v) { return trim(v).toLowerCase() === 'no'; }
+
+  // ---------------------------------------------------------------------------
+  //  Gates. Mirror the server: module = t.it AND m.it (UserRequest.hasModule),
+  //  lanes as Home (perms.ac / perms.dm), exclude + recalc = perms.ite.
+  // ---------------------------------------------------------------------------
+  function activeDb() { return (window.RRDB && window.RRDB.active && window.RRDB.active()) || {}; }
+  function hasToken() { try { return !!localStorage.getItem('rrv8.token'); } catch (_) { return false; } }
+  function hasModule() { var a = activeDb(); return !!(a.m && a.m.it === true && a.t && a.t.it === true); }
+  function perms() { return activeDb().perms || {}; }
+  function canAccountant() { return perms().ac === true; }
+  function canAnalyst() { return perms().dm === true; }
+  function canExclude() { return perms().ite === true; }
+  function dbName() { var a = activeDb(); return trim(a.n) || 'this database'; }
+
+  // ---------------------------------------------------------------------------
+  //  Company scope: Home's working companies (sessionStorage, owned by
+  //  sidebar.js) narrow the list; one company at a time, shared with Home's
+  //  analyst pick (rrv8.analystCompany.<db>). ?company= deep-links.
+  // ---------------------------------------------------------------------------
+  function scopedCompanySet() {
+    try {
+      var a = activeDb();
+      var mode = (window.RRENV && RRENV.mode()) || 'staging';
+      var key = 'rrv8.scope.v1.' + mode + '.' + (a.n || '_') + '.scope';
+      var raw = sessionStorage.getItem(key); var sc = raw ? (JSON.parse(raw).payload || null) : null;
+      var act = (sc && Array.isArray(sc.activeCompanies) && sc.activeCompanies.length) ? sc.activeCompanies.map(String) : null;
+      if (!act) return null;
+      return act.reduce(function (s, c) { s[trim(c)] = true; return s; }, {});
+    } catch (_) { return null; }
+  }
+  function soloKey() { return 'rrv8.analystCompany.' + (trim(activeDb().n) || '_'); }
+
+  // ---------------------------------------------------------------------------
+  //  Page state
+  // ---------------------------------------------------------------------------
+  var S = {
+    status: null,          // in-transit/status
+    companies: [],         // company numbers the page offers
+    company: '',
+    period: '',            // YYYY-MM-DD
+    periods: [],           // from the company's history, newest first
+    lens: '',
+    tab: '',
+    rowsAll: null,         // reconciliation rows, every company, selected period
+    history: {},           // company -> points
+    currency: {}           // company -> currency code
+  };
+  var TABS = {
+    accountant: [ ['overview', 'Overview'], ['accounts', 'Accounts'], ['onhand', 'On Hand'], ['audit', 'Audit Center'] ],
+    analyst:    [ ['health', 'Data Health'], ['txv', 'Transaction Variance'], ['orders', 'Orders'], ['tools', 'Tools'] ]
+  };
+  function filterBody(opts) {
+    opts = opts || {};
+    var f = { companies: opts.allCompanies ? S.companies.slice() : [S.company], businessUnits: [], objects: [], subsidiaries: [] };
+    if (!opts.noPeriod && S.period) f.period = S.period;
+    return { reconciliationFilter: f };
+  }
+  function curOf(co) { return S.currency[co] || ''; }
+
+  // ---------------------------------------------------------------------------
+  //  Grid: the read-only standard (search with ^ anchor, Excel of what is
+  //  shown, count, click-to-sort, sticky header) plus optional row selection.
+  // ---------------------------------------------------------------------------
+  function Grid(host, o) {
+    this.host = host; this.o = o; this.rows = []; this.q = ''; this.err = null; this.loading = true;
+    this.sort = o.sort ? { k: o.sort.k, dir: o.sort.dir } : null; this.picked = {};
+    var tools = o.tools || '';
+    host.innerHTML =
+      '<section class="grid-card"><div class="grid-head">' +
+        '<span class="grid-title">' + esc(o.title) + '</span><span class="grid-sub"></span>' +
+        (tools ? '<div class="grid-tools">' + tools + '</div>' : '') +
+        '<div class="grid-state-cluster">' +
+          '<input class="grid-search" type="search" placeholder="Search" aria-label="Search ' + esc(o.title) + '">' +
+          '<button class="grid-pill grid-pill-export" type="button" title="Export what is shown to Excel"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10v3h10v-3"/><path d="M8 2v9"/><polyline points="5 8 8 11 11 8"/></svg>Excel</button>' +
+          '<span class="grid-pill grid-pill-count">&mdash;</span>' +
+        '</div></div>' +
+      '<div class="grid-scroll"><table class="rf"><thead></thead><tbody><tr><td class="empty">Loading&hellip;</td></tr></tbody></table></div></section>';
+    var self = this, t;
+    host.querySelector('.grid-search').addEventListener('input', function (e) { clearTimeout(t); var v = e.target.value; t = setTimeout(function () { self.q = v; self.render(); }, 150); });
+    host.querySelector('.grid-pill-export').addEventListener('click', function () { self.exportXlsx(); });
+    host.querySelector('thead').addEventListener('click', function (e) {
+      var th = e.target.closest('th[data-k]');
+      if (th) {
+        var k = th.getAttribute('data-k');
+        self.sort = (self.sort && self.sort.k === k) ? { k: k, dir: self.sort.dir === 'asc' ? 'desc' : 'asc' } : { k: k, dir: self.colOf(k).num ? 'desc' : 'asc' };
+        self.render(); return;
+      }
+      if (e.target.matches('input.pick-all')) { var on = e.target.checked; self.visible().forEach(function (r) { var id = self.o.keyOf(r); if (on) self.picked[id] = r; else delete self.picked[id]; }); self.render(); }
+    });
+    host.querySelector('tbody').addEventListener('change', function (e) {
+      if (!e.target.matches('input.pick')) return;
+      var id = e.target.getAttribute('data-id'), r = self._byId[id];
+      if (e.target.checked && r) self.picked[id] = r; else delete self.picked[id];
+      e.target.closest('tr').classList.toggle('is-picked', e.target.checked);
+      if (self.o.onPick) self.o.onPick(self.pickedRows());
+    });
+  }
+  Grid.prototype.cols = function () { return typeof this.o.cols === 'function' ? this.o.cols(this.rows) : this.o.cols; };
+  Grid.prototype.colOf = function (k) { var c = this.cols(); for (var i = 0; i < c.length; i++) if (c[i].k === k) return c[i]; return {}; };
+  Grid.prototype.text = function (c, r) { var v = c.get ? c.get(r) : r[c.k]; return v == null ? '' : String(v); };
+  Grid.prototype.set = function (rows) { this.rows = Array.isArray(rows) ? rows : []; this.err = null; this.loading = false; this.picked = {}; this.render(); if (this.o.onPick) this.o.onPick([]); };
+  Grid.prototype.fail = function (msg) { this.rows = []; this.err = msg; this.loading = false; this.picked = {}; this.render(); };
+  Grid.prototype.wait = function () { this.loading = true; this.err = null; this.render(); };
+  Grid.prototype.pickedRows = function () { var p = this.picked; return Object.keys(p).map(function (k) { return p[k]; }); };
+  Grid.prototype.visible = function () {
+    var self = this, cols = this.cols(), q = trim(this.q).toLowerCase(), anchor = false;
+    if (q.charAt(0) === '^') { anchor = true; q = q.slice(1); }
+    var out = this.rows.filter(function (r) {
+      if (self.o.filter && !self.o.filter(r)) return false;
+      if (!q) return true;
+      for (var i = 0; i < cols.length; i++) {
+        var t = self.text(cols[i], r).toLowerCase().trim();
+        if (anchor ? t.indexOf(q) === 0 : t.indexOf(q) >= 0) return true;
+      }
+      return false;
+    });
+    if (this.sort) {
+      var c = this.colOf(this.sort.k), d = this.sort.dir === 'asc' ? 1 : -1;
+      out.sort(function (a, b) {
+        if (c.num) { var x = c.sortVal ? c.sortVal(a) : num(c.get ? c.get(a) : a[c.k]), y = c.sortVal ? c.sortVal(b) : num(c.get ? c.get(b) : b[c.k]); return (x - y) * d; }
+        return self.text(c, a).localeCompare(self.text(c, b), undefined, { numeric: true, sensitivity: 'base' }) * d;
+      });
+    }
+    return out;
+  };
+  Grid.prototype.render = function () {
+    var self = this, cols = this.cols(), sel = !!this.o.keyOf && this.o.selectable && this.o.selectable();
+    this.host.querySelector('.grid-sub').innerHTML = this.o.sub || '';   // o.sub is built from esc()'d parts
+    var head = (sel ? '<th class="sel"><input type="checkbox" class="pick-all" aria-label="Select all shown"></th>' : '') +
+      cols.map(function (c) {
+        var on = self.sort && self.sort.k === c.k;
+        return '<th data-k="' + esc(c.k) + '"' + (c.num ? ' class="num"' : '') + ' title="Sort by ' + esc(c.label) + '">' + esc(c.label) +
+          (on ? '<span class="sort">' + (self.sort.dir === 'asc' ? '&#9650;' : '&#9660;') + '</span>' : '') + '</th>';
+      }).join('');
+    this.host.querySelector('thead').innerHTML = '<tr>' + head + '</tr>';
+    var body = this.host.querySelector('tbody'), span = cols.length + (sel ? 1 : 0), count = this.host.querySelector('.grid-pill-count');
+    if (this.loading) { body.innerHTML = '<tr><td class="empty" colspan="' + span + '">Loading&hellip;</td></tr>'; count.textContent = '—'; return; }
+    if (this.err) { body.innerHTML = '<tr><td class="empty err" colspan="' + span + '">' + esc(this.err) + '</td></tr>'; count.textContent = '0 rows'; return; }
+    var vis = this.visible(); this._byId = {};
+    count.textContent = vis.length.toLocaleString() + (vis.length === this.rows.length ? '' : ' of ' + this.rows.length.toLocaleString()) + (this.rows.length === 1 ? ' row' : ' rows');
+    if (!vis.length) { body.innerHTML = '<tr><td class="empty" colspan="' + span + '">' + esc(this.rows.length ? 'No rows match.' : (this.o.empty || 'Nothing to show.')) + '</td></tr>'; return; }
+    var cap = 2000, html = vis.slice(0, cap).map(function (r) {
+      var id = sel ? self.o.keyOf(r) : '', on = sel && !!self.picked[id];
+      if (sel) self._byId[id] = r;
+      return '<tr' + (on ? ' class="is-picked"' : '') + '>' + (sel ? '<td class="sel"><input type="checkbox" class="pick" data-id="' + esc(id) + '"' + (on ? ' checked' : '') + ' aria-label="Select row"></td>' : '') +
+        cols.map(function (c) { return '<td' + (c.num ? ' class="num"' : (c.cls ? ' class="' + c.cls + '"' : '')) + '>' + (c.render ? c.render(r) : esc(self.text(c, r))) + '</td>'; }).join('') + '</tr>';
+    }).join('');
+    if (vis.length > cap) html += '<tr><td class="empty" colspan="' + span + '">Showing the first ' + cap.toLocaleString() + ' of ' + vis.length.toLocaleString() + ' rows. Search to narrow them, or export to Excel for all of them.</td></tr>';
+    body.innerHTML = html;
+  };
+  Grid.prototype.exportXlsx = function () {
+    var self = this, title = this.o.title;
+    RRV8.runExport(title, toast, function () {
+      if (typeof XLSX === 'undefined') { toast('The Excel library has not loaded yet. Try again in a moment.'); return; }
+      if (self.loading || self.err) { toast('There is nothing loaded to export.'); return; }
+      var vis = self.visible();
+      if (!vis.length) { toast('No rows are shown, so there is nothing to export.'); return; }
+      var cols = self.cols();
+      var wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, sheetOf(cols, vis, function (c, r) { return c.xl ? c.xl(r) : (c.get ? c.get(r) : r[c.k]); }), sheetName(title));
+      RRV8.saveWorkbook(wb, RRV8.exportName({ surface: 'InTransit-' + (self.o.surface || title), company: S.company, period: self.o.noPeriod ? '' : S.period }), toast, title);
+    });
+  };
+  function sheetName(s) { return String(s).replace(/[\\\/\?\*\[\]:]/g, ' ').slice(0, 31); }
+  function sheetOf(cols, rows, val) {
+    var aoa = [cols.map(function (c) { return c.label; })];
+    rows.forEach(function (r) { aoa.push(cols.map(function (c) { var v = val(c, r); return c.num ? num(v) : (v == null ? '' : String(v)); })); });
+    var ws = XLSX.utils.aoa_to_sheet(aoa);
+    var bold = { font: { bold: true }, fill: { fgColor: { rgb: 'ECEEF3' } } };
+    cols.forEach(function (c, i) {
+      var h = XLSX.utils.encode_cell({ r: 0, c: i }); if (ws[h]) ws[h].s = bold;
+      if (c.num) for (var r = 1; r < aoa.length; r++) { var a = XLSX.utils.encode_cell({ r: r, c: i }); if (ws[a]) ws[a].z = c.qty ? '#,##0.####;(#,##0.####)' : '#,##0.00;(#,##0.00)'; }
+    });
+    ws['!cols'] = cols.map(function (c) { return { wch: Math.max(10, Math.min(40, String(c.label).length + 4)) }; });
+    return ws;
+  }
+  // Column sets for row shapes the page does not own (the five transit reports,
+  // the variance components): one column per field, numbers right-aligned.
+  function autoCols(rows) {
+    var first = rows && rows[0]; if (!first) return [];
+    return Object.keys(first).map(function (k) {
+      var isNum = rows.some(function (r) { return typeof r[k] === 'number'; }) && !/number$|order|doc|batch|item|line|period|date|company|account/i.test(k);
+      return { k: k, label: k.replace(/([a-z])([A-Z])/g, '$1 $2'), num: isNum, render: isNum ? function (r) { return moneyCell(r[k]); } : function (r) { var v = r[k]; return /date|periodends/i.test(k) ? esc(fmtDate(v)) : esc(v); } };
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  //  Column sets
+  // ---------------------------------------------------------------------------
+  var C = {
+    co:     { k: 'CompanyNumber', label: 'Co', render: function (r) { return '<span class="mono">' + esc(r.CompanyNumber) + '</span>'; } },
+    acct:   { k: 'LongAccount', label: 'Account', render: function (r) { return '<span class="mono acct">' + esc(trim(r.LongAccount)) + '</span>'; } },
+    period: { k: 'PeriodEnds', label: 'Period', get: function (r) { return isoDay(r.PeriodEnds); }, render: function (r) { return esc(fmtDate(r.PeriodEnds)); } }
+  };
+  function m(k, label) { return { k: k, label: label, num: true, render: function (r) { return moneyCell(r[k]); } }; }
+  function q(k, label) { return { k: k, label: label, num: true, qty: true, render: function (r) { return qtyCell(r[k]); } }; }
+  function t(k, label, cls) { return { k: k, label: label, cls: cls, get: function (r) { return trim(r[k]); } }; }
+  var ACCOUNT_COLS = [C.co, C.acct, C.period,
+    m('BegGL', 'Beg GL'), m('PerGL', 'Per GL'), m('EndGL', 'End GL'), m('UnpostBatch', 'Unposted'),
+    { k: 'GLOK', label: 'GL roll', get: function (r) { return trim(r.GLOK); }, render: function (r) { return rollChip(r.GLOK); } },
+    m('TransitAmount', 'In transit'), m('BegVar', 'Beg var'), m('EndofDay', 'End of day'), m('Exclusions', 'Exclusions'),
+    m('Variance', 'Txn variance'), m('JEs', 'JEs'), m('OOB', 'Out of balance'),
+    { k: 'VarOK', label: 'Var roll', get: function (r) { return trim(r.VarOK); }, render: function (r) { return rollChip(r.VarOK); } }];
+  var HIST_COLS = [ { k: 'period', label: 'Period', get: function (r) { return isoDay(r.period); }, render: function (r) { return esc(fmtDate(r.period)); } },
+    m('glBalance', 'GL balance'), m('transitBalance', 'In transit'), m('beginningVariance', 'Beg var'), m('unpostedBatches', 'Unposted'),
+    m('endOfDay', 'End of day'), m('exclusions', 'Exclusions'), m('transactionVariance', 'Txn variance'), m('journalEntries', 'JEs'),
+    m('outOfBalance', 'Out of balance'),
+    { k: 'breaks', label: 'Roll breaks', num: true, qty: true, get: function (r) { return num(r.glRollBreaks) + num(r.varianceRollBreaks); }, render: function (r) { var n = num(r.glRollBreaks) + num(r.varianceRollBreaks); return n ? '<span class="neg">' + n + '</span>' : '<span class="muted">&mdash;</span>'; } } ];
+  var ONHAND_COLS = [C.co, C.acct, t('ItemNumber', 'Item', 'mono'), t('ThirdItem', '3rd item', 'mono'), t('Description', 'Description'), t('Lot', 'Lot', 'mono'), t('UOM', 'UOM'),
+    q('Quantity', 'Quantity'), m('Amount', 'Amount')];
+  var TXV_COLS = [C.co, C.acct, C.period, t('OT', 'Order type'), t('OrderNumber', 'Order', 'mono'), t('DT', 'Doc type'), t('DocNumber', 'Doc', 'mono'), t('Batch', 'Batch', 'mono'),
+    { k: 'TransDate', label: 'Date', get: function (r) { return isoDay(r.TransDate); }, render: function (r) { return esc(fmtDate(r.TransDate)); } },
+    m('TransitAmount', 'In transit'), m('LedgerAmount', 'Ledger'),
+    { k: 'Variance', label: 'Variance', num: true, render: function (r) { return moneyCell(r.Variance); }, sortVal: function (r) { return Math.abs(num(r.Variance)); } },
+    { k: 'Worked', label: 'Worked', get: function (r) { return r.Worked ? 'Yes' : ''; } },
+    t('Note', 'Note', 'note')];
+  var ORDER_COLS = [
+    { k: 'Excluded', label: 'Excluded', get: function (r) { return r.Excluded ? 'Excluded' : ''; }, render: function (r) { return r.Excluded ? '<span class="chip excl">Excluded</span>' : ''; } },
+    C.co, C.acct, t('OrderType', 'Type'), t('OrderNumber', 'Order', 'mono'), t('RelType', 'Rel type'), t('RelOrder', 'Rel order', 'mono'),
+    { k: 'OrderDate', label: 'Order date', get: function (r) { return isoDay(r.OrderDate); }, render: function (r) { return esc(fmtDate(r.OrderDate)); } },
+    t('ItemNumber', 'Item', 'mono'), t('Lot', 'Lot', 'mono'), t('ShipBranch', 'Ship branch', 'mono'), t('RecBranch', 'Receive branch', 'mono'),
+    q('ShipQty', 'Shipped'), q('RecQty', 'Received'), q('TranQty', 'In transit qty'),
+    m('ShipAmt', 'Ship amount'), m('RecAmt', 'Receipt amount'), m('TranAmt', 'In transit'),
+    t('ShipSts', 'Ship status', 'mono'), t('RecSts', 'Receipt status', 'mono'), t('Note', 'Note', 'note')];
+
+  // ---------------------------------------------------------------------------
+  //  Boot: gates, then status, then the company's history.
+  // ---------------------------------------------------------------------------
+  function gate(html) { var g = $('itGate'); g.innerHTML = html; g.hidden = false; $('itWork').hidden = true; }
+  function setContext(main, sub) { $('itContext').textContent = main; $('itContextSub').textContent = sub || ''; }
+
+  function boot() {
+    setContext(dbName());
+    if (!hasToken()) { gate('Sign in from the hub so this page can read In Transit from the data service.'); return; }
+    // The Agent's own words for this refusal (InTransitModuleGate), so the page and a
+    // direct call say the same thing.
+    if (!hasModule()) { gate('In Transit is not turned on for you on this database. Your administrator turns it on for each person, one database at a time.'); return; }
+    var lenses = [];
+    if (canAccountant()) lenses.push('accountant');
+    if (canAnalyst()) lenses.push('analyst');
+    if (!lenses.length) { gate('You have no lane on <b>' + esc(dbName()) + '</b>. In Transit has an accountant view and an analyst view, and your role on this database gives you neither.'); return; }
+    var saved = ''; try { saved = localStorage.getItem('rrv8.viewRole') || ''; } catch (_) {}
+    var qs = new URLSearchParams(location.search);
+    var wantTab = trim(qs.get('tab'));
+    S.lens = lenses.indexOf(saved) >= 0 ? saved : lenses[0];
+    if (wantTab) Object.keys(TABS).forEach(function (l) { if (lenses.indexOf(l) >= 0 && TABS[l].some(function (x) { return x[0] === wantTab; })) S.lens = l; });
+    if (lenses.length > 1) $('itLensWrap').hidden = false;
+    $('itWork').hidden = false;
+
+    rrFetch('in-transit/status').then(function (st) {
+      S.status = st || {};
+      var f = S.status.reconciliationFilter || {};
+      var cos = (f.companies || []).map(trim).filter(Boolean);
+      var sc = scopedCompanySet();
+      if (sc) { var narrowed = cos.filter(function (c) { return sc[c]; }); if (narrowed.length) cos = narrowed; }
+      cos.sort(function (a, b) { return a.localeCompare(b, undefined, { numeric: true }); });
+      if (!cos.length) { gate('No company you can see on <b>' + esc(dbName()) + '</b> has In Transit set up, so there is nothing to reconcile here yet.'); return; }
+      S.companies = cos;
+      S.period = isoDay(f.period);
+      var want = trim(qs.get('company')), last = ''; try { last = trim(localStorage.getItem(soloKey())); } catch (_) {}
+      if (want && cos.indexOf(want) < 0) toast('Company ' + want + ' is not one you can see here, so the page opened on another.');
+      S.company = cos.indexOf(want) >= 0 ? want : (cos.indexOf(last) >= 0 ? last : cos[0]);
+      paintLight(S.status.validation);
+      $('itCompany').innerHTML = cos.map(function (c) { return '<option value="' + esc(c) + '">' + esc(c) + '</option>'; }).join('');
+      $('itCompany').value = S.company;
+      wireControls();
+      renderTabs(wantTab);
+      return loadCompany();
+    }).catch(function (e) {
+      gate('In Transit could not be read from the data service: ' + esc(errText(e)));
+    });
+  }
+
+  function paintLight(v) {
+    var el = $('itLight'), c = trim(v && v.color).toLowerCase();
+    el.classList.remove('ok', 'bad');
+    if (c === 'success') { el.classList.add('ok'); $('itLightText').textContent = 'Roll forward checks pass'; }
+    else if (c === 'danger') { el.classList.add('bad'); $('itLightText').textContent = 'A roll forward check failed'; }
+    else $('itLightText').textContent = 'Roll forward not checked yet';
+  }
+
+  function wireControls() {
+    Array.prototype.forEach.call(document.querySelectorAll('#itLens .seg-btn'), function (b) {
+      b.classList.toggle('is-on', b.getAttribute('data-lens') === S.lens);
+      b.hidden = !(b.getAttribute('data-lens') === 'accountant' ? canAccountant() : canAnalyst());
+      b.addEventListener('click', function () {
+        var l = b.getAttribute('data-lens'); if (l === S.lens) return;
+        S.lens = l; try { localStorage.setItem('rrv8.viewRole', l); } catch (_) {}
+        Array.prototype.forEach.call(document.querySelectorAll('#itLens .seg-btn'), function (x) { x.classList.toggle('is-on', x === b); });
+        renderTabs(); showTab(S.tab);
+      });
+    });
+    $('itCompany').addEventListener('change', function (e) {
+      S.company = e.target.value; try { localStorage.setItem(soloKey(), S.company); } catch (_) {}
+      loadCompany();
+    });
+    $('itPeriod').addEventListener('change', function (e) { S.period = e.target.value; invalidate(); showTab(S.tab); });
+  }
+
+  function renderTabs(want) {
+    var list = TABS[S.lens];
+    if (!want || !list.some(function (x) { return x[0] === want; })) want = list.some(function (x) { return x[0] === S.tab; }) ? S.tab : list[0][0];
+    $('itTabs').innerHTML = list.map(function (x) { return '<button class="it-tab" type="button" role="tab" data-tab="' + x[0] + '">' + esc(x[1]) + '</button>'; }).join('');
+    Array.prototype.forEach.call($('itTabs').querySelectorAll('.it-tab'), function (b) { b.addEventListener('click', function () { showTab(b.getAttribute('data-tab')); }); });
+    S.tab = want;
+    Object.keys(TABS).forEach(function (l) { TABS[l].forEach(function (x) { $('tab-' + x[0]).hidden = true; }); });
+  }
+
+  // Per-tab loads happen once per (company, period); invalidate() forgets them.
+  var _loaded = {};
+  function invalidate() { _loaded = {}; S.rowsAll = null; }
+  function showTab(tab) {
+    S.tab = tab;
+    Array.prototype.forEach.call($('itTabs').querySelectorAll('.it-tab'), function (b) { var on = b.getAttribute('data-tab') === tab; b.classList.toggle('is-on', on); b.setAttribute('aria-selected', on ? 'true' : 'false'); });
+    Object.keys(TABS).forEach(function (l) { TABS[l].forEach(function (x) { $('tab-' + x[0]).hidden = x[0] !== tab; }); });
+    // Orders is current state, not a period: the period picker does not apply there.
+    $('itPeriodWrap').style.visibility = (tab === 'orders' || tab === 'tools') ? 'hidden' : '';
+    try { var u = new URL(location.href); u.searchParams.set('tab', tab); u.searchParams.set('company', S.company); history.replaceState(null, '', u); } catch (_) {}
+    if (_loaded[tab]) return;
+    _loaded[tab] = true;
+    ({ overview: loadOverview, accounts: loadAccounts, onhand: loadOnHand, audit: function () {}, health: loadHealth, txv: loadTxv, orders: loadOrders, tools: loadTools })[tab]();
+  }
+
+  // The company's history gives the period list (newest first) and Overview's trend.
+  function loadCompany() {
+    invalidate();
+    setContext(dbName() + ' · Company ' + S.company, '');
+    var co = S.company;
+    return rrFetch('in-transit/reconciliation/history', { method: 'POST', body: filterBody({ noPeriod: true }) }).then(function (h) {
+      if (co !== S.company) return;
+      var pts = (h && Array.isArray(h.points)) ? h.points : null;
+      if (!pts) throw new Error('the data service returned a history this page could not read');
+      S.history[co] = pts;
+      S.periods = pts.map(function (p) { return isoDay(p.period); }).filter(Boolean).reverse();
+      if (S.periods.indexOf(S.period) < 0) S.period = S.periods[0] || S.period;
+      $('itPeriod').innerHTML = S.periods.map(function (p) { return '<option value="' + esc(p) + '">' + esc(fmtDate(p)) + '</option>'; }).join('');
+      $('itPeriod').value = S.period;
+      showTab(S.tab);
+    }).catch(function (e) {
+      gate('In Transit history for company ' + esc(co) + ' could not be read: ' + esc(errText(e)));
+    });
+  }
+
+  // Every company's rows for the period: Overview's by-company table and each
+  // company's currency. One call, cached until the period changes.
+  function rowsAllCompanies() {
+    if (S.rowsAll) return Promise.resolve(S.rowsAll);
+    return rrFetch('in-transit/reconciliation/rows', { method: 'POST', body: filterBody({ allCompanies: true }) }).then(function (d) {
+      var rows = d && Array.isArray(d.rows) ? d.rows : null;
+      if (!rows) throw new Error('the data service returned rows this page could not read');
+      rows.forEach(function (r) { var c = trim(r.Currency); if (c) S.currency[trim(r.CompanyNumber)] = c; });
+      return (S.rowsAll = rows);
+    });
+  }
+
+  // ===================== ACCOUNTANT =====================
+  function kpi(label, val, sub, state) {
+    return '<div class="kpi' + (state ? ' is-' + state : '') + '"><div class="kpi-lbl">' + esc(label) + '</div><div class="kpi-val' + (/^\(/.test(val) ? ' neg' : '') + '">' + esc(val) + '</div>' + (sub ? '<div class="kpi-sub">' + esc(sub) + '</div>' : '') + '</div>';
+  }
+  var _ovCo = null, _ovHist = null;
+  function loadOverview() {
+    $('ovKpis').innerHTML = '';
+    if (!_ovCo) {
+      _ovCo = new Grid($('ovByCompany'), { title: 'Out of balance by company', surface: 'ByCompany', sort: { k: 'OOB', dir: 'desc' },
+        cols: [ C.co, { k: 'Currency', label: 'Currency' }, { k: 'Accounts', label: 'Accounts', num: true, qty: true, render: function (r) { return esc(r.Accounts); } },
+          { k: 'EndGL', label: 'GL balance', num: true, render: function (r) { return moneyCell(r.EndGL); } },
+          { k: 'TransitAmount', label: 'In transit', num: true, render: function (r) { return moneyCell(r.TransitAmount); } },
+          { k: 'OOB', label: 'Out of balance', num: true, render: function (r) { return moneyCell(r.OOB); }, sortVal: function (r) { return Math.abs(num(r.OOB)); } },
+          { k: 'Breaks', label: 'Roll breaks', num: true, qty: true, render: function (r) { return r.Breaks ? '<span class="neg">' + esc(r.Breaks) + '</span>' : '<span class="muted">&mdash;</span>'; } } ],
+        empty: 'No in-transit accounts in this period.' });
+      _ovHist = new Grid($('ovHistory'), { title: 'Out of balance by period', surface: 'History', noPeriod: true, sort: { k: 'period', dir: 'desc' }, cols: HIST_COLS });
+    }
+    _ovCo.wait();
+    var pts = (S.history[S.company] || []).slice();
+    _ovHist.o.sub = 'Company ' + esc(S.company);
+    _ovHist.set(pts);
+    rowsAllCompanies().then(function (rows) {
+      var by = {};
+      rows.forEach(function (r) {
+        var co = trim(r.CompanyNumber); var b = by[co] || (by[co] = { CompanyNumber: co, Currency: trim(r.Currency), Accounts: 0, EndGL: 0, TransitAmount: 0, OOB: 0, Breaks: 0 });
+        b.Accounts++; b.EndGL += num(r.EndGL); b.TransitAmount += num(r.TransitAmount); b.OOB += num(r.OOB); if (isNo(r.GLOK) || isNo(r.VarOK)) b.Breaks++;
+      });
+      _ovCo.o.sub = 'Period ending ' + esc(fmtDate(S.period)) + ', each company in its own currency';
+      _ovCo.set(Object.keys(by).map(function (k) { return by[k]; }));
+      var mine = by[S.company], cur = curOf(S.company);
+      var pt = pts.filter(function (p) { return isoDay(p.period) === S.period; })[0] || {};
+      var breaks = num(pt.glRollBreaks) + num(pt.varianceRollBreaks);
+      $('ovKpis').innerHTML =
+        kpi('Out of balance', curMoney(mine ? mine.OOB : pt.outOfBalance, cur), 'Company ' + S.company + ', period ending ' + fmtDate(S.period), Math.abs(num(mine ? mine.OOB : pt.outOfBalance)) >= 0.005 ? 'bad' : 'ok') +
+        kpi('GL balance', curMoney(mine ? mine.EndGL : pt.glBalance, cur), 'In-transit accounts') +
+        kpi('In transit', curMoney(mine ? mine.TransitAmount : pt.transitBalance, cur), 'Shipped, not yet received') +
+        kpi('Roll breaks', String(breaks), breaks ? 'Rows that did not roll forward' : 'Every row rolled forward', breaks ? 'bad' : 'ok');
+    }).catch(function (e) { _ovCo.fail('Could not read the roll forward: ' + errText(e)); });
+  }
+
+  var _acGrid = null;
+  function loadAccounts() {
+    if (!_acGrid) _acGrid = new Grid($('acGrid'), { title: 'Roll forward by account', surface: 'Accounts', cols: ACCOUNT_COLS, sort: { k: 'OOB', dir: 'desc' }, empty: 'No in-transit accounts in this period.' });
+    _acGrid.wait();
+    rrFetch('in-transit/reconciliation/rows', { method: 'POST', body: filterBody() }).then(function (d) {
+      if (!d || !Array.isArray(d.rows)) throw new Error('the data service returned rows this page could not read');
+      _acGrid.o.sub = 'Company ' + esc(S.company) + ', period ending ' + esc(fmtDate(S.period));
+      _acGrid.set(d.rows);
+    }).catch(function (e) { _acGrid.fail('Could not read the roll forward: ' + errText(e)); });
+  }
+
+  var _ohGrid = null;
+  function loadOnHand() {
+    if (!_ohGrid) _ohGrid = new Grid($('ohGrid'), { title: 'In transit by item', surface: 'OnHand', cols: ONHAND_COLS, sort: { k: 'Amount', dir: 'desc' }, empty: 'Nothing was in transit at the end of this period.' });
+    _ohGrid.wait();
+    rrFetch('in-transit/as-of', { method: 'POST', body: filterBody() }).then(function (d) {
+      if (!d || !Array.isArray(d.data)) throw new Error('the data service returned a response this page could not read');
+      var tot = d.data.reduce(function (s, r) { return s + num(r.Amount); }, 0);
+      _ohGrid.o.sub = 'Company ' + esc(S.company) + ', period ending ' + esc(fmtDate(S.period)) + ' &middot; total ' + esc(curMoney(tot, curOf(S.company)));
+      _ohGrid.set(d.data);
+    }).catch(function (e) { _ohGrid.fail('Could not read what is in transit: ' + errText(e)); });
+  }
+
+  // The audit report: everything the accountant signs off, in one workbook.
+  var COMPONENTS = [ ['glBatches', 'GL Batches'], ['endOfDay', 'End of Day'], ['exclusions', 'Excluded Orders'], ['manualJournalEntries', 'Manual JEs'] ];
+  function runAudit() {
+    var btn = $('auBtn'), st = $('auStatus');
+    if (typeof XLSX === 'undefined') { st.className = 'act-status err'; st.textContent = 'The Excel library has not loaded yet. Try again in a moment.'; return; }
+    btn.disabled = true; st.className = 'act-status busy'; st.textContent = 'Reading the roll forward and its components…';
+    var body = filterBody();
+    Promise.all([
+      rrFetch('in-transit/reconciliation/rows', { method: 'POST', body: body }),
+      rrFetch('in-transit/reconciliation/journal-entry', { method: 'POST', body: body })
+    ].concat(COMPONENTS.map(function (c) { return rrFetch('in-transit/variance-component', { method: 'POST', body: { component: c[0], reconciliationFilter: body.reconciliationFilter } }); })))
+    .then(function (res) {
+      RRV8.runExport('In Transit audit report', function (msg) { st.className = 'act-status err'; st.textContent = msg; }, function () {
+        var wb = XLSX.utils.book_new(), pts = S.history[S.company] || [];
+        XLSX.utils.book_append_sheet(wb, sheetOf(HIST_COLS, pts.slice().reverse(), function (c, r) { return c.get ? c.get(r) : r[c.k]; }), 'Roll Forward by Period');
+        XLSX.utils.book_append_sheet(wb, sheetOf(ACCOUNT_COLS, (res[0] && res[0].rows) || [], function (c, r) { return c.get ? c.get(r) : r[c.k]; }), 'Accounts');
+        var je = (res[1] && res[1].rows) || [];
+        XLSX.utils.book_append_sheet(wb, sheetOf([C.co, C.acct, C.period, m('EndingGLAmount', 'Ending GL'), m('EndingTransitAmount', 'Ending in transit'), m('OutofBalance', 'Out of balance'), { k: 'Currency', label: 'Currency' }],
+          je, function (c, r) { return c.get ? c.get(r) : r[c.k]; }), 'Journal Entry');
+        COMPONENTS.forEach(function (c, i) {
+          var rows = (res[2 + i] && res[2 + i].rows) || [];
+          var cols = rows.length ? autoCols(rows) : [{ k: 'none', label: 'No rows in this period' }];
+          XLSX.utils.book_append_sheet(wb, sheetOf(cols, rows, function (cc, r) { return r[cc.k]; }), c[1]);
+        });
+        if (RRV8.saveWorkbook(wb, RRV8.exportName({ surface: 'InTransit-AuditReport', company: S.company, period: S.period }), function (msg) { st.className = 'act-status err'; st.textContent = msg; }, 'In Transit audit report')) {
+          st.className = 'act-status ok'; st.textContent = 'Downloaded the audit report for company ' + S.company + ', period ending ' + fmtDate(S.period) + '.';
+        }
+      });
+    }).catch(function (e) { st.className = 'act-status err'; st.textContent = 'The audit report could not be built: ' + errText(e); })
+    .then(function () { btn.disabled = false; });
+  }
+  $('auBtn').addEventListener('click', runAudit);
+
+  // ===================== ANALYST =====================
+  var REPORTS = [
+    { id: 'v6_transit_cost_variances', title: 'Ship vs. receipt cost', desc: 'Transfer lines whose receipt cost differs from what shipped, on in-transit accounts.', period: true },
+    { id: 'v_integrity_trans_exc_glc', title: 'GL classes not in the model', desc: 'Transfer lines whose GL class no in-transit AAI (4320 / 4322) covers.' },
+    { id: 'v_integrity_trans_base',    title: 'In-transit accounts', desc: 'The in-transit accounts the transfer AAIs resolve to.' },
+    { id: 'v_integrity_trans_aais',    title: 'Transfer AAIs', desc: 'The AAI rows a transfer posts through, by document type.' },
+    { id: 'v6_transit_excluded_details', title: 'Excluded orders', desc: 'Orders excluded from In Transit and the period each counts in.', period: true }
+  ];
+  var _rollGrid = null;
+  function loadHealth() {
+    var pts = S.history[S.company] || [];
+    var glB = pts.reduce(function (s, p) { return s + num(p.glRollBreaks); }, 0), vB = pts.reduce(function (s, p) { return s + num(p.varianceRollBreaks); }, 0);
+    $('dhKpis').innerHTML = kpi('GL roll breaks', String(glB), glB ? 'Periods whose GL did not roll forward' : 'The GL rolls forward in every period', glB ? 'bad' : 'ok') +
+      kpi('Variance roll breaks', String(vB), vB ? 'Periods whose out of balance did not roll forward' : 'The out of balance rolls forward in every period', vB ? 'bad' : 'ok');
+    if (!_rollGrid) _rollGrid = new Grid($('dhRoll'), { title: 'Roll forward checks', surface: 'RollChecks', noPeriod: true, cols: ACCOUNT_COLS, sort: { k: 'PeriodEnds', dir: 'desc' },
+      filter: function (r) { return isNo(r.GLOK) || isNo(r.VarOK); }, empty: 'Every account rolled forward in this period.' });
+    _rollGrid.wait();
+    rrFetch('in-transit/reconciliation/rows', { method: 'POST', body: filterBody() }).then(function (d) {
+      if (!d || !Array.isArray(d.rows)) throw new Error('the data service returned rows this page could not read');
+      _rollGrid.o.sub = 'Accounts that did not roll forward into ' + esc(fmtDate(S.period));
+      _rollGrid.set(d.rows);
+    }).catch(function (e) { _rollGrid.fail('Could not read the roll forward: ' + errText(e)); });
+
+    $('dhReports').innerHTML = REPORTS.map(function (r, i) {
+      return '<div class="rpt" data-i="' + i + '"><div class="rpt-head" role="button" tabindex="0" aria-expanded="false">' +
+        '<span class="rpt-title">' + esc(r.title) + '</span><span class="rpt-desc">' + esc(r.desc) + '</span><span class="rpt-count" id="rc' + i + '">&hellip;</span></div>' +
+        '<div class="rpt-body" id="rb' + i + '" hidden></div></div>';
+    }).join('');
+    REPORTS.forEach(function (r, i) {
+      var head = $('dhReports').querySelector('.rpt[data-i="' + i + '"] .rpt-head'), grid = null, rows = null;
+      var body = { report: r.id, reconciliationFilter: filterBody({ noPeriod: !r.period }).reconciliationFilter };
+      rrFetch('in-transit/integrity', { method: 'POST', body: body }).then(function (d) {
+        rows = d && Array.isArray(d.data) ? d.data : null;
+        if (!rows) throw new Error('unreadable response');
+        var el = $('rc' + i); el.textContent = rows.length.toLocaleString(); el.classList.toggle('has', rows.length > 0);
+      }).catch(function (e) { var el = $('rc' + i); el.textContent = 'Not available'; el.classList.add('err'); el.title = errText(e); rows = e; });
+      function toggle() {
+        var b = $('rb' + i), open = b.hidden;
+        b.hidden = !open; head.setAttribute('aria-expanded', open ? 'true' : 'false');
+        if (open && !grid) {
+          grid = new Grid(b, { title: r.title, surface: r.title.replace(/[^A-Za-z]+/g, ''), noPeriod: !r.period, cols: function (rs) { return autoCols(rs); }, empty: 'No rows.' });
+          if (rows instanceof Error) grid.fail('This report could not be read: ' + errText(rows));
+          else if (rows) grid.set(rows);
+          else setTimeout(toggleFill, 400);
+        }
+        function toggleFill() { if (rows instanceof Error) grid.fail('This report could not be read: ' + errText(rows)); else if (rows) grid.set(rows); else setTimeout(toggleFill, 400); }
+      }
+      head.addEventListener('click', toggle);
+      head.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
+    });
+  }
+
+  var _txGrid = null, _txOnlyVar = true;
+  function loadTxv() {
+    if (!_txGrid) {
+      _txGrid = new Grid($('txGrid'), { title: 'Transaction variance', surface: 'TransactionVariance', cols: TXV_COLS, sort: { k: 'Variance', dir: 'desc' },
+        tools: '<button class="grid-pill is-on" type="button" id="txOnly" title="Show only documents with a variance">Variances only</button>',
+        filter: function (r) { return !_txOnlyVar || Math.abs(num(r.Variance)) >= 0.005; }, empty: 'No transfer documents in this period.' });
+      $('txOnly').addEventListener('click', function () { _txOnlyVar = !_txOnlyVar; this.classList.toggle('is-on', _txOnlyVar); _txGrid.render(); });
+    }
+    _txGrid.wait();
+    rrFetch('in-transit/transactions', { method: 'POST', body: filterBody() }).then(function (d) {
+      if (!d || !Array.isArray(d.data)) throw new Error('the data service returned a response this page could not read');
+      var a = d.aggregates || {};
+      _txGrid.o.sub = 'Company ' + esc(S.company) + ', period ending ' + esc(fmtDate(S.period)) + ' &middot; variance ' + esc(curMoney(a.Variance, curOf(S.company)));
+      _txGrid.set(d.data);
+    }).catch(function (e) { _txGrid.fail('Could not read transaction variance: ' + errText(e)); });
+  }
+
+  // Orders: V7's three quick filters (RR University, transfer-order-reconcile),
+  // plus Excluded. Exclude / include sends keys only; the server reads quantity
+  // and amount itself.
+  var QUICK = {
+    all:     { label: 'All', test: function () { return true; } },
+    noship:  { label: 'Receipts without shipments', test: function (r) { return Math.abs(num(r.ShipQty)) < 0.00005 && Math.abs(num(r.RecQty)) >= 0.00005; } },
+    closed:  { label: 'In transit on a closed PO', test: function (r) { return trim(r.RecSts) === '999' && Math.abs(num(r.TranQty)) >= 0.00005; } },
+    zeroqty: { label: 'Zero quantity in transit', test: function (r) { return Math.abs(num(r.TranQty)) < 0.00005 && Math.abs(num(r.TranAmt)) >= 0.005; } },
+    excl:    { label: 'Excluded', test: function (r) { return !!r.Excluded; } }
+  };
+  var _orGrid = null, _orQuick = 'all';
+  // The seven keys Transit_Excluded_Orders is keyed on, in the shape the server binds
+  // (TransitExclusionRequest.OrderKey: orderNumber and shortItem are Integer, the
+  // rest String). Jackson drops a misnamed key silently, so Tools/test-transit-page.js
+  // pins these names.
+  function exclusionKey(r) {
+    return { companyNumber: trim(r.CompanyNumber), longAccount: trim(r.LongAccount), orderDate: isoDay(r.OrderDate),
+             orderNumber: Number(r.OrderNumber), orderType: trim(r.OrderType), shortItem: Number(r.ShortItem), lot: trim(r.Lot) };
+  }
+  function orderKey(r) { return [trim(r.CompanyNumber), trim(r.LongAccount), isoDay(r.OrderDate), trim(r.OrderNumber), trim(r.OrderType), trim(r.ShortItem), trim(r.Lot)].join('|'); }
+  function loadOrders() {
+    if (!_orGrid) {
+      var tools = Object.keys(QUICK).map(function (k) { return '<button class="grid-pill' + (k === _orQuick ? ' is-on' : '') + '" type="button" data-quick="' + k + '">' + esc(QUICK[k].label) + '</button>'; }).join('') +
+        (canExclude() ? '<button class="grid-pill" type="button" id="orEx" disabled>Exclude</button><button class="grid-pill" type="button" id="orIn" disabled>Include</button>' : '');
+      _orGrid = new Grid($('orGrid'), { title: 'Transfer orders', surface: 'Orders', noPeriod: true, cols: ORDER_COLS, sort: { k: 'TranAmt', dir: 'desc' }, tools: tools,
+        filter: function (r) { return QUICK[_orQuick].test(r); }, keyOf: orderKey, selectable: canExclude,
+        onPick: function (rows) { if ($('orEx')) { $('orEx').disabled = !rows.some(function (r) { return !r.Excluded; }); $('orIn').disabled = !rows.some(function (r) { return !!r.Excluded; }); } },
+        empty: 'No transfer orders are in transit or excluded.' });
+      Array.prototype.forEach.call($('orGrid').querySelectorAll('[data-quick]'), function (b) {
+        b.addEventListener('click', function () {
+          _orQuick = b.getAttribute('data-quick');
+          Array.prototype.forEach.call($('orGrid').querySelectorAll('[data-quick]'), function (x) { x.classList.toggle('is-on', x === b); });
+          _orGrid.render();
+        });
+      });
+      if ($('orEx')) { $('orEx').addEventListener('click', function () { openExclude(true); }); $('orIn').addEventListener('click', function () { openExclude(false); }); }
+      $('orPermNote').textContent = canExclude() ? 'Select orders to exclude or include them, then recalculate on the Tools tab.' : 'Excluding orders needs the In Transit exclude permission on this database.';
+    }
+    _orGrid.wait();
+    rrFetch('in-transit/orders', { method: 'POST', body: filterBody({ noPeriod: true }) }).then(function (d) {
+      if (!d || !Array.isArray(d.data)) throw new Error('the data service returned a response this page could not read');
+      _orGrid.o.sub = 'Company ' + esc(S.company) + ', as of now';
+      _orGrid.set(d.data);
+    }).catch(function (e) { _orGrid.fail('Could not read transfer orders: ' + errText(e)); });
+  }
+
+  var _exState = null;
+  function openExclude(excluded) {
+    var picked = _orGrid.pickedRows().filter(function (r) { return excluded ? !r.Excluded : !!r.Excluded; });
+    if (!picked.length) return;
+    _exState = { excluded: excluded, rows: picked };
+    var amt = picked.reduce(function (s, r) { return s + num(r.TranAmt); }, 0);
+    $('exTitle').textContent = excluded ? 'Exclude orders' : 'Include orders';
+    $('exDesc').innerHTML = (excluded ? 'Exclude ' : 'Include ') + '<b>' + picked.length + '</b> order line' + (picked.length === 1 ? '' : 's') + ' (' + esc(curMoney(amt, curOf(S.company))) + ' in transit). ' +
+      (excluded ? 'Their in-transit amount moves into Exclusions after you recalculate.' : 'They count in transit again after you recalculate.');
+    $('exNote').value = ''; $('exCnt').textContent = '0'; $('exErr').textContent = '';
+    $('exGo').disabled = false; $('exModal').classList.add('is-open'); $('exNote').focus();
+  }
+  function closeExclude() { $('exModal').classList.remove('is-open'); _exState = null; }
+  $('exNote').addEventListener('input', function () { $('exCnt').textContent = String(this.value.length); });
+  $('exCancel').addEventListener('click', closeExclude);
+  $('exModal').addEventListener('click', function (e) { if (e.target === this) closeExclude(); });
+  $('exGo').addEventListener('click', function () {
+    if (!_exState) return;
+    var note = $('exNote').value.trim();
+    if (note.length > 100) { $('exErr').textContent = 'The note can be 100 characters at most.'; return; }
+    $('exGo').disabled = true; $('exErr').textContent = '';
+    var orders = _exState.rows.map(exclusionKey);
+    var n = orders.length, excluded = _exState.excluded;
+    rrFetch('in-transit/orders/exclusions', { method: 'POST', body: { excluded: excluded, note: note, orders: orders } }).then(function () {
+      closeExclude();
+      toast((excluded ? 'Excluded ' : 'Included ') + n + ' order line' + (n === 1 ? '' : 's') + '. Recalculate on the Tools tab to update the out of balance.');
+      _loaded.tools = false; loadOrders();
+    }).catch(function (e) { $('exErr').textContent = errText(e); $('exGo').disabled = false; });
+  });
+
+  // Recalc: async on the server; poll its status, report its failure.
+  var _rcPoll = null;
+  function rcSay(cls, msg) { var st = $('rcStatus'); st.className = 'act-status ' + cls; st.textContent = msg; }
+  function loadTools() {
+    var btn = $('rcBtn');
+    if (!canExclude()) { btn.disabled = true; rcSay('busy', 'Recalculating needs the In Transit exclude permission on this database.'); return; }
+    pollRecalc(true);
+  }
+  function pollRecalc(once) {
+    clearTimeout(_rcPoll);
+    rrFetch('in-transit/orders/recalc-status').then(function (s) {
+      s = s || {};
+      var last = s.last || null;
+      if (s.running) { $('rcBtn').disabled = true; rcSay('busy', 'Recalculating' + (s.since ? ' since ' + new Date(s.since).toLocaleTimeString() : '') + '…'); _rcPoll = setTimeout(function () { pollRecalc(false); }, 3000); return; }
+      $('rcBtn').disabled = false;
+      if (s.blockedBy) { rcSay('busy', 'The database is busy with another job, so a recalculation would wait. Try again when it finishes.'); return; }
+      if (!last) { rcSay('', ''); return; }
+      if (last.ok) {
+        rcSay('ok', 'Last recalculation finished' + (last.finishedAt ? ' at ' + new Date(last.finishedAt).toLocaleString() : '') + '.');
+        if (!once) { invalidate(); _loaded.tools = true; toast('Recalculated. The figures on every tab are current.'); }
+      } else rcSay('err', 'The last recalculation failed: ' + (last.error || 'no reason was given.'));
+    }).catch(function (e) { rcSay('err', 'Could not read the recalculation status: ' + errText(e)); });
+  }
+  $('rcBtn').addEventListener('click', function () {
+    var btn = this; btn.disabled = true; rcSay('busy', 'Starting…');
+    rrFetch('in-transit/orders/recalc', { method: 'POST', body: {} }).then(function (r) {
+      r = r || {};
+      if (!r.started) { btn.disabled = false; rcSay('err', r.busyWith ? 'The database is busy with another job, so the recalculation did not start. Try again when it finishes.' : (r.message || 'The recalculation did not start.')); return; }
+      _rcPoll = setTimeout(function () { pollRecalc(false); }, 2000);
+    }).catch(function (e) { btn.disabled = false; rcSay('err', 'The recalculation did not start: ' + errText(e)); });
+  });
+
+  boot();
+})();
+</script>
+</body>
+</html>

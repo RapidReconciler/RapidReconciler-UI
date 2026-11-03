@@ -253,7 +253,8 @@ window.RR_TEST_AGENT_AREAS = [
 // to the test agent. Tested with `area.startsWith(prefix)`.
 window.RR_TEST_AGENT_PREFIXES = [
   'download-excel/',
-  'admin/companies/'    // per-company edit (PUT /admin/companies/{n})
+  'admin/companies/',   // per-company edit (PUT /admin/companies/{n})
+  'in-transit/'         // UI-240: every In Transit endpoint (UI-239); RRV8/API.md § In Transit
 ];
 
 /*

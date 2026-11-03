@@ -108,10 +108,11 @@ Full JWT payload shape:
 
 ### In Transit (Services: UI-239; pages: UI-240)
 
-No V8 page calls these yet. The Services side is built; the pages are UI-240. Each is an `rrFetch` area under
-`in-transit/`, and **`in-transit/` is in neither `RR_TEST_AGENT_AREAS` nor `RR_TEST_AGENT_PREFIXES`
-(`config.js`) yet**, so UI-240 adds the prefix to `RR_TEST_AGENT_PREFIXES` before its first call. Until then
-`rrFetch` routes these to `db.ip`, not to the agent. Contract, per endpoint:
+`transit.html` (UI-240, the module's landing page) calls every one of these except `/details`, `/save-notes` and
+`/as-of/details`, which belong to the drill-in pages still to come. Each is an `rrFetch` area under `in-transit/`,
+routed to the active database's data services by **`'in-transit/'` in `RR_TEST_AGENT_PREFIXES` (`config.js`,
+added by UI-240)**; `Tools/test-transit-page.js` fails if it goes. Home's module pill keeps In Transit
+"Coming soon" until the drill-ins ship, so the page is reachable by its URL only. Contract, per endpoint:
 [agent docs &sect; In Transit (UI-239)](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/docs/API.md#in-transit-ui-239).
 
 What a page needs to know:
@@ -134,14 +135,19 @@ What a page needs to know:
 
 | Area | Method | Page (UI-240) |
 |---|---|---|
-| `in-transit/status` | GET | every In Transit page (sidebar universe, validation light) |
-| `in-transit/reconciliation/rows`, `/history`, `/journal-entry` | POST | Overview, Accounts, Data Health, Journal Entry export |
-| `in-transit/variance-component` | POST | variance preview modals and exports |
-| `in-transit/transactions`, `/details`, `/save-notes` | POST | Transaction Variance, `transit-transactions.html` |
-| `in-transit/as-of`, `/as-of/details` | POST | On Hand, `transit-asof.html` |
-| `in-transit/orders`, `/orders/exclusions`, `/orders/recalc` | POST | Orders, Tools, `transit-orders.html` |
-| `in-transit/orders/recalc-status` | GET | Tools |
-| `in-transit/integrity` | POST | Data Health (five reports) |
+| `in-transit/status` | GET | `transit.html` boot: company list, default period, validation light |
+| `in-transit/reconciliation/rows` | POST | `transit.html` Overview (every company, for each one's currency), Accounts, Data Health, Audit Center |
+| `in-transit/reconciliation/history` | POST | `transit.html` period list, Overview trend, Data Health counts, Audit Center |
+| `in-transit/reconciliation/journal-entry` | POST | `transit.html` Audit Center (Journal Entry sheet) |
+| `in-transit/variance-component` | POST | `transit.html` Audit Center (one sheet per component) |
+| `in-transit/transactions` | POST | `transit.html` Transaction Variance |
+| `in-transit/transactions/details`, `/save-notes` | POST | `transit-transactions.html` (not built yet) |
+| `in-transit/as-of` | POST | `transit.html` On Hand |
+| `in-transit/as-of/details` | POST | `transit-asof.html` (not built yet) |
+| `in-transit/orders`, `/orders/exclusions` | POST | `transit.html` Orders (exclude / include on `perms.ite`) |
+| `in-transit/orders/recalc` | POST | `transit.html` Tools (`perms.ite`) |
+| `in-transit/orders/recalc-status` | GET | `transit.html` Tools |
+| `in-transit/integrity` | POST | `transit.html` Data Health (five reports) |
 
 Full agent-side controller catalog (including endpoints V8 doesn't
 exercise yet):
