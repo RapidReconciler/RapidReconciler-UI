@@ -3861,7 +3861,9 @@
         <span class="row-dot" data-state="unknown" id="tsDot"></span>
         <div class="row-main">
           <div class="row-title">Troubleshooting</div>
-          <div class="data-rows">
+          <!-- UI-265: with more than one database these three area rows are replaced by one row per database
+               (_paintTsDbCard), worst first. One database keeps the area rows. -->
+          <div class="data-rows" id="tsRows">
             <a class="data-row" data-state="unknown" id="tsConnRow" data-ts-area="Connections" href="admin-troubleshooting.html" title="Connections">
               <span class="data-row-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg></span>
               <span class="data-row-text">Checking&hellip;</span>
@@ -4290,11 +4292,16 @@
     // db-parameterized VALC admin routes (e.g. license-usage?database=…) too —
     // NOT just agent routes. Only genuinely user/client-global calls (the
     // message center, AI health) are exempt, so a switch can't hide them.
-    var dbScoped = !/^api\/v1\/(messages|ai)\b/.test(area);
+    // UI-265: a call aimed at a NAMED database (opts.db, an entry of the token's dbs[]) is not dropped on a switch.
+    // Only the Administrator view's instance roll-up makes one, and that view does not follow the database picker.
+    var dbScoped = !opts.db && !/^api\/v1\/(messages|ai)\b/.test(area);
     var base;
     if (_routesToValc(area)) {
       base = window.RRDB.valcBase();   // canonical VALC resolver (config.js RRDB)
       if (!base) return Promise.reject(window.RRDB.valcGap(area));
+    } else if (opts.db) {
+      if (!opts.db.ip) return Promise.reject(new Error('The sign-in has no server address for ' + (opts.db.n || 'this database') + '.'));
+      base = (/^(?:localhost|127\.0\.0\.1)\b/i.test(opts.db.ip) ? 'http://' : 'https://') + opts.db.ip;
     } else if (_routesToTestAgent(area)) {
       base = window.RRDB.agentBase();   // canonical active-DB agent resolver (config.js RRDB)
     } else {
@@ -4346,6 +4353,26 @@
     var s = window.RR_SESSION || {};
     var d = Array.isArray(s.dbs) ? s.dbs : [];
     return d[s.activeDbIndex || 0] || d[0] || null;
+  }
+  // UI-265 (owner ruling 2026-11-02, "Make the page instance level"): the databases the Administrator view reports
+  // on. Every database the sign-in carries with the administrator tab, once each, in the token's order. The role is one
+  // per user (AuthController copies the same `rn` and `t.adm` into every entry), so in practice that is all of them.
+  // Nothing on the Administrator view may follow the database picker; the cards that are per database by nature
+  // (Activity Log, Troubleshooting) read every entry here and label each line with its database.
+  function _instanceDbs() {
+    var s = window.RR_SESSION || {}, seen = {}, out = [];
+    (Array.isArray(s.dbs) ? s.dbs : []).forEach(function (d) {
+      if (!d || !d.t || d.t.adm !== true) return;
+      var k = String(d.uuid || d.n || ''); if (!k || seen[k]) return;
+      seen[k] = true; out.push(d);
+    });
+    return out;
+  }
+  // Open a per-database page for one database from the instance view: it becomes the active database first, because
+  // every per-database page reads the active one.
+  function _openOnDb(db, href) {
+    if (db && db.n && window.RRV8 && window.RRV8.setActiveDatabase) window.RRV8.setActiveDatabase(db.n);
+    window.location.href = href;
   }
   // Mirror sidebar.js applyClientModuleCaps: a module shows when BOTH the
   // client is licensed (active.m) AND the user is granted the tab (active.t).
@@ -5422,19 +5449,26 @@
         // (UI-148). The cap figure stays on screen whenever it is the thing
         // stopping you adding a company — a warning that cites a number the
         // reader cannot see is not a warning.
+        //
+        // UI-265 (owner ruling 2026-11-02, the Administrator view reports the RR
+        // instance): the card now leads with the client-wide figure, the one the
+        // cap is judged against, and says so. It used to lead with this database's
+        // count ("2 of 12 ... on this database"), so the line changed with the
+        // database picker while the limit, the renewal and the verdict did not.
         var seatLevel = 'ok', seatMsg;
         var dbUsed = (u.used != null) ? u.used : 0;
         // clientUsed is absent on an older VALC build; fall back to `used` so the
         // card degrades to the previous single-figure reading rather than "of 0".
         var cliUsed = (u.clientUsed != null) ? u.clientUsed : dbUsed;
+        if (u.clientName) { _instanceName = String(u.clientName); renderRoleHero(); }
         if (u.unlimited) {
-          seatMsg = 'Unlimited companies · ' + dbUsed + ' licensed on this database';
+          seatMsg = 'Unlimited companies · ' + cliUsed + ' licensed across your databases';
         } else {
           var cap = u.maxCompanies;
           seatLevel = u.overLimit ? 'attention' : u.atLimit ? 'watch' : 'ok';
-          var here = dbUsed + ' of ' + cap + ' company licenses used on this database';
-          seatMsg = u.overLimit ? (here + ' · over your limit of ' + cap + ' across all databases (' + cliUsed + ' used)')
-                  : u.atLimit   ? (here + ' · all ' + cap + ' in use across your databases')
+          var here = cliUsed + ' of ' + cap + ' company licenses used across your databases';
+          seatMsg = u.overLimit ? (here + ' · over your limit')
+                  : u.atLimit   ? (here + ' · all in use')
                   :               here;
         }
 
@@ -6663,7 +6697,12 @@
   function _paintFreshPill() {
     var pill = $('haFresh'); if (!pill) return;
     var f = _dataFreshness();
-    var txt = $('haFreshLabel'); if (txt) txt.textContent = f.text;
+    // UI-265: the pill stays on every view (owner ruling 2026-09-25) and is one database's refresh. When the sign-in
+    // carries more than one database it names which, so on the Administrator view, which otherwise reports the whole
+    // instance, it never reads as all of them. Each database's own Data refresh check is on the Troubleshooting card.
+    var sdbs = (window.RR_SESSION && window.RR_SESSION.dbs) || [];
+    var pre = (sdbs.length > 1 && activeDb()) ? (dbShortName(activeDb().n || '') + ' · ') : '';
+    var txt = $('haFreshLabel'); if (txt) txt.textContent = pre + f.text;
     var dot = pill.querySelector('.ha-fresh-dot');
     if (dot && window.RRV8 && RRV8.setDotState) RRV8.setDotState(dot, f.level);
     pill.setAttribute('data-state', f.level);
@@ -6741,22 +6780,11 @@
     var ref = _dataFreshness(), refLvl = ref.level, refTxt = ref.text;
     _setDataRow('dataRefreshRow', refLvl, refTxt);
 
-    var pLvl = 'busy', pTxt = 'Checking…';
-    if (_purgeInfo && window.RRV8 && window.RRV8.purgeRecommendation) {
-      var until = reviewValueFor('purge-snooze', 'rrv8.purgeSnooze.');
-      var rec = window.RRV8.purgeRecommendation(_purgeInfo, { snoozeUntil: until, today: new Date().toISOString().slice(0, 10) });
-      if (rec.known) {
-        pLvl = rec.effectiveLevel || 'ok';
-        if (rec.runway != null) {
-          var mo = Math.max(1, Math.round(rec.runway));
-          // Runway = time until storage fills at current growth. Say what it is,
-          // in human units: years once it's past ~2 (a bare "328 mo" reads as noise).
-          pTxt = mo >= 24 ? ('Storage · ' + Math.round(mo / 12) + ' yrs free') : ('Storage · ' + mo + ' mo free');
-        }
-        else if (rec.retainedMonths != null) { pTxt = 'Keeping ~' + (rec.retainedMonths / 12).toFixed(rec.retainedMonths >= 24 ? 0 : 1) + ' yrs of data'; }
-        else { pTxt = _purgeInfo.dbSizePretty ? ('Using ' + _purgeInfo.dbSizePretty) : 'Storage healthy'; }
-      } else { pTxt = _purgeInfo.dbSizePretty ? ('Using ' + _purgeInfo.dbSizePretty) : 'Storage'; }
-    }
+    // UI-265: with more than one database the chip is the worst database's, named; one database reads as before.
+    var pc = (_instPurge && _instPurge.length > 1) ? _worstPurgeChip(_instPurge)
+           : _purgeChip(_purgeInfo, reviewValueFor('purge-snooze', 'rrv8.purgeSnooze.'));
+    var pLvl = pc.lvl, pTxt = pc.txt;
+    _purgeChipDb = pc.db || null;   // the chip opens the Purge page on the database it names
     _setDataRow('dataPurgeRow', pLvl, pTxt);
 
     // (The fiscal calendar row is painted at the top of this function now — see the
@@ -6772,6 +6800,60 @@
       ? (refLvl === worst ? refTxt : pLvl === worst ? pTxt : fTxt) : '';
     if (typeof tintPanels === 'function') tintPanels();
   }
+  // The storage chip's level and words for one database's purge-info and its own purge-snooze value. Busy until the
+  // info lands.
+  function _purgeChip(info, until) {
+    var lvl = 'busy', txt = 'Checking…';
+    if (info && window.RRV8 && window.RRV8.purgeRecommendation) {
+      var rec = window.RRV8.purgeRecommendation(info, { snoozeUntil: until, today: new Date().toISOString().slice(0, 10) });
+      if (rec.known) {
+        lvl = rec.effectiveLevel || 'ok';
+        if (rec.runway != null) {
+          var mo = Math.max(1, Math.round(rec.runway));
+          // Runway = time until storage fills at current growth. Say what it is,
+          // in human units: years once it's past ~2 (a bare "328 mo" reads as noise).
+          txt = mo >= 24 ? ('Storage · ' + Math.round(mo / 12) + ' yrs free') : ('Storage · ' + mo + ' mo free');
+        }
+        else if (rec.retainedMonths != null) { txt = 'Keeping ~' + (rec.retainedMonths / 12).toFixed(rec.retainedMonths >= 24 ? 0 : 1) + ' yrs of data'; }
+        else { txt = info.dbSizePretty ? ('Using ' + info.dbSizePretty) : 'Storage healthy'; }
+      } else { txt = info.dbSizePretty ? ('Using ' + info.dbSizePretty) : 'Storage'; }
+      return { lvl: lvl, txt: txt, runway: rec.known ? rec.runway : null };
+    }
+    return { lvl: lvl, txt: txt, runway: null };
+  }
+  // UI-265: every database's storage, each judged with its own snooze; the chip shows the worst, named. A tie goes to
+  // the shorter runway. A database whose agent did not answer is left out rather than shown as "Checking…".
+  var _instPurge = null;   // [{ label, db, info, until }] once the instance read lands, with more than one database
+  var _purgeChipDb = null; // the database the storage chip names, when it names one
+  function _worstPurgeChip(list) {
+    var best = null;
+    list.forEach(function (p) {
+      if (!p.info) return;
+      var c = _purgeChip(p.info, p.until);
+      c.txt = p.label + ' · ' + c.txt;
+      c.db = p.db;
+      if (!best || _lvlRank(c.lvl) > _lvlRank(best.lvl)
+          || (_lvlRank(c.lvl) === _lvlRank(best.lvl) && c.runway != null && (best.runway == null || c.runway < best.runway))) best = c;
+    });
+    return best || { lvl: 'busy', txt: 'Checking…', runway: null };
+  }
+  function _purgeReadDb(d) {
+    if (!isAdmin()) return Promise.resolve(null);
+    return rrFetch('inventory/integrity/purge-info', { db: d }).catch(function () { return null; });
+  }
+  function _loadInstancePurge(dbs) {
+    var acksP = (window.RRV8 && RRV8.instanceAcks) ? RRV8.instanceAcks() : Promise.resolve([]);
+    Promise.all([Promise.all(dbs.map(_purgeReadDb)), acksP]).then(function (res) {
+      var infos = res[0], per = res[1] || [];
+      _instPurge = dbs.map(function (d, i) {
+        var mine = per.filter(function (p) { return p.db === d.n; })[0];
+        var ack = mine && mine.acks ? RRV8.newestAck(mine.acks, 'purge-snooze') : null;
+        return { label: dbShortName(d.n), db: d, info: infos[i],
+                 until: (ack && RRV8.ackToReviewValue) ? RRV8.ackToReviewValue(ack) : '' };
+      });
+      renderDataCard();
+    });
+  }
   function applyPurgeInfo(info) {
     _purgeInfo = info || {};
     renderDbMeta();   // History-from + Database size in the (hidden) Scope strip
@@ -6783,6 +6865,8 @@
   function setPurgeDot(info) { if (info) _purgeInfo = info; renderDataCard(); }
   function loadPurgeInfo() {
     if (!isAdmin()) return;
+    var dbs = _instanceDbs();
+    if (dbs.length > 1) _loadInstancePurge(dbs); else _instPurge = null;
     rrFetch('inventory/integrity/purge-info').then(function (info) {
       applyPurgeInfo(info);
       if (!_purgeStaged) _purgeOriginal = info && info.currentCutoff;
@@ -6884,6 +6968,19 @@
     return rrFetch('admin/acks').then(function (rows) {
       var m = {}; (rows || []).forEach(function (r) { if (r && r.kind) m[r.kind] = r; });
       _acksByKind = m;
+      // UI-265: the client-wide reviews (RRV8.CLIENT_REVIEW_KINDS) take the newest ack on any database, so the
+      // Team & Access and Activity dots do not follow the database picker. purge-snooze and cardex-snooze stay this
+      // database's.
+      if (_instanceDbs().length > 1 && window.RRV8 && RRV8.instanceAcks) {
+        return RRV8.instanceAcks().then(function (per) {
+          var all = rows || [];
+          per.forEach(function (p) { if (p.acks) all = all.concat(p.acks); });
+          RRV8.CLIENT_REVIEW_KINDS.forEach(function (k) {
+            var a = RRV8.newestAck(all, k);
+            if (a) m[k] = a; else delete m[k];
+          });
+        });
+      }
     }).catch(function () { _acksByKind = null; }).then(function () {
       setPwPolicyDot(); setActivityDot();   // loadRefreshSchedule() retired — see its tombstone
       if (_rcdxPreview) setReloadCardexDot(_rcdxPreview);
@@ -7298,11 +7395,29 @@
     // RRV8.logActivity writes attestations / sign-offs / reloads). The staged
     // RRDEMO feed is only a fallback so a fresh / unreachable system still reads
     // true to life in a non-prod demo; prod with no events keeps the default lede.
+    // UI-265: with more than one database, every database's agent is read and the newest events across all of them
+    // are shown, each labelled with its database (RRV8.mergeActivity). A database whose agent does not answer adds
+    // nothing here; the Troubleshooting card says it is not answering. One database reads as it always has.
+    var dbs = _instanceDbs();
+    if (dbs.length > 1) {
+      var gen = ++_actGen;
+      Promise.all(dbs.map(function (d) {
+        return rrFetch('admin/activity', { query: { limit: 20 }, db: d })
+          .then(function (list) { return { db: dbShortName(d.n), list: list }; },
+                function () { return { db: dbShortName(d.n), list: null }; });
+      })).then(function (groups) {
+        if (gen !== _actGen) return;
+        var merged = RRV8.mergeActivity(groups);
+        if (merged.length) _renderActFeed(merged); else _demoActFeed();
+      });
+      return;
+    }
     rrFetch('admin/activity', { query: { limit: 20 } }).then(function (list) {
       if (Array.isArray(list) && list.length) { _renderActFeed(list); return; }
       _demoActFeed();
     }).catch(function () { _demoActFeed(); });
   }
+  var _actGen = 0;
   function _demoActFeed() {
     if ((!window.RR_CONFIG || RR_CONFIG.mode !== 'prod') && window.RRDEMO && RRDEMO.activityLog) _renderActFeed(RRDEMO.activityLog());
   }
@@ -7317,10 +7432,12 @@
     // identical sibling of Data Management + RapidReconciler Team. One neutral
     // activity glyph keeps the icon treatment consistent across all rows.
     feed.innerHTML = rows.map(function (e) {
+      // UI-265: an event from the instance roll-up names its database first ("Demo2 · Report engine started").
+      var dbTag = e._db ? (e._db + ' · ') : '';
       return '<div class="data-row act-row">'
            + '<span class="data-row-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></span>'
-           + '<span class="data-row-text" title="' + esc(e.detail || e.event || '') + '">'
-           + esc(e.event || 'Event') + (e._count > 1 ? ' ×' + e._count : '') + '</span>'
+           + '<span class="data-row-text" title="' + esc(dbTag + (e.detail || e.event || '')) + '">'
+           + esc(dbTag + (e.event || 'Event')) + (e._count > 1 ? ' ×' + e._count : '') + '</span>'
            + '<span class="data-row-meta">' + esc(fmtAgo(e.at)) + '</span>'
            + '</div>';
     }).join('');
@@ -7354,11 +7471,66 @@
     setDot($('tsDot'), Object.keys(states).length ? (TS_DOT[worst] || 'unknown') : 'unknown');
     var subEl = $('tsSub'); if (subEl) subEl.textContent = sub;
   }
+  // UI-265: the card with one row per database. Each row opens that database's Troubleshooting page, or its Data
+  // Refresh page when Data loads is the only area with a problem (the route UI-232 gave the one-database card's Data
+  // loads row, which this layout has no row for).
+  var _TS_DB_ICO = '<span class="data-row-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg></span>';
+  var _TS_GO = '<span class="data-row-go" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></span>';
+  var _tsDbs = [];
+  function _paintTsDbCard(perDb, sub) {
+    var host = $('tsRows'); if (!host) return;
+    var TS = window.RRV8 && RRV8.troubleshooting;
+    var setDot = (window.RRV8 && RRV8.setDotState) || function (el, s) { if (el) el.setAttribute('data-state', s); };
+    host.innerHTML = perDb.map(function (p) {
+      var href = (p.areas.length === 1 && p.areas[0] === 'Data loads') ? 'admin-data-refresh.html' : 'admin-troubleshooting.html';
+      var title = p.areas.length ? (p.label + ': ' + p.areas.join(', ')) : p.label;
+      return '<a class="data-row" data-state="unknown" data-ts-db="' + p.index + '" href="' + href + '" title="' + esc(title) + '">'
+           + _TS_DB_ICO + '<span class="data-row-text">' + esc(p.text) + '</span>' + _TS_GO + '</a>';
+    }).join('');
+    Array.prototype.forEach.call(host.querySelectorAll('.data-row[data-ts-db]'), function (el, i) {
+      setDot(el, TS_DOT[perDb[i].state] || 'unknown');
+    });
+    var worst = 'ok';
+    perDb.forEach(function (p) { if (TS && TS.RANK[p.state] < TS.RANK[worst]) worst = p.state; });
+    setDot($('tsDot'), perDb.length ? (TS_DOT[worst] || 'unknown') : 'unknown');
+    var subEl = $('tsSub'); if (subEl) subEl.textContent = sub;
+  }
+  // One database's troubleshooting read for the instance card. `t0` is taken here so each row's browser round trip
+  // is that database's own.
+  function _tsReadDb(d) {
+    if (!isAdmin()) return Promise.resolve({ label: dbShortName(d.n), error: 'unchecked' });
+    var TS = RRV8.troubleshooting, now = function () { return (window.performance && performance.now) ? performance.now() : Date.now(); };
+    var t0 = now();
+    return rrFetch('admin/troubleshooting', { db: d }).then(function (data) {
+      return { label: dbShortName(d.n), rows: TS.rows(data || {}, Math.round(now() - t0)) };
+    }, function (err) {
+      // A fetch that never got an answer is a TypeError; an agent that answered with an error has a status.
+      return { label: dbShortName(d.n), error: (err instanceof TypeError) ? 'unreachable' : 'unchecked' };
+    });
+  }
+  function _loadTsInstance(dbs) {
+    var TS = RRV8.troubleshooting, gen = ++_tsGen;
+    _tsDbs = dbs;
+    Promise.all(dbs.map(_tsReadDb)).then(function (res) {
+      if (gen !== _tsGen) return;
+      // Facts only for the AI grounding (feedback_ai_facts_never_name_the_reader), each under its database.
+      var facts = [], checks = 0;
+      res.forEach(function (r) {
+        if (!r.rows) { facts.push(r.label + ': ' + (r.error === 'unreachable' ? 'its server did not answer.' : 'the checks could not run.')); return; }
+        checks += r.rows.length;
+        r.rows.forEach(function (x) { if (x.state !== 'ok') facts.push(r.label + ' — ' + x.label + ': ' + x.fact); });
+      });
+      _paintTsDbCard(TS.byDatabase(res), facts.length ? facts.join(' ')
+        : 'All ' + checks + ' troubleshooting checks passed across ' + res.length + ' databases.');
+    });
+  }
   function loadTroubleshootingCard() {
     var card = $('tsRow'); if (!card) return;
     if (!isAdmin()) return;
     var TS = window.RRV8 && RRV8.troubleshooting;
     if (!TS) { _paintTsCard({}, 'Troubleshooting checks did not run: part of the page did not load.'); return; }
+    var dbs = _instanceDbs();
+    if (dbs.length > 1) { _loadTsInstance(dbs); return; }
     var gen = ++_tsGen, dbAtStart = (activeDb() && activeDb().n) || '';
     var t0 = (window.performance && performance.now) ? performance.now() : Date.now();
     rrFetch('admin/troubleshooting').then(function (data) {
@@ -7899,6 +8071,25 @@
       _dbSwitched = true;   // reset the working period to the new DB's open period
       resetScopedState();   // wipe every per-DB surface so nothing bleeds in the reload window
       loadActiveDbSurfaces(); // the SAME loader list boot uses — paint the new DB end to end
+    });
+
+    // UI-265: the storage chip names the worst database when there are several; it opens Purge on that one.
+    var purgeChipEl = $('dataPurgeRow');
+    if (purgeChipEl) purgeChipEl.addEventListener('click', function (e) {
+      if (!_purgeChipDb) return;   // one database: the plain link
+      e.preventDefault();
+      _openOnDb(_purgeChipDb, purgeChipEl.getAttribute('href'));
+    });
+
+    // UI-265: a per-database Troubleshooting row opens its page ON THAT DATABASE (it becomes the active one).
+    var tsRowsEl = $('tsRows');
+    if (tsRowsEl) tsRowsEl.addEventListener('click', function (e) {
+      var a = e.target.closest ? e.target.closest('a[data-ts-db]') : null;
+      if (!a) return;
+      var db = _tsDbs[parseInt(a.getAttribute('data-ts-db'), 10)];
+      if (!db) return;   // the plain link still works
+      e.preventDefault();
+      _openOnDb(db, a.getAttribute('href'));
     });
   }
 
@@ -13513,10 +13704,19 @@
       ? (esc(name) + ' <span class="rh-co-num">&middot; ' + esc(String(co)) + '</span>')
       : ('Company ' + esc(String(co)));
   }
+  // UI-265: the Administrator view names the instance, not the active database: the customer's name (from
+  // license-usage's clientName, once it lands) and the databases the view covers.
+  var _instanceName = '';
+  function _adminHeroContext() {
+    var names = _instanceDbs().map(function (d) { return dbShortName(d.n || ''); }).filter(Boolean);
+    var dbs = names.length > 3 ? (names.length + ' databases') : names.join(' · ');
+    if (_instanceName && dbs) return esc(_instanceName) + ' <span class="rh-co-num">&middot; ' + esc(dbs) + '</span>';
+    return esc(_instanceName || dbs);
+  }
   function _roleHeroContext(vr) {
     var db = dbShortName((activeDb() || {}).n || '');
     var dbTail = db ? ' <span class="rh-co-num">&middot; ' + esc(db) + '</span>' : '';
-    if (vr === 'admin') return db ? esc(db) : '';
+    if (vr === 'admin') return _adminHeroContext();
     var cos = _fullCosFromRows();
     if (vr === 'analyst') return cos.length ? _roleHeroCompany(_ensureAnalystSolo([])) : '';
     // accountant
@@ -19723,18 +19923,20 @@
     RRV8.setDotState($('schedDot'), 'unknown');
     var sysPill = $('sysPill'); if (sysPill) { sysPill.classList.remove('good', 'warn', 'bad'); sysPill.hidden = true; }
     var pPill = $('periodPill'); if (pPill) { pPill.hidden = true; pPill.textContent = 'Period: —'; }
-    // People & Licensing — both rows read db-scoped data (license-usage by db,
-    // access-reviews for the client); grey them so the prior DB's seats/team
-    // status can't linger in the reload window.
-    RRV8.setDotState($('licenseDot'), 'unknown', '');
-    var licSub = $('licenseSub'); if (licSub) licSub.textContent = 'Company seats & entitlements';
+    // Team & Access — the users and the access review are the client's, and so is
+    // the complex-password review (UI-265: the newest ack on any database), but
+    // that ack is re-read through loadAcks() on the switch, so the card greys for
+    // the moment the read takes. Licensing is NOT reset any
+    // more (UI-265): the card reads client-wide figures, so a switch changes nothing
+    // on it, and blanking it would flash a card whose answer is the same.
     RRV8.setDotState($('teamDot'), 'unknown', '');
     var tmSub = $('teamSub'); if (tmSub) tmSub.textContent = 'Users, roles & access';
     _teamPwLevel = 'unknown';   // new DB's password-review state loads a beat later
     _setDataRow('teamUsersRow', 'unknown', 'Checking…');
     _setDataRow('teamReviewRow', 'unknown', 'Checking…');
     _setDataRow('teamPwRow', 'unknown', 'Complex passwords');
-    var aFeed = $('actFeed'); if (aFeed) aFeed.innerHTML = '<div class="act-empty">Recent system events &mdash; restarts, data reloads, and refreshes.</div>';
+    // UI-265: with more than one database the feed is every database's, so a switch leaves it alone.
+    var aFeed = $('actFeed'); if (aFeed && _instanceDbs().length <= 1) aFeed.innerHTML = '<div class="act-empty">Recent system events &mdash; restarts, data reloads, and refreshes.</div>';
     // Data card — refresh/purge/calendar rows reset to "Checking…" for the new DB.
     _fiscalDetect = null; renderDataCard();
     // System Health review dots (AI / Activity / password) read the NEW db's key

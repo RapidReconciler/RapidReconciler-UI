@@ -230,9 +230,34 @@
     });
   }
 
+  /**
+   * Per-database roll-up for Home's card when the sign-in carries more than one database (UI-265, owner ruling
+   * 2026-11-02: the Administrator view reports the RR instance). Each result is { label, rows } for a database whose
+   * agent answered, or { label, error } for one that did not: error 'unreachable' (no answer at all: amber, because
+   * that database's users cannot work either) or 'unchecked' (it answered with an error, e.g. a Services release
+   * without the endpoint: grey, the same no-verdict the one-database card gives it).
+   * Returns [{ label, index, state, needs, areas, text }] worst first, in input order within a state. `areas` lists
+   * the areas with a check that is not OK; `index` is the result's position in the input.
+   */
+  function byDatabase(results) {
+    var out = (results || []).map(function (r, i) {
+      var label = String((r && r.label) || 'Database');
+      if (!r || r.error || !Array.isArray(r.rows)) {
+        var reach = r && r.error === 'unreachable';
+        return { label: label, index: i, state: reach ? 'warn' : 'unknown', needs: 0, areas: [],
+          text: label + (reach ? ': not answering' : ': not checked') };
+      }
+      var bad = r.rows.filter(function (x) { return x.state !== 'ok'; });
+      var areas = AREAS.filter(function (a) { return bad.some(function (x) { return x.area === a; }); });
+      return { label: label, index: i, state: worst(r.rows), needs: bad.length, areas: areas,
+        text: label + (bad.length ? ': ' + bad.length + (bad.length === 1 ? ' issue' : ' issues') : ': OK') };
+    });
+    return out.sort(function (a, b) { return (RANK[a.state] - RANK[b.state]) || (a.index - b.index); });
+  }
+
   global.RRV8 = global.RRV8 || {};
   global.RRV8.troubleshooting = {
-    rows: rows, worst: worst, byArea: byArea, fmtWhen: fmtWhen, scheduledText: scheduledText,
+    rows: rows, worst: worst, byArea: byArea, byDatabase: byDatabase, fmtWhen: fmtWhen, scheduledText: scheduledText,
     RANK: RANK, AREAS: AREAS, IT: IT
   };
 })(typeof window !== 'undefined' ? window : this);

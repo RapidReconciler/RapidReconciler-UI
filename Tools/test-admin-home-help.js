@@ -248,7 +248,12 @@ runCases(GLOSS_FN, CSS_ALL);
     'AI PLAN': () => /id="aiPlanTierLabel"/.test(VIEW_ADMIN)
       && [...PLAN_LABELS.matchAll(/:\s*'([A-Za-z]+)'/g)].map((m) => m[1]).length === 4
       && [...PLAN_LABELS.matchAll(/:\s*'([A-Za-z]+)'/g)].map((m) => m[1]).every((lbl) => line('AI PLAN').indexOf(lbl + ':') >= 0),
-    'LICENSING': () => />Licensing</.test(view) && /days <= 60/.test(LIC_FN) && /60 days/.test(line('LICENSING')) && /company licenses used on this database/.test(LIC_FN),
+    // UI-265: the view reads every database the sign-in carries, the greeting's line names them, and the
+    // Troubleshooting card switches to one row per database.
+    'ONE VIEW FOR ALL YOUR DATABASES': () => /function _instanceDbs\(\)/.test(home)
+      && /if \(vr === 'admin'\) return _adminHeroContext\(\);/.test(home) && /if \(dbs\.length > 1\) \{ _loadTsInstance\(dbs\); return; \}/.test(home),
+    'LICENSING': () => />Licensing</.test(view) && /days <= 60/.test(LIC_FN) && /60 days/.test(line('LICENSING'))
+      && /company licenses used across your databases/.test(LIC_FN) && /across your databases/.test(line('LICENSING')),
     'TEAM & ACCESS': () => />Team & Access</.test(view) && /TEAM_AMBER_DAYS = 182, TEAM_RED_DAYS = 365/.test(TEAM_DAYS)
       && /6 months/.test(line('TEAM & ACCESS')) && /a year/.test(line('TEAM & ACCESS')),
     'TROUBLESHOOTING': () => ['Connections', 'Data loads', 'Database server'].every((a) => view.indexOf('data-ts-area="' + a + '"') >= 0) && /href="admin-data-refresh.html"/.test(view),

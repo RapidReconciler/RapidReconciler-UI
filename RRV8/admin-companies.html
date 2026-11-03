@@ -1147,11 +1147,19 @@
       if (!u) return;
       const unlimited = u.unlimited;
       const cap = u.maxCompanies;
-      const atLimit  = !unlimited && cap != null && used >= cap;
-      const overLimit= !unlimited && cap != null && used >  cap;
+      // UI-265: the limit covers all the client's databases, so it is judged on the client-wide count VALC sends
+      // (clientUsed, with its own atLimit / overLimit), not on this page's rows. It was judged on this database's
+      // count, so a client at 12 of 12 across three databases read "Using 2 of 12" here with no warning, while
+      // Home's Licensing card said all were in use. clientUsed is absent on an older VALC; fall back to this page's.
+      const cliUsed  = (u.clientUsed != null) ? u.clientUsed : used;
+      const atLimit  = !unlimited && cap != null && (u.atLimit  != null ? !!u.atLimit  : cliUsed >= cap);
+      const overLimit= !unlimited && cap != null && (u.overLimit != null ? !!u.overLimit : cliUsed >  cap);
+      const elsewhere = cliUsed - used;
       let msg = unlimited
         ? ('Using ' + used + ' of unlimited company licenses.')
-        : ('Using ' + used + ' of ' + cap + ' company licenses.');
+        : elsewhere > 0
+          ? ('Using ' + used + ' of ' + cap + ' company licenses on this database, ' + cliUsed + ' of ' + cap + ' across all your databases.')
+          : ('Using ' + used + ' of ' + cap + ' company licenses.');
       if (overLimit)    msg += ' You are over your licensed amount — request more licenses from GSI.';
       else if (atLimit) msg += ' You have used all your licenses — request more from GSI.';
       const textEl = document.getElementById('js-license-usage-text');

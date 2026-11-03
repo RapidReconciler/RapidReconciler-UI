@@ -913,8 +913,14 @@ answered (`Tools/test-connection-check-topology.js`).
 
 The AI gateway is VALC (`RR_VALC_PREFIXES` carries `api/v1/ai/`); the Anthropic key never reaches the browser.
 Inside the client's purchased plan (`clients.ai_max_level`, set by GSI on Client Details), the customer's
-administrator sets a level per **feature** per **database** on the AI Assistant page. A call may use the lower of the
-two. A feature nobody has set is Off. Owner ruling 2026-10-31: five features.
+administrator sets a level per **feature** on the AI Assistant page. A call may use the lower of the two. A feature
+nobody has set is Off. Owner ruling 2026-10-31: five features.
+
+**UI-265 (V110, 2026-11-03): a level is the client's and applies to all its databases.** Until V110 it was kept per
+database, and the page changed whichever database the picker had selected. Calls and the page still send the active
+database's `uuid`; VALC uses it only to find the client (and to refuse a database the caller may not use). V110 folded
+each client's databases into one set, keeping the lowest level where they differed (owner ruling 2026-11-03), a
+database with nothing set counting as Off.
 
 | Key | Name on the AI Assistant page | Calls |
 |---|---|---|
