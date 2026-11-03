@@ -99,6 +99,15 @@ period. If V7's numbers do not tie out on Demo1, that is found before any UI exi
   satisfies OOB = BegVar − EndofDay + Exclusions + Variance + JEs.
 - Gated by `tests/dac88-transit-offset-account.sql` and `tests/dac88-transit-views.sql`. The dacpac publishes at the
   SQL 2019 floor. Deploys through VALC.
+- **DAC-90 (built 2026-11-03): the baseline carries stock in transit.** `v6_transit_item_details` kept only periods
+  ending on or after cutoff − 1, and the baseline on hand is `Transit_Item_Balance` rolled back through those same
+  rows, so it was 0 by construction and every account opened out by its whole GL balance. The body moved to
+  `v8_transit_item_activity` (no period filter); the details view is the window as before plus an **opening layer**:
+  the older rows of order lines still in transit when the window opens (net quantity > 0), dated at cutoff − 1.
+  Closed lines, receipts with no shipment in the cardex, and placeholder accounts stay out. Baseline-dated rows reach
+  on hand and Orders only (compare keeps `periodends > PeriodCutoff`; end of day joins `RFiscalCalendar`). On Demo1,
+  80002 opens at 0.00 instead of 61,520.64, and the same rule over V7's history at that date ties its GL to the cent.
+  Gated by `tests/dac90-transit-opening-on-hand.sql`.
 
 **2. Agent (UI-239).** `/in-transit/*`, each with a spec in `specs/` and an API.md entry first:
 
@@ -130,6 +139,16 @@ Drill-ins: `transit-transactions.html`, `transit-asof.html`, `transit-orders.htm
 filters: receipts without shipments, items in transit on a closed PO, and zero quantity in transit. Then Home's
 module pill goes live for In Transit (one line in `_homeModules`), RNV stays "Coming soon", and the glossary, AI
 docs, `RR_TEST_AGENT_AREAS`, API.md, GRID-STANDARDS coverage and tests follow.
+
+**Slice 1, built 2026-11-03: `RRV8/transit.html`, the landing page.** Both lenses, all eight tabs, on the live
+endpoints; `'in-transit/'` in `RR_TEST_AGENT_PREFIXES`; API.md and GRID-STANDARDS updated;
+`Tools/test-transit-page.js` pins the module gate (t.it AND m.it, fail closed), the routing, the three quick filters,
+the exclusion key's bound shape and the `perms.ite` gate, each with a mutation arm. One company at a time, because
+companies carry different currencies. The pill stays "Coming soon", so the page is reachable by URL only.
+**Still to build:** the three drill-ins (notes on Transaction Variance live in `transit-transactions.html`; the item
+roll in `transit-asof.html`; the full Orders grid in `transit-orders.html`), then the pill, the glossary and AI-doc
+entries (they feed every analyst prompt, so they land with the module going live), `test-module-pill.js`, and the live
+check as an analyst, an accountant and a user without the module.
 
 **5. Verify.** On Demo1 as an analyst, an accountant, and a user without the module (no pill, and a 403 from the
 Agent). Update the RR University transfer-order docs wherever V8 differs from V7.
