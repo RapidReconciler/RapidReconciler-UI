@@ -20,6 +20,9 @@ What goes in the zip is MEASURED from the pages, not listed by hand:
 Navigation (<a href>, and .html literals in scripts) is not a load. A navigation target
 inside the package is fine; one outside it (the knowledge base stays on Pages) is listed
 in the manifest under `linksOutside`, for the Web App deploy leg (QAv8) to resolve.
+An entry ending in "/" is a directory a script joins names onto at runtime
+('../RRUniversity/' + rec.url in Tools/home-search.js): every link under it leaves the
+package, and no file list could name them.
 
 The release declares the oldest Services release it runs against, from
 `v8-release.properties` at the repo root (`min-services-version=8.0.47`). The packager
@@ -37,11 +40,14 @@ import html.parser
 import json
 import os
 import re
+import subprocess
 import sys
 import zipfile
 
 PROPERTIES = 'v8-release.properties'
 FLOOR_KEY = 'min-services-version'
+DOCS_KEY = 'docs-base-url'
+DOCS_RE = re.compile(r'^https://[^\s?#"\'<>]+/$')
 # The same shape release-ssis.yml / release-dacpac.yml accept, minus "none".
 VERSION_RE = re.compile(r'^[0-9]+(\.[0-9]+){1,3}([-.][0-9A-Za-z.]+)?$')
 ROOT_ENTRIES = ('login.html', 'sso-landing.html')
@@ -54,6 +60,14 @@ PAGE_EXT = ('html', 'htm')
 LITERAL_RE = re.compile(
     r'''(['"`])([^'"`\s<>()\\{}$]+?\.(?:%s))(?:[?#][^'"`\s]*)?\1'''
     % '|'.join(ASSET_EXT + PAGE_EXT), re.IGNORECASE)
+# A directory a script joins a name onto at runtime: '../RRUniversity/' + rec.url, or
+# `../Scenarios/${slug}.html`. No file is named, so LITERAL_RE cannot see these links.
+PREFIX_RE = re.compile(r'''(['"])([^'"`\s<>()\\{}$]+/)\1\s*\+|`([^'"`\s<>()\\{}$]+/)\$\{''')
+# A page a script loads into a frame: iframe.src = '../Tools/analysis-workbook.html'. The
+# Export Analyzer's handshake checks location.origin, so that page must share V8's origin.
+FRAME_SRC_RE = re.compile(
+    r'''(?:\.src\s*=|setAttribute\(\s*['"]src['"]\s*,)\s*(['"])([^'"\s]+?\.html?)(?:[?#][^'"]*)?\1''',
+    re.IGNORECASE)
 CSS_URL_RE = re.compile(r'''url\(\s*(['"]?)([^'")]+)\1\s*\)''', re.IGNORECASE)
 CSS_IMPORT_RE = re.compile(r'''@import\s+(['"])([^'"]+)\1''', re.IGNORECASE)
 
@@ -81,6 +95,30 @@ def read_floor(root):
     if not VERSION_RE.match(value):
         raise Refusal('%s=%s in %s is not a Services version (such as 8.0.47); "none" is not '
                       'accepted, since every V8 page calls Services' % (FLOOR_KEY, value, PROPERTIES))
+    return value
+
+
+def _property(root, key):
+    path = os.path.join(root, PROPERTIES)
+    if os.path.isfile(path):
+        with open(path, encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith(key + '='):
+                    return line[len(key) + 1:].strip()
+    return None
+
+
+def read_docs_base(root):
+    """Where a deployed V8 links the knowledge base (owner ruling 2026-11-03)."""
+    value = _property(root, DOCS_KEY)
+    if not value:
+        raise Refusal('%s has no %s line: a deployed V8 serves from its own host, where '
+                      '../RRUniversity/ names nothing, so the release must say where the knowledge '
+                      'base is published' % (PROPERTIES, DOCS_KEY))
+    if not DOCS_RE.match(value):
+        raise Refusal('%s=%s in %s is not an https:// directory URL ending in "/"'
+                      % (DOCS_KEY, value, PROPERTIES))
     return value
 
 
@@ -128,6 +166,8 @@ class _PageRefs(html.parser.HTMLParser):
             (self.navs if rels and rels <= self.NAV_LINK_RELS else self.loads).append(a['href'])
         elif tag == 'a' and a.get('href'):
             self.navs.append(a['href'])
+        if a.get('data-help-src'):              # the "?" panel frames this doc (Tools/help-sidebar.js)
+            self.navs.append(a['data-help-src'])
         for attr in self.LOAD_ATTRS.get(tag, ()):
             v = a.get(attr)
             if not v:
@@ -152,6 +192,25 @@ class _PageRefs(html.parser.HTMLParser):
             self.styles.append(data)
 
 
+def _tracked(root):
+    """The files git tracks when root is the top of a work tree, else None (no git, or a fixture).
+
+    CI packs a fresh checkout, so a local run that saw gitignored or not-yet-added files
+    would measure a different release than the one published.
+    """
+    try:
+        # An empty prefix means root IS the top. Comparing paths instead fails on Windows,
+        # where git answers with long names and a temp dir can be spelled EDWARD~1.
+        top = subprocess.run(['git', '-C', root, 'rev-parse', '--show-prefix'],
+                             capture_output=True, text=True)
+        if top.returncode != 0 or top.stdout.strip():
+            return None
+        out = subprocess.run(['git', '-C', root, 'ls-files', '-z'], capture_output=True, text=True, check=True)
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return set(p for p in out.stdout.split('\0') if p)
+
+
 def _is_page(path):
     return path.lower().rsplit('.', 1)[-1] in PAGE_EXT
 
@@ -171,26 +230,65 @@ def entry_pages(root):
 
 def measure(root):
     """(files, links_outside, entries): every file the V8 surface needs, measured from its pages."""
+    d = measure_detail(root)
+    return d['files'], d['outside'], d['entries']
+
+
+def measure_detail(root, texts=None):
+    """measure(), plus each file's references as written (`refs`: path -> {(ref, target)}).
+
+    `texts` (path -> str) replaces a file's content, so the rewritten bytes can be measured
+    again before anything ships.
+    """
     entries = entry_pages(root)
     files = set(entries)
     nav_targets = set()
+    prefixes = set()                        # 'RRUniversity/': a script links under it at runtime
+    refs = {}                               # source path -> {(ref as written, target)}
     broken = []
     script_bases = {}                       # script path -> page dirs that load it
     queue = list(entries)
     seen = set()
+    tracked = _tracked(root)
+
+    def on_disk(p):
+        return p is not None and os.path.isfile(os.path.join(root, p))
 
     def exists(p):
-        return p is not None and os.path.isfile(os.path.join(root, p))
+        return on_disk(p) and (tracked is None or p in tracked)
+
+    def read(path):
+        if texts is not None and path in texts:
+            return texts[path]
+        with open(os.path.join(root, path), encoding='utf-8', errors='replace') as f:
+            return f.read()
+
+    def note(where, ref, target):
+        refs.setdefault(where, set()).add((ref, target))
 
     def add_load(path, where, ref):
         if not exists(path):
-            broken.append('%s loads %s (%s), which does not exist' % (where, ref, path or 'outside the repo'))
+            if on_disk(path):
+                broken.append('%s loads %s (%s), which git has not tracked: git add it, or the release '
+                              'CI cuts from a checkout will not contain it' % (where, ref, path))
+            else:
+                broken.append('%s loads %s (%s), which does not exist' % (where, ref, path or 'outside the repo'))
             return
         if path not in files:
             files.add(path)
             queue.append(path)
 
     def scan_literals(text, bases, where):
+        framed = set()
+        for m in FRAME_SRC_RE.finditer(text):
+            ref = _local(m.group(2))
+            if not ref:
+                continue
+            targets = [_resolve(root, base, ref) for base in bases]
+            hit = next((p for p in targets if exists(p)), None)
+            add_load(hit or targets[0], where, ref)
+            if hit:
+                framed.add(hit)
         for m in LITERAL_RE.finditer(text):
             ref = _local(m.group(2))
             if not ref:
@@ -198,11 +296,26 @@ def measure(root):
             for base in bases:
                 p = _resolve(root, base, ref)
                 if exists(p):
-                    if _is_page(p):
+                    if p in framed:
+                        pass
+                    elif _is_page(p):
                         nav_targets.add(p)
+                        note(where, ref, p)
                     elif p not in files:
                         files.add(p)
                         queue.append(p)
+                    break
+        for m in PREFIX_RE.finditer(text):
+            ref = _local(m.group(2) or m.group(3))
+            if not ref:
+                continue
+            for base in bases:
+                p = _resolve(root, base, ref)
+                if p and p != '.' and os.path.isdir(os.path.join(root, p)):
+                    # RRV8/ ships whole as far as links go: its pages are all entry pages.
+                    if p != SURFACE_DIR and not p.startswith(SURFACE_DIR + '/'):
+                        prefixes.add(p + '/')
+                        note(where, ref, p + '/')
                     break
 
     def scan_css(text, base, where):
@@ -217,13 +330,11 @@ def measure(root):
         if path in seen:
             continue
         seen.add(path)
-        full = os.path.join(root, path)
         base = os.path.dirname(path)
         ext = path.lower().rsplit('.', 1)[-1]
         if ext in PAGE_EXT:
-            with open(full, encoding='utf-8', errors='replace') as f:
-                p = _PageRefs()
-                p.feed(f.read())
+            p = _PageRefs()
+            p.feed(read(path))
             for ref in p.loads:
                 loc = _local(ref)
                 if loc:
@@ -237,24 +348,52 @@ def measure(root):
                     t = _resolve(root, base, loc)
                     if exists(t):
                         nav_targets.add(t)
+                        note(path, loc, t)
             for s in p.scripts:
                 scan_literals(s, [base], path)
             for s in p.styles:
                 scan_css(s, base, path)
         elif ext in ('js', 'mjs'):
-            with open(full, encoding='utf-8', errors='replace') as f:
-                text = f.read()
             # fetch() and friends resolve against the PAGE, not the script.
             bases = sorted(script_bases.get(path, set())) + [base]
-            scan_literals(text, bases, path)
+            scan_literals(read(path), bases, path)
         elif ext == 'css':
-            with open(full, encoding='utf-8', errors='replace') as f:
-                scan_css(f.read(), base, path)
+            scan_css(read(path), base, path)
 
     if broken:
         raise Refusal('the V8 surface references files that do not exist:\n  ' + '\n  '.join(sorted(set(broken))))
-    outside = sorted(t for t in nav_targets if t not in files)
-    return sorted(files), outside, entries
+    outside = sorted(set(t for t in nav_targets if t not in files) | prefixes)
+    out = set(outside)
+    refs = {src: sorted(r for r in rs if r[1] in out) for src, rs in refs.items()}
+    return {'files': sorted(files), 'outside': outside, 'entries': entries,
+            'refs': {src: rs for src, rs in refs.items() if rs and src in files}}
+
+
+# ---------------------------------------------------------------- the docs rewrite
+
+def rewrite_outside(root, detail, docs_base):
+    """path -> rewritten text for every shipped file that links out of the package.
+
+    A deployed V8 serves the zip at its own host's root, where ../RRUniversity/ names
+    nothing. Each reference is replaced where it stands as a quoted string (an HTML
+    attribute or a script literal), keeping any ?query or #anchor after it. A reference
+    in any other shape is left alone, and the re-measurement in package() refuses it.
+    """
+    out = {}
+    for path, rs in detail['refs'].items():
+        with open(os.path.join(root, path), 'rb') as f:
+            raw = f.read()
+        try:
+            text = raw.decode('utf-8')              # bytes, so CRLF files keep CRLF
+        except UnicodeDecodeError:
+            raise Refusal('%s links out of the package but is not UTF-8, so it cannot be rewritten' % path)
+        new = text
+        for ref, target in sorted(rs, key=lambda r: -len(r[0])):   # longest first: a prefix of another ref
+            new = re.sub(r'''(?<=["'`])%s(?=["'`?#$])''' % re.escape(ref),
+                         lambda _m, t=target: docs_base + t, new)
+        if new != text:
+            out[path] = new
+    return out
 
 
 # ---------------------------------------------------------------- packaging
@@ -271,7 +410,26 @@ def package(root, version, out_dir, commit=None):
     if not VERSION_RE.match(version or ''):
         raise Refusal('release version %r is not a version (tag ui-v8.0.0 gives 8.0.0)' % version)
     floor = read_floor(root)
-    files, outside, entries = measure(root)
+    docs_base = read_docs_base(root)
+    detail = measure_detail(root)
+    files, outside, entries = detail['files'], detail['outside'], detail['entries']
+    rewritten = rewrite_outside(root, detail, docs_base)
+    # The rewrite is checked by measuring what will ship, not by trusting the substitution.
+    after = measure_detail(root, texts=rewritten)
+    if after['outside']:
+        left = ['%s -> %s' % (src, ref) for src, rs in sorted(after['refs'].items()) for ref, _ in rs]
+        raise Refusal('links still leave the package after pointing them at %s; write each as a quoted '
+                      'attribute or string:\n  %s' % (docs_base, '\n  '.join(left or after['outside'])))
+    if after['files'] != files:
+        raise Refusal('pointing links at %s changed what the pages load: %s'
+                      % (docs_base, sorted(set(files) ^ set(after['files']))))
+
+    def shipped(p):
+        if p in rewritten:
+            return rewritten[p].encode('utf-8')
+        with open(os.path.join(root, p), 'rb') as f:
+            return f.read()
+
     os.makedirs(out_dir, exist_ok=True)
     name = ARTIFACT_PREFIX + version
     manifest = {
@@ -281,9 +439,11 @@ def package(root, version, out_dir, commit=None):
         'minServicesVersion': floor,
         'entryPages': entries,
         'fileCount': len(files),
-        'files': [{'path': p, 'size': os.path.getsize(os.path.join(root, p)),
-                   'sha256': sha256_of(os.path.join(root, p))} for p in files],
+        'files': [{'path': p, 'size': len(shipped(p)),
+                   'sha256': hashlib.sha256(shipped(p)).hexdigest().upper()} for p in files],
+        'docsBaseUrl': docs_base,
         'linksOutside': outside,
+        'filesRewritten': sorted(rewritten),
     }
     manifest_text = json.dumps(manifest, indent=2) + '\n'
     zip_path = os.path.join(out_dir, name + '.zip')
@@ -293,8 +453,7 @@ def package(root, version, out_dir, commit=None):
             info = zipfile.ZipInfo(p, date_time=(1980, 1, 1, 0, 0, 0))
             info.compress_type = zipfile.ZIP_DEFLATED
             info.external_attr = 0o644 << 16
-            with open(os.path.join(root, p), 'rb') as f:
-                z.writestr(info, f.read())
+            z.writestr(info, shipped(p))
         info = zipfile.ZipInfo('v8-release-manifest.json', date_time=(1980, 1, 1, 0, 0, 0))
         info.compress_type = zipfile.ZIP_DEFLATED
         info.external_attr = 0o644 << 16
@@ -306,7 +465,8 @@ def package(root, version, out_dir, commit=None):
     sha_path = zip_path + '.sha256'
     with open(sha_path, 'w', encoding='ascii', newline='\n') as f:
         f.write('%s  %s\n' % (zip_sha, os.path.basename(zip_path)))
-    return {'floor': floor, 'files': files, 'outside': outside, 'zip': zip_path,
+    return {'floor': floor, 'docsBase': docs_base, 'files': files, 'outside': outside,
+            'rewritten': sorted(rewritten), 'zip': zip_path,
             'manifest': manifest_path, 'sha256': sha_path, 'zipSha256': zip_sha}
 
 
@@ -325,12 +485,14 @@ def main(argv=None):
         print('REFUSED: ' + str(e))
         return 2
     print('min-services-version: ' + r['floor'])
-    print('files: %d  links outside the package: %d' % (len(r['files']), len(r['outside'])))
+    print('files: %d  links outside the package: %d, pointed at %s (in %d files)'
+          % (len(r['files']), len(r['outside']), r['docsBase'], len(r['rewritten'])))
     print('zip: %s  sha256: %s' % (r['zip'], r['zipSha256']))
     if args.github_output:
         with open(args.github_output, 'a', encoding='utf-8') as f:
-            f.write('floor=%s\nfile_count=%d\noutside_count=%d\nzip=%s\nmanifest=%s\nsha256=%s\nzip_sha256=%s\n' % (
-                r['floor'], len(r['files']), len(r['outside']), r['zip'], r['manifest'], r['sha256'], r['zipSha256']))
+            f.write('floor=%s\ndocs_base=%s\nfile_count=%d\noutside_count=%d\nzip=%s\nmanifest=%s\nsha256=%s\nzip_sha256=%s\n' % (
+                r['floor'], r['docsBase'], len(r['files']), len(r['outside']), r['zip'], r['manifest'],
+                r['sha256'], r['zipSha256']))
     return 0
 
 

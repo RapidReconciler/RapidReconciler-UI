@@ -288,12 +288,20 @@
     // No-op when the panel is closed, so a plain Edit click stays a plain edit.
     function scrollHelpTo(anchorId) {
       if (!anchorId) return;
-      try {
-        var doc = frame.contentDocument;
-        if (!doc) return;
+      var doc = null;
+      try { doc = frame.contentDocument; } catch (_) { doc = null; }
+      if (doc) {
         var el = doc.getElementById(anchorId);
         if (el && el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      } catch (_) { /* iframe not ready / cross-origin — ignore */ }
+        return;
+      }
+      // UI-211: a released V8 frames the knowledge base from its published site, another
+      // origin, so contentDocument is null and the scroll above cannot run. Changing only
+      // the #fragment of the frame's URL scrolls it there without reloading the doc.
+      var src = frame.getAttribute('src');
+      if (!src) return;
+      var want = src.split('#')[0] + '#' + encodeURIComponent(anchorId);
+      if (src !== want) frame.setAttribute('src', want);
     }
     document.addEventListener('click', function (e) {
       if (!isOpen()) return;
