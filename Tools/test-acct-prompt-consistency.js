@@ -23,7 +23,9 @@
  *   P4  the register points at the task ABOVE it (it is always appended last), and lets a task ask for rounding
  *   P5  a GBP company's large carry-forward reads "over £50K"; C5 CONTROL: a USD company reads "over $50K"
  *
- * FIVE MUTATION CONTROLS, one per fix, each restoring the shipped-before text: each must redden only its own case.
+ * P6-P7 UI-268: "which account first" has its own short rule; "which accounts are out of balance" keeps a trimmed list.
+ *
+ * SIX MUTATION CONTROLS, one per fix, each restoring the shipped-before text: each must redden only its own case(s).
  */
 'use strict';
 const fs = require('fs');
@@ -177,6 +179,20 @@ async function runCases(html, config) {
   // The control reads the symbol only ("over $50" covers "$50K" and the old "$50,000"), so it proves the
   // instrument sees a currency and stays green under P5's arm, which is a currency defect, not a format one.
   check('C5 CONTROL: a USD carry-forward reads "over $50…"', amort('USD').includes('over $50'), true);
+
+  // P6/P7 -- UI-268: "which account first" and "which accounts are out of balance" are two rules, not one. The
+  // owner's look got the whole list, a lead line and an "I'd focus on" line for "which should I work on first".
+  const fmt = (p.split('FORMAT — pick by the question:')[1] || '').split('HOW TO WRITE THE ANSWER')[0];
+  const rules = fmt.split('\n').filter((l) => l.startsWith('• If it asks'));
+  const first = rules.filter((r) => /work FIRST/.test(r));
+  const list = rules.filter((r) => /WHICH accounts are out of balance/.test(r));
+  check('P6 "which account first" has its own rule: 2-3 sentences, no bullets, no list, and it is not the list rule',
+    { n: first.length, short: first.some((r) => /2-3 plain sentences/.test(r) && /NO bullets and NO list/.test(r)),
+      merged: rules.some((r) => /work first, or which accounts are out of balance/i.test(r)) },
+    { n: 1, short: true, merged: false });
+  check('P7 "which accounts are out of balance" keeps a list whose bullets carry only account, amount and materiality',
+    { n: list.length, trimmed: list.some((r) => /<its materiality, exactly as its line states it>", and nothing more on that line/.test(r)) },
+    { n: 1, trimmed: true });
   return reds.slice();
 }
 
@@ -208,6 +224,11 @@ async function runCases(html, config) {
       CONFIG.replace("'- Unless the task above specifies its own layout", "'- Unless the task below specifies its own layout"));
     await arm('the amortization label says "over $50,000" for every currency again', 'P5',
       HOME.replace("('over ' + amt(50000))", "'over $50,000'"), CONFIG);
+    // UI-268: the two account rules folded back into the one that answered "which first" with the whole list.
+    const a6 = HOME.indexOf("'• If it asks which ACCOUNT to work FIRST"), a7 = HOME.indexOf("The lead line carries NO bullet.\\n' : '')");
+    await arm('the two account rules merged back into one', 'P6,P7', (a6 < 0 || a7 < 0) ? HOME : HOME.slice(0, a6)
+      + "'• If it asks which ACCOUNT to work first, or which accounts are out of balance, answer from the \"Accounts by company\" facts and NOTHING else: (1) a lead line; (2) ONE line per account worth working, starting with \"• \"; (3) a line starting with \"I\\'d focus on \".\\n' : '')"
+      + HOME.slice(a7 + "The lead line carries NO bullet.\\n' : '')".length), CONFIG);
   }
   const total = shippedFailures + armFailures;
   console.log('\nRESULT: ' + (total === 0 ? 'all passed' : total + ' failed'));
