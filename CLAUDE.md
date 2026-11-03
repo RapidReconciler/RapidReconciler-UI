@@ -328,8 +328,9 @@ runs `.github/scripts/update_release_notes.py` on every push to `main`.
 
 **Publish model: opt-in via `Release-Note:` trailer.** A commit only
 produces a release-notes entry if its body contains a `Release-Note:`
-trailer. The trailer's content (the text from the colon through end-of-
-body, minus any subsequent known-trailer block like `Co-Authored-By`)
+trailer. The trailer's content (the text from the colon up to the first
+known trailer like `Co-Authored-By`, the next commit of a squash body,
+or GitHub's `---------` rule, whichever comes first)
 becomes the entry text &mdash; the commit subject and main body are NOT
 published. This keeps engineering-detailed commits (which often contain
 customer doc numbers, dollar amounts, file names, etc.) off the customer-
@@ -353,11 +354,19 @@ Release-Note:
 
 ```
 Release-Note:
-Multi-paragraph notes are also fine — everything from the colon through
-the end of the body becomes the entry. Blank lines separate paragraphs.
+Multi-paragraph notes are also fine — everything from the colon to the
+first trailer line becomes the entry. Blank lines separate paragraphs.
 
 Co-Authored-By: ...
 ```
+
+**A squash carries every branch commit's message** (`COMMIT_MESSAGES`), so
+until HK-50 (2026-11-03) a trailer in any commit but the last published the
+commits after it. On 2026-10-20 #807's entry carried a fix commit's subject,
+two `Co-Authored-By` lines and the `---------` rule. The note now ends at the
+next `* <subject>` entry, and `test_update_release_notes.py` covers both
+orders. A bullet written with `* ` after a blank line would end the note too;
+the renderer only knows `- ` bullets anyway.
 
 Bullets are the house style. Until UI-208 (2026-10-02) the renderer joined every
 line of a block with spaces, so a bulleted note published as one run-on `<p>`.

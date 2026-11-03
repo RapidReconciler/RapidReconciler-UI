@@ -156,12 +156,18 @@ def strip_trailers(body: str) -> str:
 # "Release-Note:", "release-note:", and "RELEASE-NOTE:" all work.
 RELEASE_NOTE_LINE_RE = re.compile(r"^Release-Note:[ \t]*(.*)$", re.IGNORECASE)
 
+# A squash body's next commit ("* <subject>") and the rule GitHub closes the
+# list with ("---------"). See extract_release_note.
+SQUASH_ENTRY_RE = re.compile(r"^\* \S")
+SQUASH_RULE_RE = re.compile(r"^-{3,}\s*$")
+
 
 def extract_release_note(body: str) -> str | None:
     """Return the customer-facing release-note content from a commit body, or
     None if there's no `Release-Note:` trailer. The content runs from the
-    colon through end-of-body, with any following known-trailer block
-    (Co-Authored-By, etc.) stripped off the tail.
+    colon to the first known trailer (Co-Authored-By, etc.), the next commit
+    of a squash body ("* <subject>"), or the "---------" rule, whichever
+    comes first; otherwise to end-of-body.
 
     Single-line and multi-paragraph forms both work:
 
@@ -189,10 +195,20 @@ def extract_release_note(body: str) -> str | None:
     # the content after "Release-Note:".
     rn_lines = [first_line_content] + lines[start_idx + 1:]
 
-    # Strip any *trailing* known-trailer block (Co-Authored-By, etc.)
+    # The note ends at the first line that cannot be note text (HK-50). This
+    # repo squashes with COMMIT_MESSAGES, so a squash body is every branch
+    # commit's message in turn: "* <subject>" after a blank line starts the next
+    # commit, GitHub closes the list with a "---------" line, and a known
+    # trailer (Co-Authored-By, ...) ends a message. Collecting to end-of-body
+    # published all three on 2026-10-20 (#807: a fix commit's subject, two
+    # Co-Authored-By lines and the dashes).
     end_idx = len(rn_lines)
-    while end_idx > 0 and TRAILER_RE.match(rn_lines[end_idx - 1] or ""):
-        end_idx -= 1
+    for i in range(1, len(rn_lines)):
+        ln = rn_lines[i] or ""
+        if (TRAILER_RE.match(ln) or SQUASH_RULE_RE.match(ln)
+                or (SQUASH_ENTRY_RE.match(ln) and not rn_lines[i - 1].strip())):
+            end_idx = i
+            break
     rn_lines = rn_lines[:end_idx]
 
     # Strip trailing blank lines
