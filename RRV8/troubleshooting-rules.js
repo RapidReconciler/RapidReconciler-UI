@@ -236,7 +236,8 @@
    * agent answered, or { label, error } for one that did not: error 'unreachable' (no answer at all: amber, because
    * that database's users cannot work either) or 'unchecked' (it answered with an error, e.g. a Services release
    * without the endpoint: grey, the same no-verdict the one-database card gives it).
-   * Returns [{ label, index, state, needs, areas, text }] worst first, in input order within a state. `areas` lists
+   * Returns [{ label, index, state, needs, areas, text }] worst first, by name within a state (UI-266: the token's
+   * order is arbitrary, and the per-page Database choice sorts by name). `areas` lists
    * the areas with a check that is not OK; `index` is the result's position in the input.
    */
   function byDatabase(results) {
@@ -252,7 +253,9 @@
       return { label: label, index: i, state: worst(r.rows), needs: bad.length, areas: areas,
         text: label + (bad.length ? ': ' + bad.length + (bad.length === 1 ? ' issue' : ' issues') : ': OK') };
     });
-    return out.sort(function (a, b) { return (RANK[a.state] - RANK[b.state]) || (a.index - b.index); });
+    return out.sort(function (a, b) {
+      return (RANK[a.state] - RANK[b.state]) || a.label.localeCompare(b.label, undefined, { numeric: true, sensitivity: 'base' });
+    });
   }
 
   global.RRV8 = global.RRV8 || {};

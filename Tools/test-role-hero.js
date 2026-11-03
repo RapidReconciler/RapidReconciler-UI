@@ -182,7 +182,8 @@ function runCases(html) {
   // R6 -- UI-265 (owner ruling 2026-11-02): the Administrator view names the instance, not the picked database: the
   // customer's name once license-usage brings it, then every database the sign-in administers. A switch of the
   // picker changes nothing; a database without the admin tab is not listed; past three it is a count.
-  sb.RR_SESSION.dbs = ['Demo1', 'Demo2', 'Demo3'].map((d) => ({ n: 'RapidReconciler_' + d, uuid: d, t: { adm: true } }))
+  // The token's order is deliberately not the name order (UI-266): the line sorts by name, like the Database choice.
+  sb.RR_SESSION.dbs = ['Demo2', 'Demo3', 'Demo1'].map((d) => ({ n: 'RapidReconciler_' + d, uuid: d, t: { adm: true } }))
     .concat([{ n: 'RapidReconciler_Other', uuid: 'o', t: { adm: false } }]);
   vm.runInContext("_instanceName = 'Acme Industrial'", sb);
   sb.activeDb = () => ({ n: 'RapidReconciler_Demo2' });
@@ -217,6 +218,8 @@ if (shippedFailures === 0) {
   arm('the old static markup (role title + dismissible subtitle)', 'R1',
     HOME.replace('      <div class="role-hero-kicker">Administrator Home</div>\n      <h1 class="role-hero-title">Here&rsquo;s where you stand today</h1>',
       '      <h1 class="role-hero-title">Administrator</h1>\n      <p class="role-hero-sub"><span class="role-hero-sub-text">Users.</span></p>'));
+  arm('the Administrator line lists the databases in the token’s order (UI-266)', 'R6',
+    HOME.replace("      .sort(function (a, b) { return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }); });", ';'));
   arm('the Administrator line names the picked database again (UI-265)', 'R6',
     HOME.replace("    if (vr === 'admin') return _adminHeroContext();", "    if (vr === 'admin') return db ? esc(db) : '';"));
 }
