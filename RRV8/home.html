@@ -9354,6 +9354,9 @@
   }
   // Currency amount with the sign BEFORE the symbol ("-£19K", not "£-19K").
   function _ccyAmt(ccy, n) { n = Number(n) || 0; return (n < 0 ? '-' : '') + _ccySym(ccy) + _moneyK(Math.abs(n)); }
+  // The same, exact to the cent ("-£26,950.39"). UI-267: the Accounting Ask's facts were
+  // built as symbol + _money(v), which reads "£-26,950.39", and the answer copied it.
+  function _ccyExact(ccy, n) { n = Number(n) || 0; return (n < 0 ? '-' : '') + _ccySym(ccy) + _money(Math.abs(n)); }
   // A tie-out break is meaningful at the CENT, and every other money figure on the
   // accountant grids is abbreviated (K/M) so a row of them stays scannable. At K a
   // two-cent break renders "$0.0K" — the one number the analyst needs, rounded into
@@ -10608,8 +10611,7 @@
     if (!modal) return;
     var coName = (_coNames && _coNames[String(co).trim()]) || '';
     if (title) title.textContent = 'Adjusting Entry — Co ' + co + (coName ? ' · ' + coName : '');
-    var sym0 = (typeof _ccySym === 'function') ? _ccySym(e && e.ccy) : '';
-    var money0 = function (v) { return sym0 + (Number(v) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+    var money0 = function (v) { return _ccyExact(e && e.ccy, v); };
     // The carry-forward control is built here, ABOVE the empty-entry branch, because
     // excluding the carry-forward can empty the entry — and if the control only
     // rendered alongside a populated table, the accountant would have no way to undo
@@ -10640,7 +10642,7 @@
       _oeAiSummary(null);                                 // no entry → nothing to read
       modal.hidden = false; return;
     }
-    var sym = sym0, money = money0;
+    var money = money0;
     var balanced = Math.abs(e.drTot - e.crTot) < 0.005;
     var hasDefault = e.pairs.some(function (p) { return p.off.isDefault; });
     var hasTiming = e.timingTotal >= 1;
@@ -13838,7 +13840,7 @@
       var gb = c.glBreak;
       if (gb && gb.period) {
         var amt = Number(gb.amount) || 0;
-        var exact = (amt < 0 ? '-' : '') + _ccySym(c.ccy) + _money(Math.abs(amt));   // exact figure in the row (rounded $K goes to the AI band)
+        var exact = _ccyExact(c.ccy, amt);   // exact figure in the row (rounded $K goes to the AI band)
         var more = gb.nPeriods > 1 ? ' <span class="alh-item-more">(' + gb.nPeriods + ' periods off; largest shown)</span>' : '';
         var acctList = (gb.accts || []).map(function (a) { return a.acct; }).filter(Boolean);
         var acctHtml = acctList.length ? (' on <b>' + esc(acctList.slice(0, 3).join(', ')) + '</b>' + (acctList.length > 3 ? ' <span class="alh-item-more">+' + (acctList.length - 3) + ' more</span>' : '')) : '';
@@ -15607,7 +15609,10 @@
       });
     }
     var co = encodeURIComponent(String(solo || ''));
-    var money = function (v) { return '$' + Math.round(v).toLocaleString('en-US'); };
+    // UI-267: this read '$' + the rounded number, so a negative printed "$-1,234" and
+    // every currency read "$". _wlExact puts the sign first, in the company's own symbol.
+    var soloCo = ((d && d.companies) || []).filter(function (c) { return String(c.co) === String(solo || ''); })[0];
+    var money = function (v) { return _wlExact(soloCo && soloCo.ccy, v); };
     var n2 = function (v) { return (Math.round(v * 100) / 100).toLocaleString('en-US', { maximumFractionDigits: 2 }); };
     var n4 = function (v) { return (Math.round(v * 10000) / 10000).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 }); };
     function cellText(v) { return v ? esc(v) : '&mdash;'; }
@@ -18917,10 +18922,10 @@
       var comps = _COMPONENTS.map(function (k) { return { n: k.name, v: c.comp[k.name] }; })
         .filter(function (x) { return Math.abs(x.v) >= 1; })
         .sort(function (a, b) { return Math.abs(b.v) - Math.abs(a.v); })
-        .map(function (x) { return x.n + ' ' + _ccySym(c.ccy) + _money(x.v); }).join(', ');
+        .map(function (x) { return x.n + ' ' + _ccyExact(c.ccy, x.v); }).join(', ');
       var rec = _oobRecurrence(c.co, null);
       var recNote = rec ? '; out of balance in ' + rec.outN + ' of the last ' + rec.of + ' periods' + (rec.chronic ? ' (recurring)' : rec.oneOff ? ' (first appearance / one-off)' : ' (intermittent)') : '';
-      return label + ' (' + (c.ccy || '?') + '): net out-of-balance ' + _ccySym(c.ccy) + _money(c.oob) + ', components: ' + comps + '; ' + rf + priorNote + recNote;
+      return label + ' (' + (c.ccy || '?') + '): net out-of-balance ' + _ccyExact(c.ccy, c.oob) + ', components: ' + comps + '; ' + rf + priorNote + recNote;
     });
   }
   // ---- UI-257: the accounts behind each company, for the accountant's Ask ----------
@@ -18961,7 +18966,7 @@
       var coLbl = scrub ? ('Entity ' + String.fromCharCode(65 + (i % 26))) : ('Co ' + c.co);
       var accts = (byCo[String(c.co)] || []);
       if (!accts.length) { lines.push(coLbl + ': no accounts loaded for this period.'); return; }
-      var sym = _ccySym(c.ccy), amt = function (v) { return sym + _money(Number(v) || 0); };
+      var amt = function (v) { return _ccyExact(c.ccy, v); };
       var out = accts.filter(function (r) { return Math.abs(Number(r.OOB) || 0) >= MAT_OOB_FLOOR; })
         .sort(function (a, b) { return Math.abs(Number(b.OOB) || 0) - Math.abs(Number(a.OOB) || 0); });
       var inN = accts.length - out.length;
@@ -19062,13 +19067,13 @@
           g.net += v; g.n += 1; if (p) g.per[p] = 1;
         });
         var modTxt = Object.keys(mods).sort(function (a, b) { return Math.abs(mods[b].net) - Math.abs(mods[a].net); })
-          .map(function (k) { return k + ' ' + sym + _money(mods[k].net) + ' (' + docs(mods[k].n) + ')'; }).join(', ');
+          .map(function (k) { return k + ' ' + _ccyExact(c.ccy, mods[k].net) + ' (' + docs(mods[k].n) + ')'; }).join(', ');
         var top = Object.keys(groups).map(function (k) { return groups[k]; })
           .sort(function (a, b) { return Math.abs(b.net) - Math.abs(a.net); }).slice(0, 6)
           .map(function (g) {
             if (g.code && usedCodes.indexOf(g.code) < 0) usedCodes.push(g.code);
             var np = Object.keys(g.per).length;
-            return g.mod + ' — ' + g.cat + ', ' + (g.ot || '-') + '/' + (g.dt || '-') + ': ' + docs(g.n) + ', net ' + sym + _money(g.net)
+            return g.mod + ' — ' + g.cat + ', ' + (g.ot || '-') + '/' + (g.dt || '-') + ': ' + docs(g.n) + ', net ' + _ccyExact(c.ccy, g.net)
               + (withRecurrence ? ', in ' + np + ' of ' + Math.max(M, np) + ' periods' : '');
           }).join('; ');
         return 'by module: ' + modTxt + '. Largest groups: ' + top + '.';

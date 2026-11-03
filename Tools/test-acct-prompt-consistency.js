@@ -94,7 +94,7 @@ function load(html, config) {
     $: () => null,
     _briefScope: () => ({ period: '2025-07-31' }),
     // Fictional companies from the 9XXXX reserve: one USD, one GBP, as on Demo1.
-    _acctFactLines: () => ['Co 90002 (USD): net out-of-balance $-8,620.11', 'Co 90008 (GBP): net out-of-balance £-26,950.39'],
+    _acctFactLines: () => ['Co 90002 (USD): net out-of-balance -$8,620.11', 'Co 90008 (GBP): net out-of-balance -£26,950.39'],
     _acctAccountFactLines: () => ['Accounts by company for Jul 31, 2025 (the Accounts tab).'],
     _acctNames: null,
     _acctTrendFacts: () => [],
@@ -113,7 +113,7 @@ function load(html, config) {
     extractLine(html, /\n  var MAT_OOB_FLOOR = [^\n]*\n/, 'the materiality floors'),
     'var _acctTxvCache = null;',
     'var _txAllInflight = {};',
-    ...['fmtPeriod', '_ccySym', '_moneyK', '_ccyAmt', '_wlMateriality', '_wlAmortFact',
+    ...['fmtPeriod', '_ccySym', '_moneyK', '_ccyAmt', '_ccyExact', '_wlMateriality', '_wlAmortFact',
         '_coOf', '_txScope', '_txModuleOf', '_txFetchAll', '_acctTxvRows', '_acctTxvFactLines', '_acctPeriodsOf', 'askAcct']
       .map((n) => extractFn(html, n)),
   ].join('\n');

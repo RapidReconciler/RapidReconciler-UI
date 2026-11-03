@@ -21,6 +21,7 @@
  *   P1-P4  UI-263: each account states the page's own materiality (_wlMateriality, the company figure's rule):
  *          0.05% immaterial, 2.0% material, a dormant GL judged by amount and never called immaterial; the header
  *          forbids the model judging it
+ *   N1  UI-267: a negative amount prints its sign before the symbol (-$8,620.11, -£26,950.39), never "$-"
  *
  * MUTATION: the builder's materiality filter removed (every account listed). A2 must go red; A3-A5, which do not
  * rest on the floor, must stay green. Two more arms: the Currencies line removed (K1 red), and the account
@@ -74,7 +75,7 @@ function load(home) {
     line(home, /\n  var MAT_OOB_FLOOR = [^\n]*/, 'MAT_OOB_FLOOR'),
     line(home, /\n  var ACCT_ASK_TOP = [^\n]*/, 'ACCT_ASK_TOP'),
     line(home, /\n  var _money = function[^\n]*/, '_money'),
-    fn(home, 'fmtPeriod'), fn(home, '_coOf'), fn(home, '_ccySym'), fn(home, '_acctRfState'), fn(home, '_wlMateriality'),
+    fn(home, 'fmtPeriod'), fn(home, '_coOf'), fn(home, '_ccySym'), fn(home, '_ccyExact'), fn(home, '_acctRfState'), fn(home, '_wlMateriality'),
     fn(home, '_acctAccountFactLines'),
     'function _oobRecurrence(co, a) { return a === "9123456.141818" ? { outN: 6, of: 6 } : null; }',
   ].join('\n');
@@ -109,7 +110,7 @@ function run(home) {
   const full = sb._acctAccountFactLines(D, false, ROWS, NAMES).join('\n');
   const i1 = full.indexOf('9123456.141818'), i2 = full.indexOf('9123456.141820'), i3 = full.indexOf('9123456.141824');
   check('A1', 'Full: out-of-balance accounts, biggest first, with the roll-up figures',
-    i1 > 0 && i1 < i2 && i2 < i3 && /9123456\.141818 \(Raw Materials Inventory\): out of balance \$-?8,620\.11 = Ending GL \$1,200\.00 \(Beginning \$1,000\.00 \+ Activity \$200\.00\) vs Perpetual/.test(full)
+    i1 > 0 && i1 < i2 && i2 < i3 && /9123456\.141818 \(Raw Materials Inventory\): out of balance -\$8,620\.11 = Ending GL \$1,200\.00 \(Beginning \$1,000\.00 \+ Activity \$200\.00\) vs Perpetual/.test(full)
       && /out of balance in 6 of the last 6 periods/.test(full) && /3 of 4 accounts out of balance, 1 in balance/.test(full), full);
   check('A2', 'an account under the floor is in balance, not listed', full.indexOf('9123456.141822') < 0, full);
   check('A3', 'roll-forward words match the tab dot: BREAK / never compared / clean',
@@ -152,6 +153,11 @@ function run(home) {
       && !/141834[^\n]*(% of Ending GL|immaterial)/.test(mat), mat);
   check('P4', 'the header says every listed account is over the floor and forbids the model judging materiality',
     /so every account listed is over that floor/.test(mat) && /never judge an account's materiality yourself/.test(mat), mat);
+  // UI-267: a negative prints its sign before the symbol, in both currencies, and never after it.
+  const signed = sb._acctAccountFactLines({ viewedPeriod: PE, companies: [{ co: '90002', ccy: 'USD' }, { co: '90008', ccy: 'GBP' }] },
+    false, [acct('90002', '9123456.141818', -8620.11), acct('90008', '9123457.141818', -26950.39, { EndGL: 1343597.60 })], {}).join('\n');
+  check('N1', 'a negative reads -$8,620.11 and -£26,950.39; no amount reads $- or £-',
+    /out of balance -\$8,620\.11/.test(signed) && /out of balance -£26,950\.39/.test(signed) && !/[$£]-/.test(signed), signed);
   return reds.slice();
 }
 
@@ -182,6 +188,14 @@ console.log('\nMutation: the account materiality verdict removed (P1-P3 must go 
 const m3 = run(noMat);
 const caught3 = ['P1', 'P2', 'P3'].every((id) => m3.includes(id)) && ['A1', 'A3', 'P4'].every((id) => !m3.includes(id));
 console.log('  ' + (caught3 ? 'ok  ' : 'FAIL') + '  materiality mutation caught by ' + JSON.stringify(m3));
-const pass = real.length === 0 && caught && caught2 && caught3;
+// UI-267's formatter: the sign put back after the symbol must turn N1 red and leave P1-P4 green.
+const SIGN = "function _ccyExact(ccy, n) { n = Number(n) || 0; return (n < 0 ? '-' : '') + _ccySym(ccy) + _money(Math.abs(n)); }";
+const signAfter = HOME.replace(SIGN, 'function _ccyExact(ccy, n) { return _ccySym(ccy) + _money(Number(n) || 0); }');
+if (signAfter === HOME) broken('sign mutation did not apply');
+console.log('\nMutation: the sign back after the symbol (N1 must go red; P1-P4 stay green)');
+const m4 = run(signAfter);
+const caught4 = m4.includes('N1') && ['P1', 'P2', 'P3', 'P4'].every((id) => !m4.includes(id));
+console.log('  ' + (caught4 ? 'ok  ' : 'FAIL') + '  sign mutation caught by ' + JSON.stringify(m4));
+const pass = real.length === 0 && caught && caught2 && caught3 && caught4;
 console.log('\n' + (pass ? 'PASS' : 'FAIL') + (real.length ? ': real case(s) red ' + real.join(',') : ''));
 process.exit(pass ? 0 : 1);
