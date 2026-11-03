@@ -18001,9 +18001,43 @@
     var bal = Math.abs(c.glBal || 0), oob = Math.abs(c.oob || 0);
     var pct = bal > 0 ? (oob / bal) * 100 : 0;
     var dormant = bal < DORMANT_GL_FLOOR;
-    var nearZero = oob < MAT_OOB_FLOOR || dormant;
+    // nearZero = "do not express this as a % of the balance". Only underFloor means
+    // immaterial. UI-264: a near-zero GL with a gap at or over the floor (dormantGap) is
+    // judged by its amount; every reader used to call it immaterial, so a 500 GL with
+    // 50,000 out read "No action needed — the amount is negligible".
+    var underFloor = oob < MAT_OOB_FLOOR;
+    var nearZero = underFloor || dormant;
     var pctStr = (pct > 0 && pct < 0.1) ? 'under 0.1%' : pct.toFixed(pct < 1 ? 2 : 1) + '%';
-    return { bal: bal, oob: oob, pct: pct, pctStr: pctStr, dormant: dormant, nearZero: nearZero, material: !nearZero && pct >= 1 };
+    return { bal: bal, oob: oob, pct: pct, pctStr: pctStr, dormant: dormant, nearZero: nearZero,
+             underFloor: underFloor, dormantGap: dormant && !underFloor, material: !nearZero && pct >= 1 };
+  }
+  // UI-264: the one wording for a dormantGap company, so its four readers cannot drift.
+  function _wlDormantGapText(c) {
+    return _wlExact(c.ccy, c.oob) + ' out of balance on a near-zero GL balance of ' + _wlExact(c.ccy, c.glBal)
+      + ', so judge it by the amount, not as a percentage of the balance';
+  }
+  // The Walkthrough card's deterministic read (situation + next step), shown before or
+  // without live AI. Lifted out of renderAcctSnapshot (UI-264) so it can be tested.
+  function _wlOverview(c, canPost) {
+    var m = _wlMateriality(c);
+    var pctStr = m.pctStr, mat = m.pct < 1 ? 'immaterial' : 'modest but not trivial';
+    var drv = _acctMaterial(c, 'Accountant')[0] || _acctMaterial(c, 'Analyst')[0];
+    var review = 'Review the ' + (drv ? drv.name.toLowerCase() + ' driver (' + _ccyAmt(c.ccy, c.comp[drv.name]) + ')' : 'largest driver') + ', then post a journal entry if it holds.';
+    if (m.dormantGap) return { sit: _wlDormantGapText(c) + '.', rec: canPost ? review : '' };
+    // UI-17: near-zero / dormant → frame by absolute amount, suppress the % (a %
+    // of a ~0 GL balance reads as an alarming 100%), show the exact dollars.
+    if (m.nearZero) {
+      return { sit: _wlExact(c.ccy, c.oob) + ' out of balance — immaterial' + (m.dormant ? '; this account is dormant (near-zero balance)' : '') + '.',
+               rec: canPost ? 'No action needed — the amount is negligible. Monitor next period.' : '' };
+    }
+    // Closed/historical period → a "what happened" summary in the past tense,
+    // and NO recommendation (nothing to act on in a closed period).
+    if (!canPost) {
+      return { sit: 'Closed ' + pctStr + ' of the ' + _ccyAmt(c.ccy, c.glBal) + ' GL balance out — ' + _ccyAmt(c.ccy, c.oob) + ', ' + mat + '.', rec: '' };
+    }
+    var sit = _ccyAmt(c.ccy, c.oob) + ' out of balance — ' + pctStr + ' of the ' + _ccyAmt(c.ccy, c.glBal) + ' GL balance, ' + mat + '.';
+    var rec = (m.pct < 1) ? 'No action needed this period — the gap is negligible. Monitor next period.' : review;
+    return { sit: sit, rec: rec };
   }
   // Exact whole-dollar amount (no K/M) so a near-zero figure shows as "$3", not "$0.0K".
   function _wlExact(ccy, v) { var s = (typeof _ccySym === 'function') ? _ccySym(ccy) : ''; var n = Number(v) || 0; return (n < 0 ? '-' : '') + s + Math.abs(n).toLocaleString('en-US', { maximumFractionDigits: 0 }); }
@@ -18112,7 +18146,9 @@
       .sort(function (a, b) { return Math.abs(c.comp[b.name]) - Math.abs(c.comp[a.name]); });
     var amt = function (v) { return _ccyAmt(c.ccy, v); };
     var m = _wlMateriality(c);
-    var matLine = m.nearZero
+    var matLine = m.dormantGap
+      ? ('GL balance ' + amt(c.glBal || 0) + ', inventory on hand ' + amt(c.invBal || 0) + '. ' + _wlDormantGapText(c) + '; do NOT call it immaterial because the balance is small, and do NOT express it as a percentage of the balance.')
+      : m.nearZero
       ? ('GL balance ' + amt(c.glBal || 0) + ', inventory on hand ' + amt(c.invBal || 0) + '. Out of balance ' + _wlExact(c.ccy, c.oob) + ' — immaterial by amount' + (m.dormant ? ' (this company is dormant / near-zero balance)' : '') + '; do NOT express it as a percentage of the balance.')
       : ('GL balance ' + amt(c.glBal || 0) + ', inventory on hand ' + amt(c.invBal || 0) + '. Out of balance ' + amt(c.oob) + ' = ' + m.pctStr + ' of the GL balance.');
     if (exposure === 'grounded') {
@@ -18437,27 +18473,7 @@
     };
     // Deterministic materiality read shown before/without live AI: situation +
     // a clear recommended next step. Returns { sit, rec }.
-    var wlOverview = function (c) {
-      var m = _wlMateriality(c);
-      var pctStr = m.pctStr, mat = m.pct < 1 ? 'immaterial' : 'modest but not trivial';
-      // UI-17: near-zero / dormant → frame by absolute amount, suppress the % (a %
-      // of a ~0 GL balance reads as an alarming 100%), show the exact dollars.
-      if (m.nearZero) {
-        return { sit: _wlExact(c.ccy, c.oob) + ' out of balance — immaterial' + (m.dormant ? '; this account is dormant (near-zero balance)' : '') + '.',
-                 rec: canPost ? 'No action needed — the amount is negligible. Monitor next period.' : '' };
-      }
-      // Closed/historical period → a "what happened" summary in the past tense,
-      // and NO recommendation (nothing to act on in a closed period).
-      if (!canPost) {
-        return { sit: 'Closed ' + pctStr + ' of the ' + _ccyAmt(c.ccy, c.glBal) + ' GL balance out — ' + _ccyAmt(c.ccy, c.oob) + ', ' + mat + '.', rec: '' };
-      }
-      var drv = wlMat(c, 'Accountant')[0] || wlMat(c, 'Analyst')[0];
-      var sit = _ccyAmt(c.ccy, c.oob) + ' out of balance — ' + pctStr + ' of the ' + _ccyAmt(c.ccy, c.glBal) + ' GL balance, ' + mat + '.';
-      var rec = (m.pct < 1)
-        ? 'No action needed this period — the gap is negligible. Monitor next period.'
-        : 'Review the ' + (drv ? drv.name.toLowerCase() + ' driver (' + _ccyAmt(c.ccy, c.comp[drv.name]) + ')' : 'largest driver') + ', then post a journal entry if it holds.';
-      return { sit: sit, rec: rec };
-    };
+    var wlOverview = function (c) { return _wlOverview(c, canPost); };
     var WL_CAUSE = {
       'Carry forward': 'Mostly an unresolved balance carried forward from the prior period.',
       'Transactions': 'Mostly item-ledger movement the GL hasn’t matched.',
@@ -18725,7 +18741,7 @@
       if (pe && String(r.PeriodEnds || '').slice(0, 10) !== pe) return;
       var co = _coOf(r) || '?'; (byCo[co] || (byCo[co] = [])).push(r);
     });
-    var lines = ['Accounts by company for ' + (pe ? fmtPeriod(pe) : 'the loaded periods') + ' (the Accounts tab). Each out-of-balance account reads "<account>: out of balance <amount> = Ending GL <amount> (Beginning <amount> + Activity <amount>) vs Perpetual <amount>[, Unposted <amount>][, End of Day <amount>]; roll-forward <clean | BREAK | never compared>[; out of balance in N of the last M periods]", biggest gap first. An account whose gap is under ' + MAT_OOB_FLOOR + ' in its currency is in balance.'];
+    var lines = ['Accounts by company for ' + (pe ? fmtPeriod(pe) : 'the loaded periods') + ' (the Accounts tab). Each out-of-balance account reads "<account>: out of balance <amount> = Ending GL <amount> (Beginning <amount> + Activity <amount>) vs Perpetual <amount>[, Unposted <amount>][, End of Day <amount>]; <percent> of Ending GL, <material | immaterial>; roll-forward <clean | BREAK | never compared>[; out of balance in N of the last M periods]", biggest gap first. An account whose gap is under ' + MAT_OOB_FLOOR + ' in its currency is in balance, so every account listed is over that floor. Whether a listed account is material is stated on its line, by the same rule as the company figure; quote it and never judge an account\'s materiality yourself.'];
     // UI-258 (owner 2026-11-02, "Fix the wording"): the answer ranked Co 80008's account first
     // while the header showed Co 80002, and compared a GBP gap with a USD one without saying so.
     var coLblOf = function (co) {
@@ -18758,8 +18774,17 @@
         var extra = (Math.abs(Number(r.UnpostBatch) || 0) >= 0.005 ? ', Unposted ' + amt(r.UnpostBatch) : '')
           + (Math.abs(Number(r.EndofDay) || 0) >= 0.005 ? ', End of Day ' + amt(r.EndofDay) : '');
         var rec = _oobRecurrence(c.co, la);
+        // UI-263: the verdict comes from _wlMateriality, the rule the company figure uses.
+        // Without it the model judged accounts itself, and called $400.87 "below the
+        // materiality floor" while ranking a 0.05% account second.
+        var am = _wlMateriality({ glBal: Number(r.EndGL) || 0, oob: Number(r.OOB) || 0 });
+        // A dormant GL gets no verdict: _wlMateriality counts it nearZero, but an account
+        // can sit on a near-zero GL with a large gap, and calling that immaterial is wrong.
+        var matTxt = am.dormant ? 'Ending GL under ' + DORMANT_GL_FLOOR + ' (near-zero balance), so judge it by the amount out, NOT as a % of the balance'
+          : (am.pctStr + ' of Ending GL, ' + (am.material ? 'material' : 'immaterial'));
         lines.push('• ' + aLbl + ': out of balance ' + amt(r.OOB) + ' = Ending GL ' + amt(r.EndGL)
           + ' (Beginning ' + amt(r.BegGL) + ' + Activity ' + amt(r.PerGL) + ') vs Perpetual ' + amt(r.Perpetual) + extra
+          + '; ' + matTxt
           + '; roll-forward ' + RF_WORD[_acctRfState(r)]
           + (rec ? '; out of balance in ' + rec.outN + ' of the last ' + rec.of + ' periods' : ''));
       });
@@ -19088,6 +19113,26 @@
   // gap, whether it's material or immaterial timing, and the one thing to do —
   // no typing. Tier-gated (Off → nothing), cached per company+period so bouncing
   // around never re-hits the AI, and a deterministic lead shows instantly so the
+  // The Accounts tab auto-read's deterministic lead and its company fact line, lifted
+  // out of _acctAutoAnalyze (UI-264) so the materiality wording can be tested.
+  // UI-17: near-zero / dormant frames by absolute amount and suppresses the %.
+  function _acctAnalyzeLead(co, c, top, topNm) {
+    if (!top) return 'Every account reconciles for Co ' + co + ' this period — nothing to chase.';
+    var m = _wlMateriality(c), topAmt = _ccyAmt(c.ccy, Number(top.OOB) || 0);
+    if (m.dormantGap) return _wlDormantGapText(c) + '; concentrated in ' + topNm + ' (' + topAmt + ').';
+    if (m.nearZero) return _wlExact(c.ccy, c.oob) + ' out of balance — immaterial' + (m.dormant ? '; this company is dormant (near-zero balance)' : '') + ', spread thinly across accounts.';
+    return _ccyAmt(c.ccy, c.oob) + ' out of balance — ' + (m.pct < 1 ? 'immaterial' : 'material') + ' at ' + m.pctStr + ' of the ' + _ccyAmt(c.ccy, c.glBal) + ' GL balance; concentrated in ' + topNm + ' (' + topAmt + ').';
+  }
+  function _acctAnalyzeCoFact(c, coLbl) {
+    var m = _wlMateriality(c);
+    var mat = m.dormantGap
+      ? _wlExact(c.ccy, c.oob) + ' on a near-zero GL balance of ' + _wlExact(c.ccy, c.glBal) + ' (judge it by the amount; do NOT call it immaterial because the balance is small, and do NOT express it as a % of the balance)'
+      : m.nearZero
+        ? _wlExact(c.ccy, c.oob) + ' — immaterial by amount' + (m.dormant ? ' (dormant / near-zero balance; do NOT express as a % of the balance)' : '')
+        : _ccyAmt(c.ccy, c.oob) + ' = ' + m.pctStr + ' of the ' + _ccyAmt(c.ccy, c.glBal) + ' GL balance';
+    return 'Company ' + coLbl + ' (' + (c.ccy || '?') + '): net out of balance ' + mat + '.'
+      + ((c.breaks || 0) > 0 ? ' This company has a roll-forward BREAK (analyst re-roll, not a journal entry).' : '');
+  }
   // band is never blank while the model thinks. Only fires from an explicit drill
   // (not the Accounts tab click, which clears the company scope).
   function _acctAutoAnalyze(co) {
@@ -19114,15 +19159,10 @@
     var rows = (_invRows || []).filter(function (r) { return String(_coOf(r)) === String(co) && (!per || String(r.PeriodEnds || '').slice(0, 10) === per); });
     var outA = rows.filter(function (r) { return Math.abs(Number(r.OOB) || 0) > 1; })
       .sort(function (a, b) { return Math.abs(Number(b.OOB) || 0) - Math.abs(Number(a.OOB) || 0); });
-    var m = _wlMateriality(c);
     var top = outA[0], topNm = top ? (nameOf(top) || ('account ' + top.LongAccount)) : '';
     // Deterministic lead — shown instantly, and the graceful fallback if the AI
     // misses. UI-17: near-zero/dormant frames by absolute amount, suppresses the %.
-    var lead = !top
-      ? ('Every account reconciles for Co ' + co + ' this period — nothing to chase.')
-      : m.nearZero
-        ? (_wlExact(c.ccy, c.oob) + ' out of balance — immaterial' + (m.dormant ? '; this company is dormant (near-zero balance)' : '') + ', spread thinly across accounts.')
-        : (_ccyAmt(c.ccy, c.oob) + ' out of balance — ' + (m.pct < 1 ? 'immaterial' : 'material') + ' at ' + m.pctStr + ' of the ' + _ccyAmt(c.ccy, c.glBal) + ' GL balance; concentrated in ' + topNm + ' (' + _ccyAmt(c.ccy, Number(top.OOB) || 0) + ').');
+    var lead = _acctAnalyzeLead(co, c, top, topNm);
     if (ans) ans.textContent = lead;
     _aiRenderDocStrip(ans && ans.parentNode, [], 'acctDocStrip');
     if (!top) { _acctAnalyzeCache[key] = lead; return; }   // in balance — no AI call needed
@@ -19142,8 +19182,7 @@
       var nm = nameOf(r);
       return r.LongAccount + (nm ? ' ' + nm : '');
     };
-    var facts = ['Company ' + _coLbl + ' (' + (c.ccy || '?') + '): net out of balance ' + (m.nearZero ? _wlExact(c.ccy, c.oob) + ' — immaterial by amount' + (m.dormant ? ' (dormant / near-zero balance; do NOT express as a % of the balance)' : '') : _ccyAmt(c.ccy, c.oob) + ' = ' + m.pctStr + ' of the ' + _ccyAmt(c.ccy, c.glBal) + ' GL balance') + '.'
-      + ((c.breaks || 0) > 0 ? ' This company has a roll-forward BREAK (analyst re-roll, not a journal entry).' : '')];
+    var facts = [_acctAnalyzeCoFact(c, _coLbl)];
     facts.push('Out-of-balance accounts (biggest gap first) — account: Out (Ending GL vs Perpetual):');
     outA.slice(0, 12).forEach(function (r, i) {
       var brk = String(r.GLOK).trim().toLowerCase() === 'no' || String(r.VarOK).trim().toLowerCase() === 'no';

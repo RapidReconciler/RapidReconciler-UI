@@ -18,9 +18,13 @@
  *   S1-S3  UI-258: with the header focused on one company the Scope line names it (masked on Enhanced); on
  *          Overview it names none
  *   K1  UI-258: two currencies get a Currencies line; K2 CONTROL: one currency gets none
+ *   P1-P4  UI-263: each account states the page's own materiality (_wlMateriality, the company figure's rule):
+ *          0.05% immaterial, 2.0% material, a dormant GL judged by amount and never called immaterial; the header
+ *          forbids the model judging it
  *
  * MUTATION: the builder's materiality filter removed (every account listed). A2 must go red; A3-A5, which do not
- * rest on the floor, must stay green.
+ * rest on the floor, must stay green. Two more arms: the Currencies line removed (K1 red), and the account
+ * materiality verdict removed (P1-P3 red, A1 and A3 green).
  */
 'use strict';
 const fs = require('fs');
@@ -70,7 +74,8 @@ function load(home) {
     line(home, /\n  var MAT_OOB_FLOOR = [^\n]*/, 'MAT_OOB_FLOOR'),
     line(home, /\n  var ACCT_ASK_TOP = [^\n]*/, 'ACCT_ASK_TOP'),
     line(home, /\n  var _money = function[^\n]*/, '_money'),
-    fn(home, 'fmtPeriod'), fn(home, '_coOf'), fn(home, '_ccySym'), fn(home, '_acctRfState'), fn(home, '_acctAccountFactLines'),
+    fn(home, 'fmtPeriod'), fn(home, '_coOf'), fn(home, '_ccySym'), fn(home, '_acctRfState'), fn(home, '_wlMateriality'),
+    fn(home, '_acctAccountFactLines'),
     'function _oobRecurrence(co, a) { return a === "9123456.141818" ? { outN: 6, of: 6 } : null; }',
   ].join('\n');
   vm.runInContext(src, sb, { filename: 'home.html:acct-ask-accounts' });
@@ -130,6 +135,23 @@ function run(home) {
   check('K1', 'two currencies: the Currencies line names both and forbids an unlabelled ranking',
     /Currencies: these companies report in USD, GBP\. Keep each amount's own currency symbol, and never rank or compare amounts in different currencies without naming both currencies\./.test(mixed), mixed);
   check('K2', 'CONTROL: one currency, no Currencies line', !/Currencies:/.test(full), full);
+  // UI-263: each account carries the page's own materiality verdict, so the model never judges it. Shapes from the
+  // owner's 2026-11-02 look: 4,050.00 on an 8.2M Ending GL (0.05%), 26,950.39 on 1.34M (2.0%), plus a dormant GL.
+  const matRows = [
+    acct('90002', '9123456.141830', 4050, { EndGL: 8234760.42, Perpetual: 8230710.42 }),
+    acct('90002', '9123456.141832', -26950.39, { EndGL: 1343597.60, Perpetual: 1370547.99 }),
+    acct('90002', '9123456.141834', 50000, { EndGL: 500, Perpetual: -49500 }),
+  ];
+  const mat = sb._acctAccountFactLines({ viewedPeriod: PE, companies: [{ co: '90002', ccy: 'USD' }] }, false, matRows, {}).join('\n');
+  check('P1', 'an account at 0.05% of its Ending GL is stated immaterial, by the company figure\'s rule',
+    /141830[^\n]*; under 0\.1% of Ending GL, immaterial; roll-forward/.test(mat), mat);
+  check('P2', 'an account at 2.0% of its Ending GL is stated material', /141832[^\n]*; 2\.0% of Ending GL, material; roll-forward/.test(mat), mat);
+  // 50,000 out on a 500 GL: a near-zero GL with a large gap must not be called immaterial.
+  check('P3', 'a dormant Ending GL is judged by amount, with no percentage and no "immaterial"',
+    /141834[^\n]*; Ending GL under 1000 \(near-zero balance\), so judge it by the amount out[^\n]*; roll-forward/.test(mat)
+      && !/141834[^\n]*(% of Ending GL|immaterial)/.test(mat), mat);
+  check('P4', 'the header says every listed account is over the floor and forbids the model judging materiality',
+    /so every account listed is over that floor/.test(mat) && /never judge an account's materiality yourself/.test(mat), mat);
   return reds.slice();
 }
 
@@ -152,6 +174,14 @@ console.log('\nMutation: the Currencies line removed (K1 must go red; S1-S3 stay
 const m2 = run(noCcy);
 const caught2 = m2.includes('K1') && ['S1', 'S2', 'S3', 'K2'].every((id) => !m2.includes(id));
 console.log('  ' + (caught2 ? 'ok  ' : 'FAIL') + '  currency mutation caught by ' + JSON.stringify(m2));
-const pass = real.length === 0 && caught && caught2;
+// UI-263's verdict: dropped from the account line, P1-P3 must go red; the roll-up and roll-forward cases stay green.
+const VERDICT = "          + '; ' + matTxt\n";
+const noMat = HOME.replace(VERDICT, '');
+if (noMat === HOME) broken('materiality mutation did not apply');
+console.log('\nMutation: the account materiality verdict removed (P1-P3 must go red; A1, A3 stay green)');
+const m3 = run(noMat);
+const caught3 = ['P1', 'P2', 'P3'].every((id) => m3.includes(id)) && ['A1', 'A3', 'P4'].every((id) => !m3.includes(id));
+console.log('  ' + (caught3 ? 'ok  ' : 'FAIL') + '  materiality mutation caught by ' + JSON.stringify(m3));
+const pass = real.length === 0 && caught && caught2 && caught3;
 console.log('\n' + (pass ? 'PASS' : 'FAIL') + (real.length ? ': real case(s) red ' + real.join(',') : ''));
 process.exit(pass ? 0 : 1);
