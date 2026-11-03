@@ -126,7 +126,7 @@ function load(html, config) {
     extractVarFn(html, '_money'),
     'var _acctTxvCache = null;',
     'var _txAllInflight = {};',   // UI-256: _acctTxvRows reads through _txFetchAll
-    ...['fmtPeriod', '_ccySym', '_coOf', '_txScope', '_txModuleOf', '_txFetchAll', '_acctTxvRows', '_acctTxvFactLines', '_acctPeriodsOf', 'askAcct']
+    ...['fmtPeriod', '_ccySym', '_ccyExact', '_coOf', '_txScope', '_txModuleOf', '_txFetchAll', '_acctTxvRows', '_acctTxvFactLines', '_acctPeriodsOf', 'askAcct']
       .map((n) => extractFn(html, n)),
   ].join('\n');
   vm.runInContext(src, sb, { filename: 'home.html:acct-ask' });
@@ -152,7 +152,7 @@ async function runCases(html) {
 
   const full = sb._acctTxvFactLines(ROWS, COMPANIES, '2025-07-31', false, periodsOf);
   check('A1 the viewed period: open documents and the module roll-up, largest first',
-    has(full, 'Co 90002, Jul 31, 2025: open 5 documents; by module: Manufacturing $1,100.00 (3 documents), Sales $-20.00 (2 documents).'), true);
+    has(full, 'Co 90002, Jul 31, 2025: open 5 documents; by module: Manufacturing $1,100.00 (3 documents), Sales -$20.00 (2 documents).'), true);
   check('A1 the largest group names module, category, order/doc type, documents, net and recurrence',
     has(full, 'Manufacturing — Mfg Cost Mismatch, WO/IC: 3 documents, net $1,750.00, in 2 of 3 periods'), true);
   check('A1 a row with no category lands on its card\'s terminal, not dropped (and one document is singular)',
