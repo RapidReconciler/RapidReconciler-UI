@@ -1746,7 +1746,7 @@ window.RRV8 = window.RRV8 || {};
     '- the Licensed Companies grid. To change a company’s settings, click the pencil icon in its Options column;',
     '- the Not Licensed section, with a Check JDE for more companies scan that finds companies with activity that aren’t licensed yet. See Adding a Company License and Licensing .',
     'Company licenses in use',
-    'The band at the top reads Using 2 of 3 company licenses. (with your own numbers), or Using 2 of unlimited company licenses. if your license has no cap. The count is the companies in the Licensed Companies grid. The band changes when you reach or pass your cap:',
+    'The band at the top reads Using 2 of 3 company licenses. (with your own numbers), or Using 2 of unlimited company licenses. if your license has no cap. The count is the companies in the Licensed Companies grid, which lists the database you have selected. Your cap covers all your databases together, so when another database also has licensed companies the band gives both counts, for example Using 2 of 12 company licenses on this database, 5 of 12 across all your databases. The band changes when the total across your databases reaches or passes your cap:',
     '- At the cap it turns orange and adds You have used all your licenses — request more from GSI.',
     '- Over the cap it turns red and adds You are over your licensed amount — request more licenses from GSI.',
     'Request more licenses opens an email to GSI Sales. See Requesting Additional Companies .',
