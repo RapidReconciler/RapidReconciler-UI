@@ -573,9 +573,14 @@ window.RRDB = (function () {
   // VLC-234: the active database's uuid, as the token carries it (AuthController mints dbs[].uuid). VALC keys the AI
   // feature levels by database, and a name is not a key: every customer has a RapidReconciler_Prod_V8.
   function uuid() { var u = active().uuid; return u ? String(u) : ''; }
+  // UI-265: one database's agent address, for a caller that reads every database (the Administrator view's instance
+  // roll-up). '' when the entry carries no address; agentBase() below is the active database's, with its fallbacks.
+  function agentBaseOf(d) {
+    return (d && d.ip) ? ((/^(?:localhost|127\.0\.0\.1)\b/i.test(d.ip) ? 'http://' : 'https://') + d.ip) : '';
+  }
   function agentBase() {
     var d = active();
-    if (d && d.ip) return (/^(?:localhost|127\.0\.0\.1)\b/i.test(d.ip) ? 'http://' : 'https://') + d.ip;
+    if (d && d.ip) return agentBaseOf(d);
     /* UI-171, 2026-09-15. This line used to end `|| 'http://localhost:34537'`,
      * and that literal is the same defect VLC-39 gap 2 removed from login.html,
      * one layer down: a host-shaped last resort that turns a MISSING setting
@@ -801,7 +806,7 @@ window.RRDB = (function () {
   }
 
   rememberServer();   // UI-235: any page load with a session keeps this PC's server address
-  return { dbs: dbs, index: index, active: active, name: name, agentBase: agentBase,
+  return { dbs: dbs, index: index, active: active, name: name, agentBase: agentBase, agentBaseOf: agentBaseOf,
            valcBase: valcBase, valcGap: valcGap, valcFetch: valcFetch, setActive: setActive,
            notice: notice, responseError: responseError, uuid: uuid,
            sessionBase: sessionBase, lastServer: lastServer, rememberServer: rememberServer };
@@ -1340,8 +1345,11 @@ window.RRV8 = window.RRV8 || {};
     var out = [];
     for (var i = 0; i < list.length; i++) {
       var e = list[i], prev = out[out.length - 1];
+      // UI-265: the database is part of the key. Home's Activity Log merges every database's events, and the same
+      // restart on two databases is two rows, not "×2" on one. Untagged events (one database) compare equal here.
       if (prev && String(prev.event == null ? '' : prev.event) === String(e.event == null ? '' : e.event)
-               && String(prev.by == null ? '' : prev.by) === String(e.by == null ? '' : e.by)) {
+               && String(prev.by == null ? '' : prev.by) === String(e.by == null ? '' : e.by)
+               && String(prev._db == null ? '' : prev._db) === String(e._db == null ? '' : e._db)) {
         prev._count = (prev._count || 1) + 1;
         prev._oldestAt = e.at;   // newest-first → each subsequent row is older
         continue;
@@ -1351,6 +1359,76 @@ window.RRV8 = window.RRV8 || {};
       out.push(copy);
     }
     return out;
+  };
+  // mergeActivity() (UI-265, owner ruling 2026-11-02: the Administrator view reports the RR instance). Home's Activity
+  // Log card reads GET admin/activity from every database's agent; this joins the answers into one newest-first list.
+  // Each group is { db: '<label>', list: [...] }. An event is tagged `_db` with its group's label only when the group
+  // names one, so a single database's feed comes back exactly as the agent sent it. A group whose list is not an array
+  // (that agent did not answer) adds nothing. The input events are copied, never changed.
+  window.RRV8.mergeActivity = function (groups) {
+    var out = [];
+    (Array.isArray(groups) ? groups : []).forEach(function (g) {
+      if (!g || !Array.isArray(g.list)) return;
+      g.list.forEach(function (e) {
+        if (!e) return;
+        var copy = {}; for (var k in e) if (Object.prototype.hasOwnProperty.call(e, k)) copy[k] = e[k];
+        if (g.db) copy._db = String(g.db);
+        out.push(copy);
+      });
+    });
+    // ISO timestamps sort lexicographically, the same rule the card and the full log already use.
+    out.sort(function (a, b) { return String(b.at || '').localeCompare(String(a.at || '')); });
+    return out;
+  };
+  // ---- Client-wide review reminders (UI-265) -------------------------------------------------------------------
+  // Owner ruling 2026-11-02: the Administrator view reports the RR instance. Three of its review reminders are about
+  // the client, not a database: the activity log review, the complex-password review and the AI review. Each ack is
+  // still recorded on the agent of the database where the administrator clicked (and lands in that database's
+  // Activity Log), but it is READ as the client's: the newest ack of the kind on any database the sign-in
+  // administers is the one in force. Per-database reminders (purge-snooze, cardex-snooze) are not in this list and
+  // stay with their database.
+  window.RRV8.CLIENT_REVIEW_KINDS = ['activity-review', 'password-review', 'ai-review'];
+  /** The newest ack of `kind` in `acks` (by ackedDate), or null. Pure. */
+  window.RRV8.newestAck = function (acks, kind) {
+    var best = null;
+    (Array.isArray(acks) ? acks : []).forEach(function (a) {
+      if (!a || a.kind !== kind) return;
+      if (!best || String(a.ackedDate || '') > String(best.ackedDate || '')) best = a;
+    });
+    return best;
+  };
+  /**
+   * GET admin/acks from the agent of every database the sign-in administers (t.adm), once each. Resolves to
+   * [{ db: '<name>', acks: [...] | null }]; null where that agent did not answer. Never rejects.
+   */
+  window.RRV8.instanceAcks = function () {
+    var list = (window.RRDB && window.RRDB.dbs) ? window.RRDB.dbs() : [], seen = {}, dbs = [];
+    list.forEach(function (d) {
+      if (!d || !d.t || d.t.adm !== true) return;
+      var k = String(d.uuid || d.n || ''); if (!k || seen[k]) return;
+      seen[k] = true; dbs.push(d);
+    });
+    var h = { 'Accept': 'application/json' };
+    try { var t = localStorage.getItem('rrv8.token'); if (t) h['Authorization'] = 'Bearer ' + t; } catch (_) {}
+    return Promise.all(dbs.map(function (d) {
+      var base = window.RRDB.agentBaseOf(d);
+      if (!base) return Promise.resolve({ db: d.n, acks: null });
+      return fetch(base + '/admin/acks', { headers: h, cache: 'no-store' })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (rows) { return { db: d.n, acks: Array.isArray(rows) ? rows : null }; },
+              function () { return { db: d.n, acks: null }; });
+    }));
+  };
+  /**
+   * The client's ack of a CLIENT_REVIEW_KINDS kind: the newest across every database, `known` (the active database's
+   * own, already read) included. Resolves to the ack or null; never rejects, and falls back to `known`.
+   */
+  window.RRV8.clientReviewAck = function (kind, known) {
+    return window.RRV8.instanceAcks().then(function (per) {
+      var all = known ? [known] : [];
+      per.forEach(function (p) { if (p.acks) all = all.concat(p.acks); });
+      return window.RRV8.newestAck(all, kind);
+    }, function () { return known || null; });
   };
   // dataAccessLine(): the per-tier "DATA ACCESS — <Tier>" instruction line that
   // EVERY analyst-facing ai/explain prompt must carry. Two jobs in one line:
@@ -2035,13 +2113,14 @@ window.RRV8.ACCT_TERMS = [
 window.RRV8.ADMIN_TERMS = [
   'ADMINISTRATOR TERMS — what the words on the Administrator view of Home mean:',
   '- STATUS DOTS (on each card and each row): green means nothing needs you, orange means it needs you soon, red means it needs you now. Grey means not checked yet, so the state is unknown, not clear. A card’s dot is the worst of its rows. [ON=home]',
-  '- DATA AS OF (top right of the page): when RapidReconciler last finished pulling data from JD Edwards for this database. Refreshing now means a pull is running. Last refresh failed means the last pull did not finish, so the figures your analysts and accountants see may be out of date. [ON=home]',
-  '- AI PLAN (in the RapidReconciler AI band): how much data the AI may use for this database. Off: no AI, and no data leaves the page. Basic: only the figures already on the screen. Enhanced: fuller data, with customer-identifying fields such as company numbers masked. Full: full data, identities included. Manage opens the AI Assistant page. [ON=home]',
-  '- LICENSING (card): Active, Renewal due soon (60 days or less before the end date) or Expired. Renewal due is the date the license ends. "N of M company licenses used on this database" counts this database’s licensed companies; the limit M covers all your databases together. [ON=home]',
+  '- ONE VIEW FOR ALL YOUR DATABASES: the Administrator view’s cards cover every database you can open, so choosing another database does not change them (only DATA AS OF follows the database you select). The line under the greeting names your company and those databases. Cards that are kept per database list each database on its own line. [ON=home]',
+  '- DATA AS OF (top right of the page): when RapidReconciler last finished pulling data from JD Edwards for the database you have selected. With more than one database it starts with that database’s name; every database’s Data refresh check is on the Troubleshooting card. Refreshing now means a pull is running. Last refresh failed means the last pull did not finish, so the figures your analysts and accountants see may be out of date. [ON=home]',
+  '- AI PLAN (in the RapidReconciler AI band): how much data the AI may use, the same for all your databases. Off: no AI, and no data leaves the page. Basic: only the figures already on the screen. Enhanced: fuller data, with customer-identifying fields such as company numbers masked. Full: full data, identities included. Manage opens the AI Assistant page. [ON=home]',
+  '- LICENSING (card): Active, Renewal due soon (60 days or less before the end date) or Expired. Renewal due is the date the license ends. "N of M company licenses used across your databases" counts the licensed companies on all your databases together, which is what the limit M covers. [ON=home]',
   '- TEAM & ACCESS (card): the first row counts your team members and the roles they hold. The second row is the access review. It reads Reviewed, with the next due date, while your last recorded review is current. Otherwise it counts active users with no sign-in and no password change for 6 months (orange) or a year (red), or says the review is overdue. The third row opens Complex Passwords, the password policy for each company. [ON=home]',
-  '- TROUBLESHOOTING (card): one row each for Connections, Data loads and Database server, showing the worst result among that area’s checks. "N issues" is how many of the area’s checks are not OK. Data loads opens Data Refresh. The other two rows open the Troubleshooting page, which says what each check found. [ON=home]',
-  '- ACTIVITY LOG (card): the three most recent system events on this database, such as restarts, data reloads and refreshes, with how long ago each happened. The same event repeated in a row shows once, with ×N. See full log opens the whole list. [ON=home]',
-  '- INSTANCE HEALTH (under the cards): appears only when storage needs you, as the months or years of space left at the current growth rate. Show all shows it anyway. [ON=home]'
+  '- TROUBLESHOOTING (card): with one database, one row each for Connections, Data loads and Database server, showing the worst result among that area’s checks; Data loads opens Data Refresh and the other two rows open the Troubleshooting page. With more than one database, one row per database, worst first: OK, "N issues" (how many of its checks are not OK), "not answering" (its server did not reply, orange) or "not checked" (grey). A database row opens that database’s Troubleshooting page, or its Data Refresh page when data loads are its only problem. [ON=home]',
+  '- ACTIVITY LOG (card): the three most recent system events, such as restarts, data reloads and refreshes, with how long ago each happened. With more than one database each event starts with its database’s name. The same event repeated in a row shows once, with ×N. See full log opens the whole list for the database you have selected. [ON=home]',
+  '- INSTANCE HEALTH (under the cards): appears only when storage needs you, as the months or years of space left at the current growth rate. With more than one database it names the database whose storage needs you most, and opens Purge Old Data on that database. Show all shows it anyway. [ON=home]'
 ].join('\n');
 
 /*

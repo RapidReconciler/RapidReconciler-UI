@@ -16,9 +16,11 @@
  *       a single-company accountant tab names that company, admin database; numbers until names load)
  *   R4  wiring: a role switch (applyViewRole) and a scope change (renderCompaniesPill) re-render the header
  *   R5  database names drop only the "RapidReconciler_" prefix, so a customer's Prod_V8 does not read "V8"
+ *   R6  UI-265: the admin line names the customer and every database the sign-in administers, whichever is picked
  *
- * TWO MUTATION CONTROLS: renderCompaniesPill no longer calls the renderer (must redden R4 only), and the old
- * analyst-only static markup with subtitles (must redden R1 only).
+ * THREE MUTATION CONTROLS: renderCompaniesPill no longer calls the renderer (must redden R4 only), the old
+ * analyst-only static markup with subtitles (must redden R1 only), and the admin line back on the picked database
+ * (must redden R6 only).
  */
 'use strict';
 const fs = require('fs');
@@ -89,7 +91,7 @@ function load(html) {
       getElementById: () => null,   // renderCompaniesPill's bottom-bar pill is absent here; it returns after the header
       querySelector(sel) { const m = sel.match(/data-role="([a-z]+)"/); return m ? items[m[1]] || null : null; },
     },
-    RR_SESSION: { user: { fn: 'Pat Example' } },
+    RR_SESSION: { user: { fn: 'Pat Example' }, dbs: [{ n: 'RapidReconciler_Demo1', uuid: 'u1', t: { adm: true } }] },
     _viewRole: () => st.role,
     activeDb: () => ({ n: 'RapidReconciler_Demo1' }),
     _fullCosFromRows: () => st.cos.slice(),
@@ -105,8 +107,8 @@ function load(html) {
   sb.window = sb;
   vm.createContext(sb);
   const kick = (html.match(/\n  var _ROLE_HERO_KICKER = \{[^}]*\};/) || [''])[0];
-  const src = [kick, 'var _coNames = null;']
-    .concat(['esc', 'dbShortName', '_firstName', '_roleHeroCompany', '_roleHeroContext', 'renderRoleHero',
+  const src = [kick, 'var _coNames = null;', "var _instanceName = '';"]
+    .concat(['esc', 'dbShortName', '_instanceDbs', '_adminHeroContext', '_firstName', '_roleHeroCompany', '_roleHeroContext', 'renderRoleHero',
              'applyViewRole', 'renderCompaniesPill'].map((n) => extractFn(html, n)))
     .join('\n');
   vm.runInContext(src, sb, { filename: 'home.html:role-hero' });
@@ -174,7 +176,23 @@ function runCases(html) {
     ['RapidReconciler_Prod_V8', 'RapidReconciler_QA_V8', 'RapidReconciler_Demo1', 'LegacyName', ''].map((n) => sb.dbShortName(n)),
     ['Prod_V8', 'QA_V8', 'Demo1', 'LegacyName', '']);
   sb.activeDb = () => ({ n: 'RapidReconciler_Prod_V8' });
+  sb.RR_SESSION.dbs = [{ n: 'RapidReconciler_Prod_V8', uuid: 'p', t: { adm: true } }];
   check('R5 the Admin header on a customer production database', ctx('admin'), 'Prod_V8');
+
+  // R6 -- UI-265 (owner ruling 2026-11-02): the Administrator view names the instance, not the picked database: the
+  // customer's name once license-usage brings it, then every database the sign-in administers. A switch of the
+  // picker changes nothing; a database without the admin tab is not listed; past three it is a count.
+  sb.RR_SESSION.dbs = ['Demo1', 'Demo2', 'Demo3'].map((d) => ({ n: 'RapidReconciler_' + d, uuid: d, t: { adm: true } }))
+    .concat([{ n: 'RapidReconciler_Other', uuid: 'o', t: { adm: false } }]);
+  vm.runInContext("_instanceName = 'Acme Industrial'", sb);
+  sb.activeDb = () => ({ n: 'RapidReconciler_Demo2' });
+  const inst = ctx('admin');
+  sb.activeDb = () => ({ n: 'RapidReconciler_Demo3' });
+  check('R6 admin: the customer and its databases, whichever database is picked',
+    [inst, ctx('admin')], ['Acme Industrial · Demo1 · Demo2 · Demo3', 'Acme Industrial · Demo1 · Demo2 · Demo3']);
+  sb.RR_SESSION.dbs.push({ n: 'RapidReconciler_Demo4', uuid: 'd4', t: { adm: true } });
+  check('R6 admin: more than three databases are counted', ctx('admin'), 'Acme Industrial · 4 databases');
+  vm.runInContext("_instanceName = ''", sb);
   return reds.slice();
 }
 
@@ -199,6 +217,8 @@ if (shippedFailures === 0) {
   arm('the old static markup (role title + dismissible subtitle)', 'R1',
     HOME.replace('      <div class="role-hero-kicker">Administrator Home</div>\n      <h1 class="role-hero-title">Here&rsquo;s where you stand today</h1>',
       '      <h1 class="role-hero-title">Administrator</h1>\n      <p class="role-hero-sub"><span class="role-hero-sub-text">Users.</span></p>'));
+  arm('the Administrator line names the picked database again (UI-265)', 'R6',
+    HOME.replace("    if (vr === 'admin') return _adminHeroContext();", "    if (vr === 'admin') return db ? esc(db) : '';"));
 }
 
 const total = shippedFailures + armFailures;

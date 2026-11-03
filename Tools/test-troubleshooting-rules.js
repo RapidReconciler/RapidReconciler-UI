@@ -283,6 +283,35 @@ const ASSERTIONS = {
     const older = FAILURES[FAILURES.length - 1];
     const r = rowOf(TS.rows(older, 40), 'sql.agent_service');
     return r && r.state === 'unknown' ? null : 'missing check read ' + (r && r.state);
+  },
+  // UI-265: Home's card with more than one database. The expected state of a database that answered is taken from
+  // the same rows (so a mutation of the per-row rules does not redden this); the order, the words and the two
+  // no-answer states are this assertion's own.
+  instanceRollupIsWorstFirstInItsOwnWords: TS => {
+    const RANK = { fail: 0, warn: 1, unknown: 2, ok: 3 };
+    const answered = [DEMO1, WEEKLY_OK].concat(FAILURES).map((d, i) => ({ label: 'Db' + i, rows: TS.rows(d, 40) }));
+    const input = answered.concat([{ label: 'Gone', error: 'unreachable' }, { label: 'Old', error: 'unchecked' }]);
+    const out = TS.byDatabase(input);
+    if (out.length !== input.length) return 'rows: ' + out.length + ' for ' + input.length + ' databases';
+    for (let i = 1; i < out.length; i++) {
+      const a = out[i - 1], b = out[i];
+      if (RANK[a.state] > RANK[b.state] || (a.state === b.state && a.index > b.index)) return 'not worst first at ' + a.text + ' / ' + b.text;
+    }
+    for (const p of out) {
+      const src = input[p.index];
+      if (!src || src.label !== p.label) return 'index ' + p.index + ' does not point back at ' + p.label;
+      if (src.error) {
+        const want = src.error === 'unreachable' ? ['warn', p.label + ': not answering'] : ['unknown', p.label + ': not checked'];
+        if (p.state !== want[0] || p.text !== want[1]) return p.label + ' read ' + p.state + ' "' + p.text + '"';
+        continue;
+      }
+      const bad = src.rows.filter(r => r.state !== 'ok');
+      const text = p.label + (bad.length ? ': ' + bad.length + (bad.length === 1 ? ' issue' : ' issues') : ': OK');
+      if (p.state !== TS.worst(src.rows) || p.text !== text || p.needs !== bad.length) return p.label + ' read ' + p.state + ' "' + p.text + '"';
+      const areas = TS.AREAS.filter(a => bad.some(r => r.area === a));
+      if (JSON.stringify(p.areas) !== JSON.stringify(areas)) return p.label + ' areas ' + JSON.stringify(p.areas);
+    }
+    return null;
   }
 };
 
@@ -345,6 +374,13 @@ const MUTATIONS = [
   { name: 'treat a missing check as passing',
     find: "state: 'unknown', fact: 'This check did not run.'", replace: "state: 'ok', fact: 'This check did not run.'",
     red: ['aMissingCheckIsUnknownNotOk'] },
+  { name: 'a database whose server does not answer reads grey, like one that was not checked (UI-265)',
+    find: "state: reach ? 'warn' : 'unknown'", replace: "state: 'unknown'",
+    red: ['instanceRollupIsWorstFirstInItsOwnWords'] },
+  { name: 'the per-database rows keep the token order instead of worst first (UI-265)',
+    find: 'return out.sort(function (a, b) { return (RANK[a.state] - RANK[b.state]) || (a.index - b.index); });',
+    replace: 'return out;',
+    red: ['instanceRollupIsWorstFirstInItsOwnWords'] },
   { name: 'a busy database gets the SQL-is-down advice again (UI-213)',
     find: "if (state === 'warn') return { todo: 'Run the checks again", replace: "if (false) return { todo: 'Run the checks again",
     red: ['aSlowAnswerIsAmberAndSaysTryAgain'] }

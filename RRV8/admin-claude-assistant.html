@@ -11,9 +11,11 @@
   docs/plans/claude-sonnet-integration.md).
 
   STATUS (VLC-234, 2026-10-31): live. The levels are read from and saved to VALC
-  per database (GET api/v1/ai/health?database=<uuid>, PUT api/v1/ai/features), and
-  VALC refuses any AI call above its feature's level. Until VLC-234 they were held
-  in this browser's localStorage and nothing read them.
+  (GET api/v1/ai/health?database=<uuid>, PUT api/v1/ai/features), and VALC
+  refuses any AI call above its feature's level. Until VLC-234 they were held in
+  this browser's localStorage and nothing read them. UI-265 (V110, 2026-11-03):
+  a level is the CLIENT's and applies to all its databases; the uuid only names
+  the client.
   =============================================================================
 -->
 <html lang="en">
@@ -252,7 +254,7 @@
                  including Full (where the change-plan action stays a downgrade
                  path, not hidden). -->
             <p class="plan-status" id="js-plan-status"></p>
-            <p class="plan-help">To use less, set each feature below. To change your purchased tier, contact GSI.</p>
+            <p class="plan-help">To use less, set each feature below. The levels you set apply to all your databases. To change your purchased tier, contact GSI.</p>
             <!-- Live connection — collapsed by default. Expand to see the status
                  line and ping the gateway. The plan card border greens on a live
                  round-trip, so connectivity is glanceable even while collapsed. -->
@@ -603,13 +605,13 @@
       if (_tierKnown && !_settings) {
         // Not transient: VALC answered with a plan but no settings, so either VALC predates VLC-234 or it could not
         // place this database inside the caller's rights. Reopening the page changes neither.
-        saveMsg('error', 'VALC didn’t return this database’s AI settings, so they can’t be changed here. If this persists, contact GSI support.');
+        saveMsg('error', 'VALC didn’t return your AI settings, so they can’t be changed here. If this persists, contact GSI support.');
       } else if (_settings && r.gsiStaff) {
         // VLC-235 (owner ruling 2026-11-01, "Customer admins only"): GSI staff see the levels and who set them, and
         // VALC refuses their change. Said here, not left as greyed-out selects with no reason.
         saveMsg('error', 'GSI staff can see these settings but can’t change them. Only the customer’s own RapidReconciler administrator can.');
       } else if (_settings && !_canManage) {
-        saveMsg('error', 'Only a RapidReconciler administrator of this database can change these settings.');
+        saveMsg('error', 'Only a RapidReconciler administrator can change these settings.');
       }
       renderFeatures();
       paintPlanTier();
@@ -738,6 +740,10 @@
     if (!isAdmin()) return Promise.resolve();
     return rrFetch('admin/acks').then(function (rows) {
       _aiAck = null; (rows || []).forEach(function (r) { if (r && r.kind === 'ai-review') _aiAck = r; });
+      // UI-265: the review is the client's, so the newest one on any of your databases counts (config.js).
+      if (window.RRV8 && window.RRV8.clientReviewAck) {
+        return window.RRV8.clientReviewAck('ai-review', _aiAck).then(function (a) { _aiAck = a; });
+      }
     }).catch(function () { _aiAck = null; });
   }
   function aiReviewVal() {
@@ -862,7 +868,7 @@
         });
       }, Promise.resolve()).then(function () {
         renderFeatures();
-        saveMsg('ok', 'Saved. Every AI feature in RapidReconciler now uses these levels on this database.');
+        saveMsg('ok', 'Saved. Every AI feature in RapidReconciler now uses these levels on all your databases.');
         toast('AI settings saved.');
       }).catch(function (e) {
         renderFeatures();   // shows what VALC holds, including any change saved before the refusal
