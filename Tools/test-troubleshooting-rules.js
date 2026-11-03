@@ -289,13 +289,17 @@ const ASSERTIONS = {
   // no-answer states are this assertion's own.
   instanceRollupIsWorstFirstInItsOwnWords: TS => {
     const RANK = { fail: 0, warn: 1, unknown: 2, ok: 3 };
-    const answered = [DEMO1, WEEKLY_OK].concat(FAILURES).map((d, i) => ({ label: 'Db' + i, rows: TS.rows(d, 40) }));
+    // Labels run against the input order (UI-266: within a state the rows go by name, not by the token's order), so an
+    // input-order tie-break and a by-name one give different answers here.
+    const srcs = [DEMO1, WEEKLY_OK].concat(FAILURES);
+    const answered = srcs.map((d, i) => ({ label: 'Db' + (srcs.length - i), rows: TS.rows(d, 40) }));
     const input = answered.concat([{ label: 'Gone', error: 'unreachable' }, { label: 'Old', error: 'unchecked' }]);
     const out = TS.byDatabase(input);
     if (out.length !== input.length) return 'rows: ' + out.length + ' for ' + input.length + ' databases';
+    const byName = (x, y) => x.localeCompare(y, undefined, { numeric: true, sensitivity: 'base' });
     for (let i = 1; i < out.length; i++) {
       const a = out[i - 1], b = out[i];
-      if (RANK[a.state] > RANK[b.state] || (a.state === b.state && a.index > b.index)) return 'not worst first at ' + a.text + ' / ' + b.text;
+      if (RANK[a.state] > RANK[b.state] || (a.state === b.state && byName(a.label, b.label) > 0)) return 'not worst first, then by name, at ' + a.text + ' / ' + b.text;
     }
     for (const p of out) {
       const src = input[p.index];
@@ -377,8 +381,12 @@ const MUTATIONS = [
   { name: 'a database whose server does not answer reads grey, like one that was not checked (UI-265)',
     find: "state: reach ? 'warn' : 'unknown'", replace: "state: 'unknown'",
     red: ['instanceRollupIsWorstFirstInItsOwnWords'] },
+  { name: 'equal-state databases fall back to the token order instead of their names (UI-266)',
+    find: "|| a.label.localeCompare(b.label, undefined, { numeric: true, sensitivity: 'base' });",
+    replace: '|| (a.index - b.index);',
+    red: ['instanceRollupIsWorstFirstInItsOwnWords'] },
   { name: 'the per-database rows keep the token order instead of worst first (UI-265)',
-    find: 'return out.sort(function (a, b) { return (RANK[a.state] - RANK[b.state]) || (a.index - b.index); });',
+    find: "    return out.sort(function (a, b) {\n      return (RANK[a.state] - RANK[b.state]) || a.label.localeCompare(b.label, undefined, { numeric: true, sensitivity: 'base' });\n    });",
     replace: 'return out;',
     red: ['instanceRollupIsWorstFirstInItsOwnWords'] },
   { name: 'a busy database gets the SQL-is-down advice again (UI-213)',

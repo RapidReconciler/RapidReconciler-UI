@@ -43,7 +43,8 @@ function slice(start) {
   return CONFIG.slice(i, j + '\n  };\n'.length);
 }
 const SRC = slice('  window.RRV8.collapseActivity = function (list) {') + slice('  window.RRV8.mergeActivity = function (groups) {')
-  + slice('  window.RRV8.newestAck = function (acks, kind) {');
+  + slice('  window.RRV8.newestAck = function (acks, kind) {')
+  + slice('  window.RRV8.orderActivityByDb = function (rows) {');
 
 function load(src) {
   const sandbox = { window: { RRV8: {} } };
@@ -86,6 +87,21 @@ const ASSERTIONS = {
     const out = R.collapseActivity(list);
     const got = out.map(e => e._db + '×' + e._count).join(' ');
     return got === 'Demo2×1 Demo1×2' ? null : 'got ' + got;
+  },
+  // UI-266 (owner 2026-11-03, "sort by db name"): the card's three newest events read by database name, then newest
+  // first within one; an untagged (one-database) feed keeps its order.
+  theCardListsByDatabaseName: R => {
+    const rows = [
+      { _db: 'Demo2', event: 'a', at: '2026-11-03T10:00:00Z' },
+      { _db: 'Demo10', event: 'b', at: '2026-11-03T09:00:00Z' },
+      { _db: 'Demo1', event: 'c', at: '2026-11-03T08:00:00Z' },
+      { _db: 'Demo1', event: 'd', at: '2026-11-03T09:30:00Z' }
+    ];
+    const got = R.orderActivityByDb(rows).map(e => e.event).join('');
+    if (got !== 'dcab') return 'got ' + got;
+    if (rows.map(e => e.event).join('') !== 'abcd') return 'the input was sorted in place';
+    const one = [{ event: 'x', at: '2' }, { event: 'y', at: '1' }];
+    return R.orderActivityByDb(one).map(e => e.event).join('') === 'xy' ? null : 'an untagged feed was reordered';
   },
   // UI-265: a client-wide review (activity, complex passwords, AI) is the newest ack of its kind on ANY database.
   theNewestReviewOnAnyDatabaseIsTheClients: R => {
@@ -130,6 +146,9 @@ const MUTATIONS = [
     find: "    out.sort(function (a, b) { return String(b.at || '').localeCompare(String(a.at || '')); });\n    return out;\n  };\n",
     replace: '    return out;\n  };\n',
     red: ['mergedNewestFirstAndTagged'] },
+  { name: 'the card keeps newest-first instead of database order',
+    find: "    if (!list.some(function (e) { return e && e._db; })) return list;\n", replace: '    return list;\n',
+    red: ['theCardListsByDatabaseName'] },
   { name: 'the first review found wins instead of the newest',
     find: "if (!best || String(a.ackedDate || '') > String(best.ackedDate || '')) best = a;",
     replace: 'if (!best) best = a;',

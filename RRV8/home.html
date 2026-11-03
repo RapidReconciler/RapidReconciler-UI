@@ -293,6 +293,11 @@
   .acct-top > #periodWidget { flex: 1 1 auto; min-width: 0; margin: 0; }
   body[data-view-role="admin"] #acctTriage { display: none !important; }   /* AI band shows for accountant + analyst; admin hides the whole top row */
   body[data-view-role="admin"] #acctTop { display: none; }
+  /* UI-266 (owner 2026-11-03, "hidden for power users as well"): the Administrator view reports the whole instance
+     (UI-265), so it has no database picker, whoever is looking. A Power User gets it back on the Analyst and
+     Accountant views, which work one database. Per-database admin pages carry their own chooser
+     (config.js RRV8.mountDbChooser). */
+  body[data-view-role="admin"] #haDb { display: none !important; }
   /* UI-231: the Administrator view's Walkthrough tab replaces the Overview grid (and the
      first-run wizard, which shows in its place) while it is open. Set by renderAdminPanels(). */
   body[data-view-role="admin"][data-admin-sub="walk"] #view-admin,
@@ -4958,6 +4963,8 @@
     var dbs = Array.isArray(s.dbs) ? s.dbs : [];
     var idx = s.activeDbIndex || 0;
     if (!dbs.length) { wrap.hidden = true; return; }
+    // UI-266: the picker is hidden on the Administrator view by a CSS rule on body[data-view-role="admin"] (see the
+    // stylesheet), for a Power User as well as an Administrator, and comes back on the Analyst and Accountant views.
     wrap.hidden = false;
     label.textContent = dbShortName((dbs[idx] || dbs[0] || {}).n);
     // Sorted by display name; data-db stays the ORIGINAL index (the menu handler
@@ -7428,6 +7435,8 @@
     // source returns (ISO timestamps sort lexicographically = chronologically).
     var sorted = list.slice().sort(function (a, b) { return String(b.at || '').localeCompare(String(a.at || '')); });
     var rows = ((window.RRV8 && RRV8.collapseActivity) ? RRV8.collapseActivity(sorted) : sorted).slice(0, 3);
+    // UI-266: the three newest, listed by database name when they come from several databases.
+    if (window.RRV8 && RRV8.orderActivityByDb) rows = RRV8.orderActivityByDb(rows);
     // Shared .data-row markup (icon · label · relative time) so this card is an
     // identical sibling of Data Management + RapidReconciler Team. One neutral
     // activity glyph keeps the icon treatment consistent across all rows.
@@ -13710,7 +13719,9 @@
   // license-usage's clientName, once it lands) and the databases the view covers.
   var _instanceName = '';
   function _adminHeroContext() {
-    var names = _instanceDbs().map(function (d) { return dbShortName(d.n || ''); }).filter(Boolean);
+    // By name, the order the per-page Database choice and the old picker use, not the token's order (UI-266).
+    var names = _instanceDbs().map(function (d) { return dbShortName(d.n || ''); }).filter(Boolean)
+      .sort(function (a, b) { return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }); });
     var dbs = names.length > 3 ? (names.length + ' databases') : names.join(' · ');
     if (_instanceName && dbs) return esc(_instanceName) + ' <span class="rh-co-num">&middot; ' + esc(dbs) + '</span>';
     return esc(_instanceName || dbs);

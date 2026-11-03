@@ -1380,6 +1380,75 @@ window.RRV8 = window.RRV8 || {};
     out.sort(function (a, b) { return String(b.at || '').localeCompare(String(a.at || '')); });
     return out;
   };
+  // orderActivityByDb() (UI-266, owner 2026-11-03: "Leave but sort by db name"): the Activity Log card still shows the
+  // newest events across the databases, but lists them by database name, then newest first within a database, so the
+  // rows read in the same order as the greeting and Troubleshooting. A feed with no database tags (one database) keeps
+  // its order. Returns a new array.
+  window.RRV8.orderActivityByDb = function (rows) {
+    var list = Array.isArray(rows) ? rows.slice() : [];
+    if (!list.some(function (e) { return e && e._db; })) return list;
+    return list.sort(function (a, b) {
+      return String(a._db || '').localeCompare(String(b._db || ''), undefined, { numeric: true, sensitivity: 'base' })
+        || String(b.at || '').localeCompare(String(a.at || ''));
+    });
+  };
+  // ---- Database chooser on the per-database admin pages (UI-266) -----------------------------------------------
+  // Home's Administrator view reports the whole instance (UI-265), so it has no database picker any more, for an
+  // Administrator or a Power User (owner 2026-11-03, "ui-266 go"; "hidden for power users as well"; a Power User keeps
+  // it on the Analyst and Accountant views). The admin pages whose data IS one database's (Licensing,
+  // Data Refresh, Troubleshooting, Activity Log, Purge Old Data, Complex Passwords, AI Assistant's call record) each
+  // carry this chooser in their header instead: an element with `data-rr-db-chooser` gets a "Database" select of every
+  // database the sign-in administers. Choosing one makes it the active database and reloads the page, so every loader
+  // on the page starts again on it rather than half the page repainting. With one database it stays hidden.
+  /** The databases an admin page can be about: entries with t.adm, once each, by short name. Pure. */
+  window.RRV8.adminDbChoices = function (dbs) {
+    var seen = {}, out = [];
+    (Array.isArray(dbs) ? dbs : []).forEach(function (d) {
+      if (!d || !d.n || !d.t || d.t.adm !== true) return;
+      var k = String(d.uuid || d.n); if (seen[k]) return;
+      seen[k] = true; out.push({ n: d.n, label: String(d.n).replace(/^RapidReconciler_/, '') || d.n });
+    });
+    return out.sort(function (a, b) { return a.label.localeCompare(b.label, undefined, { numeric: true, sensitivity: 'base' }); });
+  };
+  window.RRV8.mountDbChooser = function (host) {
+    if (!host || !window.RRDB) return;
+    var dbs = window.RRDB.dbs(), choices = window.RRV8.adminDbChoices(dbs);
+    if (choices.length < 2) { host.hidden = true; host.innerHTML = ''; return; }
+    var activeName = (window.RRDB.active() || {}).n;
+    if (!document.getElementById('rr-dbchoose-style')) {
+      var st = document.createElement('style');
+      st.id = 'rr-dbchoose-style';
+      st.textContent = '.rr-dbchoose{display:inline-flex;align-items:center;gap:8px;margin-top:6px;font:inherit}'
+        + '.rr-dbchoose-k{font-family:"Source Sans 3",sans-serif;font-size:12px;font-weight:800;letter-spacing:.06em;'
+        + 'text-transform:uppercase;color:var(--text-muted,#5a6479)}'
+        + '.rr-dbchoose-sel{font:inherit;font-size:14px;font-weight:600;color:var(--navy,#1f2d4a);padding:4px 8px;'
+        + 'border:1px solid var(--rule-strong,#c9d3e0);border-radius:6px;background:var(--bg-card,#fff)}';
+      document.head.appendChild(st);
+    }
+    host.hidden = false;
+    host.innerHTML = '<label class="rr-dbchoose"><span class="rr-dbchoose-k">Database</span>'
+      + '<select class="rr-dbchoose-sel">' + choices.map(function (c) {
+        var v = String(c.n).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+        var l = c.label.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+        return '<option value="' + v + '"' + (c.n === activeName ? ' selected' : '') + '>' + l + '</option>';
+      }).join('') + '</select></label>';
+    host.querySelector('select').addEventListener('change', function (e) {
+      var n = e.target.value; if (!n || n === activeName) return;
+      window.RRDB.setActive(n);
+      window.location.reload();
+    });
+  };
+  (function () {
+    // Pages are a real DOM; the behaviour tests load config.js against a stub document, which has no query API.
+    if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') return;
+    function mountAll() {
+      Array.prototype.forEach.call(document.querySelectorAll('[data-rr-db-chooser]'), window.RRV8.mountDbChooser);
+    }
+    if (document.readyState === 'loading' && typeof document.addEventListener === 'function') {
+      document.addEventListener('DOMContentLoaded', mountAll);
+    } else mountAll();
+  })();
+
   // ---- Client-wide review reminders (UI-265) -------------------------------------------------------------------
   // Owner ruling 2026-11-02: the Administrator view reports the RR instance. Three of its review reminders are about
   // the client, not a database: the activity log review, the complex-password review and the AI review. Each ack is
@@ -2113,13 +2182,13 @@ window.RRV8.ACCT_TERMS = [
 window.RRV8.ADMIN_TERMS = [
   'ADMINISTRATOR TERMS — what the words on the Administrator view of Home mean:',
   '- STATUS DOTS (on each card and each row): green means nothing needs you, orange means it needs you soon, red means it needs you now. Grey means not checked yet, so the state is unknown, not clear. A card’s dot is the worst of its rows. [ON=home]',
-  '- ONE VIEW FOR ALL YOUR DATABASES: the Administrator view’s cards cover every database you can open, so choosing another database does not change them (only DATA AS OF follows the database you select). The line under the greeting names your company and those databases. Cards that are kept per database list each database on its own line. [ON=home]',
+  '- ONE VIEW FOR ALL YOUR DATABASES: the Administrator view’s cards cover every database you can open, so choosing another database does not change them (only DATA AS OF follows the database you select). The Administrator view has no database picker (a Power User finds it again on the Analyst and Accountant views); the pages that are about one database (Licensing, Data Refresh, Troubleshooting, Activity Log, Purge Old Data, Complex Passwords and the AI Assistant call record) have a Database choice at the top instead. The line under the greeting names your company and those databases. Cards that are kept per database list each database on its own line. [ON=home]',
   '- DATA AS OF (top right of the page): when RapidReconciler last finished pulling data from JD Edwards for the database you have selected. With more than one database it starts with that database’s name; every database’s Data refresh check is on the Troubleshooting card. Refreshing now means a pull is running. Last refresh failed means the last pull did not finish, so the figures your analysts and accountants see may be out of date. [ON=home]',
   '- AI PLAN (in the RapidReconciler AI band): how much data the AI may use, the same for all your databases. Off: no AI, and no data leaves the page. Basic: only the figures already on the screen. Enhanced: fuller data, with customer-identifying fields such as company numbers masked. Full: full data, identities included. Manage opens the AI Assistant page. [ON=home]',
   '- LICENSING (card): Active, Renewal due soon (60 days or less before the end date) or Expired. Renewal due is the date the license ends. "N of M company licenses used across your databases" counts the licensed companies on all your databases together, which is what the limit M covers. [ON=home]',
   '- TEAM & ACCESS (card): the first row counts your team members and the roles they hold. The second row is the access review. It reads Reviewed, with the next due date, while your last recorded review is current. Otherwise it counts active users with no sign-in and no password change for 6 months (orange) or a year (red), or says the review is overdue. The third row opens Complex Passwords, the password policy for each company. [ON=home]',
   '- TROUBLESHOOTING (card): with one database, one row each for Connections, Data loads and Database server, showing the worst result among that area’s checks; Data loads opens Data Refresh and the other two rows open the Troubleshooting page. With more than one database, one row per database, worst first: OK, "N issues" (how many of its checks are not OK), "not answering" (its server did not reply, orange) or "not checked" (grey). A database row opens that database’s Troubleshooting page, or its Data Refresh page when data loads are its only problem. [ON=home]',
-  '- ACTIVITY LOG (card): the three most recent system events, such as restarts, data reloads and refreshes, with how long ago each happened. With more than one database each event starts with its database’s name. The same event repeated in a row shows once, with ×N. See full log opens the whole list for the database you have selected. [ON=home]',
+  '- ACTIVITY LOG (card): the three most recent system events, such as restarts, data reloads and refreshes, with how long ago each happened. With more than one database each event starts with its database’s name, and the three are listed by database name. The same event repeated in a row shows once, with ×N. See full log opens the whole list for the database you have selected. [ON=home]',
   '- INSTANCE HEALTH (under the cards): appears only when storage needs you, as the months or years of space left at the current growth rate. With more than one database it names the database whose storage needs you most, and opens Purge Old Data on that database. Show all shows it anyway. [ON=home]'
 ].join('\n');
 
