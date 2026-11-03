@@ -22,7 +22,9 @@
  * HREFS ARE RELATIVE FROM RRV8/ (../RRUniversity/…) so they resolve identically on
  * the :8765 dev server and on GitHub Pages. Tools/test-ai-doc-coverage.js asserts
  * every one of them is a file that exists, because the only way this list rots is
- * a rename on the other side of the repo.
+ * a rename on the other side of the repo. A V8 UI release rewrites them to the
+ * published knowledge base (docs-base-url in v8-release.properties, UI-211), so
+ * keep each one a quoted string: the packager refuses a link it cannot rewrite.
  */
 (function () {
   'use strict';
