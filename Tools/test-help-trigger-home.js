@@ -30,7 +30,7 @@ const vm = require('vm');
 const ROOT = path.join(__dirname, '..');
 const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8').replace(/\r\n/g, '\n');
 const SIDEBAR = read('Tools/help-sidebar.js');
-const HOME = read('RRV8/home.html');
+const HOME = require('./page-source').readPage('RRV8/home.html');   // home-frame.css inlined where it is linked (UI-240)
 
 // The selectors help-sidebar.js asks for when it places the "?".
 const ANCHORS = ['[data-help-host]', '.topbar-home', '.app-header', '.tx-scope-band, .cxv-scope-band'];

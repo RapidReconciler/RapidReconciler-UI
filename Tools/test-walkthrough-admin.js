@@ -36,7 +36,7 @@ const vm = require('vm');
 
 const ROOT = path.join(__dirname, '..');
 const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8').replace(/\r\n/g, '\n');
-const html = read('RRV8/home.html');
+const html = require('./page-source').readPage('RRV8/home.html');   // home-frame.css inlined where it is linked (UI-240)
 const AI_DOCS_SRC = read('RRV8/ai-docs.js');
 
 let failures = 0, reds = [];

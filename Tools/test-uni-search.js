@@ -13,14 +13,22 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
-const html = fs.readFileSync(path.join(__dirname, '..', 'RRV8', 'home.html'), 'utf8').replace(/\r\n/g, '\n');
+// UI-240 slice 2: the popover moved out of home.html's wire() into RRV8/home-frame.js, which Home and In Transit
+// both load, so the block is sliced from there and both pages must carry its markup and call it.
+const read = (p) => fs.readFileSync(path.join(__dirname, '..', 'RRV8', p), 'utf8').replace(/\r\n/g, '\n');
+const frame = read('home-frame.js');
 const START = '    // UI-229. RR University search';
-const END = '\n    var whatifShowAll';
-const i = html.indexOf(START), j = html.indexOf(END, i);
-if (i < 0 || html.indexOf(START, i + 1) >= 0 || j < 0) { console.log('HARNESS BROKEN: the popover block anchors were not found exactly once'); process.exit(1); }
-const SRC = html.slice(i, j);
-for (const id of ['haHelp', 'haUniMenu', 'haUniQ', 'haUniResults', 'haUniAll', 'haUniScope', 'haUniForm']) {
-  if (html.indexOf('id="' + id + '"') < 0) { console.log('HARNESS BROKEN: the page has no #' + id); process.exit(1); }
+const END = '\n    // END UI-229 popover';
+const i = frame.indexOf(START), j = frame.indexOf(END, i);
+if (i < 0 || frame.indexOf(START, i + 1) >= 0 || j < 0) { console.log('HARNESS BROKEN: the popover block anchors were not found exactly once'); process.exit(1); }
+const SRC = frame.slice(i, j);
+for (const page of ['home.html', 'transit.html']) {
+  const html = read(page);
+  for (const id of ['haHelp', 'haUniMenu', 'haUniQ', 'haUniResults', 'haUniAll', 'haUniScope', 'haUniForm']) {
+    if (html.indexOf('id="' + id + '"') < 0) { console.log('HARNESS BROKEN: ' + page + ' has no #' + id); process.exit(1); }
+  }
+  if (!/<script src="home-frame\.js"><\/script>/.test(html)) { console.log('FAIL ' + page + ' does not load home-frame.js'); process.exit(1); }
+  if (!/RRFrame\.wireUniSearch\(\)/.test(html)) { console.log('FAIL ' + page + ' never calls RRFrame.wireUniSearch()'); process.exit(1); }
 }
 
 let failures = 0;

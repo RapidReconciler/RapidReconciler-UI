@@ -133,7 +133,7 @@ Agent parses `t` and `m`. Check v359 first. Update the Agent Documentation pair 
 | View | Tabs |
 |---|---|
 | Accountant | Overview (out of balance by company and period), Accounts, On Hand (`v6ui_transasof`), Audit Center (Excel audit report) |
-| Analyst | Data Health (roll-forward checks, transit AAIs, GL class not in the model, ship vs. receipt cost), Transaction Variance, Orders (exclusions and V7's quick filters), Tools (recalc) |
+| Analyst | Data Health (roll-forward checks, transit AAIs, GL class not in the model, ship vs. receipt cost), Transaction Variance, Orders (V7's columns, totals and quick filters, exclusions, and Recalculate balance above the grid since 2026-11-05) |
 
 Drill-ins: `transit-transactions.html`, `transit-asof.html`, `transit-orders.html`. Orders keeps V7's three quick
 filters: receipts without shipments, items in transit on a closed PO, and zero quantity in transit. Then Home's
@@ -144,11 +144,84 @@ docs, `RR_TEST_AGENT_AREAS`, API.md, GRID-STANDARDS coverage and tests follow.
 endpoints; `'in-transit/'` in `RR_TEST_AGENT_PREFIXES`; API.md and GRID-STANDARDS updated;
 `Tools/test-transit-page.js` pins the module gate (t.it AND m.it, fail closed), the routing, the three quick filters,
 the exclusion key's bound shape and the `perms.ite` gate, each with a mutation arm. One company at a time, because
-companies carry different currencies. The pill stays "Coming soon", so the page is reachable by URL only.
-**Still to build:** the three drill-ins (notes on Transaction Variance live in `transit-transactions.html`; the item
-roll in `transit-asof.html`; the full Orders grid in `transit-orders.html`), then the pill, the glossary and AI-doc
-entries (they feed every analyst prompt, so they land with the module going live), `test-module-pill.js`, and the live
-check as an analyst, an accountant and a user without the module.
+companies carry different currencies.
+**The pill went live 2026-11-05, ahead of the drill-ins (owner: "Turn it on now").** `_homeModules` lists In Transit
+with `href: 'transit.html'`, so a user licensed and granted In Transit picks it from Home's module menu; anyone else
+still gets no row at all. `test-module-pill.js` pins it (enabled, no Coming soon tag, its href a real page); PO
+Receipts stays "Coming soon". Until the drill-ins land, the landing page is the whole module.
+**Orders brought to V7, built 2026-11-05 (owner: "It should have the same functionality as V7 orders page. Make it a
+tab on the analyst view").** Every column V7's grid showed: `v6ui_transorders`, measured on Demo1, minus `OrderMonth`.
+That adds both companies, last ship and receipt dates, both UOMs, currencies and rate, short and third item, and
+`ExclQty` / `ExclAmt` / `ExclVarQty` / `ExclVarAmt`. Totals of the rows shown sit in the grid header: in transit,
+excluded, and any activity on excluded orders. **Recalculate balance** sits above the grid, where V7 put it, and only
+for `perms.ite`. The Tools tab held nothing else and is gone. The analyst tabs are Data Health, Transaction
+Variance, Orders. `test-transit-page.js` F1-F5 pin it, each with a mutation arm. So `transit-orders.html` is no
+longer needed: the tab is V7's page.
+
+**Slice 2, built 2026-11-05: In Transit in Home's frame (owner 2026-11-05).** "The accountant and analyst pages should be
+separate and formatted as close to the inventory pages as possible. The expectation is that a user switching between
+the modules sees very little difference in the screens. The data is the big difference." Inventory's two views are
+`home.html` itself: `body[data-view-role]`, the role switcher `#haRoles` in the bottom-right `#homeActions` cluster,
+`#subNav` tabs per role (`SUBVIEWS`), `#roleHero`, `#acctTop` (AI card), `#periodWidget`, and grids in the
+`.acct-g-*` style. `transit.html` instead has its own top controls row and an Accountant/Analyst toggle (`#itLens`),
+and uses admin-chrome.css. Design call (this build's, per ruling 5):
+- **One page, Home's frame, not two hand-made pages.** `transit.html` takes Home's layout and mechanisms:
+  `body[data-view-role]` with the same `rrv8.viewRole` key; the same switcher and cluster (role, companies,
+  **Module: In Transit**, University, database); `#subNav` tabs (accountant: Overview, Accounts, On Hand, Audit
+  Center; analyst: Data Health, Transaction Variance, Orders); the role hero; Home's grid styling. The lens toggle
+  and the top controls row go. In the module picker, Inventory goes back to `home.html`.
+- **Share the frame, do not copy it.** Home's frame CSS is inline (about 3,050 lines, 58-3112). Move the frame part
+  into `RRV8/home-frame.css`, linked by both pages, so they cannot drift. Measure Home before and after with a
+  headless screenshot per view, and require no difference.
+- **Data stays In Transit's.** The `/in-transit/*` calls and renderers stay as built; only their containers change.
+  Notes on Transaction Variance (`transit-transactions.html`) and the item roll (`transit-asof.html`) are still drill-ins.
+- **Verify:** the owner switches Inventory → In Transit → Inventory as an analyst and as an accountant and sees the
+  same frame. A user without the module gets no picker row and a 403 from the Agent.
+
+**What slice 2 built.**
+- **Stylesheet.** Home's whole inline `<style>` block (3,053 lines) moved byte for byte into `RRV8/home-frame.css`,
+  linked at the block's old position. It is the whole block, not a "frame" subset: a split would put the rest at a
+  second cascade position, and equal-specificity rules resolve by order. Measured with a headless harness (stubbed
+  session, every off-origin request failed, `Date` frozen). Home was shot per role (admin, analyst, accountant) before
+  and after, and every element's computed style was dumped. Result: 0 differing pixels and 0 differing computed
+  styles on all three roles. The controls held: a reshoot of the unchanged page gave 0, and admin vs analyst gave
+  739,107 px and 635 elements. Not covered: the data-bearing panels, which this harness renders empty.
+- **Shared script.** `RRV8/home-frame.js` (`window.RRFrame`) holds the Module pill's catalog (`modules()`, Inventory
+  now carries `href: 'home.html'`), its menu markup (`moduleMenuHtml`) and the RR University popover
+  (`wireUniSearch`, moved verbatim from Home's `wire()`). Home's `_homeModules()` / `_moduleMenuHtml()` delegate to
+  it. Home's `caps()` and `dbShortName()` stay in Home because their suites mutate those exact sources.
+- **transit.html.** `body[data-view-role]` from `rrv8.viewRole`, clamped to the lanes held. A stored `admin` lands on
+  the first lane and is not overwritten. Neither lane gives Home's `none` state. The page has Home's cluster
+  (account, database, **Module: In Transit**, Company, View, RR University, the AI dock and the help button),
+  `#subNav` tabs per view, `#roleHero` with the roll-forward pill in the freshness slot, and `#periodWidget`
+  (click a bar to pick the period; hidden on Orders). The grids use Home's On Hand markup. The company is the
+  Companies pill, single-select for both views. The lens toggle and the controls row are gone. The tab memory is
+  `rrv8.itSubview`, apart from Home's `rrv8.subview`. The page now loads `sidebar.js` like Home, so it also gets
+  the idle and expiry guard and the AI dock.
+- **Tests.** `test-transit-page.js` G1-G5 (17 assertions, 10 new mutation arms, all red);
+  `test-module-pill.js` gains In Transit's pill (5 checks, 3 arms); `test-uni-search.js` slices the shared file
+  and requires both pages to call it; new `Tools/page-source.js` + `test-page-source.js`. Eight suites that read
+  Home's inline `<style>` read it through `readPage()`, which throws if the link is gone. All 93 suites pass.
+- **The bottom cluster's clearance is measured, not constant (follow-up, same day).** With every control
+  showing, the cluster is 2 rows (107px) at 1440, 1280, 1024 and 900 wide, and 3 rows (153px) at 768. This holds
+  on Home and on In Transit alike. The page's clearance below its content was a fixed 152px (.home-main 96 + .wrap
+  56): enough at the four wider widths (overlap at the end of the scroll 0), 1px short at 768, and a fourth row
+  would have covered content. `home-frame.js` now measures the cluster (on load, on resize, and whenever its own
+  box resizes) and sets `--ha-clear`; `home-frame.css` pads `.home-main` by `max(96px, var(--ha-clear))`.
+  - Gate: Home per role, and Home's analyst view with data at 1440/1280/1024: 0 pixels changed. At 768: only
+    y 888 and below changed. That is the cluster (moved down with the 17px taller page) and the added space; the
+    last content ends at y 875.
+  - Control: two runs of the unchanged page differ by 0. With the clearance stripped, the probe reports 58-135px
+    of overlap.
+  - Tested by `Tools/test-cluster-clearance.js` (11 assertions, 8 arms).
+  - The slice-2 note that "the AI switch covers content" at 1440 was wrong: it came from a viewport shot at the
+    top of the page, where any fixed bar sits over content mid-scroll, on Home as well.
+- **Exercised in headless Chrome** on fictional fixtures (companies 90001 USD / 90002 GBP): view switch through the
+  cluster, tabs, module menu, a quick filter, a period bar, the company pill. A user without the module made zero
+  `/in-transit/*` requests. Not exercised: the live Agent on Demo1.
+
+**Still to build:** the two drill-ins, the glossary and AI-doc entries (they feed every analyst prompt), and the
+live check on Demo1 as an analyst, an accountant and a user without the module.
 
 **5. Verify.** On Demo1 as an analyst, an accountant, and a user without the module (no pill, and a 403 from the
 Agent). Update the RR University transfer-order docs wherever V8 differs from V7.

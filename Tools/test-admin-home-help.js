@@ -45,7 +45,7 @@ const ROOT = path.join(__dirname, '..');
 const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8').replace(/\r\n/g, '\n');
 const config = read('RRV8/config.js');
 const sidebar = read('Tools/help-sidebar.js');
-const home = read('RRV8/home.html');
+const home = require('./page-source').readPage('RRV8/home.html');   // home-frame.css inlined where it is linked (UI-240)
 
 function occurrences(hay, needle) {
   let n = 0, i = 0;

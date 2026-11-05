@@ -111,8 +111,11 @@ Full JWT payload shape:
 `transit.html` (UI-240, the module's landing page) calls every one of these except `/details`, `/save-notes` and
 `/as-of/details`, which belong to the drill-in pages still to come. Each is an `rrFetch` area under `in-transit/`,
 routed to the active database's data services by **`'in-transit/'` in `RR_TEST_AGENT_PREFIXES` (`config.js`,
-added by UI-240)**; `Tools/test-transit-page.js` fails if it goes. Home's module pill keeps In Transit
-"Coming soon" until the drill-ins ship, so the page is reachable by its URL only. Contract, per endpoint:
+added by UI-240)**; `Tools/test-transit-page.js` fails if it goes. Home's module pill lists In Transit as live
+and opens `transit.html` (owner 2026-11-05, ahead of the drill-ins). Since slice 2 the page wears Home's frame
+(`home-frame.css`, `home-frame.js`, the role switcher, `#subNav`, the period chart, the Companies pill); that changed
+its containers, not its calls. Every row below is called with the same body as before. A user without the module
+makes none of them. Contract, per endpoint:
 [agent docs &sect; In Transit (UI-239)](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/docs/API.md#in-transit-ui-239).
 
 What a page needs to know:
@@ -135,9 +138,9 @@ What a page needs to know:
 
 | Area | Method | Page (UI-240) |
 |---|---|---|
-| `in-transit/status` | GET | `transit.html` boot: company list, default period, validation light |
+| `in-transit/status` | GET | `transit.html` boot: the Companies pill's list, the default period, the roll-forward pill in the hero |
 | `in-transit/reconciliation/rows` | POST | `transit.html` Overview (every company, for each one's currency), Accounts, Data Health, Audit Center |
-| `in-transit/reconciliation/history` | POST | `transit.html` period list, Overview trend, Data Health counts, Audit Center |
+| `in-transit/reconciliation/history` | POST | `transit.html` the period chart (`#periodWidget`, click a bar to pick the period), Overview trend, Data Health counts, Audit Center |
 | `in-transit/reconciliation/journal-entry` | POST | `transit.html` Audit Center (Journal Entry sheet) |
 | `in-transit/variance-component` | POST | `transit.html` Audit Center (one sheet per component) |
 | `in-transit/transactions` | POST | `transit.html` Transaction Variance |
@@ -145,8 +148,8 @@ What a page needs to know:
 | `in-transit/as-of` | POST | `transit.html` On Hand |
 | `in-transit/as-of/details` | POST | `transit-asof.html` (not built yet) |
 | `in-transit/orders`, `/orders/exclusions` | POST | `transit.html` Orders (exclude / include on `perms.ite`) |
-| `in-transit/orders/recalc` | POST | `transit.html` Tools (`perms.ite`) |
-| `in-transit/orders/recalc-status` | GET | `transit.html` Tools |
+| `in-transit/orders/recalc` | POST | `transit.html` Orders, Recalculate balance above the grid (`perms.ite`) |
+| `in-transit/orders/recalc-status` | GET | `transit.html` Orders |
 | `in-transit/integrity` | POST | `transit.html` Data Health (five reports) |
 
 Full agent-side controller catalog (including endpoints V8 doesn't

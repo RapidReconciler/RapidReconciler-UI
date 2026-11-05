@@ -43,7 +43,7 @@ const fs   = require('fs');
 const path = require('path');
 
 const ROOT    = path.join(__dirname, '..');
-const html    = fs.readFileSync(path.join(ROOT, 'RRV8', 'home.html'), 'utf8');
+const html    = require('./page-source').readPage('RRV8/home.html', { raw: true });   // home-frame.css inlined (UI-240)
 const sidebar = fs.readFileSync(path.join(ROOT, 'RRV8', 'sidebar.js'), 'utf8');
 
 let failures = 0;

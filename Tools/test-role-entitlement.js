@@ -70,7 +70,7 @@
 const fs   = require('fs');
 const path = require('path');
 
-const html = fs.readFileSync(path.join(__dirname, '..', 'RRV8', 'home.html'), 'utf8');
+const html = require('./page-source').readPage('RRV8/home.html', { raw: true });   // home-frame.css inlined where it is linked (UI-240)
 // Strip line comments only -- see UI-170. Block comments carry markup examples
 // this file does not read, and stripping them has broken offsets before.
 const code = html.replace(/^[ \t]*\/\/.*$/gm, '');

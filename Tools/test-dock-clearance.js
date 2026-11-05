@@ -61,7 +61,7 @@ const vm = require('vm');
 const SIDEBAR = path.join(__dirname, '..', 'RRV8', 'sidebar.js');
 const HOME = path.join(__dirname, '..', 'RRV8', 'home.html');
 const sidebarSrc = fs.readFileSync(SIDEBAR, 'utf8');
-const homeSrc = fs.readFileSync(HOME, 'utf8');
+const homeSrc = require('./page-source').readPage(HOME, { raw: true });   // home-frame.css inlined where it is linked (UI-240)
 
 let failures = 0;
 function check(name, got, want) {

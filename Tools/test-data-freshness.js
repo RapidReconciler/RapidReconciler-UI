@@ -65,7 +65,7 @@ const path = require('path');
 const vm = require('vm');
 
 const SRC = path.join(__dirname, '..', 'RRV8', 'home.html');
-const html = fs.readFileSync(SRC, 'utf8');
+const html = require('./page-source').readPage(SRC, { raw: true });   // home-frame.css inlined where it is linked (UI-240)
 
 let failures = 0;
 function check(name, got, want) {
