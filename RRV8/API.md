@@ -138,6 +138,9 @@ What a page needs to know:
   `OOB = BegVar - EndofDay + Exclusions + Variance + JEs`.
 - **Exclusions** send keys only (`companyNumber, longAccount, orderDate, orderNumber, orderType, shortItem, lot`)
   plus one `excluded` and one `note` (100 characters at most). The agent reads quantity and amount itself.
+  **An un-exclude (`excluded: false`) is stored, as `excluded = 0`** (DAC-94): the load's automatic pass
+  (`usp8_transit_auto_exclude`) excludes every receipt with no shipment and every fully received line with only a cost
+  difference left, and it leaves alone any line that has a row. Its rows carry a note starting `Auto-excluded:`.
 - **Recalc** is async: `{started, message, busyWith?}`, then poll `GET in-transit/orders/recalc-status` for
   `{running, since, blockedBy, last:{ok, error, ...}}`. Report `last.error` when `ok` is false.
 - **Until DB beta.134 is deployed** to a database, `in-transit/transactions` and three of the five integrity
@@ -154,9 +157,9 @@ What a page needs to know:
 | `in-transit/transactions/details`, `/save-notes` | POST | `transit-transactions.html` (not built yet) |
 | `in-transit/as-of` | POST | `transit.html` On Hand |
 | `in-transit/as-of/details` | POST | `transit-asof.html` (not built yet) |
-| `in-transit/orders`, `/orders/exclusions` | POST | `transit.html` Orders (exclude / include on `perms.ite`) |
-| `in-transit/orders/recalc` | POST | `transit.html` Orders, Recalculate balance above the grid (`perms.ite`) |
-| `in-transit/orders/recalc-status` | GET | `transit.html` Orders |
+| `in-transit/orders`, `/orders/exclusions` | POST | `transit.html` Orders (lines in transit; Exclude) and Excluded Orders (excluded lines; Un-exclude), one read for both, writes on `perms.ite` (DAC-94) |
+| `in-transit/orders/recalc` | POST | `transit.html` Orders and Excluded Orders, Recalculate balance above the grid (`perms.ite`) |
+| `in-transit/orders/recalc-status` | GET | `transit.html` Orders and Excluded Orders |
 | `in-transit/integrity` | POST | `transit.html` Data Health (five reports) |
 
 Full agent-side controller catalog (including endpoints V8 doesn't

@@ -42,7 +42,9 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
-const PAGE = fs.readFileSync(path.join(__dirname, '..', 'RRV8', 'transit.html'), 'utf8');
+// LF, whatever the checkout: on a core.autocrlf=true clone the page is CRLF and every multi-line arm below would
+// report "the text it mutates is gone" (measured 2026-11-05 on _wt/dac-94-ui; CI's LF checkout hid it).
+const PAGE = fs.readFileSync(path.join(__dirname, '..', 'RRV8', 'transit.html'), 'utf8').replace(/\r\n/g, '\n');
 const CONFIG = fs.readFileSync(path.join(__dirname, '..', 'RRV8', 'config.js'), 'utf8');
 
 let failures = 0;
@@ -82,6 +84,12 @@ function sliceAssign(src, lead, opener) {
     return src.slice(at, matchClose(src, o) + 1) + ';';
 }
 
+// One declaration line, for a constant whose value is not a bracketed literal.
+function lineOf(src, re) {
+    const m = re.exec(src);
+    if (!m) throw new Error('not found in the page: ' + re);
+    return m[0].trim();
+}
 function build(page, config) {
     const code = [
         sliceAssign(config, 'window.RR_TEST_AGENT_AREAS = [', '['),
@@ -93,6 +101,12 @@ function build(page, config) {
         sliceAssign(page, 'var _testAgentPrefixes = ', '['),
         sliceFn(page, '_routesToTestAgent'),
         sliceAssign(page, 'var QUICK = ', '{'),
+        // DAC-94: Excluded Orders' quick filters, the prefix the load writes, and the counts behind the day brief.
+        lineOf(page, /\n  var AUTO_NOTE = [^\n]*\n/), sliceFn(page, 'isAutoExcl'), sliceFn(page, 'hasExclActivity'),
+        sliceAssign(page, 'var XQUICK = ', '{'),
+        lineOf(page, /\n  var AI_EPS = [^\n]*\n/), sliceFn(page, 'sumOf'),
+        'function curMoney(n) { return String(n); }',
+        sliceFn(page, 'itAnalystCounts'), sliceFn(page, 'itBriefChips'),
         sliceFn(page, 'exclusionKey'), sliceFn(page, 'orderKey'), sliceFn(page, 'ordersTotals'),
         // The column list runs on stand-ins for the cell helpers: only its keys are under test.
         'var C = { co: { k: "CompanyNumber" }, acct: { k: "LongAccount" } };',
@@ -100,7 +114,7 @@ function build(page, config) {
         sliceAssign(page, 'var ORDER_COLS = ', '['),
         sliceAssign(page, 'var TABS = ', '{'),
         'this.orderCols = ORDER_COLS; this.tabs = TABS;',
-        'this.api = { hasModule, canExclude, canAnalyst, canAccountant, _routesToTestAgent, QUICK, exclusionKey, orderKey, ordersTotals };'
+        'this.api = { hasModule, canExclude, canAnalyst, canAccountant, _routesToTestAgent, QUICK, XQUICK, itAnalystCounts, itBriefChips, exclusionKey, orderKey, ordersTotals };'
     ].join('\n');
     const box = { window: {}, Set, Number, String, Math, JSON };
     box.window.RRDB = { active: function () { return box.db; } };
@@ -189,8 +203,33 @@ function run(page, config, log) {
     c('C1 receipts without shipments', pick('noship'), ['noship']);
     c('C2 in transit on a closed PO', pick('closed'), ['closed']);
     c('C3 zero quantity in transit', pick('zeroqty'), ['zeroqty']);
-    c('C4 excluded', pick('excl'), ['clean']);
+    c('C4 Orders has no Excluded quick filter: excluded lines have their own tab (DAC-94)', 'excl' in api.QUICK, false);
     c('C5 all', pick('all').length, ORDERS.length);
+
+    // H: Excluded Orders (DAC-94). The load excludes receipts with no shipment and fully received lines with a cost
+    // difference left, writing a note that starts "Auto-excluded:"; a user's exclusion carries their own note.
+    const XROWS = [
+        { k: 'auto-rcpt', Excluded: true, Note: 'Auto-excluded: receipt with no shipment in the loaded history', ExclAmt: -50, ExclVarAmt: 0, ExclVarQty: 0 },
+        { k: 'auto-cost', Excluded: true, Note: 'Auto-excluded: fully received, only a cost difference left   ', ExclAmt: 2, ExclVarAmt: 0, ExclVarQty: 0 },
+        { k: 'user',      Excluded: true, Note: 'Checked with the warehouse', ExclAmt: -70, ExclVarAmt: -5, ExclVarQty: 0 },
+        { k: 'user-qty',  Excluded: true, Note: '', ExclAmt: 10, ExclVarAmt: 0, ExclVarQty: 2 }
+    ];
+    const xpick = (f) => XROWS.filter(api.XQUICK[f].test).map((r) => r.k);
+    c('H1 excluded by the load', xpick('auto'), ['auto-rcpt', 'auto-cost']);
+    c('H2 excluded by a user (a blank note is a user\'s too)', xpick('user'), ['user', 'user-qty']);
+    c('H3 activity since excluded, amount or quantity', xpick('act'), ['user', 'user-qty']);
+    c('H4 the analyst tabs end with Excluded Orders', box.tabs.analyst.map((x) => x[0]), ['health', 'txv', 'orders', 'excluded']);
+    // The day brief: the Orders chip counts only lines still in transit (an excluded receipt-only line is not
+    // "stuck"); the Excluded Orders chip carries activity since exclusion.
+    const ALL = ORDERS.concat(XROWS.map((r) => Object.assign({ ShipQty: 0, RecQty: 5, TranQty: -5, TranAmt: -50, RecSts: '999' }, r)));
+    const cnt = api.itAnalystCounts({ orders: ALL, history: [], reports: [], txv: null, period: '2025-08-28' });
+    c('H5 the brief counts only lines in transit', [cnt.noship, cnt.closed, cnt.zeroqty], [1, 1, 1]);
+    c('H6 and counts the excluded ones apart', [cnt.excluded, cnt.excludedAuto, cnt.actOnExcl], [5, 2, 2]);
+    const chips = api.itBriefChips(cnt, 'USD');
+    c('H7 one chip per analyst tab, in tab order', chips.map((x) => x.key), box.tabs.analyst.map((x) => x[0]));
+    c('H8 Orders\' chip leaves exclusions out; Excluded Orders\' flags the activity', [chips[2].text, chips[3].state], ['3 orders won’t clear on their own', 'attn']);
+    box.excludedPanel = /<section\b[^>]*\bid="tab-excluded"[\s\S]*?id="xoGrid"[\s\S]*?<\/section>/.test(page);
+    c('H9 the Excluded Orders panel and its grid are on the page', box.excludedPanel, true);
 
     // D: exclusion key
     const key = api.exclusionKey({ CompanyNumber: '90001 ', LongAccount: ' 9000.149090 ', OrderDate: '2025-07-14T00:00:00', OrderNumber: '26678', OrderType: 'ST', ShortItem: '440574', Lot: '', Excluded: false, TranAmt: 9 });
@@ -214,7 +253,7 @@ function run(page, config, log) {
     c('F2 and nothing the view does not have', shown.filter((k) => VIEW_COLS.indexOf(k) < 0), []);
     const tot = api.ordersTotals([{ TranQty: 4, TranAmt: 40, ExclAmt: 0, ExclVarAmt: 0 }, { TranQty: '-1.5', TranAmt: '-12.25', ExclAmt: '7.5', ExclVarAmt: '0.75' }, {}]);
     c('F3 the totals add up the rows they are given, text and blanks included', [tot.tranQty, tot.tranAmt, tot.exclAmt, tot.exclVarAmt], [2.5, 27.75, 7.5, 0.75]);
-    c('F4 the analyst tabs end with Orders; recalc is no longer a tab of its own', box.tabs.analyst.map((x) => x[0]), ['health', 'txv', 'orders']);
+    c('F4 recalc is no longer a tab of its own', box.tabs.analyst.map((x) => x[0]).indexOf('tools'), -1);
     c('F5 Recalculate balance sits on the Orders tab, above its grid, as in V7', box.recalcAboveOrders, true);
 
     // G: Home's frame (owner 2026-11-05: "formatted as close to the inventory pages as possible").
@@ -254,8 +293,8 @@ function run(page, config, log) {
 
     // G4 #subNav draws each view's tabs, Home's .subnav-tab buttons, one active.
     f = frame(page); f.db = BOTH; f.store['rrv8.viewRole'] = 'analyst'; f.api.renderSubNav();
-    c('G4 analyst tabs: Data Health, Transaction Variance, Orders (the first active)', f.tabsDrawn(),
-        [['health', 'Data Health', true], ['txv', 'Transaction Variance', false], ['orders', 'Orders', false]]);
+    c('G4 analyst tabs: Data Health, Transaction Variance, Orders, Excluded Orders (the first active)', f.tabsDrawn(),
+        [['health', 'Data Health', true], ['txv', 'Transaction Variance', false], ['orders', 'Orders', false], ['excluded', 'Excluded Orders', false]]);
     f.store['rrv8.viewRole'] = 'accountant'; f.api.renderSubNav();
     c('G4 accountant tabs: Overview, Accounts, On Hand, Audit Center', f.tabsDrawn(),
         [['overview', 'Overview', true], ['accounts', 'Accounts', false], ['onhand', 'On Hand', false], ['audit', 'Audit Center', false]]);
@@ -296,7 +335,13 @@ arm('exclude gated on aite', PAGE, CONFIG, 'return perms().ite === true;', 'retu
 arm('the exclusion-variance amount dropped from Orders', PAGE, CONFIG, ", m('ExclVarAmt', 'Excl var amount')", '');
 arm('a column the view does not have', PAGE, CONFIG, "t('ShipUOM', 'Ship UOM')", "t('ShipUnits', 'Ship UOM')");
 arm('the totals skip the excluded amount', PAGE, CONFIG, 't.exclAmt += num(r.ExclAmt);', '');
-arm('a Tools tab put back', PAGE, CONFIG, "['orders', 'Orders'] ]", "['orders', 'Orders'], ['tools', 'Tools'] ]");
+arm('a Tools tab put back', PAGE, CONFIG, "['excluded', 'Excluded Orders'] ]", "['excluded', 'Excluded Orders'], ['tools', 'Tools'] ]");
+arm('the Excluded Orders tab dropped', PAGE, CONFIG, "['orders', 'Orders'], ['excluded', 'Excluded Orders'] ]", "['orders', 'Orders'] ]");
+arm('the load\'s note prefix misread', PAGE, CONFIG, "var AUTO_NOTE = 'Auto-excluded:';", "var AUTO_NOTE = 'Auto excluded:';");
+arm('the brief counts excluded lines as stuck', PAGE, CONFIG, 'o = all ? all.filter(function (r) { return !r.Excluded; }) : null;', 'o = all;');
+arm('activity since exclusion reads the amount only', PAGE, CONFIG, ' || Math.abs(num(r.ExclVarQty)) >= 0.00005; }\n  var XQUICK', '; }\n  var XQUICK');
+arm('the Excluded Orders chip dropped', PAGE, CONFIG, "      { key: 'excluded', label: 'Excluded Orders'", "      false && { key: 'excluded', label: 'Excluded Orders'");
+arm('Orders gets the Excluded quick filter back', PAGE, CONFIG, "    zeroqty: { label: 'Zero quantity in transit', test: function (r) { return Math.abs(num(r.TranQty)) < 0.00005 && Math.abs(num(r.TranAmt)) >= 0.005; } }\n  };", "    zeroqty: { label: 'Zero quantity in transit', test: function (r) { return Math.abs(num(r.TranQty)) < 0.00005 && Math.abs(num(r.TranAmt)) >= 0.005; } },\n    excl: { label: 'Excluded', test: function (r) { return !!r.Excluded; } }\n  };");
 arm('recalc moved below the grid', PAGE, CONFIG, '      <div id="orGrid"></div>\n    </section>', '      <span></span>\n    </section>');
 arm('the lens toggle put back', PAGE, CONFIG, '<div class="subnav" id="subNav"', '<span class="seg" id="itLens" role="group"></span><div class="subnav" id="subNav"');
 arm('the page drops Home\'s stylesheet', PAGE, CONFIG, '<link href="home-frame.css" rel="stylesheet">', '<link href="admin-chrome.css" rel="stylesheet">');
