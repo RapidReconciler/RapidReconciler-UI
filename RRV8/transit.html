@@ -291,7 +291,7 @@
     </section>
 
     <section class="acct-panels it-panel" id="tab-orders" role="tabpanel" hidden>
-      <p class="it-lede">Every transfer order still in transit or excluded, now. The three quick filters find the orders that will not clear on their own. <span id="orPermNote"></span></p>
+      <p class="it-lede">Every transfer order line still in transit, now. The three quick filters find the orders that will not clear on their own. Excluded lines are on <b>Excluded Orders</b>. <span id="orPermNote"></span></p>
       <!-- V7 put Recalc Balance above the Orders grid; so does V8 (owner 2026-11-05: "the same functionality as V7"). -->
       <div class="acct-snapshot it-act" id="rcAct">
         <div class="it-act-main">
@@ -301,6 +301,14 @@
         <button class="it-act-btn" id="rcBtn" type="button">Recalculate balance</button>
       </div>
       <div id="orGrid"></div>
+    </section>
+
+    <!-- DAC-94 (owner 2026-11-05): "another tab in the analyst view for Excluded Orders. Same exact format as the regular
+         orders page but just containing Excluded order pairs, and a way to undo an exclusion." Same grid, columns and
+         totals as Orders; the Recalculate balance block moves to whichever of the two is open. -->
+    <section class="acct-panels it-panel" id="tab-excluded" role="tabpanel" hidden>
+      <p class="it-lede">Every transfer order line excluded from In Transit, with what it carried when it was excluded and any activity since. Lines noted <b>Auto-excluded</b> were excluded by the data load: a receipt with no shipment in the loaded history, or a line received in full with only a cost difference left. <span id="xoPermNote"></span></p>
+      <div id="xoGrid"></div>
     </section>
   </div>
 
@@ -583,7 +591,7 @@
   // The #subNav tabs per view (Home's SUBVIEWS shape: key, label).
   var TABS = {
     accountant: [ ['overview', 'Overview'], ['accounts', 'Accounts'], ['onhand', 'On Hand'], ['audit', 'Audit Center'] ],
-    analyst:    [ ['health', 'Data Health'], ['txv', 'Transaction Variance'], ['orders', 'Orders'] ]
+    analyst:    [ ['health', 'Data Health'], ['txv', 'Transaction Variance'], ['orders', 'Orders'], ['excluded', 'Excluded Orders'] ]
   };
   // Remembered per view, apart from Home's rrv8.subview: the two pages' tab keys differ.
   var SUBVIEW_KEY = 'rrv8.itSubview';
@@ -684,7 +692,8 @@
     count.textContent = vis.length.toLocaleString() + (vis.length === this.rows.length ? '' : ' of ' + this.rows.length.toLocaleString()) + (this.rows.length === 1 ? ' row' : ' rows');
     // "No rows match" only when a search hid them. A grid whose own filter leaves nothing (Data Health's roll checks,
     // Orders' quick filters) says what that means instead.
-    if (!vis.length) { body.innerHTML = '<tr><td class="it-empty" colspan="' + span + '">' + esc(this.rows.length && trim(this.q) ? 'No rows match.' : (this.rows.length && this.o.emptyFiltered) || this.o.empty || 'Nothing to show.') + '</td></tr>'; return; }
+    var ef = typeof this.o.emptyFiltered === 'function' ? this.o.emptyFiltered() : this.o.emptyFiltered;   // DAC-94: may depend on the quick filter
+    if (!vis.length) { body.innerHTML = '<tr><td class="it-empty" colspan="' + span + '">' + esc(this.rows.length && trim(this.q) ? 'No rows match.' : (this.rows.length && ef) || this.o.empty || 'Nothing to show.') + '</td></tr>'; return; }
     var cap = 2000, html = vis.slice(0, cap).map(function (r) {
       var id = sel ? self.o.keyOf(r) : '', on = sel && !!self.picked[id];
       if (sel) self._byId[id] = r;
@@ -837,7 +846,7 @@
     var first = firstName();
     var ctx = [];
     if (S.company) ctx.push('Company ' + esc(S.company) + (curOf(S.company) ? ' <span class="rh-co-num">(' + esc(curOf(S.company)) + ')</span>' : ''));
-    if (S.tab === 'orders') ctx.push('As of now');
+    if (isOrdersTab(S.tab)) ctx.push('As of now');
     else if (S.period) ctx.push('Period ending ' + esc(fmtDate(S.period)));
     ctx.push(esc(dbShortName(dbName())));
     item.innerHTML = '<div class="role-hero-kicker">In Transit &middot; ' + esc(ROLE_LABEL[vr]) + '</div>'
@@ -889,7 +898,7 @@
   var PW_COLOR = '#2f6fed', PW_WINDOW = 12, _pwExpanded = false;
   function renderPeriodWidget() {
     var box = $('periodWidget'), pts = (S.history[S.company] || []).slice();
-    if (S.tab === 'orders' || !pts.length) { box.hidden = true; return; }
+    if (isOrdersTab(S.tab) || !pts.length) { box.hidden = true; return; }
     var periods = pts.map(function (p) { return isoDay(p.period); });
     var byP = {}; pts.forEach(function (p) { byP[isoDay(p.period)] = Math.abs(num(p.outOfBalance)); });
     var win = (!_pwExpanded && periods.length > PW_WINDOW) ? periods.slice(-PW_WINDOW) : periods;
@@ -1027,7 +1036,7 @@
     if (!S.company || !S.history[S.company]) return;   // loadCompany() calls back once the history is in
     if (_loaded[tab]) return;
     _loaded[tab] = true;
-    ({ overview: loadOverview, accounts: loadAccounts, onhand: loadOnHand, audit: function () {}, health: loadHealth, txv: loadTxv, orders: loadOrders })[tab]();
+    ({ overview: loadOverview, accounts: loadAccounts, onhand: loadOnHand, audit: function () {}, health: loadHealth, txv: loadTxv, orders: loadOrders, excluded: loadExcluded })[tab]();
   }
 
   // The company's history gives the period list (newest first) and the period chart.
@@ -1229,17 +1238,30 @@
     }).catch(function (e) { _txGrid.fail('Could not read transaction variance: ' + errText(e)); });
   }
 
-  // Orders: V7's three quick filters (RR University, transfer-order-reconcile),
-  // plus Excluded. Exclude / include sends keys only; the server reads quantity
-  // and amount itself.
+  // Orders: V7's three quick filters (RR University, transfer-order-reconcile).
+  // Exclude / un-exclude sends keys only; the server reads quantity and amount itself.
+  // DAC-94: excluded lines moved to their own tab, Excluded Orders, in the same grid, columns and totals. The load
+  // now excludes receipts with no shipment and lines received in full with only a cost difference left
+  // (usp8_transit_auto_exclude), so on a first load Orders would otherwise open on thousands of excluded lines.
   var QUICK = {
     all:     { label: 'All', test: function () { return true; } },
     noship:  { label: 'Receipts without shipments', test: function (r) { return Math.abs(num(r.ShipQty)) < 0.00005 && Math.abs(num(r.RecQty)) >= 0.00005; } },
     closed:  { label: 'In transit on a closed PO', test: function (r) { return trim(r.RecSts) === '999' && Math.abs(num(r.TranQty)) >= 0.00005; } },
-    zeroqty: { label: 'Zero quantity in transit', test: function (r) { return Math.abs(num(r.TranQty)) < 0.00005 && Math.abs(num(r.TranAmt)) >= 0.005; } },
-    excl:    { label: 'Excluded', test: function (r) { return !!r.Excluded; } }
+    zeroqty: { label: 'Zero quantity in transit', test: function (r) { return Math.abs(num(r.TranQty)) < 0.00005 && Math.abs(num(r.TranAmt)) >= 0.005; } }
   };
-  var _orGrid = null, _orQuick = 'all';
+  // The prefix both of the load's notes start with (usp8_transit_auto_exclude writes them). A user who re-saves one
+  // with a note of their own makes it theirs, and it then reads as excluded by a user here too.
+  var AUTO_NOTE = 'Auto-excluded:';
+  function isAutoExcl(r) { return trim(r.Note).indexOf(AUTO_NOTE) === 0; }
+  function hasExclActivity(r) { return Math.abs(num(r.ExclVarAmt)) >= 0.005 || Math.abs(num(r.ExclVarQty)) >= 0.00005; }
+  var XQUICK = {
+    all:  { label: 'All', test: function () { return true; } },
+    auto: { label: 'Excluded by the load', test: isAutoExcl },
+    user: { label: 'Excluded by a user', test: function (r) { return !isAutoExcl(r); } },
+    act:  { label: 'Activity since excluded', test: hasExclActivity }
+  };
+  function isOrdersTab(tab) { return tab === 'orders' || tab === 'excluded'; }
+  var _orGrid = null, _orQuick = 'all', _xoGrid = null, _xoQuick = 'all';
   // The seven keys Transit_Excluded_Orders is keyed on, in the shape the server binds
   // (TransitExclusionRequest.OrderKey: orderNumber and shortItem are Integer, the
   // rest String). Jackson drops a misnamed key silently, so Tools/test-transit-page.js
@@ -1249,32 +1271,63 @@
              orderNumber: Number(r.OrderNumber), orderType: trim(r.OrderType), shortItem: Number(r.ShortItem), lot: trim(r.Lot) };
   }
   function orderKey(r) { return [trim(r.CompanyNumber), trim(r.LongAccount), isoDay(r.OrderDate), trim(r.OrderNumber), trim(r.OrderType), trim(r.ShortItem), trim(r.Lot)].join('|'); }
-  function loadOrders() {
-    if (!_orGrid) {
-      // The quick filters are Home's segmented switch (.perp-view-switch); Exclude / Include are toolbar buttons.
-      var tools = '<span class="perp-view-switch" role="tablist" aria-label="Quick filter">' + Object.keys(QUICK).map(function (k) { return '<button class="' + (k === _orQuick ? 'is-active' : '') + '" type="button" role="tab" data-quick="' + k + '">' + esc(QUICK[k].label) + '</button>'; }).join('') + '</span>' +
-        (canExclude() ? '<button class="perp-xlsx" type="button" id="orEx" disabled>Exclude</button><button class="perp-xlsx" type="button" id="orIn" disabled>Include</button>' : '');
-      _orGrid = new Grid($('orGrid'), { title: 'Transfer orders', surface: 'Orders', noPeriod: true, cols: ORDER_COLS, sort: { k: 'TranAmt', dir: 'desc' }, tools: tools,
-        filter: function (r) { return QUICK[_orQuick].test(r); }, keyOf: orderKey, selectable: canExclude,
-        onPick: function (rows) { if ($('orEx')) { $('orEx').disabled = !rows.some(function (r) { return !r.Excluded; }); $('orIn').disabled = !rows.some(function (r) { return !!r.Excluded; }); } },
-        empty: 'No transfer orders are in transit or excluded.', emptyFiltered: 'No order matches this quick filter.' });
-      Array.prototype.forEach.call($('orGrid').querySelectorAll('[data-quick]'), function (b) {
-        b.addEventListener('click', function () {
-          _orQuick = b.getAttribute('data-quick');
-          Array.prototype.forEach.call($('orGrid').querySelectorAll('[data-quick]'), function (x) { x.classList.toggle('is-active', x === b); });
-          _orGrid.render();
-        });
+  // The quick filters are Home's segmented switch (.perp-view-switch); Exclude / Un-exclude are toolbar buttons.
+  function quickSwitch(set, on) {
+    return '<span class="perp-view-switch" role="tablist" aria-label="Quick filter">' + Object.keys(set).map(function (k) { return '<button class="' + (k === on ? 'is-active' : '') + '" type="button" role="tab" data-quick="' + k + '">' + esc(set[k].label) + '</button>'; }).join('') + '</span>';
+  }
+  function wireQuick(hostId, grid, pick) {
+    Array.prototype.forEach.call($(hostId).querySelectorAll('[data-quick]'), function (b) {
+      b.addEventListener('click', function () {
+        pick(b.getAttribute('data-quick'));
+        Array.prototype.forEach.call($(hostId).querySelectorAll('[data-quick]'), function (x) { x.classList.toggle('is-active', x === b); });
+        grid.render();
       });
-      if ($('orEx')) { $('orEx').addEventListener('click', function () { openExclude(true); }); $('orIn').addEventListener('click', function () { openExclude(false); }); }
-      $('orPermNote').textContent = canExclude() ? 'Select orders to exclude or include them, then recalculate the balance.' : 'Excluding orders and recalculating need the In Transit exclude permission on this database.';
-      loadRecalc();
+    });
+  }
+  // One read of the orders feeds both tabs and the AI (itOrdersData caches it per company until invalidate()).
+  function ordersInto(grid, what) {
+    grid.wait();
+    itOrdersData().then(function (rows) { grid.o.sub = ordersSub; grid.set(rows); })
+      .catch(function (e) { grid.fail('Could not read ' + what + ': ' + errText(e)); });
+  }
+  // V7 put Recalc Balance above the Orders grid. Both tabs need it (after an exclusion or an un-exclusion), so the one
+  // block moves above whichever grid is open.
+  function placeRecalc(gridId) { var g = $(gridId); g.parentNode.insertBefore($('rcAct'), g); loadRecalc(); }
+  function loadOrders() {
+    placeRecalc('orGrid');
+    if (!_orGrid) {
+      var tools = quickSwitch(QUICK, _orQuick) + (canExclude() ? '<button class="perp-xlsx" type="button" id="orEx" disabled>Exclude</button>' : '');
+      _orGrid = new Grid($('orGrid'), { title: 'Transfer orders', surface: 'Orders', noPeriod: true, cols: ORDER_COLS, sort: { k: 'TranAmt', dir: 'desc' }, tools: tools,
+        filter: function (r) { return !r.Excluded && QUICK[_orQuick].test(r); }, keyOf: orderKey, selectable: canExclude,
+        onPick: function (rows) { if ($('orEx')) $('orEx').disabled = !rows.length; },
+        empty: 'No transfer orders are in transit.',
+        emptyFiltered: function () { return _orQuick === 'all' ? 'No order line is in transit. Excluded lines are on Excluded Orders.' : 'No order matches this quick filter.'; } });
+      wireQuick('orGrid', _orGrid, function (k) { _orQuick = k; });
+      if ($('orEx')) $('orEx').addEventListener('click', function () { openExclude(true, _orGrid); });
+      $('orPermNote').textContent = canExclude() ? 'Select orders to exclude them, then recalculate the balance.' : 'Excluding orders and recalculating need the In Transit exclude permission on this database.';
     }
-    _orGrid.wait();
-    rrFetch('in-transit/orders', { method: 'POST', body: filterBody({ noPeriod: true }) }).then(function (d) {
-      if (!d || !Array.isArray(d.data)) throw new Error('the data service returned a response this page could not read');
-      _orGrid.o.sub = ordersSub;
-      _orGrid.set(d.data);
-    }).catch(function (e) { _orGrid.fail('Could not read transfer orders: ' + errText(e)); });
+    ordersInto(_orGrid, 'transfer orders');
+  }
+  function loadExcluded() {
+    placeRecalc('xoGrid');
+    if (!_xoGrid) {
+      var tools = quickSwitch(XQUICK, _xoQuick) + (canExclude() ? '<button class="perp-xlsx" type="button" id="xoIn" disabled>Un-exclude</button>' : '');
+      _xoGrid = new Grid($('xoGrid'), { title: 'Excluded orders', surface: 'Excluded Orders', noPeriod: true, cols: ORDER_COLS, sort: { k: 'ExclAmt', dir: 'desc' }, tools: tools,
+        filter: function (r) { return !!r.Excluded && XQUICK[_xoQuick].test(r); }, keyOf: orderKey, selectable: canExclude,
+        onPick: function (rows) { if ($('xoIn')) $('xoIn').disabled = !rows.length; },
+        empty: 'No transfer order lines are excluded.',
+        emptyFiltered: function () { return _xoQuick === 'all' ? 'No transfer order lines are excluded.' : 'No excluded line matches this quick filter.'; } });
+      wireQuick('xoGrid', _xoGrid, function (k) { _xoQuick = k; });
+      if ($('xoIn')) $('xoIn').addEventListener('click', function () { openExclude(false, _xoGrid); });
+      $('xoPermNote').textContent = canExclude() ? 'Select lines to un-exclude them; the data load will not exclude them again. Then recalculate the balance.' : 'Un-excluding orders and recalculating need the In Transit exclude permission on this database.';
+    }
+    ordersInto(_xoGrid, 'excluded orders');
+  }
+  // After an exclusion or un-exclusion: forget the cached read and redraw whichever grids exist.
+  function refreshOrders() {
+    delete _aiCache['orders|' + S.company]; _briefSig = '';
+    if (_orGrid) ordersInto(_orGrid, 'transfer orders');
+    if (_xoGrid) ordersInto(_xoGrid, 'excluded orders');
   }
 
   // V7's footer totals, of the rows shown: RR University reads the in-transit total as the Reconciliation page's
@@ -1292,14 +1345,16 @@
   }
 
   var _exState = null;
-  function openExclude(excluded) {
-    var picked = _orGrid.pickedRows().filter(function (r) { return excluded ? !r.Excluded : !!r.Excluded; });
+  function openExclude(excluded, grid) {
+    var picked = grid.pickedRows().filter(function (r) { return excluded ? !r.Excluded : !!r.Excluded; });
     if (!picked.length) return;
     _exState = { excluded: excluded, rows: picked };
-    var amt = picked.reduce(function (s, r) { return s + num(r.TranAmt); }, 0);
-    $('exTitle').textContent = excluded ? 'Exclude orders' : 'Include orders';
-    $('exDesc').innerHTML = (excluded ? 'Exclude ' : 'Include ') + '<b>' + picked.length + '</b> order line' + (picked.length === 1 ? '' : 's') + ' (' + esc(curMoney(amt, curOf(S.company))) + ' in transit). ' +
-      (excluded ? 'Their in-transit amount moves into Exclusions after you recalculate.' : 'They count in transit again after you recalculate.');
+    // Excluding moves what is in transit now; un-excluding brings back what was excluded.
+    var amt = picked.reduce(function (s, r) { return s + num(excluded ? r.TranAmt : r.ExclAmt); }, 0);
+    $('exTitle').textContent = excluded ? 'Exclude orders' : 'Un-exclude orders';
+    $('exDesc').innerHTML = (excluded ? 'Exclude ' : 'Un-exclude ') + '<b>' + picked.length + '</b> order line' + (picked.length === 1 ? '' : 's') + ' (' + esc(curMoney(amt, curOf(S.company))) + (excluded ? ' in transit). ' : ' excluded). ') +
+      (excluded ? 'Their in-transit amount moves into Exclusions after you recalculate.' : 'They count in transit again after you recalculate, and the data load will not exclude them again.');
+    $('exNote').placeholder = excluded ? 'Why these orders are excluded' : 'Why these orders count in transit again';
     $('exNote').value = ''; $('exCnt').textContent = '0'; $('exErr').textContent = '';
     $('exGo').disabled = false; $('exModal').classList.add('is-open'); $('exNote').focus();
   }
@@ -1316,8 +1371,8 @@
     var n = orders.length, excluded = _exState.excluded;
     rrFetch('in-transit/orders/exclusions', { method: 'POST', body: { excluded: excluded, note: note, orders: orders } }).then(function () {
       closeExclude();
-      toast((excluded ? 'Excluded ' : 'Included ') + n + ' order line' + (n === 1 ? '' : 's') + '. Recalculate the balance when you have finished, to update the out of balance.');
-      loadOrders();
+      toast((excluded ? 'Excluded ' : 'Un-excluded ') + n + ' order line' + (n === 1 ? '' : 's') + '. Recalculate the balance when you have finished, to update the out of balance.');
+      refreshOrders();
     }).catch(function (e) { $('exErr').textContent = errText(e); $('exGo').disabled = false; });
   });
 
@@ -1342,7 +1397,7 @@
       if (!last) { rcSay('', ''); return; }
       if (last.ok) {
         rcSay('ok', 'Last recalculation finished' + (last.finishedAt ? ' at ' + new Date(last.finishedAt).toLocaleString() : '') + '.');
-        if (!once) { invalidate(); _loaded.orders = true; loadOrders(); toast('Recalculated. The figures on every tab are current.'); }
+        if (!once) { invalidate(); _loaded[S.tab] = true; (S.tab === 'excluded' ? loadExcluded : loadOrders)(); toast('Recalculated. The figures on every tab are current.'); }
       } else rcSay('err', 'The last recalculation failed: ' + (last.error || 'no reason was given.'));
     }).catch(function (e) { rcSay('err', 'Could not read the recalculation status: ' + errText(e)); });
   }
@@ -1367,7 +1422,7 @@
   if (!_gate) console.error('[transit] RRV8.aiGate is missing: ai-gate.js did not load. The assistants say so on the page.');
   var GATE_MISSING = 'The AI assistant did not load on this page. Reload the page; if this persists, contact rrsupport@getgsi.com.';
   var ROLE_ASST = { analyst: 'RR Analyst Assistant', accountant: 'RR Accounting Assistant' };
-  var NUMWORD = ['No', 'One', 'Two', 'Three'];
+  var NUMWORD = ['No', 'One', 'Two', 'Three', 'Four'];   // DAC-94: four analyst chips now
   function aiLevel(feature) { try { if (window.RRAI) { var g = RRAI.get(feature); if (g) return g; } } catch (_) {} return 'full'; }
 
   // ---- facts (pure: data in, lines out; Tools/test-transit-ai.js runs them) ----
@@ -1416,9 +1471,13 @@
   function itAnalystCounts(x) {
     var pts = x.history || [], pt = pts.filter(function (p) { return isoDay(p.period) === isoDay(x.period); })[0] || {};
     var reps = x.reports || [];
-    var o = x.orders, t = x.txv;
+    var t = x.txv;
+    // DAC-94: the quick-filter counts are of lines still in transit. An excluded line is on Excluded Orders, and the
+    // load now excludes every receipt with no shipment and every fully received line with a cost difference left.
+    var all = x.orders, o = all ? all.filter(function (r) { return !r.Excluded; }) : null;
+    var excl = all ? all.filter(function (r) { return !!r.Excluded; }) : null;
     var withVar = t ? (t.data || []).filter(function (r) { return Math.abs(num(r.Variance)) >= AI_EPS; }) : null;
-    var actOnExcl = o ? o.filter(function (r) { return r.Excluded && (Math.abs(num(r.ExclVarAmt)) >= AI_EPS || Math.abs(num(r.ExclVarQty)) >= 0.00005); }) : null;
+    var actOnExcl = excl ? excl.filter(function (r) { return Math.abs(num(r.ExclVarAmt)) >= AI_EPS || Math.abs(num(r.ExclVarQty)) >= 0.00005; }) : null;
     return {
       glBreaks: num(pt.glRollBreaks), varBreaks: num(pt.varianceRollBreaks),
       findings: reps.filter(function (r) { return r.finding && r.count > 0; }).reduce(function (s, r) { return s + r.count; }, 0),
@@ -1426,7 +1485,9 @@
       txvDocs: withVar ? withVar.length : null, txvAll: t ? (t.data || []).length : null, txvTotal: t ? num((t.aggregates || {}).Variance) : null, txvRows: withVar,
       noship: o ? o.filter(QUICK.noship.test).length : null, closed: o ? o.filter(QUICK.closed.test).length : null,
       zeroqty: o ? o.filter(QUICK.zeroqty.test).length : null, actOnExcl: actOnExcl ? actOnExcl.length : null,
-      actOnExclAmt: actOnExcl ? sumOf(actOnExcl, 'ExclVarAmt') : null
+      actOnExclAmt: actOnExcl ? sumOf(actOnExcl, 'ExclVarAmt') : null,
+      excluded: excl ? excl.length : null, excludedAuto: excl ? excl.filter(isAutoExcl).length : null,
+      excludedAmt: excl ? sumOf(excl, 'ExclAmt') : null
     };
   }
   function itAnalystFacts(x, tier) {
@@ -1437,8 +1498,9 @@
     L.push(c.txvDocs == null ? 'Transaction variance: could not be loaded.'
       : 'Transaction variance: ' + c.txvDocs + ' of ' + c.txvAll + ' transfer documents carry a variance, net ' + curMoney(c.txvTotal, cur) + '.');
     L.push(c.noship == null ? 'Orders: could not be loaded.'
-      : 'Orders: ' + c.noship + ' receipt(s) without a shipment; ' + c.closed + ' in transit on a closed PO; ' + c.zeroqty + ' with zero quantity but an amount in transit; '
-        + c.actOnExcl + ' excluded order(s) with activity since they were excluded (net ' + curMoney(c.actOnExclAmt, cur) + ').');
+      : 'Orders (lines still in transit): ' + c.noship + ' receipt(s) without a shipment; ' + c.closed + ' in transit on a closed PO; ' + c.zeroqty + ' with zero quantity but an amount in transit.');
+    if (c.excluded != null) L.push('Excluded Orders: ' + c.excluded + ' excluded line(s), ' + c.excludedAuto + ' of them by the data load (a receipt with no shipment in the loaded history, or a line received in full with only a cost difference left), excluded amount '
+        + curMoney(c.excludedAmt, cur) + '; ' + c.actOnExcl + ' with activity since they were excluded (net ' + curMoney(c.actOnExclAmt, cur) + ').');
     if (tier === 'grounded') return L;
     if (c.txvRows && c.txvRows.length) {
       L.push('Documents with the largest variance:');
@@ -1448,7 +1510,7 @@
       });
     }
     if (x.orders) {
-      var stuck = x.orders.filter(function (r) { return QUICK.noship.test(r) || QUICK.closed.test(r) || QUICK.zeroqty.test(r); })
+      var stuck = x.orders.filter(function (r) { return !r.Excluded && (QUICK.noship.test(r) || QUICK.closed.test(r) || QUICK.zeroqty.test(r)); })
         .sort(function (a, b) { return Math.abs(num(b.TranAmt)) - Math.abs(num(a.TranAmt)); }).slice(0, 5);
       if (stuck.length) {
         L.push('Orders that will not clear on their own, largest first:');
@@ -1465,14 +1527,20 @@
     var hTxt = [];
     if (c.glBreaks + c.varBreaks) hTxt.push((c.glBreaks + c.varBreaks) + ' roll-forward break' + (c.glBreaks + c.varBreaks === 1 ? '' : 's'));
     if (c.findings) hTxt.push(c.findings + ' set-up finding' + (c.findings === 1 ? '' : 's'));
-    var oN = c.noship == null ? null : c.noship + c.closed + c.zeroqty + c.actOnExcl;
+    var oN = c.noship == null ? null : c.noship + c.closed + c.zeroqty;
     return [
       { key: 'health', label: 'Data Health', state: hTxt.length ? 'attn' : (c.reportsDown ? 'wait' : 'clean'),
         text: hTxt.length ? hTxt.join(', ') : (c.reportsDown ? 'Couldn’t check every report just now' : 'Rolls forward cleanly; set-up checks clear') },
       { key: 'txv', label: 'Transaction Variance', state: c.txvDocs == null ? 'wait' : (c.txvDocs ? 'attn' : 'clean'),
         text: c.txvDocs == null ? 'Couldn’t check just now' : (c.txvDocs ? c.txvDocs + ' document' + (c.txvDocs === 1 ? '' : 's') + ' with a variance, net ' + curMoney(c.txvTotal, cur) : 'No transaction variance this period') },
       { key: 'orders', label: 'Orders', state: oN == null ? 'wait' : (oN ? 'attn' : 'clean'),
-        text: oN == null ? 'Couldn’t check just now' : (oN ? oN + ' order' + (oN === 1 ? '' : 's') + ' won’t clear on their own' : 'Nothing stuck in transit') }
+        text: oN == null ? 'Couldn’t check just now' : (oN ? oN + ' order' + (oN === 1 ? '' : 's') + ' won’t clear on their own' : 'Nothing stuck in transit') },
+      // DAC-94: new activity on an excluded line is the one thing here that needs the analyst (RR University: review it
+      // every period). Lines the load excluded are refreshed by the load, so this counts a user's exclusions in practice.
+      { key: 'excluded', label: 'Excluded Orders', state: c.actOnExcl == null ? 'wait' : (c.actOnExcl ? 'attn' : 'clean'),
+        text: c.actOnExcl == null ? 'Couldn’t check just now'
+          : (c.actOnExcl ? c.actOnExcl + ' excluded line' + (c.actOnExcl === 1 ? ' has' : 's have') + ' activity since, net ' + curMoney(c.actOnExclAmt, cur)
+            : (c.excluded ? c.excluded + ' excluded, ' + c.excludedAuto + ' by the load; no activity since' : 'Nothing excluded')) }
     ];
   }
   function itBriefLead(chips) {
@@ -1503,7 +1571,7 @@
   function itOrdersData() {
     return aiCached('orders|' + S.company, function () {
       return rrFetch('in-transit/orders', { method: 'POST', body: filterBody({ noPeriod: true }) }).then(function (d) {
-        if (!d || !Array.isArray(d.data)) throw new Error('unreadable'); return d.data; });
+        if (!d || !Array.isArray(d.data)) throw new Error('the data service returned a response this page could not read'); return d.data; });
     });
   }
   function itReportCounts() {
@@ -1552,7 +1620,7 @@
   function paintAssistants() {
     var vr = viewRole(), lane = !!ROLE_ASST[vr];
     $('acctTriage').hidden = !lane;
-    $('acctTop').classList.toggle('it-solo', S.tab === 'orders');
+    $('acctTop').classList.toggle('it-solo', isOrdersTab(S.tab));
     if (!lane) { $('analystDayBriefTop').hidden = true; return; }
     setAsstTier();
     if (vr === 'analyst') renderBrief(); else $('analystDayBriefTop').hidden = true;
@@ -1591,6 +1659,9 @@
     var vr = viewRole(); if (!ROLE_ASST[vr]) return;
     var tier = aiLevel('ask');
     showQuestion(q);
+    // DAC-94 (owner 2026-11-05, "the AI assistant question never clears"): the band above echoes the question, so
+    // the box empties once it is taken. Only a TYPED one: a re-ask after a level change must not wipe a new draft.
+    if (presetQ == null) { input.value = ''; input.style.height = 'auto'; }
     if (!_gate) { ans.textContent = GATE_MISSING; return; }
     if (tier === 'off') { ans.textContent = _gate.offWhy('ask').why; return; }   // never a silent refusal (VLC-234)
     _asking = true; _lastAsk = { q: q, role: vr };
@@ -1644,7 +1715,7 @@
       if (tier === 'off') { var off = _gate.offWhy('summaries'); briefNote(off.reason === 'tier-off' ? _gate.AI_OFF_LEAD_NOTE : off.why); return; }
       var G = window.RRV8 || {};
       var prompt = (G.TRANSIT_GROUNDING ? G.TRANSIT_GROUNDING + '\n\n' : '')
-        + 'You write the one "start here" line on an In Transit analyst\'s day brief. Three tabs sit below it: Data Health, Transaction Variance, Orders.\n'
+        + 'You write the one "start here" line on an In Transit analyst\'s day brief. Four tabs sit below it: Data Health, Transaction Variance, Orders, Excluded Orders.\n'
         + 'Facts in scope, the ONLY facts you may use:\n' + itAnalystFacts(src, tier).join('\n') + '\n\n'
         + (G.dataAccessLine ? G.dataAccessLine(tier) + '\n' : '')
         + 'Reply with ONE or TWO plain sentences and nothing else: what needs the analyst first and why, naming the tab to open. A roll-forward break comes before everything else. If nothing needs attention, say so plainly. No bullets, no greeting.\n'

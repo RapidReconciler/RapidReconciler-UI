@@ -116,7 +116,7 @@ function load(html, config) {
     'var _acctTxvCache = null;',
     'var _txAllInflight = {};',
     ...['fmtPeriod', '_ccySym', '_moneyK', '_ccyAmt', '_ccyExact', '_wlMateriality', '_wlAmortFact',
-        '_coOf', '_txScope', '_txModuleOf', '_txFetchAll', '_acctTxvRows', '_acctTxvFactLines', '_acctPeriodsOf', 'askAcct']
+        '_coOf', '_txScope', '_txModuleOf', '_txFetchAll', '_acctTxvRows', '_acctTxvFactLines', '_acctPeriodsOf', '_askTaken', 'askAcct']
       .map((n) => extractFn(html, n)),
   ].join('\n');
   vm.runInContext(src, sb, { filename: 'home.html:acct-prompt' });

@@ -28,7 +28,9 @@ const path = require('path');
 const vm = require('vm');
 
 const R8 = path.join(__dirname, '..', 'RRV8');
-const PAGE = fs.readFileSync(path.join(R8, 'transit.html'), 'utf8');
+// LF, whatever the checkout: three arms below span lines, and on a core.autocrlf=true clone they reported "the text
+// it mutates is gone" (measured 2026-11-05 on _wt/dac-94-ui; CI's LF checkout hid it).
+const PAGE = fs.readFileSync(path.join(R8, 'transit.html'), 'utf8').replace(/\r\n/g, '\n');
 const DOCS = fs.readFileSync(path.join(R8, 'ai-docs.js'), 'utf8');
 const GATE_FILE = path.join(R8, 'ai-gate.js');
 const GATE = fs.existsSync(GATE_FILE) ? fs.readFileSync(GATE_FILE, 'utf8') : null;
@@ -99,6 +101,7 @@ function build(page, docs, gate, config) {
         sliceAssign(page, 'var _testAgentAreas = ', '('), sliceAssign(page, 'var _testAgentPrefixes = ', '['), sliceFn(page, '_routesToTestAgent'),
         sliceAssign(page, 'var _valcPrefixes = ', '['), sliceFn(page, '_routesToValc'), sliceFn(page, 'rrFetch'),
         sliceAssign(page, 'var QUICK = ', '{'),
+        sliceLine(page, 'var AUTO_NOTE = '), sliceFn(page, 'isAutoExcl'),   // DAC-94: the counts split excluded lines out
         sliceLine(page, 'var GATE_MISSING = '), sliceAssign(page, 'var ROLE_ASST = ', '{'), sliceAssign(page, 'var NUMWORD = ', '['),
         sliceFn(page, 'aiLevel'),
         sliceFn(page, '_aiDocCatalogPrompt'), sliceLine(page, 'var AI_EPS = '), sliceFn(page, 'sumOf'), sliceFn(page, 'itCoLabel'),
@@ -194,13 +197,16 @@ async function run(page, docs, gate, config, log) {
 
     // B: the brief
     const chips = api.itBriefChips(n, 'USD');
-    c('B1 one chip per analyst tab, each the tab key the chip opens', chips.map((x) => x.key), ['health', 'txv', 'orders']);
-    c('B1 states follow the counts', chips.map((x) => x.state), ['attn', 'attn', 'attn']);
-    c('B1 the orders chip counts the three filters plus activity on excluded', chips[2].text, '4 orders won’t clear on their own');
-    c('B2 the lead names the count and the first tab', api.itBriefLead(chips), 'Three things need you today. Start with Data Health.');
+    // DAC-94: Excluded Orders is the fourth analyst tab, so it gets the fourth chip, and activity on an excluded line
+    // moved there from the Orders chip (the Orders tab no longer lists excluded lines).
+    c('B1 one chip per analyst tab, each the tab key the chip opens', chips.map((x) => x.key), ['health', 'txv', 'orders', 'excluded']);
+    c('B1 states follow the counts', chips.map((x) => x.state), ['attn', 'attn', 'attn', 'attn']);
+    c('B1 the orders chip counts the three filters of lines in transit', chips[2].text, '3 orders won’t clear on their own');
+    c('B1 the excluded chip carries the activity since exclusion, with its amount', chips[3].text, '1 excluded line has activity since, net $12.50');
+    c('B2 the lead names the count and the first tab', api.itBriefLead(chips), 'Four things need you today. Start with Data Health.');
     const clean = api.itBriefChips({ glBreaks: 0, varBreaks: 0, findings: 0, reportsDown: 0, txvDocs: 0, txvAll: 3, txvTotal: 0, noship: 0, closed: 0, zeroqty: 0, actOnExcl: 0 }, 'USD');
-    c('B3 all clean -> "Nothing needs you today"', [clean.map((x) => x.state), api.itBriefLead(clean)], [['clean', 'clean', 'clean'], 'Nothing needs you today. In Transit rolls forward and nothing is stuck.']);
-    c('B4 a source that failed is "wait", not clean', api.itBriefChips(Object.assign({}, n, { txvDocs: null, noship: null }), 'USD').map((x) => x.state), ['attn', 'wait', 'wait']);
+    c('B3 all clean -> "Nothing needs you today"', [clean.map((x) => x.state), api.itBriefLead(clean)], [['clean', 'clean', 'clean', 'clean'], 'Nothing needs you today. In Transit rolls forward and nothing is stuck.']);
+    c('B4 a source that failed is "wait", not clean', api.itBriefChips(Object.assign({}, n, { txvDocs: null, noship: null, actOnExcl: null }), 'USD').map((x) => x.state), ['attn', 'wait', 'wait', 'wait']);
 
     // P: the prompt
     sb.RRV8.TRANSIT_GROUNDING = sb.RRV8.TRANSIT_GROUNDING || 'IN TRANSIT POLICY (test stand-in)';
@@ -266,7 +272,7 @@ arm('accounts named below Full', 'page', "(tier === 'full' ? 'Account ' + trim(r
 arm('Basic gets the history and accounts', 'page', "    if (tier === 'grounded') return L;\n    var pts", '    var pts');
 arm('unposted shown when zero', 'page', "    if (Math.abs(sumOf(rows, 'UnpostBatch')) >= AI_EPS) L.push(", '    L.push(');
 arm('listings counted as findings', 'page', 'return r.finding && r.count > 0;', 'return r.count > 0;');
-arm('activity on excluded orders not counted', 'page', '+ c.closed + c.zeroqty + c.actOnExcl;', '+ c.closed + c.zeroqty;');
+arm('activity on excluded orders not flagged', 'page', "state: c.actOnExcl == null ? 'wait' : (c.actOnExcl ? 'attn' : 'clean'),", "state: 'clean',");
 arm('a failed source reads as zero', 'page', "L.push(c.noship == null ? 'Orders: could not be loaded.'", "L.push(false ? ''");
 arm('Inventory\'s analyst grounding in the prompt', 'page', "return (G.TRANSIT_GROUNDING ? G.TRANSIT_GROUNDING + '\\n\\n' : '')", "return (G.ANALYST_GROUNDING ? G.ANALYST_GROUNDING + '\\n\\n' : '')");
 arm('no data-access line', 'page', "      + (G.dataAccessLine ? G.dataAccessLine(tier) + '\\n' : '')\n      + _aiDocCatalogPrompt(vr)", '      + _aiDocCatalogPrompt(vr)');
