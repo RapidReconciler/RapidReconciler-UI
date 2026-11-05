@@ -220,8 +220,41 @@ and uses admin-chrome.css. Design call (this build's, per ruling 5):
   cluster, tabs, module menu, a quick filter, a period bar, the company pill. A user without the module made zero
   `/in-transit/*` requests. Not exercised: the live Agent on Demo1.
 
-**Still to build:** the two drill-ins, the glossary and AI-doc entries (they feed every analyst prompt), and the
-live check on Demo1 as an analyst, an accountant and a user without the module.
+**Slice 3, built 2026-11-05: the AI assistants (owner: "add AI assistants like inventory has for both analyst and
+accountant").**
+- **Home's surfaces, Home's markup.**
+  - Accountant and analyst: the assistant card (`#acctTriage`, RR Accounting / Analyst Assistant) beside the period
+    chart, with the answer band below. On Orders the card takes the whole row.
+  - Analyst: the day brief (`#analystDayBriefTop`). Three deterministic chips (Data Health, Transaction Variance,
+    Orders), each opening its tab, and an AI lead over a deterministic one.
+- **One gate.** Home's AI gate (`aiHealth`, `aiExplain`, the three Off facts) moved to `RRV8/ai-gate.js`
+  (`RRV8.aiGate(env)`). Home delegates under the same names; six suites run the shared file, their arms still red.
+  Home's pixels are unchanged (0 differing, per role and at four widths).
+- **In Transit's own grounding.** `AnalysisGuides/_catalog/analyst/in-transit.md` (31 bullets, distilled from
+  the three RR University transfer-order guides, checked against the DB views) generates
+  `RRV8.TRANSIT_GROUNDING` through `build-ai-grounding.py`, with `_core.md` INV-1 to INV-4 tagged `topic:transit`.
+  Inventory's ANALYST_GROUNDING is not sent: it tells the model in-transit is a separate surface.
+- **Facts from the page's own reads.**
+  - Accountant: the period's components, the roll checks, recurrence over six periods, and accounts.
+  - Analyst: roll breaks, report counts, transaction variance by document, and the quick-filter counts.
+  - Masking: below Full every identity is masked; Basic keeps to the figures on screen.
+  - The chips and the AI read the same counts, so they cannot disagree.
+- **Doc links.** `ai-docs.js` gains the three transfer-order guides, scoped by a new `modules` field so Home's
+  catalog is unchanged.
+- **Tests.** `Tools/test-transit-ai.js`: 44 assertions and 16 arms, all red.
+- **Exercised in headless Chrome with a stubbed VALC.** Both roles asked a question and got a rendered answer with
+  "What was sent" and a doc link. The brief showed its lead and chips. Every prompt led with In Transit's policy.
+- **Fixed on the way:** the analyst's facts and chips had no currency (it was learned only on Overview).
+- **The in-transit account, ruled 2026-11-05: "Ground both sides".** The KB names 4220/4245, and the DB views and
+  V7 find the accounts from 4320/4322 (`v6_transit_accounts.sql:44`, measured). The grounding now says the ship
+  side posts through 4220/4245 and the receipt clears through 4320/4322, onto one account when set up right; a
+  mismatch is a set-up fault. The views are unchanged. The other eight source conflicts stay open in the catalog's
+  header; the grounding states only what every source agrees on.
+- **Not added:** RRV8.GLOSSARY entries. The catalog proposes five; GLOSSARY feeds every analyst prompt on every
+  page, so they wait for the owner.
+
+**Still to build:** the two drill-ins, and the live check on Demo1 (analyst, accountant, a user without the module)
+now that the assistants are in.
 
 **5. Verify.** On Demo1 as an analyst, an accountant, and a user without the module (no pill, and a 403 from the
 Agent). Update the RR University transfer-order docs wherever V8 differs from V7.

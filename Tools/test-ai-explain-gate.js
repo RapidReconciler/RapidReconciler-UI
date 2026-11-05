@@ -45,7 +45,14 @@ function check(name, got, want) {
               (ok ? '' : '   got ' + JSON.stringify(got) + ' want ' + JSON.stringify(want)));
 }
 
-const START = '  var _aiHealthCache = {};';
+// UI-240 slice 2: the gate moved out of home.html into RRV8/ai-gate.js, the ONE file every page that calls
+// the AI loads. SOURCE is that shipped file followed by Home's own delegate block (aiExplain, aiHealth,
+// _aiHealthReset ... each a one-liner onto the gate Home builds), so the suite runs exactly what Home runs
+// and the mutation arms below land in ai-gate.js. GLUE is the one thing a browser gives for free: the bare
+// global RRV8 IS window.RRV8, which a vm sandbox with its own `window` object does not.
+const GATE = fs.readFileSync(path.join(ROOT, 'RRV8', 'ai-gate.js'), 'utf8');
+const GLUE = "\n;if (typeof RRV8 === 'undefined') { globalThis.RRV8 = window.RRV8; } else if (RRV8 !== window.RRV8) { RRV8.aiGate = window.RRV8.aiGate; }\n";
+const START = '  var _aiGate = RRV8.aiGate({';
 const END   = '\n  function loadAiPlan() {';
 function occurrences(h, n) { let c = 0, i = 0; for (;;) { const j = h.indexOf(n, i); if (j < 0) break; c++; i = j + 1; } return c; }
 for (const [lab, a] of [['start', START], ['end', END]]) {
@@ -54,7 +61,11 @@ for (const [lab, a] of [['start', START], ['end', END]]) {
     process.exit(1);
   }
 }
-const SOURCE = html.slice(html.indexOf(START), html.indexOf(END, html.indexOf(START)));
+if (occurrences(GATE, 'window.RRV8.aiGate = function (env) {') !== 1) {
+  console.log('HARNESS BROKEN: RRV8/ai-gate.js no longer defines RRV8.aiGate');
+  process.exit(1);
+}
+const SOURCE = GATE + GLUE + html.slice(html.indexOf(START), html.indexOf(END, html.indexOf(START)));
 
 // opts: { tier, health, db, rejectHealth }
 function mk(opts, source) {
@@ -169,12 +180,13 @@ async function suite(source, label) {
 function structural() {
   console.log('--- STRUCTURAL: no call site bypasses aiExplain ---\n');
   let bad = 0;
-  const direct = html.split('\n')
-    .map((l, i) => [i + 1, l])
+  // Home AND the shared gate file: the producer itself must not grow a literal direct call either.
+  const direct = [['home.html', html], ['ai-gate.js', GATE]].flatMap(([f, src]) => src.split('\n')
+    .map((l, i) => [f + ':' + (i + 1), l])
     .filter(([, l]) => /rrFetch\(\s*['"]api\/v1\/ai\/explain['"]/.test(l)
-                       && !l.trim().startsWith('//') && !l.trim().startsWith('*'));
+                       && !l.trim().startsWith('//') && !l.trim().startsWith('*')));
   const ok = direct.length === 0;
-  if (!ok) { bad++; direct.forEach(([n, l]) => console.log('        home.html:' + n + '  ' + l.trim().slice(0, 70))); }
+  if (!ok) { bad++; direct.forEach(([n, l]) => console.log('        ' + n + '  ' + l.trim().slice(0, 70))); }
   console.log('  ' + (ok ? 'ok  ' : 'FAIL') +
               '  S1 zero direct rrFetch to ai/explain outside the producer  (found ' + direct.length + ')');
 
@@ -187,10 +199,15 @@ function structural() {
   console.log('  ' + (seesIt ? 'ok  ' : 'FAIL') +
               '  S1 control: the pattern still matches a known direct call');
 
-  // And the producer itself must be the one place that does it.
-  const inProducer = /rrFetch\(_aiExUrl/.test(html);
+  // And the producer itself must be the one place that does it -- in the shared gate file now, and Home must
+  // reach it: its aiExplain is the delegate onto the gate it builds, not a body of its own.
+  const inProducer = /rrFetch\(_aiExUrl/.test(GATE);
   if (!inProducer) bad++;
-  console.log('  ' + (inProducer ? 'ok  ' : 'FAIL') + '  S2 the producer still makes the call');
+  console.log('  ' + (inProducer ? 'ok  ' : 'FAIL') + '  S2 the producer still makes the call  (RRV8/ai-gate.js)');
+  const delegates = /\n  function aiExplain\(p, o\) \{ return _aiGate\.explain\(p, o\); \}/.test(html.replace(/\r\n/g, '\n'))
+                    && /<script src="ai-gate\.js"><\/script>/.test(html);
+  if (!delegates) bad++;
+  console.log('  ' + (delegates ? 'ok  ' : 'FAIL') + '  S2 home.html loads ai-gate.js and its aiExplain delegates to the gate');
   console.log();
   return bad;
 }

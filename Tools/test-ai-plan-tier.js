@@ -77,7 +77,17 @@ if (occurrences(html, END) !== 1) {
 }
 const from = html.indexOf(START);
 const to   = html.indexOf(END, from) + END.length;
-const SOURCE = html.slice(from, to) + '\n  }\n';
+// UI-240 slice 2: the span above now holds Home's delegate block (`var _aiGate = RRV8.aiGate({...})` and
+// aiHealth() as a one-liner onto it), and the health producer loadAiPlan() consumes lives in RRV8/ai-gate.js.
+// So the shipped gate file runs first, then Home's span, exactly the order the page loads them. GLUE: in a
+// browser the bare global RRV8 is window.RRV8, which this sandbox's separate `window` object is not.
+const GATE = fs.readFileSync(path.join(ROOT, 'RRV8', 'ai-gate.js'), 'utf8');
+if (occurrences(GATE, 'window.RRV8.aiGate = function (env) {') !== 1) {
+  console.log('HARNESS BROKEN: RRV8/ai-gate.js no longer defines RRV8.aiGate');
+  process.exit(1);
+}
+const GLUE = "\n;if (typeof RRV8 === 'undefined') { globalThis.RRV8 = window.RRV8; } else if (RRV8 !== window.RRV8) { RRV8.aiGate = window.RRV8.aiGate; }\n";
+const SOURCE = GATE + GLUE + html.slice(from, to) + '\n  }\n';
 
 // ---------------------------------------------------------------------------
 // Run the extracted source against a stub, once per scenario.
@@ -97,6 +107,8 @@ function run(opts, source) {
     isAdmin:  function () { return !!opts.isAdmin; },
     IS_DEMO:  !!opts.isDemo,
     activeDb: function () { return opts.db ? { n: opts.db } : null; },
+    // Home hands its _recsummaryLevel to the gate it builds in the span above; loadAiPlan never calls it.
+    _recsummaryLevel: function () { return 'full'; },
     rrFetch:  function (url, o) {
       calls.push({ url: url, opts: o });
       if (opts.reject) return Promise.reject(new Error('boom'));

@@ -6,7 +6,7 @@ paraphrases that silently drift from the real docs.
 
 WHAT IT DOES
 ------------
-RRV8/config.js exposes six grounding catalogs that six AI surfaces read and
+RRV8/config.js exposes seven grounding catalogs that the AI surfaces read and
 inject into the /api/v1/ai/explain prompt:
 
     window.RRV8.ACCT_GROUNDING
@@ -16,11 +16,11 @@ inject into the /api/v1/ai/explain prompt:
     window.RRV8.ASOF_GROUNDING
     window.RRV8.ADMIN_GROUNDING
 
-Those six assignments live inside a marker-delimited block (mirrors the repo's
+Those seven assignments live inside a marker-delimited block (mirrors the repo's
 release-notes insertion-point pattern):
 
     // <<AI-GROUNDING GENERATED START -- do not edit by hand>>
-    ... the six assignments ...
+    ... the seven assignments ...
     // <<AI-GROUNDING GENERATED END>>
 
 This script rewrites that block. For every topic in GENERATE (below) it extracts
@@ -29,7 +29,7 @@ the authoritative readable text from that topic's SOURCE docs and emits a fresh
 topic is PASSED THROUGH verbatim -- its current hand-authored content is kept
 byte-for-byte so a working catalog never regresses.
 
-The six *consuming* AI surfaces are never touched: the RRV8.*_GROUNDING interface
+The *consuming* AI surfaces are never touched: the RRV8.*_GROUNDING interface
 is preserved exactly; only the string CONTENT changes.
 
 TOPIC -> SOURCE MAP
@@ -109,7 +109,7 @@ MARKER_END = "  // <<AI-GROUNDING GENERATED END>>"
 # AnalysisGuides/_catalog/ (the ```grounding fence is lifted verbatim), plus the
 # shared-core invariants tagged for that catalog in _catalog/_core.md. The read
 # path is chosen per topic by source extension (.md vs .html).
-GENERATE = ("ADMIN", "CARDEX", "ANALYST")
+GENERATE = ("ADMIN", "CARDEX", "ANALYST", "TRANSIT")
 
 # The single-source shared-core catalog: cross-role invariants authored once and
 # composed into each role catalog the generator builds (see load_core_invariants).
@@ -126,6 +126,9 @@ ROLE_OF = {
     "ROLLFORWARD": "analyst",
     "ASOF": "analyst",
     "ADMIN": "admin",
+    # TRANSIT serves both roles on one page (RRV8/transit.html), and ROLE_OF holds one role, so it takes no
+    # role-tagged invariants: the _core.md invariants it needs name it as `topic:transit` instead.
+    "TRANSIT": "",
 }
 
 # TOPIC -> ordered list of source doc paths (repo-relative). Only topics in
@@ -158,6 +161,9 @@ SOURCES = {
         "AnalysisGuides/_catalog/analyst/transaction.md",
         "AnalysisGuides/_catalog/analyst/period-workflow.md",
     ],
+    # TRANSIT (UI-240 slice 3): In Transit's own catalog, read by both assistants on RRV8/transit.html. Kept
+    # apart from ANALYST on purpose: ANALYST_GROUNDING tells the model in-transit is a separate surface.
+    "TRANSIT": ["AnalysisGuides/_catalog/analyst/in-transit.md"],
     # Passthrough-pending -- author the curated _catalog/*.md, then add here + to
     # GENERATE. Each seed distillation already lives under _grounding/*.md.
     "ACCT": [],         # -> _catalog/accountant/acct.md (seed: _grounding/acct.md; docs/plans/accounting-reference.md)

@@ -115,7 +115,14 @@ added by UI-240)**; `Tools/test-transit-page.js` fails if it goes. Home's module
 and opens `transit.html` (owner 2026-11-05, ahead of the drill-ins). Since slice 2 the page wears Home's frame
 (`home-frame.css`, `home-frame.js`, the role switcher, `#subNav`, the period chart, the Companies pill); that changed
 its containers, not its calls. Every row below is called with the same body as before. A user without the module
-makes none of them. Contract, per endpoint:
+makes none of them.
+
+**The AI assistants (slice 3)** call VALC, not the data services, through `RRV8.aiGate` (`ai-gate.js`, the gate Home
+uses): `GET api/v1/ai/health` and `POST api/v1/ai/explain` with `{feature, database, level, prompt}`. `feature` is
+`ask` for the RR Accounting / Analyst Assistant and `summaries` for the analyst day brief, so the plan and the
+administrator's per-feature levels apply as on Home. VALC needs no change: `feature` selects the checks, not a
+prompt. The prompt is built in the page from the `/in-transit/*` rows below (no new call) and leads with
+`RRV8.TRANSIT_GROUNDING`. Contract, per endpoint:
 [agent docs &sect; In Transit (UI-239)](https://github.com/RapidReconciler/RapidReconciler-Agent/blob/main/docs/API.md#in-transit-ui-239).
 
 What a page needs to know:
