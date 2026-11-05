@@ -60,6 +60,11 @@
 <title>In Transit &mdash; RapidReconciler</title>
 <link href="fonts/fonts.css" rel="stylesheet">
 <script src="config.js"></script>
+<!-- The AI assistants (UI-240 slice 3): the doc-link allowlist Home uses, and the one AI gate Home uses
+     (ai-gate.js: plan, administrator and browser Off states, health, the explain call). Not deferred. -->
+<link href="ai-docs.css" rel="stylesheet">
+<script src="ai-docs.js"></script>
+<script src="ai-gate.js"></script>
 <script src="export-guard.js"></script>
 <!-- sidebar.js: the session (hydrateSession, the idle and expiry guard), the AI dock
      mounted into [data-ai-dock-host], and RRV8.setActiveDatabase. Home loads it the same way. -->
@@ -79,6 +84,8 @@
   /* Home's .acct-panels is a grid whose track sizes to its widest child. Orders has 35 columns, so without this
      the track grows past the viewport and the whole page scrolls sideways instead of the grid's own scroller. */
   .acct-panels.it-panel { grid-template-columns: minmax(0, 1fr); }
+  /* Orders has no period chart (it is current state), so the assistant card takes the whole top row there. */
+  .acct-top.it-solo > #acctTriage { flex: 1 1 auto; }
   .it-lede { font-size: 13px; color: var(--text-muted); line-height: 1.55; margin: 0 0 2px; max-width: 900px; }
   .it-lede b { color: var(--navy); }
 
@@ -196,9 +203,49 @@
   </div>
 
   <div id="itWork" hidden>
-    <!-- Home's top row: the out-of-balance-by-period chart. Click a bar to work that period. -->
+    <!-- Analyst day brief, Home's (#analystDayBriefTop): deterministic chips, one per analyst tab, and one AI lead
+         ("start here"). The eyebrow names the AI only when the AI wrote the lead. Analyst view only. -->
+    <div class="alh-brief" id="analystDayBriefTop" hidden>
+      <div class="alh-brief-eyebrow" id="alhBriefEyebrow">RapidReconciler &middot; Here&rsquo;s your day</div>
+      <p class="alh-brief-body" id="analystDayBriefBody">Reading your day&hellip;</p>
+      <div class="alh-chips" id="analystDayBriefChips" hidden></div>
+    </div>
+
+    <!-- Home's top row: the assistant card (left) and the out-of-balance-by-period chart. Click a bar to work that
+         period. The card is Home's #acctTriage: RR Accounting Assistant for the accountant, RR Analyst Assistant for
+         the analyst. The form is persistent, so a typed question survives a repaint. -->
     <div class="acct-top" id="acctTop">
+      <div class="acct-triage" id="acctTriage" hidden data-ai-tier="full">
+        <div class="ai-asst-head">
+          <span class="ai-orb" aria-hidden="true">
+            <span class="ai-orb-pulse"></span>
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 1.6l1.9 5.1a5 5 0 0 0 2.9 2.9l5.1 1.9-5.1 1.9a5 5 0 0 0-2.9 2.9L12 21.4l-1.9-5.1a5 5 0 0 0-2.9-2.9L2.1 11.5l5.1-1.9a5 5 0 0 0 2.9-2.9z"/></svg>
+          </span>
+          <div>
+            <div class="ai-asst-name" id="aiAsstName">RR Accounting Assistant</div>
+            <div class="ai-asst-status"><span class="ai-asst-dot"></span><span id="acctAiStatusText">Full Plan</span></div>
+          </div>
+        </div>
+        <div class="ai-asst-greeting" id="acctAiGreeting"></div>
+        <form class="acct-ask-form" id="acctAskForm">
+          <textarea class="acct-ask-input" id="acctAskInput" rows="1" autocomplete="off" placeholder="Ask a question&hellip;"></textarea>
+          <button type="submit" class="acct-ask-send" id="acctAskBtn" aria-label="Ask RapidReconciler AI" title="Ask">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+          </button>
+        </form>
+      </div>
       <section class="period-widget" id="periodWidget" hidden aria-label="In Transit out of balance by period"></section>
+    </div>
+
+    <!-- The answer on its own full-width row, as on Home. Filled by itAsk(). -->
+    <div class="acct-ans-band" id="acctAnsBand" hidden>
+      <span class="acct-ans-emblem" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 1.6l1.9 5.1a5 5 0 0 0 2.9 2.9l5.1 1.9-5.1 1.9a5 5 0 0 0-2.9 2.9L12 21.4l-1.9-5.1a5 5 0 0 0-2.9-2.9L2.1 11.5l5.1-1.9a5 5 0 0 0 2.9-2.9z"/></svg></span>
+      <div class="acct-ans-body">
+        <div class="acct-ans-label" id="aiAnsLabel">RR Accounting Assistant</div>
+        <div class="acct-ans-q" id="acctAnsQ" hidden></div>
+        <div class="acct-ans-text" id="acctAskAnswer"></div>
+      </div>
+      <button type="button" class="acct-ans-dismiss" id="acctAnsDismiss" title="Dismiss" aria-label="Dismiss answer">&times;</button>
     </div>
 
     <div class="subnav" id="subNav" hidden role="tablist" aria-label="In Transit"></div>
@@ -378,12 +425,25 @@
     for (var i = 0; i < _testAgentPrefixes.length; i++) if (area.indexOf(_testAgentPrefixes[i]) === 0) return true;
     return false;
   }
+  // VALC areas (the AI assistants' api/v1/ai/*) go to VALC, as Home's rrFetch sends them. The list is config.js's
+  // RR_VALC_PREFIXES, the same one Home reads. No fallback literal: without config.js there is no RRDB to resolve
+  // VALC either, and Tools/v8-callsites.py can place only areas it can see reach a call.
+  var _valcPrefixes = window.RR_VALC_PREFIXES || [];
+  function _routesToValc(area) {
+    for (var i = 0; i < _valcPrefixes.length; i++) if (area.indexOf(_valcPrefixes[i]) === 0) return true;
+    return false;
+  }
   function rrFetch(area, opts) {
     opts = opts || {};
-    if (!_routesToTestAgent(area)) return Promise.reject(new Error('This page has no route for ' + area + '.'));
-    var base = window.RRDB && window.RRDB.agentBase();
-    if (!base) return Promise.reject(new Error('No active database. Sign in again from the hub.'));
-    var url = base + '/' + area;
+    var base;
+    if (_routesToValc(area)) {
+      base = window.RRDB.valcBase();   // canonical VALC resolver (config.js RRDB), as on Home
+      if (!base) return Promise.reject(window.RRDB.valcGap(area));
+    } else if (_routesToTestAgent(area)) {
+      base = window.RRDB && window.RRDB.agentBase();
+      if (!base) return Promise.reject(new Error('No active database. Sign in again from the hub.'));
+    } else return Promise.reject(new Error('This page has no route for ' + area + '.'));
+    var url = base + '/' + area + (opts.query ? '?' + new URLSearchParams(opts.query) : '');
     return fetch(url, {
       method: opts.method || 'GET',
       headers: prodHeaders(opts.body ? 'application/json;charset=UTF-8' : null),
@@ -484,6 +544,7 @@
   function setViewRole(r) {
     if (entitledViews().indexOf(r) < 0) return;
     try { localStorage.setItem('rrv8.viewRole', r); } catch (_) {}
+    if (!_asking) clearAnswer();   // an answer belongs to the view it was asked in (Home does the same)
     applyViewRole();
   }
 
@@ -918,6 +979,7 @@
     if (window.RRV8 && window.RRV8.hydrateSession) window.RRV8.hydrateSession();
     renderIdentity(); renderHaDb(); renderModulePill(); wireCluster();
     window.RRFrame.wireUniSearch();
+    wireAssistants();
     // The Agent's own words for this refusal (InTransitModuleGate), so the page and a
     // direct call say the same thing.
     if (!hasModule()) { gate('In Transit is not on for you', 'In Transit is not turned on for you on this database. Your administrator turns it on for each person, one database at a time.', 'Pick <b>Module: Inventory</b> below to go back to Home, or switch to a database where you have In Transit.'); return; }
@@ -955,12 +1017,12 @@
 
   // Per-tab loads happen once per (company, period); invalidate() forgets them.
   var _loaded = {};
-  function invalidate() { _loaded = {}; S.rowsAll = null; }
+  function invalidate() { _loaded = {}; S.rowsAll = null; _aiCache = {}; _briefSig = ''; }
   function showTab(tab) {
     S.tab = tab;
     Array.prototype.forEach.call($('subNav').querySelectorAll('.subnav-tab'), function (b) { var on = b.getAttribute('data-sv') === tab; b.classList.toggle('is-active', on); b.setAttribute('aria-selected', on ? 'true' : 'false'); });
     Object.keys(TABS).forEach(function (l) { TABS[l].forEach(function (x) { $('tab-' + x[0]).hidden = x[0] !== tab; }); });
-    renderPeriodWidget(); renderRoleHero(); renderCompaniesPill();
+    renderPeriodWidget(); renderRoleHero(); renderCompaniesPill(); paintAssistants();
     try { var u = new URL(location.href); u.searchParams.set('tab', tab); u.searchParams.set('company', S.company); history.replaceState(null, '', u); } catch (_) {}
     if (!S.company || !S.history[S.company]) return;   // loadCompany() calls back once the history is in
     if (_loaded[tab]) return;
@@ -1097,8 +1159,10 @@
 
   // ===================== ANALYST =====================
   var REPORTS = [
-    { id: 'v6_transit_cost_variances', title: 'Ship vs. receipt cost', desc: 'Transfer lines whose receipt cost differs from what shipped, on in-transit accounts.', period: true },
-    { id: 'v_integrity_trans_exc_glc', title: 'GL classes not in the model', desc: 'Transfer lines whose GL class no in-transit AAI (4320 / 4322) covers.' },
+    // `finding`: a row in this report is something to fix. The other three list the set-up and the exclusions, and
+    // rows there are normal. The analyst day brief counts findings only.
+    { id: 'v6_transit_cost_variances', title: 'Ship vs. receipt cost', desc: 'Transfer lines whose receipt cost differs from what shipped, on in-transit accounts.', period: true, finding: true },
+    { id: 'v_integrity_trans_exc_glc', title: 'GL classes not in the model', desc: 'Transfer lines whose GL class no in-transit AAI (4320 / 4322) covers.', finding: true },
     { id: 'v_integrity_trans_base',    title: 'In-transit accounts', desc: 'The in-transit accounts the transfer AAIs resolve to.' },
     { id: 'v_integrity_trans_aais',    title: 'Transfer AAIs', desc: 'The AAI rows a transfer posts through, by document type.' },
     { id: 'v6_transit_excluded_details', title: 'Excluded orders', desc: 'Orders excluded from In Transit and the period each counts in.', period: true }
@@ -1290,6 +1354,324 @@
       _rcPoll = setTimeout(function () { pollRecalc(false); }, 2000);
     }).catch(function (e) { btn.disabled = false; rcSay('err', 'The recalculation did not start: ' + errText(e)); });
   });
+
+  // ===================== AI ASSISTANTS (UI-240 slice 3) =====================
+  // Owner 2026-11-05: "add AI assistants like inventory has for both analyst and accountant". Home's two surfaces in
+  // Home's markup: the assistant card (#acctTriage with its ask box and the #acctAnsBand answer row), named
+  // RR Accounting Assistant or RR Analyst Assistant by view, and the analyst day brief (#analystDayBriefTop).
+  // Every call goes through RRV8.aiGate (ai-gate.js), the gate Home uses, so the plan, the administrator's
+  // per-feature level and this browser's AI switch apply here exactly as there. The grounding is In Transit's own
+  // (RRV8.TRANSIT_GROUNDING): Inventory's ANALYST_GROUNDING tells the model in-transit is a separate surface.
+  // The facts are built from the /in-transit/* calls this page already makes; nothing new is read.
+  var _gate = (window.RRV8 && RRV8.aiGate) ? RRV8.aiGate({ fetch: rrFetch, activeDb: activeDb }) : null;
+  if (!_gate) console.error('[transit] RRV8.aiGate is missing: ai-gate.js did not load. The assistants say so on the page.');
+  var GATE_MISSING = 'The AI assistant did not load on this page. Reload the page; if this persists, contact rrsupport@getgsi.com.';
+  var ROLE_ASST = { analyst: 'RR Analyst Assistant', accountant: 'RR Accounting Assistant' };
+  var NUMWORD = ['No', 'One', 'Two', 'Three'];
+  function aiLevel(feature) { try { if (window.RRAI) { var g = RRAI.get(feature); if (g) return g; } } catch (_) {} return 'full'; }
+
+  // ---- facts (pure: data in, lines out; Tools/test-transit-ai.js runs them) ----
+  // `tier` is the AI level for the call. Below Full every identity is masked (company, account, document, order);
+  // Basic ('grounded') keeps to the figures the page shows, with no lists and no history.
+  if (!(window.RRV8 && RRV8.aiDocs)) console.error('[ai-docs] RRV8.aiDocs missing: ai-docs.js did not load; AI answers will carry no doc links.');
+  function _aiDocCatalogPrompt(role) { return (window.RRV8 && RRV8.aiDocs) ? RRV8.aiDocs.catalogPrompt('token', role, 'it') : ''; }
+  function _aiExtractDocs(raw) { return (window.RRV8 && RRV8.aiDocs) ? RRV8.aiDocs.extractDocs(raw) : { text: String(raw || ''), slugs: [] }; }
+  function _aiRenderDocStrip(hostEl, slugs, stripId) { if (window.RRV8 && RRV8.aiDocs) RRV8.aiDocs.renderStrip(hostEl, slugs, stripId); }
+  var AI_EPS = 0.005;
+  function sumOf(rows, k) { return (rows || []).reduce(function (s, r) { return s + num(r[k]); }, 0); }
+  function itCoLabel(co, tier) { return tier === 'full' ? 'Company ' + co : 'the company'; }
+  function itAcctFacts(x, tier) {
+    var cur = x.currency, rows = x.rows || [], L = [];
+    var amt = function (k) { return curMoney(sumOf(rows, k), cur); };
+    L.push(itCoLabel(x.company, tier) + (cur ? ' (' + cur + ')' : '') + ', period ending ' + fmtDate(x.period) + ': out of balance ' + amt('OOB')
+      + '; GL balance ' + amt('EndGL') + '; in transit ' + amt('TransitAmount') + '.');
+    L.push('Components of the out of balance (the view\'s stored signs: out of balance = beginning variance - end of day + exclusions + transaction variance + journal entries): '
+      + 'beginning variance ' + amt('BegVar') + '; end of day ' + amt('EndofDay') + '; exclusions ' + amt('Exclusions')
+      + '; transaction variance ' + amt('Variance') + '; journal entries ' + amt('JEs') + '.');
+    if (Math.abs(sumOf(rows, 'UnpostBatch')) >= AI_EPS) L.push('Unposted GL batches ' + amt('UnpostBatch') + ': entered and not yet posted to the GL.');
+    var glNo = rows.filter(function (r) { return isNo(r.GLOK); }).length, varNo = rows.filter(function (r) { return isNo(r.VarOK); }).length;
+    L.push((glNo || varNo)
+      ? 'Roll-forward checks: ' + glNo + ' account(s) whose GL did not roll forward and ' + varNo + ' whose out of balance did not roll forward. That is an analyst re-roll, not a journal entry.'
+      : 'Roll-forward checks: every account rolled forward.');
+    if (tier === 'grounded') return L;
+    var pts = (x.history || []).slice(-6);
+    if (pts.length) {
+      var outN = pts.filter(function (p) { return Math.abs(num(p.outOfBalance)) >= AI_EPS; }).length;
+      L.push('Out of balance in ' + outN + ' of the last ' + pts.length + ' periods. By period, oldest first: '
+        + pts.map(function (p) { return fmtDate(p.period) + ' ' + curMoney(p.outOfBalance, cur); }).join('; ') + '.');
+    }
+    var acc = rows.slice().sort(function (a, b) { return Math.abs(num(b.OOB)) - Math.abs(num(a.OOB)); }).slice(0, 12);
+    if (acc.length) {
+      L.push('Accounts, largest out of balance first:');
+      acc.forEach(function (r, i) {
+        var parts = [['beginning variance', 'BegVar'], ['end of day', 'EndofDay'], ['exclusions', 'Exclusions'], ['transaction variance', 'Variance'], ['journal entries', 'JEs'], ['unposted', 'UnpostBatch']]
+          .filter(function (p) { return Math.abs(num(r[p[1]])) >= AI_EPS; }).map(function (p) { return p[0] + ' ' + curMoney(r[p[1]], cur); });
+        L.push('- ' + (tier === 'full' ? 'Account ' + trim(r.LongAccount) : 'Account ' + (i + 1)) + ': out of balance ' + curMoney(r.OOB, cur)
+          + (parts.length ? ' (' + parts.join('; ') + ')' : '') + '; GL roll ' + (trim(r.GLOK) || '?') + '; variance roll ' + (trim(r.VarOK) || '?') + '.');
+      });
+    }
+    return L;
+  }
+  // The analyst's counts. Shared by the deterministic chips and the AI facts, so the two cannot disagree.
+  function itAnalystCounts(x) {
+    var pts = x.history || [], pt = pts.filter(function (p) { return isoDay(p.period) === isoDay(x.period); })[0] || {};
+    var reps = x.reports || [];
+    var o = x.orders, t = x.txv;
+    var withVar = t ? (t.data || []).filter(function (r) { return Math.abs(num(r.Variance)) >= AI_EPS; }) : null;
+    var actOnExcl = o ? o.filter(function (r) { return r.Excluded && (Math.abs(num(r.ExclVarAmt)) >= AI_EPS || Math.abs(num(r.ExclVarQty)) >= 0.00005); }) : null;
+    return {
+      glBreaks: num(pt.glRollBreaks), varBreaks: num(pt.varianceRollBreaks),
+      findings: reps.filter(function (r) { return r.finding && r.count > 0; }).reduce(function (s, r) { return s + r.count; }, 0),
+      reportsDown: reps.filter(function (r) { return r.count == null; }).length,
+      txvDocs: withVar ? withVar.length : null, txvAll: t ? (t.data || []).length : null, txvTotal: t ? num((t.aggregates || {}).Variance) : null, txvRows: withVar,
+      noship: o ? o.filter(QUICK.noship.test).length : null, closed: o ? o.filter(QUICK.closed.test).length : null,
+      zeroqty: o ? o.filter(QUICK.zeroqty.test).length : null, actOnExcl: actOnExcl ? actOnExcl.length : null,
+      actOnExclAmt: actOnExcl ? sumOf(actOnExcl, 'ExclVarAmt') : null
+    };
+  }
+  function itAnalystFacts(x, tier) {
+    var cur = x.currency, c = itAnalystCounts(x), L = [];
+    L.push(itCoLabel(x.company, tier) + (cur ? ' (' + cur + ')' : '') + ', period ending ' + fmtDate(x.period) + '. Orders are current state, not a period.');
+    L.push('Data Health: ' + c.glBreaks + ' GL roll-forward break(s) and ' + c.varBreaks + ' out-of-balance roll-forward break(s) this period.');
+    (x.reports || []).forEach(function (r) { L.push('- Report "' + r.title + '": ' + (r.count == null ? 'could not be read' : r.count + ' row(s)') + (r.finding ? ' (a row here is something to fix)' : ' (a listing; rows are normal)') + '.'); });
+    L.push(c.txvDocs == null ? 'Transaction variance: could not be loaded.'
+      : 'Transaction variance: ' + c.txvDocs + ' of ' + c.txvAll + ' transfer documents carry a variance, net ' + curMoney(c.txvTotal, cur) + '.');
+    L.push(c.noship == null ? 'Orders: could not be loaded.'
+      : 'Orders: ' + c.noship + ' receipt(s) without a shipment; ' + c.closed + ' in transit on a closed PO; ' + c.zeroqty + ' with zero quantity but an amount in transit; '
+        + c.actOnExcl + ' excluded order(s) with activity since they were excluded (net ' + curMoney(c.actOnExclAmt, cur) + ').');
+    if (tier === 'grounded') return L;
+    if (c.txvRows && c.txvRows.length) {
+      L.push('Documents with the largest variance:');
+      c.txvRows.slice().sort(function (a, b) { return Math.abs(num(b.Variance)) - Math.abs(num(a.Variance)); }).slice(0, 5).forEach(function (r, i) {
+        L.push('- ' + (tier === 'full' ? trim(r.OT) + ' ' + trim(r.OrderNumber) + ', ' + trim(r.DT) + ' ' + trim(r.DocNumber) : 'Document ' + (i + 1))
+          + ': in transit ' + curMoney(r.TransitAmount, cur) + ', ledger ' + curMoney(r.LedgerAmount, cur) + ', variance ' + curMoney(r.Variance, cur) + (r.Worked ? ' (marked worked)' : '') + '.');
+      });
+    }
+    if (x.orders) {
+      var stuck = x.orders.filter(function (r) { return QUICK.noship.test(r) || QUICK.closed.test(r) || QUICK.zeroqty.test(r); })
+        .sort(function (a, b) { return Math.abs(num(b.TranAmt)) - Math.abs(num(a.TranAmt)); }).slice(0, 5);
+      if (stuck.length) {
+        L.push('Orders that will not clear on their own, largest first:');
+        stuck.forEach(function (r, i) {
+          var why = QUICK.noship.test(r) ? 'receipt without a shipment' : QUICK.closed.test(r) ? 'in transit on a closed PO' : 'zero quantity, amount in transit';
+          L.push('- ' + (tier === 'full' ? trim(r.OrderType) + ' ' + trim(r.OrderNumber) + ' item ' + trim(r.ItemNumber) : 'Order ' + (i + 1)) + ': ' + why + ', in transit ' + curMoney(r.TranAmt, cur) + '.');
+        });
+      }
+    }
+    return L;
+  }
+  // The day brief's chips, one per analyst tab, from itAnalystCounts. No AI: these are counts.
+  function itBriefChips(c, cur) {
+    var hTxt = [];
+    if (c.glBreaks + c.varBreaks) hTxt.push((c.glBreaks + c.varBreaks) + ' roll-forward break' + (c.glBreaks + c.varBreaks === 1 ? '' : 's'));
+    if (c.findings) hTxt.push(c.findings + ' set-up finding' + (c.findings === 1 ? '' : 's'));
+    var oN = c.noship == null ? null : c.noship + c.closed + c.zeroqty + c.actOnExcl;
+    return [
+      { key: 'health', label: 'Data Health', state: hTxt.length ? 'attn' : (c.reportsDown ? 'wait' : 'clean'),
+        text: hTxt.length ? hTxt.join(', ') : (c.reportsDown ? 'Couldn’t check every report just now' : 'Rolls forward cleanly; set-up checks clear') },
+      { key: 'txv', label: 'Transaction Variance', state: c.txvDocs == null ? 'wait' : (c.txvDocs ? 'attn' : 'clean'),
+        text: c.txvDocs == null ? 'Couldn’t check just now' : (c.txvDocs ? c.txvDocs + ' document' + (c.txvDocs === 1 ? '' : 's') + ' with a variance, net ' + curMoney(c.txvTotal, cur) : 'No transaction variance this period') },
+      { key: 'orders', label: 'Orders', state: oN == null ? 'wait' : (oN ? 'attn' : 'clean'),
+        text: oN == null ? 'Couldn’t check just now' : (oN ? oN + ' order' + (oN === 1 ? '' : 's') + ' won’t clear on their own' : 'Nothing stuck in transit') }
+    ];
+  }
+  function itBriefLead(chips) {
+    var attn = chips.filter(function (c) { return c.state === 'attn'; });
+    if (!attn.length) return 'Nothing needs you today. In Transit rolls forward and nothing is stuck.';
+    return (NUMWORD[attn.length] || attn.length) + ' thing' + (attn.length === 1 ? ' needs' : 's need') + ' you today. Start with ' + attn[0].label + '.';
+  }
+
+  // ---- reads, cached per company and period (invalidate() clears them) ----
+  var _aiCache = {};
+  function aiCached(key, fn) {
+    if (!_aiCache[key]) _aiCache[key] = fn().then(null, function (e) { delete _aiCache[key]; throw e; });
+    return _aiCache[key];
+  }
+  var soft = function (p) { return p.then(null, function () { return null; }); };   // a source that fails says so in the facts
+  function itPeriodRows() {
+    return aiCached('rows|' + S.company + '|' + S.period, function () {
+      return rrFetch('in-transit/reconciliation/rows', { method: 'POST', body: filterBody() }).then(function (d) {
+        if (!d || !Array.isArray(d.rows)) throw new Error('the data service returned rows this page could not read'); return d.rows; });
+    });
+  }
+  function itTxvData() {
+    return aiCached('txv|' + S.company + '|' + S.period, function () {
+      return rrFetch('in-transit/transactions', { method: 'POST', body: filterBody() }).then(function (d) {
+        if (!d || !Array.isArray(d.data)) throw new Error('unreadable'); return { data: d.data, aggregates: d.aggregates || {} }; });
+    });
+  }
+  function itOrdersData() {
+    return aiCached('orders|' + S.company, function () {
+      return rrFetch('in-transit/orders', { method: 'POST', body: filterBody({ noPeriod: true }) }).then(function (d) {
+        if (!d || !Array.isArray(d.data)) throw new Error('unreadable'); return d.data; });
+    });
+  }
+  function itReportCounts() {
+    return aiCached('reports|' + S.company + '|' + S.period, function () {
+      return Promise.all(REPORTS.map(function (r) {
+        var body = { report: r.id, reconciliationFilter: filterBody({ noPeriod: !r.period }).reconciliationFilter };
+        return rrFetch('in-transit/integrity', { method: 'POST', body: body })
+          .then(function (d) { return { title: r.title, finding: !!r.finding, count: d && Array.isArray(d.data) ? d.data.length : null }; },
+                function () { return { title: r.title, finding: !!r.finding, count: null }; });
+      }));
+    });
+  }
+  function itSources(role) {
+    var base = { company: S.company, currency: curOf(S.company), period: S.period, history: S.history[S.company] || [] };
+    var reads = role === 'analyst'
+      ? [soft(itPeriodRows()), itReportCounts(), soft(itTxvData()), soft(itOrdersData())]
+      : [itPeriodRows()];
+    return Promise.all(reads).then(function (r) {
+      base.rows = r[0] || []; base.reports = r[1] || []; base.txv = r[2] || null; base.orders = r[3] || null;
+      // The analyst view never loads Overview's every-company rows, which is where the page learns each company's
+      // currency, so take it from this period's own rows: an amount without its currency is not a figure.
+      if (!base.currency) {
+        var withCur = base.rows.filter(function (x) { return trim(x.Currency); })[0];
+        if (withCur) base.currency = S.currency[S.company] = trim(withCur.Currency);
+      }
+      return base;
+    });
+  }
+
+  // ---- the card: Home's _setAiAsstTier, for this page's two views ----
+  function setAsstTier() {
+    var vr = viewRole(), tier = aiLevel('ask'), off = (_gate && tier === 'off') ? _gate.offWhy('ask') : null;
+    $('acctTriage').setAttribute('data-ai-tier', _gate ? tier : 'off');
+    $('acctAiStatusText').textContent = { off: 'Off', grounded: 'Basic', scrubbed: 'Enhanced', full: 'Full Plan' }[_gate ? tier : 'off'] || 'Assistant';
+    // The three Off facts each name who can change them (ai-gate.js offWhy). The browser's own switch reads as Home's card does.
+    $('acctAiGreeting').textContent = !_gate ? GATE_MISSING
+      : off ? (off.reason === 'tier-off' ? 'Switched off. Turn AI on for reconciliation help.' : off.why)
+      : ({ grounded: 'Ask me about the figures on screen.', scrubbed: 'I read across your sources — ask about a pattern.',
+           full: vr === 'analyst' ? 'I’m here to help you prevent variances at the source. Ask me anything about it.'
+                                  : 'I’m here to help you reconcile and clear these variances. Ask me anything about it.' })[tier] || '';
+    $('aiAsstName').textContent = ROLE_ASST[vr] || ''; $('aiAnsLabel').textContent = ROLE_ASST[vr] || '';
+    var shut = !_gate || tier === 'off', input = $('acctAskInput');
+    input.disabled = shut; $('acctAskBtn').disabled = shut || _asking;
+    input.placeholder = shut ? ((window.RRAI && RRAI.plan && RRAI.plan() === 'off') ? 'Not part of this plan.' : 'AI is off.') : 'Ask a question…';
+  }
+  function paintAssistants() {
+    var vr = viewRole(), lane = !!ROLE_ASST[vr];
+    $('acctTriage').hidden = !lane;
+    $('acctTop').classList.toggle('it-solo', S.tab === 'orders');
+    if (!lane) { $('analystDayBriefTop').hidden = true; return; }
+    setAsstTier();
+    if (vr === 'analyst') renderBrief(); else $('analystDayBriefTop').hidden = true;
+  }
+
+  // ---- ask ----
+  var _asking = false, _convo = null, _lastAsk = null;
+  function showQuestion(q) { $('acctAnsBand').hidden = false; var e = $('acctAnsQ'); e.textContent = q; e.hidden = false; }
+  function clearAnswer() {
+    $('acctAnsBand').hidden = true; $('acctAskAnswer').textContent = ''; var e = $('acctAnsQ'); e.textContent = ''; e.hidden = true;
+    _aiRenderDocStrip(null, [], 'itDocStrip');
+  }
+  function itPrompt(vr, tier, facts, q, prev) {
+    var G = window.RRV8 || {};
+    return (G.TRANSIT_GROUNDING ? G.TRANSIT_GROUNDING + '\n\n' : '')
+      + (vr === 'analyst'
+          ? 'You are RapidReconciler AI, helping an analyst find and prevent In Transit variances at the source. The analyst posts no journal entries; the accountant does.\n'
+          : 'You are RapidReconciler AI, helping an accountant reconcile the In Transit accounts (goods shipped and not yet received) to the GL and sign off the period.\n')
+      + 'One company at a time: companies can carry different currencies, so never add or compare amounts across companies.\n'
+      + 'Facts in scope, the ONLY facts you may use:\n' + facts.join('\n') + '\n\n'
+      + (G.dataAccessLine ? G.dataAccessLine(tier) + '\n' : '')
+      + _aiDocCatalogPrompt(vr)
+      + (prev ? 'EARLIER IN THIS CONVERSATION (same screen, same company and period). The new question is a FOLLOW-UP: resolve "it", "this", "that" to the same figures as the earlier answer.\nEarlier question: ' + prev.q + '\nEarlier answer: ' + prev.a + '\n\n' : '')
+      + 'Question: ' + q + '\n'
+      + 'FORMAT, pick by the question:\n'
+      + '• If it asks WHAT the out of balance is or what makes it up: (1) one lead line naming the net out of balance as given; (2) ONE line per NON-ZERO component, each starting with "• " as "• <component> — <amount, as given>"; (3) a last line starting with "I\'d focus on " naming the single largest item to act on and the one next step. Never add components together or state a figure larger than the net.\n'
+      + '• For a how-to or "what does this mean" question, answer in 2-4 plain sentences, no bullets.\n'
+      + '• Otherwise lead with what to do, in a few short "• " lines.\n'
+      + 'Give every amount exactly as the facts state it, to the cent and with its currency symbol; never round it. If a number is not in the facts, say so. This surface uses "• " for its bullets, which OVERRIDES the "- " default below.\n'
+      + (G.AI_REGISTER || '');
+  }
+  function itAsk(presetQ) {
+    if (_asking) return;
+    var input = $('acctAskInput'), ans = $('acctAskAnswer');
+    var q = trim(presetQ != null ? presetQ : input.value); if (!q) return;
+    var vr = viewRole(); if (!ROLE_ASST[vr]) return;
+    var tier = aiLevel('ask');
+    showQuestion(q);
+    if (!_gate) { ans.textContent = GATE_MISSING; return; }
+    if (tier === 'off') { ans.textContent = _gate.offWhy('ask').why; return; }   // never a silent refusal (VLC-234)
+    _asking = true; _lastAsk = { q: q, role: vr };
+    $('acctAskBtn').disabled = true; ans.textContent = 'Thinking…';
+    _aiRenderDocStrip(ans.parentNode, [], 'itDocStrip');
+    var sig = dbName() + '|' + S.company + '|' + S.period + '|' + vr;
+    var prev = (tier === 'full' && _convo && _convo.sig === sig && _convo.q !== q) ? _convo : null;   // masked tiers carry no earlier turn
+    itSources(vr).then(function (src) {
+      var facts = vr === 'analyst' ? itAnalystFacts(src, tier) : itAcctFacts(src, tier);
+      return _gate.explain(itPrompt(vr, tier, facts, q, prev), { feature: 'ask', ctx: RRV8.aiCtx ? RRV8.aiCtx('it-ask', S.company, S.period) : '' });
+    }).then(function (r) {
+      if (!r.ok) { ans.textContent = r.why; return; }
+      var doc = _aiExtractDocs(r.text);
+      ans.textContent = doc.text || 'No answer came back. Try rephrasing.';
+      if (doc.text) { if (window.RRAI && RRAI.showSent) RRAI.showSent(ans, r.prompt); _convo = { sig: sig, q: q, a: doc.text }; }
+      _aiRenderDocStrip(ans.parentNode, doc.text ? doc.slugs : [], 'itDocStrip');
+    }, function (e) {
+      ans.textContent = 'The figures for this question could not be read: ' + errText(e);
+    }).then(function () { _asking = false; $('acctAskBtn').disabled = aiLevel('ask') === 'off'; });
+  }
+
+  // ---- the analyst day brief ----
+  var _briefSig = '', _briefGen = 0;
+  function setEyebrow(aiOn) {
+    $('alhBriefEyebrow').innerHTML = aiOn ? '<span class="alh-brief-spark" aria-hidden="true">✦</span> RapidReconciler AI · Here’s your day' : 'RapidReconciler · Here’s your day';
+  }
+  function briefNote(text) { var b = $('analystDayBriefBody'); var s = document.createElement('span'); s.className = 'hai-unavailable'; s.textContent = ' ' + text; b.appendChild(s); }
+  function renderChips(chips) {
+    var host = $('analystDayBriefChips');
+    host.innerHTML = chips.map(function (c) {
+      return '<button type="button" class="alh-chip alh-chip-' + c.state + '" data-chip="' + esc(c.key) + '" data-alh-chip="' + esc(c.key) + '">'
+        + '<span class="alh-chip-top"><span class="alh-chip-label">' + esc(c.label) + '</span><span class="alh-chip-go" aria-hidden="true">→</span></span>'
+        + '<span class="alh-chip-text">' + esc(c.text) + '</span></button>';
+    }).join('');
+    host.hidden = false;
+  }
+  function renderBrief() {
+    var host = $('analystDayBriefTop'), body = $('analystDayBriefBody');
+    if (viewRole() !== 'analyst' || !S.company || !S.history[S.company]) { host.hidden = true; return; }
+    host.hidden = false;
+    var tier = _gate ? aiLevel('summaries') : 'off', sig = dbName() + '|' + S.company + '|' + S.period + '|' + tier;
+    if (sig === _briefSig) return;   // a tab switch does not re-ask; a new company, period or level does
+    _briefSig = sig; var gen = ++_briefGen;
+    body.textContent = 'Reading your day…'; setEyebrow(false);
+    itSources('analyst').then(function (src) {
+      if (gen !== _briefGen) return;
+      var chips = itBriefChips(itAnalystCounts(src), src.currency);
+      renderChips(chips);
+      body.textContent = itBriefLead(chips);   // the lead is always there; the AI only rewrites it
+      if (!_gate) { briefNote(GATE_MISSING); return; }
+      if (tier === 'off') { var off = _gate.offWhy('summaries'); briefNote(off.reason === 'tier-off' ? _gate.AI_OFF_LEAD_NOTE : off.why); return; }
+      var G = window.RRV8 || {};
+      var prompt = (G.TRANSIT_GROUNDING ? G.TRANSIT_GROUNDING + '\n\n' : '')
+        + 'You write the one "start here" line on an In Transit analyst\'s day brief. Three tabs sit below it: Data Health, Transaction Variance, Orders.\n'
+        + 'Facts in scope, the ONLY facts you may use:\n' + itAnalystFacts(src, tier).join('\n') + '\n\n'
+        + (G.dataAccessLine ? G.dataAccessLine(tier) + '\n' : '')
+        + 'Reply with ONE or TWO plain sentences and nothing else: what needs the analyst first and why, naming the tab to open. A roll-forward break comes before everything else. If nothing needs attention, say so plainly. No bullets, no greeting.\n'
+        + (G.AI_REGISTER || '');
+      return _gate.explain(prompt, { feature: 'summaries', ctx: G.aiCtx ? G.aiCtx('it-daybrief', S.company, S.period) : '' }).then(function (r) {
+        if (gen !== _briefGen) return;
+        if (r.ok) { body.textContent = r.text; setEyebrow(true); if (window.RRAI && RRAI.showSent) RRAI.showSent(body, r.prompt); }
+        else briefNote(r.why);
+      });
+    }).then(null, function (e) { if (gen === _briefGen) body.textContent = 'Couldn’t read your In Transit checks just now: ' + errText(e); });
+  }
+
+  function wireAssistants() {
+    var form = $('acctAskForm'), input = $('acctAskInput');
+    form.addEventListener('submit', function (e) { e.preventDefault(); itAsk(); });
+    input.addEventListener('input', function () { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 150) + 'px'; });
+    input.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); itAsk(); } });
+    $('acctAnsDismiss').addEventListener('click', clearAnswer);
+    $('analystDayBriefChips').addEventListener('click', function (e) { var b = e.target.closest('[data-alh-chip]'); if (b) setSubView(b.getAttribute('data-alh-chip')); });
+    // The AI switch, the plan and the administrator's levels all arrive as this event. Re-run what is on screen at
+    // the new level, and an open question only in the view it was asked in (Home re-asks the accountant prompt on the
+    // analyst view; this does not).
+    window.addEventListener('rrv8:aitierchange', function () {
+      _briefSig = ''; paintAssistants();
+      if (_lastAsk && _lastAsk.role === viewRole() && !$('acctAnsBand').hidden && !_asking) itAsk(_lastAsk.q);
+    });
+  }
 
   boot();
 })();

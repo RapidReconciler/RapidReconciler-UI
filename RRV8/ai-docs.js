@@ -54,7 +54,12 @@
     'licensing':          { title: 'Licensing',           href: '../RRUniversity/rapidreconciler-licensing.html',        roles: ['admin'] },
     'login-access':       { title: 'Login & Access',       href: '../RRUniversity/login-and-access.html',                 roles: ['admin'] },
     // UI-231: the administrator Walkthrough's overview steps had no guide on this list.
-    'admin-start':        { title: 'Start Here: RR Administrators', href: '../RRUniversity/administrator-start-here.html', roles: ['admin'] }
+    'admin-start':        { title: 'Start Here: RR Administrators', href: '../RRUniversity/administrator-start-here.html', roles: ['admin'] },
+    // UI-240: In Transit's guides (the V7 Transfer Orders module). `modules` keeps them out of Inventory's
+    // prompts: an entry without `modules` belongs to Inventory, the only module V8 had before In Transit.
+    'transit-reconcile':  { title: 'In Transit Reconciliation Walkthrough', href: '../RRUniversity/transfer-order-reconcile.html',       roles: ['accountant', 'analyst'], modules: ['it'] },
+    'transit-reference':  { title: 'Transfer Order Reference Guide',        href: '../RRUniversity/transfer-order-reference.html',       roles: ['accountant', 'analyst'], modules: ['it'] },
+    'transit-exclusions': { title: 'Transfer Order Exclusion Guide',        href: '../RRUniversity/transfer-order-exclusion-guide.html', roles: ['accountant', 'analyst'], modules: ['it'] }
   };
 
   // Prompt fragment: lists the allowlist (scoped to `role`) + the emit contract.
@@ -62,10 +67,14 @@
   // "@@DOCS slug, slug@@" line; mode 'json' (for the JSON-returning briefings and
   // cards) asks for an optional "docs" array in the object. role scopes WHICH docs
   // are offered (accountant | analyst | admin); default 'accountant'.
-  function catalogPrompt(mode, role) {
+  // module scopes them to the page's module (UI-240): 'inv' (default) or 'it' (In Transit). An entry with no
+  // `modules` is Inventory's, so every caller that predates In Transit offers exactly the docs it did before.
+  function catalogPrompt(mode, role, module) {
     role = role || 'accountant';
+    module = module || 'inv';
     var lines = Object.keys(DOCS).filter(function (k) {
-      var r = DOCS[k].roles; return !r || r.indexOf(role) >= 0;
+      var r = DOCS[k].roles, m = DOCS[k].modules || ['inv'];
+      return (!r || r.indexOf(role) >= 0) && m.indexOf(module) >= 0;
     }).map(function (k) { return '  ' + k + ' = ' + DOCS[k].title; });
     var emit = mode === 'json'
       ? 'If — and ONLY if — one or two of these docs directly match what the briefing is about, add an OPTIONAL "docs" array to the JSON object with those slugs (from the list above, max TWO, most relevant first). Omit "docs" entirely when nothing fits. Never invent a slug, and do NOT mention doc titles or links in the verdict or points text.\n'

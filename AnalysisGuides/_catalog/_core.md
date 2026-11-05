@@ -36,7 +36,7 @@ The correction of 2026-07-20 (memory `reference_variance_is_always_a_difference`
 Lives here so the analyst brain, the accountant brain, and every per-topic
 catalog reason from ONE statement of it instead of three drifting paraphrases.
 
-Applies: role:analyst, role:accountant
+Applies: role:analyst, role:accountant, topic:transit
 
 ```grounding
 - VARIANCE IS ALWAYS A DIFFERENCE: whenever two figures that should equal each other do not, that gap IS a variance — full stop. "Expected" / "explained" describes the CAUSE of a variance you can account for; it NEVER downgrades the gap to "not a variance" (two scales that disagree still disagree — knowing why does not make them equal). Disposition every variance as EXPLAINED / no-action or UNEXPLAINED / investigate; never as "not a variance," "not a real variance," or "not a variance to chase."
@@ -47,7 +47,7 @@ Applies: role:analyst, role:accountant
 Store/display the natural sign so the reconciliation ties to the KPI the analyst
 and accountant read on screen. Memory `reference_transactions_sign_convention`.
 
-Applies: topic:analyst, role:accountant
+Applies: topic:analyst, role:accountant, topic:transit
 
 ```grounding
 - SIGN CONVENTION: reason in the NATURAL sign shown on screen — the stored and displayed figures already carry it, and the reconciliation ties to the on-screen KPI in that sign. Do not silently flip signs to "make it balance"; a sign flip belongs only in an Excel/PDF out-of-balance column, never in the reasoning.
@@ -60,7 +60,7 @@ The authoritative model-DMAAI (4152) policy is prepended by
 `reference_dmaai_grounding_server_injected`. Stated here so no role catalog adds a
 client-side mirror that would become a second copy to drift.
 
-Applies: topic:analyst, role:accountant
+Applies: topic:analyst, role:accountant, topic:transit
 
 ```grounding
 - DMAAI ROUTING is already grounded server-side on every AI call (the model-DMAAI 4152 rules). Reason from account derivation and routing as given; do not restate or re-derive the DMAAI model in this catalog — that copy lives once, on the server.
@@ -70,7 +70,7 @@ Applies: topic:analyst, role:accountant
 
 Memories `project_rr_tool_not_system_of_record`, `feedback_rr_utility_not_enforcement`.
 
-Applies: topic:analyst, role:accountant
+Applies: topic:analyst, role:accountant, topic:transit
 
 ```grounding
 - RR IS A UTILITY, NOT THE BOOK OF RECORD: JDE is the system of record. RR surfaces the gap, explains it, and drives the source fix or the correcting entry — it does not post to JDE, hold the ledger, gate a close, or enforce attestation. Fixes land at the source (JDE / the operation) or as a journal entry the accountant posts in JDE.

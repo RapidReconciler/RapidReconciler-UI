@@ -144,6 +144,7 @@ function frame(page) {
         // Stubs for what applyViewRole() hands on to: recorded, not run.
         'var S = { companies: ["90001"] };',
         'function renderCompaniesPill() { calls.push("cos"); } function showTab(t) { calls.push("tab:" + t); } function renderRoleHero() { calls.push("hero"); }',
+        'var _asking = false; function clearAnswer() { calls.push("clear"); }',
         'this.api = { viewRole, setViewRole, syncRoleMenu, renderSubNav, applyViewRole, curSubView, entitledViews };'
     ].join('\n');
     const box = { document, localStorage, calls, JSON, String, Array };
@@ -239,6 +240,7 @@ function run(page, config, log) {
     f = frame(page); f.db = BOTH;
     f.api.setViewRole('accountant');
     c('G2 switching writes rrv8.viewRole, so Home opens on the same view', f.store['rrv8.viewRole'], 'accountant');
+    c('G2 and clears the assistant\'s answer, which belonged to the other view', f.calls.indexOf('clear') >= 0, true);
     f.db = { m: { it: true }, t: { it: true }, perms: { dm: true } }; f.store['rrv8.viewRole'] = 'analyst';
     f.api.setViewRole('accountant');
     c('G2 a view the user does not hold cannot be switched to', f.store['rrv8.viewRole'], 'analyst');
@@ -305,6 +307,7 @@ arm('the switcher shown to a one-lane user', PAGE, CONFIG, "$('haRoles').hidden 
 arm('the analyst tabs drawn for every view', PAGE, CONFIG, "var nav = $('subNav'), list = TABS[viewRole()];", "var nav = $('subNav'), list = TABS.analyst;");
 arm('the tab memory shared with Home\'s', PAGE, CONFIG, "var SUBVIEW_KEY = 'rrv8.itSubview';", "var SUBVIEW_KEY = 'rrv8.subview';");
 arm('applyViewRole stops setting the body attribute', PAGE, CONFIG, "document.body.setAttribute('data-view-role', vr);", '');
+arm('an answer survives a switch of view', PAGE, CONFIG, '    if (!_asking) clearAnswer();', '');
 arm('a tab loads with no lane', PAGE, CONFIG, "if (vr !== 'none' && S.companies.length) showTab(curSubView());", 'if (S.companies.length) showTab(curSubView());');
 
 console.log(failures ? '\n' + failures + ' FAILURE(S)' : '\nPASS');

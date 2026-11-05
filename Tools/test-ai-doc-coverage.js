@@ -133,7 +133,11 @@ console.log('');
 console.log('=== every page that calls the AI is wired, or exempt with a reason ===');
 
 // The probe. `ai/explain` is the only route that sends a prompt.
-const AI_CALL = /ai\/explain/;
+//
+// UI-240 slice 2: a page can now send one WITHOUT the path in its source, by loading the shared gate
+// (RRV8/ai-gate.js) and calling its explain(). Home is the first: after the move, every `ai/explain` left in
+// home.html is a comment, so the path alone matched it only by accident. Loading the gate is the call.
+const AI_CALL = /ai\/explain|<script[^>]+src=["']ai-gate\.js["']/;
 
 // A page counts as WIRED when it loads the shared module AND does all three of the
 // things that make a link safe: asks for slugs, validates them, renders them. Any

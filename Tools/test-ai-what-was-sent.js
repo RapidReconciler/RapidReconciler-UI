@@ -7,7 +7,7 @@
  * string handed to fetch() for POST api/v1/ai/explain, recorded as it left, never a rebuild.
  *
  * Runs the SHIPPED code: RRAI and the fetch observer sliced out of RRV8/config.js, and aiExplain (with aiHealth)
- * sliced out of RRV8/home.html, over a small fake DOM (jsdom is not a dependency of this repo).
+ * from RRV8/ai-gate.js reached through Home's delegates, over a small fake DOM (jsdom is not a dependency of this repo).
  *
  *   S1  a POST to api/v1/ai/explain is recorded from its exact body string, and the call goes through unchanged
  *   S2  a GET, another AI path (ai/health) and a non-string body are not recorded
@@ -52,10 +52,16 @@ once(config, O_START, 'observer start');
 const O_FROM = config.indexOf(O_START);
 const OBS_SRC = config.slice(O_FROM, config.indexOf('\n})();', O_FROM) + '\n})();'.length);
 
-const H_START = '  var _aiHealthCache = {};';
+// UI-240 slice 2: aiExplain and aiHealth live in RRV8/ai-gate.js now, and Home keeps each name as a delegate
+// onto the gate it builds. HOME_SRC is the shipped gate file + Home's delegate block, so H1 runs what Home
+// runs and its mutation arm lands in ai-gate.js. GLUE: in a browser the bare global RRV8 is window.RRV8.
+const GATE = fs.readFileSync(path.join(ROOT, 'RRV8', 'ai-gate.js'), 'utf8').replace(/\r\n/g, '\n');
+const GLUE = "\n;if (typeof RRV8 === 'undefined') { globalThis.RRV8 = window.RRV8; } else if (RRV8 !== window.RRV8) { RRV8.aiGate = window.RRV8.aiGate; }\n";
+const H_START = '  var _aiGate = RRV8.aiGate({';
 const H_END = '\n  function loadAiPlan() {';
-once(html, H_START, 'aiHealth start'); once(html, H_END, 'aiHealth end');
-const HOME_SRC = html.slice(html.indexOf(H_START), html.indexOf(H_END, html.indexOf(H_START)));
+once(html, H_START, 'aiGate start'); once(html, H_END, 'aiHealth end');
+once(GATE, 'window.RRV8.aiGate = function (env) {', 'ai-gate.js aiGate');
+const HOME_SRC = GATE + GLUE + html.slice(html.indexOf(H_START), html.indexOf(H_END, html.indexOf(H_START)));
 
 // ---- a fake DOM, just enough for RRAI.sentDetails / showSent ------------------
 function makeDoc() {

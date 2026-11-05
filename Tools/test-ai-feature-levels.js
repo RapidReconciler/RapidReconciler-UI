@@ -53,10 +53,16 @@ const R_END = "    label: function (t) { return LABELS[norm(t) || 'full']; }\n  
 once(config, R_START, 'RRAI start'); once(config, R_END, 'RRAI end');
 const RRAI_SRC = config.slice(config.indexOf(R_START), config.indexOf(R_END) + R_END.length);
 
-const H_START = '  var _aiHealthCache = {};';
+// UI-240 slice 2: aiExplain / aiHealth / aiOffWhy live in RRV8/ai-gate.js now, and Home keeps each name as a
+// delegate onto the gate it builds. HOME_SRC is the shipped gate file + Home's delegate block, so this runs
+// what Home runs and the H2 arm mutates ai-gate.js. GLUE: in a browser the bare global RRV8 is window.RRV8.
+const GATE = fs.readFileSync(path.join(ROOT, 'RRV8', 'ai-gate.js'), 'utf8').replace(/\r\n/g, '\n');
+const GLUE = "\n;if (typeof RRV8 === 'undefined') { globalThis.RRV8 = window.RRV8; } else if (RRV8 !== window.RRV8) { RRV8.aiGate = window.RRV8.aiGate; }\n";
+const H_START = '  var _aiGate = RRV8.aiGate({';
 const H_END = '\n  function loadAiPlan() {';
-once(html, H_START, 'aiHealth start'); once(html, H_END, 'aiHealth end');
-const HOME_SRC = html.slice(html.indexOf(H_START), html.indexOf(H_END, html.indexOf(H_START)));
+once(html, H_START, 'aiGate start'); once(html, H_END, 'aiHealth end');
+once(GATE, 'window.RRV8.aiGate = function (env) {', 'ai-gate.js aiGate');
+const HOME_SRC = GATE + GLUE + html.slice(html.indexOf(H_START), html.indexOf(H_END, html.indexOf(H_START)));
 
 function store(init) {
   const m = Object.assign({}, init || {});
@@ -186,11 +192,15 @@ async function homeSuite(src, label) {
   const real = failures;
 
   console.log('\nmutation controls');
+  // Both halves of the H2 arm must land: a `.replace()` that misses leaves the source unchanged, and the
+  // "changed nothing" check below cannot see a two-part arm where only one part applied.
+  once(HOME_SRC, "      if (window.RRAI && RRAI.featureOff && RRAI.featureOff(feature)) {\n        return { reason: 'feature-off', why: aiFeatureOffSentence(feature) };\n      }", 'H2 feature-off branch');
+  once(HOME_SRC, "      if (lvl === 'off') {\n        var off = aiOffWhy(feature);", 'H2 lvl-off branch');
   const controls = [
     ['F1', 'get() ignores the feature', 'rrai', RRAI_SRC.replace('    if (feature) t = cap(t, featureLevel(feature));', '')],
     ['H2', 'aiExplain ignores the administrator\'s Off', 'home', HOME_SRC.replace(
-      "    if (window.RRAI && RRAI.featureOff && RRAI.featureOff(feature)) {\n      return { reason: 'feature-off', why: aiFeatureOffSentence(feature) };\n    }", '')
-      .replace("    if (lvl === 'off') {\n      var off = aiOffWhy(feature);", "    if (false) {\n      var off = aiOffWhy(feature);")]
+      "      if (window.RRAI && RRAI.featureOff && RRAI.featureOff(feature)) {\n        return { reason: 'feature-off', why: aiFeatureOffSentence(feature) };\n      }", '')
+      .replace("      if (lvl === 'off') {\n        var off = aiOffWhy(feature);", "      if (false) {\n        var off = aiOffWhy(feature);")]
   ];
   let controlsOk = true;
   for (const [want, what, which, src] of controls) {

@@ -8,8 +8,8 @@
  * went out unmasked, because every page masks from RRAI.get() before VALC sees the
  * prompt. And no call declared a level, so VALC's cap never ran.
  *
- * Runs the SHIPPED code: RRAI sliced out of RRV8/config.js, aiExplain + aiHealth sliced
- * out of RRV8/home.html, RRV8.aiRefusal sliced out of config.js.
+ * Runs the SHIPPED code: RRAI sliced out of RRV8/config.js, aiExplain + aiHealth from
+ * RRV8/ai-gate.js reached through Home's delegates, RRV8.aiRefusal sliced out of config.js.
  *
  *   C1  no plan known yet: get() is the browser's choice (VALC is the backstop)
  *   C2  plan below the choice: get() is the plan (Enhanced -> scrubbed, Off -> off)
@@ -54,10 +54,16 @@ const F_START = '  window.RRV8.aiRefusal = function (err) {';
 once(config, F_START, 'aiRefusal');
 const F_SRC = config.slice(config.indexOf(F_START), config.indexOf('\n  };', config.indexOf(F_START)) + 5);
 
-const H_START = '  var _aiHealthCache = {};';
+// UI-240 slice 2: aiExplain and aiHealth live in RRV8/ai-gate.js now, and Home keeps each name as a delegate
+// onto the gate it builds. HOME_SRC is the shipped gate file + Home's delegate block, so A1-A5 run what Home
+// runs. GLUE: in a browser the bare global RRV8 is window.RRV8.
+const GATE = fs.readFileSync(path.join(ROOT, 'RRV8', 'ai-gate.js'), 'utf8');
+const GLUE = "\n;if (typeof RRV8 === 'undefined') { globalThis.RRV8 = window.RRV8; } else if (RRV8 !== window.RRV8) { RRV8.aiGate = window.RRV8.aiGate; }\n";
+const H_START = '  var _aiGate = RRV8.aiGate({';
 const H_END = '\n  function loadAiPlan() {';
-once(html, H_START, 'aiHealth start'); once(html, H_END, 'aiHealth end');
-const HOME_SRC = html.slice(html.indexOf(H_START), html.indexOf(H_END, html.indexOf(H_START)));
+once(html, H_START, 'aiGate start'); once(html, H_END, 'aiHealth end');
+once(GATE, 'window.RRV8.aiGate = function (env) {', 'ai-gate.js aiGate');
+const HOME_SRC = GATE + GLUE + html.slice(html.indexOf(H_START), html.indexOf(H_END, html.indexOf(H_START)));
 
 function store(init) {
   const m = Object.assign({}, init || {});
@@ -167,8 +173,10 @@ const K_START = '  function _setAiAsstTier() {';
 const K_END = '\n  function renderAcctTriage(d) {';
 once(html, K_START, 'card start'); once(html, K_END, 'card end');
 const CARD_SRC = html.slice(html.indexOf(K_START), html.indexOf(K_END));
-const NOT_IN_PLAN = (html.match(/var AI_NOT_IN_PLAN = ('[^']*');/) || [])[1];
-if (!NOT_IN_PLAN) { console.log('HARNESS BROKEN: AI_NOT_IN_PLAN not found in home.html'); process.exit(1); }
+// The sentence is declared in RRV8/ai-gate.js (UI-240 slice 2); Home's AI_NOT_IN_PLAN is the gate's, by alias.
+const NOT_IN_PLAN = (GATE.match(/var AI_NOT_IN_PLAN = ('[^']*');/) || [])[1];
+if (!NOT_IN_PLAN) { console.log('HARNESS BROKEN: AI_NOT_IN_PLAN not found in RRV8/ai-gate.js'); process.exit(1); }
+once(html, '  var AI_NOT_IN_PLAN = _aiGate.AI_NOT_IN_PLAN;', 'Home AI_NOT_IN_PLAN alias');
 function card(tier, plan) {
   const els = {};
   const el = (id) => (els[id] = els[id] || { textContent: '', setAttribute() {}, id });
