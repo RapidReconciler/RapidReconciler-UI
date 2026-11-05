@@ -35,7 +35,7 @@ const vm = require('vm');
 
 const ROOT = path.join(__dirname, '..');
 const CONFIG = fs.readFileSync(path.join(ROOT, 'RRV8', 'config.js'), 'utf8').replace(/\r\n/g, '\n');
-const HOME = fs.readFileSync(path.join(ROOT, 'RRV8', 'home.html'), 'utf8').replace(/\r\n/g, '\n');
+const HOME = require('./page-source').readPage('RRV8/home.html');   // home-frame.css inlined where it is linked (UI-240)
 
 function slice(src, start) {
   const i = src.indexOf(start);
