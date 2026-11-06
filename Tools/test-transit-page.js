@@ -108,13 +108,20 @@ function build(page, config) {
         'function curMoney(n) { return String(n); }',
         sliceFn(page, 'itAnalystCounts'), sliceFn(page, 'itBriefChips'),
         sliceFn(page, 'exclusionKey'), sliceFn(page, 'orderKey'), sliceFn(page, 'ordersTotals'),
+        // Each tab's rows and footer (owner 2026-11-06). The money and escaping stand-ins keep the amounts readable.
+        'var S = { company: "90001" }; function curOf() { return ""; } function esc(s) { return String(s); }',
+        sliceFn(page, 'inTransitRow'), sliceFn(page, 'excludedRow'), sliceFn(page, 'ordersSub'), sliceFn(page, 'excludedSub'),
+        // After a recalculation (owner 2026-11-06): the history is refetched, not left stale. loadCompany is a stand-in
+        // that records the history it found when it was called.
+        'S.history = { "90001": ["old"], "90002": ["old"] }; var loadCalls = []; function loadCompany() { loadCalls.push(JSON.stringify(S.history)); return "reloaded"; }',
+        sliceFn(page, 'afterRecalc'), 'this.recalc = { run: afterRecalc, calls: loadCalls, S: S };',
         // The column list runs on stand-ins for the cell helpers: only its keys are under test.
         'var C = { co: { k: "CompanyNumber" }, acct: { k: "LongAccount" } };',
         'function t(k) { return { k: k }; } function q(k) { return { k: k }; } function m(k) { return { k: k }; } function dcol(k) { return { k: k }; }',
         sliceAssign(page, 'var ORDER_COLS = ', '['),
         sliceAssign(page, 'var TABS = ', '{'),
         'this.orderCols = ORDER_COLS; this.tabs = TABS;',
-        'this.api = { hasModule, canExclude, canAnalyst, canAccountant, _routesToTestAgent, QUICK, XQUICK, itAnalystCounts, itBriefChips, exclusionKey, orderKey, ordersTotals };'
+        'this.api = { inTransitRow, excludedRow, ordersSub, excludedSub, hasModule, canExclude, canAnalyst, canAccountant, _routesToTestAgent, QUICK, XQUICK, itAnalystCounts, itBriefChips, exclusionKey, orderKey, ordersTotals };'
     ].join('\n');
     const box = { window: {}, Set, Number, String, Math, JSON };
     box.window.RRDB = { active: function () { return box.db; } };
@@ -231,6 +238,27 @@ function run(page, config, log) {
     box.excludedPanel = /<section\b[^>]*\bid="tab-excluded"[\s\S]*?id="xoGrid"[\s\S]*?<\/section>/.test(page);
     c('H9 the Excluded Orders panel and its grid are on the page', box.excludedPanel, true);
 
+    // I: each tab's own rows and footer (owner 2026-11-06, screenshot: Excluded Orders footed "In transit $174,652.72
+    // · excluded $174,652.72" and counted "702 of 939 rows").
+    const EVERY = ORDERS.concat(XROWS);
+    const mine = EVERY.filter(api.inTransitRow), theirs = EVERY.filter(api.excludedRow);
+    c('I1 the two tabs split the read: every line on exactly one tab', [mine.length + theirs.length, mine.some((r) => r.Excluded), theirs.every((r) => r.Excluded)], [EVERY.length, false, true]);
+    const os = api.ordersSub(mine);
+    c('I2 Orders foots what is in transit, and says nothing about exclusions', [/^In transit <b>/.test(os), /xcluded/.test(os)], [true, false]);
+    const xs = api.excludedSub(theirs);
+    c('I3 Excluded Orders foots the excluded amount, never "In transit"', [xs.indexOf('Excluded <b>' + String(-50 + 2 - 70 + 10) + '</b>') === 0, /In transit/.test(xs)], [true, false]);
+    c('I4 and adds the activity since exclusion when there is some', /activity since excluded -5</.test(xs), true);
+    c('I5 no activity, no activity figure', /activity/.test(api.excludedSub(theirs.filter((r) => !r.ExclVarAmt))), false);
+
+    // K: a recalculation refreshes the history too (owner 2026-11-06: by company showed the new out of balance, by
+    // period the old one). afterRecalc must forget EVERY company's history before loadCompany refetches this one.
+    const rr = box.recalc.run();
+    c('K1 after a recalc the history is refetched, with no company\'s old history left', [rr, box.recalc.calls], ['reloaded', ['{}']]);
+    // The by-company table opens in company-number order (owner 2026-11-06), on the numeric-aware text sort.
+    const ov = /_ovCo = new Grid\([^\n]*sort: \{ k: '(\w+)', dir: '(\w+)' \}/.exec(page);
+    c('K2 Out of balance by company opens sorted by company number, ascending', ov ? [ov[1], ov[2]] : null, ['CompanyNumber', 'asc']);
+    c('K3 and the grid\'s text sort is numeric-aware', /localeCompare\(self\.text\(c, b\), undefined, \{ numeric: true/.test(page), true);
+
     // D: exclusion key
     const key = api.exclusionKey({ CompanyNumber: '90001 ', LongAccount: ' 9000.149090 ', OrderDate: '2025-07-14T00:00:00', OrderNumber: '26678', OrderType: 'ST', ShortItem: '440574', Lot: '', Excluded: false, TranAmt: 9 });
     c('D1 the seven field names, in the bound shape', Object.keys(key).sort(), ['companyNumber', 'longAccount', 'lot', 'orderDate', 'orderNumber', 'orderType', 'shortItem']);
@@ -341,6 +369,11 @@ arm('the load\'s note prefix misread', PAGE, CONFIG, "var AUTO_NOTE = 'Auto-excl
 arm('the brief counts excluded lines as stuck', PAGE, CONFIG, 'o = all ? all.filter(function (r) { return !r.Excluded; }) : null;', 'o = all;');
 arm('activity since exclusion reads the amount only', PAGE, CONFIG, ' || Math.abs(num(r.ExclVarQty)) >= 0.00005; }\n  var XQUICK', '; }\n  var XQUICK');
 arm('the Excluded Orders chip dropped', PAGE, CONFIG, "      { key: 'excluded', label: 'Excluded Orders'", "      false && { key: 'excluded', label: 'Excluded Orders'");
+arm('a recalc keeps the old history', PAGE, CONFIG, '    S.history = {};\n    return loadCompany();', '    return loadCompany();');
+arm('by company sorted by out of balance again', PAGE, CONFIG, "surface: 'ByCompany', sort: { k: 'CompanyNumber', dir: 'asc' },", "surface: 'ByCompany', sort: { k: 'OOB', dir: 'desc' },");
+arm('Excluded Orders foots the in-transit amount again', PAGE, CONFIG, "return 'Excluded <b>' + esc(curMoney(t.exclAmt, cur)) + '</b>' +", "return 'In transit <b>' + esc(curMoney(t.tranAmt, cur)) + '</b>' +");
+arm('Orders foots the excluded amount again', PAGE, CONFIG, "return 'In transit <b>' + esc(curMoney(t.tranAmt, cur)) + '</b>';", "return 'In transit <b>' + esc(curMoney(t.tranAmt, cur)) + '</b> &middot; excluded <b>' + esc(curMoney(t.exclAmt, cur)) + '</b>';");
+arm('both tabs fed the whole read again', PAGE, CONFIG, 'function excludedRow(r) { return !!r.Excluded; }', 'function excludedRow(r) { return true; }');
 arm('Orders gets the Excluded quick filter back', PAGE, CONFIG, "    zeroqty: { label: 'Zero quantity in transit', test: function (r) { return Math.abs(num(r.TranQty)) < 0.00005 && Math.abs(num(r.TranAmt)) >= 0.005; } }\n  };", "    zeroqty: { label: 'Zero quantity in transit', test: function (r) { return Math.abs(num(r.TranQty)) < 0.00005 && Math.abs(num(r.TranAmt)) >= 0.005; } },\n    excl: { label: 'Excluded', test: function (r) { return !!r.Excluded; } }\n  };");
 arm('recalc moved below the grid', PAGE, CONFIG, '      <div id="orGrid"></div>\n    </section>', '      <span></span>\n    </section>');
 arm('the lens toggle put back', PAGE, CONFIG, '<div class="subnav" id="subNav"', '<span class="seg" id="itLens" role="group"></span><div class="subnav" id="subNav"');
