@@ -108,7 +108,9 @@
   .it-grid .perp-grid td .it-muted { color: var(--text-muted); }
   .it-grid .perp-grid td.it-mono, .it-grid .perp-grid td .it-mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
   .it-grid .perp-grid td .it-acct { font-weight: 700; color: var(--navy); }
-  .it-grid .perp-grid td.it-note { white-space: normal; min-width: 180px; max-width: 340px; }
+  /* DAC-94 (owner 2026-11-06, "widen the notes column so each row is a single line"): a wrapped note made every
+     Excluded Orders row two lines tall. The note keeps its own width; the grid scrolls sideways like every other column. */
+  .it-grid .perp-grid td.it-note { white-space: nowrap; min-width: 180px; }
   .it-grid .perp-grid th.it-sel, .it-grid .perp-grid td.it-sel { width: 28px; }
   .it-grid .perp-grid tbody tr:hover td { background: rgba(31,45,74,0.03); }
   .it-grid .perp-grid tbody tr.is-picked td { background: var(--blue-pale); }
@@ -295,7 +297,7 @@
       <!-- V7 put Recalc Balance above the Orders grid; so does V8 (owner 2026-11-05: "the same functionality as V7"). -->
       <div class="acct-snapshot it-act" id="rcAct">
         <div class="it-act-main">
-          <b>Recalculate balance</b> after you exclude or include orders, so the out of balance and on hand reflect them now instead of after the next scheduled refresh. Make all your exclusions first, then recalculate once. It takes about a minute and reads nothing new from JD Edwards.
+          <b>Recalculate balance</b> after you exclude or un-exclude orders, so the out of balance and on hand reflect them now instead of after the next scheduled refresh. Make all your exclusions first, then recalculate once. It takes about a minute and reads nothing new from JD Edwards.
           <div class="it-act-status" id="rcStatus" role="status" aria-live="polite"></div>
         </div>
         <button class="it-act-btn" id="rcBtn" type="button">Recalculate balance</button>
@@ -1057,6 +1059,15 @@
     });
   }
 
+  // After a recalculation every figure on the page is stale, the period history included (owner 2026-11-06: Overview's
+  // by-company table showed the recalculated out of balance while its by-period table still showed the old history).
+  // invalidate() forgets the rows and the per-tab loads but not S.history, which loadCompany() alone fetches. So forget
+  // every company's history and reload this one, which re-runs the open tab once the history is in.
+  function afterRecalc() {
+    S.history = {};
+    return loadCompany();
+  }
+
   // Every company's rows for the period: Overview's by-company table and each
   // company's currency. One call, cached until the period changes.
   function rowsAllCompanies() {
@@ -1078,7 +1089,8 @@
   function loadOverview() {
     $('ovKpis').innerHTML = '';
     if (!_ovCo) {
-      _ovCo = new Grid($('ovByCompany'), { title: 'Out of balance by company', surface: 'ByCompany', sort: { k: 'OOB', dir: 'desc' },
+      // Companies in numeric order (owner 2026-11-06); the Grid's text sort is numeric-aware. Out of balance still sorts on a click.
+      _ovCo = new Grid($('ovByCompany'), { title: 'Out of balance by company', surface: 'ByCompany', sort: { k: 'CompanyNumber', dir: 'asc' },
         cols: [ C.co, { k: 'Currency', label: 'Currency' }, { k: 'Accounts', label: 'Accounts', num: true, qty: true, render: function (r) { return esc(r.Accounts); } },
           { k: 'EndGL', label: 'GL balance', num: true, render: function (r) { return moneyCell(r.EndGL); } },
           { k: 'TransitAmount', label: 'In transit', num: true, render: function (r) { return moneyCell(r.TransitAmount); } },
@@ -1284,12 +1296,18 @@
       });
     });
   }
-  // One read of the orders feeds both tabs and the AI (itOrdersData caches it per company until invalidate()).
-  function ordersInto(grid, what) {
+  // One read of the orders feeds both tabs and the AI (itOrdersData caches it per company until invalidate()). Each tab
+  // gets only its own rows and its own footer (owner 2026-11-06): fed the whole read, Excluded Orders counted "702 of
+  // 939 rows" and footed "In transit" on lines that are not in transit.
+  function inTransitRow(r) { return !r.Excluded; }
+  function excludedRow(r) { return !!r.Excluded; }
+  function ordersInto(grid, what, keep, sub) {
     grid.wait();
-    itOrdersData().then(function (rows) { grid.o.sub = ordersSub; grid.set(rows); })
+    itOrdersData().then(function (rows) { grid.o.sub = sub; grid.set(rows.filter(keep)); })
       .catch(function (e) { grid.fail('Could not read ' + what + ': ' + errText(e)); });
   }
+  function loadOrderRows() { ordersInto(_orGrid, 'transfer orders', inTransitRow, ordersSub); }
+  function loadExcludedRows() { ordersInto(_xoGrid, 'excluded orders', excludedRow, excludedSub); }
   // V7 put Recalc Balance above the Orders grid. Both tabs need it (after an exclusion or an un-exclusion), so the one
   // block moves above whichever grid is open.
   function placeRecalc(gridId) { var g = $(gridId); g.parentNode.insertBefore($('rcAct'), g); loadRecalc(); }
@@ -1298,7 +1316,7 @@
     if (!_orGrid) {
       var tools = quickSwitch(QUICK, _orQuick) + (canExclude() ? '<button class="perp-xlsx" type="button" id="orEx" disabled>Exclude</button>' : '');
       _orGrid = new Grid($('orGrid'), { title: 'Transfer orders', surface: 'Orders', noPeriod: true, cols: ORDER_COLS, sort: { k: 'TranAmt', dir: 'desc' }, tools: tools,
-        filter: function (r) { return !r.Excluded && QUICK[_orQuick].test(r); }, keyOf: orderKey, selectable: canExclude,
+        filter: function (r) { return QUICK[_orQuick].test(r); }, keyOf: orderKey, selectable: canExclude,
         onPick: function (rows) { if ($('orEx')) $('orEx').disabled = !rows.length; },
         empty: 'No transfer orders are in transit.',
         emptyFiltered: function () { return _orQuick === 'all' ? 'No order line is in transit. Excluded lines are on Excluded Orders.' : 'No order matches this quick filter.'; } });
@@ -1306,14 +1324,14 @@
       if ($('orEx')) $('orEx').addEventListener('click', function () { openExclude(true, _orGrid); });
       $('orPermNote').textContent = canExclude() ? 'Select orders to exclude them, then recalculate the balance.' : 'Excluding orders and recalculating need the In Transit exclude permission on this database.';
     }
-    ordersInto(_orGrid, 'transfer orders');
+    loadOrderRows();
   }
   function loadExcluded() {
     placeRecalc('xoGrid');
     if (!_xoGrid) {
       var tools = quickSwitch(XQUICK, _xoQuick) + (canExclude() ? '<button class="perp-xlsx" type="button" id="xoIn" disabled>Un-exclude</button>' : '');
       _xoGrid = new Grid($('xoGrid'), { title: 'Excluded orders', surface: 'Excluded Orders', noPeriod: true, cols: ORDER_COLS, sort: { k: 'ExclAmt', dir: 'desc' }, tools: tools,
-        filter: function (r) { return !!r.Excluded && XQUICK[_xoQuick].test(r); }, keyOf: orderKey, selectable: canExclude,
+        filter: function (r) { return XQUICK[_xoQuick].test(r); }, keyOf: orderKey, selectable: canExclude,
         onPick: function (rows) { if ($('xoIn')) $('xoIn').disabled = !rows.length; },
         empty: 'No transfer order lines are excluded.',
         emptyFiltered: function () { return _xoQuick === 'all' ? 'No transfer order lines are excluded.' : 'No excluded line matches this quick filter.'; } });
@@ -1321,13 +1339,13 @@
       if ($('xoIn')) $('xoIn').addEventListener('click', function () { openExclude(false, _xoGrid); });
       $('xoPermNote').textContent = canExclude() ? 'Select lines to un-exclude them; the data load will not exclude them again. Then recalculate the balance.' : 'Un-excluding orders and recalculating need the In Transit exclude permission on this database.';
     }
-    ordersInto(_xoGrid, 'excluded orders');
+    loadExcludedRows();
   }
   // After an exclusion or un-exclusion: forget the cached read and redraw whichever grids exist.
   function refreshOrders() {
     delete _aiCache['orders|' + S.company]; _briefSig = '';
-    if (_orGrid) ordersInto(_orGrid, 'transfer orders');
-    if (_xoGrid) ordersInto(_xoGrid, 'excluded orders');
+    if (_orGrid) loadOrderRows();
+    if (_xoGrid) loadExcludedRows();
   }
 
   // V7's footer totals, of the rows shown: RR University reads the in-transit total as the Reconciliation page's
@@ -1337,11 +1355,16 @@
     rows.forEach(function (r) { t.tranQty += num(r.TranQty); t.tranAmt += num(r.TranAmt); t.exclAmt += num(r.ExclAmt); t.exclVarAmt += num(r.ExclVarAmt); });
     return t;
   }
+  // Each tab foots its own rows (owner 2026-11-06). Orders holds only lines in transit, so its footer is the in-transit
+  // total; Excluded Orders holds only excluded lines, so its footer is what was excluded and any activity since.
   function ordersSub(rows) {
     var t = ordersTotals(rows), cur = curOf(S.company);
-    return 'In transit <b>' + esc(curMoney(t.tranAmt, cur)) + '</b>' +
-      ' &middot; excluded <b>' + esc(curMoney(t.exclAmt, cur)) + '</b>' +
-      (Math.abs(t.exclVarAmt) >= 0.005 ? ' &middot; <b>activity on excluded orders ' + esc(curMoney(t.exclVarAmt, cur)) + '</b>' : '');
+    return 'In transit <b>' + esc(curMoney(t.tranAmt, cur)) + '</b>';
+  }
+  function excludedSub(rows) {
+    var t = ordersTotals(rows), cur = curOf(S.company);
+    return 'Excluded <b>' + esc(curMoney(t.exclAmt, cur)) + '</b>' +
+      (Math.abs(t.exclVarAmt) >= 0.005 ? ' &middot; <b>activity since excluded ' + esc(curMoney(t.exclVarAmt, cur)) + '</b>' : '');
   }
 
   var _exState = null;
@@ -1397,7 +1420,8 @@
       if (!last) { rcSay('', ''); return; }
       if (last.ok) {
         rcSay('ok', 'Last recalculation finished' + (last.finishedAt ? ' at ' + new Date(last.finishedAt).toLocaleString() : '') + '.');
-        if (!once) { invalidate(); _loaded[S.tab] = true; (S.tab === 'excluded' ? loadExcluded : loadOrders)(); toast('Recalculated. The figures on every tab are current.'); }
+        // Only claim "current" when the history came back; loadCompany() reports its own failure in the notice band.
+        if (!once) { afterRecalc().then(function () { if (S.history[S.company]) toast('Recalculated. The figures on every tab are current.'); }); }
       } else rcSay('err', 'The last recalculation failed: ' + (last.error || 'no reason was given.'));
     }).catch(function (e) { rcSay('err', 'Could not read the recalculation status: ' + errText(e)); });
   }
