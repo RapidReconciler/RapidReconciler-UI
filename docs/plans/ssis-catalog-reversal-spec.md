@@ -159,7 +159,7 @@ because it yields an `execution_id` + full telemetry:
 EXEC catalog.create_execution @folder, @project, @package, @reference_id, @execution_id OUTPUT;
 EXEC catalog.set_execution_parameter_value @execution_id, @object_type=30, 'BootstrapOnly', <0|1>;
 EXEC catalog.set_execution_parameter_value @execution_id, @object_type=30, 'InitLoad', <0|1>;
--- aaStartDateGr for FULL_LOAD; LOGGING_LEVEL via object_type=50 'LOGGING_LEVEL'
+-- aaStartDateGr for every load except BOOTSTRAP (steady too, since VLC-246); LOGGING_LEVEL via object_type=50 'LOGGING_LEVEL'
 EXEC catalog.start_execution @execution_id;
 ```
 The returned `execution_id` ties straight to `catalog.executions` + the SSMS
