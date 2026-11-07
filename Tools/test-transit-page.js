@@ -100,6 +100,8 @@ function build(page, config) {
         sliceAssign(page, 'var _testAgentAreas = ', '('),
         sliceAssign(page, 'var _testAgentPrefixes = ', '['),
         sliceFn(page, '_routesToTestAgent'),
+        // Exclusion candidates (owner 2026-11-07): one quick filter, the reasons it reads, and the reason of a row.
+        sliceAssign(page, 'var CANDIDATE = ', '['), sliceFn(page, 'candidateWhy'), sliceFn(page, 'whyInline'),
         sliceAssign(page, 'var QUICK = ', '{'),
         // DAC-94: Excluded Orders' quick filters, the prefix the load writes, and the counts behind the day brief.
         lineOf(page, /\n  var AUTO_NOTE = [^\n]*\n/), sliceFn(page, 'isAutoExcl'), sliceFn(page, 'hasExclActivity'),
@@ -121,7 +123,7 @@ function build(page, config) {
         sliceAssign(page, 'var ORDER_COLS = ', '['),
         sliceAssign(page, 'var TABS = ', '{'),
         'this.orderCols = ORDER_COLS; this.tabs = TABS;',
-        'this.api = { inTransitRow, excludedRow, ordersSub, excludedSub, hasModule, canExclude, canAnalyst, canAccountant, _routesToTestAgent, QUICK, XQUICK, itAnalystCounts, itBriefChips, exclusionKey, orderKey, ordersTotals };'
+        'this.api = { inTransitRow, excludedRow, ordersSub, excludedSub, hasModule, canExclude, canAnalyst, canAccountant, _routesToTestAgent, QUICK, XQUICK, candidateWhy, itAnalystCounts, itBriefChips, exclusionKey, orderKey, ordersTotals };'
     ].join('\n');
     const box = { window: {}, Set, Number, String, Math, JSON };
     box.window.RRDB = { active: function () { return box.db; } };
@@ -186,7 +188,12 @@ const ORDERS = [
     { k: 'closed',  CompanyNumber: '90001', ShipQty: 10, RecQty: 6,  TranQty: 4,  TranAmt: 40,   RecSts: '999', Excluded: false },
     { k: 'zeroqty', CompanyNumber: '90001', ShipQty: 8,  RecQty: 8,  TranQty: 0,  TranAmt: 3.25, RecSts: '999', Excluded: false },
     { k: 'open',    CompanyNumber: '90001', ShipQty: 10, RecQty: 2,  TranQty: 8,  TranAmt: 80,   RecSts: '400', ShipSts: '999', Excluded: false },
-    { k: 'clean',   CompanyNumber: '90001', ShipQty: 3,  RecQty: 3,  TranQty: 0,  TranAmt: 0,    RecSts: '999', Excluded: true }
+    { k: 'clean',   CompanyNumber: '90001', ShipQty: 3,  RecQty: 3,  TranQty: 0,  TranAmt: 0,    RecSts: '999', Excluded: true },
+    // Exclusion candidates (owner 2026-11-07). Receipts are negative on real rows (v6ui_transorders), as here.
+    { k: 'dup',     CompanyNumber: '90001', ShipQty: 20, RecQty: -10, TranQty: 10, TranAmt: 0,   RecSts: '400', Excluded: false },
+    { k: 'dupval',  CompanyNumber: '90001', ShipQty: 20, RecQty: -10, TranQty: 10, TranAmt: 50,  RecSts: '400', Excluded: false },
+    { k: 'rcptcls', CompanyNumber: '90001', ShipQty: 0,  RecQty: -3, TranQty: -3, TranAmt: -30,  RecSts: '999', Excluded: false },
+    { k: 'settled', CompanyNumber: '90001', ShipQty: 3,  RecQty: -3, TranQty: 0,  TranAmt: 0,    RecSts: '400', Excluded: false }
 ];
 function run(page, config, log) {
     let bad = 0;
@@ -207,9 +214,14 @@ function run(page, config, log) {
 
     // C: quick filters
     const pick = (f) => ORDERS.filter(api.QUICK[f].test).map((r) => r.k);
-    c('C1 receipts without shipments', pick('noship'), ['noship']);
-    c('C2 in transit on a closed PO', pick('closed'), ['closed']);
-    c('C3 zero quantity in transit', pick('zeroqty'), ['zeroqty']);
+    // Owner 2026-11-07: V7's three quick filters became one, Exclusion candidates, and a column names the reason.
+    c('C1 one quick filter besides All', Object.keys(api.QUICK), ['all', 'cand']);
+    c('C2 the candidates: every reason, nothing that clears on its own, nothing excluded', pick('cand'), ['noship', 'closed', 'zeroqty', 'dup', 'rcptcls']);
+    c('C3 each row names its reason (a receipt on a closed PO reads as the receipt)', ORDERS.map((r) => r.k + ':' + api.candidateWhy(r)),
+        ['noship:Receipt without a shipment', 'closed:In transit on a closed PO', 'zeroqty:Zero quantity, amount in transit', 'open:', 'clean:',
+         'dup:Shipped quantity posted twice', 'dupval:', 'rcptcls:Receipt without a shipment', 'settled:']);
+    c('C3 an excluded line is never a candidate', api.candidateWhy({ Excluded: true, ShipQty: 0, RecQty: -5, TranQty: -5, TranAmt: -50 }), '');
+    c('C3 the reason column sits beside Excluded', box.orderCols.slice(0, 2).map((x) => x.k), ['Excluded', 'Candidate']);
     c('C4 Orders has no Excluded quick filter: excluded lines have their own tab (DAC-94)', 'excl' in api.QUICK, false);
     c('C5 all', pick('all').length, ORDERS.length);
 
@@ -218,11 +230,12 @@ function run(page, config, log) {
     const XROWS = [
         { k: 'auto-rcpt', Excluded: true, Note: 'Auto-excluded: receipt with no shipment in the loaded history', ExclAmt: -50, ExclVarAmt: 0, ExclVarQty: 0 },
         { k: 'auto-cost', Excluded: true, Note: 'Auto-excluded: fully received, only a cost difference left   ', ExclAmt: 2, ExclVarAmt: 0, ExclVarQty: 0 },
+        { k: 'auto-dup',  Excluded: true, Note: 'Auto-excluded: shipped quantity posted twice, nothing left in transit', ExclAmt: 0, ExclVarAmt: 0, ExclVarQty: 0 },
         { k: 'user',      Excluded: true, Note: 'Checked with the warehouse', ExclAmt: -70, ExclVarAmt: -5, ExclVarQty: 0 },
         { k: 'user-qty',  Excluded: true, Note: '', ExclAmt: 10, ExclVarAmt: 0, ExclVarQty: 2 }
     ];
     const xpick = (f) => XROWS.filter(api.XQUICK[f].test).map((r) => r.k);
-    c('H1 excluded by the load', xpick('auto'), ['auto-rcpt', 'auto-cost']);
+    c('H1 excluded by the load (all three notes, DAC-97 included)', xpick('auto'), ['auto-rcpt', 'auto-cost', 'auto-dup']);
     c('H2 excluded by a user (a blank note is a user\'s too)', xpick('user'), ['user', 'user-qty']);
     c('H3 activity since excluded, amount or quantity', xpick('act'), ['user', 'user-qty']);
     c('H4 the analyst tabs end with Excluded Orders', box.tabs.analyst.map((x) => x[0]), ['health', 'txv', 'orders', 'excluded']);
@@ -230,11 +243,11 @@ function run(page, config, log) {
     // "stuck"); the Excluded Orders chip carries activity since exclusion.
     const ALL = ORDERS.concat(XROWS.map((r) => Object.assign({ ShipQty: 0, RecQty: 5, TranQty: -5, TranAmt: -50, RecSts: '999' }, r)));
     const cnt = api.itAnalystCounts({ orders: ALL, history: [], reports: [], txv: null, period: '2025-08-28' });
-    c('H5 the brief counts only lines in transit', [cnt.noship, cnt.closed, cnt.zeroqty], [1, 1, 1]);
-    c('H6 and counts the excluded ones apart', [cnt.excluded, cnt.excludedAuto, cnt.actOnExcl], [5, 2, 2]);
+    c('H5 the brief counts only lines in transit, each candidate once', cnt.candidates, 5);
+    c('H6 and counts the excluded ones apart', [cnt.excluded, cnt.excludedAuto, cnt.actOnExcl], [6, 3, 2]);
     const chips = api.itBriefChips(cnt, 'USD');
     c('H7 one chip per analyst tab, in tab order', chips.map((x) => x.key), box.tabs.analyst.map((x) => x[0]));
-    c('H8 Orders\' chip leaves exclusions out; Excluded Orders\' flags the activity', [chips[2].text, chips[3].state], ['3 orders won’t clear on their own', 'attn']);
+    c('H8 Orders\' chip leaves exclusions out; Excluded Orders\' flags the activity', [chips[2].text, chips[3].state], ['5 exclusion candidates: won’t clear on their own', 'attn']);
     box.excludedPanel = /<section\b[^>]*\bid="tab-excluded"[\s\S]*?id="xoGrid"[\s\S]*?<\/section>/.test(page);
     c('H9 the Excluded Orders panel and its grid are on the page', box.excludedPanel, true);
 
@@ -278,7 +291,11 @@ function run(page, config, log) {
         'TranAmt', 'ShipSts', 'RecSts', 'FromCurr', 'ToCurr', 'Rate', 'ExclQty', 'ExclAmt', 'ExclVarQty', 'ExclVarAmt'];
     const shown = box.orderCols.map((x) => x.k);
     c('F1 the Orders grid shows every V7 column but OrderMonth', VIEW_COLS.filter((k) => shown.indexOf(k) < 0), ['OrderMonth']);
-    c('F2 and nothing the view does not have', shown.filter((k) => VIEW_COLS.indexOf(k) < 0), []);
+    // Computed on the page, not read from the view (owner 2026-11-07: the exclusion candidate's reason). Each must
+    // bring its own get, or it would read a field the view does not have and show blank.
+    const COMPUTED = ['Candidate'];
+    c('F2 and nothing the view does not have', shown.filter((k) => VIEW_COLS.indexOf(k) < 0 && COMPUTED.indexOf(k) < 0), []);
+    c('F2 the computed columns compute their own value', box.orderCols.filter((x) => COMPUTED.indexOf(x.k) >= 0).map((x) => typeof x.get), ['function']);
     const tot = api.ordersTotals([{ TranQty: 4, TranAmt: 40, ExclAmt: 0, ExclVarAmt: 0 }, { TranQty: '-1.5', TranAmt: '-12.25', ExclAmt: '7.5', ExclVarAmt: '0.75' }, {}]);
     c('F3 the totals add up the rows they are given, text and blanks included', [tot.tranQty, tot.tranAmt, tot.exclAmt, tot.exclVarAmt], [2.5, 27.75, 7.5, 0.75]);
     c('F4 recalc is no longer a tab of its own', box.tabs.analyst.map((x) => x[0]).indexOf('tools'), -1);
@@ -366,7 +383,9 @@ arm('the totals skip the excluded amount', PAGE, CONFIG, 't.exclAmt += num(r.Exc
 arm('a Tools tab put back', PAGE, CONFIG, "['excluded', 'Excluded Orders'] ]", "['excluded', 'Excluded Orders'], ['tools', 'Tools'] ]");
 arm('the Excluded Orders tab dropped', PAGE, CONFIG, "['orders', 'Orders'], ['excluded', 'Excluded Orders'] ]", "['orders', 'Orders'] ]");
 arm('the load\'s note prefix misread', PAGE, CONFIG, "var AUTO_NOTE = 'Auto-excluded:';", "var AUTO_NOTE = 'Auto excluded:';");
-arm('the brief counts excluded lines as stuck', PAGE, CONFIG, 'o = all ? all.filter(function (r) { return !r.Excluded; }) : null;', 'o = all;');
+// 'the brief counts excluded lines as stuck' (o = all) was retired 2026-11-07: candidateWhy now refuses an excluded
+// line itself, so that filter can no longer change a count, and the brief's filter alone cannot be armed. The rule
+// that matters is armed in candidateWhy ('an excluded line counted as a candidate', which turns C3 red).
 arm('activity since exclusion reads the amount only', PAGE, CONFIG, ' || Math.abs(num(r.ExclVarQty)) >= 0.00005; }\n  var XQUICK', '; }\n  var XQUICK');
 arm('the Excluded Orders chip dropped', PAGE, CONFIG, "      { key: 'excluded', label: 'Excluded Orders'", "      false && { key: 'excluded', label: 'Excluded Orders'");
 arm('a recalc keeps the old history', PAGE, CONFIG, '    S.history = {};\n    return loadCompany();', '    return loadCompany();');
@@ -374,7 +393,12 @@ arm('by company sorted by out of balance again', PAGE, CONFIG, "surface: 'ByComp
 arm('Excluded Orders foots the in-transit amount again', PAGE, CONFIG, "return 'Excluded <b>' + esc(curMoney(t.exclAmt, cur)) + '</b>' +", "return 'In transit <b>' + esc(curMoney(t.tranAmt, cur)) + '</b>' +");
 arm('Orders foots the excluded amount again', PAGE, CONFIG, "return 'In transit <b>' + esc(curMoney(t.tranAmt, cur)) + '</b>';", "return 'In transit <b>' + esc(curMoney(t.tranAmt, cur)) + '</b> &middot; excluded <b>' + esc(curMoney(t.exclAmt, cur)) + '</b>';");
 arm('both tabs fed the whole read again', PAGE, CONFIG, 'function excludedRow(r) { return !!r.Excluded; }', 'function excludedRow(r) { return true; }');
-arm('Orders gets the Excluded quick filter back', PAGE, CONFIG, "    zeroqty: { label: 'Zero quantity in transit', test: function (r) { return Math.abs(num(r.TranQty)) < 0.00005 && Math.abs(num(r.TranAmt)) >= 0.005; } }\n  };", "    zeroqty: { label: 'Zero quantity in transit', test: function (r) { return Math.abs(num(r.TranQty)) < 0.00005 && Math.abs(num(r.TranAmt)) >= 0.005; } },\n    excl: { label: 'Excluded', test: function (r) { return !!r.Excluded; } }\n  };");
+arm('Orders gets the Excluded quick filter back', PAGE, CONFIG, "    cand: { label: 'Exclusion candidates', test: function (r) { return candidateWhy(r) !== ''; } }\n  };", "    cand: { label: 'Exclusion candidates', test: function (r) { return candidateWhy(r) !== ''; } },\n    excl: { label: 'Excluded', test: function (r) { return !!r.Excluded; } }\n  };");
+// Exclusion candidates (owner 2026-11-07).
+arm('the doubled test ignores the value left', PAGE, CONFIG, ' && Math.abs(num(r.TranAmt)) < 0.005 && Math.abs(s - 2 * q) < 0.00005;', ' && Math.abs(s - 2 * q) < 0.00005;');
+arm('the doubled test compares signed quantities', PAGE, CONFIG, 'var s = Math.abs(num(r.ShipQty)), q = Math.abs(num(r.RecQty));', 'var s = num(r.ShipQty), q = num(r.RecQty);');
+arm('an excluded line counted as a candidate', PAGE, CONFIG, "    if (r.Excluded) return '';\n    for (var i = 0;", '    for (var i = 0;');
+arm('the reason column dropped', PAGE, CONFIG, "    { k: 'Candidate', label: 'Exclusion candidate',", "    false && { k: 'Candidate', label: 'Exclusion candidate',");
 arm('recalc moved below the grid', PAGE, CONFIG, '      <div id="orGrid"></div>\n    </section>', '      <span></span>\n    </section>');
 arm('the lens toggle put back', PAGE, CONFIG, '<div class="subnav" id="subNav"', '<span class="seg" id="itLens" role="group"></span><div class="subnav" id="subNav"');
 arm('the page drops Home\'s stylesheet', PAGE, CONFIG, '<link href="home-frame.css" rel="stylesheet">', '<link href="admin-chrome.css" rel="stylesheet">');
