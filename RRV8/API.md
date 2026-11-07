@@ -139,8 +139,9 @@ What a page needs to know:
 - **Exclusions** send keys only (`companyNumber, longAccount, orderDate, orderNumber, orderType, shortItem, lot`)
   plus one `excluded` and one `note` (100 characters at most). The agent reads quantity and amount itself.
   **An un-exclude (`excluded: false`) is stored, as `excluded = 0`** (DAC-94): the load's automatic pass
-  (`usp8_transit_auto_exclude`) excludes every receipt with no shipment and every fully received line with only a cost
-  difference left, and it leaves alone any line that has a row. Its rows carry a note starting `Auto-excluded:`.
+  (`usp8_transit_auto_exclude`) excludes every receipt with no shipment, every fully received line with only a cost
+  difference left and (DAC-97) every partly received line with no value left whose shipped quantity is exactly twice
+  the received, and it leaves alone any line that has a row. Its rows carry a note starting `Auto-excluded:`.
 - **Recalc** is async: `{started, message, busyWith?}`, then poll `GET in-transit/orders/recalc-status` for
   `{running, since, blockedBy, last:{ok, error, ...}}`. Report `last.error` when `ok` is false.
 - **Until DB beta.134 is deployed** to a database, `in-transit/transactions` and three of the five integrity

@@ -123,6 +123,7 @@
   .it-chip.is-end { background: var(--blue-pale); color: var(--blue); }
   .it-chip.is-break { background: var(--red-pale); color: var(--red); }
   .it-chip.is-excl { background: var(--orange-pale); color: var(--orange-deep); }
+  .it-chip.is-cand { background: var(--blue-pale); color: var(--blue); white-space: nowrap; }
 
   /* Data Health report list */
   .it-rpt { border: 1px solid var(--rule); border-radius: 12px; margin-bottom: 10px; background: var(--bg-card); box-shadow: var(--shadow-sm); }
@@ -293,7 +294,7 @@
     </section>
 
     <section class="acct-panels it-panel" id="tab-orders" role="tabpanel" hidden>
-      <p class="it-lede">Every transfer order line still in transit, now. The three quick filters find the orders that will not clear on their own. Excluded lines are on <b>Excluded Orders</b>. <span id="orPermNote"></span></p>
+      <p class="it-lede">Every transfer order line still in transit, now. <b>Exclusion candidates</b> shows only the lines that will not clear on their own, and the Exclusion candidate column says why. Excluded lines are on <b>Excluded Orders</b>. <span id="orPermNote"></span></p>
       <!-- V7 put Recalc Balance above the Orders grid; so does V8 (owner 2026-11-05: "the same functionality as V7"). -->
       <div class="acct-snapshot it-act" id="rcAct">
         <div class="it-act-main">
@@ -309,7 +310,7 @@
          orders page but just containing Excluded order pairs, and a way to undo an exclusion." Same grid, columns and
          totals as Orders; the Recalculate balance block moves to whichever of the two is open. -->
     <section class="acct-panels it-panel" id="tab-excluded" role="tabpanel" hidden>
-      <p class="it-lede">Every transfer order line excluded from In Transit, with what it carried when it was excluded and any activity since. Lines noted <b>Auto-excluded</b> were excluded by the data load: a receipt with no shipment in the loaded history, or a line received in full with only a cost difference left. <span id="xoPermNote"></span></p>
+      <p class="it-lede">Every transfer order line excluded from In Transit, with what it carried when it was excluded and any activity since. Lines noted <b>Auto-excluded</b> were excluded by the data load: a receipt with no shipment in the loaded history, a line received in full with only a cost difference left, or a shipment quantity posted twice with nothing left in transit. <span id="xoPermNote"></span></p>
       <div id="xoGrid"></div>
     </section>
   </div>
@@ -773,6 +774,9 @@
     t('Note', 'Note', 'it-note')];
   var ORDER_COLS = [
     { k: 'Excluded', label: 'Excluded', get: function (r) { return r.Excluded ? 'Excluded' : ''; }, render: function (r) { return r.Excluded ? '<span class="it-chip is-excl">Excluded</span>' : ''; } },
+    // Why a line still in transit is an exclusion candidate (owner 2026-11-07: one quick filter replaced three, so
+    // the row has to say which reason it met). Blank on a line that should clear on its own.
+    { k: 'Candidate', label: 'Exclusion candidate', get: candidateWhy, render: function (r) { var w = candidateWhy(r); return w ? '<span class="it-chip is-cand">' + esc(w) + '</span>' : ''; } },
     // Every column V7's Orders grid showed (usp6transorders = v6ui_transorders), in V7's groups: the order pair, the
     // two sides, what is in transit, then the exclusion and the activity since it (RR University: ExclVarQty /
     // ExclVarAmt not zero means unexclude and re-exclude). OrderMonth is left out: it is the order date's month.
@@ -1250,18 +1254,37 @@
     }).catch(function (e) { _txGrid.fail('Could not read transaction variance: ' + errText(e)); });
   }
 
-  // Orders: V7's three quick filters (RR University, transfer-order-reconcile).
+  // Orders: one quick filter, Exclusion candidates (owner 2026-11-07), in place of V7's three (RR University,
+  // transfer-order-reconcile): a line still in transit that meets any of these will not clear on its own, and the
+  // Candidate column says which. DAC-97's doubled quantity is here too, for a line a user has un-excluded. Receipt
+  // quantities are negative on these rows (v6ui_transorders), so the doubled test compares sizes. The first test
+  // that matches names the reason; "closed PO" is last because it is the most general.
   // Exclude / un-exclude sends keys only; the server reads quantity and amount itself.
   // DAC-94: excluded lines moved to their own tab, Excluded Orders, in the same grid, columns and totals. The load
-  // now excludes receipts with no shipment and lines received in full with only a cost difference left
-  // (usp8_transit_auto_exclude), so on a first load Orders would otherwise open on thousands of excluded lines.
+  // now excludes receipts with no shipment, lines received in full with only a cost difference left and (DAC-97)
+  // shipment quantities posted twice with no value left (usp8_transit_auto_exclude), so on a first load Orders
+  // would otherwise open on thousands of excluded lines.
+  var CANDIDATE = [
+    { why: 'Receipt without a shipment', test: function (r) { return Math.abs(num(r.ShipQty)) < 0.00005 && Math.abs(num(r.RecQty)) >= 0.00005; } },
+    { why: 'Zero quantity, amount in transit', test: function (r) { return Math.abs(num(r.TranQty)) < 0.00005 && Math.abs(num(r.TranAmt)) >= 0.005; } },
+    { why: 'Shipped quantity posted twice', test: function (r) {
+      var s = Math.abs(num(r.ShipQty)), q = Math.abs(num(r.RecQty));
+      return q >= 0.00005 && Math.abs(num(r.TranQty)) >= 0.00005 && Math.abs(num(r.TranAmt)) < 0.005 && Math.abs(s - 2 * q) < 0.00005; } },
+    { why: 'In transit on a closed PO', test: function (r) { return trim(r.RecSts) === '999' && Math.abs(num(r.TranQty)) >= 0.00005; } }
+  ];
+  // The reason a line still in transit is a candidate, or '' (an excluded line is never one: it is already out).
+  function candidateWhy(r) {
+    if (r.Excluded) return '';
+    for (var i = 0; i < CANDIDATE.length; i++) if (CANDIDATE[i].test(r)) return CANDIDATE[i].why;
+    return '';
+  }
+  // A reason mid-sentence: only its first letter lowered, so "PO" stays "PO".
+  function whyInline(s) { return s ? s.charAt(0).toLowerCase() + s.slice(1) : s; }
   var QUICK = {
-    all:     { label: 'All', test: function () { return true; } },
-    noship:  { label: 'Receipts without shipments', test: function (r) { return Math.abs(num(r.ShipQty)) < 0.00005 && Math.abs(num(r.RecQty)) >= 0.00005; } },
-    closed:  { label: 'In transit on a closed PO', test: function (r) { return trim(r.RecSts) === '999' && Math.abs(num(r.TranQty)) >= 0.00005; } },
-    zeroqty: { label: 'Zero quantity in transit', test: function (r) { return Math.abs(num(r.TranQty)) < 0.00005 && Math.abs(num(r.TranAmt)) >= 0.005; } }
+    all:  { label: 'All', test: function () { return true; } },
+    cand: { label: 'Exclusion candidates', test: function (r) { return candidateWhy(r) !== ''; } }
   };
-  // The prefix both of the load's notes start with (usp8_transit_auto_exclude writes them). A user who re-saves one
+  // The prefix all three of the load's notes start with (usp8_transit_auto_exclude writes them). A user who re-saves one
   // with a note of their own makes it theirs, and it then reads as excluded by a user here too.
   var AUTO_NOTE = 'Auto-excluded:';
   function isAutoExcl(r) { return trim(r.Note).indexOf(AUTO_NOTE) === 0; }
@@ -1319,7 +1342,7 @@
         filter: function (r) { return QUICK[_orQuick].test(r); }, keyOf: orderKey, selectable: canExclude,
         onPick: function (rows) { if ($('orEx')) $('orEx').disabled = !rows.length; },
         empty: 'No transfer orders are in transit.',
-        emptyFiltered: function () { return _orQuick === 'all' ? 'No order line is in transit. Excluded lines are on Excluded Orders.' : 'No order matches this quick filter.'; } });
+        emptyFiltered: function () { return _orQuick === 'all' ? 'No order line is in transit. Excluded lines are on Excluded Orders.' : 'No order line is an exclusion candidate: everything in transit should clear on its own.'; } });
       wireQuick('orGrid', _orGrid, function (k) { _orQuick = k; });
       if ($('orEx')) $('orEx').addEventListener('click', function () { openExclude(true, _orGrid); });
       $('orPermNote').textContent = canExclude() ? 'Select orders to exclude them, then recalculate the balance.' : 'Excluding orders and recalculating need the In Transit exclude permission on this database.';
@@ -1497,7 +1520,8 @@
     var reps = x.reports || [];
     var t = x.txv;
     // DAC-94: the quick-filter counts are of lines still in transit. An excluded line is on Excluded Orders, and the
-    // load now excludes every receipt with no shipment and every fully received line with a cost difference left.
+    // load now excludes every receipt with no shipment, every fully received line with a cost difference left and
+    // every shipment quantity posted twice with no value left (DAC-97).
     var all = x.orders, o = all ? all.filter(function (r) { return !r.Excluded; }) : null;
     var excl = all ? all.filter(function (r) { return !!r.Excluded; }) : null;
     var withVar = t ? (t.data || []).filter(function (r) { return Math.abs(num(r.Variance)) >= AI_EPS; }) : null;
@@ -1507,8 +1531,10 @@
       findings: reps.filter(function (r) { return r.finding && r.count > 0; }).reduce(function (s, r) { return s + r.count; }, 0),
       reportsDown: reps.filter(function (r) { return r.count == null; }).length,
       txvDocs: withVar ? withVar.length : null, txvAll: t ? (t.data || []).length : null, txvTotal: t ? num((t.aggregates || {}).Variance) : null, txvRows: withVar,
-      noship: o ? o.filter(QUICK.noship.test).length : null, closed: o ? o.filter(QUICK.closed.test).length : null,
-      zeroqty: o ? o.filter(QUICK.zeroqty.test).length : null, actOnExcl: actOnExcl ? actOnExcl.length : null,
+      // Exclusion candidates (owner 2026-11-07): one count, each line once, and the split by reason for the AI.
+      candidates: o ? o.filter(QUICK.cand.test).length : null,
+      candBy: o ? CANDIDATE.map(function (k) { return [k.why, o.filter(function (r) { return candidateWhy(r) === k.why; }).length]; }) : null,
+      actOnExcl: actOnExcl ? actOnExcl.length : null,
       actOnExclAmt: actOnExcl ? sumOf(actOnExcl, 'ExclVarAmt') : null,
       excluded: excl ? excl.length : null, excludedAuto: excl ? excl.filter(isAutoExcl).length : null,
       excludedAmt: excl ? sumOf(excl, 'ExclAmt') : null
@@ -1521,9 +1547,10 @@
     (x.reports || []).forEach(function (r) { L.push('- Report "' + r.title + '": ' + (r.count == null ? 'could not be read' : r.count + ' row(s)') + (r.finding ? ' (a row here is something to fix)' : ' (a listing; rows are normal)') + '.'); });
     L.push(c.txvDocs == null ? 'Transaction variance: could not be loaded.'
       : 'Transaction variance: ' + c.txvDocs + ' of ' + c.txvAll + ' transfer documents carry a variance, net ' + curMoney(c.txvTotal, cur) + '.');
-    L.push(c.noship == null ? 'Orders: could not be loaded.'
-      : 'Orders (lines still in transit): ' + c.noship + ' receipt(s) without a shipment; ' + c.closed + ' in transit on a closed PO; ' + c.zeroqty + ' with zero quantity but an amount in transit.');
-    if (c.excluded != null) L.push('Excluded Orders: ' + c.excluded + ' excluded line(s), ' + c.excludedAuto + ' of them by the data load (a receipt with no shipment in the loaded history, or a line received in full with only a cost difference left), excluded amount '
+    L.push(c.candidates == null ? 'Orders: could not be loaded.'
+      : 'Orders (lines still in transit): ' + c.candidates + ' exclusion candidate(s), lines that will not clear on their own'
+        + (c.candidates ? ' (' + c.candBy.filter(function (p) { return p[1]; }).map(function (p) { return p[1] + ' ' + whyInline(p[0]); }).join('; ') + ')' : '') + '.');
+    if (c.excluded != null) L.push('Excluded Orders: ' + c.excluded + ' excluded line(s), ' + c.excludedAuto + ' of them by the data load (a receipt with no shipment in the loaded history, a line received in full with only a cost difference left, or a shipment quantity posted twice with nothing left in transit), excluded amount '
         + curMoney(c.excludedAmt, cur) + '; ' + c.actOnExcl + ' with activity since they were excluded (net ' + curMoney(c.actOnExclAmt, cur) + ').');
     if (tier === 'grounded') return L;
     if (c.txvRows && c.txvRows.length) {
@@ -1534,12 +1561,12 @@
       });
     }
     if (x.orders) {
-      var stuck = x.orders.filter(function (r) { return !r.Excluded && (QUICK.noship.test(r) || QUICK.closed.test(r) || QUICK.zeroqty.test(r)); })
+      var stuck = x.orders.filter(function (r) { return candidateWhy(r) !== ''; })
         .sort(function (a, b) { return Math.abs(num(b.TranAmt)) - Math.abs(num(a.TranAmt)); }).slice(0, 5);
       if (stuck.length) {
         L.push('Orders that will not clear on their own, largest first:');
         stuck.forEach(function (r, i) {
-          var why = QUICK.noship.test(r) ? 'receipt without a shipment' : QUICK.closed.test(r) ? 'in transit on a closed PO' : 'zero quantity, amount in transit';
+          var why = whyInline(candidateWhy(r));
           L.push('- ' + (tier === 'full' ? trim(r.OrderType) + ' ' + trim(r.OrderNumber) + ' item ' + trim(r.ItemNumber) : 'Order ' + (i + 1)) + ': ' + why + ', in transit ' + curMoney(r.TranAmt, cur) + '.');
         });
       }
@@ -1551,14 +1578,14 @@
     var hTxt = [];
     if (c.glBreaks + c.varBreaks) hTxt.push((c.glBreaks + c.varBreaks) + ' roll-forward break' + (c.glBreaks + c.varBreaks === 1 ? '' : 's'));
     if (c.findings) hTxt.push(c.findings + ' set-up finding' + (c.findings === 1 ? '' : 's'));
-    var oN = c.noship == null ? null : c.noship + c.closed + c.zeroqty;
+    var oN = c.candidates;
     return [
       { key: 'health', label: 'Data Health', state: hTxt.length ? 'attn' : (c.reportsDown ? 'wait' : 'clean'),
         text: hTxt.length ? hTxt.join(', ') : (c.reportsDown ? 'Couldn’t check every report just now' : 'Rolls forward cleanly; set-up checks clear') },
       { key: 'txv', label: 'Transaction Variance', state: c.txvDocs == null ? 'wait' : (c.txvDocs ? 'attn' : 'clean'),
         text: c.txvDocs == null ? 'Couldn’t check just now' : (c.txvDocs ? c.txvDocs + ' document' + (c.txvDocs === 1 ? '' : 's') + ' with a variance, net ' + curMoney(c.txvTotal, cur) : 'No transaction variance this period') },
       { key: 'orders', label: 'Orders', state: oN == null ? 'wait' : (oN ? 'attn' : 'clean'),
-        text: oN == null ? 'Couldn’t check just now' : (oN ? oN + ' order' + (oN === 1 ? '' : 's') + ' won’t clear on their own' : 'Nothing stuck in transit') },
+        text: oN == null ? 'Couldn’t check just now' : (oN ? oN + ' exclusion candidate' + (oN === 1 ? '' : 's') + ': won’t clear on ' + (oN === 1 ? 'its' : 'their') + ' own' : 'Nothing stuck in transit') },
       // DAC-94: new activity on an excluded line is the one thing here that needs the analyst (RR University: review it
       // every period). Lines the load excluded are refreshed by the load, so this counts a user's exclusions in practice.
       { key: 'excluded', label: 'Excluded Orders', state: c.actOnExcl == null ? 'wait' : (c.actOnExcl ? 'attn' : 'clean'),

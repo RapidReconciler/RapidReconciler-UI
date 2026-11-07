@@ -100,6 +100,7 @@ function build(page, docs, gate, config) {
         sliceFn(page, 'prodHeaders'),
         sliceAssign(page, 'var _testAgentAreas = ', '('), sliceAssign(page, 'var _testAgentPrefixes = ', '['), sliceFn(page, '_routesToTestAgent'),
         sliceAssign(page, 'var _valcPrefixes = ', '['), sliceFn(page, '_routesToValc'), sliceFn(page, 'rrFetch'),
+        sliceAssign(page, 'var CANDIDATE = ', '['), sliceFn(page, 'candidateWhy'), sliceFn(page, 'whyInline'),   // owner 2026-11-07: one candidates filter
         sliceAssign(page, 'var QUICK = ', '{'),
         sliceLine(page, 'var AUTO_NOTE = '), sliceFn(page, 'isAutoExcl'),   // DAC-94: the counts split excluded lines out
         sliceLine(page, 'var GATE_MISSING = '), sliceAssign(page, 'var ROLE_ASST = ', '{'), sliceAssign(page, 'var NUMWORD = ', '['),
@@ -182,7 +183,10 @@ async function run(page, docs, gate, config, log) {
 
     // N: analyst counts and facts
     const n = api.itAnalystCounts(SRC_N);
-    c('N1 quick filters counted from the rows', [n.noship, n.closed, n.zeroqty], [1, 1, 1]);
+    c('N1 exclusion candidates counted from the rows, each once', n.candidates, 3);
+    c('N1 and split by reason for the AI', n.candBy.filter((p) => p[1]).map((p) => p.join(':')),
+        ['Receipt without a shipment:1', 'Zero quantity, amount in transit:1', 'In transit on a closed PO:1']);
+    c('N1 the facts carry the count and the reasons', api.itAnalystFacts(SRC_N, 'grounded').find((l) => l.indexOf('Orders (') === 0), 'Orders (lines still in transit): 3 exclusion candidate(s), lines that will not clear on their own (1 receipt without a shipment; 1 zero quantity, amount in transit; 1 in transit on a closed PO).');
     c('N1 activity on excluded orders counted with its amount', [n.actOnExcl, n.actOnExclAmt], [1, 12.5]);
     c('N2 only "finding" reports count as findings (listings do not)', n.findings, 1);
     c('N3 documents with a variance, of all documents, and the net', [n.txvDocs, n.txvAll, n.txvTotal], [2, 3, 1247.32]);
@@ -201,12 +205,12 @@ async function run(page, docs, gate, config, log) {
     // moved there from the Orders chip (the Orders tab no longer lists excluded lines).
     c('B1 one chip per analyst tab, each the tab key the chip opens', chips.map((x) => x.key), ['health', 'txv', 'orders', 'excluded']);
     c('B1 states follow the counts', chips.map((x) => x.state), ['attn', 'attn', 'attn', 'attn']);
-    c('B1 the orders chip counts the three filters of lines in transit', chips[2].text, '3 orders won’t clear on their own');
+    c('B1 the orders chip counts the exclusion candidates still in transit', chips[2].text, '3 exclusion candidates: won’t clear on their own');
     c('B1 the excluded chip carries the activity since exclusion, with its amount', chips[3].text, '1 excluded line has activity since, net $12.50');
     c('B2 the lead names the count and the first tab', api.itBriefLead(chips), 'Four things need you today. Start with Data Health.');
-    const clean = api.itBriefChips({ glBreaks: 0, varBreaks: 0, findings: 0, reportsDown: 0, txvDocs: 0, txvAll: 3, txvTotal: 0, noship: 0, closed: 0, zeroqty: 0, actOnExcl: 0 }, 'USD');
+    const clean = api.itBriefChips({ glBreaks: 0, varBreaks: 0, findings: 0, reportsDown: 0, txvDocs: 0, txvAll: 3, txvTotal: 0, candidates: 0, actOnExcl: 0 }, 'USD');
     c('B3 all clean -> "Nothing needs you today"', [clean.map((x) => x.state), api.itBriefLead(clean)], [['clean', 'clean', 'clean', 'clean'], 'Nothing needs you today. In Transit rolls forward and nothing is stuck.']);
-    c('B4 a source that failed is "wait", not clean', api.itBriefChips(Object.assign({}, n, { txvDocs: null, noship: null, actOnExcl: null }), 'USD').map((x) => x.state), ['attn', 'wait', 'wait', 'wait']);
+    c('B4 a source that failed is "wait", not clean', api.itBriefChips(Object.assign({}, n, { txvDocs: null, candidates: null, actOnExcl: null }), 'USD').map((x) => x.state), ['attn', 'wait', 'wait', 'wait']);
 
     // P: the prompt
     sb.RRV8.TRANSIT_GROUNDING = sb.RRV8.TRANSIT_GROUNDING || 'IN TRANSIT POLICY (test stand-in)';
@@ -273,7 +277,9 @@ arm('Basic gets the history and accounts', 'page', "    if (tier === 'grounded')
 arm('unposted shown when zero', 'page', "    if (Math.abs(sumOf(rows, 'UnpostBatch')) >= AI_EPS) L.push(", '    L.push(');
 arm('listings counted as findings', 'page', 'return r.finding && r.count > 0;', 'return r.count > 0;');
 arm('activity on excluded orders not flagged', 'page', "state: c.actOnExcl == null ? 'wait' : (c.actOnExcl ? 'attn' : 'clean'),", "state: 'clean',");
-arm('a failed source reads as zero', 'page', "L.push(c.noship == null ? 'Orders: could not be loaded.'", "L.push(false ? ''");
+arm('a failed source reads as zero', 'page', "L.push(c.candidates == null ? 'Orders: could not be loaded.'", "L.push(false ? ''");
+arm('a reason lowered whole mid-sentence', 'page', "return s ? s.charAt(0).toLowerCase() + s.slice(1) : s;", 'return s ? s.toLowerCase() : s;');
+arm('a candidate counted once per reason it meets', 'page', 'candidates: o ? o.filter(QUICK.cand.test).length : null,', 'candidates: o ? o.filter(function (r) { return CANDIDATE.some(function (k) { return k.test(r); }); }).length + o.filter(function (r) { return CANDIDATE[0].test(r) && CANDIDATE[3].test(r); }).length + 1 : null,');
 arm('Inventory\'s analyst grounding in the prompt', 'page', "return (G.TRANSIT_GROUNDING ? G.TRANSIT_GROUNDING + '\\n\\n' : '')", "return (G.ANALYST_GROUNDING ? G.ANALYST_GROUNDING + '\\n\\n' : '')");
 arm('no data-access line', 'page', "      + (G.dataAccessLine ? G.dataAccessLine(tier) + '\\n' : '')\n      + _aiDocCatalogPrompt(vr)", '      + _aiDocCatalogPrompt(vr)');
 arm('the doc catalog not scoped to In Transit', 'page', "RRV8.aiDocs.catalogPrompt('token', role, 'it')", "RRV8.aiDocs.catalogPrompt('token', role)");
