@@ -2169,8 +2169,36 @@ window.RRV8.GLOSSARY = [
   '- MODEL DMAAI TABLE: DMAAI 4152 for the company, the routing every inventory account assignment resolves through. Its document type comes from the company record, so only that one type is live. [ON=model,home]',
   '- EXCLUDED GL CLASS: a GL class an item uses that has NO 4152 entry, so there is no account to reconcile it against and its whole on-hand value sits outside reconciliation. Judge it on the amount it holds, never on what the class code is named. [ON=model,home]',
   '- CARRIES COST / UNCOSTED STOCK (markers on a 0.00 excluded row): two different reasons a row reads zero. CARRIES COST = the items have a unit cost and nothing is on hand, so it starts excluding value on the next receipt. UNCOSTED STOCK = there IS quantity on hand and no item carries a cost, so the zero is a costing gap. [ON=model,home]',
-  '- INTEGRITY REVIEW (the Data Health list): the configuration and data-setup checks — GL Class Integrity, UOM Conversion, Frozen Cost. Findings about how the data is SET UP, not about a period’s variance. [ON=home]'
+  '- INTEGRITY REVIEW (the Data Health list): the configuration and data-setup checks — GL Class Integrity, UOM Conversion, Frozen Cost. Findings about how the data is SET UP, not about a period’s variance. [ON=home]',
+  // In Transit (UI-240, owner ruling 2026-11-09: "Add all five"). Each collides with a word the Inventory pages, or
+  // an entry above, uses for something else. Source: AnalysisGuides/_catalog/analyst/in-transit.md.
+  '- ON HAND / IN TRANSIT (In Transit pages): stock shipped on a transfer and not yet received at period end, net of excluded orders. It is the figure the roll forward compares with the GL, NOT the cardex on-hand perpetual that On Hand means on the Inventory pages. [ON=transit] [VIEWS=analyst,accountant]',
+  '- BEG VAR (beginning variance, In Transit): the out of balance brought in from the prior period (V7: Carry Forward). It sits next to Beg GL and is NOT an opening GL balance. [ON=transit] [VIEWS=analyst,accountant]',
+  '- GL CLASSES NOT IN THE MODEL (In Transit Data Health): transfer lines whose GL class no in-transit AAI (4320 / 4322) covers. It is NOT the 4152 Model DMAAI that MODEL DMAAI TABLE and EXCLUDED GL CLASS above mean. [ON=transit]',
+  '- EXCL VAR QTY / EXCL VAR AMOUNT (Orders columns): activity on an order after it was excluded. Non-zero means un-exclude and re-exclude it so the exclusion carries the new figures. NOT a reconciliation variance. [ON=transit]',
+  '- TXN VARIANCE (In Transit): per transfer document, ledger minus in transit. It is NOT F4111 against F0911, which is what transaction variance means on the Inventory pages. [ON=transit] [VIEWS=analyst,accountant]'
 ].join('\n');
+
+/*
+ * RRV8.glossaryFor(surface, role) — the GLOSSARY lines one page and one view show, for a prompt that should not
+ * carry the whole list (UI-240: In Transit's assistant). The same rules help-sidebar.js uses for the panel: the
+ * entry's [ON=] names the surface, and a missing [VIEWS=] means the analyst only. The header line always leads and
+ * the tags stay in, as in the string the other pages hand the AI. '' when no entry matches, so a caller adds nothing.
+ * Still ONE source: it filters RRV8.GLOSSARY, it never copies it.
+ */
+window.RRV8.glossaryFor = function (surface, role) {
+  var lines = String(window.RRV8.GLOSSARY || '').split('\n');
+  var tags = function (line, name) {
+    var m = line.match(new RegExp('\\[' + name + '=([^\\]]*)\\]'));
+    return m ? m[1].split(',').map(function (s) { return s.trim().toLowerCase(); }) : null;
+  };
+  var want = String(surface || '').toLowerCase(), who = String(role || 'analyst').toLowerCase();
+  var picked = lines.slice(1).filter(function (line) {
+    var on = tags(line, 'ON'), views = tags(line, 'VIEWS') || ['analyst'];
+    return !!on && on.indexOf(want) >= 0 && views.indexOf(who) >= 0;
+  });
+  return picked.length ? [lines[0]].concat(picked).join('\n') : '';
+};
 
 /*
  * RRV8.ACCT_TERMS — the ACCOUNTANT's controls, in the same line format as GLOSSARY

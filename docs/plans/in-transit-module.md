@@ -250,8 +250,10 @@ accountant").**
   side posts through 4220/4245 and the receipt clears through 4320/4322, onto one account when set up right; a
   mismatch is a set-up fault. The views are unchanged. The other eight source conflicts stay open in the catalog's
   header; the grounding states only what every source agrees on.
-- **Not added:** RRV8.GLOSSARY entries. The catalog proposes five; GLOSSARY feeds every analyst prompt on every
-  page, so they wait for the owner.
+- **GLOSSARY entries added 2026-11-09 (owner: "Add all five").** The five the catalog proposed are in
+  `RRV8.GLOSSARY` tagged `[ON=transit]`. In Transit's question prompt and help panel take only the entries for the
+  page and view (`RRV8.glossaryFor`, `data-help-glossary="transit"`). Every other analyst prompt still gets the
+  whole GLOSSARY, these five included.
 
 **Still to build:** the two drill-ins, and the live check on Demo1 (analyst, accountant, a user without the module)
 now that the assistants are in.

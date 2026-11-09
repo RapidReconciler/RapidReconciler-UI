@@ -35,6 +35,10 @@ const DOCS = fs.readFileSync(path.join(R8, 'ai-docs.js'), 'utf8');
 const GATE_FILE = path.join(R8, 'ai-gate.js');
 const GATE = fs.existsSync(GATE_FILE) ? fs.readFileSync(GATE_FILE, 'utf8') : null;
 const CONFIG = fs.readFileSync(path.join(R8, 'config.js'), 'utf8');
+// UI-240: the help panel's own filter, sliced from the shipped help-sidebar.js the way test-mark-complete-help.js does.
+const SIDEBAR = fs.readFileSync(path.join(__dirname, 'help-sidebar.js'), 'utf8').replace(/\r\n/g, '\n');
+const GLOSS_FN = SIDEBAR.slice(SIDEBAR.indexOf('  function glossaryHtml('), SIDEBAR.indexOf('\n  function init() {'));
+if (GLOSS_FN.indexOf('function glossaryHtml(') < 0) { console.log('HARNESS BROKEN: glossaryHtml not found in help-sidebar.js'); process.exit(1); }
 
 let failures = 0;
 function check(name, got, want, log) {
@@ -215,12 +219,42 @@ async function run(page, docs, gate, config, log) {
     // P: the prompt
     sb.RRV8.TRANSIT_GROUNDING = sb.RRV8.TRANSIT_GROUNDING || 'IN TRANSIT POLICY (test stand-in)';
     const p = api.itPrompt('analyst', 'scrubbed', ['FACT LINE'], 'What should I fix first?', null);
-    c('P1 In Transit\'s grounding leads the prompt', p.indexOf(sb.RRV8.TRANSIT_GROUNDING) === 0, true);
+    // UI-240 (2026-11-09): the page's glossary entries now lead, as on Home; In Transit's grounding follows them.
+    const GHEAD = String(sb.RRV8.GLOSSARY || '').split('\n')[0];
+    c('P1 the glossary leads the prompt, In Transit\'s grounding follows it',
+        [p.indexOf(GHEAD) === 0, p.indexOf(sb.RRV8.TRANSIT_GROUNDING) > p.indexOf('IF THE QUESTION IS "WHAT IS X"')], [true, true]);
     c('P2 Inventory\'s policies are not in it', [sb.RRV8.ANALYST_GROUNDING, sb.RRV8.ACCT_GROUNDING].filter((g) => g && p.indexOf(g.slice(0, 60)) >= 0).length, 0);
     c('P3 the level\'s data-access line is in it', p.indexOf(sb.RRV8.dataAccessLine('scrubbed')) >= 0, true);
     c('P4 the voice register closes it', p.slice(-60) === String(sb.RRV8.AI_REGISTER).slice(-60), true);
     c('P5 the doc links offered are In Transit\'s, not Inventory\'s', [p.indexOf('transit-reconcile =') >= 0, p.indexOf(' reconciliation = Inventory Reconciliation') >= 0], [true, false]);
     c('P6 the facts and the question are in it', [p.indexOf('FACT LINE') >= 0, p.indexOf('Question: What should I fix first?') >= 0], [true, true]);
+
+    // G: the glossary (UI-240, owner 2026-11-09 "Add all five"). The five In Transit entries reach this page's
+    // assistant and help panel, each view gets the ones on its screen, and no Inventory entry rides along.
+    const TERM = (l) => (l.match(/^- ([^:(]+)/) || [, ''])[1].trim();
+    const termsIn = (s) => String(s).split('\n').filter((l) => l.indexOf('- ') === 0).map(TERM);
+    const FIVE = ['ON HAND / IN TRANSIT', 'BEG VAR', 'GL CLASSES NOT IN THE MODEL', 'EXCL VAR QTY / EXCL VAR AMOUNT', 'TXN VARIANCE'];
+    const BOTH = ['ON HAND / IN TRANSIT', 'BEG VAR', 'TXN VARIANCE'];
+    const pa = api.itPrompt('analyst', 'scrubbed', ['FACT LINE'], 'What is beg var?', null);
+    const pc = api.itPrompt('accountant', 'scrubbed', ['FACT LINE'], 'What is beg var?', null);
+    const gEnd = (s) => s.slice(0, s.indexOf('IF THE QUESTION IS "WHAT IS X"'));
+    c('G1 the analyst\'s prompt carries the five In Transit entries and nothing else of the glossary', termsIn(gEnd(pa)), FIVE);
+    c('G2 the accountant\'s prompt carries the three on the accountant\'s screen', termsIn(gEnd(pc)), BOTH);
+    c('G3 the whole GLOSSARY still carries the five, so every other analyst prompt gets them too',
+        FIVE.filter((t) => termsIn(sb.RRV8.GLOSSARY).indexOf(t) < 0), []);
+    c('G3 control: Inventory\'s entries are still in the whole GLOSSARY', termsIn(sb.RRV8.GLOSSARY).indexOf('CARDEX VARIANCE') >= 0, true);
+    c('G4 Home\'s analyst selection gets no In Transit entry', termsIn(sb.RRV8.glossaryFor('home', 'analyst')).filter((t) => FIVE.indexOf(t) >= 0), []);
+    c('G4 control: Home\'s analyst selection is not empty', termsIn(sb.RRV8.glossaryFor('home', 'analyst')).indexOf('LINKED TRANSACTIONS / A LINKED TRANSACTION / LINKED PAIR / LINKED') >= 0, true);
+    c('G5 a surface with no entries adds nothing to a prompt', sb.RRV8.glossaryFor('no-such-page', 'analyst'), '');
+    // The help panel: the shipped glossaryHtml from help-sidebar.js, given the surface this page's <body> declares.
+    const surface = (page.match(/<body[^>]*\sdata-help-glossary="([^"]*)"/) || [, ''])[1];
+    const panelTerms = (role) => {
+        const box = { window: { RRV8: sb.RRV8 }, console: { warn: () => {} }, String, out: '' };
+        vm.runInNewContext(GLOSS_FN + '\nout = glossaryHtml(SURFACE, ROLE);', Object.assign(box, { SURFACE: surface, ROLE: role }));
+        return [...box.out.matchAll(/<dt>([^<]*)<\/dt>/g)].map((m) => m[1].replace(/\s*\([^)]*\)$/, '').trim());
+    };
+    c('G6 the help panel shows the analyst the five', panelTerms('analyst'), FIVE);
+    c('G7 the help panel shows the accountant the three on that screen', panelTerms('accountant'), BOTH);
 
     // D: ai-docs.js
     const home = sb.RRV8.aiDocs.catalogPrompt('token', 'accountant');
@@ -263,10 +297,10 @@ async function run(page, docs, gate, config, log) {
 const ARMS = [];
 function arm(name, which, from, to) { ARMS.push([name, which, from, to]); }
 async function runArm(name, which, from, to) {
-    const src = { page: PAGE, docs: DOCS, gate: GATE || '' }[which];
+    const src = { page: PAGE, docs: DOCS, gate: GATE || '', config: CONFIG }[which];
     if (src.indexOf(from) < 0) { failures++; console.log('  FAIL arm "' + name + '": the text it mutates is gone'); return; }
     const m = src.replace(from, to);
-    const bad = await run(which === 'page' ? m : PAGE, which === 'docs' ? m : DOCS, which === 'gate' ? m : GATE, CONFIG, false);
+    const bad = await run(which === 'page' ? m : PAGE, which === 'docs' ? m : DOCS, which === 'gate' ? m : GATE, which === 'config' ? m : CONFIG, false);
     if (bad > 0) console.log('  ok   arm "' + name + '" turns ' + bad + ' assertion(s) red');
     else { failures++; console.log('  FAIL arm "' + name + '" changed nothing'); }
 }
@@ -280,7 +314,13 @@ arm('activity on excluded orders not flagged', 'page', "state: c.actOnExcl == nu
 arm('a failed source reads as zero', 'page', "L.push(c.candidates == null ? 'Orders: could not be loaded.'", "L.push(false ? ''");
 arm('a reason lowered whole mid-sentence', 'page', "return s ? s.charAt(0).toLowerCase() + s.slice(1) : s;", 'return s ? s.toLowerCase() : s;');
 arm('a candidate counted once per reason it meets', 'page', 'candidates: o ? o.filter(QUICK.cand.test).length : null,', 'candidates: o ? o.filter(function (r) { return CANDIDATE.some(function (k) { return k.test(r); }); }).length + o.filter(function (r) { return CANDIDATE[0].test(r) && CANDIDATE[3].test(r); }).length + 1 : null,');
-arm('Inventory\'s analyst grounding in the prompt', 'page', "return (G.TRANSIT_GROUNDING ? G.TRANSIT_GROUNDING + '\\n\\n' : '')", "return (G.ANALYST_GROUNDING ? G.ANALYST_GROUNDING + '\\n\\n' : '')");
+arm('Inventory\'s analyst grounding in the prompt', 'page', "      + (G.TRANSIT_GROUNDING ? G.TRANSIT_GROUNDING + '\\n\\n' : '')", "      + (G.ANALYST_GROUNDING ? G.ANALYST_GROUNDING + '\\n\\n' : '')");
+arm('the prompt reads no glossary', 'page', "var gloss = G.glossaryFor ? G.glossaryFor('transit', vr) : '';", "var gloss = '';");
+arm('the whole GLOSSARY handed to the page', 'page', "var gloss = G.glossaryFor ? G.glossaryFor('transit', vr) : '';", 'var gloss = G.GLOSSARY;');
+arm('glossaryFor ignores [VIEWS=]', 'config', "var on = tags(line, 'ON'), views = tags(line, 'VIEWS') || ['analyst'];", "var on = tags(line, 'ON'), views = ['analyst', 'accountant'];");
+arm('an untagged entry counted as the accountant\'s', 'config', "views = tags(line, 'VIEWS') || ['analyst'];", "views = tags(line, 'VIEWS') || ['analyst', 'accountant'];");
+arm('a [VIEWS=] tag dropped from an entry', 'config', 'not yet received at period end, net of excluded orders. It is the figure the roll forward compares with the GL, NOT the cardex on-hand perpetual that On Hand means on the Inventory pages. [ON=transit] [VIEWS=analyst,accountant]', 'not yet received at period end, net of excluded orders. It is the figure the roll forward compares with the GL, NOT the cardex on-hand perpetual that On Hand means on the Inventory pages. [ON=transit]');
+arm('the page declares no glossary surface', 'page', ' data-help-glossary="transit">', '>');
 arm('no data-access line', 'page', "      + (G.dataAccessLine ? G.dataAccessLine(tier) + '\\n' : '')\n      + _aiDocCatalogPrompt(vr)", '      + _aiDocCatalogPrompt(vr)');
 arm('the doc catalog not scoped to In Transit', 'page', "RRV8.aiDocs.catalogPrompt('token', role, 'it')", "RRV8.aiDocs.catalogPrompt('token', role)");
 arm('Home\'s catalog defaults to In Transit', 'docs', "module = module || 'inv';", "module = module || 'it';");
