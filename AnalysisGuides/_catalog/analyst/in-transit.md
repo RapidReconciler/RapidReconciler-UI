@@ -44,8 +44,9 @@ Tag by topic rather than leaning on `ROLE_OF`. The page serves both roles, and `
    `window.RRV8.TRANSIT_GROUNDING = [].join('\n');` inside the block first, or the generator skips TRANSIT, prints
    success, and `--check` stays green.
 5. Update the generator's docstring ("six catalogs") and its header list.
-6. A consumer: `transit.html` makes no grounded AI call today (no `_GROUNDING` or `GLOSSARY` reference). The AI dock
-   on that page must prepend `TRANSIT_GROUNDING` (and `GLOSSARY`) or this catalog is dead text.
+6. A consumer. **Done:** `transit.html`'s question prompt (`itPrompt`) leads with this page's GLOSSARY entries for
+   the view (`RRV8.glossaryFor('transit', view)`, UI-240, 2026-11-09), then `TRANSIT_GROUNDING`; the analyst day
+   brief prepends `TRANSIT_GROUNDING`. `Tools/test-transit-ai.js` groups P and G pin both.
 
 ## Provenance
 
@@ -107,10 +108,16 @@ definitions in `RRV8/transit.html`. Three facts the KB does not state were read 
 The KB also describes V7 features V8 dropped by ruling (pie drill-down, PDF audit report, the End of Day "Suggested
 Entry" popup). The fence does not mention them.
 
-## RRV8.GLOSSARY candidates (for the owner; not added)
+## RRV8.GLOSSARY entries for In Transit (added 2026-11-09)
+
+**Owner ruling 2026-11-09: "Add all five."** They are in `RRV8.GLOSSARY` (`RRV8/config.js`), tagged `[ON=transit]`,
+with `[VIEWS=analyst,accountant]` on 1, 2 and 5. The whole GLOSSARY still goes into every analyst prompt on Home,
+Transactions and Cardex Variance, so those carry them too. In Transit's own prompt and help panel take only the
+entries tagged for the page and view (`RRV8.glossaryFor`; `data-help-glossary="transit"`): the analyst sees all
+five, the accountant 1, 2 and 5.
 
 Bar from the GLOSSARY header: the term is on a screen AND would otherwise be got wrong. All five are on
-`transit.html`; proposed tag `[ON=transit]`, with `[VIEWS=analyst,accountant]` where both lanes show it.
+`transit.html`. The list below is what was proposed; `config.js` holds the wording that shipped.
 
 1. **ON HAND / IN TRANSIT (In Transit module):** stock shipped and not yet received at period end, net of excluded
    orders. It is not the cardex perpetual that Inventory's On Hand means. Both views.
