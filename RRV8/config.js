@@ -2174,7 +2174,7 @@ window.RRV8.GLOSSARY = [
   // an entry above, uses for something else. Source: AnalysisGuides/_catalog/analyst/in-transit.md.
   '- ON HAND / IN TRANSIT (In Transit pages): stock shipped on a transfer and not yet received at period end, net of excluded orders. It is the figure the roll forward compares with the GL, NOT the cardex on-hand perpetual that On Hand means on the Inventory pages. [ON=transit] [VIEWS=analyst,accountant]',
   '- BEG VAR (beginning variance, In Transit): the out of balance brought in from the prior period (V7: Carry Forward). It sits next to Beg GL and is NOT an opening GL balance. [ON=transit] [VIEWS=analyst,accountant]',
-  '- GL CLASSES NOT IN THE MODEL (In Transit Data Health): transfer lines whose GL class no in-transit AAI (4320 / 4322) covers. It is NOT the 4152 Model DMAAI that MODEL DMAAI TABLE and EXCLUDED GL CLASS above mean. [ON=transit]',
+  '- GL CLASSES NOT IN THE MODEL (In Transit Data Health): transfer lines whose GL class no in-transit AAI (4320 / 4322) covers. It is NOT the 4152 Model DMAAI that the Inventory pages’ MODEL DMAAI TABLE and EXCLUDED GL CLASS mean. [ON=transit]',
   '- EXCL VAR QTY / EXCL VAR AMOUNT (Orders columns): activity on an order after it was excluded. Non-zero means un-exclude and re-exclude it so the exclusion carries the new figures. NOT a reconciliation variance. [ON=transit]',
   '- TXN VARIANCE (In Transit): per transfer document, ledger minus in transit. It is NOT F4111 against F0911, which is what transaction variance means on the Inventory pages. [ON=transit] [VIEWS=analyst,accountant]'
 ].join('\n');

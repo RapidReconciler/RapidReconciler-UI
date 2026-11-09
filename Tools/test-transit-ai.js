@@ -255,6 +255,12 @@ async function run(page, docs, gate, config, log) {
     };
     c('G6 the help panel shows the analyst the five', panelTerms('analyst'), FIVE);
     c('G7 the help panel shows the accountant the three on that screen', panelTerms('accountant'), BOTH);
+    // Owner look 2026-11-09: an entry said "...EXCLUDED GL CLASS above mean", and neither entry is above it on this page
+    // or in this page's prompt. An entry may point "above" only at a term in the same selection.
+    const pointsAway = (role) => sb.RRV8.glossaryFor('transit', role).split('\n').slice(1).filter((l) => /\babove\b/i.test(l)
+        && termsIn(sb.RRV8.GLOSSARY).filter((t) => t && l.indexOf(t) >= 0 && TERM(l) !== t
+            && termsIn(sb.RRV8.glossaryFor('transit', role)).indexOf(t) < 0).length > 0).map(TERM);
+    c('G8 no In Transit entry says "above" about a term the page does not show', [pointsAway('analyst'), pointsAway('accountant')], [[], []]);
 
     // D: ai-docs.js
     const home = sb.RRV8.aiDocs.catalogPrompt('token', 'accountant');
@@ -321,6 +327,7 @@ arm('glossaryFor ignores [VIEWS=]', 'config', "var on = tags(line, 'ON'), views 
 arm('an untagged entry counted as the accountant\'s', 'config', "views = tags(line, 'VIEWS') || ['analyst'];", "views = tags(line, 'VIEWS') || ['analyst', 'accountant'];");
 arm('a [VIEWS=] tag dropped from an entry', 'config', 'not yet received at period end, net of excluded orders. It is the figure the roll forward compares with the GL, NOT the cardex on-hand perpetual that On Hand means on the Inventory pages. [ON=transit] [VIEWS=analyst,accountant]', 'not yet received at period end, net of excluded orders. It is the figure the roll forward compares with the GL, NOT the cardex on-hand perpetual that On Hand means on the Inventory pages. [ON=transit]');
 arm('the page declares no glossary surface', 'page', ' data-help-glossary="transit">', '>');
+arm('an entry points "above" at terms the page does not show', 'config', 'that the Inventory pages’ MODEL DMAAI TABLE and EXCLUDED GL CLASS mean.', 'that MODEL DMAAI TABLE and EXCLUDED GL CLASS above mean.');
 arm('no data-access line', 'page', "      + (G.dataAccessLine ? G.dataAccessLine(tier) + '\\n' : '')\n      + _aiDocCatalogPrompt(vr)", '      + _aiDocCatalogPrompt(vr)');
 arm('the doc catalog not scoped to In Transit', 'page', "RRV8.aiDocs.catalogPrompt('token', role, 'it')", "RRV8.aiDocs.catalogPrompt('token', role)");
 arm('Home\'s catalog defaults to In Transit', 'docs', "module = module || 'inv';", "module = module || 'it';");
