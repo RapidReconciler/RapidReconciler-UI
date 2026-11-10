@@ -2,7 +2,7 @@
 
 **Status:** Spec. In progress. Foundation pieces have landed
 (VALC 2.0 control plane, new Services jar core endpoints, JWT
-per-database scoping, the Deployment Center install / upgrade /
+per-database scoping, the Release Bundles page install / upgrade /
 troubleshoot console, per-client company-seat licensing, and the
 go-live administrator handoff). Customer-facing rollout
 (V7 &rarr; V8) is phased.
@@ -735,7 +735,7 @@ breadth, then the cutover-infrastructure long poles.
    and the go-live administrator handoff have shipped (see #8 and the
    release-notes section); the central-broker Services-spawn hardening
    from the sub-plan is the remaining piece.
-8. **Deployment Center real wiring** &mdash; **DONE.** The
+8. **Release Bundles real wiring** &mdash; **DONE.** The
    `/valc/deployment` console is wired end-to-end as three banded
    tabs. **Installations**: readiness check, create-database + schema
    + `rruser`, SSIS catalog deploy, bootstrap + company licensing,
@@ -843,7 +843,7 @@ recent landing reads first. Format: `YYYY-MM-DD &middot; repo#PR
   sidebar polish (cert chip, scrollable, Client Management /
   Certificate Renewal labels). &mdash; *VALC 2.0 control plane
   build-out.*
-- 2026-05-26 &middot; **Valc #20** &middot; Deployment Center
+- 2026-05-26 &middot; **Valc #20** &middot; Release Bundles
   page (DB Scripts + Services Release tabs, stub execute); new
   Troubleshooting page (customer connection + out.log import);
   shared sidebar tail across pages. &mdash; *VALC 2.0 control
