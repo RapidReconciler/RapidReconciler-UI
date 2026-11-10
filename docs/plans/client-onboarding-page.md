@@ -133,31 +133,39 @@ Prod approval; a withdrawn bundle is approved nowhere, VLC-228).
 | VALC | Its databases (all on this box's SQL Server) | What it deploys |
 |---|---|---|
 | Dev (this box) | `RapidReconciler_Demo3`, `RapidReconciler_Scratch` (new), the practice database | Draft bundles to Demo3 for testing; single components to Scratch only |
-| QA | `RapidReconciler_Demo1`, `RapidReconciler_Demo2` (proposed split, to confirm) | Published bundles, verified pass or fail; demos run here (owner ruling 2026-11-01: QAv8 is for GSI testing and demos) |
+| QA | `RapidReconciler_Demo1`, `RapidReconciler_Demo2` (owner 2026-11-10: "Demo1 and 2 go to QA") | Published bundles, verified pass or fail; demos run here (owner ruling 2026-11-01: QAv8 is for GSI testing and demos) |
 | Prod | customers | Bundles approved for Prod, to new and existing customers |
 
 | # | Decision | Ruling |
 |---|---|---|
 | D5 | Shared databases take whole bundles only | **Accepted.** Bundle-only is a property of the database. `RapidReconciler_Scratch` (owner: "You can create a RapidReconciler_Scratch db to support it") is the one Dev database that takes loose components |
-| D6 | Testing and demos on the same databases | **Demos move to QA's databases**, which only ever hold published bundles. Which databases go to QA is still to confirm |
+| D6 | Testing and demos on the same databases | **Demos move to QA's databases**, which only ever hold published bundles: Demo1 and Demo2 |
 | D7 | Where a draft is tested | **On Dev, on Demo3** (revised from "on QA"): QA sees published bundles only, so the gate needs no draft target |
 
 **Sidebar (owner 2026-11-10):** Support Center, Development Queue, Client Management, Release Bundles (formerly
 Deployment Center), Troubleshooting, Message Center, Operators. The order is built (in the VLC-271 worktree,
-`admin-nav.html`, with a render test). **The rename waits for P4:** today about 10 of the operator-facing sentences that name the page are
-about installing a database ("the data load you ran in the Deployment Center"), which would read wrong under
-"Release Bundles" until Manage database has left the page. Sized 2026-11-10: 133 lines in Valc (about 40 of them
-shown to an operator; the rest are comments and Flyway migrations, which must not change), 33 test files, 65 files
-in the UI repo.
+`admin-nav.html`, with a render test). **The rename: "now" (owner 2026-11-10)**, ahead of P4. Until Manage
+database leaves the page, the sentences about installing a database say "in Release Bundles, on the Manage
+database tab". Sized 2026-11-10: 133 lines in Valc (about 40 of them shown to an operator; the rest are comments
+and Flyway migrations, which must not change), 33 test files, 65 files in the UI repo.
+
+**The Development Queue becomes three tabs (owner 2026-11-10, VLC-273):** Tasks (the Customer Queue and Test
+Findings as inputs, and a new section for the output, the next release bundle), Recently Released, and Release
+History with the Audit export. Planned in its own row.
 
 For the client page this means the Database section picks **one bundle** at the top; Install, SSIS package and
 Services take their versions from it, shown read-only. Loose per-component pickers stay only for a bundle-only=off
 database on Dev. A real customer only ever receives approved bundles, so the junior learns the same single choice
 they will make at a customer.
 
-Still open from the flow review, unchanged by the layout: the Script 4 step in `rr-installation-prep` (gap 10),
-the discovery call and install meeting (gap 15), and the certificate claim in VALC's prep email (gap 15). All three
-change what customers read.
+**Customer-wording rulings (owner 2026-11-10)**, which close the three questions the flow review left open:
+
+- **Scripts (gap 10):** "GSI deploys scripts, the customer needs to provide temporary SQL Server admin credentials
+  for database installation." So the customer never runs Script 4; GSI does, with the temporary sysadmin login the
+  customer supplies. `rr-installation-prep` asks for those credentials; the install steps say GSI runs the scripts.
+- **Meetings (gap 15):** "V8 has a discovery call and install meeting." Every doc says both happen.
+- **The prep email (gap 15):** "Do not drop the cert claim." The claim stays, so the checklist it describes has to
+  cover certificates; the checklist gains that item rather than the email losing the sentence.
 
 ---
 
@@ -167,8 +175,8 @@ Each phase ships on its own and leaves VALC working.
 
 **P0a. `RapidReconciler_Scratch`.** Install it on client 1 through Manage database (the product's own path; the
 install login is typed by the owner, never stored). It adds a fourth Services instance to client 1's broker (2 GB
-max heap on a box whose commit limit HK-51 just raised), so it is installed once and left. JDE source and whether it
-is loaded: to confirm.
+max heap on a box whose commit limit HK-51 just raised), so it is installed once and left. It reads Demo2's JDE source
+(owner 2026-11-10: "Use Demo2's for the scratch DB").
 
 **P0. Commit VLC-271 as it stands.** Its fixes hold under any layout: the practice handoff that completes, licensing
 after Bootstrap, Install reopening on the new database, Load not ticking mid-run. Its page-to-page handoff (gap 2)
