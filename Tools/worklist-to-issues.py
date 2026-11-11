@@ -201,11 +201,27 @@ def chunk_line(chunk, wid):
                              n=len(chunk["rows"]), order=", ".join(chunk["rows"]))
 
 
-def gh(args, input_text=None):
-    r = subprocess.run([GH] + args, capture_output=True, text=True, encoding="utf-8", input=input_text)
-    if r.returncode != 0:
-        raise RuntimeError(" ".join(args[:3]) + ": " + (r.stderr or r.stdout).strip())
-    return r.stdout
+# 2026-11-10: with the box at 100% CPU, one TLS handshake in a run of dozens timed out and failed the whole sync
+# four times in a row. These messages come from the connect and handshake phases, before gh has sent the request,
+# so a retry can never apply a write twice. Any other failure (an HTTP error, a timeout after sending) is raised
+# at once, as before.
+PRE_SEND_ERRORS = ("TLS handshake timeout", "dial tcp", "no such host")
+GH_RETRY_WAITS = (5, 15, 30)
+
+
+def gh(args, input_text=None, run=None, sleep=None):
+    run = run or subprocess.run
+    sleep = sleep or time.sleep
+    for wait in GH_RETRY_WAITS + (None,):
+        r = run([GH] + args, capture_output=True, text=True, encoding="utf-8", input=input_text)
+        if r.returncode == 0:
+            return r.stdout
+        msg = (r.stderr or r.stdout).strip()
+        if wait is None or not any(e in msg for e in PRE_SEND_ERRORS):
+            raise RuntimeError(" ".join(args[:3]) + ": " + msg)
+        print(f"  gh {' '.join(args[:2])}: {msg.splitlines()[-1] if msg else 'failed'}; retrying in {wait}s",
+              file=sys.stderr)
+        sleep(wait)
 
 
 def chunk_labels(chunks):
@@ -820,6 +836,43 @@ def sync(dry):
     return 0
 
 
+def gh_retry_self_test():
+    """gh() retries a failure from before the request was sent, and nothing else."""
+    class R:
+        def __init__(self, code, out="", err=""):
+            self.returncode, self.stdout, self.stderr = code, out, err
+    tls = 'Get "https://api.github.com/x": net/http: TLS handshake timeout'
+
+    def fake(results):
+        calls = []
+        def run(*a, **k):
+            calls.append(a[0])
+            return results[len(calls) - 1]
+        return run, calls
+
+    waits = []
+    run, calls = fake([R(1, err=tls), R(1, err=tls), R(0, out="ok")])
+    with contextlib.redirect_stderr(io.StringIO()):
+        assert gh(["api", "x"], run=run, sleep=waits.append) == "ok"
+    assert len(calls) == 3 and waits == [5, 15], f"two handshake timeouts, then success: {calls} {waits}"
+    waits = []
+    run, calls = fake([R(1, err="HTTP 422: Validation Failed")])
+    try:
+        gh(["api", "x"], run=run, sleep=waits.append)
+        raise AssertionError("an HTTP error must raise")
+    except RuntimeError as e:
+        assert "422" in str(e) and len(calls) == 1 and waits == [], f"an HTTP error is never retried: {calls}"
+    waits = []
+    run, calls = fake([R(1, err=tls)] * 4)
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            gh(["api", "x"], run=run, sleep=waits.append)
+        raise AssertionError("four handshake timeouts must raise")
+    except RuntimeError as e:
+        assert "TLS handshake timeout" in str(e) and len(calls) == 4 and waits == [5, 15, 30], \
+            f"retries are bounded: {calls} {waits}"
+
+
 def self_test():
     sample = ("| ID | Status | What it is | Need from you |\n|---|---|---|---|\n"
               "| [DAC-1](#dac-1--x) | \u2610 | **A thing** | — |\n"
@@ -959,6 +1012,7 @@ def self_test():
     assert os.path.exists(CLOSE_TOOL), f"the close tool the reverse leg runs must exist: {CLOSE_TOOL}"
     hk47_self_test(rows, secs, chunks, lab)
     vlc216_self_test(lab)
+    gh_retry_self_test()
     print("self-test OK (HK-47: read cache, unchanged skip, lock, verify, state fingerprint; VLC-216: reopen pass)")
 
 
