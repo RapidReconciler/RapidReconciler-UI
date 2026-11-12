@@ -966,7 +966,7 @@ const AGENT_RULES = [
 
   { name: 'Timed out logging in to SQL Server',
     match: /\bLogin timed out\b/i,
-    severity: 'flag',
+    severity: 'flag', blip: 'database',
     fix: 'Check that the SQL Server named on the instance record is reachable from the agent host and accepting connections &mdash; the service is running, the port is open through the firewall, and the instance isn&rsquo;t saturated. A single occurrence that doesn&rsquo;t repeat is a transient blip and needs no action; a cluster of them is a real connectivity or capacity problem.',
     note: 'The agent reached the network but the SQL Server login never completed inside the driver timeout. This is distinct from a refused connection (nothing listening) and from a rejected credential (wrong password) &mdash; the server was there and simply too slow to answer. Check the timestamp against the customer&rsquo;s backup or maintenance window.' },
 
@@ -974,19 +974,19 @@ const AGENT_RULES = [
   { name: 'Heartbeat',
     match: /\bINFO\b.*Sending heartbeat/i, severity: 'good' },
   { name: 'Reported its heartbeat facts',
-    match: /\bHeartbeat-facts\b.*\bOK:\s*2\d\d/i, severity: 'good',
+    match: /\bHeartbeat-facts\b.*\bOK:\s*2\d\d/i, severity: 'good', proves: 'valc',
     note: 'The V8 data services reported their server facts to VALC and VALC accepted them. Written at DEBUG level, so it shows only when DEBUG logging is on.' },
   { name: 'Successful instance state',
-    match: /\bdbSystemStatus=success\b/, severity: 'good' },
+    match: /\bdbSystemStatus=success\b/, severity: 'good', proves: 'database' },
   { name: 'Connected to VALC',
-    match: /\b(Connected to VALC\b.*queue|Client queue\s*-\s*[a-f0-9-]{8,})/i, severity: 'good',
+    match: /\b(Connected to VALC\b.*queue|Client queue\s*-\s*[a-f0-9-]{8,})/i, severity: 'good', proves: 'valc',
     note: 'Agent completed the bootstrap handshake with VALC and is now listening on its assigned UUID queue. The real agent log uses "Client queue - <uuid>" for this; the legacy "Connected to VALC ... queue" pattern is kept for older hand-edited paste samples.' },
   { name: 'Agent application started',
     match: /\bStarted AgentApplication in [\d.]+ seconds/i, severity: 'good' },
   { name: 'Client services application started',
     match: /\bStarted ClientServicesApplication\b/i, severity: 'good' },
   { name: 'Database connectivity OK',
-    match: /\bDatabase connectivity:\s*\[OK\]/i, severity: 'good' },
+    match: /\bDatabase connectivity:\s*\[OK\]/i, severity: 'good', proves: 'database' },
   { name: 'Instance JAR runnable',
     match: /\bInstance JAR package runnable:\s*\[OK\]/i, severity: 'good' },
   { name: 'Pre-start check OK',
@@ -994,7 +994,7 @@ const AGENT_RULES = [
   { name: 'Startup preconditions met',
     match: /\bStartup preconditions met,\s*proceeding\b/i, severity: 'good' },
   { name: 'Database connected',
-    match: /\bDatabase connected with success\b/i, severity: 'good' },
+    match: /\bDatabase connected with success\b/i, severity: 'good', proves: 'database' },
   { name: 'Instance is RUNNING',
     match: /\bInstance that runs on \S+ is RUNNING!/i, severity: 'good' },
   { name: 'Notifying VALC of port',
@@ -1068,6 +1068,11 @@ const AGENT_RULES = [
     match: /RequestLogFilter\s*:\s*\S+ \S+ -> \d{3} in (?:[2-9]\d{4}|\d{6,}) ms\b/, severity: 'flag',
     note: 'The agent answered, but slowly: the line ends with how long the request took. Most requests on a healthy box finish in a few seconds. One slow request during a refresh job or a backup is expected. Several, or one at a quiet time, mean the SQL Server was busy or a query has grown.',
     fix: 'Note the request path and the time. Check whether a refresh job, a backup or another heavy query was running then. If the same request is slow again at a quiet time, capture the surrounding lines and escalate it as a performance problem.' },
+  // VLC-288: the proof of recovery a database's own log carries. The data services ran a statement against the
+  // database and answered 2xx, so the connection works. After the 20-second rule, so a slow one is still flagged.
+  { name: 'Data services ran a database request',
+    match: /RequestLogFilter\s*:\s*POST \/admin\/deploy\/sql\S* -> 2\d\d in \d+ ms\b/, severity: 'noise', proves: 'database',
+    note: 'The data services ran a statement against the database and answered. Routine, and it shows the database connection was working at that moment.' },
   { name: 'Routine INFO',
     match: /\bINFO\b/, severity: 'noise' },
 
@@ -1091,12 +1096,21 @@ const AGENT_RULES = [
 
   // ---- Flags ----
   { name: 'Agent cannot reach a monitored database',
-    match: /(?:DatabaseManagerServiceMsSqlImpl|CompanySyncService)\b.*(?:Login timed out|Socket closed|Error connecting to database|Error when quering|Error loading companies|Error removing licensed companies)/i, severity: 'flag',
+    match: /(?:DatabaseManagerServiceMsSqlImpl|CompanySyncService)\b.*(?:Login timed out|Socket closed|Error connecting to database|Error when quering|Error loading companies|Error removing licensed companies)/i, severity: 'flag', blip: 'database',
     fix: 'If this just followed a reboot, give it a minute or two &mdash; the agent retries and recovers once SQL Server is up. If it hasn&rsquo;t cleared, restart that database&rsquo;s RapidReconciler service so it reconnects, then confirm SQL Server is running, the database name is correct, and the <code>rruser</code> login works against that database.',
     note: 'The agent couldn&rsquo;t log into, or sync, one of the databases it monitors. Most common right after a reboot, when the agent starts before SQL Server is ready. <code>Socket closed</code> means the connection dropped mid-query. (A <code>Login timed out</code> is reported under its own heading above.)' },
   { name: 'Briefly lost contact with VALC',
-    match: /\b(?:Reconnect(?:ing)?|Try connect|connection (?:lost|dropped)).*?(?:broker|VALC|JMS)/i, severity: 'flag',
+    match: /\b(?:Reconnect(?:ing)?|Try connect|connection (?:lost|dropped)).*?(?:broker|VALC|JMS)/i, severity: 'flag', blip: 'valc',
     note: 'The agent&rsquo;s connection to VALC was interrupted and it&rsquo;s trying to reconnect. A single occurrence is usually a transient network blip and recovers on its own. Repeated reconnect attempts mean a real network problem between the agent host and VALC &mdash; check the corporate firewall and the agent host&rsquo;s outbound TLS access to <code>staging-valc.cloudapp.net:443</code> (staging) or <code>rr-spa.cloudapp.net:443</code> (production).' },
+  // VLC-288: named, so they can be told from an unknown WARN and judged as blips (see recoveredBlips).
+  { name: 'Data services dropped a stale database connection',
+    match: /com\.zaxxer\.hikari\.pool\.PoolBase\s*:.*Failed to validate connection/i, severity: 'flag', blip: 'database',
+    fix: 'If the lines after it show the data services answering database requests again, nothing is needed: the pool replaced the connection. If they do not, confirm SQL Server is running and restart that database&rsquo;s RapidReconciler service.',
+    note: 'The data services keep a few database connections open. One of them had gone dead (SQL Server restarted, or the network dropped it) and the pool threw it away and opened a new one. Common in the hour after a reboot.' },
+  { name: 'Data services paused briefly',
+    match: /com\.zaxxer\.hikari\.pool\.HikariPool\s*:.*Thread starvation or clock leap detected/i, severity: 'flag', blip: 'database',
+    fix: 'One or two after a reboot or a backup need nothing. If it repeats through the day, the server is short of CPU or memory, or the virtual machine is being paused: check the host.',
+    note: 'The data services noticed that their housekeeping ran late, by the time shown in the line. The server was busy or the virtual machine was paused for a moment, typically while Windows was starting.' },
   { name: 'WARN level',
     match: /\bWARN\b/, severity: 'flag' },
   { name: 'Connection failure',
@@ -1180,6 +1194,27 @@ function classifyLine(line, rules) {
     }
   }
   return { rule: { name: 'Unrecognized', severity: 'flag' }, line };
+}
+
+// VLC-288 (owner 2026-11-12: "Stop counting recovered blips"). A connection that dropped and came back used to
+// colour the verdict for as long as its line stayed in the log. A line is a RECOVERED BLIP only when both hold:
+//   1. its rule is tagged `blip` (a named connection-class rule, never "WARN level", "ERROR level" or
+//      "Unrecognized"), and
+//   2. a LATER line in the same log matches a rule tagged `proves` with the same word: for 'valc', the agent
+//      connected or its heartbeat facts were accepted; for 'database', a connect succeeded or the data services
+//      ran a database request.
+// It is judged from the log's own order, never from clock times around a known restart, so a fault that merely
+// coincides with a restart still counts, and a connection that is down NOW has no later proof and counts as before.
+// Returns one boolean per line. VALC's Troubleshooting Step 2 and AgentLogRules.java do the same.
+function recoveredBlips(lines, rules) {
+  const out = new Array(lines.length).fill(false);
+  const proven = {};
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const rule = classifyLine(lines[i], rules).rule;
+    if (rule.blip && proven[rule.blip]) out[i] = true;
+    if (rule.proves) proven[rule.proves] = true;
+  }
+  return out;
 }
 
 // Strip volatile tokens (timestamps, PIDs, ports, UUIDs, IP addresses,
@@ -1464,10 +1499,21 @@ function analyze(mode) {
     'WARN level':   'Unhandled WARN'
   };
   const buckets = new Map();
-  for (const line of lines) {
+  const recovered = recoveredBlips(lines, rules);   // VLC-288
+  for (let li = 0; li < lines.length; li++) {
+    const line = lines[li];
     const { rule } = classifyLine(line, rules);
     let key, useRule;
-    if (SUB_BUCKET_RULES.has(rule.name)) {
+    if (recovered[li]) {
+      // Said, not counted: it joins the suppressed entries under its own name, so the operator can still see it.
+      key = rule.name + '::recovered';
+      useRule = {
+        name: rule.name + ' (recovered)',
+        severity: 'noise',
+        note: 'Later lines in this log show the ' + (rule.blip === 'valc' ? 'connection to VALC' : 'database connection')
+          + ' working again, so this is not counted as a problem. ' + (rule.note || '')
+      };
+    } else if (SUB_BUCKET_RULES.has(rule.name)) {
       const norm = normalizeForGrouping(line);
       key = rule.name + '::' + norm;
       useRule = {
