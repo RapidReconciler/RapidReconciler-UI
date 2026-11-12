@@ -67,6 +67,13 @@ function pageRules(html) {
   vm.runInNewContext(html.slice(start, end + 3).replace('const AGENT_RULES =', 'AGENT_RULES ='), ctx);
   return ctx.AGENT_RULES;
 }
+function pageRecovered(html, classify) {
+  const m = /function recoveredBlips\(lines, rules\) \{[\s\S]*?\n\}/.exec(html);
+  if (!m) throw new Error('function recoveredBlips not found in ' + PAGE);
+  const ctx = { classifyLine: classify };
+  vm.runInNewContext(m[0].replace('function recoveredBlips', 'recoveredBlips = function'), ctx);
+  return ctx.recoveredBlips;
+}
 function pageClassifier(html) {
   const m = /function classifyLine\(line, rules\) \{[\s\S]*?\n\}/.exec(html);
   if (!m) throw new Error('function classifyLine not found in ' + PAGE);
@@ -74,7 +81,11 @@ function pageClassifier(html) {
   vm.runInNewContext(m[0].replace('function classifyLine', 'classifyLine = function'), ctx);
   return ctx.classifyLine;
 }
-const shape = (rules) => rules.map((r) => ({ name: r.name, severity: r.severity, source: r.match.source, flags: r.match.flags }));
+// VLC-288: `blip` and `proves` are part of the contract. A rule without one carries no such key, so the other
+// 50-odd lines of the file did not change when they were added.
+const shape = (rules) => rules.map((r) => Object.assign(
+  { name: r.name, severity: r.severity, source: r.match.source, flags: r.match.flags },
+  r.blip ? { blip: r.blip } : {}, r.proves ? { proves: r.proves } : {}));
 
 // One rule per line, so a change to the contract reads as a one-line diff.
 function render(rules) {
@@ -150,6 +161,41 @@ check('CONTROL: both parsed, with a table\'s worth of rules (page ' + page.lengt
     const r = took(line);
     check(what, r.name === name && r.severity === sev, 'got ' + r.name + ' [' + r.severity + ']');
   }
+}
+
+// 3. ------------------------------------------------------------ VLC-288: a blip the log shows recovered is not counted
+{
+  const rules = pageRules(html), classify = pageClassifier(html), recovered = pageRecovered(html, classify);
+  const DB_DOWN = '2026-11-11 20:05:55.111  WARN 5544 --- [   scheduling-1] .r.a.s.i.DatabaseManagerServiceMsSqlImpl : Error connecting to database: Cannot open database "RapidReconciler_Acme" requested by the login.';
+  const STALE = '2026-11-11T21:08:59.765Z  WARN 10992 --- [client-services-agent] [l-1:housekeeper] com.zaxxer.hikari.pool.PoolBase          : HikariPool-1 - Failed to validate connection ConnectionID:16 (The connection is closed.)';
+  const PAUSE = '2026-11-11T21:09:26.035Z  WARN 10992 --- [client-services-agent] [l-1:housekeeper] com.zaxxer.hikari.pool.HikariPool        : HikariPool-1 - Thread starvation or clock leap detected (housekeeper delta=51s3ms).';
+  const SQL_OK = '2026-11-11T21:34:44.700Z  INFO 12764 --- [client-services-agent] [0-45585-exec-10] [d330f8dfb289] c.r.c.services.config.RequestLogFilter : POST /admin/deploy/sql -> 200 in 5 ms';
+  const SQL_SLOW = '2026-11-11T21:34:44.700Z  INFO 12764 --- [client-services-agent] [0-45585-exec-10] [d330f8dfb289] c.r.c.services.config.RequestLogFilter : POST /admin/deploy/sql -> 200 in 31000 ms';
+  const SQL_500 = '2026-11-11T21:34:44.700Z  INFO 12764 --- [client-services-agent] [0-45585-exec-10] [d330f8dfb289] c.r.c.services.config.RequestLogFilter : POST /admin/deploy/sql -> 500 in 5 ms';
+  const VALC_LOST = '2026-11-11 20:05:01.000  WARN 5544 --- [main] c.r.agent.jms.ValcOutbound : Reconnecting to VALC broker';
+  const VALC_OK = '2026-11-11 20:06:01.000  INFO 5544 --- [main] c.r.agent.jms.ValcOutbound : Client queue - 0f8fad5b-d9cb-469f-a165-70867728950e';
+  const PLAIN_WARN = '2026-11-11 20:07:01.000  WARN 5544 --- [main] c.r.Foo : something odd';
+  const name = (l) => classify(l, rules).rule.name;
+  check('the two pool lines after a reboot have names of their own, no longer "WARN level"',
+        name(STALE) === 'Data services dropped a stale database connection' && name(PAUSE) === 'Data services paused briefly', name(STALE) + ' / ' + name(PAUSE));
+  check('a database request that answered 2xx is the proof, and a 20-second one is still flagged first',
+        name(SQL_OK) === 'Data services ran a database request' && name(SQL_SLOW) === 'A request took 20 seconds or more', name(SQL_OK) + ' / ' + name(SQL_SLOW));
+  const r1 = recovered([DB_DOWN, STALE, PAUSE, SQL_OK], rules);
+  check('THE 2026-11-12 CASE: three database blips followed by a working database request are all recovered',
+        JSON.stringify(r1) === '[true,true,true,false]', JSON.stringify(r1));
+  const r2 = recovered([SQL_OK, DB_DOWN, STALE], rules);
+  check('a blip with nothing after it is NOT recovered: a connection down now still counts',
+        JSON.stringify(r2) === '[false,false,false]', JSON.stringify(r2));
+  const r3 = recovered([DB_DOWN, SQL_500, VALC_OK], rules);
+  check('a failed request, or proof of the OTHER connection, recovers nothing', JSON.stringify(r3) === '[false,false,false]', JSON.stringify(r3));
+  const r4 = recovered([VALC_LOST, DB_DOWN, VALC_OK], rules);
+  check('each kind needs its own proof: VALC came back, the database did not', JSON.stringify(r4) === '[true,false,false]', JSON.stringify(r4));
+  const r5 = recovered([PLAIN_WARN, SQL_OK, VALC_OK], rules);
+  check('an unnamed WARN is never a blip, whatever follows it', JSON.stringify(r5) === '[false,false,false]', JSON.stringify(r5));
+  // MUTATION ARM: a judgement that ignores order would clear the blip that has nothing after it.
+  const loose = pageRecovered(html.replace('for (let i = lines.length - 1; i >= 0; i--) {', 'for (let i = 0; i < lines.length; i++) {'), classify);
+  check('MUTATION ARM: read front to back, proof BEFORE a blip clears it, so the "down now" check above would fail',
+        JSON.stringify(loose([SQL_OK, DB_DOWN, STALE], rules)) !== '[false,false,false]');
 }
 
 console.log('');
