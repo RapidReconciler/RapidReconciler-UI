@@ -34,22 +34,48 @@ Owner rulings, 2026-11-14 (session `[52206b]`):
 - No manual checks on Dev: a dev rollout takes no copy of the checklist and drops an old one; Publish follows the
   automated checks and acknowledged figures. The checklist itself is kept for QA.
 
-## Phase 2 &mdash; Cut release (measure first)
+## Phase 2 &mdash; Cut release (built 2026-11-14)
 
-VALC writes bundle releases on GitHub; it is **not known** whether its token can tag the component repos
-(Agent, DB, SSIS, UI) and start their release Actions. Measure the token's scopes on each repo. If it can, step 3
-offers **Cut release** on each line with unreleased changes, proposing the next version (editable). If it cannot,
-widening the token is a security decision for the owner and Daren; until then step 3 names what to cut.
+**Measured first, 2026-11-14.** The dev VALC's token is `gh auth token` on the dev box (no `RR_GITHUB_TOKEN`, no
+`~/.rr-github-token`): an OAuth token with `repo` and `workflow`, admin on all six repos. QA's and Prod's machine-account
+token (QAv8 task 12) is never asked, because the Development Queue exists only on the dev VALC. Each repo's release
+trigger, read from `.github/workflows` on `main`:
 
-## Phase 3 &mdash; QA and Prod (when the QA VALC is close)
+| Line | Releases on | Cut release |
+|---|---|---|
+| Services | every merge touching its source (`auto-release.yml`) | none: "releases itself" |
+| Database | every merge touching `RapidReconciler/**` (`bump-db-version.yml`) | none: "releases itself" |
+| SSIS | tag `ssis-v*` | next patch proposed, editable |
+| V8 UI | tag `ui-v*` | next patch proposed, editable |
+| Agent installer | tag `installer-v*` (packages the newest broker release) | next patch proposed, editable |
+| Broker | tag `v*`, refused unless it equals `broker/pom.xml` | the pom's version only, while no tag has it |
 
-- Releases on QA: Approve for QA (moves off the Support Center band), deploy to the QA databases, the same four
-  automated checks, the **manual checklist** (the current list minus "note the UI commit": UI-211 records the
-  deployed UI), result written to the bundle's GitHub release.
-- Prod approval requires QA's recorded pass, not only QA approval.
-- The V8 UI deploy (UI-211) lands here; then the Release Bundles page can retire.
-- **Cutover gate:** until phase 3 lands, no manual test is recorded anywhere. Acceptable while no customer runs V8;
-  it must land before the first V8 customer. Add it to the QAv8 master plan as a prerequisite.
+`ReleaseCutService` tags `main`'s tip with an annotated tag whose message names who cut it, refuses a line with nothing
+waiting, a version not newer than the line's newest release, an existing tag, and a second cut while one is in flight
+(45 minutes, or until the catalog has it). Endpoints: `GET /api/v1/admin/development/lane/cut-plan`,
+`POST /api/v1/admin/development/lane/cut/{component}`; Developer and Administrator, dev box only.
+
+**Not exercised against GitHub.** No tag was pushed while building it; the first real click is the first live test.
+If the dev box ever moves to a machine-account token, that token needs Contents write on the four tagged repos.
+
+## Phase 3 &mdash; QA and Prod (built 2026-11-14, not seen running)
+
+Owner rulings 2026-11-14: the checklist **travels with the bundle**; QA makes the **manual checks only** (the automated
+checks stay Dev's); **build now and hold** although no QA VALC exists (the QAv8 names do not resolve).
+
+- **Dev's Publish** writes the active checklist into the release: `RR-Bundle-QA-Check: <text>`, or
+  `RR-Bundle-QA-Check-Noted: <text>` for a check passed with a note. Dev had 6 active items on 2026-11-14.
+- **QA** (`ReleaseQaService`, Releases page): Approve for QA (the existing approve route) &rarr; Roll out (the Support
+  Center's Fleet upgrades band, unchanged) &rarr; Manual checks. On approval the checks the bundle carried (read from its
+  `IMPORTED` body) become its `release_train_manual_checks` rows; each is recorded PASS/FAIL; **Record QA's result**
+  appends `QA-Tested: PASS|FAIL <upn> <utc>` plus the per-check lines to the release, once. A failed GitHub write records
+  nothing. V125 adds `release_trains.qa_tested_result/_by/_at` and the `QA_TESTED` event.
+- **Prod**: Sync copies `QA-Tested` like an approval; `approve` and the band's waiting bundle need `PASS`.
+- **Not done here:** the band keeps its own Approve (both paths call the same gated route); UI-211's deploy is its own
+  row (built, uncommitted, in `_wt/ui-211-valc`, waiting on QAv8 task 9); retiring the Release Bundles page is the
+  owner's call.
+- **Cutover gate:** a bundle reaches Prod only with QA's recorded pass. Before the first V8 customer: phase 3 merged,
+  then one bundle taken through QAv8 end to end.
 
 ## Known limits
 
