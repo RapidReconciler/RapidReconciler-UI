@@ -33,8 +33,9 @@ walkthroughs are one now, on the Onboarding page, with its band shown on the pag
   does not tick the schedule, and says so).
 - A real customer's licensing check could never tick: the snapshot counted licensed companies for the practice client
   only. It counts every customer not yet handed off now.
-- Not changed, and still open: the JDE database password travels in the prep email's body (`rr-installation-prep.html`,
-  buildBody), while the same document says never to email the SSO secret. Customer-facing, so the owner's call.
+- The JDE database password in the prep email's body: the owner ruled "Go with the encrypted attachment" (VLC-298,
+  built 2026-11-15). The prep document seals the submission to QA's and Prod's public keys; VALC opens the file at
+  import. It switches on once those two VALCs run the build and their keys are copied into the document.
 
 ---
 
