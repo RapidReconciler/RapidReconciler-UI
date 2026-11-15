@@ -6,6 +6,27 @@ page because installing a customer means bouncing between the client card and th
 **Builds on:** `onboarding-process-flow.md` (the flow review), `deployment-center-manage-database-merge.md` (the
 2026-06-17 ruling that Manage database is database-centric, new or existing, which this plan keeps).
 
+> **Update 2026-11-14: Manage database's home is the Manage Client modal, not a client page (yet).** On 2026-11-14 the
+> owner ruled that V8 Clients keeps the Manage Client modal for now (VLC-296), so P2's page was not built. Asked where
+> Manage database should go instead, three homes were weighed (inline on Onboarding plus Client Configuration; this
+> plan's client page; an Admin "Databases" page) and the owner chose the first: **"Go with option 1"**. What shipped:
+> - **P1 as planned**, redone on `be04d6c`: `fragments/manage-database.html` and `/js/manage-database.js`.
+> - **One implementation, two hosts.** The fragment renders once in `dashboard.html`, in the Manage Client modal's
+>   **Databases** tab, so it serves the Onboarding page (a client being onboarded) and the Support Center's V8 Clients
+>   tab (a live customer). The customer is the modal's client; the picker is hidden. The modal widens on that tab.
+> - **Install walkthrough on the same page.** Its step list moved into the fragment (`:: walk`), rendered on the
+>   Onboarding view; its ticker is `/js/install-walkthrough.js`. Onboarding step 6's Add Database starts it in place;
+>   "Back to onboarding" still returns at Licensing. The sessionStorage subject is unchanged.
+> - **Release Bundles** keeps Fleet Upgrades and Release history. `/valc/deployment?clientId=…` redirects to
+>   `/valc/clients?db=…`, which sends a client still being onboarded on to `/valc/onboarding?db=…`.
+> - **Administrator only**, as before: only an Administrator's page carries the model, and a `?db=` link opens nothing
+>   for Helpdesk.
+> - The script loads with the Onboarding page and on first use on V8 Clients (it polls and syncs catalogs on load).
+>
+> P2 (this page) stays possible: moving the modal's panels onto a page carries the fragment with them unchanged.
+> VLC-296's pills move the same panels inline on Onboarding. Retiring Release Bundles still needs UI-211 (the V8 UI
+> deploy) and Ship a release moved.
+
 ---
 
 ## The problem, measured
