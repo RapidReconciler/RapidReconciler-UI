@@ -2892,7 +2892,9 @@
 
       <div class="submit-panel">
         <div class="submit-panel-head">Submit to GSI</div>
-        <p class="submit-panel-text">Click <strong>Send via Email</strong> to open your email client with your topology selection, checklist results, and JDE information pre-filled in a message to <code>rrsupport@getgsi.com</code>. Review the message before sending. If your browser is not configured to open email links, use <strong>Copy to Clipboard</strong> and paste the contents into a new message. <strong>Send via Email</strong> is enabled once a topology and a source platform have been selected and every JDE field has been filled in.</p>
+        <p class="submit-panel-text">Click <strong>Send via Email</strong> to open your email client with your topology selection, checklist results, and JDE information pre-filled in a message to <code>rrsupport@getgsi.com</code>. Review the message before sending.</p>
+        <p class="submit-panel-text" id="submit-attach-note" hidden><strong>Attach the file it downloads.</strong> <strong>Send via Email</strong> also downloads a file named <code>RapidReconciler-prep-&lt;your company&gt;.rrprep</code>: your whole submission, encrypted in this browser so that only GSI can read it. Your JDE database password travels only in that file, never in the email text. Attach it to the message before you send it.</p>
+        <p class="submit-panel-text"> If your browser is not configured to open email links, use <strong>Copy to Clipboard</strong> and paste the contents into a new message. <strong>Send via Email</strong> is enabled once a topology and a source platform have been selected and every JDE field has been filled in.</p>
         <div class="submit-actions">
           <button type="button" class="submit-btn submit-btn-primary" id="send-email-btn" onclick="sendJdeEmail()" disabled>Send via Email</button>
           <button type="button" class="submit-btn submit-btn-secondary" onclick="copyJdeText()">Copy to Clipboard</button>
@@ -3583,7 +3585,10 @@
     return lines.join('\r\n');
   }
 
-  function buildBody() {
+  // VLC-298: sealed = true writes the email text that travels beside the encrypted file: the password line names the
+  // attachment instead of the password. sealed = false is the whole submission (the file's content, or, with no VALC
+  // key on this page, the email text as before).
+  function buildBody(sealed) {
     var v = function(id) { return getValue(id) || '[not provided]'; };
     var topo = getSelectedTopology();
     var topoLabel = topo ? TOPOLOGY_LABELS[topo] : '[not selected]';
@@ -3648,7 +3653,7 @@
       '  JDE data server / warehouse:   ' + v('jde-server'),
       '  JDE data server IP:            ' + v('jde-server-ip'),
       '  Database username:             ' + v('jde-user'),
-      '  Database password:             ' + v('jde-pass'),
+      '  Database password:             ' + (sealed ? '(in the encrypted attachment)' : v('jde-pass')),
       '  JDE server type:               ' + v('jde-type'),
       '  Table qualifier:               ' + v('jde-qualifier'),
       '',
@@ -3682,17 +3687,90 @@
   // Submit actions
   // ============================================================
 
-  window.sendJdeEmail = function() {
+  // ============================================================
+  // The encrypted submission (VLC-298)
+  // ============================================================
+  // The whole submission, the JDE password with it, is sealed in this browser to GSI's VALC public keys and downloaded
+  // as a .rrprep file the customer attaches; the email text carries everything but the password. Only a VALC holding
+  // the matching private key opens it (RapidReconciler-Valc PrepKeyService). Each entry is a VALC that onboards real
+  // customers (QA and Prod): { kid, spki }, copied from that VALC's GET /api/v1/admin/prep-key. While this list is empty
+  // the page sends the submission as before, password in the text.
+  var PREP_RECIPIENTS = [];
+
+  function prepSealing() { return PREP_RECIPIENTS.length > 0; }
+
+  // ⚠ The same function as RapidReconciler-Valc /js/prep-crypto.js seal(): AES-256-GCM over the UTF-8 text with a random
+  //   12-byte iv, the AES key wrapped with RSA-OAEP (SHA-256) for each recipient. Change both or neither.
+  function prepB64(bytes) {
+    var s = '';
+    var a = new Uint8Array(bytes);
+    for (var i = 0; i < a.length; i++) s += String.fromCharCode(a[i]);
+    return btoa(s);
+  }
+  function prepUnb64(text) {
+    var s = atob(text);
+    var a = new Uint8Array(s.length);
+    for (var i = 0; i < s.length; i++) a[i] = s.charCodeAt(i);
+    return a;
+  }
+  async function sealPrep(text, company, recipients) {
+    var subtle = window.crypto && window.crypto.subtle;
+    if (!subtle) throw new Error('This browser cannot encrypt. Use a current Microsoft Edge or Google Chrome.');
+    var aes = await subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt']);
+    var iv = window.crypto.getRandomValues(new Uint8Array(12));
+    var data = await subtle.encrypt({ name: 'AES-GCM', iv: iv }, aes, new TextEncoder().encode(text));
+    var raw = await subtle.exportKey('raw', aes);
+    var wrapped = [];
+    for (var i = 0; i < recipients.length; i++) {
+      var pub = await subtle.importKey('spki', prepUnb64(recipients[i].spki), { name: 'RSA-OAEP', hash: 'SHA-256' }, false, ['encrypt']);
+      wrapped.push({ kid: recipients[i].kid, key: prepB64(await subtle.encrypt({ name: 'RSA-OAEP' }, pub, raw)) });
+    }
+    return JSON.stringify({ format: 'rrprep', v: 1, company: company || '', recipients: wrapped, iv: prepB64(iv), data: prepB64(data) });
+  }
+  function prepFileName() {
+    var c = (getValue('sub-company') || 'submission').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    return 'RapidReconciler-prep-' + (c || 'submission') + '.rrprep';
+  }
+  /** Seal the submission and download the file; resolves to the file's name, or rejects with why not. */
+  async function downloadSealed() {
+    var file = await sealPrep(buildBody(false), getValue('sub-company'), PREP_RECIPIENTS);
+    var name = prepFileName();
+    var url = URL.createObjectURL(new Blob([file], { type: 'application/json' }));
+    var a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+    return name;
+  }
+  /** The email text: with the file, the password line names the attachment and the text says to attach it. */
+  function emailText(fileName) {
+    if (!fileName) return buildBody(false);
+    return 'ATTACHMENT: ' + fileName + ' (downloaded when you clicked Send). Attach it before you send this message.\r\n'
+      + 'It carries this submission encrypted for GSI, with the JDE database password, which is not in this text.\r\n\r\n'
+      + buildBody(true);
+  }
+
+  window.sendJdeEmail = async function() {
     if (!getSelectedTopology() || !getSelectedSource() || countMissingJde() > 0) return;
+    var name = null;
+    if (prepSealing()) {
+      try { name = await downloadSealed(); }
+      catch (e) { setTransientStatus('Not sent: ' + (e && e.message ? e.message : e), 'warn'); return; }
+    }
     var mailto = 'mailto:rrsupport@getgsi.com'
       + '?subject=' + encodeURIComponent(buildSubject())
-      + '&body=' + encodeURIComponent(buildBody());
+      + '&body=' + encodeURIComponent(emailText(name));
     window.location.href = mailto;
-    setTransientStatus('Opening your email client…', 'ok');
+    setTransientStatus(name ? 'Downloaded ' + name + '. Attach it to the message that opened.' : 'Opening your email client…', 'ok');
   };
 
-  window.copyJdeText = function() {
-    var text = buildSubject() + '\r\n\r\n' + buildBody();
+  window.copyJdeText = async function() {
+    var name = null;
+    if (prepSealing()) {
+      try { name = await downloadSealed(); }
+      catch (e) { setTransientStatus('Not copied: ' + (e && e.message ? e.message : e), 'warn'); return; }
+    }
+    var text = buildSubject() + '\r\n\r\n' + emailText(name);
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(text).then(function() {
         setTransientStatus('Copied to clipboard.', 'ok');
@@ -3725,6 +3803,9 @@
   // ============================================================
 
   document.addEventListener('DOMContentLoaded', function() {
+    // VLC-298: the attach note shows only when the page seals the submission.
+    var attachNote = document.getElementById('submit-attach-note');
+    if (attachNote) attachNote.hidden = !prepSealing();
     // Auto-fill today's date
     var dateField = getField('sub-date');
     if (dateField && !dateField.value) {
