@@ -13,6 +13,29 @@ Two items already in hand are folded in, not re-reported: AI plan and SSO on Cre
 
 Gaps 2, 3, 4, 7 to 11 and 14 to 16 are untouched by those PRs.
 
+**Status, 2026-11-15 (VLC-296, built, uncommitted).** The owner asked for the walkthrough's band to list every step "from
+importing the email to handing off to the client RR administrator", and approved an 18-step list the same day. The two
+walkthroughs are one now, on the Onboarding page, with its band shown on the page before anything starts:
+
+| Phase | Steps (Part 1's numbers) |
+|---|---|
+| Intake | 1 Import the prep email (8, 9) · 2 Create the client (5) · 3 Client Details and Topology (9, 10) · 4 The DNS record (11) |
+| Agent | 5 Generate the agent installer (12) · 6 The agent reports in (13) |
+| Database | 7 Readiness (15) · 8 Install (14, 16) · 9 The customer runs Script 4 (17) · 10 RR Services is running (18) · 11 SSIS package (19) · 12 SSIS environment (20) · 13 Bootstrap and licensing (21) · 14 Load (22) · 15 Schedule (23) |
+| Go-live | 16 Databases Online and the licensed companies (24, 25) · 17 Handoff (26, 27) · 18 The RR Administrator signs in (28) |
+
+- The prep email is the input: Sales sends the prep document outside VALC (owner, 2026-11-15), so Part 1 step 6 (Send
+  prep) is no longer in the walkthrough. Step 1 reads the reply on the Create Client form and lists anything left blank
+  or unticked; Client Details' Parse & Fill gets the same text at step 3.
+- Closes gap 2 (no hand-off: Add Database starts no second walkthrough), gap 10 (Script 4 is step 9, ticked by Check
+  SSIS finding the proxy), gap 12 (the DNS record is step 4), most of gap 14 (Databases Online and the first sign-in are
+  steps; SSO stays out, owner's call), and the two gap 7 lines (Environment build is done when built; Run refresh now
+  does not tick the schedule, and says so).
+- A real customer's licensing check could never tick: the snapshot counted licensed companies for the practice client
+  only. It counts every customer not yet handed off now.
+- Not changed, and still open: the JDE database password travels in the prep email's body (`rr-installation-prep.html`,
+  buildBody), while the same document says never to email the SSO secret. Customer-facing, so the owner's call.
+
 ---
 
 ## Part 1. The flow, end to end
