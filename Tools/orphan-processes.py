@@ -12,6 +12,15 @@ C:/ProgramData/RR-DevWatchdog/state/watchdog-status.json every 5 minutes. This p
 the last 24 hours, and -- the case that matters most -- when the last pass is
 older than 20 minutes, because then nothing is watching the box at all.
 
+A STALE STATUS HAS TWO CAUSES, AND THEY NEED DIFFERENT FIXES (2026-11-18). Each
+pass writes watchdog-pass-start.json beside the status before it checks
+anything. A start mark newer than the status means passes ARE starting and are
+being stopped before they finish: Task Scheduler stops one at 4.5 minutes (3
+until 2026-11-18), so the box is too loaded. No newer mark means no pass is starting: the task itself is
+gone, disabled or stuck. On 2026-11-18 this said "NOT RUNNING" for two hours of
+the first kind, and the task could not even be looked at, because it runs as
+SYSTEM and a non-elevated Get-ScheduledTask does not list it.
+
 The watchdog does NOT run this file. It runs as SYSTEM, and SYSTEM must never
 execute anything a non-admin account can edit (owner ruling 2026-09-25), so it
 carries its own PowerShell port of the rule below. Change the rule here and
@@ -168,8 +177,44 @@ def self_test():
 # Users read). NOT under C:\source\repos, whose Users:FullControl would let any
 # user swap the dir for a junction and redirect a SYSTEM write.
 WATCHDOG_STATUS = r"C:\ProgramData\RR-DevWatchdog\state\watchdog-status.json"
+# Beside the status, whatever the status path: watchdog.ps1 writes both into one state dir.
+WATCHDOG_MARK_NAME = "watchdog-pass-start.json"
 WATCHDOG_STALE_MIN = 20
 WATCHDOG_INSTALL = r"RapidReconciler-Valc\setup\dev-box-watchdog\install-watchdog.ps1"
+
+
+def _read_mark(status_path):
+    """The start mark beside the status, or None if there is none or it is unreadable."""
+    path = os.path.join(os.path.dirname(status_path), WATCHDOG_MARK_NAME)
+    try:
+        with open(path, encoding="utf-8-sig") as fh:
+            return json.load(fh)
+    except Exception:
+        return None
+
+
+def _stale_lines(last, age_min, mark, now):
+    """What a stale status means, told apart by the start mark."""
+    started = _parse_iso((mark or {}).get("startedUtc"))
+    if started is not None and started > last:
+        before = int((mark or {}).get("unfinishedBefore") or 0)
+        run = (", and %d before it did not finish either (since %s UTC)" % (before, mark.get("unfinishedSince"))
+               if before else "")
+        return ["!! WATCHDOG PASSES ARE NOT FINISHING: the last one started %s UTC (%.0f min ago)%s, but none has "
+                "written a status since %s UTC (%.0f min ago). The task is running; Task Scheduler stops a pass "
+                "at 4.5 minutes, so the box is most likely too loaded to finish one. Nothing is checking Postgres, "
+                "VALC or the agents until one does. Look at what is using the CPU before anything else."
+                % (started.strftime("%Y-%m-%d %H:%M"), (now - started).total_seconds() / 60, run,
+                   last.strftime("%Y-%m-%d %H:%M"), age_min)]
+    if mark is None:
+        why = ("There is no start mark beside the status, so this cannot tell a task that is not running from "
+               "passes being stopped before they finish (the installed watchdog may predate the mark; "
+               "re-run %s elevated)." % WATCHDOG_INSTALL)
+    else:
+        why = "No pass has started since then either, so the task itself is not running."
+    return ["!! WATCHDOG IS NOT RUNNING: its last pass was %s UTC, %.0f min ago (it runs every 5). "
+            "Nothing is watching Postgres, VALC or the agents. %s The RR-DevBox-Watchdog task runs as SYSTEM, "
+            "so only an elevated Get-ScheduledTask lists it." % (last.strftime("%Y-%m-%d %H:%M"), age_min, why)]
 
 
 def watchdog_lines(path=WATCHDOG_STATUS, now=None):
@@ -194,9 +239,7 @@ def watchdog_lines(path=WATCHDOG_STATUS, now=None):
     age_min = (now - last).total_seconds() / 60
     out = []
     if age_min > WATCHDOG_STALE_MIN:
-        out.append("!! WATCHDOG IS NOT RUNNING: its last pass was %s UTC, %.0f min ago (it runs every 5). "
-                   "Nothing is watching Postgres, VALC or the agents. Check the RR-DevBox-Watchdog "
-                   "scheduled task." % (last.strftime("%Y-%m-%d %H:%M"), age_min))
+        out.extend(_stale_lines(last, age_min, _read_mark(path), now))
     as_of = " (as of that stale pass)" if out else ""
     for inc in st.get("openIncidents") or []:
         out.append("!! WATCHDOG INCIDENT [%s] open since %s%s: %s"
