@@ -15,8 +15,8 @@ older than 20 minutes, because then nothing is watching the box at all.
 A STALE STATUS HAS TWO CAUSES, AND THEY NEED DIFFERENT FIXES (2026-11-18). Each
 pass writes watchdog-pass-start.json beside the status before it checks
 anything. A start mark newer than the status means passes ARE starting and are
-being stopped before they finish: Task Scheduler stops one at 3 minutes, so the
-box is too loaded. No newer mark means no pass is starting: the task itself is
+being stopped before they finish: Task Scheduler stops one at 4.5 minutes (3
+until 2026-11-18), so the box is too loaded. No newer mark means no pass is starting: the task itself is
 gone, disabled or stuck. On 2026-11-18 this said "NOT RUNNING" for two hours of
 the first kind, and the task could not even be looked at, because it runs as
 SYSTEM and a non-elevated Get-ScheduledTask does not list it.
@@ -202,7 +202,7 @@ def _stale_lines(last, age_min, mark, now):
                if before else "")
         return ["!! WATCHDOG PASSES ARE NOT FINISHING: the last one started %s UTC (%.0f min ago)%s, but none has "
                 "written a status since %s UTC (%.0f min ago). The task is running; Task Scheduler stops a pass "
-                "at 3 minutes, so the box is most likely too loaded to finish one. Nothing is checking Postgres, "
+                "at 4.5 minutes, so the box is most likely too loaded to finish one. Nothing is checking Postgres, "
                 "VALC or the agents until one does. Look at what is using the CPU before anything else."
                 % (started.strftime("%Y-%m-%d %H:%M"), (now - started).total_seconds() / 60, run,
                    last.strftime("%Y-%m-%d %H:%M"), age_min)]
