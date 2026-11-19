@@ -25,6 +25,8 @@
  *   R2  V8's DEBUG lines are routine, never "Unrecognized" problems
  *   R3  but a certificate failure logged at DEBUG is still critical: Routine DEBUG is the
  *       LAST rule, VALC's own form, so the two rule tables stay equal (VLC-223)
+ *   R4  VLC-302: the same lines at WARN are noise (owner 2026-11-19: "If the customers are running ok, junior is
+ *       happy"). R1 logs them at ERROR since then, the catch-all that still reports, so its grouping stays tested.
  *   E1  a .gz that is not gzip: said on the card, nothing analysed, no earlier result left up
  *   E2  a gzip cut short: said on the card the same way
  *   E3  a browser without DecompressionStream: said on the card, with what to do
@@ -88,7 +90,7 @@ const V7_LOG = [
 // text from a made-up logger: the measured line, TroubleshootingController's "troubleshooting
 // verdict", is noise by owner ruling (VLC-180, carried to the Help Desk by VLC-223), so it
 // cannot carry a grouping test.
-const V8_SAME = [
+const V8_SAME_WARN = [
   '2026-10-27T12:49:23.393Z  WARN 19620 --- [client-services-agent] [https-jsse-nio-0.0.0.0-34537-exec-9] [797601f46cb5] c.r.c.s.services.ExampleSyncService      : example sync is behind after 18 ms: the last sync finished 44 hours ago.',
   '2026-10-27T12:51:11.863Z  WARN 19620 --- [client-services-agent] [https-jsse-nio-0.0.0.0-34537-exec-5] [0ee8d2607356] c.r.c.s.services.ExampleSyncService      : example sync is behind after 86 ms: the last sync finished 2 days ago.',
   '2026-10-27T12:52:08.327Z  WARN 7596 --- [client-services-agent] [.0-45585-exec-4] [50911c8a95ad] c.r.c.s.services.ExampleSyncService      : example sync is behind after 15 ms: the last sync finished 45 hours ago.',
@@ -97,6 +99,8 @@ const V8_SAME = [
   '2026-10-27T14:00:00.002Z DEBUG 19620 --- [client-services-agent] [scheduling-1] c.r.c.s.services.WorkingDirJanitor       : Janitor sweep complete: nothing to delete',
   ''
 ].join('\n');
+// R1's lines at ERROR (VLC-302): the janitor line and the three sync lines are the same entries, one level up.
+const V8_SAME = V8_SAME_WARN.replace(/Z  WARN /g, 'Z ERROR ');
 const GZ = zlib.gzipSync(Buffer.from(V8_LOG, 'utf8'));
 const GZ_NAME = 'services-34537.log.2026-10-27.0.gz';
 
@@ -173,10 +177,12 @@ const metaText = (r) => r.meta.replace(/<[^>]+>/g, '').replace(/&middot;/g, '·'
   check('T2 a V7 .out.log still parses as before (3 entries)', entries(v7), 3);
 
   const [same] = await load([new File([zlib.gzipSync(Buffer.from(V8_SAME))], GZ_NAME)]);
-  check('R1 one condition on three threads, requests, durations and ages is one problem (plus the janitor WARN: 2)',
-        same.out.split('\n')[0], '2 distinct problems worth a look');
-  check('R1 and that problem counts all three', /Unhandled WARN: example sync is behind after &lt;n&gt; ms: the last sync finished &lt;age&gt; ago\.[\s\S]*?Show 2 more occurrence/.test(same.out), true);
+  check('R1 one condition on three threads, requests, durations and ages is one problem (plus the janitor line: 2)',
+        same.out.split('\n')[0], '2 distinct problems, 2 needing action now');
+  check('R1 and that problem counts all three', /Unhandled ERROR: example sync is behind after &lt;n&gt; ms: the last sync finished &lt;age&gt; ago\.[\s\S]*?Show 2 more occurrence/.test(same.out), true);
   check('R2 V8 DEBUG lines are routine, never a problem', /Routine DEBUG/.test(same.out) && !/Unrecognized/.test(same.out), true);
+  const [warned] = await load([new File([V8_SAME_WARN], 'services-34537.log')]);
+  check('R4 the same lines at WARN are noise: nothing for junior (VLC-302)', /^Nothing concerning/.test(warned.out.split('\n')[0]), true);
   const pkix = '2026-10-27T15:00:00.001Z DEBUG 19620 --- [client-services-agent] [main] c.r.c.s.services.ExampleClient           : PKIX path building failed\n';
   const [cert] = await load([new File([pkix], 'services-34537.log')]);
   check('R3 but a certificate failure logged at DEBUG is still critical (VLC-180\'s case)', /needing action now/.test(cert.out.split('\n')[0]), true);

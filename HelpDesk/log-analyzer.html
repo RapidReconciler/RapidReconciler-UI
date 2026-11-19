@@ -1061,15 +1061,16 @@ const AGENT_RULES = [
     match: /\bStopping (?:instance|services)\b/i, severity: 'noise',
     note: 'Normal mid-deploy step &mdash; the agent is gracefully shutting down the previous version before starting the new one. Look for an Instance is RUNNING line shortly after.' },
   { name: 'VALC asked the agent to update itself',
-    match: /\bReceived\s+SelfUpdateMessage\b/i, severity: 'flag',
-    note: 'VALC pushed an update for the agent program itself (not for a customer&rsquo;s database services). The agent will restart shortly. Track the next few minutes &mdash; if you don&rsquo;t see an Agent application started line for the new version, the self-update got stuck.' },
-  // VLC-236: ahead of "Routine INFO", or a slow reply reads as one of the suppressed routine lines.
+    match: /\bReceived\s+SelfUpdateMessage\b/i, severity: 'noise',
+    note: 'VALC pushed an update for the agent program itself (not for a customer&rsquo;s database services). The agent restarts shortly. Routine (VLC-302): an update that gets stuck shows as a failed deploy in VALC, not here.' },
+  // VLC-236 named slow replies; VLC-302 (owner 2026-11-19: "If things work then the warnings are moot") made them
+  // noise: the customer got an answer. Still ahead of "Routine INFO", so a slow reply keeps its own name.
   { name: 'A request took 20 seconds or more',
-    match: /RequestLogFilter\s*:\s*\S+ \S+ -> \d{3} in (?:[2-9]\d{4}|\d{6,}) ms\b/, severity: 'flag',
+    match: /RequestLogFilter\s*:\s*\S+ \S+ -> \d{3} in (?:[2-9]\d{4}|\d{6,}) ms\b/, severity: 'noise',
     note: 'The agent answered, but slowly: the line ends with how long the request took. Most requests on a healthy box finish in a few seconds. One slow request during a refresh job or a backup is expected. Several, or one at a quiet time, mean the SQL Server was busy or a query has grown.',
     fix: 'Note the request path and the time. Check whether a refresh job, a backup or another heavy query was running then. If the same request is slow again at a quiet time, capture the surrounding lines and escalate it as a performance problem.' },
   // VLC-288: the proof of recovery a database's own log carries. The data services ran a statement against the
-  // database and answered 2xx, so the connection works. After the 20-second rule, so a slow one is still flagged.
+  // database and answered 2xx, so the connection works. After the 20-second rule, so a slow one keeps that name.
   { name: 'Data services ran a database request',
     match: /RequestLogFilter\s*:\s*POST \/admin\/deploy\/sql\S* -> 2\d\d in \d+ ms\b/, severity: 'noise', proves: 'database',
     note: 'The data services ran a statement against the database and answered. Routine, and it shows the database connection was working at that moment.' },
@@ -1089,6 +1090,10 @@ const AGENT_RULES = [
     match: /com\.zaxxer\.hikari\.util\.DriverDataSource\s*:?\s*Registered driver with driverClassName=.*was not found, trying direct instantiation/i,
     severity: 'noise',
     note: 'HikariCP couldn&rsquo;t find the JDBC driver via Java&rsquo;s ServiceLoader SPI and fell back to direct instantiation. Standard for the agent&rsquo;s embedded Derby driver — the pool starts successfully on the next line. Concerning only if it&rsquo;s followed by a HikariPool start failure.' },
+  // VLC-302: measured in the V8 broker log 2026-11-16..18, clustered when an agent process restarts.
+  { name: 'The SQL driver could not cancel a finished query (benign)',
+    match: /c\.m\.s\.jdbc\.internals\.TDS\.Command\s*:.*Command could not be timed out\. Reason: Socket closed/, severity: 'noise',
+    note: 'The SQL Server driver tried to cancel a query on a connection that had already closed, usually because the data services were restarting. The query had already ended, and nothing failed.' },
   { name: 'Hibernate unknown SQL Server major version (benign)',
     match: /HHH000385:\s*Unknown Microsoft SQL Server major version \[\d+\] using SQL Server 2000 dialect/i,
     severity: 'noise',
@@ -1117,8 +1122,10 @@ const AGENT_RULES = [
     match: /com\.zaxxer\.hikari\.pool\.HikariPool\s*:.*Thread starvation or clock leap detected/i, severity: 'flag', blip: 'database',
     fix: 'One or two after a reboot or a backup need nothing. If it repeats through the day, the server is short of CPU or memory, or the virtual machine is being paused: check the host.',
     note: 'The data services noticed that their housekeeping ran late, by the time shown in the line. The server was busy or the virtual machine was paused for a moment, typically while Windows was starting.' },
+  // VLC-302: the catch-all WARN is noise. A warning the rules above do not name says nothing about whether the customer
+  // is running; the failures that do are named rules, and ERROR lines are crit.
   { name: 'WARN level',
-    match: /\bWARN\b/, severity: 'flag' },
+    match: /\bWARN\b/, severity: 'noise' },
   { name: 'Connection failure',
     match: /\b(Connection (refused|reset|timed out)|SocketTimeoutException|ConnectException)\b/i, severity: 'flag',
     note: 'Network or socket-level failure. Confirm network path between agent host and backend.' },
@@ -1150,10 +1157,10 @@ const AGENT_RULES = [
     match: /(?:SHA-?1.{0,120}?mismatch|integrity.{0,120}?fail|checksum.{0,120}?fail|file.{0,120}?corrupt)/i, severity: 'crit',
     note: 'A file VALC sent arrived at the agent but didn&rsquo;t match the expected checksum &mdash; either the transfer was interrupted or the copy on VALC is stale. The agent normally deletes the bad copy and re-requests; if you see this repeatedly for the same file, VALC has a bad copy and engineering needs to re-upload.' },
   { name: "VALC sent an update for something the agent doesn't have yet",
-    match: /ValcMessageListener.*Could not interpret JMS message/i, severity: 'flag',
+    match: /ValcMessageListener.*Could not interpret JMS message/i, severity: 'noise',
     note: 'VALC sent an instruction referencing a record (a user, tab name, etc.) the agent&rsquo;s local database doesn&rsquo;t have yet. Usually a timing issue &mdash; VALC created the record but the create-sync to this agent hasn&rsquo;t happened. Most of the time the next sync resolves it. Concerning if you see the same message repeat for more than a few minutes after a deploy. <strong>Note:</strong> this heading only covers messages with no more specific cause. The same log text also appears when a required field is empty on the instance record &mdash; those are reported separately as <em>Refresh job name is not set</em>, so if you are reading this row, that is not what happened.' },
   { name: 'Database sync script returned the wrong row count',
-    match: /DatabaseManagerServiceMsSqlImpl.*Script FAILED to execute.*Incorrect result size/i, severity: 'flag',
+    match: /DatabaseManagerServiceMsSqlImpl.*Script FAILED to execute.*Incorrect result size/i, severity: 'noise',
     note: 'The agent ran a sync script against the customer&rsquo;s SQL Server and got a different number of rows than expected (usually 0 rows when expecting 1). Same root cause as "VALC sent an update for something the agent doesn&rsquo;t have yet" &mdash; just visible from the database side instead of the JMS side. Self-corrects on the next successful sync. Investigate if persistent.' },
   { name: 'ERROR level',
     match: /\bERROR\b/, severity: 'crit',
@@ -1199,7 +1206,7 @@ function classifyLine(line, rules) {
       return { rule, line };
     }
   }
-  return { rule: { name: 'Unrecognized', severity: 'flag' }, line };
+  return { rule: { name: 'Unrecognized', severity: 'noise' }, line };   // VLC-302: unknown is not a customer problem
 }
 
 // VLC-288 (owner 2026-11-12: "Stop counting recovered blips"). A connection that dropped and came back used to
