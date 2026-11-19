@@ -11,12 +11,32 @@ Owner rulings, 2026-11-14 (session `[52206b]`):
 - Step 3's per-line Deploy (VLC-280) is removed; Scratch starts from the last bundle, or from a failed/discarded
   draft since it (recorded); Cut release is added to step 3 once measured.
 
+## VLC-303 &mdash; one Dev lane, one bundle for QA (2026-11-19)
+
+Owner rulings, 2026-11-19 (session `[5ea625]`), after step 3 read green while draft `bundle-20261117-151118` held
+installer 8.0.24 / Services 8.0.55 / SSIS 8.0.1 / DB beta.140 / UI 8.0.1 and the newest releases were 8.0.26 / 8.0.56 /
+8.0.4 / beta.141 / 8.0.2:
+
+- "We should only have 1 bundle for QA to approve at a time. That bundle should contain all the changes from the last
+  approved bundle." A bundle is a full set of versions, so any bundle drafted from the newest releases is cumulative.
+- "Step 3 Band should show the repos and merged counts to be included in the next bundle. Opening the band only shows
+  the items that are going in the bundle. ... move the release version pills to the draft band. Once the bundle is
+  drafted the items in step 3 clear."
+- Accepted with it: step 3 keeps Cut release, and marks a change no release carries yet; step 3 counts from the newest
+  LIVE bundle (the open draft unless its test failed, else the last published); a draft behind the newest releases is
+  replaced (**Redraft**: draft first, then discard) while its test has not started or failed, and its test is refused
+  until then; once the test starts it is frozen and later releases wait.
+- "Yes, that split": Dev's Test on Scratch, Publish and QA approval move into the Development Queue as steps 5-7 (QA
+  verdict), with Release History as a tab; the Releases page is QA's and Prod's only, not on Dev's sidebar, and
+  `/valc/releases` on Dev redirects to step 5. Retiring the page outright was rejected: the Development Queue is Dev-only
+  (`DevelopmentGate`), so QA and Prod would lose their approval steps.
+
 ## Where each step lives
 
 | Page | Steps |
 |---|---|
-| **Development Queue** (Dev only) | 1 Customer Queue &rarr; 2 Claude Queue &rarr; 3 Cut releases &rarr; 4 Draft bundle. Output: a draft. Tabs: Tasks, Recently Closed, Audit Export. |
-| **Releases** (every VALC) | Dev: 1 Test on Scratch &rarr; 2 Publish &rarr; 3 QA approval. QA: Approve &rarr; deploy &rarr; test (automated + manual) &rarr; record. Prod: Approve (needs QA's pass) &rarr; roll out. Tab: Release History. |
+| **Development Queue** (Dev only) | 1 Customer Queue &rarr; 2 Claude Queue &rarr; 3 Cut releases &rarr; 4 Draft bundle &rarr; 5 Test on Scratch &rarr; 6 Publish &rarr; 7 QA verdict. Output: a bundle published for QA. Tabs: Tasks, Recently Closed, Release History, Audit Export. (VLC-303) |
+| **Releases** (QA and Prod) | QA: Approve &rarr; deploy &rarr; test (manual) &rarr; record. Prod: Approve (needs QA's pass) &rarr; roll out. Tab: Release History. Dev's three steps were here from 2026-11-14 to 2026-11-19. |
 | **Support Center, Fleet upgrades band** | Rollout status; QA/Prod approval and Resume/Cancel until phase 3 moves them. |
 | **Client Onboarding** | Manage databases (VLC-272). |
 
