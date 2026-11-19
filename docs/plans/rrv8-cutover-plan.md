@@ -169,6 +169,13 @@ server side; nothing reaches a customer until it's all done.
    An end-to-end rehearsal against a local VALC 2.0 is prepared and not
    yet run.
 
+   **Update 2026-11-19 (VLC-306):** on QAv8, VALC 2.0's JMS acceptor
+   serves the same automatically renewed certificate as its web server.
+   The install bundle's truststore therefore holds the issuing CA's root
+   certificates rather than VALC 2.0's certificate, and the broker checks
+   VALC 2.0's host name against it, so a renewal needs no reinstall.
+   VALC 2.0 reloads the renewed certificate without a restart.
+
    **Update 2026-10-02 (VLC-144): remote agent upgrades.** From broker
    2.5.0, VALC 2.0 can upgrade the whole V8 agent on a box (bundled
    Java 21 runtime, Windows service wrapper and its configuration, and
