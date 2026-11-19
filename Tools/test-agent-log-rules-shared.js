@@ -129,8 +129,10 @@ check('CONTROL: both parsed, with a table\'s worth of rules (page ' + page.lengt
         + (moved.length ? '\n          If the page change is intended: node Tools/test-agent-log-rules-shared.js --write,'
           + '\n          then make the same change in Valc (troubleshooting.html + AgentLogRules.java).' : ''));
   // MUTATION ARM: a one-word change on the page alone must be seen.
-  const mutated = shape(pageRules(html.replace("match: /\\bWARN\\b/, severity: 'flag'", "match: /\\bWARN\\b/, severity: 'noise'")));
-  check('MUTATION ARM: WARN level made noise on the page alone differs from the contract',
+  // VLC-302 made WARN level noise, so the arm flips Instance start timeout, which is still a flag.
+  const mutated = shape(pageRules(html.replace("match: /Instance did not start after \\d+ seconds/i, severity: 'flag'",
+                                               "match: /Instance did not start after \\d+ seconds/i, severity: 'noise'")));
+  check('MUTATION ARM: Instance start timeout made noise on the page alone differs from the contract',
         JSON.stringify(mutated) !== JSON.stringify(page) && JSON.stringify(mutated) !== JSON.stringify(contract));
 }
 
@@ -155,7 +157,7 @@ check('CONTROL: both parsed, with a table\'s worth of rules (page ' + page.lengt
     ['CONTROL: an ordinary ERROR is still ERROR level',
      '2026-10-05 13:46:17.490 ERROR 4242 --- [main] c.r.Foo : boom', 'ERROR level', 'crit'],
     ['CONTROL: a line no rule knows is still Unrecognized',
-     '2026-10-05 13:46:17.490 TRACE 4242 --- [main] c.r.Foo : something new', 'Unrecognized', 'flag'],
+     '2026-10-05 13:46:17.490 TRACE 4242 --- [main] c.r.Foo : something new', 'Unrecognized', 'noise'],   // VLC-302: unknown is not a customer problem
   ];
   for (const [what, line, name, sev] of cases) {
     const r = took(line);

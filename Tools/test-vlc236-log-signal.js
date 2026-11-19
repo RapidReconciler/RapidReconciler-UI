@@ -9,10 +9,16 @@
  * Runs the Help Desk page's real AGENT_RULES and classifyLine on lines copied from that log (services-34537.log,
  * 2026-11-01; paths and timings only, no customer data):
  *   D1  the disconnect WARN is noise, under its own name
- *   S1  the 35-second Transactions request is a flag, under the slow-request name
- *   S2  a 20,000 ms request is a flag (the boundary)
+ *   S1  the 35-second Transactions request keeps the slow-request name
+ *   S2  a 20,000 ms request keeps it too (the boundary)
  *   F1  a 19,999 ms request and a 5,532 ms one stay "Routine INFO" noise
- *   W1  CONTROL: an unrelated WARN is still the "WARN level" flag
+ *   W1  CONTROL: an unrelated WARN is still the "WARN level" rule
+ *   T1  the mssql-jdbc "Command could not be timed out. Reason: Socket closed" WARN is noise, under its own name
+ *
+ * VLC-302 (owner, 2026-11-19): "If things work then the warnings are moot", then "If the customers are running ok,
+ * junior is happy. That is the rule." So a slow reply and an unnamed WARN are NOISE now, not flags: the customer got
+ * an answer, and a warning says nothing about whether the customer is running. They keep their own names, so a
+ * developer reading the suppressed lines can still find them. S1, S2 and W1 assert the name AND the new severity.
  *
  * MUTATIONS, each must turn its cases red: the slow rule moved below "Routine INFO" (S1, S2); the disconnect rule
  * removed (D1).
@@ -45,6 +51,11 @@ const DISCONNECT = '2026-11-01T12:51:13.314Z  WARN 16072 --- [client-services-ag
 const req = (ms, what) => '2026-11-01T12:51:13.315Z  INFO 16072 --- [client-services-agent] '
   + '[https-jsse-nio-0.0.0.0-34537-exec-2] [39f5bb1060d0] c.r.c.services.config.RequestLogFilter   : '
   + (what || 'POST /inventory/transactions') + ' -> 200 in ' + ms + ' ms';
+// VLC-302: copied from the V8 broker log, rr-valc-agent.out.log, 2026-11-18.
+const TDS = '2026-11-18T20:54:02.742Z  WARN 5956 --- [client-services-agent] [00-63bccfd132a0] '
+  + 'c.m.s.jdbc.internals.TDS.Command         : TDSCommand@7fbb3838 (SQLServerStatement:1701 executeXXX): '
+  + 'Command could not be timed out. Reason: Socket closed';
+const TDS_NAME = 'The SQL driver could not cancel a finished query (benign)';
 const OTHER_WARN = '2026-11-01T12:00:00.000Z  WARN 16072 --- [client-services-agent] [main] c.r.c.s.SomeService : something unexpected';
 
 let reds = [];
@@ -62,14 +73,16 @@ function run(html) {
   let r = c(DISCONNECT);
   check('D1', 'the client-disconnect WARN is noise', is(r, GONE, 'noise'), r && [r.name, r.severity]);
   r = c(req(35246));
-  check('S1', 'the 35,246 ms Transactions request is flagged as slow', is(r, SLOW, 'flag'), r && [r.name, r.severity]);
+  check('S1', 'the 35,246 ms Transactions request is named slow, as noise', is(r, SLOW, 'noise'), r && [r.name, r.severity]);
   r = c(req(20000, 'GET /inventory/disposition/list'));
-  check('S2', 'a 20,000 ms request is flagged (the boundary)', is(r, SLOW, 'flag'), r && [r.name, r.severity]);
+  check('S2', 'a 20,000 ms request is named slow (the boundary)', is(r, SLOW, 'noise'), r && [r.name, r.severity]);
   const a = c(req(19999)), b = c(req(5532, 'POST /inventory/as-of'));
   check('F1', '19,999 ms and 5,532 ms stay Routine INFO noise', is(a, 'Routine INFO', 'noise') && is(b, 'Routine INFO', 'noise'),
     [a && a.name, b && b.name]);
   r = c(OTHER_WARN);
-  check('W1', 'CONTROL: an unrelated WARN is still the WARN level flag', is(r, 'WARN level', 'flag'), r && [r.name, r.severity]);
+  check('W1', 'CONTROL: an unrelated WARN is still the WARN level rule, as noise', is(r, 'WARN level', 'noise'), r && [r.name, r.severity]);
+  r = c(TDS);
+  check('T1', 'the TDS Socket closed WARN is noise under its own name', is(r, TDS_NAME, 'noise'), r && [r.name, r.severity]);
   return reds.slice();
 }
 
@@ -77,7 +90,7 @@ console.log('VLC-236: the Help Desk analyzer on the 2026-11-01 Demo1 lines');
 const real = run(PAGE);
 
 // Mutation 1: the slow rule below "Routine INFO" (where a rule written without thinking about order would land).
-const slowStart = PAGE.indexOf("  // VLC-236: ahead of \"Routine INFO\"");
+const slowStart = PAGE.indexOf("  // VLC-236 named slow replies");
 const slowEnd = PAGE.indexOf("  { name: 'Routine INFO',");
 const infoEnd = PAGE.indexOf('\n', PAGE.indexOf("match: /\\bINFO\\b/, severity: 'noise' },", slowEnd)) + 1;
 if (slowStart < 0 || slowEnd < slowStart || infoEnd <= slowEnd) { console.log('HARNESS BROKEN: slow-rule mutation anchors'); process.exit(1); }
