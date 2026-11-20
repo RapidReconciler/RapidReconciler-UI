@@ -45,8 +45,13 @@ Owner, 2026-11-20 (session `[de1edd]`), on the Development Queue with no bundle 
 - "There should also be a button on the band header that cuts all the individual releases" &rarr; **Cut all** in
   step 3's head (`ReleaseCutService.batch` / `cutAll`, `POST /lane/cut-all`). Each line goes through `cut()` with its
   checks; one that fails is reported and the rest still go. Held back, and said beside the button: Services and
-  Database (auto), a broker whose pom version is already tagged, the installer while the broker is cut in the same
-  click (it packages the newest broker RELEASE), and VALC.
+  Database (auto), a broker whose pom version is already tagged, and the installer while the broker is cut in the
+  same click (it packages the newest broker RELEASE). Later the same day, on the rebuilt page (no Cut all showed,
+  because VALC was its only waiting line and was left out): "Always show. ... Also the broker text should be in the
+  fold. I would include valc." So Cut all is always in the head (greyed out with nothing to cut), VALC is in it,
+  last, and what it holds back is listed inside the band under "Cut all leaves out". The blocked broker's note now
+  says which fix it needs: a pom bump when the newest installer already packages that version (2.10.0 in 8.0.27,
+  with Broker #24 after it: pom bumped to 2.10.1), an installer cut when none does.
 - "Step 4 Draft button should be moved to the band header." &rarr; Draft / Redraft, their blocker and their answer are
   in step 4's head.
 - Found while measuring: Draft took the catalog's newest release without looking at cuts in flight, so Cut all followed
@@ -59,6 +64,7 @@ Owner, 2026-11-20 (session `[de1edd]`), on the Development Queue with no bundle 
   commits touching `src/main`, `pom.xml`, `Dockerfile`, `libs`. Its cut tags `v8.0.<patch>` (`release.yml` builds the
   jar, `image.yml` the image and `docker-compose.qav8.yml`); in flight until that tag has a GitHub release. The line
   shows the release's image digest as `deploy-qav8.sh <digest>` for the QA host's administrator. VALC never deploys VALC.
+  (First built outside Cut all; included in it the same day, above.)
   Not built yet: which VALC the QA host runs (phase 2 of VLC-307: the QA VALC stamps its version on the approval).
 
 ## Where each step lives
