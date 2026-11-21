@@ -67,11 +67,34 @@ Owner, 2026-11-20 (session `[de1edd]`), on the Development Queue with no bundle 
   (First built outside Cut all; included in it the same day, above.)
   Not built yet: which VALC the QA host runs (phase 2 of VLC-307: the QA VALC stamps its version on the approval).
 
+## VLC-311 &mdash; VALC gets its own band; Cut all is bundle lines only; the installer's cut on the broker's line (2026-11-21)
+
+Owner, during the training walk (session `[9f02cb]`), right after cutting broker v2.10.1 from its own line:
+
+- The page then offered no next step. The broker line counts from the broker the newest installer packages, so it
+  still read "2 unreleased"; the installer line had no change of its own, so it sat under "No change" with no button;
+  and the only way to cut it was **Cut all (2)**, which also held VALC. VALC's first hand run of `image.yml` had just
+  failed at the Azure sign-in (`AADSTS70025`), so a VALC cut would have spent `v8.0.1` on a release with no image.
+  &rarr; The installer's **Cut release** now sits on the broker's line when the installer carries a released broker.
+- "Do we need to separate out a valc release to its own band? ... I see why now." Then "Yes, build both."
+  &rarr; This **supersedes** 2026-11-20's "I would include valc" (above). VALC leaves step 3 and Cut all
+  (`ReleaseCutService.batch` skips it) for its own band, **VALC release**, below step 7, dashed and lettered V
+  (`#js-dv-step-8`), with its own strip card. Reasons: a different pipeline (cut, image, compose file to the QA host,
+  not draft/test/publish/QA verdict), a different gate (Azure, not only GitHub), and its count kept step 3 amber
+  when every bundle line was clean.
+- **The VALC cut waits for a green image run** (`ReleaseCutService.valcImageGate`): the newest finished hand run of
+  `image.yml` on `main` must have passed (`GitHubReleaseService.newestCompletedRun`). Never run, red, or unreadable all
+  block, on the plan (mode `blocked`, the reason and the run's link) and in `cut()` itself. Runs that `release.yml`
+  starts through `workflow_call` are listed under `release.yml`, not `image.yml`, so the gate reads hand runs; a
+  release's own image result shows on the band afterwards (digest, or "no image").
+- Not built: a run-status indicator for a cut on its way (queued, running, done or failed, from the Actions API). The
+  owner asked for one on the same walk ("If something is running should we have a progress indicator?").
+
 ## Where each step lives
 
 | Page | Steps |
 |---|---|
-| **Development Queue** (Dev only) | 1 Customer Queue &rarr; 2 Claude Queue &rarr; 3 Cut releases &rarr; 4 Draft bundle &rarr; 5 Test on Scratch &rarr; 6 Publish &rarr; 7 QA verdict. Output: a bundle published for QA. Tabs: Tasks, Recently Closed, Release History, Audit Export. (VLC-303) |
+| **Development Queue** (Dev only) | 1 Customer Queue &rarr; 2 Claude Queue &rarr; 3 Cut releases &rarr; 4 Draft bundle &rarr; 5 Test on Scratch &rarr; 6 Publish &rarr; 7 QA verdict. Output: a bundle published for QA. Then, apart: V VALC release (VLC-311), whose output is a VALC image for the QA host. Tabs: Tasks, Recently Closed, Release History, Audit Export. (VLC-303) |
 | **Releases** (QA and Prod) | QA: Approve &rarr; deploy &rarr; test (manual) &rarr; record. Prod: Approve (needs QA's pass) &rarr; roll out. Tab: Release History. Dev's three steps were here from 2026-11-14 to 2026-11-19. |
 | **Support Center, Fleet upgrades band** | Rollout status; QA/Prod approval and Resume/Cancel until phase 3 moves them. |
 | **Client Onboarding** | Manage databases (VLC-272). |
