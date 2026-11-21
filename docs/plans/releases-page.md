@@ -87,8 +87,40 @@ Owner, during the training walk (session `[9f02cb]`), right after cutting broker
   block, on the plan (mode `blocked`, the reason and the run's link) and in `cut()` itself. Runs that `release.yml`
   starts through `workflow_call` are listed under `release.yml`, not `image.yml`, so the gate reads hand runs; a
   release's own image result shows on the band afterwards (digest, or "no image").
-- Not built: a run-status indicator for a cut on its way (queued, running, done or failed, from the Actions API). The
-  owner asked for one on the same walk ("If something is running should we have a progress indicator?").
+- A run-status indicator for a cut on its way: built the next day under VLC-312, below.
+
+## VLC-312 &mdash; cards carry the status and the running indicator; the installer counts what it is built from (2026-11-21)
+
+Owner, the same walk, right after Cut all (2) tagged `installer-v8.0.28` and `ui-v8.0.3`: "There should be an indicator
+that the releases are running." (the second time: "If something is running should we have a progress indicator?" came
+on the broker cut). Then, mid-build: "Make the cards 2 rows of 4. The cards should have any status notes and indicators
+that things are running. The bands have pills and buttons. Status text can be removed."
+
+- **The strip is eight cards, four to a row** (two on a narrow window), the seven steps then VALC release.
+- **Cards carry every status note.** Each band's head is its title, pills and buttons; the status line beside the
+  title is gone from all eight bands (`js-dv-qu-meta`, `-wl-`, `-nb-`, `-dt-`, `-m5`/`-m6`/`-m7`, `-vr-`). What it said
+  moved to the card, or into the band's body when it was a rule or a reason: the customer-clock rule opens band 1, the
+  test database opens band 5, and why Draft is off is in band 4's body (the card says "waits for 2 cuts to land").
+- **Running.** A cut on its way carries its release run (`ReleaseCutService.runOf`, from
+  `GitHubReleaseService.newestRunForRef`: the Actions API lists a tag push's run under the tag): starting, queued,
+  running, released (green, catalog not synced yet), failed, or unknown. Step 3's and VALC release's cards name each
+  cut with that state and show *running* with a spinner while one is starting, queued or running; step 5's does while
+  a test runs. While anything is on its way the page reads the cut plan again every 20 s, and re-reads step 3 and the
+  draft when a cut lands. The band's line links the run itself, and its green "Tagged ..." answer clears once the cut
+  is no longer on its way.
+- **The installer line counts what the installer is built from** (`ReleaseHistoryService.INSTALLER_SHIPPED`:
+  `setup/installer`, `.github/workflows/release-installer.yml`, read out of the workflow and `build-installer.ps1`). It
+  shares the Agent repo with Services; `release-installer.yml` downloads the Services jar "only so the build's JRE guard
+  can prove the bundled JRE runs it. Not packaged." Measured: installers 8.0.21 to 8.0.27 changed none of those paths.
+- **One installer button.** With the installer's own line listed, the broker line points to it instead of repeating it.
+- **Workflow and Details** (owner, same day: "divide the tab contents into 2 distinct sections: Workflow: Which always
+  shows every card and it's status. Details: All of the bands. I an thinking about only displaying the amber bands",
+  then "Yes, build it" on these rules). Workflow is the eight cards. Details shows a band when its card is amber, when
+  its card was clicked this visit, while a search filters it (1-3 and V), when it was already shown amber this visit
+  (none vanishes on a re-read), or with **Show all bands** (per viewer, `valc.dev.showAllBands`). Green and plain
+  (white) bands are otherwise left out; until any card is read every band shows. Amber means "waits on someone", so
+  VALC release (waiting on infrastructure) and QA verdict (waiting on QA) still show; splitting amber into "you" and
+  "others" is left for later, if that turns out to be noise.
 
 ## Where each step lives
 
