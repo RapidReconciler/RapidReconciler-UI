@@ -588,6 +588,69 @@ over a single total so it's robust to company-scope changes).
 
 ---
 
+## Batch Analysis (UI-270)
+
+**Status: agent + V8 built 2026-11-20.** Home &rarr; analyst &rarr; **Reports**
+&rarr; **Batch Analysis**. The analyst enters a JDE batch number (ICU); the
+report lists the F4111 and F0911 lines RapidReconciler holds for it, grouped by account, and compares
+the two per inventory account. Asked for by the owner for a V7 customer whose
+manufacturing batch ties overall while one document in it does not
+(RapidReconciler-Valc#731). Neither V7 nor v359 has a batch lookup (V7's only
+batch report is unposted GL batches), so there is no older shape to match.
+
+- **Endpoint** (agent-direct; in `RR_TEST_AGENT_AREAS`):
+  `POST /inventory/reports/batch-analysis` body `{ "batch": 13298823 }` (a
+  number, or a string of digits) &rarr;
+
+  ```json
+  { "batch": 13298823, "scope": "ok",
+    "cardex": [ { "Company", "ShortAccount", "Account", "AccountDescription",
+                  "DocType", "DocNumber", "OrderType", "OrderNumber", "LineNumber",
+                  "Branch", "ShortItem", "ItemNumber", "Location", "Lot", "GLClass",
+                  "GLDate", "Quantity", "UOM", "UnitCost", "Amount", "PostingCode",
+                  "Explanation" } ],
+    "ledger": [ { "Company", "ShortAccount", "Account", "AccountDescription",
+                  "InventoryAccount", "DocType", "DocNumber", "LineNumber",
+                  "LineExtension", "GLDate", "BatchType", "PostCode", "LedgerType",
+                  "Subledger", "OrderType", "PurchaseOrder", "Amount", "Explanation",
+                  "Remark" } ],
+    "outOfScope": { "cardex": 0, "ledger": 0 } }
+  ```
+- **Who:** the analyst lane, `perms.dm` or `su` (`BatchAnalysisController.requireAnalyst`,
+  covered with every other lane guard by `FlatRoleLaneGuardTest`). V8 draws the
+  tab on the same test (`canAnalyst()`).
+- **Company scope:** a line comes back only when its company (`ilkco` /
+  `glkco`) is in the caller's scope. Lines left out are **counted** in
+  `outOfScope`, and V8 says the totals cover part of the batch, because a batch
+  shown without some of its lines looks like a batch that does not tie. An
+  **empty** scope returns `scope: "no-scope"` and reads nothing (deny-all, as
+  `UserRequest` requires).
+- **Accounts:** an F4111 line's account is the inventory account RapidReconciler
+  gave its item (`itemid -> RItems.ShortAccount -> RInvAccountList.LongAccount`,
+  the path `usp6compare2` uses). An item whose GL class has no inventory account
+  carries the placeholder label ("gl class not in base table" /
+  "outside operations"). An F0911 line's account is `glmcu.globj[.glsub]`;
+  `InventoryAccount` is 1 when `RInvAccountList` lists it.
+- **The tie (V8):** per company + inventory account, F4111 less F0911; half a
+  cent or more is a difference. F0911 accounts that are not inventory accounts
+  are listed apart (no F4111 side to compare) with their total.
+- **⚠ No batch-balance verdict.** RapidReconciler's F0911 holds only lines whose
+  account is in its own F0901 (`usp8_apply_f0911`: the account filter is applied
+  upstream), so the lines here are not the whole JDE batch. The first cut summed
+  them and called Demo1 batch 13298823 "out of balance in the GL" (net
+  -49,190.01) when the rest of the entry was on accounts RR never loads. The
+  report says what it holds instead.
+- **Refusals** carry `{reason}` in the body: 400 for a missing or malformed
+  batch number, 403 without the analyst grant.
+- **Cost, measured on Demo1** (F4111 2.46M rows, F0911 2.31M), batch
+  13298823: F4111 6,755 lines in 1.6 s, F0911 6,461 in 0.8 s, on existing
+  indexes. No index was added; a much larger customer will scan for longer.
+- **Excel:** built in the browser (`RRV8/batch-analysis.js`, audit workbook): By
+  account, F4111 lines, F0911 lines, each with a subtotal per account and a
+  total, and a title line naming any lines left out.
+
+---
+
 ## Standing per-line offset accounts (balancing entry)
 
 Home's balancing entry debits each out-of-balance inventory account and credits

@@ -246,7 +246,11 @@ window.RR_TEST_AGENT_AREAS = [
   // through RRDB.agentBase() rather than rrFetch, but the area is listed here so
   // anything that DOES route by area lands on the agent rather than v359, which
   // has no such endpoint.
-  'inventory/gl-offset-account'
+  'inventory/gl-offset-account',
+  // UI-270: Home > Reports > Batch Analysis. Every F4111 and F0911 line in one
+  // batch, with its account, for the caller's companies (BatchAnalysisController,
+  // analyst lane). See API.md.
+  'inventory/reports/batch-analysis'
 ];
 
 // Endpoints with a variable path segment that rrFetch needs to route
