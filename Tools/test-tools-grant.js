@@ -267,9 +267,14 @@ check(shelfExpr === 'canAnalyst()',
    reload-cardex site is anchored on its own function body, not on the file. */
 const reloadSrc = extract('loadReloadCardexStatus');
 const ackSrc    = extract('ackReminder');
+/* ⚠ The SUBVIEWS anchor names the TOOLS entry, not just its gate. Until UI-270
+   (2026-11-20) the Tools tab was the only SUBVIEWS entry gated on canAnalyst(), so
+   the bare gate text was unique by accident. The Reports tab carries the same gate
+   on purpose (its server, BatchAnalysisController, admits the same lane), and the
+   bare pattern then matched twice and said nothing about either. */
 const SITES = [
     ["SUBVIEWS tools gate",
-     /gate:\s*function\s*\(\)\s*\{\s*return canAnalyst\(\);\s*\}/g, html],
+     /\{\s*k:\s*'tools',\s*label:\s*'Tools',\s*gate:\s*function\s*\(\)\s*\{\s*return canAnalyst\(\);\s*\}\s*\}/g, html],
     ["the shelf's hidden flag",
      /tools\.hidden\s*=\s*\(sv !== 'tools'\)\s*\|\|\s*!canAnalyst\(\)/g, html],
     ["loadReloadCardexStatus gate",

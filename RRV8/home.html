@@ -57,6 +57,9 @@
      the inline script dies on a ReferenceError at that line, and every function
      below it is never defined — the page renders EMPTY. Do not add `defer` back. -->
 <script src="../Tools/audit-workbook.js"></script>
+<!-- UI-270: Reports > Batch Analysis. Defines RRV8.batchAnalysis only; nothing runs
+     until renderAnalystPalette() mounts it on the Reports tab. -->
+<script src="batch-analysis.js"></script>
 <!-- jsPDF + autoTable: client-side PDF of the period audit report (accountant
      view). Vendored (same files the rec page uses); autoTable paginates. -->
 <script src="vendor/jspdf.umd.min.js" defer></script>
@@ -576,6 +579,18 @@
           <a class="row-foot-action" id="rcdxOpen" href="admin-reload-cardex.html">Open &rarr;</a>
         </div>
       </div>
+    </section>
+    <!-- UI-270 Reports tab (owner 2026-11-20). On-demand reports the analyst runs
+         against a number they bring from JDE. The first is Batch Analysis: every
+         F4111 and F0911 line in one batch, grouped by account, with the two compared
+         per inventory account. Painted by RRV8.batchAnalysis (batch-analysis.js);
+         shown on the 'rpt' sub-view by renderAnalystPalette(). The report list is a
+         strip of pills so the next report has a place to go. -->
+    <section class="rpt-panel" id="analystReports" hidden aria-label="Reports">
+      <div class="rpt-list" role="tablist" aria-label="Reports">
+        <button type="button" class="rpt-pill is-active" role="tab" aria-selected="true" data-rpt="batch">Batch Analysis</button>
+      </div>
+      <div class="rpt-card" id="rptBatch"></div>
     </section>
     <!-- Cardex Variance tab content — ONE white card holding ONLY the Cardex
          Variance worklist row (owner: that tab shows only Cardex Variance; the
@@ -6204,6 +6219,15 @@
       { k: 'work',    label: 'Data Health' },
       { k: 'txvar',   label: 'Transaction Variance' },
       { k: 'reports', label: 'Cardex Variance' },
+      // UI-270 (owner 2026-11-20): Reports, the analyst's on-demand reports; the first
+      // is Batch Analysis. ⚠ THE KEY IS 'rpt' BECAUSE 'reports' IS TAKEN: it is the
+      // Cardex Variance tab's key (the tab was renamed, the key never was), and the
+      // current tab is persisted per role in localStorage under that key, so reusing it
+      // would land every analyst who left Home on Cardex Variance on the new tab.
+      // Same gate as Tools and the panel itself: a tab drawn for someone the server
+      // refuses (BatchAnalysisController.requireAnalyst, perms.dm or su) is a dead control.
+      { k: 'rpt',     label: 'Reports',
+        gate: function () { return canAnalyst(); } },
       // Tools — the analyst's maintenance shelf (owner 2026-09-13: analysts only,
       // MOVED here, not copied). Three entry points that used to sit on the
       // administrator surface: the Report Engine card, the fiscal-calendar chip,
@@ -12273,13 +12297,14 @@
     var d = _acctData || _briefData();
     if (d) { _acctData = d; renderAnalystAiCard(d); }
     var ws = $('analystWorkspace'), reports = $('reportsPalette'), wl = $('analystWorklist'), tv = $('analystTxVar'), tools = $('analystTools');
+    var rpt = $('analystReports');   // UI-270: the Reports tab (Batch Analysis)
     // #acctAudit is the SHARED Audit Center container. renderAccountantPanels' hideAll()
     // hides it on its way out of the accountant role and then calls this function, so the
     // analyst path owns un-hiding it — and owns hiding it behind the canAnalyst() gate
     // below, or an unauthorized user keeps whatever the accountant last painted.
     var aud = $('acctAudit');
     var walk = $('acctWalk');   // UI-230: the Walkthrough panel is shared too, under the same ownership rule
-    if (!canAnalyst()) { if (ws) ws.hidden = true; if (reports) reports.hidden = true; if (wl) wl.hidden = true; if (tv) tv.hidden = true; if (tools) tools.hidden = true; if (aud) aud.hidden = true; if (walk) walk.hidden = true; _analystTaskGen++; _txvGen++; return; }
+    if (!canAnalyst()) { if (ws) ws.hidden = true; if (reports) reports.hidden = true; if (wl) wl.hidden = true; if (tv) tv.hidden = true; if (tools) tools.hidden = true; if (rpt) rpt.hidden = true; if (aud) aud.hidden = true; if (walk) walk.hidden = true; _analystTaskGen++; _txvGen++; return; }
     var sv = _curSubView();
     // Company scope is the bottom workbar "Companies" pill (single-select). This
     // establishes the default solo company; renderPeriodWidget then paints the
@@ -12295,7 +12320,9 @@
     // maintenance, not analysis, and an out-of-balance-by-period chart above a
     // "restart the report engine" button is grounding for a question nobody on this
     // tab is asking.
-    var _at = $('acctTop'); if (_at) _at.hidden = (sv === 'work' || sv === 'tools' || sv === 'walk');   // UI-230: nor is the Walkthrough
+    // UI-270: nor Reports. A batch lookup is not about the selected company or period,
+    // so the period chart and the company-grounded Ask card would only mislead above it.
+    var _at = $('acctTop'); if (_at) _at.hidden = (sv === 'work' || sv === 'tools' || sv === 'walk' || sv === 'rpt');   // UI-230: nor is the Walkthrough
     // Tools card moved to the Reports tab "for now" — relocate it into the reports
     // palette once (renderReportsPalette never rewrites the palette's innerHTML),
     // then just toggle its visibility with the reports sub-view.
@@ -12334,6 +12361,19 @@
     // same defect read from the two ends.
     if (tools) tools.hidden = (sv !== 'tools') || !canAnalyst();
     if (sv === 'tools') { loadServiceMemory(); loadFiscalStatus(); loadReloadCardexStatus(); }
+    // UI-270 Reports. Same gate as the tab in SUBVIEWS. The report reads only when the
+    // analyst runs it; entering the tab paints whatever the last run left (cleared on a
+    // database switch by resetScopedState). The fetch stays here, with a literal area,
+    // so Tools/v8-callsites.py sees the call site; batch-analysis.js never builds a URL.
+    if (rpt) rpt.hidden = (sv !== 'rpt') || !canAnalyst();
+    if (sv === 'rpt' && window.RRV8 && RRV8.batchAnalysis) {
+      RRV8.batchAnalysis.mount($('rptBatch'), {
+        load: function (batch) {
+          return rrFetch('inventory/reports/batch-analysis', { method: 'POST', body: { batch: batch } });
+        },
+        toast: toast
+      });
+    }
     // Shared Audit Center. renderAuditPanel is role-agnostic already — it resolves the
     // period through _analystViewedPeriod() first and scopes to the focus company — so it
     // takes the SCOPED data here, the same as the two tabs above, and needs no analyst
@@ -16663,6 +16703,9 @@
     _svcMem = null;             // service-health memory snapshot (per Services instance)
     _rcdxPreview = null;        // cached cardex eod-check — clear so a mid-switch repaint can't use the prior DB's
     _pvCache = {}; _txMatrix = null; _txKey = null;   // variance-source + transactions drill-down caches (per-DB scoped)
+    // UI-270: a batch report read from the database being left. Two installs share batch
+    // numbers as easily as company numbers, so it must not stay on screen under the new one.
+    try { if (window.RRV8 && RRV8.batchAnalysis) RRV8.batchAnalysis.reset(); } catch (_) {}
     // Analyst caches. The DB switch repaints in place, so anything the brief / chips
     // read must go with it or the new DB inherits the old one's answers.
     _txVarCache = { key: null, amt: null, cnt: null };   // variance-by-period series
