@@ -1,15 +1,25 @@
 # V7 to V8 migration plan
 
-Status: documentation phase (2026-07-11). The model is designed and the
-schema compatibility is verified. Nothing is built or tested yet. Open
-items are listed at the end.
+Status: documentation phase (2026-07-11, updated 2026-11-21). The model is
+designed and the schema compatibility is verified. Nothing is built or
+tested yet. Open items are listed at the end.
+
+**2026-11-21 (owner, worklist VLC-313).** The upgrade is a VALC flow shaped
+like onboarding. V8 is installed first; then an SSIS import moves the named
+tables from the V7 database into the V8 one, so the inventory baseline does
+not change. The import's two SQL connections come from the two control-plane
+Postgres databases: the source from V7's `rrvalc`, the target from VALC 2.0's
+own. See *Where the two connections come from*, below. Reaching V7's Postgres
+is on the QAv8 build list (the VALC repo's QAv8 plan, step 14 and tasks 36
+and 37).
 
 ## What this covers
 
 How a customer moves from a V7 RapidReconciler database to V8. V8 installs
 as a new database next to the existing V7 one and takes over reconciliation.
-The two run on the same SQL instance during the move, which is why V8
-databases are named `RapidReconciler_<env>_V8`. The `_V8` suffix keeps them
+The two usually run on the same SQL instance during the move, which is why V8
+databases are named `RapidReconciler_<env>_V8`. The import does not depend
+on that: its source and target are separate connections. The `_V8` suffix keeps them
 distinct from the customer's V7 `RapidReconciler_Prod` and still matches
 VALC's `RapidReconciler_` discovery prefix, so no VALC change is needed for
 discovery. See `project_v8_db_naming_convention`.
@@ -114,27 +124,53 @@ create the database, deploy the dacpac schema, provision rruser, deploy and
 configure SSIS, register the database, and start the Services jar. A
 migration is that flow with migration-specific steps added.
 
-1. Detect and profile V7. Connect with the sysadmin credentials the install
-   flow already collects, find the existing `RapidReconciler_Prod`, read its
-   version marker, and show its companies, licensed set, and JDE
-   configuration so the operator confirms the target.
+1. Pick the V7 source. The operator picks the V7 customer database from the
+   V7 mirror, which carries its SQL Server, database name and login (see
+   *Where the two connections come from*). VALC connects with that login,
+   reads the database's version marker, and shows its companies, licensed
+   set, and JDE configuration so the operator confirms it.
 2. Provision the V8 database (`RapidReconciler_Prod_V8`) through the existing
-   install flow.
-3. Carry forward configuration. V7 and V8 are on the same instance, so this
-   is a cross-database copy run through VALC's execute-sql path. No SSIS is
-   needed for the config tables.
-4. Copy the seven preserve tables from V7 to V8 by SSIS, same instance,
-   straight copy. This is the step that carries the reported numbers.
-5. Parity report. Because the opening position was copied and not recomputed,
+   install flow. V8 is installed before anything is copied.
+3. Import the seven tables from V7 to V8 by SSIS: the five preserve tables
+   and the two configuration tables, straight copy, one package with a source
+   and a target connection. This is the step that carries the reported
+   numbers. (Until 2026-11-21 this plan copied the configuration tables
+   with a cross-database T-SQL copy, which only works when both databases
+   share an instance. One package with two connections covers both cases.)
+4. Parity report. Because the opening position was copied and not recomputed,
    it matches V7 by construction. The report confirms the copy was faithful
    rather than confirming that two recomputations happened to agree.
-6. Cutover. Register and start the V8 Services jar, activate it, flip the
+5. Cutover. Register and start the V8 Services jar, activate it, flip the
    client's ui_version from v7 to v8 to open the V8 areas, and leave V7
    read-only as a fallback until parity is accepted, then retire it.
 
 Run it like the load board (`project_load_board_authoritative_state`): one
 server-computed state per step, idempotent, resumable, recorded on the
 activity spine. A migration is long-running and must not half-complete.
+
+## Where the two connections come from (2026-11-21)
+
+The import needs a source and a target SQL connection. VALC already holds
+both, in two Postgres databases:
+
+| Side | Control plane | Where |
+|---|---|---|
+| Source (V7) | V7's `rrvalc` | `client_services_instance`: database address, port, name, SQL login and password, one row per V7 customer database. The V7 mirror (VLC-90, `service/v7mirror/`) already reads these columns and keeps them in `v7_instances` |
+| Target (V8) | VALC 2.0's own database | `client_databases`: the V8 database the install flow just created |
+
+So the flow needs no new place to type a connection. It needs VALC to reach
+V7's `rrvalc`, which it cannot today: the mirror runs off a `pg_dump`
+snapshot that a person takes on the V7 host. The QAv8 build list now asks
+for a read-only login on V7 QA's `rrvalc` (step 14, task 36), and the same
+on V7 production before the first upgrade there (task 37). The login reads
+only the tables the mirror reads, and `client_account` without its password
+column. Its password is the optional vault secret
+`<prefix>v7-mirror-password`, mapped to `valc.mirror.v7.password` by
+`KeyVaultStartupSecrets`.
+
+The mirror is manual (owner ruling 2026-09-20). For the upgrade that is
+right: a person starts it and reads the result, and the flow re-reads the
+source row at the moment it runs rather than trusting an old import.
 
 ## Registration is a prerequisite
 
